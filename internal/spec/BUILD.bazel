@@ -1,0 +1,35 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "spec",
+    srcs = [
+        "compile.go",
+        "embed.go",
+        "render.go",
+        "skills.go",
+        "spec.go",
+    ],
+    embedsrcs = [
+        "prompts/controller.md",
+        "prompts/preamble/cloud.md",
+        "prompts/preamble/local.md",
+        "prompts/prover.md",
+        "prompts/verifier.md",
+        "skills/backend-design/SKILL.md",
+        "skills/verify-engineering/SKILL.md",
+        "skills/verify-quality/SKILL.md",
+    ],
+    importpath = "github.com/telos-org/telos-go/internal/spec",
+    visibility = ["//:__subpackages__"],
+    deps = ["@in_gopkg_yaml_v3//:yaml_v3"],
+)
+
+go_test(
+    name = "spec_test",
+    srcs = [
+        "compile_test.go",
+        "skills_test.go",
+        "spec_test.go",
+    ],
+    embed = [":spec"],
+)

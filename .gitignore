@@ -1,3 +1,5 @@
 .telos/
-telos
+/telos
 *.exe
+bazel-*
+dist/

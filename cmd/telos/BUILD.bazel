@@ -1,0 +1,58 @@
+load("@rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library", "go_test")
+
+go_library(
+    name = "telos_lib",
+    srcs = ["main.go"],
+    importpath = "github.com/telos-org/telos-go/cmd/telos",
+    visibility = ["//visibility:private"],
+    deps = [
+        "//internal/cli",
+        "//internal/config",
+        "//internal/hosted",
+        "//internal/sessionapi",
+        "//internal/spec",
+    ],
+)
+
+go_binary(
+    name = "telos",
+    embed = [":telos_lib"],
+    visibility = ["//visibility:public"],
+    x_defs = {
+        "github.com/telos-org/telos-go/cmd/telos.Version": "{STABLE_TELOS_VERSION}",
+    },
+)
+
+go_cross_binary(
+    name = "telos_darwin_amd64",
+    platform = "@rules_go//go/toolchain:darwin_amd64",
+    target = ":telos",
+    visibility = ["//visibility:public"],
+)
+
+go_cross_binary(
+    name = "telos_darwin_arm64",
+    platform = "@rules_go//go/toolchain:darwin_arm64",
+    target = ":telos",
+    visibility = ["//visibility:public"],
+)
+
+go_cross_binary(
+    name = "telos_linux_amd64",
+    platform = "@rules_go//go/toolchain:linux_amd64",
+    target = ":telos",
+    visibility = ["//visibility:public"],
+)
+
+go_cross_binary(
+    name = "telos_linux_arm64",
+    platform = "@rules_go//go/toolchain:linux_arm64",
+    target = ":telos",
+    visibility = ["//visibility:public"],
+)
+
+go_test(
+    name = "telos_test",
+    srcs = ["main_test.go"],
+    embed = [":telos_lib"],
+)

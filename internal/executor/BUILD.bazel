@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "executor",
+    srcs = ["pi.go"],
+    importpath = "github.com/telos-org/telos-go/internal/executor",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/game",
+        "//internal/platform",
+    ],
+)
+
+go_test(
+    name = "executor_test",
+    srcs = ["pi_test.go"],
+    embed = [":executor"],
+    deps = ["//internal/game"],
+)

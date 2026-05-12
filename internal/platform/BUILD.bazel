@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "platform",
+    srcs = ["platform.go"],
+    importpath = "github.com/telos-org/telos-go/internal/platform",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "platform_test",
+    srcs = ["platform_test.go"],
+    embed = [":platform"],
+)

@@ -1,0 +1,19 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "hosted",
+    srcs = ["client.go"],
+    importpath = "github.com/telos-org/telos-go/internal/hosted",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/config",
+        "//internal/sessionapi",
+    ],
+)
+
+go_test(
+    name = "hosted_test",
+    srcs = ["client_test.go"],
+    embed = [":hosted"],
+    deps = ["//internal/sessionapi"],
+)

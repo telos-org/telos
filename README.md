@@ -38,6 +38,16 @@ Python Telos package.
 
 ## Build And Test
 
+Use Bazel as the canonical build and release path:
+
+```bash
+bazel test //...
+bazel build //cmd/telos:telos
+scripts/build-release.sh 0.1.0
+```
+
+Native Go commands are still useful for quick local sanity checks:
+
 ```bash
 go build ./cmd/telos
 go vet ./...
@@ -67,4 +77,4 @@ Python OSS CLI by default:
 - hosted environment selection needs parity review against the Python CLI;
 - CLI code should be split out of `cmd/telos/main.go` as it grows;
 - ignored filesystem errors should be tightened in a few orchestration paths;
-- installer/versioning work is intentionally not implemented yet.
+- release signatures/provenance should be added before broad public install.

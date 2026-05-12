@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "sessionapi",
+    srcs = [
+        "server.go",
+        "store.go",
+        "types.go",
+    ],
+    importpath = "github.com/telos-org/telos-go/internal/sessionapi",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "sessionapi_test",
+    srcs = ["server_test.go"],
+    deps = [":sessionapi"],
+)

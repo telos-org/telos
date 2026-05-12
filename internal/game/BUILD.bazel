@@ -1,0 +1,28 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "game",
+    srcs = [
+        "pvg.go",
+        "state.go",
+        "transcript.go",
+        "types.go",
+    ],
+    importpath = "github.com/telos-org/telos-go/internal/game",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/evidence",
+        "//internal/spec",
+    ],
+)
+
+go_test(
+    name = "game_test",
+    srcs = [
+        "pvg_test.go",
+        "transcript_test.go",
+        "types_test.go",
+    ],
+    embed = [":game"],
+    deps = ["//internal/spec"],
+)
