@@ -25,9 +25,9 @@ gcloud storage cp "${dist}/"* "gs://${bucket}/releases/${version}/" \
   --cache-control="public,max-age=31536000,immutable"
 
 gcloud storage cp "${dist}/manifest.json" "gs://${bucket}/releases/latest/manifest.json" \
-  --cache-control="public,max-age=60"
+  --cache-control="no-cache,max-age=0"
 gcloud storage cp "${dist}/SHA256SUMS" "gs://${bucket}/releases/latest/SHA256SUMS" \
-  --cache-control="public,max-age=60"
+  --cache-control="no-cache,max-age=0"
 
 gcloud storage buckets add-iam-policy-binding "gs://${bucket}" \
   --member=allUsers \
