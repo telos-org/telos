@@ -11,18 +11,30 @@ skills:
 
 ## Goal
 
-Create the first locally runnable Go implementation of the portable Telos
-runtime core in this workspace.
+Build a standalone Go implementation of the Telos OSS runtime.
 
-This is not a rewrite of every Python feature. It is the clean foundation for
-the eventual single Telos binary that can run locally and inside hosted worker
-pods.
+The output is not a skeleton. The output is a locally runnable `telos` binary
+that can replace the Python OSS CLI/runtime for the core local product loop:
+
+```bash
+telos plan SPEC.md
+telos run SPEC.md
+telos list
+telos describe SESSION
+telos logs [-f] SESSION
+telos stop SESSION
+telos login
+telos version
+```
+
+The Go binary must not import, execute, or require the Python Telos package at
+runtime.
 
 ## Scope
 
 All writes must stay inside this `telos-go` workspace.
 
-Use the sibling Python repositories only as references:
+Use these sibling repositories only as references:
 
 - `/Users/rohangupta/Desktop/Developer/telos-org/telos`
 - `/Users/rohangupta/Desktop/Developer/telos-org/cloud`
@@ -32,65 +44,147 @@ Do not edit either Python repository.
 
 ## Required Outcome
 
-Produce a Go module that is easy to run, test, and extend:
+Produce a Go module with a binary entrypoint at `cmd/telos`.
 
-- `go.mod` at the workspace root.
-- `cmd/telos` as the binary entrypoint.
-- `internal/sessionapi` containing the canonical JSON request and response
-  types for the Telos Sessions API.
-- `internal/sessionapi` route registration for the core session routes:
-  `POST /api/sessions`, `GET /api/sessions`,
-  `GET /api/sessions/{id}`, `POST /api/sessions/{id}/stop`,
-  `GET /api/sessions/{id}/transcript`,
-  `GET /api/sessions/{id}/events`, and
-  `GET /api/sessions/{id}/workspace/{spec}`.
-- A small local file-backed session store under `.telos/sessions`.
-- Tests proving the JSON shape matches the Python Sessions API contract for
-  create, list, get, stop, transcript, events, and workspace metadata.
-- A short `README.md` explaining the current runnable slice and how it maps to
-  the Python implementation.
+The binary must implement the OSS Telos local runtime end to end:
 
-## Design Constraints
+- SPEC.md loading with YAML frontmatter and markdown body.
+- Spec validation and stable compiled spec metadata.
+- Skill resolution from embedded built-in skills and explicit filesystem paths.
+- Emphasized verifier skills using the existing trailing `*` syntax.
+- Prompt rendering for prover and verifier using embedded prompt templates.
+- The prover-verifier game loop.
+- Pi executor integration using JSON mode.
+- Local workspace execution with process-group stop and deadline handling.
+- Session persistence under `.telos/sessions/<session_id>`.
+- Evidence JSONL persistence.
+- PVG transcript rendering.
+- Workspace checkpointing.
+- Local Sessions API routes.
+- CLI commands for plan, run, list, describe, logs, stop, login, and version.
+- Hosted Sessions API client compatibility for the same commands when an
+  environment is selected.
+- Hosted configuration compatibility with the Python OSS CLI:
+  `~/.telos/config.yaml`, `~/.telos/environments.yaml`, `TELOS_CONFIG`,
+  `TELOS_ENVIRONMENTS_CONFIG`, `TELOS_API_ENDPOINT`, and `TELOS_AUTH_TOKEN`.
 
-Keep the implementation boring and hermetic:
+The implementation must preserve the public product model:
+
+- A session is the public unit of work.
+- A spec is the desired-state contract.
+- The transcript is the primary human and agent-readable log.
+- Evidence JSONL is the replay/debug stream.
+- Local and hosted differ by adapters, not by product semantics.
+
+## Runtime API
+
+Implement the canonical Sessions API in Go with JSON shapes matching the
+Python OSS `telos.session.api` models:
+
+```text
+POST /api/sessions
+GET  /api/sessions
+GET  /api/sessions/{id}
+POST /api/sessions/{id}/stop
+GET  /api/sessions/{id}/transcript
+GET  /api/sessions/{id}/events
+GET  /api/sessions/{id}/workspace/{spec}
+```
+
+The local implementation may run in-process for `telos run`, but the API
+contract must be real and testable. The hosted adapter must use the same
+request/response models.
+
+## Packaging And Hermeticity
+
+The binary should be suitable for `curl | sh` distribution later:
 
 - Prefer the Go standard library.
-- Do not shell out to Python.
-- Do not require Kubernetes, Docker, Bazel, Node, or cloud credentials.
-- Do not introduce a public runtime command tree.
-- Keep public UX centered on `telos run`, `telos list`, `telos logs`,
-  `telos describe`, and `telos stop`.
-- Internal server/worker roles may exist in code, but they should not become
-  product-facing commands.
+- Use `go:embed` for built-in prompts and built-in skills.
+- Do not require Python, uv, Bazel, Node, Docker, Kubernetes, or cloud
+  credentials for local execution.
+- Do not shell out to the Python Telos implementation.
+- Keep runtime state under `.telos` in the selected workspace.
+- Build with `go build ./cmd/telos`.
 
-## Runtime Direction
+External model execution may use the `pi` executable when present on PATH. If
+`pi` is missing, the CLI must fail with a clear error that says how execution is
+blocked. Tests must not require live model credentials.
 
-The Go binary should be shaped so it can eventually serve both deployments:
+## CLI Semantics
 
-- local loopback `telosd`;
-- hosted environment Sessions API.
+Implement these user-facing commands:
 
-Local and hosted should differ by adapters for auth, store, launcher,
-workspace, and transport. They should not diverge at the product model.
+```text
+telos plan SPEC.md [--json]
+telos run SPEC.md [--workspace DIR] [--env ENV] [--model MODEL]
+  [--thinking EFFORT] [--max-rounds N] [--max-cost-usd USD]
+  [--agent-timeout-sec SEC] [--json]
+telos list [--env ENV] [--limit N] [--all] [--wide] [--local] [--hosted] [--json]
+telos describe SESSION [--env ENV] [--json]
+telos logs [-f] SESSION [--env ENV]
+telos stop SESSION [--env ENV] [--json]
+telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
+telos version
+```
 
-## Non-Goals
+The human output should be direct and agent-friendly. Machine output should be
+JSON only when `--json` is passed.
 
-Do not port the PVG loop yet.
+Do not add a public runtime command tree. Internal service modes may exist, but
+they must not become the product UX.
 
-Do not implement Pi execution yet.
+## Minimum Local Behavior
 
-Do not implement self-update yet.
+A local run must:
 
-Do not create a Kubernetes launcher yet.
+1. Create an isolated session workspace.
+2. Copy or materialize the submitted spec under the session directory.
+3. Compile the spec, resolve skills, and render prover/verifier prompts.
+4. Execute the prover through Pi.
+5. Execute the verifier through Pi.
+6. Continue until verifier concession, failure, max rounds, max cost, stop, or
+   timeout.
+7. Persist session manifest, evidence JSONL, transcript, runner log, and
+   workspace checkpoint.
+8. Let `telos logs`, `telos describe`, `telos list`, and `telos stop` inspect
+   or mutate that session without Python.
 
-Do not add placeholder abstraction layers that only rename one call.
+## Tests
+
+Add deterministic tests that do not call live models:
+
+- Spec/frontmatter parsing.
+- Skill resolution, including emphasized `skill*`.
+- Prompt rendering includes the right skills in the right roles.
+- Pi JSON event parsing and malformed event handling.
+- PVG loop behavior with fake prover/verifier executors.
+- Session persistence and status derivation.
+- Local API route JSON compatibility.
+- CLI command behavior against a fake executor.
+- Deadline and stop behavior for local subprocess execution.
+- Workspace checkpointing.
+
+The test suite must pass with:
+
+```bash
+go test ./...
+go vet ./...
+go build ./cmd/telos
+```
 
 ## Verification
 
 The verifier should reject the result unless:
 
+- The binary builds without Python.
 - `go test ./...` passes.
-- The route and JSON contract is visible in tests, not only in prose.
-- The module can be inspected without reading the Python repos first.
-- The implementation is small enough that the core shape is obvious.
+- `go vet ./...` passes.
+- The implementation includes the PVG loop, not only the Sessions API.
+- The implementation includes Pi executor integration, not only a fake executor.
+- A deterministic fake-executor CLI smoke test proves `run -> describe -> logs
+  -> list -> stop` behavior.
+- Session artifacts match the Python OSS artifact shape closely enough for a
+  human to inspect them the same way.
+- Hosted and local share one Sessions API model in code.
 - No file outside `telos-go` was created or modified.
