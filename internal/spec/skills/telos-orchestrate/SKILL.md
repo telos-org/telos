@@ -151,8 +151,8 @@ launched task — that's the trail.
 
 A move is always: write the spec under `generated/`, then run it
 with the `telos` CLI. Inside a controller pod, `telos run` sees
-`TELOS_INTERNAL_SESSION_TOKEN` and `TELOS_SESSION_ID`, calls the
-local cluster API, and parents the task to this controller session.
+`TELOS_API_TOKEN` and `TELOS_SESSION_ID`, calls the local cluster API, and
+parents the task to this controller session.
 
 ```bash
 telos run generated/20260420-rotate-telos-api/spec.md

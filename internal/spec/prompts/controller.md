@@ -46,9 +46,9 @@ Both survive restarts. Don't conflate them.
 telos run generated/<timestamp>-<slug>/spec.md
 ```
 
-Inside a controller pod, `telos run` reads `TELOS_INTERNAL_SESSION_TOKEN`
-and `TELOS_SESSION_ID`, posts the spec to the local cluster API, and
-parents the task to this controller session.
+Inside a controller pod, `telos run` reads `TELOS_API_TOKEN` and
+`TELOS_SESSION_ID`, posts the spec to the local cluster API, and parents the
+task to this controller session.
 
 Do **not** reach for `kubectl apply / patch / delete / edit / scale /
 replace / rollout` yourself. If you find yourself about to type one,
