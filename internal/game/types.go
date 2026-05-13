@@ -14,6 +14,7 @@ const (
 	GameSuccess GameResult = "success"
 	GameFailure GameResult = "failure"
 	GameTimeout GameResult = "timeout"
+	GameStopped GameResult = "stopped"
 )
 
 // AgentStatus is the normalized status from an agent turn.
@@ -54,9 +55,10 @@ type AgentExecutor interface {
 
 // PVGConfig holds runtime settings for a PVG run.
 type PVGConfig struct {
-	MaxRounds  int
-	MaxCostUSD *float64
-	Verbose    bool
+	MaxRounds     int
+	MaxCostUSD    *float64
+	Verbose       bool
+	StopRequested func() bool
 }
 
 // PVGResult holds the aggregated result of a PVG run.

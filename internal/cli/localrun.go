@@ -42,17 +42,26 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 		return nil, err
 	}
 
-	absSpec, _ := filepath.Abs(specPath)
+	absSpec, err := filepath.Abs(specPath)
+	if err != nil {
+		return nil, fmt.Errorf("resolve spec path: %w", err)
+	}
 	var workspace string
 	if cfg.Workspace != "" {
-		workspace, _ = filepath.Abs(cfg.Workspace)
+		workspace, err = filepath.Abs(cfg.Workspace)
+		if err != nil {
+			return nil, fmt.Errorf("resolve workspace path: %w", err)
+		}
 	}
 
 	sessionsRoot := filepath.Join(".telos", "sessions")
 	if workspace != "" {
 		sessionsRoot = filepath.Join(workspace, ".telos", "sessions")
 	}
-	sessionsRoot, _ = filepath.Abs(sessionsRoot)
+	sessionsRoot, err = filepath.Abs(sessionsRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve sessions root: %w", err)
+	}
 
 	sessionDir, err := newSessionDir(sessionsRoot)
 	if err != nil {
@@ -62,17 +71,27 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	if workspace == "" {
 		workspace = filepath.Join(sessionDir, "workspace")
 	}
-	os.MkdirAll(workspace, 0o755)
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		return nil, fmt.Errorf("create workspace: %w", err)
+	}
 
 	specDir := filepath.Join(sessionDir, "specs", compiled.Environment.Name)
 	state := game.NewPVGState(compiled.Environment.Name, specDir, filepath.Base(sessionDir))
-	state.Ensure()
+	if err := state.Ensure(); err != nil {
+		return nil, fmt.Errorf("create session state: %w", err)
+	}
 
-	// Copy spec
-	data, _ := os.ReadFile(absSpec)
-	os.WriteFile(state.SpecPath(), data, 0o644)
+	data, err := os.ReadFile(absSpec)
+	if err != nil {
+		return nil, fmt.Errorf("read spec: %w", err)
+	}
+	if err := os.WriteFile(state.SpecPath(), data, 0o644); err != nil {
+		return nil, fmt.Errorf("write session spec: %w", err)
+	}
 
-	writeLocalManifest(sessionDir, compiled, absSpec, state, cfg, workspace)
+	if err := writeLocalManifest(sessionDir, compiled, absSpec, state, cfg, workspace); err != nil {
+		return nil, err
+	}
 
 	return &LocalSession{
 		SessionID:  filepath.Base(sessionDir),
@@ -97,6 +116,9 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if err := json.Unmarshal(data, &manifest); err != nil {
 		return nil, err
 	}
+	if manifestStopped(manifest) {
+		return &game.PVGResult{GameResult: game.GameStopped, Error: "stopped by operator"}, nil
+	}
 
 	cfg := manifestToConfig(manifest)
 	specs, _ := manifest["specs"].([]interface{})
@@ -105,6 +127,9 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 	spec0, _ := specs[0].(map[string]interface{})
 	sessionSpecPath, _ := spec0["session_spec_path"].(string)
+	if sessionSpecPath == "" {
+		return nil, fmt.Errorf("manifest spec missing session_spec_path")
+	}
 
 	compiled, err := spec.CompileEnvironment(sessionSpecPath)
 	if err != nil {
@@ -116,9 +141,17 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	state := game.NewPVGState(compiled.Environment.Name, specDir, sessionID)
 
 	workspace := cfg.Workspace
+	if workspace == "" {
+		workspace = filepath.Join(sessionDir, "workspace")
+	}
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		return nil, err
+	}
 
 	// Open epoch
-	startEpoch(sessionDir, manifest)
+	if err := startEpoch(sessionDir, manifest); err != nil {
+		return nil, err
+	}
 
 	var agentExec game.AgentExecutor
 	if exec != nil {
@@ -126,21 +159,28 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	} else {
 		agentExec, err = createPiExecutor(workspace, cfg)
 		if err != nil {
+			fail := &game.PVGResult{GameResult: game.GameFailure, Error: err.Error()}
+			if finishErr := finishEpoch(sessionDir, manifest, fail); finishErr != nil {
+				return nil, fmt.Errorf("%w; also failed to finish epoch: %v", err, finishErr)
+			}
 			return nil, err
 		}
 	}
 
 	pvgCfg := game.PVGConfig{
-		MaxRounds:  cfg.MaxRounds,
-		MaxCostUSD: cfg.MaxCostUSD,
-		Verbose:    true,
+		MaxRounds:     cfg.MaxRounds,
+		MaxCostUSD:    cfg.MaxCostUSD,
+		Verbose:       true,
+		StopRequested: func() bool { return sessionStopped(sessionDir) },
 	}
 
 	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)
 	result := pvg.Run()
 
 	// Close epoch
-	finishEpoch(sessionDir, manifest, result)
+	if err := finishEpoch(sessionDir, manifest, result); err != nil {
+		return result, err
+	}
 
 	return result, nil
 }
@@ -159,18 +199,22 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 }
 
 func newSessionDir(root string) (string, error) {
-	os.MkdirAll(root, 0o755)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		return "", fmt.Errorf("create sessions root: %w", err)
+	}
 	stamp := time.Now().UTC().Format("20060102_150405")
 	for i := 0; i < 100; i++ {
 		dir := filepath.Join(root, fmt.Sprintf("local_%s_%02d", stamp, i))
 		if err := os.Mkdir(dir, 0o755); err == nil {
 			return dir, nil
+		} else if !os.IsExist(err) {
+			return "", fmt.Errorf("create session dir: %w", err)
 		}
 	}
 	return "", fmt.Errorf("could not allocate local session under %s", root)
 }
 
-func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, specPath string, state *game.PVGState, cfg LocalRunConfig, workspace string) {
+func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, specPath string, state *game.PVGState, cfg LocalRunConfig, workspace string) error {
 	model := cfg.Model
 	if model == "" {
 		model = DefaultLocalModel
@@ -221,8 +265,10 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		"epochs": []interface{}{},
 	}
 
-	data, _ := json.MarshalIndent(manifest, "", "  ")
-	os.WriteFile(filepath.Join(sessionDir, "session.json"), append(data, '\n'), 0o644)
+	if err := writeManifestJSON(sessionDir, manifest); err != nil {
+		return fmt.Errorf("write session manifest: %w", err)
+	}
+	return nil
 }
 
 func manifestToConfig(manifest map[string]interface{}) LocalRunConfig {
@@ -260,7 +306,7 @@ func manifestToConfig(manifest map[string]interface{}) LocalRunConfig {
 	return lrc
 }
 
-func startEpoch(sessionDir string, manifest map[string]interface{}) {
+func startEpoch(sessionDir string, manifest map[string]interface{}) error {
 	epochs, _ := manifest["epochs"].([]interface{})
 	epochID := len(epochs) + 1
 	epoch := map[string]interface{}{
@@ -275,17 +321,24 @@ func startEpoch(sessionDir string, manifest map[string]interface{}) {
 		},
 	}
 	manifest["epochs"] = append(epochs, epoch)
-	writeManifestJSON(sessionDir, manifest)
+	if err := writeManifestJSON(sessionDir, manifest); err != nil {
+		return fmt.Errorf("start epoch: %w", err)
+	}
+	return nil
 }
 
-func finishEpoch(sessionDir string, manifest map[string]interface{}, result *game.PVGResult) {
+func finishEpoch(sessionDir string, manifest map[string]interface{}, result *game.PVGResult) error {
+	manifest = currentManifest(sessionDir, manifest)
+	if manifestStopped(manifest) && result.GameResult != game.GameStopped {
+		return nil
+	}
 	epochs, _ := manifest["epochs"].([]interface{})
 	if len(epochs) == 0 {
-		return
+		return nil
 	}
 	last, _ := epochs[len(epochs)-1].(map[string]interface{})
 	if last == nil {
-		return
+		return nil
 	}
 	last["finished_at"] = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 
@@ -300,14 +353,69 @@ func finishEpoch(sessionDir string, manifest map[string]interface{}, result *gam
 	case game.GameTimeout:
 		last["result"] = "failed"
 		last["error"] = "max_rounds_exceeded"
+	case game.GameStopped:
+		last["result"] = "stopped"
+		if result.Error != "" {
+			last["error"] = result.Error
+		} else {
+			last["error"] = "stopped by operator"
+		}
 	}
 
-	writeManifestJSON(sessionDir, manifest)
+	if err := writeManifestJSON(sessionDir, manifest); err != nil {
+		return fmt.Errorf("finish epoch: %w", err)
+	}
+	return nil
 }
 
-func writeManifestJSON(sessionDir string, manifest map[string]interface{}) {
-	data, _ := json.MarshalIndent(manifest, "", "  ")
+func sessionStopped(sessionDir string) bool {
+	data, err := os.ReadFile(filepath.Join(sessionDir, "session.json"))
+	if err != nil {
+		return false
+	}
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return false
+	}
+	return manifestStopped(manifest)
+}
+
+func manifestStopped(manifest map[string]interface{}) bool {
+	epochs, _ := manifest["epochs"].([]interface{})
+	if len(epochs) == 0 {
+		return false
+	}
+	last, _ := epochs[len(epochs)-1].(map[string]interface{})
+	if last == nil {
+		return false
+	}
+	result, _ := last["result"].(string)
+	return result == "stopped"
+}
+
+func currentManifest(sessionDir string, fallback map[string]interface{}) map[string]interface{} {
+	data, err := os.ReadFile(filepath.Join(sessionDir, "session.json"))
+	if err != nil {
+		return fallback
+	}
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return fallback
+	}
+	return manifest
+}
+
+func writeManifestJSON(sessionDir string, manifest map[string]interface{}) error {
+	data, err := json.MarshalIndent(manifest, "", "  ")
+	if err != nil {
+		return err
+	}
 	tmp := filepath.Join(sessionDir, "session.json.tmp")
-	os.WriteFile(tmp, append(data, '\n'), 0o644)
-	os.Rename(tmp, filepath.Join(sessionDir, "session.json"))
+	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, filepath.Join(sessionDir, "session.json")); err != nil {
+		return err
+	}
+	return nil
 }

@@ -96,6 +96,23 @@ func TestCreateLocalSession(t *testing.T) {
 	}
 }
 
+func TestCreateLocalSessionRejectsWorkspaceFile(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	workspacePath := filepath.Join(dir, "workspace-file")
+	if err := os.WriteFile(workspacePath, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := CreateLocalSession(specPath, LocalRunConfig{Workspace: workspacePath})
+	if err == nil {
+		t.Fatal("expected invalid workspace error")
+	}
+	if !strings.Contains(err.Error(), "create sessions root") && !strings.Contains(err.Error(), "create workspace") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
@@ -157,6 +174,88 @@ func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	}
 	if sessionAPI.Status != sessionapi.StatusCompleted {
 		t.Errorf("status: got %s", sessionAPI.Status)
+	}
+}
+
+func TestRunLocalSessionDefaultsMissingWorkspaceToSessionDir(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{MaxRounds: 4})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	manifestPath := filepath.Join(session.SessionDir, "session.json")
+	manifestData, _ := os.ReadFile(manifestPath)
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	cfg := manifest["config"].(map[string]interface{})
+	delete(cfg, "workspace")
+	if err := writeManifestJSON(session.SessionDir, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := &fakeExecutor{
+		proverResult: game.TurnResult{
+			Role:   "prover",
+			Status: game.StatusContinue,
+			Logs:   "Built.\n\n<progress_update>done</progress_update>",
+		},
+		verifierResult: game.TurnResult{
+			Role:   "verifier",
+			Status: game.StatusConcede,
+			Logs:   "LGTM\n\n<status>CONCEDE</status>\n",
+		},
+	}
+	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
+		t.Fatalf("RunLocalSession: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(session.SessionDir, "workspace")); err != nil {
+		t.Fatalf("default workspace was not created: %v", err)
+	}
+}
+
+func TestRunLocalSessionRejectsMissingSessionSpecPath(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{MaxRounds: 4})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	manifestPath := filepath.Join(session.SessionDir, "session.json")
+	manifestData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+		t.Fatal(err)
+	}
+	specs := manifest["specs"].([]interface{})
+	spec0 := specs[0].(map[string]interface{})
+	delete(spec0, "session_spec_path")
+	if err := writeManifestJSON(session.SessionDir, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = RunLocalSessionWithExecutor(session.SessionDir, &fakeExecutor{})
+	if err == nil {
+		t.Fatal("expected missing session_spec_path error")
+	}
+	if !strings.Contains(err.Error(), "session_spec_path") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

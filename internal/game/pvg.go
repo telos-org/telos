@@ -69,12 +69,18 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 	}
 
 	// Round 1: prover build
+	if p.shouldStop() {
+		return p.end(GameStopped), nil
+	}
 	p.Result.Rounds = 1
 	p.Result.ProverRounds = 1
 	p.Evidence.Log("round_start", 1, "prover", nil)
 
 	task := spec.RenderProverTask(p.Compiled, 1, "", ReadTranscript(p.State.TranscriptPath))
 	turn := p.runAgentTurn(1, "prover", p.Result.ProverRounds, task)
+	if p.shouldStop() {
+		return p.end(GameStopped), nil
+	}
 	if turn.Error != "" {
 		p.Result.Error = turn.Error
 		return p.end(GameFailure), nil
@@ -85,6 +91,9 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 
 	// Alternating verifier/prover rounds
 	for p.Result.Rounds < maxRounds {
+		if p.shouldStop() {
+			return p.end(GameStopped), nil
+		}
 		// Verifier
 		workspace := p.Executor.WorkspaceState()
 		p.Result.Rounds++
@@ -94,6 +103,9 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 
 		task = spec.RenderVerifierTask(p.Compiled, workspace, ReadTranscript(p.State.TranscriptPath))
 		turn = p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task)
+		if p.shouldStop() {
+			return p.end(GameStopped), nil
+		}
 		if turn.Error != "" {
 			p.Result.Error = turn.Error
 			return p.end(GameFailure), nil
@@ -113,6 +125,9 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 			break
 		}
 
+		if p.shouldStop() {
+			return p.end(GameStopped), nil
+		}
 		// Prover fix
 		workspace = p.Executor.WorkspaceState()
 		p.Result.Rounds++
@@ -122,6 +137,9 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 
 		task = spec.RenderProverTask(p.Compiled, p.Result.ProverRounds, workspace, ReadTranscript(p.State.TranscriptPath))
 		turn = p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task)
+		if p.shouldStop() {
+			return p.end(GameStopped), nil
+		}
 		if turn.Error != "" {
 			p.Result.Error = turn.Error
 			return p.end(GameFailure), nil
@@ -135,6 +153,10 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 		log.Printf("=== PVG TIMEOUT ===")
 	}
 	return p.end(GameTimeout), nil
+}
+
+func (p *PVG) shouldStop() bool {
+	return p.Config.StopRequested != nil && p.Config.StopRequested()
 }
 
 func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string) TurnResult {
