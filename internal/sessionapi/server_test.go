@@ -103,6 +103,26 @@ func TestCreateSession(t *testing.T) {
 	}
 }
 
+func TestHealthz(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/healthz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+
+	var body map[string]string
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("unexpected health body: %#v", body)
+	}
+}
+
 func TestCreateSessionJSONShape(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
@@ -137,6 +157,35 @@ func TestCreateSessionJSONShape(t *testing.T) {
 	assertJSONType(t, m, "specs", "slice")
 	assertJSONType(t, m, "epochs", "slice")
 	assertJSONType(t, m, "spec_versions", "slice")
+}
+
+func TestCreateSessionRejectsUnknownFields(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/api/sessions",
+		"application/json",
+		strings.NewReader(`{"spec_path":"/tmp/specs/test/SPEC.md","unexpected":true}`),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "400", itoa(resp.StatusCode))
+}
+
+func TestCreateSessionRejectsOversizedBody(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	body := `{"spec_markdown":"` + strings.Repeat("x", 4<<20) + `"}`
+	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "400", itoa(resp.StatusCode))
 }
 
 // --------- GET /api/sessions ------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -413,6 +462,39 @@ func TestEventsJSONShape(t *testing.T) {
 	var m map[string]any
 	json.Unmarshal(raw, &m)
 	assertJSONType(t, m, "events", "slice")
+}
+
+func TestEventsSSE(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, `{"spec_path":"/tmp/es/SPEC.md","model":"","thinking":""}`)
+	evidencePath := filepath.Join(store.Root, created.SessionID, "specs", "es", "evidence.jsonl")
+	os.MkdirAll(filepath.Dir(evidencePath), 0o755)
+	os.WriteFile(evidencePath, []byte(`{"event":"game_end","data":{"game_result":"success"}}`+"\n"), 0o644)
+	stopSession(t, srv.URL, created.SessionID)
+
+	req, err := http.NewRequest("GET", srv.URL+"/api/sessions/"+created.SessionID+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+	if !strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream") {
+		t.Fatalf("content-type: got %q", resp.Header.Get("Content-Type"))
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `data: {"event":"game_end"`) {
+		t.Fatalf("unexpected SSE body: %s", body)
+	}
 }
 
 // --------- GET /api/sessions/{id}/workspace/{spec} ------------------------------------------------------------------------------------------------

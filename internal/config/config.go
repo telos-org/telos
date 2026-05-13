@@ -22,10 +22,10 @@ type Config struct {
 	AuthToken   string `yaml:"auth_token,omitempty"`
 }
 
-// EnvironmentAccess holds saved credentials for one hosted environment.
+// EnvironmentAccess holds a saved scoped token for one hosted environment.
 type EnvironmentAccess struct {
-	ID        string
-	EnvAPIKey string
+	ID    string
+	Token string
 }
 
 // ConfigPath returns the path to the active config file.
@@ -69,7 +69,9 @@ func LoadConfig() *Config {
 // SaveConfig writes config to disk.
 func SaveConfig(cfg *Config) error {
 	path := ConfigPath()
-	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	m := map[string]string{}
 	if cfg.APIEndpoint != "" {
 		m["api_endpoint"] = cfg.APIEndpoint
@@ -87,7 +89,7 @@ func SaveConfig(cfg *Config) error {
 	return nil
 }
 
-// LoadEnvironmentAccess reads saved hosted environment credentials.
+// LoadEnvironmentAccess reads saved hosted environment access tokens.
 func LoadEnvironmentAccess() []EnvironmentAccess {
 	raw := readYAMLFile(EnvironmentsPath())
 	entries, ok := raw["environments"]
@@ -97,9 +99,27 @@ func LoadEnvironmentAccess() []EnvironmentAccess {
 	switch v := entries.(type) {
 	case map[string]interface{}:
 		var result []EnvironmentAccess
-		for id, key := range v {
-			if s, ok := key.(string); ok && id != "" && s != "" {
-				result = append(result, EnvironmentAccess{ID: id, EnvAPIKey: s})
+		for id, token := range v {
+			if s, ok := token.(string); ok && id != "" && s != "" {
+				result = append(result, EnvironmentAccess{ID: id, Token: s})
+			}
+		}
+		sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
+		return result
+	case []interface{}:
+		var result []EnvironmentAccess
+		for _, entry := range v {
+			m, ok := entry.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			id, _ := m["id"].(string)
+			token, _ := m["access_token"].(string)
+			if token == "" {
+				token, _ = m["env_api_key"].(string)
+			}
+			if id != "" && token != "" {
+				result = append(result, EnvironmentAccess{ID: id, Token: token})
 			}
 		}
 		sort.Slice(result, func(i, j int) bool { return result[i].ID < result[j].ID })
@@ -108,7 +128,7 @@ func LoadEnvironmentAccess() []EnvironmentAccess {
 	return nil
 }
 
-// EnvironmentAccessByID returns the saved API key for an environment, if any.
+// EnvironmentAccessByID returns the saved scoped token for an environment, if any.
 func EnvironmentAccessByID(envID string) (EnvironmentAccess, bool) {
 	for _, env := range LoadEnvironmentAccess() {
 		if env.ID == envID {
@@ -118,13 +138,15 @@ func EnvironmentAccessByID(envID string) (EnvironmentAccess, bool) {
 	return EnvironmentAccess{}, false
 }
 
-// SaveEnvironmentAccess writes saved environment credentials.
+// SaveEnvironmentAccess writes saved environment access tokens.
 func SaveEnvironmentAccess(envs []EnvironmentAccess) error {
 	path := EnvironmentsPath()
-	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
 	m := map[string]string{}
 	for _, e := range envs {
-		m[e.ID] = e.EnvAPIKey
+		m[e.ID] = e.Token
 	}
 	data, err := yaml.Marshal(map[string]interface{}{"environments": m})
 	if err != nil {
@@ -133,9 +155,9 @@ func SaveEnvironmentAccess(envs []EnvironmentAccess) error {
 	return os.WriteFile(path, data, 0o600)
 }
 
-// SaveEnvironmentAccessEntry upserts one environment credential.
+// SaveEnvironmentAccessEntry upserts one environment access token.
 func SaveEnvironmentAccessEntry(entry EnvironmentAccess) error {
-	if entry.ID == "" || entry.EnvAPIKey == "" {
+	if entry.ID == "" || entry.Token == "" {
 		return nil
 	}
 	byID := map[string]EnvironmentAccess{}
@@ -157,13 +179,7 @@ func SaveEnvironmentAccessEntry(entry EnvironmentAccess) error {
 
 // IsConfigured returns true if the user has configured hosted access.
 func IsConfigured() bool {
-	if os.Getenv(APIEndpointEnv) != "" || os.Getenv(AuthTokenEnv) != "" {
-		return true
-	}
-	if _, err := os.Stat(ConfigPath()); err == nil {
-		return true
-	}
-	return false
+	return LoadConfig().AuthToken != ""
 }
 
 func readYAMLFile(path string) map[string]interface{} {

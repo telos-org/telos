@@ -1,10 +1,14 @@
 package hosted
 
 import (
+	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos-go/internal/sessionapi"
 )
@@ -140,8 +144,59 @@ func TestClientCreateEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
 	}
-	if env.ID != "env_123" || env.Handle != "env-abc.usetelos.ai" || env.EnvAPIKey != "env-key" {
+	if env.ID != "env_123" || env.Handle != "env-abc.usetelos.ai" || env.AccessToken != "env-key" {
 		t.Fatalf("unexpected environment: %+v", env)
+	}
+}
+
+func TestSessionCreateRequestOmitsEmptyRuntimeDefaults(t *testing.T) {
+	specID := "cal-diy"
+	body, err := json.Marshal(sessionapi.SessionCreateRequest{SpecID: &specID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(body), "model") || strings.Contains(string(body), "thinking") {
+		t.Fatalf("empty model/thinking should be omitted: %s", body)
+	}
+}
+
+func TestWaitForEnvironmentRequiresSuccessStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	err := waitForEnvironment(srv.URL, 10*time.Millisecond, srv.Client(), time.Millisecond)
+	if err == nil {
+		t.Fatal("expected readiness error")
+	}
+	if !strings.Contains(err.Error(), "HTTP 401") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWaitForEnvironmentSucceedsOnSuccessStatus(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if r.URL.Path != "/api/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	if err := waitForEnvironment(srv.URL, time.Second, srv.Client(), time.Millisecond); err != nil {
+		t.Fatalf("WaitForEnvironment: %v", err)
 	}
 }
 
@@ -187,6 +242,82 @@ func TestClientGetTranscript(t *testing.T) {
 	}
 }
 
+func TestClientStreamEvents(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/sessions/sess_123/events" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Accept") != "text/event-stream" {
+			t.Fatalf("accept header: got %q", r.Header.Get("Accept"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("event: message\n"))
+		_, _ = w.Write([]byte("data: {\"event\":\"game_start\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"event\":\"game_end\",\"data\":{\"result\":\"completed\"}}\n\n"))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	var events []map[string]any
+	err := client.StreamEvents(context.Background(), "sess_123", func(event map[string]any) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamEvents: %v", err)
+	}
+	if len(events) != 2 {
+		t.Fatalf("events: got %d", len(events))
+	}
+	if events[0]["event"] != "game_start" || events[1]["event"] != "game_end" {
+		t.Fatalf("unexpected events: %#v", events)
+	}
+}
+
+func TestClientStreamEventsRejectsMalformedData(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: not-json\n\n"))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	err := client.StreamEvents(context.Background(), "sess_bad", func(event map[string]any) error {
+		t.Fatalf("unexpected event: %#v", event)
+		return nil
+	})
+	if err == nil {
+		t.Fatal("expected malformed stream data to fail")
+	}
+	if !strings.Contains(err.Error(), "decode event stream payload") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestClientStreamEventsHandlesLargeDataLine(t *testing.T) {
+	large := strings.Repeat("x", 2<<20)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"event":"large","data":{"payload":"` + large + `"}}` + "\n\n"))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	var got string
+	err := client.StreamEvents(context.Background(), "sess_large", func(event map[string]any) error {
+		data := event["data"].(map[string]any)
+		got = data["payload"].(string)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamEvents: %v", err)
+	}
+	if len(got) != len(large) {
+		t.Fatalf("payload length: got %d, want %d", len(got), len(large))
+	}
+}
+
 func TestClientNotFound(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -200,8 +331,22 @@ func TestClientNotFound(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !contains(err.Error(), "not found") {
+	if !strings.Contains(err.Error(), "not found") {
 		t.Errorf("error should contain 'not found': got %q", err.Error())
+	}
+}
+
+func TestReadErrorPreservesStructuredDetail(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body:       io.NopCloser(strings.NewReader(`{"detail":{"error":"bad spec"}}`)),
+	}
+	err := readError(resp)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "bad spec") || !strings.Contains(err.Error(), "400") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -230,17 +375,4 @@ func TestSharedAPIModel(t *testing.T) {
 			t.Errorf("runtime round-trip: got %q", decoded.Runtime)
 		}
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsImpl(s, substr))
-}
-
-func containsImpl(s, substr string) bool {
-	for i := 0; i+len(substr) <= len(s); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

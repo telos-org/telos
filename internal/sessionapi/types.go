@@ -54,8 +54,8 @@ type SessionCreateRequest struct {
 	ParentSessionID *string  `json:"parent_session_id,omitempty"`
 	FromWorkspace   *string  `json:"from_workspace,omitempty"`
 	MaxRounds       *int     `json:"max_rounds,omitempty"`
-	Model           string   `json:"model"`
-	Thinking        string   `json:"thinking"`
+	Model           string   `json:"model,omitempty"`
+	Thinking        string   `json:"thinking,omitempty"`
 	MaxCostUSD      *float64 `json:"max_cost_usd,omitempty"`
 	AgentTimeoutSec *int     `json:"agent_timeout_sec,omitempty"`
 	Workspace       *string  `json:"workspace,omitempty"`

@@ -2,8 +2,11 @@
 package hosted
 
 import (
+	"bufio"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -23,7 +26,7 @@ const (
 type Environment struct {
 	ID             string
 	Handle         string
-	EnvAPIKey      string
+	AccessToken    string
 	State          string
 	HasRecoverable bool
 }
@@ -76,14 +79,14 @@ func NewEnvironmentClient(envID string) (*Client, *Environment, error) {
 	if env.Handle == "" {
 		return nil, nil, fmt.Errorf("environment %s has no handle", envID)
 	}
-	if env.EnvAPIKey == "" {
-		return nil, nil, fmt.Errorf("environment %s has no local API key; recover access first", envID)
+	if env.AccessToken == "" {
+		return nil, nil, fmt.Errorf("environment %s has no local access token; recover access first", envID)
 	}
-	return NewClient("https://"+env.Handle, env.EnvAPIKey), env, nil
+	return NewClient("https://"+env.Handle, env.AccessToken), env, nil
 }
 
-// ResolveEnvironment returns the control-plane record plus local/recovered API
-// key for an owned environment.
+// ResolveEnvironment returns the control-plane record plus local/recovered
+// scoped access token for an owned environment.
 func ResolveEnvironment(envID string) (*Environment, error) {
 	control, err := ControlClient()
 	if err != nil {
@@ -98,7 +101,7 @@ func ResolveEnvironment(envID string) (*Environment, error) {
 			continue
 		}
 		if access, ok := config.EnvironmentAccessByID(envID); ok {
-			env.EnvAPIKey = access.EnvAPIKey
+			env.AccessToken = access.Token
 			return &env, nil
 		}
 		if !env.HasRecoverable {
@@ -109,8 +112,8 @@ func ResolveEnvironment(envID string) (*Environment, error) {
 			return nil, err
 		}
 		if err := config.SaveEnvironmentAccessEntry(config.EnvironmentAccess{
-			ID:        recovered.ID,
-			EnvAPIKey: recovered.EnvAPIKey,
+			ID:    recovered.ID,
+			Token: recovered.AccessToken,
 		}); err != nil {
 			return nil, err
 		}
@@ -134,7 +137,7 @@ func (c *Client) CreateEnvironment() (*Environment, error) {
 		return nil, err
 	}
 	env := environmentFromJSON(raw)
-	if env.ID == "" || env.Handle == "" || env.EnvAPIKey == "" {
+	if env.ID == "" || env.Handle == "" || env.AccessToken == "" {
 		return nil, fmt.Errorf("control plane returned invalid environment")
 	}
 	return &env, nil
@@ -142,20 +145,27 @@ func (c *Client) CreateEnvironment() (*Environment, error) {
 
 // WaitForEnvironment waits until an environment-local API is reachable.
 func WaitForEnvironment(handle string, timeout time.Duration) error {
+	client := &http.Client{Timeout: 5 * time.Second}
+	return waitForEnvironment(handle, timeout, client, 5*time.Second)
+}
+
+func waitForEnvironment(handle string, timeout time.Duration, client *http.Client, pollInterval time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	url := NormalizeEndpoint(handle) + "/api/healthz"
-	client := &http.Client{Timeout: 5 * time.Second}
 	var lastErr error
 	for time.Now().Before(deadline) {
 		resp, err := client.Get(url)
 		if err == nil && resp != nil {
+			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 500 {
+			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 				return nil
 			}
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+		} else {
+			lastErr = err
 		}
-		lastErr = err
-		time.Sleep(5 * time.Second)
+		time.Sleep(pollInterval)
 	}
 	if lastErr != nil {
 		return fmt.Errorf("%s did not become ready: %w", handle, lastErr)
@@ -216,7 +226,7 @@ func (c *Client) ListEnvironments() ([]Environment, error) {
 	return envs, nil
 }
 
-// IssueEnvironmentAccess recovers a local environment API key.
+// IssueEnvironmentAccess issues a scoped environment access token.
 func (c *Client) IssueEnvironmentAccess(envID string) (*Environment, error) {
 	resp, err := c.do("POST", "/api/environments/"+envID+"/access", nil)
 	if err != nil {
@@ -231,7 +241,7 @@ func (c *Client) IssueEnvironmentAccess(envID string) (*Environment, error) {
 		return nil, err
 	}
 	env := environmentFromJSON(raw)
-	if env.ID == "" || env.Handle == "" || env.EnvAPIKey == "" {
+	if env.ID == "" || env.Handle == "" || env.AccessToken == "" {
 		return nil, fmt.Errorf("control plane returned invalid environment access")
 	}
 	return &env, nil
@@ -323,6 +333,65 @@ func (c *Client) GetEvents(id string) ([]sessionapi.SessionEvent, error) {
 	return evResp.Events, nil
 }
 
+// StreamEvents follows the hosted event stream for a session.
+func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[string]any) error) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+"/api/sessions/"+id+"/events", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	client := http.DefaultClient
+	if c.HTTP != nil {
+		clone := *c.HTTP
+		clone.Timeout = 0
+		client = &clone
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return readError(resp)
+	}
+
+	reader := bufio.NewReader(resp.Body)
+	for {
+		line, readErr := reader.ReadString('\n')
+		if readErr != nil && len(line) == 0 {
+			if errors.Is(readErr, io.EOF) {
+				break
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return readErr
+		}
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data:") {
+			if readErr != nil {
+				break
+			}
+			continue
+		}
+		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		var event map[string]any
+		if decodeErr := json.Unmarshal([]byte(payload), &event); decodeErr != nil {
+			return fmt.Errorf("decode event stream payload: %w", decodeErr)
+		}
+		if err := onEvent(event); err != nil {
+			return err
+		}
+		if readErr != nil {
+			break
+		}
+	}
+	return nil
+}
+
 func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
@@ -345,10 +414,17 @@ func environmentFromJSON(raw map[string]any) Environment {
 	return Environment{
 		ID:             stringValue(raw["id"]),
 		Handle:         stringValue(raw["env_handle"]),
-		EnvAPIKey:      stringValue(raw["env_api_key"]),
+		AccessToken:    accessTokenFromJSON(raw),
 		State:          stringValue(raw["state"]),
 		HasRecoverable: boolValue(raw["has_recoverable_env_access"]),
 	}
+}
+
+func accessTokenFromJSON(raw map[string]any) string {
+	if token := stringValue(raw["access_token"]); token != "" {
+		return token
+	}
+	return stringValue(raw["env_api_key"])
 }
 
 func stringValue(value any) string {
@@ -363,10 +439,13 @@ func boolValue(value any) bool {
 
 func readError(resp *http.Response) error {
 	data, _ := io.ReadAll(resp.Body)
-	var m map[string]string
+	var m map[string]any
 	if json.Unmarshal(data, &m) == nil {
-		if detail, ok := m["detail"]; ok {
+		if detail, ok := m["detail"].(string); ok {
 			return fmt.Errorf("%s (HTTP %d)", detail, resp.StatusCode)
+		}
+		if detail, ok := m["detail"]; ok {
+			return fmt.Errorf("%v (HTTP %d)", detail, resp.StatusCode)
 		}
 	}
 	if len(data) > 0 {

@@ -11,6 +11,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/telos-org/telos-go/internal/spec"
 )
 
 // ErrNotFound is returned when a session or artifact does not exist.
@@ -101,7 +103,11 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 
-	specName := deriveSpecName(req)
+	prepared, err := prepareRequestSpec(dir, req)
+	if err != nil {
+		return nil, err
+	}
+	specName := prepared.Name
 	specDir := filepath.Join(dir, "specs", specName)
 	if err := os.MkdirAll(specDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create spec dir: %w", err)
@@ -109,6 +115,18 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 
 	evidencePath := filepath.Join(specDir, "evidence.jsonl")
 	transcriptPath := filepath.Join(specDir, fmt.Sprintf("pvg-transcript-%s.md", id))
+	workspacePath := filepath.Join(specDir, "workspace.tar.gz")
+	sessionSpecPath := ""
+	if len(prepared.SpecData) > 0 {
+		sessionSpecPath = filepath.Join(specDir, "spec.md")
+		if err := os.WriteFile(sessionSpecPath, prepared.SpecData, 0o644); err != nil {
+			return nil, fmt.Errorf("write session spec: %w", err)
+		}
+		if prepared.EnvironmentPath == nil {
+			prepared.EnvironmentPath = strPtr(sessionSpecPath)
+		}
+	}
+	prepared.SessionSpecPath = strPtr(sessionSpecPath)
 
 	idx := 0
 	m := manifest{
@@ -117,16 +135,22 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		CreatedAt:       tsNow(),
 		Launcher:        "local",
 		ParentSessionID: req.ParentSessionID,
-		SourceSpecPath:  req.SpecPath,
+		SourceSpecPath:  prepared.SourceSpecPath,
+		SessionSpecPath: prepared.SessionSpecPath,
 		SpecName:        specName,
 		Config:          buildConfig(req),
 		Provenance:      map[string]any{"mode": "local"},
 		Specs: []manifestSpec{{
-			Index:          &idx,
-			Name:           specName,
-			DirName:        specName,
-			EvidencePath:   &evidencePath,
-			TranscriptPath: &transcriptPath,
+			Index:           &idx,
+			Name:            specName,
+			DirName:         specName,
+			EnvironmentPath: prepared.EnvironmentPath,
+			SessionSpecPath: prepared.SessionSpecPath,
+			ContentHash:     prepared.ContentHash,
+			EvidencePath:    &evidencePath,
+			TranscriptPath:  &transcriptPath,
+			WorkspacePath:   &workspacePath,
+			IntervalSeconds: prepared.IntervalSeconds,
 		}},
 		Epochs: []epoch{},
 	}
@@ -532,6 +556,69 @@ func generateSessionID() string {
 
 func tsNow() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+type preparedRequestSpec struct {
+	Name            string
+	SourceSpecPath  *string
+	EnvironmentPath *string
+	SessionSpecPath *string
+	ContentHash     *string
+	IntervalSeconds *int
+	SpecData        []byte
+}
+
+func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRequestSpec, error) {
+	prepared := preparedRequestSpec{Name: deriveSpecName(req), SourceSpecPath: req.SpecPath}
+
+	if req.SpecPath != nil && *req.SpecPath != "" {
+		abs, err := filepath.Abs(*req.SpecPath)
+		if err != nil {
+			return preparedRequestSpec{}, fmt.Errorf("resolve spec path: %w", err)
+		}
+		data, err := os.ReadFile(abs)
+		if err == nil {
+			compiled, err := spec.CompileEnvironment(abs)
+			if err != nil {
+				return preparedRequestSpec{}, err
+			}
+			prepared.Name = compiled.Environment.Name
+			prepared.EnvironmentPath = req.SpecPath
+			prepared.ContentHash = strPtr(compiled.ContentHash)
+			prepared.IntervalSeconds = compiled.Environment.IntervalSeconds
+			prepared.SpecData = data
+			return prepared, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return preparedRequestSpec{}, fmt.Errorf("read spec: %w", err)
+		}
+	}
+
+	if req.SpecMarkdown == nil || strings.TrimSpace(*req.SpecMarkdown) == "" {
+		return prepared, nil
+	}
+
+	tmpDir := filepath.Join(sessionDir, ".compile")
+	if err := os.MkdirAll(tmpDir, 0o755); err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("create compile dir: %w", err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	tmpSpecPath := filepath.Join(tmpDir, "SPEC.md")
+	data := []byte(*req.SpecMarkdown)
+	if err := os.WriteFile(tmpSpecPath, data, 0o644); err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("write compile spec: %w", err)
+	}
+	compiled, err := spec.CompileEnvironment(tmpSpecPath)
+	if err != nil {
+		return preparedRequestSpec{}, err
+	}
+	prepared.Name = compiled.Environment.Name
+	prepared.SourceSpecPath = nil
+	prepared.ContentHash = strPtr(compiled.ContentHash)
+	prepared.IntervalSeconds = compiled.Environment.IntervalSeconds
+	prepared.SpecData = data
+	return prepared, nil
 }
 
 func deriveSpecName(req SessionCreateRequest) string {

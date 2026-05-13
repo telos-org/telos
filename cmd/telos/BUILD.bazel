@@ -2,12 +2,16 @@ load("@rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library", "go_
 
 go_library(
     name = "telos_lib",
-    srcs = ["main.go"],
+    srcs = glob(
+        ["*.go"],
+        exclude = ["*_test.go"],
+    ),
     importpath = "github.com/telos-org/telos-go/cmd/telos",
     visibility = ["//visibility:private"],
     deps = [
         "//internal/cli",
         "//internal/config",
+        "//internal/game",
         "//internal/hosted",
         "//internal/sessionapi",
         "//internal/spec",
@@ -53,6 +57,6 @@ go_cross_binary(
 
 go_test(
     name = "telos_test",
-    srcs = ["main_test.go"],
+    srcs = glob(["*_test.go"]),
     embed = [":telos_lib"],
 )
