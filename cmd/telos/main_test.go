@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"flag"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/telos-org/telos-go/internal/config"
+	"github.com/telos-org/telos-go/internal/sessionapi"
 )
 
 func TestReorderInterspersedFlags(t *testing.T) {
@@ -324,6 +326,138 @@ func TestControllerSessionContextUsesScopedToken(t *testing.T) {
 	}
 	if ctx.sessionID != "sess_parent" {
 		t.Fatalf("session id: got %q", ctx.sessionID)
+	}
+}
+
+func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TELOS_SESSION_DIR", root)
+	store := sessionapi.NewFileStore(root)
+	markdown := "---\nversion: v0\nname: follow-test\nplatform: local\n---\n# Follow\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var out bytes.Buffer
+	slept := false
+	err = followTranscript(session.SessionID, "", &out, func(time.Duration) {
+		if slept {
+			t.Fatal("unexpected second sleep")
+		}
+		slept = true
+		path := session.Specs[0].TranscriptPath
+		if path == nil || *path == "" {
+			t.Fatal("missing transcript path")
+		}
+		if err := os.MkdirAll(filepath.Dir(*path), 0o755); err != nil {
+			t.Fatalf("mkdir transcript dir: %v", err)
+		}
+		if err := os.WriteFile(*path, []byte("# Transcript\nready\n"), 0o644); err != nil {
+			t.Fatalf("write transcript: %v", err)
+		}
+		if _, err := store.Stop(session.SessionID); err != nil {
+			t.Fatalf("Stop: %v", err)
+		}
+	})
+	if err != nil {
+		t.Fatalf("followTranscript: %v", err)
+	}
+	if !slept {
+		t.Fatal("expected follow to wait for transcript creation")
+	}
+	if got := out.String(); !strings.Contains(got, "ready") {
+		t.Fatalf("output: got %q", got)
+	}
+}
+
+func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TELOS_SESSION_DIR", root)
+	store := sessionapi.NewFileStore(root)
+	markdown := "---\nversion: v0\nname: missing-transcript\nplatform: local\n---\n# Missing\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if _, err := store.Stop(session.SessionID); err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+
+	var out bytes.Buffer
+	err = followTranscript(session.SessionID, "", &out, func(time.Duration) {
+		t.Fatal("terminal session should not sleep")
+	})
+	if err == nil {
+		t.Fatal("expected missing terminal transcript to fail")
+	}
+	if !strings.Contains(err.Error(), "transcript") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestFollowTranscriptSurfacesControllerTranscriptError(t *testing.T) {
+	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/sessions/sess_running/transcript":
+			http.Error(w, `{"detail":"transcript backend failed"}`, http.StatusInternalServerError)
+		case "/api/sessions/sess_running":
+			json.NewEncoder(w).Encode(map[string]any{
+				"session_id": "sess_running",
+				"runtime":    "hosted",
+				"status":     "running",
+				"config":     map[string]any{},
+				"provenance": map[string]any{},
+				"specs":      []any{},
+				"epochs":     []any{},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cluster.Close()
+	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+	t.Setenv("TELOS_API_TOKEN", "scoped-token")
+	t.Setenv("TELOS_SESSION_ID", "sess_parent")
+	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
+
+	var out bytes.Buffer
+	err := followTranscript("sess_running", "", &out, func(time.Duration) {
+		t.Fatal("500 transcript errors should not sleep")
+	})
+	if err == nil {
+		t.Fatal("expected transcript error")
+	}
+	if !strings.Contains(err.Error(), "controller transcript lookup failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestControllerLookupReturnsClusterAPIError(t *testing.T) {
+	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/sessions/sess_controller" {
+			http.Error(w, `{"detail":"cluster unavailable"}`, http.StatusInternalServerError)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer cluster.Close()
+	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+	t.Setenv("TELOS_API_TOKEN", "scoped-token")
+	t.Setenv("TELOS_SESSION_ID", "sess_parent")
+	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
+
+	_, err := getSessionFromAnywhere("sess_controller", "")
+	if err == nil {
+		t.Fatal("expected controller lookup to fail")
+	}
+	if !strings.Contains(err.Error(), "controller session lookup failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(err.Error(), "session sess_controller: not found") {
+		t.Fatalf("controller error fell through to generic not found: %v", err)
 	}
 }
 

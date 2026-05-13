@@ -1,17 +1,15 @@
 package main
 
 import (
-	"context"
-	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
-	"os/signal"
-	"syscall"
+	"strings"
 	"time"
 
-	"github.com/telos-org/telos-go/internal/hosted"
+	"github.com/telos-org/telos-go/internal/sessionapi"
 )
 
 // -- logs ---------------------------------------------------------------------
@@ -42,55 +40,46 @@ func cmdLogs(args []string) {
 }
 
 func followLogs(sessionID, envID string) {
-	if ctx, ok := controllerSessionContext(); ok {
-		client := hosted.NewClient(ctx.endpoint, ctx.token)
-		streamHostedEvents(client, sessionID)
-		return
-	}
-	if localSessionExists(sessionID) {
-		followTranscript(sessionID, envID)
-		return
-	}
-	client, err := hostedClientForSession(sessionID, envID)
-	if err != nil {
+	if err := followTranscript(sessionID, envID, os.Stdout, time.Sleep); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	streamHostedEvents(client, sessionID)
 }
 
-func streamHostedEvents(client *hosted.Client, sessionID string) {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetEscapeHTML(false)
-	err := client.StreamEvents(ctx, sessionID, func(event map[string]any) error {
-		return enc.Encode(event)
-	})
-	if err == nil || errors.Is(err, context.Canceled) {
-		return
-	}
-	fmt.Fprintf(os.Stderr, "error: %v\n", err)
-	os.Exit(1)
-}
-
-func followTranscript(sessionID, envID string) {
+func followTranscript(sessionID, envID string, out io.Writer, sleep func(time.Duration)) error {
 	var lastLen int
+	var lastTranscriptErr error
 	for {
 		text, err := getTranscriptFromAnywhere(sessionID, envID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		if len(text) > lastLen {
-			fmt.Print(text[lastLen:])
+		if err == nil && len(text) > lastLen {
+			fmt.Fprint(out, text[lastLen:])
 			lastLen = len(text)
 		}
-		// Check if session is terminal
-		sess, err := getSessionFromAnywhere(sessionID, envID)
-		if err == nil && sess.Status.IsTerminal() {
-			break
+		if err != nil {
+			if !transcriptNotReady(err) {
+				return err
+			}
+			lastTranscriptErr = err
+		} else {
+			lastTranscriptErr = nil
 		}
-		time.Sleep(2 * time.Second)
+		sess, err := getSessionFromAnywhere(sessionID, envID)
+		if err != nil {
+			return err
+		}
+		if sess.Status.IsTerminal() {
+			if lastLen == 0 && lastTranscriptErr != nil {
+				return lastTranscriptErr
+			}
+			return nil
+		}
+		sleep(2 * time.Second)
 	}
+}
+
+func transcriptNotReady(err error) bool {
+	if errors.Is(err, sessionapi.ErrNotFound) {
+		return true
+	}
+	return strings.Contains(err.Error(), "HTTP 404")
 }

@@ -97,6 +97,14 @@ func getSessionFromAnywhere(sessionID, envID string) (*sessionapi.Session, error
 		return session, nil
 	}
 
+	if ctx, ok := controllerSessionContext(); ok {
+		session, err := hosted.NewClient(ctx.endpoint, ctx.token).GetSession(sessionID)
+		if err == nil {
+			return session, nil
+		}
+		return nil, fmt.Errorf("controller session lookup failed: %w", err)
+	}
+
 	// Try hosted
 	if envID != "" || config.IsConfigured() {
 		clients, err := hostedSessionClients(envID)
@@ -125,6 +133,14 @@ func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
 		return text, nil
 	}
 
+	if ctx, ok := controllerSessionContext(); ok {
+		text, err := hosted.NewClient(ctx.endpoint, ctx.token).GetTranscript(sessionID)
+		if err == nil {
+			return text, nil
+		}
+		return "", fmt.Errorf("controller transcript lookup failed: %w", err)
+	}
+
 	if envID != "" || config.IsConfigured() {
 		clients, err := hostedSessionClients(envID)
 		if err != nil && envID != "" {
@@ -142,7 +158,7 @@ func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("session %s transcript: not found", sessionID)
+	return "", fmt.Errorf("session %s transcript: %w", sessionID, sessionapi.ErrNotFound)
 }
 
 func stopSessionAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
