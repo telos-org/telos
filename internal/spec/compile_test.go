@@ -58,6 +58,77 @@ func TestCompileWithSkills(t *testing.T) {
 	}
 }
 
+func TestCompileWithExtendsUsesParentNamespaceAndHash(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base", "SPEC.md")
+	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(basePath, []byte("---\nversion: v0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	childPath := filepath.Join(dir, "child", "SPEC.md")
+	if err := os.MkdirAll(filepath.Dir(childPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(childPath, []byte("---\nversion: v0\nname: child-spec\nplatform: local\nextends: ../base/SPEC.md\n---\nChild body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	base, err := CompileEnvironment(basePath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment base: %v", err)
+	}
+	child, err := CompileEnvironment(childPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment child: %v", err)
+	}
+	if child.ExtendsCompiled == nil {
+		t.Fatal("expected child to keep compiled parent")
+	}
+	if child.Namespace != base.Namespace {
+		t.Fatalf("namespace: got %q, want %q", child.Namespace, base.Namespace)
+	}
+	if len(child.Lineage) != 1 || child.Lineage[0] != base.Namespace {
+		t.Fatalf("lineage: got %#v", child.Lineage)
+	}
+
+	originalHash := child.ContentHash
+	if err := os.WriteFile(basePath, []byte("---\nversion: v0\nname: base-spec\nplatform: local\n---\nChanged base body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := CompileEnvironment(childPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment changed child: %v", err)
+	}
+	if changed.ContentHash == originalHash {
+		t.Fatal("child hash should change when extended parent changes")
+	}
+}
+
+func TestCompileWithoutDeclaredSkillsOnlyIncludesVerifierSkills(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: hosted-default\n---\nBody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	names := map[string]bool{}
+	for _, s := range compiled.Skills {
+		names[s.Name] = true
+	}
+	if names["k8s-deploy"] {
+		t.Fatal("skills must be explicit; hosted specs should not implicitly load catalogue skills")
+	}
+	if !names["verify-engineering"] || !names["verify-quality"] {
+		t.Fatal("expected built-in verifier skills")
+	}
+}
+
 func TestCompileWithEmphasizedSkill(t *testing.T) {
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, "critical-skill")

@@ -192,7 +192,10 @@ func parseSkillRefs(baseDir string, v interface{}) (paths []string, required []s
 
 func resolvePath(baseDir, raw string) (string, error) {
 	p := filepath.Join(baseDir, raw)
-	abs, _ := filepath.Abs(p)
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(abs); err == nil {
 		return abs, nil
 	}
@@ -207,7 +210,10 @@ func resolvePath(baseDir, raw string) (string, error) {
 
 func resolveSkillPath(baseDir, raw string) (string, error) {
 	local := filepath.Join(baseDir, raw)
-	abs, _ := filepath.Abs(local)
+	abs, err := filepath.Abs(local)
+	if err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(abs); err == nil {
 		return abs, nil
 	}
@@ -267,14 +273,20 @@ func skillFingerprint(s *Skill) string {
 	return sha256str(parts...)
 }
 
-func merkleHash(env *EnvironmentSpec, skills []*Skill) string {
-	specData, _ := os.ReadFile(env.Path)
+func merkleHash(env *EnvironmentSpec, extendsCompiled *CompiledEnvironment, skills []*Skill) (string, error) {
+	specData, err := os.ReadFile(env.Path)
+	if err != nil {
+		return "", fmt.Errorf("read spec for content hash: %w", err)
+	}
 	parts := []string{env.SpecText, string(specData)}
+	if extendsCompiled != nil {
+		parts = append(parts, extendsCompiled.ContentHash)
+	}
 	sorted := make([]*Skill, len(skills))
 	copy(sorted, skills)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
 	for _, s := range sorted {
 		parts = append(parts, s.Name, skillFingerprint(s))
 	}
-	return sha256str(parts...)
+	return sha256str(parts...), nil
 }

@@ -13,6 +13,7 @@ type CompiledEnvironment struct {
 	Cluster                string
 	Context                string
 	Lineage                []string
+	ExtendsCompiled        *CompiledEnvironment
 	Skills                 []*Skill
 	RequiredVerifierSkills []*Skill
 	ContentHash            string
@@ -41,9 +42,21 @@ func compileEnv(envPath string, visited map[string]bool) (*CompiledEnvironment, 
 		return nil, err
 	}
 
+	var extendsCompiled *CompiledEnvironment
+	if env.ExtendsPath != "" {
+		extendsCompiled, err = compileEnv(env.ExtendsPath, visited)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	namespace := fmt.Sprintf("ns-%s", env.Name)
+	if extendsCompiled != nil {
+		namespace = extendsCompiled.Namespace
+	}
 	cluster := "telos"
 	context := cluster
+	lineage := computeLineage(namespace, extendsCompiled)
 
 	// Resolve skills
 	var declared []*Skill
@@ -90,7 +103,10 @@ func compileEnv(envPath string, visited map[string]bool) (*CompiledEnvironment, 
 		}
 	}
 
-	contentHash := merkleHash(env, skills)
+	contentHash, err := merkleHash(env, extendsCompiled, skills)
+	if err != nil {
+		return nil, err
+	}
 
 	return &CompiledEnvironment{
 		Environment:            env,
@@ -98,11 +114,28 @@ func compileEnv(envPath string, visited map[string]bool) (*CompiledEnvironment, 
 		Namespace:              namespace,
 		Cluster:                cluster,
 		Context:                context,
-		Lineage:                []string{namespace},
+		Lineage:                lineage,
+		ExtendsCompiled:        extendsCompiled,
 		Skills:                 skills,
 		RequiredVerifierSkills: reqVerifierSkills,
 		ContentHash:            contentHash,
 	}, nil
+}
+
+func computeLineage(namespace string, extendsCompiled *CompiledEnvironment) []string {
+	seen := map[string]bool{namespace: true}
+	lineage := []string{namespace}
+	if extendsCompiled == nil {
+		return lineage
+	}
+	for _, ns := range extendsCompiled.Lineage {
+		if seen[ns] {
+			continue
+		}
+		seen[ns] = true
+		lineage = append(lineage, ns)
+	}
+	return lineage
 }
 
 // ToIRJSON serializes a compiled environment to the inspectable IR format.
@@ -132,6 +165,15 @@ func ToIRJSON(c *CompiledEnvironment) map[string]interface{} {
 	if platform == "" {
 		platform = "cloud"
 	}
+	var extends any
+	if c.ExtendsCompiled != nil {
+		extends = map[string]interface{}{
+			"name":         c.ExtendsCompiled.Environment.Name,
+			"path":         c.Environment.ExtendsPath,
+			"namespace":    c.ExtendsCompiled.Namespace,
+			"content_hash": c.ExtendsCompiled.ContentHash,
+		}
+	}
 	return map[string]interface{}{
 		"kind":                     "telos.compiled_environment.v1",
 		"name":                     c.Environment.Name,
@@ -140,7 +182,7 @@ func ToIRJSON(c *CompiledEnvironment) map[string]interface{} {
 		"cluster":                  c.Cluster,
 		"context":                  c.Context,
 		"lineage":                  c.Lineage,
-		"extends":                  nil,
+		"extends":                  extends,
 		"interval_seconds":         c.Environment.IntervalSeconds,
 		"tags":                     c.Environment.Tags,
 		"platform":                 platform,
