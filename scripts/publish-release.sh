@@ -28,6 +28,8 @@ gcloud storage cp "${dist}/manifest.json" "gs://${bucket}/releases/latest/manife
   --cache-control="no-cache,max-age=0"
 gcloud storage cp "${dist}/SHA256SUMS" "gs://${bucket}/releases/latest/SHA256SUMS" \
   --cache-control="no-cache,max-age=0"
+gcloud storage cp "${dist}/telos-"* "gs://${bucket}/releases/latest/" \
+  --cache-control="no-cache,max-age=0"
 
 gcloud storage buckets add-iam-policy-binding "gs://${bucket}" \
   --member=allUsers \
