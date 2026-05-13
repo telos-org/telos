@@ -123,6 +123,39 @@ func TestHealthz(t *testing.T) {
 	}
 }
 
+func TestCreateSessionPersistsSpecMarkdown(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root)
+	markdown := "---\nversion: v0\nname: markdown-task\nplatform: local\ninterval: 30s\n---\n# Task\n\nDo it."
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if session.SpecName == nil || *session.SpecName != "markdown-task" {
+		t.Fatalf("spec name: got %v", session.SpecName)
+	}
+	if session.SessionSpecPath == nil || *session.SessionSpecPath == "" {
+		t.Fatal("expected top-level session_spec_path")
+	}
+	if session.Specs[0].SessionSpecPath == nil || *session.Specs[0].SessionSpecPath == "" {
+		t.Fatal("expected spec session_spec_path")
+	}
+	if session.Specs[0].ContentHash == nil || *session.Specs[0].ContentHash == "" {
+		t.Fatal("expected content hash")
+	}
+	if session.Specs[0].IntervalSeconds == nil || *session.Specs[0].IntervalSeconds != 30 {
+		t.Fatalf("interval: got %v", session.Specs[0].IntervalSeconds)
+	}
+	data, err := os.ReadFile(*session.Specs[0].SessionSpecPath)
+	if err != nil {
+		t.Fatalf("read session spec: %v", err)
+	}
+	if string(data) != markdown {
+		t.Fatalf("session spec was not persisted")
+	}
+}
+
 func TestCreateSessionJSONShape(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()

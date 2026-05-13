@@ -277,9 +277,9 @@ func TestHostedSessionClientsRecoverEnvironmentAccess(t *testing.T) {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/environments/env_123/access":
 			recovered = true
 			json.NewEncoder(w).Encode(map[string]any{
-				"id":          "env_123",
-				"env_handle":  "env-abc.usetelos.ai",
-				"env_api_key": "env-key",
+				"id":           "env_123",
+				"env_handle":   "env-abc.usetelos.ai",
+				"access_token": "env-token",
 			})
 		default:
 			http.NotFound(w, r)
@@ -302,8 +302,8 @@ func TestHostedSessionClientsRecoverEnvironmentAccess(t *testing.T) {
 	if !ok {
 		t.Fatal("expected recovered access to be saved")
 	}
-	if access.Token != "env-key" {
-		t.Fatalf("saved key: got %q", access.Token)
+	if access.Token != "env-token" {
+		t.Fatalf("saved token: got %q", access.Token)
 	}
 }
 

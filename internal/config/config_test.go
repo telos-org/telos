@@ -84,8 +84,8 @@ func TestEnvironmentAccess(t *testing.T) {
 	t.Setenv("TELOS_CONFIG", filepath.Join(dir, "config.yaml"))
 
 	envs := []EnvironmentAccess{
-		{ID: "env-1", Token: "key-1"},
-		{ID: "env-2", Token: "key-2"},
+		{ID: "env-1", Token: "token-1"},
+		{ID: "env-2", Token: "token-2"},
 	}
 	err := SaveEnvironmentAccess(envs)
 	if err != nil {
@@ -96,10 +96,10 @@ func TestEnvironmentAccess(t *testing.T) {
 	if len(loaded) != 2 {
 		t.Fatalf("expected 2 environments, got %d", len(loaded))
 	}
-	if loaded[0].ID != "env-1" || loaded[0].Token != "key-1" {
+	if loaded[0].ID != "env-1" || loaded[0].Token != "token-1" {
 		t.Errorf("env-1: got %+v", loaded[0])
 	}
-	if loaded[1].ID != "env-2" || loaded[1].Token != "key-2" {
+	if loaded[1].ID != "env-2" || loaded[1].Token != "token-2" {
 		t.Errorf("env-2: got %+v", loaded[1])
 	}
 
@@ -107,8 +107,8 @@ func TestEnvironmentAccess(t *testing.T) {
 	if !ok {
 		t.Fatal("expected env-1")
 	}
-	if env.Token != "key-1" {
-		t.Errorf("env-1 key: got %q", env.Token)
+	if env.Token != "token-1" {
+		t.Errorf("env-1 token: got %q", env.Token)
 	}
 }
 
@@ -122,7 +122,7 @@ func TestLoadEnvironmentAccessLegacyList(t *testing.T) {
 environments:
   - id: env-legacy
     env_handle: env-legacy.usetelos.ai
-    env_api_key: legacy-key
+    env_api_key: legacy-token
 `), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -131,7 +131,31 @@ environments:
 	if len(loaded) != 1 {
 		t.Fatalf("expected 1 environment, got %d", len(loaded))
 	}
-	if loaded[0].ID != "env-legacy" || loaded[0].Token != "legacy-key" {
+	if loaded[0].ID != "env-legacy" || loaded[0].Token != "legacy-token" {
+		t.Fatalf("unexpected environment: %+v", loaded[0])
+	}
+}
+
+func TestLoadEnvironmentAccessList(t *testing.T) {
+	dir := t.TempDir()
+	envPath := filepath.Join(dir, "environments.yaml")
+	t.Setenv("TELOS_ENVIRONMENTS_CONFIG", envPath)
+	t.Setenv("TELOS_CONFIG", filepath.Join(dir, "config.yaml"))
+
+	if err := os.WriteFile(envPath, []byte(`
+environments:
+  - id: env-token
+    env_handle: env-token.usetelos.ai
+    access_token: scoped-token
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded := LoadEnvironmentAccess()
+	if len(loaded) != 1 {
+		t.Fatalf("expected 1 environment, got %d", len(loaded))
+	}
+	if loaded[0].ID != "env-token" || loaded[0].Token != "scoped-token" {
 		t.Fatalf("unexpected environment: %+v", loaded[0])
 	}
 }
@@ -141,13 +165,13 @@ func TestSaveEnvironmentAccessEntry(t *testing.T) {
 	t.Setenv("TELOS_ENVIRONMENTS_CONFIG", filepath.Join(dir, "environments.yaml"))
 	t.Setenv("TELOS_CONFIG", filepath.Join(dir, "config.yaml"))
 
-	if err := SaveEnvironmentAccessEntry(EnvironmentAccess{ID: "env-2", Token: "key-2"}); err != nil {
+	if err := SaveEnvironmentAccessEntry(EnvironmentAccess{ID: "env-2", Token: "token-2"}); err != nil {
 		t.Fatalf("SaveEnvironmentAccessEntry: %v", err)
 	}
-	if err := SaveEnvironmentAccessEntry(EnvironmentAccess{ID: "env-1", Token: "key-1"}); err != nil {
+	if err := SaveEnvironmentAccessEntry(EnvironmentAccess{ID: "env-1", Token: "token-1"}); err != nil {
 		t.Fatalf("SaveEnvironmentAccessEntry: %v", err)
 	}
-	if err := SaveEnvironmentAccessEntry(EnvironmentAccess{ID: "env-2", Token: "key-2b"}); err != nil {
+	if err := SaveEnvironmentAccessEntry(EnvironmentAccess{ID: "env-2", Token: "token-2b"}); err != nil {
 		t.Fatalf("SaveEnvironmentAccessEntry: %v", err)
 	}
 
@@ -155,10 +179,10 @@ func TestSaveEnvironmentAccessEntry(t *testing.T) {
 	if len(loaded) != 2 {
 		t.Fatalf("expected 2 environments, got %d", len(loaded))
 	}
-	if loaded[0].ID != "env-1" || loaded[0].Token != "key-1" {
+	if loaded[0].ID != "env-1" || loaded[0].Token != "token-1" {
 		t.Errorf("env-1: got %+v", loaded[0])
 	}
-	if loaded[1].ID != "env-2" || loaded[1].Token != "key-2b" {
+	if loaded[1].ID != "env-2" || loaded[1].Token != "token-2b" {
 		t.Errorf("env-2: got %+v", loaded[1])
 	}
 }

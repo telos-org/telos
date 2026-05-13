@@ -92,6 +92,14 @@ func TestCompileWithExtendsUsesParentNamespaceAndHash(t *testing.T) {
 	if len(child.Lineage) != 1 || child.Lineage[0] != base.Namespace {
 		t.Fatalf("lineage: got %#v", child.Lineage)
 	}
+	ir := ToIRJSON(child)
+	extends, ok := ir["extends"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected extends in IR, got %#v", ir["extends"])
+	}
+	if extends["name"] != "base-spec" || extends["namespace"] != base.Namespace {
+		t.Fatalf("unexpected extends IR: %#v", extends)
+	}
 
 	originalHash := child.ContentHash
 	if err := os.WriteFile(basePath, []byte("---\nversion: v0\nname: base-spec\nplatform: local\n---\nChanged base body"), 0o644); err != nil {

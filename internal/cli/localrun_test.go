@@ -15,9 +15,13 @@ import (
 type fakeExecutor struct {
 	proverResult   game.TurnResult
 	verifierResult game.TurnResult
+	onExecute      func(role string)
 }
 
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) game.TurnResult {
+	if f.onExecute != nil {
+		f.onExecute(role)
+	}
 	if role == "prover" {
 		return f.proverResult
 	}
@@ -256,6 +260,58 @@ func TestRunLocalSessionRejectsMissingSessionSpecPath(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "session_spec_path") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunLocalSessionStopsWhenManifestIsStopped(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{MaxRounds: 4})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"))
+
+	exec := &fakeExecutor{
+		proverResult: game.TurnResult{
+			Role:   "prover",
+			Status: game.StatusContinue,
+			Logs:   "started",
+		},
+		verifierResult: game.TurnResult{
+			Role:   "verifier",
+			Status: game.StatusContinue,
+			Logs:   "should not run",
+		},
+		onExecute: func(role string) {
+			if role != "prover" {
+				return
+			}
+			if _, err := store.Stop(session.SessionID); err != nil {
+				t.Fatalf("Stop: %v", err)
+			}
+		},
+	}
+
+	result, err := RunLocalSessionWithExecutor(session.SessionDir, exec)
+	if err != nil {
+		t.Fatalf("RunLocalSession: %v", err)
+	}
+	if result.GameResult != game.GameStopped {
+		t.Fatalf("game result: got %s", result.GameResult)
+	}
+
+	sessionAPI, err := store.Get(session.SessionID)
+	if err != nil {
+		t.Fatalf("store.Get: %v", err)
+	}
+	if sessionAPI.Status != sessionapi.StatusStopped {
+		t.Fatalf("status: got %s", sessionAPI.Status)
 	}
 }
 

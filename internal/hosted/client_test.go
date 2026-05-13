@@ -131,9 +131,35 @@ func TestClientCreateEnvironment(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
+			"id":           "env_123",
+			"env_handle":   "env-abc.usetelos.ai",
+			"access_token": "env-token",
+			"state":        "provisioning",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	env, err := client.CreateEnvironment()
+	if err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	if env.ID != "env_123" || env.Handle != "env-abc.usetelos.ai" || env.AccessToken != "env-token" {
+		t.Fatalf("unexpected environment: %+v", env)
+	}
+}
+
+func TestClientCreateEnvironmentAcceptsLegacyAccessField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/environments" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
 			"id":          "env_123",
 			"env_handle":  "env-abc.usetelos.ai",
-			"env_api_key": "env-key",
+			"env_api_key": "legacy-token",
 			"state":       "provisioning",
 		})
 	}))
@@ -144,8 +170,8 @@ func TestClientCreateEnvironment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
 	}
-	if env.ID != "env_123" || env.Handle != "env-abc.usetelos.ai" || env.AccessToken != "env-key" {
-		t.Fatalf("unexpected environment: %+v", env)
+	if env.AccessToken != "legacy-token" {
+		t.Fatalf("access token: got %q", env.AccessToken)
 	}
 }
 
