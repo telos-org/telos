@@ -1,49 +1,44 @@
 package main
 
 import (
-	"context"
-	"errors"
+	"flag"
 	"fmt"
-	"net"
-	"net/http"
 	"os"
-	"os/signal"
-	"syscall"
-	"time"
+	"strconv"
 
-	"github.com/telos-org/telos-go/internal/sessionapi"
+	"github.com/telos-org/telos-go/internal/local"
 )
 
-// -- serve (internal) ---------------------------------------------------------
+// -- serve / telosd (internal) ------------------------------------------------
 
-func cmdServe() {
-	addr := os.Getenv("TELOS_LISTEN_ADDR")
-	if addr == "" {
-		addr = "127.0.0.1:0"
+// cmdServe runs telosd: the local Sessions API daemon for one workspace.
+func cmdServe(args []string) {
+	fs := flag.NewFlagSet("serve", flag.ExitOnError)
+	workspaceRoot := fs.String("workspace-root", "", "Workspace root directory")
+	idleSeconds := fs.Int("idle-seconds", defaultIdleSeconds(), "Idle shutdown timeout in seconds")
+	parseFlags(fs, args)
+
+	root := *workspaceRoot
+	if root == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		root = cwd
 	}
-	s := store()
-	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, s)
-	ln, err := net.Listen("tcp", addr)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "listen: %v\n", err)
+
+	if err := local.RunDaemon(root, *idleSeconds); err != nil {
+		fmt.Fprintf(os.Stderr, "telosd: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Fprintf(os.Stderr, "telos sessions api listening on %s\n", ln.Addr())
-	srv := &http.Server{
-		Handler:           mux,
-		ReadHeaderTimeout: 5 * time.Second,
+}
+
+func defaultIdleSeconds() int {
+	if v := os.Getenv("TELOSD_IDLE_SECONDS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	go func() {
-		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
-	}()
-	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		fmt.Fprintf(os.Stderr, "serve: %v\n", err)
-		os.Exit(1)
-	}
+	return local.DefaultIdleSeconds
 }

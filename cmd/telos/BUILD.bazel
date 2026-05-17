@@ -13,6 +13,7 @@ go_library(
         "//internal/config",
         "//internal/game",
         "//internal/hosted",
+        "//internal/local",
         "//internal/sessionapi",
         "//internal/spec",
     ],

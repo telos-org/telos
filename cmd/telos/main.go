@@ -47,7 +47,7 @@ func main() {
 	case "version":
 		fmt.Println("telos " + Version)
 	case "serve":
-		cmdServe()
+		cmdServe(os.Args[2:])
 	case "worker":
 		cmdWorker(os.Args[2:])
 	default:
