@@ -55,16 +55,17 @@ func cmdList(args []string) {
 		sessions = sessions[:*limit]
 	}
 
+	visible := visibleListSessions(sessions, *wide)
 	if *jsonOut {
-		printJSON(sessionapi.SessionListResponse{Sessions: sessions})
+		printJSON(sessionapi.SessionListResponse{Sessions: visible})
 		return
 	}
 
-	if len(sessions) == 0 {
+	if len(visible) == 0 {
 		fmt.Println("no sessions")
 		return
 	}
-	for _, sess := range sessions {
+	for _, sess := range visible {
 		name := ""
 		if sess.SpecName != nil {
 			name = *sess.SpecName
@@ -88,6 +89,19 @@ func cmdList(args []string) {
 		}
 		fmt.Printf("%-40s %-12s %-20s %s\n", sess.SessionID, sess.Status, name, cost)
 	}
+}
+
+func visibleListSessions(sessions []sessionapi.Session, wide bool) []sessionapi.Session {
+	if wide {
+		return sessions
+	}
+	visible := make([]sessionapi.Session, 0, len(sessions))
+	for _, session := range sessions {
+		if session.ParentSessionID == nil || *session.ParentSessionID == "" {
+			visible = append(visible, session)
+		}
+	}
+	return visible
 }
 
 func listEnvironments(jsonOut bool) {
