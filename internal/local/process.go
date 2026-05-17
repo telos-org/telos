@@ -44,6 +44,15 @@ func descendantPIDs(pid int) []int {
 	return out
 }
 
+// pidAlive reports whether a process is still running.
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
+}
+
 func processChildren() map[int][]int {
 	out, err := exec.Command("ps", "-axo", "pid=,ppid=").Output()
 	if err != nil {

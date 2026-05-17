@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "local",
     srcs = [
+        "client.go",
         "daemon.go",
         "paths.go",
         "platform.go",
@@ -19,6 +20,7 @@ go_library(
 go_test(
     name = "local_test",
     srcs = [
+        "client_test.go",
         "daemon_test.go",
         "paths_test.go",
         "platform_test.go",
