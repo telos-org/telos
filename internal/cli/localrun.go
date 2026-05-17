@@ -20,6 +20,7 @@ const DefaultLocalModel = "claude-opus-4-6"
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {
 	Workspace       string
+	SessionsRoot    string
 	Model           string
 	Thinking        string
 	MaxRounds       int
@@ -54,9 +55,12 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 		}
 	}
 
-	sessionsRoot := filepath.Join(".telos", "sessions")
-	if workspace != "" {
-		sessionsRoot = filepath.Join(workspace, ".telos", "sessions")
+	sessionsRoot := cfg.SessionsRoot
+	if sessionsRoot == "" {
+		sessionsRoot = filepath.Join(".telos", "sessions")
+		if workspace != "" {
+			sessionsRoot = filepath.Join(workspace, ".telos", "sessions")
+		}
 	}
 	sessionsRoot, err = filepath.Abs(sessionsRoot)
 	if err != nil {

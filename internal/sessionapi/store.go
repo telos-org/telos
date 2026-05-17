@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/telos-org/telos-go/internal/spec"
@@ -386,12 +387,15 @@ func deriveSpec(ms ManifestSpec) SessionSpec {
 }
 
 func deriveStatus(m *Manifest) SessionStatus {
-	open := m.OpenEpoch()
-	last := m.LastEpoch()
-
-	if open != nil {
-		return StatusRunning
+	if open := m.OpenEpoch(); open != nil {
+		// An open epoch is only "running" if its worker is still alive;
+		// otherwise the worker died without recording a result.
+		if open.Runner != nil && pidAlive(open.Runner.PID) {
+			return StatusRunning
+		}
+		return StatusStale
 	}
+	last := m.LastEpoch()
 	if last != nil {
 		if last.Result != nil {
 			switch *last.Result {
@@ -406,6 +410,15 @@ func deriveStatus(m *Manifest) SessionStatus {
 		return StatusCompleted
 	}
 	return StatusPending
+}
+
+// pidAlive reports whether a process is still running.
+func pidAlive(pid int) bool {
+	if pid <= 0 {
+		return false
+	}
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
 }
 
 func epochToMap(e Epoch) map[string]any {

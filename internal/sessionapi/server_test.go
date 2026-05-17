@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -603,7 +604,10 @@ func TestSessionLifecycleStatus(t *testing.T) {
 			"finished_at": nil,
 			"result":      nil,
 			"error":       nil,
-			"runner":      nil,
+			"runner": map[string]any{
+				"kind": "local-subprocess",
+				"pid":  os.Getpid(),
+			},
 		},
 	}
 	updated, _ := json.MarshalIndent(m, "", "  ")
@@ -678,6 +682,44 @@ func TestSessionStatusFailed(t *testing.T) {
 	if session.Error == nil || *session.Error != "some error" {
 		t.Errorf("expected error='some error', got %v", session.Error)
 	}
+}
+
+func TestSessionStatusStale(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, `{"spec_path":"/tmp/stale/SPEC.md","model":"","thinking":""}`)
+
+	// A worker that exited without recording a result leaves an open epoch
+	// with a dead pid; the session must derive as stale, not running.
+	finished := exec.Command("true")
+	if err := finished.Run(); err != nil {
+		t.Fatalf("seed dead pid: %v", err)
+	}
+	deadPID := finished.Process.Pid
+
+	mpath := filepath.Join(store.Root, created.SessionID, "session.json")
+	raw, _ := os.ReadFile(mpath)
+	var m map[string]any
+	json.Unmarshal(raw, &m)
+	m["epochs"] = []any{
+		map[string]any{
+			"id":          1,
+			"started_at":  "2026-01-01T00:00:00.000Z",
+			"finished_at": nil,
+			"result":      nil,
+			"error":       nil,
+			"runner": map[string]any{
+				"kind": "local-subprocess",
+				"pid":  deadPID,
+			},
+		},
+	}
+	updated, _ := json.MarshalIndent(m, "", "  ")
+	os.WriteFile(mpath, updated, 0o644)
+
+	session := getSession(t, srv.URL, created.SessionID)
+	assertEqual(t, "stale status", "stale", string(session.Status))
 }
 
 // --------- Python API JSON compatibility ------------------------------------------------------------------------------------------------------------------------------
