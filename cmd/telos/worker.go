@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -86,30 +85,18 @@ type workerManifest struct {
 }
 
 func loadWorkerManifest(sessionDir string) (workerManifest, error) {
-	data, err := os.ReadFile(filepath.Join(sessionDir, "session.json"))
+	m, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
 	if err != nil {
 		return workerManifest{}, fmt.Errorf("read worker manifest: %w", err)
 	}
-	var raw struct {
-		SessionKind sessionapi.SessionKind `json:"session_kind"`
-		Specs       []struct {
-			IntervalSeconds *float64 `json:"interval_seconds"`
-		} `json:"specs"`
+	if m.SessionKind != sessionapi.KindController && m.SessionKind != sessionapi.KindTask {
+		return workerManifest{}, fmt.Errorf("invalid session_kind %q in worker manifest", m.SessionKind)
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return workerManifest{}, fmt.Errorf("decode worker manifest: %w", err)
+	manifest := workerManifest{Kind: m.SessionKind}
+	if len(m.Specs) > 0 {
+		if secs := m.Specs[0].IntervalSeconds; secs != nil && *secs > 0 {
+			manifest.Interval = time.Duration(*secs) * time.Second
+		}
 	}
-	if raw.SessionKind != sessionapi.KindController && raw.SessionKind != sessionapi.KindTask {
-		return workerManifest{}, fmt.Errorf("invalid session_kind %q in worker manifest", raw.SessionKind)
-	}
-	manifest := workerManifest{Kind: raw.SessionKind}
-	if len(raw.Specs) == 0 {
-		return manifest, nil
-	}
-	seconds := raw.Specs[0].IntervalSeconds
-	if seconds == nil || *seconds <= 0 {
-		return manifest, nil
-	}
-	manifest.Interval = time.Duration(*seconds * float64(time.Second))
 	return manifest, nil
 }

@@ -2,7 +2,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +11,7 @@ import (
 	"github.com/telos-org/telos-go/internal/executor"
 	"github.com/telos-org/telos-go/internal/game"
 	"github.com/telos-org/telos-go/internal/platform"
+	"github.com/telos-org/telos-go/internal/sessionapi"
 	"github.com/telos-org/telos-go/internal/spec"
 )
 
@@ -108,37 +108,31 @@ func RunLocalSession(sessionDir string) (*game.PVGResult, error) {
 
 // RunLocalSessionWithExecutor runs a session with an optional custom executor.
 func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*game.PVGResult, error) {
-	data, err := os.ReadFile(filepath.Join(sessionDir, "session.json"))
+	m, err := sessionapi.ReadManifest(manifestPath(sessionDir))
 	if err != nil {
 		return nil, fmt.Errorf("read session manifest: %w", err)
 	}
-	var manifest map[string]interface{}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return nil, err
-	}
-	if manifestStopped(manifest) {
+	if m.IsStopped() {
 		return &game.PVGResult{GameResult: game.GameStopped, Error: "stopped by operator"}, nil
 	}
 
-	cfg := manifestToConfig(manifest)
-	specs, _ := manifest["specs"].([]interface{})
-	if len(specs) == 0 {
+	if len(m.Specs) == 0 {
 		return nil, fmt.Errorf("no specs in manifest")
 	}
-	spec0, _ := specs[0].(map[string]interface{})
-	sessionSpecPath, _ := spec0["session_spec_path"].(string)
-	if sessionSpecPath == "" {
+	sessionSpec := m.Specs[0]
+	if sessionSpec.SessionSpecPath == nil || *sessionSpec.SessionSpecPath == "" {
 		return nil, fmt.Errorf("manifest spec missing session_spec_path")
 	}
+	sessionSpecPath := *sessionSpec.SessionSpecPath
+
+	cfg := configFromManifest(m)
 
 	compiled, err := spec.CompileEnvironment(sessionSpecPath)
 	if err != nil {
 		return nil, err
 	}
 
-	specDir := filepath.Dir(sessionSpecPath)
-	sessionID, _ := manifest["session_id"].(string)
-	state := game.NewPVGState(compiled.Environment.Name, specDir, sessionID)
+	state := game.NewPVGState(compiled.Environment.Name, filepath.Dir(sessionSpecPath), m.SessionID)
 
 	workspace := cfg.Workspace
 	if workspace == "" {
@@ -148,8 +142,8 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		return nil, err
 	}
 
-	// Open epoch
-	if err := startEpoch(sessionDir, manifest); err != nil {
+	// Open epoch.
+	if err := startEpoch(sessionDir, m); err != nil {
 		return nil, err
 	}
 
@@ -160,7 +154,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		agentExec, err = createPiExecutor(workspace, cfg)
 		if err != nil {
 			fail := &game.PVGResult{GameResult: game.GameFailure, Error: err.Error()}
-			if finishErr := finishEpoch(sessionDir, manifest, fail); finishErr != nil {
+			if finishErr := finishEpoch(sessionDir, m, fail); finishErr != nil {
 				return nil, fmt.Errorf("%w; also failed to finish epoch: %v", err, finishErr)
 			}
 			return nil, err
@@ -177,8 +171,8 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)
 	result := pvg.Run()
 
-	// Close epoch
-	if err := finishEpoch(sessionDir, manifest, result); err != nil {
+	// Close epoch.
+	if err := finishEpoch(sessionDir, m, result); err != nil {
 		return result, err
 	}
 
@@ -186,7 +180,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 }
 
 func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecutor, error) {
-	// Check pi is available
+	// Check pi is available.
 	if _, err := exec.LookPath("pi"); err != nil {
 		return nil, fmt.Errorf("pi executable not found on PATH. Install pi (https://github.com/mariozechner/pi-coding-agent) to run local sessions")
 	}
@@ -232,190 +226,147 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		agentTimeout = 1800
 	}
 
-	manifest := map[string]interface{}{
-		"session_id":        filepath.Base(sessionDir),
-		"session_kind":      "task",
-		"created_at":        time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		"launcher":          "local",
-		"parent_session_id": nil,
-		"source_spec_path":  specPath,
-		"session_spec_path": state.SpecPath(),
-		"spec_name":         compiled.Environment.Name,
-		"config": map[string]interface{}{
-			"model":             model,
-			"max_rounds":        maxRounds,
-			"max_cost_usd":      cfg.MaxCostUSD,
-			"agent_timeout_sec": agentTimeout,
-			"thinking":          thinking,
-			"workspace":         workspace,
+	index := 0
+	specName := compiled.Environment.Name
+	sessionSpecPath := state.SpecPath()
+	m := &sessionapi.Manifest{
+		SessionID:       filepath.Base(sessionDir),
+		SessionKind:     sessionapi.KindTask,
+		CreatedAt:       tsNow(),
+		Launcher:        "local",
+		SourceSpecPath:  &specPath,
+		SessionSpecPath: &sessionSpecPath,
+		SpecName:        specName,
+		Config: sessionapi.SessionConfig{
+			Model:           model,
+			MaxRounds:       maxRounds,
+			MaxCostUSD:      cfg.MaxCostUSD,
+			AgentTimeoutSec: agentTimeout,
+			Thinking:        thinking,
+			Workspace:       workspace,
 		},
-		"provenance": map[string]interface{}{"mode": "local"},
-		"specs": []map[string]interface{}{{
-			"index":             0,
-			"name":              compiled.Environment.Name,
-			"dir_name":          compiled.Environment.Name,
-			"environment_path":  specPath,
-			"session_spec_path": state.SpecPath(),
-			"content_hash":      compiled.ContentHash,
-			"evidence_path":     state.EvidencePath,
-			"transcript_path":   state.TranscriptPath,
-			"workspace_path":    state.WorkspacePath,
-			"interval_seconds":  compiled.Environment.IntervalSeconds,
+		Provenance: map[string]any{"mode": "local"},
+		Specs: []sessionapi.ManifestSpec{{
+			Index:           &index,
+			Name:            specName,
+			DirName:         specName,
+			EnvironmentPath: &specPath,
+			SessionSpecPath: &sessionSpecPath,
+			ContentHash:     &compiled.ContentHash,
+			EvidencePath:    &state.EvidencePath,
+			TranscriptPath:  &state.TranscriptPath,
+			WorkspacePath:   &state.WorkspacePath,
+			IntervalSeconds: compiled.Environment.IntervalSeconds,
 		}},
-		"epochs": []interface{}{},
+		Epochs: []sessionapi.Epoch{},
 	}
 
-	if err := writeManifestJSON(sessionDir, manifest); err != nil {
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), m); err != nil {
 		return fmt.Errorf("write session manifest: %w", err)
 	}
 	return nil
 }
 
-func manifestToConfig(manifest map[string]interface{}) LocalRunConfig {
-	cfg, _ := manifest["config"].(map[string]interface{})
-	if cfg == nil {
-		cfg = map[string]interface{}{}
+func configFromManifest(m *sessionapi.Manifest) LocalRunConfig {
+	cfg := LocalRunConfig{
+		Workspace:       m.Config.Workspace,
+		Model:           m.Config.Model,
+		Thinking:        m.Config.Thinking,
+		MaxRounds:       m.Config.MaxRounds,
+		MaxCostUSD:      m.Config.MaxCostUSD,
+		AgentTimeoutSec: m.Config.AgentTimeoutSec,
 	}
-	lrc := LocalRunConfig{
-		Thinking: "medium",
+	if cfg.Thinking == "" {
+		cfg.Thinking = "medium"
 	}
-	if w, ok := cfg["workspace"].(string); ok {
-		lrc.Workspace = w
+	if cfg.MaxRounds <= 0 {
+		cfg.MaxRounds = 20
 	}
-	if m, ok := cfg["model"].(string); ok {
-		lrc.Model = m
+	if cfg.AgentTimeoutSec <= 0 {
+		cfg.AgentTimeoutSec = 1800
 	}
-	if t, ok := cfg["thinking"].(string); ok && t != "" {
-		lrc.Thinking = t
-	}
-	if mr, ok := cfg["max_rounds"].(float64); ok {
-		lrc.MaxRounds = int(mr)
-	}
-	if lrc.MaxRounds <= 0 {
-		lrc.MaxRounds = 20
-	}
-	if mc, ok := cfg["max_cost_usd"].(float64); ok {
-		lrc.MaxCostUSD = &mc
-	}
-	if at, ok := cfg["agent_timeout_sec"].(float64); ok {
-		lrc.AgentTimeoutSec = int(at)
-	}
-	if lrc.AgentTimeoutSec <= 0 {
-		lrc.AgentTimeoutSec = 1800
-	}
-	return lrc
+	return cfg
 }
 
-func startEpoch(sessionDir string, manifest map[string]interface{}) error {
-	epochs, _ := manifest["epochs"].([]interface{})
-	epochID := len(epochs) + 1
-	epoch := map[string]interface{}{
-		"id":          epochID,
-		"started_at":  time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		"finished_at": nil,
-		"result":      nil,
-		"error":       nil,
-		"runner": map[string]interface{}{
-			"kind": "local-subprocess",
-			"pid":  os.Getpid(),
+func startEpoch(sessionDir string, m *sessionapi.Manifest) error {
+	m.Epochs = append(m.Epochs, sessionapi.Epoch{
+		ID:        len(m.Epochs) + 1,
+		StartedAt: tsNow(),
+		Runner: &sessionapi.Runner{
+			Kind: "local-subprocess",
+			PID:  os.Getpid(),
 		},
-	}
-	manifest["epochs"] = append(epochs, epoch)
-	if err := writeManifestJSON(sessionDir, manifest); err != nil {
+	})
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), m); err != nil {
 		return fmt.Errorf("start epoch: %w", err)
 	}
 	return nil
 }
 
-func finishEpoch(sessionDir string, manifest map[string]interface{}, result *game.PVGResult) error {
-	manifest = currentManifest(sessionDir, manifest)
-	if manifestStopped(manifest) && result.GameResult != game.GameStopped {
+func finishEpoch(sessionDir string, fallback *sessionapi.Manifest, result *game.PVGResult) error {
+	m := currentManifest(sessionDir, fallback)
+	if m.IsStopped() && result.GameResult != game.GameStopped {
 		return nil
 	}
-	epochs, _ := manifest["epochs"].([]interface{})
-	if len(epochs) == 0 {
-		return nil
-	}
-	last, _ := epochs[len(epochs)-1].(map[string]interface{})
+	last := m.LastEpoch()
 	if last == nil {
 		return nil
 	}
-	last["finished_at"] = time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	now := tsNow()
+	last.FinishedAt = &now
 
 	switch result.GameResult {
 	case game.GameSuccess:
-		last["result"] = "completed"
+		last.Result = strRef("completed")
 	case game.GameFailure:
-		last["result"] = "failed"
+		last.Result = strRef("failed")
 		if result.Error != "" {
-			last["error"] = result.Error
+			last.Error = strRef(result.Error)
 		}
 	case game.GameTimeout:
-		last["result"] = "failed"
-		last["error"] = "max_rounds_exceeded"
+		last.Result = strRef("failed")
+		last.Error = strRef("max_rounds_exceeded")
 	case game.GameStopped:
-		last["result"] = "stopped"
+		last.Result = strRef("stopped")
 		if result.Error != "" {
-			last["error"] = result.Error
+			last.Error = strRef(result.Error)
 		} else {
-			last["error"] = "stopped by operator"
+			last.Error = strRef("stopped by operator")
 		}
 	}
 
-	if err := writeManifestJSON(sessionDir, manifest); err != nil {
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), m); err != nil {
 		return fmt.Errorf("finish epoch: %w", err)
 	}
 	return nil
 }
 
 func sessionStopped(sessionDir string) bool {
-	data, err := os.ReadFile(filepath.Join(sessionDir, "session.json"))
+	m, err := sessionapi.ReadManifest(manifestPath(sessionDir))
 	if err != nil {
 		return false
 	}
-	var manifest map[string]interface{}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return false
-	}
-	return manifestStopped(manifest)
+	return m.IsStopped()
 }
 
-func manifestStopped(manifest map[string]interface{}) bool {
-	epochs, _ := manifest["epochs"].([]interface{})
-	if len(epochs) == 0 {
-		return false
-	}
-	last, _ := epochs[len(epochs)-1].(map[string]interface{})
-	if last == nil {
-		return false
-	}
-	result, _ := last["result"].(string)
-	return result == "stopped"
-}
-
-func currentManifest(sessionDir string, fallback map[string]interface{}) map[string]interface{} {
-	data, err := os.ReadFile(filepath.Join(sessionDir, "session.json"))
+// currentManifest re-reads the manifest from disk so concurrent stop requests
+// are observed; it falls back to the in-memory copy on read failure.
+func currentManifest(sessionDir string, fallback *sessionapi.Manifest) *sessionapi.Manifest {
+	m, err := sessionapi.ReadManifest(manifestPath(sessionDir))
 	if err != nil {
 		return fallback
 	}
-	var manifest map[string]interface{}
-	if err := json.Unmarshal(data, &manifest); err != nil {
-		return fallback
-	}
-	return manifest
+	return m
 }
 
-func writeManifestJSON(sessionDir string, manifest map[string]interface{}) error {
-	data, err := json.MarshalIndent(manifest, "", "  ")
-	if err != nil {
-		return err
-	}
-	tmp := filepath.Join(sessionDir, "session.json.tmp")
-	if err := os.WriteFile(tmp, append(data, '\n'), 0o644); err != nil {
-		return err
-	}
-	if err := os.Rename(tmp, filepath.Join(sessionDir, "session.json")); err != nil {
-		return err
-	}
-	return nil
+func manifestPath(sessionDir string) string {
+	return filepath.Join(sessionDir, "session.json")
+}
+
+func tsNow() string {
+	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+func strRef(s string) *string {
+	return &s
 }

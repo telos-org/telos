@@ -193,15 +193,13 @@ func TestRunLocalSessionDefaultsMissingWorkspaceToSessionDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
-	manifestPath := filepath.Join(session.SessionDir, "session.json")
-	manifestData, _ := os.ReadFile(manifestPath)
-	var manifest map[string]interface{}
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+	mpath := filepath.Join(session.SessionDir, "session.json")
+	m, err := sessionapi.ReadManifest(mpath)
+	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := manifest["config"].(map[string]interface{})
-	delete(cfg, "workspace")
-	if err := writeManifestJSON(session.SessionDir, manifest); err != nil {
+	m.Config.Workspace = ""
+	if err := sessionapi.WriteManifest(mpath, m); err != nil {
 		t.Fatal(err)
 	}
 
@@ -238,19 +236,13 @@ func TestRunLocalSessionRejectsMissingSessionSpecPath(t *testing.T) {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
 
-	manifestPath := filepath.Join(session.SessionDir, "session.json")
-	manifestData, err := os.ReadFile(manifestPath)
+	mpath := filepath.Join(session.SessionDir, "session.json")
+	m, err := sessionapi.ReadManifest(mpath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var manifest map[string]interface{}
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		t.Fatal(err)
-	}
-	specs := manifest["specs"].([]interface{})
-	spec0 := specs[0].(map[string]interface{})
-	delete(spec0, "session_spec_path")
-	if err := writeManifestJSON(session.SessionDir, manifest); err != nil {
+	m.Specs[0].SessionSpecPath = nil
+	if err := sessionapi.WriteManifest(mpath, m); err != nil {
 		t.Fatal(err)
 	}
 
