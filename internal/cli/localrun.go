@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
 	"github.com/telos-org/telos-go/internal/executor"
@@ -99,6 +100,18 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 		Workspace:  workspace,
 		SpecName:   compiled.Environment.Name,
 	}, nil
+}
+
+// SubmitLocalSession creates a session and starts its worker in the background.
+func SubmitLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, error) {
+	session, err := CreateLocalSession(specPath, cfg)
+	if err != nil {
+		return nil, err
+	}
+	if err := startLocalWorker(session.SessionDir); err != nil {
+		return nil, err
+	}
+	return session, nil
 }
 
 // RunLocalSession executes a persisted local session.
@@ -196,6 +209,35 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 		model = DefaultLocalModel
 	}
 	return executor.NewPiExecutor(p, model, cfg.Thinking, cfg.AgentTimeoutSec), nil
+}
+
+func startLocalWorker(sessionDir string) error {
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("resolve telos executable: %w", err)
+	}
+	logPath := filepath.Join(sessionDir, "runner.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open runner log: %w", err)
+	}
+	defer logFile.Close()
+
+	cmd := exec.Command(exe, "worker", sessionDir)
+	cmd.Env = append(os.Environ(), "TELOS_SESSION_DIR="+filepath.Dir(sessionDir))
+	cmd.Stdin = nil
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start worker: %w", err)
+	}
+	if err := markWorkerStarted(sessionDir, cmd.Process.Pid, logPath); err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		_ = cmd.Process.Kill()
+		return err
+	}
+	return nil
 }
 
 func newSessionDir(root string) (string, error) {
@@ -307,18 +349,44 @@ func manifestToConfig(manifest map[string]interface{}) LocalRunConfig {
 }
 
 func startEpoch(sessionDir string, manifest map[string]interface{}) error {
+	return startEpochWithRunner(sessionDir, manifest, os.Getpid(), "")
+}
+
+func markWorkerStarted(sessionDir string, pid int, logPath string) error {
+	data, err := os.ReadFile(filepath.Join(sessionDir, "session.json"))
+	if err != nil {
+		return fmt.Errorf("read session manifest: %w", err)
+	}
+	var manifest map[string]interface{}
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return fmt.Errorf("decode session manifest: %w", err)
+	}
+	return startEpochWithRunner(sessionDir, manifest, pid, logPath)
+}
+
+func startEpochWithRunner(sessionDir string, manifest map[string]interface{}, pid int, logPath string) error {
 	epochs, _ := manifest["epochs"].([]interface{})
+	if len(epochs) > 0 {
+		if last, _ := epochs[len(epochs)-1].(map[string]interface{}); last != nil && last["finished_at"] == nil {
+			return nil
+		}
+	}
 	epochID := len(epochs) + 1
+	runner := map[string]interface{}{
+		"kind": "local-subprocess",
+		"pid":  pid,
+		"pgid": pid,
+	}
+	if logPath != "" {
+		runner["log_path"] = logPath
+	}
 	epoch := map[string]interface{}{
 		"id":          epochID,
 		"started_at":  time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		"finished_at": nil,
 		"result":      nil,
 		"error":       nil,
-		"runner": map[string]interface{}{
-			"kind": "local-subprocess",
-			"pid":  os.Getpid(),
-		},
+		"runner":      runner,
 	}
 	manifest["epochs"] = append(epochs, epoch)
 	if err := writeManifestJSON(sessionDir, manifest); err != nil {

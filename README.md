@@ -8,7 +8,7 @@ Python Telos package.
 
 ## What Works
 
-- `telos plan`, `apply`, `run`, `list`, `describe`, `logs`, `stop`, `login`, `version`.
+- `telos plan`, `apply`, `run`, `list`, `describe`, `logs`, `stop`, `login`, `--version`.
 - SPEC.md parsing with YAML frontmatter and markdown body.
 - Built-in prompt and skill embedding with `go:embed`.
 - Skill resolution, including emphasized verifier skills such as
@@ -65,6 +65,7 @@ go run ./cmd/telos list
 go run ./cmd/telos describe SESSION_ID
 go run ./cmd/telos logs SESSION_ID
 go run ./cmd/telos stop SESSION_ID
+go run ./cmd/telos --version
 ```
 
 Local live runs require `pi` on `PATH` and model credentials configured for Pi.

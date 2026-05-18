@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/telos-org/telos-go/internal/spec"
@@ -233,6 +234,10 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		return s, nil
 	}
 
+	if open := openEpoch(m); open != nil {
+		terminateRunner(open.Runner)
+	}
+
 	now := tsNow()
 	stopped := "stopped"
 	stoppedErr := "stopped by operator"
@@ -433,7 +438,11 @@ func deriveStatus(m *manifest) SessionStatus {
 	last := lastEpoch(m)
 
 	if open != nil {
-		return StatusRunning
+		pid, ok := runnerPID(open.Runner)
+		if ok && processAlive(pid) {
+			return StatusRunning
+		}
+		return StatusStale
 	}
 	if last != nil {
 		if last.Result != nil {
@@ -465,6 +474,51 @@ func lastEpoch(m *manifest) *epoch {
 		return nil
 	}
 	return &m.Epochs[len(m.Epochs)-1]
+}
+
+func runnerPID(runner map[string]any) (int, bool) {
+	raw, ok := runner["pid"]
+	if !ok {
+		return 0, false
+	}
+	switch value := raw.(type) {
+	case int:
+		if value > 0 {
+			return value, true
+		}
+	case int64:
+		if value > 0 {
+			return int(value), true
+		}
+	case float64:
+		if value > 0 {
+			return int(value), true
+		}
+	case json.Number:
+		parsed, err := value.Int64()
+		if err == nil && parsed > 0 {
+			return int(parsed), true
+		}
+	}
+	return 0, false
+}
+
+func processAlive(pid int) bool {
+	return syscall.Kill(pid, 0) == nil
+}
+
+func terminateRunner(runner map[string]any) {
+	pid, ok := runnerPID(runner)
+	if !ok {
+		return
+	}
+	if pid == os.Getpid() {
+		return
+	}
+	if err := syscall.Kill(-pid, syscall.SIGTERM); err == nil || errors.Is(err, syscall.ESRCH) {
+		return
+	}
+	_ = syscall.Kill(pid, syscall.SIGTERM)
 }
 
 func epochToMap(e epoch) map[string]any {

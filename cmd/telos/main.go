@@ -11,7 +11,7 @@
 //	telos logs [-f] SESSION [--env ENV]
 //	telos stop SESSION [--env ENV] [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
-//	telos version
+//	telos --version
 package main
 
 import (
@@ -23,6 +23,10 @@ import (
 var Version = "dev"
 
 func main() {
+	if len(os.Args) == 2 && os.Args[1] == "--version" {
+		fmt.Println("telos " + Version)
+		return
+	}
 	if len(os.Args) < 2 {
 		usage()
 		os.Exit(1)
@@ -44,8 +48,6 @@ func main() {
 		cmdStop(os.Args[2:])
 	case "login":
 		cmdLogin(os.Args[2:])
-	case "version":
-		fmt.Println("telos " + Version)
 	case "serve":
 		cmdServe()
 	case "worker":
@@ -69,5 +71,4 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  logs SESSION       Show session transcript")
 	fmt.Fprintln(os.Stderr, "  stop SESSION       Stop a running session")
 	fmt.Fprintln(os.Stderr, "  login              Configure hosted access")
-	fmt.Fprintln(os.Stderr, "  version            Show version")
 }

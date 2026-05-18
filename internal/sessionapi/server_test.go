@@ -603,7 +603,10 @@ func TestSessionLifecycleStatus(t *testing.T) {
 			"finished_at": nil,
 			"result":      nil,
 			"error":       nil,
-			"runner":      nil,
+			"runner": map[string]any{
+				"kind": "local-subprocess",
+				"pid":  os.Getpid(),
+			},
 		},
 	}
 	updated, _ := json.MarshalIndent(m, "", "  ")
@@ -615,6 +618,36 @@ func TestSessionLifecycleStatus(t *testing.T) {
 	// Stop it.
 	stopped := stopSession(t, srv.URL, created.SessionID)
 	assertEqual(t, "stopped status", "stopped", string(stopped.Status))
+}
+
+func TestSessionLifecycleStaleWhenRunnerMissing(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, `{"spec_path":"/tmp/stale/SPEC.md","model":"","thinking":""}`)
+
+	mpath := filepath.Join(store.Root, created.SessionID, "session.json")
+	raw, _ := os.ReadFile(mpath)
+	var m map[string]any
+	json.Unmarshal(raw, &m)
+	m["epochs"] = []any{
+		map[string]any{
+			"id":          1,
+			"started_at":  "2026-01-01T00:00:00.000Z",
+			"finished_at": nil,
+			"result":      nil,
+			"error":       nil,
+			"runner": map[string]any{
+				"kind": "local-subprocess",
+				"pid":  2_000_000_000,
+			},
+		},
+	}
+	updated, _ := json.MarshalIndent(m, "", "  ")
+	os.WriteFile(mpath, updated, 0o644)
+
+	session := getSession(t, srv.URL, created.SessionID)
+	assertEqual(t, "stale status", "stale", string(session.Status))
 }
 
 func TestSessionStatusCompleted(t *testing.T) {

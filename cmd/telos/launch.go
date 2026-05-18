@@ -129,7 +129,7 @@ func cmdLaunch(command, action string, args []string) {
 		os.Exit(1)
 	}
 
-	session, err := cli.CreateLocalSession(specPath, cfg)
+	session, err := cli.SubmitLocalSession(specPath, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -145,29 +145,6 @@ func cmdLaunch(command, action string, args []string) {
 		})
 	} else {
 		fmt.Printf("%s %s (%s)\n", action, session.SessionID, session.SpecName)
-	}
-
-	result, err := cli.RunLocalSession(session.SessionDir)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if *jsonOut {
-		printJSON(map[string]interface{}{
-			"session_id":  session.SessionID,
-			"game_result": string(result.GameResult),
-			"rounds":      result.Rounds,
-			"cost_usd":    result.TotalCostUSD,
-			"error":       result.Error,
-		})
-	} else {
-		fmt.Printf("\n%s %s: %s (rounds=%d, cost=$%.2f)\n",
-			session.SessionID, session.SpecName, result.GameResult,
-			result.Rounds, result.TotalCostUSD)
-		if result.Error != "" {
-			fmt.Printf("error: %s\n", result.Error)
-		}
 	}
 }
 
