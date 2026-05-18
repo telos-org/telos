@@ -24,9 +24,6 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 		return 1, err
 	}
 	controller := manifest.Kind == sessionapi.KindController
-	if controller && !once && manifest.Interval <= 0 {
-		return 1, fmt.Errorf("controller session %s has no positive interval_seconds", filepath.Base(sessionDir))
-	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -48,6 +45,10 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 			}
 			return 1, fmt.Errorf("session failed: %s", result.GameResult)
 		} else if once {
+			return 0, nil
+		}
+		if controller && manifest.Interval <= 0 {
+			<-stop
 			return 0, nil
 		}
 		timer := time.NewTimer(manifest.Interval)

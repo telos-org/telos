@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -51,7 +50,7 @@ func TestWorkerManifestRejectsMissingSessionKind(t *testing.T) {
 	}
 }
 
-func TestControllerWorkerRequiresPositiveIntervalUnlessOnce(t *testing.T) {
+func TestControllerWorkerAllowsNoInterval(t *testing.T) {
 	sessionDir := writeWorkerManifest(t, map[string]any{
 		"session_kind": "controller",
 		"specs": []map[string]any{{
@@ -59,15 +58,15 @@ func TestControllerWorkerRequiresPositiveIntervalUnlessOnce(t *testing.T) {
 		}},
 	})
 
-	code, err := RunSessionWorker(sessionDir, false)
-	if err == nil {
-		t.Fatal("expected controller without interval to fail before running")
+	manifest, err := LoadWorkerManifest(sessionDir)
+	if err != nil {
+		t.Fatalf("LoadWorkerManifest: %v", err)
 	}
-	if code != 1 {
-		t.Fatalf("code: got %d", code)
+	if got := manifest.Kind; got != "controller" {
+		t.Fatalf("kind: got %q", got)
 	}
-	if !strings.Contains(err.Error(), "no positive interval_seconds") {
-		t.Fatalf("unexpected error: %v", err)
+	if manifest.Interval != 0 {
+		t.Fatalf("interval: got %s", manifest.Interval)
 	}
 }
 
