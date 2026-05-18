@@ -502,3 +502,25 @@ func TestSessionArtifactShape(t *testing.T) {
 		}
 	}
 }
+
+func TestRunnerIdentityRecordsKubernetesPod(t *testing.T) {
+	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
+	t.Setenv("HOSTNAME", "controller-abc")
+	t.Setenv("TELOS_RUNNER_POD_NAME", "controller-abc")
+	t.Setenv("TELOS_RUNNER_POD_NAMESPACE", "ns-ctrl-abc")
+
+	runner := runnerIdentity(1234)
+
+	if runner["kind"] != "kubernetes-pod" {
+		t.Fatalf("kind: got %v", runner["kind"])
+	}
+	if runner["in_cluster"] != true {
+		t.Fatalf("in_cluster: got %v", runner["in_cluster"])
+	}
+	if runner["pod_name"] != "controller-abc" {
+		t.Fatalf("pod_name: got %v", runner["pod_name"])
+	}
+	if runner["pod_namespace"] != "ns-ctrl-abc" {
+		t.Fatalf("pod_namespace: got %v", runner["pod_namespace"])
+	}
+}

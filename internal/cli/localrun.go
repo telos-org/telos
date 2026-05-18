@@ -390,11 +390,7 @@ func startEpochWithRunner(sessionDir string, manifest map[string]interface{}, pi
 		}
 	}
 	epochID := len(epochs) + 1
-	runner := map[string]interface{}{
-		"kind": "local-subprocess",
-		"pid":  pid,
-		"pgid": pid,
-	}
+	runner := runnerIdentity(pid)
 	if logPath != "" {
 		runner["log_path"] = logPath
 	}
@@ -411,6 +407,43 @@ func startEpochWithRunner(sessionDir string, manifest map[string]interface{}, pi
 		return fmt.Errorf("start epoch: %w", err)
 	}
 	return nil
+}
+
+func runnerIdentity(pid int) map[string]interface{} {
+	runner := map[string]interface{}{
+		"kind":       "local-subprocess",
+		"pid":        pid,
+		"pgid":       pid,
+		"in_cluster": false,
+		"started_at": time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+	}
+	if os.Getenv("KUBERNETES_SERVICE_HOST") == "" {
+		return runner
+	}
+
+	runner["kind"] = "kubernetes-pod"
+	runner["in_cluster"] = true
+	if hostname := firstEnv("HOSTNAME"); hostname != "" {
+		runner["hostname"] = hostname
+	}
+	if podName := firstEnv("TELOS_RUNNER_POD_NAME", "POD_NAME"); podName != "" {
+		runner["pod_name"] = podName
+	} else if hostname := firstEnv("HOSTNAME"); hostname != "" {
+		runner["pod_name"] = hostname
+	}
+	if namespace := firstEnv("TELOS_RUNNER_POD_NAMESPACE", "POD_NAMESPACE"); namespace != "" {
+		runner["pod_namespace"] = namespace
+	}
+	return runner
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func finishEpoch(sessionDir string, manifest map[string]interface{}, result *game.PVGResult) error {
