@@ -58,6 +58,11 @@ type SessionCreateRequest struct {
 	Workspace       *string  `json:"workspace,omitempty"`
 }
 
+// SessionSpecUpdateRequest is the body of PUT /api/sessions/{id}/spec.
+type SessionSpecUpdateRequest struct {
+	SpecMarkdown string `json:"spec_markdown"`
+}
+
 // --------- Spec types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 // SessionSpec describes one compiled spec entry inside a session.

@@ -203,6 +203,27 @@ func (c *Client) CreateSession(req sessionapi.SessionCreateRequest) (*sessionapi
 	return &session, nil
 }
 
+// UpdateSessionSpec updates a controller session spec in place.
+func (c *Client) UpdateSessionSpec(id string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.Session, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("PUT", "/api/sessions/"+id+"/spec", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var session sessionapi.Session
+	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
+		return nil, err
+	}
+	return &session, nil
+}
+
 // ListEnvironments lists cloud environments from the control plane.
 func (c *Client) ListEnvironments() ([]Environment, error) {
 	resp, err := c.do("GET", "/api/environments", nil)

@@ -178,6 +178,37 @@ func TestCreateSessionRejectsInvalidNameWithoutStrayCompileFiles(t *testing.T) {
 	}
 }
 
+func TestCloudCreateSessionCreatesControllerForOperatorApply(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindController {
+		t.Fatalf("session_kind: got %#v", session.SessionKind)
+	}
+}
+
+func TestCloudCreateSessionRejectsDuplicateNonStoppedController(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	if _, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+
+	_, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err == nil {
+		t.Fatal("expected duplicate controller to fail")
+	}
+	if !strings.Contains(err.Error(), "controller spec \"postgres\" already exists") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestCreateSessionJSONShape(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
@@ -241,6 +272,73 @@ func TestCreateSessionRejectsOversizedBody(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	assertEqual(t, "status_code", "400", itoa(resp.StatusCode))
+}
+
+// --------- PUT /api/sessions/{id}/spec ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+func TestUpdateControllerSessionSpec(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+	controller, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
+
+	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
+	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/"+controller.SessionID+"/spec", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+	var session sessionapi.Session
+	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
+		t.Fatal(err)
+	}
+	if session.SpecName == nil || *session.SpecName != "postgres" {
+		t.Fatalf("spec_name: got %#v", session.SpecName)
+	}
+	if session.Specs[0].IntervalSeconds == nil || *session.Specs[0].IntervalSeconds != 300 {
+		t.Fatalf("interval: got %#v", session.Specs[0].IntervalSeconds)
+	}
+	data, err := os.ReadFile(*session.SessionSpecPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != updated {
+		t.Fatalf("spec was not updated: %q", string(data))
+	}
+}
+
+func TestUpdateControllerSessionSpecRejectsTaskSession(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+	task, _ := writeAuthorizedSession(t, store.Root, "task", sessionapi.KindTask, nil)
+
+	body := `{"spec_markdown":"---\nversion: v0\nname: task\nplatform: cloud\n---\n# Task\n"}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/"+task.SessionID+"/spec", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 400, got %d: %s", resp.StatusCode, data)
+	}
 }
 
 // --------- GET /api/sessions ------------------------------------------------------------------------------------------------------------------------------------------------------------------

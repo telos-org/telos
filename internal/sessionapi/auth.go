@@ -38,11 +38,12 @@ type Caller struct {
 type AccessAction string
 
 const (
-	ActionHealth        AccessAction = "health"
-	ActionCreateSession AccessAction = "create_session"
-	ActionListSessions  AccessAction = "list_sessions"
-	ActionReadSession   AccessAction = "read_session"
-	ActionStopSession   AccessAction = "stop_session"
+	ActionHealth            AccessAction = "health"
+	ActionCreateSession     AccessAction = "create_session"
+	ActionUpdateSessionSpec AccessAction = "update_session_spec"
+	ActionListSessions      AccessAction = "list_sessions"
+	ActionReadSession       AccessAction = "read_session"
+	ActionStopSession       AccessAction = "stop_session"
 )
 
 type AccessRequest struct {
@@ -160,6 +161,8 @@ func authorizeCaller(store *FileStore, caller Caller, req AccessRequest) error {
 		if req.CreateRequest != nil && req.CreateRequest.ParentSessionID != nil {
 			return requireControllerSession(caller, *req.CreateRequest.ParentSessionID)
 		}
+		return requireScope(caller, ScopeSessionsApply)
+	case ActionUpdateSessionSpec:
 		return requireScope(caller, ScopeSessionsApply)
 	case ActionListSessions:
 		return requireScope(caller, ScopeSessionsRead)

@@ -234,6 +234,57 @@ func TestSessionCreateRequestRejectsMissingSpecPath(t *testing.T) {
 	}
 }
 
+func TestSpecNameFromRequest(t *testing.T) {
+	markdown := "---\nversion: v0\nname: postgres\n---\n# Postgres\n"
+	req := sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}
+
+	name, err := specNameFromRequest(req)
+	if err != nil {
+		t.Fatalf("specNameFromRequest: %v", err)
+	}
+	if name != "postgres" {
+		t.Fatalf("name: got %q", name)
+	}
+}
+
+func TestActiveControllerForSpec(t *testing.T) {
+	controller := sessionapi.KindController
+	task := sessionapi.KindTask
+	other := "redis"
+	target := "postgres"
+	sessions := []sessionapi.Session{
+		{SessionID: "sess_task", SessionKind: &task, SpecName: &target, Status: sessionapi.StatusRunning},
+		{SessionID: "sess_old", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusStopped},
+		{SessionID: "sess_other", SessionKind: &controller, SpecName: &other, Status: sessionapi.StatusScheduled},
+		{SessionID: "sess_target", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusCompleted},
+	}
+
+	match, err := activeControllerForSpec(sessions, "postgres")
+	if err != nil {
+		t.Fatalf("activeControllerForSpec: %v", err)
+	}
+	if match == nil || match.SessionID != "sess_target" {
+		t.Fatalf("match: got %#v", match)
+	}
+}
+
+func TestActiveControllerForSpecRejectsDuplicates(t *testing.T) {
+	controller := sessionapi.KindController
+	target := "postgres"
+	sessions := []sessionapi.Session{
+		{SessionID: "sess_a", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusRunning},
+		{SessionID: "sess_b", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusScheduled},
+	}
+
+	_, err := activeControllerForSpec(sessions, "postgres")
+	if err == nil {
+		t.Fatal("expected duplicate active controllers to fail")
+	}
+	if !strings.Contains(err.Error(), "multiple non-stopped controller sessions") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestCloudSessionClientsExplicitUnknownEnvReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/environments" {

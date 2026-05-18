@@ -9,6 +9,7 @@ import (
 	"github.com/telos-org/telos-go/internal/cli"
 	"github.com/telos-org/telos-go/internal/cloud"
 	"github.com/telos-org/telos-go/internal/config"
+	"github.com/telos-org/telos-go/internal/sessionapi"
 	"github.com/telos-org/telos-go/internal/spec"
 )
 
@@ -91,10 +92,11 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudExisting:
-		runCloud(specArg, *env, *jsonOut, false, 0, action)
+		runCloud(command, specArg, *env, *jsonOut, false, 0, action)
 		return
 	case launchCloudNew:
 		runCloud(
+			command,
 			specArg,
 			"",
 			*jsonOut,
@@ -199,6 +201,7 @@ func runChildCloud(
 }
 
 func runCloud(
+	command string,
 	specArg string,
 	envID string,
 	jsonOut bool,
@@ -216,6 +219,10 @@ func runCloud(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	if command == "apply" {
+		applyCloud(req, client, env, jsonOut, action)
+		return
+	}
 	session, err := client.CreateSession(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -231,5 +238,95 @@ func runCloud(
 		if env != nil {
 			fmt.Printf("environment %s %s\n", env.ID, env.Handle)
 		}
+	}
+}
+
+func applyCloud(
+	req sessionapi.SessionCreateRequest,
+	client *cloud.Client,
+	env *cloud.Environment,
+	jsonOut bool,
+	action string,
+) {
+	specName, err := specNameFromRequest(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	sessions, err := client.ListSessions(0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	existing, err := activeControllerForSpec(sessions, specName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	var session *sessionapi.Session
+	operation := "created"
+	if existing != nil {
+		operation = "updated"
+		session, err = client.UpdateSessionSpec(existing.SessionID, sessionapi.SessionSpecUpdateRequest{
+			SpecMarkdown: *req.SpecMarkdown,
+		})
+	} else {
+		session, err = client.CreateSession(req)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if jsonOut {
+		printJSON(map[string]any{
+			"environment": env,
+			"operation":   operation,
+			"session":     session,
+		})
+		return
+	}
+	fmt.Printf("%s %s (status: %s, %s)\n", action, session.SessionID, session.Status, operation)
+	if env != nil {
+		fmt.Printf("environment %s %s\n", env.ID, env.Handle)
+	}
+}
+
+func specNameFromRequest(req sessionapi.SessionCreateRequest) (string, error) {
+	if req.SpecMarkdown == nil {
+		return "", fmt.Errorf("spec_markdown is required")
+	}
+	raw, _, ok := spec.ParseFrontmatter(*req.SpecMarkdown)
+	if !ok {
+		return "", fmt.Errorf("spec_markdown must contain YAML frontmatter")
+	}
+	name, ok := raw["name"].(string)
+	if !ok || name == "" {
+		return "", fmt.Errorf("spec frontmatter must include name")
+	}
+	return name, nil
+}
+
+func activeControllerForSpec(sessions []sessionapi.Session, specName string) (*sessionapi.Session, error) {
+	var matches []sessionapi.Session
+	for _, session := range sessions {
+		if session.SessionKind == nil || *session.SessionKind != sessionapi.KindController {
+			continue
+		}
+		if session.SpecName == nil || *session.SpecName != specName {
+			continue
+		}
+		if session.Status == sessionapi.StatusStopped {
+			continue
+		}
+		matches = append(matches, session)
+	}
+	switch len(matches) {
+	case 0:
+		return nil, nil
+	case 1:
+		return &matches[0], nil
+	default:
+		return nil, fmt.Errorf("multiple non-stopped controller sessions named %q; stop duplicates before applying", specName)
 	}
 }

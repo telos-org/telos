@@ -20,12 +20,20 @@ import (
 // ErrNotFound is returned when a session or artifact does not exist.
 var ErrNotFound = errors.New("not found")
 
+// ErrInvalidSession is returned when a request targets the wrong session kind
+// or would violate session identity.
+var ErrInvalidSession = errors.New("invalid session")
+
+// ErrConflict is returned when a request would create duplicate live state.
+var ErrConflict = errors.New("conflict")
+
 var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 // Store is the persistence interface for sessions. Implementations are
 // expected to be safe for concurrent use.
 type Store interface {
 	Create(req SessionCreateRequest) (*Session, error)
+	UpdateSpec(id string, req SessionSpecUpdateRequest) (*Session, error)
 	List() ([]Session, error)
 	Get(id string) (*Session, error)
 	Stop(id string) (*Session, error)
@@ -81,7 +89,17 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		return nil, err
 	}
 	specName := prepared.Name
-	access, err := NewScopedToken(id, KindTask)
+	sessionKind := fs.sessionKindForCreate(req)
+	if sessionKind == KindController {
+		ids, err := fs.nonStoppedControllerIDsBySpecName(specName)
+		if err != nil {
+			return nil, err
+		}
+		if len(ids) > 0 {
+			return nil, fmt.Errorf("controller spec %q already exists as %s: %w", specName, strings.Join(ids, ", "), ErrConflict)
+		}
+	}
+	access, err := NewScopedToken(id, sessionKind)
 	if err != nil {
 		return nil, err
 	}
@@ -104,7 +122,7 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 
 	m := ManifestFromInitial(InitialManifest{
 		SessionID:       id,
-		SessionKind:     KindTask,
+		SessionKind:     sessionKind,
 		Runtime:         fs.runtime,
 		CreatedAt:       tsNow(),
 		Launcher:        fs.launcher,
@@ -132,6 +150,89 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	}
 
 	return fs.deriveSession(id, &m)
+}
+
+func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) SessionKind {
+	if req.ParentSessionID != nil {
+		return KindTask
+	}
+	if fs.runtime == RuntimeCloud {
+		return KindController
+	}
+	return KindTask
+}
+
+func (fs *FileStore) nonStoppedControllerIDsBySpecName(specName string) ([]string, error) {
+	entries, err := os.ReadDir(fs.Root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var ids []string
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		m, err := ReadManifest(fs.manifestPath(entry.Name()))
+		if err != nil {
+			continue
+		}
+		if m.SessionKind != KindController || m.SpecName != specName {
+			continue
+		}
+		if deriveStatus(m) == StatusStopped {
+			continue
+		}
+		ids = append(ids, m.SessionID)
+	}
+	sort.Strings(ids)
+	return ids, nil
+}
+
+// UpdateSpec replaces a controller session's primary spec in place.
+func (fs *FileStore) UpdateSpec(id string, req SessionSpecUpdateRequest) (*Session, error) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	m, err := ReadManifest(fs.manifestPath(id))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+		}
+		return nil, err
+	}
+	if m.SessionKind != KindController {
+		return nil, fmt.Errorf("task sessions do not have mutable specs: %w", ErrInvalidSession)
+	}
+	if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
+		return nil, fmt.Errorf("controller session has no mutable spec: %w", ErrInvalidSession)
+	}
+
+	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
+	prepared, err := prepareRequestSpec(fs.sessionDir(id), SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		return nil, err
+	}
+	if prepared.Name != m.SpecName {
+		return nil, fmt.Errorf("controller spec name is immutable: %w", ErrInvalidSession)
+	}
+	if err := os.WriteFile(*m.SessionSpecPath, prepared.SpecData, 0o644); err != nil {
+		return nil, fmt.Errorf("write session spec: %w", err)
+	}
+	m.SessionSpecPath = strPtr(*m.SessionSpecPath)
+	if len(m.Specs) > 0 {
+		m.Specs[0].Name = prepared.Name
+		m.Specs[0].DirName = prepared.Name
+		m.Specs[0].SessionSpecPath = m.SessionSpecPath
+		m.Specs[0].ContentHash = prepared.ContentHash
+		m.Specs[0].IntervalSeconds = prepared.IntervalSeconds
+	}
+	if err := WriteManifest(fs.manifestPath(id), m); err != nil {
+		return nil, err
+	}
+	return fs.deriveSession(id, m)
 }
 
 // List returns all sessions ordered by creation time descending.

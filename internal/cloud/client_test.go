@@ -186,6 +186,49 @@ func TestSessionCreateRequestOmitsEmptyRuntimeDefaults(t *testing.T) {
 	}
 }
 
+func TestClientUpdateSessionSpec(t *testing.T) {
+	var gotMethod string
+	var gotPath string
+	var gotBody sessionapi.SessionSpecUpdateRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotPath = r.URL.Path
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		json.NewEncoder(w).Encode(sessionapi.Session{
+			SessionID: "sess_controller",
+			Status:    sessionapi.StatusScheduled,
+			Runtime:   sessionapi.RuntimeCloud,
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	session, err := client.UpdateSessionSpec("sess_controller", sessionapi.SessionSpecUpdateRequest{
+		SpecMarkdown: "---\nversion: v0\nname: demo\n---\n# Demo\n",
+	})
+	if err != nil {
+		t.Fatalf("UpdateSessionSpec: %v", err)
+	}
+	if gotMethod != http.MethodPut {
+		t.Fatalf("method: got %q", gotMethod)
+	}
+	if gotPath != "/api/sessions/sess_controller/spec" {
+		t.Fatalf("path: got %q", gotPath)
+	}
+	if !strings.Contains(gotBody.SpecMarkdown, "name: demo") {
+		t.Fatalf("body: got %#v", gotBody)
+	}
+	if session.SessionID != "sess_controller" {
+		t.Fatalf("session: got %#v", session)
+	}
+}
+
 func TestWaitForEnvironmentRequiresSuccessStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/healthz" {
