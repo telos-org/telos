@@ -186,7 +186,7 @@ func TestExtractPiStopReasonAgentEnd(t *testing.T) {
 }
 
 func TestBuildPiArgv(t *testing.T) {
-	argv := BuildPiArgv("claude-test", "high")
+	argv := BuildPiArgv("claude-test", "high", "")
 	if len(argv) != 6 {
 		t.Fatalf("expected 6 args, got %d", len(argv))
 	}
@@ -199,8 +199,24 @@ func TestBuildPiArgv(t *testing.T) {
 	if argv[5] != "high" {
 		t.Errorf("thinking arg: got %q", argv[5])
 	}
-	if !strings.Contains(argv[2], `-p "${TELOS_TASK}"`) {
+	if !strings.Contains(argv[2], `prompt="${TELOS_TASK}"`) {
 		t.Errorf("task prompt is not expanded from env: %s", argv[2])
+	}
+}
+
+func TestBuildPiArgvUsesTaskFile(t *testing.T) {
+	argv := BuildPiArgv("claude-test", "high", "/tmp/task.md")
+	if len(argv) != 7 {
+		t.Fatalf("expected 7 args, got %d", len(argv))
+	}
+	if argv[6] != "@/tmp/task.md" {
+		t.Errorf("task file arg: got %q", argv[6])
+	}
+	if !strings.Contains(argv[2], `if [ -n "${3:-}" ]; then prompt="$3"; fi`) {
+		t.Errorf("task file prompt is not selected from argv: %s", argv[2])
+	}
+	if strings.Contains(argv[2], `-p "${TELOS_TASK}"`) {
+		t.Errorf("task env is still expanded directly into argv: %s", argv[2])
 	}
 }
 

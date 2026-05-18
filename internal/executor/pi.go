@@ -37,18 +37,45 @@ func NewPiExecutor(p *platform.LocalPlatform, model, thinking string, timeout in
 
 // ExecuteTurn runs one Pi agent turn.
 func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.TurnState) game.TurnResult {
-	argv := BuildPiArgv(pe.Model, pe.Thinking)
-
 	var textParts []string
 	var stats game.TurnStats
 	stats.Model = pe.Model
 	var agentError string
 	var stopReason string
 	var rawLogPath string
+	var taskPath string
 	if turnState != nil {
 		rawLogPath = turnState.RawLogPath()
-		os.MkdirAll(turnState.Dir, 0o755)
-		os.WriteFile(rawLogPath, nil, 0o644)
+		taskPath = turnState.TaskPath()
+		if err := os.MkdirAll(turnState.Dir, 0o755); err != nil {
+			return game.TurnResult{
+				Role:   role,
+				Status: game.StatusContinue,
+				Logs:   fmt.Sprintf("turn_state_mkdir_failed:%v", err),
+				Stats:  stats,
+				Error:  fmt.Sprintf("turn_state_mkdir_failed:%v", err),
+			}
+		}
+		if task != "" {
+			if err := os.WriteFile(taskPath, []byte(task), 0o644); err != nil {
+				return game.TurnResult{
+					Role:   role,
+					Status: game.StatusContinue,
+					Logs:   fmt.Sprintf("turn_task_write_failed:%v", err),
+					Stats:  stats,
+					Error:  fmt.Sprintf("turn_task_write_failed:%v", err),
+				}
+			}
+		}
+		if err := os.WriteFile(rawLogPath, nil, 0o644); err != nil {
+			return game.TurnResult{
+				Role:   role,
+				Status: game.StatusContinue,
+				Logs:   fmt.Sprintf("raw_log_write_failed:%v", err),
+				Stats:  stats,
+				Error:  fmt.Sprintf("raw_log_write_failed:%v", err),
+			}
+		}
 	}
 
 	onLine := func(line string) {
@@ -68,7 +95,12 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		HandlePiEvent(event, &textParts, &stats)
 	}
 
-	result := pe.Platform.Run(argv, task, map[string]string{"TELOS_ROLE": role}, pe.Timeout, onLine)
+	argv := BuildPiArgv(pe.Model, pe.Thinking, taskPath)
+	taskEnv := task
+	if taskPath != "" {
+		taskEnv = ""
+	}
+	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, onLine)
 	if stopReason == "length" {
 		agentError = "agent_output_truncated:length"
 	}
@@ -143,7 +175,7 @@ func (pe *PiExecutor) CheckpointWorkspace(dest string) bool {
 }
 
 // BuildPiArgv builds the Pi command line.
-func BuildPiArgv(model, thinking string) []string {
+func BuildPiArgv(model, thinking, taskPath string) []string {
 	script := `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; ` +
 		`if ! command -v pi >/dev/null 2>&1; then ` +
 		`for nvm_script in "${NVM_DIR:-}/nvm.sh" "$HOME/.nvm/nvm.sh" "/usr/local/nvm/nvm.sh"; do ` +
@@ -152,7 +184,12 @@ func BuildPiArgv(model, thinking string) []string {
 		`break; ` +
 		`done; ` +
 		`fi; ` +
-		fmt.Sprintf(`exec pi --mode json --model "$1" --thinking "$2" --no-session --no-extensions -p "${%s}"`, platform.TaskEnvVar)
+		fmt.Sprintf(`prompt="${%s}"; `, platform.TaskEnvVar) +
+		`if [ -n "${3:-}" ]; then prompt="$3"; fi; ` +
+		`exec pi --mode json --model "$1" --thinking "$2" --no-session --no-extensions -p "$prompt"`
+	if taskPath != "" {
+		return []string{"sh", "-c", script, "pi", model, thinking, "@" + taskPath}
+	}
 	return []string{"sh", "-c", script, "pi", model, thinking}
 }
 
