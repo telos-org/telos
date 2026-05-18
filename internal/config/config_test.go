@@ -203,6 +203,6 @@ func TestIsConfigured(t *testing.T) {
 
 	t.Setenv("TELOS_AUTH_TOKEN", "token")
 	if !IsConfigured() {
-		t.Error("auth token should mark hosted access configured")
+		t.Error("auth token should mark cloud access configured")
 	}
 }

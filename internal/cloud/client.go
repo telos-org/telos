@@ -1,5 +1,5 @@
-// Package hosted provides the hosted Sessions API client.
-package hosted
+// Package cloud provides the cloud Sessions API client.
+package cloud
 
 import (
 	"bufio"
@@ -22,7 +22,7 @@ const (
 	DefaultTimeout     = 30 * time.Second
 )
 
-// Environment describes a hosted Telos environment from the control plane.
+// Environment describes a cloud Telos environment from the control plane.
 type Environment struct {
 	ID             string
 	Handle         string
@@ -31,7 +31,7 @@ type Environment struct {
 	HasRecoverable bool
 }
 
-// Client is a hosted Sessions API client.
+// Client is a cloud Sessions API client.
 type Client struct {
 	Endpoint string
 	Token    string
@@ -70,7 +70,7 @@ func NewClientFromConfig() (*Client, error) {
 // client for that environment-local Sessions API.
 func NewEnvironmentClient(envID string) (*Client, *Environment, error) {
 	if envID == "" {
-		return nil, nil, fmt.Errorf("--env is required for hosted session commands")
+		return nil, nil, fmt.Errorf("--env is required for cloud session commands")
 	}
 	env, err := ResolveEnvironment(envID)
 	if err != nil {
@@ -122,7 +122,7 @@ func ResolveEnvironment(envID string) (*Environment, error) {
 	return nil, fmt.Errorf("environment %s not found", envID)
 }
 
-// CreateEnvironment creates a new hosted environment through the control plane.
+// CreateEnvironment creates a new cloud environment through the control plane.
 func (c *Client) CreateEnvironment() (*Environment, error) {
 	resp, err := c.do("POST", "/api/environments", nil)
 	if err != nil {
@@ -182,7 +182,7 @@ func NormalizeEndpoint(endpoint string) string {
 	return endpoint
 }
 
-// CreateSession creates a new session via the hosted API.
+// CreateSession creates a new session via the cloud API.
 func (c *Client) CreateSession(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -203,7 +203,7 @@ func (c *Client) CreateSession(req sessionapi.SessionCreateRequest) (*sessionapi
 	return &session, nil
 }
 
-// ListEnvironments lists hosted environments from the control plane.
+// ListEnvironments lists cloud environments from the control plane.
 func (c *Client) ListEnvironments() ([]Environment, error) {
 	resp, err := c.do("GET", "/api/environments", nil)
 	if err != nil {
@@ -247,7 +247,7 @@ func (c *Client) IssueEnvironmentAccess(envID string) (*Environment, error) {
 	return &env, nil
 }
 
-// ListSessions lists sessions from the hosted API.
+// ListSessions lists sessions from the cloud API.
 func (c *Client) ListSessions(limit int) ([]sessionapi.Session, error) {
 	path := "/api/sessions"
 	if limit > 0 {
@@ -333,7 +333,7 @@ func (c *Client) GetEvents(id string) ([]sessionapi.SessionEvent, error) {
 	return evResp.Events, nil
 }
 
-// StreamEvents follows the hosted event stream for a session.
+// StreamEvents follows the cloud event stream for a session.
 func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[string]any) error) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+"/api/sessions/"+id+"/events", nil)
 	if err != nil {

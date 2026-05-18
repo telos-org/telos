@@ -88,6 +88,9 @@ func TestCreateLocalSession(t *testing.T) {
 	if m["spec_name"] != "cli-test" {
 		t.Errorf("manifest spec_name: got %v", m["spec_name"])
 	}
+	if m["runtime"] != "local" {
+		t.Errorf("manifest runtime: got %v", m["runtime"])
+	}
 	cfg, _ := m["config"].(map[string]interface{})
 	if cfg["model"] != "test-model" {
 		t.Errorf("manifest model: got %v", cfg["model"])
@@ -171,7 +174,7 @@ func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	}
 
 	// Verify session can be read by the store
-	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"))
+	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"), sessionapi.RuntimeLocal)
 	sessionAPI, err := store.Get(session.SessionID)
 	if err != nil {
 		t.Fatalf("store.Get: %v", err)
@@ -275,7 +278,7 @@ func TestRunLocalSessionStopsWhenManifestIsStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
-	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"))
+	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"), sessionapi.RuntimeLocal)
 
 	exec := &fakeExecutor{
 		proverResult: game.TurnResult{
@@ -354,7 +357,7 @@ func TestEndToEndSmokeTest(t *testing.T) {
 		t.Fatalf("game: got %s", result.GameResult)
 	}
 
-	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"))
+	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"), sessionapi.RuntimeLocal)
 
 	// describe
 	sess, err := store.Get(session.SessionID)

@@ -120,13 +120,13 @@ func TestResolveLocalRunConfigRejectsInvalidEnvironmentDefaults(t *testing.T) {
 
 func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 	tests := []struct {
-		name             string
-		platform         string
-		envID            string
-		hostedConfigured bool
-		localConfigSet   bool
-		want             launchMode
-		wantErr          string
+		name            string
+		platform        string
+		envID           string
+		cloudConfigured bool
+		localConfigSet  bool
+		want            launchMode
+		wantErr         string
 	}{
 		{
 			name:     "local spec runs locally",
@@ -146,22 +146,22 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 			wantErr:  "--env cannot be used with platform: local specs",
 		},
 		{
-			name:             "unspecified platform is hosted",
-			hostedConfigured: true,
-			want:             launchHostedNew,
+			name:            "unspecified platform is cloud",
+			cloudConfigured: true,
+			want:            launchCloudNew,
 		},
 		{
-			name:    "unspecified platform requires hosted login",
-			wantErr: "non-local spec requires hosted config",
+			name:    "unspecified platform requires cloud login",
+			wantErr: "non-local spec requires cloud config",
 		},
 		{
 			name:     "cloud spec with env uses existing env",
 			platform: "cloud",
 			envID:    "env_123",
-			want:     launchHostedExisting,
+			want:     launchCloudExisting,
 		},
 		{
-			name:           "hosted rejects local flags",
+			name:           "cloud rejects local flags",
 			platform:       "cloud",
 			localConfigSet: true,
 			wantErr:        "local run config flags require a platform: local spec",
@@ -173,7 +173,7 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 			got, err := decideLaunchMode(
 				tt.platform,
 				tt.envID,
-				tt.hostedConfigured,
+				tt.cloudConfigured,
 				tt.localConfigSet,
 			)
 			if tt.wantErr != "" {
@@ -240,7 +240,7 @@ func TestSessionCreateRequestRejectsMissingSpecPath(t *testing.T) {
 	}
 }
 
-func TestHostedSessionClientsExplicitUnknownEnvReturnsError(t *testing.T) {
+func TestCloudSessionClientsExplicitUnknownEnvReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/environments" {
 			http.NotFound(w, r)
@@ -249,9 +249,9 @@ func TestHostedSessionClientsExplicitUnknownEnvReturnsError(t *testing.T) {
 		json.NewEncoder(w).Encode(map[string]any{"environments": []map[string]any{}})
 	}))
 	defer srv.Close()
-	configureHostedTest(t, srv.URL)
+	configureCloudTest(t, srv.URL)
 
-	clients, err := hostedSessionClients("env_missing")
+	clients, err := cloudSessionClients("env_missing")
 	if err == nil {
 		t.Fatal("expected explicit env lookup to return an error")
 	}
@@ -263,7 +263,7 @@ func TestHostedSessionClientsExplicitUnknownEnvReturnsError(t *testing.T) {
 	}
 }
 
-func TestHostedSessionClientsRecoverEnvironmentAccess(t *testing.T) {
+func TestCloudSessionClientsRecoverEnvironmentAccess(t *testing.T) {
 	var recovered bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -288,14 +288,14 @@ func TestHostedSessionClientsRecoverEnvironmentAccess(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	configureHostedTest(t, srv.URL)
+	configureCloudTest(t, srv.URL)
 
-	clients, err := hostedSessionClients("")
+	clients, err := cloudSessionClients("")
 	if err != nil {
-		t.Fatalf("hostedSessionClients: %v", err)
+		t.Fatalf("cloudSessionClients: %v", err)
 	}
 	if len(clients) != 1 {
-		t.Fatalf("expected one hosted client, got %d", len(clients))
+		t.Fatalf("expected one cloud client, got %d", len(clients))
 	}
 	if !recovered {
 		t.Fatal("expected recoverable environment access to be issued")
@@ -332,7 +332,7 @@ func TestControllerSessionContextUsesScopedToken(t *testing.T) {
 func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("TELOS_SESSION_DIR", root)
-	store := sessionapi.NewFileStore(root)
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	markdown := "---\nversion: v0\nname: follow-test\nplatform: local\n---\n# Follow\n"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
@@ -375,7 +375,7 @@ func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
 func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("TELOS_SESSION_DIR", root)
-	store := sessionapi.NewFileStore(root)
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	markdown := "---\nversion: v0\nname: missing-transcript\nplatform: local\n---\n# Missing\n"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
@@ -406,7 +406,7 @@ func TestFollowTranscriptSurfacesControllerTranscriptError(t *testing.T) {
 		case "/api/sessions/sess_running":
 			json.NewEncoder(w).Encode(map[string]any{
 				"session_id": "sess_running",
-				"runtime":    "hosted",
+				"runtime":    "cloud",
 				"status":     "running",
 				"config":     map[string]any{},
 				"provenance": map[string]any{},
@@ -461,101 +461,7 @@ func TestControllerLookupReturnsClusterAPIError(t *testing.T) {
 	}
 }
 
-func TestWorkerIntervalReadsSessionManifest(t *testing.T) {
-	dir := t.TempDir()
-	sessionDir := filepath.Join(dir, "sess_controller")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	data := map[string]any{
-		"session_kind": "controller",
-		"specs": []map[string]any{{
-			"interval_seconds": 12,
-		}},
-	}
-	raw, err := json.Marshal(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "session.json"), raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	manifest, err := loadWorkerManifest(sessionDir)
-	if err != nil {
-		t.Fatalf("loadWorkerManifest: %v", err)
-	}
-	if got := manifest.Kind; got != "controller" {
-		t.Fatalf("kind: got %q", got)
-	}
-	if got := manifest.Interval; got != 12*time.Second {
-		t.Fatalf("interval: got %s", got)
-	}
-}
-
-func TestWorkerManifestRejectsMalformedManifest(t *testing.T) {
-	dir := t.TempDir()
-	sessionDir := filepath.Join(dir, "sess_bad")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "session.json"), []byte("{"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := loadWorkerManifest(sessionDir); err == nil {
-		t.Fatal("expected malformed manifest to fail")
-	}
-}
-
-func TestWorkerManifestRejectsMissingSessionKind(t *testing.T) {
-	dir := t.TempDir()
-	sessionDir := filepath.Join(dir, "sess_bad")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "session.json"), []byte(`{"specs":[]}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	if _, err := loadWorkerManifest(sessionDir); err == nil {
-		t.Fatal("expected missing session_kind to fail")
-	}
-}
-
-func TestControllerWorkerRequiresPositiveIntervalUnlessOnce(t *testing.T) {
-	dir := t.TempDir()
-	sessionDir := filepath.Join(dir, "sess_controller")
-	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	data := map[string]any{
-		"session_kind": "controller",
-		"specs": []map[string]any{{
-			"name": "demo",
-		}},
-	}
-	raw, err := json.Marshal(data)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sessionDir, "session.json"), raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	code, err := runWorkerSession(sessionDir, false)
-	if err == nil {
-		t.Fatal("expected controller without interval to fail before running")
-	}
-	if code != 1 {
-		t.Fatalf("code: got %d", code)
-	}
-	if !strings.Contains(err.Error(), "no positive interval_seconds") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func configureHostedTest(t *testing.T, endpoint string) {
+func configureCloudTest(t *testing.T, endpoint string) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("TELOS_CONFIG", filepath.Join(dir, "config.yaml"))

@@ -25,7 +25,7 @@ events → scheduler constraints → node state.
 ### NodeCordoned
 
 Cordon a node so no new pods can be scheduled on it. Existing pods remain
-running. In a single-node hosted environment, this prevents all new scheduling.
+running. In a single-node cloud environment, this prevents all new scheduling.
 
 ```bash
 fault_cordon_node() {
@@ -163,7 +163,7 @@ placement due to insufficient resources.
 ```bash
 fault_excessive_cpu_request() {
   local deploy=$1 ns=$2
-  local cpu=${3:-"64"}  # 64 cores — no hosted node has this
+  local cpu=${3:-"64"}  # 64 cores — no cloud node has this
 
   kubectl patch deployment "$deploy" -n "$ns" --type=json -p "[
     {\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/resources/requests/cpu\",
@@ -173,7 +173,7 @@ fault_excessive_cpu_request() {
 
 fault_excessive_memory_request() {
   local deploy=$1 ns=$2
-  local memory=${3:-"256Gi"}  # 256GB should exceed ordinary hosted nodes
+  local memory=${3:-"256Gi"}  # 256GB should exceed ordinary cloud nodes
 
   kubectl patch deployment "$deploy" -n "$ns" --type=json -p "[
     {\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/resources/requests/memory\",

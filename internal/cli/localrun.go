@@ -13,6 +13,7 @@ import (
 	"github.com/telos-org/telos-go/internal/executor"
 	"github.com/telos-org/telos-go/internal/game"
 	"github.com/telos-org/telos-go/internal/platform"
+	"github.com/telos-org/telos-go/internal/sessionapi"
 	"github.com/telos-org/telos-go/internal/spec"
 )
 
@@ -212,9 +213,9 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 }
 
 func startLocalWorker(sessionDir string) error {
-	exe, err := os.Executable()
+	telosd, err := resolveTelosd()
 	if err != nil {
-		return fmt.Errorf("resolve telos executable: %w", err)
+		return err
 	}
 	logPath := filepath.Join(sessionDir, "runner.log")
 	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
@@ -223,7 +224,7 @@ func startLocalWorker(sessionDir string) error {
 	}
 	defer logFile.Close()
 
-	cmd := exec.Command(exe, "worker", sessionDir)
+	cmd := exec.Command(telosd, "--session-dir", sessionDir)
 	cmd.Env = append(os.Environ(), "TELOS_SESSION_DIR="+filepath.Dir(sessionDir))
 	cmd.Stdin = nil
 	cmd.Stdout = logFile
@@ -238,6 +239,24 @@ func startLocalWorker(sessionDir string) error {
 		return err
 	}
 	return nil
+}
+
+func resolveTelosd() (string, error) {
+	if configured := os.Getenv("TELOSD_PATH"); configured != "" {
+		return configured, nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve telos executable: %w", err)
+	}
+	sibling := filepath.Join(filepath.Dir(exe), "telosd")
+	if _, err := os.Stat(sibling); err == nil {
+		return sibling, nil
+	}
+	if path, err := exec.LookPath("telosd"); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("telosd not found; install telosd next to telos or set TELOSD_PATH")
 }
 
 func newSessionDir(root string) (string, error) {
@@ -274,16 +293,17 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		agentTimeout = 1800
 	}
 
-	manifest := map[string]interface{}{
-		"session_id":        filepath.Base(sessionDir),
-		"session_kind":      "task",
-		"created_at":        time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		"launcher":          "local",
-		"parent_session_id": nil,
-		"source_spec_path":  specPath,
-		"session_spec_path": state.SpecPath(),
-		"spec_name":         compiled.Environment.Name,
-		"config": map[string]interface{}{
+	manifestPath := filepath.Join(sessionDir, "session.json")
+	err := sessionapi.WriteInitialManifest(manifestPath, sessionapi.InitialManifest{
+		SessionID:       filepath.Base(sessionDir),
+		SessionKind:     sessionapi.KindTask,
+		Runtime:         sessionapi.RuntimeLocal,
+		CreatedAt:       time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		Launcher:        "local",
+		SourceSpecPath:  &specPath,
+		SessionSpecPath: strPtr(state.SpecPath()),
+		SpecName:        compiled.Environment.Name,
+		Config: map[string]interface{}{
 			"model":             model,
 			"max_rounds":        maxRounds,
 			"max_cost_usd":      cfg.MaxCostUSD,
@@ -291,23 +311,21 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 			"thinking":          thinking,
 			"workspace":         workspace,
 		},
-		"provenance": map[string]interface{}{"mode": "local"},
-		"specs": []map[string]interface{}{{
-			"index":             0,
-			"name":              compiled.Environment.Name,
-			"dir_name":          compiled.Environment.Name,
-			"environment_path":  specPath,
-			"session_spec_path": state.SpecPath(),
-			"content_hash":      compiled.ContentHash,
-			"evidence_path":     state.EvidencePath,
-			"transcript_path":   state.TranscriptPath,
-			"workspace_path":    state.WorkspacePath,
-			"interval_seconds":  compiled.Environment.IntervalSeconds,
+		Provenance: map[string]interface{}{"mode": "local"},
+		Specs: []sessionapi.InitialManifestSpec{{
+			Index:           0,
+			Name:            compiled.Environment.Name,
+			DirName:         compiled.Environment.Name,
+			EnvironmentPath: &specPath,
+			SessionSpecPath: strPtr(state.SpecPath()),
+			ContentHash:     strPtr(compiled.ContentHash),
+			EvidencePath:    strPtr(state.EvidencePath),
+			TranscriptPath:  strPtr(state.TranscriptPath),
+			WorkspacePath:   strPtr(state.WorkspacePath),
+			IntervalSeconds: compiled.Environment.IntervalSeconds,
 		}},
-		"epochs": []interface{}{},
-	}
-
-	if err := writeManifestJSON(sessionDir, manifest); err != nil {
+	})
+	if err != nil {
 		return fmt.Errorf("write session manifest: %w", err)
 	}
 	return nil
@@ -486,4 +504,11 @@ func writeManifestJSON(sessionDir string, manifest map[string]interface{}) error
 		return err
 	}
 	return nil
+}
+
+func strPtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
 }

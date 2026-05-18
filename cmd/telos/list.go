@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/telos-org/telos-go/internal/cloud"
 	"github.com/telos-org/telos-go/internal/config"
-	"github.com/telos-org/telos-go/internal/hosted"
 	"github.com/telos-org/telos-go/internal/sessionapi"
 )
 
@@ -14,12 +14,12 @@ import (
 
 func cmdList(args []string) {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
-	env := fs.String("env", "", "Hosted environment")
+	env := fs.String("env", "", "Cloud environment")
 	limit := fs.Int("limit", 0, "Limit results")
 	wide := fs.Bool("wide", false, "Wide output")
-	environments := fs.Bool("environments", false, "List hosted environments")
+	environments := fs.Bool("environments", false, "List cloud environments")
 	localOnly := fs.Bool("local", false, "Local sessions only")
-	hostedOnly := fs.Bool("hosted", false, "Hosted sessions only")
+	cloudOnly := fs.Bool("cloud", false, "Cloud sessions only")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
@@ -31,7 +31,7 @@ func cmdList(args []string) {
 	var sessions []sessionapi.Session
 
 	// Local sessions
-	if !*hostedOnly {
+	if !*cloudOnly {
 		s := store()
 		local, err := s.List()
 		if err == nil {
@@ -39,15 +39,15 @@ func cmdList(args []string) {
 		}
 	}
 
-	// Hosted sessions
-	if !*localOnly && (*hostedOnly || *env != "" || config.IsConfigured()) {
-		hostedSessions, err := listHostedSessions(*env, *limit)
-		if err != nil && (*hostedOnly || *env != "") {
+	// Cloud sessions
+	if !*localOnly && (*cloudOnly || *env != "" || config.IsConfigured()) {
+		cloudSessions, err := listCloudSessions(*env, *limit)
+		if err != nil && (*cloudOnly || *env != "") {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		if err == nil {
-			sessions = append(sessions, hostedSessions...)
+			sessions = append(sessions, cloudSessions...)
 		}
 	}
 
@@ -105,7 +105,7 @@ func visibleListSessions(sessions []sessionapi.Session, wide bool) []sessionapi.
 }
 
 func listEnvironments(jsonOut bool) {
-	control, err := hosted.ControlClient()
+	control, err := cloud.ControlClient()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

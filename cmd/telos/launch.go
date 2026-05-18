@@ -7,8 +7,8 @@ import (
 	"time"
 
 	"github.com/telos-org/telos-go/internal/cli"
+	"github.com/telos-org/telos-go/internal/cloud"
 	"github.com/telos-org/telos-go/internal/config"
-	"github.com/telos-org/telos-go/internal/hosted"
 	"github.com/telos-org/telos-go/internal/spec"
 )
 
@@ -25,7 +25,7 @@ func cmdApply(args []string) {
 func cmdLaunch(command, action string, args []string) {
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	workspace := fs.String("workspace", "", "Workspace directory")
-	env := fs.String("env", "", "Hosted environment ID")
+	env := fs.String("env", "", "Cloud environment ID")
 	fromWorkspace := fs.String("from-workspace", "", "Workspace checkpoint path")
 	model := fs.String("model", "", "Model name")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
@@ -66,7 +66,7 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a controller session")
 			os.Exit(1)
 		}
-		runChildHosted(specArg, ctx, *fromWorkspace, *jsonOut, action)
+		runChildCloud(specArg, ctx, *fromWorkspace, *jsonOut, action)
 		return
 	}
 
@@ -96,11 +96,11 @@ func cmdLaunch(command, action string, args []string) {
 		os.Exit(1)
 	}
 	switch launchMode {
-	case launchHostedExisting:
-		runHosted(specArg, *env, *jsonOut, false, 0, action)
+	case launchCloudExisting:
+		runCloud(specArg, *env, *jsonOut, false, 0, action)
 		return
-	case launchHostedNew:
-		runHosted(
+	case launchCloudNew:
+		runCloud(
 			specArg,
 			"",
 			*jsonOut,
@@ -151,15 +151,15 @@ func cmdLaunch(command, action string, args []string) {
 type launchMode string
 
 const (
-	launchLocal          launchMode = "local"
-	launchHostedExisting launchMode = "hosted-existing"
-	launchHostedNew      launchMode = "hosted-new"
+	launchLocal         launchMode = "local"
+	launchCloudExisting launchMode = "cloud-existing"
+	launchCloudNew      launchMode = "cloud-new"
 )
 
 func decideLaunchMode(
 	platform string,
 	envID string,
-	hostedConfigured bool,
+	cloudConfigured bool,
 	localConfigSet bool,
 ) (launchMode, error) {
 	if platform == "local" {
@@ -172,15 +172,15 @@ func decideLaunchMode(
 		return "", fmt.Errorf("local run config flags require a platform: local spec")
 	}
 	if envID != "" {
-		return launchHostedExisting, nil
+		return launchCloudExisting, nil
 	}
-	if !hostedConfigured {
-		return "", fmt.Errorf("non-local spec requires hosted config; run `telos login` first")
+	if !cloudConfigured {
+		return "", fmt.Errorf("non-local spec requires cloud config; run `telos login` first")
 	}
-	return launchHostedNew, nil
+	return launchCloudNew, nil
 }
 
-func runChildHosted(
+func runChildCloud(
 	specArg string,
 	ctx controllerContext,
 	fromWorkspace string,
@@ -196,7 +196,7 @@ func runChildHosted(
 	if fromWorkspace != "" {
 		req.FromWorkspace = &fromWorkspace
 	}
-	session, err := hosted.NewClient(ctx.endpoint, ctx.token).CreateSession(req)
+	session, err := cloud.NewClient(ctx.endpoint, ctx.token).CreateSession(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -208,7 +208,7 @@ func runChildHosted(
 	fmt.Printf("%s %s (status: %s)\n", action, session.SessionID, session.Status)
 }
 
-func runHosted(
+func runCloud(
 	specArg string,
 	envID string,
 	jsonOut bool,
@@ -221,7 +221,7 @@ func runHosted(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	client, env, err := hostedSessionClientForRun(envID, waitForEnvironment, readyTimeout)
+	client, env, err := cloudSessionClientForRun(envID, waitForEnvironment, readyTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

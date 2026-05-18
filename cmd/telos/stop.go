@@ -10,7 +10,7 @@ import (
 
 func cmdStop(args []string) {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
-	env := fs.String("env", "", "Hosted environment")
+	env := fs.String("env", "", "Cloud environment")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 

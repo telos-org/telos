@@ -37,6 +37,7 @@ type Store interface {
 type manifest struct {
 	SessionID       string         `json:"session_id"`
 	SessionKind     SessionKind    `json:"session_kind"`
+	Runtime         SessionRuntime `json:"runtime,omitempty"`
 	CreatedAt       string         `json:"created_at"`
 	Launcher        string         `json:"launcher"`
 	ParentSessionID *string        `json:"parent_session_id"`
@@ -71,18 +72,109 @@ type epoch struct {
 	Runner     map[string]any `json:"runner"`
 }
 
+// InitialManifest is the typed input for creating a session.json before any
+// worker epoch has started.
+type InitialManifest struct {
+	SessionID       string
+	SessionKind     SessionKind
+	Runtime         SessionRuntime
+	Launcher        string
+	CreatedAt       string
+	ParentSessionID *string
+	SourceSpecPath  *string
+	SessionSpecPath *string
+	SpecName        string
+	Config          map[string]any
+	Provenance      map[string]any
+	Specs           []InitialManifestSpec
+}
+
+type InitialManifestSpec struct {
+	Index           int
+	Name            string
+	DirName         string
+	EnvironmentPath *string
+	SessionSpecPath *string
+	ContentHash     *string
+	EvidencePath    *string
+	TranscriptPath  *string
+	WorkspacePath   *string
+	IntervalSeconds *int
+}
+
+// WriteInitialManifest writes the canonical initial session manifest shape.
+func WriteInitialManifest(path string, input InitialManifest) error {
+	m := manifestFromInitial(input)
+	return writeManifest(path, &m)
+}
+
+func manifestFromInitial(input InitialManifest) manifest {
+	if input.SessionKind == "" {
+		input.SessionKind = KindTask
+	}
+	if input.Runtime == "" {
+		input.Runtime = RuntimeLocal
+	}
+	if input.Launcher == "" {
+		input.Launcher = "local"
+	}
+	if input.Provenance == nil {
+		input.Provenance = map[string]any{"mode": runtimeMode(input.Runtime)}
+	}
+	specs := make([]manifestSpec, 0, len(input.Specs))
+	for _, spec := range input.Specs {
+		index := spec.Index
+		specs = append(specs, manifestSpec{
+			Index:           &index,
+			Name:            spec.Name,
+			DirName:         spec.DirName,
+			EnvironmentPath: spec.EnvironmentPath,
+			SessionSpecPath: spec.SessionSpecPath,
+			ContentHash:     spec.ContentHash,
+			EvidencePath:    spec.EvidencePath,
+			TranscriptPath:  spec.TranscriptPath,
+			WorkspacePath:   spec.WorkspacePath,
+			IntervalSeconds: spec.IntervalSeconds,
+		})
+	}
+	return manifest{
+		SessionID:       input.SessionID,
+		SessionKind:     input.SessionKind,
+		Runtime:         input.Runtime,
+		CreatedAt:       input.CreatedAt,
+		Launcher:        input.Launcher,
+		ParentSessionID: input.ParentSessionID,
+		SourceSpecPath:  input.SourceSpecPath,
+		SessionSpecPath: input.SessionSpecPath,
+		SpecName:        input.SpecName,
+		Config:          input.Config,
+		Provenance:      input.Provenance,
+		Specs:           specs,
+		Epochs:          []epoch{},
+	}
+}
+
 // --------- FileStore ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 // FileStore is a local file-backed Store that writes session manifests under a
 // root directory (typically .telos/sessions).
 type FileStore struct {
-	Root string
-	mu   sync.Mutex
+	Root     string
+	runtime  SessionRuntime
+	launcher string
+	mu       sync.Mutex
 }
 
 // NewFileStore returns a FileStore rooted at the given directory.
-func NewFileStore(root string) *FileStore {
-	return &FileStore{Root: root}
+func NewFileStore(root string, runtime SessionRuntime) *FileStore {
+	if runtime == "" {
+		runtime = RuntimeLocal
+	}
+	launcher := "local"
+	if runtime == RuntimeCloud {
+		launcher = "telosd"
+	}
+	return &FileStore{Root: root, runtime: runtime, launcher: launcher}
 }
 
 func (fs *FileStore) sessionDir(id string) string {
@@ -129,20 +221,20 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	}
 	prepared.SessionSpecPath = strPtr(sessionSpecPath)
 
-	idx := 0
-	m := manifest{
+	m := manifestFromInitial(InitialManifest{
 		SessionID:       id,
 		SessionKind:     KindTask,
+		Runtime:         fs.runtime,
 		CreatedAt:       tsNow(),
-		Launcher:        "local",
+		Launcher:        fs.launcher,
 		ParentSessionID: req.ParentSessionID,
 		SourceSpecPath:  prepared.SourceSpecPath,
 		SessionSpecPath: prepared.SessionSpecPath,
 		SpecName:        specName,
 		Config:          buildConfig(req),
-		Provenance:      map[string]any{"mode": "local"},
-		Specs: []manifestSpec{{
-			Index:           &idx,
+		Provenance:      map[string]any{"mode": runtimeMode(fs.runtime)},
+		Specs: []InitialManifestSpec{{
+			Index:           0,
 			Name:            specName,
 			DirName:         specName,
 			EnvironmentPath: prepared.EnvironmentPath,
@@ -153,8 +245,7 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 			WorkspacePath:   &workspacePath,
 			IntervalSeconds: prepared.IntervalSeconds,
 		}},
-		Epochs: []epoch{},
-	}
+	})
 
 	if err := writeManifest(fs.manifestPath(id), &m); err != nil {
 		return nil, err
@@ -375,7 +466,7 @@ func (fs *FileStore) deriveSession(id string, m *manifest) (*Session, error) {
 		SpecName:        strPtr(m.SpecName),
 		Status:          status,
 		CreatedAt:       strPtr(m.CreatedAt),
-		Runtime:         RuntimeLocal,
+		Runtime:         manifestRuntime(m, fs.runtime),
 		Launcher:        strPtr(m.Launcher),
 		SourceSpecPath:  m.SourceSpecPath,
 		SessionSpecPath: m.SessionSpecPath,
@@ -728,4 +819,28 @@ func ptrOr[T any](p *T, def T) T {
 		return *p
 	}
 	return def
+}
+
+func runtimeMode(runtime SessionRuntime) string {
+	if runtime == RuntimeCloud {
+		return "cloud"
+	}
+	return "local"
+}
+
+func manifestRuntime(m *manifest, fallback SessionRuntime) SessionRuntime {
+	if m.Runtime == RuntimeLocal || m.Runtime == RuntimeCloud {
+		return m.Runtime
+	}
+	mode, _ := m.Provenance["mode"].(string)
+	switch mode {
+	case "cloud":
+		return RuntimeCloud
+	case "local":
+		return RuntimeLocal
+	}
+	if fallback == RuntimeCloud {
+		return RuntimeCloud
+	}
+	return RuntimeLocal
 }

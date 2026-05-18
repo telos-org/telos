@@ -1,4 +1,4 @@
-package hosted
+package cloud
 
 import (
 	"context"
@@ -46,7 +46,7 @@ func TestClientGetSession(t *testing.T) {
 		json.NewEncoder(w).Encode(sessionapi.Session{
 			SessionID: "test-session",
 			Status:    sessionapi.StatusCompleted,
-			Runtime:   sessionapi.RuntimeHosted,
+			Runtime:   sessionapi.RuntimeCloud,
 		})
 	}))
 	defer srv.Close()
@@ -62,7 +62,7 @@ func TestClientGetSession(t *testing.T) {
 	if session.Status != sessionapi.StatusCompleted {
 		t.Errorf("status: got %q", session.Status)
 	}
-	if session.Runtime != sessionapi.RuntimeHosted {
+	if session.Runtime != sessionapi.RuntimeCloud {
 		t.Errorf("runtime: got %q", session.Runtime)
 	}
 }
@@ -72,8 +72,8 @@ func TestClientListSessions(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(sessionapi.SessionListResponse{
 			Sessions: []sessionapi.Session{
-				{SessionID: "s1", Status: sessionapi.StatusCompleted, Runtime: sessionapi.RuntimeHosted},
-				{SessionID: "s2", Status: sessionapi.StatusRunning, Runtime: sessionapi.RuntimeHosted},
+				{SessionID: "s1", Status: sessionapi.StatusCompleted, Runtime: sessionapi.RuntimeCloud},
+				{SessionID: "s2", Status: sessionapi.StatusRunning, Runtime: sessionapi.RuntimeCloud},
 			},
 		})
 	}))
@@ -236,7 +236,7 @@ func TestClientStopSession(t *testing.T) {
 		json.NewEncoder(w).Encode(sessionapi.Session{
 			SessionID: "stop-me",
 			Status:    sessionapi.StatusStopped,
-			Runtime:   sessionapi.RuntimeHosted,
+			Runtime:   sessionapi.RuntimeCloud,
 		})
 	}))
 	defer srv.Close()
@@ -377,20 +377,20 @@ func TestReadErrorPreservesStructuredDetail(t *testing.T) {
 }
 
 func TestSharedAPIModel(t *testing.T) {
-	// Verify that local and hosted share the same Session type
+	// Verify that local and cloud share the same Session type
 	// by round-tripping through JSON
 	local := sessionapi.Session{
 		SessionID: "local_test",
 		Status:    sessionapi.StatusCompleted,
 		Runtime:   sessionapi.RuntimeLocal,
 	}
-	hosted := sessionapi.Session{
-		SessionID: "hosted_test",
+	cloud := sessionapi.Session{
+		SessionID: "cloud_test",
 		Status:    sessionapi.StatusRunning,
-		Runtime:   sessionapi.RuntimeHosted,
+		Runtime:   sessionapi.RuntimeCloud,
 	}
 
-	for _, s := range []*sessionapi.Session{&local, &hosted} {
+	for _, s := range []*sessionapi.Session{&local, &cloud} {
 		data, _ := json.Marshal(s)
 		var decoded sessionapi.Session
 		json.Unmarshal(data, &decoded)

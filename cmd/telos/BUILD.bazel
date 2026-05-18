@@ -11,8 +11,7 @@ go_library(
     deps = [
         "//internal/cli",
         "//internal/config",
-        "//internal/game",
-        "//internal/hosted",
+        "//internal/cloud",
         "//internal/sessionapi",
         "//internal/spec",
     ],
@@ -59,4 +58,5 @@ go_test(
     name = "telos_test",
     srcs = glob(["*_test.go"]),
     embed = [":telos_lib"],
+    deps = ["//internal/sessionapi"],
 )

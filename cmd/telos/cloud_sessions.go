@@ -3,20 +3,20 @@ package main
 import (
 	"time"
 
+	"github.com/telos-org/telos-go/internal/cloud"
 	"github.com/telos-org/telos-go/internal/config"
-	"github.com/telos-org/telos-go/internal/hosted"
 	"github.com/telos-org/telos-go/internal/sessionapi"
 )
 
-func hostedSessionClientForRun(
+func cloudSessionClientForRun(
 	envID string,
 	waitForEnvironment bool,
 	readyTimeout time.Duration,
-) (*hosted.Client, *hosted.Environment, error) {
+) (*cloud.Client, *cloud.Environment, error) {
 	if envID != "" {
-		return hosted.NewEnvironmentClient(envID)
+		return cloud.NewEnvironmentClient(envID)
 	}
-	control, err := hosted.ControlClient()
+	control, err := cloud.ControlClient()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -34,15 +34,15 @@ func hostedSessionClientForRun(
 		if readyTimeout <= 0 {
 			readyTimeout = 15 * time.Minute
 		}
-		if err := hosted.WaitForEnvironment(env.Handle, readyTimeout); err != nil {
+		if err := cloud.WaitForEnvironment(env.Handle, readyTimeout); err != nil {
 			return nil, nil, err
 		}
 	}
-	return hosted.NewClient("https://"+env.Handle, env.AccessToken), env, nil
+	return cloud.NewClient("https://"+env.Handle, env.AccessToken), env, nil
 }
 
-func listHostedSessions(envID string, limit int) ([]sessionapi.Session, error) {
-	clients, err := hostedSessionClients(envID)
+func listCloudSessions(envID string, limit int) ([]sessionapi.Session, error) {
+	clients, err := cloudSessionClients(envID)
 	if err != nil {
 		return nil, err
 	}
@@ -60,16 +60,16 @@ func listHostedSessions(envID string, limit int) ([]sessionapi.Session, error) {
 	return sessions, nil
 }
 
-func hostedSessionClients(envID string) ([]*hosted.Client, error) {
+func cloudSessionClients(envID string) ([]*cloud.Client, error) {
 	if envID != "" {
-		client, _, err := hosted.NewEnvironmentClient(envID)
+		client, _, err := cloud.NewEnvironmentClient(envID)
 		if err != nil {
 			return nil, err
 		}
-		return []*hosted.Client{client}, nil
+		return []*cloud.Client{client}, nil
 	}
 
-	control, err := hosted.ControlClient()
+	control, err := cloud.ControlClient()
 	if err != nil {
 		return nil, err
 	}
@@ -77,7 +77,7 @@ func hostedSessionClients(envID string) ([]*hosted.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	var clients []*hosted.Client
+	var clients []*cloud.Client
 	for _, env := range envs {
 		if env.ID == "" || env.Handle == "" || env.State == "torn-down" {
 			continue
@@ -99,7 +99,7 @@ func hostedSessionClients(envID string) ([]*hosted.Client, error) {
 				return nil, err
 			}
 		}
-		clients = append(clients, hosted.NewClient("https://"+env.Handle, access.Token))
+		clients = append(clients, cloud.NewClient("https://"+env.Handle, access.Token))
 	}
 	return clients, nil
 }

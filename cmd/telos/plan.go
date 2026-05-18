@@ -14,7 +14,7 @@ import (
 
 func cmdPlan(args []string) {
 	fs := flag.NewFlagSet("plan", flag.ExitOnError)
-	env := fs.String("env", "", "Existing hosted environment ID")
+	env := fs.String("env", "", "Existing cloud environment ID")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
@@ -43,14 +43,14 @@ func cmdPlan(args []string) {
 	userScope := map[string]interface{}{
 		"status": "local",
 		"label":  "local workspace",
-		"detail": "no hosted auth required",
+		"detail": "no cloud auth required",
 	}
 	if platform != "local" {
 		sessionKind = "controller"
 		if *env != "" {
-			targetMode = "hosted env " + *env
+			targetMode = "cloud env " + *env
 		} else {
-			targetMode = "hosted"
+			targetMode = "cloud"
 			willAllocateEnvironment = true
 		}
 		userScope = map[string]interface{}{
@@ -61,8 +61,8 @@ func cmdPlan(args []string) {
 		if config.IsConfigured() {
 			userScope = map[string]interface{}{
 				"status": "configured",
-				"label":  "hosted control plane",
-				"detail": "stored hosted credentials",
+				"label":  "cloud control plane",
+				"detail": "stored cloud credentials",
 			}
 		}
 	}

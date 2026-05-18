@@ -1,0 +1,27 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "telosd",
+    srcs = [
+        "config.go",
+        "server.go",
+        "worker.go",
+    ],
+    importpath = "github.com/telos-org/telos-go/internal/telosd",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/cli",
+        "//internal/game",
+        "//internal/sessionapi",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
+)
+
+go_test(
+    name = "telosd_test",
+    srcs = [
+        "config_test.go",
+        "worker_test.go",
+    ],
+    embed = [":telosd"],
+)

@@ -1,4 +1,4 @@
-// Command telos is the Telos CLI and local runtime.
+// Command telos is the public Telos CLI.
 //
 // Public commands:
 //
@@ -6,7 +6,7 @@
 //	telos apply SPEC.md [--env ENV] [--json]
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
 //	    [--max-rounds N] [--max-cost-usd USD] [--agent-timeout-sec SEC] [--json]
-//	telos list [--env ENV] [--limit N] [--wide] [--environments] [--local] [--hosted] [--json]
+//	telos list [--env ENV] [--limit N] [--wide] [--environments] [--local] [--cloud] [--json]
 //	telos describe SESSION [--env ENV] [--json]
 //	telos logs [-f] SESSION [--env ENV]
 //	telos stop SESSION [--env ENV] [--json]
@@ -48,10 +48,6 @@ func main() {
 		cmdStop(os.Args[2:])
 	case "login":
 		cmdLogin(os.Args[2:])
-	case "serve":
-		cmdServe()
-	case "worker":
-		cmdWorker(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage()
@@ -70,5 +66,5 @@ func usage() {
 	fmt.Fprintln(os.Stderr, "  describe SESSION   Show session details")
 	fmt.Fprintln(os.Stderr, "  logs SESSION       Show session transcript")
 	fmt.Fprintln(os.Stderr, "  stop SESSION       Stop a running session")
-	fmt.Fprintln(os.Stderr, "  login              Configure hosted access")
+	fmt.Fprintln(os.Stderr, "  login              Configure cloud access")
 }

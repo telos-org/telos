@@ -1,8 +1,10 @@
 // Package sessionapi defines the canonical JSON request/response types and
-// HTTP routes for the Telos Sessions API. Both local and hosted deployments
+// HTTP routes for the Telos Sessions API. Both local and cloud deployments
 // serve the same contract; they differ by adapters for auth, store, launcher,
 // and workspace.
 package sessionapi
+
+import "encoding/json"
 
 // --------- Enums ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
@@ -28,13 +30,29 @@ func (s SessionStatus) IsTerminal() bool {
 	return false
 }
 
-// SessionRuntime distinguishes local from hosted deployments.
+// SessionRuntime distinguishes local from cloud deployments.
 type SessionRuntime string
 
 const (
-	RuntimeLocal  SessionRuntime = "local"
-	RuntimeHosted SessionRuntime = "hosted"
+	RuntimeLocal SessionRuntime = "local"
+	RuntimeCloud SessionRuntime = "cloud"
 )
+
+func (r *SessionRuntime) UnmarshalJSON(data []byte) error {
+	var raw string
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	switch raw {
+	case "hosted": // Legacy wire value from older cloud APIs.
+		*r = RuntimeCloud
+	case string(RuntimeLocal), string(RuntimeCloud):
+		*r = SessionRuntime(raw)
+	default:
+		*r = SessionRuntime(raw)
+	}
+	return nil
+}
 
 // SessionKind distinguishes controller sessions from task sessions.
 type SessionKind string

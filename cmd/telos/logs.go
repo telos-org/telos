@@ -17,7 +17,7 @@ import (
 func cmdLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	follow := fs.Bool("f", false, "Follow transcript")
-	env := fs.String("env", "", "Hosted environment")
+	env := fs.String("env", "", "Cloud environment")
 	parseFlags(fs, args)
 
 	if fs.NArg() < 1 {

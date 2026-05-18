@@ -6,8 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/telos-org/telos-go/internal/cloud"
 	"github.com/telos-org/telos-go/internal/config"
-	"github.com/telos-org/telos-go/internal/hosted"
 	"github.com/telos-org/telos-go/internal/sessionapi"
 )
 
@@ -16,7 +16,7 @@ func store() *sessionapi.FileStore {
 	if root == "" {
 		root = filepath.Join(".telos", "sessions")
 	}
-	return sessionapi.NewFileStore(root)
+	return sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 }
 
 func resolveSpecPath(input string) string {
@@ -76,8 +76,8 @@ func localSessionExists(sessionID string) bool {
 	return err == nil
 }
 
-func hostedClientForSession(sessionID, envID string) (*hosted.Client, error) {
-	clients, err := hostedSessionClients(envID)
+func cloudClientForSession(sessionID, envID string) (*cloud.Client, error) {
+	clients, err := cloudSessionClients(envID)
 	if err != nil {
 		return nil, err
 	}
@@ -98,28 +98,28 @@ func getSessionFromAnywhere(sessionID, envID string) (*sessionapi.Session, error
 	}
 
 	if ctx, ok := controllerSessionContext(); ok {
-		session, err := hosted.NewClient(ctx.endpoint, ctx.token).GetSession(sessionID)
+		session, err := cloud.NewClient(ctx.endpoint, ctx.token).GetSession(sessionID)
 		if err == nil {
 			return session, nil
 		}
 		return nil, fmt.Errorf("controller session lookup failed: %w", err)
 	}
 
-	// Try hosted
+	// Try cloud
 	if envID != "" || config.IsConfigured() {
-		clients, err := hostedSessionClients(envID)
+		clients, err := cloudSessionClients(envID)
 		if err != nil && envID != "" {
 			return nil, err
 		}
-		hostedErr := err
+		cloudErr := err
 		for _, client := range clients {
 			session, err := client.GetSession(sessionID)
 			if err == nil {
 				return session, nil
 			}
 		}
-		if hostedErr != nil {
-			return nil, fmt.Errorf("session %s not found locally; hosted lookup failed: %w", sessionID, hostedErr)
+		if cloudErr != nil {
+			return nil, fmt.Errorf("session %s not found locally; cloud lookup failed: %w", sessionID, cloudErr)
 		}
 	}
 
@@ -134,7 +134,7 @@ func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
 	}
 
 	if ctx, ok := controllerSessionContext(); ok {
-		text, err := hosted.NewClient(ctx.endpoint, ctx.token).GetTranscript(sessionID)
+		text, err := cloud.NewClient(ctx.endpoint, ctx.token).GetTranscript(sessionID)
 		if err == nil {
 			return text, nil
 		}
@@ -142,19 +142,19 @@ func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
 	}
 
 	if envID != "" || config.IsConfigured() {
-		clients, err := hostedSessionClients(envID)
+		clients, err := cloudSessionClients(envID)
 		if err != nil && envID != "" {
 			return "", err
 		}
-		hostedErr := err
+		cloudErr := err
 		for _, client := range clients {
 			text, err := client.GetTranscript(sessionID)
 			if err == nil {
 				return text, nil
 			}
 		}
-		if hostedErr != nil {
-			return "", fmt.Errorf("session %s transcript not found locally; hosted lookup failed: %w", sessionID, hostedErr)
+		if cloudErr != nil {
+			return "", fmt.Errorf("session %s transcript not found locally; cloud lookup failed: %w", sessionID, cloudErr)
 		}
 	}
 
@@ -169,19 +169,19 @@ func stopSessionAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
 	}
 
 	if envID != "" || config.IsConfigured() {
-		clients, err := hostedSessionClients(envID)
+		clients, err := cloudSessionClients(envID)
 		if err != nil && envID != "" {
 			return nil, err
 		}
-		hostedErr := err
+		cloudErr := err
 		for _, client := range clients {
 			session, err := client.StopSession(sessionID)
 			if err == nil {
 				return session, nil
 			}
 		}
-		if hostedErr != nil {
-			return nil, fmt.Errorf("session %s not found locally; hosted lookup failed: %w", sessionID, hostedErr)
+		if cloudErr != nil {
+			return nil, fmt.Errorf("session %s not found locally; cloud lookup failed: %w", sessionID, cloudErr)
 		}
 	}
 

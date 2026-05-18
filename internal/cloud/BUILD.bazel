@@ -1,9 +1,9 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
-    name = "hosted",
+    name = "cloud",
     srcs = ["client.go"],
-    importpath = "github.com/telos-org/telos-go/internal/hosted",
+    importpath = "github.com/telos-org/telos-go/internal/cloud",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/config",
@@ -12,8 +12,8 @@ go_library(
 )
 
 go_test(
-    name = "hosted_test",
+    name = "cloud_test",
     srcs = ["client_test.go"],
-    embed = [":hosted"],
+    embed = [":cloud"],
     deps = ["//internal/sessionapi"],
 )

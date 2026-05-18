@@ -24,10 +24,10 @@ Split the policy into three checks:
 - transport is protected or explicitly constrained
 - stored data is encrypted in a real, defensible way
 
-## Hosted Runtime Reality Check
+## Cloud Runtime Reality Check
 
 Full node-level disk encryption is not normally controlled from inside a
-hosted workload namespace. Do not waste time on fake LUKS stories inside an
+cloud workload namespace. Do not waste time on fake LUKS stories inside an
 unprivileged pod.
 
 Prefer:

@@ -5,20 +5,20 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/telos-org/telos-go/internal/cloud"
 	"github.com/telos-org/telos-go/internal/config"
-	"github.com/telos-org/telos-go/internal/hosted"
 )
 
 // -- login --------------------------------------------------------------------
 
 func cmdLogin(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
-	endpoint := fs.String("endpoint", hosted.DefaultAPIEndpoint, "API endpoint")
+	endpoint := fs.String("endpoint", cloud.DefaultAPIEndpoint, "API endpoint")
 	token := fs.String("token", "", "API token")
 	noPrompt := fs.Bool("no-prompt", false, "No interactive prompt")
 	parseFlags(fs, args)
 
-	ep := hosted.NormalizeEndpoint(*endpoint)
+	ep := cloud.NormalizeEndpoint(*endpoint)
 	tok := *token
 	if tok == "" {
 		tok = os.Getenv("TELOS_AUTH_TOKEN")

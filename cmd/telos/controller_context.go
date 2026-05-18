@@ -4,7 +4,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/telos-org/telos-go/internal/hosted"
+	"github.com/telos-org/telos-go/internal/cloud"
 )
 
 type controllerContext struct {
@@ -24,7 +24,7 @@ func controllerSessionContext() (controllerContext, bool) {
 		endpoint = "http://telos-api.ns-telos-env.svc.cluster.local:8000"
 	}
 	return controllerContext{
-		endpoint:  hosted.NormalizeEndpoint(endpoint),
+		endpoint:  cloud.NormalizeEndpoint(endpoint),
 		token:     token,
 		sessionID: sessionID,
 	}, true

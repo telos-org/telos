@@ -144,7 +144,7 @@ these DNS names, not just `valkey-0.valkey.<ns>.svc.cluster.local`.
 
 ## Encryption at Rest
 
-The default hosted k3s StorageClass should not be treated as application-level
+The default cloud k3s StorageClass should not be treated as application-level
 encryption. Options:
 
 1. **Application-level encryption**: Encrypt values before
@@ -157,7 +157,7 @@ encryption. Options:
 3. **dm-crypt/LUKS**: Requires `privileged` init container with `cryptsetup`.
    Not viable in standard k8s pod security policies.
 
-For hosted environments, application-level encryption is the practical path. Do
+For cloud environments, application-level encryption is the practical path. Do
 not spend time on gocryptfs mount propagation — it's a dead end without
 privileged containers.
 

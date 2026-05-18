@@ -18,7 +18,7 @@ import (
 func newTestServer(t *testing.T) (*httptest.Server, *sessionapi.FileStore) {
 	t.Helper()
 	root := t.TempDir()
-	store := sessionapi.NewFileStore(root)
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	mux := http.NewServeMux()
 	sessionapi.RegisterRoutes(mux, store)
 	return httptest.NewServer(mux), store
@@ -125,7 +125,7 @@ func TestHealthz(t *testing.T) {
 
 func TestCreateSessionPersistsSpecMarkdown(t *testing.T) {
 	root := t.TempDir()
-	store := sessionapi.NewFileStore(root)
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	markdown := "---\nversion: v0\nname: markdown-task\nplatform: local\ninterval: 30s\n---\n# Task\n\nDo it."
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
@@ -719,7 +719,7 @@ func TestPythonManifestCompat(t *testing.T) {
 	// Verify that a manifest written in the Python format can be read back
 	// and produces the expected Session shape.
 	root := t.TempDir()
-	store := sessionapi.NewFileStore(root)
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 
 	id := "local_20260510_131841_00"
 	dir := filepath.Join(root, id)

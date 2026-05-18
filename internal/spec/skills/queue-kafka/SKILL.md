@@ -122,7 +122,7 @@ kafka-2.kafka-headless.<namespace>.svc.cluster.local
 
 ## Encryption at Rest
 
-The default hosted k3s StorageClass should not be treated as application-level
+The default cloud k3s StorageClass should not be treated as application-level
 encryption. Options:
 
 1. **Application-level encryption**: Use Kafka interceptors
@@ -131,7 +131,7 @@ encryption. Options:
 3. **gocryptfs/encfs**: FUSE-based, requires `--privileged` and careful init ordering.
    Race conditions between mount sidecar and Kafka startup are common — avoid unless necessary.
 
-For hosted environments, application-level encryption is the practical path.
+For cloud environments, application-level encryption is the practical path.
 
 ## Access Control (mTLS / SASL)
 

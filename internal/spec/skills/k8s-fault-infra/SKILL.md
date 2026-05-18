@@ -22,7 +22,7 @@ failures, cascading errors across services. Diagnosis requires correlating
 metrics, logs, and system state across multiple layers.
 
 Some operators require chaos tooling (ChaosBlade, tc, stress-ng) beyond
-standard kubectl. Hosted environments should prefer pod-scoped or
+standard kubectl. Cloud environments should prefer pod-scoped or
 DaemonSet-based injections over direct node shell access.
 
 ## Operators
@@ -111,7 +111,7 @@ fault_packet_loss() {
 Simulate kubelet unavailability by preventing new work from landing on a
 node and forcing rescheduling pressure through pod eviction. Directly
 stopping kubelet requires out-of-band node authority and is not a normal
-hosted controller move.
+cloud controller move.
 
 ```bash
 fault_node_unschedulable() {
@@ -129,7 +129,7 @@ verify_node_not_ready() {
 
 Simulate container runtime disruption by evicting or deleting pods from a
 selected workload so controllers must recreate them under pressure. Direct
-runtime shutdown requires node authority outside the hosted controller
+runtime shutdown requires node authority outside the cloud controller
 surface.
 
 ```bash
@@ -244,6 +244,6 @@ Some operators require tools beyond kubectl:
 - **stress-ng**: CPU/memory stress injection
 - **nsenter**: entering container network namespaces
 
-For hosted runs, node-level faults should be represented through Kubernetes
+For cloud runs, node-level faults should be represented through Kubernetes
 objects, privileged DaemonSets, or explicit chaos tooling with declared
 authority. Do not assume direct node shell access.

@@ -117,7 +117,7 @@ func TestCompileWithExtendsUsesParentNamespaceAndHash(t *testing.T) {
 func TestCompileWithoutDeclaredSkillsOnlyIncludesVerifierSkills(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: hosted-default\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: cloud-default\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -130,7 +130,7 @@ func TestCompileWithoutDeclaredSkillsOnlyIncludesVerifierSkills(t *testing.T) {
 		names[s.Name] = true
 	}
 	if names["k8s-deploy"] {
-		t.Fatal("skills must be explicit; hosted specs should not implicitly load catalogue skills")
+		t.Fatal("skills must be explicit; cloud specs should not implicitly load catalogue skills")
 	}
 	if !names["verify-engineering"] || !names["verify-quality"] {
 		t.Fatal("expected built-in verifier skills")

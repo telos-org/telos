@@ -60,7 +60,7 @@ If a task needed for the contract is pending, running, stopped, failed, or
 has not yet produced the expected live resources, report that state. Do
 not claim the system is healthy because a task was launched.
 
-`telos list --wide` works inside a controller without hosted login. It
+`telos list --wide` works inside a controller without cloud login. It
 uses the controller-local session token and returns this controller plus its
 descendants. Use it to understand child task state. Do not replace it with
 wide Kubernetes polling.

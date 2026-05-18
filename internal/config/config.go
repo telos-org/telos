@@ -16,13 +16,13 @@ const (
 	AuthTokenEnv        = "TELOS_AUTH_TOKEN"
 )
 
-// Config holds user-facing hosted CLI configuration.
+// Config holds user-facing cloud CLI configuration.
 type Config struct {
 	APIEndpoint string `yaml:"api_endpoint,omitempty"`
 	AuthToken   string `yaml:"auth_token,omitempty"`
 }
 
-// EnvironmentAccess holds a saved scoped token for one hosted environment.
+// EnvironmentAccess holds a saved scoped token for one cloud environment.
 type EnvironmentAccess struct {
 	ID    string
 	Token string
@@ -89,7 +89,7 @@ func SaveConfig(cfg *Config) error {
 	return nil
 }
 
-// LoadEnvironmentAccess reads saved hosted environment access tokens.
+// LoadEnvironmentAccess reads saved cloud environment access tokens.
 func LoadEnvironmentAccess() []EnvironmentAccess {
 	raw := readYAMLFile(EnvironmentsPath())
 	entries, ok := raw["environments"]
@@ -177,7 +177,7 @@ func SaveEnvironmentAccessEntry(entry EnvironmentAccess) error {
 	return SaveEnvironmentAccess(envs)
 }
 
-// IsConfigured returns true if the user has configured hosted access.
+// IsConfigured returns true if the user has configured cloud access.
 func IsConfigured() bool {
 	return LoadConfig().AuthToken != ""
 }

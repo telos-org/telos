@@ -1,8 +1,7 @@
-package main
+package telosd
 
 import (
 	"encoding/json"
-	"flag"
 	"fmt"
 	"os"
 	"os/signal"
@@ -15,31 +14,13 @@ import (
 	"github.com/telos-org/telos-go/internal/sessionapi"
 )
 
-// -- worker (internal) --------------------------------------------------------
-
-func cmdWorker(args []string) {
-	fs := flag.NewFlagSet("worker", flag.ExitOnError)
-	once := fs.Bool("once", false, "Run one worker cycle")
-	parseFlags(fs, args)
-	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos worker SESSION_DIR")
-		os.Exit(2)
-	}
-	code, err := runWorkerSession(fs.Arg(0), *once)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	os.Exit(code)
-}
-
-func runWorkerSession(sessionDir string, once bool) (int, error) {
+func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	var err error
 	sessionDir, err = filepath.Abs(sessionDir)
 	if err != nil {
 		return 1, err
 	}
-	manifest, err := loadWorkerManifest(sessionDir)
+	manifest, err := LoadWorkerManifest(sessionDir)
 	if err != nil {
 		return 1, err
 	}
@@ -80,15 +61,15 @@ func runWorkerSession(sessionDir string, once bool) (int, error) {
 	}
 }
 
-type workerManifest struct {
+type WorkerManifest struct {
 	Kind     sessionapi.SessionKind
 	Interval time.Duration
 }
 
-func loadWorkerManifest(sessionDir string) (workerManifest, error) {
+func LoadWorkerManifest(sessionDir string) (WorkerManifest, error) {
 	data, err := os.ReadFile(filepath.Join(sessionDir, "session.json"))
 	if err != nil {
-		return workerManifest{}, fmt.Errorf("read worker manifest: %w", err)
+		return WorkerManifest{}, fmt.Errorf("read worker manifest: %w", err)
 	}
 	var raw struct {
 		SessionKind sessionapi.SessionKind `json:"session_kind"`
@@ -97,12 +78,12 @@ func loadWorkerManifest(sessionDir string) (workerManifest, error) {
 		} `json:"specs"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return workerManifest{}, fmt.Errorf("decode worker manifest: %w", err)
+		return WorkerManifest{}, fmt.Errorf("decode worker manifest: %w", err)
 	}
 	if raw.SessionKind != sessionapi.KindController && raw.SessionKind != sessionapi.KindTask {
-		return workerManifest{}, fmt.Errorf("invalid session_kind %q in worker manifest", raw.SessionKind)
+		return WorkerManifest{}, fmt.Errorf("invalid session_kind %q in worker manifest", raw.SessionKind)
 	}
-	manifest := workerManifest{Kind: raw.SessionKind}
+	manifest := WorkerManifest{Kind: raw.SessionKind}
 	if len(raw.Specs) == 0 {
 		return manifest, nil
 	}
