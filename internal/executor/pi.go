@@ -152,7 +152,7 @@ func BuildPiArgv(model, thinking string) []string {
 		`break; ` +
 		`done; ` +
 		`fi; ` +
-		fmt.Sprintf(`exec pi --mode json --model "$1" --thinking "$2" --no-session --no-extensions -p "%s"`, platform.TaskEnvVar)
+		fmt.Sprintf(`exec pi --mode json --model "$1" --thinking "$2" --no-session --no-extensions -p "${%s}"`, platform.TaskEnvVar)
 	return []string{"sh", "-c", script, "pi", model, thinking}
 }
 

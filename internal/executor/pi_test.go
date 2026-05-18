@@ -2,6 +2,7 @@ package executor
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/telos-org/telos-go/internal/game"
@@ -197,6 +198,9 @@ func TestBuildPiArgv(t *testing.T) {
 	}
 	if argv[5] != "high" {
 		t.Errorf("thinking arg: got %q", argv[5])
+	}
+	if !strings.Contains(argv[2], `-p "${TELOS_TASK}"`) {
+		t.Errorf("task prompt is not expanded from env: %s", argv[2])
 	}
 }
 
