@@ -20,7 +20,7 @@ type PVG struct {
 
 // NewPVG creates a new PVG game instance.
 func NewPVG(compiled *spec.CompiledEnvironment, executor AgentExecutor, state *PVGState, config PVGConfig) *PVG {
-	ev := evidence.New(compiled.Environment.Name, state.EvidencePath, state.SessionID, 0)
+	ev := evidence.New(compiled.Environment.Name, state.EvidencePath, state.SessionID, config.EpochID)
 	result := &PVGResult{SystemName: compiled.Environment.Name}
 	result.EvidencePath = ev.Path
 	result.TranscriptPath = state.TranscriptPath

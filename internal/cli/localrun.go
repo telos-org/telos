@@ -154,7 +154,8 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		return nil, err
 	}
 
-	if err := startEpoch(sessionDir, manifest); err != nil {
+	epochID, err := startEpoch(sessionDir, manifest)
+	if err != nil {
 		return nil, err
 	}
 
@@ -176,6 +177,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		MaxRounds:     cfg.MaxRounds,
 		MaxCostUSD:    cfg.MaxCostUSD,
 		Verbose:       true,
+		EpochID:       epochID,
 		StopRequested: func() bool { return sessionStopped(sessionDir) },
 	}
 
@@ -343,7 +345,7 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	return lrc
 }
 
-func startEpoch(sessionDir string, manifest *sessionapi.Manifest) error {
+func startEpoch(sessionDir string, manifest *sessionapi.Manifest) (int, error) {
 	return startEpochWithRunner(sessionDir, manifest, os.Getpid(), "")
 }
 
@@ -352,12 +354,13 @@ func markWorkerStarted(sessionDir string, pid int, logPath string) error {
 	if err != nil {
 		return fmt.Errorf("read session manifest: %w", err)
 	}
-	return startEpochWithRunner(sessionDir, manifest, pid, logPath)
+	_, err = startEpochWithRunner(sessionDir, manifest, pid, logPath)
+	return err
 }
 
-func startEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid int, logPath string) error {
-	if manifest.OpenEpoch() != nil {
-		return nil
+func startEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid int, logPath string) (int, error) {
+	if open := manifest.OpenEpoch(); open != nil {
+		return open.ID, nil
 	}
 	epochID := len(manifest.Epochs) + 1
 	runner := runnerIdentity(pid)
@@ -370,9 +373,9 @@ func startEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid 
 		Runner:    &runner,
 	})
 	if err := sessionapi.WriteManifest(manifestPath(sessionDir), manifest); err != nil {
-		return fmt.Errorf("start epoch: %w", err)
+		return 0, fmt.Errorf("start epoch: %w", err)
 	}
-	return nil
+	return epochID, nil
 }
 
 func runnerIdentity(pid int) sessionapi.Runner {

@@ -214,7 +214,7 @@ func TestPVGEvidenceFormat(t *testing.T) {
 		},
 	}
 
-	cfg := PVGConfig{MaxRounds: 10, Verbose: false}
+	cfg := PVGConfig{MaxRounds: 10, Verbose: false, EpochID: 7}
 	pvg := NewPVG(compiled, exec, state, cfg)
 	pvg.Run()
 
@@ -239,6 +239,9 @@ func TestPVGEvidenceFormat(t *testing.T) {
 	}
 	if first["session_id"] != "test-session-05" {
 		t.Errorf("session_id: got %v", first["session_id"])
+	}
+	if first["epoch_id"] != float64(7) {
+		t.Errorf("epoch_id: got %v", first["epoch_id"])
 	}
 
 	// Verify last event is game_end

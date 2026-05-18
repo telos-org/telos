@@ -58,6 +58,7 @@ type PVGConfig struct {
 	MaxRounds     int
 	MaxCostUSD    *float64
 	Verbose       bool
+	EpochID       int
 	StopRequested func() bool
 }
 
