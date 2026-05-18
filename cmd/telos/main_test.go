@@ -208,21 +208,15 @@ func TestSessionCreateRequestForLocalSpec(t *testing.T) {
 	if req.SpecMarkdown == nil || !strings.Contains(*req.SpecMarkdown, "name: demo") {
 		t.Fatalf("expected spec markdown, got %#v", req)
 	}
-	if req.SpecID != nil {
-		t.Fatalf("did not expect spec id: %#v", req.SpecID)
-	}
 }
 
-func TestSessionCreateRequestForCatalogueSpecID(t *testing.T) {
-	req, err := sessionCreateRequestForSpec("cal-diy")
-	if err != nil {
-		t.Fatalf("sessionCreateRequestForSpec: %v", err)
+func TestSessionCreateRequestRejectsCatalogueSpecID(t *testing.T) {
+	_, err := sessionCreateRequestForSpec("cal-diy")
+	if err == nil {
+		t.Fatal("expected catalogue spec id to fail")
 	}
-	if req.SpecID == nil || *req.SpecID != "cal-diy" {
-		t.Fatalf("expected spec id, got %#v", req)
-	}
-	if req.SpecMarkdown != nil {
-		t.Fatalf("did not expect markdown: %#v", *req.SpecMarkdown)
+	if !strings.Contains(err.Error(), "spec file not found: cal-diy") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

@@ -3,6 +3,8 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "sessionapi",
     srcs = [
+        "auth.go",
+        "manifest.go",
         "server.go",
         "store.go",
         "types.go",
@@ -14,6 +16,9 @@ go_library(
 
 go_test(
     name = "sessionapi_test",
-    srcs = ["server_test.go"],
+    srcs = [
+        "server_test.go",
+        "types_test.go",
+    ],
     deps = [":sessionapi"],
 )

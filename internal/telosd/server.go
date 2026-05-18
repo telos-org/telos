@@ -25,7 +25,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 	store := storeForConfig(cfg)
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store)
+	sessionapi.RegisterRoutes(mux, store, authorizerForConfig(cfg, store))
 
 	var lastRequest atomic.Int64
 	lastRequest.Store(time.Now().UnixNano())
@@ -65,6 +65,13 @@ func storeForConfig(cfg Config) *sessionapi.FileStore {
 		return sessionapi.NewFileStore(SessionsRoot(cfg.Root), sessionapi.RuntimeCloud)
 	}
 	return sessionapi.NewFileStore(SessionsRoot(cfg.Root), sessionapi.RuntimeLocal)
+}
+
+func authorizerForConfig(cfg Config, store *sessionapi.FileStore) sessionapi.Authorizer {
+	if cfg.Auth.Type == AuthBearer {
+		return sessionapi.NewBearerAuthorizer(store, cfg.Auth.Token)
+	}
+	return sessionapi.AllowAllAuthorizer{}
 }
 
 func listen(cfg Config) (net.Listener, func(), error) {

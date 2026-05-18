@@ -1,4 +1,4 @@
-load("@rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library")
+load("@rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library", "go_test")
 
 go_library(
     name = "telosd_lib",
@@ -6,6 +6,12 @@ go_library(
     importpath = "github.com/telos-org/telos-go/cmd/telosd",
     visibility = ["//visibility:private"],
     deps = ["//internal/telosd"],
+)
+
+go_test(
+    name = "telosd_main_test",
+    srcs = ["main_test.go"],
+    embed = [":telosd_lib"],
 )
 
 go_binary(

@@ -197,14 +197,12 @@ func TestRunLocalSessionDefaultsMissingWorkspaceToSessionDir(t *testing.T) {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
 	manifestPath := filepath.Join(session.SessionDir, "session.json")
-	manifestData, _ := os.ReadFile(manifestPath)
-	var manifest map[string]interface{}
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := manifest["config"].(map[string]interface{})
-	delete(cfg, "workspace")
-	if err := writeManifestJSON(session.SessionDir, manifest); err != nil {
+	manifest.Config.Workspace = ""
+	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
 		t.Fatal(err)
 	}
 
@@ -242,18 +240,12 @@ func TestRunLocalSessionRejectsMissingSessionSpecPath(t *testing.T) {
 	}
 
 	manifestPath := filepath.Join(session.SessionDir, "session.json")
-	manifestData, err := os.ReadFile(manifestPath)
+	manifest, err := sessionapi.ReadManifest(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var manifest map[string]interface{}
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		t.Fatal(err)
-	}
-	specs := manifest["specs"].([]interface{})
-	spec0 := specs[0].(map[string]interface{})
-	delete(spec0, "session_spec_path")
-	if err := writeManifestJSON(session.SessionDir, manifest); err != nil {
+	manifest.Specs[0].SessionSpecPath = nil
+	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
 		t.Fatal(err)
 	}
 
@@ -511,16 +503,16 @@ func TestRunnerIdentityRecordsKubernetesPod(t *testing.T) {
 
 	runner := runnerIdentity(1234)
 
-	if runner["kind"] != "kubernetes-pod" {
-		t.Fatalf("kind: got %v", runner["kind"])
+	if runner.Kind != "kubernetes-pod" {
+		t.Fatalf("kind: got %v", runner.Kind)
 	}
-	if runner["in_cluster"] != true {
-		t.Fatalf("in_cluster: got %v", runner["in_cluster"])
+	if !runner.InCluster {
+		t.Fatalf("in_cluster: got %v", runner.InCluster)
 	}
-	if runner["pod_name"] != "controller-abc" {
-		t.Fatalf("pod_name: got %v", runner["pod_name"])
+	if runner.PodName != "controller-abc" {
+		t.Fatalf("pod_name: got %v", runner.PodName)
 	}
-	if runner["pod_namespace"] != "ns-ctrl-abc" {
-		t.Fatalf("pod_namespace: got %v", runner["pod_namespace"])
+	if runner.PodNamespace != "ns-ctrl-abc" {
+		t.Fatalf("pod_namespace: got %v", runner.PodNamespace)
 	}
 }

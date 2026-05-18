@@ -26,7 +26,6 @@ func cmdLaunch(command, action string, args []string) {
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	workspace := fs.String("workspace", "", "Workspace directory")
 	env := fs.String("env", "", "Cloud environment ID")
-	fromWorkspace := fs.String("from-workspace", "", "Workspace checkpoint path")
 	model := fs.String("model", "", "Model name")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
 	maxRounds := fs.Int("max-rounds", 20, "Maximum PVG rounds")
@@ -66,13 +65,8 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a controller session")
 			os.Exit(1)
 		}
-		runChildCloud(specArg, ctx, *fromWorkspace, *jsonOut, action)
+		runChildCloud(specArg, ctx, *jsonOut, action)
 		return
-	}
-
-	if *fromWorkspace != "" {
-		fmt.Fprintln(os.Stderr, "error: --from-workspace is only available inside a controller session")
-		os.Exit(1)
 	}
 
 	platform := ""
@@ -183,7 +177,6 @@ func decideLaunchMode(
 func runChildCloud(
 	specArg string,
 	ctx controllerContext,
-	fromWorkspace string,
 	jsonOut bool,
 	action string,
 ) {
@@ -193,9 +186,6 @@ func runChildCloud(
 		os.Exit(1)
 	}
 	req.ParentSessionID = &ctx.sessionID
-	if fromWorkspace != "" {
-		req.FromWorkspace = &fromWorkspace
-	}
 	session, err := cloud.NewClient(ctx.endpoint, ctx.token).CreateSession(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

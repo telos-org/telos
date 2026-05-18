@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/telos-org/telos-go/internal/cloud"
 	"github.com/telos-org/telos-go/internal/config"
@@ -54,21 +53,10 @@ func sessionCreateRequestForSpec(input string) (sessionapi.SessionCreateRequest,
 		md := string(specData)
 		return sessionapi.SessionCreateRequest{SpecMarkdown: &md}, nil
 	}
-	specID := strings.TrimSpace(input)
-	if specID == "" {
+	if input == "" {
 		return sessionapi.SessionCreateRequest{}, fmt.Errorf("empty spec")
 	}
-	if looksLikeSpecPath(specID) {
-		return sessionapi.SessionCreateRequest{}, fmt.Errorf("spec file not found: %s", specID)
-	}
-	return sessionapi.SessionCreateRequest{SpecID: &specID}, nil
-}
-
-func looksLikeSpecPath(input string) bool {
-	return strings.Contains(input, "/") ||
-		strings.Contains(input, string(os.PathSeparator)) ||
-		strings.Contains(input, "..") ||
-		strings.EqualFold(filepath.Ext(input), ".md")
+	return sessionapi.SessionCreateRequest{}, fmt.Errorf("spec file not found: %s", input)
 }
 
 func localSessionExists(sessionID string) bool {

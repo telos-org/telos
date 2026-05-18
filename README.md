@@ -20,7 +20,7 @@ Python Telos package.
 - Evidence JSONL, PVG transcript, runner turns, and workspace checkpoints.
 - Local Sessions API route handlers.
 - Cloud Sessions API client models.
-- Cloud catalogue spec IDs and environment selection.
+- Cloud environment selection with raw SPEC.md submission.
 
 ## Package Map
 

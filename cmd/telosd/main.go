@@ -18,7 +18,6 @@ var Version = "dev"
 func main() {
 	fs := flag.NewFlagSet("telosd", flag.ExitOnError)
 	configPath := fs.String("config", "", "Path to telosd config YAML")
-	mode := fs.String("mode", "", "Runtime mode: local or cloud")
 	root := fs.String("root", "", "State root")
 	sessionDir := fs.String("session-dir", "", "Run one persisted session worker")
 	once := fs.Bool("once", false, "Run one controller cycle")
@@ -37,7 +36,7 @@ func main() {
 		os.Exit(code)
 	}
 
-	cfg, err := configFromFlags(*configPath, *mode, *root)
+	cfg, err := configFromFlags(*configPath, *root)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -50,7 +49,7 @@ func main() {
 	}
 }
 
-func configFromFlags(configPath, mode, root string) (telosd.Config, error) {
+func configFromFlags(configPath, root string) (telosd.Config, error) {
 	var cfg telosd.Config
 	var err error
 	if configPath != "" {
@@ -59,10 +58,7 @@ func configFromFlags(configPath, mode, root string) (telosd.Config, error) {
 			return telosd.Config{}, err
 		}
 	} else {
-		cfg = telosd.DefaultConfig(telosd.ModeLocal)
-	}
-	if mode != "" {
-		cfg.Mode = telosd.Mode(mode)
+		cfg = telosd.Config{Kind: telosd.ConfigKind, Mode: telosd.ModeLocal}
 	}
 	if root != "" {
 		cfg.Root = root

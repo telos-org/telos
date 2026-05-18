@@ -176,8 +176,8 @@ func TestClientCreateEnvironmentAcceptsLegacyAccessField(t *testing.T) {
 }
 
 func TestSessionCreateRequestOmitsEmptyRuntimeDefaults(t *testing.T) {
-	specID := "cal-diy"
-	body, err := json.Marshal(sessionapi.SessionCreateRequest{SpecID: &specID})
+	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
+	body, err := json.Marshal(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -19,6 +20,8 @@ import (
 // ErrNotFound is returned when a session or artifact does not exist.
 var ErrNotFound = errors.New("not found")
 
+var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+
 // Store is the persistence interface for sessions. Implementations are
 // expected to be safe for concurrent use.
 type Store interface {
@@ -29,129 +32,6 @@ type Store interface {
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
 	WorkspacePath(id string, specName string) (string, error)
-}
-
-// --------- Manifest (on-disk shape) ------------------------------------------------------------------------------------------------------------------------------------------------
-
-// manifest mirrors the session.json written by the Python runtime.
-type manifest struct {
-	SessionID       string         `json:"session_id"`
-	SessionKind     SessionKind    `json:"session_kind"`
-	Runtime         SessionRuntime `json:"runtime,omitempty"`
-	CreatedAt       string         `json:"created_at"`
-	Launcher        string         `json:"launcher"`
-	ParentSessionID *string        `json:"parent_session_id"`
-	SourceSpecPath  *string        `json:"source_spec_path,omitempty"`
-	SessionSpecPath *string        `json:"session_spec_path,omitempty"`
-	SpecName        string         `json:"spec_name"`
-	Config          map[string]any `json:"config"`
-	Provenance      map[string]any `json:"provenance"`
-	Specs           []manifestSpec `json:"specs"`
-	Epochs          []epoch        `json:"epochs"`
-}
-
-type manifestSpec struct {
-	Index           *int    `json:"index,omitempty"`
-	Name            string  `json:"name"`
-	DirName         string  `json:"dir_name"`
-	EnvironmentPath *string `json:"environment_path,omitempty"`
-	SessionSpecPath *string `json:"session_spec_path,omitempty"`
-	ContentHash     *string `json:"content_hash,omitempty"`
-	EvidencePath    *string `json:"evidence_path,omitempty"`
-	TranscriptPath  *string `json:"transcript_path,omitempty"`
-	WorkspacePath   *string `json:"workspace_path,omitempty"`
-	IntervalSeconds *int    `json:"interval_seconds"`
-}
-
-type epoch struct {
-	ID         int            `json:"id"`
-	StartedAt  string         `json:"started_at"`
-	FinishedAt *string        `json:"finished_at"`
-	Result     *string        `json:"result"`
-	Error      *string        `json:"error"`
-	Runner     map[string]any `json:"runner"`
-}
-
-// InitialManifest is the typed input for creating a session.json before any
-// worker epoch has started.
-type InitialManifest struct {
-	SessionID       string
-	SessionKind     SessionKind
-	Runtime         SessionRuntime
-	Launcher        string
-	CreatedAt       string
-	ParentSessionID *string
-	SourceSpecPath  *string
-	SessionSpecPath *string
-	SpecName        string
-	Config          map[string]any
-	Provenance      map[string]any
-	Specs           []InitialManifestSpec
-}
-
-type InitialManifestSpec struct {
-	Index           int
-	Name            string
-	DirName         string
-	EnvironmentPath *string
-	SessionSpecPath *string
-	ContentHash     *string
-	EvidencePath    *string
-	TranscriptPath  *string
-	WorkspacePath   *string
-	IntervalSeconds *int
-}
-
-// WriteInitialManifest writes the canonical initial session manifest shape.
-func WriteInitialManifest(path string, input InitialManifest) error {
-	m := manifestFromInitial(input)
-	return writeManifest(path, &m)
-}
-
-func manifestFromInitial(input InitialManifest) manifest {
-	if input.SessionKind == "" {
-		input.SessionKind = KindTask
-	}
-	if input.Runtime == "" {
-		input.Runtime = RuntimeLocal
-	}
-	if input.Launcher == "" {
-		input.Launcher = "local"
-	}
-	if input.Provenance == nil {
-		input.Provenance = map[string]any{"mode": runtimeMode(input.Runtime)}
-	}
-	specs := make([]manifestSpec, 0, len(input.Specs))
-	for _, spec := range input.Specs {
-		index := spec.Index
-		specs = append(specs, manifestSpec{
-			Index:           &index,
-			Name:            spec.Name,
-			DirName:         spec.DirName,
-			EnvironmentPath: spec.EnvironmentPath,
-			SessionSpecPath: spec.SessionSpecPath,
-			ContentHash:     spec.ContentHash,
-			EvidencePath:    spec.EvidencePath,
-			TranscriptPath:  spec.TranscriptPath,
-			WorkspacePath:   spec.WorkspacePath,
-			IntervalSeconds: spec.IntervalSeconds,
-		})
-	}
-	return manifest{
-		SessionID:       input.SessionID,
-		SessionKind:     input.SessionKind,
-		Runtime:         input.Runtime,
-		CreatedAt:       input.CreatedAt,
-		Launcher:        input.Launcher,
-		ParentSessionID: input.ParentSessionID,
-		SourceSpecPath:  input.SourceSpecPath,
-		SessionSpecPath: input.SessionSpecPath,
-		SpecName:        input.SpecName,
-		Config:          input.Config,
-		Provenance:      input.Provenance,
-		Specs:           specs,
-		Epochs:          []epoch{},
-	}
 }
 
 // --------- FileStore ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -201,6 +81,10 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		return nil, err
 	}
 	specName := prepared.Name
+	access, err := NewScopedToken(id, KindTask)
+	if err != nil {
+		return nil, err
+	}
 	specDir := filepath.Join(dir, "specs", specName)
 	if err := os.MkdirAll(specDir, 0o755); err != nil {
 		return nil, fmt.Errorf("create spec dir: %w", err)
@@ -215,29 +99,25 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		if err := os.WriteFile(sessionSpecPath, prepared.SpecData, 0o644); err != nil {
 			return nil, fmt.Errorf("write session spec: %w", err)
 		}
-		if prepared.EnvironmentPath == nil {
-			prepared.EnvironmentPath = strPtr(sessionSpecPath)
-		}
 	}
 	prepared.SessionSpecPath = strPtr(sessionSpecPath)
 
-	m := manifestFromInitial(InitialManifest{
+	m := ManifestFromInitial(InitialManifest{
 		SessionID:       id,
 		SessionKind:     KindTask,
 		Runtime:         fs.runtime,
 		CreatedAt:       tsNow(),
 		Launcher:        fs.launcher,
 		ParentSessionID: req.ParentSessionID,
-		SourceSpecPath:  prepared.SourceSpecPath,
 		SessionSpecPath: prepared.SessionSpecPath,
 		SpecName:        specName,
 		Config:          buildConfig(req),
 		Provenance:      map[string]any{"mode": runtimeMode(fs.runtime)},
+		Access:          access,
 		Specs: []InitialManifestSpec{{
 			Index:           0,
 			Name:            specName,
 			DirName:         specName,
-			EnvironmentPath: prepared.EnvironmentPath,
 			SessionSpecPath: prepared.SessionSpecPath,
 			ContentHash:     prepared.ContentHash,
 			EvidencePath:    &evidencePath,
@@ -247,7 +127,7 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		}},
 	})
 
-	if err := writeManifest(fs.manifestPath(id), &m); err != nil {
+	if err := WriteManifest(fs.manifestPath(id), &m); err != nil {
 		return nil, err
 	}
 
@@ -272,7 +152,7 @@ func (fs *FileStore) List() ([]Session, error) {
 		if !entry.IsDir() {
 			continue
 		}
-		m, err := readManifest(fs.manifestPath(entry.Name()))
+		m, err := ReadManifest(fs.manifestPath(entry.Name()))
 		if err != nil {
 			continue // skip unreadable entries
 		}
@@ -297,7 +177,7 @@ func (fs *FileStore) Get(id string) (*Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	m, err := readManifest(fs.manifestPath(id))
+	m, err := ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
@@ -312,7 +192,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	m, err := readManifest(fs.manifestPath(id))
+	m, err := ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
@@ -325,7 +205,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		return s, nil
 	}
 
-	if open := openEpoch(m); open != nil {
+	if open := m.OpenEpoch(); open != nil {
 		terminateRunner(open.Runner)
 	}
 
@@ -334,7 +214,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	stoppedErr := "stopped by operator"
 
 	if len(m.Epochs) == 0 {
-		m.Epochs = append(m.Epochs, epoch{
+		m.Epochs = append(m.Epochs, Epoch{
 			ID:         1,
 			StartedAt:  now,
 			FinishedAt: &now,
@@ -348,7 +228,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		last.Error = &stoppedErr
 	}
 
-	if err := writeManifest(fs.manifestPath(id), m); err != nil {
+	if err := WriteManifest(fs.manifestPath(id), m); err != nil {
 		return nil, err
 	}
 
@@ -360,7 +240,7 @@ func (fs *FileStore) Transcript(id string) (string, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	m, err := readManifest(fs.manifestPath(id))
+	m, err := ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("session %s: %w", id, ErrNotFound)
@@ -392,7 +272,7 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	m, err := readManifest(fs.manifestPath(id))
+	m, err := ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
@@ -419,7 +299,7 @@ func (fs *FileStore) WorkspacePath(id string, specName string) (string, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	m, err := readManifest(fs.manifestPath(id))
+	m, err := ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("session %s: %w", id, ErrNotFound)
@@ -443,7 +323,7 @@ func (fs *FileStore) WorkspacePath(id string, specName string) (string, error) {
 
 // --------- Derivation (manifest -> Session) ------------------------------------------------------------------------------------------------------------------------
 
-func (fs *FileStore) deriveSession(id string, m *manifest) (*Session, error) {
+func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 	dir := fs.sessionDir(id)
 
 	specs := make([]SessionSpec, len(m.Specs))
@@ -468,10 +348,9 @@ func (fs *FileStore) deriveSession(id string, m *manifest) (*Session, error) {
 		CreatedAt:       strPtr(m.CreatedAt),
 		Runtime:         manifestRuntime(m, fs.runtime),
 		Launcher:        strPtr(m.Launcher),
-		SourceSpecPath:  m.SourceSpecPath,
 		SessionSpecPath: m.SessionSpecPath,
 		SessionDir:      strPtr(dir),
-		Config:          m.Config,
+		Config:          m.Config.AsMap(),
 		Provenance:      m.Provenance,
 		Specs:           specs,
 		Epochs:          epochs,
@@ -486,7 +365,7 @@ func (fs *FileStore) deriveSession(id string, m *manifest) (*Session, error) {
 	}
 
 	// Derive result/error from last epoch.
-	if last := lastEpoch(m); last != nil {
+	if last := m.LastEpoch(); last != nil {
 		s.Result = last.Result
 		s.Error = last.Error
 	}
@@ -494,12 +373,11 @@ func (fs *FileStore) deriveSession(id string, m *manifest) (*Session, error) {
 	return &s, nil
 }
 
-func deriveSpec(ms manifestSpec) SessionSpec {
+func deriveSpec(ms ManifestSpec) SessionSpec {
 	ss := SessionSpec{
 		Index:           ms.Index,
 		Name:            strPtr(ms.Name),
 		DirName:         strPtr(ms.DirName),
-		EnvironmentPath: ms.EnvironmentPath,
 		SessionSpecPath: ms.SessionSpecPath,
 		ContentHash:     ms.ContentHash,
 		EvidencePath:    ms.EvidencePath,
@@ -524,12 +402,15 @@ func deriveSpec(ms manifestSpec) SessionSpec {
 	return ss
 }
 
-func deriveStatus(m *manifest) SessionStatus {
-	open := openEpoch(m)
-	last := lastEpoch(m)
+func deriveStatus(m *Manifest) SessionStatus {
+	open := m.OpenEpoch()
+	last := m.LastEpoch()
 
 	if open != nil {
-		pid, ok := runnerPID(open.Runner)
+		if open.Runner != nil && open.Runner.InCluster {
+			return StatusRunning
+		}
+		pid, ok := open.Runner.ProcessID()
 		if ok && processAlive(pid) {
 			return StatusRunning
 		}
@@ -551,111 +432,43 @@ func deriveStatus(m *manifest) SessionStatus {
 	return StatusPending
 }
 
-func openEpoch(m *manifest) *epoch {
-	for i := len(m.Epochs) - 1; i >= 0; i-- {
-		if m.Epochs[i].FinishedAt == nil {
-			return &m.Epochs[i]
-		}
-	}
-	return nil
-}
-
-func lastEpoch(m *manifest) *epoch {
-	if len(m.Epochs) == 0 {
-		return nil
-	}
-	return &m.Epochs[len(m.Epochs)-1]
-}
-
-func runnerPID(runner map[string]any) (int, bool) {
-	raw, ok := runner["pid"]
-	if !ok {
-		return 0, false
-	}
-	switch value := raw.(type) {
-	case int:
-		if value > 0 {
-			return value, true
-		}
-	case int64:
-		if value > 0 {
-			return int(value), true
-		}
-	case float64:
-		if value > 0 {
-			return int(value), true
-		}
-	case json.Number:
-		parsed, err := value.Int64()
-		if err == nil && parsed > 0 {
-			return int(parsed), true
-		}
-	}
-	return 0, false
-}
-
 func processAlive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
-func terminateRunner(runner map[string]any) {
-	pid, ok := runnerPID(runner)
+func terminateRunner(runner *Runner) {
+	pid, ok := runner.ProcessID()
 	if !ok {
 		return
 	}
 	if pid == os.Getpid() {
 		return
 	}
-	if err := syscall.Kill(-pid, syscall.SIGTERM); err == nil || errors.Is(err, syscall.ESRCH) {
+	group := pid
+	if pgid, ok := runner.ProcessGroupID(); ok {
+		group = pgid
+	}
+	if err := syscall.Kill(-group, syscall.SIGTERM); err == nil || errors.Is(err, syscall.ESRCH) {
 		return
 	}
 	_ = syscall.Kill(pid, syscall.SIGTERM)
 }
 
-func epochToMap(e epoch) map[string]any {
-	m := map[string]any{
-		"id":          e.ID,
-		"started_at":  e.StartedAt,
-		"finished_at": e.FinishedAt,
-		"result":      e.Result,
-		"error":       e.Error,
-		"runner":      e.Runner,
+func epochToMap(e Epoch) map[string]any {
+	data, err := json.Marshal(e)
+	if err != nil {
+		return map[string]any{}
+	}
+	m := map[string]any{}
+	if err := json.Unmarshal(data, &m); err != nil {
+		return map[string]any{}
 	}
 	return m
 }
 
 // --------- Helpers ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-func readManifest(path string) (*manifest, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-	var m manifest
-	if err := json.Unmarshal(data, &m); err != nil {
-		return nil, fmt.Errorf("parse manifest %s: %w", path, err)
-	}
-	return &m, nil
-}
-
-func writeManifest(path string, m *manifest) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
-}
-
-func readEvidenceFile(path string, spec *manifestSpec) ([]SessionEvent, error) {
+func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -705,8 +518,6 @@ func tsNow() string {
 
 type preparedRequestSpec struct {
 	Name            string
-	SourceSpecPath  *string
-	EnvironmentPath *string
 	SessionSpecPath *string
 	ContentHash     *string
 	IntervalSeconds *int
@@ -714,33 +525,8 @@ type preparedRequestSpec struct {
 }
 
 func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRequestSpec, error) {
-	prepared := preparedRequestSpec{Name: deriveSpecName(req), SourceSpecPath: req.SpecPath}
-
-	if req.SpecPath != nil && *req.SpecPath != "" {
-		abs, err := filepath.Abs(*req.SpecPath)
-		if err != nil {
-			return preparedRequestSpec{}, fmt.Errorf("resolve spec path: %w", err)
-		}
-		data, err := os.ReadFile(abs)
-		if err == nil {
-			compiled, err := spec.CompileEnvironment(abs)
-			if err != nil {
-				return preparedRequestSpec{}, err
-			}
-			prepared.Name = compiled.Environment.Name
-			prepared.EnvironmentPath = req.SpecPath
-			prepared.ContentHash = strPtr(compiled.ContentHash)
-			prepared.IntervalSeconds = compiled.Environment.IntervalSeconds
-			prepared.SpecData = data
-			return prepared, nil
-		}
-		if !errors.Is(err, os.ErrNotExist) {
-			return preparedRequestSpec{}, fmt.Errorf("read spec: %w", err)
-		}
-	}
-
 	if req.SpecMarkdown == nil || strings.TrimSpace(*req.SpecMarkdown) == "" {
-		return prepared, nil
+		return preparedRequestSpec{}, fmt.Errorf("spec_markdown is required")
 	}
 
 	tmpDir := filepath.Join(sessionDir, ".compile")
@@ -749,8 +535,11 @@ func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRe
 	}
 	defer os.RemoveAll(tmpDir)
 
-	tmpSpecPath := filepath.Join(tmpDir, "SPEC.md")
 	data := []byte(*req.SpecMarkdown)
+	tmpSpecPath := filepath.Join(tmpDir, materializedSpecDir(data), "SPEC.md")
+	if err := os.MkdirAll(filepath.Dir(tmpSpecPath), 0o755); err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("create compile spec dir: %w", err)
+	}
 	if err := os.WriteFile(tmpSpecPath, data, 0o644); err != nil {
 		return preparedRequestSpec{}, fmt.Errorf("write compile spec: %w", err)
 	}
@@ -758,46 +547,43 @@ func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRe
 	if err != nil {
 		return preparedRequestSpec{}, err
 	}
-	prepared.Name = compiled.Environment.Name
-	prepared.SourceSpecPath = nil
-	prepared.ContentHash = strPtr(compiled.ContentHash)
-	prepared.IntervalSeconds = compiled.Environment.IntervalSeconds
-	prepared.SpecData = data
+	prepared := preparedRequestSpec{
+		Name:            compiled.Environment.Name,
+		ContentHash:     strPtr(compiled.ContentHash),
+		IntervalSeconds: compiled.Environment.IntervalSeconds,
+		SpecData:        data,
+	}
 	return prepared, nil
 }
 
-func deriveSpecName(req SessionCreateRequest) string {
-	if req.SpecPath != nil && *req.SpecPath != "" {
-		base := filepath.Base(filepath.Dir(*req.SpecPath))
-		if base != "." && base != "/" {
-			return base
-		}
+func materializedSpecDir(data []byte) string {
+	raw, _, ok := spec.ParseFrontmatter(string(data))
+	if !ok {
+		return "spec"
 	}
-	if req.SpecID != nil && *req.SpecID != "" {
-		return *req.SpecID
+	name, ok := raw["name"].(string)
+	if !ok || !specDirNameRE.MatchString(name) {
+		return "spec"
 	}
-	return "default"
+	return name
 }
 
-func buildConfig(req SessionCreateRequest) map[string]any {
-	cfg := map[string]any{}
-	if req.Model != "" {
-		cfg["model"] = req.Model
-	}
-	if req.Thinking != "" {
-		cfg["thinking"] = req.Thinking
+func buildConfig(req SessionCreateRequest) SessionConfig {
+	cfg := SessionConfig{
+		Model:    req.Model,
+		Thinking: req.Thinking,
 	}
 	if req.MaxRounds != nil {
-		cfg["max_rounds"] = *req.MaxRounds
+		cfg.MaxRounds = *req.MaxRounds
 	}
 	if req.MaxCostUSD != nil {
-		cfg["max_cost_usd"] = *req.MaxCostUSD
+		cfg.MaxCostUSD = req.MaxCostUSD
 	}
 	if req.AgentTimeoutSec != nil {
-		cfg["agent_timeout_sec"] = *req.AgentTimeoutSec
+		cfg.AgentTimeoutSec = *req.AgentTimeoutSec
 	}
 	if req.Workspace != nil {
-		cfg["workspace"] = *req.Workspace
+		cfg.Workspace = *req.Workspace
 	}
 	return cfg
 }
@@ -828,7 +614,7 @@ func runtimeMode(runtime SessionRuntime) string {
 	return "local"
 }
 
-func manifestRuntime(m *manifest, fallback SessionRuntime) SessionRuntime {
+func manifestRuntime(m *Manifest, fallback SessionRuntime) SessionRuntime {
 	if m.Runtime == RuntimeLocal || m.Runtime == RuntimeCloud {
 		return m.Runtime
 	}

@@ -17,12 +17,19 @@ const (
 	ModeCloud Mode = "cloud"
 )
 
+type AuthType string
+
+const (
+	AuthLocal  AuthType = "local"
+	AuthBearer AuthType = "bearer"
+)
+
 type Config struct {
 	Kind   string       `yaml:"kind"`
 	Mode   Mode         `yaml:"mode"`
 	Root   string       `yaml:"root"`
 	Server ServerConfig `yaml:"server"`
-	Access string       `yaml:"access"`
+	Auth   AuthConfig   `yaml:"auth"`
 }
 
 type ServerConfig struct {
@@ -30,6 +37,11 @@ type ServerConfig struct {
 	Listen      string `yaml:"listen"`
 	Socket      string `yaml:"socket"`
 	IdleSeconds int    `yaml:"idle_seconds"`
+}
+
+type AuthConfig struct {
+	Type  AuthType `yaml:"type"`
+	Token string   `yaml:"token"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -68,8 +80,8 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		if cfg.Root == "" {
 			cfg.Root = ".telos"
 		}
-		if cfg.Access == "" {
-			cfg.Access = "local"
+		if cfg.Auth.Type == "" {
+			cfg.Auth.Type = AuthLocal
 		}
 		if cfg.Server.Transport == "" {
 			cfg.Server.Transport = "unix"
@@ -84,8 +96,8 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		if cfg.Root == "" {
 			cfg.Root = "/telos-state"
 		}
-		if cfg.Access == "" {
-			cfg.Access = "bearer"
+		if cfg.Auth.Type == "" {
+			cfg.Auth.Type = AuthBearer
 		}
 		if cfg.Server.Transport == "" {
 			cfg.Server.Transport = "http"
@@ -96,8 +108,28 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	default:
 		return Config{}, fmt.Errorf("invalid mode %q", cfg.Mode)
 	}
-	if cfg.Access != "local" && cfg.Access != "bearer" {
-		return Config{}, fmt.Errorf("invalid access %q", cfg.Access)
+	if cfg.Mode == ModeLocal && cfg.Auth.Type != AuthLocal {
+		return Config{}, fmt.Errorf("local mode requires auth.type %q", AuthLocal)
+	}
+	if cfg.Mode == ModeCloud && cfg.Auth.Type != AuthBearer {
+		return Config{}, fmt.Errorf("cloud mode requires auth.type %q", AuthBearer)
+	}
+	if cfg.Mode == ModeLocal && cfg.Server.Transport != "unix" {
+		return Config{}, fmt.Errorf("local mode requires server.transport %q", "unix")
+	}
+	if cfg.Mode == ModeCloud && cfg.Server.Transport != "http" {
+		return Config{}, fmt.Errorf("cloud mode requires server.transport %q", "http")
+	}
+	if cfg.Auth.Type != AuthLocal && cfg.Auth.Type != AuthBearer {
+		return Config{}, fmt.Errorf("invalid auth.type %q", cfg.Auth.Type)
+	}
+	if cfg.Auth.Type == AuthBearer {
+		if cfg.Auth.Token == "" {
+			cfg.Auth.Token = os.Getenv("TELOS_API_TOKEN")
+		}
+		if cfg.Auth.Token == "" {
+			return Config{}, fmt.Errorf("auth.token is required for bearer auth")
+		}
 	}
 	switch cfg.Server.Transport {
 	case "unix":

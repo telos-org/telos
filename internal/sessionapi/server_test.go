@@ -20,7 +20,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *sessionapi.FileStore) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store)
+	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
 	return httptest.NewServer(mux), store
 }
 
@@ -31,7 +31,7 @@ func TestCreateSession(t *testing.T) {
 	defer srv.Close()
 
 	body := `{
-		"spec_path": "/tmp/specs/my-task/SPEC.md",
+		"spec_markdown": "---\nversion: v0\nname: my-task\nplatform: local\n---\n# My Task\n",
 		"model": "claude-opus-4-6",
 		"thinking": "medium",
 		"max_rounds": 4,
@@ -156,11 +156,33 @@ func TestCreateSessionPersistsSpecMarkdown(t *testing.T) {
 	}
 }
 
+func TestCreateSessionRejectsInvalidNameWithoutStrayCompileFiles(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: ..\nplatform: local\n---\n# Task\n"
+
+	if _, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err == nil {
+		t.Fatal("expected invalid spec name")
+	}
+
+	if err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if !d.IsDir() && filepath.Base(path) == "SPEC.md" {
+			t.Fatalf("unexpected compile artifact outside .compile: %s", path)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCreateSessionJSONShape(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	body := `{"spec_path": "/tmp/specs/test/SPEC.md", "model": "", "thinking": ""}`
+	body := createSessionBody(t, "test")
 	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -199,7 +221,7 @@ func TestCreateSessionRejectsUnknownFields(t *testing.T) {
 	resp, err := http.Post(
 		srv.URL+"/api/sessions",
 		"application/json",
-		strings.NewReader(`{"spec_path":"/tmp/specs/test/SPEC.md","unexpected":true}`),
+		strings.NewReader(`{"spec_markdown":"---\nversion: v0\nname: test\nplatform: local\n---\n# Test\n","unexpected":true}`),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -245,8 +267,8 @@ func TestListSessions(t *testing.T) {
 	}
 
 	// Create two sessions, list should return them newest first.
-	post(t, srv.URL+"/api/sessions", `{"spec_path":"/tmp/a/SPEC.md","model":"","thinking":""}`)
-	post(t, srv.URL+"/api/sessions", `{"spec_path":"/tmp/b/SPEC.md","model":"","thinking":""}`)
+	post(t, srv.URL+"/api/sessions", createSessionBody(t, "a"))
+	post(t, srv.URL+"/api/sessions", createSessionBody(t, "b"))
 
 	resp2, err := http.Get(srv.URL + "/api/sessions")
 	if err != nil {
@@ -289,7 +311,7 @@ func TestGetSession(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/x/SPEC.md","model":"m","thinking":"high"}`)
+	created := createSession(t, srv.URL, createSessionBodyWithConfig(t, "x", "m", "high"))
 
 	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID)
 	if err != nil {
@@ -323,7 +345,7 @@ func TestStopSession(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/s/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "s"))
 
 	req, _ := http.NewRequest("POST", srv.URL+"/api/sessions/"+created.SessionID+"/stop", nil)
 	resp, err := http.DefaultClient.Do(req)
@@ -347,7 +369,7 @@ func TestStopAlreadyStopped(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/s2/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "s2"))
 
 	// Stop twice - second should be idempotent.
 	stopSession(t, srv.URL, created.SessionID)
@@ -374,7 +396,7 @@ func TestTranscriptNotFound(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/t/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "t"))
 
 	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/transcript")
 	if err != nil {
@@ -388,7 +410,7 @@ func TestTranscriptPresent(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/tp/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "tp"))
 
 	// Write a transcript file in the expected location.
 	transcriptPath := filepath.Join(store.Root, created.SessionID, "specs", "tp",
@@ -417,7 +439,7 @@ func TestEventsEmpty(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/e/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "e"))
 
 	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/events")
 	if err != nil {
@@ -438,7 +460,7 @@ func TestEventsPresent(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/ep/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "ep"))
 
 	// Write evidence JSONL.
 	evidencePath := filepath.Join(store.Root, created.SessionID, "specs", "ep", "evidence.jsonl")
@@ -483,7 +505,7 @@ func TestEventsJSONShape(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/ejs/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "ejs"))
 
 	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/events")
 	if err != nil {
@@ -501,7 +523,7 @@ func TestEventsSSE(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/es/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "es"))
 	evidencePath := filepath.Join(store.Root, created.SessionID, "specs", "es", "evidence.jsonl")
 	os.MkdirAll(filepath.Dir(evidencePath), 0o755)
 	os.WriteFile(evidencePath, []byte(`{"event":"game_end","data":{"game_result":"success"}}`+"\n"), 0o644)
@@ -536,7 +558,7 @@ func TestWorkspaceNotFound(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/w/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "w"))
 
 	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/workspace/w")
 	if err != nil {
@@ -550,7 +572,7 @@ func TestWorkspacePresent(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/wp/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "wp"))
 
 	// Create the workspace archive.
 	workspacePath := filepath.Join(store.Root, created.SessionID, "specs", "wp", "workspace.tar.gz")
@@ -588,7 +610,7 @@ func TestSessionLifecycleStatus(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/lc/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "lc"))
 	assertEqual(t, "initial status", "pending", string(created.Status))
 
 	// Simulate an open epoch (running).
@@ -624,7 +646,7 @@ func TestSessionLifecycleStaleWhenRunnerMissing(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/stale/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "stale"))
 
 	mpath := filepath.Join(store.Root, created.SessionID, "session.json")
 	raw, _ := os.ReadFile(mpath)
@@ -654,7 +676,7 @@ func TestSessionStatusCompleted(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/comp/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "comp"))
 
 	// Simulate completed epoch.
 	mpath := filepath.Join(store.Root, created.SessionID, "session.json")
@@ -684,7 +706,7 @@ func TestSessionStatusFailed(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
-	created := createSession(t, srv.URL, `{"spec_path":"/tmp/fail/SPEC.md","model":"","thinking":""}`)
+	created := createSession(t, srv.URL, createSessionBody(t, "fail"))
 
 	mpath := filepath.Join(store.Root, created.SessionID, "session.json")
 	raw, _ := os.ReadFile(mpath)
@@ -829,7 +851,133 @@ func TestPythonManifestCompat(t *testing.T) {
 	assertEqual(t, "event", "agent_complete", events[0].Event)
 }
 
+func TestBearerAuthorizerRequiresOperatorTokenForApply(t *testing.T) {
+	srv, _ := newBearerTestServer(t, "operator-token")
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(createSessionBody(t, "secure")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without token, got %d", resp.StatusCode)
+	}
+
+	req, err := http.NewRequest("POST", srv.URL+"/api/sessions", strings.NewReader(createSessionBody(t, "secure")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer operator-token")
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 201 with operator token, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestBearerAuthorizerHonorsSessionScopedTokens(t *testing.T) {
+	srv, store := newBearerTestServer(t, "operator-token")
+	defer srv.Close()
+
+	parent, parentToken := writeAuthorizedSession(t, store.Root, "sess_parent", sessionapi.KindController, nil)
+	child, _ := writeAuthorizedSession(t, store.Root, "sess_child", sessionapi.KindTask, &parent.SessionID)
+	other, _ := writeAuthorizedSession(t, store.Root, "sess_other", sessionapi.KindTask, nil)
+
+	got := getSessionWithToken(t, srv.URL, child.SessionID, parentToken)
+	if got.SessionID != child.SessionID {
+		t.Fatalf("controller token should read child session, got %q", got.SessionID)
+	}
+
+	req, _ := http.NewRequest("GET", srv.URL+"/api/sessions/"+other.SessionID, nil)
+	req.Header.Set("Authorization", "Bearer "+parentToken)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("controller token should not read unrelated session, got %d", resp.StatusCode)
+	}
+
+	taskToken := child.Access.APIToken
+	got = getSessionWithToken(t, srv.URL, child.SessionID, taskToken)
+	if got.SessionID != child.SessionID {
+		t.Fatalf("task token should read itself, got %q", got.SessionID)
+	}
+
+	req, _ = http.NewRequest("POST", srv.URL+"/api/sessions", strings.NewReader(createSessionBody(t, "blocked")))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+taskToken)
+	resp, err = http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("task token should not apply, got %d", resp.StatusCode)
+	}
+}
+
 // --------- Test helpers ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+func newBearerTestServer(t *testing.T, operatorToken string) (*httptest.Server, *sessionapi.FileStore) {
+	t.Helper()
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	mux := http.NewServeMux()
+	sessionapi.RegisterRoutes(mux, store, sessionapi.NewBearerAuthorizer(store, operatorToken))
+	return httptest.NewServer(mux), store
+}
+
+func writeAuthorizedSession(
+	t *testing.T,
+	root string,
+	id string,
+	kind sessionapi.SessionKind,
+	parentID *string,
+) (sessionapi.Manifest, string) {
+	t.Helper()
+	access, err := sessionapi.NewScopedToken(id, kind)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(root, id)
+	specDir := filepath.Join(sessionDir, "specs", id)
+	if err := os.MkdirAll(specDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	specPath := filepath.Join(specDir, "spec.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: "+id+"\nplatform: cloud\n---\n# "+id+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := sessionapi.ManifestFromInitial(sessionapi.InitialManifest{
+		SessionID:       id,
+		SessionKind:     kind,
+		Runtime:         sessionapi.RuntimeCloud,
+		CreatedAt:       "2026-05-18T12:00:00.000Z",
+		Launcher:        "telosd",
+		ParentSessionID: parentID,
+		SessionSpecPath: &specPath,
+		SpecName:        id,
+		Access:          access,
+		Specs: []sessionapi.InitialManifestSpec{{
+			Index:           0,
+			Name:            id,
+			DirName:         id,
+			SessionSpecPath: &specPath,
+		}},
+	})
+	if err := sessionapi.WriteManifest(filepath.Join(sessionDir, "session.json"), &m); err != nil {
+		t.Fatal(err)
+	}
+	return m, access.APIToken
+}
 
 func createSession(t *testing.T, baseURL string, body string) sessionapi.Session {
 	t.Helper()
@@ -847,6 +995,25 @@ func createSession(t *testing.T, baseURL string, body string) sessionapi.Session
 	return s
 }
 
+func createSessionBody(t *testing.T, name string) string {
+	t.Helper()
+	return createSessionBodyWithConfig(t, name, "", "")
+}
+
+func createSessionBodyWithConfig(t *testing.T, name string, model string, thinking string) string {
+	t.Helper()
+	markdown := fmt.Sprintf("---\nversion: v0\nname: %s\nplatform: local\n---\n# %s\n", name, name)
+	body, err := json.Marshal(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdown,
+		Model:        model,
+		Thinking:     thinking,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(body)
+}
+
 func getSession(t *testing.T, baseURL string, id string) sessionapi.Session {
 	t.Helper()
 	resp, err := http.Get(baseURL + "/api/sessions/" + id)
@@ -854,6 +1021,27 @@ func getSession(t *testing.T, baseURL string, id string) sessionapi.Session {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
+	var s sessionapi.Session
+	json.NewDecoder(resp.Body).Decode(&s)
+	return s
+}
+
+func getSessionWithToken(t *testing.T, baseURL string, id string, token string) sessionapi.Session {
+	t.Helper()
+	req, err := http.NewRequest("GET", baseURL+"/api/sessions/"+id, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("get session: expected 200, got %d: %s", resp.StatusCode, body)
+	}
 	var s sessionapi.Session
 	json.NewDecoder(resp.Body).Decode(&s)
 	return s

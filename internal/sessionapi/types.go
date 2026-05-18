@@ -4,8 +4,6 @@
 // and workspace.
 package sessionapi
 
-import "encoding/json"
-
 // --------- Enums ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 // SessionStatus enumerates the lifecycle states of a session.
@@ -38,22 +36,6 @@ const (
 	RuntimeCloud SessionRuntime = "cloud"
 )
 
-func (r *SessionRuntime) UnmarshalJSON(data []byte) error {
-	var raw string
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	switch raw {
-	case "hosted": // Legacy wire value from older cloud APIs.
-		*r = RuntimeCloud
-	case string(RuntimeLocal), string(RuntimeCloud):
-		*r = SessionRuntime(raw)
-	default:
-		*r = SessionRuntime(raw)
-	}
-	return nil
-}
-
 // SessionKind distinguishes controller sessions from task sessions.
 type SessionKind string
 
@@ -66,11 +48,8 @@ const (
 
 // SessionCreateRequest is the body of POST /api/sessions.
 type SessionCreateRequest struct {
-	SpecPath        *string  `json:"spec_path,omitempty"`
 	SpecMarkdown    *string  `json:"spec_markdown,omitempty"`
-	SpecID          *string  `json:"spec_id,omitempty"`
 	ParentSessionID *string  `json:"parent_session_id,omitempty"`
-	FromWorkspace   *string  `json:"from_workspace,omitempty"`
 	MaxRounds       *int     `json:"max_rounds,omitempty"`
 	Model           string   `json:"model,omitempty"`
 	Thinking        string   `json:"thinking,omitempty"`
@@ -86,7 +65,6 @@ type SessionSpec struct {
 	Index                  *int     `json:"index,omitempty"`
 	Name                   *string  `json:"name,omitempty"`
 	DirName                *string  `json:"dir_name,omitempty"`
-	EnvironmentPath        *string  `json:"environment_path,omitempty"`
 	SessionSpecPath        *string  `json:"session_spec_path,omitempty"`
 	ContentHash            *string  `json:"content_hash,omitempty"`
 	EvidencePath           *string  `json:"evidence_path,omitempty"`
@@ -134,7 +112,6 @@ type Session struct {
 
 	Runtime                 SessionRuntime   `json:"runtime"`
 	Launcher                *string          `json:"launcher,omitempty"`
-	SourceSpecPath          *string          `json:"source_spec_path,omitempty"`
 	SessionSpecPath         *string          `json:"session_spec_path,omitempty"`
 	SessionDir              *string          `json:"session_dir,omitempty"`
 	Config                  map[string]any   `json:"config"`

@@ -23,8 +23,11 @@ const maxSessionRequestBytes = 4 << 20
 //	GET  /api/sessions/{id}/events
 //	GET  /api/sessions/{id}/workspace/{spec}
 //	GET  /api/healthz
-func RegisterRoutes(mux *http.ServeMux, store Store) {
-	h := &handler{store: store}
+func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer) {
+	if authorizer == nil {
+		panic("sessionapi.RegisterRoutes requires an authorizer")
+	}
+	h := &handler{store: store, authorizer: authorizer}
 
 	mux.HandleFunc("GET /api/healthz", h.healthz)
 	mux.HandleFunc("POST /api/sessions", h.createSession)
@@ -37,10 +40,14 @@ func RegisterRoutes(mux *http.ServeMux, store Store) {
 }
 
 type handler struct {
-	store Store
+	store      Store
+	authorizer Authorizer
 }
 
 func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionHealth}); !ok {
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
@@ -53,6 +60,9 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionCreateSession, CreateRequest: &req}); !ok {
+		return
+	}
 
 	session, err := h.store.Create(req)
 	if err != nil {
@@ -63,16 +73,24 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
+	caller, ok := h.authorize(w, r, AccessRequest{Action: ActionListSessions})
+	if !ok {
+		return
+	}
 	sessions, err := h.store.List()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	sessions = h.authorizer.VisibleSessions(caller, sessions)
 	writeJSON(w, http.StatusOK, SessionListResponse{Sessions: sessions})
 }
 
 func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
+		return
+	}
 	session, err := h.store.Get(id)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -87,6 +105,9 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) stopSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionStopSession, SessionID: id}); !ok {
+		return
+	}
 	session, err := h.store.Stop(id)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -101,6 +122,9 @@ func (h *handler) stopSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) getTranscript(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
+		return
+	}
 	text, err := h.store.Transcript(id)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -117,6 +141,9 @@ func (h *handler) getTranscript(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
+		return
+	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {
 		h.streamEvents(w, r, id)
 		return
@@ -201,6 +228,9 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 func (h *handler) getWorkspace(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	spec := r.PathValue("spec")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
+		return
+	}
 	path, err := h.store.WorkspacePath(id, spec)
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
@@ -214,6 +244,19 @@ func (h *handler) getWorkspace(w http.ResponseWriter, r *http.Request) {
 }
 
 // --------- JSON helpers ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+func (h *handler) authorize(w http.ResponseWriter, r *http.Request, req AccessRequest) (Caller, bool) {
+	caller, err := h.authorizer.Caller(r, req)
+	if err == nil {
+		return caller, true
+	}
+	if status, detail, ok := authHTTPError(err); ok {
+		writeError(w, status, detail)
+		return Caller{}, false
+	}
+	writeError(w, http.StatusForbidden, err.Error())
+	return Caller{}, false
+}
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

@@ -1,7 +1,6 @@
 package telosd
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -67,30 +66,21 @@ type WorkerManifest struct {
 }
 
 func LoadWorkerManifest(sessionDir string) (WorkerManifest, error) {
-	data, err := os.ReadFile(filepath.Join(sessionDir, "session.json"))
+	m, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
 	if err != nil {
 		return WorkerManifest{}, fmt.Errorf("read worker manifest: %w", err)
 	}
-	var raw struct {
-		SessionKind sessionapi.SessionKind `json:"session_kind"`
-		Specs       []struct {
-			IntervalSeconds *float64 `json:"interval_seconds"`
-		} `json:"specs"`
+	if m.SessionKind != sessionapi.KindController && m.SessionKind != sessionapi.KindTask {
+		return WorkerManifest{}, fmt.Errorf("invalid session_kind %q in worker manifest", m.SessionKind)
 	}
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return WorkerManifest{}, fmt.Errorf("decode worker manifest: %w", err)
-	}
-	if raw.SessionKind != sessionapi.KindController && raw.SessionKind != sessionapi.KindTask {
-		return WorkerManifest{}, fmt.Errorf("invalid session_kind %q in worker manifest", raw.SessionKind)
-	}
-	manifest := WorkerManifest{Kind: raw.SessionKind}
-	if len(raw.Specs) == 0 {
+	manifest := WorkerManifest{Kind: m.SessionKind}
+	if len(m.Specs) == 0 {
 		return manifest, nil
 	}
-	seconds := raw.Specs[0].IntervalSeconds
+	seconds := m.Specs[0].IntervalSeconds
 	if seconds == nil || *seconds <= 0 {
 		return manifest, nil
 	}
-	manifest.Interval = time.Duration(*seconds * float64(time.Second))
+	manifest.Interval = time.Duration(*seconds) * time.Second
 	return manifest, nil
 }
