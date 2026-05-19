@@ -584,6 +584,9 @@ func deriveStatus(m *Manifest) SessionStatus {
 		if last.Result != nil {
 			switch *last.Result {
 			case "completed":
+				if m.SessionKind == KindController && manifestRuntime(m, RuntimeLocal) == RuntimeCloud {
+					return StatusRunning
+				}
 				return StatusCompleted
 			case "failed":
 				return StatusFailed

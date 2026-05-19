@@ -850,6 +850,42 @@ func TestSessionStatusCompleted(t *testing.T) {
 	assertEqual(t, "completed status", "completed", string(session.Status))
 }
 
+func TestCloudControllerStatusStaysRunningAfterCompletedCycle(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	markdown := "---\nversion: v0\nname: controller\nplatform: cloud\n---\n# Controller\n"
+
+	created, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	mpath := filepath.Join(root, created.SessionID, "session.json")
+	raw, _ := os.ReadFile(mpath)
+	var m map[string]any
+	json.Unmarshal(raw, &m)
+	finished := "2026-01-01T00:01:00.000Z"
+	result := "completed"
+	m["epochs"] = []any{
+		map[string]any{
+			"id":          1,
+			"started_at":  "2026-01-01T00:00:00.000Z",
+			"finished_at": finished,
+			"result":      result,
+			"error":       nil,
+			"runner":      nil,
+		},
+	}
+	updated, _ := json.MarshalIndent(m, "", "  ")
+	os.WriteFile(mpath, updated, 0o644)
+
+	session, err := store.Get(created.SessionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	assertEqual(t, "controller status", "running", string(session.Status))
+}
+
 func TestSessionStatusFailed(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
