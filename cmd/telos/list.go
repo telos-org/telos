@@ -116,7 +116,7 @@ func listEnvironments(jsonOut bool) {
 		os.Exit(1)
 	}
 	if jsonOut {
-		printJSON(map[string]any{"environments": envs})
+		printJSON(map[string]any{"environments": environmentsOutput(envs)})
 		return
 	}
 	if len(envs) == 0 {

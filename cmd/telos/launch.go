@@ -230,7 +230,7 @@ func runCloud(
 	}
 	if jsonOut {
 		printJSON(map[string]any{
-			"environment": env,
+			"environment": environmentOutput(env),
 			"session":     session,
 		})
 	} else {
@@ -280,7 +280,7 @@ func applyCloud(
 	}
 	if jsonOut {
 		printJSON(map[string]any{
-			"environment": env,
+			"environment": environmentOutput(env),
 			"operation":   operation,
 			"session":     session,
 		})
