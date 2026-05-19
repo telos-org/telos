@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -28,6 +29,9 @@ type Config struct {
 	Kind       string           `yaml:"kind"`
 	Mode       Mode             `yaml:"mode"`
 	Root       string           `yaml:"root"`
+	Token      string           `yaml:"token"`
+	TokenFile  string           `yaml:"token_file"`
+	AgentImage string           `yaml:"agent_image"`
 	Server     ServerConfig     `yaml:"server"`
 	Auth       AuthConfig       `yaml:"auth"`
 	Runtime    RuntimeConfig    `yaml:"runtime"`
@@ -42,8 +46,9 @@ type ServerConfig struct {
 }
 
 type AuthConfig struct {
-	Type  AuthType `yaml:"type"`
-	Token string   `yaml:"token"`
+	Type      AuthType `yaml:"type"`
+	Token     string   `yaml:"token"`
+	TokenFile string   `yaml:"token_file"`
 }
 
 type RuntimeConfig struct {
@@ -91,6 +96,15 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.Kind != ConfigKind {
 		return Config{}, fmt.Errorf("unsupported config kind %q", cfg.Kind)
+	}
+	if cfg.Auth.Token == "" {
+		cfg.Auth.Token = cfg.Token
+	}
+	if cfg.Auth.TokenFile == "" {
+		cfg.Auth.TokenFile = cfg.TokenFile
+	}
+	if cfg.Kubernetes.AgentImage == "" {
+		cfg.Kubernetes.AgentImage = cfg.AgentImage
 	}
 	if cfg.Mode == "" {
 		cfg.Mode = ModeLocal
@@ -181,6 +195,13 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.Auth.Type == AuthBearer {
 		if cfg.Auth.Token == "" {
+			token, err := authTokenFromFile(cfg.Auth.TokenFile)
+			if err != nil {
+				return Config{}, err
+			}
+			cfg.Auth.Token = token
+		}
+		if cfg.Auth.Token == "" {
 			cfg.Auth.Token = os.Getenv("TELOS_API_TOKEN")
 		}
 		if cfg.Auth.Token == "" {
@@ -204,4 +225,15 @@ func NormalizeConfig(cfg Config) (Config, error) {
 
 func SessionsRoot(root string) string {
 	return filepath.Join(root, "sessions")
+}
+
+func authTokenFromFile(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("read auth.token_file: %w", err)
+	}
+	return strings.TrimSpace(string(data)), nil
 }

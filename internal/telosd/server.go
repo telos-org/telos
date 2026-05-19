@@ -33,6 +33,7 @@ func Run(ctx context.Context, cfg Config) error {
 		if err != nil {
 			return err
 		}
+		startRouteReconciler(ctx, substrate.client)
 		store = newCloudSessionStore(baseStore, newRouteHandleResolver(), substrate)
 	}
 	mux := http.NewServeMux()

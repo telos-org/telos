@@ -47,6 +47,43 @@ func TestNormalizeCloudConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {
+	cfg, err := NormalizeConfig(Config{
+		Mode:       ModeCloud,
+		Token:      "operator-token",
+		AgentImage: "registry/telos-agent@sha256:abc123",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeConfig: %v", err)
+	}
+	if cfg.Auth.Type != AuthBearer {
+		t.Fatalf("auth.type: got %q", cfg.Auth.Type)
+	}
+	if cfg.Auth.Token != "operator-token" {
+		t.Fatalf("auth.token: got %q", cfg.Auth.Token)
+	}
+	if cfg.Kubernetes.AgentImage != "registry/telos-agent@sha256:abc123" {
+		t.Fatalf("agent image: got %q", cfg.Kubernetes.AgentImage)
+	}
+}
+
+func TestNormalizeCloudConfigReadsTokenFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(path, []byte("operator-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := NormalizeConfig(Config{
+		Mode:      ModeCloud,
+		TokenFile: path,
+	})
+	if err != nil {
+		t.Fatalf("NormalizeConfig: %v", err)
+	}
+	if cfg.Auth.Token != "operator-token" {
+		t.Fatalf("auth.token: got %q", cfg.Auth.Token)
+	}
+}
+
 func TestNormalizeCloudConfigRequiresBearerToken(t *testing.T) {
 	t.Setenv("TELOS_API_TOKEN", "")
 	_, err := NormalizeConfig(Config{Mode: ModeCloud})
@@ -136,5 +173,30 @@ auth:
 	}
 	if cfg.Auth.Token != "test-token" {
 		t.Fatalf("auth token: got %q", cfg.Auth.Token)
+	}
+}
+
+func TestLoadConfigCompactShape(t *testing.T) {
+	tokenPath := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(tokenPath, []byte("test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "telosd.yaml")
+	if err := os.WriteFile(path, []byte(`kind: telosd.config.v1
+mode: cloud
+token_file: `+tokenPath+`
+agent_image: registry/telos-agent@sha256:abc123
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadConfig(path)
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Auth.Token != "test-token" {
+		t.Fatalf("auth token: got %q", cfg.Auth.Token)
+	}
+	if cfg.Kubernetes.AgentImage != "registry/telos-agent@sha256:abc123" {
+		t.Fatalf("agent image: got %q", cfg.Kubernetes.AgentImage)
 	}
 }
