@@ -76,12 +76,11 @@ go run ./cmd/telos --version
 Local live runs require `pi` on `PATH` and model credentials configured for Pi.
 The test suite uses fake executors and does not require live model credentials.
 
-## Current Caveat
+## Current Status
 
-The core local runtime, cloud client, worker runtime, and release path are
-present. The remaining cutover work is cloud-environment parity:
+The Go runtime is the canonical environment-local runtime. Managed Telos
+environments run `telosd --config /etc/telos/telosd.yaml`; the cloud repo keeps
+the hosted control plane, frontend, provisioning, and billing surface.
 
-- replace the Python environment API with Go `telosd` in cloud mode;
-- keep the managed control plane and frontend in the cloud repo;
-- tighten Kubernetes worker authority around internal session kind and caller
-  role.
+Python Telos remains useful as historical reference while the product surface
+hardens, but new runtime work should land here.
