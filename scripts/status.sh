@@ -6,7 +6,7 @@ if [[ -z "${version}" ]]; then
   if git describe --tags --exact-match >/dev/null 2>&1; then
     version="$(git describe --tags --exact-match)"
   else
-    version="v0.0.1-dev.$(git rev-parse --short=12 HEAD)"
+    version="v0.0.0-dev.$(git rev-parse --short=12 HEAD)"
   fi
 fi
 

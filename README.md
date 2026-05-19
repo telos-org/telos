@@ -49,7 +49,7 @@ Use Bazel as the canonical build and release path:
 ```bash
 bazel test //...
 bazel build //cmd/telos:telos //cmd/telosd:telosd
-scripts/build-release.sh v0.0.1
+scripts/build-release.sh v0.0.0
 ```
 
 Native Go commands are still useful for quick local sanity checks:
