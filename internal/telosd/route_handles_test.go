@@ -3,7 +3,9 @@ package telosd
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos-go/internal/sessionapi"
 )
@@ -294,5 +296,33 @@ func TestParsePublicRoutes(t *testing.T) {
 	}
 	if got := routeNamespaces(routes[0].Data); len(got) != 1 || got[0] != "ns-postgres" {
 		t.Fatalf("route namespaces: got %#v", got)
+	}
+}
+
+func TestReadPublicRoutesUsesContextTimeoutOnly(t *testing.T) {
+	original := kubectlOutput
+	t.Cleanup(func() { kubectlOutput = original })
+
+	var gotTimeout time.Duration
+	var gotArgs []string
+	kubectlOutput = func(_ context.Context, timeout time.Duration, args ...string) ([]byte, error) {
+		gotTimeout = timeout
+		gotArgs = append([]string(nil), args...)
+		return []byte(`{"items":[]}`), nil
+	}
+
+	routes, err := readPublicRoutes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 0 {
+		t.Fatalf("routes: got %#v", routes)
+	}
+	if gotTimeout != 2*time.Second {
+		t.Fatalf("timeout: got %s", gotTimeout)
+	}
+	wantArgs := []string{"get", "cm", "-A", "-l", "telos.ai/public-route=primary", "-o", "json"}
+	if !slices.Equal(gotArgs, wantArgs) {
+		t.Fatalf("kubectl args: got %#v want %#v", gotArgs, wantArgs)
 	}
 }

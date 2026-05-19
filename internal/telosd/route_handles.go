@@ -55,7 +55,6 @@ func readPublicRoutes(ctx context.Context) ([]publicRoute, error) {
 	out, err := kubectlOutput(
 		ctx,
 		2*time.Second,
-		"--request-timeout=2s",
 		"get",
 		"cm",
 		"-A",
