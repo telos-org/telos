@@ -3,9 +3,9 @@ package telosd
 import (
 	"context"
 	"encoding/json"
-	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/telos-org/telos-go/internal/sessionapi"
 )
@@ -52,9 +52,9 @@ func productHandleFor(routes []publicRoute, session sessionapi.Session) string {
 }
 
 func readPublicRoutes(ctx context.Context) ([]publicRoute, error) {
-	cmd := exec.CommandContext(
+	out, err := kubectlOutput(
 		ctx,
-		"kubectl",
+		2*time.Second,
 		"--request-timeout=2s",
 		"get",
 		"cm",
@@ -64,7 +64,6 @@ func readPublicRoutes(ctx context.Context) ([]publicRoute, error) {
 		"-o",
 		"json",
 	)
-	out, err := cmd.Output()
 	if err != nil {
 		return nil, err
 	}

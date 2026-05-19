@@ -19,6 +19,7 @@ const (
 	ScopeSessionsRun   Scope = "sessions:run"
 	ScopeSessionsRead  Scope = "sessions:read"
 	ScopeSessionsStop  Scope = "sessions:stop"
+	ScopeClusterRead   Scope = "cluster:read"
 )
 
 type Role string
@@ -44,6 +45,7 @@ const (
 	ActionListSessions      AccessAction = "list_sessions"
 	ActionReadSession       AccessAction = "read_session"
 	ActionStopSession       AccessAction = "stop_session"
+	ActionReadCluster       AccessAction = "read_cluster"
 )
 
 type AccessRequest struct {
@@ -129,7 +131,8 @@ func (e authError) Error() string {
 	return e.detail
 }
 
-func authHTTPError(err error) (int, string, bool) {
+// AuthHTTPError returns the HTTP status/detail for authorization errors.
+func AuthHTTPError(err error) (int, string, bool) {
 	var e authError
 	if errors.As(err, &e) {
 		return e.status, e.detail, true
@@ -145,6 +148,7 @@ func OperatorCaller() Caller {
 			ScopeSessionsRun:   true,
 			ScopeSessionsRead:  true,
 			ScopeSessionsStop:  true,
+			ScopeClusterRead:   true,
 		},
 	}
 }
@@ -170,6 +174,8 @@ func authorizeCaller(store *FileStore, caller Caller, req AccessRequest) error {
 		return requireSessionAccess(store, caller, req.SessionID, ScopeSessionsRead)
 	case ActionStopSession:
 		return requireSessionAccess(store, caller, req.SessionID, ScopeSessionsStop)
+	case ActionReadCluster:
+		return requireScope(caller, ScopeClusterRead)
 	default:
 		return authError{status: http.StatusForbidden, detail: "unsupported session API action"}
 	}
@@ -260,7 +266,7 @@ func scopesFromStrings(values []string) map[Scope]bool {
 	scopes := map[Scope]bool{}
 	for _, value := range values {
 		switch scope := Scope(strings.TrimSpace(value)); scope {
-		case ScopeSessionsApply, ScopeSessionsRun, ScopeSessionsRead, ScopeSessionsStop:
+		case ScopeSessionsApply, ScopeSessionsRun, ScopeSessionsRead, ScopeSessionsStop, ScopeClusterRead:
 			scopes[scope] = true
 		}
 	}

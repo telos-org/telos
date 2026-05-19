@@ -32,7 +32,11 @@ func Run(ctx context.Context, cfg Config) error {
 		store = newCloudSessionStore(baseStore, newRouteHandleResolver())
 	}
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store, authorizerForConfig(cfg, baseStore))
+	authorizer := authorizerForConfig(cfg, baseStore)
+	sessionapi.RegisterRoutes(mux, store, authorizer)
+	if cfg.Mode == ModeCloud {
+		registerTopologyRoutes(mux, authorizer)
+	}
 
 	var lastRequest atomic.Int64
 	lastRequest.Store(time.Now().UnixNano())

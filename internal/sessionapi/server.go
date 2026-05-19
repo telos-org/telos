@@ -307,7 +307,7 @@ func (h *handler) authorize(w http.ResponseWriter, r *http.Request, req AccessRe
 	if err == nil {
 		return caller, true
 	}
-	if status, detail, ok := authHTTPError(err); ok {
+	if status, detail, ok := AuthHTTPError(err); ok {
 		writeError(w, status, detail)
 		return Caller{}, false
 	}
