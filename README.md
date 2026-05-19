@@ -6,6 +6,10 @@ The goal is one portable `telos` binary for local execution and cloud
 Sessions API compatibility. The Go runtime does not import or execute the
 Python Telos package.
 
+The runtime mental model is documented in
+[`docs/sessions-api/SPEC.md`](docs/sessions-api/SPEC.md). That document is the
+source of truth for freezing Python Telos semantics and carrying them into Go.
+
 ## What Works
 
 - `telos plan`, `apply`, `run`, `list`, `describe`, `logs`, `stop`, `login`, `--version`.
@@ -74,9 +78,10 @@ The test suite uses fake executors and does not require live model credentials.
 
 ## Current Caveat
 
-This is a first full-port pass, not a release candidate. The core local runtime
-is present, but it still needs human hardening before it should replace the
-Python OSS CLI by default:
+The core local runtime, cloud client, worker runtime, and release path are
+present. The remaining cutover work is cloud-environment parity:
 
-- cloud cutover is still pending; the current Go `telosd` covers the
-  local API and session-worker paths.
+- replace the Python environment API with Go `telosd` in cloud mode;
+- keep the managed control plane and frontend in the cloud repo;
+- tighten Kubernetes worker authority around internal session kind and caller
+  role.
