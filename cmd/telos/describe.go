@@ -3,7 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"text/tabwriter"
+
+	"github.com/telos-org/telos-go/internal/sessionapi"
 )
 
 // -- describe -----------------------------------------------------------------
@@ -31,25 +35,99 @@ func cmdDescribe(args []string) {
 		return
 	}
 
-	fmt.Printf("Session:  %s\n", session.SessionID)
-	fmt.Printf("Status:   %s\n", session.Status)
-	fmt.Printf("Runtime:  %s\n", session.Runtime)
-	if session.SpecName != nil {
-		fmt.Printf("Spec:     %s\n", *session.SpecName)
+	printSessionDescription(os.Stdout, *session)
+}
+
+func printSessionDescription(out io.Writer, session sessionapi.Session) {
+	fmt.Fprintf(out, "Session:  %s\n", session.SessionID)
+	fmt.Fprintf(out, "Name:     %s\n", sessionName(session))
+	fmt.Fprintf(out, "Kind:     %s\n", sessionKind(session))
+	fmt.Fprintf(out, "Runtime:  %s\n", session.Runtime)
+	fmt.Fprintf(out, "Status:   %s\n", session.Status)
+	fmt.Fprintf(out, "Result:   %s\n", sessionResult(session))
+	if session.ArtifactURI != nil && *session.ArtifactURI != "" {
+		fmt.Fprintf(out, "Artifact: %s\n", *session.ArtifactURI)
 	}
 	if session.CreatedAt != nil {
-		fmt.Printf("Created:  %s\n", *session.CreatedAt)
+		fmt.Fprintf(out, "Created:  %s\n", *session.CreatedAt)
 	}
-	if session.Result != nil {
-		fmt.Printf("Result:   %s\n", *session.Result)
+	if session.FinishedAt != nil {
+		fmt.Fprintf(out, "Finished: %s\n", *session.FinishedAt)
+	}
+	if session.CurrentSpecVersion != nil {
+		fmt.Fprintf(out, "Spec Ver: %d\n", *session.CurrentSpecVersion)
 	}
 	if session.Error != nil {
-		fmt.Printf("Error:    %s\n", *session.Error)
+		fmt.Fprintf(out, "Error:    %s\n", *session.Error)
 	}
 	if session.TotalCostUSD != nil {
-		fmt.Printf("Cost:     $%.4f\n", *session.TotalCostUSD)
+		fmt.Fprintf(out, "Cost:     $%.4f\n", *session.TotalCostUSD)
 	}
 	if session.RoundCount != nil {
-		fmt.Printf("Rounds:   %d\n", *session.RoundCount)
+		fmt.Fprintf(out, "Rounds:   %d\n", *session.RoundCount)
 	}
+	if len(session.Epochs) > 0 {
+		fmt.Fprintln(out)
+		printLatestEpoch(out, session)
+	}
+	if len(session.Specs) > 0 {
+		fmt.Fprintln(out)
+		printSessionArtifacts(out, session)
+	}
+}
+
+func printLatestEpoch(out io.Writer, session sessionapi.Session) {
+	fmt.Fprintln(out, "Latest Epoch:")
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "ID\tRESULT\tSTARTED\tFINISHED")
+	fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
+		latestEpochString(session, "id"),
+		sessionResult(session),
+		orDash(latestEpochString(session, "started_at")),
+		orDash(latestEpochString(session, "finished_at")),
+	)
+	_ = w.Flush()
+}
+
+func printSessionArtifacts(out io.Writer, session sessionapi.Session) {
+	fmt.Fprintln(out, "Artifacts:")
+	for _, spec := range session.Specs {
+		fmt.Fprintf(out, "  %s:\n", sessionSpecName(spec))
+		fmt.Fprintf(out, "    workspace:  %s\n", artifactPath(spec.WorkspaceExists, spec.WorkspacePath))
+		fmt.Fprintf(out, "    evidence:   %s\n", artifactPath(spec.EvidenceExists, spec.EvidencePath))
+		fmt.Fprintf(out, "    transcript: %s\n", artifactPath(spec.TranscriptExists, spec.TranscriptPath))
+	}
+}
+
+func sessionSpecName(spec sessionapi.SessionSpec) string {
+	if spec.Name != nil && *spec.Name != "" {
+		return *spec.Name
+	}
+	if spec.DirName != nil && *spec.DirName != "" {
+		return *spec.DirName
+	}
+	return "-"
+}
+
+func artifactPath(exists *bool, path *string) string {
+	if exists != nil && !*exists {
+		return "missing"
+	}
+	if path != nil && *path != "" {
+		if exists == nil {
+			return *path
+		}
+		return "yes:" + *path
+	}
+	if exists != nil && *exists {
+		return "yes"
+	}
+	return "-"
+}
+
+func orDash(value string) string {
+	if value == "" {
+		return "-"
+	}
+	return value
 }

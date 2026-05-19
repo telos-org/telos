@@ -16,6 +16,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 )
 
@@ -27,8 +28,12 @@ func main() {
 		fmt.Println("telos " + Version)
 		return
 	}
+	if len(os.Args) == 2 && isHelpArg(os.Args[1]) {
+		usage(os.Stdout)
+		return
+	}
 	if len(os.Args) < 2 {
-		usage()
+		usage(os.Stderr)
 		os.Exit(1)
 	}
 	switch os.Args[1] {
@@ -50,21 +55,31 @@ func main() {
 		cmdLogin(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
-		usage()
+		usage(os.Stderr)
 		os.Exit(1)
 	}
 }
 
-func usage() {
-	fmt.Fprintln(os.Stderr, "usage: telos <command> [args]")
-	fmt.Fprintln(os.Stderr, "")
-	fmt.Fprintln(os.Stderr, "commands:")
-	fmt.Fprintln(os.Stderr, "  plan SPEC.md       Show compiled spec plan")
-	fmt.Fprintln(os.Stderr, "  apply SPEC.md      Apply a desired-state spec")
-	fmt.Fprintln(os.Stderr, "  run SPEC.md        Create and run a session")
-	fmt.Fprintln(os.Stderr, "  list               List sessions")
-	fmt.Fprintln(os.Stderr, "  describe SESSION   Show session details")
-	fmt.Fprintln(os.Stderr, "  logs SESSION       Show session transcript")
-	fmt.Fprintln(os.Stderr, "  stop SESSION       Stop a running session")
-	fmt.Fprintln(os.Stderr, "  login              Configure cloud access")
+func isHelpArg(arg string) bool {
+	return arg == "-h" || arg == "--help" || arg == "help"
+}
+
+func usage(out io.Writer) {
+	fmt.Fprintln(out, "usage: telos <command> [args]")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "commands:")
+	fmt.Fprintln(out, "  plan SPEC.md       Show compiled spec plan")
+	fmt.Fprintln(out, "  apply SPEC.md      Apply a desired-state spec")
+	fmt.Fprintln(out, "  run SPEC.md        Create and run a bounded task spec")
+	fmt.Fprintln(out, "  list               List sessions")
+	fmt.Fprintln(out, "  describe SESSION   Show session details")
+	fmt.Fprintln(out, "  logs SESSION       Show session transcript")
+	fmt.Fprintln(out, "  stop SESSION       Stop a running session")
+	fmt.Fprintln(out, "  login              Configure cloud access")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "global flags:")
+	fmt.Fprintln(out, "  -h, --help         Show help")
+	fmt.Fprintln(out, "  --version          Show version")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "Use `telos <command> --help` for command-specific flags.")
 }

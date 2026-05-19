@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"text/tabwriter"
 
 	"github.com/telos-org/telos-go/internal/cloud"
 	"github.com/telos-org/telos-go/internal/config"
@@ -65,30 +66,36 @@ func cmdList(args []string) {
 		fmt.Println("no sessions")
 		return
 	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	if *wide {
+		fmt.Fprintln(w, "NAME\tKIND\tSTATUS\tRESULT\tRUNTIME\tARTIFACT\tPARENT\tCOST\tSESSION")
+	} else {
+		fmt.Fprintln(w, "NAME\tSTATUS\tRESULT\tARTIFACT\tSESSION")
+	}
 	for _, sess := range visible {
-		name := ""
-		if sess.SpecName != nil {
-			name = *sess.SpecName
-		}
-		kind := ""
-		if sess.SessionKind != nil {
-			kind = string(*sess.SessionKind)
-		}
-		cost := ""
-		if sess.TotalCostUSD != nil {
-			cost = fmt.Sprintf("$%.2f", *sess.TotalCostUSD)
-		}
 		if *wide {
-			parent := ""
-			if sess.ParentSessionID != nil {
-				parent = *sess.ParentSessionID
-			}
-			fmt.Printf("%-40s %-12s %-10s %-12s %-20s %-40s %s\n",
-				sess.SessionID, sess.Status, sess.Runtime, kind, name, parent, cost)
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+				sessionName(sess),
+				sessionKind(sess),
+				sess.Status,
+				sessionResult(sess),
+				sess.Runtime,
+				sessionArtifact(sess),
+				sessionParent(sess),
+				sessionCost(sess),
+				sess.SessionID,
+			)
 			continue
 		}
-		fmt.Printf("%-40s %-12s %-20s %s\n", sess.SessionID, sess.Status, name, cost)
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			sessionName(sess),
+			sess.Status,
+			sessionResult(sess),
+			sessionArtifact(sess),
+			sess.SessionID,
+		)
 	}
+	_ = w.Flush()
 }
 
 func visibleListSessions(sessions []sessionapi.Session, wide bool) []sessionapi.Session {
@@ -132,4 +139,66 @@ func listEnvironments(jsonOut bool) {
 		}
 		fmt.Printf("%-16s %-14s %-36s %s\n", env.ID, env.State, env.Handle, access)
 	}
+}
+
+func sessionName(sess sessionapi.Session) string {
+	if sess.SpecName != nil && *sess.SpecName != "" {
+		return *sess.SpecName
+	}
+	return "-"
+}
+
+func sessionKind(sess sessionapi.Session) string {
+	if sess.SessionKind != nil && *sess.SessionKind != "" {
+		return string(*sess.SessionKind)
+	}
+	return "-"
+}
+
+func sessionParent(sess sessionapi.Session) string {
+	if sess.ParentSessionID != nil && *sess.ParentSessionID != "" {
+		return *sess.ParentSessionID
+	}
+	return "-"
+}
+
+func sessionCost(sess sessionapi.Session) string {
+	if sess.TotalCostUSD == nil {
+		return "-"
+	}
+	return fmt.Sprintf("$%.2f", *sess.TotalCostUSD)
+}
+
+func sessionArtifact(sess sessionapi.Session) string {
+	if sess.ArtifactURI != nil && *sess.ArtifactURI != "" {
+		return *sess.ArtifactURI
+	}
+	return "-"
+}
+
+func sessionResult(sess sessionapi.Session) string {
+	if sess.Result != nil && *sess.Result != "" {
+		return *sess.Result
+	}
+	if result := latestEpochString(sess, "result"); result != "" {
+		return result
+	}
+	if sess.Status.IsTerminal() {
+		return string(sess.Status)
+	}
+	return "active"
+}
+
+func latestEpochString(sess sessionapi.Session, key string) string {
+	if len(sess.Epochs) == 0 {
+		return ""
+	}
+	value, ok := sess.Epochs[len(sess.Epochs)-1][key]
+	if !ok || value == nil {
+		return ""
+	}
+	if typed, ok := value.(string); ok {
+		return typed
+	}
+	return fmt.Sprint(value)
 }

@@ -42,6 +42,22 @@ func TestReorderInterspersedFlags(t *testing.T) {
 	}
 }
 
+func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
+	var out bytes.Buffer
+	usage(&out)
+	text := out.String()
+	for _, want := range []string{
+		"usage: telos <command> [args]",
+		"--help",
+		"--version",
+		"telos <command> --help",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("usage missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestReorderInterspersedFlagsDashDash(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.Bool("json", false, "")
