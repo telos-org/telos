@@ -190,6 +190,9 @@ func TestCloudCreateSessionCreatesControllerForOperatorApply(t *testing.T) {
 	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindController {
 		t.Fatalf("session_kind: got %#v", session.SessionKind)
 	}
+	if !strings.HasPrefix(session.SessionID, "sess_") {
+		t.Fatalf("cloud session id: got %q", session.SessionID)
+	}
 	if session.CurrentSpecVersion == nil || *session.CurrentSpecVersion != 1 {
 		t.Fatalf("current_spec_version: got %#v", session.CurrentSpecVersion)
 	}

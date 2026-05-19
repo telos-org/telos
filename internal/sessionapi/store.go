@@ -1,7 +1,9 @@
 package sessionapi
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -80,7 +82,7 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	id := generateSessionID()
+	id := generateSessionID(fs.runtime)
 	dir := fs.sessionDir(id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create session dir: %w", err)
@@ -668,8 +670,16 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 
 var sessionSeq atomic.Uint64
 
-func generateSessionID() string {
+func generateSessionID(runtime SessionRuntime) string {
 	now := time.Now().UTC()
+	if runtime == RuntimeCloud {
+		var suffix [8]byte
+		if _, err := rand.Read(suffix[:]); err == nil {
+			return fmt.Sprintf("sess_%s_%s", now.Format("20060102_150405"), hex.EncodeToString(suffix[:]))
+		}
+		seq := sessionSeq.Add(1) - 1
+		return fmt.Sprintf("sess_%s_%08d", now.Format("20060102_150405"), seq)
+	}
 	seq := sessionSeq.Add(1) - 1
 	return fmt.Sprintf("local_%s_%02d", now.Format("20060102_150405"), seq)
 }
