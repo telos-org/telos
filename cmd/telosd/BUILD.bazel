@@ -50,3 +50,10 @@ go_cross_binary(
     target = ":telosd",
     visibility = ["//visibility:public"],
 )
+
+go_test(
+    name = "telosd_test",
+    srcs = ["main_test.go"],
+    embed = [":telosd_lib"],
+    deps = ["//internal/telosd"],
+)

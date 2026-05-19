@@ -10,8 +10,8 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//internal/cli",
-        "//internal/config",
         "//internal/cloud",
+        "//internal/config",
         "//internal/sessionapi",
         "//internal/spec",
     ],
@@ -58,5 +58,8 @@ go_test(
     name = "telos_test",
     srcs = glob(["*_test.go"]),
     embed = [":telos_lib"],
-    deps = ["//internal/sessionapi"],
+    deps = [
+        "//internal/config",
+        "//internal/sessionapi",
+    ],
 )

@@ -29,7 +29,11 @@ func Run(ctx context.Context, cfg Config) error {
 	baseStore := storeForConfig(cfg)
 	store := sessionapi.Store(baseStore)
 	if cfg.Mode == ModeCloud {
-		store = newCloudSessionStore(baseStore, newRouteHandleResolver())
+		substrate, err := newKubernetesSubstrate(cfg)
+		if err != nil {
+			return err
+		}
+		store = newCloudSessionStore(baseStore, newRouteHandleResolver(), substrate)
 	}
 	mux := http.NewServeMux()
 	authorizer := authorizerForConfig(cfg, baseStore)

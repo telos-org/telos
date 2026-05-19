@@ -25,11 +25,13 @@ const (
 )
 
 type Config struct {
-	Kind   string       `yaml:"kind"`
-	Mode   Mode         `yaml:"mode"`
-	Root   string       `yaml:"root"`
-	Server ServerConfig `yaml:"server"`
-	Auth   AuthConfig   `yaml:"auth"`
+	Kind       string           `yaml:"kind"`
+	Mode       Mode             `yaml:"mode"`
+	Root       string           `yaml:"root"`
+	Server     ServerConfig     `yaml:"server"`
+	Auth       AuthConfig       `yaml:"auth"`
+	Runtime    RuntimeConfig    `yaml:"runtime"`
+	Kubernetes KubernetesConfig `yaml:"kubernetes"`
 }
 
 type ServerConfig struct {
@@ -42,6 +44,24 @@ type ServerConfig struct {
 type AuthConfig struct {
 	Type  AuthType `yaml:"type"`
 	Token string   `yaml:"token"`
+}
+
+type RuntimeConfig struct {
+	ArtifactBaseURL string `yaml:"artifact_base_url"`
+	ArtifactVersion string `yaml:"artifact_version"`
+	MountPath       string `yaml:"mount_path"`
+}
+
+type KubernetesConfig struct {
+	AgentImage      string   `yaml:"agent_image"`
+	EnvNamespace    string   `yaml:"env_namespace"`
+	StateMountRoot  string   `yaml:"state_mount_root"`
+	StateHostRoot   string   `yaml:"state_host_root"`
+	StateNodeRoot   string   `yaml:"state_node_root"`
+	ImagePullSecret string   `yaml:"image_pull_secret"`
+	AgentSecretName string   `yaml:"agent_secret_name"`
+	AgentSecretKey  string   `yaml:"agent_secret_key"`
+	CopySecrets     []string `yaml:"copy_secrets"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -104,6 +124,42 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		}
 		if cfg.Server.Listen == "" {
 			cfg.Server.Listen = "0.0.0.0:8000"
+		}
+		if cfg.Runtime.ArtifactBaseURL == "" {
+			cfg.Runtime.ArtifactBaseURL = "https://usetelos.ai/releases"
+		}
+		if cfg.Runtime.ArtifactVersion == "" {
+			cfg.Runtime.ArtifactVersion = "latest"
+		}
+		if cfg.Runtime.MountPath == "" {
+			cfg.Runtime.MountPath = "/telos-runtime"
+		}
+		if cfg.Kubernetes.AgentImage == "" {
+			cfg.Kubernetes.AgentImage = envOr("TELOS_AGENT_IMAGE", "telos-agent:latest")
+		}
+		if cfg.Kubernetes.EnvNamespace == "" {
+			cfg.Kubernetes.EnvNamespace = envOr("TELOS_ENV_NAMESPACE", "ns-telos-env")
+		}
+		if cfg.Kubernetes.StateMountRoot == "" {
+			cfg.Kubernetes.StateMountRoot = envOr("TELOS_STATE_MOUNT_ROOT", cfg.Root)
+		}
+		if cfg.Kubernetes.StateHostRoot == "" {
+			cfg.Kubernetes.StateHostRoot = envOr("TELOS_STATE_HOST_ROOT", "/var/telos-state")
+		}
+		if cfg.Kubernetes.StateNodeRoot == "" {
+			cfg.Kubernetes.StateNodeRoot = envOr("TELOS_STATE_NODE_ROOT", "/var/telos-state")
+		}
+		if cfg.Kubernetes.ImagePullSecret == "" {
+			cfg.Kubernetes.ImagePullSecret = os.Getenv("TELOS_IMAGE_PULL_SECRET")
+		}
+		if cfg.Kubernetes.AgentSecretName == "" {
+			cfg.Kubernetes.AgentSecretName = "agent-api-keys"
+		}
+		if cfg.Kubernetes.AgentSecretKey == "" {
+			cfg.Kubernetes.AgentSecretKey = "ANTHROPIC_API_KEY"
+		}
+		if cfg.Kubernetes.CopySecrets == nil {
+			cfg.Kubernetes.CopySecrets = []string{"telos-env-keys"}
 		}
 	default:
 		return Config{}, fmt.Errorf("invalid mode %q", cfg.Mode)
