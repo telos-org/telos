@@ -273,6 +273,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			Name:            "install-telos-runtime",
 			Image:           s.agentImage,
 			ImagePullPolicy: pullPolicy(s.agentImage),
+			SecurityContext: agentContainerSecurityContext(),
 			Command:         []string{"bash", "-lc", s.runtimeInstallScript()},
 			VolumeMounts:    []corev1.VolumeMount{{Name: "telos-runtime", MountPath: s.runtimeMountPath}},
 		}},
@@ -280,6 +281,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			Name:            "worker",
 			Image:           s.agentImage,
 			ImagePullPolicy: pullPolicy(s.agentImage),
+			SecurityContext: agentContainerSecurityContext(),
 			Command:         []string{s.runtimeTelosdPath, "--session-dir", sessionDir},
 			Env:             s.workerEnv(sessionID, m),
 			VolumeMounts:    mounts,
@@ -334,6 +336,15 @@ func fieldEnv(name string, fieldPath string) corev1.EnvVar {
 		ValueFrom: &corev1.EnvVarSource{FieldRef: &corev1.ObjectFieldSelector{
 			FieldPath: fieldPath,
 		}},
+	}
+}
+
+func agentContainerSecurityContext() *corev1.SecurityContext {
+	return &corev1.SecurityContext{
+		RunAsNonRoot:             boolPtr(true),
+		RunAsUser:                int64Ptr(1000),
+		RunAsGroup:               int64Ptr(1000),
+		AllowPrivilegeEscalation: boolPtr(false),
 	}
 }
 
@@ -733,6 +744,10 @@ func int32Ptr(value int32) *int32 {
 }
 
 func int64Ptr(value int64) *int64 {
+	return &value
+}
+
+func boolPtr(value bool) *bool {
 	return &value
 }
 

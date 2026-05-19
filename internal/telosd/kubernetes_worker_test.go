@@ -250,7 +250,12 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	if len(template.Spec.Containers) != 1 {
 		t.Fatalf("containers: got %d", len(template.Spec.Containers))
 	}
+	if len(template.Spec.InitContainers) != 1 {
+		t.Fatalf("init containers: got %d", len(template.Spec.InitContainers))
+	}
+	assertAgentSecurityContext(t, template.Spec.InitContainers[0].SecurityContext)
 	container := template.Spec.Containers[0]
+	assertAgentSecurityContext(t, container.SecurityContext)
 	if len(container.Command) != 3 ||
 		container.Command[0] != "/telos-runtime/telosd" ||
 		container.Command[1] != "--session-dir" {
@@ -258,6 +263,25 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	}
 	if container.Command[2] != "/telos-state/sessions/"+sessionID {
 		t.Fatalf("session dir: got %+v", container.Command)
+	}
+}
+
+func assertAgentSecurityContext(t *testing.T, ctx *corev1.SecurityContext) {
+	t.Helper()
+	if ctx == nil {
+		t.Fatal("missing agent security context")
+	}
+	if ctx.RunAsUser == nil || *ctx.RunAsUser == 0 {
+		t.Fatalf("agent runs as root: %+v", ctx)
+	}
+	if ctx.RunAsGroup == nil || *ctx.RunAsGroup == 0 {
+		t.Fatalf("agent group is root: %+v", ctx)
+	}
+	if ctx.RunAsNonRoot == nil || !*ctx.RunAsNonRoot {
+		t.Fatalf("agent does not require non-root: %+v", ctx)
+	}
+	if ctx.AllowPrivilegeEscalation == nil || *ctx.AllowPrivilegeEscalation {
+		t.Fatalf("agent allows privilege escalation: %+v", ctx)
 	}
 }
 
