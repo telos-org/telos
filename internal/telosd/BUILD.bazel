@@ -21,6 +21,7 @@ go_test(
     name = "telosd_test",
     srcs = [
         "config_test.go",
+        "server_test.go",
         "worker_test.go",
     ],
     embed = [":telosd"],

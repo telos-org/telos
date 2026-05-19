@@ -7,13 +7,10 @@ import (
 	"github.com/telos-org/telos-go/internal/sessionapi"
 )
 
-func TestSessionRuntimeDoesNotNormalizeLegacyHostedValue(t *testing.T) {
+func TestSessionRuntimeRejectsLegacyHostedValue(t *testing.T) {
 	var session sessionapi.Session
-	if err := json.Unmarshal([]byte(`{"session_id":"sess_1","status":"running","runtime":"hosted"}`), &session); err != nil {
-		t.Fatalf("Unmarshal: %v", err)
-	}
-	if session.Runtime != "hosted" {
-		t.Fatalf("runtime: got %q", session.Runtime)
+	if err := json.Unmarshal([]byte(`{"session_id":"sess_1","status":"running","runtime":"hosted"}`), &session); err == nil {
+		t.Fatal("expected legacy hosted runtime to fail")
 	}
 }
 

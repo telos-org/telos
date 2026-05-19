@@ -1,6 +1,7 @@
 package sessionapi
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +34,7 @@ var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 // expected to be safe for concurrent use.
 type Store interface {
 	Create(req SessionCreateRequest) (*Session, error)
+	Spec(id string) (*SessionSpecResponse, error)
 	UpdateSpec(id string, req SessionSpecUpdateRequest) (*Session, error)
 	List() ([]Session, error)
 	Get(id string) (*Session, error)
@@ -144,6 +146,14 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 			IntervalSeconds: prepared.IntervalSeconds,
 		}},
 	})
+	if sessionKind == KindController && sessionSpecPath != "" {
+		version := 1
+		m.CurrentSpecVersion = &version
+		m.SpecVersions = append(
+			m.SpecVersions,
+			specVersionEntry(version, sessionSpecPath, prepared.SpecData, nil),
+		)
+	}
 
 	if err := WriteManifest(fs.manifestPath(id), &m); err != nil {
 		return nil, err
@@ -191,6 +201,49 @@ func (fs *FileStore) nonStoppedControllerIDsBySpecName(specName string) ([]strin
 	return ids, nil
 }
 
+// Spec returns the mutable controller spec currently attached to a session.
+func (fs *FileStore) Spec(id string) (*SessionSpecResponse, error) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	m, err := ReadManifest(fs.manifestPath(id))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+		}
+		return nil, err
+	}
+	if m.SessionKind != KindController {
+		return nil, fmt.Errorf("task sessions do not have mutable specs: %w", ErrInvalidSession)
+	}
+	if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
+		return nil, fmt.Errorf("controller session has no mutable spec: %w", ErrInvalidSession)
+	}
+	data, err := os.ReadFile(*m.SessionSpecPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("session spec file missing on disk: %w", ErrNotFound)
+		}
+		return nil, err
+	}
+	dirName := m.SpecName
+	for _, item := range m.Specs {
+		if item.SessionSpecPath != nil && *item.SessionSpecPath == *m.SessionSpecPath {
+			if item.DirName != "" {
+				dirName = item.DirName
+			}
+			break
+		}
+	}
+	return &SessionSpecResponse{
+		DirName:     dirName,
+		Markdown:    string(data),
+		Environment: frontmatterJSON(string(data)),
+		SpecPath:    *m.SessionSpecPath,
+		Version:     m.CurrentSpecVersion,
+	}, nil
+}
+
 // UpdateSpec replaces a controller session's primary spec in place.
 func (fs *FileStore) UpdateSpec(id string, req SessionSpecUpdateRequest) (*Session, error) {
 	fs.mu.Lock()
@@ -221,6 +274,13 @@ func (fs *FileStore) UpdateSpec(id string, req SessionSpecUpdateRequest) (*Sessi
 	if err := os.WriteFile(*m.SessionSpecPath, prepared.SpecData, 0o644); err != nil {
 		return nil, fmt.Errorf("write session spec: %w", err)
 	}
+	previousVersion := ptrOr(m.CurrentSpecVersion, 1)
+	version := previousVersion + 1
+	m.CurrentSpecVersion = &version
+	m.SpecVersions = append(
+		m.SpecVersions,
+		specVersionEntry(version, *m.SessionSpecPath, prepared.SpecData, &previousVersion),
+	)
 	m.SessionSpecPath = strPtr(*m.SessionSpecPath)
 	if len(m.Specs) > 0 {
 		m.Specs[0].Name = prepared.Name
@@ -441,21 +501,22 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 
 	kind := m.SessionKind
 	s := Session{
-		SessionID:       m.SessionID,
-		SessionKind:     &kind,
-		ParentSessionID: m.ParentSessionID,
-		SpecName:        strPtr(m.SpecName),
-		Status:          status,
-		CreatedAt:       strPtr(m.CreatedAt),
-		Runtime:         manifestRuntime(m, fs.runtime),
-		Launcher:        strPtr(m.Launcher),
-		SessionSpecPath: m.SessionSpecPath,
-		SessionDir:      strPtr(dir),
-		Config:          m.Config.AsMap(),
-		Provenance:      m.Provenance,
-		Specs:           specs,
-		Epochs:          epochs,
-		SpecVersions:    []map[string]any{},
+		SessionID:          m.SessionID,
+		SessionKind:        &kind,
+		ParentSessionID:    m.ParentSessionID,
+		SpecName:           strPtr(m.SpecName),
+		Status:             status,
+		CreatedAt:          strPtr(m.CreatedAt),
+		Runtime:            manifestRuntime(m, fs.runtime),
+		Launcher:           strPtr(m.Launcher),
+		SessionSpecPath:    m.SessionSpecPath,
+		SessionDir:         strPtr(dir),
+		Config:             m.Config.AsMap(),
+		Provenance:         m.Provenance,
+		Specs:              specs,
+		Epochs:             epochs,
+		CurrentSpecVersion: m.CurrentSpecVersion,
+		SpecVersions:       cloneSpecVersions(m.SpecVersions),
 	}
 
 	if s.Config == nil {
@@ -615,6 +676,49 @@ func generateSessionID() string {
 
 func tsNow() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+func frontmatterJSON(markdown string) string {
+	raw, _, ok := spec.ParseFrontmatter(markdown)
+	if !ok {
+		return "{}"
+	}
+	data, err := json.Marshal(raw)
+	if err != nil {
+		return "{}"
+	}
+	return string(data)
+}
+
+func cloneSpecVersions(versions []map[string]any) []map[string]any {
+	if versions == nil {
+		return []map[string]any{}
+	}
+	cloned := make([]map[string]any, 0, len(versions))
+	for _, version := range versions {
+		item := make(map[string]any, len(version))
+		for k, v := range version {
+			item[k] = v
+		}
+		cloned = append(cloned, item)
+	}
+	return cloned
+}
+
+func specVersionEntry(version int, specPath string, data []byte, previous *int) map[string]any {
+	hash := sha256.Sum256(data)
+	var previousVersion any
+	if previous != nil {
+		previousVersion = *previous
+	}
+	return map[string]any{
+		"version":          version,
+		"spec_path":        specPath,
+		"spec_sha256":      fmt.Sprintf("%x", hash),
+		"previous_version": previousVersion,
+		"provenance":       map[string]any{"type": "inline"},
+		"created_at":       tsNow(),
+	}
 }
 
 type preparedRequestSpec struct {

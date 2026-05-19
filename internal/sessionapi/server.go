@@ -18,6 +18,7 @@ const maxSessionRequestBytes = 4 << 20
 //	POST /api/sessions
 //	GET  /api/sessions
 //	GET  /api/sessions/{id}
+//	GET  /api/sessions/{id}/spec
 //	PUT  /api/sessions/{id}/spec
 //	POST /api/sessions/{id}/stop
 //	GET  /api/sessions/{id}/transcript
@@ -34,6 +35,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer) {
 	mux.HandleFunc("POST /api/sessions", h.createSession)
 	mux.HandleFunc("GET /api/sessions", h.listSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", h.getSession)
+	mux.HandleFunc("GET /api/sessions/{id}/spec", h.getSpec)
 	mux.HandleFunc("PUT /api/sessions/{id}/spec", h.updateSpec)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
@@ -50,7 +52,7 @@ func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionHealth}); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
 func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
@@ -77,6 +79,26 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, session)
+}
+
+func (h *handler) getSpec(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionUpdateSessionSpec, SessionID: id}); !ok {
+		return
+	}
+	spec, err := h.store.Spec(id)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrInvalidSession):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, spec)
 }
 
 func (h *handler) updateSpec(w http.ResponseWriter, r *http.Request) {

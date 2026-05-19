@@ -118,7 +118,7 @@ func TestHealthz(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
-	if body["status"] != "ok" {
+	if body["ok"] != "true" {
 		t.Fatalf("unexpected health body: %#v", body)
 	}
 }
@@ -189,6 +189,12 @@ func TestCloudCreateSessionCreatesControllerForOperatorApply(t *testing.T) {
 	}
 	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindController {
 		t.Fatalf("session_kind: got %#v", session.SessionKind)
+	}
+	if session.CurrentSpecVersion == nil || *session.CurrentSpecVersion != 1 {
+		t.Fatalf("current_spec_version: got %#v", session.CurrentSpecVersion)
+	}
+	if len(session.SpecVersions) != 1 {
+		t.Fatalf("spec_versions: got %#v", session.SpecVersions)
 	}
 }
 
@@ -310,12 +316,53 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 	if session.Specs[0].IntervalSeconds == nil || *session.Specs[0].IntervalSeconds != 300 {
 		t.Fatalf("interval: got %#v", session.Specs[0].IntervalSeconds)
 	}
+	if session.CurrentSpecVersion == nil || *session.CurrentSpecVersion != 2 {
+		t.Fatalf("current_spec_version: got %#v", session.CurrentSpecVersion)
+	}
+	if len(session.SpecVersions) != 1 {
+		t.Fatalf("spec_versions: got %#v", session.SpecVersions)
+	}
+	if session.SpecVersions[0]["previous_version"].(float64) != 1 {
+		t.Fatalf("previous_version: got %#v", session.SpecVersions[0])
+	}
 	data, err := os.ReadFile(*session.SessionSpecPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(data) != updated {
 		t.Fatalf("spec was not updated: %q", string(data))
+	}
+}
+
+func TestGetControllerSessionSpec(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+	controller, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + controller.SessionID + "/spec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+	var body sessionapi.SessionSpecResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.DirName != "postgres" {
+		t.Fatalf("dirName: got %q", body.DirName)
+	}
+	if !strings.Contains(body.Markdown, "# postgres") {
+		t.Fatalf("markdown: got %q", body.Markdown)
+	}
+	if body.Environment != `{"name":"postgres","platform":"cloud","version":"v0"}` {
+		t.Fatalf("environment: got %q", body.Environment)
+	}
+	if body.SpecPath == "" {
+		t.Fatal("expected specPath")
 	}
 }
 

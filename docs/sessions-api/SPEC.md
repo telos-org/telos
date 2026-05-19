@@ -97,10 +97,12 @@ The canonical route set is:
 
 | Method | Route | Response |
 | --- | --- | --- |
-| `GET` | `/api/healthz` | `{"status":"ok"}` |
+| `GET` | `/api/healthz` | `{"ok":"true"}` |
 | `POST` | `/api/sessions` | `Session` |
 | `GET` | `/api/sessions` | `SessionListResponse` |
 | `GET` | `/api/sessions/{id}` | `Session` |
+| `GET` | `/api/sessions/{id}/spec` | `SessionSpecResponse` |
+| `PUT` | `/api/sessions/{id}/spec` | `Session` |
 | `POST` | `/api/sessions/{id}/stop` | `Session` |
 | `GET` | `/api/sessions/{id}/transcript` | plain text |
 | `GET` | `/api/sessions/{id}/events` | `SessionEventsResponse` or SSE |
@@ -483,6 +485,8 @@ The storage contract is:
 ```go
 type Store interface {
     Create(req SessionCreateRequest) (*Session, error)
+    Spec(id string) (*SessionSpecResponse, error)
+    UpdateSpec(id string, req SessionSpecUpdateRequest) (*Session, error)
     List() ([]Session, error)
     Get(id string) (*Session, error)
     Stop(id string) (*Session, error)

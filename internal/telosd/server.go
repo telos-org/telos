@@ -8,11 +8,14 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sync/atomic"
 	"time"
 
 	"github.com/telos-org/telos-go/internal/sessionapi"
 )
+
+var cloudAllowedOrigin = regexp.MustCompile(`^https://.*\.usetelos\.ai$|^http://localhost(:[0-9]+)?$|^http://127\.0\.0\.1(:[0-9]+)?$`)
 
 func Run(ctx context.Context, cfg Config) error {
 	cfg, err := NormalizeConfig(cfg)
@@ -33,6 +36,9 @@ func Run(ctx context.Context, cfg Config) error {
 		lastRequest.Store(time.Now().UnixNano())
 		mux.ServeHTTP(w, r)
 	})
+	if cfg.Mode == ModeCloud {
+		handler = withCloudCORS(handler)
+	}
 	srv := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
@@ -102,6 +108,23 @@ func listen(cfg Config) (net.Listener, func(), error) {
 		}, nil
 	default:
 		return nil, func() {}, fmt.Errorf("invalid server.transport %q", cfg.Server.Transport)
+	}
+}
+
+func withCloudCORS(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if origin := r.Header.Get("Origin"); cloudAllowedOrigin.MatchString(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Credentials", "true")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+			w.Header().Add("Vary", "Origin")
+		}
+		if r.Method == http.MethodOptions {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		next.ServeHTTP(w, r)
 	}
 }
 

@@ -4,6 +4,11 @@
 // and workspace.
 package sessionapi
 
+import (
+	"encoding/json"
+	"fmt"
+)
+
 // --------- Enums ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 // SessionStatus enumerates the lifecycle states of a session.
@@ -36,6 +41,21 @@ const (
 	RuntimeCloud SessionRuntime = "cloud"
 )
 
+func (r *SessionRuntime) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	runtime := SessionRuntime(value)
+	switch runtime {
+	case RuntimeLocal, RuntimeCloud:
+		*r = runtime
+		return nil
+	default:
+		return fmt.Errorf("invalid session runtime %q", value)
+	}
+}
+
 // SessionKind distinguishes controller sessions from task sessions.
 type SessionKind string
 
@@ -61,6 +81,15 @@ type SessionCreateRequest struct {
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{id}/spec.
 type SessionSpecUpdateRequest struct {
 	SpecMarkdown string `json:"spec_markdown"`
+}
+
+// SessionSpecResponse is returned by GET /api/sessions/{id}/spec.
+type SessionSpecResponse struct {
+	DirName     string `json:"dirName"`
+	Markdown    string `json:"markdown"`
+	Environment string `json:"environment"`
+	SpecPath    string `json:"specPath"`
+	Version     *int   `json:"version,omitempty"`
 }
 
 // --------- Spec types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
