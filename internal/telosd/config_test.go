@@ -51,7 +51,7 @@ func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {
 	cfg, err := NormalizeConfig(Config{
 		Mode:       ModeCloud,
 		Token:      "operator-token",
-		AgentImage: "registry/telos-agent@sha256:abc123",
+		AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
@@ -62,8 +62,27 @@ func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {
 	if cfg.Auth.Token != "operator-token" {
 		t.Fatalf("auth.token: got %q", cfg.Auth.Token)
 	}
-	if cfg.Kubernetes.AgentImage != "registry/telos-agent@sha256:abc123" {
+	if cfg.Kubernetes.AgentImage != "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123" {
 		t.Fatalf("agent image: got %q", cfg.Kubernetes.AgentImage)
+	}
+	if cfg.Kubernetes.ImagePullSecret != "gar-pull" {
+		t.Fatalf("image pull secret: got %q", cfg.Kubernetes.ImagePullSecret)
+	}
+}
+
+func TestNormalizeCloudConfigUsesImagePullSecretEnvOverride(t *testing.T) {
+	t.Setenv("TELOS_IMAGE_PULL_SECRET", "custom-pull")
+
+	cfg, err := NormalizeConfig(Config{
+		Mode:       ModeCloud,
+		Token:      "operator-token",
+		AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
+	})
+	if err != nil {
+		t.Fatalf("NormalizeConfig: %v", err)
+	}
+	if cfg.Kubernetes.ImagePullSecret != "custom-pull" {
+		t.Fatalf("image pull secret: got %q", cfg.Kubernetes.ImagePullSecret)
 	}
 }
 

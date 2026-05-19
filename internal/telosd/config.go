@@ -164,7 +164,7 @@ func NormalizeConfig(cfg Config) (Config, error) {
 			cfg.Kubernetes.StateNodeRoot = envOr("TELOS_STATE_NODE_ROOT", "/var/telos-state")
 		}
 		if cfg.Kubernetes.ImagePullSecret == "" {
-			cfg.Kubernetes.ImagePullSecret = os.Getenv("TELOS_IMAGE_PULL_SECRET")
+			cfg.Kubernetes.ImagePullSecret = defaultImagePullSecret(cfg.Kubernetes.AgentImage)
 		}
 		if cfg.Kubernetes.AgentSecretName == "" {
 			cfg.Kubernetes.AgentSecretName = "agent-api-keys"
@@ -221,6 +221,16 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		return Config{}, fmt.Errorf("invalid server.transport %q", cfg.Server.Transport)
 	}
 	return cfg, nil
+}
+
+func defaultImagePullSecret(agentImage string) string {
+	if value := strings.TrimSpace(os.Getenv("TELOS_IMAGE_PULL_SECRET")); value != "" {
+		return value
+	}
+	if strings.Contains(agentImage, ".pkg.dev/") {
+		return "gar-pull"
+	}
+	return ""
 }
 
 func SessionsRoot(root string) string {
