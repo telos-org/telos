@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/telos-org/telos-go/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 var routeNamespaceRE = regexp.MustCompile(`\.(ns-[a-z0-9-]+)\.svc(?:\.|:|/|$)`)

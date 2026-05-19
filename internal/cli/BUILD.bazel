@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "cli",
     srcs = ["localrun.go"],
-    importpath = "github.com/telos-org/telos-go/internal/cli",
+    importpath = "github.com/telos-org/telos/internal/cli",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/executor",

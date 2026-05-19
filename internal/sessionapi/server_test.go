@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/telos-org/telos-go/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 // newTestServer returns an httptest.Server backed by a temporary FileStore.

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/telos-org/telos-go/internal/game"
+	"github.com/telos-org/telos/internal/game"
 )
 
 func TestParsePiJSONLine(t *testing.T) {

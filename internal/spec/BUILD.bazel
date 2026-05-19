@@ -13,7 +13,7 @@ go_library(
         "prompts/**/*.md",
         "skills/**",
     ]),
-    importpath = "github.com/telos-org/telos-go/internal/spec",
+    importpath = "github.com/telos-org/telos/internal/spec",
     visibility = ["//:__subpackages__"],
     deps = ["@in_gopkg_yaml_v3//:yaml_v3"],
 )

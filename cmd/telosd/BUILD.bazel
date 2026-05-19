@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_binary", "go_cross_binary", "go_library", "go_
 go_library(
     name = "telosd_lib",
     srcs = ["main.go"],
-    importpath = "github.com/telos-org/telos-go/cmd/telosd",
+    importpath = "github.com/telos-org/telos/cmd/telosd",
     visibility = ["//visibility:private"],
     deps = ["//internal/telosd"],
 )
@@ -19,7 +19,7 @@ go_binary(
     embed = [":telosd_lib"],
     visibility = ["//visibility:public"],
     x_defs = {
-        "github.com/telos-org/telos-go/cmd/telosd.Version": "{STABLE_TELOS_VERSION}",
+        "github.com/telos-org/telos/cmd/telosd.Version": "{STABLE_TELOS_VERSION}",
     },
 )
 

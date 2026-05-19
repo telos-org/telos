@@ -9,7 +9,7 @@ go_library(
         "store.go",
         "types.go",
     ],
-    importpath = "github.com/telos-org/telos-go/internal/sessionapi",
+    importpath = "github.com/telos-org/telos/internal/sessionapi",
     visibility = ["//:__subpackages__"],
     deps = ["//internal/spec"],
 )

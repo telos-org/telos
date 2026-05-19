@@ -21,7 +21,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
 
-	"github.com/telos-org/telos-go/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 type kubernetesSubstrate struct {

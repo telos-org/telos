@@ -17,7 +17,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/telos-org/telos-go/internal/spec"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 // ErrNotFound is returned when a session or artifact does not exist.

@@ -9,7 +9,7 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/telos-org/telos-go/internal/telosd"
+	"github.com/telos-org/telos/internal/telosd"
 )
 
 // Version is set at build time.

@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/telos-org/telos-go/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 var cloudAllowedOrigin = regexp.MustCompile(`^https://.*\.usetelos\.ai$|^http://localhost(:[0-9]+)?$|^http://127\.0\.0\.1(:[0-9]+)?$`)

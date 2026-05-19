@@ -13,7 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
-	"github.com/telos-org/telos-go/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {

@@ -8,7 +8,7 @@ go_library(
         "transcript.go",
         "types.go",
     ],
-    importpath = "github.com/telos-org/telos-go/internal/game",
+    importpath = "github.com/telos-org/telos/internal/game",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/evidence",

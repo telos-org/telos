@@ -1,10 +1,12 @@
-# telos-go
+# Telos
 
-Standalone Go port of the Telos OSS runtime.
+Telos is a spec-driven agent runtime. A user writes `SPEC.md`; Telos runs
+agents against the live system until the observable behavior satisfies the
+spec.
 
-The goal is one portable `telos` binary for local execution and cloud
-Sessions API compatibility. The Go runtime does not import or execute the
-Python Telos package.
+This repository contains the canonical OSS runtime: one portable `telos`
+binary for local execution, hosted session submission, and environment-local
+Sessions API serving through `telosd`.
 
 The runtime mental model is documented in
 [`docs/sessions-api/SPEC.md`](docs/sessions-api/SPEC.md). That document is the
@@ -84,3 +86,8 @@ the hosted control plane, frontend, provisioning, and billing surface.
 
 Python Telos remains useful as historical reference while the product surface
 hardens, but new runtime work should land here.
+
+## License
+
+Functional Source License, Version 1.1, ALv2 Future License. See
+[LICENSE](LICENSE).

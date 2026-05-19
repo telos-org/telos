@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/telos-org/telos-go/internal/spec"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 // fakeExecutor simulates prover/verifier turns.

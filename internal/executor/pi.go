@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/telos-org/telos-go/internal/game"
-	"github.com/telos-org/telos-go/internal/platform"
+	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/platform"
 )
 
 // PiExecutor runs Pi as one PVG agent turn on the given LocalPlatform.

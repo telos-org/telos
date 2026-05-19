@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/telos-org/telos-go/internal/cloud"
-	"github.com/telos-org/telos-go/internal/config"
+	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
 )
 
 // -- login --------------------------------------------------------------------

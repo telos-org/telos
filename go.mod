@@ -1,4 +1,4 @@
-module github.com/telos-org/telos-go
+module github.com/telos-org/telos
 
 go 1.26.3
 

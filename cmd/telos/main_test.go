@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/telos-org/telos-go/internal/config"
-	"github.com/telos-org/telos-go/internal/sessionapi"
+	"github.com/telos-org/telos/internal/config"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func TestReorderInterspersedFlags(t *testing.T) {

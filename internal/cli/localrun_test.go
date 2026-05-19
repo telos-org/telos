@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/telos-org/telos-go/internal/game"
-	"github.com/telos-org/telos-go/internal/sessionapi"
+	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 // fakeExecutor for testing local run.

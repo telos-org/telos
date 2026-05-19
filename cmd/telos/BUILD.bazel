@@ -6,7 +6,7 @@ go_library(
         ["*.go"],
         exclude = ["*_test.go"],
     ),
-    importpath = "github.com/telos-org/telos-go/cmd/telos",
+    importpath = "github.com/telos-org/telos/cmd/telos",
     visibility = ["//visibility:private"],
     deps = [
         "//internal/cli",
@@ -22,7 +22,7 @@ go_binary(
     embed = [":telos_lib"],
     visibility = ["//visibility:public"],
     x_defs = {
-        "github.com/telos-org/telos-go/cmd/telos.Version": "{STABLE_TELOS_VERSION}",
+        "github.com/telos-org/telos/cmd/telos.Version": "{STABLE_TELOS_VERSION}",
     },
 )
 

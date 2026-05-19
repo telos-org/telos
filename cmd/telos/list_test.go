@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/telos-org/telos-go/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func TestVisibleListSessionsHidesChildSessionsByDefault(t *testing.T) {

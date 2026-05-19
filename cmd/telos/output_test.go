@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/telos-org/telos-go/internal/cloud"
+	"github.com/telos-org/telos/internal/cloud"
 )
 
 func TestEnvironmentOutputDoesNotExposeAccessToken(t *testing.T) {

@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/telos-org/telos-go/internal/cli"
+	"github.com/telos-org/telos/internal/cli"
 )
 
 type boolFlag interface {

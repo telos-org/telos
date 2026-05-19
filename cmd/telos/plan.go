@@ -6,8 +6,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/telos-org/telos-go/internal/config"
-	"github.com/telos-org/telos-go/internal/spec"
+	"github.com/telos-org/telos/internal/config"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 // -- plan ---------------------------------------------------------------------

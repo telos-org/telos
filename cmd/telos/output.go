@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"os"
 
-	"github.com/telos-org/telos-go/internal/cloud"
+	"github.com/telos-org/telos/internal/cloud"
 )
 
 func printJSON(v interface{}) {

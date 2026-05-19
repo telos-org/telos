@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/telos-org/telos-go/internal/cli"
-	"github.com/telos-org/telos-go/internal/game"
-	"github.com/telos-org/telos-go/internal/sessionapi"
+	"github.com/telos-org/telos/internal/cli"
+	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func RunSessionWorker(sessionDir string, once bool) (int, error) {

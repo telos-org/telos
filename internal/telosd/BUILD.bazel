@@ -12,7 +12,7 @@ go_library(
         "topology.go",
         "worker.go",
     ],
-    importpath = "github.com/telos-org/telos-go/internal/telosd",
+    importpath = "github.com/telos-org/telos/internal/telosd",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/cli",

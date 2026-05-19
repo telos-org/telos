@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "cloud",
     srcs = ["client.go"],
-    importpath = "github.com/telos-org/telos-go/internal/cloud",
+    importpath = "github.com/telos-org/telos/internal/cloud",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/config",

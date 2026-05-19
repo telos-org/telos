@@ -1,5 +1,5 @@
 module(
-    name = "telos_go",
+    name = "telos",
     version = "0.0.0",
 )
 

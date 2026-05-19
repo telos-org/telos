@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/telos-org/telos-go/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func TestNormalizeEndpoint(t *testing.T) {

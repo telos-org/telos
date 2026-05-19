@@ -5,7 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/telos-org/telos-go/internal/telosd"
+	"github.com/telos-org/telos/internal/telosd"
 )
 
 func TestConfigFromFlagsDefaultsToLocal(t *testing.T) {

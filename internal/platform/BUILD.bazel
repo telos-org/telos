@@ -3,7 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "platform",
     srcs = ["platform.go"],
-    importpath = "github.com/telos-org/telos-go/internal/platform",
+    importpath = "github.com/telos-org/telos/internal/platform",
     visibility = ["//:__subpackages__"],
 )
 

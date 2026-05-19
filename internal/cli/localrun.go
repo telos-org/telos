@@ -9,11 +9,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/telos-org/telos-go/internal/executor"
-	"github.com/telos-org/telos-go/internal/game"
-	"github.com/telos-org/telos-go/internal/platform"
-	"github.com/telos-org/telos-go/internal/sessionapi"
-	"github.com/telos-org/telos-go/internal/spec"
+	"github.com/telos-org/telos/internal/executor"
+	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/platform"
+	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 const DefaultLocalModel = "claude-opus-4-6"

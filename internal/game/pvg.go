@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/telos-org/telos-go/internal/evidence"
-	"github.com/telos-org/telos-go/internal/spec"
+	"github.com/telos-org/telos/internal/evidence"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 // PVG runs the prover-verifier loop for one compiled environment.

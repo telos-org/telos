@@ -6,11 +6,11 @@ import (
 	"os"
 	"time"
 
-	"github.com/telos-org/telos-go/internal/cli"
-	"github.com/telos-org/telos-go/internal/cloud"
-	"github.com/telos-org/telos-go/internal/config"
-	"github.com/telos-org/telos-go/internal/sessionapi"
-	"github.com/telos-org/telos-go/internal/spec"
+	"github.com/telos-org/telos/internal/cli"
+	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
+	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 // -- run ----------------------------------------------------------------------
