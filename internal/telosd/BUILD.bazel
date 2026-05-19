@@ -3,7 +3,9 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "telosd",
     srcs = [
+        "cloud_store.go",
         "config.go",
+        "route_handles.go",
         "server.go",
         "worker.go",
     ],
@@ -21,6 +23,7 @@ go_test(
     name = "telosd_test",
     srcs = [
         "config_test.go",
+        "route_handles_test.go",
         "server_test.go",
         "worker_test.go",
     ],

@@ -26,9 +26,13 @@ func Run(ctx context.Context, cfg Config) error {
 		return fmt.Errorf("create sessions root: %w", err)
 	}
 
-	store := storeForConfig(cfg)
+	baseStore := storeForConfig(cfg)
+	store := sessionapi.Store(baseStore)
+	if cfg.Mode == ModeCloud {
+		store = newCloudSessionStore(baseStore, newRouteHandleResolver())
+	}
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store, authorizerForConfig(cfg, store))
+	sessionapi.RegisterRoutes(mux, store, authorizerForConfig(cfg, baseStore))
 
 	var lastRequest atomic.Int64
 	lastRequest.Store(time.Now().UnixNano())
@@ -57,7 +61,7 @@ func Run(ctx context.Context, cfg Config) error {
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 	if cfg.Mode == ModeLocal && cfg.Server.IdleSeconds > 0 {
-		go idleShutdown(ctx, srv, store, &lastRequest, time.Duration(cfg.Server.IdleSeconds)*time.Second)
+		go idleShutdown(ctx, srv, baseStore, &lastRequest, time.Duration(cfg.Server.IdleSeconds)*time.Second)
 	}
 
 	if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
