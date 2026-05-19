@@ -32,10 +32,12 @@ gcloud storage cp "${dist}/SHA256SUMS" "gs://${bucket}/releases/latest/SHA256SUM
   --cache-control="no-cache,max-age=0"
 gcloud storage cp "${dist}/manifest.json" "gs://${bucket}/releases/latest/manifest.json" \
   --cache-control="no-cache,max-age=0"
+gcloud storage cp "${dist}/install.sh" "gs://${bucket}/releases/latest/install.sh" \
+  --cache-control="no-cache,max-age=0"
 
 gcloud storage buckets add-iam-policy-binding "gs://${bucket}" \
   --member=allUsers \
   --role=roles/storage.objectViewer \
   --project "${project}" >/dev/null
 
-echo "https://storage.googleapis.com/${bucket}/releases/${version}/manifest.json"
+echo "https://usetelos.ai/releases/${version}/manifest.json"
