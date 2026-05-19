@@ -201,7 +201,7 @@ func TestCloudCreateSessionCreatesControllerForOperatorApply(t *testing.T) {
 	}
 }
 
-func TestCloudCreateSessionRejectsDuplicateNonStoppedController(t *testing.T) {
+func TestCloudCreateSessionRejectsDuplicateLiveController(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
@@ -215,6 +215,40 @@ func TestCloudCreateSessionRejectsDuplicateNonStoppedController(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "controller spec \"postgres\" already exists") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCloudCreateSessionIgnoresFailedControllerHistory(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("first create: %v", err)
+	}
+	manifestPath := filepath.Join(root, session.SessionID, "session.json")
+	m, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	finishedAt := "2026-05-19T00:00:00Z"
+	result := "failed"
+	m.Epochs = append(m.Epochs, sessionapi.Epoch{
+		ID:         1,
+		StartedAt:  "2026-05-19T00:00:00Z",
+		FinishedAt: &finishedAt,
+		Result:     &result,
+	})
+	if err := sessionapi.WriteManifest(manifestPath, m); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	recreated, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("recreate after failed history: %v", err)
+	}
+	if recreated.SessionID == session.SessionID {
+		t.Fatal("expected a new session")
 	}
 }
 

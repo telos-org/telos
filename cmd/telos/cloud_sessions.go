@@ -8,6 +8,11 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
+type cloudSessionTarget struct {
+	client *cloud.Client
+	env    cloud.Environment
+}
+
 func cloudSessionClientForRun(
 	envID string,
 	waitForEnvironment bool,
@@ -42,13 +47,13 @@ func cloudSessionClientForRun(
 }
 
 func listCloudSessions(envID string, limit int) ([]sessionapi.Session, error) {
-	clients, err := cloudSessionClients(envID)
+	targets, err := cloudSessionTargets(envID)
 	if err != nil {
 		return nil, err
 	}
 	var sessions []sessionapi.Session
-	for _, client := range clients {
-		found, err := client.ListSessions(limit)
+	for _, target := range targets {
+		found, err := target.client.ListSessions(limit)
 		if err != nil {
 			if envID != "" {
 				return nil, err
@@ -61,12 +66,24 @@ func listCloudSessions(envID string, limit int) ([]sessionapi.Session, error) {
 }
 
 func cloudSessionClients(envID string) ([]*cloud.Client, error) {
+	targets, err := cloudSessionTargets(envID)
+	if err != nil {
+		return nil, err
+	}
+	clients := make([]*cloud.Client, 0, len(targets))
+	for _, target := range targets {
+		clients = append(clients, target.client)
+	}
+	return clients, nil
+}
+
+func cloudSessionTargets(envID string) ([]cloudSessionTarget, error) {
 	if envID != "" {
-		client, _, err := cloud.NewEnvironmentClient(envID)
+		client, env, err := cloud.NewEnvironmentClient(envID)
 		if err != nil {
 			return nil, err
 		}
-		return []*cloud.Client{client}, nil
+		return []cloudSessionTarget{{client: client, env: *env}}, nil
 	}
 
 	control, err := cloud.ControlClient()
@@ -77,7 +94,7 @@ func cloudSessionClients(envID string) ([]*cloud.Client, error) {
 	if err != nil {
 		return nil, err
 	}
-	var clients []*cloud.Client
+	var targets []cloudSessionTarget
 	for _, env := range envs {
 		if env.ID == "" || env.Handle == "" || env.State == "torn-down" {
 			continue
@@ -99,7 +116,11 @@ func cloudSessionClients(envID string) ([]*cloud.Client, error) {
 				return nil, err
 			}
 		}
-		clients = append(clients, cloud.NewClient("https://"+env.Handle, access.Token))
+		env.AccessToken = access.Token
+		targets = append(targets, cloudSessionTarget{
+			client: cloud.NewClient("https://"+env.Handle, access.Token),
+			env:    env,
+		})
 	}
-	return clients, nil
+	return targets, nil
 }

@@ -272,7 +272,9 @@ func TestActiveControllerForSpec(t *testing.T) {
 		{SessionID: "sess_task", SessionKind: &task, SpecName: &target, Status: sessionapi.StatusRunning},
 		{SessionID: "sess_old", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusStopped},
 		{SessionID: "sess_other", SessionKind: &controller, SpecName: &other, Status: sessionapi.StatusScheduled},
-		{SessionID: "sess_target", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusCompleted},
+		{SessionID: "sess_done", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusCompleted},
+		{SessionID: "sess_failed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusFailed},
+		{SessionID: "sess_target", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusRunning},
 	}
 
 	match, err := activeControllerForSpec(sessions, "postgres")
@@ -280,6 +282,25 @@ func TestActiveControllerForSpec(t *testing.T) {
 		t.Fatalf("activeControllerForSpec: %v", err)
 	}
 	if match == nil || match.SessionID != "sess_target" {
+		t.Fatalf("match: got %#v", match)
+	}
+}
+
+func TestActiveControllerForSpecIgnoresTerminalSessions(t *testing.T) {
+	controller := sessionapi.KindController
+	target := "postgres"
+	sessions := []sessionapi.Session{
+		{SessionID: "sess_completed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusCompleted},
+		{SessionID: "sess_failed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusFailed},
+		{SessionID: "sess_stopped", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusStopped},
+		{SessionID: "sess_stale", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusStale},
+	}
+
+	match, err := activeControllerForSpec(sessions, "postgres")
+	if err != nil {
+		t.Fatalf("activeControllerForSpec: %v", err)
+	}
+	if match != nil {
 		t.Fatalf("match: got %#v", match)
 	}
 }
@@ -296,8 +317,58 @@ func TestActiveControllerForSpecRejectsDuplicates(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected duplicate active controllers to fail")
 	}
-	if !strings.Contains(err.Error(), "multiple non-stopped controller sessions") {
+	if !strings.Contains(err.Error(), "multiple active controller sessions") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestControllerForApplyRecoversFailedController(t *testing.T) {
+	controller := sessionapi.KindController
+	target := "postgres"
+	sessions := []sessionapi.Session{
+		{SessionID: "sess_failed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusFailed},
+	}
+
+	match, err := controllerForApply(sessions, "postgres")
+	if err != nil {
+		t.Fatalf("controllerForApply: %v", err)
+	}
+	if match == nil || match.SessionID != "sess_failed" {
+		t.Fatalf("match: got %#v", match)
+	}
+}
+
+func TestControllerForApplyPrefersActiveController(t *testing.T) {
+	controller := sessionapi.KindController
+	target := "postgres"
+	sessions := []sessionapi.Session{
+		{SessionID: "sess_failed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusFailed},
+		{SessionID: "sess_active", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusRunning},
+	}
+
+	match, err := controllerForApply(sessions, "postgres")
+	if err != nil {
+		t.Fatalf("controllerForApply: %v", err)
+	}
+	if match == nil || match.SessionID != "sess_active" {
+		t.Fatalf("match: got %#v", match)
+	}
+}
+
+func TestControllerForApplyIgnoresStoppedAndCompletedHistory(t *testing.T) {
+	controller := sessionapi.KindController
+	target := "postgres"
+	sessions := []sessionapi.Session{
+		{SessionID: "sess_stopped", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusStopped},
+		{SessionID: "sess_completed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusCompleted},
+	}
+
+	match, err := controllerForApply(sessions, "postgres")
+	if err != nil {
+		t.Fatalf("controllerForApply: %v", err)
+	}
+	if match != nil {
+		t.Fatalf("match: got %#v", match)
 	}
 }
 

@@ -214,6 +214,10 @@ func runCloud(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	if command == "apply" && envID == "" {
+		applyCloudAuto(req, jsonOut, waitForEnvironment, readyTimeout, action)
+		return
+	}
 	client, env, err := cloudSessionClientForRun(envID, waitForEnvironment, readyTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -258,7 +262,7 @@ func applyCloud(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	existing, err := activeControllerForSpec(sessions, specName)
+	existing, err := controllerForApply(sessions, specName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -292,6 +296,86 @@ func applyCloud(
 	}
 }
 
+type applyCloudResult struct {
+	Environment *environmentJSON    `json:"environment,omitempty"`
+	Operation   string              `json:"operation"`
+	Session     *sessionapi.Session `json:"session"`
+}
+
+func applyCloudAuto(
+	req sessionapi.SessionCreateRequest,
+	jsonOut bool,
+	waitForEnvironment bool,
+	readyTimeout time.Duration,
+	action string,
+) {
+	specName, err := specNameFromRequest(req)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	targets, err := cloudSessionTargets("")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	var results []applyCloudResult
+	for _, target := range targets {
+		sessions, err := target.client.ListSessions(0)
+		if err != nil {
+			continue
+		}
+		existing, err := controllerForApply(sessions, specName)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %s: %v\n", target.env.ID, err)
+			os.Exit(1)
+		}
+		if existing == nil {
+			continue
+		}
+		session, err := target.client.UpdateSessionSpec(existing.SessionID, sessionapi.SessionSpecUpdateRequest{
+			SpecMarkdown: *req.SpecMarkdown,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %s: %v\n", target.env.ID, err)
+			os.Exit(1)
+		}
+		env := environmentJSONFrom(&target.env)
+		results = append(results, applyCloudResult{
+			Environment: &env,
+			Operation:   "updated",
+			Session:     session,
+		})
+	}
+	if len(results) == 0 {
+		client, env, err := cloudSessionClientForRun("", waitForEnvironment, readyTimeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		session, err := client.CreateSession(req)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		results = append(results, applyCloudResult{
+			Environment: environmentOutput(env),
+			Operation:   "created",
+			Session:     session,
+		})
+	}
+	if jsonOut {
+		printJSON(map[string]any{"results": results})
+		return
+	}
+	for _, result := range results {
+		fmt.Printf("%s %s (status: %s, %s)\n", action, result.Session.SessionID, result.Session.Status, result.Operation)
+		if result.Environment != nil {
+			fmt.Printf("environment %s %s\n", result.Environment.ID, result.Environment.Handle)
+		}
+	}
+}
+
 func specNameFromRequest(req sessionapi.SessionCreateRequest) (string, error) {
 	if req.SpecMarkdown == nil {
 		return "", fmt.Errorf("spec_markdown is required")
@@ -310,13 +394,10 @@ func specNameFromRequest(req sessionapi.SessionCreateRequest) (string, error) {
 func activeControllerForSpec(sessions []sessionapi.Session, specName string) (*sessionapi.Session, error) {
 	var matches []sessionapi.Session
 	for _, session := range sessions {
-		if session.SessionKind == nil || *session.SessionKind != sessionapi.KindController {
+		if !isControllerNamed(session, specName) {
 			continue
 		}
-		if session.SpecName == nil || *session.SpecName != specName {
-			continue
-		}
-		if session.Status == sessionapi.StatusStopped {
+		if session.Status.IsTerminal() {
 			continue
 		}
 		matches = append(matches, session)
@@ -327,6 +408,38 @@ func activeControllerForSpec(sessions []sessionapi.Session, specName string) (*s
 	case 1:
 		return &matches[0], nil
 	default:
-		return nil, fmt.Errorf("multiple non-stopped controller sessions named %q; stop duplicates before applying", specName)
+		return nil, fmt.Errorf("multiple active controller sessions named %q; stop duplicates before applying", specName)
 	}
+}
+
+func controllerForApply(sessions []sessionapi.Session, specName string) (*sessionapi.Session, error) {
+	active, err := activeControllerForSpec(sessions, specName)
+	if err != nil || active != nil {
+		return active, err
+	}
+	var recoverable []sessionapi.Session
+	for _, session := range sessions {
+		if !isControllerNamed(session, specName) {
+			continue
+		}
+		switch session.Status {
+		case sessionapi.StatusFailed, sessionapi.StatusStale:
+			recoverable = append(recoverable, session)
+		}
+	}
+	switch len(recoverable) {
+	case 0:
+		return nil, nil
+	case 1:
+		return &recoverable[0], nil
+	default:
+		return nil, fmt.Errorf("multiple failed/stale controller sessions named %q; stop duplicates before applying", specName)
+	}
+}
+
+func isControllerNamed(session sessionapi.Session, specName string) bool {
+	return session.SessionKind != nil &&
+		*session.SessionKind == sessionapi.KindController &&
+		session.SpecName != nil &&
+		*session.SpecName == specName
 }

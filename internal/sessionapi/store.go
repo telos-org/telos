@@ -95,7 +95,7 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	specName := prepared.Name
 	sessionKind := fs.sessionKindForCreate(req)
 	if sessionKind == KindController {
-		ids, err := fs.nonStoppedControllerIDsBySpecName(specName)
+		ids, err := fs.liveControllerIDsBySpecName(specName)
 		if err != nil {
 			return nil, err
 		}
@@ -174,7 +174,7 @@ func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) SessionKind 
 	return KindTask
 }
 
-func (fs *FileStore) nonStoppedControllerIDsBySpecName(specName string) ([]string, error) {
+func (fs *FileStore) liveControllerIDsBySpecName(specName string) ([]string, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -194,7 +194,7 @@ func (fs *FileStore) nonStoppedControllerIDsBySpecName(specName string) ([]strin
 		if m.SessionKind != KindController || m.SpecName != specName {
 			continue
 		}
-		if deriveStatus(m) == StatusStopped {
+		if deriveStatus(m).IsTerminal() {
 			continue
 		}
 		ids = append(ids, m.SessionID)
