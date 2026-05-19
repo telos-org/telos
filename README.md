@@ -1,32 +1,91 @@
 # Telos
 
-Telos is a spec-driven agent runtime. A user writes `SPEC.md`; Telos runs
-agents against the live system until the observable behavior satisfies the
-spec.
+Telos turns `SPEC.md` into verified operated software.
 
-This repository contains the canonical OSS runtime: one portable `telos`
-binary for local execution, hosted session submission, and environment-local
-Sessions API serving through `telosd`.
+A spec describes the desired outcome. Telos runs agents against the live system,
+records evidence, and keeps iterating until the observable behavior satisfies
+the spec.
+
+This repository contains the public source-available runtime: one portable
+`telos` binary for local execution, hosted session submission, and
+environment-local Sessions API serving through `telosd`.
+
+## Install
+
+```bash
+curl -fsSL https://usetelos.ai/install.sh | sh
+```
+
+The installer downloads the latest checksummed release artifacts for your
+platform and installs `telos` and `telosd` into `~/.local/bin` by default.
+
+## Use
+
+Write a `SPEC.md` that states the outcome you want:
+
+```markdown
+# Postgres
+
+Run PostgreSQL with durable storage, a public dashboard, and evidence that the
+database accepts authenticated SQL connections.
+```
+
+Launch it:
+
+```bash
+telos apply SPEC.md --env env_123
+```
+
+Inspect the session:
+
+```bash
+telos list
+telos describe <session-id>
+telos logs <session-id>
+telos stop <session-id>
+```
+
+For local execution, use `run`:
+
+```bash
+telos run SPEC.md --workspace .
+```
+
+Local live runs require `pi` on `PATH` and model credentials configured for Pi.
+Hosted runs require `telos login`.
+
+## Runtime Model
+
+```text
+SPEC.md -> telos CLI -> telosd -> session -> PVG -> live system
+```
+
+The same spec acts as both the outcome contract and the grading rubric. The
+prover tries to make the world satisfy the spec; the verifier reads the same
+spec as judgment criteria and rejects weak satisfaction.
+
+Sessions persist evidence, transcripts, workspaces, product handles, status,
+and progress events. The live system remains the source of truth.
 
 The runtime mental model is documented in
-[`docs/sessions-api/SPEC.md`](docs/sessions-api/SPEC.md). That document is the
-source of truth for freezing Python Telos semantics and carrying them into Go.
+[`docs/sessions-api/SPEC.md`](docs/sessions-api/SPEC.md).
 
-## What Works
+## Develop
 
-- `telos plan`, `apply`, `run`, `list`, `describe`, `logs`, `stop`, `login`, `--version`.
-- SPEC.md parsing with YAML frontmatter and markdown body.
-- Built-in prompt and skill embedding with `go:embed`.
-- Skill resolution, including emphasized verifier skills such as
-  `verify-engineering*`.
-- Prover-verifier game loop.
-- Pi JSON-mode executor integration.
-- Local process execution with process-group timeout handling.
-- File-backed sessions under `.telos/sessions/<session_id>`.
-- Evidence JSONL, PVG transcript, runner turns, and workspace checkpoints.
-- Local Sessions API route handlers.
-- Cloud Sessions API client models.
-- Cloud environment selection with raw SPEC.md submission.
+Use Bazel as the canonical build and release path:
+
+```bash
+bazel test //...
+bazel build //cmd/telos:telos //cmd/telosd:telosd
+scripts/build-release.sh v0.0.0
+```
+
+Native Go commands are useful for quick local checks:
+
+```bash
+go test ./...
+go build ./cmd/telos ./cmd/telosd
+```
 
 ## Package Map
 
@@ -44,41 +103,7 @@ source of truth for freezing Python Telos semantics and carrying them into Go.
 | `internal/config` | `~/.telos` config compatibility |
 | `internal/cli` | Local session creation and run orchestration |
 
-## Build And Test
-
-Use Bazel as the canonical build and release path:
-
-```bash
-bazel test //...
-bazel build //cmd/telos:telos //cmd/telosd:telosd
-scripts/build-release.sh v0.0.0
-```
-
-Native Go commands are still useful for quick local sanity checks:
-
-```bash
-go build ./cmd/telos ./cmd/telosd
-go vet ./...
-go test ./...
-```
-
-## Run
-
-```bash
-go run ./cmd/telos plan path/to/SPEC.md
-go run ./cmd/telos apply path/to/SPEC.md --env env_123
-go run ./cmd/telos run path/to/SPEC.md --workspace .
-go run ./cmd/telos list
-go run ./cmd/telos describe SESSION_ID
-go run ./cmd/telos logs SESSION_ID
-go run ./cmd/telos stop SESSION_ID
-go run ./cmd/telos --version
-```
-
-Local live runs require `pi` on `PATH` and model credentials configured for Pi.
-The test suite uses fake executors and does not require live model credentials.
-
-## Current Status
+## Boundary
 
 The Go runtime is the canonical environment-local runtime. Managed Telos
 environments run `telosd --config /etc/telos/telosd.yaml`; the cloud repo keeps
