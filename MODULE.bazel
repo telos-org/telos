@@ -1,6 +1,6 @@
 module(
     name = "telos_go",
-    version = "0.0.0",
+    version = "0.0.1",
 )
 
 bazel_dep(name = "rules_go", version = "0.60.0")
