@@ -35,7 +35,7 @@ Examples:
 - `/workspace/output/backups/postgres.dump`
 - `/workspace/output/backups/openbao.snap`
 
-The artifact path should be easy for the verifier to inspect.
+The artifact path should be easy for the evaluator to inspect.
 
 ## Product Patterns
 

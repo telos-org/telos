@@ -7,7 +7,6 @@ description: |
   with no direct error in container logs.
 metadata:
   category: fault-injection
-  role: environment-generator
   difficulty: hard
   source: cloud-opsbench
   author: telos

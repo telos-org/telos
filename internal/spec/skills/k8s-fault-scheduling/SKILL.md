@@ -7,7 +7,6 @@ description: |
   understanding scheduler constraints.
 metadata:
   category: fault-injection
-  role: environment-generator
   difficulty: medium
   source: cloud-opsbench
   author: telos

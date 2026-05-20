@@ -8,7 +8,6 @@ description: |
   with host access on the target node.
 metadata:
   category: fault-injection
-  role: environment-generator
   difficulty: hard
   author: telos
 allowed-tools: Bash(kubectl:*)

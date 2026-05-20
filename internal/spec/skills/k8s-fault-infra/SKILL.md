@@ -7,7 +7,6 @@ description: |
   Requires chaos tooling (ChaosBlade/tc/stress-ng) beyond kubectl.
 metadata:
   category: fault-injection
-  role: environment-generator
   difficulty: hard
   source: cloud-opsbench
   author: telos

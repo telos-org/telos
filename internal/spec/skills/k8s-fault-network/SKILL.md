@@ -7,7 +7,6 @@ description: |
   and network policy evaluation.
 metadata:
   category: fault-injection
-  role: environment-generator
   difficulty: medium
   source: cloud-opsbench
   author: telos

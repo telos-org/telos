@@ -12,7 +12,7 @@ func TestLoadSkill(t *testing.T) {
 	skillDir := filepath.Join(dir, "test-skill")
 	os.MkdirAll(skillDir, 0o755)
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(
-		"---\nname: test-skill\ndescription: A test skill for testing\n---\n# Instructions\n\nDo stuff."), 0o644)
+		"---\nname: test-skill\ndescription: A test skill for testing\ncategory: testing\nrole: ignored\n---\n# Instructions\n\nDo stuff."), 0o644)
 
 	s, err := LoadSkill(skillDir)
 	if err != nil {
@@ -26,6 +26,9 @@ func TestLoadSkill(t *testing.T) {
 	}
 	if !strings.Contains(s.Instructions, "Do stuff.") {
 		t.Errorf("instructions: got %q", s.Instructions)
+	}
+	if len(s.Tags) != 1 || s.Tags[0] != "testing" {
+		t.Errorf("tags should include category only, got %#v", s.Tags)
 	}
 }
 

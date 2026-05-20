@@ -114,7 +114,7 @@ shared state:
 - `frontier.py --parent $TELOS_SESSION_ID` — descendants
   classified as passing, deepening, frontier, or failing; the
   right first view when surveying your own lineage
-- `evidence.py <session_id>` — round-by-round prover/verifier
+- `evidence.py <session_id>` — round-by-round implementation/evaluation
   progress updates, findings, and cost per turn for one session
 - `workspace.py <session_id>` — what a task actually wrote:
   GitOps compliance, manifests, git log, file tree

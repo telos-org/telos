@@ -2,11 +2,10 @@
 name: backend-design
 description: |
   Backend API, lifecycle, and state-machine design standards for Telos specs.
-  Use as a verifier rubric when the artifact is an API contract, daemon,
+  Use as an evaluation rubric when the artifact is an API contract, daemon,
   controller, reconciler, scheduler, or runtime boundary.
 metadata:
   category: design
-  role: verifier
   author: telos
 allowed-tools: Bash(*) Read(*) Write(*) Edit(*)
 ---

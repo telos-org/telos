@@ -7,7 +7,6 @@ description: |
   blank pages, and API integration failures that curl cannot detect.
 metadata:
   category: verification
-  role: any
   author: telos
 allowed-tools: Bash(chromium:*) Bash(python3:*) Bash(playwright:*)
 ---
@@ -125,7 +124,7 @@ assert items > 0, "No data items rendered"
 
 ## Step 4: Screenshot as Evidence
 
-Always take screenshots. They prove to the prover exactly what's broken.
+Always take screenshots. They prove exactly what is broken.
 
 ```python
 # Desktop
@@ -174,4 +173,4 @@ with sync_playwright() as p:
 - Always `wait_for_timeout(2000-3000)` after navigation for React hydration
 - Service URLs use K8s DNS: `http://service.namespace.svc.cluster.local:port`
 - Screenshots go to `/workspace/output/` as evidence
-- The prover should ALSO use Playwright to test before declaring CONTINUE
+- The implementation agent should also use Playwright before declaring progress

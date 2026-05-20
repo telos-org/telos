@@ -75,7 +75,7 @@ Promotion is for incidents or evolutions with evidence of real frontier value.
 Usually promote when one of these is true:
 
 - the solver failed a reconcile or recovery attempt on a real weakness
-- the solver succeeded only after multiple PVG rounds
+- the solver succeeded only after multiple implementation/evaluation rounds
 - the solver succeeded, but only at unusually high cost
 - a low-information short-budget solve is weak while a longer-budget solve is
   materially better
@@ -322,7 +322,7 @@ Record:
 - success or failure
 - rounds
 - cost
-- verifier findings
+- evaluator findings
 - whether replay stayed intact
 
 Promote when short-budget performance is weak but longer-budget performance is

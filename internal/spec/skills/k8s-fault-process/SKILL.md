@@ -8,7 +8,6 @@ description: |
   DaemonSet for cgroups/eBPF, libfaketime for clock faults.
 metadata:
   category: fault-injection
-  role: environment-generator
   difficulty: hard
   author: telos
 allowed-tools: Bash(kubectl:*)

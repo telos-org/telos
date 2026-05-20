@@ -13,9 +13,10 @@ allowed-tools: Bash(*) Read(*) Write(*) Edit(*)
 
 # Telos Operator
 
-Telos runs a prover-verifier game (PVG) against a spec you write. The prover
-tries to satisfy the spec; the verifier tries to falsify the claim. A run
-succeeds only when the verifier concedes.
+Telos runs a spec-driven implementation/evaluation loop against a spec you
+write. The implementation turns try to satisfy the spec; the evaluation turns
+judge the delivered work against the contract. A run succeeds only when
+evaluation concedes.
 
 Your job as operator: write a spec that says what must be true, launch the run,
 and inspect the result to decide whether the goal was actually met.
@@ -32,8 +33,8 @@ that declares the desired end state.
 - Constraints that must not be violated (performance, compatibility, style).
 - What would falsify success (regressions, missing coverage, broken interfaces).
 
-Do not write a numbered todo list of implementation steps. The prover decides
-how to get there. If a specific procedure is genuinely part of the contract
+Do not write a numbered todo list of implementation steps. The implementation
+agent decides how to get there. If a specific procedure is genuinely part of the contract
 (e.g., "the migration must be applied via `alembic upgrade head`"), include it
 — but most specs should not dictate implementation.
 
@@ -109,16 +110,16 @@ broken imports, and the CLI entrypoint loads.
 - No lint rules may be disabled inline to pass `ruff check`.
 ```
 
-### Example: PVG evidence quality
+### Example: session evidence quality
 
 ```markdown
 ---
 version: v0
-name: pvg-evidence-quality
+name: session-evidence-quality
 platform: local
 ---
 
-# PVG Evidence Quality
+# Session Evidence Quality
 
 After running the hello-world spec locally, the session directory must
 contain well-formed evidence that a future auditor can replay.
@@ -128,8 +129,8 @@ contain well-formed evidence that a future auditor can replay.
 - `evidence.jsonl` exists and every line is valid JSON.
 - At least one `game_start`, one `round_start`, and one
   `agent_complete` event are present.
-- `pvg-transcript-*.md` exists and contains at least one prover entry
-  and one verifier entry.
+- `transcript-*.md` exists and contains at least one implementation entry
+  and one evaluation entry.
 - `workspace.tar.gz` exists and contains `hello.txt`.
 
 ## Falsification
@@ -200,7 +201,7 @@ agent needs to consume it.
 uv run telos logs -f <session-id>
 ```
 
-Logs are the PVG transcript: what the prover claimed and what the verifier
+Logs are the Telos transcript: what implementation claimed and what evaluation
 found. They are not the same as evidence events.
 
 ### List sessions
@@ -225,7 +226,7 @@ After a run, session artifacts live at:
   specs/<spec_name>/
     spec.md                 # runtime copy of the spec
     evidence.jsonl           # structured event log (game_start, round_start, agent_complete, …)
-    pvg-transcript-*.md      # append-only prover/verifier dialogue
+    transcript-*.md          # append-only session dialogue
     workspace.tar.gz         # snapshot of the workspace at session end
 ```
 
@@ -241,8 +242,8 @@ cat .telos/sessions/<session_id>/session.json | python3 -m json.tool
 # Scan evidence events
 jq -c '.type // .event' .telos/sessions/<session_id>/specs/<spec_name>/evidence.jsonl
 
-# Read the PVG transcript (prover claims + verifier findings)
-cat .telos/sessions/<session_id>/specs/<spec_name>/pvg-transcript-*.md
+# Read the Telos transcript (implementation claims + evaluator findings)
+cat .telos/sessions/<session_id>/specs/<spec_name>/transcript-*.md
 
 # List workspace contents without extracting
 tar -tzf .telos/sessions/<session_id>/specs/<spec_name>/workspace.tar.gz | head -40
@@ -256,18 +257,18 @@ tar -xzf .telos/sessions/<session_id>/specs/<spec_name>/workspace.tar.gz -C /tmp
 
 A run is not successful just because it exited cleanly. Check:
 
-1. **Verifier conceded.** Read the transcript. If the verifier's last entry
+1. **Evaluation conceded.** Read the transcript. If the evaluator's last entry
    says "continue" with open findings, the goal is not met regardless of exit
    code.
 2. **Evidence supports the claim.** Read `evidence.jsonl` for concrete
-   observations. If the prover claimed tests pass but no test output appears
+   observations. If implementation claimed tests pass but no test output appears
    in evidence, the claim is unsupported.
 3. **Workspace matches the spec.** Extract `workspace.tar.gz` and verify the
    artifacts the spec required actually exist with the right content.
 4. **No constraint violations.** Re-read the spec's constraints and
    falsification criteria. Check each one against the evidence and workspace.
 
-If any of these fail, the run did not satisfy the spec — even if the prover
+If any of these fail, the run did not satisfy the spec — even if implementation
 said it did.
 
 ## Common Mistakes
@@ -275,9 +276,9 @@ said it did.
 - **Writing a todo list instead of a spec.** "1. Install deps. 2. Run tests.
   3. Fix failures." is a procedure, not a contract. Say what must be true when
   the run is done.
-- **Treating Telos as a task runner.** Telos is adversarial. The verifier will
+- **Treating Telos as a task runner.** Evaluation will
   probe for real correctness, not just check that steps were executed.
-- **Ignoring the verifier's findings.** If the transcript shows open findings,
+- **Ignoring evaluator findings.** If the transcript shows open findings,
   the run needs another iteration or a new run — not a manual override.
-- **Skipping artifact inspection.** The prover's narrative can be wrong. Always
+- **Skipping artifact inspection.** The implementation narrative can be wrong. Always
   check `evidence.jsonl` and the workspace archive before trusting a result.

@@ -6,7 +6,6 @@ description: |
   Easy-medium difficulty: container logs and pod status provide direct clues.
 metadata:
   category: fault-injection
-  role: environment-generator
   difficulty: easy
   source: cloud-opsbench
   author: telos

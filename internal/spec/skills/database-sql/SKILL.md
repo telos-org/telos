@@ -51,9 +51,9 @@ def test_sql_roundtrip():
     result = subprocess.run(
         ["psql", "-h", "localhost", "-p", "5432", "-U", "postgres", "-t", "-c",
          "CREATE TABLE IF NOT EXISTS _telos_check(k TEXT PRIMARY KEY, v TEXT); "
-         "INSERT INTO _telos_check VALUES('pvg','oracle') "
+         "INSERT INTO _telos_check VALUES('telos','oracle') "
          "ON CONFLICT(k) DO UPDATE SET v='oracle'; "
-         "SELECT v FROM _telos_check WHERE k='pvg';"],
+         "SELECT v FROM _telos_check WHERE k='telos';"],
         capture_output=True, text=True, timeout=15,
     )
     assert "oracle" in result.stdout.strip()

@@ -7,7 +7,6 @@ description: |
   (permission denied, I/O error) rather than K8s-level failures.
 metadata:
   category: fault-injection
-  role: environment-generator
   difficulty: medium
   source: cloud-opsbench
   author: telos
