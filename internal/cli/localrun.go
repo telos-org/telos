@@ -24,7 +24,7 @@ type LocalRunConfig struct {
 	Workspace       string
 	Model           string
 	Thinking        string
-	MaxRounds       int
+	Until           int
 	MaxCostUSD      *float64
 	AgentTimeoutSec int
 }
@@ -175,7 +175,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	pvgCfg := game.PVGConfig{
-		MaxRounds:       cfg.MaxRounds,
+		Until:           cfg.Until,
 		MaxCostUSD:      cfg.MaxCostUSD,
 		Verbose:         true,
 		EpochID:         epochID,
@@ -290,14 +290,6 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 	if thinking == "" {
 		thinking = "medium"
 	}
-	maxRounds := cfg.MaxRounds
-	if maxRounds <= 0 {
-		maxRounds = 20
-	}
-	agentTimeout := cfg.AgentTimeoutSec
-	if agentTimeout <= 0 {
-		agentTimeout = 1800
-	}
 	sessionKind := cfg.SessionKind
 	if sessionKind == "" {
 		sessionKind = sessionapi.KindTask
@@ -315,9 +307,9 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		SpecName:        compiled.Environment.Name,
 		Config: sessionapi.SessionConfig{
 			Model:           model,
-			MaxRounds:       maxRounds,
+			Until:           cfg.Until,
 			MaxCostUSD:      cfg.MaxCostUSD,
-			AgentTimeoutSec: agentTimeout,
+			AgentTimeoutSec: cfg.AgentTimeoutSec,
 			Thinking:        thinking,
 			Workspace:       workspace,
 		},
@@ -346,18 +338,12 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 		Workspace:       cfg.Workspace,
 		Model:           cfg.Model,
 		Thinking:        cfg.Thinking,
-		MaxRounds:       cfg.MaxRounds,
+		Until:           cfg.Until,
 		MaxCostUSD:      cfg.MaxCostUSD,
 		AgentTimeoutSec: cfg.AgentTimeoutSec,
 	}
 	if lrc.Thinking == "" {
 		lrc.Thinking = "medium"
-	}
-	if lrc.MaxRounds <= 0 {
-		lrc.MaxRounds = 20
-	}
-	if lrc.AgentTimeoutSec <= 0 {
-		lrc.AgentTimeoutSec = 1800
 	}
 	return lrc
 }
@@ -453,11 +439,6 @@ func finishEpoch(sessionDir string, manifest *sessionapi.Manifest, result *game.
 		if result.Error != "" {
 			last.Error = &result.Error
 		}
-	case game.GameTimeout:
-		failed := "failed"
-		err := "max_rounds_exceeded"
-		last.Result = &failed
-		last.Error = &err
 	case game.GameStopped:
 		stopped := "stopped"
 		last.Result = &stopped

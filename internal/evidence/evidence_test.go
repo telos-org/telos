@@ -127,7 +127,7 @@ func TestEvidenceLogGameEnd(t *testing.T) {
 	path := filepath.Join(dir, "evidence.jsonl")
 
 	ev := New("test-system", path, "sess-005", 0)
-	ev.LogGameEnd("success", 3, 2, 1, true, 5.5, 10000, 5000, 1000, 500, "")
+	ev.LogGameEnd("success", 3, 2, 1, true, 5.5, 10000, 5000, 1000, 500, "", "verifier_conceded")
 	ev.Close()
 
 	data, _ := os.ReadFile(path)
@@ -142,6 +142,9 @@ func TestEvidenceLogGameEnd(t *testing.T) {
 	}
 	if d["verifier_conceded"] != true {
 		t.Errorf("verifier_conceded: got %v", d["verifier_conceded"])
+	}
+	if d["completion_reason"] != "verifier_conceded" {
+		t.Errorf("completion_reason: got %v", d["completion_reason"])
 	}
 }
 

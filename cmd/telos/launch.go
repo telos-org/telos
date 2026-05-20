@@ -31,9 +31,9 @@ func cmdLaunch(command, action string, args []string) {
 	env := fs.String("env", "", "Cloud environment ID")
 	model := fs.String("model", "", "Model name")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
-	maxRounds := fs.Int("max-rounds", 20, "Maximum agent rounds")
+	until := fs.Int("until", 0, "Run exactly N evaluator review cycles")
 	maxCostUSD := fs.Float64("max-cost-usd", 20.0, "Maximum cost in USD")
-	agentTimeout := fs.Int("agent-timeout-sec", 1800, "Agent timeout in seconds")
+	agentTimeout := fs.Int("agent-timeout-sec", 0, "Agent timeout in seconds; 0 disables")
 	readyTimeout := fs.Int("ready-timeout", 900, "Environment readiness timeout in seconds")
 	noWait := fs.Bool("no-wait", false, "Do not wait for a newly created environment")
 	jsonOut := fs.Bool("json", false, "JSON output")
@@ -43,10 +43,18 @@ func cmdLaunch(command, action string, args []string) {
 		"workspace",
 		"model",
 		"thinking",
-		"max-rounds",
 		"max-cost-usd",
 		"agent-timeout-sec",
 	)
+	untilValue, err := untilFlagValue(fs, *until)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if command == "apply" && flagNameSet(fs, "until") {
+		fmt.Fprintln(os.Stderr, "error: --until is only supported with telos run")
+		os.Exit(1)
+	}
 
 	if fs.NArg() < 1 {
 		fmt.Fprintf(os.Stderr, "usage: telos %s SPEC.md [options]\n", command)
@@ -68,7 +76,7 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a controller session")
 			os.Exit(1)
 		}
-		runChildCloud(specArg, ctx, *jsonOut, action)
+		runChildCloud(specArg, ctx, untilValue, *jsonOut, action)
 		return
 	}
 
@@ -94,13 +102,14 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudExisting:
-		runCloud(command, specArg, *env, *jsonOut, false, 0, action)
+		runCloud(command, specArg, *env, untilValue, *jsonOut, false, 0, action)
 		return
 	case launchCloudNew:
 		runCloud(
 			command,
 			specArg,
 			"",
+			untilValue,
 			*jsonOut,
 			!*noWait,
 			time.Duration(*readyTimeout)*time.Second,
@@ -118,7 +127,6 @@ func cmdLaunch(command, action string, args []string) {
 		*workspace,
 		*model,
 		*thinking,
-		*maxRounds,
 		*maxCostUSD,
 		*agentTimeout,
 	)
@@ -127,6 +135,7 @@ func cmdLaunch(command, action string, args []string) {
 		os.Exit(1)
 	}
 	cfg.SessionKind = sessionKindForCommand(command)
+	cfg.Until = untilValue
 
 	session, err := cli.SubmitLocalSession(specPath, cfg)
 	if err != nil {
@@ -197,6 +206,7 @@ func decideLaunchMode(
 func runChildCloud(
 	specArg string,
 	ctx controllerContext,
+	until int,
 	jsonOut bool,
 	action string,
 ) {
@@ -208,6 +218,9 @@ func runChildCloud(
 	kind := sessionapi.KindTask
 	req.SessionKind = &kind
 	req.ParentSessionID = &ctx.sessionID
+	if until > 0 {
+		req.Until = &until
+	}
 	session, err := cloud.NewClient(ctx.endpoint, ctx.token).CreateSession(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -224,6 +237,7 @@ func runCloud(
 	command string,
 	specArg string,
 	envID string,
+	until int,
 	jsonOut bool,
 	waitForEnvironment bool,
 	readyTimeout time.Duration,
@@ -236,6 +250,9 @@ func runCloud(
 	}
 	kind := sessionKindForCommand(command)
 	req.SessionKind = &kind
+	if until > 0 {
+		req.Until = &until
+	}
 	if command == "apply" && envID == "" {
 		applyCloudAuto(req, jsonOut, waitForEnvironment, readyTimeout, action)
 		return

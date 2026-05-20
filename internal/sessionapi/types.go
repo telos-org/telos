@@ -86,7 +86,7 @@ type SessionCreateRequest struct {
 	SpecMarkdown    *string      `json:"spec_markdown,omitempty"`
 	SessionKind     *SessionKind `json:"session_kind,omitempty"`
 	ParentSessionID *string      `json:"parent_session_id,omitempty"`
-	MaxRounds       *int         `json:"max_rounds,omitempty"`
+	Until           *int         `json:"until,omitempty"`
 	Model           string       `json:"model,omitempty"`
 	Thinking        string       `json:"thinking,omitempty"`
 	MaxCostUSD      *float64     `json:"max_cost_usd,omitempty"`
@@ -129,6 +129,8 @@ type SessionSpec struct {
 	TotalCacheReadTokens   *int     `json:"total_cache_read_tokens,omitempty"`
 	TotalCacheCreateTokens *int     `json:"total_cache_creation_tokens,omitempty"`
 	RoundCount             *int     `json:"round_count,omitempty"`
+	CompletionReason       *string  `json:"completion_reason,omitempty"`
+	VerifierConceded       *bool    `json:"verifier_conceded,omitempty"`
 }
 
 // CurrentSpec identifies the spec currently being executed.
@@ -182,6 +184,8 @@ type Session struct {
 	TotalCacheReadTokens    *int             `json:"total_cache_read_tokens,omitempty"`
 	TotalCacheCreateTokens  *int             `json:"total_cache_creation_tokens,omitempty"`
 	RoundCount              *int             `json:"round_count,omitempty"`
+	CompletionReason        *string          `json:"completion_reason,omitempty"`
+	VerifierConceded        *bool            `json:"verifier_conceded,omitempty"`
 	ArtifactURI             *string          `json:"artifact_uri,omitempty"`
 	CurrentSpecVersion      *int             `json:"current_spec_version,omitempty"`
 	SpecVersions            []map[string]any `json:"spec_versions"`

@@ -76,5 +76,8 @@ func WriteTurnTask(ts *TurnState, task string) error {
 	if err != nil {
 		return err
 	}
-	return f.Close()
+	if err := f.Close(); err != nil {
+		return err
+	}
+	return nil
 }

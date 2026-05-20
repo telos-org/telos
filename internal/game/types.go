@@ -13,7 +13,6 @@ type GameResult string
 const (
 	GameSuccess GameResult = "success"
 	GameFailure GameResult = "failure"
-	GameTimeout GameResult = "timeout"
 	GameStopped GameResult = "stopped"
 )
 
@@ -39,11 +38,12 @@ type TurnStats struct {
 
 // TurnResult is the result of one agent turn.
 type TurnResult struct {
-	Role   string
-	Status AgentStatus
-	Logs   string
-	Stats  TurnStats
-	Error  string
+	Role        string
+	Status      AgentStatus
+	Logs        string
+	Stats       TurnStats
+	Error       string
+	Recoverable bool
 }
 
 // AgentExecutor runs one PVG agent turn.
@@ -55,7 +55,7 @@ type AgentExecutor interface {
 
 // PVGConfig holds runtime settings for a PVG run.
 type PVGConfig struct {
-	MaxRounds       int
+	Until           int
 	MaxCostUSD      *float64
 	Verbose         bool
 	EpochID         int
@@ -72,6 +72,7 @@ type PVGResult struct {
 	ProverRounds            int
 	VerifierRounds          int
 	VerifierConceded        bool
+	CompletionReason        string
 	TotalCostUSD            float64
 	TotalInputTokens        int
 	TotalOutputTokens       int
@@ -96,9 +97,10 @@ func (r *PVGResult) Accumulate(s TurnStats) {
 
 // TurnState holds filesystem paths for one PVG turn.
 type TurnState struct {
-	RoundNum int
-	Role     string
-	Dir      string
+	RoundNum      int
+	Role          string
+	Dir           string
+	StopRequested func() bool
 }
 
 // TurnID returns the canonical turn identifier.

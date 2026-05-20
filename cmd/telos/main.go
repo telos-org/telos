@@ -5,7 +5,7 @@
 //	telos plan SPEC.md [--json]
 //	telos apply SPEC.md [--env ENV] [--json]
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
-//	    [--max-rounds N] [--max-cost-usd USD] [--agent-timeout-sec SEC] [--json]
+//	    [--until N] [--max-cost-usd USD] [--agent-timeout-sec SEC|0] [--json]
 //	telos list [--env ENV] [--limit N] [--wide] [--environments] [--local] [--cloud] [--json]
 //	telos describe SESSION [--env ENV] [--json]
 //	telos logs [-f] [--raw] SESSION [--env ENV]

@@ -34,7 +34,6 @@ func TestCreateSession(t *testing.T) {
 		"spec_markdown": "---\nversion: v0\nname: my-task\nplatform: local\n---\n# My Task\n",
 		"model": "claude-opus-4-6",
 		"thinking": "medium",
-		"max_rounds": 4,
 		"max_cost_usd": 10.0,
 		"workspace": "/tmp/workspace"
 	}`
@@ -73,7 +72,6 @@ func TestCreateSession(t *testing.T) {
 	// Config should reflect the request parameters.
 	assertConfigStr(t, session.Config, "model", "claude-opus-4-6")
 	assertConfigStr(t, session.Config, "thinking", "medium")
-	assertConfigFloat(t, session.Config, "max_rounds", 4)
 	assertConfigFloat(t, session.Config, "max_cost_usd", 10.0)
 	assertConfigStr(t, session.Config, "workspace", "/tmp/workspace")
 
@@ -153,6 +151,48 @@ func TestCreateSessionPersistsSpecMarkdown(t *testing.T) {
 	}
 	if string(data) != markdown {
 		t.Fatalf("session spec was not persisted")
+	}
+}
+
+func TestCreateSessionPersistsUntil(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: review-task\nplatform: local\n---\n# Review Task\n"
+	until := 3
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdown,
+		Until:        &until,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	assertConfigFloat(t, session.Config, "until", 3)
+
+	manifest, err := sessionapi.ReadManifest(filepath.Join(root, session.SessionID, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.Config.Until != 3 {
+		t.Fatalf("manifest until: got %d", manifest.Config.Until)
+	}
+}
+
+func TestCreateSessionRejectsInvalidUntil(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: bad-until\nplatform: local\n---\n# Bad Until\n"
+	until := 0
+
+	_, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdown,
+		Until:        &until,
+	})
+	if err == nil {
+		t.Fatal("expected invalid until error")
+	}
+	if !strings.Contains(err.Error(), "until must be positive") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -811,7 +851,7 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 		t.Fatalf("missing evidence path: %#v", created.Specs)
 	}
 	evidence := `{"event":"agent_complete","round":1,"data":{"cost_usd":0.10}}` + "\n" +
-		`{"event":"game_end","round":2,"data":{"total_cost_usd":1.23,"total_input_tokens":100,"total_output_tokens":30,"total_cache_read_tokens":7,"total_cache_creation_tokens":5,"prover_rounds":1,"verifier_rounds":1}}` + "\n"
+		`{"event":"game_end","round":2,"data":{"total_cost_usd":1.23,"total_input_tokens":100,"total_output_tokens":30,"total_cache_read_tokens":7,"total_cache_creation_tokens":5,"prover_rounds":1,"verifier_rounds":1,"completion_reason":"review_cycles_complete","verifier_conceded":false}}` + "\n"
 	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
 		t.Fatalf("write evidence: %v", err)
 	}
@@ -837,6 +877,12 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 	}
 	if session.RoundCount == nil || *session.RoundCount != 2 {
 		t.Fatalf("round count: got %v", session.RoundCount)
+	}
+	if session.CompletionReason == nil || *session.CompletionReason != "review_cycles_complete" {
+		t.Fatalf("completion reason: got %v", session.CompletionReason)
+	}
+	if session.VerifierConceded == nil || *session.VerifierConceded {
+		t.Fatalf("verifier conceded: got %v", session.VerifierConceded)
 	}
 }
 

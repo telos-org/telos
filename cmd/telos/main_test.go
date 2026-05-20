@@ -21,20 +21,20 @@ func TestReorderInterspersedFlags(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.Bool("json", false, "")
 	fs.String("workspace", "", "")
-	fs.Int("max-rounds", 0, "")
+	fs.Int("until", 0, "")
 
 	got := reorderInterspersedFlags(fs, []string{
 		"SPEC.md",
 		"--json",
 		"--workspace",
 		"/tmp/ws",
-		"--max-rounds=3",
+		"--until=3",
 	})
 	want := []string{
 		"--json",
 		"--workspace",
 		"/tmp/ws",
-		"--max-rounds=3",
+		"--until=3",
 		"SPEC.md",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -72,14 +72,14 @@ func TestReorderInterspersedFlagsDashDash(t *testing.T) {
 func TestFlagNamesSetUsesExplicitFlagsOnly(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.String("thinking", "medium", "")
-	fs.Int("max-rounds", 20, "")
+	fs.Int("until", 0, "")
 	fs.String("workspace", "", "")
 	parseFlags(fs, []string{"--thinking", "medium", "SPEC.md"})
 
 	if !flagNamesSet(fs, "thinking") {
 		t.Fatal("expected explicitly passed --thinking to be detected")
 	}
-	if flagNamesSet(fs, "max-rounds", "workspace") {
+	if flagNamesSet(fs, "until", "workspace") {
 		t.Fatal("defaulted flags should not count as explicitly set")
 	}
 }
@@ -89,19 +89,17 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	fs.String("workspace", "", "")
 	fs.String("model", "", "")
 	fs.String("thinking", "medium", "")
-	fs.Int("max-rounds", 20, "")
 	fs.Float64("max-cost-usd", 20.0, "")
-	fs.Int("agent-timeout-sec", 1800, "")
+	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
 	t.Setenv("TELOS_WORKSPACE", "/tmp/telos-workspace")
 	t.Setenv("TELOS_MODEL", "claude-test")
 	t.Setenv("TELOS_THINKING", "high")
-	t.Setenv("TELOS_MAX_ROUNDS", "9")
 	t.Setenv("TELOS_MAX_COST_USD", "12.5")
 	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "123")
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20, 20.0, 1800)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -111,21 +109,103 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	if cfg.Model != "claude-test" || cfg.Thinking != "high" {
 		t.Fatalf("model/thinking: got %q/%q", cfg.Model, cfg.Thinking)
 	}
-	if cfg.MaxRounds != 9 || cfg.AgentTimeoutSec != 123 {
-		t.Fatalf("rounds/timeout: got %d/%d", cfg.MaxRounds, cfg.AgentTimeoutSec)
+	if cfg.AgentTimeoutSec != 123 {
+		t.Fatalf("timeout: got %d", cfg.AgentTimeoutSec)
 	}
 	if cfg.MaxCostUSD == nil || *cfg.MaxCostUSD != 12.5 {
 		t.Fatalf("cost: got %v", cfg.MaxCostUSD)
 	}
 }
 
+func TestResolveLocalRunConfigDefaultsToNoAgentTimeout(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.String("workspace", "", "")
+	fs.String("model", "", "")
+	fs.String("thinking", "medium", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("agent-timeout-sec", 0, "")
+	parseFlags(fs, []string{"SPEC.md"})
+
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	if err != nil {
+		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
+	}
+	if cfg.AgentTimeoutSec != 0 {
+		t.Fatalf("agent timeout should default to disabled, got %d", cfg.AgentTimeoutSec)
+	}
+}
+
+func TestResolveLocalRunConfigAllowsExplicitNoAgentTimeout(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.String("workspace", "", "")
+	fs.String("model", "", "")
+	fs.String("thinking", "medium", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("agent-timeout-sec", 0, "")
+	parseFlags(fs, []string{"--agent-timeout-sec", "0", "SPEC.md"})
+
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	if err != nil {
+		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
+	}
+	if cfg.AgentTimeoutSec != 0 {
+		t.Fatalf("agent timeout should be disabled, got %d", cfg.AgentTimeoutSec)
+	}
+}
+
+func TestResolveLocalRunConfigRejectsNegativeAgentTimeout(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.String("workspace", "", "")
+	fs.String("model", "", "")
+	fs.String("thinking", "medium", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("agent-timeout-sec", 0, "")
+	parseFlags(fs, []string{"--agent-timeout-sec", "-1", "SPEC.md"})
+
+	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, -1)
+	if err == nil {
+		t.Fatal("expected negative agent timeout to fail")
+	}
+	if !strings.Contains(err.Error(), "non-negative") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestUntilFlagValue(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.Int("until", 0, "")
+	parseFlags(fs, []string{"--until", "5", "SPEC.md"})
+
+	got, err := untilFlagValue(fs, 5)
+	if err != nil {
+		t.Fatalf("untilFlagValue: %v", err)
+	}
+	if got != 5 {
+		t.Fatalf("until: got %d", got)
+	}
+}
+
+func TestUntilFlagValueRejectsNonPositive(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.Int("until", 0, "")
+	parseFlags(fs, []string{"--until", "0", "SPEC.md"})
+
+	_, err := untilFlagValue(fs, 0)
+	if err == nil {
+		t.Fatal("expected --until 0 to fail")
+	}
+	if !strings.Contains(err.Error(), "positive") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestResolveLocalRunConfigRejectsInvalidEnvironmentDefaults(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.Int("max-rounds", 20, "")
+	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"SPEC.md"})
-	t.Setenv("TELOS_MAX_ROUNDS", "not-an-int")
+	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "not-an-int")
 
-	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20, 20.0, 1800)
+	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
 	if err == nil {
 		t.Fatal("expected invalid environment value to fail")
 	}

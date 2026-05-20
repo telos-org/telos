@@ -71,7 +71,7 @@ type ScopedToken struct {
 
 type SessionConfig struct {
 	Model           string         `json:"model,omitempty"`
-	MaxRounds       int            `json:"max_rounds,omitempty"`
+	Until           int            `json:"until,omitempty"`
 	MaxCostUSD      *float64       `json:"max_cost_usd,omitempty"`
 	AgentTimeoutSec int            `json:"agent_timeout_sec,omitempty"`
 	Thinking        string         `json:"thinking,omitempty"`
@@ -230,8 +230,8 @@ func (c SessionConfig) MarshalJSON() ([]byte, error) {
 	if c.Model != "" {
 		m["model"] = c.Model
 	}
-	if c.MaxRounds > 0 {
-		m["max_rounds"] = c.MaxRounds
+	if c.Until > 0 {
+		m["until"] = c.Until
 	}
 	if c.MaxCostUSD != nil {
 		m["max_cost_usd"] = *c.MaxCostUSD
@@ -260,11 +260,11 @@ func (c *SessionConfig) UnmarshalJSON(data []byte) error {
 		}
 		delete(raw, "model")
 	}
-	if value, ok := raw["max_rounds"]; ok {
-		if err := json.Unmarshal(value, &c.MaxRounds); err != nil {
-			return fmt.Errorf("config.max_rounds: %w", err)
+	if value, ok := raw["until"]; ok {
+		if err := json.Unmarshal(value, &c.Until); err != nil {
+			return fmt.Errorf("config.until: %w", err)
 		}
-		delete(raw, "max_rounds")
+		delete(raw, "until")
 	}
 	if value, ok := raw["max_cost_usd"]; ok {
 		if err := json.Unmarshal(value, &c.MaxCostUSD); err != nil {

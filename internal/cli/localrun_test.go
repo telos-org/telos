@@ -144,9 +144,7 @@ func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(orig)
 
-	session, err := CreateLocalSession(specPath, LocalRunConfig{
-		MaxRounds: 4,
-	})
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
@@ -200,6 +198,28 @@ func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	}
 }
 
+func TestCreateLocalSessionPersistsUntil(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{Until: 2})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.Config.Until != 2 {
+		t.Fatalf("until: got %d", manifest.Config.Until)
+	}
+}
+
 func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
@@ -208,7 +228,7 @@ func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(orig)
 
-	session, err := CreateLocalSession(specPath, LocalRunConfig{MaxRounds: 4})
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
@@ -259,10 +279,12 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(orig)
 
-	session, err := CreateLocalSession(specPath, LocalRunConfig{MaxRounds: 3})
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
+	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"), sessionapi.RuntimeLocal)
+	proverTurns := 0
 
 	exec := &fakeExecutor{
 		proverResult: game.TurnResult{
@@ -274,6 +296,17 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 			Role:   "verifier",
 			Status: game.StatusContinue,
 			Logs:   "Finding remains.\n\n<status>CONTINUE</status>\n",
+		},
+		onExecute: func(role string) {
+			if role != "prover" {
+				return
+			}
+			proverTurns++
+			if proverTurns == 2 {
+				if _, err := store.Stop(session.SessionID); err != nil {
+					t.Fatalf("Stop: %v", err)
+				}
+			}
 		},
 	}
 	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
@@ -316,7 +349,7 @@ func TestRunLocalSessionDefaultsMissingWorkspaceToSessionDir(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(orig)
 
-	session, err := CreateLocalSession(specPath, LocalRunConfig{MaxRounds: 4})
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
@@ -358,7 +391,7 @@ func TestRunLocalSessionRejectsMissingSessionSpecPath(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(orig)
 
-	session, err := CreateLocalSession(specPath, LocalRunConfig{MaxRounds: 4})
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
@@ -390,7 +423,7 @@ func TestRunLocalSessionStopsWhenManifestIsStopped(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(orig)
 
-	session, err := CreateLocalSession(specPath, LocalRunConfig{MaxRounds: 4})
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
@@ -443,9 +476,7 @@ func TestEndToEndSmokeTest(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(orig)
 
-	session, err := CreateLocalSession(specPath, LocalRunConfig{
-		MaxRounds: 4,
-	})
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}

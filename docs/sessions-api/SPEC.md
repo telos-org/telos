@@ -245,9 +245,9 @@ Create accepts raw markdown:
   "parent_session_id": "optional lineage pointer",
   "model": "claude-opus-4-6",
   "thinking": "medium",
-  "max_rounds": 20,
+  "until": 5,
   "max_cost_usd": 25.0,
-  "agent_timeout_sec": 1800,
+  "agent_timeout_sec": 0,
   "workspace": "optional local workspace path"
 }
 ```

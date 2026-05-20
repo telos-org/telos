@@ -78,7 +78,7 @@ func TestPVGVerifierConcedes(t *testing.T) {
 		checkpointOK: true,
 	}
 
-	cfg := PVGConfig{MaxRounds: 10, Verbose: false}
+	cfg := PVGConfig{Verbose: false}
 	pvg := NewPVG(compiled, exec, state, cfg)
 	result := pvg.Run()
 
@@ -117,7 +117,7 @@ func TestPVGVerifierConcedes(t *testing.T) {
 	}
 }
 
-func TestPVGMaxRoundsTimeout(t *testing.T) {
+func TestPVGUntilRunsExactReviewCycles(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()
 	specDir := filepath.Join(dir, "specs", "pvg-test")
@@ -130,20 +130,147 @@ func TestPVGMaxRoundsTimeout(t *testing.T) {
 			{Role: "prover", Status: StatusContinue, Logs: "Round 2"},
 		},
 		verifierResults: []TurnResult{
-			{Role: "verifier", Status: StatusContinue, Logs: "Issues found\n<status>CONTINUE</status>\n"},
-			{Role: "verifier", Status: StatusContinue, Logs: "Still issues\n<status>CONTINUE</status>\n"},
+			{Role: "verifier", Status: StatusConcede, Logs: "<review>\ncriteria,score\nFunctional correctness,7.0/10\n</review>\n\n<summary>Keep going.</summary>\n\n<status>CONCEDE</status>\n"},
+			{Role: "verifier", Status: StatusConcede, Logs: "<review>\ncriteria,score\nFunctional correctness,8.0/10\n</review>\n\n<summary>Better.</summary>\n\n<status>CONCEDE</status>\n"},
 		},
 	}
 
-	cfg := PVGConfig{MaxRounds: 4, Verbose: false}
+	cfg := PVGConfig{Until: 2, Verbose: false}
 	pvg := NewPVG(compiled, exec, state, cfg)
 	result := pvg.Run()
 
-	if result.GameResult != GameTimeout {
-		t.Errorf("expected timeout, got %s", result.GameResult)
+	if result.GameResult != GameSuccess {
+		t.Errorf("expected success, got %s", result.GameResult)
 	}
 	if result.Rounds != 4 {
 		t.Errorf("expected 4 rounds, got %d", result.Rounds)
+	}
+	if result.VerifierRounds != 2 {
+		t.Errorf("expected 2 verifier rounds, got %d", result.VerifierRounds)
+	}
+	if result.VerifierConceded {
+		t.Error("fixed review mode should not treat CONCEDE as loop control")
+	}
+	if result.CompletionReason != "review_cycles_complete" {
+		t.Fatalf("completion reason: got %q", result.CompletionReason)
+	}
+
+	transcript := ReadTranscript(state.TranscriptPath)
+	if strings.Contains(transcript, "<status>") {
+		t.Fatalf("fixed review transcript should not contain synthetic status tags:\n%s", transcript)
+	}
+	if count := strings.Count(transcript, "<review>"); count != 2 {
+		t.Fatalf("expected two review blocks, got %d:\n%s", count, transcript)
+	}
+}
+
+func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-recover")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "pi_failed:1", Error: "pi_failed:1", Recoverable: true},
+		},
+		verifierResults: []TurnResult{
+			{Role: "verifier", Status: StatusConcede, Logs: "Inspected failed prover turn.\n<status>CONCEDE</status>\n"},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
+	result := pvg.Run()
+
+	if result.GameResult != GameSuccess {
+		t.Fatalf("expected success, got %s error=%q", result.GameResult, result.Error)
+	}
+	if result.Rounds != 2 {
+		t.Fatalf("rounds: got %d", result.Rounds)
+	}
+	transcript := ReadTranscript(state.TranscriptPath)
+	if !strings.Contains(transcript, "Turn ended with runtime error") {
+		t.Fatalf("transcript should record recoverable turn error:\n%s", transcript)
+	}
+	if !strings.Contains(transcript, filepath.Join(state.TurnsDir(), "0001-prover", "raw.jsonl")) {
+		t.Fatalf("transcript should point to raw turn log:\n%s", transcript)
+	}
+}
+
+func TestPVGRecoverableFailureBudget(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-fail-budget")
+	state.Ensure()
+
+	recoverable := func(role string) TurnResult {
+		return TurnResult{
+			Role:        role,
+			Status:      StatusContinue,
+			Logs:        "pi_failed:1",
+			Error:       "pi_failed:1",
+			Recoverable: true,
+		}
+	}
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			recoverable("prover"),
+			recoverable("prover"),
+		},
+		verifierResults: []TurnResult{
+			recoverable("verifier"),
+			recoverable("verifier"),
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
+	result := pvg.Run()
+
+	if result.GameResult != GameFailure {
+		t.Fatalf("expected failure, got %s", result.GameResult)
+	}
+	if !strings.Contains(result.Error, "agent_failure_budget_exceeded") {
+		t.Fatalf("error: got %q", result.Error)
+	}
+	if result.Rounds != maxRecoverableAgentFailures+1 {
+		t.Fatalf("rounds: got %d", result.Rounds)
+	}
+}
+
+func TestPVGUntilDoesNotCountFailedVerifierReview(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-review-recover")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "Round 1"},
+			{Role: "prover", Status: StatusContinue, Logs: "Round 2"},
+			{Role: "prover", Status: StatusContinue, Logs: "Round 3"},
+		},
+		verifierResults: []TurnResult{
+			{Role: "verifier", Status: StatusContinue, Logs: "pi_failed:1", Error: "pi_failed:1", Recoverable: true},
+			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,7.0/10\n</review>\n\n<summary>Keep going.</summary>\n"},
+			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,8.0/10\n</review>\n\n<summary>Better.</summary>\n"},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{Until: 2, Verbose: false})
+	result := pvg.Run()
+
+	if result.GameResult != GameSuccess {
+		t.Fatalf("expected success, got %s error=%q", result.GameResult, result.Error)
+	}
+	if result.VerifierRounds != 3 {
+		t.Fatalf("verifier attempts: got %d", result.VerifierRounds)
+	}
+	transcript := ReadTranscript(state.TranscriptPath)
+	if count := strings.Count(transcript, "<review>"); count != 2 {
+		t.Fatalf("expected two successful review blocks, got %d:\n%s", count, transcript)
 	}
 }
 
@@ -160,7 +287,7 @@ func TestPVGProverError(t *testing.T) {
 		},
 	}
 
-	cfg := PVGConfig{MaxRounds: 10, Verbose: false}
+	cfg := PVGConfig{Verbose: false}
 	pvg := NewPVG(compiled, exec, state, cfg)
 	result := pvg.Run()
 
@@ -186,7 +313,7 @@ func TestPVGBudgetExceeded(t *testing.T) {
 		},
 	}
 
-	cfg := PVGConfig{MaxRounds: 10, MaxCostUSD: &maxCost, Verbose: false}
+	cfg := PVGConfig{MaxCostUSD: &maxCost, Verbose: false}
 	pvg := NewPVG(compiled, exec, state, cfg)
 	result := pvg.Run()
 
@@ -214,7 +341,7 @@ func TestPVGEvidenceFormat(t *testing.T) {
 		},
 	}
 
-	cfg := PVGConfig{MaxRounds: 10, Verbose: false, EpochID: 7}
+	cfg := PVGConfig{Verbose: false, EpochID: 7}
 	pvg := NewPVG(compiled, exec, state, cfg)
 	pvg.Run()
 
@@ -269,7 +396,7 @@ func TestPVGWorkspaceCheckpoint(t *testing.T) {
 		checkpointOK: true,
 	}
 
-	cfg := PVGConfig{MaxRounds: 10, Verbose: false}
+	cfg := PVGConfig{Verbose: false}
 	pvg := NewPVG(compiled, exec, state, cfg)
 	result := pvg.Run()
 

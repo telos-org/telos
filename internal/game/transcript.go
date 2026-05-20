@@ -15,7 +15,12 @@ var (
 )
 
 const maxTurnBodyChars = 8000
-const maxErrorExcerptChars = 2000
+
+type AppendTurnOptions struct {
+	IncludeStatus bool
+	RawLogPath    string
+	EvidencePath  string
+}
 
 // InitializeTranscript creates a transcript header if the file does not exist.
 func InitializeTranscript(path, sessionID, systemName, evidencePath, startedAt string) error {
@@ -49,16 +54,24 @@ func ReadTranscript(path string) string {
 
 // AppendTurn appends one implementation or evaluation turn to the transcript.
 func AppendTurn(path string, role string, roleRound int, status string, logs string, stats *TurnStats, turnID string, turnError string) error {
+	return AppendTurnWithOptions(path, role, roleRound, status, logs, stats, turnID, turnError,
+		AppendTurnOptions{IncludeStatus: true})
+}
+
+// AppendTurnWithOptions appends one implementation or evaluation turn to the transcript.
+func AppendTurnWithOptions(path string, role string, roleRound int, status string, logs string, stats *TurnStats, turnID string, turnError string, opts AppendTurnOptions) error {
 	label := "Implementation"
 	if role == "verifier" {
 		label = "Evaluation"
 	}
-	body := stripFinalStatus(turnBody(logs, turnError))
+	body := stripFinalStatus(turnBody(logs, turnError, opts))
 	if turnError != "" || !hasFinalProgressUpdate(body) {
 		body = fmt.Sprintf("%s\n\n<progress_update>%s</progress_update>",
-			body, fallbackProgressUpdate(body, status, turnError))
+			body, fallbackProgressUpdate(body, status, turnError, opts.IncludeStatus))
 	}
-	body = fmt.Sprintf("%s\n\n<status>%s</status>", body, status)
+	if opts.IncludeStatus {
+		body = fmt.Sprintf("%s\n\n<status>%s</status>", body, status)
+	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -117,10 +130,10 @@ func turnMeta(stats *TurnStats, turnID string) string {
 	return fmt.Sprintf("_Turn metadata: %s._", strings.Join(parts, ", "))
 }
 
-func turnBody(logs, turnError string) string {
+func turnBody(logs, turnError string, opts AppendTurnOptions) string {
 	stripped := stripFinalStatus(strings.TrimSpace(logs))
 	if turnError != "" {
-		return runtimeErrorBody(turnError, stripped)
+		return runtimeErrorBody(turnError, opts)
 	}
 	if stripped == "" {
 		return "_No assistant text captured._"
@@ -128,15 +141,16 @@ func turnBody(logs, turnError string) string {
 	return capTurnBody(stripped)
 }
 
-func runtimeErrorBody(err, logs string) string {
+func runtimeErrorBody(err string, opts AppendTurnOptions) string {
 	lines := []string{fmt.Sprintf("_Turn ended with runtime error: `%s`._", err)}
-	if logs != "" {
-		lines = append(lines,
-			"",
-			"### Captured Assistant Text Before Error",
-			"",
-			capErrorExcerpt(logs),
-		)
+	if opts.RawLogPath != "" || opts.EvidencePath != "" {
+		lines = append(lines, "", "Inspect the canonical turn artifacts before judging or continuing:")
+		if opts.RawLogPath != "" {
+			lines = append(lines, fmt.Sprintf("- Raw turn log: `%s`", opts.RawLogPath))
+		}
+		if opts.EvidencePath != "" {
+			lines = append(lines, fmt.Sprintf("- Evidence log: `%s`", opts.EvidencePath))
+		}
 	}
 	return strings.Join(lines, "\n")
 }
@@ -161,25 +175,16 @@ func capTurnBody(body string) string {
 	return strings.Join(lines, "\n")
 }
 
-func capErrorExcerpt(body string) string {
-	if len(body) <= maxErrorExcerptChars {
-		return body
-	}
-	trimmed := strings.TrimSpace(body[len(body)-maxErrorExcerptChars:])
-	return strings.Join([]string{
-		fmt.Sprintf("_Captured assistant text truncated to the last %d chars._", maxErrorExcerptChars),
-		"",
-		trimmed,
-	}, "\n")
-}
-
-func fallbackProgressUpdate(body, status, turnError string) string {
+func fallbackProgressUpdate(body, status, turnError string, includeStatus bool) string {
 	if turnError != "" {
 		return fmt.Sprintf("Turn ended with runtime error: %s.", turnError)
 	}
 	matches := progressUpdateRE.FindAllStringSubmatch(body, -1)
 	if len(matches) > 0 {
 		return strings.TrimSpace(matches[len(matches)-1][1])
+	}
+	if !includeStatus {
+		return "Turn completed."
 	}
 	return fmt.Sprintf("Turn completed with status %s.", status)
 }

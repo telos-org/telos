@@ -17,6 +17,8 @@ const (
 type PromptOptions struct {
 	Controller      bool
 	PrimarySpecPath string
+	ReviewMode      bool
+	ReviewCycles    int
 }
 
 // RenderProverTask builds the full prover task prompt.
@@ -33,11 +35,11 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 		renderPlatformPreamble(compiled),
 		renderSessionContext(compiled, RoleProver, options),
 		renderSpec(compiled),
-		renderRequiredEvaluationRubrics(compiled, RoleProver),
+		renderRequiredEvaluationRubrics(compiled, RoleProver, options),
 		renderSkillsRoster(compiled, options),
 		renderTranscriptProtocol(transcriptPath, RoleProver),
 		renderWorkspace(workspace, RoleProver),
-		renderOutputContract(RoleProver),
+		renderOutputContract(RoleProver, options),
 	}
 	return joinNonEmpty(parts)
 }
@@ -45,20 +47,34 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 // RenderVerifierTask builds the full verifier task prompt.
 func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
-	preamble, _ := ReadPrompt("verifier.md")
+	preamble := renderVerifierPreamble(options)
 	parts := []string{
 		preamble,
 		"",
 		renderPlatformPreamble(compiled),
 		renderSessionContext(compiled, RoleVerifier, options),
 		renderSpec(compiled),
-		renderRequiredEvaluationRubrics(compiled, RoleVerifier),
+		renderRequiredEvaluationRubrics(compiled, RoleVerifier, options),
 		renderSkillsRoster(compiled, options),
 		renderTranscriptProtocol(transcriptPath, RoleVerifier),
 		renderWorkspace(workspace, RoleVerifier),
-		renderOutputContract(RoleVerifier),
+		renderOutputContract(RoleVerifier, options),
 	}
 	return joinNonEmpty(parts)
+}
+
+func renderVerifierPreamble(options PromptOptions) string {
+	if options.ReviewMode {
+		return strings.Join([]string{
+			"You are the evaluator for a Telos review-cycle run.",
+			"",
+			"The implementation agent improves the delivered artifact across a runtime-controlled number of review cycles. Your job is to provide clear evaluation gradient for the next implementation turn. The runtime owns termination; do not decide whether the run should stop.",
+			"",
+			"Judge the live artifact against the spec, named standards, and applicable skills. Use concrete evidence from source, tree state, generated artifacts, and runtime behavior when it matters. Preserve nuance for the summary, and keep the review table small enough to be useful.",
+		}, "\n")
+	}
+	preamble, _ := ReadPrompt("verifier.md")
+	return preamble
 }
 
 func promptOptions(opts []PromptOptions) PromptOptions {
@@ -97,6 +113,9 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 	if opts.PrimarySpecPath != "" {
 		lines = append(lines, fmt.Sprintf("- Primary spec: `%s`", opts.PrimarySpecPath))
 	}
+	if opts.ReviewMode && opts.ReviewCycles > 0 {
+		lines = append(lines, fmt.Sprintf("- Review cycles requested: `%d`", opts.ReviewCycles))
+	}
 	if platform != "local" {
 		lines = append(lines, fmt.Sprintf("- Namespace: `%s`", compiled.Namespace))
 	}
@@ -108,6 +127,15 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 			"- if unresolved evaluator findings exist, address them before broadening the work",
 			"- otherwise advance the delivered system toward the contract",
 			"- preserve valid existing work and live state unless the spec explicitly allows replacement",
+			"",
+		)
+	} else if opts.ReviewMode {
+		lines = append(lines, "",
+			"### Review Focus",
+			"- evaluate the delivered artifact against the spec and applicable quality bars",
+			"- inspect source, tree state, generated artifacts, and runtime behavior as needed",
+			"- produce a compact score table plus a handoff summary for the next implementation turn",
+			"- do not invent new requirements",
 			"",
 		)
 	} else {
@@ -137,7 +165,7 @@ func displayRole(role Role) string {
 	return "implementation"
 }
 
-func renderRequiredEvaluationRubrics(compiled *CompiledEnvironment, role Role) string {
+func renderRequiredEvaluationRubrics(compiled *CompiledEnvironment, role Role, opts PromptOptions) string {
 	if len(compiled.RequiredVerifierSkills) == 0 {
 		return ""
 	}
@@ -145,6 +173,15 @@ func renderRequiredEvaluationRubrics(compiled *CompiledEnvironment, role Role) s
 	if role == RoleProver {
 		lines = append(lines,
 			"The evaluator will load these starred skills by name and use them as grading rubrics. Treat each named rubric as part of the contract, not optional style advice.",
+			"",
+		)
+		lines = appendSkillPointers(lines, compiled.RequiredVerifierSkills)
+		return strings.Join(lines, "\n")
+	}
+
+	if role == RoleVerifier && opts.ReviewMode {
+		lines = append(lines,
+			"The following starred skills are mandatory review rubrics. Use each mounted skill by name while grading the artifact, and reflect each applicable rubric in the review criteria or summary.",
 			"",
 		)
 		lines = appendSkillPointers(lines, compiled.RequiredVerifierSkills)
@@ -289,7 +326,7 @@ func renderWorkspace(workspace string, role Role) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderOutputContract(role Role) string {
+func renderOutputContract(role Role, opts PromptOptions) string {
 	if role == RoleProver {
 		return strings.Join([]string{
 			"## Output",
@@ -298,6 +335,21 @@ func renderOutputContract(role Role) string {
 			"- Write concise Markdown with claims, evidence, changes made, and remaining uncertainty",
 			"- During the turn, emit concise <progress_update>...</progress_update> entries when useful for a background observer, without spamming routine tool activity",
 			"- End every turn with one final <progress_update>what you did this round</progress_update>",
+		}, "\n")
+	}
+	if opts.ReviewMode {
+		return strings.Join([]string{
+			"## Output",
+			"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
+			"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
+			"- Write concise Markdown focused on evidence, score changes, and the next useful implementation pressure",
+			"- Emit exactly one <review>...</review> block and one <summary>...</summary> block",
+			"- The <review> block must be CSV with header exactly `criteria,score`",
+			"- Use score format `x.y/10` for every score",
+			"- Emit the full current rubric every review turn, not a delta",
+			"- Keep the rubric to roughly 5-10 criteria drawn from the spec, emphasized skills, and discovered non-functional risks",
+			"- Put nuance and handoff guidance in <summary>, not extra CSV columns",
+			"- Do not emit <status> tags",
 		}, "\n")
 	}
 	return strings.Join([]string{

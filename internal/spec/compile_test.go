@@ -398,6 +398,32 @@ func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 	}
 }
 
+func TestRenderVerifierTaskReviewModeUsesReviewContract(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	os.WriteFile(specPath, []byte("---\nversion: v0\nname: review-mode\nplatform: local\n---\nBody"), 0o644)
+
+	compiled, _ := CompileEnvironment(specPath)
+	task := RenderVerifierTask(compiled, "", "/tmp/transcript.md", PromptOptions{
+		ReviewMode:   true,
+		ReviewCycles: 2,
+	})
+
+	for _, want := range []string{
+		"<review>",
+		"<summary>",
+		"criteria,score",
+		"Review cycles requested: `2`",
+	} {
+		if !strings.Contains(task, want) {
+			t.Fatalf("review-mode prompt missing %q:\n%s", want, task)
+		}
+	}
+	if strings.Contains(task, "CONCEDE") || strings.Contains(task, "CONTINUE") {
+		t.Fatalf("review-mode prompt should not contain status control tokens:\n%s", task)
+	}
+}
+
 func TestRenderWithWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")

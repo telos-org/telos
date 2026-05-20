@@ -97,9 +97,10 @@ func (e *Evidence) LogAgent(roundNum int, role string, status string, logsTail s
 }
 
 // LogGameEnd logs the terminal game result.
-func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRounds int, conceded bool, costUSD float64, inputTokens, outputTokens, cacheRead, cacheCreate int, errMsg string) {
+func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRounds int, conceded bool, costUSD float64, inputTokens, outputTokens, cacheRead, cacheCreate int, errMsg string, completionReason string) {
 	e.Log("game_end", rounds, "system", map[string]interface{}{
 		"game_result":                 result,
+		"completion_reason":           completionReason,
 		"prover_rounds":               proverRounds,
 		"verifier_rounds":             verifierRounds,
 		"verifier_conceded":           conceded,

@@ -89,7 +89,6 @@ func resolveLocalRunConfigFromFlags(
 	workspace string,
 	model string,
 	thinking string,
-	maxRounds int,
 	maxCostUSD float64,
 	agentTimeout int,
 ) (cli.LocalRunConfig, error) {
@@ -97,11 +96,7 @@ func resolveLocalRunConfigFromFlags(
 	if err != nil {
 		return cli.LocalRunConfig{}, err
 	}
-	rounds, err := positiveIntOption(fs, "max-rounds", maxRounds, "TELOS_MAX_ROUNDS", 20)
-	if err != nil {
-		return cli.LocalRunConfig{}, err
-	}
-	timeout, err := positiveIntOption(fs, "agent-timeout-sec", agentTimeout, "TELOS_AGENT_TIMEOUT_SEC", 1800)
+	timeout, err := nonNegativeIntOption(fs, "agent-timeout-sec", agentTimeout, "TELOS_AGENT_TIMEOUT_SEC", 0)
 	if err != nil {
 		return cli.LocalRunConfig{}, err
 	}
@@ -109,10 +104,19 @@ func resolveLocalRunConfigFromFlags(
 		Workspace:       stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
 		Model:           modelOption(fs, model),
 		Thinking:        stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", "medium"),
-		MaxRounds:       rounds,
 		MaxCostUSD:      &cost,
 		AgentTimeoutSec: timeout,
 	}, nil
+}
+
+func untilFlagValue(fs *flag.FlagSet, value int) (int, error) {
+	if !flagNameSet(fs, "until") {
+		return 0, nil
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("--until must be positive")
+	}
+	return value, nil
 }
 
 func stringOption(fs *flag.FlagSet, name, value, envName string) string {
@@ -139,10 +143,10 @@ func modelOption(fs *flag.FlagSet, value string) string {
 	return ""
 }
 
-func positiveIntOption(fs *flag.FlagSet, name string, value int, envName string, defaultValue int) (int, error) {
+func nonNegativeIntOption(fs *flag.FlagSet, name string, value int, envName string, defaultValue int) (int, error) {
 	if flagNameSet(fs, name) {
-		if value <= 0 {
-			return 0, fmt.Errorf("--%s / %s must be positive", name, envName)
+		if value < 0 {
+			return 0, fmt.Errorf("--%s / %s must be non-negative", name, envName)
 		}
 		return value, nil
 	}
@@ -154,8 +158,8 @@ func positiveIntOption(fs *flag.FlagSet, name string, value int, envName string,
 	if err != nil {
 		return 0, fmt.Errorf("--%s / %s must be an integer", name, envName)
 	}
-	if parsed <= 0 {
-		return 0, fmt.Errorf("--%s / %s must be positive", name, envName)
+	if parsed < 0 {
+		return 0, fmt.Errorf("--%s / %s must be non-negative", name, envName)
 	}
 	return parsed, nil
 }

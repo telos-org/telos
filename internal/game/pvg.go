@@ -8,6 +8,8 @@ import (
 	"github.com/telos-org/telos/internal/spec"
 )
 
+const maxRecoverableAgentFailures = 3
+
 // PVG runs the prover-verifier loop for one compiled environment.
 type PVG struct {
 	Compiled *spec.CompiledEnvironment
@@ -63,97 +65,158 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 		log.Printf("=== PVG START: %s ===", p.Compiled.Environment.Name)
 	}
 
-	maxRounds := p.Config.MaxRounds
-	if maxRounds <= 0 {
-		maxRounds = 20
+	if p.fixedReviewMode() {
+		return p.runFixedReviewLoop(), nil
 	}
+	return p.runDefaultLoop(), nil
+}
 
-	// First prover turn.
-	if p.shouldStop() {
-		return p.end(GameStopped), nil
-	}
-	p.Result.Rounds = 1
-	p.Result.ProverRounds = 1
-	p.Evidence.Log("round_start", 1, "prover", nil)
-
+func (p *PVG) runDefaultLoop() *PVGResult {
 	promptOpts := p.promptOptions()
-	task := spec.RenderProverTask(p.Compiled, "", p.State.TranscriptPath, promptOpts)
-	turn := p.runAgentTurn(1, "prover", p.Result.ProverRounds, task)
-	if p.shouldStop() {
-		return p.end(GameStopped), nil
-	}
-	if turn.Error != "" {
-		p.Result.Error = turn.Error
-		return p.end(GameFailure), nil
-	}
-	if p.overBudget(1, "prover") {
-		return p.end(GameFailure), nil
-	}
+	workspace := ""
+	recoverableFailures := 0
 
-	// Alternating verifier/prover rounds
-	for p.Result.Rounds < maxRounds {
+	for {
 		if p.shouldStop() {
-			return p.end(GameStopped), nil
+			return p.end(GameStopped)
 		}
-		// Verifier
-		workspace := p.Executor.WorkspaceState()
-		p.Result.Rounds++
-		p.Result.VerifierRounds++
-		roundNum := p.Result.Rounds
-		p.Evidence.Log("round_start", roundNum, "verifier", nil)
-
-		task = spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
-		turn = p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task)
+		turn := p.runProverTurn(workspace, promptOpts)
 		if p.shouldStop() {
-			return p.end(GameStopped), nil
+			return p.end(GameStopped)
 		}
 		if turn.Error != "" {
-			p.Result.Error = turn.Error
-			return p.end(GameFailure), nil
+			if p.turnFailureExceeded(turn, &recoverableFailures) {
+				return p.end(GameFailure)
+			}
+		} else {
+			recoverableFailures = 0
 		}
-		if turn.Status == StatusConcede {
+		if p.overBudget(p.Result.Rounds, "prover") {
+			return p.end(GameFailure)
+		}
+
+		workspace = p.Executor.WorkspaceState()
+		if p.shouldStop() {
+			return p.end(GameStopped)
+		}
+		turn = p.runVerifierTurn(workspace, promptOpts)
+		if p.shouldStop() {
+			return p.end(GameStopped)
+		}
+		if turn.Error != "" {
+			if p.turnFailureExceeded(turn, &recoverableFailures) {
+				return p.end(GameFailure)
+			}
+		} else {
+			recoverableFailures = 0
+		}
+		if turn.Error == "" && turn.Status == StatusConcede {
 			p.Result.VerifierConceded = true
 			if p.Config.Verbose {
 				log.Printf("=== PVG SUCCESS: verifier conceded ===")
 			}
-			return p.end(GameSuccess), nil
+			return p.end(GameSuccess)
 		}
-		if p.overBudget(roundNum, "verifier") {
-			return p.end(GameFailure), nil
+		if p.overBudget(p.Result.Rounds, "verifier") {
+			return p.end(GameFailure)
 		}
-
-		if p.Result.Rounds >= maxRounds {
-			break
-		}
-
-		if p.shouldStop() {
-			return p.end(GameStopped), nil
-		}
-		// Next prover turn.
 		workspace = p.Executor.WorkspaceState()
-		p.Result.Rounds++
-		p.Result.ProverRounds++
-		roundNum = p.Result.Rounds
-		p.Evidence.Log("round_start", roundNum, "prover", nil)
+	}
+}
 
-		task = spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
-		turn = p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task)
+func (p *PVG) runFixedReviewLoop() *PVGResult {
+	promptOpts := p.promptOptions()
+	workspace := ""
+	recoverableFailures := 0
+	reviewsCompleted := 0
+
+	for reviewsCompleted < p.Config.Until {
 		if p.shouldStop() {
-			return p.end(GameStopped), nil
+			return p.end(GameStopped)
+		}
+		turn := p.runProverTurn(workspace, promptOpts)
+		if p.shouldStop() {
+			return p.end(GameStopped)
 		}
 		if turn.Error != "" {
-			p.Result.Error = turn.Error
-			return p.end(GameFailure), nil
+			if p.turnFailureExceeded(turn, &recoverableFailures) {
+				return p.end(GameFailure)
+			}
+		} else {
+			recoverableFailures = 0
 		}
-		if p.overBudget(roundNum, "prover") {
-			return p.end(GameFailure), nil
+		if p.overBudget(p.Result.Rounds, "prover") {
+			return p.end(GameFailure)
 		}
+
+		workspace = p.Executor.WorkspaceState()
+		if p.shouldStop() {
+			return p.end(GameStopped)
+		}
+		turn = p.runVerifierTurn(workspace, promptOpts)
+		if p.shouldStop() {
+			return p.end(GameStopped)
+		}
+		if turn.Error != "" {
+			if p.turnFailureExceeded(turn, &recoverableFailures) {
+				return p.end(GameFailure)
+			}
+		} else {
+			recoverableFailures = 0
+			reviewsCompleted++
+		}
+		if p.overBudget(p.Result.Rounds, "verifier") {
+			return p.end(GameFailure)
+		}
+		workspace = p.Executor.WorkspaceState()
 	}
 
 	if p.Config.Verbose {
-		log.Printf("=== PVG TIMEOUT ===")
+		log.Printf("=== PVG REVIEW CYCLES COMPLETE ===")
 	}
-	return p.end(GameTimeout), nil
+	return p.end(GameSuccess)
+}
+
+func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions) TurnResult {
+	p.Result.Rounds++
+	p.Result.ProverRounds++
+	roundNum := p.Result.Rounds
+	p.Evidence.Log("round_start", roundNum, "prover", nil)
+
+	task := spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
+	return p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task)
+}
+
+func (p *PVG) runVerifierTurn(workspace string, promptOpts spec.PromptOptions) TurnResult {
+	p.Result.Rounds++
+	p.Result.VerifierRounds++
+	roundNum := p.Result.Rounds
+	p.Evidence.Log("round_start", roundNum, "verifier", nil)
+
+	task := spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
+	return p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task)
+}
+
+func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
+	if !turn.Recoverable {
+		p.Result.Error = turn.Error
+		return true
+	}
+	*consecutive++
+	p.Evidence.Log("agent_failure_recoverable", p.Result.Rounds, turn.Role, map[string]interface{}{
+		"error":                turn.Error,
+		"consecutive_failures": *consecutive,
+		"max_failures":         maxRecoverableAgentFailures,
+	})
+	if *consecutive <= maxRecoverableAgentFailures {
+		return false
+	}
+	p.Result.Error = fmt.Sprintf("agent_failure_budget_exceeded: %s", turn.Error)
+	return true
+}
+
+func (p *PVG) fixedReviewMode() bool {
+	return p.Config.Until > 0
 }
 
 func (p *PVG) shouldStop() bool {
@@ -164,11 +227,14 @@ func (p *PVG) promptOptions() spec.PromptOptions {
 	return spec.PromptOptions{
 		Controller:      p.Config.IsController,
 		PrimarySpecPath: p.Config.PrimarySpecPath,
+		ReviewMode:      p.fixedReviewMode(),
+		ReviewCycles:    p.Config.Until,
 	}
 }
 
 func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string) TurnResult {
 	ts := p.State.Turn(roundNum, role)
+	ts.StopRequested = p.Config.StopRequested
 	if err := WriteTurnTask(ts, task); err != nil {
 		turn := TurnResult{
 			Role:   role,
@@ -177,8 +243,13 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 			Error:  fmt.Sprintf("turn_prepare_failed:%v", err),
 		}
 		p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
-		AppendTurn(p.State.TranscriptPath, role, roleRound, string(turn.Status),
-			turn.Logs, &turn.Stats, fmt.Sprintf("%04d-%s", roundNum, role), turn.Error)
+		AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
+			turn.Logs, &turn.Stats, fmt.Sprintf("%04d-%s", roundNum, role), turn.Error,
+			AppendTurnOptions{
+				IncludeStatus: !p.fixedReviewMode(),
+				RawLogPath:    ts.RawLogPath(),
+				EvidencePath:  p.State.EvidencePath,
+			})
 		return turn
 	}
 
@@ -186,14 +257,20 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 	p.Result.Accumulate(turn.Stats)
 	p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
 
-	AppendTurn(p.State.TranscriptPath, role, roleRound, string(turn.Status),
-		turn.Logs, &turn.Stats, fmt.Sprintf("%04d-%s", roundNum, role), turn.Error)
+	AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
+		turn.Logs, &turn.Stats, fmt.Sprintf("%04d-%s", roundNum, role), turn.Error,
+		AppendTurnOptions{
+			IncludeStatus: !p.fixedReviewMode(),
+			RawLogPath:    ts.RawLogPath(),
+			EvidencePath:  p.State.EvidencePath,
+		})
 
 	return turn
 }
 
 func (p *PVG) end(result GameResult) *PVGResult {
 	p.Result.GameResult = result
+	p.Result.CompletionReason = p.completionReason(result)
 	errMsg := ""
 	if p.Result.Error != "" {
 		errMsg = p.Result.Error
@@ -203,10 +280,27 @@ func (p *PVG) end(result GameResult) *PVGResult {
 		p.Result.VerifierConceded, p.Result.TotalCostUSD,
 		p.Result.TotalInputTokens, p.Result.TotalOutputTokens,
 		p.Result.TotalCacheReadTokens, p.Result.TotalCacheCreateTokens,
-		errMsg)
+		errMsg, p.Result.CompletionReason)
 
 	AppendGameResult(p.State.TranscriptPath, string(result), errMsg)
 	return p.Result
+}
+
+func (p *PVG) completionReason(result GameResult) string {
+	switch result {
+	case GameSuccess:
+		if p.fixedReviewMode() {
+			return "review_cycles_complete"
+		}
+		if p.Result.VerifierConceded {
+			return "verifier_conceded"
+		}
+		return "success"
+	case GameStopped:
+		return "stopped"
+	default:
+		return "failure"
+	}
 }
 
 func (p *PVG) checkpointWorkspace() {

@@ -98,7 +98,13 @@ func TestAppendTurnWithError(t *testing.T) {
 	path := filepath.Join(dir, "transcript.md")
 	os.WriteFile(path, []byte("# Transcript\n"), 0o644)
 
-	AppendTurn(path, "prover", 1, "CONTINUE", "I changed main.go before the tool failed.\n\n<status>CONTINUE</status>", nil, "0001-prover", "pi_failed:1")
+	rawPath := filepath.Join(dir, "turns", "0001-prover", "raw.jsonl")
+	evidencePath := filepath.Join(dir, "evidence.jsonl")
+	AppendTurnWithOptions(path, "prover", 1, "CONTINUE", "I changed main.go before the tool failed.\n\n<status>CONTINUE</status>", nil, "0001-prover", "pi_failed:1", AppendTurnOptions{
+		IncludeStatus: true,
+		RawLogPath:    rawPath,
+		EvidencePath:  evidencePath,
+	})
 
 	content := ReadTranscript(path)
 	if !strings.Contains(content, "runtime error") {
@@ -107,11 +113,17 @@ func TestAppendTurnWithError(t *testing.T) {
 	if !strings.Contains(content, "pi_failed:1") {
 		t.Error("should contain error detail")
 	}
-	if !strings.Contains(content, "Captured Assistant Text Before Error") {
-		t.Error("should include captured assistant text section")
+	if !strings.Contains(content, rawPath) {
+		t.Error("should point to raw turn log")
 	}
-	if !strings.Contains(content, "I changed main.go before the tool failed.") {
-		t.Error("should preserve captured assistant text before error")
+	if !strings.Contains(content, evidencePath) {
+		t.Error("should point to evidence log")
+	}
+	if strings.Contains(content, "Captured Assistant Text Before Error") {
+		t.Error("should not summarize captured assistant text in the transcript")
+	}
+	if strings.Contains(content, "I changed main.go before the tool failed.") {
+		t.Error("should leave captured assistant text in raw artifacts")
 	}
 	if strings.Contains(content, "<status>CONTINUE</status>\n\n<progress_update>") {
 		t.Error("captured assistant text should not preserve the assistant status tag")

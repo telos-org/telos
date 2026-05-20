@@ -82,6 +82,10 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
+	if err := validateCreateRequest(req); err != nil {
+		return nil, err
+	}
+
 	id := generateSessionID(fs.runtime)
 	dir := fs.sessionDir(id)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -165,6 +169,13 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	}
 
 	return fs.deriveSession(id, &m)
+}
+
+func validateCreateRequest(req SessionCreateRequest) error {
+	if req.Until != nil && *req.Until <= 0 {
+		return fmt.Errorf("until must be positive: %w", ErrInvalidSession)
+	}
+	return nil
 }
 
 func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) (SessionKind, error) {
@@ -585,6 +596,8 @@ func deriveSpec(ms ManifestSpec) SessionSpec {
 		ss.TotalCacheReadTokens = summary.TotalCacheReadTokens
 		ss.TotalCacheCreateTokens = summary.TotalCacheCreateTokens
 		ss.RoundCount = summary.RoundCount
+		ss.CompletionReason = summary.CompletionReason
+		ss.VerifierConceded = summary.VerifierConceded
 	}
 
 	return ss
@@ -603,6 +616,8 @@ func applySessionEvidenceSummary(session *Session) {
 	var hasCacheRead bool
 	var hasCacheCreate bool
 	var hasRounds bool
+	var completionReason *string
+	var verifierConceded *bool
 
 	for _, spec := range session.Specs {
 		if spec.TotalCostUSD != nil {
@@ -629,6 +644,12 @@ func applySessionEvidenceSummary(session *Session) {
 			roundCount += *spec.RoundCount
 			hasRounds = true
 		}
+		if spec.CompletionReason != nil {
+			completionReason = spec.CompletionReason
+		}
+		if spec.VerifierConceded != nil {
+			verifierConceded = spec.VerifierConceded
+		}
 	}
 
 	if hasCost {
@@ -649,6 +670,8 @@ func applySessionEvidenceSummary(session *Session) {
 	if hasRounds {
 		session.RoundCount = &roundCount
 	}
+	session.CompletionReason = completionReason
+	session.VerifierConceded = verifierConceded
 }
 
 func deriveStatus(m *Manifest) SessionStatus {
@@ -763,6 +786,8 @@ type evidenceSummary struct {
 	TotalCacheReadTokens   *int
 	TotalCacheCreateTokens *int
 	RoundCount             *int
+	CompletionReason       *string
+	VerifierConceded       *bool
 }
 
 func readEvidenceSummary(path *string) (*evidenceSummary, error) {
@@ -796,6 +821,8 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 			TotalCacheReadTokens:   numberAsInt(dataField["total_cache_read_tokens"]),
 			TotalCacheCreateTokens: numberAsInt(dataField["total_cache_creation_tokens"]),
 			RoundCount:             evidenceRoundCount(raw, dataField),
+			CompletionReason:       stringPtrFromAny(dataField["completion_reason"]),
+			VerifierConceded:       boolPtrFromAny(dataField["verifier_conceded"]),
 		}
 		summary = item
 	}
@@ -841,6 +868,22 @@ func numberAsInt(value any) *int {
 		}
 	}
 	return nil
+}
+
+func stringPtrFromAny(value any) *string {
+	v, ok := value.(string)
+	if !ok || v == "" {
+		return nil
+	}
+	return &v
+}
+
+func boolPtrFromAny(value any) *bool {
+	v, ok := value.(bool)
+	if !ok {
+		return nil
+	}
+	return &v
 }
 
 var sessionSeq atomic.Uint64
@@ -963,8 +1006,8 @@ func buildConfig(req SessionCreateRequest) SessionConfig {
 		Model:    req.Model,
 		Thinking: req.Thinking,
 	}
-	if req.MaxRounds != nil {
-		cfg.MaxRounds = *req.MaxRounds
+	if req.Until != nil {
+		cfg.Until = *req.Until
 	}
 	if req.MaxCostUSD != nil {
 		cfg.MaxCostUSD = req.MaxCostUSD

@@ -165,13 +165,13 @@ TELOS_MODEL=claude-opus-4-6 uv run telos run SPEC.md --json
 ### Bound the run
 
 ```bash
-uv run telos run SPEC.md --thinking medium --max-rounds 8 --max-cost-usd 5 --agent-timeout-sec 3600 --json
+uv run telos run SPEC.md --thinking medium --until 4 --max-cost-usd 5 --json
 ```
 
 The same run config can come from environment variables:
 
 ```bash
-TELOS_THINKING=medium TELOS_MAX_ROUNDS=8 TELOS_MAX_COST_USD=5 TELOS_AGENT_TIMEOUT_SEC=3600 uv run telos run SPEC.md --json
+TELOS_THINKING=medium TELOS_MAX_COST_USD=5 uv run telos run SPEC.md --until 4 --json
 ```
 
 CLI flags override environment variables.
