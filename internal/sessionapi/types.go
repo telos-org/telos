@@ -64,18 +64,34 @@ const (
 	KindTask       SessionKind = "task"
 )
 
+func (k *SessionKind) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	kind := SessionKind(value)
+	switch kind {
+	case KindController, KindTask:
+		*k = kind
+		return nil
+	default:
+		return fmt.Errorf("invalid session_kind %q", value)
+	}
+}
+
 // --------- Request types ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 // SessionCreateRequest is the body of POST /api/sessions.
 type SessionCreateRequest struct {
-	SpecMarkdown    *string  `json:"spec_markdown,omitempty"`
-	ParentSessionID *string  `json:"parent_session_id,omitempty"`
-	MaxRounds       *int     `json:"max_rounds,omitempty"`
-	Model           string   `json:"model,omitempty"`
-	Thinking        string   `json:"thinking,omitempty"`
-	MaxCostUSD      *float64 `json:"max_cost_usd,omitempty"`
-	AgentTimeoutSec *int     `json:"agent_timeout_sec,omitempty"`
-	Workspace       *string  `json:"workspace,omitempty"`
+	SpecMarkdown    *string      `json:"spec_markdown,omitempty"`
+	SessionKind     *SessionKind `json:"session_kind,omitempty"`
+	ParentSessionID *string      `json:"parent_session_id,omitempty"`
+	MaxRounds       *int         `json:"max_rounds,omitempty"`
+	Model           string       `json:"model,omitempty"`
+	Thinking        string       `json:"thinking,omitempty"`
+	MaxCostUSD      *float64     `json:"max_cost_usd,omitempty"`
+	AgentTimeoutSec *int         `json:"agent_timeout_sec,omitempty"`
+	Workspace       *string      `json:"workspace,omitempty"`
 }
 
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{id}/spec.
@@ -85,10 +101,9 @@ type SessionSpecUpdateRequest struct {
 
 // SessionSpecResponse is returned by GET /api/sessions/{id}/spec.
 type SessionSpecResponse struct {
-	DirName     string `json:"dirName"`
+	DirName     string `json:"dir_name"`
 	Markdown    string `json:"markdown"`
 	Environment string `json:"environment"`
-	SpecPath    string `json:"specPath"`
 	Version     *int   `json:"version,omitempty"`
 }
 

@@ -226,6 +226,15 @@ func TestSessionCreateRequestForLocalSpec(t *testing.T) {
 	}
 }
 
+func TestSessionKindForCommand(t *testing.T) {
+	if got := sessionKindForCommand("apply"); got != sessionapi.KindController {
+		t.Fatalf("apply kind: got %q", got)
+	}
+	if got := sessionKindForCommand("run"); got != sessionapi.KindTask {
+		t.Fatalf("run kind: got %q", got)
+	}
+}
+
 func TestSessionCreateRequestRejectsCatalogueSpecID(t *testing.T) {
 	_, err := sessionCreateRequestForSpec("cal-diy")
 	if err == nil {

@@ -14,6 +14,14 @@ func TestSessionRuntimeRejectsLegacyHostedValue(t *testing.T) {
 	}
 }
 
+func TestSessionCreateRequestRejectsInvalidSessionKind(t *testing.T) {
+	var req sessionapi.SessionCreateRequest
+	err := json.Unmarshal([]byte(`{"session_kind":"daemon"}`), &req)
+	if err == nil {
+		t.Fatal("expected invalid session_kind to fail")
+	}
+}
+
 func TestSessionConfigPreservesUnknownFields(t *testing.T) {
 	var cfg sessionapi.SessionConfig
 	if err := json.Unmarshal([]byte(`{"model":"opus","max_rounds":8,"future_knob":{"x":1}}`), &cfg); err != nil {

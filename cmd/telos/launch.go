@@ -29,7 +29,7 @@ func cmdLaunch(command, action string, args []string) {
 	env := fs.String("env", "", "Cloud environment ID")
 	model := fs.String("model", "", "Model name")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
-	maxRounds := fs.Int("max-rounds", 20, "Maximum PVG rounds")
+	maxRounds := fs.Int("max-rounds", 20, "Maximum agent rounds")
 	maxCostUSD := fs.Float64("max-cost-usd", 20.0, "Maximum cost in USD")
 	agentTimeout := fs.Int("agent-timeout-sec", 1800, "Agent timeout in seconds")
 	readyTimeout := fs.Int("ready-timeout", 900, "Environment readiness timeout in seconds")
@@ -124,6 +124,7 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	cfg.SessionKind = sessionKindForCommand(command)
 
 	session, err := cli.SubmitLocalSession(specPath, cfg)
 	if err != nil {
@@ -187,6 +188,8 @@ func runChildCloud(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	kind := sessionapi.KindTask
+	req.SessionKind = &kind
 	req.ParentSessionID = &ctx.sessionID
 	session, err := cloud.NewClient(ctx.endpoint, ctx.token).CreateSession(req)
 	if err != nil {
@@ -214,6 +217,8 @@ func runCloud(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	kind := sessionKindForCommand(command)
+	req.SessionKind = &kind
 	if command == "apply" && envID == "" {
 		applyCloudAuto(req, jsonOut, waitForEnvironment, readyTimeout, action)
 		return
@@ -389,6 +394,13 @@ func specNameFromRequest(req sessionapi.SessionCreateRequest) (string, error) {
 		return "", fmt.Errorf("spec frontmatter must include name")
 	}
 	return name, nil
+}
+
+func sessionKindForCommand(command string) sessionapi.SessionKind {
+	if command == "apply" {
+		return sessionapi.KindController
+	}
+	return sessionapi.KindTask
 }
 
 func activeControllerForSpec(sessions []sessionapi.Session, specName string) (*sessionapi.Session, error) {

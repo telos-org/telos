@@ -181,8 +181,10 @@ func TestSessionCreateRequestOmitsEmptyRuntimeDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(body), "model") || strings.Contains(string(body), "thinking") {
-		t.Fatalf("empty model/thinking should be omitted: %s", body)
+	if strings.Contains(string(body), "model") ||
+		strings.Contains(string(body), "thinking") ||
+		strings.Contains(string(body), "session_kind") {
+		t.Fatalf("empty defaults should be omitted: %s", body)
 	}
 }
 

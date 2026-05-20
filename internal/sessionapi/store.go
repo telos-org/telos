@@ -93,7 +93,10 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		return nil, err
 	}
 	specName := prepared.Name
-	sessionKind := fs.sessionKindForCreate(req)
+	sessionKind, err := fs.sessionKindForCreate(req)
+	if err != nil {
+		return nil, err
+	}
 	if sessionKind == KindController {
 		ids, err := fs.liveControllerIDsBySpecName(specName)
 		if err != nil {
@@ -113,7 +116,7 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	}
 
 	evidencePath := filepath.Join(specDir, "evidence.jsonl")
-	transcriptPath := filepath.Join(specDir, fmt.Sprintf("pvg-transcript-%s.md", id))
+	transcriptPath := filepath.Join(specDir, fmt.Sprintf("transcript-%s.md", id))
 	workspacePath := filepath.Join(specDir, "workspace.tar.gz")
 	sessionSpecPath := ""
 	if len(prepared.SpecData) > 0 {
@@ -164,14 +167,27 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	return fs.deriveSession(id, &m)
 }
 
-func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) SessionKind {
+func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) (SessionKind, error) {
+	if req.SessionKind != nil {
+		switch *req.SessionKind {
+		case KindController:
+			if req.ParentSessionID != nil {
+				return "", fmt.Errorf("child sessions must use session_kind %q: %w", KindTask, ErrInvalidSession)
+			}
+			return KindController, nil
+		case KindTask:
+			return KindTask, nil
+		default:
+			return "", fmt.Errorf("invalid session_kind %q: %w", *req.SessionKind, ErrInvalidSession)
+		}
+	}
 	if req.ParentSessionID != nil {
-		return KindTask
+		return KindTask, nil
 	}
 	if fs.runtime == RuntimeCloud {
-		return KindController
+		return KindController, nil
 	}
-	return KindTask
+	return KindTask, nil
 }
 
 func (fs *FileStore) liveControllerIDsBySpecName(specName string) ([]string, error) {
@@ -241,7 +257,6 @@ func (fs *FileStore) Spec(id string) (*SessionSpecResponse, error) {
 		DirName:     dirName,
 		Markdown:    string(data),
 		Environment: frontmatterJSON(string(data)),
-		SpecPath:    *m.SessionSpecPath,
 		Version:     m.CurrentSpecVersion,
 	}, nil
 }

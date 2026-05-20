@@ -55,7 +55,7 @@ func TestCreateSession(t *testing.T) {
 		t.Fatalf("decode response: %v", err)
 	}
 
-	// Verify the JSON contract matches the Python Sessions API.
+	// Verify the public Sessions API JSON contract.
 	assertNonEmpty(t, "session_id", session.SessionID)
 	assertEqual(t, "status", string(session.Status), "pending")
 	assertEqual(t, "runtime", string(session.Runtime), "local")
@@ -153,6 +153,53 @@ func TestCreateSessionPersistsSpecMarkdown(t *testing.T) {
 	}
 	if string(data) != markdown {
 		t.Fatalf("session spec was not persisted")
+	}
+}
+
+func TestCloudCreateSessionHonorsExplicitTaskKind(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	markdown := "---\nversion: v0\nname: one-off\nplatform: cloud\n---\n# One Off\n"
+	kind := sessionapi.KindTask
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdown,
+		SessionKind:  &kind,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindTask {
+		t.Fatalf("session_kind: got %#v", session.SessionKind)
+	}
+	if session.CurrentSpecVersion != nil {
+		t.Fatalf("task should not have current_spec_version: %#v", session.CurrentSpecVersion)
+	}
+}
+
+func TestCreateSessionRejectsControllerChild(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	markdown := "---\nversion: v0\nname: bad-child\nplatform: local\n---\n# Bad Child\n"
+	parentID := "sess_parent"
+	kind := sessionapi.KindController
+	body, err := json.Marshal(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &markdown,
+		SessionKind:     &kind,
+		ParentSessionID: &parentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 400, got %d: %s", resp.StatusCode, data)
 	}
 }
 
@@ -263,7 +310,7 @@ func TestCreateSessionJSONShape(t *testing.T) {
 	}
 	defer resp.Body.Close()
 
-	// Verify the raw JSON has the expected top-level keys matching the Python contract.
+	// Verify the raw JSON has the expected top-level keys.
 	raw, _ := io.ReadAll(resp.Body)
 	var m map[string]any
 	if err := json.Unmarshal(raw, &m); err != nil {
@@ -385,21 +432,38 @@ func TestGetControllerSessionSpec(t *testing.T) {
 		data, _ := io.ReadAll(resp.Body)
 		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
 	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := raw["dir_name"]; !ok {
+		t.Fatalf("expected dir_name in response: %#v", raw)
+	}
+	if _, ok := raw["dirName"]; ok {
+		t.Fatalf("unexpected camelCase dirName in response: %#v", raw)
+	}
+	if _, ok := raw["spec_path"]; ok {
+		t.Fatalf("unexpected spec_path in response: %#v", raw)
+	}
+	if _, ok := raw["specPath"]; ok {
+		t.Fatalf("unexpected camelCase specPath in response: %#v", raw)
+	}
 	var body sessionapi.SessionSpecResponse
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(data, &body); err != nil {
 		t.Fatal(err)
 	}
 	if body.DirName != "postgres" {
-		t.Fatalf("dirName: got %q", body.DirName)
+		t.Fatalf("dir_name: got %q", body.DirName)
 	}
 	if !strings.Contains(body.Markdown, "# postgres") {
 		t.Fatalf("markdown: got %q", body.Markdown)
 	}
 	if body.Environment != `{"name":"postgres","platform":"cloud","version":"v0"}` {
 		t.Fatalf("environment: got %q", body.Environment)
-	}
-	if body.SpecPath == "" {
-		t.Fatal("expected specPath")
 	}
 }
 
@@ -596,7 +660,7 @@ func TestTranscriptPresent(t *testing.T) {
 
 	// Write a transcript file in the expected location.
 	transcriptPath := filepath.Join(store.Root, created.SessionID, "specs", "tp",
-		"pvg-transcript-"+created.SessionID+".md")
+		"transcript-"+created.SessionID+".md")
 	os.MkdirAll(filepath.Dir(transcriptPath), 0o755)
 	os.WriteFile(transcriptPath, []byte("# Transcript\nHello"), 0o644)
 
@@ -969,7 +1033,7 @@ func TestPythonManifestCompat(t *testing.T) {
 	os.MkdirAll(specDir, 0o755)
 
 	evidencePath := filepath.Join(specDir, "evidence.jsonl")
-	transcriptPath := filepath.Join(specDir, "pvg-transcript-"+id+".md")
+	transcriptPath := filepath.Join(specDir, "transcript-"+id+".md")
 
 	os.WriteFile(transcriptPath, []byte("# Test transcript"), 0o644)
 	os.WriteFile(evidencePath, []byte(`{"event":"agent_complete","data":{"cost_usd":1.23}}`+"\n"), 0o644)
@@ -1112,9 +1176,21 @@ func TestBearerAuthorizerHonorsSessionScopedTokens(t *testing.T) {
 		t.Fatalf("controller token should read child session, got %q", got.SessionID)
 	}
 
-	req, _ := http.NewRequest("GET", srv.URL+"/api/sessions/"+other.SessionID, nil)
+	req, _ := http.NewRequest("GET", srv.URL+"/api/sessions/"+parent.SessionID+"/spec", nil)
 	req.Header.Set("Authorization", "Bearer "+parentToken)
 	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("controller token should read its own spec, got %d: %s", resp.StatusCode, body)
+	}
+
+	req, _ = http.NewRequest("GET", srv.URL+"/api/sessions/"+other.SessionID, nil)
+	req.Header.Set("Authorization", "Bearer "+parentToken)
+	resp, err = http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}

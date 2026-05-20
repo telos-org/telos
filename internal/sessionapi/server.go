@@ -73,6 +73,8 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case errors.Is(err, ErrConflict):
 			writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, ErrInvalidSession):
+			writeError(w, http.StatusBadRequest, err.Error())
 		default:
 			writeError(w, http.StatusInternalServerError, err.Error())
 		}
@@ -83,7 +85,7 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) getSpec(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionUpdateSessionSpec, SessionID: id}); !ok {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
 		return
 	}
 	spec, err := h.store.Spec(id)

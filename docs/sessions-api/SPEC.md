@@ -95,7 +95,7 @@ telosd
 session worker
         |
         v
-PVG loop -> Pi subprocess -> transcript + evidence + workspace
+agent loop -> Pi subprocess -> transcript + evidence + workspace
 ```
 
 Local and cloud differ by adapters:
@@ -155,7 +155,7 @@ Public specs do not declare `capabilities`. Authority comes from session kind,
 caller role, and internal runtime policy.
 
 `skills` are operating and verification guidance. A skill suffixed with `*`
-means the verifier must grade against it.
+means the evaluator must grade against it as a required rubric.
 
 ## Session Kinds
 
@@ -207,7 +207,7 @@ Substrate authority follows the same model:
 controller worker
   observes live state
   launches task sessions through the Sessions API
-  runs controller PVG cycles
+  runs controller agent cycles
 
 task worker
   performs the bounded operation requested by its task spec
@@ -241,6 +241,7 @@ Create accepts raw markdown:
 ```json
 {
   "spec_markdown": "SPEC.md contents",
+  "session_kind": "controller",
   "parent_session_id": "optional lineage pointer",
   "model": "claude-opus-4-6",
   "thinking": "medium",
@@ -254,6 +255,10 @@ Create accepts raw markdown:
 Product catalogue lookup, local file reading, and UI spec selection happen
 before this request. The Sessions API receives the exact spec text to run.
 
+`session_kind` is explicit for new callers: `controller` for persistent desired
+state and `task` for bounded work. If omitted, the server may apply
+compatibility defaults for old clients.
+
 ## Session State
 
 The filesystem is authoritative:
@@ -266,7 +271,7 @@ The filesystem is authoritative:
   specs/<spec_name>/
     spec.md
     evidence.jsonl
-    pvg-transcript-<session_id>.md
+    transcript-<session_id>.md
     workspace.tar.gz
     turns/
 ```
@@ -344,7 +349,7 @@ It contains:
 public CLI
 telosd server
 session worker
-PVG runtime
+agent-loop runtime
 Pi adapter
 prompt and skill data
 ```
@@ -363,7 +368,7 @@ system inspection tools
 ```
 
 Cloud workers stage the current Telos binary into the `telos-agent` pod and run
-that binary there. The heavy tool image should not be rebuilt for ordinary PVG
+that binary there. The heavy tool image should not be rebuilt for ordinary runtime
 or CLI changes.
 
 ## Control Plane Boundary
@@ -460,5 +465,5 @@ Cloud repo
 - No public `capabilities`.
 - No public daemon or worker command surface.
 - No product catalogue dependency inside the Sessions API.
-- No per-turn prover/verifier Kubernetes pods in the final cloud path.
+- No per-turn implementation/evaluation Kubernetes pods in the final cloud path.
 - No Python runtime bundle as the long-term product substrate.
