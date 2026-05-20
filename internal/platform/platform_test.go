@@ -4,7 +4,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func TestLocalPlatformRun(t *testing.T) {
@@ -14,7 +16,7 @@ func TestLocalPlatformRun(t *testing.T) {
 	var lines []string
 	result := p.Run(
 		[]string{"sh", "-c", "echo hello; echo world"},
-		"", nil, 10,
+		"", nil, 10, nil,
 		func(line string) { lines = append(lines, line) },
 	)
 
@@ -38,7 +40,7 @@ func TestLocalPlatformRunWithTask(t *testing.T) {
 
 	result := p.Run(
 		[]string{"sh", "-c", "echo $TELOS_TASK"},
-		"test-task-body", nil, 10, nil,
+		"test-task-body", nil, 10, nil, nil,
 	)
 
 	if result.InfraError != "" {
@@ -61,7 +63,7 @@ func TestLocalPlatformRunWithEnv(t *testing.T) {
 
 	result := p.Run(
 		[]string{"sh", "-c", "echo $TELOS_ROLE"},
-		"", map[string]string{"TELOS_ROLE": "prover"}, 10, nil,
+		"", map[string]string{"TELOS_ROLE": "prover"}, 10, nil, nil,
 	)
 
 	if result.InfraError != "" {
@@ -84,11 +86,28 @@ func TestLocalPlatformRunFailure(t *testing.T) {
 
 	result := p.Run(
 		[]string{"sh", "-c", "exit 42"},
-		"", nil, 10, nil,
+		"", nil, 10, nil, nil,
 	)
 
 	if result.ReturnCode != 42 {
 		t.Errorf("expected exit code 42, got %d", result.ReturnCode)
+	}
+}
+
+func TestLocalPlatformRunWithoutTimeout(t *testing.T) {
+	dir := t.TempDir()
+	p := NewLocalPlatform(dir)
+
+	result := p.Run(
+		[]string{"sh", "-c", "echo no-timeout"},
+		"", nil, 0, nil, nil,
+	)
+
+	if result.InfraError != "" {
+		t.Fatalf("infra error: %s", result.InfraError)
+	}
+	if result.ReturnCode != 0 {
+		t.Fatalf("return code: got %d", result.ReturnCode)
 	}
 }
 
@@ -98,7 +117,7 @@ func TestLocalPlatformRunTimeout(t *testing.T) {
 
 	result := p.Run(
 		[]string{"sh", "-c", "sleep 60"},
-		"", nil, 1, nil,
+		"", nil, 1, nil, nil,
 	)
 
 	if result.InfraError == "" {
@@ -109,13 +128,38 @@ func TestLocalPlatformRunTimeout(t *testing.T) {
 	}
 }
 
+func TestLocalPlatformRunInterrupt(t *testing.T) {
+	dir := t.TempDir()
+	p := NewLocalPlatform(dir)
+	var stop atomic.Bool
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		stop.Store(true)
+	}()
+
+	start := time.Now()
+	result := p.Run(
+		[]string{"sh", "-c", "sleep 60"},
+		"", nil, 0,
+		func() bool { return stop.Load() },
+		nil,
+	)
+
+	if result.InfraError != "local_interrupted:stop_requested" {
+		t.Fatalf("infra error: got %q", result.InfraError)
+	}
+	if time.Since(start) > 3*time.Second {
+		t.Fatal("interrupt should stop the subprocess promptly")
+	}
+}
+
 func TestLocalPlatformRunInvalidCommand(t *testing.T) {
 	dir := t.TempDir()
 	p := NewLocalPlatform(dir)
 
 	result := p.Run(
 		[]string{"/nonexistent/binary"},
-		"", nil, 10, nil,
+		"", nil, 10, nil, nil,
 	)
 
 	if result.InfraError == "" {

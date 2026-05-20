@@ -2,10 +2,13 @@ package executor
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/platform"
 )
 
 func TestParsePiJSONLine(t *testing.T) {
@@ -32,6 +35,17 @@ func TestParsePiJSONLine(t *testing.T) {
 	// Empty
 	if ParsePiJSONLine("") != nil {
 		t.Error("expected nil for empty string")
+	}
+}
+
+func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
+	exec := NewPiExecutor(nil, "claude-test", "", 0)
+
+	if exec.Timeout != 0 {
+		t.Fatalf("timeout should default to disabled, got %d", exec.Timeout)
+	}
+	if exec.Thinking != "medium" {
+		t.Fatalf("thinking: got %q", exec.Thinking)
 	}
 }
 
@@ -258,5 +272,36 @@ func TestRawLogLineFormat(t *testing.T) {
 	// Invalid JSON -> wraps as unparsed
 	if ParsePiJSONLine("garbage") != nil {
 		t.Error("invalid json should return nil")
+	}
+}
+
+func TestAppendPiFailureWritesRawFailureRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "raw.jsonl")
+
+	appendPiFailure(path, "pi_failed:1", &platform.CommandResult{
+		ReturnCode: 1,
+		DurationMS: 25,
+		Stderr:     "unexpected event order",
+	}, "partial assistant text")
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read raw log: %v", err)
+	}
+	var record map[string]interface{}
+	if err := json.Unmarshal(data, &record); err != nil {
+		t.Fatalf("raw failure record should be json: %v\n%s", err, data)
+	}
+	if record["type"] != "telos_pi_failure" {
+		t.Fatalf("type: got %v", record["type"])
+	}
+	if record["reason"] != "pi_failed:1" {
+		t.Fatalf("reason: got %v", record["reason"])
+	}
+	if record["stderr"] != "unexpected event order" {
+		t.Fatalf("stderr: got %v", record["stderr"])
+	}
+	if record["assistantText"] != "partial assistant text" {
+		t.Fatalf("assistant text: got %v", record["assistantText"])
 	}
 }

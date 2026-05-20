@@ -10,13 +10,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
 
 const (
 	TaskEnvVar            = "TELOS_TASK"
-	DefaultTimeout        = 1800
 	FileListLimit         = 200
 	WorkspaceStateExclude = ".git .telos __pycache__"
 )
@@ -33,6 +33,9 @@ type CommandResult struct {
 // OnStdoutLine is called for each stdout line as it arrives.
 type OnStdoutLine func(line string)
 
+// InterruptRequested returns true when an active command should be stopped.
+type InterruptRequested func() bool
+
 // LocalPlatform runs commands as subprocesses in a workspace directory.
 type LocalPlatform struct {
 	Workspace string
@@ -46,10 +49,7 @@ func NewLocalPlatform(workspace string) *LocalPlatform {
 }
 
 // Run executes a command in the workspace.
-func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, timeout int, onLine OnStdoutLine) *CommandResult {
-	if timeout <= 0 {
-		timeout = DefaultTimeout
-	}
+func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, timeout int, interrupt InterruptRequested, onLine OnStdoutLine) *CommandResult {
 	result := &CommandResult{}
 	started := time.Now()
 
@@ -140,13 +140,44 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 		}
 	}()
 
-	timer := time.AfterFunc(time.Duration(timeout)*time.Second, func() {
-		killProcessGroup(cmd)
-	})
+	var timedOut atomic.Bool
+	var interrupted atomic.Bool
+	var timer *time.Timer
+	if timeout > 0 {
+		timer = time.AfterFunc(time.Duration(timeout)*time.Second, func() {
+			timedOut.Store(true)
+			killProcessGroup(cmd)
+		})
+	}
+	var interruptDone chan struct{}
+	if interrupt != nil {
+		interruptDone = make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(200 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ticker.C:
+					if interrupt() {
+						interrupted.Store(true)
+						killProcessGroup(cmd)
+						return
+					}
+				case <-interruptDone:
+					return
+				}
+			}
+		}()
+	}
 
 	<-doneCh
 	err = cmd.Wait()
-	timer.Stop()
+	if timer != nil {
+		timer.Stop()
+	}
+	if interruptDone != nil {
+		close(interruptDone)
+	}
 
 	result.Stderr = stderrBuf.String()
 	if cmd.ProcessState != nil {
@@ -156,8 +187,10 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 	}
 	result.DurationMS = int(time.Since(started).Milliseconds())
 
-	if err != nil && result.ReturnCode == -1 {
+	if err != nil && timedOut.Load() {
 		result.InfraError = fmt.Sprintf("local_timeout:%d", timeout)
+	} else if err != nil && interrupted.Load() {
+		result.InfraError = "local_interrupted:stop_requested"
 	}
 
 	return result

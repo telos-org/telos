@@ -24,9 +24,6 @@ func NewPiExecutor(p *platform.LocalPlatform, model, thinking string, timeout in
 	if thinking == "" {
 		thinking = "medium"
 	}
-	if timeout <= 0 {
-		timeout = 1800
-	}
 	return &PiExecutor{
 		Platform: p,
 		Model:    model,
@@ -44,9 +41,11 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	var stopReason string
 	var rawLogPath string
 	var taskPath string
+	var stopRequested func() bool
 	if turnState != nil {
 		rawLogPath = turnState.RawLogPath()
 		taskPath = turnState.TaskPath()
+		stopRequested = turnState.StopRequested
 	}
 
 	onLine := func(line string) {
@@ -71,45 +70,47 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	if taskPath != "" {
 		taskEnv = ""
 	}
-	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, onLine)
+	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, onLine)
 	if stopReason == "length" {
 		agentError = "agent_output_truncated:length"
 	}
 
 	logs := strings.Join(textParts, "")
 	if result.InfraError != "" {
+		appendPiFailure(rawLogPath, result.InfraError, result, logs)
 		return game.TurnResult{
-			Role:   role,
-			Status: game.StatusContinue,
-			Logs:   orDefault(logs, result.InfraError),
-			Stats:  stats,
-			Error:  result.InfraError,
+			Role:        role,
+			Status:      game.StatusContinue,
+			Logs:        result.InfraError,
+			Stats:       stats,
+			Error:       result.InfraError,
+			Recoverable: true,
 		}
 	}
 
 	stderrTrimmed := strings.TrimSpace(result.Stderr)
 	if result.ReturnCode != 0 {
-		detail := strings.TrimSpace(logs)
-		if stderrTrimmed != "" {
-			detail = fmt.Sprintf("%s\n[stderr]\n%s", detail, stderrTrimmed)
-			detail = strings.TrimSpace(detail)
-		}
+		reason := orDefault(agentError, fmt.Sprintf("pi_failed:%d", result.ReturnCode))
+		appendPiFailure(rawLogPath, reason, result, logs)
 		return game.TurnResult{
-			Role:   role,
-			Status: game.StatusContinue,
-			Logs:   orDefault(detail, fmt.Sprintf("pi exited %d", result.ReturnCode)),
-			Stats:  stats,
-			Error:  orDefault(agentError, fmt.Sprintf("pi_failed:%d", result.ReturnCode)),
+			Role:        role,
+			Status:      game.StatusContinue,
+			Logs:        reason,
+			Stats:       stats,
+			Error:       reason,
+			Recoverable: true,
 		}
 	}
 
 	if agentError != "" {
+		appendPiFailure(rawLogPath, agentError, result, logs)
 		return game.TurnResult{
-			Role:   role,
-			Status: game.StatusContinue,
-			Logs:   orDefault(logs, agentError),
-			Stats:  stats,
-			Error:  agentError,
+			Role:        role,
+			Status:      game.StatusContinue,
+			Logs:        agentError,
+			Stats:       stats,
+			Error:       agentError,
+			Recoverable: true,
 		}
 	}
 
@@ -118,12 +119,14 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		if stderrTrimmed != "" {
 			detail = fmt.Sprintf("%s\n[stderr]\n%s", detail, stderrTrimmed)
 		}
+		appendPiFailure(rawLogPath, "agent_no_output", result, logs)
 		return game.TurnResult{
-			Role:   role,
-			Status: game.StatusContinue,
-			Logs:   detail,
-			Stats:  stats,
-			Error:  "agent_no_output",
+			Role:        role,
+			Status:      game.StatusContinue,
+			Logs:        detail,
+			Stats:       stats,
+			Error:       "agent_no_output",
+			Recoverable: true,
 		}
 	}
 
@@ -296,6 +299,24 @@ func AppendRawLogLine(path, line string) {
 	}
 	defer f.Close()
 	f.WriteString(out + "\n")
+}
+
+func appendPiFailure(path string, reason string, result *platform.CommandResult, assistantText string) {
+	if path == "" {
+		return
+	}
+	event := map[string]interface{}{
+		"type":       "telos_pi_failure",
+		"reason":     reason,
+		"stderr":     result.Stderr,
+		"returnCode": result.ReturnCode,
+		"durationMS": result.DurationMS,
+	}
+	if strings.TrimSpace(assistantText) != "" {
+		event["assistantText"] = assistantText
+	}
+	b, _ := json.Marshal(event)
+	AppendRawLogLine(path, string(b))
 }
 
 func extractMessageError(msg map[string]interface{}) string {
