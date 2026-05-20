@@ -495,13 +495,13 @@ func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
 		if err := os.MkdirAll(filepath.Dir(*path), 0o755); err != nil {
 			t.Fatalf("mkdir transcript dir: %v", err)
 		}
-		if err := os.WriteFile(*path, []byte("# Transcript\nready\n"), 0o644); err != nil {
+		if err := os.WriteFile(*path, []byte("# Transcript\n<progress_update>ready</progress_update>\n"), 0o644); err != nil {
 			t.Fatalf("write transcript: %v", err)
 		}
 		if _, err := store.Stop(session.SessionID); err != nil {
 			t.Fatalf("Stop: %v", err)
 		}
-	})
+	}, false)
 	if err != nil {
 		t.Fatalf("followTranscript: %v", err)
 	}
@@ -530,7 +530,7 @@ func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
 	var out bytes.Buffer
 	err = followTranscript(session.SessionID, "", &out, func(time.Duration) {
 		t.Fatal("terminal session should not sleep")
-	})
+	}, false)
 	if err == nil {
 		t.Fatal("expected missing terminal transcript to fail")
 	}
@@ -567,12 +567,46 @@ func TestFollowTranscriptSurfacesControllerTranscriptError(t *testing.T) {
 	var out bytes.Buffer
 	err := followTranscript("sess_running", "", &out, func(time.Duration) {
 		t.Fatal("500 transcript errors should not sleep")
-	})
+	}, false)
 	if err == nil {
 		t.Fatal("expected transcript error")
 	}
 	if !strings.Contains(err.Error(), "controller transcript lookup failed") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPrintLogsDefaultsToProgressUpdates(t *testing.T) {
+	transcript := `# Transcript
+
+hidden raw content with inline code ` + "`<progress_update>`" + `
+
+<progress_update>First checkpoint</progress_update>
+
+more raw content with inline code ` + "`</progress_update>`" + `
+
+<progress_update ts="2026-05-20T00:00:00Z">Second checkpoint</progress_update>`
+
+	var out bytes.Buffer
+	printLogs(&out, transcript, false)
+	text := out.String()
+	for _, want := range []string{"#1 First checkpoint", "#2 Second checkpoint"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("progress output missing %q:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "hidden raw content") || strings.Contains(text, "more raw content") {
+		t.Fatalf("progress output leaked raw transcript:\n%s", text)
+	}
+}
+
+func TestPrintLogsRawShowsTranscript(t *testing.T) {
+	transcript := "# Transcript\nraw content\n<progress_update>Progress</progress_update>\n"
+
+	var out bytes.Buffer
+	printLogs(&out, transcript, true)
+	if out.String() != transcript {
+		t.Fatalf("raw output mismatch:\n%s", out.String())
 	}
 }
 
@@ -599,6 +633,37 @@ func TestControllerLookupReturnsClusterAPIError(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "session sess_controller: not found") {
 		t.Fatalf("controller error fell through to generic not found: %v", err)
+	}
+}
+
+func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
+	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+
+	_, err := getSessionFromAnywhere("local_missing", "")
+	if err == nil {
+		t.Fatal("expected missing local session")
+	}
+	text := err.Error()
+	for _, want := range []string{
+		"session local_missing not found in",
+		"Local sessions are workspace-scoped",
+		"TELOS_SESSION_DIR=/path/to/.telos/sessions",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("missing guidance %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestLocalSessionRootDefaultsToWorkspaceTelosDir(t *testing.T) {
+	t.Setenv("TELOS_SESSION_DIR", "")
+
+	want, err := filepath.Abs(filepath.Join(".telos", "sessions"))
+	if err != nil {
+		t.Fatalf("abs sessions path: %v", err)
+	}
+	if got := localSessionRoot(); got != want {
+		t.Fatalf("local session root: got %q", got)
 	}
 }
 

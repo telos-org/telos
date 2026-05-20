@@ -3,7 +3,9 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/telos-org/telos/internal/cli"
@@ -141,8 +143,23 @@ func cmdLaunch(command, action string, args []string) {
 			"status":      "running",
 		})
 	} else {
-		fmt.Printf("%s %s (%s)\n", action, session.SessionID, session.SpecName)
+		printLocalLaunch(os.Stdout, action, session)
 	}
+}
+
+func printLocalLaunch(out io.Writer, action string, session *cli.LocalSession) {
+	workspace := shellQuote(session.Workspace)
+	fmt.Fprintf(out, "%s %s (%s)\n", action, session.SessionID, session.SpecName)
+	fmt.Fprintf(out, "workspace %s\n", session.Workspace)
+	fmt.Fprintf(out, "describe  cd %s && telos describe %s\n", workspace, session.SessionID)
+	fmt.Fprintf(out, "logs      cd %s && telos logs %s\n", workspace, session.SessionID)
+}
+
+func shellQuote(s string) string {
+	if s == "" {
+		return "''"
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 type launchMode string

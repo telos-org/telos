@@ -798,6 +798,48 @@ func TestEventsSSE(t *testing.T) {
 	}
 }
 
+func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: evidence-summary\nplatform: local\n---\n# Evidence\n"
+
+	created, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(created.Specs) != 1 || created.Specs[0].EvidencePath == nil {
+		t.Fatalf("missing evidence path: %#v", created.Specs)
+	}
+	evidence := `{"event":"agent_complete","round":1,"data":{"cost_usd":0.10}}` + "\n" +
+		`{"event":"game_end","round":2,"data":{"total_cost_usd":1.23,"total_input_tokens":100,"total_output_tokens":30,"total_cache_read_tokens":7,"total_cache_creation_tokens":5,"prover_rounds":1,"verifier_rounds":1}}` + "\n"
+	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	session, err := store.Get(created.SessionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if session.TotalCostUSD == nil || *session.TotalCostUSD != 1.23 {
+		t.Fatalf("cost: got %v", session.TotalCostUSD)
+	}
+	if session.TotalInputTokens == nil || *session.TotalInputTokens != 100 {
+		t.Fatalf("input tokens: got %v", session.TotalInputTokens)
+	}
+	if session.TotalOutputTokens == nil || *session.TotalOutputTokens != 30 {
+		t.Fatalf("output tokens: got %v", session.TotalOutputTokens)
+	}
+	if session.TotalCacheReadTokens == nil || *session.TotalCacheReadTokens != 7 {
+		t.Fatalf("cache read tokens: got %v", session.TotalCacheReadTokens)
+	}
+	if session.TotalCacheCreateTokens == nil || *session.TotalCacheCreateTokens != 5 {
+		t.Fatalf("cache create tokens: got %v", session.TotalCacheCreateTokens)
+	}
+	if session.RoundCount == nil || *session.RoundCount != 2 {
+		t.Fatalf("round count: got %v", session.RoundCount)
+	}
+}
+
 // --------- GET /api/sessions/{id}/workspace/{spec} ------------------------------------------------------------------------------------------------
 
 func TestWorkspaceNotFound(t *testing.T) {

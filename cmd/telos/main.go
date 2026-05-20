@@ -8,7 +8,7 @@
 //	    [--max-rounds N] [--max-cost-usd USD] [--agent-timeout-sec SEC] [--json]
 //	telos list [--env ENV] [--limit N] [--wide] [--environments] [--local] [--cloud] [--json]
 //	telos describe SESSION [--env ENV] [--json]
-//	telos logs [-f] SESSION [--env ENV]
+//	telos logs [-f] [--raw] SESSION [--env ENV]
 //	telos stop SESSION [--env ENV] [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
 //	telos --version
@@ -73,7 +73,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  run SPEC.md        Create and run a bounded task spec")
 	fmt.Fprintln(out, "  list               List sessions")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
-	fmt.Fprintln(out, "  logs SESSION       Show session transcript")
+	fmt.Fprintln(out, "  logs SESSION       Show session progress")
 	fmt.Fprintln(out, "  stop SESSION       Stop a running session")
 	fmt.Fprintln(out, "  login              Configure cloud access")
 	fmt.Fprintln(out, "")

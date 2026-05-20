@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -66,6 +67,8 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 	result := "completed"
 	artifact := "https://postgres.example"
 	version := 2
+	cost := 1.23
+	rounds := 4
 	workspaceExists := true
 	evidenceExists := true
 	transcriptExists := true
@@ -82,6 +85,8 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 		Result:             &result,
 		ArtifactURI:        &artifact,
 		CurrentSpecVersion: &version,
+		TotalCostUSD:       &cost,
+		RoundCount:         &rounds,
 		Epochs: []map[string]any{{
 			"id":          1,
 			"result":      "completed",
@@ -107,6 +112,8 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 		"Result:   completed",
 		"Artifact: https://postgres.example",
 		"Spec Ver: 2",
+		"Cost:     $1.2300",
+		"Rounds:   4",
 		"Latest Epoch:",
 		"Artifacts:",
 		"yes:/state/workspace.tar.gz",
@@ -115,6 +122,28 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("description missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestPrintLocalLaunchIncludesWorkspaceScopedCommands(t *testing.T) {
+	session := &cli.LocalSession{
+		SessionID: "local_123",
+		SpecName:  "blackbox",
+		Workspace: "/tmp/telos-blackbox",
+	}
+
+	var out bytes.Buffer
+	printLocalLaunch(&out, "submitted", session)
+	text := out.String()
+	for _, want := range []string{
+		"submitted local_123 (blackbox)",
+		"workspace /tmp/telos-blackbox",
+		"describe  cd '/tmp/telos-blackbox' && telos describe local_123",
+		"logs      cd '/tmp/telos-blackbox' && telos logs local_123",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("launch output missing %q:\n%s", want, text)
 		}
 	}
 }

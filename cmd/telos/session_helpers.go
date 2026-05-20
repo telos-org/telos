@@ -111,7 +111,7 @@ func getSessionFromAnywhere(sessionID, envID string) (*sessionapi.Session, error
 		}
 	}
 
-	return nil, fmt.Errorf("session %s: not found", sessionID)
+	return nil, localSessionNotFoundError(sessionID)
 }
 
 func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
@@ -146,7 +146,10 @@ func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
 		}
 	}
 
-	return "", fmt.Errorf("session %s transcript: %w", sessionID, sessionapi.ErrNotFound)
+	if localSessionExists(sessionID) {
+		return "", fmt.Errorf("transcript for session %s: %w", sessionID, sessionapi.ErrNotFound)
+	}
+	return "", localSessionNotFoundError(sessionID)
 }
 
 func stopSessionAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
@@ -173,5 +176,37 @@ func stopSessionAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
 		}
 	}
 
-	return nil, fmt.Errorf("session %s: not found", sessionID)
+	return nil, localSessionNotFoundError(sessionID)
+}
+
+func localSessionNotFoundError(sessionID string) error {
+	return localSessionNotFound{sessionID: sessionID, root: localSessionRoot()}
+}
+
+func localSessionRoot() string {
+	root := os.Getenv("TELOS_SESSION_DIR")
+	if root == "" {
+		root = filepath.Join(".telos", "sessions")
+	}
+	if abs, err := filepath.Abs(root); err == nil {
+		return abs
+	}
+	return root
+}
+
+type localSessionNotFound struct {
+	sessionID string
+	root      string
+}
+
+func (e localSessionNotFound) Error() string {
+	return fmt.Sprintf(
+		"session %s not found in %s\n\nLocal sessions are workspace-scoped. Run this command from the workspace where the session was created, or set:\n\n  TELOS_SESSION_DIR=/path/to/.telos/sessions",
+		e.sessionID,
+		e.root,
+	)
+}
+
+func (e localSessionNotFound) Unwrap() error {
+	return sessionapi.ErrNotFound
 }

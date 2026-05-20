@@ -548,6 +548,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		s.Result = last.Result
 		s.Error = last.Error
 	}
+	applySessionEvidenceSummary(&s)
 
 	return &s, nil
 }
@@ -577,8 +578,77 @@ func deriveSpec(ms ManifestSpec) SessionSpec {
 		exists := fileExists(*ms.WorkspacePath)
 		ss.WorkspaceExists = &exists
 	}
+	if summary, err := readEvidenceSummary(ms.EvidencePath); err == nil && summary != nil {
+		ss.TotalCostUSD = summary.TotalCostUSD
+		ss.TotalInputTokens = summary.TotalInputTokens
+		ss.TotalOutputTokens = summary.TotalOutputTokens
+		ss.TotalCacheReadTokens = summary.TotalCacheReadTokens
+		ss.TotalCacheCreateTokens = summary.TotalCacheCreateTokens
+		ss.RoundCount = summary.RoundCount
+	}
 
 	return ss
+}
+
+func applySessionEvidenceSummary(session *Session) {
+	var totalCost float64
+	var totalInputTokens int
+	var totalOutputTokens int
+	var totalCacheReadTokens int
+	var totalCacheCreateTokens int
+	var roundCount int
+	var hasCost bool
+	var hasInput bool
+	var hasOutput bool
+	var hasCacheRead bool
+	var hasCacheCreate bool
+	var hasRounds bool
+
+	for _, spec := range session.Specs {
+		if spec.TotalCostUSD != nil {
+			totalCost += *spec.TotalCostUSD
+			hasCost = true
+		}
+		if spec.TotalInputTokens != nil {
+			totalInputTokens += *spec.TotalInputTokens
+			hasInput = true
+		}
+		if spec.TotalOutputTokens != nil {
+			totalOutputTokens += *spec.TotalOutputTokens
+			hasOutput = true
+		}
+		if spec.TotalCacheReadTokens != nil {
+			totalCacheReadTokens += *spec.TotalCacheReadTokens
+			hasCacheRead = true
+		}
+		if spec.TotalCacheCreateTokens != nil {
+			totalCacheCreateTokens += *spec.TotalCacheCreateTokens
+			hasCacheCreate = true
+		}
+		if spec.RoundCount != nil {
+			roundCount += *spec.RoundCount
+			hasRounds = true
+		}
+	}
+
+	if hasCost {
+		session.TotalCostUSD = &totalCost
+	}
+	if hasInput {
+		session.TotalInputTokens = &totalInputTokens
+	}
+	if hasOutput {
+		session.TotalOutputTokens = &totalOutputTokens
+	}
+	if hasCacheRead {
+		session.TotalCacheReadTokens = &totalCacheReadTokens
+	}
+	if hasCacheCreate {
+		session.TotalCacheCreateTokens = &totalCacheCreateTokens
+	}
+	if hasRounds {
+		session.RoundCount = &roundCount
+	}
 }
 
 func deriveStatus(m *Manifest) SessionStatus {
@@ -684,6 +754,93 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 		events = append(events, ev)
 	}
 	return events, nil
+}
+
+type evidenceSummary struct {
+	TotalCostUSD           *float64
+	TotalInputTokens       *int
+	TotalOutputTokens      *int
+	TotalCacheReadTokens   *int
+	TotalCacheCreateTokens *int
+	RoundCount             *int
+}
+
+func readEvidenceSummary(path *string) (*evidenceSummary, error) {
+	if path == nil || *path == "" {
+		return nil, nil
+	}
+	data, err := os.ReadFile(*path)
+	if err != nil {
+		return nil, err
+	}
+
+	var summary *evidenceSummary
+	for _, line := range strings.Split(string(data), "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		var raw map[string]any
+		if err := json.Unmarshal([]byte(line), &raw); err != nil {
+			continue
+		}
+		eventName, _ := raw["event"].(string)
+		if eventName != "game_end" {
+			continue
+		}
+		dataField, _ := raw["data"].(map[string]any)
+		item := &evidenceSummary{
+			TotalCostUSD:           numberAsFloat(dataField["total_cost_usd"]),
+			TotalInputTokens:       numberAsInt(dataField["total_input_tokens"]),
+			TotalOutputTokens:      numberAsInt(dataField["total_output_tokens"]),
+			TotalCacheReadTokens:   numberAsInt(dataField["total_cache_read_tokens"]),
+			TotalCacheCreateTokens: numberAsInt(dataField["total_cache_creation_tokens"]),
+			RoundCount:             evidenceRoundCount(raw, dataField),
+		}
+		summary = item
+	}
+	return summary, nil
+}
+
+func evidenceRoundCount(raw map[string]any, data map[string]any) *int {
+	proverRounds := numberAsInt(data["prover_rounds"])
+	verifierRounds := numberAsInt(data["verifier_rounds"])
+	if proverRounds != nil || verifierRounds != nil {
+		total := ptrOr(proverRounds, 0) + ptrOr(verifierRounds, 0)
+		return &total
+	}
+	return numberAsInt(raw["round"])
+}
+
+func numberAsFloat(value any) *float64 {
+	switch v := value.(type) {
+	case float64:
+		return &v
+	case int:
+		f := float64(v)
+		return &f
+	case json.Number:
+		if f, err := v.Float64(); err == nil {
+			return &f
+		}
+	}
+	return nil
+}
+
+func numberAsInt(value any) *int {
+	switch v := value.(type) {
+	case float64:
+		i := int(v)
+		return &i
+	case int:
+		return &v
+	case json.Number:
+		if i, err := v.Int64(); err == nil {
+			asInt := int(i)
+			return &asInt
+		}
+	}
+	return nil
 }
 
 var sessionSeq atomic.Uint64
