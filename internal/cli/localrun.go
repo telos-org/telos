@@ -20,6 +20,7 @@ const DefaultLocalModel = "claude-opus-4-6"
 
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {
+	SessionKind     sessionapi.SessionKind
 	Workspace       string
 	Model           string
 	Thinking        string
@@ -174,11 +175,13 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	pvgCfg := game.PVGConfig{
-		MaxRounds:     cfg.MaxRounds,
-		MaxCostUSD:    cfg.MaxCostUSD,
-		Verbose:       true,
-		EpochID:       epochID,
-		StopRequested: func() bool { return sessionStopped(sessionDir) },
+		MaxRounds:       cfg.MaxRounds,
+		MaxCostUSD:      cfg.MaxCostUSD,
+		Verbose:         true,
+		EpochID:         epochID,
+		IsController:    manifest.SessionKind == sessionapi.KindController,
+		PrimarySpecPath: primarySpecPath(manifest, sessionSpecPath),
+		StopRequested:   func() bool { return sessionStopped(sessionDir) },
 	}
 
 	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)
@@ -203,6 +206,16 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 		model = DefaultLocalModel
 	}
 	return executor.NewPiExecutor(p, model, cfg.Thinking, cfg.AgentTimeoutSec), nil
+}
+
+func primarySpecPath(manifest *sessionapi.Manifest, fallback *string) string {
+	if manifest != nil && manifest.SessionSpecPath != nil && *manifest.SessionSpecPath != "" {
+		return *manifest.SessionSpecPath
+	}
+	if fallback != nil {
+		return *fallback
+	}
+	return ""
 }
 
 func startLocalWorker(sessionDir string) error {
@@ -285,11 +298,15 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 	if agentTimeout <= 0 {
 		agentTimeout = 1800
 	}
+	sessionKind := cfg.SessionKind
+	if sessionKind == "" {
+		sessionKind = sessionapi.KindTask
+	}
 
 	manifestPath := filepath.Join(sessionDir, "session.json")
 	err := sessionapi.WriteInitialManifest(manifestPath, sessionapi.InitialManifest{
 		SessionID:       filepath.Base(sessionDir),
-		SessionKind:     sessionapi.KindTask,
+		SessionKind:     sessionKind,
 		Runtime:         sessionapi.RuntimeLocal,
 		CreatedAt:       time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		Launcher:        "local",

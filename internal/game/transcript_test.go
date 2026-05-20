@@ -17,7 +17,7 @@ func TestInitializeTranscript(t *testing.T) {
 	}
 
 	content := ReadTranscript(path)
-	if !strings.Contains(content, "# PVG Transcript: sess-001") {
+	if !strings.Contains(content, "# Telos Transcript: sess-001") {
 		t.Error("should contain transcript header")
 	}
 	if !strings.Contains(content, "test-system") {
@@ -54,14 +54,14 @@ func TestAppendTurn(t *testing.T) {
 	os.WriteFile(path, []byte("# Transcript\n"), 0o644)
 
 	stats := &TurnStats{Model: "claude-test", CostUSD: 0.5, NumTurns: 3}
-	err := AppendTurn(path, "prover", 1, "CONTINUE", "I built the thing.\n\n<progress_update>Built it</progress_update>", stats, "0001-prover", "/task.md", "/raw.jsonl", "")
+	err := AppendTurn(path, "prover", 1, "CONTINUE", "I built the thing.\n\n<progress_update>Built it</progress_update>", stats, "0001-prover", "")
 	if err != nil {
 		t.Fatalf("AppendTurn: %v", err)
 	}
 
 	content := ReadTranscript(path)
-	if !strings.Contains(content, "## Prover 1") {
-		t.Error("should contain prover header")
+	if !strings.Contains(content, "## Implementation 1") {
+		t.Error("should contain implementation header")
 	}
 	if !strings.Contains(content, "I built the thing.") {
 		t.Error("should contain turn body")
@@ -72,6 +72,9 @@ func TestAppendTurn(t *testing.T) {
 	if !strings.Contains(content, "model `claude-test`") {
 		t.Error("should contain model in metadata")
 	}
+	if strings.Contains(content, "raw.jsonl") || strings.Contains(content, "Raw log") || strings.Contains(content, "task.md") {
+		t.Error("transcript should not expose raw log or task artifact paths")
+	}
 }
 
 func TestAppendTurnVerifier(t *testing.T) {
@@ -79,11 +82,11 @@ func TestAppendTurnVerifier(t *testing.T) {
 	path := filepath.Join(dir, "transcript.md")
 	os.WriteFile(path, []byte("# Transcript\n"), 0o644)
 
-	AppendTurn(path, "verifier", 1, "CONCEDE", "All good.\n\n<progress_update>Conceding</progress_update>", nil, "0002-verifier", "", "", "")
+	AppendTurn(path, "verifier", 1, "CONCEDE", "All good.\n\n<progress_update>Conceding</progress_update>", nil, "0002-verifier", "")
 
 	content := ReadTranscript(path)
-	if !strings.Contains(content, "## Verifier 1") {
-		t.Error("should contain verifier header")
+	if !strings.Contains(content, "## Evaluation 1") {
+		t.Error("should contain evaluation header")
 	}
 	if !strings.Contains(content, "<status>CONCEDE</status>") {
 		t.Error("should contain concede status")
@@ -95,7 +98,7 @@ func TestAppendTurnWithError(t *testing.T) {
 	path := filepath.Join(dir, "transcript.md")
 	os.WriteFile(path, []byte("# Transcript\n"), 0o644)
 
-	AppendTurn(path, "prover", 1, "CONTINUE", "", nil, "0001-prover", "", "", "pi_failed:1")
+	AppendTurn(path, "prover", 1, "CONTINUE", "I changed main.go before the tool failed.\n\n<status>CONTINUE</status>", nil, "0001-prover", "pi_failed:1")
 
 	content := ReadTranscript(path)
 	if !strings.Contains(content, "runtime error") {
@@ -103,6 +106,15 @@ func TestAppendTurnWithError(t *testing.T) {
 	}
 	if !strings.Contains(content, "pi_failed:1") {
 		t.Error("should contain error detail")
+	}
+	if !strings.Contains(content, "Captured Assistant Text Before Error") {
+		t.Error("should include captured assistant text section")
+	}
+	if !strings.Contains(content, "I changed main.go before the tool failed.") {
+		t.Error("should preserve captured assistant text before error")
+	}
+	if strings.Contains(content, "<status>CONTINUE</status>\n\n<progress_update>") {
+		t.Error("captured assistant text should not preserve the assistant status tag")
 	}
 }
 

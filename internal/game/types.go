@@ -55,11 +55,13 @@ type AgentExecutor interface {
 
 // PVGConfig holds runtime settings for a PVG run.
 type PVGConfig struct {
-	MaxRounds     int
-	MaxCostUSD    *float64
-	Verbose       bool
-	EpochID       int
-	StopRequested func() bool
+	MaxRounds       int
+	MaxCostUSD      *float64
+	Verbose         bool
+	EpochID         int
+	IsController    bool
+	PrimarySpecPath string
+	StopRequested   func() bool
 }
 
 // PVGResult holds the aggregated result of a PVG run.

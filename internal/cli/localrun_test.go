@@ -16,9 +16,11 @@ type fakeExecutor struct {
 	proverResult   game.TurnResult
 	verifierResult game.TurnResult
 	onExecute      func(role string)
+	tasks          []string
 }
 
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) game.TurnResult {
+	f.tasks = append(f.tasks, task)
 	if f.onExecute != nil {
 		f.onExecute(role)
 	}
@@ -26,6 +28,20 @@ func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState)
 		return f.proverResult
 	}
 	return f.verifierResult
+}
+
+func (f *fakeExecutor) firstTask() string {
+	if len(f.tasks) == 0 {
+		return ""
+	}
+	return f.tasks[0]
+}
+
+func (f *fakeExecutor) taskAt(i int) string {
+	if i < 0 || i >= len(f.tasks) {
+		return ""
+	}
+	return f.tasks[i]
 }
 
 func (f *fakeExecutor) WorkspaceState() string {
@@ -181,6 +197,114 @@ func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	}
 	if sessionAPI.Status != sessionapi.StatusCompleted {
 		t.Errorf("status: got %s", sessionAPI.Status)
+	}
+}
+
+func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{MaxRounds: 4})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	manifestPath := filepath.Join(session.SessionDir, "session.json")
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.SessionKind = sessionapi.KindController
+	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := &fakeExecutor{
+		proverResult: game.TurnResult{
+			Role:   "prover",
+			Status: game.StatusContinue,
+			Logs:   "Observed controller state.\n\n<progress_update>Observed</progress_update>",
+		},
+		verifierResult: game.TurnResult{
+			Role:   "verifier",
+			Status: game.StatusConcede,
+			Logs:   "OK\n\n<status>CONCEDE</status>\n",
+		},
+	}
+	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
+		t.Fatalf("RunLocalSession: %v", err)
+	}
+
+	task := exec.firstTask()
+	if !strings.Contains(task, "## Controller Role") {
+		t.Fatal("controller session should receive controller prompt")
+	}
+	if !strings.Contains(task, "`telos-orchestrate`") {
+		t.Fatal("controller prompt should include telos-orchestrate skill")
+	}
+	if !strings.Contains(task, "Primary spec: `") {
+		t.Fatal("controller prompt should include primary spec path")
+	}
+}
+
+func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{MaxRounds: 3})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	exec := &fakeExecutor{
+		proverResult: game.TurnResult{
+			Role:   "prover",
+			Status: game.StatusContinue,
+			Logs:   "Implemented something.\n\n<progress_update>Implemented</progress_update>",
+		},
+		verifierResult: game.TurnResult{
+			Role:   "verifier",
+			Status: game.StatusContinue,
+			Logs:   "Finding remains.\n\n<status>CONTINUE</status>\n",
+		},
+	}
+	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
+		t.Fatalf("RunLocalSession: %v", err)
+	}
+
+	firstImplementationTask := exec.taskAt(0)
+	if firstImplementationTask == "" {
+		t.Fatalf("expected first implementation task, got %d tasks", len(exec.tasks))
+	}
+	if !strings.Contains(firstImplementationTask, "First action every turn: read this transcript path") {
+		t.Fatal("first implementation prompt should require reading transcript first")
+	}
+
+	evaluationTask := exec.taskAt(1)
+	if evaluationTask == "" {
+		t.Fatalf("expected evaluation task, got %d tasks", len(exec.tasks))
+	}
+	if !strings.Contains(evaluationTask, "First action every turn: read this transcript path") {
+		t.Fatal("evaluation prompt should require reading transcript first")
+	}
+
+	secondImplementationTask := exec.taskAt(2)
+	if secondImplementationTask == "" {
+		t.Fatalf("expected second implementation task, got %d tasks", len(exec.tasks))
+	}
+	if !strings.Contains(secondImplementationTask, "First action every turn: read this transcript path") {
+		t.Fatal("second implementation prompt should require reading transcript first")
+	}
+	if !strings.Contains(secondImplementationTask, "identify unresolved evaluator findings") {
+		t.Fatal("implementation prompt should identify unresolved evaluator findings")
 	}
 }
 
@@ -368,11 +492,11 @@ func TestEndToEndSmokeTest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("logs: %v", err)
 	}
-	if !strings.Contains(transcript, "Prover 1") {
-		t.Error("transcript should contain prover turn")
+	if !strings.Contains(transcript, "Implementation 1") {
+		t.Error("transcript should contain implementation turn")
 	}
-	if !strings.Contains(transcript, "Verifier 1") {
-		t.Error("transcript should contain verifier turn")
+	if !strings.Contains(transcript, "Evaluation 1") {
+		t.Error("transcript should contain evaluation turn")
 	}
 
 	// events
@@ -452,7 +576,7 @@ func TestSessionArtifactShape(t *testing.T) {
 	expected := []string{
 		"session.json",
 		filepath.Join("specs", "cli-test", "evidence.jsonl"),
-		filepath.Join("specs", "cli-test", "pvg-transcript-"+session.SessionID+".md"),
+		filepath.Join("specs", "cli-test", "transcript-"+session.SessionID+".md"),
 		filepath.Join("specs", "cli-test", "spec.md"),
 		filepath.Join("specs", "cli-test", "workspace.tar.gz"),
 		filepath.Join("specs", "cli-test", "turns", "0001-prover", "task.md"),

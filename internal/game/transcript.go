@@ -15,6 +15,7 @@ var (
 )
 
 const maxTurnBodyChars = 8000
+const maxErrorExcerptChars = 2000
 
 // InitializeTranscript creates a transcript header if the file does not exist.
 func InitializeTranscript(path, sessionID, systemName, evidencePath, startedAt string) error {
@@ -24,13 +25,13 @@ func InitializeTranscript(path, sessionID, systemName, evidencePath, startedAt s
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	content := fmt.Sprintf(`# PVG Transcript: %s
+	content := fmt.Sprintf(`# Telos Transcript: %s
 
 - System: `+"`%s`"+`
 - Started: `+"`%s`"+`
 - Evidence: `+"`%s`"+`
 
-This append-only transcript is the LLM-native control channel for the game.
+This append-only transcript is the session communication log.
 It is also the background-agent progress surface.
 The live system remains the source of truth.
 `, sessionID, systemName, startedAt, evidencePath)
@@ -46,14 +47,14 @@ func ReadTranscript(path string) string {
 	return string(data)
 }
 
-// AppendTurn appends one prover or verifier turn to the transcript.
-func AppendTurn(path string, role string, roleRound int, status string, logs string, stats *TurnStats, turnID, taskPath, rawLogPath string, turnError string) error {
-	label := "Prover"
+// AppendTurn appends one implementation or evaluation turn to the transcript.
+func AppendTurn(path string, role string, roleRound int, status string, logs string, stats *TurnStats, turnID string, turnError string) error {
+	label := "Implementation"
 	if role == "verifier" {
-		label = "Verifier"
+		label = "Evaluation"
 	}
-	body := stripFinalStatus(turnBody(logs, turnError, rawLogPath))
-	if !hasFinalProgressUpdate(body) {
+	body := stripFinalStatus(turnBody(logs, turnError))
+	if turnError != "" || !hasFinalProgressUpdate(body) {
 		body = fmt.Sprintf("%s\n\n<progress_update>%s</progress_update>",
 			body, fallbackProgressUpdate(body, status, turnError))
 	}
@@ -69,7 +70,7 @@ func AppendTurn(path string, role string, roleRound int, status string, logs str
 	defer f.Close()
 
 	fmt.Fprintf(f, "\n## %s %d\n\n", label, roleRound)
-	meta := turnMeta(stats, turnID, taskPath, rawLogPath, filepath.Dir(path))
+	meta := turnMeta(stats, turnID)
 	if meta != "" {
 		fmt.Fprintf(f, "%s\n\n", meta)
 	}
@@ -77,7 +78,7 @@ func AppendTurn(path string, role string, roleRound int, status string, logs str
 	return nil
 }
 
-// AppendGameResult appends the terminal PVG result to the transcript.
+// AppendGameResult appends the terminal session result to the transcript.
 func AppendGameResult(path string, result string, errorMsg string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -94,7 +95,7 @@ func AppendGameResult(path string, result string, errorMsg string) error {
 	return nil
 }
 
-func turnMeta(stats *TurnStats, turnID, taskPath, rawLogPath, baseDir string) string {
+func turnMeta(stats *TurnStats, turnID string) string {
 	var parts []string
 	if turnID != "" {
 		parts = append(parts, fmt.Sprintf("turn `%s`", turnID))
@@ -110,43 +111,32 @@ func turnMeta(stats *TurnStats, turnID, taskPath, rawLogPath, baseDir string) st
 			parts = append(parts, fmt.Sprintf("tool turns `%d`", stats.NumTurns))
 		}
 	}
-	if taskPath != "" {
-		parts = append(parts, fmt.Sprintf("task `%s`", displayPath(taskPath, baseDir)))
-	}
-	if rawLogPath != "" {
-		parts = append(parts, fmt.Sprintf("raw `%s`", displayPath(rawLogPath, baseDir)))
-	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return fmt.Sprintf("_Turn metadata: %s._", strings.Join(parts, ", "))
 }
 
-func displayPath(path, baseDir string) string {
-	if baseDir != "" {
-		rel, err := filepath.Rel(baseDir, path)
-		if err == nil {
-			return filepath.ToSlash(rel)
-		}
-	}
-	return path
-}
-
-func turnBody(logs, turnError, rawLogPath string) string {
-	stripped := strings.TrimSpace(logs)
+func turnBody(logs, turnError string) string {
+	stripped := stripFinalStatus(strings.TrimSpace(logs))
 	if turnError != "" {
-		return runtimeErrorBody(turnError, rawLogPath)
+		return runtimeErrorBody(turnError, stripped)
 	}
 	if stripped == "" {
 		return "_No assistant text captured._"
 	}
-	return capTurnBody(stripped, rawLogPath)
+	return capTurnBody(stripped)
 }
 
-func runtimeErrorBody(err, rawLogPath string) string {
+func runtimeErrorBody(err, logs string) string {
 	lines := []string{fmt.Sprintf("_Turn ended with runtime error: `%s`._", err)}
-	if rawLogPath != "" {
-		lines = append(lines, fmt.Sprintf("_Raw log: `%s`._", rawLogPath))
+	if logs != "" {
+		lines = append(lines,
+			"",
+			"### Captured Assistant Text Before Error",
+			"",
+			capErrorExcerpt(logs),
+		)
 	}
 	return strings.Join(lines, "\n")
 }
@@ -159,7 +149,7 @@ func stripFinalStatus(body string) string {
 	return strings.TrimRight(finalStatusRE.ReplaceAllString(body, ""), " \t\n\r")
 }
 
-func capTurnBody(body, rawLogPath string) string {
+func capTurnBody(body string) string {
 	if len(body) <= maxTurnBodyChars {
 		return body
 	}
@@ -167,11 +157,20 @@ func capTurnBody(body, rawLogPath string) string {
 	lines := []string{
 		fmt.Sprintf("_Transcript turn truncated to the last %d chars._", maxTurnBodyChars),
 	}
-	if rawLogPath != "" {
-		lines = append(lines, fmt.Sprintf("_Raw log: `%s`._", rawLogPath))
-	}
 	lines = append(lines, "", trimmed)
 	return strings.Join(lines, "\n")
+}
+
+func capErrorExcerpt(body string) string {
+	if len(body) <= maxErrorExcerptChars {
+		return body
+	}
+	trimmed := strings.TrimSpace(body[len(body)-maxErrorExcerptChars:])
+	return strings.Join([]string{
+		fmt.Sprintf("_Captured assistant text truncated to the last %d chars._", maxErrorExcerptChars),
+		"",
+		trimmed,
+	}, "\n")
 }
 
 func fallbackProgressUpdate(body, status, turnError string) string {

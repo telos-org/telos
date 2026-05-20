@@ -47,35 +47,6 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	if turnState != nil {
 		rawLogPath = turnState.RawLogPath()
 		taskPath = turnState.TaskPath()
-		if err := os.MkdirAll(turnState.Dir, 0o755); err != nil {
-			return game.TurnResult{
-				Role:   role,
-				Status: game.StatusContinue,
-				Logs:   fmt.Sprintf("turn_state_mkdir_failed:%v", err),
-				Stats:  stats,
-				Error:  fmt.Sprintf("turn_state_mkdir_failed:%v", err),
-			}
-		}
-		if task != "" {
-			if err := os.WriteFile(taskPath, []byte(task), 0o644); err != nil {
-				return game.TurnResult{
-					Role:   role,
-					Status: game.StatusContinue,
-					Logs:   fmt.Sprintf("turn_task_write_failed:%v", err),
-					Stats:  stats,
-					Error:  fmt.Sprintf("turn_task_write_failed:%v", err),
-				}
-			}
-		}
-		if err := os.WriteFile(rawLogPath, nil, 0o644); err != nil {
-			return game.TurnResult{
-				Role:   role,
-				Status: game.StatusContinue,
-				Logs:   fmt.Sprintf("raw_log_write_failed:%v", err),
-				Stats:  stats,
-				Error:  fmt.Sprintf("raw_log_write_failed:%v", err),
-			}
-		}
 	}
 
 	onLine := func(line string) {

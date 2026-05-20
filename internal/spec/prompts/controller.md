@@ -65,8 +65,7 @@ uses the controller-local session token and returns this controller plus its
 descendants. Use it to understand child task state. Do not replace it with
 wide Kubernetes polling.
 
-See `.agents/skills/telos-orchestrate/SKILL.md` for the worked end-to-end
-example.
+Use the `telos-orchestrate` skill for the worked end-to-end example.
 
 ## Task sessions must declare `extends:`
 
@@ -114,8 +113,8 @@ task. Keep it short.
 
 You are converged when the contract probes pass against the canonical
 namespace. Not when your journal says "I think we're done." Not when
-a task exists. Not when a task has merely started. The verifier round
-will re-run the probes against the live cluster and task state.
+a task exists. Not when a task has merely started. The evaluator will
+re-run the probes against the live cluster and task state.
 
 A controller that keeps spawning tasks while observation already
 shows the contract holding is broken. A controller that treats a
@@ -132,6 +131,6 @@ paid to uphold.
 
 ---
 
-The PVG-prover guidance below still applies - just remember that for a
-controller, "make a change" usually means "author a task spec that
+The implementation guidance below still applies - just remember that for
+a controller, "make a change" usually means "author a task spec that
 `extends:` the right component," and "memory" always means the cluster.

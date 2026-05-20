@@ -69,9 +69,6 @@ func LoadSkill(skillDir string) (*Skill, error) {
 			if cat, ok := raw["category"].(string); ok && cat != "" {
 				tags = append(tags, strings.TrimSpace(cat))
 			}
-			if role, ok := raw["role"].(string); ok && role != "" {
-				tags = append(tags, strings.TrimSpace(role))
-			}
 		}
 	}
 
@@ -204,4 +201,21 @@ func ResolveVerifierSkills() []*Skill {
 		skills = append(skills, s)
 	}
 	return skills
+}
+
+// ResolveBuiltinSkill loads a single built-in skill by name.
+func ResolveBuiltinSkill(name string) *Skill {
+	dir := BuiltinSkillsDir()
+	if dir == "" {
+		return nil
+	}
+	skillDir := filepath.Join(dir, name)
+	if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
+		return nil
+	}
+	s, err := LoadSkill(skillDir)
+	if err != nil {
+		return nil
+	}
+	return s
 }

@@ -23,7 +23,7 @@ func NewPVGState(systemName, specDir, sessionID string) *PVGState {
 	if sessionID == "" {
 		sessionID = "unknown"
 	}
-	transcriptPath := filepath.Join(abs, fmt.Sprintf("pvg-transcript-%s.md", sessionID))
+	transcriptPath := filepath.Join(abs, fmt.Sprintf("transcript-%s.md", sessionID))
 	workspacePath := filepath.Join(abs, "workspace.tar.gz")
 	return &PVGState{
 		SystemName:     systemName,
@@ -72,7 +72,7 @@ func WriteTurnTask(ts *TurnState, task string) error {
 		return err
 	}
 	// Touch raw log
-	f, err := os.OpenFile(ts.RawLogPath(), os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(ts.RawLogPath(), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}

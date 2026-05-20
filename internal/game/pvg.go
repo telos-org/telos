@@ -68,7 +68,7 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 		maxRounds = 20
 	}
 
-	// Round 1: prover build
+	// First prover turn.
 	if p.shouldStop() {
 		return p.end(GameStopped), nil
 	}
@@ -76,7 +76,8 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 	p.Result.ProverRounds = 1
 	p.Evidence.Log("round_start", 1, "prover", nil)
 
-	task := spec.RenderProverTask(p.Compiled, 1, "", ReadTranscript(p.State.TranscriptPath))
+	promptOpts := p.promptOptions()
+	task := spec.RenderProverTask(p.Compiled, "", p.State.TranscriptPath, promptOpts)
 	turn := p.runAgentTurn(1, "prover", p.Result.ProverRounds, task)
 	if p.shouldStop() {
 		return p.end(GameStopped), nil
@@ -101,7 +102,7 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 		roundNum := p.Result.Rounds
 		p.Evidence.Log("round_start", roundNum, "verifier", nil)
 
-		task = spec.RenderVerifierTask(p.Compiled, workspace, ReadTranscript(p.State.TranscriptPath))
+		task = spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
 		turn = p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task)
 		if p.shouldStop() {
 			return p.end(GameStopped), nil
@@ -128,14 +129,14 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 		if p.shouldStop() {
 			return p.end(GameStopped), nil
 		}
-		// Prover fix
+		// Next prover turn.
 		workspace = p.Executor.WorkspaceState()
 		p.Result.Rounds++
 		p.Result.ProverRounds++
 		roundNum = p.Result.Rounds
 		p.Evidence.Log("round_start", roundNum, "prover", nil)
 
-		task = spec.RenderProverTask(p.Compiled, p.Result.ProverRounds, workspace, ReadTranscript(p.State.TranscriptPath))
+		task = spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
 		turn = p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task)
 		if p.shouldStop() {
 			return p.end(GameStopped), nil
@@ -159,17 +160,34 @@ func (p *PVG) shouldStop() bool {
 	return p.Config.StopRequested != nil && p.Config.StopRequested()
 }
 
+func (p *PVG) promptOptions() spec.PromptOptions {
+	return spec.PromptOptions{
+		Controller:      p.Config.IsController,
+		PrimarySpecPath: p.Config.PrimarySpecPath,
+	}
+}
+
 func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string) TurnResult {
 	ts := p.State.Turn(roundNum, role)
-	WriteTurnTask(ts, task)
+	if err := WriteTurnTask(ts, task); err != nil {
+		turn := TurnResult{
+			Role:   role,
+			Status: StatusContinue,
+			Logs:   fmt.Sprintf("turn_prepare_failed:%v", err),
+			Error:  fmt.Sprintf("turn_prepare_failed:%v", err),
+		}
+		p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
+		AppendTurn(p.State.TranscriptPath, role, roleRound, string(turn.Status),
+			turn.Logs, &turn.Stats, fmt.Sprintf("%04d-%s", roundNum, role), turn.Error)
+		return turn
+	}
 
 	turn := p.Executor.ExecuteTurn(task, role, ts)
 	p.Result.Accumulate(turn.Stats)
 	p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
 
 	AppendTurn(p.State.TranscriptPath, role, roleRound, string(turn.Status),
-		turn.Logs, &turn.Stats, fmt.Sprintf("%04d-%s", roundNum, role),
-		ts.TaskPath(), ts.RawLogPath(), turn.Error)
+		turn.Logs, &turn.Stats, fmt.Sprintf("%04d-%s", roundNum, role), turn.Error)
 
 	return turn
 }

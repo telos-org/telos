@@ -5,7 +5,7 @@ import (
 	"strings"
 )
 
-// Role is the PVG agent role.
+// Role is the internal agent role.
 type Role = string
 
 const (
@@ -13,19 +13,29 @@ const (
 	RoleVerifier Role = "verifier"
 )
 
+// PromptOptions carries session metadata that affects prompt rendering.
+type PromptOptions struct {
+	Controller      bool
+	PrimarySpecPath string
+}
+
 // RenderProverTask builds the full prover task prompt.
-func RenderProverTask(compiled *CompiledEnvironment, roundNum int, workspace, transcript string) string {
+func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
+	options := promptOptions(opts)
 	preamble, _ := ReadPrompt("prover.md")
+	if options.Controller {
+		controller, _ := ReadPrompt("controller.md")
+		preamble = joinNonEmpty([]string{controller, "", preamble})
+	}
 	parts := []string{
-		sessionTitle(compiled.Environment.Name, RoleProver, roundNum),
 		preamble,
 		"",
 		renderPlatformPreamble(compiled),
-		renderSessionContext(compiled, RoleProver, roundNum),
-		renderRequirements(compiled),
-		renderRequiredVerificationCriteria(compiled, RoleProver),
-		renderSkillsRoster(compiled),
-		renderTranscript(transcript),
+		renderSessionContext(compiled, RoleProver, options),
+		renderSpec(compiled),
+		renderRequiredEvaluationRubrics(compiled, RoleProver),
+		renderSkillsRoster(compiled, options),
+		renderTranscriptProtocol(transcriptPath, RoleProver),
 		renderWorkspace(workspace, RoleProver),
 		renderOutputContract(RoleProver),
 	}
@@ -33,32 +43,29 @@ func RenderProverTask(compiled *CompiledEnvironment, roundNum int, workspace, tr
 }
 
 // RenderVerifierTask builds the full verifier task prompt.
-func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcript string) string {
+func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
+	options := promptOptions(opts)
 	preamble, _ := ReadPrompt("verifier.md")
 	parts := []string{
-		sessionTitle(compiled.Environment.Name, RoleVerifier, 0),
 		preamble,
 		"",
 		renderPlatformPreamble(compiled),
-		renderSessionContext(compiled, RoleVerifier, 0),
-		renderRequirements(compiled),
-		renderRequiredVerificationCriteria(compiled, RoleVerifier),
-		renderSkillsRoster(compiled),
-		renderTranscript(transcript),
+		renderSessionContext(compiled, RoleVerifier, options),
+		renderSpec(compiled),
+		renderRequiredEvaluationRubrics(compiled, RoleVerifier),
+		renderSkillsRoster(compiled, options),
+		renderTranscriptProtocol(transcriptPath, RoleVerifier),
 		renderWorkspace(workspace, RoleVerifier),
 		renderOutputContract(RoleVerifier),
 	}
 	return joinNonEmpty(parts)
 }
 
-func sessionTitle(name string, role Role, roundNum int) string {
-	if role == RoleVerifier {
-		return fmt.Sprintf("# Verify: %s\n", name)
+func promptOptions(opts []PromptOptions) PromptOptions {
+	if len(opts) == 0 {
+		return PromptOptions{}
 	}
-	if roundNum <= 1 {
-		return fmt.Sprintf("# Build: %s\n", name)
-	}
-	return fmt.Sprintf("# Fix: %s\n", name)
+	return opts[0]
 }
 
 func renderPlatformPreamble(compiled *CompiledEnvironment) string {
@@ -73,33 +80,36 @@ func renderPlatformPreamble(compiled *CompiledEnvironment) string {
 	return text
 }
 
-func renderSessionContext(compiled *CompiledEnvironment, role Role, roundNum int) string {
+func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptOptions) string {
 	platform := compiled.Environment.Platform
 	if platform == "" {
 		platform = "cloud"
 	}
-	lines := []string{"## Session\n"}
+	lines := []string{
+		"## Session",
+		"",
+		fmt.Sprintf("- Spec: `%s`", compiled.Environment.Name),
+		fmt.Sprintf("- Role: `%s`", displayRole(role)),
+	}
+	if opts.Controller {
+		lines = append(lines, "- Session kind: `controller`")
+	}
+	if opts.PrimarySpecPath != "" {
+		lines = append(lines, fmt.Sprintf("- Primary spec: `%s`", opts.PrimarySpecPath))
+	}
 	if platform != "local" {
 		lines = append(lines, fmt.Sprintf("- Namespace: `%s`", compiled.Namespace))
 	}
 
 	if role == RoleProver {
-		if roundNum <= 1 {
-			lines = append(lines, "",
-				"### Objective",
-				"- satisfy the system spec from the current starting state",
-				"",
-			)
-		} else {
-			lines = append(lines, "",
-				"### Objective",
-				"- address concrete verifier findings from the PVG transcript while preserving the live system",
-				"",
-				"### Constraints",
-				"- do not solve the problem by wiping system state unless the spec explicitly allows it",
-				"",
-			)
-		}
+		lines = append(lines, "",
+			"### Operating Posture",
+			"- continue from the append-only transcript, workspace, and live environment",
+			"- if unresolved evaluator findings exist, address them before broadening the work",
+			"- otherwise advance the delivered system toward the contract",
+			"- preserve valid existing work and live state unless the spec explicitly allows replacement",
+			"",
+		)
 	} else {
 		lines = append(lines, "",
 			"### Verification Focus",
@@ -116,59 +126,51 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, roundNum int
 	return strings.Join(lines, "\n")
 }
 
-func renderRequirements(compiled *CompiledEnvironment) string {
-	return "## Requirements\n\n" + compiled.SpecText + "\n"
+func renderSpec(compiled *CompiledEnvironment) string {
+	return "# Spec\n\n" + compiled.SpecText + "\n"
 }
 
-func renderRequiredVerificationCriteria(compiled *CompiledEnvironment, role Role) string {
+func displayRole(role Role) string {
+	if role == RoleVerifier {
+		return "evaluation"
+	}
+	return "implementation"
+}
+
+func renderRequiredEvaluationRubrics(compiled *CompiledEnvironment, role Role) string {
 	if len(compiled.RequiredVerifierSkills) == 0 {
 		return ""
 	}
-	lines := []string{"## Required Verification Criteria", ""}
+	lines := []string{"## Required Evaluation Rubrics", ""}
 	if role == RoleProver {
 		lines = append(lines,
-			"The verifier will grade the delivered work against these starred skills. Treat them as part of the contract, not as optional style advice.",
+			"The evaluator will load these starred skills by name and use them as grading rubrics. Treat each named rubric as part of the contract, not optional style advice.",
 			"",
 		)
-		for _, s := range compiled.RequiredVerifierSkills {
-			desc := strings.TrimSpace(s.Description)
-			entry := fmt.Sprintf("- `%s`", s.Name)
-			if desc != "" {
-				entry += " - " + desc
-			}
-			lines = append(lines, entry)
-		}
-		lines = append(lines, "")
+		lines = appendSkillPointers(lines, compiled.RequiredVerifierSkills)
 		return strings.Join(lines, "\n")
 	}
 
-	// verifier
 	lines = append(lines,
-		"The following starred skills are mandatory grading rubrics. Apply each one explicitly before conceding.",
+		"The following starred skills are mandatory grading rubrics. Use each mounted skill by name before conceding.",
 		"",
-		"For each required criterion:",
+		"For each required rubric skill:",
 		"- state PASS or FAIL;",
 		"- cite concrete artifact, source, tree, or runtime evidence;",
-		"- raise a blocking finding for any failed criterion;",
-		"- use <status>CONTINUE</status> if any criterion fails;",
-		"- do not concede unless every required criterion passes.",
+		"- raise a blocking finding for any failed rubric;",
+		"- use <status>CONTINUE</status> if any rubric fails;",
+		"- do not concede unless every required rubric passes.",
 		"",
-		"A required rubric can block concession even when the narrow functional contract appears satisfied. That is intentional: required criteria are part of the game contract.",
+		"A required rubric can block concession even when the narrow functional contract appears satisfied. That is intentional: required rubrics are part of the session contract.",
 		"",
 	)
-	for _, s := range compiled.RequiredVerifierSkills {
-		lines = append(lines,
-			fmt.Sprintf("### %s", s.Name),
-			"",
-			strings.TrimSpace(s.Instructions),
-			"",
-		)
-	}
+	lines = appendSkillPointers(lines, compiled.RequiredVerifierSkills)
 	return strings.Join(lines, "\n")
 }
 
-func renderSkillsRoster(compiled *CompiledEnvironment) string {
-	if len(compiled.Skills) == 0 {
+func renderSkillsRoster(compiled *CompiledEnvironment, opts PromptOptions) string {
+	skills := effectiveSkills(compiled, opts)
+	if len(skills) == 0 {
 		return ""
 	}
 	requiredNames := map[string]bool{}
@@ -178,14 +180,14 @@ func renderSkillsRoster(compiled *CompiledEnvironment) string {
 	lines := []string{
 		"## Skills",
 		"",
-		"Use these skill descriptions as routing hints. If the runtime exposes matching skill files, read them before acting. Skills marked `required verifier criterion` are grading rubrics, not optional guidance.",
+		"Use these skill names as routing hints. Pi can load mounted skill files by name; the prompt references names rather than inlining skill bodies. Skills marked `required evaluation rubric` are grading rubrics, not optional guidance.",
 		"",
 	}
-	for _, s := range compiled.Skills {
+	for _, s := range skills {
 		desc := strings.TrimSpace(s.Description)
 		marker := ""
 		if requiredNames[s.Name] {
-			marker = " - required verifier criterion"
+			marker = " - required evaluation rubric"
 		}
 		if desc != "" {
 			lines = append(lines, fmt.Sprintf("- `%s`%s - %s", s.Name, marker, desc))
@@ -197,20 +199,70 @@ func renderSkillsRoster(compiled *CompiledEnvironment) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderTranscript(transcript string) string {
-	if transcript == "" {
+func appendSkillPointers(lines []string, skills []*Skill) []string {
+	for _, s := range skills {
+		desc := strings.TrimSpace(s.Description)
+		entry := fmt.Sprintf("- `%s`", s.Name)
+		if desc != "" {
+			entry += " - " + desc
+		}
+		lines = append(lines, entry)
+	}
+	lines = append(lines, "")
+	return lines
+}
+
+func effectiveSkills(compiled *CompiledEnvironment, opts PromptOptions) []*Skill {
+	skills := append([]*Skill{}, compiled.Skills...)
+	if !opts.Controller || hasSkill(skills, "telos-orchestrate") {
+		return skills
+	}
+	controllerSkill := ResolveBuiltinSkill("telos-orchestrate")
+	if controllerSkill == nil {
+		controllerSkill = &Skill{
+			Name:        "telos-orchestrate",
+			Description: "Telos controller runtime.",
+		}
+	}
+	return append(skills, controllerSkill)
+}
+
+func hasSkill(skills []*Skill, name string) bool {
+	for _, s := range skills {
+		if s.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func renderTranscriptProtocol(transcriptPath string, role Role) string {
+	transcriptPath = strings.TrimSpace(transcriptPath)
+	if transcriptPath == "" {
 		return ""
 	}
-	return strings.Join([]string{
-		"## PVG Transcript",
+	lines := []string{
+		"## Transcript",
 		"",
-		"This append-only transcript is the game control file and background-agent product surface. Use it to understand prior prover claims, verifier reviews, progress updates, and unresolved findings; do not treat it as live system state.",
-		"",
-		"~~~~markdown",
-		strings.TrimSpace(transcript),
-		"~~~~",
-		"",
-	}, "\n")
+		fmt.Sprintf("- Path: `%s`", transcriptPath),
+		"- This is the append-only communication log between the implementation agent, evaluator, controller, and operators.",
+		"- The runtime appends your assistant response to this file after the turn.",
+		"- First action every turn: read this transcript path.",
+		"- Use it to gather summarized session state: prior claims, delivered changes, evaluator findings, progress updates, and open uncertainty.",
+		"- If the transcript only contains the header, proceed from scratch against the spec.",
+		"- Do not paste, summarize, rewrite, or edit the whole transcript directly.",
+		"- Write notes, claims, checks, findings, and uncertainty in your final response when they would help an independent evaluator.",
+	}
+	if role == RoleProver {
+		lines = append(lines,
+			"- Before making changes, identify unresolved evaluator findings and decide whether this turn is a fresh implementation or a repair.",
+		)
+	} else {
+		lines = append(lines,
+			"- Before judging, identify the implementation claims and any unresolved findings from prior evaluation turns.",
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func renderWorkspace(workspace string, role Role) string {
@@ -229,7 +281,7 @@ func renderWorkspace(workspace string, role Role) string {
 	}
 	if role == RoleVerifier {
 		lines = append(lines,
-			"You may **reset** the prover's commits if they introduced regressions: `git reset --soft HEAD~N`\n",
+			"You may **reset** implementation commits if they introduced regressions: `git reset --soft HEAD~N`\n",
 			"Use this snapshot as evidence of delivered tree shape: changed files, untracked artifacts, generated outputs, and diff size may matter for artifact hygiene.\n",
 		)
 	}
@@ -241,22 +293,26 @@ func renderOutputContract(role Role) string {
 	if role == RoleProver {
 		return strings.Join([]string{
 			"## Output",
-			"- Write concise Markdown for the PVG transcript with claims, evidence, changes made, and remaining uncertainty",
+			"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
+			"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
+			"- Write concise Markdown with claims, evidence, changes made, and remaining uncertainty",
 			"- During the turn, emit concise <progress_update>...</progress_update> entries when useful for a background observer, without spamming routine tool activity",
 			"- End every turn with one final <progress_update>what you did this round</progress_update>",
 		}, "\n")
 	}
 	return strings.Join([]string{
 		"## Output",
-		"- Write concise Markdown for the PVG transcript; blocking findings first",
+		"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
+		"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
+		"- Write concise Markdown; blocking findings first",
 		"- During the turn, emit concise <progress_update>...</progress_update> entries when useful for a background observer, without spamming routine tool activity",
 		"- End every turn with one final <progress_update>what you found or why you concede</progress_update>",
 		"- The final non-empty line must be exactly one status tag",
 		"- <status>CONTINUE</status> if you found a concrete contract violation",
 		"- <status>CONTINUE</status> if any required task is pending, running, stopped, failed, or not reflected in live resources",
 		`- Include an "Artifact Hygiene" section for code-producing tasks: tree shape inspected, notable debt, and whether it blocks concession`,
-		`- If "Required Verification Criteria" are present, include a "Required Criteria Applied" section with PASS/FAIL and evidence for each required criterion`,
-		"- If any required criterion is FAIL, the final status must be <status>CONTINUE</status>",
+		`- If "Required Evaluation Rubrics" are present, include a "Required Rubrics Applied" section with PASS/FAIL and evidence for each required rubric`,
+		"- If any required rubric is FAIL, the final status must be <status>CONTINUE</status>",
 		"- <status>CONCEDE</status> only if the contract and applicable quality bars hold under independent review",
 	}, "\n")
 }

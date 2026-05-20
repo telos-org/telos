@@ -106,11 +106,11 @@ func TestPVGVerifierConcedes(t *testing.T) {
 
 	// Check transcript content
 	transcript := ReadTranscript(state.TranscriptPath)
-	if !strings.Contains(transcript, "Prover 1") {
-		t.Error("transcript should contain prover section")
+	if !strings.Contains(transcript, "Implementation 1") {
+		t.Error("transcript should contain implementation section")
 	}
-	if !strings.Contains(transcript, "Verifier 1") {
-		t.Error("transcript should contain verifier section")
+	if !strings.Contains(transcript, "Evaluation 1") {
+		t.Error("transcript should contain evaluation section")
 	}
 	if !strings.Contains(transcript, "## Result") {
 		t.Error("transcript should contain result")
