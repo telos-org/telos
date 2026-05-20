@@ -141,9 +141,6 @@ func (s *cloudSessionStore) enrich(session *sessionapi.Session, routes []publicR
 	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindController {
 		return
 	}
-	if session.Status.IsTerminal() {
-		return
-	}
 	if handle := productHandleFor(routes, *session); handle != "" {
 		uri := "https://" + stripScheme(handle)
 		session.ArtifactURI = &uri

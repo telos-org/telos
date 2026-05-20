@@ -152,7 +152,7 @@ func TestCloudSessionStoreAddsHTTPProductHandle(t *testing.T) {
 	}
 }
 
-func TestCloudSessionStoreSkipsTerminalProductHandle(t *testing.T) {
+func TestCloudSessionStoreAddsTerminalProductHandle(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	store := newCloudSessionStore(base, routeHandleResolver{
 		read: func(context.Context) ([]publicRoute, error) {
@@ -175,8 +175,8 @@ func TestCloudSessionStoreSkipsTerminalProductHandle(t *testing.T) {
 
 	store.enrich(&session, store.routes())
 
-	if session.ArtifactURI != nil {
-		t.Fatalf("terminal session got artifact_uri: %q", *session.ArtifactURI)
+	if session.ArtifactURI == nil || *session.ArtifactURI != "https://postgres.usetelos.ai" {
+		t.Fatalf("artifact_uri: got %#v", session.ArtifactURI)
 	}
 }
 
@@ -266,6 +266,39 @@ func TestProductHandleRequiresUnambiguousBrowserRoute(t *testing.T) {
 
 	if handle != "" {
 		t.Fatalf("ambiguous handle: got %q", handle)
+	}
+}
+
+func TestProductHandlePrefersProductRouteOverDashboardRoute(t *testing.T) {
+	name := "auth"
+	kind := sessionapi.KindController
+	handle := productHandleFor(
+		[]publicRoute{
+			{
+				Namespace: "ns-auth",
+				Data: map[string]string{
+					"type":     "service",
+					"hostname": "auth.usetelos.ai",
+				},
+			},
+			{
+				Namespace: "ns-auth",
+				Data: map[string]string{
+					"type":     "dashboard",
+					"hostname": "dashboard-auth.usetelos.ai",
+				},
+			},
+		},
+		sessionapi.Session{
+			SessionID:   "sess_auth",
+			SessionKind: &kind,
+			SpecName:    &name,
+			Status:      sessionapi.StatusFailed,
+		},
+	)
+
+	if handle != "auth.usetelos.ai" {
+		t.Fatalf("handle: got %q", handle)
 	}
 }
 

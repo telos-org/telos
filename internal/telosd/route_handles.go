@@ -144,11 +144,29 @@ func routeMatchesNamespace(route publicRoute, namespace string) bool {
 }
 
 func singleProductHandle(routes []publicRoute, match func(publicRoute) bool) string {
-	handles := map[string]struct{}{}
+	var candidates []publicRoute
 	for _, route := range routes {
 		if !match(route) || isTCPRoute(route.Data) {
 			continue
 		}
+		candidates = append(candidates, route)
+	}
+	if handle := singleHandle(candidates); handle != "" {
+		return handle
+	}
+
+	productRoutes := make([]publicRoute, 0, len(candidates))
+	for _, route := range candidates {
+		if !isDashboardRoute(route.Data) {
+			productRoutes = append(productRoutes, route)
+		}
+	}
+	return singleHandle(productRoutes)
+}
+
+func singleHandle(routes []publicRoute) string {
+	handles := map[string]struct{}{}
+	for _, route := range routes {
 		handle := routeHandle(route.Data)
 		if handle == "" {
 			continue
@@ -188,6 +206,10 @@ func isTCPRoute(data map[string]string) bool {
 	service := strings.TrimSpace(data["service"])
 	target := strings.TrimSpace(data["target_service"])
 	return strings.HasPrefix(service, "tcp://") || strings.HasPrefix(target, "tcp://")
+}
+
+func isDashboardRoute(data map[string]string) bool {
+	return strings.EqualFold(strings.TrimSpace(data["type"]), "dashboard")
 }
 
 func routeHandle(data map[string]string) string {
