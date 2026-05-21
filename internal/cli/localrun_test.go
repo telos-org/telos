@@ -136,6 +136,26 @@ func TestCreateLocalSessionRejectsWorkspaceFile(t *testing.T) {
 	}
 }
 
+func TestCreateLocalSessionHonorsSessionDirEnv(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	workspace := filepath.Join(dir, "workspace")
+	sessionsRoot := filepath.Join(dir, "telos-sessions")
+	t.Setenv("TELOS_SESSION_DIR", sessionsRoot)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{Workspace: workspace})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	if !strings.HasPrefix(session.SessionDir, sessionsRoot+string(os.PathSeparator)) {
+		t.Fatalf("session dir %q should be under %q", session.SessionDir, sessionsRoot)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, ".telos")); !os.IsNotExist(err) {
+		t.Fatalf("workspace should not contain .telos when TELOS_SESSION_DIR is set: %v", err)
+	}
+}
+
 func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)

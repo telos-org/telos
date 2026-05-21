@@ -56,9 +56,12 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 		}
 	}
 
-	sessionsRoot := filepath.Join(".telos", "sessions")
-	if workspace != "" {
-		sessionsRoot = filepath.Join(workspace, ".telos", "sessions")
+	sessionsRoot := os.Getenv("TELOS_SESSION_DIR")
+	if sessionsRoot == "" {
+		sessionsRoot = filepath.Join(".telos", "sessions")
+		if workspace != "" {
+			sessionsRoot = filepath.Join(workspace, ".telos", "sessions")
+		}
 	}
 	sessionsRoot, err = filepath.Abs(sessionsRoot)
 	if err != nil {
