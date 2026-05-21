@@ -327,7 +327,7 @@ done
         context.metadata = metadata
         self._last_metadata = metadata
 
-        if result.return_code != 0:
+        if result.return_code != 0 and not is_completed_telos_session(final_session):
             raise RuntimeError(
                 "telos executable agent failed: "
                 f"exit={result.return_code}; stderr={(result.stderr or '')[-2000:]}"
@@ -415,3 +415,7 @@ def _sum_spec_metric(session: dict[str, Any], key: str) -> int | float | None:
     if not values:
         return None
     return sum(values)
+
+
+def is_completed_telos_session(session: dict[str, Any]) -> bool:
+    return session.get("status") == "completed"

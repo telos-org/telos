@@ -1,6 +1,7 @@
 import unittest
 
 from integrations.harbor.telos_agent import (
+    is_completed_telos_session,
     parse_marked_json,
     render_harbor_spec,
     sanitize_spec_name,
@@ -41,6 +42,11 @@ class TelosHarborAgentTest(unittest.TestCase):
             "TELOS_HARBOR_RESULT_END\n"
         )
         self.assertEqual(parsed["status"], "completed")
+
+    def test_is_completed_telos_session(self):
+        self.assertTrue(is_completed_telos_session({"status": "completed"}))
+        self.assertFalse(is_completed_telos_session({"status": "failed"}))
+        self.assertFalse(is_completed_telos_session({}))
 
 
 if __name__ == "__main__":
