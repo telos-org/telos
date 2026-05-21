@@ -656,27 +656,39 @@ func TestFollowTranscriptSurfacesControllerTranscriptError(t *testing.T) {
 	}
 }
 
-func TestPrintLogsDefaultsToProgressUpdates(t *testing.T) {
+func TestPrintLogsDefaultsToProtocolBlocks(t *testing.T) {
 	transcript := `# Transcript
 
-hidden raw content with inline code ` + "`<progress_update>`" + `
+	hidden raw content with inline code ` + "`<progress_update>`" + `
 
 <progress_update>First checkpoint</progress_update>
 
-more raw content with inline code ` + "`</progress_update>`" + `
+	more raw content with inline code ` + "`</progress_update>`" + `
 
-<progress_update ts="2026-05-20T00:00:00Z">Second checkpoint</progress_update>`
+	<progress_update ts="2026-05-20T00:00:00Z">Second checkpoint</progress_update>
+
+	<review>
+criteria,score
+Correctness,8.0/10
+</review>
+
+	<summary>Needs one more check.</summary>`
 
 	var out bytes.Buffer
 	printLogs(&out, transcript, false)
 	text := out.String()
-	for _, want := range []string{"#1 First checkpoint", "#2 Second checkpoint"} {
+	for _, want := range []string{
+		"#1 First checkpoint",
+		"#2 Second checkpoint",
+		"Review\ncriteria,score\nCorrectness,8.0/10",
+		"Summary\nNeeds one more check.",
+	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("progress output missing %q:\n%s", want, text)
+			t.Fatalf("log output missing %q:\n%s", want, text)
 		}
 	}
 	if strings.Contains(text, "hidden raw content") || strings.Contains(text, "more raw content") {
-		t.Fatalf("progress output leaked raw transcript:\n%s", text)
+		t.Fatalf("log output leaked raw transcript:\n%s", text)
 	}
 }
 

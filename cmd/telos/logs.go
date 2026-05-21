@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"sort"
 	"strings"
 	"time"
 
@@ -50,6 +51,7 @@ func followLogs(sessionID, envID string, raw bool) {
 
 func followTranscript(sessionID, envID string, out io.Writer, sleep func(time.Duration), raw bool) error {
 	var lastLen int
+	var lastBlockCount int
 	var lastProgressCount int
 	var lastTranscriptErr error
 	for {
@@ -59,11 +61,11 @@ func followTranscript(sessionID, envID string, out io.Writer, sleep func(time.Du
 			lastLen = len(text)
 		}
 		if err == nil && !raw {
-			updates := progressUpdates(text)
-			for i := lastProgressCount; i < len(updates); i++ {
-				printProgressUpdate(out, i+1, updates[i])
+			blocks := logBlocks(text)
+			if lastBlockCount < len(blocks) {
+				lastProgressCount = printLogBlocks(out, blocks[lastBlockCount:], lastProgressCount)
+				lastBlockCount = len(blocks)
 			}
-			lastProgressCount = len(updates)
 		}
 		if err != nil {
 			if !transcriptNotReady(err) {
@@ -81,11 +83,11 @@ func followTranscript(sessionID, envID string, out io.Writer, sleep func(time.Du
 			if raw && lastLen == 0 && lastTranscriptErr != nil {
 				return lastTranscriptErr
 			}
-			if !raw && lastProgressCount == 0 {
+			if !raw && lastBlockCount == 0 {
 				if lastTranscriptErr != nil {
 					return lastTranscriptErr
 				}
-				fmt.Fprintln(out, "no progress updates")
+				fmt.Fprintln(out, "no session log entries")
 			}
 			return nil
 		}
@@ -105,14 +107,12 @@ func printLogs(out io.Writer, transcript string, raw bool) {
 		fmt.Fprint(out, transcript)
 		return
 	}
-	updates := progressUpdates(transcript)
-	if len(updates) == 0 {
-		fmt.Fprintln(out, "no progress updates")
+	blocks := logBlocks(transcript)
+	if len(blocks) == 0 {
+		fmt.Fprintln(out, "no session log entries")
 		return
 	}
-	for i, update := range updates {
-		printProgressUpdate(out, i+1, update)
-	}
+	printLogBlocks(out, blocks, 0)
 }
 
 func printProgressUpdate(out io.Writer, index int, update string) {
@@ -122,9 +122,19 @@ func printProgressUpdate(out io.Writer, index int, update string) {
 	fmt.Fprintf(out, "#%d %s\n", index, update)
 }
 
-// Logs only treat standalone protocol tags as progress. The transcript parser
-// is intentionally looser because it trims final status blocks.
-var progressUpdateTagRE = regexp.MustCompile(`(?ims)^[ \t]*<progress_update\b[^>]*>\s*(.*?)\s*</progress_update>[ \t]*$`)
+// Logs only treat standalone protocol tags as public log entries. This avoids
+// turning inline examples into user-visible progress or review output.
+var (
+	progressUpdateTagRE = regexp.MustCompile(`(?ims)^[ \t]*<progress_update\b[^>]*>\s*(.*?)\s*</progress_update>[ \t]*$`)
+	reviewTagRE         = regexp.MustCompile(`(?ims)^[ \t]*<review\b[^>]*>\s*(.*?)\s*</review>[ \t]*$`)
+	summaryTagRE        = regexp.MustCompile(`(?ims)^[ \t]*<summary\b[^>]*>\s*(.*?)\s*</summary>[ \t]*$`)
+)
+
+type logBlock struct {
+	start int
+	kind  string
+	text  string
+}
 
 func progressUpdates(transcript string) []string {
 	matches := progressUpdateTagRE.FindAllStringSubmatch(transcript, -1)
@@ -140,4 +150,52 @@ func progressUpdates(transcript string) []string {
 		updates = append(updates, text)
 	}
 	return updates
+}
+
+func logBlocks(transcript string) []logBlock {
+	var blocks []logBlock
+	blocks = appendLogBlocks(blocks, transcript, "progress_update", progressUpdateTagRE)
+	blocks = appendLogBlocks(blocks, transcript, "review", reviewTagRE)
+	blocks = appendLogBlocks(blocks, transcript, "summary", summaryTagRE)
+	sort.SliceStable(blocks, func(i, j int) bool {
+		return blocks[i].start < blocks[j].start
+	})
+	return blocks
+}
+
+func appendLogBlocks(blocks []logBlock, transcript string, kind string, re *regexp.Regexp) []logBlock {
+	matches := re.FindAllStringSubmatchIndex(transcript, -1)
+	for _, match := range matches {
+		if len(match) < 4 || match[2] < 0 || match[3] < 0 {
+			continue
+		}
+		text := strings.TrimSpace(transcript[match[2]:match[3]])
+		if text == "" {
+			continue
+		}
+		blocks = append(blocks, logBlock{start: match[0], kind: kind, text: text})
+	}
+	return blocks
+}
+
+func printLogBlocks(out io.Writer, blocks []logBlock, progressCount int) int {
+	printed := false
+	for _, block := range blocks {
+		if printed {
+			fmt.Fprintln(out)
+		}
+		switch block.kind {
+		case "progress_update":
+			progressCount++
+			fmt.Fprintf(out, "#%d %s\n", progressCount, block.text)
+		case "review":
+			fmt.Fprintf(out, "Review\n%s\n", block.text)
+		case "summary":
+			fmt.Fprintf(out, "Summary\n%s\n", block.text)
+		default:
+			fmt.Fprintln(out, block.text)
+		}
+		printed = true
+	}
+	return progressCount
 }

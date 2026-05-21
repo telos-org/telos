@@ -438,4 +438,7 @@ func TestRenderWithWorkspace(t *testing.T) {
 	if !strings.Contains(task, "./main.go") {
 		t.Error("should contain workspace content")
 	}
+	if strings.Contains(task, "/workspace/output") {
+		t.Fatalf("workspace prompt should not hardcode container paths:\n%s", task)
+	}
 }

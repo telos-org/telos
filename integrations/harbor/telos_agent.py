@@ -123,14 +123,17 @@ def model_env() -> dict[str, str]:
 
 
 def parse_marked_json(stdout: str) -> dict[str, Any]:
-    start = "TELOS_HARBOR_RESULT_BEGIN"
-    end = "TELOS_HARBOR_RESULT_END"
-    if start not in stdout or end not in stdout:
-        return {}
-    body = stdout.split(start, 1)[1].split(end, 1)[0].strip()
+    body = parse_marked_text(stdout, "TELOS_HARBOR_RESULT_BEGIN", "TELOS_HARBOR_RESULT_END")
     if not body:
         return {}
     return json.loads(body)
+
+
+def parse_marked_text(stdout: str, start: str, end: str) -> str:
+    if start not in stdout or end not in stdout:
+        return ""
+    body = stdout.split(start, 1)[1].split(end, 1)[0].strip()
+    return body
 
 
 class TelosExecutableAgent(BaseInstalledAgent):
@@ -318,6 +321,15 @@ done
             "telos_stderr_log": str(self.logs_dir / "telos-harbor-stderr.log"),
         }
         final_session = parse_marked_json(result.stdout or "")
+        transcript = parse_marked_text(
+            result.stdout or "",
+            "TELOS_HARBOR_TRANSCRIPT_BEGIN",
+            "TELOS_HARBOR_TRANSCRIPT_END",
+        )
+        if transcript:
+            transcript_path = self.logs_dir / "telos-harbor-transcript.md"
+            transcript_path.write_text(transcript)
+            metadata["telos_transcript_log"] = str(transcript_path)
         if final_session:
             metadata["telos_session"] = final_session
             context.n_input_tokens = _sum_spec_metric(final_session, "total_input_tokens")
@@ -385,10 +397,16 @@ while :; do
   status="$(awk -F'"' '/"status"/ {{ print $4; exit }}' /tmp/telos-harbor/describe.json)"
   case "$status" in
     completed|failed|stopped|stale)
-      telos logs "$session_id" > /tmp/telos-harbor/logs.txt || true
+      telos logs "$session_id" --raw > /tmp/telos-harbor/transcript.md || true
+      printf 'TELOS_HARBOR_TRANSCRIPT_BEGIN\n'
+      cat /tmp/telos-harbor/transcript.md
+      printf '\nTELOS_HARBOR_TRANSCRIPT_END\n'
       printf 'TELOS_HARBOR_RESULT_BEGIN\n'
       cat /tmp/telos-harbor/describe.json
       printf '\nTELOS_HARBOR_RESULT_END\n'
+      if [ "$status" != completed ]; then
+        exit 1
+      fi
       exit 0
       ;;
   esac

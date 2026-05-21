@@ -1,8 +1,10 @@
 import unittest
 
 from integrations.harbor.telos_agent import (
+    TelosExecutableAgent,
     is_completed_telos_session,
     parse_marked_json,
+    parse_marked_text,
     render_harbor_spec,
     sanitize_spec_name,
     split_skills,
@@ -43,10 +45,35 @@ class TelosHarborAgentTest(unittest.TestCase):
         )
         self.assertEqual(parsed["status"], "completed")
 
+    def test_parse_marked_text(self):
+        parsed = parse_marked_text(
+            "noise\nTELOS_HARBOR_TRANSCRIPT_BEGIN\n# Transcript\n"
+            "TELOS_HARBOR_TRANSCRIPT_END\n",
+            "TELOS_HARBOR_TRANSCRIPT_BEGIN",
+            "TELOS_HARBOR_TRANSCRIPT_END",
+        )
+        self.assertEqual(parsed, "# Transcript")
+
     def test_is_completed_telos_session(self):
         self.assertTrue(is_completed_telos_session({"status": "completed"}))
         self.assertFalse(is_completed_telos_session({"status": "failed"}))
         self.assertFalse(is_completed_telos_session({}))
+
+    def test_run_script_preserves_raw_logs_and_fails_non_completed_sessions(self):
+        agent = object.__new__(TelosExecutableAgent)
+        agent.model_name = "openai-codex/gpt-5.5"
+        agent.thinking = "high"
+        agent.until = 3
+        agent.max_cost_usd = 10
+        agent.agent_timeout_sec = 0
+        agent.session_timeout_sec = 3600
+        agent.poll_interval_sec = 5
+
+        script = agent._run_script("---\nversion: v0\nname: task\n---\nBody", "/app")
+
+        self.assertIn('telos logs "$session_id" --raw', script)
+        self.assertIn("TELOS_HARBOR_TRANSCRIPT_BEGIN", script)
+        self.assertIn('if [ "$status" != completed ]; then', script)
 
 
 if __name__ == "__main__":

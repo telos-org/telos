@@ -308,7 +308,7 @@ func renderWorkspace(workspace string, role Role) string {
 	}
 	lines := []string{
 		"\n## Workspace",
-		"Files at `/workspace/output` persist across rounds.",
+		"The workspace below is the durable working tree for this session.",
 		"Use `git log` and `git diff` to see previous work.\n",
 	}
 	if role == RoleProver {
