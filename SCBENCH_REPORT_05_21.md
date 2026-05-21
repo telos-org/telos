@@ -19,6 +19,30 @@ runtime as a Harbor executable agent.
 - Runtime: `1h 21m 55s`
 - Cost recorded by Harbor: `$0.830842`
 
+### Reproduction
+
+The reproducible Harbor entry point now lives at:
+
+```bash
+./integrations/harbor/run_scbench_circuit_eval.sh
+```
+
+Baseline-equivalent invocation:
+
+```bash
+TELOS_HARBOR_MODEL=openai-codex/gpt-5.5 \
+TELOS_HARBOR_UNTIL=1 \
+TELOS_HARBOR_SKILLS='verify-engineering*' \
+./integrations/harbor/run_scbench_circuit_eval.sh
+```
+
+The Harbor shim installs Telos inside the task container via:
+
+```bash
+TELOS_INSTALL_DIR="$HOME/.local/bin" \
+curl -fsSL https://usetelos.ai/releases/latest/install.sh | sh
+```
+
 ### Aggregate Metrics
 
 | Metric | Value |
