@@ -25,9 +25,8 @@ TELOS_HARBOR_SKILLS='verify-engineering*' \
 ./integrations/harbor/run_scbench_circuit_eval.sh
 ```
 
-That reproduces the baseline shape recorded in `SCBENCH_REPORT_05_21.md`:
-SCBench `circuit_eval`, Telos installed through the public release installer,
-and one implementation/evaluation cycle per checkpoint.
+That runs SCBench `circuit_eval` with Telos installed through the public
+release installer and one implementation/evaluation cycle per checkpoint.
 
 For the quality-regression run, use repair turns and include the quality rubric:
 
@@ -57,4 +56,3 @@ Per-trial logs include:
 - `telos-harbor-spec.md`
 - `telos-harbor-stdout.log`
 - `telos-harbor-stderr.log`
-
