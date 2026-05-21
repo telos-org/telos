@@ -3,3 +3,5 @@
 *.exe
 bazel-*
 dist/
+__pycache__/
+*.pyc
