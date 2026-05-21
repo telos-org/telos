@@ -17,7 +17,7 @@ func TestInitializeTranscript(t *testing.T) {
 	}
 
 	content := ReadTranscript(path)
-	if !strings.Contains(content, "# Telos Transcript: sess-001") {
+	if !strings.Contains(content, "# Session Transcript: sess-001") {
 		t.Error("should contain transcript header")
 	}
 	if !strings.Contains(content, "test-system") {

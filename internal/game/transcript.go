@@ -30,7 +30,7 @@ func InitializeTranscript(path, sessionID, systemName, evidencePath, startedAt s
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	content := fmt.Sprintf(`# Telos Transcript: %s
+	content := fmt.Sprintf(`# Session Transcript: %s
 
 - System: `+"`%s`"+`
 - Started: `+"`%s`"+`

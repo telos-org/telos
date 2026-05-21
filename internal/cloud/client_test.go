@@ -299,7 +299,7 @@ func TestClientStopSession(t *testing.T) {
 func TestClientGetTranscript(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte("# PVG Transcript\n\nSome content"))
+		w.Write([]byte("# Session Transcript\n\nSome content"))
 	}))
 	defer srv.Close()
 
@@ -308,7 +308,7 @@ func TestClientGetTranscript(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTranscript: %v", err)
 	}
-	if text != "# PVG Transcript\n\nSome content" {
+	if text != "# Session Transcript\n\nSome content" {
 		t.Errorf("transcript: got %q", text)
 	}
 }

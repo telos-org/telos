@@ -424,7 +424,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	return fs.deriveSession(id, m)
 }
 
-// Transcript returns the PVG transcript markdown for the first spec.
+// Transcript returns the session transcript markdown for the first spec.
 func (fs *FileStore) Transcript(id string) (string, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
