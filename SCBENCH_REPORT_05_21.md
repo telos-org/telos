@@ -80,8 +80,8 @@ Planned changes before launch:
 - Run with `--until 3` so evaluator findings feed into repair turns.
 - Require both `verify-engineering*` and `verify-quality*` in the rendered
   Harbor SPEC.
-- Update `verify-quality` so benchmark-provided slop/erosion signals are
-  first-class evaluation evidence, while still keeping the builder-visible SPEC
+- Update `verify-quality` so the evaluator judges the resulting system and
+  surrounding codebase in context, while keeping the builder-visible SPEC
   focused on the task contract.
 
 Target comparison:

@@ -31,6 +31,21 @@ second test suite.
 - Independent evaluation means thinking through a different path than the
   implementation agent, not always running a different command.
 
+## Changes In Context
+
+When work builds on existing code, judge the resulting system and surrounding
+codebase, not only whether the latest change passes. A change that meets its
+spec while leaving nearby files, functions, or module boundaries in worse shape
+for future work is a legitimate finding, held to the same evidentiary bar as
+any other concern in this skill.
+
+Use codebase shape as evidence: where responsibilities accumulate, whether new
+behavior spreads or concentrates in ways that obscure the contract, and whether
+the next change would have a clear place to go.
+
+Accept the tradeoff when the spec genuinely required it and the cost is local
+and named.
+
 ## Finding Quality
 
 A finding is valid only when it is specific and reproducible.
