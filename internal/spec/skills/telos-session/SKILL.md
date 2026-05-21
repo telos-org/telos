@@ -82,31 +82,27 @@ Local Telos runs persist snapshots under the workspace:
   specs/<spec_name>/transcript-<session_id>.md
   specs/<spec_name>/workspace.tar.gz
   specs/<spec_name>/turns/<turn_id>/task.md
-  specs/<spec_name>/turns/<turn_id>/raw.jsonl
+  specs/<spec_name>/turns/<turn_id>/pi-session.jsonl
 ```
 
-### `raw.jsonl` Contract
+### `pi-session.jsonl` Contract
 
-`raw.jsonl` is the per-turn ground truth: every stdout line the agent
-produced during that turn, one JSON event per line. Telos folds the same
-stream to derive transcript text, tool calls, tokens, cost, and stop reason.
+`pi-session.jsonl` is the per-turn Pi session record. It is compact native
+Pi JSONL for the completed turn: messages, tool results, model, usage, cost,
+and stop reason.
 
-- One event per line. Always valid JSONL.
-- Lines that did not parse as JSON are wrapped as
-  `{"event": "unparsed", "line": "<original>"}` so downstream tools can
-  still read the file as JSONL.
-- Schema is the agent's native event schema (Pi today). Telos does not
-  re-emit a normalized shape — it folds events into `TurnStats` and
-  `evidence.jsonl` records, but `raw.jsonl` stays unmodified.
-- Appended as the agent emits newline-delimited events. It must not depend on
-  the turn completing successfully.
+- One entry per line. Always valid JSONL when Pi completes normally.
+- Schema is Pi's native session schema. Telos does not re-emit a normalized
+  shape; it folds the final assistant message into transcript text,
+  `TurnStats`, and `evidence.jsonl` records.
+- Written by Pi, not by Telos. Treat it as a turn artifact for audit and
+  debugging, not as a live stdout stream.
 - Use `evidence.jsonl` for cross-turn structured records (game start,
-  round start, agent_complete, workspace_checkpoint). Use `raw.jsonl`
-  when you need the agent's exact output — replays, debugging a parser
-  regression, auditing a specific tool call.
+  round start, agent_complete, workspace_checkpoint). Use `pi-session.jsonl`
+  when you need the agent's native messages, tool results, or model usage.
 
 ```bash
-jq -c '.type // .event' .telos/sessions/<id>/specs/<name>/turns/<turn-id>/raw.jsonl
+jq -c 'select(.type=="message") | .message.role' .telos/sessions/<id>/specs/<name>/turns/<turn-id>/pi-session.jsonl
 ```
 
 Useful reads:
@@ -139,7 +135,7 @@ checkpoint layout is:
   turns/
     <turn-id>/
       task.md
-      raw.jsonl
+      pi-session.jsonl
   artifacts/
 ```
 

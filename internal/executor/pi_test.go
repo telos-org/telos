@@ -1,42 +1,13 @@
 package executor
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/telos-org/telos/internal/game"
-	"github.com/telos-org/telos/internal/platform"
 )
-
-func TestParsePiJSONLine(t *testing.T) {
-	// Valid JSON
-	line := `{"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}`
-	event := ParsePiJSONLine(line)
-	if event == nil {
-		t.Fatal("expected parsed event")
-	}
-	if event["type"] != "message_end" {
-		t.Errorf("type: got %v", event["type"])
-	}
-
-	// Invalid JSON
-	if ParsePiJSONLine("not json") != nil {
-		t.Error("expected nil for invalid JSON")
-	}
-
-	// Non-object JSON
-	if ParsePiJSONLine(`"just a string"`) != nil {
-		t.Error("expected nil for non-object JSON")
-	}
-
-	// Empty
-	if ParsePiJSONLine("") != nil {
-		t.Error("expected nil for empty string")
-	}
-}
 
 func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	exec := NewPiExecutor(nil, "claude-test", "", 0)
@@ -49,158 +20,8 @@ func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	}
 }
 
-func TestHandlePiEventMessageEnd(t *testing.T) {
-	event := map[string]interface{}{
-		"type": "message_end",
-		"message": map[string]interface{}{
-			"role": "assistant",
-			"content": []interface{}{
-				map[string]interface{}{
-					"type": "text",
-					"text": "Hello, world!",
-				},
-			},
-			"usage": map[string]interface{}{
-				"input":      float64(1000),
-				"output":     float64(500),
-				"cacheRead":  float64(200),
-				"cacheWrite": float64(100),
-				"cost": map[string]interface{}{
-					"total": float64(0.05),
-				},
-			},
-			"model": "claude-test",
-		},
-	}
-
-	var textParts []string
-	stats := game.TurnStats{}
-	HandlePiEvent(event, &textParts, &stats)
-
-	if len(textParts) != 1 || textParts[0] != "Hello, world!" {
-		t.Errorf("text: got %v", textParts)
-	}
-	if stats.InputTokens != 1000 {
-		t.Errorf("input: got %d", stats.InputTokens)
-	}
-	if stats.OutputTokens != 500 {
-		t.Errorf("output: got %d", stats.OutputTokens)
-	}
-	if stats.CacheReadTokens != 200 {
-		t.Errorf("cache read: got %d", stats.CacheReadTokens)
-	}
-	if stats.CacheCreationTokens != 100 {
-		t.Errorf("cache write: got %d", stats.CacheCreationTokens)
-	}
-	if stats.CostUSD != 0.05 {
-		t.Errorf("cost: got %f", stats.CostUSD)
-	}
-	if stats.Model != "claude-test" {
-		t.Errorf("model: got %q", stats.Model)
-	}
-}
-
-func TestHandlePiEventToolEnd(t *testing.T) {
-	event := map[string]interface{}{
-		"type": "tool_execution_end",
-	}
-
-	var textParts []string
-	stats := game.TurnStats{}
-	HandlePiEvent(event, &textParts, &stats)
-
-	if stats.NumTurns != 1 {
-		t.Errorf("num_turns: got %d", stats.NumTurns)
-	}
-}
-
-func TestHandlePiEventUserMessage(t *testing.T) {
-	event := map[string]interface{}{
-		"type": "message_end",
-		"message": map[string]interface{}{
-			"role":    "user",
-			"content": []interface{}{},
-		},
-	}
-
-	var textParts []string
-	stats := game.TurnStats{}
-	HandlePiEvent(event, &textParts, &stats)
-
-	if len(textParts) != 0 {
-		t.Error("user messages should not add text")
-	}
-}
-
-func TestExtractPiEventError(t *testing.T) {
-	// No error
-	event := map[string]interface{}{
-		"type": "message_end",
-		"message": map[string]interface{}{
-			"role": "assistant",
-		},
-	}
-	if err := ExtractPiEventError(event); err != "" {
-		t.Errorf("expected empty error, got %q", err)
-	}
-
-	// Real error
-	event["message"] = map[string]interface{}{
-		"role":         "assistant",
-		"errorMessage": "something broke",
-	}
-	if err := ExtractPiEventError(event); err != "something broke" {
-		t.Errorf("expected error, got %q", err)
-	}
-
-	// Transient error (should be ignored)
-	event["message"] = map[string]interface{}{
-		"role":         "assistant",
-		"errorMessage": "overloaded_error: try again",
-	}
-	if err := ExtractPiEventError(event); err != "" {
-		t.Errorf("transient error should be ignored, got %q", err)
-	}
-}
-
-func TestExtractPiStopReason(t *testing.T) {
-	event := map[string]interface{}{
-		"type": "message_end",
-		"message": map[string]interface{}{
-			"role":       "assistant",
-			"stopReason": "length",
-		},
-	}
-	if sr := ExtractPiStopReason(event); sr != "length" {
-		t.Errorf("stop reason: got %q", sr)
-	}
-
-	// No stop reason
-	event["message"] = map[string]interface{}{
-		"role": "assistant",
-	}
-	if sr := ExtractPiStopReason(event); sr != "" {
-		t.Errorf("expected empty stop reason, got %q", sr)
-	}
-}
-
-func TestExtractPiStopReasonAgentEnd(t *testing.T) {
-	event := map[string]interface{}{
-		"type": "agent_end",
-		"messages": []interface{}{
-			map[string]interface{}{
-				"role":       "assistant",
-				"stopReason": "end_turn",
-			},
-		},
-	}
-	if sr := ExtractPiStopReason(event); sr != "end_turn" {
-		t.Errorf("stop reason: got %q", sr)
-	}
-}
-
-func TestBuildPiArgv(t *testing.T) {
-	argv := BuildPiArgv("claude-test", "high", "")
+func TestBuildPiArgvUsesTextModeWithoutSessionByDefault(t *testing.T) {
+	argv := BuildPiArgv("claude-test", "high", "", "")
 	if len(argv) != 6 {
 		t.Fatalf("expected 6 args, got %d", len(argv))
 	}
@@ -216,92 +37,151 @@ func TestBuildPiArgv(t *testing.T) {
 	if !strings.Contains(argv[2], `prompt="${TELOS_TASK}"`) {
 		t.Errorf("task prompt is not expanded from env: %s", argv[2])
 	}
+	if !strings.Contains(argv[2], `--mode text`) {
+		t.Errorf("pi should run in text mode: %s", argv[2])
+	}
+	if !strings.Contains(argv[2], `--no-session`) {
+		t.Errorf("fallback path should stay ephemeral: %s", argv[2])
+	}
+	if strings.Contains(argv[2], `--mode json`) {
+		t.Errorf("pi should not use the streaming json event mode: %s", argv[2])
+	}
 }
 
-func TestBuildPiArgvUsesTaskFile(t *testing.T) {
-	argv := BuildPiArgv("claude-test", "high", "/tmp/task.md")
-	if len(argv) != 7 {
-		t.Fatalf("expected 7 args, got %d", len(argv))
+func TestBuildPiArgvUsesTaskFileAndSessionFile(t *testing.T) {
+	argv := BuildPiArgv("claude-test", "high", "/tmp/task.md", "/tmp/pi-session.jsonl")
+	if len(argv) != 8 {
+		t.Fatalf("expected 8 args, got %d", len(argv))
 	}
 	if argv[6] != "@/tmp/task.md" {
 		t.Errorf("task file arg: got %q", argv[6])
 	}
-	if !strings.Contains(argv[2], `if [ -n "${3:-}" ]; then prompt="$3"; fi`) {
-		t.Errorf("task file prompt is not selected from argv: %s", argv[2])
+	if argv[7] != "/tmp/pi-session.jsonl" {
+		t.Errorf("session file arg: got %q", argv[7])
+	}
+	if !strings.Contains(argv[2], `--session "$4"`) {
+		t.Errorf("pi session file is not selected from argv: %s", argv[2])
 	}
 	if strings.Contains(argv[2], `-p "${TELOS_TASK}"`) {
 		t.Errorf("task env is still expanded directly into argv: %s", argv[2])
 	}
 }
 
-func TestMalformedEventsHandledGracefully(t *testing.T) {
-	malformed := []string{
-		`{"type":"unknown_event"}`,
-		`{"type":"message_end","message":"not_a_map"}`,
-		`{"type":"message_end","message":{"role":"assistant","content":"not_array"}}`,
-		`{"type":"message_end","message":{"role":"assistant","content":[{"type":"text"}]}}`,
-		`{"type":"message_end","message":{"role":"assistant","usage":"not_a_map"}}`,
+func TestBuildPiArgvUsesSessionFileWithoutTaskFile(t *testing.T) {
+	argv := BuildPiArgv("claude-test", "high", "", "/tmp/pi-session.jsonl")
+	if len(argv) != 8 {
+		t.Fatalf("expected 8 args with empty task placeholder, got %d", len(argv))
 	}
-
-	for _, line := range malformed {
-		event := ParsePiJSONLine(line)
-		if event == nil {
-			continue
-		}
-		var textParts []string
-		stats := game.TurnStats{}
-		// Should not panic
-		HandlePiEvent(event, &textParts, &stats)
+	if argv[6] != "" {
+		t.Errorf("task placeholder: got %q", argv[6])
+	}
+	if argv[7] != "/tmp/pi-session.jsonl" {
+		t.Errorf("session file arg: got %q", argv[7])
 	}
 }
 
-func TestRawLogLineFormat(t *testing.T) {
-	// Valid JSON
-	line := `{"type":"test","data":"value"}`
-	event := ParsePiJSONLine(line)
-	if event == nil {
-		t.Fatal("should parse valid json")
-	}
-	b, _ := json.Marshal(event)
-	var m map[string]interface{}
-	json.Unmarshal(b, &m)
-	if m["type"] != "test" {
-		t.Errorf("expected type=test")
-	}
+func TestReadPiSessionExtractsAssistantTextStatsAndTurns(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
+	appendPiSession(t, path, `{"type":"message","id":"u","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"user","content":"do it","timestamp":1770000000000}}`)
+	appendPiSession(t, path, `{"type":"message","id":"t","parentId":"u","timestamp":"2026-05-21T00:00:02Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","content":[{"type":"text","text":"ok"}],"isError":false,"timestamp":1770000000001}}`)
+	appendPiSession(t, path, `{"type":"message","id":"a","parentId":"t","timestamp":"2026-05-21T00:00:03Z","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.5","stopReason":"stop","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"Implemented it.\n\n<status>CONCEDE</status>\n"}],"usage":{"input":10,"output":20,"cacheRead":30,"cacheWrite":40,"totalTokens":100,"cost":{"input":0.1,"output":0.2,"cacheRead":0.3,"cacheWrite":0.4,"total":1.0}},"timestamp":1770000000002}}`)
 
-	// Invalid JSON -> wraps as unparsed
-	if ParsePiJSONLine("garbage") != nil {
-		t.Error("invalid json should return nil")
-	}
-}
-
-func TestAppendPiFailureWritesRawFailureRecord(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "raw.jsonl")
-
-	appendPiFailure(path, "pi_failed:1", &platform.CommandResult{
-		ReturnCode: 1,
-		DurationMS: 25,
-		Stderr:     "unexpected event order",
-	}, "partial assistant text")
-
-	data, err := os.ReadFile(path)
+	summary, err := ReadPiSession(path)
 	if err != nil {
-		t.Fatalf("read raw log: %v", err)
+		t.Fatalf("ReadPiSession: %v", err)
 	}
-	var record map[string]interface{}
-	if err := json.Unmarshal(data, &record); err != nil {
-		t.Fatalf("raw failure record should be json: %v\n%s", err, data)
+	if summary.Logs != "Implemented it.\n\n<status>CONCEDE</status>\n" {
+		t.Fatalf("logs: got %q", summary.Logs)
 	}
-	if record["type"] != "telos_pi_failure" {
-		t.Fatalf("type: got %v", record["type"])
+	if summary.Error != "" {
+		t.Fatalf("error: got %q", summary.Error)
 	}
-	if record["reason"] != "pi_failed:1" {
-		t.Fatalf("reason: got %v", record["reason"])
+	want := game.TurnStats{
+		CostUSD:             1.0,
+		NumTurns:            1,
+		InputTokens:         10,
+		OutputTokens:        20,
+		CacheReadTokens:     30,
+		CacheCreationTokens: 40,
+		Model:               "gpt-5.5",
 	}
-	if record["stderr"] != "unexpected event order" {
-		t.Fatalf("stderr: got %v", record["stderr"])
+	if summary.Stats != want {
+		t.Fatalf("stats: got %+v want %+v", summary.Stats, want)
 	}
-	if record["assistantText"] != "partial assistant text" {
-		t.Fatalf("assistant text: got %v", record["assistantText"])
+}
+
+func TestReadPiSessionUsesLastAssistantMessage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
+	appendPiSession(t, path, `{"type":"message","id":"a1","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"stop","content":[{"type":"text","text":"first"}],"usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.1}}}}`)
+	appendPiSession(t, path, `{"type":"message","id":"a2","parentId":"a1","timestamp":"2026-05-21T00:00:02Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"stop","content":[{"type":"text","text":"second"}],"usage":{"input":2,"output":3,"cacheRead":4,"cacheWrite":5,"cost":{"total":0.6}}}}`)
+
+	summary, err := ReadPiSession(path)
+	if err != nil {
+		t.Fatalf("ReadPiSession: %v", err)
+	}
+	if summary.Logs != "second" {
+		t.Fatalf("logs: got %q", summary.Logs)
+	}
+	if summary.Stats.InputTokens != 2 || summary.Stats.CostUSD != 0.6 {
+		t.Fatalf("stats should come from the final assistant: %+v", summary.Stats)
+	}
+}
+
+func TestReadPiSessionMapsLengthStopToRecoverableError(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
+	appendPiSession(t, path, `{"type":"message","id":"a","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"length","content":[{"type":"text","text":"partial"}],"usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.3}}}}`)
+
+	summary, err := ReadPiSession(path)
+	if err != nil {
+		t.Fatalf("ReadPiSession: %v", err)
+	}
+	if summary.Error != "agent_output_truncated:length" {
+		t.Fatalf("error: got %q", summary.Error)
+	}
+}
+
+func TestReadPiSessionIgnoresTransientErrors(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
+	appendPiSession(t, path, `{"type":"message","id":"a","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"error","errorMessage":"overloaded_error: try again","content":[{"type":"text","text":"partial"}],"usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.3}}}}`)
+
+	summary, err := ReadPiSession(path)
+	if err != nil {
+		t.Fatalf("ReadPiSession: %v", err)
+	}
+	if summary.Error != "" {
+		t.Fatalf("transient error should be ignored, got %q", summary.Error)
+	}
+}
+
+func TestReadPiSessionRequiresAssistantMessage(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
+
+	_, err := ReadPiSession(path)
+	if err == nil || !strings.Contains(err.Error(), "no assistant message") {
+		t.Fatalf("expected no assistant error, got %v", err)
+	}
+}
+
+func writePiSession(t *testing.T, path string, line string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func appendPiSession(t *testing.T, path string, line string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(line + "\n"); err != nil {
+		t.Fatal(err)
 	}
 }

@@ -18,7 +18,7 @@ const maxTurnBodyChars = 8000
 
 type AppendTurnOptions struct {
 	IncludeStatus bool
-	RawLogPath    string
+	PiSessionPath string
 	EvidencePath  string
 }
 
@@ -143,10 +143,10 @@ func turnBody(logs, turnError string, opts AppendTurnOptions) string {
 
 func runtimeErrorBody(err string, opts AppendTurnOptions) string {
 	lines := []string{fmt.Sprintf("_Turn ended with runtime error: `%s`._", err)}
-	if opts.RawLogPath != "" || opts.EvidencePath != "" {
+	if opts.PiSessionPath != "" || opts.EvidencePath != "" {
 		lines = append(lines, "", "Inspect the canonical turn artifacts before judging or continuing:")
-		if opts.RawLogPath != "" {
-			lines = append(lines, fmt.Sprintf("- Raw turn log: `%s`", opts.RawLogPath))
+		if opts.PiSessionPath != "" {
+			lines = append(lines, fmt.Sprintf("- Pi session: `%s`", opts.PiSessionPath))
 		}
 		if opts.EvidencePath != "" {
 			lines = append(lines, fmt.Sprintf("- Evidence log: `%s`", opts.EvidencePath))

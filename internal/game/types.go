@@ -113,9 +113,9 @@ func (ts *TurnState) TaskPath() string {
 	return filepath.Join(ts.Dir, "task.md")
 }
 
-// RawLogPath returns the path to the raw.jsonl file.
-func (ts *TurnState) RawLogPath() string {
-	return filepath.Join(ts.Dir, "raw.jsonl")
+// PiSessionPath returns the path to Pi's compact session JSONL file.
+func (ts *TurnState) PiSessionPath() string {
+	return filepath.Join(ts.Dir, "pi-session.jsonl")
 }
 
 // -- Status extraction -------------------------------------------------------

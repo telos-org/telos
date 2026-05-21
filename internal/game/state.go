@@ -71,13 +71,5 @@ func WriteTurnTask(ts *TurnState, task string) error {
 	if err := os.WriteFile(ts.TaskPath(), []byte(task), 0o644); err != nil {
 		return err
 	}
-	// Touch raw log
-	f, err := os.OpenFile(ts.RawLogPath(), os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
 	return nil
 }

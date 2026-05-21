@@ -247,7 +247,7 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 			turn.Logs, &turn.Stats, fmt.Sprintf("%04d-%s", roundNum, role), turn.Error,
 			AppendTurnOptions{
 				IncludeStatus: !p.fixedReviewMode(),
-				RawLogPath:    ts.RawLogPath(),
+				PiSessionPath: ts.PiSessionPath(),
 				EvidencePath:  p.State.EvidencePath,
 			})
 		return turn
@@ -261,7 +261,7 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 		turn.Logs, &turn.Stats, fmt.Sprintf("%04d-%s", roundNum, role), turn.Error,
 		AppendTurnOptions{
 			IncludeStatus: !p.fixedReviewMode(),
-			RawLogPath:    ts.RawLogPath(),
+			PiSessionPath: ts.PiSessionPath(),
 			EvidencePath:  p.State.EvidencePath,
 		})
 

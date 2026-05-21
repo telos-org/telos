@@ -102,7 +102,7 @@ Each session directory holds a `spec.md` for each move it's
 running (the parent manifest's own spec plus any generated
 tasks), an `evidence.jsonl` stream of structured verification
 events for each, per-turn subdirectories under `turns/` with
-`task.md` and `raw.jsonl`, and a
+`task.md` and `pi-session.jsonl`, and a
 `workspace.tar.gz` checkpoint once the move completes. The streams
 are append-only — reading them tells you what a task tried, what
 it observed, and where it ended up, at the granularity of

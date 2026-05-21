@@ -2,8 +2,10 @@
 package executor
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -34,50 +36,45 @@ func NewPiExecutor(p *platform.LocalPlatform, model, thinking string, timeout in
 
 // ExecuteTurn runs one Pi agent turn.
 func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.TurnState) game.TurnResult {
-	var textParts []string
 	var stats game.TurnStats
 	stats.Model = pe.Model
 	var agentError string
-	var stopReason string
-	var rawLogPath string
 	var taskPath string
+	var sessionPath string
 	var stopRequested func() bool
 	if turnState != nil {
-		rawLogPath = turnState.RawLogPath()
 		taskPath = turnState.TaskPath()
+		sessionPath = turnState.PiSessionPath()
 		stopRequested = turnState.StopRequested
 	}
 
-	onLine := func(line string) {
-		if rawLogPath != "" {
-			AppendRawLogLine(rawLogPath, line)
-		}
-		event := ParsePiJSONLine(line)
-		if event == nil {
-			return
-		}
-		if agentError == "" {
-			agentError = ExtractPiEventError(event)
-		}
-		if sr := ExtractPiStopReason(event); sr != "" {
-			stopReason = sr
-		}
-		HandlePiEvent(event, &textParts, &stats)
-	}
-
-	argv := BuildPiArgv(pe.Model, pe.Thinking, taskPath)
+	argv := BuildPiArgv(pe.Model, pe.Thinking, taskPath, sessionPath)
 	taskEnv := task
 	if taskPath != "" {
 		taskEnv = ""
 	}
-	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, onLine)
-	if stopReason == "length" {
-		agentError = "agent_output_truncated:length"
+	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, nil)
+
+	logs := strings.Join(result.RawLines, "\n")
+	if sessionPath != "" {
+		summary, err := ReadPiSession(sessionPath)
+		if err == nil {
+			logs = summary.Logs
+			stats = mergeTurnStats(stats, summary.Stats)
+			agentError = summary.Error
+		} else if result.ReturnCode == 0 && result.InfraError == "" {
+			return game.TurnResult{
+				Role:        role,
+				Status:      game.StatusContinue,
+				Logs:        fmt.Sprintf("pi_session_unavailable:%v", err),
+				Stats:       stats,
+				Error:       fmt.Sprintf("pi_session_unavailable:%v", err),
+				Recoverable: true,
+			}
+		}
 	}
 
-	logs := strings.Join(textParts, "")
 	if result.InfraError != "" {
-		appendPiFailure(rawLogPath, result.InfraError, result, logs)
 		return game.TurnResult{
 			Role:        role,
 			Status:      game.StatusContinue,
@@ -91,7 +88,6 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	stderrTrimmed := strings.TrimSpace(result.Stderr)
 	if result.ReturnCode != 0 {
 		reason := orDefault(agentError, fmt.Sprintf("pi_failed:%d", result.ReturnCode))
-		appendPiFailure(rawLogPath, reason, result, logs)
 		return game.TurnResult{
 			Role:        role,
 			Status:      game.StatusContinue,
@@ -103,7 +99,6 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	}
 
 	if agentError != "" {
-		appendPiFailure(rawLogPath, agentError, result, logs)
 		return game.TurnResult{
 			Role:        role,
 			Status:      game.StatusContinue,
@@ -115,11 +110,10 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	}
 
 	if strings.TrimSpace(logs) == "" {
-		detail := "Pi produced no JSON/text output."
+		detail := "Pi produced no assistant text."
 		if stderrTrimmed != "" {
 			detail = fmt.Sprintf("%s\n[stderr]\n%s", detail, stderrTrimmed)
 		}
-		appendPiFailure(rawLogPath, "agent_no_output", result, logs)
 		return game.TurnResult{
 			Role:        role,
 			Status:      game.StatusContinue,
@@ -149,7 +143,7 @@ func (pe *PiExecutor) CheckpointWorkspace(dest string) bool {
 }
 
 // BuildPiArgv builds the Pi command line.
-func BuildPiArgv(model, thinking, taskPath string) []string {
+func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
 	script := `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; ` +
 		`if ! command -v pi >/dev/null 2>&1; then ` +
 		`for nvm_script in "${NVM_DIR:-}/nvm.sh" "$HOME/.nvm/nvm.sh" "/usr/local/nvm/nvm.sh"; do ` +
@@ -160,167 +154,137 @@ func BuildPiArgv(model, thinking, taskPath string) []string {
 		`fi; ` +
 		fmt.Sprintf(`prompt="${%s}"; `, platform.TaskEnvVar) +
 		`if [ -n "${3:-}" ]; then prompt="$3"; fi; ` +
-		`exec pi --mode json --model "$1" --thinking "$2" --no-session --no-extensions -p "$prompt"`
+		`if [ -n "${4:-}" ]; then ` +
+		`exec pi --mode text --model "$1" --thinking "$2" --session "$4" --no-extensions -p "$prompt"; ` +
+		`fi; ` +
+		`exec pi --mode text --model "$1" --thinking "$2" --no-session --no-extensions -p "$prompt"`
+	argv := []string{"sh", "-c", script, "pi", model, thinking}
 	if taskPath != "" {
-		return []string{"sh", "-c", script, "pi", model, thinking, "@" + taskPath}
+		argv = append(argv, "@"+taskPath)
+	} else if sessionPath != "" {
+		argv = append(argv, "")
 	}
-	return []string{"sh", "-c", script, "pi", model, thinking}
+	if sessionPath != "" {
+		argv = append(argv, sessionPath)
+	}
+	return argv
 }
 
-// -- Pi JSON event parsing ----------------------------------------------------
+// -- Pi session parsing -------------------------------------------------------
 
-// ParsePiJSONLine parses one Pi JSON stdout line.
-func ParsePiJSONLine(line string) map[string]interface{} {
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(line), &m); err != nil {
-		return nil
-	}
-	return m
+type PiSessionSummary struct {
+	Logs  string
+	Stats game.TurnStats
+	Error string
 }
 
-// HandlePiEvent folds one Pi event into text and stats accumulators.
-func HandlePiEvent(event map[string]interface{}, textParts *[]string, stats *game.TurnStats) {
-	etype, _ := event["type"].(string)
-
-	switch etype {
-	case "message_end":
-		msg, ok := event["message"].(map[string]interface{})
-		if !ok {
-			return
-		}
-		if role, _ := msg["role"].(string); role == "user" {
-			return
-		}
-		content, _ := msg["content"].([]interface{})
-		for _, block := range content {
-			bm, ok := block.(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if bt, _ := bm["type"].(string); bt == "text" {
-				text, _ := bm["text"].(string)
-				if strings.TrimSpace(text) != "" {
-					*textParts = append(*textParts, text)
-				}
-			}
-		}
-		usage, _ := msg["usage"].(map[string]interface{})
-		if usage != nil {
-			stats.InputTokens += intFromAny(usage["input"])
-			stats.OutputTokens += intFromAny(usage["output"])
-			stats.CacheReadTokens += intFromAny(usage["cacheRead"])
-			stats.CacheCreationTokens += intFromAny(usage["cacheWrite"])
-			cost, _ := usage["cost"].(map[string]interface{})
-			if cost != nil {
-				stats.CostUSD += floatFromAny(cost["total"])
-			}
-		}
-		if stats.Model == "" {
-			if m, ok := msg["model"].(string); ok {
-				stats.Model = m
-			}
-		}
-
-	case "tool_execution_end":
-		stats.NumTurns++
-	}
-}
-
-// ExtractPiEventError extracts any error from a Pi event.
-func ExtractPiEventError(event map[string]interface{}) string {
-	etype, _ := event["type"].(string)
-	switch etype {
-	case "message_end", "turn_end":
-		msg, ok := event["message"].(map[string]interface{})
-		if !ok {
-			return ""
-		}
-		return extractMessageError(msg)
-	case "agent_end":
-		messages, _ := event["messages"].([]interface{})
-		for i := len(messages) - 1; i >= 0; i-- {
-			m, ok := messages[i].(map[string]interface{})
-			if !ok {
-				continue
-			}
-			if role, _ := m["role"].(string); role == "assistant" {
-				if err := extractMessageError(m); err != "" {
-					return err
-				}
-			}
-		}
-	}
-	return ""
-}
-
-// ExtractPiStopReason extracts the stop reason from a Pi event.
-func ExtractPiStopReason(event map[string]interface{}) string {
-	etype, _ := event["type"].(string)
-	var msg map[string]interface{}
-
-	switch etype {
-	case "message_end", "turn_end":
-		candidate, ok := event["message"].(map[string]interface{})
-		if ok && getString(candidate, "role") == "assistant" {
-			msg = candidate
-		}
-	case "agent_end":
-		messages, _ := event["messages"].([]interface{})
-		for i := len(messages) - 1; i >= 0; i-- {
-			m, ok := messages[i].(map[string]interface{})
-			if ok && getString(m, "role") == "assistant" {
-				msg = m
-				break
-			}
-		}
-	}
-
-	if msg == nil {
-		return ""
-	}
-	sr, _ := msg["stopReason"].(string)
-	return sr
-}
-
-// AppendRawLogLine appends a raw log line to the JSONL file.
-func AppendRawLogLine(path, line string) {
-	event := ParsePiJSONLine(line)
-	var out string
-	if event == nil {
-		b, _ := json.Marshal(map[string]interface{}{"event": "unparsed", "line": line})
-		out = string(b)
-	} else {
-		b, _ := json.Marshal(event)
-		out = string(b)
-	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+// ReadPiSession reads Pi's compact session JSONL file for a completed turn.
+func ReadPiSession(path string) (PiSessionSummary, error) {
+	f, err := os.Open(path)
 	if err != nil {
-		return
+		return PiSessionSummary{}, err
 	}
 	defer f.Close()
-	f.WriteString(out + "\n")
+
+	var summary PiSessionSummary
+	var finalAssistant map[string]interface{}
+	reader := bufio.NewReader(f)
+	for {
+		line, err := reader.ReadString('\n')
+		if strings.TrimSpace(line) != "" {
+			var entry map[string]interface{}
+			dec := json.NewDecoder(strings.NewReader(line))
+			dec.UseNumber()
+			if dec.Decode(&entry) == nil {
+				if msg, ok := entry["message"].(map[string]interface{}); ok {
+					switch getString(msg, "role") {
+					case "assistant":
+						finalAssistant = msg
+					case "toolResult", "bashExecution":
+						summary.Stats.NumTurns++
+					}
+				}
+			}
+		}
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return PiSessionSummary{}, err
+		}
+	}
+	if finalAssistant == nil {
+		return PiSessionSummary{}, fmt.Errorf("no assistant message in pi session")
+	}
+
+	summary.Logs = assistantText(finalAssistant)
+	summary.Stats = mergeTurnStats(summary.Stats, statsFromPiMessage(finalAssistant))
+	summary.Error = errorFromPiMessage(finalAssistant)
+	return summary, nil
 }
 
-func appendPiFailure(path string, reason string, result *platform.CommandResult, assistantText string) {
-	if path == "" {
-		return
+func assistantText(msg map[string]interface{}) string {
+	content, _ := msg["content"].([]interface{})
+	var parts []string
+	for _, block := range content {
+		bm, ok := block.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if getString(bm, "type") != "text" {
+			continue
+		}
+		text := getString(bm, "text")
+		if strings.TrimSpace(text) != "" {
+			parts = append(parts, text)
+		}
 	}
-	event := map[string]interface{}{
-		"type":       "telos_pi_failure",
-		"reason":     reason,
-		"stderr":     result.Stderr,
-		"returnCode": result.ReturnCode,
-		"durationMS": result.DurationMS,
+	return strings.Join(parts, "")
+}
+
+func statsFromPiMessage(msg map[string]interface{}) game.TurnStats {
+	stats := game.TurnStats{}
+	if model := getString(msg, "model"); model != "" {
+		stats.Model = model
 	}
-	if strings.TrimSpace(assistantText) != "" {
-		event["assistantText"] = assistantText
+	usage, _ := msg["usage"].(map[string]interface{})
+	if usage == nil {
+		return stats
 	}
-	b, _ := json.Marshal(event)
-	AppendRawLogLine(path, string(b))
+	stats.InputTokens += intFromAny(usage["input"])
+	stats.OutputTokens += intFromAny(usage["output"])
+	stats.CacheReadTokens += intFromAny(usage["cacheRead"])
+	stats.CacheCreationTokens += intFromAny(usage["cacheWrite"])
+	cost, _ := usage["cost"].(map[string]interface{})
+	if cost != nil {
+		stats.CostUSD += floatFromAny(cost["total"])
+	}
+	return stats
+}
+
+func errorFromPiMessage(msg map[string]interface{}) string {
+	if getString(msg, "stopReason") == "length" {
+		return "agent_output_truncated:length"
+	}
+	return extractMessageError(msg)
+}
+
+func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
+	base.CostUSD += extra.CostUSD
+	base.DurationMS += extra.DurationMS
+	base.NumTurns += extra.NumTurns
+	base.InputTokens += extra.InputTokens
+	base.OutputTokens += extra.OutputTokens
+	base.CacheReadTokens += extra.CacheReadTokens
+	base.CacheCreationTokens += extra.CacheCreationTokens
+	if base.Model == "" {
+		base.Model = extra.Model
+	}
+	return base
 }
 
 func extractMessageError(msg map[string]interface{}) string {
-	em, _ := msg["errorMessage"].(string)
+	em := getString(msg, "errorMessage")
 	if em == "" {
 		return ""
 	}

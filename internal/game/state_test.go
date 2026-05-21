@@ -14,11 +14,8 @@ func TestNewPVGStateUsesTranscriptName(t *testing.T) {
 	}
 }
 
-func TestWriteTurnTaskOwnsTurnArtifacts(t *testing.T) {
+func TestWriteTurnTaskWritesOnlyTaskArtifact(t *testing.T) {
 	ts := &TurnState{Dir: t.TempDir()}
-	if err := os.WriteFile(ts.RawLogPath(), []byte("stale\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	if err := WriteTurnTask(ts, "do the thing"); err != nil {
 		t.Fatalf("WriteTurnTask: %v", err)
@@ -30,11 +27,7 @@ func TestWriteTurnTaskOwnsTurnArtifacts(t *testing.T) {
 	if string(task) != "do the thing" {
 		t.Fatalf("task content: got %q", string(task))
 	}
-	raw, err := os.ReadFile(ts.RawLogPath())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(raw) != 0 {
-		t.Fatalf("raw log should be initialized empty, got %q", string(raw))
+	if _, err := os.Stat(ts.PiSessionPath()); !os.IsNotExist(err) {
+		t.Fatalf("WriteTurnTask should leave pi session ownership to Pi, stat err=%v", err)
 	}
 }
