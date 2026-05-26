@@ -36,6 +36,32 @@ TELOS_HARBOR_SKILLS='verify-engineering*,verify-quality*' \
 ./integrations/harbor/run_scbench_circuit_eval.sh
 ```
 
+To run repeated attempts for the same task, use Harbor attempts:
+
+```bash
+TELOS_HARBOR_UNTIL=5 \
+TELOS_HARBOR_N_ATTEMPTS=3 \
+TELOS_HARBOR_N_CONCURRENT=1 \
+TELOS_HARBOR_SKILLS='verify-engineering*,verify-quality*' \
+./integrations/harbor/run_scbench_circuit_eval.sh
+```
+
+To run in Modal sandboxes instead of local Docker:
+
+```bash
+TELOS_HARBOR_ENV=modal \
+TELOS_HARBOR_PI_CONFIG_SOURCE="$HOME/.pi/agent" \
+TELOS_HARBOR_INJECT_PI_MODELS=false \
+./integrations/harbor/run_scbench_circuit_eval.sh
+```
+
+Modal uses Harbor's Docker-in-Docker strategy by default so benchmark images
+stay alive and executable inside the sandbox. Set `TELOS_HARBOR_MODAL_DIND=false`
+to use Harbor's direct Modal strategy instead. Non-Docker environments use
+`uvx 'harbor[<env>]'` by default so provider extras such as `harbor[modal]` are
+installed. Set `TELOS_HARBOR_USE_LOCAL=true` to use the local `harbor`
+executable instead.
+
 If the model is configured through Pi rather than plain environment variables,
 mount the host Pi config read-only:
 
@@ -48,7 +74,7 @@ TELOS_HARBOR_INJECT_PI_MODELS=false \
 Results are written under:
 
 ```text
-/tmp/telos-harbor-jobs/<job-name>/result.json
+eval-runs/harbor/<job-name>/result.json
 ```
 
 Per-trial logs include:

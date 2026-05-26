@@ -127,7 +127,7 @@ Harbor benchmark runs persist task artifacts under their job directory. A common
 checkpoint layout is:
 
 ```text
-/tmp/telos-harbor-jobs/<job>/<trial>/steps/checkpoint_<n>/agent/
+eval-runs/harbor/<job>/<trial>/steps/checkpoint_<n>/agent/
   telos-harbor-spec.md
   telos-evidence.jsonl
   transcript-*.md
@@ -142,17 +142,17 @@ checkpoint layout is:
 Useful reads:
 
 ```bash
-find /tmp/telos-harbor-jobs/<job>/<trial>/steps -maxdepth 4 -type f | sort
-sed -n '1,240p' /tmp/telos-harbor-jobs/<job>/<trial>/steps/checkpoint_<n>/agent/transcript-*.md
-tar -tzf /tmp/telos-harbor-jobs/<job>/<trial>/steps/checkpoint_<n>/agent/telos-workspace.tar.gz | sort | head -200
-sed -n '1,80p' /tmp/telos-harbor-jobs/<job>/<trial>/steps/checkpoint_<n>/agent/turns/<turn-id>/task.md
+find eval-runs/harbor/<job>/<trial>/steps -maxdepth 4 -type f | sort
+sed -n '1,240p' eval-runs/harbor/<job>/<trial>/steps/checkpoint_<n>/agent/transcript-*.md
+tar -tzf eval-runs/harbor/<job>/<trial>/steps/checkpoint_<n>/agent/telos-workspace.tar.gz | sort | head -200
+sed -n '1,80p' eval-runs/harbor/<job>/<trial>/steps/checkpoint_<n>/agent/turns/<turn-id>/task.md
 ```
 
 If a benchmark writes rewards or logs outside the agent directory, inspect those
 too before concluding:
 
 ```bash
-find /tmp/telos-harbor-jobs/<job>/<trial>/steps/checkpoint_<n> -maxdepth 3 -type f | sort
+find eval-runs/harbor/<job>/<trial>/steps/checkpoint_<n> -maxdepth 3 -type f | sort
 ```
 
 ## Rule Of Thumb

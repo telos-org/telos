@@ -31,7 +31,7 @@ uvx harbor run \
   --ak pi_config_source=/tmp/host-pi-agent \
   --ak inject_pi_models=false \
   --mounts '[{"type":"bind","source":"/Users/rohangupta/.pi/agent","target":"/tmp/host-pi-agent","read_only":true,"bind":{"create_host_path":false}}]' \
-  --jobs-dir /tmp/telos-harbor-jobs
+  --jobs-dir eval-runs/harbor
 ```
 
 The shim sets `TELOS_SESSION_DIR=/tmp/telos-harbor/sessions` before invoking

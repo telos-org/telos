@@ -9,9 +9,13 @@ timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 dataset="${TELOS_HARBOR_DATASET:-gabeorlanski/slopcodebench}"
 selector="${TELOS_HARBOR_SELECTOR:-*circuit*eval*}"
 job_name="${TELOS_HARBOR_JOB_NAME:-telos-scbench-circuit-${timestamp}}"
-jobs_dir="${TELOS_HARBOR_JOBS_DIR:-/tmp/telos-harbor-jobs}"
+jobs_dir="${TELOS_HARBOR_JOBS_DIR:-$repo_root/eval-runs/harbor}"
 n_tasks="${TELOS_HARBOR_N_TASKS:-1}"
+n_attempts="${TELOS_HARBOR_N_ATTEMPTS:-1}"
 n_concurrent="${TELOS_HARBOR_N_CONCURRENT:-1}"
+environment="${TELOS_HARBOR_ENV:-docker}"
+extra_docker_compose="${TELOS_HARBOR_EXTRA_DOCKER_COMPOSE:-}"
+modal_dind="${TELOS_HARBOR_MODAL_DIND:-true}"
 
 model="${TELOS_HARBOR_MODEL:-openai-codex/gpt-5.5}"
 thinking="${TELOS_HARBOR_THINKING:-high}"
@@ -24,14 +28,28 @@ install_url="${TELOS_HARBOR_TELOS_INSTALL_URL:-https://usetelos.ai/releases/late
 inject_pi_models="${TELOS_HARBOR_INJECT_PI_MODELS:-true}"
 pi_config_source="${TELOS_HARBOR_PI_CONFIG_SOURCE:-}"
 
+uvx_package="${TELOS_HARBOR_UVX_PACKAGE:-harbor}"
+if [[ "$environment" != "docker" ]]; then
+  uvx_package="${TELOS_HARBOR_UVX_PACKAGE:-harbor[$environment]}"
+fi
+if [[ "${TELOS_HARBOR_USE_LOCAL:-}" == "true" ]]; then
+  harbor_command=(harbor run)
+  selector_arg=(--task-name "$selector")
+else
+  harbor_command=(uvx "$uvx_package" run)
+  selector_arg=(--include-task-name "$selector")
+fi
+
 args=(
-  uvx harbor run
+  "${harbor_command[@]}"
   -d "$dataset"
-  -i "$selector"
+  "${selector_arg[@]}"
   --n-tasks "$n_tasks"
   --n-concurrent "$n_concurrent"
   --job-name "$job_name"
   --jobs-dir "$jobs_dir"
+  --n-attempts "$n_attempts"
+  --env "$environment"
   --agent-import-path integrations.harbor.telos_agent:TelosExecutableAgent
   --model "$model"
   --ak "thinking=$thinking"
@@ -45,7 +63,7 @@ args=(
   --debug
 )
 
-if [[ -n "$pi_config_source" ]]; then
+if [[ -n "$pi_config_source" && "$environment" == "docker" ]]; then
   mounts="$(
     python3 - "$pi_config_source" <<'PY'
 import json
@@ -65,10 +83,27 @@ PY
   )"
   args+=(
     --ak "pi_config_source=/tmp/host-pi-agent"
-    --mounts "$mounts"
+    --mounts-json "$mounts"
+  )
+elif [[ -n "$pi_config_source" ]]; then
+  args+=(
+    --ak "pi_config_source=$pi_config_source"
+  )
+fi
+
+if [[ -z "$extra_docker_compose" && "$environment" == "modal" && "$modal_dind" != "false" ]]; then
+  extra_docker_compose="$repo_root/integrations/harbor/modal-dind-compose.yaml"
+fi
+if [[ -n "$extra_docker_compose" ]]; then
+  args+=(
+    --extra-docker-compose "$extra_docker_compose"
   )
 fi
 
 printf 'Running Telos Harbor SCBench job: %s\n' "$job_name" >&2
+printf 'Environment: %s\n' "$environment" >&2
+if [[ -n "$extra_docker_compose" ]]; then
+  printf 'Extra compose: %s\n' "$extra_docker_compose" >&2
+fi
 printf 'Results directory: %s/%s\n' "$jobs_dir" "$job_name" >&2
 exec "${args[@]}"

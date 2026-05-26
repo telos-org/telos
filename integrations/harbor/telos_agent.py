@@ -12,6 +12,7 @@ import json
 import os
 import re
 import shlex
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -273,6 +274,41 @@ PIMODELS
         )
 
     async def _copy_pi_config(self, environment: BaseEnvironment) -> None:
+        host_source = Path(self.pi_config_source or "").expanduser()
+        if host_source.exists():
+            home_result = await self.exec_as_agent(
+                environment,
+                "bash -lc 'printf %s \"$HOME\"'",
+                env=model_env(),
+                timeout_sec=30,
+            )
+            home = (home_result.stdout or "").strip() or "/tmp/agent_home"
+            remote_dir = f"{home.rstrip('/')}/.pi/agent"
+            await self.exec_as_agent(
+                environment,
+                f"bash -lc {shlex.quote(f'mkdir -p {shlex.quote(remote_dir)}')}",
+                env=model_env(),
+                timeout_sec=30,
+            )
+            for name in ("auth.json", "models.json", "settings.json"):
+                source_file = host_source / name
+                if not source_file.exists():
+                    continue
+                with tempfile.NamedTemporaryFile() as tmp:
+                    tmp_path = Path(tmp.name)
+                    tmp_path.write_bytes(source_file.read_bytes())
+                    await environment.upload_file(
+                        tmp_path,
+                        f"{remote_dir}/{name}",
+                    )
+            await self.exec_as_agent(
+                environment,
+                f"bash -lc {shlex.quote(f'chmod 0600 {shlex.quote(remote_dir)}/* 2>/dev/null || true')}",
+                env=model_env(),
+                timeout_sec=30,
+            )
+            return
+
         source = shlex.quote(self.pi_config_source or "")
         command = f"""
 mkdir -p "$HOME/.pi/agent"
@@ -378,6 +414,22 @@ fi
         return f"""
 {self._shell_prologue()}
 mkdir -p /tmp/telos-harbor /tmp/telos-scratch
+json_field() {{
+  python3 - "$1" "$2" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+field = sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    value = json.load(handle)
+for part in field.split("."):
+    value = value[part]
+if value is None:
+    raise SystemExit(1)
+print(value)
+PY
+}}
 cat > /tmp/telos-harbor/SPEC.md <<'TELOS_SPEC'
 {spec_markdown}
 TELOS_SPEC
@@ -385,7 +437,7 @@ cd {shlex.quote(workdir)}
 export TELOS_SESSION_DIR=/tmp/telos-harbor/sessions
 run_json="$(telos run /tmp/telos-harbor/SPEC.md --workspace {shlex.quote(workdir)} --model {shlex.quote(model)} --thinking {shlex.quote(self.thinking)} --until {self.until}{max_cost_flag} --agent-timeout-sec {self.agent_timeout_sec} --json)"
 printf '%s\n' "$run_json" > /tmp/telos-harbor/run.json
-session_id="$(awk -F'"' '/"session_id"/ {{ print $4; exit }}' /tmp/telos-harbor/run.json)"
+session_id="$(json_field /tmp/telos-harbor/run.json session_id || true)"
 if [ -z "$session_id" ]; then
   echo "telos run did not return a session_id" >&2
   cat /tmp/telos-harbor/run.json >&2
@@ -394,7 +446,7 @@ fi
 deadline="$(($(date +%s) + {self.session_timeout_sec}))"
 while :; do
   telos describe "$session_id" --json > /tmp/telos-harbor/describe.json || true
-  status="$(awk -F'"' '/"status"/ {{ print $4; exit }}' /tmp/telos-harbor/describe.json)"
+  status="$(json_field /tmp/telos-harbor/describe.json status || true)"
   case "$status" in
     completed|failed|stopped|stale)
       telos logs "$session_id" --raw > /tmp/telos-harbor/transcript.md || true

@@ -3,5 +3,6 @@
 *.exe
 bazel-*
 dist/
+eval-runs/
 __pycache__/
 *.pyc
