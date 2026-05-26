@@ -15,8 +15,11 @@ allowed-tools: Bash(*) Read(*) Write(*) Edit(*)
 
 Telos runs a spec-driven implementation/evaluation loop against a spec you
 write. The implementation turns try to satisfy the spec; the evaluation turns
-judge the delivered work against the contract. A run succeeds only when
-evaluation concedes.
+judge whether the delivered work satisfies the goal and its obligations. In
+default satisfaction mode, a run succeeds when evaluation accepts that the goal
+holds. In `--until` review-cycle mode, the runtime completes the requested
+number of review cycles and the operator should read the review output before
+trusting the result.
 
 Your job as operator: write a spec that says what must be true, launch the run,
 and inspect the result to decide whether the goal was actually met.
@@ -34,7 +37,7 @@ that declares the desired end state.
 - What would falsify success (regressions, missing coverage, broken interfaces).
 
 Do not write a numbered todo list of implementation steps. The implementation
-agent decides how to get there. If a specific procedure is genuinely part of the contract
+agent decides how to get there. If a specific procedure is genuinely part of the goal
 (e.g., "the migration must be applied via `alembic upgrade head`"), include it
 — but most specs should not dictate implementation.
 
@@ -62,19 +65,19 @@ platform: local
 Every public CLI command (`plan`, `run`, `list`, `describe`, `logs`, `stop`) must
 complete without traceback on a clean local install.
 
-## Contract
+## Goal Checks
 
-- `uv run telos plan examples/hello-world/SPEC.md` exits 0 and prints a
+- `telos plan examples/hello-world/SPEC.md` exits 0 and prints a
   valid plan summary.
-- `uv run telos run examples/hello-world/SPEC.md --json` exits 0, prints
+- `telos run examples/hello-world/SPEC.md --json` exits 0, prints
   a JSON object with a `session_id` field, and the session reaches a
   terminal state within 120 seconds.
-- `uv run telos list --json` exits 0 and returns a JSON array that
+- `telos list --json` exits 0 and returns a JSON array that
   includes the session from the previous step.
-- `uv run telos describe <session-id>` exits 0 and prints the session
+- `telos describe <session-id>` exits 0 and prints the session
   status, config, progress, and artifact paths.
-- `uv run telos logs <session-id>` exits 0 and prints at least one line.
-- `uv run telos stop <session-id>` exits 0 or exits 1 with "already
+- `telos logs <session-id>` exits 0 and prints at least one line.
+- `telos stop <session-id>` exits 0 or exits 1 with "already
   stopped".
 
 ## Falsification
@@ -97,12 +100,11 @@ platform: local
 The repo must be in a releasable state: tests green, lints clean, no
 broken imports, and the CLI entrypoint loads.
 
-## Contract
+## Goal Checks
 
-- `uv run pytest` exits 0.
-- `uv run ruff check` exits 0.
-- `uv run ruff format --check` exits 0.
-- `uv run python -m telos.cli --help` exits 0 and prints usage.
+- `go test ./...` exits 0.
+- `bazel test //...` exits 0 when Bazel is configured.
+- `telos --help` exits 0 and prints usage.
 
 ## Constraints
 
@@ -124,7 +126,7 @@ platform: local
 After running the hello-world spec locally, the session directory must
 contain well-formed evidence that a future auditor can replay.
 
-## Contract
+## Goal Checks
 
 - `evidence.jsonl` exists and every line is valid JSON.
 - At least one `game_start`, one `round_start`, and one
@@ -144,13 +146,13 @@ not contain the expected artifact.
 ### Preview without running
 
 ```bash
-uv run telos plan SPEC.md
+telos plan SPEC.md
 ```
 
 ### Launch a local session
 
 ```bash
-uv run telos run SPEC.md --json
+telos run SPEC.md --json
 ```
 
 The `--json` flag prints a JSON object with the `session_id` you need for
@@ -159,19 +161,19 @@ subsequent commands.
 ### Set the model
 
 ```bash
-TELOS_MODEL=claude-opus-4-6 uv run telos run SPEC.md --json
+TELOS_MODEL=claude-opus-4-6 telos run SPEC.md --json
 ```
 
 ### Bound the run
 
 ```bash
-uv run telos run SPEC.md --thinking medium --until 4 --max-cost-usd 5 --json
+telos run SPEC.md --thinking medium --until 4 --max-cost-usd 5 --json
 ```
 
 The same run config can come from environment variables:
 
 ```bash
-TELOS_THINKING=medium TELOS_MAX_COST_USD=5 uv run telos run SPEC.md --until 4 --json
+TELOS_THINKING=medium TELOS_MAX_COST_USD=5 telos run SPEC.md --until 4 --json
 ```
 
 CLI flags override environment variables.
@@ -182,13 +184,13 @@ By default Telos creates a fresh workspace. To run against an existing
 directory:
 
 ```bash
-TELOS_WORKSPACE=/path/to/workspace uv run telos run SPEC.md
+TELOS_WORKSPACE=/path/to/workspace telos run SPEC.md
 ```
 
 ### Describe a session
 
 ```bash
-uv run telos describe <session-id>
+telos describe <session-id>
 ```
 
 Use `describe` for the point-in-time state: status, resolved config, progress,
@@ -198,7 +200,7 @@ agent needs to consume it.
 ### Follow logs
 
 ```bash
-uv run telos logs -f <session-id>
+telos logs -f <session-id>
 ```
 
 Logs are the Telos transcript: what implementation claimed and what evaluation
@@ -207,13 +209,13 @@ found. They are not the same as evidence events.
 ### List sessions
 
 ```bash
-uv run telos list
+telos list
 ```
 
 ### Stop a session
 
 ```bash
-uv run telos stop <session-id>
+telos stop <session-id>
 ```
 
 ## Inspecting Results
@@ -257,7 +259,7 @@ tar -xzf .telos/sessions/<session_id>/specs/<spec_name>/workspace.tar.gz -C /tmp
 
 A run is not successful just because it exited cleanly. Check:
 
-1. **Evaluation conceded.** Read the transcript. If the evaluator's last entry
+1. **Evaluation accepted the goal.** Read the transcript. If the evaluator's last entry
    says "continue" with open findings, the goal is not met regardless of exit
    code.
 2. **Evidence supports the claim.** Read `evidence.jsonl` for concrete
@@ -274,7 +276,7 @@ said it did.
 ## Common Mistakes
 
 - **Writing a todo list instead of a spec.** "1. Install deps. 2. Run tests.
-  3. Fix failures." is a procedure, not a contract. Say what must be true when
+  3. Fix failures." is a procedure, not a goal. Say what must be true when
   the run is done.
 - **Treating Telos as a task runner.** Evaluation will
   probe for real correctness, not just check that steps were executed.

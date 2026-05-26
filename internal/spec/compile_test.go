@@ -438,6 +438,23 @@ func TestRenderVerifierTaskReviewModeUsesReviewContract(t *testing.T) {
 	}
 }
 
+func TestRenderVerifierTaskGatesControllerOnlyTaskState(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	os.WriteFile(specPath, []byte("---\nversion: v0\nname: task-state\nplatform: local\n---\nBody"), 0o644)
+
+	compiled, _ := CompileEnvironment(specPath)
+	task := RenderVerifierTask(compiled, "", "/tmp/transcript.md")
+	if strings.Contains(task, "if any required task is pending") {
+		t.Fatalf("leaf task verifier should not include controller task-state rule:\n%s", task)
+	}
+
+	controllerTask := RenderVerifierTask(compiled, "", "/tmp/transcript.md", PromptOptions{Controller: true})
+	if !strings.Contains(controllerTask, "if any required task is pending") {
+		t.Fatalf("controller verifier should include controller task-state rule:\n%s", controllerTask)
+	}
+}
+
 func TestRenderWithWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")

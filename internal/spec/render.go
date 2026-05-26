@@ -147,7 +147,7 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 			"- judge the delivered artifact against the spec and applicable quality bars",
 			"- inspect source, tree state, generated artifacts, and runtime behavior as needed",
 			"- run checks when behavior is load-bearing or unclear; do not probe blindly",
-			"- produce concrete findings for contract violations or blocking maintainability debt",
+			"- produce concrete findings for goal violations or blocking maintainability debt",
 			"",
 			"### Constraints",
 			"- do not invent new requirements",
@@ -175,7 +175,7 @@ func renderRequiredEvaluationRubrics(compiled *CompiledEnvironment, role Role, o
 	lines := []string{"## Required Evaluation Rubrics", ""}
 	if role == RoleProver {
 		lines = append(lines,
-			"The evaluator will load these starred skills by name and use them as grading rubrics. Treat each named rubric as part of the contract, not optional style advice.",
+			"The evaluator will load these starred skills by name and use them as grading rubrics. Treat each named rubric as part of the goal, not optional style advice.",
 			"",
 		)
 		lines = appendSkillPointers(lines, compiled.RequiredVerifierSkills)
@@ -201,7 +201,7 @@ func renderRequiredEvaluationRubrics(compiled *CompiledEnvironment, role Role, o
 		"- use <status>CONTINUE</status> if any rubric fails;",
 		"- do not concede unless every required rubric passes.",
 		"",
-		"A required rubric can block concession even when the narrow functional contract appears satisfied. That is intentional: required rubrics are part of the session contract.",
+		"A required rubric can block concession even when the surface behavior appears satisfied. That is intentional: required rubrics are part of what the session must deliver.",
 		"",
 	)
 	lines = appendSkillPointers(lines, compiled.RequiredVerifierSkills)
@@ -321,8 +321,8 @@ func renderWorkspace(workspace string, role Role) string {
 	}
 	if role == RoleVerifier {
 		lines = append(lines,
-			"You may **reset** implementation commits if they introduced regressions: `git reset --soft HEAD~N`\n",
-			"Use this snapshot as evidence of delivered tree shape: changed files, untracked artifacts, generated outputs, and diff size may matter for artifact hygiene.\n",
+			"Do not rewrite, reset, or clean up implementation commits. Your job is to judge the delivered tree and report findings.\n",
+			"Use this snapshot as evidence of delivered tree shape: changed files, untracked artifacts, generated outputs, and diff size may matter for artifact hygiene. Keep evaluator scratch outside the delivered tree.\n",
 		)
 	}
 	lines = append(lines, fmt.Sprintf("```\n%s\n```\n", workspace))
@@ -357,7 +357,7 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 			"- Do not emit <status> tags",
 		}, "\n")
 	}
-	return strings.Join([]string{
+	lines := []string{
 		"## Output",
 		"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
 		"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
@@ -365,13 +365,18 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		"- During the turn, emit concise <progress_update>...</progress_update> entries when useful for a background observer, without spamming routine tool activity",
 		"- End every turn with one final <progress_update>what you found or why you concede</progress_update>",
 		"- The final non-empty line must be exactly one status tag",
-		"- <status>CONTINUE</status> if you found a concrete contract violation",
-		"- <status>CONTINUE</status> if any required task is pending, running, stopped, failed, or not reflected in live resources",
+		"- <status>CONTINUE</status> if you found a concrete goal violation",
+	}
+	if opts.Controller {
+		lines = append(lines, "- <status>CONTINUE</status> if any required task is pending, running, stopped, failed, or not reflected in live resources")
+	}
+	lines = append(lines,
 		`- Include an "Artifact Hygiene" section for code-producing tasks: tree shape inspected, notable debt, and whether it blocks concession`,
 		`- If "Required Evaluation Rubrics" are present, include a "Required Rubrics Applied" section with PASS/FAIL and evidence for each required rubric`,
 		"- If any required rubric is FAIL, the final status must be <status>CONTINUE</status>",
-		"- <status>CONCEDE</status> only if the contract and applicable quality bars hold under independent review",
-	}, "\n")
+		"- <status>CONCEDE</status> only if the goal and applicable quality bars hold under independent review",
+	)
+	return strings.Join(lines, "\n")
 }
 
 func joinNonEmpty(parts []string) string {

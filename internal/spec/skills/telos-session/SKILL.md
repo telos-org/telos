@@ -12,10 +12,11 @@ allowed-tools: Bash(*) Read(*) Write(*) Edit(*)
 
 # Telos Session Communication
 
-You are participating in a spec-driven Telos session. The spec is the contract. The
-live filesystem, process outputs, benchmark runner, and declared interfaces are
-the truth. Logs, journals, transcripts, and source code are evidence trails, not
-substitutes for direct verification.
+You are participating in a spec-driven Telos session. The spec declares the
+goal and its obligations. The live filesystem, process outputs, benchmark
+runner, declared interfaces, and runtime behavior are the truth. Logs,
+journals, transcripts, and source code are evidence trails, not substitutes
+for direct verification.
 
 ## Shared Transcript
 
@@ -34,8 +35,8 @@ implementation, evaluation, controller, and operator turns.
 - Do not erase or rewrite earlier transcript content.
 
 The evaluator's final progress update is the important handoff. It should say
-either "concede" with the probes that justify concession, or "continue" with the
-smallest set of findings the implementation must fix next.
+whether the goal appears satisfied under review or name the smallest set of
+grounded findings the implementation should address next.
 
 ## Implementation Turn
 
@@ -65,10 +66,11 @@ When you find a blocker, write a transcript entry with:
 4. Observed behavior.
 5. The smallest actionable repair target.
 
-When checking quality or slop, make the finding mechanical: file count, diff
-stat, duplicate path, dead artifact, hidden state dependency, broad exception,
-or unnecessary implementation branch. Tie the quality issue to correctness,
-maintainability, benchmark score, or future evaluator confidence.
+When checking quality or slop, ground the finding in the delivered artifact:
+where responsibilities accumulated, where hidden state or stale artifacts make
+the next change harder, or where unnecessary branches obscure the goal. Tie
+the quality issue to correctness, maintainability, benchmark score, or future
+evaluator confidence.
 
 ## Local Session Snapshots
 

@@ -87,12 +87,11 @@ Refuse when the delivered artifact is correct only by accumulating slop:
 - dead helpers, stale outputs, broad catch-all error handling, or comments
   that narrate instead of clarifying.
 
-When the task is benchmarked or scored for quality, treat obvious proxies
-for erosion as evidence: file count, source line count, oversized modules,
-high-branch functions, clone-like blocks, generated artifacts, and
-verbosity. You do not need the hidden scorer to enforce this bar. If these
-signals are high, either identify the blocking debt or explain why the
-shape is necessary for the goal.
+When the task builds on existing code, judge the net shape of the system
+after the work lands. If the result makes the next natural change harder to
+place, harder to verify, or more likely to regress, name the maintainability
+risk with evidence from the delivered tree. If the extra structure is
+necessary for the goal and locally contained, say that too.
 
 ## Named standards
 

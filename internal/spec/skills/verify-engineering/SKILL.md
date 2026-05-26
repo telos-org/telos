@@ -19,7 +19,7 @@ the delivered work.
 
 ## Verification Priorities
 
-1. Correctness: does the artifact satisfy the declared contract?
+1. Correctness: does the artifact satisfy the declared goal?
 2. Recoverability: can the work be rerun or repaired without manual guessing?
 3. Interface integrity: are behavior, formats, paths, and errors aligned with
    the spec or benchmark?
@@ -46,7 +46,7 @@ Evaluate these when relevant:
 - Idempotence: repeated runs converge instead of accumulating residue.
 - Dependency ordering: startup and test paths do not rely on hidden races.
 - Resource realism: timeouts, file sizes, memory use, and external calls are
-  bounded where the contract can stress them.
+  bounded where the goal can stress them.
 - Failure domains: one partial failure should not corrupt unrelated state.
 - Security defaults: secrets, credentials, and user data are not written into
   public artifacts or logs.
@@ -56,16 +56,16 @@ Evaluate these when relevant:
 Flag complexity when it increases future failure surface:
 
 - Duplicate or overlapping code paths serving the same purpose.
-- Hardcoded contract details that should be derived from input.
+- Hardcoded values or paths that should be derived from input.
 - Dead configuration, unused files, or stale generated outputs.
 - "Works now" patches that bypass the underlying invariant.
 - Rewrites that discard useful existing structure without need.
 - Missing state or provenance needed for rollback, replay, validation, or
   extension under the next natural spec change.
 
-For code-producing tasks, make this check explicit before concession. Inspect
-the delivered tree for module size, file hygiene, duplicated logic,
-high-branch control flow, and leftover generated or scratch artifacts. Treat
+For code-producing tasks, make this check explicit before accepting. Inspect
+the delivered tree for module shape, file hygiene, duplicated logic,
+branchy control flow, and leftover generated or scratch artifacts. Treat
 "one large file with every concern inside it" as a design risk even when the
 current behavior passes, because the next spec change will be harder to verify
 and easier to regress.
@@ -74,9 +74,8 @@ and easier to regress.
 
 - Do not claim success from a single happy-path check.
 - Do not accept process artifacts without validating behavior.
-- Do not let an evaluator-authored test define a different contract than the
-  benchmark or spec.
-- Do not concede after observing a traceback, malformed output, or uninspected
+- Do not let an evaluator-authored test redefine the spec or benchmark.
+- Do not accept after observing a traceback, malformed output, or uninspected
   nonzero exit.
 
 ## Test Authoring Contract

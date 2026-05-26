@@ -54,9 +54,10 @@ Session
   the unit users list, describe, log, stop, and update.
 
 Controller
-  Persistent reconciler for one desired-state spec. It observes the live world,
-  writes bounded task specs when work is needed, launches tasks through Telos,
-  and keeps running on an interval.
+  Persistent long-horizon manager for one spec goal. It observes the live
+  world, decides what bounded agent work is useful, writes task specs when work
+  is needed, launches tasks through Telos, inspects their artifacts, and keeps
+  running on an interval.
 
 Task
   Bounded session. It runs once, produces evidence, and exits.
@@ -220,9 +221,9 @@ task worker
   writes evidence and exits
 ```
 
-The clean model is "controller decides, task mutates." Any implementation path
-that gives a controller broad direct product-mutation authority is transitional
-and should be tightened.
+The clean model is "controller owns the goal, task sessions perform bounded
+work." Any implementation path that gives a controller broad direct
+product-mutation authority is transitional and should be tightened.
 
 ## Sessions API
 

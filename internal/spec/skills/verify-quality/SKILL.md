@@ -40,7 +40,7 @@ for future work is a legitimate finding, held to the same evidentiary bar as
 any other concern in this skill.
 
 Use codebase shape as evidence: where responsibilities accumulate, whether new
-behavior spreads or concentrates in ways that obscure the contract, and whether
+behavior spreads or concentrates in ways that obscure the goal, and whether
 the next change would have a clear place to go.
 
 Accept the tradeoff when the spec genuinely required it and the cost is local
@@ -73,7 +73,7 @@ A finding is valid only when it is specific and reproducible.
 - Show the exact evidence, check, or command you used.
 - State the observed result and the expected result.
 - Treat nonzero exits, tracebacks, parse errors, and schema mismatches as hard
-  blockers to concession unless the spec explicitly allows them.
+  blockers unless the spec explicitly allows them.
 - Do not report a violation if your evidence would also pass against the
   current broken state or fail against a correct implementation.
 - Do not present speculative uncertainty as a required fix. Make clear whether
