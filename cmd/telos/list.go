@@ -30,33 +30,30 @@ func cmdList(args []string) {
 	}
 
 	var sessions []sessionapi.Session
+	controllerScoped := false
 
-	// Local sessions
-	if !*cloudOnly {
-		s := store()
-		local, err := s.List()
-		if err == nil {
-			sessions = append(sessions, local...)
+	if !*localOnly && *env == "" {
+		controllerSessions, handled, err := controllerListSessions(*limit)
+		if handled {
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			sessions = append(sessions, controllerSessions...)
+			controllerScoped = true
+		} else {
+			sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, *limit)...)
 		}
-	}
-
-	// Cloud sessions
-	if !*localOnly && (*cloudOnly || *env != "" || config.IsConfigured()) {
-		cloudSessions, err := listCloudSessions(*env, *limit)
-		if err != nil && (*cloudOnly || *env != "") {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		if err == nil {
-			sessions = append(sessions, cloudSessions...)
-		}
+	} else {
+		sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, *limit)...)
 	}
 
 	if *limit > 0 && len(sessions) > *limit {
 		sessions = sessions[:*limit]
 	}
 
-	visible := visibleListSessions(sessions, *wide)
+	effectiveWide := *wide || controllerScoped
+	visible := visibleListSessions(sessions, effectiveWide)
 	if *jsonOut {
 		printJSON(sessionapi.SessionListResponse{Sessions: visible})
 		return
@@ -67,13 +64,13 @@ func cmdList(args []string) {
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	if *wide {
+	if effectiveWide {
 		fmt.Fprintln(w, "NAME\tKIND\tSTATUS\tRESULT\tRUNTIME\tARTIFACT\tPARENT\tCOST\tSESSION")
 	} else {
 		fmt.Fprintln(w, "NAME\tSTATUS\tRESULT\tARTIFACT\tSESSION")
 	}
 	for _, sess := range visible {
-		if *wide {
+		if effectiveWide {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				sessionName(sess),
 				sessionKind(sess),
@@ -96,6 +93,80 @@ func cmdList(args []string) {
 		)
 	}
 	_ = w.Flush()
+}
+
+func controllerListSessions(limit int) ([]sessionapi.Session, bool, error) {
+	if sessionID, ok := localControllerSessionID(); ok {
+		sessions, err := store().List()
+		if err != nil {
+			return nil, true, fmt.Errorf("local controller session list failed: %w", err)
+		}
+		return controllerSessionTree(sessions, sessionID), true, nil
+	}
+
+	ctx, ok := controllerSessionContext()
+	if !ok {
+		return nil, false, nil
+	}
+	sessions, err := cloud.NewClient(ctx.endpoint, ctx.token).ListSessions(limit)
+	if err != nil {
+		return nil, true, fmt.Errorf("controller session list failed: %w", err)
+	}
+	return sessions, true, nil
+}
+
+func controllerSessionTree(sessions []sessionapi.Session, rootID string) []sessionapi.Session {
+	byID := make(map[string]sessionapi.Session, len(sessions))
+	childrenByParent := make(map[string][]sessionapi.Session)
+	for _, session := range sessions {
+		byID[session.SessionID] = session
+		if session.ParentSessionID != nil && *session.ParentSessionID != "" {
+			childrenByParent[*session.ParentSessionID] = append(childrenByParent[*session.ParentSessionID], session)
+		}
+	}
+
+	root, ok := byID[rootID]
+	if !ok {
+		return nil
+	}
+
+	out := []sessionapi.Session{root}
+	seen := map[string]bool{rootID: true}
+	queue := []string{rootID}
+	for len(queue) > 0 {
+		parentID := queue[0]
+		queue = queue[1:]
+		for _, child := range childrenByParent[parentID] {
+			if seen[child.SessionID] {
+				continue
+			}
+			seen[child.SessionID] = true
+			out = append(out, child)
+			queue = append(queue, child.SessionID)
+		}
+	}
+	return out
+}
+
+func listLocalAndConfiguredCloudSessions(localOnly bool, cloudOnly bool, envID string, limit int) []sessionapi.Session {
+	var sessions []sessionapi.Session
+	if !cloudOnly {
+		local, err := store().List()
+		if err == nil {
+			sessions = append(sessions, local...)
+		}
+	}
+	if !localOnly && (cloudOnly || envID != "" || config.IsConfigured()) {
+		cloudSessions, err := listCloudSessions(envID, limit)
+		if err != nil && (cloudOnly || envID != "") {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if err == nil {
+			sessions = append(sessions, cloudSessions...)
+		}
+	}
+	return sessions
 }
 
 func visibleListSessions(sessions []sessionapi.Session, wide bool) []sessionapi.Session {

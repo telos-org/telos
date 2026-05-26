@@ -2,7 +2,10 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "cli",
-    srcs = ["localrun.go"],
+    srcs = [
+        "localrun.go",
+        "workspace.go",
+    ],
     importpath = "github.com/telos-org/telos/internal/cli",
     visibility = ["//:__subpackages__"],
     deps = [
@@ -16,10 +19,14 @@ go_library(
 
 go_test(
     name = "cli_test",
-    srcs = ["localrun_test.go"],
+    srcs = [
+        "localrun_test.go",
+        "workspace_test.go",
+    ],
     embed = [":cli"],
     deps = [
         "//internal/game",
+        "//internal/platform",
         "//internal/sessionapi",
     ],
 )

@@ -21,6 +21,7 @@ const DefaultLocalModel = "claude-opus-4-6"
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {
 	SessionKind     sessionapi.SessionKind
+	ParentSessionID *string
 	Workspace       string
 	Model           string
 	Thinking        string
@@ -227,7 +228,7 @@ func startLocalWorker(sessionDir string) error {
 	defer logFile.Close()
 
 	cmd := exec.Command(telosd, "--session-dir", sessionDir)
-	cmd.Env = append(os.Environ(), "TELOS_SESSION_DIR="+filepath.Dir(sessionDir))
+	cmd.Env = localWorkerEnv(sessionDir)
 	cmd.Stdin = nil
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -241,6 +242,19 @@ func startLocalWorker(sessionDir string) error {
 		return err
 	}
 	return nil
+}
+
+func localWorkerEnv(sessionDir string) []string {
+	env := append(os.Environ(),
+		"TELOS_RUNTIME="+string(sessionapi.RuntimeLocal),
+		"TELOS_SESSION_DIR="+filepath.Dir(sessionDir),
+		"TELOS_SESSION_ID="+filepath.Base(sessionDir),
+	)
+	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err == nil && manifest.ParentSessionID != nil {
+		env = append(env, "TELOS_PARENT_SESSION_ID="+*manifest.ParentSessionID)
+	}
+	return env
 }
 
 func resolveTelosd() (string, error) {
@@ -298,6 +312,7 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		Runtime:         sessionapi.RuntimeLocal,
 		CreatedAt:       time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		Launcher:        "local",
+		ParentSessionID: cfg.ParentSessionID,
 		SourceSpecPath:  &specPath,
 		SessionSpecPath: strPtr(state.SpecPath()),
 		SpecName:        compiled.Environment.Name,

@@ -43,8 +43,17 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	fmt.Fprintf(out, "Name:     %s\n", sessionName(session))
 	fmt.Fprintf(out, "Kind:     %s\n", sessionKind(session))
 	fmt.Fprintf(out, "Runtime:  %s\n", session.Runtime)
+	if session.ParentSessionID != nil && *session.ParentSessionID != "" {
+		fmt.Fprintf(out, "Parent:   %s\n", *session.ParentSessionID)
+	}
 	fmt.Fprintf(out, "Status:   %s\n", session.Status)
 	fmt.Fprintf(out, "Result:   %s\n", sessionResult(session))
+	if session.CompletionReason != nil && *session.CompletionReason != "" {
+		fmt.Fprintf(out, "Complete: %s\n", *session.CompletionReason)
+	}
+	if session.VerifierConceded != nil {
+		fmt.Fprintf(out, "Evaluate: %s\n", evaluationDisposition(session))
+	}
 	if session.ArtifactURI != nil && *session.ArtifactURI != "" {
 		fmt.Fprintf(out, "Artifact: %s\n", *session.ArtifactURI)
 	}
@@ -74,6 +83,19 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 		fmt.Fprintln(out)
 		printSessionArtifacts(out, session)
 	}
+}
+
+func evaluationDisposition(session sessionapi.Session) string {
+	if !session.Status.IsTerminal() {
+		return "pending"
+	}
+	if session.VerifierConceded != nil && *session.VerifierConceded {
+		return "accepted"
+	}
+	if session.CompletionReason != nil && *session.CompletionReason == "review_cycles_complete" {
+		return "review cycles complete (acceptance not used)"
+	}
+	return "not accepted"
 }
 
 func printLatestEpoch(out io.Writer, session sessionapi.Session) {

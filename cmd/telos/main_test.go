@@ -550,6 +550,79 @@ func TestControllerSessionContextUsesScopedToken(t *testing.T) {
 	}
 }
 
+func TestControllerSessionContextIgnoresLocalRuntime(t *testing.T) {
+	t.Setenv("TELOS_API_TOKEN", "session-token")
+	t.Setenv("TELOS_SESSION_ID", "sess_parent")
+	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
+	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", "http://telos-api.local:8000")
+
+	if ctx, ok := controllerSessionContext(); ok {
+		t.Fatalf("local runtime should not be cloud controller context: %#v", ctx)
+	}
+}
+
+func TestLocalControllerSessionIDUsesLocalSessionContext(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sessions")
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: local-controller\nplatform: local\n---\n# Local Controller\n"
+	kind := sessionapi.KindController
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdown,
+		SessionKind:  &kind,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Setenv("TELOS_SESSION_ID", session.SessionID)
+	t.Setenv("TELOS_SESSION_DIR", root)
+	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
+
+	sessionID, ok := localControllerSessionID()
+	if !ok {
+		t.Fatal("expected local controller session context")
+	}
+	if sessionID != session.SessionID {
+		t.Fatalf("session id: got %q", sessionID)
+	}
+}
+
+func TestLocalControllerSessionIDIgnoresTaskSession(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sessions")
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: local-task\nplatform: local\n---\n# Local Task\n"
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Setenv("TELOS_SESSION_ID", session.SessionID)
+	t.Setenv("TELOS_SESSION_DIR", root)
+	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
+
+	if sessionID, ok := localControllerSessionID(); ok {
+		t.Fatalf("task session should not be local controller context: %s", sessionID)
+	}
+}
+
+func TestLocalControllerSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sessions")
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: local-controller\nplatform: local\n---\n# Local Controller\n"
+	kind := sessionapi.KindController
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdown,
+		SessionKind:  &kind,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	t.Setenv("TELOS_SESSION_ID", session.SessionID)
+	t.Setenv("TELOS_SESSION_DIR", root)
+
+	if sessionID, ok := localControllerSessionID(); ok {
+		t.Fatalf("session should not be local controller context without runtime marker: %s", sessionID)
+	}
+}
+
 func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("TELOS_SESSION_DIR", root)

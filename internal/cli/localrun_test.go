@@ -174,6 +174,64 @@ func TestCreateLocalSession(t *testing.T) {
 	}
 }
 
+func TestCreateLocalSessionRecordsParentSession(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	parentID := "local_parent"
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{ParentSessionID: &parentID})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.ParentSessionID == nil || *manifest.ParentSessionID != parentID {
+		t.Fatalf("parent session id: got %#v, want %q", manifest.ParentSessionID, parentID)
+	}
+}
+
+func TestEnsureSessionWorkspaceInitializesAPIBackedSession(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "sessions")
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	markdown := "---\nversion: v0\nname: cloud-fresh\nplatform: cloud\n---\n# Cloud Fresh\n\nRun something."
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if session.SessionDir == nil {
+		t.Fatal("missing session dir")
+	}
+	active := filepath.Join(*session.SessionDir, "workspace")
+	if _, err := os.Stat(active); !os.IsNotExist(err) {
+		t.Fatalf("fresh API session should not pre-create workspace: %v", err)
+	}
+
+	manifestPath := filepath.Join(*session.SessionDir, "session.json")
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureSessionWorkspace(*session.SessionDir, manifest); err != nil {
+		t.Fatalf("ensureSessionWorkspace: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(active, ".git")); err != nil {
+		t.Fatalf("workspace should be initialized as a git repo: %v", err)
+	}
+	updated, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Workspace == nil || updated.Workspace.Mode != workspaceModeEmpty {
+		t.Fatalf("workspace metadata: %#v", updated.Workspace)
+	}
+	if updated.Workspace.BaseCommit == "" {
+		t.Fatal("workspace metadata should record base commit")
+	}
+}
+
 func TestCreateLocalSessionRejectsWorkspaceFile(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
@@ -453,6 +511,69 @@ func TestCreateLocalSessionExtendsRequiresCompletedWorkspaceArtifact(t *testing.
 	}
 }
 
+func TestCreateLocalSessionExtendsActiveLocalControllerWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(dir, "telos-output"))
+
+	baseSpec := filepath.Join(dir, "base", "SPEC.md")
+	if err := os.MkdirAll(filepath.Dir(baseSpec), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(baseSpec, []byte("---\nversion: v0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	childSpec := filepath.Join(dir, "base", "generated", "child", "SPEC.md")
+	if err := os.MkdirAll(filepath.Dir(childSpec), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(childSpec, []byte("---\nversion: v0\nname: child-spec\nplatform: local\nextends: ../../SPEC.md\n---\nChild body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	baseSession, err := CreateLocalSession(baseSpec, LocalRunConfig{SessionKind: sessionapi.KindController})
+	if err != nil {
+		t.Fatalf("CreateLocalSession base: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseSession.SessionDir, "workspace", "controller.txt"), []byte("active controller workspace\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sessionsRoot := filepath.Dir(baseSession.SessionDir)
+	t.Setenv("TELOS_SESSION_DIR", sessionsRoot)
+	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
+	t.Setenv("TELOS_SESSION_ID", baseSession.SessionID)
+
+	childSession, err := CreateLocalSession(childSpec, LocalRunConfig{ParentSessionID: &baseSession.SessionID})
+	if err != nil {
+		t.Fatalf("CreateLocalSession child: %v", err)
+	}
+	childData, err := os.ReadFile(filepath.Join(childSession.SessionDir, "workspace", "controller.txt"))
+	if err != nil {
+		t.Fatalf("child workspace should inherit active controller workspace: %v", err)
+	}
+	if string(childData) != "active controller workspace\n" {
+		t.Fatalf("child active workspace file: got %q", childData)
+	}
+
+	manifest, err := sessionapi.ReadManifest(filepath.Join(childSession.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Workspace == nil || manifest.Workspace.Extends == nil {
+		t.Fatalf("workspace should record active parent binding: %#v", manifest.Workspace)
+	}
+	if manifest.Workspace.Extends.SessionID != baseSession.SessionID {
+		t.Fatalf("extends session: got %q want %q", manifest.Workspace.Extends.SessionID, baseSession.SessionID)
+	}
+	if manifest.Workspace.Extends.WorkspacePath != filepath.Join(baseSession.SessionDir, "workspace") {
+		t.Fatalf("extends workspace path: got %q", manifest.Workspace.Extends.WorkspacePath)
+	}
+}
+
 func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
@@ -534,6 +655,36 @@ func TestCreateLocalSessionPersistsUntil(t *testing.T) {
 	}
 	if manifest.Config.Until != 2 {
 		t.Fatalf("until: got %d", manifest.Config.Until)
+	}
+}
+
+func TestLocalWorkerEnvIncludesSessionContext(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	parentID := "local_parent"
+	session, err := CreateLocalSession(specPath, LocalRunConfig{ParentSessionID: &parentID})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	values := map[string]string{}
+	for _, entry := range localWorkerEnv(session.SessionDir) {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	if values["TELOS_SESSION_DIR"] != filepath.Dir(session.SessionDir) {
+		t.Fatalf("TELOS_SESSION_DIR: got %q", values["TELOS_SESSION_DIR"])
+	}
+	if values["TELOS_SESSION_ID"] != session.SessionID {
+		t.Fatalf("TELOS_SESSION_ID: got %q, want %q", values["TELOS_SESSION_ID"], session.SessionID)
+	}
+	if values["TELOS_RUNTIME"] != string(sessionapi.RuntimeLocal) {
+		t.Fatalf("TELOS_RUNTIME: got %q, want %q", values["TELOS_RUNTIME"], sessionapi.RuntimeLocal)
+	}
+	if values["TELOS_PARENT_SESSION_ID"] != parentID {
+		t.Fatalf("TELOS_PARENT_SESSION_ID: got %q, want %q", values["TELOS_PARENT_SESSION_ID"], parentID)
 	}
 }
 

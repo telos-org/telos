@@ -100,6 +100,17 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	localParentSessionID, inLocalController := localControllerSessionID()
+	if inLocalController {
+		if command == "apply" {
+			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a controller session; use telos run for bounded child tasks")
+			os.Exit(1)
+		}
+		if launchMode != launchLocal {
+			fmt.Fprintln(os.Stderr, "error: local controller sessions can only launch platform: local child tasks")
+			os.Exit(1)
+		}
+	}
 	switch launchMode {
 	case launchCloudExisting:
 		runCloud(command, specArg, *env, untilValue, *jsonOut, false, 0, action)
@@ -136,6 +147,9 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	cfg.SessionKind = sessionKindForCommand(command)
 	cfg.Until = untilValue
+	if inLocalController {
+		cfg.ParentSessionID = &localParentSessionID
+	}
 
 	session, err := cli.SubmitLocalSession(specPath, cfg)
 	if err != nil {

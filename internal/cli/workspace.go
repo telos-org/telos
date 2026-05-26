@@ -170,7 +170,18 @@ func ensureSessionWorkspace(sessionDir string, manifest *sessionapi.Manifest) er
 
 	archive := latestWorkspaceCheckpoint(manifest)
 	if archive == "" {
-		return fmt.Errorf("session workspace missing: %s", active)
+		base, err := initSnapshotRepo(active)
+		if err != nil {
+			return fmt.Errorf("initialize session workspace: %w", err)
+		}
+		manifest.Workspace = &sessionapi.Workspace{
+			Mode:       workspaceModeEmpty,
+			BaseCommit: base,
+		}
+		if err := sessionapi.WriteManifest(manifestPath(sessionDir), manifest); err != nil {
+			return fmt.Errorf("record session workspace: %w", err)
+		}
+		return nil
 	}
 	if err := extractWorkspaceArtifact(archive, active); err != nil {
 		return fmt.Errorf("rehydrate session workspace: %w", err)
@@ -209,7 +220,15 @@ func prepareArtifactWorkspace(dest string, source string, parent *spec.CompiledE
 	if err != nil {
 		return nil, err
 	}
-	if err := extractWorkspaceArtifact(binding.WorkspacePath, dest); err != nil {
+	info, err := os.Stat(binding.WorkspacePath)
+	if err != nil {
+		return nil, fmt.Errorf("inspect extended workspace artifact: %w", err)
+	}
+	if info.IsDir() {
+		if err := copySnapshot(binding.WorkspacePath, dest); err != nil {
+			return nil, fmt.Errorf("copy extended workspace: %w", err)
+		}
+	} else if err := extractWorkspaceArtifact(binding.WorkspacePath, dest); err != nil {
 		return nil, fmt.Errorf("extract extended workspace artifact: %w", err)
 	}
 	base, err := workspaceHeadCommit(dest)
@@ -273,17 +292,36 @@ func resolveExtendedWorkspaceArtifact(sessionsRoot string, parent *spec.Compiled
 
 	var best *sessionapi.WorkspaceArtifactBinding
 	bestStamp := ""
+	currentControllerID := currentLocalControllerSessionID()
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
-		manifest, err := sessionapi.ReadManifest(filepath.Join(sessionsRoot, entry.Name(), "session.json"))
-		if err != nil || !manifestCompleted(manifest) {
+		sessionDir := filepath.Join(sessionsRoot, entry.Name())
+		manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
+		if err != nil {
 			continue
 		}
 		stamp := manifestCompletionStamp(manifest)
 		for _, sessionSpec := range manifest.Specs {
 			if sessionSpec.ContentHash == nil || *sessionSpec.ContentHash != parent.ContentHash {
+				continue
+			}
+			if currentControllerID != "" &&
+				manifest.SessionID == currentControllerID &&
+				manifest.SessionKind == sessionapi.KindController {
+				active := activeWorkspacePath(sessionDir)
+				if info, err := os.Stat(active); err == nil && info.IsDir() {
+					return &sessionapi.WorkspaceArtifactBinding{
+						SpecPath:      parent.Environment.Path,
+						SpecName:      parent.Environment.Name,
+						ContentHash:   parent.ContentHash,
+						SessionID:     manifest.SessionID,
+						WorkspacePath: active,
+					}, nil
+				}
+			}
+			if !manifestCompleted(manifest) {
 				continue
 			}
 			if sessionSpec.WorkspacePath == nil || *sessionSpec.WorkspacePath == "" {
@@ -309,6 +347,13 @@ func resolveExtendedWorkspaceArtifact(sessionsRoot string, parent *spec.Compiled
 		return nil, fmt.Errorf("extended spec %q (%s) has no completed local workspace artifact; run the parent spec first", parent.Environment.Name, parent.ContentHash)
 	}
 	return best, nil
+}
+
+func currentLocalControllerSessionID() string {
+	if strings.TrimSpace(os.Getenv("TELOS_RUNTIME")) != string(sessionapi.RuntimeLocal) {
+		return ""
+	}
+	return strings.TrimSpace(os.Getenv("TELOS_SESSION_ID"))
 }
 
 func manifestCompleted(manifest *sessionapi.Manifest) bool {
