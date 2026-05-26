@@ -747,15 +747,29 @@ func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
 	}
 }
 
-func TestLocalSessionRootDefaultsToWorkspaceTelosDir(t *testing.T) {
+func TestLocalSessionRootDefaultsToOutputRoot(t *testing.T) {
 	t.Setenv("TELOS_SESSION_DIR", "")
+	outputRoot := filepath.Join(t.TempDir(), "telos-output")
+	t.Setenv("TELOS_OUTPUT_ROOT", outputRoot)
 
-	want, err := filepath.Abs(filepath.Join(".telos", "sessions"))
-	if err != nil {
-		t.Fatalf("abs sessions path: %v", err)
+	got := localSessionRoot()
+	prefix := outputRoot + string(os.PathSeparator) + "execroot" + string(os.PathSeparator)
+	if !strings.HasPrefix(got, prefix) {
+		t.Fatalf("local session root %q should be under %q", got, prefix)
 	}
-	if got := localSessionRoot(); got != want {
-		t.Fatalf("local session root: got %q", got)
+	if !strings.HasSuffix(got, string(os.PathSeparator)+"sessions") {
+		t.Fatalf("local session root %q should end with sessions", got)
+	}
+}
+
+func TestLocalSessionRootHonorsSessionDirEnv(t *testing.T) {
+	want := filepath.Join(t.TempDir(), "sessions")
+	t.Setenv("TELOS_SESSION_DIR", want)
+	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(t.TempDir(), "telos-output"))
+
+	got := localSessionRoot()
+	if got != want {
+		t.Fatalf("local session root: got %q want %q", got, want)
 	}
 }
 

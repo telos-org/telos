@@ -3,11 +3,13 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -56,16 +58,69 @@ func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {
 
 func writeTestSpec(t *testing.T, dir string) string {
 	t.Helper()
+	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(dir, "telos-output"))
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: cli-test\nplatform: local\n---\n# CLI Test\n\nTest body."), 0o644)
 	return specPath
+}
+
+func runTestCommand(t *testing.T, dir string, name string, args ...string) string {
+	t.Helper()
+	cmd := exec.Command(name, args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("%s %s: %v\n%s", name, strings.Join(args, " "), err, out)
+	}
+	return string(out)
+}
+
+func initTestGitRepo(t *testing.T, dir string) string {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, dir, "git", "init", "-q")
+	if err := os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, dir, "git", "add", "-A")
+	runTestCommand(t, dir, "git", "-c", "user.name=Telos", "-c", "user.email=telos@local", "commit", "-q", "-m", "initial")
+	return strings.TrimSpace(runTestCommand(t, dir, "git", "rev-parse", "HEAD"))
+}
+
+func checkpointCompletedWorkspace(t *testing.T, session *LocalSession, specName string) string {
+	t.Helper()
+	workspacePath := filepath.Join(session.SessionDir, "specs", specName, "workspace.tar.gz")
+	if ok := platform.NewLocalPlatform(filepath.Join(session.SessionDir, "workspace")).CheckpointWorkspace(workspacePath); !ok {
+		t.Fatal("checkpoint workspace failed")
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishedAt := "2026-05-26T12:00:00.000Z"
+	completed := "completed"
+	manifest.Epochs = append(manifest.Epochs, sessionapi.Epoch{
+		ID:         len(manifest.Epochs) + 1,
+		StartedAt:  "2026-05-26T11:59:00.000Z",
+		FinishedAt: &finishedAt,
+		Result:     &completed,
+	})
+	if err := sessionapi.WriteManifest(filepath.Join(session.SessionDir, "session.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+	return workspacePath
 }
 
 func TestCreateLocalSession(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 
-	// Change to temp dir so .telos goes there
+	// Change to temp dir so the default session scope is stable.
 	orig, _ := os.Getwd()
 	os.Chdir(dir)
 	defer os.Chdir(orig)
@@ -131,7 +186,7 @@ func TestCreateLocalSessionRejectsWorkspaceFile(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected invalid workspace error")
 	}
-	if !strings.Contains(err.Error(), "create sessions root") && !strings.Contains(err.Error(), "create workspace") {
+	if !strings.Contains(err.Error(), "workspace path must be a directory") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -140,6 +195,9 @@ func TestCreateLocalSessionHonorsSessionDirEnv(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 	workspace := filepath.Join(dir, "workspace")
+	if err := os.MkdirAll(workspace, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	sessionsRoot := filepath.Join(dir, "telos-sessions")
 	t.Setenv("TELOS_SESSION_DIR", sessionsRoot)
 
@@ -153,6 +211,245 @@ func TestCreateLocalSessionHonorsSessionDirEnv(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(workspace, ".telos")); !os.IsNotExist(err) {
 		t.Fatalf("workspace should not contain .telos when TELOS_SESSION_DIR is set: %v", err)
+	}
+}
+
+func TestCreateLocalSessionClonesCleanGitWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, filepath.Join(dir, "spec"))
+	source := filepath.Join(dir, "source")
+	base := initTestGitRepo(t, source)
+	source, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{Workspace: source})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	active := filepath.Join(session.SessionDir, "workspace")
+	if active == source {
+		t.Fatal("session workspace should not be the source checkout")
+	}
+	if _, err := os.Stat(filepath.Join(active, ".git")); err != nil {
+		t.Fatalf("cloned workspace missing .git: %v", err)
+	}
+	if got := strings.TrimSpace(runTestCommand(t, active, "git", "rev-parse", "HEAD")); got != base {
+		t.Fatalf("base checkout: got %s want %s", got, base)
+	}
+	if got := strings.TrimSpace(runTestCommand(t, active, "git", "remote")); got != "" {
+		t.Fatalf("session workspace should not keep remotes: %q", got)
+	}
+	marker := filepath.Join(source, ".telos")
+	info, err := os.Lstat(marker)
+	if err != nil {
+		t.Fatalf("source workspace missing .telos marker: %v", err)
+	}
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatal(".telos marker should be a symlink")
+	}
+	target, err := os.Readlink(marker)
+	if err != nil {
+		t.Fatalf("read .telos marker: %v", err)
+	}
+	if !samePath(resolveLinkTarget(source, target), filepath.Dir(filepath.Dir(session.SessionDir))) {
+		t.Fatalf(".telos target: got %q want %q", target, filepath.Dir(filepath.Dir(session.SessionDir)))
+	}
+
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.Workspace == nil {
+		t.Fatal("manifest missing workspace metadata")
+	}
+	if manifest.Workspace.Mode != "git_clone" {
+		t.Fatalf("workspace mode: got %q", manifest.Workspace.Mode)
+	}
+	if manifest.Workspace.Source != source {
+		t.Fatalf("workspace source: got %q want %q", manifest.Workspace.Source, source)
+	}
+	if manifest.Workspace.BaseCommit != base {
+		t.Fatalf("base commit: got %q want %q", manifest.Workspace.BaseCommit, base)
+	}
+	if _, ok := manifest.Config.AsMap()["workspace"]; ok {
+		t.Fatal("config should not persist the live workspace path")
+	}
+
+	if _, err := CreateLocalSession(specPath, LocalRunConfig{Workspace: source}); err != nil {
+		t.Fatalf("second CreateLocalSession should ignore .telos marker dirtiness: %v", err)
+	}
+}
+
+func TestCreateLocalSessionRejectsDirtyGitWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, filepath.Join(dir, "spec"))
+	source := filepath.Join(dir, "source")
+	initTestGitRepo(t, source)
+	if err := os.WriteFile(filepath.Join(source, "dirty.txt"), []byte("dirty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := CreateLocalSession(specPath, LocalRunConfig{Workspace: source})
+	if err == nil {
+		t.Fatal("expected dirty workspace error")
+	}
+	if !strings.Contains(err.Error(), "uncommitted changes") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCreateLocalSessionRejectsGitLFSWorkspace(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, filepath.Join(dir, "spec"))
+	source := filepath.Join(dir, "source")
+	initTestGitRepo(t, source)
+	if err := os.WriteFile(filepath.Join(source, ".gitattributes"), []byte("*.bin filter=lfs diff=lfs merge=lfs -text\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, source, "git", "add", ".gitattributes")
+	runTestCommand(t, source, "git", "-c", "user.name=Telos", "-c", "user.email=telos@local", "commit", "-q", "-m", "mark lfs")
+
+	_, err := CreateLocalSession(specPath, LocalRunConfig{Workspace: source})
+	if err == nil {
+		t.Fatal("expected git-lfs workspace error")
+	}
+	if !strings.Contains(err.Error(), "git-lfs") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCreateLocalSessionSnapshotsPlainDirectory(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, filepath.Join(dir, "spec"))
+	source := filepath.Join(dir, "plain")
+	if err := os.MkdirAll(source, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "notes.txt"), []byte("snapshot\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{Workspace: source})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	active := filepath.Join(session.SessionDir, "workspace")
+	if _, err := os.Stat(filepath.Join(active, ".git")); err != nil {
+		t.Fatalf("snapshot workspace missing .git: %v", err)
+	}
+	if data, err := os.ReadFile(filepath.Join(active, "notes.txt")); err != nil || string(data) != "snapshot\n" {
+		t.Fatalf("snapshot file: data=%q err=%v", data, err)
+	}
+
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.Workspace == nil || manifest.Workspace.Mode != "snapshot" {
+		t.Fatalf("workspace metadata: %#v", manifest.Workspace)
+	}
+	if manifest.Workspace.BaseCommit == "" {
+		t.Fatal("snapshot should record base_commit")
+	}
+}
+
+func TestCreateLocalSessionExtendsCompletedWorkspaceArtifact(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(dir, "telos-output"))
+
+	baseSpec := filepath.Join(dir, "base", "SPEC.md")
+	if err := os.MkdirAll(filepath.Dir(baseSpec), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(baseSpec, []byte("---\nversion: v0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	childSpec := filepath.Join(dir, "child", "SPEC.md")
+	if err := os.MkdirAll(filepath.Dir(childSpec), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(childSpec, []byte("---\nversion: v0\nname: child-spec\nplatform: local\nextends: ../base/SPEC.md\n---\nChild body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	baseSession, err := CreateLocalSession(baseSpec, LocalRunConfig{})
+	if err != nil {
+		t.Fatalf("CreateLocalSession base: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(baseSession.SessionDir, "workspace", "base.txt"), []byte("parent artifact\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	baseWorkspacePath := checkpointCompletedWorkspace(t, baseSession, "base-spec")
+
+	childSession, err := CreateLocalSession(childSpec, LocalRunConfig{})
+	if err != nil {
+		t.Fatalf("CreateLocalSession child: %v", err)
+	}
+	childData, err := os.ReadFile(filepath.Join(childSession.SessionDir, "workspace", "base.txt"))
+	if err != nil {
+		t.Fatalf("child workspace should inherit parent artifact file: %v", err)
+	}
+	if string(childData) != "parent artifact\n" {
+		t.Fatalf("child artifact file: got %q", childData)
+	}
+
+	manifest, err := sessionapi.ReadManifest(filepath.Join(childSession.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Workspace == nil || manifest.Workspace.Mode != "artifact" {
+		t.Fatalf("workspace metadata: %#v", manifest.Workspace)
+	}
+	if manifest.Workspace.Extends == nil {
+		t.Fatal("workspace should record extended artifact binding")
+	}
+	if manifest.Workspace.Extends.SessionID != baseSession.SessionID {
+		t.Fatalf("extends session: got %q want %q", manifest.Workspace.Extends.SessionID, baseSession.SessionID)
+	}
+	if manifest.Workspace.Extends.WorkspacePath != baseWorkspacePath {
+		t.Fatalf("extends workspace path: got %q want %q", manifest.Workspace.Extends.WorkspacePath, baseWorkspacePath)
+	}
+	if manifest.Workspace.Extends.ContentHash == "" {
+		t.Fatal("extends binding should record content hash")
+	}
+}
+
+func TestCreateLocalSessionExtendsRequiresCompletedWorkspaceArtifact(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(dir, "telos-output"))
+
+	baseSpec := filepath.Join(dir, "base", "SPEC.md")
+	if err := os.MkdirAll(filepath.Dir(baseSpec), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(baseSpec, []byte("---\nversion: v0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	childSpec := filepath.Join(dir, "child", "SPEC.md")
+	if err := os.MkdirAll(filepath.Dir(childSpec), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(childSpec, []byte("---\nversion: v0\nname: child-spec\nplatform: local\nextends: ../base/SPEC.md\n---\nChild body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	_, err := CreateLocalSession(childSpec, LocalRunConfig{})
+	if err == nil {
+		t.Fatal("expected missing parent artifact error")
+	}
+	if !strings.Contains(err.Error(), "run the parent spec first") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -208,7 +505,7 @@ func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	}
 
 	// Verify session can be read by the store
-	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"), sessionapi.RuntimeLocal)
+	store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
 	sessionAPI, err := store.Get(session.SessionID)
 	if err != nil {
 		t.Fatalf("store.Get: %v", err)
@@ -303,7 +600,7 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
-	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"), sessionapi.RuntimeLocal)
+	store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
 	proverTurns := 0
 
 	exec := &fakeExecutor{
@@ -361,7 +658,7 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 	}
 }
 
-func TestRunLocalSessionDefaultsMissingWorkspaceToSessionDir(t *testing.T) {
+func TestRunLocalSessionRemovesWorkspaceAfterCheckpoint(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 
@@ -373,16 +670,6 @@ func TestRunLocalSessionDefaultsMissingWorkspaceToSessionDir(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
-	manifestPath := filepath.Join(session.SessionDir, "session.json")
-	manifest, err := sessionapi.ReadManifest(manifestPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest.Config.Workspace = ""
-	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
-		t.Fatal(err)
-	}
-
 	exec := &fakeExecutor{
 		proverResult: game.TurnResult{
 			Role:   "prover",
@@ -398,8 +685,53 @@ func TestRunLocalSessionDefaultsMissingWorkspaceToSessionDir(t *testing.T) {
 	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
 		t.Fatalf("RunLocalSession: %v", err)
 	}
-	if _, err := os.Stat(filepath.Join(session.SessionDir, "workspace")); err != nil {
-		t.Fatalf("default workspace was not created: %v", err)
+	if _, err := os.Stat(filepath.Join(session.SessionDir, "workspace")); !os.IsNotExist(err) {
+		t.Fatalf("default workspace should be removed after checkpoint: %v", err)
+	}
+}
+
+func TestRunLocalSessionRehydratesWorkspaceFromCheckpoint(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(session.SessionDir, "workspace", "state.txt"), []byte("checkpoint\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	checkpointCompletedWorkspace(t, session, "cli-test")
+	if err := os.RemoveAll(filepath.Join(session.SessionDir, "workspace")); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := &fakeExecutor{
+		proverResult: game.TurnResult{
+			Role:   "prover",
+			Status: game.StatusContinue,
+			Logs:   "Built.\n\n<progress_update>done</progress_update>",
+		},
+		verifierResult: game.TurnResult{
+			Role:   "verifier",
+			Status: game.StatusConcede,
+			Logs:   "LGTM\n\n<status>CONCEDE</status>\n",
+		},
+		onExecute: func(role string) {
+			if role != "prover" {
+				return
+			}
+			if data, err := os.ReadFile(filepath.Join(session.SessionDir, "workspace", "state.txt")); err != nil || string(data) != "checkpoint\n" {
+				t.Fatalf("rehydrated state: data=%q err=%v", data, err)
+			}
+		},
+	}
+	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
+		t.Fatalf("RunLocalSession: %v", err)
 	}
 }
 
@@ -447,7 +779,7 @@ func TestRunLocalSessionStopsWhenManifestIsStopped(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
-	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"), sessionapi.RuntimeLocal)
+	store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
 
 	exec := &fakeExecutor{
 		proverResult: game.TurnResult{
@@ -524,7 +856,7 @@ func TestEndToEndSmokeTest(t *testing.T) {
 		t.Fatalf("game: got %s", result.GameResult)
 	}
 
-	store := sessionapi.NewFileStore(filepath.Join(dir, ".telos", "sessions"), sessionapi.RuntimeLocal)
+	store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
 
 	// describe
 	sess, err := store.Get(session.SessionID)

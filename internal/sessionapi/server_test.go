@@ -34,8 +34,7 @@ func TestCreateSession(t *testing.T) {
 		"spec_markdown": "---\nversion: v0\nname: my-task\nplatform: local\n---\n# My Task\n",
 		"model": "claude-opus-4-6",
 		"thinking": "medium",
-		"max_cost_usd": 10.0,
-		"workspace": "/tmp/workspace"
+		"max_cost_usd": 10.0
 	}`
 
 	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(body))
@@ -73,7 +72,6 @@ func TestCreateSession(t *testing.T) {
 	assertConfigStr(t, session.Config, "model", "claude-opus-4-6")
 	assertConfigStr(t, session.Config, "thinking", "medium")
 	assertConfigFloat(t, session.Config, "max_cost_usd", 10.0)
-	assertConfigStr(t, session.Config, "workspace", "/tmp/workspace")
 
 	// Provenance should be present (local mode).
 	if session.Provenance == nil {

@@ -214,20 +214,22 @@ func (p *LocalPlatform) CheckpointWorkspace(dest string) bool {
 	abs, _ := filepath.Abs(dest)
 	os.MkdirAll(filepath.Dir(abs), 0o755)
 
-	f, err := os.Create(abs)
+	tmp := abs + ".partial"
+	absTmp, _ := filepath.Abs(tmp)
+	f, err := os.Create(tmp)
 	if err != nil {
 		return false
 	}
-	defer f.Close()
 
 	gw := gzip.NewWriter(f)
-	defer gw.Close()
 	tw := tar.NewWriter(gw)
-	defer tw.Close()
 
-	filepath.Walk(p.Workspace, func(path string, info os.FileInfo, err error) error {
+	walkErr := filepath.Walk(p.Workspace, func(path string, info os.FileInfo, err error) error {
 		if err != nil {
-			return nil
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
 		}
 		rel, _ := filepath.Rel(p.Workspace, path)
 		if rel == "." {
@@ -235,25 +237,55 @@ func (p *LocalPlatform) CheckpointWorkspace(dest string) bool {
 		}
 		// Skip the checkpoint itself
 		absPath, _ := filepath.Abs(path)
-		if absPath == abs {
+		if absPath == abs || absPath == absTmp {
 			return nil
 		}
-		header, err := tar.FileInfoHeader(info, "")
+		linkname := ""
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkname, err = os.Readlink(path)
+			if err != nil {
+				return err
+			}
+		}
+		header, err := tar.FileInfoHeader(info, linkname)
 		if err != nil {
-			return nil
+			return err
 		}
 		header.Name = "./" + filepath.ToSlash(rel)
 		if err := tw.WriteHeader(header); err != nil {
-			return nil
+			return err
 		}
-		if !info.IsDir() {
+		if info.Mode().IsRegular() {
 			data, err := os.ReadFile(path)
-			if err == nil {
-				tw.Write(data)
+			if err != nil {
+				if os.IsNotExist(err) {
+					return nil
+				}
+				return err
+			}
+			if _, err := tw.Write(data); err != nil {
+				return err
 			}
 		}
 		return nil
 	})
+	closeErr := tw.Close()
+	if closeErr == nil {
+		closeErr = gw.Close()
+	}
+	if closeErr == nil {
+		closeErr = f.Close()
+	} else {
+		_ = f.Close()
+	}
+	if walkErr != nil || closeErr != nil {
+		_ = os.Remove(tmp)
+		return false
+	}
+	if err := os.Rename(tmp, abs); err != nil {
+		_ = os.Remove(tmp)
+		return false
+	}
 	return true
 }
 

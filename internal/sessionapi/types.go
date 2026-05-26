@@ -91,7 +91,6 @@ type SessionCreateRequest struct {
 	Thinking        string       `json:"thinking,omitempty"`
 	MaxCostUSD      *float64     `json:"max_cost_usd,omitempty"`
 	AgentTimeoutSec *int         `json:"agent_timeout_sec,omitempty"`
-	Workspace       *string      `json:"workspace,omitempty"`
 }
 
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{id}/spec.
@@ -166,6 +165,7 @@ type Session struct {
 	SessionSpecPath         *string          `json:"session_spec_path,omitempty"`
 	SessionDir              *string          `json:"session_dir,omitempty"`
 	Config                  map[string]any   `json:"config"`
+	Workspace               *Workspace       `json:"workspace,omitempty"`
 	Provenance              map[string]any   `json:"provenance"`
 	Specs                   []SessionSpec    `json:"specs"`
 	Epochs                  []map[string]any `json:"epochs"`

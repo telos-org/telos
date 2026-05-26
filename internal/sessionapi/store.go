@@ -540,6 +540,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		SessionSpecPath:    m.SessionSpecPath,
 		SessionDir:         strPtr(dir),
 		Config:             m.Config.AsMap(),
+		Workspace:          m.Workspace,
 		Provenance:         m.Provenance,
 		Specs:              specs,
 		Epochs:             epochs,
@@ -1014,9 +1015,6 @@ func buildConfig(req SessionCreateRequest) SessionConfig {
 	}
 	if req.AgentTimeoutSec != nil {
 		cfg.AgentTimeoutSec = *req.AgentTimeoutSec
-	}
-	if req.Workspace != nil {
-		cfg.Workspace = *req.Workspace
 	}
 	return cfg
 }

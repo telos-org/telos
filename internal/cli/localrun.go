@@ -31,10 +31,11 @@ type LocalRunConfig struct {
 
 // LocalSession holds the result of session creation.
 type LocalSession struct {
-	SessionID  string
-	SessionDir string
-	Workspace  string
-	SpecName   string
+	SessionID       string
+	SessionDir      string
+	WorkspaceScope  string
+	ActiveWorkspace string
+	SpecName        string
 }
 
 // CreateLocalSession compiles a spec and creates a local session layout.
@@ -48,24 +49,14 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	if err != nil {
 		return nil, fmt.Errorf("resolve spec path: %w", err)
 	}
-	var workspace string
-	if cfg.Workspace != "" {
-		workspace, err = filepath.Abs(cfg.Workspace)
-		if err != nil {
-			return nil, fmt.Errorf("resolve workspace path: %w", err)
-		}
+	sourceWorkspace, scopePath, err := workspaceScope(cfg.Workspace)
+	if err != nil {
+		return nil, err
 	}
 
-	sessionsRoot := os.Getenv("TELOS_SESSION_DIR")
-	if sessionsRoot == "" {
-		sessionsRoot = filepath.Join(".telos", "sessions")
-		if workspace != "" {
-			sessionsRoot = filepath.Join(workspace, ".telos", "sessions")
-		}
-	}
-	sessionsRoot, err = filepath.Abs(sessionsRoot)
+	sessionsRoot, err := DefaultLocalSessionRoot(scopePath)
 	if err != nil {
-		return nil, fmt.Errorf("resolve sessions root: %w", err)
+		return nil, err
 	}
 
 	sessionDir, err := newSessionDir(sessionsRoot)
@@ -73,11 +64,12 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 		return nil, err
 	}
 
-	if workspace == "" {
-		workspace = filepath.Join(sessionDir, "workspace")
+	workspace, err := prepareSessionWorkspace(sessionDir, sourceWorkspace, compiled, sessionsRoot)
+	if err != nil {
+		return nil, err
 	}
-	if err := os.MkdirAll(workspace, 0o755); err != nil {
-		return nil, fmt.Errorf("create workspace: %w", err)
+	if err := ensureScopeMarker(scopePath, sessionsRoot); err != nil {
+		return nil, err
 	}
 
 	specDir := filepath.Join(sessionDir, "specs", compiled.Environment.Name)
@@ -99,10 +91,11 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	}
 
 	return &LocalSession{
-		SessionID:  filepath.Base(sessionDir),
-		SessionDir: sessionDir,
-		Workspace:  workspace,
-		SpecName:   compiled.Environment.Name,
+		SessionID:       filepath.Base(sessionDir),
+		SessionDir:      sessionDir,
+		WorkspaceScope:  scopePath,
+		ActiveWorkspace: activeWorkspacePath(sessionDir),
+		SpecName:        compiled.Environment.Name,
 	}, nil
 }
 
@@ -150,11 +143,8 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	specDir := filepath.Dir(*sessionSpecPath)
 	state := game.NewPVGState(compiled.Environment.Name, specDir, manifest.SessionID)
 
-	workspace := cfg.Workspace
-	if workspace == "" {
-		workspace = filepath.Join(sessionDir, "workspace")
-	}
-	if err := os.MkdirAll(workspace, 0o755); err != nil {
+	workspace := activeWorkspacePath(sessionDir)
+	if err := ensureSessionWorkspace(sessionDir, manifest); err != nil {
 		return nil, err
 	}
 
@@ -193,6 +183,9 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	// Close epoch
 	if err := finishEpoch(sessionDir, manifest, result); err != nil {
 		return result, err
+	}
+	if err := cleanupSessionWorkspace(sessionDir, result.WorkspaceCheckpointPath); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: cleanup session workspace: %v\n", err)
 	}
 
 	return result, nil
@@ -284,7 +277,7 @@ func newSessionDir(root string) (string, error) {
 	return "", fmt.Errorf("could not allocate local session under %s", root)
 }
 
-func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, specPath string, state *game.PVGState, cfg LocalRunConfig, workspace string) error {
+func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, specPath string, state *game.PVGState, cfg LocalRunConfig, workspace *sessionapi.Workspace) error {
 	model := cfg.Model
 	if model == "" {
 		model = DefaultLocalModel
@@ -314,8 +307,8 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 			MaxCostUSD:      cfg.MaxCostUSD,
 			AgentTimeoutSec: cfg.AgentTimeoutSec,
 			Thinking:        thinking,
-			Workspace:       workspace,
 		},
+		Workspace:  workspace,
 		Provenance: map[string]any{"mode": "local"},
 		Specs: []sessionapi.InitialManifestSpec{{
 			Index:           0,
@@ -338,7 +331,6 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	cfg := manifest.Config
 	lrc := LocalRunConfig{
-		Workspace:       cfg.Workspace,
 		Model:           cfg.Model,
 		Thinking:        cfg.Thinking,
 		Until:           cfg.Until,

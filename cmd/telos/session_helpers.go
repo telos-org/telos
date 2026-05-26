@@ -5,15 +5,19 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func store() *sessionapi.FileStore {
-	root := os.Getenv("TELOS_SESSION_DIR")
-	if root == "" {
-		root = filepath.Join(".telos", "sessions")
+	root, err := cli.DefaultLocalSessionRoot("")
+	if err != nil {
+		root = os.Getenv("TELOS_SESSION_DIR")
+		if root == "" {
+			root = filepath.Join(".telos", "sessions")
+		}
 	}
 	return sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 }
@@ -184,14 +188,11 @@ func localSessionNotFoundError(sessionID string) error {
 }
 
 func localSessionRoot() string {
-	root := os.Getenv("TELOS_SESSION_DIR")
-	if root == "" {
-		root = filepath.Join(".telos", "sessions")
+	root, err := cli.DefaultLocalSessionRoot("")
+	if err == nil {
+		return root
 	}
-	if abs, err := filepath.Abs(root); err == nil {
-		return abs
-	}
-	return root
+	return filepath.Join(".telos", "sessions")
 }
 
 type localSessionNotFound struct {

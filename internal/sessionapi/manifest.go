@@ -21,10 +21,26 @@ type Manifest struct {
 	CurrentSpecVersion *int             `json:"current_spec_version,omitempty"`
 	SpecVersions       []map[string]any `json:"spec_versions,omitempty"`
 	Config             SessionConfig    `json:"config"`
+	Workspace          *Workspace       `json:"workspace,omitempty"`
 	Provenance         map[string]any   `json:"provenance"`
 	Access             *ScopedToken     `json:"access,omitempty"`
 	Specs              []ManifestSpec   `json:"specs"`
 	Epochs             []Epoch          `json:"epochs"`
+}
+
+type Workspace struct {
+	Mode       string                    `json:"mode"`
+	Source     string                    `json:"source,omitempty"`
+	BaseCommit string                    `json:"base_commit,omitempty"`
+	Extends    *WorkspaceArtifactBinding `json:"extends,omitempty"`
+}
+
+type WorkspaceArtifactBinding struct {
+	SpecPath      string `json:"spec_path,omitempty"`
+	SpecName      string `json:"spec_name,omitempty"`
+	ContentHash   string `json:"content_hash,omitempty"`
+	SessionID     string `json:"session_id,omitempty"`
+	WorkspacePath string `json:"workspace_path,omitempty"`
 }
 
 type ManifestSpec struct {
@@ -75,7 +91,6 @@ type SessionConfig struct {
 	MaxCostUSD      *float64       `json:"max_cost_usd,omitempty"`
 	AgentTimeoutSec int            `json:"agent_timeout_sec,omitempty"`
 	Thinking        string         `json:"thinking,omitempty"`
-	Workspace       string         `json:"workspace,omitempty"`
 	Extra           map[string]any `json:"-"`
 }
 
@@ -92,6 +107,7 @@ type InitialManifest struct {
 	SessionSpecPath *string
 	SpecName        string
 	Config          SessionConfig
+	Workspace       *Workspace
 	Provenance      map[string]any
 	Access          *ScopedToken
 	Specs           []InitialManifestSpec
@@ -153,6 +169,7 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		SessionSpecPath: input.SessionSpecPath,
 		SpecName:        input.SpecName,
 		Config:          input.Config,
+		Workspace:       input.Workspace,
 		Provenance:      input.Provenance,
 		Access:          input.Access,
 		Specs:           specs,
@@ -242,9 +259,6 @@ func (c SessionConfig) MarshalJSON() ([]byte, error) {
 	if c.Thinking != "" {
 		m["thinking"] = c.Thinking
 	}
-	if c.Workspace != "" {
-		m["workspace"] = c.Workspace
-	}
 	return json.Marshal(m)
 }
 
@@ -284,10 +298,7 @@ func (c *SessionConfig) UnmarshalJSON(data []byte) error {
 		}
 		delete(raw, "thinking")
 	}
-	if value, ok := raw["workspace"]; ok {
-		if err := json.Unmarshal(value, &c.Workspace); err != nil {
-			return fmt.Errorf("config.workspace: %w", err)
-		}
+	if _, ok := raw["workspace"]; ok {
 		delete(raw, "workspace")
 	}
 	for key, value := range raw {

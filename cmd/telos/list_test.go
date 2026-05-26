@@ -128,9 +128,9 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 
 func TestPrintLocalLaunchIncludesWorkspaceScopedCommands(t *testing.T) {
 	session := &cli.LocalSession{
-		SessionID: "local_123",
-		SpecName:  "blackbox",
-		Workspace: "/tmp/telos-blackbox",
+		SessionID:      "local_123",
+		SpecName:       "blackbox",
+		WorkspaceScope: "/tmp/telos-blackbox",
 	}
 
 	var out bytes.Buffer

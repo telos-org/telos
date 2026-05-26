@@ -145,11 +145,12 @@ func cmdLaunch(command, action string, args []string) {
 
 	if *jsonOut {
 		printJSON(map[string]interface{}{
-			"session_id":  session.SessionID,
-			"session_dir": session.SessionDir,
-			"workspace":   session.Workspace,
-			"spec_name":   session.SpecName,
-			"status":      "running",
+			"session_id":       session.SessionID,
+			"session_dir":      session.SessionDir,
+			"workspace":        session.WorkspaceScope,
+			"active_workspace": session.ActiveWorkspace,
+			"spec_name":        session.SpecName,
+			"status":           "running",
 		})
 	} else {
 		printLocalLaunch(os.Stdout, action, session)
@@ -157,9 +158,9 @@ func cmdLaunch(command, action string, args []string) {
 }
 
 func printLocalLaunch(out io.Writer, action string, session *cli.LocalSession) {
-	workspace := shellQuote(session.Workspace)
+	workspace := shellQuote(session.WorkspaceScope)
 	fmt.Fprintf(out, "%s %s (%s)\n", action, session.SessionID, session.SpecName)
-	fmt.Fprintf(out, "workspace %s\n", session.Workspace)
+	fmt.Fprintf(out, "workspace %s\n", session.WorkspaceScope)
 	fmt.Fprintf(out, "describe  cd %s && telos describe %s\n", workspace, session.SessionID)
 	fmt.Fprintf(out, "logs      cd %s && telos logs %s\n", workspace, session.SessionID)
 }
