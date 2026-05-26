@@ -104,9 +104,10 @@ Local and cloud differ by adapters:
 Local
   transport: Unix socket or loopback HTTP
   auth: local trust
-  root: .telos
+  root: $TELOS_OUTPUT_ROOT/execroot/<workspace-id>
+  marker: source-workspace/.telos symlink to that execroot
   launcher: local process
-  workspace: local directory
+  workspace: session-owned clone/snapshot
 
 Cloud environment
   transport: HTTPS
@@ -148,11 +149,16 @@ platform
 interval
 skills
 tags
-extends        legacy/runtime composition only; do not grow it as a product API
+extends        runtime composition: cloud namespace lineage, local artifact seed
 ```
 
 Public specs do not declare `capabilities`. Authority comes from session kind,
 caller role, and internal runtime policy.
+
+For local sessions, `extends` resolves the parent spec's content hash to a
+completed local workspace artifact and records the exact session/archive in
+`session.json.workspace.extends`. For cloud sessions, `extends` targets the
+same namespace lineage/runtime surface.
 
 `skills` are operating and verification guidance. A skill suffixed with `*`
 means the evaluator must grade against it as a required rubric.
@@ -247,13 +253,14 @@ Create accepts raw markdown:
   "thinking": "medium",
   "until": 5,
   "max_cost_usd": 25.0,
-  "agent_timeout_sec": 0,
-  "workspace": "optional local workspace path"
+  "agent_timeout_sec": 0
 }
 ```
 
 Product catalogue lookup, local file reading, and UI spec selection happen
 before this request. The Sessions API receives the exact spec text to run.
+Local workspace selection is a launcher concern; it is recorded in
+`session.json.workspace`, not accepted as a Sessions API config field.
 
 `session_kind` is explicit for new callers: `controller` for persistent desired
 state and `task` for bounded work. If omitted, the server may apply

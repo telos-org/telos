@@ -48,9 +48,11 @@ Keycloak content goes through `keycloak-admin`, SQL through
 `database-sql`, runtime shape through deployment skills, and
 dashboard work through `build-dashboard`.
 
-Legacy `extends:` still exists in the compiler while old fixtures are
-being retired. Do not introduce new product dependencies on it.
-Prefer one source-of-truth spec plus skills.
+`extends:` is runtime composition, not product hierarchy. In cloud it
+targets the same namespace/runtime surface. In local runs it seeds the
+child workspace from the parent spec's resolved workspace artifact. Use it
+only when the task intentionally builds on a concrete runtime/artifact
+lineage; otherwise prefer one source-of-truth spec plus skills.
 
 ## Authority
 
@@ -164,12 +166,11 @@ image cache and namespace lineage. Observe completion through
 `frontier.py --parent $TELOS_SESSION_ID` and the task's session
 directory; don't block on a foreground run.
 
-A move continuing a previous workspace uses:
-
-```bash
-telos run generated/20260420-rotate-telos-api/spec.md \
-  --from-workspace /path/to/workspace.tar.gz
-```
+The child gets an isolated workspace. Its live workspace may disappear
+after checkpointing; the durable handoff is the child session directory:
+`session.json` for metadata, transcript/evidence for reasoning and tool
+history, and `workspace.tar.gz` for the final filesystem result. Do not
+assume the controller's checkout changed because a child task completed.
 
 Outside the cluster, `telos run` remains the operator entrypoint for
 launching controller sessions. The same verb means "controller" externally

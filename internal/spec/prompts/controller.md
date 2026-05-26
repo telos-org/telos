@@ -50,6 +50,12 @@ Inside a controller pod, `telos run` reads `TELOS_API_TOKEN` and
 `TELOS_SESSION_ID`, posts the spec to the local cluster API, and parents the
 task to this controller session.
 
+`telos run` gives the child task its own isolated workspace. Treat the
+child session as the handoff object: its `session.json` records workspace
+metadata, its transcript/evidence explain what happened, and its
+`workspace.tar.gz` is the durable filesystem result. Do not expect the
+controller's current checkout to be mutated by the child task.
+
 Do **not** reach for `kubectl apply / patch / delete / edit / scale /
 replace / rollout` yourself. If you find yourself about to type one,
 stop: that's the shape of a task session. Write the task spec, commit it
@@ -74,6 +80,9 @@ the namespace and runtime context of the component it operates on. A task
 without `extends:` lands in `ns-<task-name>` -
 where it cannot mutate the canonical namespace and ends up provisioning
 a parallel copy of the system instead of fixing the existing one.
+For local runs, `extends:` also seeds the task workspace from the parent
+spec's resolved workspace artifact and records the exact parent session in
+the child manifest.
 
 For in-place fixes, `extends:` the controller spec. Your primary spec path is
 provided in the `## Session` block above as `Primary spec`. Copy it verbatim
