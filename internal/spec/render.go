@@ -68,7 +68,9 @@ func renderVerifierPreamble(options PromptOptions) string {
 		return strings.Join([]string{
 			"You are the evaluator for a Telos review-cycle run.",
 			"",
-			"The implementation agent improves the delivered artifact across a runtime-controlled number of review cycles. Your job is to provide clear evaluation gradient for the next implementation turn. The runtime owns termination; do not decide whether the run should stop.",
+			"The implementation agent will receive a runtime-controlled number of review cycles. Do not emit status tags. The runtime controls when this run ends; you make an evaluation decision, not a termination decision.",
+			"",
+			"Your job is to judge whether another implementation turn would make the delivered artifact more correct, clear, reliable, or maintainable. Provide implementation pressure only when it is grounded in the live artifact. If the artifact already satisfies the contract, say that no implementation change is recommended and that the next turn should preserve the current shape.",
 			"",
 			"Judge the live artifact against the spec, named standards, and applicable skills. Use concrete evidence from source, tree state, generated artifacts, and runtime behavior when it matters. Preserve nuance for the summary, and keep the review table small enough to be useful.",
 		}, "\n")
@@ -125,7 +127,8 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 			"### Operating Posture",
 			"- continue from the append-only transcript, workspace, and live environment",
 			"- if unresolved evaluator findings exist, address them before broadening the work",
-			"- otherwise advance the delivered system toward the contract",
+			"- if the evaluator says no implementation change is recommended, preserve the current shape and revalidate tests, tree state, and named invariants only",
+			"- otherwise make the smallest change that improves the delivered system against the contract",
 			"- preserve valid existing work and live state unless the spec explicitly allows replacement",
 			"",
 		)
@@ -134,7 +137,7 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 			"### Review Focus",
 			"- evaluate the delivered artifact against the spec and applicable quality bars",
 			"- inspect source, tree state, generated artifacts, and runtime behavior as needed",
-			"- produce a compact score table plus a handoff summary for the next implementation turn",
+			"- produce a compact score table plus a summary of grounded fixes, or why no implementation change is recommended",
 			"- do not invent new requirements",
 			"",
 		)
@@ -342,12 +345,14 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 			"## Output",
 			"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
 			"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
-			"- Write concise Markdown focused on evidence, score changes, and the next useful implementation pressure",
+			"- Write concise Markdown focused on evidence, score changes, and whether another implementation turn is useful",
 			"- Emit exactly one <review>...</review> block and one <summary>...</summary> block",
 			"- The <review> block must be CSV with header exactly `criteria,score`",
 			"- Use score format `x.y/10` for every score",
 			"- Emit the full current rubric every review turn, not a delta",
 			"- Keep the rubric to roughly 5-10 criteria drawn from the spec, emphasized skills, and discovered non-functional risks",
+			"- In <summary>, distinguish grounded fixes from speculative residual uncertainty",
+			"- If no implementation change is recommended, say that plainly; the next turn will preserve the current shape and revalidate tests, tree state, and named invariants",
 			"- Put nuance and handoff guidance in <summary>, not extra CSV columns",
 			"- Do not emit <status> tags",
 		}, "\n")

@@ -414,9 +414,23 @@ func TestRenderVerifierTaskReviewModeUsesReviewContract(t *testing.T) {
 		"<summary>",
 		"criteria,score",
 		"Review cycles requested: `2`",
+		"evaluation decision, not a termination decision",
+		"no implementation change is recommended",
+		"preserve the current shape",
+		"revalidate tests, tree state, and named invariants",
+		"distinguish grounded fixes from speculative residual uncertainty",
 	} {
 		if !strings.Contains(task, want) {
 			t.Fatalf("review-mode prompt missing %q:\n%s", want, task)
+		}
+	}
+	for _, unwanted := range []string{
+		"clear evaluation gradient",
+		"next useful implementation pressure",
+		"handoff summary for the next implementation turn",
+	} {
+		if strings.Contains(task, unwanted) {
+			t.Fatalf("review-mode prompt should not contain stale pressure wording %q:\n%s", unwanted, task)
 		}
 	}
 	if strings.Contains(task, "CONCEDE") || strings.Contains(task, "CONTINUE") {
