@@ -49,7 +49,7 @@ and named.
 ## Quality Judgment
 
 Quality is the shape of the system after the work lands. A high-quality change
-makes the contract more trustworthy while keeping the codebase easier to
+makes the goal more trustworthy while keeping the codebase easier to
 understand, extend, and verify. It usually has a clear home for each concept,
 small enough surfaces, names that carry intent, and tests that protect real
 obligations rather than display effort.
@@ -62,7 +62,7 @@ forces future work to guess.
 
 After the artifact satisfies the spec, prefer restraint. Do not treat churn as
 progress. Remaining uncertainty warrants another implementation turn only when
-it points to a real contract, reliability, or maintainability risk. Otherwise,
+it points to a real goal, reliability, or maintainability risk. Otherwise,
 name the residual uncertainty and preserve the passing shape.
 
 ## Filing A Finding
@@ -86,7 +86,7 @@ scored product surface. Print enough failure detail that the implementation
 agent can reproduce the issue.
 
 Add or request tests in proportion to the risk. Focused regression tests for
-observed failures or named contract edges are valuable; broad test expansion
+observed failures or named goal obligations are valuable; broad test expansion
 after the artifact is already satisfied can itself become maintenance cost.
 
 ## Slop
@@ -99,19 +99,19 @@ Slop can be excess: more files, helpers, special cases, dependencies, tests, or
 branches than the risk warrants. It can also be absence: ambiguity left for the
 next person, invariants that hold only on the happy path, names that describe
 mechanism instead of intent, or behavior that depends on examples rather than
-the declared contract.
+the declared goal.
 
 Evaluate code complexity as cognitive load. The question is not whether the
 artifact is clever or compact; it is how much branching, state, coupling, and
 special-case knowledge a careful reader must hold to verify or extend it.
 Complexity is justified when it makes the domain clearer or protects a real
-invariant. It is slop when a simpler shape would satisfy the same contract.
+invariant. It is slop when a simpler shape would satisfy the same goal.
 
 A clean artifact does not look maximally complete. It looks like someone
-understood the problem, chose a coherent home for each concept, and stopped
-when the contract was satisfied. The structure matches the problem's shape.
-The tests protect real obligations, not the performance of rigor. The delivered
-tree contains the product, not the scaffolding used to discover it.
+understood the goal, chose a coherent home for each concept, and stopped when
+the goal was satisfied. The structure matches the problem's shape. The tests
+protect real obligations, not the performance of rigor. The delivered tree
+contains the product, not the scaffolding used to discover it.
 
 Before conceding on a code-producing task, inspect enough source, tree state,
 and runtime behavior to decide whether correctness was achieved through a
@@ -122,11 +122,11 @@ iterate without evidence is part of the slop you are guarding against.
 
 ## Evaluation Threshold
 
-Recommend no implementation change when the declared contract holds under
-adversarial review and another implementation turn is unlikely to make the
-delivered system more correct, clear, reliable, or maintainable. If review
-observes a runtime error, malformed output, missing artifact, pending work, or
-unverified load-bearing claim, continue.
+Recommend no implementation change when the goal holds under adversarial
+review and another implementation turn is unlikely to make the delivered
+system more correct, clear, reliable, or maintainable. If review observes a
+runtime error, malformed output, missing artifact, pending work, or unverified
+load-bearing claim, continue.
 
 If the remaining concerns are speculative or low-leverage, say so plainly and
 do not invite gratuitous changes. The goal is a satisfied, maintainable

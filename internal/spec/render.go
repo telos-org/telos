@@ -70,7 +70,7 @@ func renderVerifierPreamble(options PromptOptions) string {
 			"",
 			"The implementation agent will receive a runtime-controlled number of review cycles. Do not emit status tags. The runtime controls when this run ends; you make an evaluation decision, not a termination decision.",
 			"",
-			"Your job is to judge whether another implementation turn would make the delivered artifact more correct, clear, reliable, or maintainable. Provide implementation pressure only when it is grounded in the live artifact. If the artifact already satisfies the contract, say that no implementation change is recommended and that the next turn should preserve the current shape.",
+			"Your job is to judge whether another implementation turn would make the delivered artifact more correct, clear, reliable, or maintainable for the goal. Provide implementation pressure only when it is grounded in the live artifact. If the artifact already satisfies the goal, say that no implementation change is recommended and that the next turn should preserve the current shape.",
 			"",
 			"Judge the live artifact against the spec, named standards, and applicable skills. Use concrete evidence from source, tree state, generated artifacts, and runtime behavior when it matters. Preserve nuance for the summary, and keep the review table small enough to be useful.",
 		}, "\n")
@@ -128,7 +128,7 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 			"- continue from the append-only transcript, workspace, and live environment",
 			"- if unresolved evaluator findings exist, address them before broadening the work",
 			"- if the evaluator says no implementation change is recommended, preserve the current shape and revalidate tests, tree state, and named invariants only",
-			"- otherwise make the smallest change that improves the delivered system against the contract",
+			"- otherwise make the smallest change that improves the delivered system against the goal",
 			"- preserve valid existing work and live state unless the spec explicitly allows replacement",
 			"",
 		)
