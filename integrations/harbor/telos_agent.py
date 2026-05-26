@@ -221,7 +221,10 @@ if command -v telos >/dev/null 2>&1 && command -v telosd >/dev/null 2>&1; then
   exit 0
 fi
 mkdir -p "$HOME/.local/bin"
-TELOS_INSTALL_DIR="$HOME/.local/bin" curl -fsSL {shlex.quote(self.telos_install_url)} | sh
+install_script="$(mktemp)"
+retry 5 curl -fsSL {shlex.quote(self.telos_install_url)} -o "$install_script"
+TELOS_INSTALL_DIR="$HOME/.local/bin" sh "$install_script"
+rm -f "$install_script"
 telos --version
 telosd --version
 """
@@ -240,12 +243,15 @@ if command -v pi >/dev/null 2>&1; then
   exit 0
 fi
 if ! command -v npm >/dev/null 2>&1; then
-  curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh | bash
+  nvm_install_script="$(mktemp)"
+  retry 5 curl -fsSL https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.2/install.sh -o "$nvm_install_script"
+  bash "$nvm_install_script"
+  rm -f "$nvm_install_script"
   export NVM_DIR="${{NVM_DIR:-$HOME/.nvm}}"
   . "$NVM_DIR/nvm.sh"
-  nvm install 22
+  retry 3 nvm install 22
 fi
-npm install -g @mariozechner/pi-coding-agent
+retry 5 npm install -g @mariozechner/pi-coding-agent
 pi --version
 """
         await self.exec_as_agent(
@@ -393,6 +399,25 @@ done
         return """
 set -euo pipefail
 export PATH="$HOME/.local/bin:/usr/local/bin:$PATH"
+retry() {
+  attempts="$1"
+  shift
+  delay=2
+  i=1
+  while :; do
+    "$@" && return 0
+    status="$?"
+    if [ "$i" -ge "$attempts" ]; then
+      return "$status"
+    fi
+    sleep "$delay"
+    i="$((i + 1))"
+    delay="$((delay * 2))"
+    if [ "$delay" -gt 30 ]; then
+      delay=30
+    fi
+  done
+}
 if [ -z "${NVM_DIR:-}" ]; then
   if [ -d "$HOME/.nvm" ]; then
     export NVM_DIR="$HOME/.nvm"

@@ -1,3 +1,4 @@
+import inspect
 import unittest
 
 from integrations.harbor.telos_agent import (
@@ -72,11 +73,20 @@ class TelosHarborAgentTest(unittest.TestCase):
         script = agent._run_script("---\nversion: v0\nname: task\n---\nBody", "/app")
 
         self.assertIn('telos logs "$session_id" --raw', script)
+        self.assertIn("retry() {", script)
         self.assertIn("json_field /tmp/telos-harbor/run.json session_id", script)
         self.assertIn("json_field /tmp/telos-harbor/describe.json status", script)
         self.assertNotIn("awk -F", script)
         self.assertIn("TELOS_HARBOR_TRANSCRIPT_BEGIN", script)
         self.assertIn('if [ "$status" != completed ]; then', script)
+
+    def test_install_scripts_retry_network_fetches(self):
+        telos_source = inspect.getsource(TelosExecutableAgent._install_telos)
+        pi_source = inspect.getsource(TelosExecutableAgent._install_pi)
+
+        self.assertIn("retry 5 curl -fsSL", telos_source)
+        self.assertIn("retry 5 curl -fsSL", pi_source)
+        self.assertIn("retry 5 npm install", pi_source)
 
 
 if __name__ == "__main__":
