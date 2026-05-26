@@ -19,6 +19,8 @@ func TestVisibleListSessionsHidesChildSessionsByDefault(t *testing.T) {
 		{SessionID: "sess_controller", Status: sessionapi.StatusRunning},
 		{SessionID: "sess_task", ParentSessionID: &parent, Status: sessionapi.StatusCompleted},
 		{SessionID: "sess_controller_2", Status: sessionapi.StatusScheduled},
+		{SessionID: "sess_old", Status: sessionapi.StatusStopped},
+		{SessionID: "sess_failed", Status: sessionapi.StatusFailed},
 	}
 
 	visible := visibleListSessions(sessions, false)

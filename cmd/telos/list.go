@@ -60,7 +60,11 @@ func cmdList(args []string) {
 	}
 
 	if len(visible) == 0 {
-		fmt.Println("no sessions")
+		if !effectiveWide && len(sessions) > 0 {
+			fmt.Println("no active sessions (use --wide for history)")
+		} else {
+			fmt.Println("no sessions")
+		}
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
@@ -175,11 +179,21 @@ func visibleListSessions(sessions []sessionapi.Session, wide bool) []sessionapi.
 	}
 	visible := make([]sessionapi.Session, 0, len(sessions))
 	for _, session := range sessions {
-		if session.ParentSessionID == nil || *session.ParentSessionID == "" {
+		if (session.ParentSessionID == nil || *session.ParentSessionID == "") &&
+			sessionVisibleByDefault(session) {
 			visible = append(visible, session)
 		}
 	}
 	return visible
+}
+
+func sessionVisibleByDefault(session sessionapi.Session) bool {
+	switch session.Status {
+	case sessionapi.StatusPending, sessionapi.StatusRunning, sessionapi.StatusScheduled:
+		return true
+	default:
+		return false
+	}
 }
 
 func listEnvironments(jsonOut bool) {
