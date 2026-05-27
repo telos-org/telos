@@ -316,6 +316,9 @@ func TestRenderWithSkillsRoster(t *testing.T) {
 	if !strings.Contains(task, "`my-skill`") {
 		t.Error("should contain skill name")
 	}
+	if !strings.Contains(task, "/opt/telos/private/skills/<name>/SKILL.md") {
+		t.Error("should explain cloud skill mount path")
+	}
 }
 
 func TestRenderWithRequiredEvaluationSkills(t *testing.T) {

@@ -220,7 +220,7 @@ func renderSkillsRoster(compiled *CompiledEnvironment, opts PromptOptions) strin
 	lines := []string{
 		"## Skills",
 		"",
-		"Use these skill names as routing hints. Pi can load mounted skill files by name; the prompt references names rather than inlining skill bodies. Skills marked `required evaluation rubric` are grading rubrics, not optional guidance.",
+		"Use these skill names as routing hints. Pi can load mounted skill files by name; the prompt references names rather than inlining skill bodies. If you need to inspect a skill directly in a cloud worker, read the first existing `SKILL.md` at `/opt/telos/private/skills/<name>/SKILL.md`, `/opt/telos/telos/skills/<name>/SKILL.md`, or `/tmp/telos-skills-*/<name>/SKILL.md`. Skills marked `required evaluation rubric` are grading rubrics, not optional guidance.",
 		"",
 	}
 	for _, s := range skills {
