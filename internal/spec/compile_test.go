@@ -1,6 +1,7 @@
 package spec
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -111,6 +112,36 @@ func TestCompileWithExtendsUsesParentNamespaceAndHash(t *testing.T) {
 	}
 	if changed.ContentHash == originalHash {
 		t.Fatal("child hash should change when extended parent changes")
+	}
+}
+
+func TestCompileWithAbsoluteExtendsPath(t *testing.T) {
+	dir := t.TempDir()
+	basePath := filepath.Join(dir, "base", "SPEC.md")
+	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(basePath, []byte("---\nversion: v0\nname: base-abs\nplatform: local\n---\nBase body"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	childPath := filepath.Join(dir, "child", "SPEC.md")
+	if err := os.MkdirAll(filepath.Dir(childPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	childSpec := fmt.Sprintf("---\nversion: v0\nname: child-abs\nplatform: local\nextends: %s\n---\nChild body", basePath)
+	if err := os.WriteFile(childPath, []byte(childSpec), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	child, err := CompileEnvironment(childPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment child: %v", err)
+	}
+	if child.ExtendsCompiled == nil {
+		t.Fatal("expected child to keep compiled parent")
+	}
+	if child.Environment.ExtendsPath != basePath {
+		t.Fatalf("extends path: got %q, want %q", child.Environment.ExtendsPath, basePath)
 	}
 }
 

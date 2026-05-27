@@ -191,7 +191,10 @@ func parseSkillRefs(baseDir string, v interface{}) (paths []string, required []s
 }
 
 func resolvePath(baseDir, raw string) (string, error) {
-	p := filepath.Join(baseDir, raw)
+	p := raw
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(baseDir, p)
+	}
 	abs, err := filepath.Abs(p)
 	if err != nil {
 		return "", err
@@ -209,7 +212,10 @@ func resolvePath(baseDir, raw string) (string, error) {
 }
 
 func resolveSkillPath(baseDir, raw string) (string, error) {
-	local := filepath.Join(baseDir, raw)
+	local := raw
+	if !filepath.IsAbs(local) {
+		local = filepath.Join(baseDir, local)
+	}
 	abs, err := filepath.Abs(local)
 	if err != nil {
 		return "", err
