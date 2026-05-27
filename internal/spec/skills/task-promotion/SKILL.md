@@ -20,11 +20,17 @@ freezing one strong task out of lived world state.
 ## First Principles
 
 - Promote only real solver difficulty, not bookkeeping noise or authority bugs.
+- Prefer scenarios discovered while evolving a live world over invented puzzle
+  state.
 - The task package is the source of truth. Do not rely on unstored cluster
   residue once a task is promoted.
 - The solver sees only `task/public/`.
 - `task/setup/`, `task/grader/`, and `task/solution/` are evaluator-owned.
 - Prefer one clean, replayable task over a large bundle of shallow artifacts.
+
+The promotion contract is the task package plus replay proof. Controller notes
+can explain how the task was discovered, but they are not part of the solver or
+grader contract.
 
 ## Package Layout
 
@@ -112,8 +118,30 @@ Rules:
 
 - use symptom language or change-request language only
 - include real service names, ports, endpoints, versions, and constraints
-- never reveal the internal root cause, file paths, or repair steps
+- never reveal the internal root cause, hidden object names, fault-only file
+  paths, offsets, checksums, repair tools, or repair steps
 - require `diagnosis.md` when the task is an incident or hard migration
+
+The public spec must read like a problem statement, not a walkthrough. It may
+say what is broken, what must remain true, and what counts as success. It must
+not tell the solver which hidden artifact to edit, which command to run, or
+which sequence of repairs will pass.
+
+### Public Spec Review
+
+Before promotion, review `task/public/spec.md` sentence by sentence. Each
+sentence should be one of:
+
+- `symptom`
+- `invariant`
+- `success_criterion`
+- `allowed_surface`
+- `walkthrough`
+
+The task is not promotable if any sentence is `walkthrough`. Rewrite until the
+public spec describes the goal, symptoms, invariants, and allowed inspection
+surface without teaching the repair. Summarize the review in
+`controller/extraction.md`.
 
 4. Capture the healthy baseline into `task/setup/namespaces/`.
 
@@ -152,7 +180,8 @@ Rules:
 
 7. Write `task/grader/tests/`.
 
-The grader must check behavior, not implementation details.
+The grader must check behavior and forensic integrity, not merely final
+postconditions.
 
 Requirements:
 
@@ -162,6 +191,63 @@ Requirements:
 - no access to hidden package files from the solver side
 - behavior-level assertions for the symptoms or migration goals described in
   `public/spec.md`
+- at least one forensic check for every public success criterion
+- a shortcut red-team review that rejects graders passable by cheap state
+  reset, reseed, redeploy, or response spoofing
+
+### Forensic Grader Contract
+
+For every bullet in `public/spec.md` success criteria, write down:
+
+- the visible postcondition
+- the forensic evidence proving the postcondition was reached through a valid
+  recovery/evolution path
+- the shortcut the check is meant to block
+
+Examples by class:
+
+- PostgreSQL recovery: history files, timeline continuity, WAL/archive
+  continuity, LSN monotonicity, schema identity, row provenance, replication
+  slot/subscription state, replay equivalence before/after recovery. A grader
+  must reject `pg_resetwal`, table reseed, destructive reinit, or fake row
+  inflation when the task requires preserving history.
+- Data migration: source-to-target identity mapping, checksums by stable key,
+  schema invariants, old/new dual-read equivalence, rollback evidence. Reject
+  bulk reseed that loses lineage.
+- Distributed logs/queues: committed offset monotonicity, leader epoch/log
+  continuity, replay equivalence, duplicate/phantom ack checks, consumer group
+  state transitions. Reject truncation or state rewrites that only satisfy the
+  last read.
+- Security posture: negative probes, audit trail, effective permissions, token
+  revocation evidence, and absence of public bypass. Reject cosmetic config
+  changes that leave an alternate path open.
+- Performance/cost: query logs, workload replay, resource counters, latency
+  distributions, and correctness under the same workload. Reject cached or
+  hard-coded benchmark responses.
+
+The grader may inspect hidden evaluator-owned state and cluster internals. The
+solver may not. Use that asymmetry to make shortcuts fail.
+
+### Shortcut Red-Team Review
+
+Before promotion, run a fresh LLM review against:
+
+- `task/public/spec.md`
+- the proposed grader behavior or test source
+- a short hidden note naming the intended skill family
+
+Ask it to propose the cheapest solve that could pass without using the
+intended skill. If the proposed shortcut would pass, reject the grader and
+regenerate it with an additional forensic check.
+
+Summarize this in `controller/extraction.md` with:
+
+- proposed shortcut
+- would it pass?
+- added or changed forensic check
+- final decision
+
+A task is not promotable while the cheapest shortcut still passes.
 
 8. Write `task/solution/solve.sh`.
 
@@ -183,6 +269,7 @@ Replay procedure:
 6. Verify the broken or pre-change state with grader tests
 7. Run `task/solution/solve.sh`
 8. Re-run grader tests and require full pass
+9. Run the shortcut red-team review and require pass
 
 If the package depends on unstored live state, it is not ready.
 
@@ -336,7 +423,10 @@ When a candidate passes, write:
 - `controller/extraction.md` summarizing:
   - source sessions and checkpoints
   - weakness family
+  - public spec review
   - replay proof
+  - forensic grader contract
+  - shortcut red-team outcome
   - black-box evaluation outcome
   - why this task is worth keeping
 
