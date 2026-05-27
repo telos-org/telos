@@ -608,13 +608,14 @@ func workerClusterRole(namespace string) *rbacv1.ClusterRole {
 				Resources: []string{
 					"namespaces", "pods",
 					"services", "configmaps", "secrets", "events", "endpoints",
-					"persistentvolumeclaims",
+					"persistentvolumeclaims", "replicationcontrollers",
 				},
 				Verbs: workerVerbs(),
 			},
 			{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"create", "get"}},
 			{APIGroups: []string{""}, Resources: []string{"nodes", "pods/log", "persistentvolumes", "serviceaccounts"}, Verbs: readVerbs()},
 			{APIGroups: []string{"apps"}, Resources: []string{"deployments", "replicasets", "statefulsets", "daemonsets"}, Verbs: workerVerbs()},
+			{APIGroups: []string{"autoscaling"}, Resources: []string{"horizontalpodautoscalers"}, Verbs: readVerbs()},
 			{APIGroups: []string{"batch"}, Resources: []string{"jobs", "cronjobs"}, Verbs: workerVerbs()},
 			{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies", "ingresses"}, Verbs: workerVerbs()},
 			{
