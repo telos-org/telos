@@ -368,7 +368,11 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		"- <status>CONTINUE</status> if you found a concrete goal violation",
 	}
 	if opts.Controller {
-		lines = append(lines, "- <status>CONTINUE</status> if any required task is pending, running, stopped, failed, or not reflected in live resources")
+		lines = append(lines,
+			"- For controller cycles, a pending or running child task is valid waiting work when the controller observed it first, launched no competing work, and did not claim final goal satisfaction",
+			"- <status>CONCEDE</status> for that cycle if the correct next controller action is simply to wait for the child task",
+			"- <status>CONTINUE</status> if a child is stopped, failed, terminal but uninspected, missing expected artifacts, or if the controller treats a launched/running task as final goal satisfaction",
+		)
 	}
 	lines = append(lines,
 		`- Include an "Artifact Hygiene" section for code-producing tasks: tree shape inspected, notable debt, and whether it blocks concession`,

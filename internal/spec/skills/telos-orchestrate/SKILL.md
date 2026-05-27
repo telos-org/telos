@@ -161,6 +161,11 @@ runtime with an isolated workspace and the right lineage. Observe completion
 through `telos describe <session-id>`, `telos list`, and the task's session
 directory.
 
+If a previously launched child task is pending or running, waiting is the
+controller move. Report the child session id and status, then end the cycle
+without launching more work or broadening probes. Do not convert an active
+child into a new plan just to show progress.
+
 The child gets an isolated workspace. Its live workspace may disappear after
 checkpointing; the durable handoff is the child session directory:
 `session.json` for metadata, transcript/evidence for reasoning and tool

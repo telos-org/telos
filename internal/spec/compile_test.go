@@ -484,8 +484,14 @@ func TestRenderVerifierTaskGatesControllerOnlyTaskState(t *testing.T) {
 	}
 
 	controllerTask := RenderVerifierTask(compiled, "", "/tmp/transcript.md", PromptOptions{Controller: true})
-	if !strings.Contains(controllerTask, "if any required task is pending") {
+	if !strings.Contains(controllerTask, "pending or running child task is valid waiting work") {
 		t.Fatalf("controller verifier should include controller task-state rule:\n%s", controllerTask)
+	}
+	if !strings.Contains(controllerTask, "CONCEDE</status> for that cycle if the correct next controller action is simply to wait") {
+		t.Fatalf("controller verifier should allow clean wait cycles:\n%s", controllerTask)
+	}
+	if !strings.Contains(controllerTask, "CONTINUE</status> if a child is stopped, failed, terminal but uninspected") {
+		t.Fatalf("controller verifier should still block bad child state:\n%s", controllerTask)
 	}
 }
 

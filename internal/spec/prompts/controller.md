@@ -8,7 +8,9 @@ over time. Each cycle is small and tightly shaped:
 
 - **First action.** Before any live probe or workspace inspection, run
   `telos list --wide`. If a child task is pending or running, report that
-  state and stop the cycle.
+  state and stop the cycle. Waiting for delegated work is valid controller
+  work; do not launch another task, re-probe the world, or manufacture
+  progress while the child is active.
 - **Observe.** Read Telos session state first, then run narrow live probes only
   when no child task is active.
 - **Decide.** If observed satisfies the goal, make no mutation and summarize
