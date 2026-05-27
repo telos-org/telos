@@ -197,6 +197,8 @@ Requirements:
 - behavior-level assertions for the symptoms or migration goals described in
   `public/spec.md`
 - at least one forensic check for every public success criterion
+- forensic anchors that are not writable by the solver-controlled repair
+  surface
 - a shortcut red-team review that rejects graders passable by cheap state
   reset, reseed, redeploy, or response spoofing
 
@@ -208,6 +210,16 @@ For every bullet in `public/spec.md` success criteria, write down:
 - the forensic evidence proving the postcondition was reached through a valid
   recovery/evolution path
 - the shortcut the check is meant to block
+
+Do not make mutable in-world state the sole authority for forensic truth. A
+ConfigMap, Secret, table, or file inside a namespace/database the solver can
+patch is useful as a scenario marker, but it is not an authoritative baseline.
+If the grader needs expected hashes, UIDs, counts, offsets, timestamps, or
+other anchors, keep them in evaluator-owned grader code/data, an evaluator
+namespace/secret the solver cannot mutate, or deterministic constants derived
+from setup. Then explicitly verify that the solver-controlled world still
+matches those anchors. If a public spec requires a deliverable such as
+`diagnosis.md`, the grader must check that deliverable too.
 
 Examples by class:
 
