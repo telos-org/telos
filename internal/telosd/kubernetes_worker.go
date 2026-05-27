@@ -270,21 +270,23 @@ func (s kubernetesSubstrate) workerPodTemplate(
 		},
 		{Name: "telos-runtime", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{
-			Name: "pi-agent-config",
+			Name: "pi-agent-config-source",
 			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
 				SecretName:  piConfigSecretName,
 				Optional:    boolPtr(true),
-				DefaultMode: int32Ptr(0o600),
+				DefaultMode: int32Ptr(0o440),
 			}},
 		},
+		{Name: "pi-agent-config-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 	}
 	mounts := []corev1.VolumeMount{
 		{Name: "telos-state", MountPath: s.stateMountRoot},
 		{Name: "telos-state", MountPath: s.stateHostRoot},
 		{Name: "telos-runtime", MountPath: s.runtimeMountPath},
-		{Name: "pi-agent-config", MountPath: "/home/agent/.pi/agent", ReadOnly: true},
+		{Name: "pi-agent-config-home", MountPath: "/home/agent/.pi/agent"},
 	}
 	podSpec := corev1.PodSpec{
+		SecurityContext:               agentPodSecurityContext(),
 		ServiceAccountName:            "agent",
 		TerminationGracePeriodSeconds: int64Ptr(30),
 		InitContainers: []corev1.Container{{
@@ -293,7 +295,11 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			ImagePullPolicy: pullPolicy(s.agentImage),
 			SecurityContext: agentContainerSecurityContext(),
 			Command:         []string{"bash", "-lc", s.runtimeInstallScript()},
-			VolumeMounts:    []corev1.VolumeMount{{Name: "telos-runtime", MountPath: s.runtimeMountPath}},
+			VolumeMounts: []corev1.VolumeMount{
+				{Name: "telos-runtime", MountPath: s.runtimeMountPath},
+				{Name: "pi-agent-config-source", MountPath: "/telos-pi-agent-config", ReadOnly: true},
+				{Name: "pi-agent-config-home", MountPath: "/home/agent/.pi/agent"},
+			},
 		}},
 		Containers: []corev1.Container{{
 			Name:            "worker",
@@ -368,6 +374,12 @@ func agentContainerSecurityContext() *corev1.SecurityContext {
 		RunAsUser:                int64Ptr(1000),
 		RunAsGroup:               int64Ptr(1000),
 		AllowPrivilegeEscalation: boolPtr(false),
+	}
+}
+
+func agentPodSecurityContext() *corev1.PodSecurityContext {
+	return &corev1.PodSecurityContext{
+		FSGroup: int64Ptr(1000),
 	}
 }
 
@@ -771,6 +783,14 @@ download_verified "telos-$os-$arch" "$tmp_dir/telos"
 download_verified "telosd-$os-$arch" "$tmp_dir/telosd"
 install -m 0755 "$tmp_dir/telos" %s
 install -m 0755 "$tmp_dir/telosd" %s
+
+mkdir -p /home/agent/.pi/agent
+for source in /telos-pi-agent-config/*; do
+  [ -e "$source" ] || continue
+  cp -L "$source" /home/agent/.pi/agent/
+done
+chmod 0600 /home/agent/.pi/agent/* 2>/dev/null || true
+
 %s --version
 %s --version
 `, s.runtimeBaseURL, s.runtimeVersion, s.runtimeMountPath, s.runtimeTelosPath, s.runtimeTelosdPath, s.runtimeTelosPath, s.runtimeTelosdPath)

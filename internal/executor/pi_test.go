@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/platform"
 )
 
 func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
@@ -77,6 +78,34 @@ func TestBuildPiArgvUsesSessionFileWithoutTaskFile(t *testing.T) {
 	}
 	if argv[7] != "/tmp/pi-session.jsonl" {
 		t.Errorf("session file arg: got %q", argv[7])
+	}
+}
+
+func TestExecuteTurnIncludesStderrOnPiFailure(t *testing.T) {
+	workspace := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	piPath := filepath.Join(bin, "pi")
+	script := "#!/bin/sh\necho \"EROFS: read-only file system\" >&2\nexit 1\n"
+	if err := os.WriteFile(piPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	p := platform.NewLocalPlatform(workspace)
+	p.Env = map[string]string{"HOME": home}
+	exec := NewPiExecutor(p, "test-model", "high", 0)
+
+	result := exec.ExecuteTurn("do it", "prover", nil)
+
+	if result.Error == "" || !strings.Contains(result.Error, "pi_failed:1") {
+		t.Fatalf("error: got %q", result.Error)
+	}
+	if !strings.Contains(result.Logs, "[stderr]") ||
+		!strings.Contains(result.Logs, "EROFS: read-only file system") {
+		t.Fatalf("logs should include stderr, got %q", result.Logs)
 	}
 }
 

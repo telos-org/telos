@@ -269,7 +269,19 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	if len(template.Spec.InitContainers) != 1 {
 		t.Fatalf("init containers: got %d", len(template.Spec.InitContainers))
 	}
+	if template.Spec.SecurityContext == nil ||
+		template.Spec.SecurityContext.FSGroup == nil ||
+		*template.Spec.SecurityContext.FSGroup != 1000 {
+		t.Fatalf("pod security context: got %+v", template.Spec.SecurityContext)
+	}
 	assertAgentSecurityContext(t, template.Spec.InitContainers[0].SecurityContext)
+	initContainer := template.Spec.InitContainers[0]
+	if !hasReadonlyVolumeMount(initContainer.VolumeMounts, "pi-agent-config-source", "/telos-pi-agent-config") {
+		t.Fatalf("init container missing Pi config seed mount: %+v", initContainer.VolumeMounts)
+	}
+	if !hasWritableVolumeMount(initContainer.VolumeMounts, "pi-agent-config-home", "/home/agent/.pi/agent") {
+		t.Fatalf("init container missing writable Pi config mount: %+v", initContainer.VolumeMounts)
+	}
 	container := template.Spec.Containers[0]
 	assertAgentSecurityContext(t, container.SecurityContext)
 	if len(container.EnvFrom) != 1 ||
@@ -285,14 +297,23 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	if container.Command[2] != "/telos-state/sessions/"+sessionID {
 		t.Fatalf("session dir: got %+v", container.Command)
 	}
-	if !hasVolumeMount(container.VolumeMounts, "pi-agent-config", "/home/agent/.pi/agent") {
+	if !hasWritableVolumeMount(container.VolumeMounts, "pi-agent-config-home", "/home/agent/.pi/agent") {
 		t.Fatalf("worker missing Pi config mount: %+v", container.VolumeMounts)
 	}
 }
 
-func hasVolumeMount(mounts []corev1.VolumeMount, name string, path string) bool {
+func hasReadonlyVolumeMount(mounts []corev1.VolumeMount, name string, path string) bool {
 	for _, mount := range mounts {
 		if mount.Name == name && mount.MountPath == path && mount.ReadOnly {
+			return true
+		}
+	}
+	return false
+}
+
+func hasWritableVolumeMount(mounts []corev1.VolumeMount, name string, path string) bool {
+	for _, mount := range mounts {
+		if mount.Name == name && mount.MountPath == path && !mount.ReadOnly {
 			return true
 		}
 	}

@@ -88,6 +88,9 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	stderrTrimmed := strings.TrimSpace(result.Stderr)
 	if result.ReturnCode != 0 {
 		reason := orDefault(agentError, fmt.Sprintf("pi_failed:%d", result.ReturnCode))
+		if agentError == "" && stderrTrimmed != "" {
+			reason = fmt.Sprintf("%s\n[stderr]\n%s", reason, stderrTrimmed)
+		}
 		return game.TurnResult{
 			Role:        role,
 			Status:      game.StatusContinue,
