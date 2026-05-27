@@ -201,6 +201,12 @@ Requirements:
   surface
 - a shortcut red-team review that rejects graders passable by cheap state
   reset, reseed, redeploy, or response spoofing
+- shortcut checks that are specific and non-redundant. If the public spec bans
+  pod recreation, table reseed, namespace rebuild, route spoofing, or similar
+  shortcuts, the grader must check evidence that distinguishes that shortcut
+  from the intended repair. Do not count a generic row-count, readiness, or
+  existence check as an anti-shortcut check unless it would actually fail for
+  the named shortcut.
 
 ### Forensic Grader Contract
 
@@ -210,6 +216,7 @@ For every bullet in `public/spec.md` success criteria, write down:
 - the forensic evidence proving the postcondition was reached through a valid
   recovery/evolution path
 - the shortcut the check is meant to block
+- why the shortcut check is not merely a duplicate of another postcondition
 
 Do not make mutable in-world state the sole authority for forensic truth. A
 ConfigMap, Secret, table, or file inside a namespace/database the solver can
