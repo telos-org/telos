@@ -8,9 +8,9 @@ over time. Each cycle is small and tightly shaped:
 
 - **First action.** Before any live probe or workspace inspection, run
   `telos list --wide`. If a child task is pending or running, report that
-  state and stop the cycle. Waiting for delegated work is valid controller
-  work; do not launch another task, re-probe the world, or manufacture
-  progress while the child is active.
+  state, sleep for a bounded interval, then re-check the child. Waiting for
+  delegated work is valid controller work; do not launch another task,
+  re-probe the world, or manufacture progress while the child is active.
 - **Observe.** Read Telos session state first, then run narrow live probes only
   when no child task is active.
 - **Decide.** If observed satisfies the goal, make no mutation and summarize
@@ -83,10 +83,12 @@ Use Telos session commands for lineage before reaching for the substrate:
   when the structured log view is not enough.
 - `telos run <spec>` launches a bounded child task.
 
-If a child is pending or running, report that state and stop the cycle. If a
-child is terminal, inspect `describe` first; use transcript/evidence and
-`workspace.tar.gz` when you need to compare, debug, or integrate its work. Do
-not replace session inspection with broad platform polling.
+If a child is pending or running, report that state, sleep for a bounded
+interval, and re-check. If it remains active, keep waiting rather than
+inventing new work. If a child is terminal, inspect `describe` first; use
+transcript/evidence and `workspace.tar.gz` when you need to compare, debug, or
+integrate its work. Do not replace session inspection with broad platform
+polling.
 
 Use the `telos-orchestrate` skill for the worked end-to-end example.
 
