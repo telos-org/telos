@@ -67,6 +67,18 @@ func TestSessionResultPrefersSessionResultThenLatestEpoch(t *testing.T) {
 	}
 }
 
+func TestSessionTurnShowsActiveRoleAndRound(t *testing.T) {
+	round := 3
+	role := "verifier"
+	got := sessionTurn(sessionapi.Session{CurrentRound: &round, CurrentRole: &role})
+	if got != "verifier#3" {
+		t.Fatalf("session turn: got %q", got)
+	}
+	if got := sessionTurn(sessionapi.Session{}); got != "-" {
+		t.Fatalf("empty session turn: got %q", got)
+	}
+}
+
 func TestControllerListSessionsUsesScopedContext(t *testing.T) {
 	var gotAuth string
 	var gotPath string
@@ -243,11 +255,15 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 
 func TestEvaluationDispositionIsPendingForActiveReview(t *testing.T) {
 	verifierConceded := false
+	round := 1
+	role := "prover"
 	session := sessionapi.Session{
 		SessionID:        "sess_active",
 		Status:           sessionapi.StatusRunning,
 		Runtime:          sessionapi.RuntimeLocal,
 		VerifierConceded: &verifierConceded,
+		CurrentRound:     &round,
+		CurrentRole:      &role,
 	}
 
 	var out bytes.Buffer
@@ -255,6 +271,9 @@ func TestEvaluationDispositionIsPendingForActiveReview(t *testing.T) {
 	text := out.String()
 	if !strings.Contains(text, "Evaluate: pending") {
 		t.Fatalf("description should show pending evaluation while active:\n%s", text)
+	}
+	if !strings.Contains(text, "Turn:     prover#1") {
+		t.Fatalf("description should show active turn:\n%s", text)
 	}
 }
 

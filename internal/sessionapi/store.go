@@ -599,6 +599,8 @@ func deriveSpec(ms ManifestSpec) SessionSpec {
 		ss.RoundCount = summary.RoundCount
 		ss.CompletionReason = summary.CompletionReason
 		ss.VerifierConceded = summary.VerifierConceded
+		ss.CurrentRound = summary.CurrentRound
+		ss.CurrentRole = summary.CurrentRole
 	}
 
 	return ss
@@ -619,6 +621,9 @@ func applySessionEvidenceSummary(session *Session) {
 	var hasRounds bool
 	var completionReason *string
 	var verifierConceded *bool
+	var currentSpec *CurrentSpec
+	var currentRound *int
+	var currentRole *string
 
 	for _, spec := range session.Specs {
 		if spec.TotalCostUSD != nil {
@@ -651,6 +656,15 @@ func applySessionEvidenceSummary(session *Session) {
 		if spec.VerifierConceded != nil {
 			verifierConceded = spec.VerifierConceded
 		}
+		if spec.CurrentRound != nil && spec.CurrentRole != nil {
+			currentRound = spec.CurrentRound
+			currentRole = spec.CurrentRole
+			currentSpec = &CurrentSpec{
+				Index:   spec.Index,
+				Name:    spec.Name,
+				DirName: spec.DirName,
+			}
+		}
 	}
 
 	if hasCost {
@@ -673,6 +687,11 @@ func applySessionEvidenceSummary(session *Session) {
 	}
 	session.CompletionReason = completionReason
 	session.VerifierConceded = verifierConceded
+	if !session.Status.IsTerminal() {
+		session.CurrentSpec = currentSpec
+		session.CurrentRound = currentRound
+		session.CurrentRole = currentRole
+	}
 }
 
 func deriveStatus(m *Manifest) SessionStatus {
@@ -789,6 +808,8 @@ type evidenceSummary struct {
 	RoundCount             *int
 	CompletionReason       *string
 	VerifierConceded       *bool
+	CurrentRound           *int
+	CurrentRole            *string
 }
 
 func readEvidenceSummary(path *string) (*evidenceSummary, error) {
@@ -801,6 +822,8 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 	}
 
 	var summary *evidenceSummary
+	var activeRound *int
+	var activeRole *string
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -811,21 +834,43 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 			continue
 		}
 		eventName, _ := raw["event"].(string)
-		if eventName != "game_end" {
-			continue
-		}
+		round := numberAsInt(raw["round"])
+		role := stringPtrFromAny(raw["role"])
 		dataField, _ := raw["data"].(map[string]any)
-		item := &evidenceSummary{
-			TotalCostUSD:           numberAsFloat(dataField["total_cost_usd"]),
-			TotalInputTokens:       numberAsInt(dataField["total_input_tokens"]),
-			TotalOutputTokens:      numberAsInt(dataField["total_output_tokens"]),
-			TotalCacheReadTokens:   numberAsInt(dataField["total_cache_read_tokens"]),
-			TotalCacheCreateTokens: numberAsInt(dataField["total_cache_creation_tokens"]),
-			RoundCount:             evidenceRoundCount(raw, dataField),
-			CompletionReason:       stringPtrFromAny(dataField["completion_reason"]),
-			VerifierConceded:       boolPtrFromAny(dataField["verifier_conceded"]),
+
+		switch eventName {
+		case "round_start":
+			if round != nil && role != nil && *role != "" && *role != "system" {
+				activeRound = round
+				activeRole = role
+				if summary == nil {
+					summary = &evidenceSummary{}
+				}
+			}
+		case "agent_complete":
+			if activeRound != nil && activeRole != nil && round != nil && role != nil &&
+				*activeRound == *round && *activeRole == *role {
+				activeRound = nil
+				activeRole = nil
+			}
+		case "game_end":
+			activeRound = nil
+			activeRole = nil
+			summary = &evidenceSummary{
+				TotalCostUSD:           numberAsFloat(dataField["total_cost_usd"]),
+				TotalInputTokens:       numberAsInt(dataField["total_input_tokens"]),
+				TotalOutputTokens:      numberAsInt(dataField["total_output_tokens"]),
+				TotalCacheReadTokens:   numberAsInt(dataField["total_cache_read_tokens"]),
+				TotalCacheCreateTokens: numberAsInt(dataField["total_cache_creation_tokens"]),
+				RoundCount:             evidenceRoundCount(raw, dataField),
+				CompletionReason:       stringPtrFromAny(dataField["completion_reason"]),
+				VerifierConceded:       boolPtrFromAny(dataField["verifier_conceded"]),
+			}
 		}
-		summary = item
+	}
+	if summary != nil {
+		summary.CurrentRound = activeRound
+		summary.CurrentRole = activeRole
 	}
 	return summary, nil
 }

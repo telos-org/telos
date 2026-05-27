@@ -884,6 +884,48 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 	}
 }
 
+func TestGetSessionHydratesActiveTurnFromEvidence(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: active-turn\nplatform: local\n---\n# Active\n"
+
+	created, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	evidence := `{"event":"game_start","round":0,"role":"system","data":{}}` + "\n" +
+		`{"event":"round_start","round":1,"role":"prover","data":{}}` + "\n"
+	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	session, err := store.Get(created.SessionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if session.CurrentRound == nil || *session.CurrentRound != 1 {
+		t.Fatalf("current round: got %v", session.CurrentRound)
+	}
+	if session.CurrentRole == nil || *session.CurrentRole != "prover" {
+		t.Fatalf("current role: got %v", session.CurrentRole)
+	}
+	if session.CurrentSpec == nil || session.CurrentSpec.Name == nil || *session.CurrentSpec.Name != "active-turn" {
+		t.Fatalf("current spec: got %#v", session.CurrentSpec)
+	}
+
+	evidence += `{"event":"agent_complete","round":1,"role":"prover","data":{"status":"CONTINUE"}}` + "\n"
+	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
+		t.Fatalf("write completed evidence: %v", err)
+	}
+	session, err = store.Get(created.SessionID)
+	if err != nil {
+		t.Fatalf("Get completed turn: %v", err)
+	}
+	if session.CurrentRound != nil || session.CurrentRole != nil {
+		t.Fatalf("current turn should clear after agent_complete: round=%v role=%v", session.CurrentRound, session.CurrentRole)
+	}
+}
+
 // --------- GET /api/sessions/{id}/workspace/{spec} ------------------------------------------------------------------------------------------------
 
 func TestWorkspaceNotFound(t *testing.T) {

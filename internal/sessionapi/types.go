@@ -130,6 +130,8 @@ type SessionSpec struct {
 	RoundCount             *int     `json:"round_count,omitempty"`
 	CompletionReason       *string  `json:"completion_reason,omitempty"`
 	VerifierConceded       *bool    `json:"verifier_conceded,omitempty"`
+	CurrentRound           *int     `json:"current_round,omitempty"`
+	CurrentRole            *string  `json:"current_role,omitempty"`
 }
 
 // CurrentSpec identifies the spec currently being executed.

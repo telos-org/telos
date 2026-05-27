@@ -75,6 +75,9 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	if session.RoundCount != nil {
 		fmt.Fprintf(out, "Rounds:   %d\n", *session.RoundCount)
 	}
+	if turn := sessionTurn(session); turn != "-" {
+		fmt.Fprintf(out, "Turn:     %s\n", turn)
+	}
 	if len(session.Epochs) > 0 {
 		fmt.Fprintln(out)
 		printLatestEpoch(out, session)

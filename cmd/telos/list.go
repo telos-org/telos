@@ -69,17 +69,18 @@ func cmdList(args []string) {
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if effectiveWide {
-		fmt.Fprintln(w, "NAME\tKIND\tSTATUS\tRESULT\tRUNTIME\tARTIFACT\tPARENT\tCOST\tSESSION")
+		fmt.Fprintln(w, "NAME\tKIND\tSTATUS\tRESULT\tTURN\tRUNTIME\tARTIFACT\tPARENT\tCOST\tSESSION")
 	} else {
-		fmt.Fprintln(w, "NAME\tSTATUS\tRESULT\tARTIFACT\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tRESULT\tTURN\tARTIFACT\tSESSION")
 	}
 	for _, sess := range visible {
 		if effectiveWide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				sessionName(sess),
 				sessionKind(sess),
 				sess.Status,
 				sessionResult(sess),
+				sessionTurn(sess),
 				sess.Runtime,
 				sessionArtifact(sess),
 				sessionParent(sess),
@@ -88,10 +89,11 @@ func cmdList(args []string) {
 			)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 			sessionName(sess),
 			sess.Status,
 			sessionResult(sess),
+			sessionTurn(sess),
 			sessionArtifact(sess),
 			sess.SessionID,
 		)
@@ -252,6 +254,13 @@ func sessionCost(sess sessionapi.Session) string {
 		return "-"
 	}
 	return fmt.Sprintf("$%.2f", *sess.TotalCostUSD)
+}
+
+func sessionTurn(sess sessionapi.Session) string {
+	if sess.CurrentRound == nil || sess.CurrentRole == nil || *sess.CurrentRole == "" {
+		return "-"
+	}
+	return fmt.Sprintf("%s#%d", *sess.CurrentRole, *sess.CurrentRound)
 }
 
 func sessionArtifact(sess sessionapi.Session) string {
