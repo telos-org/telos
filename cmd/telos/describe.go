@@ -116,6 +116,9 @@ func printLatestEpoch(out io.Writer, session sessionapi.Session) {
 
 func printSessionArtifacts(out io.Writer, session sessionapi.Session) {
 	fmt.Fprintln(out, "Artifacts:")
+	if session.ActiveWorkspacePath != nil || session.ActiveWorkspaceExists != nil {
+		fmt.Fprintf(out, "  active workspace: %s\n", artifactPath(session.ActiveWorkspaceExists, session.ActiveWorkspacePath))
+	}
 	for _, spec := range session.Specs {
 		fmt.Fprintf(out, "  %s:\n", sessionSpecName(spec))
 		fmt.Fprintf(out, "    workspace:  %s\n", artifactPath(spec.WorkspaceExists, spec.WorkspacePath))

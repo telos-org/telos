@@ -193,24 +193,28 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 	workspaceExists := true
 	evidenceExists := true
 	transcriptExists := true
+	activeWorkspaceExists := true
+	activeWorkspacePath := "/state/workspace"
 	workspacePath := "/state/workspace.tar.gz"
 	evidencePath := "/state/evidence.jsonl"
 	transcriptPath := "/state/transcript.md"
 
 	session := sessionapi.Session{
-		SessionID:          "sess_123",
-		SessionKind:        &kind,
-		SpecName:           &name,
-		ParentSessionID:    &parent,
-		Status:             sessionapi.StatusCompleted,
-		Runtime:            sessionapi.RuntimeCloud,
-		Result:             &result,
-		CompletionReason:   &completionReason,
-		VerifierConceded:   &verifierConceded,
-		ArtifactURI:        &artifact,
-		CurrentSpecVersion: &version,
-		TotalCostUSD:       &cost,
-		RoundCount:         &rounds,
+		SessionID:             "sess_123",
+		SessionKind:           &kind,
+		SpecName:              &name,
+		ParentSessionID:       &parent,
+		Status:                sessionapi.StatusCompleted,
+		Runtime:               sessionapi.RuntimeCloud,
+		Result:                &result,
+		CompletionReason:      &completionReason,
+		VerifierConceded:      &verifierConceded,
+		ArtifactURI:           &artifact,
+		CurrentSpecVersion:    &version,
+		ActiveWorkspacePath:   &activeWorkspacePath,
+		ActiveWorkspaceExists: &activeWorkspaceExists,
+		TotalCostUSD:          &cost,
+		RoundCount:            &rounds,
 		Epochs: []map[string]any{{
 			"id":          1,
 			"result":      "completed",
@@ -243,6 +247,7 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 		"Rounds:   4",
 		"Latest Epoch:",
 		"Artifacts:",
+		"active workspace: yes:/state/workspace",
 		"yes:/state/workspace.tar.gz",
 		"yes:/state/evidence.jsonl",
 		"yes:/state/transcript.md",

@@ -166,6 +166,8 @@ type Session struct {
 	Launcher                *string          `json:"launcher,omitempty"`
 	SessionSpecPath         *string          `json:"session_spec_path,omitempty"`
 	SessionDir              *string          `json:"session_dir,omitempty"`
+	ActiveWorkspacePath     *string          `json:"active_workspace_path,omitempty"`
+	ActiveWorkspaceExists   *bool            `json:"active_workspace_exists,omitempty"`
 	Config                  map[string]any   `json:"config"`
 	Workspace               *Workspace       `json:"workspace,omitempty"`
 	Provenance              map[string]any   `json:"provenance"`

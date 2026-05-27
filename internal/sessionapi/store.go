@@ -526,26 +526,36 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 	}
 
 	status := deriveStatus(m)
+	activeWorkspacePath := filepath.Join(dir, "workspace")
+	activeWorkspaceExists := fileExists(activeWorkspacePath)
+	var activeWorkspacePathPtr *string
+	var activeWorkspaceExistsPtr *bool
+	if activeWorkspaceExists || !status.IsTerminal() {
+		activeWorkspacePathPtr = strPtr(activeWorkspacePath)
+		activeWorkspaceExistsPtr = &activeWorkspaceExists
+	}
 
 	kind := m.SessionKind
 	s := Session{
-		SessionID:          m.SessionID,
-		SessionKind:        &kind,
-		ParentSessionID:    m.ParentSessionID,
-		SpecName:           strPtr(m.SpecName),
-		Status:             status,
-		CreatedAt:          strPtr(m.CreatedAt),
-		Runtime:            manifestRuntime(m, fs.runtime),
-		Launcher:           strPtr(m.Launcher),
-		SessionSpecPath:    m.SessionSpecPath,
-		SessionDir:         strPtr(dir),
-		Config:             m.Config.AsMap(),
-		Workspace:          m.Workspace,
-		Provenance:         m.Provenance,
-		Specs:              specs,
-		Epochs:             epochs,
-		CurrentSpecVersion: m.CurrentSpecVersion,
-		SpecVersions:       cloneSpecVersions(m.SpecVersions),
+		SessionID:             m.SessionID,
+		SessionKind:           &kind,
+		ParentSessionID:       m.ParentSessionID,
+		SpecName:              strPtr(m.SpecName),
+		Status:                status,
+		CreatedAt:             strPtr(m.CreatedAt),
+		Runtime:               manifestRuntime(m, fs.runtime),
+		Launcher:              strPtr(m.Launcher),
+		SessionSpecPath:       m.SessionSpecPath,
+		SessionDir:            strPtr(dir),
+		ActiveWorkspacePath:   activeWorkspacePathPtr,
+		ActiveWorkspaceExists: activeWorkspaceExistsPtr,
+		Config:                m.Config.AsMap(),
+		Workspace:             m.Workspace,
+		Provenance:            m.Provenance,
+		Specs:                 specs,
+		Epochs:                epochs,
+		CurrentSpecVersion:    m.CurrentSpecVersion,
+		SpecVersions:          cloneSpecVersions(m.SpecVersions),
 	}
 
 	if s.Config == nil {
