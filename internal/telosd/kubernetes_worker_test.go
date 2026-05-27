@@ -28,6 +28,19 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 			Data:       map[string][]byte{"OPENAI_API_KEY": []byte("test-openai-key")},
 		},
 		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
+			Type:       corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"ANTHROPIC_API_KEY": []byte("stored-anthropic-key"),
+				"SAIL_API_KEY":      []byte("test-sail-key"),
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: piConfigSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
+			Type:       corev1.SecretTypeOpaque,
+			Data:       map[string][]byte{"models.json": []byte("{}")},
+		},
+		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.ImagePullSecret, Namespace: cfg.Kubernetes.EnvNamespace},
 			Type:       corev1.SecretTypeDockerConfigJson,
 			Data:       map[string][]byte{corev1.DockerConfigJsonKey: []byte("{}")},
@@ -60,6 +73,9 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 	}
 
 	assertSecretExists(t, client, namespace, cfg.Kubernetes.AgentSecretName)
+	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "SAIL_API_KEY", "test-sail-key")
+	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "ANTHROPIC_API_KEY", "test-anthropic-key")
+	assertSecretData(t, client, namespace, piConfigSecretName, "models.json", "{}")
 	assertSecretExists(t, client, namespace, "telos-env-keys")
 	assertSecretExists(t, client, namespace, cfg.Kubernetes.ImagePullSecret)
 	role, err := client.RbacV1().ClusterRoles().Get(context.Background(), workerClusterRole(namespace).Name, metav1.GetOptions{})
@@ -256,6 +272,11 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	assertAgentSecurityContext(t, template.Spec.InitContainers[0].SecurityContext)
 	container := template.Spec.Containers[0]
 	assertAgentSecurityContext(t, container.SecurityContext)
+	if len(container.EnvFrom) != 1 ||
+		container.EnvFrom[0].SecretRef == nil ||
+		container.EnvFrom[0].SecretRef.Name != "agent-api-keys" {
+		t.Fatalf("worker envFrom: got %+v", container.EnvFrom)
+	}
 	if len(container.Command) != 3 ||
 		container.Command[0] != "/telos-runtime/telosd" ||
 		container.Command[1] != "--session-dir" {
@@ -264,6 +285,18 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	if container.Command[2] != "/telos-state/sessions/"+sessionID {
 		t.Fatalf("session dir: got %+v", container.Command)
 	}
+	if !hasVolumeMount(container.VolumeMounts, "pi-agent-config", "/home/agent/.pi/agent") {
+		t.Fatalf("worker missing Pi config mount: %+v", container.VolumeMounts)
+	}
+}
+
+func hasVolumeMount(mounts []corev1.VolumeMount, name string, path string) bool {
+	for _, mount := range mounts {
+		if mount.Name == name && mount.MountPath == path && mount.ReadOnly {
+			return true
+		}
+	}
+	return false
 }
 
 func assertAgentSecurityContext(t *testing.T, ctx *corev1.SecurityContext) {
@@ -289,6 +322,17 @@ func assertSecretExists(t *testing.T, client *fake.Clientset, namespace string, 
 	t.Helper()
 	if _, err := client.CoreV1().Secrets(namespace).Get(context.Background(), name, metav1.GetOptions{}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func assertSecretData(t *testing.T, client *fake.Clientset, namespace string, name string, key string, want string) {
+	t.Helper()
+	secret, err := client.CoreV1().Secrets(namespace).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := string(secret.Data[key]); got != want {
+		t.Fatalf("%s/%s[%s]: got %q, want %q", namespace, name, key, got, want)
 	}
 }
 

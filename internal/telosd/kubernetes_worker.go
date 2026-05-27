@@ -43,6 +43,8 @@ type kubernetesSubstrate struct {
 	runtimeTelosdPath string
 }
 
+const piConfigSecretName = "pi-agent-config"
+
 func newKubernetesSubstrate(cfg Config) (kubernetesSubstrate, error) {
 	if strings.TrimSpace(os.Getenv(cfg.Kubernetes.AgentSecretKey)) == "" {
 		return kubernetesSubstrate{}, fmt.Errorf("%s is required to launch workers", cfg.Kubernetes.AgentSecretKey)
@@ -174,6 +176,9 @@ func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespa
 	if err := s.createOrUpdateAgentSecret(ctx, namespace); err != nil {
 		return err
 	}
+	if err := s.copyOptionalSecret(ctx, s.envNamespace, namespace, piConfigSecretName); err != nil {
+		return err
+	}
 	for _, name := range append([]string{}, s.copySecrets...) {
 		if err := s.copySecret(ctx, s.envNamespace, namespace, name); err != nil {
 			return err
@@ -189,10 +194,14 @@ func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespa
 
 func (s kubernetesSubstrate) agentSecret(namespace string) *corev1.Secret {
 	value := strings.TrimSpace(os.Getenv(s.agentSecretKey))
+	data := map[string][]byte{}
+	if value != "" {
+		data[s.agentSecretKey] = []byte(value)
+	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: s.agentSecretName, Namespace: namespace},
 		Type:       corev1.SecretTypeOpaque,
-		StringData: map[string]string{s.agentSecretKey: value},
+		Data:       data,
 	}
 }
 
@@ -260,11 +269,20 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			}},
 		},
 		{Name: "telos-runtime", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{
+			Name: "pi-agent-config",
+			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
+				SecretName:  piConfigSecretName,
+				Optional:    boolPtr(true),
+				DefaultMode: int32Ptr(0o600),
+			}},
+		},
 	}
 	mounts := []corev1.VolumeMount{
 		{Name: "telos-state", MountPath: s.stateMountRoot},
 		{Name: "telos-state", MountPath: s.stateHostRoot},
 		{Name: "telos-runtime", MountPath: s.runtimeMountPath},
+		{Name: "pi-agent-config", MountPath: "/home/agent/.pi/agent", ReadOnly: true},
 	}
 	podSpec := corev1.PodSpec{
 		ServiceAccountName:            "agent",
@@ -284,7 +302,12 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			SecurityContext: agentContainerSecurityContext(),
 			Command:         []string{s.runtimeTelosdPath, "--session-dir", sessionDir},
 			Env:             s.workerEnv(sessionID, m),
-			VolumeMounts:    mounts,
+			EnvFrom: []corev1.EnvFromSource{{
+				SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{Name: s.agentSecretName},
+				},
+			}},
+			VolumeMounts: mounts,
 		}},
 		Volumes: volumes,
 	}
@@ -425,10 +448,34 @@ func (s kubernetesSubstrate) createOrUpdateSecret(ctx context.Context, desired *
 
 func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, namespace string) error {
 	secret := s.agentSecret(namespace)
-	if strings.TrimSpace(secret.StringData[s.agentSecretKey]) == "" {
+	source, err := s.client.CoreV1().Secrets(s.envNamespace).Get(ctx, s.agentSecretName, metav1.GetOptions{})
+	if err == nil {
+		secret.Type = source.Type
+		secret.Data = cloneByteMap(source.Data)
+		if secret.Data == nil {
+			secret.Data = map[string][]byte{}
+		}
+		if envValue := strings.TrimSpace(os.Getenv(s.agentSecretKey)); envValue != "" {
+			secret.Data[s.agentSecretKey] = []byte(envValue)
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return err
+	}
+	if strings.TrimSpace(string(secret.Data[s.agentSecretKey])) == "" {
 		return fmt.Errorf("%s is required to launch a worker", s.agentSecretKey)
 	}
 	return s.createOrUpdateSecret(ctx, secret)
+}
+
+func (s kubernetesSubstrate) copyOptionalSecret(ctx context.Context, sourceNamespace string, targetNamespace string, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return nil
+	}
+	err := s.copySecret(ctx, sourceNamespace, targetNamespace, name)
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func (s kubernetesSubstrate) copySecret(ctx context.Context, sourceNamespace string, targetNamespace string, name string) error {

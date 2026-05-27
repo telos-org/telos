@@ -171,6 +171,56 @@ func TestResolveLocalRunConfigRejectsNegativeAgentTimeout(t *testing.T) {
 	}
 }
 
+func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.String("model", "", "")
+	fs.String("thinking", "medium", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("agent-timeout-sec", 0, "")
+	parseFlags(fs, []string{
+		"--model", "openai-codex/gpt-5.5",
+		"--thinking", "high",
+		"--max-cost-usd", "100",
+		"--agent-timeout-sec", "0",
+		"SPEC.md",
+	})
+
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "openai-codex/gpt-5.5", "high", 100, 0)
+	if err != nil {
+		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
+	}
+	req := sessionapi.SessionCreateRequest{}
+	applySessionRuntimeConfig(&req, cfg)
+	if req.Model != "openai-codex/gpt-5.5" || req.Thinking != "high" {
+		t.Fatalf("model/thinking: got %q/%q", req.Model, req.Thinking)
+	}
+	if req.MaxCostUSD == nil || *req.MaxCostUSD != 100 {
+		t.Fatalf("max cost: got %v", req.MaxCostUSD)
+	}
+	if req.AgentTimeoutSec == nil || *req.AgentTimeoutSec != 0 {
+		t.Fatalf("agent timeout: got %v", req.AgentTimeoutSec)
+	}
+}
+
+func TestResolveSessionRuntimeConfigOmitsDefaults(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.String("model", "", "")
+	fs.String("thinking", "medium", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("agent-timeout-sec", 0, "")
+	parseFlags(fs, []string{"SPEC.md"})
+
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "medium", 20.0, 0)
+	if err != nil {
+		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
+	}
+	req := sessionapi.SessionCreateRequest{}
+	applySessionRuntimeConfig(&req, cfg)
+	if req.Model != "" || req.Thinking != "" || req.MaxCostUSD != nil || req.AgentTimeoutSec != nil {
+		t.Fatalf("expected empty runtime request config, got %#v", req)
+	}
+}
+
 func TestUntilFlagValue(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.Int("until", 0, "")

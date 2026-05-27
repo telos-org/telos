@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/telos-org/telos/internal/cli"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 type boolFlag interface {
@@ -107,6 +108,56 @@ func resolveLocalRunConfigFromFlags(
 		MaxCostUSD:      &cost,
 		AgentTimeoutSec: timeout,
 	}, nil
+}
+
+type sessionRuntimeConfig struct {
+	Model           string
+	Thinking        string
+	MaxCostUSD      *float64
+	AgentTimeoutSec *int
+}
+
+func resolveSessionRuntimeConfigFromFlags(
+	fs *flag.FlagSet,
+	model string,
+	thinking string,
+	maxCostUSD float64,
+	agentTimeout int,
+) (sessionRuntimeConfig, error) {
+	cfg := sessionRuntimeConfig{
+		Model:    modelOption(fs, model),
+		Thinking: stringOption(fs, "thinking", thinking, "TELOS_THINKING"),
+	}
+	if flagNameSet(fs, "max-cost-usd") || strings.TrimSpace(os.Getenv("TELOS_MAX_COST_USD")) != "" {
+		cost, err := positiveFloatOption(fs, "max-cost-usd", maxCostUSD, "TELOS_MAX_COST_USD", 20.0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.MaxCostUSD = &cost
+	}
+	if flagNameSet(fs, "agent-timeout-sec") || strings.TrimSpace(os.Getenv("TELOS_AGENT_TIMEOUT_SEC")) != "" {
+		timeout, err := nonNegativeIntOption(fs, "agent-timeout-sec", agentTimeout, "TELOS_AGENT_TIMEOUT_SEC", 0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.AgentTimeoutSec = &timeout
+	}
+	return cfg, nil
+}
+
+func applySessionRuntimeConfig(req *sessionapi.SessionCreateRequest, cfg sessionRuntimeConfig) {
+	if cfg.Model != "" {
+		req.Model = cfg.Model
+	}
+	if cfg.Thinking != "" {
+		req.Thinking = cfg.Thinking
+	}
+	if cfg.MaxCostUSD != nil {
+		req.MaxCostUSD = cfg.MaxCostUSD
+	}
+	if cfg.AgentTimeoutSec != nil {
+		req.AgentTimeoutSec = cfg.AgentTimeoutSec
+	}
 }
 
 func untilFlagValue(fs *flag.FlagSet, value int) (int, error) {

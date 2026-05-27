@@ -38,14 +38,7 @@ func cmdLaunch(command, action string, args []string) {
 	noWait := fs.Bool("no-wait", false, "Do not wait for a newly created environment")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
-	localConfigSet := flagNamesSet(
-		fs,
-		"workspace",
-		"model",
-		"thinking",
-		"max-cost-usd",
-		"agent-timeout-sec",
-	)
+	localConfigSet := flagNamesSet(fs, "workspace")
 	untilValue, err := untilFlagValue(fs, *until)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -76,7 +69,12 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a controller session")
 			os.Exit(1)
 		}
-		runChildCloud(specArg, ctx, untilValue, *jsonOut, action)
+		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, *agentTimeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		runChildCloud(specArg, ctx, untilValue, runtimeConfig, *jsonOut, action)
 		return
 	}
 
@@ -113,7 +111,7 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudExisting:
-		runCloud(command, specArg, *env, untilValue, *jsonOut, false, 0, action)
+		runCloud(command, specArg, *env, untilValue, fs, *model, *thinking, *maxCostUSD, *agentTimeout, *jsonOut, false, 0, action)
 		return
 	case launchCloudNew:
 		runCloud(
@@ -121,6 +119,11 @@ func cmdLaunch(command, action string, args []string) {
 			specArg,
 			"",
 			untilValue,
+			fs,
+			*model,
+			*thinking,
+			*maxCostUSD,
+			*agentTimeout,
 			*jsonOut,
 			!*noWait,
 			time.Duration(*readyTimeout)*time.Second,
@@ -222,6 +225,7 @@ func runChildCloud(
 	specArg string,
 	ctx controllerContext,
 	until int,
+	runtimeConfig sessionRuntimeConfig,
 	jsonOut bool,
 	action string,
 ) {
@@ -236,6 +240,7 @@ func runChildCloud(
 	if until > 0 {
 		req.Until = &until
 	}
+	applySessionRuntimeConfig(&req, runtimeConfig)
 	session, err := cloud.NewClient(ctx.endpoint, ctx.token).CreateSession(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -253,6 +258,11 @@ func runCloud(
 	specArg string,
 	envID string,
 	until int,
+	fs *flag.FlagSet,
+	model string,
+	thinking string,
+	maxCostUSD float64,
+	agentTimeout int,
 	jsonOut bool,
 	waitForEnvironment bool,
 	readyTimeout time.Duration,
@@ -268,6 +278,12 @@ func runCloud(
 	if until > 0 {
 		req.Until = &until
 	}
+	runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, model, thinking, maxCostUSD, agentTimeout)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	applySessionRuntimeConfig(&req, runtimeConfig)
 	if command == "apply" && envID == "" {
 		applyCloudAuto(req, jsonOut, waitForEnvironment, readyTimeout, action)
 		return
