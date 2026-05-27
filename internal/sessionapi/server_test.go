@@ -410,7 +410,15 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 	controller, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
 
 	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
-	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated})
+	maxCost := 12.5
+	agentTimeout := 3600
+	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
+		SpecMarkdown:    updated,
+		Model:           "sail-research/moonshotai/Kimi-K2.6",
+		Thinking:        "high",
+		MaxCostUSD:      &maxCost,
+		AgentTimeoutSec: &agentTimeout,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,6 +452,10 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 	if len(session.SpecVersions) != 1 {
 		t.Fatalf("spec_versions: got %#v", session.SpecVersions)
 	}
+	assertConfigStr(t, session.Config, "model", "sail-research/moonshotai/Kimi-K2.6")
+	assertConfigStr(t, session.Config, "thinking", "high")
+	assertConfigFloat(t, session.Config, "max_cost_usd", maxCost)
+	assertConfigFloat(t, session.Config, "agent_timeout_sec", float64(agentTimeout))
 	if session.SpecVersions[0]["previous_version"].(float64) != 1 {
 		t.Fatalf("previous_version: got %#v", session.SpecVersions[0])
 	}

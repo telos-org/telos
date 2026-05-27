@@ -211,8 +211,14 @@ func TestClientUpdateSessionSpec(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
+	maxCost := 9.0
+	agentTimeout := 600
 	session, err := client.UpdateSessionSpec("sess_controller", sessionapi.SessionSpecUpdateRequest{
-		SpecMarkdown: "---\nversion: v0\nname: demo\n---\n# Demo\n",
+		SpecMarkdown:    "---\nversion: v0\nname: demo\n---\n# Demo\n",
+		Model:           "sail-research/moonshotai/Kimi-K2.6",
+		Thinking:        "high",
+		MaxCostUSD:      &maxCost,
+		AgentTimeoutSec: &agentTimeout,
 	})
 	if err != nil {
 		t.Fatalf("UpdateSessionSpec: %v", err)
@@ -225,6 +231,15 @@ func TestClientUpdateSessionSpec(t *testing.T) {
 	}
 	if !strings.Contains(gotBody.SpecMarkdown, "name: demo") {
 		t.Fatalf("body: got %#v", gotBody)
+	}
+	if gotBody.Model != "sail-research/moonshotai/Kimi-K2.6" || gotBody.Thinking != "high" {
+		t.Fatalf("runtime config not sent: %#v", gotBody)
+	}
+	if gotBody.MaxCostUSD == nil || *gotBody.MaxCostUSD != maxCost {
+		t.Fatalf("max cost not sent: %#v", gotBody.MaxCostUSD)
+	}
+	if gotBody.AgentTimeoutSec == nil || *gotBody.AgentTimeoutSec != agentTimeout {
+		t.Fatalf("agent timeout not sent: %#v", gotBody.AgentTimeoutSec)
 	}
 	if session.SessionID != "sess_controller" {
 		t.Fatalf("session: got %#v", session)

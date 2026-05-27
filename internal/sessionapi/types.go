@@ -95,7 +95,11 @@ type SessionCreateRequest struct {
 
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{id}/spec.
 type SessionSpecUpdateRequest struct {
-	SpecMarkdown string `json:"spec_markdown"`
+	SpecMarkdown    string   `json:"spec_markdown"`
+	Model           string   `json:"model,omitempty"`
+	Thinking        string   `json:"thinking,omitempty"`
+	MaxCostUSD      *float64 `json:"max_cost_usd,omitempty"`
+	AgentTimeoutSec *int     `json:"agent_timeout_sec,omitempty"`
 }
 
 // SessionSpecResponse is returned by GET /api/sessions/{id}/spec.

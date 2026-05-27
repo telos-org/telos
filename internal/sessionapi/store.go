@@ -302,6 +302,7 @@ func (fs *FileStore) UpdateSpec(id string, req SessionSpecUpdateRequest) (*Sessi
 	if err := os.WriteFile(*m.SessionSpecPath, prepared.SpecData, 0o644); err != nil {
 		return nil, fmt.Errorf("write session spec: %w", err)
 	}
+	updateManifestConfig(&m.Config, req)
 	previousVersion := ptrOr(m.CurrentSpecVersion, 1)
 	version := previousVersion + 1
 	m.CurrentSpecVersion = &version
@@ -321,6 +322,21 @@ func (fs *FileStore) UpdateSpec(id string, req SessionSpecUpdateRequest) (*Sessi
 		return nil, err
 	}
 	return fs.deriveSession(id, m)
+}
+
+func updateManifestConfig(cfg *SessionConfig, req SessionSpecUpdateRequest) {
+	if req.Model != "" {
+		cfg.Model = req.Model
+	}
+	if req.Thinking != "" {
+		cfg.Thinking = req.Thinking
+	}
+	if req.MaxCostUSD != nil {
+		cfg.MaxCostUSD = req.MaxCostUSD
+	}
+	if req.AgentTimeoutSec != nil {
+		cfg.AgentTimeoutSec = *req.AgentTimeoutSec
+	}
 }
 
 // List returns all sessions ordered by creation time descending.

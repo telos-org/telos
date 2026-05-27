@@ -342,9 +342,7 @@ func applyCloud(
 	operation := "created"
 	if existing != nil {
 		operation = "updated"
-		session, err = client.UpdateSessionSpec(existing.SessionID, sessionapi.SessionSpecUpdateRequest{
-			SpecMarkdown: *req.SpecMarkdown,
-		})
+		session, err = client.UpdateSessionSpec(existing.SessionID, updateRequestFromCreate(req))
 	} else {
 		session, err = client.CreateSession(req)
 	}
@@ -403,9 +401,7 @@ func applyCloudAuto(
 		if existing == nil {
 			continue
 		}
-		session, err := target.client.UpdateSessionSpec(existing.SessionID, sessionapi.SessionSpecUpdateRequest{
-			SpecMarkdown: *req.SpecMarkdown,
-		})
+		session, err := target.client.UpdateSessionSpec(existing.SessionID, updateRequestFromCreate(req))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %s: %v\n", target.env.ID, err)
 			os.Exit(1)
@@ -444,6 +440,18 @@ func applyCloudAuto(
 			fmt.Printf("environment %s %s\n", result.Environment.ID, result.Environment.Handle)
 		}
 	}
+}
+
+func updateRequestFromCreate(req sessionapi.SessionCreateRequest) sessionapi.SessionSpecUpdateRequest {
+	update := sessionapi.SessionSpecUpdateRequest{}
+	if req.SpecMarkdown != nil {
+		update.SpecMarkdown = *req.SpecMarkdown
+	}
+	update.Model = req.Model
+	update.Thinking = req.Thinking
+	update.MaxCostUSD = req.MaxCostUSD
+	update.AgentTimeoutSec = req.AgentTimeoutSec
+	return update
 }
 
 func specNameFromRequest(req sessionapi.SessionCreateRequest) (string, error) {

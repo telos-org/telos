@@ -202,6 +202,33 @@ func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
 	}
 }
 
+func TestUpdateRequestFromCreateCarriesRuntimeConfig(t *testing.T) {
+	specMarkdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
+	maxCost := 8.5
+	agentTimeout := 7200
+	req := sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &specMarkdown,
+		Model:           "sail-research/moonshotai/Kimi-K2.6",
+		Thinking:        "high",
+		MaxCostUSD:      &maxCost,
+		AgentTimeoutSec: &agentTimeout,
+	}
+
+	update := updateRequestFromCreate(req)
+	if update.SpecMarkdown != specMarkdown {
+		t.Fatalf("spec markdown: got %q", update.SpecMarkdown)
+	}
+	if update.Model != req.Model || update.Thinking != req.Thinking {
+		t.Fatalf("runtime config: got %#v", update)
+	}
+	if update.MaxCostUSD == nil || *update.MaxCostUSD != maxCost {
+		t.Fatalf("max cost: got %#v", update.MaxCostUSD)
+	}
+	if update.AgentTimeoutSec == nil || *update.AgentTimeoutSec != agentTimeout {
+		t.Fatalf("agent timeout: got %#v", update.AgentTimeoutSec)
+	}
+}
+
 func TestResolveSessionRuntimeConfigOmitsDefaults(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.String("model", "", "")
