@@ -127,6 +127,11 @@ say what is broken, what must remain true, and what counts as success. It must
 not tell the solver which hidden artifact to edit, which command to run, or
 which sequence of repairs will pass.
 
+Do not include a `Hints`, `Suggested approach`, `Investigation path`, `Repair
+notes`, or equivalent section in `task/public/spec.md`. If the solver needs
+inspection scope, express it as allowed surfaces and visible symptoms, not as
+a trail toward the intended repair.
+
 ### Public Spec Review
 
 Before promotion, review `task/public/spec.md` sentence by sentence. Each
