@@ -203,6 +203,7 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 					switch getString(msg, "role") {
 					case "assistant":
 						finalAssistant = msg
+						summary.Stats = mergeTurnStats(summary.Stats, statsFromPiMessage(msg))
 					case "toolResult", "bashExecution":
 						summary.Stats.NumTurns++
 					}
@@ -221,7 +222,6 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 	}
 
 	summary.Logs = assistantText(finalAssistant)
-	summary.Stats = mergeTurnStats(summary.Stats, statsFromPiMessage(finalAssistant))
 	summary.Error = errorFromPiMessage(finalAssistant)
 	return summary, nil
 }

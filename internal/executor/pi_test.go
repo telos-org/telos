@@ -140,7 +140,7 @@ func TestReadPiSessionExtractsAssistantTextStatsAndTurns(t *testing.T) {
 	}
 }
 
-func TestReadPiSessionUsesLastAssistantMessage(t *testing.T) {
+func TestReadPiSessionUsesLastAssistantTextAndAggregatesAssistantUsage(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
 	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
 	appendPiSession(t, path, `{"type":"message","id":"a1","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"stop","content":[{"type":"text","text":"first"}],"usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.1}}}}`)
@@ -153,8 +153,10 @@ func TestReadPiSessionUsesLastAssistantMessage(t *testing.T) {
 	if summary.Logs != "second" {
 		t.Fatalf("logs: got %q", summary.Logs)
 	}
-	if summary.Stats.InputTokens != 2 || summary.Stats.CostUSD != 0.6 {
-		t.Fatalf("stats should come from the final assistant: %+v", summary.Stats)
+	if summary.Stats.InputTokens != 3 || summary.Stats.OutputTokens != 4 ||
+		summary.Stats.CacheReadTokens != 4 || summary.Stats.CacheCreationTokens != 5 ||
+		summary.Stats.CostUSD != 0.7 {
+		t.Fatalf("stats should sum all assistant usage: %+v", summary.Stats)
 	}
 }
 
