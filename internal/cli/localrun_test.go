@@ -236,6 +236,46 @@ func TestEnsureSessionWorkspaceInitializesAPIBackedSession(t *testing.T) {
 	}
 }
 
+func TestEnsureSessionWorkspaceRefusesSilentDowngrade(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, filepath.Join(dir, "spec"))
+	source := filepath.Join(dir, "source")
+	initTestGitRepo(t, source)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{Workspace: source})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	if err := os.RemoveAll(filepath.Join(session.SessionDir, "workspace")); err != nil {
+		t.Fatal(err)
+	}
+
+	manifestPathStr := filepath.Join(session.SessionDir, "session.json")
+	manifest, err := sessionapi.ReadManifest(manifestPathStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Workspace == nil || manifest.Workspace.Mode != "git_clone" {
+		t.Fatalf("precondition: workspace mode should be git_clone, got %#v", manifest.Workspace)
+	}
+
+	err = ensureSessionWorkspace(session.SessionDir, manifest)
+	if err == nil {
+		t.Fatal("expected ensureSessionWorkspace to refuse silent downgrade")
+	}
+	if !strings.Contains(err.Error(), "git_clone") {
+		t.Fatalf("error should mention the original mode: %v", err)
+	}
+
+	updated, err := sessionapi.ReadManifest(manifestPathStr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Workspace == nil || updated.Workspace.Mode != "git_clone" {
+		t.Fatalf("manifest workspace must not be downgraded: %#v", updated.Workspace)
+	}
+}
+
 func TestCreateLocalSessionRejectsWorkspaceFile(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)

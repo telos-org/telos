@@ -173,6 +173,15 @@ func ensureSessionWorkspace(sessionDir string, manifest *sessionapi.Manifest) er
 
 	archive := latestWorkspaceCheckpoint(manifest)
 	if archive == "" {
+		// Only initialize an empty workspace if the manifest never recorded a
+		// source workspace (fresh API-backed session) or already declared the
+		// empty mode. Otherwise the recorded mode (git_clone, snapshot,
+		// artifact) requires real source state and we must not silently
+		// downgrade to an empty repo — the original source is gone and the
+		// runner has no way to fetch it back.
+		if manifest.Workspace != nil && manifest.Workspace.Mode != "" && manifest.Workspace.Mode != workspaceModeEmpty {
+			return fmt.Errorf("session workspace (%s) is missing and has no checkpoint to rehydrate; recreate the session", manifest.Workspace.Mode)
+		}
 		base, err := initSnapshotRepo(active)
 		if err != nil {
 			return fmt.Errorf("initialize session workspace: %w", err)
