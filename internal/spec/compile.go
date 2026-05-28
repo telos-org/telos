@@ -21,14 +21,22 @@ type CompiledEnvironment struct {
 
 // CompileEnvironment compiles a spec file into a fully resolved plan.
 func CompileEnvironment(specPath string) (*CompiledEnvironment, error) {
+	return CompileEnvironmentWithBase(specPath, "")
+}
+
+// CompileEnvironmentWithBase is like CompileEnvironment but resolves the
+// root spec's relative `extends` and `skills` paths against baseDir. An
+// empty baseDir falls back to the spec's directory. Transitively `extends`-d
+// specs continue to resolve relative to their own directories.
+func CompileEnvironmentWithBase(specPath string, baseDir string) (*CompiledEnvironment, error) {
 	abs, err := filepath.Abs(specPath)
 	if err != nil {
 		return nil, err
 	}
-	return compileEnv(abs, nil)
+	return compileEnv(abs, baseDir, nil)
 }
 
-func compileEnv(envPath string, visited map[string]bool) (*CompiledEnvironment, error) {
+func compileEnv(envPath string, baseDir string, visited map[string]bool) (*CompiledEnvironment, error) {
 	if visited == nil {
 		visited = map[string]bool{}
 	}
@@ -37,14 +45,14 @@ func compileEnv(envPath string, visited map[string]bool) (*CompiledEnvironment, 
 	}
 	visited[envPath] = true
 
-	env, err := LoadEnvironment(envPath)
+	env, err := LoadEnvironmentWithBase(envPath, baseDir)
 	if err != nil {
 		return nil, err
 	}
 
 	var extendsCompiled *CompiledEnvironment
 	if env.ExtendsPath != "" {
-		extendsCompiled, err = compileEnv(env.ExtendsPath, visited)
+		extendsCompiled, err = compileEnv(env.ExtendsPath, "", visited)
 		if err != nil {
 			return nil, err
 		}

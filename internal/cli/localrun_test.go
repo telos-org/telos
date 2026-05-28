@@ -965,6 +965,56 @@ func TestRunLocalSessionRehydratesWorkspaceFromCheckpoint(t *testing.T) {
 	}
 }
 
+func TestRunLocalSessionResolvesRelativeSkillsAgainstOriginalSpecDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(dir, "telos-output"))
+
+	srcDir := filepath.Join(dir, "src")
+	skillDir := filepath.Join(srcDir, "skills", "runner-rel-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: runner-rel-skill\ndescription: Relative\n---\nBody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	specPath := filepath.Join(srcDir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: runner-rel\nplatform: local\nskills:\n  - skills/runner-rel-skill\n---\nBody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	exec := &fakeExecutor{
+		proverResult: game.TurnResult{
+			Role:   "prover",
+			Status: game.StatusContinue,
+			Logs:   "ok\n\n<progress_update>ok</progress_update>",
+		},
+		verifierResult: game.TurnResult{
+			Role:   "verifier",
+			Status: game.StatusConcede,
+			Logs:   "ok\n\n<status>CONCEDE</status>\n",
+		},
+	}
+	result, err := RunLocalSessionWithExecutor(session.SessionDir, exec)
+	if err != nil {
+		t.Fatalf("RunLocalSession: %v", err)
+	}
+	if result.GameResult != game.GameSuccess {
+		t.Fatalf("game result: got %s", result.GameResult)
+	}
+	if !strings.Contains(exec.firstTask(), "`runner-rel-skill`") {
+		t.Fatal("prompt should include relative skill resolved against original spec dir")
+	}
+}
+
 func TestRunLocalSessionRejectsMissingSessionSpecPath(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)

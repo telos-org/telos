@@ -115,6 +115,57 @@ func TestCompileWithExtendsUsesParentNamespaceAndHash(t *testing.T) {
 	}
 }
 
+func TestCompileEnvironmentWithBaseResolvesRelativeSkillsAgainstOverride(t *testing.T) {
+	dir := t.TempDir()
+	srcDir := filepath.Join(dir, "src")
+	if err := os.MkdirAll(srcDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(srcDir, "skills", "rel-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: rel-skill\ndescription: Relative\n---\nBody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	specBody := "---\nversion: v0\nname: rel-base-test\nplatform: local\nskills:\n  - skills/rel-skill\n---\nBody"
+	srcSpec := filepath.Join(srcDir, "SPEC.md")
+	if err := os.WriteFile(srcSpec, []byte(specBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Copy the spec into a separate dir without the skill alongside it,
+	// mirroring how the session runner copies SPEC.md into specs/<name>/.
+	copyDir := filepath.Join(dir, "copy")
+	if err := os.MkdirAll(copyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	copySpec := filepath.Join(copyDir, "SPEC.md")
+	if err := os.WriteFile(copySpec, []byte(specBody), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := CompileEnvironment(copySpec); err == nil {
+		t.Fatal("expected unresolvable skill error without baseDir override")
+	} else if !strings.Contains(err.Error(), "rel-skill") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	compiled, err := CompileEnvironmentWithBase(copySpec, srcDir)
+	if err != nil {
+		t.Fatalf("CompileEnvironmentWithBase: %v", err)
+	}
+	found := false
+	for _, s := range compiled.Skills {
+		if s.Name == "rel-skill" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatal("rel-skill should resolve via override baseDir")
+	}
+}
+
 func TestCompileWithAbsoluteExtendsPath(t *testing.T) {
 	dir := t.TempDir()
 	basePath := filepath.Join(dir, "base", "SPEC.md")

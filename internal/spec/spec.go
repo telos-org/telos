@@ -58,8 +58,19 @@ func ParseFrontmatter(text string) (map[string]interface{}, string, bool) {
 	return raw, m[2], true
 }
 
-// LoadEnvironment loads and validates a SPEC.md file.
+// LoadEnvironment loads and validates a SPEC.md file. Relative `extends` and
+// `skills` paths resolve against the spec's own directory.
 func LoadEnvironment(specPath string) (*EnvironmentSpec, error) {
+	return LoadEnvironmentWithBase(specPath, "")
+}
+
+// LoadEnvironmentWithBase is like LoadEnvironment but resolves relative
+// `extends` and `skills` paths against baseDir instead of the spec's own
+// directory. An empty baseDir falls back to the spec's directory. This is
+// used by the session runner when the spec has been copied into a session
+// directory but its relative references must still resolve against the
+// original location on disk.
+func LoadEnvironmentWithBase(specPath string, baseDir string) (*EnvironmentSpec, error) {
 	absPath, err := filepath.Abs(specPath)
 	if err != nil {
 		return nil, err
@@ -75,7 +86,16 @@ func LoadEnvironment(specPath string) (*EnvironmentSpec, error) {
 	if !ok {
 		return nil, fmt.Errorf("%s has no valid YAML frontmatter", absPath)
 	}
-	return parseEnvFields(raw, absPath, filepath.Dir(absPath), body)
+	if strings.TrimSpace(baseDir) == "" {
+		baseDir = filepath.Dir(absPath)
+	} else {
+		abs, err := filepath.Abs(baseDir)
+		if err != nil {
+			return nil, fmt.Errorf("resolve spec base dir: %w", err)
+		}
+		baseDir = abs
+	}
+	return parseEnvFields(raw, absPath, baseDir, body)
 }
 
 func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*EnvironmentSpec, error) {
