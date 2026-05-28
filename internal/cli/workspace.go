@@ -36,6 +36,9 @@ func workspaceScope(requested string) (string, string, error) {
 		if err != nil {
 			return "", "", fmt.Errorf("resolve current workspace scope: %w", err)
 		}
+		if root, ok := gitTopLevel(abs); ok {
+			return root, root, nil
+		}
 		return "", abs, nil
 	}
 

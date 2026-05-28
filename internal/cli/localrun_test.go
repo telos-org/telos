@@ -179,6 +179,10 @@ func TestCreateLocalSessionRecordsParentSession(t *testing.T) {
 	specPath := writeTestSpec(t, dir)
 	parentID := "local_parent"
 
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
 	session, err := CreateLocalSession(specPath, LocalRunConfig{ParentSessionID: &parentID})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
@@ -338,6 +342,78 @@ func TestCreateLocalSessionClonesCleanGitWorkspace(t *testing.T) {
 
 	if _, err := CreateLocalSession(specPath, LocalRunConfig{Workspace: source}); err != nil {
 		t.Fatalf("second CreateLocalSession should ignore .telos marker dirtiness: %v", err)
+	}
+}
+
+func TestCreateLocalSessionDefaultsToCwdGitRoot(t *testing.T) {
+	dir := t.TempDir()
+	source := filepath.Join(dir, "repo")
+	base := initTestGitRepo(t, source)
+	source, err := filepath.EvalSymlinks(source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	specPath := filepath.Join(source, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: cwd-default\nplatform: local\n---\n# Cwd Default\n\nTest body."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runTestCommand(t, source, "git", "add", "SPEC.md")
+	runTestCommand(t, source, "git", "-c", "user.name=Telos", "-c", "user.email=telos@local", "commit", "-q", "-m", "add spec")
+	base = strings.TrimSpace(runTestCommand(t, source, "git", "rev-parse", "HEAD"))
+	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(dir, "telos-output"))
+
+	orig, _ := os.Getwd()
+	os.Chdir(source)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.Workspace == nil {
+		t.Fatal("manifest missing workspace metadata")
+	}
+	if manifest.Workspace.Mode != "git_clone" {
+		t.Fatalf("workspace mode: got %q, want git_clone", manifest.Workspace.Mode)
+	}
+	if manifest.Workspace.Source != source {
+		t.Fatalf("workspace source: got %q, want %q", manifest.Workspace.Source, source)
+	}
+	if manifest.Workspace.BaseCommit != base {
+		t.Fatalf("base commit: got %q, want %q", manifest.Workspace.BaseCommit, base)
+	}
+	active := filepath.Join(session.SessionDir, "workspace")
+	if active == source {
+		t.Fatal("session workspace should not be the source checkout")
+	}
+	if _, err := os.Stat(filepath.Join(active, ".git")); err != nil {
+		t.Fatalf("cloned workspace missing .git: %v", err)
+	}
+}
+
+func TestCreateLocalSessionDefaultsToCwdWhenNotInGitRepo(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.Workspace == nil || manifest.Workspace.Mode != workspaceModeEmpty {
+		t.Fatalf("workspace metadata: %#v", manifest.Workspace)
 	}
 }
 
@@ -662,6 +738,9 @@ func TestLocalWorkerEnvIncludesSessionContext(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 	parentID := "local_parent"
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
 	session, err := CreateLocalSession(specPath, LocalRunConfig{ParentSessionID: &parentID})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
