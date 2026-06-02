@@ -333,6 +333,29 @@ func TestRenderVerifierTask(t *testing.T) {
 	}
 }
 
+func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	os.WriteFile(specPath, []byte("---\nversion: v0\nname: reusable-eval\nplatform: local\n---\nBody"), 0o644)
+
+	compiled, _ := CompileEnvironment(specPath)
+	task := RenderVerifierTask(compiled, "=== FILES ===\n./main.go", "")
+
+	for _, want := range []string{
+		"Persist useful probes",
+		"write to the same workspace when the change is evaluation code",
+		"reusable test, probe, fixture, or reproduction script",
+		"natural test location or a small `evaluation/` directory",
+	} {
+		if !strings.Contains(task, want) {
+			t.Fatalf("verifier prompt missing %q:\n%s", want, task)
+		}
+	}
+	if strings.Contains(task, "Keep evaluator scratch outside the delivered tree") {
+		t.Fatalf("verifier prompt should not forbid durable evaluator artifacts:\n%s", task)
+	}
+}
+
 func TestRenderProverUsesOperatingPosture(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")

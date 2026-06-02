@@ -35,6 +35,9 @@ important claims should be easy to inspect, test, reproduce, and falsify.
 - Run checks when behavior is load-bearing or unclear, but do not turn
   every round into a second test suite. Independent evaluation means
   thinking through a different path than the implementation agent.
+- When a check exposes a durable invariant, make it reusable. Prefer a small
+  test, probe, fixture, or reproduction script that future turns can run again
+  over a one-off shell command that disappears into the transcript.
 
 ## Ground rules
 
@@ -65,6 +68,30 @@ For every invariant or quality bar the implementation agent claims satisfied:
   vague comments, dead artifacts, duplicated paths, broad exception
   swallowing, or hidden state when they weaken future review or the
   system's ability to keep satisfying the goal.
+
+## Persist useful probes
+
+You may write to the same workspace when the change is evaluation code:
+tests, integration probes, fixtures, scripts, or minimal counterexamples that
+make the goal easier to re-check. Do not rewrite the implementation to make
+your test pass. Keep throwaway scratch out of the delivered tree, but commit
+useful evaluation artifacts in the natural project test location or under a
+small `evaluation/` directory when no natural home exists.
+
+Useful evaluator-written artifacts are narrow and honest:
+
+- they encode an invariant, counterexample, behavioral probe, or quality check
+  that future implementation turns can run again;
+- they avoid hardcoding the current implementation's accidental shape;
+- they include the command or expected behavior needed to reproduce the
+  finding;
+- they are small enough to clarify the goal instead of becoming a second
+  product.
+
+If you add reusable evaluation artifacts, mention the files and commands in
+your finding. If a probe is useful but cannot be safely written in the current
+workspace, describe the exact artifact the next implementation or controller
+turn should create.
 
 ## Artifact hygiene gate
 

@@ -322,7 +322,8 @@ func renderWorkspace(workspace string, role Role) string {
 	if role == RoleVerifier {
 		lines = append(lines,
 			"Do not rewrite, reset, or clean up implementation commits. Your job is to judge the delivered tree and report findings.\n",
-			"Use this snapshot as evidence of delivered tree shape: changed files, untracked artifacts, generated outputs, and diff size may matter for artifact hygiene. Keep evaluator scratch outside the delivered tree.\n",
+			"Use this snapshot as evidence of delivered tree shape: changed files, untracked artifacts, generated outputs, and diff size may matter for artifact hygiene.\n",
+			"Keep throwaway evaluator scratch outside the delivered tree. If a check becomes a reusable test, probe, fixture, or reproduction script, write it into the workspace in the natural test location or a small `evaluation/` directory so future turns can run it again.\n",
 		)
 	}
 	lines = append(lines, fmt.Sprintf("```\n%s\n```\n", workspace))
