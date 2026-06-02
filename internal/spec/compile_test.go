@@ -342,9 +342,9 @@ func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
 	task := RenderVerifierTask(compiled, "=== FILES ===\n./main.go", "")
 
 	for _, want := range []string{
-		"Persist useful probes",
+		"Persist Useful Probes",
 		"write to the same workspace when the change is evaluation code",
-		"reusable test, probe, fixture, or reproduction script",
+		"integration probes, fixtures, scripts, or minimal counterexamples",
 		"natural test location or a small `evaluation/` directory",
 	} {
 		if !strings.Contains(task, want) {
@@ -390,8 +390,8 @@ func TestRenderWithSkillsRoster(t *testing.T) {
 	if !strings.Contains(task, "`my-skill`") {
 		t.Error("should contain skill name")
 	}
-	if !strings.Contains(task, "/opt/telos/private/skills/<name>/SKILL.md") {
-		t.Error("should explain cloud skill mount path")
+	if !strings.Contains(task, "prompts reference names instead of inlining skill bodies") {
+		t.Error("should explain skill-name routing without inlining skill bodies")
 	}
 }
 
