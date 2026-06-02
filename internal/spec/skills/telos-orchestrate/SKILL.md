@@ -29,13 +29,6 @@ Evaluator-written tests, probes, fixtures, and reproductions are durable
 evidence. Preserve them when they expose a real invariant, run them against
 candidate checkpoints, and only discard them when they are shown to be invalid.
 
-## Related Skills
-
-- `keycloak-admin` — Keycloak content mutations.
-- `database-sql` — PostgreSQL operations.
-- `k8s-deploy` — deployment shape.
-- `analyze-runs` — choosing among checkpoints.
-
 ## Small Example
 
 If a service secret is stale, the controller writes a focused task spec such
