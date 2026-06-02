@@ -35,6 +35,7 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 		renderPlatformPreamble(compiled),
 		renderSessionContext(compiled, RoleProver, options),
 		renderSpec(compiled),
+		renderDeliveryContract(RoleProver),
 		renderRequiredEvaluationRubrics(compiled, RoleProver, options),
 		renderSkillsRoster(compiled, options),
 		renderTranscriptProtocol(transcriptPath, RoleProver),
@@ -54,6 +55,7 @@ func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath
 		renderPlatformPreamble(compiled),
 		renderSessionContext(compiled, RoleVerifier, options),
 		renderSpec(compiled),
+		renderDeliveryContract(RoleVerifier),
 		renderRequiredEvaluationRubrics(compiled, RoleVerifier, options),
 		renderSkillsRoster(compiled, options),
 		renderTranscriptProtocol(transcriptPath, RoleVerifier),
@@ -159,6 +161,31 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 
 func renderSpec(compiled *CompiledEnvironment) string {
 	return "# Spec\n\n" + compiled.SpecText + "\n"
+}
+
+func renderDeliveryContract(role Role) string {
+	lines := []string{
+		"## Delivery Contract",
+		"",
+		"For file-producing, CLI, benchmark, or task-package work, the delivered workspace is the product surface.",
+		"- Identify concrete deliverables named by the spec: executable files, modules, CLIs, config files, tests, generated outputs, manifests, or expected paths.",
+		"- A transcript, plan, explanation, journal entry, or scratch file is not a delivered artifact unless the spec explicitly asks for it.",
+		"- If the spec shows an invocation such as `uv run --project /app tool.py ...`, the named file must exist at that path and implement the requested behavior.",
+	}
+	if role == RoleProver {
+		lines = append(lines,
+			"- Create or edit the requested deliverables directly in the workspace before claiming progress.",
+			"- Prefer the direct implementation path: inspect the workspace, write the required files, run focused checks, then fix observed failures.",
+			"- Before ending the turn, inspect the expected paths and name the files changed plus checks run.",
+		)
+	} else {
+		lines = append(lines,
+			"- Before conceding, inspect the expected paths and verify the requested files or runtime surfaces exist in the delivered workspace.",
+			"- A missing requested deliverable, empty product tree, or behavior implemented only in notes is a blocking finding.",
+			"- Treat focused verifier commands and source inspection as evidence; do not accept narrative alone.",
+		)
+	}
+	return strings.Join(lines, "\n")
 }
 
 func displayRole(role Role) string {
@@ -338,6 +365,8 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 			"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
 			"- Write concise Markdown with claims, evidence, changes made, and remaining uncertainty",
 			"- During the turn, emit concise <progress_update>...</progress_update> entries when useful for a background observer, without spamming routine tool activity",
+			"- After tool calls, always send final assistant text; a turn with no final text is incomplete",
+			"- Name concrete files changed and focused checks run before the final progress update",
 			"- End every turn with one final <progress_update>what you did this round</progress_update>",
 		}, "\n")
 	}
@@ -347,6 +376,7 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 			"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
 			"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
 			"- Write concise Markdown focused on evidence, score changes, and whether another implementation turn is useful",
+			"- After tool calls, always send final assistant text; a turn with no final text is incomplete",
 			"- Emit exactly one <review>...</review> block and one <summary>...</summary> block",
 			"- The <review> block must be CSV with header exactly `criteria,score`",
 			"- Use score format `x.y/10` for every score",
@@ -364,6 +394,7 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
 		"- Write concise Markdown; blocking findings first",
 		"- During the turn, emit concise <progress_update>...</progress_update> entries when useful for a background observer, without spamming routine tool activity",
+		"- After tool calls, always send final assistant text; a turn with no final text is incomplete",
 		"- End every turn with one final <progress_update>what you found or why you concede</progress_update>",
 		"- The final non-empty line must be exactly one status tag",
 		"- <status>CONTINUE</status> if you found a concrete goal violation",

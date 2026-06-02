@@ -174,6 +174,46 @@ func TestReadPiSessionMapsLengthStopToRecoverableError(t *testing.T) {
 	}
 }
 
+func TestReadPiSessionPreservesToolOnlyAssistantStats(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
+	appendPiSession(t, path, `{"type":"message","id":"t","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","content":[{"type":"text","text":"ok"}],"isError":false}}`)
+	appendPiSession(t, path, `{"type":"message","id":"a","parentId":"t","timestamp":"2026-05-21T00:00:02Z","message":{"role":"assistant","model":"sail-research/test","stopReason":"stop","content":[],"usage":{"input":5,"output":7,"cacheRead":0,"cacheWrite":0,"cost":{"total":0}}}}`)
+
+	summary, err := ReadPiSession(path)
+	if err != nil {
+		t.Fatalf("ReadPiSession: %v", err)
+	}
+	if summary.Logs != "" {
+		t.Fatalf("logs: got %q", summary.Logs)
+	}
+	if summary.Stats.NumTurns != 1 {
+		t.Fatalf("tool turns: got %d", summary.Stats.NumTurns)
+	}
+	if summary.Stats.InputTokens != 5 || summary.Stats.OutputTokens != 7 {
+		t.Fatalf("stats: got %+v", summary.Stats)
+	}
+}
+
+func TestReadPiSessionEstimatesUsageWhenProviderReportsZeros(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
+	appendPiSession(t, path, `{"type":"message","id":"u","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"user","content":[{"type":"text","text":"`+strings.Repeat("u", 400)+`"}]}}`)
+	appendPiSession(t, path, `{"type":"message","id":"a","parentId":"u","timestamp":"2026-05-21T00:00:02Z","message":{"role":"assistant","model":"sail-research/nvidia/Gemma-4-31B-IT-NVFP4","stopReason":"stop","content":[{"type":"text","text":"`+strings.Repeat("a", 800)+`"}],"usage":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0,"totalTokens":0,"cost":{"total":0}}}}`)
+
+	summary, err := ReadPiSession(path)
+	if err != nil {
+		t.Fatalf("ReadPiSession: %v", err)
+	}
+	if summary.Stats.InputTokens != 100 || summary.Stats.OutputTokens != 200 {
+		t.Fatalf("estimated stats: got %+v", summary.Stats)
+	}
+	wantCost := 100*0.07e-6 + 200*0.40e-6
+	if summary.Stats.CostUSD != wantCost {
+		t.Fatalf("cost: got %.12f want %.12f", summary.Stats.CostUSD, wantCost)
+	}
+}
+
 func TestReadPiSessionIgnoresTransientErrors(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
 	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)

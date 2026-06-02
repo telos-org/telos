@@ -312,6 +312,15 @@ func TestRenderProverTask(t *testing.T) {
 	if !strings.Contains(task, "## Output") {
 		t.Error("should contain output contract")
 	}
+	if !strings.Contains(task, "## Delivery Contract") {
+		t.Error("should contain shared delivery contract")
+	}
+	if !strings.Contains(task, "A transcript, plan, explanation, journal entry, or scratch file is not a delivered artifact") {
+		t.Error("should reject narrative-only delivery")
+	}
+	if !strings.Contains(task, "After tool calls, always send final assistant text") {
+		t.Error("should require final assistant text after tool calls")
+	}
 }
 
 func TestRenderVerifierTask(t *testing.T) {
@@ -330,6 +339,15 @@ func TestRenderVerifierTask(t *testing.T) {
 	}
 	if !strings.Contains(task, "Check something.") {
 		t.Error("should contain spec body")
+	}
+	if !strings.Contains(task, "## Delivery Contract") {
+		t.Error("should contain shared delivery contract")
+	}
+	if !strings.Contains(task, "A missing requested deliverable, empty product tree, or behavior implemented only in notes is a blocking finding") {
+		t.Error("verifier should block missing deliverables")
+	}
+	if !strings.Contains(task, "After tool calls, always send final assistant text") {
+		t.Error("should require final assistant text after tool calls")
 	}
 }
 

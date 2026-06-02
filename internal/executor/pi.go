@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"strings"
 
@@ -113,6 +114,15 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	}
 
 	if strings.TrimSpace(logs) == "" {
+		if stats.NumTurns > 0 {
+			logs = fmt.Sprintf("Pi completed %d tool turn(s) without final assistant text.", stats.NumTurns)
+			return game.TurnResult{
+				Role:   role,
+				Status: game.StatusContinue,
+				Logs:   logs,
+				Stats:  stats,
+			}
+		}
 		detail := "Pi produced no assistant text."
 		if stderrTrimmed != "" {
 			detail = fmt.Sprintf("%s\n[stderr]\n%s", detail, stderrTrimmed)
@@ -191,6 +201,8 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 
 	var summary PiSessionSummary
 	var finalAssistant map[string]interface{}
+	var estimatedInputChars int
+	var estimatedOutputChars int
 	reader := bufio.NewReader(f)
 	for {
 		line, err := reader.ReadString('\n')
@@ -201,8 +213,11 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 			if dec.Decode(&entry) == nil {
 				if msg, ok := entry["message"].(map[string]interface{}); ok {
 					switch getString(msg, "role") {
+					case "user":
+						estimatedInputChars += len(contentText(msg))
 					case "assistant":
 						finalAssistant = msg
+						estimatedOutputChars += len(contentText(msg))
 						summary.Stats = mergeTurnStats(summary.Stats, statsFromPiMessage(msg))
 					case "toolResult", "bashExecution":
 						summary.Stats.NumTurns++
@@ -221,6 +236,11 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 		return PiSessionSummary{}, fmt.Errorf("no assistant message in pi session")
 	}
 
+	if summary.Stats.InputTokens == 0 && summary.Stats.CacheReadTokens == 0 && summary.Stats.OutputTokens == 0 {
+		summary.Stats.InputTokens = estimateTokensFromChars(estimatedInputChars)
+		summary.Stats.OutputTokens = estimateTokensFromChars(estimatedOutputChars)
+		summary.Stats.CostUSD = estimateCostUSD(summary.Stats.Model, summary.Stats)
+	}
 	summary.Logs = assistantText(finalAssistant)
 	summary.Error = errorFromPiMessage(finalAssistant)
 	return summary, nil
@@ -245,6 +265,27 @@ func assistantText(msg map[string]interface{}) string {
 	return strings.Join(parts, "")
 }
 
+func contentText(msg map[string]interface{}) string {
+	content := msg["content"]
+	if text, ok := content.(string); ok {
+		return text
+	}
+	blocks, _ := content.([]interface{})
+	var parts []string
+	for _, block := range blocks {
+		bm, ok := block.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		if text := getString(bm, "text"); text != "" {
+			parts = append(parts, text)
+		} else if thinking := getString(bm, "thinking"); thinking != "" {
+			parts = append(parts, thinking)
+		}
+	}
+	return strings.Join(parts, "")
+}
+
 func statsFromPiMessage(msg map[string]interface{}) game.TurnStats {
 	stats := game.TurnStats{}
 	if model := getString(msg, "model"); model != "" {
@@ -263,6 +304,51 @@ func statsFromPiMessage(msg map[string]interface{}) game.TurnStats {
 		stats.CostUSD += floatFromAny(cost["total"])
 	}
 	return stats
+}
+
+type tokenPricing struct {
+	inputCostPerToken     float64
+	cacheReadCostPerToken float64
+	outputCostPerToken    float64
+}
+
+var publicTokenPricing = map[string]tokenPricing{
+	"sail-research/nvidia/Gemma-4-31B-IT-NVFP4": {
+		inputCostPerToken:     0.07e-6,
+		cacheReadCostPerToken: 0.05e-6,
+		outputCostPerToken:    0.40e-6,
+	},
+	"sail-research/deepseek-ai/DeepSeek-V4-Pro": {
+		inputCostPerToken:     1.75e-6,
+		cacheReadCostPerToken: 0.15e-6,
+		outputCostPerToken:    4.50e-6,
+	},
+	"silares/moonshotai/Kimi-K2.6": {
+		inputCostPerToken:     0.95e-6,
+		cacheReadCostPerToken: 0.16e-6,
+		outputCostPerToken:    4.00e-6,
+	},
+}
+
+func estimateTokensFromChars(charCount int) int {
+	if charCount <= 0 {
+		return 0
+	}
+	return int(math.Max(1, math.Round(float64(charCount)/4)))
+}
+
+func estimateCostUSD(model string, stats game.TurnStats) float64 {
+	pricing, ok := publicTokenPricing[model]
+	if !ok || (stats.InputTokens == 0 && stats.CacheReadTokens == 0 && stats.OutputTokens == 0) {
+		return 0
+	}
+	uncachedInput := stats.InputTokens - stats.CacheReadTokens
+	if uncachedInput < 0 {
+		uncachedInput = 0
+	}
+	return float64(uncachedInput)*pricing.inputCostPerToken +
+		float64(stats.CacheReadTokens)*pricing.cacheReadCostPerToken +
+		float64(stats.OutputTokens)*pricing.outputCostPerToken
 }
 
 func errorFromPiMessage(msg map[string]interface{}) string {
