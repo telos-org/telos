@@ -1,7 +1,9 @@
 package game
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -24,8 +26,14 @@ type AppendTurnOptions struct {
 
 // InitializeTranscript creates a transcript header if the file does not exist.
 func InitializeTranscript(path, sessionID, systemName, evidencePath, startedAt string) error {
-	if info, err := os.Stat(path); err == nil && info.Size() > 0 {
-		return nil
+	info, err := os.Stat(path)
+	switch {
+	case err == nil:
+		if info.Size() > 0 {
+			return nil
+		}
+	case !errors.Is(err, fs.ErrNotExist):
+		return fmt.Errorf("inspect transcript %s: %w", path, err)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

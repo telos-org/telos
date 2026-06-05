@@ -5,8 +5,10 @@ import (
 	"compress/gzip"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,6 +18,32 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
+
+// pathExists reports whether path is present. Returns (false, err) for any
+// stat error other than ErrNotExist so callers can distinguish "missing"
+// from "I/O or permission failure" instead of collapsing both into a
+// silent fallback.
+func pathExists(path string) (bool, error) {
+	_, err := os.Stat(path)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
+
+func dirExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err == nil {
+		return info.IsDir(), nil
+	}
+	if errors.Is(err, fs.ErrNotExist) {
+		return false, nil
+	}
+	return false, err
+}
 
 const (
 	outputRootEnv = "TELOS_OUTPUT_ROOT"
@@ -171,7 +199,10 @@ func ensureSessionWorkspace(sessionDir string, manifest *sessionapi.Manifest) er
 		return fmt.Errorf("inspect session workspace: %w", err)
 	}
 
-	archive := latestWorkspaceCheckpoint(manifest)
+	archive, err := latestWorkspaceCheckpoint(manifest)
+	if err != nil {
+		return err
+	}
 	if archive == "" {
 		// Only initialize an empty workspace if the manifest never recorded a
 		// source workspace (fresh API-backed session) or already declared the
@@ -201,27 +232,35 @@ func ensureSessionWorkspace(sessionDir string, manifest *sessionapi.Manifest) er
 	return nil
 }
 
-func latestWorkspaceCheckpoint(manifest *sessionapi.Manifest) string {
+func latestWorkspaceCheckpoint(manifest *sessionapi.Manifest) (string, error) {
 	if manifest == nil {
-		return ""
+		return "", nil
 	}
 	for i := len(manifest.Specs) - 1; i >= 0; i-- {
 		spec := manifest.Specs[i]
 		if spec.WorkspacePath == nil || *spec.WorkspacePath == "" {
 			continue
 		}
-		if _, err := os.Stat(*spec.WorkspacePath); err == nil {
-			return *spec.WorkspacePath
+		ok, err := pathExists(*spec.WorkspacePath)
+		if err != nil {
+			return "", fmt.Errorf("inspect workspace checkpoint %s: %w", *spec.WorkspacePath, err)
+		}
+		if ok {
+			return *spec.WorkspacePath, nil
 		}
 	}
-	return ""
+	return "", nil
 }
 
 func cleanupSessionWorkspace(sessionDir string, resultPath string) error {
 	if resultPath == "" {
 		return nil
 	}
-	if _, err := os.Stat(resultPath); err != nil {
+	ok, err := pathExists(resultPath)
+	if err != nil {
+		return fmt.Errorf("inspect workspace result %s: %w", resultPath, err)
+	}
+	if !ok {
 		return nil
 	}
 	return os.RemoveAll(activeWorkspacePath(sessionDir))
@@ -261,7 +300,9 @@ func cloneGitWorkspace(source string, dest string) (*sessionapi.Workspace, error
 	} else if strings.TrimSpace(dirty) != "" {
 		return nil, fmt.Errorf("workspace has uncommitted changes; commit or stash changes before launching a local Telos run")
 	}
-	if _, err := os.Stat(filepath.Join(source, ".gitmodules")); err == nil {
+	if ok, err := pathExists(filepath.Join(source, ".gitmodules")); err != nil {
+		return nil, fmt.Errorf("inspect workspace submodules: %w", err)
+	} else if ok {
 		return nil, fmt.Errorf("workspace uses git submodules; local isolated workspaces do not support submodules yet")
 	}
 	if usesLFS, err := workspaceUsesLFS(source); err != nil {
@@ -323,7 +364,11 @@ func resolveExtendedWorkspaceArtifact(sessionsRoot string, parent *spec.Compiled
 				manifest.SessionID == currentControllerID &&
 				manifest.SessionKind == sessionapi.KindController {
 				active := activeWorkspacePath(sessionDir)
-				if info, err := os.Stat(active); err == nil && info.IsDir() {
+				ok, err := dirExists(active)
+				if err != nil {
+					return nil, fmt.Errorf("inspect active workspace %s: %w", active, err)
+				}
+				if ok {
 					return &sessionapi.WorkspaceArtifactBinding{
 						SpecPath:      parent.Environment.Path,
 						SpecName:      parent.Environment.Name,
@@ -339,7 +384,11 @@ func resolveExtendedWorkspaceArtifact(sessionsRoot string, parent *spec.Compiled
 			if sessionSpec.WorkspacePath == nil || *sessionSpec.WorkspacePath == "" {
 				continue
 			}
-			if _, err := os.Stat(*sessionSpec.WorkspacePath); err != nil {
+			ok, err := pathExists(*sessionSpec.WorkspacePath)
+			if err != nil {
+				return nil, fmt.Errorf("inspect workspace artifact %s: %w", *sessionSpec.WorkspacePath, err)
+			}
+			if !ok {
 				continue
 			}
 			if best != nil && stamp <= bestStamp {
