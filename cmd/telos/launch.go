@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/telos-org/telos/internal/cli"
@@ -176,10 +177,16 @@ func cmdLaunch(command, action string, args []string) {
 
 func printLocalLaunch(out io.Writer, action string, session *cli.LocalSession) {
 	workspace := shellQuote(session.WorkspaceScope)
-	fmt.Fprintf(out, "%s %s (%s)\n", action, session.SessionID, session.SpecName)
-	fmt.Fprintf(out, "workspace %s\n", session.WorkspaceScope)
-	fmt.Fprintf(out, "describe  cd %s && telos describe %s\n", workspace, session.SessionID)
-	fmt.Fprintf(out, "logs      cd %s && telos logs %s\n", workspace, session.SessionID)
+	fmt.Fprintf(out, "%s %s\n\n", action, session.SpecName)
+	printSummaryField(out, "Name", session.SpecName)
+	printSummaryField(out, "Platform", "local")
+	printSummaryField(out, "Status", "active")
+	printSummaryField(out, "Cost", "-")
+	printSummaryField(out, "Session", session.SessionID)
+	printSummaryField(out, "Workspace", session.WorkspaceScope)
+	fmt.Fprintln(out)
+	printSummaryField(out, "Describe", fmt.Sprintf("cd %s && telos describe %s", workspace, session.SessionID))
+	printSummaryField(out, "Logs", fmt.Sprintf("cd %s && telos logs %s", workspace, session.SessionID))
 }
 
 func shellQuote(s string) string {
@@ -250,7 +257,7 @@ func runChildCloud(
 		printJSON(map[string]any{"session": session})
 		return
 	}
-	fmt.Printf("%s %s (status: %s)\n", action, session.SessionID, session.Status)
+	printSessionReceipt(os.Stdout, action, session, nil)
 }
 
 func runCloud(
@@ -285,7 +292,7 @@ func runCloud(
 	}
 	applySessionRuntimeConfig(&req, runtimeConfig)
 	if command == "apply" && envID == "" {
-		applyCloudAuto(req, jsonOut, waitForEnvironment, readyTimeout, action)
+		applyCloudAuto(req, jsonOut, waitForEnvironment, readyTimeout)
 		return
 	}
 	client, env, err := cloudSessionClientForRun(envID, waitForEnvironment, readyTimeout)
@@ -294,7 +301,7 @@ func runCloud(
 		os.Exit(1)
 	}
 	if command == "apply" {
-		applyCloud(req, client, env, jsonOut, action)
+		applyCloud(req, client, env, jsonOut)
 		return
 	}
 	session, err := client.CreateSession(req)
@@ -308,10 +315,7 @@ func runCloud(
 			"session":     session,
 		})
 	} else {
-		fmt.Printf("%s %s (status: %s)\n", action, session.SessionID, session.Status)
-		if env != nil {
-			fmt.Printf("environment %s %s\n", env.ID, env.Handle)
-		}
+		printSessionReceipt(os.Stdout, action, session, environmentOutput(env))
 	}
 }
 
@@ -320,7 +324,6 @@ func applyCloud(
 	client *cloud.Client,
 	env *cloud.Environment,
 	jsonOut bool,
-	action string,
 ) {
 	specName, err := specNameFromRequest(req)
 	if err != nil {
@@ -358,10 +361,7 @@ func applyCloud(
 		})
 		return
 	}
-	fmt.Printf("%s %s (status: %s, %s)\n", action, session.SessionID, session.Status, operation)
-	if env != nil {
-		fmt.Printf("environment %s %s\n", env.ID, env.Handle)
-	}
+	printSessionReceipt(os.Stdout, operation, session, environmentOutput(env))
 }
 
 type applyCloudResult struct {
@@ -375,7 +375,6 @@ func applyCloudAuto(
 	jsonOut bool,
 	waitForEnvironment bool,
 	readyTimeout time.Duration,
-	action string,
 ) {
 	specName, err := specNameFromRequest(req)
 	if err != nil {
@@ -434,11 +433,74 @@ func applyCloudAuto(
 		printJSON(map[string]any{"results": results})
 		return
 	}
-	for _, result := range results {
-		fmt.Printf("%s %s (status: %s, %s)\n", action, result.Session.SessionID, result.Session.Status, result.Operation)
-		if result.Environment != nil {
-			fmt.Printf("environment %s %s\n", result.Environment.ID, result.Environment.Handle)
+	printApplyResults(os.Stdout, results)
+}
+
+func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session, env *environmentJSON) {
+	if session == nil {
+		return
+	}
+	name := sessionName(*session)
+	fmt.Fprintf(out, "%s %s\n\n", operation, name)
+	row := displayRow(*session)
+	printSummaryField(out, "Name", row.Name)
+	printSummaryField(out, "Platform", row.Platform)
+	printSummaryField(out, "Status", row.Status)
+	printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
+	printSummaryField(out, "Session", row.Session)
+	if env != nil {
+		printSummaryField(out, "Environment", env.ID)
+		if env.Handle != "" {
+			printSummaryField(out, "Handle", env.Handle)
 		}
+	}
+}
+
+func printApplyResults(out io.Writer, results []applyCloudResult) {
+	if len(results) == 0 {
+		return
+	}
+	if len(results) == 1 {
+		result := results[0]
+		printSessionReceipt(out, result.Operation, result.Session, result.Environment)
+		return
+	}
+
+	seen := map[string]bool{}
+	var operations []string
+	for _, result := range results {
+		if !seen[result.Operation] {
+			seen[result.Operation] = true
+			operations = append(operations, result.Operation)
+		}
+	}
+	for index, operation := range operations {
+		if index > 0 {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintln(out, operation)
+		fmt.Fprintln(out)
+		w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
+		fmt.Fprintln(w, "ENV\tNAME\tPLATFORM\tSTATUS\tCOST\tSESSION")
+		for _, result := range results {
+			if result.Operation != operation || result.Session == nil {
+				continue
+			}
+			row := displayRow(*result.Session)
+			envID := "-"
+			if result.Environment != nil && result.Environment.ID != "" {
+				envID = result.Environment.ID
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				envID,
+				row.Name,
+				row.Platform,
+				row.Status,
+				row.Cost,
+				row.Session,
+			)
+		}
+		_ = w.Flush()
 	}
 }
 

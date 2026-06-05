@@ -387,13 +387,91 @@ func TestPrintLocalLaunchIncludesWorkspaceScopedCommands(t *testing.T) {
 	printLocalLaunch(&out, "submitted", session)
 	text := out.String()
 	for _, want := range []string{
-		"submitted local_123 (blackbox)",
-		"workspace /tmp/telos-blackbox",
-		"describe  cd '/tmp/telos-blackbox' && telos describe local_123",
-		"logs      cd '/tmp/telos-blackbox' && telos logs local_123",
+		"submitted blackbox",
+		"Name      blackbox",
+		"Platform  local",
+		"Status    active",
+		"Cost      -",
+		"Session   local_123",
+		"Workspace /tmp/telos-blackbox",
+		"Describe  cd '/tmp/telos-blackbox' && telos describe local_123",
+		"Logs      cd '/tmp/telos-blackbox' && telos logs local_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("launch output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestPrintSessionReceiptUsesNormalizedSummary(t *testing.T) {
+	name := "gitea"
+	kind := sessionapi.KindController
+	completed := "completed"
+	cost := 1.1907
+	session := &sessionapi.Session{
+		SessionID:    "sess_123",
+		SpecName:     &name,
+		SessionKind:  &kind,
+		Runtime:      sessionapi.RuntimeCloud,
+		Status:       sessionapi.StatusRunning,
+		Result:       &completed,
+		TotalCostUSD: &cost,
+	}
+	env := &environmentJSON{ID: "env_123", Handle: "env-123.usetelos.ai"}
+
+	var out bytes.Buffer
+	printSessionReceipt(&out, "updated", session, env)
+	text := out.String()
+	for _, want := range []string{
+		"updated gitea",
+		"Name      gitea",
+		"Platform  cloud",
+		"Status    idle",
+		"Cost      $1.1907",
+		"Session   sess_123",
+		"Environment env_123",
+		"Handle    env-123.usetelos.ai",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("receipt missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestPrintApplyResultsGroupsMultipleOperations(t *testing.T) {
+	name := "gitea"
+	cost := 1.23
+	session := &sessionapi.Session{
+		SessionID:    "sess_123",
+		SpecName:     &name,
+		Runtime:      sessionapi.RuntimeCloud,
+		Status:       sessionapi.StatusRunning,
+		TotalCostUSD: &cost,
+	}
+	results := []applyCloudResult{
+		{
+			Operation:   "updated",
+			Session:     session,
+			Environment: &environmentJSON{ID: "env_123"},
+		},
+		{
+			Operation: "created",
+			Session:   &sessionapi.Session{SessionID: "sess_456", SpecName: &name, Runtime: sessionapi.RuntimeCloud, Status: sessionapi.StatusPending},
+		},
+	}
+
+	var out bytes.Buffer
+	printApplyResults(&out, results)
+	text := out.String()
+	for _, want := range []string{
+		"updated\n\n",
+		"ENV      NAME   PLATFORM  STATUS",
+		"env_123  gitea  cloud     active  $1.23  sess_123",
+		"created\n\n",
+		"-    gitea  cloud     active  -     sess_456",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("apply results missing %q:\n%s", want, text)
 		}
 	}
 }
