@@ -27,6 +27,8 @@ class TelosHarborAgentTest(unittest.TestCase):
         self.assertIn("# Spec", rendered)
         self.assertIn("Harbor's task working directory is `/app`", rendered)
         self.assertIn("official Harbor benchmark verifier", rendered)
+        self.assertIn("child sessions", rendered)
+        self.assertIn("candidate", rendered)
         self.assertNotIn("telos-pvg", rendered)
 
     def test_sanitize_spec_name(self):
@@ -69,7 +71,6 @@ class TelosHarborAgentTest(unittest.TestCase):
         agent.agent_timeout_sec = 0
         agent.session_timeout_sec = 3600
         agent.poll_interval_sec = 5
-
         script = agent._run_script("---\nversion: v0\nname: task\n---\nBody", "/app")
 
         self.assertIn('telos logs "$session_id" --raw', script)

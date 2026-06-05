@@ -82,6 +82,9 @@ Complete this Harbor benchmark task inside the current container environment.
 - Harbor's task working directory is `{workdir}`.
 - Treat relative paths in the instruction as relative to `{workdir}`.
 - The delivered artifact is the task workspace and its runtime behavior.
+- If you use Telos child sessions, their workspace checkpoints are candidate
+  results and evidence. The Harbor verifier sees this task workspace, so ensure
+  the final result you want judged has been integrated here before completing.
 - The official Harbor benchmark verifier is the final scoreboard. Before
   considering the task complete, run the relevant checks available in the task
   environment.
@@ -381,7 +384,7 @@ done
         context.metadata = metadata
         self._last_metadata = metadata
 
-        if result.return_code != 0 and not is_completed_telos_session(final_session):
+        if result.return_code != 0:
             raise RuntimeError(
                 "telos executable agent failed: "
                 f"exit={result.return_code}; stderr={(result.stderr or '')[-2000:]}"
