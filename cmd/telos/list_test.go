@@ -80,6 +80,7 @@ func TestSessionTurnShowsActiveRoleAndRound(t *testing.T) {
 }
 
 func TestControllerListSessionsUsesScopedContext(t *testing.T) {
+	t.Setenv("TELOS_RUNTIME", "")
 	var gotAuth string
 	var gotPath string
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

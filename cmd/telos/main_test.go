@@ -608,6 +608,7 @@ func TestCloudSessionClientsRecoverEnvironmentAccess(t *testing.T) {
 }
 
 func TestControllerSessionContextUsesScopedToken(t *testing.T) {
+	t.Setenv("TELOS_RUNTIME", "")
 	t.Setenv("TELOS_API_TOKEN", "session-token")
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", "http://telos-api.local:8000")
@@ -692,6 +693,7 @@ func TestLocalControllerSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	t.Setenv("TELOS_RUNTIME", "")
 	t.Setenv("TELOS_SESSION_ID", session.SessionID)
 	t.Setenv("TELOS_SESSION_DIR", root)
 
@@ -770,6 +772,7 @@ func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
 }
 
 func TestFollowTranscriptSurfacesControllerTranscriptError(t *testing.T) {
+	t.Setenv("TELOS_RUNTIME", "")
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/sessions/sess_running/transcript":
@@ -853,6 +856,7 @@ func TestPrintLogsRawShowsTranscript(t *testing.T) {
 }
 
 func TestControllerLookupReturnsClusterAPIError(t *testing.T) {
+	t.Setenv("TELOS_RUNTIME", "")
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/sessions/sess_controller" {
 			http.Error(w, `{"detail":"cluster unavailable"}`, http.StatusInternalServerError)
