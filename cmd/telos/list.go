@@ -31,6 +31,10 @@ func cmdList(args []string) {
 
 	var sessions []sessionapi.Session
 	controllerScoped := false
+	fetchLimit := 0
+	if *wide {
+		fetchLimit = *limit
+	}
 
 	if !*localOnly && *env == "" {
 		controllerSessions, handled, err := controllerListSessions(*limit)
@@ -42,18 +46,15 @@ func cmdList(args []string) {
 			sessions = append(sessions, controllerSessions...)
 			controllerScoped = true
 		} else {
-			sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, *limit)...)
+			sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit)...)
 		}
 	} else {
-		sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, *limit)...)
-	}
-
-	if *limit > 0 && len(sessions) > *limit {
-		sessions = sessions[:*limit]
+		sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit)...)
 	}
 
 	effectiveWide := *wide || controllerScoped
 	visible := visibleListSessions(sessions, effectiveWide)
+	visible = limitListSessions(visible, *limit)
 	if *jsonOut {
 		printJSON(sessionapi.SessionListResponse{Sessions: visible})
 		return
@@ -182,6 +183,13 @@ func visibleListSessions(sessions []sessionapi.Session, wide bool) []sessionapi.
 		}
 	}
 	return visible
+}
+
+func limitListSessions(sessions []sessionapi.Session, limit int) []sessionapi.Session {
+	if limit > 0 && len(sessions) > limit {
+		return sessions[:limit]
+	}
+	return sessions
 }
 
 func listEnvironments(jsonOut bool) {

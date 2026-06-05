@@ -51,6 +51,23 @@ func TestVisibleListSessionsWideKeepsChildSessions(t *testing.T) {
 	}
 }
 
+func TestLimitListSessionsAppliesAfterDefaultVisibility(t *testing.T) {
+	parent := "sess_parent"
+	sessions := []sessionapi.Session{
+		{SessionID: "sess_child", ParentSessionID: &parent, Status: sessionapi.StatusRunning},
+		{SessionID: "sess_a", Status: sessionapi.StatusRunning},
+		{SessionID: "sess_b", Status: sessionapi.StatusRunning},
+	}
+
+	visible := limitListSessions(visibleListSessions(sessions, false), 2)
+	if len(visible) != 2 {
+		t.Fatalf("visible limited sessions: got %d, want 2", len(visible))
+	}
+	if visible[0].SessionID != "sess_a" || visible[1].SessionID != "sess_b" {
+		t.Fatalf("limit should apply after child filtering, got %#v", visible)
+	}
+}
+
 func TestSessionResultPrefersSessionResultThenLatestEpoch(t *testing.T) {
 	completed := "completed"
 	if got := sessionResult(sessionapi.Session{Result: &completed}); got != "completed" {
