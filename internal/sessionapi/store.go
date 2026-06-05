@@ -91,6 +91,12 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(dir)
+		}
+	}()
 
 	prepared, err := prepareRequestSpec(dir, req)
 	if err != nil {
@@ -168,7 +174,12 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		return nil, err
 	}
 
-	return fs.deriveSession(id, &m)
+	session, err := fs.deriveSession(id, &m)
+	if err != nil {
+		return nil, err
+	}
+	committed = true
+	return session, nil
 }
 
 func validateCreateRequest(req SessionCreateRequest) error {

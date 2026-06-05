@@ -261,6 +261,13 @@ func TestCreateSessionRejectsInvalidNameWithoutStrayCompileFiles(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	entries, err := os.ReadDir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected failed create to clean session dir, found %d entries", len(entries))
+	}
 }
 
 func TestCloudCreateSessionCreatesControllerForOperatorApply(t *testing.T) {
