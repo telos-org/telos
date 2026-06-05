@@ -86,10 +86,9 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		return nil, err
 	}
 
-	id := generateSessionID(fs.runtime)
-	dir := fs.sessionDir(id)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return nil, fmt.Errorf("create session dir: %w", err)
+	id, dir, err := fs.createSessionDir()
+	if err != nil {
+		return nil, err
 	}
 	committed := false
 	defer func() {
@@ -180,6 +179,25 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	}
 	committed = true
 	return session, nil
+}
+
+func (fs *FileStore) createSessionDir() (string, string, error) {
+	if err := os.MkdirAll(fs.Root, 0o755); err != nil {
+		return "", "", fmt.Errorf("create sessions root: %w", err)
+	}
+
+	for attempt := 0; attempt < 16; attempt++ {
+		id := generateSessionID(fs.runtime)
+		dir := fs.sessionDir(id)
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				continue
+			}
+			return "", "", fmt.Errorf("create session dir: %w", err)
+		}
+		return id, dir, nil
+	}
+	return "", "", fmt.Errorf("create session dir: exhausted session id retries")
 }
 
 func validateCreateRequest(req SessionCreateRequest) error {
