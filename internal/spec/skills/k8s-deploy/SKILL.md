@@ -72,7 +72,47 @@ must recreate the entire deployment. If it can't, your workspace is broken.
 - Always set resource `requests` and `limits`
 - Use `imagePullPolicy: IfNotPresent` for tagged images
 - Use labels consistently: `app: <name>`, `version: <ver>`
-- Use ClusterIP for in-cluster services; publish externally through Telos handles
+- Use ClusterIP for private services; publish browser/API surfaces through
+  Telos public route ConfigMaps as described below.
+
+## Telos Public Handles
+
+When a spec asks for a stable public HTTPS handle, artifact URL, product
+handle, browser route, public API route, or public UI route, publish it through
+the Telos public-route record. Do not satisfy that request with Kubernetes
+Ingress, LoadBalancer, NodePort, or ad-hoc annotations such as
+`telos.dev/route: public`.
+
+Current Telos cloud discovery requires one ConfigMap labeled
+`telos.ai/public-route=primary`. It must declare the route type, a stable
+prefix, and the private target URL. Minimal app route shape:
+
+```yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: <service>-route
+  namespace: <namespace>
+  labels:
+    telos.ai/public-route: primary
+data:
+  type: app
+  prefix: <product-prefix>
+  service: <private-target-url>
+```
+
+For an operator dashboard, use the `build-dashboard` skill instead. Dashboard
+routes still use `telos.ai/public-route=primary`, but `data.type` must be
+`dashboard` and the Service must be named `dashboard`.
+
+After applying the route record, verify that the route reconciler patches it
+with `hostname` and `product_handle`. A controller session's artifact URL stays
+empty until an unambiguous non-TCP route exists for that session or namespace.
+
+If a namespace has multiple browser routes, set `type: dashboard` on dashboard
+routes and `type: app` or `type: service` on product routes so Telos can choose
+the product route. TCP routes must set `protocol: tcp`; they are not used as
+browser artifacts.
 
 ## Health Probes
 
