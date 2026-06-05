@@ -299,21 +299,28 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 	printSessionDescription(&out, session)
 	text := out.String()
 	for _, want := range []string{
-		"Name:     postgres",
-		"Parent:   sess_parent",
-		"Result:   completed",
-		"Complete: verifier_conceded",
-		"Evaluate: accepted",
-		"Artifact: https://postgres.example",
-		"Spec Ver: 2",
-		"Cost:     $1.2300",
-		"Rounds:   4",
-		"Latest Epoch:",
-		"Artifacts:",
-		"active workspace: yes:/state/workspace",
-		"yes:/state/workspace.tar.gz",
-		"yes:/state/evidence.jsonl",
-		"yes:/state/transcript.md",
+		"Name      postgres",
+		"Platform  cloud",
+		"Status    completed",
+		"Cost      $1.2300",
+		"Session   sess_123",
+		"Lifecycle",
+		"result         completed",
+		"kind           controller",
+		"parent         sess_parent",
+		"completion     verifier_conceded",
+		"evaluation     accepted",
+		"spec version   2",
+		"rounds         4",
+		"Artifact",
+		"https://postgres.example",
+		"Latest Epoch",
+		"RESULT     STARTED",
+		"Paths",
+		"active workspace file:///state/workspace",
+		"postgres workspace file:///state/workspace.tar.gz",
+		"postgres evidence file:///state/evidence.jsonl",
+		"postgres transcript file:///state/transcript.md",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("description missing %q:\n%s", want, text)
@@ -337,10 +344,10 @@ func TestEvaluationDispositionIsPendingForActiveReview(t *testing.T) {
 	var out bytes.Buffer
 	printSessionDescription(&out, session)
 	text := out.String()
-	if !strings.Contains(text, "Evaluate: pending") {
+	if !strings.Contains(text, "evaluation     pending") {
 		t.Fatalf("description should show pending evaluation while active:\n%s", text)
 	}
-	if !strings.Contains(text, "Turn:     prover#1") {
+	if !strings.Contains(text, "current turn   prover#1") {
 		t.Fatalf("description should show active turn:\n%s", text)
 	}
 }
@@ -360,8 +367,8 @@ func TestPrintSessionDescriptionDistinguishesReviewCycles(t *testing.T) {
 	printSessionDescription(&out, session)
 	text := out.String()
 	for _, want := range []string{
-		"Complete: review_cycles_complete",
-		"Evaluate: review cycles complete (acceptance not used)",
+		"completion     review_cycles_complete",
+		"evaluation     review cycles complete (acceptance not used)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("description missing %q:\n%s", want, text)

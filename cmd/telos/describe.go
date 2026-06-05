@@ -39,44 +39,46 @@ func cmdDescribe(args []string) {
 }
 
 func printSessionDescription(out io.Writer, session sessionapi.Session) {
-	fmt.Fprintf(out, "Session:  %s\n", session.SessionID)
-	fmt.Fprintf(out, "Name:     %s\n", sessionName(session))
-	fmt.Fprintf(out, "Kind:     %s\n", sessionKind(session))
-	fmt.Fprintf(out, "Runtime:  %s\n", session.Runtime)
+	row := displayRow(session)
+	printSummaryField(out, "Name", row.Name)
+	printSummaryField(out, "Platform", row.Platform)
+	printSummaryField(out, "Status", row.Status)
+	printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
+	printSummaryField(out, "Session", row.Session)
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Lifecycle")
+	printDetailField(out, "api status", string(session.Status))
+	printDetailField(out, "result", sessionRawResult(session))
+	printDetailField(out, "kind", sessionKind(session))
 	if session.ParentSessionID != nil && *session.ParentSessionID != "" {
-		fmt.Fprintf(out, "Parent:   %s\n", *session.ParentSessionID)
+		printDetailField(out, "parent", *session.ParentSessionID)
+	} else {
+		printDetailField(out, "parent", "-")
 	}
-	fmt.Fprintf(out, "Status:   %s\n", session.Status)
-	fmt.Fprintf(out, "Result:   %s\n", sessionResult(session))
+	printDetailField(out, "next run", optionalString(session.NextRunAt))
+	printDetailField(out, "current turn", sessionTurn(session))
+	printDetailField(out, "created", optionalString(session.CreatedAt))
+	printDetailField(out, "finished", optionalString(session.FinishedAt))
+	if session.CurrentSpecVersion != nil {
+		printDetailField(out, "spec version", fmt.Sprint(*session.CurrentSpecVersion))
+	}
 	if session.CompletionReason != nil && *session.CompletionReason != "" {
-		fmt.Fprintf(out, "Complete: %s\n", *session.CompletionReason)
+		printDetailField(out, "completion", *session.CompletionReason)
 	}
 	if session.VerifierConceded != nil {
-		fmt.Fprintf(out, "Evaluate: %s\n", evaluationDisposition(session))
-	}
-	if session.ArtifactURI != nil && *session.ArtifactURI != "" {
-		fmt.Fprintf(out, "Artifact: %s\n", *session.ArtifactURI)
-	}
-	if session.CreatedAt != nil {
-		fmt.Fprintf(out, "Created:  %s\n", *session.CreatedAt)
-	}
-	if session.FinishedAt != nil {
-		fmt.Fprintf(out, "Finished: %s\n", *session.FinishedAt)
-	}
-	if session.CurrentSpecVersion != nil {
-		fmt.Fprintf(out, "Spec Ver: %d\n", *session.CurrentSpecVersion)
+		printDetailField(out, "evaluation", evaluationDisposition(session))
 	}
 	if session.Error != nil {
-		fmt.Fprintf(out, "Error:    %s\n", *session.Error)
-	}
-	if session.TotalCostUSD != nil {
-		fmt.Fprintf(out, "Cost:     $%.4f\n", *session.TotalCostUSD)
+		printDetailField(out, "error", *session.Error)
 	}
 	if session.RoundCount != nil {
-		fmt.Fprintf(out, "Rounds:   %d\n", *session.RoundCount)
+		printDetailField(out, "rounds", fmt.Sprint(*session.RoundCount))
 	}
-	if turn := sessionTurn(session); turn != "-" {
-		fmt.Fprintf(out, "Turn:     %s\n", turn)
+	if session.ArtifactURI != nil && *session.ArtifactURI != "" {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "Artifact")
+		fmt.Fprintf(out, "  %s\n", *session.ArtifactURI)
 	}
 	if len(session.Epochs) > 0 {
 		fmt.Fprintln(out)
@@ -86,6 +88,31 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 		fmt.Fprintln(out)
 		printSessionArtifacts(out, session)
 	}
+}
+
+func printSummaryField(out io.Writer, label string, value string) {
+	fmt.Fprintf(out, "%-9s %s\n", label, orDash(value))
+}
+
+func printDetailField(out io.Writer, label string, value string) {
+	fmt.Fprintf(out, "  %-14s %s\n", label, orDash(value))
+}
+
+func optionalString(value *string) string {
+	if value == nil {
+		return "-"
+	}
+	return *value
+}
+
+func sessionRawResult(session sessionapi.Session) string {
+	if session.Result != nil && *session.Result != "" {
+		return *session.Result
+	}
+	if result := latestEpochString(session, "result"); result != "" {
+		return result
+	}
+	return "-"
 }
 
 func evaluationDisposition(session sessionapi.Session) string {
@@ -102,12 +129,11 @@ func evaluationDisposition(session sessionapi.Session) string {
 }
 
 func printLatestEpoch(out io.Writer, session sessionapi.Session) {
-	fmt.Fprintln(out, "Latest Epoch:")
+	fmt.Fprintln(out, "Latest Epoch")
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(w, "ID\tRESULT\tSTARTED\tFINISHED")
-	fmt.Fprintf(w, "%s\t%s\t%s\t%s\n",
-		latestEpochString(session, "id"),
-		sessionResult(session),
+	fmt.Fprintln(w, "RESULT\tSTARTED\tFINISHED")
+	fmt.Fprintf(w, "%s\t%s\t%s\n",
+		sessionRawResult(session),
 		orDash(latestEpochString(session, "started_at")),
 		orDash(latestEpochString(session, "finished_at")),
 	)
@@ -115,15 +141,15 @@ func printLatestEpoch(out io.Writer, session sessionapi.Session) {
 }
 
 func printSessionArtifacts(out io.Writer, session sessionapi.Session) {
-	fmt.Fprintln(out, "Artifacts:")
+	fmt.Fprintln(out, "Paths")
 	if session.ActiveWorkspacePath != nil || session.ActiveWorkspaceExists != nil {
-		fmt.Fprintf(out, "  active workspace: %s\n", artifactPath(session.ActiveWorkspaceExists, session.ActiveWorkspacePath))
+		printDetailField(out, "active workspace", artifactPath(session.ActiveWorkspaceExists, session.ActiveWorkspacePath))
 	}
 	for _, spec := range session.Specs {
-		fmt.Fprintf(out, "  %s:\n", sessionSpecName(spec))
-		fmt.Fprintf(out, "    workspace:  %s\n", artifactPath(spec.WorkspaceExists, spec.WorkspacePath))
-		fmt.Fprintf(out, "    evidence:   %s\n", artifactPath(spec.EvidenceExists, spec.EvidencePath))
-		fmt.Fprintf(out, "    transcript: %s\n", artifactPath(spec.TranscriptExists, spec.TranscriptPath))
+		prefix := sessionSpecName(spec)
+		printDetailField(out, prefix+" workspace", artifactPath(spec.WorkspaceExists, spec.WorkspacePath))
+		printDetailField(out, prefix+" evidence", artifactPath(spec.EvidenceExists, spec.EvidencePath))
+		printDetailField(out, prefix+" transcript", artifactPath(spec.TranscriptExists, spec.TranscriptPath))
 	}
 }
 
@@ -142,13 +168,10 @@ func artifactPath(exists *bool, path *string) string {
 		return "missing"
 	}
 	if path != nil && *path != "" {
-		if exists == nil {
-			return *path
-		}
-		return "yes:" + *path
+		return fileURI(*path)
 	}
 	if exists != nil && *exists {
-		return "yes"
+		return "present"
 	}
 	return "-"
 }
