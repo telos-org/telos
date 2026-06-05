@@ -62,7 +62,7 @@ func cmdList(args []string) {
 
 	if len(visible) == 0 {
 		if !effectiveWide && len(sessions) > 0 {
-			fmt.Println("no active sessions (use --wide for history)")
+			fmt.Println("no top-level sessions (use --wide for child sessions)")
 		} else {
 			fmt.Println("no sessions")
 		}
