@@ -165,7 +165,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if exec != nil {
 		agentExec = exec
 	} else {
-		agentExec, err = createPiExecutor(workspace, cfg)
+		agentExec, err = createAgentExecutor(workspace, cfg)
 		if err != nil {
 			fail := &game.PVGResult{GameResult: game.GameFailure, Error: err.Error()}
 			if finishErr := finishEpoch(sessionDir, manifest, fail); finishErr != nil {
