@@ -585,6 +585,42 @@ func TestListSessions(t *testing.T) {
 	}
 }
 
+func TestListSessionsLimit(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	post(t, srv.URL+"/api/sessions", createSessionBody(t, "a"))
+	post(t, srv.URL+"/api/sessions", createSessionBody(t, "b"))
+	post(t, srv.URL+"/api/sessions", createSessionBody(t, "c"))
+
+	resp, err := http.Get(srv.URL + "/api/sessions?limit=2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status", "200", itoa(resp.StatusCode))
+
+	var listResp sessionapi.SessionListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(listResp.Sessions) != 2 {
+		t.Fatalf("limited sessions: got %d, want 2", len(listResp.Sessions))
+	}
+}
+
+func TestListSessionsRejectsInvalidLimit(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/sessions?limit=-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status", "400", itoa(resp.StatusCode))
+}
+
 func TestListSessionsJSONShape(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()

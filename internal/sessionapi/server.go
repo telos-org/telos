@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -136,13 +137,33 @@ func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	limit, err := listLimit(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	sessions, err := h.store.List()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	sessions = h.authorizer.VisibleSessions(caller, sessions)
+	if limit > 0 && len(sessions) > limit {
+		sessions = sessions[:limit]
+	}
 	writeJSON(w, http.StatusOK, SessionListResponse{Sessions: sessions})
+}
+
+func listLimit(r *http.Request) (int, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("limit"))
+	if raw == "" {
+		return 0, nil
+	}
+	limit, err := strconv.Atoi(raw)
+	if err != nil || limit < 0 {
+		return 0, fmt.Errorf("limit must be a non-negative integer")
+	}
+	return limit, nil
 }
 
 func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
