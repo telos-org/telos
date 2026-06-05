@@ -69,33 +69,29 @@ func cmdList(args []string) {
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if effectiveWide {
-		fmt.Fprintln(w, "NAME\tKIND\tSTATUS\tRESULT\tTURN\tRUNTIME\tARTIFACT\tPARENT\tCOST\tSESSION")
+		fmt.Fprintln(w, "NAME\tPLATFORM\tSTATUS\tPARENT\tCOST\tSESSION")
 	} else {
-		fmt.Fprintln(w, "NAME\tSTATUS\tRESULT\tTURN\tARTIFACT\tSESSION")
+		fmt.Fprintln(w, "NAME\tPLATFORM\tSTATUS\tCOST\tSESSION")
 	}
 	for _, sess := range visible {
+		row := displayRow(sess)
 		if effectiveWide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				sessionName(sess),
-				sessionKind(sess),
-				sess.Status,
-				sessionResult(sess),
-				sessionTurn(sess),
-				sess.Runtime,
-				sessionArtifact(sess),
-				sessionParent(sess),
-				sessionCost(sess),
-				sess.SessionID,
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				row.Name,
+				row.Platform,
+				row.Status,
+				row.Parent,
+				row.Cost,
+				row.Session,
 			)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-			sessionName(sess),
-			sess.Status,
-			sessionResult(sess),
-			sessionTurn(sess),
-			sessionArtifact(sess),
-			sess.SessionID,
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			row.Name,
+			row.Platform,
+			row.Status,
+			row.Cost,
+			row.Session,
 		)
 	}
 	_ = w.Flush()
@@ -181,21 +177,11 @@ func visibleListSessions(sessions []sessionapi.Session, wide bool) []sessionapi.
 	}
 	visible := make([]sessionapi.Session, 0, len(sessions))
 	for _, session := range sessions {
-		if (session.ParentSessionID == nil || *session.ParentSessionID == "") &&
-			sessionVisibleByDefault(session) {
+		if session.ParentSessionID == nil || *session.ParentSessionID == "" {
 			visible = append(visible, session)
 		}
 	}
 	return visible
-}
-
-func sessionVisibleByDefault(session sessionapi.Session) bool {
-	switch session.Status {
-	case sessionapi.StatusPending, sessionapi.StatusRunning, sessionapi.StatusScheduled:
-		return true
-	default:
-		return false
-	}
 }
 
 func listEnvironments(jsonOut bool) {

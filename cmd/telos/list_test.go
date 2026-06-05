@@ -24,10 +24,13 @@ func TestVisibleListSessionsHidesChildSessionsByDefault(t *testing.T) {
 	}
 
 	visible := visibleListSessions(sessions, false)
-	if len(visible) != 2 {
-		t.Fatalf("visible session count: got %d, want 2", len(visible))
+	if len(visible) != 4 {
+		t.Fatalf("visible session count: got %d, want 4", len(visible))
 	}
-	if visible[0].SessionID != "sess_controller" || visible[1].SessionID != "sess_controller_2" {
+	if visible[0].SessionID != "sess_controller" ||
+		visible[1].SessionID != "sess_controller_2" ||
+		visible[2].SessionID != "sess_old" ||
+		visible[3].SessionID != "sess_failed" {
 		t.Fatalf("visible sessions: got %#v", visible)
 	}
 }
@@ -76,6 +79,65 @@ func TestSessionTurnShowsActiveRoleAndRound(t *testing.T) {
 	}
 	if got := sessionTurn(sessionapi.Session{}); got != "-" {
 		t.Fatalf("empty session turn: got %q", got)
+	}
+}
+
+func TestSessionDisplayStatusDerivesHumanState(t *testing.T) {
+	controller := sessionapi.KindController
+	task := sessionapi.KindTask
+	completed := "completed"
+	round := 1
+	role := "prover"
+
+	tests := []struct {
+		name string
+		sess sessionapi.Session
+		want string
+	}{
+		{
+			name: "active running task",
+			sess: sessionapi.Session{Status: sessionapi.StatusRunning, SessionKind: &task},
+			want: "active",
+		},
+		{
+			name: "retained cloud controller",
+			sess: sessionapi.Session{
+				Status:      sessionapi.StatusRunning,
+				Runtime:     sessionapi.RuntimeCloud,
+				SessionKind: &controller,
+				Result:      &completed,
+			},
+			want: "idle",
+		},
+		{
+			name: "active turn wins",
+			sess: sessionapi.Session{
+				Status:       sessionapi.StatusRunning,
+				Runtime:      sessionapi.RuntimeCloud,
+				SessionKind:  &controller,
+				CurrentRound: &round,
+				CurrentRole:  &role,
+			},
+			want: "active",
+		},
+		{
+			name: "completed",
+			sess: sessionapi.Session{Status: sessionapi.StatusCompleted},
+			want: "completed",
+		},
+		{
+			name: "scheduled is idle",
+			sess: sessionapi.Session{Status: sessionapi.StatusScheduled},
+			want: "idle",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sessionDisplayStatus(tt.sess); got != tt.want {
+				t.Fatalf("display status: got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
