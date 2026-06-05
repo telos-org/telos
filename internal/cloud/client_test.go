@@ -204,7 +204,7 @@ func TestClientUpdateSessionSpec(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(sessionapi.Session{
 			SessionID: "sess_controller",
-			Status:    sessionapi.StatusScheduled,
+			Status:    sessionapi.StatusRunning,
 			Runtime:   sessionapi.RuntimeCloud,
 		})
 	}))

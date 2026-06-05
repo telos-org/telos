@@ -295,7 +295,6 @@ facts such as status, artifact existence, and latest descendant.
 ```text
 pending
 running
-scheduled
 completed
 failed
 stopped

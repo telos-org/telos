@@ -17,7 +17,6 @@ type SessionStatus string
 const (
 	StatusPending   SessionStatus = "pending"
 	StatusRunning   SessionStatus = "running"
-	StatusScheduled SessionStatus = "scheduled"
 	StatusCompleted SessionStatus = "completed"
 	StatusFailed    SessionStatus = "failed"
 	StatusStopped   SessionStatus = "stopped"

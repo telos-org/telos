@@ -18,7 +18,7 @@ func TestVisibleListSessionsHidesChildSessionsByDefault(t *testing.T) {
 	sessions := []sessionapi.Session{
 		{SessionID: "sess_controller", Status: sessionapi.StatusRunning},
 		{SessionID: "sess_task", ParentSessionID: &parent, Status: sessionapi.StatusCompleted},
-		{SessionID: "sess_controller_2", Status: sessionapi.StatusScheduled},
+		{SessionID: "sess_controller_2", Status: sessionapi.StatusRunning},
 		{SessionID: "sess_old", Status: sessionapi.StatusStopped},
 		{SessionID: "sess_failed", Status: sessionapi.StatusFailed},
 	}
@@ -124,11 +124,6 @@ func TestSessionDisplayStatusDerivesHumanState(t *testing.T) {
 			name: "completed",
 			sess: sessionapi.Session{Status: sessionapi.StatusCompleted},
 			want: "completed",
-		},
-		{
-			name: "scheduled is idle",
-			sess: sessionapi.Session{Status: sessionapi.StatusScheduled},
-			want: "idle",
 		},
 	}
 

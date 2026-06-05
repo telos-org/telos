@@ -438,7 +438,7 @@ func TestActiveControllerForSpec(t *testing.T) {
 	sessions := []sessionapi.Session{
 		{SessionID: "sess_task", SessionKind: &task, SpecName: &target, Status: sessionapi.StatusRunning},
 		{SessionID: "sess_old", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusStopped},
-		{SessionID: "sess_other", SessionKind: &controller, SpecName: &other, Status: sessionapi.StatusScheduled},
+		{SessionID: "sess_other", SessionKind: &controller, SpecName: &other, Status: sessionapi.StatusRunning},
 		{SessionID: "sess_done", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusCompleted},
 		{SessionID: "sess_failed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusFailed},
 		{SessionID: "sess_target", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusRunning},
@@ -477,7 +477,7 @@ func TestActiveControllerForSpecRejectsDuplicates(t *testing.T) {
 	target := "postgres"
 	sessions := []sessionapi.Session{
 		{SessionID: "sess_a", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusRunning},
-		{SessionID: "sess_b", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusScheduled},
+		{SessionID: "sess_b", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusRunning},
 	}
 
 	_, err := activeControllerForSpec(sessions, "postgres")

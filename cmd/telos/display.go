@@ -57,8 +57,6 @@ func sessionDisplayStatus(sess sessionapi.Session) string {
 	switch sess.Status {
 	case sessionapi.StatusPending, sessionapi.StatusRunning:
 		return "active"
-	case sessionapi.StatusScheduled:
-		return "idle"
 	default:
 		if sess.Status != "" {
 			return string(sess.Status)
