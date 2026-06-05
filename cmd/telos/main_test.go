@@ -49,6 +49,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
+		"version            Show version",
 		"--version",
 		"telos <command> --help",
 	} {

@@ -11,6 +11,7 @@
 //	telos logs [-f] [--raw] SESSION [--env ENV]
 //	telos stop SESSION [--env ENV] [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
+//	telos version
 //	telos --version
 package main
 
@@ -37,6 +38,9 @@ func main() {
 		os.Exit(1)
 	}
 	switch os.Args[1] {
+	case "version":
+		fmt.Println("telos " + Version)
+		return
 	case "plan":
 		cmdPlan(os.Args[2:])
 	case "apply":
@@ -76,6 +80,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  logs SESSION       Show session progress")
 	fmt.Fprintln(out, "  stop SESSION       Stop a running session")
 	fmt.Fprintln(out, "  login              Configure cloud access")
+	fmt.Fprintln(out, "  version            Show version")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "global flags:")
 	fmt.Fprintln(out, "  -h, --help         Show help")

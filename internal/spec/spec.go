@@ -80,7 +80,7 @@ func LoadEnvironmentWithBase(specPath string, baseDir string) (*EnvironmentSpec,
 	}
 	data, err := os.ReadFile(absPath)
 	if err != nil {
-		return nil, fmt.Errorf("environment file not found: %s", absPath)
+		return nil, fmt.Errorf("spec file not found: %s", absPath)
 	}
 	raw, body, ok := ParseFrontmatter(string(data))
 	if !ok {
