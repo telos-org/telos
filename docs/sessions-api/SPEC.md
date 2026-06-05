@@ -234,7 +234,7 @@ controllers:
 | --- | --- | --- |
 | `GET` | `/api/healthz` | server health |
 | `POST` | `/api/sessions` | create a session from raw spec markdown |
-| `GET` | `/api/sessions` | list visible sessions |
+| `GET` | `/api/sessions?limit=N` | list visible sessions, optionally capped |
 | `GET` | `/api/sessions/{id}` | describe one session |
 | `GET` | `/api/sessions/{id}/spec` | read mutable controller spec |
 | `PUT` | `/api/sessions/{id}/spec` | replace mutable controller spec |
@@ -289,6 +289,9 @@ epochs, and runner identity.
 
 The public `Session` response is a projection of persisted state plus derived
 facts such as status, artifact existence, and latest descendant.
+
+`limit` on `GET /api/sessions` is optional. When present, it must be a
+non-negative integer and is applied after authorization visibility.
 
 ## Status Model
 
