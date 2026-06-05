@@ -68,7 +68,9 @@ func TestClientGetSession(t *testing.T) {
 }
 
 func TestClientListSessions(t *testing.T) {
+	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.RequestURI()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(sessionapi.SessionListResponse{
 			Sessions: []sessionapi.Session{
@@ -86,6 +88,16 @@ func TestClientListSessions(t *testing.T) {
 	}
 	if len(sessions) != 2 {
 		t.Errorf("expected 2 sessions, got %d", len(sessions))
+	}
+	if gotPath != "/api/sessions" {
+		t.Fatalf("request path: got %q", gotPath)
+	}
+	sessions, err = client.ListSessions(2)
+	if err != nil {
+		t.Fatalf("ListSessions limit: %v", err)
+	}
+	if gotPath != "/api/sessions?limit=2" {
+		t.Fatalf("limited request path: got %q", gotPath)
 	}
 }
 

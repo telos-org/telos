@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
@@ -597,7 +598,9 @@ func TestListSessionsLimit(t *testing.T) {
 	defer srv.Close()
 
 	post(t, srv.URL+"/api/sessions", createSessionBody(t, "a"))
+	time.Sleep(2 * time.Millisecond)
 	post(t, srv.URL+"/api/sessions", createSessionBody(t, "b"))
+	time.Sleep(2 * time.Millisecond)
 	post(t, srv.URL+"/api/sessions", createSessionBody(t, "c"))
 
 	resp, err := http.Get(srv.URL + "/api/sessions?limit=2")
@@ -613,6 +616,10 @@ func TestListSessionsLimit(t *testing.T) {
 	}
 	if len(listResp.Sessions) != 2 {
 		t.Fatalf("limited sessions: got %d, want 2", len(listResp.Sessions))
+	}
+	if listResp.Sessions[0].SpecName == nil || *listResp.Sessions[0].SpecName != "c" ||
+		listResp.Sessions[1].SpecName == nil || *listResp.Sessions[1].SpecName != "b" {
+		t.Fatalf("limited sessions: got %#v, want newest c,b", listResp.Sessions)
 	}
 }
 
