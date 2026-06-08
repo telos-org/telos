@@ -15,6 +15,7 @@ import (
 
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 func TestReorderInterspersedFlags(t *testing.T) {
@@ -55,6 +56,69 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("usage missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestPrintPlanPreviewLocal(t *testing.T) {
+	compiled := &spec.CompiledEnvironment{
+		Environment: &spec.EnvironmentSpec{Name: "hello-service"},
+		ContentHash: "8a8f0c21",
+		Skills: []*spec.Skill{
+			{Name: "verify-engineering"},
+		},
+	}
+
+	var out bytes.Buffer
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "task", "")
+	text := out.String()
+	for _, want := range []string{
+		"Spec      hello-service",
+		"Platform  local",
+		"Session   task",
+		"Mutates   no",
+		"Path      ./SPEC.md",
+		"Hash      8a8f0c21",
+		"Skills    verify-engineering",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("plan output missing %q:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{"Target", "Namespace", "Plan for", "No sessions"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("plan output should not contain %q:\n%s", notWant, text)
+		}
+	}
+}
+
+func TestPrintPlanPreviewCloud(t *testing.T) {
+	compiled := &spec.CompiledEnvironment{
+		Environment: &spec.EnvironmentSpec{Name: "gitea"},
+		Namespace:   "ns-gitea",
+		ContentHash: "8a8f0c21",
+		Skills: []*spec.Skill{
+			{Name: "verify-engineering"},
+			{Name: "verify-quality"},
+		},
+	}
+
+	var out bytes.Buffer
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "controller", "env_123")
+	text := out.String()
+	for _, want := range []string{
+		"Spec      gitea",
+		"Platform  cloud",
+		"Session   controller",
+		"Mutates   no",
+		"Path      ./SPEC.md",
+		"Namespace ns-gitea",
+		"Hash      8a8f0c21",
+		"Skills    verify-engineering, verify-quality",
+		"Target    env_123",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("plan output missing %q:\n%s", want, text)
 		}
 	}
 }

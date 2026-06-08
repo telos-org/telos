@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"strings"
 
@@ -94,17 +95,36 @@ func cmdPlan(args []string) {
 		return
 	}
 
-	fmt.Printf("Plan for %s\n\n", compiled.Environment.Name)
-	fmt.Printf("Spec: %s\n", specPath)
-	fmt.Printf("Platform: %s\n", platform)
+	printPlanPreview(os.Stdout, compiled, specPath, platform, sessionKind, *env)
+}
+
+func printPlanPreview(
+	out io.Writer,
+	compiled *spec.CompiledEnvironment,
+	specPath string,
+	platform string,
+	sessionKind string,
+	envID string,
+) {
+	printSummaryField(out, "Spec", compiled.Environment.Name)
+	printSummaryField(out, "Platform", platform)
+	printSummaryField(out, "Session", sessionKind)
+	printSummaryField(out, "Mutates", "no")
+	printSummaryField(out, "Path", specPath)
 	if platform != "local" {
-		fmt.Printf("Namespace: %s\n", compiled.Namespace)
+		printSummaryField(out, "Namespace", compiled.Namespace)
 	}
-	fmt.Printf("Content hash: %s\n", compiled.ContentHash)
+	printSummaryField(out, "Hash", compiled.ContentHash)
 	if len(compiled.Skills) > 0 {
-		fmt.Printf("Skills: %s\n", strings.Join(skillNames(compiled.Skills), ", "))
+		printSummaryField(out, "Skills", strings.Join(skillNames(compiled.Skills), ", "))
 	}
-	fmt.Println("\nNo sessions or environments will be created.")
+	if platform != "local" {
+		target := "cloud"
+		if envID != "" {
+			target = envID
+		}
+		printSummaryField(out, "Target", target)
+	}
 }
 
 func skillNames(skills []*spec.Skill) []string {
