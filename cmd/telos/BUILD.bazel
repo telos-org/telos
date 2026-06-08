@@ -56,7 +56,13 @@ go_cross_binary(
 
 go_test(
     name = "telos_test",
-    srcs = glob(["*_test.go"]),
+    srcs = glob(
+        ["*_test.go"],
+        # This subprocess integration test builds tagged telos/telosd binaries
+        # with ambient `go build`; keep it under `go test ./...` until it is
+        # Bazel-native.
+        exclude = ["testfake_integration_test.go"],
+    ),
     embed = [":telos_lib"],
     deps = [
         "//internal/config",
