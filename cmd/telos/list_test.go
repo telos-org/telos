@@ -450,6 +450,57 @@ func TestPrintSessionReceiptUsesNormalizedSummary(t *testing.T) {
 	}
 }
 
+func TestPrintStopReceiptUsesSessionSummary(t *testing.T) {
+	name := "gitea"
+	cost := 1.1907
+	session := sessionapi.Session{
+		SessionID:    "sess_123",
+		SpecName:     &name,
+		Runtime:      sessionapi.RuntimeCloud,
+		Status:       sessionapi.StatusStopped,
+		TotalCostUSD: &cost,
+	}
+
+	var out bytes.Buffer
+	printStopReceipt(&out, session)
+	text := out.String()
+	for _, want := range []string{
+		"stopped gitea",
+		"Name      gitea",
+		"Platform  cloud",
+		"Status    stopped",
+		"Cost      $1.1907",
+		"Session   sess_123",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stop receipt missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestPrintStopReceiptUsesSessionIDForUnnamedSession(t *testing.T) {
+	session := sessionapi.Session{
+		SessionID: "sess_123",
+		Runtime:   sessionapi.RuntimeLocal,
+		Status:    sessionapi.StatusStopped,
+	}
+
+	var out bytes.Buffer
+	printStopReceipt(&out, session)
+	text := out.String()
+	for _, want := range []string{
+		"stopped sess_123",
+		"Name      -",
+		"Platform  local",
+		"Status    stopped",
+		"Session   sess_123",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("stop receipt missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestPrintApplyResultsGroupsMultipleOperations(t *testing.T) {
 	name := "gitea"
 	cost := 1.23

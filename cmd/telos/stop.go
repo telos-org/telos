@@ -3,7 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
+
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 // -- stop ---------------------------------------------------------------------
@@ -30,5 +33,25 @@ func cmdStop(args []string) {
 		printJSON(session)
 		return
 	}
-	fmt.Printf("session %s: %s\n", session.SessionID, session.Status)
+	printStopReceipt(os.Stdout, *session)
+}
+
+func printStopReceipt(out io.Writer, session sessionapi.Session) {
+	fmt.Fprintf(out, "stopped %s\n\n", stopOperationName(session))
+	row := displayRow(session)
+	printSummaryField(out, "Name", row.Name)
+	printSummaryField(out, "Platform", row.Platform)
+	printSummaryField(out, "Status", row.Status)
+	printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
+	printSummaryField(out, "Session", row.Session)
+}
+
+func stopOperationName(session sessionapi.Session) string {
+	if name := sessionName(session); name != "-" {
+		return name
+	}
+	if session.SessionID != "" {
+		return session.SessionID
+	}
+	return "-"
 }
