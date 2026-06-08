@@ -57,7 +57,6 @@ Use `run` for bounded tasks. Use `apply` for persistent controllers.
 
 ## Read Next
 
-- Runtime model and Sessions API: [`docs/sessions-api/SPEC.md`](docs/sessions-api/SPEC.md)
 - Harbor / SCBench executable agent: [`integrations/harbor`](integrations/harbor)
 - License: [`LICENSE`](LICENSE)
 
