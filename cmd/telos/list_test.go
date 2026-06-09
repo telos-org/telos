@@ -265,6 +265,7 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 	version := 2
 	cost := 1.23
 	rounds := 4
+	interval := 14400
 	workspaceExists := true
 	evidenceExists := true
 	transcriptExists := true
@@ -297,6 +298,7 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 			"finished_at": "2026-05-19T00:03:00Z",
 		}},
 		Specs: []sessionapi.SessionSpec{{
+			IntervalSeconds:  &interval,
 			Name:             &name,
 			WorkspaceExists:  &workspaceExists,
 			WorkspacePath:    &workspacePath,
@@ -320,6 +322,7 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 		"result         completed",
 		"kind           controller",
 		"parent         sess_parent",
+		"interval       4h",
 		"completion     verifier_conceded",
 		"evaluation     accepted",
 		"spec version   2",
@@ -337,6 +340,39 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("description missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, "next run") {
+		t.Fatalf("description should not show next run without persisted scheduler state:\n%s", text)
+	}
+}
+
+func TestPrintSessionDescriptionFormatsIntervals(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		secs int
+		want string
+	}{
+		{name: "seconds", secs: 45, want: "interval       45s"},
+		{name: "minutes", secs: 300, want: "interval       5m"},
+		{name: "hours", secs: 7200, want: "interval       2h"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session := sessionapi.Session{
+				SessionID: "sess_interval",
+				Status:    sessionapi.StatusRunning,
+				Runtime:   sessionapi.RuntimeCloud,
+				Specs: []sessionapi.SessionSpec{{
+					IntervalSeconds: &tc.secs,
+				}},
+			}
+
+			var out bytes.Buffer
+			printSessionDescription(&out, session)
+			text := out.String()
+			if !strings.Contains(text, tc.want) {
+				t.Fatalf("description missing %q:\n%s", tc.want, text)
+			}
+		})
 	}
 }
 

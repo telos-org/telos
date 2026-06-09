@@ -56,7 +56,9 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	} else {
 		printDetailField(out, "parent", "-")
 	}
-	printDetailField(out, "next run", optionalString(session.NextRunAt))
+	if interval := sessionInterval(session); interval != "" {
+		printDetailField(out, "interval", interval)
+	}
 	printDetailField(out, "current turn", sessionTurn(session))
 	printDetailField(out, "created", optionalString(session.CreatedAt))
 	printDetailField(out, "finished", optionalString(session.FinishedAt))
@@ -103,6 +105,23 @@ func optionalString(value *string) string {
 		return "-"
 	}
 	return *value
+}
+
+func sessionInterval(session sessionapi.Session) string {
+	if len(session.Specs) == 0 || session.Specs[0].IntervalSeconds == nil {
+		return ""
+	}
+	seconds := *session.Specs[0].IntervalSeconds
+	if seconds <= 0 {
+		return ""
+	}
+	if seconds%3600 == 0 {
+		return fmt.Sprintf("%dh", seconds/3600)
+	}
+	if seconds%60 == 0 {
+		return fmt.Sprintf("%dm", seconds/60)
+	}
+	return fmt.Sprintf("%ds", seconds)
 }
 
 func sessionRawResult(session sessionapi.Session) string {
