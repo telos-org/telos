@@ -340,6 +340,9 @@ func shouldRetryUnproductiveFinal(text, task string) bool {
 	if normalized == "" {
 		return true
 	}
+	if looksLikePendingWorkFinal(normalized) {
+		return true
+	}
 	for _, marker := range []string{
 		"what would you like me to work on",
 		"what would you like me to do",
@@ -361,6 +364,40 @@ func shouldRetryUnproductiveFinal(text, task string) bool {
 			}
 		}
 		return true
+	}
+	return false
+}
+
+func looksLikePendingWorkFinal(normalized string) bool {
+	for _, completionMarker := range []string{
+		"changed files",
+		"checks run",
+		"created ",
+		"updated ",
+		"implemented ",
+		"all checks pass",
+		"passes",
+		"pass.",
+	} {
+		if strings.Contains(normalized, completionMarker) {
+			return false
+		}
+	}
+	for _, marker := range []string{
+		"will now implement",
+		"will now extend",
+		"will now add",
+		"i will implement",
+		"i will add",
+		"i'll implement",
+		"i'll add",
+		"let me code this up",
+		"now implement the",
+		"need to implement",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
 	}
 	return false
 }
