@@ -429,8 +429,7 @@ type responseItem struct {
 
 func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (string, game.TurnStats, error) {
 	input := []interface{}{
-		map[string]interface{}{"role": "developer", "content": nativeSystemPrompt(role)},
-		map[string]interface{}{"role": "user", "content": task},
+		map[string]interface{}{"role": "user", "content": nativeSystemPrompt(role) + "\n\n# Assignment\n\n" + task},
 	}
 	var previousID string
 	var stats game.TurnStats

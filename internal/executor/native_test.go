@@ -118,6 +118,55 @@ func TestResolveNativeProviderUsesSilaresConvention(t *testing.T) {
 	}
 }
 
+func TestNativeExecutorResponsesIncludesHarnessPromptInUserInput(t *testing.T) {
+	workspace := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		input, _ := req["input"].([]interface{})
+		if len(input) != 1 {
+			t.Fatalf("responses input length: got %d body=%s", len(input), mustJSON(req))
+		}
+		first, _ := input[0].(map[string]interface{})
+		content, _ := first["content"].(string)
+		for _, want := range []string{
+			"Do not ask the operator what to build or what to do next.",
+			"# Assignment",
+			"create industry.py",
+		} {
+			if !strings.Contains(content, want) {
+				t.Fatalf("responses user input missing %q:\n%s", want, content)
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"id":"resp_1",
+			"output":[{"type":"message","content":[{"type":"output_text","text":"Done.\n<status>CONCEDE</status>\n"}]}],
+			"usage":{"input_tokens":17,"output_tokens":5}
+		}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_API_BASE_URL", server.URL)
+	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_API_STYLE", "openai-responses")
+
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	result := exec.ExecuteTurn("create industry.py", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+
+	if result.Error != "" {
+		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
+	}
+	if result.Status != game.StatusConcede {
+		t.Fatalf("status: got %s logs=%q", result.Status, result.Logs)
+	}
+}
+
 func TestNativeSystemPromptPreventsTaskDrift(t *testing.T) {
 	prompt := nativeSystemPrompt("prover")
 	for _, want := range []string{
