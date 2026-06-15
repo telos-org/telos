@@ -247,13 +247,9 @@ func resolveNativeProvider(model string) (nativeProviderConfig, error) {
 func providerFromEnv(provider, model, defaultBase, keyName string, style providerStyle) (nativeProviderConfig, error) {
 	envPrefix := providerEnvPrefix(provider)
 	base := firstEnv(envPrefix + "_BASE_URL")
-	if base == "" {
-		switch provider {
-		case "openai", "openai-codex":
-			base = firstEnv("OPENAI_BASE_URL")
-		case "xai":
-			base = firstEnv("XAI_BASE_URL")
-		}
+	if base == "" && provider == "openai-codex" {
+		// openai-codex shares OpenAI's base URL when no codex-specific override is set.
+		base = firstEnv("OPENAI_BASE_URL")
 	}
 	if base == "" {
 		base = defaultBase
@@ -437,20 +433,6 @@ func looksLikePendingWorkFinal(normalized string) bool {
 			return true
 		}
 	}
-	for _, completionMarker := range []string{
-		"changed files",
-		"checks run",
-		"created ",
-		"updated ",
-		"implemented ",
-		"all checks pass",
-		"passes",
-		"pass.",
-	} {
-		if strings.Contains(normalized, completionMarker) {
-			return false
-		}
-	}
 	return false
 }
 
@@ -498,6 +480,7 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 	stats.Model = c.cfg.Model
 	maxToolLoops := nativeMaxToolLoops()
 	maxOutputTokens := nativeMaxOutputTokens()
+	toolSchemas := nativeToolSchemasForChat()
 	usedTools := false
 	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
@@ -511,7 +494,7 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 		req := map[string]interface{}{
 			"model":       c.cfg.Model,
 			"messages":    messages,
-			"tools":       nativeToolSchemasForChat(),
+			"tools":       toolSchemas,
 			"tool_choice": "auto",
 			"max_tokens":  maxOutputTokens,
 		}
@@ -602,6 +585,7 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 	stats.Model = c.cfg.Model
 	maxToolLoops := nativeMaxToolLoops()
 	maxOutputTokens := nativeMaxOutputTokens()
+	toolSchemas := nativeToolSchemasForResponses()
 	usedTools := false
 	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
@@ -616,7 +600,7 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 		req := map[string]interface{}{
 			"model":             c.cfg.Model,
 			"input":             input,
-			"tools":             nativeToolSchemasForResponses(),
+			"tools":             toolSchemas,
 			"max_output_tokens": maxOutputTokens,
 		}
 		if previousID != "" {
@@ -727,6 +711,8 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 	stats.Model = c.cfg.Model
 	maxToolLoops := nativeMaxToolLoops()
 	maxOutputTokens := nativeMaxOutputTokens()
+	toolSchemas := nativeToolSchemasForAnthropic()
+	systemPrompt := nativeSystemPrompt(role)
 	usedTools := false
 	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
@@ -745,9 +731,9 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 		}
 		req := map[string]interface{}{
 			"model":      c.cfg.Model,
-			"system":     nativeSystemPrompt(role),
+			"system":     systemPrompt,
 			"messages":   messages,
-			"tools":      nativeToolSchemasForAnthropic(),
+			"tools":      toolSchemas,
 			"max_tokens": maxOutputTokens,
 		}
 		if err := c.postAnthropic(ctx, "/messages", req, &response); err != nil {
@@ -1167,15 +1153,16 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (string, error) {
 		_ = visit(root)
 	} else {
 		_ = filepath.WalkDir(root, func(file string, d os.DirEntry, err error) error {
-			if err != nil || d.IsDir() && shouldSkipDir(d.Name()) {
-				if d != nil && d.IsDir() {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() {
+				if shouldSkipDir(d.Name()) {
 					return filepath.SkipDir
 				}
 				return nil
 			}
-			if !d.IsDir() {
-				_ = visit(file)
-			}
+			_ = visit(file)
 			return nil
 		})
 	}
@@ -1234,17 +1221,10 @@ func (t *nativeTools) resolvePath(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	var full string
 	if filepath.IsAbs(p) {
-		full, err = filepath.Abs(filepath.Clean(p))
-		if err != nil {
-			return "", err
-		}
-		return full, nil
-	} else {
-		full = filepath.Join(workspace, p)
+		return filepath.Abs(filepath.Clean(p))
 	}
-	full, err = filepath.Abs(full)
+	full, err := filepath.Abs(filepath.Join(workspace, p))
 	if err != nil {
 		return "", err
 	}
