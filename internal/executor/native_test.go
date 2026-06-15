@@ -275,11 +275,27 @@ func TestShouldRetryUnproductiveFinalUsesAssignmentAnchors(t *testing.T) {
 	if !shouldRetryUnproductiveFinal("Good. Let's write new industry.py and add the invention command.", task) {
 		t.Fatal("expected planning answer mentioning assignment anchor to retry")
 	}
+	if !shouldRetryUnproductiveFinal("I have enough information. Let me now write the updated industry.py.", task) {
+		t.Fatal("expected let-me-now-write planning answer to retry")
+	}
 	if shouldRetryUnproductiveFinal("Created industry.py and ran the checks.", task) {
 		t.Fatal("expected answer mentioning assignment anchor to be accepted")
 	}
 	if anchors := assignmentFileAnchors("Create `industry.py`, update `src/app.ts`, and read `not-a-file`."); strings.Join(anchors, ",") != "industry.py,src/app.ts" {
 		t.Fatalf("anchors: got %q", anchors)
+	}
+}
+
+func TestShouldRetryNativeFinalRetriesNoToolLengthForFileAssignment(t *testing.T) {
+	task := "Create `industry.py` and run it."
+	if !shouldRetryNativeFinal("I have enough information about the implementation.", task, "length", false) {
+		t.Fatal("expected no-tool length response for file assignment to retry")
+	}
+	if shouldRetryNativeFinal("Created industry.py and ran checks.", task, "length", true) {
+		t.Fatal("expected length response after tool use with completion evidence to be accepted")
+	}
+	if shouldRetryNativeFinal("Here is the answer.", "Explain the design.", "length", false) {
+		t.Fatal("expected non-file assignment length response to be accepted")
 	}
 }
 

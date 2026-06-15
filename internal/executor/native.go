@@ -335,6 +335,25 @@ func nativeCorrectionPrompt(task string) string {
 	}, "\n")
 }
 
+func shouldRetryNativeFinal(text, task, stopReason string, usedTools bool) bool {
+	if shouldRetryUnproductiveFinal(text, task) {
+		return true
+	}
+	if !usedTools && isLengthStop(stopReason) && len(assignmentFileAnchors(task)) > 0 {
+		return true
+	}
+	return false
+}
+
+func isLengthStop(stopReason string) bool {
+	switch strings.ToLower(strings.TrimSpace(stopReason)) {
+	case "length", "max_tokens", "max_output_tokens":
+		return true
+	default:
+		return false
+	}
+}
+
 func shouldRetryUnproductiveFinal(text, task string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(text))
 	if normalized == "" {
@@ -369,6 +388,43 @@ func shouldRetryUnproductiveFinal(text, task string) bool {
 }
 
 func looksLikePendingWorkFinal(normalized string) bool {
+	for _, marker := range []string{
+		"will now implement",
+		"will now extend",
+		"will now add",
+		"will now write",
+		"i will now implement",
+		"i will now add",
+		"i will now write",
+		"i will implement",
+		"i will add",
+		"i will write",
+		"i'll now implement",
+		"i'll now add",
+		"i'll now write",
+		"i'll implement",
+		"i'll add",
+		"i'll write",
+		"let's implement",
+		"let's extend",
+		"let's add",
+		"let's write",
+		"let me now implement",
+		"let me now add",
+		"let me now write",
+		"let me implement",
+		"let me add",
+		"let me write",
+		"let me code this up",
+		"now implement the",
+		"need to add",
+		"need to implement",
+		"need to write",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
 	for _, completionMarker := range []string{
 		"changed files",
 		"checks run",
@@ -381,34 +437,6 @@ func looksLikePendingWorkFinal(normalized string) bool {
 	} {
 		if strings.Contains(normalized, completionMarker) {
 			return false
-		}
-	}
-	for _, marker := range []string{
-		"will now implement",
-		"will now extend",
-		"will now add",
-		"will now write",
-		"i will implement",
-		"i will add",
-		"i will write",
-		"i'll implement",
-		"i'll add",
-		"i'll write",
-		"let's implement",
-		"let's extend",
-		"let's add",
-		"let's write",
-		"let me implement",
-		"let me add",
-		"let me write",
-		"let me code this up",
-		"now implement the",
-		"need to add",
-		"need to implement",
-		"need to write",
-	} {
-		if strings.Contains(normalized, marker) {
-			return true
 		}
 	}
 	return false
@@ -457,6 +485,7 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 	var stats game.TurnStats
 	stats.Model = c.cfg.Model
 	maxToolLoops := nativeMaxToolLoops()
+	usedTools := false
 	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
 			Choices []struct {
@@ -489,7 +518,7 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 		}
 		_ = c.logger.assistant(msg.Content, c.cfg.Provider, c.cfg.Model, response.Choices[0].FinishReason, statsFromChatUsage(c.cfg.Model, response.Usage))
 		if len(msg.ToolCalls) == 0 {
-			if shouldRetryUnproductiveFinal(msg.Content, task) && i+1 < maxToolLoops {
+			if shouldRetryNativeFinal(msg.Content, task, response.Choices[0].FinishReason, usedTools) && i+1 < maxToolLoops {
 				messages = append(messages, msg, chatMessage{Role: "user", Content: nativeCorrectionPrompt(task)})
 				continue
 			}
@@ -497,6 +526,7 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 		}
 		messages = append(messages, msg)
 		results := c.executeToolCalls(msg.ToolCalls)
+		usedTools = true
 		stats.NumTurns += len(results)
 		for _, result := range results {
 			_ = c.logger.tool(result)
@@ -558,6 +588,7 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 	var stats game.TurnStats
 	stats.Model = c.cfg.Model
 	maxToolLoops := nativeMaxToolLoops()
+	usedTools := false
 	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
 			ID     string         `json:"id"`
@@ -592,7 +623,7 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 		text, calls := parseResponseOutput(response.Output)
 		_ = c.logger.assistant(text, c.cfg.Provider, c.cfg.Model, "stop", turnStats)
 		if len(calls) == 0 {
-			if shouldRetryUnproductiveFinal(text, task) && i+1 < maxToolLoops {
+			if shouldRetryNativeFinal(text, task, "stop", usedTools) && i+1 < maxToolLoops {
 				input = []interface{}{
 					map[string]interface{}{"role": "user", "content": nativeCorrectionPrompt(task)},
 				}
@@ -605,6 +636,7 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 		for _, call := range calls {
 			results = append(results, c.tools.execute(call))
 		}
+		usedTools = true
 		stats.NumTurns += len(results)
 		for _, result := range results {
 			_ = c.logger.tool(result)
@@ -680,6 +712,7 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 	var stats game.TurnStats
 	stats.Model = c.cfg.Model
 	maxToolLoops := nativeMaxToolLoops()
+	usedTools := false
 	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
 			ID         string           `json:"id"`
@@ -719,7 +752,7 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 		text, calls := parseAnthropicOutput(response.Content)
 		_ = c.logger.assistant(text, c.cfg.Provider, c.cfg.Model, response.StopReason, turnStats)
 		if len(calls) == 0 {
-			if shouldRetryUnproductiveFinal(text, task) && i+1 < maxToolLoops {
+			if shouldRetryNativeFinal(text, task, response.StopReason, usedTools) && i+1 < maxToolLoops {
 				messages = append(messages,
 					anthropicMessage{Role: "assistant", Content: response.Content},
 					anthropicMessage{Role: "user", Content: []anthropicBlock{{Type: "text", Text: nativeCorrectionPrompt(task)}}},
@@ -733,6 +766,7 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 		for _, call := range calls {
 			results = append(results, c.tools.execute(call))
 		}
+		usedTools = true
 		stats.NumTurns += len(results)
 		resultBlocks := make([]anthropicBlock, 0, len(results))
 		for _, result := range results {
