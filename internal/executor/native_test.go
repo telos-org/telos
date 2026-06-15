@@ -239,6 +239,19 @@ func TestNativeSystemPromptPreventsTaskDrift(t *testing.T) {
 	}
 }
 
+func TestShouldRetryUnproductiveFinalUsesAssignmentAnchors(t *testing.T) {
+	task := "Create `industry.py` and run it."
+	if !shouldRetryUnproductiveFinal("Your subscription is about to expire.", task) {
+		t.Fatal("expected unrelated answer without assignment anchor to retry")
+	}
+	if shouldRetryUnproductiveFinal("Created industry.py and ran the checks.", task) {
+		t.Fatal("expected answer mentioning assignment anchor to be accepted")
+	}
+	if anchors := assignmentFileAnchors("Create `industry.py`, update `src/app.ts`, and read `not-a-file`."); strings.Join(anchors, ",") != "industry.py,src/app.ts" {
+		t.Fatalf("anchors: got %q", anchors)
+	}
+}
+
 func TestNativeToolsPathResolution(t *testing.T) {
 	workspace := t.TempDir()
 	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil)

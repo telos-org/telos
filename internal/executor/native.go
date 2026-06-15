@@ -322,7 +322,7 @@ func nativeCorrectionPrompt(task string) string {
 	}, "\n")
 }
 
-func shouldRetryUnproductiveFinal(text string) bool {
+func shouldRetryUnproductiveFinal(text, task string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(text))
 	if normalized == "" {
 		return true
@@ -340,7 +340,31 @@ func shouldRetryUnproductiveFinal(text string) bool {
 			return true
 		}
 	}
+	anchors := assignmentFileAnchors(task)
+	if len(anchors) > 0 {
+		for _, anchor := range anchors {
+			if strings.Contains(normalized, strings.ToLower(anchor)) {
+				return false
+			}
+		}
+		return true
+	}
 	return false
+}
+
+func assignmentFileAnchors(task string) []string {
+	re := regexp.MustCompile("`([^`]+\\.(?:py|js|ts|tsx|jsx|go|rs|java|rb|php|sh|bash|md|json|yaml|yml|toml|xml|html|css|sql|txt))`")
+	seen := map[string]bool{}
+	var anchors []string
+	for _, match := range re.FindAllStringSubmatch(task, -1) {
+		anchor := strings.TrimSpace(match[1])
+		if anchor == "" || seen[anchor] {
+			continue
+		}
+		seen[anchor] = true
+		anchors = append(anchors, anchor)
+	}
+	return anchors
 }
 
 // -- OpenAI Chat Completions -------------------------------------------------
@@ -402,7 +426,7 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 		}
 		_ = c.logger.assistant(msg.Content, c.cfg.Provider, c.cfg.Model, response.Choices[0].FinishReason, statsFromChatUsage(c.cfg.Model, response.Usage))
 		if len(msg.ToolCalls) == 0 {
-			if shouldRetryUnproductiveFinal(msg.Content) && i+1 < defaultMaxToolLoops {
+			if shouldRetryUnproductiveFinal(msg.Content, task) && i+1 < defaultMaxToolLoops {
 				messages = append(messages, msg, chatMessage{Role: "user", Content: nativeCorrectionPrompt(task)})
 				continue
 			}
@@ -504,7 +528,7 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 		text, calls := parseResponseOutput(response.Output)
 		_ = c.logger.assistant(text, c.cfg.Provider, c.cfg.Model, "stop", turnStats)
 		if len(calls) == 0 {
-			if shouldRetryUnproductiveFinal(text) && i+1 < defaultMaxToolLoops {
+			if shouldRetryUnproductiveFinal(text, task) && i+1 < defaultMaxToolLoops {
 				input = []interface{}{
 					map[string]interface{}{"role": "user", "content": nativeCorrectionPrompt(task)},
 				}
@@ -630,7 +654,7 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 		text, calls := parseAnthropicOutput(response.Content)
 		_ = c.logger.assistant(text, c.cfg.Provider, c.cfg.Model, response.StopReason, turnStats)
 		if len(calls) == 0 {
-			if shouldRetryUnproductiveFinal(text) && i+1 < defaultMaxToolLoops {
+			if shouldRetryUnproductiveFinal(text, task) && i+1 < defaultMaxToolLoops {
 				messages = append(messages,
 					anthropicMessage{Role: "assistant", Content: response.Content},
 					anthropicMessage{Role: "user", Content: []anthropicBlock{{Type: "text", Text: nativeCorrectionPrompt(task)}}},
