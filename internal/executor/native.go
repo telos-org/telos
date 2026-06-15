@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,7 +22,7 @@ import (
 )
 
 const (
-	defaultMaxToolLoops    = 30
+	defaultMaxToolLoops    = 80
 	defaultMaxOutputTokens = 8192
 	defaultToolTimeoutSec  = 120
 )
@@ -33,6 +34,18 @@ type NativeExecutor struct {
 	Thinking string
 	Timeout  int
 	Client   *http.Client
+}
+
+func nativeMaxToolLoops() int {
+	raw := strings.TrimSpace(os.Getenv("TELOS_NATIVE_MAX_TOOL_LOOPS"))
+	if raw == "" {
+		return defaultMaxToolLoops
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 1 {
+		return defaultMaxToolLoops
+	}
+	return n
 }
 
 // NewNativeExecutor creates a native Go coding-agent executor.
@@ -394,7 +407,8 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 	}
 	var stats game.TurnStats
 	stats.Model = c.cfg.Model
-	for i := 0; i < defaultMaxToolLoops; i++ {
+	maxToolLoops := nativeMaxToolLoops()
+	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
 			Choices []struct {
 				Message      chatMessage `json:"message"`
@@ -426,7 +440,7 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 		}
 		_ = c.logger.assistant(msg.Content, c.cfg.Provider, c.cfg.Model, response.Choices[0].FinishReason, statsFromChatUsage(c.cfg.Model, response.Usage))
 		if len(msg.ToolCalls) == 0 {
-			if shouldRetryUnproductiveFinal(msg.Content, task) && i+1 < defaultMaxToolLoops {
+			if shouldRetryUnproductiveFinal(msg.Content, task) && i+1 < maxToolLoops {
 				messages = append(messages, msg, chatMessage{Role: "user", Content: nativeCorrectionPrompt(task)})
 				continue
 			}
@@ -444,7 +458,7 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 			})
 		}
 	}
-	return "", stats, fmt.Errorf("agent_tool_loop_exceeded:%d", defaultMaxToolLoops)
+	return "", stats, fmt.Errorf("agent_tool_loop_exceeded:%d", maxToolLoops)
 }
 
 func (c nativeAPIClient) executeToolCalls(calls []chatToolCall) []nativeToolResult {
@@ -494,7 +508,8 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 	var previousID string
 	var stats game.TurnStats
 	stats.Model = c.cfg.Model
-	for i := 0; i < defaultMaxToolLoops; i++ {
+	maxToolLoops := nativeMaxToolLoops()
+	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
 			ID     string         `json:"id"`
 			Output []responseItem `json:"output"`
@@ -528,7 +543,7 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 		text, calls := parseResponseOutput(response.Output)
 		_ = c.logger.assistant(text, c.cfg.Provider, c.cfg.Model, "stop", turnStats)
 		if len(calls) == 0 {
-			if shouldRetryUnproductiveFinal(text, task) && i+1 < defaultMaxToolLoops {
+			if shouldRetryUnproductiveFinal(text, task) && i+1 < maxToolLoops {
 				input = []interface{}{
 					map[string]interface{}{"role": "user", "content": nativeCorrectionPrompt(task)},
 				}
@@ -551,7 +566,7 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 			})
 		}
 	}
-	return "", stats, fmt.Errorf("agent_tool_loop_exceeded:%d", defaultMaxToolLoops)
+	return "", stats, fmt.Errorf("agent_tool_loop_exceeded:%d", maxToolLoops)
 }
 
 func parseResponseOutput(output []responseItem) (string, []nativeToolCall) {
@@ -615,7 +630,8 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 	messages := []anthropicMessage{{Role: "user", Content: []anthropicBlock{{Type: "text", Text: task}}}}
 	var stats game.TurnStats
 	stats.Model = c.cfg.Model
-	for i := 0; i < defaultMaxToolLoops; i++ {
+	maxToolLoops := nativeMaxToolLoops()
+	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
 			ID         string           `json:"id"`
 			Type       string           `json:"type"`
@@ -654,7 +670,7 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 		text, calls := parseAnthropicOutput(response.Content)
 		_ = c.logger.assistant(text, c.cfg.Provider, c.cfg.Model, response.StopReason, turnStats)
 		if len(calls) == 0 {
-			if shouldRetryUnproductiveFinal(text, task) && i+1 < defaultMaxToolLoops {
+			if shouldRetryUnproductiveFinal(text, task) && i+1 < maxToolLoops {
 				messages = append(messages,
 					anthropicMessage{Role: "assistant", Content: response.Content},
 					anthropicMessage{Role: "user", Content: []anthropicBlock{{Type: "text", Text: nativeCorrectionPrompt(task)}}},
@@ -681,7 +697,7 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 		}
 		messages = append(messages, anthropicMessage{Role: "user", Content: resultBlocks})
 	}
-	return "", stats, fmt.Errorf("agent_tool_loop_exceeded:%d", defaultMaxToolLoops)
+	return "", stats, fmt.Errorf("agent_tool_loop_exceeded:%d", maxToolLoops)
 }
 
 func parseAnthropicOutput(blocks []anthropicBlock) (string, []nativeToolCall) {

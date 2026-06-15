@@ -118,6 +118,18 @@ func TestResolveNativeProviderUsesSilaresConvention(t *testing.T) {
 	}
 }
 
+func TestNativeMaxToolLoopsCanBeOverridden(t *testing.T) {
+	t.Setenv("TELOS_NATIVE_MAX_TOOL_LOOPS", "123")
+	if got := nativeMaxToolLoops(); got != 123 {
+		t.Fatalf("max tool loops override: got %d", got)
+	}
+
+	t.Setenv("TELOS_NATIVE_MAX_TOOL_LOOPS", "not-a-number")
+	if got := nativeMaxToolLoops(); got != defaultMaxToolLoops {
+		t.Fatalf("invalid max tool loops should use default: got %d", got)
+	}
+}
+
 func TestResolveNativeProviderAllowsSilaresResponsesOverride(t *testing.T) {
 	t.Setenv("SILARES_API_KEY", "test-silares-key")
 	t.Setenv("SILARES_API_STYLE", "openai-responses")
