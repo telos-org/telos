@@ -97,8 +97,36 @@ func TestNativeExecutorRunsChatToolLoopAndWritesWorkspace(t *testing.T) {
 	if result.Stats.InputTokens != 24 || result.Stats.OutputTokens != 12 || result.Stats.NumTurns != 1 {
 		t.Fatalf("stats: %+v", result.Stats)
 	}
-	if _, err := ReadSession(ts.SessionPath()); err != nil {
-		t.Fatalf("native session should stay parseable by transcript tooling: %v", err)
+	assertValidSessionLog(t, ts.SessionPath())
+}
+
+// assertValidSessionLog checks the session JSONL is well-formed: every line
+// decodes and at least one assistant message is present.
+func assertValidSessionLog(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("session log unreadable: %v", err)
+	}
+	var sawAssistant bool
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if line == "" {
+			continue
+		}
+		var event struct {
+			Message struct {
+				Role string `json:"role"`
+			} `json:"message"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("session log line is not valid JSON: %q: %v", line, err)
+		}
+		if event.Message.Role == "assistant" {
+			sawAssistant = true
+		}
+	}
+	if !sawAssistant {
+		t.Fatal("session log should contain an assistant message")
 	}
 }
 

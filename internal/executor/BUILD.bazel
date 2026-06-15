@@ -3,8 +3,15 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "executor",
     srcs = [
-        "native.go",
-        "session.go",
+        "executor.go",
+        "httpclient.go",
+        "loop.go",
+        "provider.go",
+        "sessionlog.go",
+        "tools.go",
+        "transport_anthropic.go",
+        "transport_chat.go",
+        "transport_responses.go",
     ],
     importpath = "github.com/telos-org/telos/internal/executor",
     visibility = ["//:__subpackages__"],
@@ -16,10 +23,10 @@ go_library(
 
 go_test(
     name = "executor_test",
-    srcs = [
-        "native_test.go",
-        "session_test.go",
-    ],
+    srcs = ["native_test.go"],
     embed = [":executor"],
-    deps = ["//internal/game"],
+    deps = [
+        "//internal/game",
+        "//internal/platform",
+    ],
 )
