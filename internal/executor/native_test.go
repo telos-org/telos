@@ -272,6 +272,9 @@ func TestShouldRetryUnproductiveFinalUsesAssignmentAnchors(t *testing.T) {
 	if !shouldRetryUnproductiveFinal("I will now implement the `industry.py` changes and run checks.", task) {
 		t.Fatal("expected pending-work answer mentioning assignment anchor to retry")
 	}
+	if !shouldRetryUnproductiveFinal("Good. Let's write new industry.py and add the invention command.", task) {
+		t.Fatal("expected planning answer mentioning assignment anchor to retry")
+	}
 	if shouldRetryUnproductiveFinal("Created industry.py and ran the checks.", task) {
 		t.Fatal("expected answer mentioning assignment anchor to be accepted")
 	}
