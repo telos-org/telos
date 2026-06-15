@@ -336,7 +336,7 @@ func nativeCorrectionPrompt(task string) string {
 }
 
 func shouldRetryNativeFinal(text, task, stopReason string, usedTools bool) bool {
-	if shouldRetryUnproductiveFinal(text, task) {
+	if shouldRetryUnproductiveFinal(text, task, usedTools) {
 		return true
 	}
 	if !usedTools && isLengthStop(stopReason) && len(assignmentFileAnchors(task)) > 0 {
@@ -354,7 +354,7 @@ func isLengthStop(stopReason string) bool {
 	}
 }
 
-func shouldRetryUnproductiveFinal(text, task string) bool {
+func shouldRetryUnproductiveFinal(text, task string, usedTools bool) bool {
 	normalized := strings.ToLower(strings.TrimSpace(text))
 	if normalized == "" {
 		return true
@@ -376,7 +376,7 @@ func shouldRetryUnproductiveFinal(text, task string) bool {
 		}
 	}
 	anchors := assignmentFileAnchors(task)
-	if len(anchors) > 0 {
+	if !usedTools && len(anchors) > 0 {
 		for _, anchor := range anchors {
 			if strings.Contains(normalized, strings.ToLower(anchor)) {
 				return false

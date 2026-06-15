@@ -266,19 +266,22 @@ func TestNativeSystemPromptPreventsTaskDrift(t *testing.T) {
 
 func TestShouldRetryUnproductiveFinalUsesAssignmentAnchors(t *testing.T) {
 	task := "Create `industry.py` and run it."
-	if !shouldRetryUnproductiveFinal("Your subscription is about to expire.", task) {
+	if !shouldRetryUnproductiveFinal("Your subscription is about to expire.", task, false) {
 		t.Fatal("expected unrelated answer without assignment anchor to retry")
 	}
-	if !shouldRetryUnproductiveFinal("I will now implement the `industry.py` changes and run checks.", task) {
+	if shouldRetryUnproductiveFinal("No changes needed this turn; tests pass.", task, true) {
+		t.Fatal("expected anchorless completion after tool use to be accepted")
+	}
+	if !shouldRetryUnproductiveFinal("I will now implement the `industry.py` changes and run checks.", task, true) {
 		t.Fatal("expected pending-work answer mentioning assignment anchor to retry")
 	}
-	if !shouldRetryUnproductiveFinal("Good. Let's write new industry.py and add the invention command.", task) {
+	if !shouldRetryUnproductiveFinal("Good. Let's write new industry.py and add the invention command.", task, false) {
 		t.Fatal("expected planning answer mentioning assignment anchor to retry")
 	}
-	if !shouldRetryUnproductiveFinal("I have enough information. Let me now write the updated industry.py.", task) {
+	if !shouldRetryUnproductiveFinal("I have enough information. Let me now write the updated industry.py.", task, false) {
 		t.Fatal("expected let-me-now-write planning answer to retry")
 	}
-	if shouldRetryUnproductiveFinal("Created industry.py and ran the checks.", task) {
+	if shouldRetryUnproductiveFinal("Created industry.py and ran the checks.", task, false) {
 		t.Fatal("expected answer mentioning assignment anchor to be accepted")
 	}
 	if anchors := assignmentFileAnchors("Create `industry.py`, update `src/app.ts`, and read `not-a-file`."); strings.Join(anchors, ",") != "industry.py,src/app.ts" {
