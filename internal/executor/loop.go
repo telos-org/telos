@@ -11,8 +11,8 @@ import (
 )
 
 const (
-	defaultMaxToolLoops    = 80
-	defaultMaxOutputTokens = 4096
+	defaultMaxToolLoops    = 160
+	defaultMaxOutputTokens = 8192
 )
 
 func nativeMaxToolLoops() int {

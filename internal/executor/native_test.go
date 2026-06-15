@@ -153,6 +153,10 @@ func TestResolveNativeProviderUsesSilaresConvention(t *testing.T) {
 }
 
 func TestNativeMaxToolLoopsCanBeOverridden(t *testing.T) {
+	if got := nativeMaxToolLoops(); got != 160 {
+		t.Fatalf("default max tool loops: got %d", got)
+	}
+
 	t.Setenv("TELOS_NATIVE_MAX_TOOL_LOOPS", "123")
 	if got := nativeMaxToolLoops(); got != 123 {
 		t.Fatalf("max tool loops override: got %d", got)
@@ -165,7 +169,7 @@ func TestNativeMaxToolLoopsCanBeOverridden(t *testing.T) {
 }
 
 func TestNativeMaxOutputTokensCanBeOverridden(t *testing.T) {
-	if got := nativeMaxOutputTokens(); got != defaultMaxOutputTokens {
+	if got := nativeMaxOutputTokens(); got != 8192 {
 		t.Fatalf("default max output tokens: got %d", got)
 	}
 
