@@ -2,6 +2,7 @@ import inspect
 import unittest
 
 from integrations.harbor.telos_agent import (
+    DEFAULT_AGENT_TIMEOUT_SEC,
     TelosExecutableAgent,
     is_completed_telos_session,
     parse_marked_json,
@@ -61,6 +62,9 @@ class TelosHarborAgentTest(unittest.TestCase):
         self.assertTrue(is_completed_telos_session({"status": "completed"}))
         self.assertFalse(is_completed_telos_session({"status": "failed"}))
         self.assertFalse(is_completed_telos_session({}))
+
+    def test_default_agent_timeout_is_enabled_for_harbor(self):
+        self.assertEqual(DEFAULT_AGENT_TIMEOUT_SEC, 900)
 
     def test_run_script_preserves_raw_logs_and_fails_non_completed_sessions(self):
         agent = object.__new__(TelosExecutableAgent)

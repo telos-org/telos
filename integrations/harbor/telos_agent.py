@@ -21,7 +21,7 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 DEFAULT_HARBOR_WORKDIR = "/app"
-DEFAULT_AGENT_TIMEOUT_SEC = 0
+DEFAULT_AGENT_TIMEOUT_SEC = 900
 DEFAULT_POLL_INTERVAL_SEC = 5
 DEFAULT_SESSION_TIMEOUT_SEC = 7200
 DEFAULT_UNTIL = 3
