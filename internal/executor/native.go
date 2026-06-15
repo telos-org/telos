@@ -25,7 +25,12 @@ const (
 	defaultMaxToolLoops    = 80
 	defaultMaxOutputTokens = 4096
 	defaultToolTimeoutSec  = 120
+	httpMaxAttempts        = 3
 )
+
+// httpRetryBackoff is the base delay between transient HTTP retries. It is a
+// var so tests can shrink it.
+var httpRetryBackoff = 500 * time.Millisecond
 
 // NativeExecutor runs one PVG turn with Telos' built-in coding harness.
 type NativeExecutor struct {
@@ -85,31 +90,8 @@ func (ne *NativeExecutor) ExecuteTurn(task string, role string, turnState *game.
 		stopRequested = turnState.StopRequested
 	}
 
-	ctx := context.Background()
-	var cancel context.CancelFunc
-	if ne.Timeout > 0 {
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(ne.Timeout)*time.Second)
-	} else {
-		ctx, cancel = context.WithCancel(ctx)
-	}
+	ctx, cancel := turnContext(ne.Timeout, stopRequested)
 	defer cancel()
-	if stopRequested != nil {
-		go func() {
-			ticker := time.NewTicker(200 * time.Millisecond)
-			defer ticker.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-ticker.C:
-					if stopRequested() {
-						cancel()
-						return
-					}
-				}
-			}
-		}()
-	}
 
 	cfg, err := resolveNativeProvider(ne.Model)
 	if err != nil {
@@ -122,14 +104,9 @@ func (ne *NativeExecutor) ExecuteTurn(task string, role string, turnState *game.
 	_ = logger.user(task)
 
 	tools := newNativeTools(ne.Platform, stopRequested)
-	client := nativeAPIClient{
-		http:     ne.Client,
-		cfg:      cfg,
-		thinking: ne.Thinking,
-		tools:    tools,
-		logger:   logger,
-	}
-	logs, extraStats, err := client.run(ctx, task, role)
+	loop := newAgentLoop(httpPoster{http: ne.Client, cfg: cfg}, cfg, ne.Thinking, tools, logger, task, role)
+
+	logs, extraStats, err := loop.run(ctx)
 	stats = mergeTurnStats(stats, extraStats)
 	stats.DurationMS = int(time.Since(started).Milliseconds())
 	if err != nil {
@@ -150,6 +127,36 @@ func (ne *NativeExecutor) ExecuteTurn(task string, role string, turnState *game.
 		Logs:   logs,
 		Stats:  stats,
 	}
+}
+
+// turnContext builds the turn context, applying the optional timeout and
+// wiring stop requests into the same cancellation source the tools observe.
+func turnContext(timeout int, stopRequested func() bool) (context.Context, context.CancelFunc) {
+	ctx := context.Background()
+	var cancel context.CancelFunc
+	if timeout > 0 {
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(timeout)*time.Second)
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
+	}
+	if stopRequested != nil {
+		go func() {
+			ticker := time.NewTicker(200 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+					if stopRequested() {
+						cancel()
+						return
+					}
+				}
+			}
+		}()
+	}
+	return ctx, cancel
 }
 
 // WorkspaceState returns the workspace state from the platform.
@@ -173,6 +180,8 @@ func recoverableTurn(role string, stats game.TurnStats, reason string) game.Turn
 	}
 }
 
+// -- Provider resolution -----------------------------------------------------
+
 type providerStyle string
 
 const (
@@ -187,6 +196,25 @@ type nativeProviderConfig struct {
 	BaseURL  string
 	APIKey   string
 	Style    providerStyle
+}
+
+// providerDefaults describes a known provider's baked-in endpoint conventions.
+type providerDefaults struct {
+	baseURL string
+	keyEnv  string
+	style   providerStyle
+}
+
+func nativeProviderRegistry() map[string]providerDefaults {
+	return map[string]providerDefaults{
+		"silares":       {"https://api.silares.com/v1", "SILARES_API_KEY", providerChat},
+		"sail-research": {"https://api.sailresearch.com/v1", "SAIL_API_KEY", providerChat},
+		"moonshot":      {"https://api.moonshot.ai/v1", "MOONSHOT_API_KEY", providerChat},
+		"xai":           {"https://api.x.ai/v1", "XAI_API_KEY", providerChat},
+		"openai":        {"https://api.openai.com/v1", "OPENAI_API_KEY", providerChat},
+		"openai-codex":  {"https://api.openai.com/v1", "OPENAI_API_KEY", providerChat},
+		"anthropic":     {"https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", providerAnthropic},
+	}
 }
 
 func resolveNativeProvider(model string) (nativeProviderConfig, error) {
@@ -208,27 +236,17 @@ func resolveNativeProvider(model string) (nativeProviderConfig, error) {
 	}
 
 	provider, providerModel := splitProviderModel(model)
-	switch provider {
-	case "silares":
-		return providerFromEnv(provider, providerModel, "https://api.silares.com/v1", "SILARES_API_KEY", providerChat)
-	case "sail-research":
-		return providerFromEnv(provider, providerModel, "https://api.sailresearch.com/v1", "SAIL_API_KEY", providerChat)
-	case "moonshot":
-		return providerFromEnv(provider, providerModel, "https://api.moonshot.ai/v1", "MOONSHOT_API_KEY", providerChat)
-	case "xai":
-		return providerFromEnv(provider, providerModel, "https://api.x.ai/v1", "XAI_API_KEY", providerChat)
-	case "openai", "openai-codex":
-		return providerFromEnv(provider, providerModel, "https://api.openai.com/v1", "OPENAI_API_KEY", providerChat)
-	case "anthropic":
-		return providerFromEnv(provider, providerModel, "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", providerAnthropic)
+	registry := nativeProviderRegistry()
+	if def, ok := registry[provider]; ok {
+		return providerFromDefaults(provider, providerModel, def)
 	}
 	if strings.HasPrefix(model, "claude-") {
-		return providerFromEnv("anthropic", model, "https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", providerAnthropic)
+		return providerFromDefaults("anthropic", model, registry["anthropic"])
 	}
 	if provider != "" {
 		envPrefix := providerEnvPrefix(provider)
-		base := firstEnv(envPrefix + "_BASE_URL")
 		keyName := envPrefix + "_API_KEY"
+		base := firstEnv(envPrefix + "_BASE_URL")
 		key := firstEnv(keyName)
 		if base == "" || key == "" {
 			return nativeProviderConfig{}, fmt.Errorf("unknown provider %q; set %s_BASE_URL and %s", provider, envPrefix, keyName)
@@ -241,10 +259,10 @@ func resolveNativeProvider(model string) (nativeProviderConfig, error) {
 			Style:    providerStyle(orDefault(firstEnv(envPrefix+"_API_STYLE"), string(providerChat))),
 		}, nil
 	}
-	return providerFromEnv("openai", model, "https://api.openai.com/v1", "OPENAI_API_KEY", providerChat)
+	return providerFromDefaults("openai", model, registry["openai"])
 }
 
-func providerFromEnv(provider, model, defaultBase, keyName string, style providerStyle) (nativeProviderConfig, error) {
+func providerFromDefaults(provider, model string, def providerDefaults) (nativeProviderConfig, error) {
 	envPrefix := providerEnvPrefix(provider)
 	base := firstEnv(envPrefix + "_BASE_URL")
 	if base == "" && provider == "openai-codex" {
@@ -252,12 +270,13 @@ func providerFromEnv(provider, model, defaultBase, keyName string, style provide
 		base = firstEnv("OPENAI_BASE_URL")
 	}
 	if base == "" {
-		base = defaultBase
+		base = def.baseURL
 	}
-	key := firstEnv(keyName)
+	key := firstEnv(def.keyEnv)
 	if key == "" {
-		return nativeProviderConfig{}, fmt.Errorf("%s is required for model provider %q", keyName, provider)
+		return nativeProviderConfig{}, fmt.Errorf("%s is required for model provider %q", def.keyEnv, provider)
 	}
+	style := def.style
 	if override := firstEnv(envPrefix + "_API_STYLE"); override != "" {
 		style = providerStyle(override)
 	}
@@ -285,8 +304,7 @@ func stripProviderPrefix(model string) string {
 
 func providerEnvPrefix(provider string) string {
 	s := strings.ToUpper(provider)
-	s = strings.NewReplacer("-", "_", ".", "_").Replace(s)
-	return s
+	return strings.NewReplacer("-", "_", ".", "_").Replace(s)
 }
 
 func firstEnv(names ...string) string {
@@ -298,24 +316,89 @@ func firstEnv(names ...string) string {
 	return ""
 }
 
-type nativeAPIClient struct {
-	http     *http.Client
-	cfg      nativeProviderConfig
-	thinking string
-	tools    *nativeTools
-	logger   *nativeSessionLogger
+// -- Agent loop --------------------------------------------------------------
+
+// agentTurn is one model response, normalized across providers.
+type agentTurn struct {
+	text       string
+	calls      []nativeToolCall
+	stopReason string
+	stats      game.TurnStats
 }
 
-func (c nativeAPIClient) run(ctx context.Context, task, role string) (string, game.TurnStats, error) {
-	switch c.cfg.Style {
+// transport owns the provider-specific wire format and conversation state. The
+// agent loop drives it without knowing which provider is underneath.
+type transport interface {
+	// send issues one model call against the accumulated conversation state.
+	send(ctx context.Context) (agentTurn, error)
+	// recordToolResults threads tool output back into the conversation.
+	recordToolResults(results []nativeToolResult)
+	// recordCorrection appends a retry prompt for an unproductive final.
+	recordCorrection(prompt string)
+}
+
+type agentLoop struct {
+	transport transport
+	tools     *nativeTools
+	logger    *nativeSessionLogger
+	task      string
+	provider  string
+	model     string
+}
+
+func newAgentLoop(poster httpPoster, cfg nativeProviderConfig, thinking string, tools *nativeTools, logger *nativeSessionLogger, task, role string) *agentLoop {
+	maxOut := nativeMaxOutputTokens()
+	var tr transport
+	switch cfg.Style {
 	case providerResponses:
-		return c.runResponses(ctx, task, role)
+		tr = newResponsesTransport(poster, cfg.Model, thinking, maxOut, task, role)
 	case providerAnthropic:
-		return c.runAnthropic(ctx, task, role)
+		tr = newAnthropicTransport(poster, cfg.Model, maxOut, task, role)
 	default:
-		return c.runChat(ctx, task, role)
+		tr = newChatTransport(poster, cfg.Model, maxOut, task, role)
+	}
+	return &agentLoop{
+		transport: tr,
+		tools:     tools,
+		logger:    logger,
+		task:      task,
+		provider:  cfg.Provider,
+		model:     cfg.Model,
 	}
 }
+
+func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
+	maxLoops := nativeMaxToolLoops()
+	stats := game.TurnStats{Model: l.model}
+	usedTools := false
+	for i := 0; i < maxLoops; i++ {
+		turn, err := l.transport.send(ctx)
+		if err != nil {
+			return "", stats, err
+		}
+		stats = mergeTurnStats(stats, turn.stats)
+		_ = l.logger.assistant(turn.text, l.provider, l.model, turn.stopReason, turn.stats)
+
+		if len(turn.calls) == 0 {
+			if i+1 < maxLoops && shouldRetryNativeFinal(turn.text, l.task, turn.stopReason, usedTools) {
+				l.transport.recordCorrection(nativeCorrectionPrompt(l.task))
+				continue
+			}
+			return turn.text, stats, nil
+		}
+
+		results := l.tools.executeAll(ctx, turn.calls)
+		usedTools = true
+		stats.NumTurns += len(results)
+		for _, result := range results {
+			_ = l.logger.tool(result)
+		}
+		l.transport.recordToolResults(results)
+	}
+	return "", stats, fmt.Errorf("agent_tool_loop_exceeded:%d", maxLoops)
+}
+
+// -- Prompts -----------------------------------------------------------------
 
 func nativeSystemPrompt(role string) string {
 	return strings.Join([]string{
@@ -325,7 +408,7 @@ func nativeSystemPrompt(role string) string {
 		"Keep your work anchored to the current spec text and live files. Ignore unrelated task ideas, default assistant personas, and prior benchmark examples that are not present in the current spec.",
 		"Use the available tools directly. Do not ask for permission before inspecting or changing files required by the task.",
 		"Prefer the first useful concrete workspace mutation over long planning. For file-producing tasks, create or edit the required files before summarizing.",
-		"Available tool names are read, write, edit, bash, ls, grep, and find. Do not call unavailable tool names such as write_file, ReadFile, Edit, apply_patch, or shell.",
+		fmt.Sprintf("Available tool names are %s. Do not call unavailable tool names such as write_file, ReadFile, Edit, apply_patch, or shell.", oxfordList(nativeToolNames())),
 		"Keep all actionable content in visible assistant text. Do not put the final answer only in hidden reasoning.",
 		"After tool work, end with a concise visible final response listing changed files and checks run. Include any XML tags required by the Telos turn instructions.",
 		fmt.Sprintf("Current Telos role: %s.", role),
@@ -451,7 +534,101 @@ func assignmentFileAnchors(task string) []string {
 	return anchors
 }
 
-// -- OpenAI Chat Completions -------------------------------------------------
+// -- HTTP poster -------------------------------------------------------------
+
+type apiError struct {
+	Message string `json:"message"`
+	Type    string `json:"type"`
+}
+
+type httpPoster struct {
+	http *http.Client
+	cfg  nativeProviderConfig
+}
+
+func (p httpPoster) client() *http.Client {
+	if p.http != nil {
+		return p.http
+	}
+	return http.DefaultClient
+}
+
+func (p httpPoster) postJSON(ctx context.Context, endpoint string, body, out interface{}) error {
+	return p.post(ctx, endpoint, body, out, map[string]string{"Authorization": "Bearer " + p.cfg.APIKey})
+}
+
+func (p httpPoster) postAnthropic(ctx context.Context, endpoint string, body, out interface{}) error {
+	return p.post(ctx, endpoint, body, out, map[string]string{
+		"x-api-key":         p.cfg.APIKey,
+		"anthropic-version": "2023-06-01",
+	})
+}
+
+func (p httpPoster) post(ctx context.Context, endpoint string, body, out interface{}, headers map[string]string) error {
+	payload, err := json.Marshal(body)
+	if err != nil {
+		return fmt.Errorf("provider_request_encode:%w", err)
+	}
+	url := p.cfg.BaseURL + endpoint
+	var lastErr error
+	for attempt := 0; attempt < httpMaxAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(httpRetryBackoff * time.Duration(1<<(attempt-1))):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
+		if err != nil {
+			return fmt.Errorf("provider_request_create:%w", err)
+		}
+		req.Header.Set("Content-Type", "application/json")
+		for key, value := range headers {
+			req.Header.Set(key, value)
+		}
+		resp, err := p.client().Do(req)
+		if err != nil {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			lastErr = fmt.Errorf("provider_request_failed:%w", err)
+			continue
+		}
+		data, readErr := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
+		resp.Body.Close()
+		if readErr != nil {
+			lastErr = fmt.Errorf("provider_response_read:%w", readErr)
+			continue
+		}
+		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			if err := json.Unmarshal(data, out); err != nil {
+				return fmt.Errorf("provider_response_decode:%w", err)
+			}
+			return nil
+		}
+		lastErr = fmt.Errorf("provider_http_%d:%s", resp.StatusCode, strings.TrimSpace(string(data)))
+		if !isRetryableStatus(resp.StatusCode) {
+			return lastErr
+		}
+	}
+	return lastErr
+}
+
+func isRetryableStatus(code int) bool {
+	switch code {
+	case http.StatusTooManyRequests,
+		http.StatusInternalServerError,
+		http.StatusBadGateway,
+		http.StatusServiceUnavailable,
+		http.StatusGatewayTimeout:
+		return true
+	default:
+		return false
+	}
+}
+
+// -- OpenAI Chat Completions transport ---------------------------------------
 
 type chatMessage struct {
 	Role       string         `json:"role"`
@@ -471,83 +648,6 @@ type chatToolFunction struct {
 	Arguments string `json:"arguments"`
 }
 
-func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string, game.TurnStats, error) {
-	messages := []chatMessage{
-		{Role: "system", Content: nativeSystemPrompt(role)},
-		{Role: "user", Content: task},
-	}
-	var stats game.TurnStats
-	stats.Model = c.cfg.Model
-	maxToolLoops := nativeMaxToolLoops()
-	maxOutputTokens := nativeMaxOutputTokens()
-	toolSchemas := nativeToolSchemasForChat()
-	usedTools := false
-	for i := 0; i < maxToolLoops; i++ {
-		var response struct {
-			Choices []struct {
-				Message      chatMessage `json:"message"`
-				FinishReason string      `json:"finish_reason"`
-			} `json:"choices"`
-			Usage chatUsage `json:"usage"`
-			Error apiError  `json:"error"`
-		}
-		req := map[string]interface{}{
-			"model":       c.cfg.Model,
-			"messages":    messages,
-			"tools":       toolSchemas,
-			"tool_choice": "auto",
-			"max_tokens":  maxOutputTokens,
-		}
-		if err := c.postJSON(ctx, "/chat/completions", req, &response); err != nil {
-			return "", stats, err
-		}
-		if response.Error.Message != "" {
-			return "", stats, fmt.Errorf("provider_error:%s", response.Error.Message)
-		}
-		stats = mergeTurnStats(stats, statsFromChatUsage(c.cfg.Model, response.Usage))
-		if len(response.Choices) == 0 {
-			return "", stats, fmt.Errorf("provider_error:no_choices")
-		}
-		msg := response.Choices[0].Message
-		if msg.Role == "" {
-			msg.Role = "assistant"
-		}
-		_ = c.logger.assistant(msg.Content, c.cfg.Provider, c.cfg.Model, response.Choices[0].FinishReason, statsFromChatUsage(c.cfg.Model, response.Usage))
-		if len(msg.ToolCalls) == 0 {
-			if shouldRetryNativeFinal(msg.Content, task, response.Choices[0].FinishReason, usedTools) && i+1 < maxToolLoops {
-				messages = append(messages, msg, chatMessage{Role: "user", Content: nativeCorrectionPrompt(task)})
-				continue
-			}
-			return msg.Content, stats, nil
-		}
-		messages = append(messages, msg)
-		results := c.executeToolCalls(msg.ToolCalls)
-		usedTools = true
-		stats.NumTurns += len(results)
-		for _, result := range results {
-			_ = c.logger.tool(result)
-			messages = append(messages, chatMessage{
-				Role:       "tool",
-				ToolCallID: result.CallID,
-				Content:    result.Output,
-			})
-		}
-	}
-	return "", stats, fmt.Errorf("agent_tool_loop_exceeded:%d", maxToolLoops)
-}
-
-func (c nativeAPIClient) executeToolCalls(calls []chatToolCall) []nativeToolResult {
-	results := make([]nativeToolResult, 0, len(calls))
-	for _, call := range calls {
-		results = append(results, c.tools.execute(nativeToolCall{
-			ID:        call.ID,
-			Name:      call.Function.Name,
-			Arguments: call.Function.Arguments,
-		}))
-	}
-	return results
-}
-
 type chatUsage struct {
 	PromptTokens       int `json:"prompt_tokens"`
 	CompletionTokens   int `json:"completion_tokens"`
@@ -565,7 +665,97 @@ func statsFromChatUsage(model string, usage chatUsage) game.TurnStats {
 	}
 }
 
-// -- OpenAI Responses --------------------------------------------------------
+type chatTransport struct {
+	poster          httpPoster
+	model           string
+	maxOutputTokens int
+	schemas         []map[string]interface{}
+	messages        []chatMessage
+	last            chatMessage
+}
+
+func newChatTransport(poster httpPoster, model string, maxOutputTokens int, task, role string) *chatTransport {
+	return &chatTransport{
+		poster:          poster,
+		model:           model,
+		maxOutputTokens: maxOutputTokens,
+		schemas:         toolSchemasForChat(),
+		messages: []chatMessage{
+			{Role: "system", Content: nativeSystemPrompt(role)},
+			{Role: "user", Content: task},
+		},
+	}
+}
+
+func (t *chatTransport) send(ctx context.Context) (agentTurn, error) {
+	var response struct {
+		Choices []struct {
+			Message      chatMessage `json:"message"`
+			FinishReason string      `json:"finish_reason"`
+		} `json:"choices"`
+		Usage chatUsage `json:"usage"`
+		Error apiError  `json:"error"`
+	}
+	req := map[string]interface{}{
+		"model":       t.model,
+		"messages":    t.messages,
+		"tools":       t.schemas,
+		"tool_choice": "auto",
+		"max_tokens":  t.maxOutputTokens,
+	}
+	if err := t.poster.postJSON(ctx, "/chat/completions", req, &response); err != nil {
+		return agentTurn{}, err
+	}
+	if response.Error.Message != "" {
+		return agentTurn{}, fmt.Errorf("provider_error:%s", response.Error.Message)
+	}
+	if len(response.Choices) == 0 {
+		return agentTurn{}, fmt.Errorf("provider_error:no_choices")
+	}
+	msg := response.Choices[0].Message
+	if msg.Role == "" {
+		msg.Role = "assistant"
+	}
+	t.last = msg
+	return agentTurn{
+		text:       msg.Content,
+		calls:      chatToolCallsToNative(msg.ToolCalls),
+		stopReason: response.Choices[0].FinishReason,
+		stats:      statsFromChatUsage(t.model, response.Usage),
+	}, nil
+}
+
+func (t *chatTransport) recordToolResults(results []nativeToolResult) {
+	t.messages = append(t.messages, t.last)
+	for _, result := range results {
+		t.messages = append(t.messages, chatMessage{
+			Role:       "tool",
+			ToolCallID: result.CallID,
+			Content:    result.Output,
+		})
+	}
+}
+
+func (t *chatTransport) recordCorrection(prompt string) {
+	t.messages = append(t.messages, t.last, chatMessage{Role: "user", Content: prompt})
+}
+
+func chatToolCallsToNative(calls []chatToolCall) []nativeToolCall {
+	if len(calls) == 0 {
+		return nil
+	}
+	out := make([]nativeToolCall, 0, len(calls))
+	for _, call := range calls {
+		out = append(out, nativeToolCall{
+			ID:        call.ID,
+			Name:      call.Function.Name,
+			Arguments: call.Function.Arguments,
+		})
+	}
+	return out
+}
+
+// -- OpenAI Responses transport ----------------------------------------------
 
 type responseItem struct {
 	Type      string                   `json:"type"`
@@ -576,76 +766,21 @@ type responseItem struct {
 	Content   []map[string]interface{} `json:"content,omitempty"`
 }
 
-func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (string, game.TurnStats, error) {
-	input := []interface{}{
-		map[string]interface{}{"role": "user", "content": nativeSystemPrompt(role) + "\n\n# Assignment\n\n" + task},
+type responsesUsage struct {
+	InputTokens       int `json:"input_tokens"`
+	OutputTokens      int `json:"output_tokens"`
+	InputTokenDetails struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"input_tokens_details"`
+}
+
+func statsFromResponsesUsage(model string, usage responsesUsage) game.TurnStats {
+	return game.TurnStats{
+		Model:           model,
+		InputTokens:     usage.InputTokens,
+		OutputTokens:    usage.OutputTokens,
+		CacheReadTokens: usage.InputTokenDetails.CachedTokens,
 	}
-	var previousID string
-	var stats game.TurnStats
-	stats.Model = c.cfg.Model
-	maxToolLoops := nativeMaxToolLoops()
-	maxOutputTokens := nativeMaxOutputTokens()
-	toolSchemas := nativeToolSchemasForResponses()
-	usedTools := false
-	for i := 0; i < maxToolLoops; i++ {
-		var response struct {
-			ID     string         `json:"id"`
-			Output []responseItem `json:"output"`
-			Text   struct {
-				Format map[string]interface{} `json:"format"`
-			} `json:"text"`
-			Usage responsesUsage `json:"usage"`
-			Error apiError       `json:"error"`
-		}
-		req := map[string]interface{}{
-			"model":             c.cfg.Model,
-			"input":             input,
-			"tools":             toolSchemas,
-			"max_output_tokens": maxOutputTokens,
-		}
-		if previousID != "" {
-			req["previous_response_id"] = previousID
-		}
-		if c.thinking != "" {
-			req["reasoning"] = map[string]interface{}{"effort": c.thinking}
-		}
-		if err := c.postJSON(ctx, "/responses", req, &response); err != nil {
-			return "", stats, err
-		}
-		if response.Error.Message != "" {
-			return "", stats, fmt.Errorf("provider_error:%s", response.Error.Message)
-		}
-		previousID = response.ID
-		turnStats := statsFromResponsesUsage(c.cfg.Model, response.Usage)
-		stats = mergeTurnStats(stats, turnStats)
-		text, calls := parseResponseOutput(response.Output)
-		_ = c.logger.assistant(text, c.cfg.Provider, c.cfg.Model, "stop", turnStats)
-		if len(calls) == 0 {
-			if shouldRetryNativeFinal(text, task, "stop", usedTools) && i+1 < maxToolLoops {
-				input = []interface{}{
-					map[string]interface{}{"role": "user", "content": nativeCorrectionPrompt(task)},
-				}
-				continue
-			}
-			return text, stats, nil
-		}
-		input = nil
-		results := make([]nativeToolResult, 0, len(calls))
-		for _, call := range calls {
-			results = append(results, c.tools.execute(call))
-		}
-		usedTools = true
-		stats.NumTurns += len(results)
-		for _, result := range results {
-			_ = c.logger.tool(result)
-			input = append(input, map[string]interface{}{
-				"type":    "function_call_output",
-				"call_id": result.CallID,
-				"output":  result.Output,
-			})
-		}
-	}
-	return "", stats, fmt.Errorf("agent_tool_loop_exceeded:%d", maxToolLoops)
 }
 
 func parseResponseOutput(output []responseItem) (string, []nativeToolCall) {
@@ -670,24 +805,90 @@ func parseResponseOutput(output []responseItem) (string, []nativeToolCall) {
 	return strings.Join(textParts, ""), calls
 }
 
-type responsesUsage struct {
-	InputTokens       int `json:"input_tokens"`
-	OutputTokens      int `json:"output_tokens"`
-	InputTokenDetails struct {
-		CachedTokens int `json:"cached_tokens"`
-	} `json:"input_tokens_details"`
+type responsesTransport struct {
+	poster          httpPoster
+	model           string
+	thinking        string
+	maxOutputTokens int
+	schemas         []map[string]interface{}
+	input           []interface{}
+	previousID      string
 }
 
-func statsFromResponsesUsage(model string, usage responsesUsage) game.TurnStats {
-	return game.TurnStats{
-		Model:           model,
-		InputTokens:     usage.InputTokens,
-		OutputTokens:    usage.OutputTokens,
-		CacheReadTokens: usage.InputTokenDetails.CachedTokens,
+func newResponsesTransport(poster httpPoster, model, thinking string, maxOutputTokens int, task, role string) *responsesTransport {
+	return &responsesTransport{
+		poster:          poster,
+		model:           model,
+		thinking:        thinking,
+		maxOutputTokens: maxOutputTokens,
+		schemas:         toolSchemasForResponses(),
+		input: []interface{}{
+			map[string]interface{}{"role": "user", "content": nativeSystemPrompt(role) + "\n\n# Assignment\n\n" + task},
+		},
 	}
 }
 
-// -- Anthropic Messages ------------------------------------------------------
+func (t *responsesTransport) send(ctx context.Context) (agentTurn, error) {
+	var response struct {
+		ID                string `json:"id"`
+		Status            string `json:"status"`
+		IncompleteDetails struct {
+			Reason string `json:"reason"`
+		} `json:"incomplete_details"`
+		Output []responseItem `json:"output"`
+		Usage  responsesUsage `json:"usage"`
+		Error  apiError       `json:"error"`
+	}
+	req := map[string]interface{}{
+		"model":             t.model,
+		"input":             t.input,
+		"tools":             t.schemas,
+		"max_output_tokens": t.maxOutputTokens,
+	}
+	if t.previousID != "" {
+		req["previous_response_id"] = t.previousID
+	}
+	if t.thinking != "" {
+		req["reasoning"] = map[string]interface{}{"effort": t.thinking}
+	}
+	if err := t.poster.postJSON(ctx, "/responses", req, &response); err != nil {
+		return agentTurn{}, err
+	}
+	if response.Error.Message != "" {
+		return agentTurn{}, fmt.Errorf("provider_error:%s", response.Error.Message)
+	}
+	t.previousID = response.ID
+	text, calls := parseResponseOutput(response.Output)
+	stopReason := "stop"
+	if response.Status == "incomplete" && response.IncompleteDetails.Reason != "" {
+		stopReason = response.IncompleteDetails.Reason
+	}
+	return agentTurn{
+		text:       text,
+		calls:      calls,
+		stopReason: stopReason,
+		stats:      statsFromResponsesUsage(t.model, response.Usage),
+	}, nil
+}
+
+func (t *responsesTransport) recordToolResults(results []nativeToolResult) {
+	t.input = nil
+	for _, result := range results {
+		t.input = append(t.input, map[string]interface{}{
+			"type":    "function_call_output",
+			"call_id": result.CallID,
+			"output":  result.Output,
+		})
+	}
+}
+
+func (t *responsesTransport) recordCorrection(prompt string) {
+	t.input = []interface{}{
+		map[string]interface{}{"role": "user", "content": prompt},
+	}
+}
+
+// -- Anthropic Messages transport --------------------------------------------
 
 type anthropicBlock struct {
 	Type      string      `json:"type"`
@@ -703,85 +904,6 @@ type anthropicBlock struct {
 type anthropicMessage struct {
 	Role    string           `json:"role"`
 	Content []anthropicBlock `json:"content"`
-}
-
-func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (string, game.TurnStats, error) {
-	messages := []anthropicMessage{{Role: "user", Content: []anthropicBlock{{Type: "text", Text: task}}}}
-	var stats game.TurnStats
-	stats.Model = c.cfg.Model
-	maxToolLoops := nativeMaxToolLoops()
-	maxOutputTokens := nativeMaxOutputTokens()
-	toolSchemas := nativeToolSchemasForAnthropic()
-	systemPrompt := nativeSystemPrompt(role)
-	usedTools := false
-	for i := 0; i < maxToolLoops; i++ {
-		var response struct {
-			ID         string           `json:"id"`
-			Type       string           `json:"type"`
-			Role       string           `json:"role"`
-			Content    []anthropicBlock `json:"content"`
-			StopReason string           `json:"stop_reason"`
-			Usage      struct {
-				InputTokens              int `json:"input_tokens"`
-				OutputTokens             int `json:"output_tokens"`
-				CacheReadInputTokens     int `json:"cache_read_input_tokens"`
-				CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
-			} `json:"usage"`
-			Error apiError `json:"error"`
-		}
-		req := map[string]interface{}{
-			"model":      c.cfg.Model,
-			"system":     systemPrompt,
-			"messages":   messages,
-			"tools":      toolSchemas,
-			"max_tokens": maxOutputTokens,
-		}
-		if err := c.postAnthropic(ctx, "/messages", req, &response); err != nil {
-			return "", stats, err
-		}
-		if response.Error.Message != "" {
-			return "", stats, fmt.Errorf("provider_error:%s", response.Error.Message)
-		}
-		turnStats := game.TurnStats{
-			Model:               c.cfg.Model,
-			InputTokens:         response.Usage.InputTokens,
-			OutputTokens:        response.Usage.OutputTokens,
-			CacheReadTokens:     response.Usage.CacheReadInputTokens,
-			CacheCreationTokens: response.Usage.CacheCreationInputTokens,
-		}
-		stats = mergeTurnStats(stats, turnStats)
-		text, calls := parseAnthropicOutput(response.Content)
-		_ = c.logger.assistant(text, c.cfg.Provider, c.cfg.Model, response.StopReason, turnStats)
-		if len(calls) == 0 {
-			if shouldRetryNativeFinal(text, task, response.StopReason, usedTools) && i+1 < maxToolLoops {
-				messages = append(messages,
-					anthropicMessage{Role: "assistant", Content: response.Content},
-					anthropicMessage{Role: "user", Content: []anthropicBlock{{Type: "text", Text: nativeCorrectionPrompt(task)}}},
-				)
-				continue
-			}
-			return text, stats, nil
-		}
-		messages = append(messages, anthropicMessage{Role: "assistant", Content: response.Content})
-		results := make([]nativeToolResult, 0, len(calls))
-		for _, call := range calls {
-			results = append(results, c.tools.execute(call))
-		}
-		usedTools = true
-		stats.NumTurns += len(results)
-		resultBlocks := make([]anthropicBlock, 0, len(results))
-		for _, result := range results {
-			_ = c.logger.tool(result)
-			resultBlocks = append(resultBlocks, anthropicBlock{
-				Type:      "tool_result",
-				ToolUseID: result.CallID,
-				Content:   result.Output,
-				IsError:   result.IsError,
-			})
-		}
-		messages = append(messages, anthropicMessage{Role: "user", Content: resultBlocks})
-	}
-	return "", stats, fmt.Errorf("agent_tool_loop_exceeded:%d", maxToolLoops)
 }
 
 func parseAnthropicOutput(blocks []anthropicBlock) (string, []nativeToolCall) {
@@ -801,137 +923,88 @@ func parseAnthropicOutput(blocks []anthropicBlock) (string, []nativeToolCall) {
 	return strings.Join(textParts, ""), calls
 }
 
-// -- HTTP helpers ------------------------------------------------------------
-
-type apiError struct {
-	Message string `json:"message"`
-	Type    string `json:"type"`
+type anthropicTransport struct {
+	poster          httpPoster
+	model           string
+	system          string
+	maxOutputTokens int
+	schemas         []map[string]interface{}
+	messages        []anthropicMessage
+	last            []anthropicBlock
 }
 
-func (c nativeAPIClient) postJSON(ctx context.Context, endpoint string, body interface{}, out interface{}) error {
-	return c.post(ctx, endpoint, body, out, map[string]string{"Authorization": "Bearer " + c.cfg.APIKey})
+func newAnthropicTransport(poster httpPoster, model string, maxOutputTokens int, task, role string) *anthropicTransport {
+	return &anthropicTransport{
+		poster:          poster,
+		model:           model,
+		system:          nativeSystemPrompt(role),
+		maxOutputTokens: maxOutputTokens,
+		schemas:         toolSchemasForAnthropic(),
+		messages:        []anthropicMessage{{Role: "user", Content: []anthropicBlock{{Type: "text", Text: task}}}},
+	}
 }
 
-func (c nativeAPIClient) postAnthropic(ctx context.Context, endpoint string, body interface{}, out interface{}) error {
-	return c.post(ctx, endpoint, body, out, map[string]string{
-		"x-api-key":         c.cfg.APIKey,
-		"anthropic-version": "2023-06-01",
-	})
+func (t *anthropicTransport) send(ctx context.Context) (agentTurn, error) {
+	var response struct {
+		ID         string           `json:"id"`
+		Content    []anthropicBlock `json:"content"`
+		StopReason string           `json:"stop_reason"`
+		Usage      struct {
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
+		} `json:"usage"`
+		Error apiError `json:"error"`
+	}
+	req := map[string]interface{}{
+		"model":      t.model,
+		"system":     t.system,
+		"messages":   t.messages,
+		"tools":      t.schemas,
+		"max_tokens": t.maxOutputTokens,
+	}
+	if err := t.poster.postAnthropic(ctx, "/messages", req, &response); err != nil {
+		return agentTurn{}, err
+	}
+	if response.Error.Message != "" {
+		return agentTurn{}, fmt.Errorf("provider_error:%s", response.Error.Message)
+	}
+	t.last = response.Content
+	text, calls := parseAnthropicOutput(response.Content)
+	return agentTurn{
+		text:       text,
+		calls:      calls,
+		stopReason: response.StopReason,
+		stats: game.TurnStats{
+			Model:               t.model,
+			InputTokens:         response.Usage.InputTokens,
+			OutputTokens:        response.Usage.OutputTokens,
+			CacheReadTokens:     response.Usage.CacheReadInputTokens,
+			CacheCreationTokens: response.Usage.CacheCreationInputTokens,
+		},
+	}, nil
 }
 
-func (c nativeAPIClient) post(ctx context.Context, endpoint string, body interface{}, out interface{}, headers map[string]string) error {
-	payload, err := json.Marshal(body)
-	if err != nil {
-		return fmt.Errorf("provider_request_encode:%w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.cfg.BaseURL+endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return fmt.Errorf("provider_request_create:%w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	for key, value := range headers {
-		req.Header.Set(key, value)
-	}
-	httpClient := c.http
-	if httpClient == nil {
-		httpClient = http.DefaultClient
-	}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("provider_request_failed:%w", err)
-	}
-	defer resp.Body.Close()
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
-	if err != nil {
-		return fmt.Errorf("provider_response_read:%w", err)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("provider_http_%d:%s", resp.StatusCode, strings.TrimSpace(string(data)))
-	}
-	if err := json.Unmarshal(data, out); err != nil {
-		return fmt.Errorf("provider_response_decode:%w", err)
-	}
-	return nil
-}
-
-// -- Tool schemas ------------------------------------------------------------
-
-func nativeToolSchemasForChat() []map[string]interface{} {
-	defs := nativeToolDefinitions()
-	out := make([]map[string]interface{}, 0, len(defs))
-	for _, def := range defs {
-		out = append(out, map[string]interface{}{
-			"type": "function",
-			"function": map[string]interface{}{
-				"name":        def.Name,
-				"description": def.Description,
-				"parameters":  def.Parameters,
-			},
+func (t *anthropicTransport) recordToolResults(results []nativeToolResult) {
+	t.messages = append(t.messages, anthropicMessage{Role: "assistant", Content: t.last})
+	blocks := make([]anthropicBlock, 0, len(results))
+	for _, result := range results {
+		blocks = append(blocks, anthropicBlock{
+			Type:      "tool_result",
+			ToolUseID: result.CallID,
+			Content:   result.Output,
+			IsError:   result.IsError,
 		})
 	}
-	return out
+	t.messages = append(t.messages, anthropicMessage{Role: "user", Content: blocks})
 }
 
-func nativeToolSchemasForResponses() []map[string]interface{} {
-	defs := nativeToolDefinitions()
-	out := make([]map[string]interface{}, 0, len(defs))
-	for _, def := range defs {
-		out = append(out, map[string]interface{}{
-			"type":        "function",
-			"name":        def.Name,
-			"description": def.Description,
-			"parameters":  def.Parameters,
-		})
-	}
-	return out
-}
-
-func nativeToolSchemasForAnthropic() []map[string]interface{} {
-	defs := nativeToolDefinitions()
-	out := make([]map[string]interface{}, 0, len(defs))
-	for _, def := range defs {
-		out = append(out, map[string]interface{}{
-			"name":         def.Name,
-			"description":  def.Description,
-			"input_schema": def.Parameters,
-		})
-	}
-	return out
-}
-
-type nativeToolDefinition struct {
-	Name        string
-	Description string
-	Parameters  map[string]interface{}
-}
-
-func nativeToolDefinitions() []nativeToolDefinition {
-	stringProp := func(desc string) map[string]interface{} {
-		return map[string]interface{}{"type": "string", "description": desc}
-	}
-	boolProp := func(desc string) map[string]interface{} {
-		return map[string]interface{}{"type": "boolean", "description": desc}
-	}
-	intProp := func(desc string) map[string]interface{} {
-		return map[string]interface{}{"type": "integer", "description": desc}
-	}
-	obj := func(required []string, props map[string]interface{}) map[string]interface{} {
-		return map[string]interface{}{
-			"type":                 "object",
-			"required":             required,
-			"properties":           props,
-			"additionalProperties": false,
-		}
-	}
-	return []nativeToolDefinition{
-		{"read", "Read a UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{"path"}, map[string]interface{}{"path": stringProp("Relative workspace path or absolute container path.")})},
-		{"write", "Create or overwrite a UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{"path", "content"}, map[string]interface{}{"path": stringProp("Relative workspace path or absolute container path."), "content": stringProp("Complete file content to write.")})},
-		{"edit", "Replace text in an existing UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{"path", "old_string", "new_string"}, map[string]interface{}{"path": stringProp("Relative workspace path or absolute container path."), "old_string": stringProp("Exact text to replace."), "new_string": stringProp("Replacement text."), "replace_all": boolProp("Replace every occurrence instead of only the first.")})},
-		{"bash", "Run a shell command in the workspace.", obj([]string{"command"}, map[string]interface{}{"command": stringProp("Command to run with bash -lc."), "timeout_seconds": intProp("Optional timeout, capped by Telos.")})},
-		{"ls", "List files in a directory. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{}, map[string]interface{}{"path": stringProp("Directory path, defaults to workspace root.")})},
-		{"grep", "Search text files with a regular expression. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{"pattern"}, map[string]interface{}{"pattern": stringProp("Go regular expression."), "path": stringProp("Directory or file path, defaults to workspace root."), "max_matches": intProp("Maximum matches to return.")})},
-		{"find", "Find files by glob pattern. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{"pattern"}, map[string]interface{}{"pattern": stringProp("Glob pattern matched against relative paths and basenames."), "path": stringProp("Directory path, defaults to workspace root."), "max_matches": intProp("Maximum paths to return.")})},
-	}
+func (t *anthropicTransport) recordCorrection(prompt string) {
+	t.messages = append(t.messages,
+		anthropicMessage{Role: "assistant", Content: t.last},
+		anthropicMessage{Role: "user", Content: []anthropicBlock{{Type: "text", Text: prompt}}},
+	)
 }
 
 // -- Tools -------------------------------------------------------------------
@@ -949,16 +1022,169 @@ type nativeToolResult struct {
 	IsError bool
 }
 
+// nativeTool is the single source of truth for a tool: its schema and its
+// handler. Schema generation, dispatch, and the system-prompt name list all
+// derive from the same table.
+type nativeTool struct {
+	name        string
+	description string
+	parameters  map[string]interface{}
+	run         func(t *nativeTools, ctx context.Context, args map[string]interface{}) (string, error)
+}
+
+func nativeToolTable() []nativeTool {
+	str := func(desc string) map[string]interface{} {
+		return map[string]interface{}{"type": "string", "description": desc}
+	}
+	boolean := func(desc string) map[string]interface{} {
+		return map[string]interface{}{"type": "boolean", "description": desc}
+	}
+	integer := func(desc string) map[string]interface{} {
+		return map[string]interface{}{"type": "integer", "description": desc}
+	}
+	obj := func(required []string, props map[string]interface{}) map[string]interface{} {
+		return map[string]interface{}{
+			"type":                 "object",
+			"required":             required,
+			"properties":           props,
+			"additionalProperties": false,
+		}
+	}
+	return []nativeTool{
+		{
+			name:        "read",
+			description: "Read a UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.",
+			parameters:  obj([]string{"path"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.read(argString(args, "path"))
+			},
+		},
+		{
+			name:        "write",
+			description: "Create or overwrite a UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.",
+			parameters:  obj([]string{"path", "content"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path."), "content": str("Complete file content to write.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.write(argString(args, "path"), argString(args, "content"))
+			},
+		},
+		{
+			name:        "edit",
+			description: "Replace text in an existing UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.",
+			parameters:  obj([]string{"path", "old_string", "new_string"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path."), "old_string": str("Exact text to replace."), "new_string": str("Replacement text."), "replace_all": boolean("Replace every occurrence instead of only the first.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.edit(argString(args, "path"), argString(args, "old_string"), argString(args, "new_string"), argBool(args, "replace_all"))
+			},
+		},
+		{
+			name:        "bash",
+			description: "Run a shell command in the workspace.",
+			parameters:  obj([]string{"command"}, map[string]interface{}{"command": str("Command to run with bash -lc."), "timeout_seconds": integer("Optional timeout, capped by Telos.")}),
+			run: func(t *nativeTools, ctx context.Context, args map[string]interface{}) (string, error) {
+				return t.bash(ctx, argString(args, "command"), argInt(args, "timeout_seconds"))
+			},
+		},
+		{
+			name:        "ls",
+			description: "List files in a directory. Relative paths resolve inside the workspace; absolute paths are used as-is.",
+			parameters:  obj([]string{}, map[string]interface{}{"path": str("Directory path, defaults to workspace root.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.ls(argString(args, "path"))
+			},
+		},
+		{
+			name:        "grep",
+			description: "Search text files with a regular expression. Relative paths resolve inside the workspace; absolute paths are used as-is.",
+			parameters:  obj([]string{"pattern"}, map[string]interface{}{"pattern": str("Go regular expression."), "path": str("Directory or file path, defaults to workspace root."), "max_matches": integer("Maximum matches to return.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.grep(argString(args, "pattern"), argString(args, "path"), argInt(args, "max_matches"))
+			},
+		},
+		{
+			name:        "find",
+			description: "Find files by glob pattern. Relative paths resolve inside the workspace; absolute paths are used as-is.",
+			parameters:  obj([]string{"pattern"}, map[string]interface{}{"pattern": str("Glob pattern matched against relative paths and basenames."), "path": str("Directory path, defaults to workspace root."), "max_matches": integer("Maximum paths to return.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.find(argString(args, "pattern"), argString(args, "path"), argInt(args, "max_matches"))
+			},
+		},
+	}
+}
+
+func nativeToolNames() []string {
+	table := nativeToolTable()
+	names := make([]string, len(table))
+	for i, def := range table {
+		names[i] = def.name
+	}
+	return names
+}
+
+func toolSchemasForChat() []map[string]interface{} {
+	defs := nativeToolTable()
+	out := make([]map[string]interface{}, 0, len(defs))
+	for _, def := range defs {
+		out = append(out, map[string]interface{}{
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":        def.name,
+				"description": def.description,
+				"parameters":  def.parameters,
+			},
+		})
+	}
+	return out
+}
+
+func toolSchemasForResponses() []map[string]interface{} {
+	defs := nativeToolTable()
+	out := make([]map[string]interface{}, 0, len(defs))
+	for _, def := range defs {
+		out = append(out, map[string]interface{}{
+			"type":        "function",
+			"name":        def.name,
+			"description": def.description,
+			"parameters":  def.parameters,
+		})
+	}
+	return out
+}
+
+func toolSchemasForAnthropic() []map[string]interface{} {
+	defs := nativeToolTable()
+	out := make([]map[string]interface{}, 0, len(defs))
+	for _, def := range defs {
+		out = append(out, map[string]interface{}{
+			"name":         def.name,
+			"description":  def.description,
+			"input_schema": def.parameters,
+		})
+	}
+	return out
+}
+
 type nativeTools struct {
 	platform      *platform.LocalPlatform
 	stopRequested func() bool
+	byName        map[string]nativeTool
 }
 
 func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool) *nativeTools {
-	return &nativeTools{platform: p, stopRequested: stopRequested}
+	t := &nativeTools{platform: p, stopRequested: stopRequested, byName: map[string]nativeTool{}}
+	for _, tool := range nativeToolTable() {
+		t.byName[tool.name] = tool
+	}
+	return t
 }
 
-func (t *nativeTools) execute(call nativeToolCall) nativeToolResult {
+func (t *nativeTools) executeAll(ctx context.Context, calls []nativeToolCall) []nativeToolResult {
+	results := make([]nativeToolResult, 0, len(calls))
+	for _, call := range calls {
+		results = append(results, t.execute(ctx, call))
+	}
+	return results
+}
+
+func (t *nativeTools) execute(ctx context.Context, call nativeToolCall) nativeToolResult {
 	if call.ID == "" {
 		call.ID = call.Name
 	}
@@ -968,32 +1194,15 @@ func (t *nativeTools) execute(call nativeToolCall) nativeToolResult {
 			return nativeToolResult{CallID: call.ID, Name: call.Name, Output: "invalid tool arguments: " + err.Error(), IsError: true}
 		}
 	}
-	output, err := t.executeParsed(call.Name, args)
+	tool, ok := t.byName[call.Name]
+	if !ok {
+		return nativeToolResult{CallID: call.ID, Name: call.Name, Output: fmt.Sprintf("unknown tool %q; available tools are %s", call.Name, oxfordList(nativeToolNames())), IsError: true}
+	}
+	output, err := tool.run(t, ctx, args)
 	if err != nil {
 		return nativeToolResult{CallID: call.ID, Name: call.Name, Output: err.Error(), IsError: true}
 	}
 	return nativeToolResult{CallID: call.ID, Name: call.Name, Output: output}
-}
-
-func (t *nativeTools) executeParsed(name string, args map[string]interface{}) (string, error) {
-	switch name {
-	case "read":
-		return t.read(argString(args, "path"))
-	case "write":
-		return t.write(argString(args, "path"), argString(args, "content"))
-	case "edit":
-		return t.edit(argString(args, "path"), argString(args, "old_string"), argString(args, "new_string"), argBool(args, "replace_all"))
-	case "bash":
-		return t.bash(argString(args, "command"), argInt(args, "timeout_seconds"))
-	case "ls":
-		return t.ls(argString(args, "path"))
-	case "grep":
-		return t.grep(argString(args, "pattern"), argString(args, "path"), argInt(args, "max_matches"))
-	case "find":
-		return t.find(argString(args, "pattern"), argString(args, "path"), argInt(args, "max_matches"))
-	default:
-		return "", fmt.Errorf("unknown tool %q; available tools are read, write, edit, bash, ls, grep, and find", name)
-	}
 }
 
 func (t *nativeTools) read(p string) (string, error) {
@@ -1056,14 +1265,21 @@ func (t *nativeTools) edit(p, oldString, newString string, replaceAll bool) (str
 	return fmt.Sprintf("edited %s (%d replacement%s)", p, count, plural(count)), nil
 }
 
-func (t *nativeTools) bash(command string, timeout int) (string, error) {
+func (t *nativeTools) bash(ctx context.Context, command string, timeout int) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", fmt.Errorf("command is required")
 	}
 	if timeout <= 0 || timeout > defaultToolTimeoutSec {
 		timeout = defaultToolTimeoutSec
 	}
-	result := t.platform.Run([]string{"bash", "-lc", command}, "", nil, timeout, t.stopRequested, nil)
+	// Honor both the explicit stop request and the turn deadline carried by ctx.
+	interrupt := func() bool {
+		if ctx.Err() != nil {
+			return true
+		}
+		return t.stopRequested != nil && t.stopRequested()
+	}
+	result := t.platform.Run([]string{"bash", "-lc", command}, "", nil, timeout, interrupt, nil)
 	var parts []string
 	if stdout := strings.Join(result.RawLines, "\n"); stdout != "" {
 		parts = append(parts, "[stdout]\n"+stdout)
@@ -1121,21 +1337,20 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (string, error) {
 		return "", err
 	}
 	var matches []string
-	visit := func(file string) error {
+	visit := func(file string) {
 		if len(matches) >= maxMatches {
-			return nil
+			return
 		}
 		info, err := os.Stat(file)
 		if err != nil || info.IsDir() || info.Size() > 2<<20 {
-			return nil
+			return
 		}
 		data, err := os.ReadFile(file)
 		if err != nil || bytes.IndexByte(data, 0) >= 0 {
-			return nil
+			return
 		}
 		rel := t.displayPath(file)
-		lines := strings.Split(string(data), "\n")
-		for i, line := range lines {
+		for i, line := range strings.Split(string(data), "\n") {
 			if re.MatchString(line) {
 				matches = append(matches, fmt.Sprintf("%s:%d:%s", rel, i+1, line))
 				if len(matches) >= maxMatches {
@@ -1143,14 +1358,13 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (string, error) {
 				}
 			}
 		}
-		return nil
 	}
 	info, err := os.Stat(root)
 	if err != nil {
 		return "", err
 	}
 	if !info.IsDir() {
-		_ = visit(root)
+		visit(root)
 	} else {
 		_ = filepath.WalkDir(root, func(file string, d os.DirEntry, err error) error {
 			if err != nil {
@@ -1162,7 +1376,7 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (string, error) {
 				}
 				return nil
 			}
-			_ = visit(file)
+			visit(file)
 			return nil
 		})
 	}
@@ -1188,10 +1402,10 @@ func (t *nativeTools) find(pattern, p string, maxMatches int) (string, error) {
 		if err != nil {
 			return nil
 		}
-		if d.IsDir() && shouldSkipDir(d.Name()) {
-			return filepath.SkipDir
-		}
 		if d.IsDir() {
+			if shouldSkipDir(d.Name()) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		rel := t.displayPath(file)
@@ -1289,6 +1503,19 @@ func plural(count int) string {
 	return "s"
 }
 
+func oxfordList(items []string) string {
+	switch len(items) {
+	case 0:
+		return ""
+	case 1:
+		return items[0]
+	case 2:
+		return items[0] + " and " + items[1]
+	default:
+		return strings.Join(items[:len(items)-1], ", ") + ", and " + items[len(items)-1]
+	}
+}
+
 // -- Session logging ---------------------------------------------------------
 
 type nativeSessionLogger struct {
@@ -1307,73 +1534,64 @@ func (l *nativeSessionLogger) start() error {
 	if err := os.MkdirAll(filepath.Dir(l.path), 0o755); err != nil {
 		return err
 	}
-	return l.append(map[string]interface{}{
-		"type":      "session",
-		"version":   1,
-		"id":        fmt.Sprintf("native-%d", time.Now().UnixNano()),
-		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-		"cwd":       l.workspace,
-		"runtime":   "telos-native",
+	return l.append(sessionEvent{
+		Type:      "session",
+		Version:   1,
+		ID:        fmt.Sprintf("native-%d", time.Now().UnixNano()),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		CWD:       l.workspace,
+		Runtime:   "telos-native",
 	})
 }
 
 func (l *nativeSessionLogger) user(text string) error {
-	return l.message("user", map[string]interface{}{"content": text})
-}
-
-func (l *nativeSessionLogger) assistant(text, provider, model, stopReason string, stats game.TurnStats) error {
-	msg := map[string]interface{}{
-		"provider":   provider,
-		"model":      model,
-		"stopReason": stopReason,
-		"content": []map[string]string{{
-			"type": "text",
-			"text": text,
-		}},
-		"usage": map[string]interface{}{
-			"input":      stats.InputTokens,
-			"output":     stats.OutputTokens,
-			"cacheRead":  stats.CacheReadTokens,
-			"cacheWrite": stats.CacheCreationTokens,
-			"cost":       map[string]float64{"total": stats.CostUSD},
-		},
-	}
-	return l.message("assistant", msg)
-}
-
-func (l *nativeSessionLogger) tool(result nativeToolResult) error {
-	msg := map[string]interface{}{
-		"toolCallId": result.CallID,
-		"toolName":   result.Name,
-		"isError":    result.IsError,
-		"content": []map[string]string{{
-			"type": "text",
-			"text": result.Output,
-		}},
-	}
-	return l.message("toolResult", msg)
-}
-
-func (l *nativeSessionLogger) message(role string, fields map[string]interface{}) error {
-	if l.path == "" {
-		return nil
-	}
-	msg := map[string]interface{}{
-		"role":      role,
-		"timestamp": time.Now().UnixMilli(),
-	}
-	for k, v := range fields {
-		msg[k] = v
-	}
-	return l.append(map[string]interface{}{
-		"type":      "message",
-		"id":        fmt.Sprintf("%s-%d", role, time.Now().UnixNano()),
-		"timestamp": time.Now().UTC().Format(time.RFC3339Nano),
-		"message":   msg,
+	return l.message(&sessionMessage{
+		Role:    "user",
+		Content: []sessionContent{{Type: "text", Text: text}},
 	})
 }
 
-func (l *nativeSessionLogger) append(entry map[string]interface{}) error {
+func (l *nativeSessionLogger) assistant(text, provider, model, stopReason string, stats game.TurnStats) error {
+	return l.message(&sessionMessage{
+		Role:       "assistant",
+		Provider:   provider,
+		Model:      model,
+		StopReason: stopReason,
+		Content:    []sessionContent{{Type: "text", Text: text}},
+		Usage: &sessionUsage{
+			Input:      stats.InputTokens,
+			Output:     stats.OutputTokens,
+			CacheRead:  stats.CacheReadTokens,
+			CacheWrite: stats.CacheCreationTokens,
+			Cost:       &sessionCost{Total: stats.CostUSD},
+		},
+	})
+}
+
+func (l *nativeSessionLogger) tool(result nativeToolResult) error {
+	return l.message(&sessionMessage{
+		Role:       "toolResult",
+		ToolCallID: result.CallID,
+		ToolName:   result.Name,
+		IsError:    result.IsError,
+		Content:    []sessionContent{{Type: "text", Text: result.Output}},
+	})
+}
+
+func (l *nativeSessionLogger) message(msg *sessionMessage) error {
+	if l.path == "" {
+		return nil
+	}
+	msg.Timestamp = time.Now().UnixMilli()
+	return l.append(sessionEvent{
+		Type:      "message",
+		ID:        fmt.Sprintf("%s-%d", msg.Role, time.Now().UnixNano()),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Message:   msg,
+	})
+}
+
+func (l *nativeSessionLogger) append(event sessionEvent) error {
 	if l.path == "" {
 		return nil
 	}
@@ -1382,6 +1600,5 @@ func (l *nativeSessionLogger) append(entry map[string]interface{}) error {
 		return err
 	}
 	defer f.Close()
-	enc := json.NewEncoder(f)
-	return enc.Encode(entry)
+	return json.NewEncoder(f).Encode(event)
 }

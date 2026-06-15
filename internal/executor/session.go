@@ -12,7 +12,54 @@ import (
 	"github.com/telos-org/telos/internal/game"
 )
 
-// -- Agent session parsing ----------------------------------------------------
+// -- Agent session contract --------------------------------------------------
+//
+// These types are the single typed contract for the per-turn session JSONL.
+// Both the writer (nativeSessionLogger) and the reader (ReadSession) use them,
+// so the two halves cannot silently drift.
+
+type sessionEvent struct {
+	Type      string          `json:"type"`
+	Version   int             `json:"version,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Timestamp string          `json:"timestamp,omitempty"`
+	CWD       string          `json:"cwd,omitempty"`
+	Runtime   string          `json:"runtime,omitempty"`
+	Message   *sessionMessage `json:"message,omitempty"`
+}
+
+type sessionMessage struct {
+	Role         string           `json:"role"`
+	Timestamp    int64            `json:"timestamp,omitempty"`
+	Provider     string           `json:"provider,omitempty"`
+	Model        string           `json:"model,omitempty"`
+	StopReason   string           `json:"stopReason,omitempty"`
+	Content      []sessionContent `json:"content,omitempty"`
+	Usage        *sessionUsage    `json:"usage,omitempty"`
+	ToolCallID   string           `json:"toolCallId,omitempty"`
+	ToolName     string           `json:"toolName,omitempty"`
+	IsError      bool             `json:"isError,omitempty"`
+	ErrorMessage string           `json:"errorMessage,omitempty"`
+}
+
+type sessionContent struct {
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+}
+
+type sessionUsage struct {
+	Input      int          `json:"input"`
+	Output     int          `json:"output"`
+	CacheRead  int          `json:"cacheRead"`
+	CacheWrite int          `json:"cacheWrite"`
+	Cost       *sessionCost `json:"cost,omitempty"`
+}
+
+type sessionCost struct {
+	Total float64 `json:"total"`
+}
+
+// -- Agent session parsing ---------------------------------------------------
 
 type SessionSummary struct {
 	Logs  string
@@ -29,31 +76,27 @@ func ReadSession(path string) (SessionSummary, error) {
 	defer f.Close()
 
 	var summary SessionSummary
-	var finalAssistant map[string]interface{}
+	var finalAssistant *sessionMessage
 	reader := bufio.NewReader(f)
 	for {
-		line, err := reader.ReadString('\n')
+		line, readErr := reader.ReadString('\n')
 		if strings.TrimSpace(line) != "" {
-			var entry map[string]interface{}
-			dec := json.NewDecoder(strings.NewReader(line))
-			dec.UseNumber()
-			if dec.Decode(&entry) == nil {
-				if msg, ok := entry["message"].(map[string]interface{}); ok {
-					switch getString(msg, "role") {
-					case "assistant":
-						finalAssistant = msg
-						summary.Stats = mergeTurnStats(summary.Stats, statsFromSessionMessage(msg))
-					case "toolResult", "bashExecution":
-						summary.Stats.NumTurns++
-					}
+			var event sessionEvent
+			if json.Unmarshal([]byte(line), &event) == nil && event.Message != nil {
+				switch event.Message.Role {
+				case "assistant":
+					finalAssistant = event.Message
+					summary.Stats = mergeTurnStats(summary.Stats, statsFromSessionMessage(event.Message))
+				case "toolResult", "bashExecution":
+					summary.Stats.NumTurns++
 				}
 			}
 		}
-		if err == io.EOF {
+		if readErr == io.EOF {
 			break
 		}
-		if err != nil {
-			return SessionSummary{}, err
+		if readErr != nil {
+			return SessionSummary{}, readErr
 		}
 	}
 	if finalAssistant == nil {
@@ -65,50 +108,42 @@ func ReadSession(path string) (SessionSummary, error) {
 	return summary, nil
 }
 
-func assistantText(msg map[string]interface{}) string {
-	content, _ := msg["content"].([]interface{})
+func assistantText(msg *sessionMessage) string {
 	var parts []string
-	for _, block := range content {
-		bm, ok := block.(map[string]interface{})
-		if !ok {
+	for _, block := range msg.Content {
+		if block.Type != "text" {
 			continue
 		}
-		if getString(bm, "type") != "text" {
-			continue
-		}
-		text := getString(bm, "text")
-		if strings.TrimSpace(text) != "" {
-			parts = append(parts, text)
+		if strings.TrimSpace(block.Text) != "" {
+			parts = append(parts, block.Text)
 		}
 	}
 	return strings.Join(parts, "")
 }
 
-func statsFromSessionMessage(msg map[string]interface{}) game.TurnStats {
-	stats := game.TurnStats{}
-	if model := getString(msg, "model"); model != "" {
-		stats.Model = model
-	}
-	usage, _ := msg["usage"].(map[string]interface{})
-	if usage == nil {
+func statsFromSessionMessage(msg *sessionMessage) game.TurnStats {
+	stats := game.TurnStats{Model: msg.Model}
+	if msg.Usage == nil {
 		return stats
 	}
-	stats.InputTokens += intFromAny(usage["input"])
-	stats.OutputTokens += intFromAny(usage["output"])
-	stats.CacheReadTokens += intFromAny(usage["cacheRead"])
-	stats.CacheCreationTokens += intFromAny(usage["cacheWrite"])
-	cost, _ := usage["cost"].(map[string]interface{})
-	if cost != nil {
-		stats.CostUSD += floatFromAny(cost["total"])
+	stats.InputTokens += msg.Usage.Input
+	stats.OutputTokens += msg.Usage.Output
+	stats.CacheReadTokens += msg.Usage.CacheRead
+	stats.CacheCreationTokens += msg.Usage.CacheWrite
+	if msg.Usage.Cost != nil {
+		stats.CostUSD += msg.Usage.Cost.Total
 	}
 	return stats
 }
 
-func errorFromSessionMessage(msg map[string]interface{}) string {
-	if getString(msg, "stopReason") == "length" {
+func errorFromSessionMessage(msg *sessionMessage) string {
+	if msg.StopReason == "length" {
 		return "agent_output_truncated:length"
 	}
-	return extractMessageError(msg)
+	if msg.ErrorMessage == "" || isTransientError(msg.ErrorMessage) {
+		return ""
+	}
+	return msg.ErrorMessage
 }
 
 func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
@@ -125,17 +160,6 @@ func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
 	return base
 }
 
-func extractMessageError(msg map[string]interface{}) string {
-	em := getString(msg, "errorMessage")
-	if em == "" {
-		return ""
-	}
-	if isTransientError(em) {
-		return ""
-	}
-	return em
-}
-
 func isTransientError(err string) bool {
 	for _, t := range []string{"overloaded_error", "rate_limit_error", "api_error"} {
 		if strings.Contains(err, t) {
@@ -143,37 +167,6 @@ func isTransientError(err string) bool {
 		}
 	}
 	return false
-}
-
-func getString(m map[string]interface{}, key string) string {
-	v, _ := m[key].(string)
-	return v
-}
-
-func intFromAny(v interface{}) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	case json.Number:
-		i, _ := n.Int64()
-		return int(i)
-	}
-	return 0
-}
-
-func floatFromAny(v interface{}) float64 {
-	switch n := v.(type) {
-	case float64:
-		return n
-	case int:
-		return float64(n)
-	case json.Number:
-		f, _ := n.Float64()
-		return f
-	}
-	return 0
 }
 
 func orDefault(s, def string) string {

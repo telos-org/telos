@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
@@ -330,7 +332,7 @@ func TestNativeToolsPathResolution(t *testing.T) {
 	workspace := t.TempDir()
 	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil)
 
-	rejected := tools.execute(nativeToolCall{
+	rejected := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
 		Name:      "write",
 		Arguments: `{"path":"../outside.txt","content":"bad"}`,
@@ -344,7 +346,7 @@ func TestNativeToolsPathResolution(t *testing.T) {
 	}
 
 	absolutePath := filepath.Join(t.TempDir(), "absolute.txt")
-	written := tools.execute(nativeToolCall{
+	written := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_2",
 		Name:      "write",
 		Arguments: `{"path":` + mustJSON(absolutePath) + `,"content":"ok\n"}`,
@@ -361,6 +363,58 @@ func TestNativeToolsPathResolution(t *testing.T) {
 	}
 	if string(data) != "ok\n" {
 		t.Fatalf("absolute file content: got %q", data)
+	}
+}
+
+func TestHTTPPosterRetriesTransientStatus(t *testing.T) {
+	prev := httpRetryBackoff
+	httpRetryBackoff = time.Millisecond
+	defer func() { httpRetryBackoff = prev }()
+
+	var attempts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if attempts < httpMaxAttempts {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"overloaded"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	poster := httpPoster{http: server.Client(), cfg: nativeProviderConfig{BaseURL: server.URL, APIKey: "k"}}
+	var out struct {
+		OK bool `json:"ok"`
+	}
+	if err := poster.postJSON(context.Background(), "/x", map[string]interface{}{}, &out); err != nil {
+		t.Fatalf("expected success after retries: %v", err)
+	}
+	if attempts != httpMaxAttempts {
+		t.Fatalf("attempts: got %d want %d", attempts, httpMaxAttempts)
+	}
+	if !out.OK {
+		t.Fatal("expected decoded body after retry")
+	}
+}
+
+func TestHTTPPosterDoesNotRetryClientError(t *testing.T) {
+	var attempts int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"message":"bad"}}`))
+	}))
+	defer server.Close()
+
+	poster := httpPoster{http: server.Client(), cfg: nativeProviderConfig{BaseURL: server.URL, APIKey: "k"}}
+	err := poster.postJSON(context.Background(), "/x", map[string]interface{}{}, &struct{}{})
+	if err == nil || !strings.Contains(err.Error(), "provider_http_400") {
+		t.Fatalf("expected non-retryable 400 error, got %v", err)
+	}
+	if attempts != 1 {
+		t.Fatalf("client errors should not retry: got %d attempts", attempts)
 	}
 }
 
