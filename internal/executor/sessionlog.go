@@ -118,6 +118,15 @@ func (l *nativeSessionLogger) tool(result nativeToolResult) error {
 	})
 }
 
+// note records a harness-level telemetry event (e.g. a completion-gate retry)
+// in the session log for forensic inspection.
+func (l *nativeSessionLogger) note(kind, detail string) error {
+	return l.message(&sessionMessage{
+		Role:    "note",
+		Content: []sessionContent{{Type: "text", Text: kind + ": " + detail}},
+	})
+}
+
 func (l *nativeSessionLogger) message(msg *sessionMessage) error {
 	if l.path == "" {
 		return nil

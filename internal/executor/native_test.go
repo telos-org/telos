@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -305,6 +306,59 @@ func TestNativeExecutorResponsesRetriesUnproductiveFinal(t *testing.T) {
 	}
 }
 
+func TestNativeExecutorGateRetriesMissingDeliverableThenAccepts(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		switch requests {
+		case 1:
+			// Tool-less final that did no work for a file deliverable -> retry.
+			_, _ = w.Write([]byte(`{
+				"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"I have inspected the workspace and understand the task."}}],
+				"usage":{"prompt_tokens":5,"completion_tokens":5}
+			}`))
+		case 2:
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "already fully specified") {
+				t.Fatalf("second request should carry the correction prompt, got %s", body)
+			}
+			_, _ = w.Write([]byte(`{
+				"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"write","arguments":"{\"path\":\"rig.py\",\"content\":\"print(1)\\n\"}"}}]}}],
+				"usage":{"prompt_tokens":5,"completion_tokens":5}
+			}`))
+		default:
+			_, _ = w.Write([]byte(`{
+				"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Created rig.py.\n<status>CONCEDE</status>\n"}}],
+				"usage":{"prompt_tokens":5,"completion_tokens":5}
+			}`))
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_API_BASE_URL", server.URL)
+	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_API_STYLE", "openai-chat")
+
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
+	result := exec.ExecuteTurn("Create `rig.py` in the workspace.", "prover", ts)
+
+	if result.Error != "" {
+		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
+	}
+	if result.Status != game.StatusConcede {
+		t.Fatalf("status: got %s logs=%q", result.Status, result.Logs)
+	}
+	if requests != 3 {
+		t.Fatalf("expected retry then write then accept (3 requests), got %d", requests)
+	}
+	if _, err := os.ReadFile(filepath.Join(workspace, "rig.py")); err != nil {
+		t.Fatalf("rig.py should exist: %v", err)
+	}
+}
+
 func TestNativeSystemPromptPreventsTaskDrift(t *testing.T) {
 	prompt := nativeSystemPrompt("prover")
 	for _, want := range []string{
@@ -318,41 +372,80 @@ func TestNativeSystemPromptPreventsTaskDrift(t *testing.T) {
 	}
 }
 
-func TestShouldRetryUnproductiveFinalUsesAssignmentAnchors(t *testing.T) {
-	task := "Create `industry.py` and run it."
-	if !shouldRetryUnproductiveFinal("Your subscription is about to expire.", task, false) {
-		t.Fatal("expected unrelated answer without assignment anchor to retry")
+func TestCompletionGateSignalDecisions(t *testing.T) {
+	gate := completionGate{mode: gateSignal}
+	cases := []struct {
+		name string
+		sig  completionSignals
+		want string
+	}{
+		{"empty final", completionSignals{emptyText: true}, "empty_visible_final"},
+		{"asks operator", completionSignals{askedOperator: true}, "asked_operator_for_direction"},
+		{"bad no-generation", completionSignals{fileDeliverable: true}, "named_deliverable_absent_no_change"},
+		{"good no-generation: deliverable exists", completionSignals{fileDeliverable: true, deliverablesMet: true}, ""},
+		{"good no-generation: did real work", completionSignals{fileDeliverable: true, mutatedThisTurn: true}, ""},
+		{"good no-generation: not a file task", completionSignals{}, ""},
 	}
-	if shouldRetryUnproductiveFinal("No changes needed this turn; tests pass.", task, true) {
-		t.Fatal("expected anchorless completion after tool use to be accepted")
+	for _, tc := range cases {
+		if got := gate.retryReason(tc.sig); got != tc.want {
+			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
+		}
 	}
-	if !shouldRetryUnproductiveFinal("I will now implement the `industry.py` changes and run checks.", task, true) {
-		t.Fatal("expected pending-work answer mentioning assignment anchor to retry")
+}
+
+func TestCompletionGateOffNeverRetries(t *testing.T) {
+	gate := completionGate{mode: gateOff}
+	for _, sig := range []completionSignals{
+		{emptyText: true},
+		{askedOperator: true},
+		{fileDeliverable: true},
+	} {
+		if reason := gate.retryReason(sig); reason != "" {
+			t.Fatalf("off gate should never retry, got %q for %+v", reason, sig)
+		}
 	}
-	if !shouldRetryUnproductiveFinal("Good. Let's write new industry.py and add the invention command.", task, false) {
-		t.Fatal("expected planning answer mentioning assignment anchor to retry")
+}
+
+func TestNewCompletionGateReadsEnv(t *testing.T) {
+	if newCompletionGate().mode != gateSignal {
+		t.Fatal("default mode should be signal")
 	}
-	if !shouldRetryUnproductiveFinal("I have enough information. Let me now write the updated industry.py.", task, false) {
-		t.Fatal("expected let-me-now-write planning answer to retry")
+	t.Setenv("TELOS_NATIVE_COMPLETION_GATE", "off")
+	if newCompletionGate().mode != gateOff {
+		t.Fatal("env override to off not honored")
 	}
-	if shouldRetryUnproductiveFinal("Created industry.py and ran the checks.", task, false) {
-		t.Fatal("expected answer mentioning assignment anchor to be accepted")
+}
+
+func TestDeliverablesPresentChecksWorkspace(t *testing.T) {
+	workspace := t.TempDir()
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil)
+	if tools.deliverablesPresent([]string{"rig.py"}) {
+		t.Fatal("missing deliverable should report absent")
 	}
-	if anchors := assignmentFileAnchors("Create `industry.py`, update `src/app.ts`, and read `not-a-file`."); strings.Join(anchors, ",") != "industry.py,src/app.ts" {
+	if err := os.WriteFile(filepath.Join(workspace, "rig.py"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !tools.deliverablesPresent([]string{"rig.py"}) {
+		t.Fatal("present deliverable should report met")
+	}
+}
+
+func TestAssignmentFileAnchorsExtractsNamedFiles(t *testing.T) {
+	anchors := assignmentFileAnchors("Create `industry.py`, update `src/app.ts`, and read `not-a-file`.")
+	if strings.Join(anchors, ",") != "industry.py,src/app.ts" {
 		t.Fatalf("anchors: got %q", anchors)
 	}
 }
 
-func TestShouldRetryNativeFinalRetriesNoToolLengthForFileAssignment(t *testing.T) {
-	task := "Create `industry.py` and run it."
-	if !shouldRetryNativeFinal("I have enough information about the implementation.", task, "length", false) {
-		t.Fatal("expected no-tool length response for file assignment to retry")
+func TestAnyMutatingResult(t *testing.T) {
+	if anyMutatingResult([]nativeToolResult{{Name: "read"}, {Name: "ls"}}) {
+		t.Fatal("read-only tools should not count as mutation")
 	}
-	if shouldRetryNativeFinal("Created industry.py and ran checks.", task, "length", true) {
-		t.Fatal("expected length response after tool use with completion evidence to be accepted")
+	if anyMutatingResult([]nativeToolResult{{Name: "write", IsError: true}}) {
+		t.Fatal("failed write should not count as mutation")
 	}
-	if shouldRetryNativeFinal("Here is the answer.", "Explain the design.", "length", false) {
-		t.Fatal("expected non-file assignment length response to be accepted")
+	if !anyMutatingResult([]nativeToolResult{{Name: "read"}, {Name: "write"}}) {
+		t.Fatal("successful write should count as mutation")
 	}
 }
 
