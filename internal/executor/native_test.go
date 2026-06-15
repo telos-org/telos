@@ -167,6 +167,65 @@ func TestNativeExecutorResponsesIncludesHarnessPromptInUserInput(t *testing.T) {
 	}
 }
 
+func TestNativeExecutorResponsesRetriesUnproductiveFinal(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		var req map[string]interface{}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		if requests == 1 {
+			_, _ = w.Write([]byte(`{
+				"id":"resp_1",
+				"output":[{"type":"message","content":[{"type":"output_text","text":"The workspace is currently empty. What would you like me to work on?"}]}],
+				"usage":{"input_tokens":17,"output_tokens":11}
+			}`))
+			return
+		}
+		if req["previous_response_id"] != "resp_1" {
+			t.Fatalf("second request previous_response_id: got %v", req["previous_response_id"])
+		}
+		input, _ := req["input"].([]interface{})
+		if len(input) != 1 {
+			t.Fatalf("second responses input length: got %d body=%s", len(input), mustJSON(req))
+		}
+		first, _ := input[0].(map[string]interface{})
+		content, _ := first["content"].(string)
+		if !strings.Contains(content, "Do not ask what to build") || !strings.Contains(content, "create industry.py") {
+			t.Fatalf("second request missing correction content:\n%s", content)
+		}
+		_, _ = w.Write([]byte(`{
+			"id":"resp_2",
+			"output":[{"type":"message","content":[{"type":"output_text","text":"Created industry.py.\n<status>CONCEDE</status>\n"}]}],
+			"usage":{"input_tokens":19,"output_tokens":7}
+		}`))
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_API_BASE_URL", server.URL)
+	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_API_STYLE", "openai-responses")
+
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	result := exec.ExecuteTurn("create industry.py", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+
+	if result.Error != "" {
+		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
+	}
+	if result.Status != game.StatusConcede {
+		t.Fatalf("status: got %s logs=%q", result.Status, result.Logs)
+	}
+	if requests != 2 {
+		t.Fatalf("requests: got %d", requests)
+	}
+}
+
 func TestNativeSystemPromptPreventsTaskDrift(t *testing.T) {
 	prompt := nativeSystemPrompt("prover")
 	for _, want := range []string{

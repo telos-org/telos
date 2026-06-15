@@ -311,6 +311,38 @@ func nativeSystemPrompt(role string) string {
 	}, "\n")
 }
 
+func nativeCorrectionPrompt(task string) string {
+	return strings.Join([]string{
+		"The assignment is already fully specified above. Do not ask what to build or what to do next.",
+		"Implement the deliverable named in the assignment now. If the workspace is empty, create the required files directly.",
+		"",
+		"# Assignment",
+		"",
+		task,
+	}, "\n")
+}
+
+func shouldRetryUnproductiveFinal(text string) bool {
+	normalized := strings.ToLower(strings.TrimSpace(text))
+	if normalized == "" {
+		return true
+	}
+	for _, marker := range []string{
+		"what would you like me to work on",
+		"what would you like me to do",
+		"what would you like me to build",
+		"how can i help you",
+		"just describe what you need",
+		"ready to help",
+		"workspace is currently empty",
+	} {
+		if strings.Contains(normalized, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 // -- OpenAI Chat Completions -------------------------------------------------
 
 type chatMessage struct {
@@ -370,6 +402,10 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 		}
 		_ = c.logger.assistant(msg.Content, c.cfg.Provider, c.cfg.Model, response.Choices[0].FinishReason, statsFromChatUsage(c.cfg.Model, response.Usage))
 		if len(msg.ToolCalls) == 0 {
+			if shouldRetryUnproductiveFinal(msg.Content) && i+1 < defaultMaxToolLoops {
+				messages = append(messages, msg, chatMessage{Role: "user", Content: nativeCorrectionPrompt(task)})
+				continue
+			}
 			return msg.Content, stats, nil
 		}
 		messages = append(messages, msg)
@@ -468,6 +504,12 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 		text, calls := parseResponseOutput(response.Output)
 		_ = c.logger.assistant(text, c.cfg.Provider, c.cfg.Model, "stop", turnStats)
 		if len(calls) == 0 {
+			if shouldRetryUnproductiveFinal(text) && i+1 < defaultMaxToolLoops {
+				input = []interface{}{
+					map[string]interface{}{"role": "user", "content": nativeCorrectionPrompt(task)},
+				}
+				continue
+			}
 			return text, stats, nil
 		}
 		input = nil
@@ -588,6 +630,13 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 		text, calls := parseAnthropicOutput(response.Content)
 		_ = c.logger.assistant(text, c.cfg.Provider, c.cfg.Model, response.StopReason, turnStats)
 		if len(calls) == 0 {
+			if shouldRetryUnproductiveFinal(text) && i+1 < defaultMaxToolLoops {
+				messages = append(messages,
+					anthropicMessage{Role: "assistant", Content: response.Content},
+					anthropicMessage{Role: "user", Content: []anthropicBlock{{Type: "text", Text: nativeCorrectionPrompt(task)}}},
+				)
+				continue
+			}
 			return text, stats, nil
 		}
 		messages = append(messages, anthropicMessage{Role: "assistant", Content: response.Content})
