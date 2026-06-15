@@ -14,21 +14,21 @@ import (
 
 // -- Agent session parsing ----------------------------------------------------
 
-type PiSessionSummary struct {
+type SessionSummary struct {
 	Logs  string
 	Stats game.TurnStats
 	Error string
 }
 
-// ReadPiSession reads Telos' historical per-turn session JSONL file.
-func ReadPiSession(path string) (PiSessionSummary, error) {
+// ReadSession reads the per-turn agent session JSONL file.
+func ReadSession(path string) (SessionSummary, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return PiSessionSummary{}, err
+		return SessionSummary{}, err
 	}
 	defer f.Close()
 
-	var summary PiSessionSummary
+	var summary SessionSummary
 	var finalAssistant map[string]interface{}
 	reader := bufio.NewReader(f)
 	for {
@@ -42,7 +42,7 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 					switch getString(msg, "role") {
 					case "assistant":
 						finalAssistant = msg
-						summary.Stats = mergeTurnStats(summary.Stats, statsFromPiMessage(msg))
+						summary.Stats = mergeTurnStats(summary.Stats, statsFromSessionMessage(msg))
 					case "toolResult", "bashExecution":
 						summary.Stats.NumTurns++
 					}
@@ -53,15 +53,15 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 			break
 		}
 		if err != nil {
-			return PiSessionSummary{}, err
+			return SessionSummary{}, err
 		}
 	}
 	if finalAssistant == nil {
-		return PiSessionSummary{}, fmt.Errorf("no assistant message in pi session")
+		return SessionSummary{}, fmt.Errorf("no assistant message in agent session")
 	}
 
 	summary.Logs = assistantText(finalAssistant)
-	summary.Error = errorFromPiMessage(finalAssistant)
+	summary.Error = errorFromSessionMessage(finalAssistant)
 	return summary, nil
 }
 
@@ -84,7 +84,7 @@ func assistantText(msg map[string]interface{}) string {
 	return strings.Join(parts, "")
 }
 
-func statsFromPiMessage(msg map[string]interface{}) game.TurnStats {
+func statsFromSessionMessage(msg map[string]interface{}) game.TurnStats {
 	stats := game.TurnStats{}
 	if model := getString(msg, "model"); model != "" {
 		stats.Model = model
@@ -104,7 +104,7 @@ func statsFromPiMessage(msg map[string]interface{}) game.TurnStats {
 	return stats
 }
 
-func errorFromPiMessage(msg map[string]interface{}) string {
+func errorFromSessionMessage(msg map[string]interface{}) string {
 	if getString(msg, "stopReason") == "length" {
 		return "agent_output_truncated:length"
 	}

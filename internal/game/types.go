@@ -113,9 +113,9 @@ func (ts *TurnState) TaskPath() string {
 	return filepath.Join(ts.Dir, "task.md")
 }
 
-// PiSessionPath returns the historical path to the compact agent session JSONL file.
-func (ts *TurnState) PiSessionPath() string {
-	return filepath.Join(ts.Dir, "pi-session.jsonl")
+// SessionPath returns the path to the compact agent session JSONL file.
+func (ts *TurnState) SessionPath() string {
+	return filepath.Join(ts.Dir, "session.jsonl")
 }
 
 // -- Status extraction -------------------------------------------------------

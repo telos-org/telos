@@ -95,7 +95,7 @@ func TestNativeExecutorRunsChatToolLoopAndWritesWorkspace(t *testing.T) {
 	if result.Stats.InputTokens != 24 || result.Stats.OutputTokens != 12 || result.Stats.NumTurns != 1 {
 		t.Fatalf("stats: %+v", result.Stats)
 	}
-	if _, err := ReadPiSession(ts.PiSessionPath()); err != nil {
+	if _, err := ReadSession(ts.SessionPath()); err != nil {
 		t.Fatalf("native session should stay parseable by transcript tooling: %v", err)
 	}
 }

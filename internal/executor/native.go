@@ -81,7 +81,7 @@ func (ne *NativeExecutor) ExecuteTurn(task string, role string, turnState *game.
 	sessionPath := ""
 	var stopRequested func() bool
 	if turnState != nil {
-		sessionPath = turnState.PiSessionPath()
+		sessionPath = turnState.SessionPath()
 		stopRequested = turnState.StopRequested
 	}
 

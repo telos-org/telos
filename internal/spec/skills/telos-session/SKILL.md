@@ -84,28 +84,27 @@ Local Telos runs persist snapshots under the workspace:
   specs/<spec_name>/transcript-<session_id>.md
   specs/<spec_name>/workspace.tar.gz
   specs/<spec_name>/turns/<turn_id>/task.md
-  specs/<spec_name>/turns/<turn_id>/pi-session.jsonl
+  specs/<spec_name>/turns/<turn_id>/session.jsonl
 ```
 
-### `pi-session.jsonl` Contract
+### `session.jsonl` Contract
 
-`pi-session.jsonl` is the per-turn agent session record. The historical
-filename is kept for compatibility, but current Telos runs write this JSONL
-from the built-in native harness: messages, tool results, model, usage, cost,
-and stop reason.
+`session.jsonl` is the per-turn agent session record, written by Telos'
+built-in native harness: messages, tool results, model, usage, cost, and
+stop reason.
 
 - One entry per line. Always valid JSONL when the agent turn completes normally.
-- Schema is a compact agent-session shape that is compatible with Telos'
-  transcript parser. Telos folds the final assistant message into transcript
-  text, `TurnStats`, and `evidence.jsonl` records.
+- Schema is a compact agent-session shape consumed by Telos' transcript
+  parser. Telos folds the final assistant message into transcript text,
+  `TurnStats`, and `evidence.jsonl` records.
 - Treat it as a turn artifact for audit and debugging, not as a live stdout
   stream.
 - Use `evidence.jsonl` for cross-turn structured records (game start,
-  round start, agent_complete, workspace_checkpoint). Use `pi-session.jsonl`
+  round start, agent_complete, workspace_checkpoint). Use `session.jsonl`
   when you need the agent messages, tool results, or model usage.
 
 ```bash
-jq -c 'select(.type=="message") | .message.role' .telos/sessions/<id>/specs/<name>/turns/<turn-id>/pi-session.jsonl
+jq -c 'select(.type=="message") | .message.role' .telos/sessions/<id>/specs/<name>/turns/<turn-id>/session.jsonl
 ```
 
 Useful reads:
@@ -138,7 +137,7 @@ eval-runs/harbor/<job>/<trial>/steps/checkpoint_<n>/agent/
   turns/
     <turn-id>/
       task.md
-      pi-session.jsonl
+      session.jsonl
   artifacts/
 ```
 
