@@ -118,21 +118,41 @@ func TestResolveNativeProviderUsesSilaresConvention(t *testing.T) {
 	}
 }
 
-func TestNativeToolsRejectOutsideWorkspacePath(t *testing.T) {
+func TestNativeToolsPathResolution(t *testing.T) {
 	workspace := t.TempDir()
 	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil)
 
-	result := tools.execute(nativeToolCall{
+	rejected := tools.execute(nativeToolCall{
 		ID:        "call_1",
 		Name:      "write",
 		Arguments: `{"path":"../outside.txt","content":"bad"}`,
 	})
 
-	if !result.IsError {
-		t.Fatalf("expected outside-workspace write to fail: %+v", result)
+	if !rejected.IsError {
+		t.Fatalf("expected relative outside-workspace write to fail: %+v", rejected)
 	}
 	if _, err := os.Stat(filepath.Join(workspace, "..", "outside.txt")); !os.IsNotExist(err) {
 		t.Fatalf("outside file should not exist, stat err=%v", err)
+	}
+
+	absolutePath := filepath.Join(t.TempDir(), "absolute.txt")
+	written := tools.execute(nativeToolCall{
+		ID:        "call_2",
+		Name:      "write",
+		Arguments: `{"path":` + mustJSON(absolutePath) + `,"content":"ok\n"}`,
+	})
+	if written.IsError {
+		t.Fatalf("expected absolute container path write to succeed: %+v", written)
+	}
+	if !strings.Contains(written.Output, filepath.ToSlash(absolutePath)) {
+		t.Fatalf("absolute path should be visible in tool result, got %q", written.Output)
+	}
+	data, err := os.ReadFile(absolutePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "ok\n" {
+		t.Fatalf("absolute file content: got %q", data)
 	}
 }
 

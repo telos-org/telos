@@ -749,13 +749,13 @@ func nativeToolDefinitions() []nativeToolDefinition {
 		}
 	}
 	return []nativeToolDefinition{
-		{"read", "Read a UTF-8 file from the workspace.", obj([]string{"path"}, map[string]interface{}{"path": stringProp("Workspace-relative or workspace-absolute file path.")})},
-		{"write", "Create or overwrite a UTF-8 file in the workspace.", obj([]string{"path", "content"}, map[string]interface{}{"path": stringProp("Workspace-relative or workspace-absolute file path."), "content": stringProp("Complete file content to write.")})},
-		{"edit", "Replace text in an existing UTF-8 file.", obj([]string{"path", "old_string", "new_string"}, map[string]interface{}{"path": stringProp("Workspace-relative or workspace-absolute file path."), "old_string": stringProp("Exact text to replace."), "new_string": stringProp("Replacement text."), "replace_all": boolProp("Replace every occurrence instead of only the first.")})},
+		{"read", "Read a UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{"path"}, map[string]interface{}{"path": stringProp("Relative workspace path or absolute container path.")})},
+		{"write", "Create or overwrite a UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{"path", "content"}, map[string]interface{}{"path": stringProp("Relative workspace path or absolute container path."), "content": stringProp("Complete file content to write.")})},
+		{"edit", "Replace text in an existing UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{"path", "old_string", "new_string"}, map[string]interface{}{"path": stringProp("Relative workspace path or absolute container path."), "old_string": stringProp("Exact text to replace."), "new_string": stringProp("Replacement text."), "replace_all": boolProp("Replace every occurrence instead of only the first.")})},
 		{"bash", "Run a shell command in the workspace.", obj([]string{"command"}, map[string]interface{}{"command": stringProp("Command to run with bash -lc."), "timeout_seconds": intProp("Optional timeout, capped by Telos.")})},
-		{"ls", "List files in a workspace directory.", obj([]string{}, map[string]interface{}{"path": stringProp("Directory path, defaults to workspace root.")})},
-		{"grep", "Search workspace text files with a regular expression.", obj([]string{"pattern"}, map[string]interface{}{"pattern": stringProp("Go regular expression."), "path": stringProp("Directory or file path, defaults to workspace root."), "max_matches": intProp("Maximum matches to return.")})},
-		{"find", "Find workspace files by glob pattern.", obj([]string{"pattern"}, map[string]interface{}{"pattern": stringProp("Glob pattern matched against relative paths and basenames."), "path": stringProp("Directory path, defaults to workspace root."), "max_matches": intProp("Maximum paths to return.")})},
+		{"ls", "List files in a directory. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{}, map[string]interface{}{"path": stringProp("Directory path, defaults to workspace root.")})},
+		{"grep", "Search text files with a regular expression. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{"pattern"}, map[string]interface{}{"pattern": stringProp("Go regular expression."), "path": stringProp("Directory or file path, defaults to workspace root."), "max_matches": intProp("Maximum matches to return.")})},
+		{"find", "Find files by glob pattern. Relative paths resolve inside the workspace; absolute paths are used as-is.", obj([]string{"pattern"}, map[string]interface{}{"pattern": stringProp("Glob pattern matched against relative paths and basenames."), "path": stringProp("Directory path, defaults to workspace root."), "max_matches": intProp("Maximum paths to return.")})},
 	}
 }
 
@@ -847,8 +847,7 @@ func (t *nativeTools) write(p, content string) (string, error) {
 	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		return "", err
 	}
-	rel, _ := filepath.Rel(t.platform.Workspace, full)
-	return "wrote " + filepath.ToSlash(rel), nil
+	return "wrote " + t.displayPath(full), nil
 }
 
 func (t *nativeTools) edit(p, oldString, newString string, replaceAll bool) (string, error) {
@@ -959,11 +958,11 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (string, error) {
 		if err != nil || bytes.IndexByte(data, 0) >= 0 {
 			return nil
 		}
-		rel, _ := filepath.Rel(t.platform.Workspace, file)
+		rel := t.displayPath(file)
 		lines := strings.Split(string(data), "\n")
 		for i, line := range lines {
 			if re.MatchString(line) {
-				matches = append(matches, fmt.Sprintf("%s:%d:%s", filepath.ToSlash(rel), i+1, line))
+				matches = append(matches, fmt.Sprintf("%s:%d:%s", rel, i+1, line))
 				if len(matches) >= maxMatches {
 					break
 				}
@@ -1019,8 +1018,7 @@ func (t *nativeTools) find(pattern, p string, maxMatches int) (string, error) {
 		if d.IsDir() {
 			return nil
 		}
-		rel, _ := filepath.Rel(t.platform.Workspace, file)
-		rel = filepath.ToSlash(rel)
+		rel := t.displayPath(file)
 		base := path.Base(rel)
 		if ok, _ := path.Match(pattern, rel); ok {
 			matches = append(matches, rel)
@@ -1049,7 +1047,11 @@ func (t *nativeTools) resolvePath(p string) (string, error) {
 	}
 	var full string
 	if filepath.IsAbs(p) {
-		full = filepath.Clean(p)
+		full, err = filepath.Abs(filepath.Clean(p))
+		if err != nil {
+			return "", err
+		}
+		return full, nil
 	} else {
 		full = filepath.Join(workspace, p)
 	}
@@ -1062,6 +1064,16 @@ func (t *nativeTools) resolvePath(p string) (string, error) {
 		return "", fmt.Errorf("path %q is outside workspace %q", p, workspace)
 	}
 	return full, nil
+}
+
+func (t *nativeTools) displayPath(full string) string {
+	workspace, err := filepath.Abs(t.platform.Workspace)
+	if err == nil {
+		if rel, relErr := filepath.Rel(workspace, full); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return filepath.ToSlash(rel)
+		}
+	}
+	return filepath.ToSlash(full)
 }
 
 func shouldSkipDir(name string) bool {
