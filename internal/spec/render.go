@@ -220,7 +220,7 @@ func renderSkillsRoster(compiled *CompiledEnvironment, opts PromptOptions) strin
 	lines := []string{
 		"## Skills",
 		"",
-		"Use skill names as routing hints. Pi can load mounted skill files by name; prompts reference names instead of inlining skill bodies. Skills marked `required evaluation rubric` are grading rubrics, not optional guidance.",
+		"Use skill names as routing hints. The active agent harness can use mounted skill files by name; prompts reference names instead of inlining skill bodies. Skills marked `required evaluation rubric` are grading rubrics, not optional guidance.",
 		"",
 	}
 	for _, s := range skills {

@@ -163,8 +163,8 @@ class TelosExecutableAgent(BaseInstalledAgent):
         skills: str | tuple[str, ...] | list[str] | None = DEFAULT_SKILLS,
         install_deps: bool | str = True,
         install_telos: bool | str = True,
-        install_pi: bool | str = True,
-        inject_pi_models: bool | str = True,
+        install_pi: bool | str = False,
+        inject_pi_models: bool | str = False,
         pi_config_source: str | None = None,
         telos_install_url: str = DEFAULT_TELOS_INSTALL_URL,
         **kwargs: Any,
@@ -199,9 +199,9 @@ class TelosExecutableAgent(BaseInstalledAgent):
             await self._install_telos(environment)
         if self.install_pi:
             await self._install_pi(environment)
-        if self.pi_config_source:
+        if self.install_pi and self.pi_config_source:
             await self._copy_pi_config(environment)
-        if self.inject_pi_models:
+        if self.install_pi and self.inject_pi_models:
             await self._inject_pi_models_json(environment)
 
     async def _install_system_deps(self, environment: BaseEnvironment) -> None:

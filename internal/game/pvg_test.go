@@ -194,7 +194,7 @@ func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
 		t.Fatalf("transcript should record recoverable turn error:\n%s", transcript)
 	}
 	if !strings.Contains(transcript, filepath.Join(state.TurnsDir(), "0001-prover", "pi-session.jsonl")) {
-		t.Fatalf("transcript should point to Pi session:\n%s", transcript)
+		t.Fatalf("transcript should point to agent session:\n%s", transcript)
 	}
 }
 

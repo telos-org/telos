@@ -1,4 +1,4 @@
-// Package executor provides the Pi executor for PVG turns.
+// Package executor provides Telos agent executors and session parsing.
 package executor
 
 import (
@@ -10,170 +10,9 @@ import (
 	"strings"
 
 	"github.com/telos-org/telos/internal/game"
-	"github.com/telos-org/telos/internal/platform"
 )
 
-// PiExecutor runs Pi as one PVG agent turn on the given LocalPlatform.
-type PiExecutor struct {
-	Platform *platform.LocalPlatform
-	Model    string
-	Thinking string
-	Timeout  int
-}
-
-// NewPiExecutor creates a new Pi executor.
-func NewPiExecutor(p *platform.LocalPlatform, model, thinking string, timeout int) *PiExecutor {
-	if thinking == "" {
-		thinking = "medium"
-	}
-	return &PiExecutor{
-		Platform: p,
-		Model:    model,
-		Thinking: thinking,
-		Timeout:  timeout,
-	}
-}
-
-// ExecuteTurn runs one Pi agent turn.
-func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.TurnState) game.TurnResult {
-	var stats game.TurnStats
-	stats.Model = pe.Model
-	var agentError string
-	var taskPath string
-	var sessionPath string
-	var stopRequested func() bool
-	if turnState != nil {
-		taskPath = turnState.TaskPath()
-		sessionPath = turnState.PiSessionPath()
-		stopRequested = turnState.StopRequested
-	}
-
-	argv := BuildPiArgv(pe.Model, pe.Thinking, taskPath, sessionPath)
-	taskEnv := task
-	if taskPath != "" {
-		taskEnv = ""
-	}
-	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, nil)
-
-	logs := strings.Join(result.RawLines, "\n")
-	if sessionPath != "" {
-		summary, err := ReadPiSession(sessionPath)
-		if err == nil {
-			logs = summary.Logs
-			stats = mergeTurnStats(stats, summary.Stats)
-			agentError = summary.Error
-		} else if result.ReturnCode == 0 && result.InfraError == "" {
-			return game.TurnResult{
-				Role:        role,
-				Status:      game.StatusContinue,
-				Logs:        fmt.Sprintf("pi_session_unavailable:%v", err),
-				Stats:       stats,
-				Error:       fmt.Sprintf("pi_session_unavailable:%v", err),
-				Recoverable: true,
-			}
-		}
-	}
-
-	if result.InfraError != "" {
-		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        result.InfraError,
-			Stats:       stats,
-			Error:       result.InfraError,
-			Recoverable: true,
-		}
-	}
-
-	stderrTrimmed := strings.TrimSpace(result.Stderr)
-	if result.ReturnCode != 0 {
-		reason := orDefault(agentError, fmt.Sprintf("pi_failed:%d", result.ReturnCode))
-		if agentError == "" && stderrTrimmed != "" {
-			reason = fmt.Sprintf("%s\n[stderr]\n%s", reason, stderrTrimmed)
-		}
-		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        reason,
-			Stats:       stats,
-			Error:       reason,
-			Recoverable: true,
-		}
-	}
-
-	if agentError != "" {
-		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        agentError,
-			Stats:       stats,
-			Error:       agentError,
-			Recoverable: true,
-		}
-	}
-
-	if strings.TrimSpace(logs) == "" {
-		detail := "Pi produced no assistant text."
-		if stderrTrimmed != "" {
-			detail = fmt.Sprintf("%s\n[stderr]\n%s", detail, stderrTrimmed)
-		}
-		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        detail,
-			Stats:       stats,
-			Error:       "agent_no_output",
-			Recoverable: true,
-		}
-	}
-
-	return game.TurnResult{
-		Role:   role,
-		Status: game.ExtractStatus(logs),
-		Logs:   logs,
-		Stats:  stats,
-	}
-}
-
-// WorkspaceState returns the workspace state from the platform.
-func (pe *PiExecutor) WorkspaceState() string {
-	return pe.Platform.WorkspaceState()
-}
-
-// CheckpointWorkspace creates a workspace checkpoint.
-func (pe *PiExecutor) CheckpointWorkspace(dest string) bool {
-	return pe.Platform.CheckpointWorkspace(dest)
-}
-
-// BuildPiArgv builds the Pi command line.
-func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
-	script := `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; ` +
-		`if ! command -v pi >/dev/null 2>&1; then ` +
-		`for nvm_script in "${NVM_DIR:-}/nvm.sh" "$HOME/.nvm/nvm.sh" "/usr/local/nvm/nvm.sh"; do ` +
-		`[ -s "$nvm_script" ] || continue; ` +
-		`. "$nvm_script"; ` +
-		`break; ` +
-		`done; ` +
-		`fi; ` +
-		fmt.Sprintf(`prompt="${%s}"; `, platform.TaskEnvVar) +
-		`if [ -n "${3:-}" ]; then prompt="$3"; fi; ` +
-		`if [ -n "${4:-}" ]; then ` +
-		`exec pi --mode text --model "$1" --thinking "$2" --session "$4" --no-extensions -p "$prompt"; ` +
-		`fi; ` +
-		`exec pi --mode text --model "$1" --thinking "$2" --no-session --no-extensions -p "$prompt"`
-	argv := []string{"sh", "-c", script, "pi", model, thinking}
-	if taskPath != "" {
-		argv = append(argv, "@"+taskPath)
-	} else if sessionPath != "" {
-		argv = append(argv, "")
-	}
-	if sessionPath != "" {
-		argv = append(argv, sessionPath)
-	}
-	return argv
-}
-
-// -- Pi session parsing -------------------------------------------------------
+// -- Agent session parsing ----------------------------------------------------
 
 type PiSessionSummary struct {
 	Logs  string
@@ -181,7 +20,7 @@ type PiSessionSummary struct {
 	Error string
 }
 
-// ReadPiSession reads Pi's compact session JSONL file for a completed turn.
+// ReadPiSession reads Telos' historical per-turn session JSONL file.
 func ReadPiSession(path string) (PiSessionSummary, error) {
 	f, err := os.Open(path)
 	if err != nil {

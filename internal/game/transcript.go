@@ -154,7 +154,7 @@ func runtimeErrorBody(err string, opts AppendTurnOptions) string {
 	if opts.PiSessionPath != "" || opts.EvidencePath != "" {
 		lines = append(lines, "", "Inspect the canonical turn artifacts before judging or continuing:")
 		if opts.PiSessionPath != "" {
-			lines = append(lines, fmt.Sprintf("- Pi session: `%s`", opts.PiSessionPath))
+			lines = append(lines, fmt.Sprintf("- Agent session: `%s`", opts.PiSessionPath))
 		}
 		if opts.EvidencePath != "" {
 			lines = append(lines, fmt.Sprintf("- Evidence log: `%s`", opts.EvidencePath))

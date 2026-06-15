@@ -89,19 +89,20 @@ Local Telos runs persist snapshots under the workspace:
 
 ### `pi-session.jsonl` Contract
 
-`pi-session.jsonl` is the per-turn Pi session record. It is compact native
-Pi JSONL for the completed turn: messages, tool results, model, usage, cost,
+`pi-session.jsonl` is the per-turn agent session record. The historical
+filename is kept for compatibility, but current Telos runs write this JSONL
+from the built-in native harness: messages, tool results, model, usage, cost,
 and stop reason.
 
-- One entry per line. Always valid JSONL when Pi completes normally.
-- Schema is Pi's native session schema. Telos does not re-emit a normalized
-  shape; it folds the final assistant message into transcript text,
-  `TurnStats`, and `evidence.jsonl` records.
-- Written by Pi, not by Telos. Treat it as a turn artifact for audit and
-  debugging, not as a live stdout stream.
+- One entry per line. Always valid JSONL when the agent turn completes normally.
+- Schema is a compact agent-session shape that is compatible with Telos'
+  transcript parser. Telos folds the final assistant message into transcript
+  text, `TurnStats`, and `evidence.jsonl` records.
+- Treat it as a turn artifact for audit and debugging, not as a live stdout
+  stream.
 - Use `evidence.jsonl` for cross-turn structured records (game start,
   round start, agent_complete, workspace_checkpoint). Use `pi-session.jsonl`
-  when you need the agent's native messages, tool results, or model usage.
+  when you need the agent messages, tool results, or model usage.
 
 ```bash
 jq -c 'select(.type=="message") | .message.role' .telos/sessions/<id>/specs/<name>/turns/<turn-id>/pi-session.jsonl

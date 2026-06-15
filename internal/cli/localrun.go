@@ -9,9 +9,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/telos-org/telos/internal/executor"
 	"github.com/telos-org/telos/internal/game"
-	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -197,19 +195,6 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	return result, nil
-}
-
-func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecutor, error) {
-	// Check pi is available
-	if _, err := exec.LookPath("pi"); err != nil {
-		return nil, fmt.Errorf("pi executable not found on PATH. Install pi (https://github.com/mariozechner/pi-coding-agent) to run local sessions")
-	}
-	p := platform.NewLocalPlatform(workspace)
-	model := cfg.Model
-	if model == "" {
-		model = DefaultLocalModel
-	}
-	return executor.NewPiExecutor(p, model, cfg.Thinking, cfg.AgentTimeoutSec), nil
 }
 
 func primarySpecPath(manifest *sessionapi.Manifest, fallback *string) string {

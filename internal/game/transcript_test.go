@@ -114,7 +114,7 @@ func TestAppendTurnWithError(t *testing.T) {
 		t.Error("should contain error detail")
 	}
 	if !strings.Contains(content, piSessionPath) {
-		t.Error("should point to Pi session")
+		t.Error("should point to agent session")
 	}
 	if !strings.Contains(content, evidencePath) {
 		t.Error("should point to evidence log")
