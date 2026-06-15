@@ -23,7 +23,7 @@ import (
 
 const (
 	defaultMaxToolLoops    = 80
-	defaultMaxOutputTokens = 8192
+	defaultMaxOutputTokens = 4096
 	defaultToolTimeoutSec  = 120
 )
 
@@ -44,6 +44,18 @@ func nativeMaxToolLoops() int {
 	n, err := strconv.Atoi(raw)
 	if err != nil || n < 1 {
 		return defaultMaxToolLoops
+	}
+	return n
+}
+
+func nativeMaxOutputTokens() int {
+	raw := strings.TrimSpace(os.Getenv("TELOS_NATIVE_MAX_OUTPUT_TOKENS"))
+	if raw == "" {
+		return defaultMaxOutputTokens
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < 256 {
+		return defaultMaxOutputTokens
 	}
 	return n
 }
@@ -485,6 +497,7 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 	var stats game.TurnStats
 	stats.Model = c.cfg.Model
 	maxToolLoops := nativeMaxToolLoops()
+	maxOutputTokens := nativeMaxOutputTokens()
 	usedTools := false
 	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
@@ -500,7 +513,7 @@ func (c nativeAPIClient) runChat(ctx context.Context, task, role string) (string
 			"messages":    messages,
 			"tools":       nativeToolSchemasForChat(),
 			"tool_choice": "auto",
-			"max_tokens":  defaultMaxOutputTokens,
+			"max_tokens":  maxOutputTokens,
 		}
 		if err := c.postJSON(ctx, "/chat/completions", req, &response); err != nil {
 			return "", stats, err
@@ -588,6 +601,7 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 	var stats game.TurnStats
 	stats.Model = c.cfg.Model
 	maxToolLoops := nativeMaxToolLoops()
+	maxOutputTokens := nativeMaxOutputTokens()
 	usedTools := false
 	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
@@ -603,7 +617,7 @@ func (c nativeAPIClient) runResponses(ctx context.Context, task, role string) (s
 			"model":             c.cfg.Model,
 			"input":             input,
 			"tools":             nativeToolSchemasForResponses(),
-			"max_output_tokens": defaultMaxOutputTokens,
+			"max_output_tokens": maxOutputTokens,
 		}
 		if previousID != "" {
 			req["previous_response_id"] = previousID
@@ -712,6 +726,7 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 	var stats game.TurnStats
 	stats.Model = c.cfg.Model
 	maxToolLoops := nativeMaxToolLoops()
+	maxOutputTokens := nativeMaxOutputTokens()
 	usedTools := false
 	for i := 0; i < maxToolLoops; i++ {
 		var response struct {
@@ -733,7 +748,7 @@ func (c nativeAPIClient) runAnthropic(ctx context.Context, task, role string) (s
 			"system":     nativeSystemPrompt(role),
 			"messages":   messages,
 			"tools":      nativeToolSchemasForAnthropic(),
-			"max_tokens": defaultMaxOutputTokens,
+			"max_tokens": maxOutputTokens,
 		}
 		if err := c.postAnthropic(ctx, "/messages", req, &response); err != nil {
 			return "", stats, err

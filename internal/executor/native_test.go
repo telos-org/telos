@@ -33,6 +33,9 @@ func TestNativeExecutorRunsChatToolLoopAndWritesWorkspace(t *testing.T) {
 			if req["model"] != "test-model" {
 				t.Fatalf("model: got %v", req["model"])
 			}
+			if got := int(req["max_tokens"].(float64)); got != defaultMaxOutputTokens {
+				t.Fatalf("max_tokens: got %d", got)
+			}
 			_, _ = w.Write([]byte(`{
 				"choices":[{
 					"finish_reason":"tool_calls",
@@ -127,6 +130,27 @@ func TestNativeMaxToolLoopsCanBeOverridden(t *testing.T) {
 	t.Setenv("TELOS_NATIVE_MAX_TOOL_LOOPS", "not-a-number")
 	if got := nativeMaxToolLoops(); got != defaultMaxToolLoops {
 		t.Fatalf("invalid max tool loops should use default: got %d", got)
+	}
+}
+
+func TestNativeMaxOutputTokensCanBeOverridden(t *testing.T) {
+	if got := nativeMaxOutputTokens(); got != defaultMaxOutputTokens {
+		t.Fatalf("default max output tokens: got %d", got)
+	}
+
+	t.Setenv("TELOS_NATIVE_MAX_OUTPUT_TOKENS", "2048")
+	if got := nativeMaxOutputTokens(); got != 2048 {
+		t.Fatalf("max output tokens override: got %d", got)
+	}
+
+	t.Setenv("TELOS_NATIVE_MAX_OUTPUT_TOKENS", "not-a-number")
+	if got := nativeMaxOutputTokens(); got != defaultMaxOutputTokens {
+		t.Fatalf("invalid max output tokens should use default: got %d", got)
+	}
+
+	t.Setenv("TELOS_NATIVE_MAX_OUTPUT_TOKENS", "128")
+	if got := nativeMaxOutputTokens(); got != defaultMaxOutputTokens {
+		t.Fatalf("too-small max output tokens should use default: got %d", got)
 	}
 }
 
