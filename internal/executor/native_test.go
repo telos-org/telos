@@ -113,6 +113,19 @@ func TestResolveNativeProviderUsesSilaresConvention(t *testing.T) {
 	if cfg.BaseURL != "https://api.silares.com/v1" {
 		t.Fatalf("base URL: got %q", cfg.BaseURL)
 	}
+	if cfg.Style != providerChat {
+		t.Fatalf("style: got %q", cfg.Style)
+	}
+}
+
+func TestResolveNativeProviderAllowsSilaresResponsesOverride(t *testing.T) {
+	t.Setenv("SILARES_API_KEY", "test-silares-key")
+	t.Setenv("SILARES_API_STYLE", "openai-responses")
+
+	cfg, err := resolveNativeProvider("silares/moonshotai/Kimi-K2.7-Code")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.Style != providerResponses {
 		t.Fatalf("style: got %q", cfg.Style)
 	}

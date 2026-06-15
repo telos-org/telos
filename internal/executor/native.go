@@ -185,7 +185,7 @@ func resolveNativeProvider(model string) (nativeProviderConfig, error) {
 	provider, providerModel := splitProviderModel(model)
 	switch provider {
 	case "silares":
-		return providerFromEnv(provider, providerModel, "https://api.silares.com/v1", "SILARES_API_KEY", providerResponses)
+		return providerFromEnv(provider, providerModel, "https://api.silares.com/v1", "SILARES_API_KEY", providerChat)
 	case "sail-research":
 		return providerFromEnv(provider, providerModel, "https://api.sailresearch.com/v1", "SAIL_API_KEY", providerChat)
 	case "moonshot":
