@@ -299,6 +299,9 @@ func (c nativeAPIClient) run(ctx context.Context, task, role string) (string, ga
 func nativeSystemPrompt(role string) string {
 	return strings.Join([]string{
 		"You are Telos' built-in coding harness running inside the benchmark workspace.",
+		"The user message is the complete assignment for this turn. Do not ask the operator what to build or what to do next.",
+		"If the spec names a deliverable, implement that deliverable exactly. An empty or minimal workspace means you should create the required files, not switch to a generic sample task.",
+		"Keep your work anchored to the current spec text and live files. Ignore unrelated task ideas, default assistant personas, and prior benchmark examples that are not present in the current spec.",
 		"Use the available tools directly. Do not ask for permission before inspecting or changing files required by the task.",
 		"Prefer the first useful concrete workspace mutation over long planning. For file-producing tasks, create or edit the required files before summarizing.",
 		"Available tool names are read, write, edit, bash, ls, grep, and find. Do not call unavailable tool names such as write_file, ReadFile, Edit, apply_patch, or shell.",

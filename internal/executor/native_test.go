@@ -118,6 +118,19 @@ func TestResolveNativeProviderUsesSilaresConvention(t *testing.T) {
 	}
 }
 
+func TestNativeSystemPromptPreventsTaskDrift(t *testing.T) {
+	prompt := nativeSystemPrompt("prover")
+	for _, want := range []string{
+		"Do not ask the operator what to build or what to do next.",
+		"If the spec names a deliverable, implement that deliverable exactly.",
+		"Ignore unrelated task ideas",
+	} {
+		if !strings.Contains(prompt, want) {
+			t.Fatalf("system prompt missing %q:\n%s", want, prompt)
+		}
+	}
+}
+
 func TestNativeToolsPathResolution(t *testing.T) {
 	workspace := t.TempDir()
 	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil)
