@@ -1,7 +1,14 @@
 # Plan: `<think>` / reasoning-token sanitization in the native harness
 
 Date: 2026-06-15
-Status: planned (not yet implemented)
+Status: implemented for the native Responses loop
+
+Implementation note: the native executor now applies `sanitizeVisibleText` in
+`internal/executor/loop.go` before assistant logging, protocol checks, and final
+return. Removed reasoning blocks are preserved in a `reasoning_sanitized`
+session event. Telos now uses the Responses transport through a LiteLLM gateway,
+so this document is retained as implementation rationale rather than an open
+chat-completions migration plan.
 
 ## Problem
 
@@ -11,7 +18,7 @@ repeated `</think>` markers, narrated intended tool calls, and even non-English
 narration bleeding into an English benchmark transcript. That text reaches the
 Telos transcript, `game.ExtractStatus`, scoring, and the completion gate.
 
-This is now the **native harness's** responsibility, not Pi's.
+This is now the **native harness's** responsibility.
 
 ## Scope
 
@@ -63,10 +70,9 @@ Algorithm:
 ### Preserve, don't destroy, the reasoning
 
 Log the cleaned text as the visible assistant content **and** the removed
-reasoning as a separate `sessionContent{Type: "thinking"}` block in the session
-JSONL (the schema already supports arbitrary content types). Forensics keep
-everything; `Logs` / scoring / `ExtractStatus` / the completion gate see only
-clean text.
+reasoning as a separate `reasoning_sanitized` event in the session JSONL.
+Forensics keep everything; `Logs` / scoring / `ExtractStatus` / the completion
+gate see only clean text.
 
 ### Interactions
 
@@ -92,14 +98,14 @@ clean text.
 - incidental `a < b` (not a tag) → unchanged
 - all-reasoning → `""` (exercises empty-final retry)
 - integration: chat response with `<think>…</think>…<status>CONCEDE</status>`
-  yields clean logs, `game.StatusConcede`, and a `thinking` block in the
-  session file
+  yields clean logs, `game.StatusConcede`, and a `reasoning_sanitized` event in
+  the session file
 - kill-switch: `TELOS_NATIVE_KEEP_REASONING=1` leaves content untouched
 
 ## Estimated size
 
 ~80 lines + tests, self-contained in `loop.go` (or a new `sanitize.go`) plus a
-`thinking` content block in `sessionlog.go`.
+`reasoning_sanitized` event in `sessionlog.go`.
 
 ## Known limitations
 
