@@ -195,8 +195,8 @@ func TestNativeExecutorSendsHarnessInstructionsAndReasoning(t *testing.T) {
 		}
 		instructions, _ := req["instructions"].(string)
 		for _, want := range []string{
-			"Do not ask the operator what to build or what to do next.",
-			"Current Telos role: prover.",
+			"do not ask the operator",
+			"Your role for this turn is prover.",
 		} {
 			if !strings.Contains(instructions, want) {
 				t.Fatalf("instructions missing %q:\n%s", want, instructions)
@@ -278,15 +278,21 @@ func TestNativeExecutorGateRetriesMissingDeliverableThenAccepts(t *testing.T) {
 	}
 }
 
-func TestNativeSystemPromptPreventsTaskDrift(t *testing.T) {
+func TestNativeSystemPromptIsAutonomousAndNeutral(t *testing.T) {
 	prompt := nativeSystemPrompt("prover")
+	// Load-bearing: act autonomously and surface the role.
 	for _, want := range []string{
-		"Do not ask the operator what to build or what to do next.",
-		"If the spec names a deliverable, implement that deliverable exactly.",
-		"Ignore unrelated task ideas",
+		"do not ask the operator",
+		"Your role for this turn is prover.",
 	} {
 		if !strings.Contains(prompt, want) {
 			t.Fatalf("system prompt missing %q:\n%s", want, prompt)
+		}
+	}
+	// Should not leak the eval/benchmark framing into a general coding agent.
+	for _, banned := range []string{"benchmark", "sample task"} {
+		if strings.Contains(strings.ToLower(prompt), banned) {
+			t.Fatalf("system prompt should not mention %q:\n%s", banned, prompt)
 		}
 	}
 }

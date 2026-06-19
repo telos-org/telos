@@ -66,8 +66,12 @@ func (g completionGate) retryReason(s completionSignals) string {
 }
 
 // looksLikeOperatorPrompt detects a final that punts the assignment back to the
-// human. These markers are high precision: an autonomous benchmark agent should
-// never ask the operator what to build.
+// human. These markers are high precision: an autonomous agent should act on the
+// assignment rather than ask the operator what to build.
+//
+// NOTE: this is an English-only substring heuristic and is inherently brittle;
+// it is one signal feeding the completion gate, which can be disabled entirely
+// with TELOS_NATIVE_COMPLETION_GATE=off.
 func looksLikeOperatorPrompt(text string) bool {
 	normalized := strings.ToLower(strings.TrimSpace(text))
 	for _, marker := range []string{
