@@ -1,0 +1,65 @@
+package game
+
+type taskStateStep struct {
+	State  ObjectiveState
+	Role   string
+	Reason string
+}
+
+type taskStateMachine struct {
+	state            ObjectiveState
+	reviewMode       bool
+	reviewTarget     int
+	reviewsCompleted int
+}
+
+func newTaskStateMachine(reviewTarget int) taskStateMachine {
+	return taskStateMachine{
+		state:        ObjectiveStatePlan,
+		reviewMode:   reviewTarget > 0,
+		reviewTarget: reviewTarget,
+	}
+}
+
+func (m taskStateMachine) next() (taskStateStep, bool) {
+	switch m.state {
+	case ObjectiveStatePlan, ObjectiveStateImplement:
+		return taskStateStep{State: ObjectiveStateImplement, Role: "prover", Reason: "starting_implement_turn"}, true
+	case ObjectiveStateRepair:
+		return taskStateStep{State: ObjectiveStateRepair, Role: "prover", Reason: "starting_repair_turn"}, true
+	case ObjectiveStateVerify:
+		return taskStateStep{State: ObjectiveStateVerify, Role: "verifier", Reason: "starting_verify_turn"}, true
+	default:
+		return taskStateStep{}, false
+	}
+}
+
+func (m *taskStateMachine) advance(turn TurnResult) (GameResult, bool) {
+	if turn.Error != "" && !turn.Recoverable {
+		m.state = ObjectiveStateBlocked
+		return GameFailure, true
+	}
+
+	switch turn.Role {
+	case "prover":
+		m.state = ObjectiveStateVerify
+	case "verifier":
+		if m.reviewMode {
+			if turn.Error == "" {
+				m.reviewsCompleted++
+			}
+			if m.reviewsCompleted >= m.reviewTarget {
+				m.state = ObjectiveStateFinalize
+				return GameSuccess, true
+			}
+			m.state = ObjectiveStateImplement
+			return "", false
+		}
+		if turn.Error == "" && turn.Status == StatusConcede {
+			m.state = ObjectiveStateFinalize
+			return GameSuccess, true
+		}
+		m.state = ObjectiveStateRepair
+	}
+	return "", false
+}

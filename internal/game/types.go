@@ -34,6 +34,7 @@ type TurnStats struct {
 	CacheReadTokens     int     `json:"cache_read_tokens"`
 	CacheCreationTokens int     `json:"cache_creation_tokens"`
 	Model               string  `json:"model"`
+	CostUnavailable     bool    `json:"cost_unavailable,omitempty"`
 }
 
 // TurnResult is the result of one agent turn.
@@ -57,6 +58,12 @@ type AgentExecutor interface {
 type PVGConfig struct {
 	Until           int
 	MaxCostUSD      *float64
+	MaxRounds       int
+	MaxDurationSec  int
+	MaxInputTokens  int
+	MaxOutputTokens int
+	MaxToolLoops    int
+	AgentTimeoutSec int
 	Verbose         bool
 	EpochID         int
 	IsController    bool
@@ -78,6 +85,7 @@ type PVGResult struct {
 	TotalOutputTokens       int
 	TotalCacheReadTokens    int
 	TotalCacheCreateTokens  int
+	CostUnavailable         bool
 	Error                   string
 	EvidencePath            string
 	TranscriptPath          string
@@ -91,6 +99,7 @@ func (r *PVGResult) Accumulate(s TurnStats) {
 	r.TotalOutputTokens += s.OutputTokens
 	r.TotalCacheReadTokens += s.CacheReadTokens
 	r.TotalCacheCreateTokens += s.CacheCreationTokens
+	r.CostUnavailable = r.CostUnavailable || s.CostUnavailable
 }
 
 // -- Turn state --------------------------------------------------------------
@@ -101,6 +110,24 @@ type TurnState struct {
 	Role          string
 	Dir           string
 	StopRequested func() bool
+	Budget        TurnBudget
+	ProtocolMode  string
+}
+
+// TurnBudget carries the remaining runtime budget available to one executor
+// turn. Executors should check it before each provider request and stop
+// recoverably if an in-turn tool/model loop has already exhausted it.
+type TurnBudget struct {
+	MaxCostUSD            *float64
+	RemainingCostUSD      *float64
+	MaxDurationSec        int
+	RemainingDurationSec  int
+	AgentTimeoutSec       int
+	MaxInputTokens        int
+	RemainingInputTokens  int
+	MaxOutputTokens       int
+	RemainingOutputTokens int
+	MaxToolLoops          int
 }
 
 // TurnID returns the canonical turn identifier.

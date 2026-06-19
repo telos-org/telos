@@ -1,9 +1,9 @@
 ---
 name: telos-session
 description: |
-  Telos session communication and run snapshot inspection for local and
-  Harbor runs. Use to write concise transcript entries, read previous turns,
-  and inspect persisted evidence/workspace checkpoints.
+  Telos session communication and run snapshot inspection. Use to write concise
+  transcript entries, read previous turns, and inspect persisted
+  evidence/workspace checkpoints.
 metadata:
   category: session
   author: telos
@@ -121,40 +121,6 @@ To inspect a checkpoint without mutating the live workspace:
 rm -rf /tmp/telos-workspace-view
 mkdir -p /tmp/telos-workspace-view
 tar -xzf .telos/sessions/<session_id>/specs/<spec_name>/workspace.tar.gz -C /tmp/telos-workspace-view
-```
-
-## Harbor Snapshot Layout
-
-Harbor benchmark runs persist task artifacts under their job directory. A common
-checkpoint layout is:
-
-```text
-eval-runs/harbor/<job>/<trial>/steps/checkpoint_<n>/agent/
-  telos-harbor-spec.md
-  telos-evidence.jsonl
-  transcript-*.md
-  telos-workspace.tar.gz
-  turns/
-    <turn-id>/
-      task.md
-      session.jsonl
-  artifacts/
-```
-
-Useful reads:
-
-```bash
-find eval-runs/harbor/<job>/<trial>/steps -maxdepth 4 -type f | sort
-sed -n '1,240p' eval-runs/harbor/<job>/<trial>/steps/checkpoint_<n>/agent/transcript-*.md
-tar -tzf eval-runs/harbor/<job>/<trial>/steps/checkpoint_<n>/agent/telos-workspace.tar.gz | sort | head -200
-sed -n '1,80p' eval-runs/harbor/<job>/<trial>/steps/checkpoint_<n>/agent/turns/<turn-id>/task.md
-```
-
-If a benchmark writes rewards or logs outside the agent directory, inspect those
-too before concluding:
-
-```bash
-find eval-runs/harbor/<job>/<trial>/steps/checkpoint_<n> -maxdepth 3 -type f | sort
 ```
 
 ## Rule Of Thumb

@@ -100,7 +100,7 @@ func TestAppendTurnWithError(t *testing.T) {
 
 	sessionPath := filepath.Join(dir, "turns", "0001-prover", "session.jsonl")
 	evidencePath := filepath.Join(dir, "evidence.jsonl")
-	AppendTurnWithOptions(path, "prover", 1, "CONTINUE", "I changed main.go before the tool failed.\n\n<status>CONTINUE</status>", nil, "0001-prover", "pi_failed:1", AppendTurnOptions{
+	AppendTurnWithOptions(path, "prover", 1, "CONTINUE", "I changed main.go before the tool failed.\n\n<status>CONTINUE</status>", nil, "0001-prover", "provider_unavailable:temporary gateway error", AppendTurnOptions{
 		IncludeStatus: true,
 		SessionPath:   sessionPath,
 		EvidencePath:  evidencePath,
@@ -110,7 +110,7 @@ func TestAppendTurnWithError(t *testing.T) {
 	if !strings.Contains(content, "runtime error") {
 		t.Error("should mention runtime error")
 	}
-	if !strings.Contains(content, "pi_failed:1") {
+	if !strings.Contains(content, "provider_unavailable:temporary gateway error") {
 		t.Error("should contain error detail")
 	}
 	if !strings.Contains(content, sessionPath) {

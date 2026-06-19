@@ -14,6 +14,7 @@ type PVGState struct {
 	EvidencePath   string
 	TranscriptPath string
 	WorkspacePath  string
+	LedgerPath     string
 }
 
 // NewPVGState creates a PVGState from a spec directory.
@@ -25,6 +26,7 @@ func NewPVGState(systemName, specDir, sessionID string) *PVGState {
 	}
 	transcriptPath := filepath.Join(abs, fmt.Sprintf("transcript-%s.md", sessionID))
 	workspacePath := filepath.Join(abs, "workspace.tar.gz")
+	ledgerPath := filepath.Join(abs, "objective-ledger.json")
 	return &PVGState{
 		SystemName:     systemName,
 		SessionID:      sessionID,
@@ -32,6 +34,7 @@ func NewPVGState(systemName, specDir, sessionID string) *PVGState {
 		EvidencePath:   evidencePath,
 		TranscriptPath: transcriptPath,
 		WorkspacePath:  workspacePath,
+		LedgerPath:     ledgerPath,
 	}
 }
 

@@ -18,9 +18,15 @@ type fakeExecutor struct {
 	verifierIdx     int
 	workspaceText   string
 	checkpointOK    bool
+	seenBudgets     []TurnBudget
+	seenProtocols   []string
 }
 
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) TurnResult {
+	if ts != nil {
+		f.seenBudgets = append(f.seenBudgets, ts.Budget)
+		f.seenProtocols = append(f.seenProtocols, ts.ProtocolMode)
+	}
 	if role == "prover" {
 		if f.proverIdx < len(f.proverResults) {
 			r := f.proverResults[f.proverIdx]
@@ -117,6 +123,220 @@ func TestPVGVerifierConcedes(t *testing.T) {
 	}
 }
 
+func TestPVGWritesObjectiveLedger(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-ledger")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "Changed the artifact.\n\n<progress_update>Implemented baseline.</progress_update>"},
+			{Role: "prover", Status: StatusContinue, Logs: "Repaired the artifact.\n\n<progress_update>Fixed missing test coverage.</progress_update>"},
+		},
+		verifierResults: []TurnResult{
+			{Role: "verifier", Status: StatusContinue, Logs: "Blocking finding: missing test coverage.\n\n<progress_update>Found missing test coverage.</progress_update>\n<status>CONTINUE</status>"},
+			{Role: "verifier", Status: StatusConcede, Logs: "Looks good.\n\n<progress_update>All findings resolved.</progress_update>\n<status>CONCEDE</status>"},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
+	result := pvg.Run()
+
+	if result.GameResult != GameSuccess {
+		t.Fatalf("expected success, got %s error=%q", result.GameResult, result.Error)
+	}
+	ledger, err := readObjectiveLedger(state.LedgerPath)
+	if err != nil {
+		t.Fatalf("readObjectiveLedger: %v", err)
+	}
+	if ledger.State != ObjectiveStateFinalize {
+		t.Fatalf("ledger state: got %q", ledger.State)
+	}
+	if ledger.LastImplementation != "Fixed missing test coverage." {
+		t.Fatalf("last implementation: got %q", ledger.LastImplementation)
+	}
+	if len(ledger.ResolvedFindings) == 0 || !strings.Contains(ledger.ResolvedFindings[0], "missing test coverage") {
+		t.Fatalf("resolved findings: %#v", ledger.ResolvedFindings)
+	}
+	if len(ledger.Turns) != 4 {
+		t.Fatalf("turn count: got %d", len(ledger.Turns))
+	}
+}
+
+func TestPVGStopsAtMaxRounds(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-max-rounds")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "still working"},
+		},
+		verifierResults: []TurnResult{
+			{Role: "verifier", Status: StatusContinue, Logs: "not yet\n<status>CONTINUE</status>\n"},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{MaxRounds: 2})
+	result := pvg.Run()
+
+	if result.GameResult != GameFailure {
+		t.Fatalf("expected failure from budget exhaustion, got %s", result.GameResult)
+	}
+	if result.CompletionReason != "runtime_budget_exhausted" {
+		t.Fatalf("completion reason: got %q", result.CompletionReason)
+	}
+	if result.Error != "runtime_budget_exhausted:max_rounds" {
+		t.Fatalf("error: got %q", result.Error)
+	}
+}
+
+func TestPVGDoesNotStartTurnWhenRemainingDurationCannotFitAgentTimeout(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-duration-reserve")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "should not run"},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{MaxDurationSec: 1, AgentTimeoutSec: 2})
+	result := pvg.Run()
+
+	if result.GameResult != GameFailure {
+		t.Fatalf("expected failure from duration budget, got %s", result.GameResult)
+	}
+	if result.Error != "runtime_budget_exhausted:max_duration" {
+		t.Fatalf("error: got %q", result.Error)
+	}
+	if result.Rounds != 0 || exec.proverIdx != 0 {
+		t.Fatalf("turn should not start: rounds=%d proverIdx=%d", result.Rounds, exec.proverIdx)
+	}
+
+	data, err := os.ReadFile(state.EvidencePath)
+	if err != nil {
+		t.Fatalf("read evidence: %v", err)
+	}
+	if !strings.Contains(string(data), `"budget":"max_duration"`) ||
+		!strings.Contains(string(data), `"required_turn_sec":2`) {
+		t.Fatalf("evidence missing duration reservation details:\n%s", data)
+	}
+}
+
+func TestPVGStopsAtMaxInputTokens(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-max-input-tokens")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "used context", Stats: TurnStats{InputTokens: 11}},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{MaxInputTokens: 10})
+	result := pvg.Run()
+
+	if result.GameResult != GameFailure {
+		t.Fatalf("expected failure from input token budget, got %s", result.GameResult)
+	}
+	if result.CompletionReason != "runtime_budget_exhausted" {
+		t.Fatalf("completion reason: got %q", result.CompletionReason)
+	}
+	if result.Error != "runtime_budget_exhausted:max_input_tokens" {
+		t.Fatalf("error: got %q", result.Error)
+	}
+	if result.VerifierRounds != 0 {
+		t.Fatalf("verifier should not run after token budget exhaustion, got %d", result.VerifierRounds)
+	}
+}
+
+func TestPVGStopsAtMaxOutputTokens(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-max-output-tokens")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "generated output", Stats: TurnStats{OutputTokens: 12}},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{MaxOutputTokens: 10})
+	result := pvg.Run()
+
+	if result.GameResult != GameFailure {
+		t.Fatalf("expected failure from output token budget, got %s", result.GameResult)
+	}
+	if result.Error != "runtime_budget_exhausted:max_output_tokens" {
+		t.Fatalf("error: got %q", result.Error)
+	}
+	if result.VerifierRounds != 0 {
+		t.Fatalf("verifier should not run after token budget exhaustion, got %d", result.VerifierRounds)
+	}
+}
+
+func TestPVGPassesRemainingBudgetToExecutorTurns(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-turn-budget")
+	state.Ensure()
+
+	maxCost := 5.0
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "used some budget", Stats: TurnStats{CostUSD: 1.5, InputTokens: 100, OutputTokens: 25}},
+		},
+		verifierResults: []TurnResult{
+			{Role: "verifier", Status: StatusConcede, Logs: "ok\n<status>CONCEDE</status>\n"},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{
+		MaxCostUSD:      &maxCost,
+		MaxDurationSec:  30,
+		MaxInputTokens:  1000,
+		MaxOutputTokens: 200,
+		MaxToolLoops:    7,
+		AgentTimeoutSec: 5,
+	})
+	result := pvg.Run()
+
+	if result.GameResult != GameSuccess {
+		t.Fatalf("expected success, got %s err=%s", result.GameResult, result.Error)
+	}
+	if len(exec.seenBudgets) != 2 {
+		t.Fatalf("seen budgets: %#v", exec.seenBudgets)
+	}
+	first := exec.seenBudgets[0]
+	if first.RemainingCostUSD == nil || *first.RemainingCostUSD != 5.0 || first.RemainingInputTokens != 1000 || first.RemainingOutputTokens != 200 || first.MaxToolLoops != 7 {
+		t.Fatalf("first budget: %#v", first)
+	}
+	if first.MaxDurationSec != 30 || first.AgentTimeoutSec != 5 || first.RemainingDurationSec <= 0 || first.RemainingDurationSec > 30 {
+		t.Fatalf("first duration budget: %#v", first)
+	}
+	second := exec.seenBudgets[1]
+	if second.RemainingCostUSD == nil || *second.RemainingCostUSD != 3.5 || second.RemainingInputTokens != 900 || second.RemainingOutputTokens != 175 || second.MaxToolLoops != 7 {
+		t.Fatalf("second budget: %#v", second)
+	}
+	if second.MaxDurationSec != 30 || second.AgentTimeoutSec != 5 || second.RemainingDurationSec <= 0 || second.RemainingDurationSec > first.RemainingDurationSec {
+		t.Fatalf("second duration budget: %#v first=%#v", second, first)
+	}
+}
+
 func TestPVGUntilRunsExactReviewCycles(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()
@@ -154,6 +374,9 @@ func TestPVGUntilRunsExactReviewCycles(t *testing.T) {
 	if result.CompletionReason != "review_cycles_complete" {
 		t.Fatalf("completion reason: got %q", result.CompletionReason)
 	}
+	if len(exec.seenProtocols) != 4 || exec.seenProtocols[1] != "review" || exec.seenProtocols[3] != "review" {
+		t.Fatalf("review verifier turns should carry explicit review protocol: %#v", exec.seenProtocols)
+	}
 
 	transcript := ReadTranscript(state.TranscriptPath)
 	if strings.Contains(transcript, "<status>") {
@@ -173,7 +396,7 @@ func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
 
 	exec := &fakeExecutor{
 		proverResults: []TurnResult{
-			{Role: "prover", Status: StatusContinue, Logs: "pi_failed:1", Error: "pi_failed:1", Recoverable: true},
+			{Role: "prover", Status: StatusContinue, Logs: "provider_rate_limited: retry later", Error: "provider_rate_limited: retry later", Recoverable: true},
 		},
 		verifierResults: []TurnResult{
 			{Role: "verifier", Status: StatusConcede, Logs: "Inspected failed prover turn.\n<status>CONCEDE</status>\n"},
@@ -196,6 +419,13 @@ func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
 	if !strings.Contains(transcript, filepath.Join(state.TurnsDir(), "0001-prover", "session.jsonl")) {
 		t.Fatalf("transcript should point to agent session:\n%s", transcript)
 	}
+	evidenceData, err := os.ReadFile(state.EvidencePath)
+	if err != nil {
+		t.Fatalf("read evidence: %v", err)
+	}
+	if strings.Count(string(evidenceData), `"error_code":"provider_rate_limited"`) < 2 {
+		t.Fatalf("evidence should carry typed error code on agent_complete and recoverable failure:\n%s", evidenceData)
+	}
 }
 
 func TestPVGRecoverableFailureBudget(t *testing.T) {
@@ -209,8 +439,8 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 		return TurnResult{
 			Role:        role,
 			Status:      StatusContinue,
-			Logs:        "pi_failed:1",
-			Error:       "pi_failed:1",
+			Logs:        "provider_unavailable:temporary gateway error",
+			Error:       "provider_unavailable:temporary gateway error",
 			Recoverable: true,
 		}
 	}
@@ -253,7 +483,7 @@ func TestPVGUntilDoesNotCountFailedVerifierReview(t *testing.T) {
 			{Role: "prover", Status: StatusContinue, Logs: "Round 3"},
 		},
 		verifierResults: []TurnResult{
-			{Role: "verifier", Status: StatusContinue, Logs: "pi_failed:1", Error: "pi_failed:1", Recoverable: true},
+			{Role: "verifier", Status: StatusContinue, Logs: "provider_unavailable:temporary gateway error", Error: "provider_unavailable:temporary gateway error", Recoverable: true},
 			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,7.0/10\n</review>\n\n<summary>Keep going.</summary>\n"},
 			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,8.0/10\n</review>\n\n<summary>Better.</summary>\n"},
 		},
@@ -283,7 +513,7 @@ func TestPVGProverError(t *testing.T) {
 
 	exec := &fakeExecutor{
 		proverResults: []TurnResult{
-			{Role: "prover", Status: StatusContinue, Logs: "error", Error: "pi_failed:1"},
+			{Role: "prover", Status: StatusContinue, Logs: "error", Error: "provider_unavailable:temporary gateway error"},
 		},
 	}
 
@@ -294,7 +524,7 @@ func TestPVGProverError(t *testing.T) {
 	if result.GameResult != GameFailure {
 		t.Errorf("expected failure, got %s", result.GameResult)
 	}
-	if result.Error != "pi_failed:1" {
+	if result.Error != "provider_unavailable:temporary gateway error" {
 		t.Errorf("error: got %q", result.Error)
 	}
 }
@@ -320,8 +550,18 @@ func TestPVGBudgetExceeded(t *testing.T) {
 	if result.GameResult != GameFailure {
 		t.Errorf("expected failure, got %s", result.GameResult)
 	}
-	if !strings.Contains(result.Error, "budget exceeded") {
-		t.Errorf("error should mention budget: got %q", result.Error)
+	if result.CompletionReason != "runtime_budget_exhausted" {
+		t.Fatalf("completion reason: got %q", result.CompletionReason)
+	}
+	if result.Error != "runtime_budget_exhausted:max_cost_usd" {
+		t.Fatalf("error: got %q", result.Error)
+	}
+	data, err := os.ReadFile(state.EvidencePath)
+	if err != nil {
+		t.Fatalf("read evidence: %v", err)
+	}
+	if !strings.Contains(string(data), `"budget":"max_cost_usd"`) {
+		t.Fatalf("evidence missing cost budget kind:\n%s", data)
 	}
 }
 

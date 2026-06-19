@@ -29,9 +29,25 @@ Evaluator-written tests, probes, fixtures, and reproductions are durable
 evidence. Preserve them when they expose a real invariant, run them against
 candidate checkpoints, and only discard them when they are shown to be invalid.
 
+## Child Reconciliation Gate
+
+Before treating a terminal child as useful evidence, run:
+
+```sh
+telos inspect-child <child-session-id>
+```
+
+This records a durable `child-inspections/<child-session-id>.json` checklist
+when the parent session is local, and reports whether the child is ready to
+reconcile. A child is not ready when it is still active, lacks a workspace
+checkpoint, failed analysis, or has failure taxonomy entries that need parent
+review. Compare the child workspace against the parent live artifact before
+merging, and keep reusable verification assets.
+
 ## Small Example
 
 If a service secret is stale, the controller writes a focused task spec such
 as `generated/<ts>-rotate-secret/spec.md`, launches it with `telos run`, waits
-for that child to finish, inspects its transcript and checkpoint, then verifies
-the live service uses the new secret before declaring the goal healthy.
+for that child to finish, runs `telos inspect-child <child-session-id>`,
+compares the checkpoint with the parent artifact, then verifies the live
+service uses the new secret before declaring the goal healthy.

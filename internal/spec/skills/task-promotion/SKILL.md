@@ -340,7 +340,7 @@ Fork-test procedure:
 The replay must stand on its own. Do not point the solver at unrelated live
 namespaces that happen to exist in the cluster.
 
-### Launch The Black-Box Pi Solver
+### Launch The Isolated Solver
 
 The solver launch should be explicit and isolated, not implied.
 
@@ -377,18 +377,18 @@ The minimal practical setup is:
 - no cluster-admin
 - no access to non-replay namespaces
 
-### Pi Command
+### Solver Command
 
-Launch a dedicated `pi` pod with:
+Launch a dedicated solver pod with:
 
 - the same runtime image family used for normal Telos solving
 - the `solver` ServiceAccount
-- `ANTHROPIC_API_KEY` from the evaluator's trusted secret source
+- the LiteLLM gateway environment from the evaluator's trusted secret source
 - an empty writable workspace mount
 - a mount containing only `task/public/spec.md`
 - `activeDeadlineSeconds` set to a hard timeout
 
-The system prompt should tell Pi:
+The system prompt should tell the solver:
 
 - this is a live Kubernetes incident or change request
 - which replay namespaces it may inspect and mutate
@@ -401,18 +401,17 @@ The user prompt should be exactly the contents of `task/public/spec.md`.
 Example shape:
 
 ```bash
-pi --mode json \
+telos run /task/public/spec.md \
+  --workspace /workspace \
   --thinking high \
-  --no-session \
   --model <model> \
-  --system-prompt "<black-box solver prompt>" \
-  --prompt "$(cat /task/public/spec.md)"
+  --agent-timeout-sec <timeout>
 ```
 
 The important property is not the exact flag spelling. The important property
 is that the mounted filesystem and prompt surface match the black-box boundary.
 
-### After Pi Finishes
+### After The Solver Finishes
 
 Once the solver pod completes:
 
