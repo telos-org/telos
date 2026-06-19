@@ -741,7 +741,7 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "123")
 	t.Setenv("TELOS_SAFE_WRITE_PREFIXES", "/tmp/telos-scratch, /var/tmp/telos")
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -775,7 +775,7 @@ func TestResolveLocalRunConfigDefaultsToNoAgentTimeout(t *testing.T) {
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -794,7 +794,7 @@ func TestResolveLocalRunConfigAllowsExplicitNoAgentTimeout(t *testing.T) {
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"--agent-timeout-sec", "0", "SPEC.md"})
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -813,7 +813,7 @@ func TestResolveLocalRunConfigRejectsNegativeAgentTimeout(t *testing.T) {
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"--agent-timeout-sec", "-1", "SPEC.md"})
 
-	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, -1)
+	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{AgentTimeoutSec: -1})
 	if err == nil {
 		t.Fatal("expected negative agent timeout to fail")
 	}
@@ -848,7 +848,7 @@ func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
 		"SPEC.md",
 	})
 
-	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "openai-codex/gpt-5.5", "high", 100, 9, 3600, 120000, 24000, 55, 0)
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "openai-codex/gpt-5.5", "high", 100, budgetFlags{MaxRounds: 9, MaxDurationSec: 3600, MaxInputTokens: 120000, MaxOutputTokens: 24000, MaxToolLoops: 55, AgentTimeoutSec: 0})
 	if err != nil {
 		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
 	}
@@ -949,7 +949,7 @@ func TestResolveSessionRuntimeConfigOmitsDefaults(t *testing.T) {
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
-	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "medium", 20.0, 0)
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
 	}
@@ -994,7 +994,7 @@ func TestResolveLocalRunConfigRejectsInvalidEnvironmentDefaults(t *testing.T) {
 	parseFlags(fs, []string{"SPEC.md"})
 	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "not-an-int")
 
-	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
 	if err == nil {
 		t.Fatal("expected invalid environment value to fail")
 	}

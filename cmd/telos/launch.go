@@ -76,7 +76,14 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a controller session")
 			os.Exit(1)
 		}
-		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, *maxRounds, *maxDurationSec, *maxInputTokens, *maxOutputTokens, *maxToolLoops, *agentTimeout)
+		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, budgetFlags{
+			MaxRounds:       *maxRounds,
+			MaxDurationSec:  *maxDurationSec,
+			MaxInputTokens:  *maxInputTokens,
+			MaxOutputTokens: *maxOutputTokens,
+			MaxToolLoops:    *maxToolLoops,
+			AgentTimeoutSec: *agentTimeout,
+		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -158,12 +165,14 @@ func cmdLaunch(command, action string, args []string) {
 		*model,
 		*thinking,
 		*maxCostUSD,
-		*maxRounds,
-		*maxDurationSec,
-		*maxInputTokens,
-		*maxOutputTokens,
-		*maxToolLoops,
-		*agentTimeout,
+		budgetFlags{
+			MaxRounds:       *maxRounds,
+			MaxDurationSec:  *maxDurationSec,
+			MaxInputTokens:  *maxInputTokens,
+			MaxOutputTokens: *maxOutputTokens,
+			MaxToolLoops:    *maxToolLoops,
+			AgentTimeoutSec: *agentTimeout,
+		},
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -362,7 +371,14 @@ func runCloud(
 	if until > 0 {
 		req.Until = &until
 	}
-	runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, model, thinking, maxCostUSD, maxRounds, maxDurationSec, maxInputTokens, maxOutputTokens, maxToolLoops, agentTimeout)
+	runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, model, thinking, maxCostUSD, budgetFlags{
+		MaxRounds:       maxRounds,
+		MaxDurationSec:  maxDurationSec,
+		MaxInputTokens:  maxInputTokens,
+		MaxOutputTokens: maxOutputTokens,
+		MaxToolLoops:    maxToolLoops,
+		AgentTimeoutSec: agentTimeout,
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

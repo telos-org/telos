@@ -165,6 +165,51 @@ func TestPVGWritesObjectiveLedger(t *testing.T) {
 	}
 }
 
+func TestPVGReviewModeLedgerReturnsToImplement(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-review-ledger")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "Round 1\n\n<progress_update>Implemented baseline.</progress_update>"},
+			{Role: "prover", Status: StatusContinue, Logs: "Round 2\n\n<progress_update>Polished.</progress_update>"},
+		},
+		verifierResults: []TurnResult{
+			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,7.0/10\n</review>\n\n<summary>Keep going.</summary>\n"},
+			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,8.0/10\n</review>\n\n<summary>Better.</summary>\n"},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{Until: 2, Verbose: false})
+	if result := pvg.Run(); result.GameResult != GameSuccess {
+		t.Fatalf("expected success, got %s error=%q", result.GameResult, result.Error)
+	}
+
+	ledger, err := readObjectiveLedger(state.LedgerPath)
+	if err != nil {
+		t.Fatalf("readObjectiveLedger: %v", err)
+	}
+	// Review-mode verifier turns route back to implement, never repair. The ledger
+	// must record the state the machine computed rather than its own guess.
+	if len(ledger.Turns) != 4 {
+		t.Fatalf("turn count: got %d (%#v)", len(ledger.Turns), ledger.Turns)
+	}
+	if ledger.Turns[1].Role != "verifier" || ledger.Turns[1].StateAfter != ObjectiveStateImplement {
+		t.Fatalf("first review verifier turn: got role=%q state=%q, want verifier/implement", ledger.Turns[1].Role, ledger.Turns[1].StateAfter)
+	}
+	for i, turn := range ledger.Turns {
+		if turn.StateAfter == ObjectiveStateRepair {
+			t.Fatalf("review mode must not enter repair, turn %d did: %#v", i, turn)
+		}
+	}
+	if ledger.State != ObjectiveStateFinalize {
+		t.Fatalf("final ledger state: got %q", ledger.State)
+	}
+}
+
 func TestPVGStopsAtMaxRounds(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()

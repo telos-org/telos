@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"sort"
-	"strings"
 	"text/tabwriter"
 
 	"github.com/telos-org/telos/internal/cloud"
@@ -463,7 +462,7 @@ func analyzeSessionEvents(session *sessionapi.Session, events []sessionapi.Sessi
 				spec.OutputTokens = intFromAny(data["total_output_tokens"])
 			}
 			if errText != "" {
-				addFailure(out.Failures, spec, classifyFailure(errText))
+				addFailure(out.Failures, spec, sessionapi.ClassifyFailure(errText))
 			} else if result == "failure" && len(out.Failures) == 0 {
 				addFailure(out.Failures, spec, "goal_failure")
 			}
@@ -472,7 +471,7 @@ func analyzeSessionEvents(session *sessionapi.Session, events []sessionapi.Sessi
 			out.Budgets[budget]++
 			addFailure(out.Failures, spec, "task_budget")
 		case "agent_failure_recoverable", "game_error", "error":
-			addFailure(out.Failures, spec, classifyFailure(firstNonEmpty(stringFromAny(data["error_code"]), stringFromAny(data["error"]))))
+			addFailure(out.Failures, spec, sessionapi.ClassifyFailure(firstNonEmpty(stringFromAny(data["error_code"]), stringFromAny(data["error"]))))
 		case "agent_complete":
 			if event.Role != nil && *event.Role == "verifier" && stringFromAny(data["status"]) == "CONTINUE" && stringFromAny(data["error"]) == "" {
 				addFailure(out.Failures, spec, "verifier_rejection")
@@ -507,32 +506,6 @@ func addFailure(total map[string]int, spec *sessionSpecAnalysis, category string
 			spec.Failures = map[string]int{}
 		}
 		spec.Failures[category]++
-	}
-}
-
-func classifyFailure(errText string) string {
-	lower := strings.ToLower(strings.TrimSpace(errText))
-	switch {
-	case lower == "":
-		return "unknown"
-	case strings.Contains(lower, "benchmark_verifier") ||
-		strings.Contains(lower, "benchmark verifier") ||
-		strings.Contains(lower, "official verifier"):
-		return "benchmark_verifier_failure"
-	case strings.Contains(lower, "runtime_budget_exhausted") || strings.Contains(lower, "budget exceeded"):
-		return "task_budget"
-	case strings.Contains(lower, "provider_") || strings.Contains(lower, "rate_limited") || strings.Contains(lower, "context_limit"):
-		return "provider"
-	case strings.Contains(lower, "tool_") || strings.Contains(lower, "local_timeout") || strings.Contains(lower, "local_interrupted"):
-		return "tool"
-	case strings.Contains(lower, "agent_protocol"):
-		return "protocol"
-	case strings.Contains(lower, "agent_incomplete") || strings.Contains(lower, "tool_loop_exceeded"):
-		return "agent_incomplete"
-	case strings.Contains(lower, "stopped"):
-		return "stopped"
-	default:
-		return "agent_failure"
 	}
 }
 

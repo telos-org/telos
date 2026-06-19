@@ -104,6 +104,14 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 		if p.shouldStop() {
 			return p.end(GameStopped)
 		}
+
+		// The state machine owns the prover/verify/repair/finalize transitions.
+		// The ledger records the state the machine just computed instead of
+		// re-deriving it, so the two cannot drift (notably in review mode, where
+		// a verifier turn returns to implement rather than repair).
+		result, terminal := machine.advance(turn)
+		p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.state)
+
 		if turn.Error != "" {
 			if p.turnFailureExceeded(turn, &recoverableFailures) {
 				return p.end(GameFailure)
@@ -111,7 +119,7 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 		} else {
 			recoverableFailures = 0
 		}
-		if result, terminal := machine.advance(turn); terminal {
+		if terminal {
 			if result == GameSuccess && !p.fixedReviewMode() && turn.Role == "verifier" && turn.Status == StatusConcede {
 				p.Result.VerifierConceded = true
 			}
@@ -228,7 +236,6 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 				SessionPath:   ts.SessionPath(),
 				EvidencePath:  p.State.EvidencePath,
 			})
-		p.updateObjectiveLedger(roundNum, role, turn)
 		return turn
 	}
 
@@ -243,7 +250,6 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 			SessionPath:   ts.SessionPath(),
 			EvidencePath:  p.State.EvidencePath,
 		})
-	p.updateObjectiveLedger(roundNum, role, turn)
 
 	return turn
 }

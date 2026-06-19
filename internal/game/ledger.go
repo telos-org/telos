@@ -109,26 +109,27 @@ func (p *PVG) transitionObjectiveState(next ObjectiveState, roundNum int, role s
 	}
 }
 
-func (p *PVG) updateObjectiveLedger(roundNum int, role string, turn TurnResult) {
+// updateObjectiveLedger records the bookkeeping for a finished turn. The target
+// state is decided by the task state machine and passed in as stateAfter; this
+// function only derives the findings/summary bookkeeping from that state so the
+// ledger can never disagree with the machine about which transition occurred.
+func (p *PVG) updateObjectiveLedger(roundNum int, role string, turn TurnResult, stateAfter ObjectiveState) {
 	ledger := p.loadLedger()
 	progress := lastProgressUpdate(turn.Logs)
-	next := ledger.State
-	switch {
-	case turn.Error != "":
-		next = ObjectiveStateBlocked
-	case role == "prover":
-		next = ObjectiveStateVerify
+	switch stateAfter {
+	case ObjectiveStateVerify:
+		// The prover handed off to verification; capture its implementation summary.
 		if progress != "" {
 			ledger.LastImplementation = progress
 		}
-	case role == "verifier" && turn.Status == StatusConcede:
-		next = ObjectiveStateFinalize
+	case ObjectiveStateFinalize:
+		// The verifier conceded (or review cycles completed); open findings are resolved.
 		if len(ledger.OpenFindings) > 0 {
 			ledger.ResolvedFindings = appendUnique(ledger.ResolvedFindings, ledger.OpenFindings...)
 		}
 		ledger.OpenFindings = nil
-	case role == "verifier":
-		next = ObjectiveStateRepair
+	case ObjectiveStateRepair:
+		// The verifier wants changes; record the findings to repair.
 		findings := extractFindings(turn.Logs)
 		if len(findings) > 0 {
 			ledger.OpenFindings = findings
@@ -141,12 +142,12 @@ func (p *PVG) updateObjectiveLedger(roundNum int, role string, turn TurnResult) 
 			ledger.LastEvaluation = progress
 		}
 	}
-	ledger.State = next
+	ledger.State = stateAfter
 	ledger.Turns = append(ledger.Turns, ObjectiveTurn{
 		RoundNum:       roundNum,
 		Role:           role,
 		Status:         turn.Status,
-		StateAfter:     next,
+		StateAfter:     stateAfter,
 		Error:          turn.Error,
 		ProgressUpdate: progress,
 	})

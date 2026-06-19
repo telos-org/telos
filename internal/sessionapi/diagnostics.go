@@ -93,7 +93,7 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) *SessionDi
 				}
 			}
 			if errText != "" {
-				addDiagnosticsFailure(diagnostics.Failures, spec, classifyDiagnosticsFailure(errText))
+				addDiagnosticsFailure(diagnostics.Failures, spec, ClassifyFailure(errText))
 			} else if result == "failure" && len(diagnostics.Failures) == 0 {
 				addDiagnosticsFailure(diagnostics.Failures, spec, "goal_failure")
 			}
@@ -105,7 +105,7 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) *SessionDi
 			diagnostics.BudgetExceeded[budget]++
 			addDiagnosticsFailure(diagnostics.Failures, spec, "task_budget")
 		case "agent_failure_recoverable", "game_error", "error":
-			addDiagnosticsFailure(diagnostics.Failures, spec, classifyDiagnosticsFailure(firstDiagnosticsNonEmpty(stringFromMap(data, "error_code"), stringFromMap(data, "error"))))
+			addDiagnosticsFailure(diagnostics.Failures, spec, ClassifyFailure(firstDiagnosticsNonEmpty(stringFromMap(data, "error_code"), stringFromMap(data, "error"))))
 		case "agent_complete":
 			if event.Role != nil && *event.Role == "verifier" &&
 				stringFromMap(data, "status") == "CONTINUE" && stringFromMap(data, "error") == "" {
@@ -114,7 +114,7 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) *SessionDi
 		}
 	}
 	if session.Error != nil && *session.Error != "" && len(diagnostics.Failures) == 0 {
-		addDiagnosticsFailure(diagnostics.Failures, nil, classifyDiagnosticsFailure(*session.Error))
+		addDiagnosticsFailure(diagnostics.Failures, nil, ClassifyFailure(*session.Error))
 	}
 
 	keys := make([]string, 0, len(specs))
@@ -202,7 +202,7 @@ func readSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, path str
 				Retryable:          boolPtrFromAny(event.Data["retryable"]),
 				ProviderStatusCode: intFromMap(event.Data, "provider_status_code"),
 			})
-			addDiagnosticsFailure(diagnostics.Failures, diagnosticsSpecByName(diagnostics, specName), classifyDiagnosticsFailure(errorText))
+			addDiagnosticsFailure(diagnostics.Failures, diagnosticsSpecByName(diagnostics, specName), ClassifyFailure(errorText))
 		case "model_response":
 			if stopReason := stringFromMap(event.Data, "stop_reason"); stopReason != "" {
 				diagnostics.StopReasons[stopReason]++
@@ -216,7 +216,7 @@ func readSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, path str
 					ErrorCode: errorCode,
 					Error:     "tool_result:" + stringFromMap(event.Data, "tool_name"),
 				})
-				addDiagnosticsFailure(diagnostics.Failures, diagnosticsSpecByName(diagnostics, specName), classifyDiagnosticsFailure(errorCode))
+				addDiagnosticsFailure(diagnostics.Failures, diagnosticsSpecByName(diagnostics, specName), ClassifyFailure(errorCode))
 			}
 		case "outside_workspace_access":
 			diagnostics.OutsideWorkspace = append(diagnostics.OutsideWorkspace, SessionOutsideWorkspaceAccessDiagnostics{
@@ -322,7 +322,10 @@ func addDiagnosticsFailure(total map[string]int, spec *SessionSpecDiagnostics, c
 	}
 }
 
-func classifyDiagnosticsFailure(errText string) string {
+// ClassifyFailure maps a turn/game error string to a failure-taxonomy category.
+// It is the single classifier shared by the diagnostics endpoint and the
+// `telos analyze` CLI so the two cannot report divergent categories.
+func ClassifyFailure(errText string) string {
 	lower := strings.ToLower(strings.TrimSpace(errText))
 	switch {
 	case lower == "":
