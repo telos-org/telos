@@ -34,7 +34,13 @@ func cmdLaunch(command, action string, args []string) {
 	thinking := fs.String("thinking", "medium", "Thinking effort")
 	until := fs.Int("until", 0, "Run exactly N evaluator review cycles")
 	maxCostUSD := fs.Float64("max-cost-usd", 20.0, "Maximum cost in USD")
+	maxRounds := fs.Int("max-rounds", 0, "Maximum PVG rounds; 0 uses the runtime default")
+	maxDurationSec := fs.Int("max-duration-sec", 0, "Maximum PVG duration in seconds; 0 uses the runtime default")
+	maxInputTokens := fs.Int("max-input-tokens", 0, "Maximum input tokens across the PVG run; 0 disables")
+	maxOutputTokens := fs.Int("max-output-tokens", 0, "Maximum output tokens across the PVG run; 0 disables")
+	maxToolLoops := fs.Int("max-tool-loops", 0, "Maximum model-tool loop iterations per agent turn; 0 uses the runtime default")
 	agentTimeout := fs.Int("agent-timeout-sec", 0, "Agent timeout in seconds; 0 disables")
+	fs.String("safe-write-prefixes", "", "Comma-separated absolute path prefixes that native executor tools may write outside the workspace")
 	readyTimeout := fs.Int("ready-timeout", 900, "Environment readiness timeout in seconds")
 	noWait := fs.Bool("no-wait", false, "Do not wait for a newly created environment")
 	jsonOut := fs.Bool("json", false, "JSON output")
@@ -70,7 +76,7 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a controller session")
 			os.Exit(1)
 		}
-		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, *agentTimeout)
+		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, *maxRounds, *maxDurationSec, *maxInputTokens, *maxOutputTokens, *maxToolLoops, *agentTimeout)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -109,10 +115,14 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: local controller sessions can only launch platform: local child tasks")
 			os.Exit(1)
 		}
+		if err := ensureNoActiveControllerChild(localParentSessionID, nil); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	switch launchMode {
 	case launchCloudExisting:
-		runCloud(command, specArg, *env, untilValue, fs, *model, *thinking, *maxCostUSD, *agentTimeout, *jsonOut, false, 0, action)
+		runCloud(command, specArg, *env, untilValue, fs, *model, *thinking, *maxCostUSD, *maxRounds, *maxDurationSec, *maxInputTokens, *maxOutputTokens, *maxToolLoops, *agentTimeout, *jsonOut, false, 0, action)
 		return
 	case launchCloudNew:
 		runCloud(
@@ -124,6 +134,11 @@ func cmdLaunch(command, action string, args []string) {
 			*model,
 			*thinking,
 			*maxCostUSD,
+			*maxRounds,
+			*maxDurationSec,
+			*maxInputTokens,
+			*maxOutputTokens,
+			*maxToolLoops,
 			*agentTimeout,
 			*jsonOut,
 			!*noWait,
@@ -143,6 +158,11 @@ func cmdLaunch(command, action string, args []string) {
 		*model,
 		*thinking,
 		*maxCostUSD,
+		*maxRounds,
+		*maxDurationSec,
+		*maxInputTokens,
+		*maxOutputTokens,
+		*maxToolLoops,
 		*agentTimeout,
 	)
 	if err != nil {
@@ -248,7 +268,17 @@ func runChildCloud(
 		req.Until = &until
 	}
 	applySessionRuntimeConfig(&req, runtimeConfig)
-	session, err := cloud.NewClient(ctx.endpoint, ctx.token).CreateSession(req)
+	client := cloud.NewClient(ctx.endpoint, ctx.token)
+	sessions, err := client.ListSessions(0)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: inspect controller children: %v\n", err)
+		os.Exit(1)
+	}
+	if err := ensureNoActiveControllerChild(ctx.sessionID, sessions); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	session, err := client.CreateSession(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -260,6 +290,48 @@ func runChildCloud(
 	printSessionReceipt(os.Stdout, action, session, nil)
 }
 
+func ensureNoActiveControllerChild(parentID string, sessions []sessionapi.Session) error {
+	if ok, _ := parallelChildrenAllowed(); ok {
+		return nil
+	}
+	if sessions == nil {
+		var err error
+		sessions, err = store().List()
+		if err != nil {
+			return fmt.Errorf("inspect controller children: %w", err)
+		}
+	}
+	active := activeChildSessions(sessions, parentID)
+	if len(active) == 0 {
+		return nil
+	}
+	return fmt.Errorf("controller %s already has active child session %s; wait for it to finish, stop it, or set TELOS_ALLOW_PARALLEL_CHILDREN=1 and TELOS_PARALLEL_CHILDREN_JUSTIFICATION with an explicit justification", parentID, active[0].SessionID)
+}
+
+func activeChildSessions(sessions []sessionapi.Session, parentID string) []sessionapi.Session {
+	var active []sessionapi.Session
+	for _, session := range sessions {
+		if session.ParentSessionID == nil || *session.ParentSessionID != parentID {
+			continue
+		}
+		if session.Status.IsTerminal() {
+			continue
+		}
+		active = append(active, session)
+	}
+	return active
+}
+
+func parallelChildrenAllowed() (bool, string) {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("TELOS_ALLOW_PARALLEL_CHILDREN"))) {
+	case "1", "true", "yes", "on":
+		justification := strings.TrimSpace(os.Getenv("TELOS_PARALLEL_CHILDREN_JUSTIFICATION"))
+		return justification != "", justification
+	default:
+		return false, ""
+	}
+}
+
 func runCloud(
 	command string,
 	specArg string,
@@ -269,6 +341,11 @@ func runCloud(
 	model string,
 	thinking string,
 	maxCostUSD float64,
+	maxRounds int,
+	maxDurationSec int,
+	maxInputTokens int,
+	maxOutputTokens int,
+	maxToolLoops int,
 	agentTimeout int,
 	jsonOut bool,
 	waitForEnvironment bool,
@@ -285,7 +362,7 @@ func runCloud(
 	if until > 0 {
 		req.Until = &until
 	}
-	runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, model, thinking, maxCostUSD, agentTimeout)
+	runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, model, thinking, maxCostUSD, maxRounds, maxDurationSec, maxInputTokens, maxOutputTokens, maxToolLoops, agentTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -512,7 +589,13 @@ func updateRequestFromCreate(req sessionapi.SessionCreateRequest) sessionapi.Ses
 	update.Model = req.Model
 	update.Thinking = req.Thinking
 	update.MaxCostUSD = req.MaxCostUSD
+	update.MaxRounds = req.MaxRounds
+	update.MaxDurationSec = req.MaxDurationSec
+	update.MaxInputTokens = req.MaxInputTokens
+	update.MaxOutputTokens = req.MaxOutputTokens
+	update.MaxToolLoops = req.MaxToolLoops
 	update.AgentTimeoutSec = req.AgentTimeoutSec
+	update.SafeWritePrefixes = req.SafeWritePrefixes
 	return update
 }
 

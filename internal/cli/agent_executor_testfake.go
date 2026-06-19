@@ -16,8 +16,9 @@ import (
 
 const testFakeScenarioRelPath = ".telos-testfake/agent.json"
 
-// createAgentExecutor swaps Pi for a deterministic scenario-driven executor
-// only in binaries built with -tags telos_testfake. Tagged binaries fail closed
+// createAgentExecutor swaps the native executor for a deterministic
+// scenario-driven executor only in binaries built with -tags telos_testfake.
+// Tagged binaries fail closed
 // when the active workspace does not contain the private test fixture file.
 func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecutor, error) {
 	scenarioPath := filepath.Join(workspace, testFakeScenarioRelPath)

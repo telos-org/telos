@@ -1,13 +1,20 @@
 package cli
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/telos-org/telos/internal/executor"
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -116,6 +123,46 @@ func checkpointCompletedWorkspace(t *testing.T, session *LocalSession, specName 
 	return workspacePath
 }
 
+func TestFinishEpochRecordsTypedErrorCode(t *testing.T) {
+	dir := t.TempDir()
+	started := "2026-06-19T10:00:00.000Z"
+	manifest := &sessionapi.Manifest{
+		SessionID:   "local_test",
+		SessionKind: sessionapi.KindTask,
+		Runtime:     sessionapi.RuntimeLocal,
+		CreatedAt:   started,
+		Launcher:    "local",
+		SpecName:    "demo",
+		Config:      sessionapi.SessionConfig{},
+		Provenance:  map[string]any{},
+		Specs:       []sessionapi.ManifestSpec{},
+		Epochs: []sessionapi.Epoch{{
+			ID:        1,
+			StartedAt: started,
+		}},
+	}
+	if err := sessionapi.WriteManifest(filepath.Join(dir, "session.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	result := &game.PVGResult{
+		GameResult: game.GameFailure,
+		Error:      "provider_rate_limited: HTTP 429",
+	}
+	if err := finishEpoch(dir, manifest, result); err != nil {
+		t.Fatalf("finishEpoch: %v", err)
+	}
+
+	got, err := sessionapi.ReadManifest(filepath.Join(dir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := got.LastEpoch()
+	if last == nil || last.ErrorCode == nil || *last.ErrorCode != "provider_rate_limited" {
+		t.Fatalf("error code not recorded: %#v", last)
+	}
+}
+
 func TestCreateLocalSession(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
@@ -165,6 +212,15 @@ func TestCreateLocalSession(t *testing.T) {
 	cfg, _ := m["config"].(map[string]interface{})
 	if cfg["model"] != "test-model" {
 		t.Errorf("manifest model: got %v", cfg["model"])
+	}
+	specs, _ := m["specs"].([]interface{})
+	if len(specs) != 1 {
+		t.Fatalf("manifest specs: got %#v", m["specs"])
+	}
+	specEntry, _ := specs[0].(map[string]interface{})
+	wantLedger := filepath.Join(session.SessionDir, "specs", "cli-test", "objective-ledger.json")
+	if specEntry["objective_ledger_path"] != wantLedger {
+		t.Errorf("objective ledger path: got %v want %s", specEntry["objective_ledger_path"], wantLedger)
 	}
 
 	// Verify spec was copied
@@ -426,6 +482,9 @@ func TestCreateLocalSessionDefaultsToCwdGitRoot(t *testing.T) {
 	}
 	if manifest.Workspace.BaseCommit != base {
 		t.Fatalf("base commit: got %q, want %q", manifest.Workspace.BaseCommit, base)
+	}
+	if manifest.Config.MaxRounds != sessionapi.DefaultMaxRounds || manifest.Config.MaxDurationSec != sessionapi.DefaultMaxDurationSec {
+		t.Fatalf("manifest defaults: max_rounds=%d max_duration_sec=%d", manifest.Config.MaxRounds, manifest.Config.MaxDurationSec)
 	}
 	active := filepath.Join(session.SessionDir, "workspace")
 	if active == source {
@@ -752,7 +811,7 @@ func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	}
 }
 
-func TestCreateLocalSessionPersistsUntil(t *testing.T) {
+func TestRunLocalSessionWithNativeExecutorCompletesSmallCodeChange(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 
@@ -760,7 +819,75 @@ func TestCreateLocalSessionPersistsUntil(t *testing.T) {
 	os.Chdir(dir)
 	defer os.Chdir(orig)
 
-	session, err := CreateLocalSession(specPath, LocalRunConfig{Until: 2})
+	session, err := CreateLocalSession(specPath, LocalRunConfig{Model: "test/test-model", MaxRounds: 4})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		requests++
+		switch requests {
+		case 1:
+			writeLocalRunResponsesStream(t, w, `{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"function_call","call_id":"call_1","name":"write_file","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		case 2:
+			writeLocalRunResponsesStream(t, w, `{
+				"id":"resp_2","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Created answer.txt.\n\n<progress_update>wrote answer.txt</progress_update>"}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		case 3:
+			writeLocalRunResponsesStream(t, w, `{
+				"id":"resp_3","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Verified answer.txt exists.\n\n<status>CONCEDE</status>"}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_API_BASE_URL", server.URL)
+	t.Setenv("TELOS_API_KEY", "test-key")
+	nativeExec := executor.NewNativeExecutor(platform.NewLocalPlatform(session.ActiveWorkspace), "test/test-model", "high", 0)
+
+	result, err := RunLocalSessionWithExecutor(session.SessionDir, nativeExec)
+	if err != nil {
+		t.Fatalf("RunLocalSessionWithExecutor: %v", err)
+	}
+	if result.GameResult != game.GameSuccess {
+		t.Fatalf("game result: got %s err=%s", result.GameResult, result.Error)
+	}
+	if requests != 3 {
+		t.Fatalf("requests: got %d", requests)
+	}
+	workspacePath := filepath.Join(session.SessionDir, "specs", "cli-test", "workspace.tar.gz")
+	content, ok := readTarGzFile(t, workspacePath, "answer.txt")
+	if !ok || content != "done\n" {
+		t.Fatalf("checkpoint answer.txt: ok=%t content=%q", ok, content)
+	}
+}
+
+func TestCreateLocalSessionPersistsRuntimeConfig(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{
+		Until:             2,
+		SafeWritePrefixes: []string{"/tmp/telos-scratch", "/workspace/outside"},
+	})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
@@ -771,6 +898,9 @@ func TestCreateLocalSessionPersistsUntil(t *testing.T) {
 	}
 	if manifest.Config.Until != 2 {
 		t.Fatalf("until: got %d", manifest.Config.Until)
+	}
+	if len(manifest.Config.SafeWritePrefixes) != 2 || manifest.Config.SafeWritePrefixes[0] != "/tmp/telos-scratch" || manifest.Config.SafeWritePrefixes[1] != "/workspace/outside" {
+		t.Fatalf("safe write prefixes: got %#v", manifest.Config.SafeWritePrefixes)
 	}
 }
 
@@ -858,7 +988,7 @@ func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
 	}
 }
 
-func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
+func TestRunLocalSessionPromptsUseDigestBeforeTranscript(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 
@@ -904,24 +1034,33 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 	if firstImplementationTask == "" {
 		t.Fatalf("expected first implementation task, got %d tasks", len(exec.tasks))
 	}
-	if !strings.Contains(firstImplementationTask, "First action every turn: read this transcript path") {
-		t.Fatal("first implementation prompt should require reading transcript first")
+	if strings.Contains(firstImplementationTask, "First action every turn: read this transcript path") {
+		t.Fatal("first implementation prompt should not require reading transcript first")
+	}
+	if !strings.Contains(firstImplementationTask, "Start from the Current State Digest above") {
+		t.Fatal("first implementation prompt should start from the current state digest")
 	}
 
 	evaluationTask := exec.taskAt(1)
 	if evaluationTask == "" {
 		t.Fatalf("expected evaluation task, got %d tasks", len(exec.tasks))
 	}
-	if !strings.Contains(evaluationTask, "First action every turn: read this transcript path") {
-		t.Fatal("evaluation prompt should require reading transcript first")
+	if strings.Contains(evaluationTask, "First action every turn: read this transcript path") {
+		t.Fatal("evaluation prompt should not require reading transcript first")
+	}
+	if !strings.Contains(evaluationTask, "Read this transcript path only when the digest is insufficient") {
+		t.Fatal("evaluation prompt should read transcript on demand")
 	}
 
 	secondImplementationTask := exec.taskAt(2)
 	if secondImplementationTask == "" {
 		t.Fatalf("expected second implementation task, got %d tasks", len(exec.tasks))
 	}
-	if !strings.Contains(secondImplementationTask, "First action every turn: read this transcript path") {
-		t.Fatal("second implementation prompt should require reading transcript first")
+	if strings.Contains(secondImplementationTask, "First action every turn: read this transcript path") {
+		t.Fatal("second implementation prompt should not require reading transcript first")
+	}
+	if !strings.Contains(secondImplementationTask, "Read this transcript path only when the digest is insufficient") {
+		t.Fatal("second implementation prompt should read transcript on demand")
 	}
 	if !strings.Contains(secondImplementationTask, "identify unresolved evaluator findings") {
 		t.Fatal("implementation prompt should identify unresolved evaluator findings")
@@ -1341,5 +1480,52 @@ func TestRunnerIdentityRecordsKubernetesPod(t *testing.T) {
 	}
 	if runner.PodNamespace != "ns-ctrl-abc" {
 		t.Fatalf("pod_namespace: got %v", runner.PodNamespace)
+	}
+}
+
+func writeLocalRunResponsesStream(t *testing.T, w http.ResponseWriter, responseJSON string) {
+	t.Helper()
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, []byte(`{"type":"response.completed","response":`+responseJSON+"}")); err != nil {
+		t.Fatal(err)
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "data: "+buf.String()+"\n\n")
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func readTarGzFile(t *testing.T, path string, name string) (string, bool) {
+	t.Helper()
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open checkpoint %s: %v", path, err)
+	}
+	defer f.Close()
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		t.Fatalf("read checkpoint gzip: %v", err)
+	}
+	defer gz.Close()
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return "", false
+		}
+		if err != nil {
+			t.Fatalf("read checkpoint tar: %v", err)
+		}
+		gotName := strings.TrimPrefix(filepath.ToSlash(header.Name), "./")
+		if gotName != name {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("read %s from checkpoint: %v", name, err)
+		}
+		return string(data), true
 	}
 }

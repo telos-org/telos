@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -74,9 +75,13 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	if session.Error != nil {
 		printDetailField(out, "error", *session.Error)
 	}
+	if session.ErrorCode != nil && *session.ErrorCode != "" {
+		printDetailField(out, "error code", *session.ErrorCode)
+	}
 	if session.RoundCount != nil {
 		printDetailField(out, "rounds", fmt.Sprint(*session.RoundCount))
 	}
+	printRuntimeSummary(out, session)
 	if session.ArtifactURI != nil && *session.ArtifactURI != "" {
 		fmt.Fprintln(out)
 		fmt.Fprintln(out, "Artifact")
@@ -169,7 +174,107 @@ func printSessionArtifacts(out io.Writer, session sessionapi.Session) {
 		printDetailField(out, prefix+" workspace", artifactPath(spec.WorkspaceExists, spec.WorkspacePath))
 		printDetailField(out, prefix+" evidence", artifactPath(spec.EvidenceExists, spec.EvidencePath))
 		printDetailField(out, prefix+" transcript", artifactPath(spec.TranscriptExists, spec.TranscriptPath))
+		printDetailField(out, prefix+" ledger", artifactPath(spec.ObjectiveLedgerExists, spec.ObjectiveLedgerPath))
 	}
+}
+
+func printRuntimeSummary(out io.Writer, session sessionapi.Session) {
+	if len(session.Config) == 0 &&
+		session.TotalInputTokens == nil &&
+		session.TotalOutputTokens == nil &&
+		session.TotalCacheReadTokens == nil &&
+		session.TotalCacheCreateTokens == nil {
+		return
+	}
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Runtime")
+	printDetailField(out, "model", stringConfig(session.Config, "model"))
+	printDetailField(out, "thinking", stringConfig(session.Config, "thinking"))
+	printDetailField(out, "budgets", formatSessionBudgets(session.Config))
+	printDetailField(out, "tokens", formatSessionTokens(session))
+}
+
+func stringConfig(config map[string]any, key string) string {
+	if value, ok := config[key].(string); ok {
+		return value
+	}
+	return "-"
+}
+
+func formatSessionBudgets(config map[string]any) string {
+	parts := []string{}
+	if value := numberConfig(config, "max_cost_usd"); value != "" {
+		parts = append(parts, "cost $"+value)
+	}
+	if value := numberConfig(config, "max_rounds"); value != "" {
+		parts = append(parts, "rounds "+value)
+	}
+	if value := numberConfig(config, "max_duration_sec"); value != "" {
+		parts = append(parts, "duration "+value+"s")
+	}
+	if value := numberConfig(config, "max_input_tokens"); value != "" {
+		parts = append(parts, "input "+value)
+	}
+	if value := numberConfig(config, "max_output_tokens"); value != "" {
+		parts = append(parts, "output "+value)
+	}
+	if value := numberConfig(config, "max_tool_loops"); value != "" {
+		parts = append(parts, "tool-loops "+value)
+	}
+	if value := numberConfig(config, "agent_timeout_sec"); value != "" {
+		parts = append(parts, "agent-timeout "+value+"s")
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ", ")
+}
+
+func numberConfig(config map[string]any, key string) string {
+	switch value := config[key].(type) {
+	case int:
+		if value == 0 {
+			return ""
+		}
+		return fmt.Sprint(value)
+	case int64:
+		if value == 0 {
+			return ""
+		}
+		return fmt.Sprint(value)
+	case float64:
+		if value == 0 {
+			return ""
+		}
+		return fmt.Sprintf("%g", value)
+	case float32:
+		if value == 0 {
+			return ""
+		}
+		return fmt.Sprintf("%g", value)
+	default:
+		return ""
+	}
+}
+
+func formatSessionTokens(session sessionapi.Session) string {
+	parts := []string{}
+	if session.TotalInputTokens != nil {
+		parts = append(parts, fmt.Sprintf("input %d", *session.TotalInputTokens))
+	}
+	if session.TotalOutputTokens != nil {
+		parts = append(parts, fmt.Sprintf("output %d", *session.TotalOutputTokens))
+	}
+	if session.TotalCacheReadTokens != nil {
+		parts = append(parts, fmt.Sprintf("cache-read %d", *session.TotalCacheReadTokens))
+	}
+	if session.TotalCacheCreateTokens != nil {
+		parts = append(parts, fmt.Sprintf("cache-write %d", *session.TotalCacheCreateTokens))
+	}
+	if len(parts) == 0 {
+		return "-"
+	}
+	return strings.Join(parts, ", ")
 }
 
 func sessionSpecName(spec sessionapi.SessionSpec) string {

@@ -18,14 +18,20 @@ const DefaultLocalModel = "claude-opus-4-6"
 
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {
-	SessionKind     sessionapi.SessionKind
-	ParentSessionID *string
-	Workspace       string
-	Model           string
-	Thinking        string
-	Until           int
-	MaxCostUSD      *float64
-	AgentTimeoutSec int
+	SessionKind       sessionapi.SessionKind
+	ParentSessionID   *string
+	Workspace         string
+	Model             string
+	Thinking          string
+	Until             int
+	MaxCostUSD        *float64
+	MaxRounds         int
+	MaxDurationSec    int
+	MaxInputTokens    int
+	MaxOutputTokens   int
+	MaxToolLoops      int
+	AgentTimeoutSec   int
+	SafeWritePrefixes []string
 }
 
 // LocalSession holds the result of session creation.
@@ -176,6 +182,12 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	pvgCfg := game.PVGConfig{
 		Until:           cfg.Until,
 		MaxCostUSD:      cfg.MaxCostUSD,
+		MaxRounds:       cfg.MaxRounds,
+		MaxDurationSec:  cfg.MaxDurationSec,
+		MaxInputTokens:  cfg.MaxInputTokens,
+		MaxOutputTokens: cfg.MaxOutputTokens,
+		MaxToolLoops:    cfg.MaxToolLoops,
+		AgentTimeoutSec: cfg.AgentTimeoutSec,
 		Verbose:         true,
 		EpochID:         epochID,
 		IsController:    manifest.SessionKind == sessionapi.KindController,
@@ -309,24 +321,31 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		SessionSpecPath: strPtr(state.SpecPath()),
 		SpecName:        compiled.Environment.Name,
 		Config: sessionapi.SessionConfig{
-			Model:           model,
-			Until:           cfg.Until,
-			MaxCostUSD:      cfg.MaxCostUSD,
-			AgentTimeoutSec: cfg.AgentTimeoutSec,
-			Thinking:        thinking,
+			Model:             model,
+			Until:             cfg.Until,
+			MaxCostUSD:        cfg.MaxCostUSD,
+			MaxRounds:         cfg.MaxRounds,
+			MaxDurationSec:    cfg.MaxDurationSec,
+			MaxInputTokens:    cfg.MaxInputTokens,
+			MaxOutputTokens:   cfg.MaxOutputTokens,
+			MaxToolLoops:      cfg.MaxToolLoops,
+			AgentTimeoutSec:   cfg.AgentTimeoutSec,
+			SafeWritePrefixes: cfg.SafeWritePrefixes,
+			Thinking:          thinking,
 		},
 		Workspace:  workspace,
 		Provenance: map[string]any{"mode": "local"},
 		Specs: []sessionapi.InitialManifestSpec{{
-			Index:           0,
-			Name:            compiled.Environment.Name,
-			DirName:         compiled.Environment.Name,
-			SessionSpecPath: strPtr(state.SpecPath()),
-			ContentHash:     strPtr(compiled.ContentHash),
-			EvidencePath:    strPtr(state.EvidencePath),
-			TranscriptPath:  strPtr(state.TranscriptPath),
-			WorkspacePath:   strPtr(state.WorkspacePath),
-			IntervalSeconds: compiled.Environment.IntervalSeconds,
+			Index:               0,
+			Name:                compiled.Environment.Name,
+			DirName:             compiled.Environment.Name,
+			SessionSpecPath:     strPtr(state.SpecPath()),
+			ContentHash:         strPtr(compiled.ContentHash),
+			EvidencePath:        strPtr(state.EvidencePath),
+			TranscriptPath:      strPtr(state.TranscriptPath),
+			ObjectiveLedgerPath: strPtr(state.LedgerPath),
+			WorkspacePath:       strPtr(state.WorkspacePath),
+			IntervalSeconds:     compiled.Environment.IntervalSeconds,
 		}},
 	})
 	if err != nil {
@@ -338,11 +357,17 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	cfg := manifest.Config
 	lrc := LocalRunConfig{
-		Model:           cfg.Model,
-		Thinking:        cfg.Thinking,
-		Until:           cfg.Until,
-		MaxCostUSD:      cfg.MaxCostUSD,
-		AgentTimeoutSec: cfg.AgentTimeoutSec,
+		Model:             cfg.Model,
+		Thinking:          cfg.Thinking,
+		Until:             cfg.Until,
+		MaxCostUSD:        cfg.MaxCostUSD,
+		MaxRounds:         cfg.MaxRounds,
+		MaxDurationSec:    cfg.MaxDurationSec,
+		MaxInputTokens:    cfg.MaxInputTokens,
+		MaxOutputTokens:   cfg.MaxOutputTokens,
+		MaxToolLoops:      cfg.MaxToolLoops,
+		AgentTimeoutSec:   cfg.AgentTimeoutSec,
+		SafeWritePrefixes: cfg.SafeWritePrefixes,
 	}
 	if lrc.Thinking == "" {
 		lrc.Thinking = "medium"
@@ -440,15 +465,23 @@ func finishEpoch(sessionDir string, manifest *sessionapi.Manifest, result *game.
 		last.Result = &failed
 		if result.Error != "" {
 			last.Error = &result.Error
+			if code := runtimeErrorCode(result.Error); code != "" {
+				last.ErrorCode = &code
+			}
 		}
 	case game.GameStopped:
 		stopped := "stopped"
 		last.Result = &stopped
 		if result.Error != "" {
 			last.Error = &result.Error
+			if code := runtimeErrorCode(result.Error); code != "" {
+				last.ErrorCode = &code
+			}
 		} else {
 			err := "stopped by operator"
 			last.Error = &err
+			code := "stopped"
+			last.ErrorCode = &code
 		}
 	}
 
@@ -456,6 +489,19 @@ func finishEpoch(sessionDir string, manifest *sessionapi.Manifest, result *game.
 		return fmt.Errorf("finish epoch: %w", err)
 	}
 	return nil
+}
+
+func runtimeErrorCode(errText string) string {
+	for i, r := range errText {
+		switch {
+		case r == ':' || r == ' ' || r == '\n' || r == '\t':
+			if i == 0 {
+				return ""
+			}
+			return errText[:i]
+		}
+	}
+	return ""
 }
 
 func sessionStopped(sessionDir string) bool {

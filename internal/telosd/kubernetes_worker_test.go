@@ -17,7 +17,7 @@ import (
 )
 
 func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	setLiteLLMGatewayEnv(t)
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(
@@ -25,20 +25,15 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "telos-env-keys", Namespace: cfg.Kubernetes.EnvNamespace},
 			Type:       corev1.SecretTypeOpaque,
-			Data:       map[string][]byte{"OPENAI_API_KEY": []byte("test-openai-key")},
+			Data:       map[string][]byte{"TELOS_LITELLM_BASE_URL": []byte("https://stored-litellm.example.com/v1")},
 		},
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
 			Type:       corev1.SecretTypeOpaque,
 			Data: map[string][]byte{
-				"ANTHROPIC_API_KEY": []byte("stored-anthropic-key"),
-				"SAIL_API_KEY":      []byte("test-sail-key"),
+				"TELOS_LITELLM_API_KEY":  []byte("stored-litellm-key"),
+				"TELOS_LITELLM_BASE_URL": []byte("https://stored-litellm.example.com/v1"),
 			},
-		},
-		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: piConfigSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
-			Type:       corev1.SecretTypeOpaque,
-			Data:       map[string][]byte{"models.json": []byte("{}")},
 		},
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.ImagePullSecret, Namespace: cfg.Kubernetes.EnvNamespace},
@@ -73,9 +68,8 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 	}
 
 	assertSecretExists(t, client, namespace, cfg.Kubernetes.AgentSecretName)
-	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "SAIL_API_KEY", "test-sail-key")
-	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "ANTHROPIC_API_KEY", "test-anthropic-key")
-	assertSecretData(t, client, namespace, piConfigSecretName, "models.json", "{}")
+	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_API_KEY", "test-litellm-key")
+	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1")
 	assertSecretExists(t, client, namespace, "telos-env-keys")
 	assertSecretExists(t, client, namespace, cfg.Kubernetes.ImagePullSecret)
 	role, err := client.RbacV1().ClusterRoles().Get(context.Background(), workerClusterRole(namespace).Name, metav1.GetOptions{})
@@ -86,7 +80,7 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 }
 
 func TestKubernetesSubstrateAppliesTaskWorker(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	setLiteLLMGatewayEnv(t)
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
@@ -110,7 +104,7 @@ func TestKubernetesSubstrateAppliesTaskWorker(t *testing.T) {
 }
 
 func TestKubernetesSubstrateStopDeletesWorkerResources(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	setLiteLLMGatewayEnv(t)
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
@@ -141,7 +135,7 @@ func TestKubernetesSubstrateStopDeletesWorkerResources(t *testing.T) {
 }
 
 func TestKubernetesSubstrateStopContinuesCleanupAfterWorkloadDeleteError(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	setLiteLLMGatewayEnv(t)
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
@@ -173,7 +167,7 @@ func TestKubernetesSubstrateStopContinuesCleanupAfterWorkloadDeleteError(t *test
 }
 
 func TestCloudSessionStoreCleansKubernetesResourcesWhenInitialApplyFails(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	setLiteLLMGatewayEnv(t)
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
@@ -199,6 +193,56 @@ func TestCloudSessionStoreCleansKubernetesResourcesWhenInitialApplyFails(t *test
 	assertNoWorkerResources(t, client)
 }
 
+func TestKubernetesSubstrateAgentSecretAcceptsLiteLLMBaseURLAlias(t *testing.T) {
+	t.Setenv("TELOS_LITELLM_API_KEY", "test-litellm-key")
+	t.Setenv("TELOS_LITELLM_BASE_URL", "")
+	t.Setenv("TELOS_API_BASE_URL", "")
+	t.Setenv("TELOS_BASE_URL", "")
+
+	cfg := testCloudConfig(t)
+	targetNamespace := "ns-worker"
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.EnvNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNamespace}},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
+			Type:       corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"TELOS_LITELLM_API_KEY": []byte("stored-litellm-key"),
+				"TELOS_API_BASE_URL":    []byte("https://alias-litellm.example.com/v1"),
+			},
+		},
+	)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	if err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_API_KEY", "test-litellm-key")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_API_BASE_URL", "https://alias-litellm.example.com/v1")
+}
+
+func TestKubernetesSubstrateAgentSecretRequiresLiteLLMBaseURL(t *testing.T) {
+	t.Setenv("TELOS_LITELLM_API_KEY", "test-litellm-key")
+	t.Setenv("TELOS_LITELLM_BASE_URL", "")
+	t.Setenv("TELOS_API_BASE_URL", "")
+	t.Setenv("TELOS_BASE_URL", "")
+
+	cfg := testCloudConfig(t)
+	targetNamespace := "ns-worker"
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.EnvNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNamespace}},
+	)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace)
+	if err == nil || !strings.Contains(err.Error(), "TELOS_LITELLM_BASE_URL is required") {
+		t.Fatalf("expected missing LiteLLM base URL error, got %v", err)
+	}
+}
+
 func testCloudConfig(t *testing.T) Config {
 	t.Helper()
 	cfg, err := NormalizeConfig(Config{
@@ -217,13 +261,19 @@ func testCloudConfig(t *testing.T) Config {
 	return cfg
 }
 
+func setLiteLLMGatewayEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("TELOS_LITELLM_API_KEY", "test-litellm-key")
+	t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1")
+}
+
 func testEnvObjects(cfg Config) []runtime.Object {
 	return []runtime.Object{
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.EnvNamespace}},
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "telos-env-keys", Namespace: cfg.Kubernetes.EnvNamespace},
 			Type:       corev1.SecretTypeOpaque,
-			Data:       map[string][]byte{"OPENAI_API_KEY": []byte("test-openai-key")},
+			Data:       map[string][]byte{"TELOS_LITELLM_BASE_URL": []byte("https://stored-litellm.example.com/v1")},
 		},
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.ImagePullSecret, Namespace: cfg.Kubernetes.EnvNamespace},
@@ -276,12 +326,7 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	}
 	assertAgentSecurityContext(t, template.Spec.InitContainers[0].SecurityContext)
 	initContainer := template.Spec.InitContainers[0]
-	if !hasReadonlyVolumeMount(initContainer.VolumeMounts, "pi-agent-config-source", "/telos-pi-agent-config") {
-		t.Fatalf("init container missing Pi config seed mount: %+v", initContainer.VolumeMounts)
-	}
-	if !hasWritableVolumeMount(initContainer.VolumeMounts, "pi-agent-config-home", "/home/agent/.pi/agent") {
-		t.Fatalf("init container missing writable Pi config mount: %+v", initContainer.VolumeMounts)
-	}
+	assertNoLegacyAgentConfig(t, template.Spec.Volumes, initContainer.VolumeMounts)
 	container := template.Spec.Containers[0]
 	assertAgentSecurityContext(t, container.SecurityContext)
 	if len(container.EnvFrom) != 1 ||
@@ -297,27 +342,24 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	if container.Command[2] != "/telos-state/sessions/"+sessionID {
 		t.Fatalf("session dir: got %+v", container.Command)
 	}
-	if !hasWritableVolumeMount(container.VolumeMounts, "pi-agent-config-home", "/home/agent/.pi/agent") {
-		t.Fatalf("worker missing Pi config mount: %+v", container.VolumeMounts)
-	}
+	assertNoLegacyAgentConfig(t, template.Spec.Volumes, container.VolumeMounts)
 }
 
-func hasReadonlyVolumeMount(mounts []corev1.VolumeMount, name string, path string) bool {
-	for _, mount := range mounts {
-		if mount.Name == name && mount.MountPath == path && mount.ReadOnly {
-			return true
+func assertNoLegacyAgentConfig(t *testing.T, volumes []corev1.Volume, mounts []corev1.VolumeMount) {
+	t.Helper()
+	legacyToken := "p" + "i"
+	legacyHome := "/home/agent/.p" + "i/agent"
+	legacySeed := "telos-" + "pi"
+	for _, volume := range volumes {
+		if strings.Contains(volume.Name, legacyToken) {
+			t.Fatalf("worker template should not include legacy agent config volumes: %+v", volumes)
 		}
 	}
-	return false
-}
-
-func hasWritableVolumeMount(mounts []corev1.VolumeMount, name string, path string) bool {
 	for _, mount := range mounts {
-		if mount.Name == name && mount.MountPath == path && !mount.ReadOnly {
-			return true
+		if strings.Contains(mount.Name, legacyToken) || strings.Contains(mount.MountPath, legacyHome) || strings.Contains(mount.MountPath, legacySeed) {
+			t.Fatalf("worker template should not include legacy agent config mounts: %+v", mounts)
 		}
 	}
-	return false
 }
 
 func assertAgentSecurityContext(t *testing.T, ctx *corev1.SecurityContext) {

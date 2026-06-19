@@ -91,9 +91,30 @@ func resolveLocalRunConfigFromFlags(
 	model string,
 	thinking string,
 	maxCostUSD float64,
-	agentTimeout int,
+	budgetAndTimeout ...int,
 ) (cli.LocalRunConfig, error) {
+	maxRounds, maxDurationSec, maxInputTokens, maxOutputTokens, maxToolLoops, agentTimeout := budgetArgs(budgetAndTimeout...)
 	cost, err := positiveFloatOption(fs, "max-cost-usd", maxCostUSD, "TELOS_MAX_COST_USD", 20.0)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
+	rounds, err := nonNegativeIntOption(fs, "max-rounds", maxRounds, "TELOS_MAX_ROUNDS", 0)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
+	duration, err := nonNegativeIntOption(fs, "max-duration-sec", maxDurationSec, "TELOS_MAX_DURATION_SEC", 0)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
+	inputTokens, err := nonNegativeIntOption(fs, "max-input-tokens", maxInputTokens, "TELOS_MAX_INPUT_TOKENS", 0)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
+	outputTokens, err := nonNegativeIntOption(fs, "max-output-tokens", maxOutputTokens, "TELOS_MAX_OUTPUT_TOKENS", 0)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
+	toolLoops, err := nonNegativeIntOption(fs, "max-tool-loops", maxToolLoops, "TELOS_MAX_TOOL_LOOPS", 0)
 	if err != nil {
 		return cli.LocalRunConfig{}, err
 	}
@@ -101,20 +122,33 @@ func resolveLocalRunConfigFromFlags(
 	if err != nil {
 		return cli.LocalRunConfig{}, err
 	}
+	safeWritePrefixes := stringListOption(fs, "safe-write-prefixes", "TELOS_SAFE_WRITE_PREFIXES")
 	return cli.LocalRunConfig{
-		Workspace:       stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
-		Model:           modelOption(fs, model),
-		Thinking:        stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", "medium"),
-		MaxCostUSD:      &cost,
-		AgentTimeoutSec: timeout,
+		Workspace:         stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
+		Model:             modelOption(fs, model),
+		Thinking:          stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", "medium"),
+		MaxCostUSD:        &cost,
+		MaxRounds:         rounds,
+		MaxDurationSec:    duration,
+		MaxInputTokens:    inputTokens,
+		MaxOutputTokens:   outputTokens,
+		MaxToolLoops:      toolLoops,
+		AgentTimeoutSec:   timeout,
+		SafeWritePrefixes: safeWritePrefixes,
 	}, nil
 }
 
 type sessionRuntimeConfig struct {
-	Model           string
-	Thinking        string
-	MaxCostUSD      *float64
-	AgentTimeoutSec *int
+	Model             string
+	Thinking          string
+	MaxCostUSD        *float64
+	MaxRounds         *int
+	MaxDurationSec    *int
+	MaxInputTokens    *int
+	MaxOutputTokens   *int
+	MaxToolLoops      *int
+	AgentTimeoutSec   *int
+	SafeWritePrefixes []string
 }
 
 func resolveSessionRuntimeConfigFromFlags(
@@ -122,8 +156,9 @@ func resolveSessionRuntimeConfigFromFlags(
 	model string,
 	thinking string,
 	maxCostUSD float64,
-	agentTimeout int,
+	budgetAndTimeout ...int,
 ) (sessionRuntimeConfig, error) {
+	maxRounds, maxDurationSec, maxInputTokens, maxOutputTokens, maxToolLoops, agentTimeout := budgetArgs(budgetAndTimeout...)
 	cfg := sessionRuntimeConfig{
 		Model:    modelOption(fs, model),
 		Thinking: stringOption(fs, "thinking", thinking, "TELOS_THINKING"),
@@ -135,6 +170,41 @@ func resolveSessionRuntimeConfigFromFlags(
 		}
 		cfg.MaxCostUSD = &cost
 	}
+	if flagNameSet(fs, "max-rounds") || strings.TrimSpace(os.Getenv("TELOS_MAX_ROUNDS")) != "" {
+		rounds, err := nonNegativeIntOption(fs, "max-rounds", maxRounds, "TELOS_MAX_ROUNDS", 0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.MaxRounds = &rounds
+	}
+	if flagNameSet(fs, "max-duration-sec") || strings.TrimSpace(os.Getenv("TELOS_MAX_DURATION_SEC")) != "" {
+		duration, err := nonNegativeIntOption(fs, "max-duration-sec", maxDurationSec, "TELOS_MAX_DURATION_SEC", 0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.MaxDurationSec = &duration
+	}
+	if flagNameSet(fs, "max-input-tokens") || strings.TrimSpace(os.Getenv("TELOS_MAX_INPUT_TOKENS")) != "" {
+		inputTokens, err := nonNegativeIntOption(fs, "max-input-tokens", maxInputTokens, "TELOS_MAX_INPUT_TOKENS", 0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.MaxInputTokens = &inputTokens
+	}
+	if flagNameSet(fs, "max-output-tokens") || strings.TrimSpace(os.Getenv("TELOS_MAX_OUTPUT_TOKENS")) != "" {
+		outputTokens, err := nonNegativeIntOption(fs, "max-output-tokens", maxOutputTokens, "TELOS_MAX_OUTPUT_TOKENS", 0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.MaxOutputTokens = &outputTokens
+	}
+	if flagNameSet(fs, "max-tool-loops") || strings.TrimSpace(os.Getenv("TELOS_MAX_TOOL_LOOPS")) != "" {
+		toolLoops, err := nonNegativeIntOption(fs, "max-tool-loops", maxToolLoops, "TELOS_MAX_TOOL_LOOPS", 0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.MaxToolLoops = &toolLoops
+	}
 	if flagNameSet(fs, "agent-timeout-sec") || strings.TrimSpace(os.Getenv("TELOS_AGENT_TIMEOUT_SEC")) != "" {
 		timeout, err := nonNegativeIntOption(fs, "agent-timeout-sec", agentTimeout, "TELOS_AGENT_TIMEOUT_SEC", 0)
 		if err != nil {
@@ -142,7 +212,29 @@ func resolveSessionRuntimeConfigFromFlags(
 		}
 		cfg.AgentTimeoutSec = &timeout
 	}
+	if flagNameSet(fs, "safe-write-prefixes") || strings.TrimSpace(os.Getenv("TELOS_SAFE_WRITE_PREFIXES")) != "" {
+		cfg.SafeWritePrefixes = stringListOption(fs, "safe-write-prefixes", "TELOS_SAFE_WRITE_PREFIXES")
+	}
 	return cfg, nil
+}
+
+func budgetArgs(values ...int) (maxRounds int, maxDurationSec int, maxInputTokens int, maxOutputTokens int, maxToolLoops int, agentTimeout int) {
+	switch len(values) {
+	case 0:
+		return 0, 0, 0, 0, 0, 0
+	case 1:
+		return 0, 0, 0, 0, 0, values[0]
+	case 2:
+		return values[0], values[1], 0, 0, 0, 0
+	case 3:
+		return values[0], values[1], 0, 0, 0, values[2]
+	case 4:
+		return values[0], values[1], values[2], values[3], 0, 0
+	case 5:
+		return values[0], values[1], values[2], values[3], 0, values[4]
+	default:
+		return values[0], values[1], values[2], values[3], values[4], values[5]
+	}
 }
 
 func applySessionRuntimeConfig(req *sessionapi.SessionCreateRequest, cfg sessionRuntimeConfig) {
@@ -155,8 +247,26 @@ func applySessionRuntimeConfig(req *sessionapi.SessionCreateRequest, cfg session
 	if cfg.MaxCostUSD != nil {
 		req.MaxCostUSD = cfg.MaxCostUSD
 	}
+	if cfg.MaxRounds != nil {
+		req.MaxRounds = cfg.MaxRounds
+	}
+	if cfg.MaxDurationSec != nil {
+		req.MaxDurationSec = cfg.MaxDurationSec
+	}
+	if cfg.MaxInputTokens != nil {
+		req.MaxInputTokens = cfg.MaxInputTokens
+	}
+	if cfg.MaxOutputTokens != nil {
+		req.MaxOutputTokens = cfg.MaxOutputTokens
+	}
+	if cfg.MaxToolLoops != nil {
+		req.MaxToolLoops = cfg.MaxToolLoops
+	}
 	if cfg.AgentTimeoutSec != nil {
 		req.AgentTimeoutSec = cfg.AgentTimeoutSec
+	}
+	if len(cfg.SafeWritePrefixes) > 0 {
+		req.SafeWritePrefixes = cfg.SafeWritePrefixes
 	}
 }
 
@@ -182,6 +292,29 @@ func stringOptionDefault(fs *flag.FlagSet, name, value, envName, defaultValue st
 		return got
 	}
 	return defaultValue
+}
+
+func stringListOption(fs *flag.FlagSet, name, envName string) []string {
+	raw := ""
+	if flagNameSet(fs, name) {
+		if f := fs.Lookup(name); f != nil {
+			raw = f.Value.String()
+		}
+	} else {
+		raw = os.Getenv(envName)
+	}
+	if strings.TrimSpace(raw) == "" {
+		return nil
+	}
+	parts := strings.Split(raw, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
 }
 
 func modelOption(fs *flag.FlagSet, value string) string {

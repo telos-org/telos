@@ -43,7 +43,7 @@ type kubernetesSubstrate struct {
 	runtimeTelosdPath string
 }
 
-const piConfigSecretName = "pi-agent-config"
+var litellmBaseURLEnvNames = []string{"TELOS_LITELLM_BASE_URL", "TELOS_API_BASE_URL", "TELOS_BASE_URL"}
 
 func newKubernetesSubstrate(cfg Config) (kubernetesSubstrate, error) {
 	if strings.TrimSpace(os.Getenv(cfg.Kubernetes.AgentSecretKey)) == "" {
@@ -176,9 +176,6 @@ func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespa
 	if err := s.createOrUpdateAgentSecret(ctx, namespace); err != nil {
 		return err
 	}
-	if err := s.copyOptionalSecret(ctx, s.envNamespace, namespace, piConfigSecretName); err != nil {
-		return err
-	}
 	for _, name := range append([]string{}, s.copySecrets...) {
 		if err := s.copySecret(ctx, s.envNamespace, namespace, name); err != nil {
 			return err
@@ -197,6 +194,9 @@ func (s kubernetesSubstrate) agentSecret(namespace string) *corev1.Secret {
 	data := map[string][]byte{}
 	if value != "" {
 		data[s.agentSecretKey] = []byte(value)
+	}
+	if name, value := configuredLiteLLMBaseURL(); name != "" && value != "" {
+		data[name] = []byte(value)
 	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: s.agentSecretName, Namespace: namespace},
@@ -269,21 +269,11 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			}},
 		},
 		{Name: "telos-runtime", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		{
-			Name: "pi-agent-config-source",
-			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-				SecretName:  piConfigSecretName,
-				Optional:    boolPtr(true),
-				DefaultMode: int32Ptr(0o440),
-			}},
-		},
-		{Name: "pi-agent-config-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 	}
 	mounts := []corev1.VolumeMount{
 		{Name: "telos-state", MountPath: s.stateMountRoot},
 		{Name: "telos-state", MountPath: s.stateHostRoot},
 		{Name: "telos-runtime", MountPath: s.runtimeMountPath},
-		{Name: "pi-agent-config-home", MountPath: "/home/agent/.pi/agent"},
 	}
 	podSpec := corev1.PodSpec{
 		SecurityContext:               agentPodSecurityContext(),
@@ -297,8 +287,6 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			Command:         []string{"bash", "-lc", s.runtimeInstallScript()},
 			VolumeMounts: []corev1.VolumeMount{
 				{Name: "telos-runtime", MountPath: s.runtimeMountPath},
-				{Name: "pi-agent-config-source", MountPath: "/telos-pi-agent-config", ReadOnly: true},
-				{Name: "pi-agent-config-home", MountPath: "/home/agent/.pi/agent"},
 			},
 		}},
 		Containers: []corev1.Container{{
@@ -470,13 +458,37 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 		if envValue := strings.TrimSpace(os.Getenv(s.agentSecretKey)); envValue != "" {
 			secret.Data[s.agentSecretKey] = []byte(envValue)
 		}
+		if name, envValue := configuredLiteLLMBaseURL(); name != "" && envValue != "" {
+			secret.Data[name] = []byte(envValue)
+		}
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
 	if strings.TrimSpace(string(secret.Data[s.agentSecretKey])) == "" {
 		return fmt.Errorf("%s is required to launch a worker", s.agentSecretKey)
 	}
+	if !secretHasLiteLLMBaseURL(secret.Data) {
+		return fmt.Errorf("TELOS_LITELLM_BASE_URL is required to launch a worker (TELOS_API_BASE_URL and TELOS_BASE_URL are accepted aliases)")
+	}
 	return s.createOrUpdateSecret(ctx, secret)
+}
+
+func configuredLiteLLMBaseURL() (string, string) {
+	for _, name := range litellmBaseURLEnvNames {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return name, value
+		}
+	}
+	return "", ""
+}
+
+func secretHasLiteLLMBaseURL(data map[string][]byte) bool {
+	for _, name := range litellmBaseURLEnvNames {
+		if strings.TrimSpace(string(data[name])) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func (s kubernetesSubstrate) copyOptionalSecret(ctx context.Context, sourceNamespace string, targetNamespace string, name string) error {
@@ -784,13 +796,6 @@ download_verified "telos-$os-$arch" "$tmp_dir/telos"
 download_verified "telosd-$os-$arch" "$tmp_dir/telosd"
 install -m 0755 "$tmp_dir/telos" %s
 install -m 0755 "$tmp_dir/telosd" %s
-
-mkdir -p /home/agent/.pi/agent
-for source in /telos-pi-agent-config/*; do
-  [ -e "$source" ] || continue
-  cp -L "$source" /home/agent/.pi/agent/
-done
-chmod 0600 /home/agent/.pi/agent/* 2>/dev/null || true
 
 %s --version
 %s --version
