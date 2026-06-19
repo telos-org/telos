@@ -43,6 +43,7 @@ type Store interface {
 	Stop(id string) (*Session, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
+	Diagnostics(id string) (*SessionDiagnosticsResponse, error)
 	WorkspacePath(id string, specName string) (string, error)
 }
 
@@ -126,6 +127,7 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 
 	evidencePath := filepath.Join(specDir, "evidence.jsonl")
 	transcriptPath := filepath.Join(specDir, fmt.Sprintf("transcript-%s.md", id))
+	objectiveLedgerPath := filepath.Join(specDir, "objective-ledger.json")
 	workspacePath := filepath.Join(specDir, "workspace.tar.gz")
 	sessionSpecPath := ""
 	if len(prepared.SpecData) > 0 {
@@ -149,15 +151,16 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		Provenance:      map[string]any{"mode": runtimeMode(fs.runtime)},
 		Access:          access,
 		Specs: []InitialManifestSpec{{
-			Index:           0,
-			Name:            specName,
-			DirName:         specName,
-			SessionSpecPath: prepared.SessionSpecPath,
-			ContentHash:     prepared.ContentHash,
-			EvidencePath:    &evidencePath,
-			TranscriptPath:  &transcriptPath,
-			WorkspacePath:   &workspacePath,
-			IntervalSeconds: prepared.IntervalSeconds,
+			Index:               0,
+			Name:                specName,
+			DirName:             specName,
+			SessionSpecPath:     prepared.SessionSpecPath,
+			ContentHash:         prepared.ContentHash,
+			EvidencePath:        &evidencePath,
+			TranscriptPath:      &transcriptPath,
+			ObjectiveLedgerPath: &objectiveLedgerPath,
+			WorkspacePath:       &workspacePath,
+			IntervalSeconds:     prepared.IntervalSeconds,
 		}},
 	})
 	if sessionKind == KindController && sessionSpecPath != "" {
@@ -363,9 +366,28 @@ func updateManifestConfig(cfg *SessionConfig, req SessionSpecUpdateRequest) {
 	if req.MaxCostUSD != nil {
 		cfg.MaxCostUSD = req.MaxCostUSD
 	}
+	if req.MaxRounds != nil {
+		cfg.MaxRounds = *req.MaxRounds
+	}
+	if req.MaxDurationSec != nil {
+		cfg.MaxDurationSec = *req.MaxDurationSec
+	}
+	if req.MaxInputTokens != nil {
+		cfg.MaxInputTokens = *req.MaxInputTokens
+	}
+	if req.MaxOutputTokens != nil {
+		cfg.MaxOutputTokens = *req.MaxOutputTokens
+	}
+	if req.MaxToolLoops != nil {
+		cfg.MaxToolLoops = *req.MaxToolLoops
+	}
 	if req.AgentTimeoutSec != nil {
 		cfg.AgentTimeoutSec = *req.AgentTimeoutSec
 	}
+	if len(req.SafeWritePrefixes) > 0 {
+		cfg.SafeWritePrefixes = req.SafeWritePrefixes
+	}
+	*cfg = NormalizeSessionConfig(*cfg)
 }
 
 // List returns all sessions ordered by creation time descending.
@@ -528,6 +550,43 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 	return events, nil
 }
 
+// Diagnostics returns an operator-facing inspection document for the session.
+func (fs *FileStore) Diagnostics(id string) (*SessionDiagnosticsResponse, error) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	m, err := ReadManifest(fs.manifestPath(id))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+		}
+		return nil, err
+	}
+
+	session, err := fs.deriveSession(id, m)
+	if err != nil {
+		return nil, err
+	}
+
+	var events []SessionEvent
+	for _, spec := range m.Specs {
+		if spec.EvidencePath == nil || *spec.EvidencePath == "" {
+			continue
+		}
+		specEvents, err := readEvidenceFile(*spec.EvidencePath, &spec)
+		if err != nil {
+			continue
+		}
+		events = append(events, specEvents...)
+	}
+
+	diagnostics := buildSessionDiagnostics(session, events)
+	if err := appendSessionLogDiagnostics(diagnostics, fs.sessionDir(id)); err != nil {
+		diagnostics.ScanErrors = append(diagnostics.ScanErrors, err.Error())
+	}
+	return diagnostics, nil
+}
+
 // WorkspacePath returns the absolute path to the workspace archive for a spec.
 func (fs *FileStore) WorkspacePath(id string, specName string) (string, error) {
 	fs.mu.Lock()
@@ -614,6 +673,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 	if last := m.LastEpoch(); last != nil {
 		s.Result = last.Result
 		s.Error = last.Error
+		s.ErrorCode = last.ErrorCode
 	}
 	applySessionEvidenceSummary(&s)
 
@@ -622,15 +682,16 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 
 func deriveSpec(ms ManifestSpec) SessionSpec {
 	ss := SessionSpec{
-		Index:           ms.Index,
-		Name:            strPtr(ms.Name),
-		DirName:         strPtr(ms.DirName),
-		SessionSpecPath: ms.SessionSpecPath,
-		ContentHash:     ms.ContentHash,
-		EvidencePath:    ms.EvidencePath,
-		TranscriptPath:  ms.TranscriptPath,
-		WorkspacePath:   ms.WorkspacePath,
-		IntervalSeconds: ms.IntervalSeconds,
+		Index:               ms.Index,
+		Name:                strPtr(ms.Name),
+		DirName:             strPtr(ms.DirName),
+		SessionSpecPath:     ms.SessionSpecPath,
+		ContentHash:         ms.ContentHash,
+		EvidencePath:        ms.EvidencePath,
+		TranscriptPath:      ms.TranscriptPath,
+		ObjectiveLedgerPath: ms.ObjectiveLedgerPath,
+		WorkspacePath:       ms.WorkspacePath,
+		IntervalSeconds:     ms.IntervalSeconds,
 	}
 
 	if ms.EvidencePath != nil {
@@ -641,12 +702,17 @@ func deriveSpec(ms ManifestSpec) SessionSpec {
 		exists := fileExists(*ms.TranscriptPath)
 		ss.TranscriptExists = &exists
 	}
+	if ms.ObjectiveLedgerPath != nil {
+		exists := fileExists(*ms.ObjectiveLedgerPath)
+		ss.ObjectiveLedgerExists = &exists
+	}
 	if ms.WorkspacePath != nil {
 		exists := fileExists(*ms.WorkspacePath)
 		ss.WorkspaceExists = &exists
 	}
 	if summary, err := readEvidenceSummary(ms.EvidencePath); err == nil && summary != nil {
 		ss.TotalCostUSD = summary.TotalCostUSD
+		ss.CostUnavailable = summary.CostUnavailable
 		ss.TotalInputTokens = summary.TotalInputTokens
 		ss.TotalOutputTokens = summary.TotalOutputTokens
 		ss.TotalCacheReadTokens = summary.TotalCacheReadTokens
@@ -669,6 +735,8 @@ func applySessionEvidenceSummary(session *Session) {
 	var totalCacheCreateTokens int
 	var roundCount int
 	var hasCost bool
+	var costUnavailable bool
+	var hasCostUnavailable bool
 	var hasInput bool
 	var hasOutput bool
 	var hasCacheRead bool
@@ -684,6 +752,10 @@ func applySessionEvidenceSummary(session *Session) {
 		if spec.TotalCostUSD != nil {
 			totalCost += *spec.TotalCostUSD
 			hasCost = true
+		}
+		if spec.CostUnavailable != nil {
+			costUnavailable = costUnavailable || *spec.CostUnavailable
+			hasCostUnavailable = true
 		}
 		if spec.TotalInputTokens != nil {
 			totalInputTokens += *spec.TotalInputTokens
@@ -724,6 +796,9 @@ func applySessionEvidenceSummary(session *Session) {
 
 	if hasCost {
 		session.TotalCostUSD = &totalCost
+	}
+	if hasCostUnavailable {
+		session.CostUnavailable = &costUnavailable
 	}
 	if hasInput {
 		session.TotalInputTokens = &totalInputTokens
@@ -847,6 +922,8 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 			SpecIndex:   spec.Index,
 			SpecName:    strPtr(spec.Name),
 			SpecDirName: strPtr(spec.DirName),
+			Round:       numberAsInt(raw["round"]),
+			Role:        stringPtrFromAny(raw["role"]),
 			Data:        dataField,
 		}
 		events = append(events, ev)
@@ -856,6 +933,7 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 
 type evidenceSummary struct {
 	TotalCostUSD           *float64
+	CostUnavailable        *bool
 	TotalInputTokens       *int
 	TotalOutputTokens      *int
 	TotalCacheReadTokens   *int
@@ -913,6 +991,7 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 			activeRole = nil
 			summary = &evidenceSummary{
 				TotalCostUSD:           numberAsFloat(dataField["total_cost_usd"]),
+				CostUnavailable:        boolPtrFromAny(dataField["cost_unavailable"]),
 				TotalInputTokens:       numberAsInt(dataField["total_input_tokens"]),
 				TotalOutputTokens:      numberAsInt(dataField["total_output_tokens"]),
 				TotalCacheReadTokens:   numberAsInt(dataField["total_cache_read_tokens"]),
@@ -1113,10 +1192,28 @@ func buildConfig(req SessionCreateRequest) SessionConfig {
 	if req.MaxCostUSD != nil {
 		cfg.MaxCostUSD = req.MaxCostUSD
 	}
+	if req.MaxRounds != nil {
+		cfg.MaxRounds = *req.MaxRounds
+	}
+	if req.MaxDurationSec != nil {
+		cfg.MaxDurationSec = *req.MaxDurationSec
+	}
+	if req.MaxInputTokens != nil {
+		cfg.MaxInputTokens = *req.MaxInputTokens
+	}
+	if req.MaxOutputTokens != nil {
+		cfg.MaxOutputTokens = *req.MaxOutputTokens
+	}
+	if req.MaxToolLoops != nil {
+		cfg.MaxToolLoops = *req.MaxToolLoops
+	}
 	if req.AgentTimeoutSec != nil {
 		cfg.AgentTimeoutSec = *req.AgentTimeoutSec
 	}
-	return cfg
+	if len(req.SafeWritePrefixes) > 0 {
+		cfg.SafeWritePrefixes = req.SafeWritePrefixes
+	}
+	return NormalizeSessionConfig(cfg)
 }
 
 func fileExists(path string) bool {

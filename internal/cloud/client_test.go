@@ -224,12 +224,14 @@ func TestClientUpdateSessionSpec(t *testing.T) {
 
 	client := NewClient(srv.URL, "test-token")
 	maxCost := 9.0
+	maxToolLoops := 55
 	agentTimeout := 600
 	session, err := client.UpdateSessionSpec("sess_controller", sessionapi.SessionSpecUpdateRequest{
 		SpecMarkdown:    "---\nversion: v0\nname: demo\n---\n# Demo\n",
 		Model:           "sail-research/moonshotai/Kimi-K2.6",
 		Thinking:        "high",
 		MaxCostUSD:      &maxCost,
+		MaxToolLoops:    &maxToolLoops,
 		AgentTimeoutSec: &agentTimeout,
 	})
 	if err != nil {
@@ -249,6 +251,9 @@ func TestClientUpdateSessionSpec(t *testing.T) {
 	}
 	if gotBody.MaxCostUSD == nil || *gotBody.MaxCostUSD != maxCost {
 		t.Fatalf("max cost not sent: %#v", gotBody.MaxCostUSD)
+	}
+	if gotBody.MaxToolLoops == nil || *gotBody.MaxToolLoops != maxToolLoops {
+		t.Fatalf("max tool loops not sent: %#v", gotBody.MaxToolLoops)
 	}
 	if gotBody.AgentTimeoutSec == nil || *gotBody.AgentTimeoutSec != agentTimeout {
 		t.Fatalf("agent timeout not sent: %#v", gotBody.AgentTimeoutSec)
@@ -337,6 +342,44 @@ func TestClientGetTranscript(t *testing.T) {
 	}
 	if text != "# Session Transcript\n\nSome content" {
 		t.Errorf("transcript: got %q", text)
+	}
+}
+
+func TestClientGetDiagnostics(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/sessions/sess_123/diagnostics" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sessionapi.SessionDiagnosticsResponse{
+			SessionID: "sess_123",
+			Status:    sessionapi.StatusFailed,
+			Runtime:   sessionapi.RuntimeCloud,
+			Failures:  map[string]int{"provider": 1},
+			Retries: []sessionapi.SessionRetryDiagnostics{{
+				SpecName:  "demo",
+				TurnID:    "0001-prover",
+				ErrorCode: "provider_rate_limited",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	diagnostics, err := client.GetDiagnostics("sess_123")
+	if err != nil {
+		t.Fatalf("GetDiagnostics: %v", err)
+	}
+	if diagnostics.SessionID != "sess_123" || diagnostics.Failures["provider"] != 1 {
+		t.Fatalf("diagnostics: %#v", diagnostics)
+	}
+	if len(diagnostics.Retries) != 1 || diagnostics.Retries[0].TurnID != "0001-prover" {
+		t.Fatalf("retries: %#v", diagnostics.Retries)
 	}
 }
 

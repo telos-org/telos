@@ -354,6 +354,23 @@ func (c *Client) GetEvents(id string) ([]sessionapi.SessionEvent, error) {
 	return evResp.Events, nil
 }
 
+// GetDiagnostics gets the production inspection payload for a session.
+func (c *Client) GetDiagnostics(id string) (*sessionapi.SessionDiagnosticsResponse, error) {
+	resp, err := c.do("GET", "/api/sessions/"+id+"/diagnostics", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var diagnostics sessionapi.SessionDiagnosticsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&diagnostics); err != nil {
+		return nil, err
+	}
+	return &diagnostics, nil
+}
+
 // StreamEvents follows the cloud event stream for a session.
 func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[string]any) error) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+"/api/sessions/"+id+"/events", nil)

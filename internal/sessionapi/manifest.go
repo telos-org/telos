@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // Manifest is the persisted session.json shape shared by the store and worker.
@@ -44,16 +45,17 @@ type WorkspaceArtifactBinding struct {
 }
 
 type ManifestSpec struct {
-	Index           *int    `json:"index,omitempty"`
-	Name            string  `json:"name"`
-	DirName         string  `json:"dir_name"`
-	EnvironmentPath *string `json:"environment_path,omitempty"`
-	SessionSpecPath *string `json:"session_spec_path,omitempty"`
-	ContentHash     *string `json:"content_hash,omitempty"`
-	EvidencePath    *string `json:"evidence_path,omitempty"`
-	TranscriptPath  *string `json:"transcript_path,omitempty"`
-	WorkspacePath   *string `json:"workspace_path,omitempty"`
-	IntervalSeconds *int    `json:"interval_seconds"`
+	Index               *int    `json:"index,omitempty"`
+	Name                string  `json:"name"`
+	DirName             string  `json:"dir_name"`
+	EnvironmentPath     *string `json:"environment_path,omitempty"`
+	SessionSpecPath     *string `json:"session_spec_path,omitempty"`
+	ContentHash         *string `json:"content_hash,omitempty"`
+	EvidencePath        *string `json:"evidence_path,omitempty"`
+	TranscriptPath      *string `json:"transcript_path,omitempty"`
+	ObjectiveLedgerPath *string `json:"objective_ledger_path,omitempty"`
+	WorkspacePath       *string `json:"workspace_path,omitempty"`
+	IntervalSeconds     *int    `json:"interval_seconds"`
 }
 
 type Epoch struct {
@@ -62,6 +64,7 @@ type Epoch struct {
 	FinishedAt *string `json:"finished_at"`
 	Result     *string `json:"result"`
 	Error      *string `json:"error"`
+	ErrorCode  *string `json:"error_code,omitempty"`
 	Runner     *Runner `json:"runner"`
 }
 
@@ -86,12 +89,48 @@ type ScopedToken struct {
 }
 
 type SessionConfig struct {
-	Model           string         `json:"model,omitempty"`
-	Until           int            `json:"until,omitempty"`
-	MaxCostUSD      *float64       `json:"max_cost_usd,omitempty"`
-	AgentTimeoutSec int            `json:"agent_timeout_sec,omitempty"`
-	Thinking        string         `json:"thinking,omitempty"`
-	Extra           map[string]any `json:"-"`
+	Model             string         `json:"model,omitempty"`
+	Until             int            `json:"until,omitempty"`
+	MaxCostUSD        *float64       `json:"max_cost_usd,omitempty"`
+	MaxRounds         int            `json:"max_rounds,omitempty"`
+	MaxDurationSec    int            `json:"max_duration_sec,omitempty"`
+	MaxInputTokens    int            `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens   int            `json:"max_output_tokens,omitempty"`
+	MaxToolLoops      int            `json:"max_tool_loops,omitempty"`
+	AgentTimeoutSec   int            `json:"agent_timeout_sec,omitempty"`
+	SafeWritePrefixes []string       `json:"safe_write_prefixes,omitempty"`
+	Thinking          string         `json:"thinking,omitempty"`
+	Extra             map[string]any `json:"-"`
+}
+
+const (
+	DefaultMaxRounds      = 100
+	DefaultMaxDurationSec = 6 * 60 * 60
+)
+
+func NormalizeSessionConfig(c SessionConfig) SessionConfig {
+	if c.MaxRounds <= 0 {
+		c.MaxRounds = DefaultMaxRounds
+	}
+	if c.MaxDurationSec <= 0 {
+		c.MaxDurationSec = DefaultMaxDurationSec
+	}
+	c.SafeWritePrefixes = normalizeConfigStringList(c.SafeWritePrefixes)
+	return c
+}
+
+func normalizeConfigStringList(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value != "" {
+			out = append(out, value)
+		}
+	}
+	return out
 }
 
 // InitialManifest is the typed input for creating a session.json before any
@@ -114,15 +153,16 @@ type InitialManifest struct {
 }
 
 type InitialManifestSpec struct {
-	Index           int
-	Name            string
-	DirName         string
-	SessionSpecPath *string
-	ContentHash     *string
-	EvidencePath    *string
-	TranscriptPath  *string
-	WorkspacePath   *string
-	IntervalSeconds *int
+	Index               int
+	Name                string
+	DirName             string
+	SessionSpecPath     *string
+	ContentHash         *string
+	EvidencePath        *string
+	TranscriptPath      *string
+	ObjectiveLedgerPath *string
+	WorkspacePath       *string
+	IntervalSeconds     *int
 }
 
 func WriteInitialManifest(path string, input InitialManifest) error {
@@ -147,15 +187,16 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 	for _, spec := range input.Specs {
 		index := spec.Index
 		specs = append(specs, ManifestSpec{
-			Index:           &index,
-			Name:            spec.Name,
-			DirName:         spec.DirName,
-			SessionSpecPath: spec.SessionSpecPath,
-			ContentHash:     spec.ContentHash,
-			EvidencePath:    spec.EvidencePath,
-			TranscriptPath:  spec.TranscriptPath,
-			WorkspacePath:   spec.WorkspacePath,
-			IntervalSeconds: spec.IntervalSeconds,
+			Index:               &index,
+			Name:                spec.Name,
+			DirName:             spec.DirName,
+			SessionSpecPath:     spec.SessionSpecPath,
+			ContentHash:         spec.ContentHash,
+			EvidencePath:        spec.EvidencePath,
+			TranscriptPath:      spec.TranscriptPath,
+			ObjectiveLedgerPath: spec.ObjectiveLedgerPath,
+			WorkspacePath:       spec.WorkspacePath,
+			IntervalSeconds:     spec.IntervalSeconds,
 		})
 	}
 	return Manifest{
@@ -168,7 +209,7 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		SourceSpecPath:  input.SourceSpecPath,
 		SessionSpecPath: input.SessionSpecPath,
 		SpecName:        input.SpecName,
-		Config:          input.Config,
+		Config:          NormalizeSessionConfig(input.Config),
 		Workspace:       input.Workspace,
 		Provenance:      input.Provenance,
 		Access:          input.Access,
@@ -253,8 +294,26 @@ func (c SessionConfig) MarshalJSON() ([]byte, error) {
 	if c.MaxCostUSD != nil {
 		m["max_cost_usd"] = *c.MaxCostUSD
 	}
+	if c.MaxRounds > 0 {
+		m["max_rounds"] = c.MaxRounds
+	}
+	if c.MaxDurationSec > 0 {
+		m["max_duration_sec"] = c.MaxDurationSec
+	}
+	if c.MaxInputTokens > 0 {
+		m["max_input_tokens"] = c.MaxInputTokens
+	}
+	if c.MaxOutputTokens > 0 {
+		m["max_output_tokens"] = c.MaxOutputTokens
+	}
+	if c.MaxToolLoops > 0 {
+		m["max_tool_loops"] = c.MaxToolLoops
+	}
 	if c.AgentTimeoutSec > 0 {
 		m["agent_timeout_sec"] = c.AgentTimeoutSec
+	}
+	if len(c.SafeWritePrefixes) > 0 {
+		m["safe_write_prefixes"] = c.SafeWritePrefixes
 	}
 	if c.Thinking != "" {
 		m["thinking"] = c.Thinking
@@ -286,11 +345,47 @@ func (c *SessionConfig) UnmarshalJSON(data []byte) error {
 		}
 		delete(raw, "max_cost_usd")
 	}
+	if value, ok := raw["max_rounds"]; ok {
+		if err := json.Unmarshal(value, &c.MaxRounds); err != nil {
+			return fmt.Errorf("config.max_rounds: %w", err)
+		}
+		delete(raw, "max_rounds")
+	}
+	if value, ok := raw["max_duration_sec"]; ok {
+		if err := json.Unmarshal(value, &c.MaxDurationSec); err != nil {
+			return fmt.Errorf("config.max_duration_sec: %w", err)
+		}
+		delete(raw, "max_duration_sec")
+	}
+	if value, ok := raw["max_input_tokens"]; ok {
+		if err := json.Unmarshal(value, &c.MaxInputTokens); err != nil {
+			return fmt.Errorf("config.max_input_tokens: %w", err)
+		}
+		delete(raw, "max_input_tokens")
+	}
+	if value, ok := raw["max_output_tokens"]; ok {
+		if err := json.Unmarshal(value, &c.MaxOutputTokens); err != nil {
+			return fmt.Errorf("config.max_output_tokens: %w", err)
+		}
+		delete(raw, "max_output_tokens")
+	}
+	if value, ok := raw["max_tool_loops"]; ok {
+		if err := json.Unmarshal(value, &c.MaxToolLoops); err != nil {
+			return fmt.Errorf("config.max_tool_loops: %w", err)
+		}
+		delete(raw, "max_tool_loops")
+	}
 	if value, ok := raw["agent_timeout_sec"]; ok {
 		if err := json.Unmarshal(value, &c.AgentTimeoutSec); err != nil {
 			return fmt.Errorf("config.agent_timeout_sec: %w", err)
 		}
 		delete(raw, "agent_timeout_sec")
+	}
+	if value, ok := raw["safe_write_prefixes"]; ok {
+		if err := json.Unmarshal(value, &c.SafeWritePrefixes); err != nil {
+			return fmt.Errorf("config.safe_write_prefixes: %w", err)
+		}
+		delete(raw, "safe_write_prefixes")
 	}
 	if value, ok := raw["thinking"]; ok {
 		if err := json.Unmarshal(value, &c.Thinking); err != nil {

@@ -175,6 +175,15 @@ func TestCreateSessionPersistsUntil(t *testing.T) {
 	if manifest.Config.Until != 3 {
 		t.Fatalf("manifest until: got %d", manifest.Config.Until)
 	}
+	if manifest.Config.MaxRounds != sessionapi.DefaultMaxRounds || manifest.Config.MaxDurationSec != sessionapi.DefaultMaxDurationSec {
+		t.Fatalf("manifest defaults: max_rounds=%d max_duration_sec=%d", manifest.Config.MaxRounds, manifest.Config.MaxDurationSec)
+	}
+	if got := intValueFromConfig(t, session.Config, "max_rounds"); got != sessionapi.DefaultMaxRounds {
+		t.Fatalf("session max_rounds default: got %d", got)
+	}
+	if got := intValueFromConfig(t, session.Config, "max_duration_sec"); got != sessionapi.DefaultMaxDurationSec {
+		t.Fatalf("session max_duration_sec default: got %d", got)
+	}
 }
 
 func TestCreateSessionRejectsInvalidUntil(t *testing.T) {
@@ -420,12 +429,14 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
 	maxCost := 12.5
 	agentTimeout := 3600
+	safeWritePrefixes := []string{"/tmp/telos-scratch", "/workspace/outside"}
 	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
-		SpecMarkdown:    updated,
-		Model:           "sail-research/moonshotai/Kimi-K2.6",
-		Thinking:        "high",
-		MaxCostUSD:      &maxCost,
-		AgentTimeoutSec: &agentTimeout,
+		SpecMarkdown:      updated,
+		Model:             "sail-research/moonshotai/Kimi-K2.6",
+		Thinking:          "high",
+		MaxCostUSD:        &maxCost,
+		AgentTimeoutSec:   &agentTimeout,
+		SafeWritePrefixes: safeWritePrefixes,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -464,6 +475,7 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 	assertConfigStr(t, session.Config, "thinking", "high")
 	assertConfigFloat(t, session.Config, "max_cost_usd", maxCost)
 	assertConfigFloat(t, session.Config, "agent_timeout_sec", float64(agentTimeout))
+	assertConfigStringSlice(t, session.Config, "safe_write_prefixes", safeWritePrefixes)
 	if session.SpecVersions[0]["previous_version"].(float64) != 1 {
 		t.Fatalf("previous_version: got %#v", session.SpecVersions[0])
 	}
@@ -865,6 +877,131 @@ func TestEventsJSONShape(t *testing.T) {
 	assertJSONType(t, m, "events", "slice")
 }
 
+// --------- GET /api/sessions/{id}/diagnostics ------------------------------------------------------------------------------------------------------------------------------
+
+func TestDiagnosticsAggregatesBudgetsRetriesStopsAndArtifacts(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	markdown := "---\nversion: v0\nname: diag\nplatform: local\n---\n# Diagnostics\n"
+	maxRounds := 4
+	maxDuration := 3600
+	maxInputTokens := 1200
+	maxOutputTokens := 400
+	maxToolLoops := 55
+	agentTimeout := 120
+	safeWritePrefixes := []string{"/tmp/telos-scratch", "/workspace/outside"}
+	created, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:      &markdown,
+		MaxRounds:         &maxRounds,
+		MaxDurationSec:    &maxDuration,
+		MaxInputTokens:    &maxInputTokens,
+		MaxOutputTokens:   &maxOutputTokens,
+		MaxToolLoops:      &maxToolLoops,
+		AgentTimeoutSec:   &agentTimeout,
+		SafeWritePrefixes: safeWritePrefixes,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	evidence := strings.Join([]string{
+		`{"event":"budget_exceeded","round":1,"role":"prover","data":{"budget":"max_input_tokens"}}`,
+		`{"event":"agent_failure_recoverable","round":1,"role":"prover","data":{"error":"provider_rate_limited: HTTP 429"}}`,
+		`{"event":"agent_failure_recoverable","round":1,"role":"verifier","data":{"error_code":"agent_protocol","error":"missing status"}}`,
+		`{"event":"game_error","round":1,"role":"system","data":{"error":"benchmark verifier rejected final artifact"}}`,
+		`{"event":"game_end","round":2,"data":{"game_result":"failure","completion_reason":"runtime_budget_exhausted","total_cost_usd":0.42,"cost_unavailable":true,"total_input_tokens":1300,"total_output_tokens":210,"prover_rounds":1,"verifier_rounds":1}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	ledger := []byte(`{"session_id":"` + created.SessionID + `","turns":[]}` + "\n")
+	if err := os.WriteFile(*created.Specs[0].ObjectiveLedgerPath, ledger, 0o644); err != nil {
+		t.Fatalf("write ledger: %v", err)
+	}
+
+	turnDir := filepath.Join(store.Root, created.SessionID, "specs", "diag", "turns", "0001-prover")
+	if err := os.MkdirAll(turnDir, 0o755); err != nil {
+		t.Fatalf("create turn dir: %v", err)
+	}
+	sessionLog := strings.Join([]string{
+		`{"type":"model_request","data":{"sequence":1}}`,
+		`{"type":"retry","data":{"sequence":1,"attempt":2,"delay_ms":250,"error_code":"provider_rate_limited","error":"rate limited","provider_status_code":429}}`,
+		`{"type":"model_response","data":{"sequence":1,"response_id":"resp_1","stop_reason":"tool_calls"}}`,
+		`{"type":"tool_result","data":{"tool_call_id":"call_1","tool_name":"read_file","duration_ms":5,"output_bytes":12}}`,
+		`{"type":"tool_result","data":{"tool_call_id":"call_2","tool_name":"bash","is_error":true,"error_code":"tool_timeout","duration_ms":1000,"output_bytes":64}}`,
+		`{"type":"reasoning_sanitized","data":{"words_removed":4}}`,
+		`{"type":"outside_workspace_access","data":{"action":"write_file","path":"/tmp/telos-scratch/out.txt","write":true}}`,
+		`{"type":"error","data":{"sequence":2,"error_code":"agent_incomplete","error":"agent_incomplete: no final response","retryable":false}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(turnDir, "session.jsonl"), []byte(sessionLog), 0o644); err != nil {
+		t.Fatalf("write session log: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/diagnostics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+
+	var diagnostics sessionapi.SessionDiagnosticsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&diagnostics); err != nil {
+		t.Fatalf("decode diagnostics: %v", err)
+	}
+	assertEqual(t, "session_id", created.SessionID, diagnostics.SessionID)
+	if diagnostics.Limits.MaxRounds != 4 ||
+		diagnostics.Limits.MaxDurationSec != 3600 ||
+		diagnostics.Limits.MaxInputTokens != 1200 ||
+		diagnostics.Limits.MaxOutputTokens != 400 ||
+		diagnostics.Limits.MaxToolLoops != 55 ||
+		diagnostics.Limits.AgentTimeoutSec != 120 ||
+		len(diagnostics.Limits.SafeWritePrefixes) != 2 ||
+		diagnostics.Limits.SafeWritePrefixes[0] != "/tmp/telos-scratch" ||
+		diagnostics.Limits.SafeWritePrefixes[1] != "/workspace/outside" {
+		t.Fatalf("limits not surfaced: %#v", diagnostics.Limits)
+	}
+	if diagnostics.BudgetExceeded["max_input_tokens"] != 1 {
+		t.Fatalf("budget exceeded counts: %#v", diagnostics.BudgetExceeded)
+	}
+	if !diagnostics.Totals.CostUnavailable || len(diagnostics.Specs) != 1 || !diagnostics.Specs[0].Totals.CostUnavailable {
+		t.Fatalf("cost availability not surfaced: totals=%#v specs=%#v", diagnostics.Totals, diagnostics.Specs)
+	}
+	if diagnostics.Failures["provider"] != 1 ||
+		diagnostics.Failures["protocol"] != 1 ||
+		diagnostics.Failures["task_budget"] != 1 ||
+		diagnostics.Failures["benchmark_verifier_failure"] != 1 ||
+		diagnostics.Failures["tool"] != 1 ||
+		diagnostics.Failures["agent_incomplete"] != 1 {
+		t.Fatalf("failure taxonomy: %#v", diagnostics.Failures)
+	}
+	if diagnostics.Specs[0].Failures["tool"] != 1 || diagnostics.Specs[0].Failures["agent_incomplete"] != 1 {
+		t.Fatalf("spec failure taxonomy should include session-log failures: %#v", diagnostics.Specs[0].Failures)
+	}
+	if diagnostics.StopReasons["tool_calls"] != 1 {
+		t.Fatalf("stop reasons: %#v", diagnostics.StopReasons)
+	}
+	if diagnostics.SessionLogEvents["tool_result"] != 2 || diagnostics.SessionLogEvents["reasoning_sanitized"] != 1 {
+		t.Fatalf("session log event counts: %#v", diagnostics.SessionLogEvents)
+	}
+	if len(diagnostics.OutsideWorkspace) != 1 || diagnostics.OutsideWorkspace[0].Path != "/tmp/telos-scratch/out.txt" || !diagnostics.OutsideWorkspace[0].Write {
+		t.Fatalf("outside workspace diagnostics: %#v", diagnostics.OutsideWorkspace)
+	}
+	if len(diagnostics.Retries) != 1 || diagnostics.Retries[0].ErrorCode != "provider_rate_limited" || diagnostics.Retries[0].ProviderStatusCode != 429 {
+		t.Fatalf("retry diagnostics: %#v", diagnostics.Retries)
+	}
+	if len(diagnostics.Errors) != 2 || !diagnosticsHasErrorCode(diagnostics.Errors, "tool_timeout") || !diagnosticsHasErrorCode(diagnostics.Errors, "agent_incomplete") {
+		t.Fatalf("error diagnostics: %#v", diagnostics.Errors)
+	}
+	if len(diagnostics.Artifacts) != 1 || !diagnostics.Artifacts[0].EvidenceExists || !diagnostics.Artifacts[0].ObjectiveLedgerExists {
+		t.Fatalf("artifact diagnostics: %#v", diagnostics.Artifacts)
+	}
+	if diagnostics.Totals.InputTokens != 1300 || diagnostics.Totals.OutputTokens != 210 || diagnostics.Totals.Rounds != 2 {
+		t.Fatalf("totals: %#v", diagnostics.Totals)
+	}
+}
+
 func TestEventsSSE(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
@@ -911,7 +1048,7 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 		t.Fatalf("missing evidence path: %#v", created.Specs)
 	}
 	evidence := `{"event":"agent_complete","round":1,"data":{"cost_usd":0.10}}` + "\n" +
-		`{"event":"game_end","round":2,"data":{"total_cost_usd":1.23,"total_input_tokens":100,"total_output_tokens":30,"total_cache_read_tokens":7,"total_cache_creation_tokens":5,"prover_rounds":1,"verifier_rounds":1,"completion_reason":"review_cycles_complete","verifier_conceded":false}}` + "\n"
+		`{"event":"game_end","round":2,"data":{"total_cost_usd":1.23,"cost_unavailable":true,"total_input_tokens":100,"total_output_tokens":30,"total_cache_read_tokens":7,"total_cache_creation_tokens":5,"prover_rounds":1,"verifier_rounds":1,"completion_reason":"review_cycles_complete","verifier_conceded":false}}` + "\n"
 	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
 		t.Fatalf("write evidence: %v", err)
 	}
@@ -922,6 +1059,12 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 	}
 	if session.TotalCostUSD == nil || *session.TotalCostUSD != 1.23 {
 		t.Fatalf("cost: got %v", session.TotalCostUSD)
+	}
+	if session.CostUnavailable == nil || !*session.CostUnavailable {
+		t.Fatalf("cost unavailable: got %v", session.CostUnavailable)
+	}
+	if len(session.Specs) != 1 || session.Specs[0].CostUnavailable == nil || !*session.Specs[0].CostUnavailable {
+		t.Fatalf("spec cost unavailable: %#v", session.Specs)
 	}
 	if session.TotalInputTokens == nil || *session.TotalInputTokens != 100 {
 		t.Fatalf("input tokens: got %v", session.TotalInputTokens)
@@ -943,6 +1086,48 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 	}
 	if session.VerifierConceded == nil || *session.VerifierConceded {
 		t.Fatalf("verifier conceded: got %v", session.VerifierConceded)
+	}
+}
+
+func TestGetSessionHydratesEpochErrorCode(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: epoch-error\nplatform: local\n---\n# Error\n"
+
+	created, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	manifestPath := filepath.Join(root, created.SessionID, "session.json")
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	finishedAt := "2026-06-19T10:05:00.000Z"
+	result := "failed"
+	errText := "runtime_budget_exhausted:max_rounds"
+	errCode := "runtime_budget_exhausted"
+	manifest.Epochs = []sessionapi.Epoch{{
+		ID:         1,
+		StartedAt:  "2026-06-19T10:00:00.000Z",
+		FinishedAt: &finishedAt,
+		Result:     &result,
+		Error:      &errText,
+		ErrorCode:  &errCode,
+	}}
+	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	session, err := store.Get(created.SessionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if session.ErrorCode == nil || *session.ErrorCode != errCode {
+		t.Fatalf("session error code: got %#v", session.ErrorCode)
+	}
+	if len(session.Epochs) != 1 || session.Epochs[0]["error_code"] != errCode {
+		t.Fatalf("epoch error code missing: %#v", session.Epochs)
 	}
 }
 
@@ -1591,6 +1776,42 @@ func assertConfigFloat(t *testing.T, config map[string]any, key string, expected
 	}
 }
 
+func assertConfigStringSlice(t *testing.T, config map[string]any, key string, expected []string) {
+	t.Helper()
+	v, ok := config[key]
+	if !ok {
+		t.Errorf("config missing key %q", key)
+		return
+	}
+	items, ok := v.([]any)
+	if !ok || len(items) != len(expected) {
+		t.Errorf("config[%q]: expected %v, got %v", key, expected, v)
+		return
+	}
+	for i, want := range expected {
+		if got, ok := items[i].(string); !ok || got != want {
+			t.Errorf("config[%q][%d]: expected %q, got %v", key, i, want, items[i])
+		}
+	}
+}
+
+func intValueFromConfig(t *testing.T, config map[string]any, key string) int {
+	t.Helper()
+	v, ok := config[key]
+	if !ok {
+		t.Fatalf("config missing key %q", key)
+	}
+	switch value := v.(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		t.Fatalf("config[%q]: expected number, got %T %v", key, v, v)
+		return 0
+	}
+}
+
 func assertJSONType(t *testing.T, m map[string]any, key string, kind string) {
 	t.Helper()
 	v, ok := m[key]
@@ -1608,6 +1829,15 @@ func assertJSONType(t *testing.T, m map[string]any, key string, kind string) {
 			t.Errorf("%q: expected array, got %T", key, v)
 		}
 	}
+}
+
+func diagnosticsHasErrorCode(errors []sessionapi.SessionErrorDiagnostics, code string) bool {
+	for _, err := range errors {
+		if err.ErrorCode == code {
+			return true
+		}
+	}
+	return false
 }
 
 func itoa(n int) string {

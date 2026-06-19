@@ -4,6 +4,7 @@ go_library(
     name = "sessionapi",
     srcs = [
         "auth.go",
+        "diagnostics.go",
         "manifest.go",
         "server.go",
         "store.go",
@@ -22,4 +23,5 @@ go_test(
         "types_test.go",
     ],
     embed = [":sessionapi"],
+    deps = ["//internal/game"],
 )

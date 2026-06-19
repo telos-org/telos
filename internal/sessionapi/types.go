@@ -82,23 +82,35 @@ func (k *SessionKind) UnmarshalJSON(data []byte) error {
 
 // SessionCreateRequest is the body of POST /api/sessions.
 type SessionCreateRequest struct {
-	SpecMarkdown    *string      `json:"spec_markdown,omitempty"`
-	SessionKind     *SessionKind `json:"session_kind,omitempty"`
-	ParentSessionID *string      `json:"parent_session_id,omitempty"`
-	Until           *int         `json:"until,omitempty"`
-	Model           string       `json:"model,omitempty"`
-	Thinking        string       `json:"thinking,omitempty"`
-	MaxCostUSD      *float64     `json:"max_cost_usd,omitempty"`
-	AgentTimeoutSec *int         `json:"agent_timeout_sec,omitempty"`
+	SpecMarkdown      *string      `json:"spec_markdown,omitempty"`
+	SessionKind       *SessionKind `json:"session_kind,omitempty"`
+	ParentSessionID   *string      `json:"parent_session_id,omitempty"`
+	Until             *int         `json:"until,omitempty"`
+	Model             string       `json:"model,omitempty"`
+	Thinking          string       `json:"thinking,omitempty"`
+	MaxCostUSD        *float64     `json:"max_cost_usd,omitempty"`
+	MaxRounds         *int         `json:"max_rounds,omitempty"`
+	MaxDurationSec    *int         `json:"max_duration_sec,omitempty"`
+	MaxInputTokens    *int         `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens   *int         `json:"max_output_tokens,omitempty"`
+	MaxToolLoops      *int         `json:"max_tool_loops,omitempty"`
+	AgentTimeoutSec   *int         `json:"agent_timeout_sec,omitempty"`
+	SafeWritePrefixes []string     `json:"safe_write_prefixes,omitempty"`
 }
 
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{id}/spec.
 type SessionSpecUpdateRequest struct {
-	SpecMarkdown    string   `json:"spec_markdown"`
-	Model           string   `json:"model,omitempty"`
-	Thinking        string   `json:"thinking,omitempty"`
-	MaxCostUSD      *float64 `json:"max_cost_usd,omitempty"`
-	AgentTimeoutSec *int     `json:"agent_timeout_sec,omitempty"`
+	SpecMarkdown      string   `json:"spec_markdown"`
+	Model             string   `json:"model,omitempty"`
+	Thinking          string   `json:"thinking,omitempty"`
+	MaxCostUSD        *float64 `json:"max_cost_usd,omitempty"`
+	MaxRounds         *int     `json:"max_rounds,omitempty"`
+	MaxDurationSec    *int     `json:"max_duration_sec,omitempty"`
+	MaxInputTokens    *int     `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens   *int     `json:"max_output_tokens,omitempty"`
+	MaxToolLoops      *int     `json:"max_tool_loops,omitempty"`
+	AgentTimeoutSec   *int     `json:"agent_timeout_sec,omitempty"`
+	SafeWritePrefixes []string `json:"safe_write_prefixes,omitempty"`
 }
 
 // SessionSpecResponse is returned by GET /api/sessions/{id}/spec.
@@ -122,10 +134,13 @@ type SessionSpec struct {
 	EvidenceExists         *bool    `json:"evidence_exists,omitempty"`
 	TranscriptPath         *string  `json:"transcript_path,omitempty"`
 	TranscriptExists       *bool    `json:"transcript_exists,omitempty"`
+	ObjectiveLedgerPath    *string  `json:"objective_ledger_path,omitempty"`
+	ObjectiveLedgerExists  *bool    `json:"objective_ledger_exists,omitempty"`
 	WorkspacePath          *string  `json:"workspace_path,omitempty"`
 	WorkspaceExists        *bool    `json:"workspace_exists,omitempty"`
 	IntervalSeconds        *int     `json:"interval_seconds,omitempty"`
 	TotalCostUSD           *float64 `json:"total_cost_usd,omitempty"`
+	CostUnavailable        *bool    `json:"cost_unavailable,omitempty"`
 	TotalInputTokens       *int     `json:"total_input_tokens,omitempty"`
 	TotalOutputTokens      *int     `json:"total_output_tokens,omitempty"`
 	TotalCacheReadTokens   *int     `json:"total_cache_read_tokens,omitempty"`
@@ -185,7 +200,9 @@ type Session struct {
 	FinishedAt              *string          `json:"finished_at,omitempty"`
 	Result                  *string          `json:"result,omitempty"`
 	Error                   *string          `json:"error,omitempty"`
+	ErrorCode               *string          `json:"error_code,omitempty"`
 	TotalCostUSD            *float64         `json:"total_cost_usd,omitempty"`
+	CostUnavailable         *bool            `json:"cost_unavailable,omitempty"`
 	TotalInputTokens        *int             `json:"total_input_tokens,omitempty"`
 	TotalOutputTokens       *int             `json:"total_output_tokens,omitempty"`
 	TotalCacheReadTokens    *int             `json:"total_cache_read_tokens,omitempty"`
@@ -213,10 +230,113 @@ type SessionEvent struct {
 	SpecIndex   *int           `json:"spec_index,omitempty"`
 	SpecName    *string        `json:"spec_name,omitempty"`
 	SpecDirName *string        `json:"spec_dir_name,omitempty"`
+	Round       *int           `json:"round,omitempty"`
+	Role        *string        `json:"role,omitempty"`
 	Data        map[string]any `json:"data,omitempty"`
 }
 
 // SessionEventsResponse wraps GET /api/sessions/{id}/events.
 type SessionEventsResponse struct {
 	Events []SessionEvent `json:"events"`
+}
+
+// SessionDiagnosticsResponse is the production inspection payload for one
+// session. It consolidates manifest state, evidence events, and native
+// per-turn session logs into a single operator-facing document.
+type SessionDiagnosticsResponse struct {
+	SessionID        string                                     `json:"session_id"`
+	Status           SessionStatus                              `json:"status"`
+	Runtime          SessionRuntime                             `json:"runtime"`
+	SessionKind      *SessionKind                               `json:"session_kind,omitempty"`
+	ParentSessionID  *string                                    `json:"parent_session_id,omitempty"`
+	Result           *string                                    `json:"result,omitempty"`
+	CompletionReason *string                                    `json:"completion_reason,omitempty"`
+	Error            *string                                    `json:"error,omitempty"`
+	Config           map[string]any                             `json:"config,omitempty"`
+	Limits           SessionBudgetDiagnostics                   `json:"limits"`
+	Totals           SessionDiagnosticsTotals                   `json:"totals"`
+	Failures         map[string]int                             `json:"failures"`
+	BudgetExceeded   map[string]int                             `json:"budget_exceeded"`
+	StopReasons      map[string]int                             `json:"stop_reasons"`
+	SessionLogEvents map[string]int                             `json:"session_log_events,omitempty"`
+	Retries          []SessionRetryDiagnostics                  `json:"retries"`
+	Errors           []SessionErrorDiagnostics                  `json:"errors"`
+	OutsideWorkspace []SessionOutsideWorkspaceAccessDiagnostics `json:"outside_workspace_access,omitempty"`
+	Artifacts        []SessionArtifactDiagnostics               `json:"artifacts"`
+	Specs            []SessionSpecDiagnostics                   `json:"specs"`
+	ScanErrors       []string                                   `json:"scan_errors,omitempty"`
+}
+
+type SessionBudgetDiagnostics struct {
+	MaxCostUSD        *float64 `json:"max_cost_usd,omitempty"`
+	MaxRounds         int      `json:"max_rounds,omitempty"`
+	MaxDurationSec    int      `json:"max_duration_sec,omitempty"`
+	MaxInputTokens    int      `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens   int      `json:"max_output_tokens,omitempty"`
+	MaxToolLoops      int      `json:"max_tool_loops,omitempty"`
+	AgentTimeoutSec   int      `json:"agent_timeout_sec,omitempty"`
+	SafeWritePrefixes []string `json:"safe_write_prefixes,omitempty"`
+}
+
+type SessionDiagnosticsTotals struct {
+	CostUSD          float64 `json:"cost_usd,omitempty"`
+	CostUnavailable  bool    `json:"cost_unavailable,omitempty"`
+	InputTokens      int     `json:"input_tokens,omitempty"`
+	OutputTokens     int     `json:"output_tokens,omitempty"`
+	CacheReadTokens  int     `json:"cache_read_tokens,omitempty"`
+	CacheWriteTokens int     `json:"cache_write_tokens,omitempty"`
+	Rounds           int     `json:"rounds,omitempty"`
+}
+
+type SessionArtifactDiagnostics struct {
+	SpecName              string `json:"spec_name,omitempty"`
+	SpecDirName           string `json:"spec_dir_name,omitempty"`
+	EvidencePath          string `json:"evidence_path,omitempty"`
+	EvidenceExists        bool   `json:"evidence_exists"`
+	TranscriptPath        string `json:"transcript_path,omitempty"`
+	TranscriptExists      bool   `json:"transcript_exists"`
+	ObjectiveLedgerPath   string `json:"objective_ledger_path,omitempty"`
+	ObjectiveLedgerExists bool   `json:"objective_ledger_exists"`
+	WorkspacePath         string `json:"workspace_path,omitempty"`
+	WorkspaceExists       bool   `json:"workspace_exists"`
+}
+
+type SessionSpecDiagnostics struct {
+	Name             string                   `json:"name,omitempty"`
+	DirName          string                   `json:"dir_name,omitempty"`
+	Result           string                   `json:"result,omitempty"`
+	CompletionReason string                   `json:"completion_reason,omitempty"`
+	Totals           SessionDiagnosticsTotals `json:"totals"`
+	CurrentRound     *int                     `json:"current_round,omitempty"`
+	CurrentRole      *string                  `json:"current_role,omitempty"`
+	Failures         map[string]int           `json:"failures,omitempty"`
+}
+
+type SessionRetryDiagnostics struct {
+	SpecName           string `json:"spec_name,omitempty"`
+	TurnID             string `json:"turn_id,omitempty"`
+	Sequence           int    `json:"sequence,omitempty"`
+	Attempt            int    `json:"attempt,omitempty"`
+	DelayMS            int    `json:"delay_ms,omitempty"`
+	ErrorCode          string `json:"error_code,omitempty"`
+	Error              string `json:"error,omitempty"`
+	ProviderStatusCode int    `json:"provider_status_code,omitempty"`
+}
+
+type SessionErrorDiagnostics struct {
+	SpecName           string `json:"spec_name,omitempty"`
+	TurnID             string `json:"turn_id,omitempty"`
+	Sequence           int    `json:"sequence,omitempty"`
+	ErrorCode          string `json:"error_code,omitempty"`
+	Error              string `json:"error,omitempty"`
+	Retryable          *bool  `json:"retryable,omitempty"`
+	ProviderStatusCode int    `json:"provider_status_code,omitempty"`
+}
+
+type SessionOutsideWorkspaceAccessDiagnostics struct {
+	SpecName string `json:"spec_name,omitempty"`
+	TurnID   string `json:"turn_id,omitempty"`
+	Action   string `json:"action,omitempty"`
+	Path     string `json:"path,omitempty"`
+	Write    bool   `json:"write,omitempty"`
 }
