@@ -163,21 +163,6 @@ func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool) *nativ
 	return t
 }
 
-// deliverablesPresent reports whether every named deliverable now exists in
-// the workspace.
-func (t *nativeTools) deliverablesPresent(anchors []string) bool {
-	for _, anchor := range anchors {
-		full, err := t.resolvePath(anchor)
-		if err != nil {
-			return false
-		}
-		if _, err := os.Stat(full); err != nil {
-			return false
-		}
-	}
-	return true
-}
-
 func (t *nativeTools) executeAll(ctx context.Context, calls []nativeToolCall) []nativeToolResult {
 	results := make([]nativeToolResult, 0, len(calls))
 	for _, call := range calls {

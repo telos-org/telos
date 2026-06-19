@@ -53,7 +53,6 @@ type agentLoop struct {
 	transport *openaiTransport
 	tools     *nativeTools
 	logger    *nativeSessionLogger
-	gate      completionGate
 	task      string
 	role      string
 	provider  string
@@ -67,7 +66,6 @@ func newAgentLoop(httpClient *http.Client, cfg nativeProviderConfig, thinking st
 		transport: tr,
 		tools:     tools,
 		logger:    logger,
-		gate:      newCompletionGate(),
 		task:      task,
 		role:      role,
 		provider:  cfg.Provider,
@@ -78,12 +76,7 @@ func newAgentLoop(httpClient *http.Client, cfg nativeProviderConfig, thinking st
 func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 	maxLoops := nativeMaxToolLoops()
 	stats := game.TurnStats{Model: l.model}
-
-	anchors := assignmentFileAnchors(l.task)
-	// Deliverable enforcement applies only to the implementer (prover): a
-	// verifier turn produces judgment text, not files.
-	fileDeliverable := l.role == "prover" && len(anchors) > 0
-	mutated := false
+	nudged := false
 
 	for i := 0; i < maxLoops; i++ {
 		turn, err := l.transport.send(ctx)
@@ -94,27 +87,18 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 		_ = l.logger.assistant(turn.text, l.provider, l.model, turn.stopReason, turn.stats)
 
 		if len(turn.calls) == 0 {
-			sig := completionSignals{
-				emptyText:       strings.TrimSpace(turn.text) == "",
-				askedOperator:   looksLikeOperatorPrompt(turn.text),
-				fileDeliverable: fileDeliverable,
-				mutatedThisTurn: mutated,
-			}
-			if fileDeliverable {
-				sig.deliverablesMet = l.tools.deliverablesPresent(anchors)
-			}
-			if reason := l.gate.retryReason(sig); reason != "" && i+1 < maxLoops {
-				_ = l.logger.note("completion_gate_retry", reason)
-				l.transport.recordCorrection(nativeCorrectionPrompt(l.task))
+			// A tool-less turn with no visible text is unusable. Nudge once toward
+			// a visible answer before accepting it; otherwise take the final.
+			if strings.TrimSpace(turn.text) == "" && !nudged && i+1 < maxLoops {
+				nudged = true
+				_ = l.logger.note("empty_final_retry", "model returned an empty visible final")
+				l.transport.recordCorrection(nativeCorrectionPrompt())
 				continue
 			}
 			return turn.text, stats, nil
 		}
 
 		results := l.tools.executeAll(ctx, turn.calls)
-		if !mutated {
-			mutated = anyMutatingResult(results)
-		}
 		stats.NumTurns += len(results)
 		for _, result := range results {
 			_ = l.logger.tool(result)
@@ -122,6 +106,13 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 		l.transport.recordToolResults(results)
 	}
 	return "", stats, fmt.Errorf("agent_tool_loop_exceeded:%d", maxLoops)
+}
+
+// nativeCorrectionPrompt nudges the model when a turn produced no visible answer.
+// The assignment is already in context (server-side via the response chain), so
+// this only asks for a usable result rather than restating the task.
+func nativeCorrectionPrompt() string {
+	return "Your previous response had no visible result. Use the available tools to carry out the assignment, then reply with a visible summary of what you did."
 }
 
 func nativeSystemPrompt(role string) string {

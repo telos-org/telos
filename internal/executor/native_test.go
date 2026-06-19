@@ -224,36 +224,29 @@ func TestNativeExecutorSendsHarnessInstructionsAndReasoning(t *testing.T) {
 	}
 }
 
-func TestNativeExecutorGateRetriesMissingDeliverableThenAccepts(t *testing.T) {
+func TestNativeExecutorNudgesEmptyFinalOnce(t *testing.T) {
 	workspace := t.TempDir()
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		switch requests {
-		case 1:
-			// Tool-less final that did no work for a file deliverable -> retry.
+		if requests == 1 {
+			// Tool-less final with no visible text -> nudge once.
 			writeResponsesStream(w, `{
 				"id":"resp_1","status":"completed",
-				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I have inspected the workspace and understand the task."}]}],
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"   "}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
 			}`)
-		case 2:
-			body, _ := io.ReadAll(r.Body)
-			if !strings.Contains(string(body), "already fully specified") {
-				t.Fatalf("second request should carry the correction prompt, got %s", body)
-			}
-			writeResponsesStream(w, `{
-				"id":"resp_2","status":"completed",
-				"output":[{"type":"function_call","call_id":"c1","name":"write","arguments":"{\"path\":\"rig.py\",\"content\":\"print(1)\\n\"}"}],
-				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
-			}`)
-		default:
-			writeResponsesStream(w, `{
-				"id":"resp_3","status":"completed",
-				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Created rig.py.\n<status>CONCEDE</status>\n"}]}],
-				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
-			}`)
+			return
 		}
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), "no visible result") {
+			t.Fatalf("second request should carry the correction prompt, got %s", body)
+		}
+		writeResponsesStream(w, `{
+			"id":"resp_2","status":"completed",
+			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<status>CONCEDE</status>\n"}]}],
+			"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+		}`)
 	}))
 	defer server.Close()
 
@@ -262,7 +255,7 @@ func TestNativeExecutorGateRetriesMissingDeliverableThenAccepts(t *testing.T) {
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
-	result := exec.ExecuteTurn("Create `rig.py` in the workspace.", "prover", ts)
+	result := exec.ExecuteTurn("Summarize the workspace.", "prover", ts)
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -270,11 +263,8 @@ func TestNativeExecutorGateRetriesMissingDeliverableThenAccepts(t *testing.T) {
 	if result.Status != game.StatusConcede {
 		t.Fatalf("status: got %s logs=%q", result.Status, result.Logs)
 	}
-	if requests != 3 {
-		t.Fatalf("expected retry then write then accept (3 requests), got %d", requests)
-	}
-	if _, err := os.ReadFile(filepath.Join(workspace, "rig.py")); err != nil {
-		t.Fatalf("rig.py should exist: %v", err)
+	if requests != 2 {
+		t.Fatalf("expected empty final then nudge then accept (2 requests), got %d", requests)
 	}
 }
 
@@ -294,83 +284,6 @@ func TestNativeSystemPromptIsAutonomousAndNeutral(t *testing.T) {
 		if strings.Contains(strings.ToLower(prompt), banned) {
 			t.Fatalf("system prompt should not mention %q:\n%s", banned, prompt)
 		}
-	}
-}
-
-func TestCompletionGateSignalDecisions(t *testing.T) {
-	gate := completionGate{mode: gateSignal}
-	cases := []struct {
-		name string
-		sig  completionSignals
-		want string
-	}{
-		{"empty final", completionSignals{emptyText: true}, "empty_visible_final"},
-		{"asks operator", completionSignals{askedOperator: true}, "asked_operator_for_direction"},
-		{"bad no-generation", completionSignals{fileDeliverable: true}, "named_deliverable_absent_no_change"},
-		{"good no-generation: deliverable exists", completionSignals{fileDeliverable: true, deliverablesMet: true}, ""},
-		{"good no-generation: did real work", completionSignals{fileDeliverable: true, mutatedThisTurn: true}, ""},
-		{"good no-generation: not a file task", completionSignals{}, ""},
-	}
-	for _, tc := range cases {
-		if got := gate.retryReason(tc.sig); got != tc.want {
-			t.Fatalf("%s: got %q want %q", tc.name, got, tc.want)
-		}
-	}
-}
-
-func TestCompletionGateOffNeverRetries(t *testing.T) {
-	gate := completionGate{mode: gateOff}
-	for _, sig := range []completionSignals{
-		{emptyText: true},
-		{askedOperator: true},
-		{fileDeliverable: true},
-	} {
-		if reason := gate.retryReason(sig); reason != "" {
-			t.Fatalf("off gate should never retry, got %q for %+v", reason, sig)
-		}
-	}
-}
-
-func TestNewCompletionGateReadsEnv(t *testing.T) {
-	if newCompletionGate().mode != gateSignal {
-		t.Fatal("default mode should be signal")
-	}
-	t.Setenv("TELOS_NATIVE_COMPLETION_GATE", "off")
-	if newCompletionGate().mode != gateOff {
-		t.Fatal("env override to off not honored")
-	}
-}
-
-func TestDeliverablesPresentChecksWorkspace(t *testing.T) {
-	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil)
-	if tools.deliverablesPresent([]string{"rig.py"}) {
-		t.Fatal("missing deliverable should report absent")
-	}
-	if err := os.WriteFile(filepath.Join(workspace, "rig.py"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if !tools.deliverablesPresent([]string{"rig.py"}) {
-		t.Fatal("present deliverable should report met")
-	}
-}
-
-func TestAssignmentFileAnchorsExtractsNamedFiles(t *testing.T) {
-	anchors := assignmentFileAnchors("Create `industry.py`, update `src/app.ts`, and read `not-a-file`.")
-	if strings.Join(anchors, ",") != "industry.py,src/app.ts" {
-		t.Fatalf("anchors: got %q", anchors)
-	}
-}
-
-func TestAnyMutatingResult(t *testing.T) {
-	if anyMutatingResult([]nativeToolResult{{Name: "read"}, {Name: "ls"}}) {
-		t.Fatal("read-only tools should not count as mutation")
-	}
-	if anyMutatingResult([]nativeToolResult{{Name: "write", IsError: true}}) {
-		t.Fatal("failed write should not count as mutation")
-	}
-	if !anyMutatingResult([]nativeToolResult{{Name: "read"}, {Name: "write"}}) {
-		t.Fatal("successful write should count as mutation")
 	}
 }
 
