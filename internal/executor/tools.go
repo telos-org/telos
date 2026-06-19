@@ -18,6 +18,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/bmatcuk/doublestar/v4"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/responses"
 	"github.com/telos-org/telos/internal/platform"
@@ -30,6 +31,16 @@ const (
 	defaultToolReadLines       = 400
 	defaultToolSearchLineBytes = 4096
 )
+
+// Security model: these tools are deliberately unsandboxed. This is a YOLO /
+// minimal, Pi-inspired posture of full trust in the agent and its host: reads,
+// writes, and `bash` operate on whatever the process can touch, with no
+// workspace jail or write allowlist. The only real containment is whatever
+// sandbox the executor itself runs inside (e.g. an ephemeral container/pod).
+// Relative paths still resolve against the workspace for convenience, and
+// out-of-workspace access is logged for telemetry, but neither is a security
+// boundary — `bash` and absolute paths bypass both by design. Do not treat any
+// path handling here as a trust boundary.
 
 type nativeToolCall struct {
 	ID        string
@@ -62,18 +73,21 @@ type toolOutputLimit struct {
 	MaxLines int
 }
 
-func defaultToolOutputLimit() toolOutputLimit {
+func defaultToolOutputLimit(knobs envKnobs) toolOutputLimit {
 	return toolOutputLimit{
-		MaxBytes: envInt("TELOS_NATIVE_TOOL_MAX_BYTES", defaultToolMaxBytes, 16),
-		MaxLines: envInt("TELOS_NATIVE_TOOL_MAX_LINES", defaultToolMaxLines, 1),
+		MaxBytes: knobs.ToolMaxBytes,
+		MaxLines: knobs.ToolMaxLines,
 	}
 }
 
 // nativeTool is the single source of truth for a tool: its schema and its
 // handler. Schema generation, dispatch, and the system-prompt name list all
-// derive from the same table.
+// derive from the same table. Only the canonical name is advertised to the
+// model; aliases are still accepted on dispatch so models that emit the shorter
+// conventional names (read/write/edit/ls/grep/find) keep working.
 type nativeTool struct {
 	name        string
+	aliases     []string
 	description string
 	parameters  map[string]interface{}
 	run         func(t *nativeTools, ctx context.Context, args map[string]interface{}) (string, error)
@@ -99,15 +113,8 @@ func nativeToolTable() []nativeTool {
 	}
 	return []nativeTool{
 		{
-			name:        "read",
-			description: "Compatibility alias for read_file. Read a bounded UTF-8 file range.",
-			parameters:  obj([]string{"path"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path."), "start_line": integer("Optional 1-based start line."), "limit_lines": integer("Optional maximum lines to return.")}),
-			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
-				return t.readFile(argString(args, "path"), argInt(args, "start_line"), argInt(args, "limit_lines"))
-			},
-		},
-		{
 			name:        "read_file",
+			aliases:     []string{"read"},
 			description: "Read a bounded UTF-8 file range. Relative paths resolve inside the workspace; absolute paths may be read.",
 			parameters:  obj([]string{"path"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path."), "start_line": integer("Optional 1-based start line."), "limit_lines": integer("Optional maximum lines to return.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
@@ -115,33 +122,19 @@ func nativeToolTable() []nativeTool {
 			},
 		},
 		{
-			name:        "write",
-			description: "Compatibility alias for write_file. Create or overwrite a UTF-8 file.",
-			parameters:  obj([]string{"path", "content"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path."), "content": str("Complete file content to write.")}),
-			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
-				return t.write(argString(args, "path"), argString(args, "content"))
-			},
-		},
-		{
 			name:        "write_file",
-			description: "Create or overwrite a UTF-8 file. Writes are workspace-only unless the path is under a configured safe prefix.",
-			parameters:  obj([]string{"path", "content"}, map[string]interface{}{"path": str("Relative workspace path or absolute safe path."), "content": str("Complete file content to write.")}),
+			aliases:     []string{"write"},
+			description: "Create or overwrite a UTF-8 file at any path the process can write.",
+			parameters:  obj([]string{"path", "content"}, map[string]interface{}{"path": str("Relative workspace path or absolute path."), "content": str("Complete file content to write.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
 				return t.write(argString(args, "path"), argString(args, "content"))
-			},
-		},
-		{
-			name:        "edit",
-			description: "Compatibility alias for replace_text. Replace text in an existing UTF-8 file.",
-			parameters:  obj([]string{"path", "old_string", "new_string"}, map[string]interface{}{"path": str("Relative workspace path or absolute safe path."), "old_string": str("Exact text to replace."), "new_string": str("Replacement text."), "replace_all": boolean("Replace every occurrence instead of only the first."), "expected_count": integer("Optional required replacement count.")}),
-			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
-				return t.edit(argString(args, "path"), argString(args, "old_string"), argString(args, "new_string"), argBool(args, "replace_all"), argInt(args, "expected_count"))
 			},
 		},
 		{
 			name:        "replace_text",
+			aliases:     []string{"edit"},
 			description: "Replace text in an existing UTF-8 file with an optional exact expected replacement count.",
-			parameters:  obj([]string{"path", "old_string", "new_string"}, map[string]interface{}{"path": str("Relative workspace path or absolute safe path."), "old_string": str("Exact text to replace."), "new_string": str("Replacement text."), "replace_all": boolean("Replace every occurrence instead of only the first."), "expected_count": integer("Optional required replacement count.")}),
+			parameters:  obj([]string{"path", "old_string", "new_string"}, map[string]interface{}{"path": str("Relative workspace path or absolute path."), "old_string": str("Exact text to replace."), "new_string": str("Replacement text."), "replace_all": boolean("Replace every occurrence instead of only the first."), "expected_count": integer("Optional required replacement count.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
 				return t.edit(argString(args, "path"), argString(args, "old_string"), argString(args, "new_string"), argBool(args, "replace_all"), argInt(args, "expected_count"))
 			},
@@ -176,15 +169,8 @@ func nativeToolTable() []nativeTool {
 			},
 		},
 		{
-			name:        "ls",
-			description: "Compatibility alias for list_dir. List a bounded directory.",
-			parameters:  obj([]string{}, map[string]interface{}{"path": str("Directory path, defaults to workspace root.")}),
-			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
-				return t.ls(argString(args, "path"))
-			},
-		},
-		{
 			name:        "list_dir",
+			aliases:     []string{"ls"},
 			description: "List a bounded directory. Relative paths resolve inside the workspace; absolute paths may be read.",
 			parameters:  obj([]string{}, map[string]interface{}{"path": str("Directory path, defaults to workspace root.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
@@ -192,15 +178,8 @@ func nativeToolTable() []nativeTool {
 			},
 		},
 		{
-			name:        "grep",
-			description: "Compatibility alias for search_text. Search text files with bounded output.",
-			parameters:  obj([]string{"pattern"}, map[string]interface{}{"pattern": str("Go regular expression."), "path": str("Directory or file path, defaults to workspace root."), "max_matches": integer("Maximum matches to return.")}),
-			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
-				return t.grep(argString(args, "pattern"), argString(args, "path"), argInt(args, "max_matches"))
-			},
-		},
-		{
 			name:        "search_text",
+			aliases:     []string{"grep"},
 			description: "Search text files with a regular expression and bounded match output.",
 			parameters:  obj([]string{"pattern"}, map[string]interface{}{"pattern": str("Go regular expression."), "path": str("Directory or file path, defaults to workspace root."), "max_matches": integer("Maximum matches to return.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
@@ -208,17 +187,10 @@ func nativeToolTable() []nativeTool {
 			},
 		},
 		{
-			name:        "find",
-			description: "Compatibility alias for find_files. Find files by glob pattern with bounded output.",
-			parameters:  obj([]string{"pattern"}, map[string]interface{}{"pattern": str("Glob pattern matched against relative paths and basenames."), "path": str("Directory path, defaults to workspace root."), "max_matches": integer("Maximum paths to return.")}),
-			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
-				return t.find(argString(args, "pattern"), argString(args, "path"), argInt(args, "max_matches"))
-			},
-		},
-		{
 			name:        "find_files",
-			description: "Find files by glob pattern with bounded output.",
-			parameters:  obj([]string{"pattern"}, map[string]interface{}{"pattern": str("Glob pattern matched against relative paths and basenames."), "path": str("Directory path, defaults to workspace root."), "max_matches": integer("Maximum paths to return.")}),
+			aliases:     []string{"find"},
+			description: "Find files by glob pattern with bounded output. Supports `**` for recursive directory matches (e.g. `**/*.go`, `src/**/foo_*.txt`); a bare pattern like `*.go` matches files at any depth.",
+			parameters:  obj([]string{"pattern"}, map[string]interface{}{"pattern": str("Glob pattern matched against relative paths and basenames; supports `**`."), "path": str("Directory path, defaults to workspace root."), "max_matches": integer("Maximum paths to return.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
 				return t.find(argString(args, "pattern"), argString(args, "path"), argInt(args, "max_matches"))
 			},
@@ -277,30 +249,30 @@ func nativeToolsForOpenAI() []responses.ToolUnionParam {
 }
 
 type nativeTools struct {
-	platform          *platform.LocalPlatform
-	stopRequested     func() bool
-	byName            map[string]nativeTool
-	limit             toolOutputLimit
-	skills            map[string]nativeSkillRef
-	openedSkills      map[string]bool
-	logger            *nativeSessionLogger
-	safeWritePrefixes []string
+	platform      *platform.LocalPlatform
+	stopRequested func() bool
+	byName        map[string]nativeTool
+	limit         toolOutputLimit
+	skills        map[string]nativeSkillRef
+	openedSkills  map[string]bool
+	logger        *nativeSessionLogger
 }
 
-func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool, task string, logger *nativeSessionLogger, safeWritePrefixes ...string) *nativeTools {
-	prefixes := normalizeSafeWritePrefixes(safeWritePrefixes)
+func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool, task string, logger *nativeSessionLogger, knobs envKnobs) *nativeTools {
 	t := &nativeTools{
-		platform:          p,
-		stopRequested:     stopRequested,
-		byName:            map[string]nativeTool{},
-		limit:             defaultToolOutputLimit(),
-		skills:            parseSkillRefs(task),
-		openedSkills:      map[string]bool{},
-		logger:            logger,
-		safeWritePrefixes: prefixes,
+		platform:      p,
+		stopRequested: stopRequested,
+		byName:        map[string]nativeTool{},
+		limit:         defaultToolOutputLimit(knobs),
+		skills:        parseSkillRefs(task),
+		openedSkills:  map[string]bool{},
+		logger:        logger,
 	}
 	for _, tool := range nativeToolTable() {
 		t.byName[tool.name] = tool
+		for _, alias := range tool.aliases {
+			t.byName[alias] = tool
+		}
 	}
 	return t
 }
@@ -344,7 +316,12 @@ func (r *nativeToolResult) applyMetadataFromOutput() {
 	if r == nil {
 		return
 	}
-	for _, line := range strings.Split(r.Output, "\n") {
+	// Only scan the envelope header (the leading `key: value` lines), not the
+	// freeform body that follows a section key like `content:`/`stdout:`. The
+	// body can be arbitrary file or command output, so scanning it would let a
+	// file line such as `exit_code: 7` spoof tool metadata.
+	header := toolEnvelopeHeader(r.Output)
+	for _, line := range strings.Split(header, "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
 		if !ok {
 			continue
@@ -370,7 +347,30 @@ func (r *nativeToolResult) applyMetadataFromOutput() {
 		}
 	}
 	if r.IsError && r.ErrorCode == "" {
-		r.ErrorCode = classifyToolResultError(r.Output)
+		r.ErrorCode = classifyToolResultError(header)
+	}
+}
+
+// toolEnvelopeHeader returns the leading metadata lines of a tool envelope,
+// stopping at the first body section (`content:`, `stdout:`, ...) whose value
+// is freeform multi-line output rather than a metadata field.
+func toolEnvelopeHeader(output string) string {
+	lines := strings.Split(output, "\n")
+	for i, line := range lines {
+		key, _, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if ok && toolBodySectionKey(strings.TrimSpace(key)) {
+			return strings.Join(lines[:i], "\n")
+		}
+	}
+	return output
+}
+
+func toolBodySectionKey(key string) bool {
+	switch key {
+	case "content", "stdout", "stderr", "entries", "matches", "paths", "files":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -434,7 +434,7 @@ func (t *nativeTools) readFile(p string, startLine, limitLines int) (string, err
 	if startLine <= 0 {
 		startLine = 1
 	}
-	if limitLines <= 0 || limitLines > t.limit.MaxLines {
+	if limitLines <= 0 {
 		limitLines = defaultToolReadLines
 	}
 	if limitLines > t.limit.MaxLines {
@@ -511,7 +511,7 @@ func (t *nativeTools) write(p, content string) (string, error) {
 	if strings.ContainsRune(content, '\x00') {
 		return "", fmt.Errorf("content contains NUL byte")
 	}
-	full, err := t.resolveWritePath(p)
+	full, err := t.resolvePath(p)
 	if err != nil {
 		return "", err
 	}
@@ -540,7 +540,7 @@ func (t *nativeTools) edit(p, oldString, newString string, replaceAll bool, expe
 	if strings.ContainsRune(oldString, '\x00') || strings.ContainsRune(newString, '\x00') {
 		return "", fmt.Errorf("old_string and new_string must not contain NUL bytes")
 	}
-	full, err := t.resolveWritePath(p)
+	full, err := t.resolvePath(p)
 	if err != nil {
 		return "", err
 	}
@@ -627,7 +627,7 @@ func (t *nativeTools) patchFileMetadata(changed, created, deleted []string) stri
 	deletedSet := stringSet(deleted)
 	var lines []string
 	for _, p := range changed {
-		full, err := t.resolveWritePath(p)
+		full, err := t.resolvePath(p)
 		if err != nil {
 			lines = append(lines, fmt.Sprintf("- path: %s\n  error: %s", p, err))
 			continue
@@ -668,11 +668,6 @@ func (t *nativeTools) bash(ctx context.Context, command string, cwd string, env 
 		full, err := t.resolvePath(cwd)
 		if err != nil {
 			return "", err
-		}
-		workspace, _ := filepath.Abs(t.platform.Workspace)
-		rel, err := filepath.Rel(workspace, full)
-		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return "", fmt.Errorf("cwd %q is outside workspace", cwd)
 		}
 		runCWD = full
 	}
@@ -849,6 +844,9 @@ func (t *nativeTools) find(pattern, p string, maxMatches int) (string, error) {
 	if pattern == "" {
 		return "", fmt.Errorf("pattern is required")
 	}
+	if err := doublestar.ValidatePattern(pattern); !err {
+		return "", fmt.Errorf("invalid glob pattern %q", pattern)
+	}
 	if maxMatches <= 0 || maxMatches > 1000 {
 		maxMatches = 200
 	}
@@ -872,10 +870,14 @@ func (t *nativeTools) find(pattern, p string, maxMatches int) (string, error) {
 			return nil
 		}
 		rel := t.displayPath(file)
+		// Match the full relative path first so recursive patterns like
+		// "**/*.go" or "src/**/foo_*.txt" work. Fall back to the basename so a
+		// bare pattern like "*.go" still matches files at any depth — this is
+		// the convenience behavior users expect from `find -name`.
 		base := path.Base(rel)
-		if ok, _ := path.Match(pattern, rel); ok {
+		if ok, _ := doublestar.Match(pattern, rel); ok {
 			matches = append(matches, rel)
-		} else if ok, _ := path.Match(pattern, base); ok {
+		} else if ok, _ := doublestar.Match(pattern, base); ok {
 			matches = append(matches, rel)
 		}
 		return nil
@@ -978,7 +980,7 @@ func (t *nativeTools) readSkillFile(full string, startLine, limitLines int) (str
 	if startLine <= 0 {
 		startLine = 1
 	}
-	if limitLines <= 0 || limitLines > t.limit.MaxLines {
+	if limitLines <= 0 {
 		limitLines = defaultToolReadLines
 	}
 	if limitLines > t.limit.MaxLines {
@@ -1081,17 +1083,6 @@ func (t *nativeTools) resolvePath(p string) (string, error) {
 		return "", fmt.Errorf("path %q is outside workspace %q", p, workspace)
 	}
 	return full, nil
-}
-
-func (t *nativeTools) resolveWritePath(p string) (string, error) {
-	full, err := t.resolvePath(p)
-	if err != nil {
-		return "", err
-	}
-	if t.isInsideWorkspace(full) || t.isUnderSafeWritePrefix(full) {
-		return full, nil
-	}
-	return "", fmt.Errorf("write path %q is outside workspace and outside safe write prefixes", p)
 }
 
 func (t *nativeTools) isInsideWorkspace(full string) bool {
@@ -1231,37 +1222,6 @@ func envInt(name string, fallback int, min int) int {
 		return fallback
 	}
 	return n
-}
-
-func (t *nativeTools) isUnderSafeWritePrefix(full string) bool {
-	full, _ = filepath.Abs(full)
-	for _, prefix := range t.safeWritePrefixes {
-		abs, err := filepath.Abs(prefix)
-		if err != nil {
-			continue
-		}
-		rel, err := filepath.Rel(abs, full)
-		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
-}
-
-func normalizeSafeWritePrefixes(prefixes []string) []string {
-	var out []string
-	if len(prefixes) == 0 {
-		if raw := strings.TrimSpace(os.Getenv("TELOS_NATIVE_SAFE_WRITE_PREFIXES")); raw != "" {
-			prefixes = strings.Split(raw, string(os.PathListSeparator))
-		}
-	}
-	for _, prefix := range prefixes {
-		prefix = strings.TrimSpace(prefix)
-		if prefix != "" {
-			out = append(out, prefix)
-		}
-	}
-	return out
 }
 
 func shellQuote(s string) string {

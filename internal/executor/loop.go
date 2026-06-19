@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
-	"strconv"
 	"strings"
 
 	"github.com/telos-org/telos/internal/game"
@@ -16,39 +14,26 @@ const (
 	defaultMaxOutputTokens = 16384
 )
 
-func nativeMaxToolLoops() int {
-	return effectiveMaxToolLoops(game.TurnBudget{})
-}
-
+// effectiveMaxToolLoops resolves the per-turn tool-loop ceiling. The manifest
+// budget is the source of truth: a configured MaxToolLoops always wins. With no
+// manifest value, the harness default applies. There is no env override —
+// TELOS_NATIVE_MAX_TOOL_LOOPS was removed because it conflicted with the
+// manifest budget and made runs non-reproducible from the manifest alone.
 func effectiveMaxToolLoops(budget game.TurnBudget) int {
 	if budget.MaxToolLoops > 0 {
 		return budget.MaxToolLoops
 	}
-	raw := strings.TrimSpace(os.Getenv("TELOS_NATIVE_MAX_TOOL_LOOPS"))
-	if raw == "" {
-		return defaultMaxToolLoops
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 1 {
-		return defaultMaxToolLoops
-	}
-	return n
+	return defaultMaxToolLoops
 }
 
-func nativeMaxOutputTokens() int {
-	raw := strings.TrimSpace(os.Getenv("TELOS_NATIVE_MAX_OUTPUT_TOKENS"))
-	if raw == "" {
-		return defaultMaxOutputTokens
-	}
-	n, err := strconv.Atoi(raw)
-	if err != nil || n < 256 {
-		return defaultMaxOutputTokens
-	}
-	return n
-}
-
+// effectiveMaxOutputTokens resolves the per-model-request output-token ceiling.
+// Precedence (most restrictive wins): manifest budget remaining tokens, then
+// the model capability profile's max, then the harness default. The manifest is
+// the source of truth; TELOS_NATIVE_MAX_OUTPUT_TOKENS was removed because it
+// acted as a hidden base ceiling that could only cap *down*, contradicting the
+// manifest-wins precedence used for tool loops.
 func effectiveMaxOutputTokens(cfg nativeProviderConfig, budget game.TurnBudget) int {
-	maxOut := nativeMaxOutputTokens()
+	maxOut := defaultMaxOutputTokens
 	if cfg.Capability.MaxOutputTokens > 0 && cfg.Capability.MaxOutputTokens < maxOut {
 		maxOut = cfg.Capability.MaxOutputTokens
 	}
@@ -79,6 +64,7 @@ type agentLoop struct {
 	budget         game.TurnBudget
 	strictProtocol bool
 	toolsAvailable bool
+	keepReasoning  bool
 }
 
 type roleLoopPolicy struct {
@@ -109,7 +95,7 @@ func loopPolicy(role, protocolMode, task string) roleLoopPolicy {
 	}
 }
 
-func newAgentLoop(httpClient *http.Client, cfg nativeProviderConfig, thinking string, tools *nativeTools, logger *nativeSessionLogger, task, role, protocolMode string, budget game.TurnBudget) *agentLoop {
+func newAgentLoop(httpClient *http.Client, cfg nativeProviderConfig, thinking string, tools *nativeTools, logger *nativeSessionLogger, task, role, protocolMode string, budget game.TurnBudget, knobs envKnobs) *agentLoop {
 	maxOut := effectiveMaxOutputTokens(cfg, budget)
 	tr := newOpenAITransport(httpClient, cfg, thinking, maxOut, task, role, logger)
 	return &agentLoop{
@@ -124,6 +110,7 @@ func newAgentLoop(httpClient *http.Client, cfg nativeProviderConfig, thinking st
 		budget:         budget,
 		strictProtocol: cfg.Capability.StrictProtocol,
 		toolsAvailable: len(tr.tools) > 0,
+		keepReasoning:  knobs.KeepReasoning,
 	}
 }
 
@@ -148,7 +135,7 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 			_ = l.logger.errorEvent(l.transport.sequence, err)
 			return "", stats, err
 		}
-		if sanitized, removed := sanitizeVisibleText(turn.text); removed != "" {
+		if sanitized, removed := sanitizeVisibleText(turn.text, l.keepReasoning); removed != "" {
 			_ = l.logger.reasoningLeak(removed)
 			turn.text = sanitized
 		}

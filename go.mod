@@ -3,6 +3,7 @@ module github.com/telos-org/telos
 go 1.26.3
 
 require (
+	github.com/bmatcuk/doublestar/v4 v4.10.0
 	github.com/openai/openai-go v1.12.0
 	gopkg.in/yaml.v3 v3.0.1
 	k8s.io/api v0.36.1

@@ -68,9 +68,44 @@ Workspace checkpoints exclude runtime, dependency, build, cache, and secret-like
 paths by default. For benchmark tasks where the full workspace is the required
 artifact, set `TELOS_CHECKPOINT_INCLUDE_ALL=1`.
 
-Native executor writes are workspace-only by default. To allow writes under
-specific absolute paths, pass `--safe-write-prefixes /tmp/telos-scratch` or set
-`TELOS_SAFE_WRITE_PREFIXES` to a comma-separated prefix list.
+### Native executor security model
+
+The native executor's file/bash tools are deliberately unsandboxed: reads,
+writes, and `bash` operate on whatever the process can touch, with no workspace
+jail or write allowlist. The only real containment is whatever sandbox the
+executor itself runs inside (e.g. an ephemeral container/pod). Relative paths
+still resolve against the workspace for convenience and out-of-workspace access
+is logged for telemetry, but neither is a trust boundary — `bash` and absolute
+paths bypass both by design. Do not run the native executor on a host with
+secrets or state you cannot afford to expose to the agent.
+
+### Budgets, knobs, and precedence
+
+Per-session budgets (`--max-rounds`, `--max-tool-loops`, `--max-output-tokens`,
+`--agent-timeout-sec`, etc., or their `TELOS_*` flag/env equivalents) are
+persisted in the session manifest and are the source of truth for a run. The
+manifest always wins over ambient environment.
+
+A small set of executor-internal escape hatches have no manifest equivalent and
+remain environment-only:
+
+| Variable | Default | Effect |
+| --- | --- | --- |
+| `TELOS_NATIVE_TOOL_MAX_BYTES` | 96 KiB | Max bytes of a single tool's text output |
+| `TELOS_NATIVE_TOOL_MAX_LINES` | 400 | Max lines of a single tool's text output |
+| `TELOS_NATIVE_KEEP_REASONING` | unset | `1` disables stripping of reasoning/COT tags from visible output |
+
+These are resolved once per turn and recorded in the turn's session log
+(`env_knobs` event) so a run is auditable from the log alone. Per-model
+capability/behavior is configured via the `TELOS_MODEL_*` family
+(`TELOS_MODEL_CAPABILITY_PROFILE`, `TELOS_MODEL_STATE_MODE`, etc.) and pricing
+via `TELOS_MODEL_PRICING_TABLE`; the resolved profile is logged at turn start
+(`provider_config` event, no secrets).
+
+`TELOS_NATIVE_MAX_TOOL_LOOPS` and `TELOS_NATIVE_MAX_OUTPUT_TOKENS` were removed:
+they conflicted with the manifest budgets (tool-loop budget was overridden by
+env; output-token env acted as a hidden base ceiling that could only cap down).
+Use the manifest `max_tool_loops` / `max_output_tokens` budgets instead.
 
 ## Run In Cloud
 

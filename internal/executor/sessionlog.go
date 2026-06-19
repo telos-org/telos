@@ -135,6 +135,39 @@ func (l *nativeSessionLogger) budget(maxToolLoops, maxOutputTokens int, budget g
 	return l.event("budget", data)
 }
 
+// knobs records the resolved executor-internal env knobs for this turn, so a
+// run is auditable and reproducible from the session log alone.
+func (l *nativeSessionLogger) knobs(k envKnobs) error {
+	return l.event("env_knobs", map[string]any{
+		"tool_max_bytes":  k.ToolMaxBytes,
+		"tool_max_lines":  k.ToolMaxLines,
+		"keep_reasoning":  k.KeepReasoning,
+	})
+}
+
+// providerConfig records the resolved model/provider configuration (minus
+// secrets) so the capability profile and pricing availability are auditable
+// per turn. API keys are never included.
+func (l *nativeSessionLogger) providerConfig(cfg nativeProviderConfig) error {
+	data := map[string]any{
+		"provider":          cfg.Provider,
+		"model":             cfg.Model,
+		"state_mode":        cfg.Capability.StateMode,
+		"strict_protocol":   cfg.Capability.StrictProtocol,
+		"pricing_configured": pricingConfiguredFor(cfg.Model),
+	}
+	if cfg.Capability.MaxOutputTokens > 0 {
+		data["capability_max_output_tokens"] = cfg.Capability.MaxOutputTokens
+	}
+	if cfg.Capability.SupportsReasoning != nil {
+		data["supports_reasoning"] = *cfg.Capability.SupportsReasoning
+	}
+	if cfg.Capability.SupportsFunctionCalling != nil {
+		data["supports_function_calling"] = *cfg.Capability.SupportsFunctionCalling
+	}
+	return l.event("provider_config", data)
+}
+
 func (l *nativeSessionLogger) assistant(text, provider, model, stopReason string, stats game.TurnStats) error {
 	return l.message(&sessionMessage{
 		Role:       "assistant",

@@ -901,65 +901,41 @@ func TestResolveNativeProviderCapabilityEnvOverridesProfile(t *testing.T) {
 	}
 }
 
-func TestNativeMaxToolLoopsCanBeOverridden(t *testing.T) {
-	if got := nativeMaxToolLoops(); got != 160 {
-		t.Fatalf("default max tool loops: got %d", got)
-	}
-
-	t.Setenv("TELOS_NATIVE_MAX_TOOL_LOOPS", "123")
-	if got := nativeMaxToolLoops(); got != 123 {
-		t.Fatalf("max tool loops override: got %d", got)
+func TestEffectiveMaxToolLoopsManifestWins(t *testing.T) {
+	// No env override exists: the manifest budget is the sole source of truth
+	// above the harness default.
+	if got := effectiveMaxToolLoops(game.TurnBudget{}); got != defaultMaxToolLoops {
+		t.Fatalf("default max tool loops: got %d want %d", got, defaultMaxToolLoops)
 	}
 	if got := effectiveMaxToolLoops(game.TurnBudget{MaxToolLoops: 7}); got != 7 {
-		t.Fatalf("budget max tool loops should override environment: got %d", got)
-	}
-
-	t.Setenv("TELOS_NATIVE_MAX_TOOL_LOOPS", "not-a-number")
-	if got := nativeMaxToolLoops(); got != defaultMaxToolLoops {
-		t.Fatalf("invalid max tool loops should use default: got %d", got)
+		t.Fatalf("budget max tool loops should win over default: got %d", got)
 	}
 }
 
-func TestNativeMaxOutputTokensCanBeOverridden(t *testing.T) {
-	if got := nativeMaxOutputTokens(); got != 16384 {
-		t.Fatalf("default max output tokens: got %d", got)
-	}
-
-	t.Setenv("TELOS_NATIVE_MAX_OUTPUT_TOKENS", "2048")
-	if got := nativeMaxOutputTokens(); got != 2048 {
-		t.Fatalf("max output tokens override: got %d", got)
-	}
-
-	t.Setenv("TELOS_NATIVE_MAX_OUTPUT_TOKENS", "not-a-number")
-	if got := nativeMaxOutputTokens(); got != defaultMaxOutputTokens {
-		t.Fatalf("invalid max output tokens should use default: got %d", got)
-	}
-
-	t.Setenv("TELOS_NATIVE_MAX_OUTPUT_TOKENS", "128")
-	if got := nativeMaxOutputTokens(); got != defaultMaxOutputTokens {
-		t.Fatalf("too-small max output tokens should use default: got %d", got)
-	}
-}
-
-func TestEffectiveMaxOutputTokensUsesMostRestrictiveCap(t *testing.T) {
+func TestEffectiveMaxOutputTokensPrecedence(t *testing.T) {
+	// Precedence (most restrictive wins): manifest budget remaining, then model
+	// capability max, then harness default. No env base ceiling.
 	cfg := nativeProviderConfig{}
 	if got := effectiveMaxOutputTokens(cfg, game.TurnBudget{}); got != defaultMaxOutputTokens {
-		t.Fatalf("default effective max output tokens: got %d", got)
+		t.Fatalf("default effective max output tokens: got %d want %d", got, defaultMaxOutputTokens)
 	}
 
-	t.Setenv("TELOS_NATIVE_MAX_OUTPUT_TOKENS", "12000")
 	cfg.Capability.MaxOutputTokens = 8000
 	if got := effectiveMaxOutputTokens(cfg, game.TurnBudget{}); got != 8000 {
-		t.Fatalf("capability max output tokens: got %d", got)
+		t.Fatalf("capability max output tokens should cap down: got %d", got)
 	}
 
 	if got := effectiveMaxOutputTokens(cfg, game.TurnBudget{RemainingOutputTokens: 3000}); got != 3000 {
-		t.Fatalf("remaining output tokens: got %d", got)
+		t.Fatalf("remaining budget tokens should cap below capability: got %d", got)
 	}
 
+	// With no capability cap, the budget caps down from the default.
 	cfg.Capability.MaxOutputTokens = 0
-	if got := effectiveMaxOutputTokens(cfg, game.TurnBudget{RemainingOutputTokens: 15000}); got != 12000 {
-		t.Fatalf("native env output tokens should remain cap: got %d", got)
+	if got := effectiveMaxOutputTokens(cfg, game.TurnBudget{RemainingOutputTokens: 15000}); got != 15000 {
+		t.Fatalf("remaining budget below default should win: got %d", got)
+	}
+	if got := effectiveMaxOutputTokens(cfg, game.TurnBudget{RemainingOutputTokens: 999999}); got != defaultMaxOutputTokens {
+		t.Fatalf("remaining budget above default should clamp to default: got %d", got)
 	}
 }
 
@@ -1820,7 +1796,7 @@ func TestNativeToolsBoundFileReadsAndBinary(t *testing.T) {
 	}
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_LINES", "5")
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_BYTES", "64")
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	read := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -1864,7 +1840,7 @@ func TestNativeEditingToolsPreserveExistingFileMode(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho old\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	written := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_write",
@@ -1909,7 +1885,7 @@ func TestNativeToolsReplaceTextRejectsBinaryAndInvalidUTF8(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "invalid.txt"), []byte{0xff, 'o', 'l', 'd'}, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	for _, path := range []string{"nul.bin", "invalid.txt"} {
 		result := tools.execute(context.Background(), nativeToolCall{
@@ -1931,7 +1907,7 @@ func TestNativeEditingToolsRejectNULTextInputs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "plain.txt"), []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	written := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_write",
@@ -1954,7 +1930,7 @@ func TestNativeEditingToolsRejectNULTextInputs(t *testing.T) {
 
 func TestNativeToolsBashReportsOriginalOutputCounts(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2003,7 +1979,7 @@ func TestNativeToolsSearchTextStopsAtMatchLimit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "z-later.txt"), []byte("needle\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2034,7 +2010,7 @@ func TestNativeToolsListDirReturnsBoundedEntriesWithTotalCount(t *testing.T) {
 		}
 	}
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_LINES", "5")
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2071,7 +2047,7 @@ func TestNativeToolsListDirAndFindFilesApplyByteCaps(t *testing.T) {
 	}
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_BYTES", "128")
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_LINES", "20")
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	listed := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_list",
@@ -2104,9 +2080,92 @@ func TestNativeToolsListDirAndFindFilesApplyByteCaps(t *testing.T) {
 	}
 }
 
+func TestNativeToolsFindFilesSupportsRecursiveGlobstar(t *testing.T) {
+	workspace := t.TempDir()
+	// Build a nested tree so we can exercise `**` across directory boundaries.
+	files := map[string]string{
+		"a.go":                          "x",
+		"pkg/b.go":                      "x",
+		"pkg/sub/c.go":                  "x",
+		"pkg/sub/deep/d.go":             "x",
+		"pkg/sub/deep/e.txt":            "x",
+		"other/also.go":                 "x",
+		"node_modules/dep/ignored.go":   "x", // shouldSkipDir drops node_modules
+	}
+	for rel, content := range files {
+		full := filepath.Join(workspace, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+
+	// `**/*.go` must match .go files at every depth, including the root.
+	r1 := tools.execute(context.Background(), nativeToolCall{
+		ID: "call_1", Name: "find_files",
+		Arguments: `{"pattern":"**/*.go","max_matches":50}`,
+	})
+	if r1.IsError {
+		t.Fatalf("find_files **/*.go failed:\n%s", r1.Output)
+	}
+	want := []string{"a.go", "pkg/b.go", "pkg/sub/c.go", "pkg/sub/deep/d.go", "other/also.go"}
+	if !strings.Contains(r1.Output, "match_count: 5") {
+		t.Fatalf("expected 5 .go matches (node_modules skipped), got:\n%s", r1.Output)
+	}
+	for _, w := range want {
+		if !strings.Contains(r1.Output, w) {
+			t.Fatalf("expected %q in **/*.go results:\n%s", w, r1.Output)
+		}
+	}
+	if strings.Contains(r1.Output, "ignored.go") {
+		t.Fatalf("node_modules should be skipped:\n%s", r1.Output)
+	}
+
+	// A scoped recursive pattern under a specific directory.
+	r2 := tools.execute(context.Background(), nativeToolCall{
+		ID: "call_2", Name: "find_files",
+		Arguments: `{"pattern":"pkg/**/*.go","max_matches":50}`,
+	})
+	if r2.IsError {
+		t.Fatalf("find_files pkg/**/*.go failed:\n%s", r2.Output)
+	}
+	if !strings.Contains(r2.Output, "match_count: 3") {
+		t.Fatalf("expected 3 matches under pkg/, got:\n%s", r2.Output)
+	}
+	for _, w := range []string{"pkg/b.go", "pkg/sub/c.go", "pkg/sub/deep/d.go"} {
+		if !strings.Contains(r2.Output, w) {
+			t.Fatalf("expected %q in pkg/**/*.go results:\n%s", w, r2.Output)
+		}
+	}
+
+	// A bare `*.go` still matches at any depth (basename fallback).
+	r3 := tools.execute(context.Background(), nativeToolCall{
+		ID: "call_3", Name: "find_files",
+		Arguments: `{"pattern":"*.go","max_matches":50}`,
+	})
+	if r3.IsError {
+		t.Fatalf("find_files *.go failed:\n%s", r3.Output)
+	}
+	if !strings.Contains(r3.Output, "match_count: 5") {
+		t.Fatalf("bare *.go should match at any depth, got:\n%s", r3.Output)
+	}
+
+	// An invalid pattern is rejected up front.
+	r4 := tools.execute(context.Background(), nativeToolCall{
+		ID: "call_4", Name: "find_files",
+		Arguments: `{"pattern":"[unclosed","max_matches":50}`,
+	})
+	if !r4.IsError {
+		t.Fatalf("invalid glob pattern should be rejected, got:\n%s", r4.Output)
+	}
+}
+
 func TestNativeToolsBashAcceptsBoundedEnv(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2123,7 +2182,7 @@ func TestNativeToolsBashAcceptsBoundedEnv(t *testing.T) {
 
 func TestNativeToolsBashRejectsInvalidEnvName(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2140,7 +2199,7 @@ func TestNativeToolsBashRejectsInvalidEnvName(t *testing.T) {
 
 func TestNativeToolsClassifiesMalformedToolCallAsAgentProtocol(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	invalidJSON := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_invalid",
@@ -2163,7 +2222,7 @@ func TestNativeToolsClassifiesMalformedToolCallAsAgentProtocol(t *testing.T) {
 
 func TestNativeToolsBashMarksNonzeroExitAsError(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2190,7 +2249,7 @@ func TestNativeToolsBashMarksNonzeroExitAsError(t *testing.T) {
 func TestNativeToolsBashAppliesLineCaps(t *testing.T) {
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_LINES", "3")
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_lines",
@@ -2223,7 +2282,7 @@ func TestNativeToolsBashAppliesLineCaps(t *testing.T) {
 
 func TestNativeToolsBashClassifiesTimeoutAsToolTimeout(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_timeout",
@@ -2300,7 +2359,7 @@ func TestNativeToolsApplyPatchReportsStructuredMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "old.txt"), []byte("before\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 	patch := strings.Join([]string{
 		"diff --git a/old.txt b/old.txt",
 		"--- a/old.txt",
@@ -2364,7 +2423,7 @@ func TestNativeToolsApplyPatchReportsStructuredMetadata(t *testing.T) {
 
 func TestNativeToolsApplyPatchRejectsUnsafePaths(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 	cases := []struct {
 		name  string
 		patch string
@@ -2450,7 +2509,7 @@ func TestNativeSkillToolListsAndReadsSkillBodies(t *testing.T) {
 	if err := logger.start(); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, task, logger)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, task, logger, resolveEnvKnobs())
 
 	list := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2511,7 +2570,7 @@ func TestNativeSkillToolRequiresCompleteRequiredRubricRead(t *testing.T) {
 	}
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_BYTES", "64")
 	task := "## Skills\n\n- `review-skill` - required evaluation rubric - Review rubric (path: `" + filepath.ToSlash(skillPath) + "`)\n"
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, task, nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, task, nil, resolveEnvKnobs())
 
 	read := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2627,7 +2686,7 @@ func TestSanitizeVisibleTextRemovesReasoningTags(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			sanitized, removed := sanitizeVisibleText(tt.raw)
+			sanitized, removed := sanitizeVisibleText(tt.raw, false)
 			if sanitized != tt.wantClean {
 				t.Fatalf("sanitized: got %q want %q removed=%q", sanitized, tt.wantClean, removed)
 			}
@@ -2643,13 +2702,17 @@ func TestSanitizeVisibleTextRemovesReasoningTags(t *testing.T) {
 	}
 }
 
-func TestSanitizeVisibleTextKeepReasoningSwitch(t *testing.T) {
-	t.Setenv("TELOS_NATIVE_KEEP_REASONING", "1")
-
+func TestSanitizeVisibleTextKeepReasoningFlag(t *testing.T) {
 	raw := "<thinking>hidden</thinking>\nanswer"
-	sanitized, removed := sanitizeVisibleText(raw)
+	sanitized, removed := sanitizeVisibleText(raw, true)
 	if sanitized != raw || removed != "" {
-		t.Fatalf("keep-reasoning switch should leave content untouched, got sanitized=%q removed=%q", sanitized, removed)
+		t.Fatalf("keep-reasoning should leave content untouched, got sanitized=%q removed=%q", sanitized, removed)
+	}
+
+	// With the flag off, the same input is stripped.
+	sanitized, removed = sanitizeVisibleText(raw, false)
+	if sanitized != "answer" || removed == "" {
+		t.Fatalf("strip should remove reasoning, got sanitized=%q removed=%q", sanitized, removed)
 	}
 }
 
@@ -2674,14 +2737,16 @@ func TestNativeSystemPromptIsAutonomousAndNeutral(t *testing.T) {
 
 func TestNativeToolsPathResolution(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
 
+	// Relative paths still resolve against the workspace, so a relative escape is
+	// rejected as malformed (not as a security boundary — see the package's YOLO
+	// security model: absolute paths and bash bypass this).
 	rejected := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
 		Name:      "write",
 		Arguments: `{"path":"../outside.txt","content":"bad"}`,
 	})
-
 	if !rejected.IsError {
 		t.Fatalf("expected relative outside-workspace write to fail: %+v", rejected)
 	}
@@ -2689,49 +2754,15 @@ func TestNativeToolsPathResolution(t *testing.T) {
 		t.Fatalf("outside file should not exist, stat err=%v", err)
 	}
 
-	unsafeAbsolutePath := filepath.Join(t.TempDir(), "absolute.txt")
-	blocked := tools.execute(context.Background(), nativeToolCall{
-		ID:        "call_2",
-		Name:      "write",
-		Arguments: `{"path":` + mustJSON(unsafeAbsolutePath) + `,"content":"bad\n"}`,
-	})
-	if !blocked.IsError {
-		t.Fatalf("expected absolute path outside safe prefixes to fail: %+v", blocked)
-	}
-
-	implicitScratchPath := filepath.Join(os.TempDir(), "telos-scratch", "implicit.txt")
-	implicitScratch := tools.execute(context.Background(), nativeToolCall{
-		ID:        "call_implicit_scratch",
-		Name:      "write",
-		Arguments: `{"path":` + mustJSON(implicitScratchPath) + `,"content":"bad\n"}`,
-	})
-	if !implicitScratch.IsError {
-		t.Fatalf("expected /tmp/telos-scratch write to require an explicit safe prefix: %+v", implicitScratch)
-	}
-
-	configuredSafeDir := filepath.Join(t.TempDir(), "configured-safe")
-	tools = newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, configuredSafeDir)
-	configuredPath := filepath.Join(configuredSafeDir, "configured.txt")
-	configuredWrite := tools.execute(context.Background(), nativeToolCall{
-		ID:        "call_configured",
-		Name:      "write",
-		Arguments: `{"path":` + mustJSON(configuredPath) + `,"content":"configured\n"}`,
-	})
-	if configuredWrite.IsError {
-		t.Fatalf("expected configured safe absolute path write to succeed: %+v", configuredWrite)
-	}
-
-	safeDir := filepath.Join(t.TempDir(), "safe")
-	t.Setenv("TELOS_NATIVE_SAFE_WRITE_PREFIXES", safeDir)
-	tools = newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil)
-	absolutePath := filepath.Join(safeDir, "absolute.txt")
+	// Absolute paths are unrestricted: writes land wherever the process can write.
+	absolutePath := filepath.Join(t.TempDir(), "absolute.txt")
 	written := tools.execute(context.Background(), nativeToolCall{
-		ID:        "call_3",
+		ID:        "call_2",
 		Name:      "write",
 		Arguments: `{"path":` + mustJSON(absolutePath) + `,"content":"ok\n"}`,
 	})
 	if written.IsError {
-		t.Fatalf("expected safe absolute path write to succeed: %+v", written)
+		t.Fatalf("expected absolute path write to succeed: %+v", written)
 	}
 	if !strings.Contains(written.Output, filepath.ToSlash(absolutePath)) {
 		t.Fatalf("absolute path should be visible in tool result, got %q", written.Output)
@@ -2758,10 +2789,8 @@ func TestNativeToolsLogsOutsideWorkspaceAccess(t *testing.T) {
 	if err := os.WriteFile(outsideReadPath, []byte("outside\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	safeDir := filepath.Join(t.TempDir(), "safe")
-	t.Setenv("TELOS_NATIVE_SAFE_WRITE_PREFIXES", safeDir)
 
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", logger)
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", logger, resolveEnvKnobs())
 	read := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_read",
 		Name:      "read_file",
@@ -2770,7 +2799,7 @@ func TestNativeToolsLogsOutsideWorkspaceAccess(t *testing.T) {
 	if read.IsError {
 		t.Fatalf("absolute read should succeed: %+v", read)
 	}
-	writePath := filepath.Join(safeDir, "out.txt")
+	writePath := filepath.Join(t.TempDir(), "out.txt")
 	write := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_write",
 		Name:      "write_file",

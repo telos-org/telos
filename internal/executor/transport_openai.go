@@ -256,9 +256,33 @@ func compactHistory(history responses.ResponseInputParam) responses.ResponseInpu
 	if len(history) <= maxItems {
 		return history
 	}
-	out := make(responses.ResponseInputParam, 0, maxItems)
-	out = append(out, history[0])
-	out = append(out, history[len(history)-maxItems+1:]...)
+	// Keep the first item (the task) plus the most recent window. The window can
+	// begin mid-turn, so drop any function_call_output whose matching
+	// function_call fell outside it — the Responses API rejects an output with no
+	// preceding call when there is no previous_response_id to anchor it.
+	window := make(responses.ResponseInputParam, 0, maxItems)
+	window = append(window, history[0])
+	window = append(window, history[len(history)-maxItems+1:]...)
+	return dropOrphanFunctionOutputs(window)
+}
+
+// dropOrphanFunctionOutputs removes function_call_output items whose
+// function_call is not present in the same item slice. Only outputs are dropped,
+// so every retained output keeps a matching call.
+func dropOrphanFunctionOutputs(items responses.ResponseInputParam) responses.ResponseInputParam {
+	callIDs := map[string]bool{}
+	for _, item := range items {
+		if item.OfFunctionCall != nil {
+			callIDs[item.OfFunctionCall.CallID] = true
+		}
+	}
+	out := make(responses.ResponseInputParam, 0, len(items))
+	for _, item := range items {
+		if fco := item.OfFunctionCallOutput; fco != nil && !callIDs[fco.CallID] {
+			continue
+		}
+		out = append(out, item)
+	}
 	return out
 }
 
@@ -495,6 +519,13 @@ func configuredModelPricing(model string) (modelPricing, bool) {
 		return modelPricing{}, false
 	}
 	return pricing, true
+}
+
+// pricingConfiguredFor reports whether an explicit per-model price is set in
+// TELOS_MODEL_PRICING_TABLE, without exposing the rates. Used for audit logging.
+func pricingConfiguredFor(model string) bool {
+	_, ok := configuredModelPricing(model)
+	return ok
 }
 
 func reasoningEffort(thinking string) openai.ReasoningEffort {

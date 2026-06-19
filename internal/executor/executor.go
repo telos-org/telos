@@ -15,12 +15,11 @@ import (
 
 // NativeExecutor runs one PVG turn with Telos' built-in coding harness.
 type NativeExecutor struct {
-	Platform          *platform.LocalPlatform
-	Model             string
-	Thinking          string
-	Timeout           int
-	Client            *http.Client
-	SafeWritePrefixes []string
+	Platform *platform.LocalPlatform
+	Model    string
+	Thinking string
+	Timeout  int
+	Client   *http.Client
 }
 
 // NewNativeExecutor creates a native Go coding-agent executor.
@@ -69,10 +68,13 @@ func (ne *NativeExecutor) ExecuteTurn(task string, role string, turnState *game.
 		_ = logger.errorEvent(0, execErr)
 		return terminalTurn(role, stats, execErr.Error())
 	}
+	knobs := resolveEnvKnobs()
+	_ = logger.providerConfig(cfg)
+	_ = logger.knobs(knobs)
 	_ = logger.budget(effectiveMaxToolLoops(budget), effectiveMaxOutputTokens(cfg, budget), budget)
 
-	tools := newNativeTools(ne.Platform, stopRequested, task, logger, ne.SafeWritePrefixes...)
-	loop := newAgentLoop(ne.Client, cfg, ne.Thinking, tools, logger, task, role, protocolMode, budget)
+	tools := newNativeTools(ne.Platform, stopRequested, task, logger, knobs)
+	loop := newAgentLoop(ne.Client, cfg, ne.Thinking, tools, logger, task, role, protocolMode, budget, knobs)
 
 	logs, extraStats, err := loop.run(ctx)
 	stats = mergeTurnStats(stats, extraStats)
