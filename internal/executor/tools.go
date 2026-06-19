@@ -1,24 +1,35 @@
 package executor
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
+	"time"
+	"unicode/utf8"
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/responses"
 	"github.com/telos-org/telos/internal/platform"
 )
 
-const defaultToolTimeoutSec = 120
+const (
+	defaultToolTimeoutSec      = 120
+	defaultToolMaxBytes        = 96 << 10
+	defaultToolMaxLines        = 400
+	defaultToolReadLines       = 400
+	defaultToolSearchLineBytes = 4096
+)
 
 type nativeToolCall struct {
 	ID        string
@@ -27,10 +38,35 @@ type nativeToolCall struct {
 }
 
 type nativeToolResult struct {
-	CallID  string
-	Name    string
-	Output  string
-	IsError bool
+	CallID      string
+	Name        string
+	Output      string
+	IsError     bool
+	ErrorCode   executorErrorCode
+	Metadata    map[string]any
+	DurationMS  int64
+	ExitCode    int
+	HasExitCode bool
+	Truncated   bool
+}
+
+type nativeSkillRef struct {
+	Name        string
+	Description string
+	Path        string
+	Required    bool
+}
+
+type toolOutputLimit struct {
+	MaxBytes int
+	MaxLines int
+}
+
+func defaultToolOutputLimit() toolOutputLimit {
+	return toolOutputLimit{
+		MaxBytes: envInt("TELOS_NATIVE_TOOL_MAX_BYTES", defaultToolMaxBytes, 16),
+		MaxLines: envInt("TELOS_NATIVE_TOOL_MAX_LINES", defaultToolMaxLines, 1),
+	}
 }
 
 // nativeTool is the single source of truth for a tool: its schema and its
@@ -64,39 +100,92 @@ func nativeToolTable() []nativeTool {
 	return []nativeTool{
 		{
 			name:        "read",
-			description: "Read a UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.",
-			parameters:  obj([]string{"path"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path.")}),
+			description: "Compatibility alias for read_file. Read a bounded UTF-8 file range.",
+			parameters:  obj([]string{"path"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path."), "start_line": integer("Optional 1-based start line."), "limit_lines": integer("Optional maximum lines to return.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
-				return t.read(argString(args, "path"))
+				return t.readFile(argString(args, "path"), argInt(args, "start_line"), argInt(args, "limit_lines"))
+			},
+		},
+		{
+			name:        "read_file",
+			description: "Read a bounded UTF-8 file range. Relative paths resolve inside the workspace; absolute paths may be read.",
+			parameters:  obj([]string{"path"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path."), "start_line": integer("Optional 1-based start line."), "limit_lines": integer("Optional maximum lines to return.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.readFile(argString(args, "path"), argInt(args, "start_line"), argInt(args, "limit_lines"))
 			},
 		},
 		{
 			name:        "write",
-			description: "Create or overwrite a UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.",
+			description: "Compatibility alias for write_file. Create or overwrite a UTF-8 file.",
 			parameters:  obj([]string{"path", "content"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path."), "content": str("Complete file content to write.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
 				return t.write(argString(args, "path"), argString(args, "content"))
 			},
 		},
 		{
-			name:        "edit",
-			description: "Replace text in an existing UTF-8 file. Relative paths resolve inside the workspace; absolute paths are used as-is.",
-			parameters:  obj([]string{"path", "old_string", "new_string"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path."), "old_string": str("Exact text to replace."), "new_string": str("Replacement text."), "replace_all": boolean("Replace every occurrence instead of only the first.")}),
+			name:        "write_file",
+			description: "Create or overwrite a UTF-8 file. Writes are workspace-only unless the path is under a configured safe prefix.",
+			parameters:  obj([]string{"path", "content"}, map[string]interface{}{"path": str("Relative workspace path or absolute safe path."), "content": str("Complete file content to write.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
-				return t.edit(argString(args, "path"), argString(args, "old_string"), argString(args, "new_string"), argBool(args, "replace_all"))
+				return t.write(argString(args, "path"), argString(args, "content"))
+			},
+		},
+		{
+			name:        "edit",
+			description: "Compatibility alias for replace_text. Replace text in an existing UTF-8 file.",
+			parameters:  obj([]string{"path", "old_string", "new_string"}, map[string]interface{}{"path": str("Relative workspace path or absolute safe path."), "old_string": str("Exact text to replace."), "new_string": str("Replacement text."), "replace_all": boolean("Replace every occurrence instead of only the first."), "expected_count": integer("Optional required replacement count.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.edit(argString(args, "path"), argString(args, "old_string"), argString(args, "new_string"), argBool(args, "replace_all"), argInt(args, "expected_count"))
+			},
+		},
+		{
+			name:        "replace_text",
+			description: "Replace text in an existing UTF-8 file with an optional exact expected replacement count.",
+			parameters:  obj([]string{"path", "old_string", "new_string"}, map[string]interface{}{"path": str("Relative workspace path or absolute safe path."), "old_string": str("Exact text to replace."), "new_string": str("Replacement text."), "replace_all": boolean("Replace every occurrence instead of only the first."), "expected_count": integer("Optional required replacement count.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.edit(argString(args, "path"), argString(args, "old_string"), argString(args, "new_string"), argBool(args, "replace_all"), argInt(args, "expected_count"))
+			},
+		},
+		{
+			name:        "apply_patch",
+			description: "Apply a unified diff patch to the workspace. Prefer this for line-oriented multi-file edits.",
+			parameters:  obj([]string{"patch"}, map[string]interface{}{"patch": str("Unified diff patch text.")}),
+			run: func(t *nativeTools, ctx context.Context, args map[string]interface{}) (string, error) {
+				return t.applyPatch(ctx, argString(args, "patch"))
 			},
 		},
 		{
 			name:        "bash",
-			description: "Run a shell command in the workspace.",
-			parameters:  obj([]string{"command"}, map[string]interface{}{"command": str("Command to run with bash -lc."), "timeout_seconds": integer("Optional timeout, capped by Telos.")}),
+			description: "Run a shell command in the workspace with bounded output and optional cwd/env.",
+			parameters: obj([]string{"command"}, map[string]interface{}{
+				"command":         str("Command to run with bash -lc."),
+				"timeout_seconds": integer("Optional timeout, capped by Telos."),
+				"cwd":             str("Optional working directory relative to the workspace."),
+				"env": map[string]interface{}{
+					"type":                 "object",
+					"description":          "Optional per-command environment variables. Names must match [A-Za-z_][A-Za-z0-9_]*.",
+					"additionalProperties": map[string]interface{}{"type": "string"},
+				},
+			}),
 			run: func(t *nativeTools, ctx context.Context, args map[string]interface{}) (string, error) {
-				return t.bash(ctx, argString(args, "command"), argInt(args, "timeout_seconds"))
+				env, err := argEnv(args, "env")
+				if err != nil {
+					return "", err
+				}
+				return t.bash(ctx, argString(args, "command"), argString(args, "cwd"), env, argInt(args, "timeout_seconds"))
 			},
 		},
 		{
 			name:        "ls",
-			description: "List files in a directory. Relative paths resolve inside the workspace; absolute paths are used as-is.",
+			description: "Compatibility alias for list_dir. List a bounded directory.",
+			parameters:  obj([]string{}, map[string]interface{}{"path": str("Directory path, defaults to workspace root.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.ls(argString(args, "path"))
+			},
+		},
+		{
+			name:        "list_dir",
+			description: "List a bounded directory. Relative paths resolve inside the workspace; absolute paths may be read.",
 			parameters:  obj([]string{}, map[string]interface{}{"path": str("Directory path, defaults to workspace root.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
 				return t.ls(argString(args, "path"))
@@ -104,7 +193,15 @@ func nativeToolTable() []nativeTool {
 		},
 		{
 			name:        "grep",
-			description: "Search text files with a regular expression. Relative paths resolve inside the workspace; absolute paths are used as-is.",
+			description: "Compatibility alias for search_text. Search text files with bounded output.",
+			parameters:  obj([]string{"pattern"}, map[string]interface{}{"pattern": str("Go regular expression."), "path": str("Directory or file path, defaults to workspace root."), "max_matches": integer("Maximum matches to return.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.grep(argString(args, "pattern"), argString(args, "path"), argInt(args, "max_matches"))
+			},
+		},
+		{
+			name:        "search_text",
+			description: "Search text files with a regular expression and bounded match output.",
 			parameters:  obj([]string{"pattern"}, map[string]interface{}{"pattern": str("Go regular expression."), "path": str("Directory or file path, defaults to workspace root."), "max_matches": integer("Maximum matches to return.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
 				return t.grep(argString(args, "pattern"), argString(args, "path"), argInt(args, "max_matches"))
@@ -112,10 +209,40 @@ func nativeToolTable() []nativeTool {
 		},
 		{
 			name:        "find",
-			description: "Find files by glob pattern. Relative paths resolve inside the workspace; absolute paths are used as-is.",
+			description: "Compatibility alias for find_files. Find files by glob pattern with bounded output.",
 			parameters:  obj([]string{"pattern"}, map[string]interface{}{"pattern": str("Glob pattern matched against relative paths and basenames."), "path": str("Directory path, defaults to workspace root."), "max_matches": integer("Maximum paths to return.")}),
 			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
 				return t.find(argString(args, "pattern"), argString(args, "path"), argInt(args, "max_matches"))
+			},
+		},
+		{
+			name:        "find_files",
+			description: "Find files by glob pattern with bounded output.",
+			parameters:  obj([]string{"pattern"}, map[string]interface{}{"pattern": str("Glob pattern matched against relative paths and basenames."), "path": str("Directory path, defaults to workspace root."), "max_matches": integer("Maximum paths to return.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.find(argString(args, "pattern"), argString(args, "path"), argInt(args, "max_matches"))
+			},
+		},
+		{
+			name:        "file_info",
+			description: "Return file metadata such as type, byte size, mode, and line count for text files.",
+			parameters:  obj([]string{"path"}, map[string]interface{}{"path": str("Relative workspace path or absolute container path.")}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.fileInfo(argString(args, "path"))
+			},
+		},
+		{
+			name:        "skill",
+			description: "List available Telos skills, read one skill body, or read a referenced file inside a skill directory. Use this for required rubrics and task-specific skills.",
+			parameters: obj([]string{"action"}, map[string]interface{}{
+				"action":      str("Either 'list', 'read', or 'read_ref'."),
+				"name":        str("Skill name for action='read' or action='read_ref'."),
+				"path":        str("Relative file path inside the skill directory for action='read_ref'."),
+				"start_line":  integer("Optional 1-based start line for read/read_ref."),
+				"limit_lines": integer("Optional maximum lines to return for read/read_ref."),
+			}),
+			run: func(t *nativeTools, _ context.Context, args map[string]interface{}) (string, error) {
+				return t.skill(argString(args, "action"), argString(args, "name"), argString(args, "path"), argInt(args, "start_line"), argInt(args, "limit_lines"))
 			},
 		},
 	}
@@ -150,13 +277,28 @@ func nativeToolsForOpenAI() []responses.ToolUnionParam {
 }
 
 type nativeTools struct {
-	platform      *platform.LocalPlatform
-	stopRequested func() bool
-	byName        map[string]nativeTool
+	platform          *platform.LocalPlatform
+	stopRequested     func() bool
+	byName            map[string]nativeTool
+	limit             toolOutputLimit
+	skills            map[string]nativeSkillRef
+	openedSkills      map[string]bool
+	logger            *nativeSessionLogger
+	safeWritePrefixes []string
 }
 
-func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool) *nativeTools {
-	t := &nativeTools{platform: p, stopRequested: stopRequested, byName: map[string]nativeTool{}}
+func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool, task string, logger *nativeSessionLogger, safeWritePrefixes ...string) *nativeTools {
+	prefixes := normalizeSafeWritePrefixes(safeWritePrefixes)
+	t := &nativeTools{
+		platform:          p,
+		stopRequested:     stopRequested,
+		byName:            map[string]nativeTool{},
+		limit:             defaultToolOutputLimit(),
+		skills:            parseSkillRefs(task),
+		openedSkills:      map[string]bool{},
+		logger:            logger,
+		safeWritePrefixes: prefixes,
+	}
 	for _, tool := range nativeToolTable() {
 		t.byName[tool.name] = tool
 	}
@@ -178,39 +320,205 @@ func (t *nativeTools) execute(ctx context.Context, call nativeToolCall) nativeTo
 	args := map[string]interface{}{}
 	if strings.TrimSpace(call.Arguments) != "" {
 		if err := json.Unmarshal([]byte(call.Arguments), &args); err != nil {
-			return nativeToolResult{CallID: call.ID, Name: call.Name, Output: "invalid tool arguments: " + err.Error(), IsError: true}
+			return nativeToolResult{CallID: call.ID, Name: call.Name, Output: "invalid tool arguments: " + err.Error(), IsError: true, ErrorCode: errAgentProtocol}
 		}
 	}
 	tool, ok := t.byName[call.Name]
 	if !ok {
-		return nativeToolResult{CallID: call.ID, Name: call.Name, Output: fmt.Sprintf("unknown tool %q; available tools are %s", call.Name, oxfordList(nativeToolNames())), IsError: true}
+		return nativeToolResult{CallID: call.ID, Name: call.Name, Output: fmt.Sprintf("unknown tool %q; available tools are %s", call.Name, oxfordList(nativeToolNames())), IsError: true, ErrorCode: errAgentProtocol}
 	}
+	started := time.Now()
 	output, err := tool.run(t, ctx, args)
+	durationMS := time.Since(started).Milliseconds()
 	if err != nil {
-		return nativeToolResult{CallID: call.ID, Name: call.Name, Output: err.Error(), IsError: true}
+		result := nativeToolResult{CallID: call.ID, Name: call.Name, Output: formatToolEnvelope(call.Name, false, durationMS, err.Error()), IsError: true, DurationMS: durationMS}
+		result.applyMetadataFromOutput()
+		return result
 	}
-	return nativeToolResult{CallID: call.ID, Name: call.Name, Output: output}
+	result := nativeToolResult{CallID: call.ID, Name: call.Name, Output: formatToolEnvelope(call.Name, true, durationMS, output), DurationMS: durationMS}
+	result.applyMetadataFromOutput()
+	return result
 }
 
-func (t *nativeTools) read(p string) (string, error) {
+func (r *nativeToolResult) applyMetadataFromOutput() {
+	if r == nil {
+		return
+	}
+	for _, line := range strings.Split(r.Output, "\n") {
+		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
+		if !ok {
+			continue
+		}
+		key = strings.TrimSpace(key)
+		value = strings.TrimSpace(value)
+		if toolMetadataKey(key) {
+			if r.Metadata == nil {
+				r.Metadata = map[string]any{}
+			}
+			r.Metadata[key] = parseToolMetadataValue(value)
+		}
+		switch key {
+		case "exit_code":
+			if n, err := strconv.Atoi(value); err == nil {
+				r.ExitCode = n
+				r.HasExitCode = true
+			}
+		case "stdout_truncated", "stderr_truncated", "truncated":
+			if strings.EqualFold(value, "true") {
+				r.Truncated = true
+			}
+		}
+	}
+	if r.IsError && r.ErrorCode == "" {
+		r.ErrorCode = classifyToolResultError(r.Output)
+	}
+}
+
+func toolMetadataKey(key string) bool {
+	switch key {
+	case "tool", "ok", "exit_code", "signal", "started_at", "ended_at", "duration_ms", "timed_out", "interrupted",
+		"stdout_bytes", "stdout_original_bytes", "stdout_original_lines", "stdout_truncated",
+		"stderr_bytes", "stderr_original_bytes", "stderr_original_lines", "stderr_truncated",
+		"path", "size_bytes", "lines_returned", "line_count", "entry_count", "entries_returned", "match_count",
+		"created", "bytes_written", "replacement_count", "mode",
+		"patch_bytes", "changed_path_count", "created_paths", "deleted_paths", "hunk_count",
+		"truncated", "binary":
+		return true
+	default:
+		return false
+	}
+}
+
+func parseToolMetadataValue(value string) any {
+	if strings.EqualFold(value, "true") {
+		return true
+	}
+	if strings.EqualFold(value, "false") {
+		return false
+	}
+	if n, err := strconv.Atoi(value); err == nil {
+		return n
+	}
+	return value
+}
+
+func classifyToolResultError(output string) executorErrorCode {
+	lower := strings.ToLower(output)
+	switch {
+	case strings.Contains(lower, "timed_out: true") || strings.Contains(lower, "local_timeout"):
+		return errToolTimeout
+	case strings.Contains(lower, "interrupted: true") || strings.Contains(lower, "local_interrupted"):
+		return errStopped
+	case strings.Contains(lower, "local_spawn_failed") ||
+		strings.Contains(lower, "stdout_pipe:") ||
+		strings.Contains(lower, "stderr_pipe:"):
+		return errToolInfra
+	default:
+		return ""
+	}
+}
+
+func (t *nativeTools) readFile(p string, startLine, limitLines int) (string, error) {
 	full, err := t.resolvePath(p)
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(full)
+	t.logOutsideWorkspaceAccess("read_file", full, false)
+	info, err := os.Stat(full)
 	if err != nil {
 		return "", err
 	}
-	return string(data), nil
+	if info.IsDir() {
+		return "", fmt.Errorf("%s is a directory", p)
+	}
+	if startLine <= 0 {
+		startLine = 1
+	}
+	if limitLines <= 0 || limitLines > t.limit.MaxLines {
+		limitLines = defaultToolReadLines
+	}
+	if limitLines > t.limit.MaxLines {
+		limitLines = t.limit.MaxLines
+	}
+	content, totalLines, endLine, truncatedBytes, binary, err := readTextFileRange(full, startLine, limitLines, t.limit.MaxBytes)
+	if err != nil {
+		return "", err
+	}
+	if binary {
+		return fmt.Sprintf("path: %s\nsize_bytes: %d\nbinary: true\ncontent:\n(binary file omitted)", t.displayPath(full), info.Size()), nil
+	}
+	if endLine < startLine {
+		endLine = startLine - 1
+	}
+	truncated := endLine < totalLines || truncatedBytes
+	return fmt.Sprintf("path: %s\nsize_bytes: %d\nlines_returned: %d-%d\nline_count: %d\ntruncated: %t\ncontent:\n%s",
+		t.displayPath(full), info.Size(), startLine, endLine, totalLines, truncated, content), nil
+}
+
+func readTextFileRange(full string, startLine, limitLines, maxBytes int) (string, int, int, bool, bool, error) {
+	f, err := os.Open(full)
+	if err != nil {
+		return "", 0, 0, false, false, err
+	}
+	defer f.Close()
+
+	endLine := startLine + limitLines - 1
+	totalLines := 0
+	lastReturned := startLine - 1
+	truncatedBytes := false
+	var out strings.Builder
+	reader := bufio.NewReaderSize(f, 64<<10)
+	for {
+		fragment, readErr := reader.ReadSlice('\n')
+		if len(fragment) > 0 {
+			if !isUTF8TextBytes(fragment) {
+				return "", totalLines, lastReturned, false, true, nil
+			}
+			currentLine := totalLines + 1
+			if currentLine >= startLine && currentLine <= endLine {
+				lastReturned = currentLine
+				if !truncatedBytes {
+					remaining := maxBytes - out.Len()
+					if remaining <= 0 {
+						truncatedBytes = true
+					} else if len(fragment) > remaining {
+						out.Write(fragment[:validUTF8PrefixLen(fragment, remaining)])
+						truncatedBytes = true
+					} else {
+						out.Write(fragment)
+					}
+				}
+			}
+			if readErr != bufio.ErrBufferFull {
+				totalLines++
+			}
+		}
+		switch readErr {
+		case nil, bufio.ErrBufferFull:
+			continue
+		case io.EOF:
+			return out.String(), totalLines, lastReturned, truncatedBytes, false, nil
+		default:
+			return "", totalLines, lastReturned, truncatedBytes, false, readErr
+		}
+	}
 }
 
 func (t *nativeTools) write(p, content string) (string, error) {
 	if p == "" {
 		return "", fmt.Errorf("path is required")
 	}
-	full, err := t.resolvePath(p)
+	if strings.ContainsRune(content, '\x00') {
+		return "", fmt.Errorf("content contains NUL byte")
+	}
+	full, err := t.resolveWritePath(p)
 	if err != nil {
 		return "", err
+	}
+	t.logOutsideWorkspaceAccess("write_file", full, true)
+	created := false
+	if _, statErr := os.Stat(full); os.IsNotExist(statErr) {
+		created = true
 	}
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return "", err
@@ -218,29 +526,45 @@ func (t *nativeTools) write(p, content string) (string, error) {
 	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
 		return "", err
 	}
-	return "wrote " + t.displayPath(full), nil
+	mode := ""
+	if info, err := os.Stat(full); err == nil {
+		mode = fmt.Sprintf("\nmode: %s", info.Mode().String())
+	}
+	return fmt.Sprintf("path: %s\ncreated: %t\nbytes_written: %d%s", t.displayPath(full), created, len(content), mode), nil
 }
 
-func (t *nativeTools) edit(p, oldString, newString string, replaceAll bool) (string, error) {
+func (t *nativeTools) edit(p, oldString, newString string, replaceAll bool, expectedCount int) (string, error) {
 	if oldString == "" {
 		return "", fmt.Errorf("old_string is required")
 	}
-	full, err := t.resolvePath(p)
+	if strings.ContainsRune(oldString, '\x00') || strings.ContainsRune(newString, '\x00') {
+		return "", fmt.Errorf("old_string and new_string must not contain NUL bytes")
+	}
+	full, err := t.resolveWritePath(p)
 	if err != nil {
 		return "", err
 	}
+	t.logOutsideWorkspaceAccess("replace_text", full, true)
 	data, err := os.ReadFile(full)
 	if err != nil {
 		return "", err
+	}
+	if !isUTF8TextBytes(data) {
+		return "", fmt.Errorf("%s is not a UTF-8 text file", p)
 	}
 	text := string(data)
 	count := strings.Count(text, oldString)
 	if count == 0 {
 		return "", fmt.Errorf("old_string not found in %s", p)
 	}
+	if expectedCount > 0 && count != expectedCount {
+		return "", fmt.Errorf("replacement count mismatch in %s: found %d, expected %d", p, count, expectedCount)
+	}
 	n := 1
 	if replaceAll {
 		n = -1
+	} else if expectedCount > 1 {
+		return "", fmt.Errorf("expected_count=%d requires replace_all=true", expectedCount)
 	}
 	updated := strings.Replace(text, oldString, newString, n)
 	if err := os.WriteFile(full, []byte(updated), 0o644); err != nil {
@@ -249,10 +573,83 @@ func (t *nativeTools) edit(p, oldString, newString string, replaceAll bool) (str
 	if !replaceAll {
 		count = 1
 	}
-	return fmt.Sprintf("edited %s (%d replacement%s)", p, count, plural(count)), nil
+	mode := ""
+	if info, err := os.Stat(full); err == nil {
+		mode = fmt.Sprintf("\nmode: %s", info.Mode().String())
+	}
+	return fmt.Sprintf("path: %s\nreplacement_count: %d\nbytes_written: %d\ncreated: false%s", t.displayPath(full), count, len(updated), mode), nil
 }
 
-func (t *nativeTools) bash(ctx context.Context, command string, timeout int) (string, error) {
+func (t *nativeTools) applyPatch(ctx context.Context, patchText string) (string, error) {
+	if strings.TrimSpace(patchText) == "" {
+		return "", fmt.Errorf("patch is required")
+	}
+	tmp, err := os.CreateTemp("", "telos-patch-*.diff")
+	if err != nil {
+		return "", err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.WriteString(patchText); err != nil {
+		tmp.Close()
+		return "", err
+	}
+	if err := tmp.Close(); err != nil {
+		return "", err
+	}
+	changed := patchChangedPaths(patchText)
+	if err := validatePatchPaths(patchDeclaredPaths(patchText)); err != nil {
+		return "", err
+	}
+	created := patchCreatedPaths(patchText)
+	deleted := patchDeletedPaths(patchText)
+	hunks := patchHunkCount(patchText)
+	cmd := "git apply --whitespace=nowarn --recount " + shellQuote(tmp.Name())
+	out, err := t.bash(ctx, cmd, "", nil, defaultToolTimeoutSec)
+	if err != nil {
+		return out, err
+	}
+	lines := []string{
+		fmt.Sprintf("patch_bytes: %d", len(patchText)),
+		fmt.Sprintf("changed_path_count: %d", len(changed)),
+		fmt.Sprintf("changed_paths: %s", strings.Join(changed, ", ")),
+		fmt.Sprintf("created_paths: %s", strings.Join(created, ", ")),
+		fmt.Sprintf("deleted_paths: %s", strings.Join(deleted, ", ")),
+		fmt.Sprintf("hunk_count: %d", hunks),
+		"files:",
+		t.patchFileMetadata(changed, created, deleted),
+		out,
+	}
+	return strings.Join(lines, "\n"), nil
+}
+
+func (t *nativeTools) patchFileMetadata(changed, created, deleted []string) string {
+	createdSet := stringSet(created)
+	deletedSet := stringSet(deleted)
+	var lines []string
+	for _, p := range changed {
+		full, err := t.resolveWritePath(p)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("- path: %s\n  error: %s", p, err))
+			continue
+		}
+		if deletedSet[p] {
+			lines = append(lines, fmt.Sprintf("- path: %s\n  created: false\n  deleted: true\n  bytes_written: 0", t.displayPath(full)))
+			continue
+		}
+		info, err := os.Stat(full)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("- path: %s\n  created: %t\n  deleted: false\n  error: %s", t.displayPath(full), createdSet[p], err))
+			continue
+		}
+		lines = append(lines, fmt.Sprintf("- path: %s\n  created: %t\n  deleted: false\n  bytes_written: %d\n  mode: %s", t.displayPath(full), createdSet[p], info.Size(), info.Mode().String()))
+	}
+	if len(lines) == 0 {
+		return "none"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (t *nativeTools) bash(ctx context.Context, command string, cwd string, env map[string]string, timeout int) (string, error) {
 	if strings.TrimSpace(command) == "" {
 		return "", fmt.Errorf("command is required")
 	}
@@ -266,25 +663,72 @@ func (t *nativeTools) bash(ctx context.Context, command string, timeout int) (st
 		}
 		return t.stopRequested != nil && t.stopRequested()
 	}
-	result := t.platform.Run([]string{"bash", "-lc", command}, "", nil, timeout, interrupt, nil)
-	var parts []string
-	if stdout := strings.Join(result.RawLines, "\n"); stdout != "" {
-		parts = append(parts, "[stdout]\n"+stdout)
+	runCWD := ""
+	if strings.TrimSpace(cwd) != "" {
+		full, err := t.resolvePath(cwd)
+		if err != nil {
+			return "", err
+		}
+		workspace, _ := filepath.Abs(t.platform.Workspace)
+		rel, err := filepath.Rel(workspace, full)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return "", fmt.Errorf("cwd %q is outside workspace", cwd)
+		}
+		runCWD = full
 	}
-	if stderr := strings.TrimSpace(result.Stderr); stderr != "" {
-		parts = append(parts, "[stderr]\n"+stderr)
+	result := t.platform.Run([]string{"bash", "-lc", command}, "", env, timeout, interrupt, nil, runCWD)
+	stdoutText, stdoutLineTruncated := capOutputLines(strings.Join(result.RawLines, "\n"), "stdout", result.StdoutOriginalLines, t.limit.MaxLines)
+	stderrText, stderrLineTruncated := capOutputLines(strings.TrimSpace(result.Stderr), "stderr", result.StderrOriginalLines, t.limit.MaxLines)
+	stdoutTruncated := result.StdoutTruncated || stdoutLineTruncated
+	stderrTruncated := result.StderrTruncated || stderrLineTruncated
+	var parts []string
+	parts = append(parts,
+		fmt.Sprintf("exit_code: %d", result.ReturnCode),
+		fmt.Sprintf("signal: %s", defaultString(result.Signal, "none")),
+		fmt.Sprintf("started_at: %s", result.StartedAt.UTC().Format(time.RFC3339Nano)),
+		fmt.Sprintf("ended_at: %s", result.EndedAt.UTC().Format(time.RFC3339Nano)),
+		fmt.Sprintf("duration_ms: %d", result.DurationMS),
+		fmt.Sprintf("timed_out: %t", result.TimedOut),
+		fmt.Sprintf("interrupted: %t", result.Interrupted),
+		fmt.Sprintf("stdout_bytes: %d", result.StdoutBytes),
+		fmt.Sprintf("stdout_original_bytes: %d", result.StdoutOriginalBytes),
+		fmt.Sprintf("stdout_original_lines: %d", result.StdoutOriginalLines),
+		fmt.Sprintf("stdout_truncated: %t", stdoutTruncated),
+		fmt.Sprintf("stderr_bytes: %d", result.StderrBytes),
+		fmt.Sprintf("stderr_original_bytes: %d", result.StderrOriginalBytes),
+		fmt.Sprintf("stderr_original_lines: %d", result.StderrOriginalLines),
+		fmt.Sprintf("stderr_truncated: %t", stderrTruncated),
+	)
+	if stdoutText != "" {
+		parts = append(parts, "stdout:\n"+stdoutText)
+	}
+	if stderrText != "" {
+		parts = append(parts, "stderr:\n"+stderrText)
 	}
 	if result.InfraError != "" {
-		parts = append(parts, "[error]\n"+result.InfraError)
+		parts = append(parts, "error:\n"+result.InfraError)
 		return strings.Join(parts, "\n"), errors.New(strings.Join(parts, "\n"))
 	}
 	if result.ReturnCode != 0 {
-		parts = append(parts, fmt.Sprintf("[exit_code]\n%d", result.ReturnCode))
-	}
-	if len(parts) == 0 {
-		return "command completed with no output", nil
+		return strings.Join(parts, "\n"), errors.New(strings.Join(parts, "\n"))
 	}
 	return strings.Join(parts, "\n"), nil
+}
+
+func capOutputLines(text string, streamName string, originalLines int, maxLines int) (string, bool) {
+	if strings.TrimSpace(text) == "" || maxLines <= 0 {
+		return text, false
+	}
+	lines := strings.Split(text, "\n")
+	if len(lines) <= maxLines {
+		return text, false
+	}
+	displayOriginal := originalLines
+	if displayOriginal < len(lines) {
+		displayOriginal = len(lines)
+	}
+	lines = append(lines[:maxLines], fmt.Sprintf("... %s truncated at %d lines of %d ...", streamName, maxLines, displayOriginal))
+	return strings.Join(lines, "\n"), true
 }
 
 func (t *nativeTools) ls(p string) (string, error) {
@@ -292,20 +736,40 @@ func (t *nativeTools) ls(p string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	entries, err := os.ReadDir(full)
+	t.logOutsideWorkspaceAccess("list_dir", full, false)
+	dir, err := os.Open(full)
 	if err != nil {
 		return "", err
 	}
-	lines := make([]string, 0, len(entries))
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() {
-			name += "/"
+	defer dir.Close()
+	var lines []string
+	entryCount := 0
+	for {
+		entries, err := dir.ReadDir(256)
+		if len(entries) > 0 {
+			for _, entry := range entries {
+				entryCount++
+				if len(lines) >= t.limit.MaxLines {
+					continue
+				}
+				name := entry.Name()
+				if entry.IsDir() {
+					name += "/"
+				}
+				lines = append(lines, name)
+			}
 		}
-		lines = append(lines, name)
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return "", err
+		}
 	}
 	sort.Strings(lines)
-	return strings.Join(lines, "\n"), nil
+	entriesText, truncatedBytes := truncateText(strings.Join(lines, "\n"), t.limit.MaxBytes)
+	truncated := entryCount > len(lines) || truncatedBytes
+	return fmt.Sprintf("path: %s\nentry_count: %d\nentries_returned: %d\ntruncated: %t\nentries:\n%s", t.displayPath(full), entryCount, len(lines), truncated, entriesText), nil
 }
 
 func (t *nativeTools) grep(pattern, p string, maxMatches int) (string, error) {
@@ -323,6 +787,7 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	t.logOutsideWorkspaceAccess("search_text", root, false)
 	var matches []string
 	visit := func(file string) {
 		if len(matches) >= maxMatches {
@@ -333,12 +798,13 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (string, error) {
 			return
 		}
 		data, err := os.ReadFile(file)
-		if err != nil || bytes.IndexByte(data, 0) >= 0 {
+		if err != nil || !isUTF8TextBytes(data) {
 			return
 		}
 		rel := t.displayPath(file)
 		for i, line := range strings.Split(string(data), "\n") {
 			if re.MatchString(line) {
+				line, _ = truncateText(line, defaultToolSearchLineBytes)
 				matches = append(matches, fmt.Sprintf("%s:%d:%s", rel, i+1, line))
 				if len(matches) >= maxMatches {
 					break
@@ -357,6 +823,9 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (string, error) {
 			if err != nil {
 				return nil
 			}
+			if len(matches) >= maxMatches {
+				return filepath.SkipAll
+			}
 			if d.IsDir() {
 				if shouldSkipDir(d.Name()) {
 					return filepath.SkipDir
@@ -370,7 +839,10 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (string, error) {
 	if len(matches) == 0 {
 		return "no matches", nil
 	}
-	return strings.Join(matches, "\n"), nil
+	out := strings.Join(matches, "\n")
+	out, truncatedBytes := truncateText(out, t.limit.MaxBytes)
+	truncated := len(matches) >= maxMatches || truncatedBytes
+	return fmt.Sprintf("match_count: %d\ntruncated: %t\nmatches:\n%s", len(matches), truncated, out), nil
 }
 
 func (t *nativeTools) find(pattern, p string, maxMatches int) (string, error) {
@@ -384,10 +856,14 @@ func (t *nativeTools) find(pattern, p string, maxMatches int) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	t.logOutsideWorkspaceAccess("find_files", root, false)
 	var matches []string
 	_ = filepath.WalkDir(root, func(file string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
+		}
+		if len(matches) >= maxMatches {
+			return filepath.SkipAll
 		}
 		if d.IsDir() {
 			if shouldSkipDir(d.Name()) {
@@ -405,13 +881,184 @@ func (t *nativeTools) find(pattern, p string, maxMatches int) (string, error) {
 		return nil
 	})
 	sort.Strings(matches)
-	if len(matches) > maxMatches {
-		matches = matches[:maxMatches]
-	}
 	if len(matches) == 0 {
 		return "no matches", nil
 	}
-	return strings.Join(matches, "\n"), nil
+	pathsText, truncatedBytes := truncateText(strings.Join(matches, "\n"), t.limit.MaxBytes)
+	truncated := len(matches) >= maxMatches || truncatedBytes
+	return fmt.Sprintf("match_count: %d\ntruncated: %t\npaths:\n%s", len(matches), truncated, pathsText), nil
+}
+
+func (t *nativeTools) fileInfo(p string) (string, error) {
+	full, err := t.resolvePath(p)
+	if err != nil {
+		return "", err
+	}
+	t.logOutsideWorkspaceAccess("file_info", full, false)
+	info, err := os.Stat(full)
+	if err != nil {
+		return "", err
+	}
+	kind := "file"
+	if info.IsDir() {
+		kind = "directory"
+	}
+	lineCount := ""
+	if info.Mode().IsRegular() && info.Size() <= 8<<20 {
+		if data, err := os.ReadFile(full); err == nil && isUTF8TextBytes(data) {
+			lineCount = fmt.Sprintf("\nline_count: %d", len(strings.Split(string(data), "\n")))
+		}
+	}
+	return fmt.Sprintf("path: %s\ntype: %s\nsize_bytes: %d\nmode: %s%s", t.displayPath(full), kind, info.Size(), info.Mode().String(), lineCount), nil
+}
+
+func (t *nativeTools) skill(action, name, refPath string, startLine, limitLines int) (string, error) {
+	action = strings.ToLower(strings.TrimSpace(action))
+	if action == "" {
+		action = "list"
+	}
+	switch action {
+	case "list":
+		if len(t.skills) == 0 {
+			return "skills: none", nil
+		}
+		names := make([]string, 0, len(t.skills))
+		for name := range t.skills {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		var lines []string
+		for _, skillName := range names {
+			ref := t.skills[skillName]
+			required := ""
+			if ref.Required {
+				required = "\nrequired: true"
+			}
+			lines = append(lines, fmt.Sprintf("name: %s%s\ndescription: %s\npath: %s", ref.Name, required, ref.Description, ref.Path))
+		}
+		return strings.Join(lines, "\n---\n"), nil
+	case "read", "read_ref":
+		ref, ok := t.skills[strings.TrimSpace(name)]
+		if !ok {
+			return "", fmt.Errorf("unknown skill %q; use action=list to inspect available skills", name)
+		}
+		readPath := ref.Path
+		if action == "read_ref" {
+			var err error
+			readPath, err = resolveSkillReferencePath(ref.Path, refPath)
+			if err != nil {
+				return "", err
+			}
+		}
+		body, truncated, err := t.readSkillFile(readPath, startLine, limitLines)
+		if err != nil {
+			return "", err
+		}
+		if action == "read" && !truncated {
+			t.openedSkills[ref.Name] = true
+		}
+		_ = t.logger.skillOpened(ref.Name, readPath, truncated)
+		if action == "read" && !truncated {
+			_ = t.logger.skillApplied(ref.Name, readPath)
+		}
+		return fmt.Sprintf("name: %s\npath: %s\ntruncated: %t\n%s", ref.Name, readPath, truncated, body), nil
+	default:
+		return "", fmt.Errorf("unknown skill action %q; use 'list', 'read', or 'read_ref'", action)
+	}
+}
+
+func (t *nativeTools) readSkillFile(full string, startLine, limitLines int) (string, bool, error) {
+	info, err := os.Stat(full)
+	if err != nil {
+		return "", false, err
+	}
+	if info.IsDir() {
+		return "", false, fmt.Errorf("%s is a directory", full)
+	}
+	if startLine <= 0 {
+		startLine = 1
+	}
+	if limitLines <= 0 || limitLines > t.limit.MaxLines {
+		limitLines = defaultToolReadLines
+	}
+	if limitLines > t.limit.MaxLines {
+		limitLines = t.limit.MaxLines
+	}
+	content, totalLines, endLine, truncatedBytes, binary, err := readTextFileRange(full, startLine, limitLines, t.limit.MaxBytes)
+	if err != nil {
+		return "", false, err
+	}
+	if binary {
+		return fmt.Sprintf("size_bytes: %d\nbinary: true\ncontent:\n(binary file omitted)", info.Size()), false, nil
+	}
+	if endLine < startLine {
+		endLine = startLine - 1
+	}
+	truncated := endLine < totalLines || truncatedBytes
+	body := fmt.Sprintf("size_bytes: %d\nlines_returned: %d-%d\nline_count: %d\ncontent:\n%s", info.Size(), startLine, endLine, totalLines, content)
+	return body, truncated, nil
+}
+
+func resolveSkillReferencePath(skillPath, refPath string) (string, error) {
+	refPath = strings.TrimSpace(refPath)
+	if refPath == "" {
+		return "", fmt.Errorf("path is required for skill action='read_ref'")
+	}
+	refPath = filepath.FromSlash(refPath)
+	if filepath.IsAbs(refPath) {
+		return "", fmt.Errorf("skill reference path %q must be relative", refPath)
+	}
+	base, err := filepath.Abs(filepath.Dir(skillPath))
+	if err != nil {
+		return "", err
+	}
+	full, err := filepath.Abs(filepath.Join(base, filepath.Clean(refPath)))
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(base, full)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("skill reference path %q is outside skill directory", refPath)
+	}
+	return full, nil
+}
+
+var skillRosterLineRE = regexp.MustCompile("`([^`]+)`([^\\n]*)\\(path: `([^`]+/SKILL\\.md)`\\)")
+
+func parseSkillRefs(task string) map[string]nativeSkillRef {
+	refs := map[string]nativeSkillRef{}
+	for _, match := range skillRosterLineRE.FindAllStringSubmatch(task, -1) {
+		name := strings.TrimSpace(match[1])
+		if name == "" {
+			continue
+		}
+		meta := strings.TrimSpace(match[2])
+		path := strings.TrimSpace(match[3])
+		desc := strings.TrimSpace(strings.TrimPrefix(meta, "-"))
+		desc = strings.TrimSpace(strings.TrimSuffix(desc, " -"))
+		required := strings.Contains(meta, "required evaluation rubric")
+		refs[name] = nativeSkillRef{
+			Name:        name,
+			Description: desc,
+			Path:        path,
+			Required:    required,
+		}
+	}
+	return refs
+}
+
+func (t *nativeTools) missingRequiredSkills() []string {
+	if t == nil {
+		return nil
+	}
+	var missing []string
+	for name, ref := range t.skills {
+		if ref.Required && !t.openedSkills[name] {
+			missing = append(missing, name)
+		}
+	}
+	sort.Strings(missing)
+	return missing
 }
 
 func (t *nativeTools) resolvePath(p string) (string, error) {
@@ -436,6 +1083,26 @@ func (t *nativeTools) resolvePath(p string) (string, error) {
 	return full, nil
 }
 
+func (t *nativeTools) resolveWritePath(p string) (string, error) {
+	full, err := t.resolvePath(p)
+	if err != nil {
+		return "", err
+	}
+	if t.isInsideWorkspace(full) || t.isUnderSafeWritePrefix(full) {
+		return full, nil
+	}
+	return "", fmt.Errorf("write path %q is outside workspace and outside safe write prefixes", p)
+}
+
+func (t *nativeTools) isInsideWorkspace(full string) bool {
+	workspace, err := filepath.Abs(t.platform.Workspace)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(workspace, full)
+	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
 func (t *nativeTools) displayPath(full string) string {
 	workspace, err := filepath.Abs(t.platform.Workspace)
 	if err == nil {
@@ -444,6 +1111,13 @@ func (t *nativeTools) displayPath(full string) string {
 		}
 	}
 	return filepath.ToSlash(full)
+}
+
+func (t *nativeTools) logOutsideWorkspaceAccess(action, full string, write bool) {
+	if t == nil || t.isInsideWorkspace(full) {
+		return
+	}
+	_ = t.logger.outsideWorkspaceAccess(action, t.displayPath(full), write)
 }
 
 func shouldSkipDir(name string) bool {
@@ -476,6 +1150,40 @@ func argInt(args map[string]interface{}, key string) int {
 	}
 }
 
+var shellEnvNameRE = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+func argEnv(args map[string]interface{}, key string) (map[string]string, error) {
+	raw, ok := args[key]
+	if !ok || raw == nil {
+		return nil, nil
+	}
+	values, ok := raw.(map[string]interface{})
+	if !ok {
+		return nil, fmt.Errorf("%s must be an object", key)
+	}
+	if len(values) > 32 {
+		return nil, fmt.Errorf("%s has too many variables: %d > 32", key, len(values))
+	}
+	env := make(map[string]string, len(values))
+	for name, value := range values {
+		if !shellEnvNameRE.MatchString(name) {
+			return nil, fmt.Errorf("invalid environment variable name %q", name)
+		}
+		text, ok := value.(string)
+		if !ok {
+			return nil, fmt.Errorf("environment variable %q must be a string", name)
+		}
+		if len(text) > 4096 {
+			return nil, fmt.Errorf("environment variable %q is too large", name)
+		}
+		if strings.ContainsRune(text, 0) {
+			return nil, fmt.Errorf("environment variable %q contains a NUL byte", name)
+		}
+		env[name] = text
+	}
+	return env, nil
+}
+
 func defaultString(value, fallback string) string {
 	if value == "" {
 		return fallback
@@ -483,11 +1191,219 @@ func defaultString(value, fallback string) string {
 	return value
 }
 
-func plural(count int) string {
-	if count == 1 {
-		return ""
+func formatToolEnvelope(name string, ok bool, durationMS int64, body string) string {
+	return fmt.Sprintf("tool: %s\nok: %t\nduration_ms: %d\n%s", name, ok, durationMS, body)
+}
+
+func truncateText(text string, maxBytes int) (string, bool) {
+	if maxBytes <= 0 || len(text) <= maxBytes {
+		return text, false
 	}
-	return "s"
+	end := validUTF8PrefixLen([]byte(text), maxBytes)
+	return text[:end] + fmt.Sprintf("\n... truncated %d bytes ...", len(text)-end), true
+}
+
+func isUTF8TextBytes(data []byte) bool {
+	return bytes.IndexByte(data, 0) < 0 && utf8.Valid(data)
+}
+
+func validUTF8PrefixLen(data []byte, maxBytes int) int {
+	if maxBytes <= 0 {
+		return 0
+	}
+	if maxBytes >= len(data) {
+		return len(data)
+	}
+	end := maxBytes
+	for end > 0 && !utf8.Valid(data[:end]) {
+		end--
+	}
+	return end
+}
+
+func envInt(name string, fallback int, min int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < min {
+		return fallback
+	}
+	return n
+}
+
+func (t *nativeTools) isUnderSafeWritePrefix(full string) bool {
+	full, _ = filepath.Abs(full)
+	for _, prefix := range t.safeWritePrefixes {
+		abs, err := filepath.Abs(prefix)
+		if err != nil {
+			continue
+		}
+		rel, err := filepath.Rel(abs, full)
+		if err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+			return true
+		}
+	}
+	return false
+}
+
+func normalizeSafeWritePrefixes(prefixes []string) []string {
+	var out []string
+	if len(prefixes) == 0 {
+		if raw := strings.TrimSpace(os.Getenv("TELOS_NATIVE_SAFE_WRITE_PREFIXES")); raw != "" {
+			prefixes = strings.Split(raw, string(os.PathListSeparator))
+		}
+	}
+	for _, prefix := range prefixes {
+		prefix = strings.TrimSpace(prefix)
+		if prefix != "" {
+			out = append(out, prefix)
+		}
+	}
+	return out
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+func patchChangedPaths(patchText string) []string {
+	seen := map[string]bool{}
+	var paths []string
+	for _, line := range strings.Split(patchText, "\n") {
+		var p string
+		switch {
+		case strings.HasPrefix(line, "+++ b/"):
+			p = strings.TrimPrefix(line, "+++ b/")
+		case strings.HasPrefix(line, "--- a/"):
+			p = strings.TrimPrefix(line, "--- a/")
+		}
+		if p == "" || p == "/dev/null" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func patchDeclaredPaths(patchText string) []string {
+	seen := map[string]bool{}
+	var paths []string
+	add := func(p string) {
+		p = normalizePatchPath(p)
+		if p == "" || p == "/dev/null" || seen[p] {
+			return
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	for _, line := range strings.Split(patchText, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++ ") || strings.HasPrefix(line, "--- "):
+			fields := strings.Fields(line)
+			if len(fields) >= 2 {
+				add(fields[1])
+			}
+		case strings.HasPrefix(line, "diff --git "):
+			fields := strings.Fields(line)
+			if len(fields) >= 4 {
+				add(fields[2])
+				add(fields[3])
+			}
+		case strings.HasPrefix(line, "rename from "):
+			add(strings.TrimPrefix(line, "rename from "))
+		case strings.HasPrefix(line, "rename to "):
+			add(strings.TrimPrefix(line, "rename to "))
+		case strings.HasPrefix(line, "copy from "):
+			add(strings.TrimPrefix(line, "copy from "))
+		case strings.HasPrefix(line, "copy to "):
+			add(strings.TrimPrefix(line, "copy to "))
+		}
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func normalizePatchPath(p string) string {
+	p = strings.TrimSpace(p)
+	if unquoted, err := strconv.Unquote(p); err == nil {
+		p = unquoted
+	}
+	p = strings.TrimPrefix(p, "a/")
+	p = strings.TrimPrefix(p, "b/")
+	return p
+}
+
+func validatePatchPaths(paths []string) error {
+	for _, p := range paths {
+		clean := path.Clean(strings.TrimSpace(p))
+		if clean == "." || clean == "" {
+			return fmt.Errorf("patch contains empty path")
+		}
+		if path.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, "../") {
+			return fmt.Errorf("patch path %q is outside workspace", p)
+		}
+	}
+	return nil
+}
+
+func patchCreatedPaths(patchText string) []string {
+	var paths []string
+	seen := map[string]bool{}
+	lines := strings.Split(patchText, "\n")
+	for i := 0; i+1 < len(lines); i++ {
+		if strings.TrimSpace(lines[i]) != "--- /dev/null" || !strings.HasPrefix(lines[i+1], "+++ b/") {
+			continue
+		}
+		p := strings.TrimPrefix(lines[i+1], "+++ b/")
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func patchDeletedPaths(patchText string) []string {
+	var paths []string
+	seen := map[string]bool{}
+	lines := strings.Split(patchText, "\n")
+	for i := 0; i+1 < len(lines); i++ {
+		if !strings.HasPrefix(lines[i], "--- a/") || strings.TrimSpace(lines[i+1]) != "+++ /dev/null" {
+			continue
+		}
+		p := strings.TrimPrefix(lines[i], "--- a/")
+		if p == "" || seen[p] {
+			continue
+		}
+		seen[p] = true
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func patchHunkCount(patchText string) int {
+	count := 0
+	for _, line := range strings.Split(patchText, "\n") {
+		if strings.HasPrefix(line, "@@ ") {
+			count++
+		}
+	}
+	return count
+}
+
+func stringSet(items []string) map[string]bool {
+	set := make(map[string]bool, len(items))
+	for _, item := range items {
+		set[item] = true
+	}
+	return set
 }
 
 func oxfordList(items []string) string {

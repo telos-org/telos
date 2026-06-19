@@ -3,9 +3,13 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "executor",
     srcs = [
+        "conversation_state.go",
+        "errors.go",
         "executor.go",
         "loop.go",
         "provider.go",
+        "replay.go",
+        "sanitize.go",
         "sessionlog.go",
         "tools.go",
         "transport_openai.go",

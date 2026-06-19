@@ -15,11 +15,12 @@ import (
 
 // NativeExecutor runs one PVG turn with Telos' built-in coding harness.
 type NativeExecutor struct {
-	Platform *platform.LocalPlatform
-	Model    string
-	Thinking string
-	Timeout  int
-	Client   *http.Client
+	Platform          *platform.LocalPlatform
+	Model             string
+	Thinking          string
+	Timeout           int
+	Client            *http.Client
+	SafeWritePrefixes []string
 }
 
 // NewNativeExecutor creates a native Go coding-agent executor.
@@ -42,41 +43,59 @@ func (ne *NativeExecutor) ExecuteTurn(task string, role string, turnState *game.
 	stats := game.TurnStats{Model: ne.Model}
 	sessionPath := ""
 	var stopRequested func() bool
+	var budget game.TurnBudget
+	protocolMode := ""
 	if turnState != nil {
 		sessionPath = turnState.SessionPath()
 		stopRequested = turnState.StopRequested
+		budget = turnState.Budget
+		protocolMode = turnState.ProtocolMode
 	}
 
-	ctx, cancel := turnContext(ne.Timeout, stopRequested)
+	timeout := effectiveTurnTimeout(ne.Timeout, budget)
+	ctx, cancel := turnContext(timeout, stopRequested)
 	defer cancel()
+
+	logger := newNativeSessionLogger(sessionPath, ne.Platform.Workspace)
+	if err := logger.start(); err != nil {
+		return recoverableTurn(role, stats, newExecutorError(errToolInfra, "native_session_unavailable:"+err.Error()).Error())
+	}
+	_ = logger.user(task)
+	_ = logger.contextPack(task)
 
 	cfg, err := resolveNativeProvider(ne.Model)
 	if err != nil {
-		return recoverableTurn(role, stats, "agent_config_error:"+err.Error())
+		execErr := newExecutorError(errConfig, err.Error())
+		_ = logger.errorEvent(0, execErr)
+		return terminalTurn(role, stats, execErr.Error())
 	}
-	logger := newNativeSessionLogger(sessionPath, ne.Platform.Workspace)
-	if err := logger.start(); err != nil {
-		return recoverableTurn(role, stats, "native_session_unavailable:"+err.Error())
-	}
-	_ = logger.user(task)
+	_ = logger.budget(effectiveMaxToolLoops(budget), effectiveMaxOutputTokens(cfg, budget), budget)
 
-	tools := newNativeTools(ne.Platform, stopRequested)
-	loop := newAgentLoop(ne.Client, cfg, ne.Thinking, tools, logger, task, role)
+	tools := newNativeTools(ne.Platform, stopRequested, task, logger, ne.SafeWritePrefixes...)
+	loop := newAgentLoop(ne.Client, cfg, ne.Thinking, tools, logger, task, role, protocolMode, budget)
 
 	logs, extraStats, err := loop.run(ctx)
 	stats = mergeTurnStats(stats, extraStats)
 	stats.DurationMS = int(time.Since(started).Milliseconds())
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return recoverableTurn(role, stats, fmt.Sprintf("native_timeout:%d", ne.Timeout))
+			execErr := newExecutorError(errProviderTimeout, fmt.Sprintf("turn_timeout:%d", timeout))
+			if !executorErrorHasCode(err, errProviderTimeout) {
+				_ = logger.errorEvent(loop.transport.sequence, execErr)
+			}
+			return recoverableTurn(role, stats, execErr.Error())
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
-			return recoverableTurn(role, stats, "native_interrupted:stop_requested")
+			execErr := newExecutorError(errStopped, "stop_requested")
+			if !executorErrorHasCode(err, errStopped) {
+				_ = logger.errorEvent(loop.transport.sequence, execErr)
+			}
+			return recoverableTurn(role, stats, execErr.Error())
 		}
 		return recoverableTurn(role, stats, err.Error())
 	}
 	if strings.TrimSpace(logs) == "" {
-		return recoverableTurn(role, stats, "agent_no_output")
+		return recoverableTurn(role, stats, newExecutorError(errAgentProtocol, "no_output").Error())
 	}
 	return game.TurnResult{
 		Role:   role,
@@ -84,6 +103,22 @@ func (ne *NativeExecutor) ExecuteTurn(task string, role string, turnState *game.
 		Logs:   logs,
 		Stats:  stats,
 	}
+}
+
+func executorErrorHasCode(err error, code executorErrorCode) bool {
+	var execErr *executorError
+	return errors.As(err, &execErr) && execErr.Code == code
+}
+
+func effectiveTurnTimeout(configured int, budget game.TurnBudget) int {
+	remaining := budget.RemainingDurationSec
+	if remaining <= 0 {
+		return configured
+	}
+	if configured <= 0 || remaining < configured {
+		return remaining
+	}
+	return configured
 }
 
 // turnContext builds the turn context, applying the optional timeout and
@@ -137,6 +172,17 @@ func recoverableTurn(role string, stats game.TurnStats, reason string) game.Turn
 	}
 }
 
+func terminalTurn(role string, stats game.TurnStats, reason string) game.TurnResult {
+	return game.TurnResult{
+		Role:        role,
+		Status:      game.StatusContinue,
+		Logs:        reason,
+		Stats:       stats,
+		Error:       reason,
+		Recoverable: false,
+	}
+}
+
 func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
 	base.CostUSD += extra.CostUSD
 	base.DurationMS += extra.DurationMS
@@ -145,6 +191,7 @@ func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
 	base.OutputTokens += extra.OutputTokens
 	base.CacheReadTokens += extra.CacheReadTokens
 	base.CacheCreationTokens += extra.CacheCreationTokens
+	base.CostUnavailable = base.CostUnavailable || extra.CostUnavailable
 	if base.Model == "" {
 		base.Model = extra.Model
 	}
