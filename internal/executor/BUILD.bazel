@@ -5,20 +5,20 @@ go_library(
     srcs = [
         "completion_gate.go",
         "executor.go",
-        "httpclient.go",
         "loop.go",
         "provider.go",
         "sessionlog.go",
         "tools.go",
-        "transport_anthropic.go",
-        "transport_chat.go",
-        "transport_responses.go",
+        "transport_openai.go",
     ],
     importpath = "github.com/telos-org/telos/internal/executor",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/game",
         "//internal/platform",
+        "@com_github_openai_openai_go//:openai-go",
+        "@com_github_openai_openai_go//option",
+        "@com_github_openai_openai_go//responses",
     ],
 )
 

@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
@@ -12,7 +13,7 @@ import (
 
 const (
 	defaultMaxToolLoops    = 160
-	defaultMaxOutputTokens = 8192
+	defaultMaxOutputTokens = 16384
 )
 
 func nativeMaxToolLoops() int {
@@ -39,7 +40,8 @@ func nativeMaxOutputTokens() int {
 	return n
 }
 
-// agentTurn is one model response, normalized across providers.
+// agentTurn is one model response, lifted out of the openai-go types into the
+// shape the agent loop drives.
 type agentTurn struct {
 	text       string
 	calls      []nativeToolCall
@@ -47,19 +49,8 @@ type agentTurn struct {
 	stats      game.TurnStats
 }
 
-// transport owns the provider-specific wire format and conversation state. The
-// agent loop drives it without knowing which provider is underneath.
-type transport interface {
-	// send issues one model call against the accumulated conversation state.
-	send(ctx context.Context) (agentTurn, error)
-	// recordToolResults threads tool output back into the conversation.
-	recordToolResults(results []nativeToolResult)
-	// recordCorrection appends a retry prompt for an unproductive final.
-	recordCorrection(prompt string)
-}
-
 type agentLoop struct {
-	transport transport
+	transport *openaiTransport
 	tools     *nativeTools
 	logger    *nativeSessionLogger
 	gate      completionGate
@@ -69,17 +60,9 @@ type agentLoop struct {
 	model     string
 }
 
-func newAgentLoop(poster httpPoster, cfg nativeProviderConfig, thinking string, tools *nativeTools, logger *nativeSessionLogger, task, role string) *agentLoop {
+func newAgentLoop(httpClient *http.Client, cfg nativeProviderConfig, thinking string, tools *nativeTools, logger *nativeSessionLogger, task, role string) *agentLoop {
 	maxOut := nativeMaxOutputTokens()
-	var tr transport
-	switch cfg.Style {
-	case providerResponses:
-		tr = newResponsesTransport(poster, cfg.Model, thinking, maxOut, task, role)
-	case providerAnthropic:
-		tr = newAnthropicTransport(poster, cfg.Model, maxOut, task, role)
-	default:
-		tr = newChatTransport(poster, cfg.Model, maxOut, task, role)
-	}
+	tr := newOpenAITransport(httpClient, cfg, thinking, maxOut, task, role)
 	return &agentLoop{
 		transport: tr,
 		tools:     tools,

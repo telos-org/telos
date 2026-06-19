@@ -4,7 +4,6 @@ go_library(
     name = "cli",
     srcs = [
         "agent_executor_default.go",
-        "agent_executor_testfake.go",
         "localrun.go",
         "workspace.go",
     ],

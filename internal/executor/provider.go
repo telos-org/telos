@@ -6,38 +6,30 @@ import (
 	"strings"
 )
 
-type providerStyle string
-
-const (
-	providerChat      providerStyle = "openai-chat"
-	providerResponses providerStyle = "openai-responses"
-	providerAnthropic providerStyle = "anthropic"
-)
-
 type nativeProviderConfig struct {
 	Provider string
 	Model    string
 	BaseURL  string
 	APIKey   string
-	Style    providerStyle
 }
 
 // providerDefaults describes a known provider's baked-in endpoint conventions.
+// Every endpoint Telos talks to is OpenAI-compatible — either a provider's own
+// OpenAI-style API or a LiteLLM proxy fronting it — so only the base URL and key
+// environment variable vary.
 type providerDefaults struct {
 	baseURL string
 	keyEnv  string
-	style   providerStyle
 }
 
 func nativeProviderRegistry() map[string]providerDefaults {
 	return map[string]providerDefaults{
-		"silares":       {"https://api.silares.com/v1", "SILARES_API_KEY", providerChat},
-		"sail-research": {"https://api.sailresearch.com/v1", "SAIL_API_KEY", providerChat},
-		"moonshot":      {"https://api.moonshot.ai/v1", "MOONSHOT_API_KEY", providerChat},
-		"xai":           {"https://api.x.ai/v1", "XAI_API_KEY", providerChat},
-		"openai":        {"https://api.openai.com/v1", "OPENAI_API_KEY", providerChat},
-		"openai-codex":  {"https://api.openai.com/v1", "OPENAI_API_KEY", providerChat},
-		"anthropic":     {"https://api.anthropic.com/v1", "ANTHROPIC_API_KEY", providerAnthropic},
+		"silares":       {"https://api.silares.com/v1", "SILARES_API_KEY"},
+		"sail-research": {"https://api.sailresearch.com/v1", "SAIL_API_KEY"},
+		"moonshot":      {"https://api.moonshot.ai/v1", "MOONSHOT_API_KEY"},
+		"xai":           {"https://api.x.ai/v1", "XAI_API_KEY"},
+		"openai":        {"https://api.openai.com/v1", "OPENAI_API_KEY"},
+		"openai-codex":  {"https://api.openai.com/v1", "OPENAI_API_KEY"},
 	}
 }
 
@@ -55,7 +47,6 @@ func resolveNativeProvider(model string) (nativeProviderConfig, error) {
 			Model:    stripProviderPrefix(model),
 			BaseURL:  strings.TrimRight(base, "/"),
 			APIKey:   key,
-			Style:    providerStyle(orDefault(firstEnv("TELOS_API_STYLE"), string(providerChat))),
 		}, nil
 	}
 
@@ -63,9 +54,6 @@ func resolveNativeProvider(model string) (nativeProviderConfig, error) {
 	registry := nativeProviderRegistry()
 	if def, ok := registry[provider]; ok {
 		return providerFromDefaults(provider, providerModel, def)
-	}
-	if strings.HasPrefix(model, "claude-") {
-		return providerFromDefaults("anthropic", model, registry["anthropic"])
 	}
 	if provider != "" {
 		envPrefix := providerEnvPrefix(provider)
@@ -80,7 +68,6 @@ func resolveNativeProvider(model string) (nativeProviderConfig, error) {
 			Model:    providerModel,
 			BaseURL:  strings.TrimRight(base, "/"),
 			APIKey:   key,
-			Style:    providerStyle(orDefault(firstEnv(envPrefix+"_API_STYLE"), string(providerChat))),
 		}, nil
 	}
 	return providerFromDefaults("openai", model, registry["openai"])
@@ -100,16 +87,11 @@ func providerFromDefaults(provider, model string, def providerDefaults) (nativeP
 	if key == "" {
 		return nativeProviderConfig{}, fmt.Errorf("%s is required for model provider %q", def.keyEnv, provider)
 	}
-	style := def.style
-	if override := firstEnv(envPrefix + "_API_STYLE"); override != "" {
-		style = providerStyle(override)
-	}
 	return nativeProviderConfig{
 		Provider: provider,
 		Model:    model,
 		BaseURL:  strings.TrimRight(base, "/"),
 		APIKey:   key,
-		Style:    style,
 	}, nil
 }
 
@@ -138,11 +120,4 @@ func firstEnv(names ...string) string {
 		}
 	}
 	return ""
-}
-
-func orDefault(s, def string) string {
-	if s != "" {
-		return s
-	}
-	return def
 }

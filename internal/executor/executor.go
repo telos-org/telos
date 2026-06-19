@@ -61,7 +61,7 @@ func (ne *NativeExecutor) ExecuteTurn(task string, role string, turnState *game.
 	_ = logger.user(task)
 
 	tools := newNativeTools(ne.Platform, stopRequested)
-	loop := newAgentLoop(httpPoster{http: ne.Client, cfg: cfg}, cfg, ne.Thinking, tools, logger, task, role)
+	loop := newAgentLoop(ne.Client, cfg, ne.Thinking, tools, logger, task, role)
 
 	logs, extraStats, err := loop.run(ctx)
 	stats = mergeTurnStats(stats, extraStats)

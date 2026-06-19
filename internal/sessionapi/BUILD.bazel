@@ -18,7 +18,8 @@ go_test(
     name = "sessionapi_test",
     srcs = [
         "server_test.go",
+        "store_test.go",
         "types_test.go",
     ],
-    deps = [":sessionapi"],
+    embed = [":sessionapi"],
 )

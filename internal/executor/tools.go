@@ -13,6 +13,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/openai/openai-go"
+	"github.com/openai/openai-go/responses"
 	"github.com/telos-org/telos/internal/platform"
 )
 
@@ -128,44 +130,20 @@ func nativeToolNames() []string {
 	return names
 }
 
-func toolSchemasForChat() []map[string]interface{} {
+// nativeToolsForOpenAI renders the tool table as openai-go Responses function
+// tools. The LiteLLM proxy is OpenAI-compatible, so this is the only schema
+// shape Telos needs to emit.
+func nativeToolsForOpenAI() []responses.ToolUnionParam {
 	defs := nativeToolTable()
-	out := make([]map[string]interface{}, 0, len(defs))
+	out := make([]responses.ToolUnionParam, 0, len(defs))
 	for _, def := range defs {
-		out = append(out, map[string]interface{}{
-			"type": "function",
-			"function": map[string]interface{}{
-				"name":        def.name,
-				"description": def.description,
-				"parameters":  def.parameters,
+		out = append(out, responses.ToolUnionParam{
+			OfFunction: &responses.FunctionToolParam{
+				Name:        def.name,
+				Description: openai.String(def.description),
+				Parameters:  def.parameters,
+				Strict:      openai.Bool(false),
 			},
-		})
-	}
-	return out
-}
-
-func toolSchemasForResponses() []map[string]interface{} {
-	defs := nativeToolTable()
-	out := make([]map[string]interface{}, 0, len(defs))
-	for _, def := range defs {
-		out = append(out, map[string]interface{}{
-			"type":        "function",
-			"name":        def.name,
-			"description": def.description,
-			"parameters":  def.parameters,
-		})
-	}
-	return out
-}
-
-func toolSchemasForAnthropic() []map[string]interface{} {
-	defs := nativeToolTable()
-	out := make([]map[string]interface{}, 0, len(defs))
-	for _, def := range defs {
-		out = append(out, map[string]interface{}{
-			"name":         def.name,
-			"description":  def.description,
-			"input_schema": def.parameters,
 		})
 	}
 	return out

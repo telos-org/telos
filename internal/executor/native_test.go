@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -10,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
@@ -20,58 +20,51 @@ func TestNativeExecutorRunsChatToolLoopAndWritesWorkspace(t *testing.T) {
 	workspace := t.TempDir()
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/chat/completions" {
+		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-key" {
 			t.Fatalf("authorization header: got %q", got)
 		}
+		body, _ := io.ReadAll(r.Body)
 		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		if err := json.Unmarshal(body, &req); err != nil {
 			t.Fatal(err)
 		}
 		requests++
-		w.Header().Set("Content-Type", "application/json")
 		if requests == 1 {
 			if req["model"] != "test-model" {
 				t.Fatalf("model: got %v", req["model"])
 			}
-			if got := int(req["max_tokens"].(float64)); got != defaultMaxOutputTokens {
-				t.Fatalf("max_tokens: got %d", got)
+			if got := int(req["max_output_tokens"].(float64)); got != defaultMaxOutputTokens {
+				t.Fatalf("max_output_tokens: got %d", got)
 			}
-			_, _ = w.Write([]byte(`{
-				"choices":[{
-					"finish_reason":"tool_calls",
-					"message":{
-						"role":"assistant",
-						"tool_calls":[{
-							"id":"call_1",
-							"type":"function",
-							"function":{"name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}
-						}]
-					}
-				}],
-				"usage":{"prompt_tokens":11,"completion_tokens":7}
-			}`))
+			if !strings.Contains(string(body), "create answer.txt") {
+				t.Fatalf("first request should carry the task: %s", body)
+			}
+			writeResponsesStream(w, `{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
+				"usage":{"input_tokens":11,"output_tokens":7,"input_tokens_details":{"cached_tokens":0}}
+			}`)
 			return
 		}
-		messages, _ := req["messages"].([]interface{})
-		if len(messages) == 0 || !strings.Contains(mustJSON(messages[len(messages)-1]), "wrote answer.txt") {
-			t.Fatalf("second request should include tool result, got %s", mustJSON(messages))
+		if req["previous_response_id"] != "resp_1" {
+			t.Fatalf("second request previous_response_id: got %v", req["previous_response_id"])
 		}
-		_, _ = w.Write([]byte(`{
-			"choices":[{
-				"finish_reason":"stop",
-				"message":{"role":"assistant","content":"Created answer.txt.\n\n<status>CONCEDE</status>\n"}
-			}],
-			"usage":{"prompt_tokens":13,"completion_tokens":5}
-		}`))
+		if !strings.Contains(string(body), "wrote answer.txt") {
+			t.Fatalf("second request should include tool result, got %s", body)
+		}
+		writeResponsesStream(w, `{
+			"id":"resp_2","status":"completed",
+			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Created answer.txt.\n\n<status>CONCEDE</status>\n"}]}],
+			"usage":{"input_tokens":13,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+		}`)
 	}))
 	defer server.Close()
 
 	t.Setenv("TELOS_API_BASE_URL", server.URL)
 	t.Setenv("TELOS_API_KEY", "test-key")
-	t.Setenv("TELOS_API_STYLE", "openai-chat")
 
 	p := platform.NewLocalPlatform(workspace)
 	exec := NewNativeExecutor(p, "test/test-model", "high", 0)
@@ -147,9 +140,6 @@ func TestResolveNativeProviderUsesSilaresConvention(t *testing.T) {
 	if cfg.BaseURL != "https://api.silares.com/v1" {
 		t.Fatalf("base URL: got %q", cfg.BaseURL)
 	}
-	if cfg.Style != providerChat {
-		t.Fatalf("style: got %q", cfg.Style)
-	}
 }
 
 func TestNativeMaxToolLoopsCanBeOverridden(t *testing.T) {
@@ -169,7 +159,7 @@ func TestNativeMaxToolLoopsCanBeOverridden(t *testing.T) {
 }
 
 func TestNativeMaxOutputTokensCanBeOverridden(t *testing.T) {
-	if got := nativeMaxOutputTokens(); got != 8192 {
+	if got := nativeMaxOutputTokens(); got != 16384 {
 		t.Fatalf("default max output tokens: got %d", got)
 	}
 
@@ -189,20 +179,7 @@ func TestNativeMaxOutputTokensCanBeOverridden(t *testing.T) {
 	}
 }
 
-func TestResolveNativeProviderAllowsSilaresResponsesOverride(t *testing.T) {
-	t.Setenv("SILARES_API_KEY", "test-silares-key")
-	t.Setenv("SILARES_API_STYLE", "openai-responses")
-
-	cfg, err := resolveNativeProvider("silares/moonshotai/Kimi-K2.7-Code")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cfg.Style != providerResponses {
-		t.Fatalf("style: got %q", cfg.Style)
-	}
-}
-
-func TestNativeExecutorResponsesIncludesHarnessPromptInUserInput(t *testing.T) {
+func TestNativeExecutorSendsHarnessInstructionsAndReasoning(t *testing.T) {
 	workspace := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
@@ -212,33 +189,29 @@ func TestNativeExecutorResponsesIncludesHarnessPromptInUserInput(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			t.Fatal(err)
 		}
-		input, _ := req["input"].([]interface{})
-		if len(input) != 1 {
-			t.Fatalf("responses input length: got %d body=%s", len(input), mustJSON(req))
+		reasoning, _ := req["reasoning"].(map[string]interface{})
+		if reasoning["effort"] != "high" {
+			t.Fatalf("reasoning effort: got %v body=%s", reasoning["effort"], mustJSON(req))
 		}
-		first, _ := input[0].(map[string]interface{})
-		content, _ := first["content"].(string)
+		instructions, _ := req["instructions"].(string)
 		for _, want := range []string{
 			"Do not ask the operator what to build or what to do next.",
-			"# Assignment",
-			"create industry.py",
+			"Current Telos role: prover.",
 		} {
-			if !strings.Contains(content, want) {
-				t.Fatalf("responses user input missing %q:\n%s", want, content)
+			if !strings.Contains(instructions, want) {
+				t.Fatalf("instructions missing %q:\n%s", want, instructions)
 			}
 		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"id":"resp_1",
-			"output":[{"type":"message","content":[{"type":"output_text","text":"Done.\n<status>CONCEDE</status>\n"}]}],
-			"usage":{"input_tokens":17,"output_tokens":5}
-		}`))
+		writeResponsesStream(w, `{
+			"id":"resp_1","status":"completed",
+			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<status>CONCEDE</status>\n"}]}],
+			"usage":{"input_tokens":17,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+		}`)
 	}))
 	defer server.Close()
 
 	t.Setenv("TELOS_API_BASE_URL", server.URL)
 	t.Setenv("TELOS_API_KEY", "test-key")
-	t.Setenv("TELOS_API_STYLE", "openai-responses")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("create industry.py", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
@@ -248,65 +221,6 @@ func TestNativeExecutorResponsesIncludesHarnessPromptInUserInput(t *testing.T) {
 	}
 	if result.Status != game.StatusConcede {
 		t.Fatalf("status: got %s logs=%q", result.Status, result.Logs)
-	}
-}
-
-func TestNativeExecutorResponsesRetriesUnproductiveFinal(t *testing.T) {
-	workspace := t.TempDir()
-	var requests int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/responses" {
-			t.Fatalf("unexpected path: %s", r.URL.Path)
-		}
-		var req map[string]interface{}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			t.Fatal(err)
-		}
-		requests++
-		w.Header().Set("Content-Type", "application/json")
-		if requests == 1 {
-			_, _ = w.Write([]byte(`{
-				"id":"resp_1",
-				"output":[{"type":"message","content":[{"type":"output_text","text":"The workspace is currently empty. What would you like me to work on?"}]}],
-				"usage":{"input_tokens":17,"output_tokens":11}
-			}`))
-			return
-		}
-		if req["previous_response_id"] != "resp_1" {
-			t.Fatalf("second request previous_response_id: got %v", req["previous_response_id"])
-		}
-		input, _ := req["input"].([]interface{})
-		if len(input) != 1 {
-			t.Fatalf("second responses input length: got %d body=%s", len(input), mustJSON(req))
-		}
-		first, _ := input[0].(map[string]interface{})
-		content, _ := first["content"].(string)
-		if !strings.Contains(content, "Do not ask what to build") || !strings.Contains(content, "create industry.py") {
-			t.Fatalf("second request missing correction content:\n%s", content)
-		}
-		_, _ = w.Write([]byte(`{
-			"id":"resp_2",
-			"output":[{"type":"message","content":[{"type":"output_text","text":"Created industry.py.\n<status>CONCEDE</status>\n"}]}],
-			"usage":{"input_tokens":19,"output_tokens":7}
-		}`))
-	}))
-	defer server.Close()
-
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
-	t.Setenv("TELOS_API_STYLE", "openai-responses")
-
-	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("create industry.py", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
-
-	if result.Error != "" {
-		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
-	}
-	if result.Status != game.StatusConcede {
-		t.Fatalf("status: got %s logs=%q", result.Status, result.Logs)
-	}
-	if requests != 2 {
-		t.Fatalf("requests: got %d", requests)
 	}
 }
 
@@ -315,35 +229,36 @@ func TestNativeExecutorGateRetriesMissingDeliverableThenAccepts(t *testing.T) {
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		w.Header().Set("Content-Type", "application/json")
 		switch requests {
 		case 1:
 			// Tool-less final that did no work for a file deliverable -> retry.
-			_, _ = w.Write([]byte(`{
-				"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"I have inspected the workspace and understand the task."}}],
-				"usage":{"prompt_tokens":5,"completion_tokens":5}
-			}`))
+			writeResponsesStream(w, `{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I have inspected the workspace and understand the task."}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
 		case 2:
 			body, _ := io.ReadAll(r.Body)
 			if !strings.Contains(string(body), "already fully specified") {
 				t.Fatalf("second request should carry the correction prompt, got %s", body)
 			}
-			_, _ = w.Write([]byte(`{
-				"choices":[{"finish_reason":"tool_calls","message":{"role":"assistant","tool_calls":[{"id":"c1","type":"function","function":{"name":"write","arguments":"{\"path\":\"rig.py\",\"content\":\"print(1)\\n\"}"}}]}}],
-				"usage":{"prompt_tokens":5,"completion_tokens":5}
-			}`))
+			writeResponsesStream(w, `{
+				"id":"resp_2","status":"completed",
+				"output":[{"type":"function_call","call_id":"c1","name":"write","arguments":"{\"path\":\"rig.py\",\"content\":\"print(1)\\n\"}"}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
 		default:
-			_, _ = w.Write([]byte(`{
-				"choices":[{"finish_reason":"stop","message":{"role":"assistant","content":"Created rig.py.\n<status>CONCEDE</status>\n"}}],
-				"usage":{"prompt_tokens":5,"completion_tokens":5}
-			}`))
+			writeResponsesStream(w, `{
+				"id":"resp_3","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Created rig.py.\n<status>CONCEDE</status>\n"}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
 		}
 	}))
 	defer server.Close()
 
 	t.Setenv("TELOS_API_BASE_URL", server.URL)
 	t.Setenv("TELOS_API_KEY", "test-key")
-	t.Setenv("TELOS_API_STYLE", "openai-chat")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
@@ -491,59 +406,23 @@ func TestNativeToolsPathResolution(t *testing.T) {
 	}
 }
 
-func TestHTTPPosterRetriesTransientStatus(t *testing.T) {
-	prev := httpRetryBackoff
-	httpRetryBackoff = time.Millisecond
-	defer func() { httpRetryBackoff = prev }()
-
-	var attempts int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		if attempts < httpMaxAttempts {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			_, _ = w.Write([]byte(`{"error":{"message":"overloaded"}}`))
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"ok":true}`))
-	}))
-	defer server.Close()
-
-	poster := httpPoster{http: server.Client(), cfg: nativeProviderConfig{BaseURL: server.URL, APIKey: "k"}}
-	var out struct {
-		OK bool `json:"ok"`
-	}
-	if err := poster.postJSON(context.Background(), "/x", map[string]interface{}{}, &out); err != nil {
-		t.Fatalf("expected success after retries: %v", err)
-	}
-	if attempts != httpMaxAttempts {
-		t.Fatalf("attempts: got %d want %d", attempts, httpMaxAttempts)
-	}
-	if !out.OK {
-		t.Fatal("expected decoded body after retry")
-	}
-}
-
-func TestHTTPPosterDoesNotRetryClientError(t *testing.T) {
-	var attempts int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		w.WriteHeader(http.StatusBadRequest)
-		_, _ = w.Write([]byte(`{"error":{"message":"bad"}}`))
-	}))
-	defer server.Close()
-
-	poster := httpPoster{http: server.Client(), cfg: nativeProviderConfig{BaseURL: server.URL, APIKey: "k"}}
-	err := poster.postJSON(context.Background(), "/x", map[string]interface{}{}, &struct{}{})
-	if err == nil || !strings.Contains(err.Error(), "provider_http_400") {
-		t.Fatalf("expected non-retryable 400 error, got %v", err)
-	}
-	if attempts != 1 {
-		t.Fatalf("client errors should not retry: got %d attempts", attempts)
-	}
-}
-
 func mustJSON(v interface{}) string {
 	data, _ := json.Marshal(v)
 	return string(data)
+}
+
+// writeResponsesStream emits a minimal OpenAI Responses SSE stream that
+// terminates with a single response.completed event wrapping responseJSON. The
+// payload is compacted onto one line so it forms a single SSE data field.
+func writeResponsesStream(w http.ResponseWriter, responseJSON string) {
+	var buf bytes.Buffer
+	if err := json.Compact(&buf, []byte(`{"type":"response.completed","response":`+responseJSON+"}")); err != nil {
+		panic(err)
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.WriteHeader(http.StatusOK)
+	_, _ = io.WriteString(w, "data: "+buf.String()+"\n\n")
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 }

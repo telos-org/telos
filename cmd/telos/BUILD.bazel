@@ -65,7 +65,10 @@ go_test(
     ),
     embed = [":telos_lib"],
     deps = [
+        "//internal/cli",
+        "//internal/cloud",
         "//internal/config",
         "//internal/sessionapi",
+        "//internal/spec",
     ],
 )
