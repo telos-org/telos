@@ -10,6 +10,7 @@ go_library(
     importpath = "github.com/telos-org/telos/internal/cli",
     visibility = ["//:__subpackages__"],
     deps = [
+        "//internal/evidence",
         "//internal/executor",
         "//internal/game",
         "//internal/platform",
@@ -26,6 +27,7 @@ go_test(
     ],
     embed = [":cli"],
     deps = [
+        "//internal/executor",
         "//internal/game",
         "//internal/platform",
         "//internal/sessionapi",

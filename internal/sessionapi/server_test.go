@@ -429,14 +429,12 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
 	maxCost := 12.5
 	agentTimeout := 3600
-	safeWritePrefixes := []string{"/tmp/telos-scratch", "/workspace/outside"}
 	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
-		SpecMarkdown:      updated,
-		Model:             "sail-research/moonshotai/Kimi-K2.6",
-		Thinking:          "high",
-		MaxCostUSD:        &maxCost,
-		AgentTimeoutSec:   &agentTimeout,
-		SafeWritePrefixes: safeWritePrefixes,
+		SpecMarkdown:    updated,
+		Model:           "sail-research/moonshotai/Kimi-K2.6",
+		Thinking:        "high",
+		MaxCostUSD:      &maxCost,
+		AgentTimeoutSec: &agentTimeout,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -475,7 +473,6 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 	assertConfigStr(t, session.Config, "thinking", "high")
 	assertConfigFloat(t, session.Config, "max_cost_usd", maxCost)
 	assertConfigFloat(t, session.Config, "agent_timeout_sec", float64(agentTimeout))
-	assertConfigStringSlice(t, session.Config, "safe_write_prefixes", safeWritePrefixes)
 	if session.SpecVersions[0]["previous_version"].(float64) != 1 {
 		t.Fatalf("previous_version: got %#v", session.SpecVersions[0])
 	}
@@ -890,16 +887,14 @@ func TestDiagnosticsAggregatesBudgetsRetriesStopsAndArtifacts(t *testing.T) {
 	maxOutputTokens := 400
 	maxToolLoops := 55
 	agentTimeout := 120
-	safeWritePrefixes := []string{"/tmp/telos-scratch", "/workspace/outside"}
 	created, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown:      &markdown,
-		MaxRounds:         &maxRounds,
-		MaxDurationSec:    &maxDuration,
-		MaxInputTokens:    &maxInputTokens,
-		MaxOutputTokens:   &maxOutputTokens,
-		MaxToolLoops:      &maxToolLoops,
-		AgentTimeoutSec:   &agentTimeout,
-		SafeWritePrefixes: safeWritePrefixes,
+		SpecMarkdown:    &markdown,
+		MaxRounds:       &maxRounds,
+		MaxDurationSec:  &maxDuration,
+		MaxInputTokens:  &maxInputTokens,
+		MaxOutputTokens: &maxOutputTokens,
+		MaxToolLoops:    &maxToolLoops,
+		AgentTimeoutSec: &agentTimeout,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -956,10 +951,7 @@ func TestDiagnosticsAggregatesBudgetsRetriesStopsAndArtifacts(t *testing.T) {
 		diagnostics.Limits.MaxInputTokens != 1200 ||
 		diagnostics.Limits.MaxOutputTokens != 400 ||
 		diagnostics.Limits.MaxToolLoops != 55 ||
-		diagnostics.Limits.AgentTimeoutSec != 120 ||
-		len(diagnostics.Limits.SafeWritePrefixes) != 2 ||
-		diagnostics.Limits.SafeWritePrefixes[0] != "/tmp/telos-scratch" ||
-		diagnostics.Limits.SafeWritePrefixes[1] != "/workspace/outside" {
+		diagnostics.Limits.AgentTimeoutSec != 120 {
 		t.Fatalf("limits not surfaced: %#v", diagnostics.Limits)
 	}
 	if diagnostics.BudgetExceeded["max_input_tokens"] != 1 {
@@ -999,6 +991,60 @@ func TestDiagnosticsAggregatesBudgetsRetriesStopsAndArtifacts(t *testing.T) {
 	}
 	if diagnostics.Totals.InputTokens != 1300 || diagnostics.Totals.OutputTokens != 210 || diagnostics.Totals.Rounds != 2 {
 		t.Fatalf("totals: %#v", diagnostics.Totals)
+	}
+}
+
+func TestDiagnosticsDedupsFailuresBetweenEvidenceAndSessionLog(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	markdown := createSessionBody(t, "dedup")
+	created := createSession(t, srv.URL, markdown)
+
+	// The same recoverable turn failure (provider_rate_limited) is recorded in
+	// evidence as agent_failure_recoverable AND in the turn's session.jsonl as
+	// an error event with the same error_code. It must be counted once.
+	evidence := strings.Join([]string{
+		`{"event":"agent_failure_recoverable","round":1,"role":"prover","data":{"error_code":"provider_rate_limited","error":"provider_rate_limited: HTTP 429"}}`,
+		`{"event":"game_end","round":2,"data":{"game_result":"failure","completion_reason":"runtime_budget_exhausted","total_cost_usd":0.1,"total_input_tokens":100,"total_output_tokens":20,"prover_rounds":1,"verifier_rounds":1}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	turnDir := filepath.Join(store.Root, created.SessionID, "specs", "dedup", "turns", "0001-prover")
+	if err := os.MkdirAll(turnDir, 0o755); err != nil {
+		t.Fatalf("create turn dir: %v", err)
+	}
+	// The session-log error event carries the SAME error_code as the evidence
+	// agent_failure_recoverable above — this is the double-count scenario.
+	sessionLog := strings.Join([]string{
+		`{"type":"error","data":{"sequence":1,"error_code":"provider_rate_limited","error":"provider_rate_limited: HTTP 429","retryable":true}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(turnDir, "session.jsonl"), []byte(sessionLog), 0o644); err != nil {
+		t.Fatalf("write session log: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/diagnostics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+
+	var diagnostics sessionapi.SessionDiagnosticsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&diagnostics); err != nil {
+		t.Fatalf("decode diagnostics: %v", err)
+	}
+	// The provider failure must be counted exactly once despite appearing in
+	// both evidence and the session log.
+	if diagnostics.Failures["provider"] != 1 {
+		t.Fatalf("provider failure should be deduped to 1, got %d: %#v", diagnostics.Failures["provider"], diagnostics.Failures)
+	}
+	// The per-turn Errors list still records the granular session-log error,
+	// even though its failure was deduped from the tally.
+	if len(diagnostics.Errors) != 1 || diagnostics.Errors[0].ErrorCode != "provider_rate_limited" {
+		t.Fatalf("session-log error should still be in Errors list: %#v", diagnostics.Errors)
 	}
 }
 

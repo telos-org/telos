@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // Manifest is the persisted session.json shape shared by the store and worker.
@@ -89,18 +88,17 @@ type ScopedToken struct {
 }
 
 type SessionConfig struct {
-	Model             string         `json:"model,omitempty"`
-	Until             int            `json:"until,omitempty"`
-	MaxCostUSD        *float64       `json:"max_cost_usd,omitempty"`
-	MaxRounds         int            `json:"max_rounds,omitempty"`
-	MaxDurationSec    int            `json:"max_duration_sec,omitempty"`
-	MaxInputTokens    int            `json:"max_input_tokens,omitempty"`
-	MaxOutputTokens   int            `json:"max_output_tokens,omitempty"`
-	MaxToolLoops      int            `json:"max_tool_loops,omitempty"`
-	AgentTimeoutSec   int            `json:"agent_timeout_sec,omitempty"`
-	SafeWritePrefixes []string       `json:"safe_write_prefixes,omitempty"`
-	Thinking          string         `json:"thinking,omitempty"`
-	Extra             map[string]any `json:"-"`
+	Model           string         `json:"model,omitempty"`
+	Until           int            `json:"until,omitempty"`
+	MaxCostUSD      *float64       `json:"max_cost_usd,omitempty"`
+	MaxRounds       int            `json:"max_rounds,omitempty"`
+	MaxDurationSec  int            `json:"max_duration_sec,omitempty"`
+	MaxInputTokens  int            `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens int            `json:"max_output_tokens,omitempty"`
+	MaxToolLoops    int            `json:"max_tool_loops,omitempty"`
+	AgentTimeoutSec int            `json:"agent_timeout_sec,omitempty"`
+	Thinking        string         `json:"thinking,omitempty"`
+	Extra           map[string]any `json:"-"`
 }
 
 const (
@@ -115,22 +113,7 @@ func NormalizeSessionConfig(c SessionConfig) SessionConfig {
 	if c.MaxDurationSec <= 0 {
 		c.MaxDurationSec = DefaultMaxDurationSec
 	}
-	c.SafeWritePrefixes = normalizeConfigStringList(c.SafeWritePrefixes)
 	return c
-}
-
-func normalizeConfigStringList(values []string) []string {
-	if len(values) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(values))
-	for _, value := range values {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			out = append(out, value)
-		}
-	}
-	return out
 }
 
 // InitialManifest is the typed input for creating a session.json before any
@@ -312,9 +295,6 @@ func (c SessionConfig) MarshalJSON() ([]byte, error) {
 	if c.AgentTimeoutSec > 0 {
 		m["agent_timeout_sec"] = c.AgentTimeoutSec
 	}
-	if len(c.SafeWritePrefixes) > 0 {
-		m["safe_write_prefixes"] = c.SafeWritePrefixes
-	}
 	if c.Thinking != "" {
 		m["thinking"] = c.Thinking
 	}
@@ -380,12 +360,6 @@ func (c *SessionConfig) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("config.agent_timeout_sec: %w", err)
 		}
 		delete(raw, "agent_timeout_sec")
-	}
-	if value, ok := raw["safe_write_prefixes"]; ok {
-		if err := json.Unmarshal(value, &c.SafeWritePrefixes); err != nil {
-			return fmt.Errorf("config.safe_write_prefixes: %w", err)
-		}
-		delete(raw, "safe_write_prefixes")
 	}
 	if value, ok := raw["thinking"]; ok {
 		if err := json.Unmarshal(value, &c.Thinking); err != nil {

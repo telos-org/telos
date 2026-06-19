@@ -15,6 +15,5 @@ func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecut
 		model = DefaultLocalModel
 	}
 	exec := executor.NewNativeExecutor(p, model, cfg.Thinking, cfg.AgentTimeoutSec)
-	exec.SafeWritePrefixes = cfg.SafeWritePrefixes
 	return exec, nil
 }

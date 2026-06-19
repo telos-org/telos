@@ -428,14 +428,5 @@ func (p *PVG) runtimeBudgetExceeded(nextRole string) bool {
 }
 
 func turnErrorCode(errText string) string {
-	for i, r := range errText {
-		switch {
-		case r == ':' || r == ' ' || r == '\n' || r == '\t':
-			if i == 0 {
-				return ""
-			}
-			return errText[:i]
-		}
-	}
-	return ""
+	return evidence.ErrorCode(errText)
 }

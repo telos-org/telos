@@ -384,9 +384,6 @@ func updateManifestConfig(cfg *SessionConfig, req SessionSpecUpdateRequest) {
 	if req.AgentTimeoutSec != nil {
 		cfg.AgentTimeoutSec = *req.AgentTimeoutSec
 	}
-	if len(req.SafeWritePrefixes) > 0 {
-		cfg.SafeWritePrefixes = req.SafeWritePrefixes
-	}
 	*cfg = NormalizeSessionConfig(*cfg)
 }
 
@@ -580,8 +577,8 @@ func (fs *FileStore) Diagnostics(id string) (*SessionDiagnosticsResponse, error)
 		events = append(events, specEvents...)
 	}
 
-	diagnostics := buildSessionDiagnostics(session, events)
-	if err := appendSessionLogDiagnostics(diagnostics, fs.sessionDir(id)); err != nil {
+	diagnostics, evidenceFailureCodes := buildSessionDiagnostics(session, events)
+	if err := appendSessionLogDiagnostics(diagnostics, fs.sessionDir(id), evidenceFailureCodes); err != nil {
 		diagnostics.ScanErrors = append(diagnostics.ScanErrors, err.Error())
 	}
 	return diagnostics, nil
@@ -1209,9 +1206,6 @@ func buildConfig(req SessionCreateRequest) SessionConfig {
 	}
 	if req.AgentTimeoutSec != nil {
 		cfg.AgentTimeoutSec = *req.AgentTimeoutSec
-	}
-	if len(req.SafeWritePrefixes) > 0 {
-		cfg.SafeWritePrefixes = req.SafeWritePrefixes
 	}
 	return NormalizeSessionConfig(cfg)
 }

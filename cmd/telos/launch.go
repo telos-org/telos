@@ -40,7 +40,6 @@ func cmdLaunch(command, action string, args []string) {
 	maxOutputTokens := fs.Int("max-output-tokens", 0, "Maximum output tokens across the PVG run; 0 disables")
 	maxToolLoops := fs.Int("max-tool-loops", 0, "Maximum model-tool loop iterations per agent turn; 0 uses the runtime default")
 	agentTimeout := fs.Int("agent-timeout-sec", 0, "Agent timeout in seconds; 0 disables")
-	fs.String("safe-write-prefixes", "", "Comma-separated absolute path prefixes that native executor tools may write outside the workspace")
 	readyTimeout := fs.Int("ready-timeout", 900, "Environment readiness timeout in seconds")
 	noWait := fs.Bool("no-wait", false, "Do not wait for a newly created environment")
 	jsonOut := fs.Bool("json", false, "JSON output")
@@ -611,7 +610,6 @@ func updateRequestFromCreate(req sessionapi.SessionCreateRequest) sessionapi.Ses
 	update.MaxOutputTokens = req.MaxOutputTokens
 	update.MaxToolLoops = req.MaxToolLoops
 	update.AgentTimeoutSec = req.AgentTimeoutSec
-	update.SafeWritePrefixes = req.SafeWritePrefixes
 	return update
 }
 

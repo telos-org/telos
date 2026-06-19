@@ -885,8 +885,9 @@ func TestCreateLocalSessionPersistsRuntimeConfig(t *testing.T) {
 	defer os.Chdir(orig)
 
 	session, err := CreateLocalSession(specPath, LocalRunConfig{
-		Until:             2,
-		SafeWritePrefixes: []string{"/tmp/telos-scratch", "/workspace/outside"},
+		Until:           2,
+		MaxToolLoops:    55,
+		AgentTimeoutSec: 120,
 	})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
@@ -899,8 +900,8 @@ func TestCreateLocalSessionPersistsRuntimeConfig(t *testing.T) {
 	if manifest.Config.Until != 2 {
 		t.Fatalf("until: got %d", manifest.Config.Until)
 	}
-	if len(manifest.Config.SafeWritePrefixes) != 2 || manifest.Config.SafeWritePrefixes[0] != "/tmp/telos-scratch" || manifest.Config.SafeWritePrefixes[1] != "/workspace/outside" {
-		t.Fatalf("safe write prefixes: got %#v", manifest.Config.SafeWritePrefixes)
+	if manifest.Config.MaxToolLoops != 55 || manifest.Config.AgentTimeoutSec != 120 {
+		t.Fatalf("runtime config: got %#v", manifest.Config)
 	}
 }
 

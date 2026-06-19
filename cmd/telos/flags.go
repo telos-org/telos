@@ -133,33 +133,30 @@ func resolveLocalRunConfigFromFlags(
 	if err != nil {
 		return cli.LocalRunConfig{}, err
 	}
-	safeWritePrefixes := stringListOption(fs, "safe-write-prefixes", "TELOS_SAFE_WRITE_PREFIXES")
 	return cli.LocalRunConfig{
-		Workspace:         stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
-		Model:             modelOption(fs, model),
-		Thinking:          stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", "medium"),
-		MaxCostUSD:        &cost,
-		MaxRounds:         rounds,
-		MaxDurationSec:    duration,
-		MaxInputTokens:    inputTokens,
-		MaxOutputTokens:   outputTokens,
-		MaxToolLoops:      toolLoops,
-		AgentTimeoutSec:   timeout,
-		SafeWritePrefixes: safeWritePrefixes,
+		Workspace:       stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
+		Model:           modelOption(fs, model),
+		Thinking:        stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", "medium"),
+		MaxCostUSD:      &cost,
+		MaxRounds:       rounds,
+		MaxDurationSec:  duration,
+		MaxInputTokens:  inputTokens,
+		MaxOutputTokens: outputTokens,
+		MaxToolLoops:    toolLoops,
+		AgentTimeoutSec: timeout,
 	}, nil
 }
 
 type sessionRuntimeConfig struct {
-	Model             string
-	Thinking          string
-	MaxCostUSD        *float64
-	MaxRounds         *int
-	MaxDurationSec    *int
-	MaxInputTokens    *int
-	MaxOutputTokens   *int
-	MaxToolLoops      *int
-	AgentTimeoutSec   *int
-	SafeWritePrefixes []string
+	Model           string
+	Thinking        string
+	MaxCostUSD      *float64
+	MaxRounds       *int
+	MaxDurationSec  *int
+	MaxInputTokens  *int
+	MaxOutputTokens *int
+	MaxToolLoops    *int
+	AgentTimeoutSec *int
 }
 
 func resolveSessionRuntimeConfigFromFlags(
@@ -222,9 +219,6 @@ func resolveSessionRuntimeConfigFromFlags(
 		}
 		cfg.AgentTimeoutSec = &timeout
 	}
-	if flagNameSet(fs, "safe-write-prefixes") || strings.TrimSpace(os.Getenv("TELOS_SAFE_WRITE_PREFIXES")) != "" {
-		cfg.SafeWritePrefixes = stringListOption(fs, "safe-write-prefixes", "TELOS_SAFE_WRITE_PREFIXES")
-	}
 	return cfg, nil
 }
 
@@ -255,9 +249,6 @@ func applySessionRuntimeConfig(req *sessionapi.SessionCreateRequest, cfg session
 	}
 	if cfg.AgentTimeoutSec != nil {
 		req.AgentTimeoutSec = cfg.AgentTimeoutSec
-	}
-	if len(cfg.SafeWritePrefixes) > 0 {
-		req.SafeWritePrefixes = cfg.SafeWritePrefixes
 	}
 }
 

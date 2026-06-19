@@ -730,7 +730,6 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	fs.Float64("max-cost-usd", 20.0, "")
 	fs.Int("max-tool-loops", 0, "")
 	fs.Int("agent-timeout-sec", 0, "")
-	fs.String("safe-write-prefixes", "", "")
 	parseFlags(fs, []string{"SPEC.md"})
 
 	t.Setenv("TELOS_WORKSPACE", "/tmp/telos-workspace")
@@ -739,7 +738,6 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	t.Setenv("TELOS_MAX_COST_USD", "12.5")
 	t.Setenv("TELOS_MAX_TOOL_LOOPS", "44")
 	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "123")
-	t.Setenv("TELOS_SAFE_WRITE_PREFIXES", "/tmp/telos-scratch, /var/tmp/telos")
 
 	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
 	if err != nil {
@@ -759,9 +757,6 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	}
 	if cfg.MaxCostUSD == nil || *cfg.MaxCostUSD != 12.5 {
 		t.Fatalf("cost: got %v", cfg.MaxCostUSD)
-	}
-	if len(cfg.SafeWritePrefixes) != 2 || cfg.SafeWritePrefixes[0] != "/tmp/telos-scratch" || cfg.SafeWritePrefixes[1] != "/var/tmp/telos" {
-		t.Fatalf("safe write prefixes: got %#v", cfg.SafeWritePrefixes)
 	}
 }
 
@@ -833,7 +828,6 @@ func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
 	fs.Int("max-output-tokens", 0, "")
 	fs.Int("max-tool-loops", 0, "")
 	fs.Int("agent-timeout-sec", 0, "")
-	fs.String("safe-write-prefixes", "", "")
 	parseFlags(fs, []string{
 		"--model", "openai-codex/gpt-5.5",
 		"--thinking", "high",
@@ -844,7 +838,6 @@ func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
 		"--max-output-tokens", "24000",
 		"--max-tool-loops", "55",
 		"--agent-timeout-sec", "0",
-		"--safe-write-prefixes", "/tmp/telos-scratch,/workspace/outside",
 		"SPEC.md",
 	})
 
@@ -878,9 +871,6 @@ func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
 	if req.AgentTimeoutSec == nil || *req.AgentTimeoutSec != 0 {
 		t.Fatalf("agent timeout: got %v", req.AgentTimeoutSec)
 	}
-	if len(req.SafeWritePrefixes) != 2 || req.SafeWritePrefixes[0] != "/tmp/telos-scratch" || req.SafeWritePrefixes[1] != "/workspace/outside" {
-		t.Fatalf("safe write prefixes: got %#v", req.SafeWritePrefixes)
-	}
 }
 
 func TestUpdateRequestFromCreateCarriesRuntimeConfig(t *testing.T) {
@@ -892,19 +882,17 @@ func TestUpdateRequestFromCreateCarriesRuntimeConfig(t *testing.T) {
 	maxInputTokens := 100000
 	maxOutputTokens := 20000
 	maxToolLoops := 77
-	safeWritePrefixes := []string{"/tmp/telos-scratch", "/workspace/outside"}
 	req := sessionapi.SessionCreateRequest{
-		SpecMarkdown:      &specMarkdown,
-		Model:             "sail-research/moonshotai/Kimi-K2.6",
-		Thinking:          "high",
-		MaxCostUSD:        &maxCost,
-		MaxRounds:         &maxRounds,
-		MaxDurationSec:    &maxDuration,
-		MaxInputTokens:    &maxInputTokens,
-		MaxOutputTokens:   &maxOutputTokens,
-		MaxToolLoops:      &maxToolLoops,
-		AgentTimeoutSec:   &agentTimeout,
-		SafeWritePrefixes: safeWritePrefixes,
+		SpecMarkdown:    &specMarkdown,
+		Model:           "sail-research/moonshotai/Kimi-K2.6",
+		Thinking:        "high",
+		MaxCostUSD:      &maxCost,
+		MaxRounds:       &maxRounds,
+		MaxDurationSec:  &maxDuration,
+		MaxInputTokens:  &maxInputTokens,
+		MaxOutputTokens: &maxOutputTokens,
+		MaxToolLoops:    &maxToolLoops,
+		AgentTimeoutSec: &agentTimeout,
 	}
 
 	update := updateRequestFromCreate(req)
@@ -934,9 +922,6 @@ func TestUpdateRequestFromCreateCarriesRuntimeConfig(t *testing.T) {
 	}
 	if update.AgentTimeoutSec == nil || *update.AgentTimeoutSec != agentTimeout {
 		t.Fatalf("agent timeout: got %#v", update.AgentTimeoutSec)
-	}
-	if len(update.SafeWritePrefixes) != 2 || update.SafeWritePrefixes[0] != safeWritePrefixes[0] || update.SafeWritePrefixes[1] != safeWritePrefixes[1] {
-		t.Fatalf("safe write prefixes: got %#v", update.SafeWritePrefixes)
 	}
 }
 

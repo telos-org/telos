@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-func buildSessionDiagnostics(session *Session, events []SessionEvent) *SessionDiagnosticsResponse {
+func buildSessionDiagnostics(session *Session, events []SessionEvent) (*SessionDiagnosticsResponse, map[string]map[string]bool) {
 	diagnostics := &SessionDiagnosticsResponse{
 		Failures:         map[string]int{},
 		BudgetExceeded:   map[string]int{},
@@ -23,7 +23,7 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) *SessionDi
 		Specs:            []SessionSpecDiagnostics{},
 	}
 	if session == nil {
-		return diagnostics
+		return diagnostics, nil
 	}
 
 	diagnostics.SessionID = session.SessionID
@@ -61,6 +61,15 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) *SessionDi
 		diagnostics.Artifacts = append(diagnostics.Artifacts, artifactDiagnostics(spec))
 	}
 
+	// evidenceFailureCodes records, per spec, the error codes already counted
+	// from evidence events. The per-turn session.jsonl scan re-records the same
+	// underlying turn error as an "error" event (a recoverable turn failure is
+	// logged both to evidence as agent_failure_recoverable and to the turn's
+	// session.jsonl as an error event with the same error_code). Without dedup
+	// the same failure inflates Failures. tool_result errors are tool-level and
+	// have no evidence counterpart, so they are never deduped.
+	evidenceFailureCodes := map[string]map[string]bool{}
+
 	for _, event := range events {
 		specName := eventDiagnosticsSpecName(event)
 		spec := specs[diagnosticSpecKey(specName, specName)]
@@ -94,6 +103,7 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) *SessionDi
 			}
 			if errText != "" {
 				addDiagnosticsFailure(diagnostics.Failures, spec, ClassifyFailure(errText))
+				recordEvidenceFailureCode(evidenceFailureCodes, specName, stringFromMap(data, "error_code"))
 			} else if result == "failure" && len(diagnostics.Failures) == 0 {
 				addDiagnosticsFailure(diagnostics.Failures, spec, "goal_failure")
 			}
@@ -105,7 +115,9 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) *SessionDi
 			diagnostics.BudgetExceeded[budget]++
 			addDiagnosticsFailure(diagnostics.Failures, spec, "task_budget")
 		case "agent_failure_recoverable", "game_error", "error":
-			addDiagnosticsFailure(diagnostics.Failures, spec, ClassifyFailure(firstDiagnosticsNonEmpty(stringFromMap(data, "error_code"), stringFromMap(data, "error"))))
+			errorCode := stringFromMap(data, "error_code")
+			addDiagnosticsFailure(diagnostics.Failures, spec, ClassifyFailure(firstDiagnosticsNonEmpty(errorCode, stringFromMap(data, "error"))))
+			recordEvidenceFailureCode(evidenceFailureCodes, specName, errorCode)
 		case "agent_complete":
 			if event.Role != nil && *event.Role == "verifier" &&
 				stringFromMap(data, "status") == "CONTINUE" && stringFromMap(data, "error") == "" {
@@ -132,10 +144,32 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) *SessionDi
 		}
 		diagnostics.Specs = append(diagnostics.Specs, spec)
 	}
-	return diagnostics
+	return diagnostics, evidenceFailureCodes
 }
 
-func appendSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, sessionDir string) error {
+func recordEvidenceFailureCode(bySpec map[string]map[string]bool, specName, code string) {
+	if code == "" {
+		return
+	}
+	set := bySpec[specName]
+	if set == nil {
+		set = map[string]bool{}
+		bySpec[specName] = set
+	}
+	set[code] = true
+}
+
+// evidenceFailureAlreadyCounted reports whether an evidence event for the given
+// spec already recorded a failure with this error code, so the session-log
+// scan can skip double-counting the same underlying turn failure.
+func evidenceFailureAlreadyCounted(bySpec map[string]map[string]bool, specName, code string) bool {
+	if code == "" {
+		return false
+	}
+	return bySpec[specName][code]
+}
+
+func appendSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, sessionDir string, evidenceFailureCodes map[string]map[string]bool) error {
 	if diagnostics == nil || sessionDir == "" {
 		return nil
 	}
@@ -145,7 +179,7 @@ func appendSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, sessio
 	}
 	sort.Strings(matches)
 	for _, path := range matches {
-		if err := readSessionLogDiagnostics(diagnostics, path); err != nil {
+		if err := readSessionLogDiagnostics(diagnostics, path, evidenceFailureCodes); err != nil {
 			diagnostics.ScanErrors = append(diagnostics.ScanErrors, err.Error())
 		}
 	}
@@ -157,7 +191,7 @@ type diagnosticSessionLogEvent struct {
 	Data map[string]any `json:"data,omitempty"`
 }
 
-func readSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, path string) error {
+func readSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, path string, evidenceFailureCodes map[string]map[string]bool) error {
 	f, err := os.Open(path)
 	if err != nil {
 		return fmt.Errorf("read session log %s: %w", path, err)
@@ -202,7 +236,15 @@ func readSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, path str
 				Retryable:          boolPtrFromAny(event.Data["retryable"]),
 				ProviderStatusCode: intFromMap(event.Data, "provider_status_code"),
 			})
-			addDiagnosticsFailure(diagnostics.Failures, diagnosticsSpecByName(diagnostics, specName), ClassifyFailure(errorText))
+			// Dedup against evidence: a recoverable turn failure is logged both
+			// to evidence (agent_failure_recoverable) and to this turn's
+			// session.jsonl (error event) with the same error_code. The evidence
+			// pass already counted it, so skip the failure tally here to avoid
+			// double-counting. The per-turn Errors list above is still populated
+			// so operators keep the granular detail.
+			if !evidenceFailureAlreadyCounted(evidenceFailureCodes, specName, errorCode) {
+				addDiagnosticsFailure(diagnostics.Failures, diagnosticsSpecByName(diagnostics, specName), ClassifyFailure(errorText))
+			}
 		case "model_response":
 			if stopReason := stringFromMap(event.Data, "stop_reason"); stopReason != "" {
 				diagnostics.StopReasons[stopReason]++
@@ -259,14 +301,13 @@ func budgetDiagnostics(config map[string]any) SessionBudgetDiagnostics {
 		return SessionBudgetDiagnostics{}
 	}
 	return SessionBudgetDiagnostics{
-		MaxCostUSD:        floatPtrFromAny(config["max_cost_usd"]),
-		MaxRounds:         intValue(config["max_rounds"]),
-		MaxDurationSec:    intValue(config["max_duration_sec"]),
-		MaxInputTokens:    intValue(config["max_input_tokens"]),
-		MaxOutputTokens:   intValue(config["max_output_tokens"]),
-		MaxToolLoops:      intValue(config["max_tool_loops"]),
-		AgentTimeoutSec:   intValue(config["agent_timeout_sec"]),
-		SafeWritePrefixes: stringSliceValue(config["safe_write_prefixes"]),
+		MaxCostUSD:      floatPtrFromAny(config["max_cost_usd"]),
+		MaxRounds:       intValue(config["max_rounds"]),
+		MaxDurationSec:  intValue(config["max_duration_sec"]),
+		MaxInputTokens:  intValue(config["max_input_tokens"]),
+		MaxOutputTokens: intValue(config["max_output_tokens"]),
+		MaxToolLoops:    intValue(config["max_tool_loops"]),
+		AgentTimeoutSec: intValue(config["agent_timeout_sec"]),
 	}
 }
 
@@ -461,23 +502,6 @@ func floatPtrFromAny(value any) *float64 {
 		}
 	}
 	return nil
-}
-
-func stringSliceValue(value any) []string {
-	switch v := value.(type) {
-	case []string:
-		return append([]string(nil), v...)
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok && s != "" {
-				out = append(out, s)
-			}
-		}
-		return out
-	default:
-		return nil
-	}
 }
 
 func intPtrValue(value *int) int {

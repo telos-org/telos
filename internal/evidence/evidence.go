@@ -83,7 +83,7 @@ func (e *Evidence) LogAgent(roundNum int, role string, status string, logsTail s
 	}
 	if len(errText) > 0 && errText[0] != "" {
 		data["error"] = errText[0]
-		if code := errorCode(errText[0]); code != "" {
+		if code := ErrorCode(errText[0]); code != "" {
 			data["error_code"] = code
 		}
 	}
@@ -118,7 +118,7 @@ func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRound
 		"total_cache_creation_tokens": cacheCreate,
 		"error":                       errMsg,
 	}
-	if code := errorCode(errMsg); code != "" {
+	if code := ErrorCode(errMsg); code != "" {
 		data["error_code"] = code
 	}
 	e.Log("game_end", rounds, "system", data)
@@ -186,7 +186,11 @@ func truncate(s string, max int) string {
 	return s[len(s)-max:]
 }
 
-func errorCode(errText string) string {
+// ErrorCode returns the leading code segment of a Telos error string, i.e. the
+// text before the first ':', space, or newline ("provider_timeout:..." ->
+// "provider_timeout"). It is the single shared parser for error codes recorded
+// in evidence, transcripts, and session manifests.
+func ErrorCode(errText string) string {
 	for i, r := range errText {
 		switch {
 		case r == ':' || r == ' ' || r == '\n' || r == '\t':

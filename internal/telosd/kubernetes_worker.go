@@ -491,17 +491,6 @@ func secretHasLiteLLMBaseURL(data map[string][]byte) bool {
 	return false
 }
 
-func (s kubernetesSubstrate) copyOptionalSecret(ctx context.Context, sourceNamespace string, targetNamespace string, name string) error {
-	if strings.TrimSpace(name) == "" {
-		return nil
-	}
-	err := s.copySecret(ctx, sourceNamespace, targetNamespace, name)
-	if apierrors.IsNotFound(err) {
-		return nil
-	}
-	return err
-}
-
 func (s kubernetesSubstrate) copySecret(ctx context.Context, sourceNamespace string, targetNamespace string, name string) error {
 	source, err := s.client.CoreV1().Secrets(sourceNamespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {

@@ -52,9 +52,6 @@ func TestSessionConfigPreservesUnknownFields(t *testing.T) {
 	if cfg.MaxToolLoops != 42 {
 		t.Fatalf("max_tool_loops typed field: got %#v", cfg.MaxToolLoops)
 	}
-	if len(cfg.SafeWritePrefixes) != 2 || cfg.SafeWritePrefixes[0] != "/tmp/telos-scratch" || cfg.SafeWritePrefixes[1] != "/workspace/outside" {
-		t.Fatalf("safe_write_prefixes typed field: got %#v", cfg.SafeWritePrefixes)
-	}
 
 	m := cfg.AsMap()
 	if got, ok := m["max_rounds"].(float64); !ok || got != 8 {
@@ -71,7 +68,7 @@ func TestSessionConfigPreservesUnknownFields(t *testing.T) {
 	}
 	prefixes, ok := m["safe_write_prefixes"].([]any)
 	if !ok || len(prefixes) != 2 || prefixes[0] != "/tmp/telos-scratch" || prefixes[1] != "/workspace/outside" {
-		t.Fatalf("safe_write_prefixes should be emitted from typed field: %#v", m["safe_write_prefixes"])
+		t.Fatalf("safe_write_prefixes should be preserved as an unknown field: %#v", m["safe_write_prefixes"])
 	}
 	if _, ok := m["future_knob"].(map[string]any); !ok {
 		t.Fatalf("future_knob was not preserved: %#v", m["future_knob"])

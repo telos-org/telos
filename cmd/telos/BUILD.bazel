@@ -69,7 +69,6 @@ go_test(
         "//internal/cli",
         "//internal/cloud",
         "//internal/config",
-        "//internal/executor",
         "//internal/sessionapi",
         "//internal/spec",
     ],

@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/telos-org/telos/internal/evidence"
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
@@ -18,20 +19,19 @@ const DefaultLocalModel = "claude-opus-4-6"
 
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {
-	SessionKind       sessionapi.SessionKind
-	ParentSessionID   *string
-	Workspace         string
-	Model             string
-	Thinking          string
-	Until             int
-	MaxCostUSD        *float64
-	MaxRounds         int
-	MaxDurationSec    int
-	MaxInputTokens    int
-	MaxOutputTokens   int
-	MaxToolLoops      int
-	AgentTimeoutSec   int
-	SafeWritePrefixes []string
+	SessionKind     sessionapi.SessionKind
+	ParentSessionID *string
+	Workspace       string
+	Model           string
+	Thinking        string
+	Until           int
+	MaxCostUSD      *float64
+	MaxRounds       int
+	MaxDurationSec  int
+	MaxInputTokens  int
+	MaxOutputTokens int
+	MaxToolLoops    int
+	AgentTimeoutSec int
 }
 
 // LocalSession holds the result of session creation.
@@ -321,17 +321,16 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		SessionSpecPath: strPtr(state.SpecPath()),
 		SpecName:        compiled.Environment.Name,
 		Config: sessionapi.SessionConfig{
-			Model:             model,
-			Until:             cfg.Until,
-			MaxCostUSD:        cfg.MaxCostUSD,
-			MaxRounds:         cfg.MaxRounds,
-			MaxDurationSec:    cfg.MaxDurationSec,
-			MaxInputTokens:    cfg.MaxInputTokens,
-			MaxOutputTokens:   cfg.MaxOutputTokens,
-			MaxToolLoops:      cfg.MaxToolLoops,
-			AgentTimeoutSec:   cfg.AgentTimeoutSec,
-			SafeWritePrefixes: cfg.SafeWritePrefixes,
-			Thinking:          thinking,
+			Model:           model,
+			Until:           cfg.Until,
+			MaxCostUSD:      cfg.MaxCostUSD,
+			MaxRounds:       cfg.MaxRounds,
+			MaxDurationSec:  cfg.MaxDurationSec,
+			MaxInputTokens:  cfg.MaxInputTokens,
+			MaxOutputTokens: cfg.MaxOutputTokens,
+			MaxToolLoops:    cfg.MaxToolLoops,
+			AgentTimeoutSec: cfg.AgentTimeoutSec,
+			Thinking:        thinking,
 		},
 		Workspace:  workspace,
 		Provenance: map[string]any{"mode": "local"},
@@ -357,17 +356,16 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	cfg := manifest.Config
 	lrc := LocalRunConfig{
-		Model:             cfg.Model,
-		Thinking:          cfg.Thinking,
-		Until:             cfg.Until,
-		MaxCostUSD:        cfg.MaxCostUSD,
-		MaxRounds:         cfg.MaxRounds,
-		MaxDurationSec:    cfg.MaxDurationSec,
-		MaxInputTokens:    cfg.MaxInputTokens,
-		MaxOutputTokens:   cfg.MaxOutputTokens,
-		MaxToolLoops:      cfg.MaxToolLoops,
-		AgentTimeoutSec:   cfg.AgentTimeoutSec,
-		SafeWritePrefixes: cfg.SafeWritePrefixes,
+		Model:           cfg.Model,
+		Thinking:        cfg.Thinking,
+		Until:           cfg.Until,
+		MaxCostUSD:      cfg.MaxCostUSD,
+		MaxRounds:       cfg.MaxRounds,
+		MaxDurationSec:  cfg.MaxDurationSec,
+		MaxInputTokens:  cfg.MaxInputTokens,
+		MaxOutputTokens: cfg.MaxOutputTokens,
+		MaxToolLoops:    cfg.MaxToolLoops,
+		AgentTimeoutSec: cfg.AgentTimeoutSec,
 	}
 	if lrc.Thinking == "" {
 		lrc.Thinking = "medium"
@@ -492,16 +490,7 @@ func finishEpoch(sessionDir string, manifest *sessionapi.Manifest, result *game.
 }
 
 func runtimeErrorCode(errText string) string {
-	for i, r := range errText {
-		switch {
-		case r == ':' || r == ' ' || r == '\n' || r == '\t':
-			if i == 0 {
-				return ""
-			}
-			return errText[:i]
-		}
-	}
-	return ""
+	return evidence.ErrorCode(errText)
 }
 
 func sessionStopped(sessionDir string) bool {
