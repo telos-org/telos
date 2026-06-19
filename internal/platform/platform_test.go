@@ -142,6 +142,29 @@ func TestLocalPlatformRunCapsStdoutAndStderr(t *testing.T) {
 	}
 }
 
+func TestLocalPlatformRunPreservesBlankLines(t *testing.T) {
+	dir := t.TempDir()
+	p := NewLocalPlatform(dir)
+
+	result := p.Run(
+		[]string{"sh", "-c", "echo a; echo; echo b"},
+		"", nil, 10, nil, nil,
+	)
+
+	if result.InfraError != "" {
+		t.Fatalf("infra error: %s", result.InfraError)
+	}
+	want := []string{"a", "", "b"}
+	if len(result.RawLines) != len(want) {
+		t.Fatalf("expected %d raw lines (blank preserved), got %d: %#v", len(want), len(result.RawLines), result.RawLines)
+	}
+	for i, w := range want {
+		if result.RawLines[i] != w {
+			t.Fatalf("raw line %d: got %q want %q (full: %#v)", i, result.RawLines[i], w, result.RawLines)
+		}
+	}
+}
+
 func TestLocalPlatformRunWithoutTimeout(t *testing.T) {
 	dir := t.TempDir()
 	p := NewLocalPlatform(dir)

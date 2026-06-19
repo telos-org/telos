@@ -572,9 +572,8 @@ func (c *cappedLineCollector) Finish() {
 }
 
 func (c *cappedLineCollector) appendLine(line string) {
-	if line == "" {
-		return
-	}
+	// Preserve blank lines so reconstructed output stays faithful to the
+	// original spacing. Only the synthetic truncation marker is non-empty.
 	c.lines = append(c.lines, line)
 	if c.onLine != nil {
 		c.onLine(line)
