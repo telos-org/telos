@@ -1327,6 +1327,111 @@ func TestNativeExecutorCorrectsMalformedReviewModeBlocksOnce(t *testing.T) {
 	}
 }
 
+func TestNativeExecutorRetriesMalformedReviewBlocksBeyondOnce(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1, 2:
+			// Two consecutive malformed replies (review block only, no summary).
+			writeResponsesStream(w, `{
+				"id":"resp_x","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<review>criteria,score\nclarity,8.0/10</review>"}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		case 3:
+			writeResponsesStream(w, `{
+				"id":"resp_ok","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<review>criteria,score\nclarity,8.0/10</review>\n<summary>No issues.</summary>"}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_API_BASE_URL", server.URL)
+	t.Setenv("TELOS_API_KEY", "test-key")
+
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	result := exec.ExecuteTurn("Review workspace.", "verifier", &game.TurnState{Dir: filepath.Join(workspace, ".turn"), ProtocolMode: "review"})
+
+	if result.Error != "" {
+		t.Fatalf("expected recovery after two malformed replies, got error %q logs=%q", result.Error, result.Logs)
+	}
+	if requests != 3 {
+		t.Fatalf("expected 3 requests (2 corrections then success), got %d", requests)
+	}
+}
+
+func TestProtocolCorrectionReviewAndProgressTolerance(t *testing.T) {
+	cases := []struct {
+		name         string
+		role         string
+		protocolMode string
+		text         string
+		wantKey      string
+	}{
+		{
+			name:         "review valid lowercase",
+			role:         "verifier",
+			protocolMode: "review",
+			text:         "<review>criteria,score\nclarity,8.0/10</review>\n<summary>fine</summary>",
+			wantKey:      "",
+		},
+		{
+			name:         "review tolerates case and attributes",
+			role:         "verifier",
+			protocolMode: "review",
+			text:         "<Review type=\"rubric\">criteria,score\nclarity,8.0/10</Review>\n<SUMMARY id=\"s1\">fine</SUMMARY>",
+			wantKey:      "",
+		},
+		{
+			name:         "review tolerates a stray tag mention",
+			role:         "verifier",
+			protocolMode: "review",
+			text:         "I will now emit the review block.\n<review>criteria,score\nclarity,8.0/10</review>\n<summary>fine</summary>",
+			wantKey:      "",
+		},
+		{
+			name:         "review rejects duplicate blocks",
+			role:         "verifier",
+			protocolMode: "review",
+			text:         "<review>criteria,score\na,1.0/10</review>\n<review>criteria,score\nb,2.0/10</review>\n<summary>fine</summary>",
+			wantKey:      "malformed_review_blocks",
+		},
+		{
+			name:         "review rejects missing summary",
+			role:         "verifier",
+			protocolMode: "review",
+			text:         "<review>criteria,score\nclarity,8.0/10</review>",
+			wantKey:      "malformed_review_blocks",
+		},
+		{
+			name:    "progress tolerates case and attributes",
+			role:    "prover",
+			text:    "Done.\n<Progress_Update note=\"final\">changed main.go</Progress_Update>",
+			wantKey: "",
+		},
+		{
+			name:    "progress missing block",
+			role:    "prover",
+			text:    "Done, nothing else to add.",
+			wantKey: "missing_progress_update",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, key := protocolCorrectionForStrict(tc.role, tc.protocolMode, "Review workspace.", tc.text, true, false, true)
+			if key != tc.wantKey {
+				t.Fatalf("key: got %q want %q", key, tc.wantKey)
+			}
+		})
+	}
+}
+
 func TestNativeExecutorRequiresVerifierToOpenRequiredRubricBeforeConceding(t *testing.T) {
 	workspace := t.TempDir()
 	skillDir := filepath.Join(t.TempDir(), "review-skill")
@@ -2084,13 +2189,13 @@ func TestNativeToolsFindFilesSupportsRecursiveGlobstar(t *testing.T) {
 	workspace := t.TempDir()
 	// Build a nested tree so we can exercise `**` across directory boundaries.
 	files := map[string]string{
-		"a.go":                          "x",
-		"pkg/b.go":                      "x",
-		"pkg/sub/c.go":                  "x",
-		"pkg/sub/deep/d.go":             "x",
-		"pkg/sub/deep/e.txt":            "x",
-		"other/also.go":                 "x",
-		"node_modules/dep/ignored.go":   "x", // shouldSkipDir drops node_modules
+		"a.go":                        "x",
+		"pkg/b.go":                    "x",
+		"pkg/sub/c.go":                "x",
+		"pkg/sub/deep/d.go":           "x",
+		"pkg/sub/deep/e.txt":          "x",
+		"other/also.go":               "x",
+		"node_modules/dep/ignored.go": "x", // shouldSkipDir drops node_modules
 	}
 	for rel, content := range files {
 		full := filepath.Join(workspace, rel)
@@ -2671,6 +2776,16 @@ func TestSanitizeVisibleTextRemovesReasoningTags(t *testing.T) {
 			name:      "no tags unchanged",
 			raw:       "visible answer",
 			wantClean: "visible answer",
+		},
+		{
+			name:      "stray close after protocol blocks keeps them",
+			raw:       "<review>criteria,score\nclarity,8.0/10</review>\n<summary>fine</summary>\nleaked tail</think>",
+			wantClean: "<review>criteria,score\nclarity,8.0/10</review>\n<summary>fine</summary>\nleaked tail</think>",
+		},
+		{
+			name:      "stray open before protocol block keeps it",
+			raw:       "<think>leaked plan\n<progress_update>changed main.go</progress_update>",
+			wantClean: "<think>leaked plan\n<progress_update>changed main.go</progress_update>",
 		},
 		{
 			name:      "incidental angle bracket unchanged",

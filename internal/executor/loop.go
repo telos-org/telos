@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strings"
 
 	"github.com/telos-org/telos/internal/game"
@@ -12,7 +13,46 @@ import (
 const (
 	defaultMaxToolLoops    = 160
 	defaultMaxOutputTokens = 16384
+
+	// maxFormattingCorrections is the per-key retry budget for protocol
+	// *formatting* errors (a missing/duplicated/mis-cased response tag). These
+	// are recoverable with another attempt, so they get more than one nudge;
+	// semantic keys (e.g. a missing rubric read) keep a single correction.
+	maxFormattingCorrections = 3
 )
+
+// Protocol-tag matchers used for response validation. These intentionally
+// mirror the lenient extractors in internal/spec (case-insensitive, attribute
+// tolerant) so the gate that decides pass/fail agrees with the parser that
+// later consumes the blocks. Counting *balanced* matches — rather than raw tag
+// occurrences — also keeps a stray literal mention (e.g. "the <review> block")
+// from inflating the count.
+var (
+	reviewBlockRE   = regexp.MustCompile(`(?is)<review\b[^>]*>.*?</review>`)
+	summaryBlockRE  = regexp.MustCompile(`(?is)<summary\b[^>]*>.*?</summary>`)
+	progressBlockRE = regexp.MustCompile(`(?is)<progress_update\b[^>]*>.*?</progress_update>`)
+)
+
+func countBlocks(re *regexp.Regexp, text string) int {
+	return len(re.FindAllString(text, -1))
+}
+
+// formattingCorrectionKeys are recoverable response-shape errors worth more
+// than one retry; the model usually fixes them once it sees a diagnostic count.
+// Scoped to the prover progress-update and verifier review-block paths, which
+// are the tag shapes weaker models most often get wrong on the first reply.
+var formattingCorrectionKeys = map[string]bool{
+	"missing_progress_update":   true,
+	"malformed_progress_update": true,
+	"malformed_review_blocks":   true,
+}
+
+func maxProtocolCorrections(key string) int {
+	if formattingCorrectionKeys[key] {
+		return maxFormattingCorrections
+	}
+	return 1
+}
 
 // effectiveMaxToolLoops resolves the per-turn tool-loop ceiling. The manifest
 // budget is the source of truth: a configured MaxToolLoops always wins. With no
@@ -117,7 +157,7 @@ func newAgentLoop(httpClient *http.Client, cfg nativeProviderConfig, thinking st
 func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 	maxLoops := effectiveMaxToolLoops(l.budget)
 	stats := game.TurnStats{Model: l.model}
-	corrections := map[string]bool{}
+	corrections := map[string]int{}
 	usedTool := false
 
 	for i := 0; i < maxLoops; i++ {
@@ -146,8 +186,8 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 			if prompt == "" {
 				return turn.text, stats, nil
 			}
-			if !corrections[key] && i+1 < maxLoops {
-				corrections[key] = true
+			if corrections[key] < maxProtocolCorrections(key) && i+1 < maxLoops {
+				corrections[key]++
 				_ = l.logger.protocolCorrection(key, prompt)
 				l.transport.recordCorrection(prompt)
 				continue
@@ -214,10 +254,11 @@ func protocolCorrectionForStrict(role, protocolMode, task, text string, usedTool
 		}
 	}
 	if policy.requireProgressUpdate {
-		if strict && !hasExactTag(trimmed, "progress_update") {
-			return "Your previous response must contain exactly one <progress_update>...</progress_update> block. Reply with a concise final implementation summary and exactly one progress_update block.", "malformed_progress_update"
+		progress := countBlocks(progressBlockRE, trimmed)
+		if strict && progress != 1 {
+			return fmt.Sprintf("Your previous response must contain exactly one <progress_update>...</progress_update> block, but it had %d. Reply with a concise final implementation summary and exactly one progress_update block; do not write the tag name anywhere else.", progress), "malformed_progress_update"
 		}
-		if !strict && (!strings.Contains(trimmed, "<progress_update>") || !strings.Contains(trimmed, "</progress_update>")) {
+		if !strict && progress < 1 {
 			return "Your previous response was missing the required <progress_update>...</progress_update> block. Reply with a concise final implementation summary and include exactly one <progress_update> block.", "missing_progress_update"
 		}
 		if toolsAvailable && policy.requireToolForArtifact && !usedTool && artifactOriented(task) {
@@ -225,8 +266,10 @@ func protocolCorrectionForStrict(role, protocolMode, task, text string, usedTool
 		}
 	}
 	if policy.requireReviewBlocks {
-		if strings.Count(trimmed, "<review>") != 1 || strings.Count(trimmed, "</review>") != 1 || strings.Count(trimmed, "<summary>") != 1 || strings.Count(trimmed, "</summary>") != 1 {
-			return "Your previous review-mode response must contain exactly one <review>...</review> block and exactly one <summary>...</summary> block. Reply again using that structure.", "malformed_review_blocks"
+		reviews := countBlocks(reviewBlockRE, trimmed)
+		summaries := countBlocks(summaryBlockRE, trimmed)
+		if reviews != 1 || summaries != 1 {
+			return fmt.Sprintf("Your previous review-mode response must contain exactly one <review>...</review> block and exactly one <summary>...</summary> block, but it had %d review and %d summary block(s). Put the CSV rubric inside a single <review> tag and your notes inside a single <summary> tag, and do not write either tag name anywhere else (including examples or narration).", reviews, summaries), "malformed_review_blocks"
 		}
 	}
 	return "", ""
