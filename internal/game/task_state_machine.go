@@ -11,6 +11,12 @@ type taskStateMachine struct {
 	reviewMode       bool
 	reviewTarget     int
 	reviewsCompleted int
+	// proverDelivered records whether at least one prover turn completed
+	// without error. Review mode ends after a fixed number of cycles
+	// regardless of the verifier's verdict, so without this guard a run whose
+	// every implementation turn failed (e.g. tool-loop/protocol errors with no
+	// artifact produced) would still be reported as success.
+	proverDelivered bool
 }
 
 func newTaskStateMachine(reviewTarget int) taskStateMachine {
@@ -42,6 +48,9 @@ func (m *taskStateMachine) advance(turn TurnResult) (GameResult, bool) {
 
 	switch turn.Role {
 	case "prover":
+		if turn.Error == "" {
+			m.proverDelivered = true
+		}
 		m.state = ObjectiveStateVerify
 	case "verifier":
 		if m.reviewMode {
@@ -50,6 +59,9 @@ func (m *taskStateMachine) advance(turn TurnResult) (GameResult, bool) {
 			}
 			if m.reviewsCompleted >= m.reviewTarget {
 				m.state = ObjectiveStateFinalize
+				if !m.proverDelivered {
+					return GameFailure, true
+				}
 				return GameSuccess, true
 			}
 			m.state = ObjectiveStateImplement

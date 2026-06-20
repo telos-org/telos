@@ -120,6 +120,9 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 			recoverableFailures = 0
 		}
 		if terminal {
+			if result == GameFailure && p.fixedReviewMode() && !machine.proverDelivered && p.Result.Error == "" {
+				p.Result.Error = "no_successful_implementation"
+			}
 			if result == GameSuccess && !p.fixedReviewMode() && turn.Role == "verifier" && turn.Status == StatusConcede {
 				p.Result.VerifierConceded = true
 			}
@@ -334,6 +337,9 @@ func (p *PVG) completionReason(result GameResult) string {
 	default:
 		if p.Result.Error == "runtime_budget_exhausted" || strings.HasPrefix(p.Result.Error, "runtime_budget_exhausted:") {
 			return "runtime_budget_exhausted"
+		}
+		if p.Result.Error == "no_successful_implementation" {
+			return "no_successful_implementation"
 		}
 		return "failure"
 	}

@@ -80,3 +80,29 @@ func TestTaskStateMachineReviewModeCountsOnlySuccessfulVerifierTurns(t *testing.
 		t.Fatalf("second successful review should finalize: result=%q terminal=%v reviews=%d state=%q", result, terminal, machine.reviewsCompleted, machine.state)
 	}
 }
+
+func TestTaskStateMachineReviewModeFailsWhenProverNeverDelivers(t *testing.T) {
+	machine := newTaskStateMachine(1)
+
+	// Every prover turn errors (recoverably) so nothing is ever implemented.
+	machine.advance(TurnResult{
+		Role:        "prover",
+		Status:      StatusContinue,
+		Error:       "agent_incomplete:tool_loop_exceeded:160",
+		Recoverable: true,
+	})
+	result, terminal := machine.advance(TurnResult{Role: "verifier", Status: StatusContinue})
+	if !terminal || result != GameFailure || machine.proverDelivered {
+		t.Fatalf("review cycles completing with no successful prover turn should fail: result=%q terminal=%v delivered=%v", result, terminal, machine.proverDelivered)
+	}
+}
+
+func TestTaskStateMachineReviewModeSucceedsWhenProverDelivers(t *testing.T) {
+	machine := newTaskStateMachine(1)
+
+	machine.advance(TurnResult{Role: "prover", Status: StatusContinue})
+	result, terminal := machine.advance(TurnResult{Role: "verifier", Status: StatusContinue})
+	if !terminal || result != GameSuccess || !machine.proverDelivered {
+		t.Fatalf("clean prover + completed review should succeed: result=%q terminal=%v delivered=%v", result, terminal, machine.proverDelivered)
+	}
+}
