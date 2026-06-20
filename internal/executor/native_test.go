@@ -21,6 +21,7 @@ import (
 )
 
 func TestNativeExecutorRunsChatToolLoopAndWritesWorkspace(t *testing.T) {
+	t.Setenv("TELOS_MODEL_STATE_MODE", "server_chain")
 	workspace := t.TempDir()
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1830,6 +1831,7 @@ func TestClassifyProviderMessageDistinguishesContextLimit(t *testing.T) {
 }
 
 func TestNativeExecutorFallsBackToStatelessHistoryWhenResponseChainBreaks(t *testing.T) {
+	t.Setenv("TELOS_MODEL_STATE_MODE", "server_chain")
 	workspace := t.TempDir()
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

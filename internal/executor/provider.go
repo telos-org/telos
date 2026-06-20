@@ -56,7 +56,7 @@ func firstEnv(names ...string) string {
 }
 
 func modelCapabilityProfileFromEnv() modelCapabilityProfile {
-	profile := modelCapabilityProfile{StateMode: "server_chain"}
+	profile := modelCapabilityProfile{StateMode: "stateless_history"}
 	if raw := strings.TrimSpace(os.Getenv("TELOS_MODEL_CAPABILITY_PROFILE")); raw != "" {
 		_ = json.Unmarshal([]byte(raw), &profile)
 	}
@@ -82,7 +82,7 @@ func modelCapabilityProfileFromEnv() modelCapabilityProfile {
 	switch profile.StateMode {
 	case "server_chain", "stateless_history":
 	default:
-		profile.StateMode = "server_chain"
+		profile.StateMode = "stateless_history"
 	}
 	return profile
 }
