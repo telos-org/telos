@@ -2508,10 +2508,13 @@ func TestNativeSessionLoggerIncludesToolMetadata(t *testing.T) {
 	result := nativeToolResult{
 		CallID:     "call_1",
 		Name:       "bash",
-		Output:     "tool: bash\nok: true\nstdout_original_bytes: 300000\nstdout_truncated: true\n",
+		Output:     "tool: bash\nok: true\nduration_ms: 12\nstdout_original_bytes: 300000\nstdout_truncated: true\n",
 		DurationMS: 12,
+		Metadata: map[string]any{
+			"stdout_original_bytes": 300000,
+			"stdout_truncated":      true,
+		},
 	}
-	result.applyMetadataFromOutput()
 	if err := logger.tool(result); err != nil {
 		t.Fatal(err)
 	}
