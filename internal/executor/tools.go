@@ -21,6 +21,7 @@ import (
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/responses"
+	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 )
 
@@ -254,17 +255,23 @@ type nativeTools struct {
 	byName        map[string]nativeTool
 	limit         toolOutputLimit
 	skills        map[string]nativeSkillRef
+	// skillCoverage records, per skill name, the number of leading lines read
+	// contiguously from line 1. A required rubric counts as fully read once this
+	// reaches its line count, so paginated reads (start_line walking to EOF)
+	// satisfy the read gate just like a single complete read.
+	skillCoverage map[string]int
 	openedSkills  map[string]bool
 	logger        *nativeSessionLogger
 }
 
-func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool, task string, logger *nativeSessionLogger, knobs envKnobs) *nativeTools {
+func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool, skills []game.TurnSkill, logger *nativeSessionLogger, knobs envKnobs) *nativeTools {
 	t := &nativeTools{
 		platform:      p,
 		stopRequested: stopRequested,
 		byName:        map[string]nativeTool{},
 		limit:         defaultToolOutputLimit(knobs),
-		skills:        parseSkillRefs(task),
+		skills:        skillRefsFromTurn(skills),
+		skillCoverage: map[string]int{},
 		openedSkills:  map[string]bool{},
 		logger:        logger,
 	}
@@ -275,6 +282,25 @@ func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool, task s
 		}
 	}
 	return t
+}
+
+// skillRefsFromTurn builds the skill lookup from the structured roster the
+// runtime passes through TurnState, keyed by skill name.
+func skillRefsFromTurn(skills []game.TurnSkill) map[string]nativeSkillRef {
+	refs := make(map[string]nativeSkillRef, len(skills))
+	for _, s := range skills {
+		name := strings.TrimSpace(s.Name)
+		if name == "" || strings.TrimSpace(s.SkillPath) == "" {
+			continue
+		}
+		refs[name] = nativeSkillRef{
+			Name:        name,
+			Description: strings.TrimSpace(s.Description),
+			Path:        s.SkillPath,
+			Required:    s.Required,
+		}
+	}
+	return refs
 }
 
 func (t *nativeTools) executeAll(ctx context.Context, calls []nativeToolCall) []nativeToolResult {
@@ -952,30 +978,56 @@ func (t *nativeTools) skill(action, name, refPath string, startLine, limitLines 
 				return "", err
 			}
 		}
-		body, truncated, err := t.readSkillFile(readPath, startLine, limitLines)
+		read, err := t.readSkillFile(readPath, startLine, limitLines)
 		if err != nil {
 			return "", err
 		}
-		if action == "read" && !truncated {
-			t.openedSkills[ref.Name] = true
+		// A required rubric is satisfied once the model has read it in full, even
+		// across several paginated reads. Track contiguous coverage from line 1
+		// so a rubric larger than one read window can still be completed by
+		// walking start_line to EOF, rather than being permanently "unread". A
+		// byte-truncated read does not advance coverage, since its window was cut
+		// mid-content and those lines were not all delivered.
+		if action == "read" && !read.binary && !read.byteTruncated {
+			covered := t.skillCoverage[ref.Name]
+			if read.startLine <= covered+1 && read.endLine > covered {
+				covered = read.endLine
+				t.skillCoverage[ref.Name] = covered
+			}
+			fullyRead := read.totalLines > 0 && covered >= read.totalLines
+			if fullyRead && !t.openedSkills[ref.Name] {
+				t.openedSkills[ref.Name] = true
+				_ = t.logger.skillApplied(ref.Name, readPath)
+			}
 		}
-		_ = t.logger.skillOpened(ref.Name, readPath, truncated)
-		if action == "read" && !truncated {
-			_ = t.logger.skillApplied(ref.Name, readPath)
-		}
-		return fmt.Sprintf("name: %s\npath: %s\ntruncated: %t\n%s", ref.Name, readPath, truncated, body), nil
+		_ = t.logger.skillOpened(ref.Name, readPath, read.truncated)
+		return fmt.Sprintf("name: %s\npath: %s\ntruncated: %t\n%s", ref.Name, readPath, read.truncated, read.body), nil
 	default:
 		return "", fmt.Errorf("unknown skill action %q; use 'list', 'read', or 'read_ref'", action)
 	}
 }
 
-func (t *nativeTools) readSkillFile(full string, startLine, limitLines int) (string, bool, error) {
+// skillReadResult carries the rendered skill body plus the line range read, so
+// callers can track how much of a required rubric has been covered.
+type skillReadResult struct {
+	body       string
+	startLine  int
+	endLine    int
+	totalLines int
+	truncated  bool
+	// byteTruncated is true when the returned content was cut mid-window by the
+	// byte cap, so lines [startLine, endLine] were not all actually delivered.
+	byteTruncated bool
+	binary        bool
+}
+
+func (t *nativeTools) readSkillFile(full string, startLine, limitLines int) (skillReadResult, error) {
 	info, err := os.Stat(full)
 	if err != nil {
-		return "", false, err
+		return skillReadResult{}, err
 	}
 	if info.IsDir() {
-		return "", false, fmt.Errorf("%s is a directory", full)
+		return skillReadResult{}, fmt.Errorf("%s is a directory", full)
 	}
 	if startLine <= 0 {
 		startLine = 1
@@ -988,17 +1040,27 @@ func (t *nativeTools) readSkillFile(full string, startLine, limitLines int) (str
 	}
 	content, totalLines, endLine, truncatedBytes, binary, err := readTextFileRange(full, startLine, limitLines, t.limit.MaxBytes)
 	if err != nil {
-		return "", false, err
+		return skillReadResult{}, err
 	}
 	if binary {
-		return fmt.Sprintf("size_bytes: %d\nbinary: true\ncontent:\n(binary file omitted)", info.Size()), false, nil
+		return skillReadResult{
+			body:   fmt.Sprintf("size_bytes: %d\nbinary: true\ncontent:\n(binary file omitted)", info.Size()),
+			binary: true,
+		}, nil
 	}
 	if endLine < startLine {
 		endLine = startLine - 1
 	}
 	truncated := endLine < totalLines || truncatedBytes
 	body := fmt.Sprintf("size_bytes: %d\nlines_returned: %d-%d\nline_count: %d\ncontent:\n%s", info.Size(), startLine, endLine, totalLines, content)
-	return body, truncated, nil
+	return skillReadResult{
+		body:          body,
+		startLine:     startLine,
+		endLine:       endLine,
+		totalLines:    totalLines,
+		truncated:     truncated,
+		byteTruncated: truncatedBytes,
+	}, nil
 }
 
 func resolveSkillReferencePath(skillPath, refPath string) (string, error) {
@@ -1023,30 +1085,6 @@ func resolveSkillReferencePath(skillPath, refPath string) (string, error) {
 		return "", fmt.Errorf("skill reference path %q is outside skill directory", refPath)
 	}
 	return full, nil
-}
-
-var skillRosterLineRE = regexp.MustCompile("`([^`]+)`([^\\n]*)\\(path: `([^`]+/SKILL\\.md)`\\)")
-
-func parseSkillRefs(task string) map[string]nativeSkillRef {
-	refs := map[string]nativeSkillRef{}
-	for _, match := range skillRosterLineRE.FindAllStringSubmatch(task, -1) {
-		name := strings.TrimSpace(match[1])
-		if name == "" {
-			continue
-		}
-		meta := strings.TrimSpace(match[2])
-		path := strings.TrimSpace(match[3])
-		desc := strings.TrimSpace(strings.TrimPrefix(meta, "-"))
-		desc = strings.TrimSpace(strings.TrimSuffix(desc, " -"))
-		required := strings.Contains(meta, "required evaluation rubric")
-		refs[name] = nativeSkillRef{
-			Name:        name,
-			Description: desc,
-			Path:        path,
-			Required:    required,
-		}
-	}
-	return refs
 }
 
 func (t *nativeTools) missingRequiredSkills() []string {

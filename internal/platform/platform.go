@@ -397,6 +397,12 @@ type checkpointIgnoreRule struct {
 	HasSlash bool
 }
 
+// loadCheckpointIgnoreRules parses the workspace .gitignore for checkpoint
+// hygiene. It implements an intentional *subset* of gitignore semantics
+// (top-level file only, no `**`, no nested .gitignore, simple last-match-wins
+// negation) — enough to keep build/cache output out of checkpoints. It is not a
+// security boundary: the hardcoded secret-name exclusions in
+// shouldExcludeCheckpointPath are the real safety net for sensitive files.
 func loadCheckpointIgnoreRules(root string) []checkpointIgnoreRule {
 	data, err := os.ReadFile(filepath.Join(root, ".gitignore"))
 	if err != nil {

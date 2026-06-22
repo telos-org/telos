@@ -112,6 +112,19 @@ type TurnState struct {
 	StopRequested func() bool
 	Budget        TurnBudget
 	ProtocolMode  string
+	Skills        []TurnSkill
+}
+
+// TurnSkill is one skill made available to the executor for this turn. It
+// mirrors the roster rendered into the prompt, but is passed structurally so
+// the executor's skill tool does not have to re-parse skill names, paths, and
+// required-rubric flags out of the rendered prompt text.
+type TurnSkill struct {
+	Name        string
+	Description string
+	// SkillPath is the path to the skill's SKILL.md file.
+	SkillPath string
+	Required  bool
 }
 
 // TurnBudget carries the remaining runtime budget available to one executor

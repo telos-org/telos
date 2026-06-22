@@ -139,9 +139,9 @@ func (l *nativeSessionLogger) budget(maxToolLoops, maxOutputTokens int, budget g
 // run is auditable and reproducible from the session log alone.
 func (l *nativeSessionLogger) knobs(k envKnobs) error {
 	return l.event("env_knobs", map[string]any{
-		"tool_max_bytes":  k.ToolMaxBytes,
-		"tool_max_lines":  k.ToolMaxLines,
-		"keep_reasoning":  k.KeepReasoning,
+		"tool_max_bytes": k.ToolMaxBytes,
+		"tool_max_lines": k.ToolMaxLines,
+		"keep_reasoning": k.KeepReasoning,
 	})
 }
 
@@ -150,10 +150,10 @@ func (l *nativeSessionLogger) knobs(k envKnobs) error {
 // per turn. API keys are never included.
 func (l *nativeSessionLogger) providerConfig(cfg nativeProviderConfig) error {
 	data := map[string]any{
-		"provider":          cfg.Provider,
-		"model":             cfg.Model,
-		"state_mode":        cfg.Capability.StateMode,
-		"strict_protocol":   cfg.Capability.StrictProtocol,
+		"provider":           cfg.Provider,
+		"model":              cfg.Model,
+		"state_mode":         cfg.Capability.StateMode,
+		"strict_protocol":    cfg.Capability.StrictProtocol,
 		"pricing_configured": pricingConfiguredFor(cfg.Model),
 	}
 	if cfg.Capability.MaxOutputTokens > 0 {
@@ -166,6 +166,16 @@ func (l *nativeSessionLogger) providerConfig(cfg nativeProviderConfig) error {
 		data["supports_function_calling"] = *cfg.Capability.SupportsFunctionCalling
 	}
 	return l.event("provider_config", data)
+}
+
+// turnPolicy records the role and protocol mode for the turn so offline replay
+// can validate the output contract with the same policy the live loop used,
+// rather than guessing review-vs-pvg mode from the rendered prompt text.
+func (l *nativeSessionLogger) turnPolicy(role, protocolMode string) error {
+	return l.event("turn_policy", map[string]any{
+		"role":          role,
+		"protocol_mode": protocolMode,
+	})
 }
 
 func (l *nativeSessionLogger) assistant(text, provider, model, stopReason string, stats game.TurnStats) error {

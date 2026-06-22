@@ -18,7 +18,7 @@ func newConversationState(initial responses.ResponseInputParam, mode string) *co
 	switch mode {
 	case conversationStateServerChain, conversationStateStatelessHistory:
 	default:
-		mode = conversationStateServerChain
+		mode = conversationStateStatelessHistory
 	}
 	return &conversationState{
 		mode:    mode,

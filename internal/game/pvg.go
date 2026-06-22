@@ -224,6 +224,7 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 	ts.StopRequested = p.Config.StopRequested
 	ts.Budget = p.turnBudget()
 	ts.ProtocolMode = p.turnProtocolMode(role)
+	ts.Skills = p.turnSkills()
 	if err := WriteTurnTask(ts, task); err != nil {
 		turn := TurnResult{
 			Role:   role,
@@ -255,6 +256,26 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 		})
 
 	return turn
+}
+
+// turnSkills builds the structured skill roster handed to the executor, mirror
+// of the roster rendered into the prompt. Passing it structurally keeps the
+// executor's skill tool independent of the rendered prompt's wording.
+func (p *PVG) turnSkills() []TurnSkill {
+	roster := p.Compiled.TurnSkills(p.promptOptions())
+	if len(roster) == 0 {
+		return nil
+	}
+	skills := make([]TurnSkill, 0, len(roster))
+	for _, s := range roster {
+		skills = append(skills, TurnSkill{
+			Name:        s.Name,
+			Description: s.Description,
+			SkillPath:   s.Path,
+			Required:    s.Required,
+		})
+	}
+	return skills
 }
 
 func (p *PVG) turnProtocolMode(role string) string {

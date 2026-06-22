@@ -1483,9 +1483,18 @@ func TestNativeExecutorRequiresVerifierToOpenRequiredRubricBeforeConceding(t *te
 	t.Setenv("TELOS_API_BASE_URL", server.URL)
 	t.Setenv("TELOS_API_KEY", "test-key")
 
-	task := "Verify workspace.\n\n## Skills\n\n- `review-skill` - required evaluation rubric - Review rubric (path: `" + filepath.ToSlash(skillPath) + "`)\n"
+	task := "Verify workspace."
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn(task, "verifier", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn(task, "verifier", &game.TurnState{
+		Dir:          filepath.Join(workspace, ".turn"),
+		ProtocolMode: "pvg",
+		Skills: []game.TurnSkill{{
+			Name:        "review-skill",
+			Description: "Review rubric",
+			SkillPath:   filepath.ToSlash(skillPath),
+			Required:    true,
+		}},
+	})
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -1903,7 +1912,7 @@ func TestNativeToolsBoundFileReadsAndBinary(t *testing.T) {
 	}
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_LINES", "5")
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_BYTES", "64")
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	read := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -1947,7 +1956,7 @@ func TestNativeEditingToolsPreserveExistingFileMode(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\necho old\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	written := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_write",
@@ -1992,7 +2001,7 @@ func TestNativeToolsReplaceTextRejectsBinaryAndInvalidUTF8(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "invalid.txt"), []byte{0xff, 'o', 'l', 'd'}, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	for _, path := range []string{"nul.bin", "invalid.txt"} {
 		result := tools.execute(context.Background(), nativeToolCall{
@@ -2014,7 +2023,7 @@ func TestNativeEditingToolsRejectNULTextInputs(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "plain.txt"), []byte("old"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	written := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_write",
@@ -2037,7 +2046,7 @@ func TestNativeEditingToolsRejectNULTextInputs(t *testing.T) {
 
 func TestNativeToolsBashReportsOriginalOutputCounts(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2086,7 +2095,7 @@ func TestNativeToolsSearchTextStopsAtMatchLimit(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "z-later.txt"), []byte("needle\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2117,7 +2126,7 @@ func TestNativeToolsListDirReturnsBoundedEntriesWithTotalCount(t *testing.T) {
 		}
 	}
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_LINES", "5")
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2154,7 +2163,7 @@ func TestNativeToolsListDirAndFindFilesApplyByteCaps(t *testing.T) {
 	}
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_BYTES", "128")
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_LINES", "20")
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	listed := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_list",
@@ -2208,7 +2217,7 @@ func TestNativeToolsFindFilesSupportsRecursiveGlobstar(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	// `**/*.go` must match .go files at every depth, including the root.
 	r1 := tools.execute(context.Background(), nativeToolCall{
@@ -2272,7 +2281,7 @@ func TestNativeToolsFindFilesSupportsRecursiveGlobstar(t *testing.T) {
 
 func TestNativeToolsBashAcceptsBoundedEnv(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2289,7 +2298,7 @@ func TestNativeToolsBashAcceptsBoundedEnv(t *testing.T) {
 
 func TestNativeToolsBashRejectsInvalidEnvName(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2306,7 +2315,7 @@ func TestNativeToolsBashRejectsInvalidEnvName(t *testing.T) {
 
 func TestNativeToolsClassifiesMalformedToolCallAsAgentProtocol(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	invalidJSON := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_invalid",
@@ -2329,7 +2338,7 @@ func TestNativeToolsClassifiesMalformedToolCallAsAgentProtocol(t *testing.T) {
 
 func TestNativeToolsBashMarksNonzeroExitAsError(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2356,7 +2365,7 @@ func TestNativeToolsBashMarksNonzeroExitAsError(t *testing.T) {
 func TestNativeToolsBashAppliesLineCaps(t *testing.T) {
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_LINES", "3")
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_lines",
@@ -2389,7 +2398,7 @@ func TestNativeToolsBashAppliesLineCaps(t *testing.T) {
 
 func TestNativeToolsBashClassifiesTimeoutAsToolTimeout(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	result := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_timeout",
@@ -2466,7 +2475,7 @@ func TestNativeToolsApplyPatchReportsStructuredMetadata(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(workspace, "old.txt"), []byte("before\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 	patch := strings.Join([]string{
 		"diff --git a/old.txt b/old.txt",
 		"--- a/old.txt",
@@ -2530,7 +2539,7 @@ func TestNativeToolsApplyPatchReportsStructuredMetadata(t *testing.T) {
 
 func TestNativeToolsApplyPatchRejectsUnsafePaths(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 	cases := []struct {
 		name  string
 		patch string
@@ -2610,13 +2619,13 @@ func TestNativeSkillToolListsAndReadsSkillBodies(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(refDir, "details.md"), []byte("# Details\n\nInspect logs.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	task := "## Skills\n\n- `review-skill` - required evaluation rubric - Review rubric (path: `" + filepath.ToSlash(skillPath) + "`)\n"
+	skills := []game.TurnSkill{{Name: "review-skill", Description: "Review rubric", SkillPath: filepath.ToSlash(skillPath), Required: true}}
 	logPath := filepath.Join(workspace, ".turn", "session.jsonl")
 	logger := newNativeSessionLogger(logPath, workspace)
 	if err := logger.start(); err != nil {
 		t.Fatal(err)
 	}
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, task, logger, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, skills, logger, resolveEnvKnobs())
 
 	list := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2676,8 +2685,8 @@ func TestNativeSkillToolRequiresCompleteRequiredRubricRead(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("TELOS_NATIVE_TOOL_MAX_BYTES", "64")
-	task := "## Skills\n\n- `review-skill` - required evaluation rubric - Review rubric (path: `" + filepath.ToSlash(skillPath) + "`)\n"
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, task, nil, resolveEnvKnobs())
+	skills := []game.TurnSkill{{Name: "review-skill", Description: "Review rubric", SkillPath: filepath.ToSlash(skillPath), Required: true}}
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, skills, nil, resolveEnvKnobs())
 
 	read := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
@@ -2689,6 +2698,45 @@ func TestNativeSkillToolRequiresCompleteRequiredRubricRead(t *testing.T) {
 	}
 	if missing := tools.missingRequiredSkills(); len(missing) != 1 || missing[0] != "review-skill" {
 		t.Fatalf("required skill should remain missing after truncated read: %v", missing)
+	}
+}
+
+func TestNativeSkillToolPaginatedRequiredRubricRead(t *testing.T) {
+	workspace := t.TempDir()
+	skillDir := filepath.Join(t.TempDir(), "review-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	// A rubric larger than a single read window: it can only be read in pages.
+	body := "# Rubric\n\n" + strings.Repeat("criterion must be read\n", 250)
+	if err := os.WriteFile(skillPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_NATIVE_TOOL_MAX_LINES", "100")
+	skills := []game.TurnSkill{{Name: "review-skill", Description: "Review rubric", SkillPath: filepath.ToSlash(skillPath), Required: true}}
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, skills, nil, resolveEnvKnobs())
+
+	read := func(start int) nativeToolResult {
+		return tools.execute(context.Background(), nativeToolCall{
+			ID:        fmt.Sprintf("call_%d", start),
+			Name:      "skill",
+			Arguments: fmt.Sprintf(`{"action":"read","name":"review-skill","start_line":%d}`, start),
+		})
+	}
+
+	// First page leaves the rubric still partially read.
+	if r := read(1); r.IsError {
+		t.Fatalf("page 1 read: %+v", r)
+	}
+	if missing := tools.missingRequiredSkills(); len(missing) != 1 {
+		t.Fatalf("rubric should still be unread after first page: %v", missing)
+	}
+	// Walking start_line to EOF completes the read across pages.
+	read(101)
+	read(201)
+	if missing := tools.missingRequiredSkills(); len(missing) != 0 {
+		t.Fatalf("paginated read to EOF should satisfy the required rubric: %v", missing)
 	}
 }
 
@@ -2854,7 +2902,7 @@ func TestNativeSystemPromptIsAutonomousAndNeutral(t *testing.T) {
 
 func TestNativeToolsPathResolution(t *testing.T) {
 	workspace := t.TempDir()
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", nil, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
 
 	// Relative paths still resolve against the workspace, so a relative escape is
 	// rejected as malformed (not as a security boundary — see the package's YOLO
@@ -2907,7 +2955,7 @@ func TestNativeToolsLogsOutsideWorkspaceAccess(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, "", logger, resolveEnvKnobs())
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, logger, resolveEnvKnobs())
 	read := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_read",
 		Name:      "read_file",

@@ -214,6 +214,45 @@ func renderRequiredEvaluationRubrics(compiled *CompiledEnvironment, role Role, o
 	return strings.Join(lines, "\n")
 }
 
+// RosterSkill is one skill exposed to the agent for a turn, mirroring the
+// roster rendered into the prompt by renderSkillsRoster. It is the structured
+// source of truth for the executor's skill tool, so the executor never has to
+// re-parse the rendered prompt prose to learn which skills (and which required
+// rubrics) are available.
+type RosterSkill struct {
+	Name        string
+	Description string
+	// Path is the path to the skill's SKILL.md file, or empty when the skill
+	// has no readable body.
+	Path     string
+	Required bool
+}
+
+// TurnSkills returns the structured skill roster for a turn, matching the
+// skills rendered by renderSkillsRoster and the required-rubric markers from
+// renderRequiredEvaluationRubrics. Only skills with a readable SKILL.md path
+// are returned, since those are the only ones the skill tool can open.
+func (compiled *CompiledEnvironment) TurnSkills(opts PromptOptions) []RosterSkill {
+	skills := effectiveSkills(compiled, opts)
+	requiredNames := map[string]bool{}
+	for _, s := range compiled.RequiredVerifierSkills {
+		requiredNames[s.Name] = true
+	}
+	out := make([]RosterSkill, 0, len(skills))
+	for _, s := range skills {
+		if s == nil || strings.TrimSpace(s.Path) == "" {
+			continue
+		}
+		out = append(out, RosterSkill{
+			Name:        s.Name,
+			Description: strings.TrimSpace(s.Description),
+			Path:        strings.TrimRight(s.Path, "/") + "/SKILL.md",
+			Required:    requiredNames[s.Name],
+		})
+	}
+	return out
+}
+
 func renderSkillsRoster(compiled *CompiledEnvironment, opts PromptOptions) string {
 	skills := effectiveSkills(compiled, opts)
 	if len(skills) == 0 {

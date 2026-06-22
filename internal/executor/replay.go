@@ -41,6 +41,7 @@ func ReplaySessionLog(path, role string) (SessionReplayReport, error) {
 	defer f.Close()
 
 	var task string
+	var protocolMode string
 	var usedTool bool
 	toolCalls := map[string]string{}
 	toolResults := map[string]string{}
@@ -60,6 +61,10 @@ func ReplaySessionLog(path, role string) (SessionReplayReport, error) {
 		report.Events++
 		report.EventTypes[event.Type]++
 		switch event.Type {
+		case "turn_policy":
+			if mode := stringFromReplayData(event.Data, "protocol_mode"); mode != "" {
+				protocolMode = mode
+			}
 		case "model_request":
 			report.ModelRequests++
 		case "model_response":
@@ -133,7 +138,7 @@ func ReplaySessionLog(path, role string) (SessionReplayReport, error) {
 	if err := scanner.Err(); err != nil {
 		return report, err
 	}
-	if prompt, key := protocolCorrectionFor(role, task, report.FinalAssistantText, usedTool); prompt != "" {
+	if prompt, key := protocolCorrectionFor(role, protocolMode, task, report.FinalAssistantText, usedTool); prompt != "" {
 		report.ProtocolOK = false
 		report.ProtocolError = key
 	}

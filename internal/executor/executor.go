@@ -44,11 +44,13 @@ func (ne *NativeExecutor) ExecuteTurn(task string, role string, turnState *game.
 	var stopRequested func() bool
 	var budget game.TurnBudget
 	protocolMode := ""
+	var skills []game.TurnSkill
 	if turnState != nil {
 		sessionPath = turnState.SessionPath()
 		stopRequested = turnState.StopRequested
 		budget = turnState.Budget
 		protocolMode = turnState.ProtocolMode
+		skills = turnState.Skills
 	}
 
 	timeout := effectiveTurnTimeout(ne.Timeout, budget)
@@ -71,9 +73,10 @@ func (ne *NativeExecutor) ExecuteTurn(task string, role string, turnState *game.
 	knobs := resolveEnvKnobs()
 	_ = logger.providerConfig(cfg)
 	_ = logger.knobs(knobs)
+	_ = logger.turnPolicy(role, protocolMode)
 	_ = logger.budget(effectiveMaxToolLoops(budget), effectiveMaxOutputTokens(cfg, budget), budget)
 
-	tools := newNativeTools(ne.Platform, stopRequested, task, logger, knobs)
+	tools := newNativeTools(ne.Platform, stopRequested, skills, logger, knobs)
 	loop := newAgentLoop(ne.Client, cfg, ne.Thinking, tools, logger, task, role, protocolMode, budget, knobs)
 
 	logs, extraStats, err := loop.run(ctx)

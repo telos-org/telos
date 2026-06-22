@@ -114,13 +114,10 @@ type roleLoopPolicy struct {
 	requireToolForArtifact bool
 }
 
-func loopPolicy(role, protocolMode, task string) roleLoopPolicy {
+func loopPolicy(role, protocolMode string) roleLoopPolicy {
 	switch role {
 	case "verifier":
 		reviewMode := protocolMode == "review"
-		if protocolMode == "" {
-			reviewMode = strings.Contains(task, "Do not emit <status> tags")
-		}
 		return roleLoopPolicy{
 			requireStatus:       !reviewMode,
 			requireReviewBlocks: reviewMode,
@@ -238,13 +235,17 @@ func (l *agentLoop) protocolCorrection(text string, usedTool bool) (string, stri
 	return "", ""
 }
 
-func protocolCorrectionFor(role, task, text string, usedTool bool) (string, string) {
-	return protocolCorrectionForStrict(role, "", task, text, usedTool, false, true)
+// protocolCorrectionFor is the lenient (non-strict) entry point used by offline
+// session replay, where the model and capability profile are unavailable. The
+// caller supplies the recorded protocol mode so review-mode verifier turns are
+// validated against the review contract rather than the default pvg one.
+func protocolCorrectionFor(role, protocolMode, task, text string, usedTool bool) (string, string) {
+	return protocolCorrectionForStrict(role, protocolMode, task, text, usedTool, false, true)
 }
 
 func protocolCorrectionForStrict(role, protocolMode, task, text string, usedTool bool, strict bool, toolsAvailable bool) (string, string) {
 	trimmed := strings.TrimSpace(text)
-	policy := loopPolicy(role, protocolMode, task)
+	policy := loopPolicy(role, protocolMode)
 	if trimmed == "" {
 		return "Your previous response had no visible result. Use the available tools to carry out the assignment, then reply with a visible final answer that follows this turn's required output tags.", "empty_final"
 	}

@@ -49,7 +49,7 @@ func newOpenAITransport(httpClient *http.Client, cfg nativeProviderConfig, think
 	}
 	stateMode := cfg.Capability.StateMode
 	if stateMode == "" {
-		stateMode = "server_chain"
+		stateMode = conversationStateStatelessHistory
 	}
 	tools := nativeToolsForOpenAI()
 	if cfg.Capability.SupportsFunctionCalling != nil && !*cfg.Capability.SupportsFunctionCalling {
