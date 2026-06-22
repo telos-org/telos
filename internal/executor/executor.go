@@ -103,14 +103,14 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			execErr := newExecutorError(errProviderTimeout, fmt.Sprintf("turn_timeout:%d", timeout))
 			if !executorErrorHasCode(err, errProviderTimeout) {
-				_ = logger.errorEvent(loop.transport.sequence, execErr)
+				_ = logger.errorEvent(loop.client.sequence, execErr)
 			}
 			return recoverableTurn(role, stats, execErr.Error())
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
 			execErr := newExecutorError(errStopped, "stop_requested")
 			if !executorErrorHasCode(err, errStopped) {
-				_ = logger.errorEvent(loop.transport.sequence, execErr)
+				_ = logger.errorEvent(loop.client.sequence, execErr)
 			}
 			return recoverableTurn(role, stats, execErr.Error())
 		}

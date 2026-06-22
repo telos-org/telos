@@ -93,7 +93,7 @@ type agentTurn struct {
 }
 
 type agentLoop struct {
-	transport      *openaiTransport
+	client         *responsesClient
 	tools          *nativeTools
 	logger         *nativeSessionLogger
 	task           string
@@ -134,9 +134,9 @@ func loopPolicy(role, protocolMode string) roleLoopPolicy {
 
 func newAgentLoop(httpClient *http.Client, cfg nativeProviderConfig, thinking string, tools *nativeTools, logger *nativeSessionLogger, task, role, protocolMode string, budget game.TurnBudget, knobs envKnobs) *agentLoop {
 	maxOut := effectiveMaxOutputTokens(cfg, budget)
-	tr := newOpenAITransport(httpClient, cfg, thinking, maxOut, task, role, logger)
+	tr := newResponsesClient(httpClient, cfg, thinking, maxOut, task, role, logger)
 	return &agentLoop{
-		transport:      tr,
+		client:         tr,
 		tools:          tools,
 		logger:         logger,
 		task:           task,
@@ -159,17 +159,17 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 
 	for i := 0; i < maxLoops; i++ {
 		if err := l.checkBudget(stats); err != nil {
-			_ = l.logger.errorEvent(l.transport.sequence, err)
+			_ = l.logger.errorEvent(l.client.sequence, err)
 			return "", stats, err
 		}
-		turn, err := l.transport.send(ctx)
+		turn, err := l.client.send(ctx)
 		if err != nil {
 			stats = mergeTurnStats(stats, turn.stats)
 			return "", stats, err
 		}
 		stats = mergeTurnStats(stats, turn.stats)
 		if err := l.checkBudget(stats); err != nil {
-			_ = l.logger.errorEvent(l.transport.sequence, err)
+			_ = l.logger.errorEvent(l.client.sequence, err)
 			return "", stats, err
 		}
 		if sanitized, removed := sanitizeVisibleText(turn.text, l.keepReasoning); removed != "" {
@@ -186,11 +186,11 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 			if corrections[key] < maxProtocolCorrections(key) && i+1 < maxLoops {
 				corrections[key]++
 				_ = l.logger.protocolCorrection(key, prompt)
-				l.transport.recordCorrection(prompt)
+				l.client.recordCorrection(prompt)
 				continue
 			}
 			err := newExecutorError(errAgentProtocol, key)
-			_ = l.logger.errorEvent(l.transport.sequence, err)
+			_ = l.logger.errorEvent(l.client.sequence, err)
 			return "", stats, err
 		}
 
@@ -203,10 +203,10 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 		for _, result := range results {
 			_ = l.logger.tool(result)
 		}
-		l.transport.recordToolResults(results)
+		l.client.recordToolResults(results)
 	}
 	err := newExecutorError(errAgentIncomplete, fmt.Sprintf("tool_loop_exceeded:%d", maxLoops))
-	_ = l.logger.errorEvent(l.transport.sequence, err)
+	_ = l.logger.errorEvent(l.client.sequence, err)
 	return "", stats, err
 }
 

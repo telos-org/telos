@@ -17,14 +17,14 @@ import (
 	"github.com/telos-org/telos/internal/game"
 )
 
-// -- OpenAI-compatible transport (openai-go Responses API) -------------------
+// -- LiteLLM Responses client (openai-go Responses API) ---------------------
 
-// openaiTransport drives the agent loop against an OpenAI-compatible endpoint
-// using the official openai-go SDK. Telos talks to a LiteLLM proxy, so a single
-// Responses transport serves every provider the proxy fronts: it streams over
-// SSE, threads conversation state server-side via previous_response_id, and
-// carries reasoning effort natively.
-type openaiTransport struct {
+// responsesClient drives the agent loop against a LiteLLM proxy using the
+// official openai-go SDK's Responses API. It streams over SSE, threads
+// conversation state server-side via previous_response_id, and carries
+// reasoning effort natively. The pricing and capability it needs are injected
+// from nativeConfig at construction — no globals.
+type responsesClient struct {
 	client          openai.Client
 	model           string
 	instructions    string
@@ -40,7 +40,7 @@ type openaiTransport struct {
 	pricingKnown    bool
 }
 
-func newOpenAITransport(httpClient *http.Client, cfg nativeProviderConfig, thinking string, maxOutputTokens int, task, role string, logger *nativeSessionLogger) *openaiTransport {
+func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, thinking string, maxOutputTokens int, task, role string, logger *nativeSessionLogger) *responsesClient {
 	initial := responses.ResponseInputParam{
 		responses.ResponseInputItemParamOfMessage(task, responses.EasyInputMessageRoleUser),
 	}
@@ -56,7 +56,7 @@ func newOpenAITransport(httpClient *http.Client, cfg nativeProviderConfig, think
 	if cfg.Capability.SupportsFunctionCalling != nil && !*cfg.Capability.SupportsFunctionCalling {
 		tools = nil
 	}
-	t := &openaiTransport{
+	t := &responsesClient{
 		model:           cfg.Model,
 		instructions:    nativeSystemPrompt(role),
 		reasoning:       reasoning,
@@ -80,7 +80,7 @@ func newOpenAITransport(httpClient *http.Client, cfg nativeProviderConfig, think
 	return t
 }
 
-func (t *openaiTransport) send(ctx context.Context) (agentTurn, error) {
+func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 	t.sequence++
 	seq := t.sequence
 	params := t.params()
@@ -164,7 +164,7 @@ func (t *openaiTransport) send(ctx context.Context) (agentTurn, error) {
 	}, nil
 }
 
-func (t *openaiTransport) captureResponseHeaders(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
+func (t *responsesClient) captureResponseHeaders(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
 	resp, err := next(req)
 	if resp != nil {
 		if cost, ok := costFromResponseHeaders(resp.Header); ok {
@@ -175,7 +175,7 @@ func (t *openaiTransport) captureResponseHeaders(req *http.Request, next option.
 	return resp, err
 }
 
-func (t *openaiTransport) params() responses.ResponseNewParams {
+func (t *responsesClient) params() responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
 		Model:        openai.ResponsesModel(t.model),
 		Instructions: openai.String(t.instructions),
@@ -197,7 +197,7 @@ func (t *openaiTransport) params() responses.ResponseNewParams {
 // streamResponse consumes the SSE stream and returns the assembled response. We
 // drive the request over SSE for resilience on long generations, but act on the
 // fully-assembled response the terminal event carries.
-func (t *openaiTransport) streamResponse(ctx context.Context, params responses.ResponseNewParams) (responses.Response, error) {
+func (t *responsesClient) streamResponse(ctx context.Context, params responses.ResponseNewParams) (responses.Response, error) {
 	stream := t.client.Responses.NewStreaming(ctx, params)
 	defer stream.Close()
 
@@ -229,15 +229,15 @@ func (t *openaiTransport) streamResponse(ctx context.Context, params responses.R
 	return final, nil
 }
 
-func (t *openaiTransport) recordToolResults(results []nativeToolResult) {
+func (t *responsesClient) recordToolResults(results []nativeToolResult) {
 	t.state.recordToolResults(results)
 }
 
-func (t *openaiTransport) recordCorrection(prompt string) {
+func (t *responsesClient) recordCorrection(prompt string) {
 	t.state.recordCorrection(prompt)
 }
 
-func (t *openaiTransport) modelRequestLogData(sequence int, previousID string) modelRequestLogData {
+func (t *responsesClient) modelRequestLogData(sequence int, previousID string) modelRequestLogData {
 	return modelRequestLogData{
 		Sequence:        sequence,
 		PreviousID:      previousID,
@@ -398,7 +398,7 @@ func statsFromResponsesUsage(model string, usage responses.ResponseUsage, pricin
 	return stats
 }
 
-func (t *openaiTransport) statsFromResponse(response responses.Response) game.TurnStats {
+func (t *responsesClient) statsFromResponse(response responses.Response) game.TurnStats {
 	stats := statsFromResponsesUsage(t.model, response.Usage, t.pricing, t.pricingKnown)
 	if t.lastCostKnown {
 		stats.CostUSD = t.lastCostUSD
