@@ -154,7 +154,7 @@ func (l *nativeSessionLogger) providerConfig(cfg nativeProviderConfig) error {
 		"model":              cfg.Model,
 		"state_mode":         cfg.Capability.StateMode,
 		"strict_protocol":    cfg.Capability.StrictProtocol,
-		"pricing_configured": pricingConfiguredFor(cfg.Model),
+		"pricing_configured": cfg.PricingConfigured,
 	}
 	if cfg.Capability.MaxOutputTokens > 0 {
 		data["capability_max_output_tokens"] = cfg.Capability.MaxOutputTokens

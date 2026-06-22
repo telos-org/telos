@@ -15,24 +15,33 @@ import (
 
 // NativeExecutor runs one PVG turn with Telos' built-in coding harness.
 type NativeExecutor struct {
-	Platform *platform.LocalPlatform
-	Model    string
-	Thinking string
-	Timeout  int
-	Client   *http.Client
+	Platform  *platform.LocalPlatform
+	Model     string
+	Thinking  string
+	Timeout   int
+	Client    *http.Client
+	config    nativeConfig
+	configErr error
 }
 
-// NewNativeExecutor creates a native Go coding-agent executor.
+// NewNativeExecutor creates a native Go coding-agent executor. The provider,
+// pricing, and capability configuration is resolved once from the environment
+// here and reused for every turn — no env parsing happens per turn or per
+// model response. If the config is invalid the error is stored and surfaced
+// as a terminal error on the first ExecuteTurn call.
 func NewNativeExecutor(p *platform.LocalPlatform, model, thinking string, timeout int) *NativeExecutor {
 	if thinking == "" {
 		thinking = "medium"
 	}
+	cfg, err := resolveNativeConfig()
 	return &NativeExecutor{
-		Platform: p,
-		Model:    model,
-		Thinking: thinking,
-		Timeout:  timeout,
-		Client:   http.DefaultClient,
+		Platform:  p,
+		Model:     model,
+		Thinking:  thinking,
+		Timeout:   timeout,
+		Client:    http.DefaultClient,
+		config:    cfg,
+		configErr: err,
 	}
 }
 
@@ -67,7 +76,12 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 	_ = logger.user(task)
 	_ = logger.contextPack(task)
 
-	cfg, err := resolveNativeProvider(ne.Model)
+	if ne.configErr != nil {
+		execErr := newExecutorError(errConfig, ne.configErr.Error())
+		_ = logger.errorEvent(0, execErr)
+		return terminalTurn(role, stats, execErr.Error())
+	}
+	cfg, err := ne.config.providerFor(ne.Model)
 	if err != nil {
 		execErr := newExecutorError(errConfig, err.Error())
 		_ = logger.errorEvent(0, execErr)

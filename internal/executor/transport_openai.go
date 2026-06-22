@@ -7,7 +7,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -37,6 +36,8 @@ type openaiTransport struct {
 	sequence        int
 	lastCostUSD     float64
 	lastCostKnown   bool
+	pricing         modelPricing
+	pricingKnown    bool
 }
 
 func newOpenAITransport(httpClient *http.Client, cfg nativeProviderConfig, thinking string, maxOutputTokens int, task, role string, logger *nativeSessionLogger) *openaiTransport {
@@ -63,6 +64,8 @@ func newOpenAITransport(httpClient *http.Client, cfg nativeProviderConfig, think
 		tools:           tools,
 		state:           newConversationState(initial, stateMode),
 		logger:          logger,
+		pricing:         cfg.Pricing,
+		pricingKnown:    cfg.PricingConfigured,
 	}
 	opts := []option.RequestOption{
 		option.WithAPIKey(cfg.APIKey),
@@ -380,7 +383,7 @@ func responseStopReason(r responses.Response) string {
 	return string(r.Status)
 }
 
-func statsFromResponsesUsage(model string, usage responses.ResponseUsage) game.TurnStats {
+func statsFromResponsesUsage(model string, usage responses.ResponseUsage, pricing modelPricing, pricingKnown bool) game.TurnStats {
 	stats := game.TurnStats{
 		Model:           model,
 		InputTokens:     int(usage.InputTokens),
@@ -388,7 +391,7 @@ func statsFromResponsesUsage(model string, usage responses.ResponseUsage) game.T
 		CacheReadTokens: int(usage.InputTokensDetails.CachedTokens),
 		CostUnavailable: true,
 	}
-	if pricing, ok := configuredModelPricing(model); ok {
+	if pricingKnown {
 		stats.CostUSD = pricing.cost(stats.InputTokens, stats.OutputTokens)
 		stats.CostUnavailable = false
 	}
@@ -396,7 +399,7 @@ func statsFromResponsesUsage(model string, usage responses.ResponseUsage) game.T
 }
 
 func (t *openaiTransport) statsFromResponse(response responses.Response) game.TurnStats {
-	stats := statsFromResponsesUsage(t.model, response.Usage)
+	stats := statsFromResponsesUsage(t.model, response.Usage, t.pricing, t.pricingKnown)
 	if t.lastCostKnown {
 		stats.CostUSD = t.lastCostUSD
 		stats.CostUnavailable = false
@@ -500,32 +503,6 @@ func (p modelPricing) cost(inputTokens, outputTokens int) float64 {
 	input := float64(inputTokens) * p.InputUSDPer1MTokens / 1_000_000
 	output := float64(outputTokens) * p.OutputUSDPer1MTokens / 1_000_000
 	return input + output
-}
-
-func configuredModelPricing(model string) (modelPricing, bool) {
-	raw := strings.TrimSpace(os.Getenv("TELOS_MODEL_PRICING_TABLE"))
-	if raw == "" {
-		return modelPricing{}, false
-	}
-	var table map[string]modelPricing
-	if err := json.Unmarshal([]byte(raw), &table); err != nil {
-		return modelPricing{}, false
-	}
-	pricing, ok := table[model]
-	if !ok || pricing.InputUSDPer1MTokens < 0 || pricing.OutputUSDPer1MTokens < 0 {
-		return modelPricing{}, false
-	}
-	if pricing.InputUSDPer1MTokens == 0 && pricing.OutputUSDPer1MTokens == 0 {
-		return modelPricing{}, false
-	}
-	return pricing, true
-}
-
-// pricingConfiguredFor reports whether an explicit per-model price is set in
-// TELOS_MODEL_PRICING_TABLE, without exposing the rates. Used for audit logging.
-func pricingConfiguredFor(model string) bool {
-	_, ok := configuredModelPricing(model)
-	return ok
 }
 
 func reasoningEffort(thinking string) openai.ReasoningEffort {

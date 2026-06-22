@@ -383,12 +383,8 @@ func TestCostFromResponseBodyHandlesNestedLiteLLMMetadata(t *testing.T) {
 }
 
 func TestStatsFromResponsesUsageUsesExactConfiguredPricingTable(t *testing.T) {
-	t.Setenv("TELOS_MODEL_PRICING_TABLE", `{
-		"alias/known": {"input_usd_per_1m_tokens": 2.0, "output_usd_per_1m_tokens": 10.0},
-		"alias/other": {"input_usd_per_1m_tokens": 1.0, "output_usd_per_1m_tokens": 1.0}
-	}`)
-
-	stats := statsFromResponsesUsage("alias/known", responseUsageForTest(1_000_000, 250_000, 0))
+	pricing := modelPricing{InputUSDPer1MTokens: 2.0, OutputUSDPer1MTokens: 10.0}
+	stats := statsFromResponsesUsage("alias/known", responseUsageForTest(1_000_000, 250_000, 0), pricing, true)
 
 	if stats.CostUnavailable {
 		t.Fatalf("cost should be available: %+v", stats)
@@ -399,11 +395,7 @@ func TestStatsFromResponsesUsageUsesExactConfiguredPricingTable(t *testing.T) {
 }
 
 func TestStatsFromResponsesUsageLeavesUnknownPricingUnavailable(t *testing.T) {
-	t.Setenv("TELOS_MODEL_PRICING_TABLE", `{
-		"alias/known": {"input_usd_per_1m_tokens": 2.0, "output_usd_per_1m_tokens": 10.0}
-	}`)
-
-	stats := statsFromResponsesUsage("alias/missing", responseUsageForTest(1_000, 1_000, 0))
+	stats := statsFromResponsesUsage("alias/missing", responseUsageForTest(1_000, 1_000, 0), modelPricing{}, false)
 
 	if !stats.CostUnavailable {
 		t.Fatalf("unknown model cost should remain unavailable: %+v", stats)
@@ -761,13 +753,17 @@ func TestResolveNativeProviderUsesLiteLLMExactModelPassThrough(t *testing.T) {
 	t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1/")
 	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
 
+	nc, err := resolveNativeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	for _, model := range []string{
 		"openai/gpt-5.1",
 		"anthropic/claude-sonnet-4.5",
 		"sail-research/foo/bar",
 		"my-arbitrary-litellm-alias",
 	} {
-		cfg, err := resolveNativeProvider(model)
+		cfg, err := nc.providerFor(model)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -799,7 +795,13 @@ func TestResolveNativeProviderReportsClearConfigErrors(t *testing.T) {
 
 	t.Run("missing model", func(t *testing.T) {
 		clearGatewayEnv(t)
-		_, err := resolveNativeProvider(" ")
+		t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1")
+		t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
+		nc, err := resolveNativeConfig()
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = nc.providerFor(" ")
 		if err == nil || err.Error() != "model is required" {
 			t.Fatalf("error: %v", err)
 		}
@@ -808,7 +810,7 @@ func TestResolveNativeProviderReportsClearConfigErrors(t *testing.T) {
 	t.Run("missing base url", func(t *testing.T) {
 		clearGatewayEnv(t)
 		t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
-		_, err := resolveNativeProvider("test/model")
+		_, err := resolveNativeConfig()
 		if err == nil || !strings.Contains(err.Error(), "TELOS_LITELLM_BASE_URL is required") {
 			t.Fatalf("error: %v", err)
 		}
@@ -817,7 +819,7 @@ func TestResolveNativeProviderReportsClearConfigErrors(t *testing.T) {
 	t.Run("missing api key", func(t *testing.T) {
 		clearGatewayEnv(t)
 		t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1")
-		_, err := resolveNativeProvider("test/model")
+		_, err := resolveNativeConfig()
 		if err == nil || !strings.Contains(err.Error(), "TELOS_LITELLM_API_KEY is required") {
 			t.Fatalf("error: %v", err)
 		}
@@ -857,7 +859,11 @@ func TestResolveNativeProviderAppliesModelCapabilityProfile(t *testing.T) {
 	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
 	t.Setenv("TELOS_MODEL_CAPABILITY_PROFILE", `{"state_mode":"stateless_history","max_output_tokens":4096,"supports_reasoning":false,"supports_function_calling":false,"strict_protocol":true}`)
 
-	cfg, err := resolveNativeProvider("custom/model")
+	nc, err := resolveNativeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := nc.providerFor("custom/model")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -887,7 +893,11 @@ func TestResolveNativeProviderCapabilityEnvOverridesProfile(t *testing.T) {
 	t.Setenv("TELOS_MODEL_SUPPORTS_REASONING", "false")
 	t.Setenv("TELOS_MODEL_SUPPORTS_FUNCTION_CALLING", "false")
 
-	cfg, err := resolveNativeProvider("custom/model")
+	nc, err := resolveNativeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := nc.providerFor("custom/model")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -902,6 +912,51 @@ func TestResolveNativeProviderCapabilityEnvOverridesProfile(t *testing.T) {
 	}
 	if cfg.Capability.SupportsFunctionCalling == nil || *cfg.Capability.SupportsFunctionCalling {
 		t.Fatalf("supports function calling: got %#v", cfg.Capability.SupportsFunctionCalling)
+	}
+}
+
+func TestResolveNativeProviderUsesPerModelCapabilityTable(t *testing.T) {
+	t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1/")
+	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
+	t.Setenv("TELOS_MODEL_CAPABILITY_PROFILE", `{"state_mode":"stateless_history","max_output_tokens":8192,"strict_protocol":false}`)
+	t.Setenv("TELOS_MODEL_CAPABILITY_TABLE", `{
+		"strict/model": {"state_mode":"server_chain","max_output_tokens":2048,"strict_protocol":true},
+		"other/model":  {"max_output_tokens":4096}
+	}`)
+
+	nc, err := resolveNativeConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Model in the table gets its specific capability.
+	strictCfg, err := nc.providerFor("strict/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strictCfg.Capability.StateMode != "server_chain" {
+		t.Fatalf("strict/model state mode: got %q", strictCfg.Capability.StateMode)
+	}
+	if strictCfg.Capability.MaxOutputTokens != 2048 {
+		t.Fatalf("strict/model max output tokens: got %d", strictCfg.Capability.MaxOutputTokens)
+	}
+	if !strictCfg.Capability.StrictProtocol {
+		t.Fatal("strict/model strict protocol should be true")
+	}
+
+	// Model not in the table falls back to the process default.
+	defaultCfg, err := nc.providerFor("unlisted/model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if defaultCfg.Capability.StateMode != "stateless_history" {
+		t.Fatalf("unlisted/model state mode: got %q", defaultCfg.Capability.StateMode)
+	}
+	if defaultCfg.Capability.MaxOutputTokens != 8192 {
+		t.Fatalf("unlisted/model max output tokens: got %d", defaultCfg.Capability.MaxOutputTokens)
+	}
+	if defaultCfg.Capability.StrictProtocol {
+		t.Fatal("unlisted/model strict protocol should be false (from default)")
 	}
 }
 
