@@ -57,8 +57,8 @@ func (f *fakeExecutor) taskAt(i int) string {
 	return f.tasks[i]
 }
 
-func (f *fakeExecutor) WorkspaceState() string {
-	return "=== FILES ===\n(no files)"
+func (f *fakeExecutor) WorkspaceSnapshot() platform.WorkspaceSnapshot {
+	return platform.WorkspaceSnapshot{Raw: "=== FILES ===\n(no files)"}
 }
 
 func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {

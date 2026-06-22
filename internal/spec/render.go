@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/telos-org/telos/internal/platform"
 )
 
 // Role is the internal agent role.
@@ -26,7 +28,7 @@ type PromptOptions struct {
 }
 
 // RenderProverTask builds the full prover task prompt.
-func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
+func RenderProverTask(compiled *CompiledEnvironment, workspace platform.WorkspaceSnapshot, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
 	preamble, _ := ReadPrompt("prover.md")
 	if options.Controller {
@@ -50,7 +52,7 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 }
 
 // RenderVerifierTask builds the full verifier task prompt.
-func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
+func RenderVerifierTask(compiled *CompiledEnvironment, workspace platform.WorkspaceSnapshot, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
 	preamble := renderVerifierPreamble(options)
 	parts := []string{
@@ -318,7 +320,7 @@ type digestContext struct {
 	Role     Role
 }
 
-func renderTurnContextDigest(transcriptPath, workspace string, contexts ...digestContext) string {
+func renderTurnContextDigest(transcriptPath string, workspace platform.WorkspaceSnapshot, contexts ...digestContext) string {
 	var lines []string
 	lines = append(lines, "## Current State Digest", "")
 	if len(contexts) > 0 {
@@ -415,46 +417,21 @@ func readDigestLedger(path string) (digestLedger, bool) {
 	return ledger, true
 }
 
-func renderWorkspaceDigest(workspace string) []string {
-	if strings.TrimSpace(workspace) == "" {
+func renderWorkspaceDigest(workspace platform.WorkspaceSnapshot) []string {
+	if len(workspace.FileList) == 0 && len(workspace.GitStatus) == 0 && len(workspace.DiffStat) == 0 {
 		return nil
 	}
 	lines := []string{"- Workspace summary is included below; inspect files or diffs directly before relying on it."}
-	if status := workspaceSection(workspace, "=== GIT STATUS ==="); status != "" {
-		statusLines := nonEmptyLines(status)
-		lines = append(lines, fmt.Sprintf("- Workspace status: %d changed/untracked entries.", len(statusLines)))
-		for _, line := range limitStrings(statusLines, 6) {
+	if len(workspace.GitStatus) > 0 {
+		lines = append(lines, fmt.Sprintf("- Workspace status: %d changed/untracked entries.", len(workspace.GitStatus)))
+		for _, line := range limitStrings(workspace.GitStatus, 6) {
 			lines = append(lines, "  - "+oneLine(line))
 		}
 	}
-	if diff := workspaceSection(workspace, "=== GIT DIFF STAT ==="); diff != "" {
-		diffLines := nonEmptyLines(diff)
+	if len(workspace.DiffStat) > 0 {
 		lines = append(lines, "- Diff stat:")
-		for _, line := range limitStrings(diffLines, 6) {
+		for _, line := range limitStrings(workspace.DiffStat, 6) {
 			lines = append(lines, "  - "+oneLine(line))
-		}
-	}
-	return lines
-}
-
-func workspaceSection(workspace, heading string) string {
-	start := strings.Index(workspace, heading)
-	if start < 0 {
-		return ""
-	}
-	rest := workspace[start+len(heading):]
-	if next := strings.Index(rest, "\n==="); next >= 0 {
-		rest = rest[:next]
-	}
-	return strings.TrimSpace(rest)
-}
-
-func nonEmptyLines(text string) []string {
-	var lines []string
-	for _, line := range strings.Split(text, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			lines = append(lines, line)
 		}
 	}
 	return lines
@@ -619,8 +596,8 @@ func renderTranscriptProtocol(transcriptPath string, role Role) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderWorkspace(workspace string, role Role) string {
-	if workspace == "" {
+func renderWorkspace(workspace platform.WorkspaceSnapshot, role Role) string {
+	if workspace.Raw == "" {
 		return ""
 	}
 	lines := []string{
@@ -640,7 +617,7 @@ func renderWorkspace(workspace string, role Role) string {
 			"Keep throwaway evaluator scratch outside the delivered tree. If a check becomes a reusable test, probe, fixture, or reproduction script, write it into the workspace in the natural test location or a small `evaluation/` directory so future turns can run it again.\n",
 		)
 	}
-	lines = append(lines, fmt.Sprintf("```\n%s\n```\n", workspace))
+	lines = append(lines, fmt.Sprintf("```\n%s\n```\n", workspace.Raw))
 	return strings.Join(lines, "\n")
 }
 

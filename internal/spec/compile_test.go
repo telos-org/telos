@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/telos-org/telos/internal/platform"
 )
 
 func TestCompileEnvironment(t *testing.T) {
@@ -236,15 +238,20 @@ func TestRenderTurnContextDigestUsesLedgerAndWorkspaceSummary(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "objective-ledger.json"), []byte(ledger), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	workspace := strings.Join([]string{
-		"=== FILES ===",
-		"internal/executor/loop.go",
-		"=== GIT STATUS ===",
-		" M internal/executor/loop.go",
-		"?? internal/executor/replay.go",
-		"=== GIT DIFF STAT ===",
-		" internal/executor/loop.go | 12 ++++++------",
-	}, "\n")
+	workspace := platform.WorkspaceSnapshot{
+		FileList:  []string{"./internal/executor/loop.go"},
+		GitStatus: []string{"M internal/executor/loop.go", "?? internal/executor/replay.go"},
+		DiffStat:  []string{"internal/executor/loop.go | 12 ++++++------"},
+		Raw: strings.Join([]string{
+			"=== FILES ===",
+			"internal/executor/loop.go",
+			"=== GIT STATUS ===",
+			" M internal/executor/loop.go",
+			"?? internal/executor/replay.go",
+			"=== GIT DIFF STAT ===",
+			" internal/executor/loop.go | 12 ++++++------",
+		}, "\n"),
+	}
 
 	digest := renderTurnContextDigest(transcriptPath, workspace)
 	for _, want := range []string{
@@ -338,7 +345,7 @@ func TestRenderProverTask(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: render-test\nplatform: local\n---\n# Task\n\nDo something."), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "", "")
+	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{}, "")
 
 	if strings.Contains(task, "# Build:") || strings.Contains(task, "# Fix:") {
 		t.Error("prover prompt should not derive build/fix semantics from the round number")
@@ -366,7 +373,7 @@ func TestRenderVerifierTask(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: verify-test\nplatform: local\n---\n# Task\n\nCheck something."), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderVerifierTask(compiled, "", "")
+	task := RenderVerifierTask(compiled, platform.WorkspaceSnapshot{}, "")
 
 	if strings.Contains(task, "# Verify:") {
 		t.Error("verifier prompt should not use a synthetic title")
@@ -385,7 +392,7 @@ func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: reusable-eval\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderVerifierTask(compiled, "=== FILES ===\n./main.go", "")
+	task := RenderVerifierTask(compiled, platform.WorkspaceSnapshot{Raw: "=== FILES ===\n./main.go"}, "")
 
 	for _, want := range []string{
 		"Persist Useful Probes",
@@ -408,7 +415,7 @@ func TestRenderProverUsesOperatingPosture(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: continuation-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "", "")
+	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{}, "")
 
 	if strings.Contains(task, "# Build:") || strings.Contains(task, "# Fix:") {
 		t.Error("prover prompt should not use build/fix titles")
@@ -428,7 +435,7 @@ func TestRenderWithSkillsRoster(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: roster-test\nplatform: local\nskills:\n  - my-skill\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "", "")
+	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{}, "")
 
 	if !strings.Contains(task, "## Skills") {
 		t.Error("should contain skills section")
@@ -455,7 +462,7 @@ func TestRenderWithRequiredEvaluationSkills(t *testing.T) {
 
 	compiled, _ := CompileEnvironment(specPath)
 
-	proverTask := RenderProverTask(compiled, "", "")
+	proverTask := RenderProverTask(compiled, platform.WorkspaceSnapshot{}, "")
 	if !strings.Contains(proverTask, "Required Evaluation Rubrics") {
 		t.Error("prover should see required evaluation rubrics")
 	}
@@ -469,7 +476,7 @@ func TestRenderWithRequiredEvaluationSkills(t *testing.T) {
 		t.Error("prover prompt should not inline skill instructions")
 	}
 
-	verifierTask := RenderVerifierTask(compiled, "", "")
+	verifierTask := RenderVerifierTask(compiled, platform.WorkspaceSnapshot{}, "")
 	if !strings.Contains(verifierTask, "Required Evaluation Rubrics") {
 		t.Error("verifier should see required evaluation rubrics")
 	}
@@ -493,7 +500,7 @@ func TestRenderControllerPromptIncludesOrchestrationSkill(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: controller-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "", "/tmp/transcript.md", PromptOptions{
+	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{}, "/tmp/transcript.md", PromptOptions{
 		Controller:      true,
 		PrimarySpecPath: "/tmp/spec.md",
 	})
@@ -515,7 +522,7 @@ func TestRenderTranscriptProtocolDoesNotDumpTranscript(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: transcript-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "", "/tmp/transcript.md")
+	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{}, "/tmp/transcript.md")
 
 	if !strings.Contains(task, "## Transcript") {
 		t.Error("should contain transcript protocol section")
@@ -537,7 +544,7 @@ func TestRenderTurnContextDigestIncludesEvidencePath(t *testing.T) {
 	transcriptPath := filepath.Join(dir, "transcript-session.md")
 	compiled, _ := CompileEnvironment(specPath)
 
-	task := RenderProverTask(compiled, "", transcriptPath)
+	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{}, transcriptPath)
 
 	if !strings.Contains(task, "Evidence log: `"+filepath.Join(dir, "evidence.jsonl")+"`") {
 		t.Fatalf("task missing evidence path:\n%s", task)
@@ -549,7 +556,7 @@ func TestRenderTurnContextDigestIncludesEvidencePath(t *testing.T) {
 		t.Fatalf("task missing digest spec/role:\n%s", task)
 	}
 
-	verifierTask := RenderVerifierTask(compiled, "", transcriptPath)
+	verifierTask := RenderVerifierTask(compiled, platform.WorkspaceSnapshot{}, transcriptPath)
 	if !strings.Contains(verifierTask, "Spec: `evidence-path`") || !strings.Contains(verifierTask, "Role: `verifier`") {
 		t.Fatalf("verifier task missing digest spec/role:\n%s", verifierTask)
 	}
@@ -572,7 +579,7 @@ func TestRenderTurnContextDigestBoundsLongTranscript(t *testing.T) {
 	}
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "=== FILES ===\nmain.go\n", transcriptPath)
+	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{Raw: "=== FILES ===\nmain.go\n"}, transcriptPath)
 
 	if strings.Contains(task, "old noisy transcript line that must not appear") {
 		t.Fatal("prompt should not dump old transcript body")
@@ -606,7 +613,7 @@ func TestRenderTurnContextDigestFallbackIncludesRuntimeErrors(t *testing.T) {
 	}
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "", transcriptPath)
+	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{}, transcriptPath)
 
 	for _, want := range []string{
 		"Recent runtime errors:",
@@ -626,7 +633,7 @@ func TestRenderTranscriptProtocolUsesDigestBeforeTranscript(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: transcript-read\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	proverTask := RenderProverTask(compiled, "", "/tmp/transcript.md")
+	proverTask := RenderProverTask(compiled, platform.WorkspaceSnapshot{}, "/tmp/transcript.md")
 
 	if strings.Contains(proverTask, "First action every turn: read this transcript path") {
 		t.Error("implementation prompt should not require full transcript reads before using the digest")
@@ -644,7 +651,7 @@ func TestRenderTranscriptProtocolUsesDigestBeforeTranscript(t *testing.T) {
 		t.Error("implementation prompt should require identifying unresolved evaluator findings")
 	}
 
-	verifierTask := RenderVerifierTask(compiled, "", "/tmp/transcript.md")
+	verifierTask := RenderVerifierTask(compiled, platform.WorkspaceSnapshot{}, "/tmp/transcript.md")
 	if strings.Contains(verifierTask, "First action every turn: read this transcript path") {
 		t.Error("evaluation prompt should not require full transcript reads before using the digest")
 	}
@@ -662,7 +669,7 @@ func TestRenderVerifierTaskReviewModeUsesReviewContract(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: review-mode\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderVerifierTask(compiled, "", "/tmp/transcript.md", PromptOptions{
+	task := RenderVerifierTask(compiled, platform.WorkspaceSnapshot{}, "/tmp/transcript.md", PromptOptions{
 		ReviewMode:   true,
 		ReviewCycles: 2,
 	})
@@ -702,12 +709,12 @@ func TestRenderVerifierTaskGatesControllerOnlyTaskState(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: task-state\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderVerifierTask(compiled, "", "/tmp/transcript.md")
+	task := RenderVerifierTask(compiled, platform.WorkspaceSnapshot{}, "/tmp/transcript.md")
 	if strings.Contains(task, "if any required task is pending") {
 		t.Fatalf("leaf task verifier should not include controller task-state rule:\n%s", task)
 	}
 
-	controllerTask := RenderVerifierTask(compiled, "", "/tmp/transcript.md", PromptOptions{Controller: true})
+	controllerTask := RenderVerifierTask(compiled, platform.WorkspaceSnapshot{}, "/tmp/transcript.md", PromptOptions{Controller: true})
 	if !strings.Contains(controllerTask, "pending or running child task is valid waiting work") {
 		t.Fatalf("controller verifier should include controller task-state rule:\n%s", controllerTask)
 	}
@@ -725,7 +732,7 @@ func TestRenderWithWorkspace(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: ws-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "=== FILES ===\n./main.go", "")
+	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{Raw: "=== FILES ===\n./main.go"}, "")
 
 	if !strings.Contains(task, "## Workspace") {
 		t.Error("should contain workspace section")

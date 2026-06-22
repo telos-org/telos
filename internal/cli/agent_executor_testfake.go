@@ -131,11 +131,11 @@ func (e *testFakeExecutor) ExecuteTurn(task string, ts *game.TurnState) game.Tur
 	}
 }
 
-func (e *testFakeExecutor) WorkspaceState() string {
+func (e *testFakeExecutor) WorkspaceSnapshot() platform.WorkspaceSnapshot {
 	if e.scenario.WorkspaceState != "" {
-		return e.scenario.WorkspaceState
+		return platform.WorkspaceSnapshot{Raw: e.scenario.WorkspaceState}
 	}
-	return platform.NewLocalPlatform(e.workspace).WorkspaceState()
+	return platform.NewLocalPlatform(e.workspace).WorkspaceSnapshot()
 }
 
 func (e *testFakeExecutor) CheckpointWorkspace(dest string) bool {

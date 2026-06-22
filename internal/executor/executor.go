@@ -173,9 +173,9 @@ func turnContext(timeout int, stopRequested func() bool) (context.Context, conte
 	return ctx, cancel
 }
 
-// WorkspaceState returns the workspace state from the platform.
-func (ne *NativeExecutor) WorkspaceState() string {
-	return ne.Platform.WorkspaceState()
+// WorkspaceSnapshot returns the structured workspace state from the platform.
+func (ne *NativeExecutor) WorkspaceSnapshot() platform.WorkspaceSnapshot {
+	return ne.Platform.WorkspaceSnapshot()
 }
 
 // CheckpointWorkspace creates a workspace checkpoint.

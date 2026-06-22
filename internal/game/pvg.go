@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/evidence"
+	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/spec"
 )
 
@@ -83,7 +84,7 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 
 func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 	promptOpts := p.promptOptions()
-	workspace := ""
+	workspace := platform.WorkspaceSnapshot{}
 	recoverableFailures := 0
 	machine := newTaskStateMachine(p.Config.Until)
 
@@ -138,11 +139,11 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 		if p.overBudget(p.Result.Rounds, step.Role) {
 			return p.end(GameFailure)
 		}
-		workspace = p.Executor.WorkspaceState()
+		workspace = p.Executor.WorkspaceSnapshot()
 	}
 }
 
-func (p *PVG) runStateMachineTurn(workspace string, promptOpts spec.PromptOptions, step taskStateStep) TurnResult {
+func (p *PVG) runStateMachineTurn(workspace platform.WorkspaceSnapshot, promptOpts spec.PromptOptions, step taskStateStep) TurnResult {
 	switch step.Role {
 	case RoleProver:
 		return p.runProverTurn(workspace, promptOpts, step.State, step.Reason)
@@ -158,7 +159,7 @@ func (p *PVG) runStateMachineTurn(workspace string, promptOpts spec.PromptOption
 	}
 }
 
-func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions, state ObjectiveState, reason string) TurnResult {
+func (p *PVG) runProverTurn(workspace platform.WorkspaceSnapshot, promptOpts spec.PromptOptions, state ObjectiveState, reason string) TurnResult {
 	p.Result.Rounds++
 	p.Result.ProverRounds++
 	roundNum := p.Result.Rounds
@@ -169,7 +170,7 @@ func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions, sta
 	return p.runAgentTurn(roundNum, RoleProver, p.Result.ProverRounds, task)
 }
 
-func (p *PVG) runVerifierTurn(workspace string, promptOpts spec.PromptOptions, reason string) TurnResult {
+func (p *PVG) runVerifierTurn(workspace platform.WorkspaceSnapshot, promptOpts spec.PromptOptions, reason string) TurnResult {
 	p.Result.Rounds++
 	p.Result.VerifierRounds++
 	roundNum := p.Result.Rounds

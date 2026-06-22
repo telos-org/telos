@@ -219,17 +219,52 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 	return result
 }
 
+// WorkspaceSnapshot is the structured workspace state, built at the source.
+// The Raw field is the rendered text for verbatim prompt embedding; the
+// sliced fields let consumers read the sections without re-parsing Raw.
+type WorkspaceSnapshot struct {
+	FileList  []string
+	GitStatus []string
+	DiffStat  []string
+	Raw       string
+}
+
+// WorkspaceSnapshot returns a structured snapshot of the workspace.
+func (p *LocalPlatform) WorkspaceSnapshot() WorkspaceSnapshot {
+	files := workspaceFileListing(p.Workspace)
+	fileLines := nonEmptySplit(files)
+
+	gitStatusText := gitText([]string{"status", "--short"}, p.Workspace)
+	var gitStatus []string
+	if gitStatusText != "" {
+		gitStatus = nonEmptySplit(gitStatusText)
+	}
+
+	gitDiffText := gitText([]string{"diff", "--stat"}, p.Workspace)
+	var diffStat []string
+	if gitDiffText != "" {
+		diffStat = nonEmptySplit(gitDiffText)
+	}
+
+	parts := []string{"=== FILES ===", files}
+	if gitStatusText != "" {
+		parts = append(parts, "=== GIT STATUS ===", gitStatusText)
+	}
+	if gitDiffText != "" {
+		parts = append(parts, "=== GIT DIFF STAT ===", gitDiffText)
+	}
+
+	return WorkspaceSnapshot{
+		FileList:  fileLines,
+		GitStatus: gitStatus,
+		DiffStat:  diffStat,
+		Raw:       strings.Join(parts, "\n"),
+	}
+}
+
 // WorkspaceState returns a text snapshot of the workspace for prompts.
 func (p *LocalPlatform) WorkspaceState() string {
-	files := workspaceFileListing(p.Workspace)
-	parts := []string{"=== FILES ===", files}
-	if gitStatus := gitText([]string{"status", "--short"}, p.Workspace); gitStatus != "" {
-		parts = append(parts, "=== GIT STATUS ===", gitStatus)
-	}
-	if gitDiff := gitText([]string{"diff", "--stat"}, p.Workspace); gitDiff != "" {
-		parts = append(parts, "=== GIT DIFF STAT ===", gitDiff)
-	}
-	return strings.Join(parts, "\n")
+	return p.WorkspaceSnapshot().Raw
 }
 
 // CheckpointWorkspace creates a tar.gz of the workspace.
@@ -728,4 +763,18 @@ func gitText(args []string, cwd string) string {
 		return ""
 	}
 	return strings.TrimSpace(string(out))
+}
+
+func nonEmptySplit(text string) []string {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return nil
+	}
+	var out []string
+	for _, line := range strings.Split(text, "\n") {
+		if trimmed := strings.TrimSpace(line); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
