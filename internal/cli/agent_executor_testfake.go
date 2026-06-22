@@ -76,7 +76,11 @@ func newTestFakeExecutor(workspace string, scenarioPath string) (*testFakeExecut
 	return &testFakeExecutor{workspace: workspace, scenario: scenario}, nil
 }
 
-func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) game.TurnResult {
+func (e *testFakeExecutor) ExecuteTurn(task string, ts *game.TurnState) game.TurnResult {
+	role := ""
+	if ts != nil {
+		role = ts.Role
+	}
 	if e.nextTurn >= len(e.scenario.Turns) {
 		return game.TurnResult{
 			Role:   role,

@@ -116,13 +116,13 @@ type roleLoopPolicy struct {
 
 func loopPolicy(role, protocolMode string) roleLoopPolicy {
 	switch role {
-	case "verifier":
-		reviewMode := protocolMode == "review"
+	case game.RoleVerifier:
+		reviewMode := protocolMode == game.ProtocolModeReview
 		return roleLoopPolicy{
 			requireStatus:       !reviewMode,
 			requireReviewBlocks: reviewMode,
 		}
-	case "prover":
+	case game.RoleProver:
 		return roleLoopPolicy{
 			requireProgressUpdate:  true,
 			requireToolForArtifact: true,
@@ -227,7 +227,7 @@ func (l *agentLoop) protocolCorrection(text string, usedTool bool) (string, stri
 	if prompt, key := protocolCorrectionForStrict(l.role, l.protocolMode, l.task, text, usedTool, l.strictProtocol, l.toolsAvailable); prompt != "" {
 		return prompt, key
 	}
-	if l.role == "verifier" && verifierConcedes(text) {
+	if l.role == game.RoleVerifier && verifierConcedes(text) {
 		if missing := l.tools.missingRequiredSkills(); len(missing) > 0 {
 			return fmt.Sprintf("Before conceding, read every required evaluation rubric with the skill tool. Missing required rubric skill(s): %s. Use skill action='read' for each, inspect the workspace against the rubric, then reply with a final verifier result and <status>CONCEDE</status> only if every required rubric passes.", strings.Join(missing, ", ")), "missing_required_skill_rubric"
 		}

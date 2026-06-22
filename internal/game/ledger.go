@@ -135,7 +135,7 @@ func (p *PVG) updateObjectiveLedger(roundNum int, role string, turn TurnResult, 
 			ledger.OpenFindings = findings
 		}
 	}
-	if role == "verifier" {
+	if role == RoleVerifier {
 		if summary := lastSummaryOrReview(turn.Logs); summary != "" {
 			ledger.LastEvaluation = summary
 		} else if progress != "" {

@@ -30,11 +30,11 @@ func newTaskStateMachine(reviewTarget int) taskStateMachine {
 func (m taskStateMachine) next() (taskStateStep, bool) {
 	switch m.state {
 	case ObjectiveStatePlan, ObjectiveStateImplement:
-		return taskStateStep{State: ObjectiveStateImplement, Role: "prover", Reason: "starting_implement_turn"}, true
+		return taskStateStep{State: ObjectiveStateImplement, Role: RoleProver, Reason: "starting_implement_turn"}, true
 	case ObjectiveStateRepair:
-		return taskStateStep{State: ObjectiveStateRepair, Role: "prover", Reason: "starting_repair_turn"}, true
+		return taskStateStep{State: ObjectiveStateRepair, Role: RoleProver, Reason: "starting_repair_turn"}, true
 	case ObjectiveStateVerify:
-		return taskStateStep{State: ObjectiveStateVerify, Role: "verifier", Reason: "starting_verify_turn"}, true
+		return taskStateStep{State: ObjectiveStateVerify, Role: RoleVerifier, Reason: "starting_verify_turn"}, true
 	default:
 		return taskStateStep{}, false
 	}
@@ -47,12 +47,12 @@ func (m *taskStateMachine) advance(turn TurnResult) (GameResult, bool) {
 	}
 
 	switch turn.Role {
-	case "prover":
+	case RoleProver:
 		if turn.Error == "" {
 			m.proverDelivered = true
 		}
 		m.state = ObjectiveStateVerify
-	case "verifier":
+	case RoleVerifier:
 		if m.reviewMode {
 			if turn.Error == "" {
 				m.reviewsCompleted++

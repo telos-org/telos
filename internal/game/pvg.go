@@ -123,7 +123,7 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 			if result == GameFailure && p.fixedReviewMode() && !machine.proverDelivered && p.Result.Error == "" {
 				p.Result.Error = "no_successful_implementation"
 			}
-			if result == GameSuccess && !p.fixedReviewMode() && turn.Role == "verifier" && turn.Status == StatusConcede {
+			if result == GameSuccess && !p.fixedReviewMode() && turn.Role == RoleVerifier && turn.Status == StatusConcede {
 				p.Result.VerifierConceded = true
 			}
 			if result == GameSuccess && p.Config.Verbose {
@@ -144,9 +144,9 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 
 func (p *PVG) runStateMachineTurn(workspace string, promptOpts spec.PromptOptions, step taskStateStep) TurnResult {
 	switch step.Role {
-	case "prover":
+	case RoleProver:
 		return p.runProverTurn(workspace, promptOpts, step.State, step.Reason)
-	case "verifier":
+	case RoleVerifier:
 		return p.runVerifierTurn(workspace, promptOpts, step.Reason)
 	default:
 		return TurnResult{
@@ -162,22 +162,22 @@ func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions, sta
 	p.Result.Rounds++
 	p.Result.ProverRounds++
 	roundNum := p.Result.Rounds
-	p.transitionObjectiveState(state, roundNum, "prover", reason)
-	p.Evidence.Log("round_start", roundNum, "prover", nil)
+	p.transitionObjectiveState(state, roundNum, RoleProver, reason)
+	p.Evidence.Log("round_start", roundNum, RoleProver, nil)
 
 	task := spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
-	return p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task)
+	return p.runAgentTurn(roundNum, RoleProver, p.Result.ProverRounds, task)
 }
 
 func (p *PVG) runVerifierTurn(workspace string, promptOpts spec.PromptOptions, reason string) TurnResult {
 	p.Result.Rounds++
 	p.Result.VerifierRounds++
 	roundNum := p.Result.Rounds
-	p.transitionObjectiveState(ObjectiveStateVerify, roundNum, "verifier", reason)
-	p.Evidence.Log("round_start", roundNum, "verifier", nil)
+	p.transitionObjectiveState(ObjectiveStateVerify, roundNum, RoleVerifier, reason)
+	p.Evidence.Log("round_start", roundNum, RoleVerifier, nil)
 
 	task := spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
-	return p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task)
+	return p.runAgentTurn(roundNum, RoleVerifier, p.Result.VerifierRounds, task)
 }
 
 func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
@@ -243,7 +243,7 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 		return turn
 	}
 
-	turn := p.Executor.ExecuteTurn(task, role, ts)
+	turn := p.Executor.ExecuteTurn(task, ts)
 	p.Result.Accumulate(turn.Stats)
 	p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats, turn.Error)
 
@@ -279,10 +279,10 @@ func (p *PVG) turnSkills() []TurnSkill {
 }
 
 func (p *PVG) turnProtocolMode(role string) string {
-	if role == "verifier" && p.fixedReviewMode() {
-		return "review"
+	if role == RoleVerifier && p.fixedReviewMode() {
+		return ProtocolModeReview
 	}
-	return "pvg"
+	return ProtocolModePVG
 }
 
 func (p *PVG) turnBudget() TurnBudget {

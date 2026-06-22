@@ -94,7 +94,12 @@ type nativeTool struct {
 	run         func(t *nativeTools, ctx context.Context, args map[string]interface{}) (string, error)
 }
 
-func nativeToolTable() []nativeTool {
+// nativeToolDefs is the tool table, built once at package init. The handler
+// closures are stateless (they take the per-turn *nativeTools as an argument),
+// so a single shared table is safe to reuse across every turn and process.
+var nativeToolDefs = buildNativeToolTable()
+
+func buildNativeToolTable() []nativeTool {
 	str := func(desc string) map[string]interface{} {
 		return map[string]interface{}{"type": "string", "description": desc}
 	}
@@ -222,9 +227,8 @@ func nativeToolTable() []nativeTool {
 }
 
 func nativeToolNames() []string {
-	table := nativeToolTable()
-	names := make([]string, len(table))
-	for i, def := range table {
+	names := make([]string, len(nativeToolDefs))
+	for i, def := range nativeToolDefs {
 		names[i] = def.name
 	}
 	return names
@@ -234,9 +238,8 @@ func nativeToolNames() []string {
 // tools. The LiteLLM proxy is OpenAI-compatible, so this is the only schema
 // shape Telos needs to emit.
 func nativeToolsForOpenAI() []responses.ToolUnionParam {
-	defs := nativeToolTable()
-	out := make([]responses.ToolUnionParam, 0, len(defs))
-	for _, def := range defs {
+	out := make([]responses.ToolUnionParam, 0, len(nativeToolDefs))
+	for _, def := range nativeToolDefs {
 		out = append(out, responses.ToolUnionParam{
 			OfFunction: &responses.FunctionToolParam{
 				Name:        def.name,
@@ -275,7 +278,7 @@ func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool, skills
 		openedSkills:  map[string]bool{},
 		logger:        logger,
 	}
-	for _, tool := range nativeToolTable() {
+	for _, tool := range nativeToolDefs {
 		t.byName[tool.name] = tool
 		for _, alias := range tool.aliases {
 			t.byName[alias] = tool
@@ -324,6 +327,9 @@ func (t *nativeTools) execute(ctx context.Context, call nativeToolCall) nativeTo
 	tool, ok := t.byName[call.Name]
 	if !ok {
 		return nativeToolResult{CallID: call.ID, Name: call.Name, Output: fmt.Sprintf("unknown tool %q; available tools are %s", call.Name, oxfordList(nativeToolNames())), IsError: true, ErrorCode: errAgentProtocol}
+	}
+	if err := validateToolArgs(tool, args); err != nil {
+		return nativeToolResult{CallID: call.ID, Name: call.Name, Output: err.Error(), IsError: true, ErrorCode: errAgentProtocol}
 	}
 	started := time.Now()
 	output, err := tool.run(t, ctx, args)
@@ -1155,6 +1161,52 @@ func shouldSkipDir(name string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+// validateToolArgs rejects a tool call whose supplied arguments have the wrong
+// JSON type for the parameter, so a model that sends e.g. start_line: "10"
+// (string) gets a clear protocol error instead of the value being silently
+// coerced to the zero value by argInt. Only present, non-null, declared
+// parameters are checked; missing required fields are still reported by the
+// individual handlers with parameter-specific messages.
+func validateToolArgs(tool nativeTool, args map[string]interface{}) error {
+	props, ok := tool.parameters["properties"].(map[string]interface{})
+	if !ok {
+		return nil
+	}
+	for key, raw := range args {
+		if raw == nil {
+			continue
+		}
+		spec, ok := props[key].(map[string]interface{})
+		if !ok {
+			continue
+		}
+		want, _ := spec["type"].(string)
+		if !argMatchesType(raw, want) {
+			return fmt.Errorf("argument %q must be of type %s", key, want)
+		}
+	}
+	return nil
+}
+
+func argMatchesType(value any, want string) bool {
+	switch want {
+	case "string":
+		_, ok := value.(string)
+		return ok
+	case "integer", "number":
+		_, ok := value.(float64)
+		return ok
+	case "boolean":
+		_, ok := value.(bool)
+		return ok
+	case "object":
+		_, ok := value.(map[string]interface{})
+		return ok
+	default:
+		return true
 	}
 }
 

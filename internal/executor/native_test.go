@@ -73,9 +73,9 @@ func TestNativeExecutorRunsChatToolLoopAndWritesWorkspace(t *testing.T) {
 
 	p := platform.NewLocalPlatform(workspace)
 	exec := NewNativeExecutor(p, "test/test-model", "high", 0)
-	ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
+	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
 
-	result := exec.ExecuteTurn("create answer.txt", "prover", ts)
+	result := exec.ExecuteTurn("create answer.txt", ts)
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -121,14 +121,15 @@ func TestNativeExecutorStopsToolLoopWhenTurnTokenBudgetExhausted(t *testing.T) {
 	p := platform.NewLocalPlatform(workspace)
 	exec := NewNativeExecutor(p, "test/test-model", "high", 0)
 	ts := &game.TurnState{
-		Dir: filepath.Join(workspace, ".turn"),
+		Role: "prover",
+		Dir:  filepath.Join(workspace, ".turn"),
 		Budget: game.TurnBudget{
 			MaxInputTokens:       10,
 			RemainingInputTokens: 10,
 		},
 	}
 
-	result := exec.ExecuteTurn("create answer.txt", "prover", ts)
+	result := exec.ExecuteTurn("create answer.txt", ts)
 
 	if !result.Recoverable {
 		t.Fatalf("expected recoverable budget exhaustion, got %+v", result)
@@ -171,13 +172,14 @@ func TestNativeExecutorCapsRequestOutputTokensToRemainingBudget(t *testing.T) {
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	ts := &game.TurnState{
-		Dir: filepath.Join(workspace, ".turn"),
+		Role: "prover",
+		Dir:  filepath.Join(workspace, ".turn"),
 		Budget: game.TurnBudget{
 			MaxOutputTokens:       20,
 			RemainingOutputTokens: 9,
 		},
 	}
-	result := exec.ExecuteTurn("Report status.", "prover", ts)
+	result := exec.ExecuteTurn("Report status.", ts)
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -221,8 +223,8 @@ func TestNativeExecutorLogsTurnTimeoutError(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 1)
-	ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
-	result := exec.ExecuteTurn("Wait for timeout.", "prover", ts)
+	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
+	result := exec.ExecuteTurn("Wait for timeout.", ts)
 
 	if !result.Recoverable || !strings.Contains(result.Error, "provider_timeout:turn_timeout:1") {
 		t.Fatalf("expected recoverable turn timeout, got %+v", result)
@@ -250,10 +252,11 @@ func TestNativeExecutorLogsStopRequestedError(t *testing.T) {
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	ts := &game.TurnState{
+		Role:          "prover",
 		Dir:           filepath.Join(workspace, ".turn"),
 		StopRequested: func() bool { return true },
 	}
-	result := exec.ExecuteTurn("Wait for stop.", "prover", ts)
+	result := exec.ExecuteTurn("Wait for stop.", ts)
 
 	if !result.Recoverable || !strings.Contains(result.Error, "stopped:stop_requested") {
 		t.Fatalf("expected recoverable stop request, got %+v", result)
@@ -319,9 +322,9 @@ func TestNativeExecutorUsesLiteLLMResponseCostHeader(t *testing.T) {
 	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
 	p := platform.NewLocalPlatform(workspace)
 	exec := NewNativeExecutor(p, "test/test-model", "high", 0)
-	ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
+	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
 
-	result := exec.ExecuteTurn("Report current state.", "prover", ts)
+	result := exec.ExecuteTurn("Report current state.", ts)
 	if result.Status != game.StatusContinue {
 		t.Fatalf("status: got %s logs=%q", result.Status, result.Logs)
 	}
@@ -352,9 +355,9 @@ func TestNativeExecutorUsesLiteLLMResponseBodyCost(t *testing.T) {
 	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
 	t.Setenv("TELOS_MODEL_PRICING_TABLE", `{"test/test-model":{"input_usd_per_1m_tokens":100,"output_usd_per_1m_tokens":100}}`)
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
+	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
 
-	result := exec.ExecuteTurn("Report current state.", "prover", ts)
+	result := exec.ExecuteTurn("Report current state.", ts)
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
 	}
@@ -834,8 +837,8 @@ func TestNativeExecutorSurfacesProviderConfigError(t *testing.T) {
 
 	workspace := t.TempDir()
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/model", "high", 0)
-	ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
-	result := exec.ExecuteTurn("Say hello.", "prover", ts)
+	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
+	result := exec.ExecuteTurn("Say hello.", ts)
 
 	if result.Recoverable {
 		t.Fatalf("expected terminal config error, got %+v", result)
@@ -975,7 +978,7 @@ func TestNativeExecutorSendsHarnessInstructionsAndReasoning(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("Say hello.", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("Say hello.", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -999,9 +1002,9 @@ func TestNativeExecutorSanitizesReasoningBeforeStatusAndLogsEvent(t *testing.T) 
 	t.Setenv("TELOS_API_BASE_URL", server.URL)
 	t.Setenv("TELOS_API_KEY", "test-key")
 
-	ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
+	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("Verify workspace.", "verifier", ts)
+	result := exec.ExecuteTurn("Verify workspace.", ts)
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -1063,7 +1066,7 @@ func TestNativeExecutorOmitsToolsWhenFunctionCallingUnsupported(t *testing.T) {
 	t.Setenv("TELOS_MODEL_SUPPORTS_FUNCTION_CALLING", "false")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("Inspect the workspace files and report status.", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("Inspect the workspace files and report status.", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -1103,8 +1106,8 @@ func TestNativeExecutorNudgesEmptyFinalOnce(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
-	result := exec.ExecuteTurn("Say hello.", "prover", ts)
+	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
+	result := exec.ExecuteTurn("Say hello.", ts)
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -1150,7 +1153,7 @@ func TestNativeExecutorStrictProtocolRejectsMalformedProgressUpdate(t *testing.T
 	t.Setenv("TELOS_MODEL_STRICT_PROTOCOL", "true")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("Report status.", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("Report status.", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -1192,7 +1195,7 @@ func TestNativeExecutorCorrectsVerifierMissingStatusOnce(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("Verify workspace.", "verifier", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("Verify workspace.", &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")})
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -1237,7 +1240,7 @@ func TestNativeExecutorCorrectsVerifierInvalidStatusOnce(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("Verify workspace.", "verifier", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("Verify workspace.", &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")})
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -1267,8 +1270,8 @@ func TestNativeExecutorLogsTerminalProtocolError(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
-	result := exec.ExecuteTurn("Verify workspace.", "verifier", ts)
+	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
+	result := exec.ExecuteTurn("Verify workspace.", ts)
 
 	if !result.Recoverable || !strings.Contains(result.Error, "agent_protocol:missing_status") {
 		t.Fatalf("expected recoverable protocol error, got %+v", result)
@@ -1315,7 +1318,7 @@ func TestNativeExecutorCorrectsMalformedReviewModeBlocksOnce(t *testing.T) {
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	task := "Review workspace."
-	result := exec.ExecuteTurn(task, "verifier", &game.TurnState{Dir: filepath.Join(workspace, ".turn"), ProtocolMode: "review"})
+	result := exec.ExecuteTurn(task, &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn"), ProtocolMode: "review"})
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -1357,7 +1360,7 @@ func TestNativeExecutorRetriesMalformedReviewBlocksBeyondOnce(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("Review workspace.", "verifier", &game.TurnState{Dir: filepath.Join(workspace, ".turn"), ProtocolMode: "review"})
+	result := exec.ExecuteTurn("Review workspace.", &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn"), ProtocolMode: "review"})
 
 	if result.Error != "" {
 		t.Fatalf("expected recovery after two malformed replies, got error %q logs=%q", result.Error, result.Logs)
@@ -1485,7 +1488,8 @@ func TestNativeExecutorRequiresVerifierToOpenRequiredRubricBeforeConceding(t *te
 
 	task := "Verify workspace."
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn(task, "verifier", &game.TurnState{
+	result := exec.ExecuteTurn(task, &game.TurnState{
+		Role:         "verifier",
 		Dir:          filepath.Join(workspace, ".turn"),
 		ProtocolMode: "pvg",
 		Skills: []game.TurnSkill{{
@@ -1523,7 +1527,7 @@ func TestNativeExecutorRejectsIncompleteFinal(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("Say hello.", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("Say hello.", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
 
 	if !result.Recoverable {
 		t.Fatalf("expected recoverable incomplete response, got %+v", result)
@@ -1577,7 +1581,7 @@ func TestNativeExecutorContinuesIncompleteToolCallResponse(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("create answer.txt", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -1612,7 +1616,7 @@ func TestNativeExecutorRejectsIncompleteToolCallWithPartialArguments(t *testing.
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("create answer.txt", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
 
 	if !result.Recoverable {
 		t.Fatalf("expected recoverable incomplete response, got %+v", result)
@@ -1672,7 +1676,7 @@ func TestNativeExecutorSendsTruncatedHugeToolOutput(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("run noisy command", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("run noisy command", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -1715,7 +1719,7 @@ func TestNativeExecutorRejectsIncompleteFinalAfterToolResults(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("create answer.txt", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
 
 	if !result.Recoverable {
 		t.Fatalf("expected recoverable incomplete response, got %+v", result)
@@ -1778,8 +1782,8 @@ func TestNativeExecutorRetriesTransientProviderError(t *testing.T) {
 			t.Setenv("TELOS_API_KEY", "test-key")
 
 			exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-			ts := &game.TurnState{Dir: filepath.Join(workspace, ".turn")}
-			result := exec.ExecuteTurn("Say hello.", "prover", ts)
+			ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
+			result := exec.ExecuteTurn("Say hello.", ts)
 
 			if result.Error != "" {
 				t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
@@ -1815,7 +1819,7 @@ func TestNativeExecutorDoesNotRetryProviderInvalidRequest(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("Say hello.", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("Say hello.", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
 
 	if !result.Recoverable {
 		t.Fatalf("expected recoverable provider error, got %+v", result)
@@ -1885,7 +1889,7 @@ func TestNativeExecutorFallsBackToStatelessHistoryWhenResponseChainBreaks(t *tes
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	result := exec.ExecuteTurn("create answer.txt", "prover", &game.TurnState{Dir: filepath.Join(workspace, ".turn")})
+	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
 
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)

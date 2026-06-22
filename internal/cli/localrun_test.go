@@ -28,12 +28,16 @@ type fakeExecutor struct {
 	tasks          []string
 }
 
-func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) game.TurnResult {
+func (f *fakeExecutor) ExecuteTurn(task string, ts *game.TurnState) game.TurnResult {
 	f.tasks = append(f.tasks, task)
+	role := ""
+	if ts != nil {
+		role = ts.Role
+	}
 	if f.onExecute != nil {
 		f.onExecute(role)
 	}
-	if role == "prover" {
+	if role == game.RoleProver {
 		return f.proverResult
 	}
 	return f.verifierResult

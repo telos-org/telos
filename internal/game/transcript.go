@@ -69,7 +69,7 @@ func AppendTurn(path string, role string, roleRound int, status string, logs str
 // AppendTurnWithOptions appends one implementation or evaluation turn to the transcript.
 func AppendTurnWithOptions(path string, role string, roleRound int, status string, logs string, stats *TurnStats, turnID string, turnError string, opts AppendTurnOptions) error {
 	label := "Implementation"
-	if role == "verifier" {
+	if role == RoleVerifier {
 		label = "Evaluation"
 	}
 	body := stripFinalStatus(turnBody(logs, turnError, opts))

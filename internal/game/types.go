@@ -47,9 +47,10 @@ type TurnResult struct {
 	Recoverable bool
 }
 
-// AgentExecutor runs one PVG agent turn.
+// AgentExecutor runs one PVG agent turn. The role is carried on turnState.Role
+// rather than passed separately, so the two can never disagree.
 type AgentExecutor interface {
-	ExecuteTurn(task string, role string, turnState *TurnState) TurnResult
+	ExecuteTurn(task string, turnState *TurnState) TurnResult
 	WorkspaceState() string
 	CheckpointWorkspace(dest string) bool
 }

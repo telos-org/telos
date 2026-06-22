@@ -36,16 +36,19 @@ func NewNativeExecutor(p *platform.LocalPlatform, model, thinking string, timeou
 	}
 }
 
-// ExecuteTurn runs one Telos-native agent turn.
-func (ne *NativeExecutor) ExecuteTurn(task string, role string, turnState *game.TurnState) game.TurnResult {
+// ExecuteTurn runs one Telos-native agent turn. The role is read from
+// turnState.Role so it cannot disagree with the rest of the turn state.
+func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) game.TurnResult {
 	started := time.Now()
 	stats := game.TurnStats{Model: ne.Model}
+	role := ""
 	sessionPath := ""
 	var stopRequested func() bool
 	var budget game.TurnBudget
 	protocolMode := ""
 	var skills []game.TurnSkill
 	if turnState != nil {
+		role = turnState.Role
 		sessionPath = turnState.SessionPath()
 		stopRequested = turnState.StopRequested
 		budget = turnState.Budget

@@ -22,12 +22,14 @@ type fakeExecutor struct {
 	seenProtocols   []string
 }
 
-func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) TurnResult {
+func (f *fakeExecutor) ExecuteTurn(task string, ts *TurnState) TurnResult {
+	role := ""
 	if ts != nil {
+		role = ts.Role
 		f.seenBudgets = append(f.seenBudgets, ts.Budget)
 		f.seenProtocols = append(f.seenProtocols, ts.ProtocolMode)
 	}
-	if role == "prover" {
+	if role == RoleProver {
 		if f.proverIdx < len(f.proverResults) {
 			r := f.proverResults[f.proverIdx]
 			f.proverIdx++
