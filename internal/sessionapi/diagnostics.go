@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/telos-org/telos/internal/agentsession"
 )
 
 func buildSessionDiagnostics(session *Session, events []SessionEvent) (*SessionDiagnosticsResponse, map[string]map[string]bool) {
@@ -186,11 +188,6 @@ func appendSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, sessio
 	return nil
 }
 
-type diagnosticSessionLogEvent struct {
-	Type string         `json:"type"`
-	Data map[string]any `json:"data,omitempty"`
-}
-
 func readSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, path string, evidenceFailureCodes map[string]map[string]bool) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -205,7 +202,7 @@ func readSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, path str
 		if line == "" {
 			continue
 		}
-		var event diagnosticSessionLogEvent
+		var event agentsession.Event
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			continue
 		}
@@ -213,61 +210,70 @@ func readSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, path str
 			diagnostics.SessionLogEvents[event.Type]++
 		}
 		switch event.Type {
-		case "retry":
-			diagnostics.Retries = append(diagnostics.Retries, SessionRetryDiagnostics{
-				SpecName:           specName,
-				TurnID:             turnID,
-				Sequence:           intFromMap(event.Data, "sequence"),
-				Attempt:            intFromMap(event.Data, "attempt"),
-				DelayMS:            intFromMap(event.Data, "delay_ms"),
-				ErrorCode:          stringFromMap(event.Data, "error_code"),
-				Error:              stringFromMap(event.Data, "error"),
-				ProviderStatusCode: intFromMap(event.Data, "provider_status_code"),
-			})
-		case "error":
-			errorCode := stringFromMap(event.Data, "error_code")
-			errorText := firstDiagnosticsNonEmpty(errorCode, stringFromMap(event.Data, "error"))
+		case agentsession.KindRetry:
+			if p, err := agentsession.Unmarshal[agentsession.RetryPayload](&event); err == nil {
+				diagnostics.Retries = append(diagnostics.Retries, SessionRetryDiagnostics{
+					SpecName:           specName,
+					TurnID:             turnID,
+					Sequence:           p.Sequence,
+					Attempt:            p.Attempt,
+					DelayMS:            int(p.DelayMS),
+					ErrorCode:          p.ErrorCode,
+					Error:              p.Error,
+					ProviderStatusCode: p.ProviderStatusCode,
+				})
+			}
+		case agentsession.KindError:
+			var p *agentsession.ErrorPayload
+			p, _ = agentsession.Unmarshal[agentsession.ErrorPayload](&event)
+			if p == nil {
+				p = &agentsession.ErrorPayload{}
+			}
+			errorCode := p.ErrorCode
+			errorText := firstDiagnosticsNonEmpty(errorCode, p.Error)
+			var retryable *bool
+			if p.Retryable {
+				r := p.Retryable
+				retryable = &r
+			}
 			diagnostics.Errors = append(diagnostics.Errors, SessionErrorDiagnostics{
 				SpecName:           specName,
 				TurnID:             turnID,
-				Sequence:           intFromMap(event.Data, "sequence"),
+				Sequence:           p.Sequence,
 				ErrorCode:          errorCode,
-				Error:              stringFromMap(event.Data, "error"),
-				Retryable:          boolPtrFromAny(event.Data["retryable"]),
-				ProviderStatusCode: intFromMap(event.Data, "provider_status_code"),
+				Error:              p.Error,
+				Retryable:          retryable,
+				ProviderStatusCode: p.ProviderStatusCode,
 			})
-			// Dedup against evidence: a recoverable turn failure is logged both
-			// to evidence (agent_failure_recoverable) and to this turn's
-			// session.jsonl (error event) with the same error_code. The evidence
-			// pass already counted it, so skip the failure tally here to avoid
-			// double-counting. The per-turn Errors list above is still populated
-			// so operators keep the granular detail.
 			if !evidenceFailureAlreadyCounted(evidenceFailureCodes, specName, errorCode) {
 				addDiagnosticsFailure(diagnostics.Failures, diagnosticsSpecByName(diagnostics, specName), ClassifyFailure(errorText))
 			}
-		case "model_response":
-			if stopReason := stringFromMap(event.Data, "stop_reason"); stopReason != "" {
-				diagnostics.StopReasons[stopReason]++
+		case agentsession.KindModelResponse:
+			if p, err := agentsession.Unmarshal[agentsession.ModelResponsePayload](&event); err == nil && p.StopReason != "" {
+				diagnostics.StopReasons[p.StopReason]++
 			}
-		case "tool_result":
-			errorCode := stringFromMap(event.Data, "error_code")
-			if boolFromAny(event.Data["is_error"]) && errorCode != "" {
-				diagnostics.Errors = append(diagnostics.Errors, SessionErrorDiagnostics{
-					SpecName:  specName,
-					TurnID:    turnID,
-					ErrorCode: errorCode,
-					Error:     "tool_result:" + stringFromMap(event.Data, "tool_name"),
+		case agentsession.KindToolResult:
+			if p, err := agentsession.Unmarshal[agentsession.ToolResultPayload](&event); err == nil {
+				if p.IsError && p.ErrorCode != "" {
+					diagnostics.Errors = append(diagnostics.Errors, SessionErrorDiagnostics{
+						SpecName:  specName,
+						TurnID:    turnID,
+						ErrorCode: p.ErrorCode,
+						Error:     "tool_result:" + p.ToolName,
+					})
+					addDiagnosticsFailure(diagnostics.Failures, diagnosticsSpecByName(diagnostics, specName), ClassifyFailure(p.ErrorCode))
+				}
+			}
+		case agentsession.KindOutsideWorkspaceAccess:
+			if p, err := agentsession.Unmarshal[agentsession.OutsideWorkspaceAccessPayload](&event); err == nil {
+				diagnostics.OutsideWorkspace = append(diagnostics.OutsideWorkspace, SessionOutsideWorkspaceAccessDiagnostics{
+					SpecName: specName,
+					TurnID:   turnID,
+					Action:   p.Action,
+					Path:     p.Path,
+					Write:    p.Write,
 				})
-				addDiagnosticsFailure(diagnostics.Failures, diagnosticsSpecByName(diagnostics, specName), ClassifyFailure(errorCode))
 			}
-		case "outside_workspace_access":
-			diagnostics.OutsideWorkspace = append(diagnostics.OutsideWorkspace, SessionOutsideWorkspaceAccessDiagnostics{
-				SpecName: specName,
-				TurnID:   turnID,
-				Action:   stringFromMap(event.Data, "action"),
-				Path:     stringFromMap(event.Data, "path"),
-				Write:    boolFromAny(event.Data["write"]),
-			})
 		}
 	}
 	if err := scanner.Err(); err != nil {

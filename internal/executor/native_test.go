@@ -16,6 +16,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/openai/openai-go/responses"
+	"github.com/telos-org/telos/internal/agentsession"
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 )
@@ -291,7 +292,7 @@ func assertValidSessionLog(t *testing.T, path string) {
 		if err := json.Unmarshal([]byte(line), &event); err != nil {
 			t.Fatalf("session log line is not valid JSON: %q: %v", line, err)
 		}
-		if event.Schema != agentSessionSchema || event.Version != 1 {
+		if event.Schema != agentsession.Schema || event.Version != 1 {
 			t.Fatalf("session event missing schema/version: type=%q schema=%q version=%d", event.Type, event.Schema, event.Version)
 		}
 		if event.Message.Role == "assistant" {
@@ -595,7 +596,6 @@ func TestNativeSessionLoggerSchemaGolden(t *testing.T) {
     "data": {
       "error": "agent_incomplete:max_output_tokens",
       "error_code": "agent_incomplete",
-      "retryable": false,
       "sequence": 2
     },
     "type": "error",
@@ -707,8 +707,11 @@ func normalizedSessionLogGolden(t *testing.T, path string) string {
 		if event.Runtime != "" {
 			item["runtime"] = event.Runtime
 		}
-		if event.Data != nil {
-			item["data"] = event.Data
+		if len(event.Data) > 0 {
+			var dataMap map[string]any
+			if err := json.Unmarshal(event.Data, &dataMap); err == nil {
+				item["data"] = dataMap
+			}
 		}
 		if event.Message != nil {
 			item["role"] = event.Message.Role
@@ -3064,7 +3067,11 @@ func sessionLogEventsByType(t *testing.T, path string, eventType string) []map[s
 			t.Fatalf("parse session event: %v", err)
 		}
 		if event.Type == eventType {
-			out = append(out, event.Data)
+			var data map[string]any
+			if len(event.Data) > 0 {
+				_ = json.Unmarshal(event.Data, &data)
+			}
+			out = append(out, data)
 		}
 	}
 	return out

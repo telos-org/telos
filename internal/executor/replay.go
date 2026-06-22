@@ -7,6 +7,8 @@ import (
 	"os"
 	"strconv"
 	"strings"
+
+	"github.com/telos-org/telos/internal/agentsession"
 )
 
 type SessionReplayReport struct {
@@ -61,44 +63,47 @@ func ReplaySessionLog(path, role string) (SessionReplayReport, error) {
 		report.Events++
 		report.EventTypes[event.Type]++
 		switch event.Type {
-		case "turn_policy":
-			if mode := stringFromReplayData(event.Data, "protocol_mode"); mode != "" {
-				protocolMode = mode
+		case agentsession.KindTurnPolicy:
+			if p, err := agentsession.Unmarshal[agentsession.TurnPolicyPayload](&event); err == nil && p.ProtocolMode != "" {
+				protocolMode = p.ProtocolMode
 			}
-		case "model_request":
+		case agentsession.KindModelRequest:
 			report.ModelRequests++
-		case "model_response":
+		case agentsession.KindModelResponse:
 			report.ModelResponses++
-		case "tool_call":
+		case agentsession.KindToolCall:
 			report.ToolCalls++
 			usedTool = true
-			if id := stringFromReplayData(event.Data, "tool_call_id"); id != "" {
-				toolCalls[id] = stringFromReplayData(event.Data, "tool_name")
+			if p, err := agentsession.Unmarshal[agentsession.ToolCallPayload](&event); err == nil && p.ToolCallID != "" {
+				toolCalls[p.ToolCallID] = p.ToolName
 			}
-		case "tool_result":
+		case agentsession.KindToolResult:
 			report.ToolResults++
-			id := stringFromReplayData(event.Data, "tool_call_id")
-			if id != "" {
-				toolResults[id] = stringFromReplayData(event.Data, "tool_name")
-			}
-			if boolFromReplayData(event.Data, "is_error") {
-				report.ToolErrors++
-			}
-			if exitCode, ok := intFromReplayData(event.Data, "exit_code"); ok && exitCode != 0 {
-				report.ToolNonzeroExits++
+			var id string
+			if p, err := agentsession.Unmarshal[agentsession.ToolResultPayload](&event); err == nil {
+				id = p.ToolCallID
 				if id != "" {
-					nonzeroExitByCall[id] = true
+					toolResults[id] = p.ToolName
+				}
+				if p.IsError {
+					report.ToolErrors++
+				}
+				if p.ExitCode != 0 {
+					report.ToolNonzeroExits++
+					if id != "" {
+						nonzeroExitByCall[id] = true
+					}
+				}
+				if p.Truncated {
+					report.ToolTruncated++
+					if id != "" {
+						truncatedByCall[id] = true
+					}
 				}
 			}
-			if boolFromReplayData(event.Data, "truncated") {
-				report.ToolTruncated++
-				if id != "" {
-					truncatedByCall[id] = true
-				}
-			}
-		case "reasoning_sanitized":
+		case agentsession.KindReasoningSanitized:
 			report.ReasoningSanitized++
-		case "message":
+		case agentsession.KindMessage:
 			if event.Message == nil {
 				continue
 			}
@@ -204,34 +209,4 @@ func parseToolTrace(text string) replayToolTrace {
 		}
 	}
 	return trace
-}
-
-func stringFromReplayData(data map[string]any, key string) string {
-	if data == nil {
-		return ""
-	}
-	value, _ := data[key].(string)
-	return value
-}
-
-func boolFromReplayData(data map[string]any, key string) bool {
-	if data == nil {
-		return false
-	}
-	value, _ := data[key].(bool)
-	return value
-}
-
-func intFromReplayData(data map[string]any, key string) (int, bool) {
-	if data == nil {
-		return 0, false
-	}
-	switch value := data[key].(type) {
-	case float64:
-		return int(value), true
-	case int:
-		return value, true
-	default:
-		return 0, false
-	}
 }
