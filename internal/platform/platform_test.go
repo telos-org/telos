@@ -22,6 +22,7 @@ func TestLocalPlatformRun(t *testing.T) {
 		[]string{"sh", "-c", "echo hello; echo world"},
 		"", nil, 10, nil,
 		func(line string) { lines = append(lines, line) },
+		"",
 	)
 
 	if result.InfraError != "" {
@@ -51,6 +52,7 @@ func TestLocalPlatformRunWithTask(t *testing.T) {
 	result := p.Run(
 		[]string{"sh", "-c", "echo $TELOS_TASK"},
 		"test-task-body", nil, 10, nil, nil,
+		"",
 	)
 
 	if result.InfraError != "" {
@@ -74,6 +76,7 @@ func TestLocalPlatformRunWithEnv(t *testing.T) {
 	result := p.Run(
 		[]string{"sh", "-c", "echo $TELOS_ROLE"},
 		"", map[string]string{"TELOS_ROLE": "prover"}, 10, nil, nil,
+		"",
 	)
 
 	if result.InfraError != "" {
@@ -97,6 +100,7 @@ func TestLocalPlatformRunFailure(t *testing.T) {
 	result := p.Run(
 		[]string{"sh", "-c", "exit 42"},
 		"", nil, 10, nil, nil,
+		"",
 	)
 
 	if result.ReturnCode != 42 {
@@ -111,6 +115,7 @@ func TestLocalPlatformRunCapsStdoutAndStderr(t *testing.T) {
 	result := p.Run(
 		[]string{"sh", "-c", "python3 - <<'PY'\nimport sys\nprint('x' * (300 * 1024))\nprint('y' * (300 * 1024), file=sys.stderr)\nPY"},
 		"", nil, 10, nil, nil,
+		"",
 	)
 
 	if result.InfraError != "" {
@@ -149,6 +154,7 @@ func TestLocalPlatformRunPreservesBlankLines(t *testing.T) {
 	result := p.Run(
 		[]string{"sh", "-c", "echo a; echo; echo b"},
 		"", nil, 10, nil, nil,
+		"",
 	)
 
 	if result.InfraError != "" {
@@ -172,6 +178,7 @@ func TestLocalPlatformRunWithoutTimeout(t *testing.T) {
 	result := p.Run(
 		[]string{"sh", "-c", "echo no-timeout"},
 		"", nil, 0, nil, nil,
+		"",
 	)
 
 	if result.InfraError != "" {
@@ -189,6 +196,7 @@ func TestLocalPlatformRunTimeout(t *testing.T) {
 	result := p.Run(
 		[]string{"sh", "-c", "sleep 60"},
 		"", nil, 1, nil, nil,
+		"",
 	)
 
 	if result.InfraError == "" {
@@ -220,6 +228,7 @@ func TestLocalPlatformRunInterrupt(t *testing.T) {
 		"", nil, 0,
 		func() bool { return stop.Load() },
 		nil,
+		"",
 	)
 
 	if result.InfraError != "local_interrupted:stop_requested" {
@@ -243,6 +252,7 @@ func TestLocalPlatformRunInvalidCommand(t *testing.T) {
 	result := p.Run(
 		[]string{"/nonexistent/binary"},
 		"", nil, 10, nil, nil,
+		"",
 	)
 
 	if result.InfraError == "" {

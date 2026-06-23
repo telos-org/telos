@@ -68,7 +68,7 @@ func NewLocalPlatform(workspace string) *LocalPlatform {
 }
 
 // Run executes a command in the workspace.
-func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, timeout int, interrupt InterruptRequested, onLine OnStdoutLine, cwd ...string) *CommandResult {
+func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, timeout int, interrupt InterruptRequested, onLine OnStdoutLine, cwd string) *CommandResult {
 	result := &CommandResult{StartedAt: time.Now()}
 	started := time.Now()
 
@@ -89,8 +89,8 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = p.Workspace
-	if len(cwd) > 0 && strings.TrimSpace(cwd[0]) != "" {
-		cmd.Dir = cwd[0]
+	if strings.TrimSpace(cwd) != "" {
+		cmd.Dir = cwd
 	}
 	cmd.Env = mergedEnv
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
