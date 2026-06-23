@@ -26,6 +26,8 @@ type PVG struct {
 	Result   *PVGResult
 	Evidence *evidence.Evidence
 	started  time.Time
+
+	costCapUnenforceable bool
 }
 
 // NewPVG creates a new PVG game instance.
@@ -246,6 +248,7 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 
 	turn := p.Executor.ExecuteTurn(task, ts)
 	p.Result.Accumulate(turn.Stats)
+	p.logCostCapUnenforceable(roundNum, role, turn.Stats)
 	p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats, turn.Error)
 
 	AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
@@ -257,6 +260,17 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 		})
 
 	return turn
+}
+
+func (p *PVG) logCostCapUnenforceable(roundNum int, role string, stats TurnStats) {
+	if p.Config.MaxCostUSD == nil || !stats.CostUnavailable || p.costCapUnenforceable {
+		return
+	}
+	p.costCapUnenforceable = true
+	p.Evidence.Log("cost_cap_unenforceable", roundNum, role, map[string]any{
+		"max_cost_usd": *p.Config.MaxCostUSD,
+		"reason":       "provider returned no cost and no pricing configured",
+	})
 }
 
 // turnSkills builds the structured skill roster handed to the executor, mirror

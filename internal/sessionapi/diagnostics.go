@@ -116,6 +116,8 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) (*SessionD
 			}
 			diagnostics.BudgetExceeded[budget]++
 			addDiagnosticsFailure(diagnostics.Failures, spec, "task_budget")
+		case "cost_cap_unenforceable":
+			diagnostics.BudgetExceeded["cost_cap_unenforceable"]++
 		case "agent_failure_recoverable", "game_error", "error":
 			errorCode := stringFromMap(data, "error_code")
 			addDiagnosticsFailure(diagnostics.Failures, spec, ClassifyFailure(firstDiagnosticsNonEmpty(errorCode, stringFromMap(data, "error"))))
