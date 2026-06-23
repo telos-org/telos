@@ -295,7 +295,7 @@ func isChainSpecificError(err error) bool {
 		return false
 	}
 	lower := strings.ToLower(err.Error())
-	for _, needle := range []string{"previous_response_id", "previous response", "response chain", "conversation state", "not found"} {
+	for _, needle := range []string{"previous_response_id", "previous response", "response chain", "conversation state"} {
 		if strings.Contains(lower, needle) {
 			return true
 		}
@@ -344,6 +344,8 @@ func classifyProviderMessage(message string, statusCode int) error {
 		return newExecutorError(errProviderContextLimit, message)
 	case statusCode >= 400:
 		return newExecutorError(errProviderInvalidRequest, message)
+	// Text-only fallback classification is best-effort. Prefer typed/status
+	// provider errors whenever the transport exposes them.
 	case strings.Contains(lower, "rate limit") || strings.Contains(lower, "too many request"):
 		return retryableExecutorError(errProviderRateLimited, message)
 	case strings.Contains(lower, "context length") || strings.Contains(lower, "maximum context"):

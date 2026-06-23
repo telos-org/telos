@@ -2002,6 +2002,53 @@ func TestNativeExecutorFallsBackToStatelessHistoryWhenResponseChainBreaks(t *tes
 	}
 }
 
+func TestNativeExecutorDoesNotFallbackToStatelessHistoryForGenericNotFound(t *testing.T) {
+	t.Setenv("TELOS_MODEL_STATE_MODE", "server_chain")
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		body, _ := io.ReadAll(r.Body)
+		var req map[string]interface{}
+		if err := json.Unmarshal(body, &req); err != nil {
+			t.Fatal(err)
+		}
+		switch requests {
+		case 1:
+			writeResponsesStream(w, `{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		case 2:
+			if req["previous_response_id"] != "resp_1" {
+				t.Fatalf("expected server chain request, got %s", body)
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"model not found"}}`)
+		default:
+			t.Fatalf("generic not found should not fallback to stateless history; request %d: %s", requests, body)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_API_BASE_URL", server.URL)
+	t.Setenv("TELOS_API_KEY", "test-key")
+
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
+
+	if !result.Recoverable {
+		t.Fatalf("expected recoverable provider error, got %+v", result)
+	}
+	if !strings.Contains(result.Error, "provider_invalid_request") {
+		t.Fatalf("error: got %q", result.Error)
+	}
+	if requests != 2 {
+		t.Fatalf("requests: got %d", requests)
+	}
+}
+
 func TestNativeToolsBoundFileReadsAndBinary(t *testing.T) {
 	workspace := t.TempDir()
 	var lines []string
