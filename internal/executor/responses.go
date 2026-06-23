@@ -135,6 +135,7 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 	}
 	t.state.recordResponseID(final.ID)
 	calls := responseToolCalls(final.Output)
+	t.state.recordAssistantMessage(final.OutputText())
 	t.state.recordAssistantToolCalls(calls)
 	stats := t.statsFromResponse(final)
 	_ = t.logger.modelResponse(seq, final.ID, responseStopReason(final), stats)

@@ -1273,6 +1273,9 @@ func TestNativeExecutorCorrectsVerifierInvalidStatusOnce(t *testing.T) {
 			}`)
 		case 2:
 			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "Unsure.") {
+				t.Fatalf("correction request missing prior assistant text: %s", body)
+			}
 			if !strings.Contains(string(body), "CONTINUE") || !strings.Contains(string(body), "CONCEDE") {
 				t.Fatalf("correction request missing valid status guidance: %s", body)
 			}
@@ -1298,6 +1301,55 @@ func TestNativeExecutorCorrectsVerifierInvalidStatusOnce(t *testing.T) {
 	}
 	if result.Status != game.StatusConcede {
 		t.Fatalf("status: got %s logs=%q", result.Status, result.Logs)
+	}
+	if requests != 2 {
+		t.Fatalf("requests: got %d", requests)
+	}
+}
+
+func TestNativeExecutorStatelessHistoryReplaysAssistantText(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			writeResponsesStream(w, `{
+				"id":"resp_1","status":"completed",
+				"output":[
+					{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will write the answer file first."}]},
+					{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}
+				],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		case 2:
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "I will write the answer file first.") {
+				t.Fatalf("second request missing prior assistant text: %s", body)
+			}
+			if !strings.Contains(string(body), "function_call") || !strings.Contains(string(body), "function_call_output") {
+				t.Fatalf("second request missing function call history: %s", body)
+			}
+			writeResponsesStream(w, `{
+				"id":"resp_2","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>wrote answer</progress_update>"}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_API_BASE_URL", server.URL)
+	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_MODEL_STATE_MODE", "stateless_history")
+
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
+
+	if result.Error != "" {
+		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
 	}
 	if requests != 2 {
 		t.Fatalf("requests: got %d", requests)

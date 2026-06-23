@@ -1,6 +1,10 @@
 package executor
 
-import "github.com/openai/openai-go/responses"
+import (
+	"strings"
+
+	"github.com/openai/openai-go/responses"
+)
 
 const (
 	conversationStateServerChain      = "server_chain"
@@ -63,6 +67,13 @@ func (s *conversationState) recordCorrection(prompt string) {
 	item := responses.ResponseInputItemParamOfMessage(prompt, responses.EasyInputMessageRoleUser)
 	s.input = responses.ResponseInputParam{item}
 	s.history = append(s.history, item)
+}
+
+func (s *conversationState) recordAssistantMessage(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	s.history = append(s.history, responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleAssistant))
 }
 
 func (s *conversationState) recordAssistantToolCalls(calls []nativeToolCall) {
