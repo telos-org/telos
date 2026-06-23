@@ -643,7 +643,7 @@ func TestNativeSessionLoggerSchemaGolden(t *testing.T) {
 	}
 }
 
-func TestNativeSessionLoggerRedactsSensitiveToolArguments(t *testing.T) {
+func TestNativeSessionLoggerLogsToolArgumentsVerbatim(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	logger := newNativeSessionLogger(path, dir)
@@ -651,16 +651,17 @@ func TestNativeSessionLoggerRedactsSensitiveToolArguments(t *testing.T) {
 	if err := logger.start(); err != nil {
 		t.Fatal(err)
 	}
-	if err := logger.toolCall(nativeToolCall{
-		ID:   "call_secret",
-		Name: "bash",
-		Arguments: `{
+	rawArgs := `{
 			"command":"echo ok",
 			"max_tokens":4,
 			"api_key":"sk-test",
 			"env":{"TOKEN":"secret-token","SAFE":"visible"},
 			"headers":{"Authorization":"Bearer secret"}
-		}`,
+		}`
+	if err := logger.toolCall(nativeToolCall{
+		ID:        "call_secret",
+		Name:      "bash",
+		Arguments: rawArgs,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -669,16 +670,8 @@ func TestNativeSessionLoggerRedactsSensitiveToolArguments(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("tool_call events: %#v", events)
 	}
-	args, _ := events[0]["arguments"].(string)
-	for _, leaked := range []string{"sk-test", "secret-token", "Bearer secret"} {
-		if strings.Contains(args, leaked) {
-			t.Fatalf("arguments leaked %q: %s", leaked, args)
-		}
-	}
-	for _, want := range []string{`"api_key":"[REDACTED]"`, `"TOKEN":"[REDACTED]"`, `"Authorization":"[REDACTED]"`, `"SAFE":"visible"`, `"max_tokens":4`} {
-		if !strings.Contains(args, want) {
-			t.Fatalf("arguments missing %q: %s", want, args)
-		}
+	if got, _ := events[0]["arguments"].(string); got != rawArgs {
+		t.Fatalf("arguments should be logged verbatim\nwant: %q\n got: %q", rawArgs, got)
 	}
 }
 

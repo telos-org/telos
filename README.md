@@ -78,6 +78,8 @@ still resolve against the workspace for convenience and out-of-workspace access
 is logged for telemetry, but neither is a trust boundary — `bash` and absolute
 paths bypass both by design. Do not run the native executor on a host with
 secrets or state you cannot afford to expose to the agent.
+Session logs record tool arguments and outputs verbatim and may contain the same
+secrets as the workspace; store and handle them at the workspace trust level.
 
 ### Budgets, knobs, and precedence
 

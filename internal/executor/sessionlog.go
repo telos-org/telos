@@ -203,81 +203,16 @@ func (l *nativeSessionLogger) modelResponse(sequence int, responseID, stopReason
 	}))
 }
 
+// toolCall records tool arguments verbatim. The session log also records tool
+// outputs verbatim, so session.jsonl may contain workspace secrets and must be
+// handled at the same trust level as the workspace itself; see tools.go for the
+// native executor security model.
 func (l *nativeSessionLogger) toolCall(call nativeToolCall) error {
 	return l.event(agentsession.KindToolCall, agentsession.MarshalPayload(&agentsession.ToolCallPayload{
 		ToolCallID: call.ID,
 		ToolName:   call.Name,
-		Arguments:  redactToolArguments(call.Arguments),
+		Arguments:  call.Arguments,
 	}))
-}
-
-func redactToolArguments(raw string) string {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return ""
-	}
-	var value any
-	dec := json.NewDecoder(strings.NewReader(raw))
-	dec.UseNumber()
-	if err := dec.Decode(&value); err != nil {
-		if containsSensitiveArgumentKey(raw) {
-			return "[REDACTED: non-JSON tool arguments contained sensitive key]"
-		}
-		return raw
-	}
-	value = redactArgumentValue(value)
-	data, err := json.Marshal(value)
-	if err != nil {
-		return "[REDACTED: unmarshalable tool arguments]"
-	}
-	return string(data)
-}
-
-func redactArgumentValue(value any) any {
-	switch v := value.(type) {
-	case map[string]any:
-		out := make(map[string]any, len(v))
-		for key, child := range v {
-			if sensitiveArgumentKey(key) {
-				out[key] = "[REDACTED]"
-				continue
-			}
-			out[key] = redactArgumentValue(child)
-		}
-		return out
-	case []any:
-		out := make([]any, len(v))
-		for i, child := range v {
-			out[i] = redactArgumentValue(child)
-		}
-		return out
-	default:
-		return value
-	}
-}
-
-func sensitiveArgumentKey(key string) bool {
-	normalized := strings.ToLower(strings.NewReplacer("-", "_", ".", "_", " ", "_").Replace(strings.TrimSpace(key)))
-	switch normalized {
-	case "api_key", "apikey", "access_token", "refresh_token", "id_token", "auth_token", "token", "password", "passwd", "secret", "credential", "credentials", "authorization", "private_key", "client_secret", "bearer_token":
-		return true
-	default:
-		return strings.HasSuffix(normalized, "_password") ||
-			strings.HasSuffix(normalized, "_secret") ||
-			strings.HasSuffix(normalized, "_credential") ||
-			strings.HasSuffix(normalized, "_credentials") ||
-			strings.HasSuffix(normalized, "_private_key")
-	}
-}
-
-func containsSensitiveArgumentKey(text string) bool {
-	lower := strings.ToLower(text)
-	for _, marker := range []string{"api_key", "apikey", "access_token", "refresh_token", "auth_token", "password", "passwd", "secret", "credential", "authorization", "private_key", "client_secret", "bearer_token"} {
-		if strings.Contains(lower, marker) {
-			return true
-		}
-	}
-	return false
 }
 
 func (l *nativeSessionLogger) retry(sequence int, attempt int, delay time.Duration, err *executorError) error {
