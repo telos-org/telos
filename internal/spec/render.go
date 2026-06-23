@@ -419,6 +419,7 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		"- Write concise Markdown; blocking findings first",
 		"- During the turn, emit concise <progress_update>...</progress_update> entries when useful for a background observer, without spamming routine tool activity",
 		"- End every turn with one final <progress_update>what you found or why you concede</progress_update>",
+		"- When you continue, emit exactly one <findings>...</findings> block above the status tag listing the blocking findings, one per line as `severity | description` where severity is `blocker` or `warn`",
 		"- The final non-empty line must be exactly one status tag",
 		"- <status>CONTINUE</status> if you found a concrete goal violation",
 	}

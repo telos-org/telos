@@ -129,8 +129,17 @@ func (p *PVG) updateObjectiveLedger(roundNum int, role string, turn TurnResult, 
 		}
 		ledger.OpenFindings = nil
 	case ObjectiveStateRepair:
-		// The verifier wants changes; record the findings to repair.
-		findings := extractFindings(turn.Logs)
+		// The verifier wants changes; record the findings to repair. Prefer the
+		// structured pvg <findings> block, then the review CSV (score-driven), and
+		// fall back to the legacy keyword scan only when neither structured block
+		// is present.
+		findings, ok := findingsBlockFindings(turn.Logs)
+		if !ok {
+			findings, ok = reviewFindings(turn.Logs)
+		}
+		if !ok {
+			findings = extractFindings(turn.Logs)
+		}
 		if len(findings) > 0 {
 			ledger.OpenFindings = findings
 		}

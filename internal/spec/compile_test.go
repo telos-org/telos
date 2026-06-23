@@ -384,6 +384,9 @@ func TestRenderVerifierTask(t *testing.T) {
 	if !strings.Contains(task, "Check something.") {
 		t.Error("should contain spec body")
 	}
+	if !strings.Contains(task, "<findings>") {
+		t.Error("pvg verifier output contract should request a structured <findings> block")
+	}
 }
 
 func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {

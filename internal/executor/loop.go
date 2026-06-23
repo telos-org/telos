@@ -31,25 +31,24 @@ var (
 	reviewBlockRE   = regexp.MustCompile(`(?is)<review\b[^>]*>.*?</review>`)
 	summaryBlockRE  = regexp.MustCompile(`(?is)<summary\b[^>]*>.*?</summary>`)
 	progressBlockRE = regexp.MustCompile(`(?is)<progress_update\b[^>]*>.*?</progress_update>`)
+	findingsBlockRE = regexp.MustCompile(`(?is)<findings\b[^>]*>.*?</findings>`)
 )
 
 func countBlocks(re *regexp.Regexp, text string) int {
 	return len(re.FindAllString(text, -1))
 }
 
-// formattingCorrectionKeys are recoverable response-shape errors worth more
-// than one retry; the model usually fixes them once it sees a diagnostic count.
-// Scoped to the prover progress-update and verifier review-block paths, which
-// are the tag shapes weaker models most often get wrong on the first reply.
-var formattingCorrectionKeys = map[string]bool{
-	"missing_progress_update":   true,
-	"malformed_progress_update": true,
-	"malformed_review_blocks":   true,
-}
-
-func maxProtocolCorrections(key string) int {
-	if formattingCorrectionKeys[key] {
-		return maxFormattingCorrections
+// maxProtocolCorrections returns the per-key retry budget by looking the key up
+// in the rule table for (role, protocolMode). Each rule owns its own budget, so
+// the formatting keys that warrant more than one nudge (prover progress-update,
+// verifier review-block) carry maxFormattingCorrections directly. Keys with no
+// matching rule — including empty_final and the missing-rubric concession nudge —
+// get a single correction.
+func maxProtocolCorrections(role, protocolMode, key string) int {
+	for _, rule := range protocolRulesFor(role, protocolMode) {
+		if rule.key == key {
+			return rule.retries
+		}
 	}
 	return 1
 }
@@ -107,29 +106,135 @@ type agentLoop struct {
 	keepReasoning  bool
 }
 
-type roleLoopPolicy struct {
-	requireStatus          bool
-	requireProgressUpdate  bool
-	requireReviewBlocks    bool
-	requireToolForArtifact bool
+// policyKey identifies a rule set by role and protocol mode.
+type policyKey struct {
+	role string
+	mode string
 }
 
-func loopPolicy(role, protocolMode string) roleLoopPolicy {
+// ruleContext carries everything a rule's check may consult. Passing a struct
+// keeps the check/message signatures stable as new inputs appear.
+type ruleContext struct {
+	text           string // trimmed assistant text
+	usedTool       bool
+	strict         bool
+	toolsAvailable bool
+}
+
+// protocolRule is one enforcement rule for a (role, mode). check reports whether
+// the rule is violated (a correction is needed); message renders the correction
+// prompt (interpolating observed counts where relevant); retries is the per-key
+// correction budget.
+type protocolRule struct {
+	key     string
+	check   func(ruleContext) bool
+	message func(ruleContext) string
+	retries int
+}
+
+// Per-(role, mode) rule sets. Order is significant: the first violated rule
+// wins, reproducing the precedence of the prior nested if-checks (shape rules
+// before the prover no-tool nudge). empty_final is handled as an unconditional
+// pre-check in protocolCorrectionForStrict, so it is not listed here.
+var (
+	requireStatusRule = protocolRule{
+		key:     "missing_status",
+		check:   func(c ruleContext) bool { return !hasStatusTag(c.text) },
+		message: func(ruleContext) string { return missingStatusMessage },
+		retries: 1,
+	}
+
+	requireReviewBlocksRule = protocolRule{
+		key: "malformed_review_blocks",
+		check: func(c ruleContext) bool {
+			return countBlocks(reviewBlockRE, c.text) != 1 || countBlocks(summaryBlockRE, c.text) != 1
+		},
+		message: func(c ruleContext) string {
+			return fmt.Sprintf(malformedReviewBlocksMessage, countBlocks(reviewBlockRE, c.text), countBlocks(summaryBlockRE, c.text))
+		},
+		retries: maxFormattingCorrections,
+	}
+
+	// requireFindingsRule enforces the pvg-mode verifier <findings> contract so a
+	// continuing verifier emits structured findings (a single block) rather than
+	// prose the ledger has to keyword-scrape. Scoped to CONTINUE turns: that is
+	// where the objective ledger consumes findings (the repair state), and a
+	// concession has nothing to list. Ordered after the status rule so an
+	// invalid/missing terminator is corrected first; once the status rule passes
+	// the terminator is a valid CONTINUE or CONCEDE.
+	requireFindingsRule = protocolRule{
+		key:   "malformed_findings_block",
+		check: func(c ruleContext) bool { return statusIsContinue(c.text) && countBlocks(findingsBlockRE, c.text) != 1 },
+		message: func(c ruleContext) string {
+			return fmt.Sprintf(malformedFindingsMessage, countBlocks(findingsBlockRE, c.text))
+		},
+		retries: maxFormattingCorrections,
+	}
+
+	// The progress-update rules are mutually exclusive on strict so at most one
+	// fires: strict requires exactly one block (malformed otherwise); lenient
+	// only requires at least one (missing otherwise). Split into two rules to
+	// preserve the two distinct correction keys callers and metrics depend on.
+	proverProgressStrictRule = protocolRule{
+		key:   "malformed_progress_update",
+		check: func(c ruleContext) bool { return c.strict && countBlocks(progressBlockRE, c.text) != 1 },
+		message: func(c ruleContext) string {
+			return fmt.Sprintf(malformedProgressMessage, countBlocks(progressBlockRE, c.text))
+		},
+		retries: maxFormattingCorrections,
+	}
+
+	proverProgressLenientRule = protocolRule{
+		key:     "missing_progress_update",
+		check:   func(c ruleContext) bool { return !c.strict && countBlocks(progressBlockRE, c.text) < 1 },
+		message: func(ruleContext) string { return missingProgressMessage },
+		retries: maxFormattingCorrections,
+	}
+
+	// requireToolForProverFinalRule nudges a prover final that used no tool. This
+	// replaces the old artifactOriented(task) keyword heuristic: the nudge now
+	// fires regardless of task wording, so a prover final with no tool use always
+	// gets one recoverable correction. Only reached when the progress-update
+	// rules pass (first-match-wins order), matching the prior nested placement.
+	requireToolForProverFinalRule = protocolRule{
+		key:     "no_tool_for_artifact_task",
+		check:   func(c ruleContext) bool { return c.toolsAvailable && !c.usedTool },
+		message: func(ruleContext) string { return noToolForArtifactMessage },
+		retries: 1,
+	}
+
+	proverRules = []protocolRule{proverProgressStrictRule, proverProgressLenientRule, requireToolForProverFinalRule}
+
+	protocolPolicies = map[policyKey][]protocolRule{
+		{game.RoleVerifier, game.ProtocolModePVG}:    {requireStatusRule, requireFindingsRule},
+		{game.RoleVerifier, game.ProtocolModeReview}: {requireReviewBlocksRule},
+		{game.RoleProver, game.ProtocolModePVG}:      proverRules,
+	}
+)
+
+const (
+	emptyFinalMessage            = "Your previous response had no visible result. Use the available tools to carry out the assignment, then reply with a visible final answer that follows this turn's required output tags."
+	missingStatusMessage         = "Your previous response was missing the required final <status>...</status> tag. Reply with a concise final verifier result and include exactly one final <status>CONTINUE</status> or <status>CONCEDE</status> tag."
+	malformedProgressMessage     = "Your previous response must contain exactly one <progress_update>...</progress_update> block, but it had %d. Reply with a concise final implementation summary and exactly one progress_update block; do not write the tag name anywhere else."
+	missingProgressMessage       = "Your previous response was missing the required <progress_update>...</progress_update> block. Reply with a concise final implementation summary and include exactly one <progress_update> block."
+	noToolForArtifactMessage     = "This turn appears to require inspecting or changing workspace artifacts, but no tool was used. Inspect or update the workspace with tools before finalizing, then include the required <progress_update> block."
+	malformedReviewBlocksMessage = "Your previous review-mode response must contain exactly one <review>...</review> block and exactly one <summary>...</summary> block, but it had %d review and %d summary block(s). Put the CSV rubric inside a single <review> tag and your notes inside a single <summary> tag, and do not write either tag name anywhere else (including examples or narration)."
+	malformedFindingsMessage     = "Your previous response must contain exactly one <findings>...</findings> block, but it had %d. List blocking findings inside a single <findings> tag, one per line as `severity | description`, using an empty <findings></findings> block if you have none; do not write the tag name anywhere else."
+)
+
+// protocolRulesFor selects the rule set for a role/mode. Mode is normalized so
+// unknown or empty modes preserve the legacy switch behavior: the verifier
+// defaults to the pvg (status) contract, and the prover ignores mode entirely.
+func protocolRulesFor(role, protocolMode string) []protocolRule {
 	switch role {
 	case game.RoleVerifier:
-		reviewMode := protocolMode == game.ProtocolModeReview
-		return roleLoopPolicy{
-			requireStatus:       !reviewMode,
-			requireReviewBlocks: reviewMode,
+		if protocolMode != game.ProtocolModeReview {
+			protocolMode = game.ProtocolModePVG
 		}
 	case game.RoleProver:
-		return roleLoopPolicy{
-			requireProgressUpdate:  true,
-			requireToolForArtifact: true,
-		}
-	default:
-		return roleLoopPolicy{}
+		protocolMode = game.ProtocolModePVG
 	}
+	return protocolPolicies[policyKey{role, protocolMode}]
 }
 
 func newAgentLoop(httpClient *http.Client, cfg nativeProviderConfig, thinking string, tools *nativeTools, logger *nativeSessionLogger, task, role, protocolMode string, budget game.TurnBudget, knobs envKnobs) *agentLoop {
@@ -183,7 +288,7 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 			if prompt == "" {
 				return turn.text, stats, nil
 			}
-			if corrections[key] < maxProtocolCorrections(key) && i+1 < maxLoops {
+			if corrections[key] < maxProtocolCorrections(l.role, l.protocolMode, key) && i+1 < maxLoops {
 				corrections[key]++
 				_ = l.logger.protocolCorrection(key, prompt)
 				l.client.recordCorrection(prompt)
@@ -243,34 +348,26 @@ func protocolCorrectionFor(role, protocolMode, task, text string, usedTool bool)
 	return protocolCorrectionForStrict(role, protocolMode, task, text, usedTool, false, true)
 }
 
+// protocolCorrectionForStrict validates a final assistant turn against the rule
+// table for (role, protocolMode). Empty output is always a correction; otherwise
+// the first violated rule for the role/mode wins. task is retained in the
+// signature for callers and future task-aware rules, though no current rule
+// reads it. The returned (message, key) drive the correction prompt and the
+// per-key retry budget.
 func protocolCorrectionForStrict(role, protocolMode, task, text string, usedTool bool, strict bool, toolsAvailable bool) (string, string) {
-	trimmed := strings.TrimSpace(text)
-	policy := loopPolicy(role, protocolMode)
-	if trimmed == "" {
-		return "Your previous response had no visible result. Use the available tools to carry out the assignment, then reply with a visible final answer that follows this turn's required output tags.", "empty_final"
+	_ = task
+	ctx := ruleContext{
+		text:           strings.TrimSpace(text),
+		usedTool:       usedTool,
+		strict:         strict,
+		toolsAvailable: toolsAvailable,
 	}
-	if policy.requireStatus {
-		if !hasStatusTag(trimmed) {
-			return "Your previous response was missing the required final <status>...</status> tag. Reply with a concise final verifier result and include exactly one final <status>CONTINUE</status> or <status>CONCEDE</status> tag.", "missing_status"
-		}
+	if ctx.text == "" {
+		return emptyFinalMessage, "empty_final"
 	}
-	if policy.requireProgressUpdate {
-		progress := countBlocks(progressBlockRE, trimmed)
-		if strict && progress != 1 {
-			return fmt.Sprintf("Your previous response must contain exactly one <progress_update>...</progress_update> block, but it had %d. Reply with a concise final implementation summary and exactly one progress_update block; do not write the tag name anywhere else.", progress), "malformed_progress_update"
-		}
-		if !strict && progress < 1 {
-			return "Your previous response was missing the required <progress_update>...</progress_update> block. Reply with a concise final implementation summary and include exactly one <progress_update> block.", "missing_progress_update"
-		}
-		if toolsAvailable && policy.requireToolForArtifact && !usedTool && artifactOriented(task) {
-			return "This turn appears to require inspecting or changing workspace artifacts, but no tool was used. Inspect or update the workspace with tools before finalizing, then include the required <progress_update> block.", "no_tool_for_artifact_task"
-		}
-	}
-	if policy.requireReviewBlocks {
-		reviews := countBlocks(reviewBlockRE, trimmed)
-		summaries := countBlocks(summaryBlockRE, trimmed)
-		if reviews != 1 || summaries != 1 {
-			return fmt.Sprintf("Your previous review-mode response must contain exactly one <review>...</review> block and exactly one <summary>...</summary> block, but it had %d review and %d summary block(s). Put the CSV rubric inside a single <review> tag and your notes inside a single <summary> tag, and do not write either tag name anywhere else (including examples or narration).", reviews, summaries), "malformed_review_blocks"
+	for _, rule := range protocolRulesFor(role, protocolMode) {
+		if rule.check(ctx) {
+			return rule.message(ctx), rule.key
 		}
 	}
 	return "", ""
@@ -296,6 +393,11 @@ func hasExactTag(text, tag string) bool {
 	return strings.Count(text, "<"+tag+">") == 1 && strings.Count(text, "</"+tag+">") == 1
 }
 
+func statusIsContinue(text string) bool {
+	value, ok := tagValue(text, "status")
+	return ok && strings.EqualFold(strings.TrimSpace(value), string(game.StatusContinue))
+}
+
 func verifierConcedes(text string) bool {
 	if !hasStatusTag(text) {
 		return false
@@ -316,18 +418,6 @@ func tagValue(text, tag string) (string, bool) {
 		return "", false
 	}
 	return text[start+len(open) : start+len(open)+end], true
-}
-
-func artifactOriented(task string) bool {
-	// TODO(task-h): replace this keyword heuristic with an explicit protocol
-	// rule; see docs/plans/HANDOFF-F-A3-H.md.
-	lower := strings.ToLower(task)
-	for _, word := range []string{"file", "workspace", "code", "edit", "write", "create", "change", "fix", "test", "implement", "patch", "diff"} {
-		if strings.Contains(lower, word) {
-			return true
-		}
-	}
-	return false
 }
 
 func nativeSystemPrompt(role string) string {

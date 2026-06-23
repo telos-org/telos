@@ -162,7 +162,7 @@ func TestNativeExecutorCapsRequestOutputTokensToRemainingBudget(t *testing.T) {
 		}
 		writeResponsesStream(w, `{
 			"id":"resp_1","status":"completed",
-			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>reported</progress_update>\n"}]}],
+			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<findings>blocker | needs error handling</findings>\n<status>CONTINUE</status>\n"}]}],
 			"usage":{"input_tokens":2,"output_tokens":4,"input_tokens_details":{"cached_tokens":0}}
 		}`)
 	}))
@@ -173,7 +173,7 @@ func TestNativeExecutorCapsRequestOutputTokensToRemainingBudget(t *testing.T) {
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	ts := &game.TurnState{
-		Role: "prover",
+		Role: "verifier",
 		Dir:  filepath.Join(workspace, ".turn"),
 		Budget: game.TurnBudget{
 			MaxOutputTokens:       20,
@@ -313,7 +313,7 @@ func TestNativeExecutorUsesLiteLLMResponseCostHeader(t *testing.T) {
 		w.Header().Set("x-litellm-response-cost", "0.0123")
 		writeResponsesStream(w, `{
 			"id":"resp_cost","status":"completed",
-			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n\n<progress_update>No workspace changes needed.</progress_update>"}]}],
+			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n\n<findings>blocker | needs error handling</findings>\n<status>CONTINUE</status>"}]}],
 			"usage":{"input_tokens":31,"output_tokens":9,"input_tokens_details":{"cached_tokens":4}}
 		}`)
 	}))
@@ -323,7 +323,7 @@ func TestNativeExecutorUsesLiteLLMResponseCostHeader(t *testing.T) {
 	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
 	p := platform.NewLocalPlatform(workspace)
 	exec := NewNativeExecutor(p, "test/test-model", "high", 0)
-	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
+	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
 
 	result := exec.ExecuteTurn("Report current state.", ts)
 	if result.Status != game.StatusContinue {
@@ -346,7 +346,7 @@ func TestNativeExecutorUsesLiteLLMResponseBodyCost(t *testing.T) {
 		writeResponsesStream(w, `{
 			"id":"resp_cost","status":"completed",
 			"response_cost":0.0456,
-			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n\n<progress_update>No workspace changes needed.</progress_update>"}]}],
+			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n\n<findings>blocker | needs error handling</findings>\n<status>CONTINUE</status>"}]}],
 			"usage":{"input_tokens":31,"output_tokens":9,"input_tokens_details":{"cached_tokens":4}}
 		}`)
 	}))
@@ -356,7 +356,7 @@ func TestNativeExecutorUsesLiteLLMResponseBodyCost(t *testing.T) {
 	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
 	t.Setenv("TELOS_MODEL_PRICING_TABLE", `{"test/test-model":{"input_usd_per_1m_tokens":100,"output_usd_per_1m_tokens":100}}`)
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
+	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
 
 	result := exec.ExecuteTurn("Report current state.", ts)
 	if result.Error != "" {
@@ -996,6 +996,7 @@ func TestEffectiveMaxOutputTokensPrecedence(t *testing.T) {
 
 func TestNativeExecutorSendsHarnessInstructionsAndReasoning(t *testing.T) {
 	workspace := t.TempDir()
+	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
@@ -1017,8 +1018,19 @@ func TestNativeExecutorSendsHarnessInstructionsAndReasoning(t *testing.T) {
 				t.Fatalf("instructions missing %q:\n%s", want, instructions)
 			}
 		}
+		requests++
+		if requests == 1 {
+			// A prover final with no tool use now draws a recoverable nudge, so the
+			// prover uses a tool before finalizing.
+			writeResponsesStream(w, `{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"industry.py\",\"content\":\"print('hi')\\n\"}"}],
+				"usage":{"input_tokens":17,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+			return
+		}
 		writeResponsesStream(w, `{
-			"id":"resp_1","status":"completed",
+			"id":"resp_2","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>created industry.py</progress_update>\n<status>CONCEDE</status>\n"}]}],
 			"usage":{"input_tokens":17,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
 		}`)
@@ -1147,7 +1159,7 @@ func TestNativeExecutorNudgesEmptyFinalOnce(t *testing.T) {
 		}
 		writeResponsesStream(w, `{
 			"id":"resp_2","status":"completed",
-			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>summarized workspace</progress_update>\n<status>CONCEDE</status>\n"}]}],
+			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looks good.\n<status>CONCEDE</status>\n"}]}],
 			"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
 		}`)
 	}))
@@ -1157,7 +1169,7 @@ func TestNativeExecutorNudgesEmptyFinalOnce(t *testing.T) {
 	t.Setenv("TELOS_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
+	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
 	result := exec.ExecuteTurn("Say hello.", ts)
 
 	if result.Error != "" {
@@ -1178,18 +1190,30 @@ func TestNativeExecutorStrictProtocolRejectsMalformedProgressUpdate(t *testing.T
 		requests++
 		switch requests {
 		case 1:
+			// Use a tool up front so the prover final is not separately nudged for
+			// finalizing without any tool use; this turn exercises strict progress.
 			writeResponsesStream(w, `{
 				"id":"resp_1","status":"completed",
-				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>first</progress_update>\n<progress_update>second</progress_update>"}]}],
+				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
 			}`)
 		case 2:
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "function_call_output") {
+				t.Fatalf("second request should carry the tool result: %s", body)
+			}
+			writeResponsesStream(w, `{
+				"id":"resp_2","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>first</progress_update>\n<progress_update>second</progress_update>"}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		case 3:
 			body, _ := io.ReadAll(r.Body)
 			if !strings.Contains(string(body), "exactly one") || !strings.Contains(string(body), "progress_update") {
 				t.Fatalf("correction request missing strict progress guidance: %s", body)
 			}
 			writeResponsesStream(w, `{
-				"id":"resp_2","status":"completed",
+				"id":"resp_3","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>reported</progress_update>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
 			}`)
@@ -1209,7 +1233,7 @@ func TestNativeExecutorStrictProtocolRejectsMalformedProgressUpdate(t *testing.T
 	if result.Error != "" {
 		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
 	}
-	if requests != 2 {
+	if requests != 3 {
 		t.Fatalf("requests: got %d", requests)
 	}
 }
@@ -1536,6 +1560,85 @@ func TestProtocolCorrectionReviewAndProgressTolerance(t *testing.T) {
 				t.Fatalf("key: got %q want %q", key, tc.wantKey)
 			}
 		})
+	}
+}
+
+// TestProverNoToolFinalNudgedRegardlessOfTaskWording pins the table-driven
+// behavior change from task H: a prover final that used no tool draws one
+// recoverable nudge regardless of task wording (the old artifactOriented keyword
+// heuristic is gone), but only when tools are available and a tool was not used.
+func TestProverNoToolFinalNudgedRegardlessOfTaskWording(t *testing.T) {
+	const validProgress = "Done.\n<progress_update>summarized</progress_update>"
+	cases := []struct {
+		name           string
+		task           string
+		usedTool       bool
+		toolsAvailable bool
+		wantKey        string
+	}{
+		{name: "no tool, non-artifact task still nudges", task: "Say hello.", usedTool: false, toolsAvailable: true, wantKey: "no_tool_for_artifact_task"},
+		{name: "no tool, artifact task nudges", task: "Edit the workspace files.", usedTool: false, toolsAvailable: true, wantKey: "no_tool_for_artifact_task"},
+		{name: "tool used, no nudge", task: "Say hello.", usedTool: true, toolsAvailable: true, wantKey: ""},
+		{name: "tools unavailable, no nudge", task: "Say hello.", usedTool: false, toolsAvailable: false, wantKey: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, key := protocolCorrectionForStrict(game.RoleProver, game.ProtocolModePVG, tc.task, validProgress, tc.usedTool, false, tc.toolsAvailable)
+			if key != tc.wantKey {
+				t.Fatalf("key: got %q want %q", key, tc.wantKey)
+			}
+		})
+	}
+}
+
+// TestVerifierFindingsRuleScopedToContinue pins the A.3 Step 2 contract: a
+// continuing pvg verifier must emit exactly one <findings> block, while a
+// conceding verifier needs none (findings only feed the ledger repair state).
+func TestVerifierFindingsRuleScopedToContinue(t *testing.T) {
+	cases := []struct {
+		name    string
+		text    string
+		wantKey string
+	}{
+		{name: "continue without findings is nudged", text: "Found a bug.\n<status>CONTINUE</status>", wantKey: "malformed_findings_block"},
+		{name: "continue with findings passes", text: "Found a bug.\n<findings>blocker | bug</findings>\n<status>CONTINUE</status>", wantKey: ""},
+		{name: "continue with duplicate findings is nudged", text: "x\n<findings>a</findings>\n<findings>b</findings>\n<status>CONTINUE</status>", wantKey: "malformed_findings_block"},
+		{name: "concede needs no findings", text: "All good.\n<status>CONCEDE</status>", wantKey: ""},
+		{name: "missing status corrected before findings", text: "No terminator here.", wantKey: "missing_status"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, key := protocolCorrectionForStrict(game.RoleVerifier, game.ProtocolModePVG, "Verify workspace.", tc.text, true, false, true)
+			if key != tc.wantKey {
+				t.Fatalf("key: got %q want %q", key, tc.wantKey)
+			}
+		})
+	}
+}
+
+// TestMaxProtocolCorrectionsReadsRuleTable confirms the per-key retry budget is
+// sourced from the rule table: formatting keys get the larger budget, while
+// semantic and untabled keys (empty_final, missing-rubric nudge) get one.
+func TestMaxProtocolCorrectionsReadsRuleTable(t *testing.T) {
+	cases := []struct {
+		role string
+		mode string
+		key  string
+		want int
+	}{
+		{game.RoleProver, game.ProtocolModePVG, "malformed_progress_update", maxFormattingCorrections},
+		{game.RoleProver, game.ProtocolModePVG, "missing_progress_update", maxFormattingCorrections},
+		{game.RoleProver, game.ProtocolModePVG, "no_tool_for_artifact_task", 1},
+		{game.RoleVerifier, game.ProtocolModeReview, "malformed_review_blocks", maxFormattingCorrections},
+		{game.RoleVerifier, game.ProtocolModePVG, "malformed_findings_block", maxFormattingCorrections},
+		{game.RoleVerifier, game.ProtocolModePVG, "missing_status", 1},
+		{game.RoleProver, game.ProtocolModePVG, "empty_final", 1},
+		{game.RoleVerifier, game.ProtocolModePVG, "missing_required_skill_rubric", 1},
+	}
+	for _, tc := range cases {
+		if got := maxProtocolCorrections(tc.role, tc.mode, tc.key); got != tc.want {
+			t.Fatalf("maxProtocolCorrections(%s, %s, %s): got %d want %d", tc.role, tc.mode, tc.key, got, tc.want)
+		}
 	}
 }
 
@@ -1875,7 +1978,7 @@ func TestNativeExecutorRetriesTransientProviderError(t *testing.T) {
 				}
 				writeResponsesStream(w, `{
 					"id":"resp_1","status":"completed",
-					"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>retried</progress_update>\n"}]}],
+					"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<findings>blocker | needs error handling</findings>\n<status>CONTINUE</status>\n"}]}],
 					"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
 				}`)
 			}))
@@ -1885,7 +1988,7 @@ func TestNativeExecutorRetriesTransientProviderError(t *testing.T) {
 			t.Setenv("TELOS_API_KEY", "test-key")
 
 			exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
-			ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
+			ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
 			result := exec.ExecuteTurn("Say hello.", ts)
 
 			if result.Error != "" {
