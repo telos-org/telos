@@ -428,11 +428,11 @@ func (t *nativeTools) execute(ctx context.Context, call nativeToolCall) nativeTo
 			out.errorCode = classifyToolError(err)
 		}
 		result := nativeToolResult{
-			CallID:    call.ID,
-			Name:      call.Name,
-			Output:    renderToolOutput(call.Name, false, durationMS, out),
-			IsError:   true,
-			ErrorCode: out.errorCode,
+			CallID:     call.ID,
+			Name:       call.Name,
+			Output:     renderToolOutput(call.Name, false, durationMS, out),
+			IsError:    true,
+			ErrorCode:  out.errorCode,
 			DurationMS: durationMS,
 		}
 		applyToolOutput(&result, out)
@@ -941,7 +941,7 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (toolOutput, error
 	out, truncatedBytes := truncateText(out, t.limit.MaxBytes)
 	truncated := len(matches) >= maxMatches || truncatedBytes
 	return toolOutput{
-		fields: toolFields("match_count", len(matches), "truncated", truncated),
+		fields:    toolFields("match_count", len(matches), "truncated", truncated),
 		bodies:    []toolBodySection{{Key: "matches", Text: out}},
 		truncated: truncated,
 	}, nil
@@ -992,7 +992,7 @@ func (t *nativeTools) find(pattern, p string, maxMatches int) (toolOutput, error
 	pathsText, truncatedBytes := truncateText(strings.Join(matches, "\n"), t.limit.MaxBytes)
 	truncated := len(matches) >= maxMatches || truncatedBytes
 	return toolOutput{
-		fields: toolFields("match_count", len(matches), "truncated", truncated),
+		fields:    toolFields("match_count", len(matches), "truncated", truncated),
 		bodies:    []toolBodySection{{Key: "paths", Text: pathsText}},
 		truncated: truncated,
 	}, nil

@@ -55,7 +55,7 @@ type Message struct {
 	Model        string    `json:"model,omitempty"`
 	StopReason   string    `json:"stopReason,omitempty"`
 	Content      []Content `json:"content,omitempty"`
-	Usage        *Usage     `json:"usage,omitempty"`
+	Usage        *Usage    `json:"usage,omitempty"`
 	ToolCallID   string    `json:"toolCallId,omitempty"`
 	ToolName     string    `json:"toolName,omitempty"`
 	IsError      bool      `json:"isError,omitempty"`
@@ -68,12 +68,12 @@ type Content struct {
 }
 
 type Usage struct {
-	Input           int     `json:"input"`
-	Output          int     `json:"output"`
-	CacheRead       int     `json:"cacheRead"`
-	CacheWrite      int     `json:"cacheWrite"`
-	CostUnavailable bool    `json:"costUnavailable,omitempty"`
-	Cost            *Cost   `json:"cost,omitempty"`
+	Input           int   `json:"input"`
+	Output          int   `json:"output"`
+	CacheRead       int   `json:"cacheRead"`
+	CacheWrite      int   `json:"cacheWrite"`
+	CostUnavailable bool  `json:"costUnavailable,omitempty"`
+	Cost            *Cost `json:"cost,omitempty"`
 }
 
 type Cost struct {
@@ -83,9 +83,9 @@ type Cost struct {
 // -- Typed payloads for Data -----------------------------------------------
 
 type ContextPackPayload struct {
-	TaskBytes          int    `json:"task_bytes"`
-	CurrentStateDigest string `json:"current_state_digest"`
-	CurrentStatePresent bool  `json:"current_state_present"`
+	TaskBytes           int    `json:"task_bytes"`
+	CurrentStateDigest  string `json:"current_state_digest"`
+	CurrentStatePresent bool   `json:"current_state_present"`
 }
 
 type BudgetPayload struct {
@@ -103,25 +103,25 @@ type BudgetPayload struct {
 }
 
 type EnvKnobsPayload struct {
-	ToolMaxBytes int  `json:"tool_max_bytes"`
-	ToolMaxLines int  `json:"tool_max_lines"`
+	ToolMaxBytes  int  `json:"tool_max_bytes"`
+	ToolMaxLines  int  `json:"tool_max_lines"`
 	KeepReasoning bool `json:"keep_reasoning"`
 }
 
 type ProviderConfigPayload struct {
-	Provider              string `json:"provider"`
-	Model                 string `json:"model"`
-	StateMode             string `json:"state_mode"`
-	StrictProtocol        bool   `json:"strict_protocol"`
-	PricingConfigured     bool   `json:"pricing_configured"`
-	CapabilityMaxOutput   int    `json:"capability_max_output_tokens,omitempty"`
-	SupportsReasoning     *bool  `json:"supports_reasoning,omitempty"`
-	SupportsFunctionCalling *bool `json:"supports_function_calling,omitempty"`
+	Provider                string `json:"provider"`
+	Model                   string `json:"model"`
+	StateMode               string `json:"state_mode"`
+	StrictProtocol          bool   `json:"strict_protocol"`
+	PricingConfigured       bool   `json:"pricing_configured"`
+	CapabilityMaxOutput     int    `json:"capability_max_output_tokens,omitempty"`
+	SupportsReasoning       *bool  `json:"supports_reasoning,omitempty"`
+	SupportsFunctionCalling *bool  `json:"supports_function_calling,omitempty"`
 }
 
 type TurnPolicyPayload struct {
-	Role          string `json:"role"`
-	ProtocolMode  string `json:"protocol_mode"`
+	Role         string `json:"role"`
+	ProtocolMode string `json:"protocol_mode"`
 }
 
 type ModelRequestPayload struct {
@@ -136,19 +136,19 @@ type ModelRequestPayload struct {
 }
 
 type ModelResponsePayload struct {
-	Sequence   int    `json:"sequence"`
-	ResponseID string `json:"response_id"`
-	StopReason string `json:"stop_reason"`
+	Sequence   int                `json:"sequence"`
+	ResponseID string             `json:"response_id"`
+	StopReason string             `json:"stop_reason"`
 	Usage      ModelResponseUsage `json:"usage"`
 }
 
 type ModelResponseUsage struct {
-	Input          int     `json:"input"`
-	Output         int     `json:"output"`
-	CacheRead      int     `json:"cache_read"`
-	CacheWrite     int     `json:"cache_write"`
-	CostUSD        float64 `json:"cost_usd"`
-	CostUnavailable bool   `json:"cost_unavailable"`
+	Input           int     `json:"input"`
+	Output          int     `json:"output"`
+	CacheRead       int     `json:"cache_read"`
+	CacheWrite      int     `json:"cache_write"`
+	CostUSD         float64 `json:"cost_usd"`
+	CostUnavailable bool    `json:"cost_unavailable"`
 }
 
 type ToolCallPayload struct {

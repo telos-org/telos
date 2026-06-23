@@ -193,11 +193,11 @@ func (l *nativeSessionLogger) modelResponse(sequence int, responseID, stopReason
 		ResponseID: responseID,
 		StopReason: stopReason,
 		Usage: agentsession.ModelResponseUsage{
-			Input:          stats.InputTokens,
-			Output:         stats.OutputTokens,
-			CacheRead:      stats.CacheReadTokens,
-			CacheWrite:     stats.CacheCreationTokens,
-			CostUSD:        stats.CostUSD,
+			Input:           stats.InputTokens,
+			Output:          stats.OutputTokens,
+			CacheRead:       stats.CacheReadTokens,
+			CacheWrite:      stats.CacheCreationTokens,
+			CostUSD:         stats.CostUSD,
 			CostUnavailable: stats.CostUnavailable,
 		},
 	}))

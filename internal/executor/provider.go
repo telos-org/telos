@@ -55,12 +55,12 @@ func (c nativeConfig) providerFor(model string) (nativeProviderConfig, error) {
 		pricing, pricingKnown = p, true
 	}
 	return nativeProviderConfig{
-		Provider:         "litellm",
-		Model:            model,
-		BaseURL:          c.baseURL,
-		APIKey:           c.apiKey,
-		Capability:       cap,
-		Pricing:          pricing,
+		Provider:          "litellm",
+		Model:             model,
+		BaseURL:           c.baseURL,
+		APIKey:            c.apiKey,
+		Capability:        cap,
+		Pricing:           pricing,
 		PricingConfigured: pricingKnown,
 	}, nil
 }
