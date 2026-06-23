@@ -151,6 +151,13 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) (*SessionD
 	return diagnostics, evidenceFailureCodes
 }
 
+// DiagnosticsFromEvents builds a diagnostics response from a session and its
+// evidence events only (no session.jsonl scan). Shared by the CLI offline path.
+func DiagnosticsFromEvents(session *Session, events []SessionEvent) *SessionDiagnosticsResponse {
+	diagnostics, _ := buildSessionDiagnostics(session, events)
+	return diagnostics
+}
+
 func recordEvidenceFailureCode(bySpec map[string]map[string]bool, specName, code string) {
 	if code == "" {
 		return

@@ -348,6 +348,7 @@ func TestAnalyzeSessionEventsBuildsFailureTaxonomy(t *testing.T) {
 		{Event: "agent_failure_recoverable", SpecName: &specName, Data: map[string]any{"error_code": "agent_protocol", "error": "missing status"}},
 		{Event: "game_error", SpecName: &specName, Data: map[string]any{"error": "official verifier rejected benchmark output"}},
 		{Event: "budget_exceeded", SpecName: &specName, Data: map[string]any{"budget": "max_input_tokens"}},
+		{Event: "cost_cap_unenforceable", SpecName: &specName, Data: map[string]any{"max_cost_usd": 10.0}},
 		{Event: "game_end", SpecName: &specName, Data: map[string]any{
 			"game_result":         "failure",
 			"completion_reason":   "runtime_budget_exhausted",
@@ -362,6 +363,10 @@ func TestAnalyzeSessionEventsBuildsFailureTaxonomy(t *testing.T) {
 	}
 
 	analysis := analyzeSessionEvents(session, events)
+	diagnosticsAnalysis := analyzeSessionDiagnostics(sessionapi.DiagnosticsFromEvents(session, events))
+	if !reflect.DeepEqual(analysis, diagnosticsAnalysis) {
+		t.Fatalf("events and diagnostics analysis diverged\nevents: %#v\ndiagnostics: %#v", analysis, diagnosticsAnalysis)
+	}
 	if analysis.Failures["verifier_rejection"] != 1 {
 		t.Fatalf("verifier rejection count: %#v", analysis.Failures)
 	}
@@ -377,7 +382,7 @@ func TestAnalyzeSessionEventsBuildsFailureTaxonomy(t *testing.T) {
 	if analysis.Failures["protocol"] != 1 {
 		t.Fatalf("protocol count: %#v", analysis.Failures)
 	}
-	if analysis.Budgets["max_input_tokens"] != 1 {
+	if analysis.Budgets["max_input_tokens"] != 1 || analysis.Budgets["cost_cap_unenforceable"] != 1 {
 		t.Fatalf("budget counts: %#v", analysis.Budgets)
 	}
 	if !analysis.CostUnavailable {
@@ -390,7 +395,7 @@ func TestAnalyzeSessionEventsBuildsFailureTaxonomy(t *testing.T) {
 	var out bytes.Buffer
 	printSessionAnalysis(&out, analysis)
 	text := out.String()
-	for _, want := range []string{"$1.2500 (unavailable)", "Failure Taxonomy", "provider", "protocol", "task_budget", "benchmark_verifier_failure", "Budget Limits", "max_input_tokens", "Specs"} {
+	for _, want := range []string{"$1.2500 (unavailable)", "Failure Taxonomy", "provider", "protocol", "task_budget", "benchmark_verifier_failure", "Budget Limits", "max_input_tokens", "cost_cap_unenforceable", "Specs"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("analysis output missing %q:\n%s", want, text)
 		}
