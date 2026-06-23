@@ -319,6 +319,8 @@ func tagValue(text, tag string) (string, bool) {
 }
 
 func artifactOriented(task string) bool {
+	// TODO(task-h): replace this keyword heuristic with an explicit protocol
+	// rule; see docs/plans/HANDOFF-F-A3-H.md.
 	lower := strings.ToLower(task)
 	for _, word := range []string{"file", "workspace", "code", "edit", "write", "create", "change", "fix", "test", "implement", "patch", "diff"} {
 		if strings.Contains(lower, word) {

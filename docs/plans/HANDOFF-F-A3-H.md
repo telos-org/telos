@@ -174,6 +174,14 @@ var policies map[policyKey][]protocolRule   // keyed by (role, mode)
 `protocolCorrectionForStrict` iterates the matching rules. Localizes
 everything; adding a role/tag/mode = one table entry. Behavior-preserving.
 
+Design note for the prover artifact rule: encode the current no-tool final
+nudge as an explicit table entry, for example a `requireToolForProverFinal`
+rule keyed on `(RoleProver, ProtocolModePVG)`, not as a keyword heuristic over
+the task text. Delete `artifactOriented` during the H rewrite rather than
+porting it into the table. This intentionally changes behavior so prover finals
+with no tool use receive one recoverable nudge regardless of task wording; run
+the eval pass once against the table-driven implementation.
+
 ### Key files to reference
 - `internal/executor/loop.go` — `loopPolicy`, `roleLoopPolicy`,
   `protocolCorrectionForStrict`, `protocolCorrectionFor`,
