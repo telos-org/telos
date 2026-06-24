@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"encoding/base64"
 	"fmt"
+	"hash/maphash"
 	"io"
 	"strconv"
 	"strings"
@@ -100,16 +101,63 @@ func textTokenizer() *tiktoken.Tiktoken {
 	return tokenizer
 }
 
-// countTextTokens returns the BPE token count of text, falling back to a
-// conservative byte estimate when the tokenizer is unavailable.
+// Token counts are memoized by content so the per-request budget check does not
+// re-encode unchanged history items on every model request. Within a turn's tool
+// loop the same older items recur on each send, so this turns an O(history)
+// re-encode into O(new items). The cache is process-wide and bounded; it is
+// keyed by a maphash of the content (allocation-free, no large strings retained)
+// — a hash collision would only yield a slightly off *estimate*, which is
+// non-critical for a trigger that already carries a safety margin.
+const tokenCacheMaxEntries = 8192
+
+var (
+	tokenCacheSeed = maphash.MakeSeed()
+	tokenCacheMu   sync.Mutex
+	tokenCache     = make(map[uint64]int, tokenCacheMaxEntries)
+)
+
+// countTextTokens returns the BPE token count of text (memoized), falling back
+// to a conservative byte estimate when the tokenizer is unavailable.
 func countTextTokens(text string) int {
 	if text == "" {
 		return 0
 	}
+	key := maphash.String(tokenCacheSeed, text)
+	tokenCacheMu.Lock()
+	n, ok := tokenCache[key]
+	tokenCacheMu.Unlock()
+	if ok {
+		return n
+	}
+
+	n = encodeTextTokens(text)
+
+	tokenCacheMu.Lock()
+	if len(tokenCache) >= tokenCacheMaxEntries {
+		// Bounded eviction: drop the whole cache once full. A single
+		// conversation's working set fits well under the cap, so this is rare.
+		tokenCache = make(map[uint64]int, tokenCacheMaxEntries)
+	}
+	tokenCache[key] = n
+	tokenCacheMu.Unlock()
+	return n
+}
+
+// encodeTextTokens computes the token count without memoization. The expensive
+// Encode runs outside the cache lock so concurrent turns don't serialize on it.
+func encodeTextTokens(text string) int {
 	if enc := textTokenizer(); enc != nil {
 		return len(enc.Encode(text, nil, nil))
 	}
 	return fallbackTextTokens(text)
+}
+
+// resetTokenCache clears the memoization cache. Used by tests/benchmarks to
+// measure cold-encode cost deterministically.
+func resetTokenCache() {
+	tokenCacheMu.Lock()
+	tokenCache = make(map[uint64]int, tokenCacheMaxEntries)
+	tokenCacheMu.Unlock()
 }
 
 // fallbackTextTokens is the byte heuristic used only when the BPE tokenizer is
