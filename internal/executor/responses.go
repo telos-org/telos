@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -14,6 +15,7 @@ import (
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/responses"
+	"github.com/telos-org/telos/internal/agentsession"
 	"github.com/telos-org/telos/internal/game"
 )
 
@@ -32,6 +34,7 @@ type responsesClient struct {
 	maxOutputTokens int
 	tools           []responses.ToolUnionParam
 	state           *conversationState
+	compactor       *compactor
 	logger          *nativeSessionLogger
 	sequence        int
 	lastCostUSD     float64
@@ -56,6 +59,7 @@ func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, think
 	if cfg.Capability.SupportsFunctionCalling != nil && !*cfg.Capability.SupportsFunctionCalling {
 		tools = nil
 	}
+	comp := newCompactor(compactionConfigFromEnv(maxOutputTokens))
 	t := &responsesClient{
 		model:           cfg.Model,
 		instructions:    nativeSystemPrompt(role),
@@ -63,6 +67,7 @@ func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, think
 		maxOutputTokens: maxOutputTokens,
 		tools:           tools,
 		state:           newConversationState(initial, stateMode),
+		compactor:       comp,
 		logger:          logger,
 		pricing:         cfg.Pricing,
 		pricingKnown:    cfg.PricingConfigured,
@@ -81,6 +86,10 @@ func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, think
 }
 
 func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
+	if err := t.compactSessionState(ctx); err != nil {
+		_ = t.logger.errorEvent(t.sequence+1, err)
+		return agentTurn{}, err
+	}
 	t.sequence++
 	seq := t.sequence
 	params := t.params()
@@ -163,6 +172,162 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 		stopReason: responseStopReason(final),
 		stats:      stats,
 	}, nil
+}
+
+func (t *responsesClient) compactSessionState(ctx context.Context) error {
+	plan, ok, err := t.compactor.plan(t.state)
+	if err != nil {
+		t.logCompactionFailure(plan, err)
+		return newExecutorError(errProviderContextLimit, "autocompaction_failed:"+err.Error())
+	}
+	if !ok {
+		return nil
+	}
+	if t.compactor.cfg.strategy == compactionStrategyTruncate {
+		return t.truncateSessionState(plan)
+	}
+	summaryBudget := t.compactionSummaryBudget(plan.firstKeptIndex)
+	params := responses.ResponseNewParams{
+		Model:        openai.ResponsesModel(t.model),
+		Instructions: openai.String(t.instructions),
+		Input:        responses.ResponseNewParamsInputUnion{OfInputItemList: t.state.compactionRequestInput(plan.firstKeptIndex, summaryBudget)},
+		Tools:        t.tools,
+	}
+	if t.maxOutputTokens > 0 {
+		params.MaxOutputTokens = openai.Int(int64(t.maxOutputTokens))
+	}
+	if t.reasoning != "" {
+		params.Reasoning = openai.ReasoningParam{Effort: t.reasoning}
+	}
+	t.lastCostKnown = false
+	t.lastCostUSD = 0
+	final, err := t.streamResponse(ctx, params)
+	if err != nil {
+		t.logCompactionFailure(plan, err)
+		return compactionError(err)
+	}
+	if final.Status != responses.ResponseStatusCompleted {
+		reason := responseStopReason(final)
+		if reason == "" {
+			reason = "incomplete"
+		}
+		err := newExecutorError(errAgentIncomplete, "autocompaction_failed:"+reason)
+		t.logCompactionFailure(plan, err)
+		return err
+	}
+	if calls := responseToolCalls(final.Output); len(calls) > 0 {
+		err := newExecutorError(errAgentProtocol, "autocompaction_failed:compaction response contained tool calls")
+		t.logCompactionFailure(plan, err)
+		return err
+	}
+	summary := strings.TrimSpace(final.OutputText())
+	if err := validateCompactionSummary(summary); err != nil {
+		err = newExecutorError(errAgentProtocol, "autocompaction_failed:"+err.Error())
+		t.logCompactionFailure(plan, err)
+		return err
+	}
+	after := estimateHistoryTokens(t.state.inputWithSummary(summary, plan.firstKeptIndex))
+	if budget := t.compactor.cfg.budgetTokens(); budget > 0 && after > budget {
+		err := newExecutorError(errProviderContextLimit, fmt.Sprintf("autocompaction_failed:summary still over budget after compaction (%d > %d estimated tokens)", after, budget))
+		t.logCompactionFailure(plan, err)
+		return err
+	}
+	t.state.applyCompaction(summary, plan.firstKeptIndex)
+	_ = t.logger.compaction(agentsession.CompactionPayload{
+		Reason:          plan.reason,
+		FirstKeptIndex:  plan.firstKeptIndex,
+		TokensBefore:    plan.tokensBefore,
+		TokensAfter:     after,
+		SummaryTokens:   estimateItemTokens(compactionSummaryMessage(summary)),
+		ItemsSummarized: plan.itemsSummarized,
+		ItemsKept:       plan.itemsKept,
+		Model:           t.model,
+		ResponseID:      final.ID,
+		Usage: agentsession.ModelResponseUsage{
+			Input:           int(final.Usage.InputTokens),
+			Output:          int(final.Usage.OutputTokens),
+			CacheRead:       int(final.Usage.InputTokensDetails.CachedTokens),
+			CostUSD:         t.lastCostUSD,
+			CostUnavailable: !t.lastCostKnown,
+		},
+		Details: detailsFromCompactionSummary(summary),
+	})
+	return nil
+}
+
+func (t *responsesClient) compactionSummaryBudget(firstKeptIndex int) int {
+	if t == nil || t.compactor == nil {
+		return 0
+	}
+	budget := t.compactor.cfg.budgetTokens()
+	if budget <= 0 {
+		return 0
+	}
+	base := estimateHistoryTokens(t.state.inputWithSummary("", firstKeptIndex))
+	remaining := budget - base
+	if remaining < 200 {
+		return 200
+	}
+	return remaining
+}
+
+func (t *responsesClient) truncateSessionState(plan compactionPlan) error {
+	after := estimateHistoryTokens(t.state.inputWithSummary("", plan.firstKeptIndex))
+	if budget := t.compactor.cfg.budgetTokens(); budget > 0 && after > budget {
+		return newExecutorError(errProviderContextLimit, fmt.Sprintf("autocompaction_failed:naive cutoff still over budget (%d > %d estimated tokens)", after, budget))
+	}
+	t.state.applyCompaction("", plan.firstKeptIndex)
+	_ = t.logger.compaction(agentsession.CompactionPayload{
+		Reason:          "token_budget_naive_cutoff",
+		FirstKeptIndex:  plan.firstKeptIndex,
+		TokensBefore:    plan.tokensBefore,
+		TokensAfter:     after,
+		ItemsSummarized: plan.itemsSummarized,
+		ItemsKept:       plan.itemsKept,
+		Model:           t.model,
+	})
+	return nil
+}
+
+func compactionError(err error) error {
+	if err == nil {
+		return nil
+	}
+	var execErr *executorError
+	if errors.As(err, &execErr) {
+		return &executorError{
+			Code:       execErr.Code,
+			Message:    "autocompaction_failed:" + execErr.Error(),
+			Retryable:  execErr.Retryable,
+			StatusCode: execErr.StatusCode,
+		}
+	}
+	return newExecutorError(errProviderUnavailable, "autocompaction_failed:"+err.Error())
+}
+
+func (t *responsesClient) logCompactionFailure(plan compactionPlan, err error) {
+	if err == nil {
+		return
+	}
+	_ = t.logger.compaction(agentsession.CompactionPayload{
+		Reason:          firstNonEmpty(plan.reason, "token_budget"),
+		FirstKeptIndex:  plan.firstKeptIndex,
+		TokensBefore:    plan.tokensBefore,
+		TokensAfter:     plan.tokensBefore,
+		ItemsSummarized: plan.itemsSummarized,
+		ItemsKept:       plan.itemsKept,
+		Model:           t.model,
+		Error:           err.Error(),
+	})
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, value := range values {
+		if value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func (t *responsesClient) captureResponseHeaders(req *http.Request, next option.MiddlewareNext) (*http.Response, error) {
@@ -253,41 +418,6 @@ func (t *responsesClient) modelRequestLogData(sequence int, previousID string) m
 func retryDelay(attempt int) time.Duration {
 	base := time.Duration(250*(1<<attempt)) * time.Millisecond
 	return base + time.Duration(rand.Intn(125))*time.Millisecond
-}
-
-func compactHistory(history responses.ResponseInputParam) responses.ResponseInputParam {
-	const maxItems = 80
-	if len(history) <= maxItems {
-		return history
-	}
-	// Keep the first item (the task) plus the most recent window. The window can
-	// begin mid-turn, so drop any function_call_output whose matching
-	// function_call fell outside it — the Responses API rejects an output with no
-	// preceding call when there is no previous_response_id to anchor it.
-	window := make(responses.ResponseInputParam, 0, maxItems)
-	window = append(window, history[0])
-	window = append(window, history[len(history)-maxItems+1:]...)
-	return dropOrphanFunctionOutputs(window)
-}
-
-// dropOrphanFunctionOutputs removes function_call_output items whose
-// function_call is not present in the same item slice. Only outputs are dropped,
-// so every retained output keeps a matching call.
-func dropOrphanFunctionOutputs(items responses.ResponseInputParam) responses.ResponseInputParam {
-	callIDs := map[string]bool{}
-	for _, item := range items {
-		if item.OfFunctionCall != nil {
-			callIDs[item.OfFunctionCall.CallID] = true
-		}
-	}
-	out := make(responses.ResponseInputParam, 0, len(items))
-	for _, item := range items {
-		if fco := item.OfFunctionCallOutput; fco != nil && !callIDs[fco.CallID] {
-			continue
-		}
-		out = append(out, item)
-	}
-	return out
 }
 
 func isChainSpecificError(err error) bool {

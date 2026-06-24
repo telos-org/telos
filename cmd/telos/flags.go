@@ -252,6 +252,41 @@ func applySessionRuntimeConfig(req *sessionapi.SessionCreateRequest, cfg session
 	}
 }
 
+// autocompactFlags carries the autocompaction knob values observed from flags.
+// These mirror the executor's TELOS_AUTOCOMPACT_* env knobs.
+type autocompactFlags struct {
+	ContextWindow    int
+	TriggerRatio     float64
+	KeepRecentTokens int
+}
+
+// exportAutocompactEnv writes any explicitly-set autocompaction flags into the
+// environment so the local worker subprocess — which reads TELOS_AUTOCOMPACT_*
+// in the executor and inherits the launcher's environment — picks them up.
+// Flags left unset preserve any existing env value. Cloud runs read these from
+// the cloud environment's config, not from these flags.
+func exportAutocompactEnv(fs *flag.FlagSet, vals autocompactFlags) error {
+	if flagNameSet(fs, "autocompact-context-window") {
+		if vals.ContextWindow < 0 {
+			return fmt.Errorf("--autocompact-context-window must be non-negative (0 disables compaction)")
+		}
+		os.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", strconv.Itoa(vals.ContextWindow))
+	}
+	if flagNameSet(fs, "autocompact-trigger-ratio") {
+		if vals.TriggerRatio <= 0 || vals.TriggerRatio > 1 {
+			return fmt.Errorf("--autocompact-trigger-ratio must be in (0, 1]")
+		}
+		os.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", strconv.FormatFloat(vals.TriggerRatio, 'g', -1, 64))
+	}
+	if flagNameSet(fs, "autocompact-keep-recent-tokens") {
+		if vals.KeepRecentTokens <= 0 {
+			return fmt.Errorf("--autocompact-keep-recent-tokens must be positive")
+		}
+		os.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", strconv.Itoa(vals.KeepRecentTokens))
+	}
+	return nil
+}
+
 func untilFlagValue(fs *flag.FlagSet, value int) (int, error) {
 	if !flagNameSet(fs, "until") {
 		return 0, nil

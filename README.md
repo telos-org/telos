@@ -96,6 +96,10 @@ remain environment-only:
 | `TELOS_NATIVE_TOOL_MAX_BYTES` | 96 KiB | Max bytes of a single tool's text output |
 | `TELOS_NATIVE_TOOL_MAX_LINES` | 400 | Max lines of a single tool's text output |
 | `TELOS_NATIVE_KEEP_REASONING` | unset | `1` disables stripping of reasoning/COT tags from visible output |
+| `TELOS_AUTOCOMPACT_CONTEXT_WINDOW` | 128000 | Estimated model context window for stateless-history autocompaction; `0` disables |
+| `TELOS_AUTOCOMPACT_TRIGGER_RATIO` | 0.7 | Fraction of the context window allowed for input before compacting |
+| `TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS` | 20000 | Estimated recent-history tokens retained verbatim after compaction |
+| `TELOS_AUTOCOMPACT_STRATEGY` | `llm` | `llm` summarizes old history; `truncate` drops old history for comparison/debugging |
 
 These are resolved once per turn and recorded in the turn's session log
 (`env_knobs` event) so a run is auditable from the log alone. Per-model

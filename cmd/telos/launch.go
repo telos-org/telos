@@ -40,6 +40,9 @@ func cmdLaunch(command, action string, args []string) {
 	maxOutputTokens := fs.Int("max-output-tokens", 0, "Maximum output tokens across the PVG run; 0 disables")
 	maxToolLoops := fs.Int("max-tool-loops", 0, "Maximum model-tool loop iterations per agent turn; 0 uses the runtime default")
 	agentTimeout := fs.Int("agent-timeout-sec", 0, "Agent timeout in seconds; 0 disables")
+	autocompactContextWindow := fs.Int("autocompact-context-window", 0, "Autocompaction context window in tokens; 0 uses the default, set explicitly to disable")
+	autocompactTriggerRatio := fs.Float64("autocompact-trigger-ratio", 0, "Autocompaction trigger ratio in (0,1]; 0 uses the default")
+	autocompactKeepRecentTokens := fs.Int("autocompact-keep-recent-tokens", 0, "Recent history tokens kept verbatim during autocompaction; 0 uses the default")
 	readyTimeout := fs.Int("ready-timeout", 900, "Environment readiness timeout in seconds")
 	noWait := fs.Bool("no-wait", false, "Do not wait for a newly created environment")
 	jsonOut := fs.Bool("json", false, "JSON output")
@@ -181,6 +184,15 @@ func cmdLaunch(command, action string, args []string) {
 	cfg.Until = untilValue
 	if inLocalController {
 		cfg.ParentSessionID = &localParentSessionID
+	}
+
+	if err := exportAutocompactEnv(fs, autocompactFlags{
+		ContextWindow:    *autocompactContextWindow,
+		TriggerRatio:     *autocompactTriggerRatio,
+		KeepRecentTokens: *autocompactKeepRecentTokens,
+	}); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 
 	session, err := cli.SubmitLocalSession(specPath, cfg)

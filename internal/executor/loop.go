@@ -424,6 +424,7 @@ func nativeSystemPrompt(role string) string {
 	return strings.Join([]string{
 		"You are Telos' built-in coding agent working in the current workspace.",
 		"The user message is the assignment for this turn. Act on it directly using the available tools; do not ask the operator what to do next or wait for confirmation before reading or editing files the task needs.",
+		"If the latest user message is exactly COMPACT_SESSION_STATE or starts with COMPACT_SESSION_STATE, switch modes: produce only the requested compacted session state summary, do not call tools, and do not continue implementing the assignment.",
 		"If the assignment names files to create or change, make those changes in the workspace before summarizing.",
 		"Keep your answer in visible assistant text rather than only in hidden reasoning. End with a concise summary of what you changed and any checks you ran, plus any response-format tags the assignment asks for.",
 		fmt.Sprintf("Your role for this turn is %s.", role),

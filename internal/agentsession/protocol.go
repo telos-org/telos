@@ -29,6 +29,7 @@ const (
 	KindSkillOpened            = "skill_opened"
 	KindSkillApplied           = "skill_applied"
 	KindOutsideWorkspaceAccess = "outside_workspace_access"
+	KindCompaction             = "compaction"
 	KindError                  = "error"
 )
 
@@ -202,6 +203,29 @@ type OutsideWorkspaceAccessPayload struct {
 	Action string `json:"action"`
 	Path   string `json:"path"`
 	Write  bool   `json:"write"`
+}
+
+// CompactionPayload records a stateless_history autocompaction pass. It is
+// emitted for successful LLM summaries and for failed compaction attempts that
+// prevent the normal agent request from being sent.
+type CompactionPayload struct {
+	Reason          string             `json:"reason"`
+	FirstKeptIndex  int                `json:"first_kept_index"`
+	TokensBefore    int                `json:"tokens_before"`
+	TokensAfter     int                `json:"tokens_after"`
+	SummaryTokens   int                `json:"summary_tokens,omitempty"`
+	ItemsSummarized int                `json:"items_summarized"`
+	ItemsKept       int                `json:"items_kept"`
+	Model           string             `json:"model,omitempty"`
+	ResponseID      string             `json:"response_id,omitempty"`
+	Usage           ModelResponseUsage `json:"usage,omitempty"`
+	Details         CompactionDetails  `json:"details,omitempty"`
+	Error           string             `json:"error,omitempty"`
+}
+
+type CompactionDetails struct {
+	ReadFiles     []string `json:"read_files,omitempty"`
+	ModifiedFiles []string `json:"modified_files,omitempty"`
 }
 
 type ErrorPayload struct {

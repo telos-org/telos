@@ -267,6 +267,10 @@ func (l *nativeSessionLogger) outsideWorkspaceAccess(action, path string, write 
 	}))
 }
 
+func (l *nativeSessionLogger) compaction(p agentsession.CompactionPayload) error {
+	return l.event(agentsession.KindCompaction, agentsession.MarshalPayload(&p))
+}
+
 func (l *nativeSessionLogger) errorEvent(sequence int, err error) error {
 	payload := agentsession.ErrorPayload{
 		Sequence: sequence,
