@@ -39,6 +39,7 @@ go_test(
         "conversation_state_test.go",
         "native_test.go",
         "responses_compaction_test.go",
+        "tokens_bench_test.go",
         "tokens_test.go",
     ],
     embed = [":executor"],

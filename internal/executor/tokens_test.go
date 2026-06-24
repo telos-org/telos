@@ -13,6 +13,14 @@ func TestCountTextTokensUsesRealTokenizer(t *testing.T) {
 		t.Fatalf("empty text should be 0 tokens, got %d", got)
 	}
 
+	// A real BPE codec round-trips exactly (incl. multibyte), proving we loaded a
+	// genuine vocabulary rather than producing garbage counts.
+	sample := "func main() { fmt.Println(\"hello, 世界\") } // round-trip 123"
+	enc := textTokenizer()
+	if got := enc.Decode(enc.Encode(sample, nil, nil)); got != sample {
+		t.Fatalf("tokenizer round-trip mismatch:\n in:  %q\n out: %q", sample, got)
+	}
+
 	// A run of identical bytes compresses far below chars/4 under real BPE — this
 	// is exactly why the old byte heuristic over/under-estimated. 4000 bytes is
 	// 1000 chars/4 but tokenizes to ~500.
