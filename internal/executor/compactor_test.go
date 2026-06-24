@@ -9,7 +9,20 @@ import (
 )
 
 func largeFunctionOutputItem(callID string, size int) responses.ResponseInputItemUnionParam {
-	return responses.ResponseInputItemParamOfFunctionCallOutput(callID, strings.Repeat("x", size))
+	return responses.ResponseInputItemParamOfFunctionCallOutput(callID, fillerText(size))
+}
+
+// fillerText returns approximately n characters of realistic, varied prose that
+// tokenizes at roughly 4 chars/token. Token-budget fixtures must use this rather
+// than a run of identical bytes, which the BPE tokenizer compresses heavily and
+// would make a nominally "large" item count as only a handful of tokens.
+func fillerText(n int) string {
+	const lorem = "lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod "
+	var b strings.Builder
+	for b.Len() < n {
+		b.WriteString(lorem)
+	}
+	return b.String()[:n]
 }
 
 func tightBudgetConfig() compactionConfig {
@@ -163,7 +176,7 @@ func TestEnsureSummaryRoomMovesForwardWithParallelToolOutputs(t *testing.T) {
 		functionCallItem("call_ledger"),
 		functionCallItem("call_constraints"),
 		functionCallItem("call_checker"),
-		largeFunctionOutputItem("call_ledger", 3000),
+		largeFunctionOutputItem("call_ledger", 6000),
 		largeFunctionOutputItem("call_constraints", 200),
 		largeFunctionOutputItem("call_checker", 200),
 	)
@@ -182,7 +195,7 @@ func TestPlannerCanCompactLatestOversizedToolOutput(t *testing.T) {
 	s.history = responses.ResponseInputParam{
 		messageItem("task"),
 		functionCallItem("call_big"),
-		largeFunctionOutputItem("call_big", 4000),
+		largeFunctionOutputItem("call_big", 8000),
 	}
 
 	plan, ok, err := newCompactor(compactionConfig{contextWindow: 1200, triggerRatio: 0.7, keepRecentTokens: 100}).plan(s)
@@ -201,13 +214,14 @@ func TestPlannerKeepsInBudgetRecentTailInsteadOfDroppingAll(t *testing.T) {
 	s := newConversationState(responses.ResponseInputParam{messageItem("task")}, conversationStateStatelessHistory)
 	s.history = responses.ResponseInputParam{
 		messageItem("task"),
-		messageItem("old " + strings.Repeat("x", 8000)),
-		messageItem("recent " + strings.Repeat("r", 2400)),
+		messageItem("old " + fillerText(12000)),
+		messageItem("recent " + fillerText(4000)),
 	}
 
 	// budget = 0.5*2000 = 1000; reserved summary headroom target = 500. The
-	// recent item (~600 tokens) exceeds the headroom target but task+recent fits
-	// the budget, so it must be kept rather than summarized away to an empty tail.
+	// recent item (~630 tokens) exceeds the keep-recent threshold so the selector
+	// points firstKept past it, but task+recent still fits the budget, so it must
+	// be kept rather than summarized away to an empty tail.
 	plan, ok, err := newCompactor(compactionConfig{contextWindow: 2000, triggerRatio: 0.5, keepRecentTokens: 20}).plan(s)
 	if err != nil {
 		t.Fatal(err)

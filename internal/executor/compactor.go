@@ -14,7 +14,7 @@ import (
 
 const (
 	defaultCompactionContextWindow     = 128000
-	defaultCompactionTriggerRatio      = 0.7
+	defaultCompactionTriggerRatio      = 0.75
 	defaultCompactionKeepRecentTokens  = 20000
 	compactionStrategyLLM              = "llm"
 	compactionStrategyTruncate         = "truncate"
@@ -402,21 +402,23 @@ func headingSection(summary, heading string) string {
 	return strings.TrimSpace(rest)
 }
 
+// estimateItemTokens estimates the token cost of one conversation item using
+// the BPE tokenizer (see tokens.go), plus a small per-item framing overhead.
 func estimateItemTokens(item responses.ResponseInputItemUnionParam) int {
-	chars := 0
+	var text string
 	switch {
 	case item.OfMessage != nil:
-		chars = len(messageItemText(item.OfMessage))
+		text = messageItemText(item.OfMessage)
 	case item.OfFunctionCall != nil:
-		chars = len(item.OfFunctionCall.Name) + len(item.OfFunctionCall.Arguments)
+		text = item.OfFunctionCall.Name + " " + item.OfFunctionCall.Arguments
 	case item.OfFunctionCallOutput != nil:
-		chars = len(item.OfFunctionCallOutput.Output)
+		text = item.OfFunctionCallOutput.Output
 	default:
 		if data, err := json.Marshal(item); err == nil {
-			chars = len(data)
+			text = string(data)
 		}
 	}
-	return chars/4 + 4
+	return countTextTokens(text) + perItemTokenOverhead
 }
 
 func estimateHistoryTokens(history responses.ResponseInputParam) int {

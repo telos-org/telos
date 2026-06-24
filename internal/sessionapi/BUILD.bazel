@@ -12,7 +12,10 @@ go_library(
     ],
     importpath = "github.com/telos-org/telos/internal/sessionapi",
     visibility = ["//:__subpackages__"],
-    deps = ["//internal/spec"],
+    deps = [
+        "//internal/agentsession",
+        "//internal/spec",
+    ],
 )
 
 go_test(

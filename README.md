@@ -97,7 +97,7 @@ remain environment-only:
 | `TELOS_NATIVE_TOOL_MAX_LINES` | 400 | Max lines of a single tool's text output |
 | `TELOS_NATIVE_KEEP_REASONING` | unset | `1` disables stripping of reasoning/COT tags from visible output |
 | `TELOS_AUTOCOMPACT_CONTEXT_WINDOW` | 128000 | Configured context window for stateless-history autocompaction; floored to the model's actual window (see `TELOS_MODEL_CONTEXT_WINDOW` / built-in family defaults); `0` disables |
-| `TELOS_AUTOCOMPACT_TRIGGER_RATIO` | 0.7 | Fraction of the context window allowed for input before compacting |
+| `TELOS_AUTOCOMPACT_TRIGGER_RATIO` | 0.75 | Fraction of the context window allowed for input before compacting |
 | `TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS` | 20000 | Estimated recent-history tokens retained verbatim after compaction |
 | `TELOS_AUTOCOMPACT_STRATEGY` | `llm` | `llm` summarizes old history; `truncate` drops old history for comparison/debugging |
 

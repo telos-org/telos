@@ -5,6 +5,8 @@ go_library(
     srcs = [
         "ledger.go",
         "pvg.go",
+        "review.go",
+        "roles.go",
         "state.go",
         "task_state_machine.go",
         "transcript.go",
@@ -14,6 +16,7 @@ go_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/evidence",
+        "//internal/platform",
         "//internal/spec",
     ],
 )
@@ -22,11 +25,15 @@ go_test(
     name = "game_test",
     srcs = [
         "pvg_test.go",
+        "review_test.go",
         "state_test.go",
         "task_state_machine_test.go",
         "transcript_test.go",
         "types_test.go",
     ],
     embed = [":game"],
-    deps = ["//internal/spec"],
+    deps = [
+        "//internal/platform",
+        "//internal/spec",
+    ],
 )
