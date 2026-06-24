@@ -42,13 +42,17 @@ func (s *conversationState) requestInput() responses.ResponseInputParam {
 }
 
 func (s *conversationState) compactionRequestInput(firstKeptIndex, summaryBudgetTokens int) responses.ResponseInputParam {
-	out := s.inputWithSummary(s.compactionSummary, s.firstKeptIndex)
+	var out responses.ResponseInputParam
 	if firstKeptIndex > s.firstKeptIndex && firstKeptIndex <= len(s.history) {
-		out = append(responses.ResponseInputParam{}, s.history[0])
+		// Summarize only the window (firstKeptIndex .. now) being compacted: the
+		// seed task, any prior summary, then the to-be-summarized slice.
+		out = append(out, s.history[0])
 		if strings.TrimSpace(s.compactionSummary) != "" {
 			out = append(out, compactionSummaryMessage(s.compactionSummary))
 		}
 		out = append(out, s.history[s.firstKeptIndex:firstKeptIndex]...)
+	} else {
+		out = s.inputWithSummary(s.compactionSummary, s.firstKeptIndex)
 	}
 	out = append(out, compactionCommandMessage(summaryBudgetTokens))
 	return out

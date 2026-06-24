@@ -17,7 +17,7 @@ func tightBudgetConfig() compactionConfig {
 }
 
 func TestCompactionConfigFromEnvDefaultsAreOn(t *testing.T) {
-	cfg := compactionConfigFromEnv(4096)
+	cfg := compactionConfigFromEnv(4096, 0)
 	if cfg.contextWindow != defaultCompactionContextWindow || cfg.triggerRatio != defaultCompactionTriggerRatio {
 		t.Fatalf("defaults: got window=%d ratio=%v", cfg.contextWindow, cfg.triggerRatio)
 	}
@@ -38,7 +38,7 @@ func TestCompactionConfigFromEnvOverrides(t *testing.T) {
 	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "4096")
 	t.Setenv("TELOS_AUTOCOMPACT_STRATEGY", "truncate")
 
-	cfg := compactionConfigFromEnv(2000)
+	cfg := compactionConfigFromEnv(2000, 0)
 	if cfg.contextWindow != 32000 || cfg.triggerRatio != 0.5 || cfg.keepRecentTokens != 4096 || cfg.strategy != compactionStrategyTruncate {
 		t.Fatalf("overrides: %#v", cfg)
 	}
@@ -51,7 +51,7 @@ func TestCompactorUnderBudgetHasNoPlan(t *testing.T) {
 	s := newConversationState(responses.ResponseInputParam{messageItem("task")}, conversationStateStatelessHistory)
 	s.history = append(s.history, messageItem("small"))
 
-	_, ok, err := newCompactor(compactionConfigFromEnv(4096)).plan(s)
+	_, ok, err := newCompactor(compactionConfigFromEnv(4096, 0)).plan(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,6 +194,63 @@ func TestPlannerCanCompactLatestOversizedToolOutput(t *testing.T) {
 	}
 	if plan.firstKeptIndex != len(s.history) {
 		t.Fatalf("oversized latest item should be summarized with no recent items kept: %#v", plan)
+	}
+}
+
+func TestPlannerKeepsInBudgetRecentTailInsteadOfDroppingAll(t *testing.T) {
+	s := newConversationState(responses.ResponseInputParam{messageItem("task")}, conversationStateStatelessHistory)
+	s.history = responses.ResponseInputParam{
+		messageItem("task"),
+		messageItem("old " + strings.Repeat("x", 8000)),
+		messageItem("recent " + strings.Repeat("r", 2400)),
+	}
+
+	// budget = 0.5*2000 = 1000; reserved summary headroom target = 500. The
+	// recent item (~600 tokens) exceeds the headroom target but task+recent fits
+	// the budget, so it must be kept rather than summarized away to an empty tail.
+	plan, ok, err := newCompactor(compactionConfig{contextWindow: 2000, triggerRatio: 0.5, keepRecentTokens: 20}).plan(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("over-budget history should compact")
+	}
+	if plan.firstKeptIndex != 2 || plan.itemsKept < 1 {
+		t.Fatalf("in-budget recent tail should be preserved, not dropped: %#v", plan)
+	}
+}
+
+func TestCompactionConfigFloorsToModelContextWindow(t *testing.T) {
+	if got := compactionConfigFromEnv(0, 32000).contextWindow; got != 32000 {
+		t.Fatalf("effective window should floor to the smaller model window, got %d", got)
+	}
+	if got := compactionConfigFromEnv(0, 1000000).contextWindow; got != defaultCompactionContextWindow {
+		t.Fatalf("a larger model window must not raise the configured default, got %d", got)
+	}
+	if got := compactionConfigFromEnv(0, 0).contextWindow; got != defaultCompactionContextWindow {
+		t.Fatalf("an unknown model window must leave the configured default, got %d", got)
+	}
+}
+
+func TestModelContextWindowResolution(t *testing.T) {
+	builtin := map[string]int{
+		"claude-opus-4-6":             200000,
+		"anthropic/claude-sonnet-4.5": 200000,
+		"openai/gpt-5.1":              400000,
+		"openai/gpt-4o":               128000,
+		"some/unknown-model":          0,
+	}
+	for model, want := range builtin {
+		if got := builtinModelContextWindow(model); got != want {
+			t.Fatalf("builtinModelContextWindow(%q)=%d want %d", model, got, want)
+		}
+	}
+	// An explicit capability value wins over the built-in family default.
+	if got := (modelCapabilityProfile{ContextWindow: 64000}).effectiveContextWindow("claude-opus-4-6"); got != 64000 {
+		t.Fatalf("explicit context window should win, got %d", got)
+	}
+	if got := (modelCapabilityProfile{}).effectiveContextWindow("openai/gpt-5.1"); got != 400000 {
+		t.Fatalf("empty profile should fall back to the built-in default, got %d", got)
 	}
 }
 

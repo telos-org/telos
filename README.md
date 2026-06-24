@@ -96,7 +96,7 @@ remain environment-only:
 | `TELOS_NATIVE_TOOL_MAX_BYTES` | 96 KiB | Max bytes of a single tool's text output |
 | `TELOS_NATIVE_TOOL_MAX_LINES` | 400 | Max lines of a single tool's text output |
 | `TELOS_NATIVE_KEEP_REASONING` | unset | `1` disables stripping of reasoning/COT tags from visible output |
-| `TELOS_AUTOCOMPACT_CONTEXT_WINDOW` | 128000 | Estimated model context window for stateless-history autocompaction; `0` disables |
+| `TELOS_AUTOCOMPACT_CONTEXT_WINDOW` | 128000 | Configured context window for stateless-history autocompaction; floored to the model's actual window (see `TELOS_MODEL_CONTEXT_WINDOW` / built-in family defaults); `0` disables |
 | `TELOS_AUTOCOMPACT_TRIGGER_RATIO` | 0.7 | Fraction of the context window allowed for input before compacting |
 | `TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS` | 20000 | Estimated recent-history tokens retained verbatim after compaction |
 | `TELOS_AUTOCOMPACT_STRATEGY` | `llm` | `llm` summarizes old history; `truncate` drops old history for comparison/debugging |
@@ -104,9 +104,13 @@ remain environment-only:
 These are resolved once per turn and recorded in the turn's session log
 (`env_knobs` event) so a run is auditable from the log alone. Per-model
 capability/behavior is configured via the `TELOS_MODEL_*` family
-(`TELOS_MODEL_CAPABILITY_PROFILE`, `TELOS_MODEL_STATE_MODE`, etc.) and pricing
-via `TELOS_MODEL_PRICING_TABLE`; the resolved profile is logged at turn start
-(`provider_config` event, no secrets).
+(`TELOS_MODEL_CAPABILITY_PROFILE`, `TELOS_MODEL_STATE_MODE`,
+`TELOS_MODEL_CONTEXT_WINDOW`, etc.) and pricing via `TELOS_MODEL_PRICING_TABLE`;
+the resolved profile (including the effective context window) is logged at turn
+start (`provider_config` event, no secrets). The autocompaction trigger uses the
+floor of `TELOS_AUTOCOMPACT_CONTEXT_WINDOW` and the model's real context window
+(explicit capability value, else a built-in family default) so it never exceeds
+what the model can hold.
 
 `TELOS_NATIVE_MAX_TOOL_LOOPS` and `TELOS_NATIVE_MAX_OUTPUT_TOKENS` were removed:
 they conflicted with the manifest budgets (tool-loop budget was overridden by

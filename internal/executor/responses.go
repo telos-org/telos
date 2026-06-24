@@ -59,7 +59,7 @@ func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, think
 	if cfg.Capability.SupportsFunctionCalling != nil && !*cfg.Capability.SupportsFunctionCalling {
 		tools = nil
 	}
-	comp := newCompactor(compactionConfigFromEnv(maxOutputTokens))
+	comp := newCompactor(compactionConfigFromEnv(maxOutputTokens, cfg.Capability.effectiveContextWindow(cfg.Model)))
 	t := &responsesClient{
 		model:           cfg.Model,
 		instructions:    nativeSystemPrompt(role),
@@ -86,16 +86,18 @@ func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, think
 }
 
 func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
-	if err := t.compactSessionState(ctx); err != nil {
+	compStats, err := t.compactSessionState(ctx)
+	if err != nil {
 		_ = t.logger.errorEvent(t.sequence+1, err)
-		return agentTurn{}, err
+		// compStats carries any spend from a compaction attempt that failed after
+		// the model call, so the wasted cost is still charged to the turn.
+		return agentTurn{stats: compStats}, err
 	}
 	t.sequence++
 	seq := t.sequence
 	params := t.params()
 	_ = t.logger.modelRequest(t.modelRequestLogData(seq, t.state.previousResponseID()))
 	var final responses.Response
-	var err error
 	for attempt := 0; attempt < 3; attempt++ {
 		t.lastCostKnown = false
 		t.lastCostUSD = 0
@@ -146,8 +148,13 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 	calls := responseToolCalls(final.Output)
 	t.state.recordAssistantMessage(final.OutputText())
 	t.state.recordAssistantToolCalls(calls)
-	stats := t.statsFromResponse(final)
-	_ = t.logger.modelResponse(seq, final.ID, responseStopReason(final), stats)
+	// model_response is a per-call ledger entry, so it records this response's own
+	// usage; the compaction call has its own event. The merged total (compaction
+	// + main) flows out via the returned agentTurn so it is metered by the loop's
+	// budget check, the game cost cap, and the reported total — not just logged.
+	mainStats := t.statsFromResponse(final)
+	_ = t.logger.modelResponse(seq, final.ID, responseStopReason(final), mainStats)
+	stats := mergeTurnStats(compStats, mainStats)
 	if final.Status == responses.ResponseStatusIncomplete && len(calls) > 0 && !toolCallsHaveCompleteArguments(calls) {
 		reason := final.IncompleteDetails.Reason
 		if reason == "" {
@@ -174,17 +181,24 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 	}, nil
 }
 
-func (t *responsesClient) compactSessionState(ctx context.Context) error {
+// compactSessionState compacts the stateless-history conversation before the
+// normal request when it would otherwise exceed the token budget. It returns
+// the model usage/cost spent producing the summary so the caller folds it into
+// the turn stats: compaction is real spend and must be metered against the run
+// budget and reported cost, not merely logged. The returned stats are populated
+// even on failure paths that occur *after* the model call, so a wasted summary
+// attempt is still charged.
+func (t *responsesClient) compactSessionState(ctx context.Context) (game.TurnStats, error) {
 	plan, ok, err := t.compactor.plan(t.state)
 	if err != nil {
 		t.logCompactionFailure(plan, err)
-		return newExecutorError(errProviderContextLimit, "autocompaction_failed:"+err.Error())
+		return game.TurnStats{}, newExecutorError(errProviderContextLimit, "autocompaction_failed:"+err.Error())
 	}
 	if !ok {
-		return nil
+		return game.TurnStats{}, nil
 	}
 	if t.compactor.cfg.strategy == compactionStrategyTruncate {
-		return t.truncateSessionState(plan)
+		return game.TurnStats{}, t.truncateSessionState(plan)
 	}
 	summaryBudget := t.compactionSummaryBudget(plan.firstKeptIndex)
 	params := responses.ResponseNewParams{
@@ -199,38 +213,26 @@ func (t *responsesClient) compactSessionState(ctx context.Context) error {
 	if t.reasoning != "" {
 		params.Reasoning = openai.ReasoningParam{Effort: t.reasoning}
 	}
-	t.lastCostKnown = false
-	t.lastCostUSD = 0
-	final, err := t.streamResponse(ctx, params)
+	final, stats, err := t.streamCompaction(ctx, params)
 	if err != nil {
 		t.logCompactionFailure(plan, err)
-		return compactionError(err)
+		return stats, compactionError(err)
 	}
-	if final.Status != responses.ResponseStatusCompleted {
-		reason := responseStopReason(final)
-		if reason == "" {
-			reason = "incomplete"
-		}
-		err := newExecutorError(errAgentIncomplete, "autocompaction_failed:"+reason)
-		t.logCompactionFailure(plan, err)
-		return err
-	}
-	if calls := responseToolCalls(final.Output); len(calls) > 0 {
-		err := newExecutorError(errAgentProtocol, "autocompaction_failed:compaction response contained tool calls")
-		t.logCompactionFailure(plan, err)
-		return err
-	}
+	// A summary call was made and billed. From here every failure path returns
+	// `stats` so the spend is charged, and degrades to the truncate strategy
+	// (drop old turns, no summary) rather than failing a turn we already paid
+	// for. truncate produces a strictly smaller payload, so it also resolves the
+	// "summary still over budget" case.
 	summary := strings.TrimSpace(final.OutputText())
-	if err := validateCompactionSummary(summary); err != nil {
-		err = newExecutorError(errAgentProtocol, "autocompaction_failed:"+err.Error())
-		t.logCompactionFailure(plan, err)
-		return err
+	if vErr := validateCompactionResponse(final, summary); vErr != nil {
+		t.logCompactionFailure(plan, vErr)
+		return stats, t.truncateSessionState(plan)
 	}
 	after := estimateHistoryTokens(t.state.inputWithSummary(summary, plan.firstKeptIndex))
 	if budget := t.compactor.cfg.budgetTokens(); budget > 0 && after > budget {
-		err := newExecutorError(errProviderContextLimit, fmt.Sprintf("autocompaction_failed:summary still over budget after compaction (%d > %d estimated tokens)", after, budget))
-		t.logCompactionFailure(plan, err)
-		return err
+		overErr := newExecutorError(errProviderContextLimit, fmt.Sprintf("autocompaction_failed:summary still over budget after compaction (%d > %d estimated tokens)", after, budget))
+		t.logCompactionFailure(plan, overErr)
+		return stats, t.truncateSessionState(plan)
 	}
 	t.state.applyCompaction(summary, plan.firstKeptIndex)
 	_ = t.logger.compaction(agentsession.CompactionPayload{
@@ -252,6 +254,56 @@ func (t *responsesClient) compactSessionState(ctx context.Context) error {
 		},
 		Details: detailsFromCompactionSummary(summary),
 	})
+	return stats, nil
+}
+
+// streamCompaction runs the compaction summary request with the same retry
+// budget as a normal request, so a transient provider error at the context
+// ceiling — exactly when compaction fires — does not abort the turn. On success
+// it returns the response and the spend it incurred; on failure it returns the
+// last error (and zero stats, since a failed attempt is not billed).
+func (t *responsesClient) streamCompaction(ctx context.Context, params responses.ResponseNewParams) (responses.Response, game.TurnStats, error) {
+	var final responses.Response
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		t.lastCostKnown = false
+		t.lastCostUSD = 0
+		final, err = t.streamResponse(ctx, params)
+		if err == nil {
+			return final, t.statsFromResponse(final), nil
+		}
+		var execErr *executorError
+		if !errors.As(err, &execErr) || !execErr.Retryable || attempt == 2 {
+			break
+		}
+		delay := retryDelay(attempt)
+		_ = t.logger.retry(t.sequence+1, attempt+1, delay, execErr)
+		select {
+		case <-ctx.Done():
+			return responses.Response{}, game.TurnStats{}, ctx.Err()
+		case <-time.After(delay):
+		}
+	}
+	return responses.Response{}, game.TurnStats{}, err
+}
+
+// validateCompactionResponse reports whether the compaction response is a usable
+// summary (completed, no tool calls, all required headings). A non-nil error
+// means the model misbehaved; the caller degrades to the truncate strategy.
+func validateCompactionResponse(final responses.Response, summary string) error {
+	if final.Status != responses.ResponseStatusCompleted {
+		reason := responseStopReason(final)
+		if reason == "" {
+			reason = "incomplete"
+		}
+		return newExecutorError(errAgentIncomplete, "autocompaction_failed:"+reason)
+	}
+	if calls := responseToolCalls(final.Output); len(calls) > 0 {
+		return newExecutorError(errAgentProtocol, "autocompaction_failed:compaction response contained tool calls")
+	}
+	if err := validateCompactionSummary(summary); err != nil {
+		return newExecutorError(errAgentProtocol, "autocompaction_failed:"+err.Error())
+	}
 	return nil
 }
 

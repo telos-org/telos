@@ -78,9 +78,61 @@ type nativeProviderConfig struct {
 type modelCapabilityProfile struct {
 	StateMode               string `json:"state_mode,omitempty"`
 	MaxOutputTokens         int    `json:"max_output_tokens,omitempty"`
+	ContextWindow           int    `json:"context_window,omitempty"`
 	SupportsReasoning       *bool  `json:"supports_reasoning,omitempty"`
 	SupportsFunctionCalling *bool  `json:"supports_function_calling,omitempty"`
 	StrictProtocol          bool   `json:"strict_protocol,omitempty"`
+}
+
+// effectiveContextWindow resolves the model's total context window in tokens.
+// Precedence: an explicit capability value (table/env) wins; otherwise a
+// built-in default keyed by the model family is used; 0 means "unknown" and
+// leaves the compaction trigger at the configured global default.
+func (p modelCapabilityProfile) effectiveContextWindow(model string) int {
+	if p.ContextWindow > 0 {
+		return p.ContextWindow
+	}
+	return builtinModelContextWindow(model)
+}
+
+// builtinModelContextWindow returns a conservative, well-established total
+// context window for the model families Telos routes today, used only when the
+// capability table/profile does not specify one (env always wins). Matching is
+// substring-based on the LiteLLM-style "provider/model" name. Values are the
+// published total context windows as of early 2026; when a model's real window
+// is unknown here, callers fall back to the global compaction default.
+//
+// Because the effective compaction window is floor(global default, this value),
+// families at or above the 128k default are unaffected in practice — the table
+// matters most for models whose window is *below* the default.
+func builtinModelContextWindow(model string) int {
+	m := strings.ToLower(strings.TrimSpace(model))
+	switch {
+	case m == "":
+		return 0
+	// Anthropic Claude 4.x (opus/sonnet/haiku): 200k context.
+	case strings.Contains(m, "claude"), strings.Contains(m, "opus"), strings.Contains(m, "sonnet"), strings.Contains(m, "haiku"):
+		return 200000
+	// OpenAI GPT-5.x and GPT-4.1 / o-series reasoning models.
+	case strings.Contains(m, "gpt-4.1"):
+		return 1000000
+	case strings.Contains(m, "gpt-5"):
+		return 400000
+	case strings.Contains(m, "o3"), strings.Contains(m, "o4"):
+		return 200000
+	// Older OpenAI 128k-class models.
+	case strings.Contains(m, "gpt-4o"), strings.Contains(m, "gpt-4-turbo"):
+		return 128000
+	case strings.Contains(m, "gpt-4-32k"):
+		return 32768
+	case strings.Contains(m, "gpt-3.5"):
+		return 16385
+	// Google Gemini 1.5/2.x long-context models.
+	case strings.Contains(m, "gemini"):
+		return 1000000
+	default:
+		return 0
+	}
 }
 
 func firstEnv(names ...string) string {
@@ -118,6 +170,11 @@ func modelCapabilityProfileFromEnv() modelCapabilityProfile {
 	if raw := strings.TrimSpace(os.Getenv("TELOS_MODEL_MAX_OUTPUT_TOKENS")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
 			profile.MaxOutputTokens = n
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("TELOS_MODEL_CONTEXT_WINDOW")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			profile.ContextWindow = n
 		}
 	}
 	if raw := strings.TrimSpace(os.Getenv("TELOS_MODEL_SUPPORTS_REASONING")); raw != "" {

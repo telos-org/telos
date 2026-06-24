@@ -29,6 +29,13 @@ type NativeExecutor struct {
 // here and reused for every turn — no env parsing happens per turn or per
 // model response. If the config is invalid the error is stored and surfaced
 // as a terminal error on the first ExecuteTurn call.
+//
+// PRECONDITION — isolation: the executor's tools are deliberately unsandboxed
+// (see the security-model comment in tools.go); `bash` and absolute paths
+// operate on the host with no workspace jail. Callers MUST run this executor
+// only inside an ephemeral, untrusted-code-safe sandbox (container/pod). That
+// isolation is the sole containment boundary; running it on a host with data
+// worth protecting is unsafe by design, not a bug to be fixed in this package.
 func NewNativeExecutor(p *platform.LocalPlatform, model, thinking string, timeout int) *NativeExecutor {
 	if thinking == "" {
 		thinking = "medium"

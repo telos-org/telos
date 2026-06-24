@@ -26,6 +26,16 @@ type sessionUsage = agentsession.Usage
 type sessionCost = agentsession.Cost
 
 // -- Session logging ---------------------------------------------------------
+//
+// PRIVACY / DATA HANDLING: this logger records assistant text, tool arguments,
+// and tool outputs verbatim and applies no redaction. Because the executor is
+// unsandboxed (see tools.go), `bash` output and file reads routinely place
+// environment variables, tokens, and raw file contents into session.jsonl. The
+// file therefore carries the same secret-bearing trust level as the workspace
+// itself, and downstream handling must respect that: it may be uploaded to and
+// retained in artifact storage (e.g. the evals object store), so anywhere it is
+// shipped or granted read access must be treated as exposing workspace secrets.
+// This is an accepted property of the trust model, not an incidental leak.
 
 type nativeSessionLogger struct {
 	path      string
@@ -105,6 +115,7 @@ func (l *nativeSessionLogger) providerConfig(cfg nativeProviderConfig) error {
 		StrictProtocol:          cfg.Capability.StrictProtocol,
 		PricingConfigured:       cfg.PricingConfigured,
 		CapabilityMaxOutput:     cfg.Capability.MaxOutputTokens,
+		CapabilityContextWindow: cfg.Capability.effectiveContextWindow(cfg.Model),
 		SupportsReasoning:       cfg.Capability.SupportsReasoning,
 		SupportsFunctionCalling: cfg.Capability.SupportsFunctionCalling,
 	}))

@@ -110,7 +110,7 @@ func TestResponsesClientCompactsBeforeNormalRequest(t *testing.T) {
 	}
 }
 
-func TestResponsesClientInvalidCompactionFailsClearly(t *testing.T) {
+func TestResponsesClientInvalidCompactionFallsBackToTruncate(t *testing.T) {
 	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "500")
 	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
 	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
@@ -118,7 +118,12 @@ func TestResponsesClientInvalidCompactionFailsClearly(t *testing.T) {
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		writeResponsesStream(w, responseWithText("resp_bad", "not a valid summary"))
+		if requests == 1 {
+			// Compaction attempt returns a malformed summary.
+			writeResponsesStream(w, responseWithText("resp_bad", "not a valid summary"))
+			return
+		}
+		writeResponsesStream(w, responseWithText("resp_normal", "Continued."))
 	}))
 	defer server.Close()
 
@@ -128,16 +133,68 @@ func TestResponsesClientInvalidCompactionFailsClearly(t *testing.T) {
 		messageItem("old " + strings.Repeat("x", 2000)),
 		messageItem("recent"),
 	}
-	_, err := client.send(context.Background())
-	if err == nil || !strings.Contains(err.Error(), "autocompaction_failed") {
-		t.Fatalf("expected clear compaction failure, got %v", err)
+	turn, err := client.send(context.Background())
+	if err != nil {
+		t.Fatalf("malformed summary should degrade to truncate, not fail the turn: %v", err)
 	}
-	if requests != 1 {
-		t.Fatalf("normal request should not be sent after compaction failure, requests=%d", requests)
+	if turn.text != "Continued." {
+		t.Fatalf("turn text: %q", turn.text)
+	}
+	if requests != 2 {
+		t.Fatalf("expected compaction attempt + normal request, requests=%d", requests)
+	}
+	// The wasted compaction call's tokens are still charged to the turn: the
+	// malformed attempt (11/7/3) plus the normal response (11/7/3).
+	if turn.stats.InputTokens != 22 || turn.stats.OutputTokens != 14 || turn.stats.CacheReadTokens != 6 {
+		t.Fatalf("compaction spend not folded into turn stats: %+v", turn.stats)
 	}
 	events := sessionLogEventsByType(t, client.logger.path, "compaction")
-	if len(events) != 1 || events[0]["error"] == nil {
-		t.Fatalf("failure compaction event missing error: %#v", events)
+	// One failure event for the malformed summary, one for the truncate fallback.
+	if len(events) != 2 {
+		t.Fatalf("expected failure + truncate compaction events: %#v", events)
+	}
+	if events[0]["error"] == nil {
+		t.Fatalf("first compaction event should record the summary failure: %#v", events[0])
+	}
+	if events[1]["reason"] != "token_budget_naive_cutoff" {
+		t.Fatalf("second compaction event should be the truncate fallback: %#v", events[1])
+	}
+}
+
+func TestResponsesClientFoldsCompactionSpendIntoTurnStats(t *testing.T) {
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "500")
+	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
+	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
+
+	summary := validCompactionSummary("from llm")
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 1 {
+			writeResponsesStream(w, responseWithText("resp_compact", summary))
+			return
+		}
+		writeResponsesStream(w, responseWithText("resp_normal", "Continued."))
+	}))
+	defer server.Close()
+
+	client := newTestResponsesClient(t, server.URL, "task")
+	client.state.history = responses.ResponseInputParam{
+		messageItem("task"),
+		messageItem("old fact " + strings.Repeat("x", 2000)),
+		messageItem("recent fact"),
+	}
+	turn, err := client.send(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if requests != 2 {
+		t.Fatalf("requests: got %d want 2", requests)
+	}
+	// The successful summary call (11/7/3) plus the normal response (11/7/3) must
+	// both be metered against the turn, not just logged to session.jsonl.
+	if turn.stats.InputTokens != 22 || turn.stats.OutputTokens != 14 || turn.stats.CacheReadTokens != 6 {
+		t.Fatalf("compaction spend not folded into turn stats: %+v", turn.stats)
 	}
 }
 
@@ -267,6 +324,53 @@ func TestResponsesClientServerChainIgnoresCompaction(t *testing.T) {
 	}
 	if requests != 1 {
 		t.Fatalf("requests: got %d want 1", requests)
+	}
+}
+
+func TestResponsesClientRetriesTransientCompactionError(t *testing.T) {
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "500")
+	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
+	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
+
+	summary := validCompactionSummary("from llm")
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			// First compaction attempt fails with a retryable upstream error.
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `data: {"type":"response.failed","response":{"id":"resp_fail","status":"failed","error":{"message":"transient upstream error"}}}`+"\n\n")
+			if f, ok := w.(http.Flusher); ok {
+				f.Flush()
+			}
+		case 2:
+			writeResponsesStream(w, responseWithText("resp_compact", summary))
+		default:
+			writeResponsesStream(w, responseWithText("resp_normal", "Continued."))
+		}
+	}))
+	defer server.Close()
+
+	client := newTestResponsesClient(t, server.URL, "task")
+	client.state.history = responses.ResponseInputParam{
+		messageItem("task"),
+		messageItem("old fact " + strings.Repeat("x", 2000)),
+		messageItem("recent fact"),
+	}
+	turn, err := client.send(context.Background())
+	if err != nil {
+		t.Fatalf("transient compaction error should be retried, not fail the turn: %v", err)
+	}
+	if turn.text != "Continued." {
+		t.Fatalf("turn text: %q", turn.text)
+	}
+	if requests != 3 {
+		t.Fatalf("expected failed attempt + retry + normal request, requests=%d", requests)
+	}
+	if len(sessionLogEventsByType(t, client.logger.path, "retry")) == 0 {
+		t.Fatal("expected a retry event for the transient compaction failure")
 	}
 }
 

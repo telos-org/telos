@@ -58,7 +58,13 @@ type compactionConfig struct {
 	strategy         string
 }
 
-func compactionConfigFromEnv(reserveOutput int) compactionConfig {
+// compactionConfigFromEnv resolves the compaction config. contextWindow starts
+// from the global default (overridable by TELOS_AUTOCOMPACT_CONTEXT_WINDOW) and
+// is then floored to the model's actual context window when known, so the
+// trigger that exists to prevent context overflow can never exceed what the
+// model can hold. A modelContextWindow of 0 means "unknown" and leaves the
+// configured default in place.
+func compactionConfigFromEnv(reserveOutput, modelContextWindow int) compactionConfig {
 	cfg := compactionConfig{
 		contextWindow:    defaultCompactionContextWindow,
 		triggerRatio:     defaultCompactionTriggerRatio,
@@ -88,6 +94,9 @@ func compactionConfigFromEnv(reserveOutput int) compactionConfig {
 		case "naive", compactionStrategyTruncate:
 			cfg.strategy = compactionStrategyTruncate
 		}
+	}
+	if modelContextWindow > 0 && (cfg.contextWindow <= 0 || modelContextWindow < cfg.contextWindow) {
+		cfg.contextWindow = modelContextWindow
 	}
 	return cfg
 }
@@ -135,6 +144,18 @@ func (c *compactor) plan(s *conversationState) (compactionPlan, bool, error) {
 	}
 	firstKept := chooseFirstKeptIndex(s.history, s.firstKeptIndex, c.cfg.keepRecentTokens)
 	firstKept = ensureSummaryRoom(s, firstKept, budget)
+	if firstKept >= len(s.history) {
+		// ensureSummaryRoom advanced past the final message to reserve summary
+		// headroom. Dropping all recent context is correct when the tail is
+		// oversized or orphaned (the summary still captures it), but not when a
+		// coherent recent group would itself fit the budget — there is no point
+		// reserving room for a summary by discarding the only raw turn it would
+		// sit beside. Back off to that tail when one exists and fits.
+		if tail := lastTailBoundary(s.history, s.firstKeptIndex+1); tail > s.firstKeptIndex &&
+			estimateHistoryTokens(s.inputWithSummary("", tail)) <= budget {
+			firstKept = tail
+		}
+	}
 	if firstKept <= s.firstKeptIndex || firstKept > len(s.history) {
 		return compactionPlan{}, false, fmt.Errorf("autocompaction cannot find a new safe cut point")
 	}
@@ -169,6 +190,23 @@ func ensureSummaryRoom(s *conversationState, firstKept, budget int) int {
 		firstKept = next
 	}
 	return firstKept
+}
+
+// lastTailBoundary returns the largest cut point in [min, len-1] that keeps at
+// least the final message group without orphaning a function output, or 0 if no
+// such non-orphan tail exists. It is used to avoid dropping all recent context
+// when a coherent, in-budget tail could have been kept; reserving summary
+// headroom is not worth sending the model a summary with an empty tail.
+func lastTailBoundary(history responses.ResponseInputParam, min int) int {
+	if min < 1 {
+		min = 1
+	}
+	for b := len(history) - 1; b >= min; b-- {
+		if !hasOrphanFunctionOutputFrom(history, b) {
+			return b
+		}
+	}
+	return 0
 }
 
 func chooseFirstKeptIndex(history responses.ResponseInputParam, currentFirstKept, keepRecentTokens int) int {
