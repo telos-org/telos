@@ -17,6 +17,7 @@ go_library(
         "tokens.go",
         "tools.go",
     ],
+    embedsrcs = ["assets/cl100k_base.tiktoken.gz"],
     importpath = "github.com/telos-org/telos/internal/executor",
     visibility = ["//:__subpackages__"],
     deps = [
@@ -28,7 +29,6 @@ go_library(
         "@com_github_openai_openai_go//option",
         "@com_github_openai_openai_go//responses",
         "@com_github_pkoukk_tiktoken_go//:tiktoken-go",
-        "@com_github_pkoukk_tiktoken_go_loader//:tiktoken-go-loader",
     ],
 )
 
