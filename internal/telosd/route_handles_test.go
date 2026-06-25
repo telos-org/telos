@@ -350,6 +350,36 @@ func TestProductHandlePrefersProductRouteOverDashboardRoute(t *testing.T) {
 	}
 }
 
+func TestRouteHandlesPreferExplicitPublicRouteLabels(t *testing.T) {
+	name := "auth"
+	kind := sessionapi.KindController
+	session := sessionapi.Session{
+		SessionID:   "sess_auth",
+		SessionKind: &kind,
+		SpecName:    &name,
+		Status:      sessionapi.StatusRunning,
+	}
+	routes := []publicRoute{
+		{
+			Namespace: "ns-auth",
+			Labels:    map[string]string{publicRouteLabel: "service"},
+			Data:      map[string]string{"hostname": "auth.usetelos.ai"},
+		},
+		{
+			Namespace: "ns-auth",
+			Labels:    map[string]string{publicRouteLabel: "dashboard"},
+			Data:      map[string]string{"hostname": "dashboard-auth.usetelos.ai"},
+		},
+	}
+
+	if handle := productHandleFor(routes, session); handle != "auth.usetelos.ai" {
+		t.Fatalf("service handle: got %q", handle)
+	}
+	if handle := dashboardHandleFor(routes, session); handle != "dashboard-auth.usetelos.ai" {
+		t.Fatalf("dashboard handle: got %q", handle)
+	}
+}
+
 func TestParsePublicRoutes(t *testing.T) {
 	routes, err := parsePublicRoutes([]byte(`{
 	  "items": [
@@ -402,7 +432,7 @@ func TestReadPublicRoutesUsesContextTimeoutOnly(t *testing.T) {
 	if gotTimeout != 2*time.Second {
 		t.Fatalf("timeout: got %s", gotTimeout)
 	}
-	wantArgs := []string{"get", "cm", "-A", "-l", "telos.ai/public-route=primary", "-o", "json"}
+	wantArgs := []string{"get", "cm", "-A", "-l", "telos.ai/public-route in (primary,service,dashboard)", "-o", "json"}
 	if !slices.Equal(gotArgs, wantArgs) {
 		t.Fatalf("kubectl args: got %#v want %#v", gotArgs, wantArgs)
 	}
