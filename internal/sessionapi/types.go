@@ -182,8 +182,6 @@ type Session struct {
 	CurrentSpec             *CurrentSpec     `json:"current_spec,omitempty"`
 	CurrentRound            *int             `json:"current_round,omitempty"`
 	CurrentRole             *string          `json:"current_role,omitempty"`
-	HeartbeatAt             *string          `json:"heartbeat_at,omitempty"`
-	NextRunAt               *string          `json:"next_run_at,omitempty"`
 	FinishedAt              *string          `json:"finished_at,omitempty"`
 	Result                  *string          `json:"result,omitempty"`
 	Error                   *string          `json:"error,omitempty"`
@@ -195,6 +193,7 @@ type Session struct {
 	RoundCount              *int             `json:"round_count,omitempty"`
 	CompletionReason        *string          `json:"completion_reason,omitempty"`
 	VerifierConceded        *bool            `json:"verifier_conceded,omitempty"`
+	ServiceURL              *string          `json:"service_url,omitempty"`
 	ArtifactURI             *string          `json:"artifact_uri,omitempty"`
 	DashboardURL            *string          `json:"dashboard_url,omitempty"`
 	CurrentSpecVersion      *int             `json:"current_spec_version,omitempty"`

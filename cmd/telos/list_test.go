@@ -254,7 +254,7 @@ func TestControllerListSessionsScopesLocalControllerTree(t *testing.T) {
 	}
 }
 
-func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
+func TestPrintSessionDescriptionIncludesAgentFacingDetails(t *testing.T) {
 	name := "postgres"
 	kind := sessionapi.KindController
 	result := "completed"
@@ -327,7 +327,7 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 		"evaluation     accepted",
 		"spec version   2",
 		"rounds         4",
-		"Artifact",
+		"Service",
 		"https://postgres.example",
 		"Latest Epoch",
 		"RESULT     STARTED",
