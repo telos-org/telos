@@ -11,6 +11,20 @@ const (
 	conversationStateStatelessHistory = "stateless_history"
 )
 
+// messageInputItem builds a Responses API message input item with an explicit
+// "type":"message". The OpenAI Go SDK omits the optional type on "easy input"
+// messages, and while OpenAI itself defaults the missing field, some
+// OpenAI-compatible gateways (e.g. Wafer) reject an input item whose type is
+// absent ("input[0].type=None is not supported"). Setting it explicitly is
+// spec-compliant for every provider and keeps history items portable.
+func messageInputItem(text string, role responses.EasyInputMessageRole) responses.ResponseInputItemUnionParam {
+	item := responses.ResponseInputItemParamOfMessage(text, role)
+	if item.OfMessage != nil {
+		item.OfMessage.Type = responses.EasyInputMessageTypeMessage
+	}
+	return item
+}
+
 type conversationState struct {
 	mode              string
 	input             responses.ResponseInputParam
@@ -108,7 +122,7 @@ func (s *conversationState) recordToolResults(results []nativeToolResult) {
 }
 
 func (s *conversationState) recordCorrection(prompt string) {
-	item := responses.ResponseInputItemParamOfMessage(prompt, responses.EasyInputMessageRoleUser)
+	item := messageInputItem(prompt, responses.EasyInputMessageRoleUser)
 	s.input = responses.ResponseInputParam{item}
 	s.history = append(s.history, item)
 }
@@ -117,7 +131,7 @@ func (s *conversationState) recordAssistantMessage(text string) {
 	if strings.TrimSpace(text) == "" {
 		return
 	}
-	s.history = append(s.history, responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleAssistant))
+	s.history = append(s.history, messageInputItem(text, responses.EasyInputMessageRoleAssistant))
 }
 
 func (s *conversationState) recordAssistantToolCalls(calls []nativeToolCall) {

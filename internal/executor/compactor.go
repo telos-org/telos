@@ -321,7 +321,7 @@ func isUserMessage(item responses.ResponseInputItemUnionParam) bool {
 }
 
 func compactionSummaryMessage(summary string) responses.ResponseInputItemUnionParam {
-	return responses.ResponseInputItemParamOfMessage(compactionSummaryMessagePrefix+summary, responses.EasyInputMessageRoleAssistant)
+	return messageInputItem(compactionSummaryMessagePrefix+summary, responses.EasyInputMessageRoleAssistant)
 }
 
 func compactionCommandMessage(summaryBudgetTokens int) responses.ResponseInputItemUnionParam {
@@ -329,7 +329,7 @@ func compactionCommandMessage(summaryBudgetTokens int) responses.ResponseInputIt
 	if summaryBudgetTokens > 0 {
 		text += fmt.Sprintf("\n\nHard length limit: keep the entire summary under roughly %d tokens. If the raw history is huge, keep only exact facts needed to continue and omit repetitive filler.", summaryBudgetTokens)
 	}
-	return responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleUser)
+	return messageInputItem(text, responses.EasyInputMessageRoleUser)
 }
 
 func validateCompactionSummary(summary string) error {

@@ -45,7 +45,7 @@ type responsesClient struct {
 
 func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, thinking string, maxOutputTokens int, task, role string, logger *nativeSessionLogger) *responsesClient {
 	initial := responses.ResponseInputParam{
-		responses.ResponseInputItemParamOfMessage(task, responses.EasyInputMessageRoleUser),
+		messageInputItem(task, responses.EasyInputMessageRoleUser),
 	}
 	reasoning := reasoningEffort(thinking)
 	if cfg.Capability.SupportsReasoning != nil && !*cfg.Capability.SupportsReasoning {
