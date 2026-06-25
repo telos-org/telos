@@ -306,7 +306,7 @@ func TestCloudCreateSessionRejectsDuplicateLiveController(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected duplicate controller to fail")
 	}
-	if !strings.Contains(err.Error(), "controller spec \"postgres\" already exists") {
+	if !strings.Contains(err.Error(), "root session \"postgres\" already exists") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -410,27 +410,21 @@ func TestCreateSessionRejectsOversizedBody(t *testing.T) {
 	assertEqual(t, "status_code", "400", itoa(resp.StatusCode))
 }
 
-// --------- PUT /api/sessions/{id}/spec ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+// --------- PUT /api/sessions/{name}/spec ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-func TestUpdateControllerSessionSpec(t *testing.T) {
+func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 	controller, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
 
 	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
-	maxCost := 12.5
-	agentTimeout := 3600
 	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
-		SpecMarkdown:    updated,
-		Model:           "sail-research/moonshotai/Kimi-K2.6",
-		Thinking:        "high",
-		MaxCostUSD:      &maxCost,
-		AgentTimeoutSec: &agentTimeout,
+		SpecMarkdown: updated,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/"+controller.SessionID+"/spec", strings.NewReader(string(body)))
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -444,9 +438,19 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 		data, _ := io.ReadAll(resp.Body)
 		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
 	}
-	var session sessionapi.Session
-	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
+	var update sessionapi.SessionSpecUpdateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&update); err != nil {
 		t.Fatal(err)
+	}
+	if update.Operation != "updated" {
+		t.Fatalf("operation: got %q", update.Operation)
+	}
+	session := update.Session
+	if session == nil {
+		t.Fatal("missing session")
+	}
+	if session.SessionID != controller.SessionID {
+		t.Fatalf("session_id: got %q want %q", session.SessionID, controller.SessionID)
 	}
 	if session.SpecName == nil || *session.SpecName != "postgres" {
 		t.Fatalf("spec_name: got %#v", session.SpecName)
@@ -460,10 +464,6 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 	if len(session.SpecVersions) != 1 {
 		t.Fatalf("spec_versions: got %#v", session.SpecVersions)
 	}
-	assertConfigStr(t, session.Config, "model", "sail-research/moonshotai/Kimi-K2.6")
-	assertConfigStr(t, session.Config, "thinking", "high")
-	assertConfigFloat(t, session.Config, "max_cost_usd", maxCost)
-	assertConfigFloat(t, session.Config, "agent_timeout_sec", float64(agentTimeout))
 	if session.SpecVersions[0]["previous_version"].(float64) != 1 {
 		t.Fatalf("previous_version: got %#v", session.SpecVersions[0])
 	}
@@ -473,6 +473,62 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 	}
 	if string(data) != updated {
 		t.Fatalf("spec was not updated: %q", string(data))
+	}
+}
+
+func TestApplySessionSpecCreatesRootWhenMissing(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+	var update sessionapi.SessionSpecUpdateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&update); err != nil {
+		t.Fatal(err)
+	}
+	if update.Operation != "created" {
+		t.Fatalf("operation: got %q", update.Operation)
+	}
+	if update.Session == nil || update.Session.SpecName == nil || *update.Session.SpecName != "postgres" {
+		t.Fatalf("session: got %#v", update.Session)
+	}
+}
+
+func TestApplySessionSpecRejectsNameMismatch(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	body := `{"spec_markdown":"---\nversion: v0\nname: redis\nplatform: cloud\n---\n# Redis\n"}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 400, got %d: %s", resp.StatusCode, data)
 	}
 }
 
@@ -525,13 +581,30 @@ func TestGetControllerSessionSpec(t *testing.T) {
 	}
 }
 
-func TestUpdateControllerSessionSpecRejectsTaskSession(t *testing.T) {
+func TestApplySessionSpecRejectsDuplicateActiveRoots(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
-	task, _ := writeAuthorizedSession(t, store.Root, "task", sessionapi.KindTask, nil)
+	first, _ := writeAuthorizedSession(t, store.Root, "sess_first", sessionapi.KindController, nil)
+	second, _ := writeAuthorizedSession(t, store.Root, "sess_second", sessionapi.KindController, nil)
+	for _, session := range []sessionapi.Manifest{first, second} {
+		manifestPath := filepath.Join(store.Root, session.SessionID, "session.json")
+		m, err := sessionapi.ReadManifest(manifestPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.ParentSessionID = nil
+		m.SpecName = "postgres"
+		if len(m.Specs) > 0 {
+			m.Specs[0].Name = "postgres"
+			m.Specs[0].DirName = "postgres"
+		}
+		if err := sessionapi.WriteManifest(manifestPath, m); err != nil {
+			t.Fatal(err)
+		}
+	}
 
-	body := `{"spec_markdown":"---\nversion: v0\nname: task\nplatform: cloud\n---\n# Task\n"}`
-	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/"+task.SessionID+"/spec", strings.NewReader(body))
+	body := `{"spec_markdown":"---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,9 +614,9 @@ func TestUpdateControllerSessionSpecRejectsTaskSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
+	if resp.StatusCode != http.StatusConflict {
 		data, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected 400, got %d: %s", resp.StatusCode, data)
+		t.Fatalf("expected 409, got %d: %s", resp.StatusCode, data)
 	}
 }
 

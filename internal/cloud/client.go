@@ -203,13 +203,13 @@ func (c *Client) CreateSession(req sessionapi.SessionCreateRequest) (*sessionapi
 	return &session, nil
 }
 
-// UpdateSessionSpec updates a controller session spec in place.
-func (c *Client) UpdateSessionSpec(id string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.Session, error) {
+// ApplySessionSpec creates or updates the root session named by the spec.
+func (c *Client) ApplySessionSpec(name string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.SessionSpecUpdateResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("PUT", "/api/sessions/"+id+"/spec", body)
+	resp, err := c.do("PUT", "/api/sessions/"+name+"/spec", body)
 	if err != nil {
 		return nil, err
 	}
@@ -217,11 +217,11 @@ func (c *Client) UpdateSessionSpec(id string, req sessionapi.SessionSpecUpdateRe
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	var session sessionapi.Session
-	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
+	var response sessionapi.SessionSpecUpdateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
-	return &session, nil
+	return &response, nil
 }
 
 // ListEnvironments lists cloud environments from the control plane.

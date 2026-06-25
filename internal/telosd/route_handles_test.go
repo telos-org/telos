@@ -56,7 +56,7 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	}
 
 	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres\n"
-	if _, err := store.UpdateSpec(session.SessionID, sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated}); err != nil {
+	if _, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated}); err != nil {
 		t.Fatal(err)
 	}
 	if len(substrate.applies) != 2 {
