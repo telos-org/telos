@@ -200,7 +200,7 @@ func TestSessionCreateRequestOmitsEmptyRuntimeDefaults(t *testing.T) {
 	}
 }
 
-func TestClientUpdateSessionSpec(t *testing.T) {
+func TestClientApplySessionSpec(t *testing.T) {
 	var gotMethod string
 	var gotPath string
 	var gotBody sessionapi.SessionSpecUpdateRequest
@@ -214,47 +214,41 @@ func TestClientUpdateSessionSpec(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		json.NewEncoder(w).Encode(sessionapi.Session{
-			SessionID: "sess_controller",
-			Status:    sessionapi.StatusRunning,
-			Runtime:   sessionapi.RuntimeCloud,
+		json.NewEncoder(w).Encode(sessionapi.SessionSpecUpdateResponse{
+			Operation: "updated",
+			Session: &sessionapi.Session{
+				SessionID: "sess_controller",
+				Status:    sessionapi.StatusRunning,
+				Runtime:   sessionapi.RuntimeCloud,
+			},
 		})
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	maxCost := 9.0
-	agentTimeout := 600
-	session, err := client.UpdateSessionSpec("sess_controller", sessionapi.SessionSpecUpdateRequest{
-		SpecMarkdown:    "---\nversion: v0\nname: demo\n---\n# Demo\n",
-		Model:           "sail-research/moonshotai/Kimi-K2.6",
-		Thinking:        "high",
-		MaxCostUSD:      &maxCost,
-		AgentTimeoutSec: &agentTimeout,
+	response, err := client.ApplySessionSpec("demo", sessionapi.SessionSpecUpdateRequest{
+		SpecMarkdown: "---\nversion: v0\nname: demo\n---\n# Demo\n",
 	})
 	if err != nil {
-		t.Fatalf("UpdateSessionSpec: %v", err)
+		t.Fatalf("ApplySessionSpec: %v", err)
 	}
 	if gotMethod != http.MethodPut {
 		t.Fatalf("method: got %q", gotMethod)
 	}
-	if gotPath != "/api/sessions/sess_controller/spec" {
+	if gotPath != "/api/sessions/demo/spec" {
 		t.Fatalf("path: got %q", gotPath)
 	}
 	if !strings.Contains(gotBody.SpecMarkdown, "name: demo") {
 		t.Fatalf("body: got %#v", gotBody)
 	}
-	if gotBody.Model != "sail-research/moonshotai/Kimi-K2.6" || gotBody.Thinking != "high" {
-		t.Fatalf("runtime config not sent: %#v", gotBody)
+	if response.Operation != "updated" {
+		t.Fatalf("operation: got %q", response.Operation)
 	}
-	if gotBody.MaxCostUSD == nil || *gotBody.MaxCostUSD != maxCost {
-		t.Fatalf("max cost not sent: %#v", gotBody.MaxCostUSD)
+	if response.Session == nil {
+		t.Fatal("missing session")
 	}
-	if gotBody.AgentTimeoutSec == nil || *gotBody.AgentTimeoutSec != agentTimeout {
-		t.Fatalf("agent timeout not sent: %#v", gotBody.AgentTimeoutSec)
-	}
-	if session.SessionID != "sess_controller" {
-		t.Fatalf("session: got %#v", session)
+	if response.Session.SessionID != "sess_controller" {
+		t.Fatalf("session: got %#v", response.Session)
 	}
 }
 

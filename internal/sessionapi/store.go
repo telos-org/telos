@@ -37,7 +37,7 @@ var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 type Store interface {
 	Create(req SessionCreateRequest) (*Session, error)
 	Spec(id string) (*SessionSpecResponse, error)
-	UpdateSpec(id string, req SessionSpecUpdateRequest) (*Session, error)
+	UpdateSpec(name string, req SessionSpecUpdateRequest) (*SessionSpecUpdateResponse, error)
 	List() ([]Session, error)
 	Get(id string) (*Session, error)
 	Stop(id string) (*Session, error)
@@ -82,6 +82,10 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
+	return fs.createLocked(req)
+}
+
+func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	if err := validateCreateRequest(req); err != nil {
 		return nil, err
 	}
@@ -107,12 +111,12 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		return nil, err
 	}
 	if sessionKind == KindController {
-		ids, err := fs.liveControllerIDsBySpecName(specName)
+		ids, err := fs.liveRootIDsBySpecName(specName)
 		if err != nil {
 			return nil, err
 		}
 		if len(ids) > 0 {
-			return nil, fmt.Errorf("controller spec %q already exists as %s: %w", specName, strings.Join(ids, ", "), ErrConflict)
+			return nil, fmt.Errorf("root session %q already exists as %s: %w", specName, strings.Join(ids, ", "), ErrConflict)
 		}
 	}
 	access, err := NewScopedToken(id, sessionKind)
@@ -230,7 +234,7 @@ func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) (SessionKind
 	return KindTask, nil
 }
 
-func (fs *FileStore) liveControllerIDsBySpecName(specName string) ([]string, error) {
+func (fs *FileStore) liveRootIDsBySpecName(specName string) ([]string, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -247,7 +251,10 @@ func (fs *FileStore) liveControllerIDsBySpecName(specName string) ([]string, err
 		if err != nil {
 			continue
 		}
-		if m.SessionKind != KindController || m.SpecName != specName {
+		if m.ParentSessionID != nil && *m.ParentSessionID != "" {
+			continue
+		}
+		if m.SpecName != specName {
 			continue
 		}
 		if deriveStatus(m).IsTerminal() {
@@ -301,11 +308,56 @@ func (fs *FileStore) Spec(id string) (*SessionSpecResponse, error) {
 	}, nil
 }
 
-// UpdateSpec replaces a controller session's primary spec in place.
-func (fs *FileStore) UpdateSpec(id string, req SessionSpecUpdateRequest) (*Session, error) {
+// UpdateSpec creates or updates the active root session named by the spec.
+func (fs *FileStore) UpdateSpec(name string, req SessionSpecUpdateRequest) (*SessionSpecUpdateResponse, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
+	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
+	prepared, err := fs.prepareSpecForUpdate(markdown)
+	if err != nil {
+		return nil, err
+	}
+	if prepared.Name != name {
+		return nil, fmt.Errorf("spec name %q does not match route name %q: %w", prepared.Name, name, ErrInvalidSession)
+	}
+
+	ids, err := fs.liveRootIDsBySpecName(name)
+	if err != nil {
+		return nil, err
+	}
+	switch len(ids) {
+	case 0:
+		kind := KindController
+		session, err := fs.createLocked(SessionCreateRequest{SpecMarkdown: &markdown, SessionKind: &kind})
+		if err != nil {
+			return nil, err
+		}
+		return &SessionSpecUpdateResponse{Operation: "created", Session: session}, nil
+	case 1:
+		session, err := fs.updateSpecByIDLocked(ids[0], markdown)
+		if err != nil {
+			return nil, err
+		}
+		return &SessionSpecUpdateResponse{Operation: "updated", Session: session}, nil
+	default:
+		return nil, fmt.Errorf("multiple active root sessions named %q: %s: %w", name, strings.Join(ids, ", "), ErrConflict)
+	}
+}
+
+func (fs *FileStore) prepareSpecForUpdate(markdown string) (preparedRequestSpec, error) {
+	if err := os.MkdirAll(fs.Root, 0o755); err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("create sessions root: %w", err)
+	}
+	dir, err := os.MkdirTemp(fs.Root, ".apply-")
+	if err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("create apply compile dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	return prepareRequestSpec(dir, SessionCreateRequest{SpecMarkdown: &markdown})
+}
+
+func (fs *FileStore) updateSpecByIDLocked(id string, markdown string) (*Session, error) {
 	m, err := ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -313,25 +365,23 @@ func (fs *FileStore) UpdateSpec(id string, req SessionSpecUpdateRequest) (*Sessi
 		}
 		return nil, err
 	}
-	if m.SessionKind != KindController {
-		return nil, fmt.Errorf("task sessions do not have mutable specs: %w", ErrInvalidSession)
+	if m.ParentSessionID != nil && *m.ParentSessionID != "" {
+		return nil, fmt.Errorf("child sessions do not have mutable specs: %w", ErrInvalidSession)
 	}
 	if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
-		return nil, fmt.Errorf("controller session has no mutable spec: %w", ErrInvalidSession)
+		return nil, fmt.Errorf("root session has no mutable spec: %w", ErrInvalidSession)
 	}
 
-	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
 	prepared, err := prepareRequestSpec(fs.sessionDir(id), SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
 		return nil, err
 	}
 	if prepared.Name != m.SpecName {
-		return nil, fmt.Errorf("controller spec name is immutable: %w", ErrInvalidSession)
+		return nil, fmt.Errorf("root session spec name is immutable: %w", ErrInvalidSession)
 	}
 	if err := os.WriteFile(*m.SessionSpecPath, prepared.SpecData, 0o644); err != nil {
 		return nil, fmt.Errorf("write session spec: %w", err)
 	}
-	updateManifestConfig(&m.Config, req)
 	previousVersion := ptrOr(m.CurrentSpecVersion, 1)
 	version := previousVersion + 1
 	m.CurrentSpecVersion = &version
@@ -351,21 +401,6 @@ func (fs *FileStore) UpdateSpec(id string, req SessionSpecUpdateRequest) (*Sessi
 		return nil, err
 	}
 	return fs.deriveSession(id, m)
-}
-
-func updateManifestConfig(cfg *SessionConfig, req SessionSpecUpdateRequest) {
-	if req.Model != "" {
-		cfg.Model = req.Model
-	}
-	if req.Thinking != "" {
-		cfg.Thinking = req.Thinking
-	}
-	if req.MaxCostUSD != nil {
-		cfg.MaxCostUSD = req.MaxCostUSD
-	}
-	if req.AgentTimeoutSec != nil {
-		cfg.AgentTimeoutSec = *req.AgentTimeoutSec
-	}
 }
 
 // List returns all sessions ordered by creation time descending.

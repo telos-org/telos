@@ -20,7 +20,7 @@ const maxSessionRequestBytes = 4 << 20
 //	GET  /api/sessions
 //	GET  /api/sessions/{id}
 //	GET  /api/sessions/{id}/spec
-//	PUT  /api/sessions/{id}/spec
+//	PUT  /api/sessions/{name}/spec
 //	POST /api/sessions/{id}/stop
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
@@ -37,7 +37,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer) {
 	mux.HandleFunc("GET /api/sessions", h.listSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", h.getSession)
 	mux.HandleFunc("GET /api/sessions/{id}/spec", h.getSpec)
-	mux.HandleFunc("PUT /api/sessions/{id}/spec", h.updateSpec)
+	mux.HandleFunc("PUT /api/sessions/{name}/spec", h.updateSpec)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
@@ -105,7 +105,7 @@ func (h *handler) getSpec(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) updateSpec(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	name := r.PathValue("name")
 	var req SessionSpecUpdateRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxSessionRequestBytes)
 	dec := json.NewDecoder(r.Body)
@@ -114,14 +114,16 @@ func (h *handler) updateSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionUpdateSessionSpec, SessionID: id}); !ok {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionUpdateSessionSpec}); !ok {
 		return
 	}
-	session, err := h.store.UpdateSpec(id, req)
+	response, err := h.store.UpdateSpec(name, req)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNotFound):
 			writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrConflict):
+			writeError(w, http.StatusConflict, err.Error())
 		case errors.Is(err, ErrInvalidSession):
 			writeError(w, http.StatusBadRequest, err.Error())
 		default:
@@ -129,7 +131,7 @@ func (h *handler) updateSpec(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, session)
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {

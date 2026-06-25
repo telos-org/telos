@@ -92,13 +92,15 @@ type SessionCreateRequest struct {
 	AgentTimeoutSec *int         `json:"agent_timeout_sec,omitempty"`
 }
 
-// SessionSpecUpdateRequest is the body of PUT /api/sessions/{id}/spec.
+// SessionSpecUpdateRequest is the body of PUT /api/sessions/{name}/spec.
 type SessionSpecUpdateRequest struct {
-	SpecMarkdown    string   `json:"spec_markdown"`
-	Model           string   `json:"model,omitempty"`
-	Thinking        string   `json:"thinking,omitempty"`
-	MaxCostUSD      *float64 `json:"max_cost_usd,omitempty"`
-	AgentTimeoutSec *int     `json:"agent_timeout_sec,omitempty"`
+	SpecMarkdown string `json:"spec_markdown"`
+}
+
+// SessionSpecUpdateResponse is returned by PUT /api/sessions/{name}/spec.
+type SessionSpecUpdateResponse struct {
+	Operation string   `json:"operation"`
+	Session   *Session `json:"session"`
 }
 
 // SessionSpecResponse is returned by GET /api/sessions/{id}/spec.

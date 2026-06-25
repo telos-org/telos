@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/telos-org/telos/internal/cli"
@@ -291,10 +290,6 @@ func runCloud(
 		os.Exit(1)
 	}
 	applySessionRuntimeConfig(&req, runtimeConfig)
-	if command == "apply" && envID == "" {
-		applyCloudAuto(req, jsonOut, waitForEnvironment, readyTimeout)
-		return
-	}
 	client, env, err := cloudSessionClientForRun(envID, waitForEnvironment, readyTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -330,25 +325,9 @@ func applyCloud(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	sessions, err := client.ListSessions(0)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	existing, err := controllerForApply(sessions, specName)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	var session *sessionapi.Session
-	operation := "created"
-	if existing != nil {
-		operation = "updated"
-		session, err = client.UpdateSessionSpec(existing.SessionID, updateRequestFromCreate(req))
-	} else {
-		session, err = client.CreateSession(req)
-	}
+	response, err := client.ApplySessionSpec(specName, sessionapi.SessionSpecUpdateRequest{
+		SpecMarkdown: *req.SpecMarkdown,
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -356,84 +335,12 @@ func applyCloud(
 	if jsonOut {
 		printJSON(map[string]any{
 			"environment": environmentOutput(env),
-			"operation":   operation,
-			"session":     session,
+			"operation":   response.Operation,
+			"session":     response.Session,
 		})
 		return
 	}
-	printSessionReceipt(os.Stdout, operation, session, environmentOutput(env))
-}
-
-type applyCloudResult struct {
-	Environment *environmentJSON    `json:"environment,omitempty"`
-	Operation   string              `json:"operation"`
-	Session     *sessionapi.Session `json:"session"`
-}
-
-func applyCloudAuto(
-	req sessionapi.SessionCreateRequest,
-	jsonOut bool,
-	waitForEnvironment bool,
-	readyTimeout time.Duration,
-) {
-	specName, err := specNameFromRequest(req)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	targets, err := cloudSessionTargets("")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	var results []applyCloudResult
-	for _, target := range targets {
-		sessions, err := target.client.ListSessions(0)
-		if err != nil {
-			continue
-		}
-		existing, err := controllerForApply(sessions, specName)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s: %v\n", target.env.ID, err)
-			os.Exit(1)
-		}
-		if existing == nil {
-			continue
-		}
-		session, err := target.client.UpdateSessionSpec(existing.SessionID, updateRequestFromCreate(req))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s: %v\n", target.env.ID, err)
-			os.Exit(1)
-		}
-		env := environmentJSONFrom(&target.env)
-		results = append(results, applyCloudResult{
-			Environment: &env,
-			Operation:   "updated",
-			Session:     session,
-		})
-	}
-	if len(results) == 0 {
-		client, env, err := cloudSessionClientForRun("", waitForEnvironment, readyTimeout)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		session, err := client.CreateSession(req)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		results = append(results, applyCloudResult{
-			Environment: environmentOutput(env),
-			Operation:   "created",
-			Session:     session,
-		})
-	}
-	if jsonOut {
-		printJSON(map[string]any{"results": results})
-		return
-	}
-	printApplyResults(os.Stdout, results)
+	printSessionReceipt(os.Stdout, response.Operation, response.Session, environmentOutput(env))
 }
 
 func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session, env *environmentJSON) {
@@ -456,66 +363,6 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	}
 }
 
-func printApplyResults(out io.Writer, results []applyCloudResult) {
-	if len(results) == 0 {
-		return
-	}
-	if len(results) == 1 {
-		result := results[0]
-		printSessionReceipt(out, result.Operation, result.Session, result.Environment)
-		return
-	}
-
-	seen := map[string]bool{}
-	var operations []string
-	for _, result := range results {
-		if !seen[result.Operation] {
-			seen[result.Operation] = true
-			operations = append(operations, result.Operation)
-		}
-	}
-	for index, operation := range operations {
-		if index > 0 {
-			fmt.Fprintln(out)
-		}
-		fmt.Fprintln(out, operation)
-		fmt.Fprintln(out)
-		w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "ENV\tNAME\tPLATFORM\tSTATUS\tCOST\tSESSION")
-		for _, result := range results {
-			if result.Operation != operation || result.Session == nil {
-				continue
-			}
-			row := displayRow(*result.Session)
-			envID := "-"
-			if result.Environment != nil && result.Environment.ID != "" {
-				envID = result.Environment.ID
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				envID,
-				row.Name,
-				row.Platform,
-				row.Status,
-				row.Cost,
-				row.Session,
-			)
-		}
-		_ = w.Flush()
-	}
-}
-
-func updateRequestFromCreate(req sessionapi.SessionCreateRequest) sessionapi.SessionSpecUpdateRequest {
-	update := sessionapi.SessionSpecUpdateRequest{}
-	if req.SpecMarkdown != nil {
-		update.SpecMarkdown = *req.SpecMarkdown
-	}
-	update.Model = req.Model
-	update.Thinking = req.Thinking
-	update.MaxCostUSD = req.MaxCostUSD
-	update.AgentTimeoutSec = req.AgentTimeoutSec
-	return update
-}
-
 func specNameFromRequest(req sessionapi.SessionCreateRequest) (string, error) {
 	if req.SpecMarkdown == nil {
 		return "", fmt.Errorf("spec_markdown is required")
@@ -536,57 +383,4 @@ func sessionKindForCommand(command string) sessionapi.SessionKind {
 		return sessionapi.KindController
 	}
 	return sessionapi.KindTask
-}
-
-func activeControllerForSpec(sessions []sessionapi.Session, specName string) (*sessionapi.Session, error) {
-	var matches []sessionapi.Session
-	for _, session := range sessions {
-		if !isControllerNamed(session, specName) {
-			continue
-		}
-		if session.Status.IsTerminal() {
-			continue
-		}
-		matches = append(matches, session)
-	}
-	switch len(matches) {
-	case 0:
-		return nil, nil
-	case 1:
-		return &matches[0], nil
-	default:
-		return nil, fmt.Errorf("multiple active controller sessions named %q; stop duplicates before applying", specName)
-	}
-}
-
-func controllerForApply(sessions []sessionapi.Session, specName string) (*sessionapi.Session, error) {
-	active, err := activeControllerForSpec(sessions, specName)
-	if err != nil || active != nil {
-		return active, err
-	}
-	var recoverable []sessionapi.Session
-	for _, session := range sessions {
-		if !isControllerNamed(session, specName) {
-			continue
-		}
-		switch session.Status {
-		case sessionapi.StatusFailed, sessionapi.StatusStale:
-			recoverable = append(recoverable, session)
-		}
-	}
-	switch len(recoverable) {
-	case 0:
-		return nil, nil
-	case 1:
-		return &recoverable[0], nil
-	default:
-		return nil, fmt.Errorf("multiple failed/stale controller sessions named %q; stop duplicates before applying", specName)
-	}
-}
-
-func isControllerNamed(session sessionapi.Session, specName string) bool {
-	return session.SessionKind != nil &&
-		*session.SessionKind == sessionapi.KindController &&
-		session.SpecName != nil &&
-		*session.SpecName == specName
 }
