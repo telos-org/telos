@@ -229,7 +229,7 @@ func dashboardHandles(ctx context.Context) map[string]*string {
 	}
 	out := map[string]*string{}
 	for _, route := range routes {
-		if route.Data["type"] != "dashboard" || isTCPRoute(route.Data) {
+		if !isDashboardRoute(route) || isTCPRoute(route.Data) {
 			continue
 		}
 		handle := routeHandle(route.Data)

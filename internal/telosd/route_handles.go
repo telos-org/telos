@@ -12,6 +12,8 @@ import (
 
 var routeNamespaceRE = regexp.MustCompile(`\.(ns-[a-z0-9-]+)\.svc(?:\.|:|/|$)`)
 
+const publicRouteLabel = "telos.ai/public-route"
+
 type publicRoute struct {
 	Namespace   string
 	Name        string
@@ -75,7 +77,7 @@ func readPublicRoutes(ctx context.Context) ([]publicRoute, error) {
 		"cm",
 		"-A",
 		"-l",
-		"telos.ai/public-route=primary",
+		publicRouteLabel+" in (primary,service,dashboard)",
 		"-o",
 		"json",
 	)
@@ -173,7 +175,7 @@ func singleProductHandle(routes []publicRoute, match func(publicRoute) bool) str
 
 	productRoutes := make([]publicRoute, 0, len(candidates))
 	for _, route := range candidates {
-		if !isDashboardRoute(route.Data) {
+		if !isDashboardRoute(route) {
 			productRoutes = append(productRoutes, route)
 		}
 	}
@@ -183,7 +185,7 @@ func singleProductHandle(routes []publicRoute, match func(publicRoute) bool) str
 func singleDashboardHandle(routes []publicRoute, match func(publicRoute) bool) string {
 	candidates := make([]publicRoute, 0, len(routes))
 	for _, route := range routes {
-		if !match(route) || isTCPRoute(route.Data) || !isDashboardRoute(route.Data) {
+		if !match(route) || isTCPRoute(route.Data) || !isDashboardRoute(route) {
 			continue
 		}
 		candidates = append(candidates, route)
@@ -235,8 +237,14 @@ func isTCPRoute(data map[string]string) bool {
 	return strings.HasPrefix(service, "tcp://") || strings.HasPrefix(target, "tcp://")
 }
 
-func isDashboardRoute(data map[string]string) bool {
-	return strings.EqualFold(strings.TrimSpace(data["type"]), "dashboard")
+func isDashboardRoute(route publicRoute) bool {
+	switch strings.TrimSpace(route.Labels[publicRouteLabel]) {
+	case "dashboard":
+		return true
+	case "service":
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(route.Data["type"]), "dashboard")
 }
 
 func routeHandle(data map[string]string) string {

@@ -52,7 +52,7 @@ func TestScanClusterSummarizesNamespaces(t *testing.T) {
 				}
 			]
 		}`,
-		"get cm -A -l telos.ai/public-route=primary -o json": `{
+		"get cm -A -l telos.ai/public-route in (primary,service,dashboard) -o json": `{
 			"items": [
 				{
 					"metadata": {"namespace": "ns-postgres", "name": "dashboard-route"},
