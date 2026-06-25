@@ -138,11 +138,15 @@ func (s *cloudSessionStore) routes() []publicRoute {
 }
 
 func (s *cloudSessionStore) enrich(session *sessionapi.Session, routes []publicRoute) {
-	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindController {
+	if session.ParentSessionID != nil && *session.ParentSessionID != "" {
 		return
 	}
 	if handle := productHandleFor(routes, *session); handle != "" {
 		uri := "https://" + stripScheme(handle)
 		session.ArtifactURI = &uri
+	}
+	if handle := dashboardHandleFor(routes, *session); handle != "" {
+		url := "https://" + stripScheme(handle)
+		session.DashboardURL = &url
 	}
 }

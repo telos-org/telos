@@ -51,6 +51,22 @@ func productHandleFor(routes []publicRoute, session sessionapi.Session) string {
 	})
 }
 
+func dashboardHandleFor(routes []publicRoute, session sessionapi.Session) string {
+	if handle := singleDashboardHandle(routes, func(route publicRoute) bool {
+		return routeMatchesSessionID(route, session.SessionID)
+	}); handle != "" {
+		return handle
+	}
+
+	namespace := sessionNamespace(session)
+	if namespace == "" {
+		return ""
+	}
+	return singleDashboardHandle(routes, func(route publicRoute) bool {
+		return routeMatchesNamespace(route, namespace)
+	})
+}
+
 func readPublicRoutes(ctx context.Context) ([]publicRoute, error) {
 	out, err := kubectlOutput(
 		ctx,
@@ -162,6 +178,17 @@ func singleProductHandle(routes []publicRoute, match func(publicRoute) bool) str
 		}
 	}
 	return singleHandle(productRoutes)
+}
+
+func singleDashboardHandle(routes []publicRoute, match func(publicRoute) bool) string {
+	candidates := make([]publicRoute, 0, len(routes))
+	for _, route := range routes {
+		if !match(route) || isTCPRoute(route.Data) || !isDashboardRoute(route.Data) {
+			continue
+		}
+		candidates = append(candidates, route)
+	}
+	return singleHandle(candidates)
 }
 
 func singleHandle(routes []publicRoute) string {

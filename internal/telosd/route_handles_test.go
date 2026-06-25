@@ -152,6 +152,42 @@ func TestCloudSessionStoreAddsHTTPProductHandle(t *testing.T) {
 	}
 }
 
+func TestCloudSessionStoreAddsDashboardURL(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	store := newCloudSessionStore(base, routeHandleResolver{
+		read: func(context.Context) ([]publicRoute, error) {
+			return []publicRoute{
+				{
+					Namespace: "ns-auth",
+					Data: map[string]string{
+						"type":           "service",
+						"product_handle": "auth-service.usetelos.ai",
+					},
+				},
+				{
+					Namespace: "ns-auth",
+					Data: map[string]string{
+						"type":           "dashboard",
+						"product_handle": "dashboard-auth.usetelos.ai",
+					},
+				},
+			}, nil
+		},
+	}, nil)
+	markdown := "---\nversion: v0\nname: auth\nplatform: cloud\n---\n# Auth\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.ArtifactURI == nil || *session.ArtifactURI != "https://auth-service.usetelos.ai" {
+		t.Fatalf("artifact_uri: got %#v", session.ArtifactURI)
+	}
+	if session.DashboardURL == nil || *session.DashboardURL != "https://dashboard-auth.usetelos.ai" {
+		t.Fatalf("dashboard_url: got %#v", session.DashboardURL)
+	}
+}
+
 func TestCloudSessionStoreAddsTerminalProductHandle(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	store := newCloudSessionStore(base, routeHandleResolver{
