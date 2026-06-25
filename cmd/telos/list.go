@@ -258,10 +258,20 @@ func sessionTurn(sess sessionapi.Session) string {
 }
 
 func sessionArtifact(sess sessionapi.Session) string {
+	if url := sessionServiceURL(sess); url != "" {
+		return url
+	}
+	return "-"
+}
+
+func sessionServiceURL(sess sessionapi.Session) string {
+	if sess.ServiceURL != nil && *sess.ServiceURL != "" {
+		return *sess.ServiceURL
+	}
 	if sess.ArtifactURI != nil && *sess.ArtifactURI != "" {
 		return *sess.ArtifactURI
 	}
-	return "-"
+	return ""
 }
 
 func sessionResult(sess sessionapi.Session) string {

@@ -77,10 +77,10 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	if session.RoundCount != nil {
 		printDetailField(out, "rounds", fmt.Sprint(*session.RoundCount))
 	}
-	if session.ArtifactURI != nil && *session.ArtifactURI != "" {
+	if serviceURL := sessionServiceURL(session); serviceURL != "" {
 		fmt.Fprintln(out)
-		fmt.Fprintln(out, "Artifact")
-		fmt.Fprintf(out, "  %s\n", *session.ArtifactURI)
+		fmt.Fprintln(out, "Service")
+		fmt.Fprintf(out, "  %s\n", serviceURL)
 	}
 	if len(session.Epochs) > 0 {
 		fmt.Fprintln(out)
