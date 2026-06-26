@@ -58,7 +58,7 @@ func cmdLaunch(command, action string, args []string) {
 
 	if ctx, ok := rootSessionContext(); ok {
 		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for bounded child work")
+			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for child sessions")
 			os.Exit(1)
 		}
 		if *env != "" {
@@ -74,7 +74,7 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		runChildCloud(specArg, ctx, untilValue, runtimeConfig, *jsonOut, action)
+		runCloudChildSession(specArg, ctx, untilValue, runtimeConfig, *jsonOut, action)
 		return
 	}
 
@@ -101,11 +101,11 @@ func cmdLaunch(command, action string, args []string) {
 	localRootID, inLocalRoot := localRootSessionID()
 	if inLocalRoot {
 		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for bounded child work")
+			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for child sessions")
 			os.Exit(1)
 		}
 		if launchMode != launchLocal {
-			fmt.Fprintln(os.Stderr, "error: local root sessions can only launch platform: local child work")
+			fmt.Fprintln(os.Stderr, "error: local root sessions can only launch platform: local child sessions")
 			os.Exit(1)
 		}
 	}
@@ -238,7 +238,7 @@ func validateLaunchCommand(command string, mode launchMode) error {
 	return nil
 }
 
-func runChildCloud(
+func runCloudChildSession(
 	specArg string,
 	ctx rootContext,
 	until int,
