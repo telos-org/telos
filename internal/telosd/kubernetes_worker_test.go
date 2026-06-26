@@ -2,7 +2,10 @@ package telosd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -215,7 +218,7 @@ func TestKubernetesSubstrateAgentSecretAcceptsLiteLLMBaseURLAlias(t *testing.T) 
 	)
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 
-	if err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace); err != nil {
+	if err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -237,10 +240,72 @@ func TestKubernetesSubstrateAgentSecretRequiresLiteLLMBaseURL(t *testing.T) {
 	)
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 
-	err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace)
+	err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace, nil)
 	if err == nil || !strings.Contains(err.Error(), "TELOS_LITELLM_BASE_URL is required") {
 		t.Fatalf("expected missing LiteLLM base URL error, got %v", err)
 	}
+}
+
+func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
+	t.Setenv("TELOS_LITELLM_API_KEY", "")
+	t.Setenv("TELOS_LITELLM_BASE_URL", "")
+	mintCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/internal/sessions/sess_cloud/mint" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer env-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		mintCalls++
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"session_id": "sess_cloud",
+			"base_url":   "https://managed.example.com/v1",
+			"api_key":    "sk-managed",
+			"key_alias":  "sess_cloud",
+		})
+	}))
+	defer server.Close()
+
+	cfg := testCloudConfig(t)
+	cfg.ControlPlane.Endpoint = server.URL
+	cfg.ControlPlane.EnvID = "env_test"
+	cfg.ControlPlane.Token = "env-token"
+	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	cred, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred.APIKey != "sk-managed" || cred.BaseURL != "https://managed.example.com/v1" {
+		t.Fatalf("credential: %+v", cred)
+	}
+	if mintCalls != 1 {
+		t.Fatalf("mint calls: got %d", mintCalls)
+	}
+	cred, err = substrate.sessionGatewayCredential(context.Background(), "sess_cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mintCalls != 1 {
+		t.Fatalf("expected persisted credential reuse, mint calls: got %d", mintCalls)
+	}
+
+	targetNamespace := "ns-worker"
+	_, err = client.CoreV1().Namespaces().Create(context.Background(), &corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{Name: targetNamespace},
+	}, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace, cred); err != nil {
+		t.Fatal(err)
+	}
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_API_KEY", "sk-managed")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_BASE_URL", "https://managed.example.com/v1")
 }
 
 func testCloudConfig(t *testing.T) Config {

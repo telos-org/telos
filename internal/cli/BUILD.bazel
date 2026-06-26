@@ -13,6 +13,7 @@ go_library(
         "//internal/evidence",
         "//internal/executor",
         "//internal/game",
+        "//internal/gateway",
         "//internal/platform",
         "//internal/sessionapi",
         "//internal/spec",

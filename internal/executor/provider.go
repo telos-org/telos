@@ -19,6 +19,13 @@ type nativeConfig struct {
 	defaultCapability modelCapabilityProfile
 }
 
+// GatewayConfig is an explicit gateway credential supplied by the CLI or telosd.
+// When empty, the executor falls back to TELOS_LITELLM_* environment variables.
+type GatewayConfig struct {
+	BaseURL string
+	APIKey  string
+}
+
 func resolveNativeConfig() (nativeConfig, error) {
 	base := firstEnv("TELOS_LITELLM_BASE_URL", "TELOS_API_BASE_URL", "TELOS_BASE_URL")
 	if base == "" {
@@ -31,6 +38,24 @@ func resolveNativeConfig() (nativeConfig, error) {
 	return nativeConfig{
 		baseURL:           strings.TrimRight(base, "/"),
 		apiKey:            key,
+		capability:        parseModelCapabilityTable(),
+		defaultCapability: modelCapabilityProfileFromEnv(),
+	}, nil
+}
+
+func resolveNativeConfigWithGateway(gateway GatewayConfig) (nativeConfig, error) {
+	if strings.TrimSpace(gateway.BaseURL) == "" && strings.TrimSpace(gateway.APIKey) == "" {
+		return resolveNativeConfig()
+	}
+	if strings.TrimSpace(gateway.BaseURL) == "" {
+		return nativeConfig{}, fmt.Errorf("gateway base URL is required")
+	}
+	if strings.TrimSpace(gateway.APIKey) == "" {
+		return nativeConfig{}, fmt.Errorf("gateway API key is required")
+	}
+	return nativeConfig{
+		baseURL:           strings.TrimRight(strings.TrimSpace(gateway.BaseURL), "/"),
+		apiKey:            strings.TrimSpace(gateway.APIKey),
 		capability:        parseModelCapabilityTable(),
 		defaultCapability: modelCapabilityProfileFromEnv(),
 	}, nil
@@ -194,4 +219,3 @@ func parseEnvBool(raw string) bool {
 		return false
 	}
 }
-

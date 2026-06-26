@@ -25,7 +25,8 @@ import (
 )
 
 type kubernetesSubstrate struct {
-	client kubernetes.Interface
+	client  kubernetes.Interface
+	control *controlClient
 
 	agentImage        string
 	envNamespace      string
@@ -46,9 +47,6 @@ type kubernetesSubstrate struct {
 var litellmBaseURLEnvNames = []string{"TELOS_LITELLM_BASE_URL", "TELOS_API_BASE_URL", "TELOS_BASE_URL"}
 
 func newKubernetesSubstrate(cfg Config) (kubernetesSubstrate, error) {
-	if strings.TrimSpace(os.Getenv(cfg.Kubernetes.AgentSecretKey)) == "" {
-		return kubernetesSubstrate{}, fmt.Errorf("%s is required to launch workers", cfg.Kubernetes.AgentSecretKey)
-	}
 	restCfg, err := kubernetesRESTConfig()
 	if err != nil {
 		return kubernetesSubstrate{}, err
@@ -64,6 +62,7 @@ func newKubernetesSubstrateWithClient(cfg Config, client kubernetes.Interface) k
 	runtimeMountPath := cfg.Runtime.MountPath
 	return kubernetesSubstrate{
 		client:            client,
+		control:           newControlClient(cfg.ControlPlane),
 		agentImage:        cfg.Kubernetes.AgentImage,
 		envNamespace:      cfg.Kubernetes.EnvNamespace,
 		stateMountRoot:    cfg.Kubernetes.StateMountRoot,
@@ -104,13 +103,17 @@ func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason strin
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	namespace := workerNamespace(session.SessionID, kind)
-	if err := s.prepareWorkerNamespace(ctx, namespace); err != nil {
-		return err
-	}
 	m, err := sessionapi.ReadManifest(filepath.Join(ptrValue(session.SessionDir), "session.json"))
 	if err != nil {
 		return fmt.Errorf("read worker manifest: %w", err)
+	}
+	credential, err := s.sessionGatewayCredential(ctx, session.SessionID)
+	if err != nil {
+		return err
+	}
+	namespace := workerNamespace(session.SessionID, kind)
+	if err := s.prepareWorkerNamespace(ctx, namespace, credential); err != nil {
+		return err
 	}
 	switch kind {
 	case sessionapi.KindController:
@@ -155,7 +158,7 @@ func (s kubernetesSubstrate) Stop(session *sessionapi.Session) error {
 	return stopErr
 }
 
-func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespace string) error {
+func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespace string, credential *controlSessionKey) error {
 	if err := s.createNamespaceIfMissing(ctx, namespace); err != nil {
 		return err
 	}
@@ -173,7 +176,7 @@ func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespa
 			return err
 		}
 	}
-	if err := s.createOrUpdateAgentSecret(ctx, namespace); err != nil {
+	if err := s.createOrUpdateAgentSecret(ctx, namespace, credential); err != nil {
 		return err
 	}
 	for _, name := range append([]string{}, s.copySecrets...) {
@@ -189,7 +192,7 @@ func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespa
 	return nil
 }
 
-func (s kubernetesSubstrate) agentSecret(namespace string) *corev1.Secret {
+func (s kubernetesSubstrate) agentSecret(namespace string, credential *controlSessionKey) *corev1.Secret {
 	value := strings.TrimSpace(os.Getenv(s.agentSecretKey))
 	data := map[string][]byte{}
 	if value != "" {
@@ -198,6 +201,7 @@ func (s kubernetesSubstrate) agentSecret(namespace string) *corev1.Secret {
 	if name, value := configuredLiteLLMBaseURL(); name != "" && value != "" {
 		data[name] = []byte(value)
 	}
+	applyGatewayCredential(data, s.agentSecretKey, credential)
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: s.agentSecretName, Namespace: namespace},
 		Type:       corev1.SecretTypeOpaque,
@@ -446,8 +450,8 @@ func (s kubernetesSubstrate) createOrUpdateSecret(ctx context.Context, desired *
 	return err
 }
 
-func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, namespace string) error {
-	secret := s.agentSecret(namespace)
+func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, namespace string, credential *controlSessionKey) error {
+	secret := s.agentSecret(namespace, credential)
 	source, err := s.client.CoreV1().Secrets(s.envNamespace).Get(ctx, s.agentSecretName, metav1.GetOptions{})
 	if err == nil {
 		secret.Type = source.Type
@@ -461,6 +465,7 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 		if name, envValue := configuredLiteLLMBaseURL(); name != "" && envValue != "" {
 			secret.Data[name] = []byte(envValue)
 		}
+		applyGatewayCredential(secret.Data, s.agentSecretKey, credential)
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
@@ -471,6 +476,83 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 		return fmt.Errorf("TELOS_LITELLM_BASE_URL is required to launch a worker (TELOS_API_BASE_URL and TELOS_BASE_URL are accepted aliases)")
 	}
 	return s.createOrUpdateSecret(ctx, secret)
+}
+
+func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessionID string) (*controlSessionKey, error) {
+	if s.control == nil || !s.control.configured() {
+		return nil, nil
+	}
+	secretName := sessionGatewaySecretName(sessionID)
+	current, err := s.client.CoreV1().Secrets(s.envNamespace).Get(ctx, secretName, metav1.GetOptions{})
+	if err == nil {
+		credential := credentialFromSecret(current, s.agentSecretKey)
+		if credential != nil {
+			return credential, nil
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	minted, err := s.control.MintSessionKey(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	secret := sessionGatewaySecret(s.envNamespace, secretName, s.agentSecretKey, minted)
+	if err := s.createOrUpdateSecret(ctx, secret); err != nil {
+		return nil, err
+	}
+	return &minted, nil
+}
+
+func sessionGatewaySecretName(sessionID string) string {
+	return "telos-session-gateway-" + sessionShortID(sessionID)
+}
+
+func sessionGatewaySecret(namespace string, name string, keyName string, credential controlSessionKey) *corev1.Secret {
+	data := map[string][]byte{
+		keyName:                  []byte(credential.APIKey),
+		"TELOS_LITELLM_BASE_URL": []byte(credential.BaseURL),
+	}
+	if credential.KeyAlias != "" {
+		data["TELOS_LITELLM_KEY_ALIAS"] = []byte(credential.KeyAlias)
+	}
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"telos/role": "session-gateway",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: data,
+	}
+}
+
+func credentialFromSecret(secret *corev1.Secret, keyName string) *controlSessionKey {
+	if secret == nil {
+		return nil
+	}
+	apiKey := strings.TrimSpace(string(secret.Data[keyName]))
+	baseURL := strings.TrimSpace(string(secret.Data["TELOS_LITELLM_BASE_URL"]))
+	if apiKey == "" || baseURL == "" {
+		return nil
+	}
+	return &controlSessionKey{
+		BaseURL:  strings.TrimRight(baseURL, "/"),
+		APIKey:   apiKey,
+		KeyAlias: strings.TrimSpace(string(secret.Data["TELOS_LITELLM_KEY_ALIAS"])),
+	}
+}
+
+func applyGatewayCredential(data map[string][]byte, keyName string, credential *controlSessionKey) {
+	if credential == nil {
+		return
+	}
+	data[keyName] = []byte(credential.APIKey)
+	data["TELOS_LITELLM_BASE_URL"] = []byte(credential.BaseURL)
+	if credential.KeyAlias != "" {
+		data["TELOS_LITELLM_KEY_ALIAS"] = []byte(credential.KeyAlias)
+	}
 }
 
 func configuredLiteLLMBaseURL() (string, string) {

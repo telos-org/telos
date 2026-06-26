@@ -22,6 +22,7 @@ type NativeExecutor struct {
 	Client    *http.Client
 	config    nativeConfig
 	configErr error
+	cleanup   func() error
 }
 
 // NewNativeExecutor creates a native Go coding-agent executor. The provider and
@@ -37,10 +38,16 @@ type NativeExecutor struct {
 // isolation is the sole containment boundary; running it on a host with data
 // worth protecting is unsafe by design, not a bug to be fixed in this package.
 func NewNativeExecutor(p *platform.LocalPlatform, model, thinking string, timeout int) *NativeExecutor {
+	return NewNativeExecutorWithGateway(p, model, thinking, timeout, GatewayConfig{}, nil)
+}
+
+// NewNativeExecutorWithGateway creates a native executor using an explicit
+// gateway credential. Empty gateway fields preserve the legacy env-only path.
+func NewNativeExecutorWithGateway(p *platform.LocalPlatform, model, thinking string, timeout int, gateway GatewayConfig, cleanup func() error) *NativeExecutor {
 	if thinking == "" {
 		thinking = "medium"
 	}
-	cfg, err := resolveNativeConfig()
+	cfg, err := resolveNativeConfigWithGateway(gateway)
 	return &NativeExecutor{
 		Platform:  p,
 		Model:     model,
@@ -49,7 +56,16 @@ func NewNativeExecutor(p *platform.LocalPlatform, model, thinking string, timeou
 		Client:    http.DefaultClient,
 		config:    cfg,
 		configErr: err,
+		cleanup:   cleanup,
 	}
+}
+
+// Cleanup runs any best-effort end-of-session cleanup hook.
+func (ne *NativeExecutor) Cleanup() error {
+	if ne.cleanup == nil {
+		return nil
+	}
+	return ne.cleanup()
 }
 
 // ExecuteTurn runs one Telos-native agent turn. The role is read from

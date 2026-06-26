@@ -17,6 +17,7 @@
 //	telos replay SESSION_OR_SESSION_JSONL [--role prover|verifier] [--json]
 //	telos stop SESSION [--env ENV] [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
+//	telos configure gateway --mode managed|byo
 //	telos version
 //	telos --version
 package main
@@ -69,6 +70,8 @@ func main() {
 		cmdStop(os.Args[2:])
 	case "login":
 		cmdLogin(os.Args[2:])
+	case "configure":
+		cmdConfigure(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage(os.Stderr)
@@ -95,6 +98,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  replay TARGET      Replay session JSONL protocol checks")
 	fmt.Fprintln(out, "  stop SESSION       Stop a running session")
 	fmt.Fprintln(out, "  login              Configure cloud access")
+	fmt.Fprintln(out, "  configure          Configure local gateway access")
 	fmt.Fprintln(out, "  version            Show version")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "global flags:")

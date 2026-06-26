@@ -20,6 +20,7 @@ const DefaultLocalModel = "claude-opus-4-6"
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {
 	SessionKind     sessionapi.SessionKind
+	SessionID       string
 	ParentSessionID *string
 	Workspace       string
 	Model           string
@@ -197,6 +198,11 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 
 	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)
 	result := pvg.Run()
+	if cleaner, ok := agentExec.(interface{ Cleanup() error }); ok {
+		if err := cleaner.Cleanup(); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: cleanup managed gateway: %v\n", err)
+		}
+	}
 
 	// Close epoch
 	if err := finishEpoch(sessionDir, manifest, result); err != nil {
@@ -356,6 +362,7 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	cfg := manifest.Config
 	lrc := LocalRunConfig{
+		SessionID:       manifest.SessionID,
 		Model:           cfg.Model,
 		Thinking:        cfg.Thinking,
 		Until:           cfg.Until,

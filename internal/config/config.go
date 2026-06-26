@@ -14,12 +14,23 @@ const (
 	EnvironmentsPathEnv = "TELOS_ENVIRONMENTS_CONFIG"
 	APIEndpointEnv      = "TELOS_API_ENDPOINT"
 	AuthTokenEnv        = "TELOS_AUTH_TOKEN"
+	GatewayModeEnv      = "TELOS_GATEWAY_MODE"
+	GatewayBaseURLEnv   = "TELOS_GATEWAY_BASE_URL"
+	GatewayAPIKeyEnv    = "TELOS_GATEWAY_API_KEY"
 )
 
 // Config holds user-facing cloud CLI configuration.
 type Config struct {
-	APIEndpoint string `yaml:"api_endpoint,omitempty"`
-	AuthToken   string `yaml:"auth_token,omitempty"`
+	APIEndpoint string        `yaml:"api_endpoint,omitempty"`
+	AuthToken   string        `yaml:"auth_token,omitempty"`
+	Gateway     GatewayConfig `yaml:"gateway,omitempty"`
+}
+
+// GatewayConfig holds local model gateway selection.
+type GatewayConfig struct {
+	Mode    string `yaml:"mode,omitempty"`
+	BaseURL string `yaml:"base_url,omitempty"`
+	APIKey  string `yaml:"api_key,omitempty"`
 }
 
 // EnvironmentAccess holds a saved scoped token for one cloud environment.
@@ -56,12 +67,32 @@ func LoadConfig() *Config {
 	if at, ok := raw["auth_token"].(string); ok {
 		cfg.AuthToken = at
 	}
+	if rawGateway, ok := raw["gateway"].(map[string]interface{}); ok {
+		if mode, ok := rawGateway["mode"].(string); ok {
+			cfg.Gateway.Mode = mode
+		}
+		if baseURL, ok := rawGateway["base_url"].(string); ok {
+			cfg.Gateway.BaseURL = baseURL
+		}
+		if apiKey, ok := rawGateway["api_key"].(string); ok {
+			cfg.Gateway.APIKey = apiKey
+		}
+	}
 	// Env overrides
 	if v := os.Getenv(APIEndpointEnv); v != "" {
 		cfg.APIEndpoint = v
 	}
 	if v := os.Getenv(AuthTokenEnv); v != "" {
 		cfg.AuthToken = v
+	}
+	if v := os.Getenv(GatewayModeEnv); v != "" {
+		cfg.Gateway.Mode = v
+	}
+	if v := os.Getenv(GatewayBaseURLEnv); v != "" {
+		cfg.Gateway.BaseURL = v
+	}
+	if v := os.Getenv(GatewayAPIKeyEnv); v != "" {
+		cfg.Gateway.APIKey = v
 	}
 	return cfg
 }
@@ -72,12 +103,25 @@ func SaveConfig(cfg *Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	m := map[string]string{}
+	m := map[string]any{}
 	if cfg.APIEndpoint != "" {
 		m["api_endpoint"] = cfg.APIEndpoint
 	}
 	if cfg.AuthToken != "" {
 		m["auth_token"] = cfg.AuthToken
+	}
+	if cfg.Gateway.Mode != "" || cfg.Gateway.BaseURL != "" || cfg.Gateway.APIKey != "" {
+		m["gateway"] = map[string]string{}
+		gateway := m["gateway"].(map[string]string)
+		if cfg.Gateway.Mode != "" {
+			gateway["mode"] = cfg.Gateway.Mode
+		}
+		if cfg.Gateway.BaseURL != "" {
+			gateway["base_url"] = cfg.Gateway.BaseURL
+		}
+		if cfg.Gateway.APIKey != "" {
+			gateway["api_key"] = cfg.Gateway.APIKey
+		}
 	}
 	data, err := yaml.Marshal(m)
 	if err != nil {

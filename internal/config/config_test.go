@@ -77,6 +77,57 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	}
 }
 
+func TestSaveAndLoadGatewayConfig(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "telos", "config.yaml")
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("TELOS_API_ENDPOINT", "")
+	t.Setenv("TELOS_AUTH_TOKEN", "")
+	t.Setenv("TELOS_GATEWAY_MODE", "")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+
+	err := SaveConfig(&Config{
+		APIEndpoint: "https://saved.example.com",
+		AuthToken:   "saved-token",
+		Gateway: GatewayConfig{
+			Mode:    "byo",
+			BaseURL: "https://proxy.example.com/v1",
+			APIKey:  "sk-byo",
+		},
+	})
+	if err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	cfg := LoadConfig()
+	if cfg.Gateway.Mode != "byo" || cfg.Gateway.BaseURL != "https://proxy.example.com/v1" || cfg.Gateway.APIKey != "sk-byo" {
+		t.Fatalf("gateway: %+v", cfg.Gateway)
+	}
+}
+
+func TestLoadGatewayConfigEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(`
+gateway:
+  mode: managed
+  base_url: https://file.example.com/v1
+  api_key: file-key
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("TELOS_GATEWAY_MODE", "byo")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://env.example.com/v1")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "env-key")
+
+	cfg := LoadConfig()
+	if cfg.Gateway.Mode != "byo" || cfg.Gateway.BaseURL != "https://env.example.com/v1" || cfg.Gateway.APIKey != "env-key" {
+		t.Fatalf("gateway: %+v", cfg.Gateway)
+	}
+}
+
 func TestEnvironmentAccess(t *testing.T) {
 	dir := t.TempDir()
 	envPath := filepath.Join(dir, "environments.yaml")

@@ -37,6 +37,7 @@ type Config struct {
 	Auth            AuthConfig       `yaml:"auth"`
 	Runtime         RuntimeConfig    `yaml:"runtime"`
 	Kubernetes      KubernetesConfig `yaml:"kubernetes"`
+	ControlPlane    ControlConfig    `yaml:"control_plane"`
 }
 
 type ServerConfig struct {
@@ -56,6 +57,13 @@ type RuntimeConfig struct {
 	ArtifactBaseURL string `yaml:"artifact_base_url"`
 	ArtifactVersion string `yaml:"artifact_version"`
 	MountPath       string `yaml:"mount_path"`
+}
+
+type ControlConfig struct {
+	Endpoint  string `yaml:"endpoint"`
+	EnvID     string `yaml:"env_id"`
+	Token     string `yaml:"token"`
+	TokenFile string `yaml:"token_file"`
 }
 
 type KubernetesConfig struct {
@@ -152,6 +160,25 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		if cfg.Runtime.MountPath == "" {
 			cfg.Runtime.MountPath = "/telos-runtime"
 		}
+		if cfg.ControlPlane.Endpoint == "" {
+			cfg.ControlPlane.Endpoint = envOr("TELOS_CONTROL_ENDPOINT", "https://api.usetelos.ai")
+		}
+		if cfg.ControlPlane.EnvID == "" {
+			cfg.ControlPlane.EnvID = os.Getenv("TELOS_ENV_ID")
+		}
+		if cfg.ControlPlane.TokenFile == "" {
+			cfg.ControlPlane.TokenFile = os.Getenv("TELOS_CONTROL_TOKEN_FILE")
+		}
+		if cfg.ControlPlane.Token == "" {
+			if token, err := authTokenFromFile(cfg.ControlPlane.TokenFile); err != nil {
+				return Config{}, fmt.Errorf("read control_plane.token_file: %w", err)
+			} else if token != "" {
+				cfg.ControlPlane.Token = token
+			}
+		}
+		if cfg.ControlPlane.Token == "" {
+			cfg.ControlPlane.Token = os.Getenv("TELOS_CONTROL_TOKEN")
+		}
 		if cfg.Kubernetes.AgentImage == "" {
 			cfg.Kubernetes.AgentImage = envOr("TELOS_AGENT_IMAGE", "telos-agent:latest")
 		}
@@ -210,6 +237,9 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		}
 		if cfg.Auth.Token == "" {
 			return Config{}, fmt.Errorf("auth.token is required for bearer auth")
+		}
+		if cfg.Mode == ModeCloud && cfg.ControlPlane.Token == "" {
+			cfg.ControlPlane.Token = cfg.Auth.Token
 		}
 	}
 	switch cfg.Server.Transport {

@@ -187,6 +187,73 @@ func TestClientCreateEnvironmentAcceptsLegacyAccessField(t *testing.T) {
 	}
 }
 
+func TestClientMintSessionKey(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"session_id": "sess-1",
+			"base_url":   "https://proxy.example.com/v1",
+			"api_key":    "sk-session",
+			"budget_usd": 5.0,
+			"key_alias":  "sess-1",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	key, err := client.MintSessionKey("sess-1")
+	if err != nil {
+		t.Fatalf("MintSessionKey: %v", err)
+	}
+	if gotPath != "/api/billing/session-key" || gotBody["session_id"] != "sess-1" {
+		t.Fatalf("request: path=%q body=%v", gotPath, gotBody)
+	}
+	if key.APIKey != "sk-session" || key.BaseURL != "https://proxy.example.com/v1" || key.KeyAlias != "sess-1" {
+		t.Fatalf("key: %+v", key)
+	}
+}
+
+func TestClientBalanceAndReconcile(t *testing.T) {
+	var sawReconcile bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.RequestURI() {
+		case "/api/billing/balance":
+			json.NewEncoder(w).Encode(map[string]any{"compute_units": 123.0})
+		case "/api/billing/session-key/sess-1/reconcile?terminal=true":
+			sawReconcile = true
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	bal, err := client.Balance()
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.ComputeUnits != 123.0 {
+		t.Fatalf("balance: %+v", bal)
+	}
+	if err := client.ReconcileSession("sess-1", true); err != nil {
+		t.Fatalf("ReconcileSession: %v", err)
+	}
+	if !sawReconcile {
+		t.Fatal("missing reconcile request")
+	}
+}
+
 func TestSessionCreateRequestOmitsEmptyRuntimeDefaults(t *testing.T) {
 	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
 	body, err := json.Marshal(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})

@@ -31,6 +31,20 @@ type Environment struct {
 	HasRecoverable bool
 }
 
+// SessionKey is a budget-capped LiteLLM key minted by the control plane.
+type SessionKey struct {
+	SessionID string
+	BaseURL   string
+	APIKey    string
+	BudgetUSD float64
+	KeyAlias  string
+}
+
+// Balance is the caller's current managed compute-unit balance.
+type Balance struct {
+	ComputeUnits float64
+}
+
 // Client is a cloud Sessions API client.
 type Client struct {
 	Endpoint string
@@ -141,6 +155,78 @@ func (c *Client) CreateEnvironment() (*Environment, error) {
 		return nil, fmt.Errorf("control plane returned invalid environment")
 	}
 	return &env, nil
+}
+
+// MintSessionKey asks the control plane to mint a managed per-session gateway key.
+func (c *Client) MintSessionKey(sessionID string) (*SessionKey, error) {
+	body, err := json.Marshal(map[string]string{"session_id": sessionID})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("POST", "/api/billing/session-key", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, readError(resp)
+	}
+	var raw struct {
+		SessionID string  `json:"session_id"`
+		BaseURL   string  `json:"base_url"`
+		APIKey    string  `json:"api_key"`
+		BudgetUSD float64 `json:"budget_usd"`
+		KeyAlias  string  `json:"key_alias"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	if raw.BaseURL == "" || raw.APIKey == "" {
+		return nil, fmt.Errorf("control plane returned invalid session key")
+	}
+	return &SessionKey{
+		SessionID: raw.SessionID,
+		BaseURL:   raw.BaseURL,
+		APIKey:    raw.APIKey,
+		BudgetUSD: raw.BudgetUSD,
+		KeyAlias:  raw.KeyAlias,
+	}, nil
+}
+
+// ReconcileSession asks the control plane to settle a managed local session.
+func (c *Client) ReconcileSession(sessionID string, terminal bool) error {
+	path := "/api/billing/session-key/" + sessionID + "/reconcile"
+	if terminal {
+		path += "?terminal=true"
+	}
+	resp, err := c.do("POST", path, nil)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return readError(resp)
+	}
+	return nil
+}
+
+// Balance returns the caller's managed compute-unit balance.
+func (c *Client) Balance() (*Balance, error) {
+	resp, err := c.do("GET", "/api/billing/balance", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var raw struct {
+		ComputeUnits float64 `json:"compute_units"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+		return nil, err
+	}
+	return &Balance{ComputeUnits: raw.ComputeUnits}, nil
 }
 
 // WaitForEnvironment waits until an environment-local API is reachable.
