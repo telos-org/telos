@@ -50,7 +50,7 @@ func TestWorkerManifestRejectsMissingSessionKind(t *testing.T) {
 	}
 }
 
-func TestControllerWorkerAllowsNoInterval(t *testing.T) {
+func TestRootWorkerAllowsNoInterval(t *testing.T) {
 	sessionDir := writeWorkerManifest(t, map[string]any{
 		"session_kind": "controller",
 		"specs": []map[string]any{{
