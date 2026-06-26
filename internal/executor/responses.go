@@ -24,8 +24,8 @@ import (
 // responsesClient drives the agent loop against a LiteLLM proxy using the
 // official openai-go SDK's Responses API. It streams over SSE, threads
 // conversation state server-side via previous_response_id, and carries
-// reasoning effort natively. The pricing and capability it needs are injected
-// from nativeConfig at construction — no globals.
+// reasoning effort natively. The capability it needs is injected from
+// nativeConfig at construction — no globals.
 type responsesClient struct {
 	client          openai.Client
 	model           string
@@ -39,8 +39,6 @@ type responsesClient struct {
 	sequence        int
 	lastCostUSD     float64
 	lastCostKnown   bool
-	pricing         modelPricing
-	pricingKnown    bool
 }
 
 func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, thinking string, maxOutputTokens int, task, role string, logger *nativeSessionLogger) *responsesClient {
@@ -69,8 +67,6 @@ func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, think
 		state:           newConversationState(initial, stateMode),
 		compactor:       comp,
 		logger:          logger,
-		pricing:         cfg.Pricing,
-		pricingKnown:    cfg.PricingConfigured,
 	}
 	opts := []option.RequestOption{
 		option.WithAPIKey(cfg.APIKey),
@@ -568,23 +564,18 @@ func responseStopReason(r responses.Response) string {
 	return string(r.Status)
 }
 
-func statsFromResponsesUsage(model string, usage responses.ResponseUsage, pricing modelPricing, pricingKnown bool) game.TurnStats {
-	stats := game.TurnStats{
+func statsFromResponsesUsage(model string, usage responses.ResponseUsage) game.TurnStats {
+	return game.TurnStats{
 		Model:           model,
 		InputTokens:     int(usage.InputTokens),
 		OutputTokens:    int(usage.OutputTokens),
 		CacheReadTokens: int(usage.InputTokensDetails.CachedTokens),
 		CostUnavailable: true,
 	}
-	if pricingKnown {
-		stats.CostUSD = pricing.cost(stats.InputTokens, stats.OutputTokens)
-		stats.CostUnavailable = false
-	}
-	return stats
 }
 
 func (t *responsesClient) statsFromResponse(response responses.Response) game.TurnStats {
-	stats := statsFromResponsesUsage(t.model, response.Usage, t.pricing, t.pricingKnown)
+	stats := statsFromResponsesUsage(t.model, response.Usage)
 	if t.lastCostKnown {
 		stats.CostUSD = t.lastCostUSD
 		stats.CostUnavailable = false
@@ -677,17 +668,6 @@ func parseCostValue(value any) (float64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-type modelPricing struct {
-	InputUSDPer1MTokens  float64 `json:"input_usd_per_1m_tokens"`
-	OutputUSDPer1MTokens float64 `json:"output_usd_per_1m_tokens"`
-}
-
-func (p modelPricing) cost(inputTokens, outputTokens int) float64 {
-	input := float64(inputTokens) * p.InputUSDPer1MTokens / 1_000_000
-	output := float64(outputTokens) * p.OutputUSDPer1MTokens / 1_000_000
-	return input + output
 }
 
 func reasoningEffort(thinking string) openai.ReasoningEffort {

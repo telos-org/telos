@@ -55,9 +55,10 @@ telos run SPEC.md --workspace . --model anthropic/claude-sonnet-4.5 --until 3
 
 `TELOS_API_BASE_URL`, `TELOS_BASE_URL`, and `TELOS_API_KEY` are accepted as
 compatibility aliases. Model names are sent to the gateway unchanged.
-If your LiteLLM gateway cannot report per-response cost, configure known exact
-aliases with `TELOS_MODEL_PRICING_TABLE`, for example
-`{"team/fast":{"input_usd_per_1m_tokens":1.0,"output_usd_per_1m_tokens":3.0}}`.
+Per-response cost is taken from what the LiteLLM gateway reports (the
+`x-litellm-response-cost` header or a cost field in the response body). For
+models the gateway does not price, cost is reported as unavailable and any
+`--max-cost-usd` cap is not enforced for those turns.
 
 Migration note: Telos no longer reads Pi, Harbor, or direct provider credential
 environment variables such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or
@@ -105,7 +106,7 @@ These are resolved once per turn and recorded in the turn's session log
 (`env_knobs` event) so a run is auditable from the log alone. Per-model
 capability/behavior is configured via the `TELOS_MODEL_*` family
 (`TELOS_MODEL_CAPABILITY_PROFILE`, `TELOS_MODEL_STATE_MODE`,
-`TELOS_MODEL_CONTEXT_WINDOW`, etc.) and pricing via `TELOS_MODEL_PRICING_TABLE`;
+`TELOS_MODEL_CONTEXT_WINDOW`, etc.);
 the resolved profile (including the effective context window) is logged at turn
 start (`provider_config` event, no secrets). The autocompaction trigger uses the
 floor of `TELOS_AUTOCOMPACT_CONTEXT_WINDOW` and the model's real context window

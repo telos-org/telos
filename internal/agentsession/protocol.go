@@ -114,7 +114,6 @@ type ProviderConfigPayload struct {
 	Model                   string `json:"model"`
 	StateMode               string `json:"state_mode"`
 	StrictProtocol          bool   `json:"strict_protocol"`
-	PricingConfigured       bool   `json:"pricing_configured"`
 	CapabilityMaxOutput     int    `json:"capability_max_output_tokens,omitempty"`
 	CapabilityContextWindow int    `json:"capability_context_window,omitempty"`
 	SupportsReasoning       *bool  `json:"supports_reasoning,omitempty"`

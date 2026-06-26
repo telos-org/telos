@@ -105,15 +105,14 @@ func (l *nativeSessionLogger) knobs(k envKnobs) error {
 }
 
 // providerConfig records the resolved model/provider configuration (minus
-// secrets) so the capability profile and pricing availability are auditable
-// per turn. API keys are never included.
+// secrets) so the capability profile is auditable per turn. API keys are never
+// included.
 func (l *nativeSessionLogger) providerConfig(cfg nativeProviderConfig) error {
 	return l.event(agentsession.KindProviderConfig, agentsession.MarshalPayload(&agentsession.ProviderConfigPayload{
 		Provider:                cfg.Provider,
 		Model:                   cfg.Model,
 		StateMode:               cfg.Capability.StateMode,
 		StrictProtocol:          cfg.Capability.StrictProtocol,
-		PricingConfigured:       cfg.PricingConfigured,
 		CapabilityMaxOutput:     cfg.Capability.MaxOutputTokens,
 		CapabilityContextWindow: cfg.Capability.effectiveContextWindow(cfg.Model),
 		SupportsReasoning:       cfg.Capability.SupportsReasoning,

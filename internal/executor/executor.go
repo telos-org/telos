@@ -24,10 +24,10 @@ type NativeExecutor struct {
 	configErr error
 }
 
-// NewNativeExecutor creates a native Go coding-agent executor. The provider,
-// pricing, and capability configuration is resolved once from the environment
-// here and reused for every turn — no env parsing happens per turn or per
-// model response. If the config is invalid the error is stored and surfaced
+// NewNativeExecutor creates a native Go coding-agent executor. The provider and
+// capability configuration is resolved once from the environment here and
+// reused for every turn — no env parsing happens per turn or per model
+// response. If the config is invalid the error is stored and surfaced
 // as a terminal error on the first ExecuteTurn call.
 //
 // PRECONDITION — isolation: the executor's tools are deliberately unsandboxed

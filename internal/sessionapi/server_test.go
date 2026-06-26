@@ -902,7 +902,7 @@ func TestDiagnosticsAggregatesBudgetsRetriesStopsAndArtifacts(t *testing.T) {
 
 	evidence := strings.Join([]string{
 		`{"event":"budget_exceeded","round":1,"role":"prover","data":{"budget":"max_input_tokens"}}`,
-		`{"event":"cost_cap_unenforceable","round":1,"role":"prover","data":{"max_cost_usd":10,"reason":"provider returned no cost and no pricing configured"}}`,
+		`{"event":"cost_cap_unenforceable","round":1,"role":"prover","data":{"max_cost_usd":10,"reason":"provider returned no cost"}}`,
 		`{"event":"agent_failure_recoverable","round":1,"role":"prover","data":{"error":"provider_rate_limited: HTTP 429"}}`,
 		`{"event":"agent_failure_recoverable","round":1,"role":"verifier","data":{"error_code":"agent_protocol","error":"missing status"}}`,
 		`{"event":"game_error","round":1,"role":"system","data":{"error":"benchmark verifier rejected final artifact"}}`,

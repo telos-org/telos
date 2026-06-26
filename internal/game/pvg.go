@@ -269,7 +269,7 @@ func (p *PVG) logCostCapUnenforceable(roundNum int, role string, stats TurnStats
 	p.costCapUnenforceable = true
 	p.Evidence.Log("cost_cap_unenforceable", roundNum, role, map[string]any{
 		"max_cost_usd": *p.Config.MaxCostUSD,
-		"reason":       "provider returned no cost and no pricing configured",
+		"reason":       "provider returned no cost",
 	})
 }
 

@@ -354,7 +354,6 @@ func TestNativeExecutorUsesLiteLLMResponseBodyCost(t *testing.T) {
 
 	t.Setenv("TELOS_LITELLM_BASE_URL", server.URL)
 	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
-	t.Setenv("TELOS_MODEL_PRICING_TABLE", `{"test/test-model":{"input_usd_per_1m_tokens":100,"output_usd_per_1m_tokens":100}}`)
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
 
@@ -383,26 +382,19 @@ func TestCostFromResponseBodyHandlesNestedLiteLLMMetadata(t *testing.T) {
 	}
 }
 
-func TestStatsFromResponsesUsageUsesExactConfiguredPricingTable(t *testing.T) {
-	pricing := modelPricing{InputUSDPer1MTokens: 2.0, OutputUSDPer1MTokens: 10.0}
-	stats := statsFromResponsesUsage("alias/known", responseUsageForTest(1_000_000, 250_000, 0), pricing, true)
-
-	if stats.CostUnavailable {
-		t.Fatalf("cost should be available: %+v", stats)
-	}
-	if stats.CostUSD != 4.5 {
-		t.Fatalf("cost: got %.4f", stats.CostUSD)
-	}
-}
-
-func TestStatsFromResponsesUsageLeavesUnknownPricingUnavailable(t *testing.T) {
-	stats := statsFromResponsesUsage("alias/missing", responseUsageForTest(1_000, 1_000, 0), modelPricing{}, false)
+func TestStatsFromResponsesUsageReportsTokensWithCostUnavailable(t *testing.T) {
+	// Cost is sourced only from the provider (LiteLLM headers/body); usage alone
+	// populates token counts and always leaves cost unavailable.
+	stats := statsFromResponsesUsage("alias/known", responseUsageForTest(1_000, 250, 4))
 
 	if !stats.CostUnavailable {
-		t.Fatalf("unknown model cost should remain unavailable: %+v", stats)
+		t.Fatalf("cost should be unavailable from usage alone: %+v", stats)
 	}
 	if stats.CostUSD != 0 {
-		t.Fatalf("unknown model cost should be zero, got %.4f", stats.CostUSD)
+		t.Fatalf("cost should be zero, got %.4f", stats.CostUSD)
+	}
+	if stats.InputTokens != 1_000 || stats.OutputTokens != 250 || stats.CacheReadTokens != 4 {
+		t.Fatalf("token counts: got %+v", stats)
 	}
 }
 

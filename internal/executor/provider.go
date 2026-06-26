@@ -10,12 +10,11 @@ import (
 
 // nativeConfig is the process-level executor configuration, resolved once from
 // environment in NewNativeExecutor. It carries the base URL, API key, and the
-// per-model pricing and capability tables so that providerFor is a pure map
-// lookup with no env parsing per turn or per model response.
+// per-model capability table so that providerFor is a pure map lookup with no
+// env parsing per turn or per model response.
 type nativeConfig struct {
 	baseURL           string
 	apiKey            string
-	pricing           map[string]modelPricing
 	capability        map[string]modelCapabilityProfile
 	defaultCapability modelCapabilityProfile
 }
@@ -32,7 +31,6 @@ func resolveNativeConfig() (nativeConfig, error) {
 	return nativeConfig{
 		baseURL:           strings.TrimRight(base, "/"),
 		apiKey:            key,
-		pricing:           parseModelPricingTable(),
 		capability:        parseModelCapabilityTable(),
 		defaultCapability: modelCapabilityProfileFromEnv(),
 	}, nil
@@ -40,7 +38,7 @@ func resolveNativeConfig() (nativeConfig, error) {
 
 // providerFor returns the per-model provider config via map lookups — no env
 // parsing. The model's capability is resolved as: capability-table[model] →
-// the process default capability profile. Pricing is resolved similarly.
+// the process default capability profile.
 func (c nativeConfig) providerFor(model string) (nativeProviderConfig, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
@@ -50,29 +48,21 @@ func (c nativeConfig) providerFor(model string) (nativeProviderConfig, error) {
 	if specific, ok := c.capability[model]; ok {
 		cap = specific
 	}
-	pricing, pricingKnown := modelPricing{}, false
-	if p, ok := c.pricing[model]; ok && validPricing(p) {
-		pricing, pricingKnown = p, true
-	}
 	return nativeProviderConfig{
-		Provider:          "litellm",
-		Model:             model,
-		BaseURL:           c.baseURL,
-		APIKey:            c.apiKey,
-		Capability:        cap,
-		Pricing:           pricing,
-		PricingConfigured: pricingKnown,
+		Provider:   "litellm",
+		Model:      model,
+		BaseURL:    c.baseURL,
+		APIKey:     c.apiKey,
+		Capability: cap,
 	}, nil
 }
 
 type nativeProviderConfig struct {
-	Provider          string
-	Model             string
-	BaseURL           string
-	APIKey            string
-	Capability        modelCapabilityProfile
-	Pricing           modelPricing
-	PricingConfigured bool
+	Provider   string
+	Model      string
+	BaseURL    string
+	APIKey     string
+	Capability modelCapabilityProfile
 }
 
 type modelCapabilityProfile struct {
@@ -205,27 +195,3 @@ func parseEnvBool(raw string) bool {
 	}
 }
 
-// parseModelPricingTable reads TELOS_MODEL_PRICING_TABLE, a JSON map from model
-// name to per-token pricing. Parsed once at construction; providerFor does a
-// map lookup instead of re-reading env per model response.
-func parseModelPricingTable() map[string]modelPricing {
-	raw := strings.TrimSpace(os.Getenv("TELOS_MODEL_PRICING_TABLE"))
-	if raw == "" {
-		return nil
-	}
-	var table map[string]modelPricing
-	if err := json.Unmarshal([]byte(raw), &table); err != nil {
-		return nil
-	}
-	return table
-}
-
-func validPricing(p modelPricing) bool {
-	if p.InputUSDPer1MTokens < 0 || p.OutputUSDPer1MTokens < 0 {
-		return false
-	}
-	if p.InputUSDPer1MTokens == 0 && p.OutputUSDPer1MTokens == 0 {
-		return false
-	}
-	return true
-}
