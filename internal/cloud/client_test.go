@@ -73,7 +73,7 @@ func TestClientListSessions(t *testing.T) {
 		gotPath = r.URL.RequestURI()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(sessionapi.SessionListResponse{
-			Sessions: []sessionapi.Session{
+			Sessions: []sessionapi.SessionListItem{
 				{SessionID: "s1", Status: sessionapi.StatusCompleted, Runtime: sessionapi.RuntimeCloud},
 				{SessionID: "s2", Status: sessionapi.StatusRunning, Runtime: sessionapi.RuntimeCloud},
 			},

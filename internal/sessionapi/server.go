@@ -161,7 +161,7 @@ func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
 	if limit > 0 && len(sessions) > limit {
 		sessions = sessions[:limit]
 	}
-	writeJSON(w, http.StatusOK, SessionListResponse{Sessions: sessions})
+	writeJSON(w, http.StatusOK, SessionListResponse{Sessions: SessionListItems(sessions)})
 }
 
 func listLimit(r *http.Request) (int, error) {

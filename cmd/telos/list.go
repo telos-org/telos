@@ -56,7 +56,7 @@ func cmdList(args []string) {
 	visible := visibleListSessions(sessions, effectiveWide)
 	visible = limitListSessions(visible, *limit)
 	if *jsonOut {
-		printJSON(sessionapi.SessionListResponse{Sessions: visible})
+		printJSON(sessionapi.SessionListResponse{Sessions: sessionapi.SessionListItems(visible)})
 		return
 	}
 

@@ -165,7 +165,7 @@ func TestControllerListSessionsUsesScopedContext(t *testing.T) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(sessionapi.SessionListResponse{
-			Sessions: []sessionapi.Session{{
+			Sessions: []sessionapi.SessionListItem{{
 				SessionID: "sess_controller",
 				Status:    sessionapi.StatusRunning,
 				Runtime:   sessionapi.RuntimeCloud,
