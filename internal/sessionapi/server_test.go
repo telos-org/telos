@@ -192,15 +192,17 @@ func TestCreateSessionRejectsInvalidUntil(t *testing.T) {
 	}
 }
 
-func TestCloudCreateSessionHonorsExplicitTaskKind(t *testing.T) {
+func TestCloudCreateSessionHonorsExplicitChildTaskKind(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	markdown := "---\nversion: v0\nname: one-off\nplatform: cloud\n---\n# One Off\n"
 	kind := sessionapi.KindTask
+	parentID := "sess_parent"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown: &markdown,
-		SessionKind:  &kind,
+		SpecMarkdown:    &markdown,
+		SessionKind:     &kind,
+		ParentSessionID: &parentID,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -209,7 +211,7 @@ func TestCloudCreateSessionHonorsExplicitTaskKind(t *testing.T) {
 		t.Fatalf("session_kind: got %#v", session.SessionKind)
 	}
 	if session.CurrentSpecVersion != nil {
-		t.Fatalf("task should not have current_spec_version: %#v", session.CurrentSpecVersion)
+		t.Fatalf("child should not have current_spec_version: %#v", session.CurrentSpecVersion)
 	}
 }
 
@@ -565,6 +567,37 @@ func TestGetControllerSessionSpec(t *testing.T) {
 	}
 	if body.Environment != `{"name":"postgres","platform":"cloud","version":"v0"}` {
 		t.Fatalf("environment: got %q", body.Environment)
+	}
+}
+
+func TestGetRootSessionSpecUsesLineageNotKind(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+	markdown := "---\nversion: v0\nname: postgres\nplatform: local\n---\n# Postgres\n"
+	kind := sessionapi.KindTask
+	root, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdown,
+		SessionKind:  &kind,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + root.SessionID + "/spec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+	var body sessionapi.SessionSpecResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Version == nil || *body.Version != 1 {
+		t.Fatalf("version: got %#v", body.Version)
 	}
 }
 

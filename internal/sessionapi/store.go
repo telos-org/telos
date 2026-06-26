@@ -164,7 +164,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 			IntervalSeconds: prepared.IntervalSeconds,
 		}},
 	})
-	if sessionKind == KindController && sessionSpecPath != "" {
+	if isRootManifest(&m) && sessionSpecPath != "" {
 		version := 1
 		m.CurrentSpecVersion = &version
 		m.SpecVersions = append(
@@ -234,6 +234,10 @@ func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) (SessionKind
 	return KindTask, nil
 }
 
+func isRootManifest(m *Manifest) bool {
+	return m.ParentSessionID == nil || *m.ParentSessionID == ""
+}
+
 func (fs *FileStore) liveRootIDsBySpecName(specName string) ([]string, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -251,7 +255,7 @@ func (fs *FileStore) liveRootIDsBySpecName(specName string) ([]string, error) {
 		if err != nil {
 			continue
 		}
-		if m.ParentSessionID != nil && *m.ParentSessionID != "" {
+		if !isRootManifest(m) {
 			continue
 		}
 		if m.SpecName != specName {
@@ -278,7 +282,7 @@ func (fs *FileStore) Spec(id string) (*SessionSpecResponse, error) {
 		}
 		return nil, err
 	}
-	if m.SessionKind != KindController {
+	if !isRootManifest(m) {
 		return nil, fmt.Errorf("child sessions do not have mutable specs: %w", ErrInvalidSession)
 	}
 	if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
