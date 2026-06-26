@@ -156,7 +156,7 @@ func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
 	}
 	sessions = h.authorizer.VisibleSessions(caller, sessions)
 	if !includeChildren {
-		sessions = rootSessions(sessions)
+		sessions = topLevelSessions(sessions)
 	}
 	if limit > 0 && len(sessions) > limit {
 		sessions = sessions[:limit]
@@ -188,14 +188,14 @@ func listIncludeChildren(r *http.Request) (bool, error) {
 	return value, nil
 }
 
-func rootSessions(sessions []Session) []Session {
-	roots := make([]Session, 0, len(sessions))
+func topLevelSessions(sessions []Session) []Session {
+	topLevel := make([]Session, 0, len(sessions))
 	for _, session := range sessions {
 		if session.ParentSessionID == nil || *session.ParentSessionID == "" {
-			roots = append(roots, session)
+			topLevel = append(topLevel, session)
 		}
 	}
-	return roots
+	return topLevel
 }
 
 func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {

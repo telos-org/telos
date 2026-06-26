@@ -75,7 +75,7 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	for _, want := range []string{
 		"Spec      hello-service",
 		"Platform  local",
-		"Session   root",
+		"Lineage   root",
 		"Mutates   no",
 		"Path      ./SPEC.md",
 		"Hash      8a8f0c21",
@@ -109,7 +109,7 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	for _, want := range []string{
 		"Spec      gitea",
 		"Platform  cloud",
-		"Session   root",
+		"Lineage   root",
 		"Mutates   no",
 		"Path      ./SPEC.md",
 		"Namespace ns-gitea",
@@ -554,15 +554,15 @@ func TestCloudSessionClientsRecoverEnvironmentAccess(t *testing.T) {
 	}
 }
 
-func TestControllerSessionContextUsesScopedToken(t *testing.T) {
+func TestRootSessionContextUsesScopedToken(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	t.Setenv("TELOS_API_TOKEN", "session-token")
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", "http://telos-api.local:8000")
 
-	ctx, ok := controllerSessionContext()
+	ctx, ok := rootSessionContext()
 	if !ok {
-		t.Fatal("expected controller context")
+		t.Fatal("expected root context")
 	}
 	if ctx.endpoint != "http://telos-api.local:8000" {
 		t.Fatalf("endpoint: got %q", ctx.endpoint)
@@ -575,21 +575,21 @@ func TestControllerSessionContextUsesScopedToken(t *testing.T) {
 	}
 }
 
-func TestControllerSessionContextIgnoresLocalRuntime(t *testing.T) {
+func TestRootSessionContextIgnoresLocalRuntime(t *testing.T) {
 	t.Setenv("TELOS_API_TOKEN", "session-token")
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", "http://telos-api.local:8000")
 
-	if ctx, ok := controllerSessionContext(); ok {
-		t.Fatalf("local runtime should not be cloud controller context: %#v", ctx)
+	if ctx, ok := rootSessionContext(); ok {
+		t.Fatalf("local runtime should not be cloud root context: %#v", ctx)
 	}
 }
 
-func TestLocalControllerSessionIDUsesLocalSessionContext(t *testing.T) {
+func TestLocalRootSessionIDUsesLocalSessionContext(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: local-controller\nplatform: local\n---\n# Local Controller\n"
+	markdown := "---\nversion: v0\nname: local-root\nplatform: local\n---\n# Local Root\n"
 	kind := sessionapi.KindController
 	session, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &markdown,
@@ -602,16 +602,16 @@ func TestLocalControllerSessionIDUsesLocalSessionContext(t *testing.T) {
 	t.Setenv("TELOS_SESSION_DIR", root)
 	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
 
-	sessionID, ok := localControllerSessionID()
+	sessionID, ok := localRootSessionID()
 	if !ok {
-		t.Fatal("expected local controller session context")
+		t.Fatal("expected local root session context")
 	}
 	if sessionID != session.SessionID {
 		t.Fatalf("session id: got %q", sessionID)
 	}
 }
 
-func TestLocalControllerSessionIDIgnoresTaskSession(t *testing.T) {
+func TestLocalRootSessionIDIgnoresTaskSession(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	markdown := "---\nversion: v0\nname: local-task\nplatform: local\n---\n# Local Task\n"
@@ -623,15 +623,15 @@ func TestLocalControllerSessionIDIgnoresTaskSession(t *testing.T) {
 	t.Setenv("TELOS_SESSION_DIR", root)
 	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
 
-	if sessionID, ok := localControllerSessionID(); ok {
-		t.Fatalf("task session should not be local controller context: %s", sessionID)
+	if sessionID, ok := localRootSessionID(); ok {
+		t.Fatalf("task session should not be local root context: %s", sessionID)
 	}
 }
 
-func TestLocalControllerSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
+func TestLocalRootSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: local-controller\nplatform: local\n---\n# Local Controller\n"
+	markdown := "---\nversion: v0\nname: local-root\nplatform: local\n---\n# Local Root\n"
 	kind := sessionapi.KindController
 	session, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &markdown,
@@ -644,8 +644,8 @@ func TestLocalControllerSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
 	t.Setenv("TELOS_SESSION_ID", session.SessionID)
 	t.Setenv("TELOS_SESSION_DIR", root)
 
-	if sessionID, ok := localControllerSessionID(); ok {
-		t.Fatalf("session should not be local controller context without runtime marker: %s", sessionID)
+	if sessionID, ok := localRootSessionID(); ok {
+		t.Fatalf("session should not be local root context without runtime marker: %s", sessionID)
 	}
 }
 
@@ -718,7 +718,7 @@ func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
 	}
 }
 
-func TestFollowTranscriptSurfacesControllerTranscriptError(t *testing.T) {
+func TestFollowTranscriptSurfacesRootTranscriptError(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -802,10 +802,10 @@ func TestPrintLogsRawShowsTranscript(t *testing.T) {
 	}
 }
 
-func TestControllerLookupReturnsClusterAPIError(t *testing.T) {
+func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/sessions/sess_controller" {
+		if r.URL.Path == "/api/sessions/sess_root" {
 			http.Error(w, `{"detail":"cluster unavailable"}`, http.StatusInternalServerError)
 			return
 		}
@@ -817,14 +817,14 @@ func TestControllerLookupReturnsClusterAPIError(t *testing.T) {
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
 
-	_, err := getSessionFromAnywhere("sess_controller", "")
+	_, err := getSessionFromAnywhere("sess_root", "")
 	if err == nil {
-		t.Fatal("expected controller lookup to fail")
+		t.Fatal("expected root lookup to fail")
 	}
 	if !strings.Contains(err.Error(), "root session lookup failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Contains(err.Error(), "session sess_controller: not found") {
+	if strings.Contains(err.Error(), "session sess_root: not found") {
 		t.Fatalf("root error fell through to generic not found: %v", err)
 	}
 }
