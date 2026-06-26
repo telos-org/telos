@@ -55,7 +55,7 @@ func (r *SessionRuntime) UnmarshalJSON(data []byte) error {
 	}
 }
 
-// SessionKind distinguishes controller sessions from task sessions.
+// SessionKind distinguishes internal root workers from bounded child workers.
 type SessionKind string
 
 const (
@@ -83,7 +83,7 @@ func (k *SessionKind) UnmarshalJSON(data []byte) error {
 // SessionCreateRequest is the body of POST /api/sessions.
 type SessionCreateRequest struct {
 	SpecMarkdown    *string      `json:"spec_markdown,omitempty"`
-	SessionKind     *SessionKind `json:"session_kind,omitempty"`
+	SessionKind     *SessionKind `json:"-"`
 	ParentSessionID *string      `json:"parent_session_id,omitempty"`
 	Until           *int         `json:"until,omitempty"`
 	Model           string       `json:"model,omitempty"`
@@ -151,7 +151,7 @@ type CurrentSpec struct {
 // SessionSummary is the minimal identification of a session.
 type SessionSummary struct {
 	SessionID       string        `json:"session_id"`
-	SessionKind     *SessionKind  `json:"session_kind,omitempty"`
+	SessionKind     *SessionKind  `json:"-"`
 	ParentSessionID *string       `json:"parent_session_id,omitempty"`
 	SpecName        *string       `json:"spec_name,omitempty"`
 	Status          SessionStatus `json:"status"`
@@ -161,7 +161,7 @@ type SessionSummary struct {
 // Session is the full API representation returned by get/list/create/stop.
 type Session struct {
 	SessionID       string        `json:"session_id"`
-	SessionKind     *SessionKind  `json:"session_kind,omitempty"`
+	SessionKind     *SessionKind  `json:"-"`
 	ParentSessionID *string       `json:"parent_session_id,omitempty"`
 	SpecName        *string       `json:"spec_name,omitempty"`
 	Status          SessionStatus `json:"status"`

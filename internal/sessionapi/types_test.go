@@ -14,11 +14,14 @@ func TestSessionRuntimeRejectsLegacyHostedValue(t *testing.T) {
 	}
 }
 
-func TestSessionCreateRequestRejectsInvalidSessionKind(t *testing.T) {
-	var req sessionapi.SessionCreateRequest
-	err := json.Unmarshal([]byte(`{"session_kind":"daemon"}`), &req)
-	if err == nil {
-		t.Fatal("expected invalid session_kind to fail")
+func TestSessionCreateRequestOmitsInternalSessionKind(t *testing.T) {
+	kind := sessionapi.KindController
+	body, err := json.Marshal(sessionapi.SessionCreateRequest{SessionKind: &kind})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(body) != "{}" {
+		t.Fatalf("session_kind should not be public JSON: %s", body)
 	}
 }
 

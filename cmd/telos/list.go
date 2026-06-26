@@ -230,10 +230,10 @@ func sessionName(sess sessionapi.Session) string {
 }
 
 func sessionKind(sess sessionapi.Session) string {
-	if sess.SessionKind != nil && *sess.SessionKind != "" {
-		return string(*sess.SessionKind)
+	if isRootSession(sess) {
+		return "root"
 	}
-	return "-"
+	return "child"
 }
 
 func sessionParent(sess sessionapi.Session) string {
@@ -241,6 +241,10 @@ func sessionParent(sess sessionapi.Session) string {
 		return *sess.ParentSessionID
 	}
 	return "-"
+}
+
+func isRootSession(sess sessionapi.Session) bool {
+	return sess.ParentSessionID == nil || *sess.ParentSessionID == ""
 }
 
 func sessionCost(sess sessionapi.Session) string {
