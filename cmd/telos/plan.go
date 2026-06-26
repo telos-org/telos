@@ -40,14 +40,13 @@ func cmdPlan(args []string) {
 	}
 	targetMode := "local"
 	willAllocateEnvironment := false
-	sessionKind := "task"
+	sessionKind := "root"
 	userScope := map[string]interface{}{
 		"status": "local",
 		"label":  "local workspace",
 		"detail": "no cloud auth required",
 	}
 	if platform != "local" {
-		sessionKind = "controller"
 		if *env != "" {
 			targetMode = "cloud env " + *env
 		} else {

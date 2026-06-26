@@ -70,12 +70,12 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "task", "")
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", "")
 	text := out.String()
 	for _, want := range []string{
 		"Spec      hello-service",
 		"Platform  local",
-		"Session   task",
+		"Session   root",
 		"Mutates   no",
 		"Path      ./SPEC.md",
 		"Hash      8a8f0c21",
@@ -104,12 +104,12 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "controller", "env_123")
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", "env_123")
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",
 		"Platform  cloud",
-		"Session   controller",
+		"Session   root",
 		"Mutates   no",
 		"Path      ./SPEC.md",
 		"Namespace ns-gitea",
@@ -733,7 +733,7 @@ func TestFollowTranscriptSurfacesControllerTranscriptError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected transcript error")
 	}
-	if !strings.Contains(err.Error(), "controller transcript lookup failed") {
+	if !strings.Contains(err.Error(), "root transcript lookup failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -803,11 +803,11 @@ func TestControllerLookupReturnsClusterAPIError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected controller lookup to fail")
 	}
-	if !strings.Contains(err.Error(), "controller session lookup failed") {
+	if !strings.Contains(err.Error(), "root session lookup failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if strings.Contains(err.Error(), "session sess_controller: not found") {
-		t.Fatalf("controller error fell through to generic not found: %v", err)
+		t.Fatalf("root error fell through to generic not found: %v", err)
 	}
 }
 

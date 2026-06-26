@@ -291,7 +291,7 @@ func TestCloudCreateSessionRejectsDuplicateLiveController(t *testing.T) {
 
 	_, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err == nil {
-		t.Fatal("expected duplicate controller to fail")
+		t.Fatal("expected duplicate root to fail")
 	}
 	if !strings.Contains(err.Error(), "root session \"postgres\" already exists") {
 		t.Fatalf("unexpected error: %v", err)
@@ -1313,7 +1313,7 @@ func TestCloudControllerStatusStaysRunningAfterCompletedCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	assertEqual(t, "controller status", "running", string(session.Status))
+	assertEqual(t, "root status", "running", string(session.Status))
 }
 
 func TestSessionStatusFailed(t *testing.T) {
@@ -1505,7 +1505,7 @@ func TestBearerAuthorizerHonorsSessionScopedTokens(t *testing.T) {
 
 	got := getSessionWithToken(t, srv.URL, child.SessionID, parentToken)
 	if got.SessionID != child.SessionID {
-		t.Fatalf("controller token should read child session, got %q", got.SessionID)
+		t.Fatalf("root token should read child session, got %q", got.SessionID)
 	}
 
 	req, _ := http.NewRequest("GET", srv.URL+"/api/sessions/"+parent.SessionID+"/spec", nil)
@@ -1517,7 +1517,7 @@ func TestBearerAuthorizerHonorsSessionScopedTokens(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("controller token should read its own spec, got %d: %s", resp.StatusCode, body)
+		t.Fatalf("root token should read its own spec, got %d: %s", resp.StatusCode, body)
 	}
 
 	req, _ = http.NewRequest("GET", srv.URL+"/api/sessions/"+other.SessionID, nil)
@@ -1528,13 +1528,13 @@ func TestBearerAuthorizerHonorsSessionScopedTokens(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("controller token should not read unrelated session, got %d", resp.StatusCode)
+		t.Fatalf("root token should not read unrelated session, got %d", resp.StatusCode)
 	}
 
 	taskToken := child.Access.APIToken
 	got = getSessionWithToken(t, srv.URL, child.SessionID, taskToken)
 	if got.SessionID != child.SessionID {
-		t.Fatalf("task token should read itself, got %q", got.SessionID)
+		t.Fatalf("child token should read itself, got %q", got.SessionID)
 	}
 
 	req, _ = http.NewRequest("POST", srv.URL+"/api/sessions", strings.NewReader(createSessionBody(t, "blocked")))
@@ -1546,7 +1546,7 @@ func TestBearerAuthorizerHonorsSessionScopedTokens(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("task token should not apply, got %d", resp.StatusCode)
+		t.Fatalf("child token should not apply, got %d", resp.StatusCode)
 	}
 }
 

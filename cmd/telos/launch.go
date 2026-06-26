@@ -58,15 +58,15 @@ func cmdLaunch(command, action string, args []string) {
 
 	if ctx, ok := controllerSessionContext(); ok {
 		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a controller session; use telos run for bounded child tasks")
+			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for bounded child work")
 			os.Exit(1)
 		}
 		if *env != "" {
-			fmt.Fprintln(os.Stderr, "error: --env is not supported inside a controller session")
+			fmt.Fprintln(os.Stderr, "error: --env is not supported inside a root session")
 			os.Exit(1)
 		}
 		if localConfigSet {
-			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a controller session")
+			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a root session")
 			os.Exit(1)
 		}
 		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, *agentTimeout)
@@ -101,11 +101,11 @@ func cmdLaunch(command, action string, args []string) {
 	localParentSessionID, inLocalController := localControllerSessionID()
 	if inLocalController {
 		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a controller session; use telos run for bounded child tasks")
+			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for bounded child work")
 			os.Exit(1)
 		}
 		if launchMode != launchLocal {
-			fmt.Fprintln(os.Stderr, "error: local controller sessions can only launch platform: local child tasks")
+			fmt.Fprintln(os.Stderr, "error: local root sessions can only launch platform: local child work")
 			os.Exit(1)
 		}
 	}

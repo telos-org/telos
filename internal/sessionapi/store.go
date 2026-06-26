@@ -266,7 +266,7 @@ func (fs *FileStore) liveRootIDsBySpecName(specName string) ([]string, error) {
 	return ids, nil
 }
 
-// Spec returns the mutable controller spec currently attached to a session.
+// Spec returns the mutable root spec currently attached to a session.
 func (fs *FileStore) Spec(id string) (*SessionSpecResponse, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -279,10 +279,10 @@ func (fs *FileStore) Spec(id string) (*SessionSpecResponse, error) {
 		return nil, err
 	}
 	if m.SessionKind != KindController {
-		return nil, fmt.Errorf("task sessions do not have mutable specs: %w", ErrInvalidSession)
+		return nil, fmt.Errorf("child sessions do not have mutable specs: %w", ErrInvalidSession)
 	}
 	if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
-		return nil, fmt.Errorf("controller session has no mutable spec: %w", ErrInvalidSession)
+		return nil, fmt.Errorf("root session has no mutable spec: %w", ErrInvalidSession)
 	}
 	data, err := os.ReadFile(*m.SessionSpecPath)
 	if err != nil {
