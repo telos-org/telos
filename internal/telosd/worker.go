@@ -23,7 +23,7 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	controller := manifest.Kind == sessionapi.KindController
+	root := manifest.Kind == sessionapi.KindController
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -32,11 +32,11 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	for {
 		result, err := cli.RunLocalSession(sessionDir)
 		if err != nil {
-			if !controller || once {
+			if !root || once {
 				return 1, err
 			}
-			fmt.Fprintf(os.Stderr, "controller cycle failed: %v\n", err)
-		} else if !controller {
+			fmt.Fprintf(os.Stderr, "root cycle failed: %v\n", err)
+		} else if !root {
 			if result.GameResult == game.GameSuccess {
 				return 0, nil
 			}
@@ -47,7 +47,7 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 		} else if once {
 			return 0, nil
 		}
-		if controller && manifest.Interval <= 0 {
+		if root && manifest.Interval <= 0 {
 			<-stop
 			return 0, nil
 		}

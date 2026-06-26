@@ -111,7 +111,7 @@ func TestSessionDisplayStatusDerivesHumanState(t *testing.T) {
 		want string
 	}{
 		{
-			name: "active running task",
+			name: "active running child session",
 			sess: sessionapi.Session{Status: sessionapi.StatusRunning, SessionKind: &task},
 			want: "active",
 		},

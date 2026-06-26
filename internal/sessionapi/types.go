@@ -55,7 +55,7 @@ func (r *SessionRuntime) UnmarshalJSON(data []byte) error {
 	}
 }
 
-// SessionKind distinguishes internal root workers from bounded child workers.
+// SessionKind is the persisted worker kind backing root and child sessions.
 type SessionKind string
 
 const (
