@@ -293,7 +293,7 @@ func (c *Client) ListSessions(limit int, includeChildren bool) ([]sessionapi.Ses
 	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
 		return nil, err
 	}
-	return listResp.Sessions, nil
+	return sessionapi.SessionsFromListItems(listResp.Sessions), nil
 }
 
 // GetSession gets a session by ID.

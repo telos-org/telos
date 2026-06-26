@@ -781,6 +781,8 @@ func TestListSessionsJSONShape(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
+	createSession(t, srv.URL, createSessionBody(t, "summary"))
+
 	resp, err := http.Get(srv.URL + "/api/sessions")
 	if err != nil {
 		t.Fatal(err)
@@ -791,6 +793,31 @@ func TestListSessionsJSONShape(t *testing.T) {
 	var m map[string]any
 	json.Unmarshal(raw, &m)
 	assertJSONType(t, m, "sessions", "slice")
+	sessions := m["sessions"].([]any)
+	if len(sessions) != 1 {
+		t.Fatalf("sessions: got %#v", sessions)
+	}
+	session := sessions[0].(map[string]any)
+	for _, key := range []string{
+		"session_kind",
+		"session_spec_path",
+		"session_dir",
+		"active_workspace_path",
+		"config",
+		"provenance",
+		"specs",
+		"epochs",
+		"spec_versions",
+	} {
+		if _, ok := session[key]; ok {
+			t.Fatalf("list summary should not include %q: %#v", key, session)
+		}
+	}
+	for _, key := range []string{"session_id", "spec_name", "status", "runtime"} {
+		if _, ok := session[key]; !ok {
+			t.Fatalf("list summary missing %q: %#v", key, session)
+		}
+	}
 }
 
 // --------- GET /api/sessions/{id} ---------------------------------------------------------------------------------------------------------------------------------------------------

@@ -158,7 +158,7 @@ type SessionSummary struct {
 	CreatedAt       *string       `json:"created_at,omitempty"`
 }
 
-// Session is the full API representation returned by get/list/create/stop.
+// Session is the full API representation returned by get/create/stop.
 type Session struct {
 	SessionID       string        `json:"session_id"`
 	SessionKind     *SessionKind  `json:"-"`
@@ -203,9 +203,85 @@ type Session struct {
 
 // --------- Response types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+// SessionListItem is the product-facing summary returned by GET /api/sessions.
+type SessionListItem struct {
+	SessionID          string         `json:"session_id"`
+	ParentSessionID    *string        `json:"parent_session_id,omitempty"`
+	SpecName           *string        `json:"spec_name,omitempty"`
+	Status             SessionStatus  `json:"status"`
+	CreatedAt          *string        `json:"created_at,omitempty"`
+	Runtime            SessionRuntime `json:"runtime"`
+	CurrentRound       *int           `json:"current_round,omitempty"`
+	CurrentRole        *string        `json:"current_role,omitempty"`
+	Result             *string        `json:"result,omitempty"`
+	Error              *string        `json:"error,omitempty"`
+	TotalCostUSD       *float64       `json:"total_cost_usd,omitempty"`
+	ServiceURL         *string        `json:"service_url,omitempty"`
+	DashboardURL       *string        `json:"dashboard_url,omitempty"`
+	CurrentSpecVersion *int           `json:"current_spec_version,omitempty"`
+}
+
 // SessionListResponse wraps GET /api/sessions.
 type SessionListResponse struct {
-	Sessions []Session `json:"sessions"`
+	Sessions []SessionListItem `json:"sessions"`
+}
+
+// SessionListItems derives public list summaries from full session records.
+func SessionListItems(sessions []Session) []SessionListItem {
+	items := make([]SessionListItem, 0, len(sessions))
+	for _, session := range sessions {
+		items = append(items, SessionListItemFromSession(session))
+	}
+	return items
+}
+
+// SessionListItemFromSession strips debug-heavy fields from a full Session.
+func SessionListItemFromSession(session Session) SessionListItem {
+	return SessionListItem{
+		SessionID:          session.SessionID,
+		ParentSessionID:    session.ParentSessionID,
+		SpecName:           session.SpecName,
+		Status:             session.Status,
+		CreatedAt:          session.CreatedAt,
+		Runtime:            session.Runtime,
+		CurrentRound:       session.CurrentRound,
+		CurrentRole:        session.CurrentRole,
+		Result:             session.Result,
+		Error:              session.Error,
+		TotalCostUSD:       session.TotalCostUSD,
+		ServiceURL:         session.ServiceURL,
+		DashboardURL:       session.DashboardURL,
+		CurrentSpecVersion: session.CurrentSpecVersion,
+	}
+}
+
+// AsSession preserves the existing Go client shape for list callers.
+func (item SessionListItem) AsSession() Session {
+	return Session{
+		SessionID:          item.SessionID,
+		ParentSessionID:    item.ParentSessionID,
+		SpecName:           item.SpecName,
+		Status:             item.Status,
+		CreatedAt:          item.CreatedAt,
+		Runtime:            item.Runtime,
+		CurrentRound:       item.CurrentRound,
+		CurrentRole:        item.CurrentRole,
+		Result:             item.Result,
+		Error:              item.Error,
+		TotalCostUSD:       item.TotalCostUSD,
+		ServiceURL:         item.ServiceURL,
+		DashboardURL:       item.DashboardURL,
+		CurrentSpecVersion: item.CurrentSpecVersion,
+	}
+}
+
+// SessionsFromListItems converts list summaries to the legacy Go client shape.
+func SessionsFromListItems(items []SessionListItem) []Session {
+	sessions := make([]Session, 0, len(items))
+	for _, item := range items {
+		sessions = append(sessions, item.AsSession())
+	}
+	return sessions
 }
 
 // SessionEvent represents one evidence event from a session.
