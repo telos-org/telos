@@ -163,7 +163,7 @@ func authorizeCaller(store *FileStore, caller Caller, req AccessRequest) error {
 		return nil
 	case ActionCreateSession:
 		if req.CreateRequest != nil && req.CreateRequest.ParentSessionID != nil {
-			return requireControllerSession(caller, *req.CreateRequest.ParentSessionID)
+			return requireRootSession(caller, *req.CreateRequest.ParentSessionID)
 		}
 		return requireScope(caller, ScopeSessionsApply)
 	case ActionUpdateSessionSpec:
@@ -188,7 +188,7 @@ func requireScope(caller Caller, scope Scope) error {
 	return authError{status: http.StatusForbidden, detail: fmt.Sprintf("%s access required", scope)}
 }
 
-func requireControllerSession(caller Caller, sessionID string) error {
+func requireRootSession(caller Caller, sessionID string) error {
 	if err := requireScope(caller, ScopeSessionsRun); err != nil {
 		return err
 	}
