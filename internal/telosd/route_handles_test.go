@@ -147,9 +147,6 @@ func TestCloudSessionStoreAddsHTTPProductHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.ArtifactURI == nil || *session.ArtifactURI != "https://postgres.usetelos.ai" {
-		t.Fatalf("artifact_uri: got %#v", session.ArtifactURI)
-	}
 	if session.ServiceURL == nil || *session.ServiceURL != "https://postgres.usetelos.ai" {
 		t.Fatalf("service_url: got %#v", session.ServiceURL)
 	}
@@ -183,9 +180,6 @@ func TestCloudSessionStoreAddsDashboardURL(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.ArtifactURI == nil || *session.ArtifactURI != "https://auth-service.usetelos.ai" {
-		t.Fatalf("artifact_uri: got %#v", session.ArtifactURI)
-	}
 	if session.ServiceURL == nil || *session.ServiceURL != "https://auth-service.usetelos.ai" {
 		t.Fatalf("service_url: got %#v", session.ServiceURL)
 	}
@@ -217,9 +211,6 @@ func TestCloudSessionStoreAddsTerminalProductHandle(t *testing.T) {
 
 	store.enrich(&session, store.routes())
 
-	if session.ArtifactURI == nil || *session.ArtifactURI != "https://postgres.usetelos.ai" {
-		t.Fatalf("artifact_uri: got %#v", session.ArtifactURI)
-	}
 	if session.ServiceURL == nil || *session.ServiceURL != "https://postgres.usetelos.ai" {
 		t.Fatalf("service_url: got %#v", session.ServiceURL)
 	}
@@ -249,9 +240,6 @@ func TestCloudSessionStoreLeavesTaskHandleEmpty(t *testing.T) {
 	}
 	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindTask {
 		t.Fatalf("session kind: got %#v", session.SessionKind)
-	}
-	if session.ArtifactURI != nil {
-		t.Fatalf("task session got artifact_uri: %q", *session.ArtifactURI)
 	}
 	if session.ServiceURL != nil {
 		t.Fatalf("task session got service_url: %q", *session.ServiceURL)

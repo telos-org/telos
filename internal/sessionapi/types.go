@@ -194,7 +194,6 @@ type Session struct {
 	CompletionReason        *string          `json:"completion_reason,omitempty"`
 	VerifierConceded        *bool            `json:"verifier_conceded,omitempty"`
 	ServiceURL              *string          `json:"service_url,omitempty"`
-	ArtifactURI             *string          `json:"artifact_uri,omitempty"`
 	DashboardURL            *string          `json:"dashboard_url,omitempty"`
 	CurrentSpecVersion      *int             `json:"current_spec_version,omitempty"`
 	SpecVersions            []map[string]any `json:"spec_versions"`

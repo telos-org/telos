@@ -285,7 +285,7 @@ func TestPrintSessionDescriptionIncludesAgentFacingDetails(t *testing.T) {
 		Result:                &result,
 		CompletionReason:      &completionReason,
 		VerifierConceded:      &verifierConceded,
-		ArtifactURI:           &artifact,
+		ServiceURL:            &artifact,
 		CurrentSpecVersion:    &version,
 		ActiveWorkspacePath:   &activeWorkspacePath,
 		ActiveWorkspaceExists: &activeWorkspaceExists,
