@@ -35,7 +35,7 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 			if !root || once {
 				return 1, err
 			}
-			fmt.Fprintf(os.Stderr, "root cycle failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "root session cycle failed: %v\n", err)
 		} else if !root {
 			if result.GameResult == game.GameSuccess {
 				return 0, nil
