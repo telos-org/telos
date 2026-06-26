@@ -320,7 +320,7 @@ func TestPrintSessionDescriptionIncludesAgentFacingDetails(t *testing.T) {
 		"Session   sess_123",
 		"Lifecycle",
 		"result         completed",
-		"kind           controller",
+		"kind           child",
 		"parent         sess_parent",
 		"interval       4h",
 		"completion     verifier_conceded",

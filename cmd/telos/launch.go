@@ -240,8 +240,6 @@ func runChildCloud(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	kind := sessionapi.KindTask
-	req.SessionKind = &kind
 	req.ParentSessionID = &ctx.sessionID
 	if until > 0 {
 		req.Until = &until
@@ -279,8 +277,6 @@ func runCloud(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	kind := sessionKindForCommand(command)
-	req.SessionKind = &kind
 	if until > 0 {
 		req.Until = &until
 	}

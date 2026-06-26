@@ -59,9 +59,6 @@ func TestCreateSession(t *testing.T) {
 	assertEqual(t, "status", string(session.Status), "pending")
 	assertEqual(t, "runtime", string(session.Runtime), "local")
 
-	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindTask {
-		t.Errorf("expected session_kind=task, got %v", session.SessionKind)
-	}
 	if session.SpecName == nil || *session.SpecName != "my-task" {
 		t.Errorf("expected spec_name=my-task, got %v", session.SpecName)
 	}
@@ -216,22 +213,12 @@ func TestCloudCreateSessionHonorsExplicitTaskKind(t *testing.T) {
 	}
 }
 
-func TestCreateSessionRejectsControllerChild(t *testing.T) {
+func TestCreateSessionRejectsPublicSessionKind(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	markdown := "---\nversion: v0\nname: bad-child\nplatform: local\n---\n# Bad Child\n"
-	parentID := "sess_parent"
-	kind := sessionapi.KindController
-	body, err := json.Marshal(sessionapi.SessionCreateRequest{
-		SpecMarkdown:    &markdown,
-		SessionKind:     &kind,
-		ParentSessionID: &parentID,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(string(body)))
+	body := `{"spec_markdown":"---\nversion: v0\nname: bad-kind\nplatform: local\n---\n# Bad Kind\n","session_kind":"controller"}`
+	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
