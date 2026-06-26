@@ -269,10 +269,17 @@ func (c *Client) IssueEnvironmentAccess(envID string) (*Environment, error) {
 }
 
 // ListSessions lists sessions from the cloud API.
-func (c *Client) ListSessions(limit int) ([]sessionapi.Session, error) {
+func (c *Client) ListSessions(limit int, includeChildren bool) ([]sessionapi.Session, error) {
 	path := "/api/sessions"
+	var query []string
 	if limit > 0 {
-		path = fmt.Sprintf("%s?limit=%d", path, limit)
+		query = append(query, fmt.Sprintf("limit=%d", limit))
+	}
+	if includeChildren {
+		query = append(query, "include_children=true")
+	}
+	if len(query) > 0 {
+		path += "?" + strings.Join(query, "&")
 	}
 	resp, err := c.do("GET", path, nil)
 	if err != nil {

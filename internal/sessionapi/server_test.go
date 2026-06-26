@@ -696,6 +696,88 @@ func TestListSessionsLimit(t *testing.T) {
 	}
 }
 
+func TestListSessionsHidesChildrenByDefault(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	root := createSession(t, srv.URL, createSessionBody(t, "root"))
+	childSpec := "---\nversion: v0\nname: child\nplatform: local\n---\n# Child\n"
+	if _, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &childSpec,
+		ParentSessionID: &root.SessionID,
+	}); err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+	var listResp sessionapi.SessionListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(listResp.Sessions) != 1 || listResp.Sessions[0].SessionID != root.SessionID {
+		t.Fatalf("default list should return only roots, got %#v", listResp.Sessions)
+	}
+}
+
+func TestListSessionsCanIncludeChildren(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	root := createSession(t, srv.URL, createSessionBody(t, "root"))
+	childSpec := "---\nversion: v0\nname: child\nplatform: local\n---\n# Child\n"
+	child, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &childSpec,
+		ParentSessionID: &root.SessionID,
+	})
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions?include_children=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+	var listResp sessionapi.SessionListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(listResp.Sessions) != 2 {
+		t.Fatalf("include_children list count: got %d", len(listResp.Sessions))
+	}
+	ids := map[string]bool{}
+	for _, session := range listResp.Sessions {
+		ids[session.SessionID] = true
+	}
+	if !ids[root.SessionID] || !ids[child.SessionID] {
+		t.Fatalf("include_children sessions: got %#v", listResp.Sessions)
+	}
+}
+
+func TestListSessionsRejectsInvalidIncludeChildren(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/sessions?include_children=sure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "400", itoa(resp.StatusCode))
+}
+
 func TestListSessionsRejectsInvalidLimit(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()

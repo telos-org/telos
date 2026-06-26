@@ -189,7 +189,7 @@ func TestControllerListSessionsUsesScopedContext(t *testing.T) {
 	if gotAuth != "Bearer scoped-token" {
 		t.Fatalf("authorization header: got %q", gotAuth)
 	}
-	if gotPath != "/api/sessions?limit=7" {
+	if gotPath != "/api/sessions?limit=7&include_children=true" {
 		t.Fatalf("request path: got %q", gotPath)
 	}
 	if len(sessions) != 1 || sessions[0].SessionID != "sess_controller" {

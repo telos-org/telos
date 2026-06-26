@@ -82,7 +82,7 @@ func TestClientListSessions(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "token")
-	sessions, err := client.ListSessions(0)
+	sessions, err := client.ListSessions(0, false)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -92,12 +92,19 @@ func TestClientListSessions(t *testing.T) {
 	if gotPath != "/api/sessions" {
 		t.Fatalf("request path: got %q", gotPath)
 	}
-	sessions, err = client.ListSessions(2)
+	sessions, err = client.ListSessions(2, false)
 	if err != nil {
 		t.Fatalf("ListSessions limit: %v", err)
 	}
 	if gotPath != "/api/sessions?limit=2" {
 		t.Fatalf("limited request path: got %q", gotPath)
+	}
+	_, err = client.ListSessions(2, true)
+	if err != nil {
+		t.Fatalf("ListSessions include children: %v", err)
+	}
+	if gotPath != "/api/sessions?limit=2&include_children=true" {
+		t.Fatalf("include children request path: got %q", gotPath)
 	}
 }
 
