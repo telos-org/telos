@@ -89,7 +89,7 @@ func getSessionFromAnywhere(sessionID, envID string) (*sessionapi.Session, error
 		return session, nil
 	}
 
-	if ctx, ok := controllerSessionContext(); ok {
+	if ctx, ok := rootSessionContext(); ok {
 		session, err := cloud.NewClient(ctx.endpoint, ctx.token).GetSession(sessionID)
 		if err == nil {
 			return session, nil
@@ -125,7 +125,7 @@ func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
 		return text, nil
 	}
 
-	if ctx, ok := controllerSessionContext(); ok {
+	if ctx, ok := rootSessionContext(); ok {
 		text, err := cloud.NewClient(ctx.endpoint, ctx.token).GetTranscript(sessionID)
 		if err == nil {
 			return text, nil

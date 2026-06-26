@@ -40,7 +40,7 @@ func cmdPlan(args []string) {
 	}
 	targetMode := "local"
 	willAllocateEnvironment := false
-	sessionKind := "root"
+	sessionLineage := "root"
 	userScope := map[string]interface{}{
 		"status": "local",
 		"label":  "local workspace",
@@ -77,7 +77,7 @@ func cmdPlan(args []string) {
 			"skills":       skillNames(compiled.Skills),
 		},
 		"session": map[string]interface{}{
-			"kind":             sessionKind,
+			"lineage":          sessionLineage,
 			"interval_seconds": compiled.Environment.IntervalSeconds,
 		},
 		"target": map[string]interface{}{
@@ -94,7 +94,7 @@ func cmdPlan(args []string) {
 		return
 	}
 
-	printPlanPreview(os.Stdout, compiled, specPath, platform, sessionKind, *env)
+	printPlanPreview(os.Stdout, compiled, specPath, platform, sessionLineage, *env)
 }
 
 func printPlanPreview(
@@ -102,12 +102,12 @@ func printPlanPreview(
 	compiled *spec.CompiledEnvironment,
 	specPath string,
 	platform string,
-	sessionKind string,
+	sessionLineage string,
 	envID string,
 ) {
 	printSummaryField(out, "Spec", compiled.Environment.Name)
 	printSummaryField(out, "Platform", platform)
-	printSummaryField(out, "Session", sessionKind)
+	printSummaryField(out, "Lineage", sessionLineage)
 	printSummaryField(out, "Mutates", "no")
 	printSummaryField(out, "Path", specPath)
 	if platform != "local" {

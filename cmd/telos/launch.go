@@ -56,7 +56,7 @@ func cmdLaunch(command, action string, args []string) {
 	specArg := fs.Arg(0)
 	specPath, hasLocalSpec := existingSpecPath(specArg)
 
-	if ctx, ok := controllerSessionContext(); ok {
+	if ctx, ok := rootSessionContext(); ok {
 		if command == "apply" {
 			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for bounded child work")
 			os.Exit(1)
@@ -98,8 +98,8 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	localParentSessionID, inLocalController := localControllerSessionID()
-	if inLocalController {
+	localRootID, inLocalRoot := localRootSessionID()
+	if inLocalRoot {
 		if command == "apply" {
 			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for bounded child work")
 			os.Exit(1)
@@ -154,8 +154,8 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	cfg.SessionKind = sessionKindForCommand(command)
 	cfg.Until = untilValue
-	if inLocalController {
-		cfg.ParentSessionID = &localParentSessionID
+	if inLocalRoot {
+		cfg.ParentSessionID = &localRootID
 	}
 
 	session, err := cli.SubmitLocalSession(specPath, cfg)
@@ -240,7 +240,7 @@ func validateLaunchCommand(command string, mode launchMode) error {
 
 func runChildCloud(
 	specArg string,
-	ctx controllerContext,
+	ctx rootContext,
 	until int,
 	runtimeConfig sessionRuntimeConfig,
 	jsonOut bool,

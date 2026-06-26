@@ -50,7 +50,7 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	fmt.Fprintln(out, "Lifecycle")
 	printDetailField(out, "api status", string(session.Status))
 	printDetailField(out, "result", sessionRawResult(session))
-	printDetailField(out, "kind", sessionKind(session))
+	printDetailField(out, "lineage", sessionLineage(session))
 	if session.ParentSessionID != nil && *session.ParentSessionID != "" {
 		printDetailField(out, "parent", *session.ParentSessionID)
 	} else {

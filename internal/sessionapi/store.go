@@ -111,7 +111,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		return nil, err
 	}
 	if sessionKind == KindController {
-		ids, err := fs.liveRootIDsBySpecName(specName)
+		ids, err := fs.liveTopLevelSessionIDsBySpecName(specName)
 		if err != nil {
 			return nil, err
 		}
@@ -164,7 +164,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 			IntervalSeconds: prepared.IntervalSeconds,
 		}},
 	})
-	if isRootManifest(&m) && sessionSpecPath != "" {
+	if isTopLevelManifest(&m) && sessionSpecPath != "" {
 		version := 1
 		m.CurrentSpecVersion = &version
 		m.SpecVersions = append(
@@ -234,11 +234,11 @@ func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) (SessionKind
 	return KindTask, nil
 }
 
-func isRootManifest(m *Manifest) bool {
+func isTopLevelManifest(m *Manifest) bool {
 	return m.ParentSessionID == nil || *m.ParentSessionID == ""
 }
 
-func (fs *FileStore) liveRootIDsBySpecName(specName string) ([]string, error) {
+func (fs *FileStore) liveTopLevelSessionIDsBySpecName(specName string) ([]string, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -255,7 +255,7 @@ func (fs *FileStore) liveRootIDsBySpecName(specName string) ([]string, error) {
 		if err != nil {
 			continue
 		}
-		if !isRootManifest(m) {
+		if !isTopLevelManifest(m) {
 			continue
 		}
 		if m.SpecName != specName {
@@ -282,7 +282,7 @@ func (fs *FileStore) Spec(id string) (*SessionSpecResponse, error) {
 		}
 		return nil, err
 	}
-	if !isRootManifest(m) {
+	if !isTopLevelManifest(m) {
 		return nil, fmt.Errorf("child sessions do not have mutable specs: %w", ErrInvalidSession)
 	}
 	if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
@@ -326,7 +326,7 @@ func (fs *FileStore) UpdateSpec(name string, req SessionSpecUpdateRequest) (*Ses
 		return nil, fmt.Errorf("spec name %q does not match route name %q: %w", prepared.Name, name, ErrInvalidSession)
 	}
 
-	ids, err := fs.liveRootIDsBySpecName(name)
+	ids, err := fs.liveTopLevelSessionIDsBySpecName(name)
 	if err != nil {
 		return nil, err
 	}
