@@ -109,6 +109,10 @@ func cmdLaunch(command, action string, args []string) {
 			os.Exit(1)
 		}
 	}
+	if err := validateLaunchCommand(command, launchMode); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	switch launchMode {
 	case launchCloudExisting:
 		runCloud(command, specArg, *env, untilValue, fs, *model, *thinking, *maxCostUSD, *agentTimeout, *jsonOut, false, 0, action)
@@ -225,6 +229,13 @@ func decideLaunchMode(
 		return "", fmt.Errorf("non-local spec requires cloud config; run `telos login` first")
 	}
 	return launchCloudNew, nil
+}
+
+func validateLaunchCommand(command string, mode launchMode) error {
+	if command == "run" && (mode == launchCloudExisting || mode == launchCloudNew) {
+		return fmt.Errorf("telos run for cloud specs must be used inside a root session; use telos apply to create or update a root session")
+	}
+	return nil
 }
 
 func runChildCloud(
