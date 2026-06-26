@@ -193,7 +193,7 @@ func requireControllerSession(caller Caller, sessionID string) error {
 		return err
 	}
 	if caller.Role != RoleController || caller.SubjectSessionID != sessionID {
-		return authError{status: http.StatusForbidden, detail: "controller session access required"}
+		return authError{status: http.StatusForbidden, detail: "root session access required"}
 	}
 	return nil
 }
@@ -212,12 +212,12 @@ func requireSessionAccess(store *FileStore, caller Caller, sessionID string, sco
 		if caller.SubjectSessionID == sessionID {
 			return nil
 		}
-		return authError{status: http.StatusForbidden, detail: "task token cannot access this session"}
+		return authError{status: http.StatusForbidden, detail: "child token cannot access this session"}
 	}
 	if store.IsSessionOrDescendant(sessionID, caller.SubjectSessionID) {
 		return nil
 	}
-	return authError{status: http.StatusForbidden, detail: "controller token cannot access this session"}
+	return authError{status: http.StatusForbidden, detail: "root token cannot access this session"}
 }
 
 func NewScopedToken(sessionID string, sessionKind SessionKind) (*ScopedToken, error) {

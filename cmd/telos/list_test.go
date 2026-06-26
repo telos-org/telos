@@ -184,7 +184,7 @@ func TestControllerListSessionsUsesScopedContext(t *testing.T) {
 		t.Fatalf("controllerListSessions: %v", err)
 	}
 	if !handled {
-		t.Fatal("expected controller context to be handled")
+		t.Fatal("expected root context to be handled")
 	}
 	if gotAuth != "Bearer scoped-token" {
 		t.Fatalf("authorization header: got %q", gotAuth)
@@ -242,7 +242,7 @@ func TestControllerListSessionsScopesLocalControllerTree(t *testing.T) {
 		t.Fatalf("controllerListSessions: %v", err)
 	}
 	if !handled {
-		t.Fatal("expected local controller context to be handled")
+		t.Fatal("expected local root context to be handled")
 	}
 	got := make([]string, 0, len(sessions))
 	for _, session := range sessions {

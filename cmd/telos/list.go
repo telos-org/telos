@@ -102,7 +102,7 @@ func controllerListSessions(limit int) ([]sessionapi.Session, bool, error) {
 	if sessionID, ok := localControllerSessionID(); ok {
 		sessions, err := store().List()
 		if err != nil {
-			return nil, true, fmt.Errorf("local controller session list failed: %w", err)
+			return nil, true, fmt.Errorf("local root session list failed: %w", err)
 		}
 		return controllerSessionTree(sessions, sessionID), true, nil
 	}
@@ -113,7 +113,7 @@ func controllerListSessions(limit int) ([]sessionapi.Session, bool, error) {
 	}
 	sessions, err := cloud.NewClient(ctx.endpoint, ctx.token).ListSessions(limit, true)
 	if err != nil {
-		return nil, true, fmt.Errorf("controller session list failed: %w", err)
+		return nil, true, fmt.Errorf("root session list failed: %w", err)
 	}
 	return sessions, true, nil
 }
