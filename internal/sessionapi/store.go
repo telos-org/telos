@@ -216,7 +216,7 @@ func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) (SessionKind
 		switch *req.SessionKind {
 		case KindController:
 			if req.ParentSessionID != nil {
-				return "", fmt.Errorf("child sessions must use session_kind %q: %w", KindTask, ErrInvalidSession)
+				return "", fmt.Errorf("child sessions cannot use root worker kind: %w", ErrInvalidSession)
 			}
 			return KindController, nil
 		case KindTask:
