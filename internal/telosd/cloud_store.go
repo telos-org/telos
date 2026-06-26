@@ -158,7 +158,6 @@ func (s *cloudSessionStore) enrich(session *sessionapi.Session, routes []publicR
 	if handle := productHandleFor(routes, *session); handle != "" {
 		uri := "https://" + stripScheme(handle)
 		session.ServiceURL = &uri
-		session.ArtifactURI = &uri
 	}
 	if handle := dashboardHandleFor(routes, *session); handle != "" {
 		url := "https://" + stripScheme(handle)

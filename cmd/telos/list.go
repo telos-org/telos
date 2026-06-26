@@ -272,9 +272,6 @@ func sessionServiceURL(sess sessionapi.Session) string {
 	if sess.ServiceURL != nil && *sess.ServiceURL != "" {
 		return *sess.ServiceURL
 	}
-	if sess.ArtifactURI != nil && *sess.ArtifactURI != "" {
-		return *sess.ArtifactURI
-	}
 	return ""
 }
 
