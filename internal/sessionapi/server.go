@@ -144,12 +144,20 @@ func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	includeChildren, err := listIncludeChildren(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	sessions, err := h.store.List()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	sessions = h.authorizer.VisibleSessions(caller, sessions)
+	if !includeChildren {
+		sessions = rootSessions(sessions)
+	}
 	if limit > 0 && len(sessions) > limit {
 		sessions = sessions[:limit]
 	}
@@ -166,6 +174,28 @@ func listLimit(r *http.Request) (int, error) {
 		return 0, fmt.Errorf("limit must be a non-negative integer")
 	}
 	return limit, nil
+}
+
+func listIncludeChildren(r *http.Request) (bool, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("include_children"))
+	if raw == "" {
+		return false, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("include_children must be a boolean")
+	}
+	return value, nil
+}
+
+func rootSessions(sessions []Session) []Session {
+	roots := make([]Session, 0, len(sessions))
+	for _, session := range sessions {
+		if session.ParentSessionID == nil || *session.ParentSessionID == "" {
+			roots = append(roots, session)
+		}
+	}
+	return roots
 }
 
 func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {

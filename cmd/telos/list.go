@@ -46,10 +46,10 @@ func cmdList(args []string) {
 			sessions = append(sessions, controllerSessions...)
 			controllerScoped = true
 		} else {
-			sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit)...)
+			sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit, *wide)...)
 		}
 	} else {
-		sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit)...)
+		sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit, *wide)...)
 	}
 
 	effectiveWide := *wide || controllerScoped
@@ -111,7 +111,7 @@ func controllerListSessions(limit int) ([]sessionapi.Session, bool, error) {
 	if !ok {
 		return nil, false, nil
 	}
-	sessions, err := cloud.NewClient(ctx.endpoint, ctx.token).ListSessions(limit)
+	sessions, err := cloud.NewClient(ctx.endpoint, ctx.token).ListSessions(limit, true)
 	if err != nil {
 		return nil, true, fmt.Errorf("controller session list failed: %w", err)
 	}
@@ -151,7 +151,7 @@ func controllerSessionTree(sessions []sessionapi.Session, rootID string) []sessi
 	return out
 }
 
-func listLocalAndConfiguredCloudSessions(localOnly bool, cloudOnly bool, envID string, limit int) []sessionapi.Session {
+func listLocalAndConfiguredCloudSessions(localOnly bool, cloudOnly bool, envID string, limit int, includeChildren bool) []sessionapi.Session {
 	var sessions []sessionapi.Session
 	if !cloudOnly {
 		local, err := store().List()
@@ -160,7 +160,7 @@ func listLocalAndConfiguredCloudSessions(localOnly bool, cloudOnly bool, envID s
 		}
 	}
 	if !localOnly && (cloudOnly || envID != "" || config.IsConfigured()) {
-		cloudSessions, err := listCloudSessions(envID, limit)
+		cloudSessions, err := listCloudSessions(envID, limit, includeChildren)
 		if err != nil && (cloudOnly || envID != "") {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)

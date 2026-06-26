@@ -46,14 +46,14 @@ func cloudSessionClientForRun(
 	return cloud.NewClient("https://"+env.Handle, env.AccessToken), env, nil
 }
 
-func listCloudSessions(envID string, limit int) ([]sessionapi.Session, error) {
+func listCloudSessions(envID string, limit int, includeChildren bool) ([]sessionapi.Session, error) {
 	targets, err := cloudSessionTargets(envID)
 	if err != nil {
 		return nil, err
 	}
 	var sessions []sessionapi.Session
 	for _, target := range targets {
-		found, err := target.client.ListSessions(limit)
+		found, err := target.client.ListSessions(limit, includeChildren)
 		if err != nil {
 			if envID != "" {
 				return nil, err
