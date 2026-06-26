@@ -260,7 +260,7 @@ func TestCreateSessionRejectsInvalidNameWithoutStrayCompileFiles(t *testing.T) {
 	}
 }
 
-func TestCloudCreateSessionCreatesControllerForOperatorApply(t *testing.T) {
+func TestCloudCreateSessionCreatesRootForOperatorApply(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
@@ -283,7 +283,7 @@ func TestCloudCreateSessionCreatesControllerForOperatorApply(t *testing.T) {
 	}
 }
 
-func TestCloudCreateSessionRejectsDuplicateLiveController(t *testing.T) {
+func TestCloudCreateSessionRejectsDuplicateLiveRoot(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
@@ -300,7 +300,7 @@ func TestCloudCreateSessionRejectsDuplicateLiveController(t *testing.T) {
 	}
 }
 
-func TestCloudCreateSessionIgnoresFailedControllerHistory(t *testing.T) {
+func TestCloudCreateSessionIgnoresFailedRootHistory(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
@@ -404,7 +404,7 @@ func TestCreateSessionRejectsOversizedBody(t *testing.T) {
 func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
-	controller, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
+	rootSession, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
 
 	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
 	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
@@ -438,8 +438,8 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	if session == nil {
 		t.Fatal("missing session")
 	}
-	if session.SessionID != controller.SessionID {
-		t.Fatalf("session_id: got %q want %q", session.SessionID, controller.SessionID)
+	if session.SessionID != rootSession.SessionID {
+		t.Fatalf("session_id: got %q want %q", session.SessionID, rootSession.SessionID)
 	}
 	if session.SpecName == nil || *session.SpecName != "postgres" {
 		t.Fatalf("spec_name: got %#v", session.SpecName)
@@ -521,12 +521,12 @@ func TestApplySessionSpecRejectsNameMismatch(t *testing.T) {
 	}
 }
 
-func TestGetControllerSessionSpec(t *testing.T) {
+func TestGetRootSessionSpec(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
-	controller, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
+	rootSession, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
 
-	resp, err := http.Get(srv.URL + "/api/sessions/" + controller.SessionID + "/spec")
+	resp, err := http.Get(srv.URL + "/api/sessions/" + rootSession.SessionID + "/spec")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1340,10 +1340,10 @@ func TestSessionStatusCompleted(t *testing.T) {
 	assertEqual(t, "completed status", "completed", string(session.Status))
 }
 
-func TestCloudControllerStatusStaysRunningAfterCompletedCycle(t *testing.T) {
+func TestCloudRootStatusStaysRunningAfterCompletedCycle(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
-	markdown := "---\nversion: v0\nname: controller\nplatform: cloud\n---\n# Controller\n"
+	markdown := "---\nversion: v0\nname: root\nplatform: cloud\n---\n# Root\n"
 
 	created, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
