@@ -430,6 +430,24 @@ func TestSessionKindForCommand(t *testing.T) {
 	}
 }
 
+func TestValidateLaunchCommandRejectsCloudRunOutsideRoot(t *testing.T) {
+	for _, mode := range []launchMode{launchCloudExisting, launchCloudNew} {
+		err := validateLaunchCommand("run", mode)
+		if err == nil {
+			t.Fatalf("expected cloud run rejection for %s", mode)
+		}
+		if !strings.Contains(err.Error(), "inside a root session") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if err := validateLaunchCommand("apply", launchCloudExisting); err != nil {
+		t.Fatalf("apply should be allowed: %v", err)
+	}
+	if err := validateLaunchCommand("run", launchLocal); err != nil {
+		t.Fatalf("local run should be allowed: %v", err)
+	}
+}
+
 func TestSessionCreateRequestRejectsCatalogueSpecID(t *testing.T) {
 	_, err := sessionCreateRequestForSpec("cal-diy")
 	if err == nil {
