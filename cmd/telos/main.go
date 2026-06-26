@@ -74,7 +74,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "commands:")
 	fmt.Fprintln(out, "  plan SPEC.md       Show compiled spec plan")
 	fmt.Fprintln(out, "  apply SPEC.md      Apply a desired-state spec")
-	fmt.Fprintln(out, "  run SPEC.md        Create and run bounded child work")
+	fmt.Fprintln(out, "  run SPEC.md        Create and run a child session")
 	fmt.Fprintln(out, "  list               List sessions")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
 	fmt.Fprintln(out, "  logs SESSION       Show session progress")
