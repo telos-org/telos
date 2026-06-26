@@ -48,6 +48,9 @@ func TestNormalizeCloudConfigDefaults(t *testing.T) {
 	if cfg.Kubernetes.AgentSecretKey != "TELOS_LITELLM_API_KEY" {
 		t.Fatalf("agent secret key: got %q", cfg.Kubernetes.AgentSecretKey)
 	}
+	if cfg.Billing.Endpoint != "https://billing.usetelos.ai" {
+		t.Fatalf("billing endpoint: got %q", cfg.Billing.Endpoint)
+	}
 }
 
 func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {

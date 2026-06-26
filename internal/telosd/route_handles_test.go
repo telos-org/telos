@@ -18,12 +18,13 @@ type recordingSubstrate struct {
 }
 
 type recordedApply struct {
-	sessionID  string
-	wakeReason string
+	sessionID         string
+	wakeReason        string
+	userAuthorization string
 }
 
-func (s *recordingSubstrate) Apply(session *sessionapi.Session, wakeReason string) error {
-	s.applies = append(s.applies, recordedApply{sessionID: session.SessionID, wakeReason: wakeReason})
+func (s *recordingSubstrate) Apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error {
+	s.applies = append(s.applies, recordedApply{sessionID: session.SessionID, wakeReason: wakeReason, userAuthorization: userAuthorization})
 	if s.applyErr != nil {
 		return s.applyErr
 	}
@@ -44,7 +45,7 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	store := newCloudSessionStore(base, routeHandleResolver{}, substrate)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
-	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, UserAuthorization: "Bearer user-token"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -54,9 +55,12 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	if substrate.applies[0].sessionID != session.SessionID || substrate.applies[0].wakeReason != "controller_started" {
 		t.Fatalf("create apply: got %+v", substrate.applies[0])
 	}
+	if substrate.applies[0].userAuthorization != "Bearer user-token" {
+		t.Fatalf("create user auth: got %+v", substrate.applies[0])
+	}
 
 	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres\n"
-	if _, err := store.UpdateSpec(session.SessionID, sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated}); err != nil {
+	if _, err := store.UpdateSpec(session.SessionID, sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated, UserAuthorization: "Bearer update-user-token"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(substrate.applies) != 2 {
@@ -64,6 +68,9 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	}
 	if substrate.applies[1].sessionID != session.SessionID || substrate.applies[1].wakeReason != "spec_updated" {
 		t.Fatalf("update apply: got %+v", substrate.applies[1])
+	}
+	if substrate.applies[1].userAuthorization != "Bearer update-user-token" {
+		t.Fatalf("update user auth: got %+v", substrate.applies[1])
 	}
 
 	if _, err := store.Stop(session.SessionID); err != nil {

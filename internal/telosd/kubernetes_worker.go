@@ -26,7 +26,7 @@ import (
 
 type kubernetesSubstrate struct {
 	client  kubernetes.Interface
-	control *controlClient
+	billing *billingClient
 
 	agentImage        string
 	envNamespace      string
@@ -62,7 +62,7 @@ func newKubernetesSubstrateWithClient(cfg Config, client kubernetes.Interface) k
 	runtimeMountPath := cfg.Runtime.MountPath
 	return kubernetesSubstrate{
 		client:            client,
-		control:           newControlClient(cfg.ControlPlane),
+		billing:           newBillingClient(cfg.Billing),
 		agentImage:        cfg.Kubernetes.AgentImage,
 		envNamespace:      cfg.Kubernetes.EnvNamespace,
 		stateMountRoot:    cfg.Kubernetes.StateMountRoot,
@@ -95,7 +95,7 @@ func kubernetesRESTConfig() (*rest.Config, error) {
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
 
-func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason string) error {
+func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error {
 	kind, err := sessionWorkerKind(session)
 	if err != nil {
 		return err
@@ -107,7 +107,7 @@ func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason strin
 	if err != nil {
 		return fmt.Errorf("read worker manifest: %w", err)
 	}
-	credential, err := s.sessionGatewayCredential(ctx, session.SessionID)
+	credential, err := s.sessionGatewayCredential(ctx, session.SessionID, ptrValue(m.ParentSessionID), userAuthorization)
 	if err != nil {
 		return err
 	}
@@ -478,8 +478,8 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 	return s.createOrUpdateSecret(ctx, secret)
 }
 
-func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessionID string) (*controlSessionKey, error) {
-	if s.control == nil || !s.control.configured() {
+func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessionID, parentSessionID, userAuthorization string) (*controlSessionKey, error) {
+	if s.billing == nil || !s.billing.configured() {
 		return nil, nil
 	}
 	secretName := sessionGatewaySecretName(sessionID)
@@ -492,7 +492,7 @@ func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessi
 	} else if !apierrors.IsNotFound(err) {
 		return nil, err
 	}
-	minted, err := s.control.MintSessionKey(sessionID)
+	minted, err := s.billing.MintSessionKey(sessionID, parentSessionID, userAuthorization)
 	if err != nil {
 		return nil, err
 	}

@@ -65,7 +65,7 @@ func TestResolveManagedMintsSessionKey(t *testing.T) {
 
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(cfgPath, []byte("api_endpoint: "+server.URL+"\nauth_token: login-token\n"), 0o600); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("billing_endpoint: "+server.URL+"\nauth_token: login-token\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("TELOS_CONFIG", cfgPath)

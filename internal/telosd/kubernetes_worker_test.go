@@ -47,7 +47,7 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 	session := testCloudSession(t, sessionapi.KindController)
 
-	if err := substrate.Apply(session, "controller_started"); err != nil {
+	if err := substrate.Apply(session, "controller_started", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -90,7 +90,7 @@ func TestKubernetesSubstrateAppliesTaskWorker(t *testing.T) {
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 	session := testCloudSession(t, sessionapi.KindTask)
 
-	if err := substrate.Apply(session, "task_started"); err != nil {
+	if err := substrate.Apply(session, "task_started", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -116,7 +116,7 @@ func TestKubernetesSubstrateStopDeletesWorkerResources(t *testing.T) {
 	namespace := workerNamespace(session.SessionID, sessionapi.KindController)
 	name := workerWorkloadName(session.SessionID, sessionapi.KindController)
 
-	if err := substrate.Apply(session, "controller_started"); err != nil {
+	if err := substrate.Apply(session, "controller_started", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := substrate.Stop(session); err != nil {
@@ -146,7 +146,7 @@ func TestKubernetesSubstrateStopContinuesCleanupAfterWorkloadDeleteError(t *test
 	session := testCloudSession(t, sessionapi.KindController)
 	namespace := workerNamespace(session.SessionID, sessionapi.KindController)
 
-	if err := substrate.Apply(session, "controller_started"); err != nil {
+	if err := substrate.Apply(session, "controller_started", ""); err != nil {
 		t.Fatal(err)
 	}
 	client.Fake.PrependReactor("delete", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
@@ -255,8 +255,12 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		if r.Header.Get("Authorization") != "Bearer env-token" {
+		if r.Header.Get("Authorization") != "Bearer billing-token" {
 			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("X-Telos-User-Authorization") != "Bearer user-token" {
+			w.WriteHeader(http.StatusForbidden)
 			return
 		}
 		mintCalls++
@@ -270,13 +274,13 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	defer server.Close()
 
 	cfg := testCloudConfig(t)
-	cfg.ControlPlane.Endpoint = server.URL
-	cfg.ControlPlane.EnvID = "env_test"
-	cfg.ControlPlane.Token = "env-token"
+	cfg.Billing.Endpoint = server.URL
+	cfg.Billing.EnvID = "env_test"
+	cfg.Billing.Token = "billing-token"
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 
-	cred, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud")
+	cred, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "Bearer user-token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -286,7 +290,7 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	if mintCalls != 1 {
 		t.Fatalf("mint calls: got %d", mintCalls)
 	}
-	cred, err = substrate.sessionGatewayCredential(context.Background(), "sess_cloud")
+	cred, err = substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "Bearer user-token")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,6 +310,50 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	}
 	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_API_KEY", "sk-managed")
 	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_BASE_URL", "https://managed.example.com/v1")
+}
+
+func TestBillingClientMintsChildSessionWithParentLineage(t *testing.T) {
+	var gotBody map[string]string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/internal/sessions/sess_child/mint" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer billing-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get("X-Telos-User-Authorization") != "" {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"session_id": "sess_child",
+			"base_url":   "https://managed.example.com/v1",
+			"api_key":    "sk-child",
+			"key_alias":  "sess_child",
+		})
+	}))
+	defer server.Close()
+
+	client := newBillingClient(BillingConfig{
+		Endpoint: server.URL,
+		EnvID:    "env_test",
+		Token:    "billing-token",
+	})
+	cred, err := client.MintSessionKey("sess_child", "sess_parent", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred.APIKey != "sk-child" {
+		t.Fatalf("credential: %+v", cred)
+	}
+	if gotBody["env_id"] != "env_test" || gotBody["parent_session_id"] != "sess_parent" {
+		t.Fatalf("body: %+v", gotBody)
+	}
 }
 
 func testCloudConfig(t *testing.T) Config {

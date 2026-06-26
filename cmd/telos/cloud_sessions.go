@@ -43,7 +43,7 @@ func cloudSessionClientForRun(
 			return nil, nil, err
 		}
 	}
-	return cloud.NewClient("https://"+env.Handle, env.AccessToken), env, nil
+	return cloud.NewEnvironmentAPIClient("https://"+env.Handle, env.AccessToken), env, nil
 }
 
 func listCloudSessions(envID string, limit int) ([]sessionapi.Session, error) {
@@ -118,7 +118,7 @@ func cloudSessionTargets(envID string) ([]cloudSessionTarget, error) {
 		}
 		env.AccessToken = access.Token
 		targets = append(targets, cloudSessionTarget{
-			client: cloud.NewClient("https://"+env.Handle, access.Token),
+			client: cloud.NewEnvironmentAPIClient("https://"+env.Handle, access.Token),
 			env:    env,
 		})
 	}

@@ -54,7 +54,7 @@ func Resolve(sessionID string) (Credential, error) {
 		}
 		return Credential{BaseURL: base, APIKey: key}, nil
 	case ModeManaged:
-		client, err := cloud.ControlClient()
+		client, err := cloud.BillingClient()
 		if err != nil {
 			return Credential{}, err
 		}

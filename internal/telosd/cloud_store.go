@@ -11,7 +11,7 @@ import (
 )
 
 type sessionSubstrate interface {
-	Apply(session *sessionapi.Session, wakeReason string) error
+	Apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error
 	Stop(session *sessionapi.Session) error
 }
 
@@ -30,7 +30,7 @@ func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessio
 	if err != nil {
 		return nil, err
 	}
-	if err := s.apply(session, startWakeReason(session)); err != nil {
+	if err := s.apply(session, startWakeReason(session), req.UserAuthorization); err != nil {
 		cleanupErr := s.cleanupWorker(session)
 		removeSessionDir(session)
 		if cleanupErr != nil {
@@ -47,7 +47,7 @@ func (s *cloudSessionStore) UpdateSpec(id string, req sessionapi.SessionSpecUpda
 	if err != nil {
 		return nil, err
 	}
-	if err := s.apply(session, "spec_updated"); err != nil {
+	if err := s.apply(session, "spec_updated", req.UserAuthorization); err != nil {
 		return nil, err
 	}
 	s.enrich(session, s.routes())
@@ -75,11 +75,11 @@ func (s *cloudSessionStore) Get(id string) (*sessionapi.Session, error) {
 	return session, nil
 }
 
-func (s *cloudSessionStore) apply(session *sessionapi.Session, wakeReason string) error {
+func (s *cloudSessionStore) apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error {
 	if s.substrate == nil {
 		return nil
 	}
-	if err := s.substrate.Apply(session, wakeReason); err != nil {
+	if err := s.substrate.Apply(session, wakeReason, userAuthorization); err != nil {
 		return fmt.Errorf("launch session %s worker: %w", session.SessionID, err)
 	}
 	return nil

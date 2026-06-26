@@ -11,6 +11,7 @@ import (
 )
 
 const maxSessionRequestBytes = 4 << 20
+const forwardedUserAuthorizationHeader = "X-Telos-User-Authorization"
 
 // RegisterRoutes mounts the canonical Sessions API routes onto the given mux.
 //
@@ -67,6 +68,7 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.UserAuthorization = r.Header.Get(forwardedUserAuthorizationHeader)
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionCreateSession, CreateRequest: &req}); !ok {
 		return
 	}
@@ -116,6 +118,7 @@ func (h *handler) updateSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.UserAuthorization = r.Header.Get(forwardedUserAuthorizationHeader)
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionUpdateSessionSpec, SessionID: id}); !ok {
 		return
 	}

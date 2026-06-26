@@ -223,6 +223,41 @@ func TestClientMintSessionKey(t *testing.T) {
 	}
 }
 
+func TestClientForwardsUserAuthorization(t *testing.T) {
+	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/sessions" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer env-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get(ForwardedUserAuthorizationHeader) != "Bearer user-token" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sessionapi.Session{
+			SessionID: "sess-forwarded",
+			Status:    sessionapi.StatusRunning,
+			Runtime:   sessionapi.RuntimeCloud,
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "env-token")
+	client.ForwardedUserToken = "user-token"
+	session, err := client.CreateSession(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if session.SessionID != "sess-forwarded" {
+		t.Fatalf("session: %+v", session)
+	}
+}
+
 func TestClientBalanceAndReconcile(t *testing.T) {
 	var sawReconcile bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

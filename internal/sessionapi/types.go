@@ -82,33 +82,35 @@ func (k *SessionKind) UnmarshalJSON(data []byte) error {
 
 // SessionCreateRequest is the body of POST /api/sessions.
 type SessionCreateRequest struct {
-	SpecMarkdown    *string      `json:"spec_markdown,omitempty"`
-	SessionKind     *SessionKind `json:"session_kind,omitempty"`
-	ParentSessionID *string      `json:"parent_session_id,omitempty"`
-	Until           *int         `json:"until,omitempty"`
-	Model           string       `json:"model,omitempty"`
-	Thinking        string       `json:"thinking,omitempty"`
-	MaxCostUSD      *float64     `json:"max_cost_usd,omitempty"`
-	MaxRounds       *int         `json:"max_rounds,omitempty"`
-	MaxDurationSec  *int         `json:"max_duration_sec,omitempty"`
-	MaxInputTokens  *int         `json:"max_input_tokens,omitempty"`
-	MaxOutputTokens *int         `json:"max_output_tokens,omitempty"`
-	MaxToolLoops    *int         `json:"max_tool_loops,omitempty"`
-	AgentTimeoutSec *int         `json:"agent_timeout_sec,omitempty"`
+	SpecMarkdown      *string      `json:"spec_markdown,omitempty"`
+	SessionKind       *SessionKind `json:"session_kind,omitempty"`
+	ParentSessionID   *string      `json:"parent_session_id,omitempty"`
+	UserAuthorization string       `json:"-"`
+	Until             *int         `json:"until,omitempty"`
+	Model             string       `json:"model,omitempty"`
+	Thinking          string       `json:"thinking,omitempty"`
+	MaxCostUSD        *float64     `json:"max_cost_usd,omitempty"`
+	MaxRounds         *int         `json:"max_rounds,omitempty"`
+	MaxDurationSec    *int         `json:"max_duration_sec,omitempty"`
+	MaxInputTokens    *int         `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens   *int         `json:"max_output_tokens,omitempty"`
+	MaxToolLoops      *int         `json:"max_tool_loops,omitempty"`
+	AgentTimeoutSec   *int         `json:"agent_timeout_sec,omitempty"`
 }
 
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{id}/spec.
 type SessionSpecUpdateRequest struct {
-	SpecMarkdown    string   `json:"spec_markdown"`
-	Model           string   `json:"model,omitempty"`
-	Thinking        string   `json:"thinking,omitempty"`
-	MaxCostUSD      *float64 `json:"max_cost_usd,omitempty"`
-	MaxRounds       *int     `json:"max_rounds,omitempty"`
-	MaxDurationSec  *int     `json:"max_duration_sec,omitempty"`
-	MaxInputTokens  *int     `json:"max_input_tokens,omitempty"`
-	MaxOutputTokens *int     `json:"max_output_tokens,omitempty"`
-	MaxToolLoops    *int     `json:"max_tool_loops,omitempty"`
-	AgentTimeoutSec *int     `json:"agent_timeout_sec,omitempty"`
+	SpecMarkdown      string   `json:"spec_markdown"`
+	UserAuthorization string   `json:"-"`
+	Model             string   `json:"model,omitempty"`
+	Thinking          string   `json:"thinking,omitempty"`
+	MaxCostUSD        *float64 `json:"max_cost_usd,omitempty"`
+	MaxRounds         *int     `json:"max_rounds,omitempty"`
+	MaxDurationSec    *int     `json:"max_duration_sec,omitempty"`
+	MaxInputTokens    *int     `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens   *int     `json:"max_output_tokens,omitempty"`
+	MaxToolLoops      *int     `json:"max_tool_loops,omitempty"`
+	AgentTimeoutSec   *int     `json:"agent_timeout_sec,omitempty"`
 }
 
 // SessionSpecResponse is returned by GET /api/sessions/{id}/spec.

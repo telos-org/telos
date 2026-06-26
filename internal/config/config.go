@@ -13,6 +13,7 @@ const (
 	ConfigPathEnv       = "TELOS_CONFIG"
 	EnvironmentsPathEnv = "TELOS_ENVIRONMENTS_CONFIG"
 	APIEndpointEnv      = "TELOS_API_ENDPOINT"
+	BillingEndpointEnv  = "TELOS_BILLING_ENDPOINT"
 	AuthTokenEnv        = "TELOS_AUTH_TOKEN"
 	GatewayModeEnv      = "TELOS_GATEWAY_MODE"
 	GatewayBaseURLEnv   = "TELOS_GATEWAY_BASE_URL"
@@ -21,9 +22,10 @@ const (
 
 // Config holds user-facing cloud CLI configuration.
 type Config struct {
-	APIEndpoint string        `yaml:"api_endpoint,omitempty"`
-	AuthToken   string        `yaml:"auth_token,omitempty"`
-	Gateway     GatewayConfig `yaml:"gateway,omitempty"`
+	APIEndpoint     string        `yaml:"api_endpoint,omitempty"`
+	BillingEndpoint string        `yaml:"billing_endpoint,omitempty"`
+	AuthToken       string        `yaml:"auth_token,omitempty"`
+	Gateway         GatewayConfig `yaml:"gateway,omitempty"`
 }
 
 // GatewayConfig holds local model gateway selection.
@@ -64,6 +66,9 @@ func LoadConfig() *Config {
 	if ep, ok := raw["api_endpoint"].(string); ok {
 		cfg.APIEndpoint = ep
 	}
+	if ep, ok := raw["billing_endpoint"].(string); ok {
+		cfg.BillingEndpoint = ep
+	}
 	if at, ok := raw["auth_token"].(string); ok {
 		cfg.AuthToken = at
 	}
@@ -81,6 +86,9 @@ func LoadConfig() *Config {
 	// Env overrides
 	if v := os.Getenv(APIEndpointEnv); v != "" {
 		cfg.APIEndpoint = v
+	}
+	if v := os.Getenv(BillingEndpointEnv); v != "" {
+		cfg.BillingEndpoint = v
 	}
 	if v := os.Getenv(AuthTokenEnv); v != "" {
 		cfg.AuthToken = v
@@ -106,6 +114,9 @@ func SaveConfig(cfg *Config) error {
 	m := map[string]any{}
 	if cfg.APIEndpoint != "" {
 		m["api_endpoint"] = cfg.APIEndpoint
+	}
+	if cfg.BillingEndpoint != "" {
+		m["billing_endpoint"] = cfg.BillingEndpoint
 	}
 	if cfg.AuthToken != "" {
 		m["auth_token"] = cfg.AuthToken

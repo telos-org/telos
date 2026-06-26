@@ -18,8 +18,10 @@ import (
 )
 
 const (
-	DefaultAPIEndpoint = "https://api.usetelos.ai"
-	DefaultTimeout     = 30 * time.Second
+	DefaultAPIEndpoint               = "https://api.usetelos.ai"
+	DefaultBillingEndpoint           = "https://billing.usetelos.ai"
+	DefaultTimeout                   = 30 * time.Second
+	ForwardedUserAuthorizationHeader = "X-Telos-User-Authorization"
 )
 
 // Environment describes a cloud Telos environment from the control plane.
@@ -31,7 +33,7 @@ type Environment struct {
 	HasRecoverable bool
 }
 
-// SessionKey is a budget-capped LiteLLM key minted by the control plane.
+// SessionKey is a budget-capped LiteLLM key minted by billing.
 type SessionKey struct {
 	SessionID string
 	BaseURL   string
@@ -47,9 +49,10 @@ type Balance struct {
 
 // Client is a cloud Sessions API client.
 type Client struct {
-	Endpoint string
-	Token    string
-	HTTP     *http.Client
+	Endpoint           string
+	Token              string
+	ForwardedUserToken string
+	HTTP               *http.Client
 }
 
 // NewClient creates a client from config.
@@ -61,12 +64,34 @@ func NewClient(endpoint, token string) *Client {
 	}
 }
 
+// NewEnvironmentAPIClient creates a client for an environment-local Sessions API.
+func NewEnvironmentAPIClient(endpoint, token string) *Client {
+	cfg := config.LoadConfig()
+	client := NewClient(endpoint, token)
+	client.ForwardedUserToken = cfg.AuthToken
+	return client
+}
+
 // ControlClient returns a client for the configured Telos control plane.
 func ControlClient() (*Client, error) {
 	cfg := config.LoadConfig()
 	endpoint := cfg.APIEndpoint
 	if endpoint == "" {
 		endpoint = DefaultAPIEndpoint
+	}
+	token := cfg.AuthToken
+	if token == "" {
+		return nil, fmt.Errorf("not logged in; run `telos login` first")
+	}
+	return NewClient(endpoint, token), nil
+}
+
+// BillingClient returns a client for the configured Telos billing service.
+func BillingClient() (*Client, error) {
+	cfg := config.LoadConfig()
+	endpoint := cfg.BillingEndpoint
+	if endpoint == "" {
+		endpoint = DefaultBillingEndpoint
 	}
 	token := cfg.AuthToken
 	if token == "" {
@@ -96,7 +121,7 @@ func NewEnvironmentClient(envID string) (*Client, *Environment, error) {
 	if env.AccessToken == "" {
 		return nil, nil, fmt.Errorf("environment %s has no local access token; recover access first", envID)
 	}
-	return NewClient("https://"+env.Handle, env.AccessToken), env, nil
+	return NewEnvironmentAPIClient("https://"+env.Handle, env.AccessToken), env, nil
 }
 
 // ResolveEnvironment returns the control-plane record plus local/recovered
@@ -157,7 +182,7 @@ func (c *Client) CreateEnvironment() (*Environment, error) {
 	return &env, nil
 }
 
-// MintSessionKey asks the control plane to mint a managed per-session gateway key.
+// MintSessionKey asks billing to mint a managed per-session gateway key.
 func (c *Client) MintSessionKey(sessionID string) (*SessionKey, error) {
 	body, err := json.Marshal(map[string]string{"session_id": sessionID})
 	if err != nil {
@@ -182,7 +207,7 @@ func (c *Client) MintSessionKey(sessionID string) (*SessionKey, error) {
 		return nil, err
 	}
 	if raw.BaseURL == "" || raw.APIKey == "" {
-		return nil, fmt.Errorf("control plane returned invalid session key")
+		return nil, fmt.Errorf("billing returned invalid session key")
 	}
 	return &SessionKey{
 		SessionID: raw.SessionID,
@@ -467,6 +492,9 @@ func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[s
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
+	if c.ForwardedUserToken != "" {
+		req.Header.Set(ForwardedUserAuthorizationHeader, "Bearer "+c.ForwardedUserToken)
+	}
 	client := http.DefaultClient
 	if c.HTTP != nil {
 		clone := *c.HTTP
@@ -530,6 +558,9 @@ func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	if c.ForwardedUserToken != "" {
+		req.Header.Set(ForwardedUserAuthorizationHeader, "Bearer "+c.ForwardedUserToken)
 	}
 	return c.HTTP.Do(req)
 }

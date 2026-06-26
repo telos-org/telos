@@ -17,15 +17,15 @@ type controlSessionKey struct {
 	KeyAlias  string
 }
 
-type controlClient struct {
+type billingClient struct {
 	endpoint string
 	token    string
 	envID    string
 	http     *http.Client
 }
 
-func newControlClient(cfg ControlConfig) *controlClient {
-	return &controlClient{
+func newBillingClient(cfg BillingConfig) *billingClient {
+	return &billingClient{
 		endpoint: strings.TrimRight(cfg.Endpoint, "/"),
 		token:    strings.TrimSpace(cfg.Token),
 		envID:    strings.TrimSpace(cfg.EnvID),
@@ -33,15 +33,22 @@ func newControlClient(cfg ControlConfig) *controlClient {
 	}
 }
 
-func (c *controlClient) configured() bool {
-	return c != nil && c.endpoint != "" && c.token != "" && c.envID != ""
+func (c *billingClient) configured() bool {
+	return c != nil && c.endpoint != "" && c.envID != ""
 }
 
-func (c *controlClient) MintSessionKey(sessionID string) (controlSessionKey, error) {
+func (c *billingClient) MintSessionKey(sessionID, parentSessionID, userAuthorization string) (controlSessionKey, error) {
 	if !c.configured() {
-		return controlSessionKey{}, fmt.Errorf("control plane minting is not configured")
+		return controlSessionKey{}, fmt.Errorf("billing minting is not configured")
 	}
-	body, err := json.Marshal(map[string]string{"env_id": c.envID})
+	if strings.TrimSpace(parentSessionID) != "" && strings.TrimSpace(c.token) == "" && strings.TrimSpace(userAuthorization) == "" {
+		return controlSessionKey{}, fmt.Errorf("billing service token is required to mint a child session key")
+	}
+	bodyMap := map[string]string{"env_id": c.envID}
+	if parentSessionID = strings.TrimSpace(parentSessionID); parentSessionID != "" {
+		bodyMap["parent_session_id"] = parentSessionID
+	}
+	body, err := json.Marshal(bodyMap)
 	if err != nil {
 		return controlSessionKey{}, err
 	}
@@ -49,7 +56,12 @@ func (c *controlClient) MintSessionKey(sessionID string) (controlSessionKey, err
 	if err != nil {
 		return controlSessionKey{}, err
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	if strings.TrimSpace(userAuthorization) != "" {
+		req.Header.Set("X-Telos-User-Authorization", strings.TrimSpace(userAuthorization))
+	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -70,7 +82,7 @@ func (c *controlClient) MintSessionKey(sessionID string) (controlSessionKey, err
 		return controlSessionKey{}, err
 	}
 	if raw.BaseURL == "" || raw.APIKey == "" {
-		return controlSessionKey{}, fmt.Errorf("control plane returned invalid session key")
+		return controlSessionKey{}, fmt.Errorf("billing returned invalid session key")
 	}
 	return controlSessionKey{
 		SessionID: raw.SessionID,

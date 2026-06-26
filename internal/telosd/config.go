@@ -38,6 +38,7 @@ type Config struct {
 	Runtime         RuntimeConfig    `yaml:"runtime"`
 	Kubernetes      KubernetesConfig `yaml:"kubernetes"`
 	ControlPlane    ControlConfig    `yaml:"control_plane"`
+	Billing         BillingConfig    `yaml:"billing"`
 }
 
 type ServerConfig struct {
@@ -60,6 +61,13 @@ type RuntimeConfig struct {
 }
 
 type ControlConfig struct {
+	Endpoint  string `yaml:"endpoint"`
+	EnvID     string `yaml:"env_id"`
+	Token     string `yaml:"token"`
+	TokenFile string `yaml:"token_file"`
+}
+
+type BillingConfig struct {
 	Endpoint  string `yaml:"endpoint"`
 	EnvID     string `yaml:"env_id"`
 	Token     string `yaml:"token"`
@@ -178,6 +186,25 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		}
 		if cfg.ControlPlane.Token == "" {
 			cfg.ControlPlane.Token = os.Getenv("TELOS_CONTROL_TOKEN")
+		}
+		if cfg.Billing.Endpoint == "" {
+			cfg.Billing.Endpoint = envOr("TELOS_BILLING_ENDPOINT", "https://billing.usetelos.ai")
+		}
+		if cfg.Billing.EnvID == "" {
+			cfg.Billing.EnvID = os.Getenv("TELOS_ENV_ID")
+		}
+		if cfg.Billing.TokenFile == "" {
+			cfg.Billing.TokenFile = os.Getenv("TELOS_BILLING_SERVICE_TOKEN_FILE")
+		}
+		if cfg.Billing.Token == "" {
+			if token, err := authTokenFromFile(cfg.Billing.TokenFile); err != nil {
+				return Config{}, fmt.Errorf("read billing.token_file: %w", err)
+			} else if token != "" {
+				cfg.Billing.Token = token
+			}
+		}
+		if cfg.Billing.Token == "" {
+			cfg.Billing.Token = os.Getenv("TELOS_BILLING_SERVICE_TOKEN")
 		}
 		if cfg.Kubernetes.AgentImage == "" {
 			cfg.Kubernetes.AgentImage = envOr("TELOS_AGENT_IMAGE", "telos-agent:latest")
