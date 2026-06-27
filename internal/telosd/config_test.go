@@ -135,6 +135,34 @@ func TestNormalizeCloudConfigRequiresBearerToken(t *testing.T) {
 	}
 }
 
+func TestNormalizeCloudConfigRequiresBillingTokenWhenBillingConfigured(t *testing.T) {
+	t.Setenv("TELOS_API_TOKEN", "operator-token")
+	t.Setenv("TELOS_ENV_ID", "env_test")
+	t.Setenv("TELOS_BILLING_SERVICE_TOKEN", "")
+
+	_, err := NormalizeConfig(Config{Mode: ModeCloud})
+	if err == nil {
+		t.Fatal("expected missing billing token error")
+	}
+	if err.Error() != "billing.token is required when cloud billing is configured" {
+		t.Fatalf("error: got %q", err)
+	}
+}
+
+func TestNormalizeCloudConfigAcceptsBillingTokenFromEnv(t *testing.T) {
+	t.Setenv("TELOS_API_TOKEN", "operator-token")
+	t.Setenv("TELOS_ENV_ID", "env_test")
+	t.Setenv("TELOS_BILLING_SERVICE_TOKEN", "billing-token")
+
+	cfg, err := NormalizeConfig(Config{Mode: ModeCloud})
+	if err != nil {
+		t.Fatalf("NormalizeConfig: %v", err)
+	}
+	if cfg.Billing.Token != "billing-token" {
+		t.Fatalf("billing token: got %q", cfg.Billing.Token)
+	}
+}
+
 func TestNormalizeConfigRejectsCrossModeAuth(t *testing.T) {
 	_, err := NormalizeConfig(Config{
 		Mode: ModeCloud,

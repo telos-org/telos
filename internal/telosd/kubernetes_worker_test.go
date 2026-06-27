@@ -356,6 +356,40 @@ func TestBillingClientMintsChildSessionWithParentLineage(t *testing.T) {
 	}
 }
 
+func TestBillingClientReconcilesTerminalSession(t *testing.T) {
+	gotRequest := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/billing/reconcile/sess_cloud" || r.URL.RawQuery != "terminal=true" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer billing-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		gotRequest = true
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"session_id":    "sess_cloud",
+			"spent_usd":     0.12,
+			"units_debited": 12,
+			"state":         "settled",
+		})
+	}))
+	defer server.Close()
+
+	client := newBillingClient(BillingConfig{
+		Endpoint: server.URL,
+		EnvID:    "env_test",
+		Token:    "billing-token",
+	})
+	if err := client.ReconcileSession("sess_cloud", true); err != nil {
+		t.Fatal(err)
+	}
+	if !gotRequest {
+		t.Fatal("missing reconcile request")
+	}
+}
+
 func testCloudConfig(t *testing.T) Config {
 	t.Helper()
 	cfg, err := NormalizeConfig(Config{

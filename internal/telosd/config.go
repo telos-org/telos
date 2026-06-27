@@ -206,6 +206,9 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		if cfg.Billing.Token == "" {
 			cfg.Billing.Token = os.Getenv("TELOS_BILLING_SERVICE_TOKEN")
 		}
+		if cfg.Billing.Endpoint != "" && cfg.Billing.EnvID != "" && cfg.Billing.Token == "" {
+			return Config{}, fmt.Errorf("billing.token is required when cloud billing is configured")
+		}
 		if cfg.Kubernetes.AgentImage == "" {
 			cfg.Kubernetes.AgentImage = envOr("TELOS_AGENT_IMAGE", "telos-agent:latest")
 		}

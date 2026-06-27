@@ -91,3 +91,32 @@ func (c *billingClient) MintSessionKey(sessionID, parentSessionID, userAuthoriza
 		KeyAlias:  raw.KeyAlias,
 	}, nil
 }
+
+func (c *billingClient) ReconcileSession(sessionID string, terminal bool) error {
+	if !c.configured() {
+		return fmt.Errorf("billing reconciliation is not configured")
+	}
+	if strings.TrimSpace(c.token) == "" {
+		return fmt.Errorf("billing service token is required to reconcile a cloud session")
+	}
+	path := c.endpoint + "/api/billing/reconcile/" + strings.TrimSpace(sessionID)
+	if terminal {
+		path += "?terminal=true"
+	}
+	req, err := http.NewRequest(http.MethodPost, path, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("reconcile billing session: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
+}

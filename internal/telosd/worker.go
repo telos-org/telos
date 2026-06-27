@@ -37,6 +37,7 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 			}
 			fmt.Fprintf(os.Stderr, "controller cycle failed: %v\n", err)
 		} else if !controller {
+			reconcileWorkerBilling(sessionDir, manifest, true)
 			if result.GameResult == game.GameSuccess {
 				return 0, nil
 			}
@@ -45,7 +46,10 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 			}
 			return 1, fmt.Errorf("session failed: %s", result.GameResult)
 		} else if once {
+			reconcileWorkerBilling(sessionDir, manifest, true)
 			return 0, nil
+		} else {
+			reconcileWorkerBilling(sessionDir, manifest, false)
 		}
 		if controller && manifest.Interval <= 0 {
 			<-stop
@@ -62,8 +66,10 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 }
 
 type WorkerManifest struct {
-	Kind     sessionapi.SessionKind
-	Interval time.Duration
+	SessionID string
+	Kind      sessionapi.SessionKind
+	Runtime   sessionapi.SessionRuntime
+	Interval  time.Duration
 }
 
 func LoadWorkerManifest(sessionDir string) (WorkerManifest, error) {
@@ -74,7 +80,7 @@ func LoadWorkerManifest(sessionDir string) (WorkerManifest, error) {
 	if m.SessionKind != sessionapi.KindController && m.SessionKind != sessionapi.KindTask {
 		return WorkerManifest{}, fmt.Errorf("invalid session_kind %q in worker manifest", m.SessionKind)
 	}
-	manifest := WorkerManifest{Kind: m.SessionKind}
+	manifest := WorkerManifest{SessionID: m.SessionID, Kind: m.SessionKind, Runtime: m.Runtime}
 	if len(m.Specs) == 0 {
 		return manifest, nil
 	}
@@ -84,4 +90,26 @@ func LoadWorkerManifest(sessionDir string) (WorkerManifest, error) {
 	}
 	manifest.Interval = time.Duration(*seconds) * time.Second
 	return manifest, nil
+}
+
+func reconcileWorkerBilling(sessionDir string, manifest WorkerManifest, terminal bool) {
+	if manifest.Runtime != sessionapi.RuntimeCloud {
+		return
+	}
+	sessionID := manifest.SessionID
+	if sessionID == "" {
+		sessionID = filepath.Base(sessionDir)
+	}
+	cfg, err := NormalizeConfig(Config{Mode: ModeCloud})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "warning: reconcile managed billing: %v\n", err)
+		return
+	}
+	client := newBillingClient(cfg.Billing)
+	if !client.configured() {
+		return
+	}
+	if err := client.ReconcileSession(sessionID, terminal); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: reconcile managed billing: %v\n", err)
+	}
 }
