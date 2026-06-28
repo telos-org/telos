@@ -281,6 +281,19 @@ func TestCloudCreateSessionCreatesRootForOperatorApply(t *testing.T) {
 	if len(session.SpecVersions) != 1 {
 		t.Fatalf("spec_versions: got %#v", session.SpecVersions)
 	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(root, session.SessionID, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest == "" {
+		t.Fatalf("missing apply_package_digest: %#v", manifest.ApplyPackageDigest)
+	}
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.RootSpecPath != "SPEC.md" {
+		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
+	}
+	if got := session.SpecVersions[0]["apply_package_digest"]; got != *manifest.ApplyPackageDigest {
+		t.Fatalf("spec version apply_package_digest: got %#v want %q", got, *manifest.ApplyPackageDigest)
+	}
 }
 
 func TestCloudCreateSessionRejectsDuplicateLiveRoot(t *testing.T) {
@@ -455,6 +468,19 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	}
 	if session.SpecVersions[0]["previous_version"].(float64) != 1 {
 		t.Fatalf("previous_version: got %#v", session.SpecVersions[0])
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(store.Root, session.SessionID, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest == "" {
+		t.Fatalf("missing apply_package_digest: %#v", manifest.ApplyPackageDigest)
+	}
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Name != "postgres" {
+		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
+	}
+	if got := session.SpecVersions[0]["apply_package_digest"]; got != *manifest.ApplyPackageDigest {
+		t.Fatalf("spec version apply_package_digest: got %#v want %q", got, *manifest.ApplyPackageDigest)
 	}
 	data, err := os.ReadFile(*session.SessionSpecPath)
 	if err != nil {

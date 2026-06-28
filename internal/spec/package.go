@@ -33,35 +33,35 @@ type ApplyPackage struct {
 }
 
 type ApplyPackageSpecEntry struct {
-	Name   string `yaml:"name"`
-	Path   string `yaml:"path"`
-	Digest string `yaml:"digest"`
+	Name   string `yaml:"name" json:"name"`
+	Path   string `yaml:"path" json:"path"`
+	Digest string `yaml:"digest" json:"digest"`
 }
 
 type ApplyPackageSkillEntry struct {
-	Name     string                  `yaml:"name"`
-	Ref      string                  `yaml:"ref"`
-	Digest   string                  `yaml:"digest"`
-	Required bool                    `yaml:"required"`
-	Path     string                  `yaml:"path"`
-	Files    []ApplyPackageFileEntry `yaml:"files"`
+	Name     string                  `yaml:"name" json:"name"`
+	Ref      string                  `yaml:"ref" json:"ref"`
+	Digest   string                  `yaml:"digest" json:"digest"`
+	Required bool                    `yaml:"required" json:"required"`
+	Path     string                  `yaml:"path" json:"path"`
+	Files    []ApplyPackageFileEntry `yaml:"files" json:"files"`
 }
 
 type ApplyPackageFileEntry struct {
-	Path   string `yaml:"path"`
-	Mode   string `yaml:"mode"`
-	Digest string `yaml:"digest"`
+	Path   string `yaml:"path" json:"path"`
+	Mode   string `yaml:"mode" json:"mode"`
+	Digest string `yaml:"digest" json:"digest"`
 }
 
 // ApplyPackageLock records the immutable inputs used by the package.
 type ApplyPackageLock struct {
-	SchemaVersion   int                      `yaml:"schema_version"`
-	RootSpecPath    string                   `yaml:"root_spec_path"`
-	Spec            ApplyPackageSpecEntry    `yaml:"spec"`
-	Skills          []ApplyPackageSkillEntry `yaml:"skills"`
-	CompilerVersion string                   `yaml:"compiler_version"`
-	RuntimeVersion  string                   `yaml:"runtime_version,omitempty"`
-	PackageDigest   string                   `yaml:"package_digest"`
+	SchemaVersion   int                      `yaml:"schema_version" json:"schema_version"`
+	RootSpecPath    string                   `yaml:"root_spec_path" json:"root_spec_path"`
+	Spec            ApplyPackageSpecEntry    `yaml:"spec" json:"spec"`
+	Skills          []ApplyPackageSkillEntry `yaml:"skills" json:"skills"`
+	CompilerVersion string                   `yaml:"compiler_version" json:"compiler_version"`
+	RuntimeVersion  string                   `yaml:"runtime_version,omitempty" json:"runtime_version,omitempty"`
+	PackageDigest   string                   `yaml:"package_digest" json:"package_digest"`
 }
 
 type packageFile struct {

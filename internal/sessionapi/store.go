@@ -141,17 +141,19 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	prepared.SessionSpecPath = strPtr(sessionSpecPath)
 
 	m := ManifestFromInitial(InitialManifest{
-		SessionID:       id,
-		SessionKind:     sessionKind,
-		Runtime:         fs.runtime,
-		CreatedAt:       tsNow(),
-		Launcher:        fs.launcher,
-		ParentSessionID: req.ParentSessionID,
-		SessionSpecPath: prepared.SessionSpecPath,
-		SpecName:        specName,
-		Config:          buildConfig(req),
-		Provenance:      map[string]any{"mode": runtimeMode(fs.runtime)},
-		Access:          access,
+		SessionID:          id,
+		SessionKind:        sessionKind,
+		Runtime:            fs.runtime,
+		CreatedAt:          tsNow(),
+		Launcher:           fs.launcher,
+		ParentSessionID:    req.ParentSessionID,
+		SessionSpecPath:    prepared.SessionSpecPath,
+		SpecName:           specName,
+		Config:             buildConfig(req),
+		Provenance:         map[string]any{"mode": runtimeMode(fs.runtime)},
+		ApplyPackageDigest: prepared.ApplyPackageDigest,
+		ApplyPackageLock:   prepared.ApplyPackageLock,
+		Access:             access,
 		Specs: []InitialManifestSpec{{
 			Index:           0,
 			Name:            specName,
@@ -169,7 +171,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		m.CurrentSpecVersion = &version
 		m.SpecVersions = append(
 			m.SpecVersions,
-			specVersionEntry(version, sessionSpecPath, prepared.SpecData, nil),
+			specVersionEntry(version, sessionSpecPath, prepared.SpecData, nil, prepared.ApplyPackageDigest),
 		)
 	}
 
@@ -391,8 +393,10 @@ func (fs *FileStore) updateSpecByIDLocked(id string, markdown string) (*Session,
 	m.CurrentSpecVersion = &version
 	m.SpecVersions = append(
 		m.SpecVersions,
-		specVersionEntry(version, *m.SessionSpecPath, prepared.SpecData, &previousVersion),
+		specVersionEntry(version, *m.SessionSpecPath, prepared.SpecData, &previousVersion, prepared.ApplyPackageDigest),
 	)
+	m.ApplyPackageDigest = prepared.ApplyPackageDigest
+	m.ApplyPackageLock = prepared.ApplyPackageLock
 	m.SessionSpecPath = strPtr(*m.SessionSpecPath)
 	if len(m.Specs) > 0 {
 		m.Specs[0].Name = prepared.Name
@@ -1073,13 +1077,13 @@ func cloneSpecVersions(versions []map[string]any) []map[string]any {
 	return cloned
 }
 
-func specVersionEntry(version int, specPath string, data []byte, previous *int) map[string]any {
+func specVersionEntry(version int, specPath string, data []byte, previous *int, packageDigest *string) map[string]any {
 	hash := sha256.Sum256(data)
 	var previousVersion any
 	if previous != nil {
 		previousVersion = *previous
 	}
-	return map[string]any{
+	entry := map[string]any{
 		"version":          version,
 		"spec_path":        specPath,
 		"spec_sha256":      fmt.Sprintf("%x", hash),
@@ -1087,14 +1091,20 @@ func specVersionEntry(version int, specPath string, data []byte, previous *int) 
 		"provenance":       map[string]any{"type": "inline"},
 		"created_at":       tsNow(),
 	}
+	if packageDigest != nil && *packageDigest != "" {
+		entry["apply_package_digest"] = *packageDigest
+	}
+	return entry
 }
 
 type preparedRequestSpec struct {
-	Name            string
-	SessionSpecPath *string
-	ContentHash     *string
-	IntervalSeconds *int
-	SpecData        []byte
+	Name               string
+	SessionSpecPath    *string
+	ContentHash        *string
+	IntervalSeconds    *int
+	SpecData           []byte
+	ApplyPackageDigest *string
+	ApplyPackageLock   *spec.ApplyPackageLock
 }
 
 func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRequestSpec, error) {
@@ -1120,11 +1130,17 @@ func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRe
 	if err != nil {
 		return preparedRequestSpec{}, err
 	}
+	applyPackage, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{})
+	if err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("build apply package: %w", err)
+	}
 	prepared := preparedRequestSpec{
-		Name:            compiled.Environment.Name,
-		ContentHash:     strPtr(compiled.ContentHash),
-		IntervalSeconds: compiled.Environment.IntervalSeconds,
-		SpecData:        data,
+		Name:               compiled.Environment.Name,
+		ContentHash:        strPtr(compiled.ContentHash),
+		IntervalSeconds:    compiled.Environment.IntervalSeconds,
+		SpecData:           data,
+		ApplyPackageDigest: strPtr(applyPackage.Digest),
+		ApplyPackageLock:   &applyPackage.Lock,
 	}
 	return prepared, nil
 }
