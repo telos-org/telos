@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -29,6 +30,39 @@ type Environment struct {
 	AccessToken    string
 	State          string
 	HasRecoverable bool
+}
+
+type ApplyPackageRecord struct {
+	Digest    string `json:"digest"`
+	SizeBytes int    `json:"size_bytes"`
+	CreatedAt string `json:"created_at"`
+}
+
+type CatalogSpecRecord struct {
+	Name          string `json:"name"`
+	PackageDigest string `json:"package_digest"`
+	Visibility    string `json:"visibility"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+type CatalogSpecPushResponse struct {
+	Operation string            `json:"operation"`
+	Spec      CatalogSpecRecord `json:"spec"`
+}
+
+type EnvironmentSessionRecord struct {
+	EnvID         string `json:"env_id"`
+	Name          string `json:"name"`
+	PackageDigest string `json:"package_digest"`
+	DesiredState  string `json:"desired_state"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+type EnvironmentSessionApplyResponse struct {
+	Operation string                   `json:"operation"`
+	Session   EnvironmentSessionRecord `json:"session"`
 }
 
 // Client is a cloud Sessions API client.
@@ -141,6 +175,62 @@ func (c *Client) CreateEnvironment() (*Environment, error) {
 		return nil, fmt.Errorf("control plane returned invalid environment")
 	}
 	return &env, nil
+}
+
+func (c *Client) UploadApplyPackage(digest string, data []byte) (*ApplyPackageRecord, error) {
+	resp, err := c.doRaw("PUT", "/api/catalog/packages/"+url.PathEscape(digest), data, "application/gzip")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, readError(resp)
+	}
+	var record ApplyPackageRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) PushCatalogSpec(name string, packageDigest string) (*CatalogSpecPushResponse, error) {
+	body, err := json.Marshal(map[string]string{"package_digest": packageDigest})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("PUT", "/api/catalog/specs/"+url.PathEscape(name), body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response CatalogSpecPushResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) ApplyEnvironmentSession(envID, name, packageDigest string) (*EnvironmentSessionApplyResponse, error) {
+	body, err := json.Marshal(map[string]string{"package_digest": packageDigest})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("PUT", "/api/environments/"+url.PathEscape(envID)+"/sessions/"+url.PathEscape(name), body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response EnvironmentSessionApplyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 // WaitForEnvironment waits until an environment-local API is reachable.
@@ -421,6 +511,10 @@ func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[s
 }
 
 func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
+	return c.doRaw(method, path, body, "application/json")
+}
+
+func (c *Client) doRaw(method, path string, body []byte, contentType string) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -430,7 +524,7 @@ func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
 		return nil, err
 	}
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
