@@ -129,3 +129,22 @@ func TestResolveSkillsDedup(t *testing.T) {
 		t.Errorf("expected dedup to 1, got %d", len(skills))
 	}
 }
+
+func TestBuiltinBuildDashboardIncludesReferences(t *testing.T) {
+	s := ResolveBuiltinSkill("build-dashboard")
+	if s == nil {
+		t.Fatal("expected built-in build-dashboard skill")
+	}
+	if strings.Contains(s.Instructions, "tokens.js") {
+		t.Fatal("build-dashboard should not reference removed tokens.js")
+	}
+	for _, name := range []string{"components.jsx", "theme.css", "theme.js"} {
+		data, err := os.ReadFile(filepath.Join(s.Path, "reference", name))
+		if err != nil {
+			t.Fatalf("expected build-dashboard reference %s: %v", name, err)
+		}
+		if len(data) == 0 {
+			t.Fatalf("expected build-dashboard reference %s to be non-empty", name)
+		}
+	}
+}
