@@ -9,7 +9,7 @@ description: |
 metadata:
   category: frontend
   author: telos
-allowed-tools: Bash(kubectl:*) Bash(npm:*) Bash(npx:*) Bash(node:*)
+allowed-tools: Bash(kubectl:*) Bash(npm:*) Bash(npx:*) Bash(node:*) Bash(tar:*)
 ---
 
 # Build Dashboard
@@ -47,11 +47,11 @@ It uses the `@telos-org/design` system: a shadcn "neutral" palette with **both a
 light and a dark mode**. The dashboard must look like it belongs inside that
 console in **either** mode — same colors, fonts, and radii.
 
-Colors and fonts are CSS variables defined in `reference/theme.css` (light +
-dark, copied verbatim from the console). `reference/components.jsx` reads them
-via `var(--token)`. This is the single source of truth — do not invent a
-palette, do not hardcode colors in components, and do not use the old dark/navy
-theme.
+Colors and fonts are CSS variables defined in `reference/theme.css` (the
+vendored `@telos-org/design` token surface, light + dark).
+`reference/components.jsx` reads them via `var(--token)`. This is the single
+source of truth — do not invent a palette, do not hardcode colors in
+components, and do not use the old dark/navy theme.
 
 ### Theming — follow the console's light/dark toggle
 
@@ -232,6 +232,7 @@ kafka-topics.sh --bootstrap-server $HOST --describe
 mkdir -p /workspace/output/dashboard && cd /workspace/output/dashboard
 npm create vite@latest . -- --template react
 npm install express
+npm install --save-dev esbuild
 ```
 
 ### 2. Write the API (server.js)
@@ -240,6 +241,7 @@ Express server that:
 - Runs kubectl and service queries on each request
 - Serves the built React frontend from `dist/`
 - Listens on port 3000
+- Is bundled before deployment, so the pod does not need `node_modules`
 
 ### 3. Write the React frontend (src/App.jsx)
 
@@ -257,9 +259,26 @@ Express server that:
 
 ```bash
 npm run build
+npx esbuild server.js \
+  --bundle \
+  --minify \
+  --platform=node \
+  --target=node22 \
+  --format=cjs \
+  --outfile=server.bundle.cjs
+tar -czf dist.tar.gz dist
+
+# Package recursively built assets plus the bundled server. Do this before
+# applying the Deployment so new pods can mount a complete app immediately.
+kubectl create configmap dashboard-app \
+  --from-file=server.bundle.cjs \
+  --from-file=dist.tar.gz \
+  -n "$NAMESPACE" \
+  --dry-run=client \
+  -o yaml | kubectl apply -n "$NAMESPACE" -f -
 
 # Create a Deployment running the Express server
-kubectl apply -n $NAMESPACE -f - <<EOF
+kubectl apply -n "$NAMESPACE" -f - <<EOF
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -278,17 +297,29 @@ spec:
       containers:
       - name: dashboard
         image: node:22-slim
-        command: ["node", "server.js"]
+        command:
+        - sh
+        - -c
+        - |
+          set -eu
+          cp /bundle/server.bundle.cjs /app/server.bundle.cjs
+          tar -xzf /bundle/dist.tar.gz -C /app
+          exec node /app/server.bundle.cjs
         workingDir: /app
         ports:
         - containerPort: 3000
         volumeMounts:
+        - name: bundle
+          mountPath: /bundle
+          readOnly: true
         - name: app
           mountPath: /app
       volumes:
-      - name: app
+      - name: bundle
         configMap:
           name: dashboard-app
+      - name: app
+        emptyDir: {}
 ---
 apiVersion: v1
 kind: Service
@@ -313,15 +344,17 @@ data:
   prefix: dashboard-${NAMESPACE#ns-}
   service: http://dashboard.$NAMESPACE.svc.cluster.local:3000
 EOF
+
+kubectl rollout restart deployment/dashboard -n "$NAMESPACE"
+kubectl rollout status deployment/dashboard -n "$NAMESPACE"
 ```
 
-Package the built app + server as a ConfigMap:
-```bash
-kubectl create configmap dashboard-app \
-  --from-file=server.js \
-  --from-file=dist/ \
-  -n $NAMESPACE
-```
+Do not mount raw `server.js` plus `dist/` directly from a ConfigMap: the pod will
+not have `express` installed, and `--from-file=dist/` does not preserve Vite's
+nested `dist/assets` tree. Bundle and minify the server, tar the built assets as
+shown, and keep runtime dependencies minimal so the ConfigMap stays under the
+Kubernetes object size limit. If the bundle is too large, remove dependencies or
+rewrite the server with Node's built-in modules before deploying.
 
 ## Component Patterns
 
