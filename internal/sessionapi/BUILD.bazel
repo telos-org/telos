@@ -20,5 +20,8 @@ go_test(
         "server_test.go",
         "types_test.go",
     ],
-    deps = [":sessionapi"],
+    deps = [
+        ":sessionapi",
+        "//internal/spec",
+    ],
 )
