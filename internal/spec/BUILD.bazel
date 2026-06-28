@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "compile.go",
         "embed.go",
+        "package.go",
         "render.go",
         "skills.go",
         "spec.go",
@@ -22,6 +23,7 @@ go_test(
     name = "spec_test",
     srcs = [
         "compile_test.go",
+        "package_test.go",
         "skills_test.go",
         "spec_test.go",
     ],
