@@ -3,7 +3,7 @@ name: telos-orchestrate
 description: |
   Telos controller runtime. Use when operating a long-running Telos
   system through session lineage and when choosing the right operational
-  surface for a child task.
+  surface for delegated work.
 metadata:
   category: control-plane
   author: telos
@@ -12,8 +12,8 @@ allowed-tools: Bash(telos:*) Bash(python3:*) Bash(git:*)
 
 # Telos Orchestration
 
-A controller manages work by observing the live artifact, launching bounded
-child tasks, inspecting their evidence, and integrating the best result.
+A controller manages work by observing the live artifact, launching isolated
+delegated work, inspecting its evidence, and integrating the best result.
 
 ## Surfaces
 
