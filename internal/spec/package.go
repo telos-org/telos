@@ -140,6 +140,69 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 	}, nil
 }
 
+// ExtractApplyPackage expands an apply package into dest and returns its lock.
+func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageLock, error) {
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return nil, fmt.Errorf("create package dir: %w", err)
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("open apply package: %w", err)
+	}
+	defer gz.Close()
+
+	var lockData []byte
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read apply package: %w", err)
+		}
+		if header.Typeflag != tar.TypeReg {
+			return nil, fmt.Errorf("unsupported apply package entry %q", header.Name)
+		}
+		name, err := safePackageEntry(header.Name)
+		if err != nil {
+			return nil, err
+		}
+		path := filepath.Join(dest, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, fmt.Errorf("create package entry dir: %w", err)
+		}
+		fileData, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, fmt.Errorf("read apply package entry %q: %w", name, err)
+		}
+		mode := fs.FileMode(header.Mode).Perm()
+		if mode == 0 {
+			mode = 0o644
+		}
+		if err := os.WriteFile(path, fileData, mode); err != nil {
+			return nil, fmt.Errorf("write apply package entry %q: %w", name, err)
+		}
+		if name == "manifest-lock.yaml" {
+			lockData = fileData
+		}
+	}
+	if len(lockData) == 0 {
+		return nil, fmt.Errorf("apply package missing manifest-lock.yaml")
+	}
+	var lock ApplyPackageLock
+	if err := yaml.Unmarshal(lockData, &lock); err != nil {
+		return nil, fmt.Errorf("parse manifest-lock.yaml: %w", err)
+	}
+	if lock.RootSpecPath == "" {
+		return nil, fmt.Errorf("manifest-lock.yaml missing root_spec_path")
+	}
+	if lock.PackageDigest == "" {
+		return nil, fmt.Errorf("manifest-lock.yaml missing package_digest")
+	}
+	return &lock, nil
+}
+
 func packageSkill(skill *Skill, required bool) (ApplyPackageSkillEntry, []packageFile, error) {
 	if skill == nil {
 		return ApplyPackageSkillEntry{}, nil, fmt.Errorf("nil skill")
@@ -182,6 +245,14 @@ func packageSkill(skill *Skill, required bool) (ApplyPackageSkillEntry, []packag
 		Files:    fileEntries,
 	}
 	return entry, packaged, nil
+}
+
+func safePackageEntry(name string) (string, error) {
+	name = filepath.ToSlash(strings.TrimSpace(name))
+	if name == "" || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "../") || strings.Contains(name, "/../") {
+		return "", fmt.Errorf("unsafe apply package entry %q", name)
+	}
+	return name, nil
 }
 
 func packagePathName(name string) (string, error) {

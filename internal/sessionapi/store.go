@@ -147,6 +147,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		CreatedAt:          tsNow(),
 		Launcher:           fs.launcher,
 		ParentSessionID:    req.ParentSessionID,
+		SourceSpecPath:     prepared.SourceSpecPath,
 		SessionSpecPath:    prepared.SessionSpecPath,
 		SpecName:           specName,
 		Config:             buildConfig(req),
@@ -1099,6 +1100,7 @@ func specVersionEntry(version int, specPath string, data []byte, previous *int, 
 
 type preparedRequestSpec struct {
 	Name               string
+	SourceSpecPath     *string
 	SessionSpecPath    *string
 	ContentHash        *string
 	IntervalSeconds    *int
@@ -1108,6 +1110,9 @@ type preparedRequestSpec struct {
 }
 
 func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRequestSpec, error) {
+	if strings.TrimSpace(req.ApplyPackagePath) != "" {
+		return prepareApplyPackageSpec(sessionDir, req.ApplyPackagePath, req.ApplyPackageDigest)
+	}
 	if req.SpecMarkdown == nil || strings.TrimSpace(*req.SpecMarkdown) == "" {
 		return preparedRequestSpec{}, fmt.Errorf("spec_markdown is required")
 	}
@@ -1143,6 +1148,46 @@ func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRe
 		ApplyPackageLock:   &applyPackage.Lock,
 	}
 	return prepared, nil
+}
+
+func prepareApplyPackageSpec(sessionDir string, packagePath string, expectedDigest string) (preparedRequestSpec, error) {
+	data, err := os.ReadFile(packagePath)
+	if err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("read apply package: %w", err)
+	}
+	packageDir := filepath.Join(sessionDir, "package")
+	if err := os.RemoveAll(packageDir); err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("clear package dir: %w", err)
+	}
+	lock, err := spec.ExtractApplyPackage(data, packageDir)
+	if err != nil {
+		return preparedRequestSpec{}, err
+	}
+	expectedDigest = strings.TrimSpace(expectedDigest)
+	if expectedDigest != "" && lock.PackageDigest != expectedDigest {
+		return preparedRequestSpec{}, fmt.Errorf("package digest %q does not match expected %q", lock.PackageDigest, expectedDigest)
+	}
+	specPath := filepath.Join(packageDir, filepath.FromSlash(lock.RootSpecPath))
+	specData, err := os.ReadFile(specPath)
+	if err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("read package root spec: %w", err)
+	}
+	compiled, err := spec.CompileEnvironmentWithBase(specPath, packageDir)
+	if err != nil {
+		return preparedRequestSpec{}, err
+	}
+	if lock.Spec.Name != "" && compiled.Environment.Name != lock.Spec.Name {
+		return preparedRequestSpec{}, fmt.Errorf("package spec name %q does not match compiled name %q", lock.Spec.Name, compiled.Environment.Name)
+	}
+	return preparedRequestSpec{
+		Name:               compiled.Environment.Name,
+		SourceSpecPath:     strPtr(specPath),
+		ContentHash:        strPtr(compiled.ContentHash),
+		IntervalSeconds:    compiled.Environment.IntervalSeconds,
+		SpecData:           specData,
+		ApplyPackageDigest: strPtr(lock.PackageDigest),
+		ApplyPackageLock:   lock,
+	}, nil
 }
 
 func materializedSpecDir(data []byte) string {

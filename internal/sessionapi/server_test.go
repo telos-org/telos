@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 // newTestServer returns an httptest.Server backed by a temporary FileStore.
@@ -293,6 +294,101 @@ func TestCloudCreateSessionCreatesRootForOperatorApply(t *testing.T) {
 	}
 	if got := session.SpecVersions[0]["apply_package_digest"]; got != *manifest.ApplyPackageDigest {
 		t.Fatalf("spec version apply_package_digest: got %#v want %q", got, *manifest.ApplyPackageDigest)
+	}
+}
+
+func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
+	srcDir := t.TempDir()
+	specPath := filepath.Join(srcDir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: postgres\nplatform: cloud\nskills:\n  - alpha\n---\n# Postgres\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(srcDir, "alpha")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: alpha\n---\nUse alpha."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := spec.CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{CompilerVersion: "test"})
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+	packagePath := filepath.Join(t.TempDir(), "package.tar.gz")
+	if err := os.WriteFile(packagePath, pkg.Bytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		ApplyPackagePath:   packagePath,
+		ApplyPackageDigest: pkg.Digest,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(root, session.SessionID, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.SourceSpecPath == nil || !strings.Contains(*manifest.SourceSpecPath, filepath.Join(session.SessionID, "package", "SPEC.md")) {
+		t.Fatalf("source_spec_path: %#v", manifest.SourceSpecPath)
+	}
+	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest != pkg.Digest {
+		t.Fatalf("apply_package_digest: got %#v want %q", manifest.ApplyPackageDigest, pkg.Digest)
+	}
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.PackageDigest != pkg.Digest {
+		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
+	}
+	recompiled, err := spec.CompileEnvironmentWithBase(*manifest.SessionSpecPath, filepath.Dir(*manifest.SourceSpecPath))
+	if err != nil {
+		t.Fatalf("CompileEnvironmentWithBase session spec: %v", err)
+	}
+	var alphaPath string
+	for _, skill := range recompiled.Skills {
+		if skill.Name == "alpha" {
+			alphaPath = skill.Path
+		}
+	}
+	if !strings.Contains(alphaPath, filepath.Join(session.SessionID, "package", "skills", "alpha")) {
+		t.Fatalf("alpha resolved outside extracted package: %q", alphaPath)
+	}
+}
+
+func TestCloudCreateSessionFromApplyPackageRejectsDigestMismatch(t *testing.T) {
+	srcDir := t.TempDir()
+	specPath := filepath.Join(srcDir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := spec.CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{CompilerVersion: "test"})
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+	packagePath := filepath.Join(t.TempDir(), "package.tar.gz")
+	if err := os.WriteFile(packagePath, pkg.Bytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	_, err = store.Create(sessionapi.SessionCreateRequest{
+		ApplyPackagePath:   packagePath,
+		ApplyPackageDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+	})
+	if err == nil {
+		t.Fatal("expected digest mismatch")
+	}
+	if !strings.Contains(err.Error(), "does not match expected") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

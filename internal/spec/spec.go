@@ -243,6 +243,12 @@ func resolveSkillPath(baseDir, raw string) (string, error) {
 	if _, err := os.Stat(abs); err == nil {
 		return abs, nil
 	}
+	if !filepath.IsAbs(raw) {
+		packageLocal := filepath.Join(baseDir, "skills", raw)
+		if _, err := os.Stat(packageLocal); err == nil {
+			return packageLocal, nil
+		}
+	}
 	// Try built-in skills directory
 	builtinDir := BuiltinSkillsDir()
 	if builtinDir != "" {
