@@ -42,33 +42,82 @@ request.
 
 ## Design System
 
-Use the Telos design tokens. Reference implementation in `reference/tokens.js`.
+Match the Telos console (the web app that embeds this dashboard in an iframe).
+It uses the `@telos-org/design` system: a shadcn "neutral" palette with **both a
+light and a dark mode**. The dashboard must look like it belongs inside that
+console in **either** mode — same colors, fonts, and radii.
+
+Colors and fonts are CSS variables defined in `reference/theme.css` (light +
+dark, copied verbatim from the console). `reference/components.jsx` reads them
+via `var(--token)`. This is the single source of truth — do not invent a
+palette, do not hardcode colors in components, and do not use the old dark/navy
+theme.
+
+### Theming — follow the console's light/dark toggle
+
+The dashboard can't see the console's `.dark` class (separate document), so the
+console passes the mode in: a `?theme=light|dark` query param on first load and a
+`postMessage({ type: "telos:theme", theme })` when the operator toggles. Wire it
+up with `reference/theme.js`:
+
+1. Copy `theme.css` and `theme.js` into the app (e.g. `src/`).
+2. Import the stylesheet once: `import "./theme.css";`
+3. Call `initDashboardTheme()` once at startup (top of `src/main.jsx`, before
+   render). It applies the initial mode and toggles `.dark` live on messages.
+4. Style everything with `var(--token)` — never literal hex/oklch in components.
+
+The result: the iframe matches the console in light mode, dark mode, and follows
+the toggle live without a reload.
 
 ```
-Colors (dark theme):
-  --t-void: #0a1220        (deepest background)
-  --t-abyss: #0f1829       (container background)
-  --t-ink: #162236          (card background)
-  --t-structure: #283c58    (borders)
-  --t-mid: #4d6580          (secondary text)
-  --t-muted: #7e93aa        (labels)
-  --t-soft: #a8bace         (body text)
-  --t-light: #dae2ed        (primary text)
-  --t-primary: #3b82f6      (accent — blue)
-  --t-signal: #4ade80       (success — green)
-  --t-warm: #60a5fa         (warning — warm blue)
-  --t-danger: #f87171       (error — red)
+Tokens (from theme.css; values differ per mode, names are stable):
+  --background        page background
+  --foreground        primary text
+  --card              card background
+  --muted-foreground  labels / secondary text
+  --border            card + divider borders
+  --primary           primary accent / buttons
+  --success           healthy / green
+  --warning           warning / amber
+  --destructive       error / red
+  --radius            card radius (0.625rem; ~6px for small controls)
 
-Typography:
-  Data/values: "JetBrains Mono", monospace (load from CDN)
-  Labels: system-ui, -apple-system, sans-serif
-  Sizes: 0.7rem for values, 0.6rem for labels, 1.1rem for headings
+Typography (CSS vars --font-sans / --font-mono in theme.css):
+  UI text / labels: "IBM Plex Sans"
+  Values / IDs / code: "Geist Mono"
+  Sizes: 0.8125rem (13px) body/values, 0.75rem (12px) labels,
+         0.875rem (14px) section titles, 1.25rem (20px) metrics
+  Load "IBM Plex Sans" and "Geist Mono" from a CDN (e.g. Google Fonts /
+  Fontsource); they fall back to system fonts if unavailable.
 
 Layout:
-  Dark background: var(--t-abyss) or #0f1829
-  Cards: background rgba(40,60,88,0.1), border 1px solid rgba(40,60,88,0.18), border-radius 4px
-  Spacing: 12px padding in cards, 16px gap between sections
+  Page background: var(--background)
+  Cards: background var(--card), border 1px solid var(--border),
+         border-radius var(--radius)
+  Spacing: 1rem–1.25rem padding in cards, 1.5rem gap between sections
 ```
+
+## Quality bar — must not look AI-generated
+
+This ships to a real operator and sits inside the Telos console. Hold it to the
+same bar as the console itself.
+
+- **Match the console.** Light neutral palette, IBM Plex Sans, Geist Mono. No
+  gradients, no emoji, no neon accents, no shadow on every element, no purple.
+- **One alignment grid.** Consistent left edge, one label-column width, steady
+  vertical rhythm. Use a single spacing scale (4 / 8 / 12 / 16 / 24px).
+- **Nothing overflows.** Every value wraps (`overflowWrap: "anywhere"`) or
+  truncates with ellipsis; give its flex container `minWidth: 0`. Long DSNs,
+  URLs, cert fingerprints, and pod names are the usual offenders. Test narrow.
+- **Real states, not blank boxes.** Render `LoadingState` before the first fetch
+  resolves and `EmptyState` when a section has no data. Never show an empty card
+  or a raw `undefined` / `NaN`.
+- **Restrained hierarchy.** One page title, clear section titles, quiet labels.
+  Don't bold everything, don't center body text, keep to ~3 type sizes.
+- **Buttons that work.** Every Show/Hide and Copy must function (see Sensitive
+  Data). A button that no-ops is worse than no button.
+- **Calm, not cramped.** Generous card padding (1–1.25rem), real gaps between
+  sections (1.5rem), a sensible centered max width (~760–1040px).
 
 ## Dashboard Sections
 
@@ -113,10 +162,17 @@ service. Inspect what's deployed and include only relevant sections.
 
 ### Sensitive Data
 
-- Passwords and DSNs must be masked by default (show `••••••••••`)
-- Add a show/hide toggle button
-- Copy button copies the real value, not the mask
-- Never log or print passwords during the build
+- Use the `SecretValue` component from `reference/components.jsx` — do not
+  hand-roll masking. It encodes a working reveal + copy.
+- The API must return the **real** value to the authenticated frontend so reveal
+  has something to show. Pass that real value to `SecretValue`; it masks it for
+  display (`••••••••••`) and reveals on toggle. Masking the value server-side
+  turns the reveal button into a no-op — a recurring bug; don't do that.
+- Reveal (Show/Hide) and Copy must both actually work. The dashboard runs in an
+  iframe, so `navigator.clipboard` may be blocked — `SecretValue`/`CopyValue`
+  already fall back to a textarea + `execCommand`; keep that fallback.
+- Copy copies the real value, never the mask.
+- Never log or print passwords during the build.
 
 ## API Design
 
@@ -187,9 +243,14 @@ Express server that:
 
 ### 3. Write the React frontend (src/App.jsx)
 
+- Copy `theme.css`, `theme.js`, and `components.jsx` from `reference/` into `src/`
+- Import `./theme.css` once and call `initDashboardTheme()` (from `./theme.js`)
+  at startup so the dashboard follows the console's light/dark mode
 - Fetches from `/api/*` endpoints
 - Auto-refreshes every 10 seconds
-- Uses Telos design tokens
+- Styles everything with `var(--token)` (see Design System) and uses the
+  reference components from `components.jsx` — no hardcoded colors
+- Renders `LoadingState` before first data and `EmptyState` when a section is empty
 - Adapts sections to the data available
 
 ### 4. Build and deploy
@@ -264,9 +325,13 @@ kubectl create configmap dashboard-app \
 
 ## Component Patterns
 
-Reference implementations are in `reference/components.jsx`. Key patterns:
-SecretValue (masked password with reveal + copy), StatusDot, Card wrapper,
-PodRow, CertDownload.
+Use the reference implementations in `reference/components.jsx` rather than
+hand-rolling — they encode the console styling plus the overflow, copy, and
+reveal fixes. Available: `SecretValue` (masked value with working reveal +
+copy), `CopyValue` (copyable host / URL / DSN / handle), `StatusDot`, `Card`,
+`PodRow`, `MetricCard`, `EventRow`, `CertDownload`, `EmptyState`,
+`LoadingState`. Copy them into the app and compose layout around them; do not
+regress the `minWidth: 0` overflow handling or the clipboard fallback.
 
 ## Verification
 
@@ -276,5 +341,22 @@ PodRow, CertDownload.
 - Pod health matches `kubectl get pods` output
 - Connection info matches actual service secrets
 - Passwords masked by default, revealable
-- All Telos styling applied (dark theme, correct fonts and colors)
+- All Telos styling applied (light neutral theme matching the console — correct fonts and colors)
 - Service is named `dashboard` and the route ConfigMap has `type=dashboard`
+
+### Self-QA — open the live dashboard and verify by interaction
+
+Do not declare done from code review alone. Load the dashboard URL and check:
+
+- [ ] Click every **Show** — the real secret appears (not still dots); **Hide** re-masks.
+- [ ] Click every **Copy** — paste elsewhere and confirm the real value landed.
+- [ ] No text overflows its box. Narrow the window to ~600px and recheck long
+      DSNs, URLs, fingerprints, and pod names.
+- [ ] Each section shows a loading state on first paint and an empty state when
+      data is absent — no blank cards, no `undefined` / `NaN`.
+- [ ] It reads as part of the Telos console: correct fonts, one alignment grid,
+      calm spacing. Nothing looks AI-generated.
+- [ ] Load with `?theme=dark` and `?theme=light` — colors match the console in
+      both. Then toggle the console's theme switch and confirm the dashboard
+      follows live, in the same view, with no reload.
+- [ ] The 10s refresh does not flicker or cause layout jump.

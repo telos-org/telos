@@ -1,0 +1,48 @@
+/*
+ * Telos dashboard theme — light + dark, copied verbatim from the Telos console
+ * (@telos-org/design theme.css). This is the single source of dashboard color
+ * values. The dashboard imports it once and switches mode by toggling the
+ * `.dark` class on <html> (see theme.js). Components reference these via
+ * var(--token); never hardcode a color.
+ */
+:root {
+  color-scheme: light;
+
+  --font-sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  --font-mono: "Geist Mono", ui-monospace, "SFMono-Regular", "SF Mono", "JetBrains Mono", Consolas, monospace;
+  --radius: 0.625rem;
+
+  --background: #f3f3f4;
+  --foreground: oklch(0.145 0 0);
+  --card: #fcfcfd;
+  --muted-foreground: oklch(0.556 0 0);
+  --border: oklch(0.922 0 0);
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --success: oklch(0.627 0.17 149.2);
+  --warning: oklch(0.705 0.16 70.67);
+  --destructive: oklch(0.577 0.245 27.325);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --background: #070707;
+  --foreground: oklch(0.985 0 0);
+  --card: #0f0f10;
+  --muted-foreground: oklch(0.708 0 0);
+  --border: oklch(1 0 0 / 10%);
+  --primary: oklch(0.922 0 0);
+  --primary-foreground: oklch(0.205 0 0);
+  --success: oklch(0.696 0.17 162.48);
+  --warning: oklch(0.769 0.16 70.08);
+  --destructive: oklch(0.704 0.191 22.216);
+}
+
+html,
+body {
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
