@@ -27,21 +27,9 @@ type ApplyPackageOptions struct {
 
 // ApplyPackage is an immutable bundle of the root spec and resolved skills.
 type ApplyPackage struct {
-	Digest   string
-	Bytes    []byte
-	Manifest ApplyPackageManifest
-	Lock     ApplyPackageLock
-}
-
-// ApplyPackageManifest is written to manifest.yaml inside the package.
-type ApplyPackageManifest struct {
-	SchemaVersion   int                      `yaml:"schema_version"`
-	RootSpecPath    string                   `yaml:"root_spec_path"`
-	Spec            ApplyPackageSpecEntry    `yaml:"spec"`
-	Skills          []ApplyPackageSkillEntry `yaml:"skills"`
-	CompilerVersion string                   `yaml:"compiler_version"`
-	RuntimeVersion  string                   `yaml:"runtime_version,omitempty"`
-	PackageDigest   string                   `yaml:"package_digest"`
+	Digest string
+	Bytes  []byte
+	Lock   ApplyPackageLock
 }
 
 type ApplyPackageSpecEntry struct {
@@ -67,10 +55,13 @@ type ApplyPackageFileEntry struct {
 
 // ApplyPackageLock records the immutable inputs used by the package.
 type ApplyPackageLock struct {
-	SchemaVersion int                      `yaml:"schema_version"`
-	PackageDigest string                   `yaml:"package_digest"`
-	Spec          ApplyPackageSpecEntry    `yaml:"spec"`
-	Skills        []ApplyPackageSkillEntry `yaml:"skills"`
+	SchemaVersion   int                      `yaml:"schema_version"`
+	RootSpecPath    string                   `yaml:"root_spec_path"`
+	Spec            ApplyPackageSpecEntry    `yaml:"spec"`
+	Skills          []ApplyPackageSkillEntry `yaml:"skills"`
+	CompilerVersion string                   `yaml:"compiler_version"`
+	RuntimeVersion  string                   `yaml:"runtime_version,omitempty"`
+	PackageDigest   string                   `yaml:"package_digest"`
 }
 
 type packageFile struct {
@@ -80,7 +71,7 @@ type packageFile struct {
 }
 
 // BuildApplyPackage creates a deterministic tar.gz containing the root spec,
-// resolved skills, manifest.yaml, and lock.yaml.
+// resolved skills, and manifest-lock.yaml.
 func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) (*ApplyPackage, error) {
 	if compiled == nil || compiled.Environment == nil {
 		return nil, fmt.Errorf("compiled environment is required")
@@ -96,7 +87,7 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 	}
 	specEntry := ApplyPackageSpecEntry{
 		Name:   compiled.Environment.Name,
-		Path:   "specs/main/SPEC.md",
+		Path:   "SPEC.md",
 		Digest: digestBytes(specData),
 	}
 
@@ -122,7 +113,7 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 
 	runtimeVersion := strings.TrimSpace(opts.RuntimeVersion)
 	packageDigest := digestPackage(specEntry.Digest, skillEntries, compilerVersion, runtimeVersion)
-	manifest := ApplyPackageManifest{
+	lock := ApplyPackageLock{
 		SchemaVersion:   ApplyPackageSchemaVersion,
 		RootSpecPath:    specEntry.Path,
 		Spec:            specEntry,
@@ -131,35 +122,21 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 		RuntimeVersion:  runtimeVersion,
 		PackageDigest:   packageDigest,
 	}
-	lock := ApplyPackageLock{
-		SchemaVersion: ApplyPackageSchemaVersion,
-		PackageDigest: packageDigest,
-		Spec:          specEntry,
-		Skills:        skillEntries,
-	}
 
-	manifestData, err := yaml.Marshal(manifest)
-	if err != nil {
-		return nil, fmt.Errorf("marshal manifest: %w", err)
-	}
 	lockData, err := yaml.Marshal(lock)
 	if err != nil {
 		return nil, fmt.Errorf("marshal lock: %w", err)
 	}
-	packageFiles = append(packageFiles,
-		packageFile{path: "manifest.yaml", mode: 0o644, data: manifestData},
-		packageFile{path: "lock.yaml", mode: 0o644, data: lockData},
-	)
+	packageFiles = append(packageFiles, packageFile{path: "manifest-lock.yaml", mode: 0o644, data: lockData})
 
 	data, err := writePackageTar(packageFiles)
 	if err != nil {
 		return nil, err
 	}
 	return &ApplyPackage{
-		Digest:   packageDigest,
-		Bytes:    data,
-		Manifest: manifest,
-		Lock:     lock,
+		Digest: packageDigest,
+		Bytes:  data,
+		Lock:   lock,
 	}, nil
 }
 

@@ -39,15 +39,17 @@ func TestBuildApplyPackageIsDeterministic(t *testing.T) {
 	if !bytes.Equal(first.Bytes, second.Bytes) {
 		t.Fatal("package bytes changed for identical inputs")
 	}
-	if first.Manifest.PackageDigest != first.Digest {
-		t.Fatalf("manifest digest %q != package digest %q", first.Manifest.PackageDigest, first.Digest)
+	if first.Lock.PackageDigest != first.Digest {
+		t.Fatalf("lock digest %q != package digest %q", first.Lock.PackageDigest, first.Digest)
+	}
+	if first.Lock.RootSpecPath != "SPEC.md" {
+		t.Fatalf("root spec path = %q, want SPEC.md", first.Lock.RootSpecPath)
 	}
 
 	entries := tarEntries(t, first.Bytes)
 	for _, want := range []string{
-		"lock.yaml",
-		"manifest.yaml",
-		"specs/main/SPEC.md",
+		"manifest-lock.yaml",
+		"SPEC.md",
 		"skills/alpha/SKILL.md",
 		"skills/alpha/reference/example.txt",
 	} {
