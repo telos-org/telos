@@ -5,6 +5,7 @@ go_library(
     srcs = [
         "cloud_store.go",
         "config.go",
+        "control_reconciler.go",
         "kubernetes_worker.go",
         "route_reconciler.go",
         "route_handles.go",
@@ -37,6 +38,7 @@ go_test(
     name = "telosd_test",
     srcs = [
         "config_test.go",
+        "control_reconciler_test.go",
         "kubernetes_worker_test.go",
         "route_reconciler_test.go",
         "route_handles_test.go",
