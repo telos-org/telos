@@ -11,8 +11,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// BuiltinVerifierSkills are the names of always-included verifier skills.
-var BuiltinVerifierSkills = []string{
+// DefaultVerifierSkills are the names of always-included verifier skills.
+var DefaultVerifierSkills = []string{
 	"verify-quality",
 	"verify-engineering",
 }
@@ -182,14 +182,14 @@ func resolveOnePath(abs string) ([]*Skill, error) {
 	return skills, nil
 }
 
-// ResolveVerifierSkills loads the built-in verifier skills.
-func ResolveVerifierSkills() []*Skill {
-	dir := BuiltinSkillsDir()
+// ResolveDefaultVerifierSkills loads the default verifier skills.
+func ResolveDefaultVerifierSkills() []*Skill {
+	dir := DefaultSkillsDir()
 	if dir == "" {
 		return nil
 	}
 	var skills []*Skill
-	for _, name := range BuiltinVerifierSkills {
+	for _, name := range DefaultVerifierSkills {
 		skillDir := filepath.Join(dir, name)
 		if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
 			continue
@@ -203,9 +203,9 @@ func ResolveVerifierSkills() []*Skill {
 	return skills
 }
 
-// ResolveBuiltinSkill loads a single built-in skill by name.
-func ResolveBuiltinSkill(name string) *Skill {
-	dir := BuiltinSkillsDir()
+// ResolveDefaultSkill loads a single default catalogue skill by name.
+func ResolveDefaultSkill(name string) *Skill {
+	dir := DefaultSkillsDir()
 	if dir == "" {
 		return nil
 	}

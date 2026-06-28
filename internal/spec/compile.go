@@ -81,7 +81,7 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 			return nil, err
 		}
 	}
-	verifier := ResolveVerifierSkills()
+	verifier := ResolveDefaultVerifierSkills()
 
 	// Merge: declared + required + verifier, dedup by name
 	byName := map[string]*Skill{}
