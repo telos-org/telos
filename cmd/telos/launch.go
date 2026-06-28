@@ -283,6 +283,10 @@ func runCloud(
 	readyTimeout time.Duration,
 	action string,
 ) {
+	if command == "apply" {
+		applyCloudControl(specArg, envID, waitForEnvironment, readyTimeout, jsonOut)
+		return
+	}
 	req, err := sessionCreateRequestForSpec(specArg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -302,10 +306,6 @@ func runCloud(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if command == "apply" {
-		applyCloud(req, client, env, jsonOut)
-		return
-	}
 	session, err := client.CreateSession(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -321,23 +321,40 @@ func runCloud(
 	}
 }
 
-func applyCloud(
-	req sessionapi.SessionCreateRequest,
-	client *cloud.Client,
-	env *cloud.Environment,
+func applyCloudControl(
+	specArg string,
+	envID string,
+	waitForEnvironment bool,
+	readyTimeout time.Duration,
 	jsonOut bool,
 ) {
-	specName, err := specNameFromRequest(req)
+	pkg, err := packageSpec(specArg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	response, err := client.ApplySessionSpec(specName, sessionapi.SessionSpecUpdateRequest{
-		SpecMarkdown: *req.SpecMarkdown,
-	})
+	control, env, err := cloudEnvironmentForApply(envID, false, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+	if _, err := pushSpecPackage(control, pkg); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	response, err := control.ApplyEnvironmentSession(env.ID, pkg.name, pkg.digest)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if waitForEnvironment {
+		if readyTimeout <= 0 {
+			readyTimeout = 15 * time.Minute
+		}
+		if err := cloud.WaitForEnvironment(env.Handle, readyTimeout); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	if jsonOut {
 		printJSON(map[string]any{
@@ -347,7 +364,7 @@ func applyCloud(
 		})
 		return
 	}
-	printSessionReceipt(os.Stdout, response.Operation, response.Session, environmentOutput(env))
+	printCloudApplyReceipt(os.Stdout, response, environmentOutput(env))
 }
 
 func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session, env *environmentJSON) {
@@ -370,19 +387,18 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	}
 }
 
-func specNameFromRequest(req sessionapi.SessionCreateRequest) (string, error) {
-	if req.SpecMarkdown == nil {
-		return "", fmt.Errorf("spec_markdown is required")
+func printCloudApplyReceipt(out io.Writer, response *cloud.EnvironmentSessionApplyResponse, env *environmentJSON) {
+	fmt.Fprintf(out, "%s %s\n\n", response.Operation, response.Session.Name)
+	printSummaryField(out, "Name", response.Session.Name)
+	printSummaryField(out, "Platform", "cloud")
+	printSummaryField(out, "Status", response.Session.DesiredState)
+	printSummaryField(out, "Digest", response.Session.PackageDigest)
+	if env != nil {
+		printSummaryField(out, "Environment", env.ID)
+		if env.Handle != "" {
+			printSummaryField(out, "Handle", env.Handle)
+		}
 	}
-	raw, _, ok := spec.ParseFrontmatter(*req.SpecMarkdown)
-	if !ok {
-		return "", fmt.Errorf("spec_markdown must contain YAML frontmatter")
-	}
-	name, ok := raw["name"].(string)
-	if !ok || name == "" {
-		return "", fmt.Errorf("spec frontmatter must include name")
-	}
-	return name, nil
 }
 
 func sessionKindForCommand(command string) sessionapi.SessionKind {

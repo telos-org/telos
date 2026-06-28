@@ -194,6 +194,99 @@ func TestClientCreateEnvironmentAcceptsLegacyAccessField(t *testing.T) {
 	}
 }
 
+func TestClientPushCatalogSpec(t *testing.T) {
+	var uploadedBody []byte
+	var pushedBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/api/catalog/packages/sha256:abc":
+			uploadedBody, _ = io.ReadAll(r.Body)
+			json.NewEncoder(w).Encode(map[string]any{
+				"digest":     "sha256:abc",
+				"size_bytes": len(uploadedBody),
+				"created_at": "now",
+			})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/catalog/specs/auth":
+			if err := json.NewDecoder(r.Body).Decode(&pushedBody); err != nil {
+				t.Fatal(err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"operation": "created",
+				"spec": map[string]any{
+					"name":           "auth",
+					"package_digest": "sha256:abc",
+					"visibility":     "private",
+					"created_at":     "now",
+					"updated_at":     "now",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	uploaded, err := client.UploadApplyPackage("sha256:abc", []byte("package"))
+	if err != nil {
+		t.Fatalf("UploadApplyPackage: %v", err)
+	}
+	if uploaded.SizeBytes != len("package") || string(uploadedBody) != "package" {
+		t.Fatalf("upload: got %+v body %q", uploaded, uploadedBody)
+	}
+	pushed, err := client.PushCatalogSpec("auth", "sha256:abc")
+	if err != nil {
+		t.Fatalf("PushCatalogSpec: %v", err)
+	}
+	if pushed.Operation != "created" || pushed.Spec.Name != "auth" {
+		t.Fatalf("push: got %+v", pushed)
+	}
+	if pushedBody["package_digest"] != "sha256:abc" {
+		t.Fatalf("push body: got %#v", pushedBody)
+	}
+}
+
+func TestClientApplyEnvironmentSession(t *testing.T) {
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/environments/env_123/sessions/auth" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"operation": "created",
+			"session": map[string]any{
+				"env_id":         "env_123",
+				"name":           "auth",
+				"package_digest": "sha256:abc",
+				"desired_state":  "running",
+				"created_at":     "now",
+				"updated_at":     "now",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	response, err := client.ApplyEnvironmentSession("env_123", "auth", "sha256:abc")
+	if err != nil {
+		t.Fatalf("ApplyEnvironmentSession: %v", err)
+	}
+	if response.Operation != "created" || response.Session.Name != "auth" {
+		t.Fatalf("response: got %+v", response)
+	}
+	if gotBody["package_digest"] != "sha256:abc" {
+		t.Fatalf("body: got %#v", gotBody)
+	}
+}
+
 func TestSessionCreateRequestOmitsEmptyRuntimeDefaults(t *testing.T) {
 	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
 	body, err := json.Marshal(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})

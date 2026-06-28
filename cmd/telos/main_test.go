@@ -472,16 +472,23 @@ func TestSessionCreateRequestRejectsMissingSpecPath(t *testing.T) {
 	}
 }
 
-func TestSpecNameFromRequest(t *testing.T) {
-	markdown := "---\nversion: v0\nname: postgres\n---\n# Postgres\n"
-	req := sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}
-
-	name, err := specNameFromRequest(req)
-	if err != nil {
-		t.Fatalf("specNameFromRequest: %v", err)
+func TestPackageSpecBuildsApplyPackage(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if name != "postgres" {
-		t.Fatalf("name: got %q", name)
+	pkg, err := packageSpec(dir)
+	if err != nil {
+		t.Fatalf("packageSpec: %v", err)
+	}
+	if pkg.name != "postgres" {
+		t.Fatalf("name: got %q", pkg.name)
+	}
+	if !strings.HasPrefix(pkg.digest, "sha256:") {
+		t.Fatalf("digest: got %q", pkg.digest)
+	}
+	if len(pkg.bytes) == 0 {
+		t.Fatal("missing package bytes")
 	}
 }
 
