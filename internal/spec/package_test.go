@@ -157,6 +157,47 @@ func TestBuildApplyPackageDigestIgnoresSkillFileCreationOrder(t *testing.T) {
 	}
 }
 
+func TestExtractApplyPackageCompilesWithPackageLocalSkills(t *testing.T) {
+	srcDir := t.TempDir()
+	specPath := writePackageTestSpec(t, srcDir, "package-local-skill", "alpha")
+	writePackageTestSkill(t, srcDir, "alpha", map[string]string{
+		"SKILL.md": "---\nname: alpha\n---\nUse package-local alpha.",
+	})
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := BuildApplyPackage(compiled, ApplyPackageOptions{CompilerVersion: "test-compiler"})
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+
+	dest := t.TempDir()
+	lock, err := ExtractApplyPackage(pkg.Bytes, dest)
+	if err != nil {
+		t.Fatalf("ExtractApplyPackage: %v", err)
+	}
+	if lock.PackageDigest != pkg.Digest {
+		t.Fatalf("package digest: got %q want %q", lock.PackageDigest, pkg.Digest)
+	}
+	extracted, err := CompileEnvironmentWithBase(filepath.Join(dest, "SPEC.md"), dest)
+	if err != nil {
+		t.Fatalf("CompileEnvironmentWithBase extracted: %v", err)
+	}
+	var found bool
+	for _, skill := range extracted.Skills {
+		if skill.Name == "alpha" {
+			found = true
+			if filepath.Dir(skill.Path) != filepath.Join(dest, "skills") {
+				t.Fatalf("alpha resolved outside package: %s", skill.Path)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("missing extracted alpha skill")
+	}
+}
+
 func writePackageTestSpec(t *testing.T, dir, name, skill string) string {
 	t.Helper()
 	path := filepath.Join(dir, "SPEC.md")
