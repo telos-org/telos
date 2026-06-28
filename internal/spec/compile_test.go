@@ -198,6 +198,18 @@ func TestCompileWithAbsoluteExtendsPath(t *testing.T) {
 
 func TestCompileWithoutDeclaredSkillsOnlyIncludesVerifierSkills(t *testing.T) {
 	dir := t.TempDir()
+	defaultSkills := filepath.Join(dir, "default-skills")
+	for _, name := range []string{"verify-engineering", "verify-quality"} {
+		skillDir := filepath.Join(defaultSkills, name)
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: "+name+"\n---\nVerify."), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("TELOS_SKILLS_DIR", defaultSkills)
+
 	specPath := filepath.Join(dir, "SPEC.md")
 	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: cloud-default\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
@@ -215,7 +227,7 @@ func TestCompileWithoutDeclaredSkillsOnlyIncludesVerifierSkills(t *testing.T) {
 		t.Fatal("skills must be explicit; cloud specs should not implicitly load catalogue skills")
 	}
 	if !names["verify-engineering"] || !names["verify-quality"] {
-		t.Fatal("expected built-in verifier skills")
+		t.Fatal("expected default verifier skills")
 	}
 }
 

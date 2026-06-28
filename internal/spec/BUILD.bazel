@@ -12,7 +12,6 @@ go_library(
     ],
     embedsrcs = glob([
         "prompts/**/*.md",
-        "skills/**",
     ]),
     importpath = "github.com/telos-org/telos/internal/spec",
     visibility = ["//:__subpackages__"],

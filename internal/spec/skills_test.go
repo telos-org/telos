@@ -130,10 +130,23 @@ func TestResolveSkillsDedup(t *testing.T) {
 	}
 }
 
-func TestBuiltinBuildDashboardIncludesReferences(t *testing.T) {
-	s := ResolveBuiltinSkill("build-dashboard")
+func TestDefaultBuildDashboardIncludesReferences(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := writeTestSkill(t, dir, "build-dashboard", "---\nname: build-dashboard\n---\nUse dashboard.")
+	referenceDir := filepath.Join(skillDir, "reference")
+	if err := os.MkdirAll(referenceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"components.jsx", "theme.css", "theme.js"} {
+		if err := os.WriteFile(filepath.Join(referenceDir, name), []byte("content"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("TELOS_SKILLS_DIR", dir)
+
+	s := ResolveDefaultSkill("build-dashboard")
 	if s == nil {
-		t.Fatal("expected built-in build-dashboard skill")
+		t.Fatal("expected default build-dashboard skill")
 	}
 	if strings.Contains(s.Instructions, "tokens.js") {
 		t.Fatal("build-dashboard should not reference removed tokens.js")
@@ -147,4 +160,16 @@ func TestBuiltinBuildDashboardIncludesReferences(t *testing.T) {
 			t.Fatalf("expected build-dashboard reference %s to be non-empty", name)
 		}
 	}
+}
+
+func writeTestSkill(t *testing.T, root, name, data string) string {
+	t.Helper()
+	skillDir := filepath.Join(root, name)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return skillDir
 }

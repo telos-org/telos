@@ -257,7 +257,7 @@ func effectiveSkills(compiled *CompiledEnvironment, opts PromptOptions) []*Skill
 	if !opts.Controller || hasSkill(skills, "telos-orchestrate") {
 		return skills
 	}
-	controllerSkill := ResolveBuiltinSkill("telos-orchestrate")
+	controllerSkill := ResolveDefaultSkill("telos-orchestrate")
 	if controllerSkill == nil {
 		controllerSkill = &Skill{
 			Name:        "telos-orchestrate",
