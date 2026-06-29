@@ -48,6 +48,10 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintln(os.Stderr, "error: --until is only supported with telos run")
 		os.Exit(1)
 	}
+	if command == "apply" && *env != "" {
+		fmt.Fprintln(os.Stderr, "error: --env is no longer supported with telos apply; deployments allocate environments automatically")
+		os.Exit(1)
+	}
 
 	if fs.NArg() < 1 {
 		fmt.Fprintf(os.Stderr, "usage: telos %s SPEC.md [options]\n", command)
@@ -284,7 +288,7 @@ func runCloud(
 	action string,
 ) {
 	if command == "apply" {
-		applyCloudControl(specArg, envID, waitForEnvironment, readyTimeout, jsonOut)
+		applyCloudControl(specArg, jsonOut)
 		return
 	}
 	req, err := sessionCreateRequestForSpec(specArg)
@@ -323,9 +327,6 @@ func runCloud(
 
 func applyCloudControl(
 	specArg string,
-	envID string,
-	waitForEnvironment bool,
-	readyTimeout time.Duration,
 	jsonOut bool,
 ) {
 	pkg, err := packageSpec(specArg)
@@ -333,7 +334,7 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	control, env, err := cloudEnvironmentForApply(envID, false, 0)
+	control, err := cloud.ControlClient()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -342,29 +343,42 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	response, err := control.ApplyEnvironmentSession(env.ID, pkg.name, pkg.digest)
+	operation, deployment, err := applyDeploymentPackage(control, pkg.name, pkg.digest)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if waitForEnvironment {
-		if readyTimeout <= 0 {
-			readyTimeout = 15 * time.Minute
-		}
-		if err := cloud.WaitForEnvironment(env.Handle, readyTimeout); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-	}
 	if jsonOut {
 		printJSON(map[string]any{
-			"environment": environmentOutput(env),
-			"operation":   response.Operation,
-			"session":     response.Session,
+			"operation":  operation,
+			"deployment": deployment,
 		})
 		return
 	}
-	printCloudApplyReceipt(os.Stdout, response, environmentOutput(env))
+	printDeploymentReceipt(os.Stdout, operation, deployment)
+}
+
+func applyDeploymentPackage(control *cloud.Client, name string, digest string) (string, *cloud.DeploymentRecord, error) {
+	deployments, err := control.ListDeployments()
+	if err != nil {
+		return "", nil, err
+	}
+	var matches []cloud.DeploymentRecord
+	for _, deployment := range deployments {
+		if deployment.Name == name {
+			matches = append(matches, deployment)
+		}
+	}
+	switch len(matches) {
+	case 0:
+		deployment, err := control.CreateDeployment(name, digest)
+		return "created", deployment, err
+	case 1:
+		deployment, err := control.UpdateDeployment(matches[0].ID, digest)
+		return "updated", deployment, err
+	default:
+		return "", nil, fmt.Errorf("multiple deployments named %q; update by deployment id is not supported by telos apply yet", name)
+	}
 }
 
 func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session, env *environmentJSON) {
@@ -398,6 +412,21 @@ func printCloudApplyReceipt(out io.Writer, response *cloud.EnvironmentSessionApp
 		if env.Handle != "" {
 			printSummaryField(out, "Handle", env.Handle)
 		}
+	}
+}
+
+func printDeploymentReceipt(out io.Writer, operation string, deployment *cloud.DeploymentRecord) {
+	fmt.Fprintf(out, "%s %s\n\n", operation, deployment.Name)
+	printSummaryField(out, "Name", deployment.Name)
+	printSummaryField(out, "Platform", "cloud")
+	printSummaryField(out, "Status", deployment.State)
+	printSummaryField(out, "Digest", deployment.PackageDigest)
+	printSummaryField(out, "Deployment", deployment.ID)
+	if deployment.ServiceURL != nil {
+		printSummaryField(out, "Service URL", *deployment.ServiceURL)
+	}
+	if deployment.DashboardURL != nil {
+		printSummaryField(out, "Dashboard URL", *deployment.DashboardURL)
 	}
 }
 

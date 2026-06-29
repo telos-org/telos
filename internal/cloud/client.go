@@ -21,6 +21,7 @@ import (
 const (
 	DefaultAPIEndpoint = "https://api.usetelos.ai"
 	DefaultTimeout     = 30 * time.Second
+	UserAgent          = "telos-cli"
 )
 
 // Environment describes a cloud Telos environment from the control plane.
@@ -33,22 +34,27 @@ type Environment struct {
 }
 
 type ApplyPackageRecord struct {
-	Digest    string `json:"digest"`
-	SizeBytes int    `json:"size_bytes"`
-	CreatedAt string `json:"created_at"`
+	Digest      string  `json:"digest"`
+	SizeBytes   int     `json:"size_bytes"`
+	CreatedAt   string  `json:"created_at"`
+	Name        *string `json:"name,omitempty"`
+	Version     *string `json:"version,omitempty"`
+	DisplayName *string `json:"display_name,omitempty"`
+	Description *string `json:"description,omitempty"`
+	Visibility  string  `json:"visibility"`
+	UpdatedAt   *string `json:"updated_at,omitempty"`
 }
 
-type CatalogSpecRecord struct {
-	Name          string `json:"name"`
-	PackageDigest string `json:"package_digest"`
-	Visibility    string `json:"visibility"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
+type ApplyPackageListResponse struct {
+	Packages []ApplyPackageRecord `json:"packages"`
 }
 
-type CatalogSpecPushResponse struct {
-	Operation string            `json:"operation"`
-	Spec      CatalogSpecRecord `json:"spec"`
+type ApplyPackageMetadata struct {
+	Name        string `json:"name,omitempty"`
+	Version     string `json:"version,omitempty"`
+	DisplayName string `json:"display_name,omitempty"`
+	Description string `json:"description,omitempty"`
+	Visibility  string `json:"visibility,omitempty"`
 }
 
 type EnvironmentSessionRecord struct {
@@ -63,6 +69,23 @@ type EnvironmentSessionRecord struct {
 type EnvironmentSessionApplyResponse struct {
 	Operation string                   `json:"operation"`
 	Session   EnvironmentSessionRecord `json:"session"`
+}
+
+type DeploymentRecord struct {
+	ID             string  `json:"id"`
+	Name           string  `json:"name"`
+	State          string  `json:"state"`
+	PackageDigest  string  `json:"package_digest"`
+	RuntimeVersion *string `json:"runtime_version,omitempty"`
+	ServiceURL     *string `json:"service_url,omitempty"`
+	DashboardURL   *string `json:"dashboard_url,omitempty"`
+	FailureReason  *string `json:"failure_reason,omitempty"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
+}
+
+type DeploymentListResponse struct {
+	Deployments []DeploymentRecord `json:"deployments"`
 }
 
 // Client is a cloud Sessions API client.
@@ -178,7 +201,7 @@ func (c *Client) CreateEnvironment() (*Environment, error) {
 }
 
 func (c *Client) UploadApplyPackage(digest string, data []byte) (*ApplyPackageRecord, error) {
-	resp, err := c.doRaw("PUT", "/api/catalog/packages/"+url.PathEscape(digest), data, "application/gzip")
+	resp, err := c.doRaw("PUT", "/api/packages/"+url.PathEscape(digest), data, "application/gzip")
 	if err != nil {
 		return nil, err
 	}
@@ -193,12 +216,15 @@ func (c *Client) UploadApplyPackage(digest string, data []byte) (*ApplyPackageRe
 	return &record, nil
 }
 
-func (c *Client) PushCatalogSpec(name string, packageDigest string) (*CatalogSpecPushResponse, error) {
-	body, err := json.Marshal(map[string]string{"package_digest": packageDigest})
+func (c *Client) UpdateApplyPackageMetadata(digest string, metadata ApplyPackageMetadata) (*ApplyPackageRecord, error) {
+	if metadata.Visibility == "" {
+		metadata.Visibility = "private"
+	}
+	body, err := json.Marshal(metadata)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("PUT", "/api/catalog/specs/"+url.PathEscape(name), body)
+	resp, err := c.do("PATCH", "/api/packages/"+url.PathEscape(digest), body)
 	if err != nil {
 		return nil, err
 	}
@@ -206,11 +232,27 @@ func (c *Client) PushCatalogSpec(name string, packageDigest string) (*CatalogSpe
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	var response CatalogSpecPushResponse
+	var record ApplyPackageRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) ListApplyPackages() ([]ApplyPackageRecord, error) {
+	resp, err := c.do("GET", "/api/packages", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response ApplyPackageListResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
-	return &response, nil
+	return response.Packages, nil
 }
 
 func (c *Client) ApplyEnvironmentSession(envID, name, packageDigest string) (*EnvironmentSessionApplyResponse, error) {
@@ -231,6 +273,65 @@ func (c *Client) ApplyEnvironmentSession(envID, name, packageDigest string) (*En
 		return nil, err
 	}
 	return &response, nil
+}
+
+func (c *Client) CreateDeployment(name, packageDigest string) (*DeploymentRecord, error) {
+	body, err := json.Marshal(map[string]string{
+		"name":           name,
+		"package_digest": packageDigest,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("POST", "/api/deployments", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, readError(resp)
+	}
+	var response DeploymentRecord
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) UpdateDeployment(deploymentID, packageDigest string) (*DeploymentRecord, error) {
+	body, err := json.Marshal(map[string]string{"package_digest": packageDigest})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("PUT", "/api/deployments/"+url.PathEscape(deploymentID), body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response DeploymentRecord
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) ListDeployments() ([]DeploymentRecord, error) {
+	resp, err := c.do("GET", "/api/deployments", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response DeploymentListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return response.Deployments, nil
 }
 
 // WaitForEnvironment waits until an environment-local API is reachable.
@@ -458,6 +559,7 @@ func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[s
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("User-Agent", UserAgent)
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
@@ -526,6 +628,7 @@ func (c *Client) doRaw(method, path string, body []byte, contentType string) (*h
 	if body != nil {
 		req.Header.Set("Content-Type", contentType)
 	}
+	req.Header.Set("User-Agent", UserAgent)
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
