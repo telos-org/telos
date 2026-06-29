@@ -56,6 +56,7 @@ func Run(ctx context.Context, cfg Config) error {
 	})
 	if cfg.Mode == ModeCloud {
 		handler = withCloudCORS(handler)
+		handler = newSurfaceGateway(cfg.Auth.Token, newRouteHandleResolver()).Wrap(handler)
 	}
 	srv := &http.Server{
 		Handler:           handler,

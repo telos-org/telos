@@ -174,7 +174,7 @@ func NormalizeConfig(cfg Config) (Config, error) {
 			cfg.Kubernetes.AgentSecretName = "agent-api-keys"
 		}
 		if cfg.Kubernetes.AgentSecretKey == "" {
-			cfg.Kubernetes.AgentSecretKey = "ANTHROPIC_API_KEY"
+			cfg.Kubernetes.AgentSecretKey = "SAIL_API_KEY"
 		}
 		if cfg.Kubernetes.CopySecrets == nil {
 			cfg.Kubernetes.CopySecrets = []string{"telos-env-keys"}
