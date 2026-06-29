@@ -11,25 +11,25 @@ import (
 
 // Manifest is the persisted session.json shape shared by the store and worker.
 type Manifest struct {
-	SessionID          string                 `json:"session_id"`
-	SessionKind        SessionKind            `json:"session_kind"`
-	Runtime            SessionRuntime         `json:"runtime,omitempty"`
-	CreatedAt          string                 `json:"created_at"`
-	Launcher           string                 `json:"launcher"`
-	ParentSessionID    *string                `json:"parent_session_id"`
-	SourceSpecPath     *string                `json:"source_spec_path,omitempty"`
-	SessionSpecPath    *string                `json:"session_spec_path,omitempty"`
-	SpecName           string                 `json:"spec_name"`
-	CurrentSpecVersion *int                   `json:"current_spec_version,omitempty"`
-	SpecVersions       []map[string]any       `json:"spec_versions,omitempty"`
-	ApplyPackageDigest *string                `json:"apply_package_digest,omitempty"`
-	ApplyPackageLock   *spec.ApplyPackageLock `json:"apply_package_lock,omitempty"`
-	Config             SessionConfig          `json:"config"`
-	Workspace          *Workspace             `json:"workspace,omitempty"`
-	Provenance         map[string]any         `json:"provenance"`
-	Access             *ScopedToken           `json:"access,omitempty"`
-	Specs              []ManifestSpec         `json:"specs"`
-	Epochs             []Epoch                `json:"epochs"`
+	SessionID          string                     `json:"session_id"`
+	SessionKind        SessionKind                `json:"session_kind"`
+	Runtime            SessionRuntime             `json:"runtime,omitempty"`
+	CreatedAt          string                     `json:"created_at"`
+	Launcher           string                     `json:"launcher"`
+	ParentSessionID    *string                    `json:"parent_session_id"`
+	SourceSpecPath     *string                    `json:"source_spec_path,omitempty"`
+	SessionSpecPath    *string                    `json:"session_spec_path,omitempty"`
+	SpecName           string                     `json:"spec_name"`
+	CurrentSpecVersion *int                       `json:"current_spec_version,omitempty"`
+	SpecVersions       []map[string]any           `json:"spec_versions,omitempty"`
+	ApplyPackageDigest *string                    `json:"apply_package_digest,omitempty"`
+	ApplyPackageLock   *spec.ApplyPackageManifest `json:"apply_package_lock,omitempty"`
+	Config             SessionConfig              `json:"config"`
+	Workspace          *Workspace                 `json:"workspace,omitempty"`
+	Provenance         map[string]any             `json:"provenance"`
+	Access             *ScopedToken               `json:"access,omitempty"`
+	Specs              []ManifestSpec             `json:"specs"`
+	Epochs             []Epoch                    `json:"epochs"`
 }
 
 type Workspace struct {
@@ -114,7 +114,7 @@ type InitialManifest struct {
 	Workspace          *Workspace
 	Provenance         map[string]any
 	ApplyPackageDigest *string
-	ApplyPackageLock   *spec.ApplyPackageLock
+	ApplyPackageLock   *spec.ApplyPackageManifest
 	Access             *ScopedToken
 	Specs              []InitialManifestSpec
 }
