@@ -163,8 +163,17 @@ var (
 	// invalid/missing terminator is corrected first; once the status rule passes
 	// the terminator is a valid CONTINUE or CONCEDE.
 	requireFindingsRule = protocolRule{
-		key:   "malformed_findings_block",
-		check: func(c ruleContext) bool { return statusIsContinue(c.text) && countBlocks(findingsBlockRE, c.text) != 1 },
+		key: "malformed_findings_block",
+		check: func(c ruleContext) bool {
+			if !statusIsContinue(c.text) {
+				return false
+			}
+			if countBlocks(findingsBlockRE, c.text) != 1 {
+				return true
+			}
+			findings, ok := game.ParseFindingsBlock(c.text)
+			return !ok || len(findings) == 0
+		},
 		message: func(c ruleContext) string {
 			return fmt.Sprintf(malformedFindingsMessage, countBlocks(findingsBlockRE, c.text))
 		},
@@ -219,7 +228,7 @@ const (
 	missingProgressMessage       = "Your previous response was missing the required <progress_update>...</progress_update> block. Reply with a concise final implementation summary and include exactly one <progress_update> block."
 	noToolForArtifactMessage     = "This turn appears to require inspecting or changing workspace artifacts, but no tool was used. Inspect or update the workspace with tools before finalizing, then include the required <progress_update> block."
 	malformedReviewBlocksMessage = "Your previous review-mode response must contain exactly one <review>...</review> block and exactly one <summary>...</summary> block, but it had %d review and %d summary block(s). Put the CSV rubric inside a single <review> tag and your notes inside a single <summary> tag, and do not write either tag name anywhere else (including examples or narration)."
-	malformedFindingsMessage     = "Your previous response must contain exactly one <findings>...</findings> block, but it had %d. List blocking findings inside a single <findings> tag, one per line as `severity | description`, using an empty <findings></findings> block if you have none; do not write the tag name anywhere else."
+	malformedFindingsMessage     = "Your previous response must contain exactly one non-empty <findings>...</findings> block, but it had %d. List at least one blocking finding inside a single <findings> tag, one per line as `severity | description`; do not write the tag name anywhere else."
 )
 
 // protocolRulesFor selects the rule set for a role/mode. Mode is normalized so

@@ -168,6 +168,29 @@ func TestPVGWritesObjectiveLedger(t *testing.T) {
 	}
 }
 
+func TestPVGLedgerFallsBackWhenFindingsBlockIsEmpty(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-empty-findings-ledger")
+	state.Ensure()
+	pvg := NewPVG(compiled, nil, state, PVGConfig{})
+
+	pvg.updateObjectiveLedger(1, RoleVerifier, TurnResult{
+		Role:   RoleVerifier,
+		Status: StatusContinue,
+		Logs:   "Blocking finding: missing test coverage.\n\n<findings></findings>\n<status>CONTINUE</status>",
+	}, ObjectiveStateRepair)
+
+	ledger, err := readObjectiveLedger(state.LedgerPath)
+	if err != nil {
+		t.Fatalf("readObjectiveLedger: %v", err)
+	}
+	if len(ledger.OpenFindings) != 1 || !strings.Contains(ledger.OpenFindings[0], "missing test coverage") {
+		t.Fatalf("open findings: %#v", ledger.OpenFindings)
+	}
+}
+
 func TestPVGReviewModeLedgerReturnsToImplement(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()

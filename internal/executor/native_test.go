@@ -1801,6 +1801,7 @@ func TestVerifierFindingsRuleScopedToContinue(t *testing.T) {
 		wantKey string
 	}{
 		{name: "continue without findings is nudged", text: "Found a bug.\n<status>CONTINUE</status>", wantKey: "malformed_findings_block"},
+		{name: "continue with empty findings is nudged", text: "Found a bug.\n<findings></findings>\n<status>CONTINUE</status>", wantKey: "malformed_findings_block"},
 		{name: "continue with findings passes", text: "Found a bug.\n<findings>blocker | bug</findings>\n<status>CONTINUE</status>", wantKey: ""},
 		{name: "continue with duplicate findings is nudged", text: "x\n<findings>a</findings>\n<findings>b</findings>\n<status>CONTINUE</status>", wantKey: "malformed_findings_block"},
 		{name: "concede needs no findings", text: "All good.\n<status>CONCEDE</status>", wantKey: ""},
@@ -2388,6 +2389,52 @@ func TestNativeToolsBoundFileReadsAndBinary(t *testing.T) {
 	truncatedText, ok := truncateText("aaébb", 3)
 	if !ok || !utf8.ValidString(truncatedText) || strings.ContainsRune(truncatedText, utf8.RuneError) {
 		t.Fatalf("truncateText should preserve valid UTF-8, got %q truncated=%t", truncatedText, ok)
+	}
+}
+
+func TestReadTextFileRangeAcceptsUTF8SplitAcrossBuffer(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "long.txt")
+	line := strings.Repeat("a", 64<<10-1) + "é\nsecond\n"
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	content, totalLines, endLine, truncated, binary, err := readTextFileRange(path, 1, 1, 80<<10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if binary {
+		t.Fatal("valid UTF-8 split across reader buffer was classified as binary")
+	}
+	if truncated {
+		t.Fatalf("unexpected truncation")
+	}
+	if totalLines != 2 || endLine != 1 {
+		t.Fatalf("line metadata: total=%d end=%d", totalLines, endLine)
+	}
+	if !utf8.ValidString(content) || !strings.Contains(content, "é") {
+		t.Fatalf("content should remain valid and include split rune: valid=%t contains=%t", utf8.ValidString(content), strings.Contains(content, "é"))
+	}
+}
+
+func TestNativeToolIntegerArgumentsRejectFractions(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "big.txt"), []byte("one\ntwo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs())
+
+	result := tools.execute(context.Background(), nativeToolCall{
+		ID:        "call_fraction",
+		Name:      "read_file",
+		Arguments: `{"path":"big.txt","limit_lines":0.5}`,
+	})
+	if !result.IsError {
+		t.Fatalf("expected fractional integer argument to fail:\n%s", result.Output)
+	}
+	if result.ErrorCode != errAgentProtocol || !strings.Contains(result.Output, `argument "limit_lines" must be of type integer`) {
+		t.Fatalf("unexpected error: code=%q output=%s", result.ErrorCode, result.Output)
 	}
 }
 

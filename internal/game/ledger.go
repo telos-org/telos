@@ -130,14 +130,15 @@ func (p *PVG) updateObjectiveLedger(roundNum int, role string, turn TurnResult, 
 		ledger.OpenFindings = nil
 	case ObjectiveStateRepair:
 		// The verifier wants changes; record the findings to repair. Prefer the
-		// structured pvg <findings> block, then the review CSV (score-driven), and
-		// fall back to the legacy keyword scan only when neither structured block
-		// is present.
+		// structured pvg <findings> block when it contains at least one finding,
+		// then the review CSV (score-driven), and finally the legacy keyword scan.
+		// The final fallback keeps older/replayed CONTINUE logs with an empty
+		// findings block from entering repair with no actionable ledger item.
 		findings, ok := findingsBlockFindings(turn.Logs)
-		if !ok {
+		if !ok || len(findings) == 0 {
 			findings, ok = reviewFindings(turn.Logs)
 		}
-		if !ok {
+		if !ok || len(findings) == 0 {
 			findings = extractFindings(turn.Logs)
 		}
 		if len(findings) > 0 {
@@ -191,7 +192,7 @@ func extractFindings(text string) []string {
 	var findings []string
 	for _, line := range strings.Split(text, "\n") {
 		line = strings.Trim(strings.TrimSpace(line), "|")
-		if line == "" || strings.HasPrefix(strings.ToLower(line), "criteria,score") {
+		if line == "" || strings.HasPrefix(strings.ToLower(line), "criteria,score") || isProtocolTagLine(line) {
 			continue
 		}
 		if findingLineRE.MatchString(line) {
@@ -207,6 +208,27 @@ func extractFindings(text string) []string {
 		}
 	}
 	return findings
+}
+
+func isProtocolTagLine(line string) bool {
+	lower := strings.ToLower(strings.TrimSpace(line))
+	for _, prefix := range []string{
+		"<findings",
+		"</findings",
+		"<progress_update",
+		"</progress_update",
+		"<review",
+		"</review",
+		"<summary",
+		"</summary",
+		"<status",
+		"</status",
+	} {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func appendUnique(items []string, values ...string) []string {

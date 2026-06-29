@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path"
 	"path/filepath"
@@ -555,10 +556,11 @@ func readTextFileRange(full string, startLine, limitLines, maxBytes int) (string
 	truncatedBytes := false
 	var out strings.Builder
 	reader := bufio.NewReaderSize(f, 64<<10)
+	var text utf8TextStream
 	for {
 		fragment, readErr := reader.ReadSlice('\n')
 		if len(fragment) > 0 {
-			if !isUTF8TextBytes(fragment) {
+			if !text.accept(fragment, readErr != bufio.ErrBufferFull) {
 				return "", totalLines, lastReturned, false, true, nil
 			}
 			currentLine := totalLines + 1
@@ -584,11 +586,45 @@ func readTextFileRange(full string, startLine, limitLines, maxBytes int) (string
 		case nil, bufio.ErrBufferFull:
 			continue
 		case io.EOF:
-			return out.String(), totalLines, lastReturned, truncatedBytes, false, nil
+			content := out.String()
+			if !utf8.ValidString(content) {
+				content = content[:validUTF8PrefixLen([]byte(content), len(content))]
+				truncatedBytes = true
+			}
+			return content, totalLines, lastReturned, truncatedBytes, false, nil
 		default:
 			return "", totalLines, lastReturned, truncatedBytes, false, readErr
 		}
 	}
+}
+
+type utf8TextStream struct {
+	pending []byte
+}
+
+func (s *utf8TextStream) accept(chunk []byte, complete bool) bool {
+	if bytes.IndexByte(chunk, 0) >= 0 {
+		return false
+	}
+	if len(s.pending) > 0 {
+		combined := make([]byte, 0, len(s.pending)+len(chunk))
+		combined = append(combined, s.pending...)
+		combined = append(combined, chunk...)
+		chunk = combined
+		s.pending = nil
+	}
+	for len(chunk) > 0 {
+		r, size := utf8.DecodeRune(chunk)
+		if r == utf8.RuneError && size == 1 {
+			if !complete && !utf8.FullRune(chunk) {
+				s.pending = append(s.pending[:0], chunk...)
+				return true
+			}
+			return false
+		}
+		chunk = chunk[size:]
+	}
+	return true
 }
 
 func (t *nativeTools) write(p, content string) (toolOutput, error) {
@@ -1289,9 +1325,10 @@ func argMatchesType(value any, want string) bool {
 	case "string":
 		_, ok := value.(string)
 		return ok
-	case "integer", "number":
-		_, ok := value.(float64)
-		return ok
+	case "integer":
+		return isIntegralNumber(value)
+	case "number":
+		return isJSONNumber(value)
 	case "boolean":
 		_, ok := value.(bool)
 		return ok
@@ -1301,6 +1338,40 @@ func argMatchesType(value any, want string) bool {
 	default:
 		return true
 	}
+}
+
+func isIntegralNumber(value any) bool {
+	switch v := value.(type) {
+	case float64:
+		return isFiniteNumber(v) && math.Trunc(v) == v
+	case int:
+		return true
+	case json.Number:
+		if _, err := v.Int64(); err == nil {
+			return true
+		}
+		return false
+	default:
+		return false
+	}
+}
+
+func isJSONNumber(value any) bool {
+	switch v := value.(type) {
+	case float64:
+		return isFiniteNumber(v)
+	case int:
+		return true
+	case json.Number:
+		f, err := v.Float64()
+		return err == nil && isFiniteNumber(f)
+	default:
+		return false
+	}
+}
+
+func isFiniteNumber(value float64) bool {
+	return !math.IsNaN(value) && !math.IsInf(value, 0)
 }
 
 func argString(args map[string]interface{}, key string) string {
@@ -1316,9 +1387,17 @@ func argBool(args map[string]interface{}, key string) bool {
 func argInt(args map[string]interface{}, key string) int {
 	switch value := args[key].(type) {
 	case float64:
-		return int(value)
+		if isFiniteNumber(value) && math.Trunc(value) == value {
+			return int(value)
+		}
+		return 0
 	case int:
 		return value
+	case json.Number:
+		if i, err := value.Int64(); err == nil {
+			return int(i)
+		}
+		return 0
 	default:
 		return 0
 	}
