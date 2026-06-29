@@ -289,7 +289,7 @@ func TestCloudCreateSessionCreatesRootForOperatorApply(t *testing.T) {
 	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest == "" {
 		t.Fatalf("missing apply_package_digest: %#v", manifest.ApplyPackageDigest)
 	}
-	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.RootSpecPath != "SPEC.md" {
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Digest == "" {
 		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
 	}
 	if got := session.SpecVersions[0]["apply_package_digest"]; got != *manifest.ApplyPackageDigest {
@@ -328,6 +328,8 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	session, err := store.Create(sessionapi.SessionCreateRequest{
 		ApplyPackagePath:   packagePath,
 		ApplyPackageDigest: pkg.Digest,
+		DeploymentID:       "dep_123",
+		DeploymentName:     "postgres-prod",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -342,8 +344,14 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest != pkg.Digest {
 		t.Fatalf("apply_package_digest: got %#v want %q", manifest.ApplyPackageDigest, pkg.Digest)
 	}
-	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.PackageDigest != pkg.Digest {
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Digest != pkg.Manifest.Spec.Digest {
 		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
+	}
+	if got := manifest.Provenance["deployment_id"]; got != "dep_123" {
+		t.Fatalf("deployment_id provenance: got %#v", got)
+	}
+	if got := manifest.Provenance["deployment_name"]; got != "postgres-prod" {
+		t.Fatalf("deployment_name provenance: got %#v", got)
 	}
 	recompiled, err := spec.CompileEnvironmentWithBase(*manifest.SessionSpecPath, filepath.Dir(*manifest.SourceSpecPath))
 	if err != nil {
@@ -572,7 +580,7 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest == "" {
 		t.Fatalf("missing apply_package_digest: %#v", manifest.ApplyPackageDigest)
 	}
-	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Name != "postgres" {
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Digest == "" {
 		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
 	}
 	if got := session.SpecVersions[0]["apply_package_digest"]; got != *manifest.ApplyPackageDigest {

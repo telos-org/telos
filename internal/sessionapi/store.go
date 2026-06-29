@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -140,6 +141,13 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	}
 	prepared.SessionSpecPath = strPtr(sessionSpecPath)
 
+	provenance := map[string]any{"mode": runtimeMode(fs.runtime)}
+	if deploymentID := strings.TrimSpace(req.DeploymentID); deploymentID != "" {
+		provenance["deployment_id"] = deploymentID
+	}
+	if deploymentName := strings.TrimSpace(req.DeploymentName); deploymentName != "" {
+		provenance["deployment_name"] = deploymentName
+	}
 	m := ManifestFromInitial(InitialManifest{
 		SessionID:          id,
 		SessionKind:        sessionKind,
@@ -151,7 +159,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		SessionSpecPath:    prepared.SessionSpecPath,
 		SpecName:           specName,
 		Config:             buildConfig(req),
-		Provenance:         map[string]any{"mode": runtimeMode(fs.runtime)},
+		Provenance:         provenance,
 		ApplyPackageDigest: prepared.ApplyPackageDigest,
 		ApplyPackageLock:   prepared.ApplyPackageLock,
 		Access:             access,
@@ -1106,7 +1114,7 @@ type preparedRequestSpec struct {
 	IntervalSeconds    *int
 	SpecData           []byte
 	ApplyPackageDigest *string
-	ApplyPackageLock   *spec.ApplyPackageLock
+	ApplyPackageLock   *spec.ApplyPackageManifest
 }
 
 func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRequestSpec, error) {
@@ -1145,7 +1153,7 @@ func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRe
 		IntervalSeconds:    compiled.Environment.IntervalSeconds,
 		SpecData:           data,
 		ApplyPackageDigest: strPtr(applyPackage.Digest),
-		ApplyPackageLock:   &applyPackage.Lock,
+		ApplyPackageLock:   &applyPackage.Manifest,
 	}
 	return prepared, nil
 }
@@ -1159,15 +1167,16 @@ func prepareApplyPackageSpec(sessionDir string, packagePath string, expectedDige
 	if err := os.RemoveAll(packageDir); err != nil {
 		return preparedRequestSpec{}, fmt.Errorf("clear package dir: %w", err)
 	}
-	lock, err := spec.ExtractApplyPackage(data, packageDir)
+	manifest, err := spec.ExtractApplyPackage(data, packageDir)
 	if err != nil {
 		return preparedRequestSpec{}, err
 	}
+	actualDigest := digestApplyPackage(data, manifest)
 	expectedDigest = strings.TrimSpace(expectedDigest)
-	if expectedDigest != "" && lock.PackageDigest != expectedDigest {
-		return preparedRequestSpec{}, fmt.Errorf("package digest %q does not match expected %q", lock.PackageDigest, expectedDigest)
+	if expectedDigest != "" && actualDigest != expectedDigest {
+		return preparedRequestSpec{}, fmt.Errorf("package digest %q does not match expected %q", actualDigest, expectedDigest)
 	}
-	specPath := filepath.Join(packageDir, filepath.FromSlash(lock.RootSpecPath))
+	specPath := filepath.Join(packageDir, "SPEC.md")
 	specData, err := os.ReadFile(specPath)
 	if err != nil {
 		return preparedRequestSpec{}, fmt.Errorf("read package root spec: %w", err)
@@ -1176,18 +1185,40 @@ func prepareApplyPackageSpec(sessionDir string, packagePath string, expectedDige
 	if err != nil {
 		return preparedRequestSpec{}, err
 	}
-	if lock.Spec.Name != "" && compiled.Environment.Name != lock.Spec.Name {
-		return preparedRequestSpec{}, fmt.Errorf("package spec name %q does not match compiled name %q", lock.Spec.Name, compiled.Environment.Name)
-	}
 	return preparedRequestSpec{
 		Name:               compiled.Environment.Name,
 		SourceSpecPath:     strPtr(specPath),
 		ContentHash:        strPtr(compiled.ContentHash),
 		IntervalSeconds:    compiled.Environment.IntervalSeconds,
 		SpecData:           specData,
-		ApplyPackageDigest: strPtr(lock.PackageDigest),
-		ApplyPackageLock:   lock,
+		ApplyPackageDigest: strPtr(actualDigest),
+		ApplyPackageLock:   manifest,
 	}, nil
+}
+
+func digestApplyPackage(data []byte, manifest *spec.ApplyPackageManifest) string {
+	if manifest == nil {
+		sum := sha256.Sum256(data)
+		return fmt.Sprintf("sha256:%x", sum)
+	}
+	h := sha256.New()
+	writeSpecDigestPart(h, fmt.Sprintf("schema:%d", manifest.SchemaVersion))
+	writeSpecDigestPart(h, "spec:"+manifest.Spec.Digest)
+	names := make([]string, 0, len(manifest.Skills))
+	for name := range manifest.Skills {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		writeSpecDigestPart(h, name)
+		writeSpecDigestPart(h, manifest.Skills[name])
+	}
+	return fmt.Sprintf("sha256:%x", h.Sum(nil))
+}
+
+func writeSpecDigestPart(w io.Writer, value string) {
+	_, _ = io.WriteString(w, value)
+	_, _ = w.Write([]byte{0})
 }
 
 func materializedSpecDir(data []byte) string {

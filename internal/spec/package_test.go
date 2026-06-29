@@ -4,6 +4,7 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
+	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
@@ -39,16 +40,16 @@ func TestBuildApplyPackageIsDeterministic(t *testing.T) {
 	if !bytes.Equal(first.Bytes, second.Bytes) {
 		t.Fatal("package bytes changed for identical inputs")
 	}
-	if first.Lock.PackageDigest != first.Digest {
-		t.Fatalf("lock digest %q != package digest %q", first.Lock.PackageDigest, first.Digest)
+	if first.Manifest.Spec.Digest == "" {
+		t.Fatalf("manifest missing spec digest: %#v", first.Manifest)
 	}
-	if first.Lock.RootSpecPath != "SPEC.md" {
-		t.Fatalf("root spec path = %q, want SPEC.md", first.Lock.RootSpecPath)
+	if first.Manifest.Skills["alpha"] == "" {
+		t.Fatalf("manifest missing alpha skill digest: %#v", first.Manifest.Skills)
 	}
 
 	entries := tarEntries(t, first.Bytes)
 	for _, want := range []string{
-		"manifest-lock.yaml",
+		"manifest.json",
 		"SPEC.md",
 		"skills/alpha/SKILL.md",
 		"skills/alpha/reference/example.txt",
@@ -56,6 +57,16 @@ func TestBuildApplyPackageIsDeterministic(t *testing.T) {
 		if _, ok := entries[want]; !ok {
 			t.Fatalf("missing package entry %q; entries=%v", want, sortedEntryNames(entries))
 		}
+	}
+	var manifest map[string]any
+	if err := json.Unmarshal(entries["manifest.json"], &manifest); err != nil {
+		t.Fatalf("manifest.json: %v", err)
+	}
+	if _, ok := manifest["package_digest"]; ok {
+		t.Fatalf("manifest should not contain package_digest: %#v", manifest)
+	}
+	if _, ok := manifest["root_spec_path"]; ok {
+		t.Fatalf("manifest should not contain root_spec_path: %#v", manifest)
 	}
 }
 
@@ -92,7 +103,7 @@ func TestBuildApplyPackageDigestChangesWhenSkillChanges(t *testing.T) {
 	}
 }
 
-func TestBuildApplyPackageDigestChangesWhenRuntimeVersionChanges(t *testing.T) {
+func TestBuildApplyPackageDigestIgnoresRuntimeVersion(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writePackageTestSpec(t, dir, "package-runtime-change", "alpha")
 	writePackageTestSkill(t, dir, "alpha", map[string]string{
@@ -112,8 +123,8 @@ func TestBuildApplyPackageDigestChangesWhenRuntimeVersionChanges(t *testing.T) {
 		t.Fatalf("BuildApplyPackage second: %v", err)
 	}
 
-	if first.Digest == second.Digest {
-		t.Fatalf("digest did not change after runtime version changed: %s", first.Digest)
+	if first.Digest != second.Digest {
+		t.Fatalf("digest changed after runtime version changed: %s != %s", first.Digest, second.Digest)
 	}
 }
 
@@ -173,12 +184,12 @@ func TestExtractApplyPackageCompilesWithPackageLocalSkills(t *testing.T) {
 	}
 
 	dest := t.TempDir()
-	lock, err := ExtractApplyPackage(pkg.Bytes, dest)
+	manifest, err := ExtractApplyPackage(pkg.Bytes, dest)
 	if err != nil {
 		t.Fatalf("ExtractApplyPackage: %v", err)
 	}
-	if lock.PackageDigest != pkg.Digest {
-		t.Fatalf("package digest: got %q want %q", lock.PackageDigest, pkg.Digest)
+	if manifest.Spec.Digest != pkg.Manifest.Spec.Digest {
+		t.Fatalf("spec digest: got %q want %q", manifest.Spec.Digest, pkg.Manifest.Spec.Digest)
 	}
 	extracted, err := CompileEnvironmentWithBase(filepath.Join(dest, "SPEC.md"), dest)
 	if err != nil {

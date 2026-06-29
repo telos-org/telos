@@ -85,6 +85,8 @@ type SessionCreateRequest struct {
 	SpecMarkdown       *string      `json:"spec_markdown,omitempty"`
 	ApplyPackagePath   string       `json:"-"`
 	ApplyPackageDigest string       `json:"-"`
+	DeploymentID       string       `json:"-"`
+	DeploymentName     string       `json:"-"`
 	SessionKind        *SessionKind `json:"-"`
 	ParentSessionID    *string      `json:"parent_session_id,omitempty"`
 	Until              *int         `json:"until,omitempty"`
