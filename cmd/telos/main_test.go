@@ -1443,6 +1443,7 @@ func TestLocalControllerSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
 }
 
 func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
+	isolateLocalOnlyConfig(t)
 	root := t.TempDir()
 	t.Setenv("TELOS_SESSION_DIR", root)
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
@@ -1623,6 +1624,7 @@ func TestControllerLookupReturnsClusterAPIError(t *testing.T) {
 }
 
 func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
+	isolateLocalOnlyConfig(t)
 	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
 
 	_, err := getSessionFromAnywhere("local_missing", "")
@@ -1674,4 +1676,13 @@ func configureCloudTest(t *testing.T, endpoint string) {
 	t.Setenv("TELOS_ENVIRONMENTS_CONFIG", filepath.Join(dir, "environments.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", endpoint)
 	t.Setenv("TELOS_AUTH_TOKEN", "control-token")
+}
+
+func isolateLocalOnlyConfig(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("TELOS_CONFIG", filepath.Join(dir, "config.yaml"))
+	t.Setenv("TELOS_ENVIRONMENTS_CONFIG", filepath.Join(dir, "environments.yaml"))
+	t.Setenv("TELOS_API_ENDPOINT", "")
+	t.Setenv("TELOS_AUTH_TOKEN", "")
 }

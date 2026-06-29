@@ -24,6 +24,17 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 		return 1, err
 	}
 	controller := manifest.Kind == sessionapi.KindController
+	reconciledTerminal := false
+	reconcileTerminal := func() {
+		if reconciledTerminal {
+			return
+		}
+		reconciledTerminal = true
+		reconcileWorkerBilling(sessionDir, manifest, true)
+	}
+	if !controller || once {
+		defer reconcileTerminal()
+	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -37,7 +48,7 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 			}
 			fmt.Fprintf(os.Stderr, "controller cycle failed: %v\n", err)
 		} else if !controller {
-			reconcileWorkerBilling(sessionDir, manifest, true)
+			reconcileTerminal()
 			if result.GameResult == game.GameSuccess {
 				return 0, nil
 			}
@@ -46,7 +57,7 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 			}
 			return 1, fmt.Errorf("session failed: %s", result.GameResult)
 		} else if once {
-			reconcileWorkerBilling(sessionDir, manifest, true)
+			reconcileTerminal()
 			return 0, nil
 		} else {
 			reconcileWorkerBilling(sessionDir, manifest, false)
@@ -100,16 +111,26 @@ func reconcileWorkerBilling(sessionDir string, manifest WorkerManifest, terminal
 	if sessionID == "" {
 		sessionID = filepath.Base(sessionDir)
 	}
-	cfg, err := NormalizeConfig(Config{Mode: ModeCloud})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "warning: reconcile managed billing: %v\n", err)
-		return
-	}
-	client := newBillingClient(cfg.Billing)
+	client := newBillingClient(workerBillingConfigFromEnv())
 	if !client.configured() {
 		return
 	}
 	if err := client.ReconcileSession(sessionID, terminal); err != nil {
 		fmt.Fprintf(os.Stderr, "warning: reconcile managed billing: %v\n", err)
 	}
+}
+
+func workerBillingConfigFromEnv() BillingConfig {
+	cfg := BillingConfig{
+		Endpoint:  envOr("TELOS_BILLING_ENDPOINT", "https://billing.usetelos.ai"),
+		EnvID:     os.Getenv("TELOS_ENV_ID"),
+		TokenFile: os.Getenv("TELOS_BILLING_ENV_TOKEN_FILE"),
+		Token:     os.Getenv("TELOS_BILLING_ENV_TOKEN"),
+	}
+	if cfg.Token == "" && cfg.TokenFile != "" {
+		if token, err := authTokenFromFile(cfg.TokenFile); err == nil {
+			cfg.Token = token
+		}
+	}
+	return cfg
 }

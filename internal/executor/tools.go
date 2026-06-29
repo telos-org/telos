@@ -241,7 +241,7 @@ func buildNativeToolTable() []nativeTool {
 		},
 		{
 			name:        "bash",
-			description: "Run a shell command in the workspace with bounded output and optional cwd/env.",
+			description: "Run a shell command in the workspace with bounded output and optional cwd/env. timeout_seconds defaults to 120 seconds and is capped by the effective turn duration budget.",
 			parameters: obj([]string{"command"}, map[string]interface{}{
 				"command":         str("Command to run with bash -lc."),
 				"timeout_seconds": integer("Optional timeout, capped by Telos."),
@@ -351,9 +351,14 @@ type nativeTools struct {
 	skillCoverage map[string]int
 	openedSkills  map[string]bool
 	logger        *nativeSessionLogger
+	budget        game.TurnBudget
 }
 
-func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool, skills []game.TurnSkill, logger *nativeSessionLogger, knobs envKnobs) *nativeTools {
+func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool, skills []game.TurnSkill, logger *nativeSessionLogger, knobs envKnobs, budgets ...game.TurnBudget) *nativeTools {
+	var budget game.TurnBudget
+	if len(budgets) > 0 {
+		budget = budgets[0]
+	}
 	t := &nativeTools{
 		platform:      p,
 		stopRequested: stopRequested,
@@ -363,6 +368,7 @@ func newNativeTools(p *platform.LocalPlatform, stopRequested func() bool, skills
 		skillCoverage: map[string]int{},
 		openedSkills:  map[string]bool{},
 		logger:        logger,
+		budget:        budget,
 	}
 	for _, tool := range nativeToolDefs {
 		t.byName[tool.name] = tool
@@ -736,8 +742,9 @@ func (t *nativeTools) bash(ctx context.Context, command string, cwd string, env 
 	if strings.TrimSpace(command) == "" {
 		return toolOutput{}, fmt.Errorf("command is required")
 	}
-	if timeout <= 0 || timeout > defaultToolTimeoutSec {
-		timeout = defaultToolTimeoutSec
+	capSeconds := t.effectiveBashTimeoutCap()
+	if timeout <= 0 || timeout > capSeconds {
+		timeout = capSeconds
 	}
 	interrupt := func() bool {
 		if ctx.Err() != nil {
@@ -802,6 +809,20 @@ func (t *nativeTools) bash(ctx context.Context, command string, cwd string, env 
 		return out, errors.New(renderToolOutput("bash", false, 0, out))
 	}
 	return out, nil
+}
+
+func (t *nativeTools) effectiveBashTimeoutCap() int {
+	capSeconds := defaultToolTimeoutSec
+	if t != nil && t.budget.AgentTimeoutSec > 0 {
+		capSeconds = t.budget.AgentTimeoutSec
+	}
+	if t != nil && t.budget.RemainingDurationSec > 0 && t.budget.RemainingDurationSec < capSeconds {
+		capSeconds = t.budget.RemainingDurationSec
+	}
+	if capSeconds <= 0 {
+		return defaultToolTimeoutSec
+	}
+	return capSeconds
 }
 
 func capOutputLines(text string, streamName string, originalLines int, maxLines int) (string, bool) {
@@ -1063,7 +1084,7 @@ func (t *nativeTools) skill(action, name, refPath string, startLine, limitLines 
 		if err != nil {
 			return toolOutput{}, err
 		}
-		if action == "read" && !read.binary && !read.byteTruncated {
+		if action == "read" && !read.binary && (!read.byteTruncated || read.totalLines <= 1) {
 			covered := t.skillCoverage[ref.Name]
 			if read.startLine <= covered+1 && read.endLine > covered {
 				covered = read.endLine

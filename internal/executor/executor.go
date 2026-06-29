@@ -23,6 +23,7 @@ type NativeExecutor struct {
 	config    nativeConfig
 	configErr error
 	cleanup   func() error
+	costHard  bool
 }
 
 // NewNativeExecutor creates a native Go coding-agent executor. The provider and
@@ -57,6 +58,7 @@ func NewNativeExecutorWithGateway(p *platform.LocalPlatform, model, thinking str
 		config:    cfg,
 		configErr: err,
 		cleanup:   cleanup,
+		costHard:  gateway.CostHardLimit || costHardLimitFromEnv(),
 	}
 }
 
@@ -66,6 +68,12 @@ func (ne *NativeExecutor) Cleanup() error {
 		return nil
 	}
 	return ne.cleanup()
+}
+
+// CostHardLimit reports whether unknown provider cost should fail closed when
+// max_cost_usd is configured.
+func (ne *NativeExecutor) CostHardLimit() bool {
+	return ne.costHard
 }
 
 // ExecuteTurn runs one Telos-native agent turn. The role is read from
@@ -87,6 +95,7 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 		protocolMode = turnState.ProtocolMode
 		skills = turnState.Skills
 	}
+	budget.CostHardLimit = budget.CostHardLimit || ne.costHard
 
 	timeout := effectiveTurnTimeout(ne.Timeout, budget)
 	ctx, cancel := turnContext(timeout, stopRequested)
@@ -116,7 +125,7 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 	_ = logger.turnPolicy(role, protocolMode)
 	_ = logger.budget(effectiveMaxToolLoops(budget), effectiveMaxOutputTokens(cfg, budget), budget)
 
-	tools := newNativeTools(ne.Platform, stopRequested, skills, logger, knobs)
+	tools := newNativeTools(ne.Platform, stopRequested, skills, logger, knobs, budget)
 	loop := newAgentLoop(ne.Client, cfg, ne.Thinking, tools, logger, task, role, protocolMode, budget, knobs)
 
 	logs, extraStats, err := loop.run(ctx)

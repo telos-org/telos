@@ -22,9 +22,10 @@ const (
 
 // Credential is the Responses API endpoint and key a run should use.
 type Credential struct {
-	BaseURL string
-	APIKey  string
-	Cleanup func() error
+	BaseURL       string
+	APIKey        string
+	CostHardLimit bool
+	Cleanup       func() error
 }
 
 // Resolve chooses the local gateway credential for a session.
@@ -34,7 +35,7 @@ func Resolve(sessionID string) (Credential, error) {
 		if base == "" || key == "" {
 			return Credential{}, fmt.Errorf("both TELOS_LITELLM_BASE_URL and TELOS_LITELLM_API_KEY are required")
 		}
-		return Credential{BaseURL: base, APIKey: key}, nil
+		return Credential{BaseURL: base, APIKey: key, CostHardLimit: costHardLimitFromEnv()}, nil
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(cfg.Gateway.Mode))
@@ -63,8 +64,9 @@ func Resolve(sessionID string) (Credential, error) {
 			return Credential{}, err
 		}
 		return Credential{
-			BaseURL: key.BaseURL,
-			APIKey:  key.APIKey,
+			BaseURL:       key.BaseURL,
+			APIKey:        key.APIKey,
+			CostHardLimit: true,
 			Cleanup: func() error {
 				return client.ReconcileSession(key.SessionID, true)
 			},
@@ -72,6 +74,16 @@ func Resolve(sessionID string) (Credential, error) {
 	default:
 		return Credential{}, fmt.Errorf("run `telos login` for managed gateway access or `telos configure gateway --mode byo --base-url URL --api-key KEY`")
 	}
+}
+
+func costHardLimitFromEnv() bool {
+	raw := strings.TrimSpace(os.Getenv("TELOS_COST_HARD_LIMIT"))
+	if raw != "" {
+		return strings.EqualFold(raw, "1") || strings.EqualFold(raw, "true") || strings.EqualFold(raw, "yes")
+	}
+	return strings.TrimSpace(os.Getenv("TELOS_ENV_ID")) != "" &&
+		(strings.TrimSpace(os.Getenv("TELOS_BILLING_ENV_TOKEN")) != "" ||
+			strings.TrimSpace(os.Getenv("TELOS_BILLING_ENV_TOKEN_FILE")) != "")
 }
 
 func envGateway() (string, string) {

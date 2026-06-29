@@ -24,7 +24,7 @@ func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecut
 		model,
 		cfg.Thinking,
 		cfg.AgentTimeoutSec,
-		executor.GatewayConfig{BaseURL: cred.BaseURL, APIKey: cred.APIKey},
+		executor.GatewayConfig{BaseURL: cred.BaseURL, APIKey: cred.APIKey, CostHardLimit: cred.CostHardLimit},
 		cred.Cleanup,
 	)
 	return exec, nil

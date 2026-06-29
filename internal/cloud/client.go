@@ -209,6 +209,13 @@ func (c *Client) MintSessionKey(sessionID string) (*SessionKey, error) {
 	if raw.BaseURL == "" || raw.APIKey == "" {
 		return nil, fmt.Errorf("billing returned invalid session key")
 	}
+	raw.SessionID = strings.TrimSpace(raw.SessionID)
+	if raw.SessionID == "" {
+		return nil, fmt.Errorf("billing returned invalid session key: missing session_id")
+	}
+	if raw.SessionID != strings.TrimSpace(sessionID) {
+		return nil, fmt.Errorf("billing returned session key for %q, want %q", raw.SessionID, strings.TrimSpace(sessionID))
+	}
 	return &SessionKey{
 		SessionID: raw.SessionID,
 		BaseURL:   raw.BaseURL,

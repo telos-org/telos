@@ -100,6 +100,32 @@ func TestNativeExecutorRunsChatToolLoopAndWritesWorkspace(t *testing.T) {
 	assertValidSessionLog(t, ts.SessionPath())
 }
 
+func TestNativeExecutorRejectsIncompleteResponseBeforeExecutingToolCalls(t *testing.T) {
+	workspace := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeResponsesStream(w, `{
+			"id":"resp_1","status":"incomplete",
+			"incomplete_details":{"reason":"max_output_tokens"},
+			"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"should-not-run\\n\"}"}],
+			"usage":{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}
+		}`)
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_API_BASE_URL", server.URL)
+	t.Setenv("TELOS_API_KEY", "test-key")
+
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
+
+	if result.Error == "" || !strings.Contains(result.Error, "agent_incomplete:max_output_tokens") {
+		t.Fatalf("expected incomplete response error, got error=%q logs=%q", result.Error, result.Logs)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "answer.txt")); !os.IsNotExist(err) {
+		t.Fatalf("incomplete response tool call should not execute, stat err=%v", err)
+	}
+}
+
 func TestNativeExecutorStopsToolLoopWhenTurnTokenBudgetExhausted(t *testing.T) {
 	workspace := t.TempDir()
 	var requests int
@@ -147,6 +173,109 @@ func TestNativeExecutorStopsToolLoopWhenTurnTokenBudgetExhausted(t *testing.T) {
 	errorEvents := sessionLogEventsByType(t, ts.SessionPath(), "error")
 	if len(errorEvents) != 1 || errorEvents[0]["error_code"] != string(errRuntimeBudgetExhausted) {
 		t.Fatalf("budget error events: %#v", errorEvents)
+	}
+}
+
+func TestNativeExecutorManagedStopsWhenCostUnavailableUnderCostCap(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests > 1 {
+			t.Fatalf("executor should stop before a second provider request")
+		}
+		writeResponsesStream(w, `{
+			"id":"resp_1","status":"completed",
+			"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"should-not-run\\n\"}"}],
+			"usage":{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}
+		}`)
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_API_BASE_URL", server.URL)
+	t.Setenv("TELOS_API_KEY", "test-key")
+
+	remaining := 1.0
+	exec := NewNativeExecutorWithGateway(
+		platform.NewLocalPlatform(workspace),
+		"test/test-model",
+		"high",
+		0,
+		GatewayConfig{BaseURL: server.URL, APIKey: "test-key", CostHardLimit: true},
+		nil,
+	)
+	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{
+		Role: "prover",
+		Dir:  filepath.Join(workspace, ".turn"),
+		Budget: game.TurnBudget{
+			RemainingCostUSD: &remaining,
+		},
+	})
+
+	if result.Error == "" || !strings.Contains(result.Error, "runtime_budget_exhausted:max_cost_usd_cost_unavailable") {
+		t.Fatalf("expected cost-unavailable budget error, got error=%q logs=%q", result.Error, result.Logs)
+	}
+	if requests != 1 {
+		t.Fatalf("requests: got %d", requests)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "answer.txt")); !os.IsNotExist(err) {
+		t.Fatalf("cost-unavailable response tool call should not execute, stat err=%v", err)
+	}
+}
+
+func TestNativeExecutorBYOContinuesWhenCostUnavailableUnderCostCap(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			writeResponsesStream(w, `{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
+				"usage":{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		case 2:
+			writeResponsesStream(w, `{
+				"id":"resp_2","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>wrote answer</progress_update>"}]}],
+				"usage":{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	remaining := 1.0
+	exec := NewNativeExecutorWithGateway(
+		platform.NewLocalPlatform(workspace),
+		"test/test-model",
+		"high",
+		0,
+		GatewayConfig{BaseURL: server.URL, APIKey: "test-key"},
+		nil,
+	)
+	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{
+		Role: "prover",
+		Dir:  filepath.Join(workspace, ".turn"),
+		Budget: game.TurnBudget{
+			RemainingCostUSD: &remaining,
+		},
+	})
+
+	if result.Error != "" {
+		t.Fatalf("BYO cost-unavailable turn should continue, got error=%q logs=%q", result.Error, result.Logs)
+	}
+	if requests != 2 {
+		t.Fatalf("requests: got %d", requests)
+	}
+	data, err := os.ReadFile(filepath.Join(workspace, "answer.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "done\n" {
+		t.Fatalf("answer.txt: got %q", data)
 	}
 }
 
@@ -382,6 +511,18 @@ func TestCostFromResponseBodyHandlesNestedLiteLLMMetadata(t *testing.T) {
 	}
 }
 
+func TestCostFromResponseHeadersIgnoresCumulativeLiteLLMSpend(t *testing.T) {
+	header := http.Header{}
+	header.Set("x-litellm-spend", "0.99")
+	if cost, ok := costFromResponseHeaders(header); ok || cost != 0 {
+		t.Fatalf("cumulative spend must not be treated as per-call cost: got %.4f ok=%t", cost, ok)
+	}
+	header.Set("x-litellm-response-cost", "0.12")
+	if cost, ok := costFromResponseHeaders(header); !ok || cost != 0.12 {
+		t.Fatalf("per-call response cost should win: got %.4f ok=%t", cost, ok)
+	}
+}
+
 func TestStatsFromResponsesUsageReportsTokensWithCostUnavailable(t *testing.T) {
 	// Cost is sourced only from the provider (LiteLLM headers/body); usage alone
 	// populates token counts and always leaves cost unavailable.
@@ -395,6 +536,26 @@ func TestStatsFromResponsesUsageReportsTokensWithCostUnavailable(t *testing.T) {
 	}
 	if stats.InputTokens != 1_000 || stats.OutputTokens != 250 || stats.CacheReadTokens != 4 {
 		t.Fatalf("token counts: got %+v", stats)
+	}
+}
+
+func TestAgentLoopBudgetFailsClosedWhenCostUnavailable(t *testing.T) {
+	remaining := 1.0
+	loop := &agentLoop{budget: game.TurnBudget{RemainingCostUSD: &remaining, CostHardLimit: true}}
+	err := loop.checkBudget(game.TurnStats{CostUnavailable: true})
+	if !executorErrorHasCode(err, errRuntimeBudgetExhausted) || !strings.Contains(err.Error(), "max_cost_usd_cost_unavailable") {
+		t.Fatalf("checkBudget error: %v", err)
+	}
+}
+
+func TestAgentLoopBudgetAllowsCostUnavailableForBYO(t *testing.T) {
+	remaining := 1.0
+	loop := &agentLoop{budget: game.TurnBudget{RemainingCostUSD: &remaining}}
+	if err := loop.checkBudget(game.TurnStats{CostUnavailable: true}); err != nil {
+		t.Fatalf("BYO cost-unavailable budget should not fail closed: %v", err)
+	}
+	if err := loop.checkBudget(game.TurnStats{CostUSD: 1.0, CostUnavailable: true}); !executorErrorHasCode(err, errRuntimeBudgetExhausted) || !strings.Contains(err.Error(), "max_cost_usd") {
+		t.Fatalf("reported numeric cost should still enforce: %v", err)
 	}
 }
 
@@ -1275,6 +1436,53 @@ func TestNativeExecutorCorrectsVerifierMissingStatusOnce(t *testing.T) {
 	}
 }
 
+func TestNativeExecutorAllowsProtocolCorrectionAfterLastToolLoopSlot(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			writeResponsesStream(w, `{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looks good but forgot the status."}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		case 2:
+			writeResponsesStream(w, `{
+				"id":"resp_2","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looks good.\n<status>CONCEDE</status>"}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_API_BASE_URL", server.URL)
+	t.Setenv("TELOS_API_KEY", "test-key")
+
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	result := exec.ExecuteTurn("Verify workspace.", &game.TurnState{
+		Role: "verifier",
+		Dir:  filepath.Join(workspace, ".turn"),
+		Budget: game.TurnBudget{
+			MaxToolLoops: 1,
+		},
+	})
+
+	if result.Error != "" {
+		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
+	}
+	if result.Status != game.StatusConcede {
+		t.Fatalf("status: got %s logs=%q", result.Status, result.Logs)
+	}
+	if requests != 2 {
+		t.Fatalf("requests: got %d", requests)
+	}
+}
+
 func TestNativeExecutorCorrectsVerifierInvalidStatusOnce(t *testing.T) {
 	workspace := t.TempDir()
 	var requests int
@@ -1746,32 +1954,20 @@ func TestNativeExecutorRejectsIncompleteFinal(t *testing.T) {
 	}
 }
 
-func TestNativeExecutorContinuesIncompleteToolCallResponse(t *testing.T) {
+func TestNativeExecutorRejectsIncompleteToolCallResponseBeforeExecution(t *testing.T) {
 	workspace := t.TempDir()
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		switch requests {
-		case 1:
-			writeResponsesIncompleteStream(w, `{
-				"id":"resp_1","status":"incomplete",
-				"incomplete_details":{"reason":"max_output_tokens"},
-				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
-				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
-			}`)
-		case 2:
-			body, _ := io.ReadAll(r.Body)
-			if !strings.Contains(string(body), "path: answer.txt") {
-				t.Fatalf("second request should include tool result after incomplete tool call response, got %s", body)
-			}
-			writeResponsesStream(w, `{
-				"id":"resp_2","status":"completed",
-				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Created answer.txt.\n<progress_update>wrote answer</progress_update>"}]}],
-				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
-			}`)
-		default:
+		if requests > 1 {
 			t.Fatalf("unexpected request %d", requests)
 		}
+		writeResponsesIncompleteStream(w, `{
+			"id":"resp_1","status":"incomplete",
+			"incomplete_details":{"reason":"max_output_tokens"},
+			"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
+			"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+		}`)
 	}))
 	defer server.Close()
 
@@ -1781,18 +1977,14 @@ func TestNativeExecutorContinuesIncompleteToolCallResponse(t *testing.T) {
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
 
-	if result.Error != "" {
-		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
+	if result.Error == "" || !strings.Contains(result.Error, "agent_incomplete:max_output_tokens") {
+		t.Fatalf("expected incomplete response error, got error=%q logs=%q", result.Error, result.Logs)
 	}
-	data, err := os.ReadFile(filepath.Join(workspace, "answer.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "done\n" {
-		t.Fatalf("answer.txt: got %q", string(data))
-	}
-	if requests != 2 {
+	if requests != 1 {
 		t.Fatalf("requests: got %d", requests)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "answer.txt")); !os.IsNotExist(err) {
+		t.Fatalf("incomplete response tool call should not execute, stat err=%v", err)
 	}
 }
 
@@ -2668,6 +2860,27 @@ func TestNativeToolsBashClassifiesTimeoutAsToolTimeout(t *testing.T) {
 	}
 }
 
+func TestNativeToolsBashTimeoutCapUsesTurnBudget(t *testing.T) {
+	workspace := t.TempDir()
+	tests := []struct {
+		name   string
+		budget game.TurnBudget
+		want   int
+	}{
+		{name: "default", budget: game.TurnBudget{}, want: defaultToolTimeoutSec},
+		{name: "agent timeout raises cap", budget: game.TurnBudget{AgentTimeoutSec: 600}, want: 600},
+		{name: "remaining duration caps", budget: game.TurnBudget{AgentTimeoutSec: 600, RemainingDurationSec: 45}, want: 45},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs(), tt.budget)
+			if got := tools.effectiveBashTimeoutCap(); got != tt.want {
+				t.Fatalf("bash timeout cap: got %d want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNativeSessionLoggerIncludesToolErrorCode(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
@@ -2950,6 +3163,34 @@ func TestNativeSkillToolRequiresCompleteRequiredRubricRead(t *testing.T) {
 	}
 	if missing := tools.missingRequiredSkills(); len(missing) != 1 || missing[0] != "review-skill" {
 		t.Fatalf("required skill should remain missing after truncated read: %v", missing)
+	}
+}
+
+func TestNativeSkillToolOversizedSingleLineRequiredRubricCanSatisfyGate(t *testing.T) {
+	workspace := t.TempDir()
+	skillDir := filepath.Join(t.TempDir(), "review-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	body := strings.Repeat("oversized criterion ", 1000)
+	if err := os.WriteFile(skillPath, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_NATIVE_TOOL_MAX_BYTES", "64")
+	skills := []game.TurnSkill{{Name: "review-skill", Description: "Review rubric", SkillPath: filepath.ToSlash(skillPath), Required: true}}
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, skills, nil, resolveEnvKnobs())
+
+	read := tools.execute(context.Background(), nativeToolCall{
+		ID:        "call_1",
+		Name:      "skill",
+		Arguments: `{"action":"read","name":"review-skill"}`,
+	})
+	if read.IsError || !strings.Contains(read.Output, "truncated: true") {
+		t.Fatalf("skill read output: %+v", read)
+	}
+	if missing := tools.missingRequiredSkills(); len(missing) != 0 {
+		t.Fatalf("oversized single-line rubric should have a path through the read gate: %v", missing)
 	}
 }
 

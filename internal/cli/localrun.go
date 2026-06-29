@@ -179,10 +179,28 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 			return nil, err
 		}
 	}
+	cleanupDone := false
+	cleanupAgent := func() {
+		if cleanupDone {
+			return
+		}
+		cleanupDone = true
+		if cleaner, ok := agentExec.(interface{ Cleanup() error }); ok {
+			if err := cleaner.Cleanup(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: cleanup managed gateway: %v\n", err)
+			}
+		}
+	}
+	defer cleanupAgent()
+	costHardLimit := false
+	if enforcer, ok := agentExec.(interface{ CostHardLimit() bool }); ok {
+		costHardLimit = enforcer.CostHardLimit()
+	}
 
 	pvgCfg := game.PVGConfig{
 		Until:           cfg.Until,
 		MaxCostUSD:      cfg.MaxCostUSD,
+		CostHardLimit:   costHardLimit,
 		MaxRounds:       cfg.MaxRounds,
 		MaxDurationSec:  cfg.MaxDurationSec,
 		MaxInputTokens:  cfg.MaxInputTokens,
@@ -198,11 +216,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 
 	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)
 	result := pvg.Run()
-	if cleaner, ok := agentExec.(interface{ Cleanup() error }); ok {
-		if err := cleaner.Cleanup(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: cleanup managed gateway: %v\n", err)
-		}
-	}
+	cleanupAgent()
 
 	// Close epoch
 	if err := finishEpoch(sessionDir, manifest, result); err != nil {

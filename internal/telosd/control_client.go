@@ -84,6 +84,13 @@ func (c *billingClient) MintSessionKey(sessionID, parentSessionID, userAuthoriza
 	if raw.BaseURL == "" || raw.APIKey == "" {
 		return controlSessionKey{}, fmt.Errorf("billing returned invalid session key")
 	}
+	raw.SessionID = strings.TrimSpace(raw.SessionID)
+	if raw.SessionID == "" {
+		return controlSessionKey{}, fmt.Errorf("billing returned invalid session key: missing session_id")
+	}
+	if raw.SessionID != strings.TrimSpace(sessionID) {
+		return controlSessionKey{}, fmt.Errorf("billing returned session key for %q, want %q", raw.SessionID, strings.TrimSpace(sessionID))
+	}
 	return controlSessionKey{
 		SessionID: raw.SessionID,
 		BaseURL:   strings.TrimRight(raw.BaseURL, "/"),

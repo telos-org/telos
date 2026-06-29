@@ -105,7 +105,7 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) (*SessionD
 			}
 			if errText != "" {
 				addDiagnosticsFailure(diagnostics.Failures, spec, ClassifyFailure(errText))
-				recordEvidenceFailureCode(evidenceFailureCodes, specName, stringFromMap(data, "error_code"))
+				recordEvidenceFailureCode(evidenceFailureCodes, spec, specName, stringFromMap(data, "error_code"))
 			} else if result == "failure" && len(diagnostics.Failures) == 0 {
 				addDiagnosticsFailure(diagnostics.Failures, spec, "goal_failure")
 			}
@@ -121,7 +121,7 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) (*SessionD
 		case "agent_failure_recoverable", "game_error", "error":
 			errorCode := stringFromMap(data, "error_code")
 			addDiagnosticsFailure(diagnostics.Failures, spec, ClassifyFailure(firstDiagnosticsNonEmpty(errorCode, stringFromMap(data, "error"))))
-			recordEvidenceFailureCode(evidenceFailureCodes, specName, errorCode)
+			recordEvidenceFailureCode(evidenceFailureCodes, spec, specName, errorCode)
 		case "agent_complete":
 			if event.Role != nil && *event.Role == "verifier" &&
 				stringFromMap(data, "status") == "CONTINUE" && stringFromMap(data, "error") == "" {
@@ -158,26 +158,41 @@ func DiagnosticsFromEvents(session *Session, events []SessionEvent) *SessionDiag
 	return diagnostics
 }
 
-func recordEvidenceFailureCode(bySpec map[string]map[string]bool, specName, code string) {
+func recordEvidenceFailureCode(bySpec map[string]map[string]bool, spec *SessionSpecDiagnostics, specName, code string) {
 	if code == "" {
 		return
 	}
-	set := bySpec[specName]
-	if set == nil {
-		set = map[string]bool{}
-		bySpec[specName] = set
+	names := []string{specName}
+	if spec != nil {
+		names = append(names, spec.Name, spec.DirName)
 	}
-	set[code] = true
+	for _, name := range names {
+		if name == "" {
+			continue
+		}
+		set := bySpec[name]
+		if set == nil {
+			set = map[string]bool{}
+			bySpec[name] = set
+		}
+		set[code] = true
+	}
 }
 
 // evidenceFailureAlreadyCounted reports whether an evidence event for the given
 // spec already recorded a failure with this error code, so the session-log
 // scan can skip double-counting the same underlying turn failure.
-func evidenceFailureAlreadyCounted(bySpec map[string]map[string]bool, specName, code string) bool {
+func evidenceFailureAlreadyCounted(diagnostics *SessionDiagnosticsResponse, bySpec map[string]map[string]bool, specName, code string) bool {
 	if code == "" {
 		return false
 	}
-	return bySpec[specName][code]
+	if bySpec[specName][code] {
+		return true
+	}
+	if spec := diagnosticsSpecByName(diagnostics, specName); spec != nil {
+		return bySpec[spec.Name][code] || bySpec[spec.DirName][code]
+	}
+	return false
 }
 
 func appendSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, sessionDir string, evidenceFailureCodes map[string]map[string]bool) error {
@@ -254,7 +269,7 @@ func readSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, path str
 				Retryable:          retryable,
 				ProviderStatusCode: p.ProviderStatusCode,
 			})
-			if !evidenceFailureAlreadyCounted(evidenceFailureCodes, specName, errorCode) {
+			if !evidenceFailureAlreadyCounted(diagnostics, evidenceFailureCodes, specName, errorCode) {
 				addDiagnosticsFailure(diagnostics.Failures, diagnosticsSpecByName(diagnostics, specName), ClassifyFailure(errorText))
 			}
 		case agentsession.KindModelResponse:

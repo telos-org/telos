@@ -68,6 +68,10 @@ func (m *taskStateMachine) advance(turn TurnResult) (GameResult, bool) {
 			return "", false
 		}
 		if turn.Error == "" && turn.Status == StatusConcede {
+			if !m.proverDelivered {
+				m.state = ObjectiveStateBlocked
+				return GameFailure, true
+			}
 			m.state = ObjectiveStateFinalize
 			return GameSuccess, true
 		}

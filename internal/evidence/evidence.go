@@ -200,5 +200,5 @@ func ErrorCode(errText string) string {
 			return errText[:i]
 		}
 	}
-	return ""
+	return errText
 }

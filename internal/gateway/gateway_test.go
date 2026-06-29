@@ -20,6 +20,24 @@ func TestResolveUsesEnvGatewayFirst(t *testing.T) {
 	if cred.BaseURL != "https://env.example.com/v1" || cred.APIKey != "env-key" {
 		t.Fatalf("credential: %+v", cred)
 	}
+	if cred.CostHardLimit {
+		t.Fatalf("env BYO gateway should not hard-enforce unknown cost by default: %+v", cred)
+	}
+}
+
+func TestResolveEnvGatewayCanBeBillingBacked(t *testing.T) {
+	t.Setenv("TELOS_LITELLM_BASE_URL", "https://env.example.com/v1")
+	t.Setenv("TELOS_LITELLM_API_KEY", "env-key")
+	t.Setenv("TELOS_ENV_ID", "env_test")
+	t.Setenv("TELOS_BILLING_ENV_TOKEN", "billing-token")
+
+	cred, err := Resolve("sess-1")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !cred.CostHardLimit {
+		t.Fatalf("billing-backed env gateway should hard-enforce unknown cost: %+v", cred)
+	}
 }
 
 func TestResolveUsesBYOConfig(t *testing.T) {
@@ -43,6 +61,9 @@ gateway:
 	}
 	if cred.BaseURL != "https://file.example.com/v1" || cred.APIKey != "file-key" {
 		t.Fatalf("credential: %+v", cred)
+	}
+	if cred.CostHardLimit {
+		t.Fatalf("BYO config should not hard-enforce unknown cost: %+v", cred)
 	}
 }
 
@@ -81,5 +102,8 @@ func TestResolveManagedMintsSessionKey(t *testing.T) {
 	}
 	if cred.BaseURL != "https://managed.example.com/v1" || cred.APIKey != "sk-managed" {
 		t.Fatalf("credential: %+v", cred)
+	}
+	if !cred.CostHardLimit {
+		t.Fatalf("managed gateway should hard-enforce unknown cost: %+v", cred)
 	}
 }

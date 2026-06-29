@@ -262,7 +262,13 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 	corrections := map[string]int{}
 	usedTool := false
 
-	for i := 0; i < maxLoops; i++ {
+	toolLoops := 0
+	for {
+		if toolLoops >= maxLoops {
+			err := newExecutorError(errAgentIncomplete, fmt.Sprintf("tool_loop_exceeded:%d", maxLoops))
+			_ = l.logger.errorEvent(l.client.sequence, err)
+			return "", stats, err
+		}
 		if err := l.checkBudget(stats); err != nil {
 			_ = l.logger.errorEvent(l.client.sequence, err)
 			return "", stats, err
@@ -288,7 +294,7 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 			if prompt == "" {
 				return turn.text, stats, nil
 			}
-			if corrections[key] < maxProtocolCorrections(l.role, l.protocolMode, key) && i+1 < maxLoops {
+			if corrections[key] < maxProtocolCorrections(l.role, l.protocolMode, key) {
 				corrections[key]++
 				_ = l.logger.protocolCorrection(key, prompt)
 				l.client.recordCorrection(prompt)
@@ -300,6 +306,7 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 		}
 
 		usedTool = true
+		toolLoops++
 		for _, call := range turn.calls {
 			_ = l.logger.toolCall(call)
 		}
@@ -310,12 +317,12 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 		}
 		l.client.recordToolResults(results)
 	}
-	err := newExecutorError(errAgentIncomplete, fmt.Sprintf("tool_loop_exceeded:%d", maxLoops))
-	_ = l.logger.errorEvent(l.client.sequence, err)
-	return "", stats, err
 }
 
 func (l *agentLoop) checkBudget(stats game.TurnStats) error {
+	if l.budget.RemainingCostUSD != nil && l.budget.CostHardLimit && stats.CostUnavailable {
+		return newExecutorError(errRuntimeBudgetExhausted, "max_cost_usd_cost_unavailable")
+	}
 	if l.budget.RemainingCostUSD != nil && stats.CostUSD >= *l.budget.RemainingCostUSD {
 		return newExecutorError(errRuntimeBudgetExhausted, "max_cost_usd")
 	}
@@ -374,50 +381,21 @@ func protocolCorrectionForStrict(role, protocolMode, task, text string, usedTool
 }
 
 func hasStatusTag(text string) bool {
-	if !hasExactTag(text, "status") {
+	if strings.Count(text, "<status>") != 1 || strings.Count(text, "</status>") != 1 {
 		return false
 	}
-	value, ok := tagValue(text, "status")
-	if !ok {
-		return false
-	}
-	switch strings.ToUpper(strings.TrimSpace(value)) {
-	case string(game.StatusContinue), string(game.StatusConcede):
-		return true
-	default:
-		return false
-	}
-}
-
-func hasExactTag(text, tag string) bool {
-	return strings.Count(text, "<"+tag+">") == 1 && strings.Count(text, "</"+tag+">") == 1
+	_, ok := game.ParseFinalStatus(text)
+	return ok
 }
 
 func statusIsContinue(text string) bool {
-	value, ok := tagValue(text, "status")
-	return ok && strings.EqualFold(strings.TrimSpace(value), string(game.StatusContinue))
+	status, ok := game.ParseFinalStatus(text)
+	return ok && status == game.StatusContinue
 }
 
 func verifierConcedes(text string) bool {
-	if !hasStatusTag(text) {
-		return false
-	}
-	value, ok := tagValue(text, "status")
-	return ok && strings.EqualFold(strings.TrimSpace(value), string(game.StatusConcede))
-}
-
-func tagValue(text, tag string) (string, bool) {
-	open := "<" + tag + ">"
-	close := "</" + tag + ">"
-	start := strings.Index(text, open)
-	if start < 0 {
-		return "", false
-	}
-	end := strings.Index(text[start+len(open):], close)
-	if end < 0 {
-		return "", false
-	}
-	return text[start+len(open) : start+len(open)+end], true
+	status, ok := game.ParseFinalStatus(text)
+	return ok && status == game.StatusConcede
 }
 
 func nativeSystemPrompt(role string) string {

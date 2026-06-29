@@ -223,6 +223,34 @@ func TestClientMintSessionKey(t *testing.T) {
 	}
 }
 
+func TestClientMintSessionKeyRejectsInvalidSessionID(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+	}{
+		{name: "missing"},
+		{name: "mismatch", sessionID: "sess-other"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"session_id": tt.sessionID,
+					"base_url":   "https://proxy.example.com/v1",
+					"api_key":    "sk-session",
+				})
+			}))
+			defer srv.Close()
+
+			client := NewClient(srv.URL, "test-token")
+			if _, err := client.MintSessionKey("sess-1"); err == nil {
+				t.Fatal("expected invalid session_id error")
+			}
+		})
+	}
+}
+
 func TestClientForwardsUserAuthorization(t *testing.T) {
 	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

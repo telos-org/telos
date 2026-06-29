@@ -1049,6 +1049,60 @@ func TestDiagnosticsDedupsFailuresBetweenEvidenceAndSessionLog(t *testing.T) {
 	}
 }
 
+func TestDiagnosticsDedupsFailuresWhenSpecNameDiffersFromDirName(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	markdown := createSessionBody(t, "dedup")
+	created := createSession(t, srv.URL, markdown)
+
+	manifestPath := filepath.Join(store.Root, created.SessionID, "session.json")
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	manifest.Specs[0].Name = "canonical-dedup"
+	manifest.Specs[0].DirName = "dedup"
+	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	evidence := strings.Join([]string{
+		`{"event":"agent_failure_recoverable","spec_name":"canonical-dedup","round":1,"role":"prover","data":{"error_code":"provider_rate_limited","error":"provider_rate_limited: HTTP 429"}}`,
+		`{"event":"game_end","spec_name":"canonical-dedup","round":2,"data":{"game_result":"failure","completion_reason":"runtime_budget_exhausted","total_cost_usd":0.1,"total_input_tokens":100,"total_output_tokens":20,"prover_rounds":1,"verifier_rounds":1}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	turnDir := filepath.Join(store.Root, created.SessionID, "specs", "dedup", "turns", "0001-prover")
+	if err := os.MkdirAll(turnDir, 0o755); err != nil {
+		t.Fatalf("create turn dir: %v", err)
+	}
+	sessionLog := `{"type":"error","data":{"sequence":1,"error_code":"provider_rate_limited","error":"provider_rate_limited: HTTP 429","retryable":true}}` + "\n"
+	if err := os.WriteFile(filepath.Join(turnDir, "session.jsonl"), []byte(sessionLog), 0o644); err != nil {
+		t.Fatalf("write session log: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/diagnostics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+
+	var diagnostics sessionapi.SessionDiagnosticsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&diagnostics); err != nil {
+		t.Fatalf("decode diagnostics: %v", err)
+	}
+	if diagnostics.Failures["provider"] != 1 {
+		t.Fatalf("provider failure should be deduped across spec aliases, got %d: %#v", diagnostics.Failures["provider"], diagnostics.Failures)
+	}
+	if len(diagnostics.Specs) != 1 || diagnostics.Specs[0].Name != "canonical-dedup" || diagnostics.Specs[0].DirName != "dedup" {
+		t.Fatalf("spec diagnostics: %#v", diagnostics.Specs)
+	}
+}
+
 func TestEventsSSE(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()

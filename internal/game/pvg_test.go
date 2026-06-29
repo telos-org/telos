@@ -435,7 +435,7 @@ func TestPVGUntilRunsExactReviewCycles(t *testing.T) {
 	}
 }
 
-func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
+func TestPVGRecoverableProverFailureCannotSucceedOnVerifierConcession(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()
 	specDir := filepath.Join(dir, "specs", "pvg-test")
@@ -454,8 +454,11 @@ func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
 	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
 	result := pvg.Run()
 
-	if result.GameResult != GameSuccess {
-		t.Fatalf("expected success, got %s error=%q", result.GameResult, result.Error)
+	if result.GameResult != GameFailure {
+		t.Fatalf("expected failure, got %s error=%q", result.GameResult, result.Error)
+	}
+	if result.Error != "no_successful_implementation" {
+		t.Fatalf("error: got %q", result.Error)
 	}
 	if result.Rounds != 2 {
 		t.Fatalf("rounds: got %d", result.Rounds)
@@ -473,6 +476,36 @@ func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
 	}
 	if strings.Count(string(evidenceData), `"error_code":"provider_rate_limited"`) < 2 {
 		t.Fatalf("evidence should carry typed error code on agent_complete and recoverable failure:\n%s", evidenceData)
+	}
+	if !strings.Contains(string(evidenceData), `"error_code":"no_successful_implementation"`) {
+		t.Fatalf("game_end should carry no-successful-implementation error code:\n%s", evidenceData)
+	}
+}
+
+func TestPVGSuccessfulProverStillSucceedsOnVerifierConcession(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-successful-prover")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "implemented"},
+		},
+		verifierResults: []TurnResult{
+			{Role: "verifier", Status: StatusConcede, Logs: "LGTM\n<status>CONCEDE</status>\n"},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
+	result := pvg.Run()
+
+	if result.GameResult != GameSuccess {
+		t.Fatalf("expected success, got %s error=%q", result.GameResult, result.Error)
+	}
+	if !result.VerifierConceded {
+		t.Fatal("expected verifier concession to be recorded")
 	}
 }
 
@@ -613,7 +646,7 @@ func TestPVGBudgetExceeded(t *testing.T) {
 	}
 }
 
-func TestPVGLogsCostCapUnenforceableOnce(t *testing.T) {
+func TestPVGCostCapUnavailableBYOLogsWarningOnly(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()
 	specDir := filepath.Join(dir, "specs", "pvg-test")
@@ -634,7 +667,7 @@ func TestPVGLogsCostCapUnenforceableOnce(t *testing.T) {
 	result := pvg.Run()
 
 	if result.GameResult != GameSuccess {
-		t.Fatalf("cost-unavailable run should not cost-fail, got %s error=%q", result.GameResult, result.Error)
+		t.Fatalf("BYO cost-unavailable run should not cost-fail, got %s error=%q", result.GameResult, result.Error)
 	}
 	data, err := os.ReadFile(state.EvidencePath)
 	if err != nil {
@@ -643,8 +676,46 @@ func TestPVGLogsCostCapUnenforceableOnce(t *testing.T) {
 	if got := strings.Count(string(data), `"event":"cost_cap_unenforceable"`); got != 1 {
 		t.Fatalf("cost cap warning events: got %d\n%s", got, data)
 	}
-	if strings.Contains(string(data), `"budget":"max_cost_usd"`) {
-		t.Fatalf("cost-unavailable run should not emit cost budget exhaustion:\n%s", data)
+	if strings.Contains(string(data), `"budget":"max_cost_usd_cost_unavailable"`) {
+		t.Fatalf("BYO cost-unavailable run should not emit terminal budget exhaustion:\n%s", data)
+	}
+}
+
+func TestPVGCostCapUnavailableManagedFailsClosed(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-cost-unavailable-managed")
+	state.Ensure()
+
+	maxCost := 1.0
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "cost unknown", Stats: TurnStats{CostUnavailable: true}},
+		},
+		verifierResults: []TurnResult{
+			{Role: "verifier", Status: StatusConcede, Logs: "LGTM\n<status>CONCEDE</status>\n", Stats: TurnStats{CostUnavailable: true}},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{MaxCostUSD: &maxCost, CostHardLimit: true})
+	result := pvg.Run()
+
+	if result.GameResult != GameFailure {
+		t.Fatalf("cost-unavailable run should fail closed, got %s error=%q", result.GameResult, result.Error)
+	}
+	if result.Error != "runtime_budget_exhausted:max_cost_usd_cost_unavailable" {
+		t.Fatalf("error: got %q", result.Error)
+	}
+	data, err := os.ReadFile(state.EvidencePath)
+	if err != nil {
+		t.Fatalf("read evidence: %v", err)
+	}
+	if got := strings.Count(string(data), `"event":"cost_cap_unenforceable"`); got != 1 {
+		t.Fatalf("cost cap warning events: got %d\n%s", got, data)
+	}
+	if !strings.Contains(string(data), `"budget":"max_cost_usd_cost_unavailable"`) {
+		t.Fatalf("cost-unavailable run should emit terminal budget exhaustion:\n%s", data)
 	}
 }
 

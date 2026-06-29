@@ -22,8 +22,9 @@ type nativeConfig struct {
 // GatewayConfig is an explicit gateway credential supplied by the CLI or telosd.
 // When empty, the executor falls back to TELOS_LITELLM_* environment variables.
 type GatewayConfig struct {
-	BaseURL string
-	APIKey  string
+	BaseURL       string
+	APIKey        string
+	CostHardLimit bool
 }
 
 func resolveNativeConfig() (nativeConfig, error) {
@@ -41,6 +42,17 @@ func resolveNativeConfig() (nativeConfig, error) {
 		capability:        parseModelCapabilityTable(),
 		defaultCapability: modelCapabilityProfileFromEnv(),
 	}, nil
+}
+
+func costHardLimitFromEnv() bool {
+	raw := strings.TrimSpace(os.Getenv("TELOS_COST_HARD_LIMIT"))
+	if raw != "" {
+		value, err := strconv.ParseBool(raw)
+		return err == nil && value
+	}
+	return strings.TrimSpace(os.Getenv("TELOS_ENV_ID")) != "" &&
+		(strings.TrimSpace(os.Getenv("TELOS_BILLING_ENV_TOKEN")) != "" ||
+			strings.TrimSpace(os.Getenv("TELOS_BILLING_ENV_TOKEN_FILE")) != "")
 }
 
 func resolveNativeConfigWithGateway(gateway GatewayConfig) (nativeConfig, error) {

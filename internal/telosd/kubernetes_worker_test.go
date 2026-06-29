@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -366,6 +367,87 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_BASE_URL", "https://managed.example.com/v1")
 }
 
+func TestKubernetesSubstrateSessionGatewayCredentialConcurrentMintOnce(t *testing.T) {
+	t.Setenv("TELOS_LITELLM_API_KEY", "")
+	t.Setenv("TELOS_LITELLM_BASE_URL", "")
+	var mu sync.Mutex
+	mintCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/internal/sessions/sess_cloud/mint" {
+			http.NotFound(w, r)
+			return
+		}
+		mu.Lock()
+		mintCalls++
+		mu.Unlock()
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"session_id": "sess_cloud",
+			"base_url":   "https://managed.example.com/v1",
+			"api_key":    "sk-managed",
+			"key_alias":  "sess_cloud",
+		})
+	}))
+	defer server.Close()
+
+	cfg := testCloudConfig(t)
+	cfg.Billing.Endpoint = server.URL
+	cfg.Billing.EnvID = "env_test"
+	cfg.Billing.Token = "billing-token"
+	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "")
+			errs <- err
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	mu.Lock()
+	got := mintCalls
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("mint calls: got %d", got)
+	}
+}
+
+func TestKubernetesWorkerEnvIncludesBillingConfig(t *testing.T) {
+	cfg := testCloudConfig(t)
+	cfg.Billing.Endpoint = "https://billing.example.com"
+	cfg.Billing.EnvID = "env_test"
+	cfg.Billing.Token = "billing-token"
+	substrate := newKubernetesSubstrateWithClient(cfg, fake.NewSimpleClientset(testEnvObjects(cfg)...))
+
+	env := substrate.workerEnv("sess_cloud", &sessionapi.Manifest{})
+	if got := envValue(env, "TELOS_ENV_ID"); got != "env_test" {
+		t.Fatalf("TELOS_ENV_ID: got %q", got)
+	}
+	if got := envValue(env, "TELOS_BILLING_ENDPOINT"); got != "https://billing.example.com" {
+		t.Fatalf("TELOS_BILLING_ENDPOINT: got %q", got)
+	}
+	token := envByName(env, "TELOS_BILLING_ENV_TOKEN")
+	if token == nil || token.ValueFrom == nil || token.ValueFrom.SecretKeyRef == nil || token.ValueFrom.SecretKeyRef.Key != "TELOS_BILLING_ENV_TOKEN" {
+		t.Fatalf("TELOS_BILLING_ENV_TOKEN env: %+v", token)
+	}
+	secret := substrate.agentSecret("ns-worker", nil)
+	if got := string(secret.Data["TELOS_BILLING_ENV_TOKEN"]); got != "billing-token" {
+		t.Fatalf("billing token secret: got %q", got)
+	}
+	if got := envValue(env, "TELOS_COST_HARD_LIMIT"); got != "true" {
+		t.Fatalf("TELOS_COST_HARD_LIMIT: got %q", got)
+	}
+}
+
 func TestBillingClientMintsChildSessionWithParentLineage(t *testing.T) {
 	var gotBody map[string]string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -407,6 +489,33 @@ func TestBillingClientMintsChildSessionWithParentLineage(t *testing.T) {
 	}
 	if gotBody["env_id"] != "env_test" || gotBody["parent_session_id"] != "sess_parent" {
 		t.Fatalf("body: %+v", gotBody)
+	}
+}
+
+func TestBillingClientRejectsInvalidMintSessionID(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+	}{
+		{name: "missing"},
+		{name: "mismatch", sessionID: "other"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"session_id": tt.sessionID,
+					"base_url":   "https://managed.example.com/v1",
+					"api_key":    "sk-child",
+				})
+			}))
+			defer server.Close()
+
+			client := newBillingClient(BillingConfig{Endpoint: server.URL, EnvID: "env_test", Token: "billing-token"})
+			if _, err := client.MintSessionKey("sess_child", "", ""); err == nil {
+				t.Fatal("expected invalid session_id error")
+			}
+		})
 	}
 }
 
@@ -598,6 +707,22 @@ func assertSecretData(t *testing.T, client *fake.Clientset, namespace string, na
 	if got := string(secret.Data[key]); got != want {
 		t.Fatalf("%s/%s[%s]: got %q, want %q", namespace, name, key, got, want)
 	}
+}
+
+func envByName(env []corev1.EnvVar, name string) *corev1.EnvVar {
+	for i := range env {
+		if env[i].Name == name {
+			return &env[i]
+		}
+	}
+	return nil
+}
+
+func envValue(env []corev1.EnvVar, name string) string {
+	if v := envByName(env, name); v != nil {
+		return v.Value
+	}
+	return ""
 }
 
 func assertNoWorkerRBACEscalation(t *testing.T, rules []rbacv1.PolicyRule) {

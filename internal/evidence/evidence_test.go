@@ -171,3 +171,21 @@ func TestEvidenceNilData(t *testing.T) {
 		t.Errorf("data should be empty: got %v", d)
 	}
 }
+
+func TestErrorCode(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "provider_timeout:turn_timeout:1", want: "provider_timeout"},
+		{input: "no_successful_implementation", want: "no_successful_implementation"},
+		{input: "", want: ""},
+		{input: ":leading", want: ""},
+		{input: " agent_protocol", want: ""},
+	}
+	for _, tt := range tests {
+		if got := ErrorCode(tt.input); got != tt.want {
+			t.Fatalf("ErrorCode(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}

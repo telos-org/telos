@@ -107,6 +107,9 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 		if p.shouldStop() {
 			return p.end(GameStopped)
 		}
+		if p.costCapUnavailableExceeded(p.Result.Rounds, turn.Role, turn.Stats) {
+			return p.end(GameFailure)
+		}
 
 		// The state machine owns the prover/verify/repair/finalize transitions.
 		// The ledger records the state the machine just computed instead of
@@ -123,7 +126,7 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 			recoverableFailures = 0
 		}
 		if terminal {
-			if result == GameFailure && p.fixedReviewMode() && !machine.proverDelivered && p.Result.Error == "" {
+			if result == GameFailure && !machine.proverDelivered && p.Result.Error == "" {
 				p.Result.Error = "no_successful_implementation"
 			}
 			if result == GameSuccess && !p.fixedReviewMode() && turn.Role == RoleVerifier && turn.Status == StatusConcede {
@@ -273,6 +276,20 @@ func (p *PVG) logCostCapUnenforceable(roundNum int, role string, stats TurnStats
 	})
 }
 
+func (p *PVG) costCapUnavailableExceeded(roundNum int, role string, stats TurnStats) bool {
+	if p.Config.MaxCostUSD == nil || !stats.CostUnavailable || !p.Config.CostHardLimit {
+		return false
+	}
+	p.Result.Error = "runtime_budget_exhausted:max_cost_usd_cost_unavailable"
+	p.Evidence.Log("budget_exceeded", roundNum, role, map[string]interface{}{
+		"budget":      "max_cost_usd_cost_unavailable",
+		"cap_usd":     *p.Config.MaxCostUSD,
+		"reason":      "provider returned no cost",
+		"fail_closed": true,
+	})
+	return true
+}
+
 // turnSkills builds the structured skill roster handed to the executor, mirror
 // of the roster rendered into the prompt. Passing it structurally keeps the
 // executor's skill tool independent of the rendered prompt's wording.
@@ -306,6 +323,7 @@ func (p *PVG) turnBudget() TurnBudget {
 		MaxOutputTokens: p.Config.MaxOutputTokens,
 		MaxToolLoops:    p.Config.MaxToolLoops,
 		AgentTimeoutSec: p.Config.AgentTimeoutSec,
+		CostHardLimit:   p.Config.CostHardLimit,
 	}
 	if p.Config.MaxCostUSD != nil {
 		budget.MaxCostUSD = p.Config.MaxCostUSD

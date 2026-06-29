@@ -84,6 +84,7 @@ func (l *nativeSessionLogger) budget(maxToolLoops, maxOutputTokens int, budget g
 		MaxOutputTokens:        maxOutputTokens,
 		MaxCostUSD:             budget.MaxCostUSD,
 		RemainingCostUSD:       budget.RemainingCostUSD,
+		CostHardLimit:          budget.CostHardLimit,
 		MaxDurationSec:         budget.MaxDurationSec,
 		RemainingDurationSec:   budget.RemainingDurationSec,
 		AgentTimeoutSec:        budget.AgentTimeoutSec,

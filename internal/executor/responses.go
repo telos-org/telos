@@ -151,19 +151,13 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 	mainStats := t.statsFromResponse(final)
 	_ = t.logger.modelResponse(seq, final.ID, responseStopReason(final), mainStats)
 	stats := mergeTurnStats(compStats, mainStats)
-	if final.Status == responses.ResponseStatusIncomplete && len(calls) > 0 && !toolCallsHaveCompleteArguments(calls) {
+	if final.Status == responses.ResponseStatusIncomplete {
 		reason := final.IncompleteDetails.Reason
 		if reason == "" {
 			reason = "unknown"
 		}
-		err := newExecutorError(errAgentIncomplete, reason+":incomplete_tool_arguments")
-		_ = t.logger.errorEvent(seq, err)
-		return agentTurn{stats: stats}, err
-	}
-	if final.Status == responses.ResponseStatusIncomplete && len(calls) == 0 {
-		reason := final.IncompleteDetails.Reason
-		if reason == "" {
-			reason = "unknown"
+		if len(calls) > 0 && !toolCallsHaveCompleteArguments(calls) {
+			reason += ":incomplete_tool_arguments"
 		}
 		err := newExecutorError(errAgentIncomplete, reason)
 		_ = t.logger.errorEvent(seq, err)
@@ -591,7 +585,6 @@ func costFromResponseHeaders(headers http.Header) (float64, bool) {
 		"x-litellm-response-cost",
 		"x-litellm-cost",
 		"x-response-cost",
-		"x-litellm-spend",
 	} {
 		raw := strings.TrimSpace(headers.Get(name))
 		if raw == "" {

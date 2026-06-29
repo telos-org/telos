@@ -106,3 +106,18 @@ func TestTaskStateMachineReviewModeSucceedsWhenProverDelivers(t *testing.T) {
 		t.Fatalf("clean prover + completed review should succeed: result=%q terminal=%v delivered=%v", result, terminal, machine.proverDelivered)
 	}
 }
+
+func TestTaskStateMachineNormalModeFailsWhenVerifierConcedesWithoutProverDelivery(t *testing.T) {
+	machine := newTaskStateMachine(0)
+
+	machine.advance(TurnResult{
+		Role:        "prover",
+		Status:      StatusContinue,
+		Error:       "provider_rate_limited: retry later",
+		Recoverable: true,
+	})
+	result, terminal := machine.advance(TurnResult{Role: "verifier", Status: StatusConcede})
+	if !terminal || result != GameFailure || machine.state != ObjectiveStateBlocked {
+		t.Fatalf("verifier concession without delivered prover should fail: result=%q terminal=%v state=%q", result, terminal, machine.state)
+	}
+}

@@ -28,6 +28,16 @@ type fakeExecutor struct {
 	tasks          []string
 }
 
+type cleanupFakeExecutor struct {
+	fakeExecutor
+	cleaned bool
+}
+
+func (f *cleanupFakeExecutor) Cleanup() error {
+	f.cleaned = true
+	return nil
+}
+
 func (f *fakeExecutor) ExecuteTurn(task string, ts *game.TurnState) game.TurnResult {
 	f.tasks = append(f.tasks, task)
 	role := ""
@@ -813,6 +823,35 @@ func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	if sessionAPI.Status != sessionapi.StatusCompleted {
 		t.Errorf("status: got %s", sessionAPI.Status)
 	}
+}
+
+func TestRunLocalSessionCleansUpExecutorOnPanic(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	exec := &cleanupFakeExecutor{}
+	exec.onExecute = func(role string) {
+		panic("executor panic")
+	}
+
+	defer func() {
+		if recovered := recover(); recovered == nil {
+			t.Fatal("expected executor panic")
+		}
+		if !exec.cleaned {
+			t.Fatal("expected executor cleanup to run during panic unwind")
+		}
+	}()
+	_, _ = RunLocalSessionWithExecutor(session.SessionDir, exec)
 }
 
 func TestRunLocalSessionWithNativeExecutorCompletesSmallCodeChange(t *testing.T) {

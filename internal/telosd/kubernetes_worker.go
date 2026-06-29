@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -42,7 +43,13 @@ type kubernetesSubstrate struct {
 	runtimeMountPath  string
 	runtimeTelosPath  string
 	runtimeTelosdPath string
+	billingEndpoint   string
+	billingEnvID      string
+	billingToken      string
+	billingTokenFile  string
 }
+
+var sessionGatewayLocks sync.Map
 
 var litellmBaseURLEnvNames = []string{"TELOS_LITELLM_BASE_URL", "TELOS_API_BASE_URL", "TELOS_BASE_URL"}
 
@@ -77,6 +84,10 @@ func newKubernetesSubstrateWithClient(cfg Config, client kubernetes.Interface) k
 		runtimeMountPath:  runtimeMountPath,
 		runtimeTelosPath:  runtimeMountPath + "/telos",
 		runtimeTelosdPath: runtimeMountPath + "/telosd",
+		billingEndpoint:   cfg.Billing.Endpoint,
+		billingEnvID:      cfg.Billing.EnvID,
+		billingToken:      cfg.Billing.Token,
+		billingTokenFile:  cfg.Billing.TokenFile,
 	}
 }
 
@@ -206,6 +217,7 @@ func (s kubernetesSubstrate) agentSecret(namespace string, credential *controlSe
 	if name, value := configuredLiteLLMBaseURL(); name != "" && value != "" {
 		data[name] = []byte(value)
 	}
+	s.applyBillingCredential(data)
 	applyGatewayCredential(data, s.agentSecretKey, credential)
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: s.agentSecretName, Namespace: namespace},
@@ -353,6 +365,26 @@ func (s kubernetesSubstrate) workerEnv(sessionID string, m *sessionapi.Manifest)
 	if m.Access != nil && strings.TrimSpace(m.Access.APIToken) != "" {
 		env = append(env, corev1.EnvVar{Name: "TELOS_API_TOKEN", Value: m.Access.APIToken})
 	}
+	if s.billingEnvID != "" {
+		env = append(env, corev1.EnvVar{Name: "TELOS_ENV_ID", Value: s.billingEnvID})
+	}
+	if s.billingEndpoint != "" {
+		env = append(env, corev1.EnvVar{Name: "TELOS_BILLING_ENDPOINT", Value: s.billingEndpoint})
+	}
+	if s.billingToken != "" {
+		env = append(env, corev1.EnvVar{
+			Name: "TELOS_BILLING_ENV_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: s.agentSecretName},
+				Key:                  "TELOS_BILLING_ENV_TOKEN",
+			}},
+		})
+	} else if s.billingTokenFile != "" {
+		env = append(env, corev1.EnvVar{Name: "TELOS_BILLING_ENV_TOKEN_FILE", Value: s.billingTokenFile})
+	}
+	if s.billingEnvID != "" && (s.billingToken != "" || s.billingTokenFile != "") {
+		env = append(env, corev1.EnvVar{Name: "TELOS_COST_HARD_LIMIT", Value: "true"})
+	}
 	return env
 }
 
@@ -470,6 +502,7 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 		if name, envValue := configuredLiteLLMBaseURL(); name != "" && envValue != "" {
 			secret.Data[name] = []byte(envValue)
 		}
+		s.applyBillingCredential(secret.Data)
 		applyGatewayCredential(secret.Data, s.agentSecretKey, credential)
 	} else if !apierrors.IsNotFound(err) {
 		return err
@@ -487,6 +520,9 @@ func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessi
 	if s.billing == nil || !s.billing.configured() {
 		return nil, nil
 	}
+	lock := sessionGatewayLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
 	secretName := sessionGatewaySecretName(sessionID)
 	current, err := s.client.CoreV1().Secrets(s.envNamespace).Get(ctx, secretName, metav1.GetOptions{})
 	if err == nil {
@@ -506,6 +542,29 @@ func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessi
 		return nil, err
 	}
 	return &minted, nil
+}
+
+func sessionGatewayLock(sessionID string) *sync.Mutex {
+	value, _ := sessionGatewayLocks.LoadOrStore(sessionID, &sync.Mutex{})
+	return value.(*sync.Mutex)
+}
+
+func (s kubernetesSubstrate) applyBillingCredential(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	if s.billingEnvID != "" {
+		data["TELOS_ENV_ID"] = []byte(s.billingEnvID)
+	}
+	if s.billingEndpoint != "" {
+		data["TELOS_BILLING_ENDPOINT"] = []byte(s.billingEndpoint)
+	}
+	if s.billingToken != "" {
+		data["TELOS_BILLING_ENV_TOKEN"] = []byte(s.billingToken)
+	}
+	if s.billingTokenFile != "" {
+		data["TELOS_BILLING_ENV_TOKEN_FILE"] = []byte(s.billingTokenFile)
+	}
 }
 
 func sessionGatewaySecretName(sessionID string) string {

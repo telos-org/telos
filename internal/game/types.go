@@ -61,6 +61,7 @@ type AgentExecutor interface {
 type PVGConfig struct {
 	Until           int
 	MaxCostUSD      *float64
+	CostHardLimit   bool
 	MaxRounds       int
 	MaxDurationSec  int
 	MaxInputTokens  int
@@ -136,6 +137,7 @@ type TurnSkill struct {
 type TurnBudget struct {
 	MaxCostUSD            *float64
 	RemainingCostUSD      *float64
+	CostHardLimit         bool
 	MaxDurationSec        int
 	RemainingDurationSec  int
 	AgentTimeoutSec       int
@@ -167,15 +169,26 @@ var statusRE = regexp.MustCompile(`(?:^|\n)\s*<status>(\w+)</status>\s*$`)
 
 // ExtractStatus parses the final status tag from agent output.
 func ExtractStatus(text string) AgentStatus {
+	status, ok := ParseFinalStatus(text)
+	if !ok {
+		return StatusContinue
+	}
+	return status
+}
+
+// ParseFinalStatus parses a valid final status tag from agent output.
+func ParseFinalStatus(text string) (AgentStatus, bool) {
 	matches := statusRE.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
-		return StatusContinue
+		return StatusContinue, false
 	}
 	last := matches[len(matches)-1][1]
 	switch strings.ToUpper(last) {
 	case "CONCEDE":
-		return StatusConcede
+		return StatusConcede, true
+	case "CONTINUE":
+		return StatusContinue, true
 	default:
-		return StatusContinue
+		return StatusContinue, false
 	}
 }

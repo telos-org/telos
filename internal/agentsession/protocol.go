@@ -94,6 +94,7 @@ type BudgetPayload struct {
 	MaxOutputTokens        int      `json:"max_output_tokens"`
 	MaxCostUSD             *float64 `json:"max_cost_usd,omitempty"`
 	RemainingCostUSD       *float64 `json:"remaining_cost_usd,omitempty"`
+	CostHardLimit          bool     `json:"cost_hard_limit,omitempty"`
 	MaxDurationSec         int      `json:"max_duration_sec,omitempty"`
 	RemainingDurationSec   int      `json:"remaining_duration_sec,omitempty"`
 	AgentTimeoutSec        int      `json:"agent_timeout_sec,omitempty"`
