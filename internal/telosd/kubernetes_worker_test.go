@@ -137,6 +137,60 @@ func TestKubernetesSubstrateStopDeletesWorkerResources(t *testing.T) {
 	}
 }
 
+func TestKubernetesSubstrateStopReconcilesManagedBilling(t *testing.T) {
+	setLiteLLMGatewayEnv(t)
+
+	session := testCloudSession(t, sessionapi.KindController)
+	gotReconcile := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/internal/sessions/"+session.SessionID+"/mint":
+			if r.Header.Get("Authorization") != "Bearer env-billing-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"session_id": session.SessionID,
+				"base_url":   "https://managed.example.com/v1",
+				"api_key":    "sk-managed",
+				"key_alias":  session.SessionID,
+			})
+		case r.URL.Path == "/api/billing/reconcile/"+session.SessionID && r.URL.RawQuery == "terminal=true":
+			if r.Header.Get("Authorization") != "Bearer env-billing-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			gotReconcile = true
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"session_id":    session.SessionID,
+				"spent_usd":     0.2,
+				"units_debited": 20,
+				"state":         "settled",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	cfg := testCloudConfig(t)
+	cfg.Billing.Endpoint = server.URL
+	cfg.Billing.EnvID = "env_test"
+	cfg.Billing.Token = "env-billing-token"
+	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	if err := substrate.Apply(session, "controller_started", "Bearer user-token"); err != nil {
+		t.Fatal(err)
+	}
+	if err := substrate.Stop(session); err != nil {
+		t.Fatal(err)
+	}
+	if !gotReconcile {
+		t.Fatal("missing terminal billing reconcile")
+	}
+}
+
 func TestKubernetesSubstrateStopContinuesCleanupAfterWorkloadDeleteError(t *testing.T) {
 	setLiteLLMGatewayEnv(t)
 

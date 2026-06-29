@@ -138,7 +138,7 @@ func TestNormalizeCloudConfigRequiresBearerToken(t *testing.T) {
 func TestNormalizeCloudConfigRequiresBillingTokenWhenBillingConfigured(t *testing.T) {
 	t.Setenv("TELOS_API_TOKEN", "operator-token")
 	t.Setenv("TELOS_ENV_ID", "env_test")
-	t.Setenv("TELOS_BILLING_SERVICE_TOKEN", "")
+	t.Setenv("TELOS_BILLING_ENV_TOKEN", "")
 
 	_, err := NormalizeConfig(Config{Mode: ModeCloud})
 	if err == nil {
@@ -152,7 +152,7 @@ func TestNormalizeCloudConfigRequiresBillingTokenWhenBillingConfigured(t *testin
 func TestNormalizeCloudConfigAcceptsBillingTokenFromEnv(t *testing.T) {
 	t.Setenv("TELOS_API_TOKEN", "operator-token")
 	t.Setenv("TELOS_ENV_ID", "env_test")
-	t.Setenv("TELOS_BILLING_SERVICE_TOKEN", "billing-token")
+	t.Setenv("TELOS_BILLING_ENV_TOKEN", "billing-token")
 
 	cfg, err := NormalizeConfig(Config{Mode: ModeCloud})
 	if err != nil {

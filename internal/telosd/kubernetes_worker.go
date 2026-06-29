@@ -155,6 +155,11 @@ func (s kubernetesSubstrate) Stop(session *sessionapi.Session) error {
 	if err := s.deleteClusterRole(ctx, workerClusterRole(namespace).Name); err != nil {
 		stopErr = errors.Join(stopErr, fmt.Errorf("delete worker clusterrole %s: %w", workerClusterRole(namespace).Name, err))
 	}
+	if s.billing != nil && s.billing.configured() {
+		if err := s.billing.ReconcileSession(session.SessionID, true); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: reconcile managed billing: %v\n", err)
+		}
+	}
 	return stopErr
 }
 

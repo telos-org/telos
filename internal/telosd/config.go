@@ -194,7 +194,7 @@ func NormalizeConfig(cfg Config) (Config, error) {
 			cfg.Billing.EnvID = os.Getenv("TELOS_ENV_ID")
 		}
 		if cfg.Billing.TokenFile == "" {
-			cfg.Billing.TokenFile = os.Getenv("TELOS_BILLING_SERVICE_TOKEN_FILE")
+			cfg.Billing.TokenFile = os.Getenv("TELOS_BILLING_ENV_TOKEN_FILE")
 		}
 		if cfg.Billing.Token == "" {
 			if token, err := authTokenFromFile(cfg.Billing.TokenFile); err != nil {
@@ -204,7 +204,7 @@ func NormalizeConfig(cfg Config) (Config, error) {
 			}
 		}
 		if cfg.Billing.Token == "" {
-			cfg.Billing.Token = os.Getenv("TELOS_BILLING_SERVICE_TOKEN")
+			cfg.Billing.Token = os.Getenv("TELOS_BILLING_ENV_TOKEN")
 		}
 		if cfg.Billing.Endpoint != "" && cfg.Billing.EnvID != "" && cfg.Billing.Token == "" {
 			return Config{}, fmt.Errorf("billing.token is required when cloud billing is configured")

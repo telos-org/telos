@@ -42,7 +42,7 @@ func (c *billingClient) MintSessionKey(sessionID, parentSessionID, userAuthoriza
 		return controlSessionKey{}, fmt.Errorf("billing minting is not configured")
 	}
 	if strings.TrimSpace(parentSessionID) != "" && strings.TrimSpace(c.token) == "" && strings.TrimSpace(userAuthorization) == "" {
-		return controlSessionKey{}, fmt.Errorf("billing service token is required to mint a child session key")
+		return controlSessionKey{}, fmt.Errorf("billing env token is required to mint a child session key")
 	}
 	bodyMap := map[string]string{"env_id": c.envID}
 	if parentSessionID = strings.TrimSpace(parentSessionID); parentSessionID != "" {
@@ -97,7 +97,7 @@ func (c *billingClient) ReconcileSession(sessionID string, terminal bool) error 
 		return fmt.Errorf("billing reconciliation is not configured")
 	}
 	if strings.TrimSpace(c.token) == "" {
-		return fmt.Errorf("billing service token is required to reconcile a cloud session")
+		return fmt.Errorf("billing env token is required to reconcile a cloud session")
 	}
 	path := c.endpoint + "/api/billing/reconcile/" + strings.TrimSpace(sessionID)
 	if terminal {
