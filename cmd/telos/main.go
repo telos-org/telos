@@ -4,7 +4,7 @@
 //
 //	telos plan SPEC.md [--json]
 //	telos push SPEC.md [--json]
-//	telos apply SPEC.md [--env ENV] [--json]
+//	telos apply SPEC.md [--json]
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
 //	    [--until N] [--max-cost-usd USD] [--agent-timeout-sec SEC|0] [--json]
 //	telos list [--env ENV] [--limit N] [--wide] [--environments] [--local] [--cloud] [--json]
@@ -76,7 +76,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "commands:")
 	fmt.Fprintln(out, "  plan SPEC.md       Show compiled spec plan")
-	fmt.Fprintln(out, "  push SPEC.md       Push a spec package to the catalogue")
+	fmt.Fprintln(out, "  push SPEC.md       Push an immutable spec package")
 	fmt.Fprintln(out, "  apply SPEC.md      Apply a desired-state spec")
 	fmt.Fprintln(out, "  run SPEC.md        Run a local or delegated spec")
 	fmt.Fprintln(out, "  list               List sessions")

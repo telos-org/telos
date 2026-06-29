@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
@@ -492,6 +493,90 @@ func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	}
 }
 
+func TestApplyDeploymentPackageUpdatesExistingDeployment(t *testing.T) {
+	var updated bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+			json.NewEncoder(w).Encode(map[string]any{
+				"deployments": []map[string]any{{
+					"id":             "dep_123",
+					"name":           "auth",
+					"state":          "healthy",
+					"package_digest": "sha256:old",
+					"created_at":     "then",
+					"updated_at":     "then",
+				}},
+			})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/dep_123":
+			updated = true
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["package_digest"] != "sha256:new" {
+				t.Fatalf("body: got %#v", body)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":             "dep_123",
+				"name":           "auth",
+				"state":          "deploying",
+				"package_digest": "sha256:new",
+				"created_at":     "then",
+				"updated_at":     "now",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	operation, deployment, err := applyDeploymentPackage(cloud.NewClient(srv.URL, "test-token"), "auth", "sha256:new")
+	if err != nil {
+		t.Fatalf("applyDeploymentPackage: %v", err)
+	}
+	if operation != "updated" || !updated {
+		t.Fatalf("operation=%q updated=%v", operation, updated)
+	}
+	if deployment.ID != "dep_123" || deployment.PackageDigest != "sha256:new" {
+		t.Fatalf("deployment: got %+v", deployment)
+	}
+}
+
+func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
+	var created bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+			json.NewEncoder(w).Encode(map[string]any{"deployments": []map[string]any{}})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
+			created = true
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":             "dep_123",
+				"name":           "auth",
+				"state":          "provisioning",
+				"package_digest": "sha256:new",
+				"created_at":     "now",
+				"updated_at":     "now",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	operation, deployment, err := applyDeploymentPackage(cloud.NewClient(srv.URL, "test-token"), "auth", "sha256:new")
+	if err != nil {
+		t.Fatalf("applyDeploymentPackage: %v", err)
+	}
+	if operation != "created" || !created {
+		t.Fatalf("operation=%q created=%v", operation, created)
+	}
+	if deployment.ID != "dep_123" {
+		t.Fatalf("deployment: got %+v", deployment)
+	}
+}
+
 func TestCloudSessionClientsExplicitUnknownEnvReturnsError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/environments" {
@@ -658,6 +743,7 @@ func TestLocalRootSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
 
 func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
 	root := t.TempDir()
+	configureLocalOnlyTest(t)
 	t.Setenv("TELOS_SESSION_DIR", root)
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	markdown := "---\nversion: v0\nname: follow-test\nplatform: local\n---\n# Follow\n"
@@ -837,6 +923,7 @@ func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 }
 
 func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
+	configureLocalOnlyTest(t)
 	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
 
 	_, err := getSessionFromAnywhere("local_missing", "")
@@ -888,4 +975,13 @@ func configureCloudTest(t *testing.T, endpoint string) {
 	t.Setenv("TELOS_ENVIRONMENTS_CONFIG", filepath.Join(dir, "environments.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", endpoint)
 	t.Setenv("TELOS_AUTH_TOKEN", "control-token")
+}
+
+func configureLocalOnlyTest(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	t.Setenv("TELOS_CONFIG", filepath.Join(dir, "config.yaml"))
+	t.Setenv("TELOS_ENVIRONMENTS_CONFIG", filepath.Join(dir, "environments.yaml"))
+	t.Setenv("TELOS_API_ENDPOINT", "")
+	t.Setenv("TELOS_AUTH_TOKEN", "")
 }

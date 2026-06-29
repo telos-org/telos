@@ -16,7 +16,7 @@ import (
 	"github.com/telos-org/telos/internal/spec"
 )
 
-const DefaultLocalModel = "claude-opus-4-6"
+const DefaultLocalModel = "sail-research/zai-org/GLM-5.2-FP8"
 
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {

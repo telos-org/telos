@@ -194,35 +194,34 @@ func TestClientCreateEnvironmentAcceptsLegacyAccessField(t *testing.T) {
 	}
 }
 
-func TestClientPushCatalogSpec(t *testing.T) {
+func TestClientUploadApplyPackage(t *testing.T) {
 	var uploadedBody []byte
-	var pushedBody map[string]string
+	var metadataBody map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/api/catalog/packages/sha256:abc":
+		case r.Method == http.MethodPut && r.URL.Path == "/api/packages/sha256:abc":
 			uploadedBody, _ = io.ReadAll(r.Body)
 			json.NewEncoder(w).Encode(map[string]any{
 				"digest":     "sha256:abc",
 				"size_bytes": len(uploadedBody),
 				"created_at": "now",
+				"visibility": "private",
 			})
-		case r.Method == http.MethodPut && r.URL.Path == "/api/catalog/specs/auth":
-			if err := json.NewDecoder(r.Body).Decode(&pushedBody); err != nil {
+		case r.Method == http.MethodPatch && r.URL.Path == "/api/packages/sha256:abc":
+			if err := json.NewDecoder(r.Body).Decode(&metadataBody); err != nil {
 				t.Fatal(err)
 			}
 			json.NewEncoder(w).Encode(map[string]any{
-				"operation": "created",
-				"spec": map[string]any{
-					"name":           "auth",
-					"package_digest": "sha256:abc",
-					"visibility":     "private",
-					"created_at":     "now",
-					"updated_at":     "now",
-				},
+				"digest":     "sha256:abc",
+				"size_bytes": len(uploadedBody),
+				"created_at": "now",
+				"name":       "auth",
+				"visibility": "private",
+				"updated_at": "now",
 			})
 		default:
 			http.NotFound(w, r)
@@ -238,15 +237,15 @@ func TestClientPushCatalogSpec(t *testing.T) {
 	if uploaded.SizeBytes != len("package") || string(uploadedBody) != "package" {
 		t.Fatalf("upload: got %+v body %q", uploaded, uploadedBody)
 	}
-	pushed, err := client.PushCatalogSpec("auth", "sha256:abc")
+	patched, err := client.UpdateApplyPackageMetadata("sha256:abc", ApplyPackageMetadata{Name: "auth"})
 	if err != nil {
-		t.Fatalf("PushCatalogSpec: %v", err)
+		t.Fatalf("UpdateApplyPackageMetadata: %v", err)
 	}
-	if pushed.Operation != "created" || pushed.Spec.Name != "auth" {
-		t.Fatalf("push: got %+v", pushed)
+	if patched.Name == nil || *patched.Name != "auth" {
+		t.Fatalf("metadata: got %+v", patched)
 	}
-	if pushedBody["package_digest"] != "sha256:abc" {
-		t.Fatalf("push body: got %#v", pushedBody)
+	if metadataBody["name"] != "auth" || metadataBody["visibility"] != "private" {
+		t.Fatalf("metadata body: got %#v", metadataBody)
 	}
 }
 
@@ -284,6 +283,106 @@ func TestClientApplyEnvironmentSession(t *testing.T) {
 	}
 	if gotBody["package_digest"] != "sha256:abc" {
 		t.Fatalf("body: got %#v", gotBody)
+	}
+}
+
+func TestClientCreateDeployment(t *testing.T) {
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/deployments" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("User-Agent") != UserAgent {
+			t.Fatalf("user-agent: got %q", r.Header.Get("User-Agent"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":             "dep_123",
+			"name":           "auth",
+			"state":          "provisioning",
+			"package_digest": "sha256:abc",
+			"created_at":     "now",
+			"updated_at":     "now",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	deployment, err := client.CreateDeployment("auth", "sha256:abc")
+	if err != nil {
+		t.Fatalf("CreateDeployment: %v", err)
+	}
+	if deployment.ID != "dep_123" || deployment.Name != "auth" || deployment.State != "provisioning" {
+		t.Fatalf("deployment: got %+v", deployment)
+	}
+	if gotBody["name"] != "auth" || gotBody["package_digest"] != "sha256:abc" {
+		t.Fatalf("body: got %#v", gotBody)
+	}
+}
+
+func TestClientUpdateDeployment(t *testing.T) {
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/deployments/dep_123" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":             "dep_123",
+			"name":           "auth",
+			"state":          "deploying",
+			"package_digest": "sha256:def",
+			"created_at":     "then",
+			"updated_at":     "now",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	deployment, err := client.UpdateDeployment("dep_123", "sha256:def")
+	if err != nil {
+		t.Fatalf("UpdateDeployment: %v", err)
+	}
+	if deployment.ID != "dep_123" || deployment.PackageDigest != "sha256:def" || deployment.State != "deploying" {
+		t.Fatalf("deployment: got %+v", deployment)
+	}
+	if gotBody["package_digest"] != "sha256:def" {
+		t.Fatalf("body: got %#v", gotBody)
+	}
+}
+
+func TestClientListDeployments(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"deployments": []map[string]any{{
+				"id":             "dep_123",
+				"name":           "auth",
+				"state":          "healthy",
+				"package_digest": "sha256:abc",
+				"created_at":     "then",
+				"updated_at":     "now",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	deployments, err := client.ListDeployments()
+	if err != nil {
+		t.Fatalf("ListDeployments: %v", err)
+	}
+	if len(deployments) != 1 || deployments[0].ID != "dep_123" || deployments[0].Name != "auth" {
+		t.Fatalf("deployments: got %+v", deployments)
 	}
 }
 
