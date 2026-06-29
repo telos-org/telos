@@ -17,7 +17,7 @@ import (
 )
 
 func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	t.Setenv("SAIL_API_KEY", "test-sail-key")
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(
@@ -31,8 +31,8 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
 			Type:       corev1.SecretTypeOpaque,
 			Data: map[string][]byte{
-				"ANTHROPIC_API_KEY": []byte("stored-anthropic-key"),
-				"SAIL_API_KEY":      []byte("test-sail-key"),
+				"ANTHROPIC_API_KEY": []byte("test-anthropic-key"),
+				"SAIL_API_KEY":      []byte("stored-sail-key"),
 			},
 		},
 		&corev1.Secret{
@@ -86,7 +86,7 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 }
 
 func TestKubernetesSubstrateAppliesTaskWorker(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	t.Setenv("SAIL_API_KEY", "test-sail-key")
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
@@ -110,7 +110,7 @@ func TestKubernetesSubstrateAppliesTaskWorker(t *testing.T) {
 }
 
 func TestKubernetesSubstrateStopDeletesWorkerResources(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	t.Setenv("SAIL_API_KEY", "test-sail-key")
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
@@ -141,7 +141,7 @@ func TestKubernetesSubstrateStopDeletesWorkerResources(t *testing.T) {
 }
 
 func TestKubernetesSubstrateStopContinuesCleanupAfterWorkloadDeleteError(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	t.Setenv("SAIL_API_KEY", "test-sail-key")
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
@@ -173,7 +173,7 @@ func TestKubernetesSubstrateStopContinuesCleanupAfterWorkloadDeleteError(t *test
 }
 
 func TestCloudSessionStoreCleansKubernetesResourcesWhenInitialApplyFails(t *testing.T) {
-	t.Setenv("ANTHROPIC_API_KEY", "test-anthropic-key")
+	t.Setenv("SAIL_API_KEY", "test-sail-key")
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)

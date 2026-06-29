@@ -45,6 +45,9 @@ func TestNormalizeCloudConfigDefaults(t *testing.T) {
 	if cfg.Auth.Type != AuthBearer {
 		t.Fatalf("auth.type: got %q", cfg.Auth.Type)
 	}
+	if cfg.Kubernetes.AgentSecretKey != "SAIL_API_KEY" {
+		t.Fatalf("agent secret key: got %q", cfg.Kubernetes.AgentSecretKey)
+	}
 }
 
 func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {

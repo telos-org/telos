@@ -17,6 +17,7 @@ import (
 )
 
 type desiredSession struct {
+	DeploymentID  string `json:"deployment_id,omitempty"`
 	Name          string `json:"name"`
 	PackageDigest string `json:"package_digest"`
 	DesiredState  string `json:"desired_state"`
@@ -26,11 +27,14 @@ type desiredSessionsResponse struct {
 	Sessions []desiredSession `json:"sessions"`
 }
 
+const defaultCloudSessionModel = "sail-research/zai-org/GLM-5.2-FP8"
+
 type controlSessionReconciler struct {
 	apiURL      string
 	envID       string
 	token       string
 	packageRoot string
+	model       string
 	client      *http.Client
 	store       sessionapi.Store
 }
@@ -39,11 +43,13 @@ func startControlSessionReconciler(ctx context.Context, store sessionapi.Store, 
 	if os.Getenv("TELOS_CONTROL_RECONCILER_ENABLED") == "0" {
 		return
 	}
+	startDeploymentBootstrapReconciler(ctx, store)
 	r := controlSessionReconciler{
 		apiURL:      strings.TrimRight(strings.TrimSpace(os.Getenv("TELOS_CONTROL_API_URL")), "/"),
 		envID:       strings.TrimSpace(os.Getenv("TELOS_ENV_ID")),
 		token:       strings.TrimSpace(cfg.Auth.Token),
 		packageRoot: strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
+		model:       cloudSessionModel(),
 		client:      &http.Client{Timeout: 10 * time.Second},
 		store:       store,
 	}
@@ -68,11 +74,61 @@ func startControlSessionReconciler(ctx context.Context, store sessionapi.Store, 
 	}()
 }
 
+func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.Store) {
+	desired, ok := deploymentBootstrapDesiredSession()
+	if !ok {
+		return
+	}
+	r := controlSessionReconciler{
+		packageRoot: strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
+		model:       cloudSessionModel(),
+		store:       store,
+	}
+	if r.packageRoot == "" {
+		return
+	}
+
+	interval := time.Duration(envInt("TELOS_CONTROL_RECONCILER_INTERVAL", 10)) * time.Second
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			if err := r.reconcileDesired([]desiredSession{desired}); err != nil {
+				log.Printf("deployment bootstrap reconcile failed: %v", err)
+			}
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+}
+
+func deploymentBootstrapDesiredSession() (desiredSession, bool) {
+	deploymentID := strings.TrimSpace(os.Getenv("TELOS_DEPLOYMENT_ID"))
+	name := strings.TrimSpace(os.Getenv("TELOS_DEPLOYMENT_NAME"))
+	digest := strings.TrimSpace(os.Getenv("TELOS_PACKAGE_DIGEST"))
+	if name == "" || digest == "" {
+		return desiredSession{}, false
+	}
+	return desiredSession{
+		DeploymentID:  deploymentID,
+		Name:          name,
+		PackageDigest: digest,
+		DesiredState:  "running",
+	}, true
+}
+
 func (r controlSessionReconciler) reconcile(ctx context.Context) error {
 	desired, err := r.fetchDesired(ctx)
 	if err != nil {
 		return err
 	}
+	return r.reconcileDesired(desired)
+}
+
+func (r controlSessionReconciler) reconcileDesired(desired []desiredSession) error {
 	current, err := r.store.List()
 	if err != nil {
 		return fmt.Errorf("list local sessions: %w", err)
@@ -103,10 +159,17 @@ func (r controlSessionReconciler) reconcile(ctx context.Context) error {
 			return fmt.Errorf("package %s is not materialized at %s: %w", digest, packagePath, err)
 		}
 		kind := sessionapi.KindController
+		model := strings.TrimSpace(r.model)
+		if model == "" {
+			model = cloudSessionModel()
+		}
 		if _, err := r.store.Create(sessionapi.SessionCreateRequest{
 			ApplyPackagePath:   packagePath,
 			ApplyPackageDigest: digest,
+			DeploymentID:       strings.TrimSpace(session.DeploymentID),
+			DeploymentName:     name,
 			SessionKind:        &kind,
+			Model:              model,
 		}); err != nil {
 			return fmt.Errorf("create session %s from package %s: %w", name, digest, err)
 		}
@@ -142,21 +205,40 @@ func (r controlSessionReconciler) fetchDesired(ctx context.Context) ([]desiredSe
 	return out.Sessions, nil
 }
 
+func cloudSessionModel() string {
+	if model := strings.TrimSpace(os.Getenv("TELOS_CLOUD_DEFAULT_MODEL")); model != "" {
+		return model
+	}
+	return defaultCloudSessionModel
+}
+
 func activeRootSessionsByName(sessions []sessionapi.Session) map[string]sessionapi.Session {
 	out := map[string]sessionapi.Session{}
 	for _, session := range sessions {
 		if session.ParentSessionID != nil && *session.ParentSessionID != "" {
 			continue
 		}
-		if session.SpecName == nil || *session.SpecName == "" {
+		if session.Status.IsTerminal() {
 			continue
 		}
-		if session.Status.IsTerminal() {
+		if name := sessionDeploymentName(session); name != "" {
+			out[name] = session
+			continue
+		}
+		if session.SpecName == nil || *session.SpecName == "" {
 			continue
 		}
 		out[*session.SpecName] = session
 	}
 	return out
+}
+
+func sessionDeploymentName(session sessionapi.Session) string {
+	if session.Provenance == nil {
+		return ""
+	}
+	name, _ := session.Provenance["deployment_name"].(string)
+	return strings.TrimSpace(name)
 }
 
 func sessionPackageDigest(session sessionapi.Session) string {
