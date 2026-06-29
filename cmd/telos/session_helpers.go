@@ -89,12 +89,12 @@ func getSessionFromAnywhere(sessionID, envID string) (*sessionapi.Session, error
 		return session, nil
 	}
 
-	if ctx, ok := controllerSessionContext(); ok {
+	if ctx, ok := rootSessionContext(); ok {
 		session, err := cloud.NewClient(ctx.endpoint, ctx.token).GetSession(sessionID)
 		if err == nil {
 			return session, nil
 		}
-		return nil, fmt.Errorf("controller session lookup failed: %w", err)
+		return nil, fmt.Errorf("root session lookup failed: %w", err)
 	}
 
 	// Try cloud
@@ -125,12 +125,12 @@ func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
 		return text, nil
 	}
 
-	if ctx, ok := controllerSessionContext(); ok {
+	if ctx, ok := rootSessionContext(); ok {
 		text, err := cloud.NewClient(ctx.endpoint, ctx.token).GetTranscript(sessionID)
 		if err == nil {
 			return text, nil
 		}
-		return "", fmt.Errorf("controller transcript lookup failed: %w", err)
+		return "", fmt.Errorf("root transcript lookup failed: %w", err)
 	}
 
 	if envID != "" || config.IsConfigured() {

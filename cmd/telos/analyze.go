@@ -182,7 +182,7 @@ func getSessionAnalysis(sessionID, envID string) (sessionAnalysis, error) {
 }
 
 func getCloudSessionDiagnostics(sessionID, envID string) (*sessionapi.SessionDiagnosticsResponse, error) {
-	if ctx, ok := controllerSessionContext(); ok {
+	if ctx, ok := rootSessionContext(); ok {
 		return cloud.NewClient(ctx.endpoint, ctx.token).GetDiagnostics(sessionID)
 	}
 	if envID == "" && !config.IsConfigured() {
@@ -214,7 +214,7 @@ func getSessionAnalysisInput(sessionID, envID string) (*sessionapi.Session, []se
 		}
 		return session, events, nil
 	}
-	if ctx, ok := controllerSessionContext(); ok {
+	if ctx, ok := rootSessionContext(); ok {
 		client := cloud.NewClient(ctx.endpoint, ctx.token)
 		return cloudAnalysisInput(client, sessionID)
 	}

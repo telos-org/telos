@@ -55,7 +55,7 @@ func (r *SessionRuntime) UnmarshalJSON(data []byte) error {
 	}
 }
 
-// SessionKind distinguishes controller sessions from task sessions.
+// SessionKind is the persisted worker kind backing root and child sessions.
 type SessionKind string
 
 const (
@@ -82,23 +82,25 @@ func (k *SessionKind) UnmarshalJSON(data []byte) error {
 
 // SessionCreateRequest is the body of POST /api/sessions.
 type SessionCreateRequest struct {
-	SpecMarkdown      *string      `json:"spec_markdown,omitempty"`
-	SessionKind       *SessionKind `json:"session_kind,omitempty"`
-	ParentSessionID   *string      `json:"parent_session_id,omitempty"`
-	UserAuthorization string       `json:"-"`
-	Until             *int         `json:"until,omitempty"`
-	Model             string       `json:"model,omitempty"`
-	Thinking          string       `json:"thinking,omitempty"`
-	MaxCostUSD        *float64     `json:"max_cost_usd,omitempty"`
-	MaxRounds         *int         `json:"max_rounds,omitempty"`
-	MaxDurationSec    *int         `json:"max_duration_sec,omitempty"`
-	MaxInputTokens    *int         `json:"max_input_tokens,omitempty"`
-	MaxOutputTokens   *int         `json:"max_output_tokens,omitempty"`
-	MaxToolLoops      *int         `json:"max_tool_loops,omitempty"`
-	AgentTimeoutSec   *int         `json:"agent_timeout_sec,omitempty"`
+	SpecMarkdown       *string      `json:"spec_markdown,omitempty"`
+	ApplyPackagePath   string       `json:"-"`
+	ApplyPackageDigest string       `json:"-"`
+	SessionKind        *SessionKind `json:"-"`
+	ParentSessionID    *string      `json:"parent_session_id,omitempty"`
+	UserAuthorization  string       `json:"-"`
+	Until              *int         `json:"until,omitempty"`
+	Model              string       `json:"model,omitempty"`
+	Thinking           string       `json:"thinking,omitempty"`
+	MaxCostUSD         *float64     `json:"max_cost_usd,omitempty"`
+	MaxRounds          *int         `json:"max_rounds,omitempty"`
+	MaxDurationSec     *int         `json:"max_duration_sec,omitempty"`
+	MaxInputTokens     *int         `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens    *int         `json:"max_output_tokens,omitempty"`
+	MaxToolLoops       *int         `json:"max_tool_loops,omitempty"`
+	AgentTimeoutSec    *int         `json:"agent_timeout_sec,omitempty"`
 }
 
-// SessionSpecUpdateRequest is the body of PUT /api/sessions/{id}/spec.
+// SessionSpecUpdateRequest is the body of PUT /api/sessions/{name}/spec.
 type SessionSpecUpdateRequest struct {
 	SpecMarkdown      string   `json:"spec_markdown"`
 	UserAuthorization string   `json:"-"`
@@ -111,6 +113,12 @@ type SessionSpecUpdateRequest struct {
 	MaxOutputTokens   *int     `json:"max_output_tokens,omitempty"`
 	MaxToolLoops      *int     `json:"max_tool_loops,omitempty"`
 	AgentTimeoutSec   *int     `json:"agent_timeout_sec,omitempty"`
+}
+
+// SessionSpecUpdateResponse is returned by PUT /api/sessions/{name}/spec.
+type SessionSpecUpdateResponse struct {
+	Operation string   `json:"operation"`
+	Session   *Session `json:"session"`
 }
 
 // SessionSpecResponse is returned by GET /api/sessions/{id}/spec.
@@ -164,17 +172,17 @@ type CurrentSpec struct {
 // SessionSummary is the minimal identification of a session.
 type SessionSummary struct {
 	SessionID       string        `json:"session_id"`
-	SessionKind     *SessionKind  `json:"session_kind,omitempty"`
+	SessionKind     *SessionKind  `json:"-"`
 	ParentSessionID *string       `json:"parent_session_id,omitempty"`
 	SpecName        *string       `json:"spec_name,omitempty"`
 	Status          SessionStatus `json:"status"`
 	CreatedAt       *string       `json:"created_at,omitempty"`
 }
 
-// Session is the full API representation returned by get/list/create/stop.
+// Session is the full API representation returned by get/create/stop.
 type Session struct {
 	SessionID       string        `json:"session_id"`
-	SessionKind     *SessionKind  `json:"session_kind,omitempty"`
+	SessionKind     *SessionKind  `json:"-"`
 	ParentSessionID *string       `json:"parent_session_id,omitempty"`
 	SpecName        *string       `json:"spec_name,omitempty"`
 	Status          SessionStatus `json:"status"`
@@ -195,8 +203,6 @@ type Session struct {
 	CurrentSpec             *CurrentSpec     `json:"current_spec,omitempty"`
 	CurrentRound            *int             `json:"current_round,omitempty"`
 	CurrentRole             *string          `json:"current_role,omitempty"`
-	HeartbeatAt             *string          `json:"heartbeat_at,omitempty"`
-	NextRunAt               *string          `json:"next_run_at,omitempty"`
 	FinishedAt              *string          `json:"finished_at,omitempty"`
 	Result                  *string          `json:"result,omitempty"`
 	Error                   *string          `json:"error,omitempty"`
@@ -210,7 +216,8 @@ type Session struct {
 	RoundCount              *int             `json:"round_count,omitempty"`
 	CompletionReason        *string          `json:"completion_reason,omitempty"`
 	VerifierConceded        *bool            `json:"verifier_conceded,omitempty"`
-	ArtifactURI             *string          `json:"artifact_uri,omitempty"`
+	ServiceURL              *string          `json:"service_url,omitempty"`
+	DashboardURL            *string          `json:"dashboard_url,omitempty"`
 	CurrentSpecVersion      *int             `json:"current_spec_version,omitempty"`
 	SpecVersions            []map[string]any `json:"spec_versions"`
 	LatestDescendantSession *SessionSummary  `json:"latest_descendant_session,omitempty"`
@@ -218,9 +225,85 @@ type Session struct {
 
 // --------- Response types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
+// SessionListItem is the product-facing summary returned by GET /api/sessions.
+type SessionListItem struct {
+	SessionID          string         `json:"session_id"`
+	ParentSessionID    *string        `json:"parent_session_id,omitempty"`
+	SpecName           *string        `json:"spec_name,omitempty"`
+	Status             SessionStatus  `json:"status"`
+	CreatedAt          *string        `json:"created_at,omitempty"`
+	Runtime            SessionRuntime `json:"runtime"`
+	CurrentRound       *int           `json:"current_round,omitempty"`
+	CurrentRole        *string        `json:"current_role,omitempty"`
+	Result             *string        `json:"result,omitempty"`
+	Error              *string        `json:"error,omitempty"`
+	TotalCostUSD       *float64       `json:"total_cost_usd,omitempty"`
+	ServiceURL         *string        `json:"service_url,omitempty"`
+	DashboardURL       *string        `json:"dashboard_url,omitempty"`
+	CurrentSpecVersion *int           `json:"current_spec_version,omitempty"`
+}
+
 // SessionListResponse wraps GET /api/sessions.
 type SessionListResponse struct {
-	Sessions []Session `json:"sessions"`
+	Sessions []SessionListItem `json:"sessions"`
+}
+
+// SessionListItems derives public list summaries from full session records.
+func SessionListItems(sessions []Session) []SessionListItem {
+	items := make([]SessionListItem, 0, len(sessions))
+	for _, session := range sessions {
+		items = append(items, SessionListItemFromSession(session))
+	}
+	return items
+}
+
+// SessionListItemFromSession strips debug-heavy fields from a full Session.
+func SessionListItemFromSession(session Session) SessionListItem {
+	return SessionListItem{
+		SessionID:          session.SessionID,
+		ParentSessionID:    session.ParentSessionID,
+		SpecName:           session.SpecName,
+		Status:             session.Status,
+		CreatedAt:          session.CreatedAt,
+		Runtime:            session.Runtime,
+		CurrentRound:       session.CurrentRound,
+		CurrentRole:        session.CurrentRole,
+		Result:             session.Result,
+		Error:              session.Error,
+		TotalCostUSD:       session.TotalCostUSD,
+		ServiceURL:         session.ServiceURL,
+		DashboardURL:       session.DashboardURL,
+		CurrentSpecVersion: session.CurrentSpecVersion,
+	}
+}
+
+// AsSession preserves the existing Go client shape for list callers.
+func (item SessionListItem) AsSession() Session {
+	return Session{
+		SessionID:          item.SessionID,
+		ParentSessionID:    item.ParentSessionID,
+		SpecName:           item.SpecName,
+		Status:             item.Status,
+		CreatedAt:          item.CreatedAt,
+		Runtime:            item.Runtime,
+		CurrentRound:       item.CurrentRound,
+		CurrentRole:        item.CurrentRole,
+		Result:             item.Result,
+		Error:              item.Error,
+		TotalCostUSD:       item.TotalCostUSD,
+		ServiceURL:         item.ServiceURL,
+		DashboardURL:       item.DashboardURL,
+		CurrentSpecVersion: item.CurrentSpecVersion,
+	}
+}
+
+// SessionsFromListItems converts list summaries to the legacy Go client shape.
+func SessionsFromListItems(items []SessionListItem) []Session {
+	sessions := make([]Session, 0, len(items))
+	for _, item := range items {
+		sessions = append(sessions, item.AsSession())
+	}
+	return sessions
 }
 
 // SessionEvent represents one evidence event from a session.

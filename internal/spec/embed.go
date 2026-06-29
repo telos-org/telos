@@ -5,19 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 )
 
 //go:embed all:prompts
 var promptsFS embed.FS
-
-//go:embed all:skills
-var skillsFS embed.FS
-
-var (
-	extractedSkillsDir string
-	extractOnce        sync.Once
-)
 
 // ReadPrompt reads an embedded prompt template by relative path.
 func ReadPrompt(name string) (string, error) {
@@ -28,51 +19,50 @@ func ReadPrompt(name string) (string, error) {
 	return strings.TrimSpace(string(data)), nil
 }
 
-// BuiltinSkillsDir returns the path to extracted built-in skills.
-// Skills are extracted to a temp dir on first call.
-func BuiltinSkillsDir() string {
-	extractOnce.Do(func() {
-		dir, err := extractEmbeddedSkills()
-		if err != nil {
-			return
-		}
-		extractedSkillsDir = dir
-	})
-	return extractedSkillsDir
-}
-
-func extractEmbeddedSkills() (string, error) {
-	tmpDir, err := os.MkdirTemp("", "telos-skills-*")
-	if err != nil {
-		return "", err
-	}
-	return tmpDir, extractDir(skillsFS, "skills", tmpDir)
-}
-
-func extractDir(fs embed.FS, prefix, dest string) error {
-	entries, err := fs.ReadDir(prefix)
-	if err != nil {
-		return err
-	}
-	for _, e := range entries {
-		src := prefix + "/" + e.Name()
-		dst := filepath.Join(dest, e.Name())
-		if e.IsDir() {
-			if err := os.MkdirAll(dst, 0o755); err != nil {
-				return err
-			}
-			if err := extractDir(fs, src, dst); err != nil {
-				return err
-			}
-		} else {
-			data, err := fs.ReadFile(src)
-			if err != nil {
-				return err
-			}
-			if err := os.WriteFile(dst, data, 0o644); err != nil {
-				return err
-			}
+// DefaultSkillsDir returns the external skill catalogue directory.
+func DefaultSkillsDir() string {
+	for _, dir := range []string{
+		strings.TrimSpace(os.Getenv("TELOS_SKILLS_DIR")),
+		assetsSkillsDir(),
+		discoverSiblingAssetsSkillsDir(),
+	} {
+		if hasSkillCatalogue(dir) {
+			return dir
 		}
 	}
-	return nil
+	return ""
+}
+
+func assetsSkillsDir() string {
+	dir := strings.TrimSpace(os.Getenv("TELOS_ASSETS_DIR"))
+	if dir == "" {
+		return ""
+	}
+	return filepath.Join(dir, "skills")
+}
+
+func discoverSiblingAssetsSkillsDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	for {
+		candidate := filepath.Join(wd, "assets", "skills")
+		if hasSkillCatalogue(candidate) {
+			return candidate
+		}
+		next := filepath.Dir(wd)
+		if next == wd {
+			return ""
+		}
+		wd = next
+	}
+}
+
+func hasSkillCatalogue(dir string) bool {
+	if strings.TrimSpace(dir) == "" {
+		return false
+	}
+	info, err := os.Stat(dir)
+	return err == nil && info.IsDir()
 }

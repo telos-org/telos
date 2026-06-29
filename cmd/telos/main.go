@@ -3,6 +3,7 @@
 // Public commands:
 //
 //	telos plan SPEC.md [--json]
+//	telos push SPEC.md [--json]
 //	telos apply SPEC.md [--env ENV] [--json]
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
 //	    [--until N] [--max-cost-usd USD] [--max-rounds N]
@@ -50,6 +51,8 @@ func main() {
 		return
 	case "plan":
 		cmdPlan(os.Args[2:])
+	case "push":
+		cmdPush(os.Args[2:])
 	case "apply":
 		cmdApply(os.Args[2:])
 	case "run":
@@ -88,8 +91,9 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "commands:")
 	fmt.Fprintln(out, "  plan SPEC.md       Show compiled spec plan")
+	fmt.Fprintln(out, "  push SPEC.md       Push a spec package to the catalogue")
 	fmt.Fprintln(out, "  apply SPEC.md      Apply a desired-state spec")
-	fmt.Fprintln(out, "  run SPEC.md        Create and run a bounded task spec")
+	fmt.Fprintln(out, "  run SPEC.md        Run a local or delegated spec")
 	fmt.Fprintln(out, "  list               List sessions")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
 	fmt.Fprintln(out, "  analyze SESSION... Analyze evidence, failures, and benchmark distributions")

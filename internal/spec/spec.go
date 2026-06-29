@@ -243,10 +243,16 @@ func resolveSkillPath(baseDir, raw string) (string, error) {
 	if _, err := os.Stat(abs); err == nil {
 		return abs, nil
 	}
-	// Try built-in skills directory
-	builtinDir := BuiltinSkillsDir()
-	if builtinDir != "" {
-		catalog := filepath.Join(builtinDir, raw)
+	if !filepath.IsAbs(raw) {
+		packageLocal := filepath.Join(baseDir, "skills", raw)
+		if _, err := os.Stat(packageLocal); err == nil {
+			return packageLocal, nil
+		}
+	}
+	// Try the default external skill catalogue.
+	defaultDir := DefaultSkillsDir()
+	if defaultDir != "" {
+		catalog := filepath.Join(defaultDir, raw)
 		if _, err := os.Stat(catalog); err == nil {
 			return catalog, nil
 		}

@@ -15,7 +15,11 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
-var cloudAllowedOrigin = regexp.MustCompile(`^https://.*\.usetelos\.ai$|^http://localhost(:[0-9]+)?$|^http://127\.0\.0\.1(:[0-9]+)?$`)
+// Allow the bare apex usetelos.ai as well as any *.usetelos.ai subdomain. The
+// dashboard is served from the apex, so an origin with no subdomain label must
+// pass — `(.*\.)?` makes the subdomain optional (`usetelos.ai` and
+// `app.usetelos.ai` both match).
+var cloudAllowedOrigin = regexp.MustCompile(`^https://(.*\.)?usetelos\.ai$|^http://localhost(:[0-9]+)?$|^http://127\.0\.0\.1(:[0-9]+)?$`)
 
 func Run(ctx context.Context, cfg Config) error {
 	cfg, err := NormalizeConfig(cfg)
@@ -35,6 +39,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		startRouteReconciler(ctx, substrate.client)
 		store = newCloudSessionStore(baseStore, newRouteHandleResolver(), substrate)
+		startControlSessionReconciler(ctx, store, cfg)
 	}
 	mux := http.NewServeMux()
 	authorizer := authorizerForConfig(cfg, baseStore)

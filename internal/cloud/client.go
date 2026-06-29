@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -45,6 +46,39 @@ type SessionKey struct {
 // Balance is the caller's current managed compute-unit balance.
 type Balance struct {
 	ComputeUnits float64
+}
+
+type ApplyPackageRecord struct {
+	Digest    string `json:"digest"`
+	SizeBytes int    `json:"size_bytes"`
+	CreatedAt string `json:"created_at"`
+}
+
+type CatalogSpecRecord struct {
+	Name          string `json:"name"`
+	PackageDigest string `json:"package_digest"`
+	Visibility    string `json:"visibility"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+type CatalogSpecPushResponse struct {
+	Operation string            `json:"operation"`
+	Spec      CatalogSpecRecord `json:"spec"`
+}
+
+type EnvironmentSessionRecord struct {
+	EnvID         string `json:"env_id"`
+	Name          string `json:"name"`
+	PackageDigest string `json:"package_digest"`
+	DesiredState  string `json:"desired_state"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+type EnvironmentSessionApplyResponse struct {
+	Operation string                   `json:"operation"`
+	Session   EnvironmentSessionRecord `json:"session"`
 }
 
 // Client is a cloud Sessions API client.
@@ -261,6 +295,62 @@ func (c *Client) Balance() (*Balance, error) {
 	return &Balance{ComputeUnits: raw.ComputeUnits}, nil
 }
 
+func (c *Client) UploadApplyPackage(digest string, data []byte) (*ApplyPackageRecord, error) {
+	resp, err := c.doRaw("PUT", "/api/catalog/packages/"+url.PathEscape(digest), data, "application/gzip")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, readError(resp)
+	}
+	var record ApplyPackageRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) PushCatalogSpec(name string, packageDigest string) (*CatalogSpecPushResponse, error) {
+	body, err := json.Marshal(map[string]string{"package_digest": packageDigest})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("PUT", "/api/catalog/specs/"+url.PathEscape(name), body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response CatalogSpecPushResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) ApplyEnvironmentSession(envID, name, packageDigest string) (*EnvironmentSessionApplyResponse, error) {
+	body, err := json.Marshal(map[string]string{"package_digest": packageDigest})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("PUT", "/api/environments/"+url.PathEscape(envID)+"/sessions/"+url.PathEscape(name), body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response EnvironmentSessionApplyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
 // WaitForEnvironment waits until an environment-local API is reachable.
 func WaitForEnvironment(handle string, timeout time.Duration) error {
 	client := &http.Client{Timeout: 5 * time.Second}
@@ -321,13 +411,13 @@ func (c *Client) CreateSession(req sessionapi.SessionCreateRequest) (*sessionapi
 	return &session, nil
 }
 
-// UpdateSessionSpec updates a controller session spec in place.
-func (c *Client) UpdateSessionSpec(id string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.Session, error) {
+// ApplySessionSpec creates or updates the root session named by the spec.
+func (c *Client) ApplySessionSpec(name string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.SessionSpecUpdateResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("PUT", "/api/sessions/"+id+"/spec", body)
+	resp, err := c.do("PUT", "/api/sessions/"+name+"/spec", body)
 	if err != nil {
 		return nil, err
 	}
@@ -335,11 +425,11 @@ func (c *Client) UpdateSessionSpec(id string, req sessionapi.SessionSpecUpdateRe
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	var session sessionapi.Session
-	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
+	var response sessionapi.SessionSpecUpdateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
-	return &session, nil
+	return &response, nil
 }
 
 // ListEnvironments lists cloud environments from the control plane.
@@ -387,10 +477,17 @@ func (c *Client) IssueEnvironmentAccess(envID string) (*Environment, error) {
 }
 
 // ListSessions lists sessions from the cloud API.
-func (c *Client) ListSessions(limit int) ([]sessionapi.Session, error) {
+func (c *Client) ListSessions(limit int, includeChildren bool) ([]sessionapi.Session, error) {
 	path := "/api/sessions"
+	var query []string
 	if limit > 0 {
-		path = fmt.Sprintf("%s?limit=%d", path, limit)
+		query = append(query, fmt.Sprintf("limit=%d", limit))
+	}
+	if includeChildren {
+		query = append(query, "include_children=true")
+	}
+	if len(query) > 0 {
+		path += "?" + strings.Join(query, "&")
 	}
 	resp, err := c.do("GET", path, nil)
 	if err != nil {
@@ -404,7 +501,7 @@ func (c *Client) ListSessions(limit int) ([]sessionapi.Session, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
 		return nil, err
 	}
-	return listResp.Sessions, nil
+	return sessionapi.SessionsFromListItems(listResp.Sessions), nil
 }
 
 // GetSession gets a session by ID.
@@ -552,6 +649,10 @@ func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[s
 }
 
 func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
+	return c.doRaw(method, path, body, "application/json")
+}
+
+func (c *Client) doRaw(method, path string, body []byte, contentType string) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -561,7 +662,7 @@ func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
 		return nil, err
 	}
 	if body != nil {
-		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Content-Type", contentType)
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)

@@ -51,7 +51,7 @@ func sessionDisplayStatus(sess sessionapi.Session) string {
 	if hasActiveTurn(sess) || hasOpenEpoch(sess) {
 		return "active"
 	}
-	if retainedCloudController(sess) {
+	if retainedTopLevelCloudSession(sess) {
 		return "idle"
 	}
 	switch sess.Status {
@@ -65,8 +65,8 @@ func sessionDisplayStatus(sess sessionapi.Session) string {
 	}
 }
 
-func retainedCloudController(sess sessionapi.Session) bool {
-	return sessionKind(sess) == string(sessionapi.KindController) &&
+func retainedTopLevelCloudSession(sess sessionapi.Session) bool {
+	return isTopLevelSession(sess) &&
 		sess.Runtime == sessionapi.RuntimeCloud &&
 		sessionResult(sess) == "completed"
 }

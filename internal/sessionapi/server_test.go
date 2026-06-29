@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 // newTestServer returns an httptest.Server backed by a temporary FileStore.
@@ -59,9 +60,6 @@ func TestCreateSession(t *testing.T) {
 	assertEqual(t, "status", string(session.Status), "pending")
 	assertEqual(t, "runtime", string(session.Runtime), "local")
 
-	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindTask {
-		t.Errorf("expected session_kind=task, got %v", session.SessionKind)
-	}
 	if session.SpecName == nil || *session.SpecName != "my-task" {
 		t.Errorf("expected spec_name=my-task, got %v", session.SpecName)
 	}
@@ -204,15 +202,17 @@ func TestCreateSessionRejectsInvalidUntil(t *testing.T) {
 	}
 }
 
-func TestCloudCreateSessionHonorsExplicitTaskKind(t *testing.T) {
+func TestCloudCreateSessionHonorsExplicitChildTaskKind(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	markdown := "---\nversion: v0\nname: one-off\nplatform: cloud\n---\n# One Off\n"
 	kind := sessionapi.KindTask
+	parentID := "sess_parent"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown: &markdown,
-		SessionKind:  &kind,
+		SpecMarkdown:    &markdown,
+		SessionKind:     &kind,
+		ParentSessionID: &parentID,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -221,26 +221,16 @@ func TestCloudCreateSessionHonorsExplicitTaskKind(t *testing.T) {
 		t.Fatalf("session_kind: got %#v", session.SessionKind)
 	}
 	if session.CurrentSpecVersion != nil {
-		t.Fatalf("task should not have current_spec_version: %#v", session.CurrentSpecVersion)
+		t.Fatalf("child should not have current_spec_version: %#v", session.CurrentSpecVersion)
 	}
 }
 
-func TestCreateSessionRejectsControllerChild(t *testing.T) {
+func TestCreateSessionRejectsPublicSessionKind(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	markdown := "---\nversion: v0\nname: bad-child\nplatform: local\n---\n# Bad Child\n"
-	parentID := "sess_parent"
-	kind := sessionapi.KindController
-	body, err := json.Marshal(sessionapi.SessionCreateRequest{
-		SpecMarkdown:    &markdown,
-		SessionKind:     &kind,
-		ParentSessionID: &parentID,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(string(body)))
+	body := `{"spec_markdown":"---\nversion: v0\nname: bad-kind\nplatform: local\n---\n# Bad Kind\n","session_kind":"controller"}`
+	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +270,7 @@ func TestCreateSessionRejectsInvalidNameWithoutStrayCompileFiles(t *testing.T) {
 	}
 }
 
-func TestCloudCreateSessionCreatesControllerForOperatorApply(t *testing.T) {
+func TestCloudCreateSessionCreatesRootForOperatorApply(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
@@ -301,9 +291,117 @@ func TestCloudCreateSessionCreatesControllerForOperatorApply(t *testing.T) {
 	if len(session.SpecVersions) != 1 {
 		t.Fatalf("spec_versions: got %#v", session.SpecVersions)
 	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(root, session.SessionID, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest == "" {
+		t.Fatalf("missing apply_package_digest: %#v", manifest.ApplyPackageDigest)
+	}
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.RootSpecPath != "SPEC.md" {
+		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
+	}
+	if got := session.SpecVersions[0]["apply_package_digest"]; got != *manifest.ApplyPackageDigest {
+		t.Fatalf("spec version apply_package_digest: got %#v want %q", got, *manifest.ApplyPackageDigest)
+	}
 }
 
-func TestCloudCreateSessionRejectsDuplicateLiveController(t *testing.T) {
+func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
+	srcDir := t.TempDir()
+	specPath := filepath.Join(srcDir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: postgres\nplatform: cloud\nskills:\n  - alpha\n---\n# Postgres\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(srcDir, "alpha")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: alpha\n---\nUse alpha."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := spec.CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{CompilerVersion: "test"})
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+	packagePath := filepath.Join(t.TempDir(), "package.tar.gz")
+	if err := os.WriteFile(packagePath, pkg.Bytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		ApplyPackagePath:   packagePath,
+		ApplyPackageDigest: pkg.Digest,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(root, session.SessionID, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.SourceSpecPath == nil || !strings.Contains(*manifest.SourceSpecPath, filepath.Join(session.SessionID, "package", "SPEC.md")) {
+		t.Fatalf("source_spec_path: %#v", manifest.SourceSpecPath)
+	}
+	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest != pkg.Digest {
+		t.Fatalf("apply_package_digest: got %#v want %q", manifest.ApplyPackageDigest, pkg.Digest)
+	}
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.PackageDigest != pkg.Digest {
+		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
+	}
+	recompiled, err := spec.CompileEnvironmentWithBase(*manifest.SessionSpecPath, filepath.Dir(*manifest.SourceSpecPath))
+	if err != nil {
+		t.Fatalf("CompileEnvironmentWithBase session spec: %v", err)
+	}
+	var alphaPath string
+	for _, skill := range recompiled.Skills {
+		if skill.Name == "alpha" {
+			alphaPath = skill.Path
+		}
+	}
+	if !strings.Contains(alphaPath, filepath.Join(session.SessionID, "package", "skills", "alpha")) {
+		t.Fatalf("alpha resolved outside extracted package: %q", alphaPath)
+	}
+}
+
+func TestCloudCreateSessionFromApplyPackageRejectsDigestMismatch(t *testing.T) {
+	srcDir := t.TempDir()
+	specPath := filepath.Join(srcDir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := spec.CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{CompilerVersion: "test"})
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+	packagePath := filepath.Join(t.TempDir(), "package.tar.gz")
+	if err := os.WriteFile(packagePath, pkg.Bytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	store := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	_, err = store.Create(sessionapi.SessionCreateRequest{
+		ApplyPackagePath:   packagePath,
+		ApplyPackageDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+	})
+	if err == nil {
+		t.Fatal("expected digest mismatch")
+	}
+	if !strings.Contains(err.Error(), "does not match expected") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCloudCreateSessionRejectsDuplicateLiveRoot(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
@@ -313,14 +411,14 @@ func TestCloudCreateSessionRejectsDuplicateLiveController(t *testing.T) {
 
 	_, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err == nil {
-		t.Fatal("expected duplicate controller to fail")
+		t.Fatal("expected duplicate root to fail")
 	}
-	if !strings.Contains(err.Error(), "controller spec \"postgres\" already exists") {
+	if !strings.Contains(err.Error(), "root session \"postgres\" already exists") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
-func TestCloudCreateSessionIgnoresFailedControllerHistory(t *testing.T) {
+func TestCloudCreateSessionIgnoresFailedRootHistory(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
@@ -419,27 +517,21 @@ func TestCreateSessionRejectsOversizedBody(t *testing.T) {
 	assertEqual(t, "status_code", "400", itoa(resp.StatusCode))
 }
 
-// --------- PUT /api/sessions/{id}/spec ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+// --------- PUT /api/sessions/{name}/spec ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-func TestUpdateControllerSessionSpec(t *testing.T) {
+func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
-	controller, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
+	rootSession, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
 
 	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
-	maxCost := 12.5
-	agentTimeout := 3600
 	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
-		SpecMarkdown:    updated,
-		Model:           "sail-research/moonshotai/Kimi-K2.6",
-		Thinking:        "high",
-		MaxCostUSD:      &maxCost,
-		AgentTimeoutSec: &agentTimeout,
+		SpecMarkdown: updated,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/"+controller.SessionID+"/spec", strings.NewReader(string(body)))
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(string(body)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -453,9 +545,19 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 		data, _ := io.ReadAll(resp.Body)
 		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
 	}
-	var session sessionapi.Session
-	if err := json.NewDecoder(resp.Body).Decode(&session); err != nil {
+	var update sessionapi.SessionSpecUpdateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&update); err != nil {
 		t.Fatal(err)
+	}
+	if update.Operation != "updated" {
+		t.Fatalf("operation: got %q", update.Operation)
+	}
+	session := update.Session
+	if session == nil {
+		t.Fatal("missing session")
+	}
+	if session.SessionID != rootSession.SessionID {
+		t.Fatalf("session_id: got %q want %q", session.SessionID, rootSession.SessionID)
 	}
 	if session.SpecName == nil || *session.SpecName != "postgres" {
 		t.Fatalf("spec_name: got %#v", session.SpecName)
@@ -469,12 +571,21 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 	if len(session.SpecVersions) != 1 {
 		t.Fatalf("spec_versions: got %#v", session.SpecVersions)
 	}
-	assertConfigStr(t, session.Config, "model", "sail-research/moonshotai/Kimi-K2.6")
-	assertConfigStr(t, session.Config, "thinking", "high")
-	assertConfigFloat(t, session.Config, "max_cost_usd", maxCost)
-	assertConfigFloat(t, session.Config, "agent_timeout_sec", float64(agentTimeout))
 	if session.SpecVersions[0]["previous_version"].(float64) != 1 {
 		t.Fatalf("previous_version: got %#v", session.SpecVersions[0])
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(store.Root, session.SessionID, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest == "" {
+		t.Fatalf("missing apply_package_digest: %#v", manifest.ApplyPackageDigest)
+	}
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Name != "postgres" {
+		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
+	}
+	if got := session.SpecVersions[0]["apply_package_digest"]; got != *manifest.ApplyPackageDigest {
+		t.Fatalf("spec version apply_package_digest: got %#v want %q", got, *manifest.ApplyPackageDigest)
 	}
 	data, err := os.ReadFile(*session.SessionSpecPath)
 	if err != nil {
@@ -485,12 +596,68 @@ func TestUpdateControllerSessionSpec(t *testing.T) {
 	}
 }
 
-func TestGetControllerSessionSpec(t *testing.T) {
+func TestApplySessionSpecCreatesRootWhenMissing(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+	var update sessionapi.SessionSpecUpdateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&update); err != nil {
+		t.Fatal(err)
+	}
+	if update.Operation != "created" {
+		t.Fatalf("operation: got %q", update.Operation)
+	}
+	if update.Session == nil || update.Session.SpecName == nil || *update.Session.SpecName != "postgres" {
+		t.Fatalf("session: got %#v", update.Session)
+	}
+}
+
+func TestApplySessionSpecRejectsNameMismatch(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	body := `{"spec_markdown":"---\nversion: v0\nname: redis\nplatform: cloud\n---\n# Redis\n"}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 400, got %d: %s", resp.StatusCode, data)
+	}
+}
+
+func TestGetRootSessionSpec(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
-	controller, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
+	rootSession, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
 
-	resp, err := http.Get(srv.URL + "/api/sessions/" + controller.SessionID + "/spec")
+	resp, err := http.Get(srv.URL + "/api/sessions/" + rootSession.SessionID + "/spec")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -534,13 +701,61 @@ func TestGetControllerSessionSpec(t *testing.T) {
 	}
 }
 
-func TestUpdateControllerSessionSpecRejectsTaskSession(t *testing.T) {
+func TestGetRootSessionSpecUsesLineageNotKind(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
-	task, _ := writeAuthorizedSession(t, store.Root, "task", sessionapi.KindTask, nil)
+	markdown := "---\nversion: v0\nname: postgres\nplatform: local\n---\n# Postgres\n"
+	kind := sessionapi.KindTask
+	root, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdown,
+		SessionKind:  &kind,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
 
-	body := `{"spec_markdown":"---\nversion: v0\nname: task\nplatform: cloud\n---\n# Task\n"}`
-	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/"+task.SessionID+"/spec", strings.NewReader(body))
+	resp, err := http.Get(srv.URL + "/api/sessions/" + root.SessionID + "/spec")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+	var body sessionapi.SessionSpecResponse
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Version == nil || *body.Version != 1 {
+		t.Fatalf("version: got %#v", body.Version)
+	}
+}
+
+func TestApplySessionSpecRejectsDuplicateActiveRoots(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+	first, _ := writeAuthorizedSession(t, store.Root, "sess_first", sessionapi.KindController, nil)
+	second, _ := writeAuthorizedSession(t, store.Root, "sess_second", sessionapi.KindController, nil)
+	for _, session := range []sessionapi.Manifest{first, second} {
+		manifestPath := filepath.Join(store.Root, session.SessionID, "session.json")
+		m, err := sessionapi.ReadManifest(manifestPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		m.ParentSessionID = nil
+		m.SpecName = "postgres"
+		if len(m.Specs) > 0 {
+			m.Specs[0].Name = "postgres"
+			m.Specs[0].DirName = "postgres"
+		}
+		if err := sessionapi.WriteManifest(manifestPath, m); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	body := `{"spec_markdown":"---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"}`
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -550,9 +765,9 @@ func TestUpdateControllerSessionSpecRejectsTaskSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusBadRequest {
+	if resp.StatusCode != http.StatusConflict {
 		data, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected 400, got %d: %s", resp.StatusCode, data)
+		t.Fatalf("expected 409, got %d: %s", resp.StatusCode, data)
 	}
 }
 
@@ -632,6 +847,88 @@ func TestListSessionsLimit(t *testing.T) {
 	}
 }
 
+func TestListSessionsHidesChildrenByDefault(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	root := createSession(t, srv.URL, createSessionBody(t, "root"))
+	childSpec := "---\nversion: v0\nname: child\nplatform: local\n---\n# Child\n"
+	if _, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &childSpec,
+		ParentSessionID: &root.SessionID,
+	}); err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+	var listResp sessionapi.SessionListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(listResp.Sessions) != 1 || listResp.Sessions[0].SessionID != root.SessionID {
+		t.Fatalf("default list should return only roots, got %#v", listResp.Sessions)
+	}
+}
+
+func TestListSessionsCanIncludeChildren(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	root := createSession(t, srv.URL, createSessionBody(t, "root"))
+	childSpec := "---\nversion: v0\nname: child\nplatform: local\n---\n# Child\n"
+	child, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &childSpec,
+		ParentSessionID: &root.SessionID,
+	})
+	if err != nil {
+		t.Fatalf("create child: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions?include_children=true")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+	var listResp sessionapi.SessionListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&listResp); err != nil {
+		t.Fatal(err)
+	}
+	if len(listResp.Sessions) != 2 {
+		t.Fatalf("include_children list count: got %d", len(listResp.Sessions))
+	}
+	ids := map[string]bool{}
+	for _, session := range listResp.Sessions {
+		ids[session.SessionID] = true
+	}
+	if !ids[root.SessionID] || !ids[child.SessionID] {
+		t.Fatalf("include_children sessions: got %#v", listResp.Sessions)
+	}
+}
+
+func TestListSessionsRejectsInvalidIncludeChildren(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/sessions?include_children=sure")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "400", itoa(resp.StatusCode))
+}
+
 func TestListSessionsRejectsInvalidLimit(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
@@ -648,6 +945,8 @@ func TestListSessionsJSONShape(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
+	createSession(t, srv.URL, createSessionBody(t, "summary"))
+
 	resp, err := http.Get(srv.URL + "/api/sessions")
 	if err != nil {
 		t.Fatal(err)
@@ -658,6 +957,31 @@ func TestListSessionsJSONShape(t *testing.T) {
 	var m map[string]any
 	json.Unmarshal(raw, &m)
 	assertJSONType(t, m, "sessions", "slice")
+	sessions := m["sessions"].([]any)
+	if len(sessions) != 1 {
+		t.Fatalf("sessions: got %#v", sessions)
+	}
+	session := sessions[0].(map[string]any)
+	for _, key := range []string{
+		"session_kind",
+		"session_spec_path",
+		"session_dir",
+		"active_workspace_path",
+		"config",
+		"provenance",
+		"specs",
+		"epochs",
+		"spec_versions",
+	} {
+		if _, ok := session[key]; ok {
+			t.Fatalf("list summary should not include %q: %#v", key, session)
+		}
+	}
+	for _, key := range []string{"session_id", "spec_name", "status", "runtime"} {
+		if _, ok := session[key]; !ok {
+			t.Fatalf("list summary missing %q: %#v", key, session)
+		}
+	}
 }
 
 // --------- GET /api/sessions/{id} ---------------------------------------------------------------------------------------------------------------------------------------------------
@@ -1424,10 +1748,10 @@ func TestSessionStatusCompleted(t *testing.T) {
 	assertEqual(t, "completed status", "completed", string(session.Status))
 }
 
-func TestCloudControllerStatusStaysRunningAfterCompletedCycle(t *testing.T) {
+func TestCloudRootStatusStaysRunningAfterCompletedCycle(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
-	markdown := "---\nversion: v0\nname: controller\nplatform: cloud\n---\n# Controller\n"
+	markdown := "---\nversion: v0\nname: root\nplatform: cloud\n---\n# Root\n"
 
 	created, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -1457,7 +1781,7 @@ func TestCloudControllerStatusStaysRunningAfterCompletedCycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	assertEqual(t, "controller status", "running", string(session.Status))
+	assertEqual(t, "root status", "running", string(session.Status))
 }
 
 func TestSessionStatusFailed(t *testing.T) {
@@ -1649,7 +1973,7 @@ func TestBearerAuthorizerHonorsSessionScopedTokens(t *testing.T) {
 
 	got := getSessionWithToken(t, srv.URL, child.SessionID, parentToken)
 	if got.SessionID != child.SessionID {
-		t.Fatalf("controller token should read child session, got %q", got.SessionID)
+		t.Fatalf("root token should read child session, got %q", got.SessionID)
 	}
 
 	req, _ := http.NewRequest("GET", srv.URL+"/api/sessions/"+parent.SessionID+"/spec", nil)
@@ -1661,7 +1985,7 @@ func TestBearerAuthorizerHonorsSessionScopedTokens(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		t.Fatalf("controller token should read its own spec, got %d: %s", resp.StatusCode, body)
+		t.Fatalf("root token should read its own spec, got %d: %s", resp.StatusCode, body)
 	}
 
 	req, _ = http.NewRequest("GET", srv.URL+"/api/sessions/"+other.SessionID, nil)
@@ -1672,13 +1996,13 @@ func TestBearerAuthorizerHonorsSessionScopedTokens(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("controller token should not read unrelated session, got %d", resp.StatusCode)
+		t.Fatalf("root token should not read unrelated session, got %d", resp.StatusCode)
 	}
 
 	taskToken := child.Access.APIToken
 	got = getSessionWithToken(t, srv.URL, child.SessionID, taskToken)
 	if got.SessionID != child.SessionID {
-		t.Fatalf("task token should read itself, got %q", got.SessionID)
+		t.Fatalf("child token should read itself, got %q", got.SessionID)
 	}
 
 	req, _ = http.NewRequest("POST", srv.URL+"/api/sessions", strings.NewReader(createSessionBody(t, "blocked")))
@@ -1690,7 +2014,7 @@ func TestBearerAuthorizerHonorsSessionScopedTokens(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
-		t.Fatalf("task token should not apply, got %d", resp.StatusCode)
+		t.Fatalf("child token should not apply, got %d", resp.StatusCode)
 	}
 }
 

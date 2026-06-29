@@ -23,7 +23,7 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	if err != nil {
 		return 1, err
 	}
-	controller := manifest.Kind == sessionapi.KindController
+	root := manifest.Kind == sessionapi.KindController
 	reconciledTerminal := false
 	reconcileTerminal := func() {
 		if reconciledTerminal {
@@ -32,7 +32,7 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 		reconciledTerminal = true
 		reconcileWorkerBilling(sessionDir, manifest, true)
 	}
-	if !controller || once {
+	if !root || once {
 		defer reconcileTerminal()
 	}
 
@@ -43,11 +43,11 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	for {
 		result, err := cli.RunLocalSession(sessionDir)
 		if err != nil {
-			if !controller || once {
+			if !root || once {
 				return 1, err
 			}
-			fmt.Fprintf(os.Stderr, "controller cycle failed: %v\n", err)
-		} else if !controller {
+			fmt.Fprintf(os.Stderr, "root session cycle failed: %v\n", err)
+		} else if !root {
 			reconcileTerminal()
 			if result.GameResult == game.GameSuccess {
 				return 0, nil
@@ -62,7 +62,7 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 		} else {
 			reconcileWorkerBilling(sessionDir, manifest, false)
 		}
-		if controller && manifest.Interval <= 0 {
+		if root && manifest.Interval <= 0 {
 			<-stop
 			return 0, nil
 		}

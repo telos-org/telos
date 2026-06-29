@@ -60,7 +60,7 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	}
 
 	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres\n"
-	if _, err := store.UpdateSpec(session.SessionID, sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated, UserAuthorization: "Bearer update-user-token"}); err != nil {
+	if _, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated, UserAuthorization: "Bearer update-user-token"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(substrate.applies) != 2 {
@@ -154,8 +154,44 @@ func TestCloudSessionStoreAddsHTTPProductHandle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.ArtifactURI == nil || *session.ArtifactURI != "https://postgres.usetelos.ai" {
-		t.Fatalf("artifact_uri: got %#v", session.ArtifactURI)
+	if session.ServiceURL == nil || *session.ServiceURL != "https://postgres.usetelos.ai" {
+		t.Fatalf("service_url: got %#v", session.ServiceURL)
+	}
+}
+
+func TestCloudSessionStoreAddsDashboardURL(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	store := newCloudSessionStore(base, routeHandleResolver{
+		read: func(context.Context) ([]publicRoute, error) {
+			return []publicRoute{
+				{
+					Namespace: "ns-auth",
+					Data: map[string]string{
+						"type":           "service",
+						"product_handle": "auth-service.usetelos.ai",
+					},
+				},
+				{
+					Namespace: "ns-auth",
+					Data: map[string]string{
+						"type":           "dashboard",
+						"product_handle": "dashboard-auth.usetelos.ai",
+					},
+				},
+			}, nil
+		},
+	}, nil)
+	markdown := "---\nversion: v0\nname: auth\nplatform: cloud\n---\n# Auth\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.ServiceURL == nil || *session.ServiceURL != "https://auth-service.usetelos.ai" {
+		t.Fatalf("service_url: got %#v", session.ServiceURL)
+	}
+	if session.DashboardURL == nil || *session.DashboardURL != "https://dashboard-auth.usetelos.ai" {
+		t.Fatalf("dashboard_url: got %#v", session.DashboardURL)
 	}
 }
 
@@ -182,8 +218,8 @@ func TestCloudSessionStoreAddsTerminalProductHandle(t *testing.T) {
 
 	store.enrich(&session, store.routes())
 
-	if session.ArtifactURI == nil || *session.ArtifactURI != "https://postgres.usetelos.ai" {
-		t.Fatalf("artifact_uri: got %#v", session.ArtifactURI)
+	if session.ServiceURL == nil || *session.ServiceURL != "https://postgres.usetelos.ai" {
+		t.Fatalf("service_url: got %#v", session.ServiceURL)
 	}
 }
 
@@ -212,8 +248,8 @@ func TestCloudSessionStoreLeavesTaskHandleEmpty(t *testing.T) {
 	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindTask {
 		t.Fatalf("session kind: got %#v", session.SessionKind)
 	}
-	if session.ArtifactURI != nil {
-		t.Fatalf("task session got artifact_uri: %q", *session.ArtifactURI)
+	if session.ServiceURL != nil {
+		t.Fatalf("task session got service_url: %q", *session.ServiceURL)
 	}
 }
 
@@ -309,6 +345,36 @@ func TestProductHandlePrefersProductRouteOverDashboardRoute(t *testing.T) {
 	}
 }
 
+func TestRouteHandlesPreferExplicitPublicRouteLabels(t *testing.T) {
+	name := "auth"
+	kind := sessionapi.KindController
+	session := sessionapi.Session{
+		SessionID:   "sess_auth",
+		SessionKind: &kind,
+		SpecName:    &name,
+		Status:      sessionapi.StatusRunning,
+	}
+	routes := []publicRoute{
+		{
+			Namespace: "ns-auth",
+			Labels:    map[string]string{publicRouteLabel: "service"},
+			Data:      map[string]string{"hostname": "auth.usetelos.ai"},
+		},
+		{
+			Namespace: "ns-auth",
+			Labels:    map[string]string{publicRouteLabel: "dashboard"},
+			Data:      map[string]string{"hostname": "dashboard-auth.usetelos.ai"},
+		},
+	}
+
+	if handle := productHandleFor(routes, session); handle != "auth.usetelos.ai" {
+		t.Fatalf("service handle: got %q", handle)
+	}
+	if handle := dashboardHandleFor(routes, session); handle != "dashboard-auth.usetelos.ai" {
+		t.Fatalf("dashboard handle: got %q", handle)
+	}
+}
+
 func TestParsePublicRoutes(t *testing.T) {
 	routes, err := parsePublicRoutes([]byte(`{
 	  "items": [
@@ -361,7 +427,7 @@ func TestReadPublicRoutesUsesContextTimeoutOnly(t *testing.T) {
 	if gotTimeout != 2*time.Second {
 		t.Fatalf("timeout: got %s", gotTimeout)
 	}
-	wantArgs := []string{"get", "cm", "-A", "-l", "telos.ai/public-route=primary", "-o", "json"}
+	wantArgs := []string{"get", "cm", "-A", "-l", "telos.ai/public-route in (primary,service,dashboard)", "-o", "json"}
 	if !slices.Equal(gotArgs, wantArgs) {
 		t.Fatalf("kubectl args: got %#v want %#v", gotArgs, wantArgs)
 	}

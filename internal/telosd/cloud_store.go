@@ -42,16 +42,30 @@ func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessio
 	return session, nil
 }
 
-func (s *cloudSessionStore) UpdateSpec(id string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.Session, error) {
-	session, err := s.FileStore.UpdateSpec(id, req)
+func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.SessionSpecUpdateResponse, error) {
+	response, err := s.FileStore.UpdateSpec(name, req)
 	if err != nil {
 		return nil, err
 	}
-	if err := s.apply(session, "spec_updated", req.UserAuthorization); err != nil {
+	if response.Session == nil {
+		return response, nil
+	}
+	wakeReason := "spec_updated"
+	if response.Operation == "created" {
+		wakeReason = startWakeReason(response.Session)
+	}
+	if err := s.apply(response.Session, wakeReason, req.UserAuthorization); err != nil {
+		if response.Operation == "created" {
+			cleanupErr := s.cleanupWorker(response.Session)
+			removeSessionDir(response.Session)
+			if cleanupErr != nil {
+				return nil, errors.Join(err, cleanupErr)
+			}
+		}
 		return nil, err
 	}
-	s.enrich(session, s.routes())
-	return session, nil
+	s.enrich(response.Session, s.routes())
+	return response, nil
 }
 
 func (s *cloudSessionStore) List() ([]sessionapi.Session, error) {
@@ -138,11 +152,15 @@ func (s *cloudSessionStore) routes() []publicRoute {
 }
 
 func (s *cloudSessionStore) enrich(session *sessionapi.Session, routes []publicRoute) {
-	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindController {
+	if session.ParentSessionID != nil && *session.ParentSessionID != "" {
 		return
 	}
 	if handle := productHandleFor(routes, *session); handle != "" {
 		uri := "https://" + stripScheme(handle)
-		session.ArtifactURI = &uri
+		session.ServiceURL = &uri
+	}
+	if handle := dashboardHandleFor(routes, *session); handle != "" {
+		url := "https://" + stripScheme(handle)
+		session.DashboardURL = &url
 	}
 }

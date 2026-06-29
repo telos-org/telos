@@ -30,33 +30,33 @@ func cmdList(args []string) {
 	}
 
 	var sessions []sessionapi.Session
-	controllerScoped := false
+	rootScoped := false
 	fetchLimit := 0
 	if *wide {
 		fetchLimit = *limit
 	}
 
 	if !*localOnly && *env == "" {
-		controllerSessions, handled, err := controllerListSessions(*limit)
+		rootSessions, handled, err := rootListSessions(*limit)
 		if handled {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
-			sessions = append(sessions, controllerSessions...)
-			controllerScoped = true
+			sessions = append(sessions, rootSessions...)
+			rootScoped = true
 		} else {
-			sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit)...)
+			sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit, *wide)...)
 		}
 	} else {
-		sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit)...)
+		sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit, *wide)...)
 	}
 
-	effectiveWide := *wide || controllerScoped
+	effectiveWide := *wide || rootScoped
 	visible := visibleListSessions(sessions, effectiveWide)
 	visible = limitListSessions(visible, *limit)
 	if *jsonOut {
-		printJSON(sessionapi.SessionListResponse{Sessions: visible})
+		printJSON(sessionapi.SessionListResponse{Sessions: sessionapi.SessionListItems(visible)})
 		return
 	}
 
@@ -98,27 +98,27 @@ func cmdList(args []string) {
 	_ = w.Flush()
 }
 
-func controllerListSessions(limit int) ([]sessionapi.Session, bool, error) {
-	if sessionID, ok := localControllerSessionID(); ok {
+func rootListSessions(limit int) ([]sessionapi.Session, bool, error) {
+	if sessionID, ok := localRootSessionID(); ok {
 		sessions, err := store().List()
 		if err != nil {
-			return nil, true, fmt.Errorf("local controller session list failed: %w", err)
+			return nil, true, fmt.Errorf("local root session list failed: %w", err)
 		}
-		return controllerSessionTree(sessions, sessionID), true, nil
+		return sessionTreeForRoot(sessions, sessionID), true, nil
 	}
 
-	ctx, ok := controllerSessionContext()
+	ctx, ok := rootSessionContext()
 	if !ok {
 		return nil, false, nil
 	}
-	sessions, err := cloud.NewClient(ctx.endpoint, ctx.token).ListSessions(limit)
+	sessions, err := cloud.NewClient(ctx.endpoint, ctx.token).ListSessions(limit, true)
 	if err != nil {
-		return nil, true, fmt.Errorf("controller session list failed: %w", err)
+		return nil, true, fmt.Errorf("root session list failed: %w", err)
 	}
 	return sessions, true, nil
 }
 
-func controllerSessionTree(sessions []sessionapi.Session, rootID string) []sessionapi.Session {
+func sessionTreeForRoot(sessions []sessionapi.Session, rootID string) []sessionapi.Session {
 	byID := make(map[string]sessionapi.Session, len(sessions))
 	childrenByParent := make(map[string][]sessionapi.Session)
 	for _, session := range sessions {
@@ -151,7 +151,7 @@ func controllerSessionTree(sessions []sessionapi.Session, rootID string) []sessi
 	return out
 }
 
-func listLocalAndConfiguredCloudSessions(localOnly bool, cloudOnly bool, envID string, limit int) []sessionapi.Session {
+func listLocalAndConfiguredCloudSessions(localOnly bool, cloudOnly bool, envID string, limit int, includeChildren bool) []sessionapi.Session {
 	var sessions []sessionapi.Session
 	if !cloudOnly {
 		local, err := store().List()
@@ -160,7 +160,7 @@ func listLocalAndConfiguredCloudSessions(localOnly bool, cloudOnly bool, envID s
 		}
 	}
 	if !localOnly && (cloudOnly || envID != "" || config.IsConfigured()) {
-		cloudSessions, err := listCloudSessions(envID, limit)
+		cloudSessions, err := listCloudSessions(envID, limit, includeChildren)
 		if err != nil && (cloudOnly || envID != "") {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -229,11 +229,11 @@ func sessionName(sess sessionapi.Session) string {
 	return "-"
 }
 
-func sessionKind(sess sessionapi.Session) string {
-	if sess.SessionKind != nil && *sess.SessionKind != "" {
-		return string(*sess.SessionKind)
+func sessionLineage(sess sessionapi.Session) string {
+	if isTopLevelSession(sess) {
+		return "root"
 	}
-	return "-"
+	return "child"
 }
 
 func sessionParent(sess sessionapi.Session) string {
@@ -241,6 +241,10 @@ func sessionParent(sess sessionapi.Session) string {
 		return *sess.ParentSessionID
 	}
 	return "-"
+}
+
+func isTopLevelSession(sess sessionapi.Session) bool {
+	return sess.ParentSessionID == nil || *sess.ParentSessionID == ""
 }
 
 func sessionCost(sess sessionapi.Session) string {
@@ -258,10 +262,17 @@ func sessionTurn(sess sessionapi.Session) string {
 }
 
 func sessionArtifact(sess sessionapi.Session) string {
-	if sess.ArtifactURI != nil && *sess.ArtifactURI != "" {
-		return *sess.ArtifactURI
+	if url := sessionServiceURL(sess); url != "" {
+		return url
 	}
 	return "-"
+}
+
+func sessionServiceURL(sess sessionapi.Session) string {
+	if sess.ServiceURL != nil && *sess.ServiceURL != "" {
+		return *sess.ServiceURL
+	}
+	return ""
 }
 
 func sessionResult(sess sessionapi.Session) string {

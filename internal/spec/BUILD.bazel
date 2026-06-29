@@ -6,13 +6,13 @@ go_library(
         "compile.go",
         "digest.go",
         "embed.go",
+        "package.go",
         "render.go",
         "skills.go",
         "spec.go",
     ],
     embedsrcs = glob([
         "prompts/**/*.md",
-        "skills/**",
     ]),
     importpath = "github.com/telos-org/telos/internal/spec",
     visibility = ["//:__subpackages__"],
@@ -26,6 +26,7 @@ go_test(
     name = "spec_test",
     srcs = [
         "compile_test.go",
+        "package_test.go",
         "skills_test.go",
         "spec_test.go",
     ],

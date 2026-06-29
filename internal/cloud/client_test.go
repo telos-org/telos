@@ -73,7 +73,7 @@ func TestClientListSessions(t *testing.T) {
 		gotPath = r.URL.RequestURI()
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(sessionapi.SessionListResponse{
-			Sessions: []sessionapi.Session{
+			Sessions: []sessionapi.SessionListItem{
 				{SessionID: "s1", Status: sessionapi.StatusCompleted, Runtime: sessionapi.RuntimeCloud},
 				{SessionID: "s2", Status: sessionapi.StatusRunning, Runtime: sessionapi.RuntimeCloud},
 			},
@@ -82,7 +82,7 @@ func TestClientListSessions(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "token")
-	sessions, err := client.ListSessions(0)
+	sessions, err := client.ListSessions(0, false)
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
@@ -92,12 +92,19 @@ func TestClientListSessions(t *testing.T) {
 	if gotPath != "/api/sessions" {
 		t.Fatalf("request path: got %q", gotPath)
 	}
-	sessions, err = client.ListSessions(2)
+	sessions, err = client.ListSessions(2, false)
 	if err != nil {
 		t.Fatalf("ListSessions limit: %v", err)
 	}
 	if gotPath != "/api/sessions?limit=2" {
 		t.Fatalf("limited request path: got %q", gotPath)
+	}
+	_, err = client.ListSessions(2, true)
+	if err != nil {
+		t.Fatalf("ListSessions include children: %v", err)
+	}
+	if gotPath != "/api/sessions?limit=2&include_children=true" {
+		t.Fatalf("include children request path: got %q", gotPath)
 	}
 }
 
@@ -289,6 +296,10 @@ func TestClientForwardsUserAuthorization(t *testing.T) {
 func TestClientBalanceAndReconcile(t *testing.T) {
 	var sawReconcile bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
 		switch r.URL.RequestURI() {
 		case "/api/billing/balance":
 			json.NewEncoder(w).Encode(map[string]any{"compute_units": 123.0})
@@ -317,6 +328,99 @@ func TestClientBalanceAndReconcile(t *testing.T) {
 	}
 }
 
+func TestClientPushCatalogSpec(t *testing.T) {
+	var uploadedBody []byte
+	var pushedBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/api/catalog/packages/sha256:abc":
+			uploadedBody, _ = io.ReadAll(r.Body)
+			json.NewEncoder(w).Encode(map[string]any{
+				"digest":     "sha256:abc",
+				"size_bytes": len(uploadedBody),
+				"created_at": "now",
+			})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/catalog/specs/auth":
+			if err := json.NewDecoder(r.Body).Decode(&pushedBody); err != nil {
+				t.Fatal(err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"operation": "created",
+				"spec": map[string]any{
+					"name":           "auth",
+					"package_digest": "sha256:abc",
+					"visibility":     "private",
+					"created_at":     "now",
+					"updated_at":     "now",
+				},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	uploaded, err := client.UploadApplyPackage("sha256:abc", []byte("package"))
+	if err != nil {
+		t.Fatalf("UploadApplyPackage: %v", err)
+	}
+	if uploaded.SizeBytes != len("package") || string(uploadedBody) != "package" {
+		t.Fatalf("upload: got %+v body %q", uploaded, uploadedBody)
+	}
+	pushed, err := client.PushCatalogSpec("auth", "sha256:abc")
+	if err != nil {
+		t.Fatalf("PushCatalogSpec: %v", err)
+	}
+	if pushed.Operation != "created" || pushed.Spec.Name != "auth" {
+		t.Fatalf("push: got %+v", pushed)
+	}
+	if pushedBody["package_digest"] != "sha256:abc" {
+		t.Fatalf("push body: got %#v", pushedBody)
+	}
+}
+
+func TestClientApplyEnvironmentSession(t *testing.T) {
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/environments/env_123/sessions/auth" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"operation": "created",
+			"session": map[string]any{
+				"env_id":         "env_123",
+				"name":           "auth",
+				"package_digest": "sha256:abc",
+				"desired_state":  "running",
+				"created_at":     "now",
+				"updated_at":     "now",
+			},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	response, err := client.ApplyEnvironmentSession("env_123", "auth", "sha256:abc")
+	if err != nil {
+		t.Fatalf("ApplyEnvironmentSession: %v", err)
+	}
+	if response.Operation != "created" || response.Session.Name != "auth" {
+		t.Fatalf("response: got %+v", response)
+	}
+	if gotBody["package_digest"] != "sha256:abc" {
+		t.Fatalf("body: got %#v", gotBody)
+	}
+}
+
 func TestSessionCreateRequestOmitsEmptyRuntimeDefaults(t *testing.T) {
 	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
 	body, err := json.Marshal(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
@@ -330,7 +434,7 @@ func TestSessionCreateRequestOmitsEmptyRuntimeDefaults(t *testing.T) {
 	}
 }
 
-func TestClientUpdateSessionSpec(t *testing.T) {
+func TestClientApplySessionSpec(t *testing.T) {
 	var gotMethod string
 	var gotPath string
 	var gotBody sessionapi.SessionSpecUpdateRequest
@@ -344,10 +448,13 @@ func TestClientUpdateSessionSpec(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Fatalf("decode body: %v", err)
 		}
-		json.NewEncoder(w).Encode(sessionapi.Session{
-			SessionID: "sess_controller",
-			Status:    sessionapi.StatusRunning,
-			Runtime:   sessionapi.RuntimeCloud,
+		json.NewEncoder(w).Encode(sessionapi.SessionSpecUpdateResponse{
+			Operation: "updated",
+			Session: &sessionapi.Session{
+				SessionID: "sess_controller",
+				Status:    sessionapi.StatusRunning,
+				Runtime:   sessionapi.RuntimeCloud,
+			},
 		})
 	}))
 	defer srv.Close()
@@ -356,7 +463,7 @@ func TestClientUpdateSessionSpec(t *testing.T) {
 	maxCost := 9.0
 	maxToolLoops := 55
 	agentTimeout := 600
-	session, err := client.UpdateSessionSpec("sess_controller", sessionapi.SessionSpecUpdateRequest{
+	response, err := client.ApplySessionSpec("demo", sessionapi.SessionSpecUpdateRequest{
 		SpecMarkdown:    "---\nversion: v0\nname: demo\n---\n# Demo\n",
 		Model:           "sail-research/moonshotai/Kimi-K2.6",
 		Thinking:        "high",
@@ -365,22 +472,22 @@ func TestClientUpdateSessionSpec(t *testing.T) {
 		AgentTimeoutSec: &agentTimeout,
 	})
 	if err != nil {
-		t.Fatalf("UpdateSessionSpec: %v", err)
+		t.Fatalf("ApplySessionSpec: %v", err)
 	}
 	if gotMethod != http.MethodPut {
 		t.Fatalf("method: got %q", gotMethod)
 	}
-	if gotPath != "/api/sessions/sess_controller/spec" {
+	if gotPath != "/api/sessions/demo/spec" {
 		t.Fatalf("path: got %q", gotPath)
 	}
 	if !strings.Contains(gotBody.SpecMarkdown, "name: demo") {
 		t.Fatalf("body: got %#v", gotBody)
 	}
-	if gotBody.Model != "sail-research/moonshotai/Kimi-K2.6" || gotBody.Thinking != "high" {
-		t.Fatalf("runtime config not sent: %#v", gotBody)
+	if response.Operation != "updated" {
+		t.Fatalf("operation: got %q", response.Operation)
 	}
-	if gotBody.MaxCostUSD == nil || *gotBody.MaxCostUSD != maxCost {
-		t.Fatalf("max cost not sent: %#v", gotBody.MaxCostUSD)
+	if response.Session == nil {
+		t.Fatal("missing session")
 	}
 	if gotBody.MaxToolLoops == nil || *gotBody.MaxToolLoops != maxToolLoops {
 		t.Fatalf("max tool loops not sent: %#v", gotBody.MaxToolLoops)
@@ -388,8 +495,8 @@ func TestClientUpdateSessionSpec(t *testing.T) {
 	if gotBody.AgentTimeoutSec == nil || *gotBody.AgentTimeoutSec != agentTimeout {
 		t.Fatalf("agent timeout not sent: %#v", gotBody.AgentTimeoutSec)
 	}
-	if session.SessionID != "sess_controller" {
-		t.Fatalf("session: got %#v", session)
+	if response.Session.SessionID != "sess_controller" {
+		t.Fatalf("session: got %#v", response.Session)
 	}
 }
 

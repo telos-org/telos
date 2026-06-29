@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/telos-org/telos/internal/cli"
@@ -65,17 +64,17 @@ func cmdLaunch(command, action string, args []string) {
 	specArg := fs.Arg(0)
 	specPath, hasLocalSpec := existingSpecPath(specArg)
 
-	if ctx, ok := controllerSessionContext(); ok {
+	if ctx, ok := rootSessionContext(); ok {
 		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a controller session; use telos run for bounded child tasks")
+			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for child sessions")
 			os.Exit(1)
 		}
 		if *env != "" {
-			fmt.Fprintln(os.Stderr, "error: --env is not supported inside a controller session")
+			fmt.Fprintln(os.Stderr, "error: --env is not supported inside a root session")
 			os.Exit(1)
 		}
 		if localConfigSet {
-			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a controller session")
+			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a root session")
 			os.Exit(1)
 		}
 		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, budgetFlags{
@@ -90,7 +89,7 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		runChildCloud(specArg, ctx, untilValue, runtimeConfig, *jsonOut, action)
+		runCloudChildSession(specArg, ctx, untilValue, runtimeConfig, *jsonOut, action)
 		return
 	}
 
@@ -114,20 +113,24 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	localParentSessionID, inLocalController := localControllerSessionID()
-	if inLocalController {
+	localRootID, inLocalRoot := localRootSessionID()
+	if inLocalRoot {
 		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a controller session; use telos run for bounded child tasks")
+			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for child sessions")
 			os.Exit(1)
 		}
 		if launchMode != launchLocal {
-			fmt.Fprintln(os.Stderr, "error: local controller sessions can only launch platform: local child tasks")
+			fmt.Fprintln(os.Stderr, "error: local root sessions can only launch platform: local child sessions")
 			os.Exit(1)
 		}
-		if err := ensureNoActiveControllerChild(localParentSessionID, nil); err != nil {
+		if err := ensureNoActiveControllerChild(localRootID, nil); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	}
+	if err := validateLaunchCommand(command, launchMode); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 	switch launchMode {
 	case launchCloudExisting:
@@ -182,8 +185,8 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	cfg.SessionKind = sessionKindForCommand(command)
 	cfg.Until = untilValue
-	if inLocalController {
-		cfg.ParentSessionID = &localParentSessionID
+	if inLocalRoot {
+		cfg.ParentSessionID = &localRootID
 	}
 
 	if err := exportAutocompactEnv(fs, autocompactFlags{
@@ -268,9 +271,16 @@ func decideLaunchMode(
 	return launchCloudNew, nil
 }
 
-func runChildCloud(
+func validateLaunchCommand(command string, mode launchMode) error {
+	if command == "run" && (mode == launchCloudExisting || mode == launchCloudNew) {
+		return fmt.Errorf("telos run for cloud specs must be used inside a root session; use telos apply to create or update a root session")
+	}
+	return nil
+}
+
+func runCloudChildSession(
 	specArg string,
-	ctx controllerContext,
+	ctx rootContext,
 	until int,
 	runtimeConfig sessionRuntimeConfig,
 	jsonOut bool,
@@ -281,15 +291,13 @@ func runChildCloud(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	kind := sessionapi.KindTask
-	req.SessionKind = &kind
 	req.ParentSessionID = &ctx.sessionID
 	if until > 0 {
 		req.Until = &until
 	}
 	applySessionRuntimeConfig(&req, runtimeConfig)
 	client := cloud.NewClient(ctx.endpoint, ctx.token)
-	sessions, err := client.ListSessions(0)
+	sessions, err := client.ListSessions(0, true)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: inspect controller children: %v\n", err)
 		os.Exit(1)
@@ -372,13 +380,15 @@ func runCloud(
 	readyTimeout time.Duration,
 	action string,
 ) {
+	if command == "apply" {
+		applyCloudControl(specArg, envID, waitForEnvironment, readyTimeout, jsonOut)
+		return
+	}
 	req, err := sessionCreateRequestForSpec(specArg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	kind := sessionKindForCommand(command)
-	req.SessionKind = &kind
 	if until > 0 {
 		req.Until = &until
 	}
@@ -395,18 +405,10 @@ func runCloud(
 		os.Exit(1)
 	}
 	applySessionRuntimeConfig(&req, runtimeConfig)
-	if command == "apply" && envID == "" {
-		applyCloudAuto(req, jsonOut, waitForEnvironment, readyTimeout)
-		return
-	}
 	client, env, err := cloudSessionClientForRun(envID, waitForEnvironment, readyTimeout)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
-	}
-	if command == "apply" {
-		applyCloud(req, client, env, jsonOut)
-		return
 	}
 	session, err := client.CreateSession(req)
 	if err != nil {
@@ -423,121 +425,50 @@ func runCloud(
 	}
 }
 
-func applyCloud(
-	req sessionapi.SessionCreateRequest,
-	client *cloud.Client,
-	env *cloud.Environment,
+func applyCloudControl(
+	specArg string,
+	envID string,
+	waitForEnvironment bool,
+	readyTimeout time.Duration,
 	jsonOut bool,
 ) {
-	specName, err := specNameFromRequest(req)
+	pkg, err := packageSpec(specArg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	sessions, err := client.ListSessions(0)
+	control, env, err := cloudEnvironmentForApply(envID, false, 0)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	existing, err := controllerForApply(sessions, specName)
+	if _, err := pushSpecPackage(control, pkg); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	response, err := control.ApplyEnvironmentSession(env.ID, pkg.name, pkg.digest)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-
-	var session *sessionapi.Session
-	operation := "created"
-	if existing != nil {
-		operation = "updated"
-		session, err = client.UpdateSessionSpec(existing.SessionID, updateRequestFromCreate(req))
-	} else {
-		session, err = client.CreateSession(req)
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	if waitForEnvironment {
+		if readyTimeout <= 0 {
+			readyTimeout = 15 * time.Minute
+		}
+		if err := cloud.WaitForEnvironment(env.Handle, readyTimeout); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	if jsonOut {
 		printJSON(map[string]any{
 			"environment": environmentOutput(env),
-			"operation":   operation,
-			"session":     session,
+			"operation":   response.Operation,
+			"session":     response.Session,
 		})
 		return
 	}
-	printSessionReceipt(os.Stdout, operation, session, environmentOutput(env))
-}
-
-type applyCloudResult struct {
-	Environment *environmentJSON    `json:"environment,omitempty"`
-	Operation   string              `json:"operation"`
-	Session     *sessionapi.Session `json:"session"`
-}
-
-func applyCloudAuto(
-	req sessionapi.SessionCreateRequest,
-	jsonOut bool,
-	waitForEnvironment bool,
-	readyTimeout time.Duration,
-) {
-	specName, err := specNameFromRequest(req)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	targets, err := cloudSessionTargets("")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	var results []applyCloudResult
-	for _, target := range targets {
-		sessions, err := target.client.ListSessions(0)
-		if err != nil {
-			continue
-		}
-		existing, err := controllerForApply(sessions, specName)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s: %v\n", target.env.ID, err)
-			os.Exit(1)
-		}
-		if existing == nil {
-			continue
-		}
-		session, err := target.client.UpdateSessionSpec(existing.SessionID, updateRequestFromCreate(req))
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %s: %v\n", target.env.ID, err)
-			os.Exit(1)
-		}
-		env := environmentJSONFrom(&target.env)
-		results = append(results, applyCloudResult{
-			Environment: &env,
-			Operation:   "updated",
-			Session:     session,
-		})
-	}
-	if len(results) == 0 {
-		client, env, err := cloudSessionClientForRun("", waitForEnvironment, readyTimeout)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		session, err := client.CreateSession(req)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		results = append(results, applyCloudResult{
-			Environment: environmentOutput(env),
-			Operation:   "created",
-			Session:     session,
-		})
-	}
-	if jsonOut {
-		printJSON(map[string]any{"results": results})
-		return
-	}
-	printApplyResults(os.Stdout, results)
+	printCloudApplyReceipt(os.Stdout, response, environmentOutput(env))
 }
 
 func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session, env *environmentJSON) {
@@ -560,51 +491,17 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	}
 }
 
-func printApplyResults(out io.Writer, results []applyCloudResult) {
-	if len(results) == 0 {
-		return
-	}
-	if len(results) == 1 {
-		result := results[0]
-		printSessionReceipt(out, result.Operation, result.Session, result.Environment)
-		return
-	}
-
-	seen := map[string]bool{}
-	var operations []string
-	for _, result := range results {
-		if !seen[result.Operation] {
-			seen[result.Operation] = true
-			operations = append(operations, result.Operation)
+func printCloudApplyReceipt(out io.Writer, response *cloud.EnvironmentSessionApplyResponse, env *environmentJSON) {
+	fmt.Fprintf(out, "%s %s\n\n", response.Operation, response.Session.Name)
+	printSummaryField(out, "Name", response.Session.Name)
+	printSummaryField(out, "Platform", "cloud")
+	printSummaryField(out, "Status", response.Session.DesiredState)
+	printSummaryField(out, "Digest", response.Session.PackageDigest)
+	if env != nil {
+		printSummaryField(out, "Environment", env.ID)
+		if env.Handle != "" {
+			printSummaryField(out, "Handle", env.Handle)
 		}
-	}
-	for index, operation := range operations {
-		if index > 0 {
-			fmt.Fprintln(out)
-		}
-		fmt.Fprintln(out, operation)
-		fmt.Fprintln(out)
-		w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
-		fmt.Fprintln(w, "ENV\tNAME\tPLATFORM\tSTATUS\tCOST\tSESSION")
-		for _, result := range results {
-			if result.Operation != operation || result.Session == nil {
-				continue
-			}
-			row := displayRow(*result.Session)
-			envID := "-"
-			if result.Environment != nil && result.Environment.ID != "" {
-				envID = result.Environment.ID
-			}
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				envID,
-				row.Name,
-				row.Platform,
-				row.Status,
-				row.Cost,
-				row.Session,
-			)
-		}
-		_ = w.Flush()
 	}
 }
 
@@ -645,57 +542,4 @@ func sessionKindForCommand(command string) sessionapi.SessionKind {
 		return sessionapi.KindController
 	}
 	return sessionapi.KindTask
-}
-
-func activeControllerForSpec(sessions []sessionapi.Session, specName string) (*sessionapi.Session, error) {
-	var matches []sessionapi.Session
-	for _, session := range sessions {
-		if !isControllerNamed(session, specName) {
-			continue
-		}
-		if session.Status.IsTerminal() {
-			continue
-		}
-		matches = append(matches, session)
-	}
-	switch len(matches) {
-	case 0:
-		return nil, nil
-	case 1:
-		return &matches[0], nil
-	default:
-		return nil, fmt.Errorf("multiple active controller sessions named %q; stop duplicates before applying", specName)
-	}
-}
-
-func controllerForApply(sessions []sessionapi.Session, specName string) (*sessionapi.Session, error) {
-	active, err := activeControllerForSpec(sessions, specName)
-	if err != nil || active != nil {
-		return active, err
-	}
-	var recoverable []sessionapi.Session
-	for _, session := range sessions {
-		if !isControllerNamed(session, specName) {
-			continue
-		}
-		switch session.Status {
-		case sessionapi.StatusFailed, sessionapi.StatusStale:
-			recoverable = append(recoverable, session)
-		}
-	}
-	switch len(recoverable) {
-	case 0:
-		return nil, nil
-	case 1:
-		return &recoverable[0], nil
-	default:
-		return nil, fmt.Errorf("multiple failed/stale controller sessions named %q; stop duplicates before applying", specName)
-	}
-}
-
-func isControllerNamed(session sessionapi.Session, specName string) bool {
-	return session.SessionKind != nil &&
-		*session.SessionKind == sessionapi.KindController &&
-		session.SpecName != nil &&
-		*session.SpecName == specName
 }

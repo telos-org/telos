@@ -51,7 +51,7 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	fmt.Fprintln(out, "Lifecycle")
 	printDetailField(out, "api status", string(session.Status))
 	printDetailField(out, "result", sessionRawResult(session))
-	printDetailField(out, "kind", sessionKind(session))
+	printDetailField(out, "lineage", sessionLineage(session))
 	if session.ParentSessionID != nil && *session.ParentSessionID != "" {
 		printDetailField(out, "parent", *session.ParentSessionID)
 	} else {
@@ -82,10 +82,10 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 		printDetailField(out, "rounds", fmt.Sprint(*session.RoundCount))
 	}
 	printRuntimeSummary(out, session)
-	if session.ArtifactURI != nil && *session.ArtifactURI != "" {
+	if serviceURL := sessionServiceURL(session); serviceURL != "" {
 		fmt.Fprintln(out)
-		fmt.Fprintln(out, "Artifact")
-		fmt.Fprintf(out, "  %s\n", *session.ArtifactURI)
+		fmt.Fprintln(out, "Service")
+		fmt.Fprintf(out, "  %s\n", serviceURL)
 	}
 	if len(session.Epochs) > 0 {
 		fmt.Fprintln(out)

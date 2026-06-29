@@ -3,8 +3,8 @@
 Telos is a spec-driven coding agent runtime for declarative goals and
 background agent work.
 
-Write a `SPEC.md`. Telos runs it as a durable session: implement, evaluate,
-record evidence, and continue under policy.
+Write a `SPEC.md`. Telos applies it as a durable goal: implement, evaluate,
+record evidence, and continue reconciling under policy.
 
 This repo contains:
 
@@ -125,7 +125,9 @@ telos login
 telos apply SPEC.md --env <env-handle>
 ```
 
-Use `run` for bounded tasks. Use `apply` for persistent controllers.
+For hosted workflows, `telos apply` is the primary interface: it applies a
+declarative goal and keeps reconciling it. `telos run` remains available for
+local specs and internal delegated work.
 
 ## Read Next
 

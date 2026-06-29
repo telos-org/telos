@@ -37,7 +37,7 @@ var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 type Store interface {
 	Create(req SessionCreateRequest) (*Session, error)
 	Spec(id string) (*SessionSpecResponse, error)
-	UpdateSpec(id string, req SessionSpecUpdateRequest) (*Session, error)
+	UpdateSpec(name string, req SessionSpecUpdateRequest) (*SessionSpecUpdateResponse, error)
 	List() ([]Session, error)
 	Get(id string) (*Session, error)
 	Stop(id string) (*Session, error)
@@ -83,6 +83,10 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
+	return fs.createLocked(req)
+}
+
+func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	if err := validateCreateRequest(req); err != nil {
 		return nil, err
 	}
@@ -108,12 +112,12 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 		return nil, err
 	}
 	if sessionKind == KindController {
-		ids, err := fs.liveControllerIDsBySpecName(specName)
+		ids, err := fs.liveTopLevelSessionIDsBySpecName(specName)
 		if err != nil {
 			return nil, err
 		}
 		if len(ids) > 0 {
-			return nil, fmt.Errorf("controller spec %q already exists as %s: %w", specName, strings.Join(ids, ", "), ErrConflict)
+			return nil, fmt.Errorf("root session %q already exists as %s: %w", specName, strings.Join(ids, ", "), ErrConflict)
 		}
 	}
 	access, err := NewScopedToken(id, sessionKind)
@@ -139,17 +143,20 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	prepared.SessionSpecPath = strPtr(sessionSpecPath)
 
 	m := ManifestFromInitial(InitialManifest{
-		SessionID:       id,
-		SessionKind:     sessionKind,
-		Runtime:         fs.runtime,
-		CreatedAt:       tsNow(),
-		Launcher:        fs.launcher,
-		ParentSessionID: req.ParentSessionID,
-		SessionSpecPath: prepared.SessionSpecPath,
-		SpecName:        specName,
-		Config:          buildConfig(req),
-		Provenance:      map[string]any{"mode": runtimeMode(fs.runtime)},
-		Access:          access,
+		SessionID:          id,
+		SessionKind:        sessionKind,
+		Runtime:            fs.runtime,
+		CreatedAt:          tsNow(),
+		Launcher:           fs.launcher,
+		ParentSessionID:    req.ParentSessionID,
+		SourceSpecPath:     prepared.SourceSpecPath,
+		SessionSpecPath:    prepared.SessionSpecPath,
+		SpecName:           specName,
+		Config:             buildConfig(req),
+		Provenance:         map[string]any{"mode": runtimeMode(fs.runtime)},
+		ApplyPackageDigest: prepared.ApplyPackageDigest,
+		ApplyPackageLock:   prepared.ApplyPackageLock,
+		Access:             access,
 		Specs: []InitialManifestSpec{{
 			Index:               0,
 			Name:                specName,
@@ -163,12 +170,12 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 			IntervalSeconds:     prepared.IntervalSeconds,
 		}},
 	})
-	if sessionKind == KindController && sessionSpecPath != "" {
+	if isTopLevelManifest(&m) && sessionSpecPath != "" {
 		version := 1
 		m.CurrentSpecVersion = &version
 		m.SpecVersions = append(
 			m.SpecVersions,
-			specVersionEntry(version, sessionSpecPath, prepared.SpecData, nil),
+			specVersionEntry(version, sessionSpecPath, prepared.SpecData, nil, prepared.ApplyPackageDigest),
 		)
 	}
 
@@ -215,7 +222,7 @@ func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) (SessionKind
 		switch *req.SessionKind {
 		case KindController:
 			if req.ParentSessionID != nil {
-				return "", fmt.Errorf("child sessions must use session_kind %q: %w", KindTask, ErrInvalidSession)
+				return "", fmt.Errorf("child sessions cannot use root worker kind: %w", ErrInvalidSession)
 			}
 			return KindController, nil
 		case KindTask:
@@ -233,7 +240,11 @@ func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) (SessionKind
 	return KindTask, nil
 }
 
-func (fs *FileStore) liveControllerIDsBySpecName(specName string) ([]string, error) {
+func isTopLevelManifest(m *Manifest) bool {
+	return m.ParentSessionID == nil || *m.ParentSessionID == ""
+}
+
+func (fs *FileStore) liveTopLevelSessionIDsBySpecName(specName string) ([]string, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -250,7 +261,10 @@ func (fs *FileStore) liveControllerIDsBySpecName(specName string) ([]string, err
 		if err != nil {
 			continue
 		}
-		if m.SessionKind != KindController || m.SpecName != specName {
+		if !isTopLevelManifest(m) {
+			continue
+		}
+		if m.SpecName != specName {
 			continue
 		}
 		if deriveStatus(m).IsTerminal() {
@@ -262,7 +276,7 @@ func (fs *FileStore) liveControllerIDsBySpecName(specName string) ([]string, err
 	return ids, nil
 }
 
-// Spec returns the mutable controller spec currently attached to a session.
+// Spec returns the mutable root spec currently attached to a session.
 func (fs *FileStore) Spec(id string) (*SessionSpecResponse, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
@@ -274,11 +288,11 @@ func (fs *FileStore) Spec(id string) (*SessionSpecResponse, error) {
 		}
 		return nil, err
 	}
-	if m.SessionKind != KindController {
-		return nil, fmt.Errorf("task sessions do not have mutable specs: %w", ErrInvalidSession)
+	if !isTopLevelManifest(m) {
+		return nil, fmt.Errorf("child sessions do not have mutable specs: %w", ErrInvalidSession)
 	}
 	if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
-		return nil, fmt.Errorf("controller session has no mutable spec: %w", ErrInvalidSession)
+		return nil, fmt.Errorf("root session has no mutable spec: %w", ErrInvalidSession)
 	}
 	data, err := os.ReadFile(*m.SessionSpecPath)
 	if err != nil {
@@ -304,11 +318,73 @@ func (fs *FileStore) Spec(id string) (*SessionSpecResponse, error) {
 	}, nil
 }
 
-// UpdateSpec replaces a controller session's primary spec in place.
-func (fs *FileStore) UpdateSpec(id string, req SessionSpecUpdateRequest) (*Session, error) {
+// UpdateSpec creates or updates the active root session named by the spec.
+func (fs *FileStore) UpdateSpec(name string, req SessionSpecUpdateRequest) (*SessionSpecUpdateResponse, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
+	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
+	prepared, err := fs.prepareSpecForUpdate(markdown)
+	if err != nil {
+		return nil, err
+	}
+	if prepared.Name != name {
+		return nil, fmt.Errorf("spec name %q does not match route name %q: %w", prepared.Name, name, ErrInvalidSession)
+	}
+
+	ids, err := fs.liveTopLevelSessionIDsBySpecName(name)
+	if err != nil {
+		return nil, err
+	}
+	switch len(ids) {
+	case 0:
+		kind := KindController
+		createReq := createRequestFromSpecUpdate(markdown, req)
+		createReq.SessionKind = &kind
+		session, err := fs.createLocked(createReq)
+		if err != nil {
+			return nil, err
+		}
+		return &SessionSpecUpdateResponse{Operation: "created", Session: session}, nil
+	case 1:
+		session, err := fs.updateSpecByIDLocked(ids[0], markdown, req)
+		if err != nil {
+			return nil, err
+		}
+		return &SessionSpecUpdateResponse{Operation: "updated", Session: session}, nil
+	default:
+		return nil, fmt.Errorf("multiple active root sessions named %q: %s: %w", name, strings.Join(ids, ", "), ErrConflict)
+	}
+}
+
+func createRequestFromSpecUpdate(markdown string, req SessionSpecUpdateRequest) SessionCreateRequest {
+	return SessionCreateRequest{
+		SpecMarkdown:    &markdown,
+		Model:           req.Model,
+		Thinking:        req.Thinking,
+		MaxCostUSD:      req.MaxCostUSD,
+		MaxRounds:       req.MaxRounds,
+		MaxDurationSec:  req.MaxDurationSec,
+		MaxInputTokens:  req.MaxInputTokens,
+		MaxOutputTokens: req.MaxOutputTokens,
+		MaxToolLoops:    req.MaxToolLoops,
+		AgentTimeoutSec: req.AgentTimeoutSec,
+	}
+}
+
+func (fs *FileStore) prepareSpecForUpdate(markdown string) (preparedRequestSpec, error) {
+	if err := os.MkdirAll(fs.Root, 0o755); err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("create sessions root: %w", err)
+	}
+	dir, err := os.MkdirTemp(fs.Root, ".apply-")
+	if err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("create apply compile dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	return prepareRequestSpec(dir, SessionCreateRequest{SpecMarkdown: &markdown})
+}
+
+func (fs *FileStore) updateSpecByIDLocked(id string, markdown string, req SessionSpecUpdateRequest) (*Session, error) {
 	m, err := ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -316,20 +392,19 @@ func (fs *FileStore) UpdateSpec(id string, req SessionSpecUpdateRequest) (*Sessi
 		}
 		return nil, err
 	}
-	if m.SessionKind != KindController {
-		return nil, fmt.Errorf("task sessions do not have mutable specs: %w", ErrInvalidSession)
+	if m.ParentSessionID != nil && *m.ParentSessionID != "" {
+		return nil, fmt.Errorf("child sessions do not have mutable specs: %w", ErrInvalidSession)
 	}
 	if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
-		return nil, fmt.Errorf("controller session has no mutable spec: %w", ErrInvalidSession)
+		return nil, fmt.Errorf("root session has no mutable spec: %w", ErrInvalidSession)
 	}
 
-	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
 	prepared, err := prepareRequestSpec(fs.sessionDir(id), SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
 		return nil, err
 	}
 	if prepared.Name != m.SpecName {
-		return nil, fmt.Errorf("controller spec name is immutable: %w", ErrInvalidSession)
+		return nil, fmt.Errorf("root session spec name is immutable: %w", ErrInvalidSession)
 	}
 	if err := os.WriteFile(*m.SessionSpecPath, prepared.SpecData, 0o644); err != nil {
 		return nil, fmt.Errorf("write session spec: %w", err)
@@ -340,8 +415,10 @@ func (fs *FileStore) UpdateSpec(id string, req SessionSpecUpdateRequest) (*Sessi
 	m.CurrentSpecVersion = &version
 	m.SpecVersions = append(
 		m.SpecVersions,
-		specVersionEntry(version, *m.SessionSpecPath, prepared.SpecData, &previousVersion),
+		specVersionEntry(version, *m.SessionSpecPath, prepared.SpecData, &previousVersion, prepared.ApplyPackageDigest),
 	)
+	m.ApplyPackageDigest = prepared.ApplyPackageDigest
+	m.ApplyPackageLock = prepared.ApplyPackageLock
 	m.SessionSpecPath = strPtr(*m.SessionSpecPath)
 	if len(m.Specs) > 0 {
 		m.Specs[0].Name = prepared.Name
@@ -1110,13 +1187,13 @@ func cloneSpecVersions(versions []map[string]any) []map[string]any {
 	return cloned
 }
 
-func specVersionEntry(version int, specPath string, data []byte, previous *int) map[string]any {
+func specVersionEntry(version int, specPath string, data []byte, previous *int, packageDigest *string) map[string]any {
 	hash := sha256.Sum256(data)
 	var previousVersion any
 	if previous != nil {
 		previousVersion = *previous
 	}
-	return map[string]any{
+	entry := map[string]any{
 		"version":          version,
 		"spec_path":        specPath,
 		"spec_sha256":      fmt.Sprintf("%x", hash),
@@ -1124,17 +1201,27 @@ func specVersionEntry(version int, specPath string, data []byte, previous *int) 
 		"provenance":       map[string]any{"type": "inline"},
 		"created_at":       tsNow(),
 	}
+	if packageDigest != nil && *packageDigest != "" {
+		entry["apply_package_digest"] = *packageDigest
+	}
+	return entry
 }
 
 type preparedRequestSpec struct {
-	Name            string
-	SessionSpecPath *string
-	ContentHash     *string
-	IntervalSeconds *int
-	SpecData        []byte
+	Name               string
+	SourceSpecPath     *string
+	SessionSpecPath    *string
+	ContentHash        *string
+	IntervalSeconds    *int
+	SpecData           []byte
+	ApplyPackageDigest *string
+	ApplyPackageLock   *spec.ApplyPackageLock
 }
 
 func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRequestSpec, error) {
+	if strings.TrimSpace(req.ApplyPackagePath) != "" {
+		return prepareApplyPackageSpec(sessionDir, req.ApplyPackagePath, req.ApplyPackageDigest)
+	}
 	if req.SpecMarkdown == nil || strings.TrimSpace(*req.SpecMarkdown) == "" {
 		return preparedRequestSpec{}, fmt.Errorf("spec_markdown is required")
 	}
@@ -1157,13 +1244,59 @@ func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRe
 	if err != nil {
 		return preparedRequestSpec{}, err
 	}
+	applyPackage, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{})
+	if err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("build apply package: %w", err)
+	}
 	prepared := preparedRequestSpec{
-		Name:            compiled.Environment.Name,
-		ContentHash:     strPtr(compiled.ContentHash),
-		IntervalSeconds: compiled.Environment.IntervalSeconds,
-		SpecData:        data,
+		Name:               compiled.Environment.Name,
+		ContentHash:        strPtr(compiled.ContentHash),
+		IntervalSeconds:    compiled.Environment.IntervalSeconds,
+		SpecData:           data,
+		ApplyPackageDigest: strPtr(applyPackage.Digest),
+		ApplyPackageLock:   &applyPackage.Lock,
 	}
 	return prepared, nil
+}
+
+func prepareApplyPackageSpec(sessionDir string, packagePath string, expectedDigest string) (preparedRequestSpec, error) {
+	data, err := os.ReadFile(packagePath)
+	if err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("read apply package: %w", err)
+	}
+	packageDir := filepath.Join(sessionDir, "package")
+	if err := os.RemoveAll(packageDir); err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("clear package dir: %w", err)
+	}
+	lock, err := spec.ExtractApplyPackage(data, packageDir)
+	if err != nil {
+		return preparedRequestSpec{}, err
+	}
+	expectedDigest = strings.TrimSpace(expectedDigest)
+	if expectedDigest != "" && lock.PackageDigest != expectedDigest {
+		return preparedRequestSpec{}, fmt.Errorf("package digest %q does not match expected %q", lock.PackageDigest, expectedDigest)
+	}
+	specPath := filepath.Join(packageDir, filepath.FromSlash(lock.RootSpecPath))
+	specData, err := os.ReadFile(specPath)
+	if err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("read package root spec: %w", err)
+	}
+	compiled, err := spec.CompileEnvironmentWithBase(specPath, packageDir)
+	if err != nil {
+		return preparedRequestSpec{}, err
+	}
+	if lock.Spec.Name != "" && compiled.Environment.Name != lock.Spec.Name {
+		return preparedRequestSpec{}, fmt.Errorf("package spec name %q does not match compiled name %q", lock.Spec.Name, compiled.Environment.Name)
+	}
+	return preparedRequestSpec{
+		Name:               compiled.Environment.Name,
+		SourceSpecPath:     strPtr(specPath),
+		ContentHash:        strPtr(compiled.ContentHash),
+		IntervalSeconds:    compiled.Environment.IntervalSeconds,
+		SpecData:           specData,
+		ApplyPackageDigest: strPtr(lock.PackageDigest),
+		ApplyPackageLock:   lock,
+	}, nil
 }
 
 func materializedSpecDir(data []byte) string {

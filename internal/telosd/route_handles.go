@@ -12,6 +12,8 @@ import (
 
 var routeNamespaceRE = regexp.MustCompile(`\.(ns-[a-z0-9-]+)\.svc(?:\.|:|/|$)`)
 
+const publicRouteLabel = "telos.ai/public-route"
+
 type publicRoute struct {
 	Namespace   string
 	Name        string
@@ -51,6 +53,22 @@ func productHandleFor(routes []publicRoute, session sessionapi.Session) string {
 	})
 }
 
+func dashboardHandleFor(routes []publicRoute, session sessionapi.Session) string {
+	if handle := singleDashboardHandle(routes, func(route publicRoute) bool {
+		return routeMatchesSessionID(route, session.SessionID)
+	}); handle != "" {
+		return handle
+	}
+
+	namespace := sessionNamespace(session)
+	if namespace == "" {
+		return ""
+	}
+	return singleDashboardHandle(routes, func(route publicRoute) bool {
+		return routeMatchesNamespace(route, namespace)
+	})
+}
+
 func readPublicRoutes(ctx context.Context) ([]publicRoute, error) {
 	out, err := kubectlOutput(
 		ctx,
@@ -59,7 +77,7 @@ func readPublicRoutes(ctx context.Context) ([]publicRoute, error) {
 		"cm",
 		"-A",
 		"-l",
-		"telos.ai/public-route=primary",
+		publicRouteLabel+" in (primary,service,dashboard)",
 		"-o",
 		"json",
 	)
@@ -157,11 +175,22 @@ func singleProductHandle(routes []publicRoute, match func(publicRoute) bool) str
 
 	productRoutes := make([]publicRoute, 0, len(candidates))
 	for _, route := range candidates {
-		if !isDashboardRoute(route.Data) {
+		if !isDashboardRoute(route) {
 			productRoutes = append(productRoutes, route)
 		}
 	}
 	return singleHandle(productRoutes)
+}
+
+func singleDashboardHandle(routes []publicRoute, match func(publicRoute) bool) string {
+	candidates := make([]publicRoute, 0, len(routes))
+	for _, route := range routes {
+		if !match(route) || isTCPRoute(route.Data) || !isDashboardRoute(route) {
+			continue
+		}
+		candidates = append(candidates, route)
+	}
+	return singleHandle(candidates)
 }
 
 func singleHandle(routes []publicRoute) string {
@@ -208,8 +237,14 @@ func isTCPRoute(data map[string]string) bool {
 	return strings.HasPrefix(service, "tcp://") || strings.HasPrefix(target, "tcp://")
 }
 
-func isDashboardRoute(data map[string]string) bool {
-	return strings.EqualFold(strings.TrimSpace(data["type"]), "dashboard")
+func isDashboardRoute(route publicRoute) bool {
+	switch strings.TrimSpace(route.Labels[publicRouteLabel]) {
+	case "dashboard":
+		return true
+	case "service":
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(route.Data["type"]), "dashboard")
 }
 
 func routeHandle(data map[string]string) string {

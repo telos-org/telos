@@ -16,9 +16,9 @@ import (
 func TestVisibleListSessionsHidesChildSessionsByDefault(t *testing.T) {
 	parent := "sess_parent"
 	sessions := []sessionapi.Session{
-		{SessionID: "sess_controller", Status: sessionapi.StatusRunning},
+		{SessionID: "sess_root", Status: sessionapi.StatusRunning},
 		{SessionID: "sess_task", ParentSessionID: &parent, Status: sessionapi.StatusCompleted},
-		{SessionID: "sess_controller_2", Status: sessionapi.StatusRunning},
+		{SessionID: "sess_root_2", Status: sessionapi.StatusRunning},
 		{SessionID: "sess_old", Status: sessionapi.StatusStopped},
 		{SessionID: "sess_failed", Status: sessionapi.StatusFailed},
 	}
@@ -27,8 +27,8 @@ func TestVisibleListSessionsHidesChildSessionsByDefault(t *testing.T) {
 	if len(visible) != 4 {
 		t.Fatalf("visible session count: got %d, want 4", len(visible))
 	}
-	if visible[0].SessionID != "sess_controller" ||
-		visible[1].SessionID != "sess_controller_2" ||
+	if visible[0].SessionID != "sess_root" ||
+		visible[1].SessionID != "sess_root_2" ||
 		visible[2].SessionID != "sess_old" ||
 		visible[3].SessionID != "sess_failed" {
 		t.Fatalf("visible sessions: got %#v", visible)
@@ -38,7 +38,7 @@ func TestVisibleListSessionsHidesChildSessionsByDefault(t *testing.T) {
 func TestVisibleListSessionsWideKeepsChildSessions(t *testing.T) {
 	parent := "sess_parent"
 	sessions := []sessionapi.Session{
-		{SessionID: "sess_controller", Status: sessionapi.StatusRunning},
+		{SessionID: "sess_root", Status: sessionapi.StatusRunning},
 		{SessionID: "sess_task", ParentSessionID: &parent, Status: sessionapi.StatusCompleted},
 	}
 
@@ -100,7 +100,6 @@ func TestSessionTurnShowsActiveRoleAndRound(t *testing.T) {
 }
 
 func TestSessionDisplayStatusDerivesHumanState(t *testing.T) {
-	controller := sessionapi.KindController
 	task := sessionapi.KindTask
 	completed := "completed"
 	round := 1
@@ -112,17 +111,16 @@ func TestSessionDisplayStatusDerivesHumanState(t *testing.T) {
 		want string
 	}{
 		{
-			name: "active running task",
+			name: "active running child session",
 			sess: sessionapi.Session{Status: sessionapi.StatusRunning, SessionKind: &task},
 			want: "active",
 		},
 		{
-			name: "retained cloud controller",
+			name: "retained cloud root",
 			sess: sessionapi.Session{
-				Status:      sessionapi.StatusRunning,
-				Runtime:     sessionapi.RuntimeCloud,
-				SessionKind: &controller,
-				Result:      &completed,
+				Status:  sessionapi.StatusRunning,
+				Runtime: sessionapi.RuntimeCloud,
+				Result:  &completed,
 			},
 			want: "idle",
 		},
@@ -131,7 +129,6 @@ func TestSessionDisplayStatusDerivesHumanState(t *testing.T) {
 			sess: sessionapi.Session{
 				Status:       sessionapi.StatusRunning,
 				Runtime:      sessionapi.RuntimeCloud,
-				SessionKind:  &controller,
 				CurrentRound: &round,
 				CurrentRole:  &role,
 			},
@@ -153,7 +150,7 @@ func TestSessionDisplayStatusDerivesHumanState(t *testing.T) {
 	}
 }
 
-func TestControllerListSessionsUsesScopedContext(t *testing.T) {
+func TestRootListSessionsUsesScopedContext(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	var gotAuth string
 	var gotPath string
@@ -165,8 +162,8 @@ func TestControllerListSessionsUsesScopedContext(t *testing.T) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(sessionapi.SessionListResponse{
-			Sessions: []sessionapi.Session{{
-				SessionID: "sess_controller",
+			Sessions: []sessionapi.SessionListItem{{
+				SessionID: "sess_root",
 				Status:    sessionapi.StatusRunning,
 				Runtime:   sessionapi.RuntimeCloud,
 			}},
@@ -179,40 +176,40 @@ func TestControllerListSessionsUsesScopedContext(t *testing.T) {
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
 
-	sessions, handled, err := controllerListSessions(7)
+	sessions, handled, err := rootListSessions(7)
 	if err != nil {
-		t.Fatalf("controllerListSessions: %v", err)
+		t.Fatalf("rootListSessions: %v", err)
 	}
 	if !handled {
-		t.Fatal("expected controller context to be handled")
+		t.Fatal("expected root context to be handled")
 	}
 	if gotAuth != "Bearer scoped-token" {
 		t.Fatalf("authorization header: got %q", gotAuth)
 	}
-	if gotPath != "/api/sessions?limit=7" {
+	if gotPath != "/api/sessions?limit=7&include_children=true" {
 		t.Fatalf("request path: got %q", gotPath)
 	}
-	if len(sessions) != 1 || sessions[0].SessionID != "sess_controller" {
+	if len(sessions) != 1 || sessions[0].SessionID != "sess_root" {
 		t.Fatalf("sessions: got %#v", sessions)
 	}
 }
 
-func TestControllerListSessionsScopesLocalControllerTree(t *testing.T) {
+func TestRootListSessionsScopesLocalRootTree(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	controllerKind := sessionapi.KindController
-	controllerSpec := "---\nversion: v0\nname: controller\nplatform: local\n---\n# Controller\n"
-	controller, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown: &controllerSpec,
-		SessionKind:  &controllerKind,
+	rootKind := sessionapi.KindController
+	rootSpec := "---\nversion: v0\nname: root\nplatform: local\n---\n# Root\n"
+	rootSession, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &rootSpec,
+		SessionKind:  &rootKind,
 	})
 	if err != nil {
-		t.Fatalf("Create controller: %v", err)
+		t.Fatalf("Create root: %v", err)
 	}
 	childSpec := "---\nversion: v0\nname: child\nplatform: local\n---\n# Child\n"
 	child, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown:    &childSpec,
-		ParentSessionID: &controller.SessionID,
+		ParentSessionID: &rootSession.SessionID,
 	})
 	if err != nil {
 		t.Fatalf("Create child: %v", err)
@@ -228,33 +225,33 @@ func TestControllerListSessionsScopesLocalControllerTree(t *testing.T) {
 	siblingSpec := "---\nversion: v0\nname: sibling\nplatform: local\n---\n# Sibling\n"
 	if _, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &siblingSpec,
-		SessionKind:  &controllerKind,
+		SessionKind:  &rootKind,
 	}); err != nil {
 		t.Fatalf("Create sibling: %v", err)
 	}
 
 	t.Setenv("TELOS_SESSION_DIR", root)
 	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
-	t.Setenv("TELOS_SESSION_ID", controller.SessionID)
+	t.Setenv("TELOS_SESSION_ID", rootSession.SessionID)
 
-	sessions, handled, err := controllerListSessions(0)
+	sessions, handled, err := rootListSessions(0)
 	if err != nil {
-		t.Fatalf("controllerListSessions: %v", err)
+		t.Fatalf("rootListSessions: %v", err)
 	}
 	if !handled {
-		t.Fatal("expected local controller context to be handled")
+		t.Fatal("expected local root context to be handled")
 	}
 	got := make([]string, 0, len(sessions))
 	for _, session := range sessions {
 		got = append(got, session.SessionID)
 	}
-	want := []string{controller.SessionID, child.SessionID, grandchild.SessionID}
+	want := []string{rootSession.SessionID, child.SessionID, grandchild.SessionID}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("scoped sessions: got %v want %v", got, want)
 	}
 }
 
-func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
+func TestPrintSessionDescriptionIncludesAgentFacingDetails(t *testing.T) {
 	name := "postgres"
 	kind := sessionapi.KindController
 	result := "completed"
@@ -285,7 +282,7 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 		Result:                &result,
 		CompletionReason:      &completionReason,
 		VerifierConceded:      &verifierConceded,
-		ArtifactURI:           &artifact,
+		ServiceURL:            &artifact,
 		CurrentSpecVersion:    &version,
 		ActiveWorkspacePath:   &activeWorkspacePath,
 		ActiveWorkspaceExists: &activeWorkspaceExists,
@@ -320,14 +317,14 @@ func TestPrintSessionDescriptionIncludesAgentFacingArtifacts(t *testing.T) {
 		"Session   sess_123",
 		"Lifecycle",
 		"result         completed",
-		"kind           controller",
+		"lineage        child",
 		"parent         sess_parent",
 		"interval       4h",
 		"completion     verifier_conceded",
 		"evaluation     accepted",
 		"spec version   2",
 		"rounds         4",
-		"Artifact",
+		"Service",
 		"https://postgres.example",
 		"Latest Epoch",
 		"RESULT     STARTED",
@@ -533,44 +530,6 @@ func TestPrintStopReceiptUsesSessionIDForUnnamedSession(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("stop receipt missing %q:\n%s", want, text)
-		}
-	}
-}
-
-func TestPrintApplyResultsGroupsMultipleOperations(t *testing.T) {
-	name := "gitea"
-	cost := 1.23
-	session := &sessionapi.Session{
-		SessionID:    "sess_123",
-		SpecName:     &name,
-		Runtime:      sessionapi.RuntimeCloud,
-		Status:       sessionapi.StatusRunning,
-		TotalCostUSD: &cost,
-	}
-	results := []applyCloudResult{
-		{
-			Operation:   "updated",
-			Session:     session,
-			Environment: &environmentJSON{ID: "env_123"},
-		},
-		{
-			Operation: "created",
-			Session:   &sessionapi.Session{SessionID: "sess_456", SpecName: &name, Runtime: sessionapi.RuntimeCloud, Status: sessionapi.StatusPending},
-		},
-	}
-
-	var out bytes.Buffer
-	printApplyResults(&out, results)
-	text := out.String()
-	for _, want := range []string{
-		"updated\n\n",
-		"ENV      NAME   PLATFORM  STATUS",
-		"env_123  gitea  cloud     active  $1.23  sess_123",
-		"created\n\n",
-		"-    gitea  cloud     active  -     sess_456",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("apply results missing %q:\n%s", want, text)
 		}
 	}
 }

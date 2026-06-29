@@ -26,5 +26,8 @@ go_test(
         "types_test.go",
     ],
     embed = [":sessionapi"],
-    deps = ["//internal/game"],
+    deps = [
+        "//internal/game",
+        "//internal/spec",
+    ],
 )

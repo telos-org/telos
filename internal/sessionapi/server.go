@@ -21,7 +21,7 @@ const forwardedUserAuthorizationHeader = "X-Telos-User-Authorization"
 //	GET  /api/sessions
 //	GET  /api/sessions/{id}
 //	GET  /api/sessions/{id}/spec
-//	PUT  /api/sessions/{id}/spec
+//	PUT  /api/sessions/{name}/spec
 //	POST /api/sessions/{id}/stop
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
@@ -39,7 +39,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer) {
 	mux.HandleFunc("GET /api/sessions", h.listSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", h.getSession)
 	mux.HandleFunc("GET /api/sessions/{id}/spec", h.getSpec)
-	mux.HandleFunc("PUT /api/sessions/{id}/spec", h.updateSpec)
+	mux.HandleFunc("PUT /api/sessions/{name}/spec", h.updateSpec)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
@@ -109,7 +109,7 @@ func (h *handler) getSpec(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) updateSpec(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	name := r.PathValue("name")
 	var req SessionSpecUpdateRequest
 	r.Body = http.MaxBytesReader(w, r.Body, maxSessionRequestBytes)
 	dec := json.NewDecoder(r.Body)
@@ -119,14 +119,16 @@ func (h *handler) updateSpec(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	req.UserAuthorization = r.Header.Get(forwardedUserAuthorizationHeader)
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionUpdateSessionSpec, SessionID: id}); !ok {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionUpdateSessionSpec}); !ok {
 		return
 	}
-	session, err := h.store.UpdateSpec(id, req)
+	response, err := h.store.UpdateSpec(name, req)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrNotFound):
 			writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrConflict):
+			writeError(w, http.StatusConflict, err.Error())
 		case errors.Is(err, ErrInvalidSession):
 			writeError(w, http.StatusBadRequest, err.Error())
 		default:
@@ -134,7 +136,7 @@ func (h *handler) updateSpec(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
-	writeJSON(w, http.StatusOK, session)
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
@@ -147,16 +149,24 @@ func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	includeChildren, err := listIncludeChildren(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	sessions, err := h.store.List()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	sessions = h.authorizer.VisibleSessions(caller, sessions)
+	if !includeChildren {
+		sessions = topLevelSessions(sessions)
+	}
 	if limit > 0 && len(sessions) > limit {
 		sessions = sessions[:limit]
 	}
-	writeJSON(w, http.StatusOK, SessionListResponse{Sessions: sessions})
+	writeJSON(w, http.StatusOK, SessionListResponse{Sessions: SessionListItems(sessions)})
 }
 
 func listLimit(r *http.Request) (int, error) {
@@ -169,6 +179,28 @@ func listLimit(r *http.Request) (int, error) {
 		return 0, fmt.Errorf("limit must be a non-negative integer")
 	}
 	return limit, nil
+}
+
+func listIncludeChildren(r *http.Request) (bool, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get("include_children"))
+	if raw == "" {
+		return false, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("include_children must be a boolean")
+	}
+	return value, nil
+}
+
+func topLevelSessions(sessions []Session) []Session {
+	topLevel := make([]Session, 0, len(sessions))
+	for _, session := range sessions {
+		if session.ParentSessionID == nil || *session.ParentSessionID == "" {
+			topLevel = append(topLevel, session)
+		}
+	}
+	return topLevel
 }
 
 func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {

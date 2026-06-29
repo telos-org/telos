@@ -70,12 +70,12 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "task", "")
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", "")
 	text := out.String()
 	for _, want := range []string{
 		"Spec      hello-service",
 		"Platform  local",
-		"Session   task",
+		"Lineage   root",
 		"Mutates   no",
 		"Path      ./SPEC.md",
 		"Hash      8a8f0c21",
@@ -104,12 +104,12 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "controller", "env_123")
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", "env_123")
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",
 		"Platform  cloud",
-		"Session   controller",
+		"Lineage   root",
 		"Mutates   no",
 		"Path      ./SPEC.md",
 		"Namespace ns-gitea",
@@ -1094,6 +1094,24 @@ func TestSessionKindForCommand(t *testing.T) {
 	}
 }
 
+func TestValidateLaunchCommandRejectsCloudRunOutsideRoot(t *testing.T) {
+	for _, mode := range []launchMode{launchCloudExisting, launchCloudNew} {
+		err := validateLaunchCommand("run", mode)
+		if err == nil {
+			t.Fatalf("expected cloud run rejection for %s", mode)
+		}
+		if !strings.Contains(err.Error(), "inside a root session") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	}
+	if err := validateLaunchCommand("apply", launchCloudExisting); err != nil {
+		t.Fatalf("apply should be allowed: %v", err)
+	}
+	if err := validateLaunchCommand("run", launchLocal); err != nil {
+		t.Fatalf("local run should be allowed: %v", err)
+	}
+}
+
 func TestSessionCreateRequestRejectsCatalogueSpecID(t *testing.T) {
 	_, err := sessionCreateRequestForSpec("cal-diy")
 	if err == nil {
@@ -1118,125 +1136,23 @@ func TestSessionCreateRequestRejectsMissingSpecPath(t *testing.T) {
 	}
 }
 
-func TestSpecNameFromRequest(t *testing.T) {
-	markdown := "---\nversion: v0\nname: postgres\n---\n# Postgres\n"
-	req := sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}
-
-	name, err := specNameFromRequest(req)
+func TestPackageSpecBuildsApplyPackage(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := packageSpec(dir)
 	if err != nil {
-		t.Fatalf("specNameFromRequest: %v", err)
+		t.Fatalf("packageSpec: %v", err)
 	}
-	if name != "postgres" {
-		t.Fatalf("name: got %q", name)
+	if pkg.name != "postgres" {
+		t.Fatalf("name: got %q", pkg.name)
 	}
-}
-
-func TestActiveControllerForSpec(t *testing.T) {
-	controller := sessionapi.KindController
-	task := sessionapi.KindTask
-	other := "redis"
-	target := "postgres"
-	sessions := []sessionapi.Session{
-		{SessionID: "sess_task", SessionKind: &task, SpecName: &target, Status: sessionapi.StatusRunning},
-		{SessionID: "sess_old", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusStopped},
-		{SessionID: "sess_other", SessionKind: &controller, SpecName: &other, Status: sessionapi.StatusRunning},
-		{SessionID: "sess_done", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusCompleted},
-		{SessionID: "sess_failed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusFailed},
-		{SessionID: "sess_target", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusRunning},
+	if !strings.HasPrefix(pkg.digest, "sha256:") {
+		t.Fatalf("digest: got %q", pkg.digest)
 	}
-
-	match, err := activeControllerForSpec(sessions, "postgres")
-	if err != nil {
-		t.Fatalf("activeControllerForSpec: %v", err)
-	}
-	if match == nil || match.SessionID != "sess_target" {
-		t.Fatalf("match: got %#v", match)
-	}
-}
-
-func TestActiveControllerForSpecIgnoresTerminalSessions(t *testing.T) {
-	controller := sessionapi.KindController
-	target := "postgres"
-	sessions := []sessionapi.Session{
-		{SessionID: "sess_completed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusCompleted},
-		{SessionID: "sess_failed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusFailed},
-		{SessionID: "sess_stopped", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusStopped},
-		{SessionID: "sess_stale", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusStale},
-	}
-
-	match, err := activeControllerForSpec(sessions, "postgres")
-	if err != nil {
-		t.Fatalf("activeControllerForSpec: %v", err)
-	}
-	if match != nil {
-		t.Fatalf("match: got %#v", match)
-	}
-}
-
-func TestActiveControllerForSpecRejectsDuplicates(t *testing.T) {
-	controller := sessionapi.KindController
-	target := "postgres"
-	sessions := []sessionapi.Session{
-		{SessionID: "sess_a", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusRunning},
-		{SessionID: "sess_b", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusRunning},
-	}
-
-	_, err := activeControllerForSpec(sessions, "postgres")
-	if err == nil {
-		t.Fatal("expected duplicate active controllers to fail")
-	}
-	if !strings.Contains(err.Error(), "multiple active controller sessions") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestControllerForApplyRecoversFailedController(t *testing.T) {
-	controller := sessionapi.KindController
-	target := "postgres"
-	sessions := []sessionapi.Session{
-		{SessionID: "sess_failed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusFailed},
-	}
-
-	match, err := controllerForApply(sessions, "postgres")
-	if err != nil {
-		t.Fatalf("controllerForApply: %v", err)
-	}
-	if match == nil || match.SessionID != "sess_failed" {
-		t.Fatalf("match: got %#v", match)
-	}
-}
-
-func TestControllerForApplyPrefersActiveController(t *testing.T) {
-	controller := sessionapi.KindController
-	target := "postgres"
-	sessions := []sessionapi.Session{
-		{SessionID: "sess_failed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusFailed},
-		{SessionID: "sess_active", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusRunning},
-	}
-
-	match, err := controllerForApply(sessions, "postgres")
-	if err != nil {
-		t.Fatalf("controllerForApply: %v", err)
-	}
-	if match == nil || match.SessionID != "sess_active" {
-		t.Fatalf("match: got %#v", match)
-	}
-}
-
-func TestControllerForApplyIgnoresStoppedAndCompletedHistory(t *testing.T) {
-	controller := sessionapi.KindController
-	target := "postgres"
-	sessions := []sessionapi.Session{
-		{SessionID: "sess_stopped", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusStopped},
-		{SessionID: "sess_completed", SessionKind: &controller, SpecName: &target, Status: sessionapi.StatusCompleted},
-	}
-
-	match, err := controllerForApply(sessions, "postgres")
-	if err != nil {
-		t.Fatalf("controllerForApply: %v", err)
-	}
-	if match != nil {
-		t.Fatalf("match: got %#v", match)
+	if len(pkg.bytes) == 0 {
+		t.Fatal("missing package bytes")
 	}
 }
 
@@ -1347,15 +1263,15 @@ func TestCloudSessionClientsRecoverEnvironmentAccess(t *testing.T) {
 	}
 }
 
-func TestControllerSessionContextUsesScopedToken(t *testing.T) {
+func TestRootSessionContextUsesScopedToken(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	t.Setenv("TELOS_API_TOKEN", "session-token")
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", "http://telos-api.local:8000")
 
-	ctx, ok := controllerSessionContext()
+	ctx, ok := rootSessionContext()
 	if !ok {
-		t.Fatal("expected controller context")
+		t.Fatal("expected root context")
 	}
 	if ctx.endpoint != "http://telos-api.local:8000" {
 		t.Fatalf("endpoint: got %q", ctx.endpoint)
@@ -1368,21 +1284,21 @@ func TestControllerSessionContextUsesScopedToken(t *testing.T) {
 	}
 }
 
-func TestControllerSessionContextIgnoresLocalRuntime(t *testing.T) {
+func TestRootSessionContextIgnoresLocalRuntime(t *testing.T) {
 	t.Setenv("TELOS_API_TOKEN", "session-token")
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", "http://telos-api.local:8000")
 
-	if ctx, ok := controllerSessionContext(); ok {
-		t.Fatalf("local runtime should not be cloud controller context: %#v", ctx)
+	if ctx, ok := rootSessionContext(); ok {
+		t.Fatalf("local runtime should not be cloud root context: %#v", ctx)
 	}
 }
 
-func TestLocalControllerSessionIDUsesLocalSessionContext(t *testing.T) {
+func TestLocalRootSessionIDUsesLocalSessionContext(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: local-controller\nplatform: local\n---\n# Local Controller\n"
+	markdown := "---\nversion: v0\nname: local-root\nplatform: local\n---\n# Local Root\n"
 	kind := sessionapi.KindController
 	session, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &markdown,
@@ -1395,16 +1311,16 @@ func TestLocalControllerSessionIDUsesLocalSessionContext(t *testing.T) {
 	t.Setenv("TELOS_SESSION_DIR", root)
 	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
 
-	sessionID, ok := localControllerSessionID()
+	sessionID, ok := localRootSessionID()
 	if !ok {
-		t.Fatal("expected local controller session context")
+		t.Fatal("expected local root session context")
 	}
 	if sessionID != session.SessionID {
 		t.Fatalf("session id: got %q", sessionID)
 	}
 }
 
-func TestLocalControllerSessionIDIgnoresTaskSession(t *testing.T) {
+func TestLocalRootSessionIDIgnoresTaskSession(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	markdown := "---\nversion: v0\nname: local-task\nplatform: local\n---\n# Local Task\n"
@@ -1416,15 +1332,15 @@ func TestLocalControllerSessionIDIgnoresTaskSession(t *testing.T) {
 	t.Setenv("TELOS_SESSION_DIR", root)
 	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
 
-	if sessionID, ok := localControllerSessionID(); ok {
-		t.Fatalf("task session should not be local controller context: %s", sessionID)
+	if sessionID, ok := localRootSessionID(); ok {
+		t.Fatalf("task session should not be local root context: %s", sessionID)
 	}
 }
 
-func TestLocalControllerSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
+func TestLocalRootSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: local-controller\nplatform: local\n---\n# Local Controller\n"
+	markdown := "---\nversion: v0\nname: local-root\nplatform: local\n---\n# Local Root\n"
 	kind := sessionapi.KindController
 	session, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &markdown,
@@ -1437,8 +1353,8 @@ func TestLocalControllerSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
 	t.Setenv("TELOS_SESSION_ID", session.SessionID)
 	t.Setenv("TELOS_SESSION_DIR", root)
 
-	if sessionID, ok := localControllerSessionID(); ok {
-		t.Fatalf("session should not be local controller context without runtime marker: %s", sessionID)
+	if sessionID, ok := localRootSessionID(); ok {
+		t.Fatalf("session should not be local root context without runtime marker: %s", sessionID)
 	}
 }
 
@@ -1512,7 +1428,7 @@ func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
 	}
 }
 
-func TestFollowTranscriptSurfacesControllerTranscriptError(t *testing.T) {
+func TestFollowTranscriptSurfacesRootTranscriptError(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -1545,7 +1461,7 @@ func TestFollowTranscriptSurfacesControllerTranscriptError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected transcript error")
 	}
-	if !strings.Contains(err.Error(), "controller transcript lookup failed") {
+	if !strings.Contains(err.Error(), "root transcript lookup failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -1596,10 +1512,10 @@ func TestPrintLogsRawShowsTranscript(t *testing.T) {
 	}
 }
 
-func TestControllerLookupReturnsClusterAPIError(t *testing.T) {
+func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/sessions/sess_controller" {
+		if r.URL.Path == "/api/sessions/sess_root" {
 			http.Error(w, `{"detail":"cluster unavailable"}`, http.StatusInternalServerError)
 			return
 		}
@@ -1611,15 +1527,15 @@ func TestControllerLookupReturnsClusterAPIError(t *testing.T) {
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
 
-	_, err := getSessionFromAnywhere("sess_controller", "")
+	_, err := getSessionFromAnywhere("sess_root", "")
 	if err == nil {
-		t.Fatal("expected controller lookup to fail")
+		t.Fatal("expected root lookup to fail")
 	}
-	if !strings.Contains(err.Error(), "controller session lookup failed") {
+	if !strings.Contains(err.Error(), "root session lookup failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if strings.Contains(err.Error(), "session sess_controller: not found") {
-		t.Fatalf("controller error fell through to generic not found: %v", err)
+	if strings.Contains(err.Error(), "session sess_root: not found") {
+		t.Fatalf("root error fell through to generic not found: %v", err)
 	}
 }
 
