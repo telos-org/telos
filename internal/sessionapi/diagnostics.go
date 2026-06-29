@@ -221,6 +221,7 @@ func readSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, path str
 
 	specName, turnID := sessionLogContext(path)
 	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 64<<10), 16<<20)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
