@@ -53,7 +53,7 @@ func productHandleFor(routes []publicRoute, session sessionapi.Session) string {
 		return ""
 	}
 	return singleProductHandle(routes, func(route publicRoute) bool {
-		return routeMatchesNamespace(route, namespace)
+		return routeMatchesNamespace(route, namespace) && routeMatchesSpecName(route, session, false)
 	})
 }
 
@@ -69,7 +69,7 @@ func dashboardHandleFor(routes []publicRoute, session sessionapi.Session) string
 		return ""
 	}
 	return singleDashboardHandle(routes, func(route publicRoute) bool {
-		return routeMatchesNamespace(route, namespace)
+		return routeMatchesNamespace(route, namespace) && routeMatchesSpecName(route, session, true)
 	})
 }
 
@@ -196,6 +196,32 @@ func routeMatchesNamespace(route publicRoute, namespace string) bool {
 		}
 	}
 	return false
+}
+
+func routeMatchesSpecName(route publicRoute, session sessionapi.Session, dashboard bool) bool {
+	name := sessionSpecName(session)
+	if name == "" {
+		return false
+	}
+	prefix := strings.TrimSpace(route.Data["prefix"])
+	if prefix == "" {
+		prefix = strings.Split(routeHandle(route.Data), ".")[0]
+	}
+	if dashboard {
+		dashboardPrefix := "dashboard-" + name
+		return prefix == dashboardPrefix || strings.HasPrefix(prefix, dashboardPrefix+"-")
+	}
+	return prefix == name || strings.HasPrefix(prefix, name+"-")
+}
+
+func sessionSpecName(session sessionapi.Session) string {
+	if len(session.Specs) > 0 && session.Specs[0].Name != nil {
+		return strings.TrimSpace(*session.Specs[0].Name)
+	}
+	if session.SpecName != nil {
+		return strings.TrimSpace(*session.SpecName)
+	}
+	return ""
 }
 
 func singleProductHandle(routes []publicRoute, match func(publicRoute) bool) string {
