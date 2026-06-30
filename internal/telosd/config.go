@@ -26,18 +26,16 @@ const (
 )
 
 type Config struct {
-	Kind            string           `yaml:"kind"`
-	Mode            Mode             `yaml:"mode"`
-	Root            string           `yaml:"root"`
-	Token           string           `yaml:"token"`
-	TokenFile       string           `yaml:"token_file"`
-	AgentImage      string           `yaml:"agent_image"`
-	ImagePullSecret string           `yaml:"image_pull_secret"`
-	Server          ServerConfig     `yaml:"server"`
-	Auth            AuthConfig       `yaml:"auth"`
-	Worker          WorkerConfig     `yaml:"worker"`
-	Runtime         RuntimeConfig    `yaml:"runtime"`
-	Kubernetes      KubernetesConfig `yaml:"kubernetes"`
+	Kind       string           `yaml:"kind"`
+	Mode       Mode             `yaml:"mode"`
+	Root       string           `yaml:"root"`
+	Token      string           `yaml:"token"`
+	TokenFile  string           `yaml:"token_file"`
+	Server     ServerConfig     `yaml:"server"`
+	Auth       AuthConfig       `yaml:"auth"`
+	Worker     WorkerConfig     `yaml:"worker"`
+	Runtime    RuntimeConfig    `yaml:"runtime"`
+	Kubernetes KubernetesConfig `yaml:"kubernetes"`
 }
 
 type ServerConfig struct {
@@ -213,12 +211,6 @@ func NormalizeConfig(cfg Config) (Config, error) {
 }
 
 func withKubernetesWorkerDefaults(cfg Config) Config {
-	if cfg.Kubernetes.AgentImage == "" {
-		cfg.Kubernetes.AgentImage = cfg.AgentImage
-	}
-	if cfg.Kubernetes.ImagePullSecret == "" {
-		cfg.Kubernetes.ImagePullSecret = cfg.ImagePullSecret
-	}
 	if cfg.Kubernetes.AgentImage == "" {
 		cfg.Kubernetes.AgentImage = envOr("TELOS_AGENT_IMAGE", "telos-agent:latest")
 	}
