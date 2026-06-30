@@ -55,6 +55,15 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 
 	namespace := workerNamespace(session.SessionID, sessionapi.KindController)
 	name := workerWorkloadName(session.SessionID, sessionapi.KindController)
+	ns, err := client.CoreV1().Namespaces().Get(context.Background(), namespace, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range workerNamespaceLabels {
+		if ns.Labels[key] != want {
+			t.Fatalf("namespace label %s: got %q want %q", key, ns.Labels[key], want)
+		}
+	}
 	deployment, err := client.AppsV1().Deployments(namespace).Get(context.Background(), name, metav1.GetOptions{})
 	if err != nil {
 		t.Fatal(err)

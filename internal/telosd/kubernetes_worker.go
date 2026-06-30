@@ -45,6 +45,12 @@ type kubernetesSubstrate struct {
 
 const piConfigSecretName = "pi-agent-config"
 
+var workerNamespaceLabels = map[string]string{
+	"pod-security.kubernetes.io/enforce": "privileged",
+	"pod-security.kubernetes.io/audit":   "privileged",
+	"pod-security.kubernetes.io/warn":    "privileged",
+}
+
 func newKubernetesSubstrate(cfg Config) (kubernetesSubstrate, error) {
 	if strings.TrimSpace(os.Getenv(cfg.Kubernetes.AgentSecretKey)) == "" {
 		return kubernetesSubstrate{}, fmt.Errorf("%s is required to launch workers", cfg.Kubernetes.AgentSecretKey)
@@ -409,15 +415,30 @@ func (s kubernetesSubstrate) workerAnnotations(m *sessionapi.Manifest, wakeReaso
 }
 
 func (s kubernetesSubstrate) createNamespaceIfMissing(ctx context.Context, name string) error {
-	_, err := s.client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+	current, err := s.client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
 	if err == nil {
-		return nil
+		next := current.DeepCopy()
+		if next.Labels == nil {
+			next.Labels = map[string]string{}
+		}
+		changed := false
+		for key, value := range workerNamespaceLabels {
+			if next.Labels[key] != value {
+				next.Labels[key] = value
+				changed = true
+			}
+		}
+		if !changed {
+			return nil
+		}
+		_, err = s.client.CoreV1().Namespaces().Update(ctx, next, metav1.UpdateOptions{})
+		return err
 	}
 	if !apierrors.IsNotFound(err) {
 		return err
 	}
 	_, err = s.client.CoreV1().Namespaces().Create(ctx, &corev1.Namespace{
-		ObjectMeta: metav1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: name, Labels: workerNamespaceLabels},
 	}, metav1.CreateOptions{})
 	return err
 }
