@@ -26,7 +26,7 @@ type deploymentBootstrapReconciler struct {
 }
 
 func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.Store) {
-	if os.Getenv("TELOS_CONTROL_RECONCILER_ENABLED") == "0" {
+	if os.Getenv("TELOS_DEPLOYMENT_BOOTSTRAP_ENABLED") == "0" {
 		return
 	}
 	session, ok := deploymentBootstrapSession()
@@ -42,7 +42,7 @@ func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.St
 		return
 	}
 
-	interval := time.Duration(envInt("TELOS_CONTROL_RECONCILER_INTERVAL", 10)) * time.Second
+	interval := time.Duration(envInt("TELOS_DEPLOYMENT_BOOTSTRAP_INTERVAL", 10)) * time.Second
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()

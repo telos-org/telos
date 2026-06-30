@@ -1,6 +1,7 @@
 package telosd
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -113,7 +114,7 @@ func TestDeploymentBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T)
 	}
 }
 
-func TestControlSessionReconcilerMatchesDeploymentNameBeforeSpecName(t *testing.T) {
+func TestDeploymentBootstrapMatchesDeploymentNameBeforeSpecName(t *testing.T) {
 	digest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	specName := "auth-v2"
 	store := &fakeReconcileStore{sessions: []sessionapi.Session{{
@@ -173,7 +174,21 @@ func TestDeploymentBootstrapDesiredSession(t *testing.T) {
 	}
 }
 
-func TestControlSessionReconcilerNoopsWhenDigestMatches(t *testing.T) {
+func TestDeploymentBootstrapCanBeDisabled(t *testing.T) {
+	t.Setenv("TELOS_DEPLOYMENT_BOOTSTRAP_ENABLED", "0")
+	t.Setenv("TELOS_DEPLOYMENT_NAME", "auth")
+	t.Setenv("TELOS_PACKAGE_DIGEST", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+	t.Setenv("TELOS_PACKAGE_ROOT", t.TempDir())
+	store := &fakeReconcileStore{}
+
+	startDeploymentBootstrapReconciler(context.Background(), store)
+
+	if len(store.creates) != 0 || len(store.stops) != 0 {
+		t.Fatalf("expected disabled bootstrap to do nothing, creates=%#v stops=%#v", store.creates, store.stops)
+	}
+}
+
+func TestDeploymentBootstrapNoopsWhenDigestMatches(t *testing.T) {
 	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	name := "auth"
 	store := &fakeReconcileStore{sessions: []sessionapi.Session{{
