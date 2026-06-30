@@ -3,14 +3,14 @@
 // Public commands:
 //
 //	telos plan SPEC.md [--json]
-//	telos push SPEC.md [--json]
-//	telos apply SPEC.md [--json]
+//	telos push SPEC.md --scope SCOPE [--json]
+//	telos apply SPEC.md --scope SCOPE [--json]
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
 //	    [--until N] [--max-cost-usd USD] [--agent-timeout-sec SEC|0] [--json]
-//	telos list [--env ENV] [--limit N] [--wide] [--environments] [--local] [--cloud] [--json]
-//	telos describe SESSION [--env ENV] [--json]
-//	telos logs [-f] [--raw] SESSION [--env ENV]
-//	telos stop SESSION|DEPLOYMENT [--env ENV] [--json]
+//	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
+//	telos describe SESSION|DEPLOYMENT [--json]
+//	telos logs [-f] [--raw] SESSION|DEPLOYMENT
+//	telos stop SESSION|DEPLOYMENT [--json]
 //	telos delete DEPLOYMENT [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
 //	telos version
