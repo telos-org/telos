@@ -71,6 +71,21 @@ func readObjectiveLedger(path string) (ObjectiveLedger, error) {
 	return ledger, nil
 }
 
+// InitializeObjectiveLedger creates the objective ledger when it is missing or
+// empty, preserving existing ledger state across worker restarts.
+func InitializeObjectiveLedger(path string, state *PVGState, objective string) error {
+	info, err := os.Stat(path)
+	switch {
+	case err == nil && info.Size() > 0:
+		return nil
+	case err == nil:
+	case os.IsNotExist(err):
+	default:
+		return err
+	}
+	return writeObjectiveLedger(path, newObjectiveLedger(state, objective))
+}
+
 func writeObjectiveLedger(path string, ledger ObjectiveLedger) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err

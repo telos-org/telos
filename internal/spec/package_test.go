@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -198,6 +199,56 @@ func TestExtractApplyPackageCompilesWithPackageLocalSkills(t *testing.T) {
 	}
 }
 
+func TestExtractApplyPackageRejectsTamperedRootSpec(t *testing.T) {
+	srcDir := t.TempDir()
+	specPath := writePackageTestSpec(t, srcDir, "package-root-tamper", "alpha")
+	writePackageTestSkill(t, srcDir, "alpha", map[string]string{
+		"SKILL.md": "---\nname: alpha\n---\nUse package-local alpha.",
+	})
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := BuildApplyPackage(compiled, ApplyPackageOptions{CompilerVersion: "test-compiler"})
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+
+	tampered := rewritePackageEntry(t, pkg.Bytes, "SPEC.md", []byte("---\nversion: v0\nname: package-root-tamper\nplatform: cloud\nskills:\n  - alpha\n---\nTampered objective.\n"))
+	_, err = ExtractApplyPackage(tampered, t.TempDir())
+	if err == nil {
+		t.Fatal("expected tampered root spec to be rejected")
+	}
+	if !strings.Contains(err.Error(), "root spec digest") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestExtractApplyPackageRejectsTamperedSkillFile(t *testing.T) {
+	srcDir := t.TempDir()
+	specPath := writePackageTestSpec(t, srcDir, "package-skill-tamper", "alpha")
+	writePackageTestSkill(t, srcDir, "alpha", map[string]string{
+		"SKILL.md": "---\nname: alpha\n---\nUse package-local alpha.",
+	})
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := BuildApplyPackage(compiled, ApplyPackageOptions{CompilerVersion: "test-compiler"})
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+
+	tampered := rewritePackageEntry(t, pkg.Bytes, "skills/alpha/SKILL.md", []byte("---\nname: alpha\n---\nRun a tampered skill."))
+	_, err = ExtractApplyPackage(tampered, t.TempDir())
+	if err == nil {
+		t.Fatal("expected tampered skill file to be rejected")
+	}
+	if !strings.Contains(err.Error(), "skill file") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func writePackageTestSpec(t *testing.T, dir, name, skill string) string {
 	t.Helper()
 	path := filepath.Join(dir, "SPEC.md")
@@ -256,4 +307,50 @@ func sortedEntryNames(entries map[string][]byte) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func rewritePackageEntry(t *testing.T, data []byte, target string, replacement []byte) []byte {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("open package: %v", err)
+	}
+	defer gz.Close()
+
+	var files []packageFile
+	found := false
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read package: %v", err)
+		}
+		if header.Typeflag != tar.TypeReg {
+			t.Fatalf("unexpected package entry type %q for %s", header.Typeflag, header.Name)
+		}
+		fileData, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("read package entry %s: %v", header.Name, err)
+		}
+		if header.Name == target {
+			fileData = replacement
+			found = true
+		}
+		files = append(files, packageFile{
+			path: header.Name,
+			mode: header.Mode,
+			data: fileData,
+		})
+	}
+	if !found {
+		t.Fatalf("package entry %q not found", target)
+	}
+	out, err := writePackageTar(files)
+	if err != nil {
+		t.Fatalf("rewrite package: %v", err)
+	}
+	return out
 }

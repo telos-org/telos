@@ -39,7 +39,7 @@ func NewPVG(compiled *spec.CompiledEnvironment, executor AgentExecutor, state *P
 
 	InitializeTranscript(state.TranscriptPath, state.SessionID,
 		compiled.Environment.Name, ev.Path, ev.StartedAt)
-	_ = writeObjectiveLedger(state.LedgerPath, newObjectiveLedger(state, compiled.SpecText))
+	_ = InitializeObjectiveLedger(state.LedgerPath, state, compiled.SpecText)
 
 	return &PVG{
 		Compiled: compiled,

@@ -168,6 +168,48 @@ func TestPVGWritesObjectiveLedger(t *testing.T) {
 	}
 }
 
+func TestNewPVGPreservesExistingObjectiveLedger(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-preserve-ledger")
+	state.Ensure()
+	existing := newObjectiveLedger(state, compiled.SpecText)
+	existing.State = ObjectiveStateRepair
+	existing.LastImplementation = "Implemented baseline."
+	existing.LastEvaluation = "Missing test coverage."
+	existing.OpenFindings = []string{"missing test coverage"}
+	existing.Turns = []ObjectiveTurn{{
+		RoundNum:       1,
+		Role:           RoleVerifier,
+		Status:         StatusContinue,
+		StateAfter:     ObjectiveStateRepair,
+		ProgressUpdate: "Missing test coverage.",
+	}}
+	if err := writeObjectiveLedger(state.LedgerPath, existing); err != nil {
+		t.Fatalf("writeObjectiveLedger: %v", err)
+	}
+
+	NewPVG(compiled, nil, state, PVGConfig{})
+
+	ledger, err := readObjectiveLedger(state.LedgerPath)
+	if err != nil {
+		t.Fatalf("readObjectiveLedger: %v", err)
+	}
+	if ledger.State != ObjectiveStateRepair {
+		t.Fatalf("ledger state: got %q", ledger.State)
+	}
+	if ledger.LastImplementation != existing.LastImplementation {
+		t.Fatalf("last implementation: got %q", ledger.LastImplementation)
+	}
+	if len(ledger.OpenFindings) != 1 || ledger.OpenFindings[0] != "missing test coverage" {
+		t.Fatalf("open findings: %#v", ledger.OpenFindings)
+	}
+	if len(ledger.Turns) != 1 {
+		t.Fatalf("turn count: got %d", len(ledger.Turns))
+	}
+}
+
 func TestPVGLedgerFallsBackWhenFindingsBlockIsEmpty(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()
