@@ -176,6 +176,53 @@ func TestPublicRouteUsesPlatformHostnamesBeforeRandomFallback(t *testing.T) {
 	}
 }
 
+func TestPublicRouteLabelsDriveRouteKind(t *testing.T) {
+	t.Setenv("TELOS_SERVICE_HOSTNAME", "auth-dep123.usetelos.ai")
+	t.Setenv("TELOS_DASHBOARD_HOSTNAME", "dashboard-auth-dep123.usetelos.ai")
+
+	serviceRoute, servicePatch, ok := publicRouteFromConfigMap(corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "http-route",
+			Namespace: "ns-auth",
+			Labels:    map[string]string{"telos.ai/public-route": "service"},
+		},
+		Data: map[string]string{
+			"target_service": "auth.ns-auth.svc.cluster.local",
+			"target_port":    "8080",
+		},
+	})
+	if !ok {
+		t.Fatal("expected service route")
+	}
+	if serviceRoute.Hostname != "auth-dep123.usetelos.ai" {
+		t.Fatalf("service hostname: got %q", serviceRoute.Hostname)
+	}
+	if servicePatch["type"] != "service" {
+		t.Fatalf("service type patch: got %#v", servicePatch)
+	}
+
+	dashboardRoute, dashboardPatch, ok := publicRouteFromConfigMap(corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "http-route",
+			Namespace: "ns-auth",
+			Labels:    map[string]string{"telos.ai/public-route": "dashboard"},
+		},
+		Data: map[string]string{
+			"target_service": "operator.ns-auth.svc.cluster.local",
+			"target_port":    "3000",
+		},
+	})
+	if !ok {
+		t.Fatal("expected dashboard route")
+	}
+	if dashboardRoute.Hostname != "dashboard-auth-dep123.usetelos.ai" {
+		t.Fatalf("dashboard hostname: got %q", dashboardRoute.Hostname)
+	}
+	if dashboardPatch["type"] != "dashboard" {
+		t.Fatalf("dashboard type patch: got %#v", dashboardPatch)
+	}
+}
+
 func TestReconcileTunnelRoutesLabelsManagedNamespaces(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
