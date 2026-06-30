@@ -24,15 +24,6 @@ const (
 	UserAgent          = "telos-cli"
 )
 
-// Environment describes a cloud Telos environment from the control plane.
-type Environment struct {
-	ID             string
-	Handle         string
-	AccessToken    string
-	State          string
-	HasRecoverable bool
-}
-
 type PackageVersionRecord struct {
 	Scope     string `json:"scope"`
 	Name      string `json:"name"`
@@ -93,83 +84,6 @@ func ControlClient() (*Client, error) {
 // NewClientFromConfig creates a client from the user's config file.
 func NewClientFromConfig() (*Client, error) {
 	return ControlClient()
-}
-
-// NewEnvironmentClient resolves envID through the control plane and returns a
-// client for that environment-local Sessions API.
-func NewEnvironmentClient(envID string) (*Client, *Environment, error) {
-	if envID == "" {
-		return nil, nil, fmt.Errorf("--env is required for cloud session commands")
-	}
-	env, err := ResolveEnvironment(envID)
-	if err != nil {
-		return nil, nil, err
-	}
-	if env.Handle == "" {
-		return nil, nil, fmt.Errorf("environment %s has no handle", envID)
-	}
-	if env.AccessToken == "" {
-		return nil, nil, fmt.Errorf("environment %s has no local access token; recover access first", envID)
-	}
-	return NewClient("https://"+env.Handle, env.AccessToken), env, nil
-}
-
-// ResolveEnvironment returns the control-plane record plus local/recovered
-// scoped access token for an owned environment.
-func ResolveEnvironment(envID string) (*Environment, error) {
-	control, err := ControlClient()
-	if err != nil {
-		return nil, err
-	}
-	envs, err := control.ListEnvironments()
-	if err != nil {
-		return nil, err
-	}
-	for _, env := range envs {
-		if env.ID != envID {
-			continue
-		}
-		if access, ok := config.EnvironmentAccessByID(envID); ok {
-			env.AccessToken = access.Token
-			return &env, nil
-		}
-		if !env.HasRecoverable {
-			return nil, fmt.Errorf("no local access for %s; create a fresh environment", envID)
-		}
-		recovered, err := control.IssueEnvironmentAccess(envID)
-		if err != nil {
-			return nil, err
-		}
-		if err := config.SaveEnvironmentAccessEntry(config.EnvironmentAccess{
-			ID:    recovered.ID,
-			Token: recovered.AccessToken,
-		}); err != nil {
-			return nil, err
-		}
-		return recovered, nil
-	}
-	return nil, fmt.Errorf("environment %s not found", envID)
-}
-
-// CreateEnvironment creates a new cloud environment through the control plane.
-func (c *Client) CreateEnvironment() (*Environment, error) {
-	resp, err := c.do("POST", "/api/environments", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, readError(resp)
-	}
-	var raw map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, err
-	}
-	env := environmentFromJSON(raw)
-	if env.ID == "" || env.Handle == "" || env.AccessToken == "" {
-		return nil, fmt.Errorf("control plane returned invalid environment")
-	}
-	return &env, nil
 }
 
 func (c *Client) PublishPackageVersion(scope, name, version string, data []byte) (*PackageVersionRecord, error) {
@@ -293,36 +207,6 @@ func (c *Client) GetDeploymentTranscript(deploymentID string) (string, error) {
 	return string(data), nil
 }
 
-// WaitForEnvironment waits until an environment-local API is reachable.
-func WaitForEnvironment(handle string, timeout time.Duration) error {
-	client := &http.Client{Timeout: 5 * time.Second}
-	return waitForEnvironment(handle, timeout, client, 5*time.Second)
-}
-
-func waitForEnvironment(handle string, timeout time.Duration, client *http.Client, pollInterval time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	url := NormalizeEndpoint(handle) + "/api/healthz"
-	var lastErr error
-	for time.Now().Before(deadline) {
-		resp, err := client.Get(url)
-		if err == nil && resp != nil {
-			_, _ = io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-			if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-				return nil
-			}
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-		} else {
-			lastErr = err
-		}
-		time.Sleep(pollInterval)
-	}
-	if lastErr != nil {
-		return fmt.Errorf("%s did not become ready: %w", handle, lastErr)
-	}
-	return fmt.Errorf("%s did not become ready", handle)
-}
-
 // NormalizeEndpoint cleans up an API endpoint URL.
 func NormalizeEndpoint(endpoint string) string {
 	endpoint = strings.TrimRight(endpoint, "/")
@@ -372,50 +256,6 @@ func (c *Client) ApplySessionSpec(name string, req sessionapi.SessionSpecUpdateR
 		return nil, err
 	}
 	return &response, nil
-}
-
-// ListEnvironments lists cloud environments from the control plane.
-func (c *Client) ListEnvironments() ([]Environment, error) {
-	resp, err := c.do("GET", "/api/environments", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, readError(resp)
-	}
-	var payload struct {
-		Environments []map[string]any `json:"environments"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
-		return nil, err
-	}
-	envs := make([]Environment, 0, len(payload.Environments))
-	for _, raw := range payload.Environments {
-		envs = append(envs, environmentFromJSON(raw))
-	}
-	return envs, nil
-}
-
-// IssueEnvironmentAccess issues a scoped environment access token.
-func (c *Client) IssueEnvironmentAccess(envID string) (*Environment, error) {
-	resp, err := c.do("POST", "/api/environments/"+envID+"/access", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, readError(resp)
-	}
-	var raw map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
-		return nil, err
-	}
-	env := environmentFromJSON(raw)
-	if env.ID == "" || env.Handle == "" || env.AccessToken == "" {
-		return nil, fmt.Errorf("control plane returned invalid environment access")
-	}
-	return &env, nil
 }
 
 // ListSessions lists sessions from the cloud API.
@@ -592,33 +432,6 @@ func (c *Client) doRaw(method, path string, body []byte, contentType string) (*h
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
 	return c.HTTP.Do(req)
-}
-
-func environmentFromJSON(raw map[string]any) Environment {
-	return Environment{
-		ID:             stringValue(raw["id"]),
-		Handle:         stringValue(raw["env_handle"]),
-		AccessToken:    accessTokenFromJSON(raw),
-		State:          stringValue(raw["state"]),
-		HasRecoverable: boolValue(raw["has_recoverable_env_access"]),
-	}
-}
-
-func accessTokenFromJSON(raw map[string]any) string {
-	if token := stringValue(raw["access_token"]); token != "" {
-		return token
-	}
-	return stringValue(raw["env_api_key"])
-}
-
-func stringValue(value any) string {
-	s, _ := value.(string)
-	return s
-}
-
-func boolValue(value any) bool {
-	b, _ := value.(bool)
-	return b
 }
 
 func readError(resp *http.Response) error {
