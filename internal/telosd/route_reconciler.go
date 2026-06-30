@@ -56,6 +56,9 @@ func startRouteReconciler(ctx context.Context, client kubernetes.Interface) {
 }
 
 func reconcileTunnelRoutes(ctx context.Context, client kubernetes.Interface, httpClient *http.Client) error {
+	if err := reconcileManagedNamespacePolicy(ctx, client); err != nil {
+		return err
+	}
 	zoneID := strings.TrimSpace(os.Getenv("TELOS_CF_ZONE_ID"))
 	if zoneID == "" {
 		return nil
@@ -84,6 +87,36 @@ func reconcileTunnelRoutes(ctx context.Context, client kubernetes.Interface, htt
 	}
 	if changed {
 		return restartCloudflared(ctx, client)
+	}
+	return nil
+}
+
+func reconcileManagedNamespacePolicy(ctx context.Context, client kubernetes.Interface) error {
+	namespaces, err := client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	for _, namespace := range namespaces.Items {
+		if !strings.HasPrefix(namespace.Name, "ns-") {
+			continue
+		}
+		next := namespace.DeepCopy()
+		if next.Labels == nil {
+			next.Labels = map[string]string{}
+		}
+		changed := false
+		for key, value := range workerNamespaceLabels {
+			if next.Labels[key] != value {
+				next.Labels[key] = value
+				changed = true
+			}
+		}
+		if !changed {
+			continue
+		}
+		if _, err := client.CoreV1().Namespaces().Update(ctx, next, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
 	}
 	return nil
 }

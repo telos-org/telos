@@ -127,3 +127,32 @@ func TestReconcileTunnelRoutesPublishesEnvAndProductRoutes(t *testing.T) {
 		t.Fatalf("missing Cloudflare DNS requests: %+v", cloudflareRequests)
 	}
 }
+
+func TestReconcileTunnelRoutesLabelsManagedNamespaces(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns-auth"}},
+	)
+
+	if err := reconcileTunnelRoutes(context.Background(), client, nil); err != nil {
+		t.Fatalf("reconcileTunnelRoutes: %v", err)
+	}
+
+	defaultNamespace, err := client.CoreV1().Namespaces().Get(context.Background(), "default", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get default namespace: %v", err)
+	}
+	if len(defaultNamespace.Labels) != 0 {
+		t.Fatalf("default namespace labels: got %#v", defaultNamespace.Labels)
+	}
+
+	authNamespace, err := client.CoreV1().Namespaces().Get(context.Background(), "ns-auth", metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get auth namespace: %v", err)
+	}
+	for key, value := range workerNamespaceLabels {
+		if authNamespace.Labels[key] != value {
+			t.Fatalf("ns-auth label %s: got %q want %q", key, authNamespace.Labels[key], value)
+		}
+	}
+}
