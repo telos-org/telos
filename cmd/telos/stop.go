@@ -18,7 +18,7 @@ func cmdStop(args []string) {
 	parseFlags(fs, args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos stop SESSION [--json]")
+		fmt.Fprintln(os.Stderr, "usage: telos stop SESSION|DEPLOYMENT [--json]")
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
@@ -33,7 +33,7 @@ func cmdStop(args []string) {
 			printJSON(deployment)
 			return
 		}
-		printDeploymentStopReceipt(os.Stdout, *deployment)
+		printDeploymentDeleteReceipt(os.Stdout, *deployment)
 		return
 	}
 
@@ -74,7 +74,7 @@ func cmdDelete(args []string) {
 		printJSON(deployment)
 		return
 	}
-	printDeploymentStopReceipt(os.Stdout, *deployment)
+	printDeploymentDeleteReceipt(os.Stdout, *deployment)
 }
 
 func deleteDeployment(deploymentID string) (*cloud.DeploymentRecord, error) {
@@ -85,8 +85,8 @@ func deleteDeployment(deploymentID string) (*cloud.DeploymentRecord, error) {
 	return control.DeleteDeployment(deploymentID)
 }
 
-func printDeploymentStopReceipt(out io.Writer, deployment cloud.DeploymentRecord) {
-	fmt.Fprintf(out, "stopped %s\n\n", deployment.Name)
+func printDeploymentDeleteReceipt(out io.Writer, deployment cloud.DeploymentRecord) {
+	fmt.Fprintf(out, "deleted %s\n\n", deployment.Name)
 	printSummaryField(out, "Name", deployment.Name)
 	printSummaryField(out, "Platform", "cloud")
 	printSummaryField(out, "Status", deployment.State)

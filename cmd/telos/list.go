@@ -18,7 +18,7 @@ func cmdList(args []string) {
 	limit := fs.Int("limit", 0, "Limit results")
 	wide := fs.Bool("wide", false, "Wide output")
 	localOnly := fs.Bool("local", false, "Local sessions only")
-	cloudOnly := fs.Bool("cloud", false, "Cloud sessions only")
+	cloudOnly := fs.Bool("cloud", false, "Cloud deployments only")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
