@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
@@ -68,6 +69,10 @@ func localSessionExists(sessionID string) bool {
 	return err == nil
 }
 
+func isDeploymentID(id string) bool {
+	return strings.HasPrefix(id, "dep_")
+}
+
 func cloudClientForSession(sessionID, envID string) (*cloud.Client, error) {
 	clients, err := cloudSessionClients(envID)
 	if err != nil {
@@ -82,6 +87,10 @@ func cloudClientForSession(sessionID, envID string) (*cloud.Client, error) {
 }
 
 func getSessionFromAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
+	if isDeploymentID(sessionID) && envID == "" {
+		return nil, fmt.Errorf("deployment %s is not a session; use deployment-aware command output", sessionID)
+	}
+
 	// Try local first
 	s := store()
 	session, err := s.Get(sessionID)
@@ -119,6 +128,14 @@ func getSessionFromAnywhere(sessionID, envID string) (*sessionapi.Session, error
 }
 
 func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
+	if isDeploymentID(sessionID) && envID == "" {
+		control, err := cloud.ControlClient()
+		if err != nil {
+			return "", err
+		}
+		return control.GetDeploymentTranscript(sessionID)
+	}
+
 	s := store()
 	text, err := s.Transcript(sessionID)
 	if err == nil {
@@ -157,6 +174,10 @@ func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
 }
 
 func stopSessionAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
+	if isDeploymentID(sessionID) && envID == "" {
+		return nil, fmt.Errorf("deployment %s is not a session; use deployment delete", sessionID)
+	}
+
 	s := store()
 	session, err := s.Stop(sessionID)
 	if err == nil {

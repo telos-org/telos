@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -23,6 +24,20 @@ func cmdStop(args []string) {
 	}
 	sessionID := fs.Arg(0)
 
+	if isDeploymentID(sessionID) && *env == "" {
+		deployment, err := deleteDeployment(sessionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if *jsonOut {
+			printJSON(deployment)
+			return
+		}
+		printDeploymentStopReceipt(os.Stdout, *deployment)
+		return
+	}
+
 	session, err := stopSessionAnywhere(sessionID, *env)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -34,6 +49,23 @@ func cmdStop(args []string) {
 		return
 	}
 	printStopReceipt(os.Stdout, *session)
+}
+
+func deleteDeployment(deploymentID string) (*cloud.DeploymentRecord, error) {
+	control, err := cloud.ControlClient()
+	if err != nil {
+		return nil, err
+	}
+	return control.DeleteDeployment(deploymentID)
+}
+
+func printDeploymentStopReceipt(out io.Writer, deployment cloud.DeploymentRecord) {
+	fmt.Fprintf(out, "stopped %s\n\n", deployment.Name)
+	printSummaryField(out, "Name", deployment.Name)
+	printSummaryField(out, "Platform", "cloud")
+	printSummaryField(out, "Status", deployment.State)
+	printSummaryField(out, "Package", deployment.PackageRef)
+	printSummaryField(out, "Deployment", deployment.ID)
 }
 
 func printStopReceipt(out io.Writer, session sessionapi.Session) {

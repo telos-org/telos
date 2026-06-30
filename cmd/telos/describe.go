@@ -7,6 +7,7 @@ import (
 	"os"
 	"text/tabwriter"
 
+	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -24,6 +25,20 @@ func cmdDescribe(args []string) {
 	}
 	sessionID := fs.Arg(0)
 
+	if isDeploymentID(sessionID) && *env == "" {
+		deployment, err := getDeployment(sessionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if *jsonOut {
+			printJSON(deployment)
+			return
+		}
+		printDeploymentDescription(os.Stdout, *deployment)
+		return
+	}
+
 	session, err := getSessionFromAnywhere(sessionID, *env)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -36,6 +51,40 @@ func cmdDescribe(args []string) {
 	}
 
 	printSessionDescription(os.Stdout, *session)
+}
+
+func getDeployment(deploymentID string) (*cloud.DeploymentRecord, error) {
+	control, err := cloud.ControlClient()
+	if err != nil {
+		return nil, err
+	}
+	return control.GetDeployment(deploymentID)
+}
+
+func printDeploymentDescription(out io.Writer, deployment cloud.DeploymentRecord) {
+	printSummaryField(out, "Name", deployment.Name)
+	printSummaryField(out, "Platform", "cloud")
+	printSummaryField(out, "Status", deployment.State)
+	printSummaryField(out, "Package", deployment.PackageRef)
+	printSummaryField(out, "Digest", deployment.PackageDigest)
+	printSummaryField(out, "Deployment", deployment.ID)
+	if deployment.RuntimeVersion != nil && *deployment.RuntimeVersion != "" {
+		printSummaryField(out, "Runtime", *deployment.RuntimeVersion)
+	}
+	if deployment.ServiceURL != nil && *deployment.ServiceURL != "" {
+		printSummaryField(out, "Service", *deployment.ServiceURL)
+	}
+	if deployment.DashboardURL != nil && *deployment.DashboardURL != "" {
+		printSummaryField(out, "Dashboard", *deployment.DashboardURL)
+	}
+	if deployment.FailureReason != nil && *deployment.FailureReason != "" {
+		printSummaryField(out, "Error", *deployment.FailureReason)
+	}
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Lifecycle")
+	printDetailField(out, "created", deployment.CreatedAt)
+	printDetailField(out, "updated", deployment.UpdatedAt)
 }
 
 func printSessionDescription(out io.Writer, session sessionapi.Session) {
