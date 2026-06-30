@@ -788,7 +788,7 @@ func TestLocalWorkerEnvIncludesSessionContext(t *testing.T) {
 	}
 
 	values := map[string]string{}
-	for _, entry := range sessionworker.Env(session.SessionDir, sessionapi.RuntimeLocal) {
+	for _, entry := range sessionworker.Env(session.SessionDir, sessionworker.StartOptions{Runtime: sessionapi.RuntimeLocal}) {
 		key, value, ok := strings.Cut(entry, "=")
 		if ok {
 			values[key] = value

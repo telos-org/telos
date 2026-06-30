@@ -55,15 +55,22 @@ func newKubernetesSubstrate(cfg Config) (kubernetesSubstrate, error) {
 	if strings.TrimSpace(os.Getenv(cfg.Kubernetes.AgentSecretKey)) == "" {
 		return kubernetesSubstrate{}, fmt.Errorf("%s is required to launch workers", cfg.Kubernetes.AgentSecretKey)
 	}
-	restCfg, err := kubernetesRESTConfig()
-	if err != nil {
-		return kubernetesSubstrate{}, err
-	}
-	client, err := kubernetes.NewForConfig(restCfg)
+	client, err := kubernetesClient()
 	if err != nil {
 		return kubernetesSubstrate{}, err
 	}
 	return newKubernetesSubstrateWithClient(cfg, client), nil
+}
+
+func newSessionSubstrate(cfg Config) (sessionSubstrate, error) {
+	switch cfg.Worker.Substrate {
+	case "local-process":
+		return newLocalProcessSubstrate(), nil
+	case "kubernetes":
+		return newKubernetesSubstrate(cfg)
+	default:
+		return nil, fmt.Errorf("invalid worker.substrate %q", cfg.Worker.Substrate)
+	}
 }
 
 func newKubernetesSubstrateWithClient(cfg Config, client kubernetes.Interface) kubernetesSubstrate {
@@ -85,6 +92,14 @@ func newKubernetesSubstrateWithClient(cfg Config, client kubernetes.Interface) k
 		runtimeTelosPath:  runtimeMountPath + "/telos",
 		runtimeTelosdPath: runtimeMountPath + "/telosd",
 	}
+}
+
+func kubernetesClient() (kubernetes.Interface, error) {
+	restCfg, err := kubernetesRESTConfig()
+	if err != nil {
+		return nil, err
+	}
+	return kubernetes.NewForConfig(restCfg)
 }
 
 func kubernetesRESTConfig() (*rest.Config, error) {
