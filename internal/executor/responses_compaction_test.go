@@ -25,7 +25,7 @@ func TestResponsesClientUnderBudgetSkipsCompaction(t *testing.T) {
 		if strings.Contains(requestInputText(t, body), compactionCommand) {
 			t.Fatalf("under-budget send must not request compaction:\n%s", body)
 		}
-		writeResponsesStream(w, responseWithText("resp_normal", "Done."))
+		writeResponsesJSON(w, responseWithText("resp_normal", "Done."))
 	}))
 	defer server.Close()
 
@@ -63,7 +63,7 @@ func TestResponsesClientCompactsBeforeNormalRequest(t *testing.T) {
 			if instructions := requestStringField(t, body, "instructions"); !strings.Contains(instructions, "COMPACT_SESSION_STATE") {
 				t.Fatalf("instructions should include compaction mode:\n%s", instructions)
 			}
-			writeResponsesStream(w, responseWithText("resp_compact", summary))
+			writeResponsesJSON(w, responseWithText("resp_compact", summary))
 		case 2:
 			inputText := requestInputText(t, body)
 			if strings.Contains(inputText, compactionCommand) {
@@ -77,7 +77,7 @@ func TestResponsesClientCompactsBeforeNormalRequest(t *testing.T) {
 			if strings.Contains(inputText, "old fact") {
 				t.Fatalf("normal request should not include summarized raw history:\n%s", body)
 			}
-			writeResponsesStream(w, responseWithText("resp_normal", "Continued."))
+			writeResponsesJSON(w, responseWithText("resp_normal", "Continued."))
 		default:
 			t.Fatalf("unexpected extra request %d", len(requests))
 		}
@@ -120,10 +120,10 @@ func TestResponsesClientInvalidCompactionFallsBackToTruncate(t *testing.T) {
 		requests++
 		if requests == 1 {
 			// Compaction attempt returns a malformed summary.
-			writeResponsesStream(w, responseWithText("resp_bad", "not a valid summary"))
+			writeResponsesJSON(w, responseWithText("resp_bad", "not a valid summary"))
 			return
 		}
-		writeResponsesStream(w, responseWithText("resp_normal", "Continued."))
+		writeResponsesJSON(w, responseWithText("resp_normal", "Continued."))
 	}))
 	defer server.Close()
 
@@ -171,10 +171,10 @@ func TestResponsesClientFoldsCompactionSpendIntoTurnStats(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
 		if requests == 1 {
-			writeResponsesStream(w, responseWithText("resp_compact", summary))
+			writeResponsesJSON(w, responseWithText("resp_compact", summary))
 			return
 		}
-		writeResponsesStream(w, responseWithText("resp_normal", "Continued."))
+		writeResponsesJSON(w, responseWithText("resp_normal", "Continued."))
 	}))
 	defer server.Close()
 
@@ -212,7 +212,7 @@ func TestResponsesClientNaiveCutoffDropsOldHistoryWithoutLLMCall(t *testing.T) {
 		if strings.Contains(inputText, compactionCommand) || strings.Contains(inputText, "old fact") {
 			t.Fatalf("truncate strategy should send task + recent history only:\n%s", body)
 		}
-		writeResponsesStream(w, responseWithText("resp_normal", "Continued."))
+		writeResponsesJSON(w, responseWithText("resp_normal", "Continued."))
 	}))
 	defer server.Close()
 
@@ -258,15 +258,15 @@ func TestResponsesClientLLMCompactionPreservesAnchorNaiveLoses(t *testing.T) {
 				if !strings.Contains(inputText, anchor) {
 					t.Fatalf("compaction request lost the raw anchor:\n%s", body)
 				}
-				writeResponsesStream(w, responseWithText("resp_compact", validCompactionSummary("anchor "+anchor)))
+				writeResponsesJSON(w, responseWithText("resp_compact", validCompactionSummary("anchor "+anchor)))
 				return
 			}
 			normalRequest = inputText
 			if strings.Contains(inputText, anchor) {
-				writeResponsesStream(w, responseWithText("resp_normal", "success: "+anchor))
+				writeResponsesJSON(w, responseWithText("resp_normal", "success: "+anchor))
 				return
 			}
-			writeResponsesStream(w, responseWithText("resp_normal", "failure: missing anchor"))
+			writeResponsesJSON(w, responseWithText("resp_normal", "failure: missing anchor"))
 		}))
 		defer server.Close()
 
@@ -312,7 +312,7 @@ func TestResponsesClientServerChainIgnoresCompaction(t *testing.T) {
 		if strings.Contains(requestInputText(t, body), compactionCommand) {
 			t.Fatalf("server_chain must not compact:\n%s", body)
 		}
-		writeResponsesStream(w, responseWithText("resp_normal", "Done."))
+		writeResponsesJSON(w, responseWithText("resp_normal", "Done."))
 	}))
 	defer server.Close()
 
@@ -339,16 +339,11 @@ func TestResponsesClientRetriesTransientCompactionError(t *testing.T) {
 		switch requests {
 		case 1:
 			// First compaction attempt fails with a retryable upstream error.
-			w.Header().Set("Content-Type", "text/event-stream")
-			w.WriteHeader(http.StatusOK)
-			_, _ = io.WriteString(w, `data: {"type":"response.failed","response":{"id":"resp_fail","status":"failed","error":{"message":"transient upstream error"}}}`+"\n\n")
-			if f, ok := w.(http.Flusher); ok {
-				f.Flush()
-			}
+			http.Error(w, "transient upstream error", http.StatusServiceUnavailable)
 		case 2:
-			writeResponsesStream(w, responseWithText("resp_compact", summary))
+			writeResponsesJSON(w, responseWithText("resp_compact", summary))
 		default:
-			writeResponsesStream(w, responseWithText("resp_normal", "Continued."))
+			writeResponsesJSON(w, responseWithText("resp_normal", "Continued."))
 		}
 	}))
 	defer server.Close()

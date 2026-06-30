@@ -322,7 +322,7 @@ func nativeToolNames() []string {
 }
 
 // nativeToolsForOpenAI renders the tool table as openai-go Responses function
-// tools. The LiteLLM proxy is OpenAI-compatible, so this is the only schema
+// tools. The gateway is OpenAI-compatible, so this is the only schema
 // shape Telos needs to emit.
 func nativeToolsForOpenAI() []responses.ToolUnionParam {
 	out := make([]responses.ToolUnionParam, 0, len(nativeToolDefs))

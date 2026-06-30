@@ -86,14 +86,20 @@ func TestSaveAndLoadGatewayConfig(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_MODE", "")
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
 	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+	t.Setenv("TELOS_GATEWAY_TRANSPORT", "")
+	t.Setenv("TELOS_GATEWAY_KIND", "")
+	t.Setenv("TELOS_GATEWAY_HEADERS", "")
 
 	err := SaveConfig(&Config{
 		APIEndpoint: "https://saved.example.com",
 		AuthToken:   "saved-token",
 		Gateway: GatewayConfig{
-			Mode:    "byo",
-			BaseURL: "https://proxy.example.com/v1",
-			APIKey:  "sk-byo",
+			Mode:      "byo",
+			BaseURL:   "https://proxy.example.com/v1",
+			APIKey:    "sk-byo",
+			Transport: "bifrost_async",
+			Kind:      "bifrost",
+			Headers:   map[string]string{"x-bf-vk": "sk-bf"},
 		},
 	})
 	if err != nil {
@@ -101,7 +107,7 @@ func TestSaveAndLoadGatewayConfig(t *testing.T) {
 	}
 
 	cfg := LoadConfig()
-	if cfg.Gateway.Mode != "byo" || cfg.Gateway.BaseURL != "https://proxy.example.com/v1" || cfg.Gateway.APIKey != "sk-byo" {
+	if cfg.Gateway.Mode != "byo" || cfg.Gateway.BaseURL != "https://proxy.example.com/v1" || cfg.Gateway.APIKey != "sk-byo" || cfg.Gateway.Transport != "bifrost_async" || cfg.Gateway.Kind != "bifrost" || cfg.Gateway.Headers["x-bf-vk"] != "sk-bf" {
 		t.Fatalf("gateway: %+v", cfg.Gateway)
 	}
 }
@@ -114,6 +120,10 @@ gateway:
   mode: managed
   base_url: https://file.example.com/v1
   api_key: file-key
+  transport: openai_sync
+  kind: openai
+  headers:
+    x-file: file
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -121,9 +131,12 @@ gateway:
 	t.Setenv("TELOS_GATEWAY_MODE", "byo")
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://env.example.com/v1")
 	t.Setenv("TELOS_GATEWAY_API_KEY", "env-key")
+	t.Setenv("TELOS_GATEWAY_TRANSPORT", "bifrost_async")
+	t.Setenv("TELOS_GATEWAY_KIND", "bifrost")
+	t.Setenv("TELOS_GATEWAY_HEADERS", `{"x-env":"env"}`)
 
 	cfg := LoadConfig()
-	if cfg.Gateway.Mode != "byo" || cfg.Gateway.BaseURL != "https://env.example.com/v1" || cfg.Gateway.APIKey != "env-key" {
+	if cfg.Gateway.Mode != "byo" || cfg.Gateway.BaseURL != "https://env.example.com/v1" || cfg.Gateway.APIKey != "env-key" || cfg.Gateway.Transport != "bifrost_async" || cfg.Gateway.Kind != "bifrost" || cfg.Gateway.Headers["x-env"] != "env" {
 		t.Fatalf("gateway: %+v", cfg.Gateway)
 	}
 }

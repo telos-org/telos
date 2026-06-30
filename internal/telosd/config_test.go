@@ -45,7 +45,7 @@ func TestNormalizeCloudConfigDefaults(t *testing.T) {
 	if cfg.Auth.Type != AuthBearer {
 		t.Fatalf("auth.type: got %q", cfg.Auth.Type)
 	}
-	if cfg.Kubernetes.AgentSecretKey != "TELOS_LITELLM_API_KEY" {
+	if cfg.Kubernetes.AgentSecretKey != "TELOS_GATEWAY_API_KEY" {
 		t.Fatalf("agent secret key: got %q", cfg.Kubernetes.AgentSecretKey)
 	}
 	if cfg.Billing.Endpoint != "https://billing.usetelos.ai" {

@@ -104,6 +104,11 @@ func (s *conversationState) previousResponseID() string {
 }
 
 func (s *conversationState) recordResponseID(id string) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		s.fallbackToStatelessHistory()
+		return
+	}
 	s.previousID = id
 }
 

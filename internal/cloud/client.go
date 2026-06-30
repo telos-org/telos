@@ -34,11 +34,14 @@ type Environment struct {
 	HasRecoverable bool
 }
 
-// SessionKey is a budget-capped LiteLLM key minted by billing.
+// SessionKey is a budget-capped model gateway key minted by billing.
 type SessionKey struct {
 	SessionID string
 	BaseURL   string
 	APIKey    string
+	Transport string
+	Kind      string
+	Headers   map[string]string
 	BudgetUSD float64
 	KeyAlias  string
 }
@@ -225,11 +228,14 @@ func (c *Client) MintSessionKey(sessionID string) (*SessionKey, error) {
 		return nil, readError(resp)
 	}
 	var raw struct {
-		SessionID string  `json:"session_id"`
-		BaseURL   string  `json:"base_url"`
-		APIKey    string  `json:"api_key"`
-		BudgetUSD float64 `json:"budget_usd"`
-		KeyAlias  string  `json:"key_alias"`
+		SessionID string            `json:"session_id"`
+		BaseURL   string            `json:"base_url"`
+		APIKey    string            `json:"api_key"`
+		Transport string            `json:"transport"`
+		Kind      string            `json:"kind"`
+		Headers   map[string]string `json:"headers"`
+		BudgetUSD float64           `json:"budget_usd"`
+		KeyAlias  string            `json:"key_alias"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, err
@@ -248,6 +254,9 @@ func (c *Client) MintSessionKey(sessionID string) (*SessionKey, error) {
 		SessionID: raw.SessionID,
 		BaseURL:   raw.BaseURL,
 		APIKey:    raw.APIKey,
+		Transport: raw.Transport,
+		Kind:      raw.Kind,
+		Headers:   cloneStringMap(raw.Headers),
 		BudgetUSD: raw.BudgetUSD,
 		KeyAlias:  raw.KeyAlias,
 	}, nil
@@ -268,6 +277,24 @@ func (c *Client) ReconcileSession(sessionID string, terminal bool) error {
 		return readError(resp)
 	}
 	return nil
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		k = strings.TrimSpace(k)
+		if k == "" {
+			continue
+		}
+		out[k] = strings.TrimSpace(v)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // Balance returns the caller's managed compute-unit balance.

@@ -18,6 +18,9 @@ const (
 	GatewayModeEnv      = "TELOS_GATEWAY_MODE"
 	GatewayBaseURLEnv   = "TELOS_GATEWAY_BASE_URL"
 	GatewayAPIKeyEnv    = "TELOS_GATEWAY_API_KEY"
+	GatewayTransportEnv = "TELOS_GATEWAY_TRANSPORT"
+	GatewayKindEnv      = "TELOS_GATEWAY_KIND"
+	GatewayHeadersEnv   = "TELOS_GATEWAY_HEADERS"
 )
 
 // Config holds user-facing cloud CLI configuration.
@@ -30,9 +33,12 @@ type Config struct {
 
 // GatewayConfig holds local model gateway selection.
 type GatewayConfig struct {
-	Mode    string `yaml:"mode,omitempty"`
-	BaseURL string `yaml:"base_url,omitempty"`
-	APIKey  string `yaml:"api_key,omitempty"`
+	Mode      string            `yaml:"mode,omitempty"`
+	BaseURL   string            `yaml:"base_url,omitempty"`
+	APIKey    string            `yaml:"api_key,omitempty"`
+	Transport string            `yaml:"transport,omitempty"`
+	Kind      string            `yaml:"kind,omitempty"`
+	Headers   map[string]string `yaml:"headers,omitempty"`
 }
 
 // EnvironmentAccess holds a saved scoped token for one cloud environment.
@@ -82,6 +88,15 @@ func LoadConfig() *Config {
 		if apiKey, ok := rawGateway["api_key"].(string); ok {
 			cfg.Gateway.APIKey = apiKey
 		}
+		if transport, ok := rawGateway["transport"].(string); ok {
+			cfg.Gateway.Transport = transport
+		}
+		if kind, ok := rawGateway["kind"].(string); ok {
+			cfg.Gateway.Kind = kind
+		}
+		if headers, ok := stringMap(rawGateway["headers"]); ok {
+			cfg.Gateway.Headers = headers
+		}
 	}
 	// Env overrides
 	if v := os.Getenv(APIEndpointEnv); v != "" {
@@ -102,6 +117,18 @@ func LoadConfig() *Config {
 	if v := os.Getenv(GatewayAPIKeyEnv); v != "" {
 		cfg.Gateway.APIKey = v
 	}
+	if v := os.Getenv(GatewayTransportEnv); v != "" {
+		cfg.Gateway.Transport = v
+	}
+	if v := os.Getenv(GatewayKindEnv); v != "" {
+		cfg.Gateway.Kind = v
+	}
+	if v := os.Getenv(GatewayHeadersEnv); v != "" {
+		var headers map[string]string
+		if err := yaml.Unmarshal([]byte(v), &headers); err == nil {
+			cfg.Gateway.Headers = headers
+		}
+	}
 	return cfg
 }
 
@@ -121,9 +148,9 @@ func SaveConfig(cfg *Config) error {
 	if cfg.AuthToken != "" {
 		m["auth_token"] = cfg.AuthToken
 	}
-	if cfg.Gateway.Mode != "" || cfg.Gateway.BaseURL != "" || cfg.Gateway.APIKey != "" {
-		m["gateway"] = map[string]string{}
-		gateway := m["gateway"].(map[string]string)
+	if cfg.Gateway.Mode != "" || cfg.Gateway.BaseURL != "" || cfg.Gateway.APIKey != "" || cfg.Gateway.Transport != "" || cfg.Gateway.Kind != "" || len(cfg.Gateway.Headers) > 0 {
+		m["gateway"] = map[string]any{}
+		gateway := m["gateway"].(map[string]any)
 		if cfg.Gateway.Mode != "" {
 			gateway["mode"] = cfg.Gateway.Mode
 		}
@@ -132,6 +159,15 @@ func SaveConfig(cfg *Config) error {
 		}
 		if cfg.Gateway.APIKey != "" {
 			gateway["api_key"] = cfg.Gateway.APIKey
+		}
+		if cfg.Gateway.Transport != "" {
+			gateway["transport"] = cfg.Gateway.Transport
+		}
+		if cfg.Gateway.Kind != "" {
+			gateway["kind"] = cfg.Gateway.Kind
+		}
+		if len(cfg.Gateway.Headers) > 0 {
+			gateway["headers"] = cfg.Gateway.Headers
 		}
 	}
 	data, err := yaml.Marshal(m)
@@ -250,4 +286,20 @@ func readYAMLFile(path string) map[string]interface{} {
 		return map[string]interface{}{}
 	}
 	return raw
+}
+
+func stringMap(value any) (map[string]string, bool) {
+	raw, ok := value.(map[string]interface{})
+	if !ok {
+		return nil, false
+	}
+	out := make(map[string]string, len(raw))
+	for key, value := range raw {
+		s, ok := value.(string)
+		if !ok || key == "" {
+			return nil, false
+		}
+		out[key] = s
+	}
+	return out, true
 }

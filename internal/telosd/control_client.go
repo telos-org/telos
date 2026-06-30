@@ -14,6 +14,9 @@ type controlSessionKey struct {
 	SessionID string
 	BaseURL   string
 	APIKey    string
+	Transport string
+	Kind      string
+	Headers   map[string]string
 	KeyAlias  string
 }
 
@@ -73,10 +76,13 @@ func (c *billingClient) MintSessionKey(sessionID, parentSessionID, userAuthoriza
 		return controlSessionKey{}, fmt.Errorf("mint session key: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(data)))
 	}
 	var raw struct {
-		SessionID string `json:"session_id"`
-		BaseURL   string `json:"base_url"`
-		APIKey    string `json:"api_key"`
-		KeyAlias  string `json:"key_alias"`
+		SessionID string            `json:"session_id"`
+		BaseURL   string            `json:"base_url"`
+		APIKey    string            `json:"api_key"`
+		Transport string            `json:"transport"`
+		Kind      string            `json:"kind"`
+		Headers   map[string]string `json:"headers"`
+		KeyAlias  string            `json:"key_alias"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return controlSessionKey{}, err
@@ -95,6 +101,9 @@ func (c *billingClient) MintSessionKey(sessionID, parentSessionID, userAuthoriza
 		SessionID: raw.SessionID,
 		BaseURL:   strings.TrimRight(raw.BaseURL, "/"),
 		APIKey:    raw.APIKey,
+		Transport: raw.Transport,
+		Kind:      raw.Kind,
+		Headers:   cloneStringMap(raw.Headers),
 		KeyAlias:  raw.KeyAlias,
 	}, nil
 }

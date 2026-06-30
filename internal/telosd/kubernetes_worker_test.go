@@ -23,7 +23,7 @@ import (
 )
 
 func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
-	setLiteLLMGatewayEnv(t)
+	setGatewayEnv(t)
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(
@@ -31,14 +31,14 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "telos-env-keys", Namespace: cfg.Kubernetes.EnvNamespace},
 			Type:       corev1.SecretTypeOpaque,
-			Data:       map[string][]byte{"TELOS_LITELLM_BASE_URL": []byte("https://stored-litellm.example.com/v1")},
+			Data:       map[string][]byte{"TELOS_GATEWAY_BASE_URL": []byte("https://stored-gateway.example.com/v1")},
 		},
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
 			Type:       corev1.SecretTypeOpaque,
 			Data: map[string][]byte{
-				"TELOS_LITELLM_API_KEY":  []byte("stored-litellm-key"),
-				"TELOS_LITELLM_BASE_URL": []byte("https://stored-litellm.example.com/v1"),
+				"TELOS_GATEWAY_API_KEY":  []byte("stored-gateway-key"),
+				"TELOS_GATEWAY_BASE_URL": []byte("https://stored-gateway.example.com/v1"),
 			},
 		},
 		&corev1.Secret{
@@ -74,8 +74,8 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 	}
 
 	assertSecretExists(t, client, namespace, cfg.Kubernetes.AgentSecretName)
-	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_API_KEY", "test-litellm-key")
-	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1")
+	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY", "test-gateway-key")
+	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_BASE_URL", "https://gateway.example.com/v1")
 	assertSecretExists(t, client, namespace, "telos-env-keys")
 	assertSecretExists(t, client, namespace, cfg.Kubernetes.ImagePullSecret)
 	role, err := client.RbacV1().ClusterRoles().Get(context.Background(), workerClusterRole(namespace).Name, metav1.GetOptions{})
@@ -86,7 +86,7 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 }
 
 func TestKubernetesSubstrateAppliesTaskWorker(t *testing.T) {
-	setLiteLLMGatewayEnv(t)
+	setGatewayEnv(t)
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
@@ -110,7 +110,7 @@ func TestKubernetesSubstrateAppliesTaskWorker(t *testing.T) {
 }
 
 func TestKubernetesSubstrateStopDeletesWorkerResources(t *testing.T) {
-	setLiteLLMGatewayEnv(t)
+	setGatewayEnv(t)
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
@@ -141,7 +141,7 @@ func TestKubernetesSubstrateStopDeletesWorkerResources(t *testing.T) {
 }
 
 func TestKubernetesSubstrateStopReconcilesManagedBilling(t *testing.T) {
-	setLiteLLMGatewayEnv(t)
+	setGatewayEnv(t)
 
 	session := testCloudSession(t, sessionapi.KindController)
 	gotReconcile := false
@@ -195,7 +195,7 @@ func TestKubernetesSubstrateStopReconcilesManagedBilling(t *testing.T) {
 }
 
 func TestKubernetesSubstrateStopContinuesCleanupAfterWorkloadDeleteError(t *testing.T) {
-	setLiteLLMGatewayEnv(t)
+	setGatewayEnv(t)
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
@@ -328,7 +328,7 @@ func TestKubernetesSubstrateRuntimeStatusTask(t *testing.T) {
 }
 
 func TestCloudSessionStoreCleansKubernetesResourcesWhenInitialApplyFails(t *testing.T) {
-	setLiteLLMGatewayEnv(t)
+	setGatewayEnv(t)
 
 	cfg := testCloudConfig(t)
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
@@ -354,11 +354,9 @@ func TestCloudSessionStoreCleansKubernetesResourcesWhenInitialApplyFails(t *test
 	assertNoWorkerResources(t, client)
 }
 
-func TestKubernetesSubstrateAgentSecretAcceptsLiteLLMBaseURLAlias(t *testing.T) {
-	t.Setenv("TELOS_LITELLM_API_KEY", "test-litellm-key")
-	t.Setenv("TELOS_LITELLM_BASE_URL", "")
-	t.Setenv("TELOS_API_BASE_URL", "")
-	t.Setenv("TELOS_BASE_URL", "")
+func TestKubernetesSubstrateAgentSecretCopiesGatewayBaseURL(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-gateway-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
 
 	cfg := testCloudConfig(t)
 	targetNamespace := "ns-worker"
@@ -369,8 +367,8 @@ func TestKubernetesSubstrateAgentSecretAcceptsLiteLLMBaseURLAlias(t *testing.T) 
 			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
 			Type:       corev1.SecretTypeOpaque,
 			Data: map[string][]byte{
-				"TELOS_LITELLM_API_KEY": []byte("stored-litellm-key"),
-				"TELOS_API_BASE_URL":    []byte("https://alias-litellm.example.com/v1"),
+				"TELOS_GATEWAY_API_KEY":  []byte("stored-gateway-key"),
+				"TELOS_GATEWAY_BASE_URL": []byte("https://alias-gateway.example.com/v1"),
 			},
 		},
 	)
@@ -380,15 +378,61 @@ func TestKubernetesSubstrateAgentSecretAcceptsLiteLLMBaseURLAlias(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_API_KEY", "test-litellm-key")
-	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_API_BASE_URL", "https://alias-litellm.example.com/v1")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY", "test-gateway-key")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_BASE_URL", "https://alias-gateway.example.com/v1")
 }
 
-func TestKubernetesSubstrateAgentSecretRequiresLiteLLMBaseURL(t *testing.T) {
-	t.Setenv("TELOS_LITELLM_API_KEY", "test-litellm-key")
-	t.Setenv("TELOS_LITELLM_BASE_URL", "")
-	t.Setenv("TELOS_API_BASE_URL", "")
-	t.Setenv("TELOS_BASE_URL", "")
+func TestKubernetesSubstrateAgentSecretDropsLegacyAndStaleGatewayKeys(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+
+	cfg := testCloudConfig(t)
+	targetNamespace := "ns-worker"
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.EnvNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNamespace}},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
+			Type:       corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"TELOS_LITELLM_API_KEY":   []byte("old-key"),
+				"TELOS_LITELLM_BASE_URL":  []byte("https://old.example.com/v1"),
+				"TELOS_GATEWAY_API_KEY":   []byte("source-key"),
+				"TELOS_GATEWAY_BASE_URL":  []byte("https://source.example.com/openai"),
+				"TELOS_GATEWAY_TRANSPORT": []byte("bifrost_async"),
+				"TELOS_GATEWAY_KIND":      []byte("bifrost"),
+				"TELOS_GATEWAY_HEADERS":   []byte(`{"x-stale":"stale"}`),
+				"TELOS_GATEWAY_KEY_ALIAS": []byte("stale-alias"),
+			},
+		},
+	)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+	credential := &controlSessionKey{
+		BaseURL: "https://managed.example.com/v1",
+		APIKey:  "sk-managed",
+	}
+
+	if err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace, credential); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY", "sk-managed")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_BASE_URL", "https://managed.example.com/v1")
+	for _, key := range []string{
+		"TELOS_LITELLM_API_KEY",
+		"TELOS_LITELLM_BASE_URL",
+		"TELOS_GATEWAY_TRANSPORT",
+		"TELOS_GATEWAY_KIND",
+		"TELOS_GATEWAY_HEADERS",
+		"TELOS_GATEWAY_KEY_ALIAS",
+	} {
+		assertSecretDataAbsent(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, key)
+	}
+}
+
+func TestKubernetesSubstrateAgentSecretRequiresGatewayBaseURL(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-gateway-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
 
 	cfg := testCloudConfig(t)
 	targetNamespace := "ns-worker"
@@ -399,14 +443,14 @@ func TestKubernetesSubstrateAgentSecretRequiresLiteLLMBaseURL(t *testing.T) {
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 
 	err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace, nil)
-	if err == nil || !strings.Contains(err.Error(), "TELOS_LITELLM_BASE_URL is required") {
-		t.Fatalf("expected missing LiteLLM base URL error, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "TELOS_GATEWAY_BASE_URL is required") {
+		t.Fatalf("expected missing gateway base URL error, got %v", err)
 	}
 }
 
 func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
-	t.Setenv("TELOS_LITELLM_API_KEY", "")
-	t.Setenv("TELOS_LITELLM_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
 	mintCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/internal/sessions/sess_cloud/mint" {
@@ -424,8 +468,11 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 		mintCalls++
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"session_id": "sess_cloud",
-			"base_url":   "https://managed.example.com/v1",
+			"base_url":   "https://managed.example.com/openai",
 			"api_key":    "sk-managed",
+			"transport":  "bifrost_async",
+			"kind":       "bifrost",
+			"headers":    map[string]string{"x-bf-vk": "sk-bf"},
 			"key_alias":  "sess_cloud",
 		})
 	}))
@@ -442,7 +489,7 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cred.APIKey != "sk-managed" || cred.BaseURL != "https://managed.example.com/v1" {
+	if cred.APIKey != "sk-managed" || cred.BaseURL != "https://managed.example.com/openai" || cred.Transport != "bifrost_async" || cred.Kind != "bifrost" || cred.Headers["x-bf-vk"] != "sk-bf" {
 		t.Fatalf("credential: %+v", cred)
 	}
 	if mintCalls != 1 {
@@ -466,13 +513,17 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	if err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace, cred); err != nil {
 		t.Fatal(err)
 	}
-	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_API_KEY", "sk-managed")
-	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_LITELLM_BASE_URL", "https://managed.example.com/v1")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY", "sk-managed")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_BASE_URL", "https://managed.example.com/openai")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_TRANSPORT", "bifrost_async")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_KIND", "bifrost")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_HEADERS", `{"x-bf-vk":"sk-bf"}`)
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_KEY_ALIAS", "sess_cloud")
 }
 
 func TestKubernetesSubstrateSessionGatewayCredentialConcurrentMintOnce(t *testing.T) {
-	t.Setenv("TELOS_LITELLM_API_KEY", "")
-	t.Setenv("TELOS_LITELLM_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
 	var mu sync.Mutex
 	mintCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -674,10 +725,10 @@ func testCloudConfig(t *testing.T) Config {
 	return cfg
 }
 
-func setLiteLLMGatewayEnv(t *testing.T) {
+func setGatewayEnv(t *testing.T) {
 	t.Helper()
-	t.Setenv("TELOS_LITELLM_API_KEY", "test-litellm-key")
-	t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-gateway-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://gateway.example.com/v1")
 }
 
 func testEnvObjects(cfg Config) []runtime.Object {
@@ -686,7 +737,7 @@ func testEnvObjects(cfg Config) []runtime.Object {
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: "telos-env-keys", Namespace: cfg.Kubernetes.EnvNamespace},
 			Type:       corev1.SecretTypeOpaque,
-			Data:       map[string][]byte{"TELOS_LITELLM_BASE_URL": []byte("https://stored-litellm.example.com/v1")},
+			Data:       map[string][]byte{"TELOS_GATEWAY_BASE_URL": []byte("https://stored-gateway.example.com/v1")},
 		},
 		&corev1.Secret{
 			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.ImagePullSecret, Namespace: cfg.Kubernetes.EnvNamespace},
@@ -809,6 +860,17 @@ func assertSecretData(t *testing.T, client *fake.Clientset, namespace string, na
 	}
 	if got := string(secret.Data[key]); got != want {
 		t.Fatalf("%s/%s[%s]: got %q, want %q", namespace, name, key, got, want)
+	}
+}
+
+func assertSecretDataAbsent(t *testing.T, client *fake.Clientset, namespace string, name string, key string) {
+	t.Helper()
+	secret, err := client.CoreV1().Secrets(namespace).Get(context.Background(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := secret.Data[key]; ok {
+		t.Fatalf("%s/%s[%s] should be absent", namespace, name, key)
 	}
 }
 

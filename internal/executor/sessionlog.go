@@ -112,6 +112,8 @@ func (l *nativeSessionLogger) providerConfig(cfg nativeProviderConfig) error {
 	return l.event(agentsession.KindProviderConfig, agentsession.MarshalPayload(&agentsession.ProviderConfigPayload{
 		Provider:                cfg.Provider,
 		Model:                   cfg.Model,
+		Transport:               string(cfg.Transport),
+		BaseURLKind:             string(cfg.Kind),
 		StateMode:               cfg.Capability.StateMode,
 		StrictProtocol:          cfg.Capability.StrictProtocol,
 		CapabilityMaxOutput:     cfg.Capability.MaxOutputTokens,
@@ -177,6 +179,7 @@ func (l *nativeSessionLogger) tool(result nativeToolResult) error {
 
 type modelRequestLogData struct {
 	Sequence        int
+	Transport       string
 	PreviousID      string
 	StateMode       string
 	Model           string
@@ -188,6 +191,7 @@ type modelRequestLogData struct {
 func (l *nativeSessionLogger) modelRequest(data modelRequestLogData) error {
 	return l.event(agentsession.KindModelRequest, agentsession.MarshalPayload(&agentsession.ModelRequestPayload{
 		Sequence:        data.Sequence,
+		Transport:       data.Transport,
 		PreviousID:      data.PreviousID,
 		StateMode:       data.StateMode,
 		Model:           data.Model,
@@ -198,10 +202,15 @@ func (l *nativeSessionLogger) modelRequest(data modelRequestLogData) error {
 	}))
 }
 
-func (l *nativeSessionLogger) modelResponse(sequence int, responseID, stopReason string, stats game.TurnStats) error {
+func (l *nativeSessionLogger) modelAsyncJob(payload agentsession.ModelAsyncJobPayload) error {
+	return l.event(agentsession.KindModelAsyncJob, agentsession.MarshalPayload(&payload))
+}
+
+func (l *nativeSessionLogger) modelResponse(sequence int, responseID, asyncJobID, stopReason string, stats game.TurnStats) error {
 	return l.event(agentsession.KindModelResponse, agentsession.MarshalPayload(&agentsession.ModelResponsePayload{
 		Sequence:   sequence,
 		ResponseID: responseID,
+		AsyncJobID: asyncJobID,
 		StopReason: stopReason,
 		Usage: agentsession.ModelResponseUsage{
 			Input:           stats.InputTokens,

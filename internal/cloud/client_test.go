@@ -250,6 +250,9 @@ func TestClientMintSessionKey(t *testing.T) {
 			"session_id": "sess-1",
 			"base_url":   "https://proxy.example.com/v1",
 			"api_key":    "sk-session",
+			"transport":  "bifrost_async",
+			"kind":       "bifrost",
+			"headers":    map[string]string{"x-bf-vk": "sk-bf"},
 			"budget_usd": 5.0,
 			"key_alias":  "sess-1",
 		})
@@ -264,7 +267,7 @@ func TestClientMintSessionKey(t *testing.T) {
 	if gotPath != "/api/billing/session-key" || gotBody["session_id"] != "sess-1" {
 		t.Fatalf("request: path=%q body=%v", gotPath, gotBody)
 	}
-	if key.APIKey != "sk-session" || key.BaseURL != "https://proxy.example.com/v1" || key.KeyAlias != "sess-1" {
+	if key.APIKey != "sk-session" || key.BaseURL != "https://proxy.example.com/v1" || key.Transport != "bifrost_async" || key.Kind != "bifrost" || key.Headers["x-bf-vk"] != "sk-bf" || key.KeyAlias != "sess-1" {
 		t.Fatalf("key: %+v", key)
 	}
 }

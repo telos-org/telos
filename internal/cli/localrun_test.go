@@ -875,19 +875,19 @@ func TestRunLocalSessionWithNativeExecutorCompletesSmallCodeChange(t *testing.T)
 		requests++
 		switch requests {
 		case 1:
-			writeLocalRunResponsesStream(t, w, `{
+			writeLocalRunResponsesJSON(t, w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"function_call","call_id":"call_1","name":"write_file","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
 			}`)
 		case 2:
-			writeLocalRunResponsesStream(t, w, `{
+			writeLocalRunResponsesJSON(t, w, `{
 				"id":"resp_2","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Created answer.txt.\n\n<progress_update>wrote answer.txt</progress_update>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
 			}`)
 		case 3:
-			writeLocalRunResponsesStream(t, w, `{
+			writeLocalRunResponsesJSON(t, w, `{
 				"id":"resp_3","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Verified answer.txt exists.\n\n<status>CONCEDE</status>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -898,8 +898,8 @@ func TestRunLocalSessionWithNativeExecutorCompletesSmallCodeChange(t *testing.T)
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 	nativeExec := executor.NewNativeExecutor(platform.NewLocalPlatform(session.ActiveWorkspace), "test/test-model", "high", 0)
 
 	result, err := RunLocalSessionWithExecutor(session.SessionDir, nativeExec)
@@ -1527,18 +1527,15 @@ func TestRunnerIdentityRecordsKubernetesPod(t *testing.T) {
 	}
 }
 
-func writeLocalRunResponsesStream(t *testing.T, w http.ResponseWriter, responseJSON string) {
+func writeLocalRunResponsesJSON(t *testing.T, w http.ResponseWriter, responseJSON string) {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := json.Compact(&buf, []byte(`{"type":"response.completed","response":`+responseJSON+"}")); err != nil {
+	if err := json.Compact(&buf, []byte(responseJSON)); err != nil {
 		t.Fatal(err)
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, "data: "+buf.String()+"\n\n")
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
+	_, _ = io.WriteString(w, buf.String())
 }
 
 func readTarGzFile(t *testing.T, path string, name string) (string, bool) {

@@ -43,16 +43,16 @@ func NewNativeExecutor(p *platform.LocalPlatform, model, thinking string, timeou
 }
 
 // NewNativeExecutorWithGateway creates a native executor using an explicit
-// gateway credential. Empty gateway fields preserve the legacy env-only path.
+// gateway credential. Empty gateway fields preserve the env-only path.
 func NewNativeExecutorWithGateway(p *platform.LocalPlatform, model, thinking string, timeout int, gateway GatewayConfig, cleanup func() error) *NativeExecutor {
 	if thinking == "" {
 		thinking = "medium"
 	}
 	cfg, err := resolveNativeConfigWithGateway(gateway)
-	// Bound each provider HTTP request (the full streamed completion) so a wedged
+	// Bound each provider HTTP request (the full model response) so a wedged
 	// request fails fast instead of hanging until the turn budget — which is
 	// unbounded when --agent-timeout-sec is 0. http.Client.Timeout covers the
-	// whole request including the SSE body read, and composes with the per-turn
+	// whole request body read, and composes with the per-turn
 	// context deadline (whichever fires first wins). A zero timeout disables it.
 	return &NativeExecutor{
 		Platform:  p,

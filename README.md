@@ -44,25 +44,28 @@ Build a small HTTP service with `/healthz`, tests, and local run instructions.
 telos run SPEC.md --workspace . --until 3
 ```
 
-Local runs use Telos' native executor through a LiteLLM-compatible gateway.
+Local runs use Telos' native executor through an OpenAI-compatible Responses
+gateway.
 Configure the gateway before starting a run:
 
 ```bash
-export TELOS_LITELLM_BASE_URL="https://litellm.example.com/v1"
-export TELOS_LITELLM_API_KEY="..."
+export TELOS_GATEWAY_BASE_URL="https://gateway.example.com/v1"
+export TELOS_GATEWAY_API_KEY="..."
 telos run SPEC.md --workspace . --model anthropic/claude-sonnet-4.5 --until 3
 ```
 
-`TELOS_API_BASE_URL`, `TELOS_BASE_URL`, and `TELOS_API_KEY` are accepted as
-compatibility aliases. Model names are sent to the gateway unchanged.
-Per-response cost is taken from what the LiteLLM gateway reports (the
-`x-litellm-response-cost` header or a cost field in the response body). For
-models the gateway does not price, cost is reported as unavailable and any
-`--max-cost-usd` cap is not enforced for those turns.
+Set `TELOS_GATEWAY_TRANSPORT=openai_sync` for standard Responses APIs, or
+`TELOS_GATEWAY_TRANSPORT=bifrost_async` with a Bifrost base URL ending in
+`/openai`. Extra per-request headers can be supplied as a JSON object in
+`TELOS_GATEWAY_HEADERS`. Model names are sent to the gateway unchanged.
+Per-response cost is taken from gateway response metadata such as the
+`x-response-cost` header or a cost field in the response body. For models the
+gateway does not price, cost is reported as unavailable and any `--max-cost-usd`
+cap is not enforced for those turns.
 
 Migration note: Telos no longer reads Pi, Harbor, or direct provider credential
 environment variables such as `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or
-`SAIL_API_KEY` in the native executor. Put provider credentials in your LiteLLM
+`SAIL_API_KEY` in the native executor. Put provider credentials in your gateway
 deployment and expose only the Telos gateway URL/key variables to Telos.
 
 Workspace checkpoints exclude runtime, dependency, build, cache, and secret-like

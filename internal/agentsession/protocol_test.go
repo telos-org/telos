@@ -29,3 +29,23 @@ func TestCompactionPayloadRoundTrip(t *testing.T) {
 		t.Fatalf("round trip: got %#v want %#v", *got, want)
 	}
 }
+
+func TestModelAsyncJobPayloadRoundTrip(t *testing.T) {
+	want := ModelAsyncJobPayload{
+		Sequence:  3,
+		JobID:     "job_123",
+		Provider:  "bifrost",
+		Model:     "test/model",
+		Transport: "bifrost_async",
+		Status:    "processing",
+	}
+
+	event := Event{Type: KindModelAsyncJob, Data: MarshalPayload(&want)}
+	got, err := Unmarshal[ModelAsyncJobPayload](&event)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(*got, want) {
+		t.Fatalf("round trip: got %#v want %#v", *got, want)
+	}
+}

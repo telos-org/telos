@@ -43,6 +43,23 @@ func TestRequestInputStatelessUsesSummaryAndRecentHistory(t *testing.T) {
 	}
 }
 
+func TestRecordResponseIDEmptyFallsBackToStatelessHistory(t *testing.T) {
+	s := newConversationState(nil, conversationStateServerChain)
+	s.recordResponseID("resp_1")
+	if got := s.previousResponseID(); got != "resp_1" {
+		t.Fatalf("previous response ID: got %q", got)
+	}
+
+	s.recordResponseID("")
+
+	if s.mode != conversationStateStatelessHistory {
+		t.Fatalf("mode: got %q", s.mode)
+	}
+	if got := s.previousResponseID(); got != "" {
+		t.Fatalf("previous response ID should be cleared, got %q", got)
+	}
+}
+
 func messageItem(text string) responses.ResponseInputItemUnionParam {
 	return responses.ResponseInputItemParamOfMessage(text, responses.EasyInputMessageRoleUser)
 }

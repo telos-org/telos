@@ -48,7 +48,7 @@ func TestNativeExecutorRunsChatToolLoopAndWritesWorkspace(t *testing.T) {
 			if !strings.Contains(string(body), "create answer.txt") {
 				t.Fatalf("first request should carry the task: %s", body)
 			}
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
 				"usage":{"input_tokens":11,"output_tokens":7,"input_tokens_details":{"cached_tokens":0}}
@@ -61,7 +61,7 @@ func TestNativeExecutorRunsChatToolLoopAndWritesWorkspace(t *testing.T) {
 		if !strings.Contains(string(body), "path: answer.txt") {
 			t.Fatalf("second request should include tool result, got %s", body)
 		}
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_2","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Created answer.txt.\n\n<progress_update>wrote answer.txt</progress_update>\n<status>CONCEDE</status>\n"}]}],
 			"usage":{"input_tokens":13,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -69,8 +69,8 @@ func TestNativeExecutorRunsChatToolLoopAndWritesWorkspace(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	p := platform.NewLocalPlatform(workspace)
 	exec := NewNativeExecutor(p, "test/test-model", "high", 0)
@@ -103,7 +103,7 @@ func TestNativeExecutorRunsChatToolLoopAndWritesWorkspace(t *testing.T) {
 func TestNativeExecutorRejectsIncompleteResponseBeforeExecutingToolCalls(t *testing.T) {
 	workspace := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_1","status":"incomplete",
 			"incomplete_details":{"reason":"max_output_tokens"},
 			"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"should-not-run\\n\"}"}],
@@ -112,8 +112,8 @@ func TestNativeExecutorRejectsIncompleteResponseBeforeExecutingToolCalls(t *test
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
@@ -126,6 +126,108 @@ func TestNativeExecutorRejectsIncompleteResponseBeforeExecutingToolCalls(t *test
 	}
 }
 
+func TestNativeExecutorUsesBifrostAsyncTransport(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/openai/responses" {
+			t.Fatalf("unexpected path: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("x-bf-vk"); got != "sk-bf" {
+			t.Fatalf("extra gateway header: got %q", got)
+		}
+		var req map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := req["background"]; ok {
+			t.Fatalf("bifrost async must not set OpenAI background: %s", mustJSON(req))
+		}
+		requests++
+		switch requests {
+		case 1:
+			if got := r.Header.Get("x-bf-async"); got != "true" {
+				t.Fatalf("submit async header: got %q", got)
+			}
+			if got := r.Header.Get("x-bf-async-job-result-ttl"); got != "3600" {
+				t.Fatalf("submit ttl header: got %q", got)
+			}
+			writeResponsesJSON(w, `{"id":"job_1","status":"processing"}`)
+		case 2:
+			if got := r.Header.Get("x-bf-async-id"); got != "job_1" {
+				t.Fatalf("poll async id header: got %q", got)
+			}
+			writeResponsesJSON(w, `{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<status>CONCEDE</status>\n"}]}],
+				"usage":{"input_tokens":5,"output_tokens":3,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL+"/openai")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_TRANSPORT", "bifrost_async")
+	t.Setenv("TELOS_GATEWAY_HEADERS", `{"x-bf-vk":"sk-bf"}`)
+	t.Setenv("TELOS_GATEWAY_ASYNC_POLL_INITIAL_MS", "1")
+	t.Setenv("TELOS_GATEWAY_ASYNC_POLL_MAX_MS", "1")
+
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
+	result := exec.ExecuteTurn("Verify async.", ts)
+
+	if result.Error != "" {
+		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
+	}
+	if requests != 2 {
+		t.Fatalf("requests: got %d", requests)
+	}
+	asyncEvents := sessionLogEventsByType(t, ts.SessionPath(), "model_async_job")
+	if len(asyncEvents) != 1 || asyncEvents[0]["job_id"] != "job_1" || asyncEvents[0]["transport"] != "bifrost_async" {
+		t.Fatalf("async job events: %#v", asyncEvents)
+	}
+	responseEvents := sessionLogEventsByType(t, ts.SessionPath(), "model_response")
+	if len(responseEvents) != 1 || responseEvents[0]["response_id"] != "resp_1" || responseEvents[0]["async_job_id"] != "job_1" {
+		t.Fatalf("model response events: %#v", responseEvents)
+	}
+}
+
+func TestNativeExecutorClassifiesBifrostAsyncPollTimeout(t *testing.T) {
+	workspace := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Header.Get("x-bf-async") == "true":
+			writeResponsesJSON(w, `{"id":"job_timeout","status":"processing"}`)
+		case r.Header.Get("x-bf-async-id") == "job_timeout":
+			writeResponsesJSON(w, `{"id":"job_timeout","status":"processing"}`)
+		default:
+			t.Fatalf("missing async headers: %+v", r.Header)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL+"/openai")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_TRANSPORT", "bifrost_async")
+	t.Setenv("TELOS_GATEWAY_ASYNC_POLL_INITIAL_MS", "50")
+	t.Setenv("TELOS_GATEWAY_ASYNC_POLL_MAX_MS", "50")
+
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 1)
+	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
+	result := exec.ExecuteTurn("Verify async timeout.", ts)
+
+	if !result.Recoverable || !strings.Contains(result.Error, "provider_timeout:turn_timeout:1") {
+		t.Fatalf("expected recoverable provider timeout, got %+v", result)
+	}
+	errorEvents := sessionLogEventsByType(t, ts.SessionPath(), "error")
+	if len(errorEvents) != 1 || errorEvents[0]["error_code"] != string(errProviderTimeout) {
+		t.Fatalf("timeout error events: %#v", errorEvents)
+	}
+}
+
 func TestNativeExecutorStopsToolLoopWhenTurnTokenBudgetExhausted(t *testing.T) {
 	workspace := t.TempDir()
 	var requests int
@@ -134,7 +236,7 @@ func TestNativeExecutorStopsToolLoopWhenTurnTokenBudgetExhausted(t *testing.T) {
 		if requests > 1 {
 			t.Fatalf("executor should stop before a second provider request")
 		}
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_1","status":"completed",
 			"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
 			"usage":{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}
@@ -142,8 +244,8 @@ func TestNativeExecutorStopsToolLoopWhenTurnTokenBudgetExhausted(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	p := platform.NewLocalPlatform(workspace)
 	exec := NewNativeExecutor(p, "test/test-model", "high", 0)
@@ -184,7 +286,7 @@ func TestNativeExecutorManagedStopsWhenCostUnavailableUnderCostCap(t *testing.T)
 		if requests > 1 {
 			t.Fatalf("executor should stop before a second provider request")
 		}
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_1","status":"completed",
 			"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"should-not-run\\n\"}"}],
 			"usage":{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}
@@ -192,8 +294,8 @@ func TestNativeExecutorManagedStopsWhenCostUnavailableUnderCostCap(t *testing.T)
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	remaining := 1.0
 	exec := NewNativeExecutorWithGateway(
@@ -230,13 +332,13 @@ func TestNativeExecutorBYOContinuesWhenCostUnavailableUnderCostCap(t *testing.T)
 		requests++
 		switch requests {
 		case 1:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
 				"usage":{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}
 			}`)
 		case 2:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_2","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>wrote answer</progress_update>"}]}],
 				"usage":{"input_tokens":10,"output_tokens":2,"input_tokens_details":{"cached_tokens":0}}
@@ -289,7 +391,7 @@ func TestNativeExecutorCapsRequestOutputTokensToRemainingBudget(t *testing.T) {
 		if got := int(req["max_output_tokens"].(float64)); got != 9 {
 			t.Fatalf("max_output_tokens: got %d", got)
 		}
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_1","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<findings>blocker | needs error handling</findings>\n<status>CONTINUE</status>\n"}]}],
 			"usage":{"input_tokens":2,"output_tokens":4,"input_tokens_details":{"cached_tokens":0}}
@@ -297,8 +399,8 @@ func TestNativeExecutorCapsRequestOutputTokensToRemainingBudget(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	ts := &game.TurnState{
@@ -388,7 +490,7 @@ func TestNativeExecutorLogsTurnTimeoutError(t *testing.T) {
 	workspace := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second)
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_late","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Too late.\n<progress_update>late</progress_update>"}]}],
 			"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}
@@ -396,8 +498,8 @@ func TestNativeExecutorLogsTurnTimeoutError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 1)
 	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
@@ -416,7 +518,7 @@ func TestNativeExecutorLogsStopRequestedError(t *testing.T) {
 	workspace := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second)
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_late","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Too late.\n<progress_update>late</progress_update>"}]}],
 			"usage":{"input_tokens":1,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}
@@ -424,8 +526,8 @@ func TestNativeExecutorLogsStopRequestedError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	ts := &game.TurnState{
@@ -480,14 +582,14 @@ func assertValidSessionLog(t *testing.T, path string) {
 	}
 }
 
-func TestNativeExecutorUsesLiteLLMResponseCostHeader(t *testing.T) {
+func TestNativeExecutorUsesGatewayResponseCostHeader(t *testing.T) {
 	workspace := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		w.Header().Set("x-litellm-response-cost", "0.0123")
-		writeResponsesStream(w, `{
+		w.Header().Set("x-response-cost", "0.0123")
+		writeResponsesJSON(w, `{
 			"id":"resp_cost","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n\n<findings>blocker | needs error handling</findings>\n<status>CONTINUE</status>"}]}],
 			"usage":{"input_tokens":31,"output_tokens":9,"input_tokens_details":{"cached_tokens":4}}
@@ -495,8 +597,8 @@ func TestNativeExecutorUsesLiteLLMResponseCostHeader(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_LITELLM_BASE_URL", server.URL)
-	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 	p := platform.NewLocalPlatform(workspace)
 	exec := NewNativeExecutor(p, "test/test-model", "high", 0)
 	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
@@ -513,13 +615,13 @@ func TestNativeExecutorUsesLiteLLMResponseCostHeader(t *testing.T) {
 	}
 }
 
-func TestNativeExecutorUsesLiteLLMResponseBodyCost(t *testing.T) {
+func TestNativeExecutorUsesGatewayResponseBodyCost(t *testing.T) {
 	workspace := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/responses" {
 			t.Fatalf("unexpected path: %s", r.URL.Path)
 		}
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_cost","status":"completed",
 			"response_cost":0.0456,
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n\n<findings>blocker | needs error handling</findings>\n<status>CONTINUE</status>"}]}],
@@ -528,8 +630,8 @@ func TestNativeExecutorUsesLiteLLMResponseBodyCost(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_LITELLM_BASE_URL", server.URL)
-	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
 
@@ -545,8 +647,8 @@ func TestNativeExecutorUsesLiteLLMResponseBodyCost(t *testing.T) {
 	}
 }
 
-func TestCostFromResponseBodyHandlesNestedLiteLLMMetadata(t *testing.T) {
-	cost, ok := costFromResponseBody(`{"metadata":{"litellm_response_cost":"$0.0789"}}`)
+func TestCostFromResponseBodyHandlesNestedMetadata(t *testing.T) {
+	cost, ok := costFromResponseBody(`{"metadata":{"response_cost":"$0.0789"}}`)
 	if !ok || cost != 0.0789 {
 		t.Fatalf("nested cost: got %.4f ok=%t", cost, ok)
 	}
@@ -558,20 +660,20 @@ func TestCostFromResponseBodyHandlesNestedLiteLLMMetadata(t *testing.T) {
 	}
 }
 
-func TestCostFromResponseHeadersIgnoresCumulativeLiteLLMSpend(t *testing.T) {
+func TestCostFromResponseHeadersIgnoresUnrecognizedSpend(t *testing.T) {
 	header := http.Header{}
-	header.Set("x-litellm-spend", "0.99")
+	header.Set("x-gateway-spend", "0.99")
 	if cost, ok := costFromResponseHeaders(header); ok || cost != 0 {
 		t.Fatalf("cumulative spend must not be treated as per-call cost: got %.4f ok=%t", cost, ok)
 	}
-	header.Set("x-litellm-response-cost", "0.12")
+	header.Set("x-response-cost", "0.12")
 	if cost, ok := costFromResponseHeaders(header); !ok || cost != 0.12 {
 		t.Fatalf("per-call response cost should win: got %.4f ok=%t", cost, ok)
 	}
 }
 
 func TestStatsFromResponsesUsageReportsTokensWithCostUnavailable(t *testing.T) {
-	// Cost is sourced only from the provider (LiteLLM headers/body); usage alone
+	// Cost is sourced only from the provider (gateway headers/body); usage alone
 	// populates token counts and always leaves cost unavailable.
 	stats := statsFromResponsesUsage("alias/known", responseUsageForTest(1_000, 250, 4))
 
@@ -672,10 +774,10 @@ func TestNativeSessionLoggerSchemaGolden(t *testing.T) {
 		t.Fatal(err)
 	}
 	stats := game.TurnStats{InputTokens: 12, OutputTokens: 7, CacheReadTokens: 3, CacheCreationTokens: 2, CostUSD: 0.01}
-	if err := logger.modelResponse(1, "resp_1", "completed", stats); err != nil {
+	if err := logger.modelResponse(1, "resp_1", "", "completed", stats); err != nil {
 		t.Fatal(err)
 	}
-	if err := logger.assistant("Done.\n\n<progress_update>Updated.</progress_update>", "litellm", "test-model", "completed", stats); err != nil {
+	if err := logger.assistant("Done.\n\n<progress_update>Updated.</progress_update>", "openai", "test-model", "completed", stats); err != nil {
 		t.Fatal(err)
 	}
 
@@ -821,7 +923,7 @@ func TestNativeSessionLoggerSchemaGolden(t *testing.T) {
   {
     "cost": 0.01,
     "model": "test-model",
-    "provider": "litellm",
+    "provider": "openai",
     "role": "assistant",
     "stop_reason": "completed",
     "text": "Done.\n\n\u003cprogress_update\u003eUpdated.\u003c/progress_update\u003e",
@@ -945,9 +1047,9 @@ func normalizedSessionLogGolden(t *testing.T, path string) string {
 	return string(out)
 }
 
-func TestResolveNativeProviderUsesLiteLLMExactModelPassThrough(t *testing.T) {
-	t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1/")
-	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
+func TestResolveNativeProviderUsesGatewayExactModelPassThrough(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://gateway.example.com/v1/")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	nc, err := resolveNativeConfig()
 	if err != nil {
@@ -957,19 +1059,22 @@ func TestResolveNativeProviderUsesLiteLLMExactModelPassThrough(t *testing.T) {
 		"openai/gpt-5.1",
 		"anthropic/claude-sonnet-4.5",
 		"sail-research/foo/bar",
-		"my-arbitrary-litellm-alias",
+		"my-arbitrary-gateway-alias",
 	} {
 		cfg, err := nc.providerFor(model)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if cfg.Provider != "litellm" {
+		if cfg.Provider != "openai" {
 			t.Fatalf("provider: got %q", cfg.Provider)
+		}
+		if cfg.Transport != transportOpenAISync || cfg.Kind != gatewayKindOpenAI {
+			t.Fatalf("gateway defaults: transport=%q kind=%q", cfg.Transport, cfg.Kind)
 		}
 		if cfg.Model != model {
 			t.Fatalf("model should pass through unchanged: got %q want %q", cfg.Model, model)
 		}
-		if cfg.BaseURL != "https://litellm.example.com/v1" {
+		if cfg.BaseURL != "https://gateway.example.com/v1" {
 			t.Fatalf("base URL: got %q", cfg.BaseURL)
 		}
 	}
@@ -979,11 +1084,11 @@ func TestResolveNativeProviderReportsClearConfigErrors(t *testing.T) {
 	clearGatewayEnv := func(t *testing.T) {
 		t.Helper()
 		for _, name := range []string{
-			"TELOS_LITELLM_BASE_URL",
-			"TELOS_API_BASE_URL",
-			"TELOS_BASE_URL",
-			"TELOS_LITELLM_API_KEY",
-			"TELOS_API_KEY",
+			"TELOS_GATEWAY_BASE_URL",
+			"TELOS_GATEWAY_API_KEY",
+			"TELOS_GATEWAY_TRANSPORT",
+			"TELOS_GATEWAY_KIND",
+			"TELOS_GATEWAY_HEADERS",
 		} {
 			t.Setenv(name, "")
 		}
@@ -991,8 +1096,8 @@ func TestResolveNativeProviderReportsClearConfigErrors(t *testing.T) {
 
 	t.Run("missing model", func(t *testing.T) {
 		clearGatewayEnv(t)
-		t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1")
-		t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
+		t.Setenv("TELOS_GATEWAY_BASE_URL", "https://gateway.example.com/v1")
+		t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 		nc, err := resolveNativeConfig()
 		if err != nil {
 			t.Fatal(err)
@@ -1005,18 +1110,40 @@ func TestResolveNativeProviderReportsClearConfigErrors(t *testing.T) {
 
 	t.Run("missing base url", func(t *testing.T) {
 		clearGatewayEnv(t)
-		t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
+		t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 		_, err := resolveNativeConfig()
-		if err == nil || !strings.Contains(err.Error(), "TELOS_LITELLM_BASE_URL is required") {
+		if err == nil || !strings.Contains(err.Error(), "TELOS_GATEWAY_BASE_URL is required") {
 			t.Fatalf("error: %v", err)
 		}
 	})
 
 	t.Run("missing api key", func(t *testing.T) {
 		clearGatewayEnv(t)
-		t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1")
+		t.Setenv("TELOS_GATEWAY_BASE_URL", "https://gateway.example.com/v1")
 		_, err := resolveNativeConfig()
-		if err == nil || !strings.Contains(err.Error(), "TELOS_LITELLM_API_KEY is required") {
+		if err == nil || !strings.Contains(err.Error(), "TELOS_GATEWAY_API_KEY is required") {
+			t.Fatalf("error: %v", err)
+		}
+	})
+
+	t.Run("unknown transport", func(t *testing.T) {
+		clearGatewayEnv(t)
+		t.Setenv("TELOS_GATEWAY_BASE_URL", "https://gateway.example.com/v1")
+		t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+		t.Setenv("TELOS_GATEWAY_TRANSPORT", "streamish")
+		_, err := resolveNativeConfig()
+		if err == nil || !strings.Contains(err.Error(), "unknown TELOS_GATEWAY_TRANSPORT") {
+			t.Fatalf("error: %v", err)
+		}
+	})
+
+	t.Run("bifrost async requires openai endpoint", func(t *testing.T) {
+		clearGatewayEnv(t)
+		t.Setenv("TELOS_GATEWAY_BASE_URL", "https://bifrost.example.com/v1")
+		t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+		t.Setenv("TELOS_GATEWAY_TRANSPORT", "bifrost_async")
+		_, err := resolveNativeConfig()
+		if err == nil || !strings.Contains(err.Error(), "requires TELOS_GATEWAY_BASE_URL to end in /openai") {
 			t.Fatalf("error: %v", err)
 		}
 	})
@@ -1024,11 +1151,11 @@ func TestResolveNativeProviderReportsClearConfigErrors(t *testing.T) {
 
 func TestNativeExecutorSurfacesProviderConfigError(t *testing.T) {
 	for _, name := range []string{
-		"TELOS_LITELLM_BASE_URL",
-		"TELOS_API_BASE_URL",
-		"TELOS_BASE_URL",
-		"TELOS_LITELLM_API_KEY",
-		"TELOS_API_KEY",
+		"TELOS_GATEWAY_BASE_URL",
+		"TELOS_GATEWAY_API_KEY",
+		"TELOS_GATEWAY_TRANSPORT",
+		"TELOS_GATEWAY_KIND",
+		"TELOS_GATEWAY_HEADERS",
 	} {
 		t.Setenv(name, "")
 	}
@@ -1041,7 +1168,7 @@ func TestNativeExecutorSurfacesProviderConfigError(t *testing.T) {
 	if result.Recoverable {
 		t.Fatalf("expected terminal config error, got %+v", result)
 	}
-	if !strings.Contains(result.Error, "config:TELOS_LITELLM_BASE_URL is required") {
+	if !strings.Contains(result.Error, "config:TELOS_GATEWAY_BASE_URL is required") {
 		t.Fatalf("error: got %q", result.Error)
 	}
 	errorEvents := sessionLogEventsByType(t, ts.SessionPath(), "error")
@@ -1051,8 +1178,8 @@ func TestNativeExecutorSurfacesProviderConfigError(t *testing.T) {
 }
 
 func TestResolveNativeProviderAppliesModelCapabilityProfile(t *testing.T) {
-	t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1/")
-	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://gateway.example.com/v1/")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 	t.Setenv("TELOS_MODEL_CAPABILITY_PROFILE", `{"state_mode":"stateless_history","max_output_tokens":4096,"supports_reasoning":false,"supports_function_calling":false,"strict_protocol":true}`)
 
 	nc, err := resolveNativeConfig()
@@ -1081,8 +1208,8 @@ func TestResolveNativeProviderAppliesModelCapabilityProfile(t *testing.T) {
 }
 
 func TestResolveNativeProviderCapabilityEnvOverridesProfile(t *testing.T) {
-	t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1/")
-	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://gateway.example.com/v1/")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 	t.Setenv("TELOS_MODEL_CAPABILITY_PROFILE", `{"state_mode":"bad","max_output_tokens":4096,"supports_reasoning":true}`)
 	t.Setenv("TELOS_MODEL_STATE_MODE", "stateless_history")
 	t.Setenv("TELOS_MODEL_MAX_OUTPUT_TOKENS", "2048")
@@ -1112,8 +1239,8 @@ func TestResolveNativeProviderCapabilityEnvOverridesProfile(t *testing.T) {
 }
 
 func TestResolveNativeProviderUsesPerModelCapabilityTable(t *testing.T) {
-	t.Setenv("TELOS_LITELLM_BASE_URL", "https://litellm.example.com/v1/")
-	t.Setenv("TELOS_LITELLM_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://gateway.example.com/v1/")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 	t.Setenv("TELOS_MODEL_CAPABILITY_PROFILE", `{"state_mode":"stateless_history","max_output_tokens":8192,"strict_protocol":false}`)
 	t.Setenv("TELOS_MODEL_CAPABILITY_TABLE", `{
 		"strict/model": {"state_mode":"server_chain","max_output_tokens":2048,"strict_protocol":true},
@@ -1222,14 +1349,14 @@ func TestNativeExecutorSendsHarnessInstructionsAndReasoning(t *testing.T) {
 		if requests == 1 {
 			// A prover final with no tool use now draws a recoverable nudge, so the
 			// prover uses a tool before finalizing.
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"industry.py\",\"content\":\"print('hi')\\n\"}"}],
 				"usage":{"input_tokens":17,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
 			}`)
 			return
 		}
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_2","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>created industry.py</progress_update>\n<status>CONCEDE</status>\n"}]}],
 			"usage":{"input_tokens":17,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1237,8 +1364,8 @@ func TestNativeExecutorSendsHarnessInstructionsAndReasoning(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("Say hello.", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
@@ -1254,7 +1381,7 @@ func TestNativeExecutorSendsHarnessInstructionsAndReasoning(t *testing.T) {
 func TestNativeExecutorSanitizesReasoningBeforeStatusAndLogsEvent(t *testing.T) {
 	workspace := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_1","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<think>hidden plan\n<status>CONTINUE</status></think>\nLooks good.\n<progress_update>verified clean output</progress_update>\n<status>CONCEDE</status>\n"}]}],
 			"usage":{"input_tokens":17,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1262,8 +1389,8 @@ func TestNativeExecutorSanitizesReasoningBeforeStatusAndLogsEvent(t *testing.T) 
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
@@ -1316,7 +1443,7 @@ func TestNativeExecutorOmitsToolsWhenFunctionCallingUnsupported(t *testing.T) {
 				t.Fatalf("tools should be omitted or empty when function calling is unsupported: %s", mustJSON(req))
 			}
 		}
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_1","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>reported</progress_update>\n"}]}],
 			"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1324,8 +1451,8 @@ func TestNativeExecutorOmitsToolsWhenFunctionCallingUnsupported(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 	t.Setenv("TELOS_MODEL_SUPPORTS_FUNCTION_CALLING", "false")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
@@ -1346,7 +1473,7 @@ func TestNativeExecutorNudgesEmptyFinalOnce(t *testing.T) {
 		requests++
 		if requests == 1 {
 			// Tool-less final with no visible text -> nudge once.
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"   "}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1357,7 +1484,7 @@ func TestNativeExecutorNudgesEmptyFinalOnce(t *testing.T) {
 		if !strings.Contains(string(body), "no visible result") {
 			t.Fatalf("second request should carry the correction prompt, got %s", body)
 		}
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_2","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looks good.\n<status>CONCEDE</status>\n"}]}],
 			"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1365,8 +1492,8 @@ func TestNativeExecutorNudgesEmptyFinalOnce(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
@@ -1392,7 +1519,7 @@ func TestNativeExecutorStrictProtocolRejectsMalformedProgressUpdate(t *testing.T
 		case 1:
 			// Use a tool up front so the prover final is not separately nudged for
 			// finalizing without any tool use; this turn exercises strict progress.
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1402,7 +1529,7 @@ func TestNativeExecutorStrictProtocolRejectsMalformedProgressUpdate(t *testing.T
 			if !strings.Contains(string(body), "function_call_output") {
 				t.Fatalf("second request should carry the tool result: %s", body)
 			}
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_2","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>first</progress_update>\n<progress_update>second</progress_update>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1412,7 +1539,7 @@ func TestNativeExecutorStrictProtocolRejectsMalformedProgressUpdate(t *testing.T
 			if !strings.Contains(string(body), "exactly one") || !strings.Contains(string(body), "progress_update") {
 				t.Fatalf("correction request missing strict progress guidance: %s", body)
 			}
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_3","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>reported</progress_update>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1423,8 +1550,8 @@ func TestNativeExecutorStrictProtocolRejectsMalformedProgressUpdate(t *testing.T
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 	t.Setenv("TELOS_MODEL_STRICT_PROTOCOL", "true")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
@@ -1445,7 +1572,7 @@ func TestNativeExecutorCorrectsVerifierMissingStatusOnce(t *testing.T) {
 		requests++
 		switch requests {
 		case 1:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looks good."}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1455,7 +1582,7 @@ func TestNativeExecutorCorrectsVerifierMissingStatusOnce(t *testing.T) {
 			if !strings.Contains(string(body), "missing the required final") {
 				t.Fatalf("correction request missing status guidance: %s", body)
 			}
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_2","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looks good.\n<status>CONCEDE</status>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1466,8 +1593,8 @@ func TestNativeExecutorCorrectsVerifierMissingStatusOnce(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("Verify workspace.", &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")})
@@ -1490,13 +1617,13 @@ func TestNativeExecutorAllowsProtocolCorrectionAfterLastToolLoopSlot(t *testing.
 		requests++
 		switch requests {
 		case 1:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looks good but forgot the status."}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
 			}`)
 		case 2:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_2","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looks good.\n<status>CONCEDE</status>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1507,8 +1634,8 @@ func TestNativeExecutorAllowsProtocolCorrectionAfterLastToolLoopSlot(t *testing.
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("Verify workspace.", &game.TurnState{
@@ -1537,7 +1664,7 @@ func TestNativeExecutorCorrectsVerifierInvalidStatusOnce(t *testing.T) {
 		requests++
 		switch requests {
 		case 1:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Unsure.\n<status>MAYBE</status>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1550,7 +1677,7 @@ func TestNativeExecutorCorrectsVerifierInvalidStatusOnce(t *testing.T) {
 			if !strings.Contains(string(body), "CONTINUE") || !strings.Contains(string(body), "CONCEDE") {
 				t.Fatalf("correction request missing valid status guidance: %s", body)
 			}
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_2","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looks good.\n<status>CONCEDE</status>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1561,8 +1688,8 @@ func TestNativeExecutorCorrectsVerifierInvalidStatusOnce(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("Verify workspace.", &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")})
@@ -1585,7 +1712,7 @@ func TestNativeExecutorStatelessHistoryReplaysAssistantText(t *testing.T) {
 		requests++
 		switch requests {
 		case 1:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[
 					{"type":"message","role":"assistant","content":[{"type":"output_text","text":"I will write the answer file first."}]},
@@ -1601,7 +1728,7 @@ func TestNativeExecutorStatelessHistoryReplaysAssistantText(t *testing.T) {
 			if !strings.Contains(string(body), "function_call") || !strings.Contains(string(body), "function_call_output") {
 				t.Fatalf("second request missing function call history: %s", body)
 			}
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_2","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>wrote answer</progress_update>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1612,8 +1739,8 @@ func TestNativeExecutorStatelessHistoryReplaysAssistantText(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 	t.Setenv("TELOS_MODEL_STATE_MODE", "stateless_history")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
@@ -1632,7 +1759,7 @@ func TestNativeExecutorLogsTerminalProtocolError(t *testing.T) {
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		writeResponsesStream(w, `{
+		writeResponsesJSON(w, `{
 			"id":"resp_bad","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Still no status."}]}],
 			"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1640,8 +1767,8 @@ func TestNativeExecutorLogsTerminalProtocolError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
@@ -1666,7 +1793,7 @@ func TestNativeExecutorCorrectsMalformedReviewModeBlocksOnce(t *testing.T) {
 		requests++
 		switch requests {
 		case 1:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<review>Looks good.</review>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1676,7 +1803,7 @@ func TestNativeExecutorCorrectsMalformedReviewModeBlocksOnce(t *testing.T) {
 			if !strings.Contains(string(body), "review-mode response") || !strings.Contains(string(body), "summary") {
 				t.Fatalf("correction request missing review-mode guidance: %s", body)
 			}
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_2","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<review>Looks good.</review>\n<summary>No issues.</summary>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1687,8 +1814,8 @@ func TestNativeExecutorCorrectsMalformedReviewModeBlocksOnce(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	task := "Review workspace."
@@ -1713,13 +1840,13 @@ func TestNativeExecutorRetriesMalformedReviewBlocksBeyondOnce(t *testing.T) {
 		switch requests {
 		case 1, 2:
 			// Two consecutive malformed replies (review block only, no summary).
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_x","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<review>criteria,score\nclarity,8.0/10</review>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
 			}`)
 		case 3:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_ok","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<review>criteria,score\nclarity,8.0/10</review>\n<summary>No issues.</summary>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1730,8 +1857,8 @@ func TestNativeExecutorRetriesMalformedReviewBlocksBeyondOnce(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("Review workspace.", &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn"), ProtocolMode: "review"})
@@ -1906,7 +2033,7 @@ func TestNativeExecutorRequiresVerifierToOpenRequiredRubricBeforeConceding(t *te
 		requests++
 		switch requests {
 		case 1:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Looks good.\n<status>CONCEDE</status>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1916,7 +2043,7 @@ func TestNativeExecutorRequiresVerifierToOpenRequiredRubricBeforeConceding(t *te
 			if !strings.Contains(string(body), "Before conceding") || !strings.Contains(string(body), "review-skill") {
 				t.Fatalf("correction request missing rubric guidance: %s", body)
 			}
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_2","status":"completed",
 				"output":[{"type":"function_call","call_id":"call_1","name":"skill","arguments":"{\"action\":\"read\",\"name\":\"review-skill\"}"}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1926,7 +2053,7 @@ func TestNativeExecutorRequiresVerifierToOpenRequiredRubricBeforeConceding(t *te
 			if !strings.Contains(string(body), "# Rubric") || !strings.Contains(string(body), "Check evidence.") {
 				t.Fatalf("third request should include rubric tool result: %s", body)
 			}
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_3","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Rubric passes.\n<status>CONCEDE</status>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -1937,8 +2064,8 @@ func TestNativeExecutorRequiresVerifierToOpenRequiredRubricBeforeConceding(t *te
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	task := "Verify workspace."
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
@@ -1968,7 +2095,7 @@ func TestNativeExecutorRequiresVerifierToOpenRequiredRubricBeforeConceding(t *te
 func TestNativeExecutorRejectsIncompleteFinal(t *testing.T) {
 	workspace := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		writeResponsesIncompleteStream(w, `{
+		writeResponsesIncompleteJSON(w, `{
 			"id":"resp_1","status":"incomplete",
 			"incomplete_details":{"reason":"max_output_tokens"},
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"partial"}]}],
@@ -1977,8 +2104,8 @@ func TestNativeExecutorRejectsIncompleteFinal(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("Say hello.", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
@@ -2010,7 +2137,7 @@ func TestNativeExecutorRejectsIncompleteToolCallResponseBeforeExecution(t *testi
 		if requests > 1 {
 			t.Fatalf("unexpected request %d", requests)
 		}
-		writeResponsesIncompleteStream(w, `{
+		writeResponsesIncompleteJSON(w, `{
 			"id":"resp_1","status":"incomplete",
 			"incomplete_details":{"reason":"max_output_tokens"},
 			"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
@@ -2019,8 +2146,8 @@ func TestNativeExecutorRejectsIncompleteToolCallResponseBeforeExecution(t *testi
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
@@ -2041,7 +2168,7 @@ func TestNativeExecutorRejectsIncompleteToolCallWithPartialArguments(t *testing.
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
-		writeResponsesIncompleteStream(w, `{
+		writeResponsesIncompleteJSON(w, `{
 			"id":"resp_1","status":"incomplete",
 			"incomplete_details":{"reason":"max_output_tokens"},
 			"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\""}],
@@ -2050,8 +2177,8 @@ func TestNativeExecutorRejectsIncompleteToolCallWithPartialArguments(t *testing.
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
@@ -2085,7 +2212,7 @@ func TestNativeExecutorSendsTruncatedHugeToolOutput(t *testing.T) {
 		requests++
 		switch requests {
 		case 1:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"function_call","call_id":"call_1","name":"read_file","arguments":"{\"path\":\"huge.txt\"}"}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -2099,7 +2226,7 @@ func TestNativeExecutorSendsTruncatedHugeToolOutput(t *testing.T) {
 			if strings.Contains(bodyText, strings.Repeat("x", 1024)) {
 				t.Fatalf("second request included unbounded tool output, body length=%d", len(bodyText))
 			}
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_2","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Observed bounded output.\n<progress_update>checked truncated output</progress_update>"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -2110,8 +2237,8 @@ func TestNativeExecutorSendsTruncatedHugeToolOutput(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("run noisy command", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
@@ -2131,7 +2258,7 @@ func TestNativeExecutorRejectsIncompleteFinalAfterToolResults(t *testing.T) {
 		requests++
 		switch requests {
 		case 1:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -2141,7 +2268,7 @@ func TestNativeExecutorRejectsIncompleteFinalAfterToolResults(t *testing.T) {
 			if !strings.Contains(string(body), "path: answer.txt") {
 				t.Fatalf("second request should include tool result, got %s", body)
 			}
-			writeResponsesIncompleteStream(w, `{
+			writeResponsesIncompleteJSON(w, `{
 				"id":"resp_2","status":"incomplete",
 				"incomplete_details":{"reason":"max_output_tokens"},
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Created answer"}]}],
@@ -2153,8 +2280,8 @@ func TestNativeExecutorRejectsIncompleteFinalAfterToolResults(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
@@ -2208,7 +2335,7 @@ func TestNativeExecutorRetriesTransientProviderError(t *testing.T) {
 					_, _ = io.WriteString(w, tt.body)
 					return
 				}
-				writeResponsesStream(w, `{
+				writeResponsesJSON(w, `{
 					"id":"resp_1","status":"completed",
 					"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<findings>blocker | needs error handling</findings>\n<status>CONTINUE</status>\n"}]}],
 					"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -2216,8 +2343,8 @@ func TestNativeExecutorRetriesTransientProviderError(t *testing.T) {
 			}))
 			defer server.Close()
 
-			t.Setenv("TELOS_API_BASE_URL", server.URL)
-			t.Setenv("TELOS_API_KEY", "test-key")
+			t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+			t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 			exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 			ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
@@ -2253,8 +2380,8 @@ func TestNativeExecutorDoesNotRetryProviderInvalidRequest(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("Say hello.", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
@@ -2294,7 +2421,7 @@ func TestNativeExecutorFallsBackToStatelessHistoryWhenResponseChainBreaks(t *tes
 		}
 		switch requests {
 		case 1:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -2312,7 +2439,7 @@ func TestNativeExecutorFallsBackToStatelessHistoryWhenResponseChainBreaks(t *tes
 			if !strings.Contains(string(body), "function_call") || !strings.Contains(string(body), "function_call_output") {
 				t.Fatalf("stateless fallback should replay function call and output history: %s", body)
 			}
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_2","status":"completed",
 				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>wrote answer</progress_update>\n"}]}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -2323,8 +2450,8 @@ func TestNativeExecutorFallsBackToStatelessHistoryWhenResponseChainBreaks(t *tes
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
@@ -2350,7 +2477,7 @@ func TestNativeExecutorDoesNotFallbackToStatelessHistoryForGenericNotFound(t *te
 		}
 		switch requests {
 		case 1:
-			writeResponsesStream(w, `{
+			writeResponsesJSON(w, `{
 				"id":"resp_1","status":"completed",
 				"output":[{"type":"function_call","call_id":"call_1","name":"write","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
 				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
@@ -2367,8 +2494,8 @@ func TestNativeExecutorDoesNotFallbackToStatelessHistoryForGenericNotFound(t *te
 	}))
 	defer server.Close()
 
-	t.Setenv("TELOS_API_BASE_URL", server.URL)
-	t.Setenv("TELOS_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
 
 	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
 	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")})
@@ -3343,7 +3470,7 @@ func TestReplaySessionLogValidatesProtocolWithoutModel(t *testing.T) {
 	if err := logger.tool(nativeToolResult{CallID: "call_1", Name: "read_file", Output: "ok"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := logger.assistant("Done.\n\n<progress_update>Updated main.go.</progress_update>", "litellm", "test-model", "stop", game.TurnStats{}); err != nil {
+	if err := logger.assistant("Done.\n\n<progress_update>Updated main.go.</progress_update>", "openai", "test-model", "stop", game.TurnStats{}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -3366,7 +3493,7 @@ func TestReplaySessionLogValidatesProtocolWithoutModel(t *testing.T) {
 	if err := badLogger.user("Implement code changes in the workspace."); err != nil {
 		t.Fatal(err)
 	}
-	if err := badLogger.assistant("Done.", "litellm", "test-model", "stop", game.TurnStats{}); err != nil {
+	if err := badLogger.assistant("Done.", "openai", "test-model", "stop", game.TurnStats{}); err != nil {
 		t.Fatal(err)
 	}
 	badReport, err := ReplaySessionLog(badPath, "prover")
@@ -3609,31 +3736,17 @@ func mustJSON(v interface{}) string {
 	return string(data)
 }
 
-// writeResponsesStream emits a minimal OpenAI Responses SSE stream that
-// terminates with a single response.completed event wrapping responseJSON. The
-// payload is compacted onto one line so it forms a single SSE data field.
-func writeResponsesStream(w http.ResponseWriter, responseJSON string) {
+// writeResponsesJSON emits a compact OpenAI Responses JSON response body.
+func writeResponsesJSON(w http.ResponseWriter, responseJSON string) {
 	var buf bytes.Buffer
-	if err := json.Compact(&buf, []byte(`{"type":"response.completed","response":`+responseJSON+"}")); err != nil {
+	if err := json.Compact(&buf, []byte(responseJSON)); err != nil {
 		panic(err)
 	}
-	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, "data: "+buf.String()+"\n\n")
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
+	_, _ = io.WriteString(w, buf.String())
 }
 
-func writeResponsesIncompleteStream(w http.ResponseWriter, responseJSON string) {
-	var buf bytes.Buffer
-	if err := json.Compact(&buf, []byte(`{"type":"response.incomplete","response":`+responseJSON+"}")); err != nil {
-		panic(err)
-	}
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, "data: "+buf.String()+"\n\n")
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
+func writeResponsesIncompleteJSON(w http.ResponseWriter, responseJSON string) {
+	writeResponsesJSON(w, responseJSON)
 }

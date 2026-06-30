@@ -2,6 +2,7 @@ package telosd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -51,7 +52,37 @@ type kubernetesSubstrate struct {
 
 var sessionGatewayLocks sync.Map
 
-var litellmBaseURLEnvNames = []string{"TELOS_LITELLM_BASE_URL", "TELOS_API_BASE_URL", "TELOS_BASE_URL"}
+const (
+	gatewayAPIKeyEnv    = "TELOS_GATEWAY_API_KEY"
+	gatewayBaseURLEnv   = "TELOS_GATEWAY_BASE_URL"
+	gatewayTransportEnv = "TELOS_GATEWAY_TRANSPORT"
+	gatewayKindEnv      = "TELOS_GATEWAY_KIND"
+	gatewayHeadersEnv   = "TELOS_GATEWAY_HEADERS"
+	gatewayKeyAliasEnv  = "TELOS_GATEWAY_KEY_ALIAS"
+)
+
+var gatewayEnvNames = []string{
+	gatewayBaseURLEnv,
+	gatewayTransportEnv,
+	gatewayKindEnv,
+	gatewayHeadersEnv,
+}
+
+var legacyGatewayEnvNames = []string{
+	"TELOS_LITELLM_BASE_URL",
+	"TELOS_LITELLM_API_KEY",
+	"TELOS_LITELLM_KEY_ALIAS",
+	"TELOS_API_BASE_URL",
+	"TELOS_BASE_URL",
+	"TELOS_API_KEY",
+}
+
+var optionalGatewayCredentialEnvNames = []string{
+	gatewayTransportEnv,
+	gatewayKindEnv,
+	gatewayHeadersEnv,
+	gatewayKeyAliasEnv,
+}
 
 func newKubernetesSubstrate(cfg Config) (kubernetesSubstrate, error) {
 	restCfg, err := kubernetesRESTConfig()
@@ -278,14 +309,9 @@ func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespa
 }
 
 func (s kubernetesSubstrate) agentSecret(namespace string, credential *controlSessionKey) *corev1.Secret {
-	value := strings.TrimSpace(os.Getenv(s.agentSecretKey))
 	data := map[string][]byte{}
-	if value != "" {
-		data[s.agentSecretKey] = []byte(value)
-	}
-	if name, value := configuredLiteLLMBaseURL(); name != "" && value != "" {
-		data[name] = []byte(value)
-	}
+	applyConfiguredGatewayAPIKey(data, s.agentSecretKey)
+	applyConfiguredGatewayEnv(data)
 	s.applyBillingCredential(data)
 	applyGatewayCredential(data, s.agentSecretKey, credential)
 	return &corev1.Secret{
@@ -565,22 +591,19 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 		if secret.Data == nil {
 			secret.Data = map[string][]byte{}
 		}
-		if envValue := strings.TrimSpace(os.Getenv(s.agentSecretKey)); envValue != "" {
-			secret.Data[s.agentSecretKey] = []byte(envValue)
-		}
-		if name, envValue := configuredLiteLLMBaseURL(); name != "" && envValue != "" {
-			secret.Data[name] = []byte(envValue)
-		}
+		removeLegacyGatewayEnv(secret.Data)
+		applyConfiguredGatewayAPIKey(secret.Data, s.agentSecretKey)
+		applyConfiguredGatewayEnv(secret.Data)
 		s.applyBillingCredential(secret.Data)
 		applyGatewayCredential(secret.Data, s.agentSecretKey, credential)
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
-	if strings.TrimSpace(string(secret.Data[s.agentSecretKey])) == "" {
-		return fmt.Errorf("%s is required to launch a worker", s.agentSecretKey)
+	if gatewayAPIKeyValue(secret.Data, s.agentSecretKey) == "" {
+		return fmt.Errorf("%s is required to launch a worker", gatewayAPIKeyEnv)
 	}
-	if !secretHasLiteLLMBaseURL(secret.Data) {
-		return fmt.Errorf("TELOS_LITELLM_BASE_URL is required to launch a worker (TELOS_API_BASE_URL and TELOS_BASE_URL are accepted aliases)")
+	if !secretHasGatewayBaseURL(secret.Data) {
+		return fmt.Errorf("%s is required to launch a worker", gatewayBaseURLEnv)
 	}
 	return s.createOrUpdateSecret(ctx, secret)
 }
@@ -642,11 +665,21 @@ func sessionGatewaySecretName(sessionID string) string {
 
 func sessionGatewaySecret(namespace string, name string, keyName string, credential controlSessionKey) *corev1.Secret {
 	data := map[string][]byte{
-		keyName:                  []byte(credential.APIKey),
-		"TELOS_LITELLM_BASE_URL": []byte(credential.BaseURL),
+		keyName:           []byte(credential.APIKey),
+		gatewayAPIKeyEnv:  []byte(credential.APIKey),
+		gatewayBaseURLEnv: []byte(credential.BaseURL),
+	}
+	if credential.Transport != "" {
+		data[gatewayTransportEnv] = []byte(credential.Transport)
+	}
+	if credential.Kind != "" {
+		data[gatewayKindEnv] = []byte(credential.Kind)
+	}
+	if headers := gatewayHeadersJSON(credential.Headers); headers != "" {
+		data[gatewayHeadersEnv] = []byte(headers)
 	}
 	if credential.KeyAlias != "" {
-		data["TELOS_LITELLM_KEY_ALIAS"] = []byte(credential.KeyAlias)
+		data[gatewayKeyAliasEnv] = []byte(credential.KeyAlias)
 	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -665,15 +698,18 @@ func credentialFromSecret(secret *corev1.Secret, keyName string) *controlSession
 	if secret == nil {
 		return nil
 	}
-	apiKey := strings.TrimSpace(string(secret.Data[keyName]))
-	baseURL := strings.TrimSpace(string(secret.Data["TELOS_LITELLM_BASE_URL"]))
+	apiKey := gatewayAPIKeyValue(secret.Data, keyName)
+	baseURL := strings.TrimSpace(string(secret.Data[gatewayBaseURLEnv]))
 	if apiKey == "" || baseURL == "" {
 		return nil
 	}
 	return &controlSessionKey{
-		BaseURL:  strings.TrimRight(baseURL, "/"),
-		APIKey:   apiKey,
-		KeyAlias: strings.TrimSpace(string(secret.Data["TELOS_LITELLM_KEY_ALIAS"])),
+		BaseURL:   strings.TrimRight(baseURL, "/"),
+		APIKey:    apiKey,
+		Transport: strings.TrimSpace(string(secret.Data[gatewayTransportEnv])),
+		Kind:      strings.TrimSpace(string(secret.Data[gatewayKindEnv])),
+		Headers:   gatewayHeadersFromSecret(secret.Data),
+		KeyAlias:  strings.TrimSpace(string(secret.Data[gatewayKeyAliasEnv])),
 	}
 }
 
@@ -681,29 +717,101 @@ func applyGatewayCredential(data map[string][]byte, keyName string, credential *
 	if credential == nil {
 		return
 	}
+	clearOptionalGatewayCredentialEnv(data)
 	data[keyName] = []byte(credential.APIKey)
-	data["TELOS_LITELLM_BASE_URL"] = []byte(credential.BaseURL)
+	data[gatewayAPIKeyEnv] = []byte(credential.APIKey)
+	data[gatewayBaseURLEnv] = []byte(credential.BaseURL)
+	if credential.Transport != "" {
+		data[gatewayTransportEnv] = []byte(credential.Transport)
+	}
+	if credential.Kind != "" {
+		data[gatewayKindEnv] = []byte(credential.Kind)
+	}
+	if headers := gatewayHeadersJSON(credential.Headers); headers != "" {
+		data[gatewayHeadersEnv] = []byte(headers)
+	}
 	if credential.KeyAlias != "" {
-		data["TELOS_LITELLM_KEY_ALIAS"] = []byte(credential.KeyAlias)
+		data[gatewayKeyAliasEnv] = []byte(credential.KeyAlias)
 	}
 }
 
-func configuredLiteLLMBaseURL() (string, string) {
-	for _, name := range litellmBaseURLEnvNames {
+func removeLegacyGatewayEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	for _, name := range legacyGatewayEnvNames {
+		delete(data, name)
+	}
+	delete(data, gatewayKeyAliasEnv)
+}
+
+func clearOptionalGatewayCredentialEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	for _, name := range optionalGatewayCredentialEnvNames {
+		delete(data, name)
+	}
+}
+
+func applyConfiguredGatewayAPIKey(data map[string][]byte, keyName string) {
+	if data == nil {
+		return
+	}
+	value := strings.TrimSpace(os.Getenv(keyName))
+	if value == "" && keyName != gatewayAPIKeyEnv {
+		value = strings.TrimSpace(os.Getenv(gatewayAPIKeyEnv))
+	}
+	if value == "" {
+		return
+	}
+	data[keyName] = []byte(value)
+	data[gatewayAPIKeyEnv] = []byte(value)
+}
+
+func applyConfiguredGatewayEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	for _, name := range gatewayEnvNames {
 		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-			return name, value
+			data[name] = []byte(value)
 		}
 	}
-	return "", ""
 }
 
-func secretHasLiteLLMBaseURL(data map[string][]byte) bool {
-	for _, name := range litellmBaseURLEnvNames {
-		if strings.TrimSpace(string(data[name])) != "" {
-			return true
-		}
+func gatewayAPIKeyValue(data map[string][]byte, keyName string) string {
+	if value := strings.TrimSpace(string(data[gatewayAPIKeyEnv])); value != "" {
+		return value
 	}
-	return false
+	return strings.TrimSpace(string(data[keyName]))
+}
+
+func secretHasGatewayBaseURL(data map[string][]byte) bool {
+	return strings.TrimSpace(string(data[gatewayBaseURLEnv])) != ""
+}
+
+func gatewayHeadersJSON(headers map[string]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(headers)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func gatewayHeadersFromSecret(data map[string][]byte) map[string]string {
+	raw := strings.TrimSpace(string(data[gatewayHeadersEnv]))
+	if raw == "" {
+		return nil
+	}
+	var headers map[string]string
+	if err := json.Unmarshal([]byte(raw), &headers); err != nil {
+		return nil
+	}
+	return cloneStringMap(headers)
 }
 
 func (s kubernetesSubstrate) copySecret(ctx context.Context, sourceNamespace string, targetNamespace string, name string) error {
@@ -1054,6 +1162,24 @@ func cloneByteMap(in map[string][]byte) map[string][]byte {
 	out := make(map[string][]byte, len(in))
 	for key, value := range in {
 		out[key] = append([]byte{}, value...)
+	}
+	return out
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = strings.TrimSpace(value)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

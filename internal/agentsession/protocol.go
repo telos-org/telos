@@ -20,6 +20,7 @@ const (
 	KindProviderConfig         = "provider_config"
 	KindTurnPolicy             = "turn_policy"
 	KindModelRequest           = "model_request"
+	KindModelAsyncJob          = "model_async_job"
 	KindModelResponse          = "model_response"
 	KindToolCall               = "tool_call"
 	KindToolResult             = "tool_result"
@@ -113,6 +114,8 @@ type EnvKnobsPayload struct {
 type ProviderConfigPayload struct {
 	Provider                string `json:"provider"`
 	Model                   string `json:"model"`
+	Transport               string `json:"transport,omitempty"`
+	BaseURLKind             string `json:"base_url_kind,omitempty"`
 	StateMode               string `json:"state_mode"`
 	StrictProtocol          bool   `json:"strict_protocol"`
 	CapabilityMaxOutput     int    `json:"capability_max_output_tokens,omitempty"`
@@ -128,6 +131,7 @@ type TurnPolicyPayload struct {
 
 type ModelRequestPayload struct {
 	Sequence        int    `json:"sequence"`
+	Transport       string `json:"transport,omitempty"`
 	PreviousID      string `json:"previous_response_id"`
 	StateMode       string `json:"state_mode"`
 	Model           string `json:"model"`
@@ -137,9 +141,19 @@ type ModelRequestPayload struct {
 	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
+type ModelAsyncJobPayload struct {
+	Sequence  int    `json:"sequence"`
+	JobID     string `json:"job_id"`
+	Provider  string `json:"provider"`
+	Model     string `json:"model"`
+	Transport string `json:"transport"`
+	Status    string `json:"status"`
+}
+
 type ModelResponsePayload struct {
 	Sequence   int                `json:"sequence"`
 	ResponseID string             `json:"response_id"`
+	AsyncJobID string             `json:"async_job_id,omitempty"`
 	StopReason string             `json:"stop_reason"`
 	Usage      ModelResponseUsage `json:"usage"`
 }
