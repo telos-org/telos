@@ -1,4 +1,4 @@
-// Package cloud provides the cloud Sessions API client.
+// Package cloud provides the Telos Cloud API client.
 package cloud
 
 import (
@@ -74,7 +74,7 @@ type DeploymentListResponse struct {
 	Deployments []DeploymentRecord `json:"deployments"`
 }
 
-// Client is a cloud Sessions API client.
+// Client is a Telos Cloud API client.
 type Client struct {
 	Endpoint string
 	Token    string
@@ -280,6 +280,51 @@ func (c *Client) ListDeployments() ([]DeploymentRecord, error) {
 		return nil, err
 	}
 	return response.Deployments, nil
+}
+
+func (c *Client) GetDeployment(deploymentID string) (*DeploymentRecord, error) {
+	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(deploymentID), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response DeploymentRecord
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) DeleteDeployment(deploymentID string) (*DeploymentRecord, error) {
+	resp, err := c.do("DELETE", "/api/deployments/"+url.PathEscape(deploymentID), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response DeploymentRecord
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) GetDeploymentTranscript(deploymentID string) (string, error) {
+	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(deploymentID)+"/transcript", nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", readError(resp)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	return string(data), nil
 }
 
 // WaitForEnvironment waits until an environment-local API is reachable.

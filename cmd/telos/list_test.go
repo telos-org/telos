@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/telos-org/telos/internal/cli"
+	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -110,6 +111,71 @@ func TestCmdListShowsDeploymentsForConfiguredCloud(t *testing.T) {
 	}
 	if strings.Contains(out, "SESSION") {
 		t.Fatalf("list output should be deployment-shaped:\n%s", out)
+	}
+}
+
+func TestPrintDeploymentDescriptionShowsProductSurfaces(t *testing.T) {
+	runtime := "0.1.0"
+	serviceURL := "https://auth.example.com"
+	dashboardURL := "https://dashboard.example.com"
+	deployment := cloud.DeploymentRecord{
+		ID:             "dep_123",
+		Name:           "auth",
+		State:          "healthy",
+		PackageRef:     "@telos/auth:1.0.0",
+		PackageDigest:  "sha256:abc",
+		RuntimeVersion: &runtime,
+		ServiceURL:     &serviceURL,
+		DashboardURL:   &dashboardURL,
+		CreatedAt:      "then",
+		UpdatedAt:      "now",
+	}
+
+	var out bytes.Buffer
+	printDeploymentDescription(&out, deployment)
+	text := out.String()
+	for _, want := range []string{
+		"Name      auth",
+		"Platform  cloud",
+		"Status    healthy",
+		"Package   @telos/auth:1.0.0",
+		"Deployment dep_123",
+		"Service   https://auth.example.com",
+		"Dashboard https://dashboard.example.com",
+		"Runtime   0.1.0",
+		"Lifecycle",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("deployment description missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestPrintDeploymentStopReceiptUsesDeploymentSummary(t *testing.T) {
+	deployment := cloud.DeploymentRecord{
+		ID:            "dep_123",
+		Name:          "auth",
+		State:         "deleted",
+		PackageRef:    "@telos/auth:1.0.0",
+		PackageDigest: "sha256:abc",
+		CreatedAt:     "then",
+		UpdatedAt:     "now",
+	}
+
+	var out bytes.Buffer
+	printDeploymentStopReceipt(&out, deployment)
+	text := out.String()
+	for _, want := range []string{
+		"stopped auth",
+		"Name      auth",
+		"Platform  cloud",
+		"Status    deleted",
+		"Package   @telos/auth:1.0.0",
+		"Deployment dep_123",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("deployment stop receipt missing %q:\n%s", want, text)
+		}
 	}
 }
 

@@ -929,6 +929,50 @@ func TestPrintLogsRawShowsTranscript(t *testing.T) {
 	}
 }
 
+func TestFollowDeploymentTranscriptStopsWhenHealthy(t *testing.T) {
+	var transcriptCalls int
+	var deploymentCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123/transcript":
+			transcriptCalls++
+			_, _ = w.Write([]byte("# Transcript\n<progress_update>ready</progress_update>\n"))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123":
+			deploymentCalls++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":             "dep_123",
+				"name":           "auth",
+				"state":          "healthy",
+				"package_ref":    "@telos/auth:1.0.0",
+				"package_digest": "sha256:abc",
+				"created_at":     "then",
+				"updated_at":     "now",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	err := followDeploymentTranscript(
+		cloud.NewClient(srv.URL, "test-token"),
+		"dep_123",
+		&out,
+		func(time.Duration) {},
+		false,
+	)
+	if err != nil {
+		t.Fatalf("followDeploymentTranscript: %v", err)
+	}
+	if transcriptCalls != 1 || deploymentCalls != 1 {
+		t.Fatalf("calls: transcript=%d deployment=%d", transcriptCalls, deploymentCalls)
+	}
+	if !strings.Contains(out.String(), "#1 ready") {
+		t.Fatalf("follow output missing progress:\n%s", out.String())
+	}
+}
+
 func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

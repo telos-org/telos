@@ -368,6 +368,83 @@ func TestClientListDeployments(t *testing.T) {
 	}
 }
 
+func TestClientGetDeployment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/dep_123" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":             "dep_123",
+			"name":           "auth",
+			"state":          "healthy",
+			"package_ref":    "@telos/auth:1.2.3",
+			"package_digest": "sha256:abc",
+			"created_at":     "then",
+			"updated_at":     "now",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	deployment, err := client.GetDeployment("dep_123")
+	if err != nil {
+		t.Fatalf("GetDeployment: %v", err)
+	}
+	if deployment.ID != "dep_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
+		t.Fatalf("deployment: got %+v", deployment)
+	}
+}
+
+func TestClientDeleteDeployment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/deployments/dep_123" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":             "dep_123",
+			"name":           "auth",
+			"state":          "deleted",
+			"package_ref":    "@telos/auth:1.2.3",
+			"package_digest": "sha256:abc",
+			"created_at":     "then",
+			"updated_at":     "now",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	deployment, err := client.DeleteDeployment("dep_123")
+	if err != nil {
+		t.Fatalf("DeleteDeployment: %v", err)
+	}
+	if deployment.ID != "dep_123" || deployment.State != "deleted" {
+		t.Fatalf("deployment: got %+v", deployment)
+	}
+}
+
+func TestClientGetDeploymentTranscript(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/dep_123/transcript" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("# Deployment Transcript\n\nSome content"))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	text, err := client.GetDeploymentTranscript("dep_123")
+	if err != nil {
+		t.Fatalf("GetDeploymentTranscript: %v", err)
+	}
+	if text != "# Deployment Transcript\n\nSome content" {
+		t.Fatalf("transcript: got %q", text)
+	}
+}
+
 func TestSessionCreateRequestOmitsEmptyRuntimeDefaults(t *testing.T) {
 	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
 	body, err := json.Marshal(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
