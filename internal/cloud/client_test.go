@@ -228,43 +228,6 @@ func TestClientPublishPackageVersion(t *testing.T) {
 	}
 }
 
-func TestClientApplyEnvironmentSession(t *testing.T) {
-	var gotBody map[string]string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/api/environments/env_123/sessions/auth" {
-			http.NotFound(w, r)
-			return
-		}
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatal(err)
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"operation": "created",
-			"session": map[string]any{
-				"env_id":         "env_123",
-				"name":           "auth",
-				"package_digest": "sha256:abc",
-				"desired_state":  "running",
-				"created_at":     "now",
-				"updated_at":     "now",
-			},
-		})
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "test-token")
-	response, err := client.ApplyEnvironmentSession("env_123", "auth", "sha256:abc")
-	if err != nil {
-		t.Fatalf("ApplyEnvironmentSession: %v", err)
-	}
-	if response.Operation != "created" || response.Session.Name != "auth" {
-		t.Fatalf("response: got %+v", response)
-	}
-	if gotBody["package_digest"] != "sha256:abc" {
-		t.Fatalf("body: got %#v", gotBody)
-	}
-}
-
 func TestClientCreateDeployment(t *testing.T) {
 	var gotBody map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

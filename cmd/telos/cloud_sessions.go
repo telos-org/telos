@@ -46,44 +46,6 @@ func cloudSessionClientForRun(
 	return cloud.NewClient("https://"+env.Handle, env.AccessToken), env, nil
 }
 
-func cloudEnvironmentForApply(
-	envID string,
-	waitForEnvironment bool,
-	readyTimeout time.Duration,
-) (*cloud.Client, *cloud.Environment, error) {
-	control, err := cloud.ControlClient()
-	if err != nil {
-		return nil, nil, err
-	}
-	var env *cloud.Environment
-	if envID != "" {
-		env, err = cloud.ResolveEnvironment(envID)
-		if err != nil {
-			return nil, nil, err
-		}
-	} else {
-		env, err = control.CreateEnvironment()
-		if err != nil {
-			return nil, nil, err
-		}
-		if err := config.SaveEnvironmentAccessEntry(config.EnvironmentAccess{
-			ID:    env.ID,
-			Token: env.AccessToken,
-		}); err != nil {
-			return nil, nil, err
-		}
-	}
-	if waitForEnvironment {
-		if readyTimeout <= 0 {
-			readyTimeout = 15 * time.Minute
-		}
-		if err := cloud.WaitForEnvironment(env.Handle, readyTimeout); err != nil {
-			return nil, nil, err
-		}
-	}
-	return control, env, nil
-}
-
 func listCloudSessions(envID string, limit int, includeChildren bool) ([]sessionapi.Session, error) {
 	targets, err := cloudSessionTargets(envID)
 	if err != nil {
