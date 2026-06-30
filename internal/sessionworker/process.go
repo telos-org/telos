@@ -1,0 +1,145 @@
+package sessionworker
+
+import (
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/telos-org/telos/internal/sessionapi"
+)
+
+func Start(sessionDir string, runtime sessionapi.SessionRuntime) error {
+	telosd, err := resolveTelosd()
+	if err != nil {
+		return err
+	}
+	logPath := filepath.Join(sessionDir, "runner.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open runner log: %w", err)
+	}
+	defer logFile.Close()
+
+	cmd := exec.Command(telosd, "--session-dir", sessionDir)
+	cmd.Env = Env(sessionDir, runtime)
+	cmd.Stdin = nil
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start worker: %w", err)
+	}
+	if err := MarkStarted(sessionDir, cmd.Process.Pid, logPath); err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		_ = cmd.Process.Kill()
+		return err
+	}
+	return nil
+}
+
+func Env(sessionDir string, runtime sessionapi.SessionRuntime) []string {
+	env := append(os.Environ(),
+		"TELOS_RUNTIME="+string(runtime),
+		"TELOS_SESSION_DIR="+filepath.Dir(sessionDir),
+		"TELOS_SESSION_ID="+filepath.Base(sessionDir),
+	)
+	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err == nil && manifest.ParentSessionID != nil {
+		env = append(env, "TELOS_PARENT_SESSION_ID="+*manifest.ParentSessionID)
+	}
+	return env
+}
+
+func resolveTelosd() (string, error) {
+	if configured := os.Getenv("TELOSD_PATH"); configured != "" {
+		return configured, nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve telos executable: %w", err)
+	}
+	sibling := filepath.Join(filepath.Dir(exe), "telosd")
+	if _, err := os.Stat(sibling); err == nil {
+		return sibling, nil
+	}
+	if path, err := exec.LookPath("telosd"); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("telosd not found; install telosd next to telos or set TELOSD_PATH")
+}
+
+func StartEpoch(sessionDir string, manifest *sessionapi.Manifest) (int, error) {
+	return StartEpochWithRunner(sessionDir, manifest, os.Getpid(), "")
+}
+
+func MarkStarted(sessionDir string, pid int, logPath string) error {
+	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err != nil {
+		return fmt.Errorf("read session manifest: %w", err)
+	}
+	_, err = StartEpochWithRunner(sessionDir, manifest, pid, logPath)
+	return err
+}
+
+func StartEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid int, logPath string) (int, error) {
+	if open := manifest.OpenEpoch(); open != nil {
+		return open.ID, nil
+	}
+	epochID := len(manifest.Epochs) + 1
+	runner := RunnerIdentity(pid)
+	if logPath != "" {
+		runner.LogPath = logPath
+	}
+	manifest.Epochs = append(manifest.Epochs, sessionapi.Epoch{
+		ID:        epochID,
+		StartedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		Runner:    &runner,
+	})
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), manifest); err != nil {
+		return 0, fmt.Errorf("start epoch: %w", err)
+	}
+	return epochID, nil
+}
+
+func RunnerIdentity(pid int) sessionapi.Runner {
+	runner := sessionapi.Runner{
+		Kind:      "local-subprocess",
+		PID:       pid,
+		PGID:      pid,
+		StartedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+	}
+	if os.Getenv("KUBERNETES_SERVICE_HOST") == "" {
+		return runner
+	}
+
+	runner.Kind = "kubernetes-pod"
+	runner.InCluster = true
+	if hostname := firstEnv("HOSTNAME"); hostname != "" {
+		runner.Hostname = hostname
+	}
+	if podName := firstEnv("TELOS_RUNNER_POD_NAME", "POD_NAME"); podName != "" {
+		runner.PodName = podName
+	} else if hostname := firstEnv("HOSTNAME"); hostname != "" {
+		runner.PodName = hostname
+	}
+	if namespace := firstEnv("TELOS_RUNNER_POD_NAMESPACE", "POD_NAMESPACE"); namespace != "" {
+		runner.PodNamespace = namespace
+	}
+	return runner
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func manifestPath(sessionDir string) string {
+	return filepath.Join(sessionDir, "session.json")
+}
