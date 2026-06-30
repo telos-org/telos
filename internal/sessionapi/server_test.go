@@ -400,6 +400,42 @@ func TestCloudCreateSessionFromApplyPackageRejectsDigestMismatch(t *testing.T) {
 	}
 }
 
+func writeTestApplyPackage(t *testing.T, packageRoot string, name string, skill string) *spec.ApplyPackage {
+	t.Helper()
+	srcDir := t.TempDir()
+	specPath := filepath.Join(srcDir, "SPEC.md")
+	markdown := fmt.Sprintf("---\nversion: v0\nname: %s\nplatform: cloud\nskills:\n  - %s\n---\n# %s\n", name, skill, name)
+	if err := os.WriteFile(specPath, []byte(markdown), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	skillDir := filepath.Join(srcDir, skill)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(fmt.Sprintf("---\nname: %s\n---\nUse %s.", skill, skill)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := spec.CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{CompilerVersion: "test"})
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+	packagePath, err := sessionapi.PackagePathForDigest(packageRoot, pkg.Digest)
+	if err != nil {
+		t.Fatalf("PackagePathForDigest: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(packagePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(packagePath, pkg.Bytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return pkg
+}
+
 func TestCloudCreateSessionRejectsDuplicateLiveRoot(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
@@ -592,6 +628,72 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	}
 	if string(data) != updated {
 		t.Fatalf("spec was not updated: %q", string(data))
+	}
+}
+
+func TestApplySessionSpecUpdatesExistingRootFromPackageDigest(t *testing.T) {
+	root := t.TempDir()
+	packageRoot := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	store.PackageRoot = packageRoot
+	mux := http.NewServeMux()
+	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	initial := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	rootSession, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &initial})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	pkg := writeTestApplyPackage(t, packageRoot, "postgres", "alpha")
+
+	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
+		PackageDigest: pkg.Digest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+
+	var update sessionapi.SessionSpecUpdateResponse
+	if err := json.NewDecoder(resp.Body).Decode(&update); err != nil {
+		t.Fatal(err)
+	}
+	if update.Operation != "updated" {
+		t.Fatalf("operation: got %q", update.Operation)
+	}
+	if update.Session == nil || update.Session.SessionID != rootSession.SessionID {
+		t.Fatalf("session: got %#v", update.Session)
+	}
+	if update.Session.CurrentSpecVersion == nil || *update.Session.CurrentSpecVersion != 2 {
+		t.Fatalf("current_spec_version: got %#v", update.Session.CurrentSpecVersion)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(root, rootSession.SessionID, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest != pkg.Digest {
+		t.Fatalf("apply_package_digest: got %#v want %q", manifest.ApplyPackageDigest, pkg.Digest)
+	}
+	if manifest.SourceSpecPath == nil || !strings.Contains(*manifest.SourceSpecPath, filepath.Join(rootSession.SessionID, "package", "SPEC.md")) {
+		t.Fatalf("source_spec_path: %#v", manifest.SourceSpecPath)
+	}
+	if got := update.Session.SpecVersions[1]["apply_package_digest"]; got != pkg.Digest {
+		t.Fatalf("spec version package digest: got %#v want %q", got, pkg.Digest)
 	}
 }
 

@@ -87,7 +87,9 @@ func Run(ctx context.Context, cfg Config) error {
 
 func storeForConfig(cfg Config) *sessionapi.FileStore {
 	if cfg.Mode == ModeCloud {
-		return sessionapi.NewFileStore(SessionsRoot(cfg.Root), sessionapi.RuntimeCloud)
+		store := sessionapi.NewFileStore(SessionsRoot(cfg.Root), sessionapi.RuntimeCloud)
+		store.PackageRoot = os.Getenv("TELOS_PACKAGE_ROOT")
+		return store
 	}
 	return sessionapi.NewFileStore(SessionsRoot(cfg.Root), sessionapi.RuntimeLocal)
 }

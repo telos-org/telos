@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -151,7 +150,7 @@ func (r controlSessionReconciler) reconcileDesired(desired []desiredSession) err
 				return fmt.Errorf("stop stale session %s: %w", existing.SessionID, err)
 			}
 		}
-		packagePath, err := packagePathForDigest(r.packageRoot, digest)
+		packagePath, err := sessionapi.PackagePathForDigest(r.packageRoot, digest)
 		if err != nil {
 			return err
 		}
@@ -248,13 +247,4 @@ func sessionPackageDigest(session sessionapi.Session) string {
 		}
 	}
 	return ""
-}
-
-func packagePathForDigest(root string, digest string) (string, error) {
-	digest = strings.TrimSpace(digest)
-	hex, ok := strings.CutPrefix(digest, "sha256:")
-	if !ok || len(hex) != 64 {
-		return "", fmt.Errorf("invalid package digest %q", digest)
-	}
-	return filepath.Join(root, "blobs", "sha256", hex, "package.tar.gz"), nil
 }
