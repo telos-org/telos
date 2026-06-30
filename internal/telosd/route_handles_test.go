@@ -288,11 +288,11 @@ func TestProductHandleRequiresUnambiguousBrowserRoute(t *testing.T) {
 		[]publicRoute{
 			{
 				Namespace: "ns-auth",
-				Data:      map[string]string{"hostname": "auth.usetelos.ai"},
+				Data:      map[string]string{"hostname": "auth-a.usetelos.ai"},
 			},
 			{
 				Namespace: "ns-auth",
-				Data:      map[string]string{"hostname": "dashboard-auth.usetelos.ai"},
+				Data:      map[string]string{"hostname": "auth-b.usetelos.ai"},
 			},
 		},
 		sessionapi.Session{
@@ -338,6 +338,78 @@ func TestProductHandlePrefersProductRouteOverDashboardRoute(t *testing.T) {
 
 	if handle != "auth.usetelos.ai" {
 		t.Fatalf("handle: got %q", handle)
+	}
+}
+
+func TestProductHandleIgnoresRouteWithDifferentProductPrefix(t *testing.T) {
+	name := "auth"
+	kind := sessionapi.KindController
+	session := sessionapi.Session{
+		SessionID:   "sess_auth",
+		SessionKind: &kind,
+		SpecName:    &name,
+		Status:      sessionapi.StatusRunning,
+	}
+	routes := []publicRoute{
+		{
+			Namespace: "ns-auth",
+			Data: map[string]string{
+				"type":     "app",
+				"prefix":   "authprobe-test",
+				"hostname": "authprobe-test-rkz5f.usetelos.ai",
+			},
+		},
+		{
+			Namespace: "ns-auth",
+			Data: map[string]string{
+				"type":     "dashboard",
+				"prefix":   "dashboard-authprobe-test",
+				"hostname": "dashboard-authprobe-test-rkz5f.usetelos.ai",
+			},
+		},
+	}
+
+	if handle := productHandleFor(routes, session); handle != "" {
+		t.Fatalf("service handle: got %q", handle)
+	}
+	if handle := dashboardHandleFor(routes, session); handle != "" {
+		t.Fatalf("dashboard handle: got %q", handle)
+	}
+}
+
+func TestRouteHandlesMatchProductPrefix(t *testing.T) {
+	name := "auth"
+	kind := sessionapi.KindController
+	session := sessionapi.Session{
+		SessionID:   "sess_auth",
+		SessionKind: &kind,
+		SpecName:    &name,
+		Status:      sessionapi.StatusRunning,
+	}
+	routes := []publicRoute{
+		{
+			Namespace: "ns-auth",
+			Data: map[string]string{
+				"type":     "app",
+				"prefix":   "auth",
+				"hostname": "auth-ga84s.usetelos.ai",
+			},
+		},
+		{
+			Namespace: "ns-auth",
+			Data: map[string]string{
+				"type":     "dashboard",
+				"prefix":   "dashboard-auth",
+				"hostname": "dashboard-auth-n6ryk.usetelos.ai",
+			},
+		},
+	}
+
+	if handle := productHandleFor(routes, session); handle != "auth-ga84s.usetelos.ai" {
+		t.Fatalf("service handle: got %q", handle)
+	}
+	if handle := dashboardHandleFor(routes, session); handle != "dashboard-auth-n6ryk.usetelos.ai" {
+		t.Fatalf("dashboard handle: got %q", handle)
 	}
 }
 
