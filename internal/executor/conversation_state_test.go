@@ -68,10 +68,6 @@ func functionCallItem(callID string) responses.ResponseInputItemUnionParam {
 	return responses.ResponseInputItemParamOfFunctionCall(`{"path":"answer.txt"}`, callID, "read")
 }
 
-func functionOutputItem(callID string) responses.ResponseInputItemUnionParam {
-	return responses.ResponseInputItemParamOfFunctionCallOutput(callID, "tool output")
-}
-
 func hasOrphanFunctionOutput(items responses.ResponseInputParam) bool {
 	calls := map[string]bool{}
 	for _, item := range items {

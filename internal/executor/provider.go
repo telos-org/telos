@@ -372,15 +372,6 @@ func builtinModelContextWindow(model string) int {
 	}
 }
 
-func firstEnv(names ...string) string {
-	for _, name := range names {
-		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 // parseModelCapabilityTable reads TELOS_MODEL_CAPABILITY_TABLE, a JSON map from
 // model name to capability profile. Models not in the table fall back to the
 // process default profile (from TELOS_MODEL_CAPABILITY_PROFILE / scalar env).

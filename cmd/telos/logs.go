@@ -115,13 +115,6 @@ func printLogs(out io.Writer, transcript string, raw bool) {
 	printLogBlocks(out, blocks, 0)
 }
 
-func printProgressUpdate(out io.Writer, index int, update string) {
-	if index > 1 {
-		fmt.Fprintln(out)
-	}
-	fmt.Fprintf(out, "#%d %s\n", index, update)
-}
-
 // Logs only treat standalone protocol tags as public log entries. This avoids
 // turning inline examples into user-visible progress or review output.
 var (
@@ -134,22 +127,6 @@ type logBlock struct {
 	start int
 	kind  string
 	text  string
-}
-
-func progressUpdates(transcript string) []string {
-	matches := progressUpdateTagRE.FindAllStringSubmatch(transcript, -1)
-	updates := make([]string, 0, len(matches))
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		text := strings.TrimSpace(match[1])
-		if text == "" {
-			continue
-		}
-		updates = append(updates, text)
-	}
-	return updates
 }
 
 func logBlocks(transcript string) []logBlock {

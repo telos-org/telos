@@ -261,13 +261,6 @@ func sessionTurn(sess sessionapi.Session) string {
 	return fmt.Sprintf("%s#%d", *sess.CurrentRole, *sess.CurrentRound)
 }
 
-func sessionArtifact(sess sessionapi.Session) string {
-	if url := sessionServiceURL(sess); url != "" {
-		return url
-	}
-	return "-"
-}
-
 func sessionServiceURL(sess sessionapi.Session) string {
 	if sess.ServiceURL != nil && *sess.ServiceURL != "" {
 		return *sess.ServiceURL

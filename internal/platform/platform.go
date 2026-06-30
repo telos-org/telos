@@ -78,10 +78,8 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 			mergedEnv = append(mergedEnv, k+"="+v)
 		}
 	}
-	if env != nil {
-		for k, v := range env {
-			mergedEnv = append(mergedEnv, k+"="+v)
-		}
+	for k, v := range env {
+		mergedEnv = append(mergedEnv, k+"="+v)
 	}
 	if task != "" {
 		mergedEnv = append(mergedEnv, TaskEnvVar+"="+task)

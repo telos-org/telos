@@ -375,9 +375,7 @@ func (c *SessionConfig) UnmarshalJSON(data []byte) error {
 		}
 		delete(raw, "thinking")
 	}
-	if _, ok := raw["workspace"]; ok {
-		delete(raw, "workspace")
-	}
+	delete(raw, "workspace")
 	for key, value := range raw {
 		var decoded any
 		if err := json.Unmarshal(value, &decoded); err != nil {

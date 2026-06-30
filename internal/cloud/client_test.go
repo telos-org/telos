@@ -92,7 +92,7 @@ func TestClientListSessions(t *testing.T) {
 	if gotPath != "/api/sessions" {
 		t.Fatalf("request path: got %q", gotPath)
 	}
-	sessions, err = client.ListSessions(2, false)
+	_, err = client.ListSessions(2, false)
 	if err != nil {
 		t.Fatalf("ListSessions limit: %v", err)
 	}

@@ -65,7 +65,7 @@ func writeWorkspaceArchive(t *testing.T, path string, entries []testTarEntry) {
 
 	for _, entry := range entries {
 		header := entry.header
-		if header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA {
+		if header.Typeflag == tar.TypeReg {
 			header.Size = int64(len(entry.body))
 		}
 		if err := tarWriter.WriteHeader(&header); err != nil {

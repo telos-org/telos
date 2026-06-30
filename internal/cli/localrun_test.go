@@ -458,7 +458,7 @@ func TestCreateLocalSessionClonesCleanGitWorkspace(t *testing.T) {
 func TestCreateLocalSessionDefaultsToCwdGitRoot(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "repo")
-	base := initTestGitRepo(t, source)
+	initTestGitRepo(t, source)
 	source, err := filepath.EvalSymlinks(source)
 	if err != nil {
 		t.Fatal(err)
@@ -469,7 +469,7 @@ func TestCreateLocalSessionDefaultsToCwdGitRoot(t *testing.T) {
 	}
 	runTestCommand(t, source, "git", "add", "SPEC.md")
 	runTestCommand(t, source, "git", "-c", "user.name=Telos", "-c", "user.email=telos@local", "commit", "-q", "-m", "add spec")
-	base = strings.TrimSpace(runTestCommand(t, source, "git", "rev-parse", "HEAD"))
+	base := strings.TrimSpace(runTestCommand(t, source, "git", "rev-parse", "HEAD"))
 	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(dir, "telos-output"))
 
 	orig, _ := os.Getwd()

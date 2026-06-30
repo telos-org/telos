@@ -311,29 +311,6 @@ func stringOptionDefault(fs *flag.FlagSet, name, value, envName, defaultValue st
 	return defaultValue
 }
 
-func stringListOption(fs *flag.FlagSet, name, envName string) []string {
-	raw := ""
-	if flagNameSet(fs, name) {
-		if f := fs.Lookup(name); f != nil {
-			raw = f.Value.String()
-		}
-	} else {
-		raw = os.Getenv(envName)
-	}
-	if strings.TrimSpace(raw) == "" {
-		return nil
-	}
-	parts := strings.Split(raw, ",")
-	out := make([]string, 0, len(parts))
-	for _, part := range parts {
-		part = strings.TrimSpace(part)
-		if part != "" {
-			out = append(out, part)
-		}
-	}
-	return out
-}
-
 func modelOption(fs *flag.FlagSet, value string) string {
 	if flagNameSet(fs, "model") {
 		return strings.TrimSpace(value)

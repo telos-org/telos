@@ -552,21 +552,6 @@ func updateRequestFromCreate(req sessionapi.SessionCreateRequest) sessionapi.Ses
 	return update
 }
 
-func specNameFromRequest(req sessionapi.SessionCreateRequest) (string, error) {
-	if req.SpecMarkdown == nil {
-		return "", fmt.Errorf("spec_markdown is required")
-	}
-	raw, _, ok := spec.ParseFrontmatter(*req.SpecMarkdown)
-	if !ok {
-		return "", fmt.Errorf("spec_markdown must contain YAML frontmatter")
-	}
-	name, ok := raw["name"].(string)
-	if !ok || name == "" {
-		return "", fmt.Errorf("spec frontmatter must include name")
-	}
-	return name, nil
-}
-
 func sessionKindForCommand(command string) sessionapi.SessionKind {
 	if command == "apply" {
 		return sessionapi.KindController

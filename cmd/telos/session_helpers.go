@@ -68,19 +68,6 @@ func localSessionExists(sessionID string) bool {
 	return err == nil
 }
 
-func cloudClientForSession(sessionID, envID string) (*cloud.Client, error) {
-	clients, err := cloudSessionClients(envID)
-	if err != nil {
-		return nil, err
-	}
-	for _, client := range clients {
-		if _, err := client.GetSession(sessionID); err == nil {
-			return client, nil
-		}
-	}
-	return nil, fmt.Errorf("session %s: not found", sessionID)
-}
-
 func getSessionFromAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
 	// Try local first
 	s := store()

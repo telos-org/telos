@@ -2201,25 +2201,6 @@ func assertConfigFloat(t *testing.T, config map[string]any, key string, expected
 	}
 }
 
-func assertConfigStringSlice(t *testing.T, config map[string]any, key string, expected []string) {
-	t.Helper()
-	v, ok := config[key]
-	if !ok {
-		t.Errorf("config missing key %q", key)
-		return
-	}
-	items, ok := v.([]any)
-	if !ok || len(items) != len(expected) {
-		t.Errorf("config[%q]: expected %v, got %v", key, expected, v)
-		return
-	}
-	for i, want := range expected {
-		if got, ok := items[i].(string); !ok || got != want {
-			t.Errorf("config[%q][%d]: expected %q, got %v", key, i, want, items[i])
-		}
-	}
-}
-
 func intValueFromConfig(t *testing.T, config map[string]any, key string) int {
 	t.Helper()
 	v, ok := config[key]
