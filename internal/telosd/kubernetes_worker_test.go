@@ -305,6 +305,9 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	if !strings.Contains(initCommand, "/home/agent/.agents/skills") {
 		t.Fatalf("init command missing package skills destination: %q", initCommand)
 	}
+	if strings.Contains(initCommand, "cp -a") {
+		t.Fatalf("init command must not preserve package skill file metadata: %q", initCommand)
+	}
 	container := template.Spec.Containers[0]
 	assertAgentSecurityContext(t, container.SecurityContext)
 	if len(container.EnvFrom) != 1 ||

@@ -835,7 +835,7 @@ chmod 0600 /home/agent/.pi/agent/* 2>/dev/null || true
 
 mkdir -p /home/agent/.agents/skills
 if [ -d "$package_skills" ]; then
-  cp -a "$package_skills"/. /home/agent/.agents/skills/
+  cp -R "$package_skills"/. /home/agent/.agents/skills/
 fi
 chmod -R u+rwX,g+rX /home/agent/.agents 2>/dev/null || true
 
