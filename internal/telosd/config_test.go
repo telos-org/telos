@@ -86,11 +86,13 @@ func TestNormalizeCloudConfigRejectsInvalidWorkerSubstrate(t *testing.T) {
 
 func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {
 	cfg, err := NormalizeConfig(Config{
-		Mode:            ModeCloud,
-		Token:           "operator-token",
-		AgentImage:      "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
-		ImagePullSecret: "explicit-pull",
-		Worker:          WorkerConfig{Substrate: "kubernetes"},
+		Mode:   ModeCloud,
+		Token:  "operator-token",
+		Worker: WorkerConfig{Substrate: "kubernetes"},
+		Kubernetes: KubernetesConfig{
+			AgentImage:      "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
+			ImagePullSecret: "explicit-pull",
+		},
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
@@ -111,10 +113,12 @@ func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {
 
 func TestNormalizeCloudConfigDefaultsGARImagePullSecret(t *testing.T) {
 	cfg, err := NormalizeConfig(Config{
-		Mode:       ModeCloud,
-		Token:      "operator-token",
-		AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
-		Worker:     WorkerConfig{Substrate: "kubernetes"},
+		Mode:   ModeCloud,
+		Token:  "operator-token",
+		Worker: WorkerConfig{Substrate: "kubernetes"},
+		Kubernetes: KubernetesConfig{
+			AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
+		},
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
@@ -128,10 +132,12 @@ func TestNormalizeCloudConfigUsesImagePullSecretEnvOverride(t *testing.T) {
 	t.Setenv("TELOS_IMAGE_PULL_SECRET", "custom-pull")
 
 	cfg, err := NormalizeConfig(Config{
-		Mode:       ModeCloud,
-		Token:      "operator-token",
-		AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
-		Worker:     WorkerConfig{Substrate: "kubernetes"},
+		Mode:   ModeCloud,
+		Token:  "operator-token",
+		Worker: WorkerConfig{Substrate: "kubernetes"},
+		Kubernetes: KubernetesConfig{
+			AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
+		},
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
@@ -264,10 +270,11 @@ func TestLoadConfigCompactShape(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`kind: telosd.config.v1
 mode: cloud
 token_file: `+tokenPath+`
-agent_image: registry/telos-agent@sha256:abc123
-image_pull_secret: registry-pull
 worker:
   substrate: kubernetes
+kubernetes:
+  agent_image: registry/telos-agent@sha256:abc123
+  image_pull_secret: registry-pull
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
