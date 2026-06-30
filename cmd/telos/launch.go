@@ -6,7 +6,6 @@ import (
 	"io"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
@@ -35,8 +34,6 @@ func cmdLaunch(command, action string, args []string) {
 	until := fs.Int("until", 0, "Run exactly N evaluator review cycles")
 	maxCostUSD := fs.Float64("max-cost-usd", 20.0, "Maximum cost in USD")
 	agentTimeout := fs.Int("agent-timeout-sec", 0, "Agent timeout in seconds; 0 disables")
-	readyTimeout := fs.Int("ready-timeout", 900, "Environment readiness timeout in seconds")
-	noWait := fs.Bool("no-wait", false, "Do not wait for a newly created environment")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 	localConfigSet := flagNamesSet(fs, "workspace")
@@ -123,26 +120,8 @@ func cmdLaunch(command, action string, args []string) {
 		os.Exit(1)
 	}
 	switch launchMode {
-	case launchCloudExisting:
-		runCloud(command, specArg, *env, *scope, untilValue, fs, *model, *thinking, *maxCostUSD, *agentTimeout, *jsonOut, false, 0, action)
-		return
-	case launchCloudNew:
-		runCloud(
-			command,
-			specArg,
-			"",
-			*scope,
-			untilValue,
-			fs,
-			*model,
-			*thinking,
-			*maxCostUSD,
-			*agentTimeout,
-			*jsonOut,
-			!*noWait,
-			time.Duration(*readyTimeout)*time.Second,
-			action,
-		)
+	case launchCloudApply:
+		applyCloudControl(specArg, *scope, *jsonOut)
 		return
 	}
 	if !hasLocalSpec {
@@ -212,9 +191,8 @@ func shellQuote(s string) string {
 type launchMode string
 
 const (
-	launchLocal         launchMode = "local"
-	launchCloudExisting launchMode = "cloud-existing"
-	launchCloudNew      launchMode = "cloud-new"
+	launchLocal      launchMode = "local"
+	launchCloudApply launchMode = "cloud-apply"
 )
 
 func decideLaunchMode(
@@ -223,26 +201,23 @@ func decideLaunchMode(
 	cloudConfigured bool,
 	localConfigSet bool,
 ) (launchMode, error) {
+	if envID != "" {
+		return "", fmt.Errorf("--env is no longer supported; use deployments")
+	}
 	if platform == "local" {
-		if envID != "" {
-			return "", fmt.Errorf("--env cannot be used with platform: local specs")
-		}
 		return launchLocal, nil
 	}
 	if localConfigSet {
 		return "", fmt.Errorf("local run config flags require a platform: local spec")
 	}
-	if envID != "" {
-		return launchCloudExisting, nil
-	}
 	if !cloudConfigured {
 		return "", fmt.Errorf("non-local spec requires cloud config; run `telos login` first")
 	}
-	return launchCloudNew, nil
+	return launchCloudApply, nil
 }
 
 func validateLaunchCommand(command string, mode launchMode) error {
-	if command == "run" && (mode == launchCloudExisting || mode == launchCloudNew) {
+	if command == "run" && mode == launchCloudApply {
 		return fmt.Errorf("telos run for cloud specs must be used inside a root session; use telos apply to create or update a root session")
 	}
 	return nil
@@ -275,61 +250,7 @@ func runCloudChildSession(
 		printJSON(map[string]any{"session": session})
 		return
 	}
-	printSessionReceipt(os.Stdout, action, session, nil)
-}
-
-func runCloud(
-	command string,
-	specArg string,
-	envID string,
-	scope string,
-	until int,
-	fs *flag.FlagSet,
-	model string,
-	thinking string,
-	maxCostUSD float64,
-	agentTimeout int,
-	jsonOut bool,
-	waitForEnvironment bool,
-	readyTimeout time.Duration,
-	action string,
-) {
-	if command == "apply" {
-		applyCloudControl(specArg, scope, jsonOut)
-		return
-	}
-	req, err := sessionCreateRequestForSpec(specArg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if until > 0 {
-		req.Until = &until
-	}
-	runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, model, thinking, maxCostUSD, agentTimeout)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	applySessionRuntimeConfig(&req, runtimeConfig)
-	client, env, err := cloudSessionClientForRun(envID, waitForEnvironment, readyTimeout)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	session, err := client.CreateSession(req)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if jsonOut {
-		printJSON(map[string]any{
-			"environment": environmentOutput(env),
-			"session":     session,
-		})
-	} else {
-		printSessionReceipt(os.Stdout, action, session, environmentOutput(env))
-	}
+	printSessionReceipt(os.Stdout, action, session)
 }
 
 func applyCloudControl(
@@ -390,7 +311,7 @@ func applyDeploymentPackage(control *cloud.Client, name string, packageRef strin
 	}
 }
 
-func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session, env *environmentJSON) {
+func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session) {
 	if session == nil {
 		return
 	}
@@ -402,12 +323,6 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	printSummaryField(out, "Status", row.Status)
 	printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	printSummaryField(out, "Session", row.Session)
-	if env != nil {
-		printSummaryField(out, "Environment", env.ID)
-		if env.Handle != "" {
-			printSummaryField(out, "Handle", env.Handle)
-		}
-	}
 }
 
 func printDeploymentReceipt(out io.Writer, operation string, deployment *cloud.DeploymentRecord) {
