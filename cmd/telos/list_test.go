@@ -633,10 +633,8 @@ func TestPrintSessionReceiptUsesNormalizedSummary(t *testing.T) {
 		Result:       &completed,
 		TotalCostUSD: &cost,
 	}
-	env := &environmentJSON{ID: "env_123", Handle: "env-123.usetelos.ai"}
-
 	var out bytes.Buffer
-	printSessionReceipt(&out, "updated", session, env)
+	printSessionReceipt(&out, "updated", session)
 	text := out.String()
 	for _, want := range []string{
 		"updated gitea",
@@ -645,8 +643,6 @@ func TestPrintSessionReceiptUsesNormalizedSummary(t *testing.T) {
 		"Status    idle",
 		"Cost      $1.1907",
 		"Session   sess_123",
-		"Environment env_123",
-		"Handle    env-123.usetelos.ai",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("receipt missing %q:\n%s", want, text)

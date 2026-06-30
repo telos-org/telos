@@ -260,36 +260,6 @@ func optionalDeploymentString(value *string) string {
 	return *value
 }
 
-func listEnvironments(jsonOut bool) {
-	control, err := cloud.ControlClient()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	envs, err := control.ListEnvironments()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if jsonOut {
-		printJSON(map[string]any{"environments": environmentsOutput(envs)})
-		return
-	}
-	if len(envs) == 0 {
-		fmt.Println("no environments")
-		return
-	}
-	for _, env := range envs {
-		access := "-"
-		if _, ok := config.EnvironmentAccessByID(env.ID); ok {
-			access = "local"
-		} else if env.HasRecoverable {
-			access = "recoverable"
-		}
-		fmt.Printf("%-16s %-14s %-36s %s\n", env.ID, env.State, env.Handle, access)
-	}
-}
-
 func sessionName(sess sessionapi.Session) string {
 	if sess.SpecName != nil && *sess.SpecName != "" {
 		return *sess.SpecName

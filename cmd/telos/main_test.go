@@ -355,22 +355,22 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 			name:     "local spec rejects env",
 			platform: "local",
 			envID:    "env_123",
-			wantErr:  "--env cannot be used with platform: local specs",
+			wantErr:  "--env is no longer supported",
 		},
 		{
 			name:            "unspecified platform is cloud",
 			cloudConfigured: true,
-			want:            launchCloudNew,
+			want:            launchCloudApply,
 		},
 		{
 			name:    "unspecified platform requires cloud login",
 			wantErr: "non-local spec requires cloud config",
 		},
 		{
-			name:     "cloud spec with env uses existing env",
+			name:     "cloud spec rejects env",
 			platform: "cloud",
 			envID:    "env_123",
-			want:     launchCloudExisting,
+			wantErr:  "--env is no longer supported",
 		},
 		{
 			name:           "cloud rejects local flags",
@@ -432,16 +432,14 @@ func TestSessionKindForCommand(t *testing.T) {
 }
 
 func TestValidateLaunchCommandRejectsCloudRunOutsideRoot(t *testing.T) {
-	for _, mode := range []launchMode{launchCloudExisting, launchCloudNew} {
-		err := validateLaunchCommand("run", mode)
-		if err == nil {
-			t.Fatalf("expected cloud run rejection for %s", mode)
-		}
-		if !strings.Contains(err.Error(), "inside a root session") {
-			t.Fatalf("unexpected error: %v", err)
-		}
+	err := validateLaunchCommand("run", launchCloudApply)
+	if err == nil {
+		t.Fatal("expected cloud run rejection")
 	}
-	if err := validateLaunchCommand("apply", launchCloudExisting); err != nil {
+	if !strings.Contains(err.Error(), "inside a root session") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if err := validateLaunchCommand("apply", launchCloudApply); err != nil {
 		t.Fatalf("apply should be allowed: %v", err)
 	}
 	if err := validateLaunchCommand("run", launchLocal); err != nil {
