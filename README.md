@@ -50,12 +50,14 @@ Local runs require `pi` on `PATH` and model credentials configured for Pi.
 
 ```bash
 telos login
-telos apply SPEC.md --env <env-handle>
+telos apply SPEC.md --scope <scope>
+telos list --cloud
 ```
 
-For hosted workflows, `telos apply` is the primary interface: it applies a
-declarative goal and keeps reconciling it. `telos run` remains available for
-local specs and internal delegated work.
+For hosted workflows, `telos apply` publishes a versioned spec package and
+creates or updates a managed deployment. The deployment allocates its runtime
+behind the control plane. `telos run` remains available for local specs and
+internal delegated work.
 
 ## Read Next
 
