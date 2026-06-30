@@ -42,20 +42,6 @@ type PackageVersionRecord struct {
 	CreatedAt string `json:"created_at"`
 }
 
-type EnvironmentSessionRecord struct {
-	EnvID         string `json:"env_id"`
-	Name          string `json:"name"`
-	PackageDigest string `json:"package_digest"`
-	DesiredState  string `json:"desired_state"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
-}
-
-type EnvironmentSessionApplyResponse struct {
-	Operation string                   `json:"operation"`
-	Session   EnvironmentSessionRecord `json:"session"`
-}
-
 type DeploymentRecord struct {
 	ID             string  `json:"id"`
 	Name           string  `json:"name"`
@@ -201,26 +187,6 @@ func (c *Client) PublishPackageVersion(scope, name, version string, data []byte)
 		return nil, err
 	}
 	return &record, nil
-}
-
-func (c *Client) ApplyEnvironmentSession(envID, name, packageDigest string) (*EnvironmentSessionApplyResponse, error) {
-	body, err := json.Marshal(map[string]string{"package_digest": packageDigest})
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.do("PUT", "/api/environments/"+url.PathEscape(envID)+"/sessions/"+url.PathEscape(name), body)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, readError(resp)
-	}
-	var response EnvironmentSessionApplyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
-	return &response, nil
 }
 
 func (c *Client) CreateDeployment(name, packageRef string) (*DeploymentRecord, error) {

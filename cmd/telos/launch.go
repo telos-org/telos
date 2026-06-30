@@ -410,20 +410,6 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	}
 }
 
-func printCloudApplyReceipt(out io.Writer, response *cloud.EnvironmentSessionApplyResponse, env *environmentJSON) {
-	fmt.Fprintf(out, "%s %s\n\n", response.Operation, response.Session.Name)
-	printSummaryField(out, "Name", response.Session.Name)
-	printSummaryField(out, "Platform", "cloud")
-	printSummaryField(out, "Status", response.Session.DesiredState)
-	printSummaryField(out, "Digest", response.Session.PackageDigest)
-	if env != nil {
-		printSummaryField(out, "Environment", env.ID)
-		if env.Handle != "" {
-			printSummaryField(out, "Handle", env.Handle)
-		}
-	}
-}
-
 func printDeploymentReceipt(out io.Writer, operation string, deployment *cloud.DeploymentRecord) {
 	fmt.Fprintf(out, "%s %s\n\n", operation, deployment.Name)
 	printSummaryField(out, "Name", deployment.Name)
