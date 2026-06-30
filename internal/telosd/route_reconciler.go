@@ -157,7 +157,7 @@ func routeRequests(ctx context.Context, client kubernetes.Interface) ([]tunnelRo
 
 func publicRouteRequests(ctx context.Context, client kubernetes.Interface) ([]tunnelRoute, error) {
 	list, err := client.CoreV1().ConfigMaps("").List(ctx, metav1.ListOptions{
-		LabelSelector: "telos.ai/public-route=primary",
+		LabelSelector: publicRouteLabel + " in (primary,service,dashboard)",
 	})
 	if err != nil {
 		return nil, err
@@ -192,7 +192,7 @@ func publicRouteFromConfigMap(cm corev1.ConfigMap) (tunnelRoute, map[string]stri
 		return tunnelRoute{}, nil, false
 	}
 	protocol := routeProtocol(data, service)
-	routeType := routeType(data, cm.Name, protocol, service)
+	routeType := routeType(data, cm.Labels[publicRouteLabel], cm.Name, protocol, service)
 	prefix := strings.TrimSpace(data["prefix"])
 	if prefix == "" {
 		prefix = strings.TrimPrefix(cm.Namespace, "ns-")
@@ -308,7 +308,11 @@ func tunnelRouteService(protocol string, service string) string {
 	return envAPIService
 }
 
-func routeType(data map[string]string, name string, protocol string, service string) string {
+func routeType(data map[string]string, label string, name string, protocol string, service string) string {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "service", "dashboard":
+		return strings.ToLower(strings.TrimSpace(label))
+	}
 	if value := strings.ToLower(strings.TrimSpace(data["type"])); value != "" {
 		return value
 	}
