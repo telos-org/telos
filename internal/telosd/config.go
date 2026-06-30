@@ -141,7 +141,7 @@ func NormalizeConfig(cfg Config) (Config, error) {
 			cfg.Server.Listen = "0.0.0.0:8000"
 		}
 		if cfg.Runtime.ArtifactBaseURL == "" {
-			cfg.Runtime.ArtifactBaseURL = "https://usetelos.ai/releases"
+			cfg.Runtime.ArtifactBaseURL = "https://storage.googleapis.com/telos-runtime-artifacts/releases"
 		}
 		if cfg.Runtime.ArtifactVersion == "" {
 			cfg.Runtime.ArtifactVersion = "latest"

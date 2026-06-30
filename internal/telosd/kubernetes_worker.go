@@ -794,11 +794,11 @@ esac
 if [ "$version" = "latest" ]; then
   manifest="$(curl -fsSL -H 'Cache-Control: no-cache' "$base_url/latest/manifest.json?$(date +%%s)")"
   version="$(printf '%%s' "$manifest" | jq -r '.version')"
-  resolved_base_url="$(printf '%%s' "$manifest" | jq -r '.base_url')"
-  if [ -z "$version" ] || [ "$version" = "null" ] || [ -z "$resolved_base_url" ] || [ "$resolved_base_url" = "null" ]; then
+  if [ -z "$version" ] || [ "$version" = "null" ]; then
     echo "failed to parse Telos runtime manifest" >&2
     exit 1
   fi
+  resolved_base_url="$base_url/$version"
 else
   resolved_base_url="$base_url/$version"
 fi
