@@ -151,7 +151,7 @@ func TestPrintDeploymentDescriptionShowsProductSurfaces(t *testing.T) {
 	}
 }
 
-func TestPrintDeploymentStopReceiptUsesDeploymentSummary(t *testing.T) {
+func TestPrintDeploymentDeleteReceiptUsesDeploymentSummary(t *testing.T) {
 	deployment := cloud.DeploymentRecord{
 		ID:            "dep_123",
 		Name:          "auth",
@@ -163,10 +163,10 @@ func TestPrintDeploymentStopReceiptUsesDeploymentSummary(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printDeploymentStopReceipt(&out, deployment)
+	printDeploymentDeleteReceipt(&out, deployment)
 	text := out.String()
 	for _, want := range []string{
-		"stopped auth",
+		"deleted auth",
 		"Name      auth",
 		"Platform  cloud",
 		"Status    deleted",
@@ -207,7 +207,7 @@ func TestCmdDeleteDeletesDeployment(t *testing.T) {
 		t.Fatal("expected deployment delete request")
 	}
 	for _, want := range []string{
-		"stopped auth",
+		"deleted auth",
 		"Status    deleted",
 		"Deployment dep_123",
 	} {

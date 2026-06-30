@@ -24,7 +24,7 @@ func cmdLogs(args []string) {
 	parseFlags(fs, args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--raw] SESSION")
+		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--raw] SESSION|DEPLOYMENT")
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
