@@ -211,8 +211,9 @@ func TestCloudSessionStoreCleansKubernetesResourcesWhenInitialApplyFails(t *test
 func testCloudConfig(t *testing.T) Config {
 	t.Helper()
 	cfg, err := NormalizeConfig(Config{
-		Mode: ModeCloud,
-		Auth: AuthConfig{Token: "operator-token"},
+		Mode:   ModeCloud,
+		Auth:   AuthConfig{Token: "operator-token"},
+		Worker: WorkerConfig{Substrate: "kubernetes"},
 		Kubernetes: KubernetesConfig{
 			AgentImage:      "telos-agent:test",
 			EnvNamespace:    "ns-telos-env",

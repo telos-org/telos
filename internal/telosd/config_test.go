@@ -48,8 +48,8 @@ func TestNormalizeCloudConfigDefaults(t *testing.T) {
 	if cfg.Worker.Substrate != "local-process" {
 		t.Fatalf("worker substrate: got %q", cfg.Worker.Substrate)
 	}
-	if cfg.Kubernetes.AgentSecretKey != "SAIL_API_KEY" {
-		t.Fatalf("agent secret key: got %q", cfg.Kubernetes.AgentSecretKey)
+	if cfg.Kubernetes.AgentSecretKey != "" {
+		t.Fatalf("local-process cloud config should not fill kubernetes worker defaults: %+v", cfg.Kubernetes)
 	}
 }
 
@@ -64,6 +64,9 @@ func TestNormalizeCloudConfigAcceptsKubernetesWorkerSubstrate(t *testing.T) {
 	}
 	if cfg.Worker.Substrate != "kubernetes" {
 		t.Fatalf("worker substrate: got %q", cfg.Worker.Substrate)
+	}
+	if cfg.Kubernetes.AgentSecretKey != "SAIL_API_KEY" {
+		t.Fatalf("agent secret key: got %q", cfg.Kubernetes.AgentSecretKey)
 	}
 }
 
@@ -87,6 +90,7 @@ func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {
 		Token:           "operator-token",
 		AgentImage:      "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
 		ImagePullSecret: "explicit-pull",
+		Worker:          WorkerConfig{Substrate: "kubernetes"},
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
@@ -110,6 +114,7 @@ func TestNormalizeCloudConfigDefaultsGARImagePullSecret(t *testing.T) {
 		Mode:       ModeCloud,
 		Token:      "operator-token",
 		AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
+		Worker:     WorkerConfig{Substrate: "kubernetes"},
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
@@ -126,6 +131,7 @@ func TestNormalizeCloudConfigUsesImagePullSecretEnvOverride(t *testing.T) {
 		Mode:       ModeCloud,
 		Token:      "operator-token",
 		AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
+		Worker:     WorkerConfig{Substrate: "kubernetes"},
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
@@ -260,6 +266,8 @@ mode: cloud
 token_file: `+tokenPath+`
 agent_image: registry/telos-agent@sha256:abc123
 image_pull_secret: registry-pull
+worker:
+  substrate: kubernetes
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
