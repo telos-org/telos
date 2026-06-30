@@ -10,7 +10,8 @@
 //	telos list [--env ENV] [--limit N] [--wide] [--environments] [--local] [--cloud] [--json]
 //	telos describe SESSION [--env ENV] [--json]
 //	telos logs [-f] [--raw] SESSION [--env ENV]
-//	telos stop SESSION [--env ENV] [--json]
+//	telos stop SESSION|DEPLOYMENT [--env ENV] [--json]
+//	telos delete DEPLOYMENT [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
 //	telos version
 //	telos --version
@@ -58,6 +59,8 @@ func main() {
 		cmdLogs(os.Args[2:])
 	case "stop":
 		cmdStop(os.Args[2:])
+	case "delete":
+		cmdDelete(os.Args[2:])
 	case "login":
 		cmdLogin(os.Args[2:])
 	default:
@@ -82,7 +85,8 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  list               List sessions")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
 	fmt.Fprintln(out, "  logs SESSION       Show session progress")
-	fmt.Fprintln(out, "  stop SESSION       Stop a running session")
+	fmt.Fprintln(out, "  stop SESSION|DEPLOYMENT  Stop a session or deployment")
+	fmt.Fprintln(out, "  delete DEPLOYMENT  Delete a cloud deployment")
 	fmt.Fprintln(out, "  login              Configure cloud access")
 	fmt.Fprintln(out, "  version            Show version")
 	fmt.Fprintln(out, "")

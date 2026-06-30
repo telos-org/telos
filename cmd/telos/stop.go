@@ -51,6 +51,33 @@ func cmdStop(args []string) {
 	printStopReceipt(os.Stdout, *session)
 }
 
+func cmdDelete(args []string) {
+	fs := flag.NewFlagSet("delete", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "JSON output")
+	parseFlags(fs, args)
+
+	if fs.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "usage: telos delete DEPLOYMENT [--json]")
+		os.Exit(1)
+	}
+	deploymentID := fs.Arg(0)
+	if !isDeploymentID(deploymentID) {
+		fmt.Fprintln(os.Stderr, "error: telos delete only accepts deployment IDs")
+		os.Exit(1)
+	}
+
+	deployment, err := deleteDeployment(deploymentID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if *jsonOut {
+		printJSON(deployment)
+		return
+	}
+	printDeploymentStopReceipt(os.Stdout, *deployment)
+}
+
 func deleteDeployment(deploymentID string) (*cloud.DeploymentRecord, error) {
 	control, err := cloud.ControlClient()
 	if err != nil {

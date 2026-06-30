@@ -179,6 +179,44 @@ func TestPrintDeploymentStopReceiptUsesDeploymentSummary(t *testing.T) {
 	}
 }
 
+func TestCmdDeleteDeletesDeployment(t *testing.T) {
+	var deleted bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/deployments/dep_123" {
+			http.NotFound(w, r)
+			return
+		}
+		deleted = true
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":             "dep_123",
+			"name":           "auth",
+			"state":          "deleted",
+			"package_ref":    "@telos/auth:1.0.0",
+			"package_digest": "sha256:abc",
+			"created_at":     "then",
+			"updated_at":     "now",
+		})
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+
+	out := captureStdout(t, func() {
+		cmdDelete([]string{"dep_123"})
+	})
+	if !deleted {
+		t.Fatal("expected deployment delete request")
+	}
+	for _, want := range []string{
+		"stopped auth",
+		"Status    deleted",
+		"Deployment dep_123",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("delete output missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestSessionResultPrefersSessionResultThenLatestEpoch(t *testing.T) {
 	completed := "completed"
 	if got := sessionResult(sessionapi.Session{Result: &completed}); got != "completed" {
