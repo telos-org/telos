@@ -70,7 +70,7 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", "")
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root")
 	text := out.String()
 	for _, want := range []string{
 		"Spec      hello-service",
@@ -104,7 +104,7 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", "env_123")
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root")
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",
@@ -115,7 +115,7 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 		"Namespace ns-gitea",
 		"Hash      8a8f0c21",
 		"Skills    verify-engineering, verify-quality",
-		"Target    env_123",
+		"Target    cloud deployment",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("plan output missing %q:\n%s", want, text)
@@ -333,7 +333,6 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 	tests := []struct {
 		name            string
 		platform        string
-		envID           string
 		cloudConfigured bool
 		localConfigSet  bool
 		want            launchMode
@@ -351,12 +350,6 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 			want:           launchLocal,
 		},
 		{
-			name:     "local spec rejects env",
-			platform: "local",
-			envID:    "env_123",
-			wantErr:  "--env is no longer supported",
-		},
-		{
 			name:            "unspecified platform is cloud",
 			cloudConfigured: true,
 			want:            launchCloudApply,
@@ -364,12 +357,6 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 		{
 			name:    "unspecified platform requires cloud login",
 			wantErr: "non-local spec requires cloud config",
-		},
-		{
-			name:     "cloud spec rejects env",
-			platform: "cloud",
-			envID:    "env_123",
-			wantErr:  "--env is no longer supported",
 		},
 		{
 			name:           "cloud rejects local flags",
@@ -383,7 +370,6 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := decideLaunchMode(
 				tt.platform,
-				tt.envID,
 				tt.cloudConfigured,
 				tt.localConfigSet,
 			)
@@ -717,7 +703,7 @@ func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
 
 	var out bytes.Buffer
 	slept := false
-	err = followTranscript(session.SessionID, "", &out, func(time.Duration) {
+	err = followTranscript(session.SessionID, &out, func(time.Duration) {
 		if slept {
 			t.Fatal("unexpected second sleep")
 		}
@@ -762,7 +748,7 @@ func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err = followTranscript(session.SessionID, "", &out, func(time.Duration) {
+	err = followTranscript(session.SessionID, &out, func(time.Duration) {
 		t.Fatal("terminal session should not sleep")
 	}, false)
 	if err == nil {
@@ -800,7 +786,7 @@ func TestFollowTranscriptSurfacesRootTranscriptError(t *testing.T) {
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
 
 	var out bytes.Buffer
-	err := followTranscript("sess_running", "", &out, func(time.Duration) {
+	err := followTranscript("sess_running", &out, func(time.Duration) {
 		t.Fatal("500 transcript errors should not sleep")
 	}, false)
 	if err == nil {
@@ -916,7 +902,7 @@ func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
 
-	_, err := getSessionFromAnywhere("sess_root", "")
+	_, err := getSessionFromAnywhere("sess_root")
 	if err == nil {
 		t.Fatal("expected root lookup to fail")
 	}
@@ -932,7 +918,7 @@ func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
 	configureLocalOnlyTest(t)
 	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
 
-	_, err := getSessionFromAnywhere("local_missing", "")
+	_, err := getSessionFromAnywhere("local_missing")
 	if err == nil {
 		t.Fatal("expected missing local session")
 	}

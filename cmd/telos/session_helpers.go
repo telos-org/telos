@@ -72,12 +72,9 @@ func isDeploymentID(id string) bool {
 	return strings.HasPrefix(id, "dep_")
 }
 
-func getSessionFromAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
-	if isDeploymentID(sessionID) && envID == "" {
+func getSessionFromAnywhere(sessionID string) (*sessionapi.Session, error) {
+	if isDeploymentID(sessionID) {
 		return nil, fmt.Errorf("deployment %s is not a session; use deployment-aware command output", sessionID)
-	}
-	if envID != "" {
-		return nil, fmt.Errorf("--env is no longer supported; use deployment IDs")
 	}
 
 	// Try local first
@@ -98,16 +95,13 @@ func getSessionFromAnywhere(sessionID, envID string) (*sessionapi.Session, error
 	return nil, localSessionNotFoundError(sessionID)
 }
 
-func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
-	if isDeploymentID(sessionID) && envID == "" {
+func getTranscriptFromAnywhere(sessionID string) (string, error) {
+	if isDeploymentID(sessionID) {
 		control, err := cloud.ControlClient()
 		if err != nil {
 			return "", err
 		}
 		return control.GetDeploymentTranscript(sessionID)
-	}
-	if envID != "" {
-		return "", fmt.Errorf("--env is no longer supported; use deployment IDs")
 	}
 
 	s := store()
@@ -130,12 +124,9 @@ func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
 	return "", localSessionNotFoundError(sessionID)
 }
 
-func stopSessionAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
-	if isDeploymentID(sessionID) && envID == "" {
+func stopSessionAnywhere(sessionID string) (*sessionapi.Session, error) {
+	if isDeploymentID(sessionID) {
 		return nil, fmt.Errorf("deployment %s is not a session; use deployment delete", sessionID)
-	}
-	if envID != "" {
-		return nil, fmt.Errorf("--env is no longer supported; use deployment IDs")
 	}
 
 	s := store()

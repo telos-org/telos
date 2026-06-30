@@ -20,7 +20,6 @@ import (
 func cmdLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	follow := fs.Bool("f", false, "Follow logs")
-	env := fs.String("env", "", "Cloud environment")
 	raw := fs.Bool("raw", false, "Show raw transcript")
 	parseFlags(fs, args)
 
@@ -31,15 +30,15 @@ func cmdLogs(args []string) {
 	sessionID := fs.Arg(0)
 
 	if *follow {
-		if isDeploymentID(sessionID) && *env == "" {
+		if isDeploymentID(sessionID) {
 			followDeploymentLogs(sessionID, *raw)
 			return
 		}
-		followLogs(sessionID, *env, *raw)
+		followLogs(sessionID, *raw)
 		return
 	}
 
-	text, err := getTranscriptFromAnywhere(sessionID, *env)
+	text, err := getTranscriptFromAnywhere(sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -47,8 +46,8 @@ func cmdLogs(args []string) {
 	printLogs(os.Stdout, text, *raw)
 }
 
-func followLogs(sessionID, envID string, raw bool) {
-	if err := followTranscript(sessionID, envID, os.Stdout, time.Sleep, raw); err != nil {
+func followLogs(sessionID string, raw bool) {
+	if err := followTranscript(sessionID, os.Stdout, time.Sleep, raw); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -128,13 +127,13 @@ func deploymentStateTerminal(state string) bool {
 	}
 }
 
-func followTranscript(sessionID, envID string, out io.Writer, sleep func(time.Duration), raw bool) error {
+func followTranscript(sessionID string, out io.Writer, sleep func(time.Duration), raw bool) error {
 	var lastLen int
 	var lastBlockCount int
 	var lastProgressCount int
 	var lastTranscriptErr error
 	for {
-		text, err := getTranscriptFromAnywhere(sessionID, envID)
+		text, err := getTranscriptFromAnywhere(sessionID)
 		if err == nil && raw && len(text) > lastLen {
 			fmt.Fprint(out, text[lastLen:])
 			lastLen = len(text)
@@ -154,7 +153,7 @@ func followTranscript(sessionID, envID string, out io.Writer, sleep func(time.Du
 		} else {
 			lastTranscriptErr = nil
 		}
-		sess, err := getSessionFromAnywhere(sessionID, envID)
+		sess, err := getSessionFromAnywhere(sessionID)
 		if err != nil {
 			return err
 		}

@@ -14,7 +14,6 @@ import (
 
 func cmdStop(args []string) {
 	fs := flag.NewFlagSet("stop", flag.ExitOnError)
-	env := fs.String("env", "", "Cloud environment")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
@@ -24,7 +23,7 @@ func cmdStop(args []string) {
 	}
 	sessionID := fs.Arg(0)
 
-	if isDeploymentID(sessionID) && *env == "" {
+	if isDeploymentID(sessionID) {
 		deployment, err := deleteDeployment(sessionID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -38,7 +37,7 @@ func cmdStop(args []string) {
 		return
 	}
 
-	session, err := stopSessionAnywhere(sessionID, *env)
+	session, err := stopSessionAnywhere(sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

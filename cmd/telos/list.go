@@ -15,23 +15,13 @@ import (
 
 func cmdList(args []string) {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
-	env := fs.String("env", "", "Cloud environment")
 	limit := fs.Int("limit", 0, "Limit results")
 	wide := fs.Bool("wide", false, "Wide output")
-	environments := fs.Bool("environments", false, "List cloud environments")
 	localOnly := fs.Bool("local", false, "Local sessions only")
 	cloudOnly := fs.Bool("cloud", false, "Cloud sessions only")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
-	if *environments {
-		fmt.Fprintln(os.Stderr, "error: --environments is no longer supported; telos list shows deployments")
-		os.Exit(1)
-	}
-	if *env != "" {
-		fmt.Fprintln(os.Stderr, "error: --env is no longer supported; use deployment IDs")
-		os.Exit(1)
-	}
 	if *cloudOnly {
 		listDeployments(*jsonOut, *limit, *wide)
 		return

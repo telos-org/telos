@@ -15,7 +15,6 @@ import (
 
 func cmdDescribe(args []string) {
 	fs := flag.NewFlagSet("describe", flag.ExitOnError)
-	env := fs.String("env", "", "Cloud environment")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
@@ -25,7 +24,7 @@ func cmdDescribe(args []string) {
 	}
 	sessionID := fs.Arg(0)
 
-	if isDeploymentID(sessionID) && *env == "" {
+	if isDeploymentID(sessionID) {
 		deployment, err := getDeployment(sessionID)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -39,7 +38,7 @@ func cmdDescribe(args []string) {
 		return
 	}
 
-	session, err := getSessionFromAnywhere(sessionID, *env)
+	session, err := getSessionFromAnywhere(sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
