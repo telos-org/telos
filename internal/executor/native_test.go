@@ -337,6 +337,53 @@ func TestEffectiveTurnTimeoutUsesRemainingDurationBudget(t *testing.T) {
 	}
 }
 
+func TestNativeConfigRequestTimeoutResolution(t *testing.T) {
+	const glm = "sail-research/zai-org/GLM-5.2-FP8"
+	tests := []struct {
+		name    string
+		envVar  string
+		cfg     nativeConfig
+		model   string
+		wantSec int
+	}{
+		{name: "default when nothing configured", model: glm, wantSec: DefaultNativeRequestTimeoutSec},
+		{name: "process env default", envVar: "600", model: glm, wantSec: 600},
+		{
+			name:    "default capability profile overrides env",
+			envVar:  "600",
+			cfg:     nativeConfig{defaultCapability: modelCapabilityProfile{RequestTimeoutSec: 900}},
+			model:   glm,
+			wantSec: 900,
+		},
+		{
+			name:    "per-model capability wins over default",
+			cfg:     nativeConfig{capability: map[string]modelCapabilityProfile{glm: {RequestTimeoutSec: 120}}, defaultCapability: modelCapabilityProfile{RequestTimeoutSec: 900}},
+			model:   glm,
+			wantSec: 120,
+		},
+		{
+			name:    "negative per-model disables the bound",
+			cfg:     nativeConfig{capability: map[string]modelCapabilityProfile{glm: {RequestTimeoutSec: -1}}},
+			model:   glm,
+			wantSec: 0,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.envVar != "" {
+				t.Setenv("TELOS_NATIVE_REQUEST_TIMEOUT_SEC", tt.envVar)
+			} else {
+				t.Setenv("TELOS_NATIVE_REQUEST_TIMEOUT_SEC", "")
+			}
+			got := tt.cfg.requestTimeout(tt.model)
+			want := time.Duration(tt.wantSec) * time.Second
+			if got != want {
+				t.Fatalf("requestTimeout: got %s want %s", got, want)
+			}
+		})
+	}
+}
+
 func TestNativeExecutorLogsTurnTimeoutError(t *testing.T) {
 	workspace := t.TempDir()
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

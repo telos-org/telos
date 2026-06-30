@@ -6,7 +6,19 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// DefaultNativeRequestTimeoutSec bounds a single provider HTTP request (the full
+// streamed completion). The native executor otherwise drives requests with
+// http.DefaultClient, which has no timeout, so a wedged provider request — the
+// connection is accepted but the response never completes — hangs until the turn
+// budget, which is itself unbounded when --agent-timeout-sec is 0. 30 minutes
+// fails a hung request fast while leaving headroom for long reasoning
+// generations. Override the process default with TELOS_NATIVE_REQUEST_TIMEOUT_SEC
+// (or TELOS_MODEL_REQUEST_TIMEOUT_SEC) and per model via the capability profile's
+// request_timeout_sec; a resolved value <= 0 disables the bound.
+const DefaultNativeRequestTimeoutSec = 1800
 
 // nativeConfig is the process-level executor configuration, resolved once from
 // environment in NewNativeExecutor. It carries the base URL, API key, and the
@@ -94,6 +106,39 @@ func (c nativeConfig) providerFor(model string) (nativeProviderConfig, error) {
 	}, nil
 }
 
+// requestTimeout resolves the per-request HTTP timeout for a model. Precedence:
+// the model's capability-table request_timeout_sec → the process default
+// capability profile (TELOS_MODEL_REQUEST_TIMEOUT_SEC) → TELOS_NATIVE_REQUEST_TIMEOUT_SEC
+// → DefaultNativeRequestTimeoutSec. A non-zero capability value wins (including a
+// negative value, which disables the bound for that model); a resolved value
+// <= 0 returns 0, meaning "no timeout".
+func (c nativeConfig) requestTimeout(model string) time.Duration {
+	sec := 0
+	if specific, ok := c.capability[strings.TrimSpace(model)]; ok && specific.RequestTimeoutSec != 0 {
+		sec = specific.RequestTimeoutSec
+	} else if c.defaultCapability.RequestTimeoutSec != 0 {
+		sec = c.defaultCapability.RequestTimeoutSec
+	} else {
+		sec = nativeRequestTimeoutDefaultSec()
+	}
+	if sec <= 0 {
+		return 0
+	}
+	return time.Duration(sec) * time.Second
+}
+
+// nativeRequestTimeoutDefaultSec is the process-wide request-timeout default,
+// read from TELOS_NATIVE_REQUEST_TIMEOUT_SEC and falling back to
+// DefaultNativeRequestTimeoutSec when unset or unparseable.
+func nativeRequestTimeoutDefaultSec() int {
+	if raw := strings.TrimSpace(os.Getenv("TELOS_NATIVE_REQUEST_TIMEOUT_SEC")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			return n
+		}
+	}
+	return DefaultNativeRequestTimeoutSec
+}
+
 type nativeProviderConfig struct {
 	Provider   string
 	Model      string
@@ -106,6 +151,7 @@ type modelCapabilityProfile struct {
 	StateMode               string `json:"state_mode,omitempty"`
 	MaxOutputTokens         int    `json:"max_output_tokens,omitempty"`
 	ContextWindow           int    `json:"context_window,omitempty"`
+	RequestTimeoutSec       int    `json:"request_timeout_sec,omitempty"`
 	SupportsReasoning       *bool  `json:"supports_reasoning,omitempty"`
 	SupportsFunctionCalling *bool  `json:"supports_function_calling,omitempty"`
 	StrictProtocol          bool   `json:"strict_protocol,omitempty"`
@@ -202,6 +248,11 @@ func modelCapabilityProfileFromEnv() modelCapabilityProfile {
 	if raw := strings.TrimSpace(os.Getenv("TELOS_MODEL_CONTEXT_WINDOW")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
 			profile.ContextWindow = n
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("TELOS_MODEL_REQUEST_TIMEOUT_SEC")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			profile.RequestTimeoutSec = n
 		}
 	}
 	if raw := strings.TrimSpace(os.Getenv("TELOS_MODEL_SUPPORTS_REASONING")); raw != "" {

@@ -49,12 +49,17 @@ func NewNativeExecutorWithGateway(p *platform.LocalPlatform, model, thinking str
 		thinking = "medium"
 	}
 	cfg, err := resolveNativeConfigWithGateway(gateway)
+	// Bound each provider HTTP request (the full streamed completion) so a wedged
+	// request fails fast instead of hanging until the turn budget — which is
+	// unbounded when --agent-timeout-sec is 0. http.Client.Timeout covers the
+	// whole request including the SSE body read, and composes with the per-turn
+	// context deadline (whichever fires first wins). A zero timeout disables it.
 	return &NativeExecutor{
 		Platform:  p,
 		Model:     model,
 		Thinking:  thinking,
 		Timeout:   timeout,
-		Client:    http.DefaultClient,
+		Client:    &http.Client{Timeout: cfg.requestTimeout(model)},
 		config:    cfg,
 		configErr: err,
 		cleanup:   cleanup,
