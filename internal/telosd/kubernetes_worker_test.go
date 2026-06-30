@@ -73,8 +73,8 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 		t.Fatalf("init containers: got %d", len(deployment.Spec.Template.Spec.InitContainers))
 	}
 	installCommand := strings.Join(deployment.Spec.Template.Spec.InitContainers[0].Command, " ")
-	if !strings.Contains(installCommand, "https://usetelos.ai/releases") {
-		t.Fatalf("install command missing public release URL: %q", installCommand)
+	if !strings.Contains(installCommand, "https://storage.googleapis.com/telos-runtime-artifacts/releases") {
+		t.Fatalf("install command missing runtime artifact base URL: %q", installCommand)
 	}
 	if len(deployment.Spec.Template.Spec.ImagePullSecrets) != 1 ||
 		deployment.Spec.Template.Spec.ImagePullSecrets[0].Name != cfg.Kubernetes.ImagePullSecret {
