@@ -3,11 +3,15 @@ package telosd
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 )
 
 var routeNamespaceRE = regexp.MustCompile(`\.(ns-[a-z0-9-]+)\.svc(?:\.|:|/|$)`)
@@ -70,6 +74,19 @@ func dashboardHandleFor(routes []publicRoute, session sessionapi.Session) string
 }
 
 func readPublicRoutes(ctx context.Context) ([]publicRoute, error) {
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		config, err := rest.InClusterConfig()
+		if err == nil {
+			client, err := kubernetes.NewForConfig(config)
+			if err == nil {
+				return readPublicRoutesFromClient(ctx, client)
+			}
+		}
+	}
+	return readPublicRoutesWithKubectl(ctx)
+}
+
+func readPublicRoutesWithKubectl(ctx context.Context) ([]publicRoute, error) {
 	out, err := kubectlOutput(
 		ctx,
 		2*time.Second,
@@ -85,6 +102,26 @@ func readPublicRoutes(ctx context.Context) ([]publicRoute, error) {
 		return nil, err
 	}
 	return parsePublicRoutes(out)
+}
+
+func readPublicRoutesFromClient(ctx context.Context, client kubernetes.Interface) ([]publicRoute, error) {
+	list, err := client.CoreV1().ConfigMaps("").List(ctx, metav1.ListOptions{
+		LabelSelector: publicRouteLabel + " in (primary,service,dashboard)",
+	})
+	if err != nil {
+		return nil, err
+	}
+	routes := make([]publicRoute, 0, len(list.Items))
+	for _, item := range list.Items {
+		routes = append(routes, publicRoute{
+			Namespace:   item.Namespace,
+			Name:        item.Name,
+			Labels:      item.Labels,
+			Annotations: item.Annotations,
+			Data:        item.Data,
+		})
+	}
+	return routes, nil
 }
 
 func parsePublicRoutes(data []byte) ([]publicRoute, error) {
