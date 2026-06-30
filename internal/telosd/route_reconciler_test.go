@@ -128,6 +128,54 @@ func TestReconcileTunnelRoutesPublishesEnvAndProductRoutes(t *testing.T) {
 	}
 }
 
+func TestPublicRouteUsesPlatformHostnamesBeforeRandomFallback(t *testing.T) {
+	t.Setenv("TELOS_SERVICE_HOSTNAME", "auth-dep123.usetelos.ai")
+	t.Setenv("TELOS_DASHBOARD_HOSTNAME", "dashboard-auth-dep123.usetelos.ai")
+
+	serviceRoute, servicePatch, ok := publicRouteFromConfigMap(corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "auth-route",
+			Namespace: "ns-auth",
+			Labels:    map[string]string{"telos.ai/public-route": "primary"},
+		},
+		Data: map[string]string{
+			"target_service": "auth.ns-auth.svc.cluster.local",
+			"target_port":    "8080",
+		},
+	})
+	if !ok {
+		t.Fatal("expected service route")
+	}
+	if serviceRoute.Hostname != "auth-dep123.usetelos.ai" {
+		t.Fatalf("service hostname: got %q", serviceRoute.Hostname)
+	}
+	if servicePatch["rand"] != "" {
+		t.Fatalf("service route should not allocate rand: %#v", servicePatch)
+	}
+
+	dashboardRoute, dashboardPatch, ok := publicRouteFromConfigMap(corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "dashboard-route",
+			Namespace: "ns-auth",
+			Labels:    map[string]string{"telos.ai/public-route": "primary"},
+		},
+		Data: map[string]string{
+			"target_service": "dashboard.ns-auth.svc.cluster.local",
+			"target_port":    "3000",
+			"type":           "dashboard",
+		},
+	})
+	if !ok {
+		t.Fatal("expected dashboard route")
+	}
+	if dashboardRoute.Hostname != "dashboard-auth-dep123.usetelos.ai" {
+		t.Fatalf("dashboard hostname: got %q", dashboardRoute.Hostname)
+	}
+	if dashboardPatch["rand"] != "" {
+		t.Fatalf("dashboard route should not allocate rand: %#v", dashboardPatch)
+	}
+}
+
 func TestReconcileTunnelRoutesLabelsManagedNamespaces(t *testing.T) {
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "default"}},
