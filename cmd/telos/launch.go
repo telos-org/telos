@@ -27,7 +27,6 @@ func cmdApply(args []string) {
 func cmdLaunch(command, action string, args []string) {
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	workspace := fs.String("workspace", "", "Workspace directory")
-	env := fs.String("env", "", "Cloud environment ID")
 	scope := fs.String("scope", "", "Package scope")
 	model := fs.String("model", "", "Model name")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
@@ -46,10 +45,6 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintln(os.Stderr, "error: --until is only supported with telos run")
 		os.Exit(1)
 	}
-	if command == "apply" && *env != "" {
-		fmt.Fprintln(os.Stderr, "error: --env is no longer supported with telos apply; deployments allocate environments automatically")
-		os.Exit(1)
-	}
 	if command != "apply" && flagNameSet(fs, "scope") {
 		fmt.Fprintln(os.Stderr, "error: --scope is only supported with telos apply")
 		os.Exit(1)
@@ -65,10 +60,6 @@ func cmdLaunch(command, action string, args []string) {
 	if ctx, ok := rootSessionContext(); ok {
 		if command == "apply" {
 			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for child sessions")
-			os.Exit(1)
-		}
-		if *env != "" {
-			fmt.Fprintln(os.Stderr, "error: --env is not supported inside a root session")
 			os.Exit(1)
 		}
 		if localConfigSet {
@@ -96,7 +87,6 @@ func cmdLaunch(command, action string, args []string) {
 
 	launchMode, err := decideLaunchMode(
 		platform,
-		*env,
 		config.IsConfigured(),
 		localConfigSet,
 	)
@@ -197,13 +187,9 @@ const (
 
 func decideLaunchMode(
 	platform string,
-	envID string,
 	cloudConfigured bool,
 	localConfigSet bool,
 ) (launchMode, error) {
-	if envID != "" {
-		return "", fmt.Errorf("--env is no longer supported; use deployments")
-	}
 	if platform == "local" {
 		return launchLocal, nil
 	}

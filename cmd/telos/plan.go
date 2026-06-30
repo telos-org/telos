@@ -15,7 +15,6 @@ import (
 
 func cmdPlan(args []string) {
 	fs := flag.NewFlagSet("plan", flag.ExitOnError)
-	env := fs.String("env", "", "Existing cloud environment ID")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
@@ -34,12 +33,8 @@ func cmdPlan(args []string) {
 	if platform == "" {
 		platform = "cloud"
 	}
-	if *env != "" && platform == "local" {
-		fmt.Fprintln(os.Stderr, "error: --env cannot be used with platform: local specs")
-		os.Exit(1)
-	}
 	targetMode := "local"
-	willAllocateEnvironment := false
+	willCreateDeployment := false
 	sessionLineage := "root"
 	userScope := map[string]interface{}{
 		"status": "local",
@@ -47,16 +42,12 @@ func cmdPlan(args []string) {
 		"detail": "no cloud auth required",
 	}
 	if platform != "local" {
-		if *env != "" {
-			targetMode = "cloud env " + *env
-		} else {
-			targetMode = "cloud"
-			willAllocateEnvironment = true
-		}
+		targetMode = "cloud deployment"
+		willCreateDeployment = true
 		userScope = map[string]interface{}{
 			"status": "missing",
 			"label":  "not logged in",
-			"detail": "run `telos login` before `telos run`",
+			"detail": "run `telos login` before `telos apply`",
 		}
 		if config.IsConfigured() {
 			userScope = map[string]interface{}{
@@ -81,10 +72,10 @@ func cmdPlan(args []string) {
 			"interval_seconds": compiled.Environment.IntervalSeconds,
 		},
 		"target": map[string]interface{}{
-			"mode":                      targetMode,
-			"will_allocate_environment": willAllocateEnvironment,
-			"will_create_session":       true,
-			"will_mutate":               false,
+			"mode":                   targetMode,
+			"will_create_deployment": willCreateDeployment,
+			"will_create_session":    platform == "local",
+			"will_mutate":            false,
 		},
 		"user": userScope,
 	}
@@ -94,7 +85,7 @@ func cmdPlan(args []string) {
 		return
 	}
 
-	printPlanPreview(os.Stdout, compiled, specPath, platform, sessionLineage, *env)
+	printPlanPreview(os.Stdout, compiled, specPath, platform, sessionLineage)
 }
 
 func printPlanPreview(
@@ -103,7 +94,6 @@ func printPlanPreview(
 	specPath string,
 	platform string,
 	sessionLineage string,
-	envID string,
 ) {
 	printSummaryField(out, "Spec", compiled.Environment.Name)
 	printSummaryField(out, "Platform", platform)
@@ -118,11 +108,7 @@ func printPlanPreview(
 		printSummaryField(out, "Skills", strings.Join(skillNames(compiled.Skills), ", "))
 	}
 	if platform != "local" {
-		target := "cloud"
-		if envID != "" {
-			target = envID
-		}
-		printSummaryField(out, "Target", target)
+		printSummaryField(out, "Target", "cloud deployment")
 	}
 }
 
