@@ -5,8 +5,9 @@ go_library(
     srcs = [
         "cloud_store.go",
         "config.go",
-        "control_reconciler.go",
+        "deployment_bootstrap.go",
         "kubernetes_worker.go",
+        "local_process_worker.go",
         "route_reconciler.go",
         "route_handles.go",
         "server.go",
@@ -20,6 +21,7 @@ go_library(
         "//internal/cli",
         "//internal/game",
         "//internal/sessionapi",
+        "//internal/sessionworker",
         "@in_gopkg_yaml_v3//:yaml_v3",
         "@io_k8s_api//apps/v1:apps",
         "@io_k8s_api//batch/v1:batch",
@@ -39,7 +41,7 @@ go_test(
     name = "telosd_test",
     srcs = [
         "config_test.go",
-        "control_reconciler_test.go",
+        "deployment_bootstrap_test.go",
         "kubernetes_worker_test.go",
         "route_reconciler_test.go",
         "route_handles_test.go",
