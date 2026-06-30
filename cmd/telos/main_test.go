@@ -978,7 +978,6 @@ func configureCloudTest(t *testing.T, endpoint string) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("TELOS_CONFIG", filepath.Join(dir, "config.yaml"))
-	t.Setenv("TELOS_ENVIRONMENTS_CONFIG", filepath.Join(dir, "environments.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", endpoint)
 	t.Setenv("TELOS_AUTH_TOKEN", "control-token")
 }
@@ -987,7 +986,6 @@ func configureLocalOnlyTest(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("TELOS_CONFIG", filepath.Join(dir, "config.yaml"))
-	t.Setenv("TELOS_ENVIRONMENTS_CONFIG", filepath.Join(dir, "environments.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", "")
 	t.Setenv("TELOS_AUTH_TOKEN", "")
 }

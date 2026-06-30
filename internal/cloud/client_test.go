@@ -8,7 +8,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
@@ -105,92 +104,6 @@ func TestClientListSessions(t *testing.T) {
 	}
 	if gotPath != "/api/sessions?limit=2&include_children=true" {
 		t.Fatalf("include children request path: got %q", gotPath)
-	}
-}
-
-func TestClientListEnvironments(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/environments" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"environments": []map[string]any{{
-				"id":                         "env_123",
-				"env_handle":                 "env-abc.usetelos.ai",
-				"state":                      "ready",
-				"has_recoverable_env_access": true,
-			}},
-		})
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "token")
-	envs, err := client.ListEnvironments()
-	if err != nil {
-		t.Fatalf("ListEnvironments: %v", err)
-	}
-	if len(envs) != 1 {
-		t.Fatalf("expected 1 environment, got %d", len(envs))
-	}
-	if envs[0].ID != "env_123" || envs[0].Handle != "env-abc.usetelos.ai" {
-		t.Fatalf("unexpected environment: %+v", envs[0])
-	}
-	if !envs[0].HasRecoverable {
-		t.Fatal("expected recoverable environment")
-	}
-}
-
-func TestClientCreateEnvironment(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/environments" || r.Method != "POST" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"id":           "env_123",
-			"env_handle":   "env-abc.usetelos.ai",
-			"access_token": "env-token",
-			"state":        "provisioning",
-		})
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "token")
-	env, err := client.CreateEnvironment()
-	if err != nil {
-		t.Fatalf("CreateEnvironment: %v", err)
-	}
-	if env.ID != "env_123" || env.Handle != "env-abc.usetelos.ai" || env.AccessToken != "env-token" {
-		t.Fatalf("unexpected environment: %+v", env)
-	}
-}
-
-func TestClientCreateEnvironmentAcceptsLegacyAccessField(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/environments" || r.Method != http.MethodPost {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
-			"id":          "env_123",
-			"env_handle":  "env-abc.usetelos.ai",
-			"env_api_key": "legacy-token",
-			"state":       "provisioning",
-		})
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "token")
-	env, err := client.CreateEnvironment()
-	if err != nil {
-		t.Fatalf("CreateEnvironment: %v", err)
-	}
-	if env.AccessToken != "legacy-token" {
-		t.Fatalf("access token: got %q", env.AccessToken)
 	}
 }
 
@@ -470,46 +383,6 @@ func TestClientApplySessionSpec(t *testing.T) {
 	}
 	if response.Session.SessionID != "sess_controller" {
 		t.Fatalf("session: got %#v", response.Session)
-	}
-}
-
-func TestWaitForEnvironmentRequiresSuccessStatus(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/healthz" {
-			http.NotFound(w, r)
-			return
-		}
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-
-	err := waitForEnvironment(srv.URL, 10*time.Millisecond, srv.Client(), time.Millisecond)
-	if err == nil {
-		t.Fatal("expected readiness error")
-	}
-	if !strings.Contains(err.Error(), "HTTP 401") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestWaitForEnvironmentSucceedsOnSuccessStatus(t *testing.T) {
-	attempts := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		attempts++
-		if r.URL.Path != "/api/healthz" {
-			http.NotFound(w, r)
-			return
-		}
-		if attempts == 1 {
-			w.WriteHeader(http.StatusServiceUnavailable)
-			return
-		}
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	if err := waitForEnvironment(srv.URL, time.Second, srv.Client(), time.Millisecond); err != nil {
-		t.Fatalf("WaitForEnvironment: %v", err)
 	}
 }
 
