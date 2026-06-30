@@ -28,15 +28,19 @@ func cmdList(args []string) {
 		fmt.Fprintln(os.Stderr, "error: --environments is no longer supported; telos list shows deployments")
 		os.Exit(1)
 	}
+	if *env != "" {
+		fmt.Fprintln(os.Stderr, "error: --env is no longer supported; use deployment IDs")
+		os.Exit(1)
+	}
+	if *cloudOnly {
+		listDeployments(*jsonOut, *limit, *wide)
+		return
+	}
 
 	var sessions []sessionapi.Session
 	rootScoped := false
-	fetchLimit := 0
-	if *wide {
-		fetchLimit = *limit
-	}
 
-	if !*localOnly && *env == "" {
+	if !*localOnly {
 		rootSessions, handled, err := rootListSessions(*limit)
 		if handled {
 			if err != nil {
@@ -49,10 +53,10 @@ func cmdList(args []string) {
 			listDeployments(*jsonOut, *limit, *wide)
 			return
 		} else {
-			sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit, *wide)...)
+			sessions = append(sessions, listLocalSessions()...)
 		}
 	} else {
-		sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit, *wide)...)
+		sessions = append(sessions, listLocalSessions()...)
 	}
 
 	effectiveWide := *wide || rootScoped
@@ -154,23 +158,10 @@ func sessionTreeForRoot(sessions []sessionapi.Session, rootID string) []sessiona
 	return out
 }
 
-func listLocalAndConfiguredCloudSessions(localOnly bool, cloudOnly bool, envID string, limit int, includeChildren bool) []sessionapi.Session {
-	var sessions []sessionapi.Session
-	if !cloudOnly {
-		local, err := store().List()
-		if err == nil {
-			sessions = append(sessions, local...)
-		}
-	}
-	if !localOnly && (cloudOnly || envID != "" || config.IsConfigured()) {
-		cloudSessions, err := listCloudSessions(envID, limit, includeChildren)
-		if err != nil && (cloudOnly || envID != "") {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		if err == nil {
-			sessions = append(sessions, cloudSessions...)
-		}
+func listLocalSessions() []sessionapi.Session {
+	sessions, err := store().List()
+	if err != nil {
+		return nil
 	}
 	return sessions
 }

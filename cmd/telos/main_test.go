@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/cloud"
-	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -606,75 +605,6 @@ func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
 	}
 	if deployment.ID != "dep_123" {
 		t.Fatalf("deployment: got %+v", deployment)
-	}
-}
-
-func TestCloudSessionClientsExplicitUnknownEnvReturnsError(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/environments" {
-			http.NotFound(w, r)
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{"environments": []map[string]any{}})
-	}))
-	defer srv.Close()
-	configureCloudTest(t, srv.URL)
-
-	clients, err := cloudSessionClients("env_missing")
-	if err == nil {
-		t.Fatal("expected explicit env lookup to return an error")
-	}
-	if len(clients) != 0 {
-		t.Fatalf("expected no clients, got %d", len(clients))
-	}
-	if !strings.Contains(err.Error(), "environment env_missing not found") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestCloudSessionClientsRecoverEnvironmentAccess(t *testing.T) {
-	var recovered bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/environments":
-			json.NewEncoder(w).Encode(map[string]any{
-				"environments": []map[string]any{{
-					"id":                         "env_123",
-					"env_handle":                 "env-abc.usetelos.ai",
-					"state":                      "ready",
-					"has_recoverable_env_access": true,
-				}},
-			})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/environments/env_123/access":
-			recovered = true
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":           "env_123",
-				"env_handle":   "env-abc.usetelos.ai",
-				"access_token": "env-token",
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-	configureCloudTest(t, srv.URL)
-
-	clients, err := cloudSessionClients("")
-	if err != nil {
-		t.Fatalf("cloudSessionClients: %v", err)
-	}
-	if len(clients) != 1 {
-		t.Fatalf("expected one cloud client, got %d", len(clients))
-	}
-	if !recovered {
-		t.Fatal("expected recoverable environment access to be issued")
-	}
-	access, ok := config.EnvironmentAccessByID("env_123")
-	if !ok {
-		t.Fatal("expected recovered access to be saved")
-	}
-	if access.Token != "env-token" {
-		t.Fatalf("saved token: got %q", access.Token)
 	}
 }
 
