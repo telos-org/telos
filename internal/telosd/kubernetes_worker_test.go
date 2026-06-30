@@ -289,8 +289,21 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	if !hasReadonlyVolumeMount(initContainer.VolumeMounts, "pi-agent-config-source", "/telos-pi-agent-config") {
 		t.Fatalf("init container missing Pi config seed mount: %+v", initContainer.VolumeMounts)
 	}
+	if !hasWritableVolumeMount(initContainer.VolumeMounts, "telos-state", "/telos-state") {
+		t.Fatalf("init container missing state mount: %+v", initContainer.VolumeMounts)
+	}
+	if !hasWritableVolumeMount(initContainer.VolumeMounts, "agent-skills-home", "/home/agent/.agents/skills") {
+		t.Fatalf("init container missing writable agent skills mount: %+v", initContainer.VolumeMounts)
+	}
 	if !hasWritableVolumeMount(initContainer.VolumeMounts, "pi-agent-config-home", "/home/agent/.pi/agent") {
 		t.Fatalf("init container missing writable Pi config mount: %+v", initContainer.VolumeMounts)
+	}
+	initCommand := strings.Join(initContainer.Command, " ")
+	if !strings.Contains(initCommand, "/telos-state/sessions/"+sessionID+"/package/skills") {
+		t.Fatalf("init command missing package skills source: %q", initCommand)
+	}
+	if !strings.Contains(initCommand, "/home/agent/.agents/skills") {
+		t.Fatalf("init command missing package skills destination: %q", initCommand)
 	}
 	container := template.Spec.Containers[0]
 	assertAgentSecurityContext(t, container.SecurityContext)
@@ -309,6 +322,9 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	}
 	if !hasWritableVolumeMount(container.VolumeMounts, "pi-agent-config-home", "/home/agent/.pi/agent") {
 		t.Fatalf("worker missing Pi config mount: %+v", container.VolumeMounts)
+	}
+	if !hasWritableVolumeMount(container.VolumeMounts, "agent-skills-home", "/home/agent/.agents/skills") {
+		t.Fatalf("worker missing agent skills mount: %+v", container.VolumeMounts)
 	}
 }
 
