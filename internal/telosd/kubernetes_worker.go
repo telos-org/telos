@@ -290,6 +290,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			}},
 		},
 		{Name: "telos-runtime", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "agent-skills-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{
 			Name: "pi-agent-config-source",
 			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
@@ -304,6 +305,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 		{Name: "telos-state", MountPath: s.stateMountRoot},
 		{Name: "telos-state", MountPath: s.stateHostRoot},
 		{Name: "telos-runtime", MountPath: s.runtimeMountPath},
+		{Name: "agent-skills-home", MountPath: "/home/agent/.agents/skills"},
 		{Name: "pi-agent-config-home", MountPath: "/home/agent/.pi/agent"},
 	}
 	podSpec := corev1.PodSpec{
@@ -315,9 +317,11 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			Image:           s.agentImage,
 			ImagePullPolicy: pullPolicy(s.agentImage),
 			SecurityContext: agentContainerSecurityContext(),
-			Command:         []string{"bash", "-lc", s.runtimeInstallScript()},
+			Command:         []string{"bash", "-lc", s.runtimeInstallScript(sessionID)},
 			VolumeMounts: []corev1.VolumeMount{
+				{Name: "telos-state", MountPath: s.stateMountRoot},
 				{Name: "telos-runtime", MountPath: s.runtimeMountPath},
+				{Name: "agent-skills-home", MountPath: "/home/agent/.agents/skills"},
 				{Name: "pi-agent-config-source", MountPath: "/telos-pi-agent-config", ReadOnly: true},
 				{Name: "pi-agent-config-home", MountPath: "/home/agent/.pi/agent"},
 			},
@@ -770,10 +774,11 @@ func sessionShortID(sessionID string) string {
 	return parts[len(parts)-1]
 }
 
-func (s kubernetesSubstrate) runtimeInstallScript() string {
+func (s kubernetesSubstrate) runtimeInstallScript(sessionID string) string {
 	return fmt.Sprintf(`set -euo pipefail
 base_url=%q
 version=%q
+package_skills=%q
 os=linux
 arch="$(uname -m)"
 case "$arch" in
@@ -828,9 +833,15 @@ for source in /telos-pi-agent-config/*; do
 done
 chmod 0600 /home/agent/.pi/agent/* 2>/dev/null || true
 
+mkdir -p /home/agent/.agents/skills
+if [ -d "$package_skills" ]; then
+  cp -a "$package_skills"/. /home/agent/.agents/skills/
+fi
+chmod -R u+rwX,g+rX /home/agent/.agents 2>/dev/null || true
+
 %s --version
 %s --version
-`, s.runtimeBaseURL, s.runtimeVersion, s.runtimeMountPath, s.runtimeTelosPath, s.runtimeTelosdPath, s.runtimeTelosPath, s.runtimeTelosdPath)
+`, s.runtimeBaseURL, s.runtimeVersion, filepath.Join(s.stateMountRoot, "sessions", sessionID, "package", "skills"), s.runtimeMountPath, s.runtimeTelosPath, s.runtimeTelosdPath, s.runtimeTelosPath, s.runtimeTelosdPath)
 }
 
 func pullPolicy(image string) corev1.PullPolicy {
