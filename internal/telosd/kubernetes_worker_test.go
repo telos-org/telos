@@ -295,6 +295,9 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	if !hasWritableVolumeMount(initContainer.VolumeMounts, "agent-skills-home", "/home/agent/.agents/skills") {
 		t.Fatalf("init container missing writable agent skills mount: %+v", initContainer.VolumeMounts)
 	}
+	if !hasWritableVolumeMount(initContainer.VolumeMounts, "agent-kubeconfig-home", "/home/agent/.kube") {
+		t.Fatalf("init container missing writable kubeconfig mount: %+v", initContainer.VolumeMounts)
+	}
 	if !hasWritableVolumeMount(initContainer.VolumeMounts, "pi-agent-config-home", "/home/agent/.pi/agent") {
 		t.Fatalf("init container missing writable Pi config mount: %+v", initContainer.VolumeMounts)
 	}
@@ -307,6 +310,10 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	}
 	if strings.Contains(initCommand, "cp -a") {
 		t.Fatalf("init command must not preserve package skill file metadata: %q", initCommand)
+	}
+	if !strings.Contains(initCommand, "https://kubernetes.default.svc") ||
+		!strings.Contains(initCommand, "tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token") {
+		t.Fatalf("init command missing in-cluster kubeconfig: %q", initCommand)
 	}
 	container := template.Spec.Containers[0]
 	assertAgentSecurityContext(t, container.SecurityContext)
@@ -329,6 +336,12 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	if !hasWritableVolumeMount(container.VolumeMounts, "agent-skills-home", "/home/agent/.agents/skills") {
 		t.Fatalf("worker missing agent skills mount: %+v", container.VolumeMounts)
 	}
+	if !hasWritableVolumeMount(container.VolumeMounts, "agent-kubeconfig-home", "/home/agent/.kube") {
+		t.Fatalf("worker missing kubeconfig mount: %+v", container.VolumeMounts)
+	}
+	if !hasEnv(container.Env, "KUBECONFIG", "/home/agent/.kube/config") {
+		t.Fatalf("worker missing KUBECONFIG env: %+v", container.Env)
+	}
 }
 
 func hasReadonlyVolumeMount(mounts []corev1.VolumeMount, name string, path string) bool {
@@ -343,6 +356,15 @@ func hasReadonlyVolumeMount(mounts []corev1.VolumeMount, name string, path strin
 func hasWritableVolumeMount(mounts []corev1.VolumeMount, name string, path string) bool {
 	for _, mount := range mounts {
 		if mount.Name == name && mount.MountPath == path && !mount.ReadOnly {
+			return true
+		}
+	}
+	return false
+}
+
+func hasEnv(env []corev1.EnvVar, name string, value string) bool {
+	for _, item := range env {
+		if item.Name == name && item.Value == value {
 			return true
 		}
 	}

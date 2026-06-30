@@ -291,6 +291,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 		},
 		{Name: "telos-runtime", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{Name: "agent-skills-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		{Name: "agent-kubeconfig-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 		{
 			Name: "pi-agent-config-source",
 			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
@@ -306,6 +307,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 		{Name: "telos-state", MountPath: s.stateHostRoot},
 		{Name: "telos-runtime", MountPath: s.runtimeMountPath},
 		{Name: "agent-skills-home", MountPath: "/home/agent/.agents/skills"},
+		{Name: "agent-kubeconfig-home", MountPath: "/home/agent/.kube"},
 		{Name: "pi-agent-config-home", MountPath: "/home/agent/.pi/agent"},
 	}
 	podSpec := corev1.PodSpec{
@@ -322,6 +324,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 				{Name: "telos-state", MountPath: s.stateMountRoot},
 				{Name: "telos-runtime", MountPath: s.runtimeMountPath},
 				{Name: "agent-skills-home", MountPath: "/home/agent/.agents/skills"},
+				{Name: "agent-kubeconfig-home", MountPath: "/home/agent/.kube"},
 				{Name: "pi-agent-config-source", MountPath: "/telos-pi-agent-config", ReadOnly: true},
 				{Name: "pi-agent-config-home", MountPath: "/home/agent/.pi/agent"},
 			},
@@ -360,6 +363,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 func (s kubernetesSubstrate) workerEnv(sessionID string, m *sessionapi.Manifest) []corev1.EnvVar {
 	env := []corev1.EnvVar{
 		{Name: "PATH", Value: s.runtimeMountPath + ":/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin"},
+		{Name: "KUBECONFIG", Value: "/home/agent/.kube/config"},
 		{
 			Name: s.agentSecretKey,
 			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
@@ -838,6 +842,29 @@ if [ -d "$package_skills" ]; then
   cp -R "$package_skills"/. /home/agent/.agents/skills/
 fi
 chmod -R u+rwX,g+rX /home/agent/.agents 2>/dev/null || true
+
+mkdir -p /home/agent/.kube
+cat > /home/agent/.kube/config <<'EOF'
+apiVersion: v1
+kind: Config
+clusters:
+- name: in-cluster
+  cluster:
+    server: https://kubernetes.default.svc
+    certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
+users:
+- name: agent
+  user:
+    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
+contexts:
+- name: agent
+  context:
+    cluster: in-cluster
+    user: agent
+    namespace: default
+current-context: agent
+EOF
+chmod 0600 /home/agent/.kube/config
 
 %s --version
 %s --version
