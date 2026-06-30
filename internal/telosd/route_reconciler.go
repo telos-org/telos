@@ -203,6 +203,9 @@ func publicRouteFromConfigMap(cm corev1.ConfigMap) (tunnelRoute, map[string]stri
 	routeRand := strings.TrimSpace(data["rand"])
 	hostname := routeHandle(data)
 	if hostname == "" {
+		hostname = platformRouteHostname(routeType)
+	}
+	if hostname == "" {
 		if routeRand == "" {
 			routeRand = randomRouteSuffix()
 		}
@@ -228,6 +231,17 @@ func publicRouteFromConfigMap(cm corev1.ConfigMap) (tunnelRoute, map[string]stri
 		}
 	}
 	return tunnelRoute{Hostname: hostname, Service: tunnelRouteService(protocol, service), Protocol: protocol}, patch, true
+}
+
+func platformRouteHostname(routeType string) string {
+	switch routeType {
+	case "dashboard":
+		return strings.TrimSpace(os.Getenv("TELOS_DASHBOARD_HOSTNAME"))
+	case "service", "app":
+		return strings.TrimSpace(os.Getenv("TELOS_SERVICE_HOSTNAME"))
+	default:
+		return ""
+	}
 }
 
 func consoleRouteRequests(ctx context.Context, client kubernetes.Interface) ([]tunnelRoute, error) {
