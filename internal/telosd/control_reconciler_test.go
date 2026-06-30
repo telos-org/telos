@@ -1,10 +1,6 @@
 package telosd
 
 import (
-	"context"
-	"encoding/json"
-	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -73,7 +69,7 @@ func (s *fakeReconcileStore) WorkspacePath(string, string) (string, error) {
 	return "", sessionapi.ErrNotFound
 }
 
-func TestControlSessionReconcilerCreatesDesiredPackageSession(t *testing.T) {
+func TestDeploymentBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	root := t.TempDir()
 	packagePath := filepath.Join(root, "blobs", "sha256", digest[len("sha256:"):], "package.tar.gz")
@@ -83,39 +79,19 @@ func TestControlSessionReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	if err := os.WriteFile(packagePath, []byte("package"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	var sawAuth bool
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "Bearer env-token" {
-			t.Fatalf("authorization = %q", got)
-		}
-		if r.URL.Path != "/api/environments/env_123/sessions" {
-			t.Fatalf("path = %q", r.URL.Path)
-		}
-		sawAuth = true
-		_ = json.NewEncoder(w).Encode(desiredSessionsResponse{Sessions: []desiredSession{{
-			DeploymentID:  "dep_123",
-			Name:          "auth",
-			PackageDigest: digest,
-			DesiredState:  "running",
-		}}})
-	}))
-	defer server.Close()
 
 	store := &fakeReconcileStore{}
-	reconciler := controlSessionReconciler{
-		apiURL:      server.URL,
-		envID:       "env_123",
-		token:       "env-token",
+	reconciler := deploymentBootstrapReconciler{
 		packageRoot: root,
-		client:      server.Client(),
 		store:       store,
 	}
 
-	if err := reconciler.reconcile(context.Background()); err != nil {
+	if err := reconciler.reconcile([]deploymentSession{{
+		DeploymentID:  "dep_123",
+		Name:          "auth",
+		PackageDigest: digest,
+	}}); err != nil {
 		t.Fatalf("reconcile: %v", err)
-	}
-	if !sawAuth {
-		t.Fatal("server was not called")
 	}
 	if len(store.creates) != 1 {
 		t.Fatalf("creates = %#v", store.creates)
@@ -151,25 +127,16 @@ func TestControlSessionReconcilerMatchesDeploymentNameBeforeSpecName(t *testing.
 			"apply_package_digest": digest,
 		}},
 	}}}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(desiredSessionsResponse{Sessions: []desiredSession{{
-			Name:          "auth",
-			PackageDigest: digest,
-			DesiredState:  "running",
-		}}})
-	}))
-	defer server.Close()
 
-	reconciler := controlSessionReconciler{
-		apiURL:      server.URL,
-		envID:       "env_123",
-		token:       "env-token",
+	reconciler := deploymentBootstrapReconciler{
 		packageRoot: t.TempDir(),
-		client:      server.Client(),
 		store:       store,
 	}
 
-	if err := reconciler.reconcile(context.Background()); err != nil {
+	if err := reconciler.reconcile([]deploymentSession{{
+		Name:          "auth",
+		PackageDigest: digest,
+	}}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if len(store.creates) != 0 || len(store.stops) != 0 {
@@ -190,22 +157,19 @@ func TestDeploymentBootstrapDesiredSession(t *testing.T) {
 	t.Setenv("TELOS_DEPLOYMENT_NAME", "auth")
 	t.Setenv("TELOS_PACKAGE_DIGEST", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
-	desired, ok := deploymentBootstrapDesiredSession()
+	session, ok := deploymentBootstrapSession()
 
 	if !ok {
 		t.Fatal("expected deployment bootstrap")
 	}
-	if desired.Name != "auth" {
-		t.Fatalf("Name = %q", desired.Name)
+	if session.Name != "auth" {
+		t.Fatalf("Name = %q", session.Name)
 	}
-	if desired.DeploymentID != "dep_123" {
-		t.Fatalf("DeploymentID = %q", desired.DeploymentID)
+	if session.DeploymentID != "dep_123" {
+		t.Fatalf("DeploymentID = %q", session.DeploymentID)
 	}
-	if desired.PackageDigest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
-		t.Fatalf("PackageDigest = %q", desired.PackageDigest)
-	}
-	if desired.DesiredState != "running" {
-		t.Fatalf("DesiredState = %q", desired.DesiredState)
+	if session.PackageDigest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("PackageDigest = %q", session.PackageDigest)
 	}
 }
 
@@ -220,25 +184,16 @@ func TestControlSessionReconcilerNoopsWhenDigestMatches(t *testing.T) {
 			"apply_package_digest": digest,
 		}},
 	}}}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(desiredSessionsResponse{Sessions: []desiredSession{{
-			Name:          name,
-			PackageDigest: digest,
-			DesiredState:  "running",
-		}}})
-	}))
-	defer server.Close()
 
-	reconciler := controlSessionReconciler{
-		apiURL:      server.URL,
-		envID:       "env_123",
-		token:       "env-token",
+	reconciler := deploymentBootstrapReconciler{
 		packageRoot: t.TempDir(),
-		client:      server.Client(),
 		store:       store,
 	}
 
-	if err := reconciler.reconcile(context.Background()); err != nil {
+	if err := reconciler.reconcile([]deploymentSession{{
+		Name:          name,
+		PackageDigest: digest,
+	}}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if len(store.creates) != 0 || len(store.stops) != 0 {

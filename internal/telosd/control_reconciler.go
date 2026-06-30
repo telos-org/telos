@@ -2,12 +2,8 @@ package telosd
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
-	"net/http"
-	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -15,70 +11,29 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
-type desiredSession struct {
+type deploymentSession struct {
 	DeploymentID  string `json:"deployment_id,omitempty"`
 	Name          string `json:"name"`
 	PackageDigest string `json:"package_digest"`
-	DesiredState  string `json:"desired_state"`
-}
-
-type desiredSessionsResponse struct {
-	Sessions []desiredSession `json:"sessions"`
 }
 
 const defaultCloudSessionModel = "sail-research/zai-org/GLM-5.2-FP8"
 
-type controlSessionReconciler struct {
-	apiURL      string
-	envID       string
-	token       string
+type deploymentBootstrapReconciler struct {
 	packageRoot string
 	model       string
-	client      *http.Client
 	store       sessionapi.Store
 }
 
-func startControlSessionReconciler(ctx context.Context, store sessionapi.Store, cfg Config) {
+func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.Store) {
 	if os.Getenv("TELOS_CONTROL_RECONCILER_ENABLED") == "0" {
 		return
 	}
-	startDeploymentBootstrapReconciler(ctx, store)
-	r := controlSessionReconciler{
-		apiURL:      strings.TrimRight(strings.TrimSpace(os.Getenv("TELOS_CONTROL_API_URL")), "/"),
-		envID:       strings.TrimSpace(os.Getenv("TELOS_ENV_ID")),
-		token:       strings.TrimSpace(cfg.Auth.Token),
-		packageRoot: strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
-		model:       cloudSessionModel(),
-		client:      &http.Client{Timeout: 10 * time.Second},
-		store:       store,
-	}
-	if r.apiURL == "" || r.envID == "" || r.token == "" || r.packageRoot == "" {
-		return
-	}
-
-	interval := time.Duration(envInt("TELOS_CONTROL_RECONCILER_INTERVAL", 10)) * time.Second
-	go func() {
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
-		for {
-			if err := r.reconcile(ctx); err != nil {
-				log.Printf("control session reconcile failed: %v", err)
-			}
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-			}
-		}
-	}()
-}
-
-func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.Store) {
-	desired, ok := deploymentBootstrapDesiredSession()
+	session, ok := deploymentBootstrapSession()
 	if !ok {
 		return
 	}
-	r := controlSessionReconciler{
+	r := deploymentBootstrapReconciler{
 		packageRoot: strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
 		model:       cloudSessionModel(),
 		store:       store,
@@ -92,7 +47,7 @@ func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.St
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
-			if err := r.reconcileDesired([]desiredSession{desired}); err != nil {
+			if err := r.reconcile([]deploymentSession{session}); err != nil {
 				log.Printf("deployment bootstrap reconcile failed: %v", err)
 			}
 			select {
@@ -104,39 +59,27 @@ func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.St
 	}()
 }
 
-func deploymentBootstrapDesiredSession() (desiredSession, bool) {
+func deploymentBootstrapSession() (deploymentSession, bool) {
 	deploymentID := strings.TrimSpace(os.Getenv("TELOS_DEPLOYMENT_ID"))
 	name := strings.TrimSpace(os.Getenv("TELOS_DEPLOYMENT_NAME"))
 	digest := strings.TrimSpace(os.Getenv("TELOS_PACKAGE_DIGEST"))
 	if name == "" || digest == "" {
-		return desiredSession{}, false
+		return deploymentSession{}, false
 	}
-	return desiredSession{
+	return deploymentSession{
 		DeploymentID:  deploymentID,
 		Name:          name,
 		PackageDigest: digest,
-		DesiredState:  "running",
 	}, true
 }
 
-func (r controlSessionReconciler) reconcile(ctx context.Context) error {
-	desired, err := r.fetchDesired(ctx)
-	if err != nil {
-		return err
-	}
-	return r.reconcileDesired(desired)
-}
-
-func (r controlSessionReconciler) reconcileDesired(desired []desiredSession) error {
+func (r deploymentBootstrapReconciler) reconcile(sessions []deploymentSession) error {
 	current, err := r.store.List()
 	if err != nil {
 		return fmt.Errorf("list local sessions: %w", err)
 	}
 	active := activeRootSessionsByName(current)
-	for _, session := range desired {
-		if strings.TrimSpace(session.DesiredState) != "running" {
-			continue
-		}
+	for _, session := range sessions {
 		name := strings.TrimSpace(session.Name)
 		digest := strings.TrimSpace(session.PackageDigest)
 		if name == "" || digest == "" {
@@ -179,29 +122,6 @@ func (r controlSessionReconciler) reconcileDesired(desired []desiredSession) err
 		active = activeRootSessionsByName(current)
 	}
 	return nil
-}
-
-func (r controlSessionReconciler) fetchDesired(ctx context.Context) ([]desiredSession, error) {
-	u := r.apiURL + "/api/environments/" + url.PathEscape(r.envID) + "/sessions"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+r.token)
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetch desired sessions: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("fetch desired sessions: HTTP %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
-	}
-	var out desiredSessionsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return nil, fmt.Errorf("decode desired sessions: %w", err)
-	}
-	return out.Sessions, nil
 }
 
 func cloudSessionModel() string {
