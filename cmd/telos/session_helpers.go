@@ -163,6 +163,14 @@ func stopSessionAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
 		return session, nil
 	}
 
+	if ctx, ok := rootSessionContext(); ok {
+		session, err := cloud.NewClient(ctx.endpoint, ctx.token).StopSession(sessionID)
+		if err == nil {
+			return session, nil
+		}
+		return nil, fmt.Errorf("root session stop failed: %w", err)
+	}
+
 	if envID != "" || config.IsConfigured() {
 		clients, err := cloudSessionClients(envID)
 		if err != nil && envID != "" {

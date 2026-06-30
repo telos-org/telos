@@ -15,6 +15,10 @@ type sessionSubstrate interface {
 	Stop(session *sessionapi.Session) error
 }
 
+type sessionRuntimeStatusSubstrate interface {
+	RuntimeStatus(session *sessionapi.Session) (sessionapi.SessionStatus, error)
+}
+
 type cloudSessionStore struct {
 	*sessionapi.FileStore
 	handles   routeHandleResolver
@@ -152,6 +156,7 @@ func (s *cloudSessionStore) routes() []publicRoute {
 }
 
 func (s *cloudSessionStore) enrich(session *sessionapi.Session, routes []publicRoute) {
+	s.enrichRuntimeStatus(session)
 	if session.ParentSessionID != nil && *session.ParentSessionID != "" {
 		return
 	}
@@ -163,4 +168,19 @@ func (s *cloudSessionStore) enrich(session *sessionapi.Session, routes []publicR
 		url := "https://" + stripScheme(handle)
 		session.DashboardURL = &url
 	}
+}
+
+func (s *cloudSessionStore) enrichRuntimeStatus(session *sessionapi.Session) {
+	if session == nil || s.substrate == nil || session.Status.IsTerminal() {
+		return
+	}
+	statuser, ok := s.substrate.(sessionRuntimeStatusSubstrate)
+	if !ok {
+		return
+	}
+	status, err := statuser.RuntimeStatus(session)
+	if err != nil || status == "" {
+		return
+	}
+	session.Status = status
 }

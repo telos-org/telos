@@ -174,6 +174,75 @@ func (s kubernetesSubstrate) Stop(session *sessionapi.Session) error {
 	return stopErr
 }
 
+func (s kubernetesSubstrate) RuntimeStatus(session *sessionapi.Session) (sessionapi.SessionStatus, error) {
+	kind, err := sessionWorkerKind(session)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	name := workerWorkloadName(session.SessionID, kind)
+	namespace := workerNamespace(session.SessionID, kind)
+	switch kind {
+	case sessionapi.KindController:
+		deployment, err := s.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return sessionapi.StatusStale, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if deploymentProgressDeadlineExceeded(deployment) {
+			return sessionapi.StatusStale, nil
+		}
+		return sessionapi.StatusRunning, nil
+	case sessionapi.KindTask:
+		job, err := s.client.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return sessionapi.StatusStale, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if jobConditionTrue(job, batchv1.JobFailed) || job.Status.Failed > 0 {
+			return sessionapi.StatusFailed, nil
+		}
+		if jobConditionTrue(job, batchv1.JobComplete) || job.Status.Succeeded > 0 {
+			return sessionapi.StatusStale, nil
+		}
+		return sessionapi.StatusRunning, nil
+	default:
+		return "", fmt.Errorf("invalid session_kind %q", kind)
+	}
+}
+
+func deploymentProgressDeadlineExceeded(deployment *appsv1.Deployment) bool {
+	if deployment == nil {
+		return false
+	}
+	for _, condition := range deployment.Status.Conditions {
+		if condition.Type == appsv1.DeploymentProgressing &&
+			condition.Status == corev1.ConditionFalse &&
+			condition.Reason == "ProgressDeadlineExceeded" {
+			return true
+		}
+	}
+	return false
+}
+
+func jobConditionTrue(job *batchv1.Job, conditionType batchv1.JobConditionType) bool {
+	if job == nil {
+		return false
+	}
+	for _, condition := range job.Status.Conditions {
+		if condition.Type == conditionType && condition.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
 func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespace string, credential *controlSessionKey) error {
 	if err := s.createNamespaceIfMissing(ctx, namespace); err != nil {
 		return err

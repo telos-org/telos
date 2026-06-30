@@ -57,7 +57,7 @@ func cloudEnvironmentForApply(
 	}
 	var env *cloud.Environment
 	if envID != "" {
-		env, err = cloud.ResolveEnvironment(envID)
+		env, err = control.GetEnvironment(envID)
 		if err != nil {
 			return nil, nil, err
 		}

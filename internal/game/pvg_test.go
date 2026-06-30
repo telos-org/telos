@@ -458,7 +458,7 @@ func TestPVGUntilRunsExactReviewCycles(t *testing.T) {
 	}
 }
 
-func TestPVGRecoverableProverFailureCannotSucceedOnVerifierConcession(t *testing.T) {
+func TestPVGRecoverableProverFailureRetriesProver(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()
 	specDir := filepath.Join(dir, "specs", "pvg-test")
@@ -468,22 +468,23 @@ func TestPVGRecoverableProverFailureCannotSucceedOnVerifierConcession(t *testing
 	exec := &fakeExecutor{
 		proverResults: []TurnResult{
 			{Role: "prover", Status: StatusContinue, Logs: "provider_rate_limited: retry later", Error: "provider_rate_limited: retry later", Recoverable: true},
+			{Role: "prover", Status: StatusContinue, Logs: "implemented after retry"},
 		},
 		verifierResults: []TurnResult{
-			{Role: "verifier", Status: StatusConcede, Logs: "Inspected failed prover turn.\n<status>CONCEDE</status>\n"},
+			{Role: "verifier", Status: StatusConcede, Logs: "LGTM\n<status>CONCEDE</status>\n"},
 		},
 	}
 
 	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
 	result := pvg.Run()
 
-	if result.GameResult != GameFailure {
-		t.Fatalf("expected failure, got %s error=%q", result.GameResult, result.Error)
+	if result.GameResult != GameSuccess {
+		t.Fatalf("expected success after prover retry, got %s error=%q", result.GameResult, result.Error)
 	}
-	if result.Error != "no_successful_implementation" {
-		t.Fatalf("error: got %q", result.Error)
+	if result.ProverRounds != 2 || result.VerifierRounds != 1 {
+		t.Fatalf("rounds: prover=%d verifier=%d", result.ProverRounds, result.VerifierRounds)
 	}
-	if result.Rounds != 2 {
+	if result.Rounds != 3 {
 		t.Fatalf("rounds: got %d", result.Rounds)
 	}
 	transcript := ReadTranscript(state.TranscriptPath)
@@ -500,8 +501,36 @@ func TestPVGRecoverableProverFailureCannotSucceedOnVerifierConcession(t *testing
 	if strings.Count(string(evidenceData), `"error_code":"provider_rate_limited"`) < 2 {
 		t.Fatalf("evidence should carry typed error code on agent_complete and recoverable failure:\n%s", evidenceData)
 	}
-	if !strings.Contains(string(evidenceData), `"error_code":"no_successful_implementation"`) {
-		t.Fatalf("game_end should carry no-successful-implementation error code:\n%s", evidenceData)
+	if strings.Contains(string(evidenceData), `"error_code":"no_successful_implementation"`) {
+		t.Fatalf("retrying prover failure should not emit no-successful-implementation:\n%s", evidenceData)
+	}
+}
+
+func TestPVGRecoverableVerifierFailureRetriesVerifier(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-verifier-retry")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "implemented"},
+		},
+		verifierResults: []TurnResult{
+			{Role: "verifier", Status: StatusContinue, Logs: "provider_unavailable: retry", Error: "provider_unavailable: retry", Recoverable: true},
+			{Role: "verifier", Status: StatusConcede, Logs: "LGTM\n<status>CONCEDE</status>\n"},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
+	result := pvg.Run()
+
+	if result.GameResult != GameSuccess {
+		t.Fatalf("expected success after verifier retry, got %s error=%q", result.GameResult, result.Error)
+	}
+	if result.ProverRounds != 1 || result.VerifierRounds != 2 {
+		t.Fatalf("rounds: prover=%d verifier=%d", result.ProverRounds, result.VerifierRounds)
 	}
 }
 
@@ -552,10 +581,8 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 		proverResults: []TurnResult{
 			recoverable("prover"),
 			recoverable("prover"),
-		},
-		verifierResults: []TurnResult{
-			recoverable("verifier"),
-			recoverable("verifier"),
+			recoverable("prover"),
+			recoverable("prover"),
 		},
 	}
 
@@ -570,6 +597,9 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 	}
 	if result.Rounds != maxRecoverableAgentFailures+1 {
 		t.Fatalf("rounds: got %d", result.Rounds)
+	}
+	if result.VerifierRounds != 0 {
+		t.Fatalf("verifier should not run before prover failure budget is exhausted, got %d", result.VerifierRounds)
 	}
 }
 
@@ -598,6 +628,9 @@ func TestPVGUntilDoesNotCountFailedVerifierReview(t *testing.T) {
 
 	if result.GameResult != GameSuccess {
 		t.Fatalf("expected success, got %s error=%q", result.GameResult, result.Error)
+	}
+	if result.ProverRounds != 2 {
+		t.Fatalf("prover attempts: got %d", result.ProverRounds)
 	}
 	if result.VerifierRounds != 3 {
 		t.Fatalf("verifier attempts: got %d", result.VerifierRounds)

@@ -41,22 +41,21 @@ func (m taskStateMachine) next() (taskStateStep, bool) {
 }
 
 func (m *taskStateMachine) advance(turn TurnResult) (GameResult, bool) {
-	if turn.Error != "" && !turn.Recoverable {
-		m.state = ObjectiveStateBlocked
-		return GameFailure, true
+	if turn.Error != "" {
+		if !turn.Recoverable {
+			m.state = ObjectiveStateBlocked
+			return GameFailure, true
+		}
+		return "", false
 	}
 
 	switch turn.Role {
 	case RoleProver:
-		if turn.Error == "" {
-			m.proverDelivered = true
-		}
+		m.proverDelivered = true
 		m.state = ObjectiveStateVerify
 	case RoleVerifier:
 		if m.reviewMode {
-			if turn.Error == "" {
-				m.reviewsCompleted++
-			}
+			m.reviewsCompleted++
 			if m.reviewsCompleted >= m.reviewTarget {
 				m.state = ObjectiveStateFinalize
 				if !m.proverDelivered {

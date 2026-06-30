@@ -165,34 +165,28 @@ func ResolveEnvironment(envID string) (*Environment, error) {
 	if err != nil {
 		return nil, err
 	}
-	envs, err := control.ListEnvironments()
+	env, err := control.GetEnvironment(envID)
 	if err != nil {
 		return nil, err
 	}
-	for _, env := range envs {
-		if env.ID != envID {
-			continue
-		}
-		if access, ok := config.EnvironmentAccessByID(envID); ok {
-			env.AccessToken = access.Token
-			return &env, nil
-		}
-		if !env.HasRecoverable {
-			return nil, fmt.Errorf("no local access for %s; create a fresh environment", envID)
-		}
-		recovered, err := control.IssueEnvironmentAccess(envID)
-		if err != nil {
-			return nil, err
-		}
-		if err := config.SaveEnvironmentAccessEntry(config.EnvironmentAccess{
-			ID:    recovered.ID,
-			Token: recovered.AccessToken,
-		}); err != nil {
-			return nil, err
-		}
-		return recovered, nil
+	if access, ok := config.EnvironmentAccessByID(envID); ok {
+		env.AccessToken = access.Token
+		return env, nil
 	}
-	return nil, fmt.Errorf("environment %s not found", envID)
+	if !env.HasRecoverable {
+		return nil, fmt.Errorf("no local access for %s; create a fresh environment", envID)
+	}
+	recovered, err := control.IssueEnvironmentAccess(envID)
+	if err != nil {
+		return nil, err
+	}
+	if err := config.SaveEnvironmentAccessEntry(config.EnvironmentAccess{
+		ID:    recovered.ID,
+		Token: recovered.AccessToken,
+	}); err != nil {
+		return nil, err
+	}
+	return recovered, nil
 }
 
 // CreateEnvironment creates a new cloud environment through the control plane.
@@ -453,6 +447,24 @@ func (c *Client) ListEnvironments() ([]Environment, error) {
 		envs = append(envs, environmentFromJSON(raw))
 	}
 	return envs, nil
+}
+
+// GetEnvironment resolves an environment control-plane record without requiring
+// or issuing an environment-local access token.
+func (c *Client) GetEnvironment(envID string) (*Environment, error) {
+	if envID == "" {
+		return nil, fmt.Errorf("environment id is required")
+	}
+	envs, err := c.ListEnvironments()
+	if err != nil {
+		return nil, err
+	}
+	for _, env := range envs {
+		if env.ID == envID {
+			return &env, nil
+		}
+	}
+	return nil, fmt.Errorf("environment %s not found", envID)
 }
 
 // IssueEnvironmentAccess issues a scoped environment access token.

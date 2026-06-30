@@ -950,6 +950,44 @@ func TestResolveSessionRuntimeConfigOmitsDefaults(t *testing.T) {
 	}
 }
 
+func TestRejectCloudApplyRuntimeFlags(t *testing.T) {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	fs.String("model", "", "")
+	fs.String("thinking", "medium", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("max-rounds", 0, "")
+	fs.Int("max-duration-sec", 0, "")
+	fs.Int("max-input-tokens", 0, "")
+	fs.Int("max-output-tokens", 0, "")
+	fs.Int("max-tool-loops", 0, "")
+	fs.Int("agent-timeout-sec", 0, "")
+	fs.Int("autocompact-context-window", 0, "")
+	fs.Float64("autocompact-trigger-ratio", 0, "")
+	fs.Int("autocompact-keep-recent-tokens", 0, "")
+	parseFlags(fs, []string{"--model", "openai-codex/gpt-5.5", "--autocompact-context-window", "64000", "SPEC.md"})
+
+	err := rejectCloudApplyRuntimeFlags(fs)
+	if err == nil {
+		t.Fatal("expected explicit runtime flags to be rejected")
+	}
+	if !strings.Contains(err.Error(), "--model") || !strings.Contains(err.Error(), "--autocompact-context-window") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRejectCloudApplyRuntimeFlagsAllowsApplyControls(t *testing.T) {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	fs.String("env", "", "")
+	fs.Bool("json", false, "")
+	fs.Bool("no-wait", false, "")
+	fs.Int("ready-timeout", 900, "")
+	parseFlags(fs, []string{"--env", "env_123", "--json", "--no-wait", "--ready-timeout", "30", "SPEC.md"})
+
+	if err := rejectCloudApplyRuntimeFlags(fs); err != nil {
+		t.Fatalf("apply controls should be allowed: %v", err)
+	}
+}
+
 func TestUntilFlagValue(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.Int("until", 0, "")
@@ -1263,6 +1301,41 @@ func TestCloudSessionClientsRecoverEnvironmentAccess(t *testing.T) {
 	}
 }
 
+func TestCloudEnvironmentForApplyDoesNotRequireLocalAccess(t *testing.T) {
+	var accessRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/environments":
+			json.NewEncoder(w).Encode(map[string]any{
+				"environments": []map[string]any{{
+					"id":                         "env_123",
+					"env_handle":                 "env-abc.usetelos.ai",
+					"state":                      "ready",
+					"has_recoverable_env_access": false,
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/environments/env_123/access":
+			accessRequests++
+			http.Error(w, "access should not be requested", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+
+	_, env, err := cloudEnvironmentForApply("env_123", false, 0)
+	if err != nil {
+		t.Fatalf("cloudEnvironmentForApply: %v", err)
+	}
+	if env.ID != "env_123" || env.Handle != "env-abc.usetelos.ai" {
+		t.Fatalf("environment: got %+v", env)
+	}
+	if accessRequests != 0 {
+		t.Fatalf("access requests: got %d", accessRequests)
+	}
+}
+
 func TestRootSessionContextUsesScopedToken(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	t.Setenv("TELOS_API_TOKEN", "session-token")
@@ -1536,6 +1609,42 @@ func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "session sess_root: not found") {
 		t.Fatalf("root error fell through to generic not found: %v", err)
+	}
+}
+
+func TestRootStopUsesClusterAPI(t *testing.T) {
+	t.Setenv("TELOS_RUNTIME", "")
+	var gotStop bool
+	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/sessions/sess_child/stop" {
+			if r.Header.Get("Authorization") != "Bearer scoped-token" {
+				t.Fatalf("authorization: got %q", r.Header.Get("Authorization"))
+			}
+			gotStop = true
+			json.NewEncoder(w).Encode(sessionapi.Session{
+				SessionID: "sess_child",
+				Status:    sessionapi.StatusStopped,
+				Runtime:   sessionapi.RuntimeCloud,
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer cluster.Close()
+	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+	t.Setenv("TELOS_API_TOKEN", "scoped-token")
+	t.Setenv("TELOS_SESSION_ID", "sess_parent")
+	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
+
+	session, err := stopSessionAnywhere("sess_child", "")
+	if err != nil {
+		t.Fatalf("stopSessionAnywhere: %v", err)
+	}
+	if !gotStop {
+		t.Fatal("cluster stop endpoint was not called")
+	}
+	if session.Status != sessionapi.StatusStopped {
+		t.Fatalf("status: got %q", session.Status)
 	}
 }
 

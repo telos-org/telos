@@ -11,10 +11,11 @@ import (
 )
 
 type recordingSubstrate struct {
-	applies  []recordedApply
-	stops    []string
-	applyErr error
-	stopErr  error
+	applies       []recordedApply
+	stops         []string
+	runtimeStatus map[string]sessionapi.SessionStatus
+	applyErr      error
+	stopErr       error
 }
 
 type recordedApply struct {
@@ -37,6 +38,13 @@ func (s *recordingSubstrate) Stop(session *sessionapi.Session) error {
 		return s.stopErr
 	}
 	return nil
+}
+
+func (s *recordingSubstrate) RuntimeStatus(session *sessionapi.Session) (sessionapi.SessionStatus, error) {
+	if s.runtimeStatus == nil {
+		return "", nil
+	}
+	return s.runtimeStatus[session.SessionID], nil
 }
 
 func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
@@ -123,6 +131,53 @@ func TestCloudSessionStoreLeavesFileStateRunningWhenWorkerStopFails(t *testing.T
 	}
 	if current.Status == sessionapi.StatusStopped {
 		t.Fatal("file state was marked stopped despite substrate stop failure")
+	}
+}
+
+func TestCloudSessionStoreEnrichesRuntimeStatus(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{runtimeStatus: map[string]sessionapi.SessionStatus{}}
+	store := newCloudSessionStore(base, routeHandleResolver{}, substrate)
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	substrate.runtimeStatus[session.SessionID] = sessionapi.StatusStale
+	current, err := store.Get(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != sessionapi.StatusStale {
+		t.Fatalf("status: got %q", current.Status)
+	}
+}
+
+func TestCloudSessionStoreEnrichesChildRuntimeStatus(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{runtimeStatus: map[string]sessionapi.SessionStatus{}}
+	store := newCloudSessionStore(base, routeHandleResolver{}, substrate)
+	parentID := "sess_controller"
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &markdown,
+		ParentSessionID: &parentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	substrate.runtimeStatus[session.SessionID] = sessionapi.StatusFailed
+	current, err := store.Get(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != sessionapi.StatusFailed {
+		t.Fatalf("status: got %q", current.Status)
+	}
+	if current.ServiceURL != nil || current.DashboardURL != nil {
+		t.Fatalf("child session should not get route URLs: service=%v dashboard=%v", current.ServiceURL, current.DashboardURL)
 	}
 }
 

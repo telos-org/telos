@@ -111,6 +111,24 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 			return p.end(GameFailure)
 		}
 
+		if turn.Error != "" {
+			if turn.Recoverable {
+				machine.state = step.State
+			} else {
+				machine.state = ObjectiveStateBlocked
+			}
+			p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.state)
+			if p.turnFailureExceeded(turn, &recoverableFailures) {
+				return p.end(GameFailure)
+			}
+			if p.overBudget(p.Result.Rounds, step.Role) {
+				return p.end(GameFailure)
+			}
+			workspace = p.Executor.WorkspaceSnapshot()
+			continue
+		}
+
+		recoverableFailures = 0
 		// The state machine owns the prover/verify/repair/finalize transitions.
 		// The ledger records the state the machine just computed instead of
 		// re-deriving it, so the two cannot drift (notably in review mode, where
@@ -118,13 +136,6 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 		result, terminal := machine.advance(turn)
 		p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.state)
 
-		if turn.Error != "" {
-			if p.turnFailureExceeded(turn, &recoverableFailures) {
-				return p.end(GameFailure)
-			}
-		} else {
-			recoverableFailures = 0
-		}
 		if terminal {
 			if result == GameFailure && !machine.proverDelivered && p.Result.Error == "" {
 				p.Result.Error = "no_successful_implementation"

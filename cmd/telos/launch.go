@@ -381,6 +381,10 @@ func runCloud(
 	action string,
 ) {
 	if command == "apply" {
+		if err := rejectCloudApplyRuntimeFlags(fs); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 		applyCloudControl(specArg, envID, waitForEnvironment, readyTimeout, jsonOut)
 		return
 	}
@@ -423,6 +427,32 @@ func runCloud(
 	} else {
 		printSessionReceipt(os.Stdout, action, session, environmentOutput(env))
 	}
+}
+
+func rejectCloudApplyRuntimeFlags(fs *flag.FlagSet) error {
+	var set []string
+	for _, name := range []string{
+		"model",
+		"thinking",
+		"max-cost-usd",
+		"max-rounds",
+		"max-duration-sec",
+		"max-input-tokens",
+		"max-output-tokens",
+		"max-tool-loops",
+		"agent-timeout-sec",
+		"autocompact-context-window",
+		"autocompact-trigger-ratio",
+		"autocompact-keep-recent-tokens",
+	} {
+		if flagNameSet(fs, name) {
+			set = append(set, "--"+name)
+		}
+	}
+	if len(set) == 0 {
+		return nil
+	}
+	return fmt.Errorf("runtime flags %s are not supported with cloud apply", strings.Join(set, ", "))
 }
 
 func applyCloudControl(

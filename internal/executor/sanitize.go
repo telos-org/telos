@@ -13,7 +13,7 @@ var reasoningCloseRE = regexp.MustCompile(`(?is)</(think|thinking|reasoning)>`)
 // The lossy unbalanced-tail stripping below must never discard a region that
 // carries one of these, or it would manufacture the very malformed_review_blocks
 // / missing_progress_update failures it is meant to avoid.
-var protocolBlockRE = regexp.MustCompile(`(?is)<(?:/?)(?:review|summary|progress_update|status)\b[^>]*>`)
+var protocolBlockRE = regexp.MustCompile(`(?is)<(?:/?)(?:findings|review|summary|progress_update|status)\b[^>]*>`)
 
 func containsProtocolBlock(text string) bool {
 	return protocolBlockRE.MatchString(text)

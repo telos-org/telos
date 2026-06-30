@@ -10,6 +10,8 @@ import (
 	"sync"
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -222,6 +224,107 @@ func TestKubernetesSubstrateStopContinuesCleanupAfterWorkloadDeleteError(t *test
 	if _, err := client.RbacV1().ClusterRoleBindings().Get(context.Background(), workerClusterRoleBinding(namespace).Name, metav1.GetOptions{}); err == nil {
 		t.Fatalf("clusterrolebinding for %s still exists", namespace)
 	}
+}
+
+func TestKubernetesSubstrateRuntimeStatusController(t *testing.T) {
+	cfg := testCloudConfig(t)
+	kind := sessionapi.KindController
+	session := &sessionapi.Session{SessionID: "sess_20260518_000000_ctrl", SessionKind: &kind}
+	namespace := workerNamespace(session.SessionID, kind)
+	name := workerWorkloadName(session.SessionID, kind)
+	client := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+	})
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	status, err := substrate.RuntimeStatus(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != sessionapi.StatusRunning {
+		t.Fatalf("status: got %q", status)
+	}
+
+	if err := client.AppsV1().Deployments(namespace).Delete(context.Background(), name, metav1.DeleteOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	status, err = substrate.RuntimeStatus(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != sessionapi.StatusStale {
+		t.Fatalf("missing deployment status: got %q", status)
+	}
+}
+
+func TestKubernetesSubstrateRuntimeStatusTask(t *testing.T) {
+	cfg := testCloudConfig(t)
+	kind := sessionapi.KindTask
+	session := &sessionapi.Session{SessionID: "sess_20260518_000000_task", SessionKind: &kind}
+	namespace := workerNamespace(session.SessionID, kind)
+	name := workerWorkloadName(session.SessionID, kind)
+
+	tests := []struct {
+		name string
+		job  *batchv1.Job
+		want sessionapi.SessionStatus
+	}{
+		{
+			name: "active",
+			job: &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+				Status:     batchv1.JobStatus{Active: 1},
+			},
+			want: sessionapi.StatusRunning,
+		},
+		{
+			name: "failed",
+			job: &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+				Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
+					Type:   batchv1.JobFailed,
+					Status: corev1.ConditionTrue,
+				}}},
+			},
+			want: sessionapi.StatusFailed,
+		},
+		{
+			name: "complete before manifest close",
+			job: &batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+				Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
+					Type:   batchv1.JobComplete,
+					Status: corev1.ConditionTrue,
+				}}},
+			},
+			want: sessionapi.StatusStale,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := fake.NewSimpleClientset(tt.job)
+			substrate := newKubernetesSubstrateWithClient(cfg, client)
+			status, err := substrate.RuntimeStatus(session)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status != tt.want {
+				t.Fatalf("status: got %q want %q", status, tt.want)
+			}
+		})
+	}
+
+	t.Run("missing", func(t *testing.T) {
+		substrate := newKubernetesSubstrateWithClient(cfg, fake.NewSimpleClientset())
+		status, err := substrate.RuntimeStatus(session)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if status != sessionapi.StatusStale {
+			t.Fatalf("status: got %q", status)
+		}
+	})
 }
 
 func TestCloudSessionStoreCleansKubernetesResourcesWhenInitialApplyFails(t *testing.T) {

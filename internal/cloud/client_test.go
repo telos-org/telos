@@ -142,6 +142,45 @@ func TestClientListEnvironments(t *testing.T) {
 	}
 }
 
+func TestClientGetEnvironmentDoesNotRequireAccess(t *testing.T) {
+	var accessRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/environments":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"environments": []map[string]any{{
+					"id":                         "env_123",
+					"env_handle":                 "env-abc.usetelos.ai",
+					"state":                      "ready",
+					"has_recoverable_env_access": false,
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/environments/env_123/access":
+			accessRequests++
+			http.Error(w, "access should not be requested", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	env, err := client.GetEnvironment("env_123")
+	if err != nil {
+		t.Fatalf("GetEnvironment: %v", err)
+	}
+	if env.ID != "env_123" || env.Handle != "env-abc.usetelos.ai" {
+		t.Fatalf("unexpected environment: %+v", env)
+	}
+	if env.AccessToken != "" {
+		t.Fatalf("metadata-only lookup should not set access token: %+v", env)
+	}
+	if accessRequests != 0 {
+		t.Fatalf("access requests: got %d", accessRequests)
+	}
+}
+
 func TestClientCreateEnvironment(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/environments" || r.Method != "POST" {

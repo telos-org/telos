@@ -3425,6 +3425,11 @@ func TestSanitizeVisibleTextRemovesReasoningTags(t *testing.T) {
 			wantClean: "<think>leaked plan\n<progress_update>changed main.go</progress_update>",
 		},
 		{
+			name:      "stray close after findings keeps verifier block",
+			raw:       "<findings>blocker | missing validation</findings></thinking>\n<status>CONTINUE</status>",
+			wantClean: "<findings>blocker | missing validation</findings></thinking>\n<status>CONTINUE</status>",
+		},
+		{
 			name:      "incidental angle bracket unchanged",
 			raw:       "keep math a < b and c > d",
 			wantClean: "keep math a < b and c > d",

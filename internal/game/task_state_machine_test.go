@@ -64,11 +64,10 @@ func TestTaskStateMachineReviewModeCountsOnlySuccessfulVerifierTurns(t *testing.
 		Error:       "provider_unavailable: retry",
 		Recoverable: true,
 	})
-	if terminal || result != "" || machine.reviewsCompleted != 0 || machine.state != ObjectiveStateImplement {
+	if terminal || result != "" || machine.reviewsCompleted != 0 || machine.state != ObjectiveStateVerify {
 		t.Fatalf("failed review should not count: result=%q terminal=%v reviews=%d state=%q", result, terminal, machine.reviewsCompleted, machine.state)
 	}
 
-	machine.advance(TurnResult{Role: "prover", Status: StatusContinue})
 	result, terminal = machine.advance(TurnResult{Role: "verifier", Status: StatusContinue})
 	if terminal || result != "" || machine.reviewsCompleted != 1 || machine.state != ObjectiveStateImplement {
 		t.Fatalf("first successful review should continue: result=%q terminal=%v reviews=%d state=%q", result, terminal, machine.reviewsCompleted, machine.state)
@@ -81,19 +80,18 @@ func TestTaskStateMachineReviewModeCountsOnlySuccessfulVerifierTurns(t *testing.
 	}
 }
 
-func TestTaskStateMachineReviewModeFailsWhenProverNeverDelivers(t *testing.T) {
+func TestTaskStateMachineRecoverableProverFailureRetriesProver(t *testing.T) {
 	machine := newTaskStateMachine(1)
 
-	// Every prover turn errors (recoverably) so nothing is ever implemented.
-	machine.advance(TurnResult{
+	result, terminal := machine.advance(TurnResult{
 		Role:        "prover",
 		Status:      StatusContinue,
 		Error:       "agent_incomplete:tool_loop_exceeded:160",
 		Recoverable: true,
 	})
-	result, terminal := machine.advance(TurnResult{Role: "verifier", Status: StatusContinue})
-	if !terminal || result != GameFailure || machine.proverDelivered {
-		t.Fatalf("review cycles completing with no successful prover turn should fail: result=%q terminal=%v delivered=%v", result, terminal, machine.proverDelivered)
+	step, ok := machine.next()
+	if terminal || result != "" || machine.proverDelivered || !ok || step.Role != RoleProver {
+		t.Fatalf("recoverable prover failure should retry prover: result=%q terminal=%v delivered=%v next=%#v ok=%v", result, terminal, machine.proverDelivered, step, ok)
 	}
 }
 
