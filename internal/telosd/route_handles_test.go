@@ -8,6 +8,9 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 type recordingSubstrate struct {
@@ -395,6 +398,55 @@ func TestParsePublicRoutes(t *testing.T) {
 	}
 	if got := routeNamespaces(routes[0].Data); len(got) != 1 || got[0] != "ns-postgres" {
 		t.Fatalf("route namespaces: got %#v", got)
+	}
+}
+
+func TestReadPublicRoutesFromClient(t *testing.T) {
+	client := fake.NewSimpleClientset(
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "auth-route",
+				Namespace: "ns-auth",
+				Labels:    map[string]string{publicRouteLabel: "primary"},
+			},
+			Data: map[string]string{
+				"type":     "app",
+				"hostname": "auth.usetelos.ai",
+			},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "dashboard-route",
+				Namespace: "ns-auth",
+				Labels:    map[string]string{publicRouteLabel: "dashboard"},
+			},
+			Data: map[string]string{
+				"hostname": "dashboard-auth.usetelos.ai",
+			},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "private-route",
+				Namespace: "ns-auth",
+				Labels:    map[string]string{"app": "auth"},
+			},
+			Data: map[string]string{
+				"hostname": "private.usetelos.ai",
+			},
+		},
+	)
+
+	routes, err := readPublicRoutesFromClient(context.Background(), client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(routes) != 2 {
+		t.Fatalf("routes: got %#v", routes)
+	}
+	handles := []string{routeHandle(routes[0].Data), routeHandle(routes[1].Data)}
+	slices.Sort(handles)
+	if !slices.Equal(handles, []string{"auth.usetelos.ai", "dashboard-auth.usetelos.ai"}) {
+		t.Fatalf("handles: got %#v", handles)
 	}
 }
 
