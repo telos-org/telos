@@ -475,7 +475,7 @@ func TestSessionCreateRequestRejectsMissingSpecPath(t *testing.T) {
 
 func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nschema: v0\nversion: 1.2\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	pkg, err := packageSpec(dir)
@@ -485,11 +485,35 @@ func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	if pkg.name != "postgres" {
 		t.Fatalf("name: got %q", pkg.name)
 	}
+	if pkg.version != "1.2" {
+		t.Fatalf("version: got %q", pkg.version)
+	}
 	if !strings.HasPrefix(pkg.digest, "sha256:") {
 		t.Fatalf("digest: got %q", pkg.digest)
 	}
 	if len(pkg.bytes) == 0 {
 		t.Fatal("missing package bytes")
+	}
+}
+
+func TestNormalizePackageVersion(t *testing.T) {
+	for input, want := range map[string]string{
+		"1":     "1.0.0",
+		"1.2":   "1.2.0",
+		"1.2.3": "1.2.3",
+	} {
+		got, err := normalizePackageVersion(input)
+		if err != nil {
+			t.Fatalf("normalizePackageVersion(%q): %v", input, err)
+		}
+		if got != want {
+			t.Fatalf("normalizePackageVersion(%q): got %q want %q", input, got, want)
+		}
+	}
+	for _, input := range []string{"v1", "1.2.3.4", "1.x", ""} {
+		if _, err := normalizePackageVersion(input); err == nil {
+			t.Fatalf("normalizePackageVersion(%q): expected error", input)
+		}
 	}
 }
 
@@ -503,6 +527,7 @@ func TestApplyDeploymentPackageUpdatesExistingDeployment(t *testing.T) {
 					"id":             "dep_123",
 					"name":           "auth",
 					"state":          "healthy",
+					"package_ref":    "@telos/auth:1.2.2",
 					"package_digest": "sha256:old",
 					"created_at":     "then",
 					"updated_at":     "then",
@@ -514,13 +539,14 @@ func TestApplyDeploymentPackageUpdatesExistingDeployment(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
-			if body["package_digest"] != "sha256:new" {
+			if body["package_ref"] != "@telos/auth:1.2.3" {
 				t.Fatalf("body: got %#v", body)
 			}
 			json.NewEncoder(w).Encode(map[string]any{
 				"id":             "dep_123",
 				"name":           "auth",
 				"state":          "deploying",
+				"package_ref":    "@telos/auth:1.2.3",
 				"package_digest": "sha256:new",
 				"created_at":     "then",
 				"updated_at":     "now",
@@ -531,14 +557,14 @@ func TestApplyDeploymentPackageUpdatesExistingDeployment(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	operation, deployment, err := applyDeploymentPackage(cloud.NewClient(srv.URL, "test-token"), "auth", "sha256:new")
+	operation, deployment, err := applyDeploymentPackage(cloud.NewClient(srv.URL, "test-token"), "auth", "@telos/auth:1.2.3")
 	if err != nil {
 		t.Fatalf("applyDeploymentPackage: %v", err)
 	}
 	if operation != "updated" || !updated {
 		t.Fatalf("operation=%q updated=%v", operation, updated)
 	}
-	if deployment.ID != "dep_123" || deployment.PackageDigest != "sha256:new" {
+	if deployment.ID != "dep_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
 		t.Fatalf("deployment: got %+v", deployment)
 	}
 }
@@ -551,10 +577,18 @@ func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{"deployments": []map[string]any{}})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
 			created = true
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["package_ref"] != "@telos/auth:1.2.3" {
+				t.Fatalf("body: got %#v", body)
+			}
 			json.NewEncoder(w).Encode(map[string]any{
 				"id":             "dep_123",
 				"name":           "auth",
 				"state":          "provisioning",
+				"package_ref":    "@telos/auth:1.2.3",
 				"package_digest": "sha256:new",
 				"created_at":     "now",
 				"updated_at":     "now",
@@ -565,7 +599,7 @@ func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	operation, deployment, err := applyDeploymentPackage(cloud.NewClient(srv.URL, "test-token"), "auth", "sha256:new")
+	operation, deployment, err := applyDeploymentPackage(cloud.NewClient(srv.URL, "test-token"), "auth", "@telos/auth:1.2.3")
 	if err != nil {
 		t.Fatalf("applyDeploymentPackage: %v", err)
 	}

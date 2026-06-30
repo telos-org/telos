@@ -3,8 +3,10 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -68,6 +70,49 @@ func TestLimitListSessionsAppliesAfterDefaultVisibility(t *testing.T) {
 	}
 }
 
+func TestCmdListShowsDeploymentsForConfiguredCloud(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"deployments": []map[string]any{{
+				"id":             "dep_123",
+				"name":           "auth",
+				"state":          "healthy",
+				"package_ref":    "@telos/auth:1.0.0",
+				"package_digest": "sha256:abc",
+				"service_url":    "https://auth.example.com",
+				"dashboard_url":  "https://dashboard.example.com",
+				"created_at":     "then",
+				"updated_at":     "now",
+			}},
+		})
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+
+	out := captureStdout(t, func() {
+		cmdList([]string{"--wide"})
+	})
+	for _, want := range []string{
+		"NAME",
+		"PACKAGE",
+		"auth",
+		"healthy",
+		"@telos/auth:1.0.0",
+		"dep_123",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("list output missing %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "SESSION") {
+		t.Fatalf("list output should be deployment-shaped:\n%s", out)
+	}
+}
+
 func TestSessionResultPrefersSessionResultThenLatestEpoch(t *testing.T) {
 	completed := "completed"
 	if got := sessionResult(sessionapi.Session{Result: &completed}); got != "completed" {
@@ -85,6 +130,28 @@ func TestSessionResultPrefersSessionResultThenLatestEpoch(t *testing.T) {
 	if got := sessionResult(sessionapi.Session{Status: sessionapi.StatusRunning}); got != "active" {
 		t.Fatalf("active result: got %q", got)
 	}
+}
+
+func captureStdout(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stdout
+	read, write, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = write
+	t.Cleanup(func() {
+		os.Stdout = old
+	})
+	fn()
+	if err := write.Close(); err != nil {
+		t.Fatal(err)
+	}
+	out, err := io.ReadAll(read)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
 }
 
 func TestSessionTurnShowsActiveRoleAndRound(t *testing.T) {

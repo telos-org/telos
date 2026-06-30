@@ -25,8 +25,8 @@ func cmdList(args []string) {
 	parseFlags(fs, args)
 
 	if *environments {
-		listEnvironments(*jsonOut)
-		return
+		fmt.Fprintln(os.Stderr, "error: --environments is no longer supported; telos list shows deployments")
+		os.Exit(1)
 	}
 
 	var sessions []sessionapi.Session
@@ -45,6 +45,9 @@ func cmdList(args []string) {
 			}
 			sessions = append(sessions, rootSessions...)
 			rootScoped = true
+		} else if config.IsConfigured() {
+			listDeployments(*jsonOut, *limit, *wide)
+			return
 		} else {
 			sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit, *wide)...)
 		}
@@ -190,6 +193,71 @@ func limitListSessions(sessions []sessionapi.Session, limit int) []sessionapi.Se
 		return sessions[:limit]
 	}
 	return sessions
+}
+
+func listDeployments(jsonOut bool, limit int, wide bool) {
+	control, err := cloud.ControlClient()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	deployments, err := control.ListDeployments()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	deployments = limitDeployments(deployments, limit)
+	if jsonOut {
+		printJSON(cloud.DeploymentListResponse{Deployments: deployments})
+		return
+	}
+	if len(deployments) == 0 {
+		fmt.Println("no deployments")
+		return
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	if wide {
+		fmt.Fprintln(w, "NAME\tSTATUS\tPACKAGE\tSERVICE\tDASHBOARD\tDEPLOYMENT")
+	} else {
+		fmt.Fprintln(w, "NAME\tSTATUS\tSERVICE\tDASHBOARD\tDEPLOYMENT")
+	}
+	for _, deployment := range deployments {
+		serviceURL := optionalDeploymentString(deployment.ServiceURL)
+		dashboardURL := optionalDeploymentString(deployment.DashboardURL)
+		if wide {
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+				deployment.Name,
+				deployment.State,
+				deployment.PackageRef,
+				serviceURL,
+				dashboardURL,
+				deployment.ID,
+			)
+			continue
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			deployment.Name,
+			deployment.State,
+			serviceURL,
+			dashboardURL,
+			deployment.ID,
+		)
+	}
+	_ = w.Flush()
+}
+
+func limitDeployments(deployments []cloud.DeploymentRecord, limit int) []cloud.DeploymentRecord {
+	if limit > 0 && len(deployments) > limit {
+		return deployments[:limit]
+	}
+	return deployments
+}
+
+func optionalDeploymentString(value *string) string {
+	if value == nil || *value == "" {
+		return "-"
+	}
+	return *value
 }
 
 func listEnvironments(jsonOut bool) {

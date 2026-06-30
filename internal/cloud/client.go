@@ -33,28 +33,13 @@ type Environment struct {
 	HasRecoverable bool
 }
 
-type ApplyPackageRecord struct {
-	Digest      string  `json:"digest"`
-	SizeBytes   int     `json:"size_bytes"`
-	CreatedAt   string  `json:"created_at"`
-	Name        *string `json:"name,omitempty"`
-	Version     *string `json:"version,omitempty"`
-	DisplayName *string `json:"display_name,omitempty"`
-	Description *string `json:"description,omitempty"`
-	Visibility  string  `json:"visibility"`
-	UpdatedAt   *string `json:"updated_at,omitempty"`
-}
-
-type ApplyPackageListResponse struct {
-	Packages []ApplyPackageRecord `json:"packages"`
-}
-
-type ApplyPackageMetadata struct {
-	Name        string `json:"name,omitempty"`
-	Version     string `json:"version,omitempty"`
-	DisplayName string `json:"display_name,omitempty"`
-	Description string `json:"description,omitempty"`
-	Visibility  string `json:"visibility,omitempty"`
+type PackageVersionRecord struct {
+	Scope     string `json:"scope"`
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	Ref       string `json:"ref"`
+	Digest    string `json:"digest"`
+	CreatedAt string `json:"created_at"`
 }
 
 type EnvironmentSessionRecord struct {
@@ -75,6 +60,7 @@ type DeploymentRecord struct {
 	ID             string  `json:"id"`
 	Name           string  `json:"name"`
 	State          string  `json:"state"`
+	PackageRef     string  `json:"package_ref"`
 	PackageDigest  string  `json:"package_digest"`
 	RuntimeVersion *string `json:"runtime_version,omitempty"`
 	ServiceURL     *string `json:"service_url,omitempty"`
@@ -200,8 +186,9 @@ func (c *Client) CreateEnvironment() (*Environment, error) {
 	return &env, nil
 }
 
-func (c *Client) UploadApplyPackage(digest string, data []byte) (*ApplyPackageRecord, error) {
-	resp, err := c.doRaw("PUT", "/api/packages/"+url.PathEscape(digest), data, "application/gzip")
+func (c *Client) PublishPackageVersion(scope, name, version string, data []byte) (*PackageVersionRecord, error) {
+	path := "/api/packages/" + url.PathEscape(scope) + "/" + url.PathEscape(name) + "/versions/" + url.PathEscape(version)
+	resp, err := c.doRaw("PUT", path, data, "application/gzip")
 	if err != nil {
 		return nil, err
 	}
@@ -209,50 +196,11 @@ func (c *Client) UploadApplyPackage(digest string, data []byte) (*ApplyPackageRe
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return nil, readError(resp)
 	}
-	var record ApplyPackageRecord
+	var record PackageVersionRecord
 	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
 		return nil, err
 	}
 	return &record, nil
-}
-
-func (c *Client) UpdateApplyPackageMetadata(digest string, metadata ApplyPackageMetadata) (*ApplyPackageRecord, error) {
-	if metadata.Visibility == "" {
-		metadata.Visibility = "private"
-	}
-	body, err := json.Marshal(metadata)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.do("PATCH", "/api/packages/"+url.PathEscape(digest), body)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, readError(resp)
-	}
-	var record ApplyPackageRecord
-	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
-		return nil, err
-	}
-	return &record, nil
-}
-
-func (c *Client) ListApplyPackages() ([]ApplyPackageRecord, error) {
-	resp, err := c.do("GET", "/api/packages", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, readError(resp)
-	}
-	var response ApplyPackageListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
-	return response.Packages, nil
 }
 
 func (c *Client) ApplyEnvironmentSession(envID, name, packageDigest string) (*EnvironmentSessionApplyResponse, error) {
@@ -275,10 +223,10 @@ func (c *Client) ApplyEnvironmentSession(envID, name, packageDigest string) (*En
 	return &response, nil
 }
 
-func (c *Client) CreateDeployment(name, packageDigest string) (*DeploymentRecord, error) {
+func (c *Client) CreateDeployment(name, packageRef string) (*DeploymentRecord, error) {
 	body, err := json.Marshal(map[string]string{
-		"name":           name,
-		"package_digest": packageDigest,
+		"name":        name,
+		"package_ref": packageRef,
 	})
 	if err != nil {
 		return nil, err
@@ -298,8 +246,8 @@ func (c *Client) CreateDeployment(name, packageDigest string) (*DeploymentRecord
 	return &response, nil
 }
 
-func (c *Client) UpdateDeployment(deploymentID, packageDigest string) (*DeploymentRecord, error) {
-	body, err := json.Marshal(map[string]string{"package_digest": packageDigest})
+func (c *Client) UpdateDeployment(deploymentID, packageRef string) (*DeploymentRecord, error) {
+	body, err := json.Marshal(map[string]string{"package_ref": packageRef})
 	if err != nil {
 		return nil, err
 	}

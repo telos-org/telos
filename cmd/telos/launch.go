@@ -29,6 +29,7 @@ func cmdLaunch(command, action string, args []string) {
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	workspace := fs.String("workspace", "", "Workspace directory")
 	env := fs.String("env", "", "Cloud environment ID")
+	scope := fs.String("scope", "", "Package scope")
 	model := fs.String("model", "", "Model name")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
 	until := fs.Int("until", 0, "Run exactly N evaluator review cycles")
@@ -50,6 +51,10 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	if command == "apply" && *env != "" {
 		fmt.Fprintln(os.Stderr, "error: --env is no longer supported with telos apply; deployments allocate environments automatically")
+		os.Exit(1)
+	}
+	if command != "apply" && flagNameSet(fs, "scope") {
+		fmt.Fprintln(os.Stderr, "error: --scope is only supported with telos apply")
 		os.Exit(1)
 	}
 
@@ -119,13 +124,14 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudExisting:
-		runCloud(command, specArg, *env, untilValue, fs, *model, *thinking, *maxCostUSD, *agentTimeout, *jsonOut, false, 0, action)
+		runCloud(command, specArg, *env, *scope, untilValue, fs, *model, *thinking, *maxCostUSD, *agentTimeout, *jsonOut, false, 0, action)
 		return
 	case launchCloudNew:
 		runCloud(
 			command,
 			specArg,
 			"",
+			*scope,
 			untilValue,
 			fs,
 			*model,
@@ -276,6 +282,7 @@ func runCloud(
 	command string,
 	specArg string,
 	envID string,
+	scope string,
 	until int,
 	fs *flag.FlagSet,
 	model string,
@@ -288,7 +295,7 @@ func runCloud(
 	action string,
 ) {
 	if command == "apply" {
-		applyCloudControl(specArg, jsonOut)
+		applyCloudControl(specArg, scope, jsonOut)
 		return
 	}
 	req, err := sessionCreateRequestForSpec(specArg)
@@ -327,6 +334,7 @@ func runCloud(
 
 func applyCloudControl(
 	specArg string,
+	scope string,
 	jsonOut bool,
 ) {
 	pkg, err := packageSpec(specArg)
@@ -339,11 +347,12 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if _, err := pushSpecPackage(control, pkg); err != nil {
+	record, err := pushSpecPackage(control, pkg, scope)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	operation, deployment, err := applyDeploymentPackage(control, pkg.name, pkg.digest)
+	operation, deployment, err := applyDeploymentPackage(control, pkg.name, record.Ref)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -358,7 +367,7 @@ func applyCloudControl(
 	printDeploymentReceipt(os.Stdout, operation, deployment)
 }
 
-func applyDeploymentPackage(control *cloud.Client, name string, digest string) (string, *cloud.DeploymentRecord, error) {
+func applyDeploymentPackage(control *cloud.Client, name string, packageRef string) (string, *cloud.DeploymentRecord, error) {
 	deployments, err := control.ListDeployments()
 	if err != nil {
 		return "", nil, err
@@ -371,10 +380,10 @@ func applyDeploymentPackage(control *cloud.Client, name string, digest string) (
 	}
 	switch len(matches) {
 	case 0:
-		deployment, err := control.CreateDeployment(name, digest)
+		deployment, err := control.CreateDeployment(name, packageRef)
 		return "created", deployment, err
 	case 1:
-		deployment, err := control.UpdateDeployment(matches[0].ID, digest)
+		deployment, err := control.UpdateDeployment(matches[0].ID, packageRef)
 		return "updated", deployment, err
 	default:
 		return "", nil, fmt.Errorf("multiple deployments named %q; update by deployment id is not supported by telos apply yet", name)
@@ -420,6 +429,7 @@ func printDeploymentReceipt(out io.Writer, operation string, deployment *cloud.D
 	printSummaryField(out, "Name", deployment.Name)
 	printSummaryField(out, "Platform", "cloud")
 	printSummaryField(out, "Status", deployment.State)
+	printSummaryField(out, "Package", deployment.PackageRef)
 	printSummaryField(out, "Digest", deployment.PackageDigest)
 	printSummaryField(out, "Deployment", deployment.ID)
 	if deployment.ServiceURL != nil {

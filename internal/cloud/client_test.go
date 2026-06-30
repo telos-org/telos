@@ -194,34 +194,23 @@ func TestClientCreateEnvironmentAcceptsLegacyAccessField(t *testing.T) {
 	}
 }
 
-func TestClientUploadApplyPackage(t *testing.T) {
+func TestClientPublishPackageVersion(t *testing.T) {
 	var uploadedBody []byte
-	var metadataBody map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/api/packages/sha256:abc":
+		case r.Method == http.MethodPut && r.URL.Path == "/api/packages/telos/auth/versions/1.2.3":
 			uploadedBody, _ = io.ReadAll(r.Body)
 			json.NewEncoder(w).Encode(map[string]any{
-				"digest":     "sha256:abc",
-				"size_bytes": len(uploadedBody),
-				"created_at": "now",
-				"visibility": "private",
-			})
-		case r.Method == http.MethodPatch && r.URL.Path == "/api/packages/sha256:abc":
-			if err := json.NewDecoder(r.Body).Decode(&metadataBody); err != nil {
-				t.Fatal(err)
-			}
-			json.NewEncoder(w).Encode(map[string]any{
-				"digest":     "sha256:abc",
-				"size_bytes": len(uploadedBody),
-				"created_at": "now",
+				"scope":      "telos",
 				"name":       "auth",
-				"visibility": "private",
-				"updated_at": "now",
+				"version":    "1.2.3",
+				"ref":        "@telos/auth:1.2.3",
+				"digest":     "sha256:abc",
+				"created_at": "now",
 			})
 		default:
 			http.NotFound(w, r)
@@ -230,22 +219,12 @@ func TestClientUploadApplyPackage(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	uploaded, err := client.UploadApplyPackage("sha256:abc", []byte("package"))
+	uploaded, err := client.PublishPackageVersion("telos", "auth", "1.2.3", []byte("package"))
 	if err != nil {
-		t.Fatalf("UploadApplyPackage: %v", err)
+		t.Fatalf("PublishPackageVersion: %v", err)
 	}
-	if uploaded.SizeBytes != len("package") || string(uploadedBody) != "package" {
+	if uploaded.Ref != "@telos/auth:1.2.3" || uploaded.Digest != "sha256:abc" || string(uploadedBody) != "package" {
 		t.Fatalf("upload: got %+v body %q", uploaded, uploadedBody)
-	}
-	patched, err := client.UpdateApplyPackageMetadata("sha256:abc", ApplyPackageMetadata{Name: "auth"})
-	if err != nil {
-		t.Fatalf("UpdateApplyPackageMetadata: %v", err)
-	}
-	if patched.Name == nil || *patched.Name != "auth" {
-		t.Fatalf("metadata: got %+v", patched)
-	}
-	if metadataBody["name"] != "auth" || metadataBody["visibility"] != "private" {
-		t.Fatalf("metadata body: got %#v", metadataBody)
 	}
 }
 
@@ -303,6 +282,7 @@ func TestClientCreateDeployment(t *testing.T) {
 			"id":             "dep_123",
 			"name":           "auth",
 			"state":          "provisioning",
+			"package_ref":    "@telos/auth:1.2.3",
 			"package_digest": "sha256:abc",
 			"created_at":     "now",
 			"updated_at":     "now",
@@ -311,14 +291,14 @@ func TestClientCreateDeployment(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.CreateDeployment("auth", "sha256:abc")
+	deployment, err := client.CreateDeployment("auth", "@telos/auth:1.2.3")
 	if err != nil {
 		t.Fatalf("CreateDeployment: %v", err)
 	}
 	if deployment.ID != "dep_123" || deployment.Name != "auth" || deployment.State != "provisioning" {
 		t.Fatalf("deployment: got %+v", deployment)
 	}
-	if gotBody["name"] != "auth" || gotBody["package_digest"] != "sha256:abc" {
+	if gotBody["name"] != "auth" || gotBody["package_ref"] != "@telos/auth:1.2.3" {
 		t.Fatalf("body: got %#v", gotBody)
 	}
 }
@@ -337,6 +317,7 @@ func TestClientUpdateDeployment(t *testing.T) {
 			"id":             "dep_123",
 			"name":           "auth",
 			"state":          "deploying",
+			"package_ref":    "@telos/auth:1.2.4",
 			"package_digest": "sha256:def",
 			"created_at":     "then",
 			"updated_at":     "now",
@@ -345,14 +326,14 @@ func TestClientUpdateDeployment(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.UpdateDeployment("dep_123", "sha256:def")
+	deployment, err := client.UpdateDeployment("dep_123", "@telos/auth:1.2.4")
 	if err != nil {
 		t.Fatalf("UpdateDeployment: %v", err)
 	}
 	if deployment.ID != "dep_123" || deployment.PackageDigest != "sha256:def" || deployment.State != "deploying" {
 		t.Fatalf("deployment: got %+v", deployment)
 	}
-	if gotBody["package_digest"] != "sha256:def" {
+	if gotBody["package_ref"] != "@telos/auth:1.2.4" {
 		t.Fatalf("body: got %#v", gotBody)
 	}
 }
@@ -368,6 +349,7 @@ func TestClientListDeployments(t *testing.T) {
 				"id":             "dep_123",
 				"name":           "auth",
 				"state":          "healthy",
+				"package_ref":    "@telos/auth:1.2.3",
 				"package_digest": "sha256:abc",
 				"created_at":     "then",
 				"updated_at":     "now",
