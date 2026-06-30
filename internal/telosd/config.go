@@ -109,12 +109,6 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	if cfg.Auth.TokenFile == "" {
 		cfg.Auth.TokenFile = cfg.TokenFile
 	}
-	if cfg.Kubernetes.AgentImage == "" {
-		cfg.Kubernetes.AgentImage = cfg.AgentImage
-	}
-	if cfg.Kubernetes.ImagePullSecret == "" {
-		cfg.Kubernetes.ImagePullSecret = cfg.ImagePullSecret
-	}
 	if cfg.Mode == "" {
 		cfg.Mode = ModeLocal
 	}
@@ -160,33 +154,6 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		if cfg.Worker.Substrate == "" {
 			cfg.Worker.Substrate = envOr("TELOS_WORKER_SUBSTRATE", "local-process")
 		}
-		if cfg.Kubernetes.AgentImage == "" {
-			cfg.Kubernetes.AgentImage = envOr("TELOS_AGENT_IMAGE", "telos-agent:latest")
-		}
-		if cfg.Kubernetes.EnvNamespace == "" {
-			cfg.Kubernetes.EnvNamespace = envOr("TELOS_ENV_NAMESPACE", "ns-telos-env")
-		}
-		if cfg.Kubernetes.StateMountRoot == "" {
-			cfg.Kubernetes.StateMountRoot = envOr("TELOS_STATE_MOUNT_ROOT", cfg.Root)
-		}
-		if cfg.Kubernetes.StateHostRoot == "" {
-			cfg.Kubernetes.StateHostRoot = envOr("TELOS_STATE_HOST_ROOT", "/var/telos-state")
-		}
-		if cfg.Kubernetes.StateNodeRoot == "" {
-			cfg.Kubernetes.StateNodeRoot = envOr("TELOS_STATE_NODE_ROOT", "/var/telos-state")
-		}
-		if cfg.Kubernetes.ImagePullSecret == "" {
-			cfg.Kubernetes.ImagePullSecret = defaultImagePullSecret(cfg.Kubernetes.AgentImage)
-		}
-		if cfg.Kubernetes.AgentSecretName == "" {
-			cfg.Kubernetes.AgentSecretName = "agent-api-keys"
-		}
-		if cfg.Kubernetes.AgentSecretKey == "" {
-			cfg.Kubernetes.AgentSecretKey = "SAIL_API_KEY"
-		}
-		if cfg.Kubernetes.CopySecrets == nil {
-			cfg.Kubernetes.CopySecrets = []string{"telos-env-keys"}
-		}
 	default:
 		return Config{}, fmt.Errorf("invalid mode %q", cfg.Mode)
 	}
@@ -210,6 +177,9 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		case "local-process", "kubernetes":
 		default:
 			return Config{}, fmt.Errorf("invalid worker.substrate %q", cfg.Worker.Substrate)
+		}
+		if cfg.Worker.Substrate == "kubernetes" {
+			cfg = withKubernetesWorkerDefaults(cfg)
 		}
 	}
 	if cfg.Auth.Type == AuthBearer {
@@ -240,6 +210,43 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		return Config{}, fmt.Errorf("invalid server.transport %q", cfg.Server.Transport)
 	}
 	return cfg, nil
+}
+
+func withKubernetesWorkerDefaults(cfg Config) Config {
+	if cfg.Kubernetes.AgentImage == "" {
+		cfg.Kubernetes.AgentImage = cfg.AgentImage
+	}
+	if cfg.Kubernetes.ImagePullSecret == "" {
+		cfg.Kubernetes.ImagePullSecret = cfg.ImagePullSecret
+	}
+	if cfg.Kubernetes.AgentImage == "" {
+		cfg.Kubernetes.AgentImage = envOr("TELOS_AGENT_IMAGE", "telos-agent:latest")
+	}
+	if cfg.Kubernetes.EnvNamespace == "" {
+		cfg.Kubernetes.EnvNamespace = envOr("TELOS_ENV_NAMESPACE", "ns-telos-env")
+	}
+	if cfg.Kubernetes.StateMountRoot == "" {
+		cfg.Kubernetes.StateMountRoot = envOr("TELOS_STATE_MOUNT_ROOT", cfg.Root)
+	}
+	if cfg.Kubernetes.StateHostRoot == "" {
+		cfg.Kubernetes.StateHostRoot = envOr("TELOS_STATE_HOST_ROOT", "/var/telos-state")
+	}
+	if cfg.Kubernetes.StateNodeRoot == "" {
+		cfg.Kubernetes.StateNodeRoot = envOr("TELOS_STATE_NODE_ROOT", "/var/telos-state")
+	}
+	if cfg.Kubernetes.ImagePullSecret == "" {
+		cfg.Kubernetes.ImagePullSecret = defaultImagePullSecret(cfg.Kubernetes.AgentImage)
+	}
+	if cfg.Kubernetes.AgentSecretName == "" {
+		cfg.Kubernetes.AgentSecretName = "agent-api-keys"
+	}
+	if cfg.Kubernetes.AgentSecretKey == "" {
+		cfg.Kubernetes.AgentSecretKey = "SAIL_API_KEY"
+	}
+	if cfg.Kubernetes.CopySecrets == nil {
+		cfg.Kubernetes.CopySecrets = []string{"telos-env-keys"}
+	}
+	return cfg
 }
 
 func defaultImagePullSecret(agentImage string) string {
