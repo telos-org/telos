@@ -1,6 +1,7 @@
 package sessionworker
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,7 +12,16 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
+type StartOptions struct {
+	Runtime    sessionapi.SessionRuntime
+	WakeReason string
+}
+
 func Start(sessionDir string, runtime sessionapi.SessionRuntime) error {
+	return StartWithOptions(sessionDir, StartOptions{Runtime: runtime})
+}
+
+func StartWithOptions(sessionDir string, opts StartOptions) error {
 	telosd, err := resolveTelosd()
 	if err != nil {
 		return err
@@ -24,7 +34,7 @@ func Start(sessionDir string, runtime sessionapi.SessionRuntime) error {
 	defer logFile.Close()
 
 	cmd := exec.Command(telosd, "--session-dir", sessionDir)
-	cmd.Env = Env(sessionDir, runtime)
+	cmd.Env = Env(sessionDir, opts)
 	cmd.Stdin = nil
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
@@ -40,17 +50,58 @@ func Start(sessionDir string, runtime sessionapi.SessionRuntime) error {
 	return nil
 }
 
-func Env(sessionDir string, runtime sessionapi.SessionRuntime) []string {
+func Env(sessionDir string, opts StartOptions) []string {
+	runtime := opts.Runtime
+	if runtime == "" {
+		runtime = sessionapi.RuntimeLocal
+	}
 	env := append(os.Environ(),
 		"TELOS_RUNTIME="+string(runtime),
 		"TELOS_SESSION_DIR="+filepath.Dir(sessionDir),
 		"TELOS_SESSION_ID="+filepath.Base(sessionDir),
 	)
 	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
-	if err == nil && manifest.ParentSessionID != nil {
-		env = append(env, "TELOS_PARENT_SESSION_ID="+*manifest.ParentSessionID)
+	if err == nil {
+		if manifest.ParentSessionID != nil {
+			env = append(env, "TELOS_PARENT_SESSION_ID="+*manifest.ParentSessionID)
+		}
+		if manifest.Access != nil && manifest.Access.APIToken != "" {
+			env = append(env, "TELOS_API_TOKEN="+manifest.Access.APIToken)
+		}
+	}
+	if opts.WakeReason != "" {
+		env = append(env,
+			"TELOS_WAKE_REASON="+opts.WakeReason,
+			"TELOS_WAKE_ID="+opts.WakeReason+":"+time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		)
 	}
 	return env
+}
+
+func Stop(sessionDir string) error {
+	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err != nil {
+		return fmt.Errorf("read session manifest: %w", err)
+	}
+	open := manifest.OpenEpoch()
+	if open == nil || open.Runner == nil {
+		return nil
+	}
+	pid, ok := open.Runner.ProcessID()
+	if !ok || pid == os.Getpid() {
+		return nil
+	}
+	group := pid
+	if pgid, ok := open.Runner.ProcessGroupID(); ok {
+		group = pgid
+	}
+	if err := syscall.Kill(-group, syscall.SIGTERM); err == nil || errors.Is(err, syscall.ESRCH) {
+		return nil
+	}
+	if err := syscall.Kill(pid, syscall.SIGTERM); err != nil && !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("stop worker process %d: %w", pid, err)
+	}
+	return nil
 }
 
 func resolveTelosd() (string, error) {

@@ -33,11 +33,15 @@ func Run(ctx context.Context, cfg Config) error {
 	baseStore := storeForConfig(cfg)
 	store := sessionapi.Store(baseStore)
 	if cfg.Mode == ModeCloud {
-		substrate, err := newKubernetesSubstrate(cfg)
+		routeClient, err := kubernetesClient()
 		if err != nil {
 			return err
 		}
-		startRouteReconciler(ctx, substrate.client)
+		substrate, err := newSessionSubstrate(cfg)
+		if err != nil {
+			return err
+		}
+		startRouteReconciler(ctx, routeClient)
 		store = newCloudSessionStore(baseStore, newRouteHandleResolver(), substrate)
 		startControlSessionReconciler(ctx, store, cfg)
 	}

@@ -35,6 +35,7 @@ type Config struct {
 	ImagePullSecret string           `yaml:"image_pull_secret"`
 	Server          ServerConfig     `yaml:"server"`
 	Auth            AuthConfig       `yaml:"auth"`
+	Worker          WorkerConfig     `yaml:"worker"`
 	Runtime         RuntimeConfig    `yaml:"runtime"`
 	Kubernetes      KubernetesConfig `yaml:"kubernetes"`
 }
@@ -50,6 +51,10 @@ type AuthConfig struct {
 	Type      AuthType `yaml:"type"`
 	Token     string   `yaml:"token"`
 	TokenFile string   `yaml:"token_file"`
+}
+
+type WorkerConfig struct {
+	Substrate string `yaml:"substrate"`
 }
 
 type RuntimeConfig struct {
@@ -152,6 +157,9 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		if cfg.Runtime.MountPath == "" {
 			cfg.Runtime.MountPath = "/telos-runtime"
 		}
+		if cfg.Worker.Substrate == "" {
+			cfg.Worker.Substrate = envOr("TELOS_WORKER_SUBSTRATE", "local-process")
+		}
 		if cfg.Kubernetes.AgentImage == "" {
 			cfg.Kubernetes.AgentImage = envOr("TELOS_AGENT_IMAGE", "telos-agent:latest")
 		}
@@ -196,6 +204,13 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.Auth.Type != AuthLocal && cfg.Auth.Type != AuthBearer {
 		return Config{}, fmt.Errorf("invalid auth.type %q", cfg.Auth.Type)
+	}
+	if cfg.Mode == ModeCloud {
+		switch cfg.Worker.Substrate {
+		case "local-process", "kubernetes":
+		default:
+			return Config{}, fmt.Errorf("invalid worker.substrate %q", cfg.Worker.Substrate)
+		}
 	}
 	if cfg.Auth.Type == AuthBearer {
 		if cfg.Auth.Token == "" {

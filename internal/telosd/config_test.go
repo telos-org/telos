@@ -45,8 +45,39 @@ func TestNormalizeCloudConfigDefaults(t *testing.T) {
 	if cfg.Auth.Type != AuthBearer {
 		t.Fatalf("auth.type: got %q", cfg.Auth.Type)
 	}
+	if cfg.Worker.Substrate != "local-process" {
+		t.Fatalf("worker substrate: got %q", cfg.Worker.Substrate)
+	}
 	if cfg.Kubernetes.AgentSecretKey != "SAIL_API_KEY" {
 		t.Fatalf("agent secret key: got %q", cfg.Kubernetes.AgentSecretKey)
+	}
+}
+
+func TestNormalizeCloudConfigAcceptsKubernetesWorkerSubstrate(t *testing.T) {
+	cfg, err := NormalizeConfig(Config{
+		Mode:   ModeCloud,
+		Auth:   AuthConfig{Token: "operator-token"},
+		Worker: WorkerConfig{Substrate: "kubernetes"},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeConfig: %v", err)
+	}
+	if cfg.Worker.Substrate != "kubernetes" {
+		t.Fatalf("worker substrate: got %q", cfg.Worker.Substrate)
+	}
+}
+
+func TestNormalizeCloudConfigRejectsInvalidWorkerSubstrate(t *testing.T) {
+	_, err := NormalizeConfig(Config{
+		Mode:   ModeCloud,
+		Auth:   AuthConfig{Token: "operator-token"},
+		Worker: WorkerConfig{Substrate: "pod-farm"},
+	})
+	if err == nil {
+		t.Fatal("expected invalid worker substrate")
+	}
+	if err.Error() != `invalid worker.substrate "pod-farm"` {
+		t.Fatalf("error: got %q", err)
 	}
 }
 
@@ -198,6 +229,8 @@ server:
 auth:
   type: bearer
   token: test-token
+worker:
+  substrate: kubernetes
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -210,6 +243,9 @@ auth:
 	}
 	if cfg.Auth.Token != "test-token" {
 		t.Fatalf("auth token: got %q", cfg.Auth.Token)
+	}
+	if cfg.Worker.Substrate != "kubernetes" {
+		t.Fatalf("worker substrate: got %q", cfg.Worker.Substrate)
 	}
 }
 
