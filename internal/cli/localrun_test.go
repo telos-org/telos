@@ -11,6 +11,7 @@ import (
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionworker"
 )
 
 // fakeExecutor for testing local run.
@@ -787,7 +788,7 @@ func TestLocalWorkerEnvIncludesSessionContext(t *testing.T) {
 	}
 
 	values := map[string]string{}
-	for _, entry := range localWorkerEnv(session.SessionDir) {
+	for _, entry := range sessionworker.Env(session.SessionDir, sessionapi.RuntimeLocal) {
 		key, value, ok := strings.Cut(entry, "=")
 		if ok {
 			values[key] = value
@@ -1328,7 +1329,7 @@ func TestRunnerIdentityRecordsKubernetesPod(t *testing.T) {
 	t.Setenv("TELOS_RUNNER_POD_NAME", "controller-abc")
 	t.Setenv("TELOS_RUNNER_POD_NAMESPACE", "ns-ctrl-abc")
 
-	runner := runnerIdentity(1234)
+	runner := sessionworker.RunnerIdentity(1234)
 
 	if runner.Kind != "kubernetes-pod" {
 		t.Fatalf("kind: got %v", runner.Kind)
