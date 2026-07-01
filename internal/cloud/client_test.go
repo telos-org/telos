@@ -300,24 +300,24 @@ func TestClientDeleteDeployment(t *testing.T) {
 	}
 }
 
-func TestClientGetDeploymentTranscript(t *testing.T) {
+func TestClientGetDeploymentLogs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/dep_123/transcript" {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/dep_123/logs" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte("# Deployment Transcript\n\nSome content"))
+		w.Write([]byte("# Deployment Logs\n\nSome content"))
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	text, err := client.GetDeploymentTranscript("dep_123")
+	text, err := client.GetDeploymentLogs("dep_123")
 	if err != nil {
-		t.Fatalf("GetDeploymentTranscript: %v", err)
+		t.Fatalf("GetDeploymentLogs: %v", err)
 	}
-	if text != "# Deployment Transcript\n\nSome content" {
-		t.Fatalf("transcript: got %q", text)
+	if text != "# Deployment Logs\n\nSome content" {
+		t.Fatalf("logs: got %q", text)
 	}
 }
 

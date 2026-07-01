@@ -101,7 +101,7 @@ func getTranscriptFromAnywhere(sessionID string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return control.GetDeploymentTranscript(sessionID)
+		return control.GetDeploymentLogs(sessionID)
 	}
 
 	s := store()
