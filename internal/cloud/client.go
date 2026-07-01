@@ -194,10 +194,6 @@ func (c *Client) DeleteDeployment(deploymentID string) (*DeploymentRecord, error
 	return &response, nil
 }
 
-func (c *Client) GetDeploymentTranscript(deploymentID string) (string, error) {
-	return c.GetDeploymentLogs(deploymentID)
-}
-
 func (c *Client) GetDeploymentLogs(deploymentID string) (string, error) {
 	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(deploymentID)+"/logs", nil)
 	if err != nil {
