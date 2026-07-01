@@ -848,7 +848,7 @@ func TestFollowDeploymentTranscriptStopsWhenHealthy(t *testing.T) {
 	var deploymentCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123/transcript":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123/logs":
 			transcriptCalls++
 			_, _ = w.Write([]byte("# Transcript\n<progress_update>ready</progress_update>\n"))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123":

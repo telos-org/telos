@@ -77,7 +77,7 @@ func followDeploymentTranscript(
 	var lastProgressCount int
 	var lastTranscriptErr error
 	for {
-		text, err := control.GetDeploymentTranscript(deploymentID)
+		text, err := control.GetDeploymentLogs(deploymentID)
 		if err == nil && raw && len(text) > lastLen {
 			fmt.Fprint(out, text[lastLen:])
 			lastLen = len(text)
