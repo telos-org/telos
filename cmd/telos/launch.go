@@ -10,6 +10,7 @@ import (
 	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
+	"github.com/telos-org/telos/internal/runtimeclient"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -232,7 +233,7 @@ func runCloudChildSession(
 		req.Until = &until
 	}
 	applySessionRuntimeConfig(&req, runtimeConfig)
-	session, err := cloud.NewClient(ctx.endpoint, ctx.token).CreateSession(req)
+	session, err := runtimeclient.New(ctx.endpoint, ctx.token).CreateSession(req)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

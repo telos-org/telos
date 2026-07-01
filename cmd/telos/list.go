@@ -8,6 +8,7 @@ import (
 
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
+	"github.com/telos-org/telos/internal/runtimeclient"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -108,7 +109,7 @@ func rootListSessions(limit int) ([]sessionapi.Session, bool, error) {
 	if !ok {
 		return nil, false, nil
 	}
-	sessions, err := cloud.NewClient(ctx.endpoint, ctx.token).ListSessions(limit, true)
+	sessions, err := runtimeclient.New(ctx.endpoint, ctx.token).ListSessions(limit, true)
 	if err != nil {
 		return nil, true, fmt.Errorf("root session list failed: %w", err)
 	}
