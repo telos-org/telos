@@ -59,13 +59,13 @@ func followDeploymentLogs(deploymentID string, raw bool) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if err := followDeploymentTranscript(control, deploymentID, os.Stdout, time.Sleep, raw); err != nil {
+	if err := pollDeploymentLogs(control, deploymentID, os.Stdout, time.Sleep, raw); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func followDeploymentTranscript(
+func pollDeploymentLogs(
 	control *cloud.Client,
 	deploymentID string,
 	out io.Writer,

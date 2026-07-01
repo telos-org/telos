@@ -843,13 +843,13 @@ func TestPrintLogsRawShowsTranscript(t *testing.T) {
 	}
 }
 
-func TestFollowDeploymentTranscriptStopsWhenHealthy(t *testing.T) {
-	var transcriptCalls int
+func TestFollowDeploymentLogsStopsWhenHealthy(t *testing.T) {
+	var logCalls int
 	var deploymentCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123/logs":
-			transcriptCalls++
+			logCalls++
 			_, _ = w.Write([]byte("# Transcript\n<progress_update>ready</progress_update>\n"))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123":
 			deploymentCalls++
@@ -869,7 +869,7 @@ func TestFollowDeploymentTranscriptStopsWhenHealthy(t *testing.T) {
 	defer srv.Close()
 
 	var out bytes.Buffer
-	err := followDeploymentTranscript(
+	err := pollDeploymentLogs(
 		cloud.NewClient(srv.URL, "test-token"),
 		"dep_123",
 		&out,
@@ -877,10 +877,10 @@ func TestFollowDeploymentTranscriptStopsWhenHealthy(t *testing.T) {
 		false,
 	)
 	if err != nil {
-		t.Fatalf("followDeploymentTranscript: %v", err)
+		t.Fatalf("pollDeploymentLogs: %v", err)
 	}
-	if transcriptCalls != 1 || deploymentCalls != 1 {
-		t.Fatalf("calls: transcript=%d deployment=%d", transcriptCalls, deploymentCalls)
+	if logCalls != 1 || deploymentCalls != 1 {
+		t.Fatalf("calls: logs=%d deployment=%d", logCalls, deploymentCalls)
 	}
 	if !strings.Contains(out.String(), "#1 ready") {
 		t.Fatalf("follow output missing progress:\n%s", out.String())
