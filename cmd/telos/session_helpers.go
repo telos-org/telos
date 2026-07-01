@@ -96,14 +96,6 @@ func getSessionFromAnywhere(sessionID string) (*sessionapi.Session, error) {
 }
 
 func getTranscriptFromAnywhere(sessionID string) (string, error) {
-	if isDeploymentID(sessionID) {
-		control, err := cloud.ControlClient()
-		if err != nil {
-			return "", err
-		}
-		return control.GetDeploymentLogs(sessionID)
-	}
-
 	s := store()
 	text, err := s.Transcript(sessionID)
 	if err == nil {

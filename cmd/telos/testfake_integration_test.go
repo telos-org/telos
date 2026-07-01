@@ -93,9 +93,9 @@ func TestCLIWithTestFakeExecutor(t *testing.T) {
 		t.Fatalf("total cost: got %#v", describeResp.TotalCostUSD)
 	}
 
-	logsOut := runProcess(t, workspace, env, telosBin, "logs", "--raw", runResp.SessionID)
+	logsOut := runProcess(t, workspace, env, telosBin, "logs", "--verbose", runResp.SessionID)
 	if !strings.Contains(logsOut, "fake prover wrote hello.txt") || !strings.Contains(logsOut, "fake verifier accepted") {
-		t.Fatalf("raw logs missing fake turns:\n%s", logsOut)
+		t.Fatalf("verbose logs missing fake turns:\n%s", logsOut)
 	}
 
 	archivePath := filepath.Join(runResp.SessionDir, "specs", "fake-cli", "workspace.tar.gz")

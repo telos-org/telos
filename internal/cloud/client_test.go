@@ -306,18 +306,50 @@ func TestClientGetDeploymentLogs(t *testing.T) {
 			http.NotFound(w, r)
 			return
 		}
-		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte("# Deployment Logs\n\nSome content"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(sessionapi.SessionEventsResponse{
+			Events: []sessionapi.SessionEvent{
+				{Event: "agent_progress", Data: map[string]any{"kind": "progress_update", "text": "ready"}},
+			},
+		})
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	text, err := client.GetDeploymentLogs("dep_123")
+	events, err := client.GetDeploymentLogs("dep_123")
 	if err != nil {
 		t.Fatalf("GetDeploymentLogs: %v", err)
 	}
-	if text != "# Deployment Logs\n\nSome content" {
-		t.Fatalf("logs: got %q", text)
+	if len(events) != 1 || events[0].Event != "agent_progress" || events[0].Data["text"] != "ready" {
+		t.Fatalf("events: got %#v", events)
+	}
+}
+
+func TestClientStreamDeploymentLogs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/deployments/dep_123/logs" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Accept") != "text/event-stream" {
+			t.Fatalf("Accept: got %q", r.Header.Get("Accept"))
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"event\":\"game_end\",\"data\":{\"game_result\":\"completed\"}}\n\n"))
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	var events []sessionapi.SessionEvent
+	err := client.StreamDeploymentLogs(context.Background(), "dep_123", func(event sessionapi.SessionEvent) error {
+		events = append(events, event)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("StreamDeploymentLogs: %v", err)
+	}
+	if len(events) != 1 || events[0].Event != "game_end" || events[0].Data["game_result"] != "completed" {
+		t.Fatalf("events: got %#v", events)
 	}
 }
 

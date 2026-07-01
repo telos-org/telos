@@ -194,17 +194,30 @@ func (c *Client) DeleteDeployment(deploymentID string) (*DeploymentRecord, error
 	return &response, nil
 }
 
-func (c *Client) GetDeploymentLogs(deploymentID string) (string, error) {
+func (c *Client) GetDeploymentLogs(deploymentID string) ([]sessionapi.SessionEvent, error) {
 	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(deploymentID)+"/logs", nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", readError(resp)
+		return nil, readError(resp)
 	}
-	data, _ := io.ReadAll(resp.Body)
-	return string(data), nil
+	var response sessionapi.SessionEventsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return response.Events, nil
+}
+
+func (c *Client) StreamDeploymentLogs(ctx context.Context, deploymentID string, onEvent func(sessionapi.SessionEvent) error) error {
+	return c.streamEvents(ctx, "/api/deployments/"+url.PathEscape(deploymentID)+"/logs", func(data []byte) error {
+		var event sessionapi.SessionEvent
+		if err := json.Unmarshal(data, &event); err != nil {
+			return fmt.Errorf("decode deployment log event: %w", err)
+		}
+		return onEvent(event)
+	})
 }
 
 // NormalizeEndpoint cleans up an API endpoint URL.
@@ -353,7 +366,17 @@ func (c *Client) GetEvents(id string) ([]sessionapi.SessionEvent, error) {
 
 // StreamEvents follows the cloud event stream for a session.
 func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[string]any) error) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+"/api/sessions/"+id+"/events", nil)
+	return c.streamEvents(ctx, "/api/sessions/"+id+"/events", func(data []byte) error {
+		var event map[string]any
+		if err := json.Unmarshal(data, &event); err != nil {
+			return fmt.Errorf("decode event stream payload: %w", err)
+		}
+		return onEvent(event)
+	})
+}
+
+func (c *Client) streamEvents(ctx context.Context, path string, onData func([]byte) error) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+path, nil)
 	if err != nil {
 		return err
 	}
@@ -397,11 +420,7 @@ func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[s
 			continue
 		}
 		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		var event map[string]any
-		if decodeErr := json.Unmarshal([]byte(payload), &event); decodeErr != nil {
-			return fmt.Errorf("decode event stream payload: %w", decodeErr)
-		}
-		if err := onEvent(event); err != nil {
+		if err := onData([]byte(payload)); err != nil {
 			return err
 		}
 		if readErr != nil {
