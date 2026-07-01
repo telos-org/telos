@@ -843,6 +843,7 @@ func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
 			Logs:   "OK\n\n<status>CONCEDE</status>\n",
 		},
 	}
+	t.Setenv("TELOS_CONTROLLER_PROMPT_ENABLED", "1")
 	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
 		t.Fatalf("RunLocalSession: %v", err)
 	}
@@ -856,6 +857,50 @@ func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
 	}
 	if !strings.Contains(task, "Primary spec: `") {
 		t.Fatal("controller prompt should include primary spec path")
+	}
+}
+
+func TestRunLocalControllerSessionUsesBuildPromptByDefault(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(t.TempDir(), "telos-output"))
+	runTestCommand(t, dir, "git", "init", "-q")
+	runTestCommand(t, dir, "git", "add", "-A")
+	runTestCommand(t, dir, "git", "-c", "user.name=Telos", "-c", "user.email=telos@local", "commit", "-q", "-m", "initial")
+	session, err := CreateLocalSession(specPath, LocalRunConfig{
+		SessionKind: sessionapi.KindController,
+		Workspace:   dir,
+	})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessionapi.WriteManifest(filepath.Join(session.SessionDir, "session.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := &fakeExecutor{
+		proverResult: game.TurnResult{
+			Role:   "prover",
+			Status: game.StatusContinue,
+			Logs:   "Built.\n\n<progress_update>Built</progress_update>",
+		},
+		verifierResult: game.TurnResult{
+			Role:   "verifier",
+			Status: game.StatusConcede,
+			Logs:   "OK\n\n<status>CONCEDE</status>\n",
+		},
+	}
+	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
+		t.Fatalf("RunLocalSession: %v", err)
+	}
+
+	task := exec.firstTask()
+	if strings.Contains(task, "## Controller Role") {
+		t.Fatal("controller prompt should be opt-in")
 	}
 }
 

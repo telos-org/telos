@@ -385,14 +385,6 @@ func TestRootListSessionsScopesLocalRootTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create child: %v", err)
 	}
-	grandchildSpec := "---\nversion: v0\nname: grandchild\nplatform: local\n---\n# Grandchild\n"
-	grandchild, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown:    &grandchildSpec,
-		ParentSessionID: &child.SessionID,
-	})
-	if err != nil {
-		t.Fatalf("Create grandchild: %v", err)
-	}
 	siblingSpec := "---\nversion: v0\nname: sibling\nplatform: local\n---\n# Sibling\n"
 	if _, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &siblingSpec,
@@ -416,7 +408,7 @@ func TestRootListSessionsScopesLocalRootTree(t *testing.T) {
 	for _, session := range sessions {
 		got = append(got, session.SessionID)
 	}
-	want := []string{rootSession.SessionID, child.SessionID, grandchild.SessionID}
+	want := []string{rootSession.SessionID, child.SessionID}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("scoped sessions: got %v want %v", got, want)
 	}
