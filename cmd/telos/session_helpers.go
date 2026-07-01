@@ -7,7 +7,7 @@ import (
 	"strings"
 
 	"github.com/telos-org/telos/internal/cli"
-	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/runtimeclient"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -85,7 +85,7 @@ func getSessionFromAnywhere(sessionID string) (*sessionapi.Session, error) {
 	}
 
 	if ctx, ok := rootSessionContext(); ok {
-		session, err := cloud.NewClient(ctx.endpoint, ctx.token).GetSession(sessionID)
+		session, err := runtimeclient.New(ctx.endpoint, ctx.token).GetSession(sessionID)
 		if err == nil {
 			return session, nil
 		}
@@ -103,7 +103,7 @@ func getTranscriptFromAnywhere(sessionID string) (string, error) {
 	}
 
 	if ctx, ok := rootSessionContext(); ok {
-		text, err := cloud.NewClient(ctx.endpoint, ctx.token).GetTranscript(sessionID)
+		text, err := runtimeclient.New(ctx.endpoint, ctx.token).GetTranscript(sessionID)
 		if err == nil {
 			return text, nil
 		}
