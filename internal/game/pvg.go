@@ -235,6 +235,17 @@ func (p *PVG) promptOptions() spec.PromptOptions {
 func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string) TurnResult {
 	ts := p.State.Turn(roundNum, role)
 	ts.StopRequested = p.Config.StopRequested
+	turnID := fmt.Sprintf("%04d-%s", roundNum, role)
+	ts.OnLiveEvent = func(event LiveAgentEvent) {
+		if err := AppendLiveAgentEvent(p.State.TranscriptPath, role, roleRound, turnID, event); err != nil {
+			return
+		}
+		p.Evidence.Log("agent_progress", roundNum, role, map[string]interface{}{
+			"kind":    event.Kind,
+			"text":    event.Text,
+			"turn_id": turnID,
+		})
+	}
 	if err := WriteTurnTask(ts, task); err != nil {
 		turn := TurnResult{
 			Role:   role,
@@ -244,7 +255,7 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 		}
 		p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
 		AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
-			turn.Logs, &turn.Stats, fmt.Sprintf("%04d-%s", roundNum, role), turn.Error,
+			turn.Logs, &turn.Stats, turnID, turn.Error,
 			AppendTurnOptions{
 				IncludeStatus: !p.fixedReviewMode(),
 				PiSessionPath: ts.PiSessionPath(),
@@ -258,7 +269,7 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 	p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
 
 	AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
-		turn.Logs, &turn.Stats, fmt.Sprintf("%04d-%s", roundNum, role), turn.Error,
+		turn.Logs, &turn.Stats, turnID, turn.Error,
 		AppendTurnOptions{
 			IncludeStatus: !p.fixedReviewMode(),
 			PiSessionPath: ts.PiSessionPath(),

@@ -46,6 +46,12 @@ type TurnResult struct {
 	Recoverable bool
 }
 
+// LiveAgentEvent is a user-visible progress artifact emitted before a turn exits.
+type LiveAgentEvent struct {
+	Kind string
+	Text string
+}
+
 // AgentExecutor runs one PVG agent turn.
 type AgentExecutor interface {
 	ExecuteTurn(task string, role string, turnState *TurnState) TurnResult
@@ -101,6 +107,7 @@ type TurnState struct {
 	Role          string
 	Dir           string
 	StopRequested func() bool
+	OnLiveEvent   func(LiveAgentEvent)
 }
 
 // TurnID returns the canonical turn identifier.

@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
@@ -53,7 +55,15 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	if taskPath != "" {
 		taskEnv = ""
 	}
-	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, nil)
+	projector := startPiLiveProjector(sessionPath, turnState)
+	if projector != nil {
+		defer projector.Stop()
+	}
+	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, func(line string) {
+		if projector != nil {
+			projector.ObserveLine(line)
+		}
+	})
 
 	logs := strings.Join(result.RawLines, "\n")
 	if sessionPath != "" {
@@ -133,6 +143,100 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		Logs:   logs,
 		Stats:  stats,
 	}
+}
+
+type piLiveProjector struct {
+	sessionPath string
+	turnState   *game.TurnState
+
+	mu   sync.Mutex
+	seen map[string]bool
+	stop chan struct{}
+	done chan struct{}
+}
+
+func startPiLiveProjector(sessionPath string, turnState *game.TurnState) *piLiveProjector {
+	if sessionPath == "" || turnState == nil || turnState.OnLiveEvent == nil {
+		return nil
+	}
+	p := &piLiveProjector{
+		sessionPath: sessionPath,
+		turnState:   turnState,
+		seen:        map[string]bool{},
+		stop:        make(chan struct{}),
+		done:        make(chan struct{}),
+	}
+	go p.watch()
+	return p
+}
+
+func (p *piLiveProjector) Stop() {
+	close(p.stop)
+	<-p.done
+	p.observeSessionFile()
+}
+
+func (p *piLiveProjector) ObserveLine(line string) {
+	for _, event := range piLineEvents(line) {
+		p.emit(event)
+	}
+}
+
+func (p *piLiveProjector) watch() {
+	defer close(p.done)
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			p.observeSessionFile()
+		case <-p.stop:
+			return
+		}
+	}
+}
+
+func (p *piLiveProjector) observeSessionFile() {
+	data, err := os.ReadFile(p.sessionPath)
+	if err != nil {
+		return
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		p.ObserveLine(line)
+	}
+}
+
+func (p *piLiveProjector) emit(event game.LiveAgentEvent) {
+	key := event.Kind + "\x00" + event.Text
+	p.mu.Lock()
+	if p.seen[key] {
+		p.mu.Unlock()
+		return
+	}
+	p.seen[key] = true
+	p.mu.Unlock()
+	p.turnState.OnLiveEvent(event)
+}
+
+func piLineEvents(line string) []game.LiveAgentEvent {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return nil
+	}
+	var entry map[string]interface{}
+	dec := json.NewDecoder(strings.NewReader(line))
+	dec.UseNumber()
+	if dec.Decode(&entry) != nil {
+		return nil
+	}
+	msg, ok := entry["message"].(map[string]interface{})
+	if !ok || getString(msg, "role") != "assistant" {
+		return nil
+	}
+	return game.ExtractLiveAgentEvents(assistantText(msg))
 }
 
 // WorkspaceState returns the workspace state from the platform.

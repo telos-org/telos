@@ -93,6 +93,32 @@ func TestAppendTurnVerifier(t *testing.T) {
 	}
 }
 
+func TestExtractAndAppendLiveAgentEvents(t *testing.T) {
+	text := "working\n<progress_update ts=\"now\">Built API</progress_update>\n<summary>Ready for review</summary>"
+	events := ExtractLiveAgentEvents(text)
+	if len(events) != 2 {
+		t.Fatalf("events: got %#v", events)
+	}
+	if events[0].Kind != "progress_update" || events[0].Text != "Built API" {
+		t.Fatalf("first event: got %#v", events[0])
+	}
+	if events[1].Kind != "summary" || events[1].Text != "Ready for review" {
+		t.Fatalf("second event: got %#v", events[1])
+	}
+
+	path := filepath.Join(t.TempDir(), "transcript.md")
+	if err := AppendLiveAgentEvent(path, "prover", 1, "0001-prover", events[0]); err != nil {
+		t.Fatalf("AppendLiveAgentEvent: %v", err)
+	}
+	content := ReadTranscript(path)
+	if !strings.Contains(content, "## Live Implementation 1") {
+		t.Fatalf("missing live heading:\n%s", content)
+	}
+	if !strings.Contains(content, "<progress_update>Built API</progress_update>") {
+		t.Fatalf("missing live progress tag:\n%s", content)
+	}
+}
+
 func TestAppendTurnWithError(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "transcript.md")
