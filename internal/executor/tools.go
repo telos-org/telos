@@ -719,13 +719,10 @@ func (t *nativeTools) applyPatch(ctx context.Context, patchText string) (toolOut
 	if err := tmp.Close(); err != nil {
 		return toolOutput{}, err
 	}
-	changed := patchChangedPaths(patchText)
-	if err := validatePatchPaths(patchDeclaredPaths(patchText)); err != nil {
+	metadata := parsePatchMetadata(patchText)
+	if err := validatePatchPaths(metadata.declared); err != nil {
 		return toolOutput{}, err
 	}
-	created := patchCreatedPaths(patchText)
-	deleted := patchDeletedPaths(patchText)
-	hunks := patchHunkCount(patchText)
 	cmd := "git apply --whitespace=nowarn --recount " + shellQuote(tmp.Name())
 	bashOut, err := t.bash(ctx, cmd, "", nil, defaultToolTimeoutSec)
 	if err != nil {
@@ -734,14 +731,14 @@ func (t *nativeTools) applyPatch(ctx context.Context, patchText string) (toolOut
 	return toolOutput{
 		fields: toolFields(
 			"patch_bytes", len(patchText),
-			"changed_path_count", len(changed),
-			"changed_paths", strings.Join(changed, ", "),
-			"created_paths", strings.Join(created, ", "),
-			"deleted_paths", strings.Join(deleted, ", "),
-			"hunk_count", hunks,
+			"changed_path_count", len(metadata.changed),
+			"changed_paths", strings.Join(metadata.changed, ", "),
+			"created_paths", strings.Join(metadata.created, ", "),
+			"deleted_paths", strings.Join(metadata.deleted, ", "),
+			"hunk_count", metadata.hunks,
 		),
 		bodies: []toolBodySection{
-			{Key: "files", Text: t.patchFileMetadata(changed, created, deleted)},
+			{Key: "files", Text: t.patchFileMetadata(metadata.changed, metadata.created, metadata.deleted)},
 			{Text: bashOut.innerText()},
 		},
 	}, nil
@@ -1486,63 +1483,102 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func patchChangedPaths(patchText string) []string {
-	seen := map[string]bool{}
-	var paths []string
-	for _, line := range strings.Split(patchText, "\n") {
-		var p string
-		switch {
-		case strings.HasPrefix(line, "+++ b/"):
-			p = strings.TrimPrefix(line, "+++ b/")
-		case strings.HasPrefix(line, "--- a/"):
-			p = strings.TrimPrefix(line, "--- a/")
-		}
-		if p == "" || p == "/dev/null" || seen[p] {
-			continue
-		}
-		seen[p] = true
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	return paths
+type patchMetadata struct {
+	changed  []string
+	declared []string
+	created  []string
+	deleted  []string
+	hunks    int
 }
 
-func patchDeclaredPaths(patchText string) []string {
-	seen := map[string]bool{}
-	var paths []string
-	add := func(p string) {
-		p = normalizePatchPath(p)
-		if p == "" || p == "/dev/null" || seen[p] {
+func parsePatchMetadata(patchText string) patchMetadata {
+	var metadata patchMetadata
+	changedSeen := map[string]bool{}
+	declaredSeen := map[string]bool{}
+	createdSeen := map[string]bool{}
+	deletedSeen := map[string]bool{}
+	var previous string
+
+	addChanged := func(p string) {
+		if p == "" || p == "/dev/null" || changedSeen[p] {
 			return
 		}
-		seen[p] = true
-		paths = append(paths, p)
+		changedSeen[p] = true
+		metadata.changed = append(metadata.changed, p)
 	}
-	for _, line := range strings.Split(patchText, "\n") {
+	addDeclared := func(p string) {
+		p = normalizePatchPath(p)
+		if p == "" || p == "/dev/null" || declaredSeen[p] {
+			return
+		}
+		declaredSeen[p] = true
+		metadata.declared = append(metadata.declared, p)
+	}
+	addCreated := func(p string) {
+		if p == "" || createdSeen[p] {
+			return
+		}
+		createdSeen[p] = true
+		metadata.created = append(metadata.created, p)
+	}
+	addDeleted := func(p string) {
+		if p == "" || deletedSeen[p] {
+			return
+		}
+		deletedSeen[p] = true
+		metadata.deleted = append(metadata.deleted, p)
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(patchText))
+	scanner.Buffer(make([]byte, 0, 64*1024), len(patchText)+1)
+	for scanner.Scan() {
+		line := scanner.Text()
 		switch {
+		case strings.HasPrefix(line, "+++ b/"):
+			p := strings.TrimPrefix(line, "+++ b/")
+			addChanged(p)
+			addDeclared(p)
+			if strings.TrimSpace(previous) == "--- /dev/null" {
+				addCreated(p)
+			}
+		case strings.HasPrefix(line, "--- a/"):
+			p := strings.TrimPrefix(line, "--- a/")
+			addChanged(p)
+			addDeclared(p)
 		case strings.HasPrefix(line, "+++ ") || strings.HasPrefix(line, "--- "):
 			fields := strings.Fields(line)
 			if len(fields) >= 2 {
-				add(fields[1])
+				addDeclared(fields[1])
 			}
 		case strings.HasPrefix(line, "diff --git "):
 			fields := strings.Fields(line)
 			if len(fields) >= 4 {
-				add(fields[2])
-				add(fields[3])
+				addDeclared(fields[2])
+				addDeclared(fields[3])
 			}
 		case strings.HasPrefix(line, "rename from "):
-			add(strings.TrimPrefix(line, "rename from "))
+			addDeclared(strings.TrimPrefix(line, "rename from "))
 		case strings.HasPrefix(line, "rename to "):
-			add(strings.TrimPrefix(line, "rename to "))
+			addDeclared(strings.TrimPrefix(line, "rename to "))
 		case strings.HasPrefix(line, "copy from "):
-			add(strings.TrimPrefix(line, "copy from "))
+			addDeclared(strings.TrimPrefix(line, "copy from "))
 		case strings.HasPrefix(line, "copy to "):
-			add(strings.TrimPrefix(line, "copy to "))
+			addDeclared(strings.TrimPrefix(line, "copy to "))
 		}
+		if strings.TrimSpace(line) == "+++ /dev/null" && strings.HasPrefix(previous, "--- a/") {
+			addDeleted(strings.TrimPrefix(previous, "--- a/"))
+		}
+		if strings.HasPrefix(line, "@@ ") {
+			metadata.hunks++
+		}
+		previous = line
 	}
-	sort.Strings(paths)
-	return paths
+
+	sort.Strings(metadata.changed)
+	sort.Strings(metadata.declared)
+	sort.Strings(metadata.created)
+	sort.Strings(metadata.deleted)
+	return metadata
 }
 
 func normalizePatchPath(p string) string {
@@ -1566,54 +1602,6 @@ func validatePatchPaths(paths []string) error {
 		}
 	}
 	return nil
-}
-
-func patchCreatedPaths(patchText string) []string {
-	var paths []string
-	seen := map[string]bool{}
-	lines := strings.Split(patchText, "\n")
-	for i := 0; i+1 < len(lines); i++ {
-		if strings.TrimSpace(lines[i]) != "--- /dev/null" || !strings.HasPrefix(lines[i+1], "+++ b/") {
-			continue
-		}
-		p := strings.TrimPrefix(lines[i+1], "+++ b/")
-		if p == "" || seen[p] {
-			continue
-		}
-		seen[p] = true
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	return paths
-}
-
-func patchDeletedPaths(patchText string) []string {
-	var paths []string
-	seen := map[string]bool{}
-	lines := strings.Split(patchText, "\n")
-	for i := 0; i+1 < len(lines); i++ {
-		if !strings.HasPrefix(lines[i], "--- a/") || strings.TrimSpace(lines[i+1]) != "+++ /dev/null" {
-			continue
-		}
-		p := strings.TrimPrefix(lines[i], "--- a/")
-		if p == "" || seen[p] {
-			continue
-		}
-		seen[p] = true
-		paths = append(paths, p)
-	}
-	sort.Strings(paths)
-	return paths
-}
-
-func patchHunkCount(patchText string) int {
-	count := 0
-	for _, line := range strings.Split(patchText, "\n") {
-		if strings.HasPrefix(line, "@@ ") {
-			count++
-		}
-	}
-	return count
 }
 
 func stringSet(items []string) map[string]bool {

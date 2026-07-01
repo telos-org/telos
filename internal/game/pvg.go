@@ -109,16 +109,29 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 		}
 		costCapExceeded := p.costCapUnavailableExceeded(p.Result.Rounds, turn.Role, turn.Stats)
 
+		var result GameResult
+		var terminal bool
+		turnFailed := turn.Error != ""
 		if turn.Error != "" {
 			if turn.Recoverable {
 				machine.state = step.State
 			} else {
 				machine.state = ObjectiveStateBlocked
 			}
-			p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.state)
-			if costCapExceeded {
-				return p.end(GameFailure)
-			}
+		} else {
+			recoverableFailures = 0
+			// The state machine owns the prover/verify/repair/finalize transitions.
+			// The ledger records the state the machine just computed instead of
+			// re-deriving it, so the two cannot drift (notably in review mode, where
+			// a verifier turn returns to implement rather than repair).
+			result, terminal = machine.advance(turn)
+		}
+		p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.state)
+		if costCapExceeded {
+			return p.end(GameFailure)
+		}
+
+		if turnFailed {
 			if p.turnFailureExceeded(turn, &recoverableFailures) {
 				return p.end(GameFailure)
 			}
@@ -127,17 +140,6 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 			}
 			workspace = p.Executor.WorkspaceSnapshot()
 			continue
-		}
-
-		recoverableFailures = 0
-		// The state machine owns the prover/verify/repair/finalize transitions.
-		// The ledger records the state the machine just computed instead of
-		// re-deriving it, so the two cannot drift (notably in review mode, where
-		// a verifier turn returns to implement rather than repair).
-		result, terminal := machine.advance(turn)
-		p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.state)
-		if costCapExceeded {
-			return p.end(GameFailure)
 		}
 
 		if terminal {

@@ -60,19 +60,16 @@ type RuntimeConfig struct {
 	MountPath       string `yaml:"mount_path"`
 }
 
-type ControlConfig struct {
+type ServiceCredentialConfig struct {
 	Endpoint  string `yaml:"endpoint"`
 	EnvID     string `yaml:"env_id"`
 	Token     string `yaml:"token"`
 	TokenFile string `yaml:"token_file"`
 }
 
-type BillingConfig struct {
-	Endpoint  string `yaml:"endpoint"`
-	EnvID     string `yaml:"env_id"`
-	Token     string `yaml:"token"`
-	TokenFile string `yaml:"token_file"`
-}
+type ControlConfig = ServiceCredentialConfig
+
+type BillingConfig = ServiceCredentialConfig
 
 type KubernetesConfig struct {
 	AgentImage      string   `yaml:"agent_image"`
@@ -168,46 +165,26 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		if cfg.Runtime.MountPath == "" {
 			cfg.Runtime.MountPath = "/telos-runtime"
 		}
-		if cfg.ControlPlane.Endpoint == "" {
-			cfg.ControlPlane.Endpoint = envFirst(
-				[]string{"TELOS_CONTROL_ENDPOINT", "TELOS_CONTROL_API_URL"},
-				"https://api.usetelos.ai",
-			)
+		var err error
+		cfg.ControlPlane, err = resolveServiceCredential(cfg.ControlPlane, serviceCredentialEnv{
+			Name:          "control_plane",
+			EndpointVars:  []string{"TELOS_CONTROL_ENDPOINT", "TELOS_CONTROL_API_URL"},
+			EndpointValue: "https://api.usetelos.ai",
+			TokenFileVar:  "TELOS_CONTROL_TOKEN_FILE",
+			TokenVar:      "TELOS_CONTROL_TOKEN",
+		})
+		if err != nil {
+			return Config{}, err
 		}
-		if cfg.ControlPlane.EnvID == "" {
-			cfg.ControlPlane.EnvID = os.Getenv("TELOS_ENV_ID")
-		}
-		if cfg.ControlPlane.TokenFile == "" {
-			cfg.ControlPlane.TokenFile = os.Getenv("TELOS_CONTROL_TOKEN_FILE")
-		}
-		if cfg.ControlPlane.Token == "" {
-			if token, err := authTokenFromFile(cfg.ControlPlane.TokenFile); err != nil {
-				return Config{}, fmt.Errorf("read control_plane.token_file: %w", err)
-			} else if token != "" {
-				cfg.ControlPlane.Token = token
-			}
-		}
-		if cfg.ControlPlane.Token == "" {
-			cfg.ControlPlane.Token = os.Getenv("TELOS_CONTROL_TOKEN")
-		}
-		if cfg.Billing.Endpoint == "" {
-			cfg.Billing.Endpoint = envOr("TELOS_BILLING_ENDPOINT", "https://billing.usetelos.ai")
-		}
-		if cfg.Billing.EnvID == "" {
-			cfg.Billing.EnvID = os.Getenv("TELOS_ENV_ID")
-		}
-		if cfg.Billing.TokenFile == "" {
-			cfg.Billing.TokenFile = os.Getenv("TELOS_BILLING_ENV_TOKEN_FILE")
-		}
-		if cfg.Billing.Token == "" {
-			if token, err := authTokenFromFile(cfg.Billing.TokenFile); err != nil {
-				return Config{}, fmt.Errorf("read billing.token_file: %w", err)
-			} else if token != "" {
-				cfg.Billing.Token = token
-			}
-		}
-		if cfg.Billing.Token == "" {
-			cfg.Billing.Token = os.Getenv("TELOS_BILLING_ENV_TOKEN")
+		cfg.Billing, err = resolveServiceCredential(cfg.Billing, serviceCredentialEnv{
+			Name:          "billing",
+			EndpointVars:  []string{"TELOS_BILLING_ENDPOINT"},
+			EndpointValue: "https://billing.usetelos.ai",
+			TokenFileVar:  "TELOS_BILLING_ENV_TOKEN_FILE",
+			TokenVar:      "TELOS_BILLING_ENV_TOKEN",
+		})
+		if err != nil {
+			return Config{}, err
 		}
 		if cfg.Billing.Endpoint != "" && cfg.Billing.EnvID != "" && cfg.Billing.Token == "" {
 			return Config{}, fmt.Errorf("billing.token is required when cloud billing is configured")
@@ -298,6 +275,37 @@ func defaultImagePullSecret(agentImage string) string {
 		return "gar-pull"
 	}
 	return ""
+}
+
+type serviceCredentialEnv struct {
+	Name          string
+	EndpointVars  []string
+	EndpointValue string
+	TokenFileVar  string
+	TokenVar      string
+}
+
+func resolveServiceCredential(cfg ServiceCredentialConfig, env serviceCredentialEnv) (ServiceCredentialConfig, error) {
+	if cfg.Endpoint == "" {
+		cfg.Endpoint = envFirst(env.EndpointVars, env.EndpointValue)
+	}
+	if cfg.EnvID == "" {
+		cfg.EnvID = os.Getenv("TELOS_ENV_ID")
+	}
+	if cfg.TokenFile == "" {
+		cfg.TokenFile = os.Getenv(env.TokenFileVar)
+	}
+	if cfg.Token == "" {
+		if token, err := authTokenFromFile(cfg.TokenFile); err != nil {
+			return ServiceCredentialConfig{}, fmt.Errorf("read %s.token_file: %w", env.Name, err)
+		} else if token != "" {
+			cfg.Token = token
+		}
+	}
+	if cfg.Token == "" {
+		cfg.Token = os.Getenv(env.TokenVar)
+	}
+	return cfg, nil
 }
 
 func envFirst(names []string, fallback string) string {

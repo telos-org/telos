@@ -57,10 +57,11 @@ func (m *taskStateMachine) advance(turn TurnResult) (GameResult, bool) {
 		if m.reviewMode {
 			m.reviewsCompleted++
 			if m.reviewsCompleted >= m.reviewTarget {
-				m.state = ObjectiveStateFinalize
 				if !m.proverDelivered {
+					m.blockNoProverDelivery()
 					return GameFailure, true
 				}
+				m.state = ObjectiveStateFinalize
 				return GameSuccess, true
 			}
 			m.state = ObjectiveStateImplement
@@ -68,7 +69,7 @@ func (m *taskStateMachine) advance(turn TurnResult) (GameResult, bool) {
 		}
 		if turn.Error == "" && turn.Status == StatusConcede {
 			if !m.proverDelivered {
-				m.state = ObjectiveStateBlocked
+				m.blockNoProverDelivery()
 				return GameFailure, true
 			}
 			m.state = ObjectiveStateFinalize
@@ -77,4 +78,8 @@ func (m *taskStateMachine) advance(turn TurnResult) (GameResult, bool) {
 		m.state = ObjectiveStateRepair
 	}
 	return "", false
+}
+
+func (m *taskStateMachine) blockNoProverDelivery() {
+	m.state = ObjectiveStateBlocked
 }
