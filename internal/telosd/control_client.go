@@ -48,7 +48,10 @@ func (c *billingClient) MintSessionKey(sessionID, parentSessionID, userAuthoriza
 	if strings.TrimSpace(parentSessionID) != "" && strings.TrimSpace(c.token) == "" && strings.TrimSpace(userAuthorization) == "" {
 		return controlSessionKey{}, fmt.Errorf("billing env token is required to mint a child session key")
 	}
-	bodyMap := map[string]string{"env_id": c.envID}
+	bodyMap := map[string]any{
+		"env_id":               c.envID,
+		"supported_transports": []string{"openai_sync"},
+	}
 	if parentSessionID = strings.TrimSpace(parentSessionID); parentSessionID != "" {
 		bodyMap["parent_session_id"] = parentSessionID
 	}

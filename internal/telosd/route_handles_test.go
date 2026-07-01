@@ -89,6 +89,36 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	}
 }
 
+func TestCloudSessionStoreCachesRootUserAuthorizationForChildApply(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{}
+	store := newCloudSessionStore(base, routeHandleResolver{}, substrate)
+	rootMarkdown := "---\nversion: v0\nname: controller\nplatform: cloud\n---\n# Controller\n"
+	childMarkdown := "---\nversion: v0\nname: child\nplatform: cloud\n---\n# Child\n"
+
+	root, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:      &rootMarkdown,
+		UserAuthorization: "Bearer root-user-token",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &childMarkdown,
+		ParentSessionID: &root.SessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(substrate.applies) != 2 {
+		t.Fatalf("applies: got %d", len(substrate.applies))
+	}
+	if substrate.applies[1].userAuthorization != "Bearer root-user-token" {
+		t.Fatalf("child apply user auth: got %q", substrate.applies[1].userAuthorization)
+	}
+}
+
 func TestCloudSessionStoreRemovesSessionWhenWorkerApplyFails(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{applyErr: errors.New("worker launch failed")}

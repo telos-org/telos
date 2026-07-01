@@ -237,7 +237,7 @@ func TestClientCreateEnvironmentAcceptsLegacyAccessField(t *testing.T) {
 
 func TestClientMintSessionKey(t *testing.T) {
 	var gotPath string
-	var gotBody map[string]string
+	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		if r.Header.Get("Authorization") != "Bearer test-token" {
@@ -268,6 +268,9 @@ func TestClientMintSessionKey(t *testing.T) {
 	}
 	if gotPath != "/api/billing/session-key" || gotBody["session_id"] != "sess-1" {
 		t.Fatalf("request: path=%q body=%v", gotPath, gotBody)
+	}
+	if transports, ok := gotBody["supported_transports"].([]any); !ok || len(transports) != 1 || transports[0] != "openai_sync" {
+		t.Fatalf("supported transports: got %#v", gotBody["supported_transports"])
 	}
 	if key.APIKey != "sk-session" || key.BaseURL != "https://proxy.example.com/v1" || key.Transport != "bifrost_async" || key.Kind != "bifrost" || key.Headers["x-bf-vk"] != "sk-bf" || key.KeyAlias != "sess-1" {
 		t.Fatalf("key: %+v", key)

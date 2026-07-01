@@ -610,7 +610,7 @@ func TestKubernetesWorkerEnvIncludesBillingConfig(t *testing.T) {
 }
 
 func TestBillingClientMintsChildSessionWithParentLineage(t *testing.T) {
-	var gotBody map[string]string
+	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/internal/sessions/sess_child/mint" {
 			http.NotFound(w, r)
@@ -650,6 +650,9 @@ func TestBillingClientMintsChildSessionWithParentLineage(t *testing.T) {
 	}
 	if gotBody["env_id"] != "env_test" || gotBody["parent_session_id"] != "sess_parent" {
 		t.Fatalf("body: %+v", gotBody)
+	}
+	if transports, ok := gotBody["supported_transports"].([]any); !ok || len(transports) != 1 || transports[0] != "openai_sync" {
+		t.Fatalf("supported transports: got %#v", gotBody["supported_transports"])
 	}
 }
 

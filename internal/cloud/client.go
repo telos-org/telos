@@ -25,6 +25,8 @@ const (
 	ForwardedUserAuthorizationHeader = "X-Telos-User-Authorization"
 )
 
+var supportedGatewayTransports = []string{"openai_sync"}
+
 // Environment describes a cloud Telos environment from the control plane.
 type Environment struct {
 	ID             string
@@ -222,7 +224,10 @@ func (c *Client) CreateEnvironment() (*Environment, error) {
 
 // MintSessionKey asks billing to mint a managed per-session gateway key.
 func (c *Client) MintSessionKey(sessionID string) (*SessionKey, error) {
-	body, err := json.Marshal(map[string]string{"session_id": sessionID})
+	body, err := json.Marshal(map[string]any{
+		"session_id":           sessionID,
+		"supported_transports": supportedGatewayTransports,
+	})
 	if err != nil {
 		return nil, err
 	}

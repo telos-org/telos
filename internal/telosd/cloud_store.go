@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
+	"sync"
 	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -21,12 +23,18 @@ type sessionRuntimeStatusSubstrate interface {
 
 type cloudSessionStore struct {
 	*sessionapi.FileStore
-	handles   routeHandleResolver
-	substrate sessionSubstrate
+	handles           routeHandleResolver
+	substrate         sessionSubstrate
+	userAuthorization *rootUserAuthorizationCache
 }
 
 func newCloudSessionStore(base *sessionapi.FileStore, handles routeHandleResolver, substrate sessionSubstrate) *cloudSessionStore {
-	return &cloudSessionStore{FileStore: base, handles: handles, substrate: substrate}
+	return &cloudSessionStore{
+		FileStore:         base,
+		handles:           handles,
+		substrate:         substrate,
+		userAuthorization: newRootUserAuthorizationCache(),
+	}
 }
 
 func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
@@ -34,7 +42,10 @@ func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessio
 	if err != nil {
 		return nil, err
 	}
-	if err := s.apply(session, startWakeReason(session), req.UserAuthorization); err != nil {
+	s.rememberUserAuthorization(session, req.UserAuthorization)
+	userAuthorization := s.userAuthorizationFor(session, req.UserAuthorization)
+	if err := s.apply(session, startWakeReason(session), userAuthorization); err != nil {
+		s.forgetUserAuthorization(session)
 		cleanupErr := s.cleanupWorker(session)
 		removeSessionDir(session)
 		if cleanupErr != nil {
@@ -58,8 +69,11 @@ func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUp
 	if response.Operation == "created" {
 		wakeReason = startWakeReason(response.Session)
 	}
-	if err := s.apply(response.Session, wakeReason, req.UserAuthorization); err != nil {
+	s.rememberUserAuthorization(response.Session, req.UserAuthorization)
+	userAuthorization := s.userAuthorizationFor(response.Session, req.UserAuthorization)
+	if err := s.apply(response.Session, wakeReason, userAuthorization); err != nil {
 		if response.Operation == "created" {
+			s.forgetUserAuthorization(response.Session)
 			cleanupErr := s.cleanupWorker(response.Session)
 			removeSessionDir(response.Session)
 			if cleanupErr != nil {
@@ -134,8 +148,92 @@ func (s *cloudSessionStore) Stop(id string) (*sessionapi.Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	s.forgetUserAuthorization(session)
 	s.enrich(session, s.routes())
 	return session, nil
+}
+
+func (s *cloudSessionStore) rememberUserAuthorization(session *sessionapi.Session, userAuthorization string) {
+	if s.userAuthorization == nil {
+		return
+	}
+	s.userAuthorization.Remember(session, userAuthorization)
+}
+
+func (s *cloudSessionStore) userAuthorizationFor(session *sessionapi.Session, provided string) string {
+	if provided = strings.TrimSpace(provided); provided != "" {
+		return provided
+	}
+	if s.userAuthorization == nil {
+		return ""
+	}
+	return s.userAuthorization.For(session)
+}
+
+func (s *cloudSessionStore) forgetUserAuthorization(session *sessionapi.Session) {
+	if s.userAuthorization == nil {
+		return
+	}
+	s.userAuthorization.Forget(session)
+}
+
+type rootUserAuthorizationCache struct {
+	mu     sync.RWMutex
+	byRoot map[string]string
+}
+
+func newRootUserAuthorizationCache() *rootUserAuthorizationCache {
+	return &rootUserAuthorizationCache{byRoot: map[string]string{}}
+}
+
+func (c *rootUserAuthorizationCache) Remember(session *sessionapi.Session, userAuthorization string) {
+	userAuthorization = strings.TrimSpace(userAuthorization)
+	if session == nil || userAuthorization == "" || !isRootSession(session) {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.byRoot[session.SessionID] = userAuthorization
+}
+
+func (c *rootUserAuthorizationCache) For(session *sessionapi.Session) string {
+	if session == nil {
+		return ""
+	}
+	rootID := rootSessionID(session)
+	if rootID == "" {
+		return ""
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.byRoot[rootID]
+}
+
+func (c *rootUserAuthorizationCache) Forget(session *sessionapi.Session) {
+	if session == nil {
+		return
+	}
+	rootID := rootSessionID(session)
+	if rootID == "" {
+		rootID = session.SessionID
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.byRoot, rootID)
+}
+
+func isRootSession(session *sessionapi.Session) bool {
+	return session != nil && (session.ParentSessionID == nil || *session.ParentSessionID == "")
+}
+
+func rootSessionID(session *sessionapi.Session) string {
+	if session == nil {
+		return ""
+	}
+	if session.ParentSessionID != nil && *session.ParentSessionID != "" {
+		return *session.ParentSessionID
+	}
+	return session.SessionID
 }
 
 func removeSessionDir(session *sessionapi.Session) {
