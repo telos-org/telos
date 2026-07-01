@@ -15,6 +15,7 @@ const (
 	APIEndpointEnv      = "TELOS_API_ENDPOINT"
 	BillingEndpointEnv  = "TELOS_BILLING_ENDPOINT"
 	AuthTokenEnv        = "TELOS_AUTH_TOKEN"
+	OrgIDEnv            = "TELOS_ORG_ID"
 	GatewayModeEnv      = "TELOS_GATEWAY_MODE"
 	GatewayBaseURLEnv   = "TELOS_GATEWAY_BASE_URL"
 	GatewayAPIKeyEnv    = "TELOS_GATEWAY_API_KEY"
@@ -28,6 +29,7 @@ type Config struct {
 	APIEndpoint     string        `yaml:"api_endpoint,omitempty"`
 	BillingEndpoint string        `yaml:"billing_endpoint,omitempty"`
 	AuthToken       string        `yaml:"auth_token,omitempty"`
+	OrgID           string        `yaml:"org_id,omitempty"`
 	Gateway         GatewayConfig `yaml:"gateway,omitempty"`
 }
 
@@ -78,6 +80,9 @@ func LoadConfig() *Config {
 	if at, ok := raw["auth_token"].(string); ok {
 		cfg.AuthToken = at
 	}
+	if orgID, ok := raw["org_id"].(string); ok {
+		cfg.OrgID = orgID
+	}
 	if rawGateway, ok := raw["gateway"].(map[string]interface{}); ok {
 		if mode, ok := rawGateway["mode"].(string); ok {
 			cfg.Gateway.Mode = mode
@@ -107,6 +112,9 @@ func LoadConfig() *Config {
 	}
 	if v := os.Getenv(AuthTokenEnv); v != "" {
 		cfg.AuthToken = v
+	}
+	if v := os.Getenv(OrgIDEnv); v != "" {
+		cfg.OrgID = v
 	}
 	if v := os.Getenv(GatewayModeEnv); v != "" {
 		cfg.Gateway.Mode = v
@@ -147,6 +155,9 @@ func SaveConfig(cfg *Config) error {
 	}
 	if cfg.AuthToken != "" {
 		m["auth_token"] = cfg.AuthToken
+	}
+	if cfg.OrgID != "" {
+		m["org_id"] = cfg.OrgID
 	}
 	if cfg.Gateway.Mode != "" || cfg.Gateway.BaseURL != "" || cfg.Gateway.APIKey != "" || cfg.Gateway.Transport != "" || cfg.Gateway.Kind != "" || len(cfg.Gateway.Headers) > 0 {
 		m["gateway"] = map[string]any{}

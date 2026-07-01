@@ -80,7 +80,7 @@ func TestWithCloudCORSHandlesPreflight(t *testing.T) {
 	if got := res.Header().Get("Access-Control-Allow-Methods"); got != "GET, POST, PUT, OPTIONS" {
 		t.Fatalf("allow methods: got %q", got)
 	}
-	if got := res.Header().Get("Access-Control-Allow-Headers"); got != "Authorization, Content-Type, Accept, X-Telos-User-Authorization" {
+	if got := res.Header().Get("Access-Control-Allow-Headers"); got != "Authorization, Content-Type, Accept, X-Telos-User-Authorization, X-Telos-Org-Id" {
 		t.Fatalf("allow headers: got %q", got)
 	}
 }

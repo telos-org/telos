@@ -35,9 +35,20 @@ func cmdLogin(args []string) {
 	cfg := config.LoadConfig()
 	cfg.APIEndpoint = ep
 	cfg.AuthToken = tok
+	client := cloud.NewClient(ep, tok)
+	me, err := client.Me()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: login failed: %v\n", err)
+		os.Exit(1)
+	}
+	cfg.OrgID = me.OrgID
 	if err := config.SaveConfig(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+	if cfg.OrgID != "" {
+		fmt.Printf("%s\n%s\n", ep, cfg.OrgID)
+		return
 	}
 	fmt.Println(ep)
 }

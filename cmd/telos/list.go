@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/telos-org/telos/internal/cloud"
@@ -16,16 +17,18 @@ import (
 func cmdList(args []string) {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
 	env := fs.String("env", "", "Cloud environment")
+	orgID := fs.String("org", "", "Organization ID")
 	limit := fs.Int("limit", 0, "Limit results")
 	wide := fs.Bool("wide", false, "Wide output")
-	environments := fs.Bool("environments", false, "List cloud environments")
+	environments := fs.Bool("environments", false, "List cloud deployments (legacy alias)")
+	deployments := fs.Bool("deployments", false, "List cloud deployments")
 	localOnly := fs.Bool("local", false, "Local sessions only")
 	cloudOnly := fs.Bool("cloud", false, "Cloud sessions only")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
-	if *environments {
-		listEnvironments(*jsonOut)
+	if *environments || *deployments || (*cloudOnly && *env == "") {
+		listDeployments(*orgID, *jsonOut)
 		return
 	}
 
@@ -220,6 +223,47 @@ func listEnvironments(jsonOut bool) {
 		}
 		fmt.Printf("%-16s %-14s %-36s %s\n", env.ID, env.State, env.Handle, access)
 	}
+}
+
+func listDeployments(orgID string, jsonOut bool) {
+	control, err := cloud.ControlClient()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	applyOrgOverride(control, orgID)
+	deployments, err := control.ListDeployments()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if jsonOut {
+		printJSON(map[string]any{"deployments": deployments})
+		return
+	}
+	if len(deployments) == 0 {
+		fmt.Println("no deployments")
+		return
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	fmt.Fprintln(w, "NAME\tSTATUS\tDEPLOYMENT\tDIGEST\tSERVICE")
+	for _, deployment := range deployments {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			deployment.Name,
+			deployment.State,
+			deployment.ID,
+			shortDigest(deployment.PackageDigest),
+			orDash(deployment.ServiceURL),
+		)
+	}
+	_ = w.Flush()
+}
+
+func shortDigest(digest string) string {
+	if len(digest) > len("sha256:")+12 && strings.HasPrefix(digest, "sha256:") {
+		return digest[:len("sha256:")+12]
+	}
+	return digest
 }
 
 func sessionName(sess sessionapi.Session) string {

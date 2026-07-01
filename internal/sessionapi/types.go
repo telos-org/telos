@@ -103,6 +103,7 @@ type SessionCreateRequest struct {
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{name}/spec.
 type SessionSpecUpdateRequest struct {
 	SpecMarkdown      string   `json:"spec_markdown"`
+	PackageDigest     string   `json:"package_digest,omitempty"`
 	UserAuthorization string   `json:"-"`
 	Model             string   `json:"model,omitempty"`
 	Thinking          string   `json:"thinking,omitempty"`

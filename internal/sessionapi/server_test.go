@@ -369,6 +369,84 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	}
 }
 
+func TestUpdateSpecFromPackageDigest(t *testing.T) {
+	root := t.TempDir()
+	packageRoot := t.TempDir()
+	t.Setenv("TELOS_PACKAGE_ROOT", packageRoot)
+
+	first := buildTestApplyPackage(t, "postgres", "first")
+	second := buildTestApplyPackage(t, "postgres", "second")
+	firstPath := writePackageBlob(t, packageRoot, first)
+	writePackageBlob(t, packageRoot, second)
+
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		ApplyPackagePath:   firstPath,
+		ApplyPackageDigest: first.Digest,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	response, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{
+		PackageDigest: second.Digest,
+	})
+	if err != nil {
+		t.Fatalf("UpdateSpec: %v", err)
+	}
+	if response.Operation != "updated" || response.Session == nil || response.Session.SessionID != session.SessionID {
+		t.Fatalf("response: %+v", response)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(root, session.SessionID, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest != second.Digest {
+		t.Fatalf("apply_package_digest: got %#v want %q", manifest.ApplyPackageDigest, second.Digest)
+	}
+	if manifest.SourceSpecPath == nil || !strings.Contains(*manifest.SourceSpecPath, filepath.Join(session.SessionID, "package", "SPEC.md")) {
+		t.Fatalf("source_spec_path: %#v", manifest.SourceSpecPath)
+	}
+	data, err := os.ReadFile(*manifest.SessionSpecPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "second") {
+		t.Fatalf("session spec not updated from package: %q", data)
+	}
+}
+
+func buildTestApplyPackage(t *testing.T, name string, body string) *spec.ApplyPackage {
+	t.Helper()
+	srcDir := t.TempDir()
+	specPath := filepath.Join(srcDir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: "+name+"\nplatform: cloud\n---\n"+body+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := spec.CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{CompilerVersion: "test"})
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+	return pkg
+}
+
+func writePackageBlob(t *testing.T, root string, pkg *spec.ApplyPackage) string {
+	t.Helper()
+	hex := strings.TrimPrefix(pkg.Digest, "sha256:")
+	path := filepath.Join(root, "blobs", "sha256", hex, "package.tar.gz")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, pkg.Bytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func TestCloudCreateSessionFromApplyPackageRejectsDigestMismatch(t *testing.T) {
 	srcDir := t.TempDir()
 	specPath := filepath.Join(srcDir, "SPEC.md")

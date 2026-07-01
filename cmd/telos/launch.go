@@ -29,6 +29,12 @@ func cmdLaunch(command, action string, args []string) {
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	workspace := fs.String("workspace", "", "Workspace directory")
 	env := fs.String("env", "", "Cloud environment ID")
+	deployment := fs.String("deployment", "", "Cloud deployment ID to update")
+	deploymentName := fs.String("name", "", "Cloud deployment name")
+	scope := fs.String("scope", "default", "Package scope for cloud apply")
+	version := fs.String("version", "", "Package version for cloud apply")
+	orgID := fs.String("org", "", "Organization ID")
+	runtimeVersion := fs.String("runtime-version", "", "Runtime version")
 	model := fs.String("model", "", "Model name")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
 	until := fs.Int("until", 0, "Run exactly N evaluator review cycles")
@@ -54,6 +60,10 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	if command == "apply" && flagNameSet(fs, "until") {
 		fmt.Fprintln(os.Stderr, "error: --until is only supported with telos run")
+		os.Exit(1)
+	}
+	if command == "apply" && *env != "" {
+		fmt.Fprintln(os.Stderr, "error: --env has been replaced by --deployment for cloud apply")
 		os.Exit(1)
 	}
 
@@ -134,7 +144,14 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudExisting:
-		runCloud(command, specArg, *env, untilValue, fs, *model, *thinking, *maxCostUSD, *maxRounds, *maxDurationSec, *maxInputTokens, *maxOutputTokens, *maxToolLoops, *agentTimeout, *jsonOut, false, 0, action)
+		runCloud(command, specArg, *env, untilValue, fs, *model, *thinking, *maxCostUSD, *maxRounds, *maxDurationSec, *maxInputTokens, *maxOutputTokens, *maxToolLoops, *agentTimeout, *jsonOut, false, 0, cloudApplyOptions{
+			DeploymentID:   *deployment,
+			Name:           *deploymentName,
+			Scope:          *scope,
+			Version:        *version,
+			OrgID:          *orgID,
+			RuntimeVersion: *runtimeVersion,
+		}, action)
 		return
 	case launchCloudNew:
 		runCloud(
@@ -155,6 +172,14 @@ func cmdLaunch(command, action string, args []string) {
 			*jsonOut,
 			!*noWait,
 			time.Duration(*readyTimeout)*time.Second,
+			cloudApplyOptions{
+				DeploymentID:   *deployment,
+				Name:           *deploymentName,
+				Scope:          *scope,
+				Version:        *version,
+				OrgID:          *orgID,
+				RuntimeVersion: *runtimeVersion,
+			},
 			action,
 		)
 		return
@@ -378,6 +403,7 @@ func runCloud(
 	jsonOut bool,
 	waitForEnvironment bool,
 	readyTimeout time.Duration,
+	applyOptions cloudApplyOptions,
 	action string,
 ) {
 	if command == "apply" {
@@ -385,7 +411,7 @@ func runCloud(
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		applyCloudControl(specArg, envID, waitForEnvironment, readyTimeout, jsonOut)
+		applyCloudControl(specArg, applyOptions, waitForEnvironment, readyTimeout, jsonOut)
 		return
 	}
 	req, err := sessionCreateRequestForSpec(specArg)
@@ -429,6 +455,15 @@ func runCloud(
 	}
 }
 
+type cloudApplyOptions struct {
+	DeploymentID   string
+	Name           string
+	Scope          string
+	Version        string
+	OrgID          string
+	RuntimeVersion string
+}
+
 func rejectCloudApplyRuntimeFlags(fs *flag.FlagSet) error {
 	var set []string
 	for _, name := range []string{
@@ -457,7 +492,7 @@ func rejectCloudApplyRuntimeFlags(fs *flag.FlagSet) error {
 
 func applyCloudControl(
 	specArg string,
-	envID string,
+	options cloudApplyOptions,
 	waitForEnvironment bool,
 	readyTimeout time.Duration,
 	jsonOut bool,
@@ -467,16 +502,27 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	control, env, err := cloudEnvironmentForApply(envID, false, 0)
+	control, err := cloud.ControlClient()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if _, err := pushSpecPackage(control, pkg); err != nil {
+	applyOrgOverride(control, options.OrgID)
+	published, err := pushSpecPackageVersion(control, pkg, options.Scope, options.Version)
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	response, err := control.ApplyEnvironmentSession(env.ID, pkg.name, pkg.digest)
+	var deployment *cloud.DeploymentRecord
+	if strings.TrimSpace(options.DeploymentID) != "" {
+		deployment, err = control.UpdateDeployment(options.DeploymentID, published.Ref, options.RuntimeVersion)
+	} else {
+		name := options.Name
+		if strings.TrimSpace(name) == "" {
+			name = pkg.name
+		}
+		deployment, err = control.CreateDeployment(name, published.Ref, options.RuntimeVersion)
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -485,20 +531,20 @@ func applyCloudControl(
 		if readyTimeout <= 0 {
 			readyTimeout = 15 * time.Minute
 		}
-		if err := cloud.WaitForEnvironment(env.Handle, readyTimeout); err != nil {
+		deployment, err = control.WaitForDeployment(deployment.ID, readyTimeout)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 	}
 	if jsonOut {
 		printJSON(map[string]any{
-			"environment": environmentOutput(env),
-			"operation":   response.Operation,
-			"session":     response.Session,
+			"package":    published,
+			"deployment": deployment,
 		})
 		return
 	}
-	printCloudApplyReceipt(os.Stdout, response, environmentOutput(env))
+	printCloudApplyReceipt(os.Stdout, deployment)
 }
 
 func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session, env *environmentJSON) {
@@ -521,17 +567,18 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	}
 }
 
-func printCloudApplyReceipt(out io.Writer, response *cloud.EnvironmentSessionApplyResponse, env *environmentJSON) {
-	fmt.Fprintf(out, "%s %s\n\n", response.Operation, response.Session.Name)
-	printSummaryField(out, "Name", response.Session.Name)
+func printCloudApplyReceipt(out io.Writer, deployment *cloud.DeploymentRecord) {
+	fmt.Fprintf(out, "applied %s\n\n", deployment.Name)
+	printSummaryField(out, "Name", deployment.Name)
 	printSummaryField(out, "Platform", "cloud")
-	printSummaryField(out, "Status", response.Session.DesiredState)
-	printSummaryField(out, "Digest", response.Session.PackageDigest)
-	if env != nil {
-		printSummaryField(out, "Environment", env.ID)
-		if env.Handle != "" {
-			printSummaryField(out, "Handle", env.Handle)
-		}
+	printSummaryField(out, "Status", deployment.State)
+	printSummaryField(out, "Deployment", deployment.ID)
+	printSummaryField(out, "Digest", deployment.PackageDigest)
+	if deployment.ServiceURL != "" {
+		printSummaryField(out, "Service", deployment.ServiceURL)
+	}
+	if deployment.DashboardURL != "" {
+		printSummaryField(out, "Dashboard", deployment.DashboardURL)
 	}
 }
 

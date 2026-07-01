@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/spec"
@@ -17,10 +18,13 @@ type specPackage struct {
 
 func cmdPush(args []string) {
 	fs := flag.NewFlagSet("push", flag.ExitOnError)
+	scope := fs.String("scope", "default", "Package scope")
+	version := fs.String("version", "", "Package version")
+	orgID := fs.String("org", "", "Organization ID")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos push SPEC.md [--json]")
+		fmt.Fprintln(os.Stderr, "usage: telos push SPEC.md [--scope SCOPE] [--version VERSION] [--org ORG] [--json]")
 		os.Exit(1)
 	}
 
@@ -34,15 +38,15 @@ func cmdPush(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	response, err := pushSpecPackage(client, pkg)
+	applyOrgOverride(client, *orgID)
+	response, err := pushSpecPackageVersion(client, pkg, *scope, *version)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	if *jsonOut {
 		printJSON(map[string]any{
-			"operation": response.Operation,
-			"spec":      response.Spec,
+			"package": response,
 		})
 		return
 	}
@@ -72,15 +76,35 @@ func packageSpec(input string) (*specPackage, error) {
 	}, nil
 }
 
-func pushSpecPackage(client *cloud.Client, pkg *specPackage) (*cloud.CatalogSpecPushResponse, error) {
-	if _, err := client.UploadApplyPackage(pkg.digest, pkg.bytes); err != nil {
-		return nil, err
-	}
-	return client.PushCatalogSpec(pkg.name, pkg.digest)
+func pushSpecPackage(client *cloud.Client, pkg *specPackage) (*cloud.RegistryVersionRecord, error) {
+	return pushSpecPackageVersion(client, pkg, "default", "")
 }
 
-func printPushReceipt(response *cloud.CatalogSpecPushResponse) {
-	fmt.Fprintf(os.Stdout, "%s %s\n\n", response.Operation, response.Spec.Name)
-	printSummaryField(os.Stdout, "Digest", response.Spec.PackageDigest)
-	printSummaryField(os.Stdout, "Ref", response.Spec.Name+"@"+response.Spec.PackageDigest)
+func pushSpecPackageVersion(client *cloud.Client, pkg *specPackage, scope string, version string) (*cloud.RegistryVersionRecord, error) {
+	scope = strings.TrimSpace(scope)
+	if scope == "" {
+		scope = "default"
+	}
+	version = strings.TrimSpace(version)
+	if version == "" {
+		version = versionForDigest(pkg.digest)
+	}
+	return client.PublishRegistryVersion(scope, pkg.name, version, pkg.bytes)
+}
+
+func versionForDigest(digest string) string {
+	hex := strings.TrimPrefix(strings.TrimSpace(digest), "sha256:")
+	if len(hex) > 12 {
+		hex = hex[:12]
+	}
+	if hex == "" {
+		hex = "unknown"
+	}
+	return "0.0.0-sha." + hex
+}
+
+func printPushReceipt(response *cloud.RegistryVersionRecord) {
+	fmt.Fprintf(os.Stdout, "published %s\n\n", response.Ref)
+	printSummaryField(os.Stdout, "Digest", response.Digest)
+	printSummaryField(os.Stdout, "Ref", response.Ref)
 }

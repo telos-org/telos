@@ -323,8 +323,7 @@ func (fs *FileStore) UpdateSpec(name string, req SessionSpecUpdateRequest) (*Ses
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
-	prepared, err := fs.prepareSpecForUpdate(markdown)
+	prepared, err := fs.prepareSpecForUpdate(req)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +338,10 @@ func (fs *FileStore) UpdateSpec(name string, req SessionSpecUpdateRequest) (*Ses
 	switch len(ids) {
 	case 0:
 		kind := KindController
-		createReq := createRequestFromSpecUpdate(markdown, req)
+		createReq, err := createRequestFromSpecUpdate(req)
+		if err != nil {
+			return nil, err
+		}
 		createReq.SessionKind = &kind
 		session, err := fs.createLocked(createReq)
 		if err != nil {
@@ -347,7 +349,7 @@ func (fs *FileStore) UpdateSpec(name string, req SessionSpecUpdateRequest) (*Ses
 		}
 		return &SessionSpecUpdateResponse{Operation: "created", Session: session}, nil
 	case 1:
-		session, err := fs.updateSpecByIDLocked(ids[0], markdown, req)
+		session, err := fs.updateSpecByIDLocked(ids[0], req)
 		if err != nil {
 			return nil, err
 		}
@@ -357,9 +359,11 @@ func (fs *FileStore) UpdateSpec(name string, req SessionSpecUpdateRequest) (*Ses
 	}
 }
 
-func createRequestFromSpecUpdate(markdown string, req SessionSpecUpdateRequest) SessionCreateRequest {
-	return SessionCreateRequest{
-		SpecMarkdown:    &markdown,
+func createRequestFromSpecUpdate(req SessionSpecUpdateRequest) (SessionCreateRequest, error) {
+	if err := validateSpecUpdateRequest(req); err != nil {
+		return SessionCreateRequest{}, err
+	}
+	create := SessionCreateRequest{
 		Model:           req.Model,
 		Thinking:        req.Thinking,
 		MaxCostUSD:      req.MaxCostUSD,
@@ -370,9 +374,44 @@ func createRequestFromSpecUpdate(markdown string, req SessionSpecUpdateRequest) 
 		MaxToolLoops:    req.MaxToolLoops,
 		AgentTimeoutSec: req.AgentTimeoutSec,
 	}
+	if digest := strings.TrimSpace(req.PackageDigest); digest != "" {
+		path, err := applyPackagePathForDigest(os.Getenv("TELOS_PACKAGE_ROOT"), digest)
+		if err != nil {
+			return SessionCreateRequest{}, err
+		}
+		create.ApplyPackagePath = path
+		create.ApplyPackageDigest = digest
+		return create, nil
+	}
+	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
+	create.SpecMarkdown = &markdown
+	return create, nil
 }
 
-func (fs *FileStore) prepareSpecForUpdate(markdown string) (preparedRequestSpec, error) {
+func validateSpecUpdateRequest(req SessionSpecUpdateRequest) error {
+	hasMarkdown := strings.TrimSpace(req.SpecMarkdown) != ""
+	hasDigest := strings.TrimSpace(req.PackageDigest) != ""
+	switch {
+	case hasMarkdown == hasDigest:
+		return fmt.Errorf("exactly one of spec_markdown or package_digest is required: %w", ErrInvalidSession)
+	default:
+		return nil
+	}
+}
+
+func applyPackagePathForDigest(root string, digest string) (string, error) {
+	digest = strings.TrimSpace(digest)
+	hex, ok := strings.CutPrefix(digest, "sha256:")
+	if !ok || len(hex) != 64 {
+		return "", fmt.Errorf("invalid package digest %q: %w", digest, ErrInvalidSession)
+	}
+	if strings.TrimSpace(root) == "" {
+		return "", fmt.Errorf("TELOS_PACKAGE_ROOT is required for package_digest updates: %w", ErrInvalidSession)
+	}
+	return filepath.Join(root, "blobs", "sha256", hex, "package.tar.gz"), nil
+}
+
+func (fs *FileStore) prepareSpecForUpdate(req SessionSpecUpdateRequest) (preparedRequestSpec, error) {
 	if err := os.MkdirAll(fs.Root, 0o755); err != nil {
 		return preparedRequestSpec{}, fmt.Errorf("create sessions root: %w", err)
 	}
@@ -381,10 +420,14 @@ func (fs *FileStore) prepareSpecForUpdate(markdown string) (preparedRequestSpec,
 		return preparedRequestSpec{}, fmt.Errorf("create apply compile dir: %w", err)
 	}
 	defer os.RemoveAll(dir)
-	return prepareRequestSpec(dir, SessionCreateRequest{SpecMarkdown: &markdown})
+	createReq, err := createRequestFromSpecUpdate(req)
+	if err != nil {
+		return preparedRequestSpec{}, err
+	}
+	return prepareRequestSpec(dir, createReq)
 }
 
-func (fs *FileStore) updateSpecByIDLocked(id string, markdown string, req SessionSpecUpdateRequest) (*Session, error) {
+func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateRequest) (*Session, error) {
 	m, err := ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -399,7 +442,11 @@ func (fs *FileStore) updateSpecByIDLocked(id string, markdown string, req Sessio
 		return nil, fmt.Errorf("root session has no mutable spec: %w", ErrInvalidSession)
 	}
 
-	prepared, err := prepareRequestSpec(fs.sessionDir(id), SessionCreateRequest{SpecMarkdown: &markdown})
+	createReq, err := createRequestFromSpecUpdate(req)
+	if err != nil {
+		return nil, err
+	}
+	prepared, err := prepareRequestSpec(fs.sessionDir(id), createReq)
 	if err != nil {
 		return nil, err
 	}
@@ -419,6 +466,7 @@ func (fs *FileStore) updateSpecByIDLocked(id string, markdown string, req Sessio
 	)
 	m.ApplyPackageDigest = prepared.ApplyPackageDigest
 	m.ApplyPackageLock = prepared.ApplyPackageLock
+	m.SourceSpecPath = prepared.SourceSpecPath
 	m.SessionSpecPath = strPtr(*m.SessionSpecPath)
 	if len(m.Specs) > 0 {
 		m.Specs[0].Name = prepared.Name

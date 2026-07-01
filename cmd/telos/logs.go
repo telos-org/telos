@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -20,6 +22,7 @@ func cmdLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	follow := fs.Bool("f", false, "Follow logs")
 	env := fs.String("env", "", "Cloud environment")
+	orgID := fs.String("org", "", "Organization ID")
 	raw := fs.Bool("raw", false, "Show raw transcript")
 	parseFlags(fs, args)
 
@@ -36,10 +39,26 @@ func cmdLogs(args []string) {
 
 	text, err := getTranscriptFromAnywhere(sessionID, *env)
 	if err != nil {
+		if *env == "" && config.IsConfigured() {
+			text, deploymentErr := getDeploymentTranscriptFromCloud(sessionID, *orgID)
+			if deploymentErr == nil {
+				printLogs(os.Stdout, text, *raw)
+				return
+			}
+		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	printLogs(os.Stdout, text, *raw)
+}
+
+func getDeploymentTranscriptFromCloud(id string, orgID string) (string, error) {
+	client, err := cloud.ControlClient()
+	if err != nil {
+		return "", err
+	}
+	applyOrgOverride(client, orgID)
+	return client.GetDeploymentTranscript(id)
 }
 
 func followLogs(sessionID, envID string, raw bool) {

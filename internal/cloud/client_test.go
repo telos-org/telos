@@ -396,6 +396,161 @@ func TestClientForwardsUserAuthorizationOnlyForMutations(t *testing.T) {
 	}
 }
 
+func TestClientSendsOrgHeader(t *testing.T) {
+	var sawMe, sawBilling, sawStream bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("X-Telos-Org-Id"); got != "org_team" {
+			t.Fatalf("org header: got %q", got)
+		}
+		switch {
+		case r.URL.Path == "/api/me":
+			sawMe = true
+			json.NewEncoder(w).Encode(map[string]any{
+				"subject":       "user:1",
+				"auth_method":   "api-token",
+				"org_id":        "org_team",
+				"organizations": []map[string]string{{"id": "org_team", "display_name": "Team", "role": "owner"}},
+			})
+		case r.URL.Path == "/api/billing/balance":
+			sawBilling = true
+			json.NewEncoder(w).Encode(map[string]any{"compute_units": 1.0})
+		case r.URL.Path == "/api/sessions/sess-1/events":
+			sawStream = true
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"ok\":true}\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	client.OrgID = "org_team"
+	if _, err := client.Me(); err != nil {
+		t.Fatalf("Me: %v", err)
+	}
+	if _, err := client.Balance(); err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if err := client.StreamEvents(context.Background(), "sess-1", func(map[string]any) error { return nil }); err != nil {
+		t.Fatalf("StreamEvents: %v", err)
+	}
+	if !sawMe || !sawBilling || !sawStream {
+		t.Fatalf("missing requests: me=%v billing=%v stream=%v", sawMe, sawBilling, sawStream)
+	}
+}
+
+func TestClientRegistryAndDeploymentAPI(t *testing.T) {
+	var publishedBody []byte
+	var createBody map[string]string
+	var updateBody map[string]string
+	var deleted bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Telos-Org-Id") != "org_team" {
+			t.Fatalf("org header: got %q", r.Header.Get("X-Telos-Org-Id"))
+		}
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/api/packages/default/auth/versions/0.0.0-sha.abc":
+			publishedBody, _ = io.ReadAll(r.Body)
+			json.NewEncoder(w).Encode(map[string]any{
+				"scope":      "default",
+				"name":       "auth",
+				"version":    "0.0.0-sha.abc",
+				"ref":        "@default/auth:0.0.0-sha.abc",
+				"digest":     "sha256:abc",
+				"created_at": "now",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
+			if err := json.NewDecoder(r.Body).Decode(&createBody); err != nil {
+				t.Fatal(err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":             "dep_123",
+				"name":           "auth",
+				"state":          "provisioning",
+				"package_ref":    createBody["package_ref"],
+				"package_digest": "sha256:abc",
+				"created_at":     "now",
+				"updated_at":     "now",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+			json.NewEncoder(w).Encode(map[string]any{"deployments": []map[string]any{{
+				"id":             "dep_123",
+				"name":           "auth",
+				"state":          "healthy",
+				"package_ref":    "@default/auth:0.0.0-sha.abc",
+				"package_digest": "sha256:abc",
+				"created_at":     "now",
+				"updated_at":     "now",
+			}}})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/dep_123":
+			if err := json.NewDecoder(r.Body).Decode(&updateBody); err != nil {
+				t.Fatal(err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":             "dep_123",
+				"name":           "auth",
+				"state":          "deploying",
+				"package_ref":    updateBody["package_ref"],
+				"package_digest": "sha256:def",
+				"created_at":     "now",
+				"updated_at":     "later",
+			})
+		case r.Method == http.MethodDelete && r.URL.Path == "/api/deployments/dep_123":
+			deleted = true
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":             "dep_123",
+				"name":           "auth",
+				"state":          "deleted",
+				"package_ref":    "@default/auth:0.0.0-sha.def",
+				"package_digest": "sha256:def",
+				"created_at":     "now",
+				"updated_at":     "later",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	client.OrgID = "org_team"
+	version, err := client.PublishRegistryVersion("default", "auth", "0.0.0-sha.abc", []byte("package"))
+	if err != nil {
+		t.Fatalf("PublishRegistryVersion: %v", err)
+	}
+	if string(publishedBody) != "package" || version.Ref != "@default/auth:0.0.0-sha.abc" {
+		t.Fatalf("publish: body=%q version=%+v", publishedBody, version)
+	}
+	created, err := client.CreateDeployment("auth", version.Ref, "runtime-v1")
+	if err != nil {
+		t.Fatalf("CreateDeployment: %v", err)
+	}
+	if created.ID != "dep_123" || createBody["runtime_version"] != "runtime-v1" {
+		t.Fatalf("created=%+v body=%+v", created, createBody)
+	}
+	listed, err := client.ListDeployments()
+	if err != nil {
+		t.Fatalf("ListDeployments: %v", err)
+	}
+	if len(listed) != 1 || listed[0].ID != "dep_123" {
+		t.Fatalf("deployments: %+v", listed)
+	}
+	updated, err := client.UpdateDeployment("dep_123", "@default/auth:0.0.0-sha.def", "")
+	if err != nil {
+		t.Fatalf("UpdateDeployment: %v", err)
+	}
+	if updated.PackageDigest != "sha256:def" || updateBody["package_ref"] != "@default/auth:0.0.0-sha.def" {
+		t.Fatalf("updated=%+v body=%+v", updated, updateBody)
+	}
+	if _, err := client.DeleteDeployment("dep_123"); err != nil {
+		t.Fatalf("DeleteDeployment: %v", err)
+	}
+	if !deleted {
+		t.Fatal("deployment was not deleted")
+	}
+}
+
 func TestBillingClientRequiresExplicitEndpointForCustomAPIEndpoint(t *testing.T) {
 	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
 	if err := os.WriteFile(cfgPath, []byte("api_endpoint: https://api.staging.example.com\nauth_token: login-token\n"), 0o600); err != nil {

@@ -8,6 +8,8 @@ import (
 	"strings"
 	"text/tabwriter"
 
+	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -16,6 +18,7 @@ import (
 func cmdDescribe(args []string) {
 	fs := flag.NewFlagSet("describe", flag.ExitOnError)
 	env := fs.String("env", "", "Cloud environment")
+	orgID := fs.String("org", "", "Organization ID")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
@@ -27,6 +30,17 @@ func cmdDescribe(args []string) {
 
 	session, err := getSessionFromAnywhere(sessionID, *env)
 	if err != nil {
+		if *env == "" && config.IsConfigured() {
+			deployment, deploymentErr := getDeploymentFromCloud(sessionID, *orgID)
+			if deploymentErr == nil {
+				if *jsonOut {
+					printJSON(deployment)
+					return
+				}
+				printDeploymentDescription(os.Stdout, *deployment)
+				return
+			}
+		}
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -37,6 +51,39 @@ func cmdDescribe(args []string) {
 	}
 
 	printSessionDescription(os.Stdout, *session)
+}
+
+func getDeploymentFromCloud(id string, orgID string) (*cloud.DeploymentRecord, error) {
+	client, err := cloud.ControlClient()
+	if err != nil {
+		return nil, err
+	}
+	applyOrgOverride(client, orgID)
+	return client.GetDeployment(id)
+}
+
+func printDeploymentDescription(out io.Writer, deployment cloud.DeploymentRecord) {
+	printSummaryField(out, "Name", deployment.Name)
+	printSummaryField(out, "Platform", "cloud")
+	printSummaryField(out, "Status", deployment.State)
+	printSummaryField(out, "Deployment", deployment.ID)
+	printSummaryField(out, "Digest", deployment.PackageDigest)
+
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Deployment")
+	printDetailField(out, "package ref", deployment.PackageRef)
+	printDetailField(out, "runtime", deployment.RuntimeVersion)
+	printDetailField(out, "created", deployment.CreatedAt)
+	printDetailField(out, "updated", deployment.UpdatedAt)
+	if deployment.FailureReason != "" {
+		printDetailField(out, "failure", deployment.FailureReason)
+	}
+	if deployment.ServiceURL != "" || deployment.DashboardURL != "" {
+		fmt.Fprintln(out)
+		fmt.Fprintln(out, "Surfaces")
+		printDetailField(out, "service", deployment.ServiceURL)
+		printDetailField(out, "dashboard", deployment.DashboardURL)
+	}
 }
 
 func printSessionDescription(out io.Writer, session sessionapi.Session) {

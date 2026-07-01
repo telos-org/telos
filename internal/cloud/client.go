@@ -53,10 +53,60 @@ type Balance struct {
 	ComputeUnits float64
 }
 
+type OrganizationRecord struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+	Role        string `json:"role"`
+}
+
+type MeResponse struct {
+	Subject       string               `json:"subject"`
+	Email         string               `json:"email"`
+	Name          string               `json:"name"`
+	AuthMethod    string               `json:"auth_method"`
+	IsAdmin       bool                 `json:"is_admin"`
+	OrgID         string               `json:"org_id"`
+	Organizations []OrganizationRecord `json:"organizations"`
+}
+
 type ApplyPackageRecord struct {
 	Digest    string `json:"digest"`
 	SizeBytes int    `json:"size_bytes"`
 	CreatedAt string `json:"created_at"`
+}
+
+type RegistryPackageRecord struct {
+	Scope       string `json:"scope"`
+	Name        string `json:"name"`
+	Ref         string `json:"ref"`
+	DisplayName string `json:"display_name"`
+	Description string `json:"description"`
+	Visibility  string `json:"visibility"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+type RegistryVersionRecord struct {
+	Scope     string `json:"scope"`
+	Name      string `json:"name"`
+	Version   string `json:"version"`
+	Ref       string `json:"ref"`
+	Digest    string `json:"digest"`
+	CreatedAt string `json:"created_at"`
+}
+
+type DeploymentRecord struct {
+	ID             string `json:"id"`
+	Name           string `json:"name"`
+	State          string `json:"state"`
+	PackageRef     string `json:"package_ref"`
+	PackageDigest  string `json:"package_digest"`
+	RuntimeVersion string `json:"runtime_version"`
+	ServiceURL     string `json:"service_url"`
+	DashboardURL   string `json:"dashboard_url"`
+	FailureReason  string `json:"failure_reason"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 type CatalogSpecRecord struct {
@@ -90,6 +140,7 @@ type EnvironmentSessionApplyResponse struct {
 type Client struct {
 	Endpoint           string
 	Token              string
+	OrgID              string
 	ForwardedUserToken string
 	HTTP               *http.Client
 }
@@ -108,6 +159,7 @@ func NewEnvironmentAPIClient(endpoint, token string) *Client {
 	cfg := config.LoadConfig()
 	client := NewClient(endpoint, token)
 	client.ForwardedUserToken = cfg.AuthToken
+	client.OrgID = cfg.OrgID
 	return client
 }
 
@@ -122,7 +174,9 @@ func ControlClient() (*Client, error) {
 	if token == "" {
 		return nil, fmt.Errorf("not logged in; run `telos login` first")
 	}
-	return NewClient(endpoint, token), nil
+	client := NewClient(endpoint, token)
+	client.OrgID = cfg.OrgID
+	return client, nil
 }
 
 // BillingClient returns a client for the configured Telos billing service.
@@ -143,7 +197,9 @@ func BillingClient() (*Client, error) {
 	if token == "" {
 		return nil, fmt.Errorf("not logged in; run `telos login` first")
 	}
-	return NewClient(endpoint, token), nil
+	client := NewClient(endpoint, token)
+	client.OrgID = cfg.OrgID
+	return client, nil
 }
 
 // NewClientFromConfig creates a client from the user's config file.
@@ -220,6 +276,22 @@ func (c *Client) CreateEnvironment() (*Environment, error) {
 		return nil, fmt.Errorf("control plane returned invalid environment")
 	}
 	return &env, nil
+}
+
+func (c *Client) Me() (*MeResponse, error) {
+	resp, err := c.do("GET", "/api/me", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var me MeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&me); err != nil {
+		return nil, err
+	}
+	return &me, nil
 }
 
 // MintSessionKey asks billing to mint a managed per-session gateway key.
@@ -326,6 +398,162 @@ func (c *Client) Balance() (*Balance, error) {
 		return nil, err
 	}
 	return &Balance{ComputeUnits: raw.ComputeUnits}, nil
+}
+
+func (c *Client) PublishRegistryVersion(scope, name, version string, data []byte) (*RegistryVersionRecord, error) {
+	path := "/api/packages/" + url.PathEscape(scope) + "/" + url.PathEscape(name) + "/versions/" + url.PathEscape(version)
+	resp, err := c.doRaw("PUT", path, data, "application/gzip")
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, readError(resp)
+	}
+	var record RegistryVersionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) ListDeployments() ([]DeploymentRecord, error) {
+	resp, err := c.do("GET", "/api/deployments", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var payload struct {
+		Deployments []DeploymentRecord `json:"deployments"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	return payload.Deployments, nil
+}
+
+func (c *Client) CreateDeployment(name, packageRef, runtimeVersion string) (*DeploymentRecord, error) {
+	body := map[string]string{"package_ref": packageRef}
+	if strings.TrimSpace(name) != "" {
+		body["name"] = strings.TrimSpace(name)
+	}
+	if strings.TrimSpace(runtimeVersion) != "" {
+		body["runtime_version"] = strings.TrimSpace(runtimeVersion)
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("POST", "/api/deployments", data)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, readError(resp)
+	}
+	var record DeploymentRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) GetDeployment(id string) (*DeploymentRecord, error) {
+	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(strings.TrimSpace(id)), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var record DeploymentRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) UpdateDeployment(id, packageRef, runtimeVersion string) (*DeploymentRecord, error) {
+	body := map[string]string{"package_ref": packageRef}
+	if strings.TrimSpace(runtimeVersion) != "" {
+		body["runtime_version"] = strings.TrimSpace(runtimeVersion)
+	}
+	data, err := json.Marshal(body)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("PUT", "/api/deployments/"+url.PathEscape(strings.TrimSpace(id)), data)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var record DeploymentRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) DeleteDeployment(id string) (*DeploymentRecord, error) {
+	resp, err := c.do("DELETE", "/api/deployments/"+url.PathEscape(strings.TrimSpace(id)), nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var record DeploymentRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) GetDeploymentTranscript(id string) (string, error) {
+	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(strings.TrimSpace(id))+"/transcript", nil)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", readError(resp)
+	}
+	data, _ := io.ReadAll(resp.Body)
+	return string(data), nil
+}
+
+func (c *Client) WaitForDeployment(id string, timeout time.Duration) (*DeploymentRecord, error) {
+	if timeout <= 0 {
+		timeout = 15 * time.Minute
+	}
+	deadline := time.Now().Add(timeout)
+	var last *DeploymentRecord
+	for {
+		record, err := c.GetDeployment(id)
+		if err != nil {
+			return nil, err
+		}
+		last = record
+		switch record.State {
+		case "healthy":
+			return record, nil
+		case "failed", "deleted":
+			return record, fmt.Errorf("deployment %s is %s: %s", id, record.State, strings.TrimSpace(record.FailureReason))
+		}
+		if time.Now().After(deadline) {
+			return last, fmt.Errorf("deployment %s did not become healthy before timeout", id)
+		}
+		time.Sleep(5 * time.Second)
+	}
 }
 
 func (c *Client) UploadApplyPackage(digest string, data []byte) (*ApplyPackageRecord, error) {
@@ -647,6 +875,9 @@ func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[s
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
+	if strings.TrimSpace(c.OrgID) != "" {
+		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(c.OrgID))
+	}
 	client := http.DefaultClient
 	if c.HTTP != nil {
 		clone := *c.HTTP
@@ -722,6 +953,9 @@ func (c *Client) doRawInternal(method, path string, body []byte, contentType str
 	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	if strings.TrimSpace(c.OrgID) != "" {
+		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(c.OrgID))
 	}
 	if forwardUser && c.ForwardedUserToken != "" {
 		req.Header.Set(ForwardedUserAuthorizationHeader, "Bearer "+c.ForwardedUserToken)

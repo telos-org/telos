@@ -39,6 +39,7 @@ func Run(ctx context.Context, cfg Config) error {
 		}
 		startRouteReconciler(ctx, substrate.client)
 		store = newCloudSessionStore(baseStore, newRouteHandleResolver(), substrate)
+		startDeploymentBootstrapper(ctx, store)
 		startControlSessionReconciler(ctx, store, cfg)
 	}
 	mux := http.NewServeMux()
@@ -134,7 +135,7 @@ func withCloudCORS(next http.HandlerFunc) http.HandlerFunc {
 		if origin := r.Header.Get("Origin"); cloudAllowedOrigin.MatchString(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, X-Telos-User-Authorization")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, X-Telos-User-Authorization, X-Telos-Org-Id")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 			w.Header().Add("Vary", "Origin")
 		}
