@@ -17,6 +17,12 @@ export TELOS_VERSION="${version}"
 dist="${repo_root}/dist/${version}"
 rm -rf "${dist}"
 mkdir -p "${dist}"
+darwin_artifacts=(
+  "telos-darwin-amd64"
+  "telos-darwin-arm64"
+  "telosd-darwin-amd64"
+  "telosd-darwin-arm64"
+)
 
 bazel build \
   --stamp \
@@ -51,6 +57,33 @@ copy_binary "//cmd/telosd:telosd_darwin_amd64" "telosd-darwin-amd64"
 copy_binary "//cmd/telosd:telosd_darwin_arm64" "telosd-darwin-arm64"
 copy_binary "//cmd/telosd:telosd_linux_amd64" "telosd-linux-amd64"
 copy_binary "//cmd/telosd:telosd_linux_arm64" "telosd-linux-arm64"
+
+sign_darwin_artifacts() {
+  local identity="${TELOS_DARWIN_CODESIGN_IDENTITY:-}"
+  if [[ -z "${identity}" ]]; then
+    cat >&2 <<EOF
+build-release: Darwin artifacts are unsigned.
+Set TELOS_DARWIN_CODESIGN_IDENTITY to a Developer ID Application identity before publishing macOS releases.
+EOF
+    return 0
+  fi
+  if [[ "$(uname -s)" != "Darwin" ]]; then
+    echo "build-release: Darwin signing requires running on macOS" >&2
+    exit 1
+  fi
+  command -v codesign >/dev/null 2>&1 || {
+    echo "build-release: codesign is required for Darwin signing" >&2
+    exit 1
+  }
+
+  for artifact in "${darwin_artifacts[@]}"; do
+    codesign --force --timestamp --options runtime --sign "${identity}" "${dist}/${artifact}"
+    codesign --verify --strict --verbose=2 "${dist}/${artifact}"
+  done
+  touch "${dist}/.darwin-signed"
+}
+
+sign_darwin_artifacts
 
 (
   cd "${dist}"
