@@ -948,9 +948,11 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 		}
 
 		dataField, _ := raw["data"].(map[string]any)
+		timestamp, _ := raw["ts"].(string)
 
 		ev := SessionEvent{
 			Event:       eventName,
+			Timestamp:   strPtr(timestamp),
 			SpecIndex:   spec.Index,
 			SpecName:    strPtr(spec.Name),
 			SpecDirName: strPtr(spec.DirName),
