@@ -28,6 +28,7 @@ func cmdLaunch(command, action string, args []string) {
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	workspace := fs.String("workspace", "", "Workspace directory")
 	scope := fs.String("scope", "", "Package scope")
+	deploymentID := fs.String("deployment", "", "Deployment ID to update")
 	model := fs.String("model", "", "Model name")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
 	until := fs.Int("until", 0, "Run exactly N evaluator review cycles")
@@ -47,6 +48,10 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	if command != "apply" && flagNameSet(fs, "scope") {
 		fmt.Fprintln(os.Stderr, "error: --scope is only supported with telos apply")
+		os.Exit(1)
+	}
+	if command != "apply" && flagNameSet(fs, "deployment") {
+		fmt.Fprintln(os.Stderr, "error: --deployment is only supported with telos apply")
 		os.Exit(1)
 	}
 
@@ -111,7 +116,7 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudApply:
-		applyCloudControl(specArg, *scope, *jsonOut)
+		applyCloudControl(specArg, *scope, *deploymentID, *jsonOut)
 		return
 	}
 	if !hasLocalSpec {
@@ -242,6 +247,7 @@ func runCloudChildSession(
 func applyCloudControl(
 	specArg string,
 	scope string,
+	deploymentID string,
 	jsonOut bool,
 ) {
 	pkg, err := packageSpec(specArg)
@@ -259,7 +265,12 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	operation, deployment, err := applyDeploymentPackage(control, pkg.name, record.Ref)
+	operation, deployment, err := applyDeploymentPackage(
+		control,
+		pkg.name,
+		record.Ref,
+		deploymentID,
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -274,7 +285,20 @@ func applyCloudControl(
 	printDeploymentReceipt(os.Stdout, operation, deployment)
 }
 
-func applyDeploymentPackage(control *cloud.Client, name string, packageRef string) (string, *cloud.DeploymentRecord, error) {
+func applyDeploymentPackage(
+	control *cloud.Client,
+	name string,
+	packageRef string,
+	deploymentID string,
+) (string, *cloud.DeploymentRecord, error) {
+	if deploymentID != "" {
+		if !isDeploymentID(deploymentID) {
+			return "", nil, fmt.Errorf("invalid deployment id %q", deploymentID)
+		}
+		deployment, err := control.UpdateDeployment(deploymentID, packageRef)
+		return "updated", deployment, err
+	}
+
 	deployments, err := control.ListDeployments()
 	if err != nil {
 		return "", nil, err
