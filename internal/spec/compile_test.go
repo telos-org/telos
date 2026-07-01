@@ -518,6 +518,32 @@ func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 	}
 }
 
+func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	os.WriteFile(specPath, []byte("---\nversion: v0\nname: progress-test\nplatform: local\n---\nBody"), 0o644)
+
+	compiled, _ := CompileEnvironment(specPath)
+	proverTask := RenderProverTask(compiled, "", "/tmp/transcript.md")
+	verifierTask := RenderVerifierTask(compiled, "", "/tmp/transcript.md")
+
+	for _, task := range []string{proverTask, verifierTask} {
+		for _, want := range []string{
+			"meaningful milestones",
+			"Before any operation expected to take more than 60 seconds",
+			"about once per minute",
+			"do not save all progress for the final response",
+		} {
+			if !strings.Contains(task, want) {
+				t.Fatalf("prompt missing progress guidance %q:\n%s", want, task)
+			}
+		}
+		if strings.Contains(task, `phase=`) || strings.Contains(task, `timestamp=`) {
+			t.Fatalf("progress guidance should not require model-owned metadata:\n%s", task)
+		}
+	}
+}
+
 func TestRenderVerifierTaskReviewModeUsesReviewContract(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")

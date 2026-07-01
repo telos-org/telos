@@ -337,7 +337,9 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 			"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
 			"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
 			"- Write concise Markdown with claims, evidence, changes made, and remaining uncertainty",
-			"- During the turn, emit concise <progress_update>...</progress_update> entries when useful for a background observer, without spamming routine tool activity",
+			"- Emit concise <progress_update>...</progress_update> entries for a background observer at meaningful milestones: after planning, before and after long deploys, waits, probes, repairs, and verification passes",
+			"- Before any operation expected to take more than 60 seconds, emit a progress update explaining what you are about to wait on or verify",
+			"- During long-running work, keep progress updates regular enough that an observer sees useful movement about once per minute; do not save all progress for the final response",
 			"- End every turn with one final <progress_update>what you did this round</progress_update>",
 		}, "\n")
 	}
@@ -363,7 +365,9 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
 		"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
 		"- Write concise Markdown; blocking findings first",
-		"- During the turn, emit concise <progress_update>...</progress_update> entries when useful for a background observer, without spamming routine tool activity",
+		"- Emit concise <progress_update>...</progress_update> entries for a background observer at meaningful milestones: after scoping, before and after long probes, reproductions, waits, and verification passes",
+		"- Before any operation expected to take more than 60 seconds, emit a progress update explaining what you are about to wait on or verify",
+		"- During long-running evaluation, keep progress updates regular enough that an observer sees useful movement about once per minute; do not save all progress for the final response",
 		"- End every turn with one final <progress_update>what you found or why you concede</progress_update>",
 		"- The final non-empty line must be exactly one status tag",
 		"- <status>CONTINUE</status> if you found a concrete goal violation",
