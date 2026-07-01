@@ -540,7 +540,12 @@ func TestApplyDeploymentPackageUpdatesExistingDeployment(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	operation, deployment, err := applyDeploymentPackage(cloud.NewClient(srv.URL, "test-token"), "auth", "@telos/auth:1.2.3")
+	operation, deployment, err := applyDeploymentPackage(
+		cloud.NewClient(srv.URL, "test-token"),
+		"auth",
+		"@telos/auth:1.2.3",
+		"",
+	)
 	if err != nil {
 		t.Fatalf("applyDeploymentPackage: %v", err)
 	}
@@ -582,7 +587,12 @@ func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	operation, deployment, err := applyDeploymentPackage(cloud.NewClient(srv.URL, "test-token"), "auth", "@telos/auth:1.2.3")
+	operation, deployment, err := applyDeploymentPackage(
+		cloud.NewClient(srv.URL, "test-token"),
+		"auth",
+		"@telos/auth:1.2.3",
+		"",
+	)
 	if err != nil {
 		t.Fatalf("applyDeploymentPackage: %v", err)
 	}
@@ -590,6 +600,55 @@ func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
 		t.Fatalf("operation=%q created=%v", operation, created)
 	}
 	if deployment.ID != "dep_123" {
+		t.Fatalf("deployment: got %+v", deployment)
+	}
+}
+
+func TestApplyDeploymentPackageUpdatesExplicitDeployment(t *testing.T) {
+	var listed bool
+	var updated bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+			listed = true
+			http.NotFound(w, r)
+		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/dep_123":
+			updated = true
+			var body map[string]string
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["package_ref"] != "@telos/auth:1.2.3" {
+				t.Fatalf("body: got %#v", body)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":             "dep_123",
+				"name":           "auth",
+				"state":          "deploying",
+				"package_ref":    "@telos/auth:1.2.3",
+				"package_digest": "sha256:new",
+				"created_at":     "then",
+				"updated_at":     "now",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	operation, deployment, err := applyDeploymentPackage(
+		cloud.NewClient(srv.URL, "test-token"),
+		"auth",
+		"@telos/auth:1.2.3",
+		"dep_123",
+	)
+	if err != nil {
+		t.Fatalf("applyDeploymentPackage: %v", err)
+	}
+	if operation != "updated" || !updated || listed {
+		t.Fatalf("operation=%q updated=%v listed=%v", operation, updated, listed)
+	}
+	if deployment.ID != "dep_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
 		t.Fatalf("deployment: got %+v", deployment)
 	}
 }
