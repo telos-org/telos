@@ -1282,7 +1282,7 @@ func TestEventsPresent(t *testing.T) {
 	evidencePath := filepath.Join(store.Root, created.SessionID, "specs", "ep", "evidence.jsonl")
 	os.MkdirAll(filepath.Dir(evidencePath), 0o755)
 	lines := []string{
-		`{"event":"agent_complete","data":{"cost_usd":0.5,"role":"prover"}}`,
+		`{"ts":"2026-05-21T00:00:01.000Z","event":"agent_complete","data":{"cost_usd":0.5,"role":"prover"}}`,
 		`{"event":"game_end","data":{"game_result":"accepted"}}`,
 	}
 	os.WriteFile(evidencePath, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
@@ -1304,6 +1304,9 @@ func TestEventsPresent(t *testing.T) {
 
 	// Verify event shape matches the Python contract.
 	assertEqual(t, "event[0].event", "agent_complete", evResp.Events[0].Event)
+	if evResp.Events[0].Timestamp == nil || *evResp.Events[0].Timestamp != "2026-05-21T00:00:01.000Z" {
+		t.Errorf("expected timestamp, got %v", evResp.Events[0].Timestamp)
+	}
 	if evResp.Events[0].SpecName == nil || *evResp.Events[0].SpecName != "ep" {
 		t.Errorf("expected spec_name=ep, got %v", evResp.Events[0].SpecName)
 	}

@@ -293,6 +293,7 @@ func SessionsFromListItems(items []SessionListItem) []Session {
 // SessionEvent represents one evidence event from a session.
 type SessionEvent struct {
 	Event       string         `json:"event"`
+	Timestamp   *string        `json:"ts,omitempty"`
 	SessionID   *string        `json:"session_id,omitempty"`
 	SpecIndex   *int           `json:"spec_index,omitempty"`
 	SpecName    *string        `json:"spec_name,omitempty"`
