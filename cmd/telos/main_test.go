@@ -547,6 +547,12 @@ func TestAnalyzeSessionSetBuildsBenchmarkDistributions(t *testing.T) {
 	if !aggregate.CostUnavailable || aggregate.CostUnavailableN != 1 {
 		t.Fatalf("cost unavailable aggregate: %#v", aggregate)
 	}
+	if aggregate.TotalCostUSD != 0.60 {
+		t.Fatalf("total cost should exclude unavailable-cost sessions: %#v", aggregate)
+	}
+	if aggregate.Distributions.CostUSD.P50 != 0.10 || aggregate.Distributions.CostUSD.P95 != 0.50 {
+		t.Fatalf("cost distribution should exclude unavailable-cost sessions: %#v", aggregate.Distributions.CostUSD)
+	}
 	if aggregate.StopReasons["completed"] != 2 {
 		t.Fatalf("stop reasons: %#v", aggregate.StopReasons)
 	}
@@ -629,6 +635,46 @@ func TestBuildChildInspectionWritesMarkerAndReadyChecklist(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("inspection output missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestChildInspectionRequiresExplicitSuccessfulResult(t *testing.T) {
+	report := childInspectionReport{
+		Status:          string(sessionapi.StatusCompleted),
+		Terminal:        true,
+		WorkspaceExists: true,
+		Analysis:        sessionAnalysis{Failures: map[string]int{}},
+	}
+	if childReadyToReconcile(report) {
+		t.Fatal("empty result should not be ready to reconcile")
+	}
+	report.Result = "success"
+	if !childReadyToReconcile(report) {
+		t.Fatal("successful result should be ready")
+	}
+}
+
+func TestWriteChildInspectionMarkerRejectsPathTraversalIDs(t *testing.T) {
+	root := t.TempDir()
+	childDir := filepath.Join(root, "local_child")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeChildInspectionMarker(childDir, childInspectionReport{
+		ChildSessionID:  "../escape",
+		ParentSessionID: "../../../../tmp",
+	}); err == nil {
+		t.Fatal("expected invalid child session id error")
+	}
+	path, err := writeChildInspectionMarker(childDir, childInspectionReport{
+		ChildSessionID:  "local_child",
+		ParentSessionID: "../../../../tmp",
+	})
+	if err != nil {
+		t.Fatalf("write marker with invalid parent fallback: %v", err)
+	}
+	if !strings.HasPrefix(path, filepath.Join(childDir, "child-inspections")) {
+		t.Fatalf("marker escaped child dir: %s", path)
 	}
 }
 

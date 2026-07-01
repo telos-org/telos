@@ -135,15 +135,16 @@ func childReadyToReconcile(report childInspectionReport) bool {
 	if report.Status != string(sessionapi.StatusCompleted) {
 		return false
 	}
-	if report.Result != "" && report.Result != "completed" && report.Result != "success" {
+	result := strings.ToLower(strings.TrimSpace(report.Result))
+	if result != "completed" && result != "success" {
 		return false
 	}
 	return len(report.Analysis.Failures) == 0
 }
 
 func writeChildInspectionMarker(childSessionDir string, report childInspectionReport) (string, error) {
-	parentDir := filepath.Dir(childSessionDir)
-	if report.ParentSessionID != "" {
+	parentDir := childSessionDir
+	if safeSessionIDPathSegment(report.ParentSessionID) {
 		parentDir = filepath.Join(filepath.Dir(childSessionDir), report.ParentSessionID)
 	}
 	if info, err := os.Stat(parentDir); err != nil || !info.IsDir() {
@@ -152,6 +153,9 @@ func writeChildInspectionMarker(childSessionDir string, report childInspectionRe
 	dir := filepath.Join(parentDir, "child-inspections")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
+	}
+	if !safeSessionIDPathSegment(report.ChildSessionID) {
+		return "", fmt.Errorf("invalid child session id %q", report.ChildSessionID)
 	}
 	path := filepath.Join(dir, report.ChildSessionID+".json")
 	data, err := json.MarshalIndent(report, "", "  ")
@@ -162,6 +166,14 @@ func writeChildInspectionMarker(childSessionDir string, report childInspectionRe
 		return "", err
 	}
 	return path, nil
+}
+
+func safeSessionIDPathSegment(id string) bool {
+	id = strings.TrimSpace(id)
+	if id == "" || id == "." || id == ".." {
+		return false
+	}
+	return filepath.Base(id) == id && !strings.ContainsAny(id, `/\`)
 }
 
 func printChildInspection(out io.Writer, report childInspectionReport) {

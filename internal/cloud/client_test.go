@@ -444,6 +444,27 @@ func TestClientBalanceAndReconcile(t *testing.T) {
 	}
 }
 
+func TestClientReconcileSessionEscapesSessionID(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		if gotPath != "/api/billing/session-key/sess%2F1%3Fx/reconcile" || r.URL.RawQuery != "terminal=true" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	if err := client.ReconcileSession("sess/1?x", true); err != nil {
+		t.Fatalf("ReconcileSession: %v", err)
+	}
+	if gotPath != "/api/billing/session-key/sess%2F1%3Fx/reconcile" {
+		t.Fatalf("session id not escaped: %s", gotPath)
+	}
+}
+
 func TestClientPushCatalogSpec(t *testing.T) {
 	var uploadedBody []byte
 	var pushedBody map[string]string

@@ -271,7 +271,7 @@ func (c *Client) MintSessionKey(sessionID string) (*SessionKey, error) {
 
 // ReconcileSession asks the control plane to settle a managed local session.
 func (c *Client) ReconcileSession(sessionID string, terminal bool) error {
-	path := "/api/billing/session-key/" + sessionID + "/reconcile"
+	path := "/api/billing/session-key/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/reconcile"
 	if terminal {
 		path += "?terminal=true"
 	}

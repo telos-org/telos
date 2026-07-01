@@ -314,6 +314,9 @@ func TestCheckpointWorkspaceExcludesRuntimeDirsAndWritesManifest(t *testing.T) {
 	os.WriteFile(filepath.Join(dir, "id_rsa"), []byte("secret"), 0o600)
 	os.WriteFile(filepath.Join(dir, "credentials.json"), []byte("{}"), 0o600)
 	os.WriteFile(filepath.Join(dir, "cert.p12"), []byte("secret"), 0o600)
+	if err := os.Symlink(filepath.Join(dir, "id_rsa"), filepath.Join(dir, "notes.txt")); err != nil {
+		t.Fatal(err)
+	}
 	os.WriteFile(filepath.Join(dir, "app.go"), []byte("package app"), 0o644)
 
 	p := NewLocalPlatform(dir)
@@ -333,6 +336,7 @@ func TestCheckpointWorkspaceExcludesRuntimeDirsAndWritesManifest(t *testing.T) {
 		"./target/artifact",
 		"./.env.local",
 		"./id_rsa",
+		"./notes.txt",
 		"./credentials.json",
 		"./cert.p12",
 	} {
@@ -355,9 +359,18 @@ func TestCheckpointWorkspaceExcludesRuntimeDirsAndWritesManifest(t *testing.T) {
 	if len(manifest.Excluded) == 0 {
 		t.Fatalf("manifest should record exclusions: %+v", manifest)
 	}
-	for _, want := range []string{".env.local", "id_rsa", "credentials.json", "cert.p12"} {
-		if !manifestHasExcluded(manifest, want, "excluded_file") {
-			t.Fatalf("manifest missing secret exclusion %s: %+v", want, manifest)
+	for _, want := range []struct {
+		path   string
+		reason string
+	}{
+		{".env.local", "excluded_file"},
+		{"id_rsa", "excluded_file"},
+		{"credentials.json", "excluded_file"},
+		{"cert.p12", "excluded_file"},
+		{"notes.txt", "excluded_symlink"},
+	} {
+		if !manifestHasExcluded(manifest, want.path, want.reason) {
+			t.Fatalf("manifest missing secret exclusion %s: %+v", want.path, manifest)
 		}
 	}
 }

@@ -297,6 +297,10 @@ func (p *LocalPlatform) CheckpointWorkspace(dest string) bool {
 		if rel == "." {
 			return nil
 		}
+		if !includeAll && info.Mode()&os.ModeSymlink != 0 {
+			manifest.Excluded = append(manifest.Excluded, checkpointManifestEntry{Path: filepath.ToSlash(rel), Reason: "excluded_symlink"})
+			return nil
+		}
 		if !includeAll && info.IsDir() && shouldExcludeCheckpointPath(rel, info.Name()) {
 			manifest.Excluded = append(manifest.Excluded, checkpointManifestEntry{Path: filepath.ToSlash(rel), Reason: "excluded_dir"})
 			return filepath.SkipDir

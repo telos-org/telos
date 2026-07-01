@@ -88,3 +88,52 @@ func TestReadSessionLogDiagnosticsHandlesLargeJSONLLine(t *testing.T) {
 		t.Fatalf("expected provider failure after large line, got %#v", diagnostics.Failures)
 	}
 }
+
+func TestBuildSessionDiagnosticsRecordsGoalFailurePerSpec(t *testing.T) {
+	specA := "a"
+	specB := "b"
+	session := &Session{
+		SessionID: "local_diag",
+		Specs: []SessionSpec{
+			{Name: &specA},
+			{Name: &specB},
+		},
+	}
+	events := []SessionEvent{
+		{Event: "game_end", SpecName: &specA, Data: map[string]any{"game_result": "failure", "error": "provider_rate_limited: exhausted"}},
+		{Event: "game_end", SpecName: &specB, Data: map[string]any{"game_result": "failure"}},
+	}
+
+	diagnostics, _ := buildSessionDiagnostics(session, events)
+	if diagnostics.Failures["provider"] != 1 || diagnostics.Failures["goal_failure"] != 1 {
+		t.Fatalf("session failures: %#v", diagnostics.Failures)
+	}
+	byName := map[string]SessionSpecDiagnostics{}
+	for _, spec := range diagnostics.Specs {
+		byName[spec.Name] = spec
+	}
+	if byName["b"].Failures["goal_failure"] != 1 {
+		t.Fatalf("spec b failures: %#v", byName["b"].Failures)
+	}
+}
+
+func TestReadSessionLogDiagnosticsSkipsMalformedErrorPayload(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "specs", "diag", "turns", "0001-prover", "session.jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"type":"error","data":"not-an-object"}`+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	diagnostics := &SessionDiagnosticsResponse{
+		Failures:         map[string]int{},
+		SessionLogEvents: map[string]int{},
+	}
+	if err := readSessionLogDiagnostics(diagnostics, path, nil); err != nil {
+		t.Fatalf("readSessionLogDiagnostics: %v", err)
+	}
+	if diagnostics.SessionLogEvents[agentsession.KindError] != 1 || len(diagnostics.Errors) != 0 || len(diagnostics.Failures) != 0 {
+		t.Fatalf("malformed event should not fabricate diagnostics: %+v", diagnostics)
+	}
+}

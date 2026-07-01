@@ -356,17 +356,18 @@ func analyzeSessionSet(analyses []sessionAnalysis) sessionSetAnalysis {
 	var outputTokens []float64
 	var rounds []float64
 	for _, analysis := range analyses {
-		out.TotalCostUSD += analysis.CostUSD
 		if analysis.CostUnavailable {
 			out.CostUnavailable = true
 			out.CostUnavailableN++
+		} else {
+			out.TotalCostUSD += analysis.CostUSD
+			costs = append(costs, analysis.CostUSD)
 		}
 		out.TotalInputTokens += analysis.InputTokens
 		out.TotalOutputTokens += analysis.OutputTokens
 		out.TotalRounds += analysis.Rounds
 		result := firstNonEmpty(analysis.Result, "unknown")
 		out.Results[result]++
-		costs = append(costs, analysis.CostUSD)
 		inputTokens = append(inputTokens, float64(analysis.InputTokens))
 		outputTokens = append(outputTokens, float64(analysis.OutputTokens))
 		rounds = append(rounds, float64(analysis.Rounds))

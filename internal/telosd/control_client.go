@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -55,7 +56,7 @@ func (c *billingClient) MintSessionKey(sessionID, parentSessionID, userAuthoriza
 	if err != nil {
 		return controlSessionKey{}, err
 	}
-	req, err := http.NewRequest(http.MethodPost, c.endpoint+"/api/internal/sessions/"+sessionID+"/mint", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPost, c.endpoint+"/api/internal/sessions/"+url.PathEscape(strings.TrimSpace(sessionID))+"/mint", bytes.NewReader(body))
 	if err != nil {
 		return controlSessionKey{}, err
 	}
@@ -115,7 +116,7 @@ func (c *billingClient) ReconcileSession(sessionID string, terminal bool) error 
 	if strings.TrimSpace(c.token) == "" {
 		return fmt.Errorf("billing env token is required to reconcile a cloud session")
 	}
-	path := c.endpoint + "/api/billing/reconcile/" + strings.TrimSpace(sessionID)
+	path := c.endpoint + "/api/billing/reconcile/" + url.PathEscape(strings.TrimSpace(sessionID))
 	if terminal {
 		path += "?terminal=true"
 	}

@@ -714,6 +714,37 @@ func TestBillingClientReconcilesTerminalSession(t *testing.T) {
 	}
 }
 
+func TestBillingClientEscapesSessionIDsInURLs(t *testing.T) {
+	seen := map[string]bool{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen[r.URL.EscapedPath()] = true
+		switch {
+		case strings.HasPrefix(r.URL.EscapedPath(), "/api/internal/sessions/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"session_id": "sess/a?b",
+				"base_url":   "https://managed.example.com/v1",
+				"api_key":    "sk-child",
+			})
+		case strings.HasPrefix(r.URL.EscapedPath(), "/api/billing/reconcile/"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"state": "settled"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	client := newBillingClient(BillingConfig{Endpoint: server.URL, EnvID: "env_test", Token: "billing-token"})
+	if _, err := client.MintSessionKey("sess/a?b", "", ""); err != nil {
+		t.Fatalf("MintSessionKey: %v", err)
+	}
+	if err := client.ReconcileSession("sess/a?b", true); err != nil {
+		t.Fatalf("ReconcileSession: %v", err)
+	}
+	if !seen["/api/internal/sessions/sess%2Fa%3Fb/mint"] || !seen["/api/billing/reconcile/sess%2Fa%3Fb"] {
+		t.Fatalf("session ids not escaped in paths: %#v", seen)
+	}
+}
+
 func testCloudConfig(t *testing.T) Config {
 	t.Helper()
 	cfg, err := NormalizeConfig(Config{

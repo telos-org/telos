@@ -871,6 +871,49 @@ func TestPVGEvidenceFormat(t *testing.T) {
 	}
 }
 
+func TestPVGStateTransitionEvidenceUsesPreviousState(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	specDir := filepath.Join(dir, "specs", "pvg-test")
+	state := NewPVGState("pvg-test", specDir, "test-session-state-transitions")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		proverResults: []TurnResult{
+			{Role: RoleProver, Status: StatusContinue, Logs: "done\n<progress_update>implemented</progress_update>"},
+		},
+		verifierResults: []TurnResult{
+			{Role: RoleVerifier, Status: StatusConcede, Logs: "ok\n<status>CONCEDE</status>\n"},
+		},
+	}
+	pvg := NewPVG(compiled, exec, state, PVGConfig{})
+	pvg.Run()
+
+	data, err := os.ReadFile(state.EvidencePath)
+	if err != nil {
+		t.Fatalf("read evidence: %v", err)
+	}
+	var sawImplementToVerify bool
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var event struct {
+			Event string         `json:"event"`
+			Data  map[string]any `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil || event.Event != "state_transition" {
+			continue
+		}
+		if event.Data["from"] == event.Data["to"] {
+			t.Fatalf("state transition did not advance: %s", line)
+		}
+		if event.Data["from"] == string(ObjectiveStateImplement) && event.Data["to"] == string(ObjectiveStateVerify) {
+			sawImplementToVerify = true
+		}
+	}
+	if !sawImplementToVerify {
+		t.Fatalf("missing implement->verify transition:\n%s", data)
+	}
+}
+
 func TestPVGWorkspaceCheckpoint(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()

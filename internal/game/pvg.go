@@ -107,9 +107,7 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 		if p.shouldStop() {
 			return p.end(GameStopped)
 		}
-		if p.costCapUnavailableExceeded(p.Result.Rounds, turn.Role, turn.Stats) {
-			return p.end(GameFailure)
-		}
+		costCapExceeded := p.costCapUnavailableExceeded(p.Result.Rounds, turn.Role, turn.Stats)
 
 		if turn.Error != "" {
 			if turn.Recoverable {
@@ -118,6 +116,9 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 				machine.state = ObjectiveStateBlocked
 			}
 			p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.state)
+			if costCapExceeded {
+				return p.end(GameFailure)
+			}
 			if p.turnFailureExceeded(turn, &recoverableFailures) {
 				return p.end(GameFailure)
 			}
@@ -135,6 +136,9 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 		// a verifier turn returns to implement rather than repair).
 		result, terminal := machine.advance(turn)
 		p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.state)
+		if costCapExceeded {
+			return p.end(GameFailure)
+		}
 
 		if terminal {
 			if result == GameFailure && !machine.proverDelivered && p.Result.Error == "" {

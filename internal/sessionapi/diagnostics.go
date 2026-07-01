@@ -106,7 +106,7 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) (*SessionD
 			if errText != "" {
 				addDiagnosticsFailure(diagnostics.Failures, spec, ClassifyFailure(errText))
 				recordEvidenceFailureCode(evidenceFailureCodes, spec, specName, stringFromMap(data, "error_code"))
-			} else if result == "failure" && len(diagnostics.Failures) == 0 {
+			} else if result == "failure" && diagnosticsSpecFailureCount(diagnostics, spec) == 0 {
 				addDiagnosticsFailure(diagnostics.Failures, spec, "goal_failure")
 			}
 		case "budget_exceeded":
@@ -156,6 +156,16 @@ func buildSessionDiagnostics(session *Session, events []SessionEvent) (*SessionD
 func DiagnosticsFromEvents(session *Session, events []SessionEvent) *SessionDiagnosticsResponse {
 	diagnostics, _ := buildSessionDiagnostics(session, events)
 	return diagnostics
+}
+
+func diagnosticsSpecFailureCount(diagnostics *SessionDiagnosticsResponse, spec *SessionSpecDiagnostics) int {
+	if spec != nil {
+		return len(spec.Failures)
+	}
+	if diagnostics == nil {
+		return 0
+	}
+	return len(diagnostics.Failures)
 }
 
 func recordEvidenceFailureCode(bySpec map[string]map[string]bool, spec *SessionSpecDiagnostics, specName, code string) {
@@ -249,25 +259,20 @@ func readSessionLogDiagnostics(diagnostics *SessionDiagnosticsResponse, path str
 				})
 			}
 		case agentsession.KindError:
-			var p *agentsession.ErrorPayload
-			p, _ = agentsession.Unmarshal[agentsession.ErrorPayload](&event)
-			if p == nil {
-				p = &agentsession.ErrorPayload{}
+			p, err := agentsession.Unmarshal[agentsession.ErrorPayload](&event)
+			if err != nil {
+				continue
 			}
 			errorCode := p.ErrorCode
 			errorText := firstDiagnosticsNonEmpty(errorCode, p.Error)
-			var retryable *bool
-			if p.Retryable {
-				r := p.Retryable
-				retryable = &r
-			}
+			r := p.Retryable
 			diagnostics.Errors = append(diagnostics.Errors, SessionErrorDiagnostics{
 				SpecName:           specName,
 				TurnID:             turnID,
 				Sequence:           p.Sequence,
 				ErrorCode:          errorCode,
 				Error:              p.Error,
-				Retryable:          retryable,
+				Retryable:          &r,
 				ProviderStatusCode: p.ProviderStatusCode,
 			})
 			if !evidenceFailureAlreadyCounted(diagnostics, evidenceFailureCodes, specName, errorCode) {

@@ -108,7 +108,7 @@ func (p *PVG) loadLedger() ObjectiveLedger {
 
 func (p *PVG) transitionObjectiveState(next ObjectiveState, roundNum int, role string, reason string) {
 	ledger := p.loadLedger()
-	if ledger.State == next && ledger.LastTransition == reason {
+	if ledger.State == next {
 		return
 	}
 	previous := ledger.State
@@ -130,6 +130,7 @@ func (p *PVG) transitionObjectiveState(next ObjectiveState, roundNum int, role s
 // ledger can never disagree with the machine about which transition occurred.
 func (p *PVG) updateObjectiveLedger(roundNum int, role string, turn TurnResult, stateAfter ObjectiveState) {
 	ledger := p.loadLedger()
+	previousState := ledger.State
 	progress := lastProgressUpdate(turn.Logs)
 	switch stateAfter {
 	case ObjectiveStateVerify:
@@ -168,6 +169,9 @@ func (p *PVG) updateObjectiveLedger(roundNum int, role string, turn TurnResult, 
 		}
 	}
 	ledger.State = stateAfter
+	if previousState != stateAfter {
+		ledger.LastTransition = "turn_completed"
+	}
 	ledger.Turns = append(ledger.Turns, ObjectiveTurn{
 		RoundNum:       roundNum,
 		Role:           role,
@@ -179,7 +183,14 @@ func (p *PVG) updateObjectiveLedger(roundNum int, role string, turn TurnResult, 
 	if len(ledger.Turns) > 200 {
 		ledger.Turns = ledger.Turns[len(ledger.Turns)-200:]
 	}
-	_ = writeObjectiveLedger(p.State.LedgerPath, ledger)
+	if err := writeObjectiveLedger(p.State.LedgerPath, ledger); err == nil && previousState != stateAfter {
+		p.Evidence.Log("state_transition", roundNum, role, map[string]interface{}{
+			"from":   previousState,
+			"to":     stateAfter,
+			"reason": ledger.LastTransition,
+			"ledger": p.State.LedgerPath,
+		})
+	}
 }
 
 func lastProgressUpdate(text string) string {
