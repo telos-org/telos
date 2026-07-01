@@ -1458,58 +1458,6 @@ func TestGetSessionHydratesActiveTurnFromEvidence(t *testing.T) {
 	}
 }
 
-// --------- GET /api/sessions/{id}/workspace/{spec} ------------------------------------------------------------------------------------------------
-
-func TestWorkspaceNotFound(t *testing.T) {
-	srv, _ := newTestServer(t)
-	defer srv.Close()
-
-	created := createSession(t, srv.URL, createSessionBody(t, "w"))
-
-	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/workspace/w")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	assertEqual(t, "status_code", "404", itoa(resp.StatusCode))
-}
-
-func TestWorkspacePresent(t *testing.T) {
-	srv, store := newTestServer(t)
-	defer srv.Close()
-
-	created := createSession(t, srv.URL, createSessionBody(t, "wp"))
-
-	// Create the workspace archive.
-	workspacePath := filepath.Join(store.Root, created.SessionID, "specs", "wp", "workspace.tar.gz")
-	os.MkdirAll(filepath.Dir(workspacePath), 0o755)
-	os.WriteFile(workspacePath, []byte("fake-archive-content"), 0o644)
-
-	// Update the manifest to include workspace_path.
-	mpath := filepath.Join(store.Root, created.SessionID, "session.json")
-	raw, _ := os.ReadFile(mpath)
-	var m map[string]any
-	json.Unmarshal(raw, &m)
-	specs := m["specs"].([]any)
-	spec0 := specs[0].(map[string]any)
-	spec0["workspace_path"] = workspacePath
-	updated, _ := json.MarshalIndent(m, "", "  ")
-	os.WriteFile(mpath, updated, 0o644)
-
-	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/workspace/wp")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-
-	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
-
-	body, _ := io.ReadAll(resp.Body)
-	if string(body) != "fake-archive-content" {
-		t.Errorf("unexpected workspace body: %q", body)
-	}
-}
-
 // --------- Session lifecycle ------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 func TestSessionLifecycleStatus(t *testing.T) {

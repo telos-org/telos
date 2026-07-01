@@ -66,9 +66,6 @@ func (s *fakeReconcileStore) Transcript(string) (string, error) {
 func (s *fakeReconcileStore) Events(string) ([]sessionapi.SessionEvent, error) {
 	return nil, sessionapi.ErrNotFound
 }
-func (s *fakeReconcileStore) WorkspacePath(string, string) (string, error) {
-	return "", sessionapi.ErrNotFound
-}
 
 func TestDeploymentBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
