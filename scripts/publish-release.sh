@@ -14,6 +14,15 @@ else
   dist="$("${repo_root}/scripts/build-release.sh" "${version}")"
 fi
 
+if [[ ! -f "${dist}/.darwin-signed" && "${TELOS_ALLOW_UNSIGNED_DARWIN:-}" != "1" ]]; then
+  cat >&2 <<EOF
+publish-release: refusing to publish unsigned Darwin artifacts.
+Set TELOS_DARWIN_CODESIGN_IDENTITY to a Developer ID Application identity and rebuild.
+For an explicit internal-only override, set TELOS_ALLOW_UNSIGNED_DARWIN=1.
+EOF
+  exit 1
+fi
+
 if ! gcloud storage buckets describe "gs://${bucket}" --project "${project}" >/dev/null 2>&1; then
   gcloud storage buckets create "gs://${bucket}" \
     --project "${project}" \
