@@ -45,54 +45,12 @@ func TestNormalizeCloudConfigDefaults(t *testing.T) {
 	if cfg.Auth.Type != AuthBearer {
 		t.Fatalf("auth.type: got %q", cfg.Auth.Type)
 	}
-	if cfg.Worker.Substrate != "local-process" {
-		t.Fatalf("worker substrate: got %q", cfg.Worker.Substrate)
-	}
-	if cfg.Kubernetes.AgentSecretKey != "" {
-		t.Fatalf("local-process cloud config should not fill kubernetes worker defaults: %+v", cfg.Kubernetes)
-	}
-}
-
-func TestNormalizeCloudConfigAcceptsKubernetesWorkerSubstrate(t *testing.T) {
-	cfg, err := NormalizeConfig(Config{
-		Mode:   ModeCloud,
-		Auth:   AuthConfig{Token: "operator-token"},
-		Worker: WorkerConfig{Substrate: "kubernetes"},
-	})
-	if err != nil {
-		t.Fatalf("NormalizeConfig: %v", err)
-	}
-	if cfg.Worker.Substrate != "kubernetes" {
-		t.Fatalf("worker substrate: got %q", cfg.Worker.Substrate)
-	}
-	if cfg.Kubernetes.AgentSecretKey != "SAIL_API_KEY" {
-		t.Fatalf("agent secret key: got %q", cfg.Kubernetes.AgentSecretKey)
-	}
-}
-
-func TestNormalizeCloudConfigRejectsInvalidWorkerSubstrate(t *testing.T) {
-	_, err := NormalizeConfig(Config{
-		Mode:   ModeCloud,
-		Auth:   AuthConfig{Token: "operator-token"},
-		Worker: WorkerConfig{Substrate: "pod-farm"},
-	})
-	if err == nil {
-		t.Fatal("expected invalid worker substrate")
-	}
-	if err.Error() != `invalid worker.substrate "pod-farm"` {
-		t.Fatalf("error: got %q", err)
-	}
 }
 
 func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {
 	cfg, err := NormalizeConfig(Config{
-		Mode:   ModeCloud,
-		Token:  "operator-token",
-		Worker: WorkerConfig{Substrate: "kubernetes"},
-		Kubernetes: KubernetesConfig{
-			AgentImage:      "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
-			ImagePullSecret: "explicit-pull",
-		},
+		Mode:  ModeCloud,
+		Token: "operator-token",
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
@@ -102,48 +60,6 @@ func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {
 	}
 	if cfg.Auth.Token != "operator-token" {
 		t.Fatalf("auth.token: got %q", cfg.Auth.Token)
-	}
-	if cfg.Kubernetes.AgentImage != "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123" {
-		t.Fatalf("agent image: got %q", cfg.Kubernetes.AgentImage)
-	}
-	if cfg.Kubernetes.ImagePullSecret != "explicit-pull" {
-		t.Fatalf("image pull secret: got %q", cfg.Kubernetes.ImagePullSecret)
-	}
-}
-
-func TestNormalizeCloudConfigDefaultsGARImagePullSecret(t *testing.T) {
-	cfg, err := NormalizeConfig(Config{
-		Mode:   ModeCloud,
-		Token:  "operator-token",
-		Worker: WorkerConfig{Substrate: "kubernetes"},
-		Kubernetes: KubernetesConfig{
-			AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
-		},
-	})
-	if err != nil {
-		t.Fatalf("NormalizeConfig: %v", err)
-	}
-	if cfg.Kubernetes.ImagePullSecret != "gar-pull" {
-		t.Fatalf("image pull secret: got %q", cfg.Kubernetes.ImagePullSecret)
-	}
-}
-
-func TestNormalizeCloudConfigUsesImagePullSecretEnvOverride(t *testing.T) {
-	t.Setenv("TELOS_IMAGE_PULL_SECRET", "custom-pull")
-
-	cfg, err := NormalizeConfig(Config{
-		Mode:   ModeCloud,
-		Token:  "operator-token",
-		Worker: WorkerConfig{Substrate: "kubernetes"},
-		Kubernetes: KubernetesConfig{
-			AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
-		},
-	})
-	if err != nil {
-		t.Fatalf("NormalizeConfig: %v", err)
-	}
-	if cfg.Kubernetes.ImagePullSecret != "custom-pull" {
-		t.Fatalf("image pull secret: got %q", cfg.Kubernetes.ImagePullSecret)
 	}
 }
 
@@ -241,8 +157,6 @@ server:
 auth:
   type: bearer
   token: test-token
-worker:
-  substrate: kubernetes
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -256,12 +170,9 @@ worker:
 	if cfg.Auth.Token != "test-token" {
 		t.Fatalf("auth token: got %q", cfg.Auth.Token)
 	}
-	if cfg.Worker.Substrate != "kubernetes" {
-		t.Fatalf("worker substrate: got %q", cfg.Worker.Substrate)
-	}
 }
 
-func TestLoadConfigCompactShape(t *testing.T) {
+func TestLoadConfigIgnoresLegacyWorkerShape(t *testing.T) {
 	tokenPath := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenPath, []byte("test-token\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -284,11 +195,5 @@ kubernetes:
 	}
 	if cfg.Auth.Token != "test-token" {
 		t.Fatalf("auth token: got %q", cfg.Auth.Token)
-	}
-	if cfg.Kubernetes.AgentImage != "registry/telos-agent@sha256:abc123" {
-		t.Fatalf("agent image: got %q", cfg.Kubernetes.AgentImage)
-	}
-	if cfg.Kubernetes.ImagePullSecret != "registry-pull" {
-		t.Fatalf("image pull secret: got %q", cfg.Kubernetes.ImagePullSecret)
 	}
 }

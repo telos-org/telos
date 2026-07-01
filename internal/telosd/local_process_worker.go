@@ -13,6 +13,10 @@ func newLocalProcessSubstrate() localProcessSubstrate {
 	return localProcessSubstrate{}
 }
 
+func newSessionSubstrate(Config) (sessionSubstrate, error) {
+	return newLocalProcessSubstrate(), nil
+}
+
 func (s localProcessSubstrate) Apply(session *sessionapi.Session, wakeReason string) error {
 	if _, err := sessionWorkerKind(session); err != nil {
 		return err
