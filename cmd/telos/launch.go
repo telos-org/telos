@@ -299,26 +299,8 @@ func applyDeploymentPackage(
 		return "updated", deployment, err
 	}
 
-	deployments, err := control.ListDeployments()
-	if err != nil {
-		return "", nil, err
-	}
-	var matches []cloud.DeploymentRecord
-	for _, deployment := range deployments {
-		if deployment.Name == name {
-			matches = append(matches, deployment)
-		}
-	}
-	switch len(matches) {
-	case 0:
-		deployment, err := control.CreateDeployment(name, packageRef)
-		return "created", deployment, err
-	case 1:
-		deployment, err := control.UpdateDeployment(matches[0].ID, packageRef)
-		return "updated", deployment, err
-	default:
-		return "", nil, fmt.Errorf("multiple deployments named %q; update by deployment id is not supported by telos apply yet", name)
-	}
+	deployment, err := control.CreateDeployment(name, packageRef)
+	return "created", deployment, err
 }
 
 func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session) {

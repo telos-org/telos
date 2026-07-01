@@ -500,24 +500,16 @@ func TestNormalizePackageVersion(t *testing.T) {
 	}
 }
 
-func TestApplyDeploymentPackageUpdatesExistingDeployment(t *testing.T) {
-	var updated bool
+func TestApplyDeploymentPackageCreatesWithoutReconciliation(t *testing.T) {
+	var listed bool
+	var created bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			json.NewEncoder(w).Encode(map[string]any{
-				"deployments": []map[string]any{{
-					"id":             "dep_123",
-					"name":           "auth",
-					"state":          "healthy",
-					"package_ref":    "@telos/auth:1.2.2",
-					"package_digest": "sha256:old",
-					"created_at":     "then",
-					"updated_at":     "then",
-				}},
-			})
-		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/dep_123":
-			updated = true
+			listed = true
+			http.NotFound(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
+			created = true
 			var body map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
@@ -528,10 +520,10 @@ func TestApplyDeploymentPackageUpdatesExistingDeployment(t *testing.T) {
 			json.NewEncoder(w).Encode(map[string]any{
 				"id":             "dep_123",
 				"name":           "auth",
-				"state":          "deploying",
+				"state":          "provisioning",
 				"package_ref":    "@telos/auth:1.2.3",
 				"package_digest": "sha256:new",
-				"created_at":     "then",
+				"created_at":     "now",
 				"updated_at":     "now",
 			})
 		default:
@@ -549,8 +541,8 @@ func TestApplyDeploymentPackageUpdatesExistingDeployment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("applyDeploymentPackage: %v", err)
 	}
-	if operation != "updated" || !updated {
-		t.Fatalf("operation=%q updated=%v", operation, updated)
+	if operation != "created" || !created || listed {
+		t.Fatalf("operation=%q created=%v listed=%v", operation, created, listed)
 	}
 	if deployment.ID != "dep_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
 		t.Fatalf("deployment: got %+v", deployment)
@@ -562,7 +554,7 @@ func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			json.NewEncoder(w).Encode(map[string]any{"deployments": []map[string]any{}})
+			t.Fatal("apply without --deployment must not list deployments")
 		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
 			created = true
 			var body map[string]string
