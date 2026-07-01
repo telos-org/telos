@@ -76,10 +76,16 @@ func (e *Evidence) Log(event string, roundNum int, role string, data map[string]
 }
 
 // LogAgent logs an agent completion event.
-func (e *Evidence) LogAgent(roundNum int, role string, status string, logsTail string, stats interface{}) {
+func (e *Evidence) LogAgent(roundNum int, role string, status string, logsTail string, stats interface{}, errText ...string) {
 	data := map[string]interface{}{
 		"status":    status,
 		"logs_tail": truncate(logsTail, 8000),
+	}
+	if len(errText) > 0 && errText[0] != "" {
+		data["error"] = errText[0]
+		if code := ErrorCode(errText[0]); code != "" {
+			data["error_code"] = code
+		}
 	}
 	if stats != nil {
 		// Marshal stats to map
@@ -97,20 +103,25 @@ func (e *Evidence) LogAgent(roundNum int, role string, status string, logsTail s
 }
 
 // LogGameEnd logs the terminal game result.
-func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRounds int, conceded bool, costUSD float64, inputTokens, outputTokens, cacheRead, cacheCreate int, errMsg string, completionReason string) {
-	e.Log("game_end", rounds, "system", map[string]interface{}{
+func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRounds int, conceded bool, costUSD float64, costUnavailable bool, inputTokens, outputTokens, cacheRead, cacheCreate int, errMsg string, completionReason string) {
+	data := map[string]interface{}{
 		"game_result":                 result,
 		"completion_reason":           completionReason,
 		"prover_rounds":               proverRounds,
 		"verifier_rounds":             verifierRounds,
 		"verifier_conceded":           conceded,
 		"total_cost_usd":              costUSD,
+		"cost_unavailable":            costUnavailable,
 		"total_input_tokens":          inputTokens,
 		"total_output_tokens":         outputTokens,
 		"total_cache_read_tokens":     cacheRead,
 		"total_cache_creation_tokens": cacheCreate,
 		"error":                       errMsg,
-	})
+	}
+	if code := ErrorCode(errMsg); code != "" {
+		data["error_code"] = code
+	}
+	e.Log("game_end", rounds, "system", data)
 }
 
 // LogWorkspaceCheckpoint logs a workspace checkpoint event.
@@ -173,4 +184,21 @@ func truncate(s string, max int) string {
 		return s
 	}
 	return s[len(s)-max:]
+}
+
+// ErrorCode returns the leading code segment of a Telos error string, i.e. the
+// text before the first ':', space, or newline ("provider_timeout:..." ->
+// "provider_timeout"). It is the single shared parser for error codes recorded
+// in evidence, transcripts, and session manifests.
+func ErrorCode(errText string) string {
+	for i, r := range errText {
+		switch {
+		case r == ':' || r == ' ' || r == '\n' || r == '\t':
+			if i == 0 {
+				return ""
+			}
+			return errText[:i]
+		}
+	}
+	return errText
 }

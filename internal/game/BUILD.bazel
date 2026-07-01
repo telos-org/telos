@@ -3,8 +3,12 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "game",
     srcs = [
+        "ledger.go",
         "pvg.go",
+        "review.go",
+        "roles.go",
         "state.go",
+        "task_state_machine.go",
         "transcript.go",
         "types.go",
     ],
@@ -21,10 +25,15 @@ go_test(
     name = "game_test",
     srcs = [
         "pvg_test.go",
+        "review_test.go",
         "state_test.go",
+        "task_state_machine_test.go",
         "transcript_test.go",
         "types_test.go",
     ],
     embed = [":game"],
-    deps = ["//internal/spec"],
+    deps = [
+        "//internal/platform",
+        "//internal/spec",
+    ],
 )

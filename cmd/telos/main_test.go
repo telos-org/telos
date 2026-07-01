@@ -188,6 +188,137 @@ func TestPrintSessionDescriptionShowsRuntimeAndLedger(t *testing.T) {
 	}
 }
 
+func TestReplayTargetDirectPathInfersRoleAndValidatesProtocol(t *testing.T) {
+	dir := t.TempDir()
+	turnDir := filepath.Join(dir, "turns", "0001-prover")
+	if err := os.MkdirAll(turnDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(turnDir, "session.jsonl")
+	writeReplayLog(t, logPath, "Implement code in the workspace.", "Done.\n\n<progress_update>Updated code.</progress_update>", true)
+
+	reports, err := replayTarget(logPath, "")
+	if err != nil {
+		t.Fatalf("replayTarget: %v", err)
+	}
+	if len(reports) != 1 {
+		t.Fatalf("reports: got %d", len(reports))
+	}
+	if reports[0].Role != "prover" || !reports[0].Report.ProtocolOK {
+		t.Fatalf("report: %+v", reports[0])
+	}
+	if reports[0].Report.ToolCalls != 1 || reports[0].Report.ToolResults != 1 {
+		t.Fatalf("tool counts: %+v", reports[0].Report)
+	}
+}
+
+func TestReplayTargetDirectPathRequiresRoleWhenNotInferable(t *testing.T) {
+	dir := t.TempDir()
+	logPath := filepath.Join(dir, "session.jsonl")
+	writeReplayLog(t, logPath, "Implement code in the workspace.", "Done.", false)
+
+	_, err := replayTarget(logPath, "")
+	if err == nil {
+		t.Fatal("expected missing role error")
+	}
+	if !strings.Contains(err.Error(), "--role is required") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	reports, err := replayTarget(logPath, "prover")
+	if err != nil {
+		t.Fatalf("replayTarget with role: %v", err)
+	}
+	if reports[0].Report.ProtocolOK || reports[0].Report.ProtocolError != "missing_progress_update" {
+		t.Fatalf("expected missing progress update, got %+v", reports[0].Report)
+	}
+}
+
+func TestReplayLocalSessionDiscoversTurnLogs(t *testing.T) {
+	dir := t.TempDir()
+	sessionDir := filepath.Join(dir, "local_123")
+	proverPath := filepath.Join(sessionDir, "specs", "demo", "turns", "0001-prover", "session.jsonl")
+	verifierPath := filepath.Join(sessionDir, "specs", "demo", "turns", "0002-verifier", "session.jsonl")
+	writeReplayLog(t, proverPath, "Implement code in the workspace.", "Done.\n\n<progress_update>Updated code.</progress_update>", true)
+	writeReplayLog(t, verifierPath, "Verify code.", "Looks good.\n\n<status>CONCEDE</status>", false)
+	session := &sessionapi.Session{SessionID: "local_123", SessionDir: &sessionDir}
+
+	reports, err := replayLocalSession(session)
+	if err != nil {
+		t.Fatalf("replayLocalSession: %v", err)
+	}
+	if len(reports) != 2 {
+		t.Fatalf("reports: got %d", len(reports))
+	}
+	if reports[0].Role != "prover" || reports[1].Role != "verifier" {
+		t.Fatalf("roles: %+v", reports)
+	}
+	var out bytes.Buffer
+	printReplayReports(&out, reports)
+	text := out.String()
+	for _, want := range []string{"Replay", "prover", "verifier", "ok", "0001-prover", "0002-verifier"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("replay output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestReplayReportsToolTraceFailuresAndTruncation(t *testing.T) {
+	dir := t.TempDir()
+	turnDir := filepath.Join(dir, "turns", "0001-prover")
+	logPath := filepath.Join(turnDir, "session.jsonl")
+	writeReplayEvents(t, logPath, []map[string]any{
+		{"type": "session", "version": 1},
+		{"type": "message", "message": map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": "Implement code."}}}},
+		{"type": "tool_call", "data": map[string]any{"tool_call_id": "call_1", "tool_name": "bash", "arguments": `{"command":"false"}`}},
+		{"type": "tool_result", "data": map[string]any{"tool_call_id": "call_1", "tool_name": "bash", "is_error": true, "exit_code": 2, "truncated": true}},
+		{"type": "message", "message": map[string]any{"role": "toolResult", "toolCallId": "call_1", "toolName": "bash", "isError": true, "content": []map[string]any{{"type": "text", "text": "tool: bash\nok: false\nexit_code: 2\nstdout_truncated: true\n"}}}},
+		{"type": "message", "message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "Done.\n<progress_update>checked command</progress_update>"}}}},
+	})
+
+	reports, err := replayTarget(logPath, "")
+	if err != nil {
+		t.Fatalf("replayTarget: %v", err)
+	}
+	report := reports[0].Report
+	if !report.ProtocolOK {
+		t.Fatalf("protocol should pass, got %+v", report)
+	}
+	if report.ToolErrors != 1 || report.ToolNonzeroExits != 1 || report.ToolTruncated != 1 {
+		t.Fatalf("tool trace counters: %+v", report)
+	}
+
+	var out bytes.Buffer
+	printReplayReports(&out, reports)
+	text := out.String()
+	for _, want := range []string{"TOOL_ERR", "EXIT", "TRUNC", "1"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("replay output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestReplayFailsOnToolTraceMismatch(t *testing.T) {
+	dir := t.TempDir()
+	turnDir := filepath.Join(dir, "turns", "0001-prover")
+	logPath := filepath.Join(turnDir, "session.jsonl")
+	writeReplayEvents(t, logPath, []map[string]any{
+		{"type": "session", "version": 1},
+		{"type": "message", "message": map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": "Implement code."}}}},
+		{"type": "tool_call", "data": map[string]any{"tool_call_id": "call_1", "tool_name": "read_file", "arguments": `{"path":"main.go"}`}},
+		{"type": "message", "message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": "Done.\n<progress_update>stopped early</progress_update>"}}}},
+	})
+
+	reports, err := replayTarget(logPath, "")
+	if err != nil {
+		t.Fatalf("replayTarget: %v", err)
+	}
+	report := reports[0].Report
+	if report.ProtocolOK || report.ProtocolError != "tool_trace_mismatch" || report.UnmatchedToolCalls != 1 {
+		t.Fatalf("expected tool trace mismatch, got %+v", report)
+	}
+}
+
 func TestAnalyzeSessionEventsBuildsFailureTaxonomy(t *testing.T) {
 	specName := "demo"
 	roleVerifier := "verifier"
@@ -578,6 +709,42 @@ func TestBuildChildInspectionRejectsNonChildAndBlocksUnready(t *testing.T) {
 	}
 	if report.Analysis.Failures["tool"] != 1 {
 		t.Fatalf("expected tool failure: %#v", report.Analysis.Failures)
+	}
+}
+
+func writeReplayLog(t *testing.T, path string, task string, final string, withTool bool) {
+	t.Helper()
+	events := []map[string]any{
+		{"type": "session", "version": 1},
+		{"type": "message", "message": map[string]any{"role": "user", "content": []map[string]any{{"type": "text", "text": task}}}},
+		{"type": "model_request", "data": map[string]any{"sequence": 1}},
+		{"type": "model_response", "data": map[string]any{"sequence": 1}},
+	}
+	if withTool {
+		events = append(events,
+			map[string]any{"type": "tool_call", "data": map[string]any{"tool_call_id": "call_1", "tool_name": "read_file", "arguments": `{"path":"main.go"}`}},
+			map[string]any{"type": "message", "message": map[string]any{"role": "toolResult", "toolCallId": "call_1", "toolName": "read_file", "content": []map[string]any{{"type": "text", "text": "ok"}}}},
+		)
+	}
+	events = append(events, map[string]any{"type": "message", "message": map[string]any{"role": "assistant", "content": []map[string]any{{"type": "text", "text": final}}}})
+	writeReplayEvents(t, path, events)
+}
+
+func writeReplayEvents(t *testing.T, path string, events []map[string]any) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var lines []string
+	for _, event := range events {
+		data, err := json.Marshal(event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines = append(lines, string(data))
+	}
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

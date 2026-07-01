@@ -2,8 +2,37 @@
 
 package cli
 
-import "github.com/telos-org/telos/internal/game"
+import (
+	"github.com/telos-org/telos/internal/executor"
+	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/gateway"
+	"github.com/telos-org/telos/internal/platform"
+)
 
 func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecutor, error) {
-	return createPiExecutor(workspace, cfg)
+	p := platform.NewLocalPlatform(workspace)
+	model := cfg.Model
+	if model == "" {
+		model = DefaultLocalModel
+	}
+	cred, err := gateway.Resolve(cfg.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	exec := executor.NewNativeExecutorWithGateway(
+		p,
+		model,
+		cfg.Thinking,
+		cfg.AgentTimeoutSec,
+		executor.GatewayConfig{
+			BaseURL:       cred.BaseURL,
+			APIKey:        cred.APIKey,
+			Transport:     cred.Transport,
+			Kind:          cred.Kind,
+			Headers:       cred.Headers,
+			CostHardLimit: cred.CostHardLimit,
+		},
+		cred.Cleanup,
+	)
+	return exec, nil
 }

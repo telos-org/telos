@@ -20,7 +20,7 @@ const maxTurnBodyChars = 8000
 
 type AppendTurnOptions struct {
 	IncludeStatus bool
-	PiSessionPath string
+	SessionPath   string
 	EvidencePath  string
 }
 
@@ -69,7 +69,7 @@ func AppendTurn(path string, role string, roleRound int, status string, logs str
 // AppendTurnWithOptions appends one implementation or evaluation turn to the transcript.
 func AppendTurnWithOptions(path string, role string, roleRound int, status string, logs string, stats *TurnStats, turnID string, turnError string, opts AppendTurnOptions) error {
 	label := "Implementation"
-	if role == "verifier" {
+	if role == RoleVerifier {
 		label = "Evaluation"
 	}
 	body := stripFinalStatus(turnBody(logs, turnError, opts))
@@ -151,10 +151,10 @@ func turnBody(logs, turnError string, opts AppendTurnOptions) string {
 
 func runtimeErrorBody(err string, opts AppendTurnOptions) string {
 	lines := []string{fmt.Sprintf("_Turn ended with runtime error: `%s`._", err)}
-	if opts.PiSessionPath != "" || opts.EvidencePath != "" {
+	if opts.SessionPath != "" || opts.EvidencePath != "" {
 		lines = append(lines, "", "Inspect the canonical turn artifacts before judging or continuing:")
-		if opts.PiSessionPath != "" {
-			lines = append(lines, fmt.Sprintf("- Pi session: `%s`", opts.PiSessionPath))
+		if opts.SessionPath != "" {
+			lines = append(lines, fmt.Sprintf("- Agent session: `%s`", opts.SessionPath))
 		}
 		if opts.EvidencePath != "" {
 			lines = append(lines, fmt.Sprintf("- Evidence log: `%s`", opts.EvidencePath))

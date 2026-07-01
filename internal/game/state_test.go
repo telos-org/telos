@@ -27,7 +27,7 @@ func TestWriteTurnTaskWritesOnlyTaskArtifact(t *testing.T) {
 	if string(task) != "do the thing" {
 		t.Fatalf("task content: got %q", string(task))
 	}
-	if _, err := os.Stat(ts.PiSessionPath()); !os.IsNotExist(err) {
-		t.Fatalf("WriteTurnTask should leave pi session ownership to Pi, stat err=%v", err)
+	if _, err := os.Stat(ts.SessionPath()); !os.IsNotExist(err) {
+		t.Fatalf("WriteTurnTask should not create the agent session file, stat err=%v", err)
 	}
 }

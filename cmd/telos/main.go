@@ -15,6 +15,7 @@
 //	telos analyze SESSION... [--env ENV] [--json]
 //	telos inspect-child CHILD_SESSION [--env ENV] [--json]
 //	telos logs [-f] [--raw] SESSION|DEPLOYMENT [--env ENV] [--org ORG]
+//	telos replay SESSION_OR_SESSION_JSONL [--role prover|verifier] [--json]
 //	telos stop SESSION|DEPLOYMENT [--env ENV] [--org ORG] [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
 //	telos org list|use
@@ -67,6 +68,8 @@ func main() {
 		cmdInspectChild(os.Args[2:])
 	case "logs":
 		cmdLogs(os.Args[2:])
+	case "replay":
+		cmdReplay(os.Args[2:])
 	case "stop":
 		cmdStop(os.Args[2:])
 	case "login":
@@ -99,6 +102,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  analyze SESSION... Analyze evidence, failures, and benchmark distributions")
 	fmt.Fprintln(out, "  inspect-child SES  Inspect child artifacts for reconciliation")
 	fmt.Fprintln(out, "  logs SESSION       Show session or deployment progress")
+	fmt.Fprintln(out, "  replay TARGET      Replay session JSONL protocol checks")
 	fmt.Fprintln(out, "  stop SESSION       Stop a running session or deployment")
 	fmt.Fprintln(out, "  login              Configure cloud access")
 	fmt.Fprintln(out, "  org                List or select organizations")

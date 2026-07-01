@@ -1,9 +1,0 @@
-load("@rules_go//go:def.bzl", "go_library")
-
-go_library(
-    name = "sessionworker",
-    srcs = ["process.go"],
-    importpath = "github.com/telos-org/telos/internal/sessionworker",
-    visibility = ["//:__subpackages__"],
-    deps = ["//internal/sessionapi"],
-)

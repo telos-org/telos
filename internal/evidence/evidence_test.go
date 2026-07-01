@@ -127,7 +127,7 @@ func TestEvidenceLogGameEnd(t *testing.T) {
 	path := filepath.Join(dir, "evidence.jsonl")
 
 	ev := New("test-system", path, "sess-005", 0)
-	ev.LogGameEnd("success", 3, 2, 1, true, 5.5, 10000, 5000, 1000, 500, "", "verifier_conceded")
+	ev.LogGameEnd("success", 3, 2, 1, true, 5.5, true, 10000, 5000, 1000, 500, "", "verifier_conceded")
 	ev.Close()
 
 	data, _ := os.ReadFile(path)
@@ -142,6 +142,9 @@ func TestEvidenceLogGameEnd(t *testing.T) {
 	}
 	if d["verifier_conceded"] != true {
 		t.Errorf("verifier_conceded: got %v", d["verifier_conceded"])
+	}
+	if d["cost_unavailable"] != true {
+		t.Errorf("cost_unavailable: got %v", d["cost_unavailable"])
 	}
 	if d["completion_reason"] != "verifier_conceded" {
 		t.Errorf("completion_reason: got %v", d["completion_reason"])
@@ -166,5 +169,23 @@ func TestEvidenceNilData(t *testing.T) {
 	}
 	if len(d) != 0 {
 		t.Errorf("data should be empty: got %v", d)
+	}
+}
+
+func TestErrorCode(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{input: "provider_timeout:turn_timeout:1", want: "provider_timeout"},
+		{input: "no_successful_implementation", want: "no_successful_implementation"},
+		{input: "", want: ""},
+		{input: ":leading", want: ""},
+		{input: " agent_protocol", want: ""},
+	}
+	for _, tt := range tests {
+		if got := ErrorCode(tt.input); got != tt.want {
+			t.Fatalf("ErrorCode(%q) = %q, want %q", tt.input, got, tt.want)
+		}
 	}
 }

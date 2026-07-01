@@ -16,8 +16,9 @@ import (
 
 const testFakeScenarioRelPath = ".telos-testfake/agent.json"
 
-// createAgentExecutor swaps Pi for a deterministic scenario-driven executor
-// only in binaries built with -tags telos_testfake. Tagged binaries fail closed
+// createAgentExecutor swaps the native executor for a deterministic
+// scenario-driven executor only in binaries built with -tags telos_testfake.
+// Tagged binaries fail closed
 // when the active workspace does not contain the private test fixture file.
 func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecutor, error) {
 	scenarioPath := filepath.Join(workspace, testFakeScenarioRelPath)
@@ -75,7 +76,11 @@ func newTestFakeExecutor(workspace string, scenarioPath string) (*testFakeExecut
 	return &testFakeExecutor{workspace: workspace, scenario: scenario}, nil
 }
 
-func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) game.TurnResult {
+func (e *testFakeExecutor) ExecuteTurn(task string, ts *game.TurnState) game.TurnResult {
+	role := ""
+	if ts != nil {
+		role = ts.Role
+	}
 	if e.nextTurn >= len(e.scenario.Turns) {
 		return game.TurnResult{
 			Role:   role,
@@ -126,9 +131,9 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 	}
 }
 
-func (e *testFakeExecutor) WorkspaceState() platform.WorkspaceSnapshot {
+func (e *testFakeExecutor) WorkspaceSnapshot() platform.WorkspaceSnapshot {
 	if e.scenario.WorkspaceState != "" {
-		return platform.WorkspaceSnapshot{Raw: e.scenario.WorkspaceState, FileList: []string{e.scenario.WorkspaceState}}
+		return platform.WorkspaceSnapshot{Raw: e.scenario.WorkspaceState}
 	}
 	return platform.NewLocalPlatform(e.workspace).WorkspaceSnapshot()
 }

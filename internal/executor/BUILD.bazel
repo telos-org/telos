@@ -2,24 +2,51 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "executor",
-    srcs = ["pi.go"],
-    embedsrcs = ["pi_extensions/telos_bifrost.ts"],
+    srcs = [
+        "compactor.go",
+        "conversation_state.go",
+        "errors.go",
+        "executor.go",
+        "knobs.go",
+        "loop.go",
+        "provider.go",
+        "replay.go",
+        "responses.go",
+        "sanitize.go",
+        "sessionlog.go",
+        "tokens.go",
+        "tools.go",
+    ],
+    embedsrcs = ["assets/cl100k_base.tiktoken.gz"],
     importpath = "github.com/telos-org/telos/internal/executor",
     visibility = ["//:__subpackages__"],
     deps = [
+        "//internal/agentsession",
         "//internal/game",
-        "//internal/gateway",
         "//internal/platform",
-        "//internal/sessionapi",
+        "@com_github_bmatcuk_doublestar_v4//:doublestar",
+        "@com_github_openai_openai_go//:openai-go",
+        "@com_github_openai_openai_go//option",
+        "@com_github_openai_openai_go//responses",
+        "@com_github_pkoukk_tiktoken_go//:tiktoken-go",
     ],
 )
 
 go_test(
     name = "executor_test",
-    srcs = ["pi_test.go"],
+    srcs = [
+        "compactor_test.go",
+        "conversation_state_test.go",
+        "native_test.go",
+        "responses_compaction_test.go",
+        "tokens_bench_test.go",
+        "tokens_test.go",
+    ],
     embed = [":executor"],
     deps = [
+        "//internal/agentsession",
         "//internal/game",
-        "//internal/gateway",
+        "//internal/platform",
+        "@com_github_openai_openai_go//responses",
     ],
 )

@@ -13,6 +13,7 @@ func TestExtractStatus(t *testing.T) {
 		{"no status tag", StatusContinue},
 		{"", StatusContinue},
 		{"<status>CONCEDE</status>\nmore text after", StatusContinue}, // not final
+		{"The literal tag <status>CONCEDE</status> is an example.", StatusContinue},
 		{"line1\n<status>CONTINUE</status>\nline2\n<status>CONCEDE</status>\n", StatusConcede},
 	}
 	for _, tt := range tests {
@@ -20,6 +21,19 @@ func TestExtractStatus(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("ExtractStatus(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestParseFinalStatus(t *testing.T) {
+	status, ok := ParseFinalStatus("done\n<status>CONTINUE</status>\n")
+	if !ok || status != StatusContinue {
+		t.Fatalf("ParseFinalStatus CONTINUE: got %q ok=%v", status, ok)
+	}
+	if status, ok := ParseFinalStatus("done\n<status>MAYBE</status>\n"); ok || status != StatusContinue {
+		t.Fatalf("invalid status: got %q ok=%v", status, ok)
+	}
+	if status, ok := ParseFinalStatus("<status>CONCEDE</status>\ntrailing prose"); ok || status != StatusContinue {
+		t.Fatalf("trailing prose should not parse: got %q ok=%v", status, ok)
 	}
 }
 

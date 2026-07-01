@@ -36,6 +36,7 @@ type TurnStats struct {
 	CacheReadTokens     int     `json:"cache_read_tokens"`
 	CacheCreationTokens int     `json:"cache_creation_tokens"`
 	Model               string  `json:"model"`
+	CostUnavailable     bool    `json:"cost_unavailable,omitempty"`
 }
 
 // TurnResult is the result of one agent turn.
@@ -48,10 +49,11 @@ type TurnResult struct {
 	Recoverable bool
 }
 
-// AgentExecutor runs one PVG agent turn.
+// AgentExecutor runs one PVG agent turn. The role is carried on turnState.Role
+// rather than passed separately, so the two can never disagree.
 type AgentExecutor interface {
-	ExecuteTurn(task string, role string, turnState *TurnState) TurnResult
-	WorkspaceState() platform.WorkspaceSnapshot
+	ExecuteTurn(task string, turnState *TurnState) TurnResult
+	WorkspaceSnapshot() platform.WorkspaceSnapshot
 	CheckpointWorkspace(dest string) bool
 }
 
@@ -59,6 +61,13 @@ type AgentExecutor interface {
 type PVGConfig struct {
 	Until           int
 	MaxCostUSD      *float64
+	CostHardLimit   bool
+	MaxRounds       int
+	MaxDurationSec  int
+	MaxInputTokens  int
+	MaxOutputTokens int
+	MaxToolLoops    int
+	AgentTimeoutSec int
 	Verbose         bool
 	EpochID         int
 	IsController    bool
@@ -80,6 +89,7 @@ type PVGResult struct {
 	TotalOutputTokens       int
 	TotalCacheReadTokens    int
 	TotalCacheCreateTokens  int
+	CostUnavailable         bool
 	Error                   string
 	EvidencePath            string
 	TranscriptPath          string
@@ -93,6 +103,7 @@ func (r *PVGResult) Accumulate(s TurnStats) {
 	r.TotalOutputTokens += s.OutputTokens
 	r.TotalCacheReadTokens += s.CacheReadTokens
 	r.TotalCacheCreateTokens += s.CacheCreationTokens
+	r.CostUnavailable = r.CostUnavailable || s.CostUnavailable
 }
 
 // -- Turn state --------------------------------------------------------------
@@ -104,6 +115,38 @@ type TurnState struct {
 	Role          string
 	Dir           string
 	StopRequested func() bool
+	Budget        TurnBudget
+	ProtocolMode  string
+	Skills        []TurnSkill
+}
+
+// TurnSkill is one skill made available to the executor for this turn. It
+// mirrors the roster rendered into the prompt, but is passed structurally so
+// the executor's skill tool does not have to re-parse skill names, paths, and
+// required-rubric flags out of the rendered prompt text.
+type TurnSkill struct {
+	Name        string
+	Description string
+	// SkillPath is the path to the skill's SKILL.md file.
+	SkillPath string
+	Required  bool
+}
+
+// TurnBudget carries the remaining runtime budget available to one executor
+// turn. Executors should check it before each provider request and stop
+// recoverably if an in-turn tool/model loop has already exhausted it.
+type TurnBudget struct {
+	MaxCostUSD            *float64
+	RemainingCostUSD      *float64
+	CostHardLimit         bool
+	MaxDurationSec        int
+	RemainingDurationSec  int
+	AgentTimeoutSec       int
+	MaxInputTokens        int
+	RemainingInputTokens  int
+	MaxOutputTokens       int
+	RemainingOutputTokens int
+	MaxToolLoops          int
 }
 
 // TurnID returns the canonical turn identifier.
@@ -116,9 +159,9 @@ func (ts *TurnState) TaskPath() string {
 	return filepath.Join(ts.Dir, "task.md")
 }
 
-// PiSessionPath returns the path to Pi's compact session JSONL file.
-func (ts *TurnState) PiSessionPath() string {
-	return filepath.Join(ts.Dir, "pi-session.jsonl")
+// SessionPath returns the path to the compact agent session JSONL file.
+func (ts *TurnState) SessionPath() string {
+	return filepath.Join(ts.Dir, "session.jsonl")
 }
 
 // -- Status extraction -------------------------------------------------------
@@ -127,15 +170,26 @@ var statusRE = regexp.MustCompile(`(?:^|\n)\s*<status>(\w+)</status>\s*$`)
 
 // ExtractStatus parses the final status tag from agent output.
 func ExtractStatus(text string) AgentStatus {
+	status, ok := ParseFinalStatus(text)
+	if !ok {
+		return StatusContinue
+	}
+	return status
+}
+
+// ParseFinalStatus parses a valid final status tag from agent output.
+func ParseFinalStatus(text string) (AgentStatus, bool) {
 	matches := statusRE.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {
-		return StatusContinue
+		return StatusContinue, false
 	}
 	last := matches[len(matches)-1][1]
 	switch strings.ToUpper(last) {
 	case "CONCEDE":
-		return StatusConcede
+		return StatusConcede, true
+	case "CONTINUE":
+		return StatusContinue, true
 	default:
-		return StatusContinue
+		return StatusContinue, false
 	}
 }

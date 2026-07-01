@@ -6,28 +6,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"syscall"
 	"time"
 
-	"github.com/telos-org/telos/internal/executor"
+	"github.com/telos-org/telos/internal/evidence"
 	"github.com/telos-org/telos/internal/game"
-	"github.com/telos-org/telos/internal/gateway"
-	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
-	"github.com/telos-org/telos/internal/sessionworker"
 	"github.com/telos-org/telos/internal/spec"
 )
 
-const DefaultLocalModel = "sail-research/zai-org/GLM-5.2-FP8"
+const DefaultLocalModel = "claude-opus-4-6"
 
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {
 	SessionKind     sessionapi.SessionKind
 	SessionID       string
-	SessionDir      string
 	ParentSessionID *string
 	Workspace       string
 	Model           string
-	ModelProfile    sessionapi.ModelProfile
 	Thinking        string
 	Until           int
 	MaxCostUSD      *float64
@@ -68,11 +64,6 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	if err != nil {
 		return nil, err
 	}
-	modelProfile, err := resolveLocalModelProfile(cfg, sessionsRoot)
-	if err != nil {
-		return nil, err
-	}
-	cfg.ModelProfile = modelProfile
 
 	sessionDir, err := newSessionDir(sessionsRoot)
 	if err != nil {
@@ -120,7 +111,7 @@ func SubmitLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	if err != nil {
 		return nil, err
 	}
-	if err := sessionworker.Start(session.SessionDir, sessionapi.RuntimeLocal); err != nil {
+	if err := startLocalWorker(session.SessionDir); err != nil {
 		return nil, err
 	}
 	return session, nil
@@ -142,7 +133,6 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	cfg := manifestToConfig(manifest)
-	cfg.SessionDir = sessionDir
 	if len(manifest.Specs) == 0 {
 		return nil, fmt.Errorf("no specs in manifest")
 	}
@@ -171,7 +161,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		return nil, err
 	}
 
-	epochID, err := sessionworker.StartEpoch(sessionDir, manifest)
+	epochID, err := startEpoch(sessionDir, manifest)
 	if err != nil {
 		return nil, err
 	}
@@ -202,10 +192,21 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		}
 	}
 	defer cleanupAgent()
+	costHardLimit := false
+	if enforcer, ok := agentExec.(interface{ CostHardLimit() bool }); ok {
+		costHardLimit = enforcer.CostHardLimit()
+	}
 
 	pvgCfg := game.PVGConfig{
 		Until:           cfg.Until,
 		MaxCostUSD:      cfg.MaxCostUSD,
+		CostHardLimit:   costHardLimit,
+		MaxRounds:       cfg.MaxRounds,
+		MaxDurationSec:  cfg.MaxDurationSec,
+		MaxInputTokens:  cfg.MaxInputTokens,
+		MaxOutputTokens: cfg.MaxOutputTokens,
+		MaxToolLoops:    cfg.MaxToolLoops,
+		AgentTimeoutSec: cfg.AgentTimeoutSec,
 		Verbose:         true,
 		EpochID:         epochID,
 		IsController:    manifest.SessionKind == sessionapi.KindController,
@@ -228,60 +229,6 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	return result, nil
 }
 
-func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecutor, error) {
-	// Check pi is available
-	if _, err := exec.LookPath("pi"); err != nil {
-		return nil, fmt.Errorf("pi executable not found on PATH. Install pi (https://github.com/mariozechner/pi-coding-agent) to run local sessions")
-	}
-	p := platform.NewLocalPlatform(workspace)
-	profile, err := sessionapi.NormalizeModelProfile(string(cfg.ModelProfile))
-	if err != nil {
-		return nil, err
-	}
-	cfg.ModelProfile = profile
-	model := cfg.Model
-	if model == "" {
-		model = defaultModelForRun(cfg.ModelProfile)
-	}
-	piExec := executor.NewPiExecutor(p, model, cfg.Thinking, cfg.AgentTimeoutSec)
-	piExec.SessionID = cfg.SessionID
-	piExec.SessionDir = cfg.SessionDir
-	piExec.ModelProfile = cfg.ModelProfile
-	if gateway.Enabled() {
-		cred, err := gateway.Resolve(cfg.SessionID, cfg.ModelProfile)
-		if err != nil {
-			return nil, err
-		}
-		if err := piExec.ConfigureGateway(cred); err != nil {
-			return nil, err
-		}
-	}
-	return piExec, nil
-}
-
-func resolveLocalModelProfile(cfg LocalRunConfig, sessionsRoot string) (sessionapi.ModelProfile, error) {
-	if cfg.ModelProfile != "" {
-		return sessionapi.NormalizeModelProfile(string(cfg.ModelProfile))
-	}
-	if cfg.ParentSessionID != nil && *cfg.ParentSessionID != "" {
-		manifest, err := sessionapi.ReadManifest(filepath.Join(sessionsRoot, *cfg.ParentSessionID, "session.json"))
-		if err == nil {
-			return sessionapi.NormalizeModelProfile(string(manifest.Config.ModelProfile))
-		}
-		if !os.IsNotExist(err) {
-			return "", fmt.Errorf("read parent session manifest: %w", err)
-		}
-	}
-	return sessionapi.ModelProfileStandard, nil
-}
-
-func defaultModelForRun(profile sessionapi.ModelProfile) string {
-	if gateway.ManagedEnabled() {
-		return sessionapi.BifrostAgentModel(profile)
-	}
-	return DefaultLocalModel
-}
-
 func primarySpecPath(manifest *sessionapi.Manifest, fallback *string) string {
 	if manifest != nil && manifest.SessionSpecPath != nil && *manifest.SessionSpecPath != "" {
 		return *manifest.SessionSpecPath
@@ -290,6 +237,66 @@ func primarySpecPath(manifest *sessionapi.Manifest, fallback *string) string {
 		return *fallback
 	}
 	return ""
+}
+
+func startLocalWorker(sessionDir string) error {
+	telosd, err := resolveTelosd()
+	if err != nil {
+		return err
+	}
+	logPath := filepath.Join(sessionDir, "runner.log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return fmt.Errorf("open runner log: %w", err)
+	}
+	defer logFile.Close()
+
+	cmd := exec.Command(telosd, "--session-dir", sessionDir)
+	cmd.Env = localWorkerEnv(sessionDir)
+	cmd.Stdin = nil
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("start worker: %w", err)
+	}
+	if err := markWorkerStarted(sessionDir, cmd.Process.Pid, logPath); err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
+		_ = cmd.Process.Kill()
+		return err
+	}
+	return nil
+}
+
+func localWorkerEnv(sessionDir string) []string {
+	env := append(os.Environ(),
+		"TELOS_RUNTIME="+string(sessionapi.RuntimeLocal),
+		"TELOS_SESSION_DIR="+filepath.Dir(sessionDir),
+		"TELOS_SESSION_ID="+filepath.Base(sessionDir),
+	)
+	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err == nil && manifest.ParentSessionID != nil {
+		env = append(env, "TELOS_PARENT_SESSION_ID="+*manifest.ParentSessionID)
+	}
+	return env
+}
+
+func resolveTelosd() (string, error) {
+	if configured := os.Getenv("TELOSD_PATH"); configured != "" {
+		return configured, nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return "", fmt.Errorf("resolve telos executable: %w", err)
+	}
+	sibling := filepath.Join(filepath.Dir(exe), "telosd")
+	if _, err := os.Stat(sibling); err == nil {
+		return sibling, nil
+	}
+	if path, err := exec.LookPath("telosd"); err == nil {
+		return path, nil
+	}
+	return "", fmt.Errorf("telosd not found; install telosd next to telos or set TELOSD_PATH")
 }
 
 func newSessionDir(root string) (string, error) {
@@ -311,7 +318,7 @@ func newSessionDir(root string) (string, error) {
 func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, specPath string, state *game.PVGState, cfg LocalRunConfig, workspace *sessionapi.Workspace) error {
 	model := cfg.Model
 	if model == "" {
-		model = defaultModelForRun(cfg.ModelProfile)
+		model = DefaultLocalModel
 	}
 	thinking := cfg.Thinking
 	if thinking == "" {
@@ -335,7 +342,6 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		SpecName:        compiled.Environment.Name,
 		Config: sessionapi.SessionConfig{
 			Model:           model,
-			ModelProfile:    cfg.ModelProfile,
 			Until:           cfg.Until,
 			MaxCostUSD:      cfg.MaxCostUSD,
 			MaxRounds:       cfg.MaxRounds,
@@ -349,15 +355,16 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		Workspace:  workspace,
 		Provenance: map[string]any{"mode": "local"},
 		Specs: []sessionapi.InitialManifestSpec{{
-			Index:           0,
-			Name:            compiled.Environment.Name,
-			DirName:         compiled.Environment.Name,
-			SessionSpecPath: strPtr(state.SpecPath()),
-			ContentHash:     strPtr(compiled.ContentHash),
-			EvidencePath:    strPtr(state.EvidencePath),
-			TranscriptPath:  strPtr(state.TranscriptPath),
-			WorkspacePath:   strPtr(state.WorkspacePath),
-			IntervalSeconds: compiled.Environment.IntervalSeconds,
+			Index:               0,
+			Name:                compiled.Environment.Name,
+			DirName:             compiled.Environment.Name,
+			SessionSpecPath:     strPtr(state.SpecPath()),
+			ContentHash:         strPtr(compiled.ContentHash),
+			EvidencePath:        strPtr(state.EvidencePath),
+			TranscriptPath:      strPtr(state.TranscriptPath),
+			ObjectiveLedgerPath: strPtr(state.LedgerPath),
+			WorkspacePath:       strPtr(state.WorkspacePath),
+			IntervalSeconds:     compiled.Environment.IntervalSeconds,
 		}},
 	})
 	if err != nil {
@@ -371,7 +378,6 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	lrc := LocalRunConfig{
 		SessionID:       manifest.SessionID,
 		Model:           cfg.Model,
-		ModelProfile:    cfg.ModelProfile,
 		Thinking:        cfg.Thinking,
 		Until:           cfg.Until,
 		MaxCostUSD:      cfg.MaxCostUSD,
@@ -386,6 +392,75 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 		lrc.Thinking = "medium"
 	}
 	return lrc
+}
+
+func startEpoch(sessionDir string, manifest *sessionapi.Manifest) (int, error) {
+	return startEpochWithRunner(sessionDir, manifest, os.Getpid(), "")
+}
+
+func markWorkerStarted(sessionDir string, pid int, logPath string) error {
+	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err != nil {
+		return fmt.Errorf("read session manifest: %w", err)
+	}
+	_, err = startEpochWithRunner(sessionDir, manifest, pid, logPath)
+	return err
+}
+
+func startEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid int, logPath string) (int, error) {
+	if open := manifest.OpenEpoch(); open != nil {
+		return open.ID, nil
+	}
+	epochID := len(manifest.Epochs) + 1
+	runner := runnerIdentity(pid)
+	if logPath != "" {
+		runner.LogPath = logPath
+	}
+	manifest.Epochs = append(manifest.Epochs, sessionapi.Epoch{
+		ID:        epochID,
+		StartedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		Runner:    &runner,
+	})
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), manifest); err != nil {
+		return 0, fmt.Errorf("start epoch: %w", err)
+	}
+	return epochID, nil
+}
+
+func runnerIdentity(pid int) sessionapi.Runner {
+	runner := sessionapi.Runner{
+		Kind:      "local-subprocess",
+		PID:       pid,
+		PGID:      pid,
+		StartedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+	}
+	if os.Getenv("KUBERNETES_SERVICE_HOST") == "" {
+		return runner
+	}
+
+	runner.Kind = "kubernetes-pod"
+	runner.InCluster = true
+	if hostname := firstEnv("HOSTNAME"); hostname != "" {
+		runner.Hostname = hostname
+	}
+	if podName := firstEnv("TELOS_RUNNER_POD_NAME", "POD_NAME"); podName != "" {
+		runner.PodName = podName
+	} else if hostname := firstEnv("HOSTNAME"); hostname != "" {
+		runner.PodName = hostname
+	}
+	if namespace := firstEnv("TELOS_RUNNER_POD_NAMESPACE", "POD_NAMESPACE"); namespace != "" {
+		runner.PodNamespace = namespace
+	}
+	return runner
+}
+
+func firstEnv(names ...string) string {
+	for _, name := range names {
+		if value := os.Getenv(name); value != "" {
+			return value
+		}
+	}
+	return ""
 }
 
 func finishEpoch(sessionDir string, manifest *sessionapi.Manifest, result *game.PVGResult) error {
@@ -409,15 +484,23 @@ func finishEpoch(sessionDir string, manifest *sessionapi.Manifest, result *game.
 		last.Result = &failed
 		if result.Error != "" {
 			last.Error = &result.Error
+			if code := runtimeErrorCode(result.Error); code != "" {
+				last.ErrorCode = &code
+			}
 		}
 	case game.GameStopped:
 		stopped := "stopped"
 		last.Result = &stopped
 		if result.Error != "" {
 			last.Error = &result.Error
+			if code := runtimeErrorCode(result.Error); code != "" {
+				last.ErrorCode = &code
+			}
 		} else {
 			err := "stopped by operator"
 			last.Error = &err
+			code := "stopped"
+			last.ErrorCode = &code
 		}
 	}
 
@@ -425,6 +508,10 @@ func finishEpoch(sessionDir string, manifest *sessionapi.Manifest, result *game.
 		return fmt.Errorf("finish epoch: %w", err)
 	}
 	return nil
+}
+
+func runtimeErrorCode(errText string) string {
+	return evidence.ErrorCode(errText)
 }
 
 func sessionStopped(sessionDir string) bool {

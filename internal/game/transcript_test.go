@@ -72,7 +72,7 @@ func TestAppendTurn(t *testing.T) {
 	if !strings.Contains(content, "model `claude-test`") {
 		t.Error("should contain model in metadata")
 	}
-	if strings.Contains(content, "pi-session.jsonl") || strings.Contains(content, "task.md") {
+	if strings.Contains(content, "session.jsonl") || strings.Contains(content, "task.md") {
 		t.Error("transcript should not expose turn artifact paths without an error")
 	}
 }
@@ -98,11 +98,11 @@ func TestAppendTurnWithError(t *testing.T) {
 	path := filepath.Join(dir, "transcript.md")
 	os.WriteFile(path, []byte("# Transcript\n"), 0o644)
 
-	piSessionPath := filepath.Join(dir, "turns", "0001-prover", "pi-session.jsonl")
+	sessionPath := filepath.Join(dir, "turns", "0001-prover", "session.jsonl")
 	evidencePath := filepath.Join(dir, "evidence.jsonl")
-	AppendTurnWithOptions(path, "prover", 1, "CONTINUE", "I changed main.go before the tool failed.\n\n<status>CONTINUE</status>", nil, "0001-prover", "pi_failed:1", AppendTurnOptions{
+	AppendTurnWithOptions(path, "prover", 1, "CONTINUE", "I changed main.go before the tool failed.\n\n<status>CONTINUE</status>", nil, "0001-prover", "provider_unavailable:temporary gateway error", AppendTurnOptions{
 		IncludeStatus: true,
-		PiSessionPath: piSessionPath,
+		SessionPath:   sessionPath,
 		EvidencePath:  evidencePath,
 	})
 
@@ -110,11 +110,11 @@ func TestAppendTurnWithError(t *testing.T) {
 	if !strings.Contains(content, "runtime error") {
 		t.Error("should mention runtime error")
 	}
-	if !strings.Contains(content, "pi_failed:1") {
+	if !strings.Contains(content, "provider_unavailable:temporary gateway error") {
 		t.Error("should contain error detail")
 	}
-	if !strings.Contains(content, piSessionPath) {
-		t.Error("should point to Pi session")
+	if !strings.Contains(content, sessionPath) {
+		t.Error("should point to agent session")
 	}
 	if !strings.Contains(content, evidencePath) {
 		t.Error("should point to evidence log")
@@ -123,7 +123,7 @@ func TestAppendTurnWithError(t *testing.T) {
 		t.Error("should not summarize captured assistant text in the transcript")
 	}
 	if strings.Contains(content, "I changed main.go before the tool failed.") {
-		t.Error("should leave captured assistant text in Pi artifacts")
+		t.Error("should leave captured assistant text in session artifacts")
 	}
 	if strings.Contains(content, "<status>CONTINUE</status>\n\n<progress_update>") {
 		t.Error("captured assistant text should not preserve the assistant status tag")
