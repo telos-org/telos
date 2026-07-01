@@ -1,6 +1,8 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -20,21 +22,36 @@ import (
 func cmdLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	follow := fs.Bool("f", false, "Follow logs")
-	raw := fs.Bool("raw", false, "Show raw transcript")
+	verbose := fs.Bool("verbose", false, "Show verbose log events")
 	parseFlags(fs, args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--raw] SESSION|DEPLOYMENT")
+		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--verbose] SESSION|DEPLOYMENT")
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
 
 	if *follow {
 		if isDeploymentID(sessionID) {
-			followDeploymentLogs(sessionID, *raw)
+			followDeploymentLogs(sessionID, *verbose)
 			return
 		}
-		followLogs(sessionID, *raw)
+		followLogs(sessionID, *verbose)
+		return
+	}
+
+	if isDeploymentID(sessionID) {
+		control, err := cloud.ControlClient()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		events, err := control.GetDeploymentLogs(sessionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		printDeploymentLogEvents(os.Stdout, events, *verbose)
 		return
 	}
 
@@ -43,59 +60,51 @@ func cmdLogs(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	printLogs(os.Stdout, text, *raw)
+	printLogs(os.Stdout, text, *verbose)
 }
 
-func followLogs(sessionID string, raw bool) {
-	if err := followTranscript(sessionID, os.Stdout, time.Sleep, raw); err != nil {
+func followLogs(sessionID string, verbose bool) {
+	if err := followTranscript(sessionID, os.Stdout, time.Sleep, verbose); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func followDeploymentLogs(deploymentID string, raw bool) {
+func followDeploymentLogs(deploymentID string, verbose bool) {
 	control, err := cloud.ControlClient()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if err := pollDeploymentLogs(control, deploymentID, os.Stdout, time.Sleep, raw); err != nil {
+	if err := streamDeploymentLogs(control, deploymentID, os.Stdout, time.Sleep, verbose); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func pollDeploymentLogs(
+func streamDeploymentLogs(
 	control *cloud.Client,
 	deploymentID string,
 	out io.Writer,
 	sleep func(time.Duration),
-	raw bool,
+	verbose bool,
 ) error {
-	var lastLen int
-	var lastBlockCount int
 	var lastProgressCount int
-	var lastTranscriptErr error
 	for {
-		text, err := control.GetDeploymentLogs(deploymentID)
-		if err == nil && raw && len(text) > lastLen {
-			fmt.Fprint(out, text[lastLen:])
-			lastLen = len(text)
-		}
-		if err == nil && !raw {
-			blocks := logBlocks(text)
-			if lastBlockCount < len(blocks) {
-				lastProgressCount = printLogBlocks(out, blocks[lastBlockCount:], lastProgressCount)
-				lastBlockCount = len(blocks)
+		streamErr := control.StreamDeploymentLogs(context.Background(), deploymentID, func(event sessionapi.SessionEvent) error {
+			printed := printDeploymentLogEvent(out, event, verbose, &lastProgressCount)
+			if printed {
+				_, _ = fmt.Fprintln(out)
 			}
+			return nil
+		})
+		if streamErr == nil {
+			return nil
 		}
-		if err != nil {
-			if !transcriptNotReady(err) {
-				return err
+		if streamErr != nil {
+			if !transcriptNotReady(streamErr) {
+				return streamErr
 			}
-			lastTranscriptErr = err
-		} else {
-			lastTranscriptErr = nil
 		}
 
 		deployment, err := control.GetDeployment(deploymentID)
@@ -103,16 +112,7 @@ func pollDeploymentLogs(
 			return err
 		}
 		if deploymentStateTerminal(deployment.State) {
-			if raw && lastLen == 0 && lastTranscriptErr != nil {
-				return lastTranscriptErr
-			}
-			if !raw && lastBlockCount == 0 {
-				if lastTranscriptErr != nil {
-					return lastTranscriptErr
-				}
-				fmt.Fprintln(out, "no deployment log entries")
-			}
-			return nil
+			return streamErr
 		}
 		sleep(2 * time.Second)
 	}
@@ -191,6 +191,54 @@ func printLogs(out io.Writer, transcript string, raw bool) {
 		return
 	}
 	printLogBlocks(out, blocks, 0)
+}
+
+func printDeploymentLogEvents(out io.Writer, events []sessionapi.SessionEvent, verbose bool) {
+	progressCount := 0
+	printed := false
+	for _, event := range events {
+		if printed {
+			fmt.Fprintln(out)
+		}
+		if printDeploymentLogEvent(out, event, verbose, &progressCount) {
+			printed = true
+		}
+	}
+	if !printed {
+		fmt.Fprintln(out, "no deployment log entries")
+	}
+}
+
+func printDeploymentLogEvent(out io.Writer, event sessionapi.SessionEvent, verbose bool, progressCount *int) bool {
+	if verbose {
+		data, err := json.Marshal(event)
+		if err != nil {
+			return false
+		}
+		fmt.Fprintln(out, string(data))
+		return true
+	}
+	switch event.Event {
+	case "agent_progress":
+		kind, _ := event.Data["kind"].(string)
+		text, _ := event.Data["text"].(string)
+		if strings.TrimSpace(text) == "" {
+			return false
+		}
+		block := logBlock{kind: kind, text: strings.TrimSpace(text)}
+		*progressCount = printLogBlocks(out, []logBlock{block}, *progressCount)
+		return true
+	case "game_end":
+		if result, _ := event.Data["game_result"].(string); result != "" {
+			fmt.Fprintf(out, "Completed: %s\n", result)
+			return true
+		}
+		if reason, _ := event.Data["completion_reason"].(string); reason != "" {
+			fmt.Fprintf(out, "Completed: %s\n", reason)
+			return true
+		}
+	}
+	return false
 }
 
 func printProgressUpdate(out io.Writer, index int, update string) {

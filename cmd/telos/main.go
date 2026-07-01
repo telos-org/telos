@@ -9,7 +9,7 @@
 //	    [--until N] [--max-cost-usd USD] [--agent-timeout-sec SEC|0] [--json]
 //	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
 //	telos describe SESSION|DEPLOYMENT [--json]
-//	telos logs [-f] [--raw] SESSION|DEPLOYMENT
+//	telos logs [-f] [--verbose] SESSION|DEPLOYMENT
 //	telos stop SESSION|DEPLOYMENT [--json]
 //	telos delete DEPLOYMENT [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]

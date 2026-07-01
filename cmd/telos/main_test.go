@@ -884,35 +884,64 @@ Correctness,8.0/10
 	}
 }
 
-func TestPrintLogsRawShowsTranscript(t *testing.T) {
+func TestPrintLogsVerboseShowsTranscript(t *testing.T) {
 	transcript := "# Transcript\nraw content\n<progress_update>Progress</progress_update>\n"
 
 	var out bytes.Buffer
 	printLogs(&out, transcript, true)
 	if out.String() != transcript {
-		t.Fatalf("raw output mismatch:\n%s", out.String())
+		t.Fatalf("verbose output mismatch:\n%s", out.String())
 	}
 }
 
-func TestFollowDeploymentLogsStopsWhenHealthy(t *testing.T) {
+func TestPrintDeploymentLogsDefaultsToAgentProgress(t *testing.T) {
+	events := []sessionapi.SessionEvent{
+		{Event: "agent_progress", Data: map[string]any{"kind": "progress_update", "text": "ready"}},
+		{Event: "agent_progress", Data: map[string]any{"kind": "review", "text": "criteria,score\nCorrectness,8/10"}},
+		{Event: "game_end", Data: map[string]any{"game_result": "accepted"}},
+	}
+
+	var out bytes.Buffer
+	printDeploymentLogEvents(&out, events, false)
+	text := out.String()
+	for _, want := range []string{
+		"#1 ready",
+		"Review\ncriteria,score\nCorrectness,8/10",
+		"Completed: accepted",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("deployment logs missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestPrintDeploymentLogsVerboseShowsJSONEvents(t *testing.T) {
+	ts := "2026-07-01T00:00:00Z"
+	events := []sessionapi.SessionEvent{
+		{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"kind": "progress_update", "text": "ready"}},
+	}
+
+	var out bytes.Buffer
+	printDeploymentLogEvents(&out, events, true)
+	text := out.String()
+	for _, want := range []string{`"event":"agent_progress"`, `"ts":"2026-07-01T00:00:00Z"`, `"text":"ready"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("verbose deployment logs missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestFollowDeploymentLogsStreamsEvents(t *testing.T) {
 	var logCalls int
-	var deploymentCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123/logs":
 			logCalls++
-			_, _ = w.Write([]byte("# Transcript\n<progress_update>ready</progress_update>\n"))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123":
-			deploymentCalls++
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id":             "dep_123",
-				"name":           "auth",
-				"state":          "healthy",
-				"package_ref":    "@telos/auth:1.0.0",
-				"package_digest": "sha256:abc",
-				"created_at":     "then",
-				"updated_at":     "now",
-			})
+			if r.Header.Get("Accept") != "text/event-stream" {
+				t.Fatalf("Accept: got %q", r.Header.Get("Accept"))
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"event\":\"agent_progress\",\"data\":{\"kind\":\"progress_update\",\"text\":\"ready\"}}\n\n"))
 		default:
 			http.NotFound(w, r)
 		}
@@ -920,7 +949,7 @@ func TestFollowDeploymentLogsStopsWhenHealthy(t *testing.T) {
 	defer srv.Close()
 
 	var out bytes.Buffer
-	err := pollDeploymentLogs(
+	err := streamDeploymentLogs(
 		cloud.NewClient(srv.URL, "test-token"),
 		"dep_123",
 		&out,
@@ -928,10 +957,10 @@ func TestFollowDeploymentLogsStopsWhenHealthy(t *testing.T) {
 		false,
 	)
 	if err != nil {
-		t.Fatalf("pollDeploymentLogs: %v", err)
+		t.Fatalf("streamDeploymentLogs: %v", err)
 	}
-	if logCalls != 1 || deploymentCalls != 1 {
-		t.Fatalf("calls: logs=%d deployment=%d", logCalls, deploymentCalls)
+	if logCalls != 1 {
+		t.Fatalf("calls: logs=%d", logCalls)
 	}
 	if !strings.Contains(out.String(), "#1 ready") {
 		t.Fatalf("follow output missing progress:\n%s", out.String())
