@@ -3,16 +3,13 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/telos-org/telos/internal/cli"
-	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -71,152 +68,6 @@ func TestLimitListSessionsAppliesAfterDefaultVisibility(t *testing.T) {
 	}
 }
 
-func TestCmdListShowsDeploymentsForConfiguredCloud(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments" {
-			http.NotFound(w, r)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"deployments": []map[string]any{{
-				"id":             "dep_123",
-				"name":           "auth",
-				"state":          "healthy",
-				"package_ref":    "@telos/auth:1.0.0",
-				"package_digest": "sha256:abc",
-				"service_url":    "https://auth.example.com",
-				"dashboard_url":  "https://dashboard.example.com",
-				"created_at":     "then",
-				"updated_at":     "now",
-			}},
-		})
-	}))
-	defer srv.Close()
-	configureCloudTest(t, srv.URL)
-
-	out := captureStdout(t, func() {
-		cmdList([]string{"--wide"})
-	})
-	for _, want := range []string{
-		"NAME",
-		"PACKAGE",
-		"auth",
-		"healthy",
-		"@telos/auth:1.0.0",
-		"dep_123",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("list output missing %q:\n%s", want, out)
-		}
-	}
-	if strings.Contains(out, "SESSION") {
-		t.Fatalf("list output should be deployment-shaped:\n%s", out)
-	}
-}
-
-func TestPrintDeploymentDescriptionShowsProductSurfaces(t *testing.T) {
-	runtime := "0.1.0"
-	serviceURL := "https://auth.example.com"
-	dashboardURL := "https://dashboard.example.com"
-	deployment := cloud.DeploymentRecord{
-		ID:             "dep_123",
-		Name:           "auth",
-		State:          "healthy",
-		PackageRef:     "@telos/auth:1.0.0",
-		PackageDigest:  "sha256:abc",
-		RuntimeVersion: &runtime,
-		ServiceURL:     &serviceURL,
-		DashboardURL:   &dashboardURL,
-		CreatedAt:      "then",
-		UpdatedAt:      "now",
-	}
-
-	var out bytes.Buffer
-	printDeploymentDescription(&out, deployment)
-	text := out.String()
-	for _, want := range []string{
-		"Name      auth",
-		"Platform  cloud",
-		"Status    healthy",
-		"Package   @telos/auth:1.0.0",
-		"Deployment dep_123",
-		"Service   https://auth.example.com",
-		"Dashboard https://dashboard.example.com",
-		"Runtime   0.1.0",
-		"Lifecycle",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("deployment description missing %q:\n%s", want, text)
-		}
-	}
-}
-
-func TestPrintDeploymentStopReceiptUsesDeploymentSummary(t *testing.T) {
-	deployment := cloud.DeploymentRecord{
-		ID:            "dep_123",
-		Name:          "auth",
-		State:         "deleted",
-		PackageRef:    "@telos/auth:1.0.0",
-		PackageDigest: "sha256:abc",
-		CreatedAt:     "then",
-		UpdatedAt:     "now",
-	}
-
-	var out bytes.Buffer
-	printDeploymentStopReceipt(&out, deployment)
-	text := out.String()
-	for _, want := range []string{
-		"stopped auth",
-		"Name      auth",
-		"Platform  cloud",
-		"Status    deleted",
-		"Package   @telos/auth:1.0.0",
-		"Deployment dep_123",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("deployment stop receipt missing %q:\n%s", want, text)
-		}
-	}
-}
-
-func TestCmdDeleteDeletesDeployment(t *testing.T) {
-	var deleted bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete || r.URL.Path != "/api/deployments/dep_123" {
-			http.NotFound(w, r)
-			return
-		}
-		deleted = true
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id":             "dep_123",
-			"name":           "auth",
-			"state":          "deleted",
-			"package_ref":    "@telos/auth:1.0.0",
-			"package_digest": "sha256:abc",
-			"created_at":     "then",
-			"updated_at":     "now",
-		})
-	}))
-	defer srv.Close()
-	configureCloudTest(t, srv.URL)
-
-	out := captureStdout(t, func() {
-		cmdDelete([]string{"dep_123"})
-	})
-	if !deleted {
-		t.Fatal("expected deployment delete request")
-	}
-	for _, want := range []string{
-		"stopped auth",
-		"Status    deleted",
-		"Deployment dep_123",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("delete output missing %q:\n%s", want, out)
-		}
-	}
-}
-
 func TestSessionResultPrefersSessionResultThenLatestEpoch(t *testing.T) {
 	completed := "completed"
 	if got := sessionResult(sessionapi.Session{Result: &completed}); got != "completed" {
@@ -234,28 +85,6 @@ func TestSessionResultPrefersSessionResultThenLatestEpoch(t *testing.T) {
 	if got := sessionResult(sessionapi.Session{Status: sessionapi.StatusRunning}); got != "active" {
 		t.Fatalf("active result: got %q", got)
 	}
-}
-
-func captureStdout(t *testing.T, fn func()) string {
-	t.Helper()
-	old := os.Stdout
-	read, write, err := os.Pipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	os.Stdout = write
-	t.Cleanup(func() {
-		os.Stdout = old
-	})
-	fn()
-	if err := write.Close(); err != nil {
-		t.Fatal(err)
-	}
-	out, err := io.ReadAll(read)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return string(out)
 }
 
 func TestSessionTurnShowsActiveRoleAndRound(t *testing.T) {
@@ -633,8 +462,10 @@ func TestPrintSessionReceiptUsesNormalizedSummary(t *testing.T) {
 		Result:       &completed,
 		TotalCostUSD: &cost,
 	}
+	env := &environmentJSON{ID: "env_123", Handle: "env-123.usetelos.ai"}
+
 	var out bytes.Buffer
-	printSessionReceipt(&out, "updated", session)
+	printSessionReceipt(&out, "updated", session, env)
 	text := out.String()
 	for _, want := range []string{
 		"updated gitea",
@@ -643,6 +474,8 @@ func TestPrintSessionReceiptUsesNormalizedSummary(t *testing.T) {
 		"Status    idle",
 		"Cost      $1.1907",
 		"Session   sess_123",
+		"Environment env_123",
+		"Handle    env-123.usetelos.ai",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("receipt missing %q:\n%s", want, text)

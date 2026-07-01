@@ -173,6 +173,15 @@ func TestCreateSessionPersistsUntil(t *testing.T) {
 	if manifest.Config.Until != 3 {
 		t.Fatalf("manifest until: got %d", manifest.Config.Until)
 	}
+	if manifest.Config.MaxRounds != sessionapi.DefaultMaxRounds || manifest.Config.MaxDurationSec != sessionapi.DefaultMaxDurationSec {
+		t.Fatalf("manifest defaults: max_rounds=%d max_duration_sec=%d", manifest.Config.MaxRounds, manifest.Config.MaxDurationSec)
+	}
+	if got := intValueFromConfig(t, session.Config, "max_rounds"); got != sessionapi.DefaultMaxRounds {
+		t.Fatalf("session max_rounds default: got %d", got)
+	}
+	if got := intValueFromConfig(t, session.Config, "max_duration_sec"); got != sessionapi.DefaultMaxDurationSec {
+		t.Fatalf("session max_duration_sec default: got %d", got)
+	}
 }
 
 func TestCreateSessionRejectsInvalidUntil(t *testing.T) {
@@ -289,7 +298,7 @@ func TestCloudCreateSessionCreatesRootForOperatorApply(t *testing.T) {
 	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest == "" {
 		t.Fatalf("missing apply_package_digest: %#v", manifest.ApplyPackageDigest)
 	}
-	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Digest == "" {
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.RootSpecPath != "SPEC.md" {
 		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
 	}
 	if got := session.SpecVersions[0]["apply_package_digest"]; got != *manifest.ApplyPackageDigest {
@@ -328,8 +337,6 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	session, err := store.Create(sessionapi.SessionCreateRequest{
 		ApplyPackagePath:   packagePath,
 		ApplyPackageDigest: pkg.Digest,
-		DeploymentID:       "dep_123",
-		DeploymentName:     "postgres-prod",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -344,14 +351,8 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest != pkg.Digest {
 		t.Fatalf("apply_package_digest: got %#v want %q", manifest.ApplyPackageDigest, pkg.Digest)
 	}
-	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Digest != pkg.Manifest.Spec.Digest {
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.PackageDigest != pkg.Digest {
 		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
-	}
-	if got := manifest.Provenance["deployment_id"]; got != "dep_123" {
-		t.Fatalf("deployment_id provenance: got %#v", got)
-	}
-	if got := manifest.Provenance["deployment_name"]; got != "postgres-prod" {
-		t.Fatalf("deployment_name provenance: got %#v", got)
 	}
 	recompiled, err := spec.CompileEnvironmentWithBase(*manifest.SessionSpecPath, filepath.Dir(*manifest.SourceSpecPath))
 	if err != nil {
@@ -398,42 +399,6 @@ func TestCloudCreateSessionFromApplyPackageRejectsDigestMismatch(t *testing.T) {
 	if !strings.Contains(err.Error(), "does not match expected") {
 		t.Fatalf("unexpected error: %v", err)
 	}
-}
-
-func writeTestApplyPackage(t *testing.T, packageRoot string, name string, skill string) *spec.ApplyPackage {
-	t.Helper()
-	srcDir := t.TempDir()
-	specPath := filepath.Join(srcDir, "SPEC.md")
-	markdown := fmt.Sprintf("---\nversion: v0\nname: %s\nplatform: cloud\nskills:\n  - %s\n---\n# %s\n", name, skill, name)
-	if err := os.WriteFile(specPath, []byte(markdown), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	skillDir := filepath.Join(srcDir, skill)
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(fmt.Sprintf("---\nname: %s\n---\nUse %s.", skill, skill)), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := spec.CompileEnvironment(specPath)
-	if err != nil {
-		t.Fatalf("CompileEnvironment: %v", err)
-	}
-	pkg, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{CompilerVersion: "test"})
-	if err != nil {
-		t.Fatalf("BuildApplyPackage: %v", err)
-	}
-	packagePath, err := sessionapi.PackagePathForDigest(packageRoot, pkg.Digest)
-	if err != nil {
-		t.Fatalf("PackagePathForDigest: %v", err)
-	}
-	if err := os.MkdirAll(filepath.Dir(packagePath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(packagePath, pkg.Bytes, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return pkg
 }
 
 func TestCloudCreateSessionRejectsDuplicateLiveRoot(t *testing.T) {
@@ -616,7 +581,7 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest == "" {
 		t.Fatalf("missing apply_package_digest: %#v", manifest.ApplyPackageDigest)
 	}
-	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Digest == "" {
+	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Name != "postgres" {
 		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
 	}
 	if got := session.SpecVersions[0]["apply_package_digest"]; got != *manifest.ApplyPackageDigest {
@@ -628,72 +593,6 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	}
 	if string(data) != updated {
 		t.Fatalf("spec was not updated: %q", string(data))
-	}
-}
-
-func TestApplySessionSpecUpdatesExistingRootFromPackageDigest(t *testing.T) {
-	root := t.TempDir()
-	packageRoot := t.TempDir()
-	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
-	store.PackageRoot = packageRoot
-	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	initial := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
-	rootSession, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &initial})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	pkg := writeTestApplyPackage(t, packageRoot, "postgres", "alpha")
-
-	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
-		PackageDigest: pkg.Digest,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(string(body)))
-	if err != nil {
-		t.Fatal(err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		data, _ := io.ReadAll(resp.Body)
-		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
-	}
-
-	var update sessionapi.SessionSpecUpdateResponse
-	if err := json.NewDecoder(resp.Body).Decode(&update); err != nil {
-		t.Fatal(err)
-	}
-	if update.Operation != "updated" {
-		t.Fatalf("operation: got %q", update.Operation)
-	}
-	if update.Session == nil || update.Session.SessionID != rootSession.SessionID {
-		t.Fatalf("session: got %#v", update.Session)
-	}
-	if update.Session.CurrentSpecVersion == nil || *update.Session.CurrentSpecVersion != 2 {
-		t.Fatalf("current_spec_version: got %#v", update.Session.CurrentSpecVersion)
-	}
-	manifest, err := sessionapi.ReadManifest(filepath.Join(root, rootSession.SessionID, "session.json"))
-	if err != nil {
-		t.Fatalf("ReadManifest: %v", err)
-	}
-	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest != pkg.Digest {
-		t.Fatalf("apply_package_digest: got %#v want %q", manifest.ApplyPackageDigest, pkg.Digest)
-	}
-	if manifest.SourceSpecPath == nil || !strings.Contains(*manifest.SourceSpecPath, filepath.Join(rootSession.SessionID, "package", "SPEC.md")) {
-		t.Fatalf("source_spec_path: %#v", manifest.SourceSpecPath)
-	}
-	if got := update.Session.SpecVersions[1]["apply_package_digest"]; got != pkg.Digest {
-		t.Fatalf("spec version package digest: got %#v want %q", got, pkg.Digest)
 	}
 }
 
@@ -1299,6 +1198,235 @@ func TestEventsJSONShape(t *testing.T) {
 	assertJSONType(t, m, "events", "slice")
 }
 
+// --------- GET /api/sessions/{id}/diagnostics ------------------------------------------------------------------------------------------------------------------------------
+
+func TestDiagnosticsAggregatesBudgetsRetriesStopsAndArtifacts(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	markdown := "---\nversion: v0\nname: diag\nplatform: local\n---\n# Diagnostics\n"
+	maxRounds := 4
+	maxDuration := 3600
+	maxInputTokens := 1200
+	maxOutputTokens := 400
+	maxToolLoops := 55
+	agentTimeout := 120
+	created, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &markdown,
+		MaxRounds:       &maxRounds,
+		MaxDurationSec:  &maxDuration,
+		MaxInputTokens:  &maxInputTokens,
+		MaxOutputTokens: &maxOutputTokens,
+		MaxToolLoops:    &maxToolLoops,
+		AgentTimeoutSec: &agentTimeout,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	evidence := strings.Join([]string{
+		`{"event":"budget_exceeded","round":1,"role":"prover","data":{"budget":"max_input_tokens"}}`,
+		`{"event":"cost_cap_unenforceable","round":1,"role":"prover","data":{"max_cost_usd":10,"reason":"provider returned no cost"}}`,
+		`{"event":"agent_failure_recoverable","round":1,"role":"prover","data":{"error":"provider_rate_limited: HTTP 429"}}`,
+		`{"event":"agent_failure_recoverable","round":1,"role":"verifier","data":{"error_code":"agent_protocol","error":"missing status"}}`,
+		`{"event":"game_error","round":1,"role":"system","data":{"error":"benchmark verifier rejected final artifact"}}`,
+		`{"event":"game_end","round":2,"data":{"game_result":"failure","completion_reason":"runtime_budget_exhausted","total_cost_usd":0.42,"cost_unavailable":true,"total_input_tokens":1300,"total_output_tokens":210,"prover_rounds":1,"verifier_rounds":1}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	ledger := []byte(`{"session_id":"` + created.SessionID + `","turns":[]}` + "\n")
+	if err := os.WriteFile(*created.Specs[0].ObjectiveLedgerPath, ledger, 0o644); err != nil {
+		t.Fatalf("write ledger: %v", err)
+	}
+
+	turnDir := filepath.Join(store.Root, created.SessionID, "specs", "diag", "turns", "0001-prover")
+	if err := os.MkdirAll(turnDir, 0o755); err != nil {
+		t.Fatalf("create turn dir: %v", err)
+	}
+	sessionLog := strings.Join([]string{
+		`{"type":"model_request","data":{"sequence":1}}`,
+		`{"type":"retry","data":{"sequence":1,"attempt":2,"delay_ms":250,"error_code":"provider_rate_limited","error":"rate limited","provider_status_code":429}}`,
+		`{"type":"model_response","data":{"sequence":1,"response_id":"resp_1","stop_reason":"tool_calls"}}`,
+		`{"type":"tool_result","data":{"tool_call_id":"call_1","tool_name":"read_file","duration_ms":5,"output_bytes":12}}`,
+		`{"type":"tool_result","data":{"tool_call_id":"call_2","tool_name":"bash","is_error":true,"error_code":"tool_timeout","duration_ms":1000,"output_bytes":64}}`,
+		`{"type":"reasoning_sanitized","data":{"words_removed":4}}`,
+		`{"type":"outside_workspace_access","data":{"action":"write_file","path":"/tmp/telos-scratch/out.txt","write":true}}`,
+		`{"type":"error","data":{"sequence":2,"error_code":"agent_incomplete","error":"agent_incomplete: no final response","retryable":false}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(turnDir, "session.jsonl"), []byte(sessionLog), 0o644); err != nil {
+		t.Fatalf("write session log: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/diagnostics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+
+	var diagnostics sessionapi.SessionDiagnosticsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&diagnostics); err != nil {
+		t.Fatalf("decode diagnostics: %v", err)
+	}
+	assertEqual(t, "session_id", created.SessionID, diagnostics.SessionID)
+	if diagnostics.Limits.MaxRounds != 4 ||
+		diagnostics.Limits.MaxDurationSec != 3600 ||
+		diagnostics.Limits.MaxInputTokens != 1200 ||
+		diagnostics.Limits.MaxOutputTokens != 400 ||
+		diagnostics.Limits.MaxToolLoops != 55 ||
+		diagnostics.Limits.AgentTimeoutSec != 120 {
+		t.Fatalf("limits not surfaced: %#v", diagnostics.Limits)
+	}
+	if diagnostics.BudgetExceeded["max_input_tokens"] != 1 || diagnostics.BudgetExceeded["cost_cap_unenforceable"] != 1 {
+		t.Fatalf("budget exceeded counts: %#v", diagnostics.BudgetExceeded)
+	}
+	if !diagnostics.Totals.CostUnavailable || len(diagnostics.Specs) != 1 || !diagnostics.Specs[0].Totals.CostUnavailable {
+		t.Fatalf("cost availability not surfaced: totals=%#v specs=%#v", diagnostics.Totals, diagnostics.Specs)
+	}
+	if diagnostics.Failures["provider"] != 1 ||
+		diagnostics.Failures["protocol"] != 1 ||
+		diagnostics.Failures["task_budget"] != 1 ||
+		diagnostics.Failures["benchmark_verifier_failure"] != 1 ||
+		diagnostics.Failures["tool"] != 1 ||
+		diagnostics.Failures["agent_incomplete"] != 1 {
+		t.Fatalf("failure taxonomy: %#v", diagnostics.Failures)
+	}
+	if diagnostics.Specs[0].Failures["tool"] != 1 || diagnostics.Specs[0].Failures["agent_incomplete"] != 1 {
+		t.Fatalf("spec failure taxonomy should include session-log failures: %#v", diagnostics.Specs[0].Failures)
+	}
+	if diagnostics.StopReasons["tool_calls"] != 1 {
+		t.Fatalf("stop reasons: %#v", diagnostics.StopReasons)
+	}
+	if diagnostics.SessionLogEvents["tool_result"] != 2 || diagnostics.SessionLogEvents["reasoning_sanitized"] != 1 {
+		t.Fatalf("session log event counts: %#v", diagnostics.SessionLogEvents)
+	}
+	if len(diagnostics.OutsideWorkspace) != 1 || diagnostics.OutsideWorkspace[0].Path != "/tmp/telos-scratch/out.txt" || !diagnostics.OutsideWorkspace[0].Write {
+		t.Fatalf("outside workspace diagnostics: %#v", diagnostics.OutsideWorkspace)
+	}
+	if len(diagnostics.Retries) != 1 || diagnostics.Retries[0].ErrorCode != "provider_rate_limited" || diagnostics.Retries[0].ProviderStatusCode != 429 {
+		t.Fatalf("retry diagnostics: %#v", diagnostics.Retries)
+	}
+	if len(diagnostics.Errors) != 2 || !diagnosticsHasErrorCode(diagnostics.Errors, "tool_timeout") || !diagnosticsHasErrorCode(diagnostics.Errors, "agent_incomplete") {
+		t.Fatalf("error diagnostics: %#v", diagnostics.Errors)
+	}
+	if len(diagnostics.Artifacts) != 1 || !diagnostics.Artifacts[0].EvidenceExists || !diagnostics.Artifacts[0].ObjectiveLedgerExists {
+		t.Fatalf("artifact diagnostics: %#v", diagnostics.Artifacts)
+	}
+	if diagnostics.Totals.InputTokens != 1300 || diagnostics.Totals.OutputTokens != 210 || diagnostics.Totals.Rounds != 2 {
+		t.Fatalf("totals: %#v", diagnostics.Totals)
+	}
+}
+
+func TestDiagnosticsDedupsFailuresBetweenEvidenceAndSessionLog(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	markdown := createSessionBody(t, "dedup")
+	created := createSession(t, srv.URL, markdown)
+
+	// The same recoverable turn failure (provider_rate_limited) is recorded in
+	// evidence as agent_failure_recoverable AND in the turn's session.jsonl as
+	// an error event with the same error_code. It must be counted once.
+	evidence := strings.Join([]string{
+		`{"event":"agent_failure_recoverable","round":1,"role":"prover","data":{"error_code":"provider_rate_limited","error":"provider_rate_limited: HTTP 429"}}`,
+		`{"event":"game_end","round":2,"data":{"game_result":"failure","completion_reason":"runtime_budget_exhausted","total_cost_usd":0.1,"total_input_tokens":100,"total_output_tokens":20,"prover_rounds":1,"verifier_rounds":1}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	turnDir := filepath.Join(store.Root, created.SessionID, "specs", "dedup", "turns", "0001-prover")
+	if err := os.MkdirAll(turnDir, 0o755); err != nil {
+		t.Fatalf("create turn dir: %v", err)
+	}
+	// The session-log error event carries the SAME error_code as the evidence
+	// agent_failure_recoverable above — this is the double-count scenario.
+	sessionLog := strings.Join([]string{
+		`{"type":"error","data":{"sequence":1,"error_code":"provider_rate_limited","error":"provider_rate_limited: HTTP 429","retryable":true}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(filepath.Join(turnDir, "session.jsonl"), []byte(sessionLog), 0o644); err != nil {
+		t.Fatalf("write session log: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/diagnostics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+
+	var diagnostics sessionapi.SessionDiagnosticsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&diagnostics); err != nil {
+		t.Fatalf("decode diagnostics: %v", err)
+	}
+	// The provider failure must be counted exactly once despite appearing in
+	// both evidence and the session log.
+	if diagnostics.Failures["provider"] != 1 {
+		t.Fatalf("provider failure should be deduped to 1, got %d: %#v", diagnostics.Failures["provider"], diagnostics.Failures)
+	}
+	// The per-turn Errors list still records the granular session-log error,
+	// even though its failure was deduped from the tally.
+	if len(diagnostics.Errors) != 1 || diagnostics.Errors[0].ErrorCode != "provider_rate_limited" {
+		t.Fatalf("session-log error should still be in Errors list: %#v", diagnostics.Errors)
+	}
+}
+
+func TestDiagnosticsDedupsFailuresWhenSpecNameDiffersFromDirName(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	markdown := createSessionBody(t, "dedup")
+	created := createSession(t, srv.URL, markdown)
+
+	manifestPath := filepath.Join(store.Root, created.SessionID, "session.json")
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("read manifest: %v", err)
+	}
+	manifest.Specs[0].Name = "canonical-dedup"
+	manifest.Specs[0].DirName = "dedup"
+	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
+		t.Fatalf("write manifest: %v", err)
+	}
+
+	evidence := strings.Join([]string{
+		`{"event":"agent_failure_recoverable","spec_name":"canonical-dedup","round":1,"role":"prover","data":{"error_code":"provider_rate_limited","error":"provider_rate_limited: HTTP 429"}}`,
+		`{"event":"game_end","spec_name":"canonical-dedup","round":2,"data":{"game_result":"failure","completion_reason":"runtime_budget_exhausted","total_cost_usd":0.1,"total_input_tokens":100,"total_output_tokens":20,"prover_rounds":1,"verifier_rounds":1}}`,
+	}, "\n") + "\n"
+	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	turnDir := filepath.Join(store.Root, created.SessionID, "specs", "dedup", "turns", "0001-prover")
+	if err := os.MkdirAll(turnDir, 0o755); err != nil {
+		t.Fatalf("create turn dir: %v", err)
+	}
+	sessionLog := `{"type":"error","data":{"sequence":1,"error_code":"provider_rate_limited","error":"provider_rate_limited: HTTP 429","retryable":true}}` + "\n"
+	if err := os.WriteFile(filepath.Join(turnDir, "session.jsonl"), []byte(sessionLog), 0o644); err != nil {
+		t.Fatalf("write session log: %v", err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/diagnostics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+
+	var diagnostics sessionapi.SessionDiagnosticsResponse
+	if err := json.NewDecoder(resp.Body).Decode(&diagnostics); err != nil {
+		t.Fatalf("decode diagnostics: %v", err)
+	}
+	if diagnostics.Failures["provider"] != 1 {
+		t.Fatalf("provider failure should be deduped across spec aliases, got %d: %#v", diagnostics.Failures["provider"], diagnostics.Failures)
+	}
+	if len(diagnostics.Specs) != 1 || diagnostics.Specs[0].Name != "canonical-dedup" || diagnostics.Specs[0].DirName != "dedup" {
+		t.Fatalf("spec diagnostics: %#v", diagnostics.Specs)
+	}
+}
+
 func TestEventsSSE(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
@@ -1345,7 +1473,7 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 		t.Fatalf("missing evidence path: %#v", created.Specs)
 	}
 	evidence := `{"event":"agent_complete","round":1,"data":{"cost_usd":0.10}}` + "\n" +
-		`{"event":"game_end","round":2,"data":{"total_cost_usd":1.23,"total_input_tokens":100,"total_output_tokens":30,"total_cache_read_tokens":7,"total_cache_creation_tokens":5,"prover_rounds":1,"verifier_rounds":1,"completion_reason":"review_cycles_complete","verifier_conceded":false}}` + "\n"
+		`{"event":"game_end","round":2,"data":{"total_cost_usd":1.23,"cost_unavailable":true,"total_input_tokens":100,"total_output_tokens":30,"total_cache_read_tokens":7,"total_cache_creation_tokens":5,"prover_rounds":1,"verifier_rounds":1,"completion_reason":"review_cycles_complete","verifier_conceded":false}}` + "\n"
 	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
 		t.Fatalf("write evidence: %v", err)
 	}
@@ -1356,6 +1484,12 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 	}
 	if session.TotalCostUSD == nil || *session.TotalCostUSD != 1.23 {
 		t.Fatalf("cost: got %v", session.TotalCostUSD)
+	}
+	if session.CostUnavailable == nil || !*session.CostUnavailable {
+		t.Fatalf("cost unavailable: got %v", session.CostUnavailable)
+	}
+	if len(session.Specs) != 1 || session.Specs[0].CostUnavailable == nil || !*session.Specs[0].CostUnavailable {
+		t.Fatalf("spec cost unavailable: %#v", session.Specs)
 	}
 	if session.TotalInputTokens == nil || *session.TotalInputTokens != 100 {
 		t.Fatalf("input tokens: got %v", session.TotalInputTokens)
@@ -1377,6 +1511,48 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 	}
 	if session.VerifierConceded == nil || *session.VerifierConceded {
 		t.Fatalf("verifier conceded: got %v", session.VerifierConceded)
+	}
+}
+
+func TestGetSessionHydratesEpochErrorCode(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: epoch-error\nplatform: local\n---\n# Error\n"
+
+	created, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	manifestPath := filepath.Join(root, created.SessionID, "session.json")
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	finishedAt := "2026-06-19T10:05:00.000Z"
+	result := "failed"
+	errText := "runtime_budget_exhausted:max_rounds"
+	errCode := "runtime_budget_exhausted"
+	manifest.Epochs = []sessionapi.Epoch{{
+		ID:         1,
+		StartedAt:  "2026-06-19T10:00:00.000Z",
+		FinishedAt: &finishedAt,
+		Result:     &result,
+		Error:      &errText,
+		ErrorCode:  &errCode,
+	}}
+	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	session, err := store.Get(created.SessionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if session.ErrorCode == nil || *session.ErrorCode != errCode {
+		t.Fatalf("session error code: got %#v", session.ErrorCode)
+	}
+	if len(session.Epochs) != 1 || session.Epochs[0]["error_code"] != errCode {
+		t.Fatalf("epoch error code missing: %#v", session.Epochs)
 	}
 }
 
@@ -2025,6 +2201,23 @@ func assertConfigFloat(t *testing.T, config map[string]any, key string, expected
 	}
 }
 
+func intValueFromConfig(t *testing.T, config map[string]any, key string) int {
+	t.Helper()
+	v, ok := config[key]
+	if !ok {
+		t.Fatalf("config missing key %q", key)
+	}
+	switch value := v.(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		t.Fatalf("config[%q]: expected number, got %T %v", key, v, v)
+		return 0
+	}
+}
+
 func assertJSONType(t *testing.T, m map[string]any, key string, kind string) {
 	t.Helper()
 	v, ok := m[key]
@@ -2042,6 +2235,15 @@ func assertJSONType(t *testing.T, m map[string]any, key string, kind string) {
 			t.Errorf("%q: expected array, got %T", key, v)
 		}
 	}
+}
+
+func diagnosticsHasErrorCode(errors []sessionapi.SessionErrorDiagnostics, code string) bool {
+	for _, err := range errors {
+		if err.ErrorCode == code {
+			return true
+		}
+	}
+	return false
 }
 
 func itoa(n int) string {

@@ -3,15 +3,11 @@ package telosd
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"regexp"
 	"strings"
 	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes"
-	"k8s.io/client-go/rest"
 )
 
 var routeNamespaceRE = regexp.MustCompile(`\.(ns-[a-z0-9-]+)\.svc(?:\.|:|/|$)`)
@@ -53,7 +49,7 @@ func productHandleFor(routes []publicRoute, session sessionapi.Session) string {
 		return ""
 	}
 	return singleProductHandle(routes, func(route publicRoute) bool {
-		return routeMatchesNamespace(route, namespace) && routeMatchesSpecName(route, session, false)
+		return routeMatchesNamespace(route, namespace)
 	})
 }
 
@@ -69,24 +65,11 @@ func dashboardHandleFor(routes []publicRoute, session sessionapi.Session) string
 		return ""
 	}
 	return singleDashboardHandle(routes, func(route publicRoute) bool {
-		return routeMatchesNamespace(route, namespace) && routeMatchesSpecName(route, session, true)
+		return routeMatchesNamespace(route, namespace)
 	})
 }
 
 func readPublicRoutes(ctx context.Context) ([]publicRoute, error) {
-	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
-		config, err := rest.InClusterConfig()
-		if err == nil {
-			client, err := kubernetes.NewForConfig(config)
-			if err == nil {
-				return readPublicRoutesFromClient(ctx, client)
-			}
-		}
-	}
-	return readPublicRoutesWithKubectl(ctx)
-}
-
-func readPublicRoutesWithKubectl(ctx context.Context) ([]publicRoute, error) {
 	out, err := kubectlOutput(
 		ctx,
 		2*time.Second,
@@ -102,26 +85,6 @@ func readPublicRoutesWithKubectl(ctx context.Context) ([]publicRoute, error) {
 		return nil, err
 	}
 	return parsePublicRoutes(out)
-}
-
-func readPublicRoutesFromClient(ctx context.Context, client kubernetes.Interface) ([]publicRoute, error) {
-	list, err := client.CoreV1().ConfigMaps("").List(ctx, metav1.ListOptions{
-		LabelSelector: publicRouteLabel + " in (primary,service,dashboard)",
-	})
-	if err != nil {
-		return nil, err
-	}
-	routes := make([]publicRoute, 0, len(list.Items))
-	for _, item := range list.Items {
-		routes = append(routes, publicRoute{
-			Namespace:   item.Namespace,
-			Name:        item.Name,
-			Labels:      item.Labels,
-			Annotations: item.Annotations,
-			Data:        item.Data,
-		})
-	}
-	return routes, nil
 }
 
 func parsePublicRoutes(data []byte) ([]publicRoute, error) {
@@ -196,32 +159,6 @@ func routeMatchesNamespace(route publicRoute, namespace string) bool {
 		}
 	}
 	return false
-}
-
-func routeMatchesSpecName(route publicRoute, session sessionapi.Session, dashboard bool) bool {
-	name := sessionSpecName(session)
-	if name == "" {
-		return false
-	}
-	prefix := strings.TrimSpace(route.Data["prefix"])
-	if prefix == "" {
-		prefix = strings.Split(routeHandle(route.Data), ".")[0]
-	}
-	if dashboard {
-		dashboardPrefix := "dashboard-" + name
-		return prefix == dashboardPrefix || strings.HasPrefix(prefix, dashboardPrefix+"-")
-	}
-	return prefix == name || strings.HasPrefix(prefix, name+"-")
-}
-
-func sessionSpecName(session sessionapi.Session) string {
-	if len(session.Specs) > 0 && session.Specs[0].Name != nil {
-		return strings.TrimSpace(*session.Specs[0].Name)
-	}
-	if session.SpecName != nil {
-		return strings.TrimSpace(*session.SpecName)
-	}
-	return ""
 }
 
 func singleProductHandle(routes []publicRoute, match func(publicRoute) bool) string {

@@ -4,11 +4,11 @@ import (
 	"archive/tar"
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -40,16 +40,16 @@ func TestBuildApplyPackageIsDeterministic(t *testing.T) {
 	if !bytes.Equal(first.Bytes, second.Bytes) {
 		t.Fatal("package bytes changed for identical inputs")
 	}
-	if first.Manifest.Spec.Digest == "" {
-		t.Fatalf("manifest missing spec digest: %#v", first.Manifest)
+	if first.Lock.PackageDigest != first.Digest {
+		t.Fatalf("lock digest %q != package digest %q", first.Lock.PackageDigest, first.Digest)
 	}
-	if first.Manifest.Skills["alpha"] == "" {
-		t.Fatalf("manifest missing alpha skill digest: %#v", first.Manifest.Skills)
+	if first.Lock.RootSpecPath != "SPEC.md" {
+		t.Fatalf("root spec path = %q, want SPEC.md", first.Lock.RootSpecPath)
 	}
 
 	entries := tarEntries(t, first.Bytes)
 	for _, want := range []string{
-		"manifest.json",
+		"manifest-lock.yaml",
 		"SPEC.md",
 		"skills/alpha/SKILL.md",
 		"skills/alpha/reference/example.txt",
@@ -57,16 +57,6 @@ func TestBuildApplyPackageIsDeterministic(t *testing.T) {
 		if _, ok := entries[want]; !ok {
 			t.Fatalf("missing package entry %q; entries=%v", want, sortedEntryNames(entries))
 		}
-	}
-	var manifest map[string]any
-	if err := json.Unmarshal(entries["manifest.json"], &manifest); err != nil {
-		t.Fatalf("manifest.json: %v", err)
-	}
-	if _, ok := manifest["package_digest"]; ok {
-		t.Fatalf("manifest should not contain package_digest: %#v", manifest)
-	}
-	if _, ok := manifest["root_spec_path"]; ok {
-		t.Fatalf("manifest should not contain root_spec_path: %#v", manifest)
 	}
 }
 
@@ -103,7 +93,7 @@ func TestBuildApplyPackageDigestChangesWhenSkillChanges(t *testing.T) {
 	}
 }
 
-func TestBuildApplyPackageDigestIgnoresRuntimeVersion(t *testing.T) {
+func TestBuildApplyPackageDigestChangesWhenRuntimeVersionChanges(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writePackageTestSpec(t, dir, "package-runtime-change", "alpha")
 	writePackageTestSkill(t, dir, "alpha", map[string]string{
@@ -123,8 +113,8 @@ func TestBuildApplyPackageDigestIgnoresRuntimeVersion(t *testing.T) {
 		t.Fatalf("BuildApplyPackage second: %v", err)
 	}
 
-	if first.Digest != second.Digest {
-		t.Fatalf("digest changed after runtime version changed: %s != %s", first.Digest, second.Digest)
+	if first.Digest == second.Digest {
+		t.Fatalf("digest did not change after runtime version changed: %s", first.Digest)
 	}
 }
 
@@ -184,12 +174,12 @@ func TestExtractApplyPackageCompilesWithPackageLocalSkills(t *testing.T) {
 	}
 
 	dest := t.TempDir()
-	manifest, err := ExtractApplyPackage(pkg.Bytes, dest)
+	lock, err := ExtractApplyPackage(pkg.Bytes, dest)
 	if err != nil {
 		t.Fatalf("ExtractApplyPackage: %v", err)
 	}
-	if manifest.Spec.Digest != pkg.Manifest.Spec.Digest {
-		t.Fatalf("spec digest: got %q want %q", manifest.Spec.Digest, pkg.Manifest.Spec.Digest)
+	if lock.PackageDigest != pkg.Digest {
+		t.Fatalf("package digest: got %q want %q", lock.PackageDigest, pkg.Digest)
 	}
 	extracted, err := CompileEnvironmentWithBase(filepath.Join(dest, "SPEC.md"), dest)
 	if err != nil {
@@ -206,6 +196,56 @@ func TestExtractApplyPackageCompilesWithPackageLocalSkills(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("missing extracted alpha skill")
+	}
+}
+
+func TestExtractApplyPackageRejectsTamperedRootSpec(t *testing.T) {
+	srcDir := t.TempDir()
+	specPath := writePackageTestSpec(t, srcDir, "package-root-tamper", "alpha")
+	writePackageTestSkill(t, srcDir, "alpha", map[string]string{
+		"SKILL.md": "---\nname: alpha\n---\nUse package-local alpha.",
+	})
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := BuildApplyPackage(compiled, ApplyPackageOptions{CompilerVersion: "test-compiler"})
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+
+	tampered := rewritePackageEntry(t, pkg.Bytes, "SPEC.md", []byte("---\nversion: v0\nname: package-root-tamper\nplatform: cloud\nskills:\n  - alpha\n---\nTampered objective.\n"))
+	_, err = ExtractApplyPackage(tampered, t.TempDir())
+	if err == nil {
+		t.Fatal("expected tampered root spec to be rejected")
+	}
+	if !strings.Contains(err.Error(), "root spec digest") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestExtractApplyPackageRejectsTamperedSkillFile(t *testing.T) {
+	srcDir := t.TempDir()
+	specPath := writePackageTestSpec(t, srcDir, "package-skill-tamper", "alpha")
+	writePackageTestSkill(t, srcDir, "alpha", map[string]string{
+		"SKILL.md": "---\nname: alpha\n---\nUse package-local alpha.",
+	})
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := BuildApplyPackage(compiled, ApplyPackageOptions{CompilerVersion: "test-compiler"})
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+
+	tampered := rewritePackageEntry(t, pkg.Bytes, "skills/alpha/SKILL.md", []byte("---\nname: alpha\n---\nRun a tampered skill."))
+	_, err = ExtractApplyPackage(tampered, t.TempDir())
+	if err == nil {
+		t.Fatal("expected tampered skill file to be rejected")
+	}
+	if !strings.Contains(err.Error(), "skill file") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -267,4 +307,50 @@ func sortedEntryNames(entries map[string][]byte) []string {
 	}
 	sort.Strings(names)
 	return names
+}
+
+func rewritePackageEntry(t *testing.T, data []byte, target string, replacement []byte) []byte {
+	t.Helper()
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("open package: %v", err)
+	}
+	defer gz.Close()
+
+	var files []packageFile
+	found := false
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("read package: %v", err)
+		}
+		if header.Typeflag != tar.TypeReg {
+			t.Fatalf("unexpected package entry type %q for %s", header.Typeflag, header.Name)
+		}
+		fileData, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatalf("read package entry %s: %v", header.Name, err)
+		}
+		if header.Name == target {
+			fileData = replacement
+			found = true
+		}
+		files = append(files, packageFile{
+			path: header.Name,
+			mode: header.Mode,
+			data: fileData,
+		})
+	}
+	if !found {
+		t.Fatalf("package entry %q not found", target)
+	}
+	out, err := writePackageTar(files)
+	if err != nil {
+		t.Fatalf("rewrite package: %v", err)
+	}
+	return out
 }

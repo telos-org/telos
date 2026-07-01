@@ -26,16 +26,19 @@ const (
 )
 
 type Config struct {
-	Kind       string           `yaml:"kind"`
-	Mode       Mode             `yaml:"mode"`
-	Root       string           `yaml:"root"`
-	Token      string           `yaml:"token"`
-	TokenFile  string           `yaml:"token_file"`
-	Server     ServerConfig     `yaml:"server"`
-	Auth       AuthConfig       `yaml:"auth"`
-	Worker     WorkerConfig     `yaml:"worker"`
-	Runtime    RuntimeConfig    `yaml:"runtime"`
-	Kubernetes KubernetesConfig `yaml:"kubernetes"`
+	Kind            string           `yaml:"kind"`
+	Mode            Mode             `yaml:"mode"`
+	Root            string           `yaml:"root"`
+	Token           string           `yaml:"token"`
+	TokenFile       string           `yaml:"token_file"`
+	AgentImage      string           `yaml:"agent_image"`
+	ImagePullSecret string           `yaml:"image_pull_secret"`
+	Server          ServerConfig     `yaml:"server"`
+	Auth            AuthConfig       `yaml:"auth"`
+	Runtime         RuntimeConfig    `yaml:"runtime"`
+	Kubernetes      KubernetesConfig `yaml:"kubernetes"`
+	ControlPlane    ControlConfig    `yaml:"control_plane"`
+	Billing         BillingConfig    `yaml:"billing"`
 }
 
 type ServerConfig struct {
@@ -51,15 +54,22 @@ type AuthConfig struct {
 	TokenFile string   `yaml:"token_file"`
 }
 
-type WorkerConfig struct {
-	Substrate string `yaml:"substrate"`
-}
-
 type RuntimeConfig struct {
 	ArtifactBaseURL string `yaml:"artifact_base_url"`
 	ArtifactVersion string `yaml:"artifact_version"`
 	MountPath       string `yaml:"mount_path"`
 }
+
+type ServiceCredentialConfig struct {
+	Endpoint  string `yaml:"endpoint"`
+	EnvID     string `yaml:"env_id"`
+	Token     string `yaml:"token"`
+	TokenFile string `yaml:"token_file"`
+}
+
+type ControlConfig = ServiceCredentialConfig
+
+type BillingConfig = ServiceCredentialConfig
 
 type KubernetesConfig struct {
 	AgentImage      string   `yaml:"agent_image"`
@@ -107,6 +117,12 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	if cfg.Auth.TokenFile == "" {
 		cfg.Auth.TokenFile = cfg.TokenFile
 	}
+	if cfg.Kubernetes.AgentImage == "" {
+		cfg.Kubernetes.AgentImage = cfg.AgentImage
+	}
+	if cfg.Kubernetes.ImagePullSecret == "" {
+		cfg.Kubernetes.ImagePullSecret = cfg.ImagePullSecret
+	}
 	if cfg.Mode == "" {
 		cfg.Mode = ModeLocal
 	}
@@ -149,8 +165,56 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		if cfg.Runtime.MountPath == "" {
 			cfg.Runtime.MountPath = "/telos-runtime"
 		}
-		if cfg.Worker.Substrate == "" {
-			cfg.Worker.Substrate = envOr("TELOS_WORKER_SUBSTRATE", "local-process")
+		var err error
+		cfg.ControlPlane, err = resolveServiceCredential(cfg.ControlPlane, serviceCredentialEnv{
+			Name:          "control_plane",
+			EndpointVars:  []string{"TELOS_CONTROL_ENDPOINT", "TELOS_CONTROL_API_URL"},
+			EndpointValue: "https://api.usetelos.ai",
+			TokenFileVar:  "TELOS_CONTROL_TOKEN_FILE",
+			TokenVar:      "TELOS_CONTROL_TOKEN",
+		})
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.Billing, err = resolveServiceCredential(cfg.Billing, serviceCredentialEnv{
+			Name:          "billing",
+			EndpointVars:  []string{"TELOS_BILLING_ENDPOINT"},
+			EndpointValue: "https://billing.usetelos.ai",
+			TokenFileVar:  "TELOS_BILLING_ENV_TOKEN_FILE",
+			TokenVar:      "TELOS_BILLING_ENV_TOKEN",
+		})
+		if err != nil {
+			return Config{}, err
+		}
+		if cfg.Billing.Endpoint != "" && cfg.Billing.EnvID != "" && cfg.Billing.Token == "" {
+			return Config{}, fmt.Errorf("billing.token is required when cloud billing is configured")
+		}
+		if cfg.Kubernetes.AgentImage == "" {
+			cfg.Kubernetes.AgentImage = envOr("TELOS_AGENT_IMAGE", "telos-agent:latest")
+		}
+		if cfg.Kubernetes.EnvNamespace == "" {
+			cfg.Kubernetes.EnvNamespace = envOr("TELOS_ENV_NAMESPACE", "ns-telos-env")
+		}
+		if cfg.Kubernetes.StateMountRoot == "" {
+			cfg.Kubernetes.StateMountRoot = envOr("TELOS_STATE_MOUNT_ROOT", cfg.Root)
+		}
+		if cfg.Kubernetes.StateHostRoot == "" {
+			cfg.Kubernetes.StateHostRoot = envOr("TELOS_STATE_HOST_ROOT", "/var/telos-state")
+		}
+		if cfg.Kubernetes.StateNodeRoot == "" {
+			cfg.Kubernetes.StateNodeRoot = envOr("TELOS_STATE_NODE_ROOT", "/var/telos-state")
+		}
+		if cfg.Kubernetes.ImagePullSecret == "" {
+			cfg.Kubernetes.ImagePullSecret = defaultImagePullSecret(cfg.Kubernetes.AgentImage)
+		}
+		if cfg.Kubernetes.AgentSecretName == "" {
+			cfg.Kubernetes.AgentSecretName = "agent-api-keys"
+		}
+		if cfg.Kubernetes.AgentSecretKey == "" {
+			cfg.Kubernetes.AgentSecretKey = "TELOS_GATEWAY_API_KEY"
+		}
+		if cfg.Kubernetes.CopySecrets == nil {
+			cfg.Kubernetes.CopySecrets = []string{"telos-env-keys"}
 		}
 	default:
 		return Config{}, fmt.Errorf("invalid mode %q", cfg.Mode)
@@ -170,16 +234,6 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	if cfg.Auth.Type != AuthLocal && cfg.Auth.Type != AuthBearer {
 		return Config{}, fmt.Errorf("invalid auth.type %q", cfg.Auth.Type)
 	}
-	if cfg.Mode == ModeCloud {
-		switch cfg.Worker.Substrate {
-		case "local-process", "kubernetes":
-		default:
-			return Config{}, fmt.Errorf("invalid worker.substrate %q", cfg.Worker.Substrate)
-		}
-		if cfg.Worker.Substrate == "kubernetes" {
-			cfg = withKubernetesWorkerDefaults(cfg)
-		}
-	}
 	if cfg.Auth.Type == AuthBearer {
 		if cfg.Auth.Token == "" {
 			token, err := authTokenFromFile(cfg.Auth.TokenFile)
@@ -193,6 +247,9 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		}
 		if cfg.Auth.Token == "" {
 			return Config{}, fmt.Errorf("auth.token is required for bearer auth")
+		}
+		if cfg.Mode == ModeCloud && cfg.ControlPlane.Token == "" {
+			cfg.ControlPlane.Token = cfg.Auth.Token
 		}
 	}
 	switch cfg.Server.Transport {
@@ -210,37 +267,6 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	return cfg, nil
 }
 
-func withKubernetesWorkerDefaults(cfg Config) Config {
-	if cfg.Kubernetes.AgentImage == "" {
-		cfg.Kubernetes.AgentImage = envOr("TELOS_AGENT_IMAGE", "telos-agent:latest")
-	}
-	if cfg.Kubernetes.EnvNamespace == "" {
-		cfg.Kubernetes.EnvNamespace = envOr("TELOS_ENV_NAMESPACE", "ns-telos-env")
-	}
-	if cfg.Kubernetes.StateMountRoot == "" {
-		cfg.Kubernetes.StateMountRoot = envOr("TELOS_STATE_MOUNT_ROOT", cfg.Root)
-	}
-	if cfg.Kubernetes.StateHostRoot == "" {
-		cfg.Kubernetes.StateHostRoot = envOr("TELOS_STATE_HOST_ROOT", "/var/telos-state")
-	}
-	if cfg.Kubernetes.StateNodeRoot == "" {
-		cfg.Kubernetes.StateNodeRoot = envOr("TELOS_STATE_NODE_ROOT", "/var/telos-state")
-	}
-	if cfg.Kubernetes.ImagePullSecret == "" {
-		cfg.Kubernetes.ImagePullSecret = defaultImagePullSecret(cfg.Kubernetes.AgentImage)
-	}
-	if cfg.Kubernetes.AgentSecretName == "" {
-		cfg.Kubernetes.AgentSecretName = "agent-api-keys"
-	}
-	if cfg.Kubernetes.AgentSecretKey == "" {
-		cfg.Kubernetes.AgentSecretKey = "SAIL_API_KEY"
-	}
-	if cfg.Kubernetes.CopySecrets == nil {
-		cfg.Kubernetes.CopySecrets = []string{"telos-env-keys"}
-	}
-	return cfg
-}
-
 func defaultImagePullSecret(agentImage string) string {
 	if value := strings.TrimSpace(os.Getenv("TELOS_IMAGE_PULL_SECRET")); value != "" {
 		return value
@@ -249,6 +275,46 @@ func defaultImagePullSecret(agentImage string) string {
 		return "gar-pull"
 	}
 	return ""
+}
+
+type serviceCredentialEnv struct {
+	Name          string
+	EndpointVars  []string
+	EndpointValue string
+	TokenFileVar  string
+	TokenVar      string
+}
+
+func resolveServiceCredential(cfg ServiceCredentialConfig, env serviceCredentialEnv) (ServiceCredentialConfig, error) {
+	if cfg.Endpoint == "" {
+		cfg.Endpoint = envFirst(env.EndpointVars, env.EndpointValue)
+	}
+	if cfg.EnvID == "" {
+		cfg.EnvID = os.Getenv("TELOS_ENV_ID")
+	}
+	if cfg.TokenFile == "" {
+		cfg.TokenFile = os.Getenv(env.TokenFileVar)
+	}
+	if cfg.Token == "" {
+		if token, err := authTokenFromFile(cfg.TokenFile); err != nil {
+			return ServiceCredentialConfig{}, fmt.Errorf("read %s.token_file: %w", env.Name, err)
+		} else if token != "" {
+			cfg.Token = token
+		}
+	}
+	if cfg.Token == "" {
+		cfg.Token = os.Getenv(env.TokenVar)
+	}
+	return cfg, nil
+}
+
+func envFirst(names []string, fallback string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return fallback
 }
 
 func SessionsRoot(root string) string {

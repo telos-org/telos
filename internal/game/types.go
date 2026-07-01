@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+
+	"github.com/telos-org/telos/internal/platform"
 )
 
 // GameResult is the terminal outcome of a PVG run.
@@ -49,7 +51,7 @@ type TurnResult struct {
 // AgentExecutor runs one PVG agent turn.
 type AgentExecutor interface {
 	ExecuteTurn(task string, role string, turnState *TurnState) TurnResult
-	WorkspaceState() string
+	WorkspaceState() platform.WorkspaceSnapshot
 	CheckpointWorkspace(dest string) bool
 }
 

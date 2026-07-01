@@ -31,7 +31,6 @@ var durationUnits = map[string]int{"s": 1, "m": 60, "h": 3600}
 type EnvironmentSpec struct {
 	Path                       string
 	Version                    string
-	PackageVersion             string
 	Name                       string
 	ExtendsPath                string
 	SkillPaths                 []string // nil means "not declared"
@@ -100,26 +99,12 @@ func LoadEnvironmentWithBase(specPath string, baseDir string) (*EnvironmentSpec,
 }
 
 func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*EnvironmentSpec, error) {
-	frontmatterVersion := requireStr(raw, "version", path)
-	schemaVersion := requireStr(raw, "schema", path)
-	packageVersion := requireStr(raw, "package_version", path)
-	if schemaVersion == "" {
-		if frontmatterVersion == "" {
-			return nil, fmt.Errorf("%s: missing required field 'version'", path)
-		}
-		if frontmatterVersion == "v0" {
-			schemaVersion = frontmatterVersion
-		} else {
-			schemaVersion = "v0"
-			if packageVersion == "" {
-				packageVersion = frontmatterVersion
-			}
-		}
-	} else if packageVersion == "" && frontmatterVersion != "" && frontmatterVersion != schemaVersion {
-		packageVersion = frontmatterVersion
+	version := requireStr(raw, "version", path)
+	if version == "" {
+		return nil, fmt.Errorf("%s: missing required field 'version'", path)
 	}
-	if schemaVersion != "v0" {
-		return nil, fmt.Errorf("unsupported schema '%s' (only 'v0' is valid)", schemaVersion)
+	if version != "v0" {
+		return nil, fmt.Errorf("unsupported version '%s' (only 'v0' is valid)", version)
 	}
 	name := requireStr(raw, "name", path)
 	if name == "" {
@@ -134,11 +119,10 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 	}
 
 	env := &EnvironmentSpec{
-		Path:           path,
-		Version:        schemaVersion,
-		PackageVersion: packageVersion,
-		Name:           name,
-		SpecText:       specBody,
+		Path:     path,
+		Version:  version,
+		Name:     name,
+		SpecText: specBody,
 	}
 
 	// extends

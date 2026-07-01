@@ -85,19 +85,51 @@ func flagNameSet(fs *flag.FlagSet, name string) bool {
 	return seen[name]
 }
 
+// budgetFlags carries the runtime budget flag values a caller observed, so the
+// resolvers can apply each one by name instead of decoding a positional,
+// count-dependent variadic. Zero fields fall back to env defaults during resolution.
+type budgetFlags struct {
+	MaxRounds       int
+	MaxDurationSec  int
+	MaxInputTokens  int
+	MaxOutputTokens int
+	MaxToolLoops    int
+	AgentTimeoutSec int
+}
+
 func resolveLocalRunConfigFromFlags(
 	fs *flag.FlagSet,
 	workspace string,
 	model string,
 	thinking string,
 	maxCostUSD float64,
-	agentTimeout int,
+	budget budgetFlags,
 ) (cli.LocalRunConfig, error) {
 	cost, err := positiveFloatOption(fs, "max-cost-usd", maxCostUSD, "TELOS_MAX_COST_USD", 20.0)
 	if err != nil {
 		return cli.LocalRunConfig{}, err
 	}
-	timeout, err := nonNegativeIntOption(fs, "agent-timeout-sec", agentTimeout, "TELOS_AGENT_TIMEOUT_SEC", 0)
+	rounds, err := nonNegativeIntOption(fs, "max-rounds", budget.MaxRounds, "TELOS_MAX_ROUNDS", 0)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
+	duration, err := nonNegativeIntOption(fs, "max-duration-sec", budget.MaxDurationSec, "TELOS_MAX_DURATION_SEC", 0)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
+	inputTokens, err := nonNegativeIntOption(fs, "max-input-tokens", budget.MaxInputTokens, "TELOS_MAX_INPUT_TOKENS", 0)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
+	outputTokens, err := nonNegativeIntOption(fs, "max-output-tokens", budget.MaxOutputTokens, "TELOS_MAX_OUTPUT_TOKENS", 0)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
+	toolLoops, err := nonNegativeIntOption(fs, "max-tool-loops", budget.MaxToolLoops, "TELOS_MAX_TOOL_LOOPS", 0)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
+	timeout, err := nonNegativeIntOption(fs, "agent-timeout-sec", budget.AgentTimeoutSec, "TELOS_AGENT_TIMEOUT_SEC", 0)
 	if err != nil {
 		return cli.LocalRunConfig{}, err
 	}
@@ -106,6 +138,11 @@ func resolveLocalRunConfigFromFlags(
 		Model:           modelOption(fs, model),
 		Thinking:        stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", "medium"),
 		MaxCostUSD:      &cost,
+		MaxRounds:       rounds,
+		MaxDurationSec:  duration,
+		MaxInputTokens:  inputTokens,
+		MaxOutputTokens: outputTokens,
+		MaxToolLoops:    toolLoops,
 		AgentTimeoutSec: timeout,
 	}, nil
 }
@@ -114,6 +151,11 @@ type sessionRuntimeConfig struct {
 	Model           string
 	Thinking        string
 	MaxCostUSD      *float64
+	MaxRounds       *int
+	MaxDurationSec  *int
+	MaxInputTokens  *int
+	MaxOutputTokens *int
+	MaxToolLoops    *int
 	AgentTimeoutSec *int
 }
 
@@ -122,7 +164,7 @@ func resolveSessionRuntimeConfigFromFlags(
 	model string,
 	thinking string,
 	maxCostUSD float64,
-	agentTimeout int,
+	budget budgetFlags,
 ) (sessionRuntimeConfig, error) {
 	cfg := sessionRuntimeConfig{
 		Model:    modelOption(fs, model),
@@ -135,8 +177,43 @@ func resolveSessionRuntimeConfigFromFlags(
 		}
 		cfg.MaxCostUSD = &cost
 	}
+	if flagNameSet(fs, "max-rounds") || strings.TrimSpace(os.Getenv("TELOS_MAX_ROUNDS")) != "" {
+		rounds, err := nonNegativeIntOption(fs, "max-rounds", budget.MaxRounds, "TELOS_MAX_ROUNDS", 0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.MaxRounds = &rounds
+	}
+	if flagNameSet(fs, "max-duration-sec") || strings.TrimSpace(os.Getenv("TELOS_MAX_DURATION_SEC")) != "" {
+		duration, err := nonNegativeIntOption(fs, "max-duration-sec", budget.MaxDurationSec, "TELOS_MAX_DURATION_SEC", 0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.MaxDurationSec = &duration
+	}
+	if flagNameSet(fs, "max-input-tokens") || strings.TrimSpace(os.Getenv("TELOS_MAX_INPUT_TOKENS")) != "" {
+		inputTokens, err := nonNegativeIntOption(fs, "max-input-tokens", budget.MaxInputTokens, "TELOS_MAX_INPUT_TOKENS", 0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.MaxInputTokens = &inputTokens
+	}
+	if flagNameSet(fs, "max-output-tokens") || strings.TrimSpace(os.Getenv("TELOS_MAX_OUTPUT_TOKENS")) != "" {
+		outputTokens, err := nonNegativeIntOption(fs, "max-output-tokens", budget.MaxOutputTokens, "TELOS_MAX_OUTPUT_TOKENS", 0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.MaxOutputTokens = &outputTokens
+	}
+	if flagNameSet(fs, "max-tool-loops") || strings.TrimSpace(os.Getenv("TELOS_MAX_TOOL_LOOPS")) != "" {
+		toolLoops, err := nonNegativeIntOption(fs, "max-tool-loops", budget.MaxToolLoops, "TELOS_MAX_TOOL_LOOPS", 0)
+		if err != nil {
+			return sessionRuntimeConfig{}, err
+		}
+		cfg.MaxToolLoops = &toolLoops
+	}
 	if flagNameSet(fs, "agent-timeout-sec") || strings.TrimSpace(os.Getenv("TELOS_AGENT_TIMEOUT_SEC")) != "" {
-		timeout, err := nonNegativeIntOption(fs, "agent-timeout-sec", agentTimeout, "TELOS_AGENT_TIMEOUT_SEC", 0)
+		timeout, err := nonNegativeIntOption(fs, "agent-timeout-sec", budget.AgentTimeoutSec, "TELOS_AGENT_TIMEOUT_SEC", 0)
 		if err != nil {
 			return sessionRuntimeConfig{}, err
 		}
@@ -155,9 +232,59 @@ func applySessionRuntimeConfig(req *sessionapi.SessionCreateRequest, cfg session
 	if cfg.MaxCostUSD != nil {
 		req.MaxCostUSD = cfg.MaxCostUSD
 	}
+	if cfg.MaxRounds != nil {
+		req.MaxRounds = cfg.MaxRounds
+	}
+	if cfg.MaxDurationSec != nil {
+		req.MaxDurationSec = cfg.MaxDurationSec
+	}
+	if cfg.MaxInputTokens != nil {
+		req.MaxInputTokens = cfg.MaxInputTokens
+	}
+	if cfg.MaxOutputTokens != nil {
+		req.MaxOutputTokens = cfg.MaxOutputTokens
+	}
+	if cfg.MaxToolLoops != nil {
+		req.MaxToolLoops = cfg.MaxToolLoops
+	}
 	if cfg.AgentTimeoutSec != nil {
 		req.AgentTimeoutSec = cfg.AgentTimeoutSec
 	}
+}
+
+// autocompactFlags carries the autocompaction knob values observed from flags.
+// These mirror the executor's TELOS_AUTOCOMPACT_* env knobs.
+type autocompactFlags struct {
+	ContextWindow    int
+	TriggerRatio     float64
+	KeepRecentTokens int
+}
+
+// exportAutocompactEnv writes any explicitly-set autocompaction flags into the
+// environment so the local worker subprocess — which reads TELOS_AUTOCOMPACT_*
+// in the executor and inherits the launcher's environment — picks them up.
+// Flags left unset preserve any existing env value. Cloud runs read these from
+// the cloud environment's config, not from these flags.
+func exportAutocompactEnv(fs *flag.FlagSet, vals autocompactFlags) error {
+	if flagNameSet(fs, "autocompact-context-window") {
+		if vals.ContextWindow < 0 {
+			return fmt.Errorf("--autocompact-context-window must be non-negative (0 disables compaction)")
+		}
+		os.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", strconv.Itoa(vals.ContextWindow))
+	}
+	if flagNameSet(fs, "autocompact-trigger-ratio") {
+		if vals.TriggerRatio <= 0 || vals.TriggerRatio > 1 {
+			return fmt.Errorf("--autocompact-trigger-ratio must be in (0, 1]")
+		}
+		os.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", strconv.FormatFloat(vals.TriggerRatio, 'g', -1, 64))
+	}
+	if flagNameSet(fs, "autocompact-keep-recent-tokens") {
+		if vals.KeepRecentTokens <= 0 {
+			return fmt.Errorf("--autocompact-keep-recent-tokens must be positive")
+		}
+		os.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", strconv.Itoa(vals.KeepRecentTokens))
+	}
+	return nil
 }
 
 func untilFlagValue(fs *flag.FlagSet, value int) (int, error) {

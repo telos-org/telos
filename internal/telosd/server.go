@@ -33,17 +33,13 @@ func Run(ctx context.Context, cfg Config) error {
 	baseStore := storeForConfig(cfg)
 	store := sessionapi.Store(baseStore)
 	if cfg.Mode == ModeCloud {
-		routeClient, err := kubernetesClient()
+		substrate, err := newKubernetesSubstrate(cfg)
 		if err != nil {
 			return err
 		}
-		substrate, err := newSessionSubstrate(cfg)
-		if err != nil {
-			return err
-		}
-		startRouteReconciler(ctx, routeClient)
+		startRouteReconciler(ctx, substrate.client)
 		store = newCloudSessionStore(baseStore, newRouteHandleResolver(), substrate)
-		startDeploymentBootstrapReconciler(ctx, store)
+		startControlSessionReconciler(ctx, store, cfg)
 	}
 	mux := http.NewServeMux()
 	authorizer := authorizerForConfig(cfg, baseStore)
@@ -60,7 +56,6 @@ func Run(ctx context.Context, cfg Config) error {
 	})
 	if cfg.Mode == ModeCloud {
 		handler = withCloudCORS(handler)
-		handler = newSurfaceGateway(cfg.Auth.Token, newRouteHandleResolver()).Wrap(handler)
 	}
 	srv := &http.Server{
 		Handler:           handler,
@@ -91,9 +86,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 func storeForConfig(cfg Config) *sessionapi.FileStore {
 	if cfg.Mode == ModeCloud {
-		store := sessionapi.NewFileStore(SessionsRoot(cfg.Root), sessionapi.RuntimeCloud)
-		store.PackageRoot = os.Getenv("TELOS_PACKAGE_ROOT")
-		return store
+		return sessionapi.NewFileStore(SessionsRoot(cfg.Root), sessionapi.RuntimeCloud)
 	}
 	return sessionapi.NewFileStore(SessionsRoot(cfg.Root), sessionapi.RuntimeLocal)
 }
@@ -141,7 +134,7 @@ func withCloudCORS(next http.HandlerFunc) http.HandlerFunc {
 		if origin := r.Header.Get("Origin"); cloudAllowedOrigin.MatchString(origin) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Credentials", "true")
-			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, Accept, X-Telos-User-Authorization")
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
 			w.Header().Add("Vary", "Origin")
 		}

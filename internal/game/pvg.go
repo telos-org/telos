@@ -5,10 +5,15 @@ import (
 	"log"
 
 	"github.com/telos-org/telos/internal/evidence"
+	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/spec"
 )
 
-const maxRecoverableAgentFailures = 3
+const (
+	maxRecoverableAgentFailures = 3
+	DefaultMaxRounds            = 100
+	DefaultMaxDurationSec       = 6 * 60 * 60
+)
 
 // PVG runs the prover-verifier loop for one compiled environment.
 type PVG struct {
@@ -73,7 +78,7 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 
 func (p *PVG) runDefaultLoop() *PVGResult {
 	promptOpts := p.promptOptions()
-	workspace := ""
+	workspace := platform.WorkspaceSnapshot{}
 	recoverableFailures := 0
 
 	for {
@@ -126,7 +131,7 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 
 func (p *PVG) runFixedReviewLoop() *PVGResult {
 	promptOpts := p.promptOptions()
-	workspace := ""
+	workspace := platform.WorkspaceSnapshot{}
 	recoverableFailures := 0
 	reviewsCompleted := 0
 
@@ -177,7 +182,7 @@ func (p *PVG) runFixedReviewLoop() *PVGResult {
 	return p.end(GameSuccess)
 }
 
-func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions) TurnResult {
+func (p *PVG) runProverTurn(workspace platform.WorkspaceSnapshot, promptOpts spec.PromptOptions) TurnResult {
 	p.Result.Rounds++
 	p.Result.ProverRounds++
 	roundNum := p.Result.Rounds
@@ -187,7 +192,7 @@ func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions) Tur
 	return p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task)
 }
 
-func (p *PVG) runVerifierTurn(workspace string, promptOpts spec.PromptOptions) TurnResult {
+func (p *PVG) runVerifierTurn(workspace platform.WorkspaceSnapshot, promptOpts spec.PromptOptions) TurnResult {
 	p.Result.Rounds++
 	p.Result.VerifierRounds++
 	roundNum := p.Result.Rounds

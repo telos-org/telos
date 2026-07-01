@@ -11,6 +11,7 @@ import (
 )
 
 const maxSessionRequestBytes = 4 << 20
+const forwardedUserAuthorizationHeader = "X-Telos-User-Authorization"
 
 // RegisterRoutes mounts the canonical Sessions API routes onto the given mux.
 //
@@ -24,6 +25,7 @@ const maxSessionRequestBytes = 4 << 20
 //	POST /api/sessions/{id}/stop
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
+//	GET  /api/sessions/{id}/diagnostics
 //	GET  /api/sessions/{id}/workspace/{spec}
 //	GET  /api/healthz
 func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer) {
@@ -41,6 +43,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer) {
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
+	mux.HandleFunc("GET /api/sessions/{id}/diagnostics", h.getDiagnostics)
 	mux.HandleFunc("GET /api/sessions/{id}/workspace/{spec}", h.getWorkspace)
 }
 
@@ -65,6 +68,7 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.UserAuthorization = r.Header.Get(forwardedUserAuthorizationHeader)
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionCreateSession, CreateRequest: &req}); !ok {
 		return
 	}
@@ -114,6 +118,7 @@ func (h *handler) updateSpec(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
+	req.UserAuthorization = r.Header.Get(forwardedUserAuthorizationHeader)
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionUpdateSessionSpec}); !ok {
 		return
 	}
@@ -273,6 +278,23 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 		events = []SessionEvent{}
 	}
 	writeJSON(w, http.StatusOK, SessionEventsResponse{Events: events})
+}
+
+func (h *handler) getDiagnostics(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
+		return
+	}
+	diagnostics, err := h.store.Diagnostics(id)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, diagnostics)
 }
 
 func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string) {

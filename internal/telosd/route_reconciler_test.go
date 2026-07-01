@@ -91,7 +91,7 @@ func TestReconcileTunnelRoutesPublishesEnvAndProductRoutes(t *testing.T) {
 		"hostname: fresh-env.usetelos.ai",
 		"service: " + envAPIService,
 		"hostname: postgres.usetelos.ai",
-		"service: " + envAPIService,
+		"service: http://dashboard.ns-postgres.svc.cluster.local:8080",
 	} {
 		if !strings.Contains(rendered, want) {
 			t.Fatalf("rendered tunnel config missing %q:\n%s", want, rendered)

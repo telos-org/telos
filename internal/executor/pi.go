@@ -10,15 +10,19 @@ import (
 	"strings"
 
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/gateway"
 	"github.com/telos-org/telos/internal/platform"
 )
 
 // PiExecutor runs Pi as one PVG agent turn on the given LocalPlatform.
 type PiExecutor struct {
-	Platform *platform.LocalPlatform
-	Model    string
-	Thinking string
-	Timeout  int
+	Platform           *platform.LocalPlatform
+	Model              string
+	Thinking           string
+	Timeout            int
+	GatewayEnv         map[string]string
+	GatewayCleanup     func() error
+	CostHardLimitValue bool
 }
 
 // NewPiExecutor creates a new Pi executor.
@@ -32,6 +36,42 @@ func NewPiExecutor(p *platform.LocalPlatform, model, thinking string, timeout in
 		Thinking: thinking,
 		Timeout:  timeout,
 	}
+}
+
+// ConfigureGateway injects an OpenAI-compatible gateway into the Pi process.
+func (pe *PiExecutor) ConfigureGateway(cred gateway.Credential) error {
+	if cred.Transport == gateway.TransportBifrostAsync {
+		if cred.Cleanup != nil {
+			_ = cred.Cleanup()
+		}
+		return fmt.Errorf("bifrost_async transport requires the native executor (not available in this build); configure openai_sync instead")
+	}
+	if strings.TrimSpace(cred.BaseURL) == "" || strings.TrimSpace(cred.APIKey) == "" {
+		if cred.Cleanup != nil {
+			_ = cred.Cleanup()
+		}
+		return fmt.Errorf("gateway returned incomplete OpenAI-compatible credentials")
+	}
+	pe.GatewayEnv = map[string]string{
+		"OPENAI_API_KEY":  strings.TrimSpace(cred.APIKey),
+		"OPENAI_BASE_URL": strings.TrimRight(strings.TrimSpace(cred.BaseURL), "/"),
+	}
+	pe.GatewayCleanup = cred.Cleanup
+	pe.CostHardLimitValue = cred.CostHardLimit
+	return nil
+}
+
+// Cleanup reconciles managed gateway usage, when this executor owns a session key.
+func (pe *PiExecutor) Cleanup() error {
+	if pe.GatewayCleanup == nil {
+		return nil
+	}
+	return pe.GatewayCleanup()
+}
+
+// CostHardLimit reports whether the active gateway enforces cost caps server-side.
+func (pe *PiExecutor) CostHardLimit() bool {
+	return pe.CostHardLimitValue
 }
 
 // ExecuteTurn runs one Pi agent turn.
@@ -53,7 +93,11 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	if taskPath != "" {
 		taskEnv = ""
 	}
-	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, nil)
+	env := map[string]string{"TELOS_ROLE": role}
+	for k, v := range pe.GatewayEnv {
+		env[k] = v
+	}
+	result := pe.Platform.Run(argv, taskEnv, env, pe.Timeout, stopRequested, nil, "")
 
 	logs := strings.Join(result.RawLines, "\n")
 	if sessionPath != "" {
@@ -136,8 +180,8 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 }
 
 // WorkspaceState returns the workspace state from the platform.
-func (pe *PiExecutor) WorkspaceState() string {
-	return pe.Platform.WorkspaceState()
+func (pe *PiExecutor) WorkspaceState() platform.WorkspaceSnapshot {
+	return pe.Platform.WorkspaceSnapshot()
 }
 
 // CheckpointWorkspace creates a workspace checkpoint.

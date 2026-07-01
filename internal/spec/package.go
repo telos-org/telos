@@ -5,15 +5,17 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/sha256"
-	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+
+	"gopkg.in/yaml.v3"
 )
 
 const ApplyPackageSchemaVersion = 1
@@ -26,34 +28,41 @@ type ApplyPackageOptions struct {
 
 // ApplyPackage is an immutable bundle of the root spec and resolved skills.
 type ApplyPackage struct {
-	Digest   string
-	Bytes    []byte
-	Manifest ApplyPackageManifest
+	Digest string
+	Bytes  []byte
+	Lock   ApplyPackageLock
 }
 
 type ApplyPackageSpecEntry struct {
-	Digest string `json:"digest"`
+	Name   string `yaml:"name" json:"name"`
+	Path   string `yaml:"path" json:"path"`
+	Digest string `yaml:"digest" json:"digest"`
 }
 
 type ApplyPackageSkillEntry struct {
-	Name   string                  `json:"-"`
-	Digest string                  `json:"digest"`
-	Files  []ApplyPackageFileEntry `json:"-"`
+	Name     string                  `yaml:"name" json:"name"`
+	Ref      string                  `yaml:"ref" json:"ref"`
+	Digest   string                  `yaml:"digest" json:"digest"`
+	Required bool                    `yaml:"required" json:"required"`
+	Path     string                  `yaml:"path" json:"path"`
+	Files    []ApplyPackageFileEntry `yaml:"files" json:"files"`
 }
 
 type ApplyPackageFileEntry struct {
-	Path   string `json:"path"`
-	Mode   string `json:"mode"`
-	Digest string `json:"digest"`
+	Path   string `yaml:"path" json:"path"`
+	Mode   string `yaml:"mode" json:"mode"`
+	Digest string `yaml:"digest" json:"digest"`
 }
 
-// ApplyPackageManifest records the immutable inputs used by the package.
-type ApplyPackageManifest struct {
-	SchemaVersion int                   `json:"schema_version"`
-	Spec          ApplyPackageSpecEntry `json:"spec"`
-	Skills        map[string]string     `json:"skills"`
-	Compiler      string                `json:"compiler,omitempty"`
-	Runtime       string                `json:"runtime,omitempty"`
+// ApplyPackageLock records the immutable inputs used by the package.
+type ApplyPackageLock struct {
+	SchemaVersion   int                      `yaml:"schema_version" json:"schema_version"`
+	RootSpecPath    string                   `yaml:"root_spec_path" json:"root_spec_path"`
+	Spec            ApplyPackageSpecEntry    `yaml:"spec" json:"spec"`
+	Skills          []ApplyPackageSkillEntry `yaml:"skills" json:"skills"`
+	CompilerVersion string                   `yaml:"compiler_version" json:"compiler_version"`
+	RuntimeVersion  string                   `yaml:"runtime_version,omitempty" json:"runtime_version,omitempty"`
+	PackageDigest   string                   `yaml:"package_digest" json:"package_digest"`
 }
 
 type packageFile struct {
@@ -63,7 +72,7 @@ type packageFile struct {
 }
 
 // BuildApplyPackage creates a deterministic tar.gz containing the root spec,
-// resolved skills, and manifest.json.
+// resolved skills, and manifest-lock.yaml.
 func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) (*ApplyPackage, error) {
 	if compiled == nil || compiled.Environment == nil {
 		return nil, fmt.Errorf("compiled environment is required")
@@ -78,6 +87,8 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 		return nil, fmt.Errorf("read root spec: %w", err)
 	}
 	specEntry := ApplyPackageSpecEntry{
+		Name:   compiled.Environment.Name,
+		Path:   "SPEC.md",
 		Digest: digestBytes(specData),
 	}
 
@@ -87,7 +98,7 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 	}
 
 	packageFiles := []packageFile{{
-		path: "SPEC.md",
+		path: specEntry.Path,
 		mode: 0o644,
 		data: specData,
 	}}
@@ -102,45 +113,44 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 	}
 
 	runtimeVersion := strings.TrimSpace(opts.RuntimeVersion)
-	manifest := ApplyPackageManifest{
-		SchemaVersion: ApplyPackageSchemaVersion,
-		Spec:          specEntry,
-		Skills:        skillDigestMap(skillEntries),
-		Compiler:      "telos@" + compilerVersion,
-		Runtime:       runtimeVersion,
+	packageDigest := digestPackage(specEntry.Digest, skillEntries, compilerVersion, runtimeVersion)
+	lock := ApplyPackageLock{
+		SchemaVersion:   ApplyPackageSchemaVersion,
+		RootSpecPath:    specEntry.Path,
+		Spec:            specEntry,
+		Skills:          skillEntries,
+		CompilerVersion: compilerVersion,
+		RuntimeVersion:  runtimeVersion,
+		PackageDigest:   packageDigest,
 	}
-	packageDigest := digestPackage(specEntry.Digest, manifest.Skills)
 
-	manifestData, err := json.MarshalIndent(manifest, "", "  ")
+	lockData, err := yaml.Marshal(lock)
 	if err != nil {
-		return nil, fmt.Errorf("marshal manifest: %w", err)
+		return nil, fmt.Errorf("marshal lock: %w", err)
 	}
-	manifestData = append(manifestData, '\n')
-	packageFiles = append(packageFiles, packageFile{path: "manifest.json", mode: 0o644, data: manifestData})
+	packageFiles = append(packageFiles, packageFile{path: "manifest-lock.yaml", mode: 0o644, data: lockData})
 
 	data, err := writePackageTar(packageFiles)
 	if err != nil {
 		return nil, err
 	}
 	return &ApplyPackage{
-		Digest:   packageDigest,
-		Bytes:    data,
-		Manifest: manifest,
+		Digest: packageDigest,
+		Bytes:  data,
+		Lock:   lock,
 	}, nil
 }
 
-// ExtractApplyPackage expands an apply package into dest and returns its manifest.
-func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageManifest, error) {
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return nil, fmt.Errorf("create package dir: %w", err)
-	}
+// ExtractApplyPackage expands an apply package into dest and returns its lock.
+func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageLock, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, fmt.Errorf("open apply package: %w", err)
 	}
 	defer gz.Close()
 
-	var manifestData []byte
+	var lockData []byte
+	entries := map[string]packageFile{}
 	tr := tar.NewReader(gz)
 	for {
 		header, err := tr.Next()
@@ -157,10 +167,6 @@ func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageManifest, error
 		if err != nil {
 			return nil, err
 		}
-		path := filepath.Join(dest, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return nil, fmt.Errorf("create package entry dir: %w", err)
-		}
 		fileData, err := io.ReadAll(tr)
 		if err != nil {
 			return nil, fmt.Errorf("read apply package entry %q: %w", name, err)
@@ -169,24 +175,138 @@ func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageManifest, error
 		if mode == 0 {
 			mode = 0o644
 		}
-		if err := os.WriteFile(path, fileData, mode); err != nil {
+		if _, exists := entries[name]; exists {
+			return nil, fmt.Errorf("duplicate apply package entry %q", name)
+		}
+		entries[name] = packageFile{
+			path: name,
+			mode: int64(mode),
+			data: fileData,
+		}
+		if name == "manifest-lock.yaml" {
+			lockData = fileData
+		}
+	}
+	if len(lockData) == 0 {
+		return nil, fmt.Errorf("apply package missing manifest-lock.yaml")
+	}
+	var lock ApplyPackageLock
+	if err := yaml.Unmarshal(lockData, &lock); err != nil {
+		return nil, fmt.Errorf("parse manifest-lock.yaml: %w", err)
+	}
+	if lock.RootSpecPath == "" {
+		return nil, fmt.Errorf("manifest-lock.yaml missing root_spec_path")
+	}
+	if lock.PackageDigest == "" {
+		return nil, fmt.Errorf("manifest-lock.yaml missing package_digest")
+	}
+	if err := validateApplyPackageEntries(entries, &lock); err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return nil, fmt.Errorf("create package dir: %w", err)
+	}
+	names := make([]string, 0, len(entries))
+	for name := range entries {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		entry := entries[name]
+		path := filepath.Join(dest, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return nil, fmt.Errorf("create package entry dir: %w", err)
+		}
+		if err := os.WriteFile(path, entry.data, fs.FileMode(entry.mode).Perm()); err != nil {
 			return nil, fmt.Errorf("write apply package entry %q: %w", name, err)
 		}
-		if name == "manifest.json" {
-			manifestData = fileData
+	}
+	return &lock, nil
+}
+
+func validateApplyPackageEntries(entries map[string]packageFile, lock *ApplyPackageLock) error {
+	if lock.SchemaVersion != ApplyPackageSchemaVersion {
+		return fmt.Errorf("unsupported apply package schema_version %d", lock.SchemaVersion)
+	}
+	rootSpecPath, err := safePackageEntry(lock.RootSpecPath)
+	if err != nil {
+		return err
+	}
+	if lock.Spec.Path != rootSpecPath {
+		return fmt.Errorf("manifest-lock.yaml root_spec_path %q does not match spec path %q", lock.RootSpecPath, lock.Spec.Path)
+	}
+	rootSpec, ok := entries[rootSpecPath]
+	if !ok {
+		return fmt.Errorf("apply package missing root spec %q", rootSpecPath)
+	}
+	if got := digestBytes(rootSpec.data); got != lock.Spec.Digest {
+		return fmt.Errorf("root spec digest %q does not match manifest-lock.yaml digest %q", got, lock.Spec.Digest)
+	}
+
+	expectedEntries := map[string]bool{
+		"manifest-lock.yaml": true,
+		rootSpecPath:         true,
+	}
+	skillNames := map[string]bool{}
+	for _, skill := range lock.Skills {
+		if skillNames[skill.Name] {
+			return fmt.Errorf("duplicate apply package skill %q", skill.Name)
+		}
+		skillNames[skill.Name] = true
+		skillPathName, err := packagePathName(skill.Name)
+		if err != nil {
+			return err
+		}
+		expectedSkillPath := filepath.ToSlash(filepath.Join("skills", skillPathName))
+		if skill.Path != expectedSkillPath {
+			return fmt.Errorf("skill %q path %q does not match expected package path %q", skill.Name, skill.Path, expectedSkillPath)
+		}
+		filePaths := map[string]bool{}
+		for _, file := range skill.Files {
+			filePath, err := safePackageEntry(file.Path)
+			if err != nil {
+				return err
+			}
+			if filePath != file.Path {
+				return fmt.Errorf("skill %q file path %q is not normalized", skill.Name, file.Path)
+			}
+			if filePaths[filePath] {
+				return fmt.Errorf("duplicate file %q in skill %q", filePath, skill.Name)
+			}
+			filePaths[filePath] = true
+			mode, err := parsePackageMode(file.Mode)
+			if err != nil {
+				return fmt.Errorf("skill %q file %q has invalid mode: %w", skill.Name, filePath, err)
+			}
+			if file.Mode != packageModeString(mode) {
+				return fmt.Errorf("skill %q file %q mode %q is not normalized", skill.Name, filePath, file.Mode)
+			}
+			entryPath := filepath.ToSlash(filepath.Join(skill.Path, filePath))
+			entry, ok := entries[entryPath]
+			if !ok {
+				return fmt.Errorf("apply package missing skill file %q", entryPath)
+			}
+			expectedEntries[entryPath] = true
+			if entry.mode != mode {
+				return fmt.Errorf("skill file %q mode %s does not match manifest-lock.yaml mode %s", entryPath, packageModeString(entry.mode), file.Mode)
+			}
+			if got := digestFile(filePath, mode, entry.data); got != file.Digest {
+				return fmt.Errorf("skill file %q digest %q does not match manifest-lock.yaml digest %q", entryPath, got, file.Digest)
+			}
+		}
+		if got := digestSkill(skill.Name, skill.Files); got != skill.Digest {
+			return fmt.Errorf("skill %q digest %q does not match manifest-lock.yaml digest %q", skill.Name, got, skill.Digest)
 		}
 	}
-	if len(manifestData) == 0 {
-		return nil, fmt.Errorf("apply package missing manifest.json")
+	for name := range entries {
+		if !expectedEntries[name] {
+			return fmt.Errorf("unlisted apply package entry %q", name)
+		}
 	}
-	var manifest ApplyPackageManifest
-	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return nil, fmt.Errorf("parse manifest.json: %w", err)
+	if got := digestPackage(lock.Spec.Digest, lock.Skills, lock.CompilerVersion, lock.RuntimeVersion); got != lock.PackageDigest {
+		return fmt.Errorf("computed package digest %q does not match manifest-lock.yaml digest %q", got, lock.PackageDigest)
 	}
-	if manifest.Spec.Digest == "" {
-		return nil, fmt.Errorf("manifest.json missing spec digest")
-	}
-	return &manifest, nil
+	return nil
 }
 
 func packageSkill(skill *Skill, required bool) (ApplyPackageSkillEntry, []packageFile, error) {
@@ -213,7 +333,7 @@ func packageSkill(skill *Skill, required bool) (ApplyPackageSkillEntry, []packag
 		fileDigest := digestFile(file.path, file.mode, file.data)
 		fileEntries = append(fileEntries, ApplyPackageFileEntry{
 			Path:   file.path,
-			Mode:   fmt.Sprintf("%04o", file.mode),
+			Mode:   packageModeString(file.mode),
 			Digest: fileDigest,
 		})
 		packaged = append(packaged, packageFile{
@@ -223,11 +343,13 @@ func packageSkill(skill *Skill, required bool) (ApplyPackageSkillEntry, []packag
 		})
 	}
 	entry := ApplyPackageSkillEntry{
-		Name:   skill.Name,
-		Digest: digestSkill(skill.Name, fileEntries),
-		Files:  fileEntries,
+		Name:     skill.Name,
+		Ref:      skill.Name,
+		Digest:   digestSkill(skill.Name, fileEntries),
+		Required: required,
+		Path:     filepath.ToSlash(filepath.Join("skills", skillPathName)),
+		Files:    fileEntries,
 	}
-	_ = required
 	return entry, packaged, nil
 }
 
@@ -308,9 +430,21 @@ func digestBytes(data []byte) string {
 func digestFile(path string, mode int64, data []byte) string {
 	h := sha256.New()
 	writeDigestPart(h, filepath.ToSlash(path))
-	writeDigestPart(h, fmt.Sprintf("%04o", mode))
+	writeDigestPart(h, packageModeString(mode))
 	h.Write(data)
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))
+}
+
+func parsePackageMode(mode string) (int64, error) {
+	parsed, err := strconv.ParseInt(mode, 8, 64)
+	if err != nil {
+		return 0, err
+	}
+	return int64(fs.FileMode(parsed).Perm()), nil
+}
+
+func packageModeString(mode int64) string {
+	return fmt.Sprintf("%04o", fs.FileMode(mode).Perm())
 }
 
 func digestSkill(name string, files []ApplyPackageFileEntry) string {
@@ -324,26 +458,17 @@ func digestSkill(name string, files []ApplyPackageFileEntry) string {
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }
 
-func skillDigestMap(skills []ApplyPackageSkillEntry) map[string]string {
-	out := make(map[string]string, len(skills))
-	for _, skill := range skills {
-		out[skill.Name] = skill.Digest
-	}
-	return out
-}
-
-func digestPackage(specDigest string, skills map[string]string) string {
+func digestPackage(specDigest string, skills []ApplyPackageSkillEntry, compilerVersion, runtimeVersion string) string {
 	h := sha256.New()
 	writeDigestPart(h, fmt.Sprintf("schema:%d", ApplyPackageSchemaVersion))
+	writeDigestPart(h, "compiler:"+compilerVersion)
+	writeDigestPart(h, "runtime:"+runtimeVersion)
 	writeDigestPart(h, "spec:"+specDigest)
-	names := make([]string, 0, len(skills))
-	for name := range skills {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		writeDigestPart(h, name)
-		writeDigestPart(h, skills[name])
+	sorted := append([]ApplyPackageSkillEntry{}, skills...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
+	for _, skill := range sorted {
+		writeDigestPart(h, skill.Name)
+		writeDigestPart(h, skill.Digest)
 	}
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }

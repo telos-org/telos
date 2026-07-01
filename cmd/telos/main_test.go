@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -70,7 +71,7 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root")
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", "")
 	text := out.String()
 	for _, want := range []string{
 		"Spec      hello-service",
@@ -104,7 +105,7 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root")
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", "env_123")
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",
@@ -115,11 +116,468 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 		"Namespace ns-gitea",
 		"Hash      8a8f0c21",
 		"Skills    verify-engineering, verify-quality",
-		"Target    cloud deployment",
+		"Target    env_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("plan output missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestPrintSessionDescriptionShowsRuntimeAndLedger(t *testing.T) {
+	status := sessionapi.StatusCompleted
+	kind := sessionapi.KindTask
+	created := "2026-06-19T10:00:00.000Z"
+	finished := "2026-06-19T10:05:00.000Z"
+	specName := "demo"
+	workspacePath := filepath.Join(t.TempDir(), "workspace.tar.gz")
+	evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
+	transcriptPath := filepath.Join(t.TempDir(), "transcript.md")
+	ledgerPath := filepath.Join(t.TempDir(), "objective-ledger.json")
+	exists := true
+	totalInput := 1234
+	totalOutput := 567
+	totalCacheRead := 89
+	totalCacheWrite := 10
+	errText := "runtime_budget_exhausted:max_rounds"
+	errCode := "runtime_budget_exhausted"
+	session := sessionapi.Session{
+		SessionID:              "local_123",
+		SessionKind:            &kind,
+		SpecName:               &specName,
+		Status:                 status,
+		CreatedAt:              &created,
+		FinishedAt:             &finished,
+		Runtime:                sessionapi.RuntimeLocal,
+		Config:                 map[string]any{"model": "test/model", "thinking": "high", "max_rounds": 9.0, "max_input_tokens": 100000.0, "max_output_tokens": 20000.0, "max_tool_loops": 55.0, "agent_timeout_sec": 120.0},
+		Error:                  &errText,
+		ErrorCode:              &errCode,
+		TotalInputTokens:       &totalInput,
+		TotalOutputTokens:      &totalOutput,
+		TotalCacheReadTokens:   &totalCacheRead,
+		TotalCacheCreateTokens: &totalCacheWrite,
+		Specs: []sessionapi.SessionSpec{{
+			Name:                  &specName,
+			WorkspacePath:         &workspacePath,
+			WorkspaceExists:       &exists,
+			EvidencePath:          &evidencePath,
+			EvidenceExists:        &exists,
+			TranscriptPath:        &transcriptPath,
+			TranscriptExists:      &exists,
+			ObjectiveLedgerPath:   &ledgerPath,
+			ObjectiveLedgerExists: &exists,
+		}},
+	}
+
+	var out bytes.Buffer
+	printSessionDescription(&out, session)
+	text := out.String()
+	for _, want := range []string{
+		"Runtime",
+		"model          test/model",
+		"thinking       high",
+		"budgets        rounds 9, input 100000, output 20000, tool-loops 55, agent-timeout 120s",
+		"error code     runtime_budget_exhausted",
+		"tokens         input 1234, output 567, cache-read 89, cache-write 10",
+		"demo ledger    file://",
+		"objective-ledger.json",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("describe output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestAnalyzeSessionEventsBuildsFailureTaxonomy(t *testing.T) {
+	specName := "demo"
+	roleVerifier := "verifier"
+	roundOne := 1
+	cost := 1.25
+	input := 1000
+	output := 500
+	rounds := 2
+	completion := "runtime_budget_exhausted"
+	costUnavailable := true
+	session := &sessionapi.Session{
+		SessionID:         "local_123",
+		Status:            sessionapi.StatusFailed,
+		Config:            map[string]any{},
+		TotalCostUSD:      &cost,
+		CostUnavailable:   &costUnavailable,
+		TotalInputTokens:  &input,
+		TotalOutputTokens: &output,
+		RoundCount:        &rounds,
+		CompletionReason:  &completion,
+		Specs: []sessionapi.SessionSpec{{
+			Name: &specName,
+		}},
+	}
+	events := []sessionapi.SessionEvent{
+		{Event: "agent_complete", SpecName: &specName, Round: &roundOne, Role: &roleVerifier, Data: map[string]any{"status": "CONTINUE"}},
+		{Event: "agent_failure_recoverable", SpecName: &specName, Data: map[string]any{"error_code": "provider_rate_limited", "error": "retry later"}},
+		{Event: "agent_failure_recoverable", SpecName: &specName, Data: map[string]any{"error_code": "agent_protocol", "error": "missing status"}},
+		{Event: "game_error", SpecName: &specName, Data: map[string]any{"error": "official verifier rejected benchmark output"}},
+		{Event: "budget_exceeded", SpecName: &specName, Data: map[string]any{"budget": "max_input_tokens"}},
+		{Event: "cost_cap_unenforceable", SpecName: &specName, Data: map[string]any{"max_cost_usd": 10.0}},
+		{Event: "game_end", SpecName: &specName, Data: map[string]any{
+			"game_result":         "failure",
+			"completion_reason":   "runtime_budget_exhausted",
+			"prover_rounds":       1.0,
+			"verifier_rounds":     1.0,
+			"total_cost_usd":      1.25,
+			"cost_unavailable":    true,
+			"total_input_tokens":  1000.0,
+			"total_output_tokens": 500.0,
+			"error":               "runtime_budget_exhausted:max_input_tokens",
+		}},
+	}
+
+	analysis := analyzeSessionEvents(session, events)
+	diagnosticsAnalysis := analyzeSessionDiagnostics(sessionapi.DiagnosticsFromEvents(session, events))
+	if !reflect.DeepEqual(analysis, diagnosticsAnalysis) {
+		t.Fatalf("events and diagnostics analysis diverged\nevents: %#v\ndiagnostics: %#v", analysis, diagnosticsAnalysis)
+	}
+	if analysis.Failures["verifier_rejection"] != 1 {
+		t.Fatalf("verifier rejection count: %#v", analysis.Failures)
+	}
+	if analysis.Failures["provider"] != 1 {
+		t.Fatalf("provider count: %#v", analysis.Failures)
+	}
+	if analysis.Failures["task_budget"] != 2 {
+		t.Fatalf("task budget count: %#v", analysis.Failures)
+	}
+	if analysis.Failures["benchmark_verifier_failure"] != 1 {
+		t.Fatalf("benchmark verifier count: %#v", analysis.Failures)
+	}
+	if analysis.Failures["protocol"] != 1 {
+		t.Fatalf("protocol count: %#v", analysis.Failures)
+	}
+	if analysis.Budgets["max_input_tokens"] != 1 || analysis.Budgets["cost_cap_unenforceable"] != 1 {
+		t.Fatalf("budget counts: %#v", analysis.Budgets)
+	}
+	if !analysis.CostUnavailable {
+		t.Fatalf("cost unavailable should be carried through: %#v", analysis)
+	}
+	if len(analysis.Specs) != 1 || analysis.Specs[0].Failures["provider"] != 1 {
+		t.Fatalf("spec analysis: %#v", analysis.Specs)
+	}
+
+	var out bytes.Buffer
+	printSessionAnalysis(&out, analysis)
+	text := out.String()
+	for _, want := range []string{"$1.2500 (unavailable)", "Failure Taxonomy", "provider", "protocol", "task_budget", "benchmark_verifier_failure", "Budget Limits", "max_input_tokens", "cost_cap_unenforceable", "Specs"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("analysis output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestAnalyzeSessionDiagnosticsIncludesRetriesStopsAndArtifacts(t *testing.T) {
+	result := "failure"
+	completion := "runtime_budget_exhausted"
+	diagnostics := &sessionapi.SessionDiagnosticsResponse{
+		SessionID:        "local_diag",
+		Status:           sessionapi.StatusFailed,
+		Result:           &result,
+		CompletionReason: &completion,
+		Totals: sessionapi.SessionDiagnosticsTotals{
+			CostUSD:         0.42,
+			CostUnavailable: true,
+			InputTokens:     1300,
+			OutputTokens:    210,
+			Rounds:          2,
+		},
+		Failures:         map[string]int{"provider": 1, "task_budget": 1},
+		BudgetExceeded:   map[string]int{"max_input_tokens": 1},
+		StopReasons:      map[string]int{"tool_calls": 1},
+		SessionLogEvents: map[string]int{"tool_result": 2, "outside_workspace_access": 1},
+		Retries: []sessionapi.SessionRetryDiagnostics{{
+			SpecName:           "demo",
+			TurnID:             "0001-prover",
+			Sequence:           1,
+			Attempt:            2,
+			DelayMS:            250,
+			ErrorCode:          "provider_rate_limited",
+			ProviderStatusCode: 429,
+		}},
+		Errors: []sessionapi.SessionErrorDiagnostics{{
+			SpecName:  "demo",
+			TurnID:    "0001-prover",
+			Sequence:  2,
+			ErrorCode: "agent_incomplete",
+			Error:     "agent_incomplete:max_output_tokens",
+		}},
+		OutsideWorkspace: []sessionapi.SessionOutsideWorkspaceAccessDiagnostics{{
+			SpecName: "demo",
+			TurnID:   "0001-prover",
+			Action:   "write_file",
+			Path:     "/tmp/telos-scratch/out.txt",
+			Write:    true,
+		}},
+		Artifacts: []sessionapi.SessionArtifactDiagnostics{{
+			SpecName:              "demo",
+			EvidenceExists:        true,
+			TranscriptExists:      true,
+			ObjectiveLedgerExists: true,
+			WorkspaceExists:       false,
+		}},
+		Specs: []sessionapi.SessionSpecDiagnostics{{
+			Name:             "demo",
+			Result:           "failure",
+			CompletionReason: "runtime_budget_exhausted",
+			Totals: sessionapi.SessionDiagnosticsTotals{
+				CostUnavailable: true,
+				InputTokens:     1300,
+				OutputTokens:    210,
+				Rounds:          2,
+			},
+			Failures: map[string]int{"provider": 1},
+		}},
+	}
+
+	analysis := analyzeSessionDiagnostics(diagnostics)
+	if analysis.StopReasons["tool_calls"] != 1 || analysis.SessionLogEvents["tool_result"] != 2 || len(analysis.Retries) != 1 || len(analysis.OutsideWorkspace) != 1 || len(analysis.Artifacts) != 1 {
+		t.Fatalf("diagnostics analysis missing rich fields: %#v", analysis)
+	}
+	if !analysis.CostUnavailable || len(analysis.Specs) != 1 || !analysis.Specs[0].CostUnavailable {
+		t.Fatalf("cost unavailable not surfaced: %#v", analysis)
+	}
+	var out bytes.Buffer
+	printSessionAnalysis(&out, analysis)
+	text := out.String()
+	for _, want := range []string{"$0.4200 (unavailable)", "Stop Reasons", "tool_calls", "Session Log Events", "tool_result", "Retries", "provider_rate_limited", "Errors", "agent_incomplete", "Outside Workspace Access", "/tmp/telos-scratch/out.txt", "Artifacts", "demo"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("diagnostics output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestAnalyzeSessionSetBuildsBenchmarkDistributions(t *testing.T) {
+	analyses := []sessionAnalysis{
+		{
+			SessionID:    "s1",
+			Status:       "completed",
+			Result:       "success",
+			CostUSD:      0.10,
+			InputTokens:  100,
+			OutputTokens: 20,
+			Rounds:       2,
+			Failures:     map[string]int{},
+			StopReasons:  map[string]int{"completed": 1},
+		},
+		{
+			SessionID:    "s2",
+			Status:       "failed",
+			Result:       "failure",
+			Completion:   "runtime_budget_exhausted",
+			CostUSD:      0.50,
+			InputTokens:  500,
+			OutputTokens: 50,
+			Rounds:       5,
+			Failures:     map[string]int{"task_budget": 1},
+			Budgets:      map[string]int{"max_rounds": 1},
+			StopReasons:  map[string]int{"max_output_tokens": 1},
+		},
+		{
+			SessionID:       "s3",
+			Status:          "failed",
+			Result:          "failure",
+			CostUSD:         0.25,
+			CostUnavailable: true,
+			InputTokens:     300,
+			OutputTokens:    30,
+			Rounds:          3,
+			Failures:        map[string]int{"provider": 1, "tool": 1, "protocol": 1, "benchmark_verifier_failure": 1, "verifier_rejection": 1},
+			StopReasons:     map[string]int{"completed": 1},
+		},
+	}
+
+	aggregate := analyzeSessionSet(analyses)
+	if aggregate.Count != 3 || aggregate.TotalInputTokens != 900 || aggregate.TotalOutputTokens != 100 || aggregate.TotalRounds != 10 {
+		t.Fatalf("aggregate totals: %#v", aggregate)
+	}
+	if aggregate.Results["success"] != 1 || aggregate.Results["failure"] != 2 {
+		t.Fatalf("result counts: %#v", aggregate.Results)
+	}
+	if aggregate.PassRate < 0.333 || aggregate.PassRate > 0.334 {
+		t.Fatalf("pass rate: got %.4f", aggregate.PassRate)
+	}
+	if aggregate.Failures["task_budget"] != 1 ||
+		aggregate.Failures["provider"] != 1 ||
+		aggregate.Failures["tool"] != 1 ||
+		aggregate.Failures["protocol"] != 1 ||
+		aggregate.Failures["benchmark_verifier_failure"] != 1 ||
+		aggregate.Failures["verifier_rejection"] != 1 {
+		t.Fatalf("failure counts: %#v", aggregate.Failures)
+	}
+	if aggregate.Budgets["max_rounds"] != 1 {
+		t.Fatalf("budget counts: %#v", aggregate.Budgets)
+	}
+	if !aggregate.CostUnavailable || aggregate.CostUnavailableN != 1 {
+		t.Fatalf("cost unavailable aggregate: %#v", aggregate)
+	}
+	if aggregate.TotalCostUSD != 0.60 {
+		t.Fatalf("total cost should exclude unavailable-cost sessions: %#v", aggregate)
+	}
+	if aggregate.Distributions.CostUSD.P50 != 0.10 || aggregate.Distributions.CostUSD.P95 != 0.50 {
+		t.Fatalf("cost distribution should exclude unavailable-cost sessions: %#v", aggregate.Distributions.CostUSD)
+	}
+	if aggregate.StopReasons["completed"] != 2 {
+		t.Fatalf("stop reasons: %#v", aggregate.StopReasons)
+	}
+	if aggregate.Distributions.Rounds.P50 != 3 || aggregate.Distributions.Rounds.P95 != 5 {
+		t.Fatalf("round distribution: %#v", aggregate.Distributions.Rounds)
+	}
+
+	var out bytes.Buffer
+	printSessionSetAnalysis(&out, aggregate)
+	text := out.String()
+	for _, want := range []string{"Benchmark Analysis", "pass rate", "33.3%", "cost unavailable", "1 session", "$0.2500 (unavailable)", "Results", "success", "failure", "Distributions", "input_tokens", "Failure Taxonomy", "provider", "tool", "protocol", "verifier_rejection", "benchmark_verifier_failure", "task_budget", "Sessions", "s2"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("aggregate output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestBuildChildInspectionWritesMarkerAndReadyChecklist(t *testing.T) {
+	root := t.TempDir()
+	parentDir := filepath.Join(root, "local_parent")
+	childDir := filepath.Join(root, "local_child")
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	parent := "local_parent"
+	child := "local_child"
+	specName := "demo"
+	workspacePath := filepath.Join(childDir, "specs", "demo", "workspace.tar.gz")
+	transcriptPath := filepath.Join(childDir, "specs", "demo", "transcript.md")
+	evidencePath := filepath.Join(childDir, "specs", "demo", "evidence.jsonl")
+	ledgerPath := filepath.Join(childDir, "specs", "demo", "objective-ledger.json")
+	exists := true
+	result := "completed"
+	completion := "verifier_conceded"
+	session := &sessionapi.Session{
+		SessionID:        child,
+		ParentSessionID:  &parent,
+		SessionDir:       &childDir,
+		Status:           sessionapi.StatusCompleted,
+		Result:           &result,
+		CompletionReason: &completion,
+		Specs: []sessionapi.SessionSpec{{
+			Name:                  &specName,
+			WorkspacePath:         &workspacePath,
+			WorkspaceExists:       &exists,
+			TranscriptPath:        &transcriptPath,
+			EvidencePath:          &evidencePath,
+			ObjectiveLedgerPath:   &ledgerPath,
+			ObjectiveLedgerExists: &exists,
+		}},
+	}
+
+	report, err := buildChildInspection(session, nil)
+	if err != nil {
+		t.Fatalf("buildChildInspection: %v", err)
+	}
+	if !report.ReadyToReconcile {
+		t.Fatalf("expected ready report: %+v", report)
+	}
+	if report.InspectionPath == "" {
+		t.Fatal("expected inspection marker path")
+	}
+	if !strings.Contains(report.InspectionPath, filepath.Join("local_parent", "child-inspections", "local_child.json")) {
+		t.Fatalf("inspection path: got %q", report.InspectionPath)
+	}
+	data, err := os.ReadFile(report.InspectionPath)
+	if err != nil {
+		t.Fatalf("read marker: %v", err)
+	}
+	if !strings.Contains(string(data), `"ready_to_reconcile": true`) {
+		t.Fatalf("marker missing ready flag:\n%s", data)
+	}
+	var out bytes.Buffer
+	printChildInspection(&out, report)
+	text := out.String()
+	for _, want := range []string{"Child Inspection", "ready          true", "workspace checkpoint exists", "Failure Taxonomy"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("inspection output missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestChildInspectionRequiresExplicitSuccessfulResult(t *testing.T) {
+	report := childInspectionReport{
+		Status:          string(sessionapi.StatusCompleted),
+		Terminal:        true,
+		WorkspaceExists: true,
+		Analysis:        sessionAnalysis{Failures: map[string]int{}},
+	}
+	if childReadyToReconcile(report) {
+		t.Fatal("empty result should not be ready to reconcile")
+	}
+	report.Result = "success"
+	if !childReadyToReconcile(report) {
+		t.Fatal("successful result should be ready")
+	}
+}
+
+func TestWriteChildInspectionMarkerRejectsPathTraversalIDs(t *testing.T) {
+	root := t.TempDir()
+	childDir := filepath.Join(root, "local_child")
+	if err := os.MkdirAll(childDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := writeChildInspectionMarker(childDir, childInspectionReport{
+		ChildSessionID:  "../escape",
+		ParentSessionID: "../../../../tmp",
+	}); err == nil {
+		t.Fatal("expected invalid child session id error")
+	}
+	path, err := writeChildInspectionMarker(childDir, childInspectionReport{
+		ChildSessionID:  "local_child",
+		ParentSessionID: "../../../../tmp",
+	})
+	if err != nil {
+		t.Fatalf("write marker with invalid parent fallback: %v", err)
+	}
+	if !strings.HasPrefix(path, filepath.Join(childDir, "child-inspections")) {
+		t.Fatalf("marker escaped child dir: %s", path)
+	}
+}
+
+func TestBuildChildInspectionRejectsNonChildAndBlocksUnready(t *testing.T) {
+	_, err := buildChildInspection(&sessionapi.Session{SessionID: "local_not_child"}, nil)
+	if err == nil {
+		t.Fatal("expected non-child session to fail")
+	}
+	if !strings.Contains(err.Error(), "not a child session") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	parent := "local_parent"
+	specName := "demo"
+	missing := false
+	session := &sessionapi.Session{
+		SessionID:       "local_child",
+		ParentSessionID: &parent,
+		Status:          sessionapi.StatusRunning,
+		Specs: []sessionapi.SessionSpec{{
+			Name:            &specName,
+			WorkspaceExists: &missing,
+		}},
+	}
+	report, err := buildChildInspection(session, []sessionapi.SessionEvent{
+		{Event: "agent_failure_recoverable", SpecName: &specName, Data: map[string]any{"error": "tool_timeout: test"}},
+	})
+	if err != nil {
+		t.Fatalf("buildChildInspection: %v", err)
+	}
+	if report.ReadyToReconcile {
+		t.Fatalf("running child without workspace should not be ready: %+v", report)
+	}
+	if report.Analysis.Failures["tool"] != 1 {
+		t.Fatalf("expected tool failure: %#v", report.Analysis.Failures)
 	}
 }
 
@@ -155,6 +613,7 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	fs.String("model", "", "")
 	fs.String("thinking", "medium", "")
 	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("max-tool-loops", 0, "")
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
@@ -162,9 +621,10 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	t.Setenv("TELOS_MODEL", "claude-test")
 	t.Setenv("TELOS_THINKING", "high")
 	t.Setenv("TELOS_MAX_COST_USD", "12.5")
+	t.Setenv("TELOS_MAX_TOOL_LOOPS", "44")
 	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "123")
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -177,6 +637,9 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	if cfg.AgentTimeoutSec != 123 {
 		t.Fatalf("timeout: got %d", cfg.AgentTimeoutSec)
 	}
+	if cfg.MaxToolLoops != 44 {
+		t.Fatalf("max tool loops: got %d", cfg.MaxToolLoops)
+	}
 	if cfg.MaxCostUSD == nil || *cfg.MaxCostUSD != 12.5 {
 		t.Fatalf("cost: got %v", cfg.MaxCostUSD)
 	}
@@ -188,10 +651,11 @@ func TestResolveLocalRunConfigDefaultsToNoAgentTimeout(t *testing.T) {
 	fs.String("model", "", "")
 	fs.String("thinking", "medium", "")
 	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("max-tool-loops", 0, "")
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -206,10 +670,11 @@ func TestResolveLocalRunConfigAllowsExplicitNoAgentTimeout(t *testing.T) {
 	fs.String("model", "", "")
 	fs.String("thinking", "medium", "")
 	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("max-tool-loops", 0, "")
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"--agent-timeout-sec", "0", "SPEC.md"})
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -224,10 +689,11 @@ func TestResolveLocalRunConfigRejectsNegativeAgentTimeout(t *testing.T) {
 	fs.String("model", "", "")
 	fs.String("thinking", "medium", "")
 	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("max-tool-loops", 0, "")
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"--agent-timeout-sec", "-1", "SPEC.md"})
 
-	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, -1)
+	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{AgentTimeoutSec: -1})
 	if err == nil {
 		t.Fatal("expected negative agent timeout to fail")
 	}
@@ -241,16 +707,26 @@ func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
 	fs.String("model", "", "")
 	fs.String("thinking", "medium", "")
 	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("max-rounds", 0, "")
+	fs.Int("max-duration-sec", 0, "")
+	fs.Int("max-input-tokens", 0, "")
+	fs.Int("max-output-tokens", 0, "")
+	fs.Int("max-tool-loops", 0, "")
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{
 		"--model", "openai-codex/gpt-5.5",
 		"--thinking", "high",
 		"--max-cost-usd", "100",
+		"--max-rounds", "9",
+		"--max-duration-sec", "3600",
+		"--max-input-tokens", "120000",
+		"--max-output-tokens", "24000",
+		"--max-tool-loops", "55",
 		"--agent-timeout-sec", "0",
 		"SPEC.md",
 	})
 
-	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "openai-codex/gpt-5.5", "high", 100, 0)
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "openai-codex/gpt-5.5", "high", 100, budgetFlags{MaxRounds: 9, MaxDurationSec: 3600, MaxInputTokens: 120000, MaxOutputTokens: 24000, MaxToolLoops: 55, AgentTimeoutSec: 0})
 	if err != nil {
 		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
 	}
@@ -262,8 +738,75 @@ func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
 	if req.MaxCostUSD == nil || *req.MaxCostUSD != 100 {
 		t.Fatalf("max cost: got %v", req.MaxCostUSD)
 	}
+	if req.MaxRounds == nil || *req.MaxRounds != 9 {
+		t.Fatalf("max rounds: got %v", req.MaxRounds)
+	}
+	if req.MaxDurationSec == nil || *req.MaxDurationSec != 3600 {
+		t.Fatalf("max duration: got %v", req.MaxDurationSec)
+	}
+	if req.MaxInputTokens == nil || *req.MaxInputTokens != 120000 {
+		t.Fatalf("max input tokens: got %v", req.MaxInputTokens)
+	}
+	if req.MaxOutputTokens == nil || *req.MaxOutputTokens != 24000 {
+		t.Fatalf("max output tokens: got %v", req.MaxOutputTokens)
+	}
+	if req.MaxToolLoops == nil || *req.MaxToolLoops != 55 {
+		t.Fatalf("max tool loops: got %v", req.MaxToolLoops)
+	}
 	if req.AgentTimeoutSec == nil || *req.AgentTimeoutSec != 0 {
 		t.Fatalf("agent timeout: got %v", req.AgentTimeoutSec)
+	}
+}
+
+func TestUpdateRequestFromCreateCarriesRuntimeConfig(t *testing.T) {
+	specMarkdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
+	maxCost := 8.5
+	agentTimeout := 7200
+	maxRounds := 10
+	maxDuration := 7200
+	maxInputTokens := 100000
+	maxOutputTokens := 20000
+	maxToolLoops := 77
+	req := sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &specMarkdown,
+		Model:           "sail-research/moonshotai/Kimi-K2.6",
+		Thinking:        "high",
+		MaxCostUSD:      &maxCost,
+		MaxRounds:       &maxRounds,
+		MaxDurationSec:  &maxDuration,
+		MaxInputTokens:  &maxInputTokens,
+		MaxOutputTokens: &maxOutputTokens,
+		MaxToolLoops:    &maxToolLoops,
+		AgentTimeoutSec: &agentTimeout,
+	}
+
+	update := updateRequestFromCreate(req)
+	if update.SpecMarkdown != specMarkdown {
+		t.Fatalf("spec markdown: got %q", update.SpecMarkdown)
+	}
+	if update.Model != req.Model || update.Thinking != req.Thinking {
+		t.Fatalf("runtime config: got %#v", update)
+	}
+	if update.MaxCostUSD == nil || *update.MaxCostUSD != maxCost {
+		t.Fatalf("max cost: got %#v", update.MaxCostUSD)
+	}
+	if update.MaxRounds == nil || *update.MaxRounds != maxRounds {
+		t.Fatalf("max rounds: got %#v", update.MaxRounds)
+	}
+	if update.MaxDurationSec == nil || *update.MaxDurationSec != maxDuration {
+		t.Fatalf("max duration: got %#v", update.MaxDurationSec)
+	}
+	if update.MaxInputTokens == nil || *update.MaxInputTokens != maxInputTokens {
+		t.Fatalf("max input tokens: got %#v", update.MaxInputTokens)
+	}
+	if update.MaxOutputTokens == nil || *update.MaxOutputTokens != maxOutputTokens {
+		t.Fatalf("max output tokens: got %#v", update.MaxOutputTokens)
+	}
+	if update.MaxToolLoops == nil || *update.MaxToolLoops != maxToolLoops {
+		t.Fatalf("max tool loops: got %#v", update.MaxToolLoops)
+	}
+	if update.AgentTimeoutSec == nil || *update.AgentTimeoutSec != agentTimeout {
+		t.Fatalf("agent timeout: got %#v", update.AgentTimeoutSec)
 	}
 }
 
@@ -272,10 +815,11 @@ func TestResolveSessionRuntimeConfigOmitsDefaults(t *testing.T) {
 	fs.String("model", "", "")
 	fs.String("thinking", "medium", "")
 	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("max-tool-loops", 0, "")
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
-	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "medium", 20.0, 0)
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
 	}
@@ -283,6 +827,44 @@ func TestResolveSessionRuntimeConfigOmitsDefaults(t *testing.T) {
 	applySessionRuntimeConfig(&req, cfg)
 	if req.Model != "" || req.Thinking != "" || req.MaxCostUSD != nil || req.AgentTimeoutSec != nil {
 		t.Fatalf("expected empty runtime request config, got %#v", req)
+	}
+}
+
+func TestRejectCloudApplyRuntimeFlags(t *testing.T) {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	fs.String("model", "", "")
+	fs.String("thinking", "medium", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	fs.Int("max-rounds", 0, "")
+	fs.Int("max-duration-sec", 0, "")
+	fs.Int("max-input-tokens", 0, "")
+	fs.Int("max-output-tokens", 0, "")
+	fs.Int("max-tool-loops", 0, "")
+	fs.Int("agent-timeout-sec", 0, "")
+	fs.Int("autocompact-context-window", 0, "")
+	fs.Float64("autocompact-trigger-ratio", 0, "")
+	fs.Int("autocompact-keep-recent-tokens", 0, "")
+	parseFlags(fs, []string{"--model", "openai-codex/gpt-5.5", "--autocompact-context-window", "64000", "SPEC.md"})
+
+	err := rejectCloudApplyRuntimeFlags(fs)
+	if err == nil {
+		t.Fatal("expected explicit runtime flags to be rejected")
+	}
+	if !strings.Contains(err.Error(), "--model") || !strings.Contains(err.Error(), "--autocompact-context-window") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRejectCloudApplyRuntimeFlagsAllowsApplyControls(t *testing.T) {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	fs.String("env", "", "")
+	fs.Bool("json", false, "")
+	fs.Bool("no-wait", false, "")
+	fs.Int("ready-timeout", 900, "")
+	parseFlags(fs, []string{"--env", "env_123", "--json", "--no-wait", "--ready-timeout", "30", "SPEC.md"})
+
+	if err := rejectCloudApplyRuntimeFlags(fs); err != nil {
+		t.Fatalf("apply controls should be allowed: %v", err)
 	}
 }
 
@@ -320,7 +902,7 @@ func TestResolveLocalRunConfigRejectsInvalidEnvironmentDefaults(t *testing.T) {
 	parseFlags(fs, []string{"SPEC.md"})
 	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "not-an-int")
 
-	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
 	if err == nil {
 		t.Fatal("expected invalid environment value to fail")
 	}
@@ -333,6 +915,7 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 	tests := []struct {
 		name            string
 		platform        string
+		envID           string
 		cloudConfigured bool
 		localConfigSet  bool
 		want            launchMode
@@ -350,13 +933,25 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 			want:           launchLocal,
 		},
 		{
+			name:     "local spec rejects env",
+			platform: "local",
+			envID:    "env_123",
+			wantErr:  "--env cannot be used with platform: local specs",
+		},
+		{
 			name:            "unspecified platform is cloud",
 			cloudConfigured: true,
-			want:            launchCloudApply,
+			want:            launchCloudNew,
 		},
 		{
 			name:    "unspecified platform requires cloud login",
 			wantErr: "non-local spec requires cloud config",
+		},
+		{
+			name:     "cloud spec with env uses existing env",
+			platform: "cloud",
+			envID:    "env_123",
+			want:     launchCloudExisting,
 		},
 		{
 			name:           "cloud rejects local flags",
@@ -370,6 +965,7 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			got, err := decideLaunchMode(
 				tt.platform,
+				tt.envID,
 				tt.cloudConfigured,
 				tt.localConfigSet,
 			)
@@ -417,14 +1013,16 @@ func TestSessionKindForCommand(t *testing.T) {
 }
 
 func TestValidateLaunchCommandRejectsCloudRunOutsideRoot(t *testing.T) {
-	err := validateLaunchCommand("run", launchCloudApply)
-	if err == nil {
-		t.Fatal("expected cloud run rejection")
+	for _, mode := range []launchMode{launchCloudExisting, launchCloudNew} {
+		err := validateLaunchCommand("run", mode)
+		if err == nil {
+			t.Fatalf("expected cloud run rejection for %s", mode)
+		}
+		if !strings.Contains(err.Error(), "inside a root session") {
+			t.Fatalf("unexpected error: %v", err)
+		}
 	}
-	if !strings.Contains(err.Error(), "inside a root session") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if err := validateLaunchCommand("apply", launchCloudApply); err != nil {
+	if err := validateLaunchCommand("apply", launchCloudExisting); err != nil {
 		t.Fatalf("apply should be allowed: %v", err)
 	}
 	if err := validateLaunchCommand("run", launchLocal); err != nil {
@@ -458,7 +1056,7 @@ func TestSessionCreateRequestRejectsMissingSpecPath(t *testing.T) {
 
 func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nschema: v0\nversion: 1.2\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	pkg, err := packageSpec(dir)
@@ -468,9 +1066,6 @@ func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	if pkg.name != "postgres" {
 		t.Fatalf("name: got %q", pkg.name)
 	}
-	if pkg.version != "1.2" {
-		t.Fatalf("version: got %q", pkg.version)
-	}
 	if !strings.HasPrefix(pkg.digest, "sha256:") {
 		t.Fatalf("digest: got %q", pkg.digest)
 	}
@@ -479,118 +1074,199 @@ func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	}
 }
 
-func TestNormalizePackageVersion(t *testing.T) {
-	for input, want := range map[string]string{
-		"1":     "1.0.0",
-		"1.2":   "1.2.0",
-		"1.2.3": "1.2.3",
-	} {
-		got, err := normalizePackageVersion(input)
-		if err != nil {
-			t.Fatalf("normalizePackageVersion(%q): %v", input, err)
-		}
-		if got != want {
-			t.Fatalf("normalizePackageVersion(%q): got %q want %q", input, got, want)
-		}
+func TestActiveChildSessionsFiltersRunningChildren(t *testing.T) {
+	parent := "sess_controller"
+	otherParent := "sess_other"
+	sessions := []sessionapi.Session{
+		{SessionID: "sess_pending", ParentSessionID: &parent, Status: sessionapi.StatusPending},
+		{SessionID: "sess_running", ParentSessionID: &parent, Status: sessionapi.StatusRunning},
+		{SessionID: "sess_completed", ParentSessionID: &parent, Status: sessionapi.StatusCompleted},
+		{SessionID: "sess_other", ParentSessionID: &otherParent, Status: sessionapi.StatusRunning},
 	}
-	for _, input := range []string{"v1", "1.2.3.4", "1.x", ""} {
-		if _, err := normalizePackageVersion(input); err == nil {
-			t.Fatalf("normalizePackageVersion(%q): expected error", input)
-		}
+
+	active := activeChildSessions(sessions, parent)
+	if len(active) != 2 {
+		t.Fatalf("active children: got %#v", active)
+	}
+	if active[0].SessionID != "sess_pending" || active[1].SessionID != "sess_running" {
+		t.Fatalf("active children: got %#v", active)
 	}
 }
 
-func TestApplyDeploymentPackageUpdatesExistingDeployment(t *testing.T) {
-	var updated bool
+func TestEnsureNoActiveControllerChildAllowsExplicitOverride(t *testing.T) {
+	parent := "sess_controller"
+	sessions := []sessionapi.Session{
+		{SessionID: "sess_running", ParentSessionID: &parent, Status: sessionapi.StatusRunning},
+	}
+
+	if err := ensureNoActiveControllerChild(parent, sessions); err == nil {
+		t.Fatal("expected active child guard to fail")
+	}
+	t.Setenv("TELOS_ALLOW_PARALLEL_CHILDREN", "1")
+	if err := ensureNoActiveControllerChild(parent, sessions); err == nil {
+		t.Fatal("expected override without justification to fail")
+	}
+	t.Setenv("TELOS_PARALLEL_CHILDREN_JUSTIFICATION", "compare two independent storage backends")
+	if err := ensureNoActiveControllerChild(parent, sessions); err != nil {
+		t.Fatalf("override should allow active child: %v", err)
+	}
+}
+
+func TestCloudSessionClientsExplicitUnknownEnvReturnsError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/environments" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"environments": []map[string]any{}})
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+
+	clients, err := cloudSessionClients("env_missing")
+	if err == nil {
+		t.Fatal("expected explicit env lookup to return an error")
+	}
+	if len(clients) != 0 {
+		t.Fatalf("expected no clients, got %d", len(clients))
+	}
+	if !strings.Contains(err.Error(), "environment env_missing not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCloudSessionClientsRecoverEnvironmentAccess(t *testing.T) {
+	var recovered bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/environments":
 			json.NewEncoder(w).Encode(map[string]any{
-				"deployments": []map[string]any{{
-					"id":             "dep_123",
-					"name":           "auth",
-					"state":          "healthy",
-					"package_ref":    "@telos/auth:1.2.2",
-					"package_digest": "sha256:old",
-					"created_at":     "then",
-					"updated_at":     "then",
+				"environments": []map[string]any{{
+					"id":                         "env_123",
+					"env_handle":                 "env-abc.usetelos.ai",
+					"state":                      "ready",
+					"has_recoverable_env_access": true,
 				}},
 			})
-		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/dep_123":
-			updated = true
-			var body map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatal(err)
-			}
-			if body["package_ref"] != "@telos/auth:1.2.3" {
-				t.Fatalf("body: got %#v", body)
-			}
+		case r.Method == http.MethodPost && r.URL.Path == "/api/environments/env_123/access":
+			recovered = true
 			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "dep_123",
-				"name":           "auth",
-				"state":          "deploying",
-				"package_ref":    "@telos/auth:1.2.3",
-				"package_digest": "sha256:new",
-				"created_at":     "then",
-				"updated_at":     "now",
+				"id":           "env_123",
+				"env_handle":   "env-abc.usetelos.ai",
+				"access_token": "env-token",
 			})
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer srv.Close()
+	configureCloudTest(t, srv.URL)
 
-	operation, deployment, err := applyDeploymentPackage(cloud.NewClient(srv.URL, "test-token"), "auth", "@telos/auth:1.2.3")
+	clients, err := cloudSessionClients("")
 	if err != nil {
-		t.Fatalf("applyDeploymentPackage: %v", err)
+		t.Fatalf("cloudSessionClients: %v", err)
 	}
-	if operation != "updated" || !updated {
-		t.Fatalf("operation=%q updated=%v", operation, updated)
+	if len(clients) != 1 {
+		t.Fatalf("expected one cloud client, got %d", len(clients))
 	}
-	if deployment.ID != "dep_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
-		t.Fatalf("deployment: got %+v", deployment)
+	if !recovered {
+		t.Fatal("expected recoverable environment access to be issued")
+	}
+	access, ok := config.EnvironmentAccessByID("env_123")
+	if !ok {
+		t.Fatal("expected recovered access to be saved")
+	}
+	if access.Token != "env-token" {
+		t.Fatalf("saved token: got %q", access.Token)
 	}
 }
 
-func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
-	var created bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func TestGetSessionFromAnywhereReportsCloudClientError(t *testing.T) {
+	t.Setenv("TELOS_SESSION_DIR", t.TempDir())
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			json.NewEncoder(w).Encode(map[string]any{"deployments": []map[string]any{}})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
-			created = true
-			var body map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatal(err)
-			}
-			if body["package_ref"] != "@telos/auth:1.2.3" {
-				t.Fatalf("body: got %#v", body)
-			}
+		case r.Method == http.MethodGet && r.URL.Path == "/api/environments":
 			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "dep_123",
-				"name":           "auth",
-				"state":          "provisioning",
-				"package_ref":    "@telos/auth:1.2.3",
-				"package_digest": "sha256:new",
-				"created_at":     "now",
-				"updated_at":     "now",
+				"environments": []map[string]any{{
+					"id":                         "env_123",
+					"env_handle":                 strings.TrimPrefix(srv.URL, "http://"),
+					"state":                      "ready",
+					"has_recoverable_env_access": false,
+				}},
 			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/sessions/sess_remote":
+			http.Error(w, "denied", http.StatusUnauthorized)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+	if err := config.SaveEnvironmentAccessEntry(config.EnvironmentAccess{ID: "env_123", Token: "env-token"}); err != nil {
+		t.Fatal(err)
+	}
 
-	operation, deployment, err := applyDeploymentPackage(cloud.NewClient(srv.URL, "test-token"), "auth", "@telos/auth:1.2.3")
+	_, err := getSessionFromAnywhere("sess_remote", "env_123")
+	if err == nil || !strings.Contains(err.Error(), "cloud lookup failed") {
+		t.Fatalf("expected cloud lookup error, got %v", err)
+	}
+}
+
+func TestGetSessionFromCloudClientsReportsAllFailures(t *testing.T) {
+	unauthorized := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "denied", http.StatusUnauthorized)
+	}))
+	defer unauthorized.Close()
+	missing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "missing", http.StatusNotFound)
+	}))
+	defer missing.Close()
+
+	_, err := getSessionFromCloudClients("sess_remote", []*cloud.Client{
+		cloud.NewClient(unauthorized.URL, "env-token-1"),
+		cloud.NewClient(missing.URL, "env-token-2"),
+	})
+	if err == nil {
+		t.Fatal("expected cloud client errors")
+	}
+	if !strings.Contains(err.Error(), "denied") || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("expected both cloud errors, got %v", err)
+	}
+}
+
+func TestCloudEnvironmentForApplyDoesNotRequireLocalAccess(t *testing.T) {
+	var accessRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/environments":
+			json.NewEncoder(w).Encode(map[string]any{
+				"environments": []map[string]any{{
+					"id":                         "env_123",
+					"env_handle":                 "env-abc.usetelos.ai",
+					"state":                      "ready",
+					"has_recoverable_env_access": false,
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/environments/env_123/access":
+			accessRequests++
+			http.Error(w, "access should not be requested", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+
+	_, env, err := cloudEnvironmentForApply("env_123", false, 0)
 	if err != nil {
-		t.Fatalf("applyDeploymentPackage: %v", err)
+		t.Fatalf("cloudEnvironmentForApply: %v", err)
 	}
-	if operation != "created" || !created {
-		t.Fatalf("operation=%q created=%v", operation, created)
+	if env.ID != "env_123" || env.Handle != "env-abc.usetelos.ai" {
+		t.Fatalf("environment: got %+v", env)
 	}
-	if deployment.ID != "dep_123" {
-		t.Fatalf("deployment: got %+v", deployment)
+	if accessRequests != 0 {
+		t.Fatalf("access requests: got %d", accessRequests)
 	}
 }
 
@@ -690,8 +1366,8 @@ func TestLocalRootSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
 }
 
 func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
+	isolateLocalOnlyConfig(t)
 	root := t.TempDir()
-	configureLocalOnlyTest(t)
 	t.Setenv("TELOS_SESSION_DIR", root)
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	markdown := "---\nversion: v0\nname: follow-test\nplatform: local\n---\n# Follow\n"
@@ -703,7 +1379,7 @@ func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
 
 	var out bytes.Buffer
 	slept := false
-	err = followTranscript(session.SessionID, &out, func(time.Duration) {
+	err = followTranscript(session.SessionID, "", &out, func(time.Duration) {
 		if slept {
 			t.Fatal("unexpected second sleep")
 		}
@@ -748,7 +1424,7 @@ func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	err = followTranscript(session.SessionID, &out, func(time.Duration) {
+	err = followTranscript(session.SessionID, "", &out, func(time.Duration) {
 		t.Fatal("terminal session should not sleep")
 	}, false)
 	if err == nil {
@@ -756,6 +1432,85 @@ func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "transcript") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetTranscriptFromAnywherePrefersLocalMissingTranscript(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TELOS_SESSION_DIR", root)
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: missing-transcript\nplatform: local\n---\n# Missing\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var sawCloudTranscript bool
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/environments":
+			json.NewEncoder(w).Encode(map[string]any{
+				"environments": []map[string]any{{
+					"id":                         "env_123",
+					"env_handle":                 strings.TrimPrefix(srv.URL, "http://"),
+					"state":                      "ready",
+					"has_recoverable_env_access": false,
+				}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/sessions/"+session.SessionID+"/transcript":
+			sawCloudTranscript = true
+			http.Error(w, "denied", http.StatusUnauthorized)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+	if err := config.SaveEnvironmentAccessEntry(config.EnvironmentAccess{ID: "env_123", Token: "env-token"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = getTranscriptFromAnywhere(session.SessionID, "")
+	if err == nil || !strings.Contains(err.Error(), "transcript for session "+session.SessionID) {
+		t.Fatalf("expected local missing transcript error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "cloud lookup failed") {
+		t.Fatalf("local missing transcript should not be hidden by cloud error: %v", err)
+	}
+	if sawCloudTranscript {
+		t.Fatal("implicit cloud transcript lookup should not run for an existing local session")
+	}
+}
+
+func TestGetTranscriptFromAnywherePreservesLocalReadError(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TELOS_SESSION_DIR", root)
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: unreadable-transcript\nplatform: local\n---\n# Unreadable\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	transcriptPath := session.Specs[0].TranscriptPath
+	if transcriptPath == nil || *transcriptPath == "" {
+		t.Fatal("missing transcript path")
+	}
+	if err := os.MkdirAll(*transcriptPath, 0o755); err != nil {
+		t.Fatalf("create transcript path directory: %v", err)
+	}
+
+	_, err = getTranscriptFromAnywhere(session.SessionID, "")
+	if err == nil {
+		t.Fatal("expected local transcript read error")
+	}
+	if strings.Contains(err.Error(), "transcript for session "+session.SessionID) {
+		t.Fatalf("read error should not be rewritten as missing transcript: %v", err)
+	}
+	if strings.Contains(err.Error(), "cloud lookup failed") {
+		t.Fatalf("read error should not fall back to cloud lookup: %v", err)
 	}
 }
 
@@ -786,7 +1541,7 @@ func TestFollowTranscriptSurfacesRootTranscriptError(t *testing.T) {
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
 
 	var out bytes.Buffer
-	err := followTranscript("sess_running", &out, func(time.Duration) {
+	err := followTranscript("sess_running", "", &out, func(time.Duration) {
 		t.Fatal("500 transcript errors should not sleep")
 	}, false)
 	if err == nil {
@@ -843,50 +1598,6 @@ func TestPrintLogsRawShowsTranscript(t *testing.T) {
 	}
 }
 
-func TestFollowDeploymentTranscriptStopsWhenHealthy(t *testing.T) {
-	var transcriptCalls int
-	var deploymentCalls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123/transcript":
-			transcriptCalls++
-			_, _ = w.Write([]byte("# Transcript\n<progress_update>ready</progress_update>\n"))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123":
-			deploymentCalls++
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id":             "dep_123",
-				"name":           "auth",
-				"state":          "healthy",
-				"package_ref":    "@telos/auth:1.0.0",
-				"package_digest": "sha256:abc",
-				"created_at":     "then",
-				"updated_at":     "now",
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	var out bytes.Buffer
-	err := followDeploymentTranscript(
-		cloud.NewClient(srv.URL, "test-token"),
-		"dep_123",
-		&out,
-		func(time.Duration) {},
-		false,
-	)
-	if err != nil {
-		t.Fatalf("followDeploymentTranscript: %v", err)
-	}
-	if transcriptCalls != 1 || deploymentCalls != 1 {
-		t.Fatalf("calls: transcript=%d deployment=%d", transcriptCalls, deploymentCalls)
-	}
-	if !strings.Contains(out.String(), "#1 ready") {
-		t.Fatalf("follow output missing progress:\n%s", out.String())
-	}
-}
-
 func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -902,7 +1613,7 @@ func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
 
-	_, err := getSessionFromAnywhere("sess_root")
+	_, err := getSessionFromAnywhere("sess_root", "")
 	if err == nil {
 		t.Fatal("expected root lookup to fail")
 	}
@@ -914,11 +1625,47 @@ func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 	}
 }
 
+func TestRootStopUsesClusterAPI(t *testing.T) {
+	t.Setenv("TELOS_RUNTIME", "")
+	var gotStop bool
+	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost && r.URL.Path == "/api/sessions/sess_child/stop" {
+			if r.Header.Get("Authorization") != "Bearer scoped-token" {
+				t.Fatalf("authorization: got %q", r.Header.Get("Authorization"))
+			}
+			gotStop = true
+			json.NewEncoder(w).Encode(sessionapi.Session{
+				SessionID: "sess_child",
+				Status:    sessionapi.StatusStopped,
+				Runtime:   sessionapi.RuntimeCloud,
+			})
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer cluster.Close()
+	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+	t.Setenv("TELOS_API_TOKEN", "scoped-token")
+	t.Setenv("TELOS_SESSION_ID", "sess_parent")
+	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
+
+	session, err := stopSessionAnywhere("sess_child", "")
+	if err != nil {
+		t.Fatalf("stopSessionAnywhere: %v", err)
+	}
+	if !gotStop {
+		t.Fatal("cluster stop endpoint was not called")
+	}
+	if session.Status != sessionapi.StatusStopped {
+		t.Fatalf("status: got %q", session.Status)
+	}
+}
+
 func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
-	configureLocalOnlyTest(t)
+	isolateLocalOnlyConfig(t)
 	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
 
-	_, err := getSessionFromAnywhere("local_missing")
+	_, err := getSessionFromAnywhere("local_missing", "")
 	if err == nil {
 		t.Fatal("expected missing local session")
 	}
@@ -964,14 +1711,16 @@ func configureCloudTest(t *testing.T, endpoint string) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("TELOS_CONFIG", filepath.Join(dir, "config.yaml"))
+	t.Setenv("TELOS_ENVIRONMENTS_CONFIG", filepath.Join(dir, "environments.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", endpoint)
 	t.Setenv("TELOS_AUTH_TOKEN", "control-token")
 }
 
-func configureLocalOnlyTest(t *testing.T) {
+func isolateLocalOnlyConfig(t *testing.T) {
 	t.Helper()
 	dir := t.TempDir()
 	t.Setenv("TELOS_CONFIG", filepath.Join(dir, "config.yaml"))
+	t.Setenv("TELOS_ENVIRONMENTS_CONFIG", filepath.Join(dir, "environments.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", "")
 	t.Setenv("TELOS_AUTH_TOKEN", "")
 }

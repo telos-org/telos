@@ -2,6 +2,9 @@ package telosd
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -24,10 +27,6 @@ func (s *fakeReconcileStore) Create(req sessionapi.SessionCreateRequest) (*sessi
 		SessionKind: &kind,
 		SpecName:    &name,
 		Status:      sessionapi.StatusRunning,
-		Provenance: map[string]any{
-			"deployment_id":   req.DeploymentID,
-			"deployment_name": req.DeploymentName,
-		},
 		SpecVersions: []map[string]any{{
 			"apply_package_digest": req.ApplyPackageDigest,
 		}},
@@ -66,11 +65,14 @@ func (s *fakeReconcileStore) Transcript(string) (string, error) {
 func (s *fakeReconcileStore) Events(string) ([]sessionapi.SessionEvent, error) {
 	return nil, sessionapi.ErrNotFound
 }
+func (s *fakeReconcileStore) Diagnostics(string) (*sessionapi.SessionDiagnosticsResponse, error) {
+	return nil, sessionapi.ErrNotFound
+}
 func (s *fakeReconcileStore) WorkspacePath(string, string) (string, error) {
 	return "", sessionapi.ErrNotFound
 }
 
-func TestDeploymentBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
+func TestControlSessionReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	root := t.TempDir()
 	packagePath := filepath.Join(root, "blobs", "sha256", digest[len("sha256:"):], "package.tar.gz")
@@ -80,19 +82,38 @@ func TestDeploymentBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T)
 	if err := os.WriteFile(packagePath, []byte("package"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	var sawAuth bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer env-token" {
+			t.Fatalf("authorization = %q", got)
+		}
+		if r.URL.Path != "/api/environments/env_123/sessions" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		sawAuth = true
+		_ = json.NewEncoder(w).Encode(desiredSessionsResponse{Sessions: []desiredSession{{
+			Name:          "auth",
+			PackageDigest: digest,
+			DesiredState:  "running",
+		}}})
+	}))
+	defer server.Close()
 
 	store := &fakeReconcileStore{}
-	reconciler := deploymentBootstrapReconciler{
+	reconciler := controlSessionReconciler{
+		apiURL:      server.URL,
+		envID:       "env_123",
+		token:       "env-token",
 		packageRoot: root,
+		client:      server.Client(),
 		store:       store,
 	}
 
-	if err := reconciler.reconcile([]deploymentSession{{
-		DeploymentID:  "dep_123",
-		Name:          "auth",
-		PackageDigest: digest,
-	}}); err != nil {
+	if err := reconciler.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
+	}
+	if !sawAuth {
+		t.Fatal("server was not called")
 	}
 	if len(store.creates) != 1 {
 		t.Fatalf("creates = %#v", store.creates)
@@ -103,92 +124,39 @@ func TestDeploymentBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T)
 	if store.creates[0].ApplyPackageDigest != digest {
 		t.Fatalf("ApplyPackageDigest = %q want %q", store.creates[0].ApplyPackageDigest, digest)
 	}
-	if store.creates[0].DeploymentID != "dep_123" {
-		t.Fatalf("DeploymentID = %q want dep_123", store.creates[0].DeploymentID)
+}
+
+func TestControlSessionReconcilerUsesNormalizedControlEndpoint(t *testing.T) {
+	cfg := Config{
+		ControlPlane: ControlConfig{Endpoint: " https://control.staging.example/ "},
 	}
-	if store.creates[0].DeploymentName != "auth" {
-		t.Fatalf("DeploymentName = %q want auth", store.creates[0].DeploymentName)
-	}
-	if store.creates[0].Model != defaultCloudSessionModel {
-		t.Fatalf("Model = %q want %q", store.creates[0].Model, defaultCloudSessionModel)
+
+	if got := controlReconcilerAPIURL(cfg); got != "https://control.staging.example" {
+		t.Fatalf("api url = %q", got)
 	}
 }
 
-func TestDeploymentBootstrapMatchesDeploymentNameBeforeSpecName(t *testing.T) {
-	digest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-	specName := "auth-v2"
-	store := &fakeReconcileStore{sessions: []sessionapi.Session{{
-		SessionID: "sess_existing",
-		SpecName:  &specName,
-		Status:    sessionapi.StatusRunning,
-		Provenance: map[string]any{
-			"deployment_name": "auth",
+func TestNewControlSessionReconcilerUsesControlPlaneToken(t *testing.T) {
+	packageRoot := t.TempDir()
+	t.Setenv("TELOS_PACKAGE_ROOT", packageRoot)
+
+	reconciler, ok := newControlSessionReconciler(&fakeReconcileStore{}, Config{
+		Auth: AuthConfig{Token: "sessions-api-token"},
+		ControlPlane: ControlConfig{
+			Endpoint: "https://control.staging.example",
+			EnvID:    "env_123",
+			Token:    "control-plane-token",
 		},
-		SpecVersions: []map[string]any{{
-			"apply_package_digest": digest,
-		}},
-	}}}
-
-	reconciler := deploymentBootstrapReconciler{
-		packageRoot: t.TempDir(),
-		store:       store,
-	}
-
-	if err := reconciler.reconcile([]deploymentSession{{
-		Name:          "auth",
-		PackageDigest: digest,
-	}}); err != nil {
-		t.Fatalf("reconcile: %v", err)
-	}
-	if len(store.creates) != 0 || len(store.stops) != 0 {
-		t.Fatalf("expected no changes, creates=%#v stops=%#v", store.creates, store.stops)
-	}
-}
-
-func TestCloudSessionModelUsesEnvOverride(t *testing.T) {
-	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "sail-research/custom")
-
-	if got := cloudSessionModel(); got != "sail-research/custom" {
-		t.Fatalf("cloudSessionModel = %q", got)
-	}
-}
-
-func TestDeploymentBootstrapDesiredSession(t *testing.T) {
-	t.Setenv("TELOS_DEPLOYMENT_ID", "dep_123")
-	t.Setenv("TELOS_DEPLOYMENT_NAME", "auth")
-	t.Setenv("TELOS_PACKAGE_DIGEST", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-
-	session, ok := deploymentBootstrapSession()
-
+	})
 	if !ok {
-		t.Fatal("expected deployment bootstrap")
+		t.Fatal("expected reconciler to be configured")
 	}
-	if session.Name != "auth" {
-		t.Fatalf("Name = %q", session.Name)
-	}
-	if session.DeploymentID != "dep_123" {
-		t.Fatalf("DeploymentID = %q", session.DeploymentID)
-	}
-	if session.PackageDigest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
-		t.Fatalf("PackageDigest = %q", session.PackageDigest)
+	if reconciler.token != "control-plane-token" {
+		t.Fatalf("token = %q", reconciler.token)
 	}
 }
 
-func TestDeploymentBootstrapCanBeDisabled(t *testing.T) {
-	t.Setenv("TELOS_DEPLOYMENT_BOOTSTRAP_ENABLED", "0")
-	t.Setenv("TELOS_DEPLOYMENT_NAME", "auth")
-	t.Setenv("TELOS_PACKAGE_DIGEST", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
-	t.Setenv("TELOS_PACKAGE_ROOT", t.TempDir())
-	store := &fakeReconcileStore{}
-
-	startDeploymentBootstrapReconciler(context.Background(), store)
-
-	if len(store.creates) != 0 || len(store.stops) != 0 {
-		t.Fatalf("expected disabled bootstrap to do nothing, creates=%#v stops=%#v", store.creates, store.stops)
-	}
-}
-
-func TestDeploymentBootstrapNoopsWhenDigestMatches(t *testing.T) {
+func TestControlSessionReconcilerNoopsWhenDigestMatches(t *testing.T) {
 	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	name := "auth"
 	store := &fakeReconcileStore{sessions: []sessionapi.Session{{
@@ -199,16 +167,25 @@ func TestDeploymentBootstrapNoopsWhenDigestMatches(t *testing.T) {
 			"apply_package_digest": digest,
 		}},
 	}}}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(desiredSessionsResponse{Sessions: []desiredSession{{
+			Name:          name,
+			PackageDigest: digest,
+			DesiredState:  "running",
+		}}})
+	}))
+	defer server.Close()
 
-	reconciler := deploymentBootstrapReconciler{
+	reconciler := controlSessionReconciler{
+		apiURL:      server.URL,
+		envID:       "env_123",
+		token:       "env-token",
 		packageRoot: t.TempDir(),
+		client:      server.Client(),
 		store:       store,
 	}
 
-	if err := reconciler.reconcile([]deploymentSession{{
-		Name:          name,
-		PackageDigest: digest,
-	}}); err != nil {
+	if err := reconciler.reconcile(context.Background()); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
 	if len(store.creates) != 0 || len(store.stops) != 0 {

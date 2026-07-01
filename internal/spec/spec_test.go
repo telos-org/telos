@@ -46,9 +46,6 @@ func TestLoadEnvironment(t *testing.T) {
 	if env.Version != "v0" {
 		t.Errorf("version: got %q", env.Version)
 	}
-	if env.PackageVersion != "" {
-		t.Errorf("package version: got %q", env.PackageVersion)
-	}
 	if env.Platform != "local" {
 		t.Errorf("platform: got %q", env.Platform)
 	}
@@ -71,31 +68,14 @@ func TestLoadEnvironmentEmptyBody(t *testing.T) {
 	}
 }
 
-func TestLoadEnvironmentWithPackageVersion(t *testing.T) {
+func TestLoadEnvironmentInvalidVersion(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nschema: v0\nversion: 1.2.3\nname: versioned\n---\nBody"), 0o644)
-
-	env, err := LoadEnvironment(specPath)
-	if err != nil {
-		t.Fatalf("LoadEnvironment: %v", err)
-	}
-	if env.Version != "v0" {
-		t.Errorf("schema version: got %q", env.Version)
-	}
-	if env.PackageVersion != "1.2.3" {
-		t.Errorf("package version: got %q", env.PackageVersion)
-	}
-}
-
-func TestLoadEnvironmentInvalidSchema(t *testing.T) {
-	dir := t.TempDir()
-	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nschema: v99\nversion: 1.0.0\nname: bad-ver\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: v99\nname: bad-ver\n---\nBody"), 0o644)
 
 	_, err := LoadEnvironment(specPath)
 	if err == nil {
-		t.Fatal("expected error for invalid schema")
+		t.Fatal("expected error for invalid version")
 	}
 }
 

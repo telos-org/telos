@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/gateway"
 	"github.com/telos-org/telos/internal/platform"
 )
 
@@ -78,6 +79,61 @@ func TestBuildPiArgvUsesSessionFileWithoutTaskFile(t *testing.T) {
 	}
 	if argv[7] != "/tmp/pi-session.jsonl" {
 		t.Errorf("session file arg: got %q", argv[7])
+	}
+}
+
+func TestConfigureGatewayInjectsOpenAIEnvAndCleanup(t *testing.T) {
+	exec := NewPiExecutor(nil, "test-model", "", 0)
+	cleaned := false
+
+	err := exec.ConfigureGateway(gateway.Credential{
+		BaseURL:       "https://proxy.example.com/v1/",
+		APIKey:        "sk-session",
+		Transport:     gateway.TransportOpenAISync,
+		CostHardLimit: true,
+		Cleanup: func() error {
+			cleaned = true
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("ConfigureGateway: %v", err)
+	}
+	if exec.GatewayEnv["OPENAI_API_KEY"] != "sk-session" {
+		t.Fatalf("OPENAI_API_KEY: got %q", exec.GatewayEnv["OPENAI_API_KEY"])
+	}
+	if exec.GatewayEnv["OPENAI_BASE_URL"] != "https://proxy.example.com/v1" {
+		t.Fatalf("OPENAI_BASE_URL: got %q", exec.GatewayEnv["OPENAI_BASE_URL"])
+	}
+	if !exec.CostHardLimit() {
+		t.Fatal("cost hard limit should be true")
+	}
+	if err := exec.Cleanup(); err != nil {
+		t.Fatalf("Cleanup: %v", err)
+	}
+	if !cleaned {
+		t.Fatal("cleanup function was not called")
+	}
+}
+
+func TestConfigureGatewayRejectsBifrostAsyncForPi(t *testing.T) {
+	exec := NewPiExecutor(nil, "test-model", "", 0)
+	cleaned := false
+
+	err := exec.ConfigureGateway(gateway.Credential{
+		BaseURL:   "https://proxy.example.com/openai",
+		APIKey:    "sk-session",
+		Transport: gateway.TransportBifrostAsync,
+		Cleanup: func() error {
+			cleaned = true
+			return nil
+		},
+	})
+	if err == nil || !strings.Contains(err.Error(), "bifrost_async transport requires the native executor") {
+		t.Fatalf("expected bifrost_async rejection, got %v", err)
+	}
+	if !cleaned {
+		t.Fatal("cleanup should run after rejected managed credential")
 	}
 }
 

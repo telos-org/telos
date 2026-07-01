@@ -8,25 +8,24 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/client-go/kubernetes/fake"
 )
 
 type recordingSubstrate struct {
-	applies  []recordedApply
-	stops    []string
-	applyErr error
-	stopErr  error
+	applies       []recordedApply
+	stops         []string
+	runtimeStatus map[string]sessionapi.SessionStatus
+	applyErr      error
+	stopErr       error
 }
 
 type recordedApply struct {
-	sessionID  string
-	wakeReason string
+	sessionID         string
+	wakeReason        string
+	userAuthorization string
 }
 
-func (s *recordingSubstrate) Apply(session *sessionapi.Session, wakeReason string) error {
-	s.applies = append(s.applies, recordedApply{sessionID: session.SessionID, wakeReason: wakeReason})
+func (s *recordingSubstrate) Apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error {
+	s.applies = append(s.applies, recordedApply{sessionID: session.SessionID, wakeReason: wakeReason, userAuthorization: userAuthorization})
 	if s.applyErr != nil {
 		return s.applyErr
 	}
@@ -41,13 +40,20 @@ func (s *recordingSubstrate) Stop(session *sessionapi.Session) error {
 	return nil
 }
 
+func (s *recordingSubstrate) RuntimeStatus(session *sessionapi.Session) (sessionapi.SessionStatus, error) {
+	if s.runtimeStatus == nil {
+		return "", nil
+	}
+	return s.runtimeStatus[session.SessionID], nil
+}
+
 func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{}
 	store := newCloudSessionStore(base, routeHandleResolver{}, substrate)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
-	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, UserAuthorization: "Bearer user-token"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,9 +63,12 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	if substrate.applies[0].sessionID != session.SessionID || substrate.applies[0].wakeReason != "controller_started" {
 		t.Fatalf("create apply: got %+v", substrate.applies[0])
 	}
+	if substrate.applies[0].userAuthorization != "Bearer user-token" {
+		t.Fatalf("create user auth: got %+v", substrate.applies[0])
+	}
 
 	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres\n"
-	if _, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated}); err != nil {
+	if _, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated, UserAuthorization: "Bearer update-user-token"}); err != nil {
 		t.Fatal(err)
 	}
 	if len(substrate.applies) != 2 {
@@ -67,6 +76,9 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	}
 	if substrate.applies[1].sessionID != session.SessionID || substrate.applies[1].wakeReason != "spec_updated" {
 		t.Fatalf("update apply: got %+v", substrate.applies[1])
+	}
+	if substrate.applies[1].userAuthorization != "Bearer update-user-token" {
+		t.Fatalf("update user auth: got %+v", substrate.applies[1])
 	}
 
 	if _, err := store.Stop(session.SessionID); err != nil {
@@ -119,6 +131,53 @@ func TestCloudSessionStoreLeavesFileStateRunningWhenWorkerStopFails(t *testing.T
 	}
 	if current.Status == sessionapi.StatusStopped {
 		t.Fatal("file state was marked stopped despite substrate stop failure")
+	}
+}
+
+func TestCloudSessionStoreEnrichesRuntimeStatus(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{runtimeStatus: map[string]sessionapi.SessionStatus{}}
+	store := newCloudSessionStore(base, routeHandleResolver{}, substrate)
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	substrate.runtimeStatus[session.SessionID] = sessionapi.StatusStale
+	current, err := store.Get(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != sessionapi.StatusStale {
+		t.Fatalf("status: got %q", current.Status)
+	}
+}
+
+func TestCloudSessionStoreEnrichesChildRuntimeStatus(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{runtimeStatus: map[string]sessionapi.SessionStatus{}}
+	store := newCloudSessionStore(base, routeHandleResolver{}, substrate)
+	parentID := "sess_controller"
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &markdown,
+		ParentSessionID: &parentID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	substrate.runtimeStatus[session.SessionID] = sessionapi.StatusFailed
+	current, err := store.Get(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.Status != sessionapi.StatusFailed {
+		t.Fatalf("status: got %q", current.Status)
+	}
+	if current.ServiceURL != nil || current.DashboardURL != nil {
+		t.Fatalf("child session should not get route URLs: service=%v dashboard=%v", current.ServiceURL, current.DashboardURL)
 	}
 }
 
@@ -288,11 +347,11 @@ func TestProductHandleRequiresUnambiguousBrowserRoute(t *testing.T) {
 		[]publicRoute{
 			{
 				Namespace: "ns-auth",
-				Data:      map[string]string{"hostname": "auth-a.usetelos.ai"},
+				Data:      map[string]string{"hostname": "auth.usetelos.ai"},
 			},
 			{
 				Namespace: "ns-auth",
-				Data:      map[string]string{"hostname": "auth-b.usetelos.ai"},
+				Data:      map[string]string{"hostname": "dashboard-auth.usetelos.ai"},
 			},
 		},
 		sessionapi.Session{
@@ -338,78 +397,6 @@ func TestProductHandlePrefersProductRouteOverDashboardRoute(t *testing.T) {
 
 	if handle != "auth.usetelos.ai" {
 		t.Fatalf("handle: got %q", handle)
-	}
-}
-
-func TestProductHandleIgnoresRouteWithDifferentProductPrefix(t *testing.T) {
-	name := "auth"
-	kind := sessionapi.KindController
-	session := sessionapi.Session{
-		SessionID:   "sess_auth",
-		SessionKind: &kind,
-		SpecName:    &name,
-		Status:      sessionapi.StatusRunning,
-	}
-	routes := []publicRoute{
-		{
-			Namespace: "ns-auth",
-			Data: map[string]string{
-				"type":     "app",
-				"prefix":   "authprobe-test",
-				"hostname": "authprobe-test-rkz5f.usetelos.ai",
-			},
-		},
-		{
-			Namespace: "ns-auth",
-			Data: map[string]string{
-				"type":     "dashboard",
-				"prefix":   "dashboard-authprobe-test",
-				"hostname": "dashboard-authprobe-test-rkz5f.usetelos.ai",
-			},
-		},
-	}
-
-	if handle := productHandleFor(routes, session); handle != "" {
-		t.Fatalf("service handle: got %q", handle)
-	}
-	if handle := dashboardHandleFor(routes, session); handle != "" {
-		t.Fatalf("dashboard handle: got %q", handle)
-	}
-}
-
-func TestRouteHandlesMatchProductPrefix(t *testing.T) {
-	name := "auth"
-	kind := sessionapi.KindController
-	session := sessionapi.Session{
-		SessionID:   "sess_auth",
-		SessionKind: &kind,
-		SpecName:    &name,
-		Status:      sessionapi.StatusRunning,
-	}
-	routes := []publicRoute{
-		{
-			Namespace: "ns-auth",
-			Data: map[string]string{
-				"type":     "app",
-				"prefix":   "auth",
-				"hostname": "auth-ga84s.usetelos.ai",
-			},
-		},
-		{
-			Namespace: "ns-auth",
-			Data: map[string]string{
-				"type":     "dashboard",
-				"prefix":   "dashboard-auth",
-				"hostname": "dashboard-auth-n6ryk.usetelos.ai",
-			},
-		},
-	}
-
-	if handle := productHandleFor(routes, session); handle != "auth-ga84s.usetelos.ai" {
-		t.Fatalf("service handle: got %q", handle)
-	}
-	if handle := dashboardHandleFor(routes, session); handle != "dashboard-auth-n6ryk.usetelos.ai" {
-		t.Fatalf("dashboard handle: got %q", handle)
 	}
 }
 
@@ -470,55 +457,6 @@ func TestParsePublicRoutes(t *testing.T) {
 	}
 	if got := routeNamespaces(routes[0].Data); len(got) != 1 || got[0] != "ns-postgres" {
 		t.Fatalf("route namespaces: got %#v", got)
-	}
-}
-
-func TestReadPublicRoutesFromClient(t *testing.T) {
-	client := fake.NewSimpleClientset(
-		&corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "auth-route",
-				Namespace: "ns-auth",
-				Labels:    map[string]string{publicRouteLabel: "primary"},
-			},
-			Data: map[string]string{
-				"type":     "app",
-				"hostname": "auth.usetelos.ai",
-			},
-		},
-		&corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "dashboard-route",
-				Namespace: "ns-auth",
-				Labels:    map[string]string{publicRouteLabel: "dashboard"},
-			},
-			Data: map[string]string{
-				"hostname": "dashboard-auth.usetelos.ai",
-			},
-		},
-		&corev1.ConfigMap{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      "private-route",
-				Namespace: "ns-auth",
-				Labels:    map[string]string{"app": "auth"},
-			},
-			Data: map[string]string{
-				"hostname": "private.usetelos.ai",
-			},
-		},
-	)
-
-	routes, err := readPublicRoutesFromClient(context.Background(), client)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(routes) != 2 {
-		t.Fatalf("routes: got %#v", routes)
-	}
-	handles := []string{routeHandle(routes[0].Data), routeHandle(routes[1].Data)}
-	slices.Sort(handles)
-	if !slices.Equal(handles, []string{"auth.usetelos.ai", "dashboard-auth.usetelos.ai"}) {
-		t.Fatalf("handles: got %#v", handles)
 	}
 }
 

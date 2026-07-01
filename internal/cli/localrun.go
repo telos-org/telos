@@ -10,6 +10,7 @@ import (
 
 	"github.com/telos-org/telos/internal/executor"
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/gateway"
 	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/sessionworker"
@@ -21,12 +22,18 @@ const DefaultLocalModel = "sail-research/zai-org/GLM-5.2-FP8"
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {
 	SessionKind     sessionapi.SessionKind
+	SessionID       string
 	ParentSessionID *string
 	Workspace       string
 	Model           string
 	Thinking        string
 	Until           int
 	MaxCostUSD      *float64
+	MaxRounds       int
+	MaxDurationSec  int
+	MaxInputTokens  int
+	MaxOutputTokens int
+	MaxToolLoops    int
 	AgentTimeoutSec int
 }
 
@@ -174,6 +181,19 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 			return nil, err
 		}
 	}
+	cleanupDone := false
+	cleanupAgent := func() {
+		if cleanupDone {
+			return
+		}
+		cleanupDone = true
+		if cleaner, ok := agentExec.(interface{ Cleanup() error }); ok {
+			if err := cleaner.Cleanup(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: cleanup managed gateway: %v\n", err)
+			}
+		}
+	}
+	defer cleanupAgent()
 
 	pvgCfg := game.PVGConfig{
 		Until:           cfg.Until,
@@ -187,6 +207,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 
 	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)
 	result := pvg.Run()
+	cleanupAgent()
 
 	// Close epoch
 	if err := finishEpoch(sessionDir, manifest, result); err != nil {
@@ -209,7 +230,15 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 	if model == "" {
 		model = DefaultLocalModel
 	}
-	return executor.NewPiExecutor(p, model, cfg.Thinking, cfg.AgentTimeoutSec), nil
+	piExec := executor.NewPiExecutor(p, model, cfg.Thinking, cfg.AgentTimeoutSec)
+	cred, err := gateway.Resolve(cfg.SessionID)
+	if err != nil {
+		return nil, err
+	}
+	if err := piExec.ConfigureGateway(cred); err != nil {
+		return nil, err
+	}
+	return piExec, nil
 }
 
 func primarySpecPath(manifest *sessionapi.Manifest, fallback *string) string {
@@ -267,6 +296,11 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 			Model:           model,
 			Until:           cfg.Until,
 			MaxCostUSD:      cfg.MaxCostUSD,
+			MaxRounds:       cfg.MaxRounds,
+			MaxDurationSec:  cfg.MaxDurationSec,
+			MaxInputTokens:  cfg.MaxInputTokens,
+			MaxOutputTokens: cfg.MaxOutputTokens,
+			MaxToolLoops:    cfg.MaxToolLoops,
 			AgentTimeoutSec: cfg.AgentTimeoutSec,
 			Thinking:        thinking,
 		},
@@ -293,10 +327,16 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	cfg := manifest.Config
 	lrc := LocalRunConfig{
+		SessionID:       manifest.SessionID,
 		Model:           cfg.Model,
 		Thinking:        cfg.Thinking,
 		Until:           cfg.Until,
 		MaxCostUSD:      cfg.MaxCostUSD,
+		MaxRounds:       cfg.MaxRounds,
+		MaxDurationSec:  cfg.MaxDurationSec,
+		MaxInputTokens:  cfg.MaxInputTokens,
+		MaxOutputTokens: cfg.MaxOutputTokens,
+		MaxToolLoops:    cfg.MaxToolLoops,
 		AgentTimeoutSec: cfg.AgentTimeoutSec,
 	}
 	if lrc.Thinking == "" {

@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "agentsession",
+    srcs = ["protocol.go"],
+    importpath = "github.com/telos-org/telos/internal/agentsession",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "agentsession_test",
+    srcs = ["protocol_test.go"],
+    embed = [":agentsession"],
+)

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/spec"
 )
 
@@ -37,8 +38,8 @@ func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) Turn
 	return TurnResult{Role: role, Status: StatusContinue, Logs: "verifier default"}
 }
 
-func (f *fakeExecutor) WorkspaceState() string {
-	return f.workspaceText
+func (f *fakeExecutor) WorkspaceState() platform.WorkspaceSnapshot {
+	return platform.WorkspaceSnapshot{Raw: f.workspaceText, FileList: []string{f.workspaceText}}
 }
 
 func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {

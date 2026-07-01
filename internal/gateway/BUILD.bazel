@@ -1,0 +1,18 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "gateway",
+    srcs = ["gateway.go"],
+    importpath = "github.com/telos-org/telos/internal/gateway",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/cloud",
+        "//internal/config",
+    ],
+)
+
+go_test(
+    name = "gateway_test",
+    srcs = ["gateway_test.go"],
+    embed = [":gateway"],
+)

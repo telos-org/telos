@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -20,6 +19,7 @@ import (
 func cmdLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	follow := fs.Bool("f", false, "Follow logs")
+	env := fs.String("env", "", "Cloud environment")
 	raw := fs.Bool("raw", false, "Show raw transcript")
 	parseFlags(fs, args)
 
@@ -30,15 +30,11 @@ func cmdLogs(args []string) {
 	sessionID := fs.Arg(0)
 
 	if *follow {
-		if isDeploymentID(sessionID) {
-			followDeploymentLogs(sessionID, *raw)
-			return
-		}
-		followLogs(sessionID, *raw)
+		followLogs(sessionID, *env, *raw)
 		return
 	}
 
-	text, err := getTranscriptFromAnywhere(sessionID)
+	text, err := getTranscriptFromAnywhere(sessionID, *env)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -46,38 +42,20 @@ func cmdLogs(args []string) {
 	printLogs(os.Stdout, text, *raw)
 }
 
-func followLogs(sessionID string, raw bool) {
-	if err := followTranscript(sessionID, os.Stdout, time.Sleep, raw); err != nil {
+func followLogs(sessionID, envID string, raw bool) {
+	if err := followTranscript(sessionID, envID, os.Stdout, time.Sleep, raw); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func followDeploymentLogs(deploymentID string, raw bool) {
-	control, err := cloud.ControlClient()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if err := followDeploymentTranscript(control, deploymentID, os.Stdout, time.Sleep, raw); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func followDeploymentTranscript(
-	control *cloud.Client,
-	deploymentID string,
-	out io.Writer,
-	sleep func(time.Duration),
-	raw bool,
-) error {
+func followTranscript(sessionID, envID string, out io.Writer, sleep func(time.Duration), raw bool) error {
 	var lastLen int
 	var lastBlockCount int
 	var lastProgressCount int
 	var lastTranscriptErr error
 	for {
-		text, err := control.GetDeploymentTranscript(deploymentID)
+		text, err := getTranscriptFromAnywhere(sessionID, envID)
 		if err == nil && raw && len(text) > lastLen {
 			fmt.Fprint(out, text[lastLen:])
 			lastLen = len(text)
@@ -97,63 +75,7 @@ func followDeploymentTranscript(
 		} else {
 			lastTranscriptErr = nil
 		}
-
-		deployment, err := control.GetDeployment(deploymentID)
-		if err != nil {
-			return err
-		}
-		if deploymentStateTerminal(deployment.State) {
-			if raw && lastLen == 0 && lastTranscriptErr != nil {
-				return lastTranscriptErr
-			}
-			if !raw && lastBlockCount == 0 {
-				if lastTranscriptErr != nil {
-					return lastTranscriptErr
-				}
-				fmt.Fprintln(out, "no deployment log entries")
-			}
-			return nil
-		}
-		sleep(2 * time.Second)
-	}
-}
-
-func deploymentStateTerminal(state string) bool {
-	switch state {
-	case "healthy", "failed", "deleted":
-		return true
-	default:
-		return false
-	}
-}
-
-func followTranscript(sessionID string, out io.Writer, sleep func(time.Duration), raw bool) error {
-	var lastLen int
-	var lastBlockCount int
-	var lastProgressCount int
-	var lastTranscriptErr error
-	for {
-		text, err := getTranscriptFromAnywhere(sessionID)
-		if err == nil && raw && len(text) > lastLen {
-			fmt.Fprint(out, text[lastLen:])
-			lastLen = len(text)
-		}
-		if err == nil && !raw {
-			blocks := logBlocks(text)
-			if lastBlockCount < len(blocks) {
-				lastProgressCount = printLogBlocks(out, blocks[lastBlockCount:], lastProgressCount)
-				lastBlockCount = len(blocks)
-			}
-		}
-		if err != nil {
-			if !transcriptNotReady(err) {
-				return err
-			}
-			lastTranscriptErr = err
-		} else {
-			lastTranscriptErr = nil
-		}
-		sess, err := getSessionFromAnywhere(sessionID)
+		sess, err := getSessionFromAnywhere(sessionID, envID)
 		if err != nil {
 			return err
 		}
@@ -193,13 +115,6 @@ func printLogs(out io.Writer, transcript string, raw bool) {
 	printLogBlocks(out, blocks, 0)
 }
 
-func printProgressUpdate(out io.Writer, index int, update string) {
-	if index > 1 {
-		fmt.Fprintln(out)
-	}
-	fmt.Fprintf(out, "#%d %s\n", index, update)
-}
-
 // Logs only treat standalone protocol tags as public log entries. This avoids
 // turning inline examples into user-visible progress or review output.
 var (
@@ -212,22 +127,6 @@ type logBlock struct {
 	start int
 	kind  string
 	text  string
-}
-
-func progressUpdates(transcript string) []string {
-	matches := progressUpdateTagRE.FindAllStringSubmatch(transcript, -1)
-	updates := make([]string, 0, len(matches))
-	for _, match := range matches {
-		if len(match) < 2 {
-			continue
-		}
-		text := strings.TrimSpace(match[1])
-		if text == "" {
-			continue
-		}
-		updates = append(updates, text)
-	}
-	return updates
 }
 
 func logBlocks(transcript string) []logBlock {

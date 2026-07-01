@@ -2,11 +2,13 @@ package telosd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -25,7 +27,8 @@ import (
 )
 
 type kubernetesSubstrate struct {
-	client kubernetes.Interface
+	client  kubernetes.Interface
+	billing *billingClient
 
 	agentImage        string
 	envNamespace      string
@@ -41,9 +44,13 @@ type kubernetesSubstrate struct {
 	runtimeMountPath  string
 	runtimeTelosPath  string
 	runtimeTelosdPath string
+	billingEndpoint   string
+	billingEnvID      string
+	billingToken      string
+	billingTokenFile  string
 }
 
-const piConfigSecretName = "pi-agent-config"
+var sessionGatewayLocks sync.Map
 
 var workerNamespaceLabels = map[string]string{
 	"pod-security.kubernetes.io/enforce": "privileged",
@@ -51,32 +58,55 @@ var workerNamespaceLabels = map[string]string{
 	"pod-security.kubernetes.io/warn":    "privileged",
 }
 
+const (
+	gatewayAPIKeyEnv    = "TELOS_GATEWAY_API_KEY"
+	gatewayBaseURLEnv   = "TELOS_GATEWAY_BASE_URL"
+	gatewayTransportEnv = "TELOS_GATEWAY_TRANSPORT"
+	gatewayKindEnv      = "TELOS_GATEWAY_KIND"
+	gatewayHeadersEnv   = "TELOS_GATEWAY_HEADERS"
+	gatewayKeyAliasEnv  = "TELOS_GATEWAY_KEY_ALIAS"
+)
+
+var gatewayEnvNames = []string{
+	gatewayBaseURLEnv,
+	gatewayTransportEnv,
+	gatewayKindEnv,
+	gatewayHeadersEnv,
+}
+
+var legacyGatewayEnvNames = []string{
+	"TELOS_LITELLM_BASE_URL",
+	"TELOS_LITELLM_API_KEY",
+	"TELOS_LITELLM_KEY_ALIAS",
+	"TELOS_API_BASE_URL",
+	"TELOS_BASE_URL",
+	"TELOS_API_KEY",
+}
+
+var optionalGatewayCredentialEnvNames = []string{
+	gatewayTransportEnv,
+	gatewayKindEnv,
+	gatewayHeadersEnv,
+	gatewayKeyAliasEnv,
+}
+
 func newKubernetesSubstrate(cfg Config) (kubernetesSubstrate, error) {
-	if strings.TrimSpace(os.Getenv(cfg.Kubernetes.AgentSecretKey)) == "" {
-		return kubernetesSubstrate{}, fmt.Errorf("%s is required to launch workers", cfg.Kubernetes.AgentSecretKey)
+	restCfg, err := kubernetesRESTConfig()
+	if err != nil {
+		return kubernetesSubstrate{}, err
 	}
-	client, err := kubernetesClient()
+	client, err := kubernetes.NewForConfig(restCfg)
 	if err != nil {
 		return kubernetesSubstrate{}, err
 	}
 	return newKubernetesSubstrateWithClient(cfg, client), nil
 }
 
-func newSessionSubstrate(cfg Config) (sessionSubstrate, error) {
-	switch cfg.Worker.Substrate {
-	case "local-process":
-		return newLocalProcessSubstrate(), nil
-	case "kubernetes":
-		return newKubernetesSubstrate(cfg)
-	default:
-		return nil, fmt.Errorf("invalid worker.substrate %q", cfg.Worker.Substrate)
-	}
-}
-
 func newKubernetesSubstrateWithClient(cfg Config, client kubernetes.Interface) kubernetesSubstrate {
 	runtimeMountPath := cfg.Runtime.MountPath
 	return kubernetesSubstrate{
 		client:            client,
+		billing:           newBillingClient(cfg.Billing),
 		agentImage:        cfg.Kubernetes.AgentImage,
 		envNamespace:      cfg.Kubernetes.EnvNamespace,
 		stateMountRoot:    cfg.Kubernetes.StateMountRoot,
@@ -91,15 +121,11 @@ func newKubernetesSubstrateWithClient(cfg Config, client kubernetes.Interface) k
 		runtimeMountPath:  runtimeMountPath,
 		runtimeTelosPath:  runtimeMountPath + "/telos",
 		runtimeTelosdPath: runtimeMountPath + "/telosd",
+		billingEndpoint:   cfg.Billing.Endpoint,
+		billingEnvID:      cfg.Billing.EnvID,
+		billingToken:      cfg.Billing.Token,
+		billingTokenFile:  cfg.Billing.TokenFile,
 	}
-}
-
-func kubernetesClient() (kubernetes.Interface, error) {
-	restCfg, err := kubernetesRESTConfig()
-	if err != nil {
-		return nil, err
-	}
-	return kubernetes.NewForConfig(restCfg)
 }
 
 func kubernetesRESTConfig() (*rest.Config, error) {
@@ -117,7 +143,7 @@ func kubernetesRESTConfig() (*rest.Config, error) {
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
 
-func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason string) error {
+func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error {
 	kind, err := sessionWorkerKind(session)
 	if err != nil {
 		return err
@@ -125,13 +151,17 @@ func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason strin
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
 
-	namespace := workerNamespace(session.SessionID, kind)
-	if err := s.prepareWorkerNamespace(ctx, namespace); err != nil {
-		return err
-	}
 	m, err := sessionapi.ReadManifest(filepath.Join(ptrValue(session.SessionDir), "session.json"))
 	if err != nil {
 		return fmt.Errorf("read worker manifest: %w", err)
+	}
+	credential, err := s.sessionGatewayCredential(ctx, session.SessionID, ptrValue(m.ParentSessionID), userAuthorization)
+	if err != nil {
+		return err
+	}
+	namespace := workerNamespace(session.SessionID, kind)
+	if err := s.prepareWorkerNamespace(ctx, namespace, credential); err != nil {
+		return err
 	}
 	switch kind {
 	case sessionapi.KindController:
@@ -173,10 +203,87 @@ func (s kubernetesSubstrate) Stop(session *sessionapi.Session) error {
 	if err := s.deleteClusterRole(ctx, workerClusterRole(namespace).Name); err != nil {
 		stopErr = errors.Join(stopErr, fmt.Errorf("delete worker clusterrole %s: %w", workerClusterRole(namespace).Name, err))
 	}
+	if s.billing != nil && s.billing.configured() {
+		if err := s.billing.ReconcileSession(session.SessionID, true); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: reconcile managed billing: %v\n", err)
+		}
+		if err := s.deleteSecret(ctx, s.envNamespace, sessionGatewaySecretName(session.SessionID)); err != nil {
+			stopErr = errors.Join(stopErr, fmt.Errorf("delete session gateway secret %s/%s: %w", s.envNamespace, sessionGatewaySecretName(session.SessionID), err))
+		}
+	}
 	return stopErr
 }
 
-func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespace string) error {
+func (s kubernetesSubstrate) RuntimeStatus(session *sessionapi.Session) (sessionapi.SessionStatus, error) {
+	kind, err := sessionWorkerKind(session)
+	if err != nil {
+		return "", err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	name := workerWorkloadName(session.SessionID, kind)
+	namespace := workerNamespace(session.SessionID, kind)
+	switch kind {
+	case sessionapi.KindController:
+		deployment, err := s.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return sessionapi.StatusStale, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if deploymentProgressDeadlineExceeded(deployment) {
+			return sessionapi.StatusStale, nil
+		}
+		return sessionapi.StatusRunning, nil
+	case sessionapi.KindTask:
+		job, err := s.client.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
+		if apierrors.IsNotFound(err) {
+			return sessionapi.StatusStale, nil
+		}
+		if err != nil {
+			return "", err
+		}
+		if jobConditionTrue(job, batchv1.JobFailed) || job.Status.Failed > 0 {
+			return sessionapi.StatusFailed, nil
+		}
+		if jobConditionTrue(job, batchv1.JobComplete) || job.Status.Succeeded > 0 {
+			return sessionapi.StatusStale, nil
+		}
+		return sessionapi.StatusRunning, nil
+	default:
+		return "", fmt.Errorf("invalid session_kind %q", kind)
+	}
+}
+
+func deploymentProgressDeadlineExceeded(deployment *appsv1.Deployment) bool {
+	if deployment == nil {
+		return false
+	}
+	for _, condition := range deployment.Status.Conditions {
+		if condition.Type == appsv1.DeploymentProgressing &&
+			condition.Status == corev1.ConditionFalse &&
+			condition.Reason == "ProgressDeadlineExceeded" {
+			return true
+		}
+	}
+	return false
+}
+
+func jobConditionTrue(job *batchv1.Job, conditionType batchv1.JobConditionType) bool {
+	if job == nil {
+		return false
+	}
+	for _, condition := range job.Status.Conditions {
+		if condition.Type == conditionType && condition.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespace string, credential *controlSessionKey) error {
 	if err := s.createNamespaceIfMissing(ctx, namespace); err != nil {
 		return err
 	}
@@ -194,10 +301,7 @@ func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespa
 			return err
 		}
 	}
-	if err := s.createOrUpdateAgentSecret(ctx, namespace); err != nil {
-		return err
-	}
-	if err := s.copyOptionalSecret(ctx, s.envNamespace, namespace, piConfigSecretName); err != nil {
+	if err := s.createOrUpdateAgentSecret(ctx, namespace, credential); err != nil {
 		return err
 	}
 	for _, name := range append([]string{}, s.copySecrets...) {
@@ -213,12 +317,12 @@ func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespa
 	return nil
 }
 
-func (s kubernetesSubstrate) agentSecret(namespace string) *corev1.Secret {
-	value := strings.TrimSpace(os.Getenv(s.agentSecretKey))
+func (s kubernetesSubstrate) agentSecret(namespace string, credential *controlSessionKey) *corev1.Secret {
 	data := map[string][]byte{}
-	if value != "" {
-		data[s.agentSecretKey] = []byte(value)
-	}
+	applyConfiguredGatewayAPIKey(data, s.agentSecretKey)
+	applyConfiguredGatewayEnv(data)
+	s.applyBillingCredential(data)
+	applyGatewayCredential(data, s.agentSecretKey, credential)
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: s.agentSecretName, Namespace: namespace},
 		Type:       corev1.SecretTypeOpaque,
@@ -290,25 +394,11 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			}},
 		},
 		{Name: "telos-runtime", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		{Name: "agent-skills-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		{Name: "agent-kubeconfig-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
-		{
-			Name: "pi-agent-config-source",
-			VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{
-				SecretName:  piConfigSecretName,
-				Optional:    boolPtr(true),
-				DefaultMode: int32Ptr(0o440),
-			}},
-		},
-		{Name: "pi-agent-config-home", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
 	}
 	mounts := []corev1.VolumeMount{
 		{Name: "telos-state", MountPath: s.stateMountRoot},
 		{Name: "telos-state", MountPath: s.stateHostRoot},
 		{Name: "telos-runtime", MountPath: s.runtimeMountPath},
-		{Name: "agent-skills-home", MountPath: "/home/agent/.agents/skills"},
-		{Name: "agent-kubeconfig-home", MountPath: "/home/agent/.kube"},
-		{Name: "pi-agent-config-home", MountPath: "/home/agent/.pi/agent"},
 	}
 	podSpec := corev1.PodSpec{
 		SecurityContext:               agentPodSecurityContext(),
@@ -319,14 +409,9 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			Image:           s.agentImage,
 			ImagePullPolicy: pullPolicy(s.agentImage),
 			SecurityContext: agentContainerSecurityContext(),
-			Command:         []string{"bash", "-lc", s.runtimeInstallScript(sessionID)},
+			Command:         []string{"bash", "-lc", s.runtimeInstallScript()},
 			VolumeMounts: []corev1.VolumeMount{
-				{Name: "telos-state", MountPath: s.stateMountRoot},
 				{Name: "telos-runtime", MountPath: s.runtimeMountPath},
-				{Name: "agent-skills-home", MountPath: "/home/agent/.agents/skills"},
-				{Name: "agent-kubeconfig-home", MountPath: "/home/agent/.kube"},
-				{Name: "pi-agent-config-source", MountPath: "/telos-pi-agent-config", ReadOnly: true},
-				{Name: "pi-agent-config-home", MountPath: "/home/agent/.pi/agent"},
 			},
 		}},
 		Containers: []corev1.Container{{
@@ -363,7 +448,6 @@ func (s kubernetesSubstrate) workerPodTemplate(
 func (s kubernetesSubstrate) workerEnv(sessionID string, m *sessionapi.Manifest) []corev1.EnvVar {
 	env := []corev1.EnvVar{
 		{Name: "PATH", Value: s.runtimeMountPath + ":/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin"},
-		{Name: "KUBECONFIG", Value: "/home/agent/.kube/config"},
 		{
 			Name: s.agentSecretKey,
 			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
@@ -384,6 +468,26 @@ func (s kubernetesSubstrate) workerEnv(sessionID string, m *sessionapi.Manifest)
 	}
 	if m.Access != nil && strings.TrimSpace(m.Access.APIToken) != "" {
 		env = append(env, corev1.EnvVar{Name: "TELOS_API_TOKEN", Value: m.Access.APIToken})
+	}
+	if s.billingEnvID != "" {
+		env = append(env, corev1.EnvVar{Name: "TELOS_ENV_ID", Value: s.billingEnvID})
+	}
+	if s.billingEndpoint != "" {
+		env = append(env, corev1.EnvVar{Name: "TELOS_BILLING_ENDPOINT", Value: s.billingEndpoint})
+	}
+	if s.billingToken != "" {
+		env = append(env, corev1.EnvVar{
+			Name: "TELOS_BILLING_ENV_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: s.agentSecretName},
+				Key:                  "TELOS_BILLING_ENV_TOKEN",
+			}},
+		})
+	} else if s.billingTokenFile != "" {
+		env = append(env, corev1.EnvVar{Name: "TELOS_BILLING_ENV_TOKEN_FILE", Value: s.billingTokenFile})
+	}
+	if s.billingEnvID != "" && (s.billingToken != "" || s.billingTokenFile != "") {
+		env = append(env, corev1.EnvVar{Name: "TELOS_COST_HARD_LIMIT", Value: "true"})
 	}
 	return env
 }
@@ -438,24 +542,9 @@ func (s kubernetesSubstrate) workerAnnotations(m *sessionapi.Manifest, wakeReaso
 }
 
 func (s kubernetesSubstrate) createNamespaceIfMissing(ctx context.Context, name string) error {
-	current, err := s.client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
+	_, err := s.client.CoreV1().Namespaces().Get(ctx, name, metav1.GetOptions{})
 	if err == nil {
-		next := current.DeepCopy()
-		if next.Labels == nil {
-			next.Labels = map[string]string{}
-		}
-		changed := false
-		for key, value := range workerNamespaceLabels {
-			if next.Labels[key] != value {
-				next.Labels[key] = value
-				changed = true
-			}
-		}
-		if !changed {
-			return nil
-		}
-		_, err = s.client.CoreV1().Namespaces().Update(ctx, next, metav1.UpdateOptions{})
-		return err
+		return nil
 	}
 	if !apierrors.IsNotFound(err) {
 		return err
@@ -502,8 +591,16 @@ func (s kubernetesSubstrate) createOrUpdateSecret(ctx context.Context, desired *
 	return err
 }
 
-func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, namespace string) error {
-	secret := s.agentSecret(namespace)
+func (s kubernetesSubstrate) deleteSecret(ctx context.Context, namespace string, name string) error {
+	err := s.client.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
+	return err
+}
+
+func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, namespace string, credential *controlSessionKey) error {
+	secret := s.agentSecret(namespace, credential)
 	source, err := s.client.CoreV1().Secrets(s.envNamespace).Get(ctx, s.agentSecretName, metav1.GetOptions{})
 	if err == nil {
 		secret.Type = source.Type
@@ -511,27 +608,227 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 		if secret.Data == nil {
 			secret.Data = map[string][]byte{}
 		}
-		if envValue := strings.TrimSpace(os.Getenv(s.agentSecretKey)); envValue != "" {
-			secret.Data[s.agentSecretKey] = []byte(envValue)
-		}
+		removeLegacyGatewayEnv(secret.Data)
+		applyConfiguredGatewayAPIKey(secret.Data, s.agentSecretKey)
+		applyConfiguredGatewayEnv(secret.Data)
+		s.applyBillingCredential(secret.Data)
+		applyGatewayCredential(secret.Data, s.agentSecretKey, credential)
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
-	if strings.TrimSpace(string(secret.Data[s.agentSecretKey])) == "" {
-		return fmt.Errorf("%s is required to launch a worker", s.agentSecretKey)
+	if gatewayAPIKeyValue(secret.Data, s.agentSecretKey) == "" {
+		return fmt.Errorf("%s is required to launch a worker", gatewayAPIKeyEnv)
+	}
+	if !secretHasGatewayBaseURL(secret.Data) {
+		return fmt.Errorf("%s is required to launch a worker", gatewayBaseURLEnv)
 	}
 	return s.createOrUpdateSecret(ctx, secret)
 }
 
-func (s kubernetesSubstrate) copyOptionalSecret(ctx context.Context, sourceNamespace string, targetNamespace string, name string) error {
-	if strings.TrimSpace(name) == "" {
+func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessionID, parentSessionID, userAuthorization string) (*controlSessionKey, error) {
+	if s.billing == nil || !s.billing.configured() {
+		return nil, nil
+	}
+	lock := sessionGatewayLock(sessionID)
+	lock.Lock()
+	defer lock.Unlock()
+	secretName := sessionGatewaySecretName(sessionID)
+	current, err := s.client.CoreV1().Secrets(s.envNamespace).Get(ctx, secretName, metav1.GetOptions{})
+	if err == nil {
+		credential := credentialFromSecret(current, s.agentSecretKey)
+		if credential != nil {
+			return credential, nil
+		}
+	} else if !apierrors.IsNotFound(err) {
+		return nil, err
+	}
+	minted, err := s.billing.MintSessionKey(sessionID, parentSessionID, userAuthorization)
+	if err != nil {
+		return nil, err
+	}
+	secret := sessionGatewaySecret(s.envNamespace, secretName, s.agentSecretKey, minted)
+	if err := s.createOrUpdateSecret(ctx, secret); err != nil {
+		return nil, err
+	}
+	return &minted, nil
+}
+
+func sessionGatewayLock(sessionID string) *sync.Mutex {
+	value, _ := sessionGatewayLocks.LoadOrStore(sessionID, &sync.Mutex{})
+	return value.(*sync.Mutex)
+}
+
+func (s kubernetesSubstrate) applyBillingCredential(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	if s.billingEnvID != "" {
+		data["TELOS_ENV_ID"] = []byte(s.billingEnvID)
+	}
+	if s.billingEndpoint != "" {
+		data["TELOS_BILLING_ENDPOINT"] = []byte(s.billingEndpoint)
+	}
+	if s.billingToken != "" {
+		data["TELOS_BILLING_ENV_TOKEN"] = []byte(s.billingToken)
+	}
+	if s.billingTokenFile != "" {
+		data["TELOS_BILLING_ENV_TOKEN_FILE"] = []byte(s.billingTokenFile)
+	}
+}
+
+func sessionGatewaySecretName(sessionID string) string {
+	return "telos-session-gateway-" + sessionShortID(sessionID)
+}
+
+func sessionGatewaySecret(namespace string, name string, keyName string, credential controlSessionKey) *corev1.Secret {
+	data := map[string][]byte{
+		keyName:           []byte(credential.APIKey),
+		gatewayAPIKeyEnv:  []byte(credential.APIKey),
+		gatewayBaseURLEnv: []byte(credential.BaseURL),
+	}
+	if credential.Transport != "" {
+		data[gatewayTransportEnv] = []byte(credential.Transport)
+	}
+	if credential.Kind != "" {
+		data[gatewayKindEnv] = []byte(credential.Kind)
+	}
+	if headers := gatewayHeadersJSON(credential.Headers); headers != "" {
+		data[gatewayHeadersEnv] = []byte(headers)
+	}
+	if credential.KeyAlias != "" {
+		data[gatewayKeyAliasEnv] = []byte(credential.KeyAlias)
+	}
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      name,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"telos/role": "session-gateway",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: data,
+	}
+}
+
+func credentialFromSecret(secret *corev1.Secret, keyName string) *controlSessionKey {
+	if secret == nil {
 		return nil
 	}
-	err := s.copySecret(ctx, sourceNamespace, targetNamespace, name)
-	if apierrors.IsNotFound(err) {
+	apiKey := gatewayAPIKeyValue(secret.Data, keyName)
+	baseURL := strings.TrimSpace(string(secret.Data[gatewayBaseURLEnv]))
+	if apiKey == "" || baseURL == "" {
 		return nil
 	}
-	return err
+	return &controlSessionKey{
+		BaseURL:   strings.TrimRight(baseURL, "/"),
+		APIKey:    apiKey,
+		Transport: strings.TrimSpace(string(secret.Data[gatewayTransportEnv])),
+		Kind:      strings.TrimSpace(string(secret.Data[gatewayKindEnv])),
+		Headers:   gatewayHeadersFromSecret(secret.Data),
+		KeyAlias:  strings.TrimSpace(string(secret.Data[gatewayKeyAliasEnv])),
+	}
+}
+
+func applyGatewayCredential(data map[string][]byte, keyName string, credential *controlSessionKey) {
+	if credential == nil {
+		return
+	}
+	clearOptionalGatewayCredentialEnv(data)
+	data[keyName] = []byte(credential.APIKey)
+	data[gatewayAPIKeyEnv] = []byte(credential.APIKey)
+	data[gatewayBaseURLEnv] = []byte(credential.BaseURL)
+	if credential.Transport != "" {
+		data[gatewayTransportEnv] = []byte(credential.Transport)
+	}
+	if credential.Kind != "" {
+		data[gatewayKindEnv] = []byte(credential.Kind)
+	}
+	if headers := gatewayHeadersJSON(credential.Headers); headers != "" {
+		data[gatewayHeadersEnv] = []byte(headers)
+	}
+	if credential.KeyAlias != "" {
+		data[gatewayKeyAliasEnv] = []byte(credential.KeyAlias)
+	}
+}
+
+func removeLegacyGatewayEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	for _, name := range legacyGatewayEnvNames {
+		delete(data, name)
+	}
+	delete(data, gatewayKeyAliasEnv)
+}
+
+func clearOptionalGatewayCredentialEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	for _, name := range optionalGatewayCredentialEnvNames {
+		delete(data, name)
+	}
+}
+
+func applyConfiguredGatewayAPIKey(data map[string][]byte, keyName string) {
+	if data == nil {
+		return
+	}
+	value := strings.TrimSpace(os.Getenv(keyName))
+	if value == "" && keyName != gatewayAPIKeyEnv {
+		value = strings.TrimSpace(os.Getenv(gatewayAPIKeyEnv))
+	}
+	if value == "" {
+		return
+	}
+	data[keyName] = []byte(value)
+	data[gatewayAPIKeyEnv] = []byte(value)
+}
+
+func applyConfiguredGatewayEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	for _, name := range gatewayEnvNames {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			data[name] = []byte(value)
+		}
+	}
+}
+
+func gatewayAPIKeyValue(data map[string][]byte, keyName string) string {
+	if value := strings.TrimSpace(string(data[gatewayAPIKeyEnv])); value != "" {
+		return value
+	}
+	return strings.TrimSpace(string(data[keyName]))
+}
+
+func secretHasGatewayBaseURL(data map[string][]byte) bool {
+	return strings.TrimSpace(string(data[gatewayBaseURLEnv])) != ""
+}
+
+func gatewayHeadersJSON(headers map[string]string) string {
+	if len(headers) == 0 {
+		return ""
+	}
+	data, err := json.Marshal(headers)
+	if err != nil {
+		return ""
+	}
+	return string(data)
+}
+
+func gatewayHeadersFromSecret(data map[string][]byte) map[string]string {
+	raw := strings.TrimSpace(string(data[gatewayHeadersEnv]))
+	if raw == "" {
+		return nil
+	}
+	var headers map[string]string
+	if err := json.Unmarshal([]byte(raw), &headers); err != nil {
+		return nil
+	}
+	return cloneStringMap(headers)
 }
 
 func (s kubernetesSubstrate) copySecret(ctx context.Context, sourceNamespace string, targetNamespace string, name string) error {
@@ -778,11 +1075,10 @@ func sessionShortID(sessionID string) string {
 	return parts[len(parts)-1]
 }
 
-func (s kubernetesSubstrate) runtimeInstallScript(sessionID string) string {
+func (s kubernetesSubstrate) runtimeInstallScript() string {
 	return fmt.Sprintf(`set -euo pipefail
 base_url=%q
 version=%q
-package_skills=%q
 os=linux
 arch="$(uname -m)"
 case "$arch" in
@@ -830,45 +1126,9 @@ download_verified "telosd-$os-$arch" "$tmp_dir/telosd"
 install -m 0755 "$tmp_dir/telos" %s
 install -m 0755 "$tmp_dir/telosd" %s
 
-mkdir -p /home/agent/.pi/agent
-for source in /telos-pi-agent-config/*; do
-  [ -e "$source" ] || continue
-  cp -L "$source" /home/agent/.pi/agent/
-done
-chmod 0600 /home/agent/.pi/agent/* 2>/dev/null || true
-
-mkdir -p /home/agent/.agents/skills
-if [ -d "$package_skills" ]; then
-  cp -R "$package_skills"/. /home/agent/.agents/skills/
-fi
-chmod -R u+rwX,g+rX /home/agent/.agents 2>/dev/null || true
-
-mkdir -p /home/agent/.kube
-cat > /home/agent/.kube/config <<'EOF'
-apiVersion: v1
-kind: Config
-clusters:
-- name: in-cluster
-  cluster:
-    server: https://kubernetes.default.svc
-    certificate-authority: /var/run/secrets/kubernetes.io/serviceaccount/ca.crt
-users:
-- name: agent
-  user:
-    tokenFile: /var/run/secrets/kubernetes.io/serviceaccount/token
-contexts:
-- name: agent
-  context:
-    cluster: in-cluster
-    user: agent
-    namespace: default
-current-context: agent
-EOF
-chmod 0600 /home/agent/.kube/config
-
 %s --version
 %s --version
-`, s.runtimeBaseURL, s.runtimeVersion, filepath.Join(s.stateMountRoot, "sessions", sessionID, "package", "skills"), s.runtimeMountPath, s.runtimeTelosPath, s.runtimeTelosdPath, s.runtimeTelosPath, s.runtimeTelosdPath)
+`, s.runtimeBaseURL, s.runtimeVersion, s.runtimeMountPath, s.runtimeTelosPath, s.runtimeTelosdPath, s.runtimeTelosPath, s.runtimeTelosdPath)
 }
 
 func pullPolicy(image string) corev1.PullPolicy {
@@ -919,6 +1179,24 @@ func cloneByteMap(in map[string][]byte) map[string][]byte {
 	out := make(map[string][]byte, len(in))
 	for key, value := range in {
 		out[key] = append([]byte{}, value...)
+	}
+	return out
+}
+
+func cloneStringMap(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for key, value := range in {
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		out[key] = strings.TrimSpace(value)
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }

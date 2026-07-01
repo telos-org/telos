@@ -11,8 +11,12 @@ import (
 )
 
 type sessionSubstrate interface {
-	Apply(session *sessionapi.Session, wakeReason string) error
+	Apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error
 	Stop(session *sessionapi.Session) error
+}
+
+type sessionRuntimeStatusSubstrate interface {
+	RuntimeStatus(session *sessionapi.Session) (sessionapi.SessionStatus, error)
 }
 
 type cloudSessionStore struct {
@@ -30,7 +34,7 @@ func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessio
 	if err != nil {
 		return nil, err
 	}
-	if err := s.apply(session, startWakeReason(session)); err != nil {
+	if err := s.apply(session, startWakeReason(session), req.UserAuthorization); err != nil {
 		cleanupErr := s.cleanupWorker(session)
 		removeSessionDir(session)
 		if cleanupErr != nil {
@@ -54,7 +58,7 @@ func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUp
 	if response.Operation == "created" {
 		wakeReason = startWakeReason(response.Session)
 	}
-	if err := s.apply(response.Session, wakeReason); err != nil {
+	if err := s.apply(response.Session, wakeReason, req.UserAuthorization); err != nil {
 		if response.Operation == "created" {
 			cleanupErr := s.cleanupWorker(response.Session)
 			removeSessionDir(response.Session)
@@ -89,11 +93,11 @@ func (s *cloudSessionStore) Get(id string) (*sessionapi.Session, error) {
 	return session, nil
 }
 
-func (s *cloudSessionStore) apply(session *sessionapi.Session, wakeReason string) error {
+func (s *cloudSessionStore) apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error {
 	if s.substrate == nil {
 		return nil
 	}
-	if err := s.substrate.Apply(session, wakeReason); err != nil {
+	if err := s.substrate.Apply(session, wakeReason, userAuthorization); err != nil {
 		return fmt.Errorf("launch session %s worker: %w", session.SessionID, err)
 	}
 	return nil
@@ -152,6 +156,7 @@ func (s *cloudSessionStore) routes() []publicRoute {
 }
 
 func (s *cloudSessionStore) enrich(session *sessionapi.Session, routes []publicRoute) {
+	s.enrichRuntimeStatus(session)
 	if session.ParentSessionID != nil && *session.ParentSessionID != "" {
 		return
 	}
@@ -163,4 +168,19 @@ func (s *cloudSessionStore) enrich(session *sessionapi.Session, routes []publicR
 		url := "https://" + stripScheme(handle)
 		session.DashboardURL = &url
 	}
+}
+
+func (s *cloudSessionStore) enrichRuntimeStatus(session *sessionapi.Session) {
+	if session == nil || s.substrate == nil || session.Status.IsTerminal() {
+		return
+	}
+	statuser, ok := s.substrate.(sessionRuntimeStatusSubstrate)
+	if !ok {
+		return
+	}
+	status, err := statuser.RuntimeStatus(session)
+	if err != nil || status == "" {
+		return
+	}
+	session.Status = status
 }

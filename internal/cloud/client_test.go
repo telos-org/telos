@@ -6,8 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
@@ -91,7 +94,7 @@ func TestClientListSessions(t *testing.T) {
 	if gotPath != "/api/sessions" {
 		t.Fatalf("request path: got %q", gotPath)
 	}
-	sessions, err = client.ListSessions(2, false)
+	_, err = client.ListSessions(2, false)
 	if err != nil {
 		t.Fatalf("ListSessions limit: %v", err)
 	}
@@ -107,23 +110,390 @@ func TestClientListSessions(t *testing.T) {
 	}
 }
 
-func TestClientPublishPackageVersion(t *testing.T) {
+func TestClientListEnvironments(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/environments" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"environments": []map[string]any{{
+				"id":                         "env_123",
+				"env_handle":                 "env-abc.usetelos.ai",
+				"state":                      "ready",
+				"has_recoverable_env_access": true,
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	envs, err := client.ListEnvironments()
+	if err != nil {
+		t.Fatalf("ListEnvironments: %v", err)
+	}
+	if len(envs) != 1 {
+		t.Fatalf("expected 1 environment, got %d", len(envs))
+	}
+	if envs[0].ID != "env_123" || envs[0].Handle != "env-abc.usetelos.ai" {
+		t.Fatalf("unexpected environment: %+v", envs[0])
+	}
+	if !envs[0].HasRecoverable {
+		t.Fatal("expected recoverable environment")
+	}
+}
+
+func TestClientGetEnvironmentDoesNotRequireAccess(t *testing.T) {
+	var accessRequests int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/environments":
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]any{
+				"environments": []map[string]any{{
+					"id":                         "env_123",
+					"env_handle":                 "env-abc.usetelos.ai",
+					"state":                      "ready",
+					"has_recoverable_env_access": false,
+				}},
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/environments/env_123/access":
+			accessRequests++
+			http.Error(w, "access should not be requested", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	env, err := client.GetEnvironment("env_123")
+	if err != nil {
+		t.Fatalf("GetEnvironment: %v", err)
+	}
+	if env.ID != "env_123" || env.Handle != "env-abc.usetelos.ai" {
+		t.Fatalf("unexpected environment: %+v", env)
+	}
+	if env.AccessToken != "" {
+		t.Fatalf("metadata-only lookup should not set access token: %+v", env)
+	}
+	if accessRequests != 0 {
+		t.Fatalf("access requests: got %d", accessRequests)
+	}
+}
+
+func TestClientCreateEnvironment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/environments" || r.Method != "POST" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":           "env_123",
+			"env_handle":   "env-abc.usetelos.ai",
+			"access_token": "env-token",
+			"state":        "provisioning",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	env, err := client.CreateEnvironment()
+	if err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	if env.ID != "env_123" || env.Handle != "env-abc.usetelos.ai" || env.AccessToken != "env-token" {
+		t.Fatalf("unexpected environment: %+v", env)
+	}
+}
+
+func TestClientCreateEnvironmentAcceptsLegacyAccessField(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/environments" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"id":          "env_123",
+			"env_handle":  "env-abc.usetelos.ai",
+			"env_api_key": "legacy-token",
+			"state":       "provisioning",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	env, err := client.CreateEnvironment()
+	if err != nil {
+		t.Fatalf("CreateEnvironment: %v", err)
+	}
+	if env.AccessToken != "legacy-token" {
+		t.Fatalf("access token: got %q", env.AccessToken)
+	}
+}
+
+func TestClientMintSessionKey(t *testing.T) {
+	var gotPath string
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]any{
+			"session_id": "sess-1",
+			"base_url":   "https://proxy.example.com/v1",
+			"api_key":    "sk-session",
+			"transport":  "bifrost_async",
+			"kind":       "bifrost",
+			"headers":    map[string]string{"x-bf-vk": "sk-bf"},
+			"budget_usd": 5.0,
+			"key_alias":  "sess-1",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	key, err := client.MintSessionKey("sess-1")
+	if err != nil {
+		t.Fatalf("MintSessionKey: %v", err)
+	}
+	if gotPath != "/api/billing/session-key" || gotBody["session_id"] != "sess-1" {
+		t.Fatalf("request: path=%q body=%v", gotPath, gotBody)
+	}
+	if key.APIKey != "sk-session" || key.BaseURL != "https://proxy.example.com/v1" || key.Transport != "bifrost_async" || key.Kind != "bifrost" || key.Headers["x-bf-vk"] != "sk-bf" || key.KeyAlias != "sess-1" {
+		t.Fatalf("key: %+v", key)
+	}
+}
+
+func TestClientMintSessionKeyRejectsInvalidSessionID(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+	}{
+		{name: "missing"},
+		{name: "mismatch", sessionID: "sess-other"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				json.NewEncoder(w).Encode(map[string]any{
+					"session_id": tt.sessionID,
+					"base_url":   "https://proxy.example.com/v1",
+					"api_key":    "sk-session",
+				})
+			}))
+			defer srv.Close()
+
+			client := NewClient(srv.URL, "test-token")
+			if _, err := client.MintSessionKey("sess-1"); err == nil {
+				t.Fatal("expected invalid session_id error")
+			}
+		})
+	}
+}
+
+func TestClientForwardsUserAuthorization(t *testing.T) {
+	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/sessions" || r.Method != http.MethodPost {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer env-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Header.Get(ForwardedUserAuthorizationHeader) != "Bearer user-token" {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sessionapi.Session{
+			SessionID: "sess-forwarded",
+			Status:    sessionapi.StatusRunning,
+			Runtime:   sessionapi.RuntimeCloud,
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "env-token")
+	client.ForwardedUserToken = "user-token"
+	session, err := client.CreateSession(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if session.SessionID != "sess-forwarded" {
+		t.Fatalf("session: %+v", session)
+	}
+}
+
+func TestClientForwardsUserAuthorizationOnlyForMutations(t *testing.T) {
+	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
+	var sawCreate, sawUpdate, sawList, sawStream bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/sessions" && r.Method == http.MethodPost:
+			sawCreate = true
+			if r.Header.Get(ForwardedUserAuthorizationHeader) != "Bearer user-token" {
+				t.Fatalf("create missing forwarded user auth: %q", r.Header.Get(ForwardedUserAuthorizationHeader))
+			}
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(sessionapi.Session{SessionID: "sess-create", Runtime: sessionapi.RuntimeCloud})
+		case r.URL.Path == "/api/sessions/demo/spec" && r.Method == http.MethodPut:
+			sawUpdate = true
+			if r.Header.Get(ForwardedUserAuthorizationHeader) != "Bearer user-token" {
+				t.Fatalf("update missing forwarded user auth: %q", r.Header.Get(ForwardedUserAuthorizationHeader))
+			}
+			json.NewEncoder(w).Encode(sessionapi.SessionSpecUpdateResponse{Operation: "updated"})
+		case r.URL.Path == "/api/sessions" && r.Method == http.MethodGet:
+			sawList = true
+			if got := r.Header.Get(ForwardedUserAuthorizationHeader); got != "" {
+				t.Fatalf("list should not forward user auth, got %q", got)
+			}
+			json.NewEncoder(w).Encode(sessionapi.SessionListResponse{})
+		case r.URL.Path == "/api/sessions/sess-create/events" && r.Method == http.MethodGet:
+			sawStream = true
+			if got := r.Header.Get(ForwardedUserAuthorizationHeader); got != "" {
+				t.Fatalf("stream should not forward user auth, got %q", got)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"event\":\"ok\"}\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "env-token")
+	client.ForwardedUserToken = "user-token"
+	if _, err := client.CreateSession(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := client.ApplySessionSpec("demo", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown}); err != nil {
+		t.Fatalf("ApplySessionSpec: %v", err)
+	}
+	if _, err := client.ListSessions(0, false); err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if err := client.StreamEvents(context.Background(), "sess-create", func(map[string]any) error { return nil }); err != nil {
+		t.Fatalf("StreamEvents: %v", err)
+	}
+	if !sawCreate || !sawUpdate || !sawList || !sawStream {
+		t.Fatalf("missing requests: create=%v update=%v list=%v stream=%v", sawCreate, sawUpdate, sawList, sawStream)
+	}
+}
+
+func TestBillingClientRequiresExplicitEndpointForCustomAPIEndpoint(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("api_endpoint: https://api.staging.example.com\nauth_token: login-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("TELOS_API_ENDPOINT", "")
+	t.Setenv("TELOS_BILLING_ENDPOINT", "")
+	t.Setenv("TELOS_AUTH_TOKEN", "")
+
+	_, err := BillingClient()
+	if err == nil || !strings.Contains(err.Error(), "billing_endpoint is required") {
+		t.Fatalf("expected billing_endpoint error, got %v", err)
+	}
+}
+
+func TestClientBalanceAndReconcile(t *testing.T) {
+	var sawReconcile bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch r.URL.RequestURI() {
+		case "/api/billing/balance":
+			json.NewEncoder(w).Encode(map[string]any{"compute_units": 123.0})
+		case "/api/billing/session-key/sess-1/reconcile?terminal=true":
+			sawReconcile = true
+			json.NewEncoder(w).Encode(map[string]any{"ok": true})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	bal, err := client.Balance()
+	if err != nil {
+		t.Fatalf("Balance: %v", err)
+	}
+	if bal.ComputeUnits != 123.0 {
+		t.Fatalf("balance: %+v", bal)
+	}
+	if err := client.ReconcileSession("sess-1", true); err != nil {
+		t.Fatalf("ReconcileSession: %v", err)
+	}
+	if !sawReconcile {
+		t.Fatal("missing reconcile request")
+	}
+}
+
+func TestClientReconcileSessionEscapesSessionID(t *testing.T) {
+	var gotPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.EscapedPath()
+		if gotPath != "/api/billing/session-key/sess%2F1%3Fx/reconcile" || r.URL.RawQuery != "terminal=true" {
+			http.NotFound(w, r)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{"ok": true})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	if err := client.ReconcileSession("sess/1?x", true); err != nil {
+		t.Fatalf("ReconcileSession: %v", err)
+	}
+	if gotPath != "/api/billing/session-key/sess%2F1%3Fx/reconcile" {
+		t.Fatalf("session id not escaped: %s", gotPath)
+	}
+}
+
+func TestClientPushCatalogSpec(t *testing.T) {
 	var uploadedBody []byte
+	var pushedBody map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
 		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/api/packages/telos/auth/versions/1.2.3":
+		case r.Method == http.MethodPut && r.URL.Path == "/api/catalog/packages/sha256:abc":
 			uploadedBody, _ = io.ReadAll(r.Body)
 			json.NewEncoder(w).Encode(map[string]any{
-				"scope":      "telos",
-				"name":       "auth",
-				"version":    "1.2.3",
-				"ref":        "@telos/auth:1.2.3",
 				"digest":     "sha256:abc",
+				"size_bytes": len(uploadedBody),
 				"created_at": "now",
+			})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/catalog/specs/auth":
+			if err := json.NewDecoder(r.Body).Decode(&pushedBody); err != nil {
+				t.Fatal(err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"operation": "created",
+				"spec": map[string]any{
+					"name":           "auth",
+					"package_digest": "sha256:abc",
+					"visibility":     "private",
+					"created_at":     "now",
+					"updated_at":     "now",
+				},
 			})
 		default:
 			http.NotFound(w, r)
@@ -132,57 +502,29 @@ func TestClientPublishPackageVersion(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	uploaded, err := client.PublishPackageVersion("telos", "auth", "1.2.3", []byte("package"))
+	uploaded, err := client.UploadApplyPackage("sha256:abc", []byte("package"))
 	if err != nil {
-		t.Fatalf("PublishPackageVersion: %v", err)
+		t.Fatalf("UploadApplyPackage: %v", err)
 	}
-	if uploaded.Ref != "@telos/auth:1.2.3" || uploaded.Digest != "sha256:abc" || string(uploadedBody) != "package" {
+	if uploaded.SizeBytes != len("package") || string(uploadedBody) != "package" {
 		t.Fatalf("upload: got %+v body %q", uploaded, uploadedBody)
 	}
-}
-
-func TestClientCreateDeployment(t *testing.T) {
-	var gotBody map[string]string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/deployments" {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Header.Get("User-Agent") != UserAgent {
-			t.Fatalf("user-agent: got %q", r.Header.Get("User-Agent"))
-		}
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatal(err)
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"id":             "dep_123",
-			"name":           "auth",
-			"state":          "provisioning",
-			"package_ref":    "@telos/auth:1.2.3",
-			"package_digest": "sha256:abc",
-			"created_at":     "now",
-			"updated_at":     "now",
-		})
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.CreateDeployment("auth", "@telos/auth:1.2.3")
+	pushed, err := client.PushCatalogSpec("auth", "sha256:abc")
 	if err != nil {
-		t.Fatalf("CreateDeployment: %v", err)
+		t.Fatalf("PushCatalogSpec: %v", err)
 	}
-	if deployment.ID != "dep_123" || deployment.Name != "auth" || deployment.State != "provisioning" {
-		t.Fatalf("deployment: got %+v", deployment)
+	if pushed.Operation != "created" || pushed.Spec.Name != "auth" {
+		t.Fatalf("push: got %+v", pushed)
 	}
-	if gotBody["name"] != "auth" || gotBody["package_ref"] != "@telos/auth:1.2.3" {
-		t.Fatalf("body: got %#v", gotBody)
+	if pushedBody["package_digest"] != "sha256:abc" {
+		t.Fatalf("push body: got %#v", pushedBody)
 	}
 }
 
-func TestClientUpdateDeployment(t *testing.T) {
+func TestClientApplyEnvironmentSession(t *testing.T) {
 	var gotBody map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/api/deployments/dep_123" {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/environments/env_123/sessions/auth" {
 			http.NotFound(w, r)
 			return
 		}
@@ -190,134 +532,29 @@ func TestClientUpdateDeployment(t *testing.T) {
 			t.Fatal(err)
 		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"id":             "dep_123",
-			"name":           "auth",
-			"state":          "deploying",
-			"package_ref":    "@telos/auth:1.2.4",
-			"package_digest": "sha256:def",
-			"created_at":     "then",
-			"updated_at":     "now",
-		})
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.UpdateDeployment("dep_123", "@telos/auth:1.2.4")
-	if err != nil {
-		t.Fatalf("UpdateDeployment: %v", err)
-	}
-	if deployment.ID != "dep_123" || deployment.PackageDigest != "sha256:def" || deployment.State != "deploying" {
-		t.Fatalf("deployment: got %+v", deployment)
-	}
-	if gotBody["package_ref"] != "@telos/auth:1.2.4" {
-		t.Fatalf("body: got %#v", gotBody)
-	}
-}
-
-func TestClientListDeployments(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments" {
-			http.NotFound(w, r)
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"deployments": []map[string]any{{
-				"id":             "dep_123",
+			"operation": "created",
+			"session": map[string]any{
+				"env_id":         "env_123",
 				"name":           "auth",
-				"state":          "healthy",
-				"package_ref":    "@telos/auth:1.2.3",
 				"package_digest": "sha256:abc",
-				"created_at":     "then",
+				"desired_state":  "running",
+				"created_at":     "now",
 				"updated_at":     "now",
-			}},
+			},
 		})
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	deployments, err := client.ListDeployments()
+	response, err := client.ApplyEnvironmentSession("env_123", "auth", "sha256:abc")
 	if err != nil {
-		t.Fatalf("ListDeployments: %v", err)
+		t.Fatalf("ApplyEnvironmentSession: %v", err)
 	}
-	if len(deployments) != 1 || deployments[0].ID != "dep_123" || deployments[0].Name != "auth" {
-		t.Fatalf("deployments: got %+v", deployments)
+	if response.Operation != "created" || response.Session.Name != "auth" {
+		t.Fatalf("response: got %+v", response)
 	}
-}
-
-func TestClientGetDeployment(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/dep_123" {
-			http.NotFound(w, r)
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"id":             "dep_123",
-			"name":           "auth",
-			"state":          "healthy",
-			"package_ref":    "@telos/auth:1.2.3",
-			"package_digest": "sha256:abc",
-			"created_at":     "then",
-			"updated_at":     "now",
-		})
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.GetDeployment("dep_123")
-	if err != nil {
-		t.Fatalf("GetDeployment: %v", err)
-	}
-	if deployment.ID != "dep_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
-		t.Fatalf("deployment: got %+v", deployment)
-	}
-}
-
-func TestClientDeleteDeployment(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete || r.URL.Path != "/api/deployments/dep_123" {
-			http.NotFound(w, r)
-			return
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"id":             "dep_123",
-			"name":           "auth",
-			"state":          "deleted",
-			"package_ref":    "@telos/auth:1.2.3",
-			"package_digest": "sha256:abc",
-			"created_at":     "then",
-			"updated_at":     "now",
-		})
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.DeleteDeployment("dep_123")
-	if err != nil {
-		t.Fatalf("DeleteDeployment: %v", err)
-	}
-	if deployment.ID != "dep_123" || deployment.State != "deleted" {
-		t.Fatalf("deployment: got %+v", deployment)
-	}
-}
-
-func TestClientGetDeploymentTranscript(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/dep_123/transcript" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/plain")
-		w.Write([]byte("# Deployment Transcript\n\nSome content"))
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "test-token")
-	text, err := client.GetDeploymentTranscript("dep_123")
-	if err != nil {
-		t.Fatalf("GetDeploymentTranscript: %v", err)
-	}
-	if text != "# Deployment Transcript\n\nSome content" {
-		t.Fatalf("transcript: got %q", text)
+	if gotBody["package_digest"] != "sha256:abc" {
+		t.Fatalf("body: got %#v", gotBody)
 	}
 }
 
@@ -360,8 +597,16 @@ func TestClientApplySessionSpec(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
+	maxCost := 9.0
+	maxToolLoops := 55
+	agentTimeout := 600
 	response, err := client.ApplySessionSpec("demo", sessionapi.SessionSpecUpdateRequest{
-		SpecMarkdown: "---\nversion: v0\nname: demo\n---\n# Demo\n",
+		SpecMarkdown:    "---\nversion: v0\nname: demo\n---\n# Demo\n",
+		Model:           "sail-research/moonshotai/Kimi-K2.6",
+		Thinking:        "high",
+		MaxCostUSD:      &maxCost,
+		MaxToolLoops:    &maxToolLoops,
+		AgentTimeoutSec: &agentTimeout,
 	})
 	if err != nil {
 		t.Fatalf("ApplySessionSpec: %v", err)
@@ -381,8 +626,54 @@ func TestClientApplySessionSpec(t *testing.T) {
 	if response.Session == nil {
 		t.Fatal("missing session")
 	}
+	if gotBody.MaxToolLoops == nil || *gotBody.MaxToolLoops != maxToolLoops {
+		t.Fatalf("max tool loops not sent: %#v", gotBody.MaxToolLoops)
+	}
+	if gotBody.AgentTimeoutSec == nil || *gotBody.AgentTimeoutSec != agentTimeout {
+		t.Fatalf("agent timeout not sent: %#v", gotBody.AgentTimeoutSec)
+	}
 	if response.Session.SessionID != "sess_controller" {
 		t.Fatalf("session: got %#v", response.Session)
+	}
+}
+
+func TestWaitForEnvironmentRequiresSuccessStatus(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	err := waitForEnvironment(srv.URL, 10*time.Millisecond, srv.Client(), time.Millisecond)
+	if err == nil {
+		t.Fatal("expected readiness error")
+	}
+	if !strings.Contains(err.Error(), "HTTP 401") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestWaitForEnvironmentSucceedsOnSuccessStatus(t *testing.T) {
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		if r.URL.Path != "/api/healthz" {
+			http.NotFound(w, r)
+			return
+		}
+		if attempts == 1 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	if err := waitForEnvironment(srv.URL, time.Second, srv.Client(), time.Millisecond); err != nil {
+		t.Fatalf("WaitForEnvironment: %v", err)
 	}
 }
 
@@ -425,6 +716,44 @@ func TestClientGetTranscript(t *testing.T) {
 	}
 	if text != "# Session Transcript\n\nSome content" {
 		t.Errorf("transcript: got %q", text)
+	}
+}
+
+func TestClientGetDiagnostics(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/sessions/sess_123/diagnostics" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(sessionapi.SessionDiagnosticsResponse{
+			SessionID: "sess_123",
+			Status:    sessionapi.StatusFailed,
+			Runtime:   sessionapi.RuntimeCloud,
+			Failures:  map[string]int{"provider": 1},
+			Retries: []sessionapi.SessionRetryDiagnostics{{
+				SpecName:  "demo",
+				TurnID:    "0001-prover",
+				ErrorCode: "provider_rate_limited",
+			}},
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "token")
+	diagnostics, err := client.GetDiagnostics("sess_123")
+	if err != nil {
+		t.Fatalf("GetDiagnostics: %v", err)
+	}
+	if diagnostics.SessionID != "sess_123" || diagnostics.Failures["provider"] != 1 {
+		t.Fatalf("diagnostics: %#v", diagnostics)
+	}
+	if len(diagnostics.Retries) != 1 || diagnostics.Retries[0].TurnID != "0001-prover" {
+		t.Fatalf("retries: %#v", diagnostics.Retries)
 	}
 }
 

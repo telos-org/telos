@@ -3,6 +3,8 @@ package spec
 import (
 	"fmt"
 	"strings"
+
+	"github.com/telos-org/telos/internal/platform"
 )
 
 // Role is the internal agent role.
@@ -22,7 +24,7 @@ type PromptOptions struct {
 }
 
 // RenderProverTask builds the full prover task prompt.
-func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
+func RenderProverTask(compiled *CompiledEnvironment, workspace platform.WorkspaceSnapshot, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
 	preamble, _ := ReadPrompt("prover.md")
 	if options.Controller {
@@ -37,6 +39,7 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleProver, options),
 		renderSkillsRoster(compiled, options),
+		renderTurnContextDigest(transcriptPath, workspace, digestContext{SpecName: compiled.Environment.Name, Role: RoleProver}),
 		renderTranscriptProtocol(transcriptPath, RoleProver),
 		renderWorkspace(workspace, RoleProver),
 		renderOutputContract(RoleProver, options),
@@ -45,7 +48,7 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 }
 
 // RenderVerifierTask builds the full verifier task prompt.
-func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
+func RenderVerifierTask(compiled *CompiledEnvironment, workspace platform.WorkspaceSnapshot, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
 	preamble := renderVerifierPreamble(options)
 	parts := []string{
@@ -56,6 +59,7 @@ func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleVerifier, options),
 		renderSkillsRoster(compiled, options),
+		renderTurnContextDigest(transcriptPath, workspace, digestContext{SpecName: compiled.Environment.Name, Role: RoleVerifier}),
 		renderTranscriptProtocol(transcriptPath, RoleVerifier),
 		renderWorkspace(workspace, RoleVerifier),
 		renderOutputContract(RoleVerifier, options),
@@ -208,6 +212,45 @@ func renderRequiredEvaluationRubrics(compiled *CompiledEnvironment, role Role, o
 	return strings.Join(lines, "\n")
 }
 
+// RosterSkill is one skill exposed to the agent for a turn, mirroring the
+// roster rendered into the prompt by renderSkillsRoster. It is the structured
+// source of truth for the executor's skill tool, so the executor never has to
+// re-parse the rendered prompt prose to learn which skills (and which required
+// rubrics) are available.
+type RosterSkill struct {
+	Name        string
+	Description string
+	// Path is the path to the skill's SKILL.md file, or empty when the skill
+	// has no readable body.
+	Path     string
+	Required bool
+}
+
+// TurnSkills returns the structured skill roster for a turn, matching the
+// skills rendered by renderSkillsRoster and the required-rubric markers from
+// renderRequiredEvaluationRubrics. Only skills with a readable SKILL.md path
+// are returned, since those are the only ones the skill tool can open.
+func (compiled *CompiledEnvironment) TurnSkills(opts PromptOptions) []RosterSkill {
+	skills := effectiveSkills(compiled, opts)
+	requiredNames := map[string]bool{}
+	for _, s := range compiled.RequiredVerifierSkills {
+		requiredNames[s.Name] = true
+	}
+	out := make([]RosterSkill, 0, len(skills))
+	for _, s := range skills {
+		if s == nil || strings.TrimSpace(s.Path) == "" {
+			continue
+		}
+		out = append(out, RosterSkill{
+			Name:        s.Name,
+			Description: strings.TrimSpace(s.Description),
+			Path:        strings.TrimRight(s.Path, "/") + "/SKILL.md",
+			Required:    requiredNames[s.Name],
+		})
+	}
+	return out
+}
+
 func renderSkillsRoster(compiled *CompiledEnvironment, opts PromptOptions) string {
 	skills := effectiveSkills(compiled, opts)
 	if len(skills) == 0 {
@@ -220,7 +263,7 @@ func renderSkillsRoster(compiled *CompiledEnvironment, opts PromptOptions) strin
 	lines := []string{
 		"## Skills",
 		"",
-		"Use skill names as routing hints. Pi can load mounted skill files by name; prompts reference names instead of inlining skill bodies. Skills marked `required evaluation rubric` are grading rubrics, not optional guidance.",
+		"Use skill names as routing hints. Read the listed `SKILL.md` path only when the skill is relevant. Skills marked `required evaluation rubric` are grading rubrics, not optional guidance.",
 		"",
 	}
 	for _, s := range skills {
@@ -229,14 +272,22 @@ func renderSkillsRoster(compiled *CompiledEnvironment, opts PromptOptions) strin
 		if requiredNames[s.Name] {
 			marker = " - required evaluation rubric"
 		}
+		pathText := skillPathText(s)
 		if desc != "" {
-			lines = append(lines, fmt.Sprintf("- `%s`%s - %s", s.Name, marker, desc))
+			lines = append(lines, fmt.Sprintf("- `%s`%s - %s%s", s.Name, marker, desc, pathText))
 		} else {
-			lines = append(lines, fmt.Sprintf("- `%s`%s", s.Name, marker))
+			lines = append(lines, fmt.Sprintf("- `%s`%s%s", s.Name, marker, pathText))
 		}
 	}
 	lines = append(lines, "")
 	return strings.Join(lines, "\n")
+}
+
+func skillPathText(s *Skill) string {
+	if s == nil || strings.TrimSpace(s.Path) == "" {
+		return ""
+	}
+	return fmt.Sprintf(" (path: `%s/SKILL.md`)", strings.TrimRight(s.Path, "/"))
 }
 
 func appendSkillPointers(lines []string, skills []*Skill) []string {
@@ -245,6 +296,9 @@ func appendSkillPointers(lines []string, skills []*Skill) []string {
 		entry := fmt.Sprintf("- `%s`", s.Name)
 		if desc != "" {
 			entry += " - " + desc
+		}
+		if s.Path != "" {
+			entry += fmt.Sprintf(" (path: `%s/SKILL.md`)", strings.TrimRight(s.Path, "/"))
 		}
 		lines = append(lines, entry)
 	}
@@ -287,8 +341,8 @@ func renderTranscriptProtocol(transcriptPath string, role Role) string {
 		fmt.Sprintf("- Path: `%s`", transcriptPath),
 		"- This is the append-only communication log between the implementation agent, evaluator, controller, and operators.",
 		"- The runtime appends your assistant response to this file after the turn.",
-		"- First action every turn: read this transcript path.",
-		"- Use it to gather summarized session state: prior claims, delivered changes, evaluator findings, progress updates, and open uncertainty.",
+		"- Start from the Current State Digest above for routine session state.",
+		"- Read this transcript path only when the digest is insufficient, contradictory, or you need exact prior claims, delivered changes, evaluator findings, progress updates, or open uncertainty.",
 		"- If the transcript only contains the header, proceed from scratch against the spec.",
 		"- Do not paste, summarize, rewrite, or edit the whole transcript directly.",
 		"- Write notes, claims, checks, findings, and uncertainty in your final response when they would help an independent evaluator.",
@@ -305,8 +359,8 @@ func renderTranscriptProtocol(transcriptPath string, role Role) string {
 	return strings.Join(lines, "\n")
 }
 
-func renderWorkspace(workspace string, role Role) string {
-	if workspace == "" {
+func renderWorkspace(workspace platform.WorkspaceSnapshot, role Role) string {
+	if workspace.Raw == "" {
 		return ""
 	}
 	lines := []string{
@@ -326,7 +380,7 @@ func renderWorkspace(workspace string, role Role) string {
 			"Keep throwaway evaluator scratch outside the delivered tree. If a check becomes a reusable test, probe, fixture, or reproduction script, write it into the workspace in the natural test location or a small `evaluation/` directory so future turns can run it again.\n",
 		)
 	}
-	lines = append(lines, fmt.Sprintf("```\n%s\n```\n", workspace))
+	lines = append(lines, fmt.Sprintf("```\n%s\n```\n", workspace.Raw))
 	return strings.Join(lines, "\n")
 }
 
@@ -365,6 +419,7 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		"- Write concise Markdown; blocking findings first",
 		"- During the turn, emit concise <progress_update>...</progress_update> entries when useful for a background observer, without spamming routine tool activity",
 		"- End every turn with one final <progress_update>what you found or why you concede</progress_update>",
+		"- When you continue, emit exactly one <findings>...</findings> block above the status tag listing the blocking findings, one per line as `severity | description` where severity is `blocker` or `warn`",
 		"- The final non-empty line must be exactly one status tag",
 		"- <status>CONTINUE</status> if you found a concrete goal violation",
 	}

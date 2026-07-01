@@ -23,8 +23,9 @@ and keep responsibility for the final outcome.
 - Delegated work that restates the whole parent goal is not useful delegation
   unless the goal itself is already narrow.
 - Terminal children are evidence, not automatic success. Inspect `describe`,
-  logs, and `workspace.tar.gz`; then select, merge, or reconcile useful work
-  into the delivered artifact before claiming the goal is satisfied.
+  logs, and `workspace.tar.gz`; run `telos inspect-child <session-id>` to
+  create a durable reconciliation checklist; then select, merge, or reconcile
+  useful work into the delivered artifact before claiming the goal is satisfied.
 - Preserve reusable tests, probes, fixtures, and reproductions produced by
   evaluators or children. They are part of the reusable verification surface.
 
@@ -35,6 +36,10 @@ Use the Telos CLI before reaching for substrate-specific tools:
 - `telos list --wide` shows this controller's visible session tree.
 - `telos describe <session-id>` shows status, result, costs, and artifact
   paths.
+- `telos analyze <session-id>` summarizes evidence, budgets, token totals, and
+  failure taxonomy.
+- `telos inspect-child <session-id>` validates a terminal child and records the
+  checklist the controller must reconcile before acceptance.
 - `telos logs <session-id>` shows the Session Transcript.
 - `telos run <spec>` launches isolated delegated work in this controller's
   runtime context.

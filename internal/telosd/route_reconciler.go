@@ -227,7 +227,7 @@ func publicRouteFromConfigMap(cm corev1.ConfigMap) (tunnelRoute, map[string]stri
 			patch[key] = value
 		}
 	}
-	return tunnelRoute{Hostname: hostname, Service: tunnelRouteService(protocol, service), Protocol: protocol}, patch, true
+	return tunnelRoute{Hostname: hostname, Service: service, Protocol: protocol}, patch, true
 }
 
 func consoleRouteRequests(ctx context.Context, client kubernetes.Interface) ([]tunnelRoute, error) {
@@ -285,13 +285,6 @@ func routeProtocol(data map[string]string, service string) string {
 	default:
 		return "http"
 	}
-}
-
-func tunnelRouteService(protocol string, service string) string {
-	if protocol == "tcp" {
-		return service
-	}
-	return envAPIService
 }
 
 func routeType(data map[string]string, name string, protocol string, service string) string {

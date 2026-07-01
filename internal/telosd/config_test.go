@@ -45,54 +45,50 @@ func TestNormalizeCloudConfigDefaults(t *testing.T) {
 	if cfg.Auth.Type != AuthBearer {
 		t.Fatalf("auth.type: got %q", cfg.Auth.Type)
 	}
-	if cfg.Worker.Substrate != "local-process" {
-		t.Fatalf("worker substrate: got %q", cfg.Worker.Substrate)
+	if cfg.Kubernetes.AgentSecretKey != "TELOS_GATEWAY_API_KEY" {
+		t.Fatalf("agent secret key: got %q", cfg.Kubernetes.AgentSecretKey)
 	}
-	if cfg.Kubernetes.AgentSecretKey != "" {
-		t.Fatalf("local-process cloud config should not fill kubernetes worker defaults: %+v", cfg.Kubernetes)
+	if cfg.Billing.Endpoint != "https://billing.usetelos.ai" {
+		t.Fatalf("billing endpoint: got %q", cfg.Billing.Endpoint)
 	}
 }
 
-func TestNormalizeCloudConfigAcceptsKubernetesWorkerSubstrate(t *testing.T) {
+func TestNormalizeCloudConfigReadsControlEndpointEnv(t *testing.T) {
+	t.Setenv("TELOS_CONTROL_ENDPOINT", "https://control.staging.example")
+
 	cfg, err := NormalizeConfig(Config{
-		Mode:   ModeCloud,
-		Auth:   AuthConfig{Token: "operator-token"},
-		Worker: WorkerConfig{Substrate: "kubernetes"},
+		Mode: ModeCloud,
+		Auth: AuthConfig{Token: "operator-token"},
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
 	}
-	if cfg.Worker.Substrate != "kubernetes" {
-		t.Fatalf("worker substrate: got %q", cfg.Worker.Substrate)
-	}
-	if cfg.Kubernetes.AgentSecretKey != "SAIL_API_KEY" {
-		t.Fatalf("agent secret key: got %q", cfg.Kubernetes.AgentSecretKey)
+	if cfg.ControlPlane.Endpoint != "https://control.staging.example" {
+		t.Fatalf("control endpoint: got %q", cfg.ControlPlane.Endpoint)
 	}
 }
 
-func TestNormalizeCloudConfigRejectsInvalidWorkerSubstrate(t *testing.T) {
-	_, err := NormalizeConfig(Config{
-		Mode:   ModeCloud,
-		Auth:   AuthConfig{Token: "operator-token"},
-		Worker: WorkerConfig{Substrate: "pod-farm"},
+func TestNormalizeCloudConfigFallsBackToLegacyControlAPIURLEnv(t *testing.T) {
+	t.Setenv("TELOS_CONTROL_API_URL", "https://legacy-control.example")
+
+	cfg, err := NormalizeConfig(Config{
+		Mode: ModeCloud,
+		Auth: AuthConfig{Token: "operator-token"},
 	})
-	if err == nil {
-		t.Fatal("expected invalid worker substrate")
+	if err != nil {
+		t.Fatalf("NormalizeConfig: %v", err)
 	}
-	if err.Error() != `invalid worker.substrate "pod-farm"` {
-		t.Fatalf("error: got %q", err)
+	if cfg.ControlPlane.Endpoint != "https://legacy-control.example" {
+		t.Fatalf("control endpoint: got %q", cfg.ControlPlane.Endpoint)
 	}
 }
 
 func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {
 	cfg, err := NormalizeConfig(Config{
-		Mode:   ModeCloud,
-		Token:  "operator-token",
-		Worker: WorkerConfig{Substrate: "kubernetes"},
-		Kubernetes: KubernetesConfig{
-			AgentImage:      "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
-			ImagePullSecret: "explicit-pull",
-		},
+		Mode:            ModeCloud,
+		Token:           "operator-token",
+		AgentImage:      "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
+		ImagePullSecret: "explicit-pull",
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
@@ -113,12 +109,9 @@ func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {
 
 func TestNormalizeCloudConfigDefaultsGARImagePullSecret(t *testing.T) {
 	cfg, err := NormalizeConfig(Config{
-		Mode:   ModeCloud,
-		Token:  "operator-token",
-		Worker: WorkerConfig{Substrate: "kubernetes"},
-		Kubernetes: KubernetesConfig{
-			AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
-		},
+		Mode:       ModeCloud,
+		Token:      "operator-token",
+		AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
@@ -132,12 +125,9 @@ func TestNormalizeCloudConfigUsesImagePullSecretEnvOverride(t *testing.T) {
 	t.Setenv("TELOS_IMAGE_PULL_SECRET", "custom-pull")
 
 	cfg, err := NormalizeConfig(Config{
-		Mode:   ModeCloud,
-		Token:  "operator-token",
-		Worker: WorkerConfig{Substrate: "kubernetes"},
-		Kubernetes: KubernetesConfig{
-			AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
-		},
+		Mode:       ModeCloud,
+		Token:      "operator-token",
+		AgentImage: "us-west1-docker.pkg.dev/telos-experiments/telos/telos-agent@sha256:abc123",
 	})
 	if err != nil {
 		t.Fatalf("NormalizeConfig: %v", err)
@@ -172,6 +162,34 @@ func TestNormalizeCloudConfigRequiresBearerToken(t *testing.T) {
 	}
 	if err.Error() != "auth.token is required for bearer auth" {
 		t.Fatalf("error: got %q", err)
+	}
+}
+
+func TestNormalizeCloudConfigRequiresBillingTokenWhenBillingConfigured(t *testing.T) {
+	t.Setenv("TELOS_API_TOKEN", "operator-token")
+	t.Setenv("TELOS_ENV_ID", "env_test")
+	t.Setenv("TELOS_BILLING_ENV_TOKEN", "")
+
+	_, err := NormalizeConfig(Config{Mode: ModeCloud})
+	if err == nil {
+		t.Fatal("expected missing billing token error")
+	}
+	if err.Error() != "billing.token is required when cloud billing is configured" {
+		t.Fatalf("error: got %q", err)
+	}
+}
+
+func TestNormalizeCloudConfigAcceptsBillingTokenFromEnv(t *testing.T) {
+	t.Setenv("TELOS_API_TOKEN", "operator-token")
+	t.Setenv("TELOS_ENV_ID", "env_test")
+	t.Setenv("TELOS_BILLING_ENV_TOKEN", "billing-token")
+
+	cfg, err := NormalizeConfig(Config{Mode: ModeCloud})
+	if err != nil {
+		t.Fatalf("NormalizeConfig: %v", err)
+	}
+	if cfg.Billing.Token != "billing-token" {
+		t.Fatalf("billing token: got %q", cfg.Billing.Token)
 	}
 }
 
@@ -241,8 +259,6 @@ server:
 auth:
   type: bearer
   token: test-token
-worker:
-  substrate: kubernetes
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -256,9 +272,6 @@ worker:
 	if cfg.Auth.Token != "test-token" {
 		t.Fatalf("auth token: got %q", cfg.Auth.Token)
 	}
-	if cfg.Worker.Substrate != "kubernetes" {
-		t.Fatalf("worker substrate: got %q", cfg.Worker.Substrate)
-	}
 }
 
 func TestLoadConfigCompactShape(t *testing.T) {
@@ -270,11 +283,8 @@ func TestLoadConfigCompactShape(t *testing.T) {
 	if err := os.WriteFile(path, []byte(`kind: telosd.config.v1
 mode: cloud
 token_file: `+tokenPath+`
-worker:
-  substrate: kubernetes
-kubernetes:
-  agent_image: registry/telos-agent@sha256:abc123
-  image_pull_secret: registry-pull
+agent_image: registry/telos-agent@sha256:abc123
+image_pull_secret: registry-pull
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}

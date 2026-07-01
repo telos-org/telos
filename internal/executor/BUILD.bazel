@@ -7,6 +7,7 @@ go_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/game",
+        "//internal/gateway",
         "//internal/platform",
     ],
 )
@@ -15,5 +16,8 @@ go_test(
     name = "executor_test",
     srcs = ["pi_test.go"],
     embed = [":executor"],
-    deps = ["//internal/game"],
+    deps = [
+        "//internal/game",
+        "//internal/gateway",
+    ],
 )

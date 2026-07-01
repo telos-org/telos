@@ -15,22 +15,28 @@ import (
 
 func cmdList(args []string) {
 	fs := flag.NewFlagSet("list", flag.ExitOnError)
+	env := fs.String("env", "", "Cloud environment")
 	limit := fs.Int("limit", 0, "Limit results")
 	wide := fs.Bool("wide", false, "Wide output")
+	environments := fs.Bool("environments", false, "List cloud environments")
 	localOnly := fs.Bool("local", false, "Local sessions only")
 	cloudOnly := fs.Bool("cloud", false, "Cloud sessions only")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
-	if *cloudOnly {
-		listDeployments(*jsonOut, *limit, *wide)
+	if *environments {
+		listEnvironments(*jsonOut)
 		return
 	}
 
 	var sessions []sessionapi.Session
 	rootScoped := false
+	fetchLimit := 0
+	if *wide {
+		fetchLimit = *limit
+	}
 
-	if !*localOnly {
+	if !*localOnly && *env == "" {
 		rootSessions, handled, err := rootListSessions(*limit)
 		if handled {
 			if err != nil {
@@ -39,14 +45,11 @@ func cmdList(args []string) {
 			}
 			sessions = append(sessions, rootSessions...)
 			rootScoped = true
-		} else if config.IsConfigured() {
-			listDeployments(*jsonOut, *limit, *wide)
-			return
 		} else {
-			sessions = append(sessions, listLocalSessions()...)
+			sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit, *wide)...)
 		}
 	} else {
-		sessions = append(sessions, listLocalSessions()...)
+		sessions = append(sessions, listLocalAndConfiguredCloudSessions(*localOnly, *cloudOnly, *env, fetchLimit, *wide)...)
 	}
 
 	effectiveWide := *wide || rootScoped
@@ -148,10 +151,23 @@ func sessionTreeForRoot(sessions []sessionapi.Session, rootID string) []sessiona
 	return out
 }
 
-func listLocalSessions() []sessionapi.Session {
-	sessions, err := store().List()
-	if err != nil {
-		return nil
+func listLocalAndConfiguredCloudSessions(localOnly bool, cloudOnly bool, envID string, limit int, includeChildren bool) []sessionapi.Session {
+	var sessions []sessionapi.Session
+	if !cloudOnly {
+		local, err := store().List()
+		if err == nil {
+			sessions = append(sessions, local...)
+		}
+	}
+	if !localOnly && (cloudOnly || envID != "" || config.IsConfigured()) {
+		cloudSessions, err := listCloudSessions(envID, limit, includeChildren)
+		if err != nil && (cloudOnly || envID != "") {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if err == nil {
+			sessions = append(sessions, cloudSessions...)
+		}
 	}
 	return sessions
 }
@@ -176,69 +192,34 @@ func limitListSessions(sessions []sessionapi.Session, limit int) []sessionapi.Se
 	return sessions
 }
 
-func listDeployments(jsonOut bool, limit int, wide bool) {
+func listEnvironments(jsonOut bool) {
 	control, err := cloud.ControlClient()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	deployments, err := control.ListDeployments()
+	envs, err := control.ListEnvironments()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	deployments = limitDeployments(deployments, limit)
 	if jsonOut {
-		printJSON(cloud.DeploymentListResponse{Deployments: deployments})
+		printJSON(map[string]any{"environments": environmentsOutput(envs)})
 		return
 	}
-	if len(deployments) == 0 {
-		fmt.Println("no deployments")
+	if len(envs) == 0 {
+		fmt.Println("no environments")
 		return
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	if wide {
-		fmt.Fprintln(w, "NAME\tSTATUS\tPACKAGE\tSERVICE\tDASHBOARD\tDEPLOYMENT")
-	} else {
-		fmt.Fprintln(w, "NAME\tSTATUS\tSERVICE\tDASHBOARD\tDEPLOYMENT")
-	}
-	for _, deployment := range deployments {
-		serviceURL := optionalDeploymentString(deployment.ServiceURL)
-		dashboardURL := optionalDeploymentString(deployment.DashboardURL)
-		if wide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
-				deployment.Name,
-				deployment.State,
-				deployment.PackageRef,
-				serviceURL,
-				dashboardURL,
-				deployment.ID,
-			)
-			continue
+	for _, env := range envs {
+		access := "-"
+		if _, ok := config.EnvironmentAccessByID(env.ID); ok {
+			access = "local"
+		} else if env.HasRecoverable {
+			access = "recoverable"
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			deployment.Name,
-			deployment.State,
-			serviceURL,
-			dashboardURL,
-			deployment.ID,
-		)
+		fmt.Printf("%-16s %-14s %-36s %s\n", env.ID, env.State, env.Handle, access)
 	}
-	_ = w.Flush()
-}
-
-func limitDeployments(deployments []cloud.DeploymentRecord, limit int) []cloud.DeploymentRecord {
-	if limit > 0 && len(deployments) > limit {
-		return deployments[:limit]
-	}
-	return deployments
-}
-
-func optionalDeploymentString(value *string) string {
-	if value == nil || *value == "" {
-		return "-"
-	}
-	return *value
 }
 
 func sessionName(sess sessionapi.Session) string {
@@ -278,13 +259,6 @@ func sessionTurn(sess sessionapi.Session) string {
 		return "-"
 	}
 	return fmt.Sprintf("%s#%d", *sess.CurrentRole, *sess.CurrentRound)
-}
-
-func sessionArtifact(sess sessionapi.Session) string {
-	if url := sessionServiceURL(sess); url != "" {
-		return url
-	}
-	return "-"
 }
 
 func sessionServiceURL(sess sessionapi.Session) string {

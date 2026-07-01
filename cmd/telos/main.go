@@ -3,16 +3,21 @@
 // Public commands:
 //
 //	telos plan SPEC.md [--json]
-//	telos push SPEC.md --scope SCOPE [--json]
-//	telos apply SPEC.md --scope SCOPE [--json]
+//	telos push SPEC.md [--json]
+//	telos apply SPEC.md [--env ENV] [--json]
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
-//	    [--until N] [--max-cost-usd USD] [--agent-timeout-sec SEC|0] [--json]
-//	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
-//	telos describe SESSION|DEPLOYMENT [--json]
-//	telos logs [-f] [--raw] SESSION|DEPLOYMENT
-//	telos stop SESSION|DEPLOYMENT [--json]
-//	telos delete DEPLOYMENT [--json]
+//	    [--until N] [--max-cost-usd USD] [--max-rounds N]
+//	    [--max-duration-sec SEC] [--max-input-tokens N]
+//	    [--max-output-tokens N] [--max-tool-loops N] [--agent-timeout-sec SEC|0]
+//	    [--autocompact-context-window N] [--autocompact-trigger-ratio R] [--autocompact-keep-recent-tokens N] [--json]
+//	telos list [--env ENV] [--limit N] [--wide] [--environments] [--local] [--cloud] [--json]
+//	telos describe SESSION [--env ENV] [--json]
+//	telos analyze SESSION... [--env ENV] [--json]
+//	telos inspect-child CHILD_SESSION [--env ENV] [--json]
+//	telos logs [-f] [--raw] SESSION [--env ENV]
+//	telos stop SESSION [--env ENV] [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
+//	telos configure gateway --mode managed|byo
 //	telos version
 //	telos --version
 package main
@@ -55,14 +60,18 @@ func main() {
 		cmdList(os.Args[2:])
 	case "describe":
 		cmdDescribe(os.Args[2:])
+	case "analyze":
+		cmdAnalyze(os.Args[2:])
+	case "inspect-child":
+		cmdInspectChild(os.Args[2:])
 	case "logs":
 		cmdLogs(os.Args[2:])
 	case "stop":
 		cmdStop(os.Args[2:])
-	case "delete":
-		cmdDelete(os.Args[2:])
 	case "login":
 		cmdLogin(os.Args[2:])
+	case "configure":
+		cmdConfigure(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage(os.Stderr)
@@ -78,16 +87,18 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "usage: telos <command> [args]")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "commands:")
-	fmt.Fprintln(out, "  plan SPEC.md       Show compiled spec/package plan")
-	fmt.Fprintln(out, "  push SPEC.md       Push an immutable spec package")
-	fmt.Fprintln(out, "  apply SPEC.md      Publish and deploy a spec package")
+	fmt.Fprintln(out, "  plan SPEC.md       Show compiled spec plan")
+	fmt.Fprintln(out, "  push SPEC.md       Push a spec package to the catalogue")
+	fmt.Fprintln(out, "  apply SPEC.md      Apply a desired-state spec")
 	fmt.Fprintln(out, "  run SPEC.md        Run a local or delegated spec")
-	fmt.Fprintln(out, "  list               List local sessions or cloud deployments")
-	fmt.Fprintln(out, "  describe ID        Show session or deployment details")
-	fmt.Fprintln(out, "  logs ID            Show session or deployment progress")
-	fmt.Fprintln(out, "  stop SESSION|DEPLOYMENT  Stop a session or deployment")
-	fmt.Fprintln(out, "  delete DEPLOYMENT  Delete a cloud deployment")
+	fmt.Fprintln(out, "  list               List sessions")
+	fmt.Fprintln(out, "  describe SESSION   Show session details")
+	fmt.Fprintln(out, "  analyze SESSION... Analyze evidence, failures, and benchmark distributions")
+	fmt.Fprintln(out, "  inspect-child SES  Inspect child artifacts for reconciliation")
+	fmt.Fprintln(out, "  logs SESSION       Show session progress")
+	fmt.Fprintln(out, "  stop SESSION       Stop a running session")
 	fmt.Fprintln(out, "  login              Configure cloud access")
+	fmt.Fprintln(out, "  configure          Configure local gateway access")
 	fmt.Fprintln(out, "  version            Show version")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "global flags:")
