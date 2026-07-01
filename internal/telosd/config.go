@@ -26,16 +26,14 @@ const (
 )
 
 type Config struct {
-	Kind       string           `yaml:"kind"`
-	Mode       Mode             `yaml:"mode"`
-	Root       string           `yaml:"root"`
-	Token      string           `yaml:"token"`
-	TokenFile  string           `yaml:"token_file"`
-	Server     ServerConfig     `yaml:"server"`
-	Auth       AuthConfig       `yaml:"auth"`
-	Worker     WorkerConfig     `yaml:"worker"`
-	Runtime    RuntimeConfig    `yaml:"runtime"`
-	Kubernetes KubernetesConfig `yaml:"kubernetes"`
+	Kind      string        `yaml:"kind"`
+	Mode      Mode          `yaml:"mode"`
+	Root      string        `yaml:"root"`
+	Token     string        `yaml:"token"`
+	TokenFile string        `yaml:"token_file"`
+	Server    ServerConfig  `yaml:"server"`
+	Auth      AuthConfig    `yaml:"auth"`
+	Runtime   RuntimeConfig `yaml:"runtime"`
 }
 
 type ServerConfig struct {
@@ -51,26 +49,10 @@ type AuthConfig struct {
 	TokenFile string   `yaml:"token_file"`
 }
 
-type WorkerConfig struct {
-	Substrate string `yaml:"substrate"`
-}
-
 type RuntimeConfig struct {
 	ArtifactBaseURL string `yaml:"artifact_base_url"`
 	ArtifactVersion string `yaml:"artifact_version"`
 	MountPath       string `yaml:"mount_path"`
-}
-
-type KubernetesConfig struct {
-	AgentImage      string   `yaml:"agent_image"`
-	EnvNamespace    string   `yaml:"env_namespace"`
-	StateMountRoot  string   `yaml:"state_mount_root"`
-	StateHostRoot   string   `yaml:"state_host_root"`
-	StateNodeRoot   string   `yaml:"state_node_root"`
-	ImagePullSecret string   `yaml:"image_pull_secret"`
-	AgentSecretName string   `yaml:"agent_secret_name"`
-	AgentSecretKey  string   `yaml:"agent_secret_key"`
-	CopySecrets     []string `yaml:"copy_secrets"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -149,9 +131,6 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		if cfg.Runtime.MountPath == "" {
 			cfg.Runtime.MountPath = "/telos-runtime"
 		}
-		if cfg.Worker.Substrate == "" {
-			cfg.Worker.Substrate = envOr("TELOS_WORKER_SUBSTRATE", "local-process")
-		}
 	default:
 		return Config{}, fmt.Errorf("invalid mode %q", cfg.Mode)
 	}
@@ -169,16 +148,6 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	}
 	if cfg.Auth.Type != AuthLocal && cfg.Auth.Type != AuthBearer {
 		return Config{}, fmt.Errorf("invalid auth.type %q", cfg.Auth.Type)
-	}
-	if cfg.Mode == ModeCloud {
-		switch cfg.Worker.Substrate {
-		case "local-process", "kubernetes":
-		default:
-			return Config{}, fmt.Errorf("invalid worker.substrate %q", cfg.Worker.Substrate)
-		}
-		if cfg.Worker.Substrate == "kubernetes" {
-			cfg = withKubernetesWorkerDefaults(cfg)
-		}
 	}
 	if cfg.Auth.Type == AuthBearer {
 		if cfg.Auth.Token == "" {
@@ -208,47 +177,6 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		return Config{}, fmt.Errorf("invalid server.transport %q", cfg.Server.Transport)
 	}
 	return cfg, nil
-}
-
-func withKubernetesWorkerDefaults(cfg Config) Config {
-	if cfg.Kubernetes.AgentImage == "" {
-		cfg.Kubernetes.AgentImage = envOr("TELOS_AGENT_IMAGE", "telos-agent:latest")
-	}
-	if cfg.Kubernetes.EnvNamespace == "" {
-		cfg.Kubernetes.EnvNamespace = envOr("TELOS_ENV_NAMESPACE", "ns-telos-env")
-	}
-	if cfg.Kubernetes.StateMountRoot == "" {
-		cfg.Kubernetes.StateMountRoot = envOr("TELOS_STATE_MOUNT_ROOT", cfg.Root)
-	}
-	if cfg.Kubernetes.StateHostRoot == "" {
-		cfg.Kubernetes.StateHostRoot = envOr("TELOS_STATE_HOST_ROOT", "/var/telos-state")
-	}
-	if cfg.Kubernetes.StateNodeRoot == "" {
-		cfg.Kubernetes.StateNodeRoot = envOr("TELOS_STATE_NODE_ROOT", "/var/telos-state")
-	}
-	if cfg.Kubernetes.ImagePullSecret == "" {
-		cfg.Kubernetes.ImagePullSecret = defaultImagePullSecret(cfg.Kubernetes.AgentImage)
-	}
-	if cfg.Kubernetes.AgentSecretName == "" {
-		cfg.Kubernetes.AgentSecretName = "agent-api-keys"
-	}
-	if cfg.Kubernetes.AgentSecretKey == "" {
-		cfg.Kubernetes.AgentSecretKey = "SAIL_API_KEY"
-	}
-	if cfg.Kubernetes.CopySecrets == nil {
-		cfg.Kubernetes.CopySecrets = []string{"telos-env-keys"}
-	}
-	return cfg
-}
-
-func defaultImagePullSecret(agentImage string) string {
-	if value := strings.TrimSpace(os.Getenv("TELOS_IMAGE_PULL_SECRET")); value != "" {
-		return value
-	}
-	if strings.Contains(agentImage, ".pkg.dev/") {
-		return "gar-pull"
-	}
-	return ""
 }
 
 func SessionsRoot(root string) string {
