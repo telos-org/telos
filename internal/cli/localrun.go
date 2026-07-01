@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/telos-org/telos/internal/executor"
@@ -180,7 +181,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		MaxCostUSD:      cfg.MaxCostUSD,
 		Verbose:         true,
 		EpochID:         epochID,
-		IsController:    manifest.SessionKind == sessionapi.KindController,
+		IsController:    controllerPromptEnabled(manifest),
 		PrimarySpecPath: primarySpecPath(manifest, sessionSpecPath),
 		StopRequested:   func() bool { return sessionStopped(sessionDir) },
 	}
@@ -197,6 +198,13 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	return result, nil
+}
+
+func controllerPromptEnabled(manifest *sessionapi.Manifest) bool {
+	if manifest.SessionKind != sessionapi.KindController {
+		return false
+	}
+	return strings.TrimSpace(os.Getenv("TELOS_CONTROLLER_PROMPT_ENABLED")) == "1"
 }
 
 func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecutor, error) {

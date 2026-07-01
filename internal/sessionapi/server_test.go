@@ -2,6 +2,7 @@ package sessionapi_test
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -213,6 +214,41 @@ func TestCloudCreateSessionHonorsExplicitChildTaskKind(t *testing.T) {
 	}
 	if session.CurrentSpecVersion != nil {
 		t.Fatalf("child should not have current_spec_version: %#v", session.CurrentSpecVersion)
+	}
+}
+
+func TestCreateSessionRejectsGrandchildSession(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	rootSpec := "---\nversion: v0\nname: root\nplatform: cloud\n---\n# Root\n"
+	rootKind := sessionapi.KindController
+	rootSession, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &rootSpec,
+		SessionKind:  &rootKind,
+	})
+	if err != nil {
+		t.Fatalf("Create root: %v", err)
+	}
+
+	childSpec := "---\nversion: v0\nname: child\nplatform: cloud\n---\n# Child\n"
+	childSession, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &childSpec,
+		ParentSessionID: &rootSession.SessionID,
+	})
+	if err != nil {
+		t.Fatalf("Create child: %v", err)
+	}
+
+	grandchildSpec := "---\nversion: v0\nname: grandchild\nplatform: cloud\n---\n# Grandchild\n"
+	_, err = store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &grandchildSpec,
+		ParentSessionID: &childSession.SessionID,
+	})
+	if err == nil {
+		t.Fatal("expected grandchild session creation to fail")
+	}
+	if !errors.Is(err, sessionapi.ErrInvalidSession) {
+		t.Fatalf("expected ErrInvalidSession, got %v", err)
 	}
 }
 

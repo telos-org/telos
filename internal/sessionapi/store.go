@@ -100,6 +100,9 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	if err := validateCreateRequest(req); err != nil {
 		return nil, err
 	}
+	if err := fs.validateParentage(req); err != nil {
+		return nil, err
+	}
 
 	id, dir, err := fs.createSessionDir()
 	if err != nil {
@@ -228,6 +231,24 @@ func (fs *FileStore) createSessionDir() (string, string, error) {
 func validateCreateRequest(req SessionCreateRequest) error {
 	if req.Until != nil && *req.Until <= 0 {
 		return fmt.Errorf("until must be positive: %w", ErrInvalidSession)
+	}
+	return nil
+}
+
+func (fs *FileStore) validateParentage(req SessionCreateRequest) error {
+	parentID := strings.TrimSpace(ptrOr(req.ParentSessionID, ""))
+	if parentID == "" {
+		return nil
+	}
+	parent, err := ReadManifest(fs.manifestPath(parentID))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	if parent.ParentSessionID != nil && strings.TrimSpace(*parent.ParentSessionID) != "" {
+		return fmt.Errorf("child sessions cannot spawn child sessions: %w", ErrInvalidSession)
 	}
 	return nil
 }
