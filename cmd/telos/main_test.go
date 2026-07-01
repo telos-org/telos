@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
@@ -1301,6 +1302,60 @@ func TestCloudSessionClientsRecoverEnvironmentAccess(t *testing.T) {
 	}
 }
 
+func TestGetSessionFromAnywhereReportsCloudClientError(t *testing.T) {
+	t.Setenv("TELOS_SESSION_DIR", t.TempDir())
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/environments":
+			json.NewEncoder(w).Encode(map[string]any{
+				"environments": []map[string]any{{
+					"id":                         "env_123",
+					"env_handle":                 strings.TrimPrefix(srv.URL, "http://"),
+					"state":                      "ready",
+					"has_recoverable_env_access": false,
+				}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/sessions/sess_remote":
+			http.Error(w, "denied", http.StatusUnauthorized)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+	if err := config.SaveEnvironmentAccessEntry(config.EnvironmentAccess{ID: "env_123", Token: "env-token"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := getSessionFromAnywhere("sess_remote", "env_123")
+	if err == nil || !strings.Contains(err.Error(), "cloud lookup failed") {
+		t.Fatalf("expected cloud lookup error, got %v", err)
+	}
+}
+
+func TestGetSessionFromCloudClientsReportsAllFailures(t *testing.T) {
+	unauthorized := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "denied", http.StatusUnauthorized)
+	}))
+	defer unauthorized.Close()
+	missing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "missing", http.StatusNotFound)
+	}))
+	defer missing.Close()
+
+	_, err := getSessionFromCloudClients("sess_remote", []*cloud.Client{
+		cloud.NewClient(unauthorized.URL, "env-token-1"),
+		cloud.NewClient(missing.URL, "env-token-2"),
+	})
+	if err == nil {
+		t.Fatal("expected cloud client errors")
+	}
+	if !strings.Contains(err.Error(), "denied") || !strings.Contains(err.Error(), "missing") {
+		t.Fatalf("expected both cloud errors, got %v", err)
+	}
+}
+
 func TestCloudEnvironmentForApplyDoesNotRequireLocalAccess(t *testing.T) {
 	var accessRequests int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1498,6 +1553,85 @@ func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "transcript") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetTranscriptFromAnywherePrefersLocalMissingTranscript(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TELOS_SESSION_DIR", root)
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: missing-transcript\nplatform: local\n---\n# Missing\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	var sawCloudTranscript bool
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/environments":
+			json.NewEncoder(w).Encode(map[string]any{
+				"environments": []map[string]any{{
+					"id":                         "env_123",
+					"env_handle":                 strings.TrimPrefix(srv.URL, "http://"),
+					"state":                      "ready",
+					"has_recoverable_env_access": false,
+				}},
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/sessions/"+session.SessionID+"/transcript":
+			sawCloudTranscript = true
+			http.Error(w, "denied", http.StatusUnauthorized)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+	if err := config.SaveEnvironmentAccessEntry(config.EnvironmentAccess{ID: "env_123", Token: "env-token"}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = getTranscriptFromAnywhere(session.SessionID, "")
+	if err == nil || !strings.Contains(err.Error(), "transcript for session "+session.SessionID) {
+		t.Fatalf("expected local missing transcript error, got %v", err)
+	}
+	if strings.Contains(err.Error(), "cloud lookup failed") {
+		t.Fatalf("local missing transcript should not be hidden by cloud error: %v", err)
+	}
+	if sawCloudTranscript {
+		t.Fatal("implicit cloud transcript lookup should not run for an existing local session")
+	}
+}
+
+func TestGetTranscriptFromAnywherePreservesLocalReadError(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("TELOS_SESSION_DIR", root)
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: v0\nname: unreadable-transcript\nplatform: local\n---\n# Unreadable\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	transcriptPath := session.Specs[0].TranscriptPath
+	if transcriptPath == nil || *transcriptPath == "" {
+		t.Fatal("missing transcript path")
+	}
+	if err := os.MkdirAll(*transcriptPath, 0o755); err != nil {
+		t.Fatalf("create transcript path directory: %v", err)
+	}
+
+	_, err = getTranscriptFromAnywhere(session.SessionID, "")
+	if err == nil {
+		t.Fatal("expected local transcript read error")
+	}
+	if strings.Contains(err.Error(), "transcript for session "+session.SessionID) {
+		t.Fatalf("read error should not be rewritten as missing transcript: %v", err)
+	}
+	if strings.Contains(err.Error(), "cloud lookup failed") {
+		t.Fatalf("read error should not fall back to cloud lookup: %v", err)
 	}
 }
 

@@ -282,7 +282,11 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 			_ = l.logger.errorEvent(l.client.sequence, err)
 			return "", stats, err
 		}
+		l.client.beforeMainRequest = func(compStats game.TurnStats) error {
+			return l.checkBudget(mergeTurnStats(stats, compStats))
+		}
 		turn, err := l.client.send(ctx)
+		l.client.beforeMainRequest = nil
 		if err != nil {
 			stats = mergeTurnStats(stats, turn.stats)
 			return "", stats, err
@@ -348,8 +352,11 @@ func (l *agentLoop) protocolCorrection(text string, usedTool bool) (string, stri
 	if prompt, key := protocolCorrectionForStrict(l.role, l.protocolMode, l.task, text, usedTool, l.strictProtocol, l.toolsAvailable); prompt != "" {
 		return prompt, key
 	}
-	if l.role == game.RoleVerifier && verifierConcedes(text) {
+	if l.role == game.RoleVerifier && (verifierConcedes(text) || l.protocolMode == game.ProtocolModeReview) {
 		if missing := l.tools.missingRequiredSkills(); len(missing) > 0 {
+			if l.protocolMode == game.ProtocolModeReview {
+				return fmt.Sprintf("Before completing this review turn, read every required evaluation rubric with the skill tool. Missing required rubric skill(s): %s. Use skill action='read' for each, inspect the workspace against the rubric, then reply with exactly one <review> block and one <summary> block that reflect every required rubric.", strings.Join(missing, ", ")), "missing_required_skill_rubric"
+			}
 			return fmt.Sprintf("Before conceding, read every required evaluation rubric with the skill tool. Missing required rubric skill(s): %s. Use skill action='read' for each, inspect the workspace against the rubric, then reply with a final verifier result and <status>CONCEDE</status> only if every required rubric passes.", strings.Join(missing, ", ")), "missing_required_skill_rubric"
 		}
 	}

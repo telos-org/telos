@@ -43,6 +43,15 @@ func TestResolveEnvGatewayUsesBifrostDefaults(t *testing.T) {
 	}
 }
 
+func TestValidateTransportAndKindRejectsInvalidValues(t *testing.T) {
+	if _, _, err := ValidateTransportAndKind("bogus", "openai"); err == nil {
+		t.Fatal("expected invalid transport error")
+	}
+	if _, _, err := ValidateTransportAndKind("openai_sync", "bogus"); err == nil {
+		t.Fatal("expected invalid kind error")
+	}
+}
+
 func TestResolveEnvGatewayCanBeBillingBacked(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://env.example.com/v1")
 	t.Setenv("TELOS_GATEWAY_API_KEY", "env-key")

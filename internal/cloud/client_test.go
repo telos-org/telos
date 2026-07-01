@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -332,6 +334,78 @@ func TestClientForwardsUserAuthorization(t *testing.T) {
 	}
 	if session.SessionID != "sess-forwarded" {
 		t.Fatalf("session: %+v", session)
+	}
+}
+
+func TestClientForwardsUserAuthorizationOnlyForMutations(t *testing.T) {
+	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
+	var sawCreate, sawUpdate, sawList, sawStream bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/sessions" && r.Method == http.MethodPost:
+			sawCreate = true
+			if r.Header.Get(ForwardedUserAuthorizationHeader) != "Bearer user-token" {
+				t.Fatalf("create missing forwarded user auth: %q", r.Header.Get(ForwardedUserAuthorizationHeader))
+			}
+			w.WriteHeader(http.StatusCreated)
+			json.NewEncoder(w).Encode(sessionapi.Session{SessionID: "sess-create", Runtime: sessionapi.RuntimeCloud})
+		case r.URL.Path == "/api/sessions/demo/spec" && r.Method == http.MethodPut:
+			sawUpdate = true
+			if r.Header.Get(ForwardedUserAuthorizationHeader) != "Bearer user-token" {
+				t.Fatalf("update missing forwarded user auth: %q", r.Header.Get(ForwardedUserAuthorizationHeader))
+			}
+			json.NewEncoder(w).Encode(sessionapi.SessionSpecUpdateResponse{Operation: "updated"})
+		case r.URL.Path == "/api/sessions" && r.Method == http.MethodGet:
+			sawList = true
+			if got := r.Header.Get(ForwardedUserAuthorizationHeader); got != "" {
+				t.Fatalf("list should not forward user auth, got %q", got)
+			}
+			json.NewEncoder(w).Encode(sessionapi.SessionListResponse{})
+		case r.URL.Path == "/api/sessions/sess-create/events" && r.Method == http.MethodGet:
+			sawStream = true
+			if got := r.Header.Get(ForwardedUserAuthorizationHeader); got != "" {
+				t.Fatalf("stream should not forward user auth, got %q", got)
+			}
+			w.Header().Set("Content-Type", "text/event-stream")
+			_, _ = w.Write([]byte("data: {\"event\":\"ok\"}\n\n"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "env-token")
+	client.ForwardedUserToken = "user-token"
+	if _, err := client.CreateSession(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if _, err := client.ApplySessionSpec("demo", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown}); err != nil {
+		t.Fatalf("ApplySessionSpec: %v", err)
+	}
+	if _, err := client.ListSessions(0, false); err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if err := client.StreamEvents(context.Background(), "sess-create", func(map[string]any) error { return nil }); err != nil {
+		t.Fatalf("StreamEvents: %v", err)
+	}
+	if !sawCreate || !sawUpdate || !sawList || !sawStream {
+		t.Fatalf("missing requests: create=%v update=%v list=%v stream=%v", sawCreate, sawUpdate, sawList, sawStream)
+	}
+}
+
+func TestBillingClientRequiresExplicitEndpointForCustomAPIEndpoint(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("api_endpoint: https://api.staging.example.com\nauth_token: login-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("TELOS_API_ENDPOINT", "")
+	t.Setenv("TELOS_BILLING_ENDPOINT", "")
+	t.Setenv("TELOS_AUTH_TOKEN", "")
+
+	_, err := BillingClient()
+	if err == nil || !strings.Contains(err.Error(), "billing_endpoint is required") {
+		t.Fatalf("expected billing_endpoint error, got %v", err)
 	}
 }
 

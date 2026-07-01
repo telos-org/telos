@@ -126,6 +126,36 @@ func TestControlSessionReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	}
 }
 
+func TestControlSessionReconcilerUsesNormalizedControlEndpoint(t *testing.T) {
+	cfg := Config{
+		ControlPlane: ControlConfig{Endpoint: " https://control.staging.example/ "},
+	}
+
+	if got := controlReconcilerAPIURL(cfg); got != "https://control.staging.example" {
+		t.Fatalf("api url = %q", got)
+	}
+}
+
+func TestNewControlSessionReconcilerUsesControlPlaneToken(t *testing.T) {
+	packageRoot := t.TempDir()
+	t.Setenv("TELOS_PACKAGE_ROOT", packageRoot)
+
+	reconciler, ok := newControlSessionReconciler(&fakeReconcileStore{}, Config{
+		Auth: AuthConfig{Token: "sessions-api-token"},
+		ControlPlane: ControlConfig{
+			Endpoint: "https://control.staging.example",
+			EnvID:    "env_123",
+			Token:    "control-plane-token",
+		},
+	})
+	if !ok {
+		t.Fatal("expected reconciler to be configured")
+	}
+	if reconciler.token != "control-plane-token" {
+		t.Fatalf("token = %q", reconciler.token)
+	}
+}
+
 func TestControlSessionReconcilerNoopsWhenDigestMatches(t *testing.T) {
 	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	name := "auth"

@@ -329,6 +329,11 @@ func resolveTransportAndKind(rawTransport, rawKind string) (string, string, erro
 	return transport, kind, nil
 }
 
+// ValidateTransportAndKind validates and normalizes gateway transport/kind values.
+func ValidateTransportAndKind(rawTransport, rawKind string) (string, string, error) {
+	return resolveTransportAndKind(rawTransport, rawKind)
+}
+
 func headersFromEnv() (map[string]string, error) {
 	raw := strings.TrimSpace(os.Getenv("TELOS_GATEWAY_HEADERS"))
 	if raw == "" {

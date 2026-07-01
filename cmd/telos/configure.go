@@ -41,10 +41,15 @@ func cmdConfigure(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		resolvedTransport, resolvedKind, err := gateway.ValidateTransportAndKind(*transport, *kind)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 		if !*noProbe {
 			if err := gateway.ProbeResponses(*baseURL, *apiKey, *model, gateway.ProbeConfig{
-				Transport: *transport,
-				Kind:      *kind,
+				Transport: resolvedTransport,
+				Kind:      resolvedKind,
 				Headers:   headers,
 			}); err != nil {
 				fmt.Fprintf(os.Stderr, "error: gateway probe failed: %v\n", err)
@@ -55,8 +60,8 @@ func cmdConfigure(args []string) {
 			Mode:      gateway.ModeBYO,
 			BaseURL:   strings.TrimRight(strings.TrimSpace(*baseURL), "/"),
 			APIKey:    strings.TrimSpace(*apiKey),
-			Transport: strings.TrimSpace(*transport),
-			Kind:      strings.TrimSpace(*kind),
+			Transport: resolvedTransport,
+			Kind:      resolvedKind,
 			Headers:   headers,
 		}
 	default:

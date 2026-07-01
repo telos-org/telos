@@ -27,6 +27,7 @@ go_test(
     ],
     embed = [":sessionapi"],
     deps = [
+        "//internal/agentsession",
         "//internal/game",
         "//internal/spec",
     ],

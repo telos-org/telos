@@ -72,9 +72,11 @@ func compactionConfigFromEnv(reserveOutput, modelContextWindow int) compactionCo
 		reserveOutput:    reserveOutput,
 		strategy:         compactionStrategyLLM,
 	}
+	contextWindowDisabled := false
 	if raw := strings.TrimSpace(os.Getenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
 			cfg.contextWindow = n
+			contextWindowDisabled = n == 0
 		}
 	}
 	if raw := strings.TrimSpace(os.Getenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO")); raw != "" {
@@ -95,7 +97,7 @@ func compactionConfigFromEnv(reserveOutput, modelContextWindow int) compactionCo
 			cfg.strategy = compactionStrategyTruncate
 		}
 	}
-	if modelContextWindow > 0 && (cfg.contextWindow <= 0 || modelContextWindow < cfg.contextWindow) {
+	if !contextWindowDisabled && modelContextWindow > 0 && modelContextWindow < cfg.contextWindow {
 		cfg.contextWindow = modelContextWindow
 	}
 	return cfg

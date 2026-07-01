@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/openai/openai-go/responses"
+	"github.com/telos-org/telos/internal/game"
 )
 
 func TestResponsesClientUnderBudgetSkipsCompaction(t *testing.T) {
@@ -57,8 +58,11 @@ func TestResponsesClientCompactsBeforeNormalRequest(t *testing.T) {
 			if !strings.Contains(string(body), compactionCommand) {
 				t.Fatalf("first request should be compaction:\n%s", body)
 			}
-			if !strings.Contains(string(body), "old fact") || !strings.Contains(string(body), `"tools"`) {
-				t.Fatalf("compaction request should include old history and tools:\n%s", body)
+			if !strings.Contains(string(body), "old fact") {
+				t.Fatalf("compaction request should include old history:\n%s", body)
+			}
+			if strings.Contains(string(body), `"tools"`) {
+				t.Fatalf("compaction request should not expose tools:\n%s", body)
 			}
 			if instructions := requestStringField(t, body, "instructions"); !strings.Contains(instructions, "COMPACT_SESSION_STATE") {
 				t.Fatalf("instructions should include compaction mode:\n%s", instructions)
@@ -195,6 +199,43 @@ func TestResponsesClientFoldsCompactionSpendIntoTurnStats(t *testing.T) {
 	// both be metered against the turn, not just logged to session.jsonl.
 	if turn.stats.InputTokens != 22 || turn.stats.OutputTokens != 14 || turn.stats.CacheReadTokens != 6 {
 		t.Fatalf("compaction spend not folded into turn stats: %+v", turn.stats)
+	}
+}
+
+func TestResponsesClientStopsAfterCompactionWhenBudgetExhausted(t *testing.T) {
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "500")
+	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
+	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
+
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests > 1 {
+			t.Fatalf("normal request should not be sent after budget exhaustion")
+		}
+		writeResponsesJSON(w, responseWithText("resp_compact", validCompactionSummary("from llm")))
+	}))
+	defer server.Close()
+
+	client := newTestResponsesClient(t, server.URL, "task")
+	client.beforeMainRequest = func(game.TurnStats) error {
+		return newExecutorError(errRuntimeBudgetExhausted, "max_input_tokens")
+	}
+	client.state.history = responses.ResponseInputParam{
+		messageItem("task"),
+		messageItem("old fact " + strings.Repeat("x", 2000)),
+		messageItem("recent fact"),
+	}
+
+	turn, err := client.send(context.Background())
+	if !executorErrorHasCode(err, errRuntimeBudgetExhausted) {
+		t.Fatalf("expected budget exhaustion, got turn=%+v err=%v", turn, err)
+	}
+	if requests != 1 {
+		t.Fatalf("requests: got %d want 1", requests)
+	}
+	if turn.stats.InputTokens == 0 {
+		t.Fatalf("compaction spend should be returned with budget error: %+v", turn.stats)
 	}
 }
 

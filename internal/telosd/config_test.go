@@ -53,6 +53,36 @@ func TestNormalizeCloudConfigDefaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeCloudConfigReadsControlEndpointEnv(t *testing.T) {
+	t.Setenv("TELOS_CONTROL_ENDPOINT", "https://control.staging.example")
+
+	cfg, err := NormalizeConfig(Config{
+		Mode: ModeCloud,
+		Auth: AuthConfig{Token: "operator-token"},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeConfig: %v", err)
+	}
+	if cfg.ControlPlane.Endpoint != "https://control.staging.example" {
+		t.Fatalf("control endpoint: got %q", cfg.ControlPlane.Endpoint)
+	}
+}
+
+func TestNormalizeCloudConfigFallsBackToLegacyControlAPIURLEnv(t *testing.T) {
+	t.Setenv("TELOS_CONTROL_API_URL", "https://legacy-control.example")
+
+	cfg, err := NormalizeConfig(Config{
+		Mode: ModeCloud,
+		Auth: AuthConfig{Token: "operator-token"},
+	})
+	if err != nil {
+		t.Fatalf("NormalizeConfig: %v", err)
+	}
+	if cfg.ControlPlane.Endpoint != "https://legacy-control.example" {
+		t.Fatalf("control endpoint: got %q", cfg.ControlPlane.Endpoint)
+	}
+}
+
 func TestNormalizeCloudConfigAcceptsCompactShape(t *testing.T) {
 	cfg, err := NormalizeConfig(Config{
 		Mode:            ModeCloud,

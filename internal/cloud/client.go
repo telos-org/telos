@@ -128,6 +128,13 @@ func BillingClient() (*Client, error) {
 	cfg := config.LoadConfig()
 	endpoint := cfg.BillingEndpoint
 	if endpoint == "" {
+		apiEndpoint := cfg.APIEndpoint
+		if apiEndpoint == "" {
+			apiEndpoint = DefaultAPIEndpoint
+		}
+		if NormalizeEndpoint(apiEndpoint) != DefaultAPIEndpoint {
+			return nil, fmt.Errorf("billing_endpoint is required when api_endpoint is %s", apiEndpoint)
+		}
 		endpoint = DefaultBillingEndpoint
 	}
 	token := cfg.AuthToken
@@ -417,7 +424,7 @@ func (c *Client) CreateSession(req sessionapi.SessionCreateRequest) (*sessionapi
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("POST", "/api/sessions", body)
+	resp, err := c.doWithForwardedUser("POST", "/api/sessions", body)
 	if err != nil {
 		return nil, err
 	}
@@ -438,7 +445,7 @@ func (c *Client) ApplySessionSpec(name string, req sessionapi.SessionSpecUpdateR
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("PUT", "/api/sessions/"+name+"/spec", body)
+	resp, err := c.doWithForwardedUser("PUT", "/api/sessions/"+name+"/spec", body)
 	if err != nil {
 		return nil, err
 	}
@@ -635,9 +642,6 @@ func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[s
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
-	if c.ForwardedUserToken != "" {
-		req.Header.Set(ForwardedUserAuthorizationHeader, "Bearer "+c.ForwardedUserToken)
-	}
 	client := http.DefaultClient
 	if c.HTTP != nil {
 		clone := *c.HTTP
@@ -691,7 +695,15 @@ func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
 	return c.doRaw(method, path, body, "application/json")
 }
 
+func (c *Client) doWithForwardedUser(method, path string, body []byte) (*http.Response, error) {
+	return c.doRawInternal(method, path, body, "application/json", true)
+}
+
 func (c *Client) doRaw(method, path string, body []byte, contentType string) (*http.Response, error) {
+	return c.doRawInternal(method, path, body, contentType, false)
+}
+
+func (c *Client) doRawInternal(method, path string, body []byte, contentType string, forwardUser bool) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
@@ -706,7 +718,7 @@ func (c *Client) doRaw(method, path string, body []byte, contentType string) (*h
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
-	if c.ForwardedUserToken != "" {
+	if forwardUser && c.ForwardedUserToken != "" {
 		req.Header.Set(ForwardedUserAuthorizationHeader, "Bearer "+c.ForwardedUserToken)
 	}
 	return c.HTTP.Do(req)

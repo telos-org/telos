@@ -246,6 +246,14 @@ func TestCompactionConfigFloorsToModelContextWindow(t *testing.T) {
 	}
 }
 
+func TestCompactionConfigExplicitZeroDisablesEvenWithModelWindow(t *testing.T) {
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "0")
+	cfg := compactionConfigFromEnv(0, 32000)
+	if cfg.contextWindow != 0 || cfg.budgetTokens() != 0 {
+		t.Fatalf("explicit zero should disable compaction, got %#v budget=%d", cfg, cfg.budgetTokens())
+	}
+}
+
 func TestModelContextWindowResolution(t *testing.T) {
 	builtin := map[string]int{
 		"claude-opus-4-6":             200000,

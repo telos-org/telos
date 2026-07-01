@@ -186,11 +186,18 @@ func TestKubernetesSubstrateStopReconcilesManagedBilling(t *testing.T) {
 	if err := substrate.Apply(session, "controller_started", "Bearer user-token"); err != nil {
 		t.Fatal(err)
 	}
+	secretName := sessionGatewaySecretName(session.SessionID)
+	if _, err := client.CoreV1().Secrets(cfg.Kubernetes.EnvNamespace).Get(context.Background(), secretName, metav1.GetOptions{}); err != nil {
+		t.Fatalf("session gateway secret was not created: %v", err)
+	}
 	if err := substrate.Stop(session); err != nil {
 		t.Fatal(err)
 	}
 	if !gotReconcile {
 		t.Fatal("missing terminal billing reconcile")
+	}
+	if _, err := client.CoreV1().Secrets(cfg.Kubernetes.EnvNamespace).Get(context.Background(), secretName, metav1.GetOptions{}); err == nil {
+		t.Fatalf("session gateway secret %s still exists", secretName)
 	}
 }
 

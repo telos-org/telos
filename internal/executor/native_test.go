@@ -2009,6 +2009,7 @@ func TestMaxProtocolCorrectionsReadsRuleTable(t *testing.T) {
 		{game.RoleVerifier, game.ProtocolModePVG, "missing_status", 1},
 		{game.RoleProver, game.ProtocolModePVG, "empty_final", 1},
 		{game.RoleVerifier, game.ProtocolModePVG, "missing_required_skill_rubric", 1},
+		{game.RoleVerifier, game.ProtocolModeReview, "missing_required_skill_rubric", 1},
 	}
 	for _, tc := range cases {
 		if got := maxProtocolCorrections(tc.role, tc.mode, tc.key); got != tc.want {
@@ -2086,6 +2087,80 @@ func TestNativeExecutorRequiresVerifierToOpenRequiredRubricBeforeConceding(t *te
 	}
 	if result.Status != game.StatusConcede {
 		t.Fatalf("status: got %s logs=%q", result.Status, result.Logs)
+	}
+	if requests != 3 {
+		t.Fatalf("requests: got %d", requests)
+	}
+}
+
+func TestNativeExecutorRequiresVerifierToOpenRequiredRubricInReviewMode(t *testing.T) {
+	workspace := t.TempDir()
+	skillDir := filepath.Join(t.TempDir(), "review-skill")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	skillPath := filepath.Join(skillDir, "SKILL.md")
+	if err := os.WriteFile(skillPath, []byte("---\nname: review-skill\ndescription: Review rubric\n---\n# Rubric\n\nCheck evidence.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			writeResponsesJSON(w, `{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<review>criteria,score\nquality,8.0/10</review>\n<summary>No issues.</summary>"}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		case 2:
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "Before completing this review turn") || !strings.Contains(string(body), "review-skill") || strings.Contains(string(body), "<status>CONCEDE</status>") {
+				t.Fatalf("review correction request missing rubric guidance or used pvg status wording: %s", body)
+			}
+			writeResponsesJSON(w, `{
+				"id":"resp_2","status":"completed",
+				"output":[{"type":"function_call","call_id":"call_1","name":"skill","arguments":"{\"action\":\"read\",\"name\":\"review-skill\"}"}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		case 3:
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "# Rubric") || !strings.Contains(string(body), "Check evidence.") {
+				t.Fatalf("third request should include rubric tool result: %s", body)
+			}
+			writeResponsesJSON(w, `{
+				"id":"resp_3","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"<review>criteria,score\nreview-skill,9.0/10</review>\n<summary>Rubric applied.</summary>"}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	result := exec.ExecuteTurn("Review workspace.", &game.TurnState{
+		Role:         "verifier",
+		Dir:          filepath.Join(workspace, ".turn"),
+		ProtocolMode: game.ProtocolModeReview,
+		Skills: []game.TurnSkill{{
+			Name:        "review-skill",
+			Description: "Review rubric",
+			SkillPath:   filepath.ToSlash(skillPath),
+			Required:    true,
+		}},
+	})
+
+	if result.Error != "" {
+		t.Fatalf("error: got %q logs=%q", result.Error, result.Logs)
+	}
+	if !strings.Contains(result.Logs, "<summary>Rubric applied.</summary>") {
+		t.Fatalf("review-mode final logs: %q", result.Logs)
 	}
 	if requests != 3 {
 		t.Fatalf("requests: got %d", requests)

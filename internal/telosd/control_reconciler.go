@@ -39,15 +39,8 @@ func startControlSessionReconciler(ctx context.Context, store sessionapi.Store, 
 	if os.Getenv("TELOS_CONTROL_RECONCILER_ENABLED") == "0" {
 		return
 	}
-	r := controlSessionReconciler{
-		apiURL:      strings.TrimRight(strings.TrimSpace(os.Getenv("TELOS_CONTROL_API_URL")), "/"),
-		envID:       strings.TrimSpace(os.Getenv("TELOS_ENV_ID")),
-		token:       strings.TrimSpace(cfg.Auth.Token),
-		packageRoot: strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
-		client:      &http.Client{Timeout: 10 * time.Second},
-		store:       store,
-	}
-	if r.apiURL == "" || r.envID == "" || r.token == "" || r.packageRoot == "" {
+	r, ok := newControlSessionReconciler(store, cfg)
+	if !ok {
 		return
 	}
 
@@ -66,6 +59,25 @@ func startControlSessionReconciler(ctx context.Context, store sessionapi.Store, 
 			}
 		}
 	}()
+}
+
+func newControlSessionReconciler(store sessionapi.Store, cfg Config) (controlSessionReconciler, bool) {
+	r := controlSessionReconciler{
+		apiURL:      controlReconcilerAPIURL(cfg),
+		envID:       strings.TrimSpace(cfg.ControlPlane.EnvID),
+		token:       strings.TrimSpace(cfg.ControlPlane.Token),
+		packageRoot: strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
+		client:      &http.Client{Timeout: 10 * time.Second},
+		store:       store,
+	}
+	if r.apiURL == "" || r.envID == "" || r.token == "" || r.packageRoot == "" {
+		return controlSessionReconciler{}, false
+	}
+	return r, true
+}
+
+func controlReconcilerAPIURL(cfg Config) string {
+	return strings.TrimRight(strings.TrimSpace(cfg.ControlPlane.Endpoint), "/")
 }
 
 func (r controlSessionReconciler) reconcile(ctx context.Context) error {

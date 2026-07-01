@@ -201,6 +201,9 @@ func (s kubernetesSubstrate) Stop(session *sessionapi.Session) error {
 		if err := s.billing.ReconcileSession(session.SessionID, true); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: reconcile managed billing: %v\n", err)
 		}
+		if err := s.deleteSecret(ctx, s.envNamespace, sessionGatewaySecretName(session.SessionID)); err != nil {
+			stopErr = errors.Join(stopErr, fmt.Errorf("delete session gateway secret %s/%s: %w", s.envNamespace, sessionGatewaySecretName(session.SessionID), err))
+		}
 	}
 	return stopErr
 }
@@ -579,6 +582,14 @@ func (s kubernetesSubstrate) createOrUpdateSecret(ctx context.Context, desired *
 	}
 	desired.ResourceVersion = current.ResourceVersion
 	_, err = s.client.CoreV1().Secrets(desired.Namespace).Update(ctx, desired, metav1.UpdateOptions{})
+	return err
+}
+
+func (s kubernetesSubstrate) deleteSecret(ctx context.Context, namespace string, name string) error {
+	err := s.client.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if apierrors.IsNotFound(err) {
+		return nil
+	}
 	return err
 }
 

@@ -26,22 +26,23 @@ import (
 // gateway using the official openai-go SDK's Responses API. Transport mechanics
 // are hidden behind responseRunner so the loop acts only on final responses.
 type responsesClient struct {
-	client          openai.Client
-	runner          responseRunner
-	provider        string
-	transport       responseTransport
-	model           string
-	instructions    string
-	reasoning       openai.ReasoningEffort
-	maxOutputTokens int
-	tools           []responses.ToolUnionParam
-	state           *conversationState
-	compactor       *compactor
-	logger          *nativeSessionLogger
-	sequence        int
-	activeSequence  int
-	lastCostUSD     float64
-	lastCostKnown   bool
+	client            openai.Client
+	runner            responseRunner
+	provider          string
+	transport         responseTransport
+	model             string
+	instructions      string
+	reasoning         openai.ReasoningEffort
+	maxOutputTokens   int
+	tools             []responses.ToolUnionParam
+	state             *conversationState
+	compactor         *compactor
+	logger            *nativeSessionLogger
+	beforeMainRequest func(game.TurnStats) error
+	sequence          int
+	activeSequence    int
+	lastCostUSD       float64
+	lastCostKnown     bool
 }
 
 type completionResult struct {
@@ -276,6 +277,12 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 		// the model call, so the wasted cost is still charged to the turn.
 		return agentTurn{stats: compStats}, err
 	}
+	if t.beforeMainRequest != nil {
+		if err := t.beforeMainRequest(compStats); err != nil {
+			_ = t.logger.errorEvent(t.sequence+1, err)
+			return agentTurn{stats: compStats}, err
+		}
+	}
 	t.sequence++
 	seq := t.sequence
 	params := t.params()
@@ -401,7 +408,6 @@ func (t *responsesClient) compactSessionState(ctx context.Context) (game.TurnSta
 		Model:        openai.ResponsesModel(t.model),
 		Instructions: openai.String(t.instructions),
 		Input:        responses.ResponseNewParamsInputUnion{OfInputItemList: t.state.compactionRequestInput(plan.firstKeptIndex, summaryBudget)},
-		Tools:        t.tools,
 	}
 	if t.maxOutputTokens > 0 {
 		params.MaxOutputTokens = openai.Int(int64(t.maxOutputTokens))

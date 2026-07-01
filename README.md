@@ -40,10 +40,6 @@ skills:
 Build a small HTTP service with `/healthz`, tests, and local run instructions.
 ```
 
-```bash
-telos run SPEC.md --workspace . --until 3
-```
-
 Local runs use Telos' native executor through an OpenAI-compatible Responses
 gateway.
 Configure the gateway before starting a run:

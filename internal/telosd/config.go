@@ -169,7 +169,10 @@ func NormalizeConfig(cfg Config) (Config, error) {
 			cfg.Runtime.MountPath = "/telos-runtime"
 		}
 		if cfg.ControlPlane.Endpoint == "" {
-			cfg.ControlPlane.Endpoint = envOr("TELOS_CONTROL_ENDPOINT", "https://api.usetelos.ai")
+			cfg.ControlPlane.Endpoint = envFirst(
+				[]string{"TELOS_CONTROL_ENDPOINT", "TELOS_CONTROL_API_URL"},
+				"https://api.usetelos.ai",
+			)
 		}
 		if cfg.ControlPlane.EnvID == "" {
 			cfg.ControlPlane.EnvID = os.Getenv("TELOS_ENV_ID")
@@ -295,6 +298,15 @@ func defaultImagePullSecret(agentImage string) string {
 		return "gar-pull"
 	}
 	return ""
+}
+
+func envFirst(names []string, fallback string) string {
+	for _, name := range names {
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			return value
+		}
+	}
+	return fallback
 }
 
 func SessionsRoot(root string) string {

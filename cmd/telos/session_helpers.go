@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -91,11 +92,12 @@ func getSessionFromAnywhere(sessionID, envID string) (*sessionapi.Session, error
 			return nil, err
 		}
 		cloudErr := err
-		for _, client := range clients {
-			session, err := client.GetSession(sessionID)
-			if err == nil {
+		if len(clients) > 0 {
+			session, cloudLookupErr := getSessionFromCloudClients(sessionID, clients)
+			if cloudLookupErr == nil {
 				return session, nil
 			}
+			cloudErr = errors.Join(cloudErr, cloudLookupErr)
 		}
 		if cloudErr != nil {
 			return nil, fmt.Errorf("session %s not found locally; cloud lookup failed: %w", sessionID, cloudErr)
@@ -120,24 +122,32 @@ func getTranscriptFromAnywhere(sessionID, envID string) (string, error) {
 		return "", fmt.Errorf("root transcript lookup failed: %w", err)
 	}
 
+	if envID == "" && localSessionExists(sessionID) {
+		if errors.Is(err, sessionapi.ErrNotFound) {
+			return "", fmt.Errorf("transcript for session %s: %w", sessionID, sessionapi.ErrNotFound)
+		}
+		return "", err
+	}
+
 	if envID != "" || config.IsConfigured() {
 		clients, err := cloudSessionClients(envID)
 		if err != nil && envID != "" {
 			return "", err
 		}
 		cloudErr := err
-		for _, client := range clients {
-			text, err := client.GetTranscript(sessionID)
-			if err == nil {
+		if len(clients) > 0 {
+			text, cloudLookupErr := getTranscriptFromCloudClients(sessionID, clients)
+			if cloudLookupErr == nil {
 				return text, nil
 			}
+			cloudErr = errors.Join(cloudErr, cloudLookupErr)
 		}
 		if cloudErr != nil {
 			return "", fmt.Errorf("session %s transcript not found locally; cloud lookup failed: %w", sessionID, cloudErr)
 		}
 	}
 
-	if localSessionExists(sessionID) {
+	if envID != "" && localSessionExists(sessionID) {
 		return "", fmt.Errorf("transcript for session %s: %w", sessionID, sessionapi.ErrNotFound)
 	}
 	return "", localSessionNotFoundError(sessionID)
@@ -164,11 +174,12 @@ func stopSessionAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
 			return nil, err
 		}
 		cloudErr := err
-		for _, client := range clients {
-			session, err := client.StopSession(sessionID)
-			if err == nil {
+		if len(clients) > 0 {
+			session, cloudLookupErr := stopSessionFromCloudClients(sessionID, clients)
+			if cloudLookupErr == nil {
 				return session, nil
 			}
+			cloudErr = errors.Join(cloudErr, cloudLookupErr)
 		}
 		if cloudErr != nil {
 			return nil, fmt.Errorf("session %s not found locally; cloud lookup failed: %w", sessionID, cloudErr)
@@ -176,6 +187,42 @@ func stopSessionAnywhere(sessionID, envID string) (*sessionapi.Session, error) {
 	}
 
 	return nil, localSessionNotFoundError(sessionID)
+}
+
+func getSessionFromCloudClients(sessionID string, clients []*cloud.Client) (*sessionapi.Session, error) {
+	var cloudErr error
+	for _, client := range clients {
+		session, err := client.GetSession(sessionID)
+		if err == nil {
+			return session, nil
+		}
+		cloudErr = errors.Join(cloudErr, err)
+	}
+	return nil, cloudErr
+}
+
+func getTranscriptFromCloudClients(sessionID string, clients []*cloud.Client) (string, error) {
+	var cloudErr error
+	for _, client := range clients {
+		text, err := client.GetTranscript(sessionID)
+		if err == nil {
+			return text, nil
+		}
+		cloudErr = errors.Join(cloudErr, err)
+	}
+	return "", cloudErr
+}
+
+func stopSessionFromCloudClients(sessionID string, clients []*cloud.Client) (*sessionapi.Session, error) {
+	var cloudErr error
+	for _, client := range clients {
+		session, err := client.StopSession(sessionID)
+		if err == nil {
+			return session, nil
+		}
+		cloudErr = errors.Join(cloudErr, err)
+	}
+	return nil, cloudErr
 }
 
 func localSessionNotFoundError(sessionID string) error {
