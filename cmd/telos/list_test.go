@@ -179,6 +179,31 @@ func TestPrintDeploymentDeleteReceiptUsesDeploymentSummary(t *testing.T) {
 	}
 }
 
+func TestPrintDeploymentDeleteReceiptShowsAsyncDeletion(t *testing.T) {
+	deployment := cloud.DeploymentRecord{
+		ID:            "dep_123",
+		Name:          "auth",
+		State:         "deleting",
+		PackageRef:    "@telos/auth:1.0.0",
+		PackageDigest: "sha256:abc",
+		CreatedAt:     "then",
+		UpdatedAt:     "now",
+	}
+
+	var out bytes.Buffer
+	printDeploymentDeleteReceipt(&out, deployment)
+	text := out.String()
+	for _, want := range []string{
+		"delete requested for auth",
+		"Status    deleting",
+		"Deployment dep_123",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("deployment delete receipt missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestCmdDeleteDeletesDeployment(t *testing.T) {
 	var deleted bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

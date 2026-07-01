@@ -86,7 +86,12 @@ func deleteDeployment(deploymentID string) (*cloud.DeploymentRecord, error) {
 }
 
 func printDeploymentDeleteReceipt(out io.Writer, deployment cloud.DeploymentRecord) {
-	fmt.Fprintf(out, "deleted %s\n\n", deployment.Name)
+	switch deployment.State {
+	case "deleted":
+		fmt.Fprintf(out, "deleted %s\n\n", deployment.Name)
+	default:
+		fmt.Fprintf(out, "delete requested for %s\n\n", deployment.Name)
+	}
 	printSummaryField(out, "Name", deployment.Name)
 	printSummaryField(out, "Platform", "cloud")
 	printSummaryField(out, "Status", deployment.State)
