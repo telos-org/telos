@@ -44,6 +44,24 @@ type ProbeConfig struct {
 	Headers   map[string]string
 }
 
+// Enabled reports whether the caller explicitly configured Telos gateway
+// routing. A login token alone must not opt existing Pi/provider setups into
+// managed billing.
+func Enabled() bool {
+	cfg := config.LoadConfig()
+	if base, key, _, _, _, err := envGateway(); err != nil {
+		return true
+	} else if base != "" || key != "" {
+		return true
+	}
+	return strings.TrimSpace(cfg.Gateway.Mode) != "" ||
+		strings.TrimSpace(cfg.Gateway.BaseURL) != "" ||
+		strings.TrimSpace(cfg.Gateway.APIKey) != "" ||
+		strings.TrimSpace(cfg.Gateway.Transport) != "" ||
+		strings.TrimSpace(cfg.Gateway.Kind) != "" ||
+		len(cfg.Gateway.Headers) > 0
+}
+
 // Resolve chooses the local gateway credential for a session.
 func Resolve(sessionID string) (Credential, error) {
 	cfg := config.LoadConfig()
@@ -64,8 +82,6 @@ func Resolve(sessionID string) (Credential, error) {
 	if mode == "" {
 		if cfg.Gateway.BaseURL != "" || cfg.Gateway.APIKey != "" {
 			mode = ModeBYO
-		} else if cfg.AuthToken != "" {
-			mode = ModeManaged
 		}
 	}
 	switch mode {

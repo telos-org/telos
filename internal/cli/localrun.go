@@ -231,12 +231,14 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 		model = DefaultLocalModel
 	}
 	piExec := executor.NewPiExecutor(p, model, cfg.Thinking, cfg.AgentTimeoutSec)
-	cred, err := gateway.Resolve(cfg.SessionID)
-	if err != nil {
-		return nil, err
-	}
-	if err := piExec.ConfigureGateway(cred); err != nil {
-		return nil, err
+	if gateway.Enabled() {
+		cred, err := gateway.Resolve(cfg.SessionID)
+		if err != nil {
+			return nil, err
+		}
+		if err := piExec.ConfigureGateway(cred); err != nil {
+			return nil, err
+		}
 	}
 	return piExec, nil
 }

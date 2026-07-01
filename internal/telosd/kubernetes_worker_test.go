@@ -142,6 +142,7 @@ func TestKubernetesSubstrateStopDeletesWorkerResources(t *testing.T) {
 
 func TestKubernetesSubstrateStopReconcilesManagedBilling(t *testing.T) {
 	setGatewayEnv(t)
+	t.Setenv("TELOS_GATEWAY_MODE", "managed")
 
 	session := testCloudSession(t, sessionapi.KindController)
 	gotReconcile := false
@@ -198,6 +199,42 @@ func TestKubernetesSubstrateStopReconcilesManagedBilling(t *testing.T) {
 	}
 	if _, err := client.CoreV1().Secrets(cfg.Kubernetes.EnvNamespace).Get(context.Background(), secretName, metav1.GetOptions{}); err == nil {
 		t.Fatalf("session gateway secret %s still exists", secretName)
+	}
+}
+
+func TestKubernetesSubstrateStopSkipsBillingWithoutManagedMode(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_MODE", "")
+	session := testCloudSession(t, sessionapi.KindController)
+	reconcileCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/billing/reconcile/") {
+			reconcileCalls++
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	cfg := testCloudConfig(t)
+	cfg.Billing.Endpoint = server.URL
+	cfg.Billing.EnvID = "env_test"
+	cfg.Billing.Token = "env-billing-token"
+	secretName := sessionGatewaySecretName(session.SessionID)
+	objects := append(testEnvObjects(cfg), sessionGatewaySecret(cfg.Kubernetes.EnvNamespace, secretName, cfg.Kubernetes.AgentSecretKey, controlSessionKey{
+		SessionID: session.SessionID,
+		BaseURL:   "https://managed.example.com/v1",
+		APIKey:    "sk-managed",
+	}))
+	client := fake.NewSimpleClientset(objects...)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	if err := substrate.Stop(session); err != nil {
+		t.Fatal(err)
+	}
+	if reconcileCalls != 0 {
+		t.Fatalf("reconcile calls: got %d", reconcileCalls)
+	}
+	if _, err := client.CoreV1().Secrets(cfg.Kubernetes.EnvNamespace).Get(context.Background(), secretName, metav1.GetOptions{}); err != nil {
+		t.Fatalf("session gateway secret should not be touched without managed mode: %v", err)
 	}
 }
 
@@ -334,6 +371,63 @@ func TestKubernetesSubstrateRuntimeStatusTask(t *testing.T) {
 	})
 }
 
+func TestKubernetesSubstrateRuntimeStatusReconcilesTerminalManagedTask(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_MODE", "managed")
+	kind := sessionapi.KindTask
+	session := &sessionapi.Session{SessionID: "sess_20260518_000000_task", SessionKind: &kind}
+	namespace := workerNamespace(session.SessionID, kind)
+	name := workerWorkloadName(session.SessionID, kind)
+	gotReconcile := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/billing/reconcile/"+session.SessionID || r.URL.RawQuery != "terminal=true" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer env-billing-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		gotReconcile = true
+		_ = json.NewEncoder(w).Encode(map[string]any{"state": "settled"})
+	}))
+	defer server.Close()
+
+	cfg := testCloudConfig(t)
+	cfg.Billing.Endpoint = server.URL
+	cfg.Billing.EnvID = "env_test"
+	cfg.Billing.Token = "env-billing-token"
+	secretName := sessionGatewaySecretName(session.SessionID)
+	client := fake.NewSimpleClientset(
+		&batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
+			Status: batchv1.JobStatus{Conditions: []batchv1.JobCondition{{
+				Type:   batchv1.JobComplete,
+				Status: corev1.ConditionTrue,
+			}}},
+		},
+		sessionGatewaySecret(cfg.Kubernetes.EnvNamespace, secretName, cfg.Kubernetes.AgentSecretKey, controlSessionKey{
+			SessionID: session.SessionID,
+			BaseURL:   "https://managed.example.com/v1",
+			APIKey:    "sk-managed",
+		}),
+	)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	status, err := substrate.RuntimeStatus(session)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status != sessionapi.StatusStale {
+		t.Fatalf("status: got %q", status)
+	}
+	if !gotReconcile {
+		t.Fatal("missing terminal billing reconcile")
+	}
+	if _, err := client.CoreV1().Secrets(cfg.Kubernetes.EnvNamespace).Get(context.Background(), secretName, metav1.GetOptions{}); err == nil {
+		t.Fatalf("session gateway secret %s still exists", secretName)
+	}
+}
+
 func TestCloudSessionStoreCleansKubernetesResourcesWhenInitialApplyFails(t *testing.T) {
 	setGatewayEnv(t)
 
@@ -458,6 +552,7 @@ func TestKubernetesSubstrateAgentSecretRequiresGatewayBaseURL(t *testing.T) {
 func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_API_KEY", "")
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_MODE", "managed")
 	mintCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/internal/sessions/sess_cloud/mint" {
@@ -528,9 +623,63 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_KEY_ALIAS", "sess_cloud")
 }
 
+func TestKubernetesSubstrateDoesNotMintGatewayWithoutManagedMode(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_MODE", "")
+	mintCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/mint") {
+			mintCalls++
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	cfg := testCloudConfig(t)
+	cfg.Billing.Endpoint = server.URL
+	cfg.Billing.EnvID = "env_test"
+	cfg.Billing.Token = "billing-token"
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.EnvNamespace}},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "telos-env-keys", Namespace: cfg.Kubernetes.EnvNamespace},
+			Type:       corev1.SecretTypeOpaque,
+			Data:       map[string][]byte{"TELOS_ENV_ID": []byte("env_test")},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
+			Type:       corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"SAIL_API_KEY":      []byte("sail-key"),
+				"ANTHROPIC_API_KEY": []byte("anthropic-key"),
+			},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.ImagePullSecret, Namespace: cfg.Kubernetes.EnvNamespace},
+			Type:       corev1.SecretTypeDockerConfigJson,
+			Data:       map[string][]byte{corev1.DockerConfigJsonKey: []byte("{}")},
+		},
+	)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+	session := testCloudSession(t, sessionapi.KindController)
+
+	if err := substrate.Apply(session, "controller_started", "Bearer user-token"); err != nil {
+		t.Fatal(err)
+	}
+	if mintCalls != 0 {
+		t.Fatalf("mint calls: got %d", mintCalls)
+	}
+	namespace := workerNamespace(session.SessionID, sessionapi.KindController)
+	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "SAIL_API_KEY", "sail-key")
+	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "ANTHROPIC_API_KEY", "anthropic-key")
+	assertSecretDataAbsent(t, client, namespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY")
+}
+
 func TestKubernetesSubstrateSessionGatewayCredentialConcurrentMintOnce(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_API_KEY", "")
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_MODE", "managed")
 	var mu sync.Mutex
 	mintCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -582,7 +731,7 @@ func TestKubernetesSubstrateSessionGatewayCredentialConcurrentMintOnce(t *testin
 	}
 }
 
-func TestKubernetesWorkerEnvIncludesBillingConfig(t *testing.T) {
+func TestKubernetesWorkerEnvKeepsBillingTokenOutOfDefaultWorker(t *testing.T) {
 	cfg := testCloudConfig(t)
 	cfg.Billing.Endpoint = "https://billing.example.com"
 	cfg.Billing.EnvID = "env_test"
@@ -596,13 +745,42 @@ func TestKubernetesWorkerEnvIncludesBillingConfig(t *testing.T) {
 	if got := envValue(env, "TELOS_BILLING_ENDPOINT"); got != "https://billing.example.com" {
 		t.Fatalf("TELOS_BILLING_ENDPOINT: got %q", got)
 	}
-	token := envByName(env, "TELOS_BILLING_ENV_TOKEN")
-	if token == nil || token.ValueFrom == nil || token.ValueFrom.SecretKeyRef == nil || token.ValueFrom.SecretKeyRef.Key != "TELOS_BILLING_ENV_TOKEN" {
-		t.Fatalf("TELOS_BILLING_ENV_TOKEN env: %+v", token)
+	if token := envByName(env, "TELOS_BILLING_ENV_TOKEN"); token != nil {
+		t.Fatalf("TELOS_BILLING_ENV_TOKEN should not be exposed by default: %+v", token)
+	}
+	if tokenFile := envByName(env, "TELOS_BILLING_ENV_TOKEN_FILE"); tokenFile != nil {
+		t.Fatalf("TELOS_BILLING_ENV_TOKEN_FILE should not be exposed by default: %+v", tokenFile)
 	}
 	secret := substrate.agentSecret("ns-worker", nil)
-	if got := string(secret.Data["TELOS_BILLING_ENV_TOKEN"]); got != "billing-token" {
-		t.Fatalf("billing token secret: got %q", got)
+	if _, ok := secret.Data["TELOS_BILLING_ENV_TOKEN"]; ok {
+		t.Fatal("agent secret should not contain billing token by default")
+	}
+	if got := envValue(env, "TELOS_COST_HARD_LIMIT"); got != "" {
+		t.Fatalf("TELOS_COST_HARD_LIMIT: got %q", got)
+	}
+}
+
+func TestKubernetesWorkerEnvKeepsBillingTokenOutOfManagedWorker(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_MODE", "managed")
+	cfg := testCloudConfig(t)
+	cfg.Billing.Endpoint = "https://billing.example.com"
+	cfg.Billing.EnvID = "env_test"
+	cfg.Billing.Token = "billing-token"
+	substrate := newKubernetesSubstrateWithClient(cfg, fake.NewSimpleClientset(testEnvObjects(cfg)...))
+
+	env := substrate.workerEnv("sess_cloud", &sessionapi.Manifest{})
+	if tokenFile := envByName(env, "TELOS_BILLING_ENV_TOKEN_FILE"); tokenFile != nil {
+		t.Fatalf("TELOS_BILLING_ENV_TOKEN_FILE should not be exposed: %+v", tokenFile)
+	}
+	if token := envByName(env, "TELOS_BILLING_ENV_TOKEN"); token != nil {
+		t.Fatalf("TELOS_BILLING_ENV_TOKEN should not be exposed directly: %+v", token)
+	}
+	secret := substrate.agentSecret("ns-worker", nil)
+	if _, ok := secret.Data["TELOS_BILLING_ENV_TOKEN"]; ok {
+		t.Fatal("agent secret should not contain raw billing token")
+	}
+	if _, ok := secret.Data["TELOS_BILLING_ENV_TOKEN_FILE"]; ok {
+		t.Fatal("agent secret should not contain billing token file")
 	}
 	if got := envValue(env, "TELOS_COST_HARD_LIMIT"); got != "true" {
 		t.Fatalf("TELOS_COST_HARD_LIMIT: got %q", got)

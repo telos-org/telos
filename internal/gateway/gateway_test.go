@@ -113,7 +113,7 @@ func TestResolveManagedMintsSessionKey(t *testing.T) {
 
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
-	if err := os.WriteFile(cfgPath, []byte("billing_endpoint: "+server.URL+"\nauth_token: login-token\n"), 0o600); err != nil {
+	if err := os.WriteFile(cfgPath, []byte("billing_endpoint: "+server.URL+"\nauth_token: login-token\ngateway:\n  mode: managed\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("TELOS_CONFIG", cfgPath)
@@ -132,6 +132,42 @@ func TestResolveManagedMintsSessionKey(t *testing.T) {
 	}
 	if !cred.CostHardLimit {
 		t.Fatalf("managed gateway should hard-enforce unknown cost: %+v", cred)
+	}
+}
+
+func TestResolveDoesNotTreatLoginAsManagedOptIn(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("auth_token: login-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+
+	if Enabled() {
+		t.Fatal("login alone should not enable gateway routing")
+	}
+	if _, err := Resolve("sess-1"); err == nil {
+		t.Fatal("expected explicit gateway mode error")
+	}
+}
+
+func TestGatewayTransportOnlyCountsAsIntent(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("gateway:\n  transport: bifrost_async\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+
+	if !Enabled() {
+		t.Fatal("gateway transport should enable gateway routing")
+	}
+	if _, err := Resolve("sess-1"); err == nil {
+		t.Fatal("expected incomplete gateway config error")
 	}
 }
 

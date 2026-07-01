@@ -27,6 +27,12 @@ const (
 	DefaultCheckpointMaxBytes = 512 << 20
 )
 
+var workspaceProcessEnvDenylist = map[string]bool{
+	"TELOS_BILLING_ENV_TOKEN":      true,
+	"TELOS_BILLING_ENV_TOKEN_FILE": true,
+	"TELOS_BILLING_SERVICE_TOKEN":  true,
+}
+
 // CommandResult is the outcome of one platform run.
 type CommandResult struct {
 	RawLines            []string
@@ -75,14 +81,14 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 	mergedEnv := workspaceProcessEnv()
 	if p.Env != nil {
 		for k, v := range p.Env {
-			mergedEnv = append(mergedEnv, k+"="+v)
+			mergedEnv = appendWorkspaceEnv(mergedEnv, k, v)
 		}
 	}
 	for k, v := range env {
-		mergedEnv = append(mergedEnv, k+"="+v)
+		mergedEnv = appendWorkspaceEnv(mergedEnv, k, v)
 	}
 	if task != "" {
-		mergedEnv = append(mergedEnv, TaskEnvVar+"="+task)
+		mergedEnv = appendWorkspaceEnv(mergedEnv, TaskEnvVar, task)
 	}
 
 	cmd := exec.Command(argv[0], argv[1:]...)
@@ -726,9 +732,19 @@ func workspaceProcessEnv() []string {
 		case "VIRTUAL_ENV", "PYTHONHOME", "PYTHONPATH":
 			continue
 		}
+		if workspaceProcessEnvDenylist[key] {
+			continue
+		}
 		env = append(env, e)
 	}
 	return env
+}
+
+func appendWorkspaceEnv(env []string, key, value string) []string {
+	if workspaceProcessEnvDenylist[key] {
+		return env
+	}
+	return append(env, key+"="+value)
 }
 
 func workspaceFileListing(workspace string) string {

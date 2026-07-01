@@ -65,6 +65,7 @@ const (
 	gatewayKindEnv      = "TELOS_GATEWAY_KIND"
 	gatewayHeadersEnv   = "TELOS_GATEWAY_HEADERS"
 	gatewayKeyAliasEnv  = "TELOS_GATEWAY_KEY_ALIAS"
+	gatewayModeEnv      = "TELOS_GATEWAY_MODE"
 )
 
 var gatewayEnvNames = []string{
@@ -203,13 +204,8 @@ func (s kubernetesSubstrate) Stop(session *sessionapi.Session) error {
 	if err := s.deleteClusterRole(ctx, workerClusterRole(namespace).Name); err != nil {
 		stopErr = errors.Join(stopErr, fmt.Errorf("delete worker clusterrole %s: %w", workerClusterRole(namespace).Name, err))
 	}
-	if s.billing != nil && s.billing.configured() {
-		if err := s.billing.ReconcileSession(session.SessionID, true); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: reconcile managed billing: %v\n", err)
-		}
-		if err := s.deleteSecret(ctx, s.envNamespace, sessionGatewaySecretName(session.SessionID)); err != nil {
-			stopErr = errors.Join(stopErr, fmt.Errorf("delete session gateway secret %s/%s: %w", s.envNamespace, sessionGatewaySecretName(session.SessionID), err))
-		}
+	if err := s.reconcileManagedBilling(ctx, session.SessionID, true); err != nil {
+		stopErr = errors.Join(stopErr, err)
 	}
 	return stopErr
 }
@@ -228,33 +224,79 @@ func (s kubernetesSubstrate) RuntimeStatus(session *sessionapi.Session) (session
 	case sessionapi.KindController:
 		deployment, err := s.client.AppsV1().Deployments(namespace).Get(ctx, name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
-			return sessionapi.StatusStale, nil
+			status := sessionapi.StatusStale
+			s.reconcileObservedStatus(ctx, session.SessionID, status)
+			return status, nil
 		}
 		if err != nil {
 			return "", err
 		}
 		if deploymentProgressDeadlineExceeded(deployment) {
-			return sessionapi.StatusStale, nil
+			status := sessionapi.StatusStale
+			s.reconcileObservedStatus(ctx, session.SessionID, status)
+			return status, nil
 		}
-		return sessionapi.StatusRunning, nil
+		status := sessionapi.StatusRunning
+		s.reconcileObservedStatus(ctx, session.SessionID, status)
+		return status, nil
 	case sessionapi.KindTask:
 		job, err := s.client.BatchV1().Jobs(namespace).Get(ctx, name, metav1.GetOptions{})
 		if apierrors.IsNotFound(err) {
-			return sessionapi.StatusStale, nil
+			status := sessionapi.StatusStale
+			s.reconcileObservedStatus(ctx, session.SessionID, status)
+			return status, nil
 		}
 		if err != nil {
 			return "", err
 		}
 		if jobConditionTrue(job, batchv1.JobFailed) || job.Status.Failed > 0 {
-			return sessionapi.StatusFailed, nil
+			status := sessionapi.StatusFailed
+			s.reconcileObservedStatus(ctx, session.SessionID, status)
+			return status, nil
 		}
 		if jobConditionTrue(job, batchv1.JobComplete) || job.Status.Succeeded > 0 {
-			return sessionapi.StatusStale, nil
+			status := sessionapi.StatusStale
+			s.reconcileObservedStatus(ctx, session.SessionID, status)
+			return status, nil
 		}
-		return sessionapi.StatusRunning, nil
+		status := sessionapi.StatusRunning
+		s.reconcileObservedStatus(ctx, session.SessionID, status)
+		return status, nil
 	default:
 		return "", fmt.Errorf("invalid session_kind %q", kind)
 	}
+}
+
+func (s kubernetesSubstrate) reconcileObservedStatus(ctx context.Context, sessionID string, status sessionapi.SessionStatus) {
+	if status == "" {
+		return
+	}
+	if err := s.reconcileManagedBilling(ctx, sessionID, status.IsTerminal()); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: reconcile managed billing: %v\n", err)
+	}
+}
+
+func (s kubernetesSubstrate) reconcileManagedBilling(ctx context.Context, sessionID string, terminal bool) error {
+	if !s.managedGatewayEnabled() || s.billing == nil || !s.billing.configured() {
+		return nil
+	}
+	secretName := sessionGatewaySecretName(sessionID)
+	if _, err := s.client.CoreV1().Secrets(s.envNamespace).Get(ctx, secretName, metav1.GetOptions{}); err != nil {
+		if apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("read session gateway secret %s/%s: %w", s.envNamespace, secretName, err)
+	}
+	if err := s.billing.ReconcileSession(sessionID, terminal); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: reconcile managed billing: %v\n", err)
+		return nil
+	}
+	if terminal {
+		if err := s.deleteSecret(ctx, s.envNamespace, secretName); err != nil {
+			return fmt.Errorf("delete session gateway secret %s/%s: %w", s.envNamespace, secretName, err)
+		}
+	}
+	return nil
 }
 
 func deploymentProgressDeadlineExceeded(deployment *appsv1.Deployment) bool {
@@ -453,6 +495,7 @@ func (s kubernetesSubstrate) workerEnv(sessionID string, m *sessionapi.Manifest)
 			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
 				LocalObjectReference: corev1.LocalObjectReference{Name: s.agentSecretName},
 				Key:                  s.agentSecretKey,
+				Optional:             boolPtr(true),
 			}},
 		},
 		{Name: "TELOS_SESSION_ID", Value: sessionID},
@@ -475,18 +518,7 @@ func (s kubernetesSubstrate) workerEnv(sessionID string, m *sessionapi.Manifest)
 	if s.billingEndpoint != "" {
 		env = append(env, corev1.EnvVar{Name: "TELOS_BILLING_ENDPOINT", Value: s.billingEndpoint})
 	}
-	if s.billingToken != "" {
-		env = append(env, corev1.EnvVar{
-			Name: "TELOS_BILLING_ENV_TOKEN",
-			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
-				LocalObjectReference: corev1.LocalObjectReference{Name: s.agentSecretName},
-				Key:                  "TELOS_BILLING_ENV_TOKEN",
-			}},
-		})
-	} else if s.billingTokenFile != "" {
-		env = append(env, corev1.EnvVar{Name: "TELOS_BILLING_ENV_TOKEN_FILE", Value: s.billingTokenFile})
-	}
-	if s.billingEnvID != "" && (s.billingToken != "" || s.billingTokenFile != "") {
+	if s.managedGatewayEnabled() && s.billingEnvID != "" && s.billing != nil && s.billing.configured() {
 		env = append(env, corev1.EnvVar{Name: "TELOS_COST_HARD_LIMIT", Value: "true"})
 	}
 	return env
@@ -616,17 +648,19 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
-	if gatewayAPIKeyValue(secret.Data, s.agentSecretKey) == "" {
-		return fmt.Errorf("%s is required to launch a worker", gatewayAPIKeyEnv)
-	}
-	if !secretHasGatewayBaseURL(secret.Data) {
-		return fmt.Errorf("%s is required to launch a worker", gatewayBaseURLEnv)
+	if hasGatewayIntent(secret.Data, s.agentSecretKey) {
+		if gatewayAPIKeyValue(secret.Data, s.agentSecretKey) == "" {
+			return fmt.Errorf("%s is required to launch a worker", gatewayAPIKeyEnv)
+		}
+		if !secretHasGatewayBaseURL(secret.Data) {
+			return fmt.Errorf("%s is required to launch a worker", gatewayBaseURLEnv)
+		}
 	}
 	return s.createOrUpdateSecret(ctx, secret)
 }
 
 func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessionID, parentSessionID, userAuthorization string) (*controlSessionKey, error) {
-	if s.billing == nil || !s.billing.configured() {
+	if !s.managedGatewayEnabled() || s.billing == nil || !s.billing.configured() {
 		return nil, nil
 	}
 	lock := sessionGatewayLock(sessionID)
@@ -662,18 +696,19 @@ func (s kubernetesSubstrate) applyBillingCredential(data map[string][]byte) {
 	if data == nil {
 		return
 	}
+	if !s.managedGatewayEnabled() {
+		return
+	}
 	if s.billingEnvID != "" {
 		data["TELOS_ENV_ID"] = []byte(s.billingEnvID)
 	}
 	if s.billingEndpoint != "" {
 		data["TELOS_BILLING_ENDPOINT"] = []byte(s.billingEndpoint)
 	}
-	if s.billingToken != "" {
-		data["TELOS_BILLING_ENV_TOKEN"] = []byte(s.billingToken)
-	}
-	if s.billingTokenFile != "" {
-		data["TELOS_BILLING_ENV_TOKEN_FILE"] = []byte(s.billingTokenFile)
-	}
+}
+
+func (s kubernetesSubstrate) managedGatewayEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv(gatewayModeEnv)), "managed")
 }
 
 func sessionGatewaySecretName(sessionID string) string {
@@ -795,6 +830,12 @@ func applyConfiguredGatewayEnv(data map[string][]byte) {
 			data[name] = []byte(value)
 		}
 	}
+}
+
+func hasGatewayIntent(data map[string][]byte, keyName string) bool {
+	return strings.TrimSpace(string(data[gatewayAPIKeyEnv])) != "" ||
+		strings.TrimSpace(string(data[keyName])) != "" ||
+		strings.TrimSpace(string(data[gatewayBaseURLEnv])) != ""
 }
 
 func gatewayAPIKeyValue(data map[string][]byte, keyName string) string {

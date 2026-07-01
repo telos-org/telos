@@ -93,6 +93,35 @@ func TestLocalPlatformRunWithEnv(t *testing.T) {
 	}
 }
 
+func TestLocalPlatformRunScrubsBillingCredentials(t *testing.T) {
+	dir := t.TempDir()
+	p := NewLocalPlatform(dir)
+	p.Env = map[string]string{"TELOS_BILLING_SERVICE_TOKEN": "service-token"}
+	t.Setenv("TELOS_BILLING_ENV_TOKEN", "env-token")
+	t.Setenv("TELOS_BILLING_ENV_TOKEN_FILE", "/secret/token")
+
+	result := p.Run(
+		[]string{"sh", "-c", "env | grep '^TELOS_BILLING_'; true"},
+		"",
+		map[string]string{"TELOS_BILLING_ENV_TOKEN": "override-token"},
+		10,
+		nil,
+		nil,
+		"",
+	)
+
+	if result.InfraError != "" {
+		t.Fatalf("infra error: %s", result.InfraError)
+	}
+	for _, line := range result.RawLines {
+		if strings.Contains(line, "TELOS_BILLING_ENV_TOKEN") ||
+			strings.Contains(line, "TELOS_BILLING_ENV_TOKEN_FILE") ||
+			strings.Contains(line, "TELOS_BILLING_SERVICE_TOKEN") {
+			t.Fatalf("billing credential leaked to subprocess: %q", line)
+		}
+	}
+}
+
 func TestLocalPlatformRunFailure(t *testing.T) {
 	dir := t.TempDir()
 	p := NewLocalPlatform(dir)
