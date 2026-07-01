@@ -53,7 +53,6 @@ type Store interface {
 	Stop(id string) (*Session, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
-	WorkspacePath(id string, specName string) (string, error)
 }
 
 // --------- FileStore ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -661,33 +660,6 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 		events = append(events, specEvents...)
 	}
 	return events, nil
-}
-
-// WorkspacePath returns the absolute path to the workspace archive for a spec.
-func (fs *FileStore) WorkspacePath(id string, specName string) (string, error) {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	m, err := ReadManifest(fs.manifestPath(id))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return "", fmt.Errorf("session %s: %w", id, ErrNotFound)
-		}
-		return "", err
-	}
-
-	for _, spec := range m.Specs {
-		if spec.Name == specName || spec.DirName == specName {
-			if spec.WorkspacePath == nil || *spec.WorkspacePath == "" {
-				return "", fmt.Errorf("workspace for spec %s: %w", specName, ErrNotFound)
-			}
-			if _, err := os.Stat(*spec.WorkspacePath); err != nil {
-				return "", fmt.Errorf("workspace for spec %s: %w", specName, ErrNotFound)
-			}
-			return *spec.WorkspacePath, nil
-		}
-	}
-	return "", fmt.Errorf("spec %s: %w", specName, ErrNotFound)
 }
 
 // --------- Derivation (manifest -> Session) ------------------------------------------------------------------------------------------------------------------------

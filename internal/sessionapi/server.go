@@ -24,7 +24,6 @@ const maxSessionRequestBytes = 4 << 20
 //	POST /api/sessions/{id}/stop
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
-//	GET  /api/sessions/{id}/workspace/{spec}
 //	GET  /api/healthz
 func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer) {
 	if authorizer == nil {
@@ -41,7 +40,6 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer) {
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
-	mux.HandleFunc("GET /api/sessions/{id}/workspace/{spec}", h.getWorkspace)
 }
 
 type handler struct {
@@ -335,24 +333,6 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		case <-poll.C:
 		}
 	}
-}
-
-func (h *handler) getWorkspace(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	spec := r.PathValue("spec")
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
-		return
-	}
-	path, err := h.store.WorkspacePath(id, spec)
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	http.ServeFile(w, r, path)
 }
 
 // --------- JSON helpers ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
