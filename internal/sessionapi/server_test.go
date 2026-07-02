@@ -26,6 +26,66 @@ func newTestServer(t *testing.T) (*httptest.Server, *sessionapi.FileStore) {
 	return httptest.NewServer(mux), store
 }
 
+type recordingStore struct {
+	createReq  sessionapi.SessionCreateRequest
+	updateName string
+	updateReq  sessionapi.SessionSpecUpdateRequest
+}
+
+func (s *recordingStore) Create(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
+	s.createReq = req
+	return &sessionapi.Session{
+		SessionID: "sess_recorded",
+		Status:    sessionapi.StatusPending,
+		Runtime:   sessionapi.RuntimeCloud,
+	}, nil
+}
+
+func (s *recordingStore) Spec(string) (*sessionapi.SessionSpecResponse, error) {
+	return nil, sessionapi.ErrNotFound
+}
+
+func (s *recordingStore) UpdateSpec(name string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.SessionSpecUpdateResponse, error) {
+	s.updateName = name
+	s.updateReq = req
+	return &sessionapi.SessionSpecUpdateResponse{
+		Operation: "updated",
+		Session: &sessionapi.Session{
+			SessionID: "sess_recorded",
+			Status:    sessionapi.StatusPending,
+			Runtime:   sessionapi.RuntimeCloud,
+		},
+	}, nil
+}
+
+func (s *recordingStore) List() ([]sessionapi.Session, error) {
+	return nil, nil
+}
+
+func (s *recordingStore) Get(string) (*sessionapi.Session, error) {
+	return nil, sessionapi.ErrNotFound
+}
+
+func (s *recordingStore) Stop(string) (*sessionapi.Session, error) {
+	return nil, sessionapi.ErrNotFound
+}
+
+func (s *recordingStore) Transcript(string) (string, error) {
+	return "", sessionapi.ErrNotFound
+}
+
+func (s *recordingStore) Events(string) ([]sessionapi.SessionEvent, error) {
+	return nil, sessionapi.ErrNotFound
+}
+
+func (s *recordingStore) Diagnostics(string) (*sessionapi.SessionDiagnosticsResponse, error) {
+	return nil, sessionapi.ErrNotFound
+}
+
+func (s *recordingStore) WorkspacePath(string, string) (string, error) {
+	return "", sessionapi.ErrNotFound
+}
+
 // --------- POST /api/sessions ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 func TestCreateSession(t *testing.T) {
@@ -95,6 +155,37 @@ func TestCreateSession(t *testing.T) {
 	}
 	if session.SpecVersions == nil {
 		t.Error("spec_versions should be empty array, not nil")
+	}
+}
+
+func TestCreateSessionForwardsUserHeadersToStore(t *testing.T) {
+	store := &recordingStore{}
+	mux := http.NewServeMux()
+	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	req, err := http.NewRequest("POST", srv.URL+"/api/sessions", strings.NewReader(createSessionBody(t, "forwarded")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Telos-User-Authorization", "Bearer user-token")
+	req.Header.Set("X-Telos-Org-Id", "org_team")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 201, got %d: %s", resp.StatusCode, body)
+	}
+	if store.createReq.UserAuthorization != "Bearer user-token" {
+		t.Fatalf("UserAuthorization: got %q", store.createReq.UserAuthorization)
+	}
+	if store.createReq.UserOrgID != "org_team" {
+		t.Fatalf("UserOrgID: got %q", store.createReq.UserOrgID)
 	}
 }
 
@@ -596,6 +687,46 @@ func TestCreateSessionRejectsOversizedBody(t *testing.T) {
 }
 
 // --------- PUT /api/sessions/{name}/spec ---------------------------------------------------------------------------------------------------------------------------------------------------------------
+
+func TestUpdateSpecForwardsUserHeadersToStore(t *testing.T) {
+	store := &recordingStore{}
+	mux := http.NewServeMux()
+	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
+		SpecMarkdown: "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Telos-User-Authorization", "Bearer user-token")
+	req.Header.Set("X-Telos-Org-Id", "org_team")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+	if store.updateName != "postgres" {
+		t.Fatalf("update name: got %q", store.updateName)
+	}
+	if store.updateReq.UserAuthorization != "Bearer user-token" {
+		t.Fatalf("UserAuthorization: got %q", store.updateReq.UserAuthorization)
+	}
+	if store.updateReq.UserOrgID != "org_team" {
+		t.Fatalf("UserOrgID: got %q", store.updateReq.UserOrgID)
+	}
+}
 
 func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	srv, store := newTestServer(t)

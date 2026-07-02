@@ -12,6 +12,7 @@ go_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/evidence",
+        "//internal/platform",
         "//internal/spec",
     ],
 )

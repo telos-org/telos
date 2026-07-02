@@ -84,6 +84,13 @@ var legacyGatewayEnvNames = []string{
 	"TELOS_API_KEY",
 }
 
+var directProviderKeyNames = []string{
+	"ANTHROPIC_API_KEY",
+	"OPENAI_API_KEY",
+	"SAIL_API_KEY",
+	"SILARES_API_KEY",
+}
+
 var optionalGatewayCredentialEnvNames = []string{
 	gatewayTransportEnv,
 	gatewayKindEnv,
@@ -144,7 +151,7 @@ func kubernetesRESTConfig() (*rest.Config, error) {
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
 
-func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error {
+func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason string, userAuthorization string, userOrgID string) error {
 	kind, err := sessionWorkerKind(session)
 	if err != nil {
 		return err
@@ -156,7 +163,7 @@ func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason strin
 	if err != nil {
 		return fmt.Errorf("read worker manifest: %w", err)
 	}
-	credential, err := s.sessionGatewayCredential(ctx, session.SessionID, ptrValue(m.ParentSessionID), userAuthorization)
+	credential, err := s.sessionGatewayCredential(ctx, session.SessionID, ptrValue(m.ParentSessionID), userAuthorization, userOrgID)
 	if err != nil {
 		return err
 	}
@@ -623,6 +630,32 @@ func (s kubernetesSubstrate) createOrUpdateSecret(ctx context.Context, desired *
 	return err
 }
 
+func (s kubernetesSubstrate) scrubManagedAgentSecrets(ctx context.Context) error {
+	if !s.managedGatewayEnabled() {
+		return nil
+	}
+	secrets, err := s.client.CoreV1().Secrets("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	for _, secret := range secrets.Items {
+		if secret.Name != s.agentSecretName {
+			continue
+		}
+		if len(secret.Data) == 0 {
+			continue
+		}
+		updated := secret.DeepCopy()
+		if !scrubManagedDirectProviderEnv(updated.Data, s.agentSecretKey) {
+			continue
+		}
+		if _, err := s.client.CoreV1().Secrets(updated.Namespace).Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s kubernetesSubstrate) deleteSecret(ctx context.Context, namespace string, name string) error {
 	err := s.client.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if apierrors.IsNotFound(err) {
@@ -641,6 +674,9 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 			secret.Data = map[string][]byte{}
 		}
 		removeLegacyGatewayEnv(secret.Data)
+		if s.managedGatewayEnabled() {
+			removeDirectProviderEnv(secret.Data)
+		}
 		applyConfiguredGatewayAPIKey(secret.Data, s.agentSecretKey)
 		applyConfiguredGatewayEnv(secret.Data)
 		s.applyBillingCredential(secret.Data)
@@ -648,7 +684,13 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
-	if hasGatewayIntent(secret.Data, s.agentSecretKey) {
+	if !s.managedGatewayEnabled() && !hasGatewayIntent(secret.Data) {
+		applyConfiguredDirectProviderEnv(secret.Data)
+	}
+	if !hasGatewayIntent(secret.Data) {
+		clearGatewayCredentialEnv(secret.Data)
+	}
+	if hasGatewayIntent(secret.Data) {
 		if gatewayAPIKeyValue(secret.Data, s.agentSecretKey) == "" {
 			return fmt.Errorf("%s is required to launch a worker", gatewayAPIKeyEnv)
 		}
@@ -659,7 +701,7 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 	return s.createOrUpdateSecret(ctx, secret)
 }
 
-func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessionID, parentSessionID, userAuthorization string) (*controlSessionKey, error) {
+func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessionID, parentSessionID, userAuthorization string, userOrgID string) (*controlSessionKey, error) {
 	if !s.managedGatewayEnabled() || s.billing == nil || !s.billing.configured() {
 		return nil, nil
 	}
@@ -676,7 +718,7 @@ func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessi
 	} else if !apierrors.IsNotFound(err) {
 		return nil, err
 	}
-	minted, err := s.billing.MintSessionKey(sessionID, parentSessionID, userAuthorization)
+	minted, err := s.billing.MintSessionKey(sessionID, parentSessionID, userAuthorization, userOrgID)
 	if err != nil {
 		return nil, err
 	}
@@ -806,14 +848,63 @@ func clearOptionalGatewayCredentialEnv(data map[string][]byte) {
 	}
 }
 
+func clearGatewayCredentialEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	delete(data, gatewayAPIKeyEnv)
+	delete(data, gatewayBaseURLEnv)
+	clearOptionalGatewayCredentialEnv(data)
+}
+
+func removeDirectProviderEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	for _, name := range directProviderKeyNames {
+		delete(data, name)
+	}
+}
+
+func scrubManagedDirectProviderEnv(data map[string][]byte, keyName string) bool {
+	if data == nil {
+		return false
+	}
+	gatewayKey := strings.TrimSpace(string(data[gatewayAPIKeyEnv]))
+	changed := false
+	for _, name := range directProviderKeyNames {
+		value, ok := data[name]
+		if !ok {
+			continue
+		}
+		if name == keyName && gatewayKey != "" && strings.TrimSpace(string(value)) == gatewayKey {
+			continue
+		}
+		delete(data, name)
+		changed = true
+	}
+	return changed
+}
+
+func applyConfiguredDirectProviderEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	for _, name := range directProviderKeyNames {
+		if strings.TrimSpace(string(data[name])) != "" {
+			continue
+		}
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			data[name] = []byte(value)
+		}
+	}
+}
+
 func applyConfiguredGatewayAPIKey(data map[string][]byte, keyName string) {
 	if data == nil {
 		return
 	}
-	value := strings.TrimSpace(os.Getenv(keyName))
-	if value == "" && keyName != gatewayAPIKeyEnv {
-		value = strings.TrimSpace(os.Getenv(gatewayAPIKeyEnv))
-	}
+	value := strings.TrimSpace(os.Getenv(gatewayAPIKeyEnv))
 	if value == "" {
 		return
 	}
@@ -832,10 +923,8 @@ func applyConfiguredGatewayEnv(data map[string][]byte) {
 	}
 }
 
-func hasGatewayIntent(data map[string][]byte, keyName string) bool {
-	return strings.TrimSpace(string(data[gatewayAPIKeyEnv])) != "" ||
-		strings.TrimSpace(string(data[keyName])) != "" ||
-		strings.TrimSpace(string(data[gatewayBaseURLEnv])) != ""
+func hasGatewayIntent(data map[string][]byte) bool {
+	return strings.TrimSpace(string(data[gatewayAPIKeyEnv])) != ""
 }
 
 func gatewayAPIKeyValue(data map[string][]byte, keyName string) string {

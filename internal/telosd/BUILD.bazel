@@ -7,6 +7,7 @@ go_library(
         "config.go",
         "control_client.go",
         "control_reconciler.go",
+        "deployment_bootstrap.go",
         "kubernetes_worker.go",
         "route_handles.go",
         "route_reconciler.go",

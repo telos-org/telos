@@ -37,6 +37,12 @@ func Run(ctx context.Context, cfg Config) error {
 		if err != nil {
 			return err
 		}
+		scrubCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		if err := substrate.scrubManagedAgentSecrets(scrubCtx); err != nil {
+			cancel()
+			return fmt.Errorf("scrub managed agent secrets: %w", err)
+		}
+		cancel()
 		startRouteReconciler(ctx, substrate.client)
 		store = newCloudSessionStore(baseStore, newRouteHandleResolver(), substrate)
 		startDeploymentBootstrapper(ctx, store)

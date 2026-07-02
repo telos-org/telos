@@ -22,10 +22,11 @@ type recordedApply struct {
 	sessionID         string
 	wakeReason        string
 	userAuthorization string
+	userOrgID         string
 }
 
-func (s *recordingSubstrate) Apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error {
-	s.applies = append(s.applies, recordedApply{sessionID: session.SessionID, wakeReason: wakeReason, userAuthorization: userAuthorization})
+func (s *recordingSubstrate) Apply(session *sessionapi.Session, wakeReason string, userAuthorization string, userOrgID string) error {
+	s.applies = append(s.applies, recordedApply{sessionID: session.SessionID, wakeReason: wakeReason, userAuthorization: userAuthorization, userOrgID: userOrgID})
 	if s.applyErr != nil {
 		return s.applyErr
 	}
@@ -99,6 +100,7 @@ func TestCloudSessionStoreCachesRootUserAuthorizationForChildApply(t *testing.T)
 	root, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown:      &rootMarkdown,
 		UserAuthorization: "Bearer root-user-token",
+		UserOrgID:         "org_team",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -116,6 +118,9 @@ func TestCloudSessionStoreCachesRootUserAuthorizationForChildApply(t *testing.T)
 	}
 	if substrate.applies[1].userAuthorization != "Bearer root-user-token" {
 		t.Fatalf("child apply user auth: got %q", substrate.applies[1].userAuthorization)
+	}
+	if substrate.applies[1].userOrgID != "org_team" {
+		t.Fatalf("child apply user org: got %q", substrate.applies[1].userOrgID)
 	}
 }
 

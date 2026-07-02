@@ -13,7 +13,7 @@ import (
 )
 
 type sessionSubstrate interface {
-	Apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error
+	Apply(session *sessionapi.Session, wakeReason string, userAuthorization string, userOrgID string) error
 	Stop(session *sessionapi.Session) error
 }
 
@@ -42,9 +42,9 @@ func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessio
 	if err != nil {
 		return nil, err
 	}
-	s.rememberUserAuthorization(session, req.UserAuthorization)
-	userAuthorization := s.userAuthorizationFor(session, req.UserAuthorization)
-	if err := s.apply(session, startWakeReason(session), userAuthorization); err != nil {
+	s.rememberUserContext(session, req.UserAuthorization, req.UserOrgID)
+	userContext := s.userContextFor(session, req.UserAuthorization, req.UserOrgID)
+	if err := s.apply(session, startWakeReason(session), userContext); err != nil {
 		s.forgetUserAuthorization(session)
 		cleanupErr := s.cleanupWorker(session)
 		removeSessionDir(session)
@@ -69,9 +69,9 @@ func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUp
 	if response.Operation == "created" {
 		wakeReason = startWakeReason(response.Session)
 	}
-	s.rememberUserAuthorization(response.Session, req.UserAuthorization)
-	userAuthorization := s.userAuthorizationFor(response.Session, req.UserAuthorization)
-	if err := s.apply(response.Session, wakeReason, userAuthorization); err != nil {
+	s.rememberUserContext(response.Session, req.UserAuthorization, req.UserOrgID)
+	userContext := s.userContextFor(response.Session, req.UserAuthorization, req.UserOrgID)
+	if err := s.apply(response.Session, wakeReason, userContext); err != nil {
 		if response.Operation == "created" {
 			s.forgetUserAuthorization(response.Session)
 			cleanupErr := s.cleanupWorker(response.Session)
@@ -107,11 +107,11 @@ func (s *cloudSessionStore) Get(id string) (*sessionapi.Session, error) {
 	return session, nil
 }
 
-func (s *cloudSessionStore) apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error {
+func (s *cloudSessionStore) apply(session *sessionapi.Session, wakeReason string, userContext userAuthContext) error {
 	if s.substrate == nil {
 		return nil
 	}
-	if err := s.substrate.Apply(session, wakeReason, userAuthorization); err != nil {
+	if err := s.substrate.Apply(session, wakeReason, userContext.authorization, userContext.orgID); err != nil {
 		return fmt.Errorf("launch session %s worker: %w", session.SessionID, err)
 	}
 	return nil
@@ -153,19 +153,23 @@ func (s *cloudSessionStore) Stop(id string) (*sessionapi.Session, error) {
 	return session, nil
 }
 
-func (s *cloudSessionStore) rememberUserAuthorization(session *sessionapi.Session, userAuthorization string) {
+func (s *cloudSessionStore) rememberUserContext(session *sessionapi.Session, userAuthorization string, userOrgID string) {
 	if s.userAuthorization == nil {
 		return
 	}
-	s.userAuthorization.Remember(session, userAuthorization)
+	s.userAuthorization.Remember(session, userAuthorization, userOrgID)
 }
 
-func (s *cloudSessionStore) userAuthorizationFor(session *sessionapi.Session, provided string) string {
-	if provided = strings.TrimSpace(provided); provided != "" {
+func (s *cloudSessionStore) userContextFor(session *sessionapi.Session, providedAuthorization string, providedOrgID string) userAuthContext {
+	provided := userAuthContext{
+		authorization: strings.TrimSpace(providedAuthorization),
+		orgID:         strings.TrimSpace(providedOrgID),
+	}
+	if provided.authorization != "" || provided.orgID != "" {
 		return provided
 	}
 	if s.userAuthorization == nil {
-		return ""
+		return userAuthContext{}
 	}
 	return s.userAuthorization.For(session)
 }
@@ -177,32 +181,40 @@ func (s *cloudSessionStore) forgetUserAuthorization(session *sessionapi.Session)
 	s.userAuthorization.Forget(session)
 }
 
+type userAuthContext struct {
+	authorization string
+	orgID         string
+}
+
 type rootUserAuthorizationCache struct {
 	mu     sync.RWMutex
-	byRoot map[string]string
+	byRoot map[string]userAuthContext
 }
 
 func newRootUserAuthorizationCache() *rootUserAuthorizationCache {
-	return &rootUserAuthorizationCache{byRoot: map[string]string{}}
+	return &rootUserAuthorizationCache{byRoot: map[string]userAuthContext{}}
 }
 
-func (c *rootUserAuthorizationCache) Remember(session *sessionapi.Session, userAuthorization string) {
-	userAuthorization = strings.TrimSpace(userAuthorization)
-	if session == nil || userAuthorization == "" || !isRootSession(session) {
+func (c *rootUserAuthorizationCache) Remember(session *sessionapi.Session, userAuthorization string, userOrgID string) {
+	ctx := userAuthContext{
+		authorization: strings.TrimSpace(userAuthorization),
+		orgID:         strings.TrimSpace(userOrgID),
+	}
+	if session == nil || ctx.authorization == "" || !isRootSession(session) {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.byRoot[session.SessionID] = userAuthorization
+	c.byRoot[session.SessionID] = ctx
 }
 
-func (c *rootUserAuthorizationCache) For(session *sessionapi.Session) string {
+func (c *rootUserAuthorizationCache) For(session *sessionapi.Session) userAuthContext {
 	if session == nil {
-		return ""
+		return userAuthContext{}
 	}
 	rootID := rootSessionID(session)
 	if rootID == "" {
-		return ""
+		return userAuthContext{}
 	}
 	c.mu.RLock()
 	defer c.mu.RUnlock()

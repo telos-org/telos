@@ -51,8 +51,13 @@ func Enabled() bool {
 	cfg := config.LoadConfig()
 	if base, key, _, _, _, err := envGateway(); err != nil {
 		return true
-	} else if base != "" || key != "" {
+	} else if key != "" {
 		return true
+	} else if base != "" {
+		// A stale base URL without a gateway key must not opt direct-provider
+		// setups into gateway routing. Re-read the file without env overrides so
+		// an explicit saved gateway config still works.
+		cfg = config.LoadConfigFile()
 	}
 	return strings.TrimSpace(cfg.Gateway.Mode) != "" ||
 		strings.TrimSpace(cfg.Gateway.BaseURL) != "" ||
@@ -67,8 +72,8 @@ func Resolve(sessionID string) (Credential, error) {
 	cfg := config.LoadConfig()
 	if base, key, transport, kind, headers, err := envGateway(); err != nil {
 		return Credential{}, err
-	} else if base != "" || key != "" {
-		if base == "" || key == "" {
+	} else if key != "" {
+		if base == "" {
 			return Credential{}, fmt.Errorf("both TELOS_GATEWAY_BASE_URL and TELOS_GATEWAY_API_KEY are required")
 		}
 		transport, kind, err := resolveTransportAndKind(transport, kind)
@@ -76,6 +81,8 @@ func Resolve(sessionID string) (Credential, error) {
 			return Credential{}, err
 		}
 		return Credential{BaseURL: base, APIKey: key, Transport: transport, Kind: kind, Headers: headers, CostHardLimit: costHardLimitFromEnv()}, nil
+	} else if base != "" {
+		cfg = config.LoadConfigFile()
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(cfg.Gateway.Mode))

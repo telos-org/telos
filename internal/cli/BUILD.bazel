@@ -13,6 +13,7 @@ go_library(
     deps = [
         "//internal/executor",
         "//internal/game",
+        "//internal/gateway",
         "//internal/platform",
         "//internal/sessionapi",
         "//internal/sessionworker",

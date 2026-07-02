@@ -88,6 +88,7 @@ type SessionCreateRequest struct {
 	SessionKind        *SessionKind `json:"-"`
 	ParentSessionID    *string      `json:"parent_session_id,omitempty"`
 	UserAuthorization  string       `json:"-"`
+	UserOrgID          string       `json:"-"`
 	Until              *int         `json:"until,omitempty"`
 	Model              string       `json:"model,omitempty"`
 	Thinking           string       `json:"thinking,omitempty"`
@@ -105,6 +106,7 @@ type SessionSpecUpdateRequest struct {
 	SpecMarkdown      string   `json:"spec_markdown"`
 	PackageDigest     string   `json:"package_digest,omitempty"`
 	UserAuthorization string   `json:"-"`
+	UserOrgID         string   `json:"-"`
 	Model             string   `json:"model,omitempty"`
 	Thinking          string   `json:"thinking,omitempty"`
 	MaxCostUSD        *float64 `json:"max_cost_usd,omitempty"`

@@ -153,6 +153,64 @@ func TestResolveDoesNotTreatLoginAsManagedOptIn(t *testing.T) {
 	}
 }
 
+func TestStaleEnvGatewayBaseURLDoesNotEnableGateway(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://stale.example.com/v1")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+
+	if Enabled() {
+		t.Fatal("gateway base URL without key should not enable gateway routing")
+	}
+	if _, err := Resolve("sess-1"); err == nil || err.Error() == "both TELOS_GATEWAY_BASE_URL and TELOS_GATEWAY_API_KEY are required" {
+		t.Fatalf("expected non-env gateway error, got %v", err)
+	}
+}
+
+func TestStaleEnvGatewayBaseURLDoesNotOverrideSavedGateway(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte("gateway:\n  base_url: https://saved.example.com/v1\n  api_key: saved-key\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://stale.example.com/v1")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+
+	if !Enabled() {
+		t.Fatal("saved gateway config should still enable gateway routing")
+	}
+	cred, err := Resolve("sess-1")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if cred.BaseURL != "https://saved.example.com/v1" || cred.APIKey != "saved-key" {
+		t.Fatalf("credential: %+v", cred)
+	}
+}
+
+func TestEnvGatewayAPIKeyWithoutBaseURLRequiresBaseURL(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "env-key")
+
+	if !Enabled() {
+		t.Fatal("gateway key should enable gateway routing")
+	}
+	if _, err := Resolve("sess-1"); err == nil || err.Error() != "both TELOS_GATEWAY_BASE_URL and TELOS_GATEWAY_API_KEY are required" {
+		t.Fatalf("expected incomplete env gateway error, got %v", err)
+	}
+}
+
 func TestGatewayTransportOnlyCountsAsIntent(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")

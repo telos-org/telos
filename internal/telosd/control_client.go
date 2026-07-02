@@ -41,7 +41,7 @@ func (c *billingClient) configured() bool {
 	return c != nil && c.endpoint != "" && c.envID != ""
 }
 
-func (c *billingClient) MintSessionKey(sessionID, parentSessionID, userAuthorization string) (controlSessionKey, error) {
+func (c *billingClient) MintSessionKey(sessionID, parentSessionID, userAuthorization string, userOrgID string) (controlSessionKey, error) {
 	if !c.configured() {
 		return controlSessionKey{}, fmt.Errorf("billing minting is not configured")
 	}
@@ -68,6 +68,9 @@ func (c *billingClient) MintSessionKey(sessionID, parentSessionID, userAuthoriza
 	}
 	if strings.TrimSpace(userAuthorization) != "" {
 		req.Header.Set("X-Telos-User-Authorization", strings.TrimSpace(userAuthorization))
+	}
+	if strings.TrimSpace(userOrgID) != "" {
+		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(userOrgID))
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)

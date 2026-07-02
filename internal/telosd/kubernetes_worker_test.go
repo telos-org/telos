@@ -50,7 +50,7 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 	session := testCloudSession(t, sessionapi.KindController)
 
-	if err := substrate.Apply(session, "controller_started", ""); err != nil {
+	if err := substrate.Apply(session, "controller_started", "", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -93,7 +93,7 @@ func TestKubernetesSubstrateAppliesTaskWorker(t *testing.T) {
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 	session := testCloudSession(t, sessionapi.KindTask)
 
-	if err := substrate.Apply(session, "task_started", ""); err != nil {
+	if err := substrate.Apply(session, "task_started", "", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -119,7 +119,7 @@ func TestKubernetesSubstrateStopDeletesWorkerResources(t *testing.T) {
 	namespace := workerNamespace(session.SessionID, sessionapi.KindController)
 	name := workerWorkloadName(session.SessionID, sessionapi.KindController)
 
-	if err := substrate.Apply(session, "controller_started", ""); err != nil {
+	if err := substrate.Apply(session, "controller_started", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if err := substrate.Stop(session); err != nil {
@@ -184,7 +184,7 @@ func TestKubernetesSubstrateStopReconcilesManagedBilling(t *testing.T) {
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 
-	if err := substrate.Apply(session, "controller_started", "Bearer user-token"); err != nil {
+	if err := substrate.Apply(session, "controller_started", "Bearer user-token", ""); err != nil {
 		t.Fatal(err)
 	}
 	secretName := sessionGatewaySecretName(session.SessionID)
@@ -247,7 +247,7 @@ func TestKubernetesSubstrateStopContinuesCleanupAfterWorkloadDeleteError(t *test
 	session := testCloudSession(t, sessionapi.KindController)
 	namespace := workerNamespace(session.SessionID, sessionapi.KindController)
 
-	if err := substrate.Apply(session, "controller_started", ""); err != nil {
+	if err := substrate.Apply(session, "controller_started", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	client.Fake.PrependReactor("delete", "deployments", func(k8stesting.Action) (bool, runtime.Object, error) {
@@ -486,8 +486,10 @@ func TestKubernetesSubstrateAgentSecretCopiesGatewayBaseURL(t *testing.T) {
 func TestKubernetesSubstrateAgentSecretDropsLegacyAndStaleGatewayKeys(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_API_KEY", "")
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_MODE", "managed")
 
 	cfg := testCloudConfig(t)
+	cfg.Kubernetes.AgentSecretKey = "SAIL_API_KEY"
 	targetNamespace := "ns-worker"
 	client := fake.NewSimpleClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.EnvNamespace}},
@@ -498,6 +500,10 @@ func TestKubernetesSubstrateAgentSecretDropsLegacyAndStaleGatewayKeys(t *testing
 			Data: map[string][]byte{
 				"TELOS_LITELLM_API_KEY":   []byte("old-key"),
 				"TELOS_LITELLM_BASE_URL":  []byte("https://old.example.com/v1"),
+				"SAIL_API_KEY":            []byte("raw-sail-key"),
+				"ANTHROPIC_API_KEY":       []byte("raw-anthropic-key"),
+				"OPENAI_API_KEY":          []byte("raw-openai-key"),
+				"SILARES_API_KEY":         []byte("raw-silares-key"),
 				"TELOS_GATEWAY_API_KEY":   []byte("source-key"),
 				"TELOS_GATEWAY_BASE_URL":  []byte("https://source.example.com/openai"),
 				"TELOS_GATEWAY_TRANSPORT": []byte("bifrost_async"),
@@ -518,10 +524,14 @@ func TestKubernetesSubstrateAgentSecretDropsLegacyAndStaleGatewayKeys(t *testing
 	}
 
 	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY", "sk-managed")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "SAIL_API_KEY", "sk-managed")
 	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_BASE_URL", "https://managed.example.com/v1")
 	for _, key := range []string{
 		"TELOS_LITELLM_API_KEY",
 		"TELOS_LITELLM_BASE_URL",
+		"ANTHROPIC_API_KEY",
+		"OPENAI_API_KEY",
+		"SILARES_API_KEY",
 		"TELOS_GATEWAY_TRANSPORT",
 		"TELOS_GATEWAY_KIND",
 		"TELOS_GATEWAY_HEADERS",
@@ -529,6 +539,130 @@ func TestKubernetesSubstrateAgentSecretDropsLegacyAndStaleGatewayKeys(t *testing
 	} {
 		assertSecretDataAbsent(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, key)
 	}
+}
+
+func TestKubernetesSubstrateScrubsManagedAgentSecrets(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_MODE", "managed")
+
+	cfg := testCloudConfig(t)
+	cfg.Kubernetes.AgentSecretKey = "SAIL_API_KEY"
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sess-direct"}},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: "sess-direct"},
+			Type:       corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"SAIL_API_KEY":      []byte("raw-sail"),
+				"ANTHROPIC_API_KEY": []byte("raw-anthropic"),
+				"OPENAI_API_KEY":    []byte("raw-openai"),
+				"SILARES_API_KEY":   []byte("raw-silares"),
+			},
+		},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sess-managed"}},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: "sess-managed"},
+			Type:       corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"SAIL_API_KEY":           []byte("managed-key"),
+				"ANTHROPIC_API_KEY":      []byte("raw-anthropic"),
+				"TELOS_GATEWAY_API_KEY":  []byte("managed-key"),
+				"TELOS_GATEWAY_BASE_URL": []byte("https://managed.example.com/v1"),
+			},
+		},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "other"}},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "unrelated", Namespace: "other"},
+			Type:       corev1.SecretTypeOpaque,
+			Data:       map[string][]byte{"SAIL_API_KEY": []byte("raw-sail")},
+		},
+	)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	if err := substrate.scrubManagedAgentSecrets(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, key := range directProviderKeyNames {
+		assertSecretDataAbsent(t, client, "sess-direct", cfg.Kubernetes.AgentSecretName, key)
+	}
+	assertSecretData(t, client, "sess-managed", cfg.Kubernetes.AgentSecretName, "SAIL_API_KEY", "managed-key")
+	assertSecretData(t, client, "sess-managed", cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY", "managed-key")
+	assertSecretDataAbsent(t, client, "sess-managed", cfg.Kubernetes.AgentSecretName, "ANTHROPIC_API_KEY")
+	assertSecretData(t, client, "other", "unrelated", "SAIL_API_KEY", "raw-sail")
+}
+
+func TestKubernetesSubstrateAgentSecretAllowsDirectProviderKey(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+	t.Setenv("SAIL_API_KEY", "sail-env-key")
+
+	cfg := testCloudConfig(t)
+	cfg.Kubernetes.AgentSecretKey = "SAIL_API_KEY"
+	targetNamespace := "ns-worker"
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.EnvNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNamespace}},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
+			Type:       corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"SAIL_API_KEY":            []byte("sail-key"),
+				"ANTHROPIC_API_KEY":       []byte("anthropic-key"),
+				"TELOS_GATEWAY_BASE_URL":  []byte("https://stale-gateway.example.com/v1"),
+				"TELOS_GATEWAY_TRANSPORT": []byte("bifrost_async"),
+				"TELOS_GATEWAY_KIND":      []byte("bifrost"),
+				"TELOS_GATEWAY_HEADERS":   []byte(`{"x-stale":"stale"}`),
+				"TELOS_GATEWAY_KEY_ALIAS": []byte("stale-alias"),
+			},
+		},
+	)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	if err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "SAIL_API_KEY", "sail-key")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "ANTHROPIC_API_KEY", "anthropic-key")
+	assertSecretDataAbsent(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY")
+	assertSecretDataAbsent(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_BASE_URL")
+	for _, key := range []string{
+		"TELOS_GATEWAY_TRANSPORT",
+		"TELOS_GATEWAY_KIND",
+		"TELOS_GATEWAY_HEADERS",
+		"TELOS_GATEWAY_KEY_ALIAS",
+	} {
+		assertSecretDataAbsent(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, key)
+	}
+}
+
+func TestKubernetesSubstrateAgentSecretFallsBackToDirectProviderEnv(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://stale-gateway.example.com/v1")
+	t.Setenv("TELOS_GATEWAY_MODE", "")
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-env-key")
+	t.Setenv("OPENAI_API_KEY", "openai-env-key")
+	t.Setenv("SAIL_API_KEY", "sail-env-key")
+	t.Setenv("SILARES_API_KEY", "silares-env-key")
+
+	cfg := testCloudConfig(t)
+	targetNamespace := "ns-worker"
+	client := fake.NewSimpleClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.EnvNamespace}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: targetNamespace}},
+	)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	if err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "ANTHROPIC_API_KEY", "anthropic-env-key")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "OPENAI_API_KEY", "openai-env-key")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "SAIL_API_KEY", "sail-env-key")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "SILARES_API_KEY", "silares-env-key")
+	assertSecretDataAbsent(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY")
+	assertSecretDataAbsent(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_BASE_URL")
 }
 
 func TestKubernetesSubstrateAgentSecretRequiresGatewayBaseURL(t *testing.T) {
@@ -567,6 +701,10 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 			w.WriteHeader(http.StatusForbidden)
 			return
 		}
+		if r.Header.Get("X-Telos-Org-Id") != "org_team" {
+			w.WriteHeader(http.StatusConflict)
+			return
+		}
 		mintCalls++
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"session_id": "sess_cloud",
@@ -587,7 +725,7 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 
-	cred, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "Bearer user-token")
+	cred, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "Bearer user-token", "org_team")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -597,7 +735,7 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	if mintCalls != 1 {
 		t.Fatalf("mint calls: got %d", mintCalls)
 	}
-	cred, err = substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "Bearer user-token")
+	cred, err = substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "Bearer user-token", "org_team")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -664,7 +802,7 @@ func TestKubernetesSubstrateDoesNotMintGatewayWithoutManagedMode(t *testing.T) {
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 	session := testCloudSession(t, sessionapi.KindController)
 
-	if err := substrate.Apply(session, "controller_started", "Bearer user-token"); err != nil {
+	if err := substrate.Apply(session, "controller_started", "Bearer user-token", ""); err != nil {
 		t.Fatal(err)
 	}
 	if mintCalls != 0 {
@@ -712,7 +850,7 @@ func TestKubernetesSubstrateSessionGatewayCredentialConcurrentMintOnce(t *testin
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "")
+			_, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "", "")
 			errs <- err
 		}()
 	}
@@ -819,7 +957,7 @@ func TestBillingClientMintsChildSessionWithParentLineage(t *testing.T) {
 		EnvID:    "env_test",
 		Token:    "billing-token",
 	})
-	cred, err := client.MintSessionKey("sess_child", "sess_parent", "")
+	cred, err := client.MintSessionKey("sess_child", "sess_parent", "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -854,7 +992,7 @@ func TestBillingClientRejectsInvalidMintSessionID(t *testing.T) {
 			defer server.Close()
 
 			client := newBillingClient(BillingConfig{Endpoint: server.URL, EnvID: "env_test", Token: "billing-token"})
-			if _, err := client.MintSessionKey("sess_child", "", ""); err == nil {
+			if _, err := client.MintSessionKey("sess_child", "", "", ""); err == nil {
 				t.Fatal("expected invalid session_id error")
 			}
 		})
@@ -915,7 +1053,7 @@ func TestBillingClientEscapesSessionIDsInURLs(t *testing.T) {
 	defer server.Close()
 
 	client := newBillingClient(BillingConfig{Endpoint: server.URL, EnvID: "env_test", Token: "billing-token"})
-	if _, err := client.MintSessionKey("sess/a?b", "", ""); err != nil {
+	if _, err := client.MintSessionKey("sess/a?b", "", "", ""); err != nil {
 		t.Fatalf("MintSessionKey: %v", err)
 	}
 	if err := client.ReconcileSession("sess/a?b", true); err != nil {
