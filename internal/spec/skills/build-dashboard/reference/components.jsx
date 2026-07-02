@@ -17,6 +17,16 @@
  *    contexts. Never let a copy button silently no-op.
  *  - Reveal is plain React state over the REAL value passed in as `value`.
  *    Pass the real secret here; the component masks it for display.
+ *  - Layout gaps come from <Page> / <Grid>, never hand-set per section. The
+ *    recurring regression is sibling cards rendered flush (gap:0) so the page
+ *    reads as one solid slab; the primitives own the spacing so that can't
+ *    happen. The only spacing scale is 4 / 8 / 12 / 16 / 24px.
+ *  - Status reads as a dot + a sentence-case word (see StatusTile), never a
+ *    giant lowercase colored monospace headline — that "status banner" look is
+ *    a strong AI-generated tell. Monospace is for real IDs / values / numbers
+ *    only; labels and prose stay sans and sentence case.
+ *  - No Kubernetes internals. Health is a service-level verdict (is it
+ *    serving?), not pods / restarts / images / nodes / raw cluster events.
  */
 import { useState } from "react";
 
@@ -48,6 +58,40 @@ function fallbackCopy(value) {
 const rowStyle = { display: "flex", alignItems: "center", gap: 10, padding: "5px 0", minWidth: 0 };
 const labelStyle = { ...sans, fontSize: "0.8125rem", color: "var(--muted-foreground)", flexShrink: 0, minWidth: 104 };
 const valueStyle = { ...mono, fontSize: "0.8125rem", flex: 1, minWidth: 0, overflowWrap: "anywhere" };
+
+/* ── Layout primitives ───────────────────────────────────────────────
+   Spacing is the thing that silently regresses when the page is assembled by
+   hand: sections end up flush (gap:0) and the whole dashboard reads as one
+   solid block. Let a primitive own the gap instead of re-deriving it each
+   time. Compose the entire dashboard inside one <Page>, and put tile rows in
+   <Grid>. Then spacing is correct by construction, not by luck. */
+
+/* Page — centered canvas with steady vertical rhythm between every section. */
+export function Page({ children, maxWidth = 960 }) {
+  return (
+    <div style={{
+      maxWidth, margin: "0 auto", padding: "24px 20px 40px",
+      display: "flex", flexDirection: "column", gap: 24, minWidth: 0,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+/* Grid — responsive row of equal tiles (status / metric cards). The grid owns
+   the gap so tiles never sit flush, and auto-fit keeps them from cramming when
+   the viewport is narrow. Wrap each child in <Card> for a bordered tile. */
+export function Grid({ children, min = 200, gap = 16 }) {
+  return (
+    <div style={{
+      display: "grid", gap,
+      gridTemplateColumns: `repeat(auto-fit, minmax(${min}px, 1fr))`,
+      minWidth: 0,
+    }}>
+      {children}
+    </div>
+  );
+}
 
 /* ── SecretValue — masked password/DSN with reveal + copy ──────── */
 export function SecretValue({ value, label }) {
@@ -141,23 +185,30 @@ export function LoadingState({ children = "Loading…" }) {
   );
 }
 
-/* ── PodRow ──────── */
-export function PodRow({ pod }) {
+/* ── HealthRow — one service-level health check ────────
+   Replaces the old pod grid on purpose: operators care whether the service is
+   actually serving, not about pod names, restart counts, images, or nodes.
+   Compute `ok` from a real probe server-side (a query, an HTTP check) and keep
+   `detail` short and human ("Accepting connections", "HTTP 200 · 42ms"). */
+export function HealthRow({ name, ok, detail }) {
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "4px 0", minWidth: 0 }}>
-      <StatusDot ready={pod.ready === "True" || pod.ready === true} />
-      <span style={{ ...mono, fontSize: "0.8125rem", color: "var(--foreground)", flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-        {pod.name}
+    <div style={{ display: "flex", alignItems: "center", gap: 10, padding: "6px 0", minWidth: 0 }}>
+      <StatusDot ready={ok} />
+      <span style={{ ...sans, fontSize: "0.8125rem", color: "var(--foreground)", flex: 1, minWidth: 0, overflowWrap: "anywhere" }}>
+        {name}
       </span>
-      <span style={{ ...sans, fontSize: "0.75rem", color: "var(--muted-foreground)", flexShrink: 0 }}>{pod.phase}</span>
-      {pod.restarts > 0 && (
-        <span style={{ ...mono, fontSize: "0.6875rem", color: "var(--warning)", flexShrink: 0 }}>{pod.restarts}× restarts</span>
+      {detail && (
+        <span style={{ ...sans, fontSize: "0.75rem", color: "var(--muted-foreground)", flexShrink: 0 }}>{detail}</span>
       )}
     </div>
   );
 }
 
-/* ── MetricCard — big number with label ──────── */
+/* ── MetricCard — a single numeric metric with a label ────────
+   For NUMBERS only (counts, rates, sizes): monospace + tabular-nums keeps
+   columns of digits aligned. Don't pass a status word here — a big colored
+   lowercase word reads as an AI-generated "stat banner"; use StatusTile for
+   state. Leave `color` unset unless the number itself is a genuine alert. */
 export function MetricCard({ value, label, color }) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
@@ -171,9 +222,34 @@ export function MetricCard({ value, label, color }) {
   );
 }
 
-/* ── EventRow ──────── */
+/* ── StatusTile — compact state summary for the top KPI row ────────
+   State reads as a dot + a sentence-case word ("Healthy", "Degraded"), not a
+   giant lowercase colored monospace headline. Color lives in the dot; the word
+   stays in the foreground unless it's a real problem, so a wall of these reads
+   calm rather than like a neon status board. */
+export function StatusTile({ label, ok, status }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8, minWidth: 0 }}>
+      <span style={{ ...sans, fontSize: "0.6875rem", color: "var(--muted-foreground)", textTransform: "uppercase", letterSpacing: "0.04em" }}>
+        {label}
+      </span>
+      <span style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+        <StatusDot ready={ok} />
+        <span style={{ ...sans, fontSize: "0.9375rem", fontWeight: 600, color: ok ? "var(--foreground)" : "var(--destructive)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+          {status}
+        </span>
+      </span>
+    </div>
+  );
+}
+
+/* ── EventRow — one application/service event line ────────
+   For events the service itself exposes (audit entries, job outcomes, service
+   log events). NOT for raw Kubernetes events (BackOff, FailedScheduling, …) —
+   those are cluster internals we deliberately don't surface. A type of
+   "Warning" or "error" tints the row so real problems stand out. */
 export function EventRow({ event }) {
-  const isWarning = event.type === "Warning";
+  const isWarning = event.type === "Warning" || event.type === "error";
   return (
     <div style={{ display: "flex", alignItems: "baseline", gap: 10, padding: "4px 0", minWidth: 0, fontSize: "0.8125rem" }}>
       <span style={{ ...sans, fontWeight: 500, color: isWarning ? "var(--destructive)" : "var(--muted-foreground)", flexShrink: 0, minWidth: 64 }}>{event.reason}</span>
