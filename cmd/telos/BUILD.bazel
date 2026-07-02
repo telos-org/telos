@@ -12,6 +12,7 @@ go_library(
         "//internal/cli",
         "//internal/cloud",
         "//internal/config",
+        "//internal/runtimeclient",
         "//internal/sessionapi",
         "//internal/spec",
     ],
