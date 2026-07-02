@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "runtimeclient",
+    srcs = ["client.go"],
+    importpath = "github.com/telos-org/telos/internal/runtimeclient",
+    visibility = ["//:__subpackages__"],
+    deps = ["//internal/sessionapi"],
+)
+
+go_test(
+    name = "runtimeclient_test",
+    srcs = ["client_test.go"],
+    embed = [":runtimeclient"],
+    deps = ["//internal/sessionapi"],
+)
