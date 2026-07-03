@@ -107,6 +107,9 @@ func reconcileWorkerBilling(sessionDir string, manifest WorkerManifest, terminal
 	if manifest.Runtime != sessionapi.RuntimeCloud {
 		return
 	}
+	if !managedGatewayModeEnabled() {
+		return
+	}
 	sessionID := manifest.SessionID
 	if sessionID == "" {
 		sessionID = filepath.Base(sessionDir)

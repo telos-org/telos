@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func TestWorkerIntervalReadsSessionManifest(t *testing.T) {
@@ -84,6 +86,29 @@ func TestWorkerBillingConfigFromEnvDoesNotRequireOperatorAuth(t *testing.T) {
 	}
 }
 
+func TestReconcileWorkerBillingSkipsWithoutManagedGateway(t *testing.T) {
+	called := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_ENV_ID", "env_test")
+	t.Setenv("TELOS_BILLING_ENDPOINT", server.URL)
+	t.Setenv("TELOS_BILLING_ENV_TOKEN", "billing-token")
+	t.Setenv("TELOS_GATEWAY_MODE", "")
+
+	reconcileWorkerBilling(t.TempDir(), WorkerManifest{
+		SessionID: "sess_cloud",
+		Runtime:   sessionapi.RuntimeCloud,
+	}, true)
+
+	if called {
+		t.Fatal("billing reconcile should not run outside managed gateway mode")
+	}
+}
+
 func TestRunSessionWorkerReconcilesTerminalBillingAfterLocalRunError(t *testing.T) {
 	sessionDir := writeWorkerManifest(t, map[string]any{
 		"session_id":    "sess_cloud",
@@ -116,6 +141,7 @@ func TestRunSessionWorkerReconcilesTerminalBillingAfterLocalRunError(t *testing.
 	t.Setenv("TELOS_ENV_ID", "env_test")
 	t.Setenv("TELOS_BILLING_ENDPOINT", server.URL)
 	t.Setenv("TELOS_BILLING_ENV_TOKEN", "billing-token")
+	t.Setenv("TELOS_GATEWAY_MODE", "managed")
 
 	code, err := RunSessionWorker(sessionDir, false)
 	if err == nil || code != 1 {

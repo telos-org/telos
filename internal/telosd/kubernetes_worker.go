@@ -382,9 +382,15 @@ func (s kubernetesSubstrate) agentSecret(namespace string, credential *controlSe
 	s.applyBillingCredential(data)
 	applyGatewayCredential(data, s.agentSecretKey, credential)
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: s.agentSecretName, Namespace: namespace},
-		Type:       corev1.SecretTypeOpaque,
-		Data:       data,
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      s.agentSecretName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"telos/role": "worker-agent",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: data,
 	}
 }
 
@@ -648,7 +654,7 @@ func (s kubernetesSubstrate) scrubManagedAgentSecrets(ctx context.Context) error
 		return err
 	}
 	for _, secret := range secrets.Items {
-		if secret.Name != s.agentSecretName {
+		if !s.shouldScrubManagedAgentSecret(secret) {
 			continue
 		}
 		if len(secret.Data) == 0 {
@@ -663,6 +669,19 @@ func (s kubernetesSubstrate) scrubManagedAgentSecrets(ctx context.Context) error
 		}
 	}
 	return nil
+}
+
+func (s kubernetesSubstrate) shouldScrubManagedAgentSecret(secret corev1.Secret) bool {
+	if secret.Name != s.agentSecretName {
+		return false
+	}
+	if secret.Namespace == "" || secret.Namespace == s.envNamespace {
+		return false
+	}
+	if secret.Labels["telos/role"] == "worker-agent" {
+		return true
+	}
+	return strings.HasPrefix(secret.Namespace, "ns-ctrl-") || strings.HasPrefix(secret.Namespace, "ns-task-")
 }
 
 func (s kubernetesSubstrate) deleteSecret(ctx context.Context, namespace string, name string) error {
@@ -769,7 +788,7 @@ func (s kubernetesSubstrate) applyBillingCredential(data map[string][]byte) {
 }
 
 func (s kubernetesSubstrate) managedGatewayEnabled() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv(gatewayModeEnv)), "managed")
+	return managedGatewayModeEnabled()
 }
 
 func sessionGatewaySecretName(sessionID string) string {

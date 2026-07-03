@@ -169,6 +169,7 @@ func TestNormalizeCloudConfigRequiresBillingTokenWhenBillingConfigured(t *testin
 	t.Setenv("TELOS_API_TOKEN", "operator-token")
 	t.Setenv("TELOS_ENV_ID", "env_test")
 	t.Setenv("TELOS_BILLING_ENV_TOKEN", "")
+	t.Setenv("TELOS_GATEWAY_MODE", "managed")
 
 	_, err := NormalizeConfig(Config{Mode: ModeCloud})
 	if err == nil {
@@ -176,6 +177,22 @@ func TestNormalizeCloudConfigRequiresBillingTokenWhenBillingConfigured(t *testin
 	}
 	if err.Error() != "billing.token is required when cloud billing is configured" {
 		t.Fatalf("error: got %q", err)
+	}
+}
+
+func TestNormalizeCloudConfigAllowsConfiguredBillingOutsideManagedGateway(t *testing.T) {
+	t.Setenv("TELOS_API_TOKEN", "operator-token")
+	t.Setenv("TELOS_ENV_ID", "env_test")
+	t.Setenv("TELOS_BILLING_ENV_TOKEN", "")
+	t.Setenv("TELOS_BILLING_ENV_TOKEN_FILE", filepath.Join(t.TempDir(), "missing-token"))
+	t.Setenv("TELOS_GATEWAY_MODE", "")
+
+	cfg, err := NormalizeConfig(Config{Mode: ModeCloud})
+	if err != nil {
+		t.Fatalf("NormalizeConfig: %v", err)
+	}
+	if cfg.Billing.Endpoint != "https://billing.usetelos.ai" || cfg.Billing.EnvID != "env_test" || cfg.Billing.Token != "" {
+		t.Fatalf("billing config: %+v", cfg.Billing)
 	}
 }
 

@@ -1,6 +1,7 @@
 package telosd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -177,16 +178,17 @@ func NormalizeConfig(cfg Config) (Config, error) {
 			return Config{}, err
 		}
 		cfg.Billing, err = resolveServiceCredential(cfg.Billing, serviceCredentialEnv{
-			Name:          "billing",
-			EndpointVars:  []string{"TELOS_BILLING_ENDPOINT"},
-			EndpointValue: "https://billing.usetelos.ai",
-			TokenFileVar:  "TELOS_BILLING_ENV_TOKEN_FILE",
-			TokenVar:      "TELOS_BILLING_ENV_TOKEN",
+			Name:              "billing",
+			EndpointVars:      []string{"TELOS_BILLING_ENDPOINT"},
+			EndpointValue:     "https://billing.usetelos.ai",
+			TokenFileVar:      "TELOS_BILLING_ENV_TOKEN_FILE",
+			TokenVar:          "TELOS_BILLING_ENV_TOKEN",
+			OptionalTokenFile: !managedGatewayModeEnabled(),
 		})
 		if err != nil {
 			return Config{}, err
 		}
-		if cfg.Billing.Endpoint != "" && cfg.Billing.EnvID != "" && cfg.Billing.Token == "" {
+		if managedGatewayModeEnabled() && cfg.Billing.Endpoint != "" && cfg.Billing.EnvID != "" && cfg.Billing.Token == "" {
 			return Config{}, fmt.Errorf("billing.token is required when cloud billing is configured")
 		}
 		if cfg.Kubernetes.AgentImage == "" {
@@ -278,11 +280,12 @@ func defaultImagePullSecret(agentImage string) string {
 }
 
 type serviceCredentialEnv struct {
-	Name          string
-	EndpointVars  []string
-	EndpointValue string
-	TokenFileVar  string
-	TokenVar      string
+	Name              string
+	EndpointVars      []string
+	EndpointValue     string
+	TokenFileVar      string
+	TokenVar          string
+	OptionalTokenFile bool
 }
 
 func resolveServiceCredential(cfg ServiceCredentialConfig, env serviceCredentialEnv) (ServiceCredentialConfig, error) {
@@ -297,7 +300,9 @@ func resolveServiceCredential(cfg ServiceCredentialConfig, env serviceCredential
 	}
 	if cfg.Token == "" {
 		if token, err := authTokenFromFile(cfg.TokenFile); err != nil {
-			return ServiceCredentialConfig{}, fmt.Errorf("read %s.token_file: %w", env.Name, err)
+			if !(env.OptionalTokenFile && errors.Is(err, os.ErrNotExist)) {
+				return ServiceCredentialConfig{}, fmt.Errorf("read %s.token_file: %w", env.Name, err)
+			}
 		} else if token != "" {
 			cfg.Token = token
 		}
@@ -315,6 +320,10 @@ func envFirst(names []string, fallback string) string {
 		}
 	}
 	return fallback
+}
+
+func managedGatewayModeEnabled() bool {
+	return strings.EqualFold(strings.TrimSpace(os.Getenv("TELOS_GATEWAY_MODE")), "managed")
 }
 
 func SessionsRoot(root string) string {

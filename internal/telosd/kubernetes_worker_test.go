@@ -547,9 +547,18 @@ func TestKubernetesSubstrateScrubsManagedAgentSecrets(t *testing.T) {
 	cfg := testCloudConfig(t)
 	cfg.Kubernetes.AgentSecretKey = "SAIL_API_KEY"
 	client := fake.NewSimpleClientset(
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sess-direct"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.EnvNamespace}},
 		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: "sess-direct"},
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: cfg.Kubernetes.EnvNamespace},
+			Type:       corev1.SecretTypeOpaque,
+			Data: map[string][]byte{
+				"SAIL_API_KEY":      []byte("source-sail"),
+				"ANTHROPIC_API_KEY": []byte("source-anthropic"),
+			},
+		},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns-ctrl-direct"}},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: "ns-ctrl-direct"},
 			Type:       corev1.SecretTypeOpaque,
 			Data: map[string][]byte{
 				"SAIL_API_KEY":      []byte("raw-sail"),
@@ -558,9 +567,9 @@ func TestKubernetesSubstrateScrubsManagedAgentSecrets(t *testing.T) {
 				"SILARES_API_KEY":   []byte("raw-silares"),
 			},
 		},
-		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "sess-managed"}},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "ns-task-managed"}},
 		&corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: "sess-managed"},
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: "ns-task-managed"},
 			Type:       corev1.SecretTypeOpaque,
 			Data: map[string][]byte{
 				"SAIL_API_KEY":           []byte("managed-key"),
@@ -568,6 +577,12 @@ func TestKubernetesSubstrateScrubsManagedAgentSecrets(t *testing.T) {
 				"TELOS_GATEWAY_API_KEY":  []byte("managed-key"),
 				"TELOS_GATEWAY_BASE_URL": []byte("https://managed.example.com/v1"),
 			},
+		},
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "external"}},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: cfg.Kubernetes.AgentSecretName, Namespace: "external"},
+			Type:       corev1.SecretTypeOpaque,
+			Data:       map[string][]byte{"SAIL_API_KEY": []byte("external-sail")},
 		},
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "other"}},
 		&corev1.Secret{
@@ -583,11 +598,14 @@ func TestKubernetesSubstrateScrubsManagedAgentSecrets(t *testing.T) {
 	}
 
 	for _, key := range directProviderKeyNames {
-		assertSecretDataAbsent(t, client, "sess-direct", cfg.Kubernetes.AgentSecretName, key)
+		assertSecretDataAbsent(t, client, "ns-ctrl-direct", cfg.Kubernetes.AgentSecretName, key)
 	}
-	assertSecretData(t, client, "sess-managed", cfg.Kubernetes.AgentSecretName, "SAIL_API_KEY", "managed-key")
-	assertSecretData(t, client, "sess-managed", cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY", "managed-key")
-	assertSecretDataAbsent(t, client, "sess-managed", cfg.Kubernetes.AgentSecretName, "ANTHROPIC_API_KEY")
+	assertSecretData(t, client, "ns-task-managed", cfg.Kubernetes.AgentSecretName, "SAIL_API_KEY", "managed-key")
+	assertSecretData(t, client, "ns-task-managed", cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY", "managed-key")
+	assertSecretDataAbsent(t, client, "ns-task-managed", cfg.Kubernetes.AgentSecretName, "ANTHROPIC_API_KEY")
+	assertSecretData(t, client, cfg.Kubernetes.EnvNamespace, cfg.Kubernetes.AgentSecretName, "SAIL_API_KEY", "source-sail")
+	assertSecretData(t, client, cfg.Kubernetes.EnvNamespace, cfg.Kubernetes.AgentSecretName, "ANTHROPIC_API_KEY", "source-anthropic")
+	assertSecretData(t, client, "external", cfg.Kubernetes.AgentSecretName, "SAIL_API_KEY", "external-sail")
 	assertSecretData(t, client, "other", "unrelated", "SAIL_API_KEY", "raw-sail")
 }
 

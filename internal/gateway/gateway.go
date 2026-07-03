@@ -348,11 +348,7 @@ func resolveTransportAndKind(rawTransport, rawKind string) (string, string, erro
 	transport := strings.ToLower(strings.TrimSpace(rawTransport))
 	switch transport {
 	case "":
-		if kind == KindBifrost {
-			transport = TransportBifrostAsync
-		} else {
-			transport = TransportOpenAISync
-		}
+		transport = TransportOpenAISync
 	case TransportOpenAISync, TransportBifrostAsync:
 	default:
 		return "", "", fmt.Errorf("unknown TELOS_GATEWAY_TRANSPORT %q (accepted: openai_sync, bifrost_async)", rawTransport)

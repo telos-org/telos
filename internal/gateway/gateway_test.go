@@ -28,7 +28,7 @@ func TestResolveUsesEnvGatewayFirst(t *testing.T) {
 	}
 }
 
-func TestResolveEnvGatewayUsesBifrostDefaults(t *testing.T) {
+func TestResolveEnvGatewayDefaultsBifrostKindToSyncTransport(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://env.example.com/openai")
 	t.Setenv("TELOS_GATEWAY_API_KEY", "env-key")
 	t.Setenv("TELOS_GATEWAY_KIND", KindBifrost)
@@ -38,7 +38,7 @@ func TestResolveEnvGatewayUsesBifrostDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
-	if cred.Transport != TransportBifrostAsync || cred.Kind != KindBifrost || cred.Headers["x-bf-vk"] != "sk-bf" {
+	if cred.Transport != TransportOpenAISync || cred.Kind != KindBifrost || cred.Headers["x-bf-vk"] != "sk-bf" {
 		t.Fatalf("credential: %+v", cred)
 	}
 }
