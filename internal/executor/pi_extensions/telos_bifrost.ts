@@ -99,10 +99,15 @@ function model(id: string, name: string, contextWindow: number, headers: Headers
 }
 
 function appendRouting(pi: ExtensionAPI, headers: Record<string, unknown>, fallbackModel = "", ok = true) {
-  const provider = headerValue(headers, "x-telos-routed-provider");
-  const routedModel = headerValue(headers, "x-telos-routed-model") || fallbackModel;
+  const provider = headerValue(headers, "x-bifrost-provider") || headerValue(headers, "x-telos-routed-provider");
+  const routedModel =
+    headerValue(headers, "x-bifrost-original-model") ||
+    headerValue(headers, "x-telos-routed-model") ||
+    fallbackModel;
   if (!provider && !routedModel) return;
-  const fallback = headerValue(headers, "x-telos-routing-fallback").toLowerCase() === "true";
+  const fallbackIndex = Number.parseInt(headerValue(headers, "x-bifrost-fallback-index") || "0", 10);
+  const fallback =
+    fallbackIndex > 0 || headerValue(headers, "x-telos-routing-fallback").toLowerCase() === "true";
   pi.appendEntry(routingEntryType, {
     provider,
     model: routedModel,

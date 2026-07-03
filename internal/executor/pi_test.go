@@ -163,6 +163,22 @@ func TestConfigureGatewayRejectsBifrostAsyncForPi(t *testing.T) {
 	}
 }
 
+func TestBifrostExtensionUsesNativeRoutingHeaders(t *testing.T) {
+	for _, want := range []string{
+		`"x-bifrost-provider"`,
+		`"x-bifrost-original-model"`,
+		`"x-bifrost-fallback-index"`,
+		`"x-telos-routed-provider"`,
+	} {
+		if !strings.Contains(telosBifrostExtension, want) {
+			t.Fatalf("embedded Bifrost extension missing %s", want)
+		}
+	}
+	if strings.Contains(telosBifrostExtension, `"x-bifrost-resolved-model"`) {
+		t.Fatal("embedded Bifrost extension must not use resolved upstream model as the routed model")
+	}
+}
+
 func TestExecuteTurnIncludesStderrOnPiFailure(t *testing.T) {
 	workspace := t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
