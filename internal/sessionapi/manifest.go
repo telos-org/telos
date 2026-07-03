@@ -28,6 +28,7 @@ type Manifest struct {
 	Workspace          *Workspace             `json:"workspace,omitempty"`
 	Provenance         map[string]any         `json:"provenance"`
 	Access             *ScopedToken           `json:"access,omitempty"`
+	GatewayRouting     *GatewayRoutingState   `json:"gateway_routing,omitempty"`
 	Specs              []ManifestSpec         `json:"specs"`
 	Epochs             []Epoch                `json:"epochs"`
 }
@@ -91,8 +92,18 @@ type ScopedToken struct {
 	Scopes           []string `json:"scopes"`
 }
 
+type GatewayRoutingState struct {
+	ModelProfile     ModelProfile `json:"model_profile"`
+	AssignedProvider string       `json:"assigned_provider,omitempty"`
+	AssignedAt       string       `json:"assigned_at,omitempty"`
+	LastSeenAt       string       `json:"last_seen_at,omitempty"`
+	LastModel        string       `json:"last_model,omitempty"`
+	LastFallback     bool         `json:"last_fallback,omitempty"`
+}
+
 type SessionConfig struct {
 	Model           string         `json:"model,omitempty"`
+	ModelProfile    ModelProfile   `json:"model_profile,omitempty"`
 	Until           int            `json:"until,omitempty"`
 	MaxCostUSD      *float64       `json:"max_cost_usd,omitempty"`
 	MaxRounds       int            `json:"max_rounds,omitempty"`
@@ -111,6 +122,11 @@ const (
 )
 
 func NormalizeSessionConfig(c SessionConfig) SessionConfig {
+	profile, err := NormalizeModelProfile(string(c.ModelProfile))
+	if err != nil {
+		profile = ModelProfileStandard
+	}
+	c.ModelProfile = profile
 	if c.MaxRounds <= 0 {
 		c.MaxRounds = DefaultMaxRounds
 	}
@@ -172,6 +188,7 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 	if input.Provenance == nil {
 		input.Provenance = map[string]any{"mode": runtimeMode(input.Runtime)}
 	}
+	input.Config = NormalizeSessionConfig(input.Config)
 	specs := make([]ManifestSpec, 0, len(input.Specs))
 	for _, spec := range input.Specs {
 		index := spec.Index
@@ -198,7 +215,7 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		SourceSpecPath:     input.SourceSpecPath,
 		SessionSpecPath:    input.SessionSpecPath,
 		SpecName:           input.SpecName,
-		Config:             NormalizeSessionConfig(input.Config),
+		Config:             input.Config,
 		Workspace:          input.Workspace,
 		Provenance:         input.Provenance,
 		ApplyPackageDigest: input.ApplyPackageDigest,
@@ -279,6 +296,11 @@ func (c SessionConfig) MarshalJSON() ([]byte, error) {
 	if c.Model != "" {
 		m["model"] = c.Model
 	}
+	profile, err := NormalizeModelProfile(string(c.ModelProfile))
+	if err != nil {
+		return nil, err
+	}
+	m["model_profile"] = string(profile)
 	if c.Until > 0 {
 		m["until"] = c.Until
 	}
@@ -320,6 +342,14 @@ func (c *SessionConfig) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("config.model: %w", err)
 		}
 		delete(raw, "model")
+	}
+	if value, ok := raw["model_profile"]; ok {
+		if err := json.Unmarshal(value, &c.ModelProfile); err != nil {
+			return fmt.Errorf("config.model_profile: %w", err)
+		}
+		delete(raw, "model_profile")
+	} else {
+		c.ModelProfile = ModelProfileStandard
 	}
 	if value, ok := raw["until"]; ok {
 		if err := json.Unmarshal(value, &c.Until); err != nil {

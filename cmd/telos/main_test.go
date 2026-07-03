@@ -624,7 +624,7 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	t.Setenv("TELOS_MAX_TOOL_LOOPS", "44")
 	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "123")
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -655,7 +655,7 @@ func TestResolveLocalRunConfigDefaultsToNoAgentTimeout(t *testing.T) {
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -674,7 +674,7 @@ func TestResolveLocalRunConfigAllowsExplicitNoAgentTimeout(t *testing.T) {
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"--agent-timeout-sec", "0", "SPEC.md"})
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -693,7 +693,7 @@ func TestResolveLocalRunConfigRejectsNegativeAgentTimeout(t *testing.T) {
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"--agent-timeout-sec", "-1", "SPEC.md"})
 
-	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{AgentTimeoutSec: -1})
+	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "", "medium", 20.0, budgetFlags{AgentTimeoutSec: -1})
 	if err == nil {
 		t.Fatal("expected negative agent timeout to fail")
 	}
@@ -726,7 +726,7 @@ func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
 		"SPEC.md",
 	})
 
-	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "openai-codex/gpt-5.5", "high", 100, budgetFlags{MaxRounds: 9, MaxDurationSec: 3600, MaxInputTokens: 120000, MaxOutputTokens: 24000, MaxToolLoops: 55, AgentTimeoutSec: 0})
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "openai-codex/gpt-5.5", "", "high", 100, budgetFlags{MaxRounds: 9, MaxDurationSec: 3600, MaxInputTokens: 120000, MaxOutputTokens: 24000, MaxToolLoops: 55, AgentTimeoutSec: 0})
 	if err != nil {
 		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
 	}
@@ -755,6 +755,25 @@ func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
 	}
 	if req.AgentTimeoutSec == nil || *req.AgentTimeoutSec != 0 {
 		t.Fatalf("agent timeout: got %v", req.AgentTimeoutSec)
+	}
+}
+
+func TestResolveSessionRuntimeConfigUsesProfileFlag(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.String("model", "", "")
+	fs.String("profile", "", "")
+	fs.String("thinking", "medium", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	parseFlags(fs, []string{"--profile", "premium", "SPEC.md"})
+
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "premium", "medium", 20.0, budgetFlags{})
+	if err != nil {
+		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
+	}
+	req := sessionapi.SessionCreateRequest{}
+	applySessionRuntimeConfig(&req, cfg)
+	if req.ModelProfile != sessionapi.ModelProfilePremium {
+		t.Fatalf("model_profile: got %q", req.ModelProfile)
 	}
 }
 
@@ -819,7 +838,7 @@ func TestResolveSessionRuntimeConfigOmitsDefaults(t *testing.T) {
 	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
-	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "medium", 20.0, budgetFlags{})
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
 	if err != nil {
 		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
 	}
@@ -902,7 +921,7 @@ func TestResolveLocalRunConfigRejectsInvalidEnvironmentDefaults(t *testing.T) {
 	parseFlags(fs, []string{"SPEC.md"})
 	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "not-an-int")
 
-	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, budgetFlags{})
+	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "", "medium", 20.0, budgetFlags{})
 	if err == nil {
 		t.Fatal("expected invalid environment value to fail")
 	}

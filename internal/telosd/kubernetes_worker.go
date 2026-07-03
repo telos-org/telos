@@ -65,6 +65,7 @@ const (
 	gatewayKindEnv      = "TELOS_GATEWAY_KIND"
 	gatewayHeadersEnv   = "TELOS_GATEWAY_HEADERS"
 	gatewayKeyAliasEnv  = "TELOS_GATEWAY_KEY_ALIAS"
+	modelProfileEnv     = "TELOS_MODEL_PROFILE"
 	gatewayModeEnv      = "TELOS_GATEWAY_MODE"
 )
 
@@ -73,6 +74,8 @@ var gatewayEnvNames = []string{
 	gatewayTransportEnv,
 	gatewayKindEnv,
 	gatewayHeadersEnv,
+	modelProfileEnv,
+	gatewayModeEnv,
 }
 
 var legacyGatewayEnvNames = []string{
@@ -96,6 +99,8 @@ var optionalGatewayCredentialEnvNames = []string{
 	gatewayKindEnv,
 	gatewayHeadersEnv,
 	gatewayKeyAliasEnv,
+	modelProfileEnv,
+	gatewayModeEnv,
 }
 
 func newKubernetesSubstrate(cfg Config) (kubernetesSubstrate, error) {
@@ -163,7 +168,11 @@ func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason strin
 	if err != nil {
 		return fmt.Errorf("read worker manifest: %w", err)
 	}
-	credential, err := s.sessionGatewayCredential(ctx, session.SessionID, ptrValue(m.ParentSessionID), userAuthorization, userOrgID)
+	modelProfile, err := sessionapi.NormalizeModelProfile(string(m.Config.ModelProfile))
+	if err != nil {
+		return err
+	}
+	credential, err := s.sessionGatewayCredential(ctx, session.SessionID, ptrValue(m.ParentSessionID), userAuthorization, userOrgID, modelProfile)
 	if err != nil {
 		return err
 	}
@@ -701,9 +710,13 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 	return s.createOrUpdateSecret(ctx, secret)
 }
 
-func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessionID, parentSessionID, userAuthorization string, userOrgID string) (*controlSessionKey, error) {
+func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessionID, parentSessionID, userAuthorization string, userOrgID string, modelProfile sessionapi.ModelProfile) (*controlSessionKey, error) {
 	if !s.managedGatewayEnabled() || s.billing == nil || !s.billing.configured() {
 		return nil, nil
+	}
+	modelProfile, err := sessionapi.NormalizeModelProfile(string(modelProfile))
+	if err != nil {
+		return nil, err
 	}
 	lock := sessionGatewayLock(sessionID)
 	lock.Lock()
@@ -713,12 +726,18 @@ func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessi
 	if err == nil {
 		credential := credentialFromSecret(current, s.agentSecretKey)
 		if credential != nil {
+			if credential.ModelProfile == "" {
+				credential.ModelProfile = sessionapi.ModelProfileStandard
+			}
+			if credential.ModelProfile != modelProfile {
+				return nil, fmt.Errorf("cached session gateway key profile mismatch for %s: cached %s, requested %s", sessionID, credential.ModelProfile, modelProfile)
+			}
 			return credential, nil
 		}
 	} else if !apierrors.IsNotFound(err) {
 		return nil, err
 	}
-	minted, err := s.billing.MintSessionKey(sessionID, parentSessionID, userAuthorization, userOrgID)
+	minted, err := s.billing.MintSessionKey(sessionID, parentSessionID, userAuthorization, userOrgID, modelProfile)
 	if err != nil {
 		return nil, err
 	}
@@ -762,6 +781,7 @@ func sessionGatewaySecret(namespace string, name string, keyName string, credent
 		keyName:           []byte(credential.APIKey),
 		gatewayAPIKeyEnv:  []byte(credential.APIKey),
 		gatewayBaseURLEnv: []byte(credential.BaseURL),
+		gatewayModeEnv:    []byte("managed"),
 	}
 	if credential.Transport != "" {
 		data[gatewayTransportEnv] = []byte(credential.Transport)
@@ -774,6 +794,9 @@ func sessionGatewaySecret(namespace string, name string, keyName string, credent
 	}
 	if credential.KeyAlias != "" {
 		data[gatewayKeyAliasEnv] = []byte(credential.KeyAlias)
+	}
+	if credential.ModelProfile != "" {
+		data[modelProfileEnv] = []byte(credential.ModelProfile)
 	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -797,13 +820,18 @@ func credentialFromSecret(secret *corev1.Secret, keyName string) *controlSession
 	if apiKey == "" || baseURL == "" {
 		return nil
 	}
+	profile, err := sessionapi.NormalizeModelProfile(strings.TrimSpace(string(secret.Data[modelProfileEnv])))
+	if err != nil {
+		return nil
+	}
 	return &controlSessionKey{
-		BaseURL:   strings.TrimRight(baseURL, "/"),
-		APIKey:    apiKey,
-		Transport: strings.TrimSpace(string(secret.Data[gatewayTransportEnv])),
-		Kind:      strings.TrimSpace(string(secret.Data[gatewayKindEnv])),
-		Headers:   gatewayHeadersFromSecret(secret.Data),
-		KeyAlias:  strings.TrimSpace(string(secret.Data[gatewayKeyAliasEnv])),
+		BaseURL:      strings.TrimRight(baseURL, "/"),
+		APIKey:       apiKey,
+		Transport:    strings.TrimSpace(string(secret.Data[gatewayTransportEnv])),
+		Kind:         strings.TrimSpace(string(secret.Data[gatewayKindEnv])),
+		Headers:      gatewayHeadersFromSecret(secret.Data),
+		KeyAlias:     strings.TrimSpace(string(secret.Data[gatewayKeyAliasEnv])),
+		ModelProfile: profile,
 	}
 }
 
@@ -815,6 +843,7 @@ func applyGatewayCredential(data map[string][]byte, keyName string, credential *
 	data[keyName] = []byte(credential.APIKey)
 	data[gatewayAPIKeyEnv] = []byte(credential.APIKey)
 	data[gatewayBaseURLEnv] = []byte(credential.BaseURL)
+	data[gatewayModeEnv] = []byte("managed")
 	if credential.Transport != "" {
 		data[gatewayTransportEnv] = []byte(credential.Transport)
 	}
@@ -826,6 +855,9 @@ func applyGatewayCredential(data map[string][]byte, keyName string, credential *
 	}
 	if credential.KeyAlias != "" {
 		data[gatewayKeyAliasEnv] = []byte(credential.KeyAlias)
+	}
+	if credential.ModelProfile != "" {
+		data[modelProfileEnv] = []byte(credential.ModelProfile)
 	}
 }
 

@@ -99,6 +99,7 @@ func (r *PVGResult) Accumulate(s TurnStats) {
 
 // TurnState holds filesystem paths for one PVG turn.
 type TurnState struct {
+	EpochID       int
 	RoundNum      int
 	Role          string
 	Dir           string

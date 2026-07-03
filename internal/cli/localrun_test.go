@@ -175,6 +175,32 @@ func TestCreateLocalSession(t *testing.T) {
 	}
 }
 
+func TestCreateLocalSessionUsesManagedProfileDefaultModel(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	orig, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(orig)
+	t.Setenv("TELOS_GATEWAY_MODE", "managed")
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{ModelProfile: sessionapi.ModelProfilePremium})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Config.ModelProfile != sessionapi.ModelProfilePremium {
+		t.Fatalf("model profile: got %q", manifest.Config.ModelProfile)
+	}
+	if manifest.Config.Model != "telos-bifrost/premium-agent" {
+		t.Fatalf("model: got %q", manifest.Config.Model)
+	}
+}
+
 func TestCreateLocalSessionRecordsParentSession(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)

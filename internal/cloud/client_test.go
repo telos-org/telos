@@ -249,20 +249,21 @@ func TestClientMintSessionKey(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"session_id": "sess-1",
-			"base_url":   "https://proxy.example.com/v1",
-			"api_key":    "sk-session",
-			"transport":  "bifrost_async",
-			"kind":       "bifrost",
-			"headers":    map[string]string{"x-bf-vk": "sk-bf"},
-			"budget_usd": 5.0,
-			"key_alias":  "sess-1",
+			"session_id":    "sess-1",
+			"base_url":      "https://proxy.example.com/v1",
+			"api_key":       "sk-session",
+			"transport":     "bifrost_async",
+			"kind":          "bifrost",
+			"headers":       map[string]string{"x-bf-vk": "sk-bf"},
+			"budget_usd":    5.0,
+			"key_alias":     "sess-1",
+			"model_profile": "standard",
 		})
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	key, err := client.MintSessionKey("sess-1")
+	key, err := client.MintSessionKey("sess-1", "standard")
 	if err != nil {
 		t.Fatalf("MintSessionKey: %v", err)
 	}
@@ -272,7 +273,10 @@ func TestClientMintSessionKey(t *testing.T) {
 	if transports, ok := gotBody["supported_transports"].([]any); !ok || len(transports) != 1 || transports[0] != "openai_sync" {
 		t.Fatalf("supported transports: got %#v", gotBody["supported_transports"])
 	}
-	if key.APIKey != "sk-session" || key.BaseURL != "https://proxy.example.com/v1" || key.Transport != "bifrost_async" || key.Kind != "bifrost" || key.Headers["x-bf-vk"] != "sk-bf" || key.KeyAlias != "sess-1" {
+	if gotBody["model_profile"] != "standard" {
+		t.Fatalf("model_profile body: %+v", gotBody)
+	}
+	if key.APIKey != "sk-session" || key.BaseURL != "https://proxy.example.com/v1" || key.Transport != "bifrost_async" || key.Kind != "bifrost" || key.Headers["x-bf-vk"] != "sk-bf" || key.KeyAlias != "sess-1" || key.ModelProfile != sessionapi.ModelProfileStandard {
 		t.Fatalf("key: %+v", key)
 	}
 }
@@ -298,7 +302,7 @@ func TestClientMintSessionKeyRejectsInvalidSessionID(t *testing.T) {
 			defer srv.Close()
 
 			client := NewClient(srv.URL, "test-token")
-			if _, err := client.MintSessionKey("sess-1"); err == nil {
+			if _, err := client.MintSessionKey("sess-1", "standard"); err == nil {
 				t.Fatal("expected invalid session_id error")
 			}
 		})

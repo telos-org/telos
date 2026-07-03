@@ -242,6 +242,34 @@ func TestCreateSessionPersistsSpecMarkdown(t *testing.T) {
 	}
 }
 
+func TestCreateChildSessionInheritsParentModelProfile(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	parentMarkdown := "---\nversion: v0\nname: parent-profile\nplatform: local\n---\n# Parent\n"
+	parent, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &parentMarkdown,
+		ModelProfile: sessionapi.ModelProfilePremium,
+	})
+	if err != nil {
+		t.Fatalf("Create parent: %v", err)
+	}
+	childMarkdown := "---\nversion: v0\nname: child-profile\nplatform: local\n---\n# Child\n"
+	child, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown:    &childMarkdown,
+		ParentSessionID: &parent.SessionID,
+	})
+	if err != nil {
+		t.Fatalf("Create child: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(root, child.SessionID, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Config.ModelProfile != sessionapi.ModelProfilePremium {
+		t.Fatalf("model profile: got %q", manifest.Config.ModelProfile)
+	}
+}
+
 func TestCreateSessionPersistsUntil(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
@@ -802,6 +830,35 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	}
 	if string(data) != updated {
 		t.Fatalf("spec was not updated: %q", string(data))
+	}
+}
+
+func TestApplySessionSpecRejectsExistingRootModelProfileChange(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+	writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
+
+	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres v2\n"
+	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
+		SpecMarkdown: updated,
+		ModelProfile: sessionapi.ModelProfilePremium,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 400, got %d: %s", resp.StatusCode, data)
 	}
 }
 

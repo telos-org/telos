@@ -3,16 +3,23 @@ package executor
 
 import (
 	"bufio"
+	_ "embed"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/gateway"
 	"github.com/telos-org/telos/internal/platform"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
+
+//go:embed pi_extensions/telos_bifrost.ts
+var telosBifrostExtension string
 
 // PiExecutor runs Pi as one PVG agent turn on the given LocalPlatform.
 type PiExecutor struct {
@@ -20,6 +27,9 @@ type PiExecutor struct {
 	Model              string
 	Thinking           string
 	Timeout            int
+	SessionID          string
+	SessionDir         string
+	ModelProfile       sessionapi.ModelProfile
 	GatewayEnv         map[string]string
 	GatewayCleanup     func() error
 	CostHardLimitValue bool
@@ -52,10 +62,30 @@ func (pe *PiExecutor) ConfigureGateway(cred gateway.Credential) error {
 		}
 		return fmt.Errorf("gateway returned incomplete OpenAI-compatible credentials")
 	}
-	pe.GatewayEnv = map[string]string{
-		"OPENAI_API_KEY":  strings.TrimSpace(cred.APIKey),
-		"OPENAI_BASE_URL": strings.TrimRight(strings.TrimSpace(cred.BaseURL), "/"),
+	profile, err := sessionapi.NormalizeModelProfile(string(cred.ModelProfile))
+	if err != nil {
+		if cred.Cleanup != nil {
+			_ = cred.Cleanup()
+		}
+		return err
 	}
+	headers := "{}"
+	if len(cred.Headers) > 0 {
+		if data, err := json.Marshal(cred.Headers); err == nil {
+			headers = string(data)
+		}
+	}
+	pe.GatewayEnv = map[string]string{
+		"OPENAI_API_KEY":          strings.TrimSpace(cred.APIKey),
+		"OPENAI_BASE_URL":         strings.TrimRight(strings.TrimSpace(cred.BaseURL), "/"),
+		"TELOS_GATEWAY_API_KEY":   strings.TrimSpace(cred.APIKey),
+		"TELOS_GATEWAY_BASE_URL":  strings.TrimRight(strings.TrimSpace(cred.BaseURL), "/"),
+		"TELOS_GATEWAY_HEADERS":   headers,
+		"TELOS_GATEWAY_KIND":      strings.TrimSpace(cred.Kind),
+		"TELOS_GATEWAY_TRANSPORT": strings.TrimSpace(cred.Transport),
+		"TELOS_MODEL_PROFILE":     string(profile),
+	}
+	pe.ModelProfile = profile
 	pe.GatewayCleanup = cred.Cleanup
 	pe.CostHardLimitValue = cred.CostHardLimit
 	return nil
@@ -88,7 +118,25 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		stopRequested = turnState.StopRequested
 	}
 
-	argv := BuildPiArgv(pe.Model, pe.Thinking, taskPath, sessionPath)
+	profile, _ := sessionapi.NormalizeModelProfile(string(pe.ModelProfile))
+	routing := pe.currentRoutingState(profile)
+	extensionPath := ""
+	if pe.needsBifrostExtension() {
+		var err error
+		extensionPath, err = pe.ensureBifrostExtension()
+		if err != nil {
+			return game.TurnResult{
+				Role:        role,
+				Status:      game.StatusContinue,
+				Logs:        fmt.Sprintf("pi_extension_unavailable:%v", err),
+				Stats:       stats,
+				Error:       fmt.Sprintf("pi_extension_unavailable:%v", err),
+				Recoverable: true,
+			}
+		}
+	}
+
+	argv := BuildPiArgv(pe.Model, pe.Thinking, taskPath, sessionPath, extensionPath)
 	taskEnv := task
 	if taskPath != "" {
 		taskEnv = ""
@@ -97,15 +145,36 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	for k, v := range pe.GatewayEnv {
 		env[k] = v
 	}
+	for k, v := range pe.bifrostTurnEnv(profile, routing, role, turnState) {
+		env[k] = v
+	}
+	sessionOffset := int64(0)
+	if sessionPath != "" {
+		if info, err := os.Stat(sessionPath); err == nil {
+			sessionOffset = info.Size()
+		}
+	}
 	result := pe.Platform.Run(argv, taskEnv, env, pe.Timeout, stopRequested, nil, "")
 
 	logs := strings.Join(result.RawLines, "\n")
 	if sessionPath != "" {
-		summary, err := ReadPiSession(sessionPath)
+		summary, err := ReadPiSessionFromOffset(sessionPath, sessionOffset)
 		if err == nil {
 			logs = summary.Logs
 			stats = mergeTurnStats(stats, summary.Stats)
 			agentError = summary.Error
+			if summary.Routing != nil {
+				if err := pe.updateRoutingState(profile, *summary.Routing); err != nil {
+					return game.TurnResult{
+						Role:        role,
+						Status:      game.StatusContinue,
+						Logs:        fmt.Sprintf("gateway_routing_update_failed:%v", err),
+						Stats:       stats,
+						Error:       fmt.Sprintf("gateway_routing_update_failed:%v", err),
+						Recoverable: true,
+					}
+				}
+			}
 		} else if result.ReturnCode == 0 && result.InfraError == "" {
 			return game.TurnResult{
 				Role:        role,
@@ -189,8 +258,117 @@ func (pe *PiExecutor) CheckpointWorkspace(dest string) bool {
 	return pe.Platform.CheckpointWorkspace(dest)
 }
 
+func (pe *PiExecutor) needsBifrostExtension() bool {
+	if strings.HasPrefix(pe.Model, "telos-bifrost/") {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(pe.GatewayEnv["TELOS_GATEWAY_KIND"]), gateway.KindBifrost)
+}
+
+func (pe *PiExecutor) ensureBifrostExtension() (string, error) {
+	base := pe.SessionDir
+	if strings.TrimSpace(base) == "" {
+		dir, err := os.MkdirTemp("", "telos-pi-extension-")
+		if err != nil {
+			return "", err
+		}
+		base = dir
+	}
+	dir := filepath.Join(base, "runtime")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	path := filepath.Join(dir, "telos_bifrost.ts")
+	if err := os.WriteFile(path, []byte(telosBifrostExtension), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func (pe *PiExecutor) currentRoutingState(profile sessionapi.ModelProfile) *sessionapi.GatewayRoutingState {
+	if strings.TrimSpace(pe.SessionDir) == "" {
+		return &sessionapi.GatewayRoutingState{ModelProfile: profile}
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(pe.SessionDir, "session.json"))
+	if err != nil || manifest.GatewayRouting == nil {
+		return &sessionapi.GatewayRoutingState{ModelProfile: profile}
+	}
+	stateProfile, err := sessionapi.NormalizeModelProfile(string(manifest.GatewayRouting.ModelProfile))
+	if err != nil || stateProfile != profile {
+		return &sessionapi.GatewayRoutingState{ModelProfile: profile}
+	}
+	return manifest.GatewayRouting
+}
+
+func (pe *PiExecutor) bifrostTurnEnv(profile sessionapi.ModelProfile, routing *sessionapi.GatewayRoutingState, role string, turnState *game.TurnState) map[string]string {
+	sessionID := strings.TrimSpace(pe.SessionID)
+	if sessionID == "" {
+		sessionID = "unknown"
+	}
+	assignedProvider := "unset"
+	phase := "new"
+	if routing != nil && strings.TrimSpace(routing.AssignedProvider) != "" {
+		assignedProvider = strings.TrimSpace(routing.AssignedProvider)
+		phase = "existing"
+	}
+	requestID := sessionID
+	if turnState != nil {
+		requestID = fmt.Sprintf("%s:%d:%d:%s", sessionID, turnState.EpochID, turnState.RoundNum, role)
+	}
+	return map[string]string{
+		"TELOS_MODEL_PROFILE":                 string(profile),
+		"TELOS_BIFROST_SESSION_TTL":           "1h",
+		"TELOS_BIFROST_AGENT_SESSION_ID":      sessionID,
+		"TELOS_BIFROST_AGENT_CACHE_KEY":       sessionID,
+		"TELOS_BIFROST_COMPACTION_SESSION_ID": sessionID + ":compaction",
+		"TELOS_BIFROST_COMPACTION_CACHE_KEY":  sessionID + ":compaction",
+		"TELOS_BIFROST_AGENT_PHASE":           phase,
+		"TELOS_BIFROST_ASSIGNED_PROVIDER":     assignedProvider,
+		"TELOS_BIFROST_REQUEST_ID":            requestID,
+	}
+}
+
+func (pe *PiExecutor) updateRoutingState(profile sessionapi.ModelProfile, route PiRoutingObservation) error {
+	if strings.TrimSpace(pe.SessionDir) == "" {
+		return nil
+	}
+	manifestPath := filepath.Join(pe.SessionDir, "session.json")
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+	state := manifest.GatewayRouting
+	if state != nil {
+		stateProfile, err := sessionapi.NormalizeModelProfile(string(state.ModelProfile))
+		if err != nil || stateProfile != profile {
+			state = nil
+		}
+	}
+	if state == nil {
+		state = &sessionapi.GatewayRoutingState{ModelProfile: profile}
+		manifest.GatewayRouting = state
+	}
+	state.ModelProfile = profile
+	if route.Model != "" {
+		state.LastModel = route.Model
+	}
+	state.LastFallback = route.Fallback
+	state.LastSeenAt = now
+	if route.OK && route.Provider != "" && isBifrostAgentModel(route.Model) && state.AssignedProvider == "" {
+		state.AssignedProvider = route.Provider
+		state.AssignedAt = now
+	}
+	return sessionapi.WriteManifest(manifestPath, manifest)
+}
+
+func isBifrostAgentModel(model string) bool {
+	model = strings.TrimPrefix(strings.TrimSpace(model), "telos-bifrost/")
+	return strings.HasSuffix(model, "-agent")
+}
+
 // BuildPiArgv builds the Pi command line.
-func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
+func BuildPiArgv(model, thinking, taskPath, sessionPath string, extensionPath string) []string {
 	script := `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; ` +
 		`if ! command -v pi >/dev/null 2>&1; then ` +
 		`for nvm_script in "${NVM_DIR:-}/nvm.sh" "$HOME/.nvm/nvm.sh" "/usr/local/nvm/nvm.sh"; do ` +
@@ -202,8 +380,10 @@ func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
 		fmt.Sprintf(`prompt="${%s}"; `, platform.TaskEnvVar) +
 		`if [ -n "${3:-}" ]; then prompt="$3"; fi; ` +
 		`if [ -n "${4:-}" ]; then ` +
+		`if [ -n "${5:-}" ]; then exec pi --mode text --model "$1" --thinking "$2" --session "$4" --no-extensions --extension "$5" -p "$prompt"; fi; ` +
 		`exec pi --mode text --model "$1" --thinking "$2" --session "$4" --no-extensions -p "$prompt"; ` +
 		`fi; ` +
+		`if [ -n "${5:-}" ]; then exec pi --mode text --model "$1" --thinking "$2" --no-session --no-extensions --extension "$5" -p "$prompt"; fi; ` +
 		`exec pi --mode text --model "$1" --thinking "$2" --no-session --no-extensions -p "$prompt"`
 	argv := []string{"sh", "-c", script, "pi", model, thinking}
 	if taskPath != "" {
@@ -214,24 +394,54 @@ func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
 	if sessionPath != "" {
 		argv = append(argv, sessionPath)
 	}
+	if extensionPath != "" {
+		for len(argv) < 8 {
+			argv = append(argv, "")
+		}
+		argv = append(argv, extensionPath)
+	}
 	return argv
 }
 
 // -- Pi session parsing -------------------------------------------------------
 
 type PiSessionSummary struct {
-	Logs  string
-	Stats game.TurnStats
-	Error string
+	Logs    string
+	Stats   game.TurnStats
+	Error   string
+	Routing *PiRoutingObservation
+}
+
+type PiRoutingObservation struct {
+	Provider string
+	Model    string
+	Fallback bool
+	OK       bool
 }
 
 // ReadPiSession reads Pi's compact session JSONL file for a completed turn.
 func ReadPiSession(path string) (PiSessionSummary, error) {
+	return ReadPiSessionFromOffset(path, 0)
+}
+
+// ReadPiSessionFromOffset reads Pi session entries appended from offset onward.
+func ReadPiSessionFromOffset(path string, offset int64) (PiSessionSummary, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		return PiSessionSummary{}, err
 	}
 	defer f.Close()
+	if offset > 0 {
+		info, err := f.Stat()
+		if err != nil {
+			return PiSessionSummary{}, err
+		}
+		if offset <= info.Size() {
+			if _, err := f.Seek(offset, io.SeekStart); err != nil {
+				return PiSessionSummary{}, err
+			}
+		}
+	}
 
 	var summary PiSessionSummary
 	var finalAssistant map[string]interface{}
@@ -252,6 +462,9 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 						summary.Stats.NumTurns++
 					}
 				}
+				if route, ok := routingFromPiEntry(entry); ok {
+					summary.Routing = &route
+				}
 			}
 		}
 		if err == io.EOF {
@@ -268,6 +481,32 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 	summary.Logs = assistantText(finalAssistant)
 	summary.Error = errorFromPiMessage(finalAssistant)
 	return summary, nil
+}
+
+func routingFromPiEntry(entry map[string]interface{}) (PiRoutingObservation, bool) {
+	if getString(entry, "type") != "custom" || getString(entry, "customType") != "telos-bifrost-routing" {
+		return PiRoutingObservation{}, false
+	}
+	data, _ := entry["data"].(map[string]interface{})
+	if data == nil {
+		return PiRoutingObservation{}, false
+	}
+	provider := strings.TrimSpace(getString(data, "provider"))
+	model := strings.TrimSpace(getString(data, "model"))
+	if provider == "" && model == "" {
+		return PiRoutingObservation{}, false
+	}
+	fallback, _ := data["fallback"].(bool)
+	ok, hasOK := data["ok"].(bool)
+	if !hasOK {
+		ok = true
+	}
+	return PiRoutingObservation{
+		Provider: provider,
+		Model:    model,
+		Fallback: fallback,
+		OK:       ok,
+	}, true
 }
 
 func assistantText(msg map[string]interface{}) string {

@@ -688,6 +688,7 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
 	t.Setenv("TELOS_GATEWAY_MODE", "managed")
 	mintCalls := 0
+	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/internal/sessions/sess_cloud/mint" {
 			http.NotFound(w, r)
@@ -705,15 +706,19 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 			w.WriteHeader(http.StatusConflict)
 			return
 		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
 		mintCalls++
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"session_id": "sess_cloud",
-			"base_url":   "https://managed.example.com/openai",
-			"api_key":    "sk-managed",
-			"transport":  "bifrost_async",
-			"kind":       "bifrost",
-			"headers":    map[string]string{"x-bf-vk": "sk-bf"},
-			"key_alias":  "sess_cloud",
+			"session_id":    "sess_cloud",
+			"base_url":      "https://managed.example.com/openai",
+			"api_key":       "sk-managed",
+			"transport":     "bifrost_async",
+			"kind":          "bifrost",
+			"headers":       map[string]string{"x-bf-vk": "sk-bf"},
+			"key_alias":     "sess_cloud",
+			"model_profile": "premium",
 		})
 	}))
 	defer server.Close()
@@ -725,17 +730,23 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 
-	cred, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "Bearer user-token", "org_team")
+	cred, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "Bearer user-token", "org_team", sessionapi.ModelProfilePremium)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cred.APIKey != "sk-managed" || cred.BaseURL != "https://managed.example.com/openai" || cred.Transport != "bifrost_async" || cred.Kind != "bifrost" || cred.Headers["x-bf-vk"] != "sk-bf" {
+	if cred.APIKey != "sk-managed" || cred.BaseURL != "https://managed.example.com/openai" || cred.Transport != "bifrost_async" || cred.Kind != "bifrost" || cred.Headers["x-bf-vk"] != "sk-bf" || cred.ModelProfile != sessionapi.ModelProfilePremium {
 		t.Fatalf("credential: %+v", cred)
+	}
+	if string(sessionGatewaySecret(cfg.Kubernetes.EnvNamespace, sessionGatewaySecretName("sess_cloud"), cfg.Kubernetes.AgentSecretKey, *cred).Data["TELOS_GATEWAY_MODE"]) != "managed" {
+		t.Fatalf("session gateway secret should carry managed gateway mode")
+	}
+	if gotBody["model_profile"] != "premium" {
+		t.Fatalf("model_profile body: %+v", gotBody)
 	}
 	if mintCalls != 1 {
 		t.Fatalf("mint calls: got %d", mintCalls)
 	}
-	cred, err = substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "Bearer user-token", "org_team")
+	cred, err = substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "Bearer user-token", "org_team", sessionapi.ModelProfilePremium)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -759,6 +770,35 @@ func TestKubernetesSubstrateMintsAndReusesSessionGatewaySecret(t *testing.T) {
 	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_KIND", "bifrost")
 	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_HEADERS", `{"x-bf-vk":"sk-bf"}`)
 	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_KEY_ALIAS", "sess_cloud")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_MODEL_PROFILE", "premium")
+	assertSecretData(t, client, targetNamespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_MODE", "managed")
+}
+
+func TestKubernetesSubstrateRejectsCachedGatewayProfileMismatch(t *testing.T) {
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_MODE", "managed")
+	cfg := testCloudConfig(t)
+	cfg.Billing.Endpoint = "https://billing.example.com"
+	cfg.Billing.EnvID = "env_test"
+	cfg.Billing.Token = "billing-token"
+	secretName := sessionGatewaySecretName("sess_cloud")
+	client := fake.NewSimpleClientset(append(testEnvObjects(cfg), &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: secretName, Namespace: cfg.Kubernetes.EnvNamespace},
+		Type:       corev1.SecretTypeOpaque,
+		Data: map[string][]byte{
+			"SAIL_API_KEY":           []byte("sk-standard"),
+			"TELOS_GATEWAY_API_KEY":  []byte("sk-standard"),
+			"TELOS_GATEWAY_BASE_URL": []byte("https://managed.example.com/openai"),
+			"TELOS_MODEL_PROFILE":    []byte("standard"),
+		},
+	})...)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+
+	_, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "", "", sessionapi.ModelProfilePremium)
+	if err == nil || !strings.Contains(err.Error(), "profile mismatch") {
+		t.Fatalf("expected cached profile mismatch, got %v", err)
+	}
 }
 
 func TestKubernetesSubstrateDoesNotMintGatewayWithoutManagedMode(t *testing.T) {
@@ -850,7 +890,7 @@ func TestKubernetesSubstrateSessionGatewayCredentialConcurrentMintOnce(t *testin
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "", "")
+			_, err := substrate.sessionGatewayCredential(context.Background(), "sess_cloud", "", "", "", sessionapi.ModelProfileStandard)
 			errs <- err
 		}()
 	}
@@ -944,10 +984,11 @@ func TestBillingClientMintsChildSessionWithParentLineage(t *testing.T) {
 			t.Fatalf("decode body: %v", err)
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"session_id": "sess_child",
-			"base_url":   "https://managed.example.com/v1",
-			"api_key":    "sk-child",
-			"key_alias":  "sess_child",
+			"session_id":    "sess_child",
+			"base_url":      "https://managed.example.com/v1",
+			"api_key":       "sk-child",
+			"key_alias":     "sess_child",
+			"model_profile": "premium",
 		})
 	}))
 	defer server.Close()
@@ -957,15 +998,21 @@ func TestBillingClientMintsChildSessionWithParentLineage(t *testing.T) {
 		EnvID:    "env_test",
 		Token:    "billing-token",
 	})
-	cred, err := client.MintSessionKey("sess_child", "sess_parent", "", "")
+	cred, err := client.MintSessionKey("sess_child", "sess_parent", "", "", "premium")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cred.APIKey != "sk-child" {
 		t.Fatalf("credential: %+v", cred)
 	}
+	if cred.ModelProfile != sessionapi.ModelProfilePremium {
+		t.Fatalf("model profile: %+v", cred)
+	}
 	if gotBody["env_id"] != "env_test" || gotBody["parent_session_id"] != "sess_parent" {
 		t.Fatalf("body: %+v", gotBody)
+	}
+	if gotBody["model_profile"] != "premium" {
+		t.Fatalf("model_profile body: %+v", gotBody)
 	}
 	if transports, ok := gotBody["supported_transports"].([]any); !ok || len(transports) != 1 || transports[0] != "openai_sync" {
 		t.Fatalf("supported transports: got %#v", gotBody["supported_transports"])
@@ -992,7 +1039,7 @@ func TestBillingClientRejectsInvalidMintSessionID(t *testing.T) {
 			defer server.Close()
 
 			client := newBillingClient(BillingConfig{Endpoint: server.URL, EnvID: "env_test", Token: "billing-token"})
-			if _, err := client.MintSessionKey("sess_child", "", "", ""); err == nil {
+			if _, err := client.MintSessionKey("sess_child", "", "", "", "standard"); err == nil {
 				t.Fatal("expected invalid session_id error")
 			}
 		})
@@ -1053,7 +1100,7 @@ func TestBillingClientEscapesSessionIDsInURLs(t *testing.T) {
 	defer server.Close()
 
 	client := newBillingClient(BillingConfig{Endpoint: server.URL, EnvID: "env_test", Token: "billing-token"})
-	if _, err := client.MintSessionKey("sess/a?b", "", "", ""); err != nil {
+	if _, err := client.MintSessionKey("sess/a?b", "", "", "", "standard"); err != nil {
 		t.Fatalf("MintSessionKey: %v", err)
 	}
 	if err := client.ReconcileSession("sess/a?b", true); err != nil {

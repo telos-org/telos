@@ -23,9 +23,11 @@ const DefaultLocalModel = "sail-research/zai-org/GLM-5.2-FP8"
 type LocalRunConfig struct {
 	SessionKind     sessionapi.SessionKind
 	SessionID       string
+	SessionDir      string
 	ParentSessionID *string
 	Workspace       string
 	Model           string
+	ModelProfile    sessionapi.ModelProfile
 	Thinking        string
 	Until           int
 	MaxCostUSD      *float64
@@ -66,6 +68,11 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	if err != nil {
 		return nil, err
 	}
+	modelProfile, err := resolveLocalModelProfile(cfg, sessionsRoot)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ModelProfile = modelProfile
 
 	sessionDir, err := newSessionDir(sessionsRoot)
 	if err != nil {
@@ -135,6 +142,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	cfg := manifestToConfig(manifest)
+	cfg.SessionDir = sessionDir
 	if len(manifest.Specs) == 0 {
 		return nil, fmt.Errorf("no specs in manifest")
 	}
@@ -226,13 +234,21 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 		return nil, fmt.Errorf("pi executable not found on PATH. Install pi (https://github.com/mariozechner/pi-coding-agent) to run local sessions")
 	}
 	p := platform.NewLocalPlatform(workspace)
+	profile, err := sessionapi.NormalizeModelProfile(string(cfg.ModelProfile))
+	if err != nil {
+		return nil, err
+	}
+	cfg.ModelProfile = profile
 	model := cfg.Model
 	if model == "" {
-		model = DefaultLocalModel
+		model = defaultModelForRun(cfg.ModelProfile)
 	}
 	piExec := executor.NewPiExecutor(p, model, cfg.Thinking, cfg.AgentTimeoutSec)
+	piExec.SessionID = cfg.SessionID
+	piExec.SessionDir = cfg.SessionDir
+	piExec.ModelProfile = cfg.ModelProfile
 	if gateway.Enabled() {
-		cred, err := gateway.Resolve(cfg.SessionID)
+		cred, err := gateway.Resolve(cfg.SessionID, cfg.ModelProfile)
 		if err != nil {
 			return nil, err
 		}
@@ -241,6 +257,29 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 		}
 	}
 	return piExec, nil
+}
+
+func resolveLocalModelProfile(cfg LocalRunConfig, sessionsRoot string) (sessionapi.ModelProfile, error) {
+	if cfg.ModelProfile != "" {
+		return sessionapi.NormalizeModelProfile(string(cfg.ModelProfile))
+	}
+	if cfg.ParentSessionID != nil && *cfg.ParentSessionID != "" {
+		manifest, err := sessionapi.ReadManifest(filepath.Join(sessionsRoot, *cfg.ParentSessionID, "session.json"))
+		if err == nil {
+			return sessionapi.NormalizeModelProfile(string(manifest.Config.ModelProfile))
+		}
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("read parent session manifest: %w", err)
+		}
+	}
+	return sessionapi.ModelProfileStandard, nil
+}
+
+func defaultModelForRun(profile sessionapi.ModelProfile) string {
+	if gateway.ManagedEnabled() {
+		return sessionapi.BifrostAgentModel(profile)
+	}
+	return DefaultLocalModel
 }
 
 func primarySpecPath(manifest *sessionapi.Manifest, fallback *string) string {
@@ -272,7 +311,7 @@ func newSessionDir(root string) (string, error) {
 func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, specPath string, state *game.PVGState, cfg LocalRunConfig, workspace *sessionapi.Workspace) error {
 	model := cfg.Model
 	if model == "" {
-		model = DefaultLocalModel
+		model = defaultModelForRun(cfg.ModelProfile)
 	}
 	thinking := cfg.Thinking
 	if thinking == "" {
@@ -296,6 +335,7 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		SpecName:        compiled.Environment.Name,
 		Config: sessionapi.SessionConfig{
 			Model:           model,
+			ModelProfile:    cfg.ModelProfile,
 			Until:           cfg.Until,
 			MaxCostUSD:      cfg.MaxCostUSD,
 			MaxRounds:       cfg.MaxRounds,
@@ -331,6 +371,7 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	lrc := LocalRunConfig{
 		SessionID:       manifest.SessionID,
 		Model:           cfg.Model,
+		ModelProfile:    cfg.ModelProfile,
 		Thinking:        cfg.Thinking,
 		Until:           cfg.Until,
 		MaxCostUSD:      cfg.MaxCostUSD,

@@ -14,6 +14,7 @@ import (
 
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 const (
@@ -34,6 +35,7 @@ type Credential struct {
 	Transport     string
 	Kind          string
 	Headers       map[string]string
+	ModelProfile  sessionapi.ModelProfile
 	CostHardLimit bool
 	Cleanup       func() error
 }
@@ -67,8 +69,20 @@ func Enabled() bool {
 		len(cfg.Gateway.Headers) > 0
 }
 
+func ManagedEnabled() bool {
+	cfg := config.LoadConfig()
+	if mode := strings.ToLower(strings.TrimSpace(os.Getenv(config.GatewayModeEnv))); mode != "" {
+		return mode == ModeManaged
+	}
+	return strings.ToLower(strings.TrimSpace(cfg.Gateway.Mode)) == ModeManaged
+}
+
 // Resolve chooses the local gateway credential for a session.
-func Resolve(sessionID string) (Credential, error) {
+func Resolve(sessionID string, modelProfile sessionapi.ModelProfile) (Credential, error) {
+	modelProfile, err := sessionapi.NormalizeModelProfile(string(modelProfile))
+	if err != nil {
+		return Credential{}, err
+	}
 	cfg := config.LoadConfig()
 	if base, key, transport, kind, headers, err := envGateway(); err != nil {
 		return Credential{}, err
@@ -76,11 +90,11 @@ func Resolve(sessionID string) (Credential, error) {
 		if base == "" {
 			return Credential{}, fmt.Errorf("both TELOS_GATEWAY_BASE_URL and TELOS_GATEWAY_API_KEY are required")
 		}
-		transport, kind, err := resolveTransportAndKind(transport, kind)
+		transport, kind, err = resolveTransportAndKind(transport, kind)
 		if err != nil {
 			return Credential{}, err
 		}
-		return Credential{BaseURL: base, APIKey: key, Transport: transport, Kind: kind, Headers: headers, CostHardLimit: costHardLimitFromEnv()}, nil
+		return Credential{BaseURL: base, APIKey: key, Transport: transport, Kind: kind, Headers: headers, ModelProfile: modelProfile, CostHardLimit: costHardLimitFromEnv()}, nil
 	} else if base != "" {
 		cfg = config.LoadConfigFile()
 	}
@@ -102,13 +116,13 @@ func Resolve(sessionID string) (Credential, error) {
 		if err != nil {
 			return Credential{}, err
 		}
-		return Credential{BaseURL: base, APIKey: key, Transport: transport, Kind: kind, Headers: cloneHeaders(cfg.Gateway.Headers)}, nil
+		return Credential{BaseURL: base, APIKey: key, Transport: transport, Kind: kind, Headers: cloneHeaders(cfg.Gateway.Headers), ModelProfile: modelProfile}, nil
 	case ModeManaged:
 		client, err := cloud.BillingClient()
 		if err != nil {
 			return Credential{}, err
 		}
-		key, err := client.MintSessionKey(sessionID)
+		key, err := client.MintSessionKey(sessionID, modelProfile)
 		if err != nil {
 			return Credential{}, err
 		}
@@ -122,6 +136,7 @@ func Resolve(sessionID string) (Credential, error) {
 			Transport:     transport,
 			Kind:          kind,
 			Headers:       cloneHeaders(key.Headers),
+			ModelProfile:  key.ModelProfile,
 			CostHardLimit: true,
 			Cleanup: func() error {
 				return client.ReconcileSession(key.SessionID, true)

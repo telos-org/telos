@@ -101,10 +101,15 @@ func resolveLocalRunConfigFromFlags(
 	fs *flag.FlagSet,
 	workspace string,
 	model string,
+	profile string,
 	thinking string,
 	maxCostUSD float64,
 	budget budgetFlags,
 ) (cli.LocalRunConfig, error) {
+	modelProfile, err := modelProfileOption(fs, profile)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
 	cost, err := positiveFloatOption(fs, "max-cost-usd", maxCostUSD, "TELOS_MAX_COST_USD", 20.0)
 	if err != nil {
 		return cli.LocalRunConfig{}, err
@@ -136,6 +141,7 @@ func resolveLocalRunConfigFromFlags(
 	return cli.LocalRunConfig{
 		Workspace:       stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
 		Model:           modelOption(fs, model),
+		ModelProfile:    modelProfile,
 		Thinking:        stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", "medium"),
 		MaxCostUSD:      &cost,
 		MaxRounds:       rounds,
@@ -149,6 +155,7 @@ func resolveLocalRunConfigFromFlags(
 
 type sessionRuntimeConfig struct {
 	Model           string
+	ModelProfile    sessionapi.ModelProfile
 	Thinking        string
 	MaxCostUSD      *float64
 	MaxRounds       *int
@@ -162,13 +169,19 @@ type sessionRuntimeConfig struct {
 func resolveSessionRuntimeConfigFromFlags(
 	fs *flag.FlagSet,
 	model string,
+	profile string,
 	thinking string,
 	maxCostUSD float64,
 	budget budgetFlags,
 ) (sessionRuntimeConfig, error) {
+	modelProfile, err := modelProfileOption(fs, profile)
+	if err != nil {
+		return sessionRuntimeConfig{}, err
+	}
 	cfg := sessionRuntimeConfig{
-		Model:    modelOption(fs, model),
-		Thinking: stringOption(fs, "thinking", thinking, "TELOS_THINKING"),
+		Model:        modelOption(fs, model),
+		ModelProfile: modelProfile,
+		Thinking:     stringOption(fs, "thinking", thinking, "TELOS_THINKING"),
 	}
 	if flagNameSet(fs, "max-cost-usd") || strings.TrimSpace(os.Getenv("TELOS_MAX_COST_USD")) != "" {
 		cost, err := positiveFloatOption(fs, "max-cost-usd", maxCostUSD, "TELOS_MAX_COST_USD", 20.0)
@@ -225,6 +238,9 @@ func resolveSessionRuntimeConfigFromFlags(
 func applySessionRuntimeConfig(req *sessionapi.SessionCreateRequest, cfg sessionRuntimeConfig) {
 	if cfg.Model != "" {
 		req.Model = cfg.Model
+	}
+	if cfg.ModelProfile != "" {
+		req.ModelProfile = cfg.ModelProfile
 	}
 	if cfg.Thinking != "" {
 		req.Thinking = cfg.Thinking
@@ -319,6 +335,23 @@ func modelOption(fs *flag.FlagSet, value string) string {
 		return model
 	}
 	return ""
+}
+
+func modelProfileOption(fs *flag.FlagSet, value string) (sessionapi.ModelProfile, error) {
+	raw := ""
+	if flagNameSet(fs, "profile") {
+		raw = value
+	} else {
+		raw = os.Getenv("TELOS_MODEL_PROFILE")
+	}
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	profile, err := sessionapi.NormalizeModelProfile(raw)
+	if err != nil {
+		return "", fmt.Errorf("--profile / TELOS_MODEL_PROFILE must be standard or premium")
+	}
+	return profile, nil
 }
 
 func nonNegativeIntOption(fs *flag.FlagSet, name string, value int, envName string, defaultValue int) (int, error) {

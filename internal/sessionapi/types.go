@@ -7,6 +7,7 @@ package sessionapi
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // --------- Enums ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -55,6 +56,53 @@ func (r *SessionRuntime) UnmarshalJSON(data []byte) error {
 	}
 }
 
+type ModelProfile string
+
+const (
+	ModelProfileStandard ModelProfile = "standard"
+	ModelProfilePremium  ModelProfile = "premium"
+)
+
+func NormalizeModelProfile(value string) (ModelProfile, error) {
+	profile := ModelProfile(strings.ToLower(strings.TrimSpace(value)))
+	if profile == "" {
+		return ModelProfileStandard, nil
+	}
+	switch profile {
+	case ModelProfileStandard, ModelProfilePremium:
+		return profile, nil
+	default:
+		return "", fmt.Errorf("invalid model_profile %q", value)
+	}
+}
+
+func (p *ModelProfile) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	profile, err := NormalizeModelProfile(value)
+	if err != nil {
+		return err
+	}
+	*p = profile
+	return nil
+}
+
+func BifrostAgentModel(profile ModelProfile) string {
+	if profile == ModelProfilePremium {
+		return "telos-bifrost/premium-agent"
+	}
+	return "telos-bifrost/standard-agent"
+}
+
+func BifrostCompactionModel(profile ModelProfile) string {
+	if profile == ModelProfilePremium {
+		return "telos-bifrost/premium-compaction"
+	}
+	return "telos-bifrost/standard-compaction"
+}
+
 // SessionKind is the persisted worker kind backing root and child sessions.
 type SessionKind string
 
@@ -91,6 +139,7 @@ type SessionCreateRequest struct {
 	UserOrgID          string       `json:"-"`
 	Until              *int         `json:"until,omitempty"`
 	Model              string       `json:"model,omitempty"`
+	ModelProfile       ModelProfile `json:"model_profile,omitempty"`
 	Thinking           string       `json:"thinking,omitempty"`
 	MaxCostUSD         *float64     `json:"max_cost_usd,omitempty"`
 	MaxRounds          *int         `json:"max_rounds,omitempty"`
@@ -103,19 +152,20 @@ type SessionCreateRequest struct {
 
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{name}/spec.
 type SessionSpecUpdateRequest struct {
-	SpecMarkdown      string   `json:"spec_markdown"`
-	PackageDigest     string   `json:"package_digest,omitempty"`
-	UserAuthorization string   `json:"-"`
-	UserOrgID         string   `json:"-"`
-	Model             string   `json:"model,omitempty"`
-	Thinking          string   `json:"thinking,omitempty"`
-	MaxCostUSD        *float64 `json:"max_cost_usd,omitempty"`
-	MaxRounds         *int     `json:"max_rounds,omitempty"`
-	MaxDurationSec    *int     `json:"max_duration_sec,omitempty"`
-	MaxInputTokens    *int     `json:"max_input_tokens,omitempty"`
-	MaxOutputTokens   *int     `json:"max_output_tokens,omitempty"`
-	MaxToolLoops      *int     `json:"max_tool_loops,omitempty"`
-	AgentTimeoutSec   *int     `json:"agent_timeout_sec,omitempty"`
+	SpecMarkdown      string       `json:"spec_markdown"`
+	PackageDigest     string       `json:"package_digest,omitempty"`
+	UserAuthorization string       `json:"-"`
+	UserOrgID         string       `json:"-"`
+	Model             string       `json:"model,omitempty"`
+	ModelProfile      ModelProfile `json:"model_profile,omitempty"`
+	Thinking          string       `json:"thinking,omitempty"`
+	MaxCostUSD        *float64     `json:"max_cost_usd,omitempty"`
+	MaxRounds         *int         `json:"max_rounds,omitempty"`
+	MaxDurationSec    *int         `json:"max_duration_sec,omitempty"`
+	MaxInputTokens    *int         `json:"max_input_tokens,omitempty"`
+	MaxOutputTokens   *int         `json:"max_output_tokens,omitempty"`
+	MaxToolLoops      *int         `json:"max_tool_loops,omitempty"`
+	AgentTimeoutSec   *int         `json:"agent_timeout_sec,omitempty"`
 }
 
 // SessionSpecUpdateResponse is returned by PUT /api/sessions/{name}/spec.
@@ -191,39 +241,40 @@ type Session struct {
 	Status          SessionStatus `json:"status"`
 	CreatedAt       *string       `json:"created_at,omitempty"`
 
-	Runtime                 SessionRuntime   `json:"runtime"`
-	Launcher                *string          `json:"launcher,omitempty"`
-	SessionSpecPath         *string          `json:"session_spec_path,omitempty"`
-	SessionDir              *string          `json:"session_dir,omitempty"`
-	ActiveWorkspacePath     *string          `json:"active_workspace_path,omitempty"`
-	ActiveWorkspaceExists   *bool            `json:"active_workspace_exists,omitempty"`
-	Config                  map[string]any   `json:"config"`
-	Workspace               *Workspace       `json:"workspace,omitempty"`
-	Provenance              map[string]any   `json:"provenance"`
-	Specs                   []SessionSpec    `json:"specs"`
-	Epochs                  []map[string]any `json:"epochs"`
-	CurrentEpoch            *int             `json:"current_epoch,omitempty"`
-	CurrentSpec             *CurrentSpec     `json:"current_spec,omitempty"`
-	CurrentRound            *int             `json:"current_round,omitempty"`
-	CurrentRole             *string          `json:"current_role,omitempty"`
-	FinishedAt              *string          `json:"finished_at,omitempty"`
-	Result                  *string          `json:"result,omitempty"`
-	Error                   *string          `json:"error,omitempty"`
-	ErrorCode               *string          `json:"error_code,omitempty"`
-	TotalCostUSD            *float64         `json:"total_cost_usd,omitempty"`
-	CostUnavailable         *bool            `json:"cost_unavailable,omitempty"`
-	TotalInputTokens        *int             `json:"total_input_tokens,omitempty"`
-	TotalOutputTokens       *int             `json:"total_output_tokens,omitempty"`
-	TotalCacheReadTokens    *int             `json:"total_cache_read_tokens,omitempty"`
-	TotalCacheCreateTokens  *int             `json:"total_cache_creation_tokens,omitempty"`
-	RoundCount              *int             `json:"round_count,omitempty"`
-	CompletionReason        *string          `json:"completion_reason,omitempty"`
-	VerifierConceded        *bool            `json:"verifier_conceded,omitempty"`
-	ServiceURL              *string          `json:"service_url,omitempty"`
-	DashboardURL            *string          `json:"dashboard_url,omitempty"`
-	CurrentSpecVersion      *int             `json:"current_spec_version,omitempty"`
-	SpecVersions            []map[string]any `json:"spec_versions"`
-	LatestDescendantSession *SessionSummary  `json:"latest_descendant_session,omitempty"`
+	Runtime                 SessionRuntime       `json:"runtime"`
+	Launcher                *string              `json:"launcher,omitempty"`
+	SessionSpecPath         *string              `json:"session_spec_path,omitempty"`
+	SessionDir              *string              `json:"session_dir,omitempty"`
+	ActiveWorkspacePath     *string              `json:"active_workspace_path,omitempty"`
+	ActiveWorkspaceExists   *bool                `json:"active_workspace_exists,omitempty"`
+	Config                  map[string]any       `json:"config"`
+	Workspace               *Workspace           `json:"workspace,omitempty"`
+	Provenance              map[string]any       `json:"provenance"`
+	GatewayRouting          *GatewayRoutingState `json:"gateway_routing,omitempty"`
+	Specs                   []SessionSpec        `json:"specs"`
+	Epochs                  []map[string]any     `json:"epochs"`
+	CurrentEpoch            *int                 `json:"current_epoch,omitempty"`
+	CurrentSpec             *CurrentSpec         `json:"current_spec,omitempty"`
+	CurrentRound            *int                 `json:"current_round,omitempty"`
+	CurrentRole             *string              `json:"current_role,omitempty"`
+	FinishedAt              *string              `json:"finished_at,omitempty"`
+	Result                  *string              `json:"result,omitempty"`
+	Error                   *string              `json:"error,omitempty"`
+	ErrorCode               *string              `json:"error_code,omitempty"`
+	TotalCostUSD            *float64             `json:"total_cost_usd,omitempty"`
+	CostUnavailable         *bool                `json:"cost_unavailable,omitempty"`
+	TotalInputTokens        *int                 `json:"total_input_tokens,omitempty"`
+	TotalOutputTokens       *int                 `json:"total_output_tokens,omitempty"`
+	TotalCacheReadTokens    *int                 `json:"total_cache_read_tokens,omitempty"`
+	TotalCacheCreateTokens  *int                 `json:"total_cache_creation_tokens,omitempty"`
+	RoundCount              *int                 `json:"round_count,omitempty"`
+	CompletionReason        *string              `json:"completion_reason,omitempty"`
+	VerifierConceded        *bool                `json:"verifier_conceded,omitempty"`
+	ServiceURL              *string              `json:"service_url,omitempty"`
+	DashboardURL            *string              `json:"dashboard_url,omitempty"`
+	CurrentSpecVersion      *int                 `json:"current_spec_version,omitempty"`
+	SpecVersions            []map[string]any     `json:"spec_versions"`
+	LatestDescendantSession *SessionSummary      `json:"latest_descendant_session,omitempty"`
 }
 
 // --------- Response types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

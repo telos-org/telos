@@ -35,9 +35,29 @@ func TestSessionDefaultsMatchPVGRuntimeDefaults(t *testing.T) {
 	}
 }
 
+func TestNormalizeModelProfile(t *testing.T) {
+	profile, err := sessionapi.NormalizeModelProfile(" Premium ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile != sessionapi.ModelProfilePremium {
+		t.Fatalf("profile: got %q", profile)
+	}
+	profile, err = sessionapi.NormalizeModelProfile("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if profile != sessionapi.ModelProfileStandard {
+		t.Fatalf("empty profile should default standard, got %q", profile)
+	}
+	if _, err := sessionapi.NormalizeModelProfile("ultra"); err == nil {
+		t.Fatal("expected unknown profile to fail")
+	}
+}
+
 func TestSessionConfigPreservesUnknownFields(t *testing.T) {
 	var cfg sessionapi.SessionConfig
-	if err := json.Unmarshal([]byte(`{"model":"opus","max_rounds":8,"max_input_tokens":1000,"max_output_tokens":500,"max_tool_loops":42,"safe_write_prefixes":["/tmp/telos-scratch","/workspace/outside"],"future_knob":{"x":1}}`), &cfg); err != nil {
+	if err := json.Unmarshal([]byte(`{"model":"opus","model_profile":"premium","max_rounds":8,"max_input_tokens":1000,"max_output_tokens":500,"max_tool_loops":42,"safe_write_prefixes":["/tmp/telos-scratch","/workspace/outside"],"future_knob":{"x":1}}`), &cfg); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
 	if cfg.Model != "opus" {
@@ -45,6 +65,9 @@ func TestSessionConfigPreservesUnknownFields(t *testing.T) {
 	}
 	if cfg.MaxRounds != 8 {
 		t.Fatalf("max_rounds typed field: got %#v", cfg.MaxRounds)
+	}
+	if cfg.ModelProfile != sessionapi.ModelProfilePremium {
+		t.Fatalf("model_profile typed field: got %#v", cfg.ModelProfile)
 	}
 	if cfg.MaxInputTokens != 1000 {
 		t.Fatalf("max_input_tokens typed field: got %#v", cfg.MaxInputTokens)
@@ -59,6 +82,9 @@ func TestSessionConfigPreservesUnknownFields(t *testing.T) {
 	m := cfg.AsMap()
 	if got, ok := m["max_rounds"].(float64); !ok || got != 8 {
 		t.Fatalf("max_rounds should be emitted from typed field: %#v", m["max_rounds"])
+	}
+	if got, ok := m["model_profile"].(string); !ok || got != "premium" {
+		t.Fatalf("model_profile should be emitted from typed field: %#v", m["model_profile"])
 	}
 	if got, ok := m["max_input_tokens"].(float64); !ok || got != 1000 {
 		t.Fatalf("max_input_tokens should be emitted from typed field: %#v", m["max_input_tokens"])

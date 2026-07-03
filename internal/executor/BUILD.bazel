@@ -3,12 +3,14 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "executor",
     srcs = ["pi.go"],
+    embedsrcs = ["pi_extensions/telos_bifrost.ts"],
     importpath = "github.com/telos-org/telos/internal/executor",
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/game",
         "//internal/gateway",
         "//internal/platform",
+        "//internal/sessionapi",
     ],
 )
 

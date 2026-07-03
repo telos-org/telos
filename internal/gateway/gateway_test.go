@@ -13,7 +13,7 @@ func TestResolveUsesEnvGatewayFirst(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://env.example.com/v1")
 	t.Setenv("TELOS_GATEWAY_API_KEY", "env-key")
 
-	cred, err := Resolve("sess-1")
+	cred, err := Resolve("sess-1", "standard")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -34,7 +34,7 @@ func TestResolveEnvGatewayUsesBifrostDefaults(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_KIND", KindBifrost)
 	t.Setenv("TELOS_GATEWAY_HEADERS", `{"x-bf-vk":"sk-bf"}`)
 
-	cred, err := Resolve("sess-1")
+	cred, err := Resolve("sess-1", "standard")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -58,7 +58,7 @@ func TestResolveEnvGatewayCanBeBillingBacked(t *testing.T) {
 	t.Setenv("TELOS_ENV_ID", "env_test")
 	t.Setenv("TELOS_BILLING_ENV_TOKEN", "billing-token")
 
-	cred, err := Resolve("sess-1")
+	cred, err := Resolve("sess-1", "standard")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -82,7 +82,7 @@ gateway:
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
 	t.Setenv("TELOS_GATEWAY_API_KEY", "")
 
-	cred, err := Resolve("sess-1")
+	cred, err := Resolve("sess-1", "standard")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -96,17 +96,22 @@ gateway:
 
 func TestResolveManagedMintsSessionKey(t *testing.T) {
 	var gotPath string
+	var gotBody map[string]any
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotPath = r.URL.Path
 		if r.Header.Get("Authorization") != "Bearer login-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode body: %v", err)
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"session_id": "sess-managed",
-			"base_url":   "https://managed.example.com/v1",
-			"api_key":    "sk-managed",
-			"budget_usd": 5.0,
+			"session_id":    "sess-managed",
+			"base_url":      "https://managed.example.com/v1",
+			"api_key":       "sk-managed",
+			"budget_usd":    5.0,
+			"model_profile": "standard",
 		})
 	}))
 	defer server.Close()
@@ -120,12 +125,15 @@ func TestResolveManagedMintsSessionKey(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
 	t.Setenv("TELOS_GATEWAY_API_KEY", "")
 
-	cred, err := Resolve("sess-managed")
+	cred, err := Resolve("sess-managed", "standard")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
 	if gotPath != "/api/billing/session-key" {
 		t.Fatalf("path: got %q", gotPath)
+	}
+	if gotBody["model_profile"] != "standard" {
+		t.Fatalf("model_profile body: %+v", gotBody)
 	}
 	if cred.BaseURL != "https://managed.example.com/v1" || cred.APIKey != "sk-managed" {
 		t.Fatalf("credential: %+v", cred)
@@ -148,7 +156,7 @@ func TestResolveDoesNotTreatLoginAsManagedOptIn(t *testing.T) {
 	if Enabled() {
 		t.Fatal("login alone should not enable gateway routing")
 	}
-	if _, err := Resolve("sess-1"); err == nil {
+	if _, err := Resolve("sess-1", "standard"); err == nil {
 		t.Fatal("expected explicit gateway mode error")
 	}
 }
@@ -166,7 +174,7 @@ func TestStaleEnvGatewayBaseURLDoesNotEnableGateway(t *testing.T) {
 	if Enabled() {
 		t.Fatal("gateway base URL without key should not enable gateway routing")
 	}
-	if _, err := Resolve("sess-1"); err == nil || err.Error() == "both TELOS_GATEWAY_BASE_URL and TELOS_GATEWAY_API_KEY are required" {
+	if _, err := Resolve("sess-1", "standard"); err == nil || err.Error() == "both TELOS_GATEWAY_BASE_URL and TELOS_GATEWAY_API_KEY are required" {
 		t.Fatalf("expected non-env gateway error, got %v", err)
 	}
 }
@@ -184,7 +192,7 @@ func TestStaleEnvGatewayBaseURLDoesNotOverrideSavedGateway(t *testing.T) {
 	if !Enabled() {
 		t.Fatal("saved gateway config should still enable gateway routing")
 	}
-	cred, err := Resolve("sess-1")
+	cred, err := Resolve("sess-1", "standard")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -206,7 +214,7 @@ func TestEnvGatewayAPIKeyWithoutBaseURLRequiresBaseURL(t *testing.T) {
 	if !Enabled() {
 		t.Fatal("gateway key should enable gateway routing")
 	}
-	if _, err := Resolve("sess-1"); err == nil || err.Error() != "both TELOS_GATEWAY_BASE_URL and TELOS_GATEWAY_API_KEY are required" {
+	if _, err := Resolve("sess-1", "standard"); err == nil || err.Error() != "both TELOS_GATEWAY_BASE_URL and TELOS_GATEWAY_API_KEY are required" {
 		t.Fatalf("expected incomplete env gateway error, got %v", err)
 	}
 }
@@ -224,7 +232,7 @@ func TestGatewayTransportOnlyCountsAsIntent(t *testing.T) {
 	if !Enabled() {
 		t.Fatal("gateway transport should enable gateway routing")
 	}
-	if _, err := Resolve("sess-1"); err == nil {
+	if _, err := Resolve("sess-1", "standard"); err == nil {
 		t.Fatal("expected incomplete gateway config error")
 	}
 }

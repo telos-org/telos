@@ -36,6 +36,7 @@ func cmdLaunch(command, action string, args []string) {
 	orgID := fs.String("org", "", "Organization ID")
 	runtimeVersion := fs.String("runtime-version", "", "Runtime version")
 	model := fs.String("model", "", "Model name")
+	profile := fs.String("profile", "", "Model profile: standard or premium")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
 	until := fs.Int("until", 0, "Run exactly N evaluator review cycles")
 	maxCostUSD := fs.Float64("max-cost-usd", 20.0, "Maximum cost in USD")
@@ -87,7 +88,7 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a root session")
 			os.Exit(1)
 		}
-		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, budgetFlags{
+		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *profile, *thinking, *maxCostUSD, budgetFlags{
 			MaxRounds:       *maxRounds,
 			MaxDurationSec:  *maxDurationSec,
 			MaxInputTokens:  *maxInputTokens,
@@ -144,7 +145,7 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudExisting:
-		runCloud(command, specArg, *env, untilValue, fs, *model, *thinking, *maxCostUSD, *maxRounds, *maxDurationSec, *maxInputTokens, *maxOutputTokens, *maxToolLoops, *agentTimeout, *jsonOut, false, 0, cloudApplyOptions{
+		runCloud(command, specArg, *env, untilValue, fs, *model, *profile, *thinking, *maxCostUSD, *maxRounds, *maxDurationSec, *maxInputTokens, *maxOutputTokens, *maxToolLoops, *agentTimeout, *jsonOut, false, 0, cloudApplyOptions{
 			DeploymentID:   *deployment,
 			Name:           *deploymentName,
 			Scope:          *scope,
@@ -161,6 +162,7 @@ func cmdLaunch(command, action string, args []string) {
 			untilValue,
 			fs,
 			*model,
+			*profile,
 			*thinking,
 			*maxCostUSD,
 			*maxRounds,
@@ -193,6 +195,7 @@ func cmdLaunch(command, action string, args []string) {
 		fs,
 		*workspace,
 		*model,
+		*profile,
 		*thinking,
 		*maxCostUSD,
 		budgetFlags{
@@ -392,6 +395,7 @@ func runCloud(
 	until int,
 	fs *flag.FlagSet,
 	model string,
+	profile string,
 	thinking string,
 	maxCostUSD float64,
 	maxRounds int,
@@ -422,7 +426,7 @@ func runCloud(
 	if until > 0 {
 		req.Until = &until
 	}
-	runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, model, thinking, maxCostUSD, budgetFlags{
+	runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, model, profile, thinking, maxCostUSD, budgetFlags{
 		MaxRounds:       maxRounds,
 		MaxDurationSec:  maxDurationSec,
 		MaxInputTokens:  maxInputTokens,
@@ -468,6 +472,7 @@ func rejectCloudApplyRuntimeFlags(fs *flag.FlagSet) error {
 	var set []string
 	for _, name := range []string{
 		"model",
+		"profile",
 		"thinking",
 		"max-cost-usd",
 		"max-rounds",

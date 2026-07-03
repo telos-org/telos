@@ -38,14 +38,15 @@ type Environment struct {
 
 // SessionKey is a budget-capped model gateway key minted by billing.
 type SessionKey struct {
-	SessionID string
-	BaseURL   string
-	APIKey    string
-	Transport string
-	Kind      string
-	Headers   map[string]string
-	BudgetUSD float64
-	KeyAlias  string
+	SessionID    string
+	BaseURL      string
+	APIKey       string
+	Transport    string
+	Kind         string
+	Headers      map[string]string
+	BudgetUSD    float64
+	KeyAlias     string
+	ModelProfile sessionapi.ModelProfile
 }
 
 // Balance is the caller's current managed compute-unit balance.
@@ -295,10 +296,15 @@ func (c *Client) Me() (*MeResponse, error) {
 }
 
 // MintSessionKey asks billing to mint a managed per-session gateway key.
-func (c *Client) MintSessionKey(sessionID string) (*SessionKey, error) {
+func (c *Client) MintSessionKey(sessionID string, modelProfile sessionapi.ModelProfile) (*SessionKey, error) {
+	modelProfile, err := sessionapi.NormalizeModelProfile(string(modelProfile))
+	if err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(map[string]any{
 		"session_id":           sessionID,
 		"supported_transports": supportedGatewayTransports,
+		"model_profile":        string(modelProfile),
 	})
 	if err != nil {
 		return nil, err
@@ -312,14 +318,15 @@ func (c *Client) MintSessionKey(sessionID string) (*SessionKey, error) {
 		return nil, readError(resp)
 	}
 	var raw struct {
-		SessionID string            `json:"session_id"`
-		BaseURL   string            `json:"base_url"`
-		APIKey    string            `json:"api_key"`
-		Transport string            `json:"transport"`
-		Kind      string            `json:"kind"`
-		Headers   map[string]string `json:"headers"`
-		BudgetUSD float64           `json:"budget_usd"`
-		KeyAlias  string            `json:"key_alias"`
+		SessionID    string                  `json:"session_id"`
+		BaseURL      string                  `json:"base_url"`
+		APIKey       string                  `json:"api_key"`
+		Transport    string                  `json:"transport"`
+		Kind         string                  `json:"kind"`
+		Headers      map[string]string       `json:"headers"`
+		BudgetUSD    float64                 `json:"budget_usd"`
+		KeyAlias     string                  `json:"key_alias"`
+		ModelProfile sessionapi.ModelProfile `json:"model_profile"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, err
@@ -334,15 +341,22 @@ func (c *Client) MintSessionKey(sessionID string) (*SessionKey, error) {
 	if raw.SessionID != strings.TrimSpace(sessionID) {
 		return nil, fmt.Errorf("billing returned session key for %q, want %q", raw.SessionID, strings.TrimSpace(sessionID))
 	}
+	if raw.ModelProfile == "" {
+		raw.ModelProfile = sessionapi.ModelProfileStandard
+	}
+	if _, err := sessionapi.NormalizeModelProfile(string(raw.ModelProfile)); err != nil {
+		return nil, fmt.Errorf("billing returned invalid model_profile: %w", err)
+	}
 	return &SessionKey{
-		SessionID: raw.SessionID,
-		BaseURL:   raw.BaseURL,
-		APIKey:    raw.APIKey,
-		Transport: raw.Transport,
-		Kind:      raw.Kind,
-		Headers:   cloneStringMap(raw.Headers),
-		BudgetUSD: raw.BudgetUSD,
-		KeyAlias:  raw.KeyAlias,
+		SessionID:    raw.SessionID,
+		BaseURL:      raw.BaseURL,
+		APIKey:       raw.APIKey,
+		Transport:    raw.Transport,
+		Kind:         raw.Kind,
+		Headers:      cloneStringMap(raw.Headers),
+		BudgetUSD:    raw.BudgetUSD,
+		KeyAlias:     raw.KeyAlias,
+		ModelProfile: raw.ModelProfile,
 	}, nil
 }
 

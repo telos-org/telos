@@ -9,6 +9,7 @@ import (
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/gateway"
 	"github.com/telos-org/telos/internal/platform"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
@@ -23,7 +24,7 @@ func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 }
 
 func TestBuildPiArgvUsesTextModeWithoutSessionByDefault(t *testing.T) {
-	argv := BuildPiArgv("claude-test", "high", "", "")
+	argv := BuildPiArgv("claude-test", "high", "", "", "")
 	if len(argv) != 6 {
 		t.Fatalf("expected 6 args, got %d", len(argv))
 	}
@@ -51,7 +52,7 @@ func TestBuildPiArgvUsesTextModeWithoutSessionByDefault(t *testing.T) {
 }
 
 func TestBuildPiArgvUsesTaskFileAndSessionFile(t *testing.T) {
-	argv := BuildPiArgv("claude-test", "high", "/tmp/task.md", "/tmp/pi-session.jsonl")
+	argv := BuildPiArgv("claude-test", "high", "/tmp/task.md", "/tmp/pi-session.jsonl", "")
 	if len(argv) != 8 {
 		t.Fatalf("expected 8 args, got %d", len(argv))
 	}
@@ -70,7 +71,7 @@ func TestBuildPiArgvUsesTaskFileAndSessionFile(t *testing.T) {
 }
 
 func TestBuildPiArgvUsesSessionFileWithoutTaskFile(t *testing.T) {
-	argv := BuildPiArgv("claude-test", "high", "", "/tmp/pi-session.jsonl")
+	argv := BuildPiArgv("claude-test", "high", "", "/tmp/pi-session.jsonl", "")
 	if len(argv) != 8 {
 		t.Fatalf("expected 8 args with empty task placeholder, got %d", len(argv))
 	}
@@ -82,6 +83,19 @@ func TestBuildPiArgvUsesSessionFileWithoutTaskFile(t *testing.T) {
 	}
 }
 
+func TestBuildPiArgvLoadsExplicitExtension(t *testing.T) {
+	argv := BuildPiArgv("telos-bifrost/standard-agent", "high", "/tmp/task.md", "/tmp/pi-session.jsonl", "/tmp/telos_bifrost.ts")
+	if len(argv) != 9 {
+		t.Fatalf("expected 9 args, got %d: %#v", len(argv), argv)
+	}
+	if argv[8] != "/tmp/telos_bifrost.ts" {
+		t.Fatalf("extension arg: got %q", argv[8])
+	}
+	if !strings.Contains(argv[2], `--no-extensions --extension "$5"`) {
+		t.Fatalf("pi should load explicit extension while discovery is disabled: %s", argv[2])
+	}
+}
+
 func TestConfigureGatewayInjectsOpenAIEnvAndCleanup(t *testing.T) {
 	exec := NewPiExecutor(nil, "test-model", "", 0)
 	cleaned := false
@@ -90,6 +104,9 @@ func TestConfigureGatewayInjectsOpenAIEnvAndCleanup(t *testing.T) {
 		BaseURL:       "https://proxy.example.com/v1/",
 		APIKey:        "sk-session",
 		Transport:     gateway.TransportOpenAISync,
+		Kind:          gateway.KindBifrost,
+		Headers:       map[string]string{"x-bf-vk": "sk-bf"},
+		ModelProfile:  "premium",
 		CostHardLimit: true,
 		Cleanup: func() error {
 			cleaned = true
@@ -104,6 +121,15 @@ func TestConfigureGatewayInjectsOpenAIEnvAndCleanup(t *testing.T) {
 	}
 	if exec.GatewayEnv["OPENAI_BASE_URL"] != "https://proxy.example.com/v1" {
 		t.Fatalf("OPENAI_BASE_URL: got %q", exec.GatewayEnv["OPENAI_BASE_URL"])
+	}
+	if exec.GatewayEnv["TELOS_GATEWAY_API_KEY"] != "sk-session" || exec.GatewayEnv["TELOS_GATEWAY_BASE_URL"] != "https://proxy.example.com/v1" {
+		t.Fatalf("Telos gateway env: %+v", exec.GatewayEnv)
+	}
+	if exec.GatewayEnv["TELOS_GATEWAY_KIND"] != gateway.KindBifrost || exec.GatewayEnv["TELOS_MODEL_PROFILE"] != "premium" {
+		t.Fatalf("Telos gateway profile/kind env: %+v", exec.GatewayEnv)
+	}
+	if exec.GatewayEnv["TELOS_GATEWAY_HEADERS"] != `{"x-bf-vk":"sk-bf"}` {
+		t.Fatalf("TELOS_GATEWAY_HEADERS: got %q", exec.GatewayEnv["TELOS_GATEWAY_HEADERS"])
 	}
 	if !exec.CostHardLimit() {
 		t.Fatal("cost hard limit should be true")
@@ -213,6 +239,166 @@ func TestReadPiSessionUsesLastAssistantTextAndAggregatesAssistantUsage(t *testin
 		summary.Stats.CacheReadTokens != 4 || summary.Stats.CacheCreationTokens != 5 ||
 		summary.Stats.CostUSD != 0.7 {
 		t.Fatalf("stats should sum all assistant usage: %+v", summary.Stats)
+	}
+}
+
+func TestReadPiSessionExtractsLatestBifrostRoutingEntry(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
+	appendPiSession(t, path, `{"type":"custom","customType":"telos-bifrost-routing","data":{"provider":"sailresearch","model":"standard-compaction","fallback":false}}`)
+	appendPiSession(t, path, `{"type":"custom","customType":"other","data":{"provider":"ignored"}}`)
+	appendPiSession(t, path, `{"type":"custom","customType":"telos-bifrost-routing","data":{"provider":"silares","model":"standard-agent","fallback":true}}`)
+	appendPiSession(t, path, `{"type":"message","id":"a","parentId":null,"timestamp":"2026-05-21T00:00:03Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"stop","content":[{"type":"text","text":"done"}]}}`)
+
+	summary, err := ReadPiSession(path)
+	if err != nil {
+		t.Fatalf("ReadPiSession: %v", err)
+	}
+	if summary.Routing == nil {
+		t.Fatal("expected routing observation")
+	}
+	if summary.Routing.Provider != "silares" || summary.Routing.Model != "standard-agent" || !summary.Routing.Fallback || !summary.Routing.OK {
+		t.Fatalf("routing: %+v", summary.Routing)
+	}
+}
+
+func TestReadPiSessionFromOffsetIgnoresStaleRoutingEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
+	appendPiSession(t, path, `{"type":"custom","customType":"telos-bifrost-routing","data":{"provider":"silares","model":"standard-agent","fallback":false}}`)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	appendPiSession(t, path, `{"type":"message","id":"a","parentId":null,"timestamp":"2026-05-21T00:00:03Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"stop","content":[{"type":"text","text":"done"}]}}`)
+
+	summary, err := ReadPiSessionFromOffset(path, info.Size())
+	if err != nil {
+		t.Fatalf("ReadPiSessionFromOffset: %v", err)
+	}
+	if summary.Routing != nil {
+		t.Fatalf("stale routing entry should be ignored: %+v", summary.Routing)
+	}
+}
+
+func TestUpdateRoutingStateAssignsOnlyAgentRoutes(t *testing.T) {
+	sessionDir := t.TempDir()
+	manifestPath := filepath.Join(sessionDir, "session.json")
+	if err := sessionapi.WriteInitialManifest(manifestPath, sessionapi.InitialManifest{
+		SessionID:   "sess-routing",
+		SessionKind: sessionapi.KindTask,
+		Runtime:     sessionapi.RuntimeLocal,
+		CreatedAt:   "2026-07-03T00:00:00.000Z",
+		Launcher:    "local",
+		SpecName:    "routing",
+		Config:      sessionapi.SessionConfig{ModelProfile: sessionapi.ModelProfileStandard},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	exec := NewPiExecutor(nil, "telos-bifrost/standard-agent", "high", 0)
+	exec.SessionDir = sessionDir
+
+	if err := exec.updateRoutingState(sessionapi.ModelProfileStandard, PiRoutingObservation{Provider: "silares", Model: "standard-compaction"}); err != nil {
+		t.Fatalf("update compaction route: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.GatewayRouting == nil || manifest.GatewayRouting.AssignedProvider != "" {
+		t.Fatalf("compaction route should not assign provider: %#v", manifest.GatewayRouting)
+	}
+
+	if err := exec.updateRoutingState(sessionapi.ModelProfileStandard, PiRoutingObservation{Provider: "silares", Model: "standard-agent", Fallback: true, OK: true}); err != nil {
+		t.Fatalf("update agent route: %v", err)
+	}
+	manifest, err = sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.GatewayRouting.AssignedProvider != "silares" || manifest.GatewayRouting.LastModel != "standard-agent" || !manifest.GatewayRouting.LastFallback {
+		t.Fatalf("routing state: %#v", manifest.GatewayRouting)
+	}
+}
+
+func TestUpdateRoutingStateDoesNotAssignFailedAgentRoute(t *testing.T) {
+	sessionDir := t.TempDir()
+	manifestPath := filepath.Join(sessionDir, "session.json")
+	if err := sessionapi.WriteInitialManifest(manifestPath, sessionapi.InitialManifest{
+		SessionID:   "sess-routing",
+		SessionKind: sessionapi.KindTask,
+		Runtime:     sessionapi.RuntimeLocal,
+		CreatedAt:   "2026-07-03T00:00:00.000Z",
+		Launcher:    "local",
+		SpecName:    "routing",
+		Config:      sessionapi.SessionConfig{ModelProfile: sessionapi.ModelProfileStandard},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	exec := NewPiExecutor(nil, "telos-bifrost/standard-agent", "high", 0)
+	exec.SessionDir = sessionDir
+
+	if err := exec.updateRoutingState(sessionapi.ModelProfileStandard, PiRoutingObservation{Provider: "silares", Model: "standard-agent", OK: false}); err != nil {
+		t.Fatalf("update failed route: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.GatewayRouting == nil {
+		t.Fatal("expected routing state")
+	}
+	if manifest.GatewayRouting.AssignedProvider != "" {
+		t.Fatalf("failed route should not assign provider: %#v", manifest.GatewayRouting)
+	}
+	if manifest.GatewayRouting.LastModel != "standard-agent" {
+		t.Fatalf("failed route should still update observability: %#v", manifest.GatewayRouting)
+	}
+}
+
+func TestRoutingStateIsScopedToModelProfile(t *testing.T) {
+	sessionDir := t.TempDir()
+	manifestPath := filepath.Join(sessionDir, "session.json")
+	if err := sessionapi.WriteInitialManifest(manifestPath, sessionapi.InitialManifest{
+		SessionID:   "sess-routing",
+		SessionKind: sessionapi.KindTask,
+		Runtime:     sessionapi.RuntimeLocal,
+		CreatedAt:   "2026-07-03T00:00:00.000Z",
+		Launcher:    "local",
+		SpecName:    "routing",
+		Config:      sessionapi.SessionConfig{ModelProfile: sessionapi.ModelProfilePremium},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.GatewayRouting = &sessionapi.GatewayRoutingState{
+		ModelProfile:     sessionapi.ModelProfileStandard,
+		AssignedProvider: "silares",
+		LastModel:        "standard-agent",
+	}
+	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := NewPiExecutor(nil, "telos-bifrost/premium-agent", "high", 0)
+	exec.SessionDir = sessionDir
+	routing := exec.currentRoutingState(sessionapi.ModelProfilePremium)
+	if routing.AssignedProvider != "" || routing.ModelProfile != sessionapi.ModelProfilePremium {
+		t.Fatalf("current routing should ignore standard assignment for premium: %#v", routing)
+	}
+
+	if err := exec.updateRoutingState(sessionapi.ModelProfilePremium, PiRoutingObservation{Provider: "premium-provider", Model: "premium-agent", OK: true}); err != nil {
+		t.Fatalf("update premium route: %v", err)
+	}
+	manifest, err = sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.GatewayRouting.ModelProfile != sessionapi.ModelProfilePremium || manifest.GatewayRouting.AssignedProvider != "premium-provider" {
+		t.Fatalf("premium routing should replace stale standard routing: %#v", manifest.GatewayRouting)
 	}
 }
 

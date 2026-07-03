@@ -90,6 +90,10 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	if err := validateCreateRequest(req); err != nil {
 		return nil, err
 	}
+	modelProfile, err := fs.modelProfileForCreate(req)
+	if err != nil {
+		return nil, err
+	}
 
 	id, dir, err := fs.createSessionDir()
 	if err != nil {
@@ -152,7 +156,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		SourceSpecPath:     prepared.SourceSpecPath,
 		SessionSpecPath:    prepared.SessionSpecPath,
 		SpecName:           specName,
-		Config:             buildConfig(req),
+		Config:             buildConfig(req, modelProfile),
 		Provenance:         map[string]any{"mode": runtimeMode(fs.runtime)},
 		ApplyPackageDigest: prepared.ApplyPackageDigest,
 		ApplyPackageLock:   prepared.ApplyPackageLock,
@@ -214,7 +218,30 @@ func validateCreateRequest(req SessionCreateRequest) error {
 	if req.Until != nil && *req.Until <= 0 {
 		return fmt.Errorf("until must be positive: %w", ErrInvalidSession)
 	}
+	if _, err := NormalizeModelProfile(string(req.ModelProfile)); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidSession, err)
+	}
 	return nil
+}
+
+func (fs *FileStore) modelProfileForCreate(req SessionCreateRequest) (ModelProfile, error) {
+	if strings.TrimSpace(string(req.ModelProfile)) != "" {
+		profile, err := NormalizeModelProfile(string(req.ModelProfile))
+		if err != nil {
+			return "", fmt.Errorf("%w: %v", ErrInvalidSession, err)
+		}
+		return profile, nil
+	}
+	if req.ParentSessionID != nil && strings.TrimSpace(*req.ParentSessionID) != "" {
+		parent, err := ReadManifest(fs.manifestPath(strings.TrimSpace(*req.ParentSessionID)))
+		if err == nil {
+			return NormalizeModelProfile(string(parent.Config.ModelProfile))
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+	}
+	return ModelProfileStandard, nil
 }
 
 func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) (SessionKind, error) {
@@ -365,6 +392,7 @@ func createRequestFromSpecUpdate(req SessionSpecUpdateRequest) (SessionCreateReq
 	}
 	create := SessionCreateRequest{
 		Model:           req.Model,
+		ModelProfile:    req.ModelProfile,
 		Thinking:        req.Thinking,
 		MaxCostUSD:      req.MaxCostUSD,
 		MaxRounds:       req.MaxRounds,
@@ -394,9 +422,11 @@ func validateSpecUpdateRequest(req SessionSpecUpdateRequest) error {
 	switch {
 	case hasMarkdown == hasDigest:
 		return fmt.Errorf("exactly one of spec_markdown or package_digest is required: %w", ErrInvalidSession)
-	default:
-		return nil
 	}
+	if _, err := NormalizeModelProfile(string(req.ModelProfile)); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidSession, err)
+	}
+	return nil
 }
 
 func applyPackagePathForDigest(root string, digest string) (string, error) {
@@ -441,6 +471,19 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 	if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
 		return nil, fmt.Errorf("root session has no mutable spec: %w", ErrInvalidSession)
 	}
+	if strings.TrimSpace(string(req.ModelProfile)) != "" {
+		currentProfile, err := NormalizeModelProfile(string(m.Config.ModelProfile))
+		if err != nil {
+			return nil, err
+		}
+		requestedProfile, err := NormalizeModelProfile(string(req.ModelProfile))
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrInvalidSession, err)
+		}
+		if requestedProfile != currentProfile {
+			return nil, fmt.Errorf("model_profile is immutable for existing sessions: %w", ErrInvalidSession)
+		}
+	}
 
 	createReq, err := createRequestFromSpecUpdate(req)
 	if err != nil {
@@ -484,6 +527,9 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 func updateManifestConfig(cfg *SessionConfig, req SessionSpecUpdateRequest) {
 	if req.Model != "" {
 		cfg.Model = req.Model
+	}
+	if strings.TrimSpace(string(req.ModelProfile)) != "" {
+		cfg.ModelProfile = req.ModelProfile
 	}
 	if req.Thinking != "" {
 		cfg.Thinking = req.Thinking
@@ -778,6 +824,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		Config:                m.Config.AsMap(),
 		Workspace:             m.Workspace,
 		Provenance:            m.Provenance,
+		GatewayRouting:        m.GatewayRouting,
 		Specs:                 specs,
 		Epochs:                epochs,
 		CurrentSpecVersion:    m.CurrentSpecVersion,
@@ -1359,10 +1406,11 @@ func materializedSpecDir(data []byte) string {
 	return name
 }
 
-func buildConfig(req SessionCreateRequest) SessionConfig {
+func buildConfig(req SessionCreateRequest, profile ModelProfile) SessionConfig {
 	cfg := SessionConfig{
-		Model:    req.Model,
-		Thinking: req.Thinking,
+		Model:        req.Model,
+		ModelProfile: profile,
+		Thinking:     req.Thinking,
 	}
 	if req.Until != nil {
 		cfg.Until = *req.Until

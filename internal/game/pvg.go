@@ -239,6 +239,7 @@ func (p *PVG) promptOptions() spec.PromptOptions {
 
 func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string) TurnResult {
 	ts := p.State.Turn(roundNum, role)
+	ts.EpochID = p.Config.EpochID
 	ts.StopRequested = p.Config.StopRequested
 	if err := WriteTurnTask(ts, task); err != nil {
 		turn := TurnResult{
