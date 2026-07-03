@@ -158,7 +158,8 @@ func (g surfaceGateway) proxy(w http.ResponseWriter, r *http.Request, route publ
 	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		resp.Header.Del("X-Frame-Options")
-		resp.Header.Set("Content-Security-Policy", "frame-ancestors 'self' https://usetelos.ai https://*.usetelos.ai http://localhost:* http://127.0.0.1:*")
+		// Only the product console may frame a surface; never sibling *.usetelos.ai tenants.
+		resp.Header.Set("Content-Security-Policy", "frame-ancestors 'self' https://usetelos.ai")
 		return nil
 	}
 	proxy.ServeHTTP(w, r)
@@ -277,25 +278,23 @@ func safeSurfaceWrite(r *http.Request) bool {
 	case http.MethodGet, http.MethodHead, http.MethodOptions, http.MethodTrace:
 		return true
 	}
-	origin := strings.TrimSpace(r.Header.Get("Origin"))
-	if origin != "" {
-		return cloudAllowedOrigin.MatchString(origin)
+	// CSRF protection: a cookie-auth write must come from the surface's own
+	// origin. A sibling *.usetelos.ai tenant is same-site but not same-origin,
+	// so match the request host exactly instead of trusting the whole zone.
+	host := requestHost(r)
+	if origin := strings.TrimSpace(r.Header.Get("Origin")); origin != "" {
+		return sameOriginHost(origin, host)
 	}
 	if referer := strings.TrimSpace(r.Header.Get("Referer")); referer != "" {
-		return allowedSurfaceReferer(referer)
+		return sameOriginHost(referer, host)
 	}
-	switch strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")) {
-	case "", "same-origin", "same-site":
-		return true
-	default:
-		return false
-	}
+	return strings.EqualFold(strings.TrimSpace(r.Header.Get("Sec-Fetch-Site")), "same-origin")
 }
 
-func allowedSurfaceReferer(referer string) bool {
-	u, err := url.Parse(referer)
-	if err != nil || u.Scheme == "" || u.Host == "" {
+func sameOriginHost(rawURL, host string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
 		return false
 	}
-	return cloudAllowedOrigin.MatchString(u.Scheme + "://" + u.Host)
+	return strings.EqualFold(u.Hostname(), host)
 }

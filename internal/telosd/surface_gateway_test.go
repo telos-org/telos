@@ -184,12 +184,21 @@ func TestSafeSurfaceWriteRejectsCrossSiteFetch(t *testing.T) {
 	}
 }
 
-func TestSafeSurfaceWriteAllowsApprovedReferer(t *testing.T) {
-	req := httptest.NewRequest(http.MethodPost, "/", nil)
-	req.Header.Set("Referer", "https://app.usetelos.ai/deployments/dep_test")
+func TestSafeSurfaceWriteAllowsSameOriginReferer(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "https://dash-abc.usetelos.ai/", nil)
+	req.Header.Set("Referer", "https://dash-abc.usetelos.ai/deployments/dep_test")
 
 	if !safeSurfaceWrite(req) {
-		t.Fatal("expected approved referer to be allowed")
+		t.Fatal("expected same-origin referer to be allowed")
+	}
+}
+
+func TestSafeSurfaceWriteRejectsSiblingTenantOrigin(t *testing.T) {
+	req := httptest.NewRequest(http.MethodPost, "https://victim.usetelos.ai/", nil)
+	req.Header.Set("Origin", "https://attacker.usetelos.ai")
+
+	if safeSurfaceWrite(req) {
+		t.Fatal("expected cross-tenant same-site origin to be rejected")
 	}
 }
 
