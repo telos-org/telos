@@ -8,6 +8,7 @@
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
 //	    [--until N] [--max-cost-usd USD] [--agent-timeout-sec SEC|0] [--json]
 //	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
+//	telos usage [--limit N] [--local] [--json]
 //	telos describe SESSION|DEPLOYMENT [--json]
 //	telos logs [-f] [--verbose] SESSION|DEPLOYMENT
 //	telos stop SESSION|DEPLOYMENT [--json]
@@ -53,6 +54,8 @@ func main() {
 		cmdRun(os.Args[2:])
 	case "list":
 		cmdList(os.Args[2:])
+	case "usage":
+		cmdUsage(os.Args[2:])
 	case "describe":
 		cmdDescribe(os.Args[2:])
 	case "logs":
@@ -83,6 +86,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  apply SPEC.md      Publish and deploy a spec package")
 	fmt.Fprintln(out, "  run SPEC.md        Run a local or delegated spec")
 	fmt.Fprintln(out, "  list               List cloud deployments, or local sessions with --local")
+	fmt.Fprintln(out, "  usage              Show per-session token and cost usage with totals")
 	fmt.Fprintln(out, "  describe ID        Show cloud deployment or runtime session details")
 	fmt.Fprintln(out, "  logs ID            Show cloud deployment or runtime session progress")
 	fmt.Fprintln(out, "  stop ID            Stop a session; cloud deployment IDs are deleted")
