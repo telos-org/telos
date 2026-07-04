@@ -456,10 +456,21 @@ func (fs *FileStore) createRequestForSpecUpdate(req SessionSpecUpdateRequest, ki
 			ApplyPackagePath:   packagePath,
 			ApplyPackageDigest: packageDigest,
 			SessionKind:        kind,
+			Model:              req.Model,
+			Thinking:           req.Thinking,
+			MaxCostUSD:         req.MaxCostUSD,
+			AgentTimeoutSec:    req.AgentTimeoutSec,
 		}, nil
 	}
 	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
-	return SessionCreateRequest{SpecMarkdown: &markdown, SessionKind: kind}, nil
+	return SessionCreateRequest{
+		SpecMarkdown:    &markdown,
+		SessionKind:     kind,
+		Model:           req.Model,
+		Thinking:        req.Thinking,
+		MaxCostUSD:      req.MaxCostUSD,
+		AgentTimeoutSec: req.AgentTimeoutSec,
+	}, nil
 }
 
 func (fs *FileStore) packagePathForDigest(digest string) (string, error) {
