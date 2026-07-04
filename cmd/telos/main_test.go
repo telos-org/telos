@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/telos-org/telos/internal/agentsession"
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -1890,6 +1891,69 @@ func TestLocalSessionRootHonorsSessionDirEnv(t *testing.T) {
 	got := localSessionRoot()
 	if got != want {
 		t.Fatalf("local session root: got %q want %q", got, want)
+	}
+}
+
+func TestLogsJSONRendersProtocolJSONLInOrderAndTerminalExit(t *testing.T) {
+	events := []agentsession.Event{
+		{
+			Schema:        agentsession.Schema,
+			SchemaVersion: agentsession.SchemaVersion,
+			Type:          agentsession.KindAssistantText,
+			Version:       1,
+			Sequence:      1,
+			ID:            "1",
+			Data:          agentsession.MarshalPayload(agentsession.AssistantTextPayload{Text: "hello"}),
+		},
+		{
+			Schema:        agentsession.Schema,
+			SchemaVersion: agentsession.SchemaVersion,
+			Type:          agentsession.KindTerminal,
+			Version:       1,
+			Sequence:      2,
+			ID:            "2",
+			Data:          agentsession.MarshalPayload(agentsession.TerminalPayload{TerminalState: agentsession.TerminalToolFailed}),
+		},
+	}
+	var out bytes.Buffer
+	var last int64
+	code, terminal, err := renderProtocolEvents(&out, events, true, &last)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !terminal || code != 5 || last != 2 {
+		t.Fatalf("terminal=%v code=%d last=%d", terminal, code, last)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("jsonl lines: %d\n%s", len(lines), out.String())
+	}
+	var first, second agentsession.Event
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal([]byte(lines[1]), &second); err != nil {
+		t.Fatal(err)
+	}
+	if first.Type != agentsession.KindAssistantText || first.Sequence != 1 || second.Type != agentsession.KindTerminal || second.Sequence != 2 {
+		t.Fatalf("unexpected order: %#v %#v", first, second)
+	}
+}
+
+func TestTerminalExitCodeMapping(t *testing.T) {
+	tests := map[agentsession.TerminalState]int{
+		agentsession.TerminalCompleted:      0,
+		agentsession.TerminalIncomplete:     1,
+		agentsession.TerminalExhausted:      2,
+		agentsession.TerminalPolicyBlocked:  3,
+		agentsession.TerminalProviderFailed: 4,
+		agentsession.TerminalToolFailed:     5,
+		agentsession.TerminalInterrupted:    130,
+	}
+	for state, want := range tests {
+		if got := terminalExitCode(state); got != want {
+			t.Fatalf("%s: got %d want %d", state, got, want)
+		}
 	}
 }
 

@@ -14,7 +14,7 @@
 //	telos describe SESSION|DEPLOYMENT [--env ENV] [--org ORG] [--json]
 //	telos analyze SESSION... [--env ENV] [--json]
 //	telos inspect-child CHILD_SESSION [--env ENV] [--json]
-//	telos logs [-f] [--raw] SESSION|DEPLOYMENT [--env ENV] [--org ORG]
+//	telos logs [-f] [--raw|--json] [--poll] SESSION|DEPLOYMENT [--env ENV] [--org ORG]
 //	telos replay SESSION_OR_SESSION_JSONL [--role prover|verifier] [--json]
 //	telos stop SESSION|DEPLOYMENT [--env ENV] [--org ORG] [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]

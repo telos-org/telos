@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
@@ -201,6 +204,166 @@ func TestStoreEventSequenceIntegrity(t *testing.T) {
 	if err := sessionapi.CheckStoreEventLogIntegrity(truncatedPath); err == nil {
 		t.Fatal("expected truncated log to be detected")
 	}
+}
+
+func TestStopLifecycleEscalatesSIGKILL(t *testing.T) {
+	t.Setenv("TELOS_STOP_GRACE_MS", "50")
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	cmd := stopHelperCommand(t, "ignore-term")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	writeOpenRunnerManifest(t, root, "sess_kill", cmd.Process.Pid)
+
+	session, err := store.Stop("sess_kill")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.Status != sessionapi.StatusStopped {
+		t.Fatalf("status: got %q", session.Status)
+	}
+	events := readStoreEventTypes(t, filepath.Join(root, "sess_kill", "events.jsonl"))
+	want := []sessionapi.StoreEventType{
+		sessionapi.EventStopRequested,
+		sessionapi.EventStopSignalSent,
+		sessionapi.EventForcedKill,
+		sessionapi.EventProcessExitObserved,
+	}
+	if strings.Join(storeEventTypeStrings(events), ",") != strings.Join(storeEventTypeStrings(want), ",") {
+		t.Fatalf("events: got %#v want %#v", events, want)
+	}
+	m, err := sessionapi.ReadManifest(filepath.Join(root, "sess_kill", "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Epochs[0].Runner.Status; !strings.Contains(got, "killed") {
+		t.Fatalf("runner status: %q", got)
+	}
+	_ = cmd.Process.Release()
+}
+
+func TestStopLifecycleCompliantWorkerExitsWithoutSIGKILL(t *testing.T) {
+	t.Setenv("TELOS_STOP_GRACE_MS", "500")
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	cmd := stopHelperCommand(t, "exit-term")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	writeOpenRunnerManifest(t, root, "sess_term", cmd.Process.Pid)
+
+	if _, err := store.Stop("sess_term"); err != nil {
+		t.Fatal(err)
+	}
+	events := readStoreEventTypes(t, filepath.Join(root, "sess_term", "events.jsonl"))
+	want := []sessionapi.StoreEventType{
+		sessionapi.EventStopRequested,
+		sessionapi.EventStopSignalSent,
+		sessionapi.EventProcessExitObserved,
+	}
+	if strings.Join(storeEventTypeStrings(events), ",") != strings.Join(storeEventTypeStrings(want), ",") {
+		t.Fatalf("events: got %#v want %#v", events, want)
+	}
+	_ = cmd.Process.Release()
+}
+
+func stopHelperCommand(t *testing.T, mode string) *exec.Cmd {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=TestStopLifecycleHelper")
+	cmd.Env = append(os.Environ(), "TELOS_STOP_HELPER="+mode)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	return cmd
+}
+
+func TestStopLifecycleHelper(t *testing.T) {
+	switch os.Getenv("TELOS_STOP_HELPER") {
+	case "ignore-term":
+		stopHelperIgnoreTERM()
+	case "exit-term":
+		stopHelperExitOnTERM()
+	default:
+		t.Skip("helper only")
+	}
+}
+
+func stopHelperIgnoreTERM() {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+	for {
+		<-signals
+	}
+}
+
+func stopHelperExitOnTERM() {
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM)
+	<-signals
+	os.Exit(0)
+}
+
+func writeOpenRunnerManifest(t *testing.T, root string, id string, pid int) {
+	t.Helper()
+	dir := filepath.Join(root, id)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := manifestFixture(id, sessionapi.KindTask)
+	runner := sessionapi.Runner{
+		Kind:      "local-subprocess",
+		PID:       pid,
+		PGID:      pid,
+		StartedAt: "2026-07-04T00:00:00.000Z",
+	}
+	m.Epochs = append(m.Epochs, sessionapi.Epoch{
+		ID:        1,
+		StartedAt: "2026-07-04T00:00:00.000Z",
+		Runner:    &runner,
+	})
+	if err := sessionapi.WriteManifest(filepath.Join(dir, "session.json"), &m); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readStoreEventTypes(t *testing.T, path string) []sessionapi.StoreEventType {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var data []byte
+	var err error
+	for {
+		data, err = os.ReadFile(path)
+		if err == nil || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []sessionapi.StoreEventType
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var event sessionapi.StoreEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		out = append(out, event.Type)
+	}
+	return out
+}
+
+func storeEventTypeStrings(events []sessionapi.StoreEventType) []string {
+	out := make([]string, 0, len(events))
+	for _, event := range events {
+		out = append(out, string(event))
+	}
+	return out
 }
 
 func manifestFixture(id string, kind sessionapi.SessionKind) sessionapi.Manifest {

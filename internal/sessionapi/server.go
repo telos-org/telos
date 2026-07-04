@@ -8,6 +8,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/telos-org/telos/internal/agentsession"
 )
 
 const maxSessionRequestBytes = 4 << 20
@@ -263,11 +265,12 @@ func (h *handler) getTranscript(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
+	caller, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id})
+	if !ok {
 		return
 	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {
-		h.streamEvents(w, r, id)
+		h.streamEvents(w, r, id, caller)
 		return
 	}
 	events, err := h.store.Events(id)
@@ -302,7 +305,11 @@ func (h *handler) getDiagnostics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, diagnostics)
 }
 
-func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string) {
+type protocolEventStore interface {
+	ProtocolEvents(id string, opts ProtocolEventsOptions) ([]agentsession.Event, error)
+}
+
+func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string, caller Caller) {
 	if _, err := h.store.Get(id); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -316,12 +323,79 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
+	raw, err := parseBoolQuery(r, "raw")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if raw && caller.Role != RoleOperator {
+		writeError(w, http.StatusForbidden, "operator access required for raw event stream")
+		return
+	}
+	protocolStore, ok := h.store.(protocolEventStore)
+	if !ok {
+		h.streamLegacyEvents(w, r, id, flusher)
+		return
+	}
+	since, err := lastEventID(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// File-backed evidence is append-only; sent indexes are stable for one stream.
+	lastSent := since
+	emitAvailable := func() (bool, bool) {
+		events, err := protocolStore.ProtocolEvents(id, ProtocolEventsOptions{Raw: raw, SinceSequence: lastSent})
+		if err != nil {
+			return false, false
+		}
+		terminal := false
+		for _, event := range events {
+			data, err := json.Marshal(event)
+			if err != nil {
+				continue
+			}
+			_, _ = fmt.Fprintf(w, "id: %d\n", event.Sequence)
+			_, _ = fmt.Fprintf(w, "event: %s\n", event.Type)
+			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+			lastSent = event.Sequence
+			if event.Type == agentsession.KindTerminal {
+				terminal = true
+			}
+		}
+		return true, terminal
+	}
+	poll := time.NewTicker(time.Second)
+	defer poll.Stop()
+	heartbeat := time.NewTicker(15 * time.Second)
+	defer heartbeat.Stop()
+	for {
+		ok, terminal := emitAvailable()
+		if !ok || terminal {
+			return
+		}
+		select {
+		case <-r.Context().Done():
+			return
+		case <-heartbeat.C:
+			_, _ = fmt.Fprint(w, ": keep-alive\n\n")
+			flusher.Flush()
+		case <-poll.C:
+		}
+	}
+}
+
+func (h *handler) streamLegacyEvents(w http.ResponseWriter, r *http.Request, id string, flusher http.Flusher) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.WriteHeader(http.StatusOK)
+	flusher.Flush()
+
 	sent := 0
 	emitAvailable := func() bool {
 		events, err := h.store.Events(id)
@@ -362,6 +436,30 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		case <-poll.C:
 		}
 	}
+}
+
+func lastEventID(r *http.Request) (int64, error) {
+	raw := strings.TrimSpace(r.Header.Get("Last-Event-ID"))
+	if raw == "" {
+		return 0, nil
+	}
+	seq, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || seq < 0 {
+		return 0, fmt.Errorf("Last-Event-ID must be a non-negative sequence")
+	}
+	return seq, nil
+}
+
+func parseBoolQuery(r *http.Request, name string) (bool, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return false, nil
+	}
+	value, err := strconv.ParseBool(raw)
+	if err != nil {
+		return false, fmt.Errorf("%s must be a boolean", name)
+	}
+	return value, nil
 }
 
 func (h *handler) getWorkspace(w http.ResponseWriter, r *http.Request) {

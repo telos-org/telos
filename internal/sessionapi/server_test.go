@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/telos-org/telos/internal/agentsession"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -1721,7 +1722,7 @@ func TestEventsSSE(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(body), `data: {"event":"game_end"`) {
+	if !strings.Contains(string(body), `"type":"terminal"`) {
 		t.Fatalf("unexpected SSE body: %s", body)
 	}
 }
@@ -2518,4 +2519,106 @@ func diagnosticsHasErrorCode(errors []sessionapi.SessionErrorDiagnostics, code s
 
 func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
+}
+
+func TestSSEProtocolEventsOrderedResumeAndTerminalClose(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	markdown := "---\nversion: v0\nname: sse-demo\nplatform: local\n---\n# SSE\n"
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnDir := filepath.Join(store.Root, session.SessionID, "specs", "sse-demo", "turns", "0001-prover")
+	if err := os.MkdirAll(turnDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(turnDir, "session.jsonl")
+	writeProtocolLog(t, logPath, []agentsession.Event{
+		{
+			Type: agentsession.KindMessage,
+			Message: &agentsession.Message{
+				Role:    "assistant",
+				Content: []agentsession.Content{{Type: "text", Text: "hello"}},
+			},
+		},
+		{
+			Type: agentsession.KindTerminal,
+			Data: agentsession.MarshalPayload(agentsession.TerminalPayload{TerminalState: agentsession.TerminalCompleted}),
+		},
+	})
+
+	events := readSSEProtocolEvents(t, srv.URL+"/api/sessions/"+session.SessionID+"/events", "")
+	if len(events) != 2 {
+		t.Fatalf("events: got %d %#v", len(events), events)
+	}
+	if events[0].Sequence != 1 || events[0].Type != agentsession.KindAssistantText {
+		t.Fatalf("first event: %#v", events[0])
+	}
+	if events[1].Sequence != 2 || events[1].Type != agentsession.KindTerminal {
+		t.Fatalf("terminal event: %#v", events[1])
+	}
+
+	resumed := readSSEProtocolEvents(t, srv.URL+"/api/sessions/"+session.SessionID+"/events", "1")
+	if len(resumed) != 1 || resumed[0].Sequence != 2 || resumed[0].Type != agentsession.KindTerminal {
+		t.Fatalf("resumed events: %#v", resumed)
+	}
+}
+
+func writeProtocolLog(t *testing.T, path string, events []agentsession.Event) {
+	t.Helper()
+	file, err := os.Create(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	enc := json.NewEncoder(file)
+	for _, event := range events {
+		if err := enc.Encode(event); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func readSSEProtocolEvents(t *testing.T, url string, lastEventID string) []agentsession.Event {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	if lastEventID != "" {
+		req.Header.Set("Last-Event-ID", lastEventID)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("status: %d %s", resp.StatusCode, data)
+	}
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []agentsession.Event
+	for _, block := range strings.Split(string(data), "\n\n") {
+		for _, line := range strings.Split(block, "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "data:") {
+				continue
+			}
+			var event agentsession.Event
+			if err := json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &event); err != nil {
+				t.Fatal(err)
+			}
+			events = append(events, event)
+		}
+	}
+	return events
 }

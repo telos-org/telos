@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -666,7 +667,18 @@ func (fs *FileStore) stopLocked(id string) (*Session, error) {
 	if open := m.OpenEpoch(); open != nil {
 		result := terminateRunner(open.Runner)
 		if result.SignalSent {
-			if _, err := fs.appendStoreEventLocked(id, EventStopSignalSent, result.Payload()); err != nil {
+			payload := result.Payload()
+			payload["signal"] = "SIGTERM"
+			payload["forced_kill"] = false
+			if _, err := fs.appendStoreEventLocked(id, EventStopSignalSent, payload); err != nil {
+				return nil, err
+			}
+		}
+		if result.ForcedKill {
+			payload := result.Payload()
+			payload["signal"] = "SIGKILL"
+			payload["forced_kill"] = true
+			if _, err := fs.appendStoreEventLocked(id, EventForcedKill, payload); err != nil {
 				return nil, err
 			}
 		}
@@ -675,6 +687,7 @@ func (fs *FileStore) stopLocked(id string) (*Session, error) {
 				return nil, err
 			}
 		}
+		recordRunnerTermination(open.Runner, result)
 	}
 
 	now := tsNow()
@@ -1080,7 +1093,11 @@ type terminateResult struct {
 	Target              string
 	Signal              string
 	SignalSent          bool
+	ForcedKill          bool
 	ProcessExitObserved bool
+	ExitCode            int
+	ExitSignal          string
+	ExitStatus          string
 	Error               string
 }
 
@@ -1091,7 +1108,17 @@ func (r terminateResult) Payload() map[string]any {
 		"target":                r.Target,
 		"signal":                r.Signal,
 		"signal_sent":           r.SignalSent,
+		"forced_kill":           r.ForcedKill,
 		"process_exit_observed": r.ProcessExitObserved,
+	}
+	if r.ExitStatus != "" {
+		payload["exit_status"] = r.ExitStatus
+	}
+	if r.ExitCode != 0 {
+		payload["exit_code"] = r.ExitCode
+	}
+	if r.ExitSignal != "" {
+		payload["exit_signal"] = r.ExitSignal
 	}
 	if r.Error != "" {
 		payload["error"] = r.Error
@@ -1116,30 +1143,130 @@ func terminateRunner(runner *Runner) terminateResult {
 		result.PGID = pgid
 	}
 	result.Target = "process_group"
-	if err := syscall.Kill(-group, syscall.SIGTERM); err == nil {
-		result.SignalSent = true
-		result.ProcessExitObserved = !processAlive(pid)
-		return result
-	} else if errors.Is(err, syscall.ESRCH) {
-		result.ProcessExitObserved = true
-		return result
-	} else {
-		result.Error = err.Error()
-	}
-	result.Target = "process"
-	if err := syscall.Kill(pid, syscall.SIGTERM); err == nil {
-		result.SignalSent = true
-		result.ProcessExitObserved = !processAlive(pid)
-		result.Error = ""
-		return result
-	} else if errors.Is(err, syscall.ESRCH) {
-		result.ProcessExitObserved = true
-		result.Error = ""
+	if sent, err := signalProcessTarget(pid, group, syscall.SIGTERM, &result); err == nil {
+		result.SignalSent = sent
+		if result.ProcessExitObserved {
+			return result
+		}
+		if observed, status := waitForProcessExit(pid, stopGraceDuration()); observed {
+			result.ProcessExitObserved = true
+			applyObservedStatus(&result, status)
+			return result
+		}
+		result.Signal = "SIGKILL"
+		if sent, err := signalProcessTarget(pid, group, syscall.SIGKILL, &result); err == nil {
+			result.ForcedKill = sent
+			result.SignalSent = sent
+			if result.ProcessExitObserved {
+				return result
+			}
+			if observed, status := waitForProcessExit(pid, 2*time.Second); observed {
+				result.ProcessExitObserved = true
+				applyObservedStatus(&result, status)
+			}
+			return result
+		}
 		return result
 	} else {
 		result.Error = err.Error()
 	}
 	return result
+}
+
+func signalProcessTarget(pid, group int, signal syscall.Signal, result *terminateResult) (bool, error) {
+	result.Target = "process_group"
+	if err := syscall.Kill(-group, signal); err == nil {
+		result.Error = ""
+		return true, nil
+	} else if errors.Is(err, syscall.ESRCH) {
+		result.ProcessExitObserved = true
+		result.Error = ""
+		return false, nil
+	} else {
+		result.Error = err.Error()
+	}
+	result.Target = "process"
+	if err := syscall.Kill(pid, signal); err == nil {
+		result.Error = ""
+		return true, nil
+	} else if errors.Is(err, syscall.ESRCH) {
+		result.ProcessExitObserved = true
+		result.Error = ""
+		return false, nil
+	} else {
+		result.Error = err.Error()
+		return false, err
+	}
+}
+
+func waitForProcessExit(pid int, grace time.Duration) (bool, syscall.WaitStatus) {
+	deadline := time.Now().Add(grace)
+	for {
+		if observed, status := observeProcessExit(pid); observed {
+			return true, status
+		}
+		if time.Now().After(deadline) {
+			return false, 0
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
+func observeProcessExit(pid int) (bool, syscall.WaitStatus) {
+	var status syscall.WaitStatus
+	waited, err := syscall.Wait4(pid, &status, syscall.WNOHANG, nil)
+	if waited == pid {
+		return true, status
+	}
+	if err != nil && !errors.Is(err, syscall.ECHILD) {
+		return false, status
+	}
+	if !processAlive(pid) {
+		return true, status
+	}
+	return false, status
+}
+
+func applyObservedStatus(result *terminateResult, status syscall.WaitStatus) {
+	switch {
+	case status.Exited():
+		result.ExitCode = status.ExitStatus()
+		result.ExitStatus = fmt.Sprintf("exited:%d", result.ExitCode)
+	case status.Signaled():
+		result.ExitSignal = status.Signal().String()
+		result.ExitStatus = "signaled:" + result.ExitSignal
+	case result.ProcessExitObserved:
+		result.ExitStatus = "exited"
+	}
+}
+
+func recordRunnerTermination(runner *Runner, result terminateResult) {
+	if runner == nil {
+		return
+	}
+	now := tsNow()
+	runner.FinishedAt = &now
+	if result.ExitStatus != "" {
+		runner.Status = result.ExitStatus
+	} else if result.ForcedKill {
+		runner.Status = "forced_kill_sent"
+	} else if result.SignalSent {
+		runner.Status = "stop_signal_sent"
+	}
+}
+
+func stopGraceDuration() time.Duration {
+	if raw := strings.TrimSpace(os.Getenv("TELOS_STOP_GRACE_MS")); raw != "" {
+		if ms, err := strconv.Atoi(raw); err == nil && ms >= 0 {
+			return time.Duration(ms) * time.Millisecond
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("TELOS_STOP_GRACE_SECONDS")); raw != "" {
+		if sec, err := strconv.ParseFloat(raw, 64); err == nil && sec >= 0 {
+			return time.Duration(sec * float64(time.Second))
+		}
+	}
+	return 10 * time.Second
 }
 
 func epochToMap(e Epoch) map[string]any {

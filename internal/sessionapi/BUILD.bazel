@@ -8,6 +8,7 @@ go_library(
         "diagnostics.go",
         "durable.go",
         "manifest.go",
+        "protocol_stream.go",
         "server.go",
         "store.go",
         "store_events.go",

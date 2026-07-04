@@ -6,8 +6,14 @@ package agentsession
 
 import "encoding/json"
 
-// Schema is the schema version string stamped on every session JSONL file.
+// Schema is the schema identifier stamped on every session JSONL file.
 const Schema = "telos.agent_session.v1"
+
+// SchemaVersion is the major protocol version for Event. Within one major
+// version, changes are additive only: writers may add fields and readers must
+// ignore unknown fields. Removing fields, changing meanings, or changing JSON
+// types requires a new major version.
+const SchemaVersion = 1
 
 // Event kind constants. These are the string values written to Event.Type
 // and read by consumers to dispatch on event kind.
@@ -32,20 +38,29 @@ const (
 	KindOutsideWorkspaceAccess = "outside_workspace_access"
 	KindCompaction             = "compaction"
 	KindError                  = "error"
+	KindAssistantText          = "assistant_text"
+	KindReasoning              = "reasoning"
+	KindToolCallStart          = "tool_call_start"
+	KindToolCallResult         = "tool_call_result"
+	KindUsage                  = "usage"
+	KindLifecycle              = "lifecycle"
+	KindTerminal               = "terminal"
 )
 
 // Event is the JSONL envelope. Data carries the kind-specific payload as raw
 // JSON so readers unmarshal into the appropriate typed struct.
 type Event struct {
-	Schema    string          `json:"schema,omitempty"`
-	Type      string          `json:"type"`
-	Version   int             `json:"version,omitempty"`
-	ID        string          `json:"id,omitempty"`
-	Timestamp string          `json:"timestamp,omitempty"`
-	CWD       string          `json:"cwd,omitempty"`
-	Runtime   string          `json:"runtime,omitempty"`
-	Message   *Message        `json:"message,omitempty"`
-	Data      json.RawMessage `json:"data,omitempty"`
+	Schema        string          `json:"schema,omitempty"`
+	SchemaVersion int             `json:"schema_version,omitempty"`
+	Type          string          `json:"type"`
+	Version       int             `json:"version,omitempty"`
+	Sequence      int64           `json:"sequence,omitempty"`
+	ID            string          `json:"id,omitempty"`
+	Timestamp     string          `json:"timestamp,omitempty"`
+	CWD           string          `json:"cwd,omitempty"`
+	Runtime       string          `json:"runtime,omitempty"`
+	Message       *Message        `json:"message,omitempty"`
+	Data          json.RawMessage `json:"data,omitempty"`
 }
 
 // Message is the typed payload for KindMessage events (user, assistant,
@@ -81,6 +96,18 @@ type Usage struct {
 type Cost struct {
 	Total float64 `json:"total"`
 }
+
+type TerminalState string
+
+const (
+	TerminalCompleted      TerminalState = "completed"
+	TerminalIncomplete     TerminalState = "incomplete"
+	TerminalExhausted      TerminalState = "exhausted"
+	TerminalInterrupted    TerminalState = "interrupted"
+	TerminalPolicyBlocked  TerminalState = "policy_blocked"
+	TerminalProviderFailed TerminalState = "provider_failed"
+	TerminalToolFailed     TerminalState = "tool_failed"
+)
 
 // -- Typed payloads for Data -----------------------------------------------
 
@@ -172,9 +199,13 @@ type ModelResponseUsage struct {
 }
 
 type ToolCallPayload struct {
-	ToolCallID string `json:"tool_call_id"`
-	ToolName   string `json:"tool_name"`
-	Arguments  string `json:"arguments"`
+	ToolCallID      string         `json:"tool_call_id"`
+	ToolName        string         `json:"tool_name"`
+	Arguments       string         `json:"arguments,omitempty"`
+	ContainmentMode string         `json:"containment_mode,omitempty"`
+	ChangedFiles    []string       `json:"changed_files,omitempty"`
+	Redacted        bool           `json:"redacted,omitempty"`
+	Redaction       map[string]any `json:"redaction,omitempty"`
 }
 
 type ToolResultPayload struct {
@@ -253,6 +284,66 @@ type ErrorPayload struct {
 	ErrorCode          string `json:"error_code,omitempty"`
 	Retryable          bool   `json:"retryable,omitempty"`
 	ProviderStatusCode int    `json:"provider_status_code,omitempty"`
+}
+
+type AssistantTextPayload struct {
+	Text       string `json:"text"`
+	Provider   string `json:"provider,omitempty"`
+	Model      string `json:"model,omitempty"`
+	StopReason string `json:"stop_reason,omitempty"`
+}
+
+type ReasoningPayload struct {
+	Text     string `json:"text,omitempty"`
+	Redacted bool   `json:"redacted,omitempty"`
+	Removed  bool   `json:"removed,omitempty"`
+}
+
+type ToolCallStartPayload = ToolCallPayload
+
+type ToolCallResultStreamPayload struct {
+	ToolCallID      string         `json:"tool_call_id"`
+	ToolName        string         `json:"tool_name"`
+	IsError         bool           `json:"is_error,omitempty"`
+	DurationMS      int64          `json:"duration_ms,omitempty"`
+	OutputBytes     int            `json:"output_bytes,omitempty"`
+	Truncated       bool           `json:"truncated,omitempty"`
+	ExitCode        int            `json:"exit_code,omitempty"`
+	ErrorCode       string         `json:"error_code,omitempty"`
+	Preview         string         `json:"preview,omitempty"`
+	ContainmentMode string         `json:"containment_mode,omitempty"`
+	ChangedFiles    []string       `json:"changed_files,omitempty"`
+	Redacted        bool           `json:"redacted,omitempty"`
+	Redaction       map[string]any `json:"redaction,omitempty"`
+	Metadata        map[string]any `json:"metadata,omitempty"`
+}
+
+type UsagePayload struct {
+	Input           int     `json:"input"`
+	Output          int     `json:"output"`
+	CacheRead       int     `json:"cache_read,omitempty"`
+	CacheWrite      int     `json:"cache_write,omitempty"`
+	CostUSD         float64 `json:"cost_usd,omitempty"`
+	CostUnavailable bool    `json:"cost_unavailable,omitempty"`
+	Provider        string  `json:"provider,omitempty"`
+	Model           string  `json:"model,omitempty"`
+}
+
+type LifecyclePayload struct {
+	State    string         `json:"state"`
+	Status   string         `json:"status,omitempty"`
+	PID      int            `json:"pid,omitempty"`
+	PGID     int            `json:"pgid,omitempty"`
+	Signal   string         `json:"signal,omitempty"`
+	ExitCode int            `json:"exit_code,omitempty"`
+	Error    string         `json:"error,omitempty"`
+	Metadata map[string]any `json:"metadata,omitempty"`
+}
+
+type TerminalPayload struct {
+	TerminalState   TerminalState `json:"terminal_state"`
+	ContainmentMode string        `json:"containment_mode,omitempty"`
+	Error           string        `json:"error,omitempty"`
 }
 
 // Unmarshal decodes the Event's Data field into the provided payload.

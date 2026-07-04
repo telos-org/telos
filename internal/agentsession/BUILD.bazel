@@ -10,5 +10,6 @@ go_library(
 go_test(
     name = "agentsession_test",
     srcs = ["protocol_test.go"],
+    data = glob(["testdata/**"]),
     embed = [":agentsession"],
 )
