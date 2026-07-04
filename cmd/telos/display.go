@@ -11,26 +11,26 @@ import (
 )
 
 type sessionDisplayRow struct {
-	Name     string
-	Platform string
-	Status   string
-	Cost     string
-	Session  string
-	Parent   string
+	Name    string
+	Target  string
+	Status  string
+	Cost    string
+	Session string
+	Parent  string
 }
 
 func displayRow(sess sessionapi.Session) sessionDisplayRow {
 	return sessionDisplayRow{
-		Name:     sessionName(sess),
-		Platform: sessionPlatform(sess),
-		Status:   sessionDisplayStatus(sess),
-		Cost:     sessionCost(sess),
-		Session:  sess.SessionID,
-		Parent:   sessionParent(sess),
+		Name:    sessionName(sess),
+		Target:  sessionTarget(sess),
+		Status:  sessionDisplayStatus(sess),
+		Cost:    sessionCost(sess),
+		Session: sess.SessionID,
+		Parent:  sessionParent(sess),
 	}
 }
 
-func sessionPlatform(sess sessionapi.Session) string {
+func sessionTarget(sess sessionapi.Session) string {
 	if sess.Runtime != "" {
 		return string(sess.Runtime)
 	}

@@ -26,41 +26,51 @@ func cmdLogs(args []string) {
 	parseFlags(fs, args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--verbose] SESSION|DEPLOYMENT")
+		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--verbose] SESSION")
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
 
 	if *follow {
-		if isDeploymentID(sessionID) {
-			followDeploymentLogs(sessionID, *verbose)
-			return
+		if !localSessionExists(sessionID) {
+			if _, found, err := getCloudDeploymentIfConfigured(sessionID); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			} else if found {
+				followDeploymentLogs(sessionID, *verbose)
+				return
+			}
 		}
 		followLogs(sessionID, *verbose)
 		return
 	}
 
-	if isDeploymentID(sessionID) {
-		control, err := cloud.ControlClient()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	text, err := getTranscriptFromAnywhere(sessionID)
+	if err == nil {
+		printLogs(os.Stdout, text, *verbose)
+		return
+	}
+
+	if _, found, cloudErr := getCloudDeploymentIfConfigured(sessionID); cloudErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
+		os.Exit(1)
+	} else if found {
+		control, controlErr := cloud.ControlClient()
+		if controlErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", controlErr)
 			os.Exit(1)
 		}
-		events, err := control.GetDeploymentLogs(sessionID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		events, eventsErr := control.GetDeploymentLogs(sessionID)
+		if eventsErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", eventsErr)
 			os.Exit(1)
 		}
 		printDeploymentLogEvents(os.Stdout, events, *verbose)
 		return
 	}
 
-	text, err := getTranscriptFromAnywhere(sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	printLogs(os.Stdout, text, *verbose)
+	fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	os.Exit(1)
 }
 
 func followLogs(sessionID string, verbose bool) {
@@ -205,7 +215,7 @@ func printDeploymentLogEvents(out io.Writer, events []sessionapi.SessionEvent, v
 		}
 	}
 	if !printed {
-		fmt.Fprintln(out, "no deployment log entries")
+		fmt.Fprintln(out, "no session log entries")
 	}
 }
 

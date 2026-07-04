@@ -63,12 +63,13 @@ done
 
 	envPath := filepath.Join(*session.SessionDir, "worker.env")
 	var data []byte
-	for i := 0; i < 50; i++ {
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
 		data, err = os.ReadFile(envPath)
 		if err == nil {
 			break
 		}
-		time.Sleep(10 * time.Millisecond)
+		time.Sleep(25 * time.Millisecond)
 	}
 	if err != nil {
 		t.Fatalf("read worker env: %v", err)

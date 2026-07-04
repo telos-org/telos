@@ -8,10 +8,10 @@
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
 //	    [--until N] [--max-cost-usd USD] [--agent-timeout-sec SEC|0] [--json]
 //	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
-//	telos describe SESSION|DEPLOYMENT [--json]
-//	telos logs [-f] [--verbose] SESSION|DEPLOYMENT
-//	telos stop SESSION|DEPLOYMENT [--json]
-//	telos delete DEPLOYMENT [--json]
+//	telos describe SESSION [--json]
+//	telos logs [-f] [--verbose] SESSION
+//	telos stop SESSION [--json]
+//	telos delete SESSION [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
 //	telos version
 //	telos --version
@@ -82,11 +82,11 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  push SPEC.md       Push an immutable spec package")
 	fmt.Fprintln(out, "  apply SPEC.md      Publish and deploy a spec package")
 	fmt.Fprintln(out, "  run SPEC.md        Run a local or delegated spec")
-	fmt.Fprintln(out, "  list               List cloud deployments, or local sessions with --local")
-	fmt.Fprintln(out, "  describe ID        Show cloud deployment or runtime session details")
-	fmt.Fprintln(out, "  logs ID            Show cloud deployment or runtime session progress")
-	fmt.Fprintln(out, "  stop ID            Stop a session; cloud deployment IDs are deleted")
-	fmt.Fprintln(out, "  delete DEPLOYMENT  Delete a cloud deployment")
+	fmt.Fprintln(out, "  list               List local and cloud sessions")
+	fmt.Fprintln(out, "  describe ID        Show session details")
+	fmt.Fprintln(out, "  logs ID            Show session progress")
+	fmt.Fprintln(out, "  stop ID            Stop a session; cloud sessions are deleted")
+	fmt.Fprintln(out, "  delete SESSION     Delete a cloud session")
 	fmt.Fprintln(out, "  login              Configure cloud access")
 	fmt.Fprintln(out, "  version            Show version")
 	fmt.Fprintln(out, "")

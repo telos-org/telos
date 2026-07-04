@@ -364,8 +364,8 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	session, err := store.Create(sessionapi.SessionCreateRequest{
 		ApplyPackagePath:   packagePath,
 		ApplyPackageDigest: pkg.Digest,
-		DeploymentID:       "dep_123",
-		DeploymentName:     "postgres-prod",
+		CloudSessionID:     "sess_123",
+		CloudSessionName:   "postgres-prod",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -383,11 +383,11 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Digest != pkg.Manifest.Spec.Digest {
 		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
 	}
-	if got := manifest.Provenance["deployment_id"]; got != "dep_123" {
-		t.Fatalf("deployment_id provenance: got %#v", got)
+	if got := manifest.Provenance["cloud_session_id"]; got != "sess_123" {
+		t.Fatalf("cloud_session_id provenance: got %#v", got)
 	}
-	if got := manifest.Provenance["deployment_name"]; got != "postgres-prod" {
-		t.Fatalf("deployment_name provenance: got %#v", got)
+	if got := manifest.Provenance["cloud_session_name"]; got != "postgres-prod" {
+		t.Fatalf("cloud_session_name provenance: got %#v", got)
 	}
 	recompiled, err := spec.CompileEnvironmentWithBase(*manifest.SessionSpecPath, filepath.Dir(*manifest.SourceSpecPath))
 	if err != nil {

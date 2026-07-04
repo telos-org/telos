@@ -24,12 +24,23 @@ func cmdDescribe(args []string) {
 	}
 	sessionID := fs.Arg(0)
 
-	if isDeploymentID(sessionID) {
-		deployment, err := getDeployment(sessionID)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+	session, err := getSessionFromAnywhere(sessionID)
+	if err == nil {
+		if *jsonOut {
+			printJSON(session)
+			return
 		}
+
+		printSessionDescription(os.Stdout, *session)
+		return
+	}
+
+	deployment, found, cloudErr := getCloudDeploymentIfConfigured(sessionID)
+	if cloudErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
+		os.Exit(1)
+	}
+	if found {
 		if *jsonOut {
 			printJSON(deployment)
 			return
@@ -38,18 +49,8 @@ func cmdDescribe(args []string) {
 		return
 	}
 
-	session, err := getSessionFromAnywhere(sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if *jsonOut {
-		printJSON(session)
-		return
-	}
-
-	printSessionDescription(os.Stdout, *session)
+	fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	os.Exit(1)
 }
 
 func getDeployment(deploymentID string) (*cloud.DeploymentRecord, error) {
@@ -62,11 +63,11 @@ func getDeployment(deploymentID string) (*cloud.DeploymentRecord, error) {
 
 func printDeploymentDescription(out io.Writer, deployment cloud.DeploymentRecord) {
 	printSummaryField(out, "Name", deployment.Name)
-	printSummaryField(out, "Platform", "cloud")
+	printSummaryField(out, "Target", "cloud")
 	printSummaryField(out, "Status", deployment.State)
 	printSummaryField(out, "Package", deployment.PackageRef)
 	printSummaryField(out, "Digest", deployment.PackageDigest)
-	printSummaryField(out, "Deployment", deployment.ID)
+	printSummaryField(out, "Session", deployment.ID)
 	if deployment.RuntimeVersion != nil && *deployment.RuntimeVersion != "" {
 		printSummaryField(out, "Runtime", *deployment.RuntimeVersion)
 	}
@@ -89,7 +90,7 @@ func printDeploymentDescription(out io.Writer, deployment cloud.DeploymentRecord
 func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	row := displayRow(session)
 	printSummaryField(out, "Name", row.Name)
-	printSummaryField(out, "Platform", row.Platform)
+	printSummaryField(out, "Target", row.Target)
 	printSummaryField(out, "Status", row.Status)
 	printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	printSummaryField(out, "Session", row.Session)

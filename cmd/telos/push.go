@@ -99,7 +99,7 @@ func pushSpecPackage(client *cloud.Client, pkg *specPackage, scope string) (*clo
 func normalizePackageVersion(raw string) (string, error) {
 	version := strings.TrimSpace(raw)
 	if version == "" {
-		return "", fmt.Errorf("package version is required; set `schema: v0` and `version: 1.0.0` in SPEC.md frontmatter")
+		return "", fmt.Errorf("package version is required; set `version: 1.0.0` in SPEC.md frontmatter")
 	}
 	if strings.HasPrefix(version, "v") {
 		return "", fmt.Errorf("package version must not start with v: %s", version)

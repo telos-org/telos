@@ -7,6 +7,8 @@ import (
 	"strings"
 
 	"github.com/telos-org/telos/internal/cli"
+	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/runtimeclient"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
@@ -68,15 +70,25 @@ func localSessionExists(sessionID string) bool {
 	return err == nil
 }
 
-func isDeploymentID(id string) bool {
-	return strings.HasPrefix(id, "dep_")
+func isCloudApplyID(id string) bool {
+	return strings.HasPrefix(id, "sess_")
+}
+
+func getCloudDeploymentIfConfigured(id string) (*cloud.DeploymentRecord, bool, error) {
+	if !config.IsConfigured() {
+		return nil, false, nil
+	}
+	deployment, err := getDeployment(id)
+	if err != nil {
+		if strings.Contains(err.Error(), "(HTTP 404)") {
+			return nil, false, nil
+		}
+		return nil, true, err
+	}
+	return deployment, true, nil
 }
 
 func getSessionFromAnywhere(sessionID string) (*sessionapi.Session, error) {
-	if isDeploymentID(sessionID) {
-		return nil, fmt.Errorf("deployment %s is not a session; use deployment-aware command output", sessionID)
-	}
-
 	// Try local first
 	s := store()
 	session, err := s.Get(sessionID)
@@ -117,10 +129,6 @@ func getTranscriptFromAnywhere(sessionID string) (string, error) {
 }
 
 func stopSessionAnywhere(sessionID string) (*sessionapi.Session, error) {
-	if isDeploymentID(sessionID) {
-		return nil, fmt.Errorf("deployment %s is not a session; use deployment delete", sessionID)
-	}
-
 	s := store()
 	session, err := s.Stop(sessionID)
 	if err == nil {

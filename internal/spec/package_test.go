@@ -46,6 +46,15 @@ func TestBuildApplyPackageIsDeterministic(t *testing.T) {
 	if first.Manifest.Skills["alpha"] == "" {
 		t.Fatalf("manifest missing alpha skill digest: %#v", first.Manifest.Skills)
 	}
+	if first.Manifest.SkillProvenance["alpha"].Digest != first.Manifest.Skills["alpha"] {
+		t.Fatalf("manifest alpha provenance mismatch: %#v", first.Manifest.SkillProvenance["alpha"])
+	}
+	if first.Manifest.SkillProvenance["alpha"].Ref != "path:alpha" {
+		t.Fatalf("manifest alpha provenance ref: got %q", first.Manifest.SkillProvenance["alpha"].Ref)
+	}
+	if first.Manifest.SkillProvenance["alpha"].Origin != "declared" {
+		t.Fatalf("manifest alpha provenance origin: got %q", first.Manifest.SkillProvenance["alpha"].Origin)
+	}
 
 	entries := tarEntries(t, first.Bytes)
 	for _, want := range []string{
@@ -67,6 +76,23 @@ func TestBuildApplyPackageIsDeterministic(t *testing.T) {
 	}
 	if _, ok := manifest["root_spec_path"]; ok {
 		t.Fatalf("manifest should not contain root_spec_path: %#v", manifest)
+	}
+	rawProvenance, ok := manifest["skill_provenance"].(map[string]any)
+	if !ok {
+		t.Fatalf("manifest missing skill_provenance: %#v", manifest)
+	}
+	alpha, ok := rawProvenance["alpha"].(map[string]any)
+	if !ok {
+		t.Fatalf("manifest missing alpha skill_provenance: %#v", rawProvenance)
+	}
+	if alpha["digest"] != first.Manifest.Skills["alpha"] {
+		t.Fatalf("manifest alpha skill_provenance digest: got %#v want %q", alpha["digest"], first.Manifest.Skills["alpha"])
+	}
+	if alpha["ref"] != "path:alpha" {
+		t.Fatalf("manifest alpha skill_provenance ref: got %#v", alpha["ref"])
+	}
+	if alpha["origin"] != "declared" {
+		t.Fatalf("manifest alpha skill_provenance origin: got %#v", alpha["origin"])
 	}
 }
 

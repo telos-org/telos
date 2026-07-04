@@ -5,16 +5,17 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
-type deploymentSession struct {
-	DeploymentID  string `json:"deployment_id,omitempty"`
-	Name          string `json:"name"`
-	PackageDigest string `json:"package_digest"`
+type cloudBootstrapSession struct {
+	CloudSessionID string `json:"cloud_session_id,omitempty"`
+	Name           string `json:"name"`
+	PackageDigest  string `json:"package_digest"`
 }
 
 const defaultCloudSessionModel = "sail-research/zai-org/GLM-5.2-FP8"
@@ -26,7 +27,7 @@ type deploymentBootstrapReconciler struct {
 }
 
 func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.Store) {
-	if os.Getenv("TELOS_DEPLOYMENT_BOOTSTRAP_ENABLED") == "0" {
+	if os.Getenv("TELOS_SESSION_BOOTSTRAP_ENABLED") == "0" {
 		return
 	}
 	session, ok := deploymentBootstrapSession()
@@ -42,12 +43,12 @@ func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.St
 		return
 	}
 
-	interval := time.Duration(envInt("TELOS_DEPLOYMENT_BOOTSTRAP_INTERVAL", 10)) * time.Second
+	interval := time.Duration(envInt("TELOS_SESSION_BOOTSTRAP_INTERVAL", 10)) * time.Second
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
-			if err := r.reconcile([]deploymentSession{session}); err != nil {
+			if err := r.reconcile([]cloudBootstrapSession{session}); err != nil {
 				log.Printf("deployment bootstrap reconcile failed: %v", err)
 			}
 			select {
@@ -59,21 +60,21 @@ func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.St
 	}()
 }
 
-func deploymentBootstrapSession() (deploymentSession, bool) {
-	deploymentID := strings.TrimSpace(os.Getenv("TELOS_DEPLOYMENT_ID"))
-	name := strings.TrimSpace(os.Getenv("TELOS_DEPLOYMENT_NAME"))
+func deploymentBootstrapSession() (cloudBootstrapSession, bool) {
+	cloudSessionID := strings.TrimSpace(os.Getenv("TELOS_SESSION_ID"))
+	name := strings.TrimSpace(os.Getenv("TELOS_SESSION_NAME"))
 	digest := strings.TrimSpace(os.Getenv("TELOS_PACKAGE_DIGEST"))
 	if name == "" || digest == "" {
-		return deploymentSession{}, false
+		return cloudBootstrapSession{}, false
 	}
-	return deploymentSession{
-		DeploymentID:  deploymentID,
-		Name:          name,
-		PackageDigest: digest,
+	return cloudBootstrapSession{
+		CloudSessionID: cloudSessionID,
+		Name:           name,
+		PackageDigest:  digest,
 	}, true
 }
 
-func (r deploymentBootstrapReconciler) reconcile(sessions []deploymentSession) error {
+func (r deploymentBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) error {
 	current, err := r.store.List()
 	if err != nil {
 		return fmt.Errorf("list local sessions: %w", err)
@@ -108,8 +109,8 @@ func (r deploymentBootstrapReconciler) reconcile(sessions []deploymentSession) e
 		if _, err := r.store.Create(sessionapi.SessionCreateRequest{
 			ApplyPackagePath:   packagePath,
 			ApplyPackageDigest: digest,
-			DeploymentID:       strings.TrimSpace(session.DeploymentID),
-			DeploymentName:     name,
+			CloudSessionID:     strings.TrimSpace(session.CloudSessionID),
+			CloudSessionName:   name,
 			SessionKind:        &kind,
 			Model:              model,
 		}); err != nil {
@@ -140,7 +141,7 @@ func activeRootSessionsByName(sessions []sessionapi.Session) map[string]sessiona
 		if session.Status.IsTerminal() {
 			continue
 		}
-		if name := sessionDeploymentName(session); name != "" {
+		if name := sessionCloudName(session); name != "" {
 			out[name] = session
 			continue
 		}
@@ -152,11 +153,11 @@ func activeRootSessionsByName(sessions []sessionapi.Session) map[string]sessiona
 	return out
 }
 
-func sessionDeploymentName(session sessionapi.Session) string {
+func sessionCloudName(session sessionapi.Session) string {
 	if session.Provenance == nil {
 		return ""
 	}
-	name, _ := session.Provenance["deployment_name"].(string)
+	name, _ := session.Provenance["cloud_session_name"].(string)
 	return strings.TrimSpace(name)
 }
 
@@ -167,4 +168,16 @@ func sessionPackageDigest(session sessionapi.Session) string {
 		}
 	}
 	return ""
+}
+
+func envInt(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value <= 0 {
+		return fallback
+	}
+	return value
 }

@@ -19,7 +19,7 @@ func cmdList(args []string) {
 	limit := fs.Int("limit", 0, "Limit results")
 	wide := fs.Bool("wide", false, "Wide output")
 	localOnly := fs.Bool("local", false, "Local sessions only")
-	cloudOnly := fs.Bool("cloud", false, "Cloud deployments only")
+	cloudOnly := fs.Bool("cloud", false, "Cloud sessions only")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
@@ -68,16 +68,16 @@ func cmdList(args []string) {
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if effectiveWide {
-		fmt.Fprintln(w, "NAME\tPLATFORM\tSTATUS\tPARENT\tCOST\tSESSION")
+		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPARENT\tCOST\tSESSION")
 	} else {
-		fmt.Fprintln(w, "NAME\tPLATFORM\tSTATUS\tCOST\tSESSION")
+		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tCOST\tSESSION")
 	}
 	for _, sess := range visible {
 		row := displayRow(sess)
 		if effectiveWide {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
 				row.Name,
-				row.Platform,
+				row.Target,
 				row.Status,
 				row.Parent,
 				row.Cost,
@@ -87,7 +87,7 @@ func cmdList(args []string) {
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			row.Name,
-			row.Platform,
+			row.Target,
 			row.Status,
 			row.Cost,
 			row.Session,
@@ -190,25 +190,26 @@ func listDeployments(jsonOut bool, limit int, wide bool) {
 	}
 	deployments = limitDeployments(deployments, limit)
 	if jsonOut {
-		printJSON(cloud.DeploymentListResponse{Deployments: deployments})
+		printJSON(map[string]any{"sessions": deployments})
 		return
 	}
 	if len(deployments) == 0 {
-		fmt.Println("no deployments")
+		fmt.Println("no sessions")
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if wide {
-		fmt.Fprintln(w, "NAME\tSTATUS\tPACKAGE\tSERVICE\tDASHBOARD\tDEPLOYMENT")
+		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPACKAGE\tSERVICE\tDASHBOARD\tSESSION")
 	} else {
-		fmt.Fprintln(w, "NAME\tSTATUS\tSERVICE\tDASHBOARD\tDEPLOYMENT")
+		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tURL\tSESSION")
 	}
 	for _, deployment := range deployments {
 		serviceURL := optionalDeploymentString(deployment.ServiceURL)
 		dashboardURL := optionalDeploymentString(deployment.DashboardURL)
 		if wide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				deployment.Name,
+				"cloud",
 				deployment.State,
 				deployment.PackageRef,
 				serviceURL,
@@ -219,9 +220,9 @@ func listDeployments(jsonOut bool, limit int, wide bool) {
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			deployment.Name,
+			"cloud",
 			deployment.State,
 			serviceURL,
-			dashboardURL,
 			deployment.ID,
 		)
 	}

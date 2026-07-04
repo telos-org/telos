@@ -79,7 +79,7 @@ func TestCmdListShowsDeploymentsForConfiguredCloud(t *testing.T) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"deployments": []map[string]any{{
-				"id":             "dep_123",
+				"id":             "sess_123",
 				"name":           "auth",
 				"state":          "healthy",
 				"package_ref":    "@telos/auth:1.0.0",
@@ -103,14 +103,55 @@ func TestCmdListShowsDeploymentsForConfiguredCloud(t *testing.T) {
 		"auth",
 		"healthy",
 		"@telos/auth:1.0.0",
-		"dep_123",
+		"sess_123",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("list output missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "SESSION") {
-		t.Fatalf("list output should be deployment-shaped:\n%s", out)
+	if strings.Contains(out, "DEPLOYMENT") || !strings.Contains(out, "SESSION") {
+		t.Fatalf("list output should be session-shaped:\n%s", out)
+	}
+}
+
+func TestCmdListJSONShowsCloudSessions(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"deployments": []map[string]any{{
+				"id":             "sess_123",
+				"name":           "auth",
+				"state":          "healthy",
+				"package_ref":    "@telos/auth:1.0.0",
+				"package_digest": "sha256:abc",
+				"created_at":     "then",
+				"updated_at":     "now",
+			}},
+		})
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+
+	out := captureStdout(t, func() {
+		cmdList([]string{"--json"})
+	})
+	var body map[string]any
+	if err := json.Unmarshal([]byte(out), &body); err != nil {
+		t.Fatalf("list json: %v\n%s", err, out)
+	}
+	if _, ok := body["deployments"]; ok {
+		t.Fatalf("cloud list json should not expose deployments: %#v", body)
+	}
+	sessions, ok := body["sessions"].([]any)
+	if !ok || len(sessions) != 1 {
+		t.Fatalf("cloud list json sessions: %#v", body)
+	}
+	session, ok := sessions[0].(map[string]any)
+	if !ok || session["id"] != "sess_123" {
+		t.Fatalf("cloud list json first session: %#v", sessions[0])
 	}
 }
 
@@ -119,7 +160,7 @@ func TestPrintDeploymentDescriptionShowsProductSurfaces(t *testing.T) {
 	serviceURL := "https://auth.example.com"
 	dashboardURL := "https://dashboard.example.com"
 	deployment := cloud.DeploymentRecord{
-		ID:             "dep_123",
+		ID:             "sess_123",
 		Name:           "auth",
 		State:          "healthy",
 		PackageRef:     "@telos/auth:1.0.0",
@@ -136,10 +177,10 @@ func TestPrintDeploymentDescriptionShowsProductSurfaces(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"Name      auth",
-		"Platform  cloud",
+		"Target    cloud",
 		"Status    healthy",
 		"Package   @telos/auth:1.0.0",
-		"Deployment dep_123",
+		"Session   sess_123",
 		"Service   https://auth.example.com",
 		"Dashboard https://dashboard.example.com",
 		"Runtime   0.1.0",
@@ -153,7 +194,7 @@ func TestPrintDeploymentDescriptionShowsProductSurfaces(t *testing.T) {
 
 func TestPrintDeploymentDeleteReceiptUsesDeploymentSummary(t *testing.T) {
 	deployment := cloud.DeploymentRecord{
-		ID:            "dep_123",
+		ID:            "sess_123",
 		Name:          "auth",
 		State:         "deleted",
 		PackageRef:    "@telos/auth:1.0.0",
@@ -168,10 +209,10 @@ func TestPrintDeploymentDeleteReceiptUsesDeploymentSummary(t *testing.T) {
 	for _, want := range []string{
 		"deleted auth",
 		"Name      auth",
-		"Platform  cloud",
+		"Target    cloud",
 		"Status    deleted",
 		"Package   @telos/auth:1.0.0",
-		"Deployment dep_123",
+		"Session   sess_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("deployment stop receipt missing %q:\n%s", want, text)
@@ -181,7 +222,7 @@ func TestPrintDeploymentDeleteReceiptUsesDeploymentSummary(t *testing.T) {
 
 func TestPrintDeploymentDeleteReceiptShowsAsyncDeletion(t *testing.T) {
 	deployment := cloud.DeploymentRecord{
-		ID:            "dep_123",
+		ID:            "sess_123",
 		Name:          "auth",
 		State:         "deleting",
 		PackageRef:    "@telos/auth:1.0.0",
@@ -196,7 +237,7 @@ func TestPrintDeploymentDeleteReceiptShowsAsyncDeletion(t *testing.T) {
 	for _, want := range []string{
 		"delete requested for auth",
 		"Status    deleting",
-		"Deployment dep_123",
+		"Session   sess_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("deployment delete receipt missing %q:\n%s", want, text)
@@ -207,13 +248,13 @@ func TestPrintDeploymentDeleteReceiptShowsAsyncDeletion(t *testing.T) {
 func TestCmdDeleteDeletesDeployment(t *testing.T) {
 	var deleted bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete || r.URL.Path != "/api/deployments/dep_123" {
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/deployments/sess_123" {
 			http.NotFound(w, r)
 			return
 		}
 		deleted = true
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"id":             "dep_123",
+			"id":             "sess_123",
 			"name":           "auth",
 			"state":          "deleted",
 			"package_ref":    "@telos/auth:1.0.0",
@@ -226,7 +267,7 @@ func TestCmdDeleteDeletesDeployment(t *testing.T) {
 	configureCloudTest(t, srv.URL)
 
 	out := captureStdout(t, func() {
-		cmdDelete([]string{"dep_123"})
+		cmdDelete([]string{"sess_123"})
 	})
 	if !deleted {
 		t.Fatal("expected deployment delete request")
@@ -234,7 +275,7 @@ func TestCmdDeleteDeletesDeployment(t *testing.T) {
 	for _, want := range []string{
 		"deleted auth",
 		"Status    deleted",
-		"Deployment dep_123",
+		"Session   sess_123",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("delete output missing %q:\n%s", want, out)
@@ -370,7 +411,7 @@ func TestRootListSessionsUsesScopedContext(t *testing.T) {
 	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
 	t.Setenv("TELOS_API_TOKEN", "scoped-token")
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
-	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
+	t.Setenv("TELOS_API_ENDPOINT", cluster.URL)
 
 	sessions, handled, err := rootListSessions(7)
 	if err != nil {
@@ -499,7 +540,7 @@ func TestPrintSessionDescriptionIncludesAgentFacingDetails(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"Name      postgres",
-		"Platform  cloud",
+		"Target    cloud",
 		"Status    completed",
 		"Cost      $1.2300",
 		"Session   sess_123",
@@ -622,7 +663,7 @@ func TestPrintLocalLaunchIncludesWorkspaceScopedCommands(t *testing.T) {
 	for _, want := range []string{
 		"submitted blackbox",
 		"Name      blackbox",
-		"Platform  local",
+		"Target    local",
 		"Status    active",
 		"Cost      -",
 		"Session   local_123",
@@ -656,7 +697,7 @@ func TestPrintSessionReceiptUsesNormalizedSummary(t *testing.T) {
 	for _, want := range []string{
 		"updated gitea",
 		"Name      gitea",
-		"Platform  cloud",
+		"Target    cloud",
 		"Status    idle",
 		"Cost      $1.1907",
 		"Session   sess_123",
@@ -684,7 +725,7 @@ func TestPrintStopReceiptUsesSessionSummary(t *testing.T) {
 	for _, want := range []string{
 		"stopped gitea",
 		"Name      gitea",
-		"Platform  cloud",
+		"Target    cloud",
 		"Status    stopped",
 		"Cost      $1.1907",
 		"Session   sess_123",
@@ -708,7 +749,7 @@ func TestPrintStopReceiptUsesSessionIDForUnnamedSession(t *testing.T) {
 	for _, want := range []string{
 		"stopped sess_123",
 		"Name      -",
-		"Platform  local",
+		"Target    local",
 		"Status    stopped",
 		"Session   sess_123",
 	} {

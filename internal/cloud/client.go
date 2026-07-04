@@ -214,7 +214,7 @@ func (c *Client) StreamDeploymentLogs(ctx context.Context, deploymentID string, 
 	return c.streamEvents(ctx, "/api/deployments/"+url.PathEscape(deploymentID)+"/logs", func(data []byte) error {
 		var event sessionapi.SessionEvent
 		if err := json.Unmarshal(data, &event); err != nil {
-			return fmt.Errorf("decode deployment log event: %w", err)
+			return fmt.Errorf("decode session log event: %w", err)
 		}
 		return onEvent(event)
 	})

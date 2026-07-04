@@ -55,9 +55,9 @@ telos list --cloud
 ```
 
 For hosted workflows, `telos apply` publishes a versioned spec package and
-creates or updates a managed deployment. The deployment allocates its runtime
-behind the control plane. `telos run` remains available for local specs and
-internal delegated work.
+creates or updates a cloud session. The control plane allocates the runtime
+behind that session. `telos run` remains available for local specs and internal
+delegated work.
 
 ## Read Next
 

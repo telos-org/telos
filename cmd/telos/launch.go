@@ -29,7 +29,7 @@ func cmdLaunch(command, action string, args []string) {
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	workspace := fs.String("workspace", "", "Workspace directory")
 	scope := fs.String("scope", "", "Package scope")
-	deploymentID := fs.String("deployment", "", "Deployment ID to update")
+	sessionID := fs.String("session", "", "Managed session ID to update")
 	model := fs.String("model", "", "Model name")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
 	until := fs.Int("until", 0, "Run exactly N evaluator review cycles")
@@ -51,8 +51,8 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintln(os.Stderr, "error: --scope is only supported with telos apply")
 		os.Exit(1)
 	}
-	if command != "apply" && flagNameSet(fs, "deployment") {
-		fmt.Fprintln(os.Stderr, "error: --deployment is only supported with telos apply")
+	if command != "apply" && flagNameSet(fs, "session") {
+		fmt.Fprintln(os.Stderr, "error: --session is only supported with telos apply")
 		os.Exit(1)
 	}
 
@@ -117,7 +117,7 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudApply:
-		applyCloudControl(specArg, *scope, *deploymentID, *jsonOut)
+		applyCloudControl(specArg, *scope, *sessionID, *jsonOut)
 		return
 	}
 	if !hasLocalSpec {
@@ -167,7 +167,7 @@ func printLocalLaunch(out io.Writer, action string, session *cli.LocalSession) {
 	workspace := shellQuote(session.WorkspaceScope)
 	fmt.Fprintf(out, "%s %s\n\n", action, session.SpecName)
 	printSummaryField(out, "Name", session.SpecName)
-	printSummaryField(out, "Platform", "local")
+	printSummaryField(out, "Target", "local")
 	printSummaryField(out, "Status", "active")
 	printSummaryField(out, "Cost", "-")
 	printSummaryField(out, "Session", session.SessionID)
@@ -278,8 +278,8 @@ func applyCloudControl(
 	}
 	if jsonOut {
 		printJSON(map[string]any{
-			"operation":  operation,
-			"deployment": deployment,
+			"operation": operation,
+			"session":   deployment,
 		})
 		return
 	}
@@ -293,8 +293,8 @@ func applyDeploymentPackage(
 	deploymentID string,
 ) (string, *cloud.DeploymentRecord, error) {
 	if deploymentID != "" {
-		if !isDeploymentID(deploymentID) {
-			return "", nil, fmt.Errorf("invalid deployment id %q", deploymentID)
+		if !isCloudApplyID(deploymentID) {
+			return "", nil, fmt.Errorf("invalid cloud session id %q", deploymentID)
 		}
 		deployment, err := control.UpdateDeployment(deploymentID, packageRef)
 		return "updated", deployment, err
@@ -312,7 +312,7 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	fmt.Fprintf(out, "%s %s\n\n", operation, name)
 	row := displayRow(*session)
 	printSummaryField(out, "Name", row.Name)
-	printSummaryField(out, "Platform", row.Platform)
+	printSummaryField(out, "Target", row.Target)
 	printSummaryField(out, "Status", row.Status)
 	printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	printSummaryField(out, "Session", row.Session)
@@ -321,11 +321,11 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 func printDeploymentReceipt(out io.Writer, operation string, deployment *cloud.DeploymentRecord) {
 	fmt.Fprintf(out, "%s %s\n\n", operation, deployment.Name)
 	printSummaryField(out, "Name", deployment.Name)
-	printSummaryField(out, "Platform", "cloud")
+	printSummaryField(out, "Target", "cloud")
 	printSummaryField(out, "Status", deployment.State)
 	printSummaryField(out, "Package", deployment.PackageRef)
 	printSummaryField(out, "Digest", deployment.PackageDigest)
-	printSummaryField(out, "Deployment", deployment.ID)
+	printSummaryField(out, "Session", deployment.ID)
 	if deployment.ServiceURL != nil {
 		printSummaryField(out, "Service URL", *deployment.ServiceURL)
 	}

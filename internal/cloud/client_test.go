@@ -78,7 +78,7 @@ func TestClientCreateDeployment(t *testing.T) {
 			t.Fatal(err)
 		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"id":             "dep_123",
+			"id":             "sess_123",
 			"name":           "auth",
 			"state":          "provisioning",
 			"package_ref":    "@telos/auth:1.2.3",
@@ -94,7 +94,7 @@ func TestClientCreateDeployment(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateDeployment: %v", err)
 	}
-	if deployment.ID != "dep_123" || deployment.Name != "auth" || deployment.State != "provisioning" {
+	if deployment.ID != "sess_123" || deployment.Name != "auth" || deployment.State != "provisioning" {
 		t.Fatalf("deployment: got %+v", deployment)
 	}
 	if gotBody["name"] != "auth" || gotBody["package_ref"] != "@telos/auth:1.2.3" {
@@ -105,7 +105,7 @@ func TestClientCreateDeployment(t *testing.T) {
 func TestClientUpdateDeployment(t *testing.T) {
 	var gotBody map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/api/deployments/dep_123" {
+		if r.Method != http.MethodPut || r.URL.Path != "/api/deployments/sess_123" {
 			http.NotFound(w, r)
 			return
 		}
@@ -113,7 +113,7 @@ func TestClientUpdateDeployment(t *testing.T) {
 			t.Fatal(err)
 		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"id":             "dep_123",
+			"id":             "sess_123",
 			"name":           "auth",
 			"state":          "deploying",
 			"package_ref":    "@telos/auth:1.2.4",
@@ -125,11 +125,11 @@ func TestClientUpdateDeployment(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.UpdateDeployment("dep_123", "@telos/auth:1.2.4")
+	deployment, err := client.UpdateDeployment("sess_123", "@telos/auth:1.2.4")
 	if err != nil {
 		t.Fatalf("UpdateDeployment: %v", err)
 	}
-	if deployment.ID != "dep_123" || deployment.PackageDigest != "sha256:def" || deployment.State != "deploying" {
+	if deployment.ID != "sess_123" || deployment.PackageDigest != "sha256:def" || deployment.State != "deploying" {
 		t.Fatalf("deployment: got %+v", deployment)
 	}
 	if gotBody["package_ref"] != "@telos/auth:1.2.4" {
@@ -145,7 +145,7 @@ func TestClientListDeployments(t *testing.T) {
 		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"deployments": []map[string]any{{
-				"id":             "dep_123",
+				"id":             "sess_123",
 				"name":           "auth",
 				"state":          "healthy",
 				"package_ref":    "@telos/auth:1.2.3",
@@ -162,19 +162,19 @@ func TestClientListDeployments(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListDeployments: %v", err)
 	}
-	if len(deployments) != 1 || deployments[0].ID != "dep_123" || deployments[0].Name != "auth" {
+	if len(deployments) != 1 || deployments[0].ID != "sess_123" || deployments[0].Name != "auth" {
 		t.Fatalf("deployments: got %+v", deployments)
 	}
 }
 
 func TestClientGetDeployment(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/dep_123" {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/sess_123" {
 			http.NotFound(w, r)
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"id":             "dep_123",
+			"id":             "sess_123",
 			"name":           "auth",
 			"state":          "healthy",
 			"package_ref":    "@telos/auth:1.2.3",
@@ -186,23 +186,23 @@ func TestClientGetDeployment(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.GetDeployment("dep_123")
+	deployment, err := client.GetDeployment("sess_123")
 	if err != nil {
 		t.Fatalf("GetDeployment: %v", err)
 	}
-	if deployment.ID != "dep_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
+	if deployment.ID != "sess_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
 		t.Fatalf("deployment: got %+v", deployment)
 	}
 }
 
 func TestClientDeleteDeployment(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodDelete || r.URL.Path != "/api/deployments/dep_123" {
+		if r.Method != http.MethodDelete || r.URL.Path != "/api/deployments/sess_123" {
 			http.NotFound(w, r)
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"id":             "dep_123",
+			"id":             "sess_123",
 			"name":           "auth",
 			"state":          "deleted",
 			"package_ref":    "@telos/auth:1.2.3",
@@ -214,18 +214,18 @@ func TestClientDeleteDeployment(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.DeleteDeployment("dep_123")
+	deployment, err := client.DeleteDeployment("sess_123")
 	if err != nil {
 		t.Fatalf("DeleteDeployment: %v", err)
 	}
-	if deployment.ID != "dep_123" || deployment.State != "deleted" {
+	if deployment.ID != "sess_123" || deployment.State != "deleted" {
 		t.Fatalf("deployment: got %+v", deployment)
 	}
 }
 
 func TestClientGetDeploymentLogs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/dep_123/logs" {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/sess_123/logs" {
 			http.NotFound(w, r)
 			return
 		}
@@ -239,7 +239,7 @@ func TestClientGetDeploymentLogs(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	events, err := client.GetDeploymentLogs("dep_123")
+	events, err := client.GetDeploymentLogs("sess_123")
 	if err != nil {
 		t.Fatalf("GetDeploymentLogs: %v", err)
 	}
@@ -250,7 +250,7 @@ func TestClientGetDeploymentLogs(t *testing.T) {
 
 func TestClientStreamDeploymentLogs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/deployments/dep_123/logs" {
+		if r.URL.Path != "/api/deployments/sess_123/logs" {
 			http.NotFound(w, r)
 			return
 		}
@@ -264,7 +264,7 @@ func TestClientStreamDeploymentLogs(t *testing.T) {
 
 	client := NewClient(srv.URL, "test-token")
 	var events []sessionapi.SessionEvent
-	err := client.StreamDeploymentLogs(context.Background(), "dep_123", func(event sessionapi.SessionEvent) error {
+	err := client.StreamDeploymentLogs(context.Background(), "sess_123", func(event sessionapi.SessionEvent) error {
 		events = append(events, event)
 		return nil
 	})

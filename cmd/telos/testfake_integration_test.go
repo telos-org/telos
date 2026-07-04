@@ -202,13 +202,13 @@ func runProcess(t *testing.T, dir string, extraEnv []string, name string, args .
 
 func fakeIntegrationEnv(extra []string) []string {
 	drop := map[string]bool{
-		"TELOS_API_TOKEN":            true,
-		"TELOS_CLUSTER_API_ENDPOINT": true,
-		"TELOS_PARENT_SESSION_ID":    true,
-		"TELOS_RUNTIME":              true,
-		"TELOS_SESSION_DIR":          true,
-		"TELOS_SESSION_ID":           true,
-		"TELOSD_PATH":                true,
+		"TELOS_API_TOKEN":         true,
+		"TELOS_API_ENDPOINT":      true,
+		"TELOS_PARENT_SESSION_ID": true,
+		"TELOS_RUNTIME":           true,
+		"TELOS_SESSION_DIR":       true,
+		"TELOS_SESSION_ID":        true,
+		"TELOSD_PATH":             true,
 	}
 	var env []string
 	for _, item := range os.Environ() {

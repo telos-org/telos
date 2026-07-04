@@ -154,11 +154,11 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	prepared.SessionSpecPath = strPtr(sessionSpecPath)
 
 	provenance := map[string]any{"mode": runtimeMode(fs.runtime)}
-	if deploymentID := strings.TrimSpace(req.DeploymentID); deploymentID != "" {
-		provenance["deployment_id"] = deploymentID
+	if cloudSessionID := strings.TrimSpace(req.CloudSessionID); cloudSessionID != "" {
+		provenance["cloud_session_id"] = cloudSessionID
 	}
-	if deploymentName := strings.TrimSpace(req.DeploymentName); deploymentName != "" {
-		provenance["deployment_name"] = deploymentName
+	if cloudSessionName := strings.TrimSpace(req.CloudSessionName); cloudSessionName != "" {
+		provenance["cloud_session_name"] = cloudSessionName
 	}
 	m := ManifestFromInitial(InitialManifest{
 		SessionID:          id,

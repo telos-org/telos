@@ -1368,7 +1368,7 @@ func TestSessionArtifactShape(t *testing.T) {
 	}
 }
 
-func TestRunnerIdentityRecordsKubernetesPod(t *testing.T) {
+func TestRunnerIdentityUsesLocalSubprocess(t *testing.T) {
 	t.Setenv("KUBERNETES_SERVICE_HOST", "10.0.0.1")
 	t.Setenv("HOSTNAME", "controller-abc")
 	t.Setenv("TELOS_RUNNER_POD_NAME", "controller-abc")
@@ -1376,16 +1376,16 @@ func TestRunnerIdentityRecordsKubernetesPod(t *testing.T) {
 
 	runner := sessionworker.RunnerIdentity(1234)
 
-	if runner.Kind != "kubernetes-pod" {
+	if runner.Kind != "local-subprocess" {
 		t.Fatalf("kind: got %v", runner.Kind)
 	}
-	if !runner.InCluster {
+	if runner.InCluster {
 		t.Fatalf("in_cluster: got %v", runner.InCluster)
 	}
-	if runner.PodName != "controller-abc" {
+	if runner.PodName != "" {
 		t.Fatalf("pod_name: got %v", runner.PodName)
 	}
-	if runner.PodNamespace != "ns-ctrl-abc" {
+	if runner.PodNamespace != "" {
 		t.Fatalf("pod_namespace: got %v", runner.PodNamespace)
 	}
 }
