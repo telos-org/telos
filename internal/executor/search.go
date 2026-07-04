@@ -15,12 +15,11 @@ import (
 )
 
 func (t *nativeTools) ls(p string) (toolOutput, error) {
-	full, err := t.resolvePath(defaultString(p, "."))
+	resolved, err := t.resolvePath(defaultString(p, "."))
 	if err != nil {
 		return toolOutput{}, err
 	}
-	t.logOutsideWorkspaceAccess("list_dir", full, false)
-	dir, err := os.Open(full)
+	dir, err := os.Open(resolved.full)
 	if err != nil {
 		return toolOutput{}, err
 	}
@@ -54,7 +53,7 @@ func (t *nativeTools) ls(p string) (toolOutput, error) {
 	truncated := entryCount > len(lines) || truncatedBytes
 	return toolOutput{
 		fields: toolFields(
-			"path", t.displayPath(full),
+			"path", resolved.rel,
 			"entry_count", entryCount,
 			"entries_returned", len(lines),
 			"truncated", truncated,
@@ -79,7 +78,6 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (toolOutput, error
 	if err != nil {
 		return toolOutput{}, err
 	}
-	t.logOutsideWorkspaceAccess("search_text", root, false)
 	var matches []string
 	visit := func(file string) {
 		if len(matches) >= maxMatches {
@@ -104,14 +102,14 @@ func (t *nativeTools) grep(pattern, p string, maxMatches int) (toolOutput, error
 			}
 		}
 	}
-	info, err := os.Stat(root)
+	info, err := os.Stat(root.full)
 	if err != nil {
 		return toolOutput{}, err
 	}
 	if !info.IsDir() {
-		visit(root)
+		visit(root.full)
 	} else {
-		_ = filepath.WalkDir(root, func(file string, d os.DirEntry, err error) error {
+		_ = filepath.WalkDir(root.full, func(file string, d os.DirEntry, err error) error {
 			if err != nil {
 				return nil
 			}
@@ -155,9 +153,8 @@ func (t *nativeTools) find(pattern, p string, maxMatches int) (toolOutput, error
 	if err != nil {
 		return toolOutput{}, err
 	}
-	t.logOutsideWorkspaceAccess("find_files", root, false)
 	var matches []string
-	_ = filepath.WalkDir(root, func(file string, d os.DirEntry, err error) error {
+	_ = filepath.WalkDir(root.full, func(file string, d os.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}

@@ -26,6 +26,7 @@ func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecut
 		cfg.AgentTimeoutSec,
 		cred.Credential,
 		cred.Cleanup,
+		executor.WithContainmentMode(executor.ContainmentSessionWorkspace),
 	)
 	return exec, nil
 }

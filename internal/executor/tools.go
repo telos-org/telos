@@ -13,15 +13,10 @@ const (
 	defaultToolSearchLineBytes = 4096
 )
 
-// Security model: these tools are deliberately unsandboxed. This is a YOLO /
-// minimal, Pi-inspired posture of full trust in the agent and its host: reads,
-// writes, and `bash` operate on whatever the process can touch, with no
-// workspace jail or write allowlist. The only real containment is whatever
-// sandbox the executor itself runs inside (e.g. an ephemeral container/pod).
-// Relative paths still resolve against the workspace for convenience, and
-// out-of-workspace access is logged for telemetry, but neither is a security
-// boundary — `bash` and absolute paths bypass both by design. Do not treat any
-// path handling here as a trust boundary.
+// Native tools require an explicit ContainmentMode on the executor. File tools
+// and bash cwd are scoped to the workspace by the registry/resolver in this
+// package; process-level containment is still declared by the caller and
+// recorded on session/tool events.
 
 type nativeToolCall struct {
 	ID        string
@@ -63,11 +58,13 @@ type toolBodySection struct {
 // nativeToolResult (Metadata, ExitCode, Truncated, ErrorCode) directly from
 // these fields, eliminating the old applyMetadataFromOutput re-parse.
 type toolOutput struct {
-	fields    []toolField
-	bodies    []toolBodySection
-	exitCode  *int
-	truncated bool
-	errorCode executorErrorCode
+	fields       []toolField
+	bodies       []toolBodySection
+	exitCode     *int
+	truncated    bool
+	errorCode    executorErrorCode
+	changedFiles []string
+	preview      string
 }
 
 // innerText renders the fields and body sections without the envelope header
@@ -88,6 +85,10 @@ func (o toolOutput) innerText() string {
 		} else {
 			parts = append(parts, b.Text)
 		}
+	}
+	if o.preview != "" {
+		parts = append(parts, "preview:")
+		parts = append(parts, o.preview)
 	}
 	return strings.Join(parts, "\n")
 }
@@ -124,6 +125,10 @@ func renderToolOutput(name string, ok bool, durationMS int64, out toolOutput) st
 		} else {
 			parts = append(parts, b.Text)
 		}
+	}
+	if out.preview != "" {
+		parts = append(parts, "preview:")
+		parts = append(parts, out.preview)
 	}
 	return strings.Join(parts, "\n")
 }

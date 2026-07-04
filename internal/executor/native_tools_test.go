@@ -114,6 +114,191 @@ func TestNativeToolIntegerArgumentsRejectFractions(t *testing.T) {
 	}
 }
 
+func TestNativeToolArgumentValidation(t *testing.T) {
+	workspace := t.TempDir()
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs(), game.TurnBudget{})
+
+	cases := []struct {
+		name      string
+		call      nativeToolCall
+		wantError string
+	}{
+		{
+			name:      "missing required",
+			call:      nativeToolCall{ID: "missing", Name: "write_file", Arguments: `{"path":"x.txt"}`},
+			wantError: `missing required argument "content"`,
+		},
+		{
+			name:      "additional properties",
+			call:      nativeToolCall{ID: "extra", Name: "read_file", Arguments: `{"path":"x.txt","surprise":true}`},
+			wantError: `unexpected argument "surprise"`,
+		},
+		{
+			name:      "enum",
+			call:      nativeToolCall{ID: "enum", Name: "skill", Arguments: `{"action":"delete"}`},
+			wantError: `argument "action" must be one of`,
+		},
+		{
+			name:      "malformed",
+			call:      nativeToolCall{ID: "bad", Name: "bash", Arguments: `{"command":`},
+			wantError: `invalid tool arguments`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			result := tools.execute(context.Background(), tc.call)
+			if !result.IsError || result.ErrorCode != errAgentProtocol || !strings.Contains(result.Output, tc.wantError) {
+				t.Fatalf("unexpected validation result: %+v\n%s", result, result.Output)
+			}
+		})
+	}
+
+	recovered := tools.execute(context.Background(), nativeToolCall{
+		ID:        "recovered",
+		Name:      "write_file",
+		Arguments: `{"path":"ok.txt","content":"ok\n"} trailing text`,
+	})
+	if recovered.IsError {
+		t.Fatalf("expected tolerant recovery after complete JSON object:\n%s", recovered.Output)
+	}
+}
+
+func TestNativeToolsRejectSymlinkEscapeAndAbsoluteOutsideRoot(t *testing.T) {
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(workspace, "outside-link")); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs(), game.TurnBudget{})
+
+	throughSymlink := tools.execute(context.Background(), nativeToolCall{
+		ID:        "symlink",
+		Name:      "write_file",
+		Arguments: `{"path":"outside-link/escape.txt","content":"bad\n"}`,
+	})
+	if !throughSymlink.IsError {
+		t.Fatalf("expected symlink escape write to fail:\n%s", throughSymlink.Output)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "escape.txt")); !os.IsNotExist(err) {
+		t.Fatalf("symlink escape target should not be written: %v", err)
+	}
+
+	absoluteOutside := filepath.Join(outside, "absolute.txt")
+	result := tools.execute(context.Background(), nativeToolCall{
+		ID:        "absolute",
+		Name:      "write_file",
+		Arguments: `{"path":` + mustJSON(absoluteOutside) + `,"content":"bad\n"}`,
+	})
+	if !result.IsError || !strings.Contains(result.Output, "must stay inside the workspace") {
+		t.Fatalf("expected absolute outside-root rejection:\n%s", result.Output)
+	}
+}
+
+func TestNativeToolsFileTrackerStaleWrites(t *testing.T) {
+	workspace := t.TempDir()
+	path := filepath.Join(workspace, "tracked.txt")
+	if err := os.WriteFile(path, []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs(), game.TurnBudget{})
+
+	read := tools.execute(context.Background(), nativeToolCall{ID: "read", Name: "read_file", Arguments: `{"path":"tracked.txt"}`})
+	if read.IsError {
+		t.Fatalf("read failed:\n%s", read.Output)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("recreated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	deletedRecreated := tools.execute(context.Background(), nativeToolCall{ID: "write", Name: "write_file", Arguments: `{"path":"tracked.txt","content":"new\n"}`})
+	if !deletedRecreated.IsError || !strings.Contains(deletedRecreated.Output, "re-read") {
+		t.Fatalf("expected deleted/recreated stale write refusal:\n%s", deletedRecreated.Output)
+	}
+
+	readAgain := tools.execute(context.Background(), nativeToolCall{ID: "read2", Name: "read_file", Arguments: `{"path":"tracked.txt"}`})
+	if readAgain.IsError {
+		t.Fatalf("second read failed:\n%s", readAgain.Output)
+	}
+	if err := os.WriteFile(path, []byte("external\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	edit := tools.execute(context.Background(), nativeToolCall{ID: "edit", Name: "replace_text", Arguments: `{"path":"tracked.txt","old_string":"external","new_string":"ours"}`})
+	if !edit.IsError || !strings.Contains(edit.Output, "re-read") {
+		t.Fatalf("expected concurrent-edit stale refusal:\n%s", edit.Output)
+	}
+
+	readThird := tools.execute(context.Background(), nativeToolCall{ID: "read3", Name: "read_file", Arguments: `{"path":"tracked.txt"}`})
+	if readThird.IsError {
+		t.Fatalf("third read failed:\n%s", readThird.Output)
+	}
+	firstWrite := tools.execute(context.Background(), nativeToolCall{ID: "write2", Name: "write_file", Arguments: `{"path":"tracked.txt","content":"ours\n"}`})
+	if firstWrite.IsError {
+		t.Fatalf("write after re-read failed:\n%s", firstWrite.Output)
+	}
+	secondWrite := tools.execute(context.Background(), nativeToolCall{ID: "write3", Name: "write_file", Arguments: `{"path":"tracked.txt","content":"ours again\n"}`})
+	if secondWrite.IsError {
+		t.Fatalf("baseline should update after successful write:\n%s", secondWrite.Output)
+	}
+}
+
+func TestNativeToolsChangedFileMetadataAndPreview(t *testing.T) {
+	workspace := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workspace, "edit.txt"), []byte("old\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs(), game.TurnBudget{})
+
+	write := tools.execute(context.Background(), nativeToolCall{ID: "write", Name: "write_file", Arguments: `{"path":"write.txt","content":"hello\n"}`})
+	assertChangedFileMetadata(t, write, "write.txt")
+
+	if read := tools.execute(context.Background(), nativeToolCall{ID: "read", Name: "read_file", Arguments: `{"path":"edit.txt"}`}); read.IsError {
+		t.Fatalf("read failed:\n%s", read.Output)
+	}
+	edit := tools.execute(context.Background(), nativeToolCall{ID: "edit", Name: "replace_text", Arguments: `{"path":"edit.txt","old_string":"old","new_string":"new"}`})
+	assertChangedFileMetadata(t, edit, "edit.txt")
+
+	patch := strings.Join([]string{
+		"diff --git a/patch.txt b/patch.txt",
+		"new file mode 100644",
+		"index 0000000..8d1c8b2",
+		"--- /dev/null",
+		"+++ b/patch.txt",
+		"@@ -0,0 +1 @@",
+		"+patched",
+		"",
+	}, "\n")
+	applied := tools.execute(context.Background(), nativeToolCall{ID: "patch", Name: "apply_patch", Arguments: `{"patch":` + mustJSON(patch) + `}`})
+	assertChangedFileMetadata(t, applied, "patch.txt")
+}
+
+func assertChangedFileMetadata(t *testing.T, result nativeToolResult, want string) {
+	t.Helper()
+	if result.IsError {
+		t.Fatalf("tool failed:\n%s", result.Output)
+	}
+	changed, ok := result.Metadata["changed_files"].([]string)
+	if !ok {
+		t.Fatalf("changed_files metadata missing or wrong type: %#v", result.Metadata)
+	}
+	var found bool
+	for _, path := range changed {
+		if path == want {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("changed_files missing %q: %#v", want, changed)
+	}
+	if preview, ok := result.Metadata["preview"].(string); !ok || strings.TrimSpace(preview) == "" {
+		t.Fatalf("preview metadata missing: %#v", result.Metadata)
+	}
+	if !strings.Contains(result.Output, "preview:") {
+		t.Fatalf("preview missing from output:\n%s", result.Output)
+	}
+}
+
 func TestNativeEditingToolsPreserveExistingFileMode(t *testing.T) {
 	workspace := t.TempDir()
 	scriptPath := filepath.Join(workspace, "script.sh")

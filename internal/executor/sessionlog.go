@@ -38,13 +38,18 @@ type sessionCost = agentsession.Cost
 // This is an accepted property of the trust model, not an incidental leak.
 
 type nativeSessionLogger struct {
-	path      string
-	workspace string
-	file      *os.File
+	path            string
+	workspace       string
+	containmentMode ContainmentMode
+	file            *os.File
 }
 
-func newNativeSessionLogger(path, workspace string) *nativeSessionLogger {
-	return &nativeSessionLogger{path: path, workspace: workspace}
+func newNativeSessionLogger(path, workspace string, mode ...ContainmentMode) *nativeSessionLogger {
+	containment := ContainmentUncontained
+	if len(mode) > 0 && mode[0] != "" {
+		containment = mode[0]
+	}
+	return &nativeSessionLogger{path: path, workspace: workspace, containmentMode: containment}
 }
 
 func (l *nativeSessionLogger) start() error {
@@ -66,6 +71,7 @@ func (l *nativeSessionLogger) start() error {
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		CWD:       l.workspace,
 		Runtime:   "telos-native",
+		Data:      mustRawJSON(map[string]any{"containment_mode": string(l.containmentMode)}),
 	}); err != nil {
 		_ = l.close()
 		return err
@@ -175,6 +181,10 @@ func (l *nativeSessionLogger) assistant(text, provider, model, stopReason string
 }
 
 func (l *nativeSessionLogger) tool(result nativeToolResult) error {
+	if result.Metadata == nil {
+		result.Metadata = map[string]any{}
+	}
+	result.Metadata["containment_mode"] = string(l.containmentMode)
 	payload := agentsession.ToolResultPayload{
 		ToolCallID:  result.CallID,
 		ToolName:    result.Name,
@@ -310,6 +320,13 @@ func (l *nativeSessionLogger) outsideWorkspaceAccess(action, path string, write 
 	}))
 }
 
+func (l *nativeSessionLogger) terminal(state TerminalState) error {
+	return l.event("terminal", mustRawJSON(map[string]any{
+		"terminal_state":   string(state),
+		"containment_mode": string(l.containmentMode),
+	}))
+}
+
 func (l *nativeSessionLogger) compaction(p agentsession.CompactionPayload) error {
 	return l.event(agentsession.KindCompaction, agentsession.MarshalPayload(&p))
 }
@@ -371,6 +388,14 @@ func (l *nativeSessionLogger) event(kind string, data json.RawMessage) error {
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		Data:      data,
 	})
+}
+
+func mustRawJSON(v any) json.RawMessage {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	return data
 }
 
 func sessionCostFromStats(stats game.TurnStats) *sessionCost {

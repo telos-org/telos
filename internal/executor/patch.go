@@ -31,11 +31,15 @@ func (t *nativeTools) applyPatch(ctx context.Context, patchText string) (toolOut
 	if err := validatePatchPaths(metadata.declared); err != nil {
 		return toolOutput{}, err
 	}
+	if err := t.validatePatchScopeAndStaleness(metadata); err != nil {
+		return toolOutput{}, err
+	}
 	cmd := "git apply --whitespace=nowarn --recount " + shellQuote(tmp.Name())
 	bashOut, err := t.bash(ctx, cmd, "", nil, defaultToolTimeoutSec)
 	if err != nil {
 		return bashOut, err
 	}
+	t.recordPatchBaselines(metadata)
 	return toolOutput{
 		fields: toolFields(
 			"patch_bytes", len(patchText),
@@ -49,6 +53,8 @@ func (t *nativeTools) applyPatch(ctx context.Context, patchText string) (toolOut
 			{Key: "files", Text: t.patchFileMetadata(metadata.changed, metadata.created, metadata.deleted)},
 			{Text: bashOut.innerText()},
 		},
+		changedFiles: metadata.changed,
+		preview:      changedFilePreview(patchText),
 	}, nil
 }
 
@@ -57,26 +63,63 @@ func (t *nativeTools) patchFileMetadata(changed, created, deleted []string) stri
 	deletedSet := stringSet(deleted)
 	var lines []string
 	for _, p := range changed {
-		full, err := t.resolvePath(p)
+		resolved, err := t.resolveWritePath(p)
 		if err != nil {
 			lines = append(lines, fmt.Sprintf("- path: %s\n  error: %s", p, err))
 			continue
 		}
 		if deletedSet[p] {
-			lines = append(lines, fmt.Sprintf("- path: %s\n  created: false\n  deleted: true\n  bytes_written: 0", t.displayPath(full)))
+			lines = append(lines, fmt.Sprintf("- path: %s\n  created: false\n  deleted: true\n  bytes_written: 0", resolved.rel))
 			continue
 		}
-		info, err := os.Stat(full)
+		info, err := os.Stat(resolved.full)
 		if err != nil {
-			lines = append(lines, fmt.Sprintf("- path: %s\n  created: %t\n  deleted: false\n  error: %s", t.displayPath(full), createdSet[p], err))
+			lines = append(lines, fmt.Sprintf("- path: %s\n  created: %t\n  deleted: false\n  error: %s", resolved.rel, createdSet[p], err))
 			continue
 		}
-		lines = append(lines, fmt.Sprintf("- path: %s\n  created: %t\n  deleted: false\n  bytes_written: %d\n  mode: %s", t.displayPath(full), createdSet[p], info.Size(), info.Mode().String()))
+		lines = append(lines, fmt.Sprintf("- path: %s\n  created: %t\n  deleted: false\n  bytes_written: %d\n  mode: %s", resolved.rel, createdSet[p], info.Size(), info.Mode().String()))
 	}
 	if len(lines) == 0 {
 		return "none"
 	}
 	return strings.Join(lines, "\n")
+}
+
+func (t *nativeTools) validatePatchScopeAndStaleness(metadata patchMetadata) error {
+	created := stringSet(metadata.created)
+	for _, p := range metadata.declared {
+		resolved, err := t.resolveWritePath(p)
+		if err != nil {
+			t.logOutsideWorkspaceAttempt("apply_patch", p, true)
+			return err
+		}
+		if created[p] {
+			continue
+		}
+		if _, err := os.Stat(resolved.full); err == nil {
+			if err := ensureNoStaleWrite(t.fileTracker, resolved.full, resolved.rel); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func (t *nativeTools) recordPatchBaselines(metadata patchMetadata) {
+	deleted := stringSet(metadata.deleted)
+	for _, p := range metadata.changed {
+		resolved, err := t.resolveWritePath(p)
+		if err != nil {
+			continue
+		}
+		if deleted[p] {
+			t.fileTracker.forget(resolved.full)
+			continue
+		}
+		if data, err := os.ReadFile(resolved.full); err == nil {
+			t.fileTracker.record(resolved.full, data)
+		}
+	}
 }
 
 func shellQuote(s string) string {

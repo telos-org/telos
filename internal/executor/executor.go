@@ -16,15 +16,16 @@ import (
 
 // NativeExecutor runs one PVG turn with Telos' built-in coding harness.
 type NativeExecutor struct {
-	Platform  *platform.LocalPlatform
-	Model     string
-	Thinking  string
-	Timeout   int
-	Client    *http.Client
-	config    nativeConfig
-	configErr error
-	cleanup   func() error
-	costHard  bool
+	Platform        *platform.LocalPlatform
+	Model           string
+	Thinking        string
+	Timeout         int
+	Client          *http.Client
+	config          nativeConfig
+	configErr       error
+	cleanup         func() error
+	costHard        bool
+	containmentMode ContainmentMode
 }
 
 // Executor is the preferred name for Telos' built-in coding-agent executor.
@@ -33,14 +34,14 @@ type Executor = NativeExecutor
 // New creates an executor without a gateway credential. Production callers
 // should resolve a gateway credential at their package edge and call
 // NewWithGateway.
-func New(p *platform.LocalPlatform, model, thinking string, timeout int) *Executor {
-	return NewWithGateway(p, model, thinking, timeout, gatewaycred.Credential{}, nil)
+func New(p *platform.LocalPlatform, model, thinking string, timeout int, opts ...NativeExecutorOption) *Executor {
+	return NewWithGateway(p, model, thinking, timeout, gatewaycred.Credential{}, nil, opts...)
 }
 
 // NewWithGateway creates an executor using an explicit gateway credential
 // resolved by the caller.
-func NewWithGateway(p *platform.LocalPlatform, model, thinking string, timeout int, gateway gatewaycred.Credential, cleanup func() error) *Executor {
-	return NewNativeExecutorWithGateway(p, model, thinking, timeout, gateway, cleanup)
+func NewWithGateway(p *platform.LocalPlatform, model, thinking string, timeout int, gateway gatewaycred.Credential, cleanup func() error, opts ...NativeExecutorOption) *Executor {
+	return NewNativeExecutorWithGateway(p, model, thinking, timeout, gateway, cleanup, opts...)
 }
 
 // NewNativeExecutor creates a native Go coding-agent executor without a gateway
@@ -55,32 +56,40 @@ func NewWithGateway(p *platform.LocalPlatform, model, thinking string, timeout i
 // only inside an ephemeral, untrusted-code-safe sandbox (container/pod). That
 // isolation is the sole containment boundary; running it on a host with data
 // worth protecting is unsafe by design, not a bug to be fixed in this package.
-func NewNativeExecutor(p *platform.LocalPlatform, model, thinking string, timeout int) *NativeExecutor {
-	return NewNativeExecutorWithGateway(p, model, thinking, timeout, gatewaycred.Credential{}, nil)
+func NewNativeExecutor(p *platform.LocalPlatform, model, thinking string, timeout int, opts ...NativeExecutorOption) *NativeExecutor {
+	return NewNativeExecutorWithGateway(p, model, thinking, timeout, gatewaycred.Credential{}, nil, opts...)
 }
 
 // NewNativeExecutorWithGateway creates a native executor using an explicit
 // gateway credential resolved by the caller.
-func NewNativeExecutorWithGateway(p *platform.LocalPlatform, model, thinking string, timeout int, gateway gatewaycred.Credential, cleanup func() error) *NativeExecutor {
+func NewNativeExecutorWithGateway(p *platform.LocalPlatform, model, thinking string, timeout int, gateway gatewaycred.Credential, cleanup func() error, opts ...NativeExecutorOption) *NativeExecutor {
 	if thinking == "" {
 		thinking = "medium"
 	}
+	options := nativeExecutorOptions{}
+	for _, opt := range opts {
+		opt(&options)
+	}
 	cfg, err := resolveNativeConfig(gateway)
+	if modeErr := validateContainmentMode(options.containmentMode); modeErr != nil && err == nil {
+		err = modeErr
+	}
 	// Bound each provider HTTP request (the full model response) so a wedged
 	// request fails fast instead of hanging until the turn budget — which is
 	// unbounded when --agent-timeout-sec is 0. http.Client.Timeout covers the
 	// whole request body read, and composes with the per-turn
 	// context deadline (whichever fires first wins). A zero timeout disables it.
 	return &NativeExecutor{
-		Platform:  p,
-		Model:     model,
-		Thinking:  thinking,
-		Timeout:   timeout,
-		Client:    &http.Client{Timeout: cfg.requestTimeout(model)},
-		config:    cfg,
-		configErr: err,
-		cleanup:   cleanup,
-		costHard:  gateway.CostHardLimit,
+		Platform:        p,
+		Model:           model,
+		Thinking:        thinking,
+		Timeout:         timeout,
+		Client:          &http.Client{Timeout: cfg.requestTimeout(model)},
+		config:          cfg,
+		configErr:       err,
+		cleanup:         cleanup,
+		costHard:        gateway.CostHardLimit,
+		containmentMode: options.containmentMode,
 	}
 }
 
@@ -123,7 +132,7 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 	ctx, cancel := turnContext(timeout, stopRequested)
 	defer cancel()
 
-	logger := newNativeSessionLogger(sessionPath, ne.Platform.Workspace)
+	logger := newNativeSessionLogger(sessionPath, ne.Platform.Workspace, ne.containmentMode)
 	if err := logger.start(); err != nil {
 		return recoverableTurn(role, stats, newExecutorError(errToolInfra, "native_session_unavailable:"+err.Error()).Error())
 	}
@@ -134,12 +143,14 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 	if ne.configErr != nil {
 		execErr := newExecutorError(errConfig, ne.configErr.Error())
 		_ = logger.errorEvent(0, execErr)
+		_ = logger.terminal(terminalStateForError(execErr, ctx))
 		return terminalTurn(role, stats, execErr.Error())
 	}
 	cfg, err := ne.config.providerFor(ne.Model)
 	if err != nil {
 		execErr := newExecutorError(errConfig, err.Error())
 		_ = logger.errorEvent(0, execErr)
+		_ = logger.terminal(terminalStateForError(execErr, ctx))
 		return terminalTurn(role, stats, execErr.Error())
 	}
 	knobs := resolveEnvKnobs()
@@ -148,7 +159,7 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 	_ = logger.turnPolicy(role, protocolMode)
 	_ = logger.budget(effectiveMaxToolLoops(budget), effectiveMaxOutputTokens(cfg, budget), budget)
 
-	tools := newNativeTools(ne.Platform, stopRequested, skills, logger, knobs, budget)
+	tools := newNativeTools(ne.Platform, stopRequested, skills, logger, knobs, budget, withNativeToolsContainment(ne.containmentMode))
 	loop := newAgentLoop(ne.Client, cfg, ne.Thinking, tools, logger, task, role, protocolMode, budget, knobs)
 
 	logs, extraStats, err := loop.run(ctx)
@@ -160,6 +171,7 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 			if !executorErrorHasCode(err, errProviderTimeout) {
 				_ = logger.errorEvent(loop.client.sequence, execErr)
 			}
+			_ = logger.terminal(terminalStateForError(execErr, ctx))
 			return recoverableTurn(role, stats, execErr.Error())
 		}
 		if errors.Is(ctx.Err(), context.Canceled) {
@@ -167,13 +179,18 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 			if !executorErrorHasCode(err, errStopped) {
 				_ = logger.errorEvent(loop.client.sequence, execErr)
 			}
+			_ = logger.terminal(terminalStateForError(execErr, ctx))
 			return recoverableTurn(role, stats, execErr.Error())
 		}
+		_ = logger.terminal(terminalStateForError(err, ctx))
 		return recoverableTurn(role, stats, err.Error())
 	}
 	if strings.TrimSpace(logs) == "" {
-		return recoverableTurn(role, stats, newExecutorError(errAgentProtocol, "no_output").Error())
+		execErr := newExecutorError(errAgentProtocol, "no_output")
+		_ = logger.terminal(terminalStateForError(execErr, ctx))
+		return recoverableTurn(role, stats, execErr.Error())
 	}
+	_ = logger.terminal(TerminalCompleted)
 	return game.TurnResult{
 		Role:   role,
 		Status: game.ExtractStatus(logs),

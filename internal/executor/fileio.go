@@ -12,24 +12,26 @@ import (
 )
 
 func (t *nativeTools) readFile(p string, startLine, limitLines int) (toolOutput, error) {
-	full, err := t.resolvePath(p)
+	resolved, err := t.resolvePath(p)
 	if err != nil {
 		return toolOutput{}, err
 	}
-	t.logOutsideWorkspaceAccess("read_file", full, false)
-	read, err := t.readBoundedTextFile(full, startLine, limitLines)
+	read, err := t.readBoundedTextFile(resolved.full, startLine, limitLines)
 	if err != nil {
 		return toolOutput{}, err
+	}
+	if data, err := os.ReadFile(resolved.full); err == nil {
+		t.fileTracker.record(resolved.full, data)
 	}
 	if read.binary {
 		return toolOutput{
-			fields: toolFields("path", t.displayPath(full), "size_bytes", read.sizeBytes, "binary", true),
+			fields: toolFields("path", resolved.rel, "size_bytes", read.sizeBytes, "binary", true),
 			bodies: []toolBodySection{{Key: "content", Text: "(binary file omitted)"}},
 		}, nil
 	}
 	return toolOutput{
 		fields: toolFields(
-			"path", t.displayPath(full),
+			"path", resolved.rel,
 			"size_bytes", read.sizeBytes,
 			"lines_returned", fmt.Sprintf("%d-%d", read.startLine, read.endLine),
 			"line_count", read.totalLines,
@@ -180,26 +182,34 @@ func (t *nativeTools) write(p, content string) (toolOutput, error) {
 	if strings.ContainsRune(content, '\x00') {
 		return toolOutput{}, fmt.Errorf("content contains NUL byte")
 	}
-	full, err := t.resolvePath(p)
+	resolved, err := t.resolveWritePath(p)
 	if err != nil {
 		return toolOutput{}, err
 	}
-	t.logOutsideWorkspaceAccess("write_file", full, true)
 	created := false
-	if _, statErr := os.Stat(full); os.IsNotExist(statErr) {
+	if _, statErr := os.Stat(resolved.full); os.IsNotExist(statErr) {
 		created = true
 	}
-	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+	if !created {
+		if err := ensureNoStaleWrite(t.fileTracker, resolved.full, resolved.rel); err != nil {
+			return toolOutput{}, err
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(resolved.full), 0o755); err != nil {
 		return toolOutput{}, err
 	}
-	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+	if err := t.scope.recheckWriteTarget(resolved.full, p); err != nil {
 		return toolOutput{}, err
 	}
-	fields := toolFields("path", t.displayPath(full), "created", created, "bytes_written", len(content))
-	if info, err := os.Stat(full); err == nil {
+	if err := os.WriteFile(resolved.full, []byte(content), 0o644); err != nil {
+		return toolOutput{}, err
+	}
+	t.fileTracker.record(resolved.full, []byte(content))
+	fields := toolFields("path", resolved.rel, "created", created, "bytes_written", len(content))
+	if info, err := os.Stat(resolved.full); err == nil {
 		fields = append(fields, toolField{Key: "mode", Value: info.Mode().String()})
 	}
-	return toolOutput{fields: fields}, nil
+	return toolOutput{fields: fields, changedFiles: []string{resolved.rel}, preview: changedFilePreview(content)}, nil
 }
 
 func (t *nativeTools) edit(p, oldString, newString string, replaceAll bool, expectedCount int) (toolOutput, error) {
@@ -209,12 +219,14 @@ func (t *nativeTools) edit(p, oldString, newString string, replaceAll bool, expe
 	if strings.ContainsRune(oldString, '\x00') || strings.ContainsRune(newString, '\x00') {
 		return toolOutput{}, fmt.Errorf("old_string and new_string must not contain NUL bytes")
 	}
-	full, err := t.resolvePath(p)
+	resolved, err := t.resolveWritePath(p)
 	if err != nil {
 		return toolOutput{}, err
 	}
-	t.logOutsideWorkspaceAccess("replace_text", full, true)
-	data, err := os.ReadFile(full)
+	if err := ensureNoStaleWrite(t.fileTracker, resolved.full, resolved.rel); err != nil {
+		return toolOutput{}, err
+	}
+	data, err := os.ReadFile(resolved.full)
 	if err != nil {
 		return toolOutput{}, err
 	}
@@ -236,26 +248,29 @@ func (t *nativeTools) edit(p, oldString, newString string, replaceAll bool, expe
 		return toolOutput{}, fmt.Errorf("expected_count=%d requires replace_all=true", expectedCount)
 	}
 	updated := strings.Replace(text, oldString, newString, n)
-	if err := os.WriteFile(full, []byte(updated), 0o644); err != nil {
+	if err := t.scope.recheckWriteTarget(resolved.full, p); err != nil {
 		return toolOutput{}, err
 	}
+	if err := os.WriteFile(resolved.full, []byte(updated), 0o644); err != nil {
+		return toolOutput{}, err
+	}
+	t.fileTracker.record(resolved.full, []byte(updated))
 	if !replaceAll {
 		count = 1
 	}
-	fields := toolFields("path", t.displayPath(full), "replacement_count", count, "bytes_written", len(updated), "created", false)
-	if info, err := os.Stat(full); err == nil {
+	fields := toolFields("path", resolved.rel, "replacement_count", count, "bytes_written", len(updated), "created", false)
+	if info, err := os.Stat(resolved.full); err == nil {
 		fields = append(fields, toolField{Key: "mode", Value: info.Mode().String()})
 	}
-	return toolOutput{fields: fields}, nil
+	return toolOutput{fields: fields, changedFiles: []string{resolved.rel}, preview: compactDiffPreview(text, updated)}, nil
 }
 
 func (t *nativeTools) fileInfo(p string) (toolOutput, error) {
-	full, err := t.resolvePath(p)
+	resolved, err := t.resolvePath(p)
 	if err != nil {
 		return toolOutput{}, err
 	}
-	t.logOutsideWorkspaceAccess("file_info", full, false)
-	info, err := os.Stat(full)
+	info, err := os.Stat(resolved.full)
 	if err != nil {
 		return toolOutput{}, err
 	}
@@ -263,61 +278,43 @@ func (t *nativeTools) fileInfo(p string) (toolOutput, error) {
 	if info.IsDir() {
 		kind = "directory"
 	}
-	fields := toolFields("path", t.displayPath(full), "type", kind, "size_bytes", info.Size(), "mode", info.Mode().String())
+	fields := toolFields("path", resolved.rel, "type", kind, "size_bytes", info.Size(), "mode", info.Mode().String())
 	if info.Mode().IsRegular() && info.Size() <= 8<<20 {
-		if data, err := os.ReadFile(full); err == nil && isUTF8TextBytes(data) {
+		if data, err := os.ReadFile(resolved.full); err == nil && isUTF8TextBytes(data) {
 			fields = append(fields, toolField{Key: "line_count", Value: len(strings.Split(string(data), "\n"))})
 		}
 	}
 	return toolOutput{fields: fields}, nil
 }
 
-func (t *nativeTools) resolvePath(p string) (string, error) {
-	if p == "" {
-		return "", fmt.Errorf("path is required")
+func (t *nativeTools) resolvePath(p string) (scopedPath, error) {
+	if t.scope == nil {
+		return scopedPath{}, fmt.Errorf("workspace scope unavailable")
 	}
-	workspace, err := filepath.Abs(t.platform.Workspace)
-	if err != nil {
-		return "", err
-	}
-	if filepath.IsAbs(p) {
-		return filepath.Abs(filepath.Clean(p))
-	}
-	full, err := filepath.Abs(filepath.Join(workspace, p))
-	if err != nil {
-		return "", err
-	}
-	rel, err := filepath.Rel(workspace, full)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("path %q is outside workspace %q", p, workspace)
-	}
-	return full, nil
+	return t.scope.resolveExisting(p)
 }
 
-func (t *nativeTools) isInsideWorkspace(full string) bool {
-	workspace, err := filepath.Abs(t.platform.Workspace)
-	if err != nil {
-		return false
+func (t *nativeTools) resolveWritePath(p string) (scopedPath, error) {
+	if t.scope == nil {
+		return scopedPath{}, fmt.Errorf("workspace scope unavailable")
 	}
-	rel, err := filepath.Rel(workspace, full)
-	return err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+	return t.scope.resolveWriteTarget(p)
 }
 
 func (t *nativeTools) displayPath(full string) string {
-	workspace, err := filepath.Abs(t.platform.Workspace)
-	if err == nil {
-		if rel, relErr := filepath.Rel(workspace, full); relErr == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-			return filepath.ToSlash(rel)
+	if t.scope != nil {
+		if rel, err := t.scope.relative(full, full); err == nil {
+			return rel
 		}
 	}
 	return filepath.ToSlash(full)
 }
 
-func (t *nativeTools) logOutsideWorkspaceAccess(action, full string, write bool) {
-	if t == nil || t.isInsideWorkspace(full) {
+func (t *nativeTools) logOutsideWorkspaceAttempt(action, requested string, write bool) {
+	if t == nil {
 		return
 	}
-	_ = t.logger.outsideWorkspaceAccess(action, t.displayPath(full), write)
+	_ = t.logger.outsideWorkspaceAccess(action, filepath.ToSlash(requested), write)
 }
 
 func shouldSkipDir(name string) bool {

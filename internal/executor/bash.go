@@ -23,11 +23,11 @@ func (t *nativeTools) bash(ctx context.Context, command string, cwd string, env 
 	}
 	runCWD := ""
 	if strings.TrimSpace(cwd) != "" {
-		full, err := t.resolvePath(cwd)
+		resolved, err := t.resolvePath(cwd)
 		if err != nil {
 			return toolOutput{}, err
 		}
-		runCWD = full
+		runCWD = resolved.full
 	}
 	result := t.platform.Run([]string{"bash", "-lc", command}, "", env, timeout, interrupt, nil, runCWD)
 	stdoutText, stdoutLineTruncated := capOutputLines(strings.Join(result.RawLines, "\n"), "stdout", result.StdoutOriginalLines, t.limit.MaxLines)

@@ -942,6 +942,7 @@ func TestRunLocalSessionWithNativeExecutorCompletesSmallCodeChange(t *testing.T)
 		0,
 		gatewaycred.Credential{BaseURL: server.URL, APIKey: "test-key"},
 		nil,
+		executor.WithContainmentMode(executor.ContainmentSessionWorkspace),
 	)
 
 	result, err := RunLocalSessionWithExecutor(session.SessionDir, nativeExec)

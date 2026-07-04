@@ -32,7 +32,7 @@ func newTestNativeExecutor(t *testing.T, p *platform.LocalPlatform, model, think
 		Transport: gatewaycred.Transport(os.Getenv(gatewaycred.TransportEnv)),
 		Kind:      gatewaycred.Kind(os.Getenv(gatewaycred.KindEnv)),
 		Headers:   headers,
-	}, nil)
+	}, nil, WithContainmentMode(ContainmentSessionWorkspace))
 }
 
 func testGatewayCredential() gatewaycred.Credential {
@@ -326,6 +326,7 @@ func TestNativeExecutorManagedStopsWhenCostUnavailableUnderCostCap(t *testing.T)
 		0,
 		gatewaycred.Credential{BaseURL: server.URL, APIKey: "test-key", CostHardLimit: true},
 		nil,
+		WithContainmentMode(ContainmentSessionWorkspace),
 	)
 	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{
 		Role: "prover",
@@ -378,6 +379,7 @@ func TestNativeExecutorBYOContinuesWhenCostUnavailableUnderCostCap(t *testing.T)
 		0,
 		gatewaycred.Credential{BaseURL: server.URL, APIKey: "test-key"},
 		nil,
+		WithContainmentMode(ContainmentSessionWorkspace),
 	)
 	result := exec.ExecuteTurn("create answer.txt", &game.TurnState{
 		Role: "prover",
@@ -808,6 +810,9 @@ func TestNativeSessionLoggerSchemaGolden(t *testing.T) {
 	got := normalizedSessionLogGolden(t, path)
 	want := `[
   {
+    "data": {
+      "containment_mode": "uncontained"
+    },
     "runtime": "telos-native",
     "schema": "telos.agent_session.v1",
     "type": "session",
@@ -859,6 +864,9 @@ func TestNativeSessionLoggerSchemaGolden(t *testing.T) {
     "data": {
       "duration_ms": 12,
       "is_error": false,
+      "metadata": {
+        "containment_mode": "uncontained"
+      },
       "output_bytes": 2,
       "tool_call_id": "call_1",
       "tool_name": "read_file",
@@ -1162,7 +1170,7 @@ func TestNativeExecutorSurfacesProviderConfigError(t *testing.T) {
 	}
 
 	workspace := t.TempDir()
-	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/model", "high", 0)
+	exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/model", "high", 0, WithContainmentMode(ContainmentSessionWorkspace))
 	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
 	result := exec.ExecuteTurn("Say hello.", ts)
 
@@ -1176,6 +1184,125 @@ func TestNativeExecutorSurfacesProviderConfigError(t *testing.T) {
 	if len(errorEvents) != 1 || errorEvents[0]["error_code"] != string(errConfig) || errorEvents[0]["sequence"] != float64(0) {
 		t.Fatalf("config error events: %#v", errorEvents)
 	}
+}
+
+func TestNativeExecutorRejectsMissingContainmentMode(t *testing.T) {
+	workspace := t.TempDir()
+	exec := NewNativeExecutorWithGateway(
+		platform.NewLocalPlatform(workspace),
+		"test/test-model",
+		"high",
+		0,
+		testGatewayCredential(),
+		nil,
+	)
+	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
+	result := exec.ExecuteTurn("Say hello.", ts)
+
+	if result.Recoverable || !strings.Contains(result.Error, "containment_mode is required") {
+		t.Fatalf("expected missing containment mode to fail closed, got %+v", result)
+	}
+	terminal := sessionLogEventsByType(t, ts.SessionPath(), "terminal")
+	if len(terminal) != 1 || terminal[0]["terminal_state"] != string(TerminalProviderFailed) {
+		t.Fatalf("terminal events: %#v", terminal)
+	}
+}
+
+func TestNativeExecutorLogsContainmentModeOnSessionAndToolEvents(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch requests {
+		case 1:
+			writeResponsesJSON(w, `{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"function_call","call_id":"call_1","name":"write_file","arguments":"{\"path\":\"answer.txt\",\"content\":\"done\\n\"}"}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		case 2:
+			writeResponsesJSON(w, `{
+				"id":"resp_2","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>wrote answer</progress_update>"}]}],
+				"usage":{"input_tokens":5,"output_tokens":5,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+	exec := newTestNativeExecutor(t, platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
+	result := exec.ExecuteTurn("create answer.txt", ts)
+	if result.Error != "" {
+		t.Fatalf("execute turn: %s", result.Error)
+	}
+
+	sessionEvents := sessionLogRawEventsByType(t, ts.SessionPath(), "session")
+	if len(sessionEvents) != 1 {
+		t.Fatalf("session events: %#v", sessionEvents)
+	}
+	var sessionData map[string]any
+	if err := json.Unmarshal(sessionEvents[0].Data, &sessionData); err != nil {
+		t.Fatal(err)
+	}
+	if sessionData["containment_mode"] != string(ContainmentSessionWorkspace) {
+		t.Fatalf("session containment: %#v", sessionData)
+	}
+	toolEvents := sessionLogEventsByType(t, ts.SessionPath(), "tool_result")
+	if len(toolEvents) != 1 {
+		t.Fatalf("tool events: %#v", toolEvents)
+	}
+	metadata, _ := toolEvents[0]["metadata"].(map[string]any)
+	if metadata["containment_mode"] != string(ContainmentSessionWorkspace) {
+		t.Fatalf("tool containment metadata: %#v", metadata)
+	}
+}
+
+func TestNativeExecutorTerminalClassificationMapping(t *testing.T) {
+	t.Run("exhausted", func(t *testing.T) {
+		workspace := t.TempDir()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			writeResponsesJSON(w, `{
+				"id":"resp_1","status":"completed",
+				"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Done.\n<progress_update>x</progress_update>"}]}],
+				"usage":{"input_tokens":10,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}
+			}`)
+		}))
+		defer server.Close()
+		t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+		t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+		exec := newTestNativeExecutor(t, platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+		ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn"), Budget: game.TurnBudget{RemainingInputTokens: 10}}
+		_ = exec.ExecuteTurn("budget", ts)
+		assertTerminalState(t, ts.SessionPath(), TerminalExhausted)
+	})
+
+	t.Run("interrupted", func(t *testing.T) {
+		workspace := t.TempDir()
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			time.Sleep(300 * time.Millisecond)
+			writeResponsesJSON(w, `{"id":"late","status":"completed","output":[]}`)
+		}))
+		defer server.Close()
+		t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+		t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+		exec := newTestNativeExecutor(t, platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+		ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn"), StopRequested: func() bool { return true }}
+		_ = exec.ExecuteTurn("stop", ts)
+		assertTerminalState(t, ts.SessionPath(), TerminalInterrupted)
+	})
+
+	t.Run("provider failed", func(t *testing.T) {
+		workspace := t.TempDir()
+		exec := NewNativeExecutor(platform.NewLocalPlatform(workspace), "test/model", "high", 0, WithContainmentMode(ContainmentSessionWorkspace))
+		ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn")}
+		_ = exec.ExecuteTurn("config failure", ts)
+		assertTerminalState(t, ts.SessionPath(), TerminalProviderFailed)
+	})
 }
 
 func TestResolveNativeProviderAppliesModelCapabilityProfile(t *testing.T) {
@@ -2750,9 +2877,6 @@ func TestNativeToolsPathResolution(t *testing.T) {
 	workspace := t.TempDir()
 	tools := newNativeTools(platform.NewLocalPlatform(workspace), nil, nil, nil, resolveEnvKnobs(), game.TurnBudget{})
 
-	// Relative paths still resolve against the workspace, so a relative escape is
-	// rejected as malformed (not as a security boundary — see the package's YOLO
-	// security model: absolute paths and bash bypass this).
 	rejected := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_1",
 		Name:      "write",
@@ -2765,25 +2889,17 @@ func TestNativeToolsPathResolution(t *testing.T) {
 		t.Fatalf("outside file should not exist, stat err=%v", err)
 	}
 
-	// Absolute paths are unrestricted: writes land wherever the process can write.
 	absolutePath := filepath.Join(t.TempDir(), "absolute.txt")
-	written := tools.execute(context.Background(), nativeToolCall{
+	absolute := tools.execute(context.Background(), nativeToolCall{
 		ID:        "call_2",
 		Name:      "write",
 		Arguments: `{"path":` + mustJSON(absolutePath) + `,"content":"ok\n"}`,
 	})
-	if written.IsError {
-		t.Fatalf("expected absolute path write to succeed: %+v", written)
+	if !absolute.IsError || !strings.Contains(absolute.Output, "must stay inside the workspace") {
+		t.Fatalf("expected absolute outside-workspace path to fail: %+v", absolute)
 	}
-	if !strings.Contains(written.Output, filepath.ToSlash(absolutePath)) {
-		t.Fatalf("absolute path should be visible in tool result, got %q", written.Output)
-	}
-	data, err := os.ReadFile(absolutePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(data) != "ok\n" {
-		t.Fatalf("absolute file content: got %q", data)
+	if _, err := os.Stat(absolutePath); !os.IsNotExist(err) {
+		t.Fatalf("absolute file should not exist, stat err=%v", err)
 	}
 }
 
@@ -2807,8 +2923,8 @@ func TestNativeToolsLogsOutsideWorkspaceAccess(t *testing.T) {
 		Name:      "read_file",
 		Arguments: `{"path":` + mustJSON(outsideReadPath) + `}`,
 	})
-	if read.IsError {
-		t.Fatalf("absolute read should succeed: %+v", read)
+	if !read.IsError {
+		t.Fatalf("absolute read should be rejected: %+v", read)
 	}
 	writePath := filepath.Join(t.TempDir(), "out.txt")
 	write := tools.execute(context.Background(), nativeToolCall{
@@ -2816,8 +2932,8 @@ func TestNativeToolsLogsOutsideWorkspaceAccess(t *testing.T) {
 		Name:      "write_file",
 		Arguments: `{"path":` + mustJSON(writePath) + `,"content":"ok\n"}`,
 	})
-	if write.IsError {
-		t.Fatalf("safe absolute write should succeed: %+v", write)
+	if !write.IsError {
+		t.Fatalf("absolute write should be rejected: %+v", write)
 	}
 
 	events := sessionLogEventsByType(t, logPath, "outside_workspace_access")
@@ -2856,6 +2972,39 @@ func sessionLogEventsByType(t *testing.T, path string, eventType string) []map[s
 		}
 	}
 	return out
+}
+
+func sessionLogRawEventsByType(t *testing.T, path string, eventType string) []sessionEvent {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []sessionEvent
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		var event sessionEvent
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatalf("parse session event: %v", err)
+		}
+		if event.Type == eventType {
+			out = append(out, event)
+		}
+	}
+	return out
+}
+
+func assertTerminalState(t *testing.T, path string, want TerminalState) {
+	t.Helper()
+	events := sessionLogEventsByType(t, path, "terminal")
+	if len(events) != 1 {
+		t.Fatalf("terminal events: %#v", events)
+	}
+	if events[0]["terminal_state"] != string(want) {
+		t.Fatalf("terminal_state: got %#v want %q", events[0], want)
+	}
 }
 
 func mustJSON(v interface{}) string {
