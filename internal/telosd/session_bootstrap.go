@@ -20,21 +20,21 @@ type cloudBootstrapSession struct {
 
 const defaultCloudSessionModel = "sail-research/zai-org/GLM-5.2-FP8"
 
-type deploymentBootstrapReconciler struct {
+type sessionBootstrapReconciler struct {
 	packageRoot string
 	model       string
 	store       sessionapi.Store
 }
 
-func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.Store) {
+func startSessionBootstrapReconciler(ctx context.Context, store sessionapi.Store) {
 	if os.Getenv("TELOS_SESSION_BOOTSTRAP_ENABLED") == "0" {
 		return
 	}
-	session, ok := deploymentBootstrapSession()
+	session, ok := bootstrapSessionFromEnv()
 	if !ok {
 		return
 	}
-	r := deploymentBootstrapReconciler{
+	r := sessionBootstrapReconciler{
 		packageRoot: strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
 		model:       cloudSessionModel(),
 		store:       store,
@@ -49,7 +49,7 @@ func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.St
 		defer ticker.Stop()
 		for {
 			if err := r.reconcile([]cloudBootstrapSession{session}); err != nil {
-				log.Printf("deployment bootstrap reconcile failed: %v", err)
+				log.Printf("session bootstrap reconcile failed: %v", err)
 			}
 			select {
 			case <-ctx.Done():
@@ -60,7 +60,7 @@ func startDeploymentBootstrapReconciler(ctx context.Context, store sessionapi.St
 	}()
 }
 
-func deploymentBootstrapSession() (cloudBootstrapSession, bool) {
+func bootstrapSessionFromEnv() (cloudBootstrapSession, bool) {
 	cloudSessionID := strings.TrimSpace(os.Getenv("TELOS_SESSION_ID"))
 	name := strings.TrimSpace(os.Getenv("TELOS_SESSION_NAME"))
 	digest := strings.TrimSpace(os.Getenv("TELOS_PACKAGE_DIGEST"))
@@ -74,7 +74,7 @@ func deploymentBootstrapSession() (cloudBootstrapSession, bool) {
 	}, true
 }
 
-func (r deploymentBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) error {
+func (r sessionBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) error {
 	current, err := r.store.List()
 	if err != nil {
 		return fmt.Errorf("list local sessions: %w", err)

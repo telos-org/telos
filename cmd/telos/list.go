@@ -24,7 +24,7 @@ func cmdList(args []string) {
 	parseFlags(fs, args)
 
 	if *cloudOnly {
-		listDeployments(*jsonOut, *limit, *wide)
+		listCloudSessions(*jsonOut, *limit, *wide)
 		return
 	}
 
@@ -41,7 +41,7 @@ func cmdList(args []string) {
 			sessions = append(sessions, rootSessions...)
 			rootScoped = true
 		} else if config.IsConfigured() {
-			listDeployments(*jsonOut, *limit, *wide)
+			listCloudSessions(*jsonOut, *limit, *wide)
 			return
 		} else {
 			sessions = append(sessions, listLocalSessions()...)
@@ -177,23 +177,23 @@ func limitListSessions(sessions []sessionapi.Session, limit int) []sessionapi.Se
 	return sessions
 }
 
-func listDeployments(jsonOut bool, limit int, wide bool) {
+func listCloudSessions(jsonOut bool, limit int, wide bool) {
 	control, err := cloud.ControlClient()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	deployments, err := control.ListDeployments()
+	cloudSessions, err := control.ListSessions()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	deployments = limitDeployments(deployments, limit)
+	cloudSessions = limitCloudSessions(cloudSessions, limit)
 	if jsonOut {
-		printJSON(map[string]any{"sessions": deployments})
+		printJSON(map[string]any{"sessions": cloudSessions})
 		return
 	}
-	if len(deployments) == 0 {
+	if len(cloudSessions) == 0 {
 		fmt.Println("no sessions")
 		return
 	}
@@ -203,40 +203,40 @@ func listDeployments(jsonOut bool, limit int, wide bool) {
 	} else {
 		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tURL\tSESSION")
 	}
-	for _, deployment := range deployments {
-		serviceURL := optionalDeploymentString(deployment.ServiceURL)
-		dashboardURL := optionalDeploymentString(deployment.DashboardURL)
+	for _, session := range cloudSessions {
+		serviceURL := optionalSessionString(session.ServiceURL)
+		dashboardURL := optionalSessionString(session.DashboardURL)
 		if wide {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
-				deployment.Name,
+				session.Name,
 				"cloud",
-				deployment.State,
-				deployment.PackageRef,
+				session.State,
+				session.PackageRef,
 				serviceURL,
 				dashboardURL,
-				deployment.ID,
+				session.ID,
 			)
 			continue
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
-			deployment.Name,
+			session.Name,
 			"cloud",
-			deployment.State,
+			session.State,
 			serviceURL,
-			deployment.ID,
+			session.ID,
 		)
 	}
 	_ = w.Flush()
 }
 
-func limitDeployments(deployments []cloud.DeploymentRecord, limit int) []cloud.DeploymentRecord {
-	if limit > 0 && len(deployments) > limit {
-		return deployments[:limit]
+func limitCloudSessions(sessions []cloud.SessionRecord, limit int) []cloud.SessionRecord {
+	if limit > 0 && len(sessions) > limit {
+		return sessions[:limit]
 	}
-	return deployments
+	return sessions
 }
 
-func optionalDeploymentString(value *string) string {
+func optionalSessionString(value *string) string {
 	if value == nil || *value == "" {
 		return "-"
 	}

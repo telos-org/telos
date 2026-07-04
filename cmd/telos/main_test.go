@@ -499,7 +499,7 @@ func TestNormalizePackageVersion(t *testing.T) {
 	}
 }
 
-func TestApplyDeploymentPackageCreatesWithoutReconciliation(t *testing.T) {
+func TestApplyCloudSessionPackageCreatesWithoutReconciliation(t *testing.T) {
 	var listed bool
 	var created bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -531,24 +531,24 @@ func TestApplyDeploymentPackageCreatesWithoutReconciliation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	operation, deployment, err := applyDeploymentPackage(
+	operation, session, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
 		"auth",
 		"@telos/auth:1.2.3",
 		"",
 	)
 	if err != nil {
-		t.Fatalf("applyDeploymentPackage: %v", err)
+		t.Fatalf("applyCloudSessionPackage: %v", err)
 	}
 	if operation != "created" || !created || listed {
 		t.Fatalf("operation=%q created=%v listed=%v", operation, created, listed)
 	}
-	if deployment.ID != "sess_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
-		t.Fatalf("deployment: got %+v", deployment)
+	if session.ID != "sess_123" || session.PackageRef != "@telos/auth:1.2.3" {
+		t.Fatalf("session: got %+v", session)
 	}
 }
 
-func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
+func TestApplyCloudSessionPackageCreatesWhenMissing(t *testing.T) {
 	var created bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -578,24 +578,24 @@ func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	operation, deployment, err := applyDeploymentPackage(
+	operation, session, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
 		"auth",
 		"@telos/auth:1.2.3",
 		"",
 	)
 	if err != nil {
-		t.Fatalf("applyDeploymentPackage: %v", err)
+		t.Fatalf("applyCloudSessionPackage: %v", err)
 	}
 	if operation != "created" || !created {
 		t.Fatalf("operation=%q created=%v", operation, created)
 	}
-	if deployment.ID != "sess_123" {
-		t.Fatalf("deployment: got %+v", deployment)
+	if session.ID != "sess_123" {
+		t.Fatalf("session: got %+v", session)
 	}
 }
 
-func TestApplyDeploymentPackageUpdatesExplicitDeployment(t *testing.T) {
+func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 	var listed bool
 	var updated bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -627,20 +627,20 @@ func TestApplyDeploymentPackageUpdatesExplicitDeployment(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	operation, deployment, err := applyDeploymentPackage(
+	operation, session, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
 		"auth",
 		"@telos/auth:1.2.3",
 		"sess_123",
 	)
 	if err != nil {
-		t.Fatalf("applyDeploymentPackage: %v", err)
+		t.Fatalf("applyCloudSessionPackage: %v", err)
 	}
 	if operation != "updated" || !updated || listed {
 		t.Fatalf("operation=%q updated=%v listed=%v", operation, updated, listed)
 	}
-	if deployment.ID != "sess_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
-		t.Fatalf("deployment: got %+v", deployment)
+	if session.ID != "sess_123" || session.PackageRef != "@telos/auth:1.2.3" {
+		t.Fatalf("session: got %+v", session)
 	}
 }
 
@@ -907,7 +907,7 @@ func TestPrintLogsVerboseShowsTranscript(t *testing.T) {
 	}
 }
 
-func TestPrintDeploymentLogsDefaultsToAgentProgress(t *testing.T) {
+func TestPrintCloudSessionLogsDefaultsToAgentProgress(t *testing.T) {
 	events := []sessionapi.SessionEvent{
 		{Event: "agent_progress", Data: map[string]any{"kind": "progress_update", "text": "ready"}},
 		{Event: "agent_progress", Data: map[string]any{"kind": "review", "text": "criteria,score\nCorrectness,8/10"}},
@@ -915,7 +915,7 @@ func TestPrintDeploymentLogsDefaultsToAgentProgress(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printDeploymentLogEvents(&out, events, false)
+	printCloudSessionLogEvents(&out, events, false)
 	text := out.String()
 	for _, want := range []string{
 		"#1 ready",
@@ -923,28 +923,28 @@ func TestPrintDeploymentLogsDefaultsToAgentProgress(t *testing.T) {
 		"Completed: accepted",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("deployment logs missing %q:\n%s", want, text)
+			t.Fatalf("cloud session logs missing %q:\n%s", want, text)
 		}
 	}
 }
 
-func TestPrintDeploymentLogsVerboseShowsJSONEvents(t *testing.T) {
+func TestPrintCloudSessionLogsVerboseShowsJSONEvents(t *testing.T) {
 	ts := "2026-07-01T00:00:00Z"
 	events := []sessionapi.SessionEvent{
 		{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"kind": "progress_update", "text": "ready"}},
 	}
 
 	var out bytes.Buffer
-	printDeploymentLogEvents(&out, events, true)
+	printCloudSessionLogEvents(&out, events, true)
 	text := out.String()
 	for _, want := range []string{`"event":"agent_progress"`, `"ts":"2026-07-01T00:00:00Z"`, `"text":"ready"`} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("verbose deployment logs missing %q:\n%s", want, text)
+			t.Fatalf("verbose cloud session logs missing %q:\n%s", want, text)
 		}
 	}
 }
 
-func TestFollowDeploymentLogsStreamsEvents(t *testing.T) {
+func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
 	var logCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -962,7 +962,7 @@ func TestFollowDeploymentLogsStreamsEvents(t *testing.T) {
 	defer srv.Close()
 
 	var out bytes.Buffer
-	err := streamDeploymentLogs(
+	err := streamCloudSessionLogs(
 		cloud.NewClient(srv.URL, "test-token"),
 		"sess_123",
 		&out,
@@ -970,7 +970,7 @@ func TestFollowDeploymentLogsStreamsEvents(t *testing.T) {
 		false,
 	)
 	if err != nil {
-		t.Fatalf("streamDeploymentLogs: %v", err)
+		t.Fatalf("streamCloudSessionLogs: %v", err)
 	}
 	if logCalls != 1 {
 		t.Fatalf("calls: logs=%d", logCalls)

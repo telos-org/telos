@@ -33,11 +33,11 @@ func cmdLogs(args []string) {
 
 	if *follow {
 		if !localSessionExists(sessionID) {
-			if _, found, err := getCloudDeploymentIfConfigured(sessionID); err != nil {
+			if _, found, err := getCloudSessionIfConfigured(sessionID); err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			} else if found {
-				followDeploymentLogs(sessionID, *verbose)
+				followCloudSessionLogs(sessionID, *verbose)
 				return
 			}
 		}
@@ -51,7 +51,7 @@ func cmdLogs(args []string) {
 		return
 	}
 
-	if _, found, cloudErr := getCloudDeploymentIfConfigured(sessionID); cloudErr != nil {
+	if _, found, cloudErr := getCloudSessionIfConfigured(sessionID); cloudErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
 		os.Exit(1)
 	} else if found {
@@ -60,12 +60,12 @@ func cmdLogs(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", controlErr)
 			os.Exit(1)
 		}
-		events, eventsErr := control.GetDeploymentLogs(sessionID)
+		events, eventsErr := control.GetSessionLogs(sessionID)
 		if eventsErr != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", eventsErr)
 			os.Exit(1)
 		}
-		printDeploymentLogEvents(os.Stdout, events, *verbose)
+		printCloudSessionLogEvents(os.Stdout, events, *verbose)
 		return
 	}
 
@@ -80,29 +80,29 @@ func followLogs(sessionID string, verbose bool) {
 	}
 }
 
-func followDeploymentLogs(deploymentID string, verbose bool) {
+func followCloudSessionLogs(sessionID string, verbose bool) {
 	control, err := cloud.ControlClient()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if err := streamDeploymentLogs(control, deploymentID, os.Stdout, time.Sleep, verbose); err != nil {
+	if err := streamCloudSessionLogs(control, sessionID, os.Stdout, time.Sleep, verbose); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func streamDeploymentLogs(
+func streamCloudSessionLogs(
 	control *cloud.Client,
-	deploymentID string,
+	sessionID string,
 	out io.Writer,
 	sleep func(time.Duration),
 	verbose bool,
 ) error {
 	var lastProgressCount int
 	for {
-		streamErr := control.StreamDeploymentLogs(context.Background(), deploymentID, func(event sessionapi.SessionEvent) error {
-			printed := printDeploymentLogEvent(out, event, verbose, &lastProgressCount)
+		streamErr := control.StreamSessionLogs(context.Background(), sessionID, func(event sessionapi.SessionEvent) error {
+			printed := printCloudSessionLogEvent(out, event, verbose, &lastProgressCount)
 			if printed {
 				_, _ = fmt.Fprintln(out)
 			}
@@ -117,18 +117,18 @@ func streamDeploymentLogs(
 			}
 		}
 
-		deployment, err := control.GetDeployment(deploymentID)
+		session, err := control.GetSession(sessionID)
 		if err != nil {
 			return err
 		}
-		if deploymentStateTerminal(deployment.State) {
+		if cloudSessionStateTerminal(session.State) {
 			return streamErr
 		}
 		sleep(2 * time.Second)
 	}
 }
 
-func deploymentStateTerminal(state string) bool {
+func cloudSessionStateTerminal(state string) bool {
 	switch state {
 	case "healthy", "failed", "deleted":
 		return true
@@ -203,14 +203,14 @@ func printLogs(out io.Writer, transcript string, raw bool) {
 	printLogBlocks(out, blocks, 0)
 }
 
-func printDeploymentLogEvents(out io.Writer, events []sessionapi.SessionEvent, verbose bool) {
+func printCloudSessionLogEvents(out io.Writer, events []sessionapi.SessionEvent, verbose bool) {
 	progressCount := 0
 	printed := false
 	for _, event := range events {
 		if printed {
 			fmt.Fprintln(out)
 		}
-		if printDeploymentLogEvent(out, event, verbose, &progressCount) {
+		if printCloudSessionLogEvent(out, event, verbose, &progressCount) {
 			printed = true
 		}
 	}
@@ -219,7 +219,7 @@ func printDeploymentLogEvents(out io.Writer, events []sessionapi.SessionEvent, v
 	}
 }
 
-func printDeploymentLogEvent(out io.Writer, event sessionapi.SessionEvent, verbose bool, progressCount *int) bool {
+func printCloudSessionLogEvent(out io.Writer, event sessionapi.SessionEvent, verbose bool, progressCount *int) bool {
 	if verbose {
 		data, err := json.Marshal(event)
 		if err != nil {

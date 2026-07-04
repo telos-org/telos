@@ -18,7 +18,7 @@ func TestCreateSessionDirSkipsExistingID(t *testing.T) {
 	}
 
 	sessionSeq.Store(0)
-	id, dir, err := store.createSessionDir()
+	id, dir, err := store.createSessionDir(SessionCreateRequest{}, KindTask)
 	if err != nil {
 		t.Fatal(err)
 	}
