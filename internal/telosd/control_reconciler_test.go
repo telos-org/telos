@@ -3,11 +3,14 @@ package telosd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
@@ -191,4 +194,107 @@ func TestControlSessionReconcilerNoopsWhenDigestMatches(t *testing.T) {
 	if len(store.creates) != 0 || len(store.stops) != 0 {
 		t.Fatalf("expected no changes, creates=%#v stops=%#v", store.creates, store.stops)
 	}
+}
+
+func TestControlSessionReconcilerIsolatesItemErrorsAndBacksOff(t *testing.T) {
+	goodDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	missingDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	root := t.TempDir()
+	materializePackage(t, root, goodDigest)
+	server := desiredSessionsServer(t, []desiredSession{
+		{Name: "bad", PackageDigest: missingDigest, DesiredState: "running"},
+		{Name: "auth", PackageDigest: goodDigest, DesiredState: "running"},
+	})
+	defer server.Close()
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	retry := newReconcileRetryTracker()
+	retry.now = func() time.Time { return now }
+	retry.backoff = func(int) time.Duration { return time.Second }
+	retry.jitter = func(d time.Duration) time.Duration { return d + 500*time.Millisecond }
+	store := &fakeReconcileStore{}
+	reconciler := controlSessionReconciler{
+		apiURL:      server.URL,
+		envID:       "env_123",
+		token:       "env-token",
+		packageRoot: root,
+		client:      server.Client(),
+		store:       store,
+		retry:       retry,
+	}
+
+	err := reconciler.reconcile(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "bad") {
+		t.Fatalf("expected isolated bad item error, got %v", err)
+	}
+	if len(store.creates) != 1 || store.creates[0].ApplyPackageDigest != goodDigest {
+		t.Fatalf("good item was not processed: %#v", store.creates)
+	}
+	state, ok := retry.snapshot("control-session:bad")
+	if !ok {
+		t.Fatal("missing retry state for bad item")
+	}
+	if state.Permanent {
+		t.Fatalf("temporary package materialization failure marked permanent: %+v", state)
+	}
+	if got, want := state.NextRetry, now.Add(1500*time.Millisecond); !got.Equal(want) {
+		t.Fatalf("next retry = %s want %s", got, want)
+	}
+}
+
+func TestControlSessionReconcilerPermanentErrorStopsRetrying(t *testing.T) {
+	goodDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	root := t.TempDir()
+	materializePackage(t, root, goodDigest)
+	server := desiredSessionsServer(t, []desiredSession{
+		{Name: "bad", PackageDigest: "not-a-digest", DesiredState: "running"},
+		{Name: "auth", PackageDigest: goodDigest, DesiredState: "running"},
+	})
+	defer server.Close()
+	store := &fakeReconcileStore{}
+	reconciler := controlSessionReconciler{
+		apiURL:      server.URL,
+		envID:       "env_123",
+		token:       "env-token",
+		packageRoot: root,
+		client:      server.Client(),
+		store:       store,
+		retry:       newReconcileRetryTracker(),
+	}
+
+	err := reconciler.reconcile(context.Background())
+	if !errors.Is(err, errPermanentReconcile) {
+		t.Fatalf("expected permanent error, got %v", err)
+	}
+	if len(store.creates) != 1 {
+		t.Fatalf("good item was not processed: %#v", store.creates)
+	}
+	state, ok := reconciler.retry.snapshot("control-session:bad")
+	if !ok || !state.Permanent {
+		t.Fatalf("bad item was not recorded permanent: %+v ok=%v", state, ok)
+	}
+	err = reconciler.reconcile(context.Background())
+	if errors.Is(err, errPermanentReconcile) {
+		t.Fatalf("permanent item should not be retried, got %v", err)
+	}
+}
+
+func materializePackage(t *testing.T, root string, digest string) {
+	t.Helper()
+	packagePath := filepath.Join(root, "blobs", "sha256", digest[len("sha256:"):], "package.tar.gz")
+	if err := os.MkdirAll(filepath.Dir(packagePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(packagePath, []byte("package"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func desiredSessionsServer(t *testing.T, sessions []desiredSession) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/environments/env_123/sessions" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(desiredSessionsResponse{Sessions: sessions})
+	}))
 }

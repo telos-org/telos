@@ -3,6 +3,7 @@ package telosd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -34,6 +35,7 @@ type controlSessionReconciler struct {
 	packageRoot string
 	client      *http.Client
 	store       sessionapi.Store
+	retry       *reconcileRetryTracker
 }
 
 func startControlSessionReconciler(ctx context.Context, store sessionapi.Store, cfg Config) {
@@ -74,6 +76,7 @@ func newControlSessionReconciler(store sessionapi.Store, cfg Config) (controlSes
 		packageRoot: strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
 		client:      &http.Client{Timeout: 10 * time.Second},
 		store:       store,
+		retry:       newReconcileRetryTracker(),
 	}
 	if r.apiURL == "" || r.envID == "" || r.token == "" || r.packageRoot == "" {
 		return controlSessionReconciler{}, false
@@ -85,7 +88,7 @@ func controlReconcilerAPIURL(cfg Config) string {
 	return strings.TrimRight(strings.TrimSpace(cfg.ControlPlane.Endpoint), "/")
 }
 
-func (r controlSessionReconciler) reconcile(ctx context.Context) error {
+func (r *controlSessionReconciler) reconcile(ctx context.Context) error {
 	desired, err := r.fetchDesired(ctx)
 	if err != nil {
 		return err
@@ -95,6 +98,7 @@ func (r controlSessionReconciler) reconcile(ctx context.Context) error {
 		return fmt.Errorf("list local sessions: %w", err)
 	}
 	active := activeRootSessionsByName(current)
+	var reconcileErr error
 	for _, session := range desired {
 		if strings.TrimSpace(session.DesiredState) != "running" {
 			continue
@@ -104,34 +108,63 @@ func (r controlSessionReconciler) reconcile(ctx context.Context) error {
 		if name == "" || digest == "" {
 			continue
 		}
-		if existing, ok := active[name]; ok {
-			if sessionPackageDigest(existing) == digest {
-				continue
-			}
-			if _, err := r.store.Stop(existing.SessionID); err != nil {
-				return fmt.Errorf("stop stale session %s: %w", existing.SessionID, err)
-			}
+		key := "control-session:" + name
+		if !r.retryTracker().shouldRun(key) {
+			continue
 		}
-		packagePath, err := packagePathForDigest(r.packageRoot, digest)
-		if err != nil {
-			return err
+		if err := r.reconcileDesiredSession(ctx, session, active); err != nil {
+			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("reconcile desired session %s: %w", name, r.retryTracker().recordError(key, err)))
+			continue
 		}
-		if _, err := os.Stat(packagePath); err != nil {
-			return fmt.Errorf("package %s is not materialized at %s: %w", digest, packagePath, err)
-		}
-		kind := sessionapi.KindController
-		if _, err := r.store.Create(sessionapi.SessionCreateRequest{
-			ApplyPackagePath:   packagePath,
-			ApplyPackageDigest: digest,
-			SessionKind:        &kind,
-		}); err != nil {
-			return fmt.Errorf("create session %s from package %s: %w", name, digest, err)
-		}
+		r.retryTracker().recordSuccess(key)
 		current, err = r.store.List()
 		if err != nil {
-			return fmt.Errorf("list local sessions after create: %w", err)
+			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("list local sessions after reconcile: %w", err))
+			continue
 		}
 		active = activeRootSessionsByName(current)
+	}
+	return reconcileErr
+}
+
+func (r *controlSessionReconciler) retryTracker() *reconcileRetryTracker {
+	if r.retry == nil {
+		r.retry = newReconcileRetryTracker()
+	}
+	return r.retry
+}
+
+func (r *controlSessionReconciler) reconcileDesiredSession(ctx context.Context, session desiredSession, active map[string]sessionapi.Session) error {
+	name := strings.TrimSpace(session.Name)
+	digest := strings.TrimSpace(session.PackageDigest)
+	if name == "" || digest == "" {
+		return nil
+	}
+	if _, err := packagePathForDigest(r.packageRoot, digest); err != nil {
+		return permanentReconcileError("%v", err)
+	}
+	if existing, ok := active[name]; ok {
+		if sessionPackageDigest(existing) == digest {
+			return nil
+		}
+		if _, err := r.store.Stop(existing.SessionID); err != nil {
+			return fmt.Errorf("stop stale session %s: %w", existing.SessionID, err)
+		}
+	}
+	packagePath, err := packagePathForDigest(r.packageRoot, digest)
+	if err != nil {
+		return permanentReconcileError("%v", err)
+	}
+	if _, err := os.Stat(packagePath); err != nil {
+		return fmt.Errorf("package %s is not materialized at %s: %w", digest, packagePath, err)
+	}
+	kind := sessionapi.KindController
+	if _, err := r.store.Create(sessionapi.SessionCreateRequest{
+		ApplyPackagePath:   packagePath,
+		ApplyPackageDigest: digest,
+		SessionKind:        &kind,
+	}); err != nil {
+		return fmt.Errorf("create session %s from package %s: %w", name, digest, err)
 	}
 	return nil
 }

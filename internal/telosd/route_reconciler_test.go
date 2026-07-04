@@ -3,14 +3,17 @@ package telosd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -155,4 +158,130 @@ func TestReconcileTunnelRoutesLabelsManagedNamespaces(t *testing.T) {
 			t.Fatalf("ns-auth label %s: got %q want %q", key, authNamespace.Labels[key], value)
 		}
 	}
+}
+
+func TestRouteReconcilerIsolatesDNSFailuresAndBacksOff(t *testing.T) {
+	t.Setenv("TELOS_CF_ZONE_ID", "zone_123")
+	var postedGood bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.RawQuery, "bad.usetelos.ai") {
+			w.WriteHeader(http.StatusBadGateway)
+			_ = json.NewEncoder(w).Encode(map[string]any{"success": false})
+			return
+		}
+		if r.Method == http.MethodGet {
+			_ = json.NewEncoder(w).Encode(map[string]any{"result": []any{}})
+			return
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		if body["name"] == "good.usetelos.ai" {
+			postedGood = true
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"result": map[string]any{"id": "record_123"}})
+	}))
+	defer server.Close()
+	previousBaseURL := cloudflareAPIBaseURL
+	cloudflareAPIBaseURL = server.URL
+	defer func() { cloudflareAPIBaseURL = previousBaseURL }()
+
+	client := fake.NewSimpleClientset(routeReconcilerObjects("bad.usetelos.ai", "good.usetelos.ai")...)
+	now := time.Date(2026, 7, 4, 12, 0, 0, 0, time.UTC)
+	retry := newReconcileRetryTracker()
+	retry.now = func() time.Time { return now }
+	retry.backoff = func(int) time.Duration { return time.Second }
+	retry.jitter = func(d time.Duration) time.Duration { return d + time.Second }
+	reconciler := routeReconciler{client: client, httpClient: server.Client(), retry: retry}
+
+	err := reconciler.reconcile(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "bad.usetelos.ai") {
+		t.Fatalf("expected bad DNS error, got %v", err)
+	}
+	if !postedGood {
+		t.Fatal("good DNS route was not processed after bad route failed")
+	}
+	state, ok := retry.snapshot("cloudflare-dns:bad.usetelos.ai")
+	if !ok {
+		t.Fatal("missing retry state for bad DNS route")
+	}
+	if state.Permanent {
+		t.Fatalf("temporary DNS failure marked permanent: %+v", state)
+	}
+	if got, want := state.NextRetry, now.Add(2*time.Second); !got.Equal(want) {
+		t.Fatalf("next retry = %s want %s", got, want)
+	}
+}
+
+func TestRouteReconcilerPermanentDNSFailureStopsRetrying(t *testing.T) {
+	t.Setenv("TELOS_CF_ZONE_ID", "zone_123")
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]any{"success": false})
+	}))
+	defer server.Close()
+	previousBaseURL := cloudflareAPIBaseURL
+	cloudflareAPIBaseURL = server.URL
+	defer func() { cloudflareAPIBaseURL = previousBaseURL }()
+
+	client := fake.NewSimpleClientset(routeReconcilerObjects()...)
+	reconciler := routeReconciler{client: client, httpClient: server.Client(), retry: newReconcileRetryTracker()}
+	err := reconciler.reconcile(context.Background())
+	if !errors.Is(err, errPermanentReconcile) {
+		t.Fatalf("expected permanent DNS error, got %v", err)
+	}
+	state, ok := reconciler.retry.snapshot("cloudflare-dns:fresh-env.usetelos.ai")
+	if !ok || !state.Permanent {
+		t.Fatalf("env route was not recorded permanent: %+v ok=%v", state, ok)
+	}
+	err = reconciler.reconcile(context.Background())
+	if errors.Is(err, errPermanentReconcile) {
+		t.Fatalf("permanent route should not be retried, got %v", err)
+	}
+	if requests != 1 {
+		t.Fatalf("permanent route retried: requests=%d", requests)
+	}
+}
+
+func routeReconcilerObjects(hostnames ...string) []runtime.Object {
+	objects := []runtime.Object{
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "cloudflare-api", Namespace: cloudflaredNamespace},
+			Data:       map[string][]byte{"token": []byte("cf-token")},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "env-tunnel", Namespace: cloudflaredNamespace},
+			Data: map[string]string{
+				"tunnel_id":  "tunnel_123",
+				"env_handle": "fresh-env.usetelos.ai",
+			},
+		},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "cloudflared", Namespace: cloudflaredNamespace},
+			Spec: appsv1.DeploymentSpec{
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{}},
+				},
+			},
+		},
+	}
+	for _, hostname := range hostnames {
+		prefix := hostname[:strings.Index(hostname, ".")]
+		objects = append(objects, &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "route-" + prefix,
+				Namespace: "ns-product",
+				Labels:    map[string]string{"telos.ai/public-route": "primary"},
+			},
+			Data: map[string]string{
+				"hostname":       hostname,
+				"target_service": "service-" + prefix + ".ns-product.svc.cluster.local",
+				"target_port":    "8080",
+			},
+		})
+	}
+	return objects
 }

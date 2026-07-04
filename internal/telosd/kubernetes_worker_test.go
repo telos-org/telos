@@ -2,10 +2,14 @@ package telosd
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -69,6 +73,12 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 	if !strings.Contains(installCommand, "https://usetelos.ai/releases") {
 		t.Fatalf("install command missing public release URL: %q", installCommand)
 	}
+	if strings.Contains(installCommand, "/latest/manifest.json") || strings.Contains(installCommand, " jq ") {
+		t.Fatalf("install command must not fetch latest manifests with jq: %q", installCommand)
+	}
+	if !strings.Contains(installCommand, "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa") {
+		t.Fatalf("install command missing pinned digest: %q", installCommand)
+	}
 	if len(deployment.Spec.Template.Spec.ImagePullSecrets) != 1 ||
 		deployment.Spec.Template.Spec.ImagePullSecrets[0].Name != cfg.Kubernetes.ImagePullSecret {
 		t.Fatalf("image pull secrets: got %+v", deployment.Spec.Template.Spec.ImagePullSecrets)
@@ -84,6 +94,150 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 		t.Fatal(err)
 	}
 	assertNoWorkerRBACEscalation(t, role.Rules)
+}
+
+func TestWorkerClusterRoleLeastPrivilegeGolden(t *testing.T) {
+	role := workerClusterRole("ns-worker")
+	got := mustJSON(t, role.Rules)
+	want := `[
+  {
+    "verbs": [
+      "create",
+      "get",
+      "list",
+      "update",
+      "patch",
+      "delete"
+    ],
+    "apiGroups": [
+      ""
+    ],
+    "resources": [
+      "pods",
+      "services",
+      "configmaps",
+      "secrets",
+      "events",
+      "persistentvolumeclaims"
+    ]
+  },
+  {
+    "verbs": [
+      "get",
+      "list"
+    ],
+    "apiGroups": [
+      ""
+    ],
+    "resources": [
+      "pods/log"
+    ]
+  },
+  {
+    "verbs": [
+      "create"
+    ],
+    "apiGroups": [
+      ""
+    ],
+    "resources": [
+      "pods/exec"
+    ]
+  },
+  {
+    "verbs": [
+      "create",
+      "get",
+      "list",
+      "update",
+      "patch",
+      "delete"
+    ],
+    "apiGroups": [
+      "apps"
+    ],
+    "resources": [
+      "deployments"
+    ]
+  },
+  {
+    "verbs": [
+      "create",
+      "get",
+      "list",
+      "update",
+      "patch",
+      "delete"
+    ],
+    "apiGroups": [
+      "batch"
+    ],
+    "resources": [
+      "jobs"
+    ]
+  },
+  {
+    "verbs": [
+      "create",
+      "get",
+      "list",
+      "update",
+      "patch",
+      "delete"
+    ],
+    "apiGroups": [
+      "networking.k8s.io"
+    ],
+    "resources": [
+      "networkpolicies",
+      "ingresses"
+    ]
+  }
+]`
+	if got != want {
+		t.Fatalf("clusterrole golden mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
+}
+
+func TestWorkerNetworkPolicyLeastPrivilegeGolden(t *testing.T) {
+	policy := workerNetworkPolicies("ns-worker", []string{"203.0.113.10/32"})[0]
+	got := mustJSON(t, policy.Spec.Egress)
+	want := `[
+  {
+    "ports": [
+      {
+        "protocol": "UDP",
+        "port": 53
+      },
+      {
+        "protocol": "TCP",
+        "port": 53
+      }
+    ]
+  },
+  {
+    "ports": [
+      {
+        "protocol": "TCP",
+        "port": 443
+      },
+      {
+        "protocol": "TCP",
+        "port": 80
+      }
+    ],
+    "to": [
+      {
+        "ipBlock": {
+          "cidr": "203.0.113.10/32"
+        }
+      }
+    ]
+  }
+]`
+	if got != want {
+		t.Fatalf("networkpolicy golden mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
+	}
 }
 
 func TestKubernetesSubstrateAppliesTaskWorker(t *testing.T) {
@@ -963,6 +1117,68 @@ func TestKubernetesWorkerEnvKeepsBillingTokenOutOfDefaultWorker(t *testing.T) {
 	}
 }
 
+func TestKubernetesSubstrateUsesPVCWhenStorageClassConfigured(t *testing.T) {
+	setGatewayEnv(t)
+	cfg := testCloudConfig(t)
+	cfg.Kubernetes.StateStorageClass = "fast-rwo"
+	cfg.Kubernetes.StateStorageSize = "20Gi"
+	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+	session := testCloudSession(t, sessionapi.KindController)
+
+	if err := substrate.Apply(session, "controller_started", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	namespace := workerNamespace(session.SessionID, sessionapi.KindController)
+	pvc, err := client.CoreV1().PersistentVolumeClaims(namespace).Get(context.Background(), statePVCName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatalf("get state pvc: %v", err)
+	}
+	if pvc.Spec.StorageClassName == nil || *pvc.Spec.StorageClassName != "fast-rwo" {
+		t.Fatalf("storage class: %+v", pvc.Spec.StorageClassName)
+	}
+	deployment, err := client.AppsV1().Deployments(namespace).Get(context.Background(), workerWorkloadName(session.SessionID, sessionapi.KindController), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if deployment.Spec.Template.Annotations["telos.ai/state-volume"] != "pvc" {
+		t.Fatalf("state volume annotation: %+v", deployment.Spec.Template.Annotations)
+	}
+	if deployment.Spec.Template.Spec.Volumes[0].PersistentVolumeClaim == nil {
+		t.Fatalf("state volume is not PVC-backed: %+v", deployment.Spec.Template.Spec.Volumes[0])
+	}
+}
+
+func TestKubernetesSubstrateRequiresHostPathOptInWithoutStorageClass(t *testing.T) {
+	setGatewayEnv(t)
+	cfg := testCloudConfig(t)
+	cfg.Kubernetes.AllowHostPathState = false
+	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+	session := testCloudSession(t, sessionapi.KindController)
+
+	err := substrate.Apply(session, "controller_started", "")
+	if err == nil || !strings.Contains(err.Error(), "allow_host_path_state") {
+		t.Fatalf("expected hostPath opt-in error, got %v", err)
+	}
+}
+
+func TestVerifyArtifactSHA256FailsClosedOnMismatch(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "artifact")
+	if err := os.WriteFile(path, []byte("runtime"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256([]byte("runtime"))
+	if err := verifyArtifactSHA256(path, fmt.Sprintf("%x", sum)); err != nil {
+		t.Fatalf("verify matching digest: %v", err)
+	}
+	err := verifyArtifactSHA256(path, strings.Repeat("0", 64))
+	if err == nil || !strings.Contains(err.Error(), "sha256 mismatch") {
+		t.Fatalf("expected mismatch error, got %v", err)
+	}
+}
+
 func TestKubernetesWorkerEnvKeepsBillingTokenOutOfManagedWorker(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_MODE", "managed")
 	cfg := testCloudConfig(t)
@@ -1141,11 +1357,22 @@ func testCloudConfig(t *testing.T) Config {
 	cfg, err := NormalizeConfig(Config{
 		Mode: ModeCloud,
 		Auth: AuthConfig{Token: "operator-token"},
+		Runtime: RuntimeConfig{
+			ArtifactVersion: "v1.2.3",
+			Artifacts: []RuntimeArtifactConfig{
+				{Name: "telos", OS: "linux", Arch: "amd64", SHA256: strings.Repeat("a", 64)},
+				{Name: "telosd", OS: "linux", Arch: "amd64", SHA256: strings.Repeat("b", 64)},
+				{Name: "telos", OS: "linux", Arch: "arm64", SHA256: strings.Repeat("c", 64)},
+				{Name: "telosd", OS: "linux", Arch: "arm64", SHA256: strings.Repeat("d", 64)},
+			},
+		},
 		Kubernetes: KubernetesConfig{
-			AgentImage:      "telos-agent:test",
-			EnvNamespace:    "ns-telos-env",
-			ImagePullSecret: "gar-pull",
-			CopySecrets:     []string{"telos-env-keys"},
+			AgentImage:         "telos-agent:test",
+			EnvNamespace:       "ns-telos-env",
+			AllowHostPathState: true,
+			ImagePullSecret:    "gar-pull",
+			CopySecrets:        []string{"telos-env-keys"},
+			WorkerEgressCIDRs:  []string{"203.0.113.10/32"},
 		},
 	})
 	if err != nil {
@@ -1203,7 +1430,7 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	if template.Annotations["telos.ai/wake-reason"] != wakeReason {
 		t.Fatalf("wake reason: got %q", template.Annotations["telos.ai/wake-reason"])
 	}
-	if template.Annotations["telos.ai/runtime-version"] != "latest" {
+	if template.Annotations["telos.ai/runtime-version"] != "v1.2.3" {
 		t.Fatalf("runtime version: got %q", template.Annotations["telos.ai/runtime-version"])
 	}
 	if len(template.Spec.Containers) != 1 {
@@ -1236,6 +1463,15 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 		t.Fatalf("session dir: got %+v", container.Command)
 	}
 	assertNoLegacyAgentConfig(t, template.Spec.Volumes, container.VolumeMounts)
+}
+
+func mustJSON(t *testing.T, value any) string {
+	t.Helper()
+	data, err := json.MarshalIndent(value, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(data)
 }
 
 func assertNoLegacyAgentConfig(t *testing.T, volumes []corev1.Volume, mounts []corev1.VolumeMount) {

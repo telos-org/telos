@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -67,7 +68,10 @@ func Run(ctx context.Context, cfg Config) error {
 	srv := &http.Server{
 		Handler:           handler,
 		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       60 * time.Second,
 	}
+	conns := newServerConnTracker()
+	srv.ConnState = conns.ConnState
 
 	ln, cleanup, err := listen(cfg)
 	if err != nil {
@@ -77,9 +81,7 @@ func Run(ctx context.Context, cfg Config) error {
 
 	go func() {
 		<-ctx.Done()
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		_ = shutdownHTTPServer(srv, conns, 10*time.Second)
 	}()
 	if cfg.Mode == ModeLocal && cfg.Server.IdleSeconds > 0 {
 		go idleShutdown(ctx, srv, baseStore, &lastRequest, time.Duration(cfg.Server.IdleSeconds)*time.Second)
@@ -169,11 +171,69 @@ func idleShutdown(ctx context.Context, srv *http.Server, store *sessionapi.FileS
 		if time.Since(last) < idle {
 			continue
 		}
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_ = srv.Shutdown(shutdownCtx)
-		cancel()
+		_ = shutdownHTTPServer(srv, nil, 10*time.Second)
 		return
 	}
+}
+
+type serverConnTracker struct {
+	mu    sync.Mutex
+	conns map[net.Conn]http.ConnState
+}
+
+func newServerConnTracker() *serverConnTracker {
+	return &serverConnTracker{conns: map[net.Conn]http.ConnState{}}
+}
+
+func (t *serverConnTracker) ConnState(conn net.Conn, state http.ConnState) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	switch state {
+	case http.StateClosed, http.StateHijacked:
+		delete(t.conns, conn)
+	default:
+		t.conns[conn] = state
+	}
+}
+
+func (t *serverConnTracker) closeAll() {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	conns := make([]net.Conn, 0, len(t.conns))
+	for conn := range t.conns {
+		conns = append(conns, conn)
+	}
+	t.mu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
+}
+
+func shutdownHTTPServer(srv *http.Server, conns *serverConnTracker, grace time.Duration) error {
+	if srv == nil {
+		return nil
+	}
+	if grace <= 0 {
+		conns.closeAll()
+		return srv.Close()
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), grace)
+	defer cancel()
+	err := srv.Shutdown(shutdownCtx)
+	if err == nil {
+		return nil
+	}
+	conns.closeAll()
+	closeErr := srv.Close()
+	if closeErr != nil && !errors.Is(closeErr, http.ErrServerClosed) {
+		return errors.Join(err, closeErr)
+	}
+	return err
 }
 
 func hasActiveSessions(store *sessionapi.FileStore) bool {

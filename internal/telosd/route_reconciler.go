@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -36,6 +37,12 @@ type tunnelRoute struct {
 	Protocol string
 }
 
+type routeReconciler struct {
+	client     kubernetes.Interface
+	httpClient *http.Client
+	retry      *reconcileRetryTracker
+}
+
 func startRouteReconciler(ctx context.Context, client kubernetes.Interface) {
 	if os.Getenv("TELOS_ROUTE_RECONCILER_ENABLED") != "1" {
 		return
@@ -45,9 +52,10 @@ func startRouteReconciler(ctx context.Context, client kubernetes.Interface) {
 		intervalSec = 10
 	}
 	interval := time.Duration(intervalSec) * time.Second
+	reconciler := routeReconciler{client: client, httpClient: http.DefaultClient, retry: newReconcileRetryTracker()}
 	go func() {
 		for {
-			if err := reconcileTunnelRoutes(ctx, client, http.DefaultClient); err != nil {
+			if err := reconciler.reconcile(ctx); err != nil {
 				log.Printf("route reconcile failed: %v", err)
 			}
 			timer := time.NewTimer(interval)
@@ -62,48 +70,73 @@ func startRouteReconciler(ctx context.Context, client kubernetes.Interface) {
 }
 
 func reconcileTunnelRoutes(ctx context.Context, client kubernetes.Interface, httpClient *http.Client) error {
-	if err := reconcileManagedNamespacePolicy(ctx, client); err != nil {
-		return err
+	return (&routeReconciler{client: client, httpClient: httpClient, retry: newReconcileRetryTracker()}).reconcile(ctx)
+}
+
+func (r *routeReconciler) reconcile(ctx context.Context) error {
+	if r.retry == nil {
+		r.retry = newReconcileRetryTracker()
+	}
+	var reconcileErr error
+	if err := r.reconcileManagedNamespacePolicy(ctx); err != nil {
+		reconcileErr = errors.Join(reconcileErr, err)
 	}
 	zoneID := strings.TrimSpace(os.Getenv("TELOS_CF_ZONE_ID"))
 	if zoneID == "" {
-		return nil
+		return reconcileErr
 	}
-	token, err := cloudflareToken(ctx, client)
+	token, err := cloudflareToken(ctx, r.client)
 	if err != nil || token == "" {
-		return err
+		return errors.Join(reconcileErr, err)
 	}
-	tunnelID, envHandle, err := envTunnel(ctx, client)
+	tunnelID, envHandle, err := envTunnel(ctx, r.client)
 	if err != nil || tunnelID == "" || envHandle == "" {
-		return err
+		return errors.Join(reconcileErr, err)
 	}
-	routes, err := routeRequests(ctx, client)
+	routes, err := routeRequests(ctx, r.client)
 	if err != nil {
-		return err
+		reconcileErr = errors.Join(reconcileErr, err)
 	}
 	allRoutes := append([]tunnelRoute{{Hostname: envHandle, Service: envAPIService, Protocol: "http"}}, routes...)
 	for _, route := range allRoutes {
-		if err := ensureCloudflareDNS(ctx, httpClient, zoneID, token, route.Hostname, tunnelID); err != nil {
-			return err
+		key := "cloudflare-dns:" + route.Hostname
+		if !r.retry.shouldRun(key) {
+			continue
 		}
+		if err := ensureCloudflareDNS(ctx, r.httpClient, zoneID, token, route.Hostname, tunnelID); err != nil {
+			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("ensure dns %s: %w", route.Hostname, r.retry.recordError(key, classifyCloudflareError(err))))
+			continue
+		}
+		r.retry.recordSuccess(key)
 	}
-	changed, err := applyTunnelConfig(ctx, client, renderTunnelConfig(tunnelID, envHandle, routes))
+	changed, err := applyTunnelConfig(ctx, r.client, renderTunnelConfig(tunnelID, envHandle, routes))
 	if err != nil {
-		return err
+		return errors.Join(reconcileErr, err)
 	}
 	if changed {
-		return restartCloudflared(ctx, client)
+		if err := restartCloudflared(ctx, r.client); err != nil {
+			return errors.Join(reconcileErr, err)
+		}
 	}
-	return nil
+	return reconcileErr
 }
 
 func reconcileManagedNamespacePolicy(ctx context.Context, client kubernetes.Interface) error {
-	namespaces, err := client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
+	return (&routeReconciler{client: client, retry: newReconcileRetryTracker()}).reconcileManagedNamespacePolicy(ctx)
+}
+
+func (r *routeReconciler) reconcileManagedNamespacePolicy(ctx context.Context) error {
+	namespaces, err := r.client.CoreV1().Namespaces().List(ctx, metav1.ListOptions{})
 	if err != nil {
 		return err
 	}
+	var reconcileErr error
 	for _, namespace := range namespaces.Items {
 		if !strings.HasPrefix(namespace.Name, "ns-") {
+			continue
+		}
+		key := "namespace-policy:" + namespace.Name
+		if !r.retry.shouldRun(key) {
 			continue
 		}
 		next := namespace.DeepCopy()
@@ -118,13 +151,16 @@ func reconcileManagedNamespacePolicy(ctx context.Context, client kubernetes.Inte
 			}
 		}
 		if !changed {
+			r.retry.recordSuccess(key)
 			continue
 		}
-		if _, err := client.CoreV1().Namespaces().Update(ctx, next, metav1.UpdateOptions{}); err != nil {
-			return err
+		if _, err := r.client.CoreV1().Namespaces().Update(ctx, next, metav1.UpdateOptions{}); err != nil {
+			reconcileErr = errors.Join(reconcileErr, fmt.Errorf("label namespace %s: %w", namespace.Name, r.retry.recordError(key, err)))
+			continue
 		}
+		r.retry.recordSuccess(key)
 	}
-	return nil
+	return reconcileErr
 }
 
 func cloudflareToken(ctx context.Context, client kubernetes.Interface) (string, error) {
@@ -169,6 +205,7 @@ func publicRouteRequests(ctx context.Context, client kubernetes.Interface) ([]tu
 		return nil, err
 	}
 	routes := make([]tunnelRoute, 0, len(list.Items))
+	var reconcileErr error
 	for _, item := range list.Items {
 		route, patch, ok := publicRouteFromConfigMap(item)
 		if !ok {
@@ -183,12 +220,13 @@ func publicRouteRequests(ctx context.Context, client kubernetes.Interface) ([]tu
 				next.Data[key] = value
 			}
 			if _, err := client.CoreV1().ConfigMaps(item.Namespace).Update(ctx, next, metav1.UpdateOptions{}); err != nil {
-				return nil, err
+				reconcileErr = errors.Join(reconcileErr, fmt.Errorf("patch public route %s/%s: %w", item.Namespace, item.Name, err))
+				continue
 			}
 		}
 		routes = append(routes, route)
 	}
-	return routes, nil
+	return routes, reconcileErr
 }
 
 func publicRouteFromConfigMap(cm corev1.ConfigMap) (tunnelRoute, map[string]string, bool) {
@@ -373,9 +411,20 @@ func cloudflareJSON(ctx context.Context, httpClient *http.Client, method string,
 		return nil, err
 	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("cloudflare %s %s: HTTP %d", method, path, resp.StatusCode)
+		err := fmt.Errorf("cloudflare %s %s: HTTP %d", method, path, resp.StatusCode)
+		if resp.StatusCode >= 400 && resp.StatusCode < 500 {
+			err = permanentReconcileError("%v", err)
+		}
+		return nil, err
 	}
 	return payload, nil
+}
+
+func classifyCloudflareError(err error) error {
+	if isPermanentReconcileError(err) {
+		return err
+	}
+	return err
 }
 
 func renderTunnelConfig(tunnelID string, envHandle string, routes []tunnelRoute) string {

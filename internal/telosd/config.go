@@ -1,7 +1,6 @@
 package telosd
 
 import (
-	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -56,9 +55,17 @@ type AuthConfig struct {
 }
 
 type RuntimeConfig struct {
-	ArtifactBaseURL string `yaml:"artifact_base_url"`
-	ArtifactVersion string `yaml:"artifact_version"`
-	MountPath       string `yaml:"mount_path"`
+	ArtifactBaseURL string                  `yaml:"artifact_base_url"`
+	ArtifactVersion string                  `yaml:"artifact_version"`
+	Artifacts       []RuntimeArtifactConfig `yaml:"artifacts"`
+	MountPath       string                  `yaml:"mount_path"`
+}
+
+type RuntimeArtifactConfig struct {
+	Name   string `yaml:"name"`
+	OS     string `yaml:"os"`
+	Arch   string `yaml:"arch"`
+	SHA256 string `yaml:"sha256"`
 }
 
 type ServiceCredentialConfig struct {
@@ -73,15 +80,19 @@ type ControlConfig = ServiceCredentialConfig
 type BillingConfig = ServiceCredentialConfig
 
 type KubernetesConfig struct {
-	AgentImage      string   `yaml:"agent_image"`
-	EnvNamespace    string   `yaml:"env_namespace"`
-	StateMountRoot  string   `yaml:"state_mount_root"`
-	StateHostRoot   string   `yaml:"state_host_root"`
-	StateNodeRoot   string   `yaml:"state_node_root"`
-	ImagePullSecret string   `yaml:"image_pull_secret"`
-	AgentSecretName string   `yaml:"agent_secret_name"`
-	AgentSecretKey  string   `yaml:"agent_secret_key"`
-	CopySecrets     []string `yaml:"copy_secrets"`
+	AgentImage         string   `yaml:"agent_image"`
+	EnvNamespace       string   `yaml:"env_namespace"`
+	StateMountRoot     string   `yaml:"state_mount_root"`
+	StateHostRoot      string   `yaml:"state_host_root"`
+	StateNodeRoot      string   `yaml:"state_node_root"`
+	StateStorageClass  string   `yaml:"state_storage_class"`
+	StateStorageSize   string   `yaml:"state_storage_size"`
+	AllowHostPathState bool     `yaml:"allow_host_path_state"`
+	WorkerEgressCIDRs  []string `yaml:"worker_egress_cidrs"`
+	ImagePullSecret    string   `yaml:"image_pull_secret"`
+	AgentSecretName    string   `yaml:"agent_secret_name"`
+	AgentSecretKey     string   `yaml:"agent_secret_key"`
+	CopySecrets        []string `yaml:"copy_secrets"`
 }
 
 func LoadConfig(path string) (Config, error) {
@@ -161,7 +172,10 @@ func NormalizeConfig(cfg Config) (Config, error) {
 			cfg.Runtime.ArtifactBaseURL = "https://usetelos.ai/releases"
 		}
 		if cfg.Runtime.ArtifactVersion == "" {
-			cfg.Runtime.ArtifactVersion = "latest"
+			cfg.Runtime.ArtifactVersion = envOr("TELOS_RUNTIME_VERSION", "latest")
+		}
+		if len(cfg.Runtime.Artifacts) == 0 {
+			cfg.Runtime.Artifacts = runtimeArtifactsFromEnv()
 		}
 		if cfg.Runtime.MountPath == "" {
 			cfg.Runtime.MountPath = "/telos-runtime"
@@ -178,17 +192,16 @@ func NormalizeConfig(cfg Config) (Config, error) {
 			return Config{}, err
 		}
 		cfg.Billing, err = resolveServiceCredential(cfg.Billing, serviceCredentialEnv{
-			Name:              "billing",
-			EndpointVars:      []string{"TELOS_BILLING_ENDPOINT"},
-			EndpointValue:     "https://billing.usetelos.ai",
-			TokenFileVar:      "TELOS_BILLING_ENV_TOKEN_FILE",
-			TokenVar:          "TELOS_BILLING_ENV_TOKEN",
-			OptionalTokenFile: !managedGatewayModeEnabled(),
+			Name:          "billing",
+			EndpointVars:  []string{"TELOS_BILLING_ENDPOINT"},
+			EndpointValue: "https://billing.usetelos.ai",
+			TokenFileVar:  "TELOS_BILLING_ENV_TOKEN_FILE",
+			TokenVar:      "TELOS_BILLING_ENV_TOKEN",
 		})
 		if err != nil {
 			return Config{}, err
 		}
-		if managedGatewayModeEnabled() && cfg.Billing.Endpoint != "" && cfg.Billing.EnvID != "" && cfg.Billing.Token == "" {
+		if cfg.Billing.Endpoint != "" && cfg.Billing.EnvID != "" && cfg.Billing.Token == "" {
 			return Config{}, fmt.Errorf("billing.token is required when cloud billing is configured")
 		}
 		if cfg.Kubernetes.AgentImage == "" {
@@ -205,6 +218,18 @@ func NormalizeConfig(cfg Config) (Config, error) {
 		}
 		if cfg.Kubernetes.StateNodeRoot == "" {
 			cfg.Kubernetes.StateNodeRoot = envOr("TELOS_STATE_NODE_ROOT", "/var/telos-state")
+		}
+		if cfg.Kubernetes.StateStorageClass == "" {
+			cfg.Kubernetes.StateStorageClass = strings.TrimSpace(os.Getenv("TELOS_STATE_STORAGE_CLASS"))
+		}
+		if cfg.Kubernetes.StateStorageSize == "" {
+			cfg.Kubernetes.StateStorageSize = envOr("TELOS_STATE_STORAGE_SIZE", "10Gi")
+		}
+		if !cfg.Kubernetes.AllowHostPathState {
+			cfg.Kubernetes.AllowHostPathState = boolEnv("TELOS_ALLOW_HOST_PATH_STATE", false)
+		}
+		if cfg.Kubernetes.WorkerEgressCIDRs == nil {
+			cfg.Kubernetes.WorkerEgressCIDRs = splitList(os.Getenv("TELOS_WORKER_EGRESS_CIDRS"))
 		}
 		if cfg.Kubernetes.ImagePullSecret == "" {
 			cfg.Kubernetes.ImagePullSecret = defaultImagePullSecret(cfg.Kubernetes.AgentImage)
@@ -280,12 +305,11 @@ func defaultImagePullSecret(agentImage string) string {
 }
 
 type serviceCredentialEnv struct {
-	Name              string
-	EndpointVars      []string
-	EndpointValue     string
-	TokenFileVar      string
-	TokenVar          string
-	OptionalTokenFile bool
+	Name          string
+	EndpointVars  []string
+	EndpointValue string
+	TokenFileVar  string
+	TokenVar      string
 }
 
 func resolveServiceCredential(cfg ServiceCredentialConfig, env serviceCredentialEnv) (ServiceCredentialConfig, error) {
@@ -300,9 +324,7 @@ func resolveServiceCredential(cfg ServiceCredentialConfig, env serviceCredential
 	}
 	if cfg.Token == "" {
 		if token, err := authTokenFromFile(cfg.TokenFile); err != nil {
-			if !(env.OptionalTokenFile && errors.Is(err, os.ErrNotExist)) {
-				return ServiceCredentialConfig{}, fmt.Errorf("read %s.token_file: %w", env.Name, err)
-			}
+			return ServiceCredentialConfig{}, fmt.Errorf("read %s.token_file: %w", env.Name, err)
 		} else if token != "" {
 			cfg.Token = token
 		}
@@ -322,8 +344,48 @@ func envFirst(names []string, fallback string) string {
 	return fallback
 }
 
-func managedGatewayModeEnabled() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv("TELOS_GATEWAY_MODE")), "managed")
+func runtimeArtifactsFromEnv() []RuntimeArtifactConfig {
+	var out []RuntimeArtifactConfig
+	for _, item := range []struct {
+		name string
+		arch string
+		env  string
+	}{
+		{name: "telos", arch: "amd64", env: "TELOS_RUNTIME_TELOS_LINUX_AMD64_SHA256"},
+		{name: "telosd", arch: "amd64", env: "TELOS_RUNTIME_TELOSD_LINUX_AMD64_SHA256"},
+		{name: "telos", arch: "arm64", env: "TELOS_RUNTIME_TELOS_LINUX_ARM64_SHA256"},
+		{name: "telosd", arch: "arm64", env: "TELOS_RUNTIME_TELOSD_LINUX_ARM64_SHA256"},
+	} {
+		if value := strings.TrimSpace(os.Getenv(item.env)); value != "" {
+			out = append(out, RuntimeArtifactConfig{Name: item.name, OS: "linux", Arch: item.arch, SHA256: value})
+		}
+	}
+	return out
+}
+
+func boolEnv(name string, fallback bool) bool {
+	value := strings.ToLower(strings.TrimSpace(os.Getenv(name)))
+	switch value {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return fallback
+	}
+}
+
+func splitList(value string) []string {
+	fields := strings.FieldsFunc(value, func(r rune) bool {
+		return r == ',' || r == '\n' || r == ' ' || r == '\t'
+	})
+	out := make([]string, 0, len(fields))
+	for _, field := range fields {
+		if trimmed := strings.TrimSpace(field); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
 }
 
 func SessionsRoot(root string) string {

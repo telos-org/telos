@@ -2,9 +2,12 @@ package telosd
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -17,6 +20,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
@@ -31,24 +35,29 @@ type kubernetesSubstrate struct {
 	client  kubernetes.Interface
 	billing *billingClient
 
-	agentImage        string
-	envNamespace      string
-	stateMountRoot    string
-	stateHostRoot     string
-	stateNodeRoot     string
-	imagePullSecret   string
-	agentSecretName   string
-	agentSecretKey    string
-	copySecrets       []string
-	runtimeBaseURL    string
-	runtimeVersion    string
-	runtimeMountPath  string
-	runtimeTelosPath  string
-	runtimeTelosdPath string
-	billingEndpoint   string
-	billingEnvID      string
-	billingToken      string
-	billingTokenFile  string
+	agentImage         string
+	envNamespace       string
+	stateMountRoot     string
+	stateHostRoot      string
+	stateNodeRoot      string
+	stateStorageClass  string
+	stateStorageSize   string
+	allowHostPathState bool
+	workerEgressCIDRs  []string
+	imagePullSecret    string
+	agentSecretName    string
+	agentSecretKey     string
+	copySecrets        []string
+	runtimeBaseURL     string
+	runtimeVersion     string
+	runtimeArtifacts   map[string]string
+	runtimeMountPath   string
+	runtimeTelosPath   string
+	runtimeTelosdPath  string
+	billingEndpoint    string
+	billingEnvID       string
+	billingToken       string
+	billingTokenFile   string
 }
 
 var sessionGatewayLocks sync.Map
@@ -107,26 +116,31 @@ func newKubernetesSubstrate(cfg Config) (kubernetesSubstrate, error) {
 func newKubernetesSubstrateWithClient(cfg Config, client kubernetes.Interface) kubernetesSubstrate {
 	runtimeMountPath := cfg.Runtime.MountPath
 	return kubernetesSubstrate{
-		client:            client,
-		billing:           newBillingClient(cfg.Billing),
-		agentImage:        cfg.Kubernetes.AgentImage,
-		envNamespace:      cfg.Kubernetes.EnvNamespace,
-		stateMountRoot:    cfg.Kubernetes.StateMountRoot,
-		stateHostRoot:     cfg.Kubernetes.StateHostRoot,
-		stateNodeRoot:     cfg.Kubernetes.StateNodeRoot,
-		imagePullSecret:   cfg.Kubernetes.ImagePullSecret,
-		agentSecretName:   cfg.Kubernetes.AgentSecretName,
-		agentSecretKey:    cfg.Kubernetes.AgentSecretKey,
-		copySecrets:       append([]string{}, cfg.Kubernetes.CopySecrets...),
-		runtimeBaseURL:    cfg.Runtime.ArtifactBaseURL,
-		runtimeVersion:    cfg.Runtime.ArtifactVersion,
-		runtimeMountPath:  runtimeMountPath,
-		runtimeTelosPath:  runtimeMountPath + "/telos",
-		runtimeTelosdPath: runtimeMountPath + "/telosd",
-		billingEndpoint:   cfg.Billing.Endpoint,
-		billingEnvID:      cfg.Billing.EnvID,
-		billingToken:      cfg.Billing.Token,
-		billingTokenFile:  cfg.Billing.TokenFile,
+		client:             client,
+		billing:            newBillingClient(cfg.Billing),
+		agentImage:         cfg.Kubernetes.AgentImage,
+		envNamespace:       cfg.Kubernetes.EnvNamespace,
+		stateMountRoot:     cfg.Kubernetes.StateMountRoot,
+		stateHostRoot:      cfg.Kubernetes.StateHostRoot,
+		stateNodeRoot:      cfg.Kubernetes.StateNodeRoot,
+		stateStorageClass:  cfg.Kubernetes.StateStorageClass,
+		stateStorageSize:   cfg.Kubernetes.StateStorageSize,
+		allowHostPathState: cfg.Kubernetes.AllowHostPathState,
+		workerEgressCIDRs:  append([]string{}, cfg.Kubernetes.WorkerEgressCIDRs...),
+		imagePullSecret:    cfg.Kubernetes.ImagePullSecret,
+		agentSecretName:    cfg.Kubernetes.AgentSecretName,
+		agentSecretKey:     cfg.Kubernetes.AgentSecretKey,
+		copySecrets:        append([]string{}, cfg.Kubernetes.CopySecrets...),
+		runtimeBaseURL:     cfg.Runtime.ArtifactBaseURL,
+		runtimeVersion:     cfg.Runtime.ArtifactVersion,
+		runtimeArtifacts:   runtimeArtifactDigestMap(cfg.Runtime.Artifacts),
+		runtimeMountPath:   runtimeMountPath,
+		runtimeTelosPath:   runtimeMountPath + "/telos",
+		runtimeTelosdPath:  runtimeMountPath + "/telosd",
+		billingEndpoint:    cfg.Billing.Endpoint,
+		billingEnvID:       cfg.Billing.EnvID,
+		billingToken:       cfg.Billing.Token,
+		billingTokenFile:   cfg.Billing.TokenFile,
 	}
 }
 
@@ -327,6 +341,9 @@ func jobConditionTrue(job *batchv1.Job, conditionType batchv1.JobConditionType) 
 }
 
 func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespace string, credential *controlSessionKey) error {
+	if s.stateStorageClass == "" && !s.allowHostPathState {
+		return fmt.Errorf("kubernetes.allow_host_path_state must be true when kubernetes.state_storage_class is not configured")
+	}
 	if err := s.createNamespaceIfMissing(ctx, namespace); err != nil {
 		return err
 	}
@@ -339,7 +356,12 @@ func (s kubernetesSubstrate) prepareWorkerNamespace(ctx context.Context, namespa
 	if err := s.createOrUpdateClusterRoleBinding(ctx, workerClusterRoleBinding(namespace)); err != nil {
 		return err
 	}
-	for _, policy := range workerNetworkPolicies(namespace) {
+	if s.stateStorageClass != "" {
+		if err := s.createOrUpdatePersistentVolumeClaim(ctx, s.statePersistentVolumeClaim(namespace)); err != nil {
+			return err
+		}
+	}
+	for _, policy := range workerNetworkPolicies(namespace, s.workerEgressCIDRs) {
 		if err := s.createOrUpdateNetworkPolicy(ctx, policy); err != nil {
 			return err
 		}
@@ -428,15 +450,33 @@ func (s kubernetesSubstrate) workerPodTemplate(
 	wakeReason string,
 ) corev1.PodTemplateSpec {
 	sessionDir := s.stateMountRoot + "/sessions/" + sessionID
+	annotations := s.workerAnnotations(m, wakeReason)
 	volumes := []corev1.Volume{
-		{
+		{Name: "telos-runtime", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+	}
+	if s.stateStorageClass != "" {
+		volumes = append([]corev1.Volume{{
+			Name: "telos-state",
+			VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+				ClaimName: statePVCName,
+				ReadOnly:  false,
+			}},
+		}}, volumes...)
+		annotations["telos.ai/state-volume"] = "pvc"
+		annotations["telos.ai/state-storage-class"] = s.stateStorageClass
+	} else {
+		volumes = append([]corev1.Volume{{
 			Name: "telos-state",
 			VolumeSource: corev1.VolumeSource{HostPath: &corev1.HostPathVolumeSource{
 				Path: s.stateNodeRoot,
 				Type: hostPathTypePtr(corev1.HostPathDirectoryOrCreate),
 			}},
-		},
-		{Name: "telos-runtime", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		}}, volumes...)
+		annotations["telos.ai/state-volume"] = "hostPath"
+		annotations["telos.ai/state-volume-warning"] = "hostPath state mount enabled; configure kubernetes.state_storage_class to use PVC-backed state"
+		if !s.allowHostPathState {
+			annotations["telos.ai/state-volume-warning"] = "hostPath state mount used without explicit allow_host_path_state opt-in"
+		}
 	}
 	mounts := []corev1.VolumeMount{
 		{Name: "telos-state", MountPath: s.stateMountRoot},
@@ -482,7 +522,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 	return corev1.PodTemplateSpec{
 		ObjectMeta: metav1.ObjectMeta{
 			Labels:      labels,
-			Annotations: s.workerAnnotations(m, wakeReason),
+			Annotations: annotations,
 		},
 		Spec: podSpec,
 	}
@@ -621,6 +661,42 @@ func (s kubernetesSubstrate) createOrUpdateSecret(ctx context.Context, desired *
 	}
 	desired.ResourceVersion = current.ResourceVersion
 	_, err = s.client.CoreV1().Secrets(desired.Namespace).Update(ctx, desired, metav1.UpdateOptions{})
+	return err
+}
+
+const statePVCName = "telos-state"
+
+func (s kubernetesSubstrate) statePersistentVolumeClaim(namespace string) *corev1.PersistentVolumeClaim {
+	storageClass := s.stateStorageClass
+	return &corev1.PersistentVolumeClaim{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      statePVCName,
+			Namespace: namespace,
+			Labels:    map[string]string{"telos/role": "worker-state"},
+		},
+		Spec: corev1.PersistentVolumeClaimSpec{
+			AccessModes:      []corev1.PersistentVolumeAccessMode{corev1.ReadWriteOnce},
+			StorageClassName: &storageClass,
+			Resources: corev1.VolumeResourceRequirements{
+				Requests: corev1.ResourceList{
+					corev1.ResourceStorage: resource.MustParse(s.stateStorageSize),
+				},
+			},
+		},
+	}
+}
+
+func (s kubernetesSubstrate) createOrUpdatePersistentVolumeClaim(ctx context.Context, desired *corev1.PersistentVolumeClaim) error {
+	current, err := s.client.CoreV1().PersistentVolumeClaims(desired.Namespace).Get(ctx, desired.Name, metav1.GetOptions{})
+	if apierrors.IsNotFound(err) {
+		_, err = s.client.CoreV1().PersistentVolumeClaims(desired.Namespace).Create(ctx, desired, metav1.CreateOptions{})
+		return err
+	}
+	if err != nil {
+		return err
+	}
+	desired.ResourceVersion = current.ResourceVersion
+	_, err = s.client.CoreV1().PersistentVolumeClaims(desired.Namespace).Update(ctx, desired, metav1.UpdateOptions{})
 	return err
 }
 
@@ -988,27 +1064,28 @@ func workerClusterRole(namespace string) *rbacv1.ClusterRole {
 	return &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Rules: []rbacv1.PolicyRule{
+			// Worker apply path: agent-created Kubernetes app specs need CRUD for
+			// namespaced core resources inside their session namespace.
 			{
 				APIGroups: []string{""},
 				Resources: []string{
-					"namespaces", "pods",
-					"services", "configmaps", "secrets", "events", "endpoints",
-					"persistentvolumeclaims", "replicationcontrollers",
+					"pods", "services", "configmaps", "secrets", "events", "persistentvolumeclaims",
 				},
-				Verbs: workerVerbs(),
+				Verbs: namespacedWriteVerbs(),
 			},
-			{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"create", "get"}},
-			{APIGroups: []string{""}, Resources: []string{"nodes", "pods/log", "persistentvolumes", "serviceaccounts"}, Verbs: readVerbs()},
-			{APIGroups: []string{"apps"}, Resources: []string{"deployments", "replicasets", "statefulsets", "daemonsets"}, Verbs: workerVerbs()},
-			{APIGroups: []string{"autoscaling"}, Resources: []string{"horizontalpodautoscalers"}, Verbs: readVerbs()},
-			{APIGroups: []string{"batch"}, Resources: []string{"jobs", "cronjobs"}, Verbs: workerVerbs()},
-			{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies", "ingresses"}, Verbs: workerVerbs()},
-			{
-				APIGroups: []string{"rbac.authorization.k8s.io"},
-				Resources: []string{"roles", "rolebindings", "clusterroles", "clusterrolebindings"},
-				Verbs:     readVerbs(),
-			},
-			{APIGroups: []string{"storage.k8s.io"}, Resources: []string{"storageclasses"}, Verbs: readVerbs()},
+			// Worker diagnostics path: tools may stream logs for pods created by
+			// the session when debugging deployments.
+			{APIGroups: []string{""}, Resources: []string{"pods/log"}, Verbs: []string{"get", "list"}},
+			// Worker interactive diagnostics path: exec is create-only in the
+			// Kubernetes API and is used for explicit pod debugging commands.
+			{APIGroups: []string{""}, Resources: []string{"pods/exec"}, Verbs: []string{"create"}},
+			// Worker apply path: app manifests most commonly manage Deployments.
+			{APIGroups: []string{"apps"}, Resources: []string{"deployments"}, Verbs: namespacedWriteVerbs()},
+			// Worker task path: batch Jobs are created for session-managed tasks.
+			{APIGroups: []string{"batch"}, Resources: []string{"jobs"}, Verbs: namespacedWriteVerbs()},
+			// Worker network path: product routes may require in-namespace
+			// NetworkPolicy and Ingress objects.
+			{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"networkpolicies", "ingresses"}, Verbs: namespacedWriteVerbs()},
 		},
 	}
 }
@@ -1030,18 +1107,27 @@ func workerClusterRoleBinding(namespace string) *rbacv1.ClusterRoleBinding {
 	}
 }
 
-func workerNetworkPolicies(namespace string) []*networkingv1.NetworkPolicy {
+func workerNetworkPolicies(namespace string, egressCIDRs []string) []*networkingv1.NetworkPolicy {
+	egress := []networkingv1.NetworkPolicyEgressRule{
+		{Ports: []networkingv1.NetworkPolicyPort{networkPort(53, corev1.ProtocolUDP), networkPort(53, corev1.ProtocolTCP)}},
+	}
+	for _, cidr := range egressCIDRs {
+		cidr = strings.TrimSpace(cidr)
+		if cidr == "" {
+			continue
+		}
+		egress = append(egress, networkingv1.NetworkPolicyEgressRule{
+			To:    []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: cidr}}},
+			Ports: []networkingv1.NetworkPolicyPort{networkPort(443, corev1.ProtocolTCP), networkPort(80, corev1.ProtocolTCP)},
+		})
+	}
 	return []*networkingv1.NetworkPolicy{
 		{
 			ObjectMeta: metav1.ObjectMeta{Name: "agent-egress", Namespace: namespace},
 			Spec: networkingv1.NetworkPolicySpec{
 				PodSelector: metav1.LabelSelector{MatchLabels: map[string]string{"telos/role": "worker"}},
 				PolicyTypes: []networkingv1.PolicyType{networkingv1.PolicyTypeEgress},
-				Egress: []networkingv1.NetworkPolicyEgressRule{
-					{Ports: []networkingv1.NetworkPolicyPort{networkPort(53, corev1.ProtocolUDP), networkPort(53, corev1.ProtocolTCP)}},
-					{Ports: []networkingv1.NetworkPolicyPort{networkPort(443, corev1.ProtocolTCP)}},
-					{To: []networkingv1.NetworkPolicyPeer{{IPBlock: &networkingv1.IPBlock{CIDR: "10.0.0.0/8"}}}},
-				},
+				Egress:      egress,
 			},
 		},
 		{
@@ -1062,12 +1148,8 @@ func networkPort(port int, protocol corev1.Protocol) networkingv1.NetworkPolicyP
 	}
 }
 
-func workerVerbs() []string {
-	return []string{"create", "get", "list", "watch", "update", "patch", "delete"}
-}
-
-func readVerbs() []string {
-	return []string{"get", "list", "watch"}
+func namespacedWriteVerbs() []string {
+	return []string{"create", "get", "list", "update", "patch", "delete"}
 }
 
 func specSHAForVersion(m *sessionapi.Manifest, version int) string {
@@ -1120,44 +1202,41 @@ func sessionShortID(sessionID string) string {
 }
 
 func (s kubernetesSubstrate) runtimeInstallScript() string {
+	amd64Telos := s.runtimeArtifactDigest("telos", "linux", "amd64")
+	amd64Telosd := s.runtimeArtifactDigest("telosd", "linux", "amd64")
+	arm64Telos := s.runtimeArtifactDigest("telos", "linux", "arm64")
+	arm64Telosd := s.runtimeArtifactDigest("telosd", "linux", "arm64")
 	return fmt.Sprintf(`set -euo pipefail
 base_url=%q
 version=%q
 os=linux
 arch="$(uname -m)"
 case "$arch" in
-  x86_64|amd64) arch=amd64 ;;
-  aarch64|arm64) arch=arm64 ;;
+  x86_64|amd64) arch=amd64; telos_sha256=%q; telosd_sha256=%q ;;
+  aarch64|arm64) arch=arm64; telos_sha256=%q; telosd_sha256=%q ;;
   *) echo "unsupported architecture: $arch" >&2; exit 1 ;;
 esac
 
-if [ "$version" = "latest" ]; then
-  manifest="$(curl -fsSL -H 'Cache-Control: no-cache' "$base_url/latest/manifest.json?$(date +%%s)")"
-  version="$(printf '%%s' "$manifest" | jq -r '.version')"
-  resolved_base_url="$(printf '%%s' "$manifest" | jq -r '.base_url')"
-  if [ -z "$version" ] || [ "$version" = "null" ] || [ -z "$resolved_base_url" ] || [ "$resolved_base_url" = "null" ]; then
-    echo "failed to parse Telos runtime manifest" >&2
-    exit 1
-  fi
-else
-  resolved_base_url="$base_url/$version"
+if [ -z "$version" ] || [ "$version" = "latest" ]; then
+  echo "runtime artifact_version must be pinned; refusing to fetch latest" >&2
+  exit 1
 fi
+if [ -z "$telos_sha256" ] || [ -z "$telosd_sha256" ]; then
+  echo "runtime sha256 digests must be configured for $os/$arch" >&2
+  exit 1
+fi
+resolved_base_url="$base_url/$version"
 
 tmp_dir="$(mktemp -d)"
 trap 'rm -rf "$tmp_dir"' EXIT
 
-curl -fsSL "$resolved_base_url/SHA256SUMS" -o "$tmp_dir/SHA256SUMS"
 mkdir -p %s
 
 download_verified() {
   artifact="$1"
   dest="$2"
+  expected="$3"
   curl -fsSL "$resolved_base_url/$artifact" -o "$dest"
-  expected="$(awk -v file="$artifact" '$2 == file { print $1 }' "$tmp_dir/SHA256SUMS")"
-  if [ -z "$expected" ]; then
-    echo "checksum missing for $artifact" >&2
-    exit 1
-  fi
   actual="$(sha256sum "$dest" | awk '{ print $1 }')"
   if [ "$actual" != "$expected" ]; then
     echo "checksum verification failed for $artifact" >&2
@@ -1165,14 +1244,64 @@ download_verified() {
   fi
 }
 
-download_verified "telos-$os-$arch" "$tmp_dir/telos"
-download_verified "telosd-$os-$arch" "$tmp_dir/telosd"
+download_verified "telos-$os-$arch" "$tmp_dir/telos" "$telos_sha256"
+download_verified "telosd-$os-$arch" "$tmp_dir/telosd" "$telosd_sha256"
 install -m 0755 "$tmp_dir/telos" %s
 install -m 0755 "$tmp_dir/telosd" %s
 
 %s --version
 %s --version
-`, s.runtimeBaseURL, s.runtimeVersion, s.runtimeMountPath, s.runtimeTelosPath, s.runtimeTelosdPath, s.runtimeTelosPath, s.runtimeTelosdPath)
+`, s.runtimeBaseURL, s.runtimeVersion, amd64Telos, amd64Telosd, arm64Telos, arm64Telosd, s.runtimeMountPath, s.runtimeTelosPath, s.runtimeTelosdPath, s.runtimeTelosPath, s.runtimeTelosdPath)
+}
+
+func runtimeArtifactDigestMap(artifacts []RuntimeArtifactConfig) map[string]string {
+	out := map[string]string{}
+	for _, artifact := range artifacts {
+		key := runtimeArtifactKey(artifact.Name, artifact.OS, artifact.Arch)
+		if key == "" {
+			continue
+		}
+		out[key] = strings.ToLower(strings.TrimSpace(artifact.SHA256))
+	}
+	return out
+}
+
+func (s kubernetesSubstrate) runtimeArtifactDigest(name, osName, arch string) string {
+	if s.runtimeArtifacts == nil {
+		return ""
+	}
+	return s.runtimeArtifacts[runtimeArtifactKey(name, osName, arch)]
+}
+
+func runtimeArtifactKey(name, osName, arch string) string {
+	name = strings.ToLower(strings.TrimSpace(name))
+	osName = strings.ToLower(strings.TrimSpace(osName))
+	arch = strings.ToLower(strings.TrimSpace(arch))
+	if name == "" || osName == "" || arch == "" {
+		return ""
+	}
+	return name + "/" + osName + "/" + arch
+}
+
+func verifyArtifactSHA256(path string, expected string) error {
+	expected = strings.ToLower(strings.TrimSpace(expected))
+	if len(expected) != sha256.Size*2 {
+		return fmt.Errorf("invalid sha256 digest %q", expected)
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return err
+	}
+	actual := hex.EncodeToString(hash.Sum(nil))
+	if actual != expected {
+		return fmt.Errorf("sha256 mismatch for %s: got %s want %s", path, actual, expected)
+	}
+	return nil
 }
 
 func pullPolicy(image string) corev1.PullPolicy {
