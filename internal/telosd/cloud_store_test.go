@@ -147,6 +147,9 @@ func assertManagedSessionDefaults(t *testing.T, session *sessionapi.Session) {
 	if got, _ := session.Config["model"].(string); got != defaultCloudSessionModel {
 		t.Fatalf("model = %q want %q", got, defaultCloudSessionModel)
 	}
+	if got, _ := session.Config["thinking"].(string); got != defaultCloudSessionThinking {
+		t.Fatalf("thinking = %q want %q", got, defaultCloudSessionThinking)
+	}
 	got, ok := intConfigValue(session.Config, "agent_timeout_sec")
 	if !ok || got != defaultCloudAgentTimeoutSec {
 		t.Fatalf("agent_timeout_sec = %v want %d", session.Config["agent_timeout_sec"], defaultCloudAgentTimeoutSec)
