@@ -109,6 +109,33 @@ func TestExecuteTurnIncludesStderrOnPiFailure(t *testing.T) {
 	}
 }
 
+func TestExecuteTurnTreatsTimeoutAsTerminalFailure(t *testing.T) {
+	workspace := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	piPath := filepath.Join(bin, "pi")
+	script := "#!/bin/sh\nsleep 5\n"
+	if err := os.WriteFile(piPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	p := platform.NewLocalPlatform(workspace)
+	p.Env = map[string]string{"HOME": home}
+	exec := NewPiExecutor(p, "test-model", "high", 1)
+
+	result := exec.ExecuteTurn("do it", "prover", nil)
+
+	if result.Error != "local_timeout:1" {
+		t.Fatalf("error: got %q", result.Error)
+	}
+	if result.Recoverable {
+		t.Fatalf("timeout should be terminal, got recoverable result: %#v", result)
+	}
+}
+
 func TestReadPiSessionExtractsAssistantTextStatsAndTurns(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
 	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)

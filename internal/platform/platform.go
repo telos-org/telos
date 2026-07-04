@@ -23,11 +23,13 @@ const (
 
 // CommandResult is the outcome of one platform run.
 type CommandResult struct {
-	RawLines   []string
-	Stderr     string
-	ReturnCode int
-	DurationMS int
-	InfraError string
+	RawLines    []string
+	Stderr      string
+	ReturnCode  int
+	DurationMS  int
+	InfraError  string
+	TimedOut    bool
+	Interrupted bool
 }
 
 // OnStdoutLine is called for each stdout line as it arrives.
@@ -186,10 +188,12 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 		result.ReturnCode = -1
 	}
 	result.DurationMS = int(time.Since(started).Milliseconds())
+	result.TimedOut = timedOut.Load()
+	result.Interrupted = interrupted.Load()
 
-	if err != nil && timedOut.Load() {
+	if err != nil && result.TimedOut {
 		result.InfraError = fmt.Sprintf("local_timeout:%d", timeout)
-	} else if err != nil && interrupted.Load() {
+	} else if err != nil && result.Interrupted {
 		result.InfraError = "local_interrupted:stop_requested"
 	}
 

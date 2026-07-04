@@ -18,12 +18,17 @@ type cloudBootstrapSession struct {
 	PackageDigest  string `json:"package_digest"`
 }
 
-const defaultCloudSessionModel = "sail-research/zai-org/GLM-5.2-FP8"
+const (
+	defaultCloudSessionModel    = "sail-research/zai-org/GLM-5.2-FP8"
+	defaultCloudAgentTimeoutSec = 900
+	cloudAgentTimeoutEnvVar     = "TELOS_AGENT_TIMEOUT_SEC"
+)
 
 type sessionBootstrapReconciler struct {
-	packageRoot string
-	model       string
-	store       sessionapi.Store
+	packageRoot     string
+	model           string
+	agentTimeoutSec *int
+	store           sessionapi.Store
 }
 
 func startSessionBootstrapReconciler(ctx context.Context, store sessionapi.Store) {
@@ -35,9 +40,10 @@ func startSessionBootstrapReconciler(ctx context.Context, store sessionapi.Store
 		return
 	}
 	r := sessionBootstrapReconciler{
-		packageRoot: strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
-		model:       cloudSessionModel(),
-		store:       store,
+		packageRoot:     strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
+		model:           cloudSessionModel(),
+		agentTimeoutSec: intPtr(cloudAgentTimeoutSec()),
+		store:           store,
 	}
 	if r.packageRoot == "" {
 		return
@@ -106,6 +112,10 @@ func (r sessionBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) 
 		if model == "" {
 			model = cloudSessionModel()
 		}
+		agentTimeoutSec := cloudAgentTimeoutSec()
+		if r.agentTimeoutSec != nil {
+			agentTimeoutSec = *r.agentTimeoutSec
+		}
 		if _, err := r.store.Create(sessionapi.SessionCreateRequest{
 			ApplyPackagePath:   packagePath,
 			ApplyPackageDigest: digest,
@@ -113,6 +123,7 @@ func (r sessionBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) 
 			CloudSessionName:   name,
 			SessionKind:        &kind,
 			Model:              model,
+			AgentTimeoutSec:    intPtr(agentTimeoutSec),
 		}); err != nil {
 			return fmt.Errorf("create session %s from package %s: %w", name, digest, err)
 		}
@@ -130,6 +141,10 @@ func cloudSessionModel() string {
 		return model
 	}
 	return defaultCloudSessionModel
+}
+
+func cloudAgentTimeoutSec() int {
+	return envNonNegativeInt(cloudAgentTimeoutEnvVar, defaultCloudAgentTimeoutSec)
 }
 
 func activeRootSessionsByName(sessions []sessionapi.Session) map[string]sessionapi.Session {
@@ -180,4 +195,20 @@ func envInt(name string, fallback int) int {
 		return fallback
 	}
 	return value
+}
+
+func envNonNegativeInt(name string, fallback int) int {
+	raw := strings.TrimSpace(os.Getenv(name))
+	if raw == "" {
+		return fallback
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 0 {
+		return fallback
+	}
+	return value
+}
+
+func intPtr(value int) *int {
+	return &value
 }
