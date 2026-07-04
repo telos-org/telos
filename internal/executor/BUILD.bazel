@@ -58,6 +58,7 @@ go_library(
 go_test(
     name = "executor_test",
     srcs = [
+        "bifrost_routing_test.go",
         "compactor_test.go",
         "conversation_state_test.go",
         "native_test.go",
@@ -77,6 +78,7 @@ go_test(
         "//internal/oauthcred",
         "//internal/platform",
         "//internal/protocol",
+        "//internal/sessionapi",
         "@com_github_openai_openai_go//responses",
     ],
 )

@@ -924,13 +924,13 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 	} else if !apierrors.IsNotFound(err) {
 		return err
 	}
-	if !s.managedGatewayEnabled() && !hasGatewayIntent(secret.Data, s.agentSecretKey) {
+	if !s.managedGatewayEnabled() && !hasGatewayIntent(secret.Data) {
 		applyConfiguredDirectProviderEnv(secret.Data)
 	}
-	if !hasGatewayIntent(secret.Data, s.agentSecretKey) {
+	if !hasGatewayIntent(secret.Data) {
 		clearGatewayCredentialEnv(secret.Data)
 	}
-	if hasGatewayIntent(secret.Data, s.agentSecretKey) {
+	if hasGatewayIntent(secret.Data) {
 		if gatewayAPIKeyValue(secret.Data, s.agentSecretKey) == "" {
 			return fmt.Errorf("%s is required to launch a worker", gatewayAPIKeyEnv)
 		}
@@ -1168,14 +1168,15 @@ func applyConfiguredDirectProviderEnv(data map[string][]byte) {
 	}
 }
 
+// applyConfiguredGatewayAPIKey copies only the explicit gateway key env into
+// the secret. The agent secret key slot may be a direct provider variable
+// (e.g. SAIL_API_KEY); reading that env here would misfile a direct provider
+// key as gateway intent.
 func applyConfiguredGatewayAPIKey(data map[string][]byte, keyName string) {
 	if data == nil {
 		return
 	}
-	value := strings.TrimSpace(os.Getenv(keyName))
-	if value == "" && keyName != gatewayAPIKeyEnv {
-		value = strings.TrimSpace(os.Getenv(gatewayAPIKeyEnv))
-	}
+	value := strings.TrimSpace(os.Getenv(gatewayAPIKeyEnv))
 	if value == "" {
 		return
 	}
@@ -1194,10 +1195,10 @@ func applyConfiguredGatewayEnv(data map[string][]byte) {
 	}
 }
 
-func hasGatewayIntent(data map[string][]byte, keyName string) bool {
-	return strings.TrimSpace(string(data[gatewayAPIKeyEnv])) != "" ||
-		strings.TrimSpace(string(data[keyName])) != "" ||
-		strings.TrimSpace(string(data[gatewayBaseURLEnv])) != ""
+// hasGatewayIntent keys off the canonical gateway key alone: a stale base URL
+// or a direct provider key in the agent slot is not gateway intent.
+func hasGatewayIntent(data map[string][]byte) bool {
+	return strings.TrimSpace(string(data[gatewayAPIKeyEnv])) != ""
 }
 
 func gatewayAPIKeyValue(data map[string][]byte, keyName string) string {

@@ -45,14 +45,23 @@ gateway.
 Configure the gateway before starting a run:
 
 ```bash
+telos login
+telos configure gateway --mode managed
+
+# or bring your own gateway / provider endpoint
+telos configure gateway --mode byo --base-url https://gateway.example.com/v1 --api-key ...
+
+# or point the process at a gateway directly
 export TELOS_GATEWAY_BASE_URL="https://gateway.example.com/v1"
 export TELOS_GATEWAY_API_KEY="..."
 telos run SPEC.md --workspace . --model anthropic/claude-sonnet-4.5 --until 3
 ```
 
-Set `TELOS_GATEWAY_TRANSPORT=openai_sync` for standard Responses APIs, or
-`TELOS_GATEWAY_TRANSPORT=bifrost_async` with a Bifrost base URL ending in
-`/openai`. Extra per-request headers can be supplied as a JSON object in
+Managed sessions pick a model tier with `--profile standard|premium` and
+default to the Bifrost async transport; BYO and env-configured gateways default
+to `openai_sync`. Set `TELOS_GATEWAY_TRANSPORT=bifrost_async` explicitly (with a
+Bifrost base URL ending in `/openai`) to opt a BYO gateway into async. Extra
+per-request headers can be supplied as a JSON object in
 `TELOS_GATEWAY_HEADERS`. Model names are sent to the gateway unchanged.
 Per-response cost is taken from gateway response metadata such as the
 `x-response-cost` header or a cost field in the response body. For models the

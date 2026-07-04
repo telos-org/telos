@@ -106,17 +106,14 @@ func (r *bifrostRouting) assignedOrUnset() string {
 	return "unset"
 }
 
-// agentOptions returns the per-request options for agent-loop requests.
-func (r *bifrostRouting) agentOptions() []option.RequestOption {
-	if r == nil {
-		return nil
-	}
+// agentHeaders is the sticky-routing header set for agent-loop requests.
+func (r *bifrostRouting) agentHeaders() map[string]string {
 	assigned := r.assignedOrUnset()
 	phase := r.phase
 	if assigned == "unset" {
 		phase = "new"
 	}
-	return r.options(map[string]string{
+	return map[string]string{
 		"x-bf-session-id":         r.sessionID,
 		"x-bf-session-ttl":        "1h",
 		"x-bf-cache-key":          r.sessionID,
@@ -125,21 +122,18 @@ func (r *bifrostRouting) agentOptions() []option.RequestOption {
 		"x-llm-assigned-provider": assigned,
 		"x-telos-model-profile":   string(r.profile),
 		"x-request-id":            r.requestID,
-	}, sessionapi.BifrostAgentModel(r.profile))
+	}
 }
 
-// compactionOptions returns the per-request options for compaction requests.
-// Standard-profile compaction always routes to the fixed compaction provider;
-// premium follows the agent assignment.
-func (r *bifrostRouting) compactionOptions() []option.RequestOption {
-	if r == nil {
-		return nil
-	}
+// compactionHeaders is the header set for compaction requests. Standard-profile
+// compaction always routes to the fixed compaction provider; premium follows
+// the agent assignment.
+func (r *bifrostRouting) compactionHeaders() map[string]string {
 	assigned := r.assignedOrUnset()
 	if r.profile == gatewaycred.ModelProfileStandard {
 		assigned = "silares"
 	}
-	return r.options(map[string]string{
+	return map[string]string{
 		"x-bf-session-id":         r.sessionID + ":compaction",
 		"x-bf-session-ttl":        "1h",
 		"x-bf-cache-key":          r.sessionID + ":compaction",
@@ -148,7 +142,23 @@ func (r *bifrostRouting) compactionOptions() []option.RequestOption {
 		"x-llm-assigned-provider": assigned,
 		"x-telos-model-profile":   string(r.profile),
 		"x-request-id":            r.requestID + ":compaction",
-	}, sessionapi.BifrostCompactionModel(r.profile))
+	}
+}
+
+// agentOptions returns the per-request options for agent-loop requests.
+func (r *bifrostRouting) agentOptions() []option.RequestOption {
+	if r == nil {
+		return nil
+	}
+	return r.options(r.agentHeaders(), sessionapi.BifrostAgentModel(r.profile))
+}
+
+// compactionOptions returns the per-request options for compaction requests.
+func (r *bifrostRouting) compactionOptions() []option.RequestOption {
+	if r == nil {
+		return nil
+	}
+	return r.options(r.compactionHeaders(), sessionapi.BifrostCompactionModel(r.profile))
 }
 
 func (r *bifrostRouting) options(headers map[string]string, fallbackModel string) []option.RequestOption {

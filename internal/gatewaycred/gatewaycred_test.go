@@ -11,7 +11,10 @@ func TestNormalizeTransportAndKind(t *testing.T) {
 		wantK     Kind
 	}{
 		{name: "defaults openai", wantT: TransportOpenAISync, wantK: KindOpenAI},
-		{name: "bifrost kind defaults async transport", kind: "bifrost", wantT: TransportBifrostAsync, wantK: KindBifrost},
+		// Kind alone never opts into the async transport: BYO/env credentials
+		// stay openai_sync unless transport is explicit; managed resolution
+		// pre-fills bifrost_async before normalizing.
+		{name: "bifrost kind keeps sync transport", kind: "bifrost", wantT: TransportOpenAISync, wantK: KindBifrost},
 		{name: "async transport defaults bifrost kind", transport: "bifrost_async", wantT: TransportBifrostAsync, wantK: KindBifrost},
 	}
 	for _, tt := range tests {
@@ -58,7 +61,7 @@ func TestFromEnv(t *testing.T) {
 	if cred.BaseURL != "https://gateway.example.com/openai" || cred.APIKey != "test-key" {
 		t.Fatalf("credential: %+v", cred)
 	}
-	if cred.Transport != TransportBifrostAsync || cred.Kind != KindBifrost {
+	if cred.Transport != TransportOpenAISync || cred.Kind != KindBifrost {
 		t.Fatalf("transport/kind: %+v", cred)
 	}
 	if cred.Headers["x-extra"] != "ok" {
@@ -82,10 +85,30 @@ func TestFromEnvProviderFallbackAPIKey(t *testing.T) {
 	}
 }
 
-func TestFromEnvInvalidHeadersCountAsPresent(t *testing.T) {
+func TestFromEnvInvalidHeadersWithoutKeyIgnored(t *testing.T) {
+	// Stale gateway env without a usable key must not opt the process into
+	// gateway routing, even when the leftovers are malformed.
+	t.Setenv(HeadersEnv, `["not-object"]`)
+	if _, ok, err := FromEnv(); err != nil || ok {
+		t.Fatalf("FromEnv stale invalid headers: ok=%v err=%v", ok, err)
+	}
+	if !EnvPresent() {
+		t.Fatal("EnvPresent should still report the stale variable")
+	}
+}
+
+func TestFromEnvInvalidHeadersWithKeyError(t *testing.T) {
+	t.Setenv(APIKeyEnv, "test-key")
 	t.Setenv(HeadersEnv, `["not-object"]`)
 	if _, ok, err := FromEnv(); err == nil || !ok {
-		t.Fatalf("FromEnv invalid headers: ok=%v err=%v", ok, err)
+		t.Fatalf("FromEnv invalid headers with key: ok=%v err=%v", ok, err)
+	}
+}
+
+func TestFromEnvStaleBaseURLWithoutKeyIgnored(t *testing.T) {
+	t.Setenv(BaseURLEnv, "https://stale-gateway.example.com/v1")
+	if _, ok, err := FromEnv(); err != nil || ok {
+		t.Fatalf("FromEnv stale base URL: ok=%v err=%v", ok, err)
 	}
 }
 

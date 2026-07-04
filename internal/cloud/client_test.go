@@ -262,14 +262,17 @@ func TestClientMintSessionKey(t *testing.T) {
 	defer srv.Close()
 
 	client := NewBillingClient(srv.URL, "test-token")
-	key, err := client.MintSessionKey("sess-1")
+	key, err := client.MintSessionKey("sess-1", "premium")
 	if err != nil {
 		t.Fatalf("MintSessionKey: %v", err)
 	}
 	if gotPath != "/api/billing/session-key" || gotBody["session_id"] != "sess-1" {
 		t.Fatalf("request: path=%q body=%v", gotPath, gotBody)
 	}
-	if transports, ok := gotBody["supported_transports"].([]any); !ok || len(transports) != 1 || transports[0] != "openai_sync" {
+	if gotBody["model_profile"] != "premium" {
+		t.Fatalf("model profile: got %#v", gotBody["model_profile"])
+	}
+	if transports, ok := gotBody["supported_transports"].([]any); !ok || len(transports) != 2 || transports[0] != "bifrost_async" || transports[1] != "openai_sync" {
 		t.Fatalf("supported transports: got %#v", gotBody["supported_transports"])
 	}
 	if key.APIKey != "sk-session" || key.BaseURL != "https://proxy.example.com/v1" || key.Transport != "bifrost_async" || key.Kind != "bifrost" || key.Headers["x-bf-vk"] != "sk-bf" || key.KeyAlias != "sess-1" {
@@ -298,7 +301,7 @@ func TestClientMintSessionKeyRejectsInvalidSessionID(t *testing.T) {
 			defer srv.Close()
 
 			client := NewBillingClient(srv.URL, "test-token")
-			if _, err := client.MintSessionKey("sess-1"); err == nil {
+			if _, err := client.MintSessionKey("sess-1", "standard"); err == nil {
 				t.Fatal("expected invalid session_id error")
 			}
 		})

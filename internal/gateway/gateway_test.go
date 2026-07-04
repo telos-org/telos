@@ -107,7 +107,7 @@ gateway:
 	t.Setenv("TELOS_CONFIG", cfgPath)
 	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
 
-	cred, err := Resolve("sess-1")
+	cred, err := Resolve("sess-1", "standard")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}
@@ -132,7 +132,7 @@ gateway:
 	t.Setenv("TELOS_GATEWAY_API_KEY", "")
 	t.Setenv("TELOS_COST_HARD_LIMIT", "YES")
 
-	cred, err := Resolve("sess-1")
+	cred, err := Resolve("sess-1", "standard")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
 	}

@@ -274,7 +274,7 @@ func TestKubernetesSubstrateRecreatesSessionAPITokenSecretOnRelaunch(t *testing.
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 	session := testCloudSession(t, sessionapi.KindController)
 
-	if err := substrate.Apply(session, "controller_started", ""); err != nil {
+	if err := substrate.Apply(session, "controller_started", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	first := sessionAPITokenSecretData(t, client, session)
@@ -289,7 +289,7 @@ func TestKubernetesSubstrateRecreatesSessionAPITokenSecretOnRelaunch(t *testing.
 	if err := store.IndexScopedToken(session.SessionID, sessionapi.KindController, userScoped); err != nil {
 		t.Fatal(err)
 	}
-	if err := substrate.Apply(session, "controller_relaunched", ""); err != nil {
+	if err := substrate.Apply(session, "controller_relaunched", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	second := sessionAPITokenSecretData(t, client, session)
@@ -313,7 +313,7 @@ func TestKubernetesSubstrateRotatesLegacyManifestAPITokenIntoSecret(t *testing.T
 	session := testCloudSession(t, sessionapi.KindController)
 	writeLegacyManifestAPIToken(t, session, "legacy-session-token")
 
-	if err := substrate.Apply(session, "controller_started", ""); err != nil {
+	if err := substrate.Apply(session, "controller_started", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	token := sessionAPITokenSecretData(t, client, session)
@@ -1212,7 +1212,7 @@ func TestKubernetesSubstrateUsesPVCWhenStorageClassConfigured(t *testing.T) {
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 	session := testCloudSession(t, sessionapi.KindController)
 
-	if err := substrate.Apply(session, "controller_started", ""); err != nil {
+	if err := substrate.Apply(session, "controller_started", "", ""); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1244,7 +1244,7 @@ func TestKubernetesSubstrateRequiresHostPathOptInWithoutStorageClass(t *testing.
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 	session := testCloudSession(t, sessionapi.KindController)
 
-	err := substrate.Apply(session, "controller_started", "")
+	err := substrate.Apply(session, "controller_started", "", "")
 	if err == nil || !strings.Contains(err.Error(), "allow_host_path_state") {
 		t.Fatalf("expected hostPath opt-in error, got %v", err)
 	}
@@ -1341,7 +1341,7 @@ func TestBillingClientMintsChildSessionWithParentLineage(t *testing.T) {
 	if gotBody["model_profile"] != "premium" {
 		t.Fatalf("model_profile body: %+v", gotBody)
 	}
-	if transports, ok := gotBody["supported_transports"].([]any); !ok || len(transports) != 1 || transports[0] != "openai_sync" {
+	if transports, ok := gotBody["supported_transports"].([]any); !ok || len(transports) != 2 || transports[0] != "bifrost_async" || transports[1] != "openai_sync" {
 		t.Fatalf("supported transports: got %#v", gotBody["supported_transports"])
 	}
 }
