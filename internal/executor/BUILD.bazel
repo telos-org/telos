@@ -16,6 +16,7 @@ go_library(
         "loop.go",
         "patch.go",
         "provider.go",
+        "redaction.go",
         "registry.go",
         "replay.go",
         "responses.go",

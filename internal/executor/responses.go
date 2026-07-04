@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand"
 	"net/http"
 	"net/url"
@@ -204,10 +205,17 @@ func (r *bifrostAsyncRunner) Complete(ctx context.Context, params responses.Resp
 
 func (r *bifrostAsyncRunner) pollJob(ctx context.Context, params responses.ResponseNewParams, jobID string, cost *responseCostCapture) (completionResult, error) {
 	backoff := newAsyncPollBackoff(r.poll)
+	started := time.Now()
+	attempts := 0
 	for {
-		if err := sleepContext(ctx, backoff.Next()); err != nil {
+		delay := backoff.Next()
+		if err := enforceAsyncPollCap(r.poll, started, attempts, delay); err != nil {
+			return completionResult{}, err
+		}
+		if err := sleepContext(ctx, delay); err != nil {
 			return completionResult{}, classifyProviderError(err)
 		}
+		attempts++
 		resp, err := r.client.Responses.New(ctx, params, option.WithHeader("x-bf-async-id", jobID), option.WithMiddleware(cost.middleware))
 		if err != nil {
 			return completionResult{}, classifyProviderError(err)
@@ -220,6 +228,31 @@ func (r *bifrostAsyncRunner) pollJob(ctx context.Context, params responses.Respo
 		}
 		return cost.complete(*resp, jobID), nil
 	}
+}
+
+func enforceAsyncPollCap(cfg asyncPollConfig, started time.Time, attempts int, nextDelay time.Duration) error {
+	if cfg.MaxAttempts > 0 && attempts >= cfg.MaxAttempts {
+		return newExecutorError(errProviderTimeout, "async_poll_cap_exceeded:max_attempts")
+	}
+	capAt, ok := asyncPollDeadline(cfg, started)
+	if !ok {
+		return nil
+	}
+	if time.Now().Add(nextDelay).After(capAt) {
+		return newExecutorError(errProviderTimeout, "async_poll_cap_exceeded:max_duration")
+	}
+	return nil
+}
+
+func asyncPollDeadline(cfg asyncPollConfig, started time.Time) (time.Time, bool) {
+	var deadline time.Time
+	if cfg.MaxDuration > 0 {
+		deadline = started.Add(cfg.MaxDuration)
+	}
+	if deadline.IsZero() {
+		return time.Time{}, false
+	}
+	return deadline, true
 }
 
 func (r *bifrostAsyncRunner) logAsyncJob(seq int, jobID, status string) {
@@ -608,11 +641,15 @@ func responseToolCalls(output []responses.ResponseOutputItemUnion) []nativeToolC
 	var calls []nativeToolCall
 	for _, item := range output {
 		if item.Type == "function_call" {
-			calls = append(calls, nativeToolCall{
+			call := nativeToolCall{
 				ID:        item.CallID,
 				Name:      item.Name,
 				Arguments: item.Arguments,
-			})
+			}
+			if strings.TrimSpace(call.ID) == "" {
+				call.ID = fmt.Sprintf("call_%d", len(calls)+1)
+			}
+			calls = append(calls, call)
 		}
 	}
 	return calls

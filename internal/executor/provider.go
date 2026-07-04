@@ -53,6 +53,8 @@ const (
 type asyncPollConfig struct {
 	Initial          time.Duration
 	Max              time.Duration
+	MaxDuration      time.Duration
+	MaxAttempts      int
 	ResultTTLSeconds int
 }
 
@@ -140,6 +142,8 @@ func asyncPollConfigFromEnv() asyncPollConfig {
 	return asyncPollConfig{
 		Initial:          envutil.EnvDurationMS("TELOS_GATEWAY_ASYNC_POLL_INITIAL_MS", 500*time.Millisecond),
 		Max:              envutil.EnvDurationMS("TELOS_GATEWAY_ASYNC_POLL_MAX_MS", 5*time.Second),
+		MaxDuration:      envutil.EnvDurationMS("TELOS_GATEWAY_ASYNC_POLL_MAX_DURATION_MS", 10*time.Minute),
+		MaxAttempts:      envutil.EnvInt("TELOS_GATEWAY_ASYNC_POLL_MAX_ATTEMPTS", 0),
 		ResultTTLSeconds: envutil.EnvInt("TELOS_GATEWAY_ASYNC_JOB_RESULT_TTL_SEC", 3600),
 	}
 }

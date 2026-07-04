@@ -137,8 +137,12 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 		return recoverableTurn(role, stats, newExecutorError(errToolInfra, "native_session_unavailable:"+err.Error()).Error())
 	}
 	defer logger.close()
-	_ = logger.user(task)
-	_ = logger.contextPack(task)
+	if err := logger.user(task); err != nil {
+		return recoverableTurn(role, stats, newExecutorError(errToolInfra, "native_session_degraded:"+err.Error()).Error())
+	}
+	if err := logger.contextPack(task); err != nil {
+		return recoverableTurn(role, stats, newExecutorError(errToolInfra, "native_session_degraded:"+err.Error()).Error())
+	}
 
 	if ne.configErr != nil {
 		execErr := newExecutorError(errConfig, ne.configErr.Error())
@@ -154,10 +158,18 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 		return terminalTurn(role, stats, execErr.Error())
 	}
 	knobs := resolveEnvKnobs()
-	_ = logger.providerConfig(cfg)
-	_ = logger.knobs(knobs)
-	_ = logger.turnPolicy(role, protocolMode)
-	_ = logger.budget(effectiveMaxToolLoops(budget), effectiveMaxOutputTokens(cfg, budget), budget)
+	if err := logger.providerConfig(cfg); err != nil {
+		return recoverableTurn(role, stats, newExecutorError(errToolInfra, "native_session_degraded:"+err.Error()).Error())
+	}
+	if err := logger.knobs(knobs); err != nil {
+		return recoverableTurn(role, stats, newExecutorError(errToolInfra, "native_session_degraded:"+err.Error()).Error())
+	}
+	if err := logger.turnPolicy(role, protocolMode); err != nil {
+		return recoverableTurn(role, stats, newExecutorError(errToolInfra, "native_session_degraded:"+err.Error()).Error())
+	}
+	if err := logger.budget(effectiveMaxToolLoops(budget), effectiveMaxOutputTokens(cfg, budget), budget); err != nil {
+		return recoverableTurn(role, stats, newExecutorError(errToolInfra, "native_session_degraded:"+err.Error()).Error())
+	}
 
 	tools := newNativeTools(ne.Platform, stopRequested, skills, logger, knobs, budget, withNativeToolsContainment(ne.containmentMode))
 	loop := newAgentLoop(ne.Client, cfg, ne.Thinking, tools, logger, task, role, protocolMode, budget, knobs)

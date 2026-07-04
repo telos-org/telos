@@ -27,21 +27,25 @@ type sessionCost = agentsession.Cost
 
 // -- Session logging ---------------------------------------------------------
 //
-// PRIVACY / DATA HANDLING: this logger records assistant text, tool arguments,
-// and tool outputs verbatim and applies no redaction. Because the executor is
-// unsandboxed (see tools.go), `bash` output and file reads routinely place
-// environment variables, tokens, and raw file contents into session.jsonl. The
-// file therefore carries the same secret-bearing trust level as the workspace
-// itself, and downstream handling must respect that: it may be uploaded to and
-// retained in artifact storage (e.g. the evals object store), so anywhere it is
-// shipped or granted read access must be treated as exposing workspace secrets.
-// This is an accepted property of the trust model, not an incidental leak.
+// PRIVACY / DATA HANDLING: session.jsonl is the redacted stream. Before events
+// are written, assistant text, reasoning, tool arguments, and tool outputs are
+// scrubbed for registry-declared sensitive fields and high-confidence secret
+// patterns. Raw verbatim JSONL is written only when explicitly enabled with
+// TELOS_SESSION_LOG_RAW (or TELOS_NATIVE_SESSION_LOG_RAW), and goes to a sibling
+// *.raw.jsonl file; redacted logging remains enabled even then. Raw logs carry
+// the same secret-bearing trust level as the workspace and must not back UI,
+// API, SSE, or CLI surfaces.
 
 type nativeSessionLogger struct {
 	path            string
+	rawPath         string
 	workspace       string
 	containmentMode ContainmentMode
 	file            *os.File
+	rawFile         *os.File
+	rawEnabled      bool
+	degraded        bool
+	degradedErr     error
 }
 
 func newNativeSessionLogger(path, workspace string, mode ...ContainmentMode) *nativeSessionLogger {
@@ -49,7 +53,13 @@ func newNativeSessionLogger(path, workspace string, mode ...ContainmentMode) *na
 	if len(mode) > 0 && mode[0] != "" {
 		containment = mode[0]
 	}
-	return &nativeSessionLogger{path: path, workspace: workspace, containmentMode: containment}
+	return &nativeSessionLogger{
+		path:            path,
+		rawPath:         rawSessionLogPath(path),
+		workspace:       workspace,
+		containmentMode: containment,
+		rawEnabled:      envBool("TELOS_SESSION_LOG_RAW", "TELOS_NATIVE_SESSION_LOG_RAW"),
+	}
 }
 
 func (l *nativeSessionLogger) start() error {
@@ -64,6 +74,21 @@ func (l *nativeSessionLogger) start() error {
 		return err
 	}
 	l.file = f
+	if l.rawEnabled {
+		rf, err := os.OpenFile(l.rawPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+		if err != nil {
+			_ = l.close()
+			return err
+		}
+		l.rawFile = rf
+	}
+	data := map[string]any{
+		"containment_mode": string(l.containmentMode),
+		"log_mode":         l.logMode(),
+	}
+	if rawPath := l.rawPathForEvent(); rawPath != "" {
+		data["raw_log_path"] = rawPath
+	}
 	if err := l.append(sessionEvent{
 		Type:      agentsession.KindSession,
 		Version:   1,
@@ -71,7 +96,7 @@ func (l *nativeSessionLogger) start() error {
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		CWD:       l.workspace,
 		Runtime:   "telos-native",
-		Data:      mustRawJSON(map[string]any{"containment_mode": string(l.containmentMode)}),
+		Data:      mustRawJSON(data),
 	}); err != nil {
 		_ = l.close()
 		return err
@@ -80,11 +105,20 @@ func (l *nativeSessionLogger) start() error {
 }
 
 func (l *nativeSessionLogger) close() error {
-	if l == nil || l.file == nil {
+	if l == nil {
 		return nil
 	}
-	err := l.file.Close()
-	l.file = nil
+	var err error
+	if l.file != nil {
+		err = l.file.Close()
+		l.file = nil
+	}
+	if l.rawFile != nil {
+		if rawErr := l.rawFile.Close(); err == nil {
+			err = rawErr
+		}
+		l.rawFile = nil
+	}
 	return err
 }
 
@@ -366,7 +400,7 @@ func (l *nativeSessionLogger) append(event sessionEvent) error {
 		return nil
 	}
 	if l.file == nil {
-		return fmt.Errorf("native session logger not started")
+		return l.markDegraded(fmt.Errorf("native session logger not started"))
 	}
 	if event.Schema == "" {
 		event.Schema = agentsession.Schema
@@ -374,7 +408,18 @@ func (l *nativeSessionLogger) append(event sessionEvent) error {
 	if event.Version == 0 {
 		event.Version = 1
 	}
-	return json.NewEncoder(l.file).Encode(event)
+	if err := json.NewEncoder(l.file).Encode(l.redactedEvent(event)); err != nil {
+		return l.markDegraded(err)
+	}
+	if l.rawEnabled {
+		if l.rawFile == nil {
+			return l.markDegraded(fmt.Errorf("native raw session logger not started"))
+		}
+		if err := json.NewEncoder(l.rawFile).Encode(event); err != nil {
+			return l.markDegraded(err)
+		}
+	}
+	return nil
 }
 
 func (l *nativeSessionLogger) event(kind string, data json.RawMessage) error {
@@ -396,6 +441,111 @@ func mustRawJSON(v any) json.RawMessage {
 		return nil
 	}
 	return data
+}
+
+func (l *nativeSessionLogger) redactedEvent(event sessionEvent) sessionEvent {
+	if event.Message != nil {
+		msg := *event.Message
+		msg.Content = append([]sessionContent(nil), event.Message.Content...)
+		for i := range msg.Content {
+			if msg.Content[i].Type != "text" {
+				continue
+			}
+			if msg.Role == "toolResult" {
+				msg.Content[i].Text = redactToolOutput(msg.ToolName, msg.Content[i].Text)
+			} else {
+				msg.Content[i].Text = scrubSecrets(msg.Content[i].Text)
+			}
+		}
+		event.Message = &msg
+	}
+	switch event.Type {
+	case agentsession.KindToolCall:
+		var p agentsession.ToolCallPayload
+		if err := json.Unmarshal(event.Data, &p); err == nil {
+			p.Arguments = redactToolArguments(p.ToolName, p.Arguments)
+			event.Data = agentsession.MarshalPayload(&p)
+		} else {
+			event.Data = scrubJSONStrings(event.Data)
+		}
+	case agentsession.KindReasoningSanitized:
+		var p agentsession.ReasoningSanitizedPayload
+		if err := json.Unmarshal(event.Data, &p); err == nil {
+			p.Removed = scrubSecrets(p.Removed)
+			event.Data = agentsession.MarshalPayload(&p)
+		} else {
+			event.Data = scrubJSONStrings(event.Data)
+		}
+	default:
+		event.Data = scrubJSONStrings(event.Data)
+	}
+	return event
+}
+
+func (l *nativeSessionLogger) markDegraded(err error) error {
+	if err == nil {
+		return nil
+	}
+	if l != nil {
+		l.degraded = true
+		l.degradedErr = err
+		l.logDegradedEvent(err)
+	}
+	return err
+}
+
+func (l *nativeSessionLogger) logDegradedEvent(err error) {
+	if l == nil || err == nil {
+		return
+	}
+	event := sessionEvent{
+		Schema:    agentsession.Schema,
+		Type:      "session_degraded",
+		Version:   1,
+		ID:        fmt.Sprintf("session_degraded-%d", time.Now().UnixNano()),
+		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
+		Data: mustRawJSON(map[string]any{
+			"reason": err.Error(),
+		}),
+	}
+	if l.file != nil {
+		_ = json.NewEncoder(l.file).Encode(event)
+	}
+	if l.rawEnabled && l.rawFile != nil {
+		_ = json.NewEncoder(l.rawFile).Encode(event)
+	}
+}
+
+func (l *nativeSessionLogger) degradedError() error {
+	if l == nil || !l.degraded || l.degradedErr == nil {
+		return nil
+	}
+	return newExecutorError(errToolInfra, "native_session_degraded:"+l.degradedErr.Error())
+}
+
+func (l *nativeSessionLogger) logMode() string {
+	if l != nil && l.rawEnabled {
+		return "redacted+raw"
+	}
+	return "redacted"
+}
+
+func (l *nativeSessionLogger) rawPathForEvent() string {
+	if l == nil || !l.rawEnabled {
+		return ""
+	}
+	return l.rawPath
+}
+
+func rawSessionLogPath(path string) string {
+	if path == "" {
+		return ""
+	}
+	ext := filepath.Ext(path)
+	if ext == "" {
+		return path + ".raw"
+	}
+	return strings.TrimSuffix(path, ext) + ".raw" + ext
 }
 
 func sessionCostFromStats(stats game.TurnStats) *sessionCost {

@@ -249,6 +249,42 @@ func TestNativeExecutorClassifiesBifrostAsyncPollTimeout(t *testing.T) {
 	}
 }
 
+func TestNativeExecutorBifrostAsyncPollCap(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		switch {
+		case r.Header.Get("x-bf-async") == "true":
+			writeResponsesJSON(w, `{"id":"job_cap","status":"processing"}`)
+		case r.Header.Get("x-bf-async-id") == "job_cap":
+			writeResponsesJSON(w, `{"id":"job_cap","status":"processing"}`)
+		default:
+			t.Fatalf("missing async headers: %+v", r.Header)
+		}
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL+"/openai")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+	t.Setenv("TELOS_GATEWAY_TRANSPORT", "bifrost_async")
+	t.Setenv("TELOS_GATEWAY_ASYNC_POLL_INITIAL_MS", "1")
+	t.Setenv("TELOS_GATEWAY_ASYNC_POLL_MAX_MS", "1")
+	t.Setenv("TELOS_GATEWAY_ASYNC_POLL_MAX_ATTEMPTS", "2")
+
+	exec := newTestNativeExecutor(t, platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
+	result := exec.ExecuteTurn("Verify async cap.", ts)
+
+	if !result.Recoverable || !strings.Contains(result.Error, "provider_timeout:async_poll_cap_exceeded:max_attempts") {
+		t.Fatalf("expected async poll cap error, got %+v", result)
+	}
+	if requests != 3 {
+		t.Fatalf("requests: got %d", requests)
+	}
+	assertTerminalState(t, ts.SessionPath(), TerminalProviderFailed)
+}
+
 func TestNativeExecutorStopsToolLoopWhenTurnTokenBudgetExhausted(t *testing.T) {
 	workspace := t.TempDir()
 	var requests int
@@ -811,7 +847,8 @@ func TestNativeSessionLoggerSchemaGolden(t *testing.T) {
 	want := `[
   {
     "data": {
-      "containment_mode": "uncontained"
+      "containment_mode": "uncontained",
+      "log_mode": "redacted"
     },
     "runtime": "telos-native",
     "schema": "telos.agent_session.v1",
@@ -977,7 +1014,7 @@ func TestNativeSessionLoggerSchemaGolden(t *testing.T) {
 	}
 }
 
-func TestNativeSessionLoggerLogsToolArgumentsVerbatim(t *testing.T) {
+func TestNativeSessionLoggerRedactsToolArgumentsByDefault(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	logger := newNativeSessionLogger(path, dir)
@@ -1004,9 +1041,82 @@ func TestNativeSessionLoggerLogsToolArgumentsVerbatim(t *testing.T) {
 	if len(events) != 1 {
 		t.Fatalf("tool_call events: %#v", events)
 	}
-	if got, _ := events[0]["arguments"].(string); got != rawArgs {
-		t.Fatalf("arguments should be logged verbatim\nwant: %q\n got: %q", rawArgs, got)
+	got, _ := events[0]["arguments"].(string)
+	for _, leaked := range []string{"echo ok", "sk-test", "secret-token", "Bearer secret"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("redacted arguments leaked %q: %s", leaked, got)
+		}
 	}
+	for _, want := range []string{`"command":"[REDACTED]"`, `"env":"[REDACTED]"`, `"api_key":"[REDACTED]"`} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("redacted arguments missing %q: %s", want, got)
+		}
+	}
+}
+
+func TestNativeSessionLoggerRawOptInPreservesSecretsOnlyInRawFile(t *testing.T) {
+	t.Setenv("TELOS_SESSION_LOG_RAW", "1")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	logger := newNativeSessionLogger(path, dir)
+	if err := logger.start(); err != nil {
+		t.Fatal(err)
+	}
+	secret := "sk-testsecretsecretsecret"
+	if err := logger.tool(nativeToolResult{
+		CallID: "call_1",
+		Name:   "bash",
+		Output: "tool: bash\nok: true\nstdout:\n" + secret,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.close(); err != nil {
+		t.Fatal(err)
+	}
+
+	redacted, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(redacted), secret) {
+		t.Fatalf("redacted log leaked secret:\n%s", redacted)
+	}
+	raw, err := os.ReadFile(rawSessionLogPath(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), secret) {
+		t.Fatalf("raw opt-in log should preserve secret, got:\n%s", raw)
+	}
+}
+
+func TestNativeSessionLoggerAppendFailureMarksDegraded(t *testing.T) {
+	t.Setenv("TELOS_SESSION_LOG_RAW", "1")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	logger := newNativeSessionLogger(path, dir)
+	if err := logger.start(); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.file.Close(); err != nil {
+		t.Fatal(err)
+	}
+	err := logger.user("this append fails")
+	if err == nil {
+		t.Fatal("expected append failure")
+	}
+	if !logger.degraded {
+		t.Fatal("logger should be marked degraded")
+	}
+	raw, readErr := os.ReadFile(rawSessionLogPath(path))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if !strings.Contains(string(raw), "session_degraded") {
+		t.Fatalf("raw log should contain degraded event:\n%s", raw)
+	}
+	logger.file = nil
+	_ = logger.close()
 }
 
 func normalizedSessionLogGolden(t *testing.T, path string) string {
@@ -1632,6 +1742,89 @@ func TestNativeExecutorNudgesEmptyFinalOnce(t *testing.T) {
 	}
 }
 
+func TestNativeExecutorNoOutputTurnsFailProviderAfterRetries(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests > 1 {
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "no visible result") {
+				t.Fatalf("retry request missing no-output recovery prompt: %s", body)
+			}
+		}
+		writeResponsesJSON(w, `{
+			"id":"resp_empty","status":"completed",
+			"output":[],
+			"usage":{"input_tokens":5,"output_tokens":0,"input_tokens_details":{"cached_tokens":0}}
+		}`)
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+
+	exec := newTestNativeExecutor(t, platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	ts := &game.TurnState{Role: "verifier", Dir: filepath.Join(workspace, ".turn")}
+	result := exec.ExecuteTurn("Verify workspace.", ts)
+
+	if !result.Recoverable || !strings.Contains(result.Error, "provider_unavailable:no_output_turns:3") {
+		t.Fatalf("expected no-output provider failure, got %+v", result)
+	}
+	if requests != 3 {
+		t.Fatalf("requests: got %d", requests)
+	}
+	assertTerminalState(t, ts.SessionPath(), TerminalProviderFailed)
+}
+
+func TestRepairDroppedToolResultsSynthesizesErrors(t *testing.T) {
+	results := repairDroppedToolResults([]nativeToolCall{{ID: "call_1", Name: "write_file"}}, nil)
+	if len(results) != 1 {
+		t.Fatalf("results: %#v", results)
+	}
+	if results[0].CallID != "call_1" || results[0].Name != "write_file" || !results[0].IsError {
+		t.Fatalf("synthetic result mismatch: %#v", results[0])
+	}
+	if !strings.Contains(results[0].Output, "no tool result was recorded") {
+		t.Fatalf("synthetic result output: %q", results[0].Output)
+	}
+}
+
+func TestNativeExecutorRepeatedFailedToolBatchesEscalateThenTerminate(t *testing.T) {
+	workspace := t.TempDir()
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		if requests == 4 {
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "different strategy") {
+				t.Fatalf("fourth request missing repeated-failure strategy prompt: %s", body)
+			}
+		}
+		writeResponsesJSON(w, `{
+			"id":"resp_fail","status":"completed",
+			"output":[{"type":"function_call","call_id":"call_fail","name":"not_a_tool","arguments":"{}"}],
+			"usage":{"input_tokens":5,"output_tokens":1,"input_tokens_details":{"cached_tokens":0}}
+		}`)
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+
+	exec := newTestNativeExecutor(t, platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn"), Budget: game.TurnBudget{MaxToolLoops: 10}}
+	result := exec.ExecuteTurn("Keep trying a missing tool.", ts)
+
+	if !result.Recoverable || !strings.Contains(result.Error, "tool_infra:repeated_tool_failures:6") {
+		t.Fatalf("expected repeated tool failure, got %+v", result)
+	}
+	if requests != 6 {
+		t.Fatalf("requests: got %d", requests)
+	}
+	assertTerminalState(t, ts.SessionPath(), TerminalToolFailed)
+}
+
 func TestNativeExecutorStrictProtocolRejectsMalformedProgressUpdate(t *testing.T) {
 	workspace := t.TempDir()
 	var requests int
@@ -1881,6 +2074,12 @@ func TestNativeExecutorLogsTerminalProtocolError(t *testing.T) {
 	var requests int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests++
+		if requests == 3 {
+			body, _ := io.ReadAll(r.Body)
+			if !strings.Contains(string(body), "Complete this turn now without calling more tools") {
+				t.Fatalf("final request missing completion nudge: %s", body)
+			}
+		}
 		writeResponsesJSON(w, `{
 			"id":"resp_bad","status":"completed",
 			"output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Still no status."}]}],
@@ -1899,7 +2098,7 @@ func TestNativeExecutorLogsTerminalProtocolError(t *testing.T) {
 	if !result.Recoverable || !strings.Contains(result.Error, "agent_protocol:missing_status") {
 		t.Fatalf("expected recoverable protocol error, got %+v", result)
 	}
-	if requests != 2 {
+	if requests != 3 {
 		t.Fatalf("requests: got %d", requests)
 	}
 	errorEvents := sessionLogEventsByType(t, ts.SessionPath(), "error")

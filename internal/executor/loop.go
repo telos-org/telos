@@ -19,6 +19,10 @@ const (
 	// are recoverable with another attempt, so they get more than one nudge;
 	// semantic keys (e.g. a missing rubric read) keep a single correction.
 	maxFormattingCorrections = 3
+
+	maxNoOutputTurns        = 3
+	maxFailedToolBatches    = 3
+	maxFailedToolBatchStops = 2 * maxFailedToolBatches
 )
 
 func countBlocks(tag protocol.Tag, text string) int {
@@ -210,6 +214,9 @@ var (
 
 const (
 	emptyFinalMessage            = "Your previous response had no visible result. Use the available tools to carry out the assignment, then reply with a visible final answer that follows this turn's required output tags."
+	noOutputRecoveryMessage      = "Your previous response had no visible result: the provider turn produced no assistant text, no reasoning, and no tool calls. Continue the task now: use a tool if work remains, or reply with a visible final answer that follows this turn's required output tags."
+	repeatedToolFailureMessage   = "The last tool batches all failed. Stop repeating the same approach: inspect the exact errors, choose a different strategy, and only call tools that can make concrete progress."
+	finalCompletionNudgeMessage  = "Complete this turn now without calling more tools. Summarize the current state, name any unfinished work or blockers plainly, and include this turn's required output tags."
 	missingStatusMessage         = "Your previous response was missing the required final <status>...</status> tag. Reply with a concise final verifier result and include exactly one final <status>CONTINUE</status> or <status>CONCEDE</status> tag."
 	malformedProgressMessage     = "Your previous response must contain exactly one <progress_update>...</progress_update> block, but it had %d. Reply with a concise final implementation summary and exactly one progress_update block; do not write the tag name anywhere else."
 	missingProgressMessage       = "Your previous response was missing the required <progress_update>...</progress_update> block. Reply with a concise final implementation summary and include exactly one <progress_update> block."
@@ -257,10 +264,19 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 	stats := game.TurnStats{Model: l.model}
 	corrections := map[string]int{}
 	usedTool := false
+	noOutputTurns := 0
+	failedToolBatches := 0
+	finalNudgeSent := false
 
 	toolLoops := 0
 	for {
 		if toolLoops >= maxLoops {
+			if !finalNudgeSent {
+				finalNudgeSent = true
+				_ = l.logger.protocolCorrection("final_completion_nudge", finalCompletionNudgeMessage)
+				l.client.recordCorrection(finalCompletionNudgeMessage)
+				continue
+			}
 			err := newExecutorError(errAgentIncomplete, fmt.Sprintf("tool_loop_exceeded:%d", maxLoops))
 			_ = l.logger.errorEvent(l.client.sequence, err)
 			return "", stats, err
@@ -288,6 +304,22 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 			turn.text = sanitized
 		}
 		_ = l.logger.assistant(turn.text, l.provider, l.model, turn.stopReason, turn.stats)
+		if err := l.logger.degradedError(); err != nil {
+			return "", stats, err
+		}
+
+		if strings.TrimSpace(turn.text) == "" && len(turn.calls) == 0 {
+			noOutputTurns++
+			if noOutputTurns >= maxNoOutputTurns {
+				err := newExecutorError(errProviderUnavailable, fmt.Sprintf("no_output_turns:%d", noOutputTurns))
+				_ = l.logger.errorEvent(l.client.sequence, err)
+				return "", stats, err
+			}
+			_ = l.logger.protocolCorrection("no_output_recovery", noOutputRecoveryMessage)
+			l.client.recordCorrection(noOutputRecoveryMessage)
+			continue
+		}
+		noOutputTurns = 0
 
 		if len(turn.calls) == 0 {
 			prompt, key := l.protocolCorrection(turn.text, usedTool)
@@ -298,6 +330,12 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 				corrections[key]++
 				_ = l.logger.protocolCorrection(key, prompt)
 				l.client.recordCorrection(prompt)
+				continue
+			}
+			if !finalNudgeSent {
+				finalNudgeSent = true
+				_ = l.logger.protocolCorrection("final_completion_nudge", finalCompletionNudgeMessage)
+				l.client.recordCorrection(finalCompletionNudgeMessage)
 				continue
 			}
 			err := newExecutorError(errAgentProtocol, key)
@@ -311,12 +349,91 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 			_ = l.logger.toolCall(call)
 		}
 		results := l.tools.executeAll(ctx, turn.calls)
+		results = repairDroppedToolResults(turn.calls, results)
 		stats.NumTurns += len(results)
 		for _, result := range results {
 			_ = l.logger.tool(result)
 		}
+		if err := l.logger.degradedError(); err != nil {
+			return "", stats, err
+		}
 		l.client.recordToolResults(results)
+		if allToolResultsFailed(results) {
+			failedToolBatches++
+			if failedToolBatches >= maxFailedToolBatchStops {
+				err := newExecutorError(errToolInfra, fmt.Sprintf("repeated_tool_failures:%d", failedToolBatches))
+				_ = l.logger.errorEvent(l.client.sequence, err)
+				return "", stats, err
+			}
+			if failedToolBatches == maxFailedToolBatches {
+				_ = l.logger.protocolCorrection("repeated_tool_failures", repeatedToolFailureMessage)
+				l.client.recordCorrection(repeatedToolFailureMessage)
+			}
+		} else {
+			failedToolBatches = 0
+		}
+		if maxLoops-toolLoops == 1 && !finalNudgeSent {
+			finalNudgeSent = true
+			_ = l.logger.protocolCorrection("final_completion_nudge", finalCompletionNudgeMessage)
+			l.client.recordCorrection(finalCompletionNudgeMessage)
+		}
 	}
+}
+
+func repairDroppedToolResults(calls []nativeToolCall, results []nativeToolResult) []nativeToolResult {
+	if len(calls) == 0 {
+		return results
+	}
+	seenCalls := map[string]nativeToolCall{}
+	for _, call := range calls {
+		seenCalls[call.ID] = call
+	}
+	var repaired []nativeToolResult
+	resultIDs := map[string]bool{}
+	for _, result := range results {
+		if _, ok := seenCalls[result.CallID]; ok {
+			repaired = append(repaired, result)
+			resultIDs[result.CallID] = true
+			continue
+		}
+		call := nativeToolCall{ID: result.CallID, Name: result.Name}
+		if len(calls) > 0 {
+			call = calls[0]
+		}
+		repaired = append(repaired, nativeToolResult{
+			CallID:    call.ID,
+			Name:      call.Name,
+			Output:    fmt.Sprintf("tool result call_id %q did not match a recorded tool call; retry with valid tool call IDs", result.CallID),
+			IsError:   true,
+			ErrorCode: errAgentProtocol,
+		})
+		resultIDs[call.ID] = true
+	}
+	for _, call := range calls {
+		if resultIDs[call.ID] {
+			continue
+		}
+		repaired = append(repaired, nativeToolResult{
+			CallID:    call.ID,
+			Name:      call.Name,
+			Output:    fmt.Sprintf("provider emitted tool call %q but no tool result was recorded; retry with a valid tool call", call.ID),
+			IsError:   true,
+			ErrorCode: errAgentProtocol,
+		})
+	}
+	return repaired
+}
+
+func allToolResultsFailed(results []nativeToolResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+	for _, result := range results {
+		if !result.IsError {
+			return false
+		}
+	}
+	return true
 }
 
 func (l *agentLoop) checkBudget(stats game.TurnStats) error {
