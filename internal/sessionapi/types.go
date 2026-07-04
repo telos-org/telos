@@ -7,7 +7,8 @@ package sessionapi
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
+
+	"github.com/telos-org/telos/internal/gatewaycred"
 )
 
 // --------- Enums ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -56,37 +57,17 @@ func (r *SessionRuntime) UnmarshalJSON(data []byte) error {
 	}
 }
 
-type ModelProfile string
+// ModelProfile aliases the gatewaycred type so the managed tier selection is
+// one type from CLI flag to minted gateway credential.
+type ModelProfile = gatewaycred.ModelProfile
 
 const (
-	ModelProfileStandard ModelProfile = "standard"
-	ModelProfilePremium  ModelProfile = "premium"
+	ModelProfileStandard = gatewaycred.ModelProfileStandard
+	ModelProfilePremium  = gatewaycred.ModelProfilePremium
 )
 
 func NormalizeModelProfile(value string) (ModelProfile, error) {
-	profile := ModelProfile(strings.ToLower(strings.TrimSpace(value)))
-	if profile == "" {
-		return ModelProfileStandard, nil
-	}
-	switch profile {
-	case ModelProfileStandard, ModelProfilePremium:
-		return profile, nil
-	default:
-		return "", fmt.Errorf("invalid model_profile %q", value)
-	}
-}
-
-func (p *ModelProfile) UnmarshalJSON(data []byte) error {
-	var value string
-	if err := json.Unmarshal(data, &value); err != nil {
-		return err
-	}
-	profile, err := NormalizeModelProfile(value)
-	if err != nil {
-		return err
-	}
-	*p = profile
-	return nil
+	return gatewaycred.NormalizeModelProfile(value)
 }
 
 func BifrostAgentModel(profile ModelProfile) string {

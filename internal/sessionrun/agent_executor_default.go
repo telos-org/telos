@@ -15,7 +15,7 @@ func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecut
 	if model == "" {
 		model = DefaultLocalModel
 	}
-	cred, err := gateway.Resolve(cfg.SessionID)
+	cred, err := gateway.Resolve(cfg.SessionID, cfg.ModelProfile)
 	if err != nil {
 		return nil, err
 	}

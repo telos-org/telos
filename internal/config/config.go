@@ -70,12 +70,18 @@ func EnvironmentsPath() string {
 	return filepath.Join(dir, "environments.yaml")
 }
 
-// LoadConfig reads config from disk with env overrides.
-func LoadConfig() *Config {
+// LoadConfigFile reads config from disk without applying env overrides.
+func LoadConfigFile() *Config {
 	cfg := &Config{}
 	if data, err := os.ReadFile(ConfigPath()); err == nil {
 		_ = yaml.Unmarshal(data, cfg)
 	}
+	return cfg
+}
+
+// LoadConfig reads config from disk with env overrides.
+func LoadConfig() *Config {
+	cfg := LoadConfigFile()
 	// Env overrides
 	if v := os.Getenv(APIEndpointEnv); v != "" {
 		cfg.APIEndpoint = v

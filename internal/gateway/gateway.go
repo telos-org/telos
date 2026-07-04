@@ -55,6 +55,11 @@ func Enabled() bool {
 		return true
 	} else if ok {
 		return true
+	} else if gatewaycred.EnvPresent() {
+		// Stale gateway env vars without a usable key must not opt
+		// direct-provider setups into gateway routing. Re-read the file without
+		// env overrides so an explicit saved gateway config still works.
+		cfg = config.LoadConfigFile()
 	}
 	return strings.TrimSpace(cfg.Gateway.Mode) != "" ||
 		strings.TrimSpace(cfg.Gateway.BaseURL) != "" ||
@@ -66,7 +71,11 @@ func Enabled() bool {
 }
 
 // Resolve chooses the local gateway credential for a session.
-func Resolve(sessionID string) (Credential, error) {
+func Resolve(sessionID string, modelProfile gatewaycred.ModelProfile) (Credential, error) {
+	modelProfile, err := gatewaycred.NormalizeModelProfile(string(modelProfile))
+	if err != nil {
+		return Credential{}, err
+	}
 	cfg := config.LoadConfig()
 	if cred, ok, err := gatewaycred.FromEnv(); err != nil {
 		return Credential{}, err
@@ -77,7 +86,12 @@ func Resolve(sessionID string) (Credential, error) {
 		if cred.Provider == gatewaycred.ProviderOpenAI && cred.Transport == gatewaycred.TransportBifrostAsync && !strings.HasSuffix(cred.BaseURL, "/openai") {
 			return Credential{}, fmt.Errorf("bifrost_async via the OpenAI SDK requires TELOS_GATEWAY_BASE_URL to end in /openai")
 		}
+		if cred.ModelProfile == "" || cred.ModelProfile == gatewaycred.ModelProfileStandard {
+			cred.ModelProfile = modelProfile
+		}
 		return Credential{Credential: cred}, nil
+	} else if gatewaycred.EnvPresent() {
+		cfg = config.LoadConfigFile()
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(cfg.Gateway.Mode))
@@ -89,12 +103,13 @@ func Resolve(sessionID string) (Credential, error) {
 	switch mode {
 	case ModeBYO:
 		cred, err := gatewaycred.NormalizeWithEnvPolicy(gatewaycred.Credential{
-			BaseURL:   cfg.Gateway.BaseURL,
-			APIKey:    cfg.Gateway.APIKey,
-			Provider:  gatewaycred.Provider(cfg.Gateway.Provider),
-			Transport: gatewaycred.Transport(cfg.Gateway.Transport),
-			Kind:      gatewaycred.Kind(cfg.Gateway.Kind),
-			Headers:   cfg.Gateway.Headers,
+			BaseURL:      cfg.Gateway.BaseURL,
+			APIKey:       cfg.Gateway.APIKey,
+			Provider:     gatewaycred.Provider(cfg.Gateway.Provider),
+			Transport:    gatewaycred.Transport(cfg.Gateway.Transport),
+			Kind:         gatewaycred.Kind(cfg.Gateway.Kind),
+			Headers:      cfg.Gateway.Headers,
+			ModelProfile: modelProfile,
 		})
 		if err != nil {
 			return Credential{}, err
@@ -124,17 +139,22 @@ func Resolve(sessionID string) (Credential, error) {
 		if err != nil {
 			return Credential{}, err
 		}
-		key, err := client.MintSessionKey(sessionID)
+		key, err := client.MintSessionKey(sessionID, modelProfile)
 		if err != nil {
 			return Credential{}, err
+		}
+		profile := key.ModelProfile
+		if profile == "" {
+			profile = modelProfile
 		}
 		cred, err := gatewaycred.NormalizeWithEnvPolicy(gatewaycred.Credential{
 			BaseURL:       key.BaseURL,
 			APIKey:        key.APIKey,
 			Provider:      gatewaycred.ProviderOpenAI,
-			Transport:     gatewaycred.Transport(key.Transport),
+			Transport:     key.Transport,
 			Kind:          gatewaycred.Kind(key.Kind),
 			Headers:       key.Headers,
+			ModelProfile:  profile,
 			CostHardLimit: true,
 		})
 		if err != nil {

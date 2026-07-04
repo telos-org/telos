@@ -15,6 +15,7 @@ const (
 	TransportEnv       = "TELOS_GATEWAY_TRANSPORT"
 	KindEnv            = "TELOS_GATEWAY_KIND"
 	HeadersEnv         = "TELOS_GATEWAY_HEADERS"
+	ModelProfileEnv    = "TELOS_MODEL_PROFILE"
 	CostHardLimitEnv   = "TELOS_COST_HARD_LIMIT"
 	AnthropicAPIKeyEnv = "ANTHROPIC_API_KEY"
 	GeminiAPIKeyEnv    = "GEMINI_API_KEY"
@@ -28,6 +29,41 @@ type Transport string
 type Kind string
 
 type Provider string
+
+// ModelProfile selects the managed model tier a session runs on.
+type ModelProfile string
+
+const (
+	ModelProfileStandard ModelProfile = "standard"
+	ModelProfilePremium  ModelProfile = "premium"
+)
+
+// NormalizeModelProfile validates a model profile, defaulting empty to standard.
+func NormalizeModelProfile(value string) (ModelProfile, error) {
+	profile := ModelProfile(strings.ToLower(strings.TrimSpace(value)))
+	if profile == "" {
+		return ModelProfileStandard, nil
+	}
+	switch profile {
+	case ModelProfileStandard, ModelProfilePremium:
+		return profile, nil
+	default:
+		return "", fmt.Errorf("invalid model_profile %q", value)
+	}
+}
+
+func (p *ModelProfile) UnmarshalJSON(data []byte) error {
+	var value string
+	if err := json.Unmarshal(data, &value); err != nil {
+		return err
+	}
+	profile, err := NormalizeModelProfile(value)
+	if err != nil {
+		return err
+	}
+	*p = profile
+	return nil
+}
 
 const (
 	TransportOpenAISync   Transport = "openai_sync"
@@ -50,34 +86,44 @@ type Credential struct {
 	Transport     Transport         `json:"transport,omitempty"`
 	Kind          Kind              `json:"kind,omitempty"`
 	Headers       map[string]string `json:"headers,omitempty"`
+	ModelProfile  ModelProfile      `json:"model_profile,omitempty"`
 	CostHardLimit bool              `json:"cost_hard_limit,omitempty"`
 }
 
 // FromEnv reads the TELOS_GATEWAY_* credential from the process environment.
-// The bool return reports whether any gateway environment value was present.
+// The bool return reports whether the environment carries a usable credential:
+// an explicit TELOS_GATEWAY_API_KEY, or a provider whose native key variable is
+// set. Stale non-key variables (a leftover base URL, transport, or headers)
+// must not opt direct-provider setups into gateway routing; use EnvPresent to
+// detect them.
 func FromEnv() (Credential, bool, error) {
 	rawHeaders := os.Getenv(HeadersEnv)
-	headers, err := ParseHeaders(rawHeaders)
-	if err != nil {
-		return Credential{}, true, err
-	}
 	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv(BaseURLEnv)), "/")
 	apiKey := strings.TrimSpace(os.Getenv(APIKeyEnv))
 	providerRaw := strings.TrimSpace(os.Getenv(ProviderEnv))
 	transportRaw := strings.TrimSpace(os.Getenv(TransportEnv))
 	kindRaw := strings.TrimSpace(os.Getenv(KindEnv))
-	present := baseURL != "" || apiKey != "" || providerRaw != "" || transportRaw != "" || kindRaw != "" || strings.TrimSpace(rawHeaders) != ""
-	if !present {
+	if apiKey == "" {
+		if provider, err := NormalizeProvider(providerRaw); err == nil {
+			apiKey = providerAPIKeyFromEnv(provider)
+		}
+	}
+	if apiKey == "" {
 		return Credential{}, false, nil
+	}
+	headers, err := ParseHeaders(rawHeaders)
+	if err != nil {
+		return Credential{}, true, err
 	}
 	provider, err := NormalizeProvider(providerRaw)
 	if err != nil {
 		return Credential{}, true, err
 	}
-	if apiKey == "" {
-		apiKey = providerAPIKeyFromEnv(provider)
-	}
 	transport, kind, err := NormalizeTransportAndKind(transportRaw, kindRaw)
+	if err != nil {
+		return Credential{}, true, err
+	}
+	profile, err := NormalizeModelProfile(os.Getenv(ModelProfileEnv))
 	if err != nil {
 		return Credential{}, true, err
 	}
@@ -88,8 +134,21 @@ func FromEnv() (Credential, bool, error) {
 		Transport:     transport,
 		Kind:          kind,
 		Headers:       headers,
+		ModelProfile:  profile,
 		CostHardLimit: CostHardLimitFromEnv(),
 	}, true, nil
+}
+
+// EnvPresent reports whether any TELOS_GATEWAY_* variable is set, usable or
+// not. Callers use it to avoid re-applying stale gateway env overrides on top
+// of the saved config file when FromEnv found no usable credential.
+func EnvPresent() bool {
+	for _, name := range []string{BaseURLEnv, APIKeyEnv, ProviderEnv, TransportEnv, KindEnv, HeadersEnv} {
+		if strings.TrimSpace(os.Getenv(name)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // Normalize returns a trimmed, cloned credential with default transport/kind.
@@ -102,6 +161,10 @@ func Normalize(cred Credential) (Credential, error) {
 	if err != nil {
 		return Credential{}, err
 	}
+	profile, err := NormalizeModelProfile(string(cred.ModelProfile))
+	if err != nil {
+		return Credential{}, err
+	}
 	return Credential{
 		BaseURL:       defaultBaseURL(provider, strings.TrimRight(strings.TrimSpace(cred.BaseURL), "/")),
 		APIKey:        defaultAPIKey(provider, strings.TrimSpace(cred.APIKey)),
@@ -109,6 +172,7 @@ func Normalize(cred Credential) (Credential, error) {
 		Transport:     transport,
 		Kind:          kind,
 		Headers:       CloneHeaders(cred.Headers),
+		ModelProfile:  profile,
 		CostHardLimit: cred.CostHardLimit,
 	}, nil
 }
@@ -199,11 +263,10 @@ func NormalizeTransportAndKind(rawTransport, rawKind string) (Transport, Kind, e
 	transport := Transport(strings.ToLower(strings.TrimSpace(rawTransport)))
 	switch transport {
 	case "":
-		if kind == KindBifrost {
-			transport = TransportBifrostAsync
-		} else {
-			transport = TransportOpenAISync
-		}
+		// Neutral default. Managed sessions prefer bifrost_async; the managed
+		// resolution paths pre-fill it before normalizing, so kind alone never
+		// switches a BYO or env credential to the async transport.
+		transport = TransportOpenAISync
 	case TransportOpenAISync, TransportBifrostAsync:
 	default:
 		return "", "", fmt.Errorf("unknown %s %q (accepted: openai_sync, bifrost_async)", TransportEnv, rawTransport)

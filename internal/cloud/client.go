@@ -26,7 +26,10 @@ const (
 	ForwardedUserAuthorizationHeader = "X-Telos-User-Authorization"
 )
 
-var supportedGatewayTransports = []string{string(gatewaycred.TransportOpenAISync)}
+var supportedGatewayTransports = []string{
+	string(gatewaycred.TransportBifrostAsync),
+	string(gatewaycred.TransportOpenAISync),
+}
 
 // Environment describes a cloud Telos environment from the control plane.
 type Environment struct {
@@ -340,10 +343,15 @@ func (c *ControlClient) Me() (*MeResponse, error) {
 }
 
 // MintSessionKey asks billing to mint a managed per-session gateway key.
-func (c *BillingClient) MintSessionKey(sessionID string) (*SessionKey, error) {
+func (c *BillingClient) MintSessionKey(sessionID string, modelProfile gatewaycred.ModelProfile) (*SessionKey, error) {
+	modelProfile, err := gatewaycred.NormalizeModelProfile(string(modelProfile))
+	if err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(map[string]any{
 		"session_id":           sessionID,
 		"supported_transports": supportedGatewayTransports,
+		"model_profile":        string(modelProfile),
 	})
 	if err != nil {
 		return nil, err
@@ -374,6 +382,15 @@ func (c *BillingClient) MintSessionKey(sessionID string) (*SessionKey, error) {
 	}
 	if raw.SessionID != strings.TrimSpace(sessionID) {
 		return nil, fmt.Errorf("billing returned session key for %q, want %q", raw.SessionID, strings.TrimSpace(sessionID))
+	}
+	if raw.Transport == "" {
+		// Managed sessions default to the async transport; the native executor
+		// drives it, unlike BYO gateways which stay openai_sync unless
+		// configured otherwise.
+		raw.Transport = gatewaycred.TransportBifrostAsync
+	}
+	if raw.ModelProfile == "" {
+		raw.ModelProfile = modelProfile
 	}
 	cred, err := gatewaycred.Normalize(raw.Credential)
 	if err != nil {

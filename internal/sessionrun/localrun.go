@@ -24,6 +24,7 @@ type LocalRunConfig struct {
 	ParentSessionID *string
 	Workspace       string
 	Model           string
+	ModelProfile    sessionapi.ModelProfile
 	Thinking        string
 	Until           int
 	MaxCostUSD      *float64
@@ -270,8 +271,13 @@ func localWorkerEnv(sessionDir string) []string {
 		"TELOS_SESSION_ID="+filepath.Base(sessionDir),
 	)
 	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
-	if err == nil && manifest.ParentSessionID != nil {
-		env = append(env, "TELOS_PARENT_SESSION_ID="+*manifest.ParentSessionID)
+	if err == nil {
+		if profile, profileErr := sessionapi.NormalizeModelProfile(string(manifest.Config.ModelProfile)); profileErr == nil {
+			env = append(env, "TELOS_MODEL_PROFILE="+string(profile))
+		}
+		if manifest.ParentSessionID != nil {
+			env = append(env, "TELOS_PARENT_SESSION_ID="+*manifest.ParentSessionID)
+		}
 	}
 	return env
 }
@@ -337,6 +343,7 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		SpecName:        compiled.Environment.Name,
 		Config: sessionapi.SessionConfig{
 			Model:           model,
+			ModelProfile:    cfg.ModelProfile,
 			Until:           cfg.Until,
 			MaxCostUSD:      cfg.MaxCostUSD,
 			MaxRounds:       cfg.MaxRounds,
@@ -373,6 +380,7 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	lrc := LocalRunConfig{
 		SessionID:       manifest.SessionID,
 		Model:           cfg.Model,
+		ModelProfile:    cfg.ModelProfile,
 		Thinking:        cfg.Thinking,
 		Until:           cfg.Until,
 		MaxCostUSD:      cfg.MaxCostUSD,
