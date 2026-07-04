@@ -223,7 +223,7 @@ func TestCompileWithoutDeclaredSkillsOnlyIncludesVerifierSkills(t *testing.T) {
 	for _, s := range compiled.Skills {
 		names[s.Name] = true
 	}
-	if names["k8s-deploy"] {
+	if names["catalogue-deploy"] {
 		t.Fatal("skills must be explicit; cloud specs should not implicitly load catalogue skills")
 	}
 	if !names["verify-engineering"] || !names["verify-quality"] {

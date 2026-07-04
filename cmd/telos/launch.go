@@ -248,7 +248,7 @@ func runCloudChildSession(
 func applyCloudControl(
 	specArg string,
 	scope string,
-	deploymentID string,
+	sessionID string,
 	jsonOut bool,
 ) {
 	pkg, err := packageSpec(specArg)
@@ -266,11 +266,11 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	operation, deployment, err := applyDeploymentPackage(
+	operation, session, err := applyCloudSessionPackage(
 		control,
 		pkg.name,
 		record.Ref,
-		deploymentID,
+		sessionID,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -279,29 +279,29 @@ func applyCloudControl(
 	if jsonOut {
 		printJSON(map[string]any{
 			"operation": operation,
-			"session":   deployment,
+			"session":   session,
 		})
 		return
 	}
-	printDeploymentReceipt(os.Stdout, operation, deployment)
+	printCloudSessionReceipt(os.Stdout, operation, session)
 }
 
-func applyDeploymentPackage(
+func applyCloudSessionPackage(
 	control *cloud.Client,
 	name string,
 	packageRef string,
-	deploymentID string,
-) (string, *cloud.DeploymentRecord, error) {
-	if deploymentID != "" {
-		if !isCloudApplyID(deploymentID) {
-			return "", nil, fmt.Errorf("invalid cloud session id %q", deploymentID)
+	sessionID string,
+) (string, *cloud.SessionRecord, error) {
+	if sessionID != "" {
+		if !isCloudApplyID(sessionID) {
+			return "", nil, fmt.Errorf("invalid cloud session id %q", sessionID)
 		}
-		deployment, err := control.UpdateDeployment(deploymentID, packageRef)
-		return "updated", deployment, err
+		session, err := control.UpdateSession(sessionID, packageRef)
+		return "updated", session, err
 	}
 
-	deployment, err := control.CreateDeployment(name, packageRef)
-	return "created", deployment, err
+	session, err := control.CreateSession(name, packageRef)
+	return "created", session, err
 }
 
 func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session) {
@@ -318,19 +318,19 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	printSummaryField(out, "Session", row.Session)
 }
 
-func printDeploymentReceipt(out io.Writer, operation string, deployment *cloud.DeploymentRecord) {
-	fmt.Fprintf(out, "%s %s\n\n", operation, deployment.Name)
-	printSummaryField(out, "Name", deployment.Name)
+func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.SessionRecord) {
+	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
+	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Target", "cloud")
-	printSummaryField(out, "Status", deployment.State)
-	printSummaryField(out, "Package", deployment.PackageRef)
-	printSummaryField(out, "Digest", deployment.PackageDigest)
-	printSummaryField(out, "Session", deployment.ID)
-	if deployment.ServiceURL != nil {
-		printSummaryField(out, "Service URL", *deployment.ServiceURL)
+	printSummaryField(out, "Status", session.State)
+	printSummaryField(out, "Package", session.PackageRef)
+	printSummaryField(out, "Digest", session.PackageDigest)
+	printSummaryField(out, "Session", session.ID)
+	if session.ServiceURL != nil {
+		printSummaryField(out, "Service URL", *session.ServiceURL)
 	}
-	if deployment.DashboardURL != nil {
-		printSummaryField(out, "Dashboard URL", *deployment.DashboardURL)
+	if session.DashboardURL != nil {
+		printSummaryField(out, "Dashboard URL", *session.DashboardURL)
 	}
 }
 

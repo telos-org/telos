@@ -35,17 +35,17 @@ func cmdDescribe(args []string) {
 		return
 	}
 
-	deployment, found, cloudErr := getCloudDeploymentIfConfigured(sessionID)
+	cloudSession, found, cloudErr := getCloudSessionIfConfigured(sessionID)
 	if cloudErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
 		os.Exit(1)
 	}
 	if found {
 		if *jsonOut {
-			printJSON(deployment)
+			printJSON(cloudSession)
 			return
 		}
-		printDeploymentDescription(os.Stdout, *deployment)
+		printCloudSessionDescription(os.Stdout, *cloudSession)
 		return
 	}
 
@@ -53,38 +53,38 @@ func cmdDescribe(args []string) {
 	os.Exit(1)
 }
 
-func getDeployment(deploymentID string) (*cloud.DeploymentRecord, error) {
+func getCloudSession(sessionID string) (*cloud.SessionRecord, error) {
 	control, err := cloud.ControlClient()
 	if err != nil {
 		return nil, err
 	}
-	return control.GetDeployment(deploymentID)
+	return control.GetSession(sessionID)
 }
 
-func printDeploymentDescription(out io.Writer, deployment cloud.DeploymentRecord) {
-	printSummaryField(out, "Name", deployment.Name)
+func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
+	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Target", "cloud")
-	printSummaryField(out, "Status", deployment.State)
-	printSummaryField(out, "Package", deployment.PackageRef)
-	printSummaryField(out, "Digest", deployment.PackageDigest)
-	printSummaryField(out, "Session", deployment.ID)
-	if deployment.RuntimeVersion != nil && *deployment.RuntimeVersion != "" {
-		printSummaryField(out, "Runtime", *deployment.RuntimeVersion)
+	printSummaryField(out, "Status", session.State)
+	printSummaryField(out, "Package", session.PackageRef)
+	printSummaryField(out, "Digest", session.PackageDigest)
+	printSummaryField(out, "Session", session.ID)
+	if session.RuntimeVersion != nil && *session.RuntimeVersion != "" {
+		printSummaryField(out, "Runtime", *session.RuntimeVersion)
 	}
-	if deployment.ServiceURL != nil && *deployment.ServiceURL != "" {
-		printSummaryField(out, "Service", *deployment.ServiceURL)
+	if session.ServiceURL != nil && *session.ServiceURL != "" {
+		printSummaryField(out, "Service", *session.ServiceURL)
 	}
-	if deployment.DashboardURL != nil && *deployment.DashboardURL != "" {
-		printSummaryField(out, "Dashboard", *deployment.DashboardURL)
+	if session.DashboardURL != nil && *session.DashboardURL != "" {
+		printSummaryField(out, "Dashboard", *session.DashboardURL)
 	}
-	if deployment.FailureReason != nil && *deployment.FailureReason != "" {
-		printSummaryField(out, "Error", *deployment.FailureReason)
+	if session.FailureReason != nil && *session.FailureReason != "" {
+		printSummaryField(out, "Error", *session.FailureReason)
 	}
 
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Lifecycle")
-	printDetailField(out, "created", deployment.CreatedAt)
-	printDetailField(out, "updated", deployment.UpdatedAt)
+	printDetailField(out, "created", session.CreatedAt)
+	printDetailField(out, "updated", session.UpdatedAt)
 }
 
 func printSessionDescription(out io.Writer, session sessionapi.Session) {

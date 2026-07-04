@@ -33,7 +33,7 @@ type PackageVersionRecord struct {
 	CreatedAt string `json:"created_at"`
 }
 
-type DeploymentRecord struct {
+type SessionRecord struct {
 	ID             string  `json:"id"`
 	Name           string  `json:"name"`
 	State          string  `json:"state"`
@@ -47,11 +47,13 @@ type DeploymentRecord struct {
 	UpdatedAt      string  `json:"updated_at"`
 }
 
-type DeploymentListResponse struct {
-	Deployments []DeploymentRecord `json:"deployments"`
+// The hosted control API still exposes cloud sessions at /api/deployments.
+// Keep that wire contract here and expose session-shaped methods to the CLI.
+type sessionListResponse struct {
+	Sessions []SessionRecord `json:"deployments"`
 }
 
-type DeploymentOpenResponse struct {
+type SessionOpenResponse struct {
 	URL       string `json:"url"`
 	ExpiresAt string `json:"expires_at"`
 }
@@ -108,7 +110,7 @@ func (c *Client) PublishPackageVersion(scope, name, version string, data []byte)
 	return &record, nil
 }
 
-func (c *Client) CreateDeployment(name, packageRef string) (*DeploymentRecord, error) {
+func (c *Client) CreateSession(name, packageRef string) (*SessionRecord, error) {
 	body, err := json.Marshal(map[string]string{
 		"name":        name,
 		"package_ref": packageRef,
@@ -124,19 +126,19 @@ func (c *Client) CreateDeployment(name, packageRef string) (*DeploymentRecord, e
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		return nil, readError(resp)
 	}
-	var response DeploymentRecord
+	var response SessionRecord
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
 	return &response, nil
 }
 
-func (c *Client) UpdateDeployment(deploymentID, packageRef string) (*DeploymentRecord, error) {
+func (c *Client) UpdateSession(sessionID, packageRef string) (*SessionRecord, error) {
 	body, err := json.Marshal(map[string]string{"package_ref": packageRef})
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("PUT", "/api/deployments/"+url.PathEscape(deploymentID), body)
+	resp, err := c.do("PUT", "/api/deployments/"+url.PathEscape(sessionID), body)
 	if err != nil {
 		return nil, err
 	}
@@ -144,14 +146,14 @@ func (c *Client) UpdateDeployment(deploymentID, packageRef string) (*DeploymentR
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	var response DeploymentRecord
+	var response SessionRecord
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
 	return &response, nil
 }
 
-func (c *Client) ListDeployments() ([]DeploymentRecord, error) {
+func (c *Client) ListSessions() ([]SessionRecord, error) {
 	resp, err := c.do("GET", "/api/deployments", nil)
 	if err != nil {
 		return nil, err
@@ -160,15 +162,15 @@ func (c *Client) ListDeployments() ([]DeploymentRecord, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	var response DeploymentListResponse
+	var response sessionListResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
-	return response.Deployments, nil
+	return response.Sessions, nil
 }
 
-func (c *Client) GetDeployment(deploymentID string) (*DeploymentRecord, error) {
-	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(deploymentID), nil)
+func (c *Client) GetSession(sessionID string) (*SessionRecord, error) {
+	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(sessionID), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -176,15 +178,15 @@ func (c *Client) GetDeployment(deploymentID string) (*DeploymentRecord, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	var response DeploymentRecord
+	var response SessionRecord
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
 	return &response, nil
 }
 
-func (c *Client) DeleteDeployment(deploymentID string) (*DeploymentRecord, error) {
-	resp, err := c.do("DELETE", "/api/deployments/"+url.PathEscape(deploymentID), nil)
+func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {
+	resp, err := c.do("DELETE", "/api/deployments/"+url.PathEscape(sessionID), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -192,14 +194,14 @@ func (c *Client) DeleteDeployment(deploymentID string) (*DeploymentRecord, error
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	var response DeploymentRecord
+	var response SessionRecord
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
 	return &response, nil
 }
 
-func (c *Client) OpenDeployment(deploymentID, target, path string) (*DeploymentOpenResponse, error) {
+func (c *Client) OpenSession(sessionID, target, path string) (*SessionOpenResponse, error) {
 	body, err := json.Marshal(map[string]string{
 		"target": target,
 		"path":   path,
@@ -207,7 +209,7 @@ func (c *Client) OpenDeployment(deploymentID, target, path string) (*DeploymentO
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("POST", "/api/deployments/"+url.PathEscape(deploymentID)+"/open", body)
+	resp, err := c.do("POST", "/api/deployments/"+url.PathEscape(sessionID)+"/open", body)
 	if err != nil {
 		return nil, err
 	}
@@ -215,15 +217,15 @@ func (c *Client) OpenDeployment(deploymentID, target, path string) (*DeploymentO
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	var response DeploymentOpenResponse
+	var response SessionOpenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
 	return &response, nil
 }
 
-func (c *Client) GetDeploymentLogs(deploymentID string) ([]sessionapi.SessionEvent, error) {
-	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(deploymentID)+"/logs", nil)
+func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, error) {
+	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(sessionID)+"/logs", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -238,8 +240,8 @@ func (c *Client) GetDeploymentLogs(deploymentID string) ([]sessionapi.SessionEve
 	return response.Events, nil
 }
 
-func (c *Client) StreamDeploymentLogs(ctx context.Context, deploymentID string, onEvent func(sessionapi.SessionEvent) error) error {
-	return c.streamEvents(ctx, "/api/deployments/"+url.PathEscape(deploymentID)+"/logs", func(data []byte) error {
+func (c *Client) StreamSessionLogs(ctx context.Context, sessionID string, onEvent func(sessionapi.SessionEvent) error) error {
+	return c.streamEvents(ctx, "/api/deployments/"+url.PathEscape(sessionID)+"/logs", func(data []byte) error {
 		var event sessionapi.SessionEvent
 		if err := json.Unmarshal(data, &event); err != nil {
 			return fmt.Errorf("decode session log event: %w", err)

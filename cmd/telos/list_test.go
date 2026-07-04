@@ -71,7 +71,7 @@ func TestLimitListSessionsAppliesAfterDefaultVisibility(t *testing.T) {
 	}
 }
 
-func TestCmdListShowsDeploymentsForConfiguredCloud(t *testing.T) {
+func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments" {
 			http.NotFound(w, r)
@@ -143,7 +143,7 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 		t.Fatalf("list json: %v\n%s", err, out)
 	}
 	if _, ok := body["deployments"]; ok {
-		t.Fatalf("cloud list json should not expose deployments: %#v", body)
+		t.Fatalf("cloud list json should not expose sessions: %#v", body)
 	}
 	sessions, ok := body["sessions"].([]any)
 	if !ok || len(sessions) != 1 {
@@ -188,11 +188,11 @@ func TestCmdOpenPrintsCloudSurfaceURL(t *testing.T) {
 	}
 }
 
-func TestPrintDeploymentDescriptionShowsProductSurfaces(t *testing.T) {
+func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 	runtime := "0.1.0"
 	serviceURL := "https://auth.example.com"
 	dashboardURL := "https://dashboard.example.com"
-	deployment := cloud.DeploymentRecord{
+	session := cloud.SessionRecord{
 		ID:             "sess_123",
 		Name:           "auth",
 		State:          "healthy",
@@ -206,7 +206,7 @@ func TestPrintDeploymentDescriptionShowsProductSurfaces(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printDeploymentDescription(&out, deployment)
+	printCloudSessionDescription(&out, session)
 	text := out.String()
 	for _, want := range []string{
 		"Name      auth",
@@ -220,13 +220,13 @@ func TestPrintDeploymentDescriptionShowsProductSurfaces(t *testing.T) {
 		"Lifecycle",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("deployment description missing %q:\n%s", want, text)
+			t.Fatalf("cloud session description missing %q:\n%s", want, text)
 		}
 	}
 }
 
-func TestPrintDeploymentDeleteReceiptUsesDeploymentSummary(t *testing.T) {
-	deployment := cloud.DeploymentRecord{
+func TestPrintCloudSessionDeleteReceiptUsesSessionSummary(t *testing.T) {
+	session := cloud.SessionRecord{
 		ID:            "sess_123",
 		Name:          "auth",
 		State:         "deleted",
@@ -237,7 +237,7 @@ func TestPrintDeploymentDeleteReceiptUsesDeploymentSummary(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printDeploymentDeleteReceipt(&out, deployment)
+	printCloudSessionDeleteReceipt(&out, session)
 	text := out.String()
 	for _, want := range []string{
 		"deleted auth",
@@ -248,13 +248,13 @@ func TestPrintDeploymentDeleteReceiptUsesDeploymentSummary(t *testing.T) {
 		"Session   sess_123",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("deployment stop receipt missing %q:\n%s", want, text)
+			t.Fatalf("cloud session stop receipt missing %q:\n%s", want, text)
 		}
 	}
 }
 
-func TestPrintDeploymentDeleteReceiptShowsAsyncDeletion(t *testing.T) {
-	deployment := cloud.DeploymentRecord{
+func TestPrintCloudSessionDeleteReceiptShowsAsyncDeletion(t *testing.T) {
+	session := cloud.SessionRecord{
 		ID:            "sess_123",
 		Name:          "auth",
 		State:         "deleting",
@@ -265,7 +265,7 @@ func TestPrintDeploymentDeleteReceiptShowsAsyncDeletion(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printDeploymentDeleteReceipt(&out, deployment)
+	printCloudSessionDeleteReceipt(&out, session)
 	text := out.String()
 	for _, want := range []string{
 		"delete requested for auth",
@@ -273,12 +273,12 @@ func TestPrintDeploymentDeleteReceiptShowsAsyncDeletion(t *testing.T) {
 		"Session   sess_123",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("deployment delete receipt missing %q:\n%s", want, text)
+			t.Fatalf("cloud session delete receipt missing %q:\n%s", want, text)
 		}
 	}
 }
 
-func TestCmdDeleteDeletesDeployment(t *testing.T) {
+func TestCmdDeleteDeletesCloudSession(t *testing.T) {
 	var deleted bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/deployments/sess_123" {
@@ -303,7 +303,7 @@ func TestCmdDeleteDeletesDeployment(t *testing.T) {
 		cmdDelete([]string{"sess_123"})
 	})
 	if !deleted {
-		t.Fatal("expected deployment delete request")
+		t.Fatal("expected cloud session delete request")
 	}
 	for _, want := range []string{
 		"deleted auth",

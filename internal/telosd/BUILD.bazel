@@ -5,9 +5,9 @@ go_library(
     srcs = [
         "cloud_store.go",
         "config.go",
-        "deployment_bootstrap.go",
         "local_process_worker.go",
         "server.go",
+        "session_bootstrap.go",
         "session_worker_helpers.go",
         "worker.go",
     ],
@@ -27,8 +27,8 @@ go_test(
     srcs = [
         "cloud_store_test.go",
         "config_test.go",
-        "deployment_bootstrap_test.go",
         "server_test.go",
+        "session_bootstrap_test.go",
         "worker_test.go",
     ],
     embed = [":telosd"],

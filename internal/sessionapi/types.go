@@ -1,7 +1,7 @@
 // Package sessionapi defines the canonical JSON request/response types and
-// HTTP routes for the Telos Sessions API. Both local and cloud deployments
-// serve the same contract; they differ by adapters for auth, store, launcher,
-// and workspace.
+// HTTP routes for the Telos Sessions API. Local and cloud runtimes serve the
+// same contract; they differ by adapters for auth, store, launcher, and
+// workspace.
 package sessionapi
 
 import (
@@ -32,7 +32,7 @@ func (s SessionStatus) IsTerminal() bool {
 	return false
 }
 
-// SessionRuntime distinguishes local from cloud deployments.
+// SessionRuntime distinguishes local from cloud sessions.
 type SessionRuntime string
 
 const (

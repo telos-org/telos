@@ -64,7 +64,7 @@ func TestClientPublishPackageVersion(t *testing.T) {
 	}
 }
 
-func TestClientCreateDeployment(t *testing.T) {
+func TestClientCreateSession(t *testing.T) {
 	var gotBody map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/deployments" {
@@ -90,19 +90,19 @@ func TestClientCreateDeployment(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.CreateDeployment("auth", "@telos/auth:1.2.3")
+	session, err := client.CreateSession("auth", "@telos/auth:1.2.3")
 	if err != nil {
-		t.Fatalf("CreateDeployment: %v", err)
+		t.Fatalf("CreateSession: %v", err)
 	}
-	if deployment.ID != "sess_123" || deployment.Name != "auth" || deployment.State != "provisioning" {
-		t.Fatalf("deployment: got %+v", deployment)
+	if session.ID != "sess_123" || session.Name != "auth" || session.State != "provisioning" {
+		t.Fatalf("session: got %+v", session)
 	}
 	if gotBody["name"] != "auth" || gotBody["package_ref"] != "@telos/auth:1.2.3" {
 		t.Fatalf("body: got %#v", gotBody)
 	}
 }
 
-func TestClientUpdateDeployment(t *testing.T) {
+func TestClientUpdateSession(t *testing.T) {
 	var gotBody map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut || r.URL.Path != "/api/deployments/sess_123" {
@@ -125,19 +125,19 @@ func TestClientUpdateDeployment(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.UpdateDeployment("sess_123", "@telos/auth:1.2.4")
+	session, err := client.UpdateSession("sess_123", "@telos/auth:1.2.4")
 	if err != nil {
-		t.Fatalf("UpdateDeployment: %v", err)
+		t.Fatalf("UpdateSession: %v", err)
 	}
-	if deployment.ID != "sess_123" || deployment.PackageDigest != "sha256:def" || deployment.State != "deploying" {
-		t.Fatalf("deployment: got %+v", deployment)
+	if session.ID != "sess_123" || session.PackageDigest != "sha256:def" || session.State != "deploying" {
+		t.Fatalf("session: got %+v", session)
 	}
 	if gotBody["package_ref"] != "@telos/auth:1.2.4" {
 		t.Fatalf("body: got %#v", gotBody)
 	}
 }
 
-func TestClientListDeployments(t *testing.T) {
+func TestClientListSessions(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments" {
 			http.NotFound(w, r)
@@ -158,16 +158,16 @@ func TestClientListDeployments(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	deployments, err := client.ListDeployments()
+	sessions, err := client.ListSessions()
 	if err != nil {
-		t.Fatalf("ListDeployments: %v", err)
+		t.Fatalf("ListSessions: %v", err)
 	}
-	if len(deployments) != 1 || deployments[0].ID != "sess_123" || deployments[0].Name != "auth" {
-		t.Fatalf("deployments: got %+v", deployments)
+	if len(sessions) != 1 || sessions[0].ID != "sess_123" || sessions[0].Name != "auth" {
+		t.Fatalf("sessions: got %+v", sessions)
 	}
 }
 
-func TestClientGetDeployment(t *testing.T) {
+func TestClientGetSession(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/sess_123" {
 			http.NotFound(w, r)
@@ -186,16 +186,16 @@ func TestClientGetDeployment(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.GetDeployment("sess_123")
+	session, err := client.GetSession("sess_123")
 	if err != nil {
-		t.Fatalf("GetDeployment: %v", err)
+		t.Fatalf("GetSession: %v", err)
 	}
-	if deployment.ID != "sess_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
-		t.Fatalf("deployment: got %+v", deployment)
+	if session.ID != "sess_123" || session.PackageRef != "@telos/auth:1.2.3" {
+		t.Fatalf("session: got %+v", session)
 	}
 }
 
-func TestClientDeleteDeployment(t *testing.T) {
+func TestClientDeleteSession(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodDelete || r.URL.Path != "/api/deployments/sess_123" {
 			http.NotFound(w, r)
@@ -214,16 +214,16 @@ func TestClientDeleteDeployment(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	deployment, err := client.DeleteDeployment("sess_123")
+	session, err := client.DeleteSession("sess_123")
 	if err != nil {
-		t.Fatalf("DeleteDeployment: %v", err)
+		t.Fatalf("DeleteSession: %v", err)
 	}
-	if deployment.ID != "sess_123" || deployment.State != "deleted" {
-		t.Fatalf("deployment: got %+v", deployment)
+	if session.ID != "sess_123" || session.State != "deleted" {
+		t.Fatalf("session: got %+v", session)
 	}
 }
 
-func TestClientOpenDeployment(t *testing.T) {
+func TestClientOpenSession(t *testing.T) {
 	var gotBody map[string]string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/deployments/sess_123/open" {
@@ -244,9 +244,9 @@ func TestClientOpenDeployment(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	openURL, err := client.OpenDeployment("sess_123", "dashboard", "/admin")
+	openURL, err := client.OpenSession("sess_123", "dashboard", "/admin")
 	if err != nil {
-		t.Fatalf("OpenDeployment: %v", err)
+		t.Fatalf("OpenSession: %v", err)
 	}
 	if openURL.URL != "https://auth.example.com/admin" || openURL.ExpiresAt == "" {
 		t.Fatalf("open URL: got %+v", openURL)
@@ -256,7 +256,7 @@ func TestClientOpenDeployment(t *testing.T) {
 	}
 }
 
-func TestClientGetDeploymentLogs(t *testing.T) {
+func TestClientGetSessionLogs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/sess_123/logs" {
 			http.NotFound(w, r)
@@ -272,16 +272,16 @@ func TestClientGetDeploymentLogs(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	events, err := client.GetDeploymentLogs("sess_123")
+	events, err := client.GetSessionLogs("sess_123")
 	if err != nil {
-		t.Fatalf("GetDeploymentLogs: %v", err)
+		t.Fatalf("GetSessionLogs: %v", err)
 	}
 	if len(events) != 1 || events[0].Event != "agent_progress" || events[0].Data["text"] != "ready" {
 		t.Fatalf("events: got %#v", events)
 	}
 }
 
-func TestClientStreamDeploymentLogs(t *testing.T) {
+func TestClientStreamSessionLogs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/deployments/sess_123/logs" {
 			http.NotFound(w, r)
@@ -297,12 +297,12 @@ func TestClientStreamDeploymentLogs(t *testing.T) {
 
 	client := NewClient(srv.URL, "test-token")
 	var events []sessionapi.SessionEvent
-	err := client.StreamDeploymentLogs(context.Background(), "sess_123", func(event sessionapi.SessionEvent) error {
+	err := client.StreamSessionLogs(context.Background(), "sess_123", func(event sessionapi.SessionEvent) error {
 		events = append(events, event)
 		return nil
 	})
 	if err != nil {
-		t.Fatalf("StreamDeploymentLogs: %v", err)
+		t.Fatalf("StreamSessionLogs: %v", err)
 	}
 	if len(events) != 1 || events[0].Event != "game_end" || events[0].Data["game_result"] != "completed" {
 		t.Fatalf("events: got %#v", events)

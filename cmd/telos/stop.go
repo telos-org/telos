@@ -33,17 +33,17 @@ func cmdStop(args []string) {
 		return
 	}
 
-	deployment, found, cloudErr := deleteCloudDeploymentIfConfigured(sessionID)
+	cloudSession, found, cloudErr := deleteCloudSessionIfConfigured(sessionID)
 	if cloudErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
 		os.Exit(1)
 	}
 	if found {
 		if *jsonOut {
-			printJSON(deployment)
+			printJSON(cloudSession)
 			return
 		}
-		printDeploymentDeleteReceipt(os.Stdout, *deployment)
+		printCloudSessionDeleteReceipt(os.Stdout, *cloudSession)
 		return
 	}
 
@@ -60,51 +60,51 @@ func cmdDelete(args []string) {
 		fmt.Fprintln(os.Stderr, "usage: telos delete SESSION [--json]")
 		os.Exit(1)
 	}
-	deploymentID := fs.Arg(0)
+	sessionID := fs.Arg(0)
 
-	deployment, err := deleteDeployment(deploymentID)
+	cloudSession, err := deleteCloudSession(sessionID)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	if *jsonOut {
-		printJSON(deployment)
+		printJSON(cloudSession)
 		return
 	}
-	printDeploymentDeleteReceipt(os.Stdout, *deployment)
+	printCloudSessionDeleteReceipt(os.Stdout, *cloudSession)
 }
 
-func deleteDeployment(deploymentID string) (*cloud.DeploymentRecord, error) {
+func deleteCloudSession(sessionID string) (*cloud.SessionRecord, error) {
 	control, err := cloud.ControlClient()
 	if err != nil {
 		return nil, err
 	}
-	return control.DeleteDeployment(deploymentID)
+	return control.DeleteSession(sessionID)
 }
 
-func deleteCloudDeploymentIfConfigured(deploymentID string) (*cloud.DeploymentRecord, bool, error) {
-	if _, found, err := getCloudDeploymentIfConfigured(deploymentID); err != nil || !found {
+func deleteCloudSessionIfConfigured(sessionID string) (*cloud.SessionRecord, bool, error) {
+	if _, found, err := getCloudSessionIfConfigured(sessionID); err != nil || !found {
 		return nil, found, err
 	}
-	deployment, err := deleteDeployment(deploymentID)
+	cloudSession, err := deleteCloudSession(sessionID)
 	if err != nil {
 		return nil, true, err
 	}
-	return deployment, true, nil
+	return cloudSession, true, nil
 }
 
-func printDeploymentDeleteReceipt(out io.Writer, deployment cloud.DeploymentRecord) {
-	switch deployment.State {
+func printCloudSessionDeleteReceipt(out io.Writer, session cloud.SessionRecord) {
+	switch session.State {
 	case "deleted":
-		fmt.Fprintf(out, "deleted %s\n\n", deployment.Name)
+		fmt.Fprintf(out, "deleted %s\n\n", session.Name)
 	default:
-		fmt.Fprintf(out, "delete requested for %s\n\n", deployment.Name)
+		fmt.Fprintf(out, "delete requested for %s\n\n", session.Name)
 	}
-	printSummaryField(out, "Name", deployment.Name)
+	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Target", "cloud")
-	printSummaryField(out, "Status", deployment.State)
-	printSummaryField(out, "Package", deployment.PackageRef)
-	printSummaryField(out, "Session", deployment.ID)
+	printSummaryField(out, "Status", session.State)
+	printSummaryField(out, "Package", session.PackageRef)
+	printSummaryField(out, "Session", session.ID)
 }
 
 func printStopReceipt(out io.Writer, session sessionapi.Session) {

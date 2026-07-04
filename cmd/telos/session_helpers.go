@@ -74,18 +74,18 @@ func isCloudApplyID(id string) bool {
 	return strings.HasPrefix(id, "sess_")
 }
 
-func getCloudDeploymentIfConfigured(id string) (*cloud.DeploymentRecord, bool, error) {
+func getCloudSessionIfConfigured(id string) (*cloud.SessionRecord, bool, error) {
 	if !config.IsConfigured() {
 		return nil, false, nil
 	}
-	deployment, err := getDeployment(id)
+	session, err := getCloudSession(id)
 	if err != nil {
 		if strings.Contains(err.Error(), "(HTTP 404)") {
 			return nil, false, nil
 		}
 		return nil, true, err
 	}
-	return deployment, true, nil
+	return session, true, nil
 }
 
 func getSessionFromAnywhere(sessionID string) (*sessionapi.Session, error) {
