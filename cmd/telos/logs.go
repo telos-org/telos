@@ -248,6 +248,10 @@ func printCloudSessionLogEvent(out io.Writer, event sessionapi.SessionEvent, ver
 			return true
 		}
 	}
+	if message, _ := event.Data["message"].(string); strings.TrimSpace(message) != "" {
+		fmt.Fprintln(out, strings.TrimSpace(message))
+		return true
+	}
 	return false
 }
 
