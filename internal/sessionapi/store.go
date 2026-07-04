@@ -32,6 +32,7 @@ var ErrInvalidSession = errors.New("invalid session")
 var ErrConflict = errors.New("conflict")
 
 var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
+var cloudSessionIDRE = regexp.MustCompile(`^sess_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 func PackagePathForDigest(root string, digest string) (string, error) {
 	digest = strings.TrimSpace(digest)
@@ -103,7 +104,11 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		return nil, err
 	}
 
-	id, dir, err := fs.createSessionDir()
+	sessionKind, err := fs.sessionKindForCreate(req)
+	if err != nil {
+		return nil, err
+	}
+	id, dir, err := fs.createSessionDir(req, sessionKind)
 	if err != nil {
 		return nil, err
 	}
@@ -119,10 +124,6 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		return nil, err
 	}
 	specName := prepared.Name
-	sessionKind, err := fs.sessionKindForCreate(req)
-	if err != nil {
-		return nil, err
-	}
 	if sessionKind == KindController {
 		ids, err := fs.liveTopLevelSessionIDsBySpecName(specName)
 		if err != nil {
@@ -208,23 +209,43 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	return session, nil
 }
 
-func (fs *FileStore) createSessionDir() (string, string, error) {
+func (fs *FileStore) createSessionDir(req SessionCreateRequest, sessionKind SessionKind) (string, string, error) {
 	if err := os.MkdirAll(fs.Root, 0o755); err != nil {
 		return "", "", fmt.Errorf("create sessions root: %w", err)
+	}
+	if id := strings.TrimSpace(req.CloudSessionID); id != "" {
+		if fs.runtime != RuntimeCloud || sessionKind != KindController {
+			return "", "", fmt.Errorf("cloud_session_id is only valid for cloud controller sessions: %w", ErrInvalidSession)
+		}
+		return fs.createSessionDirWithID(id, true)
 	}
 
 	for attempt := 0; attempt < 16; attempt++ {
 		id := generateSessionID(fs.runtime)
-		dir := fs.sessionDir(id)
-		if err := os.Mkdir(dir, 0o755); err != nil {
-			if errors.Is(err, os.ErrExist) {
+		createdID, dir, err := fs.createSessionDirWithID(id, false)
+		if err != nil {
+			if errors.Is(err, ErrConflict) {
 				continue
 			}
-			return "", "", fmt.Errorf("create session dir: %w", err)
+			return "", "", err
 		}
-		return id, dir, nil
+		return createdID, dir, nil
 	}
 	return "", "", fmt.Errorf("create session dir: exhausted session id retries")
+}
+
+func (fs *FileStore) createSessionDirWithID(id string, validateCloudID bool) (string, string, error) {
+	if validateCloudID && !cloudSessionIDRE.MatchString(id) {
+		return "", "", fmt.Errorf("invalid session id %q: %w", id, ErrInvalidSession)
+	}
+	dir := fs.sessionDir(id)
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return "", "", fmt.Errorf("session %s already exists: %w", id, ErrConflict)
+		}
+		return "", "", fmt.Errorf("create session dir: %w", err)
+	}
+	return id, dir, nil
 }
 
 func validateCreateRequest(req SessionCreateRequest) error {

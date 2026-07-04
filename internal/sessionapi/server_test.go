@@ -370,6 +370,9 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
+	if session.SessionID != "sess_123" {
+		t.Fatalf("session_id: got %q want sess_123", session.SessionID)
+	}
 	manifest, err := sessionapi.ReadManifest(filepath.Join(root, session.SessionID, "session.json"))
 	if err != nil {
 		t.Fatalf("ReadManifest: %v", err)
