@@ -223,6 +223,39 @@ func TestClientDeleteDeployment(t *testing.T) {
 	}
 }
 
+func TestClientOpenDeployment(t *testing.T) {
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/deployments/sess_123/open" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("User-Agent") != UserAgent {
+			t.Fatalf("user-agent: got %q", r.Header.Get("User-Agent"))
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"url":        "https://auth.example.com/admin",
+			"expires_at": "2026-07-04T08:00:00Z",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	openURL, err := client.OpenDeployment("sess_123", "dashboard", "/admin")
+	if err != nil {
+		t.Fatalf("OpenDeployment: %v", err)
+	}
+	if openURL.URL != "https://auth.example.com/admin" || openURL.ExpiresAt == "" {
+		t.Fatalf("open URL: got %+v", openURL)
+	}
+	if gotBody["target"] != "dashboard" || gotBody["path"] != "/admin" {
+		t.Fatalf("body: got %#v", gotBody)
+	}
+}
+
 func TestClientGetDeploymentLogs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/sess_123/logs" {

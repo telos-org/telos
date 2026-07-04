@@ -51,6 +51,11 @@ type DeploymentListResponse struct {
 	Deployments []DeploymentRecord `json:"deployments"`
 }
 
+type DeploymentOpenResponse struct {
+	URL       string `json:"url"`
+	ExpiresAt string `json:"expires_at"`
+}
+
 // Client is a Telos Cloud API client.
 type Client struct {
 	Endpoint string
@@ -188,6 +193,29 @@ func (c *Client) DeleteDeployment(deploymentID string) (*DeploymentRecord, error
 		return nil, readError(resp)
 	}
 	var response DeploymentRecord
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) OpenDeployment(deploymentID, target, path string) (*DeploymentOpenResponse, error) {
+	body, err := json.Marshal(map[string]string{
+		"target": target,
+		"path":   path,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("POST", "/api/deployments/"+url.PathEscape(deploymentID)+"/open", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response DeploymentOpenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
