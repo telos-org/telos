@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
@@ -23,6 +24,7 @@ func newCloudSessionStore(base *sessionapi.FileStore, substrate sessionSubstrate
 }
 
 func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
+	req = cloudCreateDefaults(req)
 	session, err := s.FileStore.Create(req)
 	if err != nil {
 		return nil, err
@@ -39,6 +41,7 @@ func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessio
 }
 
 func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.SessionSpecUpdateResponse, error) {
+	req = cloudSpecUpdateDefaults(req)
 	response, err := s.FileStore.UpdateSpec(name, req)
 	if err != nil {
 		return nil, err
@@ -121,6 +124,32 @@ func (s *cloudSessionStore) Stop(id string) (*sessionapi.Session, error) {
 		return nil, err
 	}
 	return session, nil
+}
+
+func cloudCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.SessionCreateRequest {
+	if req.ParentSessionID != nil {
+		return req
+	}
+	if req.SessionKind != nil && *req.SessionKind == sessionapi.KindTask {
+		return req
+	}
+	if strings.TrimSpace(req.Model) == "" {
+		req.Model = cloudSessionModel()
+	}
+	if req.AgentTimeoutSec == nil {
+		req.AgentTimeoutSec = intPtr(cloudAgentTimeoutSec())
+	}
+	return req
+}
+
+func cloudSpecUpdateDefaults(req sessionapi.SessionSpecUpdateRequest) sessionapi.SessionSpecUpdateRequest {
+	if strings.TrimSpace(req.Model) == "" {
+		req.Model = cloudSessionModel()
+	}
+	if req.AgentTimeoutSec == nil {
+		req.AgentTimeoutSec = intPtr(cloudAgentTimeoutSec())
+	}
+	return req
 }
 
 func removeSessionDir(session *sessionapi.Session) {

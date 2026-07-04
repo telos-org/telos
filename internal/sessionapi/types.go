@@ -98,10 +98,14 @@ type SessionCreateRequest struct {
 
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{name}/spec.
 type SessionSpecUpdateRequest struct {
-	SpecMarkdown       string `json:"spec_markdown,omitempty"`
-	PackageDigest      string `json:"package_digest,omitempty"`
-	ApplyPackagePath   string `json:"-"`
-	ApplyPackageDigest string `json:"-"`
+	SpecMarkdown       string   `json:"spec_markdown,omitempty"`
+	PackageDigest      string   `json:"package_digest,omitempty"`
+	ApplyPackagePath   string   `json:"-"`
+	ApplyPackageDigest string   `json:"-"`
+	Model              string   `json:"-"`
+	Thinking           string   `json:"-"`
+	MaxCostUSD         *float64 `json:"-"`
+	AgentTimeoutSec    *int     `json:"-"`
 }
 
 // SessionSpecUpdateResponse is returned by PUT /api/sessions/{name}/spec.
