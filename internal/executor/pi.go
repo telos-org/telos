@@ -91,7 +91,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Logs:        result.InfraError,
 			Stats:       stats,
 			Error:       result.InfraError,
-			Recoverable: true,
+			Recoverable: !result.TimedOut,
 		}
 	}
 
