@@ -18,6 +18,7 @@ const (
 	AuthTokenEnv        = "TELOS_AUTH_TOKEN"
 	OrgIDEnv            = "TELOS_ORG_ID"
 	GatewayModeEnv      = "TELOS_GATEWAY_MODE"
+	GatewayProviderEnv  = "TELOS_GATEWAY_PROVIDER"
 	GatewayBaseURLEnv   = "TELOS_GATEWAY_BASE_URL"
 	GatewayAPIKeyEnv    = "TELOS_GATEWAY_API_KEY"
 	GatewayTransportEnv = "TELOS_GATEWAY_TRANSPORT"
@@ -37,6 +38,7 @@ type Config struct {
 // GatewayConfig holds local model gateway selection.
 type GatewayConfig struct {
 	Mode      string            `yaml:"mode,omitempty"`
+	Provider  string            `yaml:"provider,omitempty"`
 	BaseURL   string            `yaml:"base_url,omitempty"`
 	APIKey    string            `yaml:"api_key,omitempty"`
 	Transport string            `yaml:"transport,omitempty"`
@@ -89,6 +91,9 @@ func LoadConfig() *Config {
 	}
 	if v := os.Getenv(GatewayModeEnv); v != "" {
 		cfg.Gateway.Mode = v
+	}
+	if v := os.Getenv(GatewayProviderEnv); v != "" {
+		cfg.Gateway.Provider = v
 	}
 	if v := os.Getenv(GatewayBaseURLEnv); v != "" {
 		cfg.Gateway.BaseURL = v

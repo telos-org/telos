@@ -14,6 +14,7 @@ import (
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/gatewaycred"
+	"github.com/telos-org/telos/internal/oauthcred"
 )
 
 const (
@@ -25,6 +26,11 @@ const (
 
 	KindOpenAI  = gatewaycred.KindOpenAI
 	KindBifrost = gatewaycred.KindBifrost
+
+	ProviderOpenAI    = gatewaycred.ProviderOpenAI
+	ProviderAnthropic = gatewaycred.ProviderAnthropic
+	ProviderGemini    = gatewaycred.ProviderGemini
+	ProviderCodex     = gatewaycred.ProviderCodex
 )
 
 // Credential is a resolved gateway credential plus any policy cleanup hook.
@@ -34,6 +40,7 @@ type Credential struct {
 }
 
 type ProbeConfig struct {
+	Provider  gatewaycred.Provider
 	Transport gatewaycred.Transport
 	Kind      gatewaycred.Kind
 	Headers   map[string]string
@@ -52,6 +59,7 @@ func Enabled() bool {
 	return strings.TrimSpace(cfg.Gateway.Mode) != "" ||
 		strings.TrimSpace(cfg.Gateway.BaseURL) != "" ||
 		strings.TrimSpace(cfg.Gateway.APIKey) != "" ||
+		strings.TrimSpace(cfg.Gateway.Provider) != "" ||
 		strings.TrimSpace(cfg.Gateway.Transport) != "" ||
 		strings.TrimSpace(cfg.Gateway.Kind) != "" ||
 		len(cfg.Gateway.Headers) > 0
@@ -66,7 +74,7 @@ func Resolve(sessionID string) (Credential, error) {
 		if cred.BaseURL == "" || cred.APIKey == "" {
 			return Credential{}, fmt.Errorf("both TELOS_GATEWAY_BASE_URL and TELOS_GATEWAY_API_KEY are required")
 		}
-		if cred.Transport == gatewaycred.TransportBifrostAsync && !strings.HasSuffix(cred.BaseURL, "/openai") {
+		if cred.Provider == gatewaycred.ProviderOpenAI && cred.Transport == gatewaycred.TransportBifrostAsync && !strings.HasSuffix(cred.BaseURL, "/openai") {
 			return Credential{}, fmt.Errorf("bifrost_async via the OpenAI SDK requires TELOS_GATEWAY_BASE_URL to end in /openai")
 		}
 		return Credential{Credential: cred}, nil
@@ -80,12 +88,10 @@ func Resolve(sessionID string) (Credential, error) {
 	}
 	switch mode {
 	case ModeBYO:
-		if strings.TrimSpace(cfg.Gateway.BaseURL) == "" || strings.TrimSpace(cfg.Gateway.APIKey) == "" {
-			return Credential{}, fmt.Errorf("BYO gateway requires gateway.base_url and gateway.api_key")
-		}
 		cred, err := gatewaycred.NormalizeWithEnvPolicy(gatewaycred.Credential{
 			BaseURL:   cfg.Gateway.BaseURL,
 			APIKey:    cfg.Gateway.APIKey,
+			Provider:  gatewaycred.Provider(cfg.Gateway.Provider),
 			Transport: gatewaycred.Transport(cfg.Gateway.Transport),
 			Kind:      gatewaycred.Kind(cfg.Gateway.Kind),
 			Headers:   cfg.Gateway.Headers,
@@ -93,7 +99,23 @@ func Resolve(sessionID string) (Credential, error) {
 		if err != nil {
 			return Credential{}, err
 		}
-		if cred.Transport == gatewaycred.TransportBifrostAsync && !strings.HasSuffix(cred.BaseURL, "/openai") {
+		if cred.Provider == gatewaycred.ProviderCodex && cred.APIKey == "" {
+			token, loadErr := oauthcred.Load(oauthcred.StorePath(config.ConfigPath()))
+			if loadErr != nil {
+				return Credential{}, fmt.Errorf("BYO codex gateway requires `telos login codex` or gateway.api_key: %w", loadErr)
+			}
+			cred.APIKey = token.AccessToken
+			if token.AccountID != "" {
+				if cred.Headers == nil {
+					cred.Headers = map[string]string{}
+				}
+				cred.Headers["chatgpt-account-id"] = token.AccountID
+			}
+		}
+		if cred.BaseURL == "" || cred.APIKey == "" {
+			return Credential{}, fmt.Errorf("BYO %s gateway requires gateway.base_url and gateway.api_key", cred.Provider)
+		}
+		if cred.Provider == gatewaycred.ProviderOpenAI && cred.Transport == gatewaycred.TransportBifrostAsync && !strings.HasSuffix(cred.BaseURL, "/openai") {
 			return Credential{}, fmt.Errorf("bifrost_async via the OpenAI SDK requires gateway.base_url to end in /openai")
 		}
 		return Credential{Credential: cred}, nil
@@ -109,6 +131,7 @@ func Resolve(sessionID string) (Credential, error) {
 		cred, err := gatewaycred.NormalizeWithEnvPolicy(gatewaycred.Credential{
 			BaseURL:       key.BaseURL,
 			APIKey:        key.APIKey,
+			Provider:      gatewaycred.ProviderOpenAI,
 			Transport:     gatewaycred.Transport(key.Transport),
 			Kind:          gatewaycred.Kind(key.Kind),
 			Headers:       key.Headers,
@@ -128,8 +151,7 @@ func Resolve(sessionID string) (Credential, error) {
 	}
 }
 
-// ProbeResponses checks that baseURL looks like the configured Responses
-// transport endpoint.
+// ProbeResponses checks that baseURL looks like the configured provider endpoint.
 func ProbeResponses(baseURL, apiKey, model string, cfg ProbeConfig) error {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	apiKey = strings.TrimSpace(apiKey)
@@ -138,7 +160,15 @@ func ProbeResponses(baseURL, apiKey, model string, cfg ProbeConfig) error {
 		return fmt.Errorf("base URL and API key are required")
 	}
 	if model == "" {
-		model = "gpt-4o-mini"
+		model = defaultProbeModel(cfg.Provider)
+	}
+	switch cfg.Provider {
+	case gatewaycred.ProviderAnthropic:
+		return probeAnthropic(baseURL, apiKey, model, cfg.Headers)
+	case gatewaycred.ProviderGemini:
+		return probeGemini(baseURL, apiKey, model, cfg.Headers)
+	case gatewaycred.ProviderCodex:
+		return probeCodex(baseURL, apiKey, model, cfg.Headers)
 	}
 	transport, _, err := gatewaycred.NormalizeTransportAndKind(string(cfg.Transport), string(cfg.Kind))
 	if err != nil {
@@ -177,6 +207,108 @@ func ProbeResponses(baseURL, apiKey, model string, cfg ProbeConfig) error {
 		}
 	}
 	return validateProbeResult(baseURL, result)
+}
+
+func defaultProbeModel(provider gatewaycred.Provider) string {
+	switch provider {
+	case gatewaycred.ProviderAnthropic:
+		return "claude-3-5-haiku-latest"
+	case gatewaycred.ProviderGemini:
+		return "gemini-2.0-flash"
+	case gatewaycred.ProviderCodex:
+		return "gpt-5"
+	default:
+		return "gpt-4o-mini"
+	}
+}
+
+func probeAnthropic(baseURL, apiKey, model string, headers map[string]string) error {
+	body, _ := json.Marshal(map[string]any{
+		"model":      model,
+		"system":     "Reply with exactly OK.",
+		"messages":   []map[string]any{{"role": "user", "content": "OK?"}},
+		"max_tokens": 16,
+	})
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, baseURL+"/v1/messages", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-api-key", apiKey)
+	req.Header.Set("anthropic-version", firstNonEmptyHeader(headers, "anthropic-version", "2023-06-01"))
+	for k, v := range headers {
+		if !strings.EqualFold(k, "anthropic-version") {
+			req.Header.Set(k, v)
+		}
+	}
+	return doSimpleProbe(req, baseURL+"/v1/messages")
+}
+
+func probeGemini(baseURL, apiKey, model string, headers map[string]string) error {
+	body, _ := json.Marshal(map[string]any{
+		"contents":         []map[string]any{{"role": "user", "parts": []map[string]any{{"text": "Reply with exactly OK."}}}},
+		"generationConfig": map[string]any{"maxOutputTokens": 16},
+	})
+	model = strings.TrimPrefix(model, "models/")
+	endpoint := baseURL + "/v1beta/models/" + model + ":generateContent"
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("x-goog-api-key", apiKey)
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return doSimpleProbe(req, endpoint)
+}
+
+func probeCodex(baseURL, apiKey, model string, headers map[string]string) error {
+	body, _ := json.Marshal(map[string]any{
+		"model":        model,
+		"instructions": "Reply with exactly OK.",
+		"input":        []map[string]any{{"type": "message", "role": "user", "content": []map[string]any{{"type": "input_text", "text": "OK?"}}}},
+		"stream":       true,
+		"store":        false,
+	})
+	endpoint := baseURL + "/backend-api/codex/responses"
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("session_id", "telos-probe")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return doSimpleProbe(req, endpoint)
+}
+
+func doSimpleProbe(req *http.Request, label string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
+	resp, err := (&http.Client{Timeout: 20 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return fmt.Errorf("POST %s returned HTTP %d", label, resp.StatusCode)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	return nil
+}
+
+func firstNonEmptyHeader(headers map[string]string, key, fallback string) string {
+	for k, v := range headers {
+		if strings.EqualFold(k, key) && strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return fallback
 }
 
 func postProbe(ctx context.Context, baseURL, apiKey string, body []byte, headers map[string]string, perRequest map[string]string, client *http.Client) (probeResponse, error) {

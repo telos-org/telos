@@ -4,6 +4,7 @@ import (
 	"strings"
 
 	"github.com/openai/openai-go/responses"
+	"github.com/telos-org/telos/internal/executor/providercore"
 )
 
 const (
@@ -29,12 +30,15 @@ type conversationState struct {
 	mode              string
 	input             responses.ResponseInputParam
 	history           responses.ResponseInputParam
+	coreInput         []providercore.Message
+	coreHistory       []providercore.Message
 	previousID        string
 	compactionSummary string
 	firstKeptIndex    int
 }
 
 func newConversationState(initial responses.ResponseInputParam, mode string) *conversationState {
+	coreInitial := coreMessagesFromInitialInput(initial)
 	switch mode {
 	case conversationStateServerChain, conversationStateStatelessHistory:
 	default:
@@ -44,6 +48,8 @@ func newConversationState(initial responses.ResponseInputParam, mode string) *co
 		mode:           mode,
 		input:          append(responses.ResponseInputParam{}, initial...),
 		history:        append(responses.ResponseInputParam{}, initial...),
+		coreInput:      append([]providercore.Message(nil), coreInitial...),
+		coreHistory:    append([]providercore.Message(nil), coreInitial...),
 		firstKeptIndex: 1,
 	}
 }
@@ -53,6 +59,29 @@ func (s *conversationState) requestInput() responses.ResponseInputParam {
 		return s.input
 	}
 	return s.inputWithSummary(s.compactionSummary, s.firstKeptIndex)
+}
+
+func (s *conversationState) coreRequestMessages() []providercore.Message {
+	if s.mode != conversationStateStatelessHistory {
+		return append([]providercore.Message(nil), s.coreInput...)
+	}
+	if len(s.coreHistory) == 0 {
+		return nil
+	}
+	firstKeptIndex := s.firstKeptIndex
+	if firstKeptIndex < 1 {
+		firstKeptIndex = 1
+	}
+	if firstKeptIndex > len(s.coreHistory) {
+		firstKeptIndex = len(s.coreHistory)
+	}
+	out := make([]providercore.Message, 0, 1+len(s.coreHistory)-firstKeptIndex+1)
+	out = append(out, s.coreHistory[0])
+	if strings.TrimSpace(s.compactionSummary) != "" {
+		out = append(out, providercore.Message{Role: providercore.RoleUser, Content: compactionSummaryMessageText(s.compactionSummary)})
+	}
+	out = append(out, s.coreHistory[firstKeptIndex:]...)
+	return out
 }
 
 func (s *conversationState) compactionRequestInput(firstKeptIndex, summaryBudgetTokens int) responses.ResponseInputParam {
@@ -135,10 +164,19 @@ func (s *conversationState) fallbackToStatelessHistory() {
 
 func (s *conversationState) recordToolResults(results []nativeToolResult) {
 	s.input = make(responses.ResponseInputParam, 0, len(results))
+	s.coreInput = make([]providercore.Message, 0, len(results))
 	for _, result := range results {
 		item := responses.ResponseInputItemParamOfFunctionCallOutput(result.CallID, result.Output)
 		s.input = append(s.input, item)
 		s.history = append(s.history, item)
+		msg := providercore.Message{
+			Role:       providercore.RoleTool,
+			Content:    result.Output,
+			ToolCallID: result.CallID,
+			ToolName:   result.Name,
+		}
+		s.coreInput = append(s.coreInput, msg)
+		s.coreHistory = append(s.coreHistory, msg)
 	}
 }
 
@@ -146,6 +184,9 @@ func (s *conversationState) recordCorrection(prompt string) {
 	item := messageInputItem(prompt, responses.EasyInputMessageRoleUser)
 	s.input = responses.ResponseInputParam{item}
 	s.history = append(s.history, item)
+	msg := providercore.Message{Role: providercore.RoleUser, Content: prompt}
+	s.coreInput = []providercore.Message{msg}
+	s.coreHistory = append(s.coreHistory, msg)
 }
 
 func (s *conversationState) recordAssistantMessage(text string) {
@@ -153,10 +194,44 @@ func (s *conversationState) recordAssistantMessage(text string) {
 		return
 	}
 	s.history = append(s.history, messageInputItem(text, responses.EasyInputMessageRoleAssistant))
+	s.coreHistory = append(s.coreHistory, providercore.Message{Role: providercore.RoleAssistant, Content: text})
 }
 
 func (s *conversationState) recordAssistantToolCalls(calls []nativeToolCall) {
+	if len(calls) == 0 {
+		return
+	}
+	coreCalls := make([]providercore.ToolCall, 0, len(calls))
 	for _, call := range calls {
 		s.history = append(s.history, responses.ResponseInputItemParamOfFunctionCall(call.Arguments, call.ID, call.Name))
+		coreCalls = append(coreCalls, providercore.ToolCall{ID: call.ID, Name: call.Name, Arguments: call.Arguments})
 	}
+	s.coreHistory = append(s.coreHistory, providercore.Message{Role: providercore.RoleAssistant, ToolCalls: coreCalls})
+}
+
+func coreMessagesFromInitialInput(input responses.ResponseInputParam) []providercore.Message {
+	var out []providercore.Message
+	for _, item := range input {
+		if item.OfMessage == nil {
+			continue
+		}
+		out = append(out, providercore.Message{
+			Role:    coreRoleFromOpenAI(item.OfMessage.Role),
+			Content: item.OfMessage.Content.OfString.Value,
+		})
+	}
+	return out
+}
+
+func coreRoleFromOpenAI(role responses.EasyInputMessageRole) providercore.Role {
+	switch role {
+	case responses.EasyInputMessageRoleAssistant:
+		return providercore.RoleAssistant
+	default:
+		return providercore.RoleUser
+	}
+}
+
+func compactionSummaryMessageText(summary string) string {
+	return compactionSummaryMessagePrefix + strings.TrimSpace(summary)
 }

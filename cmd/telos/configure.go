@@ -9,15 +9,17 @@ import (
 
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/gateway"
+	"github.com/telos-org/telos/internal/gatewaycred"
 )
 
 func cmdConfigure(args []string) {
 	if len(args) == 0 || args[0] != "gateway" {
-		fmt.Fprintln(os.Stderr, "usage: telos configure gateway --mode managed|byo [--base-url URL --api-key KEY] [--transport openai_sync|bifrost_async] [--kind openai|bifrost] [--headers JSON] [--model MODEL] [--no-probe]")
+		fmt.Fprintln(os.Stderr, "usage: telos configure gateway --mode managed|byo [--provider openai|anthropic|gemini|codex] [--base-url URL --api-key KEY] [--transport openai_sync|bifrost_async] [--kind openai|bifrost] [--headers JSON] [--model MODEL] [--no-probe]")
 		os.Exit(1)
 	}
 	fs := flag.NewFlagSet("configure gateway", flag.ExitOnError)
 	mode := fs.String("mode", "", "Gateway mode: managed or byo")
+	providerRaw := fs.String("provider", "", "BYO provider: openai, anthropic, gemini, or codex")
 	baseURL := fs.String("base-url", "", "BYO Responses API base URL")
 	apiKey := fs.String("api-key", "", "BYO gateway API key")
 	transport := fs.String("transport", "", "Gateway transport: openai_sync or bifrost_async")
@@ -32,8 +34,9 @@ func cmdConfigure(args []string) {
 	case gateway.ModeManaged:
 		cfg.Gateway = config.GatewayConfig{Mode: gateway.ModeManaged}
 	case gateway.ModeBYO:
-		if strings.TrimSpace(*baseURL) == "" || strings.TrimSpace(*apiKey) == "" {
-			fmt.Fprintln(os.Stderr, "error: BYO mode requires --base-url and --api-key")
+		provider, err := gatewaycred.NormalizeProvider(*providerRaw)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		headers, err := parseGatewayHeadersFlag(*headersRaw)
@@ -46,8 +49,25 @@ func cmdConfigure(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		cred, err := gatewaycred.Normalize(gatewaycred.Credential{
+			BaseURL:   *baseURL,
+			APIKey:    *apiKey,
+			Provider:  provider,
+			Transport: resolvedTransport,
+			Kind:      resolvedKind,
+			Headers:   headers,
+		})
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if strings.TrimSpace(cred.BaseURL) == "" || strings.TrimSpace(cred.APIKey) == "" {
+			fmt.Fprintf(os.Stderr, "error: BYO %s mode requires --base-url and --api-key (or provider-specific environment API key)\n", cred.Provider)
+			os.Exit(1)
+		}
 		if !*noProbe {
-			if err := gateway.ProbeResponses(*baseURL, *apiKey, *model, gateway.ProbeConfig{
+			if err := gateway.ProbeResponses(cred.BaseURL, cred.APIKey, *model, gateway.ProbeConfig{
+				Provider:  cred.Provider,
 				Transport: resolvedTransport,
 				Kind:      resolvedKind,
 				Headers:   headers,
@@ -58,8 +78,9 @@ func cmdConfigure(args []string) {
 		}
 		cfg.Gateway = config.GatewayConfig{
 			Mode:      gateway.ModeBYO,
-			BaseURL:   strings.TrimRight(strings.TrimSpace(*baseURL), "/"),
-			APIKey:    strings.TrimSpace(*apiKey),
+			Provider:  string(cred.Provider),
+			BaseURL:   strings.TrimRight(strings.TrimSpace(cred.BaseURL), "/"),
+			APIKey:    strings.TrimSpace(cred.APIKey),
 			Transport: string(resolvedTransport),
 			Kind:      string(resolvedKind),
 			Headers:   headers,

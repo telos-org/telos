@@ -27,6 +27,20 @@ func TestNormalizeTransportAndKind(t *testing.T) {
 	}
 }
 
+func TestNormalizeProviderDefaultsAndProviderEnvKeys(t *testing.T) {
+	t.Setenv(AnthropicAPIKeyEnv, "anthropic-env")
+	cred, err := Normalize(Credential{Provider: ProviderAnthropic})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cred.Provider != ProviderAnthropic || cred.BaseURL != "https://api.anthropic.com" || cred.APIKey != "anthropic-env" {
+		t.Fatalf("credential: %+v", cred)
+	}
+	if _, err := NormalizeProvider("bogus"); err == nil {
+		t.Fatal("expected invalid provider error")
+	}
+}
+
 func TestFromEnv(t *testing.T) {
 	t.Setenv(BaseURLEnv, "https://gateway.example.com/openai/")
 	t.Setenv(APIKeyEnv, " test-key ")
@@ -52,6 +66,19 @@ func TestFromEnv(t *testing.T) {
 	}
 	if !cred.CostHardLimit {
 		t.Fatalf("cost hard limit should use shared YES grammar: %+v", cred)
+	}
+}
+
+func TestFromEnvProviderFallbackAPIKey(t *testing.T) {
+	t.Setenv(ProviderEnv, string(ProviderGemini))
+	t.Setenv(GeminiAPIKeyEnv, "gemini-env")
+
+	cred, ok, err := FromEnv()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok || cred.Provider != ProviderGemini || cred.BaseURL != "https://generativelanguage.googleapis.com" || cred.APIKey != "gemini-env" {
+		t.Fatalf("credential: ok=%v %+v", ok, cred)
 	}
 }
 

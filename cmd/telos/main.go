@@ -18,8 +18,9 @@
 //	telos replay SESSION_OR_SESSION_JSONL [--role prover|verifier] [--json]
 //	telos stop SESSION|DEPLOYMENT [--env ENV] [--org ORG] [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
+//	telos login codex [--no-browser]
 //	telos org list|use
-//	telos configure gateway --mode managed|byo
+//	telos configure gateway --mode managed|byo [--provider openai|anthropic|gemini|codex]
 //	telos version
 //	telos --version
 package main
@@ -105,6 +106,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  replay TARGET      Replay session JSONL protocol checks")
 	fmt.Fprintln(out, "  stop SESSION       Stop a running session or deployment")
 	fmt.Fprintln(out, "  login              Configure cloud access")
+	fmt.Fprintln(out, "  login codex        Configure ChatGPT Codex subscription access")
 	fmt.Fprintln(out, "  org                List or select organizations")
 	fmt.Fprintln(out, "  configure          Configure local gateway access")
 	fmt.Fprintln(out, "  version            Show version")

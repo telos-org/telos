@@ -1,0 +1,17 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "providercore",
+    srcs = [
+        "collector.go",
+        "types.go",
+    ],
+    importpath = "github.com/telos-org/telos/internal/executor/providercore",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "providercore_test",
+    srcs = ["collector_test.go"],
+    embed = [":providercore"],
+)

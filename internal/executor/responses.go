@@ -17,7 +17,9 @@ import (
 	"github.com/openai/openai-go/option"
 	"github.com/openai/openai-go/responses"
 	"github.com/telos-org/telos/internal/agentsession"
+	"github.com/telos-org/telos/internal/executor/providercore"
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/gatewaycred"
 )
 
 // -- Gateway Responses client (openai-go Responses API) ---------------------
@@ -29,12 +31,15 @@ type responsesClient struct {
 	client            openai.Client
 	runner            responseRunner
 	provider          string
+	protocol          gatewaycred.Provider
 	transport         responseTransport
 	model             string
 	instructions      string
 	reasoning         openai.ReasoningEffort
 	maxOutputTokens   int
 	tools             []responses.ToolUnionParam
+	coreTools         []providercore.ToolDefinition
+	coreAdapter       providercore.Adapter
 	state             *conversationState
 	compactor         *compactor
 	logger            *nativeSessionLogger
@@ -85,12 +90,14 @@ func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, think
 	comp := newCompactor(cfg.Compaction.withReserveOutput(maxOutputTokens))
 	t := &responsesClient{
 		provider:        cfg.Provider,
+		protocol:        cfg.Protocol,
 		transport:       cfg.Transport,
 		model:           cfg.Model,
 		instructions:    nativeSystemPrompt(role),
 		reasoning:       reasoning,
 		maxOutputTokens: maxOutputTokens,
 		tools:           tools,
+		coreTools:       nativeToolsForProviderCore(),
 		state:           newConversationState(initial, stateMode),
 		compactor:       comp,
 		logger:          logger,
@@ -108,6 +115,7 @@ func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, think
 	}
 	t.client = openai.NewClient(opts...)
 	t.runner = newResponseRunner(cfg, t.client, logger)
+	t.coreAdapter = newProviderCoreAdapter(httpClient, cfg, maxOutputTokens, logger)
 	return t
 }
 
@@ -320,6 +328,9 @@ func sleepContext(ctx context.Context, delay time.Duration) error {
 }
 
 func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
+	if t.protocol != "" && t.protocol != gatewaycred.ProviderOpenAI {
+		return t.sendCore(ctx)
+	}
 	compStats, err := t.compactor.compact(ctx, compactionRuntime{
 		state:           t.state,
 		model:           t.model,
@@ -407,6 +418,83 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 		stopReason: responseStopReason(final),
 		stats:      stats,
 	}, nil
+}
+
+func (t *responsesClient) sendCore(ctx context.Context) (agentTurn, error) {
+	if t.beforeMainRequest != nil {
+		if err := t.beforeMainRequest(game.TurnStats{}); err != nil {
+			_ = t.logger.errorEvent(t.sequence+1, err)
+			return agentTurn{}, err
+		}
+	}
+	t.sequence++
+	seq := t.sequence
+	request := providercore.Request{
+		Model:           t.model,
+		System:          t.instructions,
+		Messages:        t.state.coreRequestMessages(),
+		Tools:           t.coreTools,
+		MaxOutputTokens: t.maxOutputTokens,
+		ReasoningEffort: string(t.reasoning),
+		Stream:          t.protocol == gatewaycred.ProviderCodex,
+	}
+	_ = t.logger.modelRequest(t.modelRequestLogData(seq, ""))
+	result, err := t.completeCoreWithRetries(ctx, seq, request)
+	if err != nil {
+		_ = t.logger.errorEvent(seq, err)
+		return agentTurn{}, err
+	}
+	calls := coreToolCalls(result.ToolCalls)
+	t.state.recordResponseID(result.ID)
+	t.state.recordAssistantMessage(result.Text)
+	t.state.recordAssistantToolCalls(calls)
+	mainStats := statsFromCoreUsage(t.model, result.Usage)
+	_ = t.logger.modelResponse(seq, result.ID, result.AsyncJobID, result.StopReason, mainStats)
+	if result.Status == providercore.StatusIncomplete {
+		reason := result.StopReason
+		if reason == "" {
+			reason = "incomplete"
+		}
+		if len(calls) > 0 && !toolCallsHaveCompleteArguments(calls) {
+			reason += ":incomplete_tool_arguments"
+		}
+		err := newExecutorError(errAgentIncomplete, reason)
+		_ = t.logger.errorEvent(seq, err)
+		return agentTurn{stats: mainStats}, err
+	}
+	return agentTurn{
+		text:       result.Text,
+		calls:      calls,
+		stopReason: result.StopReason,
+		stats:      mainStats,
+	}, nil
+}
+
+func (t *responsesClient) completeCoreWithRetries(ctx context.Context, seq int, request providercore.Request) (providercore.Response, error) {
+	var result providercore.Response
+	var err error
+	for attempt := 0; attempt < 3; attempt++ {
+		result, err = t.coreAdapter.Complete(ctx, request, seq)
+		if err == nil {
+			err = coreTerminalError(result)
+		}
+		if err == nil {
+			return result, nil
+		}
+		var execErr *executorError
+		if !errors.As(err, &execErr) {
+			return providercore.Response{}, err
+		}
+		if !execErr.Retryable || attempt == 2 {
+			return result, err
+		}
+		delay := retryDelay(attempt)
+		_ = t.logger.retry(seq, attempt+1, delay, execErr)
+		if err := sleepContext(ctx, delay); err != nil {
+			return providercore.Response{}, classifyProviderError(err)
+		}
+	}
+	return result, err
 }
 
 func (t *responsesClient) completeWithRetries(ctx context.Context, seq int, params responses.ResponseNewParams, stopOnChainError bool) (completionResult, error) {

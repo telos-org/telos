@@ -30,6 +30,7 @@ const DefaultNativeRequestTimeoutSec = 1800
 type nativeConfig struct {
 	baseURL           string
 	apiKey            string
+	provider          gatewaycred.Provider
 	transport         responseTransport
 	kind              gatewayKind
 	headers           map[string]string
@@ -70,6 +71,7 @@ func resolveNativeConfig(credential gatewaycred.Credential) (nativeConfig, error
 	return nativeConfig{
 		baseURL:           credential.BaseURL,
 		apiKey:            credential.APIKey,
+		provider:          credential.Provider,
 		transport:         credential.Transport,
 		kind:              credential.Kind,
 		headers:           credential.Headers,
@@ -94,6 +96,7 @@ func (c nativeConfig) providerFor(model string) (nativeProviderConfig, error) {
 	}
 	return nativeProviderConfig{
 		Provider:   string(c.kind),
+		Protocol:   c.provider,
 		Model:      model,
 		BaseURL:    c.baseURL,
 		APIKey:     c.apiKey,
@@ -150,6 +153,7 @@ func asyncPollConfigFromEnv() asyncPollConfig {
 
 type nativeProviderConfig struct {
 	Provider   string
+	Protocol   gatewaycred.Provider
 	Model      string
 	BaseURL    string
 	APIKey     string

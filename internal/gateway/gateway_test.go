@@ -94,6 +94,28 @@ gateway:
 	}
 }
 
+func TestResolveBYOAnthropicUsesProviderDefaultsAndEnvKey(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(`
+gateway:
+  mode: byo
+  provider: anthropic
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("ANTHROPIC_API_KEY", "anthropic-key")
+
+	cred, err := Resolve("sess-1")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if cred.Provider != ProviderAnthropic || cred.BaseURL != "https://api.anthropic.com" || cred.APIKey != "anthropic-key" {
+		t.Fatalf("credential: %+v", cred)
+	}
+}
+
 func TestResolveBYOConfigUsesCostHardLimitEnv(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")

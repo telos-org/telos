@@ -5,6 +5,7 @@ import (
 
 	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/responses"
+	"github.com/telos-org/telos/internal/executor/providercore"
 )
 
 type nativeTool struct {
@@ -186,6 +187,18 @@ func nativeToolsForOpenAI() []responses.ToolUnionParam {
 				Parameters:  def.parameters,
 				Strict:      openai.Bool(false),
 			},
+		})
+	}
+	return out
+}
+
+func nativeToolsForProviderCore() []providercore.ToolDefinition {
+	out := make([]providercore.ToolDefinition, 0, len(nativeToolDefs))
+	for _, def := range nativeToolDefs {
+		out = append(out, providercore.ToolDefinition{
+			Name:        def.name,
+			Description: def.description,
+			Parameters:  def.parameters,
 		})
 	}
 	return out

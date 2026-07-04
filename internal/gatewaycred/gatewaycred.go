@@ -9,20 +9,25 @@ import (
 )
 
 const (
-	BaseURLEnv       = "TELOS_GATEWAY_BASE_URL"
-	APIKeyEnv        = "TELOS_GATEWAY_API_KEY"
-	TransportEnv     = "TELOS_GATEWAY_TRANSPORT"
-	KindEnv          = "TELOS_GATEWAY_KIND"
-	HeadersEnv       = "TELOS_GATEWAY_HEADERS"
-	CostHardLimitEnv = "TELOS_COST_HARD_LIMIT"
-	BillingEnvIDEnv  = "TELOS_ENV_ID"
-	BillingTokenEnv  = "TELOS_BILLING_ENV_TOKEN"
-	BillingFileEnv   = "TELOS_BILLING_ENV_TOKEN_FILE"
+	BaseURLEnv         = "TELOS_GATEWAY_BASE_URL"
+	APIKeyEnv          = "TELOS_GATEWAY_API_KEY"
+	ProviderEnv        = "TELOS_GATEWAY_PROVIDER"
+	TransportEnv       = "TELOS_GATEWAY_TRANSPORT"
+	KindEnv            = "TELOS_GATEWAY_KIND"
+	HeadersEnv         = "TELOS_GATEWAY_HEADERS"
+	CostHardLimitEnv   = "TELOS_COST_HARD_LIMIT"
+	AnthropicAPIKeyEnv = "ANTHROPIC_API_KEY"
+	GeminiAPIKeyEnv    = "GEMINI_API_KEY"
+	BillingEnvIDEnv    = "TELOS_ENV_ID"
+	BillingTokenEnv    = "TELOS_BILLING_ENV_TOKEN"
+	BillingFileEnv     = "TELOS_BILLING_ENV_TOKEN_FILE"
 )
 
 type Transport string
 
 type Kind string
+
+type Provider string
 
 const (
 	TransportOpenAISync   Transport = "openai_sync"
@@ -30,12 +35,18 @@ const (
 
 	KindOpenAI  Kind = "openai"
 	KindBifrost Kind = "bifrost"
+
+	ProviderOpenAI    Provider = "openai"
+	ProviderAnthropic Provider = "anthropic"
+	ProviderGemini    Provider = "gemini"
+	ProviderCodex     Provider = "codex"
 )
 
 // Credential is the Responses API endpoint and key a run should use.
 type Credential struct {
 	BaseURL       string            `json:"base_url,omitempty"`
 	APIKey        string            `json:"api_key,omitempty"`
+	Provider      Provider          `json:"provider,omitempty"`
 	Transport     Transport         `json:"transport,omitempty"`
 	Kind          Kind              `json:"kind,omitempty"`
 	Headers       map[string]string `json:"headers,omitempty"`
@@ -52,19 +63,28 @@ func FromEnv() (Credential, bool, error) {
 	}
 	baseURL := strings.TrimRight(strings.TrimSpace(os.Getenv(BaseURLEnv)), "/")
 	apiKey := strings.TrimSpace(os.Getenv(APIKeyEnv))
+	providerRaw := strings.TrimSpace(os.Getenv(ProviderEnv))
 	transportRaw := strings.TrimSpace(os.Getenv(TransportEnv))
 	kindRaw := strings.TrimSpace(os.Getenv(KindEnv))
-	present := baseURL != "" || apiKey != "" || transportRaw != "" || kindRaw != "" || strings.TrimSpace(rawHeaders) != ""
+	present := baseURL != "" || apiKey != "" || providerRaw != "" || transportRaw != "" || kindRaw != "" || strings.TrimSpace(rawHeaders) != ""
 	if !present {
 		return Credential{}, false, nil
+	}
+	provider, err := NormalizeProvider(providerRaw)
+	if err != nil {
+		return Credential{}, true, err
+	}
+	if apiKey == "" {
+		apiKey = providerAPIKeyFromEnv(provider)
 	}
 	transport, kind, err := NormalizeTransportAndKind(transportRaw, kindRaw)
 	if err != nil {
 		return Credential{}, true, err
 	}
 	return Credential{
-		BaseURL:       baseURL,
+		BaseURL:       defaultBaseURL(provider, baseURL),
 		APIKey:        apiKey,
+		Provider:      provider,
 		Transport:     transport,
 		Kind:          kind,
 		Headers:       headers,
@@ -74,18 +94,69 @@ func FromEnv() (Credential, bool, error) {
 
 // Normalize returns a trimmed, cloned credential with default transport/kind.
 func Normalize(cred Credential) (Credential, error) {
+	provider, err := NormalizeProvider(string(cred.Provider))
+	if err != nil {
+		return Credential{}, err
+	}
 	transport, kind, err := NormalizeTransportAndKind(string(cred.Transport), string(cred.Kind))
 	if err != nil {
 		return Credential{}, err
 	}
 	return Credential{
-		BaseURL:       strings.TrimRight(strings.TrimSpace(cred.BaseURL), "/"),
-		APIKey:        strings.TrimSpace(cred.APIKey),
+		BaseURL:       defaultBaseURL(provider, strings.TrimRight(strings.TrimSpace(cred.BaseURL), "/")),
+		APIKey:        defaultAPIKey(provider, strings.TrimSpace(cred.APIKey)),
+		Provider:      provider,
 		Transport:     transport,
 		Kind:          kind,
 		Headers:       CloneHeaders(cred.Headers),
 		CostHardLimit: cred.CostHardLimit,
 	}, nil
+}
+
+func defaultBaseURL(provider Provider, baseURL string) string {
+	if baseURL != "" {
+		return baseURL
+	}
+	switch provider {
+	case ProviderAnthropic:
+		return "https://api.anthropic.com"
+	case ProviderGemini:
+		return "https://generativelanguage.googleapis.com"
+	case ProviderCodex:
+		return "https://chatgpt.com"
+	default:
+		return ""
+	}
+}
+
+func defaultAPIKey(provider Provider, apiKey string) string {
+	if apiKey != "" {
+		return apiKey
+	}
+	return providerAPIKeyFromEnv(provider)
+}
+
+func providerAPIKeyFromEnv(provider Provider) string {
+	switch provider {
+	case ProviderAnthropic:
+		return strings.TrimSpace(os.Getenv(AnthropicAPIKeyEnv))
+	case ProviderGemini:
+		return strings.TrimSpace(os.Getenv(GeminiAPIKeyEnv))
+	default:
+		return ""
+	}
+}
+
+func NormalizeProvider(raw string) (Provider, error) {
+	provider := Provider(strings.ToLower(strings.TrimSpace(raw)))
+	switch provider {
+	case "":
+		return ProviderOpenAI, nil
+	case ProviderOpenAI, ProviderAnthropic, ProviderGemini, ProviderCodex:
+		return provider, nil
+	default:
+		return "", fmt.Errorf("unknown %s %q (accepted: openai, anthropic, gemini, codex)", ProviderEnv, raw)
+	}
 }
 
 // NormalizeWithEnvPolicy normalizes a credential and applies the process-wide
@@ -111,7 +182,7 @@ func RequireComplete(cred Credential, baseURLError, apiKeyError string) (Credent
 	if cred.APIKey == "" {
 		return Credential{}, fmt.Errorf("%s", apiKeyError)
 	}
-	if cred.Transport == TransportBifrostAsync && !strings.HasSuffix(cred.BaseURL, "/openai") {
+	if cred.Provider == ProviderOpenAI && cred.Transport == TransportBifrostAsync && !strings.HasSuffix(cred.BaseURL, "/openai") {
 		return Credential{}, fmt.Errorf("bifrost_async via the OpenAI SDK requires %s to end in /openai", BaseURLEnv)
 	}
 	return cred, nil
