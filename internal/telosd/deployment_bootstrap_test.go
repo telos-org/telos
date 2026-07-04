@@ -25,8 +25,8 @@ func (s *fakeReconcileStore) Create(req sessionapi.SessionCreateRequest) (*sessi
 		SpecName:    &name,
 		Status:      sessionapi.StatusRunning,
 		Provenance: map[string]any{
-			"deployment_id":   req.DeploymentID,
-			"deployment_name": req.DeploymentName,
+			"cloud_session_id":   req.CloudSessionID,
+			"cloud_session_name": req.CloudSessionName,
 		},
 		SpecVersions: []map[string]any{{
 			"apply_package_digest": req.ApplyPackageDigest,
@@ -84,10 +84,10 @@ func TestDeploymentBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T)
 		store:       store,
 	}
 
-	if err := reconciler.reconcile([]deploymentSession{{
-		DeploymentID:  "dep_123",
-		Name:          "auth",
-		PackageDigest: digest,
+	if err := reconciler.reconcile([]cloudBootstrapSession{{
+		CloudSessionID: "sess_123",
+		Name:           "auth",
+		PackageDigest:  digest,
 	}}); err != nil {
 		t.Fatalf("reconcile: %v", err)
 	}
@@ -100,18 +100,18 @@ func TestDeploymentBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T)
 	if store.creates[0].ApplyPackageDigest != digest {
 		t.Fatalf("ApplyPackageDigest = %q want %q", store.creates[0].ApplyPackageDigest, digest)
 	}
-	if store.creates[0].DeploymentID != "dep_123" {
-		t.Fatalf("DeploymentID = %q want dep_123", store.creates[0].DeploymentID)
+	if store.creates[0].CloudSessionID != "sess_123" {
+		t.Fatalf("CloudSessionID = %q want sess_123", store.creates[0].CloudSessionID)
 	}
-	if store.creates[0].DeploymentName != "auth" {
-		t.Fatalf("DeploymentName = %q want auth", store.creates[0].DeploymentName)
+	if store.creates[0].CloudSessionName != "auth" {
+		t.Fatalf("CloudSessionName = %q want auth", store.creates[0].CloudSessionName)
 	}
 	if store.creates[0].Model != defaultCloudSessionModel {
 		t.Fatalf("Model = %q want %q", store.creates[0].Model, defaultCloudSessionModel)
 	}
 }
 
-func TestDeploymentBootstrapMatchesDeploymentNameBeforeSpecName(t *testing.T) {
+func TestDeploymentBootstrapMatchesCloudSessionNameBeforeSpecName(t *testing.T) {
 	digest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	specName := "auth-v2"
 	store := &fakeReconcileStore{sessions: []sessionapi.Session{{
@@ -119,7 +119,7 @@ func TestDeploymentBootstrapMatchesDeploymentNameBeforeSpecName(t *testing.T) {
 		SpecName:  &specName,
 		Status:    sessionapi.StatusRunning,
 		Provenance: map[string]any{
-			"deployment_name": "auth",
+			"cloud_session_name": "auth",
 		},
 		SpecVersions: []map[string]any{{
 			"apply_package_digest": digest,
@@ -131,7 +131,7 @@ func TestDeploymentBootstrapMatchesDeploymentNameBeforeSpecName(t *testing.T) {
 		store:       store,
 	}
 
-	if err := reconciler.reconcile([]deploymentSession{{
+	if err := reconciler.reconcile([]cloudBootstrapSession{{
 		Name:          "auth",
 		PackageDigest: digest,
 	}}); err != nil {
@@ -151,8 +151,8 @@ func TestCloudSessionModelUsesEnvOverride(t *testing.T) {
 }
 
 func TestDeploymentBootstrapDesiredSession(t *testing.T) {
-	t.Setenv("TELOS_DEPLOYMENT_ID", "dep_123")
-	t.Setenv("TELOS_DEPLOYMENT_NAME", "auth")
+	t.Setenv("TELOS_SESSION_ID", "sess_123")
+	t.Setenv("TELOS_SESSION_NAME", "auth")
 	t.Setenv("TELOS_PACKAGE_DIGEST", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 
 	session, ok := deploymentBootstrapSession()
@@ -163,8 +163,8 @@ func TestDeploymentBootstrapDesiredSession(t *testing.T) {
 	if session.Name != "auth" {
 		t.Fatalf("Name = %q", session.Name)
 	}
-	if session.DeploymentID != "dep_123" {
-		t.Fatalf("DeploymentID = %q", session.DeploymentID)
+	if session.CloudSessionID != "sess_123" {
+		t.Fatalf("CloudSessionID = %q", session.CloudSessionID)
 	}
 	if session.PackageDigest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
 		t.Fatalf("PackageDigest = %q", session.PackageDigest)
@@ -172,8 +172,8 @@ func TestDeploymentBootstrapDesiredSession(t *testing.T) {
 }
 
 func TestDeploymentBootstrapCanBeDisabled(t *testing.T) {
-	t.Setenv("TELOS_DEPLOYMENT_BOOTSTRAP_ENABLED", "0")
-	t.Setenv("TELOS_DEPLOYMENT_NAME", "auth")
+	t.Setenv("TELOS_SESSION_BOOTSTRAP_ENABLED", "0")
+	t.Setenv("TELOS_SESSION_NAME", "auth")
 	t.Setenv("TELOS_PACKAGE_DIGEST", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	t.Setenv("TELOS_PACKAGE_ROOT", t.TempDir())
 	store := &fakeReconcileStore{}
@@ -202,7 +202,7 @@ func TestDeploymentBootstrapNoopsWhenDigestMatches(t *testing.T) {
 		store:       store,
 	}
 
-	if err := reconciler.reconcile([]deploymentSession{{
+	if err := reconciler.reconcile([]cloudBootstrapSession{{
 		Name:          name,
 		PackageDigest: digest,
 	}}); err != nil {

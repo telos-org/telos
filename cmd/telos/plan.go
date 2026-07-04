@@ -34,7 +34,7 @@ func cmdPlan(args []string) {
 		platform = "cloud"
 	}
 	targetMode := "local"
-	willCreateDeployment := false
+	willCreateSession := platform == "local"
 	sessionLineage := "root"
 	userScope := map[string]interface{}{
 		"status": "local",
@@ -42,8 +42,8 @@ func cmdPlan(args []string) {
 		"detail": "no cloud auth required",
 	}
 	if platform != "local" {
-		targetMode = "cloud deployment"
-		willCreateDeployment = true
+		targetMode = "cloud"
+		willCreateSession = true
 		userScope = map[string]interface{}{
 			"status": "missing",
 			"label":  "not logged in",
@@ -72,10 +72,9 @@ func cmdPlan(args []string) {
 			"interval_seconds": compiled.Environment.IntervalSeconds,
 		},
 		"target": map[string]interface{}{
-			"mode":                   targetMode,
-			"will_create_deployment": willCreateDeployment,
-			"will_create_session":    platform == "local",
-			"will_mutate":            false,
+			"mode":                targetMode,
+			"will_create_session": willCreateSession,
+			"will_mutate":         false,
 		},
 		"user": userScope,
 	}
@@ -96,7 +95,7 @@ func printPlanPreview(
 	sessionLineage string,
 ) {
 	printSummaryField(out, "Spec", compiled.Environment.Name)
-	printSummaryField(out, "Platform", platform)
+	printSummaryField(out, "Target", platform)
 	printSummaryField(out, "Lineage", sessionLineage)
 	printSummaryField(out, "Mutates", "no")
 	printSummaryField(out, "Path", specPath)
@@ -106,9 +105,6 @@ func printPlanPreview(
 	printSummaryField(out, "Hash", compiled.ContentHash)
 	if len(compiled.Skills) > 0 {
 		printSummaryField(out, "Skills", strings.Join(skillNames(compiled.Skills), ", "))
-	}
-	if platform != "local" {
-		printSummaryField(out, "Target", "cloud deployment")
 	}
 }
 

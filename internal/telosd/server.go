@@ -33,24 +33,16 @@ func Run(ctx context.Context, cfg Config) error {
 	baseStore := storeForConfig(cfg)
 	store := sessionapi.Store(baseStore)
 	if cfg.Mode == ModeCloud {
-		routeClient, err := kubernetesClient()
-		if err != nil {
-			return err
-		}
 		substrate, err := newSessionSubstrate(cfg)
 		if err != nil {
 			return err
 		}
-		startRouteReconciler(ctx, routeClient)
-		store = newCloudSessionStore(baseStore, newRouteHandleResolver(), substrate)
+		store = newCloudSessionStore(baseStore, substrate)
 		startDeploymentBootstrapReconciler(ctx, store)
 	}
 	mux := http.NewServeMux()
 	authorizer := authorizerForConfig(cfg, baseStore)
 	sessionapi.RegisterRoutes(mux, store, authorizer)
-	if cfg.Mode == ModeCloud {
-		registerTopologyRoutes(mux, authorizer)
-	}
 
 	var lastRequest atomic.Int64
 	lastRequest.Store(time.Now().UnixNano())
@@ -60,7 +52,6 @@ func Run(ctx context.Context, cfg Config) error {
 	})
 	if cfg.Mode == ModeCloud {
 		handler = withCloudCORS(handler)
-		handler = newSurfaceGateway(cfg.Auth.Token, newRouteHandleResolver()).Wrap(handler)
 	}
 	srv := &http.Server{
 		Handler:           handler,

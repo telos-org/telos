@@ -37,6 +37,8 @@ type ApplyPackageSpecEntry struct {
 
 type ApplyPackageSkillEntry struct {
 	Name   string                  `json:"-"`
+	Ref    string                  `json:"-"`
+	Origin string                  `json:"-"`
 	Digest string                  `json:"digest"`
 	Files  []ApplyPackageFileEntry `json:"-"`
 }
@@ -47,13 +49,20 @@ type ApplyPackageFileEntry struct {
 	Digest string `json:"digest"`
 }
 
+type ApplyPackageSkillProvenance struct {
+	Ref    string `json:"ref,omitempty"`
+	Origin string `json:"origin,omitempty"`
+	Digest string `json:"digest"`
+}
+
 // ApplyPackageManifest records the immutable inputs used by the package.
 type ApplyPackageManifest struct {
-	SchemaVersion int                   `json:"schema_version"`
-	Spec          ApplyPackageSpecEntry `json:"spec"`
-	Skills        map[string]string     `json:"skills"`
-	Compiler      string                `json:"compiler,omitempty"`
-	Runtime       string                `json:"runtime,omitempty"`
+	SchemaVersion   int                                    `json:"schema_version"`
+	Spec            ApplyPackageSpecEntry                  `json:"spec"`
+	Skills          map[string]string                      `json:"skills"`
+	SkillProvenance map[string]ApplyPackageSkillProvenance `json:"skill_provenance,omitempty"`
+	Compiler        string                                 `json:"compiler,omitempty"`
+	Runtime         string                                 `json:"runtime,omitempty"`
 }
 
 type packageFile struct {
@@ -93,7 +102,7 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 	}}
 	skillEntries := make([]ApplyPackageSkillEntry, 0, len(compiled.Skills))
 	for _, skill := range sortedSkills(compiled.Skills) {
-		entry, files, err := packageSkill(skill, required[skill.Name])
+		entry, files, err := packageSkill(skill, compiled.Environment.Path, required[skill.Name])
 		if err != nil {
 			return nil, err
 		}
@@ -103,11 +112,12 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 
 	runtimeVersion := strings.TrimSpace(opts.RuntimeVersion)
 	manifest := ApplyPackageManifest{
-		SchemaVersion: ApplyPackageSchemaVersion,
-		Spec:          specEntry,
-		Skills:        skillDigestMap(skillEntries),
-		Compiler:      "telos@" + compilerVersion,
-		Runtime:       runtimeVersion,
+		SchemaVersion:   ApplyPackageSchemaVersion,
+		Spec:            specEntry,
+		Skills:          skillDigestMap(skillEntries),
+		SkillProvenance: skillProvenanceMap(skillEntries),
+		Compiler:        "telos@" + compilerVersion,
+		Runtime:         runtimeVersion,
 	}
 	packageDigest := digestPackage(specEntry.Digest, manifest.Skills)
 
@@ -189,7 +199,7 @@ func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageManifest, error
 	return &manifest, nil
 }
 
-func packageSkill(skill *Skill, required bool) (ApplyPackageSkillEntry, []packageFile, error) {
+func packageSkill(skill *Skill, rootSpecPath string, required bool) (ApplyPackageSkillEntry, []packageFile, error) {
 	if skill == nil {
 		return ApplyPackageSkillEntry{}, nil, fmt.Errorf("nil skill")
 	}
@@ -224,6 +234,8 @@ func packageSkill(skill *Skill, required bool) (ApplyPackageSkillEntry, []packag
 	}
 	entry := ApplyPackageSkillEntry{
 		Name:   skill.Name,
+		Ref:    skillSourceRef(skill, rootSpecPath),
+		Origin: skillOrigin(skill, required),
 		Digest: digestSkill(skill.Name, fileEntries),
 		Files:  fileEntries,
 	}
@@ -330,6 +342,77 @@ func skillDigestMap(skills []ApplyPackageSkillEntry) map[string]string {
 		out[skill.Name] = skill.Digest
 	}
 	return out
+}
+
+func skillProvenanceMap(skills []ApplyPackageSkillEntry) map[string]ApplyPackageSkillProvenance {
+	out := make(map[string]ApplyPackageSkillProvenance, len(skills))
+	for _, skill := range skills {
+		out[skill.Name] = ApplyPackageSkillProvenance{
+			Ref:    skill.Ref,
+			Origin: skill.Origin,
+			Digest: skill.Digest,
+		}
+	}
+	return out
+}
+
+func skillOrigin(skill *Skill, required bool) string {
+	if required {
+		return "required_verifier"
+	}
+	if isDefaultVerifierSkill(skill) {
+		return "platform"
+	}
+	return "declared"
+}
+
+func isDefaultVerifierSkill(skill *Skill) bool {
+	if skill == nil {
+		return false
+	}
+	for _, name := range DefaultVerifierSkills {
+		if skill.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+func skillSourceRef(skill *Skill, rootSpecPath string) string {
+	if skill == nil || strings.TrimSpace(skill.Path) == "" {
+		return ""
+	}
+	path := skill.Path
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	if catalog := DefaultSkillsDir(); catalog != "" {
+		if rel, ok := relativePathWithin(catalog, path); ok {
+			return "catalog:" + rel
+		}
+	}
+	if rootSpecPath != "" {
+		if rel, err := filepath.Rel(filepath.Dir(rootSpecPath), path); err == nil {
+			return "path:" + filepath.ToSlash(rel)
+		}
+	}
+	return "path:" + filepath.ToSlash(path)
+}
+
+func relativePathWithin(root string, path string) (string, bool) {
+	rootAbs, err := filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(rootAbs, pathAbs)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 func digestPackage(specDigest string, skills map[string]string) string {

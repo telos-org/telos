@@ -1,11 +1,9 @@
 package telosd
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
@@ -17,12 +15,11 @@ type sessionSubstrate interface {
 
 type cloudSessionStore struct {
 	*sessionapi.FileStore
-	handles   routeHandleResolver
 	substrate sessionSubstrate
 }
 
-func newCloudSessionStore(base *sessionapi.FileStore, handles routeHandleResolver, substrate sessionSubstrate) *cloudSessionStore {
-	return &cloudSessionStore{FileStore: base, handles: handles, substrate: substrate}
+func newCloudSessionStore(base *sessionapi.FileStore, substrate sessionSubstrate) *cloudSessionStore {
+	return &cloudSessionStore{FileStore: base, substrate: substrate}
 }
 
 func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
@@ -38,7 +35,6 @@ func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessio
 		}
 		return nil, err
 	}
-	s.enrich(session, s.routes())
 	return session, nil
 }
 
@@ -64,7 +60,6 @@ func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUp
 		}
 		return nil, err
 	}
-	s.enrich(response.Session, s.routes())
 	return response, nil
 }
 
@@ -72,10 +67,6 @@ func (s *cloudSessionStore) List() ([]sessionapi.Session, error) {
 	sessions, err := s.FileStore.List()
 	if err != nil {
 		return nil, err
-	}
-	routes := s.routes()
-	for i := range sessions {
-		s.enrich(&sessions[i], routes)
 	}
 	return sessions, nil
 }
@@ -85,7 +76,6 @@ func (s *cloudSessionStore) Get(id string) (*sessionapi.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.enrich(session, s.routes())
 	return session, nil
 }
 
@@ -130,7 +120,6 @@ func (s *cloudSessionStore) Stop(id string) (*sessionapi.Session, error) {
 	if err != nil {
 		return nil, err
 	}
-	s.enrich(session, s.routes())
 	return session, nil
 }
 
@@ -139,28 +128,4 @@ func removeSessionDir(session *sessionapi.Session) {
 		return
 	}
 	_ = os.RemoveAll(*session.SessionDir)
-}
-
-func (s *cloudSessionStore) routes() []publicRoute {
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-	defer cancel()
-	routes, err := s.handles.Routes(ctx)
-	if err != nil {
-		return nil
-	}
-	return routes
-}
-
-func (s *cloudSessionStore) enrich(session *sessionapi.Session, routes []publicRoute) {
-	if session.ParentSessionID != nil && *session.ParentSessionID != "" {
-		return
-	}
-	if handle := productHandleFor(routes, *session); handle != "" {
-		uri := "https://" + stripScheme(handle)
-		session.ServiceURL = &uri
-	}
-	if handle := dashboardHandleFor(routes, *session); handle != "" {
-		url := "https://" + stripScheme(handle)
-		session.DashboardURL = &url
-	}
 }

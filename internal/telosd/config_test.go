@@ -182,10 +182,10 @@ func TestLoadConfigIgnoresLegacyWorkerShape(t *testing.T) {
 mode: cloud
 token_file: `+tokenPath+`
 worker:
-  substrate: kubernetes
-kubernetes:
-  agent_image: registry/telos-agent@sha256:abc123
-  image_pull_secret: registry-pull
+  substrate: legacy
+legacy_worker:
+  image: registry/telos-agent@sha256:abc123
+  pull_secret: registry-pull
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}

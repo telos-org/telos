@@ -24,9 +24,9 @@ func rootSessionContext() (rootContext, bool) {
 	if token == "" || sessionID == "" {
 		return rootContext{}, false
 	}
-	endpoint := strings.TrimSpace(os.Getenv("TELOS_CLUSTER_API_ENDPOINT"))
+	endpoint := strings.TrimSpace(os.Getenv("TELOS_API_ENDPOINT"))
 	if endpoint == "" {
-		endpoint = "http://telos-api.ns-telos-env.svc.cluster.local:8000"
+		endpoint = "http://127.0.0.1:8000"
 	}
 	return rootContext{
 		endpoint:  cloud.NormalizeEndpoint(endpoint),

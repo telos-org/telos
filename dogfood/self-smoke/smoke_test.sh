@@ -40,7 +40,7 @@ fail() {
 telos_cmd() {
   env \
     -u TELOS_API_TOKEN \
-    -u TELOS_CLUSTER_API_ENDPOINT \
+    -u TELOS_API_ENDPOINT \
     -u TELOS_RUNTIME \
     -u TELOS_SESSION_DIR \
     -u TELOS_SESSION_ID \

@@ -156,39 +156,12 @@ func StartEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid 
 }
 
 func RunnerIdentity(pid int) sessionapi.Runner {
-	runner := sessionapi.Runner{
+	return sessionapi.Runner{
 		Kind:      "local-subprocess",
 		PID:       pid,
 		PGID:      pid,
 		StartedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 	}
-	if os.Getenv("KUBERNETES_SERVICE_HOST") == "" {
-		return runner
-	}
-
-	runner.Kind = "kubernetes-pod"
-	runner.InCluster = true
-	if hostname := firstEnv("HOSTNAME"); hostname != "" {
-		runner.Hostname = hostname
-	}
-	if podName := firstEnv("TELOS_RUNNER_POD_NAME", "POD_NAME"); podName != "" {
-		runner.PodName = podName
-	} else if hostname := firstEnv("HOSTNAME"); hostname != "" {
-		runner.PodName = hostname
-	}
-	if namespace := firstEnv("TELOS_RUNNER_POD_NAMESPACE", "POD_NAMESPACE"); namespace != "" {
-		runner.PodNamespace = namespace
-	}
-	return runner
-}
-
-func firstEnv(names ...string) string {
-	for _, name := range names {
-		if value := os.Getenv(name); value != "" {
-			return value
-		}
-	}
-	return ""
 }
 
 func manifestPath(sessionDir string) string {

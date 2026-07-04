@@ -74,7 +74,7 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"Spec      hello-service",
-		"Platform  local",
+		"Target    local",
 		"Lineage   root",
 		"Mutates   no",
 		"Path      ./SPEC.md",
@@ -85,7 +85,7 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 			t.Fatalf("plan output missing %q:\n%s", want, text)
 		}
 	}
-	for _, notWant := range []string{"Target", "Namespace", "Plan for", "No sessions"} {
+	for _, notWant := range []string{"Namespace", "Plan for", "No sessions"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("plan output should not contain %q:\n%s", notWant, text)
 		}
@@ -108,14 +108,13 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",
-		"Platform  cloud",
+		"Target    cloud",
 		"Lineage   root",
 		"Mutates   no",
 		"Path      ./SPEC.md",
 		"Namespace ns-gitea",
 		"Hash      8a8f0c21",
 		"Skills    verify-engineering, verify-quality",
-		"Target    cloud deployment",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("plan output missing %q:\n%s", want, text)
@@ -458,7 +457,7 @@ func TestSessionCreateRequestRejectsMissingSpecPath(t *testing.T) {
 
 func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nschema: v0\nversion: 1.2\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nversion: 1.2\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	pkg, err := packageSpec(dir)
@@ -518,7 +517,7 @@ func TestApplyDeploymentPackageCreatesWithoutReconciliation(t *testing.T) {
 				t.Fatalf("body: got %#v", body)
 			}
 			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "dep_123",
+				"id":             "sess_123",
 				"name":           "auth",
 				"state":          "provisioning",
 				"package_ref":    "@telos/auth:1.2.3",
@@ -544,7 +543,7 @@ func TestApplyDeploymentPackageCreatesWithoutReconciliation(t *testing.T) {
 	if operation != "created" || !created || listed {
 		t.Fatalf("operation=%q created=%v listed=%v", operation, created, listed)
 	}
-	if deployment.ID != "dep_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
+	if deployment.ID != "sess_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
 		t.Fatalf("deployment: got %+v", deployment)
 	}
 }
@@ -554,7 +553,7 @@ func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			t.Fatal("apply without --deployment must not list deployments")
+			t.Fatal("apply without --session must not list cloud sessions")
 		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
 			created = true
 			var body map[string]string
@@ -565,7 +564,7 @@ func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
 				t.Fatalf("body: got %#v", body)
 			}
 			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "dep_123",
+				"id":             "sess_123",
 				"name":           "auth",
 				"state":          "provisioning",
 				"package_ref":    "@telos/auth:1.2.3",
@@ -591,7 +590,7 @@ func TestApplyDeploymentPackageCreatesWhenMissing(t *testing.T) {
 	if operation != "created" || !created {
 		t.Fatalf("operation=%q created=%v", operation, created)
 	}
-	if deployment.ID != "dep_123" {
+	if deployment.ID != "sess_123" {
 		t.Fatalf("deployment: got %+v", deployment)
 	}
 }
@@ -604,7 +603,7 @@ func TestApplyDeploymentPackageUpdatesExplicitDeployment(t *testing.T) {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
 			listed = true
 			http.NotFound(w, r)
-		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/dep_123":
+		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
 			updated = true
 			var body map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -614,7 +613,7 @@ func TestApplyDeploymentPackageUpdatesExplicitDeployment(t *testing.T) {
 				t.Fatalf("body: got %#v", body)
 			}
 			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "dep_123",
+				"id":             "sess_123",
 				"name":           "auth",
 				"state":          "deploying",
 				"package_ref":    "@telos/auth:1.2.3",
@@ -632,7 +631,7 @@ func TestApplyDeploymentPackageUpdatesExplicitDeployment(t *testing.T) {
 		cloud.NewClient(srv.URL, "test-token"),
 		"auth",
 		"@telos/auth:1.2.3",
-		"dep_123",
+		"sess_123",
 	)
 	if err != nil {
 		t.Fatalf("applyDeploymentPackage: %v", err)
@@ -640,7 +639,7 @@ func TestApplyDeploymentPackageUpdatesExplicitDeployment(t *testing.T) {
 	if operation != "updated" || !updated || listed {
 		t.Fatalf("operation=%q updated=%v listed=%v", operation, updated, listed)
 	}
-	if deployment.ID != "dep_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
+	if deployment.ID != "sess_123" || deployment.PackageRef != "@telos/auth:1.2.3" {
 		t.Fatalf("deployment: got %+v", deployment)
 	}
 }
@@ -649,7 +648,7 @@ func TestRootSessionContextUsesScopedToken(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	t.Setenv("TELOS_API_TOKEN", "session-token")
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
-	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", "http://telos-api.local:8000")
+	t.Setenv("TELOS_API_ENDPOINT", "http://telos-api.local:8000")
 
 	ctx, ok := rootSessionContext()
 	if !ok {
@@ -666,11 +665,25 @@ func TestRootSessionContextUsesScopedToken(t *testing.T) {
 	}
 }
 
+func TestRootSessionContextDefaultsToLocalAPI(t *testing.T) {
+	t.Setenv("TELOS_RUNTIME", "")
+	t.Setenv("TELOS_API_TOKEN", "session-token")
+	t.Setenv("TELOS_SESSION_ID", "sess_parent")
+
+	ctx, ok := rootSessionContext()
+	if !ok {
+		t.Fatal("expected root context")
+	}
+	if ctx.endpoint != "http://127.0.0.1:8000" {
+		t.Fatalf("endpoint: got %q", ctx.endpoint)
+	}
+}
+
 func TestRootSessionContextIgnoresLocalRuntime(t *testing.T) {
 	t.Setenv("TELOS_API_TOKEN", "session-token")
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
-	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", "http://telos-api.local:8000")
+	t.Setenv("TELOS_API_ENDPOINT", "http://telos-api.local:8000")
 
 	if ctx, ok := rootSessionContext(); ok {
 		t.Fatalf("local runtime should not be cloud root context: %#v", ctx)
@@ -834,7 +847,7 @@ func TestFollowTranscriptSurfacesRootTranscriptError(t *testing.T) {
 	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
 	t.Setenv("TELOS_API_TOKEN", "scoped-token")
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
-	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
+	t.Setenv("TELOS_API_ENDPOINT", cluster.URL)
 
 	var out bytes.Buffer
 	err := followTranscript("sess_running", &out, func(time.Duration) {
@@ -935,7 +948,7 @@ func TestFollowDeploymentLogsStreamsEvents(t *testing.T) {
 	var logCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/dep_123/logs":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_123/logs":
 			logCalls++
 			if r.Header.Get("Accept") != "text/event-stream" {
 				t.Fatalf("Accept: got %q", r.Header.Get("Accept"))
@@ -951,7 +964,7 @@ func TestFollowDeploymentLogsStreamsEvents(t *testing.T) {
 	var out bytes.Buffer
 	err := streamDeploymentLogs(
 		cloud.NewClient(srv.URL, "test-token"),
-		"dep_123",
+		"sess_123",
 		&out,
 		func(time.Duration) {},
 		false,
@@ -980,7 +993,7 @@ func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
 	t.Setenv("TELOS_API_TOKEN", "scoped-token")
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
-	t.Setenv("TELOS_CLUSTER_API_ENDPOINT", cluster.URL)
+	t.Setenv("TELOS_API_ENDPOINT", cluster.URL)
 
 	_, err := getSessionFromAnywhere("sess_root")
 	if err == nil {

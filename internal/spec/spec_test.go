@@ -74,6 +74,23 @@ func TestLoadEnvironmentEmptyBody(t *testing.T) {
 func TestLoadEnvironmentWithPackageVersion(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
+	os.WriteFile(specPath, []byte("---\nversion: 1.2.3\nname: versioned\n---\nBody"), 0o644)
+
+	env, err := LoadEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("LoadEnvironment: %v", err)
+	}
+	if env.Version != "v0" {
+		t.Errorf("schema version: got %q", env.Version)
+	}
+	if env.PackageVersion != "1.2.3" {
+		t.Errorf("package version: got %q", env.PackageVersion)
+	}
+}
+
+func TestLoadEnvironmentWithExplicitSchemaCompatibility(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nschema: v0\nversion: 1.2.3\nname: versioned\n---\nBody"), 0o644)
 
 	env, err := LoadEnvironment(specPath)
