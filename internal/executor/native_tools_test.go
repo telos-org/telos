@@ -843,6 +843,62 @@ func TestNativeSessionLoggerIncludesToolMetadata(t *testing.T) {
 	}
 }
 
+func TestNativeSessionLoggerRedactsToolPreviewMetadata(t *testing.T) {
+	t.Setenv("TELOS_SESSION_LOG_RAW", "1")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	logger := newNativeSessionLogger(path, dir)
+	if err := logger.start(); err != nil {
+		t.Fatal(err)
+	}
+	result := nativeToolResult{
+		CallID: "call_1",
+		Name:   "write_file",
+		Output: "tool: write_file\nok: true\npreview:\nproprietary-content\n",
+		Metadata: map[string]any{
+			"preview":       "proprietary-content",
+			"changed_files": []string{"secret.txt"},
+		},
+	}
+	if err := logger.tool(result); err != nil {
+		t.Fatal(err)
+	}
+	if err := logger.close(); err != nil {
+		t.Fatal(err)
+	}
+
+	events := sessionLogEventsByType(t, path, "tool_result")
+	if len(events) != 1 {
+		t.Fatalf("tool_result events: %#v", events)
+	}
+	metadata, ok := events[0]["metadata"].(map[string]any)
+	if !ok {
+		t.Fatalf("metadata missing: %#v", events[0])
+	}
+	if metadata["preview"] != redactedSecret {
+		t.Fatalf("redacted preview metadata: %#v", metadata)
+	}
+	messages := sessionLogRawEventsByType(t, path, "message")
+	var redactedToolText string
+	for _, event := range messages {
+		if event.Message != nil && event.Message.Role == "toolResult" {
+			redactedToolText = event.Message.Content[0].Text
+		}
+	}
+	if redactedToolText != redactedSecret {
+		t.Fatalf("redacted tool message: %q", redactedToolText)
+	}
+
+	rawEvents := sessionLogEventsByType(t, rawSessionLogPath(path), "tool_result")
+	if len(rawEvents) != 1 {
+		t.Fatalf("raw tool_result events: %#v", rawEvents)
+	}
+	rawMetadata, ok := rawEvents[0]["metadata"].(map[string]any)
+	if !ok || rawMetadata["preview"] != "proprietary-content" {
+		t.Fatalf("raw preview metadata: %#v", rawEvents[0])
+	}
+}
+
 func TestNativeToolsApplyPatchReportsStructuredMetadata(t *testing.T) {
 	workspace := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workspace, "old.txt"), []byte("before\n"), 0o644); err != nil {

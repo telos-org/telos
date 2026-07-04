@@ -1825,6 +1825,52 @@ func TestNativeExecutorRepeatedFailedToolBatchesEscalateThenTerminate(t *testing
 	assertTerminalState(t, ts.SessionPath(), TerminalToolFailed)
 }
 
+func TestNativeExecutorRepeatedPolicyDeniedToolBatchesTerminatePolicyBlocked(t *testing.T) {
+	workspace := t.TempDir()
+	outsidePath := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outsidePath, []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"id":     "resp_policy",
+			"status": "completed",
+			"output": []map[string]any{{
+				"type":      "function_call",
+				"call_id":   "call_policy",
+				"name":      "read_file",
+				"arguments": mustJSON(map[string]string{"path": outsidePath}),
+			}},
+			"usage": map[string]any{
+				"input_tokens":  5,
+				"output_tokens": 1,
+				"input_tokens_details": map[string]any{
+					"cached_tokens": 0,
+				},
+			},
+		})
+	}))
+	defer server.Close()
+
+	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
+	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
+
+	exec := newTestNativeExecutor(t, platform.NewLocalPlatform(workspace), "test/test-model", "high", 0)
+	ts := &game.TurnState{Role: "prover", Dir: filepath.Join(workspace, ".turn"), Budget: game.TurnBudget{MaxToolLoops: 10}}
+	result := exec.ExecuteTurn("Keep trying an outside path.", ts)
+
+	if !result.Recoverable || !strings.Contains(result.Error, "tool_policy_denied:repeated_tool_failures:6") {
+		t.Fatalf("expected repeated policy denial, got %+v", result)
+	}
+	if requests != 6 {
+		t.Fatalf("requests: got %d", requests)
+	}
+	assertTerminalState(t, ts.SessionPath(), TerminalPolicyBlocked)
+}
+
 func TestNativeExecutorStrictProtocolRejectsMalformedProgressUpdate(t *testing.T) {
 	workspace := t.TempDir()
 	var requests int

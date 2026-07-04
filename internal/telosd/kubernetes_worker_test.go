@@ -281,6 +281,14 @@ func TestKubernetesSubstrateRecreatesSessionAPITokenSecretOnRelaunch(t *testing.
 	if first == "" {
 		t.Fatal("first session API token secret is empty")
 	}
+	userScoped, err := sessionapi.NewScopedToken(session.SessionID, sessionapi.KindController)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := sessionapi.NewFileStore(filepath.Dir(ptrValue(session.SessionDir)), sessionapi.RuntimeCloud)
+	if err := store.IndexScopedToken(session.SessionID, sessionapi.KindController, userScoped); err != nil {
+		t.Fatal(err)
+	}
 	if err := substrate.Apply(session, "controller_relaunched", ""); err != nil {
 		t.Fatal(err)
 	}
@@ -291,7 +299,9 @@ func TestKubernetesSubstrateRecreatesSessionAPITokenSecretOnRelaunch(t *testing.
 	if second == first {
 		t.Fatal("session API token secret was not rotated on relaunch")
 	}
+	assertSessionTokenDoesNotAuthenticate(t, session, first)
 	assertSessionTokenAuthenticates(t, session, second, sessionapi.KindController)
+	assertSessionTokenAuthenticates(t, session, userScoped.APIToken, sessionapi.KindController)
 }
 
 func TestKubernetesSubstrateRotatesLegacyManifestAPITokenIntoSecret(t *testing.T) {
@@ -1637,6 +1647,14 @@ func assertSessionTokenAuthenticates(t *testing.T, session *sessionapi.Session, 
 	}
 	if caller.Role != wantRole {
 		t.Fatalf("token role: got %q want %q", caller.Role, wantRole)
+	}
+}
+
+func assertSessionTokenDoesNotAuthenticate(t *testing.T, session *sessionapi.Session, token string) {
+	t.Helper()
+	store := sessionapi.NewFileStore(filepath.Dir(ptrValue(session.SessionDir)), sessionapi.RuntimeCloud)
+	if caller, ok := store.CallerForToken(token); ok {
+		t.Fatalf("token should not authenticate: caller=%#v", caller)
 	}
 }
 

@@ -106,10 +106,40 @@ func redactToolArguments(toolName, raw string) string {
 
 func redactToolOutput(toolName, output string) string {
 	meta, ok := nativeToolMetadataForName(toolName)
-	if ok && len(meta.redactOutputs) > 0 && strings.TrimSpace(output) != "" {
+	if ok && (len(meta.redactOutputs) > 0 || meta.previewOutputs) && strings.TrimSpace(output) != "" {
 		return redactedSecret
 	}
 	return scrubSecrets(output)
+}
+
+func redactToolMetadata(toolName string, metadata map[string]any) map[string]any {
+	if metadata == nil {
+		return nil
+	}
+	redacted := map[string]any{}
+	if data, err := json.Marshal(metadata); err == nil {
+		dec := json.NewDecoder(strings.NewReader(string(data)))
+		dec.UseNumber()
+		if err := dec.Decode(&redacted); err != nil {
+			redacted = map[string]any{}
+		}
+	}
+	if len(redacted) == 0 {
+		for key, value := range metadata {
+			redacted[key] = value
+		}
+	}
+	redacted = scrubJSONValue(redacted).(map[string]any)
+	meta, ok := nativeToolMetadataForName(toolName)
+	if !ok || (!meta.previewOutputs && len(meta.redactOutputs) == 0) {
+		return redacted
+	}
+	for _, key := range []string{"preview", "content", "diff", "patch", "stdout", "stderr", "output"} {
+		if _, ok := redacted[key]; ok {
+			redacted[key] = redactedSecret
+		}
+	}
+	return redacted
 }
 
 func redactKeys(value any, keys []string) {
@@ -230,11 +260,11 @@ func normalizeSensitiveKey(key string) string {
 func nativeToolMetadataForName(name string) (nativeToolMetadata, bool) {
 	switch name {
 	case "write_file", "write":
-		return nativeToolMetadata{redactArgs: []string{"content"}}, true
+		return nativeToolMetadata{redactArgs: []string{"content"}, previewOutputs: true}, true
 	case "replace_text", "edit":
-		return nativeToolMetadata{redactArgs: []string{"old_string", "new_string"}}, true
+		return nativeToolMetadata{redactArgs: []string{"old_string", "new_string"}, previewOutputs: true}, true
 	case "apply_patch":
-		return nativeToolMetadata{redactArgs: []string{"patch"}}, true
+		return nativeToolMetadata{redactArgs: []string{"patch"}, previewOutputs: true}, true
 	case "bash":
 		return nativeToolMetadata{redactArgs: []string{"command", "env"}, redactOutputs: []string{"stdout", "stderr"}}, true
 	default:

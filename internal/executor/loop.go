@@ -361,7 +361,11 @@ func (l *agentLoop) run(ctx context.Context) (string, game.TurnStats, error) {
 		if allToolResultsFailed(results) {
 			failedToolBatches++
 			if failedToolBatches >= maxFailedToolBatchStops {
-				err := newExecutorError(errToolInfra, fmt.Sprintf("repeated_tool_failures:%d", failedToolBatches))
+				code := errToolInfra
+				if allToolResultsPolicyDenied(results) {
+					code = errToolPolicyDenied
+				}
+				err := newExecutorError(code, fmt.Sprintf("repeated_tool_failures:%d", failedToolBatches))
 				_ = l.logger.errorEvent(l.client.sequence, err)
 				return "", stats, err
 			}
@@ -430,6 +434,18 @@ func allToolResultsFailed(results []nativeToolResult) bool {
 	}
 	for _, result := range results {
 		if !result.IsError {
+			return false
+		}
+	}
+	return true
+}
+
+func allToolResultsPolicyDenied(results []nativeToolResult) bool {
+	if len(results) == 0 {
+		return false
+	}
+	for _, result := range results {
+		if !result.IsError || result.ErrorCode != errToolPolicyDenied {
 			return false
 		}
 	}

@@ -468,6 +468,14 @@ func (l *nativeSessionLogger) redactedEvent(event sessionEvent) sessionEvent {
 		} else {
 			event.Data = scrubJSONStrings(event.Data)
 		}
+	case agentsession.KindToolResult:
+		var p agentsession.ToolResultPayload
+		if err := json.Unmarshal(event.Data, &p); err == nil {
+			p.Metadata = redactToolMetadata(p.ToolName, p.Metadata)
+			event.Data = agentsession.MarshalPayload(&p)
+		} else {
+			event.Data = scrubJSONStrings(event.Data)
+		}
 	case agentsession.KindReasoningSanitized:
 		var p agentsession.ReasoningSanitizedPayload
 		if err := json.Unmarshal(event.Data, &p); err == nil {

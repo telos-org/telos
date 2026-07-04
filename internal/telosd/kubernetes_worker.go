@@ -582,11 +582,12 @@ func (s kubernetesSubstrate) workerEnv(sessionID string, m *sessionapi.Manifest,
 }
 
 func (s kubernetesSubstrate) recreateSessionAPITokenSecret(ctx context.Context, namespace string, session *sessionapi.Session, kind sessionapi.SessionKind, m *sessionapi.Manifest) (string, error) {
-	token, err := mintSessionAPIToken(session, kind, m)
+	name := sessionAPITokenSecretName(session.SessionID)
+	previousToken := s.existingSessionAPITokenSecret(ctx, namespace, name)
+	token, err := mintSessionAPIToken(session, kind, m, previousToken)
 	if err != nil {
 		return "", err
 	}
-	name := sessionAPITokenSecretName(session.SessionID)
 	if err := s.deleteSecret(ctx, namespace, name); err != nil {
 		return "", fmt.Errorf("delete session API token secret %s/%s: %w", namespace, name, err)
 	}
@@ -596,7 +597,15 @@ func (s kubernetesSubstrate) recreateSessionAPITokenSecret(ctx context.Context, 
 	return name, nil
 }
 
-func mintSessionAPIToken(session *sessionapi.Session, kind sessionapi.SessionKind, m *sessionapi.Manifest) (string, error) {
+func (s kubernetesSubstrate) existingSessionAPITokenSecret(ctx context.Context, namespace string, name string) string {
+	secret, err := s.client.CoreV1().Secrets(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(secret.Data[sessionAPITokenSecretKey]))
+}
+
+func mintSessionAPIToken(session *sessionapi.Session, kind sessionapi.SessionKind, m *sessionapi.Manifest, previousTokens ...string) (string, error) {
 	if session == nil {
 		return "", fmt.Errorf("mint session API token: session is required")
 	}
@@ -604,7 +613,7 @@ func mintSessionAPIToken(session *sessionapi.Session, kind sessionapi.SessionKin
 	if err == nil {
 		store, storeErr := fileStoreForSession(session)
 		if storeErr == nil {
-			if indexErr := store.IndexScopedToken(session.SessionID, kind, access); indexErr == nil {
+			if indexErr := store.ReplaceWorkerScopedToken(session.SessionID, kind, access, previousTokens...); indexErr == nil {
 				return access.APIToken, nil
 			} else {
 				err = indexErr

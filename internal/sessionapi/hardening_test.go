@@ -167,6 +167,44 @@ func TestScopedTokenHashIndexLegacyAndRevocation(t *testing.T) {
 	}
 }
 
+func TestReplaceWorkerScopedTokenRevokesPreviousWorkerOnly(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+
+	previousWorker, err := sessionapi.NewScopedToken("sess_worker", sessionapi.KindController)
+	if err != nil {
+		t.Fatal(err)
+	}
+	userScoped, err := sessionapi.NewScopedToken("sess_worker", sessionapi.KindController)
+	if err != nil {
+		t.Fatal(err)
+	}
+	replacement, err := sessionapi.NewScopedToken("sess_worker", sessionapi.KindController)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeManifestWithAccess(t, root, "sess_worker", sessionapi.KindController, userScoped, false)
+	if err := store.IndexScopedToken("sess_worker", sessionapi.KindController, previousWorker); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.IndexScopedToken("sess_worker", sessionapi.KindController, userScoped); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReplaceWorkerScopedToken("sess_worker", sessionapi.KindController, replacement, previousWorker.APIToken); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, ok := store.CallerForToken(previousWorker.APIToken); ok {
+		t.Fatal("previous worker token authenticated")
+	}
+	if caller, ok := store.CallerForToken(replacement.APIToken); !ok || caller.SubjectSessionID != "sess_worker" || caller.Role != sessionapi.RoleController {
+		t.Fatalf("replacement worker token did not authenticate: caller=%#v ok=%v", caller, ok)
+	}
+	if caller, ok := store.CallerForToken(userScoped.APIToken); !ok || caller.SubjectSessionID != "sess_worker" || caller.Role != sessionapi.RoleController {
+		t.Fatalf("user scoped token should survive: caller=%#v ok=%v", caller, ok)
+	}
+}
+
 func TestStoreEventSequenceIntegrity(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)

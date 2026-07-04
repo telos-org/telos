@@ -426,6 +426,7 @@ func scanResponsesSSE(r io.Reader, events chan<- providercore.Event) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 64<<10), 4<<20)
 	var data strings.Builder
+	state := newResponsesStreamState()
 	flush := func() bool {
 		raw := strings.TrimSpace(data.String())
 		data.Reset()
@@ -437,7 +438,7 @@ func scanResponsesSSE(r io.Reader, events chan<- providercore.Event) {
 			events <- providercore.Event{Type: providercore.EventError, Error: providercore.Classify(0, "malformed response stream: "+err.Error())}
 			return false
 		}
-		return emitResponsesEvent(payload, events)
+		return state.emit(payload, events)
 	}
 	for scanner.Scan() {
 		line := scanner.Text()
@@ -455,6 +456,14 @@ func scanResponsesSSE(r io.Reader, events chan<- providercore.Event) {
 		}
 	}
 	_ = flush()
+}
+
+type responsesStreamState struct {
+	itemToCallID map[string]string
+}
+
+func newResponsesStreamState() *responsesStreamState {
+	return &responsesStreamState{itemToCallID: map[string]string{}}
 }
 
 type responsesStreamEvent struct {
@@ -489,7 +498,7 @@ type responsesStreamEvent struct {
 	Code    string `json:"code"`
 }
 
-func emitResponsesEvent(payload responsesStreamEvent, events chan<- providercore.Event) bool {
+func (s *responsesStreamState) emit(payload responsesStreamEvent, events chan<- providercore.Event) bool {
 	switch payload.Type {
 	case "response.output_text.delta":
 		events <- providercore.Event{Type: providercore.EventTextDelta, Text: payload.Delta}
@@ -498,16 +507,19 @@ func emitResponsesEvent(payload responsesStreamEvent, events chan<- providercore
 	case "response.output_item.added":
 		if payload.Item != nil && payload.Item.Type == "function_call" {
 			id := firstNonEmpty(payload.Item.CallID, payload.Item.ID, payload.ItemID)
+			s.rememberItemCall(payload, id)
 			events <- providercore.Event{Type: providercore.EventToolCallStart, ToolCallID: id, ToolName: payload.Item.Name}
 			if payload.Item.Arguments != "" {
 				events <- providercore.Event{Type: providercore.EventToolCallDelta, ToolCallID: id, ArgumentsFragment: payload.Item.Arguments}
 			}
 		}
 	case "response.function_call_arguments.delta":
-		events <- providercore.Event{Type: providercore.EventToolCallDelta, ToolCallID: payload.ItemID, ArgumentsFragment: payload.Delta}
+		id := s.callIDForItem(payload.ItemID)
+		events <- providercore.Event{Type: providercore.EventToolCallDelta, ToolCallID: id, ArgumentsFragment: payload.Delta}
 	case "response.output_item.done":
 		if payload.Item != nil && payload.Item.Type == "function_call" {
 			id := firstNonEmpty(payload.Item.CallID, payload.Item.ID, payload.ItemID)
+			s.rememberItemCall(payload, id)
 			events <- providercore.Event{Type: providercore.EventToolCallEnd, ToolCallID: id}
 		}
 	case "response.completed", "response.incomplete":
@@ -534,6 +546,29 @@ func emitResponsesEvent(payload responsesStreamEvent, events chan<- providercore
 		return false
 	}
 	return true
+}
+
+func (s *responsesStreamState) rememberItemCall(payload responsesStreamEvent, callID string) {
+	if s == nil || strings.TrimSpace(callID) == "" || payload.Item == nil {
+		return
+	}
+	for _, itemID := range []string{payload.Item.ID, payload.ItemID} {
+		itemID = strings.TrimSpace(itemID)
+		if itemID != "" {
+			s.itemToCallID[itemID] = callID
+		}
+	}
+}
+
+func (s *responsesStreamState) callIDForItem(itemID string) string {
+	itemID = strings.TrimSpace(itemID)
+	if s == nil || itemID == "" {
+		return itemID
+	}
+	if callID := strings.TrimSpace(s.itemToCallID[itemID]); callID != "" {
+		return callID
+	}
+	return itemID
 }
 
 func classifyHTTPBody(resp *http.Response, secrets ...string) error {

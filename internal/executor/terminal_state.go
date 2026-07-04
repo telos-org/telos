@@ -38,6 +38,8 @@ func terminalStateForError(err error, ctx context.Context) TerminalState {
 			return TerminalInterrupted
 		case errAgentIncomplete, errAgentProtocol:
 			return TerminalIncomplete
+		case errToolPolicyDenied:
+			return TerminalPolicyBlocked
 		case errToolInfra, errToolTimeout:
 			return TerminalToolFailed
 		case errConfig, errProviderRateLimited, errProviderTimeout, errProviderUnavailable, errProviderInvalidRequest, errProviderContextLimit:

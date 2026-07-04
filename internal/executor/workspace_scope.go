@@ -16,6 +16,14 @@ type scopedPath struct {
 	rel  string
 }
 
+type policyDeniedError struct {
+	reason string
+}
+
+func (e policyDeniedError) Error() string {
+	return e.reason
+}
+
 func newWorkspaceScope(root string) (*workspaceScope, error) {
 	if strings.TrimSpace(root) == "" {
 		return nil, fmt.Errorf("workspace root is required")
@@ -138,7 +146,7 @@ func (s *workspaceScope) recheckWriteTarget(target string, requested string) err
 			if relErr != nil {
 				symlinkRel = current
 			}
-			return fmt.Errorf("%s must not traverse symlink %s", requested, filepath.ToSlash(symlinkRel))
+			return policyDeniedError{reason: fmt.Sprintf("%s must not traverse symlink %s", requested, filepath.ToSlash(symlinkRel))}
 		}
 	}
 	return nil
@@ -150,5 +158,5 @@ func (s *workspaceScope) contains(full string) bool {
 }
 
 func outsideWorkspaceError(requestedPath string) error {
-	return fmt.Errorf("%s must stay inside the workspace", requestedPath)
+	return policyDeniedError{reason: fmt.Sprintf("%s must stay inside the workspace", requestedPath)}
 }

@@ -72,7 +72,11 @@ func (r *nativeToolRegistry) run(t *nativeTools, ctx context.Context, call nativ
 		return nativeToolResult{CallID: call.ID, Name: call.Name, Output: err.Error(), IsError: true, ErrorCode: errAgentProtocol}
 	}
 	if err := t.preflightToolPaths(tool, args); err != nil {
-		return nativeToolResult{CallID: call.ID, Name: call.Name, Output: err.Error(), IsError: true, ErrorCode: errAgentProtocol, Metadata: t.envelopeMetadata(nil)}
+		code := errAgentProtocol
+		if isToolPolicyDenial(err) {
+			code = errToolPolicyDenied
+		}
+		return nativeToolResult{CallID: call.ID, Name: call.Name, Output: err.Error(), IsError: true, ErrorCode: code, Metadata: t.envelopeMetadata(nil)}
 	}
 
 	started := time.Now()

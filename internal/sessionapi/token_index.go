@@ -18,11 +18,14 @@ type scopedTokenIndex struct {
 	Tokens map[string]ScopedTokenIndexEntry `json:"tokens"`
 }
 
+const ScopedTokenPurposeWorker = "worker"
+
 type ScopedTokenIndexEntry struct {
 	SessionID string   `json:"session_id"`
 	Role      Role     `json:"role"`
 	Scopes    []string `json:"scopes,omitempty"`
 	ExpiresAt string   `json:"expires_at,omitempty"`
+	Purpose   string   `json:"purpose,omitempty"`
 }
 
 func hashScopedToken(token string) string {
@@ -52,6 +55,10 @@ func (fs *FileStore) IndexScopedToken(sessionID string, sessionKind SessionKind,
 }
 
 func (fs *FileStore) indexScopedTokenLocked(sessionID string, sessionKind SessionKind, access *ScopedToken) error {
+	return fs.indexScopedTokenWithPurposeLocked(sessionID, sessionKind, access, "")
+}
+
+func (fs *FileStore) indexScopedTokenWithPurposeLocked(sessionID string, sessionKind SessionKind, access *ScopedToken, purpose string) error {
 	hash := strings.TrimSpace(access.TokenSHA256)
 	if hash == "" && strings.TrimSpace(access.APIToken) != "" {
 		hash = hashScopedToken(access.APIToken)
@@ -67,8 +74,69 @@ func (fs *FileStore) indexScopedTokenLocked(sessionID string, sessionKind Sessio
 		SessionID: sessionID,
 		Role:      roleForSessionKind(sessionKind),
 		Scopes:    append([]string(nil), access.Scopes...),
+		Purpose:   strings.TrimSpace(purpose),
 	}
 	return fs.writeTokenIndexLocked(index)
+}
+
+func (fs *FileStore) ReplaceWorkerScopedToken(sessionID string, sessionKind SessionKind, access *ScopedToken, previousTokens ...string) error {
+	if access == nil {
+		return nil
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	return fs.withStoreLock(func() error {
+		index, err := fs.readTokenIndexLocked()
+		if err != nil {
+			return err
+		}
+		previousHashes := map[string]bool{}
+		for _, token := range previousTokens {
+			token = strings.TrimSpace(token)
+			if token != "" {
+				previousHashes[hashScopedToken(token)] = true
+			}
+		}
+		var revoked []struct {
+			hash  string
+			entry ScopedTokenIndexEntry
+		}
+		for hash, entry := range index.Tokens {
+			if entry.SessionID == sessionID && (entry.Purpose == ScopedTokenPurposeWorker || previousHashes[hash]) {
+				revoked = append(revoked, struct {
+					hash  string
+					entry ScopedTokenIndexEntry
+				}{hash: hash, entry: entry})
+				delete(index.Tokens, hash)
+			}
+		}
+		hash := strings.TrimSpace(access.TokenSHA256)
+		if hash == "" && strings.TrimSpace(access.APIToken) != "" {
+			hash = hashScopedToken(access.APIToken)
+		}
+		if hash == "" {
+			return fs.writeTokenIndexLocked(index)
+		}
+		index.Tokens[hash] = ScopedTokenIndexEntry{
+			SessionID: sessionID,
+			Role:      roleForSessionKind(sessionKind),
+			Scopes:    append([]string(nil), access.Scopes...),
+			Purpose:   ScopedTokenPurposeWorker,
+		}
+		if err := fs.writeTokenIndexLocked(index); err != nil {
+			return err
+		}
+		for _, item := range revoked {
+			if _, err := fs.appendStoreEventLocked(item.entry.SessionID, EventScopedTokenRevoked, map[string]any{
+				"token_sha256": item.hash,
+				"role":         item.entry.Role,
+				"purpose":      item.entry.Purpose,
+			}); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func (fs *FileStore) RevokeScopedToken(token string) (bool, error) {

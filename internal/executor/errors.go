@@ -13,6 +13,7 @@ const (
 	errProviderContextLimit   executorErrorCode = "provider_context_limit"
 	errToolTimeout            executorErrorCode = "tool_timeout"
 	errToolInfra              executorErrorCode = "tool_infra"
+	errToolPolicyDenied       executorErrorCode = "tool_policy_denied"
 	errAgentProtocol          executorErrorCode = "agent_protocol"
 	errAgentIncomplete        executorErrorCode = "agent_incomplete"
 	errRuntimeBudgetExhausted executorErrorCode = "runtime_budget_exhausted"

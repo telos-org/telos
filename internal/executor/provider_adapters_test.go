@@ -162,6 +162,37 @@ func TestCodexAdapterRequestHeadersAndRefresh(t *testing.T) {
 	}
 }
 
+func TestCodexAdapterStreamsToolArgumentsByItemID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/backend-api/codex/responses" {
+			t.Fatalf("path=%s", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		fmt.Fprint(w, "data: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"read_file\"}}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"delta\":\"{\\\"path\\\":\"}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.function_call_arguments.delta\",\"item_id\":\"fc_1\",\"delta\":\"\\\"a.txt\\\"}\"}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"function_call\",\"id\":\"fc_1\",\"call_id\":\"call_1\",\"name\":\"read_file\"}}\n\n")
+		fmt.Fprint(w, "data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"status\":\"completed\",\"usage\":{\"input_tokens\":1,\"output_tokens\":2}}}\n\n")
+	}))
+	defer server.Close()
+	adapter := newProviderCoreAdapter(server.Client(), nativeProviderConfig{
+		Protocol: gatewaycred.ProviderCodex,
+		BaseURL:  server.URL,
+		APIKey:   "access-token",
+	}, 64, nil)
+	got, err := adapter.Complete(context.Background(), coreTestRequest("gpt-5"), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.ToolCalls) != 1 {
+		t.Fatalf("tool calls=%#v", got.ToolCalls)
+	}
+	call := got.ToolCalls[0]
+	if call.ID != "call_1" || call.Name != "read_file" || call.Arguments != `{"path":"a.txt"}` {
+		t.Fatalf("tool call=%#v", call)
+	}
+}
+
 func TestProviderContextLimitClassification(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

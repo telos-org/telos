@@ -2566,6 +2566,53 @@ func TestSSEProtocolEventsOrderedResumeAndTerminalClose(t *testing.T) {
 	}
 }
 
+func TestProtocolEventsServeRedactedToolResultMetadata(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	markdown := "---\nversion: v0\nname: redaction-demo\nplatform: local\n---\n# Redaction\n"
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	turnDir := filepath.Join(store.Root, session.SessionID, "specs", "redaction-demo", "turns", "0001-prover")
+	if err := os.MkdirAll(turnDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeProtocolLog(t, filepath.Join(turnDir, "session.jsonl"), []agentsession.Event{
+		{
+			Type: agentsession.KindToolResult,
+			Data: agentsession.MarshalPayload(agentsession.ToolResultPayload{
+				ToolCallID: "call_1",
+				ToolName:   "write_file",
+				Metadata: map[string]any{
+					"preview":          "[REDACTED]",
+					"containment_mode": "session-workspace",
+					"changed_files":    []string{"secret.txt"},
+				},
+			}),
+		},
+	})
+
+	events, err := store.ProtocolEvents(session.SessionID, sessionapi.ProtocolEventsOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(events) != 1 || events[0].Type != agentsession.KindToolCallResult {
+		t.Fatalf("events: %#v", events)
+	}
+	payload, err := agentsession.Unmarshal[agentsession.ToolCallResultStreamPayload](&events[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if payload.Metadata["preview"] != "[REDACTED]" || payload.ContainmentMode != "session-workspace" {
+		t.Fatalf("payload: %#v", payload)
+	}
+	if !payload.Redacted || payload.Redaction["output"] != true {
+		t.Fatalf("redaction flags: %#v", payload)
+	}
+}
+
 func writeProtocolLog(t *testing.T, path string, events []agentsession.Event) {
 	t.Helper()
 	file, err := os.Create(path)

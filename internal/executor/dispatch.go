@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"os"
 	"regexp"
 	"strings"
 
@@ -129,6 +130,9 @@ func classifyToolError(err error) executorErrorCode {
 	if err == nil {
 		return ""
 	}
+	if isToolPolicyDenial(err) {
+		return errToolPolicyDenied
+	}
 	var failure toolFailure
 	if errors.As(err, &failure) {
 		return failure.code
@@ -146,6 +150,17 @@ func classifyToolError(err error) executorErrorCode {
 	default:
 		return ""
 	}
+}
+
+func isToolPolicyDenial(err error) bool {
+	if err == nil {
+		return false
+	}
+	var denied policyDeniedError
+	if errors.As(err, &denied) {
+		return true
+	}
+	return errors.Is(err, os.ErrPermission)
 }
 
 type toolFailure struct {
