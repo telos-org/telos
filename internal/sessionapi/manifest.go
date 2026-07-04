@@ -87,7 +87,8 @@ type Runner struct {
 }
 
 type ScopedToken struct {
-	APIToken         string   `json:"api_token"`
+	APIToken         string   `json:"api_token,omitempty"`
+	TokenSHA256      string   `json:"token_sha256,omitempty"`
 	SubjectSessionID string   `json:"subject_session_id"`
 	Scopes           []string `json:"scopes"`
 }
@@ -242,17 +243,28 @@ func WriteManifest(path string, m *Manifest) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
+	return withFileLock(path+".lock", func() error {
+		copy := manifestForDisk(m)
+		data, err := json.MarshalIndent(copy, "", "  ")
+		if err != nil {
+			return err
+		}
+		data = append(data, '\n')
+		return writeFileDurable(path, data, 0o600)
+	})
+}
 
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
+func manifestForDisk(m *Manifest) Manifest {
+	copy := *m
+	if m.Access != nil {
+		access := *m.Access
+		if access.TokenSHA256 == "" && access.APIToken != "" {
+			access.TokenSHA256 = hashScopedToken(access.APIToken)
+		}
+		access.APIToken = ""
+		copy.Access = &access
 	}
-	return os.Rename(tmp, path)
+	return copy
 }
 
 func (m *Manifest) LastEpoch() *Epoch {

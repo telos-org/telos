@@ -83,7 +83,13 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	return fs.createLocked(req)
+	var session *Session
+	err := fs.withStoreLock(func() error {
+		var err error
+		session, err = fs.createLocked(req)
+		return err
+	})
+	return session, err
 }
 
 func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
@@ -184,6 +190,9 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	}
 
 	if err := WriteManifest(fs.manifestPath(id), &m); err != nil {
+		return nil, err
+	}
+	if err := fs.indexScopedTokenLocked(id, sessionKind, access); err != nil {
 		return nil, err
 	}
 
@@ -350,6 +359,16 @@ func (fs *FileStore) UpdateSpec(name string, req SessionSpecUpdateRequest) (*Ses
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
+	var response *SessionSpecUpdateResponse
+	err := fs.withStoreLock(func() error {
+		var err error
+		response, err = fs.updateSpecLocked(name, req)
+		return err
+	})
+	return response, err
+}
+
+func (fs *FileStore) updateSpecLocked(name string, req SessionSpecUpdateRequest) (*SessionSpecUpdateResponse, error) {
 	prepared, err := fs.prepareSpecForUpdate(req)
 	if err != nil {
 		return nil, err
@@ -616,6 +635,16 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
+	var session *Session
+	err := fs.withStoreLock(func() error {
+		var err error
+		session, err = fs.stopLocked(id)
+		return err
+	})
+	return session, err
+}
+
+func (fs *FileStore) stopLocked(id string) (*Session, error) {
 	m, err := ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -629,8 +658,23 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		return s, nil
 	}
 
+	if _, err := fs.appendStoreEventLocked(id, EventStopRequested, map[string]any{
+		"status": s.Status,
+	}); err != nil {
+		return nil, err
+	}
 	if open := m.OpenEpoch(); open != nil {
-		terminateRunner(open.Runner)
+		result := terminateRunner(open.Runner)
+		if result.SignalSent {
+			if _, err := fs.appendStoreEventLocked(id, EventStopSignalSent, result.Payload()); err != nil {
+				return nil, err
+			}
+		}
+		if result.ProcessExitObserved {
+			if _, err := fs.appendStoreEventLocked(id, EventProcessExitObserved, result.Payload()); err != nil {
+				return nil, err
+			}
+		}
 	}
 
 	now := tsNow()
@@ -1030,22 +1074,72 @@ func processAlive(pid int) bool {
 	return syscall.Kill(pid, 0) == nil
 }
 
-func terminateRunner(runner *Runner) {
+type terminateResult struct {
+	PID                 int
+	PGID                int
+	Target              string
+	Signal              string
+	SignalSent          bool
+	ProcessExitObserved bool
+	Error               string
+}
+
+func (r terminateResult) Payload() map[string]any {
+	payload := map[string]any{
+		"pid":                   r.PID,
+		"pgid":                  r.PGID,
+		"target":                r.Target,
+		"signal":                r.Signal,
+		"signal_sent":           r.SignalSent,
+		"process_exit_observed": r.ProcessExitObserved,
+	}
+	if r.Error != "" {
+		payload["error"] = r.Error
+	}
+	return payload
+}
+
+func terminateRunner(runner *Runner) terminateResult {
+	result := terminateResult{Signal: "SIGTERM"}
 	pid, ok := runner.ProcessID()
 	if !ok {
-		return
+		return result
 	}
+	result.PID = pid
 	if pid == os.Getpid() {
-		return
+		result.Error = "refusing to signal current process"
+		return result
 	}
 	group := pid
 	if pgid, ok := runner.ProcessGroupID(); ok {
 		group = pgid
+		result.PGID = pgid
 	}
-	if err := syscall.Kill(-group, syscall.SIGTERM); err == nil || errors.Is(err, syscall.ESRCH) {
-		return
+	result.Target = "process_group"
+	if err := syscall.Kill(-group, syscall.SIGTERM); err == nil {
+		result.SignalSent = true
+		result.ProcessExitObserved = !processAlive(pid)
+		return result
+	} else if errors.Is(err, syscall.ESRCH) {
+		result.ProcessExitObserved = true
+		return result
+	} else {
+		result.Error = err.Error()
 	}
-	_ = syscall.Kill(pid, syscall.SIGTERM)
+	result.Target = "process"
+	if err := syscall.Kill(pid, syscall.SIGTERM); err == nil {
+		result.SignalSent = true
+		result.ProcessExitObserved = !processAlive(pid)
+		result.Error = ""
+		return result
+	} else if errors.Is(err, syscall.ESRCH) {
+		result.ProcessExitObserved = true
+		result.Error = ""
+		return result
+	} else {
+		result.Error = err.Error()
+	}
+	return result
 }
 
 func epochToMap(e Epoch) map[string]any {

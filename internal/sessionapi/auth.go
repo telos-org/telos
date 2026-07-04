@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 type Scope string
@@ -228,6 +229,7 @@ func NewScopedToken(sessionID string, sessionKind SessionKind) (*ScopedToken, er
 	scopes := scopesForSessionKind(sessionKind)
 	return &ScopedToken{
 		APIToken:         token,
+		TokenSHA256:      hashScopedToken(token),
 		SubjectSessionID: sessionID,
 		Scopes:           scopeStrings(scopes),
 	}, nil
@@ -301,6 +303,38 @@ func (fs *FileStore) CallerForToken(token string) (Caller, bool) {
 
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
+
+	var caller Caller
+	var ok bool
+	err := fs.withStoreLock(func() error {
+		caller, ok = fs.callerForTokenLocked(token)
+		return nil
+	})
+	if err != nil {
+		return Caller{}, false
+	}
+	return caller, ok
+}
+
+func (fs *FileStore) callerForTokenLocked(token string) (Caller, bool) {
+	hash := hashScopedToken(token)
+	index, err := fs.readTokenIndexLocked()
+	if err == nil {
+		if entry, ok := index.Tokens[hash]; ok && !tokenIndexEntryExpired(entry, time.Now().UTC()) {
+			if _, err := ReadManifest(fs.manifestPath(entry.SessionID)); err != nil {
+				return Caller{}, false
+			}
+			scopes := scopesFromStrings(entry.Scopes)
+			if len(scopes) == 0 {
+				return Caller{}, false
+			}
+			return Caller{
+				Role:             entry.Role,
+				Scopes:           scopes,
+				SubjectSessionID: entry.SessionID,
+			}, true
+		}
+	}
 
 	entries, err := os.ReadDir(fs.Root)
 	if err != nil {

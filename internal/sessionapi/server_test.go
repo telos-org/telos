@@ -2336,6 +2336,10 @@ func writeAuthorizedSession(
 	if err := sessionapi.WriteManifest(filepath.Join(sessionDir, "session.json"), &m); err != nil {
 		t.Fatal(err)
 	}
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	if err := store.IndexScopedToken(id, kind, access); err != nil {
+		t.Fatal(err)
+	}
 	return m, access.APIToken
 }
 
