@@ -9,11 +9,11 @@ import (
 	"github.com/telos-org/telos/internal/platform"
 )
 
-func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecutor, error) {
+func createAgentExecutor(workspace string, sessionDir string, cfg LocalRunConfig) (game.AgentExecutor, error) {
 	p := platform.NewLocalPlatform(workspace)
 	model := cfg.Model
 	if model == "" {
-		model = DefaultLocalModel
+		model = defaultModelForRun(cfg.ModelProfile)
 	}
 	cred, err := gateway.Resolve(cfg.SessionID, cfg.ModelProfile)
 	if err != nil {
@@ -27,6 +27,7 @@ func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecut
 		cred.Credential,
 		cred.Cleanup,
 		executor.WithContainmentMode(executor.ContainmentSessionWorkspace),
+		executor.WithSession(cfg.SessionID, sessionDir),
 	)
 	return exec, nil
 }

@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "executor",
     srcs = [
+        "bifrost_routing.go",
         "compactor.go",
         "containment.go",
         "conversation_state.go",
@@ -45,6 +46,7 @@ go_library(
         "//internal/oauthcred",
         "//internal/platform",
         "//internal/protocol",
+        "//internal/sessionapi",
         "@com_github_bmatcuk_doublestar_v4//:doublestar",
         "@com_github_openai_openai_go//:openai-go",
         "@com_github_openai_openai_go//option",

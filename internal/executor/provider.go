@@ -34,6 +34,7 @@ type nativeConfig struct {
 	transport         responseTransport
 	kind              gatewayKind
 	headers           map[string]string
+	modelProfile      gatewaycred.ModelProfile
 	asyncPoll         asyncPollConfig
 	compaction        compactionConfig
 	capability        map[string]modelCapabilityProfile
@@ -75,6 +76,7 @@ func resolveNativeConfig(credential gatewaycred.Credential) (nativeConfig, error
 		transport:         credential.Transport,
 		kind:              credential.Kind,
 		headers:           credential.Headers,
+		modelProfile:      credential.ModelProfile,
 		asyncPoll:         asyncPollConfigFromEnv(),
 		compaction:        compactionConfigFromEnv(),
 		capability:        parseModelCapabilityTable(),
@@ -163,6 +165,9 @@ type nativeProviderConfig struct {
 	AsyncPoll  asyncPollConfig
 	Compaction compactionConfig
 	Capability modelCapabilityProfile
+	// Routing carries the turn's Bifrost sticky-routing state; nil when the
+	// gateway is not Bifrost-shaped.
+	Routing *bifrostRouting
 }
 
 type modelCapabilityProfile struct {

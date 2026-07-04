@@ -19,6 +19,7 @@ go_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/agentsession",
+        "//internal/gatewaycred",
         "//internal/spec",
     ],
 )

@@ -20,7 +20,8 @@ const testFakeScenarioRelPath = ".telos-testfake/agent.json"
 // scenario-driven executor only in binaries built with -tags telos_testfake.
 // Tagged binaries fail closed
 // when the active workspace does not contain the private test fixture file.
-func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecutor, error) {
+func createAgentExecutor(workspace string, sessionDir string, cfg LocalRunConfig) (game.AgentExecutor, error) {
+	_ = sessionDir
 	scenarioPath := filepath.Join(workspace, testFakeScenarioRelPath)
 	if _, err := os.Stat(scenarioPath); err != nil {
 		if os.IsNotExist(err) {

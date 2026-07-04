@@ -26,6 +26,8 @@ type NativeExecutor struct {
 	cleanup         func() error
 	costHard        bool
 	containmentMode ContainmentMode
+	sessionID       string
+	sessionDir      string
 }
 
 // Executor is the preferred name for Telos' built-in coding-agent executor.
@@ -90,6 +92,8 @@ func NewNativeExecutorWithGateway(p *platform.LocalPlatform, model, thinking str
 		cleanup:         cleanup,
 		costHard:        gateway.CostHardLimit,
 		containmentMode: options.containmentMode,
+		sessionID:       options.sessionID,
+		sessionDir:      options.sessionDir,
 	}
 }
 
@@ -156,6 +160,9 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 		_ = logger.errorEvent(0, execErr)
 		_ = logger.terminal(terminalStateForError(execErr, ctx))
 		return terminalTurn(role, stats, execErr.Error())
+	}
+	if bifrostRoutingActive(cfg.Kind, ne.Model) {
+		cfg.Routing = newBifrostRouting(ne.sessionID, ne.sessionDir, ne.config.modelProfile, turnState, role)
 	}
 	knobs := resolveEnvKnobs()
 	if err := logger.providerConfig(cfg); err != nil {

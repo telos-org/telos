@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -68,6 +69,15 @@ func Enabled() bool {
 		strings.TrimSpace(cfg.Gateway.Transport) != "" ||
 		strings.TrimSpace(cfg.Gateway.Kind) != "" ||
 		len(cfg.Gateway.Headers) > 0
+}
+
+// ManagedEnabled reports whether gateway mode resolves to managed billing. The
+// env override wins when set; otherwise the saved config decides.
+func ManagedEnabled() bool {
+	if mode := strings.ToLower(strings.TrimSpace(os.Getenv(config.GatewayModeEnv))); mode != "" {
+		return mode == ModeManaged
+	}
+	return strings.ToLower(strings.TrimSpace(config.LoadConfigFile().Gateway.Mode)) == ModeManaged
 }
 
 // Resolve chooses the local gateway credential for a session.

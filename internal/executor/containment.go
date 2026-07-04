@@ -14,11 +14,23 @@ type NativeExecutorOption func(*nativeExecutorOptions)
 
 type nativeExecutorOptions struct {
 	containmentMode ContainmentMode
+	sessionID       string
+	sessionDir      string
 }
 
 func WithContainmentMode(mode ContainmentMode) NativeExecutorOption {
 	return func(opts *nativeExecutorOptions) {
 		opts.containmentMode = mode
+	}
+}
+
+// WithSession identifies the session a turn belongs to. The session dir must
+// hold the session.json manifest; managed Bifrost routing state is persisted
+// there across turns.
+func WithSession(sessionID, sessionDir string) NativeExecutorOption {
+	return func(opts *nativeExecutorOptions) {
+		opts.sessionID = sessionID
+		opts.sessionDir = sessionDir
 	}
 }
 

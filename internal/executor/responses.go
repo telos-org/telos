@@ -34,6 +34,8 @@ type responsesClient struct {
 	protocol          gatewaycred.Provider
 	transport         responseTransport
 	model             string
+	requestModel      string
+	routing           *bifrostRouting
 	instructions      string
 	reasoning         openai.ReasoningEffort
 	maxOutputTokens   int
@@ -55,7 +57,7 @@ type completionResult struct {
 }
 
 type responseRunner interface {
-	Complete(ctx context.Context, params responses.ResponseNewParams, sequence int) (completionResult, error)
+	Complete(ctx context.Context, params responses.ResponseNewParams, sequence int, extra ...option.RequestOption) (completionResult, error)
 }
 
 type openAISyncRunner struct {
@@ -88,11 +90,17 @@ func newResponsesClient(httpClient *http.Client, cfg nativeProviderConfig, think
 		tools = nil
 	}
 	comp := newCompactor(cfg.Compaction.withReserveOutput(maxOutputTokens))
+	requestModel := cfg.Model
+	if cfg.Routing != nil {
+		requestModel = bifrostRequestModel(cfg.Model)
+	}
 	t := &responsesClient{
 		provider:        cfg.Provider,
 		protocol:        cfg.Protocol,
 		transport:       cfg.Transport,
 		model:           cfg.Model,
+		requestModel:    requestModel,
+		routing:         cfg.Routing,
 		instructions:    nativeSystemPrompt(role),
 		reasoning:       reasoning,
 		maxOutputTokens: maxOutputTokens,
@@ -172,10 +180,12 @@ func (c *responseCostCapture) complete(response responses.Response, asyncJobID s
 	}
 }
 
-func (r *openAISyncRunner) Complete(ctx context.Context, params responses.ResponseNewParams, sequence int) (completionResult, error) {
+func (r *openAISyncRunner) Complete(ctx context.Context, params responses.ResponseNewParams, sequence int, extra ...option.RequestOption) (completionResult, error) {
 	_ = sequence
 	cost := &responseCostCapture{}
-	resp, err := r.client.Responses.New(ctx, params, option.WithMiddleware(cost.middleware))
+	opts := append([]option.RequestOption{}, extra...)
+	opts = append(opts, option.WithMiddleware(cost.middleware))
+	resp, err := r.client.Responses.New(ctx, params, opts...)
 	if err != nil {
 		return completionResult{}, classifyProviderError(err)
 	}
@@ -185,12 +195,13 @@ func (r *openAISyncRunner) Complete(ctx context.Context, params responses.Respon
 	return cost.complete(*resp, ""), nil
 }
 
-func (r *bifrostAsyncRunner) Complete(ctx context.Context, params responses.ResponseNewParams, sequence int) (completionResult, error) {
+func (r *bifrostAsyncRunner) Complete(ctx context.Context, params responses.ResponseNewParams, sequence int, extra ...option.RequestOption) (completionResult, error) {
 	cost := &responseCostCapture{}
-	opts := []option.RequestOption{
+	opts := append([]option.RequestOption{}, extra...)
+	opts = append(opts,
 		option.WithHeader("x-bf-async", "true"),
 		option.WithMiddleware(cost.middleware),
-	}
+	)
 	if r.poll.ResultTTLSeconds > 0 {
 		opts = append(opts, option.WithHeader("x-bf-async-job-result-ttl", strconv.Itoa(r.poll.ResultTTLSeconds)))
 	}
@@ -208,10 +219,10 @@ func (r *bifrostAsyncRunner) Complete(ctx context.Context, params responses.Resp
 		return completionResult{}, retryableExecutorError(errProviderUnavailable, "async_submit_missing_job_id")
 	}
 	r.logAsyncJob(sequence, initial.ID, string(initial.Status))
-	return r.pollJob(ctx, params, initial.ID, cost)
+	return r.pollJob(ctx, params, initial.ID, cost, extra)
 }
 
-func (r *bifrostAsyncRunner) pollJob(ctx context.Context, params responses.ResponseNewParams, jobID string, cost *responseCostCapture) (completionResult, error) {
+func (r *bifrostAsyncRunner) pollJob(ctx context.Context, params responses.ResponseNewParams, jobID string, cost *responseCostCapture, extra []option.RequestOption) (completionResult, error) {
 	backoff := newAsyncPollBackoff(r.poll)
 	started := time.Now()
 	attempts := 0
@@ -224,7 +235,9 @@ func (r *bifrostAsyncRunner) pollJob(ctx context.Context, params responses.Respo
 			return completionResult{}, classifyProviderError(err)
 		}
 		attempts++
-		resp, err := r.client.Responses.New(ctx, params, option.WithHeader("x-bf-async-id", jobID), option.WithMiddleware(cost.middleware))
+		pollOpts := append([]option.RequestOption{}, extra...)
+		pollOpts = append(pollOpts, option.WithHeader("x-bf-async-id", jobID), option.WithMiddleware(cost.middleware))
+		resp, err := r.client.Responses.New(ctx, params, pollOpts...)
 		if err != nil {
 			return completionResult{}, classifyProviderError(err)
 		}
@@ -333,7 +346,7 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 	}
 	compStats, err := t.compactor.compact(ctx, compactionRuntime{
 		state:           t.state,
-		model:           t.model,
+		model:           t.compactionRequestModel(),
 		instructions:    t.instructions,
 		tools:           t.tools,
 		reasoning:       t.reasoning,
@@ -356,18 +369,19 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 	t.sequence++
 	seq := t.sequence
 	params := t.params()
+	agentOpts := t.routing.agentOptions()
 	_ = t.logger.modelRequest(t.modelRequestLogData(seq, t.state.previousResponseID()))
-	result, err := t.completeWithRetries(ctx, seq, params, true)
+	result, err := t.completeWithRetries(ctx, seq, params, true, agentOpts...)
 	if err != nil && t.state.mode == conversationStateServerChain && t.state.previousResponseID() != "" && isChainSpecificError(err) {
 		t.state.fallbackToStatelessHistory()
 		_ = t.logger.retry(seq, 1, 0, newExecutorError(errProviderUnavailable, "falling back to stateless_history"))
 		_ = t.logger.modelRequest(t.modelRequestLogData(seq, ""))
-		result, err = t.completeWithRetries(ctx, seq, t.params(), false)
+		result, err = t.completeWithRetries(ctx, seq, t.params(), false, agentOpts...)
 	}
 	if err != nil && isContextLimitError(err) && t.state.mode == conversationStateStatelessHistory {
 		reactiveStats, compactErr := t.compactor.compactReactive(ctx, compactionRuntime{
 			state:           t.state,
-			model:           t.model,
+			model:           t.compactionRequestModel(),
 			instructions:    t.instructions,
 			tools:           t.tools,
 			reasoning:       t.reasoning,
@@ -379,7 +393,7 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 		if compactErr == nil {
 			_ = t.logger.retry(seq, 1, 0, newExecutorError(errProviderContextLimit, "reactive compaction retry"))
 			_ = t.logger.modelRequest(t.modelRequestLogData(seq, t.state.previousResponseID()))
-			result, err = t.completeWithRetries(ctx, seq, t.params(), false)
+			result, err = t.completeWithRetries(ctx, seq, t.params(), false, agentOpts...)
 		} else {
 			err = compactErr
 		}
@@ -497,11 +511,11 @@ func (t *responsesClient) completeCoreWithRetries(ctx context.Context, seq int, 
 	return result, err
 }
 
-func (t *responsesClient) completeWithRetries(ctx context.Context, seq int, params responses.ResponseNewParams, stopOnChainError bool) (completionResult, error) {
+func (t *responsesClient) completeWithRetries(ctx context.Context, seq int, params responses.ResponseNewParams, stopOnChainError bool, extra ...option.RequestOption) (completionResult, error) {
 	var result completionResult
 	var err error
 	for attempt := 0; attempt < 3; attempt++ {
-		result, err = t.runner.Complete(ctx, params, seq)
+		result, err = t.runner.Complete(ctx, params, seq, extra...)
 		if err == nil {
 			err = responseTerminalError(result.Response, result.AsyncJobID)
 		}
@@ -533,7 +547,7 @@ func (t *responsesClient) completeWithRetries(ctx context.Context, seq int, para
 // it returns the response and the spend it incurred; on failure it returns the
 // last error (and zero stats, since a failed attempt is not billed).
 func (t *responsesClient) completeCompaction(ctx context.Context, params responses.ResponseNewParams) (completionResult, game.TurnStats, error) {
-	result, err := t.completeWithRetries(ctx, t.sequence+1, params, false)
+	result, err := t.completeWithRetries(ctx, t.sequence+1, params, false, t.routing.compactionOptions()...)
 	if err != nil {
 		return completionResult{}, game.TurnStats{}, err
 	}
@@ -585,9 +599,19 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
+// compactionRequestModel is the model compaction requests use: the Bifrost
+// profile's dedicated compaction model when sticky routing is active, else the
+// agent model itself.
+func (t *responsesClient) compactionRequestModel() string {
+	if t.routing != nil {
+		return t.routing.compactionModel()
+	}
+	return t.model
+}
+
 func (t *responsesClient) params() responses.ResponseNewParams {
 	params := responses.ResponseNewParams{
-		Model:        openai.ResponsesModel(t.model),
+		Model:        openai.ResponsesModel(t.requestModel),
 		Instructions: openai.String(t.instructions),
 		Input:        responses.ResponseNewParamsInputUnion{OfInputItemList: t.state.requestInput()},
 		Tools:        t.tools,

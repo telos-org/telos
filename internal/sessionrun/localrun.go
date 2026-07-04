@@ -11,6 +11,7 @@ import (
 
 	"github.com/telos-org/telos/internal/evidence"
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/gateway"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -65,6 +66,11 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	if err != nil {
 		return nil, err
 	}
+	modelProfile, err := resolveLocalModelProfile(cfg, sessionsRoot)
+	if err != nil {
+		return nil, err
+	}
+	cfg.ModelProfile = modelProfile
 
 	sessionDir, err := newSessionDir(sessionsRoot)
 	if err != nil {
@@ -171,7 +177,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if exec != nil {
 		agentExec = exec
 	} else {
-		agentExec, err = createAgentExecutor(workspace, cfg)
+		agentExec, err = createAgentExecutor(workspace, sessionDir, cfg)
 		if err != nil {
 			fail := &game.PVGResult{GameResult: game.GameFailure, Error: err.Error()}
 			if finishErr := finishEpoch(sessionDir, manifest, fail); finishErr != nil {
@@ -300,6 +306,32 @@ func resolveTelosd() (string, error) {
 	return "", fmt.Errorf("telosd not found; install telosd next to telos or set TELOSD_PATH")
 }
 
+// resolveLocalModelProfile picks the session's managed model tier: an explicit
+// profile wins, then a parent session's profile (children stay on the parent's
+// tier), then standard.
+func resolveLocalModelProfile(cfg LocalRunConfig, sessionsRoot string) (sessionapi.ModelProfile, error) {
+	if cfg.ModelProfile != "" {
+		return sessionapi.NormalizeModelProfile(string(cfg.ModelProfile))
+	}
+	if cfg.ParentSessionID != nil && *cfg.ParentSessionID != "" {
+		manifest, err := sessionapi.ReadManifest(filepath.Join(sessionsRoot, *cfg.ParentSessionID, "session.json"))
+		if err == nil {
+			return sessionapi.NormalizeModelProfile(string(manifest.Config.ModelProfile))
+		}
+		if !os.IsNotExist(err) {
+			return "", fmt.Errorf("read parent session manifest: %w", err)
+		}
+	}
+	return sessionapi.ModelProfileStandard, nil
+}
+
+func defaultModelForRun(profile sessionapi.ModelProfile) string {
+	if gateway.ManagedEnabled() {
+		return sessionapi.BifrostAgentModel(profile)
+	}
+	return DefaultLocalModel
+}
+
 func newSessionDir(root string) (string, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", fmt.Errorf("create sessions root: %w", err)
@@ -319,7 +351,7 @@ func newSessionDir(root string) (string, error) {
 func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, specPath string, state *game.PVGState, cfg LocalRunConfig, workspace *sessionapi.Workspace) error {
 	model := cfg.Model
 	if model == "" {
-		model = DefaultLocalModel
+		model = defaultModelForRun(cfg.ModelProfile)
 	}
 	thinking := cfg.Thinking
 	if thinking == "" {
