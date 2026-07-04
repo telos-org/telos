@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"regexp"
@@ -16,18 +17,25 @@ import (
 )
 
 const (
-	defaultCompactionContextWindow     = 128000
-	defaultCompactionTriggerRatio      = 0.75
-	defaultCompactionKeepRecentTokens  = 20000
-	compactionStrategyLLM              = "llm"
-	compactionStrategyTruncate         = "truncate"
-	compactionSummaryMessagePrefix     = "Compacted prior session state:\n"
-	compactionCommand                  = "COMPACT_SESSION_STATE"
-	compactionHeadingSchemaDescription = `Produce only a compacted state summary. Do not call tools. Do not answer the original task directly.
+	defaultCompactionContextWindow      = 128000
+	defaultCompactionTriggerRatio       = 0.75
+	defaultCompactionKeepRecentTokens   = 20000
+	defaultPruneOlderThanAssistantTurns = 3
+	defaultPruneKeepRecentTurns         = 2
+	defaultPruneMinOutputBytes          = 4096
+	maxRecursiveSummaryDepth            = 3
+	compactionStrategyLLM               = "llm"
+	compactionStrategyTruncate          = "truncate"
+	compactionSummaryMessagePrefix      = "Compacted prior session state:\n"
+	compactionCommand                   = "COMPACT_SESSION_STATE"
+	compactionHeadingSchemaDescription  = `Produce only a compacted state summary. Do not call tools. Do not answer the original task directly.
 
 Return terse Markdown with exactly these headings, in this order:
 ## Goal
+## Current Task State
 ## Constraints & Preferences
+## Required Skills
+## Current Plan
 ## Progress
 ## Key Decisions
 ## Files Inspected
@@ -42,7 +50,10 @@ Capture durable facts needed for the coding agent to continue: user requirements
 
 var compactionRequiredHeadings = []string{
 	"## Goal",
+	"## Current Task State",
 	"## Constraints & Preferences",
+	"## Required Skills",
+	"## Current Plan",
 	"## Progress",
 	"## Key Decisions",
 	"## Files Inspected",
@@ -60,6 +71,9 @@ type compactionConfig struct {
 	keepRecentTokens      int
 	reserveOutput         int
 	strategy              string
+	pruneOlderThanTurns   int
+	pruneKeepRecentTurns  int
+	pruneMinOutputBytes   int
 }
 
 // compactionConfigFromEnv resolves the process-wide autocompaction knobs once
@@ -67,10 +81,13 @@ type compactionConfig struct {
 // output reserve are applied later without reading env again.
 func compactionConfigFromEnv() compactionConfig {
 	cfg := compactionConfig{
-		contextWindow:    defaultCompactionContextWindow,
-		triggerRatio:     defaultCompactionTriggerRatio,
-		keepRecentTokens: defaultCompactionKeepRecentTokens,
-		strategy:         compactionStrategyLLM,
+		contextWindow:        defaultCompactionContextWindow,
+		triggerRatio:         defaultCompactionTriggerRatio,
+		keepRecentTokens:     defaultCompactionKeepRecentTokens,
+		strategy:             compactionStrategyLLM,
+		pruneOlderThanTurns:  defaultPruneOlderThanAssistantTurns,
+		pruneKeepRecentTurns: defaultPruneKeepRecentTurns,
+		pruneMinOutputBytes:  defaultPruneMinOutputBytes,
 	}
 	if raw := strings.TrimSpace(os.Getenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
@@ -94,6 +111,21 @@ func compactionConfigFromEnv() compactionConfig {
 			cfg.strategy = compactionStrategyLLM
 		case "naive", compactionStrategyTruncate:
 			cfg.strategy = compactionStrategyTruncate
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("TELOS_AUTOCOMPACT_PRUNE_OLDER_THAN_TURNS")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			cfg.pruneOlderThanTurns = n
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("TELOS_AUTOCOMPACT_PRUNE_KEEP_RECENT_TURNS")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
+			cfg.pruneKeepRecentTurns = n
+		}
+	}
+	if raw := strings.TrimSpace(os.Getenv("TELOS_AUTOCOMPACT_PRUNE_MIN_OUTPUT_BYTES")); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil && n > 0 {
+			cfg.pruneMinOutputBytes = n
 		}
 	}
 	return cfg
@@ -130,10 +162,44 @@ type compactionRuntime struct {
 	state           *conversationState
 	model           string
 	instructions    string
+	tools           []responses.ToolUnionParam
 	reasoning       openai.ReasoningEffort
 	maxOutputTokens int
 	logger          *nativeSessionLogger
 	complete        func(context.Context, responses.ResponseNewParams) (completionResult, game.TurnStats, error)
+}
+
+type compactionTokenBreakdown struct {
+	SystemPrompt int `json:"system_prompt"`
+	Tools        int `json:"tools"`
+	Messages     int `json:"messages"`
+	Total        int `json:"total"`
+}
+
+type toolOutputPruneStats struct {
+	OutputsPruned int `json:"outputs_pruned,omitempty"`
+	BytesBefore   int `json:"bytes_before,omitempty"`
+	BytesAfter    int `json:"bytes_after,omitempty"`
+	TokensBefore  int `json:"tokens_before,omitempty"`
+	TokensAfter   int `json:"tokens_after,omitempty"`
+}
+
+func (s toolOutputPruneStats) empty() bool {
+	return s.OutputsPruned == 0
+}
+
+type compactionEventPayload struct {
+	agentsession.CompactionPayload
+	TokenBreakdownBefore compactionTokenBreakdown `json:"token_breakdown_before,omitempty"`
+	TokenBreakdownAfter  compactionTokenBreakdown `json:"token_breakdown_after,omitempty"`
+	PrunedToolOutputs    toolOutputPruneStats     `json:"pruned_tool_outputs,omitempty"`
+}
+
+type compactionSummaryResult struct {
+	summary    string
+	responseID string
+	usage      agentsession.ModelResponseUsage
+	stats      game.TurnStats
 }
 
 // compact owns the "plan -> summarize -> validate -> degrade to truncate"
@@ -141,7 +207,15 @@ type compactionRuntime struct {
 // model-completion hook, so request transport and compaction decisions do not
 // live in the same type.
 func (c *compactor) compact(ctx context.Context, rt compactionRuntime) (game.TurnStats, error) {
-	plan, ok, err := c.plan(rt.state)
+	return c.compactWithReason(ctx, rt, "token_budget", false)
+}
+
+func (c *compactor) compactReactive(ctx context.Context, rt compactionRuntime) (game.TurnStats, error) {
+	return c.compactWithReason(ctx, rt, "reactive_context_limit", true)
+}
+
+func (c *compactor) compactWithReason(ctx context.Context, rt compactionRuntime, reason string, force bool) (game.TurnStats, error) {
+	plan, ok, err := c.plan(rt.state, rt.instructions, rt.tools, reason, force)
 	if err != nil {
 		c.logFailure(rt, plan, err)
 		return game.TurnStats{}, newExecutorError(errProviderContextLimit, "autocompaction_failed:"+err.Error())
@@ -149,14 +223,66 @@ func (c *compactor) compact(ctx context.Context, rt compactionRuntime) (game.Tur
 	if !ok {
 		return game.TurnStats{}, nil
 	}
+	pruneStats := c.pruneStaleToolOutputs(rt.state)
+	if !pruneStats.empty() {
+		plan.PrunedToolOutputs = pruneStats
+		replanned, replanOK, replanErr := c.plan(rt.state, rt.instructions, rt.tools, reason, force)
+		if replanErr != nil {
+			c.logFailure(rt, plan, replanErr)
+			return game.TurnStats{}, newExecutorError(errProviderContextLimit, "autocompaction_failed:"+replanErr.Error())
+		}
+		if !replanOK {
+			after := estimateContextTokens(rt.instructions, rt.tools, rt.state.requestInput())
+			c.logSuccess(rt, compactionPlan{
+				reason:               "stale_tool_output_prune",
+				firstKeptIndex:       rt.state.firstKeptIndex,
+				tokensBefore:         plan.tokensBefore,
+				itemsKept:            len(rt.state.history) - rt.state.firstKeptIndex,
+				TokenBreakdownBefore: plan.TokenBreakdownBefore,
+				TokenBreakdownAfter:  after,
+				PrunedToolOutputs:    pruneStats,
+			}, compactionSummaryResult{}, after.Total)
+			return game.TurnStats{}, nil
+		}
+		replanned.PrunedToolOutputs = pruneStats
+		plan = replanned
+	}
 	if c.cfg.strategy == compactionStrategyTruncate {
 		return game.TurnStats{}, c.truncate(rt, plan)
 	}
 	summaryBudget := c.summaryBudget(rt.state, plan.firstKeptIndex)
+	result, err := c.summarizeSpan(ctx, rt, plan.oldFirstKeptIndex, plan.firstKeptIndex, summaryBudget, 0)
+	if err != nil {
+		c.logFailure(rt, plan, err)
+		var execErr *executorError
+		if isContextLimitError(err) || (errors.As(err, &execErr) && (execErr.Code == errAgentProtocol || execErr.Code == errAgentIncomplete)) {
+			return result.stats, c.truncate(rt, plan)
+		}
+		return result.stats, compactionError(err)
+	}
+	summary := preserveCompactionState(result.summary, rt.state.history)
+	if vErr := validateCompactionSummary(summary); vErr != nil {
+		c.logFailure(rt, plan, vErr)
+		return result.stats, c.truncate(rt, plan)
+	}
+	after := estimateContextTokens(rt.instructions, rt.tools, rt.state.inputWithSummary(summary, plan.firstKeptIndex))
+	if budget := c.cfg.budgetTokens(); budget > 0 && after.Total > budget {
+		overErr := newExecutorError(errProviderContextLimit, fmt.Sprintf("autocompaction_failed:summary still over budget after compaction (%d > %d estimated tokens)", after.Total, budget))
+		c.logFailure(rt, plan, overErr)
+		return result.stats, c.truncate(rt, plan)
+	}
+	rt.state.applyCompaction(summary, plan.firstKeptIndex)
+	result.summary = summary
+	plan.TokenBreakdownAfter = after
+	c.logSuccess(rt, plan, result, after.Total)
+	return result.stats, nil
+}
+
+func (c *compactor) summarizeSpan(ctx context.Context, rt compactionRuntime, start, end, summaryBudget, depth int) (compactionSummaryResult, error) {
 	params := responses.ResponseNewParams{
 		Model:        openai.ResponsesModel(rt.model),
 		Instructions: openai.String(rt.instructions),
-		Input:        responses.ResponseNewParamsInputUnion{OfInputItemList: rt.state.compactionRequestInput(plan.firstKeptIndex, summaryBudget)},
+		Input:        responses.ResponseNewParamsInputUnion{OfInputItemList: rt.state.compactionRequestSpanInput(start, end, summaryBudget)},
 	}
 	if rt.maxOutputTokens > 0 {
 		params.MaxOutputTokens = openai.Int(int64(rt.maxOutputTokens))
@@ -165,43 +291,56 @@ func (c *compactor) compact(ctx context.Context, rt compactionRuntime) (game.Tur
 		params.Reasoning = openai.ReasoningParam{Effort: rt.reasoning}
 	}
 	result, stats, err := rt.complete(ctx, params)
-	if err != nil {
-		c.logFailure(rt, plan, err)
-		return stats, compactionError(err)
+	if err == nil {
+		final := result.Response
+		summary := strings.TrimSpace(final.OutputText())
+		if vErr := validateCompactionResponse(final, summary); vErr != nil {
+			return compactionSummaryResult{stats: stats}, vErr
+		}
+		return compactionSummaryResult{
+			summary:    summary,
+			responseID: final.ID,
+			usage: agentsession.ModelResponseUsage{
+				Input:           int(final.Usage.InputTokens),
+				Output:          int(final.Usage.OutputTokens),
+				CacheRead:       int(final.Usage.InputTokensDetails.CachedTokens),
+				CostUSD:         stats.CostUSD,
+				CostUnavailable: stats.CostUnavailable,
+			},
+			stats: stats,
+		}, nil
 	}
-	final := result.Response
-	summary := strings.TrimSpace(final.OutputText())
-	if vErr := validateCompactionResponse(final, summary); vErr != nil {
-		c.logFailure(rt, plan, vErr)
-		return stats, c.truncate(rt, plan)
+	if !isContextLimitError(err) || depth >= maxRecursiveSummaryDepth {
+		return compactionSummaryResult{stats: stats}, err
 	}
-	after := estimateHistoryTokens(rt.state.inputWithSummary(summary, plan.firstKeptIndex))
-	if budget := c.cfg.budgetTokens(); budget > 0 && after > budget {
-		overErr := newExecutorError(errProviderContextLimit, fmt.Sprintf("autocompaction_failed:summary still over budget after compaction (%d > %d estimated tokens)", after, budget))
-		c.logFailure(rt, plan, overErr)
-		return stats, c.truncate(rt, plan)
+	mid := safeSummarySplitBoundary(rt.state.history, start, end)
+	if mid <= start || mid >= end {
+		return compactionSummaryResult{stats: stats}, err
 	}
-	rt.state.applyCompaction(summary, plan.firstKeptIndex)
-	_ = rt.logger.compaction(agentsession.CompactionPayload{
-		Reason:          plan.reason,
-		FirstKeptIndex:  plan.firstKeptIndex,
-		TokensBefore:    plan.tokensBefore,
-		TokensAfter:     after,
-		SummaryTokens:   estimateItemTokens(compactionSummaryMessage(summary)),
-		ItemsSummarized: plan.itemsSummarized,
-		ItemsKept:       plan.itemsKept,
-		Model:           rt.model,
-		ResponseID:      final.ID,
-		Usage: agentsession.ModelResponseUsage{
-			Input:           int(final.Usage.InputTokens),
-			Output:          int(final.Usage.OutputTokens),
-			CacheRead:       int(final.Usage.InputTokensDetails.CachedTokens),
-			CostUSD:         stats.CostUSD,
-			CostUnavailable: stats.CostUnavailable,
+	left, leftErr := c.summarizeSpan(ctx, rt, start, mid, summaryBudget/2, depth+1)
+	mergedStats := mergeTurnStats(stats, left.stats)
+	if leftErr != nil {
+		left.stats = mergedStats
+		return left, leftErr
+	}
+	right, rightErr := c.summarizeSpan(ctx, rt, mid, end, summaryBudget/2, depth+1)
+	mergedStats = mergeTurnStats(mergedStats, right.stats)
+	if rightErr != nil {
+		right.stats = mergedStats
+		return right, rightErr
+	}
+	return compactionSummaryResult{
+		summary:    mergeCompactionSummaries(left.summary, right.summary),
+		responseID: firstNonEmpty(right.responseID, left.responseID),
+		usage: agentsession.ModelResponseUsage{
+			Input:           left.usage.Input + right.usage.Input,
+			Output:          left.usage.Output + right.usage.Output,
+			CacheRead:       left.usage.CacheRead + right.usage.CacheRead,
+			CostUSD:         left.usage.CostUSD + right.usage.CostUSD,
+			CostUnavailable: left.usage.CostUnavailable || right.usage.CostUnavailable,
 		},
-		Details: detailsFromCompactionSummary(summary),
-	})
-	return stats, nil
+		stats: mergedStats,
+	}, nil
 }
 
 func (c *compactor) summaryBudget(state *conversationState, firstKeptIndex int) int {
@@ -221,20 +360,14 @@ func (c *compactor) summaryBudget(state *conversationState, firstKeptIndex int) 
 }
 
 func (c *compactor) truncate(rt compactionRuntime, plan compactionPlan) error {
-	after := estimateHistoryTokens(rt.state.inputWithSummary("", plan.firstKeptIndex))
-	if budget := c.cfg.budgetTokens(); budget > 0 && after > budget {
-		return newExecutorError(errProviderContextLimit, fmt.Sprintf("autocompaction_failed:naive cutoff still over budget (%d > %d estimated tokens)", after, budget))
+	after := estimateContextTokens(rt.instructions, rt.tools, rt.state.inputWithSummary("", plan.firstKeptIndex))
+	if budget := c.cfg.budgetTokens(); budget > 0 && after.Total > budget {
+		return newExecutorError(errProviderContextLimit, fmt.Sprintf("autocompaction_failed:naive cutoff still over budget (%d > %d estimated tokens)", after.Total, budget))
 	}
 	rt.state.applyCompaction("", plan.firstKeptIndex)
-	_ = rt.logger.compaction(agentsession.CompactionPayload{
-		Reason:          "token_budget_naive_cutoff",
-		FirstKeptIndex:  plan.firstKeptIndex,
-		TokensBefore:    plan.tokensBefore,
-		TokensAfter:     after,
-		ItemsSummarized: plan.itemsSummarized,
-		ItemsKept:       plan.itemsKept,
-		Model:           rt.model,
-	})
+	plan.reason = "token_budget_naive_cutoff"
+	plan.TokenBreakdownAfter = after
+	c.logSuccess(rt, plan, compactionSummaryResult{}, after.Total)
 	return nil
 }
 
@@ -242,29 +375,61 @@ func (c *compactor) logFailure(rt compactionRuntime, plan compactionPlan, err er
 	if err == nil {
 		return
 	}
-	_ = rt.logger.compaction(agentsession.CompactionPayload{
-		Reason:          firstNonEmpty(plan.reason, "token_budget"),
-		FirstKeptIndex:  plan.firstKeptIndex,
-		TokensBefore:    plan.tokensBefore,
-		TokensAfter:     plan.tokensBefore,
-		ItemsSummarized: plan.itemsSummarized,
-		ItemsKept:       plan.itemsKept,
-		Model:           rt.model,
-		Error:           err.Error(),
+	_ = rt.logger.compaction(compactionEventPayload{
+		CompactionPayload: agentsession.CompactionPayload{
+			Reason:          firstNonEmpty(plan.reason, "token_budget"),
+			FirstKeptIndex:  plan.firstKeptIndex,
+			TokensBefore:    plan.tokensBefore,
+			TokensAfter:     plan.tokensBefore,
+			ItemsSummarized: plan.itemsSummarized,
+			ItemsKept:       plan.itemsKept,
+			Model:           rt.model,
+			Error:           err.Error(),
+		},
+		TokenBreakdownBefore: plan.TokenBreakdownBefore,
+		TokenBreakdownAfter:  plan.TokenBreakdownBefore,
+		PrunedToolOutputs:    plan.PrunedToolOutputs,
 	})
 }
 
-type compactionPlan struct {
-	reason             string
-	firstKeptIndex     int
-	oldFirstKeptIndex  int
-	tokensBefore       int
-	projectedTokensRaw int
-	itemsSummarized    int
-	itemsKept          int
+func (c *compactor) logSuccess(rt compactionRuntime, plan compactionPlan, result compactionSummaryResult, tokensAfter int) {
+	payload := compactionEventPayload{
+		CompactionPayload: agentsession.CompactionPayload{
+			Reason:          firstNonEmpty(plan.reason, "token_budget"),
+			FirstKeptIndex:  plan.firstKeptIndex,
+			TokensBefore:    plan.tokensBefore,
+			TokensAfter:     tokensAfter,
+			ItemsSummarized: plan.itemsSummarized,
+			ItemsKept:       plan.itemsKept,
+			Model:           rt.model,
+			ResponseID:      result.responseID,
+			Usage:           result.usage,
+		},
+		TokenBreakdownBefore: plan.TokenBreakdownBefore,
+		TokenBreakdownAfter:  plan.TokenBreakdownAfter,
+		PrunedToolOutputs:    plan.PrunedToolOutputs,
+	}
+	if strings.TrimSpace(result.summary) != "" {
+		payload.SummaryTokens = estimateItemTokens(compactionSummaryMessage(result.summary))
+		payload.Details = detailsFromCompactionSummary(result.summary)
+	}
+	_ = rt.logger.compaction(payload)
 }
 
-func (c *compactor) plan(s *conversationState) (compactionPlan, bool, error) {
+type compactionPlan struct {
+	reason               string
+	firstKeptIndex       int
+	oldFirstKeptIndex    int
+	tokensBefore         int
+	projectedTokensRaw   int
+	itemsSummarized      int
+	itemsKept            int
+	TokenBreakdownBefore compactionTokenBreakdown
+	TokenBreakdownAfter  compactionTokenBreakdown
+	PrunedToolOutputs    toolOutputPruneStats
+}
+
+func (c *compactor) plan(s *conversationState, instructions string, tools []responses.ToolUnionParam, reason string, force bool) (compactionPlan, bool, error) {
 	if c == nil || s == nil || s.mode != conversationStateStatelessHistory {
 		return compactionPlan{}, false, nil
 	}
@@ -273,8 +438,8 @@ func (c *compactor) plan(s *conversationState) (compactionPlan, bool, error) {
 		return compactionPlan{}, false, nil
 	}
 	current := s.requestInput()
-	tokensBefore := estimateHistoryTokens(current)
-	if tokensBefore <= budget {
+	before := estimateContextTokens(instructions, tools, current)
+	if before.Total <= budget && !force {
 		return compactionPlan{}, false, nil
 	}
 	if len(s.history) <= 1 {
@@ -298,13 +463,14 @@ func (c *compactor) plan(s *conversationState) (compactionPlan, bool, error) {
 		return compactionPlan{}, false, fmt.Errorf("autocompaction cannot find a new safe cut point")
 	}
 	return compactionPlan{
-		reason:             "token_budget",
-		firstKeptIndex:     firstKept,
-		oldFirstKeptIndex:  s.firstKeptIndex,
-		tokensBefore:       tokensBefore,
-		projectedTokensRaw: estimateHistoryTokens(s.inputWithSummary("", firstKept)),
-		itemsSummarized:    firstKept - s.firstKeptIndex,
-		itemsKept:          len(s.history) - firstKept,
+		reason:               reason,
+		firstKeptIndex:       firstKept,
+		oldFirstKeptIndex:    s.firstKeptIndex,
+		tokensBefore:         before.Total,
+		projectedTokensRaw:   estimateContextTokens(instructions, tools, s.inputWithSummary("", firstKept)).Total,
+		itemsSummarized:      firstKept - s.firstKeptIndex,
+		itemsKept:            len(s.history) - firstKept,
+		TokenBreakdownBefore: before,
 	}, true, nil
 }
 
@@ -451,11 +617,175 @@ func forwardFunctionOutputBoundary(history responses.ResponseInputParam, boundar
 	return len(history)
 }
 
+func safeSummarySplitBoundary(history responses.ResponseInputParam, start, end int) int {
+	if end-start < 2 {
+		return 0
+	}
+	mid := start + (end-start)/2
+	for distance := 0; ; distance++ {
+		checked := false
+		if candidate := mid - distance; candidate > start && candidate < end {
+			checked = true
+			if safeSpan(history, start, candidate) && safeSpan(history, candidate, end) {
+				return candidate
+			}
+		}
+		if distance > 0 {
+			if candidate := mid + distance; candidate > start && candidate < end {
+				checked = true
+				if safeSpan(history, start, candidate) && safeSpan(history, candidate, end) {
+					return candidate
+				}
+			}
+		}
+		if !checked {
+			return 0
+		}
+	}
+}
+
+func safeSpan(history responses.ResponseInputParam, start, end int) bool {
+	if start < 0 {
+		start = 0
+	}
+	if end > len(history) {
+		end = len(history)
+	}
+	if start >= end {
+		return true
+	}
+	calls := map[string]bool{}
+	for i := start; i < end; i++ {
+		if fc := history[i].OfFunctionCall; fc != nil {
+			calls[fc.CallID] = true
+		}
+	}
+	for i := start; i < end; i++ {
+		if fco := history[i].OfFunctionCallOutput; fco != nil && !calls[fco.CallID] {
+			return false
+		}
+	}
+	return true
+}
+
 func isUserMessage(item responses.ResponseInputItemUnionParam) bool {
 	if item.OfMessage == nil {
 		return false
 	}
 	return string(item.OfMessage.Role) == string(responses.EasyInputMessageRoleUser)
+}
+
+func (c *compactor) pruneStaleToolOutputs(s *conversationState) toolOutputPruneStats {
+	if c == nil || s == nil || len(s.history) == 0 || c.cfg.pruneMinOutputBytes <= 0 {
+		return toolOutputPruneStats{}
+	}
+	protectFrom := protectedRecentTurnIndex(s.history, c.cfg.pruneKeepRecentTurns)
+	protectedCalls := referencedToolOutputs(s.history)
+	replacements := map[string]string{}
+	var stats toolOutputPruneStats
+	assistantTurnsAfter := 0
+	for i := len(s.history) - 1; i >= 0; i-- {
+		item := s.history[i]
+		if isAssistantTurnMarker(item) {
+			assistantTurnsAfter++
+		}
+		output := item.OfFunctionCallOutput
+		if output == nil {
+			continue
+		}
+		if i >= protectFrom || assistantTurnsAfter < c.cfg.pruneOlderThanTurns {
+			continue
+		}
+		if protectedCalls[output.CallID] || isPrunedToolOutput(output.Output) || len(output.Output) < c.cfg.pruneMinOutputBytes {
+			continue
+		}
+		tool := toolNameForCallID(s.history, output.CallID)
+		placeholder := fmt.Sprintf("[output pruned: %s %d bytes]", firstNonEmpty(tool, "tool"), len(output.Output))
+		stats.OutputsPruned++
+		stats.BytesBefore += len(output.Output)
+		stats.BytesAfter += len(placeholder)
+		stats.TokensBefore += estimateItemTokens(item)
+		s.history[i].OfFunctionCallOutput.Output = placeholder
+		stats.TokensAfter += estimateItemTokens(s.history[i])
+		replacements[output.CallID] = placeholder
+	}
+	if len(replacements) > 0 {
+		for i := range s.input {
+			output := s.input[i].OfFunctionCallOutput
+			if output == nil {
+				continue
+			}
+			if replacement, ok := replacements[output.CallID]; ok {
+				s.input[i].OfFunctionCallOutput.Output = replacement
+			}
+		}
+	}
+	return stats
+}
+
+func protectedRecentTurnIndex(history responses.ResponseInputParam, keepTurns int) int {
+	if keepTurns <= 0 {
+		return len(history)
+	}
+	seen := 0
+	for i := len(history) - 1; i >= 0; i-- {
+		if isAssistantTurnMarker(history[i]) || isUserMessage(history[i]) {
+			seen++
+			if seen >= keepTurns {
+				return i
+			}
+		}
+	}
+	return 0
+}
+
+func isAssistantTurnMarker(item responses.ResponseInputItemUnionParam) bool {
+	if item.OfFunctionCall != nil {
+		return true
+	}
+	if item.OfMessage == nil {
+		return false
+	}
+	return string(item.OfMessage.Role) == string(responses.EasyInputMessageRoleAssistant)
+}
+
+func referencedToolOutputs(history responses.ResponseInputParam) map[string]bool {
+	protected := map[string]bool{}
+	plan := strings.ToLower(extractLatestPlan(history))
+	requiredSkills := extractRequiredSkills(history)
+	for _, item := range history {
+		fc := item.OfFunctionCall
+		if fc == nil {
+			continue
+		}
+		name := strings.ToLower(fc.Name)
+		if name == "skill" {
+			protected[fc.CallID] = true
+			continue
+		}
+		if plan != "" && (strings.Contains(plan, strings.ToLower(fc.CallID)) || strings.Contains(plan, name)) {
+			protected[fc.CallID] = true
+		}
+		for _, skill := range requiredSkills {
+			if strings.Contains(strings.ToLower(fc.Arguments), strings.ToLower(skill)) {
+				protected[fc.CallID] = true
+			}
+		}
+	}
+	return protected
+}
+
+func toolNameForCallID(history responses.ResponseInputParam, callID string) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		if fc := history[i].OfFunctionCall; fc != nil && fc.CallID == callID {
+			return fc.Name
+		}
+	}
+	return ""
+}
+
+func isPrunedToolOutput(output string) bool {
+	return strings.HasPrefix(strings.TrimSpace(output), "[output pruned:")
 }
 
 func compactionSummaryMessage(summary string) responses.ResponseInputItemUnionParam {
@@ -487,6 +817,291 @@ func validateCompactionSummary(summary string) error {
 		last = idx
 	}
 	return nil
+}
+
+func preserveCompactionState(summary string, history responses.ResponseInputParam) string {
+	summary = strings.TrimSpace(summary)
+	if summary == "" {
+		return summary
+	}
+	taskState := extractTaskState(history)
+	requiredSkills := extractRequiredSkills(history)
+	currentPlan := extractLatestPlan(history)
+	modifiedFiles := extractModifiedFiles(history, summary)
+	if taskState != "" {
+		summary = appendHeadingLines(summary, "## Current Task State", []string{taskState})
+	}
+	if len(requiredSkills) > 0 {
+		summary = appendHeadingLines(summary, "## Required Skills", requiredSkills)
+	}
+	if currentPlan != "" {
+		summary = appendHeadingBlock(summary, "## Current Plan", currentPlan)
+	}
+	if len(modifiedFiles) > 0 {
+		summary = appendHeadingLines(summary, "## Files Changed", modifiedFiles)
+	}
+	return summary
+}
+
+func appendHeadingLines(summary, heading string, values []string) string {
+	var lines []string
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" || headingSectionContains(summary, heading, value) {
+			continue
+		}
+		if !markdownListPrefixRE.MatchString(value) {
+			value = "- " + value
+		}
+		lines = append(lines, value)
+	}
+	if len(lines) == 0 {
+		return summary
+	}
+	return appendHeadingBlock(summary, heading, strings.Join(lines, "\n"))
+}
+
+func appendHeadingBlock(summary, heading, block string) string {
+	block = strings.TrimSpace(block)
+	if block == "" || headingSectionContains(summary, heading, block) {
+		return summary
+	}
+	start := strings.Index(summary, heading)
+	if start < 0 {
+		return strings.TrimSpace(summary) + "\n" + heading + "\n" + block
+	}
+	sectionRest := summary[start+len(heading):]
+	insertAt := len(summary)
+	if next := strings.Index(sectionRest, "\n## "); next >= 0 {
+		insertAt = start + len(heading) + next
+	}
+	prefix := strings.TrimRight(summary[:insertAt], "\n")
+	suffix := strings.TrimLeft(summary[insertAt:], "\n")
+	if suffix == "" {
+		return prefix + "\n" + block
+	}
+	return prefix + "\n" + block + "\n" + suffix
+}
+
+func headingSectionContains(summary, heading, value string) bool {
+	section := headingSection(summary, heading)
+	return section != "" && strings.Contains(section, strings.TrimSpace(value))
+}
+
+func extractTaskState(history responses.ResponseInputParam) string {
+	for _, item := range history {
+		if item.OfMessage != nil && string(item.OfMessage.Role) == string(responses.EasyInputMessageRoleUser) {
+			text := strings.TrimSpace(messageItemText(item.OfMessage))
+			if text == "" {
+				continue
+			}
+			if idx := strings.Index(text, "\n## "); idx >= 0 {
+				text = strings.TrimSpace(text[:idx])
+			}
+			if len(text) > 500 {
+				text = text[:500] + "..."
+			}
+			return "Initial task/spec: " + strings.ReplaceAll(text, "\n", " ")
+		}
+	}
+	return ""
+}
+
+func extractRequiredSkills(history responses.ResponseInputParam) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(value string) {
+		value = strings.Trim(strings.TrimSpace(value), "`*[] ")
+		value = strings.TrimPrefix(value, "- ")
+		value = strings.TrimSpace(value)
+		if value == "" || seen[value] {
+			return
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	for _, item := range history {
+		if fc := item.OfFunctionCall; fc != nil && fc.Name == "skill" {
+			if name := stringArgFromJSON(fc.Arguments, "name"); name != "" {
+				add(name)
+			}
+		}
+		if item.OfMessage == nil {
+			continue
+		}
+		text := messageItemText(item.OfMessage)
+		for _, heading := range []string{"Required Skills", "Required skills", "Skills"} {
+			for _, line := range strings.Split(markdownSectionByLooseHeading(text, heading), "\n") {
+				add(line)
+			}
+		}
+	}
+	return out
+}
+
+func extractLatestPlan(history responses.ResponseInputParam) string {
+	for i := len(history) - 1; i >= 0; i-- {
+		fc := history[i].OfFunctionCall
+		if fc == nil || fc.Name != "update_plan" {
+			continue
+		}
+		if plan := formatPlanArguments(fc.Arguments); plan != "" {
+			return plan
+		}
+	}
+	for i := len(history) - 1; i >= 0; i-- {
+		if history[i].OfMessage == nil {
+			continue
+		}
+		text := messageItemText(history[i].OfMessage)
+		for _, heading := range []string{"Current Plan", "Plan"} {
+			if section := markdownSectionByLooseHeading(text, heading); section != "" {
+				return section
+			}
+		}
+	}
+	return ""
+}
+
+func formatPlanArguments(arguments string) string {
+	var parsed struct {
+		Plan []struct {
+			Content string `json:"content"`
+			Step    string `json:"step"`
+			Status  string `json:"status"`
+			Notes   string `json:"notes"`
+		} `json:"plan"`
+	}
+	if err := json.Unmarshal([]byte(strings.TrimSpace(arguments)), &parsed); err != nil {
+		return ""
+	}
+	var lines []string
+	for _, item := range parsed.Plan {
+		step := strings.TrimSpace(firstNonEmpty(item.Content, item.Step))
+		if step == "" {
+			continue
+		}
+		status := firstNonEmpty(strings.TrimSpace(item.Status), "pending")
+		line := "- [" + status + "] " + step
+		if notes := strings.TrimSpace(item.Notes); notes != "" {
+			line += " - " + notes
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
+}
+
+func extractModifiedFiles(history responses.ResponseInputParam, summary string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(path string) {
+		path = strings.Trim(path, "` \"'")
+		if path == "" || seen[path] {
+			return
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	for _, path := range extractHeadingList(summary, "## Files Changed") {
+		add(path)
+	}
+	for _, item := range history {
+		fc := item.OfFunctionCall
+		if fc == nil {
+			continue
+		}
+		switch fc.Name {
+		case "write_file", "replace_text":
+			add(stringArgFromJSON(fc.Arguments, "path"))
+		case "apply_patch":
+			for _, path := range modifiedFilesFromPatch(stringArgFromJSON(fc.Arguments, "patch")) {
+				add(path)
+			}
+		}
+	}
+	return out
+}
+
+func modifiedFilesFromPatch(patch string) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(path string) {
+		path = strings.TrimSpace(path)
+		path = strings.TrimPrefix(path, "b/")
+		if path == "" || path == "/dev/null" || seen[path] {
+			return
+		}
+		seen[path] = true
+		out = append(out, path)
+	}
+	for _, line := range strings.Split(patch, "\n") {
+		if rest, ok := strings.CutPrefix(line, "*** Update File: "); ok {
+			add(rest)
+		}
+		if rest, ok := strings.CutPrefix(line, "*** Add File: "); ok {
+			add(rest)
+		}
+		if rest, ok := strings.CutPrefix(line, "+++ "); ok {
+			add(rest)
+		}
+	}
+	return out
+}
+
+func stringArgFromJSON(raw, key string) string {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(raw)), &args); err != nil {
+		return ""
+	}
+	value, _ := args[key].(string)
+	return strings.TrimSpace(value)
+}
+
+func markdownSectionByLooseHeading(text, heading string) string {
+	lines := strings.Split(text, "\n")
+	for i, line := range lines {
+		trimmed := strings.TrimSpace(strings.TrimLeft(line, "#"))
+		trimmed = strings.TrimSuffix(trimmed, ":")
+		if !strings.EqualFold(trimmed, heading) {
+			continue
+		}
+		var section []string
+		for _, next := range lines[i+1:] {
+			if strings.HasPrefix(strings.TrimSpace(next), "#") {
+				break
+			}
+			if strings.TrimSpace(next) != "" {
+				section = append(section, strings.TrimSpace(next))
+			}
+		}
+		return strings.Join(section, "\n")
+	}
+	return ""
+}
+
+func mergeCompactionSummaries(summaries ...string) string {
+	var b strings.Builder
+	for _, heading := range compactionRequiredHeadings {
+		b.WriteString(heading)
+		b.WriteByte('\n')
+		wrote := false
+		for _, summary := range summaries {
+			section := headingSection(summary, heading)
+			if section == "" {
+				continue
+			}
+			if wrote {
+				b.WriteByte('\n')
+			}
+			b.WriteString(section)
+			wrote = true
+		}
+		if !wrote {
+			b.WriteString("- none")
+		}
+		b.WriteString("\n")
+	}
+	return strings.TrimSpace(b.String())
 }
 
 type compactionDetails = agentsession.CompactionDetails
@@ -563,6 +1178,39 @@ func estimateHistoryTokens(history responses.ResponseInputParam) int {
 	total := 0
 	for i := range history {
 		total += estimateItemTokens(history[i])
+	}
+	return total
+}
+
+func estimateContextTokens(instructions string, tools []responses.ToolUnionParam, history responses.ResponseInputParam) compactionTokenBreakdown {
+	system := countTextTokens(instructions)
+	toolTokens := estimateToolSchemaTokens(tools)
+	messages := estimateHistoryTokens(history)
+	return compactionTokenBreakdown{
+		SystemPrompt: system,
+		Tools:        toolTokens,
+		Messages:     messages,
+		Total:        system + toolTokens + messages,
+	}
+}
+
+func estimateToolSchemaTokens(tools []responses.ToolUnionParam) int {
+	total := 0
+	for _, tool := range tools {
+		if data, err := json.Marshal(tool); err == nil {
+			total += countTextTokens(string(data)) + perItemTokenOverhead
+			continue
+		}
+		if tool.OfFunction != nil {
+			total += countTextTokens(tool.OfFunction.Name)
+			if tool.OfFunction.Description.Valid() {
+				total += countTextTokens(tool.OfFunction.Description.Value)
+			}
+			if data, err := json.Marshal(tool.OfFunction.Parameters); err == nil {
+				total += countTextTokens(string(data))
+			}
+			total += perItemTokenOverhead
+		}
 	}
 	return total
 }

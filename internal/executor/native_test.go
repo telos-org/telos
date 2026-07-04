@@ -2794,13 +2794,22 @@ func TestNativeExecutorDoesNotRetryProviderInvalidRequest(t *testing.T) {
 }
 
 func TestClassifyProviderMessageDistinguishesContextLimit(t *testing.T) {
-	err := classifyProviderMessage("context length exceeded maximum context", http.StatusBadRequest)
-	execErr, ok := err.(*executorError)
-	if !ok {
-		t.Fatalf("error type: %T %v", err, err)
+	fixtures := []string{
+		"context_length_exceeded: maximum context length reached",
+		"Invalid request: string too long",
+		"prompt is too long: 200001 tokens",
+		"exceeds the maximum number of tokens",
+		"400 bad request: token limit exceeded by prompt",
 	}
-	if execErr.Code != errProviderContextLimit || execErr.Retryable {
-		t.Fatalf("context-limit classification: %+v", execErr)
+	for _, fixture := range fixtures {
+		err := classifyProviderMessage(fixture, http.StatusBadRequest)
+		execErr, ok := err.(*executorError)
+		if !ok {
+			t.Fatalf("error type for %q: %T %v", fixture, err, err)
+		}
+		if execErr.Code != errProviderContextLimit || execErr.Retryable {
+			t.Fatalf("context-limit classification for %q: %+v", fixture, execErr)
+		}
 	}
 }
 

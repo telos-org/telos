@@ -324,6 +324,7 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 		state:           t.state,
 		model:           t.model,
 		instructions:    t.instructions,
+		tools:           t.tools,
 		reasoning:       t.reasoning,
 		maxOutputTokens: t.maxOutputTokens,
 		logger:          t.logger,
@@ -352,9 +353,29 @@ func (t *responsesClient) send(ctx context.Context) (agentTurn, error) {
 		_ = t.logger.modelRequest(t.modelRequestLogData(seq, ""))
 		result, err = t.completeWithRetries(ctx, seq, t.params(), false)
 	}
+	if err != nil && isContextLimitError(err) && t.state.mode == conversationStateStatelessHistory {
+		reactiveStats, compactErr := t.compactor.compactReactive(ctx, compactionRuntime{
+			state:           t.state,
+			model:           t.model,
+			instructions:    t.instructions,
+			tools:           t.tools,
+			reasoning:       t.reasoning,
+			maxOutputTokens: t.maxOutputTokens,
+			logger:          t.logger,
+			complete:        t.completeCompaction,
+		})
+		compStats = mergeTurnStats(compStats, reactiveStats)
+		if compactErr == nil {
+			_ = t.logger.retry(seq, 1, 0, newExecutorError(errProviderContextLimit, "reactive compaction retry"))
+			_ = t.logger.modelRequest(t.modelRequestLogData(seq, t.state.previousResponseID()))
+			result, err = t.completeWithRetries(ctx, seq, t.params(), false)
+		} else {
+			err = compactErr
+		}
+	}
 	if err != nil {
 		_ = t.logger.errorEvent(seq, err)
-		return agentTurn{}, err
+		return agentTurn{stats: compStats}, err
 	}
 	final := result.Response
 	t.state.recordResponseID(final.ID)
@@ -616,25 +637,68 @@ func classifyProviderError(err error) error {
 func classifyProviderMessage(message string, statusCode int) error {
 	lower := strings.ToLower(message)
 	switch {
+	case isContextLimitMessage(lower):
+		return newExecutorError(errProviderContextLimit, message)
 	case statusCode == http.StatusTooManyRequests:
 		return retryableExecutorError(errProviderRateLimited, message)
 	case statusCode == http.StatusRequestTimeout || strings.Contains(lower, "timeout"):
 		return retryableExecutorError(errProviderTimeout, message)
 	case statusCode >= 500:
 		return retryableExecutorError(errProviderUnavailable, message)
-	case statusCode == http.StatusBadRequest && (strings.Contains(lower, "context") || strings.Contains(lower, "token")):
-		return newExecutorError(errProviderContextLimit, message)
 	case statusCode >= 400:
 		return newExecutorError(errProviderInvalidRequest, message)
 	// Text-only fallback classification is best-effort. Prefer typed/status
 	// provider errors whenever the transport exposes them.
 	case strings.Contains(lower, "rate limit") || strings.Contains(lower, "too many request"):
 		return retryableExecutorError(errProviderRateLimited, message)
-	case strings.Contains(lower, "context length") || strings.Contains(lower, "maximum context"):
-		return newExecutorError(errProviderContextLimit, message)
 	default:
 		return retryableExecutorError(errProviderUnavailable, message)
 	}
+}
+
+func isContextLimitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	var execErr *executorError
+	if errors.As(err, &execErr) && execErr.Code == errProviderContextLimit {
+		return true
+	}
+	return isContextLimitMessage(err.Error())
+}
+
+func isContextLimitMessage(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return false
+	}
+	needles := []string{
+		"context_length_exceeded",
+		"context length exceeded",
+		"maximum context length",
+		"maximum context",
+		"context window",
+		"prompt is too long",
+		"prompt too long",
+		"string too long",
+		"exceeds the maximum number of tokens",
+		"exceeded token limit",
+		"token limit exceeded",
+		"too many tokens",
+		"input is too long",
+	}
+	for _, needle := range needles {
+		if strings.Contains(lower, needle) {
+			return true
+		}
+	}
+	if strings.Contains(lower, "context") && strings.Contains(lower, "limit") {
+		return true
+	}
+	if strings.Contains(lower, "token") && (strings.Contains(lower, "limit") || strings.Contains(lower, "maximum") || strings.Contains(lower, "exceed")) {
+		return true
+	}
+	return false
 }
 
 func responseToolCalls(output []responses.ResponseOutputItemUnion) []nativeToolCall {

@@ -361,7 +361,7 @@ func (l *nativeSessionLogger) terminal(state TerminalState) error {
 	}))
 }
 
-func (l *nativeSessionLogger) compaction(p agentsession.CompactionPayload) error {
+func (l *nativeSessionLogger) compaction(p compactionEventPayload) error {
 	return l.event(agentsession.KindCompaction, agentsession.MarshalPayload(&p))
 }
 

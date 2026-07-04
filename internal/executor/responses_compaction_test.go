@@ -3,6 +3,7 @@ package executor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +45,7 @@ func TestResponsesClientUnderBudgetSkipsCompaction(t *testing.T) {
 }
 
 func TestResponsesClientCompactsBeforeNormalRequest(t *testing.T) {
-	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "500")
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "3000")
 	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
 	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
 
@@ -115,7 +116,7 @@ func TestResponsesClientCompactsBeforeNormalRequest(t *testing.T) {
 }
 
 func TestResponsesClientInvalidCompactionFallsBackToTruncate(t *testing.T) {
-	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "500")
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "3000")
 	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
 	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
 
@@ -166,7 +167,7 @@ func TestResponsesClientInvalidCompactionFallsBackToTruncate(t *testing.T) {
 }
 
 func TestResponsesClientFoldsCompactionSpendIntoTurnStats(t *testing.T) {
-	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "500")
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "3000")
 	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
 	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
 
@@ -203,7 +204,7 @@ func TestResponsesClientFoldsCompactionSpendIntoTurnStats(t *testing.T) {
 }
 
 func TestResponsesClientStopsAfterCompactionWhenBudgetExhausted(t *testing.T) {
-	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "500")
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "3000")
 	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
 	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
 
@@ -240,7 +241,7 @@ func TestResponsesClientStopsAfterCompactionWhenBudgetExhausted(t *testing.T) {
 }
 
 func TestResponsesClientNaiveCutoffDropsOldHistoryWithoutLLMCall(t *testing.T) {
-	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "500")
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "3000")
 	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
 	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
 	t.Setenv("TELOS_AUTOCOMPACT_STRATEGY", "truncate")
@@ -286,7 +287,7 @@ func TestResponsesClientLLMCompactionPreservesAnchorNaiveLoses(t *testing.T) {
 
 	run := func(t *testing.T, strategy string) string {
 		t.Helper()
-		t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "700")
+		t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "3500")
 		t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
 		t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "40")
 		t.Setenv("TELOS_AUTOCOMPACT_STRATEGY", strategy)
@@ -342,7 +343,7 @@ func TestResponsesClientLLMCompactionPreservesAnchorNaiveLoses(t *testing.T) {
 
 func TestResponsesClientServerChainIgnoresCompaction(t *testing.T) {
 	t.Setenv("TELOS_MODEL_STATE_MODE", "server_chain")
-	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "500")
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "3000")
 	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
 	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
 
@@ -369,7 +370,7 @@ func TestResponsesClientServerChainIgnoresCompaction(t *testing.T) {
 }
 
 func TestResponsesClientRetriesTransientCompactionError(t *testing.T) {
-	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "500")
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "3000")
 	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
 	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
 
@@ -407,6 +408,157 @@ func TestResponsesClientRetriesTransientCompactionError(t *testing.T) {
 	}
 	if len(sessionLogEventsByType(t, client.logger.path, "retry")) == 0 {
 		t.Fatal("expected a retry event for the transient compaction failure")
+	}
+}
+
+func TestResponsesClientRecursiveCompactionSplitsOnContextLimit(t *testing.T) {
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "4000")
+	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
+	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
+
+	var compactRequests int
+	var normalRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		input := requestInputText(t, body)
+		if strings.Contains(input, compactionCommand) {
+			compactRequests++
+			if compactRequests == 1 {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, `{"error":{"message":"context_length_exceeded"}}`)
+				return
+			}
+			label := "split"
+			if strings.Contains(input, "left-block") {
+				label = "left"
+			}
+			if strings.Contains(input, "right-block") {
+				label = "right"
+			}
+			writeResponsesJSON(w, responseWithText("resp_compact_"+label, validCompactionSummary(label)))
+			return
+		}
+		normalRequests++
+		writeResponsesJSON(w, responseWithText("resp_normal", "Continued."))
+	}))
+	defer server.Close()
+
+	client := newTestResponsesClient(t, server.URL, "task")
+	client.state.history = responses.ResponseInputParam{
+		messageItem("task"),
+		messageItem("left-block " + fillerText(1500)),
+		messageItem("left-block " + fillerText(1500)),
+		messageItem("right-block " + fillerText(1500)),
+		messageItem("right-block " + fillerText(1500)),
+	}
+
+	turn, err := client.send(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.text != "Continued." {
+		t.Fatalf("turn text: %q", turn.text)
+	}
+	if compactRequests != 3 || normalRequests != 1 {
+		t.Fatalf("requests: compact=%d normal=%d", compactRequests, normalRequests)
+	}
+	if got := client.state.compactionSummary; !strings.Contains(got, "left") || !strings.Contains(got, "right") {
+		t.Fatalf("recursive summary should merge split summaries:\n%s", got)
+	}
+}
+
+func TestResponsesClientRecursiveCompactionFallsBackToTruncateAtDepthBound(t *testing.T) {
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "3000")
+	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "0.5")
+	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
+
+	var compactRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		input := requestInputText(t, body)
+		if strings.Contains(input, compactionCommand) {
+			compactRequests++
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"prompt is too long"}}`)
+			return
+		}
+		writeResponsesJSON(w, responseWithText("resp_normal", "Continued."))
+	}))
+	defer server.Close()
+
+	client := newTestResponsesClient(t, server.URL, "task")
+	client.state.history = responses.ResponseInputParam{messageItem("task")}
+	for i := 0; i < 16; i++ {
+		client.state.history = append(client.state.history, messageItem(fmt.Sprintf("old-depth-bound-%02d %s", i, fillerText(1000))))
+	}
+	client.state.history = append(client.state.history, messageItem("recent"))
+
+	turn, err := client.send(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.text != "Continued." {
+		t.Fatalf("turn text: %q", turn.text)
+	}
+	if compactRequests == 0 || compactRequests > 15 {
+		t.Fatalf("recursive compaction should be attempted with bounded depth, got %d requests", compactRequests)
+	}
+	events := sessionLogEventsByType(t, client.logger.path, "compaction")
+	if len(events) < 2 || events[len(events)-1]["reason"] != "token_budget_naive_cutoff" {
+		t.Fatalf("expected truncate fallback event after recursive failure: %#v", events)
+	}
+}
+
+func TestResponsesClientContextLimitTriggersReactiveCompactionRetry(t *testing.T) {
+	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "100000")
+	t.Setenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO", "1")
+	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "20")
+
+	var requests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		body, _ := io.ReadAll(r.Body)
+		input := requestInputText(t, body)
+		switch requests {
+		case 1:
+			if strings.Contains(input, compactionCommand) {
+				t.Fatalf("first request should be the normal request:\n%s", body)
+			}
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"exceeds the maximum number of tokens"}}`)
+		case 2:
+			if !strings.Contains(input, compactionCommand) {
+				t.Fatalf("second request should be reactive compaction:\n%s", body)
+			}
+			writeResponsesJSON(w, responseWithText("resp_compact", validCompactionSummary("reactive")))
+		case 3:
+			if strings.Contains(input, "old reactive") {
+				t.Fatalf("retry should use compacted history:\n%s", body)
+			}
+			writeResponsesJSON(w, responseWithText("resp_normal", "Recovered."))
+		default:
+			t.Fatalf("unexpected request %d", requests)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestResponsesClient(t, server.URL, "task")
+	client.state.history = responses.ResponseInputParam{
+		messageItem("task"),
+		messageItem("old reactive " + fillerText(4000)),
+		messageItem("recent"),
+	}
+
+	turn, err := client.send(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if turn.text != "Recovered." || requests != 3 {
+		t.Fatalf("reactive retry failed: turn=%+v requests=%d", turn, requests)
+	}
+	events := sessionLogEventsByType(t, client.logger.path, "compaction")
+	if len(events) != 1 || events[0]["reason"] != "reactive_context_limit" {
+		t.Fatalf("reactive compaction event missing: %#v", events)
 	}
 }
 

@@ -1,11 +1,15 @@
 package executor
 
 import (
+	"context"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/responses"
+	"github.com/telos-org/telos/internal/game"
 )
 
 func largeFunctionOutputItem(callID string, size int) responses.ResponseInputItemUnionParam {
@@ -64,7 +68,7 @@ func TestCompactorUnderBudgetHasNoPlan(t *testing.T) {
 	s := newConversationState(responses.ResponseInputParam{messageItem("task")}, conversationStateStatelessHistory)
 	s.history = append(s.history, messageItem("small"))
 
-	_, ok, err := newCompactor(compactionConfigFromEnv().forModel(0).withReserveOutput(4096)).plan(s)
+	_, ok, err := newCompactor(compactionConfigFromEnv().forModel(0).withReserveOutput(4096)).plan(s, "", nil, "token_budget", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -81,7 +85,7 @@ func TestCompactorPlansTokenBoundaryAndPreservesTask(t *testing.T) {
 	}
 	s.history = append(s.history, messageItem("recent user turn"), messageItem(strings.Repeat("r", 300)))
 
-	plan, ok, err := newCompactor(tightBudgetConfig()).plan(s)
+	plan, ok, err := newCompactor(tightBudgetConfig()).plan(s, "", nil, "token_budget", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -198,7 +202,7 @@ func TestPlannerCanCompactLatestOversizedToolOutput(t *testing.T) {
 		largeFunctionOutputItem("call_big", 8000),
 	}
 
-	plan, ok, err := newCompactor(compactionConfig{contextWindow: 1200, triggerRatio: 0.7, keepRecentTokens: 100}).plan(s)
+	plan, ok, err := newCompactor(compactionConfig{contextWindow: 1200, triggerRatio: 0.7, keepRecentTokens: 100}).plan(s, "", nil, "token_budget", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -222,7 +226,7 @@ func TestPlannerKeepsInBudgetRecentTailInsteadOfDroppingAll(t *testing.T) {
 	// recent item (~630 tokens) exceeds the keep-recent threshold so the selector
 	// points firstKept past it, but task+recent still fits the budget, so it must
 	// be kept rather than summarized away to an empty tail.
-	plan, ok, err := newCompactor(compactionConfig{contextWindow: 2000, triggerRatio: 0.5, keepRecentTokens: 20}).plan(s)
+	plan, ok, err := newCompactor(compactionConfig{contextWindow: 2000, triggerRatio: 0.5, keepRecentTokens: 20}).plan(s, "", nil, "token_budget", false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,6 +300,142 @@ func TestDetailsFromCompactionSummaryExtractsCleanPaths(t *testing.T) {
 	}
 }
 
+func TestPruneStaleToolOutputsKeepsPairsAndRecentTurns(t *testing.T) {
+	s := newConversationState(responses.ResponseInputParam{messageItem("task")}, conversationStateStatelessHistory)
+	s.history = responses.ResponseInputParam{
+		messageItem("task"),
+		functionCallItemNamed("old_call", "bash"),
+		largeFunctionOutputItem("old_call", 5000),
+		messageItem("assistant note"),
+		functionCallItemNamed("recent_call", "bash"),
+		largeFunctionOutputItem("recent_call", 5000),
+	}
+	c := newCompactor(compactionConfig{
+		pruneOlderThanTurns:  1,
+		pruneKeepRecentTurns: 1,
+		pruneMinOutputBytes:  100,
+	})
+
+	stats := c.pruneStaleToolOutputs(s)
+
+	if stats.OutputsPruned != 1 || stats.BytesBefore == 0 || stats.BytesAfter == 0 {
+		t.Fatalf("prune stats not recorded: %#v", stats)
+	}
+	if hasOrphanFunctionOutput(s.history) {
+		t.Fatalf("pruning must not orphan function outputs: %#v", s.history)
+	}
+	oldOut := s.history[2].OfFunctionCallOutput.Output
+	recentOut := s.history[5].OfFunctionCallOutput.Output
+	if !strings.HasPrefix(oldOut, "[output pruned: bash ") {
+		t.Fatalf("old output not pruned with placeholder: %q", oldOut)
+	}
+	if strings.HasPrefix(recentOut, "[output pruned:") {
+		t.Fatalf("recent turn output should remain verbatim: %q", recentOut)
+	}
+}
+
+func TestCompactionEventRecordsPruningStats(t *testing.T) {
+	logger := newNativeSessionLogger(filepath.Join(t.TempDir(), "session.jsonl"), t.TempDir())
+	if err := logger.start(); err != nil {
+		t.Fatal(err)
+	}
+	s := newConversationState(responses.ResponseInputParam{messageItem("task")}, conversationStateStatelessHistory)
+	s.history = responses.ResponseInputParam{
+		messageItem("task"),
+		functionCallItemNamed("old_call", "bash"),
+		largeFunctionOutputItem("old_call", 8000),
+		messageItem("assistant note"),
+		functionCallItemNamed("recent_call", "bash"),
+		largeFunctionOutputItem("recent_call", 200),
+	}
+	c := newCompactor(compactionConfig{
+		contextWindow:        1500,
+		triggerRatio:         0.5,
+		keepRecentTokens:     40,
+		pruneOlderThanTurns:  1,
+		pruneKeepRecentTurns: 1,
+		pruneMinOutputBytes:  100,
+	})
+
+	_, err := c.compact(context.Background(), compactionRuntime{
+		state:        s,
+		model:        "test-model",
+		instructions: "",
+		logger:       logger,
+		complete: func(context.Context, responses.ResponseNewParams) (completionResult, game.TurnStats, error) {
+			t.Fatal("prune-only compaction should not call summarizer")
+			return completionResult{}, game.TurnStats{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := sessionLogEventsByType(t, logger.path, "compaction")
+	if len(events) != 1 {
+		t.Fatalf("compaction events: %#v", events)
+	}
+	stats, _ := events[0]["pruned_tool_outputs"].(map[string]any)
+	if stats["outputs_pruned"] == nil || events[0]["reason"] != "stale_tool_output_prune" {
+		t.Fatalf("pruning stats missing from compaction event: %#v", events[0])
+	}
+}
+
+func TestContextEstimateIncludesToolSchemaTokens(t *testing.T) {
+	history := responses.ResponseInputParam{messageItem("task")}
+	tools := []responses.ToolUnionParam{{
+		OfFunction: &responses.FunctionToolParam{
+			Name:        "fixture_tool",
+			Description: openai.String("fixture description with enough text to count"),
+			Parameters: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"path": map[string]any{"type": "string", "description": "workspace path"},
+				},
+			},
+		},
+	}}
+
+	withoutTools := estimateContextTokens("system", nil, history)
+	withTools := estimateContextTokens("system", tools, history)
+
+	if withTools.Tools <= 0 {
+		t.Fatalf("expected tool schema tokens, got %#v", withTools)
+	}
+	if withTools.Total != withoutTools.Total+withTools.Tools {
+		t.Fatalf("total should include tool tokens: without=%#v with=%#v", withoutTools, withTools)
+	}
+}
+
+func TestPreserveCompactionStateCarriesSkillsPlanAndModifiedFiles(t *testing.T) {
+	summary := validCompactionSummary("fixture")
+	history := responses.ResponseInputParam{
+		messageItem("task\n\n## Required Skills\n- imagegen\n"),
+		functionCallItemNamedArgs("plan", "update_plan", `{"plan":[{"step":"Patch compactor","status":"in_progress"}]}`),
+		functionCallItemNamedArgs("skill", "skill", `{"action":"read","name":"openai-docs"}`),
+		largeFunctionOutputItem("skill", 300),
+		functionCallItemNamedArgs("write", "write_file", `{"path":"internal/executor/compactor.go","content":"x"}`),
+	}
+
+	got := preserveCompactionState(summary, history)
+
+	for _, want := range []string{"imagegen", "openai-docs", "[in_progress] Patch compactor", "internal/executor/compactor.go", "Initial task/spec:"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("preserved summary missing %q:\n%s", want, got)
+		}
+	}
+	if err := validateCompactionSummary(got); err != nil {
+		t.Fatalf("preserved summary should remain valid: %v\n%s", err, got)
+	}
+}
+
+func functionCallItemNamed(callID, name string) responses.ResponseInputItemUnionParam {
+	return responses.ResponseInputItemParamOfFunctionCall(`{"path":"answer.txt"}`, callID, name)
+}
+
+func functionCallItemNamedArgs(callID, name, args string) responses.ResponseInputItemUnionParam {
+	return responses.ResponseInputItemParamOfFunctionCall(args, callID, name)
+}
+
 func requestText(items responses.ResponseInputParam) string {
 	var b strings.Builder
 	for _, item := range items {
@@ -319,8 +459,14 @@ func validCompactionSummary(label string) string {
 	return strings.Join([]string{
 		"## Goal",
 		"Continue " + label,
+		"## Current Task State",
+		"- Continue current task",
 		"## Constraints & Preferences",
 		"- Keep changes scoped",
+		"## Required Skills",
+		"- none",
+		"## Current Plan",
+		"- continue",
 		"## Progress",
 		"- Implemented core pieces",
 		"## Key Decisions",
