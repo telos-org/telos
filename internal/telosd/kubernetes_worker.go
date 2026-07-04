@@ -22,6 +22,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -77,6 +78,8 @@ const (
 	gatewayKeyAliasEnv  = "TELOS_GATEWAY_KEY_ALIAS"
 	gatewayModeEnv      = "TELOS_GATEWAY_MODE"
 )
+
+const sessionAPITokenSecretKey = "token"
 
 var gatewayEnvNames = []string{
 	gatewayBaseURLEnv,
@@ -179,11 +182,15 @@ func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason strin
 	if err := s.prepareWorkerNamespace(ctx, namespace, credential); err != nil {
 		return err
 	}
+	tokenSecretName, err := s.recreateSessionAPITokenSecret(ctx, namespace, session, kind, m)
+	if err != nil {
+		return err
+	}
 	switch kind {
 	case sessionapi.KindController:
-		return s.createOrUpdateDeployment(ctx, s.controllerDeployment(session.SessionID, m, wakeReason))
+		return s.createOrUpdateDeployment(ctx, s.controllerDeployment(session.SessionID, m, wakeReason, tokenSecretName))
 	case sessionapi.KindTask:
-		return s.createJobIfMissing(ctx, s.taskJob(session.SessionID, m, wakeReason))
+		return s.createJobIfMissing(ctx, s.taskJob(session.SessionID, m, wakeReason, tokenSecretName))
 	default:
 		return fmt.Errorf("invalid session_kind %q", kind)
 	}
@@ -399,6 +406,7 @@ func (s kubernetesSubstrate) controllerDeployment(
 	sessionID string,
 	m *sessionapi.Manifest,
 	wakeReason string,
+	tokenSecretName string,
 ) *appsv1.Deployment {
 	name := workerWorkloadName(sessionID, sessionapi.KindController)
 	namespace := workerNamespace(sessionID, sessionapi.KindController)
@@ -415,7 +423,7 @@ func (s kubernetesSubstrate) controllerDeployment(
 			Selector: &metav1.LabelSelector{
 				MatchLabels: map[string]string{"app.kubernetes.io/name": name},
 			},
-			Template: s.workerPodTemplate(sessionID, sessionapi.KindController, m, labels, wakeReason),
+			Template: s.workerPodTemplate(sessionID, sessionapi.KindController, m, labels, wakeReason, tokenSecretName),
 		},
 	}
 }
@@ -424,6 +432,7 @@ func (s kubernetesSubstrate) taskJob(
 	sessionID string,
 	m *sessionapi.Manifest,
 	wakeReason string,
+	tokenSecretName string,
 ) *batchv1.Job {
 	name := workerWorkloadName(sessionID, sessionapi.KindTask)
 	namespace := workerNamespace(sessionID, sessionapi.KindTask)
@@ -437,7 +446,7 @@ func (s kubernetesSubstrate) taskJob(
 		},
 		Spec: batchv1.JobSpec{
 			BackoffLimit: int32Ptr(0),
-			Template:     s.workerPodTemplate(sessionID, sessionapi.KindTask, m, labels, wakeReason),
+			Template:     s.workerPodTemplate(sessionID, sessionapi.KindTask, m, labels, wakeReason, tokenSecretName),
 		},
 	}
 }
@@ -448,6 +457,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 	m *sessionapi.Manifest,
 	labels map[string]string,
 	wakeReason string,
+	tokenSecretName string,
 ) corev1.PodTemplateSpec {
 	sessionDir := s.stateMountRoot + "/sessions/" + sessionID
 	annotations := s.workerAnnotations(m, wakeReason)
@@ -503,7 +513,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 			ImagePullPolicy: pullPolicy(s.agentImage),
 			SecurityContext: agentContainerSecurityContext(),
 			Command:         []string{s.runtimeTelosdPath, "--session-dir", sessionDir},
-			Env:             s.workerEnv(sessionID, m),
+			Env:             s.workerEnv(sessionID, m, tokenSecretName),
 			EnvFrom: []corev1.EnvFromSource{{
 				SecretRef: &corev1.SecretEnvSource{
 					LocalObjectReference: corev1.LocalObjectReference{Name: s.agentSecretName},
@@ -528,7 +538,7 @@ func (s kubernetesSubstrate) workerPodTemplate(
 	}
 }
 
-func (s kubernetesSubstrate) workerEnv(sessionID string, m *sessionapi.Manifest) []corev1.EnvVar {
+func (s kubernetesSubstrate) workerEnv(sessionID string, m *sessionapi.Manifest, tokenSecretName string) []corev1.EnvVar {
 	env := []corev1.EnvVar{
 		{Name: "PATH", Value: s.runtimeMountPath + ":/usr/local/bin:/bin:/usr/bin:/sbin:/usr/sbin"},
 		{
@@ -550,8 +560,14 @@ func (s kubernetesSubstrate) workerEnv(sessionID string, m *sessionapi.Manifest)
 		fieldEnv("TELOS_WAKE_REASON", "metadata.annotations['telos.ai/wake-reason']"),
 		fieldEnv("TELOS_WAKE_ID", "metadata.annotations['telos.ai/wake-id']"),
 	}
-	if m.Access != nil && strings.TrimSpace(m.Access.APIToken) != "" {
-		env = append(env, corev1.EnvVar{Name: "TELOS_API_TOKEN", Value: m.Access.APIToken})
+	if tokenSecretName != "" {
+		env = append(env, corev1.EnvVar{
+			Name: "TELOS_API_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{SecretKeyRef: &corev1.SecretKeySelector{
+				LocalObjectReference: corev1.LocalObjectReference{Name: tokenSecretName},
+				Key:                  sessionAPITokenSecretKey,
+			}},
+		})
 	}
 	if s.billingEnvID != "" {
 		env = append(env, corev1.EnvVar{Name: "TELOS_ENV_ID", Value: s.billingEnvID})
@@ -563,6 +579,116 @@ func (s kubernetesSubstrate) workerEnv(sessionID string, m *sessionapi.Manifest)
 		env = append(env, corev1.EnvVar{Name: "TELOS_COST_HARD_LIMIT", Value: "true"})
 	}
 	return env
+}
+
+func (s kubernetesSubstrate) recreateSessionAPITokenSecret(ctx context.Context, namespace string, session *sessionapi.Session, kind sessionapi.SessionKind, m *sessionapi.Manifest) (string, error) {
+	token, err := mintSessionAPIToken(session, kind, m)
+	if err != nil {
+		return "", err
+	}
+	name := sessionAPITokenSecretName(session.SessionID)
+	if err := s.deleteSecret(ctx, namespace, name); err != nil {
+		return "", fmt.Errorf("delete session API token secret %s/%s: %w", namespace, name, err)
+	}
+	if err := s.createSessionAPITokenSecret(ctx, namespace, name, token); err != nil {
+		return "", fmt.Errorf("create session API token secret %s/%s: %w", namespace, name, err)
+	}
+	return name, nil
+}
+
+func mintSessionAPIToken(session *sessionapi.Session, kind sessionapi.SessionKind, m *sessionapi.Manifest) (string, error) {
+	if session == nil {
+		return "", fmt.Errorf("mint session API token: session is required")
+	}
+	access, err := sessionapi.NewScopedToken(session.SessionID, kind)
+	if err == nil {
+		store, storeErr := fileStoreForSession(session)
+		if storeErr == nil {
+			if indexErr := store.IndexScopedToken(session.SessionID, kind, access); indexErr == nil {
+				return access.APIToken, nil
+			} else {
+				err = indexErr
+			}
+		} else {
+			err = storeErr
+		}
+	}
+	if m != nil && m.Access != nil && strings.TrimSpace(m.Access.APIToken) != "" {
+		return strings.TrimSpace(m.Access.APIToken), nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("mint session API token: %w", err)
+	}
+	return "", fmt.Errorf("mint session API token: no token issued")
+}
+
+func fileStoreForSession(session *sessionapi.Session) (*sessionapi.FileStore, error) {
+	if session == nil {
+		return nil, fmt.Errorf("session is required")
+	}
+	sessionDir := strings.TrimSpace(ptrValue(session.SessionDir))
+	if sessionDir == "" {
+		return nil, fmt.Errorf("session_dir is required")
+	}
+	root := filepath.Dir(sessionDir)
+	if root == "." || root == "" {
+		return nil, fmt.Errorf("invalid session_dir %q", sessionDir)
+	}
+	return sessionapi.NewFileStore(root, sessionapi.RuntimeCloud), nil
+}
+
+func sessionAPITokenSecretName(sessionID string) string {
+	return "telos-session-api-" + sessionShortID(sessionID)
+}
+
+func (s kubernetesSubstrate) createSessionAPITokenSecret(ctx context.Context, namespace string, name string, token string) error {
+	secret, err := s.sessionAPITokenSecret(ctx, namespace, name, token)
+	if err != nil {
+		return err
+	}
+	_, err = s.client.CoreV1().Secrets(namespace).Create(ctx, secret, metav1.CreateOptions{})
+	if apierrors.IsAlreadyExists(err) {
+		return s.createOrUpdateSecret(ctx, secret)
+	}
+	return err
+}
+
+func (s kubernetesSubstrate) sessionAPITokenSecret(ctx context.Context, namespace string, name string, token string) (*corev1.Secret, error) {
+	token = strings.TrimSpace(token)
+	if token == "" {
+		return nil, fmt.Errorf("session API token is required")
+	}
+	ownerRef, err := s.workerNamespaceOwnerReference(ctx, namespace)
+	if err != nil {
+		return nil, err
+	}
+	return &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:            name,
+			Namespace:       namespace,
+			Labels:          map[string]string{"telos/role": "session-api-token"},
+			OwnerReferences: []metav1.OwnerReference{ownerRef},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: map[string][]byte{sessionAPITokenSecretKey: []byte(token)},
+	}, nil
+}
+
+func (s kubernetesSubstrate) workerNamespaceOwnerReference(ctx context.Context, namespace string) (metav1.OwnerReference, error) {
+	ns, err := s.client.CoreV1().Namespaces().Get(ctx, namespace, metav1.GetOptions{})
+	if err != nil {
+		return metav1.OwnerReference{}, fmt.Errorf("read worker namespace %s: %w", namespace, err)
+	}
+	uid := ns.UID
+	if uid == "" {
+		uid = types.UID(namespace)
+	}
+	return metav1.OwnerReference{
+		APIVersion: "v1",
+		Kind:       "Namespace",
+		Name:       namespace,
+		UID:        uid,
+	}, nil
 }
 
 func fieldEnv(name string, fieldPath string) corev1.EnvVar {

@@ -85,6 +85,7 @@ func TestKubernetesSubstrateAppliesControllerWorker(t *testing.T) {
 	}
 
 	assertSecretExists(t, client, namespace, cfg.Kubernetes.AgentSecretName)
+	assertSessionAPITokenSecretAuthenticates(t, client, session, sessionapi.KindController)
 	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_API_KEY", "test-gateway-key")
 	assertSecretData(t, client, namespace, cfg.Kubernetes.AgentSecretName, "TELOS_GATEWAY_BASE_URL", "https://gateway.example.com/v1")
 	assertSecretExists(t, client, namespace, "telos-env-keys")
@@ -261,6 +262,81 @@ func TestKubernetesSubstrateAppliesTaskWorker(t *testing.T) {
 	assertWorkerTemplate(t, &job.Spec.Template, session.SessionID, "task_started")
 	if job.Spec.Template.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Fatalf("restart policy: got %q", job.Spec.Template.Spec.RestartPolicy)
+	}
+	assertSessionAPITokenSecretAuthenticates(t, client, session, sessionapi.KindTask)
+}
+
+func TestKubernetesSubstrateRecreatesSessionAPITokenSecretOnRelaunch(t *testing.T) {
+	setGatewayEnv(t)
+
+	cfg := testCloudConfig(t)
+	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+	session := testCloudSession(t, sessionapi.KindController)
+
+	if err := substrate.Apply(session, "controller_started", ""); err != nil {
+		t.Fatal(err)
+	}
+	first := sessionAPITokenSecretData(t, client, session)
+	if first == "" {
+		t.Fatal("first session API token secret is empty")
+	}
+	if err := substrate.Apply(session, "controller_relaunched", ""); err != nil {
+		t.Fatal(err)
+	}
+	second := sessionAPITokenSecretData(t, client, session)
+	if second == "" {
+		t.Fatal("second session API token secret is empty")
+	}
+	if second == first {
+		t.Fatal("session API token secret was not rotated on relaunch")
+	}
+	assertSessionTokenAuthenticates(t, session, second, sessionapi.KindController)
+}
+
+func TestKubernetesSubstrateRotatesLegacyManifestAPITokenIntoSecret(t *testing.T) {
+	setGatewayEnv(t)
+
+	cfg := testCloudConfig(t)
+	client := fake.NewSimpleClientset(testEnvObjects(cfg)...)
+	substrate := newKubernetesSubstrateWithClient(cfg, client)
+	session := testCloudSession(t, sessionapi.KindController)
+	writeLegacyManifestAPIToken(t, session, "legacy-session-token")
+
+	if err := substrate.Apply(session, "controller_started", ""); err != nil {
+		t.Fatal(err)
+	}
+	token := sessionAPITokenSecretData(t, client, session)
+	if token == "" {
+		t.Fatal("session API token secret is empty")
+	}
+	if token == "legacy-session-token" {
+		t.Fatal("legacy manifest API token was reused instead of rotating")
+	}
+	namespace := workerNamespace(session.SessionID, sessionapi.KindController)
+	deployment, err := client.AppsV1().Deployments(namespace).Get(context.Background(), workerWorkloadName(session.SessionID, sessionapi.KindController), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertSessionAPITokenEnvRef(t, deployment.Spec.Template.Spec.Containers[0].Env, sessionAPITokenSecretName(session.SessionID))
+}
+
+func TestWorkerEnvSessionAPITokenSecretRefGolden(t *testing.T) {
+	cfg := testCloudConfig(t)
+	substrate := newKubernetesSubstrateWithClient(cfg, fake.NewSimpleClientset(testEnvObjects(cfg)...))
+	env := substrate.workerEnv("sess_cloud", &sessionapi.Manifest{}, sessionAPITokenSecretName("sess_cloud"))
+	got := mustJSON(t, envByName(env, "TELOS_API_TOKEN"))
+	want := `{
+  "name": "TELOS_API_TOKEN",
+  "valueFrom": {
+    "secretKeyRef": {
+      "name": "telos-session-api-cloud",
+      "key": "token"
+    }
+  }
+}`
+	if got != want {
+		t.Fatalf("TELOS_API_TOKEN env golden mismatch\n--- got ---\n%s\n--- want ---\n%s", got, want)
 	}
 }
 
@@ -1095,7 +1171,7 @@ func TestKubernetesWorkerEnvKeepsBillingTokenOutOfDefaultWorker(t *testing.T) {
 	cfg.Billing.Token = "billing-token"
 	substrate := newKubernetesSubstrateWithClient(cfg, fake.NewSimpleClientset(testEnvObjects(cfg)...))
 
-	env := substrate.workerEnv("sess_cloud", &sessionapi.Manifest{})
+	env := substrate.workerEnv("sess_cloud", &sessionapi.Manifest{}, sessionAPITokenSecretName("sess_cloud"))
 	if got := envValue(env, "TELOS_ENV_ID"); got != "env_test" {
 		t.Fatalf("TELOS_ENV_ID: got %q", got)
 	}
@@ -1187,7 +1263,7 @@ func TestKubernetesWorkerEnvKeepsBillingTokenOutOfManagedWorker(t *testing.T) {
 	cfg.Billing.Token = "billing-token"
 	substrate := newKubernetesSubstrateWithClient(cfg, fake.NewSimpleClientset(testEnvObjects(cfg)...))
 
-	env := substrate.workerEnv("sess_cloud", &sessionapi.Manifest{})
+	env := substrate.workerEnv("sess_cloud", &sessionapi.Manifest{}, sessionAPITokenSecretName("sess_cloud"))
 	if tokenFile := envByName(env, "TELOS_BILLING_ENV_TOKEN_FILE"); tokenFile != nil {
 		t.Fatalf("TELOS_BILLING_ENV_TOKEN_FILE should not be exposed: %+v", tokenFile)
 	}
@@ -1462,6 +1538,7 @@ func assertWorkerTemplate(t *testing.T, template *corev1.PodTemplateSpec, sessio
 	if container.Command[2] != "/telos-state/sessions/"+sessionID {
 		t.Fatalf("session dir: got %+v", container.Command)
 	}
+	assertSessionAPITokenEnvRef(t, container.Env, sessionAPITokenSecretName(sessionID))
 	assertNoLegacyAgentConfig(t, template.Spec.Volumes, container.VolumeMounts)
 }
 
@@ -1513,6 +1590,94 @@ func assertAgentSecurityContext(t *testing.T, ctx *corev1.SecurityContext) {
 func assertSecretExists(t *testing.T, client *fake.Clientset, namespace string, name string) {
 	t.Helper()
 	if _, err := client.CoreV1().Secrets(namespace).Get(context.Background(), name, metav1.GetOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func assertSessionAPITokenEnvRef(t *testing.T, env []corev1.EnvVar, wantSecret string) {
+	t.Helper()
+	tokenEnv := envByName(env, "TELOS_API_TOKEN")
+	if tokenEnv == nil {
+		t.Fatal("missing TELOS_API_TOKEN env")
+	}
+	if tokenEnv.Value != "" {
+		t.Fatalf("TELOS_API_TOKEN must not be embedded as a literal env value: %+v", tokenEnv)
+	}
+	if tokenEnv.ValueFrom == nil || tokenEnv.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("TELOS_API_TOKEN must reference a secret key: %+v", tokenEnv)
+	}
+	ref := tokenEnv.ValueFrom.SecretKeyRef
+	if ref.Name != wantSecret || ref.Key != sessionAPITokenSecretKey {
+		t.Fatalf("TELOS_API_TOKEN secret ref: got %s/%s, want %s/%s", ref.Name, ref.Key, wantSecret, sessionAPITokenSecretKey)
+	}
+}
+
+func assertSessionAPITokenSecretAuthenticates(t *testing.T, client *fake.Clientset, session *sessionapi.Session, kind sessionapi.SessionKind) {
+	t.Helper()
+	token := sessionAPITokenSecretData(t, client, session)
+	if token == "" {
+		t.Fatal("session API token secret is empty")
+	}
+	assertSessionTokenAuthenticates(t, session, token, kind)
+}
+
+func assertSessionTokenAuthenticates(t *testing.T, session *sessionapi.Session, token string, kind sessionapi.SessionKind) {
+	t.Helper()
+	store := sessionapi.NewFileStore(filepath.Dir(ptrValue(session.SessionDir)), sessionapi.RuntimeCloud)
+	caller, ok := store.CallerForToken(token)
+	if !ok {
+		t.Fatal("session API token secret did not authenticate")
+	}
+	if caller.SubjectSessionID != session.SessionID {
+		t.Fatalf("token subject: got %q want %q", caller.SubjectSessionID, session.SessionID)
+	}
+	wantRole := sessionapi.RoleTask
+	if kind == sessionapi.KindController {
+		wantRole = sessionapi.RoleController
+	}
+	if caller.Role != wantRole {
+		t.Fatalf("token role: got %q want %q", caller.Role, wantRole)
+	}
+}
+
+func sessionAPITokenSecretData(t *testing.T, client *fake.Clientset, session *sessionapi.Session) string {
+	t.Helper()
+	namespace := workerNamespace(session.SessionID, *session.SessionKind)
+	secret, err := client.CoreV1().Secrets(namespace).Get(context.Background(), sessionAPITokenSecretName(session.SessionID), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(secret.OwnerReferences) != 1 ||
+		secret.OwnerReferences[0].Kind != "Namespace" ||
+		secret.OwnerReferences[0].Name != namespace {
+		t.Fatalf("session API token secret owner refs: %+v", secret.OwnerReferences)
+	}
+	return strings.TrimSpace(string(secret.Data[sessionAPITokenSecretKey]))
+}
+
+func writeLegacyManifestAPIToken(t *testing.T, session *sessionapi.Session, token string) {
+	t.Helper()
+	path := filepath.Join(ptrValue(session.SessionDir), "session.json")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	access, _ := raw["access"].(map[string]any)
+	if access == nil {
+		access = map[string]any{}
+		raw["access"] = access
+	}
+	access["api_token"] = token
+	data, err = json.MarshalIndent(raw, "", "  ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = append(data, '\n')
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
 }
