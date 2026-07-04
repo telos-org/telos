@@ -153,6 +153,14 @@ func TestCloudSessionModelUsesEnvOverride(t *testing.T) {
 	}
 }
 
+func TestCloudSessionThinkingUsesEnvOverride(t *testing.T) {
+	t.Setenv("TELOS_CLOUD_DEFAULT_THINKING", "low")
+
+	if got := cloudSessionThinking(); got != "low" {
+		t.Fatalf("cloudSessionThinking = %q", got)
+	}
+}
+
 func TestCloudAgentTimeoutUsesEnvOverride(t *testing.T) {
 	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "120")
 

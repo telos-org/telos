@@ -136,6 +136,9 @@ func cloudCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.Session
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = cloudSessionModel()
 	}
+	if strings.TrimSpace(req.Thinking) == "" {
+		req.Thinking = cloudSessionThinking()
+	}
 	if req.AgentTimeoutSec == nil {
 		req.AgentTimeoutSec = intPtr(cloudAgentTimeoutSec())
 	}
@@ -145,6 +148,9 @@ func cloudCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.Session
 func cloudSpecUpdateDefaults(req sessionapi.SessionSpecUpdateRequest) sessionapi.SessionSpecUpdateRequest {
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = cloudSessionModel()
+	}
+	if strings.TrimSpace(req.Thinking) == "" {
+		req.Thinking = cloudSessionThinking()
 	}
 	if req.AgentTimeoutSec == nil {
 		req.AgentTimeoutSec = intPtr(cloudAgentTimeoutSec())

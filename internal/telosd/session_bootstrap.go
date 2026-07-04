@@ -20,6 +20,7 @@ type cloudBootstrapSession struct {
 
 const (
 	defaultCloudSessionModel    = "sail-research/zai-org/GLM-5.2-FP8"
+	defaultCloudSessionThinking = "medium"
 	defaultCloudAgentTimeoutSec = 900
 	cloudAgentTimeoutEnvVar     = "TELOS_AGENT_TIMEOUT_SEC"
 )
@@ -27,6 +28,7 @@ const (
 type sessionBootstrapReconciler struct {
 	packageRoot     string
 	model           string
+	thinking        string
 	agentTimeoutSec *int
 	store           sessionapi.Store
 }
@@ -42,6 +44,7 @@ func startSessionBootstrapReconciler(ctx context.Context, store sessionapi.Store
 	r := sessionBootstrapReconciler{
 		packageRoot:     strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
 		model:           cloudSessionModel(),
+		thinking:        cloudSessionThinking(),
 		agentTimeoutSec: intPtr(cloudAgentTimeoutSec()),
 		store:           store,
 	}
@@ -112,6 +115,10 @@ func (r sessionBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) 
 		if model == "" {
 			model = cloudSessionModel()
 		}
+		thinking := strings.TrimSpace(r.thinking)
+		if thinking == "" {
+			thinking = cloudSessionThinking()
+		}
 		agentTimeoutSec := cloudAgentTimeoutSec()
 		if r.agentTimeoutSec != nil {
 			agentTimeoutSec = *r.agentTimeoutSec
@@ -123,6 +130,7 @@ func (r sessionBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) 
 			CloudSessionName:   name,
 			SessionKind:        &kind,
 			Model:              model,
+			Thinking:           thinking,
 			AgentTimeoutSec:    intPtr(agentTimeoutSec),
 		}); err != nil {
 			return fmt.Errorf("create session %s from package %s: %w", name, digest, err)
@@ -141,6 +149,13 @@ func cloudSessionModel() string {
 		return model
 	}
 	return defaultCloudSessionModel
+}
+
+func cloudSessionThinking() string {
+	if thinking := strings.TrimSpace(os.Getenv("TELOS_CLOUD_DEFAULT_THINKING")); thinking != "" {
+		return thinking
+	}
+	return defaultCloudSessionThinking
 }
 
 func cloudAgentTimeoutSec() int {
