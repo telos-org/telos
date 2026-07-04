@@ -76,6 +76,7 @@ const (
 	gatewayKindEnv      = "TELOS_GATEWAY_KIND"
 	gatewayHeadersEnv   = "TELOS_GATEWAY_HEADERS"
 	gatewayKeyAliasEnv  = "TELOS_GATEWAY_KEY_ALIAS"
+	modelProfileEnv     = "TELOS_MODEL_PROFILE"
 	gatewayModeEnv      = "TELOS_GATEWAY_MODE"
 )
 
@@ -86,6 +87,15 @@ var gatewayEnvNames = []string{
 	gatewayTransportEnv,
 	gatewayKindEnv,
 	gatewayHeadersEnv,
+	modelProfileEnv,
+	gatewayModeEnv,
+}
+
+var directProviderKeyNames = []string{
+	"ANTHROPIC_API_KEY",
+	"OPENAI_API_KEY",
+	"SAIL_API_KEY",
+	"SILARES_API_KEY",
 }
 
 var legacyGatewayEnvNames = []string{
@@ -102,6 +112,8 @@ var optionalGatewayCredentialEnvNames = []string{
 	gatewayKindEnv,
 	gatewayHeadersEnv,
 	gatewayKeyAliasEnv,
+	modelProfileEnv,
+	gatewayModeEnv,
 }
 
 func newKubernetesSubstrate(cfg Config) (kubernetesSubstrate, error) {
@@ -162,7 +174,7 @@ func kubernetesRESTConfig() (*rest.Config, error) {
 	return clientcmd.BuildConfigFromFlags("", kubeconfig)
 }
 
-func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason string, userAuthorization string) error {
+func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason string, userAuthorization string, userOrgID string) error {
 	kind, err := sessionWorkerKind(session)
 	if err != nil {
 		return err
@@ -174,7 +186,11 @@ func (s kubernetesSubstrate) Apply(session *sessionapi.Session, wakeReason strin
 	if err != nil {
 		return fmt.Errorf("read worker manifest: %w", err)
 	}
-	credential, err := s.sessionGatewayCredential(ctx, session.SessionID, ptrValue(m.ParentSessionID), userAuthorization)
+	modelProfile, err := sessionapi.NormalizeModelProfile(string(m.Config.ModelProfile))
+	if err != nil {
+		return err
+	}
+	credential, err := s.sessionGatewayCredential(ctx, session.SessionID, ptrValue(m.ParentSessionID), userAuthorization, userOrgID, modelProfile)
 	if err != nil {
 		return err
 	}
@@ -396,9 +412,15 @@ func (s kubernetesSubstrate) agentSecret(namespace string, credential *controlSe
 	s.applyBillingCredential(data)
 	applyGatewayCredential(data, s.agentSecretKey, credential)
 	return &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: s.agentSecretName, Namespace: namespace},
-		Type:       corev1.SecretTypeOpaque,
-		Data:       data,
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      s.agentSecretName,
+			Namespace: namespace,
+			Labels: map[string]string{
+				"telos/role": "worker-agent",
+			},
+		},
+		Type: corev1.SecretTypeOpaque,
+		Data: data,
 	}
 }
 
@@ -835,6 +857,45 @@ func (s kubernetesSubstrate) createOrUpdatePersistentVolumeClaim(ctx context.Con
 	return err
 }
 
+func (s kubernetesSubstrate) scrubManagedAgentSecrets(ctx context.Context) error {
+	if !s.managedGatewayEnabled() {
+		return nil
+	}
+	secrets, err := s.client.CoreV1().Secrets("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	for _, secret := range secrets.Items {
+		if !s.shouldScrubManagedAgentSecret(secret) {
+			continue
+		}
+		if len(secret.Data) == 0 {
+			continue
+		}
+		updated := secret.DeepCopy()
+		if !scrubManagedDirectProviderEnv(updated.Data, s.agentSecretKey) {
+			continue
+		}
+		if _, err := s.client.CoreV1().Secrets(updated.Namespace).Update(ctx, updated, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s kubernetesSubstrate) shouldScrubManagedAgentSecret(secret corev1.Secret) bool {
+	if secret.Name != s.agentSecretName {
+		return false
+	}
+	if secret.Namespace == "" || secret.Namespace == s.envNamespace {
+		return false
+	}
+	if secret.Labels["telos/role"] == "worker-agent" {
+		return true
+	}
+	return strings.HasPrefix(secret.Namespace, "ns-ctrl-") || strings.HasPrefix(secret.Namespace, "ns-task-")
+}
+
 func (s kubernetesSubstrate) deleteSecret(ctx context.Context, namespace string, name string) error {
 	err := s.client.CoreV1().Secrets(namespace).Delete(ctx, name, metav1.DeleteOptions{})
 	if apierrors.IsNotFound(err) {
@@ -853,12 +914,21 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 			secret.Data = map[string][]byte{}
 		}
 		removeLegacyGatewayEnv(secret.Data)
+		if s.managedGatewayEnabled() {
+			removeDirectProviderEnv(secret.Data)
+		}
 		applyConfiguredGatewayAPIKey(secret.Data, s.agentSecretKey)
 		applyConfiguredGatewayEnv(secret.Data)
 		s.applyBillingCredential(secret.Data)
 		applyGatewayCredential(secret.Data, s.agentSecretKey, credential)
 	} else if !apierrors.IsNotFound(err) {
 		return err
+	}
+	if !s.managedGatewayEnabled() && !hasGatewayIntent(secret.Data, s.agentSecretKey) {
+		applyConfiguredDirectProviderEnv(secret.Data)
+	}
+	if !hasGatewayIntent(secret.Data, s.agentSecretKey) {
+		clearGatewayCredentialEnv(secret.Data)
 	}
 	if hasGatewayIntent(secret.Data, s.agentSecretKey) {
 		if gatewayAPIKeyValue(secret.Data, s.agentSecretKey) == "" {
@@ -871,9 +941,13 @@ func (s kubernetesSubstrate) createOrUpdateAgentSecret(ctx context.Context, name
 	return s.createOrUpdateSecret(ctx, secret)
 }
 
-func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessionID, parentSessionID, userAuthorization string) (*controlSessionKey, error) {
+func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessionID, parentSessionID, userAuthorization string, userOrgID string, modelProfile sessionapi.ModelProfile) (*controlSessionKey, error) {
 	if !s.managedGatewayEnabled() || s.billing == nil || !s.billing.configured() {
 		return nil, nil
+	}
+	modelProfile, err := sessionapi.NormalizeModelProfile(string(modelProfile))
+	if err != nil {
+		return nil, err
 	}
 	lock := sessionGatewayLock(sessionID)
 	lock.Lock()
@@ -883,12 +957,18 @@ func (s kubernetesSubstrate) sessionGatewayCredential(ctx context.Context, sessi
 	if err == nil {
 		credential := credentialFromSecret(current, s.agentSecretKey)
 		if credential != nil {
+			if credential.ModelProfile == "" {
+				credential.ModelProfile = sessionapi.ModelProfileStandard
+			}
+			if credential.ModelProfile != modelProfile {
+				return nil, fmt.Errorf("cached session gateway key profile mismatch for %s: cached %s, requested %s", sessionID, credential.ModelProfile, modelProfile)
+			}
 			return credential, nil
 		}
 	} else if !apierrors.IsNotFound(err) {
 		return nil, err
 	}
-	minted, err := s.billing.MintSessionKey(sessionID, parentSessionID, userAuthorization)
+	minted, err := s.billing.MintSessionKey(sessionID, parentSessionID, userAuthorization, userOrgID, modelProfile)
 	if err != nil {
 		return nil, err
 	}
@@ -920,7 +1000,7 @@ func (s kubernetesSubstrate) applyBillingCredential(data map[string][]byte) {
 }
 
 func (s kubernetesSubstrate) managedGatewayEnabled() bool {
-	return strings.EqualFold(strings.TrimSpace(os.Getenv(gatewayModeEnv)), "managed")
+	return managedGatewayModeEnabled()
 }
 
 func sessionGatewaySecretName(sessionID string) string {
@@ -932,6 +1012,7 @@ func sessionGatewaySecret(namespace string, name string, keyName string, credent
 		keyName:           []byte(credential.APIKey),
 		gatewayAPIKeyEnv:  []byte(credential.APIKey),
 		gatewayBaseURLEnv: []byte(credential.BaseURL),
+		gatewayModeEnv:    []byte("managed"),
 	}
 	if credential.Transport != "" {
 		data[gatewayTransportEnv] = []byte(credential.Transport)
@@ -944,6 +1025,9 @@ func sessionGatewaySecret(namespace string, name string, keyName string, credent
 	}
 	if credential.KeyAlias != "" {
 		data[gatewayKeyAliasEnv] = []byte(credential.KeyAlias)
+	}
+	if credential.ModelProfile != "" {
+		data[modelProfileEnv] = []byte(credential.ModelProfile)
 	}
 	return &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -967,13 +1051,18 @@ func credentialFromSecret(secret *corev1.Secret, keyName string) *controlSession
 	if apiKey == "" || baseURL == "" {
 		return nil
 	}
+	profile, err := sessionapi.NormalizeModelProfile(strings.TrimSpace(string(secret.Data[modelProfileEnv])))
+	if err != nil {
+		return nil
+	}
 	return &controlSessionKey{
 		Credential: gatewaycred.Credential{
-			BaseURL:   strings.TrimRight(baseURL, "/"),
-			APIKey:    apiKey,
-			Transport: gatewaycred.Transport(strings.TrimSpace(string(secret.Data[gatewayTransportEnv]))),
-			Kind:      gatewaycred.Kind(strings.TrimSpace(string(secret.Data[gatewayKindEnv]))),
-			Headers:   gatewayHeadersFromSecret(secret.Data),
+			BaseURL:      strings.TrimRight(baseURL, "/"),
+			APIKey:       apiKey,
+			Transport:    gatewaycred.Transport(strings.TrimSpace(string(secret.Data[gatewayTransportEnv]))),
+			Kind:         gatewaycred.Kind(strings.TrimSpace(string(secret.Data[gatewayKindEnv]))),
+			Headers:      gatewayHeadersFromSecret(secret.Data),
+			ModelProfile: profile,
 		},
 		KeyAlias: strings.TrimSpace(string(secret.Data[gatewayKeyAliasEnv])),
 	}
@@ -987,6 +1076,7 @@ func applyGatewayCredential(data map[string][]byte, keyName string, credential *
 	data[keyName] = []byte(credential.APIKey)
 	data[gatewayAPIKeyEnv] = []byte(credential.APIKey)
 	data[gatewayBaseURLEnv] = []byte(credential.BaseURL)
+	data[gatewayModeEnv] = []byte("managed")
 	if credential.Transport != "" {
 		data[gatewayTransportEnv] = []byte(credential.Transport)
 	}
@@ -998,6 +1088,9 @@ func applyGatewayCredential(data map[string][]byte, keyName string, credential *
 	}
 	if credential.KeyAlias != "" {
 		data[gatewayKeyAliasEnv] = []byte(credential.KeyAlias)
+	}
+	if credential.ModelProfile != "" {
+		data[modelProfileEnv] = []byte(credential.ModelProfile)
 	}
 }
 
@@ -1017,6 +1110,61 @@ func clearOptionalGatewayCredentialEnv(data map[string][]byte) {
 	}
 	for _, name := range optionalGatewayCredentialEnvNames {
 		delete(data, name)
+	}
+}
+
+func clearGatewayCredentialEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	delete(data, gatewayAPIKeyEnv)
+	delete(data, gatewayBaseURLEnv)
+	clearOptionalGatewayCredentialEnv(data)
+}
+
+func removeDirectProviderEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	for _, name := range directProviderKeyNames {
+		delete(data, name)
+	}
+}
+
+// scrubManagedDirectProviderEnv strips direct provider keys from an existing
+// worker agent secret, sparing the agent secret key slot when it holds the
+// managed gateway key itself. Returns whether anything changed.
+func scrubManagedDirectProviderEnv(data map[string][]byte, keyName string) bool {
+	if data == nil {
+		return false
+	}
+	gatewayKey := strings.TrimSpace(string(data[gatewayAPIKeyEnv]))
+	changed := false
+	for _, name := range directProviderKeyNames {
+		value, ok := data[name]
+		if !ok {
+			continue
+		}
+		if name == keyName && gatewayKey != "" && strings.TrimSpace(string(value)) == gatewayKey {
+			continue
+		}
+		delete(data, name)
+		changed = true
+	}
+	return changed
+}
+
+func applyConfiguredDirectProviderEnv(data map[string][]byte) {
+	if data == nil {
+		return
+	}
+	for _, name := range directProviderKeyNames {
+		if strings.TrimSpace(string(data[name])) != "" {
+			continue
+		}
+		if value := strings.TrimSpace(os.Getenv(name)); value != "" {
+			data[name] = []byte(value)
+		}
 	}
 }
 
