@@ -32,7 +32,7 @@ func cmdOrgList(args []string) {
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
-	client, err := cloud.ControlClient()
+	client, err := cloud.NewControlClientFromConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -74,7 +74,7 @@ func cmdOrgUse(args []string) {
 		fmt.Fprintln(os.Stderr, "error: organization is required")
 		os.Exit(1)
 	}
-	client, err := cloud.ControlClient()
+	client, err := cloud.NewControlClientFromConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -89,7 +89,7 @@ func cmdOrgUse(args []string) {
 		fmt.Fprintf(os.Stderr, "error: organization %q not found\n", target)
 		os.Exit(1)
 	}
-	client.OrgID = orgID
+	client.SetOrgID(orgID)
 	selected, err := client.Me()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -113,11 +113,15 @@ func resolveOrgID(target string, orgs []cloud.OrganizationRecord) string {
 	return ""
 }
 
-func applyOrgOverride(client *cloud.Client, orgID string) {
+type orgClient interface {
+	SetOrgID(string)
+}
+
+func applyOrgOverride(client orgClient, orgID string) {
 	if client == nil {
 		return
 	}
 	if orgID = strings.TrimSpace(orgID); orgID != "" {
-		client.OrgID = orgID
+		client.SetOrgID(orgID)
 	}
 }

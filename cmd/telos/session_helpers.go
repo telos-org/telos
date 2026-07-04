@@ -237,6 +237,13 @@ func localSessionRoot() string {
 	return filepath.Join(".telos", "sessions")
 }
 
+func ptrString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
 type localSessionNotFound struct {
 	sessionID string
 	root      string

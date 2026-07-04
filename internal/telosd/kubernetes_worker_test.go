@@ -19,6 +19,7 @@ import (
 	"k8s.io/client-go/kubernetes/fake"
 	k8stesting "k8s.io/client-go/testing"
 
+	"github.com/telos-org/telos/internal/gatewaycred"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -221,8 +222,10 @@ func TestKubernetesSubstrateStopSkipsBillingWithoutManagedMode(t *testing.T) {
 	secretName := sessionGatewaySecretName(session.SessionID)
 	objects := append(testEnvObjects(cfg), sessionGatewaySecret(cfg.Kubernetes.EnvNamespace, secretName, cfg.Kubernetes.AgentSecretKey, controlSessionKey{
 		SessionID: session.SessionID,
-		BaseURL:   "https://managed.example.com/v1",
-		APIKey:    "sk-managed",
+		Credential: gatewaycred.Credential{
+			BaseURL: "https://managed.example.com/v1",
+			APIKey:  "sk-managed",
+		},
 	}))
 	client := fake.NewSimpleClientset(objects...)
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
@@ -407,8 +410,10 @@ func TestKubernetesSubstrateRuntimeStatusReconcilesTerminalManagedTask(t *testin
 		},
 		sessionGatewaySecret(cfg.Kubernetes.EnvNamespace, secretName, cfg.Kubernetes.AgentSecretKey, controlSessionKey{
 			SessionID: session.SessionID,
-			BaseURL:   "https://managed.example.com/v1",
-			APIKey:    "sk-managed",
+			Credential: gatewaycred.Credential{
+				BaseURL: "https://managed.example.com/v1",
+				APIKey:  "sk-managed",
+			},
 		}),
 	)
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
@@ -515,8 +520,10 @@ func TestKubernetesSubstrateAgentSecretDropsLegacyAndStaleGatewayKeys(t *testing
 	)
 	substrate := newKubernetesSubstrateWithClient(cfg, client)
 	credential := &controlSessionKey{
-		BaseURL: "https://managed.example.com/v1",
-		APIKey:  "sk-managed",
+		Credential: gatewaycred.Credential{
+			BaseURL: "https://managed.example.com/v1",
+			APIKey:  "sk-managed",
+		},
 	}
 
 	if err := substrate.createOrUpdateAgentSecret(context.Background(), targetNamespace, credential); err != nil {

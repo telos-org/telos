@@ -3,10 +3,9 @@ package game
 
 import (
 	"path/filepath"
-	"regexp"
-	"strings"
 
 	"github.com/telos-org/telos/internal/platform"
+	"github.com/telos-org/telos/internal/protocol"
 )
 
 // GameResult is the terminal outcome of a PVG run.
@@ -19,11 +18,11 @@ const (
 )
 
 // AgentStatus is the normalized status from an agent turn.
-type AgentStatus string
+type AgentStatus = protocol.AgentStatus
 
 const (
-	StatusContinue AgentStatus = "CONTINUE"
-	StatusConcede  AgentStatus = "CONCEDE"
+	StatusContinue = protocol.StatusContinue
+	StatusConcede  = protocol.StatusConcede
 )
 
 // TurnStats holds token and cost data from a single agent turn.
@@ -37,6 +36,20 @@ type TurnStats struct {
 	CacheCreationTokens int     `json:"cache_creation_tokens"`
 	Model               string  `json:"model"`
 	CostUnavailable     bool    `json:"cost_unavailable,omitempty"`
+}
+
+func (s *TurnStats) Add(extra TurnStats) {
+	s.CostUSD += extra.CostUSD
+	s.DurationMS += extra.DurationMS
+	s.NumTurns += extra.NumTurns
+	s.InputTokens += extra.InputTokens
+	s.OutputTokens += extra.OutputTokens
+	s.CacheReadTokens += extra.CacheReadTokens
+	s.CacheCreationTokens += extra.CacheCreationTokens
+	s.CostUnavailable = s.CostUnavailable || extra.CostUnavailable
+	if s.Model == "" {
+		s.Model = extra.Model
+	}
 }
 
 // TurnResult is the result of one agent turn.
@@ -55,6 +68,8 @@ type AgentExecutor interface {
 	ExecuteTurn(task string, turnState *TurnState) TurnResult
 	WorkspaceSnapshot() platform.WorkspaceSnapshot
 	CheckpointWorkspace(dest string) bool
+	Cleanup() error
+	CostHardLimit() bool
 }
 
 // PVGConfig holds runtime settings for a PVG run.
@@ -98,12 +113,21 @@ type PVGResult struct {
 
 // Accumulate adds turn stats to the result totals.
 func (r *PVGResult) Accumulate(s TurnStats) {
-	r.TotalCostUSD += s.CostUSD
-	r.TotalInputTokens += s.InputTokens
-	r.TotalOutputTokens += s.OutputTokens
-	r.TotalCacheReadTokens += s.CacheReadTokens
-	r.TotalCacheCreateTokens += s.CacheCreationTokens
-	r.CostUnavailable = r.CostUnavailable || s.CostUnavailable
+	total := TurnStats{
+		CostUSD:             r.TotalCostUSD,
+		InputTokens:         r.TotalInputTokens,
+		OutputTokens:        r.TotalOutputTokens,
+		CacheReadTokens:     r.TotalCacheReadTokens,
+		CacheCreationTokens: r.TotalCacheCreateTokens,
+		CostUnavailable:     r.CostUnavailable,
+	}
+	total.Add(s)
+	r.TotalCostUSD = total.CostUSD
+	r.TotalInputTokens = total.InputTokens
+	r.TotalOutputTokens = total.OutputTokens
+	r.TotalCacheReadTokens = total.CacheReadTokens
+	r.TotalCacheCreateTokens = total.CacheCreationTokens
+	r.CostUnavailable = total.CostUnavailable
 }
 
 // -- Turn state --------------------------------------------------------------
@@ -164,32 +188,12 @@ func (ts *TurnState) SessionPath() string {
 	return filepath.Join(ts.Dir, "session.jsonl")
 }
 
-// -- Status extraction -------------------------------------------------------
-
-var statusRE = regexp.MustCompile(`(?:^|\n)\s*<status>(\w+)</status>\s*$`)
-
 // ExtractStatus parses the final status tag from agent output.
 func ExtractStatus(text string) AgentStatus {
-	status, ok := ParseFinalStatus(text)
-	if !ok {
-		return StatusContinue
-	}
-	return status
+	return protocol.ExtractStatus(text)
 }
 
 // ParseFinalStatus parses a valid final status tag from agent output.
 func ParseFinalStatus(text string) (AgentStatus, bool) {
-	matches := statusRE.FindAllStringSubmatch(text, -1)
-	if len(matches) == 0 {
-		return StatusContinue, false
-	}
-	last := matches[len(matches)-1][1]
-	switch strings.ToUpper(last) {
-	case "CONCEDE":
-		return StatusConcede, true
-	case "CONTINUE":
-		return StatusContinue, true
-	default:
-		return StatusContinue, false
-	}
+	return protocol.ParseFinalStatus(text)
 }

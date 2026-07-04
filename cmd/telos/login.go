@@ -35,7 +35,7 @@ func cmdLogin(args []string) {
 	cfg := config.LoadConfig()
 	cfg.APIEndpoint = ep
 	cfg.AuthToken = tok
-	client := cloud.NewClient(ep, tok)
+	client := cloud.NewControlClient(ep, tok)
 	me, err := client.Me()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: login failed: %v\n", err)

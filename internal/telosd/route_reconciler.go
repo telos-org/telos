@@ -18,6 +18,8 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/telos-org/telos/internal/envutil"
 )
 
 const (
@@ -38,7 +40,11 @@ func startRouteReconciler(ctx context.Context, client kubernetes.Interface) {
 	if os.Getenv("TELOS_ROUTE_RECONCILER_ENABLED") != "1" {
 		return
 	}
-	interval := time.Duration(envInt("TELOS_ROUTE_RECONCILER_INTERVAL", 10)) * time.Second
+	intervalSec := envutil.EnvInt("TELOS_ROUTE_RECONCILER_INTERVAL", 10)
+	if intervalSec <= 0 {
+		intervalSec = 10
+	}
+	interval := time.Duration(intervalSec) * time.Second
 	go func() {
 		for {
 			if err := reconcileTunnelRoutes(ctx, client, http.DefaultClient); err != nil {
@@ -455,18 +461,6 @@ func routeDomain() string {
 
 func routeTimestamp() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-}
-
-func envInt(name string, fallback int) int {
-	raw := strings.TrimSpace(os.Getenv(name))
-	if raw == "" {
-		return fallback
-	}
-	value, err := strconv.Atoi(raw)
-	if err != nil || value <= 0 {
-		return fallback
-	}
-	return value
 }
 
 func firstNonEmpty(values ...string) string {

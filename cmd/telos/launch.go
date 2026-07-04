@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"io"
@@ -507,7 +508,7 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	control, err := cloud.ControlClient()
+	control, err := cloud.NewControlClientFromConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -536,7 +537,7 @@ func applyCloudControl(
 		if readyTimeout <= 0 {
 			readyTimeout = 15 * time.Minute
 		}
-		deployment, err = control.WaitForDeployment(deployment.ID, readyTimeout)
+		deployment, err = control.WaitForDeployment(context.Background(), deployment.ID, readyTimeout)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)

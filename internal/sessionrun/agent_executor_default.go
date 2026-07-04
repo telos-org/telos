@@ -1,6 +1,6 @@
 //go:build !telos_testfake
 
-package cli
+package sessionrun
 
 import (
 	"github.com/telos-org/telos/internal/executor"
@@ -19,19 +19,12 @@ func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecut
 	if err != nil {
 		return nil, err
 	}
-	exec := executor.NewNativeExecutorWithGateway(
+	exec := executor.NewWithGateway(
 		p,
 		model,
 		cfg.Thinking,
 		cfg.AgentTimeoutSec,
-		executor.GatewayConfig{
-			BaseURL:       cred.BaseURL,
-			APIKey:        cred.APIKey,
-			Transport:     cred.Transport,
-			Kind:          cred.Kind,
-			Headers:       cred.Headers,
-			CostHardLimit: cred.CostHardLimit,
-		},
+		cred.Credential,
 		cred.Cleanup,
 	)
 	return exec, nil

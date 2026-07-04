@@ -1,10 +1,5 @@
 package executor
 
-import (
-	"os"
-	"strings"
-)
-
 // envKnobs is the set of executor-internal tuning values read from the
 // environment. They are orthogonal to per-session budgets (which live in the
 // manifest and win over these) and to model properties (which live in the
@@ -25,8 +20,8 @@ type envKnobs struct {
 
 func resolveEnvKnobs() envKnobs {
 	return envKnobs{
-		ToolMaxBytes:  envInt("TELOS_NATIVE_TOOL_MAX_BYTES", defaultToolMaxBytes, 16),
-		ToolMaxLines:  envInt("TELOS_NATIVE_TOOL_MAX_LINES", defaultToolMaxLines, 1),
-		KeepReasoning: strings.TrimSpace(os.Getenv("TELOS_NATIVE_KEEP_REASONING")) == "1",
+		ToolMaxBytes:  envInt("TELOS_TOOL_MAX_BYTES", defaultToolMaxBytes, 16, "TELOS_NATIVE_TOOL_MAX_BYTES"),
+		ToolMaxLines:  envInt("TELOS_TOOL_MAX_LINES", defaultToolMaxLines, 1, "TELOS_NATIVE_TOOL_MAX_LINES"),
+		KeepReasoning: envBool("TELOS_KEEP_REASONING", "TELOS_NATIVE_KEEP_REASONING"),
 	}
 }

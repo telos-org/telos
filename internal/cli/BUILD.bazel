@@ -3,21 +3,15 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "cli",
     srcs = [
-        "agent_executor_default.go",
-        "agent_executor_testfake.go",
         "localrun.go",
         "workspace.go",
     ],
     importpath = "github.com/telos-org/telos/internal/cli",
     visibility = ["//:__subpackages__"],
     deps = [
-        "//internal/evidence",
-        "//internal/executor",
         "//internal/game",
-        "//internal/gateway",
-        "//internal/platform",
         "//internal/sessionapi",
-        "//internal/spec",
+        "//internal/sessionrun",
     ],
 )
 
@@ -31,7 +25,9 @@ go_test(
     deps = [
         "//internal/executor",
         "//internal/game",
+        "//internal/gatewaycred",
         "//internal/platform",
         "//internal/sessionapi",
+        "//internal/sessionrun",
     ],
 )

@@ -1,0 +1,16 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "ledger",
+    srcs = ["ledger.go"],
+    importpath = "github.com/telos-org/telos/internal/ledger",
+    visibility = ["//:__subpackages__"],
+    deps = ["//internal/protocol"],
+)
+
+go_test(
+    name = "ledger_test",
+    srcs = ["ledger_test.go"],
+    embed = [":ledger"],
+    deps = ["//internal/protocol"],
+)

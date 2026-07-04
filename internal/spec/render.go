@@ -5,14 +5,15 @@ import (
 	"strings"
 
 	"github.com/telos-org/telos/internal/platform"
+	"github.com/telos-org/telos/internal/protocol"
 )
 
 // Role is the internal agent role.
-type Role = string
+type Role = protocol.Role
 
 const (
-	RoleProver   Role = "prover"
-	RoleVerifier Role = "verifier"
+	RoleProver   = protocol.RoleProver
+	RoleVerifier = protocol.RoleVerifier
 )
 
 // PromptOptions carries session metadata that affects prompt rendering.
@@ -21,11 +22,13 @@ type PromptOptions struct {
 	PrimarySpecPath string
 	ReviewMode      bool
 	ReviewCycles    int
+	TurnContext     TurnContextDigest
 }
 
 // RenderProverTask builds the full prover task prompt.
 func RenderProverTask(compiled *CompiledEnvironment, workspace platform.WorkspaceSnapshot, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
+	turnContext := options.TurnContext.withTranscriptPath(transcriptPath)
 	preamble, _ := ReadPrompt("prover.md")
 	if options.Controller {
 		controller, _ := ReadPrompt("controller.md")
@@ -39,8 +42,8 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace platform.Workspac
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleProver, options),
 		renderSkillsRoster(compiled, options),
-		renderTurnContextDigest(transcriptPath, workspace, digestContext{SpecName: compiled.Environment.Name, Role: RoleProver}),
-		renderTranscriptProtocol(transcriptPath, RoleProver),
+		renderTurnContextDigest(turnContext, workspace, digestContext{SpecName: compiled.Environment.Name, Role: RoleProver}),
+		renderTranscriptProtocol(turnContext.TranscriptPath, RoleProver),
 		renderWorkspace(workspace, RoleProver),
 		renderOutputContract(RoleProver, options),
 	}
@@ -50,6 +53,7 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace platform.Workspac
 // RenderVerifierTask builds the full verifier task prompt.
 func RenderVerifierTask(compiled *CompiledEnvironment, workspace platform.WorkspaceSnapshot, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
+	turnContext := options.TurnContext.withTranscriptPath(transcriptPath)
 	preamble := renderVerifierPreamble(options)
 	parts := []string{
 		preamble,
@@ -59,8 +63,8 @@ func RenderVerifierTask(compiled *CompiledEnvironment, workspace platform.Worksp
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleVerifier, options),
 		renderSkillsRoster(compiled, options),
-		renderTurnContextDigest(transcriptPath, workspace, digestContext{SpecName: compiled.Environment.Name, Role: RoleVerifier}),
-		renderTranscriptProtocol(transcriptPath, RoleVerifier),
+		renderTurnContextDigest(turnContext, workspace, digestContext{SpecName: compiled.Environment.Name, Role: RoleVerifier}),
+		renderTranscriptProtocol(turnContext.TranscriptPath, RoleVerifier),
 		renderWorkspace(workspace, RoleVerifier),
 		renderOutputContract(RoleVerifier, options),
 	}

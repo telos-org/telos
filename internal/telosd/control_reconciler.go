@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/telos-org/telos/internal/envutil"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -44,7 +45,11 @@ func startControlSessionReconciler(ctx context.Context, store sessionapi.Store, 
 		return
 	}
 
-	interval := time.Duration(envInt("TELOS_CONTROL_RECONCILER_INTERVAL", 10)) * time.Second
+	intervalSec := envutil.EnvInt("TELOS_CONTROL_RECONCILER_INTERVAL", 10)
+	if intervalSec <= 0 {
+		intervalSec = 10
+	}
+	interval := time.Duration(intervalSec) * time.Second
 	go func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()

@@ -40,13 +40,29 @@ func (m taskStateMachine) next() (taskStateStep, bool) {
 	}
 }
 
+func (m taskStateMachine) currentState() ObjectiveState {
+	return m.state
+}
+
+func (m *taskStateMachine) observe(step taskStateStep, turn TurnResult) (GameResult, bool) {
+	if turn.Error != "" {
+		return m.fail(step, turn.Recoverable)
+	}
+	return m.advance(turn)
+}
+
+func (m *taskStateMachine) fail(step taskStateStep, recoverable bool) (GameResult, bool) {
+	if recoverable {
+		m.state = step.State
+		return "", false
+	}
+	m.state = ObjectiveStateBlocked
+	return GameFailure, true
+}
+
 func (m *taskStateMachine) advance(turn TurnResult) (GameResult, bool) {
 	if turn.Error != "" {
-		if !turn.Recoverable {
-			m.state = ObjectiveStateBlocked
-			return GameFailure, true
-		}
-		return "", false
+		return m.fail(taskStateStep{State: m.state}, turn.Recoverable)
 	}
 
 	switch turn.Role {

@@ -40,6 +40,7 @@ type sessionCost = agentsession.Cost
 type nativeSessionLogger struct {
 	path      string
 	workspace string
+	file      *os.File
 }
 
 func newNativeSessionLogger(path, workspace string) *nativeSessionLogger {
@@ -53,14 +54,32 @@ func (l *nativeSessionLogger) start() error {
 	if err := os.MkdirAll(filepath.Dir(l.path), 0o755); err != nil {
 		return err
 	}
-	return l.append(sessionEvent{
+	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		return err
+	}
+	l.file = f
+	if err := l.append(sessionEvent{
 		Type:      agentsession.KindSession,
 		Version:   1,
 		ID:        fmt.Sprintf("native-%d", time.Now().UnixNano()),
 		Timestamp: time.Now().UTC().Format(time.RFC3339Nano),
 		CWD:       l.workspace,
 		Runtime:   "telos-native",
-	})
+	}); err != nil {
+		_ = l.close()
+		return err
+	}
+	return nil
+}
+
+func (l *nativeSessionLogger) close() error {
+	if l == nil || l.file == nil {
+		return nil
+	}
+	err := l.file.Close()
+	l.file = nil
+	return err
 }
 
 func (l *nativeSessionLogger) user(text string) error {
@@ -120,6 +139,10 @@ func (l *nativeSessionLogger) providerConfig(cfg nativeProviderConfig) error {
 		CapabilityContextWindow: cfg.Capability.effectiveContextWindow(cfg.Model),
 		SupportsReasoning:       cfg.Capability.SupportsReasoning,
 		SupportsFunctionCalling: cfg.Capability.SupportsFunctionCalling,
+		CompactionContextWindow: cfg.Compaction.contextWindow,
+		CompactionTriggerRatio:  cfg.Compaction.triggerRatio,
+		CompactionKeepRecent:    cfg.Compaction.keepRecentTokens,
+		CompactionStrategy:      cfg.Compaction.strategy,
 	}))
 }
 
@@ -325,18 +348,16 @@ func (l *nativeSessionLogger) append(event sessionEvent) error {
 	if l == nil || l.path == "" {
 		return nil
 	}
+	if l.file == nil {
+		return fmt.Errorf("native session logger not started")
+	}
 	if event.Schema == "" {
 		event.Schema = agentsession.Schema
 	}
 	if event.Version == 0 {
 		event.Version = 1
 	}
-	f, err := os.OpenFile(l.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	return json.NewEncoder(f).Encode(event)
+	return json.NewEncoder(l.file).Encode(event)
 }
 
 func (l *nativeSessionLogger) event(kind string, data json.RawMessage) error {

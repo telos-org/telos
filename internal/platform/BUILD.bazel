@@ -5,6 +5,7 @@ go_library(
     srcs = ["platform.go"],
     importpath = "github.com/telos-org/telos/internal/platform",
     visibility = ["//:__subpackages__"],
+    deps = ["//internal/envutil"],
 )
 
 go_test(

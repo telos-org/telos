@@ -31,7 +31,7 @@ func TestResolveUsesEnvGatewayFirst(t *testing.T) {
 func TestResolveEnvGatewayDefaultsBifrostKindToSyncTransport(t *testing.T) {
 	t.Setenv("TELOS_GATEWAY_BASE_URL", "https://env.example.com/openai")
 	t.Setenv("TELOS_GATEWAY_API_KEY", "env-key")
-	t.Setenv("TELOS_GATEWAY_KIND", KindBifrost)
+	t.Setenv("TELOS_GATEWAY_KIND", string(KindBifrost))
 	t.Setenv("TELOS_GATEWAY_HEADERS", `{"x-bf-vk":"sk-bf"}`)
 
 	cred, err := Resolve("sess-1", "standard")
@@ -91,6 +91,31 @@ gateway:
 	}
 	if cred.CostHardLimit {
 		t.Fatalf("BYO config should not hard-enforce unknown cost: %+v", cred)
+	}
+}
+
+func TestResolveBYOConfigUsesCostHardLimitEnv(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	if err := os.WriteFile(cfgPath, []byte(`
+gateway:
+  mode: byo
+  base_url: https://file.example.com/v1
+  api_key: file-key
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("TELOS_GATEWAY_BASE_URL", "")
+	t.Setenv("TELOS_GATEWAY_API_KEY", "")
+	t.Setenv("TELOS_COST_HARD_LIMIT", "YES")
+
+	cred, err := Resolve("sess-1")
+	if err != nil {
+		t.Fatalf("Resolve: %v", err)
+	}
+	if !cred.CostHardLimit {
+		t.Fatalf("BYO config should honor TELOS_COST_HARD_LIMIT: %+v", cred)
 	}
 }
 

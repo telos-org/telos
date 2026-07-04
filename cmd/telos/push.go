@@ -33,7 +33,7 @@ func cmdPush(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	client, err := cloud.ControlClient()
+	client, err := cloud.NewControlClientFromConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -76,11 +76,11 @@ func packageSpec(input string) (*specPackage, error) {
 	}, nil
 }
 
-func pushSpecPackage(client *cloud.Client, pkg *specPackage) (*cloud.RegistryVersionRecord, error) {
+func pushSpecPackage(client *cloud.ControlClient, pkg *specPackage) (*cloud.RegistryVersionRecord, error) {
 	return pushSpecPackageVersion(client, pkg, "default", "")
 }
 
-func pushSpecPackageVersion(client *cloud.Client, pkg *specPackage, scope string, version string) (*cloud.RegistryVersionRecord, error) {
+func pushSpecPackageVersion(client *cloud.ControlClient, pkg *specPackage, scope string, version string) (*cloud.RegistryVersionRecord, error) {
 	scope = strings.TrimSpace(scope)
 	if scope == "" {
 		scope = "default"

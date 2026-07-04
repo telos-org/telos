@@ -4,10 +4,10 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/protocol"
 )
 
 const (
@@ -21,21 +21,8 @@ const (
 	maxFormattingCorrections = 3
 )
 
-// Protocol-tag matchers used for response validation. These intentionally
-// mirror the lenient extractors in internal/spec (case-insensitive, attribute
-// tolerant) so the gate that decides pass/fail agrees with the parser that
-// later consumes the blocks. Counting *balanced* matches — rather than raw tag
-// occurrences — also keeps a stray literal mention (e.g. "the <review> block")
-// from inflating the count.
-var (
-	reviewBlockRE   = regexp.MustCompile(`(?is)<review\b[^>]*>.*?</review>`)
-	summaryBlockRE  = regexp.MustCompile(`(?is)<summary\b[^>]*>.*?</summary>`)
-	progressBlockRE = regexp.MustCompile(`(?is)<progress_update\b[^>]*>.*?</progress_update>`)
-	findingsBlockRE = regexp.MustCompile(`(?is)<findings\b[^>]*>.*?</findings>`)
-)
-
-func countBlocks(re *regexp.Regexp, text string) int {
-	return len(re.FindAllString(text, -1))
+func countBlocks(tag protocol.Tag, text string) int {
+	return protocol.CountBlocks(tag, text)
 }
 
 // maxProtocolCorrections returns the per-key retry budget by looking the key up
@@ -147,10 +134,10 @@ var (
 	requireReviewBlocksRule = protocolRule{
 		key: "malformed_review_blocks",
 		check: func(c ruleContext) bool {
-			return countBlocks(reviewBlockRE, c.text) != 1 || countBlocks(summaryBlockRE, c.text) != 1
+			return countBlocks(protocol.TagReview, c.text) != 1 || countBlocks(protocol.TagSummary, c.text) != 1
 		},
 		message: func(c ruleContext) string {
-			return fmt.Sprintf(malformedReviewBlocksMessage, countBlocks(reviewBlockRE, c.text), countBlocks(summaryBlockRE, c.text))
+			return fmt.Sprintf(malformedReviewBlocksMessage, countBlocks(protocol.TagReview, c.text), countBlocks(protocol.TagSummary, c.text))
 		},
 		retries: maxFormattingCorrections,
 	}
@@ -168,14 +155,14 @@ var (
 			if !statusIsContinue(c.text) {
 				return false
 			}
-			if countBlocks(findingsBlockRE, c.text) != 1 {
+			if countBlocks(protocol.TagFindings, c.text) != 1 {
 				return true
 			}
-			findings, ok := game.ParseFindingsBlock(c.text)
+			findings, ok := protocol.ParseFindingsBlock(c.text)
 			return !ok || len(findings) == 0
 		},
 		message: func(c ruleContext) string {
-			return fmt.Sprintf(malformedFindingsMessage, countBlocks(findingsBlockRE, c.text))
+			return fmt.Sprintf(malformedFindingsMessage, countBlocks(protocol.TagFindings, c.text))
 		},
 		retries: maxFormattingCorrections,
 	}
@@ -186,16 +173,16 @@ var (
 	// preserve the two distinct correction keys callers and metrics depend on.
 	proverProgressStrictRule = protocolRule{
 		key:   "malformed_progress_update",
-		check: func(c ruleContext) bool { return c.strict && countBlocks(progressBlockRE, c.text) != 1 },
+		check: func(c ruleContext) bool { return c.strict && countBlocks(protocol.TagProgressUpdate, c.text) != 1 },
 		message: func(c ruleContext) string {
-			return fmt.Sprintf(malformedProgressMessage, countBlocks(progressBlockRE, c.text))
+			return fmt.Sprintf(malformedProgressMessage, countBlocks(protocol.TagProgressUpdate, c.text))
 		},
 		retries: maxFormattingCorrections,
 	}
 
 	proverProgressLenientRule = protocolRule{
 		key:     "missing_progress_update",
-		check:   func(c ruleContext) bool { return !c.strict && countBlocks(progressBlockRE, c.text) < 1 },
+		check:   func(c ruleContext) bool { return !c.strict && countBlocks(protocol.TagProgressUpdate, c.text) < 1 },
 		message: func(ruleContext) string { return missingProgressMessage },
 		retries: maxFormattingCorrections,
 	}
@@ -397,21 +384,21 @@ func protocolCorrectionForStrict(role, protocolMode, task, text string, usedTool
 }
 
 func hasStatusTag(text string) bool {
-	if strings.Count(text, "<status>") != 1 || strings.Count(text, "</status>") != 1 {
+	if countBlocks(protocol.TagStatus, text) != 1 {
 		return false
 	}
-	_, ok := game.ParseFinalStatus(text)
+	_, ok := protocol.ParseFinalStatus(text)
 	return ok
 }
 
 func statusIsContinue(text string) bool {
-	status, ok := game.ParseFinalStatus(text)
-	return ok && status == game.StatusContinue
+	status, ok := protocol.ParseFinalStatus(text)
+	return ok && status == protocol.StatusContinue
 }
 
 func verifierConcedes(text string) bool {
-	status, ok := game.ParseFinalStatus(text)
-	return ok && status == game.StatusConcede
+	status, ok := protocol.ParseFinalStatus(text)
+	return ok && status == protocol.StatusConcede
 }
 
 func nativeSystemPrompt(role string) string {

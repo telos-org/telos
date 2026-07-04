@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "envutil",
+    srcs = ["envutil.go"],
+    importpath = "github.com/telos-org/telos/internal/envutil",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "envutil_test",
+    srcs = ["envutil_test.go"],
+    embed = [":envutil"],
+)

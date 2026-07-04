@@ -60,8 +60,8 @@ func cmdConfigure(args []string) {
 			Mode:      gateway.ModeBYO,
 			BaseURL:   strings.TrimRight(strings.TrimSpace(*baseURL), "/"),
 			APIKey:    strings.TrimSpace(*apiKey),
-			Transport: resolvedTransport,
-			Kind:      resolvedKind,
+			Transport: string(resolvedTransport),
+			Kind:      string(resolvedKind),
 			Headers:   headers,
 		}
 	default:

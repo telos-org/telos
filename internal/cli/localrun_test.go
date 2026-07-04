@@ -16,6 +16,7 @@ import (
 
 	"github.com/telos-org/telos/internal/executor"
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/gatewaycred"
 	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
@@ -75,6 +76,14 @@ func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {
 	os.MkdirAll(filepath.Dir(dest), 0o755)
 	os.WriteFile(dest, []byte("fake"), 0o644)
 	return true
+}
+
+func (f *fakeExecutor) Cleanup() error {
+	return nil
+}
+
+func (f *fakeExecutor) CostHardLimit() bool {
+	return false
 }
 
 func writeTestSpec(t *testing.T, dir string) string {
@@ -926,7 +935,14 @@ func TestRunLocalSessionWithNativeExecutorCompletesSmallCodeChange(t *testing.T)
 
 	t.Setenv("TELOS_GATEWAY_BASE_URL", server.URL)
 	t.Setenv("TELOS_GATEWAY_API_KEY", "test-key")
-	nativeExec := executor.NewNativeExecutor(platform.NewLocalPlatform(session.ActiveWorkspace), "test/test-model", "high", 0)
+	nativeExec := executor.NewNativeExecutorWithGateway(
+		platform.NewLocalPlatform(session.ActiveWorkspace),
+		"test/test-model",
+		"high",
+		0,
+		gatewaycred.Credential{BaseURL: server.URL, APIKey: "test-key"},
+		nil,
+	)
 
 	result, err := RunLocalSessionWithExecutor(session.SessionDir, nativeExec)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/gatewaycred"
 	"github.com/telos-org/telos/internal/platform"
 )
 
@@ -26,11 +27,27 @@ type NativeExecutor struct {
 	costHard  bool
 }
 
-// NewNativeExecutor creates a native Go coding-agent executor. The provider and
-// capability configuration is resolved once from the environment here and
-// reused for every turn — no env parsing happens per turn or per model
-// response. If the config is invalid the error is stored and surfaced
-// as a terminal error on the first ExecuteTurn call.
+// Executor is the preferred name for Telos' built-in coding-agent executor.
+type Executor = NativeExecutor
+
+// New creates an executor without a gateway credential. Production callers
+// should resolve a gateway credential at their package edge and call
+// NewWithGateway.
+func New(p *platform.LocalPlatform, model, thinking string, timeout int) *Executor {
+	return NewWithGateway(p, model, thinking, timeout, gatewaycred.Credential{}, nil)
+}
+
+// NewWithGateway creates an executor using an explicit gateway credential
+// resolved by the caller.
+func NewWithGateway(p *platform.LocalPlatform, model, thinking string, timeout int, gateway gatewaycred.Credential, cleanup func() error) *Executor {
+	return NewNativeExecutorWithGateway(p, model, thinking, timeout, gateway, cleanup)
+}
+
+// NewNativeExecutor creates a native Go coding-agent executor without a gateway
+// credential. It is useful for tests that assert config failures; production
+// callers should resolve a gateway credential at their package edge and call
+// NewNativeExecutorWithGateway. If the config is invalid the error is stored and
+// surfaced as a terminal error on the first ExecuteTurn call.
 //
 // PRECONDITION — isolation: the executor's tools are deliberately unsandboxed
 // (see the security-model comment in tools.go); `bash` and absolute paths
@@ -39,16 +56,16 @@ type NativeExecutor struct {
 // isolation is the sole containment boundary; running it on a host with data
 // worth protecting is unsafe by design, not a bug to be fixed in this package.
 func NewNativeExecutor(p *platform.LocalPlatform, model, thinking string, timeout int) *NativeExecutor {
-	return NewNativeExecutorWithGateway(p, model, thinking, timeout, GatewayConfig{}, nil)
+	return NewNativeExecutorWithGateway(p, model, thinking, timeout, gatewaycred.Credential{}, nil)
 }
 
 // NewNativeExecutorWithGateway creates a native executor using an explicit
-// gateway credential. Empty gateway fields preserve the env-only path.
-func NewNativeExecutorWithGateway(p *platform.LocalPlatform, model, thinking string, timeout int, gateway GatewayConfig, cleanup func() error) *NativeExecutor {
+// gateway credential resolved by the caller.
+func NewNativeExecutorWithGateway(p *platform.LocalPlatform, model, thinking string, timeout int, gateway gatewaycred.Credential, cleanup func() error) *NativeExecutor {
 	if thinking == "" {
 		thinking = "medium"
 	}
-	cfg, err := resolveNativeConfigWithGateway(gateway)
+	cfg, err := resolveNativeConfig(gateway)
 	// Bound each provider HTTP request (the full model response) so a wedged
 	// request fails fast instead of hanging until the turn budget — which is
 	// unbounded when --agent-timeout-sec is 0. http.Client.Timeout covers the
@@ -63,7 +80,7 @@ func NewNativeExecutorWithGateway(p *platform.LocalPlatform, model, thinking str
 		config:    cfg,
 		configErr: err,
 		cleanup:   cleanup,
-		costHard:  gateway.CostHardLimit || costHardLimitFromEnv(),
+		costHard:  gateway.CostHardLimit,
 	}
 }
 
@@ -110,6 +127,7 @@ func (ne *NativeExecutor) ExecuteTurn(task string, turnState *game.TurnState) ga
 	if err := logger.start(); err != nil {
 		return recoverableTurn(role, stats, newExecutorError(errToolInfra, "native_session_unavailable:"+err.Error()).Error())
 	}
+	defer logger.close()
 	_ = logger.user(task)
 	_ = logger.contextPack(task)
 
@@ -243,16 +261,6 @@ func terminalTurn(role string, stats game.TurnStats, reason string) game.TurnRes
 }
 
 func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
-	base.CostUSD += extra.CostUSD
-	base.DurationMS += extra.DurationMS
-	base.NumTurns += extra.NumTurns
-	base.InputTokens += extra.InputTokens
-	base.OutputTokens += extra.OutputTokens
-	base.CacheReadTokens += extra.CacheReadTokens
-	base.CacheCreationTokens += extra.CacheCreationTokens
-	base.CostUnavailable = base.CostUnavailable || extra.CostUnavailable
-	if base.Model == "" {
-		base.Model = extra.Model
-	}
+	base.Add(extra)
 	return base
 }

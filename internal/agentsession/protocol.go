@@ -112,16 +112,20 @@ type EnvKnobsPayload struct {
 }
 
 type ProviderConfigPayload struct {
-	Provider                string `json:"provider"`
-	Model                   string `json:"model"`
-	Transport               string `json:"transport,omitempty"`
-	BaseURLKind             string `json:"base_url_kind,omitempty"`
-	StateMode               string `json:"state_mode"`
-	StrictProtocol          bool   `json:"strict_protocol"`
-	CapabilityMaxOutput     int    `json:"capability_max_output_tokens,omitempty"`
-	CapabilityContextWindow int    `json:"capability_context_window,omitempty"`
-	SupportsReasoning       *bool  `json:"supports_reasoning,omitempty"`
-	SupportsFunctionCalling *bool  `json:"supports_function_calling,omitempty"`
+	Provider                string  `json:"provider"`
+	Model                   string  `json:"model"`
+	Transport               string  `json:"transport,omitempty"`
+	BaseURLKind             string  `json:"base_url_kind,omitempty"`
+	StateMode               string  `json:"state_mode"`
+	StrictProtocol          bool    `json:"strict_protocol"`
+	CapabilityMaxOutput     int     `json:"capability_max_output_tokens,omitempty"`
+	CapabilityContextWindow int     `json:"capability_context_window,omitempty"`
+	SupportsReasoning       *bool   `json:"supports_reasoning,omitempty"`
+	SupportsFunctionCalling *bool   `json:"supports_function_calling,omitempty"`
+	CompactionContextWindow int     `json:"compaction_context_window,omitempty"`
+	CompactionTriggerRatio  float64 `json:"compaction_trigger_ratio,omitempty"`
+	CompactionKeepRecent    int     `json:"compaction_keep_recent_tokens,omitempty"`
+	CompactionStrategy      string  `json:"compaction_strategy,omitempty"`
 }
 
 type TurnPolicyPayload struct {

@@ -8,9 +8,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionrun"
 )
 
 func RunSessionWorker(sessionDir string, once bool) (int, error) {
@@ -41,7 +41,7 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	defer signal.Stop(stop)
 
 	for {
-		result, err := cli.RunLocalSession(sessionDir)
+		result, err := sessionrun.RunLocalSession(sessionDir)
 		if err != nil {
 			if !root || once {
 				return 1, err

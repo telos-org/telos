@@ -53,7 +53,7 @@ func cmdLogs(args []string) {
 }
 
 func getDeploymentTranscriptFromCloud(id string, orgID string) (string, error) {
-	client, err := cloud.ControlClient()
+	client, err := cloud.NewControlClientFromConfig()
 	if err != nil {
 		return "", err
 	}

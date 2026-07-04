@@ -51,7 +51,7 @@ func cmdStop(args []string) {
 }
 
 func deleteDeploymentFromCloud(id string, orgID string) (*cloud.DeploymentRecord, error) {
-	client, err := cloud.ControlClient()
+	client, err := cloud.NewControlClientFromConfig()
 	if err != nil {
 		return nil, err
 	}

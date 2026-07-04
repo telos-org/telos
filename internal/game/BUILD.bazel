@@ -16,7 +16,9 @@ go_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/evidence",
+        "//internal/ledger",
         "//internal/platform",
+        "//internal/protocol",
         "//internal/spec",
     ],
 )
@@ -34,6 +36,8 @@ go_test(
     embed = [":game"],
     deps = [
         "//internal/platform",
+        "//internal/ledger",
+        "//internal/protocol",
         "//internal/spec",
     ],
 )

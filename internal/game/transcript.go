@@ -6,14 +6,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
-)
 
-var (
-	finalStatusRE         = regexp.MustCompile(`(?:^|\n)\s*<status>\w+</status>\s*$`)
-	finalProgressUpdateRE = regexp.MustCompile(`(?s)(?:^|\n)\s*<progress_update>.*?</progress_update>\s*$`)
-	progressUpdateRE      = regexp.MustCompile(`(?si)<progress_update>\s*(.*?)\s*</progress_update>`)
+	"github.com/telos-org/telos/internal/protocol"
 )
 
 const maxTurnBodyChars = 8000
@@ -164,11 +159,11 @@ func runtimeErrorBody(err string, opts AppendTurnOptions) string {
 }
 
 func hasFinalProgressUpdate(body string) bool {
-	return finalProgressUpdateRE.MatchString(strings.TrimRight(body, " \t\n\r"))
+	return protocol.HasFinalProgressUpdate(body)
 }
 
 func stripFinalStatus(body string) string {
-	return strings.TrimRight(finalStatusRE.ReplaceAllString(body, ""), " \t\n\r")
+	return protocol.StripFinalStatus(body)
 }
 
 func capTurnBody(body string) string {
@@ -187,9 +182,8 @@ func fallbackProgressUpdate(body, status, turnError string, includeStatus bool) 
 	if turnError != "" {
 		return fmt.Sprintf("Turn ended with runtime error: %s.", turnError)
 	}
-	matches := progressUpdateRE.FindAllStringSubmatch(body, -1)
-	if len(matches) > 0 {
-		return strings.TrimSpace(matches[len(matches)-1][1])
+	if progress := protocol.LastProgressUpdate(body); progress != "" {
+		return progress
 	}
 	if !includeStatus {
 		return "Turn completed."

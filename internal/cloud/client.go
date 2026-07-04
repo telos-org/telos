@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/config"
+	"github.com/telos-org/telos/internal/gatewaycred"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -25,7 +26,7 @@ const (
 	ForwardedUserAuthorizationHeader = "X-Telos-User-Authorization"
 )
 
-var supportedGatewayTransports = []string{"openai_sync"}
+var supportedGatewayTransports = []string{string(gatewaycred.TransportOpenAISync)}
 
 // Environment describes a cloud Telos environment from the control plane.
 type Environment struct {
@@ -38,15 +39,10 @@ type Environment struct {
 
 // SessionKey is a budget-capped model gateway key minted by billing.
 type SessionKey struct {
-	SessionID    string
-	BaseURL      string
-	APIKey       string
-	Transport    string
-	Kind         string
-	Headers      map[string]string
-	BudgetUSD    float64
-	KeyAlias     string
-	ModelProfile sessionapi.ModelProfile
+	SessionID string
+	gatewaycred.Credential
+	BudgetUSD float64
+	KeyAlias  string
 }
 
 // Balance is the caller's current managed compute-unit balance.
@@ -137,35 +133,83 @@ type EnvironmentSessionApplyResponse struct {
 	Session   EnvironmentSessionRecord `json:"session"`
 }
 
-// Client is a cloud Sessions API client.
-type Client struct {
-	Endpoint           string
-	Token              string
-	OrgID              string
-	ForwardedUserToken string
-	HTTP               *http.Client
+type transport struct {
+	endpoint           string
+	token              string
+	orgID              string
+	forwardedUserToken string
+	http               *http.Client
 }
 
-// NewClient creates a client from config.
-func NewClient(endpoint, token string) *Client {
-	return &Client{
-		Endpoint: NormalizeEndpoint(endpoint),
-		Token:    token,
-		HTTP:     &http.Client{Timeout: DefaultTimeout},
+type ControlClient struct {
+	transport *transport
+}
+
+type BillingClient struct {
+	transport *transport
+}
+
+type EnvClient struct {
+	transport *transport
+}
+
+// Client is kept as the environment-local Sessions API client type.
+type Client = EnvClient
+
+func newTransport(endpoint, token string) *transport {
+	return &transport{
+		endpoint: NormalizeEndpoint(endpoint),
+		token:    token,
+		http:     &http.Client{Timeout: DefaultTimeout},
 	}
 }
 
+func NewControlClient(endpoint, token string) *ControlClient {
+	return &ControlClient{transport: newTransport(endpoint, token)}
+}
+
+func NewBillingClient(endpoint, token string) *BillingClient {
+	return &BillingClient{transport: newTransport(endpoint, token)}
+}
+
+func NewEnvClient(endpoint, token string) *EnvClient {
+	return &EnvClient{transport: newTransport(endpoint, token)}
+}
+
+func (c *ControlClient) SetOrgID(orgID string) {
+	if c != nil && c.transport != nil {
+		c.transport.orgID = strings.TrimSpace(orgID)
+	}
+}
+
+func (c *BillingClient) SetOrgID(orgID string) {
+	if c != nil && c.transport != nil {
+		c.transport.orgID = strings.TrimSpace(orgID)
+	}
+}
+
+func (c *EnvClient) SetOrgID(orgID string) {
+	if c != nil && c.transport != nil {
+		c.transport.orgID = strings.TrimSpace(orgID)
+	}
+}
+
+// NewClient creates an environment-local Sessions API client.
+func NewClient(endpoint, token string) *EnvClient {
+	return NewEnvClient(endpoint, token)
+}
+
 // NewEnvironmentAPIClient creates a client for an environment-local Sessions API.
-func NewEnvironmentAPIClient(endpoint, token string) *Client {
+func NewEnvironmentAPIClient(endpoint, token string) *EnvClient {
 	cfg := config.LoadConfig()
-	client := NewClient(endpoint, token)
-	client.ForwardedUserToken = cfg.AuthToken
-	client.OrgID = cfg.OrgID
+	client := NewEnvClient(endpoint, token)
+	client.transport.forwardedUserToken = cfg.AuthToken
+	client.transport.orgID = cfg.OrgID
 	return client
 }
 
-// ControlClient returns a client for the configured Telos control plane.
-func ControlClient() (*Client, error) {
+// NewControlClientFromConfig returns a client for the configured Telos control plane.
+func NewControlClientFromConfig() (*ControlClient, error) {
 	cfg := config.LoadConfig()
 	endpoint := cfg.APIEndpoint
 	if endpoint == "" {
@@ -175,13 +219,13 @@ func ControlClient() (*Client, error) {
 	if token == "" {
 		return nil, fmt.Errorf("not logged in; run `telos login` first")
 	}
-	client := NewClient(endpoint, token)
-	client.OrgID = cfg.OrgID
+	client := NewControlClient(endpoint, token)
+	client.transport.orgID = cfg.OrgID
 	return client, nil
 }
 
-// BillingClient returns a client for the configured Telos billing service.
-func BillingClient() (*Client, error) {
+// NewBillingClientFromConfig returns a client for the configured Telos billing service.
+func NewBillingClientFromConfig() (*BillingClient, error) {
 	cfg := config.LoadConfig()
 	endpoint := cfg.BillingEndpoint
 	if endpoint == "" {
@@ -198,19 +242,19 @@ func BillingClient() (*Client, error) {
 	if token == "" {
 		return nil, fmt.Errorf("not logged in; run `telos login` first")
 	}
-	client := NewClient(endpoint, token)
-	client.OrgID = cfg.OrgID
+	client := NewBillingClient(endpoint, token)
+	client.transport.orgID = cfg.OrgID
 	return client, nil
 }
 
 // NewClientFromConfig creates a client from the user's config file.
-func NewClientFromConfig() (*Client, error) {
-	return ControlClient()
+func NewClientFromConfig() (*ControlClient, error) {
+	return NewControlClientFromConfig()
 }
 
 // NewEnvironmentClient resolves envID through the control plane and returns a
 // client for that environment-local Sessions API.
-func NewEnvironmentClient(envID string) (*Client, *Environment, error) {
+func NewEnvironmentClient(envID string) (*EnvClient, *Environment, error) {
 	if envID == "" {
 		return nil, nil, fmt.Errorf("--env is required for cloud session commands")
 	}
@@ -230,7 +274,7 @@ func NewEnvironmentClient(envID string) (*Client, *Environment, error) {
 // ResolveEnvironment returns the control-plane record plus local/recovered
 // scoped access token for an owned environment.
 func ResolveEnvironment(envID string) (*Environment, error) {
-	control, err := ControlClient()
+	control, err := NewControlClientFromConfig()
 	if err != nil {
 		return nil, err
 	}
@@ -259,7 +303,7 @@ func ResolveEnvironment(envID string) (*Environment, error) {
 }
 
 // CreateEnvironment creates a new cloud environment through the control plane.
-func (c *Client) CreateEnvironment() (*Environment, error) {
+func (c *ControlClient) CreateEnvironment() (*Environment, error) {
 	resp, err := c.do("POST", "/api/environments", nil)
 	if err != nil {
 		return nil, err
@@ -279,7 +323,7 @@ func (c *Client) CreateEnvironment() (*Environment, error) {
 	return &env, nil
 }
 
-func (c *Client) Me() (*MeResponse, error) {
+func (c *ControlClient) Me() (*MeResponse, error) {
 	resp, err := c.do("GET", "/api/me", nil)
 	if err != nil {
 		return nil, err
@@ -296,15 +340,10 @@ func (c *Client) Me() (*MeResponse, error) {
 }
 
 // MintSessionKey asks billing to mint a managed per-session gateway key.
-func (c *Client) MintSessionKey(sessionID string, modelProfile sessionapi.ModelProfile) (*SessionKey, error) {
-	modelProfile, err := sessionapi.NormalizeModelProfile(string(modelProfile))
-	if err != nil {
-		return nil, err
-	}
+func (c *BillingClient) MintSessionKey(sessionID string) (*SessionKey, error) {
 	body, err := json.Marshal(map[string]any{
 		"session_id":           sessionID,
 		"supported_transports": supportedGatewayTransports,
-		"model_profile":        string(modelProfile),
 	})
 	if err != nil {
 		return nil, err
@@ -318,15 +357,10 @@ func (c *Client) MintSessionKey(sessionID string, modelProfile sessionapi.ModelP
 		return nil, readError(resp)
 	}
 	var raw struct {
-		SessionID    string                  `json:"session_id"`
-		BaseURL      string                  `json:"base_url"`
-		APIKey       string                  `json:"api_key"`
-		Transport    string                  `json:"transport"`
-		Kind         string                  `json:"kind"`
-		Headers      map[string]string       `json:"headers"`
-		BudgetUSD    float64                 `json:"budget_usd"`
-		KeyAlias     string                  `json:"key_alias"`
-		ModelProfile sessionapi.ModelProfile `json:"model_profile"`
+		SessionID string `json:"session_id"`
+		gatewaycred.Credential
+		BudgetUSD float64 `json:"budget_usd"`
+		KeyAlias  string  `json:"key_alias"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return nil, err
@@ -341,27 +375,20 @@ func (c *Client) MintSessionKey(sessionID string, modelProfile sessionapi.ModelP
 	if raw.SessionID != strings.TrimSpace(sessionID) {
 		return nil, fmt.Errorf("billing returned session key for %q, want %q", raw.SessionID, strings.TrimSpace(sessionID))
 	}
-	if raw.ModelProfile == "" {
-		raw.ModelProfile = sessionapi.ModelProfileStandard
-	}
-	if _, err := sessionapi.NormalizeModelProfile(string(raw.ModelProfile)); err != nil {
-		return nil, fmt.Errorf("billing returned invalid model_profile: %w", err)
+	cred, err := gatewaycred.Normalize(raw.Credential)
+	if err != nil {
+		return nil, err
 	}
 	return &SessionKey{
-		SessionID:    raw.SessionID,
-		BaseURL:      raw.BaseURL,
-		APIKey:       raw.APIKey,
-		Transport:    raw.Transport,
-		Kind:         raw.Kind,
-		Headers:      cloneStringMap(raw.Headers),
-		BudgetUSD:    raw.BudgetUSD,
-		KeyAlias:     raw.KeyAlias,
-		ModelProfile: raw.ModelProfile,
+		SessionID:  raw.SessionID,
+		Credential: cred,
+		BudgetUSD:  raw.BudgetUSD,
+		KeyAlias:   raw.KeyAlias,
 	}, nil
 }
 
 // ReconcileSession asks the control plane to settle a managed local session.
-func (c *Client) ReconcileSession(sessionID string, terminal bool) error {
+func (c *BillingClient) ReconcileSession(sessionID string, terminal bool) error {
 	path := "/api/billing/session-key/" + url.PathEscape(strings.TrimSpace(sessionID)) + "/reconcile"
 	if terminal {
 		path += "?terminal=true"
@@ -396,7 +423,7 @@ func cloneStringMap(in map[string]string) map[string]string {
 }
 
 // Balance returns the caller's managed compute-unit balance.
-func (c *Client) Balance() (*Balance, error) {
+func (c *BillingClient) Balance() (*Balance, error) {
 	resp, err := c.do("GET", "/api/billing/balance", nil)
 	if err != nil {
 		return nil, err
@@ -414,7 +441,7 @@ func (c *Client) Balance() (*Balance, error) {
 	return &Balance{ComputeUnits: raw.ComputeUnits}, nil
 }
 
-func (c *Client) PublishRegistryVersion(scope, name, version string, data []byte) (*RegistryVersionRecord, error) {
+func (c *ControlClient) PublishRegistryVersion(scope, name, version string, data []byte) (*RegistryVersionRecord, error) {
 	path := "/api/packages/" + url.PathEscape(scope) + "/" + url.PathEscape(name) + "/versions/" + url.PathEscape(version)
 	resp, err := c.doRaw("PUT", path, data, "application/gzip")
 	if err != nil {
@@ -431,7 +458,7 @@ func (c *Client) PublishRegistryVersion(scope, name, version string, data []byte
 	return &record, nil
 }
 
-func (c *Client) ListDeployments() ([]DeploymentRecord, error) {
+func (c *ControlClient) ListDeployments() ([]DeploymentRecord, error) {
 	resp, err := c.do("GET", "/api/deployments", nil)
 	if err != nil {
 		return nil, err
@@ -449,7 +476,7 @@ func (c *Client) ListDeployments() ([]DeploymentRecord, error) {
 	return payload.Deployments, nil
 }
 
-func (c *Client) CreateDeployment(name, packageRef, runtimeVersion string) (*DeploymentRecord, error) {
+func (c *ControlClient) CreateDeployment(name, packageRef, runtimeVersion string) (*DeploymentRecord, error) {
 	body := map[string]string{"package_ref": packageRef}
 	if strings.TrimSpace(name) != "" {
 		body["name"] = strings.TrimSpace(name)
@@ -476,8 +503,12 @@ func (c *Client) CreateDeployment(name, packageRef, runtimeVersion string) (*Dep
 	return &record, nil
 }
 
-func (c *Client) GetDeployment(id string) (*DeploymentRecord, error) {
-	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(strings.TrimSpace(id)), nil)
+func (c *ControlClient) GetDeployment(id string) (*DeploymentRecord, error) {
+	return c.getDeployment(context.Background(), id)
+}
+
+func (c *ControlClient) getDeployment(ctx context.Context, id string) (*DeploymentRecord, error) {
+	resp, err := c.doContext(ctx, "GET", "/api/deployments/"+url.PathEscape(strings.TrimSpace(id)), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -492,7 +523,7 @@ func (c *Client) GetDeployment(id string) (*DeploymentRecord, error) {
 	return &record, nil
 }
 
-func (c *Client) UpdateDeployment(id, packageRef, runtimeVersion string) (*DeploymentRecord, error) {
+func (c *ControlClient) UpdateDeployment(id, packageRef, runtimeVersion string) (*DeploymentRecord, error) {
 	body := map[string]string{"package_ref": packageRef}
 	if strings.TrimSpace(runtimeVersion) != "" {
 		body["runtime_version"] = strings.TrimSpace(runtimeVersion)
@@ -516,7 +547,7 @@ func (c *Client) UpdateDeployment(id, packageRef, runtimeVersion string) (*Deplo
 	return &record, nil
 }
 
-func (c *Client) DeleteDeployment(id string) (*DeploymentRecord, error) {
+func (c *ControlClient) DeleteDeployment(id string) (*DeploymentRecord, error) {
 	resp, err := c.do("DELETE", "/api/deployments/"+url.PathEscape(strings.TrimSpace(id)), nil)
 	if err != nil {
 		return nil, err
@@ -532,7 +563,7 @@ func (c *Client) DeleteDeployment(id string) (*DeploymentRecord, error) {
 	return &record, nil
 }
 
-func (c *Client) GetDeploymentTranscript(id string) (string, error) {
+func (c *ControlClient) GetDeploymentTranscript(id string) (string, error) {
 	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(strings.TrimSpace(id))+"/transcript", nil)
 	if err != nil {
 		return "", err
@@ -545,14 +576,20 @@ func (c *Client) GetDeploymentTranscript(id string) (string, error) {
 	return string(data), nil
 }
 
-func (c *Client) WaitForDeployment(id string, timeout time.Duration) (*DeploymentRecord, error) {
+func (c *ControlClient) WaitForDeployment(ctx context.Context, id string, timeout time.Duration) (*DeploymentRecord, error) {
 	if timeout <= 0 {
 		timeout = 15 * time.Minute
 	}
-	deadline := time.Now().Add(timeout)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 	var last *DeploymentRecord
 	for {
-		record, err := c.GetDeployment(id)
+		record, err := c.getDeployment(ctx, id)
 		if err != nil {
 			return nil, err
 		}
@@ -563,14 +600,15 @@ func (c *Client) WaitForDeployment(id string, timeout time.Duration) (*Deploymen
 		case "failed", "deleted":
 			return record, fmt.Errorf("deployment %s is %s: %s", id, record.State, strings.TrimSpace(record.FailureReason))
 		}
-		if time.Now().After(deadline) {
+		select {
+		case <-ctx.Done():
 			return last, fmt.Errorf("deployment %s did not become healthy before timeout", id)
+		case <-ticker.C:
 		}
-		time.Sleep(5 * time.Second)
 	}
 }
 
-func (c *Client) UploadApplyPackage(digest string, data []byte) (*ApplyPackageRecord, error) {
+func (c *ControlClient) UploadApplyPackage(digest string, data []byte) (*ApplyPackageRecord, error) {
 	resp, err := c.doRaw("PUT", "/api/catalog/packages/"+url.PathEscape(digest), data, "application/gzip")
 	if err != nil {
 		return nil, err
@@ -586,7 +624,7 @@ func (c *Client) UploadApplyPackage(digest string, data []byte) (*ApplyPackageRe
 	return &record, nil
 }
 
-func (c *Client) PushCatalogSpec(name string, packageDigest string) (*CatalogSpecPushResponse, error) {
+func (c *ControlClient) PushCatalogSpec(name string, packageDigest string) (*CatalogSpecPushResponse, error) {
 	body, err := json.Marshal(map[string]string{"package_digest": packageDigest})
 	if err != nil {
 		return nil, err
@@ -606,7 +644,7 @@ func (c *Client) PushCatalogSpec(name string, packageDigest string) (*CatalogSpe
 	return &response, nil
 }
 
-func (c *Client) ApplyEnvironmentSession(envID, name, packageDigest string) (*EnvironmentSessionApplyResponse, error) {
+func (c *ControlClient) ApplyEnvironmentSession(envID, name, packageDigest string) (*EnvironmentSessionApplyResponse, error) {
 	body, err := json.Marshal(map[string]string{"package_digest": packageDigest})
 	if err != nil {
 		return nil, err
@@ -627,17 +665,27 @@ func (c *Client) ApplyEnvironmentSession(envID, name, packageDigest string) (*En
 }
 
 // WaitForEnvironment waits until an environment-local API is reachable.
-func WaitForEnvironment(handle string, timeout time.Duration) error {
+func WaitForEnvironment(ctx context.Context, handle string, timeout time.Duration) error {
 	client := &http.Client{Timeout: 5 * time.Second}
-	return waitForEnvironment(handle, timeout, client, 5*time.Second)
+	return waitForEnvironment(ctx, handle, timeout, client, 5*time.Second)
 }
 
-func waitForEnvironment(handle string, timeout time.Duration, client *http.Client, pollInterval time.Duration) error {
-	deadline := time.Now().Add(timeout)
+func waitForEnvironment(ctx context.Context, handle string, timeout time.Duration, client *http.Client, pollInterval time.Duration) error {
+	if timeout <= 0 {
+		timeout = 15 * time.Minute
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
 	url := NormalizeEndpoint(handle) + "/api/healthz"
 	var lastErr error
-	for time.Now().Before(deadline) {
-		resp, err := client.Get(url)
+	for {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := client.Do(req)
 		if err == nil && resp != nil {
 			_, _ = io.Copy(io.Discard, resp.Body)
 			resp.Body.Close()
@@ -646,14 +694,19 @@ func waitForEnvironment(handle string, timeout time.Duration, client *http.Clien
 			}
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 		} else {
-			lastErr = err
+			if ctx.Err() == nil || lastErr == nil {
+				lastErr = err
+			}
 		}
-		time.Sleep(pollInterval)
+		select {
+		case <-ctx.Done():
+			if lastErr != nil {
+				return fmt.Errorf("%s did not become ready: %w", handle, lastErr)
+			}
+			return fmt.Errorf("%s did not become ready", handle)
+		case <-ticker.C:
+		}
 	}
-	if lastErr != nil {
-		return fmt.Errorf("%s did not become ready: %w", handle, lastErr)
-	}
-	return fmt.Errorf("%s did not become ready", handle)
 }
 
 // NormalizeEndpoint cleans up an API endpoint URL.
@@ -666,12 +719,12 @@ func NormalizeEndpoint(endpoint string) string {
 }
 
 // CreateSession creates a new session via the cloud API.
-func (c *Client) CreateSession(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
+func (c *EnvClient) CreateSession(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.doWithForwardedUser("POST", "/api/sessions", body)
+	resp, err := c.do("POST", "/api/sessions", body)
 	if err != nil {
 		return nil, err
 	}
@@ -687,12 +740,12 @@ func (c *Client) CreateSession(req sessionapi.SessionCreateRequest) (*sessionapi
 }
 
 // ApplySessionSpec creates or updates the root session named by the spec.
-func (c *Client) ApplySessionSpec(name string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.SessionSpecUpdateResponse, error) {
+func (c *EnvClient) ApplySessionSpec(name string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.SessionSpecUpdateResponse, error) {
 	body, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.doWithForwardedUser("PUT", "/api/sessions/"+name+"/spec", body)
+	resp, err := c.do("PUT", "/api/sessions/"+name+"/spec", body)
 	if err != nil {
 		return nil, err
 	}
@@ -708,7 +761,7 @@ func (c *Client) ApplySessionSpec(name string, req sessionapi.SessionSpecUpdateR
 }
 
 // ListEnvironments lists cloud environments from the control plane.
-func (c *Client) ListEnvironments() ([]Environment, error) {
+func (c *ControlClient) ListEnvironments() ([]Environment, error) {
 	resp, err := c.do("GET", "/api/environments", nil)
 	if err != nil {
 		return nil, err
@@ -732,7 +785,7 @@ func (c *Client) ListEnvironments() ([]Environment, error) {
 
 // GetEnvironment resolves an environment control-plane record without requiring
 // or issuing an environment-local access token.
-func (c *Client) GetEnvironment(envID string) (*Environment, error) {
+func (c *ControlClient) GetEnvironment(envID string) (*Environment, error) {
 	if envID == "" {
 		return nil, fmt.Errorf("environment id is required")
 	}
@@ -749,7 +802,7 @@ func (c *Client) GetEnvironment(envID string) (*Environment, error) {
 }
 
 // IssueEnvironmentAccess issues a scoped environment access token.
-func (c *Client) IssueEnvironmentAccess(envID string) (*Environment, error) {
+func (c *ControlClient) IssueEnvironmentAccess(envID string) (*Environment, error) {
 	resp, err := c.do("POST", "/api/environments/"+envID+"/access", nil)
 	if err != nil {
 		return nil, err
@@ -770,7 +823,7 @@ func (c *Client) IssueEnvironmentAccess(envID string) (*Environment, error) {
 }
 
 // ListSessions lists sessions from the cloud API.
-func (c *Client) ListSessions(limit int, includeChildren bool) ([]sessionapi.Session, error) {
+func (c *EnvClient) ListSessions(limit int, includeChildren bool) ([]sessionapi.Session, error) {
 	path := "/api/sessions"
 	var query []string
 	if limit > 0 {
@@ -798,7 +851,7 @@ func (c *Client) ListSessions(limit int, includeChildren bool) ([]sessionapi.Ses
 }
 
 // GetSession gets a session by ID.
-func (c *Client) GetSession(id string) (*sessionapi.Session, error) {
+func (c *EnvClient) GetSession(id string) (*sessionapi.Session, error) {
 	resp, err := c.do("GET", "/api/sessions/"+id, nil)
 	if err != nil {
 		return nil, err
@@ -815,7 +868,7 @@ func (c *Client) GetSession(id string) (*sessionapi.Session, error) {
 }
 
 // StopSession stops a session by ID.
-func (c *Client) StopSession(id string) (*sessionapi.Session, error) {
+func (c *EnvClient) StopSession(id string) (*sessionapi.Session, error) {
 	resp, err := c.do("POST", "/api/sessions/"+id+"/stop", nil)
 	if err != nil {
 		return nil, err
@@ -832,7 +885,7 @@ func (c *Client) StopSession(id string) (*sessionapi.Session, error) {
 }
 
 // GetTranscript gets the transcript for a session.
-func (c *Client) GetTranscript(id string) (string, error) {
+func (c *EnvClient) GetTranscript(id string) (string, error) {
 	resp, err := c.do("GET", "/api/sessions/"+id+"/transcript", nil)
 	if err != nil {
 		return "", err
@@ -846,7 +899,7 @@ func (c *Client) GetTranscript(id string) (string, error) {
 }
 
 // GetEvents gets events for a session.
-func (c *Client) GetEvents(id string) ([]sessionapi.SessionEvent, error) {
+func (c *EnvClient) GetEvents(id string) ([]sessionapi.SessionEvent, error) {
 	resp, err := c.do("GET", "/api/sessions/"+id+"/events", nil)
 	if err != nil {
 		return nil, err
@@ -863,7 +916,7 @@ func (c *Client) GetEvents(id string) ([]sessionapi.SessionEvent, error) {
 }
 
 // GetDiagnostics gets the production inspection payload for a session.
-func (c *Client) GetDiagnostics(id string) (*sessionapi.SessionDiagnosticsResponse, error) {
+func (c *EnvClient) GetDiagnostics(id string) (*sessionapi.SessionDiagnosticsResponse, error) {
 	resp, err := c.do("GET", "/api/sessions/"+id+"/diagnostics", nil)
 	if err != nil {
 		return nil, err
@@ -880,21 +933,24 @@ func (c *Client) GetDiagnostics(id string) (*sessionapi.SessionDiagnosticsRespon
 }
 
 // StreamEvents follows the cloud event stream for a session.
-func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[string]any) error) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+"/api/sessions/"+id+"/events", nil)
+func (c *EnvClient) StreamEvents(ctx context.Context, id string, onEvent func(map[string]any) error) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.transport.endpoint+"/api/sessions/"+id+"/events", nil)
 	if err != nil {
 		return err
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+	if c.transport.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.transport.token)
 	}
-	if strings.TrimSpace(c.OrgID) != "" {
-		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(c.OrgID))
+	if strings.TrimSpace(c.transport.orgID) != "" {
+		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(c.transport.orgID))
+	}
+	if c.transport.forwardedUserToken != "" {
+		req.Header.Set(ForwardedUserAuthorizationHeader, "Bearer "+c.transport.forwardedUserToken)
 	}
 	client := http.DefaultClient
-	if c.HTTP != nil {
-		clone := *c.HTTP
+	if c.transport.http != nil {
+		clone := *c.transport.http
 		clone.Timeout = 0
 		client = &clone
 	}
@@ -941,40 +997,51 @@ func (c *Client) StreamEvents(ctx context.Context, id string, onEvent func(map[s
 	return nil
 }
 
-func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
-	return c.doRaw(method, path, body, "application/json")
+func (c *ControlClient) do(method, path string, body []byte) (*http.Response, error) {
+	return c.doContext(context.Background(), method, path, body)
 }
 
-func (c *Client) doWithForwardedUser(method, path string, body []byte) (*http.Response, error) {
-	return c.doRawInternal(method, path, body, "application/json", true)
+func (c *ControlClient) doContext(ctx context.Context, method, path string, body []byte) (*http.Response, error) {
+	return c.transport.doRaw(ctx, method, path, body, "application/json", false)
 }
 
-func (c *Client) doRaw(method, path string, body []byte, contentType string) (*http.Response, error) {
-	return c.doRawInternal(method, path, body, contentType, false)
+func (c *ControlClient) doRaw(method, path string, body []byte, contentType string) (*http.Response, error) {
+	return c.transport.doRaw(context.Background(), method, path, body, contentType, false)
 }
 
-func (c *Client) doRawInternal(method, path string, body []byte, contentType string, forwardUser bool) (*http.Response, error) {
+func (c *BillingClient) do(method, path string, body []byte) (*http.Response, error) {
+	return c.transport.doRaw(context.Background(), method, path, body, "application/json", false)
+}
+
+func (c *EnvClient) do(method, path string, body []byte) (*http.Response, error) {
+	return c.transport.doRaw(context.Background(), method, path, body, "application/json", true)
+}
+
+func (t *transport) doRaw(ctx context.Context, method, path string, body []byte, contentType string, forwardUser bool) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, c.Endpoint+path, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, t.endpoint+path, bodyReader)
 	if err != nil {
 		return nil, err
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", contentType)
 	}
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
+	if t.token != "" {
+		req.Header.Set("Authorization", "Bearer "+t.token)
 	}
-	if strings.TrimSpace(c.OrgID) != "" {
-		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(c.OrgID))
+	if strings.TrimSpace(t.orgID) != "" {
+		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(t.orgID))
 	}
-	if forwardUser && c.ForwardedUserToken != "" {
-		req.Header.Set(ForwardedUserAuthorizationHeader, "Bearer "+c.ForwardedUserToken)
+	if forwardUser && t.forwardedUserToken != "" {
+		req.Header.Set(ForwardedUserAuthorizationHeader, "Bearer "+t.forwardedUserToken)
 	}
-	return c.HTTP.Do(req)
+	return t.http.Do(req)
 }
 
 func environmentFromJSON(raw map[string]any) Environment {

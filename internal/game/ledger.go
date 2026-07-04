@@ -1,109 +1,58 @@
 package game
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
-	"time"
+
+	objectiveledger "github.com/telos-org/telos/internal/ledger"
+	"github.com/telos-org/telos/internal/protocol"
 )
 
-const objectiveLedgerSchema = "telos.objective_ledger.v1"
+const objectiveLedgerSchema = objectiveledger.Schema
 
-type ObjectiveState string
+type ObjectiveState = objectiveledger.ObjectiveState
 
 const (
-	ObjectiveStatePlan      ObjectiveState = "plan"
-	ObjectiveStateImplement ObjectiveState = "implement"
-	ObjectiveStateVerify    ObjectiveState = "verify"
-	ObjectiveStateRepair    ObjectiveState = "repair"
-	ObjectiveStateFinalize  ObjectiveState = "finalize"
-	ObjectiveStateBlocked   ObjectiveState = "blocked"
+	ObjectiveStatePlan      = objectiveledger.ObjectiveStatePlan
+	ObjectiveStateImplement = objectiveledger.ObjectiveStateImplement
+	ObjectiveStateVerify    = objectiveledger.ObjectiveStateVerify
+	ObjectiveStateRepair    = objectiveledger.ObjectiveStateRepair
+	ObjectiveStateFinalize  = objectiveledger.ObjectiveStateFinalize
+	ObjectiveStateBlocked   = objectiveledger.ObjectiveStateBlocked
 )
 
-type ObjectiveLedger struct {
-	Schema             string          `json:"schema"`
-	SessionID          string          `json:"session_id"`
-	SystemName         string          `json:"system_name"`
-	Objective          string          `json:"objective,omitempty"`
-	State              ObjectiveState  `json:"state"`
-	LastTransition     string          `json:"last_transition,omitempty"`
-	UpdatedAt          string          `json:"updated_at"`
-	LastImplementation string          `json:"last_implementation,omitempty"`
-	LastEvaluation     string          `json:"last_evaluation,omitempty"`
-	OpenFindings       []string        `json:"open_findings,omitempty"`
-	ResolvedFindings   []string        `json:"resolved_findings,omitempty"`
-	Turns              []ObjectiveTurn `json:"turns,omitempty"`
-}
-
-type ObjectiveTurn struct {
-	RoundNum       int            `json:"round_num"`
-	Role           string         `json:"role"`
-	Status         AgentStatus    `json:"status"`
-	StateAfter     ObjectiveState `json:"state_after"`
-	Error          string         `json:"error,omitempty"`
-	ProgressUpdate string         `json:"progress_update,omitempty"`
-}
+type ObjectiveLedger = objectiveledger.ObjectiveLedger
+type ObjectiveTurn = objectiveledger.ObjectiveTurn
 
 var findingLineRE = regexp.MustCompile(`(?i)\b(fail|finding|blocked|blocker|continue|unresolved|must|missing|regression)\b`)
 
 func newObjectiveLedger(state *PVGState, objective string) ObjectiveLedger {
-	return ObjectiveLedger{
-		Schema:     objectiveLedgerSchema,
-		SessionID:  state.SessionID,
-		SystemName: state.SystemName,
-		Objective:  firstParagraph(objective),
-		State:      ObjectiveStatePlan,
-		UpdatedAt:  time.Now().UTC().Format(time.RFC3339Nano),
-	}
+	return objectiveledger.New(state.SessionID, state.SystemName, objective)
 }
 
 func readObjectiveLedger(path string) (ObjectiveLedger, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ObjectiveLedger{}, err
-	}
-	var ledger ObjectiveLedger
-	if err := json.Unmarshal(data, &ledger); err != nil {
-		return ObjectiveLedger{}, err
-	}
-	return ledger, nil
+	return objectiveledger.Read(path)
 }
 
 // InitializeObjectiveLedger creates the objective ledger when it is missing or
 // empty, preserving existing ledger state across worker restarts.
 func InitializeObjectiveLedger(path string, state *PVGState, objective string) error {
-	info, err := os.Stat(path)
-	switch {
-	case err == nil && info.Size() > 0:
-		return nil
-	case err == nil:
-	case os.IsNotExist(err):
-	default:
-		return err
-	}
-	return writeObjectiveLedger(path, newObjectiveLedger(state, objective))
+	return objectiveledger.Initialize(path, newObjectiveLedger(state, objective))
 }
 
 func writeObjectiveLedger(path string, ledger ObjectiveLedger) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	ledger.UpdatedAt = time.Now().UTC().Format(time.RFC3339Nano)
-	data, err := json.MarshalIndent(ledger, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, append(data, '\n'), 0o644)
+	return objectiveledger.Write(path, ledger)
 }
 
 func (p *PVG) loadLedger() ObjectiveLedger {
-	ledger, err := readObjectiveLedger(p.State.LedgerPath)
-	if err == nil && ledger.Schema == objectiveLedgerSchema {
-		return ledger
+	if p != nil && p.ledger.Schema == objectiveLedgerSchema {
+		return p.ledger
 	}
-	return newObjectiveLedger(p.State, p.Compiled.SpecText)
+	if p == nil {
+		return ObjectiveLedger{}
+	}
+	p.ledger = newObjectiveLedger(p.State, p.Compiled.SpecText)
+	return p.ledger
 }
 
 func (p *PVG) transitionObjectiveState(next ObjectiveState, roundNum int, role string, reason string) {
@@ -114,6 +63,7 @@ func (p *PVG) transitionObjectiveState(next ObjectiveState, roundNum int, role s
 	previous := ledger.State
 	ledger.State = next
 	ledger.LastTransition = reason
+	p.ledger = ledger
 	if err := writeObjectiveLedger(p.State.LedgerPath, ledger); err == nil {
 		p.Evidence.Log("state_transition", roundNum, role, map[string]interface{}{
 			"from":   previous,
@@ -183,6 +133,7 @@ func (p *PVG) updateObjectiveLedger(roundNum int, role string, turn TurnResult, 
 	if len(ledger.Turns) > 200 {
 		ledger.Turns = ledger.Turns[len(ledger.Turns)-200:]
 	}
+	p.ledger = ledger
 	if err := writeObjectiveLedger(p.State.LedgerPath, ledger); err == nil && previousState != stateAfter {
 		p.Evidence.Log("state_transition", roundNum, role, map[string]interface{}{
 			"from":   previousState,
@@ -194,24 +145,19 @@ func (p *PVG) updateObjectiveLedger(roundNum int, role string, turn TurnResult, 
 }
 
 func lastProgressUpdate(text string) string {
-	matches := progressUpdateRE.FindAllStringSubmatch(text, -1)
-	if len(matches) == 0 || len(matches[len(matches)-1]) < 2 {
+	progress := protocol.LastProgressUpdate(text)
+	if progress == "" {
 		return ""
 	}
-	return compactLedgerText(matches[len(matches)-1][1], 500)
+	return compactLedgerText(progress, 500)
 }
 
 func lastSummaryOrReview(text string) string {
-	for _, re := range []*regexp.Regexp{
-		regexp.MustCompile(`(?is)<summary\b[^>]*>(.*?)</summary>`),
-		regexp.MustCompile(`(?is)<review\b[^>]*>(.*?)</review>`),
-	} {
-		matches := re.FindAllStringSubmatch(text, -1)
-		if len(matches) > 0 && len(matches[len(matches)-1]) >= 2 {
-			return compactLedgerText(matches[len(matches)-1][1], 700)
-		}
+	body := protocol.LastSummaryOrReview(text)
+	if body == "" {
+		return ""
 	}
-	return ""
+	return compactLedgerText(body, 700)
 }
 
 func extractFindings(text string) []string {
@@ -273,24 +219,6 @@ func appendUnique(items []string, values ...string) []string {
 	return items
 }
 
-func firstParagraph(text string) string {
-	text = strings.TrimSpace(text)
-	if text == "" {
-		return ""
-	}
-	for _, part := range strings.Split(text, "\n\n") {
-		part = strings.TrimSpace(part)
-		if part != "" && !strings.HasPrefix(part, "---") {
-			return compactLedgerText(part, 500)
-		}
-	}
-	return compactLedgerText(text, 500)
-}
-
 func compactLedgerText(text string, max int) string {
-	text = strings.Join(strings.Fields(strings.TrimSpace(text)), " ")
-	if len(text) <= max {
-		return text
-	}
-	return text[:max] + "..."
+	return objectiveledger.CompactText(text, max)
 }

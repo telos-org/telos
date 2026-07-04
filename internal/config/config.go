@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/telos-org/telos/internal/gatewaycred"
 	"gopkg.in/yaml.v3"
 )
 
@@ -21,7 +22,7 @@ const (
 	GatewayAPIKeyEnv    = "TELOS_GATEWAY_API_KEY"
 	GatewayTransportEnv = "TELOS_GATEWAY_TRANSPORT"
 	GatewayKindEnv      = "TELOS_GATEWAY_KIND"
-	GatewayHeadersEnv   = "TELOS_GATEWAY_HEADERS"
+	GatewayHeadersEnv   = gatewaycred.HeadersEnv
 )
 
 // Config holds user-facing cloud CLI configuration.
@@ -67,48 +68,13 @@ func EnvironmentsPath() string {
 	return filepath.Join(dir, "environments.yaml")
 }
 
-// LoadConfigFile reads config from disk without applying env overrides.
-func LoadConfigFile() *Config {
-	raw := readYAMLFile(ConfigPath())
-	cfg := &Config{}
-	if ep, ok := raw["api_endpoint"].(string); ok {
-		cfg.APIEndpoint = ep
-	}
-	if ep, ok := raw["billing_endpoint"].(string); ok {
-		cfg.BillingEndpoint = ep
-	}
-	if at, ok := raw["auth_token"].(string); ok {
-		cfg.AuthToken = at
-	}
-	if orgID, ok := raw["org_id"].(string); ok {
-		cfg.OrgID = orgID
-	}
-	if rawGateway, ok := raw["gateway"].(map[string]interface{}); ok {
-		if mode, ok := rawGateway["mode"].(string); ok {
-			cfg.Gateway.Mode = mode
-		}
-		if baseURL, ok := rawGateway["base_url"].(string); ok {
-			cfg.Gateway.BaseURL = baseURL
-		}
-		if apiKey, ok := rawGateway["api_key"].(string); ok {
-			cfg.Gateway.APIKey = apiKey
-		}
-		if transport, ok := rawGateway["transport"].(string); ok {
-			cfg.Gateway.Transport = transport
-		}
-		if kind, ok := rawGateway["kind"].(string); ok {
-			cfg.Gateway.Kind = kind
-		}
-		if headers, ok := stringMap(rawGateway["headers"]); ok {
-			cfg.Gateway.Headers = headers
-		}
-	}
-	return cfg
-}
-
 // LoadConfig reads config from disk with env overrides.
 func LoadConfig() *Config {
-	cfg := LoadConfigFile()
+	cfg := &Config{}
+	if data, err := os.ReadFile(ConfigPath()); err == nil {
+		_ = yaml.Unmarshal(data, cfg)
+	}
+	// Env overrides
 	if v := os.Getenv(APIEndpointEnv); v != "" {
 		cfg.APIEndpoint = v
 	}
@@ -137,8 +103,7 @@ func LoadConfig() *Config {
 		cfg.Gateway.Kind = v
 	}
 	if v := os.Getenv(GatewayHeadersEnv); v != "" {
-		var headers map[string]string
-		if err := yaml.Unmarshal([]byte(v), &headers); err == nil {
+		if headers, err := gatewaycred.ParseHeaders(v); err == nil {
 			cfg.Gateway.Headers = headers
 		}
 	}
@@ -151,42 +116,10 @@ func SaveConfig(cfg *Config) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	m := map[string]any{}
-	if cfg.APIEndpoint != "" {
-		m["api_endpoint"] = cfg.APIEndpoint
+	if cfg == nil {
+		cfg = &Config{}
 	}
-	if cfg.BillingEndpoint != "" {
-		m["billing_endpoint"] = cfg.BillingEndpoint
-	}
-	if cfg.AuthToken != "" {
-		m["auth_token"] = cfg.AuthToken
-	}
-	if cfg.OrgID != "" {
-		m["org_id"] = cfg.OrgID
-	}
-	if cfg.Gateway.Mode != "" || cfg.Gateway.BaseURL != "" || cfg.Gateway.APIKey != "" || cfg.Gateway.Transport != "" || cfg.Gateway.Kind != "" || len(cfg.Gateway.Headers) > 0 {
-		m["gateway"] = map[string]any{}
-		gateway := m["gateway"].(map[string]any)
-		if cfg.Gateway.Mode != "" {
-			gateway["mode"] = cfg.Gateway.Mode
-		}
-		if cfg.Gateway.BaseURL != "" {
-			gateway["base_url"] = cfg.Gateway.BaseURL
-		}
-		if cfg.Gateway.APIKey != "" {
-			gateway["api_key"] = cfg.Gateway.APIKey
-		}
-		if cfg.Gateway.Transport != "" {
-			gateway["transport"] = cfg.Gateway.Transport
-		}
-		if cfg.Gateway.Kind != "" {
-			gateway["kind"] = cfg.Gateway.Kind
-		}
-		if len(cfg.Gateway.Headers) > 0 {
-			gateway["headers"] = cfg.Gateway.Headers
-		}
-	}
-	data, err := yaml.Marshal(m)
+	data, err := yaml.Marshal(cfg)
 	if err != nil {
 		return err
 	}
@@ -302,20 +235,4 @@ func readYAMLFile(path string) map[string]interface{} {
 		return map[string]interface{}{}
 	}
 	return raw
-}
-
-func stringMap(value any) (map[string]string, bool) {
-	raw, ok := value.(map[string]interface{})
-	if !ok {
-		return nil, false
-	}
-	out := make(map[string]string, len(raw))
-	for key, value := range raw {
-		s, ok := value.(string)
-		if !ok || key == "" {
-			return nil, false
-		}
-		out[key] = s
-	}
-	return out, true
 }

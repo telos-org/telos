@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/telos-org/telos/internal/envutil"
 )
 
 const (
@@ -532,13 +534,7 @@ func checkpointMaxBytes() int64 {
 }
 
 func checkpointIncludeAll() bool {
-	raw := strings.ToLower(strings.TrimSpace(os.Getenv("TELOS_CHECKPOINT_INCLUDE_ALL")))
-	switch raw {
-	case "1", "true", "yes", "on":
-		return true
-	default:
-		return false
-	}
+	return envutil.EnvBool("TELOS_CHECKPOINT_INCLUDE_ALL")
 }
 
 func terminateProcessGroup(cmd *exec.Cmd, processDone <-chan struct{}) {

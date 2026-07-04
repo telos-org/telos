@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "gatewaycred",
+    srcs = ["gatewaycred.go"],
+    importpath = "github.com/telos-org/telos/internal/gatewaycred",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "gatewaycred_test",
+    srcs = ["gatewaycred_test.go"],
+    embed = [":gatewaycred"],
+)

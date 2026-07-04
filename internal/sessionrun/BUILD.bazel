@@ -1,0 +1,22 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "sessionrun",
+    srcs = [
+        "agent_executor_default.go",
+        "agent_executor_testfake.go",
+        "localrun.go",
+        "workspace.go",
+    ],
+    importpath = "github.com/telos-org/telos/internal/sessionrun",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/evidence",
+        "//internal/executor",
+        "//internal/game",
+        "//internal/gateway",
+        "//internal/platform",
+        "//internal/sessionapi",
+        "//internal/spec",
+    ],
+)

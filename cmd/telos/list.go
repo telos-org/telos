@@ -196,7 +196,7 @@ func limitListSessions(sessions []sessionapi.Session, limit int) []sessionapi.Se
 }
 
 func listEnvironments(jsonOut bool) {
-	control, err := cloud.ControlClient()
+	control, err := cloud.NewControlClientFromConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -226,7 +226,7 @@ func listEnvironments(jsonOut bool) {
 }
 
 func listDeployments(orgID string, jsonOut bool) {
-	control, err := cloud.ControlClient()
+	control, err := cloud.NewControlClientFromConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

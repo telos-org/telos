@@ -8,7 +8,7 @@ go_library(
     deps = [
         "//internal/cloud",
         "//internal/config",
-        "//internal/sessionapi",
+        "//internal/gatewaycred",
     ],
 )
 

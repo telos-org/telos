@@ -8,41 +8,34 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"strings"
 	"time"
 
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
-	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/gatewaycred"
 )
 
 const (
 	ModeManaged = "managed"
 	ModeBYO     = "byo"
 
-	TransportOpenAISync   = "openai_sync"
-	TransportBifrostAsync = "bifrost_async"
+	TransportOpenAISync   = gatewaycred.TransportOpenAISync
+	TransportBifrostAsync = gatewaycred.TransportBifrostAsync
 
-	KindOpenAI  = "openai"
-	KindBifrost = "bifrost"
+	KindOpenAI  = gatewaycred.KindOpenAI
+	KindBifrost = gatewaycred.KindBifrost
 )
 
-// Credential is the Responses API endpoint and key a run should use.
+// Credential is a resolved gateway credential plus any policy cleanup hook.
 type Credential struct {
-	BaseURL       string
-	APIKey        string
-	Transport     string
-	Kind          string
-	Headers       map[string]string
-	ModelProfile  sessionapi.ModelProfile
-	CostHardLimit bool
-	Cleanup       func() error
+	gatewaycred.Credential
+	Cleanup func() error
 }
 
 type ProbeConfig struct {
-	Transport string
-	Kind      string
+	Transport gatewaycred.Transport
+	Kind      gatewaycred.Kind
 	Headers   map[string]string
 }
 
@@ -51,15 +44,10 @@ type ProbeConfig struct {
 // managed billing.
 func Enabled() bool {
 	cfg := config.LoadConfig()
-	if base, key, _, _, _, err := envGateway(); err != nil {
+	if _, ok, err := gatewaycred.FromEnv(); err != nil {
 		return true
-	} else if key != "" {
+	} else if ok {
 		return true
-	} else if base != "" {
-		// A stale base URL without a gateway key must not opt direct-provider
-		// setups into gateway routing. Re-read the file without env overrides so
-		// an explicit saved gateway config still works.
-		cfg = config.LoadConfigFile()
 	}
 	return strings.TrimSpace(cfg.Gateway.Mode) != "" ||
 		strings.TrimSpace(cfg.Gateway.BaseURL) != "" ||
@@ -69,34 +57,19 @@ func Enabled() bool {
 		len(cfg.Gateway.Headers) > 0
 }
 
-func ManagedEnabled() bool {
-	cfg := config.LoadConfig()
-	if mode := strings.ToLower(strings.TrimSpace(os.Getenv(config.GatewayModeEnv))); mode != "" {
-		return mode == ModeManaged
-	}
-	return strings.ToLower(strings.TrimSpace(cfg.Gateway.Mode)) == ModeManaged
-}
-
 // Resolve chooses the local gateway credential for a session.
-func Resolve(sessionID string, modelProfile sessionapi.ModelProfile) (Credential, error) {
-	modelProfile, err := sessionapi.NormalizeModelProfile(string(modelProfile))
-	if err != nil {
-		return Credential{}, err
-	}
+func Resolve(sessionID string) (Credential, error) {
 	cfg := config.LoadConfig()
-	if base, key, transport, kind, headers, err := envGateway(); err != nil {
+	if cred, ok, err := gatewaycred.FromEnv(); err != nil {
 		return Credential{}, err
-	} else if key != "" {
-		if base == "" {
+	} else if ok {
+		if cred.BaseURL == "" || cred.APIKey == "" {
 			return Credential{}, fmt.Errorf("both TELOS_GATEWAY_BASE_URL and TELOS_GATEWAY_API_KEY are required")
 		}
-		transport, kind, err = resolveTransportAndKind(transport, kind)
-		if err != nil {
-			return Credential{}, err
+		if cred.Transport == gatewaycred.TransportBifrostAsync && !strings.HasSuffix(cred.BaseURL, "/openai") {
+			return Credential{}, fmt.Errorf("bifrost_async via the OpenAI SDK requires TELOS_GATEWAY_BASE_URL to end in /openai")
 		}
-		return Credential{BaseURL: base, APIKey: key, Transport: transport, Kind: kind, Headers: headers, ModelProfile: modelProfile, CostHardLimit: costHardLimitFromEnv()}, nil
-	} else if base != "" {
-		cfg = config.LoadConfigFile()
+		return Credential{Credential: cred}, nil
 	}
 
 	mode := strings.ToLower(strings.TrimSpace(cfg.Gateway.Mode))
@@ -107,37 +80,45 @@ func Resolve(sessionID string, modelProfile sessionapi.ModelProfile) (Credential
 	}
 	switch mode {
 	case ModeBYO:
-		base := strings.TrimRight(strings.TrimSpace(cfg.Gateway.BaseURL), "/")
-		key := strings.TrimSpace(cfg.Gateway.APIKey)
-		if base == "" || key == "" {
+		if strings.TrimSpace(cfg.Gateway.BaseURL) == "" || strings.TrimSpace(cfg.Gateway.APIKey) == "" {
 			return Credential{}, fmt.Errorf("BYO gateway requires gateway.base_url and gateway.api_key")
 		}
-		transport, kind, err := resolveTransportAndKind(cfg.Gateway.Transport, cfg.Gateway.Kind)
+		cred, err := gatewaycred.NormalizeWithEnvPolicy(gatewaycred.Credential{
+			BaseURL:   cfg.Gateway.BaseURL,
+			APIKey:    cfg.Gateway.APIKey,
+			Transport: gatewaycred.Transport(cfg.Gateway.Transport),
+			Kind:      gatewaycred.Kind(cfg.Gateway.Kind),
+			Headers:   cfg.Gateway.Headers,
+		})
 		if err != nil {
 			return Credential{}, err
 		}
-		return Credential{BaseURL: base, APIKey: key, Transport: transport, Kind: kind, Headers: cloneHeaders(cfg.Gateway.Headers), ModelProfile: modelProfile}, nil
+		if cred.Transport == gatewaycred.TransportBifrostAsync && !strings.HasSuffix(cred.BaseURL, "/openai") {
+			return Credential{}, fmt.Errorf("bifrost_async via the OpenAI SDK requires gateway.base_url to end in /openai")
+		}
+		return Credential{Credential: cred}, nil
 	case ModeManaged:
-		client, err := cloud.BillingClient()
+		client, err := cloud.NewBillingClientFromConfig()
 		if err != nil {
 			return Credential{}, err
 		}
-		key, err := client.MintSessionKey(sessionID, modelProfile)
+		key, err := client.MintSessionKey(sessionID)
 		if err != nil {
 			return Credential{}, err
 		}
-		transport, kind, err := resolveTransportAndKind(key.Transport, key.Kind)
+		cred, err := gatewaycred.NormalizeWithEnvPolicy(gatewaycred.Credential{
+			BaseURL:       key.BaseURL,
+			APIKey:        key.APIKey,
+			Transport:     gatewaycred.Transport(key.Transport),
+			Kind:          gatewaycred.Kind(key.Kind),
+			Headers:       key.Headers,
+			CostHardLimit: true,
+		})
 		if err != nil {
 			return Credential{}, err
 		}
 		return Credential{
-			BaseURL:       key.BaseURL,
-			APIKey:        key.APIKey,
-			Transport:     transport,
-			Kind:          kind,
-			Headers:       cloneHeaders(key.Headers),
-			ModelProfile:  key.ModelProfile,
-			CostHardLimit: true,
+			Credential: cred,
 			Cleanup: func() error {
 				return client.ReconcileSession(key.SessionID, true)
 			},
@@ -145,29 +126,6 @@ func Resolve(sessionID string, modelProfile sessionapi.ModelProfile) (Credential
 	default:
 		return Credential{}, fmt.Errorf("run `telos login` for managed gateway access or `telos configure gateway --mode byo --base-url URL --api-key KEY`")
 	}
-}
-
-func costHardLimitFromEnv() bool {
-	raw := strings.TrimSpace(os.Getenv("TELOS_COST_HARD_LIMIT"))
-	if raw != "" {
-		return strings.EqualFold(raw, "1") || strings.EqualFold(raw, "true") || strings.EqualFold(raw, "yes")
-	}
-	return strings.TrimSpace(os.Getenv("TELOS_ENV_ID")) != "" &&
-		(strings.TrimSpace(os.Getenv("TELOS_BILLING_ENV_TOKEN")) != "" ||
-			strings.TrimSpace(os.Getenv("TELOS_BILLING_ENV_TOKEN_FILE")) != "")
-}
-
-func envGateway() (string, string, string, string, map[string]string, error) {
-	headers, err := headersFromEnv()
-	if err != nil {
-		return "", "", "", "", nil, err
-	}
-	return strings.TrimRight(strings.TrimSpace(os.Getenv("TELOS_GATEWAY_BASE_URL")), "/"),
-		strings.TrimSpace(os.Getenv("TELOS_GATEWAY_API_KEY")),
-		strings.TrimSpace(os.Getenv("TELOS_GATEWAY_TRANSPORT")),
-		strings.TrimSpace(os.Getenv("TELOS_GATEWAY_KIND")),
-		headers,
-		nil
 }
 
 // ProbeResponses checks that baseURL looks like the configured Responses
@@ -182,11 +140,11 @@ func ProbeResponses(baseURL, apiKey, model string, cfg ProbeConfig) error {
 	if model == "" {
 		model = "gpt-4o-mini"
 	}
-	transport, _, err := resolveTransportAndKind(cfg.Transport, cfg.Kind)
+	transport, _, err := gatewaycred.NormalizeTransportAndKind(string(cfg.Transport), string(cfg.Kind))
 	if err != nil {
 		return err
 	}
-	if transport == TransportBifrostAsync && !strings.HasSuffix(baseURL, "/openai") {
+	if transport == gatewaycred.TransportBifrostAsync && !strings.HasSuffix(baseURL, "/openai") {
 		return fmt.Errorf("bifrost_async via the OpenAI SDK requires the /openai endpoint")
 	}
 	body, _ := json.Marshal(map[string]any{
@@ -200,7 +158,7 @@ func ProbeResponses(baseURL, apiKey, model string, cfg ProbeConfig) error {
 	if err != nil {
 		return err
 	}
-	if transport == TransportBifrostAsync && isProbePending(result.Status) {
+	if transport == gatewaycred.TransportBifrostAsync && isProbePending(result.Status) {
 		if result.ID == "" {
 			return fmt.Errorf("bifrost_async probe returned no async job ID")
 		}
@@ -310,8 +268,8 @@ func (r probeResponse) text() string {
 	return out.String()
 }
 
-func asyncSubmitHeader(transport string) map[string]string {
-	if transport == TransportBifrostAsync {
+func asyncSubmitHeader(transport gatewaycred.Transport) map[string]string {
+	if transport == gatewaycred.TransportBifrostAsync {
 		return map[string]string{"x-bf-async": "true"}
 	}
 	return nil
@@ -337,63 +295,7 @@ func sleepProbe(ctx context.Context, delay time.Duration) error {
 	}
 }
 
-func resolveTransportAndKind(rawTransport, rawKind string) (string, string, error) {
-	kind := strings.ToLower(strings.TrimSpace(rawKind))
-	switch kind {
-	case "":
-	case KindOpenAI, KindBifrost:
-	default:
-		return "", "", fmt.Errorf("unknown TELOS_GATEWAY_KIND %q (accepted: openai, bifrost)", rawKind)
-	}
-	transport := strings.ToLower(strings.TrimSpace(rawTransport))
-	switch transport {
-	case "":
-		transport = TransportOpenAISync
-	case TransportOpenAISync, TransportBifrostAsync:
-	default:
-		return "", "", fmt.Errorf("unknown TELOS_GATEWAY_TRANSPORT %q (accepted: openai_sync, bifrost_async)", rawTransport)
-	}
-	if kind == "" {
-		if transport == TransportBifrostAsync {
-			kind = KindBifrost
-		} else {
-			kind = KindOpenAI
-		}
-	}
-	return transport, kind, nil
-}
-
 // ValidateTransportAndKind validates and normalizes gateway transport/kind values.
-func ValidateTransportAndKind(rawTransport, rawKind string) (string, string, error) {
-	return resolveTransportAndKind(rawTransport, rawKind)
-}
-
-func headersFromEnv() (map[string]string, error) {
-	raw := strings.TrimSpace(os.Getenv("TELOS_GATEWAY_HEADERS"))
-	if raw == "" {
-		return nil, nil
-	}
-	var headers map[string]string
-	if err := json.Unmarshal([]byte(raw), &headers); err != nil {
-		return nil, fmt.Errorf("TELOS_GATEWAY_HEADERS must be a JSON object of string values: %w", err)
-	}
-	return cloneHeaders(headers), nil
-}
-
-func cloneHeaders(in map[string]string) map[string]string {
-	if len(in) == 0 {
-		return nil
-	}
-	out := make(map[string]string, len(in))
-	for k, v := range in {
-		k = strings.TrimSpace(k)
-		if k == "" {
-			continue
-		}
-		out[k] = strings.TrimSpace(v)
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
+func ValidateTransportAndKind(rawTransport, rawKind string) (gatewaycred.Transport, gatewaycred.Kind, error) {
+	return gatewaycred.NormalizeTransportAndKind(rawTransport, rawKind)
 }

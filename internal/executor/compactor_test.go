@@ -30,7 +30,7 @@ func tightBudgetConfig() compactionConfig {
 }
 
 func TestCompactionConfigFromEnvDefaultsAreOn(t *testing.T) {
-	cfg := compactionConfigFromEnv(4096, 0)
+	cfg := compactionConfigFromEnv().forModel(0).withReserveOutput(4096)
 	if cfg.contextWindow != defaultCompactionContextWindow || cfg.triggerRatio != defaultCompactionTriggerRatio {
 		t.Fatalf("defaults: got window=%d ratio=%v", cfg.contextWindow, cfg.triggerRatio)
 	}
@@ -51,7 +51,7 @@ func TestCompactionConfigFromEnvOverrides(t *testing.T) {
 	t.Setenv("TELOS_AUTOCOMPACT_KEEP_RECENT_TOKENS", "4096")
 	t.Setenv("TELOS_AUTOCOMPACT_STRATEGY", "truncate")
 
-	cfg := compactionConfigFromEnv(2000, 0)
+	cfg := compactionConfigFromEnv().forModel(0).withReserveOutput(2000)
 	if cfg.contextWindow != 32000 || cfg.triggerRatio != 0.5 || cfg.keepRecentTokens != 4096 || cfg.strategy != compactionStrategyTruncate {
 		t.Fatalf("overrides: %#v", cfg)
 	}
@@ -64,7 +64,7 @@ func TestCompactorUnderBudgetHasNoPlan(t *testing.T) {
 	s := newConversationState(responses.ResponseInputParam{messageItem("task")}, conversationStateStatelessHistory)
 	s.history = append(s.history, messageItem("small"))
 
-	_, ok, err := newCompactor(compactionConfigFromEnv(4096, 0)).plan(s)
+	_, ok, err := newCompactor(compactionConfigFromEnv().forModel(0).withReserveOutput(4096)).plan(s)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -235,20 +235,20 @@ func TestPlannerKeepsInBudgetRecentTailInsteadOfDroppingAll(t *testing.T) {
 }
 
 func TestCompactionConfigFloorsToModelContextWindow(t *testing.T) {
-	if got := compactionConfigFromEnv(0, 32000).contextWindow; got != 32000 {
+	if got := compactionConfigFromEnv().forModel(32000).withReserveOutput(0).contextWindow; got != 32000 {
 		t.Fatalf("effective window should floor to the smaller model window, got %d", got)
 	}
-	if got := compactionConfigFromEnv(0, 1000000).contextWindow; got != defaultCompactionContextWindow {
+	if got := compactionConfigFromEnv().forModel(1000000).withReserveOutput(0).contextWindow; got != defaultCompactionContextWindow {
 		t.Fatalf("a larger model window must not raise the configured default, got %d", got)
 	}
-	if got := compactionConfigFromEnv(0, 0).contextWindow; got != defaultCompactionContextWindow {
+	if got := compactionConfigFromEnv().forModel(0).withReserveOutput(0).contextWindow; got != defaultCompactionContextWindow {
 		t.Fatalf("an unknown model window must leave the configured default, got %d", got)
 	}
 }
 
 func TestCompactionConfigExplicitZeroDisablesEvenWithModelWindow(t *testing.T) {
 	t.Setenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW", "0")
-	cfg := compactionConfigFromEnv(0, 32000)
+	cfg := compactionConfigFromEnv().forModel(32000).withReserveOutput(0)
 	if cfg.contextWindow != 0 || cfg.budgetTokens() != 0 {
 		t.Fatalf("explicit zero should disable compaction, got %#v budget=%d", cfg, cfg.budgetTokens())
 	}

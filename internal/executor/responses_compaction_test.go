@@ -423,6 +423,7 @@ func newTestResponsesClient(t *testing.T, baseURL, task string) *responsesClient
 		Capability: modelCapabilityProfile{
 			StateMode: "stateless_history",
 		},
+		Compaction: compactionConfigFromEnv().forModel(0),
 	}
 	return newResponsesClient(nil, cfg, "high", 0, task, "prover", logger)
 }

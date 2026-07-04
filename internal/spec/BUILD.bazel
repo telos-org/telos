@@ -17,7 +17,9 @@ go_library(
     importpath = "github.com/telos-org/telos/internal/spec",
     visibility = ["//:__subpackages__"],
     deps = [
+        "//internal/ledger",
         "//internal/platform",
+        "//internal/protocol",
         "@in_gopkg_yaml_v3//:yaml_v3",
     ],
 )
@@ -31,5 +33,9 @@ go_test(
         "spec_test.go",
     ],
     embed = [":spec"],
-    deps = ["//internal/platform"],
+    deps = [
+        "//internal/ledger",
+        "//internal/platform",
+        "//internal/protocol",
+    ],
 )

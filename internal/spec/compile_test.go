@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	objectiveledger "github.com/telos-org/telos/internal/ledger"
 	"github.com/telos-org/telos/internal/platform"
 )
 
@@ -236,19 +237,13 @@ func TestCompileWithoutDeclaredSkillsOnlyIncludesVerifierSkills(t *testing.T) {
 func TestRenderTurnContextDigestUsesLedgerAndWorkspaceSummary(t *testing.T) {
 	dir := t.TempDir()
 	transcriptPath := filepath.Join(dir, "transcript.md")
-	if err := os.WriteFile(transcriptPath, []byte("<status>CONTINUE</status>\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	ledger := `{
-		"objective": "Fix the flaky executor loop.",
-		"state": "repair",
-		"last_implementation": "Added retry classification.",
-		"last_evaluation": "The verifier found one remaining issue.",
-		"open_findings": ["Missing diagnostics for outside workspace writes."],
-		"turns": [{"round_num": 3, "role": "prover", "error": "provider_timeout: gateway timed out"}]
-	}`
-	if err := os.WriteFile(filepath.Join(dir, "objective-ledger.json"), []byte(ledger), 0o644); err != nil {
-		t.Fatal(err)
+	ledger := objectiveledger.ObjectiveLedger{
+		Objective:          "Fix the flaky executor loop.",
+		State:              objectiveledger.ObjectiveStateRepair,
+		LastImplementation: "Added retry classification.",
+		LastEvaluation:     "The verifier found one remaining issue.",
+		OpenFindings:       []string{"Missing diagnostics for outside workspace writes."},
+		Turns:              []objectiveledger.ObjectiveTurn{{RoundNum: 3, Role: "prover", Error: "provider_timeout: gateway timed out"}},
 	}
 	workspace := platform.WorkspaceSnapshot{
 		FileList:  []string{"./internal/executor/loop.go"},
@@ -265,7 +260,13 @@ func TestRenderTurnContextDigestUsesLedgerAndWorkspaceSummary(t *testing.T) {
 		}, "\n"),
 	}
 
-	digest := renderTurnContextDigest(transcriptPath, workspace)
+	digest := renderTurnContextDigest(TurnContextDigest{
+		TranscriptPath: transcriptPath,
+		EvidencePath:   filepath.Join(dir, "evidence.jsonl"),
+		LedgerPath:     filepath.Join(dir, "objective-ledger.json"),
+		Ledger:         &ledger,
+		Transcript:     "<status>CONTINUE</status>\n",
+	}, workspace)
 	for _, want := range []string{
 		"Current objective: Fix the flaky executor loop.",
 		"Objective state: `repair`",
@@ -589,12 +590,11 @@ func TestRenderTurnContextDigestBoundsLongTranscript(t *testing.T) {
 	body.WriteString("Recent evaluator finding: missing retry evidence\n")
 	body.WriteString("<progress_update>Implemented bounded replay diagnostics.</progress_update>\n")
 	body.WriteString("<status>CONTINUE</status>\n")
-	if err := os.WriteFile(transcriptPath, []byte(body.String()), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{Raw: "=== FILES ===\nmain.go\n"}, transcriptPath)
+	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{Raw: "=== FILES ===\nmain.go\n"}, transcriptPath, PromptOptions{
+		TurnContext: TurnContextDigest{Transcript: body.String()},
+	})
 
 	if strings.Contains(task, "old noisy transcript line that must not appear") {
 		t.Fatal("prompt should not dump old transcript body")
@@ -623,12 +623,11 @@ func TestRenderTurnContextDigestFallbackIncludesRuntimeErrors(t *testing.T) {
 		"tool_result error_code=tool_timeout local_timeout:1",
 		"<progress_update>Retried provider call.</progress_update>",
 	}, "\n")
-	if err := os.WriteFile(transcriptPath, []byte(body), 0o644); err != nil {
-		t.Fatal(err)
-	}
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{}, transcriptPath)
+	task := RenderProverTask(compiled, platform.WorkspaceSnapshot{}, transcriptPath, PromptOptions{
+		TurnContext: TurnContextDigest{Transcript: body},
+	})
 
 	for _, want := range []string{
 		"Recent runtime errors:",

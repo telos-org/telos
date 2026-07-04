@@ -58,6 +58,14 @@ func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {
 	return f.checkpointOK
 }
 
+func (f *fakeExecutor) Cleanup() error {
+	return nil
+}
+
+func (f *fakeExecutor) CostHardLimit() bool {
+	return false
+}
+
 func compileTestSpec(t *testing.T) *spec.CompiledEnvironment {
 	t.Helper()
 	dir := t.TempDir()
@@ -643,6 +651,16 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 	if result.VerifierRounds != 0 {
 		t.Fatalf("verifier should not run before prover failure budget is exhausted, got %d", result.VerifierRounds)
 	}
+	ledger, err := readObjectiveLedger(state.LedgerPath)
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	if ledger.State != ObjectiveStateBlocked {
+		t.Fatalf("ledger should be blocked after failure budget exhaustion, got %q", ledger.State)
+	}
+	if len(ledger.Turns) == 0 || ledger.Turns[len(ledger.Turns)-1].StateAfter != ObjectiveStateBlocked {
+		t.Fatalf("last ledger turn should record blocked state: %+v", ledger.Turns)
+	}
 }
 
 func TestPVGUntilDoesNotCountFailedVerifierReview(t *testing.T) {
@@ -742,6 +760,16 @@ func TestPVGBudgetExceeded(t *testing.T) {
 	if !strings.Contains(string(data), `"budget":"max_cost_usd"`) {
 		t.Fatalf("evidence missing cost budget kind:\n%s", data)
 	}
+	ledger, err := readObjectiveLedger(state.LedgerPath)
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	if ledger.State != ObjectiveStateBlocked {
+		t.Fatalf("ledger should be blocked after cost budget exhaustion, got %q", ledger.State)
+	}
+	if len(ledger.Turns) == 0 || ledger.Turns[len(ledger.Turns)-1].StateAfter != ObjectiveStateBlocked {
+		t.Fatalf("last ledger turn should record blocked state: %+v", ledger.Turns)
+	}
 }
 
 func TestPVGCostCapUnavailableBYOLogsWarningOnly(t *testing.T) {
@@ -814,6 +842,16 @@ func TestPVGCostCapUnavailableManagedFailsClosed(t *testing.T) {
 	}
 	if !strings.Contains(string(data), `"budget":"max_cost_usd_cost_unavailable"`) {
 		t.Fatalf("cost-unavailable run should emit terminal budget exhaustion:\n%s", data)
+	}
+	ledger, err := readObjectiveLedger(state.LedgerPath)
+	if err != nil {
+		t.Fatalf("read ledger: %v", err)
+	}
+	if ledger.State != ObjectiveStateBlocked {
+		t.Fatalf("ledger should be blocked after cost-unavailable budget exhaustion, got %q", ledger.State)
+	}
+	if len(ledger.Turns) == 0 || ledger.Turns[len(ledger.Turns)-1].StateAfter != ObjectiveStateBlocked {
+		t.Fatalf("last ledger turn should record blocked state: %+v", ledger.Turns)
 	}
 }
 

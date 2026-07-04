@@ -1,6 +1,6 @@
 //go:build telos_testfake
 
-package cli
+package sessionrun
 
 import (
 	"encoding/json"
@@ -174,6 +174,14 @@ func testFakeStatus(status string) game.AgentStatus {
 	default:
 		return game.StatusContinue
 	}
+}
+
+func (e *testFakeExecutor) Cleanup() error {
+	return nil
+}
+
+func (e *testFakeExecutor) CostHardLimit() bool {
+	return false
 }
 
 func safeWorkspacePath(workspace string, rel string) (string, error) {

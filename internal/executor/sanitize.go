@@ -3,24 +3,20 @@ package executor
 import (
 	"regexp"
 	"strings"
+
+	"github.com/telos-org/telos/internal/protocol"
 )
 
 var reasoningLeakRE = regexp.MustCompile(`(?is)<(?:think|thinking|reasoning)\b[^>]*>.*?</(?:think|thinking|reasoning)>`)
 var reasoningOpenRE = regexp.MustCompile(`(?is)<(think|thinking|reasoning)\b[^>]*>`)
 var reasoningCloseRE = regexp.MustCompile(`(?is)</(think|thinking|reasoning)>`)
 
-// protocolBlockRE matches any required response tag the loop validates against.
-// The lossy unbalanced-tail stripping below must never discard a region that
-// carries one of these, or it would manufacture the very malformed_review_blocks
-// / missing_progress_update failures it is meant to avoid.
-var protocolBlockRE = regexp.MustCompile(`(?is)<(?:/?)(?:findings|review|summary|progress_update|status)\b[^>]*>`)
-
 func containsProtocolBlock(text string) bool {
-	return protocolBlockRE.MatchString(text)
+	return protocol.HasAnyKnownTag(text)
 }
 
 // sanitizeVisibleText strips reasoning/COT tags from visible model output. When
-// keepReasoning is true (TELOS_NATIVE_KEEP_REASONING=1, resolved once into
+// keepReasoning is true (TELOS_KEEP_REASONING=1, with TELOS_NATIVE_KEEP_REASONING as a legacy alias, resolved once into
 // envKnobs) the text is returned untouched.
 func sanitizeVisibleText(text string, keepReasoning bool) (string, string) {
 	if keepReasoning {
@@ -37,7 +33,7 @@ func sanitizeVisibleText(text string, keepReasoning bool) (string, string) {
 	// would synthesize the malformed_review_blocks / missing_progress_update
 	// failures the validator then reports. So skip the strip whenever the region
 	// it would discard carries a protocol tag, and keep the answer instead.
-	// (TELOS_NATIVE_KEEP_REASONING=1 disables this stripping entirely.)
+	// (TELOS_KEEP_REASONING=1 disables this stripping entirely.)
 	if locs := reasoningCloseRE.FindAllStringIndex(sanitized, -1); len(locs) > 0 {
 		last := locs[len(locs)-1]
 		if !containsProtocolBlock(sanitized[:last[1]]) {

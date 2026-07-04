@@ -18,9 +18,11 @@ go_library(
     importpath = "github.com/telos-org/telos/internal/telosd",
     visibility = ["//:__subpackages__"],
     deps = [
-        "//internal/cli",
+        "//internal/envutil",
         "//internal/game",
+        "//internal/gatewaycred",
         "//internal/sessionapi",
+        "//internal/sessionrun",
         "@in_gopkg_yaml_v3//:yaml_v3",
         "@io_k8s_api//apps/v1:apps",
         "@io_k8s_api//batch/v1:batch",
@@ -50,6 +52,7 @@ go_test(
     ],
     embed = [":telosd"],
     deps = [
+        "//internal/gatewaycred",
         "//internal/sessionapi",
         "@io_k8s_api//apps/v1:apps",
         "@io_k8s_api//batch/v1:batch",

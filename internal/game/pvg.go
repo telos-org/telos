@@ -26,6 +26,7 @@ type PVG struct {
 	Result   *PVGResult
 	Evidence *evidence.Evidence
 	started  time.Time
+	ledger   ObjectiveLedger
 
 	costCapUnenforceable bool
 }
@@ -40,6 +41,10 @@ func NewPVG(compiled *spec.CompiledEnvironment, executor AgentExecutor, state *P
 	InitializeTranscript(state.TranscriptPath, state.SessionID,
 		compiled.Environment.Name, ev.Path, ev.StartedAt)
 	_ = InitializeObjectiveLedger(state.LedgerPath, state, compiled.SpecText)
+	ledger, err := readObjectiveLedger(state.LedgerPath)
+	if err != nil || ledger.Schema != objectiveLedgerSchema {
+		ledger = newObjectiveLedger(state, compiled.SpecText)
+	}
 
 	return &PVG{
 		Compiled: compiled,
@@ -48,6 +53,7 @@ func NewPVG(compiled *spec.CompiledEnvironment, executor AgentExecutor, state *P
 		Config:   config,
 		Result:   result,
 		Evidence: ev,
+		ledger:   ledger,
 	}
 }
 
@@ -112,35 +118,37 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 		var result GameResult
 		var terminal bool
 		turnFailed := turn.Error != ""
-		if turn.Error != "" {
-			if turn.Recoverable {
-				machine.state = step.State
-			} else {
-				machine.state = ObjectiveStateBlocked
-			}
-		} else {
+		if turn.Error == "" {
 			recoverableFailures = 0
-			// The state machine owns the prover/verify/repair/finalize transitions.
-			// The ledger records the state the machine just computed instead of
-			// re-deriving it, so the two cannot drift (notably in review mode, where
-			// a verifier turn returns to implement rather than repair).
-			result, terminal = machine.advance(turn)
 		}
-		p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.state)
-		if costCapExceeded {
-			return p.end(GameFailure)
-		}
-
+		// The state machine owns every transition, including recoverable and
+		// terminal failure paths. The ledger records the state the machine just
+		// computed instead of re-deriving it.
+		result, terminal = machine.observe(step, turn)
 		if turnFailed {
 			if p.turnFailureExceeded(turn, &recoverableFailures) {
+				if turn.Recoverable {
+					result, terminal = machine.fail(step, false)
+				}
+				p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.currentState())
 				return p.end(GameFailure)
 			}
-			if p.overBudget(p.Result.Rounds, step.Role) {
+			if costCapExceeded || p.overBudget(p.Result.Rounds, step.Role) {
+				result, terminal = machine.fail(step, false)
+				p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.currentState())
 				return p.end(GameFailure)
 			}
+			p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.currentState())
 			workspace = p.Executor.WorkspaceSnapshot()
 			continue
 		}
+
+		if costCapExceeded || p.overBudget(p.Result.Rounds, step.Role) {
+			result, terminal = machine.fail(step, false)
+			p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.currentState())
+			return p.end(GameFailure)
+		}
+		p.updateObjectiveLedger(p.Result.Rounds, turn.Role, turn, machine.currentState())
 
 		if terminal {
 			if result == GameFailure && !machine.proverDelivered && p.Result.Error == "" {
@@ -157,9 +165,6 @@ func (p *PVG) runTaskStateMachineLoop() *PVGResult {
 				}
 			}
 			return p.end(result)
-		}
-		if p.overBudget(p.Result.Rounds, step.Role) {
-			return p.end(GameFailure)
 		}
 		workspace = p.Executor.WorkspaceSnapshot()
 	}
@@ -188,6 +193,7 @@ func (p *PVG) runProverTurn(workspace platform.WorkspaceSnapshot, promptOpts spe
 	p.transitionObjectiveState(state, roundNum, RoleProver, reason)
 	p.Evidence.Log("round_start", roundNum, RoleProver, nil)
 
+	promptOpts.TurnContext = p.turnContextDigest()
 	task := spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
 	return p.runAgentTurn(roundNum, RoleProver, p.Result.ProverRounds, task)
 }
@@ -199,8 +205,20 @@ func (p *PVG) runVerifierTurn(workspace platform.WorkspaceSnapshot, promptOpts s
 	p.transitionObjectiveState(ObjectiveStateVerify, roundNum, RoleVerifier, reason)
 	p.Evidence.Log("round_start", roundNum, RoleVerifier, nil)
 
+	promptOpts.TurnContext = p.turnContextDigest()
 	task := spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
 	return p.runAgentTurn(roundNum, RoleVerifier, p.Result.VerifierRounds, task)
+}
+
+func (p *PVG) turnContextDigest() spec.TurnContextDigest {
+	ledger := p.loadLedger()
+	return spec.TurnContextDigest{
+		TranscriptPath: p.State.TranscriptPath,
+		EvidencePath:   p.State.EvidencePath,
+		LedgerPath:     p.State.LedgerPath,
+		Ledger:         &ledger,
+		Transcript:     ReadTranscript(p.State.TranscriptPath),
+	}
 }
 
 func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {

@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -8,8 +9,10 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/openai/openai-go"
 	"github.com/openai/openai-go/responses"
 	"github.com/telos-org/telos/internal/agentsession"
+	"github.com/telos-org/telos/internal/game"
 )
 
 const (
@@ -51,32 +54,28 @@ var compactionRequiredHeadings = []string{
 }
 
 type compactionConfig struct {
-	contextWindow    int
-	triggerRatio     float64
-	keepRecentTokens int
-	reserveOutput    int
-	strategy         string
+	contextWindow         int
+	contextWindowDisabled bool
+	triggerRatio          float64
+	keepRecentTokens      int
+	reserveOutput         int
+	strategy              string
 }
 
-// compactionConfigFromEnv resolves the compaction config. contextWindow starts
-// from the global default (overridable by TELOS_AUTOCOMPACT_CONTEXT_WINDOW) and
-// is then floored to the model's actual context window when known, so the
-// trigger that exists to prevent context overflow can never exceed what the
-// model can hold. A modelContextWindow of 0 means "unknown" and leaves the
-// configured default in place.
-func compactionConfigFromEnv(reserveOutput, modelContextWindow int) compactionConfig {
+// compactionConfigFromEnv resolves the process-wide autocompaction knobs once
+// at executor construction. Per-model context-window flooring and per-request
+// output reserve are applied later without reading env again.
+func compactionConfigFromEnv() compactionConfig {
 	cfg := compactionConfig{
 		contextWindow:    defaultCompactionContextWindow,
 		triggerRatio:     defaultCompactionTriggerRatio,
 		keepRecentTokens: defaultCompactionKeepRecentTokens,
-		reserveOutput:    reserveOutput,
 		strategy:         compactionStrategyLLM,
 	}
-	contextWindowDisabled := false
 	if raw := strings.TrimSpace(os.Getenv("TELOS_AUTOCOMPACT_CONTEXT_WINDOW")); raw != "" {
 		if n, err := strconv.Atoi(raw); err == nil && n >= 0 {
 			cfg.contextWindow = n
-			contextWindowDisabled = n == 0
+			cfg.contextWindowDisabled = n == 0
 		}
 	}
 	if raw := strings.TrimSpace(os.Getenv("TELOS_AUTOCOMPACT_TRIGGER_RATIO")); raw != "" {
@@ -97,9 +96,18 @@ func compactionConfigFromEnv(reserveOutput, modelContextWindow int) compactionCo
 			cfg.strategy = compactionStrategyTruncate
 		}
 	}
-	if !contextWindowDisabled && modelContextWindow > 0 && modelContextWindow < cfg.contextWindow {
+	return cfg
+}
+
+func (cfg compactionConfig) forModel(modelContextWindow int) compactionConfig {
+	if !cfg.contextWindowDisabled && modelContextWindow > 0 && modelContextWindow < cfg.contextWindow {
 		cfg.contextWindow = modelContextWindow
 	}
+	return cfg
+}
+
+func (cfg compactionConfig) withReserveOutput(reserveOutput int) compactionConfig {
+	cfg.reserveOutput = reserveOutput
 	return cfg
 }
 
@@ -116,6 +124,134 @@ type compactor struct {
 
 func newCompactor(cfg compactionConfig) *compactor {
 	return &compactor{cfg: cfg}
+}
+
+type compactionRuntime struct {
+	state           *conversationState
+	model           string
+	instructions    string
+	reasoning       openai.ReasoningEffort
+	maxOutputTokens int
+	logger          *nativeSessionLogger
+	complete        func(context.Context, responses.ResponseNewParams) (completionResult, game.TurnStats, error)
+}
+
+// compact owns the "plan -> summarize -> validate -> degrade to truncate"
+// policy. The caller only supplies the current conversation state and a narrow
+// model-completion hook, so request transport and compaction decisions do not
+// live in the same type.
+func (c *compactor) compact(ctx context.Context, rt compactionRuntime) (game.TurnStats, error) {
+	plan, ok, err := c.plan(rt.state)
+	if err != nil {
+		c.logFailure(rt, plan, err)
+		return game.TurnStats{}, newExecutorError(errProviderContextLimit, "autocompaction_failed:"+err.Error())
+	}
+	if !ok {
+		return game.TurnStats{}, nil
+	}
+	if c.cfg.strategy == compactionStrategyTruncate {
+		return game.TurnStats{}, c.truncate(rt, plan)
+	}
+	summaryBudget := c.summaryBudget(rt.state, plan.firstKeptIndex)
+	params := responses.ResponseNewParams{
+		Model:        openai.ResponsesModel(rt.model),
+		Instructions: openai.String(rt.instructions),
+		Input:        responses.ResponseNewParamsInputUnion{OfInputItemList: rt.state.compactionRequestInput(plan.firstKeptIndex, summaryBudget)},
+	}
+	if rt.maxOutputTokens > 0 {
+		params.MaxOutputTokens = openai.Int(int64(rt.maxOutputTokens))
+	}
+	if rt.reasoning != "" {
+		params.Reasoning = openai.ReasoningParam{Effort: rt.reasoning}
+	}
+	result, stats, err := rt.complete(ctx, params)
+	if err != nil {
+		c.logFailure(rt, plan, err)
+		return stats, compactionError(err)
+	}
+	final := result.Response
+	summary := strings.TrimSpace(final.OutputText())
+	if vErr := validateCompactionResponse(final, summary); vErr != nil {
+		c.logFailure(rt, plan, vErr)
+		return stats, c.truncate(rt, plan)
+	}
+	after := estimateHistoryTokens(rt.state.inputWithSummary(summary, plan.firstKeptIndex))
+	if budget := c.cfg.budgetTokens(); budget > 0 && after > budget {
+		overErr := newExecutorError(errProviderContextLimit, fmt.Sprintf("autocompaction_failed:summary still over budget after compaction (%d > %d estimated tokens)", after, budget))
+		c.logFailure(rt, plan, overErr)
+		return stats, c.truncate(rt, plan)
+	}
+	rt.state.applyCompaction(summary, plan.firstKeptIndex)
+	_ = rt.logger.compaction(agentsession.CompactionPayload{
+		Reason:          plan.reason,
+		FirstKeptIndex:  plan.firstKeptIndex,
+		TokensBefore:    plan.tokensBefore,
+		TokensAfter:     after,
+		SummaryTokens:   estimateItemTokens(compactionSummaryMessage(summary)),
+		ItemsSummarized: plan.itemsSummarized,
+		ItemsKept:       plan.itemsKept,
+		Model:           rt.model,
+		ResponseID:      final.ID,
+		Usage: agentsession.ModelResponseUsage{
+			Input:           int(final.Usage.InputTokens),
+			Output:          int(final.Usage.OutputTokens),
+			CacheRead:       int(final.Usage.InputTokensDetails.CachedTokens),
+			CostUSD:         stats.CostUSD,
+			CostUnavailable: stats.CostUnavailable,
+		},
+		Details: detailsFromCompactionSummary(summary),
+	})
+	return stats, nil
+}
+
+func (c *compactor) summaryBudget(state *conversationState, firstKeptIndex int) int {
+	if c == nil {
+		return 0
+	}
+	budget := c.cfg.budgetTokens()
+	if budget <= 0 {
+		return 0
+	}
+	base := estimateHistoryTokens(state.inputWithSummary("", firstKeptIndex))
+	remaining := budget - base
+	if remaining < 200 {
+		return 200
+	}
+	return remaining
+}
+
+func (c *compactor) truncate(rt compactionRuntime, plan compactionPlan) error {
+	after := estimateHistoryTokens(rt.state.inputWithSummary("", plan.firstKeptIndex))
+	if budget := c.cfg.budgetTokens(); budget > 0 && after > budget {
+		return newExecutorError(errProviderContextLimit, fmt.Sprintf("autocompaction_failed:naive cutoff still over budget (%d > %d estimated tokens)", after, budget))
+	}
+	rt.state.applyCompaction("", plan.firstKeptIndex)
+	_ = rt.logger.compaction(agentsession.CompactionPayload{
+		Reason:          "token_budget_naive_cutoff",
+		FirstKeptIndex:  plan.firstKeptIndex,
+		TokensBefore:    plan.tokensBefore,
+		TokensAfter:     after,
+		ItemsSummarized: plan.itemsSummarized,
+		ItemsKept:       plan.itemsKept,
+		Model:           rt.model,
+	})
+	return nil
+}
+
+func (c *compactor) logFailure(rt compactionRuntime, plan compactionPlan, err error) {
+	if err == nil {
+		return
+	}
+	_ = rt.logger.compaction(agentsession.CompactionPayload{
+		Reason:          firstNonEmpty(plan.reason, "token_budget"),
+		FirstKeptIndex:  plan.firstKeptIndex,
+		TokensBefore:    plan.tokensBefore,
+		TokensAfter:     plan.tokensBefore,
+		ItemsSummarized: plan.itemsSummarized,
+		ItemsKept:       plan.itemsKept,
+		Model:           rt.model,
+		Error:           err.Error(),
+	})
 }
 
 type compactionPlan struct {

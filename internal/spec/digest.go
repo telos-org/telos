@@ -1,31 +1,50 @@
 package spec
 
 import (
-	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 
+	objectiveledger "github.com/telos-org/telos/internal/ledger"
 	"github.com/telos-org/telos/internal/platform"
+	"github.com/telos-org/telos/internal/protocol"
 )
 
 // -- Turn context digest -----------------------------------------------------
 
-var progressUpdateRE = regexp.MustCompile(`(?is)<progress_update\b[^>]*>(.*?)</progress_update>`)
-var statusTagRE = regexp.MustCompile(`(?is)<status>(.*?)</status>`)
-var reviewBlockRE = regexp.MustCompile(`(?is)<review\b[^>]*>(.*?)</review>`)
-var summaryBlockRE = regexp.MustCompile(`(?is)<summary\b[^>]*>(.*?)</summary>`)
+type TurnContextDigest struct {
+	TranscriptPath string
+	EvidencePath   string
+	LedgerPath     string
+	Ledger         *objectiveledger.ObjectiveLedger
+	Transcript     string
+}
+
+func (d TurnContextDigest) withTranscriptPath(transcriptPath string) TurnContextDigest {
+	if strings.TrimSpace(d.TranscriptPath) == "" {
+		d.TranscriptPath = transcriptPath
+	}
+	if d.TranscriptPath != "" {
+		dir := filepath.Dir(d.TranscriptPath)
+		if strings.TrimSpace(d.EvidencePath) == "" {
+			d.EvidencePath = filepath.Join(dir, "evidence.jsonl")
+		}
+		if strings.TrimSpace(d.LedgerPath) == "" {
+			d.LedgerPath = filepath.Join(dir, "objective-ledger.json")
+		}
+	}
+	return d
+}
 
 type digestContext struct {
 	SpecName string
 	Role     Role
 }
 
-func renderTurnContextDigest(transcriptPath string, workspace platform.WorkspaceSnapshot, contexts ...digestContext) string {
+func renderTurnContextDigest(turnContext TurnContextDigest, workspace platform.WorkspaceSnapshot, contexts ...digestContext) string {
 	var lines []string
 	lines = append(lines, "## Current State Digest", "")
+	turnContext = turnContext.withTranscriptPath(turnContext.TranscriptPath)
 	if len(contexts) > 0 {
 		ctx := contexts[0]
 		if strings.TrimSpace(ctx.SpecName) != "" {
@@ -35,22 +54,25 @@ func renderTurnContextDigest(transcriptPath string, workspace platform.Workspace
 			lines = append(lines, "- Role: `"+strings.TrimSpace(ctx.Role)+"`")
 		}
 	}
-	ledgerPath := ""
-	if transcriptPath != "" {
-		ledgerPath = filepath.Join(filepath.Dir(transcriptPath), "objective-ledger.json")
-		lines = append(lines, fmt.Sprintf("- Full transcript: `%s`", transcriptPath))
-		lines = append(lines, fmt.Sprintf("- Evidence log: `%s`", filepath.Join(filepath.Dir(transcriptPath), "evidence.jsonl")))
-		lines = append(lines, fmt.Sprintf("- Objective ledger: `%s`", ledgerPath))
+	if turnContext.TranscriptPath != "" {
+		lines = append(lines, fmt.Sprintf("- Full transcript: `%s`", turnContext.TranscriptPath))
+		if turnContext.EvidencePath != "" {
+			lines = append(lines, fmt.Sprintf("- Evidence log: `%s`", turnContext.EvidencePath))
+		}
+		if turnContext.LedgerPath != "" {
+			lines = append(lines, fmt.Sprintf("- Objective ledger: `%s`", turnContext.LedgerPath))
+		}
 	}
 	lines = append(lines, renderWorkspaceDigest(workspace)...)
 
-	ledger, ledgerOK := readDigestLedger(ledgerPath)
+	ledgerOK := turnContext.Ledger != nil
 	if ledgerOK {
+		ledger := turnContext.Ledger
 		if ledger.Objective != "" {
 			lines = append(lines, "- Current objective: "+oneLine(ledger.Objective))
 		}
 		if ledger.State != "" {
-			lines = append(lines, "- Objective state: `"+ledger.State+"`")
+			lines = append(lines, "- Objective state: `"+string(ledger.State)+"`")
 		}
 		if ledger.LastImplementation != "" {
 			lines = append(lines, "- Last implementation: "+oneLine(ledger.LastImplementation))
@@ -73,7 +95,7 @@ func renderTurnContextDigest(transcriptPath string, workspace platform.Workspace
 			}
 		}
 	}
-	body := readDigestTranscript(transcriptPath)
+	body := boundedDigestTranscript(turnContext.Transcript)
 	if body == "" {
 		if !ledgerOK {
 			lines = append(lines, "- Transcript state: no prior turn content found.")
@@ -84,40 +106,10 @@ func renderTurnContextDigest(transcriptPath string, workspace platform.Workspace
 		lines = append(lines, "- Transcript state: parsed from append-only transcript.")
 		return strings.Join(renderTranscriptFallbackDigest(lines, body), "\n")
 	}
-	if last := lastMatch(statusTagRE, body); last != "" {
+	if last := lastBlock(protocol.TagStatus, body); last != "" {
 		lines = append(lines, "- Last verifier status: "+strings.ToUpper(strings.TrimSpace(last)))
 	}
 	return strings.Join(lines, "\n")
-}
-
-type digestLedger struct {
-	Objective          string             `json:"objective"`
-	State              string             `json:"state"`
-	LastImplementation string             `json:"last_implementation"`
-	LastEvaluation     string             `json:"last_evaluation"`
-	OpenFindings       []string           `json:"open_findings"`
-	Turns              []digestLedgerTurn `json:"turns"`
-}
-
-type digestLedgerTurn struct {
-	RoundNum int    `json:"round_num"`
-	Role     string `json:"role"`
-	Error    string `json:"error"`
-}
-
-func readDigestLedger(path string) (digestLedger, bool) {
-	if strings.TrimSpace(path) == "" {
-		return digestLedger{}, false
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return digestLedger{}, false
-	}
-	var ledger digestLedger
-	if err := json.Unmarshal(data, &ledger); err != nil {
-		return digestLedger{}, false
-	}
-	return ledger, true
 }
 
 func renderWorkspaceDigest(workspace platform.WorkspaceSnapshot) []string {
@@ -140,7 +132,7 @@ func renderWorkspaceDigest(workspace platform.WorkspaceSnapshot) []string {
 	return lines
 }
 
-func recentLedgerErrors(turns []digestLedgerTurn, limit int) []string {
+func recentLedgerErrors(turns []objectiveledger.ObjectiveTurn, limit int) []string {
 	var out []string
 	for i := len(turns) - 1; i >= 0 && len(out) < limit; i-- {
 		errText := strings.TrimSpace(turns[i].Error)
@@ -164,15 +156,15 @@ func limitStrings(in []string, limit int) []string {
 }
 
 func renderTranscriptFallbackDigest(lines []string, body string) []string {
-	if last := lastMatch(progressUpdateRE, body); last != "" {
+	if last := lastBlock(protocol.TagProgressUpdate, body); last != "" {
 		lines = append(lines, "- Last implementation: "+oneLine(last))
 	}
-	if last := lastMatch(reviewBlockRE, body); last != "" {
+	if last := lastBlock(protocol.TagReview, body); last != "" {
 		lines = append(lines, "- Last review: "+oneLine(last))
-	} else if last := lastMatch(summaryBlockRE, body); last != "" {
+	} else if last := lastBlock(protocol.TagSummary, body); last != "" {
 		lines = append(lines, "- Last review summary: "+oneLine(last))
 	}
-	if last := lastMatch(statusTagRE, body); last != "" {
+	if last := lastBlock(protocol.TagStatus, body); last != "" {
 		lines = append(lines, "- Last verifier status: "+strings.ToUpper(strings.TrimSpace(last)))
 	}
 	findings := recentLinesContaining(body, []string{"FAIL", "finding", "blocked", "CONTINUE"}, 5)
@@ -192,14 +184,8 @@ func renderTranscriptFallbackDigest(lines []string, body string) []string {
 	return lines
 }
 
-func readDigestTranscript(path string) string {
-	if strings.TrimSpace(path) == "" {
-		return ""
-	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return ""
-	}
+func boundedDigestTranscript(body string) string {
+	data := []byte(body)
 	const maxDigestBytes = 128 << 10
 	if len(data) > maxDigestBytes {
 		data = data[len(data)-maxDigestBytes:]
@@ -207,12 +193,12 @@ func readDigestTranscript(path string) string {
 	return string(data)
 }
 
-func lastMatch(re *regexp.Regexp, text string) string {
-	matches := re.FindAllStringSubmatch(text, -1)
-	if len(matches) == 0 || len(matches[len(matches)-1]) < 2 {
+func lastBlock(tag protocol.Tag, text string) string {
+	body, ok := protocol.LastBlock(tag, text)
+	if !ok {
 		return ""
 	}
-	return strings.TrimSpace(matches[len(matches)-1][1])
+	return body
 }
 
 func recentLinesContaining(text string, needles []string, limit int) []string {

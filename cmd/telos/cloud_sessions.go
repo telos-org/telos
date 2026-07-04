@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"time"
 
 	"github.com/telos-org/telos/internal/cloud"
@@ -21,7 +22,7 @@ func cloudSessionClientForRun(
 	if envID != "" {
 		return cloud.NewEnvironmentClient(envID)
 	}
-	control, err := cloud.ControlClient()
+	control, err := cloud.NewControlClientFromConfig()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -39,7 +40,7 @@ func cloudSessionClientForRun(
 		if readyTimeout <= 0 {
 			readyTimeout = 15 * time.Minute
 		}
-		if err := cloud.WaitForEnvironment(env.Handle, readyTimeout); err != nil {
+		if err := cloud.WaitForEnvironment(context.Background(), env.Handle, readyTimeout); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -50,8 +51,8 @@ func cloudEnvironmentForApply(
 	envID string,
 	waitForEnvironment bool,
 	readyTimeout time.Duration,
-) (*cloud.Client, *cloud.Environment, error) {
-	control, err := cloud.ControlClient()
+) (*cloud.ControlClient, *cloud.Environment, error) {
+	control, err := cloud.NewControlClientFromConfig()
 	if err != nil {
 		return nil, nil, err
 	}
@@ -77,7 +78,7 @@ func cloudEnvironmentForApply(
 		if readyTimeout <= 0 {
 			readyTimeout = 15 * time.Minute
 		}
-		if err := cloud.WaitForEnvironment(env.Handle, readyTimeout); err != nil {
+		if err := cloud.WaitForEnvironment(context.Background(), env.Handle, readyTimeout); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -124,7 +125,7 @@ func cloudSessionTargets(envID string) ([]cloudSessionTarget, error) {
 		return []cloudSessionTarget{{client: client, env: *env}}, nil
 	}
 
-	control, err := cloud.ControlClient()
+	control, err := cloud.NewControlClientFromConfig()
 	if err != nil {
 		return nil, err
 	}

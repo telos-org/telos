@@ -128,7 +128,7 @@ func TestClientListEnvironments(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "token")
+	client := NewControlClient(srv.URL, "token")
 	envs, err := client.ListEnvironments()
 	if err != nil {
 		t.Fatalf("ListEnvironments: %v", err)
@@ -167,7 +167,7 @@ func TestClientGetEnvironmentDoesNotRequireAccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "token")
+	client := NewControlClient(srv.URL, "token")
 	env, err := client.GetEnvironment("env_123")
 	if err != nil {
 		t.Fatalf("GetEnvironment: %v", err)
@@ -199,7 +199,7 @@ func TestClientCreateEnvironment(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "token")
+	client := NewControlClient(srv.URL, "token")
 	env, err := client.CreateEnvironment()
 	if err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
@@ -225,7 +225,7 @@ func TestClientCreateEnvironmentAcceptsLegacyAccessField(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "token")
+	client := NewControlClient(srv.URL, "token")
 	env, err := client.CreateEnvironment()
 	if err != nil {
 		t.Fatalf("CreateEnvironment: %v", err)
@@ -249,21 +249,20 @@ func TestClientMintSessionKey(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(map[string]any{
-			"session_id":    "sess-1",
-			"base_url":      "https://proxy.example.com/v1",
-			"api_key":       "sk-session",
-			"transport":     "bifrost_async",
-			"kind":          "bifrost",
-			"headers":       map[string]string{"x-bf-vk": "sk-bf"},
-			"budget_usd":    5.0,
-			"key_alias":     "sess-1",
-			"model_profile": "standard",
+			"session_id": "sess-1",
+			"base_url":   "https://proxy.example.com/v1",
+			"api_key":    "sk-session",
+			"transport":  "bifrost_async",
+			"kind":       "bifrost",
+			"headers":    map[string]string{"x-bf-vk": "sk-bf"},
+			"budget_usd": 5.0,
+			"key_alias":  "sess-1",
 		})
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-token")
-	key, err := client.MintSessionKey("sess-1", "standard")
+	client := NewBillingClient(srv.URL, "test-token")
+	key, err := client.MintSessionKey("sess-1")
 	if err != nil {
 		t.Fatalf("MintSessionKey: %v", err)
 	}
@@ -273,10 +272,7 @@ func TestClientMintSessionKey(t *testing.T) {
 	if transports, ok := gotBody["supported_transports"].([]any); !ok || len(transports) != 1 || transports[0] != "openai_sync" {
 		t.Fatalf("supported transports: got %#v", gotBody["supported_transports"])
 	}
-	if gotBody["model_profile"] != "standard" {
-		t.Fatalf("model_profile body: %+v", gotBody)
-	}
-	if key.APIKey != "sk-session" || key.BaseURL != "https://proxy.example.com/v1" || key.Transport != "bifrost_async" || key.Kind != "bifrost" || key.Headers["x-bf-vk"] != "sk-bf" || key.KeyAlias != "sess-1" || key.ModelProfile != sessionapi.ModelProfileStandard {
+	if key.APIKey != "sk-session" || key.BaseURL != "https://proxy.example.com/v1" || key.Transport != "bifrost_async" || key.Kind != "bifrost" || key.Headers["x-bf-vk"] != "sk-bf" || key.KeyAlias != "sess-1" {
 		t.Fatalf("key: %+v", key)
 	}
 }
@@ -301,8 +297,8 @@ func TestClientMintSessionKeyRejectsInvalidSessionID(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			client := NewClient(srv.URL, "test-token")
-			if _, err := client.MintSessionKey("sess-1", "standard"); err == nil {
+			client := NewBillingClient(srv.URL, "test-token")
+			if _, err := client.MintSessionKey("sess-1"); err == nil {
 				t.Fatal("expected invalid session_id error")
 			}
 		})
@@ -334,7 +330,7 @@ func TestClientForwardsUserAuthorization(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "env-token")
-	client.ForwardedUserToken = "user-token"
+	client.transport.forwardedUserToken = "user-token"
 	session, err := client.CreateSession(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
@@ -344,7 +340,7 @@ func TestClientForwardsUserAuthorization(t *testing.T) {
 	}
 }
 
-func TestClientForwardsUserAuthorizationOnlyForMutations(t *testing.T) {
+func TestClientForwardsUserAuthorizationOnEnvironmentAPI(t *testing.T) {
 	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
 	var sawCreate, sawUpdate, sawList, sawStream bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -364,14 +360,14 @@ func TestClientForwardsUserAuthorizationOnlyForMutations(t *testing.T) {
 			json.NewEncoder(w).Encode(sessionapi.SessionSpecUpdateResponse{Operation: "updated"})
 		case r.URL.Path == "/api/sessions" && r.Method == http.MethodGet:
 			sawList = true
-			if got := r.Header.Get(ForwardedUserAuthorizationHeader); got != "" {
-				t.Fatalf("list should not forward user auth, got %q", got)
+			if r.Header.Get(ForwardedUserAuthorizationHeader) != "Bearer user-token" {
+				t.Fatalf("list missing forwarded user auth: %q", r.Header.Get(ForwardedUserAuthorizationHeader))
 			}
 			json.NewEncoder(w).Encode(sessionapi.SessionListResponse{})
 		case r.URL.Path == "/api/sessions/sess-create/events" && r.Method == http.MethodGet:
 			sawStream = true
-			if got := r.Header.Get(ForwardedUserAuthorizationHeader); got != "" {
-				t.Fatalf("stream should not forward user auth, got %q", got)
+			if r.Header.Get(ForwardedUserAuthorizationHeader) != "Bearer user-token" {
+				t.Fatalf("stream missing forwarded user auth: %q", r.Header.Get(ForwardedUserAuthorizationHeader))
 			}
 			w.Header().Set("Content-Type", "text/event-stream")
 			_, _ = w.Write([]byte("data: {\"event\":\"ok\"}\n\n"))
@@ -382,7 +378,7 @@ func TestClientForwardsUserAuthorizationOnlyForMutations(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "env-token")
-	client.ForwardedUserToken = "user-token"
+	client.transport.forwardedUserToken = "user-token"
 	if _, err := client.CreateSession(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
@@ -428,15 +424,19 @@ func TestClientSendsOrgHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "token")
-	client.OrgID = "org_team"
-	if _, err := client.Me(); err != nil {
+	control := NewControlClient(srv.URL, "token")
+	control.SetOrgID("org_team")
+	billing := NewBillingClient(srv.URL, "token")
+	billing.SetOrgID("org_team")
+	env := NewClient(srv.URL, "token")
+	env.SetOrgID("org_team")
+	if _, err := control.Me(); err != nil {
 		t.Fatalf("Me: %v", err)
 	}
-	if _, err := client.Balance(); err != nil {
+	if _, err := billing.Balance(); err != nil {
 		t.Fatalf("Balance: %v", err)
 	}
-	if err := client.StreamEvents(context.Background(), "sess-1", func(map[string]any) error { return nil }); err != nil {
+	if err := env.StreamEvents(context.Background(), "sess-1", func(map[string]any) error { return nil }); err != nil {
 		t.Fatalf("StreamEvents: %v", err)
 	}
 	if !sawMe || !sawBilling || !sawStream {
@@ -517,8 +517,8 @@ func TestClientRegistryAndDeploymentAPI(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "token")
-	client.OrgID = "org_team"
+	client := NewControlClient(srv.URL, "token")
+	client.SetOrgID("org_team")
 	version, err := client.PublishRegistryVersion("default", "auth", "0.0.0-sha.abc", []byte("package"))
 	if err != nil {
 		t.Fatalf("PublishRegistryVersion: %v", err)
@@ -565,7 +565,7 @@ func TestBillingClientRequiresExplicitEndpointForCustomAPIEndpoint(t *testing.T)
 	t.Setenv("TELOS_BILLING_ENDPOINT", "")
 	t.Setenv("TELOS_AUTH_TOKEN", "")
 
-	_, err := BillingClient()
+	_, err := NewBillingClientFromConfig()
 	if err == nil || !strings.Contains(err.Error(), "billing_endpoint is required") {
 		t.Fatalf("expected billing_endpoint error, got %v", err)
 	}
@@ -590,7 +590,7 @@ func TestClientBalanceAndReconcile(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-token")
+	client := NewBillingClient(srv.URL, "test-token")
 	bal, err := client.Balance()
 	if err != nil {
 		t.Fatalf("Balance: %v", err)
@@ -618,7 +618,7 @@ func TestClientReconcileSessionEscapesSessionID(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-token")
+	client := NewBillingClient(srv.URL, "test-token")
 	if err := client.ReconcileSession("sess/1?x", true); err != nil {
 		t.Fatalf("ReconcileSession: %v", err)
 	}
@@ -663,7 +663,7 @@ func TestClientPushCatalogSpec(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-token")
+	client := NewControlClient(srv.URL, "test-token")
 	uploaded, err := client.UploadApplyPackage("sha256:abc", []byte("package"))
 	if err != nil {
 		t.Fatalf("UploadApplyPackage: %v", err)
@@ -707,7 +707,7 @@ func TestClientApplyEnvironmentSession(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-token")
+	client := NewControlClient(srv.URL, "test-token")
 	response, err := client.ApplyEnvironmentSession("env_123", "auth", "sha256:abc")
 	if err != nil {
 		t.Fatalf("ApplyEnvironmentSession: %v", err)
@@ -809,7 +809,7 @@ func TestWaitForEnvironmentRequiresSuccessStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	err := waitForEnvironment(srv.URL, 10*time.Millisecond, srv.Client(), time.Millisecond)
+	err := waitForEnvironment(context.Background(), srv.URL, 10*time.Millisecond, srv.Client(), time.Millisecond)
 	if err == nil {
 		t.Fatal("expected readiness error")
 	}
@@ -834,7 +834,7 @@ func TestWaitForEnvironmentSucceedsOnSuccessStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if err := waitForEnvironment(srv.URL, time.Second, srv.Client(), time.Millisecond); err != nil {
+	if err := waitForEnvironment(context.Background(), srv.URL, time.Second, srv.Client(), time.Millisecond); err != nil {
 		t.Fatalf("WaitForEnvironment: %v", err)
 	}
 }
