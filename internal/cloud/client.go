@@ -58,6 +58,49 @@ type SessionOpenResponse struct {
 	ExpiresAt string `json:"expires_at"`
 }
 
+type deploymentLogEventsResponse struct {
+	Events []deploymentLogEvent `json:"events"`
+}
+
+type deploymentLogEvent struct {
+	Event       string         `json:"event"`
+	Timestamp   *string        `json:"ts,omitempty"`
+	Time        *string        `json:"time,omitempty"`
+	SessionID   *string        `json:"session_id,omitempty"`
+	SpecIndex   *int           `json:"spec_index,omitempty"`
+	SpecName    *string        `json:"spec_name,omitempty"`
+	SpecDirName *string        `json:"spec_dir_name,omitempty"`
+	Data        map[string]any `json:"data,omitempty"`
+	Message     string         `json:"message,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+}
+
+func (event deploymentLogEvent) asSessionEvent() sessionapi.SessionEvent {
+	data := event.Data
+	if data == nil {
+		data = map[string]any{}
+	}
+	if event.Message != "" {
+		data["message"] = event.Message
+	}
+	for key, value := range event.Metadata {
+		data[key] = value
+	}
+	timestamp := event.Timestamp
+	if timestamp == nil {
+		timestamp = event.Time
+	}
+	return sessionapi.SessionEvent{
+		Event:       event.Event,
+		Timestamp:   timestamp,
+		SessionID:   event.SessionID,
+		SpecIndex:   event.SpecIndex,
+		SpecName:    event.SpecName,
+		SpecDirName: event.SpecDirName,
+		Data:        data,
+	}
+}
+
 // Client is a Telos Cloud API client.
 type Client struct {
 	Endpoint string
@@ -233,20 +276,24 @@ func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, er
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	var response sessionapi.SessionEventsResponse
+	var response deploymentLogEventsResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
-	return response.Events, nil
+	events := make([]sessionapi.SessionEvent, 0, len(response.Events))
+	for _, event := range response.Events {
+		events = append(events, event.asSessionEvent())
+	}
+	return events, nil
 }
 
 func (c *Client) StreamSessionLogs(ctx context.Context, sessionID string, onEvent func(sessionapi.SessionEvent) error) error {
 	return c.streamEvents(ctx, "/api/deployments/"+url.PathEscape(sessionID)+"/logs", func(data []byte) error {
-		var event sessionapi.SessionEvent
+		var event deploymentLogEvent
 		if err := json.Unmarshal(data, &event); err != nil {
 			return fmt.Errorf("decode session log event: %w", err)
 		}
-		return onEvent(event)
+		return onEvent(event.asSessionEvent())
 	})
 }
 

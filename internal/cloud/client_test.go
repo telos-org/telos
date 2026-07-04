@@ -263,11 +263,10 @@ func TestClientGetSessionLogs(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(sessionapi.SessionEventsResponse{
-			Events: []sessionapi.SessionEvent{
-				{Event: "agent_progress", Data: map[string]any{"kind": "progress_update", "text": "ready"}},
-			},
-		})
+		_, _ = w.Write([]byte(`{"events":[` +
+			`{"event":"agent_progress","data":{"kind":"progress_update","text":"ready"}},` +
+			`{"event":"runtime.prepare.started","time":"2026-07-04T15:14:52Z","message":"preparing runtime","metadata":{"stage":"prepare"}}` +
+			`]}`))
 	}))
 	defer srv.Close()
 
@@ -276,8 +275,14 @@ func TestClientGetSessionLogs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSessionLogs: %v", err)
 	}
-	if len(events) != 1 || events[0].Event != "agent_progress" || events[0].Data["text"] != "ready" {
+	if len(events) != 2 || events[0].Event != "agent_progress" || events[0].Data["text"] != "ready" {
 		t.Fatalf("events: got %#v", events)
+	}
+	if events[1].Event != "runtime.prepare.started" || events[1].Data["message"] != "preparing runtime" || events[1].Data["stage"] != "prepare" {
+		t.Fatalf("control event: got %#v", events[1])
+	}
+	if events[1].Timestamp == nil || *events[1].Timestamp != "2026-07-04T15:14:52Z" {
+		t.Fatalf("control event timestamp: got %#v", events[1].Timestamp)
 	}
 }
 
@@ -291,7 +296,7 @@ func TestClientStreamSessionLogs(t *testing.T) {
 			t.Fatalf("Accept: got %q", r.Header.Get("Accept"))
 		}
 		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"event\":\"game_end\",\"data\":{\"game_result\":\"completed\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"event\":\"runtime.route.succeeded\",\"time\":\"2026-07-04T15:15:00Z\",\"message\":\"service route configured\",\"metadata\":{\"stage\":\"route\"}}\n\n"))
 	}))
 	defer srv.Close()
 
@@ -304,8 +309,11 @@ func TestClientStreamSessionLogs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("StreamSessionLogs: %v", err)
 	}
-	if len(events) != 1 || events[0].Event != "game_end" || events[0].Data["game_result"] != "completed" {
+	if len(events) != 1 || events[0].Event != "runtime.route.succeeded" || events[0].Data["message"] != "service route configured" {
 		t.Fatalf("events: got %#v", events)
+	}
+	if events[0].Data["stage"] != "route" {
+		t.Fatalf("event metadata: got %#v", events[0].Data)
 	}
 }
 
