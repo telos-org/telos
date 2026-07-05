@@ -223,6 +223,36 @@ func TestClientDeleteSession(t *testing.T) {
 	}
 }
 
+func TestClientOpenSession(t *testing.T) {
+	var gotBody map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/api/deployments/sess_123/open" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"url":        "https://auth.usetelos.ai/admin",
+			"expires_at": "2026-07-05T00:00:00Z",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	open, err := client.OpenSession("sess_123", "dashboard", "/admin")
+	if err != nil {
+		t.Fatalf("OpenSession: %v", err)
+	}
+	if gotBody["target"] != "dashboard" || gotBody["path"] != "/admin" {
+		t.Fatalf("body: got %#v", gotBody)
+	}
+	if open.URL != "https://auth.usetelos.ai/admin" || open.ExpiresAt == "" {
+		t.Fatalf("open response: got %+v", open)
+	}
+}
+
 func TestClientGetSessionLogs(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/sess_123/logs" {

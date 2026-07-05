@@ -47,6 +47,11 @@ type SessionRecord struct {
 	UpdatedAt      string  `json:"updated_at"`
 }
 
+type SessionOpenResponse struct {
+	URL       string `json:"url"`
+	ExpiresAt string `json:"expires_at"`
+}
+
 // The hosted control API still exposes cloud sessions at /api/deployments.
 // Keep that wire contract here and expose session-shaped methods to the CLI.
 type sessionListResponse struct {
@@ -250,6 +255,29 @@ func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {
 		return nil, readError(resp)
 	}
 	var response SessionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
+}
+
+func (c *Client) OpenSession(sessionID, target, path string) (*SessionOpenResponse, error) {
+	body, err := json.Marshal(map[string]string{
+		"target": target,
+		"path":   path,
+	})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("POST", "/api/deployments/"+url.PathEscape(sessionID)+"/open", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response SessionOpenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
