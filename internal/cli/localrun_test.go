@@ -225,6 +225,16 @@ func TestEnsureSessionWorkspaceInitializesAPIBackedSession(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(active, ".git")); err != nil {
 		t.Fatalf("workspace should be initialized as a git repo: %v", err)
 	}
+	if got, err := gitOutput(active, "config", "--get", "user.name"); err != nil {
+		t.Fatalf("workspace git user.name: %v", err)
+	} else if strings.TrimSpace(got) != sessionGitUserName {
+		t.Fatalf("workspace git user.name: got %q want %q", strings.TrimSpace(got), sessionGitUserName)
+	}
+	if got, err := gitOutput(active, "config", "--get", "user.email"); err != nil {
+		t.Fatalf("workspace git user.email: %v", err)
+	} else if strings.TrimSpace(got) != sessionGitUserEmail {
+		t.Fatalf("workspace git user.email: got %q want %q", strings.TrimSpace(got), sessionGitUserEmail)
+	}
 	updated, err := sessionapi.ReadManifest(manifestPath)
 	if err != nil {
 		t.Fatal(err)
