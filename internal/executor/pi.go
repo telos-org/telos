@@ -236,7 +236,85 @@ func piLineEvents(line string) []game.LiveAgentEvent {
 	if !ok || getString(msg, "role") != "assistant" {
 		return nil
 	}
-	return game.ExtractLiveAgentEvents(assistantText(msg))
+	events := game.ExtractLiveAgentEvents(assistantText(msg))
+	events = append(events, piToolCallEvents(msg)...)
+	return events
+}
+
+func piToolCallEvents(msg map[string]interface{}) []game.LiveAgentEvent {
+	content, _ := msg["content"].([]interface{})
+	var events []game.LiveAgentEvent
+	for _, block := range content {
+		bm, ok := block.(map[string]interface{})
+		if !ok || getString(bm, "type") != "toolCall" {
+			continue
+		}
+		text := safeToolProgressText(bm)
+		if text == "" {
+			continue
+		}
+		events = append(events, game.LiveAgentEvent{
+			Kind: "progress_update",
+			Text: text,
+		})
+	}
+	return events
+}
+
+func safeToolProgressText(block map[string]interface{}) string {
+	name := getString(block, "name")
+	args, _ := block["arguments"].(map[string]interface{})
+	switch name {
+	case "read":
+		if path := safePathLabel(getString(args, "path")); path != "" {
+			return "Reading " + path
+		}
+		return "Reading files"
+	case "write", "edit":
+		if path := safePathLabel(getString(args, "path")); path != "" {
+			return "Editing " + path
+		}
+		return "Editing workspace files"
+	case "bash":
+		return safeShellProgressText(getString(args, "command"))
+	case "":
+		return ""
+	default:
+		return "Using " + name
+	}
+}
+
+func safePathLabel(path string) string {
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return ""
+	}
+	path = strings.TrimRight(path, "/")
+	if path == "" {
+		return ""
+	}
+	parts := strings.Split(path, "/")
+	label := parts[len(parts)-1]
+	if label == "" || label == "." || label == ".." {
+		return "file"
+	}
+	return label
+}
+
+func safeShellProgressText(command string) string {
+	command = strings.TrimSpace(command)
+	switch {
+	case strings.HasPrefix(command, "kubectl "):
+		return "Running kubectl"
+	case strings.HasPrefix(command, "git "):
+		return "Updating workspace"
+	case strings.HasPrefix(command, "npm "), strings.HasPrefix(command, "npx "), strings.Contains(command, " npm "):
+		return "Running Node build step"
+	case command == "":
+		return "Running shell command"
+	default:
+		return "Running shell command"
+	}
 }
 
 // WorkspaceState returns the workspace state from the platform.

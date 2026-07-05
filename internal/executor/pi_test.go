@@ -225,6 +225,26 @@ func TestReadPiSessionRequiresAssistantMessage(t *testing.T) {
 	}
 }
 
+func TestPiLineEventsProjectsSafeToolCallProgress(t *testing.T) {
+	events := piLineEvents(`{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"toolCall","name":"bash","arguments":{"command":"kubectl get pods --token SECRET"}},{"type":"toolCall","name":"bash","arguments":{"command":"git status --short"}}]}}`)
+
+	got := make([]string, 0, len(events))
+	for _, event := range events {
+		got = append(got, event.Kind+":"+event.Text)
+	}
+	want := []string{
+		"progress_update:Reading spec.md",
+		"progress_update:Running kubectl",
+		"progress_update:Updating workspace",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("events:\ngot\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	if strings.Contains(strings.Join(got, "\n"), "SECRET") {
+		t.Fatalf("tool progress leaked command contents: %v", got)
+	}
+}
+
 func writePiSession(t *testing.T, path string, line string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
