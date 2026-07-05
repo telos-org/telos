@@ -18,7 +18,11 @@ type specPackage struct {
 	bytes   []byte
 }
 
-var packageVersionRE = regexp.MustCompile(`^[0-9]+(\.[0-9]+){0,2}$`)
+var packageSemverRE = regexp.MustCompile(
+	`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)` +
+		`(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`,
+)
+var packageVersionNumberRE = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
 
 func cmdPush(args []string) {
 	fs := flag.NewFlagSet("push", flag.ExitOnError)
@@ -81,6 +85,19 @@ func packageSpec(input string) (*specPackage, error) {
 }
 
 func pushSpecPackage(client *cloud.Client, pkg *specPackage, scope string) (*cloud.PackageVersionRecord, error) {
+	version, err := normalizePackageVersion(pkg.version)
+	if err != nil {
+		return nil, err
+	}
+	return pushSpecPackageVersion(client, pkg, scope, version)
+}
+
+func pushSpecPackageVersion(
+	client *cloud.Client,
+	pkg *specPackage,
+	scope string,
+	version string,
+) (*cloud.PackageVersionRecord, error) {
 	if pkg == nil {
 		return nil, fmt.Errorf("package is required")
 	}
@@ -88,7 +105,7 @@ func pushSpecPackage(client *cloud.Client, pkg *specPackage, scope string) (*clo
 	if scope == "" {
 		return nil, fmt.Errorf("--scope is required for package publishing")
 	}
-	version, err := normalizePackageVersion(pkg.version)
+	version, err := normalizePackageVersion(version)
 	if err != nil {
 		return nil, err
 	}
@@ -104,14 +121,51 @@ func normalizePackageVersion(raw string) (string, error) {
 	if strings.HasPrefix(version, "v") {
 		return "", fmt.Errorf("package version must not start with v: %s", version)
 	}
-	if !packageVersionRE.MatchString(version) {
-		return "", fmt.Errorf("package version must be x, x.y, or x.y.z: %s", version)
+	suffixAt := strings.IndexAny(version, "-+")
+	main := version
+	suffix := ""
+	if suffixAt >= 0 {
+		main = version[:suffixAt]
+		suffix = version[suffixAt:]
 	}
-	parts := strings.Split(version, ".")
+	if main == "" {
+		return "", fmt.Errorf("package version must be semver: %s", version)
+	}
+	parts := strings.Split(main, ".")
+	if len(parts) > 3 {
+		return "", fmt.Errorf("package version must be semver: %s", version)
+	}
+	for _, part := range parts {
+		if !packageVersionNumberRE.MatchString(part) {
+			return "", fmt.Errorf("package version must be semver: %s", version)
+		}
+	}
 	for len(parts) < 3 {
 		parts = append(parts, "0")
 	}
-	return strings.Join(parts, "."), nil
+	normalized := strings.Join(parts, ".") + suffix
+	if !packageSemverRE.MatchString(normalized) {
+		return "", fmt.Errorf("package version must be semver: %s", version)
+	}
+	return normalized, nil
+}
+
+func contentAddressedPackageVersion(version string, digest string) (string, error) {
+	normalized, err := normalizePackageVersion(version)
+	if err != nil {
+		return "", err
+	}
+	shortDigest := strings.TrimPrefix(strings.TrimSpace(digest), "sha256:")
+	if len(shortDigest) > 12 {
+		shortDigest = shortDigest[:12]
+	}
+	if shortDigest == "" {
+		return "", fmt.Errorf("package digest is required")
+	}
+	if strings.Contains(normalized, "+") {
+		return normalized + ".sha." + shortDigest, nil
+	}
+	return normalized + "+sha." + shortDigest, nil
 }
 
 func printPushReceipt(name string, record *cloud.PackageVersionRecord) {

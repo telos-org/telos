@@ -261,7 +261,7 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	record, err := pushSpecPackage(control, pkg, scope)
+	record, err := pushApplySpecPackage(control, pkg, scope)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -284,6 +284,25 @@ func applyCloudControl(
 		return
 	}
 	printCloudSessionReceipt(os.Stdout, operation, session)
+}
+
+func pushApplySpecPackage(
+	client *cloud.Client,
+	pkg *specPackage,
+	scope string,
+) (*cloud.PackageVersionRecord, error) {
+	record, err := pushSpecPackage(client, pkg, scope)
+	if err == nil || !cloud.IsStatus(err, 409) {
+		return record, err
+	}
+	fallbackVersion, versionErr := contentAddressedPackageVersion(pkg.version, pkg.digest)
+	if versionErr != nil {
+		return nil, versionErr
+	}
+	if fallbackVersion == pkg.version {
+		return nil, err
+	}
+	return pushSpecPackageVersion(client, pkg, scope, fallbackVersion)
 }
 
 func applyCloudSessionPackage(

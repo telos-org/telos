@@ -480,9 +480,12 @@ func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 
 func TestNormalizePackageVersion(t *testing.T) {
 	for input, want := range map[string]string{
-		"1":     "1.0.0",
-		"1.2":   "1.2.0",
-		"1.2.3": "1.2.3",
+		"1":                "1.0.0",
+		"1.2":              "1.2.0",
+		"1.2.3":            "1.2.3",
+		"1.2.3-alpha.1":    "1.2.3-alpha.1",
+		"1.2.3+sha.abcdef": "1.2.3+sha.abcdef",
+		"1.2.3-rc.1+build": "1.2.3-rc.1+build",
 	} {
 		got, err := normalizePackageVersion(input)
 		if err != nil {
@@ -492,10 +495,53 @@ func TestNormalizePackageVersion(t *testing.T) {
 			t.Fatalf("normalizePackageVersion(%q): got %q want %q", input, got, want)
 		}
 	}
-	for _, input := range []string{"v1", "1.2.3.4", "1.x", ""} {
+	for _, input := range []string{"v1", "1.2.3.4", "1.x", "01.2.3", "1.02.3", ""} {
 		if _, err := normalizePackageVersion(input); err == nil {
 			t.Fatalf("normalizePackageVersion(%q): expected error", input)
 		}
+	}
+}
+
+func TestPushApplySpecPackageRetriesConflictWithContentAddressedVersion(t *testing.T) {
+	var paths []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		switch r.URL.Path {
+		case "/api/packages/rohan/odoo/versions/1.0.0":
+			http.Error(w, `{"detail":"package version already exists"}`, http.StatusConflict)
+		case "/api/packages/rohan/odoo/versions/1.0.0+sha.abcdef123456":
+			json.NewEncoder(w).Encode(map[string]any{
+				"scope":      "rohan",
+				"name":       "odoo",
+				"version":    "1.0.0+sha.abcdef123456",
+				"ref":        "@rohan/odoo:1.0.0+sha.abcdef123456",
+				"digest":     "sha256:abcdef1234567890",
+				"created_at": "now",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	record, err := pushApplySpecPackage(
+		cloud.NewClient(srv.URL, "test-token"),
+		&specPackage{
+			name:    "odoo",
+			version: "1.0.0",
+			digest:  "sha256:abcdef1234567890",
+			bytes:   []byte("package"),
+		},
+		"rohan",
+	)
+	if err != nil {
+		t.Fatalf("pushApplySpecPackage: %v", err)
+	}
+	if record.Version != "1.0.0+sha.abcdef123456" {
+		t.Fatalf("version: got %q", record.Version)
+	}
+	if len(paths) != 2 {
+		t.Fatalf("paths: got %#v", paths)
 	}
 }
 
