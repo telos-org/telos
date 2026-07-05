@@ -407,6 +407,54 @@ func TestRenderWithSkillsRoster(t *testing.T) {
 	}
 }
 
+func TestRenderProverHidesDefaultVerifierSkills(t *testing.T) {
+	dir := t.TempDir()
+	defaultSkills := filepath.Join(dir, "default-skills")
+	for _, name := range []string{"verify-engineering", "verify-quality"} {
+		skillDir := filepath.Join(defaultSkills, name)
+		if err := os.MkdirAll(skillDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: "+name+"\n---\nVerify."), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	implSkillDir := filepath.Join(defaultSkills, "k8s-deploy")
+	if err := os.MkdirAll(implSkillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(implSkillDir, "SKILL.md"), []byte("---\nname: k8s-deploy\ndescription: Deploy\n---\nDeploy."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_SKILLS_DIR", defaultSkills)
+
+	specPath := filepath.Join(dir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: odoo\nplatform: cloud\nskills:\n  - k8s-deploy\n---\n# Odoo\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+
+	proverTask := RenderProverTask(compiled, "", "")
+	if !strings.Contains(proverTask, "`k8s-deploy`") {
+		t.Fatalf("prover prompt missing implementation skill:\n%s", proverTask)
+	}
+	for _, unwanted := range []string{"`verify-engineering`", "`verify-quality`"} {
+		if strings.Contains(proverTask, unwanted) {
+			t.Fatalf("prover prompt should not advertise default verifier skill %s:\n%s", unwanted, proverTask)
+		}
+	}
+
+	verifierTask := RenderVerifierTask(compiled, "", "")
+	for _, want := range []string{"`k8s-deploy`", "`verify-engineering`", "`verify-quality`"} {
+		if !strings.Contains(verifierTask, want) {
+			t.Fatalf("verifier prompt missing %s:\n%s", want, verifierTask)
+		}
+	}
+}
+
 func TestRenderWithRequiredEvaluationSkills(t *testing.T) {
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, "crit-skill")
