@@ -103,6 +103,23 @@ type Client struct {
 	HTTP     *http.Client
 }
 
+type APIError struct {
+	StatusCode int
+	Detail     string
+}
+
+func (e *APIError) Error() string {
+	if e.Detail != "" {
+		return fmt.Sprintf("%s (HTTP %d)", e.Detail, e.StatusCode)
+	}
+	return fmt.Sprintf("HTTP %d", e.StatusCode)
+}
+
+func IsStatus(err error, statusCode int) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.StatusCode == statusCode
+}
+
 // NewClient creates a client from config.
 func NewClient(endpoint, token string) *Client {
 	return &Client{
@@ -361,14 +378,14 @@ func readError(resp *http.Response) error {
 	var m map[string]any
 	if json.Unmarshal(data, &m) == nil {
 		if detail, ok := m["detail"].(string); ok {
-			return fmt.Errorf("%s (HTTP %d)", detail, resp.StatusCode)
+			return &APIError{StatusCode: resp.StatusCode, Detail: detail}
 		}
 		if detail, ok := m["detail"]; ok {
-			return fmt.Errorf("%v (HTTP %d)", detail, resp.StatusCode)
+			return &APIError{StatusCode: resp.StatusCode, Detail: fmt.Sprint(detail)}
 		}
 	}
 	if len(data) > 0 {
-		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(data))
+		return &APIError{StatusCode: resp.StatusCode, Detail: string(data)}
 	}
-	return fmt.Errorf("HTTP %d", resp.StatusCode)
+	return &APIError{StatusCode: resp.StatusCode}
 }
