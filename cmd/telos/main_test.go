@@ -50,6 +50,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
+		"open SESSION",
 		"version            Show version",
 		"--version",
 		"telos <command> --help",
@@ -57,6 +58,18 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("usage missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestPrintOpenReceipt(t *testing.T) {
+	var out bytes.Buffer
+	printOpenReceipt(&out, cloud.SessionOpenResponse{
+		URL:       "https://status-ping-api.usetelos.ai",
+		ExpiresAt: "2026-07-05T00:00:00Z",
+	})
+
+	if got := out.String(); got != "https://status-ping-api.usetelos.ai\n" {
+		t.Fatalf("receipt: got %q", got)
 	}
 }
 
