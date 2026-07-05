@@ -52,6 +52,9 @@ const (
 	workspaceModeArtifact = "artifact"
 	workspaceModeGitClone = "git_clone"
 	workspaceModeSnapshot = "snapshot"
+
+	sessionGitUserEmail = "telos@local"
+	sessionGitUserName  = "Telos"
 )
 
 func workspaceScope(requested string) (string, string, error) {
@@ -194,6 +197,9 @@ func activeWorkspacePath(sessionDir string) string {
 func ensureSessionWorkspace(sessionDir string, manifest *sessionapi.Manifest) error {
 	active := activeWorkspacePath(sessionDir)
 	if _, err := os.Stat(active); err == nil {
+		if err := configureSessionGitIdentity(active); err != nil {
+			return fmt.Errorf("configure session workspace git identity: %w", err)
+		}
 		return nil
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("inspect session workspace: %w", err)
@@ -228,6 +234,9 @@ func ensureSessionWorkspace(sessionDir string, manifest *sessionapi.Manifest) er
 	}
 	if err := extractWorkspaceArtifact(archive, active); err != nil {
 		return fmt.Errorf("rehydrate session workspace: %w", err)
+	}
+	if err := configureSessionGitIdentity(active); err != nil {
+		return fmt.Errorf("configure rehydrated workspace git identity: %w", err)
 	}
 	return nil
 }
@@ -328,6 +337,9 @@ func cloneGitWorkspace(source string, dest string) (*sessionapi.Workspace, error
 	}
 	if err := removeGitRemotes(dest); err != nil {
 		return nil, err
+	}
+	if err := configureSessionGitIdentity(dest); err != nil {
+		return nil, fmt.Errorf("configure cloned workspace git identity: %w", err)
 	}
 
 	return &sessionapi.Workspace{
@@ -651,10 +663,13 @@ func initSnapshotRepo(dir string) (string, error) {
 	if err := runCommand(dir, "git", "init", "-q"); err != nil {
 		return "", fmt.Errorf("initialize session workspace git repo: %w", err)
 	}
+	if err := configureSessionGitIdentity(dir); err != nil {
+		return "", fmt.Errorf("configure session workspace git identity: %w", err)
+	}
 	if err := runCommand(dir, "git", "add", "-A"); err != nil {
 		return "", fmt.Errorf("stage session workspace snapshot: %w", err)
 	}
-	if err := runCommand(dir, "git", "-c", "user.name=Telos", "-c", "user.email=telos@local", "commit", "-q", "--allow-empty", "-m", "Initial workspace snapshot"); err != nil {
+	if err := runCommand(dir, "git", "commit", "-q", "--allow-empty", "-m", "Initial workspace snapshot"); err != nil {
 		return "", fmt.Errorf("commit session workspace snapshot: %w", err)
 	}
 	base, err := gitOutput(dir, "rev-parse", "HEAD")
@@ -662,6 +677,19 @@ func initSnapshotRepo(dir string) (string, error) {
 		return "", fmt.Errorf("resolve session workspace base commit: %w", err)
 	}
 	return strings.TrimSpace(base), nil
+}
+
+func configureSessionGitIdentity(workspace string) error {
+	if !isGitRepo(workspace) {
+		return nil
+	}
+	if err := runCommand(workspace, "git", "config", "user.name", sessionGitUserName); err != nil {
+		return fmt.Errorf("set git user.name: %w", err)
+	}
+	if err := runCommand(workspace, "git", "config", "user.email", sessionGitUserEmail); err != nil {
+		return fmt.Errorf("set git user.email: %w", err)
+	}
+	return nil
 }
 
 func workspaceHeadCommit(dir string) (string, error) {
