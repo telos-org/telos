@@ -10,7 +10,6 @@
 //	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
 //	telos describe SESSION [--json]
 //	telos logs [-f] [--verbose] SESSION
-//	telos open SESSION [--target service|dashboard] [--path /...] [--json]
 //	telos stop SESSION [--json]
 //	telos delete SESSION [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
@@ -58,8 +57,6 @@ func main() {
 		cmdDescribe(os.Args[2:])
 	case "logs":
 		cmdLogs(os.Args[2:])
-	case "open":
-		cmdOpen(os.Args[2:])
 	case "stop":
 		cmdStop(os.Args[2:])
 	case "delete":
@@ -88,7 +85,6 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  list               List local and cloud sessions")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
 	fmt.Fprintln(out, "  logs SESSION       Show session progress")
-	fmt.Fprintln(out, "  open SESSION       Print a cloud session surface URL")
 	fmt.Fprintln(out, "  stop SESSION       Stop a session; cloud sessions are deleted")
 	fmt.Fprintln(out, "  delete SESSION     Delete a cloud session")
 	fmt.Fprintln(out, "  login              Configure cloud access")

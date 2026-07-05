@@ -155,39 +155,6 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 	}
 }
 
-func TestCmdOpenPrintsCloudSurfaceURL(t *testing.T) {
-	var gotBody map[string]string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/deployments/sess_123/open" {
-			http.NotFound(w, r)
-			return
-		}
-		if r.Header.Get("User-Agent") != cloud.UserAgent {
-			t.Fatalf("user-agent: got %q", r.Header.Get("User-Agent"))
-		}
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatal(err)
-		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"url":        "https://dashboard.example.com/admin",
-			"expires_at": "2026-07-04T08:00:00Z",
-		})
-	}))
-	defer srv.Close()
-	configureCloudTest(t, srv.URL)
-
-	out := captureStdout(t, func() {
-		cmdOpen([]string{"sess_123", "--target", "dashboard", "--path", "/admin"})
-	})
-
-	if strings.TrimSpace(out) != "https://dashboard.example.com/admin" {
-		t.Fatalf("open output: got %q", out)
-	}
-	if gotBody["target"] != "dashboard" || gotBody["path"] != "/admin" {
-		t.Fatalf("body: got %#v", gotBody)
-	}
-}
-
 func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 	runtime := "0.1.0"
 	serviceURL := "https://auth.example.com"
