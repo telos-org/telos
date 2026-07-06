@@ -9,6 +9,7 @@ go_library(
     importpath = "github.com/telos-org/telos/cmd/telos",
     visibility = ["//visibility:private"],
     deps = [
+        "//internal/agentsession",
         "//internal/cli",
         "//internal/cloud",
         "//internal/config",
