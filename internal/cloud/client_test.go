@@ -2,6 +2,7 @@ package cloud
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -30,37 +31,112 @@ func TestNormalizeEndpoint(t *testing.T) {
 	}
 }
 
-func TestClientPublishPackageVersion(t *testing.T) {
-	var uploadedBody []byte
+func TestClientPublishPackage(t *testing.T) {
+	var gotBody struct {
+		Scope      string `json:"scope"`
+		Name       string `json:"name"`
+		Version    string `json:"version"`
+		DataBase64 string `json:"data_base64"`
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/api/packages/telos/auth/versions/1.2.3":
-			uploadedBody, _ = io.ReadAll(r.Body)
-			json.NewEncoder(w).Encode(map[string]any{
-				"scope":      "telos",
-				"name":       "auth",
-				"version":    "1.2.3",
-				"ref":        "@telos/auth:1.2.3",
-				"digest":     "sha256:abc",
-				"created_at": "now",
-			})
-		default:
+		if r.Method != http.MethodPost || r.URL.Path != "/api/packages" {
 			http.NotFound(w, r)
+			return
 		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"scope":      "user-abc",
+			"name":       "auth",
+			"version":    "0.1.0",
+			"ref":        "@user-abc/auth:0.1.0",
+			"digest":     "sha256:abc",
+			"created_at": "now",
+		})
 	}))
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
-	uploaded, err := client.PublishPackageVersion("telos", "auth", "1.2.3", []byte("package"))
+	uploaded, err := client.PublishPackage("", "auth", "", []byte("package"))
 	if err != nil {
-		t.Fatalf("PublishPackageVersion: %v", err)
+		t.Fatalf("PublishPackage: %v", err)
 	}
-	if uploaded.Ref != "@telos/auth:1.2.3" || uploaded.Digest != "sha256:abc" || string(uploadedBody) != "package" {
-		t.Fatalf("upload: got %+v body %q", uploaded, uploadedBody)
+	if uploaded.Ref != "@user-abc/auth:0.1.0" || uploaded.Digest != "sha256:abc" {
+		t.Fatalf("upload: got %+v", uploaded)
+	}
+	if gotBody.Scope != "" || gotBody.Name != "auth" || gotBody.Version != "" {
+		t.Fatalf("body: got %#v", gotBody)
+	}
+	if gotBody.DataBase64 != base64.StdEncoding.EncodeToString([]byte("package")) {
+		t.Fatalf("body data: got %#v", gotBody)
+	}
+}
+
+func TestClientPublishSkillVersion(t *testing.T) {
+	var gotBody struct {
+		Scope   string `json:"scope"`
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		Files   map[string]struct {
+			DataBase64 string `json:"data_base64"`
+			Mode       string `json:"mode"`
+		} `json:"files"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/api/skills" {
+			http.NotFound(w, r)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"scope":       "telos",
+			"name":        "k8s-deploy",
+			"version":     "1.0.0",
+			"ref":         "@telos/k8s-deploy:1.0.0",
+			"digest":      "sha256:abc",
+			"description": "Deploy to Kubernetes.",
+			"metadata":    map[string]any{"category": "deploy"},
+			"file_count":  2,
+			"source_ref":  "@telos/k8s-deploy:1.0.0",
+		})
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	record, err := client.PublishSkillVersion(
+		"telos",
+		"k8s-deploy",
+		"1.0.0",
+		map[string]SkillFile{
+			"SKILL.md":          {Mode: "0644", Data: []byte("skill")},
+			"scripts/deploy.sh": {Mode: "0755", Data: []byte("#!/bin/sh\n")},
+		},
+	)
+	if err != nil {
+		t.Fatalf("PublishSkillVersion: %v", err)
+	}
+	if record.Ref != "@telos/k8s-deploy:1.0.0" || record.FileCount != 2 {
+		t.Fatalf("record: got %+v", record)
+	}
+	if gotBody.Scope != "telos" || gotBody.Name != "k8s-deploy" || gotBody.Version != "1.0.0" {
+		t.Fatalf("body: got %#v", gotBody)
+	}
+	if gotBody.Files["SKILL.md"].DataBase64 != base64.StdEncoding.EncodeToString([]byte("skill")) {
+		t.Fatalf("skill file base64: got %#v", gotBody.Files["SKILL.md"])
+	}
+	if gotBody.Files["scripts/deploy.sh"].Mode != "0755" {
+		t.Fatalf("script mode: got %#v", gotBody.Files["scripts/deploy.sh"])
 	}
 }
 
@@ -234,8 +310,7 @@ func TestClientOpenSession(t *testing.T) {
 			t.Fatal(err)
 		}
 		json.NewEncoder(w).Encode(map[string]any{
-			"url":        "https://auth.usetelos.ai/admin",
-			"expires_at": "2026-07-05T00:00:00Z",
+			"url": "https://auth.usetelos.ai/admin",
 		})
 	}))
 	defer srv.Close()
@@ -248,7 +323,7 @@ func TestClientOpenSession(t *testing.T) {
 	if gotBody["target"] != "dashboard" || gotBody["path"] != "/admin" {
 		t.Fatalf("body: got %#v", gotBody)
 	}
-	if open.URL != "https://auth.usetelos.ai/admin" || open.ExpiresAt == "" {
+	if open.URL != "https://auth.usetelos.ai/admin" {
 		t.Fatalf("open response: got %+v", open)
 	}
 }

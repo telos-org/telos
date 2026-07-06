@@ -174,6 +174,56 @@ func TestLoadEnvironmentWithSkills(t *testing.T) {
 	}
 }
 
+func TestLoadEnvironmentRejectsScopedSkillLocalSubstitution(t *testing.T) {
+	dir := t.TempDir()
+	skillDir := filepath.Join(dir, "skills", "deploy")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: deploy\n---\nDeploy."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	specPath := filepath.Join(dir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: scoped-local\nskills:\n  - '@acme/deploy:2.1.0'\n---\nBody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := LoadEnvironment(specPath)
+	if err == nil {
+		t.Fatal("expected scoped registry ref to reject local substitution")
+	}
+	if !strings.Contains(err.Error(), "cannot resolve to local skills") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestLoadEnvironmentResolvesPlatformScopedSkillFromCatalogue(t *testing.T) {
+	dir := t.TempDir()
+	catalogue := filepath.Join(dir, "catalogue")
+	writePackageTestSkill(t, catalogue, "deploy", map[string]string{
+		"SKILL.md": "---\nname: deploy\n---\nDeploy.",
+	})
+	t.Setenv("TELOS_SKILLS_DIR", catalogue)
+
+	for _, ref := range []string{"@telos/deploy:1.0.0", "skill:@telos/deploy*"} {
+		t.Run(ref, func(t *testing.T) {
+			specPath := filepath.Join(t.TempDir(), "SPEC.md")
+			if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: platform-scope\nskills:\n  - '"+ref+"'\n---\nBody"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			env, err := LoadEnvironment(specPath)
+			if err != nil {
+				t.Fatalf("LoadEnvironment: %v", err)
+			}
+			if len(env.SkillPaths) != 1 || env.SkillPaths[0] != filepath.Join(catalogue, "deploy") {
+				t.Fatalf("skill paths: got %#v", env.SkillPaths)
+			}
+		})
+	}
+}
+
 func TestLoadEnvironmentWithEmphasizedSkill(t *testing.T) {
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, "important-skill")

@@ -6,6 +6,7 @@ go_library(
         "cloud_store.go",
         "config.go",
         "local_process_worker.go",
+        "package_materializer.go",
         "server.go",
         "session_bootstrap.go",
         "session_worker_helpers.go",
@@ -27,6 +28,7 @@ go_test(
     srcs = [
         "cloud_store_test.go",
         "config_test.go",
+        "package_materializer_test.go",
         "server_test.go",
         "session_bootstrap_test.go",
         "worker_test.go",
@@ -34,5 +36,6 @@ go_test(
     embed = [":telosd"],
     deps = [
         "//internal/sessionapi",
+        "//internal/spec",
     ],
 )

@@ -28,11 +28,18 @@ func cmdApply(args []string) {
 func cmdLaunch(command, action string, args []string) {
 	fs := flag.NewFlagSet(command, flag.ExitOnError)
 	workspace := fs.String("workspace", "", "Workspace directory")
-	scope := fs.String("scope", "", "Package scope")
-	sessionID := fs.String("session", "", "Managed session ID to update")
+	sessionIDValue := ""
+	sessionID := &sessionIDValue
+	if command == "apply" {
+		sessionID = fs.String("session", "", "Managed session ID to update")
+	}
 	model := fs.String("model", "", "Model name")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
-	until := fs.Int("until", 0, "Run exactly N evaluator review cycles")
+	untilValue := 0
+	until := &untilValue
+	if command == "run" {
+		until = fs.Int("until", 0, "Run exactly N evaluator review cycles")
+	}
 	maxCostUSD := fs.Float64("max-cost-usd", 20.0, "Maximum cost in USD")
 	agentTimeout := fs.Int("agent-timeout-sec", 0, "Agent timeout in seconds; 0 disables")
 	jsonOut := fs.Bool("json", false, "JSON output")
@@ -43,19 +50,6 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if command == "apply" && flagNameSet(fs, "until") {
-		fmt.Fprintln(os.Stderr, "error: --until is only supported with telos run")
-		os.Exit(1)
-	}
-	if command != "apply" && flagNameSet(fs, "scope") {
-		fmt.Fprintln(os.Stderr, "error: --scope is only supported with telos apply")
-		os.Exit(1)
-	}
-	if command != "apply" && flagNameSet(fs, "session") {
-		fmt.Fprintln(os.Stderr, "error: --session is only supported with telos apply")
-		os.Exit(1)
-	}
-
 	if fs.NArg() < 1 {
 		fmt.Fprintf(os.Stderr, "usage: telos %s SPEC.md [options]\n", command)
 		os.Exit(1)
@@ -83,12 +77,12 @@ func cmdLaunch(command, action string, args []string) {
 
 	platform := ""
 	if hasLocalSpec {
-		compiled, err := spec.CompileEnvironment(specPath)
+		parsedPlatform, err := launchSpecPlatform(specPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		platform = compiled.Environment.Platform
+		platform = parsedPlatform
 	}
 
 	launchMode, err := decideLaunchMode(
@@ -117,7 +111,7 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudApply:
-		applyCloudControl(specArg, *scope, *sessionID, *jsonOut)
+		applyCloudControl(specArg, *sessionID, *jsonOut)
 		return
 	}
 	if !hasLocalSpec {
@@ -184,6 +178,26 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+func launchSpecPlatform(specPath string) (string, error) {
+	data, err := os.ReadFile(specPath)
+	if err != nil {
+		return "", err
+	}
+	raw, _, ok := spec.ParseFrontmatter(string(data))
+	if !ok {
+		return "", fmt.Errorf("%s has no valid YAML frontmatter", specPath)
+	}
+	platform, ok := raw["platform"]
+	if !ok {
+		return "", nil
+	}
+	value := fmt.Sprint(platform)
+	if value != "local" && value != "cloud" {
+		return "", fmt.Errorf("%s: invalid platform '%s' (valid: cloud, local)", specPath, value)
+	}
+	return value, nil
+}
+
 type launchMode string
 
 const (
@@ -247,7 +261,6 @@ func runCloudChildSession(
 
 func applyCloudControl(
 	specArg string,
-	scope string,
 	sessionID string,
 	jsonOut bool,
 ) {
@@ -261,7 +274,7 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	record, err := pushApplySpecPackage(control, pkg, scope)
+	packageRecord, err := pushSpecPackage(control, pkg, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -269,7 +282,7 @@ func applyCloudControl(
 	operation, session, err := applyCloudSessionPackage(
 		control,
 		pkg.name,
-		record.Ref,
+		packageRecord.Ref,
 		sessionID,
 	)
 	if err != nil {
@@ -279,30 +292,12 @@ func applyCloudControl(
 	if jsonOut {
 		printJSON(map[string]any{
 			"operation": operation,
+			"package":   packageRecord,
 			"session":   session,
 		})
 		return
 	}
 	printCloudSessionReceipt(os.Stdout, operation, session)
-}
-
-func pushApplySpecPackage(
-	client *cloud.Client,
-	pkg *specPackage,
-	scope string,
-) (*cloud.PackageVersionRecord, error) {
-	record, err := pushSpecPackage(client, pkg, scope)
-	if err == nil || !cloud.IsStatus(err, 409) {
-		return record, err
-	}
-	fallbackVersion, versionErr := contentAddressedPackageVersion(pkg.version, pkg.digest)
-	if versionErr != nil {
-		return nil, versionErr
-	}
-	if fallbackVersion == pkg.version {
-		return nil, err
-	}
-	return pushSpecPackageVersion(client, pkg, scope, fallbackVersion)
 }
 
 func applyCloudSessionPackage(

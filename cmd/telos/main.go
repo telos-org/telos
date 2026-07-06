@@ -3,8 +3,8 @@
 // Public commands:
 //
 //	telos plan SPEC.md [--json]
-//	telos push SPEC.md --scope SCOPE [--json]
-//	telos apply SPEC.md --scope SCOPE [--json]
+//	telos push SPEC.md|SKILL_DIR [--scope SCOPE] [--version VERSION] [--json]
+//	telos apply SPEC.md [--session SESSION] [--json]
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
 //	    [--until N] [--max-cost-usd USD] [--agent-timeout-sec SEC|0] [--json]
 //	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
@@ -83,7 +83,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "commands:")
 	fmt.Fprintln(out, "  plan SPEC.md       Show compiled spec/package plan")
 	fmt.Fprintln(out, "  push SPEC.md       Push an immutable spec package")
-	fmt.Fprintln(out, "  apply SPEC.md      Publish and deploy a spec package")
+	fmt.Fprintln(out, "  apply SPEC.md      Apply a spec as a managed cloud session")
 	fmt.Fprintln(out, "  run SPEC.md        Run a local or delegated spec")
 	fmt.Fprintln(out, "  list               List local and cloud sessions")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")

@@ -2,7 +2,6 @@ package telosd
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 	"testing"
 
@@ -29,7 +28,7 @@ func (s *fakeReconcileStore) Create(req sessionapi.SessionCreateRequest) (*sessi
 			"cloud_session_name": req.CloudSessionName,
 		},
 		SpecVersions: []map[string]any{{
-			"apply_package_digest": req.ApplyPackageDigest,
+			"package_digest": req.PackageDigest,
 		}},
 	}
 	s.sessions = append(s.sessions, session)
@@ -68,13 +67,11 @@ func (s *fakeReconcileStore) Events(string) ([]sessionapi.SessionEvent, error) {
 }
 
 func TestSessionBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
-	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	pkg := buildMaterializerTestPackage(t, "auth")
+	digest := pkg.Digest
 	root := t.TempDir()
 	packagePath := filepath.Join(root, "blobs", "sha256", digest[len("sha256:"):], "package.tar.gz")
-	if err := os.MkdirAll(filepath.Dir(packagePath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(packagePath, []byte("package"), 0o644); err != nil {
+	if err := writePackageCacheEntry(packagePath, pkg.Bytes); err != nil {
 		t.Fatal(err)
 	}
 
@@ -94,11 +91,11 @@ func TestSessionBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	if len(store.creates) != 1 {
 		t.Fatalf("creates = %#v", store.creates)
 	}
-	if store.creates[0].ApplyPackagePath != packagePath {
-		t.Fatalf("ApplyPackagePath = %q want %q", store.creates[0].ApplyPackagePath, packagePath)
+	if store.creates[0].PackagePath != packagePath {
+		t.Fatalf("PackagePath = %q want %q", store.creates[0].PackagePath, packagePath)
 	}
-	if store.creates[0].ApplyPackageDigest != digest {
-		t.Fatalf("ApplyPackageDigest = %q want %q", store.creates[0].ApplyPackageDigest, digest)
+	if store.creates[0].PackageDigest != digest {
+		t.Fatalf("PackageDigest = %q want %q", store.creates[0].PackageDigest, digest)
 	}
 	if store.creates[0].CloudSessionID != "sess_123" {
 		t.Fatalf("CloudSessionID = %q want sess_123", store.creates[0].CloudSessionID)
@@ -125,7 +122,7 @@ func TestSessionBootstrapMatchesCloudSessionNameBeforeSpecName(t *testing.T) {
 			"cloud_session_name": "auth",
 		},
 		SpecVersions: []map[string]any{{
-			"apply_package_digest": digest,
+			"package_digest": digest,
 		}},
 	}}}
 
@@ -205,7 +202,7 @@ func TestSessionBootstrapCanBeDisabled(t *testing.T) {
 	t.Setenv("TELOS_PACKAGE_ROOT", t.TempDir())
 	store := &fakeReconcileStore{}
 
-	startSessionBootstrapReconciler(context.Background(), store)
+	startSessionBootstrapReconciler(context.Background(), store, nil)
 
 	if len(store.creates) != 0 || len(store.stops) != 0 {
 		t.Fatalf("expected disabled bootstrap to do nothing, creates=%#v stops=%#v", store.creates, store.stops)
@@ -220,7 +217,7 @@ func TestSessionBootstrapNoopsWhenDigestMatches(t *testing.T) {
 		SpecName:  &name,
 		Status:    sessionapi.StatusRunning,
 		SpecVersions: []map[string]any{{
-			"apply_package_digest": digest,
+			"package_digest": digest,
 		}},
 	}}}
 
@@ -237,5 +234,34 @@ func TestSessionBootstrapNoopsWhenDigestMatches(t *testing.T) {
 	}
 	if len(store.creates) != 0 || len(store.stops) != 0 {
 		t.Fatalf("expected no changes, creates=%#v stops=%#v", store.creates, store.stops)
+	}
+}
+
+func TestSessionBootstrapDoesNotOverwriteUpdatedPackageDigest(t *testing.T) {
+	initialDigest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	updatedDigest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	name := "auth"
+	store := &fakeReconcileStore{sessions: []sessionapi.Session{{
+		SessionID: "sess_existing",
+		SpecName:  &name,
+		Status:    sessionapi.StatusRunning,
+		SpecVersions: []map[string]any{{
+			"package_digest": updatedDigest,
+		}},
+	}}}
+
+	reconciler := sessionBootstrapReconciler{
+		packageRoot: t.TempDir(),
+		store:       store,
+	}
+
+	if err := reconciler.reconcile([]cloudBootstrapSession{{
+		Name:          name,
+		PackageDigest: initialDigest,
+	}}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if len(store.creates) != 0 || len(store.stops) != 0 {
+		t.Fatalf("expected bootstrap seed to leave updated session alone, creates=%#v stops=%#v", store.creates, store.stops)
 	}
 }

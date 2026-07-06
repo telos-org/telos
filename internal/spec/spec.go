@@ -248,32 +248,154 @@ func resolvePath(baseDir, raw string) (string, error) {
 }
 
 func resolveSkillPath(baseDir, raw string) (string, error) {
-	local := raw
-	if !filepath.IsAbs(local) {
-		local = filepath.Join(baseDir, local)
-	}
-	abs, err := filepath.Abs(local)
-	if err != nil {
-		return "", err
-	}
-	if _, err := os.Stat(abs); err == nil {
-		return abs, nil
-	}
-	if !filepath.IsAbs(raw) {
-		packageLocal := filepath.Join(baseDir, "skills", raw)
-		if _, err := os.Stat(packageLocal); err == nil {
-			return packageLocal, nil
+	if isScopedRegistrySkillRef(raw) {
+		if path, ok := resolvePackageLocalRegistrySkill(baseDir, raw); ok {
+			return path, nil
 		}
+		if path, ok, err := resolvePlatformCatalogueSkill(raw); err != nil {
+			return "", err
+		} else if ok {
+			return path, nil
+		}
+		return "", fmt.Errorf("'skills' registry ref %q cannot resolve to local skills outside the Telos platform catalogue or a packaged Telos lockfile", raw)
 	}
-	// Try the default external skill catalogue.
-	defaultDir := DefaultSkillsDir()
-	if defaultDir != "" {
-		catalog := filepath.Join(defaultDir, raw)
-		if _, err := os.Stat(catalog); err == nil {
-			return catalog, nil
+	for _, candidate := range skillPathCandidates(raw) {
+		local := candidate
+		if !filepath.IsAbs(local) {
+			local = filepath.Join(baseDir, local)
+		}
+		abs, err := filepath.Abs(local)
+		if err != nil {
+			return "", err
+		}
+		if ok, err := skillDirExists(abs); err != nil {
+			return "", err
+		} else if ok {
+			return abs, nil
+		}
+		if !filepath.IsAbs(candidate) {
+			packageLocal := filepath.Join(baseDir, "skills", candidate)
+			if ok, err := skillDirExists(packageLocal); err != nil {
+				return "", err
+			} else if ok {
+				return packageLocal, nil
+			}
+		}
+		// Try the default external skill catalogue.
+		defaultDir := DefaultSkillsDir()
+		if defaultDir != "" {
+			catalog := filepath.Join(defaultDir, candidate)
+			if ok, err := skillDirExists(catalog); err != nil {
+				return "", err
+			} else if ok {
+				return catalog, nil
+			}
 		}
 	}
 	return "", fmt.Errorf("'skills' references unknown skill or path '%s'", raw)
+}
+
+func resolvePlatformCatalogueSkill(raw string) (string, bool, error) {
+	scope, name, ok := registrySkillParts(raw)
+	if !ok || !isPlatformSkillScope(scope) {
+		return "", false, nil
+	}
+	defaultDir := DefaultSkillsDir()
+	if defaultDir == "" {
+		return "", false, nil
+	}
+	path := filepath.Join(defaultDir, name)
+	exists, err := skillDirExists(path)
+	if err != nil || !exists {
+		return "", false, err
+	}
+	return path, true, nil
+}
+
+func resolvePackageLocalRegistrySkill(baseDir, raw string) (string, bool) {
+	_, _, hasPackageManifest := packageManifestSkillPaths(baseDir)
+	if !hasPackageManifest {
+		return "", false
+	}
+	name := registrySkillLocalName(raw)
+	if name == "" {
+		return "", false
+	}
+	path := filepath.Join(baseDir, "skills", name)
+	ok, err := skillDirExists(path)
+	return path, err == nil && ok
+}
+
+func registrySkillParts(raw string) (string, string, bool) {
+	value := strings.TrimSpace(strings.TrimSuffix(raw, "*"))
+	value = strings.TrimSpace(strings.TrimPrefix(value, "skill:"))
+	if !strings.HasPrefix(value, "@") {
+		return "", "", false
+	}
+	scoped := strings.TrimPrefix(value, "@")
+	scope, rest, ok := strings.Cut(scoped, "/")
+	if !ok {
+		return "", "", false
+	}
+	name, _, _ := strings.Cut(rest, ":")
+	if !dnsRE.MatchString(scope) || !dnsRE.MatchString(name) {
+		return "", "", false
+	}
+	return scope, name, true
+}
+
+func isPlatformSkillScope(scope string) bool {
+	return scope == "telos"
+}
+
+func skillDirExists(path string) (bool, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, nil
+	}
+	if _, err := os.Stat(filepath.Join(path, "SKILL.md")); err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+func skillPathCandidates(raw string) []string {
+	raw = strings.TrimSpace(raw)
+	candidates := []string{raw}
+	alias := registrySkillLocalName(raw)
+	if alias != "" && alias != raw {
+		candidates = append(candidates, alias)
+	}
+	return candidates
+}
+
+func isScopedRegistrySkillRef(raw string) bool {
+	_, _, ok := registrySkillParts(raw)
+	return ok
+}
+
+func registrySkillLocalName(raw string) string {
+	if _, name, ok := registrySkillParts(raw); ok {
+		return name
+	}
+	value := strings.TrimSpace(strings.TrimSuffix(raw, "*"))
+	value = strings.TrimPrefix(value, "skill:")
+	if name, _, ok := strings.Cut(value, ":"); ok {
+		value = name
+	}
+	if dnsRE.MatchString(value) {
+		return value
+	}
+	return ""
 }
 
 func requireStr(raw map[string]interface{}, key, ctx string) string {

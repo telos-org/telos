@@ -5,6 +5,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -33,6 +34,23 @@ type PackageVersionRecord struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type SkillFile struct {
+	Mode string
+	Data []byte
+}
+
+type SkillRecord struct {
+	Scope       string         `json:"scope"`
+	Name        string         `json:"name"`
+	Version     string         `json:"version"`
+	Ref         string         `json:"ref"`
+	Digest      string         `json:"digest"`
+	Description *string        `json:"description,omitempty"`
+	Metadata    map[string]any `json:"metadata,omitempty"`
+	FileCount   int            `json:"file_count"`
+	SourceRef   string         `json:"source_ref"`
+}
+
 type SessionRecord struct {
 	ID             string  `json:"id"`
 	Name           string  `json:"name"`
@@ -48,8 +66,7 @@ type SessionRecord struct {
 }
 
 type SessionOpenResponse struct {
-	URL       string `json:"url"`
-	ExpiresAt string `json:"expires_at"`
+	URL string `json:"url"`
 }
 
 // The hosted control API still exposes cloud sessions at /api/deployments.
@@ -153,9 +170,22 @@ func NewClientFromConfig() (*Client, error) {
 	return ControlClient()
 }
 
-func (c *Client) PublishPackageVersion(scope, name, version string, data []byte) (*PackageVersionRecord, error) {
-	path := "/api/packages/" + url.PathEscape(scope) + "/" + url.PathEscape(name) + "/versions/" + url.PathEscape(version)
-	resp, err := c.doRaw("PUT", path, data, "application/gzip")
+func (c *Client) PublishPackage(scope, name, version string, data []byte) (*PackageVersionRecord, error) {
+	payload := map[string]any{
+		"name":        name,
+		"data_base64": base64.StdEncoding.EncodeToString(data),
+	}
+	if strings.TrimSpace(scope) != "" {
+		payload["scope"] = scope
+	}
+	if strings.TrimSpace(version) != "" {
+		payload["version"] = version
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("POST", "/api/packages", body)
 	if err != nil {
 		return nil, err
 	}
@@ -164,6 +194,47 @@ func (c *Client) PublishPackageVersion(scope, name, version string, data []byte)
 		return nil, readError(resp)
 	}
 	var record PackageVersionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) PublishSkillVersion(scope, name, version string, files map[string]SkillFile) (*SkillRecord, error) {
+	type skillFileRequest struct {
+		DataBase64 string `json:"data_base64"`
+		Mode       string `json:"mode"`
+	}
+	bodyFiles := make(map[string]skillFileRequest, len(files))
+	for path, file := range files {
+		bodyFiles[path] = skillFileRequest{
+			DataBase64: base64.StdEncoding.EncodeToString(file.Data),
+			Mode:       file.Mode,
+		}
+	}
+	payload := map[string]any{
+		"name":  name,
+		"files": bodyFiles,
+	}
+	if strings.TrimSpace(scope) != "" {
+		payload["scope"] = scope
+	}
+	if strings.TrimSpace(version) != "" {
+		payload["version"] = version
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("POST", "/api/skills", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, readError(resp)
+	}
+	var record SkillRecord
 	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
 		return nil, err
 	}

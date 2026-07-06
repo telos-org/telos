@@ -82,30 +82,29 @@ func (k *SessionKind) UnmarshalJSON(data []byte) error {
 
 // SessionCreateRequest is the body of POST /api/sessions.
 type SessionCreateRequest struct {
-	SpecMarkdown       *string      `json:"spec_markdown,omitempty"`
-	ApplyPackagePath   string       `json:"-"`
-	ApplyPackageDigest string       `json:"-"`
-	CloudSessionID     string       `json:"-"`
-	CloudSessionName   string       `json:"-"`
-	SessionKind        *SessionKind `json:"-"`
-	ParentSessionID    *string      `json:"parent_session_id,omitempty"`
-	Until              *int         `json:"until,omitempty"`
-	Model              string       `json:"model,omitempty"`
-	Thinking           string       `json:"thinking,omitempty"`
-	MaxCostUSD         *float64     `json:"max_cost_usd,omitempty"`
-	AgentTimeoutSec    *int         `json:"agent_timeout_sec,omitempty"`
+	SpecMarkdown     *string      `json:"spec_markdown,omitempty"`
+	PackageDigest    string       `json:"package_digest,omitempty"`
+	PackagePath      string       `json:"-"`
+	CloudSessionID   string       `json:"-"`
+	CloudSessionName string       `json:"-"`
+	SessionKind      *SessionKind `json:"-"`
+	ParentSessionID  *string      `json:"parent_session_id,omitempty"`
+	Until            *int         `json:"until,omitempty"`
+	Model            string       `json:"model,omitempty"`
+	Thinking         string       `json:"thinking,omitempty"`
+	MaxCostUSD       *float64     `json:"max_cost_usd,omitempty"`
+	AgentTimeoutSec  *int         `json:"agent_timeout_sec,omitempty"`
 }
 
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{name}/spec.
 type SessionSpecUpdateRequest struct {
-	SpecMarkdown       string   `json:"spec_markdown,omitempty"`
-	PackageDigest      string   `json:"package_digest,omitempty"`
-	ApplyPackagePath   string   `json:"-"`
-	ApplyPackageDigest string   `json:"-"`
-	Model              string   `json:"-"`
-	Thinking           string   `json:"-"`
-	MaxCostUSD         *float64 `json:"-"`
-	AgentTimeoutSec    *int     `json:"-"`
+	SpecMarkdown    string   `json:"spec_markdown,omitempty"`
+	PackageDigest   string   `json:"package_digest,omitempty"`
+	PackagePath     string   `json:"-"`
+	Model           string   `json:"-"`
+	Thinking        string   `json:"-"`
+	MaxCostUSD      *float64 `json:"-"`
+	AgentTimeoutSec *int     `json:"-"`
 }
 
 // SessionSpecUpdateResponse is returned by PUT /api/sessions/{name}/spec.

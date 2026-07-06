@@ -1,8 +1,11 @@
 package spec
 
 import (
+	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 )
 
 // CompiledEnvironment is the fully resolved environment plan.
@@ -45,6 +48,11 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 	}
 	visited[envPath] = true
 
+	compileBaseDir, err := resolvedCompileBaseDir(envPath, baseDir)
+	if err != nil {
+		return nil, err
+	}
+
 	env, err := LoadEnvironmentWithBase(envPath, baseDir)
 	if err != nil {
 		return nil, err
@@ -66,22 +74,29 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 	context := cluster
 	lineage := computeLineage(namespace, extendsCompiled)
 
+	packageSkillPaths, packageRequiredPaths, hasPackageManifest := packageManifestSkillPaths(compileBaseDir)
+
 	// Resolve skills
 	var declared []*Skill
-	if env.SkillPaths != nil {
-		declared, err = ResolveSkillsFromPaths(env.SkillPaths)
+	skillPaths := appendMissingPaths(env.SkillPaths, packageSkillPaths)
+	if skillPaths != nil {
+		declared, err = ResolveSkillsFromPaths(skillPaths)
 		if err != nil {
 			return nil, err
 		}
 	}
 	var required []*Skill
-	if len(env.RequiredVerifierSkillPaths) > 0 {
-		required, err = ResolveSkillsFromPaths(env.RequiredVerifierSkillPaths)
+	requiredPaths := appendMissingPaths(env.RequiredVerifierSkillPaths, packageRequiredPaths)
+	if len(requiredPaths) > 0 {
+		required, err = ResolveSkillsFromPaths(requiredPaths)
 		if err != nil {
 			return nil, err
 		}
 	}
-	verifier := ResolveDefaultVerifierSkills()
+	var verifier []*Skill
+	if !hasPackageManifest {
+		verifier = ResolveDefaultVerifierSkills()
+	}
 
 	// Merge: declared + required + verifier, dedup by name
 	byName := map[string]*Skill{}
@@ -130,6 +145,71 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 	}, nil
 }
 
+func resolvedCompileBaseDir(envPath string, baseDir string) (string, error) {
+	if baseDir == "" {
+		return filepath.Dir(envPath), nil
+	}
+	return filepath.Abs(baseDir)
+}
+
+func appendMissingPaths(base []string, extra []string) []string {
+	if len(extra) == 0 {
+		return base
+	}
+	out := append([]string{}, base...)
+	seen := map[string]bool{}
+	for _, path := range out {
+		if abs, err := filepath.Abs(path); err == nil {
+			seen[abs] = true
+		}
+	}
+	for _, path := range extra {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			continue
+		}
+		if seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		out = append(out, abs)
+	}
+	return out
+}
+
+func packageManifestSkillPaths(baseDir string) ([]string, []string, bool) {
+	manifestPath := filepath.Join(baseDir, "manifest.json")
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		return nil, nil, false
+	}
+	var manifest ApplyPackageManifest
+	if err := json.Unmarshal(data, &manifest); err != nil {
+		return nil, nil, false
+	}
+	if !isApplyPackageManifest(manifest) {
+		return nil, nil, false
+	}
+	var paths []string
+	for name := range manifest.Skills {
+		if !dnsRE.MatchString(name) {
+			continue
+		}
+		path := filepath.Join(baseDir, "skills", name)
+		if _, err := os.Stat(filepath.Join(path, "SKILL.md")); err != nil {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil, true
+}
+
+func isApplyPackageManifest(manifest ApplyPackageManifest) bool {
+	return manifest.SchemaVersion == ApplyPackageSchemaVersion &&
+		strings.TrimSpace(manifest.Spec.Digest) != "" &&
+		manifest.Skills != nil
+}
+
 func computeLineage(namespace string, extendsCompiled *CompiledEnvironment) []string {
 	seen := map[string]bool{namespace: true}
 	lineage := []string{namespace}
@@ -148,22 +228,13 @@ func computeLineage(namespace string, extendsCompiled *CompiledEnvironment) []st
 
 // ToIRJSON serializes a compiled environment to the inspectable IR format.
 func ToIRJSON(c *CompiledEnvironment) map[string]interface{} {
-	requiredNames := map[string]bool{}
-	for _, s := range c.RequiredVerifierSkills {
-		requiredNames[s.Name] = true
-	}
 	var skillList []map[string]interface{}
 	for _, s := range c.Skills {
 		skillList = append(skillList, map[string]interface{}{
-			"name":              s.Name,
-			"description":       s.Description,
-			"scripts":           scriptNames(s),
-			"required_verifier": requiredNames[s.Name],
+			"name":        s.Name,
+			"description": s.Description,
+			"scripts":     scriptNames(s),
 		})
-	}
-	var reqNames []string
-	for _, s := range c.RequiredVerifierSkills {
-		reqNames = append(reqNames, s.Name)
 	}
 	specText := c.SpecText
 	if len(specText) > 500 {
@@ -183,19 +254,18 @@ func ToIRJSON(c *CompiledEnvironment) map[string]interface{} {
 		}
 	}
 	return map[string]interface{}{
-		"kind":                     "telos.compiled_environment.v1",
-		"name":                     c.Environment.Name,
-		"spec":                     specText,
-		"namespace":                c.Namespace,
-		"cluster":                  c.Cluster,
-		"context":                  c.Context,
-		"lineage":                  c.Lineage,
-		"extends":                  extends,
-		"interval_seconds":         c.Environment.IntervalSeconds,
-		"tags":                     c.Environment.Tags,
-		"platform":                 platform,
-		"skills":                   skillList,
-		"required_verifier_skills": reqNames,
+		"kind":             "telos.compiled_environment.v1",
+		"name":             c.Environment.Name,
+		"spec":             specText,
+		"namespace":        c.Namespace,
+		"cluster":          c.Cluster,
+		"context":          c.Context,
+		"lineage":          c.Lineage,
+		"extends":          extends,
+		"interval_seconds": c.Environment.IntervalSeconds,
+		"tags":             c.Environment.Tags,
+		"platform":         platform,
+		"skills":           skillList,
 	}
 }
 

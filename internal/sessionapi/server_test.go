@@ -322,14 +322,14 @@ func TestCloudCreateSessionCreatesRootForOperatorApply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadManifest: %v", err)
 	}
-	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest == "" {
-		t.Fatalf("missing apply_package_digest: %#v", manifest.ApplyPackageDigest)
+	if manifest.PackageDigest == nil || *manifest.PackageDigest == "" {
+		t.Fatalf("missing package_digest: %#v", manifest.PackageDigest)
 	}
 	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Digest == "" {
 		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
 	}
-	if got := session.SpecVersions[0]["apply_package_digest"]; got != *manifest.ApplyPackageDigest {
-		t.Fatalf("spec version apply_package_digest: got %#v want %q", got, *manifest.ApplyPackageDigest)
+	if got := session.SpecVersions[0]["package_digest"]; got != *manifest.PackageDigest {
+		t.Fatalf("spec version package_digest: got %#v want %q", got, *manifest.PackageDigest)
 	}
 }
 
@@ -350,7 +350,7 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompileEnvironment: %v", err)
 	}
-	pkg, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{CompilerVersion: "test"})
+	pkg, err := spec.BuildApplyPackage(compiled)
 	if err != nil {
 		t.Fatalf("BuildApplyPackage: %v", err)
 	}
@@ -362,10 +362,10 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	session, err := store.Create(sessionapi.SessionCreateRequest{
-		ApplyPackagePath:   packagePath,
-		ApplyPackageDigest: pkg.Digest,
-		CloudSessionID:     "sess_123",
-		CloudSessionName:   "postgres-prod",
+		PackagePath:      packagePath,
+		PackageDigest:    pkg.Digest,
+		CloudSessionID:   "sess_123",
+		CloudSessionName: "postgres-prod",
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -380,8 +380,8 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	if manifest.SourceSpecPath == nil || !strings.Contains(*manifest.SourceSpecPath, filepath.Join(session.SessionID, "package", "SPEC.md")) {
 		t.Fatalf("source_spec_path: %#v", manifest.SourceSpecPath)
 	}
-	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest != pkg.Digest {
-		t.Fatalf("apply_package_digest: got %#v want %q", manifest.ApplyPackageDigest, pkg.Digest)
+	if manifest.PackageDigest == nil || *manifest.PackageDigest != pkg.Digest {
+		t.Fatalf("package_digest: got %#v want %q", manifest.PackageDigest, pkg.Digest)
 	}
 	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Digest != pkg.Manifest.Spec.Digest {
 		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
@@ -417,7 +417,7 @@ func TestCloudCreateSessionFromApplyPackageRejectsDigestMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompileEnvironment: %v", err)
 	}
-	pkg, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{CompilerVersion: "test"})
+	pkg, err := spec.BuildApplyPackage(compiled)
 	if err != nil {
 		t.Fatalf("BuildApplyPackage: %v", err)
 	}
@@ -428,8 +428,8 @@ func TestCloudCreateSessionFromApplyPackageRejectsDigestMismatch(t *testing.T) {
 
 	store := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	_, err = store.Create(sessionapi.SessionCreateRequest{
-		ApplyPackagePath:   packagePath,
-		ApplyPackageDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+		PackagePath:   packagePath,
+		PackageDigest: "sha256:0000000000000000000000000000000000000000000000000000000000000000",
 	})
 	if err == nil {
 		t.Fatal("expected digest mismatch")
@@ -458,7 +458,7 @@ func writeTestApplyPackage(t *testing.T, packageRoot string, name string, skill 
 	if err != nil {
 		t.Fatalf("CompileEnvironment: %v", err)
 	}
-	pkg, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{CompilerVersion: "test"})
+	pkg, err := spec.BuildApplyPackage(compiled)
 	if err != nil {
 		t.Fatalf("BuildApplyPackage: %v", err)
 	}
@@ -652,14 +652,14 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadManifest: %v", err)
 	}
-	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest == "" {
-		t.Fatalf("missing apply_package_digest: %#v", manifest.ApplyPackageDigest)
+	if manifest.PackageDigest == nil || *manifest.PackageDigest == "" {
+		t.Fatalf("missing package_digest: %#v", manifest.PackageDigest)
 	}
 	if manifest.ApplyPackageLock == nil || manifest.ApplyPackageLock.Spec.Digest == "" {
 		t.Fatalf("apply_package_lock: %#v", manifest.ApplyPackageLock)
 	}
-	if got := session.SpecVersions[0]["apply_package_digest"]; got != *manifest.ApplyPackageDigest {
-		t.Fatalf("spec version apply_package_digest: got %#v want %q", got, *manifest.ApplyPackageDigest)
+	if got := session.SpecVersions[0]["package_digest"]; got != *manifest.PackageDigest {
+		t.Fatalf("spec version package_digest: got %#v want %q", got, *manifest.PackageDigest)
 	}
 	data, err := os.ReadFile(*session.SessionSpecPath)
 	if err != nil {
@@ -725,13 +725,13 @@ func TestApplySessionSpecUpdatesExistingRootFromPackageDigest(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadManifest: %v", err)
 	}
-	if manifest.ApplyPackageDigest == nil || *manifest.ApplyPackageDigest != pkg.Digest {
-		t.Fatalf("apply_package_digest: got %#v want %q", manifest.ApplyPackageDigest, pkg.Digest)
+	if manifest.PackageDigest == nil || *manifest.PackageDigest != pkg.Digest {
+		t.Fatalf("package_digest: got %#v want %q", manifest.PackageDigest, pkg.Digest)
 	}
 	if manifest.SourceSpecPath == nil || !strings.Contains(*manifest.SourceSpecPath, filepath.Join(rootSession.SessionID, "package", "SPEC.md")) {
 		t.Fatalf("source_spec_path: %#v", manifest.SourceSpecPath)
 	}
-	if got := update.Session.SpecVersions[1]["apply_package_digest"]; got != pkg.Digest {
+	if got := update.Session.SpecVersions[1]["package_digest"]; got != pkg.Digest {
 		t.Fatalf("spec version package digest: got %#v want %q", got, pkg.Digest)
 	}
 }
