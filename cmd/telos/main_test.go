@@ -50,6 +50,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
+		"apply SPEC.md      Apply a spec as a managed cloud session",
 		"open SESSION",
 		"version            Show version",
 		"--version",
@@ -64,8 +65,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 func TestPrintOpenReceipt(t *testing.T) {
 	var out bytes.Buffer
 	printOpenReceipt(&out, cloud.SessionOpenResponse{
-		URL:       "https://status-ping-api.usetelos.ai",
-		ExpiresAt: "2026-07-05T00:00:00Z",
+		URL: "https://status-ping-api.usetelos.ai",
 	})
 
 	if got := out.String(); got != "https://status-ping-api.usetelos.ai\n" {
@@ -491,6 +491,137 @@ func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	}
 }
 
+func TestPackageSkillDirBuildsSkillPublishPayload(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: k8s-deploy\ndescription: Deploy\n---\nUse kubectl.\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	scripts := filepath.Join(dir, "scripts")
+	if err := os.MkdirAll(scripts, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scripts, "deploy.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	skill, ok, err := packageSkillDir(dir, "1.0")
+	if err != nil {
+		t.Fatalf("packageSkillDir: %v", err)
+	}
+	if !ok {
+		t.Fatal("expected skill directory")
+	}
+	if skill.name != "k8s-deploy" || skill.version != "1.0.0" {
+		t.Fatalf("skill: got %+v", skill)
+	}
+	if string(skill.files["SKILL.md"].Data) != "---\nname: k8s-deploy\ndescription: Deploy\n---\nUse kubectl.\n" {
+		t.Fatalf("skill file: got %#v", skill.files["SKILL.md"])
+	}
+	if skill.files["scripts/deploy.sh"].Mode != "0755" {
+		t.Fatalf("script file: got %#v", skill.files["scripts/deploy.sh"])
+	}
+}
+
+func TestPackageSkillDirAllowsRegistryAssignedVersion(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(dir, "SKILL.md"),
+		[]byte("---\nname: k8s-deploy\n---\nUse kubectl.\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	skill, ok, err := packageSkillDir(dir, "")
+
+	if !ok {
+		t.Fatal("expected skill directory")
+	}
+	if err != nil {
+		t.Fatalf("packageSkillDir: %v", err)
+	}
+	if skill.version != "" {
+		t.Fatalf("version: got %q", skill.version)
+	}
+}
+
+func TestPushSkillPackagePublishesSkill(t *testing.T) {
+	var gotBody struct {
+		Scope   string `json:"scope"`
+		Name    string `json:"name"`
+		Version string `json:"version"`
+		Files   map[string]struct {
+			DataBase64 string `json:"data_base64"`
+			Mode       string `json:"mode"`
+		} `json:"files"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPost && r.URL.Path == "/api/skills":
+			if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+				t.Fatal(err)
+			}
+			json.NewEncoder(w).Encode(map[string]any{
+				"scope":      "telos",
+				"name":       "k8s-deploy",
+				"version":    "1.0.0",
+				"ref":        "@telos/k8s-deploy:1.0.0",
+				"digest":     "sha256:abc",
+				"file_count": 1,
+				"source_ref": "@telos/k8s-deploy:1.0.0",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	record, err := pushSkillPackage(
+		cloud.NewClient(srv.URL, "test-token"),
+		&skillPackage{
+			name:    "k8s-deploy",
+			version: "1.0.0",
+			files: map[string]cloud.SkillFile{
+				"SKILL.md": {Mode: "0644", Data: []byte("skill")},
+			},
+		},
+		"telos",
+	)
+	if err != nil {
+		t.Fatalf("pushSkillPackage: %v", err)
+	}
+	if record.Ref != "@telos/k8s-deploy:1.0.0" {
+		t.Fatalf("record: got %+v", record)
+	}
+	if gotBody.Scope != "telos" || gotBody.Name != "k8s-deploy" || gotBody.Version != "1.0.0" {
+		t.Fatalf("body: got %#v", gotBody)
+	}
+}
+
+func TestLaunchSpecPlatformDoesNotResolveSkills(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	if err := os.WriteFile(
+		specPath,
+		[]byte("---\nversion: v0\nname: hosted\nplatform: cloud\nskills:\n  - server-side-only\n---\n# Hosted\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	platform, err := launchSpecPlatform(specPath)
+	if err != nil {
+		t.Fatalf("launchSpecPlatform: %v", err)
+	}
+	if platform != "cloud" {
+		t.Fatalf("platform: got %q", platform)
+	}
+}
+
 func TestNormalizePackageVersion(t *testing.T) {
 	for input, want := range map[string]string{
 		"1":                "1.0.0",
@@ -515,71 +646,24 @@ func TestNormalizePackageVersion(t *testing.T) {
 	}
 }
 
-func TestPushApplySpecPackageRetriesConflictWithContentAddressedVersion(t *testing.T) {
-	var paths []string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		paths = append(paths, r.URL.Path)
-		switch r.URL.Path {
-		case "/api/packages/rohan/odoo/versions/1.0.0":
-			http.Error(w, `{"detail":"package version already exists"}`, http.StatusConflict)
-		case "/api/packages/rohan/odoo/versions/1.0.0+sha.abcdef123456":
-			json.NewEncoder(w).Encode(map[string]any{
-				"scope":      "rohan",
-				"name":       "odoo",
-				"version":    "1.0.0+sha.abcdef123456",
-				"ref":        "@rohan/odoo:1.0.0+sha.abcdef123456",
-				"digest":     "sha256:abcdef1234567890",
-				"created_at": "now",
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	record, err := pushApplySpecPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		&specPackage{
-			name:    "odoo",
-			version: "1.0.0",
-			digest:  "sha256:abcdef1234567890",
-			bytes:   []byte("package"),
-		},
-		"rohan",
-	)
-	if err != nil {
-		t.Fatalf("pushApplySpecPackage: %v", err)
-	}
-	if record.Version != "1.0.0+sha.abcdef123456" {
-		t.Fatalf("version: got %q", record.Version)
-	}
-	if len(paths) != 2 {
-		t.Fatalf("paths: got %#v", paths)
-	}
-}
-
-func TestApplyCloudSessionPackageCreatesWithoutReconciliation(t *testing.T) {
-	var listed bool
+func TestApplyCloudSessionPackageCreates(t *testing.T) {
 	var created bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			listed = true
-			http.NotFound(w, r)
 		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
 			created = true
 			var body map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
-			if body["package_ref"] != "@telos/auth:1.2.3" {
+			if body["name"] != "auth" || body["package_ref"] != "@user-abc/auth:0.1.0" {
 				t.Fatalf("body: got %#v", body)
 			}
 			json.NewEncoder(w).Encode(map[string]any{
 				"id":             "sess_123",
 				"name":           "auth",
 				"state":          "provisioning",
-				"package_ref":    "@telos/auth:1.2.3",
+				"package_ref":    "@user-abc/auth:0.1.0",
 				"package_digest": "sha256:new",
 				"created_at":     "now",
 				"updated_at":     "now",
@@ -593,54 +677,7 @@ func TestApplyCloudSessionPackageCreatesWithoutReconciliation(t *testing.T) {
 	operation, session, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
 		"auth",
-		"@telos/auth:1.2.3",
-		"",
-	)
-	if err != nil {
-		t.Fatalf("applyCloudSessionPackage: %v", err)
-	}
-	if operation != "created" || !created || listed {
-		t.Fatalf("operation=%q created=%v listed=%v", operation, created, listed)
-	}
-	if session.ID != "sess_123" || session.PackageRef != "@telos/auth:1.2.3" {
-		t.Fatalf("session: got %+v", session)
-	}
-}
-
-func TestApplyCloudSessionPackageCreatesWhenMissing(t *testing.T) {
-	var created bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			t.Fatal("apply without --session must not list cloud sessions")
-		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
-			created = true
-			var body map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatal(err)
-			}
-			if body["package_ref"] != "@telos/auth:1.2.3" {
-				t.Fatalf("body: got %#v", body)
-			}
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "sess_123",
-				"name":           "auth",
-				"state":          "provisioning",
-				"package_ref":    "@telos/auth:1.2.3",
-				"package_digest": "sha256:new",
-				"created_at":     "now",
-				"updated_at":     "now",
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	operation, session, err := applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@telos/auth:1.2.3",
+		"@user-abc/auth:0.1.0",
 		"",
 	)
 	if err != nil {
@@ -655,27 +692,23 @@ func TestApplyCloudSessionPackageCreatesWhenMissing(t *testing.T) {
 }
 
 func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
-	var listed bool
 	var updated bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			listed = true
-			http.NotFound(w, r)
 		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
 			updated = true
 			var body map[string]string
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
-			if body["package_ref"] != "@telos/auth:1.2.3" {
+			if body["package_ref"] != "@user-abc/auth:0.1.1" {
 				t.Fatalf("body: got %#v", body)
 			}
 			json.NewEncoder(w).Encode(map[string]any{
 				"id":             "sess_123",
 				"name":           "auth",
 				"state":          "deploying",
-				"package_ref":    "@telos/auth:1.2.3",
+				"package_ref":    "@user-abc/auth:0.1.1",
 				"package_digest": "sha256:new",
 				"created_at":     "then",
 				"updated_at":     "now",
@@ -689,16 +722,16 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 	operation, session, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
 		"auth",
-		"@telos/auth:1.2.3",
+		"@user-abc/auth:0.1.1",
 		"sess_123",
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
 	}
-	if operation != "updated" || !updated || listed {
-		t.Fatalf("operation=%q updated=%v listed=%v", operation, updated, listed)
+	if operation != "updated" || !updated {
+		t.Fatalf("operation=%q updated=%v", operation, updated)
 	}
-	if session.ID != "sess_123" || session.PackageRef != "@telos/auth:1.2.3" {
+	if session.ID != "sess_123" {
 		t.Fatalf("session: got %+v", session)
 	}
 }

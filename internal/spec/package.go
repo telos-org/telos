@@ -18,12 +18,6 @@ import (
 
 const ApplyPackageSchemaVersion = 1
 
-// ApplyPackageOptions controls deterministic spec+skill package creation.
-type ApplyPackageOptions struct {
-	CompilerVersion string
-	RuntimeVersion  string
-}
-
 // ApplyPackage is an immutable bundle of the root spec and resolved skills.
 type ApplyPackage struct {
 	Digest   string
@@ -38,7 +32,6 @@ type ApplyPackageSpecEntry struct {
 type ApplyPackageSkillEntry struct {
 	Name   string                  `json:"-"`
 	Ref    string                  `json:"-"`
-	Origin string                  `json:"-"`
 	Digest string                  `json:"digest"`
 	Files  []ApplyPackageFileEntry `json:"-"`
 }
@@ -50,10 +43,17 @@ type ApplyPackageFileEntry struct {
 }
 
 type ApplyPackageSkillProvenance struct {
-	Ref    string `json:"ref,omitempty"`
-	Origin string `json:"origin,omitempty"`
+	Ref    string `json:"ref"`
 	Digest string `json:"digest"`
 }
+
+type ApplyPackageSkillFetchRequest struct {
+	Name   string
+	Ref    string
+	Digest string
+}
+
+type ApplyPackageSkillFetcher func(ApplyPackageSkillFetchRequest) ([]byte, error)
 
 // ApplyPackageManifest records the immutable inputs used by the package.
 type ApplyPackageManifest struct {
@@ -61,8 +61,6 @@ type ApplyPackageManifest struct {
 	Spec            ApplyPackageSpecEntry                  `json:"spec"`
 	Skills          map[string]string                      `json:"skills"`
 	SkillProvenance map[string]ApplyPackageSkillProvenance `json:"skill_provenance,omitempty"`
-	Compiler        string                                 `json:"compiler,omitempty"`
-	Runtime         string                                 `json:"runtime,omitempty"`
 }
 
 type packageFile struct {
@@ -73,13 +71,16 @@ type packageFile struct {
 
 // BuildApplyPackage creates a deterministic tar.gz containing the root spec,
 // resolved skills, and manifest.json.
-func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) (*ApplyPackage, error) {
+func BuildApplyPackage(compiled *CompiledEnvironment) (*ApplyPackage, error) {
+	return BuildApplyPackageWithSkillRefs(compiled, nil)
+}
+
+// BuildApplyPackageWithSkillRefs builds a package while pinning registry skill
+// refs in manifest provenance. Skills with refs are recorded by digest and
+// materialized from the registry by telosd.
+func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map[string]string) (*ApplyPackage, error) {
 	if compiled == nil || compiled.Environment == nil {
 		return nil, fmt.Errorf("compiled environment is required")
-	}
-	compilerVersion := strings.TrimSpace(opts.CompilerVersion)
-	if compilerVersion == "" {
-		compilerVersion = "dev"
 	}
 
 	specData, err := os.ReadFile(compiled.Environment.Path)
@@ -90,11 +91,6 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 		Digest: digestBytes(specData),
 	}
 
-	required := map[string]bool{}
-	for _, skill := range compiled.RequiredVerifierSkills {
-		required[skill.Name] = true
-	}
-
 	packageFiles := []packageFile{{
 		path: "SPEC.md",
 		mode: 0o644,
@@ -102,7 +98,16 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 	}}
 	skillEntries := make([]ApplyPackageSkillEntry, 0, len(compiled.Skills))
 	for _, skill := range sortedSkills(compiled.Skills) {
-		entry, files, err := packageSkill(skill, compiled.Environment.Path, required[skill.Name])
+		registryRef := ""
+		if skill != nil {
+			registryRef = strings.TrimSpace(skillRefs[skill.Name])
+		}
+		entry, files, err := packageSkill(
+			skill,
+			compiled.Environment.Path,
+			registryRef,
+			registryRef == "",
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -110,14 +115,11 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 		packageFiles = append(packageFiles, files...)
 	}
 
-	runtimeVersion := strings.TrimSpace(opts.RuntimeVersion)
 	manifest := ApplyPackageManifest{
 		SchemaVersion:   ApplyPackageSchemaVersion,
 		Spec:            specEntry,
 		Skills:          skillDigestMap(skillEntries),
 		SkillProvenance: skillProvenanceMap(skillEntries),
-		Compiler:        "telos@" + compilerVersion,
-		Runtime:         runtimeVersion,
 	}
 	packageDigest := digestPackage(specEntry.Digest, manifest.Skills)
 
@@ -141,16 +143,120 @@ func BuildApplyPackage(compiled *CompiledEnvironment, opts ApplyPackageOptions) 
 
 // ExtractApplyPackage expands an apply package into dest and returns its manifest.
 func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageManifest, error) {
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return nil, fmt.Errorf("create package dir: %w", err)
+	files, manifest, err := readApplyPackage(data)
+	if err != nil {
+		return nil, err
 	}
+	if err := validateApplyPackageFiles(manifest, files); err != nil {
+		return nil, err
+	}
+	if err := writeApplyPackageFiles(dest, files); err != nil {
+		return nil, err
+	}
+	return manifest, nil
+}
+
+// HydrateApplyPackage returns a self-contained package tarball by fetching any
+// registry-backed skill blobs referenced by the package manifest.
+func HydrateApplyPackage(data []byte, fetch ApplyPackageSkillFetcher) ([]byte, *ApplyPackageManifest, error) {
+	files, manifest, err := readApplyPackage(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateApplyPackageFilesAllowReferences(manifest, files); err != nil {
+		return nil, nil, err
+	}
+	for _, name := range missingPackageSkillNames(manifest, files) {
+		if fetch == nil {
+			return nil, nil, fmt.Errorf("fetch skill %q: skill fetcher is required", name)
+		}
+		provenance, ok := manifest.SkillProvenance[name]
+		if !ok || strings.TrimSpace(provenance.Ref) == "" {
+			return nil, nil, fmt.Errorf("package missing registry ref for skill %q", name)
+		}
+		expectedDigest := manifest.Skills[name]
+		bundle, err := fetch(ApplyPackageSkillFetchRequest{
+			Name:   name,
+			Ref:    provenance.Ref,
+			Digest: expectedDigest,
+		})
+		if err != nil {
+			return nil, nil, fmt.Errorf("fetch skill %q: %w", name, err)
+		}
+		skillFiles, err := readSkillBundleFiles(name, bundle)
+		if err != nil {
+			return nil, nil, err
+		}
+		if digest := digestPackagedSkill(name, skillFiles); digest != expectedDigest {
+			return nil, nil, fmt.Errorf("skill digest mismatch for %q: got %s want %s", name, digest, expectedDigest)
+		}
+		skillPathName, err := packagePathName(name)
+		if err != nil {
+			return nil, nil, err
+		}
+		for _, file := range skillFiles {
+			path := filepath.ToSlash(filepath.Join("skills", skillPathName, file.path))
+			if _, exists := files[path]; exists {
+				return nil, nil, fmt.Errorf("duplicate apply package entry %q", path)
+			}
+			files[path] = packageFile{path: path, mode: file.mode, data: file.data}
+		}
+	}
+	if err := validateApplyPackageFiles(manifest, files); err != nil {
+		return nil, nil, err
+	}
+	hydrated, err := writePackageTar(packageFilesFromMap(files))
+	if err != nil {
+		return nil, nil, err
+	}
+	return hydrated, manifest, nil
+}
+
+func BuildSkillBundle(skill *Skill) (string, []byte, error) {
+	if skill == nil {
+		return "", nil, fmt.Errorf("nil skill")
+	}
+	if strings.TrimSpace(skill.Name) == "" {
+		return "", nil, fmt.Errorf("skill with empty name")
+	}
+	if _, err := packagePathName(skill.Name); err != nil {
+		return "", nil, err
+	}
+	files, err := readSkillFiles(skill)
+	if err != nil {
+		return "", nil, err
+	}
+	if !packageFilesContainSkillMarkdown(files) {
+		return "", nil, fmt.Errorf("skill %q missing SKILL.md", skill.Name)
+	}
+	digest := digestPackagedSkill(skill.Name, files)
+	data, err := writePackageTar(files)
+	if err != nil {
+		return "", nil, err
+	}
+	return digest, data, nil
+}
+
+func VerifySkillBundle(name string, expectedDigest string, data []byte) error {
+	files, err := readSkillBundleFiles(name, data)
+	if err != nil {
+		return err
+	}
+	if digest := digestPackagedSkill(name, files); digest != expectedDigest {
+		return fmt.Errorf("skill digest mismatch for %q: got %s want %s", name, digest, expectedDigest)
+	}
+	return nil
+}
+
+func readApplyPackage(data []byte) (map[string]packageFile, *ApplyPackageManifest, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
-		return nil, fmt.Errorf("open apply package: %w", err)
+		return nil, nil, fmt.Errorf("open apply package: %w", err)
 	}
 	defer gz.Close()
 
 	var manifestData []byte
+	files := map[string]packageFile{}
 	tr := tar.NewReader(gz)
 	for {
 		header, err := tr.Next()
@@ -158,48 +264,177 @@ func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageManifest, error
 			break
 		}
 		if err != nil {
-			return nil, fmt.Errorf("read apply package: %w", err)
+			return nil, nil, fmt.Errorf("read apply package: %w", err)
 		}
 		if header.Typeflag != tar.TypeReg {
-			return nil, fmt.Errorf("unsupported apply package entry %q", header.Name)
+			return nil, nil, fmt.Errorf("unsupported apply package entry %q", header.Name)
 		}
 		name, err := safePackageEntry(header.Name)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		path := filepath.Join(dest, filepath.FromSlash(name))
-		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-			return nil, fmt.Errorf("create package entry dir: %w", err)
+		if _, exists := files[name]; exists {
+			return nil, nil, fmt.Errorf("duplicate apply package entry %q", name)
 		}
 		fileData, err := io.ReadAll(tr)
 		if err != nil {
-			return nil, fmt.Errorf("read apply package entry %q: %w", name, err)
+			return nil, nil, fmt.Errorf("read apply package entry %q: %w", name, err)
 		}
 		mode := fs.FileMode(header.Mode).Perm()
 		if mode == 0 {
 			mode = 0o644
 		}
-		if err := os.WriteFile(path, fileData, mode); err != nil {
-			return nil, fmt.Errorf("write apply package entry %q: %w", name, err)
-		}
+		files[name] = packageFile{path: name, mode: int64(mode), data: fileData}
 		if name == "manifest.json" {
 			manifestData = fileData
 		}
 	}
 	if len(manifestData) == 0 {
-		return nil, fmt.Errorf("apply package missing manifest.json")
+		return nil, nil, fmt.Errorf("apply package missing manifest.json")
 	}
 	var manifest ApplyPackageManifest
 	if err := json.Unmarshal(manifestData, &manifest); err != nil {
-		return nil, fmt.Errorf("parse manifest.json: %w", err)
+		return nil, nil, fmt.Errorf("parse manifest.json: %w", err)
 	}
-	if manifest.Spec.Digest == "" {
-		return nil, fmt.Errorf("manifest.json missing spec digest")
-	}
-	return &manifest, nil
+	return files, &manifest, nil
 }
 
-func packageSkill(skill *Skill, rootSpecPath string, required bool) (ApplyPackageSkillEntry, []packageFile, error) {
+func writeApplyPackageFiles(dest string, files map[string]packageFile) error {
+	if err := os.MkdirAll(dest, 0o755); err != nil {
+		return fmt.Errorf("create package dir: %w", err)
+	}
+	for name, file := range files {
+		path := filepath.Join(dest, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			return fmt.Errorf("create package entry dir: %w", err)
+		}
+		if err := os.WriteFile(path, file.data, fs.FileMode(file.mode)); err != nil {
+			return fmt.Errorf("write apply package entry %q: %w", name, err)
+		}
+	}
+	return nil
+}
+
+func validateApplyPackageFiles(manifest *ApplyPackageManifest, files map[string]packageFile) error {
+	return validateApplyPackageFilesWithMode(manifest, files, false)
+}
+
+func validateApplyPackageFilesAllowReferences(manifest *ApplyPackageManifest, files map[string]packageFile) error {
+	return validateApplyPackageFilesWithMode(manifest, files, true)
+}
+
+func validateApplyPackageFilesWithMode(manifest *ApplyPackageManifest, files map[string]packageFile, allowReferencedSkills bool) error {
+	if manifest == nil {
+		return fmt.Errorf("apply package missing manifest")
+	}
+	if manifest.SchemaVersion != ApplyPackageSchemaVersion {
+		return fmt.Errorf("unsupported apply package schema_version %d", manifest.SchemaVersion)
+	}
+	specFile, ok := files["SPEC.md"]
+	if !ok {
+		return fmt.Errorf("apply package missing SPEC.md")
+	}
+	if manifest.Spec.Digest == "" {
+		return fmt.Errorf("manifest.json missing spec digest")
+	}
+	specDigest := digestBytes(specFile.data)
+	if specDigest != manifest.Spec.Digest {
+		return fmt.Errorf("spec digest mismatch: got %s want %s", specDigest, manifest.Spec.Digest)
+	}
+	if manifest.Skills == nil {
+		return fmt.Errorf("manifest.json missing skills")
+	}
+	skillEntries := map[string][]ApplyPackageFileEntry{}
+	skillNames := make([]string, 0, len(manifest.Skills))
+	for name := range manifest.Skills {
+		if _, err := packagePathName(name); err != nil {
+			return err
+		}
+		skillNames = append(skillNames, name)
+	}
+	sort.Strings(skillNames)
+	for pathName, file := range files {
+		if pathName == "SPEC.md" || pathName == "manifest.json" {
+			continue
+		}
+		matched := false
+		for _, skillName := range skillNames {
+			prefix := "skills/" + skillName + "/"
+			if !strings.HasPrefix(pathName, prefix) {
+				continue
+			}
+			rel := strings.TrimPrefix(pathName, prefix)
+			if rel == "" {
+				return fmt.Errorf("unsafe apply package entry %q", pathName)
+			}
+			skillEntries[skillName] = append(skillEntries[skillName], ApplyPackageFileEntry{
+				Path:   rel,
+				Mode:   fmt.Sprintf("%04o", file.mode),
+				Digest: digestFile(rel, file.mode, file.data),
+			})
+			matched = true
+			break
+		}
+		if !matched {
+			return fmt.Errorf("apply package contains unmanifested file %q", pathName)
+		}
+	}
+	for _, skillName := range skillNames {
+		entries := skillEntries[skillName]
+		if len(entries) == 0 {
+			if allowReferencedSkills && packageSkillHasRegistryRef(manifest, skillName) {
+				continue
+			}
+			return fmt.Errorf("apply package missing skill files for %q", skillName)
+		}
+		sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+		skillDigest := digestSkill(skillName, entries)
+		if skillDigest != manifest.Skills[skillName] {
+			return fmt.Errorf("skill digest mismatch for %q: got %s want %s", skillName, skillDigest, manifest.Skills[skillName])
+		}
+	}
+	return nil
+}
+
+func packageSkillHasRegistryRef(manifest *ApplyPackageManifest, name string) bool {
+	if manifest == nil || manifest.SkillProvenance == nil {
+		return false
+	}
+	provenance, ok := manifest.SkillProvenance[name]
+	ref := strings.TrimSpace(provenance.Ref)
+	return ok &&
+		strings.HasPrefix(ref, "@") &&
+		provenance.Digest == manifest.Skills[name]
+}
+
+func missingPackageSkillNames(manifest *ApplyPackageManifest, files map[string]packageFile) []string {
+	if manifest == nil {
+		return nil
+	}
+	names := make([]string, 0, len(manifest.Skills))
+	for name := range manifest.Skills {
+		prefix := "skills/" + name + "/"
+		found := false
+		for path := range files {
+			if strings.HasPrefix(path, prefix) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func packageSkill(
+	skill *Skill,
+	rootSpecPath string,
+	registryRef string,
+	includeFiles bool,
+) (ApplyPackageSkillEntry, []packageFile, error) {
 	if skill == nil {
 		return ApplyPackageSkillEntry{}, nil, fmt.Errorf("nil skill")
 	}
@@ -226,21 +461,103 @@ func packageSkill(skill *Skill, rootSpecPath string, required bool) (ApplyPackag
 			Mode:   fmt.Sprintf("%04o", file.mode),
 			Digest: fileDigest,
 		})
-		packaged = append(packaged, packageFile{
-			path: filepath.ToSlash(filepath.Join("skills", skillPathName, file.path)),
-			mode: file.mode,
-			data: file.data,
-		})
+		if includeFiles {
+			packaged = append(packaged, packageFile{
+				path: filepath.ToSlash(filepath.Join("skills", skillPathName, file.path)),
+				mode: file.mode,
+				data: file.data,
+			})
+		}
+	}
+	ref := strings.TrimSpace(registryRef)
+	if ref == "" {
+		ref = skillSourceRef(skill, rootSpecPath)
 	}
 	entry := ApplyPackageSkillEntry{
 		Name:   skill.Name,
-		Ref:    skillSourceRef(skill, rootSpecPath),
-		Origin: skillOrigin(skill, required),
+		Ref:    ref,
 		Digest: digestSkill(skill.Name, fileEntries),
 		Files:  fileEntries,
 	}
-	_ = required
 	return entry, packaged, nil
+}
+
+func readSkillBundleFiles(name string, data []byte) ([]packageFile, error) {
+	if _, err := packagePathName(name); err != nil {
+		return nil, err
+	}
+	gz, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, fmt.Errorf("open skill bundle %q: %w", name, err)
+	}
+	defer gz.Close()
+
+	files := []packageFile{}
+	tr := tar.NewReader(gz)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("read skill bundle %q: %w", name, err)
+		}
+		if header.Typeflag != tar.TypeReg {
+			return nil, fmt.Errorf("unsupported skill bundle entry %q", header.Name)
+		}
+		path, err := safePackageEntry(header.Name)
+		if err != nil {
+			return nil, err
+		}
+		fileData, err := io.ReadAll(tr)
+		if err != nil {
+			return nil, fmt.Errorf("read skill bundle entry %q: %w", path, err)
+		}
+		mode := fs.FileMode(header.Mode).Perm()
+		if mode == 0 {
+			mode = 0o644
+		}
+		files = append(files, packageFile{
+			path: path,
+			mode: int64(normalizedPackageMode(mode)),
+			data: fileData,
+		})
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
+	if !packageFilesContainSkillMarkdown(files) {
+		return nil, fmt.Errorf("skill bundle %q missing SKILL.md", name)
+	}
+	return files, nil
+}
+
+func packageFilesContainSkillMarkdown(files []packageFile) bool {
+	for _, file := range files {
+		if file.path == "SKILL.md" {
+			return true
+		}
+	}
+	return false
+}
+
+func digestPackagedSkill(name string, files []packageFile) string {
+	entries := make([]ApplyPackageFileEntry, 0, len(files))
+	for _, file := range files {
+		entries = append(entries, ApplyPackageFileEntry{
+			Path:   file.path,
+			Mode:   fmt.Sprintf("%04o", file.mode),
+			Digest: digestFile(file.path, file.mode, file.data),
+		})
+	}
+	sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
+	return digestSkill(name, entries)
+}
+
+func packageFilesFromMap(files map[string]packageFile) []packageFile {
+	out := make([]packageFile, 0, len(files))
+	for _, file := range files {
+		out = append(out, file)
+	}
+	return out
 }
 
 func safePackageEntry(name string) (string, error) {
@@ -286,7 +603,7 @@ func readSkillFiles(skill *Skill) ([]packageFile, error) {
 		}
 		files = append(files, packageFile{
 			path: filepath.ToSlash(rel),
-			mode: int64(info.Mode().Perm()),
+			mode: normalizedPackageMode(info.Mode()),
 			data: data,
 		})
 		return nil
@@ -296,6 +613,13 @@ func readSkillFiles(skill *Skill) ([]packageFile, error) {
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
 	return files, nil
+}
+
+func normalizedPackageMode(mode fs.FileMode) int64 {
+	if mode.Perm()&0o111 != 0 {
+		return 0o755
+	}
+	return 0o644
 }
 
 func sortedSkills(skills []*Skill) []*Skill {
@@ -349,33 +673,10 @@ func skillProvenanceMap(skills []ApplyPackageSkillEntry) map[string]ApplyPackage
 	for _, skill := range skills {
 		out[skill.Name] = ApplyPackageSkillProvenance{
 			Ref:    skill.Ref,
-			Origin: skill.Origin,
 			Digest: skill.Digest,
 		}
 	}
 	return out
-}
-
-func skillOrigin(skill *Skill, required bool) string {
-	if required {
-		return "required_verifier"
-	}
-	if isDefaultVerifierSkill(skill) {
-		return "platform"
-	}
-	return "declared"
-}
-
-func isDefaultVerifierSkill(skill *Skill) bool {
-	if skill == nil {
-		return false
-	}
-	for _, name := range DefaultVerifierSkills {
-		if skill.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 func skillSourceRef(skill *Skill, rootSpecPath string) string {

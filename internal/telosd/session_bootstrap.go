@@ -21,19 +21,24 @@ type cloudBootstrapSession struct {
 const (
 	defaultCloudSessionModel    = "sail-research/zai-org/GLM-5.2-FP8"
 	defaultCloudSessionThinking = "medium"
-	defaultCloudAgentTimeoutSec = 900
+	defaultCloudAgentTimeoutSec = 14400
 	cloudAgentTimeoutEnvVar     = "TELOS_AGENT_TIMEOUT_SEC"
 )
 
 type sessionBootstrapReconciler struct {
 	packageRoot     string
+	materializer    *applyPackageMaterializer
 	model           string
 	thinking        string
 	agentTimeoutSec *int
 	store           sessionapi.Store
 }
 
-func startSessionBootstrapReconciler(ctx context.Context, store sessionapi.Store) {
+func startSessionBootstrapReconciler(
+	ctx context.Context,
+	store sessionapi.Store,
+	materializer *applyPackageMaterializer,
+) {
 	if os.Getenv("TELOS_SESSION_BOOTSTRAP_ENABLED") == "0" {
 		return
 	}
@@ -43,6 +48,7 @@ func startSessionBootstrapReconciler(ctx context.Context, store sessionapi.Store
 	}
 	r := sessionBootstrapReconciler{
 		packageRoot:     strings.TrimSpace(os.Getenv("TELOS_PACKAGE_ROOT")),
+		materializer:    materializer,
 		model:           cloudSessionModel(),
 		thinking:        cloudSessionThinking(),
 		agentTimeoutSec: intPtr(cloudAgentTimeoutSec()),
@@ -95,20 +101,12 @@ func (r sessionBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) 
 		if name == "" || digest == "" {
 			continue
 		}
-		if existing, ok := active[name]; ok {
-			if sessionPackageDigest(existing) == digest {
-				continue
-			}
-			if _, err := r.store.Stop(existing.SessionID); err != nil {
-				return fmt.Errorf("stop stale session %s: %w", existing.SessionID, err)
-			}
+		if _, ok := active[name]; ok {
+			continue
 		}
-		packagePath, err := sessionapi.PackagePathForDigest(r.packageRoot, digest)
+		packagePath, err := r.packagePathForDigest(digest)
 		if err != nil {
 			return err
-		}
-		if _, err := os.Stat(packagePath); err != nil {
-			return fmt.Errorf("package %s is not materialized at %s: %w", digest, packagePath, err)
 		}
 		kind := sessionapi.KindController
 		model := strings.TrimSpace(r.model)
@@ -124,14 +122,14 @@ func (r sessionBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) 
 			agentTimeoutSec = *r.agentTimeoutSec
 		}
 		if _, err := r.store.Create(sessionapi.SessionCreateRequest{
-			ApplyPackagePath:   packagePath,
-			ApplyPackageDigest: digest,
-			CloudSessionID:     strings.TrimSpace(session.CloudSessionID),
-			CloudSessionName:   name,
-			SessionKind:        &kind,
-			Model:              model,
-			Thinking:           thinking,
-			AgentTimeoutSec:    intPtr(agentTimeoutSec),
+			PackagePath:      packagePath,
+			PackageDigest:    digest,
+			CloudSessionID:   strings.TrimSpace(session.CloudSessionID),
+			CloudSessionName: name,
+			SessionKind:      &kind,
+			Model:            model,
+			Thinking:         thinking,
+			AgentTimeoutSec:  intPtr(agentTimeoutSec),
 		}); err != nil {
 			return fmt.Errorf("create session %s from package %s: %w", name, digest, err)
 		}
@@ -142,6 +140,26 @@ func (r sessionBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) 
 		active = activeRootSessionsByName(current)
 	}
 	return nil
+}
+
+func (r sessionBootstrapReconciler) packagePathForDigest(digest string) (string, error) {
+	if r.materializer != nil {
+		path, err := r.materializer.Ensure(context.Background(), digest)
+		if err == nil {
+			return path, nil
+		}
+		if r.materializer.bundleBase != "" {
+			return "", err
+		}
+	}
+	packagePath, err := sessionapi.PackagePathForDigest(r.packageRoot, digest)
+	if err != nil {
+		return "", err
+	}
+	if err := sessionapi.VerifyPackageDigest(packagePath, digest); err != nil {
+		return "", fmt.Errorf("package %s is not materialized at %s: %w", digest, packagePath, err)
+	}
+	return packagePath, nil
 }
 
 func cloudSessionModel() string {
@@ -189,15 +207,6 @@ func sessionCloudName(session sessionapi.Session) string {
 	}
 	name, _ := session.Provenance["cloud_session_name"].(string)
 	return strings.TrimSpace(name)
-}
-
-func sessionPackageDigest(session sessionapi.Session) string {
-	for i := len(session.SpecVersions) - 1; i >= 0; i-- {
-		if digest, ok := session.SpecVersions[i]["apply_package_digest"].(string); ok {
-			return strings.TrimSpace(digest)
-		}
-	}
-	return ""
 }
 
 func envInt(name string, fallback int) int {

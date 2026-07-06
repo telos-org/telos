@@ -1,6 +1,7 @@
 package telosd
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -16,15 +17,27 @@ type sessionSubstrate interface {
 
 type cloudSessionStore struct {
 	*sessionapi.FileStore
-	substrate sessionSubstrate
+	substrate    sessionSubstrate
+	materializer *applyPackageMaterializer
 }
 
-func newCloudSessionStore(base *sessionapi.FileStore, substrate sessionSubstrate) *cloudSessionStore {
-	return &cloudSessionStore{FileStore: base, substrate: substrate}
+func newCloudSessionStore(
+	base *sessionapi.FileStore,
+	substrate sessionSubstrate,
+	materializer *applyPackageMaterializer,
+) *cloudSessionStore {
+	return &cloudSessionStore{
+		FileStore:    base,
+		substrate:    substrate,
+		materializer: materializer,
+	}
 }
 
 func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
 	req = cloudCreateDefaults(req)
+	if err := s.materializeCreatePackage(&req); err != nil {
+		return nil, err
+	}
 	session, err := s.FileStore.Create(req)
 	if err != nil {
 		return nil, err
@@ -42,6 +55,9 @@ func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessio
 
 func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.SessionSpecUpdateResponse, error) {
 	req = cloudSpecUpdateDefaults(req)
+	if err := s.materializeUpdatePackage(&req); err != nil {
+		return nil, err
+	}
 	response, err := s.FileStore.UpdateSpec(name, req)
 	if err != nil {
 		return nil, err
@@ -64,6 +80,39 @@ func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUp
 		return nil, err
 	}
 	return response, nil
+}
+
+func (s *cloudSessionStore) materializeCreatePackage(req *sessionapi.SessionCreateRequest) error {
+	if req == nil || s.materializer == nil || strings.TrimSpace(req.PackagePath) != "" {
+		return nil
+	}
+	digest := strings.TrimSpace(req.PackageDigest)
+	if digest == "" {
+		return nil
+	}
+	path, err := s.materializer.Ensure(context.Background(), digest)
+	if err != nil {
+		return err
+	}
+	req.PackagePath = path
+	return nil
+}
+
+func (s *cloudSessionStore) materializeUpdatePackage(req *sessionapi.SessionSpecUpdateRequest) error {
+	if req == nil || s.materializer == nil || strings.TrimSpace(req.PackagePath) != "" {
+		return nil
+	}
+	digest := strings.TrimSpace(req.PackageDigest)
+	if digest == "" {
+		return nil
+	}
+	path, err := s.materializer.Ensure(context.Background(), digest)
+	if err != nil {
+		return err
+	}
+	req.PackagePath = path
+	req.PackageDigest = digest
+	return nil
 }
 
 func (s *cloudSessionStore) List() ([]sessionapi.Session, error) {

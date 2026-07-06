@@ -22,7 +22,7 @@ type Manifest struct {
 	SpecName           string                     `json:"spec_name"`
 	CurrentSpecVersion *int                       `json:"current_spec_version,omitempty"`
 	SpecVersions       []map[string]any           `json:"spec_versions,omitempty"`
-	ApplyPackageDigest *string                    `json:"apply_package_digest,omitempty"`
+	PackageDigest      *string                    `json:"package_digest,omitempty"`
 	ApplyPackageLock   *spec.ApplyPackageManifest `json:"apply_package_lock,omitempty"`
 	Config             SessionConfig              `json:"config"`
 	Workspace          *Workspace                 `json:"workspace,omitempty"`
@@ -101,22 +101,22 @@ type SessionConfig struct {
 // InitialManifest is the typed input for creating a session.json before any
 // worker epoch has started.
 type InitialManifest struct {
-	SessionID          string
-	SessionKind        SessionKind
-	Runtime            SessionRuntime
-	Launcher           string
-	CreatedAt          string
-	ParentSessionID    *string
-	SourceSpecPath     *string
-	SessionSpecPath    *string
-	SpecName           string
-	Config             SessionConfig
-	Workspace          *Workspace
-	Provenance         map[string]any
-	ApplyPackageDigest *string
-	ApplyPackageLock   *spec.ApplyPackageManifest
-	Access             *ScopedToken
-	Specs              []InitialManifestSpec
+	SessionID        string
+	SessionKind      SessionKind
+	Runtime          SessionRuntime
+	Launcher         string
+	CreatedAt        string
+	ParentSessionID  *string
+	SourceSpecPath   *string
+	SessionSpecPath  *string
+	SpecName         string
+	Config           SessionConfig
+	Workspace        *Workspace
+	Provenance       map[string]any
+	PackageDigest    *string
+	ApplyPackageLock *spec.ApplyPackageManifest
+	Access           *ScopedToken
+	Specs            []InitialManifestSpec
 }
 
 type InitialManifestSpec struct {
@@ -165,23 +165,23 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		})
 	}
 	return Manifest{
-		SessionID:          input.SessionID,
-		SessionKind:        input.SessionKind,
-		Runtime:            input.Runtime,
-		CreatedAt:          input.CreatedAt,
-		Launcher:           input.Launcher,
-		ParentSessionID:    input.ParentSessionID,
-		SourceSpecPath:     input.SourceSpecPath,
-		SessionSpecPath:    input.SessionSpecPath,
-		SpecName:           input.SpecName,
-		Config:             input.Config,
-		Workspace:          input.Workspace,
-		Provenance:         input.Provenance,
-		ApplyPackageDigest: input.ApplyPackageDigest,
-		ApplyPackageLock:   input.ApplyPackageLock,
-		Access:             input.Access,
-		Specs:              specs,
-		Epochs:             []Epoch{},
+		SessionID:        input.SessionID,
+		SessionKind:      input.SessionKind,
+		Runtime:          input.Runtime,
+		CreatedAt:        input.CreatedAt,
+		Launcher:         input.Launcher,
+		ParentSessionID:  input.ParentSessionID,
+		SourceSpecPath:   input.SourceSpecPath,
+		SessionSpecPath:  input.SessionSpecPath,
+		SpecName:         input.SpecName,
+		Config:           input.Config,
+		Workspace:        input.Workspace,
+		Provenance:       input.Provenance,
+		PackageDigest:    input.PackageDigest,
+		ApplyPackageLock: input.ApplyPackageLock,
+		Access:           input.Access,
+		Specs:            specs,
+		Epochs:           []Epoch{},
 	}
 }
 

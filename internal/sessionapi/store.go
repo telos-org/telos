@@ -43,6 +43,20 @@ func PackagePathForDigest(root string, digest string) (string, error) {
 	return filepath.Join(root, "blobs", "sha256", hex, "package.tar.gz"), nil
 }
 
+// VerifyPackageDigest validates that packagePath is a readable package whose
+// manifest-derived digest matches expectedDigest.
+func VerifyPackageDigest(packagePath string, expectedDigest string) error {
+	dir, err := os.MkdirTemp("", "telos-apply-package-verify-")
+	if err != nil {
+		return fmt.Errorf("create package verify dir: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	if _, err := prepareApplyPackageSpec(dir, packagePath, expectedDigest); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Store is the persistence interface for sessions. Implementations are
 // expected to be safe for concurrent use.
 type Store interface {
@@ -98,6 +112,9 @@ func (fs *FileStore) Create(req SessionCreateRequest) (*Session, error) {
 
 func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	if err := validateCreateRequest(req); err != nil {
+		return nil, err
+	}
+	if err := fs.normalizeCreatePackage(&req); err != nil {
 		return nil, err
 	}
 	if err := fs.validateParentage(req); err != nil {
@@ -162,20 +179,20 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		provenance["cloud_session_name"] = cloudSessionName
 	}
 	m := ManifestFromInitial(InitialManifest{
-		SessionID:          id,
-		SessionKind:        sessionKind,
-		Runtime:            fs.runtime,
-		CreatedAt:          tsNow(),
-		Launcher:           fs.launcher,
-		ParentSessionID:    req.ParentSessionID,
-		SourceSpecPath:     prepared.SourceSpecPath,
-		SessionSpecPath:    prepared.SessionSpecPath,
-		SpecName:           specName,
-		Config:             buildConfig(req),
-		Provenance:         provenance,
-		ApplyPackageDigest: prepared.ApplyPackageDigest,
-		ApplyPackageLock:   prepared.ApplyPackageLock,
-		Access:             access,
+		SessionID:        id,
+		SessionKind:      sessionKind,
+		Runtime:          fs.runtime,
+		CreatedAt:        tsNow(),
+		Launcher:         fs.launcher,
+		ParentSessionID:  req.ParentSessionID,
+		SourceSpecPath:   prepared.SourceSpecPath,
+		SessionSpecPath:  prepared.SessionSpecPath,
+		SpecName:         specName,
+		Config:           buildConfig(req),
+		Provenance:       provenance,
+		PackageDigest:    prepared.PackageDigest,
+		ApplyPackageLock: prepared.ApplyPackageLock,
+		Access:           access,
 		Specs: []InitialManifestSpec{{
 			Index:           0,
 			Name:            specName,
@@ -193,7 +210,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		m.CurrentSpecVersion = &version
 		m.SpecVersions = append(
 			m.SpecVersions,
-			specVersionEntry(version, sessionSpecPath, prepared.SpecData, nil, prepared.ApplyPackageDigest),
+			specVersionEntry(version, sessionSpecPath, prepared.SpecData, nil, prepared.PackageDigest),
 		)
 	}
 
@@ -252,6 +269,33 @@ func validateCreateRequest(req SessionCreateRequest) error {
 	if req.Until != nil && *req.Until <= 0 {
 		return fmt.Errorf("until must be positive: %w", ErrInvalidSession)
 	}
+	hasPackage := strings.TrimSpace(req.PackageDigest) != "" || strings.TrimSpace(req.PackagePath) != ""
+	hasMarkdown := req.SpecMarkdown != nil && strings.TrimSpace(*req.SpecMarkdown) != ""
+	if hasPackage && hasMarkdown {
+		return fmt.Errorf("set either spec_markdown or package_digest, not both: %w", ErrInvalidSession)
+	}
+	if !hasPackage && !hasMarkdown {
+		return fmt.Errorf("spec_markdown or package_digest is required: %w", ErrInvalidSession)
+	}
+	if strings.TrimSpace(req.PackagePath) != "" && strings.TrimSpace(req.PackageDigest) == "" {
+		return fmt.Errorf("package_digest is required with package_path: %w", ErrInvalidSession)
+	}
+	return nil
+}
+
+func (fs *FileStore) normalizeCreatePackage(req *SessionCreateRequest) error {
+	if req == nil || strings.TrimSpace(req.PackagePath) != "" {
+		return nil
+	}
+	digest := strings.TrimSpace(req.PackageDigest)
+	if digest == "" {
+		return nil
+	}
+	path, err := fs.packagePathForDigest(digest)
+	if err != nil {
+		return err
+	}
+	req.PackagePath = path
 	return nil
 }
 
@@ -432,10 +476,7 @@ func (fs *FileStore) prepareSpecForUpdate(req SessionSpecUpdateRequest) (prepare
 
 func (fs *FileStore) createRequestForSpecUpdate(req SessionSpecUpdateRequest, kind *SessionKind) (SessionCreateRequest, error) {
 	packageDigest := strings.TrimSpace(req.PackageDigest)
-	if packageDigest == "" {
-		packageDigest = strings.TrimSpace(req.ApplyPackageDigest)
-	}
-	packagePath := strings.TrimSpace(req.ApplyPackagePath)
+	packagePath := strings.TrimSpace(req.PackagePath)
 	hasPackage := packageDigest != "" || packagePath != ""
 	hasMarkdown := strings.TrimSpace(req.SpecMarkdown) != ""
 	if hasPackage && hasMarkdown {
@@ -453,13 +494,13 @@ func (fs *FileStore) createRequestForSpecUpdate(req SessionSpecUpdateRequest, ki
 	}
 	if packagePath != "" {
 		return SessionCreateRequest{
-			ApplyPackagePath:   packagePath,
-			ApplyPackageDigest: packageDigest,
-			SessionKind:        kind,
-			Model:              req.Model,
-			Thinking:           req.Thinking,
-			MaxCostUSD:         req.MaxCostUSD,
-			AgentTimeoutSec:    req.AgentTimeoutSec,
+			PackagePath:     packagePath,
+			PackageDigest:   packageDigest,
+			SessionKind:     kind,
+			Model:           req.Model,
+			Thinking:        req.Thinking,
+			MaxCostUSD:      req.MaxCostUSD,
+			AgentTimeoutSec: req.AgentTimeoutSec,
 		}, nil
 	}
 	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
@@ -515,9 +556,9 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 	m.CurrentSpecVersion = &version
 	m.SpecVersions = append(
 		m.SpecVersions,
-		specVersionEntry(version, *m.SessionSpecPath, prepared.SpecData, &previousVersion, prepared.ApplyPackageDigest),
+		specVersionEntry(version, *m.SessionSpecPath, prepared.SpecData, &previousVersion, prepared.PackageDigest),
 	)
-	m.ApplyPackageDigest = prepared.ApplyPackageDigest
+	m.PackageDigest = prepared.PackageDigest
 	m.ApplyPackageLock = prepared.ApplyPackageLock
 	m.SourceSpecPath = prepared.SourceSpecPath
 	m.SessionSpecPath = strPtr(*m.SessionSpecPath)
@@ -1190,25 +1231,25 @@ func specVersionEntry(version int, specPath string, data []byte, previous *int, 
 		"created_at":       tsNow(),
 	}
 	if packageDigest != nil && *packageDigest != "" {
-		entry["apply_package_digest"] = *packageDigest
+		entry["package_digest"] = *packageDigest
 	}
 	return entry
 }
 
 type preparedRequestSpec struct {
-	Name               string
-	SourceSpecPath     *string
-	SessionSpecPath    *string
-	ContentHash        *string
-	IntervalSeconds    *int
-	SpecData           []byte
-	ApplyPackageDigest *string
-	ApplyPackageLock   *spec.ApplyPackageManifest
+	Name             string
+	SourceSpecPath   *string
+	SessionSpecPath  *string
+	ContentHash      *string
+	IntervalSeconds  *int
+	SpecData         []byte
+	PackageDigest    *string
+	ApplyPackageLock *spec.ApplyPackageManifest
 }
 
 func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRequestSpec, error) {
-	if strings.TrimSpace(req.ApplyPackagePath) != "" {
-		return prepareApplyPackageSpec(sessionDir, req.ApplyPackagePath, req.ApplyPackageDigest)
+	if strings.TrimSpace(req.PackagePath) != "" {
+		return prepareApplyPackageSpec(sessionDir, req.PackagePath, req.PackageDigest)
 	}
 	if req.SpecMarkdown == nil || strings.TrimSpace(*req.SpecMarkdown) == "" {
 		return preparedRequestSpec{}, fmt.Errorf("spec_markdown is required")
@@ -1232,17 +1273,17 @@ func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRe
 	if err != nil {
 		return preparedRequestSpec{}, err
 	}
-	applyPackage, err := spec.BuildApplyPackage(compiled, spec.ApplyPackageOptions{})
+	applyPackage, err := spec.BuildApplyPackage(compiled)
 	if err != nil {
 		return preparedRequestSpec{}, fmt.Errorf("build apply package: %w", err)
 	}
 	prepared := preparedRequestSpec{
-		Name:               compiled.Environment.Name,
-		ContentHash:        strPtr(compiled.ContentHash),
-		IntervalSeconds:    compiled.Environment.IntervalSeconds,
-		SpecData:           data,
-		ApplyPackageDigest: strPtr(applyPackage.Digest),
-		ApplyPackageLock:   &applyPackage.Manifest,
+		Name:             compiled.Environment.Name,
+		ContentHash:      strPtr(compiled.ContentHash),
+		IntervalSeconds:  compiled.Environment.IntervalSeconds,
+		SpecData:         data,
+		PackageDigest:    strPtr(applyPackage.Digest),
+		ApplyPackageLock: &applyPackage.Manifest,
 	}
 	return prepared, nil
 }
@@ -1275,13 +1316,13 @@ func prepareApplyPackageSpec(sessionDir string, packagePath string, expectedDige
 		return preparedRequestSpec{}, err
 	}
 	return preparedRequestSpec{
-		Name:               compiled.Environment.Name,
-		SourceSpecPath:     strPtr(specPath),
-		ContentHash:        strPtr(compiled.ContentHash),
-		IntervalSeconds:    compiled.Environment.IntervalSeconds,
-		SpecData:           specData,
-		ApplyPackageDigest: strPtr(actualDigest),
-		ApplyPackageLock:   manifest,
+		Name:             compiled.Environment.Name,
+		SourceSpecPath:   strPtr(specPath),
+		ContentHash:      strPtr(compiled.ContentHash),
+		IntervalSeconds:  compiled.Environment.IntervalSeconds,
+		SpecData:         specData,
+		PackageDigest:    strPtr(actualDigest),
+		ApplyPackageLock: manifest,
 	}, nil
 }
 

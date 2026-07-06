@@ -37,8 +37,9 @@ func Run(ctx context.Context, cfg Config) error {
 		if err != nil {
 			return err
 		}
-		store = newCloudSessionStore(baseStore, substrate)
-		startSessionBootstrapReconciler(ctx, store)
+		materializer := newApplyPackageMaterializer(baseStore.PackageRoot, cfg.Auth.Token)
+		store = newCloudSessionStore(baseStore, substrate, materializer)
+		startSessionBootstrapReconciler(ctx, store, materializer)
 	}
 	mux := http.NewServeMux()
 	authorizer := authorizerForConfig(cfg, baseStore)

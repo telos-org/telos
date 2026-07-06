@@ -2,6 +2,8 @@ package telosd
 
 import (
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -38,7 +40,7 @@ func (s *recordingSubstrate) Stop(session *sessionapi.Session) error {
 func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{}
-	store := newCloudSessionStore(base, substrate)
+	store := newCloudSessionStore(base, substrate, nil)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
@@ -75,7 +77,7 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 func TestCloudSessionStoreDefaultsSpecPutCreatedSessions(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{}
-	store := newCloudSessionStore(base, substrate)
+	store := newCloudSessionStore(base, substrate, nil)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
 	response, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown})
@@ -97,10 +99,56 @@ func TestCloudSessionStoreDefaultsSpecPutCreatedSessions(t *testing.T) {
 	}
 }
 
+func TestCloudSessionStoreMaterializesPackageDigestUpdates(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	base.PackageRoot = t.TempDir()
+	substrate := &recordingSubstrate{}
+	pkg := buildMaterializerTestPackage(t, "postgres")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.Header.Get("Authorization"); got != "Bearer runtime-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		_, _ = w.Write(pkg.Bytes)
+	}))
+	defer server.Close()
+	t.Setenv("TELOS_PACKAGE_BUNDLE_BASE_URL", server.URL)
+	materializer := newApplyPackageMaterializer(base.PackageRoot, "runtime-token")
+	materializer.client = server.Client()
+	store := newCloudSessionStore(base, substrate, materializer)
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+
+	if _, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err != nil {
+		t.Fatal(err)
+	}
+	response, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{
+		PackageDigest: pkg.Digest,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Session == nil || len(response.Session.SpecVersions) == 0 {
+		t.Fatalf("updated session package digest: %#v", response.Session)
+	}
+	lastVersion := response.Session.SpecVersions[len(response.Session.SpecVersions)-1]
+	if got := lastVersion["package_digest"]; got != pkg.Digest {
+		t.Fatalf("updated session package digest: got %#v want %q", got, pkg.Digest)
+	}
+	path, err := sessionapi.PackagePathForDigest(base.PackageRoot, pkg.Digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := sessionapi.VerifyPackageDigest(path, pkg.Digest); err != nil {
+		t.Fatalf("VerifyPackageDigest: %v", err)
+	}
+	if len(substrate.applies) != 2 || substrate.applies[1].wakeReason != "spec_updated" {
+		t.Fatalf("applies: %+v", substrate.applies)
+	}
+}
+
 func TestCloudSessionStoreRemovesSessionWhenWorkerApplyFails(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{applyErr: errors.New("worker launch failed")}
-	store := newCloudSessionStore(base, substrate)
+	store := newCloudSessionStore(base, substrate, nil)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
 	_, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
@@ -122,7 +170,7 @@ func TestCloudSessionStoreRemovesSessionWhenWorkerApplyFails(t *testing.T) {
 func TestCloudSessionStoreLeavesFileStateRunningWhenWorkerStopFails(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{stopErr: errors.New("worker stop failed")}
-	store := newCloudSessionStore(base, substrate)
+	store := newCloudSessionStore(base, substrate, nil)
 	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})

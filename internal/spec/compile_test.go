@@ -231,6 +231,37 @@ func TestCompileWithoutDeclaredSkillsOnlyIncludesVerifierSkills(t *testing.T) {
 	}
 }
 
+func TestCompileIgnoresUnrelatedManifestJSON(t *testing.T) {
+	dir := t.TempDir()
+	defaultSkills := filepath.Join(dir, "default-skills")
+	for _, name := range []string{"verify-engineering", "verify-quality"} {
+		writePackageTestSkill(t, defaultSkills, name, map[string]string{
+			"SKILL.md": "---\nname: " + name + "\n---\nVerify.",
+		})
+	}
+	t.Setenv("TELOS_SKILLS_DIR", defaultSkills)
+
+	specPath := filepath.Join(dir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: app-manifest\nplatform: cloud\n---\nBody"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"app","icons":[]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	names := map[string]bool{}
+	for _, skill := range compiled.Skills {
+		names[skill.Name] = true
+	}
+	if !names["verify-engineering"] || !names["verify-quality"] {
+		t.Fatalf("unrelated manifest.json suppressed default verifier skills: %#v", names)
+	}
+}
+
 func TestCompileWithEmphasizedSkill(t *testing.T) {
 	dir := t.TempDir()
 	skillDir := filepath.Join(dir, "critical-skill")
