@@ -113,6 +113,22 @@ type SessionSpecUpdateResponse struct {
 	Session   *Session `json:"session"`
 }
 
+type SpecUpdateEvent struct {
+	SessionID             string
+	SpecName              string
+	SessionCreatedAt      string
+	TranscriptPath        string
+	EvidencePath          string
+	SpecPath              string
+	EpochID               int
+	PreviousSpecVersion   int
+	CurrentSpecVersion    int
+	PreviousSpecSHA256    string
+	CurrentSpecSHA256     string
+	PreviousPackageDigest string
+	CurrentPackageDigest  string
+}
+
 // SessionSpecResponse is returned by GET /api/sessions/{id}/spec.
 type SessionSpecResponse struct {
 	DirName     string `json:"dir_name"`

@@ -1,6 +1,6 @@
 module github.com/telos-org/telos
 
-go 1.26.3
+go 1.26
 
 require gopkg.in/yaml.v3 v3.0.1
 

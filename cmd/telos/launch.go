@@ -59,11 +59,11 @@ func cmdLaunch(command, action string, args []string) {
 
 	if ctx, ok := rootSessionContext(); ok {
 		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for child sessions")
+			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session; use telos run to launch nested specs")
 			os.Exit(1)
 		}
 		if localConfigSet {
-			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a root session")
+			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a Telos session")
 			os.Exit(1)
 		}
 		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, *agentTimeout)
@@ -97,11 +97,11 @@ func cmdLaunch(command, action string, args []string) {
 	localRootID, inLocalRoot := localRootSessionID()
 	if inLocalRoot {
 		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply is not available inside a root session; use telos run for child sessions")
+			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session; use telos run to launch nested specs")
 			os.Exit(1)
 		}
 		if launchMode != launchLocal {
-			fmt.Fprintln(os.Stderr, "error: local root sessions can only launch platform: local child sessions")
+			fmt.Fprintln(os.Stderr, "error: a local Telos session can only launch specs with platform: local")
 			os.Exit(1)
 		}
 	}
@@ -217,14 +217,14 @@ func decideLaunchMode(
 		return "", fmt.Errorf("local run config flags require a platform: local spec")
 	}
 	if !cloudConfigured {
-		return "", fmt.Errorf("non-local spec requires cloud config; run `telos login` first")
+		return "", fmt.Errorf("this spec runs in Telos Cloud; run `telos login` first")
 	}
 	return launchCloudApply, nil
 }
 
 func validateLaunchCommand(command string, mode launchMode) error {
 	if command == "run" && mode == launchCloudApply {
-		return fmt.Errorf("telos run for cloud specs must be used inside a root session; use telos apply to create or update a root session")
+		return fmt.Errorf("use telos apply to start cloud specs; telos run can only launch cloud specs from inside an existing Telos session")
 	}
 	return nil
 }

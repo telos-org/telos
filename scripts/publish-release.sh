@@ -4,7 +4,7 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 version="${1:-}"
 bucket="${TELOS_RELEASE_BUCKET:-telos-runtime-artifacts}"
-project="${TELOS_GCP_PROJECT:-telos-experiments}"
+project="${TELOS_GCP_PROJECT:?set TELOS_GCP_PROJECT to the GCP project that owns the release bucket}"
 location="${TELOS_GCS_LOCATION:-us-west1}"
 
 if [[ -z "${version}" ]]; then

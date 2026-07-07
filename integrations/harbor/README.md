@@ -1,7 +1,10 @@
 # Harbor Integration
 
-This directory makes Telos available to Harbor as an executable agent. Harbor
-loads the Python shim, but the evaluated agent is the Go `telos` binary.
+[Harbor](https://pypi.org/project/harbor/) is a harness for running coding
+agents against containerized benchmark tasks; we use it to evaluate Telos on
+SCBench. This directory makes Telos available to Harbor as an executable
+agent: Harbor loads the Python shim, but the evaluated agent is the Go
+`telos` binary.
 
 The shim:
 

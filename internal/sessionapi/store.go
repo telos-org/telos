@@ -75,11 +75,12 @@ type Store interface {
 // FileStore is a local file-backed Store that writes session manifests under a
 // root directory (typically .telos/sessions).
 type FileStore struct {
-	Root        string
-	PackageRoot string
-	runtime     SessionRuntime
-	launcher    string
-	mu          sync.Mutex
+	Root         string
+	PackageRoot  string
+	OnSpecUpdate func(SpecUpdateEvent)
+	runtime      SessionRuntime
+	launcher     string
+	mu           sync.Mutex
 }
 
 // NewFileStore returns a FileStore rooted at the given directory.
@@ -165,7 +166,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	sessionSpecPath := ""
 	if len(prepared.SpecData) > 0 {
 		sessionSpecPath = filepath.Join(specDir, "spec.md")
-		if err := os.WriteFile(sessionSpecPath, prepared.SpecData, 0o644); err != nil {
+		if err := writeFileAtomic(sessionSpecPath, prepared.SpecData, 0o644); err != nil {
 			return nil, fmt.Errorf("write session spec: %w", err)
 		}
 	}
@@ -448,9 +449,12 @@ func (fs *FileStore) UpdateSpec(name string, req SessionSpecUpdateRequest) (*Ses
 		}
 		return &SessionSpecUpdateResponse{Operation: "created", Session: session}, nil
 	case 1:
-		session, err := fs.updateSpecByIDLocked(ids[0], req)
+		session, changed, err := fs.updateSpecByIDLocked(ids[0], req)
 		if err != nil {
 			return nil, err
+		}
+		if !changed {
+			return &SessionSpecUpdateResponse{Operation: "unchanged", Session: session}, nil
 		}
 		return &SessionSpecUpdateResponse{Operation: "updated", Session: session}, nil
 	default:
@@ -522,42 +526,46 @@ func (fs *FileStore) packagePathForDigest(digest string) (string, error) {
 	return PackagePathForDigest(root, digest)
 }
 
-func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateRequest) (*Session, error) {
+func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateRequest) (*Session, bool, error) {
 	m, err := ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+			return nil, false, fmt.Errorf("session %s: %w", id, ErrNotFound)
 		}
-		return nil, err
+		return nil, false, err
 	}
 	if m.ParentSessionID != nil && *m.ParentSessionID != "" {
-		return nil, fmt.Errorf("child sessions do not have mutable specs: %w", ErrInvalidSession)
+		return nil, false, fmt.Errorf("child sessions do not have mutable specs: %w", ErrInvalidSession)
 	}
 	if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
-		return nil, fmt.Errorf("root session has no mutable spec: %w", ErrInvalidSession)
+		return nil, false, fmt.Errorf("root session has no mutable spec: %w", ErrInvalidSession)
 	}
 
 	createReq, err := fs.createRequestForSpecUpdate(req, nil)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	prepared, err := prepareRequestSpec(fs.sessionDir(id), createReq)
 	if err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if prepared.Name != m.SpecName {
-		return nil, fmt.Errorf("root session spec name is immutable: %w", ErrInvalidSession)
-	}
-	if err := os.WriteFile(*m.SessionSpecPath, prepared.SpecData, 0o644); err != nil {
-		return nil, fmt.Errorf("write session spec: %w", err)
+		return nil, false, fmt.Errorf("root session spec name is immutable: %w", ErrInvalidSession)
 	}
 	previousVersion := ptrOr(m.CurrentSpecVersion, 1)
+	previousPackageDigest := strValue(m.PackageDigest)
+	previousSpecSHA256 := latestSpecSHA256(m.SpecVersions)
+	if previousSpecSHA256 == specSHA256(prepared.SpecData) && previousPackageDigest == strValue(prepared.PackageDigest) {
+		session, err := fs.deriveSession(id, m)
+		return session, false, err
+	}
+	if err := writeFileAtomic(*m.SessionSpecPath, prepared.SpecData, 0o644); err != nil {
+		return nil, false, fmt.Errorf("write session spec: %w", err)
+	}
 	version := previousVersion + 1
+	versionEntry := specVersionEntry(version, *m.SessionSpecPath, prepared.SpecData, &previousVersion, prepared.PackageDigest)
 	m.CurrentSpecVersion = &version
-	m.SpecVersions = append(
-		m.SpecVersions,
-		specVersionEntry(version, *m.SessionSpecPath, prepared.SpecData, &previousVersion, prepared.PackageDigest),
-	)
+	m.SpecVersions = append(m.SpecVersions, versionEntry)
 	m.PackageDigest = prepared.PackageDigest
 	m.ApplyPackageLock = prepared.ApplyPackageLock
 	m.SourceSpecPath = prepared.SourceSpecPath
@@ -570,9 +578,19 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		m.Specs[0].IntervalSeconds = prepared.IntervalSeconds
 	}
 	if err := WriteManifest(fs.manifestPath(id), m); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return fs.deriveSession(id, m)
+	fs.emitSpecUpdate(specUpdateEvent(id, m, SpecUpdateEvent{
+		PreviousSpecVersion:   previousVersion,
+		CurrentSpecVersion:    version,
+		PreviousSpecSHA256:    previousSpecSHA256,
+		CurrentSpecSHA256:     stringMapValue(versionEntry, "spec_sha256"),
+		PreviousPackageDigest: previousPackageDigest,
+		CurrentPackageDigest:  strValue(prepared.PackageDigest),
+		SpecPath:              *m.SessionSpecPath,
+	}))
+	session, err := fs.deriveSession(id, m)
+	return session, true, err
 }
 
 // List returns all sessions ordered by creation time descending.
@@ -733,6 +751,32 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 		events = append(events, specEvents...)
 	}
 	return events, nil
+}
+
+func (fs *FileStore) emitSpecUpdate(event SpecUpdateEvent) {
+	if fs.OnSpecUpdate == nil {
+		return
+	}
+	fs.OnSpecUpdate(event)
+}
+
+func specUpdateEvent(id string, m *Manifest, event SpecUpdateEvent) SpecUpdateEvent {
+	if m == nil {
+		return event
+	}
+	event.SessionID = id
+	event.SpecName = m.SpecName
+	event.SessionCreatedAt = m.CreatedAt
+	if open := m.OpenEpoch(); open != nil {
+		event.EpochID = open.ID
+	}
+	if len(m.Specs) == 0 {
+		return event
+	}
+	spec := m.Specs[0]
+	event.TranscriptPath = ptrOr(spec.TranscriptPath, "")
+	event.EvidencePath = ptrOr(spec.EvidencePath, "")
+	return event
 }
 
 // --------- Derivation (manifest -> Session) ------------------------------------------------------------------------------------------------------------------------
@@ -1217,7 +1261,6 @@ func cloneSpecVersions(versions []map[string]any) []map[string]any {
 }
 
 func specVersionEntry(version int, specPath string, data []byte, previous *int, packageDigest *string) map[string]any {
-	hash := sha256.Sum256(data)
 	var previousVersion any
 	if previous != nil {
 		previousVersion = *previous
@@ -1225,7 +1268,7 @@ func specVersionEntry(version int, specPath string, data []byte, previous *int, 
 	entry := map[string]any{
 		"version":          version,
 		"spec_path":        specPath,
-		"spec_sha256":      fmt.Sprintf("%x", hash),
+		"spec_sha256":      specSHA256(data),
 		"previous_version": previousVersion,
 		"provenance":       map[string]any{"type": "inline"},
 		"created_at":       tsNow(),
@@ -1234,6 +1277,11 @@ func specVersionEntry(version int, specPath string, data []byte, previous *int, 
 		entry["package_digest"] = *packageDigest
 	}
 	return entry
+}
+
+func specSHA256(data []byte) string {
+	hash := sha256.Sum256(data)
+	return fmt.Sprintf("%x", hash)
 }
 
 type preparedRequestSpec struct {
@@ -1392,11 +1440,64 @@ func strPtr(s string) *string {
 	return &s
 }
 
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	file, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := file.Name()
+	defer os.Remove(tmpPath)
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Chmod(perm); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, path)
+}
+
+func strValue(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
 func ptrOr[T any](p *T, def T) T {
 	if p != nil {
 		return *p
 	}
 	return def
+}
+
+func latestSpecSHA256(versions []map[string]any) string {
+	for i := len(versions) - 1; i >= 0; i-- {
+		if value := stringMapValue(versions[i], "spec_sha256"); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func stringMapValue(m map[string]any, key string) string {
+	if m == nil {
+		return ""
+	}
+	value, _ := m[key].(string)
+	return value
 }
 
 func runtimeMode(runtime SessionRuntime) string {

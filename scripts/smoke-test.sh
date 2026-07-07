@@ -2,11 +2,11 @@
 # CLI contract smoke test for Telos.
 #
 # Usage:
-#   TELOS_SMOKE_BIN=/path/to/telos TELOS_SMOKE_TELOSD=/path/to/telosd ./smoke_test.sh
+#   TELOS_SMOKE_BIN=/path/to/telos TELOS_SMOKE_TELOSD=/path/to/telosd ./smoke-test.sh
 #
-# The script validates the end-user CLI surface and launches one tiny isolated
-# local run so dogfooding covers real session creation, inspection, logs, stop,
-# and persisted artifacts.
+# Validates the end-user CLI surface, then launches one tiny isolated local
+# run to cover real session creation, inspection, logs, stop, and persisted
+# artifacts.
 
 set -euo pipefail
 
@@ -113,8 +113,30 @@ json_has_session() {
   python3 -c 'import json,sys; ids=[s.get("session_id") for s in json.load(sys.stdin).get("sessions", [])]; assert sys.argv[1] in ids' "$expected"
 }
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-SPEC_PATH="$SCRIPT_DIR/SPEC.md"
+FIXTURE_DIR="$(mktemp -d)"
+mkdir -p "$FIXTURE_DIR/fixture"
+FIXTURE_SPEC_PATH="$FIXTURE_DIR/fixture/SPEC.md"
+
+cat > "$FIXTURE_SPEC_PATH" <<'FIXTURE_SPEC'
+---
+version: v0
+name: smoke-fixture
+platform: local
+---
+
+# Goal
+
+Create a file called `hello.txt` in the workspace root containing exactly:
+
+smoke test passed
+FIXTURE_SPEC
+
+(
+  cd "$FIXTURE_DIR"
+  git init -q
+  git add -A
+  git -c user.name="Telos Smoke" -c user.email="smoke@telos.local" commit -q -m "init"
+)
 
 echo "=== 1. Help and version ==="
 
@@ -176,19 +198,15 @@ check_not_contains "plan missing spec has no panic" "$PLAN_MISSING" "panic"
 
 echo "=== 3. Plan contract ==="
 
-if [ -f "$SPEC_PATH" ]; then
-  PLAN_HUMAN="$(telos_cmd plan "$SPEC_PATH" 2>&1)"
-  check_contains "plan human includes spec name" "$PLAN_HUMAN" "telos-cli-dogfood"
-  check_contains "plan human includes platform" "$PLAN_HUMAN" "local"
-  check_not_contains "plan human has no panic" "$PLAN_HUMAN" "panic"
+PLAN_HUMAN="$(telos_cmd plan "$FIXTURE_SPEC_PATH" 2>&1)"
+check_contains "plan human includes spec name" "$PLAN_HUMAN" "smoke-fixture"
+check_contains "plan human includes platform" "$PLAN_HUMAN" "local"
+check_not_contains "plan human has no panic" "$PLAN_HUMAN" "panic"
 
-  PLAN_JSON="$(telos_cmd plan "$SPEC_PATH" --json 2>&1)"
-  check_json "plan --json parses" "$PLAN_JSON"
-  check_contains "plan JSON includes spec name" "$PLAN_JSON" '"name": "telos-cli-dogfood"'
-  check_contains "plan JSON includes platform" "$PLAN_JSON" '"platform": "local"'
-else
-  fail "SPEC.md exists next to smoke_test.sh"
-fi
+PLAN_JSON="$(telos_cmd plan "$FIXTURE_SPEC_PATH" --json 2>&1)"
+check_json "plan --json parses" "$PLAN_JSON"
+check_contains "plan JSON includes spec name" "$PLAN_JSON" '"name": "smoke-fixture"'
+check_contains "plan JSON includes platform" "$PLAN_JSON" '"platform": "local"'
 
 echo "=== 4. List contract ==="
 
@@ -201,32 +219,8 @@ check_contains "list JSON includes sessions" "$LIST_JSON" '"sessions"'
 
 echo "=== 5. Fixture lifecycle ==="
 
-FIXTURE_DIR="$(mktemp -d)"
-mkdir -p "$FIXTURE_DIR/fixture"
-
-cat > "$FIXTURE_DIR/fixture/SPEC.md" <<'FIXTURE_SPEC'
----
-version: v0
-name: smoke-fixture
-platform: local
----
-
-# Goal
-
-Create a file called `hello.txt` in the workspace root containing exactly:
-
-smoke test passed
-FIXTURE_SPEC
-
-(
-  cd "$FIXTURE_DIR"
-  git init -q
-  git add -A
-  git -c user.name="Telos Smoke" -c user.email="smoke@telos.local" commit -q -m "init"
-)
-
 echo "  launching fixture run..."
-RUN_JSON="$(telos_fixture run "$FIXTURE_DIR/fixture/SPEC.md" \
+RUN_JSON="$(telos_fixture run "$FIXTURE_SPEC_PATH" \
   --json \
   --until 1 \
   --max-cost-usd 4 \

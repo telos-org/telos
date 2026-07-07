@@ -10,7 +10,6 @@
 //	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
 //	telos describe SESSION [--json]
 //	telos logs [-f] [--verbose] SESSION
-//	telos open SESSION [--target service|dashboard] [--path PATH] [--json]
 //	telos stop SESSION [--json]
 //	telos delete SESSION [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
@@ -58,8 +57,6 @@ func main() {
 		cmdDescribe(os.Args[2:])
 	case "logs":
 		cmdLogs(os.Args[2:])
-	case "open":
-		cmdOpen(os.Args[2:])
 	case "stop":
 		cmdStop(os.Args[2:])
 	case "delete":
@@ -81,17 +78,16 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "usage: telos <command> [args]")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "commands:")
-	fmt.Fprintln(out, "  plan SPEC.md       Show compiled spec/package plan")
-	fmt.Fprintln(out, "  push SPEC.md       Push an immutable spec package")
-	fmt.Fprintln(out, "  apply SPEC.md      Apply a spec as a managed cloud session")
-	fmt.Fprintln(out, "  run SPEC.md        Run a local or delegated spec")
+	fmt.Fprintln(out, "  plan SPEC.md       Preview a spec without running it")
+	fmt.Fprintln(out, "  push SPEC.md       Publish a versioned spec or skill for reuse")
+	fmt.Fprintln(out, "  apply SPEC.md      Create or update a cloud session from a spec")
+	fmt.Fprintln(out, "  run SPEC.md        Run a spec locally")
 	fmt.Fprintln(out, "  list               List local and cloud sessions")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
 	fmt.Fprintln(out, "  logs SESSION       Show session progress")
-	fmt.Fprintln(out, "  open SESSION       Print a verified service or dashboard URL")
-	fmt.Fprintln(out, "  stop SESSION       Stop a session; cloud sessions are deleted")
+	fmt.Fprintln(out, "  stop SESSION       Stop a session (cloud sessions are also deleted)")
 	fmt.Fprintln(out, "  delete SESSION     Delete a cloud session")
-	fmt.Fprintln(out, "  login              Configure cloud access")
+	fmt.Fprintln(out, "  login              Log in to Telos Cloud")
 	fmt.Fprintln(out, "  version            Show version")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "global flags:")

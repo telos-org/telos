@@ -208,9 +208,8 @@ func controllerPromptEnabled(manifest *sessionapi.Manifest) bool {
 }
 
 func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecutor, error) {
-	// Check pi is available
 	if _, err := exec.LookPath("pi"); err != nil {
-		return nil, fmt.Errorf("pi executable not found on PATH. Install pi (https://github.com/mariozechner/pi-coding-agent) to run local sessions")
+		return nil, fmt.Errorf("local runs use the pi coding agent, but `pi` is not on your PATH; install it with `npm install -g @mariozechner/pi-coding-agent`")
 	}
 	p := platform.NewLocalPlatform(workspace)
 	model := cfg.Model

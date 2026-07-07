@@ -50,8 +50,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
-		"apply SPEC.md      Apply a spec as a managed cloud session",
-		"open SESSION",
+		"apply SPEC.md      Create or update a cloud session from a spec",
 		"version            Show version",
 		"--version",
 		"telos <command> --help",
@@ -59,17 +58,6 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("usage missing %q:\n%s", want, text)
 		}
-	}
-}
-
-func TestPrintOpenReceipt(t *testing.T) {
-	var out bytes.Buffer
-	printOpenReceipt(&out, cloud.SessionOpenResponse{
-		URL: "https://status-ping-api.usetelos.ai",
-	})
-
-	if got := out.String(); got != "https://status-ping-api.usetelos.ai\n" {
-		t.Fatalf("receipt: got %q", got)
 	}
 }
 
@@ -368,7 +356,7 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 		},
 		{
 			name:    "unspecified platform requires cloud login",
-			wantErr: "non-local spec requires cloud config",
+			wantErr: "runs in Telos Cloud",
 		},
 		{
 			name:           "cloud rejects local flags",
@@ -433,7 +421,7 @@ func TestValidateLaunchCommandRejectsCloudRunOutsideRoot(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected cloud run rejection")
 	}
-	if !strings.Contains(err.Error(), "inside a root session") {
+	if !strings.Contains(err.Error(), "use telos apply") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if err := validateLaunchCommand("apply", launchCloudApply); err != nil {
@@ -970,6 +958,12 @@ Correctness,8.0/10
 </review>
 
 	<summary>Needs one more check.</summary>`
+	transcript += `
+
+	<external_update>
+Reload the current spec.
+- Current spec version: ` + "`2`" + `
+</external_update>`
 
 	var out bytes.Buffer
 	printLogs(&out, transcript, false)
@@ -979,6 +973,7 @@ Correctness,8.0/10
 		"#2 Second checkpoint",
 		"Review\ncriteria,score\nCorrectness,8.0/10",
 		"Summary\nNeeds one more check.",
+		"External update\nReload the current spec.\n- Current spec version: `2`",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("log output missing %q:\n%s", want, text)
