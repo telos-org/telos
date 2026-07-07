@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -99,6 +100,34 @@ func TestCloudSessionStoreDefaultsSpecPutCreatedSessions(t *testing.T) {
 	}
 }
 
+func TestCloudSessionStoreSkipsApplyForUnchangedSpecPut(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{}
+	store := newCloudSessionStore(base, substrate, nil)
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(substrate.applies) != 1 {
+		t.Fatalf("initial applies: got %d", len(substrate.applies))
+	}
+	response, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if response.Operation != "unchanged" {
+		t.Fatalf("operation = %q want unchanged", response.Operation)
+	}
+	if response.Session == nil || response.Session.SessionID != session.SessionID {
+		t.Fatalf("session: got %#v", response.Session)
+	}
+	if len(substrate.applies) != 1 {
+		t.Fatalf("unchanged update should not apply worker: %+v", substrate.applies)
+	}
+}
+
 func TestCloudSessionStoreMaterializesPackageDigestUpdates(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	base.PackageRoot = t.TempDir()
@@ -142,6 +171,53 @@ func TestCloudSessionStoreMaterializesPackageDigestUpdates(t *testing.T) {
 	}
 	if len(substrate.applies) != 2 || substrate.applies[1].wakeReason != "spec_updated" {
 		t.Fatalf("applies: %+v", substrate.applies)
+	}
+}
+
+func TestCloudSessionStoreProjectsSpecUpdates(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{}
+	store := newCloudSessionStore(base, substrate, nil)
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
+
+	if _, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated}); err != nil {
+		t.Fatal(err)
+	}
+
+	transcript, err := store.Transcript(session.SessionID)
+	if err != nil {
+		t.Fatalf("Transcript: %v", err)
+	}
+	for _, want := range []string{
+		"## External Update",
+		"<external_update>",
+		"from version 1 to 2",
+		"Current spec path: `",
+	} {
+		if !strings.Contains(transcript, want) {
+			t.Fatalf("transcript missing %q:\n%s", want, transcript)
+		}
+	}
+	events, err := store.Events(session.SessionID)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var found bool
+	for _, event := range events {
+		if event.Event == "external_update" {
+			found = true
+			if got := event.Data["current_spec_version"]; got != float64(2) {
+				t.Fatalf("current_spec_version: got %#v", got)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missing external_update event: %#v", events)
 	}
 }
 

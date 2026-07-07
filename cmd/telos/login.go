@@ -39,5 +39,5 @@ func cmdLogin(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Println(ep)
+	fmt.Printf("logged in to %s\n", ep)
 }

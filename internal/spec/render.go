@@ -220,7 +220,7 @@ func renderSkillsRoster(compiled *CompiledEnvironment, role Role, opts PromptOpt
 	lines := []string{
 		"## Skills",
 		"",
-		"Use skill names as routing hints. Pi can load mounted skill files by name; prompts reference names instead of inlining skill bodies. Skills marked `required evaluation rubric` are grading rubrics, not optional guidance.",
+		"Use skill names as routing hints. The agent can load mounted skill files by name; prompts reference names instead of inlining skill bodies. Skills marked `required evaluation rubric` are grading rubrics, not optional guidance.",
 		"",
 	}
 	for _, s := range skills {
@@ -311,6 +311,7 @@ func renderTranscriptProtocol(transcriptPath string, role Role) string {
 		"- The runtime appends your assistant response to this file after the turn.",
 		"- First action every turn: read this transcript path.",
 		"- Use it to gather summarized session state: prior claims, delivered changes, evaluator findings, progress updates, and open uncertainty.",
+		"- Treat <external_update> blocks as operator/runtime changes to the desired spec; reload the current spec path named in the block and realign before continuing.",
 		"- If the transcript only contains the header, proceed from scratch against the spec.",
 		"- Do not paste, summarize, rewrite, or edit the whole transcript directly.",
 		"- Write notes, claims, checks, findings, and uncertainty in your final response when they would help an independent evaluator.",

@@ -217,7 +217,7 @@ func ensureSessionWorkspace(sessionDir string, manifest *sessionapi.Manifest) er
 		// downgrade to an empty repo — the original source is gone and the
 		// runner has no way to fetch it back.
 		if manifest.Workspace != nil && manifest.Workspace.Mode != "" && manifest.Workspace.Mode != workspaceModeEmpty {
-			return fmt.Errorf("session workspace (%s) is missing and has no checkpoint to rehydrate; recreate the session", manifest.Workspace.Mode)
+			return fmt.Errorf("session workspace (%s) is missing and no saved checkpoint exists to restore it; recreate the session", manifest.Workspace.Mode)
 		}
 		base, err := initSnapshotRepo(active)
 		if err != nil {
@@ -233,10 +233,10 @@ func ensureSessionWorkspace(sessionDir string, manifest *sessionapi.Manifest) er
 		return nil
 	}
 	if err := extractWorkspaceArtifact(archive, active); err != nil {
-		return fmt.Errorf("rehydrate session workspace: %w", err)
+		return fmt.Errorf("restore session workspace: %w", err)
 	}
 	if err := configureSessionGitIdentity(active); err != nil {
-		return fmt.Errorf("configure rehydrated workspace git identity: %w", err)
+		return fmt.Errorf("configure restored workspace git identity: %w", err)
 	}
 	return nil
 }
@@ -451,7 +451,7 @@ func ensureScopeMarker(scope string, sessionsRoot string) error {
 
 	execRoot := filepath.Dir(sessionsRoot)
 	if err := os.MkdirAll(execRoot, 0o755); err != nil {
-		return fmt.Errorf("create local execroot: %w", err)
+		return fmt.Errorf("create local workspace root: %w", err)
 	}
 
 	marker := filepath.Join(scope, ".telos")

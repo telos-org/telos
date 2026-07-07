@@ -26,6 +26,9 @@ func newCloudSessionStore(
 	substrate sessionSubstrate,
 	materializer *applyPackageMaterializer,
 ) *cloudSessionStore {
+	if base.OnSpecUpdate == nil {
+		base.OnSpecUpdate = projectSpecUpdate
+	}
 	return &cloudSessionStore{
 		FileStore:    base,
 		substrate:    substrate,
@@ -63,6 +66,9 @@ func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUp
 		return nil, err
 	}
 	if response.Session == nil {
+		return response, nil
+	}
+	if response.Operation == "unchanged" {
 		return response, nil
 	}
 	wakeReason := "spec_updated"

@@ -279,7 +279,19 @@ func sessionTurn(sess sessionapi.Session) string {
 	if sess.CurrentRound == nil || sess.CurrentRole == nil || *sess.CurrentRole == "" {
 		return "-"
 	}
-	return fmt.Sprintf("%s#%d", *sess.CurrentRole, *sess.CurrentRound)
+	return fmt.Sprintf("%s#%d", displayRole(*sess.CurrentRole), *sess.CurrentRound)
+}
+
+// displayRole maps internal game roles to the terms used everywhere else in
+// user-facing output.
+func displayRole(role string) string {
+	switch role {
+	case "prover":
+		return "implementation"
+	case "verifier":
+		return "evaluation"
+	}
+	return role
 }
 
 func sessionArtifact(sess sessionapi.Session) string {

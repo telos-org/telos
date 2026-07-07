@@ -1,5 +1,6 @@
 .telos/
 /telos
+/dogfood/
 *.exe
 bazel-*
 dist/

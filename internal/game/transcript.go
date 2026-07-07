@@ -29,6 +29,17 @@ type AppendTurnOptions struct {
 	EvidencePath  string
 }
 
+type ExternalUpdate struct {
+	Message               string
+	PreviousSpecVersion   int
+	CurrentSpecVersion    int
+	PreviousSpecSHA256    string
+	CurrentSpecSHA256     string
+	PreviousPackageDigest string
+	CurrentPackageDigest  string
+	SpecPath              string
+}
+
 // InitializeTranscript creates a transcript header if the file does not exist.
 func InitializeTranscript(path, sessionID, systemName, evidencePath, startedAt string) error {
 	info, err := os.Stat(path)
@@ -142,6 +153,45 @@ func AppendLiveAgentEvent(path string, role string, roleRound int, turnID string
 		fmt.Fprintf(f, "_Turn metadata: turn `%s`._\n\n", turnID)
 	}
 	fmt.Fprintf(f, "<%s>%s</%s>\n", event.Kind, strings.TrimSpace(event.Text), event.Kind)
+	return nil
+}
+
+func AppendExternalUpdate(path string, update ExternalUpdate) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+
+	message := strings.TrimSpace(update.Message)
+	if message == "" {
+		message = "The operator updated the session spec. Reload the current spec before continuing."
+	}
+	fmt.Fprint(f, "\n## External Update\n\n")
+	fmt.Fprintln(f, "<external_update>")
+	fmt.Fprintln(f, message)
+	fmt.Fprintln(f)
+	fmt.Fprintf(f, "- Previous spec version: `%d`\n", update.PreviousSpecVersion)
+	fmt.Fprintf(f, "- Current spec version: `%d`\n", update.CurrentSpecVersion)
+	if update.PreviousSpecSHA256 != "" {
+		fmt.Fprintf(f, "- Previous spec SHA-256: `%s`\n", update.PreviousSpecSHA256)
+	}
+	if update.CurrentSpecSHA256 != "" {
+		fmt.Fprintf(f, "- Current spec SHA-256: `%s`\n", update.CurrentSpecSHA256)
+	}
+	if update.PreviousPackageDigest != "" {
+		fmt.Fprintf(f, "- Previous package digest: `%s`\n", update.PreviousPackageDigest)
+	}
+	if update.CurrentPackageDigest != "" {
+		fmt.Fprintf(f, "- Current package digest: `%s`\n", update.CurrentPackageDigest)
+	}
+	if update.SpecPath != "" {
+		fmt.Fprintf(f, "- Current spec path: `%s`\n", update.SpecPath)
+	}
+	fmt.Fprintln(f, "</external_update>")
 	return nil
 }
 

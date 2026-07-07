@@ -44,7 +44,15 @@ Build a small HTTP service with `/healthz`, tests, and local run instructions.
 telos run SPEC.md --workspace . --until 3
 ```
 
-Local runs require `pi` on `PATH` and model credentials configured for Pi.
+Local runs execute spec turns through
+[pi](https://github.com/mariozechner/pi-coding-agent), an open-source coding
+agent:
+
+```bash
+npm install -g @mariozechner/pi-coding-agent
+```
+
+Configure model credentials for pi before your first run.
 
 ## Run In Cloud
 
@@ -70,6 +78,9 @@ delegated work.
 go test ./...
 go build ./cmd/telos ./cmd/telosd
 ```
+
+`scripts/smoke-test.sh` exercises the end-user CLI contract against a built
+binary, including one tiny isolated local run.
 
 Release builds use Bazel:
 

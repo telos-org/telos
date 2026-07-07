@@ -328,7 +328,7 @@ func TestSessionTurnShowsActiveRoleAndRound(t *testing.T) {
 	round := 3
 	role := "verifier"
 	got := sessionTurn(sessionapi.Session{CurrentRound: &round, CurrentRole: &role})
-	if got != "verifier#3" {
+	if got != "evaluation#3" {
 		t.Fatalf("session turn: got %q", got)
 	}
 	if got := sessionTurn(sessionapi.Session{}); got != "-" {
@@ -621,7 +621,7 @@ func TestEvaluationDispositionIsPendingForActiveReview(t *testing.T) {
 	if !strings.Contains(text, "evaluation     pending") {
 		t.Fatalf("description should show pending evaluation while active:\n%s", text)
 	}
-	if !strings.Contains(text, "current turn   prover#1") {
+	if !strings.Contains(text, "current turn   implementation#1") {
 		t.Fatalf("description should show active turn:\n%s", text)
 	}
 }

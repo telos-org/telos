@@ -9,6 +9,7 @@ go_library(
         "package_materializer.go",
         "server.go",
         "session_bootstrap.go",
+        "spec_update_projection.go",
         "session_worker_helpers.go",
         "worker.go",
     ],
@@ -16,6 +17,7 @@ go_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/cli",
+        "//internal/evidence",
         "//internal/game",
         "//internal/sessionapi",
         "//internal/sessionworker",

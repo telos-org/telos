@@ -268,6 +268,7 @@ var (
 	progressUpdateTagRE = regexp.MustCompile(`(?ims)^[ \t]*<progress_update\b[^>]*>\s*(.*?)\s*</progress_update>[ \t]*$`)
 	reviewTagRE         = regexp.MustCompile(`(?ims)^[ \t]*<review\b[^>]*>\s*(.*?)\s*</review>[ \t]*$`)
 	summaryTagRE        = regexp.MustCompile(`(?ims)^[ \t]*<summary\b[^>]*>\s*(.*?)\s*</summary>[ \t]*$`)
+	externalUpdateTagRE = regexp.MustCompile(`(?ims)^[ \t]*<external_update\b[^>]*>\s*(.*?)\s*</external_update>[ \t]*$`)
 )
 
 type logBlock struct {
@@ -297,6 +298,7 @@ func logBlocks(transcript string) []logBlock {
 	blocks = appendLogBlocks(blocks, transcript, "progress_update", progressUpdateTagRE)
 	blocks = appendLogBlocks(blocks, transcript, "review", reviewTagRE)
 	blocks = appendLogBlocks(blocks, transcript, "summary", summaryTagRE)
+	blocks = appendLogBlocks(blocks, transcript, "external_update", externalUpdateTagRE)
 	sort.SliceStable(blocks, func(i, j int) bool {
 		return blocks[i].start < blocks[j].start
 	})
@@ -332,6 +334,8 @@ func printLogBlocks(out io.Writer, blocks []logBlock, progressCount int) int {
 			fmt.Fprintf(out, "Review\n%s\n", block.text)
 		case "summary":
 			fmt.Fprintf(out, "Summary\n%s\n", block.text)
+		case "external_update":
+			fmt.Fprintf(out, "External update\n%s\n", block.text)
 		default:
 			fmt.Fprintln(out, block.text)
 		}

@@ -736,6 +736,102 @@ func TestApplySessionSpecUpdatesExistingRootFromPackageDigest(t *testing.T) {
 	}
 }
 
+func TestApplySessionSpecEmitsExternalUpdate(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	var emitted []sessionapi.SpecUpdateEvent
+	store.OnSpecUpdate = func(event sessionapi.SpecUpdateEvent) {
+		emitted = append(emitted, event)
+	}
+	mux := http.NewServeMux()
+	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	initial := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	rootSession, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &initial})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
+	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		data, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, data)
+	}
+
+	if len(emitted) != 1 {
+		t.Fatalf("emitted updates: %#v", emitted)
+	}
+	event := emitted[0]
+	if event.SessionID != rootSession.SessionID {
+		t.Fatalf("session_id: got %q want %q", event.SessionID, rootSession.SessionID)
+	}
+	if event.SpecName != "postgres" {
+		t.Fatalf("spec_name: got %q", event.SpecName)
+	}
+	if event.PreviousSpecVersion != 1 || event.CurrentSpecVersion != 2 {
+		t.Fatalf("versions: got %d -> %d", event.PreviousSpecVersion, event.CurrentSpecVersion)
+	}
+	if event.CurrentSpecSHA256 == "" {
+		t.Fatalf("missing current spec sha: %#v", event)
+	}
+	if event.SpecPath != *rootSession.SessionSpecPath {
+		t.Fatalf("spec_path: got %q want %q", event.SpecPath, *rootSession.SessionSpecPath)
+	}
+	if event.TranscriptPath == "" || event.EvidencePath == "" {
+		t.Fatalf("missing projection paths: %#v", event)
+	}
+}
+
+func TestApplySessionSpecNoopsWhenCurrent(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	var emitted []sessionapi.SpecUpdateEvent
+	store.OnSpecUpdate = func(event sessionapi.SpecUpdateEvent) {
+		emitted = append(emitted, event)
+	}
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	rootSession, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	update, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown})
+	if err != nil {
+		t.Fatalf("UpdateSpec: %v", err)
+	}
+	if update.Operation != "unchanged" {
+		t.Fatalf("operation: got %q", update.Operation)
+	}
+	if update.Session == nil || update.Session.SessionID != rootSession.SessionID {
+		t.Fatalf("session: got %#v", update.Session)
+	}
+	if update.Session.CurrentSpecVersion == nil || *update.Session.CurrentSpecVersion != 1 {
+		t.Fatalf("current_spec_version: got %#v", update.Session.CurrentSpecVersion)
+	}
+	if len(update.Session.SpecVersions) != 1 {
+		t.Fatalf("spec_versions: got %#v", update.Session.SpecVersions)
+	}
+	if len(emitted) != 0 {
+		t.Fatalf("unexpected external updates: %#v", emitted)
+	}
+}
+
 func TestApplySessionSpecCreatesRootWhenMissing(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
