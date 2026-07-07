@@ -1,8 +1,8 @@
 # telos
 
-Telos is a goal-oriented agent runtime. 
+`telos` is a goal-oriented agent runtime. 
 
-Use Telos to turn software goals into running services. Maintain and manage goals, not code.
+Use `telos` to turn software goals into running services. Maintain and manage goals, not code.
 
 ## Install
 
