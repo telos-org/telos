@@ -1,18 +1,8 @@
-# Telos
+# telos
 
-Telos is a spec-driven coding agent runtime for declarative goals and
-background agent work.
+Telos is a goal-oriented agent runtime. 
 
-Write a `SPEC.md`. Telos applies it as a durable goal: implement, evaluate,
-record evidence, and continue reconciling under policy.
-
-This repo contains:
-
-- `telos`, the CLI
-- `telosd`, the environment-local Sessions API and worker runtime
-- spec rendering, skills, transcripts, evidence, and release tooling
-
-The hosted control plane and product surface live in `telos-org/cloud`.
+Use Telos to turn software goals into running services. Maintain and manage goals, not code.
 
 ## Install
 
@@ -24,27 +14,29 @@ telos --version
 The installer downloads checksummed `telos` and `telosd` binaries for your
 platform.
 
-## Run Locally
+## Quickstart
+
+Write a goal spec:
 
 ```markdown
 ---
 version: v0
 name: hello-service
 platform: local
-skills:
-  - verify-engineering*
 ---
 
-# Spec
+# Goal
 
 Build a small HTTP service with `/healthz`, tests, and local run instructions.
 ```
 
+Run it once:
+
 ```bash
-telos run SPEC.md --workspace . --until 3
+telos run goal.md --workspace . --until 3
 ```
 
-Local runs execute spec turns through
+Local runs execute Goal turns through
 [pi](https://github.com/mariozechner/pi-coding-agent), an open-source coding
 agent:
 
@@ -54,7 +46,7 @@ npm install -g @mariozechner/pi-coding-agent
 
 Configure model credentials for pi before your first run.
 
-## Run In Cloud
+## Run a Goal in Telos Cloud
 
 ```bash
 telos login
@@ -62,15 +54,11 @@ telos apply SPEC.md --scope <scope>
 telos list --cloud
 ```
 
-For hosted workflows, `telos apply` publishes a versioned spec package and
-creates or updates a cloud session. The control plane allocates the runtime
-behind that session. `telos run` remains available for local specs and internal
-delegated work.
+`telos apply` runs a persistent `telos` session in the cloud, to execute your long running goal
 
-## Read Next
+# LICENSE
 
-- Harbor / SCBench executable agent: [`integrations/harbor`](integrations/harbor)
-- License: [`LICENSE`](LICENSE)
+Fair Source (FSL-1.1), converts to Apache-2.0 two years after each major release
 
 ## Develop
 
@@ -78,10 +66,6 @@ delegated work.
 go test ./...
 go build ./cmd/telos ./cmd/telosd
 ```
-
-`scripts/smoke-test.sh` exercises the end-user CLI contract against a built
-binary, including one tiny isolated local run.
-
 Release builds use Bazel:
 
 ```bash
