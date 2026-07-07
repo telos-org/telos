@@ -56,7 +56,7 @@ telos list --cloud
 
 `telos apply` runs a persistent `telos` session in the cloud, to execute your long running goal
 
-# LICENSE
+## License
 
 Fair Source (FSL-1.1), converts to Apache-2.0 two years after each major release
 
