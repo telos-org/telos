@@ -21,6 +21,7 @@ go_library(
         "//internal/game",
         "//internal/sessionapi",
         "//internal/sessionworker",
+        "//internal/spec",
         "@in_gopkg_yaml_v3//:yaml_v3",
     ],
 )
