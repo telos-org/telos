@@ -80,14 +80,14 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
-		if p.shouldStop() {
+		if p.shouldStop(deadline) {
 			return p.end(GameStopped)
 		}
-		turn := p.runProverTurn(workspace, promptOpts)
+		turn := p.runProverTurn(workspace, promptOpts, deadline)
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
-		if p.shouldStop() {
+		if p.shouldStop(deadline) {
 			return p.end(GameStopped)
 		}
 		if turn.Error != "" {
@@ -105,14 +105,14 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
-		if p.shouldStop() {
+		if p.shouldStop(deadline) {
 			return p.end(GameStopped)
 		}
-		turn = p.runVerifierTurn(workspace, promptOpts)
+		turn = p.runVerifierTurn(workspace, promptOpts, deadline)
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
-		if p.shouldStop() {
+		if p.shouldStop(deadline) {
 			return p.end(GameStopped)
 		}
 		if turn.Error != "" {
@@ -161,24 +161,24 @@ func (p *PVG) runDurationExhausted(deadline time.Time) bool {
 	return !deadline.IsZero() && time.Now().After(deadline)
 }
 
-func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions) TurnResult {
+func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
 	p.Result.Rounds++
 	p.Result.ProverRounds++
 	roundNum := p.Result.Rounds
 	p.Evidence.Log("round_start", roundNum, "prover", nil)
 
 	task := spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
-	return p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task)
+	return p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task, deadline)
 }
 
-func (p *PVG) runVerifierTurn(workspace string, promptOpts spec.PromptOptions) TurnResult {
+func (p *PVG) runVerifierTurn(workspace string, promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
 	p.Result.Rounds++
 	p.Result.VerifierRounds++
 	roundNum := p.Result.Rounds
 	p.Evidence.Log("round_start", roundNum, "verifier", nil)
 
 	task := spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
-	return p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task)
+	return p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task, deadline)
 }
 
 func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
@@ -203,7 +203,10 @@ func (p *PVG) reviewBudgetMode() bool {
 	return p.Config.Until > 0
 }
 
-func (p *PVG) shouldStop() bool {
+func (p *PVG) shouldStop(deadline time.Time) bool {
+	if p.runDurationExhausted(deadline) {
+		return true
+	}
 	return p.Config.StopRequested != nil && p.Config.StopRequested()
 }
 
@@ -216,9 +219,11 @@ func (p *PVG) promptOptions() spec.PromptOptions {
 	}
 }
 
-func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string) TurnResult {
+func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string, deadline time.Time) TurnResult {
 	ts := p.State.Turn(p.Config.EpochID, roundNum, role)
-	ts.StopRequested = p.Config.StopRequested
+	ts.StopRequested = func() bool {
+		return p.shouldStop(deadline)
+	}
 	turnID := fmt.Sprintf("%04d-%s", roundNum, role)
 	ts.OnLiveEvent = func(event LiveAgentEvent) {
 		if err := AppendLiveAgentEvent(p.State.TranscriptPath, role, roleRound, turnID, event); err != nil {
