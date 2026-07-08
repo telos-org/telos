@@ -238,13 +238,42 @@ func printCloudSessionLogEvent(out io.Writer, event sessionapi.SessionEvent, ver
 		block := logBlock{kind: kind, text: strings.TrimSpace(text)}
 		*progressCount = printLogBlocks(out, []logBlock{block}, *progressCount)
 		return true
+	case "agent_complete":
+		status, _ := event.Data["status"].(string)
+		model, _ := event.Data["model"].(string)
+		turns, hasTurns := numericEventValue(event.Data["num_turns"])
+		if status == "" && model == "" && !hasTurns {
+			return false
+		}
+		fmt.Fprintf(out, "Agent complete: %s", orDash(status))
+		if model != "" {
+			fmt.Fprintf(out, " model=%s", model)
+		}
+		if hasTurns {
+			fmt.Fprintf(out, " turns=%d", turns)
+		}
+		fmt.Fprintln(out)
+		return true
+	case "agent_failure_recoverable":
+		errText, _ := event.Data["error"].(string)
+		if strings.TrimSpace(errText) == "" {
+			return false
+		}
+		current, hasCurrent := numericEventValue(event.Data["consecutive_failures"])
+		maxFailures, hasMax := numericEventValue(event.Data["max_failures"])
+		fmt.Fprintf(out, "Recoverable failure: %s", strings.TrimSpace(errText))
+		if hasCurrent && hasMax {
+			fmt.Fprintf(out, " (%d/%d)", current, maxFailures)
+		}
+		fmt.Fprintln(out)
+		return true
 	case "game_end":
 		if result, _ := event.Data["game_result"].(string); result != "" {
-			fmt.Fprintf(out, "Completed: %s\n", result)
+			fmt.Fprintf(out, "Completed: %s%s\n", result, eventErrorSuffix(event))
 			return true
 		}
 		if reason, _ := event.Data["completion_reason"].(string); reason != "" {
-			fmt.Fprintf(out, "Completed: %s\n", reason)
+			fmt.Fprintf(out, "Completed: %s%s\n", reason, eventErrorSuffix(event))
 			return true
 		}
 	}
@@ -253,6 +282,28 @@ func printCloudSessionLogEvent(out io.Writer, event sessionapi.SessionEvent, ver
 		return true
 	}
 	return false
+}
+
+func eventErrorSuffix(event sessionapi.SessionEvent) string {
+	errText, _ := event.Data["error"].(string)
+	errText = strings.TrimSpace(errText)
+	if errText == "" {
+		return ""
+	}
+	return " (" + errText + ")"
+}
+
+func numericEventValue(value any) (int, bool) {
+	switch typed := value.(type) {
+	case int:
+		return typed, true
+	case int64:
+		return int(typed), true
+	case float64:
+		return int(typed), true
+	default:
+		return 0, false
+	}
 }
 
 func printProgressUpdate(out io.Writer, index int, update string) {

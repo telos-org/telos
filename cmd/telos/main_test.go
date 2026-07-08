@@ -1192,8 +1192,10 @@ func TestPrintCloudSessionLogsDefaultsToAgentProgress(t *testing.T) {
 	events := []sessionapi.SessionEvent{
 		{Event: "agent_progress", Data: map[string]any{"kind": "progress_update", "text": "ready"}},
 		{Event: "agent_progress", Data: map[string]any{"kind": "review", "text": "criteria,score\nCorrectness,8/10"}},
+		{Event: "agent_complete", Data: map[string]any{"status": "CONTINUE", "model": "test-model", "num_turns": float64(12)}},
+		{Event: "agent_failure_recoverable", Data: map[string]any{"error": "agent_no_output", "consecutive_failures": float64(1), "max_failures": float64(3)}},
 		{Event: "runtime.prepare.started", Data: map[string]any{"message": "preparing runtime", "stage": "prepare"}},
-		{Event: "game_end", Data: map[string]any{"game_result": "accepted"}},
+		{Event: "game_end", Data: map[string]any{"game_result": "failure", "error": "local_timeout:900"}},
 	}
 
 	var out bytes.Buffer
@@ -1202,8 +1204,10 @@ func TestPrintCloudSessionLogsDefaultsToAgentProgress(t *testing.T) {
 	for _, want := range []string{
 		"#1 ready",
 		"Review\ncriteria,score\nCorrectness,8/10",
+		"Agent complete: CONTINUE model=test-model turns=12",
+		"Recoverable failure: agent_no_output (1/3)",
 		"preparing runtime",
-		"Completed: accepted",
+		"Completed: failure (local_timeout:900)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("cloud session logs missing %q:\n%s", want, text)
