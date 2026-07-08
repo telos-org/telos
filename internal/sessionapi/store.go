@@ -626,11 +626,26 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		previousSpecSHA256 = latestSpecSHA256(m.SpecVersions)
 		previousRevision = strValue(m.CurrentRevision)
 		previousSpecPath = latestSpecPath(m.SpecVersions)
+		if previousSpecPath == "" {
+			previousSpecPath = *m.SessionSpecPath
+		}
+		if previousSpecSHA256 == "" {
+			data, err := os.ReadFile(previousSpecPath)
+			if err != nil {
+				return err
+			}
+			previousSpecSHA256 = specSHA256(data)
+		}
 		if previousSpecSHA256 == specSHA256(prepared.SpecData) && previousPackageDigest == strValue(prepared.PackageDigest) {
 			changed = false
 			return nil
 		}
 		currentVersion = previousVersion + 1
+		previousSpecPath, previousRevision, err = fs.ensureStablePreviousSpecPath(fs.sessionDir(id), prepared.Name, m, previousVersion, previousRevision, previousSpecPath, previousPackageDigest)
+		if err != nil {
+			return err
+		}
+		stabilizeLatestSpecVersion(m.SpecVersions, *m.SessionSpecPath, previousSpecPath, previousRevision)
 		paths, metadata, err := fs.installRevision(fs.sessionDir(id), prepared.Name, prepared, revisionInstallOptions{
 			Sequence:         currentVersion,
 			PreviousVersion:  previousRevision,
@@ -1434,6 +1449,23 @@ func specVersionEntry(version int, specPath string, data []byte, previous *int, 
 	return entry
 }
 
+func stabilizeLatestSpecVersion(versions []map[string]any, activeSpecPath string, stableSpecPath string, revision string) {
+	if activeSpecPath == "" || stableSpecPath == "" {
+		return
+	}
+	for i := len(versions) - 1; i >= 0; i-- {
+		if stringMapValue(versions[i], "spec_path") != activeSpecPath {
+			return
+		}
+		versions[i]["spec_path"] = stableSpecPath
+		versions[i]["active_spec_path"] = activeSpecPath
+		if revision != "" {
+			versions[i]["revision"] = revision
+		}
+		return
+	}
+}
+
 func specSHA256(data []byte) string {
 	hash := sha256.Sum256(data)
 	return fmt.Sprintf("%x", hash)
@@ -1463,11 +1495,162 @@ type revisionMetadata struct {
 	SpecSHA256      string `json:"spec_sha256"`
 	PackageDigest   string `json:"package_digest,omitempty"`
 	SpecPath        string `json:"spec_path"`
-	PackagePath     string `json:"package_path"`
-	PackageSpecPath string `json:"package_spec_path"`
+	PackagePath     string `json:"package_path,omitempty"`
+	PackageSpecPath string `json:"package_spec_path,omitempty"`
 	ActiveSpecPath  string `json:"active_spec_path"`
 	DiffPath        string `json:"diff_path,omitempty"`
 	CreatedAt       string `json:"created_at"`
+}
+
+func (fs *FileStore) ensureStablePreviousSpecPath(sessionDir string, specName string, m *Manifest, sequence int, previousRevision string, previousSpecPath string, packageDigest string) (string, string, error) {
+	activeSpecPath := strValue(m.SessionSpecPath)
+	if previousSpecPath == "" {
+		previousSpecPath = activeSpecPath
+	}
+	if previousSpecPath == "" || previousSpecPath != activeSpecPath {
+		return previousSpecPath, previousRevision, nil
+	}
+	data, err := os.ReadFile(previousSpecPath)
+	if err != nil {
+		return "", "", err
+	}
+	version := strings.TrimSpace(previousRevision)
+	if !spec.IsSemver(version) {
+		version = specVersionFromMarkdown(data)
+	}
+	if spec.IsSemver(version) {
+		paths := revisionLayout(sessionDir, specName, version, activeSpecPath)
+		if err := fs.snapshotLegacyRevision(sessionDir, paths, sequence, data, packageDigest); err != nil {
+			return "", "", err
+		}
+		return paths.SpecPath, version, nil
+	}
+	path, err := writeLegacySpecSnapshot(sessionDir, sequence, data)
+	if err != nil {
+		return "", "", err
+	}
+	return path, previousRevision, nil
+}
+
+func (fs *FileStore) snapshotLegacyRevision(sessionDir string, paths revisionPaths, sequence int, specData []byte, packageDigest string) error {
+	metadata := revisionMetadata{
+		Version:        paths.Version,
+		Sequence:       sequence,
+		SpecSHA256:     specSHA256(specData),
+		PackageDigest:  packageDigest,
+		SpecPath:       paths.SpecPath,
+		ActiveSpecPath: paths.ActiveSpecPath,
+		CreatedAt:      tsNow(),
+	}
+	if existing, ok, err := readRevisionMetadata(paths.RevisionDir); err != nil {
+		return err
+	} else if ok {
+		if existing.SpecSHA256 != metadata.SpecSHA256 || existing.PackageDigest != metadata.PackageDigest {
+			return fmt.Errorf("revision %s already exists with different content: %w", paths.Version, ErrConflict)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(paths.RevisionDir, 0o755); err != nil {
+		return err
+	}
+	if err := writeFileAtomic(paths.SpecPath, specData, 0o644); err != nil {
+		return err
+	}
+	if copied, err := copyActivePackageSnapshot(filepath.Join(sessionDir, "package"), paths.PackagePath); err != nil {
+		return err
+	} else if copied {
+		metadata.PackagePath = paths.PackagePath
+		if _, err := os.Stat(paths.PackageSpecPath); err == nil {
+			metadata.PackageSpecPath = paths.PackageSpecPath
+		}
+	}
+	return writeRevisionMetadata(filepath.Join(paths.RevisionDir, "revision.json"), metadata)
+}
+
+func writeLegacySpecSnapshot(sessionDir string, sequence int, specData []byte) (string, error) {
+	path := filepath.Join(sessionDir, "snapshots", fmt.Sprintf("spec-version-%d", sequence), "SPEC.md")
+	if existing, err := os.ReadFile(path); err == nil {
+		if specSHA256(existing) != specSHA256(specData) {
+			return "", fmt.Errorf("snapshot %s already exists with different content: %w", path, ErrConflict)
+		}
+		return path, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	if err := writeFileAtomic(path, specData, 0o644); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+func specVersionFromMarkdown(data []byte) string {
+	raw, _, ok := spec.ParseFrontmatter(string(data))
+	if !ok {
+		return ""
+	}
+	version, _ := raw["version"].(string)
+	version = strings.TrimSpace(version)
+	if !spec.IsSemver(version) {
+		return ""
+	}
+	return version
+}
+
+func copyActivePackageSnapshot(source string, dest string) (bool, error) {
+	info, err := os.Stat(source)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	if !info.IsDir() {
+		return false, nil
+	}
+	if err := copyDir(source, dest); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func copyDir(source string, dest string) error {
+	return filepath.WalkDir(source, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		rel, err := filepath.Rel(source, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dest, rel)
+		if entry.IsDir() {
+			return os.MkdirAll(target, 0o755)
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		input, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer input.Close()
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return err
+		}
+		output, err := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, info.Mode().Perm())
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(output, input); err != nil {
+			_ = output.Close()
+			return err
+		}
+		return output.Close()
+	})
 }
 
 func (fs *FileStore) installRevision(sessionDir string, specName string, prepared preparedRequestSpec, opts revisionInstallOptions) (revisionPaths, revisionMetadata, error) {
