@@ -21,7 +21,6 @@ type cloudBootstrapSession struct {
 const (
 	defaultCloudSessionModel    = "sail-research/moonshotai/Kimi-K2.6"
 	defaultCloudSessionThinking = "medium"
-	defaultCloudAgentTimeoutSec = 900
 	cloudAgentTimeoutEnvVar     = "TELOS_AGENT_TIMEOUT_SEC"
 )
 
@@ -51,7 +50,7 @@ func startSessionBootstrapReconciler(
 		materializer:    materializer,
 		model:           cloudSessionModel(),
 		thinking:        cloudSessionThinking(),
-		agentTimeoutSec: intPtr(cloudAgentTimeoutSec()),
+		agentTimeoutSec: cloudAgentTimeoutSec(),
 		store:           store,
 	}
 	if r.packageRoot == "" {
@@ -117,10 +116,6 @@ func (r sessionBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) 
 		if thinking == "" {
 			thinking = cloudSessionThinking()
 		}
-		agentTimeoutSec := cloudAgentTimeoutSec()
-		if r.agentTimeoutSec != nil {
-			agentTimeoutSec = *r.agentTimeoutSec
-		}
 		if _, err := r.store.Create(sessionapi.SessionCreateRequest{
 			PackagePath:      packagePath,
 			PackageDigest:    digest,
@@ -129,7 +124,7 @@ func (r sessionBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) 
 			SessionKind:      &kind,
 			Model:            model,
 			Thinking:         thinking,
-			AgentTimeoutSec:  intPtr(agentTimeoutSec),
+			AgentTimeoutSec:  r.agentTimeoutSec,
 		}); err != nil {
 			return fmt.Errorf("create session %s from package %s: %w", name, digest, err)
 		}
@@ -176,8 +171,16 @@ func cloudSessionThinking() string {
 	return defaultCloudSessionThinking
 }
 
-func cloudAgentTimeoutSec() int {
-	return envNonNegativeInt(cloudAgentTimeoutEnvVar, defaultCloudAgentTimeoutSec)
+func cloudAgentTimeoutSec() *int {
+	return envOptionalNonNegativeInt(cloudAgentTimeoutEnvVar)
+}
+
+func cloudControllerDefaults() controllerDefaults {
+	return controllerDefaults{
+		Model:           cloudSessionModel(),
+		Thinking:        cloudSessionThinking(),
+		AgentTimeoutSec: cloudAgentTimeoutSec(),
+	}
 }
 
 func activeRootSessionsByName(sessions []sessionapi.Session) map[string]sessionapi.Session {
@@ -221,18 +224,14 @@ func envInt(name string, fallback int) int {
 	return value
 }
 
-func envNonNegativeInt(name string, fallback int) int {
+func envOptionalNonNegativeInt(name string) *int {
 	raw := strings.TrimSpace(os.Getenv(name))
 	if raw == "" {
-		return fallback
+		return nil
 	}
 	value, err := strconv.Atoi(raw)
 	if err != nil || value < 0 {
-		return fallback
+		return nil
 	}
-	return value
-}
-
-func intPtr(value int) *int {
 	return &value
 }

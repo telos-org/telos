@@ -18,29 +18,42 @@ type sessionSubstrate interface {
 	Wake(session *sessionapi.Session, wakeReason string) error
 }
 
-type cloudSessionStore struct {
-	*sessionapi.FileStore
-	substrate    sessionSubstrate
-	materializer *applyPackageMaterializer
+type packageMaterializer interface {
+	Ensure(ctx context.Context, digest string) (string, error)
 }
 
-func newCloudSessionStore(
+type controllerDefaults struct {
+	Model           string
+	Thinking        string
+	AgentTimeoutSec *int
+}
+
+type controllerReconciler struct {
+	*sessionapi.FileStore
+	substrate    sessionSubstrate
+	materializer packageMaterializer
+	defaults     controllerDefaults
+}
+
+func newControllerReconciler(
 	base *sessionapi.FileStore,
 	substrate sessionSubstrate,
-	materializer *applyPackageMaterializer,
-) *cloudSessionStore {
+	materializer packageMaterializer,
+	defaults controllerDefaults,
+) *controllerReconciler {
 	if base.OnSpecUpdate == nil {
 		base.OnSpecUpdate = sessionupdate.ProjectSpecUpdate
 	}
-	return &cloudSessionStore{
+	return &controllerReconciler{
 		FileStore:    base,
 		substrate:    substrate,
 		materializer: materializer,
+		defaults:     defaults,
 	}
 }
 
-func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
-	req = cloudCreateDefaults(req)
+func (s *controllerReconciler) Create(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
+	req = s.applyCreateDefaults(req)
 	if err := s.materializeCreatePackage(&req); err != nil {
 		return nil, err
 	}
@@ -59,8 +72,8 @@ func (s *cloudSessionStore) Create(req sessionapi.SessionCreateRequest) (*sessio
 	return session, nil
 }
 
-func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.SessionSpecUpdateResponse, error) {
-	req = cloudSpecUpdateDefaults(req)
+func (s *controllerReconciler) UpdateSpec(name string, req sessionapi.SessionSpecUpdateRequest) (*sessionapi.SessionSpecUpdateResponse, error) {
+	req = s.applySpecUpdateDefaults(req)
 	if err := s.materializeUpdatePackage(&req); err != nil {
 		return nil, err
 	}
@@ -94,7 +107,7 @@ func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUp
 	return response, nil
 }
 
-func (s *cloudSessionStore) materializeCreatePackage(req *sessionapi.SessionCreateRequest) error {
+func (s *controllerReconciler) materializeCreatePackage(req *sessionapi.SessionCreateRequest) error {
 	if req == nil || s.materializer == nil || strings.TrimSpace(req.PackagePath) != "" {
 		return nil
 	}
@@ -110,7 +123,7 @@ func (s *cloudSessionStore) materializeCreatePackage(req *sessionapi.SessionCrea
 	return nil
 }
 
-func (s *cloudSessionStore) materializeUpdatePackage(req *sessionapi.SessionSpecUpdateRequest) error {
+func (s *controllerReconciler) materializeUpdatePackage(req *sessionapi.SessionSpecUpdateRequest) error {
 	if req == nil || s.materializer == nil || strings.TrimSpace(req.PackagePath) != "" {
 		return nil
 	}
@@ -127,7 +140,7 @@ func (s *cloudSessionStore) materializeUpdatePackage(req *sessionapi.SessionSpec
 	return nil
 }
 
-func (s *cloudSessionStore) List() ([]sessionapi.Session, error) {
+func (s *controllerReconciler) List() ([]sessionapi.Session, error) {
 	sessions, err := s.FileStore.List()
 	if err != nil {
 		return nil, err
@@ -135,7 +148,7 @@ func (s *cloudSessionStore) List() ([]sessionapi.Session, error) {
 	return sessions, nil
 }
 
-func (s *cloudSessionStore) Get(id string) (*sessionapi.Session, error) {
+func (s *controllerReconciler) Get(id string) (*sessionapi.Session, error) {
 	session, err := s.FileStore.Get(id)
 	if err != nil {
 		return nil, err
@@ -143,7 +156,7 @@ func (s *cloudSessionStore) Get(id string) (*sessionapi.Session, error) {
 	return session, nil
 }
 
-func (s *cloudSessionStore) apply(session *sessionapi.Session, wakeReason string) error {
+func (s *controllerReconciler) apply(session *sessionapi.Session, wakeReason string) error {
 	if s.substrate == nil {
 		return nil
 	}
@@ -153,7 +166,7 @@ func (s *cloudSessionStore) apply(session *sessionapi.Session, wakeReason string
 	return nil
 }
 
-func (s *cloudSessionStore) ensureRootWorkers(wakeReason string) error {
+func (s *controllerReconciler) ensureRootWorkers(wakeReason string) error {
 	sessions, err := s.FileStore.List()
 	if err != nil {
 		return err
@@ -177,7 +190,7 @@ func (s *cloudSessionStore) ensureRootWorkers(wakeReason string) error {
 	return errors.Join(errs...)
 }
 
-func (s *cloudSessionStore) wake(session *sessionapi.Session, wakeReason string) error {
+func (s *controllerReconciler) wake(session *sessionapi.Session, wakeReason string) error {
 	if s.substrate == nil {
 		return nil
 	}
@@ -190,7 +203,7 @@ func (s *cloudSessionStore) wake(session *sessionapi.Session, wakeReason string)
 	return nil
 }
 
-func (s *cloudSessionStore) cleanupWorker(session *sessionapi.Session) error {
+func (s *controllerReconciler) cleanupWorker(session *sessionapi.Session) error {
 	if s.substrate == nil {
 		return nil
 	}
@@ -207,7 +220,7 @@ func startWakeReason(session *sessionapi.Session) string {
 	return "task_started"
 }
 
-func (s *cloudSessionStore) Stop(id string) (*sessionapi.Session, error) {
+func (s *controllerReconciler) Stop(id string) (*sessionapi.Session, error) {
 	session, err := s.FileStore.Get(id)
 	if err != nil {
 		return nil, err
@@ -224,7 +237,7 @@ func (s *cloudSessionStore) Stop(id string) (*sessionapi.Session, error) {
 	return session, nil
 }
 
-func cloudCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.SessionCreateRequest {
+func (s *controllerReconciler) applyCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.SessionCreateRequest {
 	if req.ParentSessionID != nil {
 		return req
 	}
@@ -232,26 +245,26 @@ func cloudCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.Session
 		return req
 	}
 	if strings.TrimSpace(req.Model) == "" {
-		req.Model = cloudSessionModel()
+		req.Model = s.defaults.Model
 	}
 	if strings.TrimSpace(req.Thinking) == "" {
-		req.Thinking = cloudSessionThinking()
+		req.Thinking = s.defaults.Thinking
 	}
-	if req.AgentTimeoutSec == nil {
-		req.AgentTimeoutSec = intPtr(cloudAgentTimeoutSec())
+	if req.AgentTimeoutSec == nil && s.defaults.AgentTimeoutSec != nil {
+		req.AgentTimeoutSec = s.defaults.AgentTimeoutSec
 	}
 	return req
 }
 
-func cloudSpecUpdateDefaults(req sessionapi.SessionSpecUpdateRequest) sessionapi.SessionSpecUpdateRequest {
+func (s *controllerReconciler) applySpecUpdateDefaults(req sessionapi.SessionSpecUpdateRequest) sessionapi.SessionSpecUpdateRequest {
 	if strings.TrimSpace(req.Model) == "" {
-		req.Model = cloudSessionModel()
+		req.Model = s.defaults.Model
 	}
 	if strings.TrimSpace(req.Thinking) == "" {
-		req.Thinking = cloudSessionThinking()
+		req.Thinking = s.defaults.Thinking
 	}
-	if req.AgentTimeoutSec == nil {
-		req.AgentTimeoutSec = intPtr(cloudAgentTimeoutSec())
+	if req.AgentTimeoutSec == nil && s.defaults.AgentTimeoutSec != nil {
+		req.AgentTimeoutSec = s.defaults.AgentTimeoutSec
 	}
 	return req
 }
