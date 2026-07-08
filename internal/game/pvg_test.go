@@ -25,7 +25,13 @@ type fakeExecutor struct {
 
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) TurnResult {
 	if f.delay > 0 {
-		time.Sleep(f.delay)
+		deadline := time.Now().Add(f.delay)
+		for time.Now().Before(deadline) {
+			if ts != nil && ts.StopRequested != nil && ts.StopRequested() {
+				return TurnResult{Role: role, Status: StatusContinue, Logs: "stopped", Error: "local_interrupted:stop_requested", Recoverable: true}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	if ts != nil {
 		f.turnDirs = append(f.turnDirs, ts.Dir)
@@ -341,8 +347,10 @@ func TestPVGUntilSecondsFailsWhenDurationExhausted(t *testing.T) {
 		},
 	}
 
+	start := time.Now()
 	pvg := NewPVG(compiled, exec, state, PVGConfig{UntilSeconds: 1, Verbose: false})
 	result := pvg.Run()
+	elapsed := time.Since(start)
 
 	if result.GameResult != GameFailure {
 		t.Fatalf("expected failure, got %s error=%q", result.GameResult, result.Error)
@@ -352,6 +360,9 @@ func TestPVGUntilSecondsFailsWhenDurationExhausted(t *testing.T) {
 	}
 	if result.VerifierRounds != 0 {
 		t.Fatalf("verifier should not run after duration exhaustion, got %d", result.VerifierRounds)
+	}
+	if elapsed > 2*time.Second {
+		t.Fatalf("deadline did not interrupt running turn quickly enough: %s", elapsed)
 	}
 }
 
