@@ -735,6 +735,7 @@ func TestApplyCloudSessionPackageCreates(t *testing.T) {
 		"auth",
 		"@user-abc/auth:0.1.0",
 		"",
+		sessionRuntimeConfig{},
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -780,6 +781,7 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 		"auth",
 		"@user-abc/auth:0.1.1",
 		"sess_123",
+		sessionRuntimeConfig{},
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)

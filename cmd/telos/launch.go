@@ -125,7 +125,20 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudApply:
-		applyCloudControl(specArg, *sessionID, *jsonOut)
+		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, *agentTimeout)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if runtimeConfig.MaxCostUSD != nil {
+			fmt.Fprintln(os.Stderr, "error: --max-cost-usd is not supported for cloud apply yet")
+			os.Exit(1)
+		}
+		if *sessionID != "" && cloudRuntimeConfigSet(runtimeConfig) {
+			fmt.Fprintln(os.Stderr, "error: cloud runtime config flags can only seed a new session; they cannot update an existing session")
+			os.Exit(1)
+		}
+		applyCloudControl(specArg, *sessionID, runtimeConfig, *jsonOut)
 		return
 	}
 	if !hasLocalSpec {
@@ -327,6 +340,7 @@ func runCloudChildSession(
 func applyCloudControl(
 	specArg string,
 	sessionID string,
+	runtimeConfig sessionRuntimeConfig,
 	jsonOut bool,
 ) {
 	pkg, err := packageSpec(specArg)
@@ -349,6 +363,7 @@ func applyCloudControl(
 		pkg.name,
 		packageRecord.Ref,
 		sessionID,
+		runtimeConfig,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -370,6 +385,7 @@ func applyCloudSessionPackage(
 	name string,
 	packageRef string,
 	sessionID string,
+	runtimeConfig sessionRuntimeConfig,
 ) (string, *cloud.SessionRecord, error) {
 	if sessionID != "" {
 		if !isCloudApplyID(sessionID) {
@@ -379,8 +395,18 @@ func applyCloudSessionPackage(
 		return "updated", session, err
 	}
 
-	session, err := control.CreateSession(name, packageRef)
+	session, err := control.CreateSession(cloud.SessionCreateOptions{
+		Name:            name,
+		PackageRef:      packageRef,
+		AgentModel:      runtimeConfig.Model,
+		AgentThinking:   runtimeConfig.Thinking,
+		AgentTimeoutSec: runtimeConfig.AgentTimeoutSec,
+	})
 	return "created", session, err
+}
+
+func cloudRuntimeConfigSet(cfg sessionRuntimeConfig) bool {
+	return cfg.Model != "" || cfg.Thinking != "" || cfg.AgentTimeoutSec != nil
 }
 
 func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session) {

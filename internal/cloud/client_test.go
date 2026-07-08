@@ -141,7 +141,7 @@ func TestClientPublishSkillVersion(t *testing.T) {
 }
 
 func TestClientCreateSession(t *testing.T) {
-	var gotBody map[string]string
+	var gotBody map[string]any
 	var gotOrgID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/deployments" {
@@ -169,14 +169,25 @@ func TestClientCreateSession(t *testing.T) {
 
 	client := NewClient(srv.URL, "test-token")
 	client.OrgID = "org_telos"
-	session, err := client.CreateSession("auth", "@telos/auth:1.2.3")
+	timeout := 1800
+	session, err := client.CreateSession(SessionCreateOptions{
+		Name:            "auth",
+		PackageRef:      "@telos/auth:1.2.3",
+		AgentModel:      "sail-research/test-model",
+		AgentThinking:   "high",
+		AgentTimeoutSec: &timeout,
+	})
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
 	if session.ID != "sess_123" || session.Name != "auth" || session.State != "provisioning" {
 		t.Fatalf("session: got %+v", session)
 	}
-	if gotBody["name"] != "auth" || gotBody["package_ref"] != "@telos/auth:1.2.3" {
+	if gotBody["name"] != "auth" ||
+		gotBody["package_ref"] != "@telos/auth:1.2.3" ||
+		gotBody["agent_model"] != "sail-research/test-model" ||
+		gotBody["agent_thinking"] != "high" ||
+		gotBody["agent_timeout_sec"] != float64(1800) {
 		t.Fatalf("body: got %#v", gotBody)
 	}
 	if gotOrgID != "org_telos" {
