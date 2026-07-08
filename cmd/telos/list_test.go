@@ -192,6 +192,34 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 	}
 }
 
+func TestPrintCloudSessionDescriptionShowsPendingServiceHint(t *testing.T) {
+	dashboardURL := "https://dashboard.example.com"
+	session := cloud.SessionRecord{
+		ID:            "sess_123",
+		Name:          "auth",
+		State:         "deploying",
+		PackageRef:    "@telos/auth:1.0.0",
+		PackageDigest: "sha256:abc",
+		DashboardURL:  &dashboardURL,
+		CreatedAt:     "then",
+		UpdatedAt:     "now",
+	}
+
+	var out bytes.Buffer
+	printCloudSessionDescription(&out, session)
+	text := out.String()
+	for _, want := range []string{
+		"Status    deploying",
+		"Service   pending",
+		"Dashboard https://dashboard.example.com",
+		"Inspect   telos logs sess_123",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("cloud session description missing %q:\n%s", want, text)
+		}
+	}
+}
+
 func TestPrintCloudSessionDeleteReceiptUsesSessionSummary(t *testing.T) {
 	session := cloud.SessionRecord{
 		ID:            "sess_123",
