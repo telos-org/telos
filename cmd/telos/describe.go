@@ -73,6 +73,8 @@ func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
 	}
 	if session.ServiceURL != nil && *session.ServiceURL != "" {
 		printSummaryField(out, "Service", *session.ServiceURL)
+	} else if cloudSessionInProgress(session.State) {
+		printSummaryField(out, "Service", "pending")
 	}
 	if session.DashboardURL != nil && *session.DashboardURL != "" {
 		printSummaryField(out, "Dashboard", *session.DashboardURL)
@@ -85,6 +87,19 @@ func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
 	fmt.Fprintln(out, "Lifecycle")
 	printDetailField(out, "created", session.CreatedAt)
 	printDetailField(out, "updated", session.UpdatedAt)
+	if cloudSessionInProgress(session.State) {
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "Inspect   telos logs %s\n", session.ID)
+	}
+}
+
+func cloudSessionInProgress(state string) bool {
+	switch state {
+	case "provisioning", "deploying":
+		return true
+	default:
+		return false
+	}
 }
 
 func printSessionDescription(out io.Writer, session sessionapi.Session) {
