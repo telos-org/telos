@@ -96,7 +96,19 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 		}
 	}
 	if turn.SleepMS > 0 {
-		time.Sleep(time.Duration(turn.SleepMS) * time.Millisecond)
+		deadline := time.Now().Add(time.Duration(turn.SleepMS) * time.Millisecond)
+		for time.Now().Before(deadline) {
+			if ts != nil && ts.StopRequested != nil && ts.StopRequested() {
+				return game.TurnResult{
+					Role:        role,
+					Status:      game.StatusContinue,
+					Logs:        "test fake interrupted by stop request",
+					Error:       "local_interrupted:stop_requested",
+					Recoverable: true,
+				}
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 	}
 	if err := e.applyWorkspaceChanges(turn); err != nil {
 		return game.TurnResult{
