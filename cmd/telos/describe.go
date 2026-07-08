@@ -184,11 +184,11 @@ func sessionRawResult(session sessionapi.Session) string {
 }
 
 func evaluationDisposition(session sessionapi.Session) string {
-	if !session.Status.IsTerminal() {
-		return "pending"
-	}
 	if session.VerifierConceded != nil && *session.VerifierConceded {
 		return "accepted"
+	}
+	if !session.Status.IsTerminal() {
+		return "pending"
 	}
 	if session.CompletionReason != nil && *session.CompletionReason == "review_budget_exhausted" {
 		return "review budget exhausted"
