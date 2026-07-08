@@ -237,6 +237,35 @@ func (c *Client) PublishSkillVersion(scope, name, version string, files map[stri
 	return &record, nil
 }
 
+func (c *Client) GetSkill(scope, name string) (*SkillRecord, error) {
+	path := "/api/skills/" + url.PathEscape(strings.TrimSpace(scope)) + "/" + url.PathEscape(strings.TrimSpace(name))
+	return c.getSkill(path)
+}
+
+func (c *Client) GetSkillVersion(scope, name, version string) (*SkillRecord, error) {
+	path := "/api/skills/" +
+		url.PathEscape(strings.TrimSpace(scope)) + "/" +
+		url.PathEscape(strings.TrimSpace(name)) + "/versions/" +
+		url.PathEscape(strings.TrimSpace(version))
+	return c.getSkill(path)
+}
+
+func (c *Client) getSkill(path string) (*SkillRecord, error) {
+	resp, err := c.do("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var record SkillRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
 func (c *Client) CreateSession(name, packageRef string) (*SessionRecord, error) {
 	body, err := json.Marshal(map[string]string{
 		"name":        name,

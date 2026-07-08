@@ -190,8 +190,8 @@ func evaluationDisposition(session sessionapi.Session) string {
 	if session.VerifierConceded != nil && *session.VerifierConceded {
 		return "accepted"
 	}
-	if session.CompletionReason != nil && *session.CompletionReason == "review_cycles_complete" {
-		return "review cycles complete (acceptance not used)"
+	if session.CompletionReason != nil && *session.CompletionReason == "review_budget_exhausted" {
+		return "review budget exhausted"
 	}
 	return "not accepted"
 }

@@ -36,6 +36,7 @@ type Skill struct {
 	Description  string
 	Instructions string
 	Path         string
+	SourceRef    string
 	Tags         []string
 	Scripts      []*SkillScript
 }

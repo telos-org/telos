@@ -18,9 +18,13 @@ type fakeExecutor struct {
 	verifierIdx     int
 	workspaceText   string
 	checkpointOK    bool
+	turnDirs        []string
 }
 
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) TurnResult {
+	if ts != nil {
+		f.turnDirs = append(f.turnDirs, ts.Dir)
+	}
 	if role == "prover" {
 		if f.proverIdx < len(f.proverResults) {
 			r := f.proverResults[f.proverIdx]
@@ -117,7 +121,44 @@ func TestPVGVerifierConcedes(t *testing.T) {
 	}
 }
 
-func TestPVGUntilRunsExactReviewCycles(t *testing.T) {
+func TestPVGEpochsUseDistinctTurnArtifacts(t *testing.T) {
+	compiled := compileTestSpec(t)
+	state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-epochs")
+	state.Ensure()
+	newExecutor := func() *fakeExecutor {
+		return &fakeExecutor{
+			proverResults: []TurnResult{
+				{Role: "prover", Status: StatusContinue, Logs: "done"},
+			},
+			verifierResults: []TurnResult{
+				{Role: "verifier", Status: StatusConcede, Logs: "ok\n<status>CONCEDE</status>\n"},
+			},
+		}
+	}
+
+	first := newExecutor()
+	if result := NewPVG(compiled, first, state, PVGConfig{EpochID: 1}).Run(); result.GameResult != GameSuccess {
+		t.Fatalf("first epoch result: %s error=%q", result.GameResult, result.Error)
+	}
+	second := newExecutor()
+	if result := NewPVG(compiled, second, state, PVGConfig{EpochID: 2}).Run(); result.GameResult != GameSuccess {
+		t.Fatalf("second epoch result: %s error=%q", result.GameResult, result.Error)
+	}
+
+	firstProver := filepath.Join(state.TurnsDir(), "epoch-0001", "0001-prover")
+	secondProver := filepath.Join(state.TurnsDir(), "epoch-0002", "0001-prover")
+	if !containsString(first.turnDirs, firstProver) {
+		t.Fatalf("first epoch turn dirs: got %#v want %q", first.turnDirs, firstProver)
+	}
+	if !containsString(second.turnDirs, secondProver) {
+		t.Fatalf("second epoch turn dirs: got %#v want %q", second.turnDirs, secondProver)
+	}
+	if firstProver == secondProver {
+		t.Fatal("epoch turn directories must not collide")
+	}
+}
+
+func TestPVGUntilStopsOnVerifierConcede(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()
 	specDir := filepath.Join(dir, "specs", "pvg-test")
@@ -142,26 +183,32 @@ func TestPVGUntilRunsExactReviewCycles(t *testing.T) {
 	if result.GameResult != GameSuccess {
 		t.Errorf("expected success, got %s", result.GameResult)
 	}
-	if result.Rounds != 4 {
-		t.Errorf("expected 4 rounds, got %d", result.Rounds)
+	if result.Rounds != 2 {
+		t.Errorf("expected 2 rounds, got %d", result.Rounds)
 	}
-	if result.VerifierRounds != 2 {
-		t.Errorf("expected 2 verifier rounds, got %d", result.VerifierRounds)
+	if result.VerifierRounds != 1 {
+		t.Errorf("expected 1 verifier round, got %d", result.VerifierRounds)
 	}
-	if result.VerifierConceded {
-		t.Error("fixed review mode should not treat CONCEDE as loop control")
+	if !result.VerifierConceded {
+		t.Error("until should treat CONCEDE as success")
 	}
-	if result.CompletionReason != "review_cycles_complete" {
+	if result.CompletionReason != "verifier_conceded" {
 		t.Fatalf("completion reason: got %q", result.CompletionReason)
 	}
 
 	transcript := ReadTranscript(state.TranscriptPath)
-	if strings.Contains(transcript, "<status>") {
-		t.Fatalf("fixed review transcript should not contain synthetic status tags:\n%s", transcript)
+	if count := strings.Count(transcript, "<review>"); count != 1 {
+		t.Fatalf("expected one review block, got %d:\n%s", count, transcript)
 	}
-	if count := strings.Count(transcript, "<review>"); count != 2 {
-		t.Fatalf("expected two review blocks, got %d:\n%s", count, transcript)
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
 	}
+	return false
 }
 
 func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
@@ -193,7 +240,7 @@ func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
 	if !strings.Contains(transcript, "Turn ended with runtime error") {
 		t.Fatalf("transcript should record recoverable turn error:\n%s", transcript)
 	}
-	if !strings.Contains(transcript, filepath.Join(state.TurnsDir(), "0001-prover", "pi-session.jsonl")) {
+	if !strings.Contains(transcript, filepath.Join(state.TurnsDir(), "epoch-0000", "0001-prover", "pi-session.jsonl")) {
 		t.Fatalf("transcript should point to Pi session:\n%s", transcript)
 	}
 }
@@ -239,7 +286,7 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 	}
 }
 
-func TestPVGUntilDoesNotCountFailedVerifierReview(t *testing.T) {
+func TestPVGUntilFailsWhenReviewBudgetExhausted(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()
 	specDir := filepath.Join(dir, "specs", "pvg-test")
@@ -262,8 +309,11 @@ func TestPVGUntilDoesNotCountFailedVerifierReview(t *testing.T) {
 	pvg := NewPVG(compiled, exec, state, PVGConfig{Until: 2, Verbose: false})
 	result := pvg.Run()
 
-	if result.GameResult != GameSuccess {
-		t.Fatalf("expected success, got %s error=%q", result.GameResult, result.Error)
+	if result.GameResult != GameFailure {
+		t.Fatalf("expected failure, got %s error=%q", result.GameResult, result.Error)
+	}
+	if result.CompletionReason != "review_budget_exhausted" {
+		t.Fatalf("completion reason: got %q", result.CompletionReason)
 	}
 	if result.VerifierRounds != 3 {
 		t.Fatalf("verifier attempts: got %d", result.VerifierRounds)

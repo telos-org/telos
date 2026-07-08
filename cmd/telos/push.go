@@ -291,6 +291,12 @@ func pushPackageSkills(
 		if resolved == nil || strings.TrimSpace(resolved.Path) == "" {
 			continue
 		}
+		if ref, ok, err := platformCatalogueSkillRef(client, resolved); err != nil {
+			return nil, err
+		} else if ok {
+			refs[resolved.Name] = ref
+			continue
+		}
 		skill, ok, err := packageSkillDir(resolved.Path, "")
 		if err != nil {
 			return nil, err
@@ -305,6 +311,89 @@ func pushPackageSkills(
 		refs[resolved.Name] = record.Ref
 	}
 	return refs, nil
+}
+
+func platformCatalogueSkillRef(client *cloud.Client, resolved *spec.Skill) (string, bool, error) {
+	if !isDefaultCatalogueSkillPath(resolved.Path) {
+		return "", false, nil
+	}
+	digest, _, err := spec.BuildSkillBundle(resolved)
+	if err != nil {
+		return "", true, fmt.Errorf("bundle platform skill %q: %w", resolved.Name, err)
+	}
+	record, err := platformSkillRecord(client, resolved)
+	if err != nil {
+		return "", true, err
+	}
+	if record.Digest != digest {
+		return "", true, fmt.Errorf(
+			"platform skill %q digest mismatch: local %s, registry %s (%s)",
+			resolved.Name,
+			digest,
+			record.Digest,
+			record.Ref,
+		)
+	}
+	return record.Ref, true, nil
+}
+
+func platformSkillRecord(client *cloud.Client, resolved *spec.Skill) (*cloud.SkillRecord, error) {
+	scope, name, version, ok := registrySkillRefParts(resolved.SourceRef)
+	if ok {
+		if scope != "telos" || name != resolved.Name {
+			return nil, fmt.Errorf("platform skill %q has inconsistent source ref %q", resolved.Name, resolved.SourceRef)
+		}
+		if version != "" {
+			record, err := client.GetSkillVersion(scope, name, version)
+			if err != nil {
+				return nil, fmt.Errorf("platform skill %q is not published at %s: %w", resolved.Name, resolved.SourceRef, err)
+			}
+			return record, nil
+		}
+	}
+	record, err := client.GetSkill("telos", resolved.Name)
+	if err != nil {
+		return nil, fmt.Errorf("platform skill %q is not published in @telos: %w", resolved.Name, err)
+	}
+	return record, nil
+}
+
+func registrySkillRefParts(raw string) (scope string, name string, version string, ok bool) {
+	value := strings.TrimSpace(strings.TrimSuffix(raw, "*"))
+	value = strings.TrimSpace(strings.TrimPrefix(value, "skill:"))
+	if !strings.HasPrefix(value, "@") {
+		return "", "", "", false
+	}
+	scoped := strings.TrimPrefix(value, "@")
+	scope, rest, ok := strings.Cut(scoped, "/")
+	if !ok {
+		return "", "", "", false
+	}
+	name, version, _ = strings.Cut(rest, ":")
+	if scope == "" || name == "" {
+		return "", "", "", false
+	}
+	return scope, name, version, true
+}
+
+func isDefaultCatalogueSkillPath(path string) bool {
+	catalogue := strings.TrimSpace(spec.DefaultSkillsDir())
+	if catalogue == "" || strings.TrimSpace(path) == "" {
+		return false
+	}
+	catalogueAbs, err := filepath.Abs(catalogue)
+	if err != nil {
+		return false
+	}
+	pathAbs, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(catalogueAbs, pathAbs)
+	if err != nil {
+		return false
+	}
+	return rel != "." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) && rel != ".."
 }
 
 func pushSkillPackage(client *cloud.Client, skill *skillPackage, scope string) (*cloud.SkillRecord, error) {

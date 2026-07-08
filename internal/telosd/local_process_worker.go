@@ -25,9 +25,6 @@ func (s localProcessSubstrate) Apply(session *sessionapi.Session, wakeReason str
 	if sessionDir == "" {
 		return fmt.Errorf("session %s has no session_dir", session.SessionID)
 	}
-	if err := sessionworker.Stop(sessionDir); err != nil {
-		return err
-	}
 	return sessionworker.StartWithOptions(sessionDir, sessionworker.StartOptions{
 		Runtime:    sessionapi.RuntimeCloud,
 		WakeReason: wakeReason,
@@ -40,4 +37,12 @@ func (s localProcessSubstrate) Stop(session *sessionapi.Session) error {
 		return nil
 	}
 	return sessionworker.Stop(sessionDir)
+}
+
+func (s localProcessSubstrate) Wake(session *sessionapi.Session, wakeReason string) error {
+	sessionDir := ptrValue(session.SessionDir)
+	if sessionDir == "" {
+		return sessionworker.ErrWorkerNotRunning
+	}
+	return sessionworker.Wake(sessionDir)
 }

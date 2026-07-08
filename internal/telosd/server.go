@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"os"
@@ -38,7 +39,11 @@ func Run(ctx context.Context, cfg Config) error {
 			return err
 		}
 		materializer := newApplyPackageMaterializer(baseStore.PackageRoot, cfg.Auth.Token)
-		store = newCloudSessionStore(baseStore, substrate, materializer)
+		cloudStore := newCloudSessionStore(baseStore, substrate, materializer)
+		store = cloudStore
+		if err := cloudStore.ensureRootWorkers("server_started"); err != nil {
+			log.Printf("ensure root workers: %v", err)
+		}
 		startSessionBootstrapReconciler(ctx, store, materializer)
 	}
 	mux := http.NewServeMux()

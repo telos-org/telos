@@ -53,9 +53,9 @@ func (s *PVGState) SpecPath() string {
 	return filepath.Join(s.SpecDir, "spec.md")
 }
 
-// Turn returns a TurnState for a given round and role.
-func (s *PVGState) Turn(roundNum int, role string) *TurnState {
-	dir := filepath.Join(s.TurnsDir(), fmt.Sprintf("%04d-%s", roundNum, role))
+// Turn returns a TurnState for a given epoch, round, and role.
+func (s *PVGState) Turn(epochID int, roundNum int, role string) *TurnState {
+	dir := filepath.Join(s.TurnsDir(), fmt.Sprintf("epoch-%04d", epochID), fmt.Sprintf("%04d-%s", roundNum, role))
 	return &TurnState{
 		RoundNum: roundNum,
 		Role:     role,

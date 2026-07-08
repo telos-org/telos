@@ -35,6 +35,7 @@ type EnvironmentSpec struct {
 	Name                       string
 	ExtendsPath                string
 	SkillPaths                 []string // nil means "not declared"
+	SkillSourceRefs            map[string]string
 	SpecText                   string
 	IntervalSeconds            *int
 	Tags                       []string
@@ -161,12 +162,13 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 
 	// skills
 	if v, ok := raw["skills"]; ok {
-		refs, reqPaths, err := parseSkillRefs(baseDir, v)
+		refs, reqPaths, sourceRefs, err := parseSkillRefs(baseDir, v)
 		if err != nil {
 			return nil, err
 		}
 		env.SkillPaths = refs
 		env.RequiredVerifierSkillPaths = reqPaths
+		env.SkillSourceRefs = sourceRefs
 	}
 
 	// interval
@@ -192,7 +194,7 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 	return env, nil
 }
 
-func parseSkillRefs(baseDir string, v interface{}) (paths []string, required []string, err error) {
+func parseSkillRefs(baseDir string, v interface{}) (paths []string, required []string, sourceRefs map[string]string, err error) {
 	var items []string
 	switch val := v.(type) {
 	case string:
@@ -202,9 +204,10 @@ func parseSkillRefs(baseDir string, v interface{}) (paths []string, required []s
 			items = append(items, fmt.Sprint(item))
 		}
 	default:
-		return nil, nil, fmt.Errorf("'skills' must be a path or a list of paths")
+		return nil, nil, nil, fmt.Errorf("'skills' must be a path or a list of paths")
 	}
 
+	sourceRefs = map[string]string{}
 	for _, raw := range items {
 		raw = strings.TrimSpace(raw)
 		isRequired := strings.HasSuffix(raw, "*")
@@ -212,18 +215,21 @@ func parseSkillRefs(baseDir string, v interface{}) (paths []string, required []s
 			raw = strings.TrimSpace(strings.TrimSuffix(raw, "*"))
 		}
 		if raw == "" {
-			return nil, nil, fmt.Errorf("'skills' contains an empty skill reference")
+			return nil, nil, nil, fmt.Errorf("'skills' contains an empty skill reference")
 		}
 		resolved, err := resolveSkillPath(baseDir, raw)
 		if err != nil {
-			return nil, nil, err
+			return nil, nil, nil, err
 		}
 		paths = append(paths, resolved)
+		if isScopedRegistrySkillRef(raw) {
+			sourceRefs[resolved] = raw
+		}
 		if isRequired {
 			required = append(required, resolved)
 		}
 	}
-	return paths, required, nil
+	return paths, required, sourceRefs, nil
 }
 
 func resolvePath(baseDir, raw string) (string, error) {

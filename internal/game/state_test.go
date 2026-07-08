@@ -14,6 +14,15 @@ func TestNewPVGStateUsesTranscriptName(t *testing.T) {
 	}
 }
 
+func TestPVGStateTurnPathIncludesEpoch(t *testing.T) {
+	state := NewPVGState("test-system", t.TempDir(), "sess-001")
+	turn := state.Turn(7, 2, "verifier")
+	want := filepath.Join(state.TurnsDir(), "epoch-0007", "0002-verifier")
+	if turn.Dir != want {
+		t.Fatalf("turn dir: got %q want %q", turn.Dir, want)
+	}
+}
+
 func TestWriteTurnTaskWritesOnlyTaskArtifact(t *testing.T) {
 	ts := &TurnState{Dir: t.TempDir()}
 

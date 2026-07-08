@@ -223,11 +223,13 @@ func ensureSessionWorkspace(sessionDir string, manifest *sessionapi.Manifest) er
 		if err != nil {
 			return fmt.Errorf("initialize session workspace: %w", err)
 		}
-		manifest.Workspace = &sessionapi.Workspace{
-			Mode:       workspaceModeEmpty,
-			BaseCommit: base,
-		}
-		if err := sessionapi.WriteManifest(manifestPath(sessionDir), manifest); err != nil {
+		if _, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(m *sessionapi.Manifest) error {
+			m.Workspace = &sessionapi.Workspace{
+				Mode:       workspaceModeEmpty,
+				BaseCommit: base,
+			}
+			return nil
+		}); err != nil {
 			return fmt.Errorf("record session workspace: %w", err)
 		}
 		return nil

@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/telos-org/telos/internal/executor"
@@ -193,23 +192,22 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if err := finishEpoch(sessionDir, manifest, result); err != nil {
 		return result, err
 	}
-	if err := cleanupSessionWorkspace(sessionDir, result.WorkspaceCheckpointPath); err != nil {
-		fmt.Fprintf(os.Stderr, "warning: cleanup session workspace: %v\n", err)
+	if manifest.SessionKind != sessionapi.KindController {
+		if err := cleanupSessionWorkspace(sessionDir, result.WorkspaceCheckpointPath); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: cleanup session workspace: %v\n", err)
+		}
 	}
 
 	return result, nil
 }
 
 func controllerPromptEnabled(manifest *sessionapi.Manifest) bool {
-	if manifest.SessionKind != sessionapi.KindController {
-		return false
-	}
-	return strings.TrimSpace(os.Getenv("TELOS_CONTROLLER_PROMPT_ENABLED")) == "1"
+	return manifest.SessionKind == sessionapi.KindController
 }
 
 func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecutor, error) {
 	if _, err := exec.LookPath("pi"); err != nil {
-		return nil, fmt.Errorf("local runs use the pi coding agent, but `pi` is not on your PATH; install it with `npm install -g @mariozechner/pi-coding-agent`")
+		return nil, fmt.Errorf("local runs use the pi coding agent, but `pi` is not on your PATH; install it with `npm install -g @earendil-works/pi-coding-agent`")
 	}
 	p := platform.NewLocalPlatform(workspace)
 	model := cfg.Model
@@ -313,39 +311,40 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 }
 
 func finishEpoch(sessionDir string, manifest *sessionapi.Manifest, result *game.PVGResult) error {
-	manifest = currentManifest(sessionDir, manifest)
-	if manifest.IsStopped() && result.GameResult != game.GameStopped {
-		return nil
-	}
-	last := manifest.LastEpoch()
-	if last == nil {
-		return nil
-	}
-	finishedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-	last.FinishedAt = &finishedAt
-
-	switch result.GameResult {
-	case game.GameSuccess:
-		completed := "completed"
-		last.Result = &completed
-	case game.GameFailure:
-		failed := "failed"
-		last.Result = &failed
-		if result.Error != "" {
-			last.Error = &result.Error
+	_, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(manifest *sessionapi.Manifest) error {
+		if manifest.IsStopped() && result.GameResult != game.GameStopped {
+			return nil
 		}
-	case game.GameStopped:
-		stopped := "stopped"
-		last.Result = &stopped
-		if result.Error != "" {
-			last.Error = &result.Error
-		} else {
-			err := "stopped by operator"
-			last.Error = &err
+		last := manifest.LastEpoch()
+		if last == nil {
+			return nil
 		}
-	}
+		finishedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+		last.FinishedAt = &finishedAt
 
-	if err := sessionapi.WriteManifest(manifestPath(sessionDir), manifest); err != nil {
+		switch result.GameResult {
+		case game.GameSuccess:
+			completed := "completed"
+			last.Result = &completed
+		case game.GameFailure:
+			failed := "failed"
+			last.Result = &failed
+			if result.Error != "" {
+				last.Error = &result.Error
+			}
+		case game.GameStopped:
+			stopped := "stopped"
+			last.Result = &stopped
+			if result.Error != "" {
+				last.Error = &result.Error
+			} else {
+				err := "stopped by operator"
+				last.Error = &err
+			}
+		}
+		return nil
+	})
+	if err != nil {
 		return fmt.Errorf("finish epoch: %w", err)
 	}
 	return nil

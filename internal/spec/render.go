@@ -17,8 +17,8 @@ const (
 type PromptOptions struct {
 	Controller      bool
 	PrimarySpecPath string
-	ReviewMode      bool
-	ReviewCycles    int
+	ReviewBudget    bool
+	ReviewCycleCap  int
 }
 
 // RenderProverTask builds the full prover task prompt.
@@ -64,17 +64,6 @@ func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath
 }
 
 func renderVerifierPreamble(options PromptOptions) string {
-	if options.ReviewMode {
-		return strings.Join([]string{
-			"You are the evaluator for a Telos review-cycle run.",
-			"",
-			"The implementation agent will receive a runtime-controlled number of review cycles. Do not emit status tags. The runtime controls when this run ends; you make an evaluation decision, not a termination decision.",
-			"",
-			"Your job is to judge whether another implementation turn would make the delivered artifact more correct, clear, reliable, or maintainable for the goal. Provide implementation pressure only when it is grounded in the live artifact. If the artifact already satisfies the goal, say that no implementation change is recommended and that the next turn should preserve the current shape.",
-			"",
-			"Judge the live artifact against the spec, named standards, and applicable skills. Use concrete evidence from source, tree state, generated artifacts, and runtime behavior when it matters. Preserve nuance for the summary, and keep the review table small enough to be useful.",
-		}, "\n")
-	}
 	preamble, _ := ReadPrompt("verifier.md")
 	return preamble
 }
@@ -115,8 +104,8 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 	if opts.PrimarySpecPath != "" {
 		lines = append(lines, fmt.Sprintf("- Primary spec: `%s`", opts.PrimarySpecPath))
 	}
-	if opts.ReviewMode && opts.ReviewCycles > 0 {
-		lines = append(lines, fmt.Sprintf("- Review cycles requested: `%d`", opts.ReviewCycles))
+	if opts.ReviewBudget && opts.ReviewCycleCap > 0 {
+		lines = append(lines, fmt.Sprintf("- Review cycle cap: at most `%d` verifier cycles", opts.ReviewCycleCap))
 	}
 	if platform != "local" {
 		lines = append(lines, fmt.Sprintf("- Namespace: `%s`", compiled.Namespace))
@@ -130,15 +119,6 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 			"- if the evaluator says no implementation change is recommended, preserve the current shape and revalidate tests, tree state, and named invariants only",
 			"- otherwise make the smallest change that improves the delivered system against the goal",
 			"- preserve valid existing work and live state unless the spec explicitly allows replacement",
-			"",
-		)
-	} else if opts.ReviewMode {
-		lines = append(lines, "",
-			"### Review Focus",
-			"- evaluate the delivered artifact against the spec and applicable quality bars",
-			"- inspect source, tree state, generated artifacts, and runtime behavior as needed",
-			"- produce a compact score table plus a summary of grounded fixes, or why no implementation change is recommended",
-			"- do not invent new requirements",
 			"",
 		)
 	} else {
@@ -176,15 +156,6 @@ func renderRequiredEvaluationRubrics(compiled *CompiledEnvironment, role Role, o
 	if role == RoleProver {
 		lines = append(lines,
 			"The evaluator will load these starred skills by name and use them as grading rubrics. Treat each named rubric as part of the goal, not optional style advice.",
-			"",
-		)
-		lines = appendSkillPointers(lines, compiled.RequiredVerifierSkills)
-		return strings.Join(lines, "\n")
-	}
-
-	if role == RoleVerifier && opts.ReviewMode {
-		lines = append(lines,
-			"The following starred skills are mandatory review rubrics. Use each mounted skill by name while grading the artifact, and reflect each applicable rubric in the review criteria or summary.",
 			"",
 		)
 		lines = appendSkillPointers(lines, compiled.RequiredVerifierSkills)
@@ -257,17 +228,7 @@ func effectiveSkills(compiled *CompiledEnvironment, role Role, opts PromptOption
 	if role == RoleProver {
 		skills = implementationSkills(skills, compiled.RequiredVerifierSkills)
 	}
-	if !opts.Controller || hasSkill(skills, "telos-orchestrate") {
-		return skills
-	}
-	controllerSkill := ResolveDefaultSkill("telos-orchestrate")
-	if controllerSkill == nil {
-		controllerSkill = &Skill{
-			Name:        "telos-orchestrate",
-			Description: "Telos controller runtime.",
-		}
-	}
-	return append(skills, controllerSkill)
+	return skills
 }
 
 func implementationSkills(skills []*Skill, requiredVerifierSkills []*Skill) []*Skill {
@@ -364,23 +325,6 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 			"- Before any operation expected to take more than 60 seconds, emit a progress update explaining what you are about to wait on or verify",
 			"- During long-running work, keep progress updates regular enough that an observer sees useful movement about once per minute; do not save all progress for the final response",
 			"- End every turn with one final <progress_update>what you did this round</progress_update>",
-		}, "\n")
-	}
-	if opts.ReviewMode {
-		return strings.Join([]string{
-			"## Output",
-			"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
-			"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
-			"- Write concise Markdown focused on evidence, score changes, and whether another implementation turn is useful",
-			"- Emit exactly one <review>...</review> block and one <summary>...</summary> block",
-			"- The <review> block must be CSV with header exactly `criteria,score`",
-			"- Use score format `x.y/10` for every score",
-			"- Emit the full current rubric every review turn, not a delta",
-			"- Keep the rubric to roughly 5-10 criteria drawn from the spec, emphasized skills, and discovered non-functional risks",
-			"- In <summary>, distinguish grounded fixes from speculative residual uncertainty",
-			"- If no implementation change is recommended, say that plainly; the next turn will preserve the current shape and revalidate tests, tree state, and named invariants",
-			"- Put nuance and handoff guidance in <summary>, not extra CSV columns",
-			"- Do not emit <status> tags",
 		}, "\n")
 	}
 	lines := []string{

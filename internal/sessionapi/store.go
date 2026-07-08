@@ -346,6 +346,18 @@ func isTopLevelManifest(m *Manifest) bool {
 }
 
 func (fs *FileStore) liveTopLevelSessionIDsBySpecName(specName string) ([]string, error) {
+	return fs.topLevelSessionIDsBySpecName(specName, func(id string, m *Manifest) bool {
+		return !deriveStatus(fs.sessionDir(id), m).IsTerminal()
+	})
+}
+
+func (fs *FileStore) updatableTopLevelSessionIDsBySpecName(specName string) ([]string, error) {
+	return fs.topLevelSessionIDsBySpecName(specName, func(_ string, m *Manifest) bool {
+		return !m.IsStopped()
+	})
+}
+
+func (fs *FileStore) topLevelSessionIDsBySpecName(specName string, include func(id string, m *Manifest) bool) ([]string, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
@@ -358,7 +370,8 @@ func (fs *FileStore) liveTopLevelSessionIDsBySpecName(specName string) ([]string
 		if !entry.IsDir() {
 			continue
 		}
-		m, err := ReadManifest(fs.manifestPath(entry.Name()))
+		id := entry.Name()
+		m, err := ReadManifest(fs.manifestPath(id))
 		if err != nil {
 			continue
 		}
@@ -368,7 +381,7 @@ func (fs *FileStore) liveTopLevelSessionIDsBySpecName(specName string) ([]string
 		if m.SpecName != specName {
 			continue
 		}
-		if deriveStatus(m).IsTerminal() {
+		if include != nil && !include(id, m) {
 			continue
 		}
 		ids = append(ids, m.SessionID)
@@ -432,7 +445,7 @@ func (fs *FileStore) UpdateSpec(name string, req SessionSpecUpdateRequest) (*Ses
 		return nil, fmt.Errorf("spec name %q does not match route name %q: %w", prepared.Name, name, ErrInvalidSession)
 	}
 
-	ids, err := fs.liveTopLevelSessionIDsBySpecName(name)
+	ids, err := fs.updatableTopLevelSessionIDsBySpecName(name)
 	if err != nil {
 		return nil, err
 	}
@@ -460,6 +473,20 @@ func (fs *FileStore) UpdateSpec(name string, req SessionSpecUpdateRequest) (*Ses
 	default:
 		return nil, fmt.Errorf("multiple active root sessions named %q: %s: %w", name, strings.Join(ids, ", "), ErrConflict)
 	}
+}
+
+func (fs *FileStore) UpdateSpecByID(id string, req SessionSpecUpdateRequest) (*SessionSpecUpdateResponse, error) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	session, changed, err := fs.updateSpecByIDLocked(id, req)
+	if err != nil {
+		return nil, err
+	}
+	if !changed {
+		return &SessionSpecUpdateResponse{Operation: "unchanged", Session: session}, nil
+	}
+	return &SessionSpecUpdateResponse{Operation: "updated", Session: session}, nil
 }
 
 func (fs *FileStore) prepareSpecForUpdate(req SessionSpecUpdateRequest) (preparedRequestSpec, error) {
@@ -534,13 +561,6 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		}
 		return nil, false, err
 	}
-	if m.ParentSessionID != nil && *m.ParentSessionID != "" {
-		return nil, false, fmt.Errorf("child sessions do not have mutable specs: %w", ErrInvalidSession)
-	}
-	if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
-		return nil, false, fmt.Errorf("root session has no mutable spec: %w", ErrInvalidSession)
-	}
-
 	createReq, err := fs.createRequestForSpecUpdate(req, nil)
 	if err != nil {
 		return nil, false, err
@@ -549,40 +569,66 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 	if err != nil {
 		return nil, false, err
 	}
-	if prepared.Name != m.SpecName {
-		return nil, false, fmt.Errorf("root session spec name is immutable: %w", ErrInvalidSession)
+	var changed bool
+	var previousVersion int
+	var currentVersion int
+	var previousPackageDigest string
+	var previousSpecSHA256 string
+	var versionEntry map[string]any
+	m, err = MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
+		if m.ParentSessionID != nil && *m.ParentSessionID != "" {
+			return fmt.Errorf("child sessions do not have mutable specs: %w", ErrInvalidSession)
+		}
+		if m.SessionKind != KindController {
+			return fmt.Errorf("only controller sessions have mutable specs: %w", ErrInvalidSession)
+		}
+		if m.IsStopped() {
+			return fmt.Errorf("stopped controller sessions do not have mutable specs: %w", ErrInvalidSession)
+		}
+		if m.SessionSpecPath == nil || *m.SessionSpecPath == "" {
+			return fmt.Errorf("root session has no mutable spec: %w", ErrInvalidSession)
+		}
+		if prepared.Name != m.SpecName {
+			return fmt.Errorf("root session spec name is immutable: %w", ErrInvalidSession)
+		}
+		previousVersion = ptrOr(m.CurrentSpecVersion, 1)
+		previousPackageDigest = strValue(m.PackageDigest)
+		previousSpecSHA256 = latestSpecSHA256(m.SpecVersions)
+		if previousSpecSHA256 == specSHA256(prepared.SpecData) && previousPackageDigest == strValue(prepared.PackageDigest) {
+			changed = false
+			return nil
+		}
+		if err := writeFileAtomic(*m.SessionSpecPath, prepared.SpecData, 0o644); err != nil {
+			return fmt.Errorf("write session spec: %w", err)
+		}
+		currentVersion = previousVersion + 1
+		versionEntry = specVersionEntry(currentVersion, *m.SessionSpecPath, prepared.SpecData, &previousVersion, prepared.PackageDigest)
+		m.CurrentSpecVersion = &currentVersion
+		m.SpecVersions = append(m.SpecVersions, versionEntry)
+		m.PackageDigest = prepared.PackageDigest
+		m.ApplyPackageLock = prepared.ApplyPackageLock
+		m.SourceSpecPath = prepared.SourceSpecPath
+		m.SessionSpecPath = strPtr(*m.SessionSpecPath)
+		if len(m.Specs) > 0 {
+			m.Specs[0].Name = prepared.Name
+			m.Specs[0].DirName = prepared.Name
+			m.Specs[0].SessionSpecPath = m.SessionSpecPath
+			m.Specs[0].ContentHash = prepared.ContentHash
+			m.Specs[0].IntervalSeconds = prepared.IntervalSeconds
+		}
+		changed = true
+		return nil
+	})
+	if err != nil {
+		return nil, false, err
 	}
-	previousVersion := ptrOr(m.CurrentSpecVersion, 1)
-	previousPackageDigest := strValue(m.PackageDigest)
-	previousSpecSHA256 := latestSpecSHA256(m.SpecVersions)
-	if previousSpecSHA256 == specSHA256(prepared.SpecData) && previousPackageDigest == strValue(prepared.PackageDigest) {
+	if !changed {
 		session, err := fs.deriveSession(id, m)
 		return session, false, err
 	}
-	if err := writeFileAtomic(*m.SessionSpecPath, prepared.SpecData, 0o644); err != nil {
-		return nil, false, fmt.Errorf("write session spec: %w", err)
-	}
-	version := previousVersion + 1
-	versionEntry := specVersionEntry(version, *m.SessionSpecPath, prepared.SpecData, &previousVersion, prepared.PackageDigest)
-	m.CurrentSpecVersion = &version
-	m.SpecVersions = append(m.SpecVersions, versionEntry)
-	m.PackageDigest = prepared.PackageDigest
-	m.ApplyPackageLock = prepared.ApplyPackageLock
-	m.SourceSpecPath = prepared.SourceSpecPath
-	m.SessionSpecPath = strPtr(*m.SessionSpecPath)
-	if len(m.Specs) > 0 {
-		m.Specs[0].Name = prepared.Name
-		m.Specs[0].DirName = prepared.Name
-		m.Specs[0].SessionSpecPath = m.SessionSpecPath
-		m.Specs[0].ContentHash = prepared.ContentHash
-		m.Specs[0].IntervalSeconds = prepared.IntervalSeconds
-	}
-	if err := WriteManifest(fs.manifestPath(id), m); err != nil {
-		return nil, false, err
-	}
 	fs.emitSpecUpdate(specUpdateEvent(id, m, SpecUpdateEvent{
 		PreviousSpecVersion:   previousVersion,
-		CurrentSpecVersion:    version,
+		CurrentSpecVersion:    currentVersion,
 		PreviousSpecSHA256:    previousSpecSHA256,
 		CurrentSpecSHA256:     stringMapValue(versionEntry, "spec_sha256"),
 		PreviousPackageDigest: previousPackageDigest,
@@ -664,32 +710,40 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		return s, nil
 	}
 
-	if open := m.OpenEpoch(); open != nil {
-		terminateRunner(open.Runner)
+	var runner *Runner
+	if m.Runner != nil {
+		copy := *m.Runner
+		runner = &copy
+	} else if open := m.OpenEpoch(); open != nil && open.Runner != nil {
+		copy := *open.Runner
+		runner = &copy
 	}
 
-	now := tsNow()
-	stopped := "stopped"
-	stoppedErr := "stopped by operator"
+	m, err = MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
+		now := tsNow()
+		stopped := "stopped"
+		stoppedErr := "stopped by operator"
 
-	if len(m.Epochs) == 0 {
-		m.Epochs = append(m.Epochs, Epoch{
-			ID:         1,
-			StartedAt:  now,
-			FinishedAt: &now,
-			Result:     &stopped,
-			Error:      &stoppedErr,
-		})
-	} else {
-		last := &m.Epochs[len(m.Epochs)-1]
-		last.FinishedAt = &now
-		last.Result = &stopped
-		last.Error = &stoppedErr
-	}
-
-	if err := WriteManifest(fs.manifestPath(id), m); err != nil {
+		if len(m.Epochs) == 0 {
+			m.Epochs = append(m.Epochs, Epoch{
+				ID:         1,
+				StartedAt:  now,
+				FinishedAt: &now,
+				Result:     &stopped,
+				Error:      &stoppedErr,
+			})
+		} else {
+			last := &m.Epochs[len(m.Epochs)-1]
+			last.FinishedAt = &now
+			last.Result = &stopped
+			last.Error = &stoppedErr
+		}
+		return nil
+	})
+	if err != nil {
 		return nil, err
 	}
+	terminateRunner(runner)
 
 	return fs.deriveSession(id, m)
 }
@@ -794,7 +848,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		epochs[i] = epochToMap(e)
 	}
 
-	status := deriveStatus(m)
+	status := deriveStatus(dir, m)
 	activeWorkspacePath := filepath.Join(dir, "workspace")
 	activeWorkspaceExists := fileExists(activeWorkspacePath)
 	var activeWorkspacePathPtr *string
@@ -973,16 +1027,25 @@ func applySessionEvidenceSummary(session *Session) {
 	}
 }
 
-func deriveStatus(m *Manifest) SessionStatus {
+func deriveStatus(sessionDir string, m *Manifest) SessionStatus {
 	open := m.OpenEpoch()
 	last := m.LastEpoch()
+
+	if m.Runner != nil {
+		alive, err := runnerLockHeld(sessionDir)
+		if err == nil && alive {
+			return StatusRunning
+		}
+		if last == nil || last.Result == nil {
+			return StatusStale
+		}
+	}
 
 	if open != nil {
 		if open.Runner != nil && open.Runner.InCluster {
 			return StatusRunning
 		}
-		pid, ok := open.Runner.ProcessID()
-		if ok && processAlive(pid) {
+		if pid, ok := open.Runner.ProcessID(); ok && pid == os.Getpid() {
 			return StatusRunning
 		}
 		return StatusStale
@@ -1006,8 +1069,20 @@ func deriveStatus(m *Manifest) SessionStatus {
 	return StatusPending
 }
 
-func processAlive(pid int) bool {
-	return syscall.Kill(pid, 0) == nil
+func runnerLockHeld(sessionDir string) (bool, error) {
+	lock, err := os.OpenFile(filepath.Join(sessionDir, "runner.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return false, err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_SH|syscall.LOCK_NB); err != nil {
+		if errors.Is(err, syscall.EWOULDBLOCK) || errors.Is(err, syscall.EAGAIN) {
+			return true, nil
+		}
+		return false, err
+	}
+	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	return false, nil
 }
 
 func terminateRunner(runner *Runner) {

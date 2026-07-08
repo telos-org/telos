@@ -1,4 +1,4 @@
-package telosd
+package sessionupdate
 
 import (
 	"fmt"
@@ -8,7 +8,7 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
-func projectSpecUpdate(event sessionapi.SpecUpdateEvent) {
+func ProjectSpecUpdate(event sessionapi.SpecUpdateEvent) {
 	message := fmt.Sprintf(
 		"The operator updated the session spec from version %d to %d. Reload the current spec before continuing.",
 		event.PreviousSpecVersion,

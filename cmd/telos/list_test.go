@@ -626,8 +626,8 @@ func TestEvaluationDispositionIsPendingForActiveReview(t *testing.T) {
 	}
 }
 
-func TestPrintSessionDescriptionDistinguishesReviewCycles(t *testing.T) {
-	completionReason := "review_cycles_complete"
+func TestPrintSessionDescriptionDistinguishesReviewBudgetExhausted(t *testing.T) {
+	completionReason := "review_budget_exhausted"
 	verifierConceded := false
 	session := sessionapi.Session{
 		SessionID:        "sess_review",
@@ -641,8 +641,8 @@ func TestPrintSessionDescriptionDistinguishesReviewCycles(t *testing.T) {
 	printSessionDescription(&out, session)
 	text := out.String()
 	for _, want := range []string{
-		"completion     review_cycles_complete",
-		"evaluation     review cycles complete (acceptance not used)",
+		"completion     review_budget_exhausted",
+		"evaluation     review budget exhausted",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("description missing %q:\n%s", want, text)
