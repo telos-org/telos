@@ -390,7 +390,7 @@ func TestClientStreamSessionLogs(t *testing.T) {
 }
 
 func TestSessionCreateRequestOmitsEmptyRuntimeDefaults(t *testing.T) {
-	markdown := "---\nversion: v0\nname: demo\n---\n# Demo\n"
+	markdown := "---\nversion: 0.1.0\nname: demo\n---\n# Demo\n"
 	body, err := json.Marshal(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
 		t.Fatal(err)

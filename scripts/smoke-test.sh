@@ -119,7 +119,7 @@ FIXTURE_SPEC_PATH="$FIXTURE_DIR/fixture/SPEC.md"
 
 cat > "$FIXTURE_SPEC_PATH" <<'FIXTURE_SPEC'
 ---
-version: v0
+version: 0.1.0
 name: smoke-fixture
 platform: local
 ---
@@ -224,7 +224,6 @@ RUN_JSON="$(telos_fixture run "$FIXTURE_SPEC_PATH" \
   --json \
   --until 1 \
   --max-cost-usd 4 \
-  --agent-timeout-sec 600 \
   2>&1 || true)"
 
 check_json "run --json parses" "$RUN_JSON"

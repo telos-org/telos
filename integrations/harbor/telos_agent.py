@@ -21,7 +21,6 @@ from harbor.environments.base import BaseEnvironment
 from harbor.models.agent.context import AgentContext
 
 DEFAULT_HARBOR_WORKDIR = "/app"
-DEFAULT_AGENT_TIMEOUT_SEC = 0
 DEFAULT_POLL_INTERVAL_SEC = 5
 DEFAULT_SESSION_TIMEOUT_SEC = 7200
 DEFAULT_UNTIL = 3
@@ -57,7 +56,7 @@ def render_harbor_spec(
 ) -> str:
     frontmatter = [
         "---",
-        "version: v0",
+        "version: 0.1.0",
         f"name: {sanitize_spec_name(name)}",
         "platform: local",
     ]
@@ -155,7 +154,6 @@ class TelosExecutableAgent(BaseInstalledAgent):
         thinking: str = "medium",
         until: int | str = DEFAULT_UNTIL,
         max_cost_usd: float | str | None = 20.0,
-        agent_timeout_sec: int | str = DEFAULT_AGENT_TIMEOUT_SEC,
         session_timeout_sec: int | str = DEFAULT_SESSION_TIMEOUT_SEC,
         poll_interval_sec: int | str = DEFAULT_POLL_INTERVAL_SEC,
         workdir: str | None = None,
@@ -175,7 +173,6 @@ class TelosExecutableAgent(BaseInstalledAgent):
         self.max_cost_usd = (
             None if max_cost_usd in (None, "") else float(max_cost_usd)
         )
-        self.agent_timeout_sec = int(agent_timeout_sec)
         self.session_timeout_sec = int(session_timeout_sec)
         self.poll_interval_sec = int(poll_interval_sec)
         self.workdir = workdir
@@ -463,7 +460,7 @@ cat > /tmp/telos-harbor/SPEC.md <<'TELOS_SPEC'
 TELOS_SPEC
 cd {shlex.quote(workdir)}
 export TELOS_SESSION_DIR=/tmp/telos-harbor/sessions
-run_json="$(telos run /tmp/telos-harbor/SPEC.md --workspace {shlex.quote(workdir)} --model {shlex.quote(model)} --thinking {shlex.quote(self.thinking)} --until {self.until}{max_cost_flag} --agent-timeout-sec {self.agent_timeout_sec} --json)"
+run_json="$(telos run /tmp/telos-harbor/SPEC.md --workspace {shlex.quote(workdir)} --model {shlex.quote(model)} --thinking {shlex.quote(self.thinking)} --until {self.until}{max_cost_flag} --json)"
 printf '%s\n' "$run_json" > /tmp/telos-harbor/run.json
 session_id="$(json_field /tmp/telos-harbor/run.json session_id || true)"
 if [ -z "$session_id" ]; then

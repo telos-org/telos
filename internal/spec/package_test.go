@@ -358,7 +358,7 @@ func TestCompilePackageLocalScopedSkillRef(t *testing.T) {
 	specPath := filepath.Join(dir, "SPEC.md")
 	if err := os.WriteFile(
 		specPath,
-		[]byte("---\nversion: v0\nname: scoped-package-skill\nplatform: cloud\nskills:\n  - '@telos/alpha:1.0.0'\n---\nUse alpha.\n"),
+		[]byte("---\nversion: 0.1.0\nname: scoped-package-skill\nplatform: cloud\nskills:\n  - '@telos/alpha:1.0.0'\n---\nUse alpha.\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)
@@ -410,7 +410,7 @@ func TestCompileUsesPackageManifestInjectedRequiredSkill(t *testing.T) {
 	specPath := filepath.Join(dir, "SPEC.md")
 	if err := os.WriteFile(
 		specPath,
-		[]byte("---\nversion: v0\nname: manifest-default-skill\nplatform: cloud\n---\nUse injected defaults.\n"),
+		[]byte("---\nversion: 0.1.0\nname: manifest-default-skill\nplatform: cloud\n---\nUse injected defaults.\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)
@@ -575,7 +575,7 @@ func packageFilesFromEntries(entries map[string][]byte) []packageFile {
 func writePackageTestSpec(t *testing.T, dir, name, skill string) string {
 	t.Helper()
 	path := filepath.Join(dir, "SPEC.md")
-	data := []byte("---\nversion: v0\nname: " + name + "\nplatform: cloud\nskills:\n  - " + skill + "\n---\nBuild the package.\n")
+	data := []byte("---\nversion: 0.1.0\nname: " + name + "\nplatform: cloud\nskills:\n  - " + skill + "\n---\nBuild the package.\n")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatalf("write spec: %v", err)
 	}
