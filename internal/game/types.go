@@ -62,6 +62,7 @@ type AgentExecutor interface {
 // PVGConfig holds runtime settings for a PVG run.
 type PVGConfig struct {
 	Until           int
+	UntilSeconds    int
 	MaxCostUSD      *float64
 	Verbose         bool
 	EpochID         int

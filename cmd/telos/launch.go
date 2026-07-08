@@ -37,17 +37,16 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	model := fs.String("model", "", "Model name")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
-	untilValue := 0
+	untilValue := ""
 	until := &untilValue
 	if command == "run" {
-		until = fs.Int("until", 0, "Run at most N evaluator review cycles before failing")
+		until = fs.String("until", "", "Run at most N review cycles or duration like 30m")
 	}
 	maxCostUSD := fs.Float64("max-cost-usd", 20.0, "Maximum cost in USD")
-	agentTimeout := fs.Int("agent-timeout-sec", 0, "Agent timeout in seconds; 0 disables")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 	localConfigSet := flagNamesSet(fs, "workspace")
-	untilValue, err := untilFlagValue(fs, *until)
+	untilConfig, err := untilFlagValue(fs, *until)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -72,12 +71,12 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a Telos session")
 			os.Exit(1)
 		}
-		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, *agentTimeout)
+		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		runCloudChildSession(specArg, ctx, untilValue, runtimeConfig, *jsonOut, action)
+		runCloudChildSession(specArg, ctx, untilConfig, runtimeConfig, *jsonOut, action)
 		return
 	}
 
@@ -125,7 +124,7 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudApply:
-		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD, *agentTimeout)
+		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -152,14 +151,14 @@ func cmdLaunch(command, action string, args []string) {
 		*model,
 		*thinking,
 		*maxCostUSD,
-		*agentTimeout,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	cfg.SessionKind = sessionKindForCommand(command)
-	cfg.Until = untilValue
+	cfg.Until = untilConfig.ReviewCycles
+	cfg.UntilSeconds = untilConfig.Seconds
 	if inLocalRoot {
 		cfg.ParentSessionID = &localRootID
 	}
@@ -310,7 +309,7 @@ func validateLaunchCommand(command string, mode launchMode) error {
 func runCloudChildSession(
 	specArg string,
 	ctx rootContext,
-	until int,
+	until untilConfig,
 	runtimeConfig sessionRuntimeConfig,
 	jsonOut bool,
 	action string,
@@ -321,8 +320,11 @@ func runCloudChildSession(
 		os.Exit(1)
 	}
 	req.ParentSessionID = &ctx.sessionID
-	if until > 0 {
-		req.Until = &until
+	if until.ReviewCycles > 0 {
+		req.Until = &until.ReviewCycles
+	}
+	if until.Seconds > 0 {
+		req.UntilSeconds = &until.Seconds
 	}
 	applySessionRuntimeConfig(&req, runtimeConfig)
 	session, err := runtimeclient.New(ctx.endpoint, ctx.token).CreateSession(req)
@@ -402,17 +404,16 @@ func applyCloudSessionPackage(
 	}
 
 	session, err := control.CreateSession(cloud.SessionCreateOptions{
-		Name:            name,
-		PackageRef:      packageRef,
-		AgentModel:      runtimeConfig.Model,
-		AgentThinking:   runtimeConfig.Thinking,
-		AgentTimeoutSec: runtimeConfig.AgentTimeoutSec,
+		Name:          name,
+		PackageRef:    packageRef,
+		AgentModel:    runtimeConfig.Model,
+		AgentThinking: runtimeConfig.Thinking,
 	})
 	return "created", session, err
 }
 
 func cloudRuntimeConfigSet(cfg sessionRuntimeConfig) bool {
-	return cfg.Model != "" || cfg.Thinking != "" || cfg.AgentTimeoutSec != nil
+	return cfg.Model != "" || cfg.Thinking != ""
 }
 
 func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session) {

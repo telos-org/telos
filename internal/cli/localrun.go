@@ -26,6 +26,7 @@ type LocalRunConfig struct {
 	Model           string
 	Thinking        string
 	Until           int
+	UntilSeconds    int
 	MaxCostUSD      *float64
 	AgentTimeoutSec int
 }
@@ -177,6 +178,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 
 	pvgCfg := game.PVGConfig{
 		Until:           cfg.Until,
+		UntilSeconds:    cfg.UntilSeconds,
 		MaxCostUSD:      cfg.MaxCostUSD,
 		Verbose:         true,
 		EpochID:         epochID,
@@ -271,6 +273,7 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		Config: sessionapi.SessionConfig{
 			Model:           model,
 			Until:           cfg.Until,
+			UntilSeconds:    cfg.UntilSeconds,
 			MaxCostUSD:      cfg.MaxCostUSD,
 			AgentTimeoutSec: cfg.AgentTimeoutSec,
 			Thinking:        thinking,
@@ -301,6 +304,7 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 		Model:           cfg.Model,
 		Thinking:        cfg.Thinking,
 		Until:           cfg.Until,
+		UntilSeconds:    cfg.UntilSeconds,
 		MaxCostUSD:      cfg.MaxCostUSD,
 		AgentTimeoutSec: cfg.AgentTimeoutSec,
 	}

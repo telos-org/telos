@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -91,30 +92,28 @@ func resolveLocalRunConfigFromFlags(
 	model string,
 	thinking string,
 	maxCostUSD float64,
-	agentTimeout int,
 ) (cli.LocalRunConfig, error) {
 	cost, err := positiveFloatOption(fs, "max-cost-usd", maxCostUSD, "TELOS_MAX_COST_USD", 20.0)
 	if err != nil {
 		return cli.LocalRunConfig{}, err
 	}
-	timeout, err := nonNegativeIntOption(fs, "agent-timeout-sec", agentTimeout, "TELOS_AGENT_TIMEOUT_SEC", 0)
-	if err != nil {
-		return cli.LocalRunConfig{}, err
-	}
 	return cli.LocalRunConfig{
-		Workspace:       stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
-		Model:           modelOption(fs, model),
-		Thinking:        stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", "medium"),
-		MaxCostUSD:      &cost,
-		AgentTimeoutSec: timeout,
+		Workspace:  stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
+		Model:      modelOption(fs, model),
+		Thinking:   stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", "medium"),
+		MaxCostUSD: &cost,
 	}, nil
 }
 
 type sessionRuntimeConfig struct {
-	Model           string
-	Thinking        string
-	MaxCostUSD      *float64
-	AgentTimeoutSec *int
+	Model      string
+	Thinking   string
+	MaxCostUSD *float64
+}
+
+type untilConfig struct {
+	ReviewCycles int
+	Seconds      int
 }
 
 func resolveSessionRuntimeConfigFromFlags(
@@ -122,7 +121,6 @@ func resolveSessionRuntimeConfigFromFlags(
 	model string,
 	thinking string,
 	maxCostUSD float64,
-	agentTimeout int,
 ) (sessionRuntimeConfig, error) {
 	cfg := sessionRuntimeConfig{
 		Model:    modelOption(fs, model),
@@ -134,13 +132,6 @@ func resolveSessionRuntimeConfigFromFlags(
 			return sessionRuntimeConfig{}, err
 		}
 		cfg.MaxCostUSD = &cost
-	}
-	if flagNameSet(fs, "agent-timeout-sec") || strings.TrimSpace(os.Getenv("TELOS_AGENT_TIMEOUT_SEC")) != "" {
-		timeout, err := nonNegativeIntOption(fs, "agent-timeout-sec", agentTimeout, "TELOS_AGENT_TIMEOUT_SEC", 0)
-		if err != nil {
-			return sessionRuntimeConfig{}, err
-		}
-		cfg.AgentTimeoutSec = &timeout
 	}
 	return cfg, nil
 }
@@ -155,19 +146,30 @@ func applySessionRuntimeConfig(req *sessionapi.SessionCreateRequest, cfg session
 	if cfg.MaxCostUSD != nil {
 		req.MaxCostUSD = cfg.MaxCostUSD
 	}
-	if cfg.AgentTimeoutSec != nil {
-		req.AgentTimeoutSec = cfg.AgentTimeoutSec
-	}
 }
 
-func untilFlagValue(fs *flag.FlagSet, value int) (int, error) {
+func untilFlagValue(fs *flag.FlagSet, value string) (untilConfig, error) {
 	if !flagNameSet(fs, "until") {
-		return 0, nil
+		return untilConfig{}, nil
 	}
-	if value <= 0 {
-		return 0, fmt.Errorf("--until must be positive")
+	raw := strings.TrimSpace(value)
+	if raw == "" {
+		return untilConfig{}, fmt.Errorf("--until must be positive")
 	}
-	return value, nil
+	if n, err := strconv.Atoi(raw); err == nil {
+		if n <= 0 {
+			return untilConfig{}, fmt.Errorf("--until must be positive")
+		}
+		return untilConfig{ReviewCycles: n}, nil
+	}
+	duration, err := time.ParseDuration(raw)
+	if err != nil || duration <= 0 {
+		return untilConfig{}, fmt.Errorf("--until must be a positive review count or duration like 30m")
+	}
+	if duration < time.Second {
+		return untilConfig{}, fmt.Errorf("--until duration must be at least 1s")
+	}
+	return untilConfig{Seconds: int(duration.Seconds())}, nil
 }
 
 func stringOption(fs *flag.FlagSet, name, value, envName string) string {
@@ -192,27 +194,6 @@ func modelOption(fs *flag.FlagSet, value string) string {
 		return model
 	}
 	return ""
-}
-
-func nonNegativeIntOption(fs *flag.FlagSet, name string, value int, envName string, defaultValue int) (int, error) {
-	if flagNameSet(fs, name) {
-		if value < 0 {
-			return 0, fmt.Errorf("--%s / %s must be non-negative", name, envName)
-		}
-		return value, nil
-	}
-	raw := strings.TrimSpace(os.Getenv(envName))
-	if raw == "" {
-		return defaultValue, nil
-	}
-	parsed, err := strconv.Atoi(raw)
-	if err != nil {
-		return 0, fmt.Errorf("--%s / %s must be an integer", name, envName)
-	}
-	if parsed < 0 {
-		return 0, fmt.Errorf("--%s / %s must be non-negative", name, envName)
-	}
-	return parsed, nil
 }
 
 func positiveFloatOption(fs *flag.FlagSet, name string, value float64, envName string, defaultValue float64) (float64, error) {

@@ -110,7 +110,7 @@ func TestClientApplySessionSpec(t *testing.T) {
 
 	client := New(srv.URL, "test-token")
 	response, err := client.ApplySessionSpec("demo", sessionapi.SessionSpecUpdateRequest{
-		SpecMarkdown: "---\nversion: v0\nname: demo\n---\n# Demo\n",
+		SpecMarkdown: "---\nversion: 0.1.0\nname: demo\n---\n# Demo\n",
 	})
 	if err != nil {
 		t.Fatalf("ApplySessionSpec: %v", err)
