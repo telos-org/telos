@@ -19,9 +19,9 @@ type cloudBootstrapSession struct {
 }
 
 const (
-	defaultCloudSessionModel    = "sail-research/zai-org/GLM-5.2-FP8"
+	defaultCloudSessionModel    = "sail-research/moonshotai/Kimi-K2.6"
 	defaultCloudSessionThinking = "medium"
-	defaultCloudAgentTimeoutSec = 14400
+	defaultCloudAgentTimeoutSec = 900
 	cloudAgentTimeoutEnvVar     = "TELOS_AGENT_TIMEOUT_SEC"
 )
 
