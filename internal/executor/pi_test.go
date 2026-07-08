@@ -47,6 +47,9 @@ func TestBuildPiArgvUsesTextModeWithoutSessionByDefault(t *testing.T) {
 	if strings.Contains(argv[2], `--mode json`) {
 		t.Errorf("pi should not use the streaming json event mode: %s", argv[2])
 	}
+	if strings.Contains(argv[2], `--no-extensions`) {
+		t.Errorf("pi should allow configured extensions: %s", argv[2])
+	}
 }
 
 func TestBuildPiArgvUsesTaskFileAndSessionFile(t *testing.T) {

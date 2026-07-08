@@ -340,9 +340,9 @@ func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
 		fmt.Sprintf(`prompt="${%s}"; `, platform.TaskEnvVar) +
 		`if [ -n "${3:-}" ]; then prompt="$3"; fi; ` +
 		`if [ -n "${4:-}" ]; then ` +
-		`exec pi --mode text --model "$1" --thinking "$2" --session "$4" --no-extensions -p "$prompt"; ` +
+		`exec pi --mode text --model "$1" --thinking "$2" --session "$4" -p "$prompt"; ` +
 		`fi; ` +
-		`exec pi --mode text --model "$1" --thinking "$2" --no-session --no-extensions -p "$prompt"`
+		`exec pi --mode text --model "$1" --thinking "$2" --no-session -p "$prompt"`
 	argv := []string{"sh", "-c", script, "pi", model, thinking}
 	if taskPath != "" {
 		argv = append(argv, "@"+taskPath)
