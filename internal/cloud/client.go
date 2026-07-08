@@ -118,6 +118,7 @@ func (event deploymentLogEvent) asSessionEvent() sessionapi.SessionEvent {
 type Client struct {
 	Endpoint string
 	Token    string
+	OrgID    string
 	HTTP     *http.Client
 }
 
@@ -158,7 +159,9 @@ func ControlClient() (*Client, error) {
 	if token == "" {
 		return nil, fmt.Errorf("not logged in; run `telos login` first")
 	}
-	return NewClient(endpoint, token), nil
+	client := NewClient(endpoint, token)
+	client.OrgID = cfg.OrgID
+	return client, nil
 }
 
 // NewClientFromConfig creates a client from the user's config file.
@@ -406,6 +409,9 @@ func (c *Client) streamEvents(ctx context.Context, path string, onData func([]by
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}
+	if strings.TrimSpace(c.OrgID) != "" {
+		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(c.OrgID))
+	}
 	client := http.DefaultClient
 	if c.HTTP != nil {
 		clone := *c.HTTP
@@ -470,6 +476,9 @@ func (c *Client) doRaw(method, path string, body []byte, contentType string) (*h
 	req.Header.Set("User-Agent", UserAgent)
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	if strings.TrimSpace(c.OrgID) != "" {
+		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(c.OrgID))
 	}
 	return c.HTTP.Do(req)
 }
