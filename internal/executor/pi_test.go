@@ -112,6 +112,64 @@ func TestExecuteTurnIncludesStderrOnPiFailure(t *testing.T) {
 	}
 }
 
+func TestExecuteTurnUsesEnvPromptForNormalSessionTask(t *testing.T) {
+	workspace := t.TempDir()
+	home := filepath.Join(t.TempDir(), "home")
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	piPath := filepath.Join(bin, "pi")
+	script := `#!/bin/sh
+printf '%s\n' "$@" > "$HOME/argv.txt"
+printf '%s' "$TELOS_TASK" > "$HOME/task-env.txt"
+session=""
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--session" ]; then
+    shift
+    session="$1"
+  fi
+  shift || true
+done
+mkdir -p "$(dirname "$session")"
+printf '%s\n' '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"done\n<status>CONCEDE</status>\n"}],"stopReason":"stop"}}' > "$session"
+`
+	if err := os.WriteFile(piPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	state := game.NewPVGState("spec", t.TempDir(), "sess")
+	turn := state.Turn(1, 1, "prover")
+	task := "small controller task"
+	if err := game.WriteTurnTask(turn, task); err != nil {
+		t.Fatal(err)
+	}
+
+	p := platform.NewLocalPlatform(workspace)
+	p.Env = map[string]string{"HOME": home}
+	exec := NewPiExecutor(p, "test-model", "high", 0)
+
+	result := exec.ExecuteTurn(task, "prover", turn)
+
+	if result.Status != game.StatusConcede {
+		t.Fatalf("status: got %q logs=%q error=%q", result.Status, result.Logs, result.Error)
+	}
+	taskEnv, err := os.ReadFile(filepath.Join(home, "task-env.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(taskEnv) != task {
+		t.Fatalf("TELOS_TASK: got %q want %q", string(taskEnv), task)
+	}
+	argv, err := os.ReadFile(filepath.Join(home, "argv.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(argv), "@"+turn.TaskPath()) {
+		t.Fatalf("normal session task should not use Pi @file prompt:\n%s", string(argv))
+	}
+}
+
 func TestExecuteTurnTreatsTimeoutAsTerminalFailure(t *testing.T) {
 	workspace := t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")

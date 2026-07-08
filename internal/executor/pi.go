@@ -23,6 +23,8 @@ type PiExecutor struct {
 	Timeout  int
 }
 
+const piEnvPromptMaxBytes = 256 * 1024
+
 // NewPiExecutor creates a new Pi executor.
 func NewPiExecutor(p *platform.LocalPlatform, model, thinking string, timeout int) *PiExecutor {
 	if thinking == "" {
@@ -50,11 +52,13 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		stopRequested = turnState.StopRequested
 	}
 
-	argv := BuildPiArgv(pe.Model, pe.Thinking, taskPath, sessionPath)
 	taskEnv := task
-	if taskPath != "" {
+	promptPath := ""
+	if taskPath != "" && len(task) > piEnvPromptMaxBytes {
+		promptPath = taskPath
 		taskEnv = ""
 	}
+	argv := BuildPiArgv(pe.Model, pe.Thinking, promptPath, sessionPath)
 	projector := startPiLiveProjector(sessionPath, turnState)
 	if projector != nil {
 		defer projector.Stop()
