@@ -392,6 +392,12 @@ func applyCloudSessionPackage(
 			return "", nil, fmt.Errorf("invalid cloud session id %q", sessionID)
 		}
 		session, err := control.UpdateSession(sessionID, packageRef)
+		if err != nil && cloud.IsStatus(err, 409) {
+			current, getErr := control.GetSession(sessionID)
+			if getErr == nil && current.PackageRef == packageRef {
+				return "unchanged", current, nil
+			}
+		}
 		return "updated", session, err
 	}
 

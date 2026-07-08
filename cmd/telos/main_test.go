@@ -794,6 +794,52 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 	}
 }
 
+func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
+	var updateCalls int
+	var getCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
+			updateCalls++
+			http.Error(w, "conflict", http.StatusConflict)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_123":
+			getCalls++
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":             "sess_123",
+				"name":           "auth",
+				"state":          "healthy",
+				"package_ref":    "@user-abc/auth:0.1.1",
+				"package_digest": "sha256:new",
+				"created_at":     "then",
+				"updated_at":     "now",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	operation, session, err := applyCloudSessionPackage(
+		cloud.NewClient(srv.URL, "test-token"),
+		"auth",
+		"@user-abc/auth:0.1.1",
+		"sess_123",
+		sessionRuntimeConfig{},
+	)
+	if err != nil {
+		t.Fatalf("applyCloudSessionPackage: %v", err)
+	}
+	if operation != "unchanged" {
+		t.Fatalf("operation: got %q want unchanged", operation)
+	}
+	if session.ID != "sess_123" || session.PackageRef != "@user-abc/auth:0.1.1" {
+		t.Fatalf("session: got %+v", session)
+	}
+	if updateCalls != 1 || getCalls != 1 {
+		t.Fatalf("calls: update=%d get=%d", updateCalls, getCalls)
+	}
+}
+
 func TestRootSessionContextUsesScopedToken(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	t.Setenv("TELOS_API_TOKEN", "session-token")
