@@ -105,23 +105,25 @@ type SessionConfig struct {
 // InitialManifest is the typed input for creating a session.json before any
 // worker epoch has started.
 type InitialManifest struct {
-	SessionID        string
-	SessionKind      SessionKind
-	Runtime          SessionRuntime
-	Launcher         string
-	CreatedAt        string
-	ParentSessionID  *string
-	SourceSpecPath   *string
-	SessionSpecPath  *string
-	SpecName         string
-	CurrentRevision  *string
-	Config           SessionConfig
-	Workspace        *Workspace
-	Provenance       map[string]any
-	PackageDigest    *string
-	ApplyPackageLock *spec.ApplyPackageManifest
-	Access           *ScopedToken
-	Specs            []InitialManifestSpec
+	SessionID          string
+	SessionKind        SessionKind
+	Runtime            SessionRuntime
+	Launcher           string
+	CreatedAt          string
+	ParentSessionID    *string
+	SourceSpecPath     *string
+	SessionSpecPath    *string
+	SpecName           string
+	CurrentRevision    *string
+	CurrentSpecVersion *int
+	SpecVersions       []map[string]any
+	Config             SessionConfig
+	Workspace          *Workspace
+	Provenance         map[string]any
+	PackageDigest      *string
+	ApplyPackageLock   *spec.ApplyPackageManifest
+	Access             *ScopedToken
+	Specs              []InitialManifestSpec
 }
 
 type InitialManifestSpec struct {
@@ -170,25 +172,42 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		})
 	}
 	return Manifest{
-		SessionID:        input.SessionID,
-		SessionKind:      input.SessionKind,
-		Runtime:          input.Runtime,
-		CreatedAt:        input.CreatedAt,
-		Launcher:         input.Launcher,
-		ParentSessionID:  input.ParentSessionID,
-		SourceSpecPath:   input.SourceSpecPath,
-		SessionSpecPath:  input.SessionSpecPath,
-		SpecName:         input.SpecName,
-		CurrentRevision:  input.CurrentRevision,
-		Config:           input.Config,
-		Workspace:        input.Workspace,
-		Provenance:       input.Provenance,
-		PackageDigest:    input.PackageDigest,
-		ApplyPackageLock: input.ApplyPackageLock,
-		Access:           input.Access,
-		Specs:            specs,
-		Epochs:           []Epoch{},
+		SessionID:          input.SessionID,
+		SessionKind:        input.SessionKind,
+		Runtime:            input.Runtime,
+		CreatedAt:          input.CreatedAt,
+		Launcher:           input.Launcher,
+		ParentSessionID:    input.ParentSessionID,
+		SourceSpecPath:     input.SourceSpecPath,
+		SessionSpecPath:    input.SessionSpecPath,
+		SpecName:           input.SpecName,
+		CurrentRevision:    input.CurrentRevision,
+		CurrentSpecVersion: input.CurrentSpecVersion,
+		SpecVersions:       cloneSpecVersionMaps(input.SpecVersions),
+		Config:             input.Config,
+		Workspace:          input.Workspace,
+		Provenance:         input.Provenance,
+		PackageDigest:      input.PackageDigest,
+		ApplyPackageLock:   input.ApplyPackageLock,
+		Access:             input.Access,
+		Specs:              specs,
+		Epochs:             []Epoch{},
 	}
+}
+
+func cloneSpecVersionMaps(versions []map[string]any) []map[string]any {
+	if versions == nil {
+		return nil
+	}
+	out := make([]map[string]any, 0, len(versions))
+	for _, version := range versions {
+		copy := make(map[string]any, len(version))
+		for key, value := range version {
+			copy[key] = value
+		}
+		out = append(out, copy)
+	}
+	return out
 }
 
 func ReadManifest(path string) (*Manifest, error) {

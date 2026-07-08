@@ -197,6 +197,54 @@ func TestCreateLocalSessionRecordsParentSession(t *testing.T) {
 	}
 }
 
+func TestCreateLocalControllerMaterializesInitialRevision(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{SessionKind: sessionapi.KindController})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.CurrentRevision == nil || *manifest.CurrentRevision != "0.1.0" {
+		t.Fatalf("current_revision: %#v", manifest.CurrentRevision)
+	}
+	if manifest.CurrentSpecVersion == nil || *manifest.CurrentSpecVersion != 1 {
+		t.Fatalf("current_spec_version: %#v", manifest.CurrentSpecVersion)
+	}
+	if len(manifest.SpecVersions) != 1 {
+		t.Fatalf("spec_versions: %#v", manifest.SpecVersions)
+	}
+	revisionSpec := filepath.Join(session.SessionDir, "revisions", "0.1.0", "SPEC.md")
+	if got, _ := manifest.SpecVersions[0]["spec_path"].(string); got != revisionSpec {
+		t.Fatalf("spec_path: got %q want %q", got, revisionSpec)
+	}
+	if _, err := os.Lstat(filepath.Join(session.SessionDir, "revisions", "current")); err != nil {
+		t.Fatalf("current revision link missing: %v", err)
+	}
+	if info, err := os.Lstat(*manifest.SessionSpecPath); err != nil {
+		t.Fatalf("active spec missing: %v", err)
+	} else if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("active spec should be a symlink: %s", info.Mode())
+	}
+	if manifest.PackageDigest == nil || *manifest.PackageDigest == "" {
+		t.Fatalf("package_digest: %#v", manifest.PackageDigest)
+	}
+	if manifest.ApplyPackageLock == nil {
+		t.Fatal("missing apply package lock")
+	}
+	if _, err := os.Stat(filepath.Join(session.SessionDir, "package", "SPEC.md")); err != nil {
+		t.Fatalf("active package missing: %v", err)
+	}
+}
+
 func TestEnsureSessionWorkspaceInitializesAPIBackedSession(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
