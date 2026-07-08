@@ -68,10 +68,9 @@ class TelosHarborAgentTest(unittest.TestCase):
         agent.thinking = "high"
         agent.until = 3
         agent.max_cost_usd = 10
-        agent.agent_timeout_sec = 0
         agent.session_timeout_sec = 3600
         agent.poll_interval_sec = 5
-        script = agent._run_script("---\nversion: v0\nname: task\n---\nBody", "/app")
+        script = agent._run_script("---\nversion: 0.1.0\nname: task\n---\nBody", "/app")
 
         self.assertIn('telos logs "$session_id" --raw', script)
         self.assertIn("retry() {", script)

@@ -463,7 +463,7 @@ func TestRootListSessionsScopesLocalRootTree(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	rootKind := sessionapi.KindController
-	rootSpec := "---\nversion: v0\nname: root\nplatform: local\n---\n# Root\n"
+	rootSpec := "---\nversion: 0.1.0\nname: root\nplatform: local\n---\n# Root\n"
 	rootSession, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &rootSpec,
 		SessionKind:  &rootKind,
@@ -471,7 +471,7 @@ func TestRootListSessionsScopesLocalRootTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create root: %v", err)
 	}
-	childSpec := "---\nversion: v0\nname: child\nplatform: local\n---\n# Child\n"
+	childSpec := "---\nversion: 0.1.0\nname: child\nplatform: local\n---\n# Child\n"
 	child, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown:    &childSpec,
 		ParentSessionID: &rootSession.SessionID,
@@ -479,7 +479,7 @@ func TestRootListSessionsScopesLocalRootTree(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Create child: %v", err)
 	}
-	siblingSpec := "---\nversion: v0\nname: sibling\nplatform: local\n---\n# Sibling\n"
+	siblingSpec := "---\nversion: 0.1.0\nname: sibling\nplatform: local\n---\n# Sibling\n"
 	if _, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &siblingSpec,
 		SessionKind:  &rootKind,

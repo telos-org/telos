@@ -118,7 +118,7 @@ func packageSpec(input string) (*specPackage, error) {
 	}
 	return &specPackage{
 		name:     compiled.Environment.Name,
-		version:  compiled.Environment.PackageVersion,
+		version:  compiled.Environment.Version,
 		digest:   pkg.Digest,
 		bytes:    pkg.Bytes,
 		compiled: compiled,

@@ -11,7 +11,7 @@ import (
 func TestCompileEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: compile-test\nplatform: local\n---\n# Compile Test\n\nTest body."), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: compile-test\nplatform: local\n---\n# Compile Test\n\nTest body."), 0o644)
 
 	compiled, err := CompileEnvironment(specPath)
 	if err != nil {
@@ -41,7 +41,7 @@ func TestCompileWithSkills(t *testing.T) {
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: my-skill\ndescription: Test skill\n---\nInstructions"), 0o644)
 
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: skill-compile\nplatform: local\nskills:\n  - my-skill\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: skill-compile\nplatform: local\nskills:\n  - my-skill\n---\nBody"), 0o644)
 
 	compiled, err := CompileEnvironment(specPath)
 	if err != nil {
@@ -65,14 +65,14 @@ func TestCompileWithExtendsUsesParentNamespaceAndHash(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(basePath, []byte("---\nversion: v0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
+	if err := os.WriteFile(basePath, []byte("---\nversion: 0.1.0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	childPath := filepath.Join(dir, "child", "SPEC.md")
 	if err := os.MkdirAll(filepath.Dir(childPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(childPath, []byte("---\nversion: v0\nname: child-spec\nplatform: local\nextends: ../base/SPEC.md\n---\nChild body"), 0o644); err != nil {
+	if err := os.WriteFile(childPath, []byte("---\nversion: 0.1.0\nname: child-spec\nplatform: local\nextends: ../base/SPEC.md\n---\nChild body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -103,7 +103,7 @@ func TestCompileWithExtendsUsesParentNamespaceAndHash(t *testing.T) {
 	}
 
 	originalHash := child.ContentHash
-	if err := os.WriteFile(basePath, []byte("---\nversion: v0\nname: base-spec\nplatform: local\n---\nChanged base body"), 0o644); err != nil {
+	if err := os.WriteFile(basePath, []byte("---\nversion: 0.1.0\nname: base-spec\nplatform: local\n---\nChanged base body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	changed, err := CompileEnvironment(childPath)
@@ -128,7 +128,7 @@ func TestCompileEnvironmentWithBaseResolvesRelativeSkillsAgainstOverride(t *test
 	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: rel-skill\ndescription: Relative\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	specBody := "---\nversion: v0\nname: rel-base-test\nplatform: local\nskills:\n  - skills/rel-skill\n---\nBody"
+	specBody := "---\nversion: 0.1.0\nname: rel-base-test\nplatform: local\nskills:\n  - skills/rel-skill\n---\nBody"
 	srcSpec := filepath.Join(srcDir, "SPEC.md")
 	if err := os.WriteFile(srcSpec, []byte(specBody), 0o644); err != nil {
 		t.Fatal(err)
@@ -172,14 +172,14 @@ func TestCompileWithAbsoluteExtendsPath(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(basePath, []byte("---\nversion: v0\nname: base-abs\nplatform: local\n---\nBase body"), 0o644); err != nil {
+	if err := os.WriteFile(basePath, []byte("---\nversion: 0.1.0\nname: base-abs\nplatform: local\n---\nBase body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	childPath := filepath.Join(dir, "child", "SPEC.md")
 	if err := os.MkdirAll(filepath.Dir(childPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	childSpec := fmt.Sprintf("---\nversion: v0\nname: child-abs\nplatform: local\nextends: %s\n---\nChild body", basePath)
+	childSpec := fmt.Sprintf("---\nversion: 0.1.0\nname: child-abs\nplatform: local\nextends: %s\n---\nChild body", basePath)
 	if err := os.WriteFile(childPath, []byte(childSpec), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -211,7 +211,7 @@ func TestCompileWithoutDeclaredSkillsOnlyIncludesVerifierSkills(t *testing.T) {
 	t.Setenv("TELOS_SKILLS_DIR", defaultSkills)
 
 	specPath := filepath.Join(dir, "SPEC.md")
-	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: cloud-default\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: cloud-default\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -242,7 +242,7 @@ func TestCompileIgnoresUnrelatedManifestJSON(t *testing.T) {
 	t.Setenv("TELOS_SKILLS_DIR", defaultSkills)
 
 	specPath := filepath.Join(dir, "SPEC.md")
-	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: app-manifest\nplatform: cloud\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: app-manifest\nplatform: cloud\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), []byte(`{"name":"app","icons":[]}`), 0o644); err != nil {
@@ -269,7 +269,7 @@ func TestCompileWithEmphasizedSkill(t *testing.T) {
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: critical-skill\ndescription: Critical\n---\nMust do"), 0o644)
 
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: emph-compile\nplatform: local\nskills:\n  - critical-skill*\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: emph-compile\nplatform: local\nskills:\n  - critical-skill*\n---\nBody"), 0o644)
 
 	compiled, err := CompileEnvironment(specPath)
 	if err != nil {
@@ -300,7 +300,7 @@ func TestCompileWithEmphasizedSkill(t *testing.T) {
 func TestToIRJSON(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: ir-test\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: ir-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	ir := ToIRJSON(compiled)
@@ -319,7 +319,7 @@ func TestToIRJSON(t *testing.T) {
 func TestContentHashStability(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: stable-hash\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: stable-hash\nplatform: local\n---\nBody"), 0o644)
 
 	c1, _ := CompileEnvironment(specPath)
 	c2, _ := CompileEnvironment(specPath)
@@ -332,7 +332,7 @@ func TestContentHashStability(t *testing.T) {
 func TestRenderProverTask(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: render-test\nplatform: local\n---\n# Task\n\nDo something."), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: render-test\nplatform: local\n---\n# Task\n\nDo something."), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderProverTask(compiled, "", "")
@@ -360,7 +360,7 @@ func TestRenderProverTask(t *testing.T) {
 func TestRenderVerifierTask(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: verify-test\nplatform: local\n---\n# Task\n\nCheck something."), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: verify-test\nplatform: local\n---\n# Task\n\nCheck something."), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderVerifierTask(compiled, "", "")
@@ -379,7 +379,7 @@ func TestRenderVerifierTask(t *testing.T) {
 func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: reusable-eval\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: reusable-eval\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderVerifierTask(compiled, "=== FILES ===\n./main.go", "")
@@ -402,7 +402,7 @@ func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
 func TestRenderProverUsesOperatingPosture(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: continuation-test\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: continuation-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderProverTask(compiled, "", "")
@@ -422,7 +422,7 @@ func TestRenderWithSkillsRoster(t *testing.T) {
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: my-skill\ndescription: A skill\n---\nInstructions"), 0o644)
 
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: roster-test\nplatform: local\nskills:\n  - my-skill\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: roster-test\nplatform: local\nskills:\n  - my-skill\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderProverTask(compiled, "", "")
@@ -460,7 +460,7 @@ func TestRenderProverHidesDefaultVerifierSkills(t *testing.T) {
 	t.Setenv("TELOS_SKILLS_DIR", defaultSkills)
 
 	specPath := filepath.Join(dir, "SPEC.md")
-	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: odoo\nplatform: cloud\nskills:\n  - k8s-deploy\n---\n# Odoo\n"), 0o644); err != nil {
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: odoo\nplatform: cloud\nskills:\n  - k8s-deploy\n---\n# Odoo\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	compiled, err := CompileEnvironment(specPath)
@@ -493,7 +493,7 @@ func TestRenderWithRequiredEvaluationSkills(t *testing.T) {
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: crit-skill\ndescription: Critical\n---\nMust follow"), 0o644)
 
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: reqver-test\nplatform: local\nskills:\n  - crit-skill*\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: reqver-test\nplatform: local\nskills:\n  - crit-skill*\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 
@@ -532,7 +532,7 @@ func TestRenderWithRequiredEvaluationSkills(t *testing.T) {
 func TestRenderControllerPromptDoesNotAutoInjectOrchestrationSkill(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: controller-test\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: controller-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderProverTask(compiled, "", "/tmp/transcript.md", PromptOptions{
@@ -554,7 +554,7 @@ func TestRenderControllerPromptDoesNotAutoInjectOrchestrationSkill(t *testing.T)
 func TestRenderTranscriptProtocolDoesNotDumpTranscript(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: transcript-test\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: transcript-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderProverTask(compiled, "", "/tmp/transcript.md")
@@ -573,7 +573,7 @@ func TestRenderTranscriptProtocolDoesNotDumpTranscript(t *testing.T) {
 func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: transcript-read\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: transcript-read\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	proverTask := RenderProverTask(compiled, "", "/tmp/transcript.md")
@@ -600,7 +600,7 @@ func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: progress-test\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: progress-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	proverTask := RenderProverTask(compiled, "", "/tmp/transcript.md")
@@ -626,7 +626,7 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 func TestRenderVerifierTaskReviewBudgetUsesStatusContract(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: review-mode\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: review-mode\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderVerifierTask(compiled, "", "/tmp/transcript.md", PromptOptions{
@@ -662,7 +662,7 @@ func TestRenderVerifierTaskReviewBudgetUsesStatusContract(t *testing.T) {
 func TestRenderVerifierTaskGatesControllerOnlyTaskState(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: task-state\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: task-state\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderVerifierTask(compiled, "", "/tmp/transcript.md")
@@ -685,7 +685,7 @@ func TestRenderVerifierTaskGatesControllerOnlyTaskState(t *testing.T) {
 func TestRenderWithWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: ws-test\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: ws-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderProverTask(compiled, "=== FILES ===\n./main.go", "")

@@ -8,12 +8,12 @@ import (
 )
 
 func TestParseFrontmatter(t *testing.T) {
-	input := "---\nversion: v0\nname: test-spec\n---\n# Hello\nBody text"
+	input := "---\nversion: 0.1.0\nname: test-spec\n---\n# Hello\nBody text"
 	raw, body, ok := ParseFrontmatter(input)
 	if !ok {
 		t.Fatal("expected frontmatter to parse")
 	}
-	if raw["version"] != "v0" {
+	if raw["version"] != "0.1.0" {
 		t.Errorf("version: got %v", raw["version"])
 	}
 	if raw["name"] != "test-spec" {
@@ -34,7 +34,7 @@ func TestParseFrontmatterNoFrontmatter(t *testing.T) {
 func TestLoadEnvironment(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: my-test\nplatform: local\n---\n# My Test\n\nSpec body here."), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: my-test\nplatform: local\n---\n# My Test\n\nSpec body here."), 0o644)
 
 	env, err := LoadEnvironment(specPath)
 	if err != nil {
@@ -43,11 +43,8 @@ func TestLoadEnvironment(t *testing.T) {
 	if env.Name != "my-test" {
 		t.Errorf("name: got %q", env.Name)
 	}
-	if env.Version != "v0" {
+	if env.Version != "0.1.0" {
 		t.Errorf("version: got %q", env.Version)
-	}
-	if env.PackageVersion != "" {
-		t.Errorf("package version: got %q", env.PackageVersion)
 	}
 	if env.Platform != "local" {
 		t.Errorf("platform: got %q", env.Platform)
@@ -60,7 +57,7 @@ func TestLoadEnvironment(t *testing.T) {
 func TestLoadEnvironmentEmptyBody(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: empty-body\n---\n"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: empty-body\n---\n"), 0o644)
 
 	_, err := LoadEnvironment(specPath)
 	if err == nil {
@@ -71,7 +68,7 @@ func TestLoadEnvironmentEmptyBody(t *testing.T) {
 	}
 }
 
-func TestLoadEnvironmentWithPackageVersion(t *testing.T) {
+func TestLoadEnvironmentWithVersion(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 1.2.3\nname: versioned\n---\nBody"), 0o644)
@@ -80,46 +77,37 @@ func TestLoadEnvironmentWithPackageVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadEnvironment: %v", err)
 	}
-	if env.Version != "v0" {
-		t.Errorf("schema version: got %q", env.Version)
-	}
-	if env.PackageVersion != "1.2.3" {
-		t.Errorf("package version: got %q", env.PackageVersion)
+	if env.Version != "1.2.3" {
+		t.Errorf("version: got %q", env.Version)
 	}
 }
 
-func TestLoadEnvironmentWithExplicitSchemaCompatibility(t *testing.T) {
+func TestLoadEnvironmentRejectsPackageVersion(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nschema: v0\nversion: 1.2.3\nname: versioned\n---\nBody"), 0o644)
-
-	env, err := LoadEnvironment(specPath)
-	if err != nil {
-		t.Fatalf("LoadEnvironment: %v", err)
-	}
-	if env.Version != "v0" {
-		t.Errorf("schema version: got %q", env.Version)
-	}
-	if env.PackageVersion != "1.2.3" {
-		t.Errorf("package version: got %q", env.PackageVersion)
-	}
-}
-
-func TestLoadEnvironmentInvalidSchema(t *testing.T) {
-	dir := t.TempDir()
-	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nschema: v99\nversion: 1.0.0\nname: bad-ver\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 1.2.3\npackage_version: 1.2.4\nname: versioned\n---\nBody"), 0o644)
 
 	_, err := LoadEnvironment(specPath)
 	if err == nil {
-		t.Fatal("expected error for invalid schema")
+		t.Fatal("expected package_version to be rejected")
+	}
+}
+
+func TestLoadEnvironmentInvalidVersion(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	os.WriteFile(specPath, []byte("---\nversion: 1\nname: bad-ver\n---\nBody"), 0o644)
+
+	_, err := LoadEnvironment(specPath)
+	if err == nil {
+		t.Fatal("expected error for invalid version")
 	}
 }
 
 func TestLoadEnvironmentInvalidPlatform(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: bad-plat\nplatform: docker\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: bad-plat\nplatform: docker\n---\nBody"), 0o644)
 
 	_, err := LoadEnvironment(specPath)
 	if err == nil {
@@ -130,7 +118,7 @@ func TestLoadEnvironmentInvalidPlatform(t *testing.T) {
 func TestLoadEnvironmentWithInterval(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: interval-test\ninterval: 15m\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: interval-test\ninterval: 15m\n---\nBody"), 0o644)
 
 	env, err := LoadEnvironment(specPath)
 	if err != nil {
@@ -144,7 +132,7 @@ func TestLoadEnvironmentWithInterval(t *testing.T) {
 func TestLoadEnvironmentWithTags(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: tag-test\ntags:\n  - alpha\n  - beta\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: tag-test\ntags:\n  - alpha\n  - beta\n---\nBody"), 0o644)
 
 	env, err := LoadEnvironment(specPath)
 	if err != nil {
@@ -163,7 +151,7 @@ func TestLoadEnvironmentWithSkills(t *testing.T) {
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: my-skill\ndescription: A test skill\n---\nInstructions here"), 0o644)
 
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: skill-test\nskills:\n  - my-skill\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: skill-test\nskills:\n  - my-skill\n---\nBody"), 0o644)
 
 	env, err := LoadEnvironment(specPath)
 	if err != nil {
@@ -185,7 +173,7 @@ func TestLoadEnvironmentRejectsScopedSkillLocalSubstitution(t *testing.T) {
 	}
 
 	specPath := filepath.Join(dir, "SPEC.md")
-	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: scoped-local\nskills:\n  - '@acme/deploy:2.1.0'\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: scoped-local\nskills:\n  - '@acme/deploy:2.1.0'\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -209,7 +197,7 @@ func TestLoadEnvironmentResolvesPlatformScopedSkillFromCatalogue(t *testing.T) {
 	for _, ref := range []string{"@telos/deploy:1.0.0", "skill:@telos/deploy*"} {
 		t.Run(ref, func(t *testing.T) {
 			specPath := filepath.Join(t.TempDir(), "SPEC.md")
-			if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: platform-scope\nskills:\n  - '"+ref+"'\n---\nBody"), 0o644); err != nil {
+			if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: platform-scope\nskills:\n  - '"+ref+"'\n---\nBody"), 0o644); err != nil {
 				t.Fatal(err)
 			}
 
@@ -231,7 +219,7 @@ func TestLoadEnvironmentWithEmphasizedSkill(t *testing.T) {
 	os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: important-skill\ndescription: Critical\n---\nRequired instructions"), 0o644)
 
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: emph-test\nskills:\n  - important-skill*\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: emph-test\nskills:\n  - important-skill*\n---\nBody"), 0o644)
 
 	env, err := LoadEnvironment(specPath)
 	if err != nil {
