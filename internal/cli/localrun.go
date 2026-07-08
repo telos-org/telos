@@ -3,6 +3,7 @@ package cli
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -52,6 +53,10 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	if err != nil {
 		return nil, fmt.Errorf("resolve spec path: %w", err)
 	}
+	sessionKind := localSessionKind(cfg)
+	if sessionKind == sessionapi.KindController && (cfg.Until > 0 || cfg.UntilSeconds > 0) {
+		return nil, fmt.Errorf("controller sessions do not support per-run duration bounds")
+	}
 	sourceWorkspace, scopePath, err := workspaceScope(cfg.Workspace)
 	if err != nil {
 		return nil, err
@@ -85,7 +90,6 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	if err != nil {
 		return nil, fmt.Errorf("read spec: %w", err)
 	}
-	sessionKind := localSessionKind(cfg)
 	sourceSpecPath := absSpec
 	sessionSpecPath := state.SpecPath()
 	var currentRevision *string
@@ -290,6 +294,18 @@ type localControllerRevision struct {
 	ApplyPackageLock *spec.ApplyPackageManifest
 }
 
+type localRevisionMetadata struct {
+	Version         string `json:"version"`
+	Sequence        int    `json:"sequence"`
+	SpecSHA256      string `json:"spec_sha256"`
+	PackageDigest   string `json:"package_digest,omitempty"`
+	SpecPath        string `json:"spec_path"`
+	PackagePath     string `json:"package_path,omitempty"`
+	PackageSpecPath string `json:"package_spec_path,omitempty"`
+	ActiveSpecPath  string `json:"active_spec_path"`
+	CreatedAt       string `json:"created_at"`
+}
+
 func materializeLocalControllerRevision(sessionDir string, compiled *spec.CompiledEnvironment, activeSpecPath string, specData []byte) (localControllerRevision, error) {
 	pkg, err := spec.BuildApplyPackage(compiled)
 	if err != nil {
@@ -317,6 +333,19 @@ func materializeLocalControllerRevision(sessionDir string, compiled *spec.Compil
 	if _, err := spec.ExtractApplyPackage(pkg.Bytes, packagePath); err != nil {
 		return localControllerRevision{}, fmt.Errorf("extract revision package: %w", err)
 	}
+	if err := writeLocalRevisionMetadata(filepath.Join(revisionDir, "revision.json"), localRevisionMetadata{
+		Version:         version,
+		Sequence:        1,
+		SpecSHA256:      specDataSHA256(specData),
+		PackageDigest:   pkg.Digest,
+		SpecPath:        revision.SpecPath,
+		PackagePath:     revision.PackagePath,
+		PackageSpecPath: revision.PackageSpecPath,
+		ActiveSpecPath:  revision.ActiveSpecPath,
+		CreatedAt:       time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+	}); err != nil {
+		return localControllerRevision{}, fmt.Errorf("write revision metadata: %w", err)
+	}
 	if err := replaceLocalSymlink(filepath.Join(sessionDir, "revisions", "current"), version); err != nil {
 		return localControllerRevision{}, fmt.Errorf("update current revision link: %w", err)
 	}
@@ -331,6 +360,15 @@ func materializeLocalControllerRevision(sessionDir string, compiled *spec.Compil
 		return localControllerRevision{}, fmt.Errorf("update active package link: %w", err)
 	}
 	return revision, nil
+}
+
+func writeLocalRevisionMetadata(path string, metadata localRevisionMetadata) error {
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return os.WriteFile(path, data, 0o644)
 }
 
 func replaceLocalSymlink(path string, target string) error {
