@@ -9,7 +9,7 @@ import (
 func TestLoadConfigFromFile(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(cfgPath, []byte("api_endpoint: https://test.example.com\nauth_token: secret123\n"), 0o644)
+	os.WriteFile(cfgPath, []byte("api_endpoint: https://test.example.com\nauth_token: secret123\norg_id: org_telos\n"), 0o644)
 
 	t.Setenv("TELOS_CONFIG", cfgPath)
 	t.Setenv("TELOS_API_ENDPOINT", "")
@@ -22,16 +22,20 @@ func TestLoadConfigFromFile(t *testing.T) {
 	if cfg.AuthToken != "secret123" {
 		t.Errorf("token: got %q", cfg.AuthToken)
 	}
+	if cfg.OrgID != "org_telos" {
+		t.Errorf("org id: got %q", cfg.OrgID)
+	}
 }
 
 func TestLoadConfigEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
-	os.WriteFile(cfgPath, []byte("api_endpoint: https://file.example.com\nauth_token: file-token\n"), 0o644)
+	os.WriteFile(cfgPath, []byte("api_endpoint: https://file.example.com\nauth_token: file-token\norg_id: org_file\n"), 0o644)
 
 	t.Setenv("TELOS_CONFIG", cfgPath)
 	t.Setenv("TELOS_API_ENDPOINT", "https://env.example.com")
 	t.Setenv("TELOS_AUTH_TOKEN", "env-token")
+	t.Setenv("TELOS_ORG_ID", "org_env")
 
 	cfg := LoadConfig()
 	if cfg.APIEndpoint != "https://env.example.com" {
@@ -39,6 +43,9 @@ func TestLoadConfigEnvOverride(t *testing.T) {
 	}
 	if cfg.AuthToken != "env-token" {
 		t.Errorf("token: got %q (should be env override)", cfg.AuthToken)
+	}
+	if cfg.OrgID != "org_env" {
+		t.Errorf("org id: got %q (should be env override)", cfg.OrgID)
 	}
 }
 
@@ -63,6 +70,7 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	err := SaveConfig(&Config{
 		APIEndpoint: "https://saved.example.com",
 		AuthToken:   "saved-token",
+		OrgID:       "org_saved",
 	})
 	if err != nil {
 		t.Fatalf("SaveConfig: %v", err)
@@ -74,6 +82,9 @@ func TestSaveAndLoadConfig(t *testing.T) {
 	}
 	if cfg.AuthToken != "saved-token" {
 		t.Errorf("token: got %q", cfg.AuthToken)
+	}
+	if cfg.OrgID != "org_saved" {
+		t.Errorf("org id: got %q", cfg.OrgID)
 	}
 }
 

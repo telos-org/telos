@@ -142,11 +142,13 @@ func TestClientPublishSkillVersion(t *testing.T) {
 
 func TestClientCreateSession(t *testing.T) {
 	var gotBody map[string]string
+	var gotOrgID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost || r.URL.Path != "/api/deployments" {
 			http.NotFound(w, r)
 			return
 		}
+		gotOrgID = r.Header.Get("X-Telos-Org-Id")
 		if r.Header.Get("User-Agent") != UserAgent {
 			t.Fatalf("user-agent: got %q", r.Header.Get("User-Agent"))
 		}
@@ -166,6 +168,7 @@ func TestClientCreateSession(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
+	client.OrgID = "org_telos"
 	session, err := client.CreateSession("auth", "@telos/auth:1.2.3")
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
@@ -176,15 +179,20 @@ func TestClientCreateSession(t *testing.T) {
 	if gotBody["name"] != "auth" || gotBody["package_ref"] != "@telos/auth:1.2.3" {
 		t.Fatalf("body: got %#v", gotBody)
 	}
+	if gotOrgID != "org_telos" {
+		t.Fatalf("org header: got %q", gotOrgID)
+	}
 }
 
 func TestClientUpdateSession(t *testing.T) {
 	var gotBody map[string]string
+	var gotOrgID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut || r.URL.Path != "/api/deployments/sess_123" {
 			http.NotFound(w, r)
 			return
 		}
+		gotOrgID = r.Header.Get("X-Telos-Org-Id")
 		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
 			t.Fatal(err)
 		}
@@ -201,6 +209,7 @@ func TestClientUpdateSession(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
+	client.OrgID = " org_telos "
 	session, err := client.UpdateSession("sess_123", "@telos/auth:1.2.4")
 	if err != nil {
 		t.Fatalf("UpdateSession: %v", err)
@@ -210,6 +219,9 @@ func TestClientUpdateSession(t *testing.T) {
 	}
 	if gotBody["package_ref"] != "@telos/auth:1.2.4" {
 		t.Fatalf("body: got %#v", gotBody)
+	}
+	if gotOrgID != "org_telos" {
+		t.Fatalf("org header: got %q", gotOrgID)
 	}
 }
 
@@ -330,11 +342,13 @@ func TestClientGetSessionLogs(t *testing.T) {
 }
 
 func TestClientStreamSessionLogs(t *testing.T) {
+	var gotOrgID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/deployments/sess_123/logs" {
 			http.NotFound(w, r)
 			return
 		}
+		gotOrgID = r.Header.Get("X-Telos-Org-Id")
 		if r.Header.Get("Accept") != "text/event-stream" {
 			t.Fatalf("Accept: got %q", r.Header.Get("Accept"))
 		}
@@ -344,6 +358,7 @@ func TestClientStreamSessionLogs(t *testing.T) {
 	defer srv.Close()
 
 	client := NewClient(srv.URL, "test-token")
+	client.OrgID = "org_telos"
 	var events []sessionapi.SessionEvent
 	err := client.StreamSessionLogs(context.Background(), "sess_123", func(event sessionapi.SessionEvent) error {
 		events = append(events, event)
@@ -357,6 +372,9 @@ func TestClientStreamSessionLogs(t *testing.T) {
 	}
 	if events[0].Data["stage"] != "route" {
 		t.Fatalf("event metadata: got %#v", events[0].Data)
+	}
+	if gotOrgID != "org_telos" {
+		t.Fatalf("org header: got %q", gotOrgID)
 	}
 }
 
