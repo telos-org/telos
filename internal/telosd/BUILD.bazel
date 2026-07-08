@@ -3,8 +3,8 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "telosd",
     srcs = [
-        "cloud_store.go",
         "config.go",
+        "controller_reconciler.go",
         "local_process_worker.go",
         "package_materializer.go",
         "server.go",
@@ -28,8 +28,8 @@ go_library(
 go_test(
     name = "telosd_test",
     srcs = [
-        "cloud_store_test.go",
         "config_test.go",
+        "controller_reconciler_test.go",
         "package_materializer_test.go",
         "server_test.go",
         "session_bootstrap_test.go",

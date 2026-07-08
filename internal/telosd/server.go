@@ -39,9 +39,9 @@ func Run(ctx context.Context, cfg Config) error {
 			return err
 		}
 		materializer := newApplyPackageMaterializer(baseStore.PackageRoot, cfg.Auth.Token)
-		cloudStore := newCloudSessionStore(baseStore, substrate, materializer)
-		store = cloudStore
-		if err := cloudStore.ensureRootWorkers("server_started"); err != nil {
+		reconciler := newControllerReconciler(baseStore, substrate, materializer, cloudControllerDefaults())
+		store = reconciler
+		if err := reconciler.ensureRootWorkers("server_started"); err != nil {
 			log.Printf("ensure root workers: %v", err)
 		}
 		startSessionBootstrapReconciler(ctx, store, materializer)

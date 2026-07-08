@@ -13,6 +13,9 @@ with `telos run <spec>` when isolation, parallelism, or independent evidence is
 useful. Child sessions are evidence, not final success. Inspect their
 transcript, evidence, and workspace checkpoint before relying on them.
 
+Do not use `telos apply` from inside a controller. `apply` updates durable root
+controller desired state and is reserved for operators.
+
 Use Telos commands for session state before reaching for substrate-specific
 tools:
 

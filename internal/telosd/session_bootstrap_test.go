@@ -106,8 +106,8 @@ func TestSessionBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	if store.creates[0].Model != defaultCloudSessionModel {
 		t.Fatalf("Model = %q want %q", store.creates[0].Model, defaultCloudSessionModel)
 	}
-	if store.creates[0].AgentTimeoutSec == nil || *store.creates[0].AgentTimeoutSec != defaultCloudAgentTimeoutSec {
-		t.Fatalf("AgentTimeoutSec = %v want %d", store.creates[0].AgentTimeoutSec, defaultCloudAgentTimeoutSec)
+	if store.creates[0].AgentTimeoutSec != nil {
+		t.Fatalf("AgentTimeoutSec should not default for controller bootstrap: %v", store.creates[0].AgentTimeoutSec)
 	}
 }
 
@@ -161,16 +161,24 @@ func TestCloudSessionThinkingUsesEnvOverride(t *testing.T) {
 func TestCloudAgentTimeoutUsesEnvOverride(t *testing.T) {
 	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "120")
 
-	if got := cloudAgentTimeoutSec(); got != 120 {
-		t.Fatalf("cloudAgentTimeoutSec = %d want 120", got)
+	got := cloudAgentTimeoutSec()
+	if got == nil || *got != 120 {
+		t.Fatalf("cloudAgentTimeoutSec = %v want 120", got)
 	}
 }
 
 func TestCloudAgentTimeoutCanBeDisabled(t *testing.T) {
 	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "0")
 
-	if got := cloudAgentTimeoutSec(); got != 0 {
-		t.Fatalf("cloudAgentTimeoutSec = %d want 0", got)
+	got := cloudAgentTimeoutSec()
+	if got == nil || *got != 0 {
+		t.Fatalf("cloudAgentTimeoutSec = %v want 0", got)
+	}
+}
+
+func TestCloudAgentTimeoutDefaultsUnset(t *testing.T) {
+	if got := cloudAgentTimeoutSec(); got != nil {
+		t.Fatalf("cloudAgentTimeoutSec = %v want nil", got)
 	}
 }
 

@@ -50,7 +50,7 @@ done
 	t.Setenv("TELOSD_PATH", fakeTelosd)
 
 	store := sessionapi.NewFileStore(filepath.Join(dir, "sessions"), sessionapi.RuntimeCloud)
-	markdown := "---\nversion: v0\nname: auth\nplatform: cloud\n---\n# Auth\n"
+	markdown := "---\nversion: 0.1.0\nname: auth\nplatform: cloud\n---\n# Auth\n"
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
 		t.Fatalf("Create: %v", err)

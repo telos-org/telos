@@ -49,11 +49,11 @@ func (s *recordingSubstrate) Stop(session *sessionapi.Session) error {
 	return nil
 }
 
-func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
+func TestControllerReconcilerAppliesAndStopsWorkers(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{}
-	store := newCloudSessionStore(base, substrate, nil)
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -67,7 +67,7 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	}
 	assertManagedSessionDefaults(t, session)
 
-	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres\n"
+	updated := "---\nversion: 0.1.1\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres\n"
 	if _, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated}); err != nil {
 		t.Fatal(err)
 	}
@@ -89,11 +89,11 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	}
 }
 
-func TestCloudSessionStoreDefaultsSpecPutCreatedSessions(t *testing.T) {
+func TestControllerReconcilerDefaultsSpecPutCreatedSessions(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{}
-	store := newCloudSessionStore(base, substrate, nil)
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
 	response, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown})
 	if err != nil {
@@ -114,11 +114,11 @@ func TestCloudSessionStoreDefaultsSpecPutCreatedSessions(t *testing.T) {
 	}
 }
 
-func TestCloudSessionStoreWakesExistingWorkerForUnchangedSpecPut(t *testing.T) {
+func TestControllerReconcilerWakesExistingWorkerForUnchangedSpecPut(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{}
-	store := newCloudSessionStore(base, substrate, nil)
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -145,11 +145,11 @@ func TestCloudSessionStoreWakesExistingWorkerForUnchangedSpecPut(t *testing.T) {
 	}
 }
 
-func TestCloudSessionStoreMaterializesPackageDigestUpdates(t *testing.T) {
+func TestControllerReconcilerMaterializesPackageDigestUpdates(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	base.PackageRoot = t.TempDir()
 	substrate := &recordingSubstrate{}
-	pkg := buildMaterializerTestPackage(t, "postgres")
+	pkg := buildMaterializerTestPackage(t, "postgres", "0.1.1")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer runtime-token" {
 			t.Fatalf("Authorization = %q", got)
@@ -160,8 +160,8 @@ func TestCloudSessionStoreMaterializesPackageDigestUpdates(t *testing.T) {
 	t.Setenv("TELOS_PACKAGE_BUNDLE_BASE_URL", server.URL)
 	materializer := newApplyPackageMaterializer(base.PackageRoot, "runtime-token")
 	materializer.client = server.Client()
-	store := newCloudSessionStore(base, substrate, materializer)
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	store := newControllerReconciler(base, substrate, materializer, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
 	if _, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err != nil {
 		t.Fatal(err)
@@ -194,11 +194,11 @@ func TestCloudSessionStoreMaterializesPackageDigestUpdates(t *testing.T) {
 	}
 }
 
-func TestCloudSessionStoreRestartsPackageDigestUpdateWhenWorkerIsNotRunning(t *testing.T) {
+func TestControllerReconcilerRestartsPackageDigestUpdateWhenWorkerIsNotRunning(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	base.PackageRoot = t.TempDir()
 	substrate := &recordingSubstrate{wakeErr: sessionworker.ErrWorkerNotRunning}
-	pkg := buildMaterializerTestPackage(t, "postgres")
+	pkg := buildMaterializerTestPackage(t, "postgres", "0.1.1")
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write(pkg.Bytes)
 	}))
@@ -206,8 +206,8 @@ func TestCloudSessionStoreRestartsPackageDigestUpdateWhenWorkerIsNotRunning(t *t
 	t.Setenv("TELOS_PACKAGE_BUNDLE_BASE_URL", server.URL)
 	materializer := newApplyPackageMaterializer(base.PackageRoot, "runtime-token")
 	materializer.client = server.Client()
-	store := newCloudSessionStore(base, substrate, materializer)
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	store := newControllerReconciler(base, substrate, materializer, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 	if _, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err != nil {
 		t.Fatal(err)
 	}
@@ -224,16 +224,16 @@ func TestCloudSessionStoreRestartsPackageDigestUpdateWhenWorkerIsNotRunning(t *t
 	}
 }
 
-func TestCloudSessionStoreProjectsSpecUpdates(t *testing.T) {
+func TestControllerReconcilerProjectsSpecUpdates(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{}
-	store := newCloudSessionStore(base, substrate, nil)
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
 		t.Fatal(err)
 	}
-	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
+	updated := "---\nversion: 0.1.1\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
 
 	if _, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated}); err != nil {
 		t.Fatal(err)
@@ -247,7 +247,8 @@ func TestCloudSessionStoreProjectsSpecUpdates(t *testing.T) {
 		"## External Update",
 		"<external_update>",
 		"from version 1 to 2",
-		"Current spec path: `",
+		"Current immutable spec path: `",
+		"Active spec path: `",
 	} {
 		if !strings.Contains(transcript, want) {
 			t.Fatalf("transcript missing %q:\n%s", want, transcript)
@@ -271,11 +272,11 @@ func TestCloudSessionStoreProjectsSpecUpdates(t *testing.T) {
 	}
 }
 
-func TestCloudSessionStoreRemovesSessionWhenWorkerApplyFails(t *testing.T) {
+func TestControllerReconcilerRemovesSessionWhenWorkerApplyFails(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{applyErr: errors.New("worker launch failed")}
-	store := newCloudSessionStore(base, substrate, nil)
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
 	_, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err == nil {
@@ -293,11 +294,11 @@ func TestCloudSessionStoreRemovesSessionWhenWorkerApplyFails(t *testing.T) {
 	}
 }
 
-func TestCloudSessionStoreLeavesFileStateRunningWhenWorkerStopFails(t *testing.T) {
+func TestControllerReconcilerLeavesFileStateRunningWhenWorkerStopFails(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{stopErr: errors.New("worker stop failed")}
-	store := newCloudSessionStore(base, substrate, nil)
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -324,19 +325,7 @@ func assertManagedSessionDefaults(t *testing.T, session *sessionapi.Session) {
 	if got, _ := session.Config["thinking"].(string); got != defaultCloudSessionThinking {
 		t.Fatalf("thinking = %q want %q", got, defaultCloudSessionThinking)
 	}
-	got, ok := intConfigValue(session.Config, "agent_timeout_sec")
-	if !ok || got != defaultCloudAgentTimeoutSec {
-		t.Fatalf("agent_timeout_sec = %v want %d", session.Config["agent_timeout_sec"], defaultCloudAgentTimeoutSec)
-	}
-}
-
-func intConfigValue(config map[string]any, key string) (int, bool) {
-	switch value := config[key].(type) {
-	case int:
-		return value, true
-	case float64:
-		return int(value), value == float64(int(value))
-	default:
-		return 0, false
+	if _, ok := session.Config["agent_timeout_sec"]; ok {
+		t.Fatalf("agent_timeout_sec should not default for controllers: %v", session.Config["agent_timeout_sec"])
 	}
 }
