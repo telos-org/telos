@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -45,6 +46,15 @@ func (e *Evidence) Log(event string, roundNum int, role string, data map[string]
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
+	lock, err := lockEvidenceFile(e.Path)
+	if err != nil {
+		return
+	}
+	defer unlockEvidenceFile(lock)
+
+	if lastSeq := lastEventSeq(e.Path); lastSeq > e.eventSeq {
+		e.eventSeq = lastSeq
+	}
 	e.eventSeq++
 	record := map[string]interface{}{
 		"schema":             SchemaVersion,
@@ -162,6 +172,23 @@ func splitLines(s string) []string {
 		lines = append(lines, s[start:])
 	}
 	return lines
+}
+
+func lockEvidenceFile(path string) (*os.File, error) {
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		_ = lock.Close()
+		return nil, err
+	}
+	return lock, nil
+}
+
+func unlockEvidenceFile(lock *os.File) {
+	_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+	_ = lock.Close()
 }
 
 func tsNow() string {
