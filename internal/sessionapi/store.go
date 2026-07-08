@@ -126,6 +126,9 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	if sessionKind == KindController && (req.Until != nil || req.UntilSeconds != nil) {
+		return nil, fmt.Errorf("controller sessions do not support per-run duration bounds: %w", ErrInvalidSession)
+	}
 	id, dir, err := fs.createSessionDir(req, sessionKind)
 	if err != nil {
 		return nil, err
@@ -186,6 +189,9 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 				PackageSpecPath: paths.PackageSpecPath,
 			})
 		} else {
+			if err := materializePreparedPackageSource(dir, &prepared); err != nil {
+				return nil, err
+			}
 			if err := writeFileAtomic(sessionSpecPath, prepared.SpecData, 0o644); err != nil {
 				return nil, fmt.Errorf("write session spec: %w", err)
 			}
@@ -1901,7 +1907,6 @@ func prepareApplyPackageSpec(sessionDir string, packagePath string, expectedDige
 	if err != nil {
 		return preparedRequestSpec{}, fmt.Errorf("create package compile dir: %w", err)
 	}
-	defer os.RemoveAll(packageDir)
 	manifest, err := spec.ExtractApplyPackage(data, packageDir)
 	if err != nil {
 		return preparedRequestSpec{}, err
@@ -1931,6 +1936,25 @@ func prepareApplyPackageSpec(sessionDir string, packagePath string, expectedDige
 		PackageDigest:    strPtr(actualDigest),
 		ApplyPackageLock: manifest,
 	}, nil
+}
+
+func materializePreparedPackageSource(sessionDir string, prepared *preparedRequestSpec) error {
+	if prepared == nil || prepared.SourceSpecPath == nil || *prepared.SourceSpecPath == "" || len(prepared.PackageData) == 0 {
+		return nil
+	}
+	sourceDir := filepath.Dir(*prepared.SourceSpecPath)
+	packageDir := filepath.Join(sessionDir, "package")
+	if sourceDir == packageDir {
+		return nil
+	}
+	if err := os.RemoveAll(packageDir); err != nil {
+		return fmt.Errorf("replace package dir: %w", err)
+	}
+	if err := os.Rename(sourceDir, packageDir); err != nil {
+		return fmt.Errorf("persist package source: %w", err)
+	}
+	prepared.SourceSpecPath = strPtr(filepath.Join(packageDir, "SPEC.md"))
+	return nil
 }
 
 func digestApplyPackage(data []byte, manifest *spec.ApplyPackageManifest) string {
