@@ -129,7 +129,10 @@ func TestAppendExternalUpdate(t *testing.T) {
 		CurrentSpecSHA256:     "new",
 		PreviousPackageDigest: "sha256:old",
 		CurrentPackageDigest:  "sha256:new",
-		SpecPath:              "/sessions/sess/specs/postgres/spec.md",
+		PreviousSpecPath:      "/sessions/sess/revisions/0.1.0/SPEC.md",
+		CurrentSpecPath:       "/sessions/sess/revisions/0.1.1/SPEC.md",
+		ActiveSpecPath:        "/sessions/sess/specs/postgres/spec.md",
+		DiffPath:              "/sessions/sess/revisions/0.1.1/spec.diff",
 	}); err != nil {
 		t.Fatalf("AppendExternalUpdate: %v", err)
 	}
@@ -144,8 +147,14 @@ func TestAppendExternalUpdate(t *testing.T) {
 	if !strings.Contains(content, "Current spec version: `2`") {
 		t.Fatalf("missing version:\n%s", content)
 	}
-	if !strings.Contains(content, "Current spec path: `/sessions/sess/specs/postgres/spec.md`") {
-		t.Fatalf("missing spec path:\n%s", content)
+	if !strings.Contains(content, "Current immutable spec path: `/sessions/sess/revisions/0.1.1/SPEC.md`") {
+		t.Fatalf("missing immutable spec path:\n%s", content)
+	}
+	if !strings.Contains(content, "Active spec path: `/sessions/sess/specs/postgres/spec.md`") {
+		t.Fatalf("missing active spec path:\n%s", content)
+	}
+	if !strings.Contains(content, "Spec diff path: `/sessions/sess/revisions/0.1.1/spec.diff`") {
+		t.Fatalf("missing spec diff path:\n%s", content)
 	}
 }
 

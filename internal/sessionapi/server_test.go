@@ -34,7 +34,7 @@ func TestCreateSession(t *testing.T) {
 	defer srv.Close()
 
 	body := `{
-		"spec_markdown": "---\nversion: v0\nname: my-task\nplatform: local\n---\n# My Task\n",
+		"spec_markdown": "---\nversion: 0.1.0\nname: my-task\nplatform: local\n---\n# My Task\n",
 		"model": "claude-opus-4-6",
 		"thinking": "medium",
 		"max_cost_usd": 10.0
@@ -122,7 +122,7 @@ func TestHealthz(t *testing.T) {
 func TestCreateSessionPersistsSpecMarkdown(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: markdown-task\nplatform: local\ninterval: 30s\n---\n# Task\n\nDo it."
+	markdown := "---\nversion: 0.1.0\nname: markdown-task\nplatform: local\ninterval: 30s\n---\n# Task\n\nDo it."
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -155,7 +155,7 @@ func TestCreateSessionPersistsSpecMarkdown(t *testing.T) {
 func TestCreateSessionPersistsUntil(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: review-task\nplatform: local\n---\n# Review Task\n"
+	markdown := "---\nversion: 0.1.0\nname: review-task\nplatform: local\n---\n# Review Task\n"
 	until := 3
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{
@@ -176,10 +176,34 @@ func TestCreateSessionPersistsUntil(t *testing.T) {
 	}
 }
 
+func TestCreateSessionPersistsUntilSeconds(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: 0.1.0\nname: timed-task\nplatform: local\n---\n# Timed Task\n"
+	untilSeconds := 1800
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdown,
+		UntilSeconds: &untilSeconds,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	assertConfigFloat(t, session.Config, "until_seconds", 1800)
+
+	manifest, err := sessionapi.ReadManifest(filepath.Join(root, session.SessionID, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.Config.UntilSeconds != 1800 {
+		t.Fatalf("manifest until_seconds: got %d", manifest.Config.UntilSeconds)
+	}
+}
+
 func TestCreateSessionRejectsInvalidUntil(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: bad-until\nplatform: local\n---\n# Bad Until\n"
+	markdown := "---\nversion: 0.1.0\nname: bad-until\nplatform: local\n---\n# Bad Until\n"
 	until := 0
 
 	_, err := store.Create(sessionapi.SessionCreateRequest{
@@ -197,7 +221,7 @@ func TestCreateSessionRejectsInvalidUntil(t *testing.T) {
 func TestCloudCreateSessionHonorsExplicitChildTaskKind(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
-	markdown := "---\nversion: v0\nname: one-off\nplatform: cloud\n---\n# One Off\n"
+	markdown := "---\nversion: 0.1.0\nname: one-off\nplatform: cloud\n---\n# One Off\n"
 	kind := sessionapi.KindTask
 	parentID := "sess_parent"
 
@@ -220,7 +244,7 @@ func TestCloudCreateSessionHonorsExplicitChildTaskKind(t *testing.T) {
 func TestCreateSessionRejectsGrandchildSession(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
-	rootSpec := "---\nversion: v0\nname: root\nplatform: cloud\n---\n# Root\n"
+	rootSpec := "---\nversion: 0.1.0\nname: root\nplatform: cloud\n---\n# Root\n"
 	rootKind := sessionapi.KindController
 	rootSession, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &rootSpec,
@@ -230,7 +254,7 @@ func TestCreateSessionRejectsGrandchildSession(t *testing.T) {
 		t.Fatalf("Create root: %v", err)
 	}
 
-	childSpec := "---\nversion: v0\nname: child\nplatform: cloud\n---\n# Child\n"
+	childSpec := "---\nversion: 0.1.0\nname: child\nplatform: cloud\n---\n# Child\n"
 	childSession, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown:    &childSpec,
 		ParentSessionID: &rootSession.SessionID,
@@ -239,7 +263,7 @@ func TestCreateSessionRejectsGrandchildSession(t *testing.T) {
 		t.Fatalf("Create child: %v", err)
 	}
 
-	grandchildSpec := "---\nversion: v0\nname: grandchild\nplatform: cloud\n---\n# Grandchild\n"
+	grandchildSpec := "---\nversion: 0.1.0\nname: grandchild\nplatform: cloud\n---\n# Grandchild\n"
 	_, err = store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown:    &grandchildSpec,
 		ParentSessionID: &childSession.SessionID,
@@ -256,7 +280,7 @@ func TestCreateSessionRejectsPublicSessionKind(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	body := `{"spec_markdown":"---\nversion: v0\nname: bad-kind\nplatform: local\n---\n# Bad Kind\n","session_kind":"controller"}`
+	body := `{"spec_markdown":"---\nversion: 0.1.0\nname: bad-kind\nplatform: local\n---\n# Bad Kind\n","session_kind":"controller"}`
 	resp, err := http.Post(srv.URL+"/api/sessions", "application/json", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -271,7 +295,7 @@ func TestCreateSessionRejectsPublicSessionKind(t *testing.T) {
 func TestCreateSessionRejectsInvalidNameWithoutStrayCompileFiles(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: ..\nplatform: local\n---\n# Task\n"
+	markdown := "---\nversion: 0.1.0\nname: ..\nplatform: local\n---\n# Task\n"
 
 	if _, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err == nil {
 		t.Fatal("expected invalid spec name")
@@ -300,7 +324,7 @@ func TestCreateSessionRejectsInvalidNameWithoutStrayCompileFiles(t *testing.T) {
 func TestCloudCreateSessionCreatesRootForOperatorApply(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -336,7 +360,7 @@ func TestCloudCreateSessionCreatesRootForOperatorApply(t *testing.T) {
 func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	srcDir := t.TempDir()
 	specPath := filepath.Join(srcDir, "SPEC.md")
-	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: postgres\nplatform: cloud\nskills:\n  - alpha\n---\n# Postgres\n"), 0o644); err != nil {
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: postgres\nplatform: cloud\nskills:\n  - alpha\n---\n# Postgres\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	skillDir := filepath.Join(srcDir, "alpha")
@@ -377,7 +401,7 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadManifest: %v", err)
 	}
-	if manifest.SourceSpecPath == nil || !strings.Contains(*manifest.SourceSpecPath, filepath.Join(session.SessionID, "package", "SPEC.md")) {
+	if manifest.SourceSpecPath == nil || !strings.Contains(*manifest.SourceSpecPath, filepath.Join(session.SessionID, "revisions", "0.1.0", "package", "SPEC.md")) {
 		t.Fatalf("source_spec_path: %#v", manifest.SourceSpecPath)
 	}
 	if manifest.PackageDigest == nil || *manifest.PackageDigest != pkg.Digest {
@@ -402,7 +426,7 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 			alphaPath = skill.Path
 		}
 	}
-	if !strings.Contains(alphaPath, filepath.Join(session.SessionID, "package", "skills", "alpha")) {
+	if !strings.Contains(alphaPath, filepath.Join(session.SessionID, "revisions", "0.1.0", "package", "skills", "alpha")) {
 		t.Fatalf("alpha resolved outside extracted package: %q", alphaPath)
 	}
 }
@@ -410,7 +434,7 @@ func TestCloudCreateSessionFromApplyPackage(t *testing.T) {
 func TestCloudCreateSessionFromApplyPackageRejectsDigestMismatch(t *testing.T) {
 	srcDir := t.TempDir()
 	specPath := filepath.Join(srcDir, "SPEC.md")
-	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	compiled, err := spec.CompileEnvironment(specPath)
@@ -439,11 +463,15 @@ func TestCloudCreateSessionFromApplyPackageRejectsDigestMismatch(t *testing.T) {
 	}
 }
 
-func writeTestApplyPackage(t *testing.T, packageRoot string, name string, skill string) *spec.ApplyPackage {
+func writeTestApplyPackage(t *testing.T, packageRoot string, name string, skill string, versions ...string) *spec.ApplyPackage {
 	t.Helper()
+	version := "0.1.0"
+	if len(versions) > 0 && versions[0] != "" {
+		version = versions[0]
+	}
 	srcDir := t.TempDir()
 	specPath := filepath.Join(srcDir, "SPEC.md")
-	markdown := fmt.Sprintf("---\nversion: v0\nname: %s\nplatform: cloud\nskills:\n  - %s\n---\n# %s\n", name, skill, name)
+	markdown := fmt.Sprintf("---\nversion: %s\nname: %s\nplatform: cloud\nskills:\n  - %s\n---\n# %s\n", version, name, skill, name)
 	if err := os.WriteFile(specPath, []byte(markdown), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -478,7 +506,7 @@ func writeTestApplyPackage(t *testing.T, packageRoot string, name string, skill 
 func TestCloudCreateSessionRejectsDuplicateLiveRoot(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 	if _, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
@@ -495,7 +523,7 @@ func TestCloudCreateSessionRejectsDuplicateLiveRoot(t *testing.T) {
 func TestCloudCreateSessionIgnoresFailedRootHistory(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
 		t.Fatalf("first create: %v", err)
@@ -569,7 +597,7 @@ func TestCreateSessionRejectsUnknownFields(t *testing.T) {
 	resp, err := http.Post(
 		srv.URL+"/api/sessions",
 		"application/json",
-		strings.NewReader(`{"spec_markdown":"---\nversion: v0\nname: test\nplatform: local\n---\n# Test\n","unexpected":true}`),
+		strings.NewReader(`{"spec_markdown":"---\nversion: 0.1.0\nname: test\nplatform: local\n---\n# Test\n","unexpected":true}`),
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -598,7 +626,7 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	defer srv.Close()
 	rootSession, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
 
-	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
+	updated := "---\nversion: 0.1.1\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
 	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
 		SpecMarkdown: updated,
 	})
@@ -661,6 +689,18 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	if got := session.SpecVersions[0]["package_digest"]; got != *manifest.PackageDigest {
 		t.Fatalf("spec version package_digest: got %#v want %q", got, *manifest.PackageDigest)
 	}
+	if manifest.CurrentRevision == nil || *manifest.CurrentRevision != "0.1.1" {
+		t.Fatalf("current_revision: %#v", manifest.CurrentRevision)
+	}
+	if got := session.SpecVersions[0]["revision"]; got != "0.1.1" {
+		t.Fatalf("revision: got %#v", got)
+	}
+	if got, _ := session.SpecVersions[0]["spec_path"].(string); !strings.Contains(got, filepath.Join("revisions", "0.1.1", "SPEC.md")) {
+		t.Fatalf("spec_path should be immutable revision path: %#v", session.SpecVersions[0])
+	}
+	if got, _ := session.SpecVersions[0]["active_spec_path"].(string); got != *session.SessionSpecPath {
+		t.Fatalf("active_spec_path: got %q want %q", got, *session.SessionSpecPath)
+	}
 	data, err := os.ReadFile(*session.SessionSpecPath)
 	if err != nil {
 		t.Fatal(err)
@@ -680,12 +720,12 @@ func TestApplySessionSpecUpdatesExistingRootFromPackageDigest(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	initial := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	initial := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 	rootSession, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &initial})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	pkg := writeTestApplyPackage(t, packageRoot, "postgres", "alpha")
+	pkg := writeTestApplyPackage(t, packageRoot, "postgres", "alpha", "0.1.1")
 
 	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
 		PackageDigest: pkg.Digest,
@@ -728,7 +768,7 @@ func TestApplySessionSpecUpdatesExistingRootFromPackageDigest(t *testing.T) {
 	if manifest.PackageDigest == nil || *manifest.PackageDigest != pkg.Digest {
 		t.Fatalf("package_digest: got %#v want %q", manifest.PackageDigest, pkg.Digest)
 	}
-	if manifest.SourceSpecPath == nil || !strings.Contains(*manifest.SourceSpecPath, filepath.Join(rootSession.SessionID, "package", "SPEC.md")) {
+	if manifest.SourceSpecPath == nil || !strings.Contains(*manifest.SourceSpecPath, filepath.Join(rootSession.SessionID, "revisions", "0.1.1", "package", "SPEC.md")) {
 		t.Fatalf("source_spec_path: %#v", manifest.SourceSpecPath)
 	}
 	if got := update.Session.SpecVersions[1]["package_digest"]; got != pkg.Digest {
@@ -748,12 +788,12 @@ func TestApplySessionSpecEmitsExternalUpdate(t *testing.T) {
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
-	initial := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	initial := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 	rootSession, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &initial})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	updated := "---\nversion: v0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
+	updated := "---\nversion: 0.1.1\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
 	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated})
 	if err != nil {
 		t.Fatal(err)
@@ -805,7 +845,7 @@ func TestApplySessionSpecNoopsWhenCurrent(t *testing.T) {
 	store.OnSpecUpdate = func(event sessionapi.SpecUpdateEvent) {
 		emitted = append(emitted, event)
 	}
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 	rootSession, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -832,11 +872,29 @@ func TestApplySessionSpecNoopsWhenCurrent(t *testing.T) {
 	}
 }
 
+func TestApplySessionSpecRejectsSameRevisionDifferentContent(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	if _, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	updated := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres changed\n"
+	_, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated})
+	if err == nil {
+		t.Fatal("expected same revision with different content to fail")
+	}
+	if !errors.Is(err, sessionapi.ErrConflict) {
+		t.Fatalf("error: got %v want ErrConflict", err)
+	}
+}
+
 func TestApplySessionSpecCreatesRootWhenMissing(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
 	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown})
 	if err != nil {
 		t.Fatal(err)
@@ -871,7 +929,7 @@ func TestApplySessionSpecRejectsNameMismatch(t *testing.T) {
 	srv, _ := newTestServer(t)
 	defer srv.Close()
 
-	body := `{"spec_markdown":"---\nversion: v0\nname: redis\nplatform: cloud\n---\n# Redis\n"}`
+	body := `{"spec_markdown":"---\nversion: 0.1.0\nname: redis\nplatform: cloud\n---\n# Redis\n"}`
 	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -932,7 +990,7 @@ func TestGetRootSessionSpec(t *testing.T) {
 	if !strings.Contains(body.Markdown, "# postgres") {
 		t.Fatalf("markdown: got %q", body.Markdown)
 	}
-	if body.Environment != `{"name":"postgres","platform":"cloud","version":"v0"}` {
+	if body.Environment != `{"name":"postgres","platform":"cloud","version":"0.1.0"}` {
 		t.Fatalf("environment: got %q", body.Environment)
 	}
 }
@@ -940,7 +998,7 @@ func TestGetRootSessionSpec(t *testing.T) {
 func TestGetRootSessionSpecUsesLineageNotKind(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
-	markdown := "---\nversion: v0\nname: postgres\nplatform: local\n---\n# Postgres\n"
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: local\n---\n# Postgres\n"
 	kind := sessionapi.KindTask
 	root, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &markdown,
@@ -990,7 +1048,7 @@ func TestApplySessionSpecRejectsDuplicateActiveRoots(t *testing.T) {
 		}
 	}
 
-	body := `{"spec_markdown":"---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"}`
+	body := `{"spec_markdown":"---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"}`
 	req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -1088,7 +1146,7 @@ func TestListSessionsHidesChildrenByDefault(t *testing.T) {
 	defer srv.Close()
 
 	root := createSession(t, srv.URL, createSessionBody(t, "root"))
-	childSpec := "---\nversion: v0\nname: child\nplatform: local\n---\n# Child\n"
+	childSpec := "---\nversion: 0.1.0\nname: child\nplatform: local\n---\n# Child\n"
 	if _, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown:    &childSpec,
 		ParentSessionID: &root.SessionID,
@@ -1119,7 +1177,7 @@ func TestListSessionsCanIncludeChildren(t *testing.T) {
 	defer srv.Close()
 
 	root := createSession(t, srv.URL, createSessionBody(t, "root"))
-	childSpec := "---\nversion: v0\nname: child\nplatform: local\n---\n# Child\n"
+	childSpec := "---\nversion: 0.1.0\nname: child\nplatform: local\n---\n# Child\n"
 	child, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown:    &childSpec,
 		ParentSessionID: &root.SessionID,
@@ -1473,7 +1531,7 @@ func TestEventsSSE(t *testing.T) {
 func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: evidence-summary\nplatform: local\n---\n# Evidence\n"
+	markdown := "---\nversion: 0.1.0\nname: evidence-summary\nplatform: local\n---\n# Evidence\n"
 
 	created, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -1521,7 +1579,7 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 func TestGetSessionHydratesActiveTurnFromEvidence(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: active-turn\nplatform: local\n---\n# Active\n"
+	markdown := "---\nversion: 0.1.0\nname: active-turn\nplatform: local\n---\n# Active\n"
 
 	created, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -1661,7 +1719,7 @@ func TestSessionStatusCompleted(t *testing.T) {
 func TestCloudRootStatusStaysRunningAfterCompletedCycle(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
-	markdown := "---\nversion: v0\nname: root\nplatform: cloud\n---\n# Root\n"
+	markdown := "---\nversion: 0.1.0\nname: root\nplatform: cloud\n---\n# Root\n"
 
 	created, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -1957,7 +2015,7 @@ func writeAuthorizedSession(
 		t.Fatal(err)
 	}
 	specPath := filepath.Join(specDir, "spec.md")
-	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: "+id+"\nplatform: cloud\n---\n# "+id+"\n"), 0o644); err != nil {
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: "+id+"\nplatform: cloud\n---\n# "+id+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	m := sessionapi.ManifestFromInitial(sessionapi.InitialManifest{
@@ -2006,7 +2064,7 @@ func createSessionBody(t *testing.T, name string) string {
 
 func createSessionBodyWithConfig(t *testing.T, name string, model string, thinking string) string {
 	t.Helper()
-	markdown := fmt.Sprintf("---\nversion: v0\nname: %s\nplatform: local\n---\n# %s\n", name, name)
+	markdown := fmt.Sprintf("---\nversion: 0.1.0\nname: %s\nplatform: local\n---\n# %s\n", name, name)
 	body, err := json.Marshal(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &markdown,
 		Model:        model,
