@@ -343,9 +343,14 @@ func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
 		`fi; ` +
 		fmt.Sprintf(`prompt="${%s}"; `, platform.TaskEnvVar) +
 		`if [ -n "${3:-}" ]; then prompt="$3"; fi; ` +
+		`append_prompt="${TELOS_PI_APPEND_SYSTEM_PROMPT:-}"; ` +
+		`append_file=""; ` +
+		`if [ -n "$append_prompt" ]; then append_file="$(mktemp)"; printf '%s' "$append_prompt" > "$append_file"; fi; ` +
 		`if [ -n "${4:-}" ]; then ` +
+		`if [ -n "$append_file" ]; then exec pi --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --session "$4" -p "$prompt"; fi; ` +
 		`exec pi --mode text --model "$1" --thinking "$2" --session "$4" -p "$prompt"; ` +
 		`fi; ` +
+		`if [ -n "$append_file" ]; then exec pi --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --no-session -p "$prompt"; fi; ` +
 		`exec pi --mode text --model "$1" --thinking "$2" --no-session -p "$prompt"`
 	argv := []string{"sh", "-c", script, "pi", model, thinking}
 	if taskPath != "" {
