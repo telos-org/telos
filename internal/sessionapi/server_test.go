@@ -200,6 +200,71 @@ func TestCreateSessionPersistsUntilSeconds(t *testing.T) {
 	}
 }
 
+func TestCreateControllerRejectsDurationBounds(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: 0.1.0\nname: bounded-controller\nplatform: local\n---\n# Controller\n"
+	kind := sessionapi.KindController
+	untilSeconds := 1800
+
+	_, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdown,
+		SessionKind:  &kind,
+		UntilSeconds: &untilSeconds,
+	})
+	if err == nil {
+		t.Fatal("expected controller duration bound to be rejected")
+	}
+	if !strings.Contains(err.Error(), "controller sessions do not support per-run duration bounds") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestCreatePackageTaskPersistsSourcePackage(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	specDir := t.TempDir()
+	specPath := filepath.Join(specDir, "SPEC.md")
+	markdown := "---\nversion: 0.1.0\nname: packaged-task\nplatform: local\n---\n# Packaged Task\n\nUse the package."
+	if err := os.WriteFile(specPath, []byte(markdown), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := spec.CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := spec.BuildApplyPackage(compiled)
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+	packagePath := filepath.Join(t.TempDir(), "package.telos")
+	if err := os.WriteFile(packagePath, pkg.Bytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		PackagePath:   packagePath,
+		PackageDigest: pkg.Digest,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(root, session.SessionID, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.SourceSpecPath == nil {
+		t.Fatal("missing source_spec_path")
+	}
+	want := filepath.Join(root, session.SessionID, "package", "SPEC.md")
+	if *manifest.SourceSpecPath != want {
+		t.Fatalf("source_spec_path: got %q want %q", *manifest.SourceSpecPath, want)
+	}
+	if _, err := os.Stat(want); err != nil {
+		t.Fatalf("durable package spec missing: %v", err)
+	}
+}
+
 func TestCreateSessionRejectsInvalidUntil(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
