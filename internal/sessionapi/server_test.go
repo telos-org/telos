@@ -838,6 +838,86 @@ func TestApplySessionSpecEmitsExternalUpdate(t *testing.T) {
 	}
 }
 
+func TestApplySessionSpecSnapshotsLegacyActiveSpec(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	var emitted []sessionapi.SpecUpdateEvent
+	store.OnSpecUpdate = func(event sessionapi.SpecUpdateEvent) {
+		emitted = append(emitted, event)
+	}
+	initial := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	rootSession, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &initial})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	sessionDir := filepath.Join(root, rootSession.SessionID)
+	if err := os.RemoveAll(filepath.Join(sessionDir, "revisions")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(sessionDir, "package")); err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err := os.Remove(*rootSession.SessionSpecPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(*rootSession.SessionSpecPath, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	manifest.CurrentRevision = nil
+	manifest.SourceSpecPath = rootSession.SessionSpecPath
+	manifest.SpecVersions = []map[string]any{{
+		"version":   1,
+		"spec_path": *rootSession.SessionSpecPath,
+	}}
+	if err := sessionapi.WriteManifest(filepath.Join(sessionDir, "session.json"), manifest); err != nil {
+		t.Fatalf("WriteManifest: %v", err)
+	}
+
+	updated := "---\nversion: 0.1.1\nname: postgres\nplatform: cloud\n---\n# Postgres v2\n"
+	response, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated})
+	if err != nil {
+		t.Fatalf("UpdateSpec: %v", err)
+	}
+	if response.Operation != "updated" {
+		t.Fatalf("operation: got %q", response.Operation)
+	}
+	if len(emitted) != 1 {
+		t.Fatalf("emitted updates: %#v", emitted)
+	}
+	previousPath := emitted[0].PreviousSpecPath
+	if !strings.Contains(previousPath, filepath.Join("revisions", "0.1.0", "SPEC.md")) {
+		t.Fatalf("previous path should be stable revision path, got %q", previousPath)
+	}
+	previousData, err := os.ReadFile(previousPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(previousData) != initial {
+		t.Fatalf("previous path does not preserve old spec:\n%s", previousData)
+	}
+	activeData, err := os.ReadFile(*rootSession.SessionSpecPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(activeData) != updated {
+		t.Fatalf("active spec not updated:\n%s", activeData)
+	}
+	manifest, err = sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if got, _ := manifest.SpecVersions[0]["spec_path"].(string); got != previousPath {
+		t.Fatalf("historical spec_path: got %q want %q", got, previousPath)
+	}
+	if got, _ := manifest.SpecVersions[0]["active_spec_path"].(string); got != *rootSession.SessionSpecPath {
+		t.Fatalf("historical active_spec_path: got %q want %q", got, *rootSession.SessionSpecPath)
+	}
+}
+
 func TestApplySessionSpecNoopsWhenCurrent(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)

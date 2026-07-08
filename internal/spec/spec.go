@@ -60,6 +60,11 @@ func ParseFrontmatter(text string) (map[string]interface{}, string, bool) {
 	return raw, m[2], true
 }
 
+// IsSemver reports whether version is a Telos package/spec semantic version.
+func IsSemver(version string) bool {
+	return semverRE.MatchString(strings.TrimSpace(version))
+}
+
 // LoadEnvironment loads and validates a SPEC.md file. Relative `extends` and
 // `skills` paths resolve against the spec's own directory.
 func LoadEnvironment(specPath string) (*EnvironmentSpec, error) {
@@ -105,7 +110,7 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 	if version == "" {
 		return nil, fmt.Errorf("%s: missing required field 'version'", path)
 	}
-	if !semverRE.MatchString(version) {
+	if !IsSemver(version) {
 		return nil, fmt.Errorf("%s: version must be semver like 0.1.0", path)
 	}
 	if strings.TrimSpace(requireStr(raw, "package_version", path)) != "" {
