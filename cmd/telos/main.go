@@ -6,7 +6,7 @@
 //	telos push SPEC.md|SKILL_DIR [--scope SCOPE] [--version VERSION] [--json]
 //	telos apply SPEC.md [--session SESSION] [--json]
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
-//	    [--until N] [--max-cost-usd USD] [--agent-timeout-sec SEC|0] [--json]
+//	    [--until N|DURATION] [--max-cost-usd USD] [--json]
 //	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
 //	telos describe SESSION [--json]
 //	telos logs [-f] [--verbose] SESSION

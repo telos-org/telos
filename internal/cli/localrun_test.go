@@ -64,7 +64,7 @@ func writeTestSpec(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: cli-test\nplatform: local\n---\n# CLI Test\n\nTest body."), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: cli-test\nplatform: local\n---\n# CLI Test\n\nTest body."), 0o644)
 	return specPath
 }
 
@@ -200,7 +200,7 @@ func TestCreateLocalSessionRecordsParentSession(t *testing.T) {
 func TestEnsureSessionWorkspaceInitializesAPIBackedSession(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
-	markdown := "---\nversion: v0\nname: cloud-fresh\nplatform: cloud\n---\n# Cloud Fresh\n\nRun something."
+	markdown := "---\nversion: 0.1.0\nname: cloud-fresh\nplatform: cloud\n---\n# Cloud Fresh\n\nRun something."
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -405,7 +405,7 @@ func TestCreateLocalSessionDefaultsToCwdGitRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	specPath := filepath.Join(source, "SPEC.md")
-	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: cwd-default\nplatform: local\n---\n# Cwd Default\n\nTest body."), 0o644); err != nil {
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: cwd-default\nplatform: local\n---\n# Cwd Default\n\nTest body."), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	runTestCommand(t, source, "git", "add", "SPEC.md")
@@ -549,14 +549,14 @@ func TestCreateLocalSessionExtendsCompletedWorkspaceArtifact(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(baseSpec), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(baseSpec, []byte("---\nversion: v0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
+	if err := os.WriteFile(baseSpec, []byte("---\nversion: 0.1.0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	childSpec := filepath.Join(dir, "child", "SPEC.md")
 	if err := os.MkdirAll(filepath.Dir(childSpec), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(childSpec, []byte("---\nversion: v0\nname: child-spec\nplatform: local\nextends: ../base/SPEC.md\n---\nChild body"), 0o644); err != nil {
+	if err := os.WriteFile(childSpec, []byte("---\nversion: 0.1.0\nname: child-spec\nplatform: local\nextends: ../base/SPEC.md\n---\nChild body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -614,14 +614,14 @@ func TestCreateLocalSessionExtendsRequiresCompletedWorkspaceArtifact(t *testing.
 	if err := os.MkdirAll(filepath.Dir(baseSpec), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(baseSpec, []byte("---\nversion: v0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
+	if err := os.WriteFile(baseSpec, []byte("---\nversion: 0.1.0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	childSpec := filepath.Join(dir, "child", "SPEC.md")
 	if err := os.MkdirAll(filepath.Dir(childSpec), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(childSpec, []byte("---\nversion: v0\nname: child-spec\nplatform: local\nextends: ../base/SPEC.md\n---\nChild body"), 0o644); err != nil {
+	if err := os.WriteFile(childSpec, []byte("---\nversion: 0.1.0\nname: child-spec\nplatform: local\nextends: ../base/SPEC.md\n---\nChild body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -646,14 +646,14 @@ func TestCreateLocalSessionExtendsActiveLocalControllerWorkspace(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(baseSpec), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(baseSpec, []byte("---\nversion: v0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
+	if err := os.WriteFile(baseSpec, []byte("---\nversion: 0.1.0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	childSpec := filepath.Join(dir, "base", "generated", "child", "SPEC.md")
 	if err := os.MkdirAll(filepath.Dir(childSpec), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(childSpec, []byte("---\nversion: v0\nname: child-spec\nplatform: local\nextends: ../../SPEC.md\n---\nChild body"), 0o644); err != nil {
+	if err := os.WriteFile(childSpec, []byte("---\nversion: 0.1.0\nname: child-spec\nplatform: local\nextends: ../../SPEC.md\n---\nChild body"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -782,6 +782,28 @@ func TestCreateLocalSessionPersistsUntil(t *testing.T) {
 	}
 	if manifest.Config.Until != 2 {
 		t.Fatalf("until: got %d", manifest.Config.Until)
+	}
+}
+
+func TestCreateLocalSessionPersistsUntilSeconds(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{UntilSeconds: 1800})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatalf("ReadManifest: %v", err)
+	}
+	if manifest.Config.UntilSeconds != 1800 {
+		t.Fatalf("until_seconds: got %d", manifest.Config.UntilSeconds)
 	}
 }
 
@@ -1073,7 +1095,7 @@ func TestRunLocalSessionResolvesRelativeSkillsAgainstOriginalSpecDir(t *testing.
 		t.Fatal(err)
 	}
 	specPath := filepath.Join(srcDir, "SPEC.md")
-	if err := os.WriteFile(specPath, []byte("---\nversion: v0\nname: runner-rel\nplatform: local\nskills:\n  - skills/runner-rel-skill\n---\nBody"), 0o644); err != nil {
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: runner-rel\nplatform: local\nskills:\n  - skills/runner-rel-skill\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

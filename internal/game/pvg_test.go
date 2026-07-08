@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -19,9 +20,13 @@ type fakeExecutor struct {
 	workspaceText   string
 	checkpointOK    bool
 	turnDirs        []string
+	delay           time.Duration
 }
 
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) TurnResult {
+	if f.delay > 0 {
+		time.Sleep(f.delay)
+	}
 	if ts != nil {
 		f.turnDirs = append(f.turnDirs, ts.Dir)
 	}
@@ -57,7 +62,7 @@ func compileTestSpec(t *testing.T) *spec.CompiledEnvironment {
 	t.Helper()
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: v0\nname: pvg-test\nplatform: local\n---\n# Test\n\nTest body."), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: pvg-test\nplatform: local\n---\n# Test\n\nTest body."), 0o644)
 	compiled, err := spec.CompileEnvironment(specPath)
 	if err != nil {
 		t.Fatalf("CompileEnvironment: %v", err)
@@ -321,6 +326,32 @@ func TestPVGUntilFailsWhenReviewBudgetExhausted(t *testing.T) {
 	transcript := ReadTranscript(state.TranscriptPath)
 	if count := strings.Count(transcript, "<review>"); count != 2 {
 		t.Fatalf("expected two successful review blocks, got %d:\n%s", count, transcript)
+	}
+}
+
+func TestPVGUntilSecondsFailsWhenDurationExhausted(t *testing.T) {
+	compiled := compileTestSpec(t)
+	state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-duration")
+	state.Ensure()
+
+	exec := &fakeExecutor{
+		delay: time.Second + 100*time.Millisecond,
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "slow turn"},
+		},
+	}
+
+	pvg := NewPVG(compiled, exec, state, PVGConfig{UntilSeconds: 1, Verbose: false})
+	result := pvg.Run()
+
+	if result.GameResult != GameFailure {
+		t.Fatalf("expected failure, got %s error=%q", result.GameResult, result.Error)
+	}
+	if result.CompletionReason != "run_duration_exhausted" {
+		t.Fatalf("completion reason: got %q", result.CompletionReason)
+	}
+	if result.VerifierRounds != 0 {
+		t.Fatalf("verifier should not run after duration exhaustion, got %d", result.VerifierRounds)
 	}
 }
 

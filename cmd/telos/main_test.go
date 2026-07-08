@@ -22,7 +22,7 @@ func TestReorderInterspersedFlags(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.Bool("json", false, "")
 	fs.String("workspace", "", "")
-	fs.Int("until", 0, "")
+	fs.String("until", "", "")
 
 	got := reorderInterspersedFlags(fs, []string{
 		"SPEC.md",
@@ -137,7 +137,7 @@ func TestReorderInterspersedFlagsDashDash(t *testing.T) {
 func TestFlagNamesSetUsesExplicitFlagsOnly(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.String("thinking", "medium", "")
-	fs.Int("until", 0, "")
+	fs.String("until", "", "")
 	fs.String("workspace", "", "")
 	parseFlags(fs, []string{"--thinking", "medium", "SPEC.md"})
 
@@ -155,16 +155,14 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	fs.String("model", "", "")
 	fs.String("thinking", "medium", "")
 	fs.Float64("max-cost-usd", 20.0, "")
-	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
 	t.Setenv("TELOS_WORKSPACE", "/tmp/telos-workspace")
 	t.Setenv("TELOS_MODEL", "claude-test")
 	t.Setenv("TELOS_THINKING", "high")
 	t.Setenv("TELOS_MAX_COST_USD", "12.5")
-	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "123")
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0)
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -174,65 +172,8 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	if cfg.Model != "claude-test" || cfg.Thinking != "high" {
 		t.Fatalf("model/thinking: got %q/%q", cfg.Model, cfg.Thinking)
 	}
-	if cfg.AgentTimeoutSec != 123 {
-		t.Fatalf("timeout: got %d", cfg.AgentTimeoutSec)
-	}
 	if cfg.MaxCostUSD == nil || *cfg.MaxCostUSD != 12.5 {
 		t.Fatalf("cost: got %v", cfg.MaxCostUSD)
-	}
-}
-
-func TestResolveLocalRunConfigDefaultsToNoAgentTimeout(t *testing.T) {
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.String("workspace", "", "")
-	fs.String("model", "", "")
-	fs.String("thinking", "medium", "")
-	fs.Float64("max-cost-usd", 20.0, "")
-	fs.Int("agent-timeout-sec", 0, "")
-	parseFlags(fs, []string{"SPEC.md"})
-
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
-	if err != nil {
-		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
-	}
-	if cfg.AgentTimeoutSec != 0 {
-		t.Fatalf("agent timeout should default to disabled, got %d", cfg.AgentTimeoutSec)
-	}
-}
-
-func TestResolveLocalRunConfigAllowsExplicitNoAgentTimeout(t *testing.T) {
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.String("workspace", "", "")
-	fs.String("model", "", "")
-	fs.String("thinking", "medium", "")
-	fs.Float64("max-cost-usd", 20.0, "")
-	fs.Int("agent-timeout-sec", 0, "")
-	parseFlags(fs, []string{"--agent-timeout-sec", "0", "SPEC.md"})
-
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
-	if err != nil {
-		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
-	}
-	if cfg.AgentTimeoutSec != 0 {
-		t.Fatalf("agent timeout should be disabled, got %d", cfg.AgentTimeoutSec)
-	}
-}
-
-func TestResolveLocalRunConfigRejectsNegativeAgentTimeout(t *testing.T) {
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.String("workspace", "", "")
-	fs.String("model", "", "")
-	fs.String("thinking", "medium", "")
-	fs.Float64("max-cost-usd", 20.0, "")
-	fs.Int("agent-timeout-sec", 0, "")
-	parseFlags(fs, []string{"--agent-timeout-sec", "-1", "SPEC.md"})
-
-	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, -1)
-	if err == nil {
-		t.Fatal("expected negative agent timeout to fail")
-	}
-	if !strings.Contains(err.Error(), "non-negative") {
-		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -241,16 +182,14 @@ func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
 	fs.String("model", "", "")
 	fs.String("thinking", "medium", "")
 	fs.Float64("max-cost-usd", 20.0, "")
-	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{
 		"--model", "openai-codex/gpt-5.5",
 		"--thinking", "high",
 		"--max-cost-usd", "100",
-		"--agent-timeout-sec", "0",
 		"SPEC.md",
 	})
 
-	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "openai-codex/gpt-5.5", "high", 100, 0)
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "openai-codex/gpt-5.5", "high", 100)
 	if err != nil {
 		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
 	}
@@ -262,9 +201,6 @@ func TestResolveSessionRuntimeConfigUsesExplicitFlags(t *testing.T) {
 	if req.MaxCostUSD == nil || *req.MaxCostUSD != 100 {
 		t.Fatalf("max cost: got %v", req.MaxCostUSD)
 	}
-	if req.AgentTimeoutSec == nil || *req.AgentTimeoutSec != 0 {
-		t.Fatalf("agent timeout: got %v", req.AgentTimeoutSec)
-	}
 }
 
 func TestResolveSessionRuntimeConfigOmitsDefaults(t *testing.T) {
@@ -272,40 +208,53 @@ func TestResolveSessionRuntimeConfigOmitsDefaults(t *testing.T) {
 	fs.String("model", "", "")
 	fs.String("thinking", "medium", "")
 	fs.Float64("max-cost-usd", 20.0, "")
-	fs.Int("agent-timeout-sec", 0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
-	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "medium", 20.0, 0)
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "medium", 20.0)
 	if err != nil {
 		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
 	}
 	req := sessionapi.SessionCreateRequest{}
 	applySessionRuntimeConfig(&req, cfg)
-	if req.Model != "" || req.Thinking != "" || req.MaxCostUSD != nil || req.AgentTimeoutSec != nil {
+	if req.Model != "" || req.Thinking != "" || req.MaxCostUSD != nil {
 		t.Fatalf("expected empty runtime request config, got %#v", req)
 	}
 }
 
 func TestUntilFlagValue(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.Int("until", 0, "")
+	fs.String("until", "", "")
 	parseFlags(fs, []string{"--until", "5", "SPEC.md"})
 
-	got, err := untilFlagValue(fs, 5)
+	got, err := untilFlagValue(fs, "5")
 	if err != nil {
 		t.Fatalf("untilFlagValue: %v", err)
 	}
-	if got != 5 {
-		t.Fatalf("until: got %d", got)
+	if got.ReviewCycles != 5 || got.Seconds != 0 {
+		t.Fatalf("until: got %#v", got)
+	}
+}
+
+func TestUntilFlagValueDuration(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.String("until", "", "")
+	parseFlags(fs, []string{"--until", "30m", "SPEC.md"})
+
+	got, err := untilFlagValue(fs, "30m")
+	if err != nil {
+		t.Fatalf("untilFlagValue: %v", err)
+	}
+	if got.ReviewCycles != 0 || got.Seconds != 1800 {
+		t.Fatalf("until: got %#v", got)
 	}
 }
 
 func TestUntilFlagValueRejectsNonPositive(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.Int("until", 0, "")
+	fs.String("until", "", "")
 	parseFlags(fs, []string{"--until", "0", "SPEC.md"})
 
-	_, err := untilFlagValue(fs, 0)
+	_, err := untilFlagValue(fs, "0")
 	if err == nil {
 		t.Fatal("expected --until 0 to fail")
 	}
@@ -314,17 +263,16 @@ func TestUntilFlagValueRejectsNonPositive(t *testing.T) {
 	}
 }
 
-func TestResolveLocalRunConfigRejectsInvalidEnvironmentDefaults(t *testing.T) {
+func TestUntilFlagValueRejectsSubsecondDuration(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.Int("agent-timeout-sec", 0, "")
-	parseFlags(fs, []string{"SPEC.md"})
-	t.Setenv("TELOS_AGENT_TIMEOUT_SEC", "not-an-int")
+	fs.String("until", "", "")
+	parseFlags(fs, []string{"--until", "500ms", "SPEC.md"})
 
-	_, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0, 0)
+	_, err := untilFlagValue(fs, "500ms")
 	if err == nil {
-		t.Fatal("expected invalid environment value to fail")
+		t.Fatal("expected --until 500ms to fail")
 	}
-	if !strings.Contains(err.Error(), "must be an integer") {
+	if !strings.Contains(err.Error(), "at least 1s") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -458,7 +406,7 @@ func TestSessionCreateRequestRejectsMissingSpecPath(t *testing.T) {
 
 func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nversion: 1.2\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nversion: 1.2.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	pkg, err := packageSpec(dir)
@@ -468,7 +416,7 @@ func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	if pkg.name != "postgres" {
 		t.Fatalf("name: got %q", pkg.name)
 	}
-	if pkg.version != "1.2" {
+	if pkg.version != "1.2.0" {
 		t.Fatalf("version: got %q", pkg.version)
 	}
 	if !strings.HasPrefix(pkg.digest, "sha256:") {
@@ -663,7 +611,7 @@ func TestLaunchSpecPlatformDoesNotResolveSkills(t *testing.T) {
 	specPath := filepath.Join(dir, "SPEC.md")
 	if err := os.WriteFile(
 		specPath,
-		[]byte("---\nversion: v0\nname: hosted\nplatform: cloud\nskills:\n  - server-side-only\n---\n# Hosted\n"),
+		[]byte("---\nversion: 0.1.0\nname: hosted\nplatform: cloud\nskills:\n  - server-side-only\n---\n# Hosted\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)
@@ -889,7 +837,7 @@ func TestRootSessionContextIgnoresLocalRuntime(t *testing.T) {
 func TestLocalRootSessionIDUsesLocalSessionContext(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: local-root\nplatform: local\n---\n# Local Root\n"
+	markdown := "---\nversion: 0.1.0\nname: local-root\nplatform: local\n---\n# Local Root\n"
 	kind := sessionapi.KindController
 	session, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &markdown,
@@ -914,7 +862,7 @@ func TestLocalRootSessionIDUsesLocalSessionContext(t *testing.T) {
 func TestLocalRootSessionIDIgnoresTaskSession(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: local-task\nplatform: local\n---\n# Local Task\n"
+	markdown := "---\nversion: 0.1.0\nname: local-task\nplatform: local\n---\n# Local Task\n"
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -931,7 +879,7 @@ func TestLocalRootSessionIDIgnoresTaskSession(t *testing.T) {
 func TestLocalRootSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "sessions")
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: local-root\nplatform: local\n---\n# Local Root\n"
+	markdown := "---\nversion: 0.1.0\nname: local-root\nplatform: local\n---\n# Local Root\n"
 	kind := sessionapi.KindController
 	session, err := store.Create(sessionapi.SessionCreateRequest{
 		SpecMarkdown: &markdown,
@@ -954,7 +902,7 @@ func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
 	configureLocalOnlyTest(t)
 	t.Setenv("TELOS_SESSION_DIR", root)
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: follow-test\nplatform: local\n---\n# Follow\n"
+	markdown := "---\nversion: 0.1.0\nname: follow-test\nplatform: local\n---\n# Follow\n"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -998,13 +946,13 @@ func TestLocalStoreProjectsSpecUpdates(t *testing.T) {
 	configureLocalOnlyTest(t)
 	t.Setenv("TELOS_SESSION_DIR", root)
 	s := store()
-	markdown := "---\nversion: v0\nname: local-update\nplatform: local\n---\n# Local Update\n"
+	markdown := "---\nversion: 0.1.0\nname: local-update\nplatform: local\n---\n# Local Update\n"
 	kind := sessionapi.KindController
 	session, err := s.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, SessionKind: &kind})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	updated := "---\nversion: v0\nname: local-update\nplatform: local\ninterval: 6h\n---\n# Local Update v2\n"
+	updated := "---\nversion: 0.1.1\nname: local-update\nplatform: local\ninterval: 6h\n---\n# Local Update v2\n"
 
 	if _, err := s.UpdateSpecByID(session.SessionID, sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated}); err != nil {
 		t.Fatalf("UpdateSpecByID: %v", err)
@@ -1018,7 +966,8 @@ func TestLocalStoreProjectsSpecUpdates(t *testing.T) {
 		"## External Update",
 		"<external_update>",
 		"from version 1 to 2",
-		"Current spec path: `",
+		"Current immutable spec path: `",
+		"Active spec path: `",
 	} {
 		if !strings.Contains(transcript, want) {
 			t.Fatalf("transcript missing %q:\n%s", want, transcript)
@@ -1047,7 +996,7 @@ func TestLocalStoreUpdatesCompletedController(t *testing.T) {
 	configureLocalOnlyTest(t)
 	t.Setenv("TELOS_SESSION_DIR", root)
 	s := store()
-	markdown := "---\nversion: v0\nname: completed-update\nplatform: local\n---\n# Completed Update\n"
+	markdown := "---\nversion: 0.1.0\nname: completed-update\nplatform: local\n---\n# Completed Update\n"
 	kind := sessionapi.KindController
 	session, err := s.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, SessionKind: &kind})
 	if err != nil {
@@ -1074,7 +1023,7 @@ func TestLocalStoreUpdatesCompletedController(t *testing.T) {
 	if current.Status != sessionapi.StatusCompleted {
 		t.Fatalf("status: got %s", current.Status)
 	}
-	updated := "---\nversion: v0\nname: completed-update\nplatform: local\ninterval: 6h\n---\n# Completed Update v2\n"
+	updated := "---\nversion: 0.1.1\nname: completed-update\nplatform: local\ninterval: 6h\n---\n# Completed Update v2\n"
 	response, err := s.UpdateSpecByID(session.SessionID, sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated})
 	if err != nil {
 		t.Fatalf("UpdateSpecByID: %v", err)
@@ -1088,7 +1037,7 @@ func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("TELOS_SESSION_DIR", root)
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: v0\nname: missing-transcript\nplatform: local\n---\n# Missing\n"
+	markdown := "---\nversion: 0.1.0\nname: missing-transcript\nplatform: local\n---\n# Missing\n"
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
 	if err != nil {
@@ -1241,7 +1190,7 @@ func TestPrintCloudSessionLogsDefaultsToAgentProgress(t *testing.T) {
 		{Event: "agent_complete", Data: map[string]any{"status": "CONTINUE", "model": "test-model", "num_turns": float64(12)}},
 		{Event: "agent_failure_recoverable", Data: map[string]any{"error": "agent_no_output", "consecutive_failures": float64(1), "max_failures": float64(3)}},
 		{Event: "runtime.prepare.started", Data: map[string]any{"message": "preparing runtime", "stage": "prepare"}},
-		{Event: "game_end", Data: map[string]any{"game_result": "failure", "error": "local_timeout:900"}},
+		{Event: "game_end", Data: map[string]any{"game_result": "failure", "error": "run_duration_exhausted: exceeded 1800 seconds"}},
 	}
 
 	var out bytes.Buffer
@@ -1253,7 +1202,7 @@ func TestPrintCloudSessionLogsDefaultsToAgentProgress(t *testing.T) {
 		"Agent complete: CONTINUE model=test-model turns=12",
 		"Recoverable failure: agent_no_output (1/3)",
 		"preparing runtime",
-		"Completed: failure (local_timeout:900)",
+		"Completed: failure (run_duration_exhausted: exceeded 1800 seconds)",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("cloud session logs missing %q:\n%s", want, text)

@@ -3,6 +3,7 @@ package game
 import (
 	"fmt"
 	"log"
+	"time"
 
 	"github.com/telos-org/telos/internal/evidence"
 	"github.com/telos-org/telos/internal/spec"
@@ -73,12 +74,19 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 	workspace := ""
 	recoverableFailures := 0
 	reviewCyclesCompleted := 0
+	deadline := p.runDeadline()
 
 	for {
+		if p.runDurationExhausted(deadline) {
+			return p.failRunDurationExhausted()
+		}
 		if p.shouldStop() {
 			return p.end(GameStopped)
 		}
 		turn := p.runProverTurn(workspace, promptOpts)
+		if p.runDurationExhausted(deadline) {
+			return p.failRunDurationExhausted()
+		}
 		if p.shouldStop() {
 			return p.end(GameStopped)
 		}
@@ -94,10 +102,16 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 		}
 
 		workspace = p.Executor.WorkspaceState()
+		if p.runDurationExhausted(deadline) {
+			return p.failRunDurationExhausted()
+		}
 		if p.shouldStop() {
 			return p.end(GameStopped)
 		}
 		turn = p.runVerifierTurn(workspace, promptOpts)
+		if p.runDurationExhausted(deadline) {
+			return p.failRunDurationExhausted()
+		}
 		if p.shouldStop() {
 			return p.end(GameStopped)
 		}
@@ -128,6 +142,23 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 		}
 		workspace = p.Executor.WorkspaceState()
 	}
+}
+
+func (p *PVG) failRunDurationExhausted() *PVGResult {
+	p.Result.Error = fmt.Sprintf("run_duration_exhausted: exceeded %d seconds", p.Config.UntilSeconds)
+	p.Result.CompletionReason = "run_duration_exhausted"
+	return p.end(GameFailure)
+}
+
+func (p *PVG) runDeadline() time.Time {
+	if p.Config.UntilSeconds <= 0 {
+		return time.Time{}
+	}
+	return time.Now().Add(time.Duration(p.Config.UntilSeconds) * time.Second)
+}
+
+func (p *PVG) runDurationExhausted(deadline time.Time) bool {
+	return !deadline.IsZero() && time.Now().After(deadline)
 }
 
 func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions) TurnResult {

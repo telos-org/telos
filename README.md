@@ -20,7 +20,7 @@ Write a goal:
 
 ```markdown
 ---
-version: v0
+version: 0.1.0
 name: hello-service
 platform: local
 ---
@@ -30,10 +30,11 @@ platform: local
 Build a small HTTP service with `/healthz`, tests, and local run instructions.
 ```
 
-Run it once:
+Run it as a bounded task:
 
 ```bash
-telos run goal.md --workspace . --until 3   # at most 3 turns
+telos run goal.md --workspace . --until 3    # at most 3 review cycles
+telos run goal.md --workspace . --until 30m  # at most 30 minutes
 ```
 
 Local runs execute goal turns through
@@ -45,9 +46,10 @@ npm install -g @earendil-works/pi-coding-agent
 
 Configure model credentials for pi before your first run.
 
-## Run a Goal in Telos Cloud
+## Apply a Goal
 
-`run` executes a goal once. `apply` keeps it running.
+`run` executes bounded task work. `apply` creates or updates a durable
+controller session that keeps reconciling desired state.
 
 ```bash
 telos login
@@ -55,9 +57,21 @@ telos apply goal.md
 telos list --cloud
 ```
 
-`telos apply` holds your goal in a persistent session on
-[Telos Cloud](https://usetelos.ai) — reconciling it, not just executing it
-once. Managed Cloud is in early access; sign up at
+To steer an existing controller, edit the same disk spec and apply it back to
+the same session:
+
+```bash
+telos apply goal.md --session sess_...
+```
+
+The spec frontmatter `version` is the package version published to Telos Cloud,
+so the reviewed file, package ref, and backend record stay aligned:
+
+```yaml
+version: 0.1.1
+```
+
+Managed Cloud is in early access; sign up at
 [usetelos.ai](https://usetelos.ai).
 
 ## License
