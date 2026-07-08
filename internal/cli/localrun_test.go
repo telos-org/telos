@@ -226,6 +226,21 @@ func TestCreateLocalControllerMaterializesInitialRevision(t *testing.T) {
 	if got, _ := manifest.SpecVersions[0]["spec_path"].(string); got != revisionSpec {
 		t.Fatalf("spec_path: got %q want %q", got, revisionSpec)
 	}
+	revisionMetadataPath := filepath.Join(session.SessionDir, "revisions", "0.1.0", "revision.json")
+	metadataData, err := os.ReadFile(revisionMetadataPath)
+	if err != nil {
+		t.Fatalf("revision metadata missing: %v", err)
+	}
+	var metadata map[string]any
+	if err := json.Unmarshal(metadataData, &metadata); err != nil {
+		t.Fatalf("revision metadata json: %v", err)
+	}
+	if metadata["version"] != "0.1.0" {
+		t.Fatalf("revision metadata version: %#v", metadata["version"])
+	}
+	if metadata["spec_path"] != revisionSpec {
+		t.Fatalf("revision metadata spec_path: %#v", metadata["spec_path"])
+	}
 	if _, err := os.Lstat(filepath.Join(session.SessionDir, "revisions", "current")); err != nil {
 		t.Fatalf("current revision link missing: %v", err)
 	}
@@ -242,6 +257,22 @@ func TestCreateLocalControllerMaterializesInitialRevision(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(session.SessionDir, "package", "SPEC.md")); err != nil {
 		t.Fatalf("active package missing: %v", err)
+	}
+}
+
+func TestCreateLocalControllerRejectsDurationBounds(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	_, err := CreateLocalSession(specPath, LocalRunConfig{
+		SessionKind:  sessionapi.KindController,
+		UntilSeconds: 1800,
+	})
+	if err == nil {
+		t.Fatal("expected controller duration bound to be rejected")
+	}
+	if !strings.Contains(err.Error(), "controller sessions do not support per-run duration bounds") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
