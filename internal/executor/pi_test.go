@@ -50,6 +50,10 @@ func TestBuildPiArgvUsesTextModeWithoutSessionByDefault(t *testing.T) {
 	if strings.Contains(argv[2], `--no-extensions`) {
 		t.Errorf("pi should allow configured extensions: %s", argv[2])
 	}
+	if !strings.Contains(argv[2], `TELOS_PI_APPEND_SYSTEM_PROMPT`) ||
+		!strings.Contains(argv[2], `--append-system-prompt "$append_file"`) {
+		t.Errorf("hosted append system prompt is not wired: %s", argv[2])
+	}
 }
 
 func TestBuildPiArgvUsesTaskFileAndSessionFile(t *testing.T) {
