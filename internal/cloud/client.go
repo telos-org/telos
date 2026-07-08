@@ -65,6 +65,14 @@ type SessionRecord struct {
 	UpdatedAt      string  `json:"updated_at"`
 }
 
+type SessionCreateOptions struct {
+	Name            string
+	PackageRef      string
+	AgentModel      string
+	AgentThinking   string
+	AgentTimeoutSec *int
+}
+
 // The hosted control API still exposes cloud sessions at /api/deployments.
 // Keep that wire contract here and expose session-shaped methods to the CLI.
 type sessionListResponse struct {
@@ -269,11 +277,21 @@ func (c *Client) getSkill(path string) (*SkillRecord, error) {
 	return &record, nil
 }
 
-func (c *Client) CreateSession(name, packageRef string) (*SessionRecord, error) {
-	body, err := json.Marshal(map[string]string{
-		"name":        name,
-		"package_ref": packageRef,
-	})
+func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error) {
+	payload := map[string]any{
+		"name":        opts.Name,
+		"package_ref": opts.PackageRef,
+	}
+	if strings.TrimSpace(opts.AgentModel) != "" {
+		payload["agent_model"] = strings.TrimSpace(opts.AgentModel)
+	}
+	if strings.TrimSpace(opts.AgentThinking) != "" {
+		payload["agent_thinking"] = strings.TrimSpace(opts.AgentThinking)
+	}
+	if opts.AgentTimeoutSec != nil {
+		payload["agent_timeout_sec"] = *opts.AgentTimeoutSec
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
