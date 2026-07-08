@@ -1143,6 +1143,39 @@ Reload the current spec.
 	}
 }
 
+func TestPrintLogsSuppressesDuplicateProtocolBlocks(t *testing.T) {
+	transcript := `# Transcript
+
+<progress_update>Checked live state</progress_update>
+
+## Implementation 1
+
+The agent repeated its machine-readable update:
+
+<progress_update>Checked live state</progress_update>
+
+<external_update>
+Reload the current spec.
+</external_update>
+
+## Implementation 2
+
+<external_update>
+Reload the current spec.
+</external_update>
+`
+
+	var out bytes.Buffer
+	printLogs(&out, transcript, false)
+	text := out.String()
+	if strings.Count(text, "Checked live state") != 1 {
+		t.Fatalf("expected one progress update, got:\n%s", text)
+	}
+	if strings.Count(text, "External update") != 1 {
+		t.Fatalf("expected one external update, got:\n%s", text)
+	}
+}
+
 func TestPrintLogsVerboseShowsTranscript(t *testing.T) {
 	transcript := "# Transcript\nraw content\n<progress_update>Progress</progress_update>\n"
 

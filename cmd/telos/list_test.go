@@ -369,7 +369,7 @@ func TestSessionDisplayStatusDerivesHumanState(t *testing.T) {
 				CurrentRound: &round,
 				CurrentRole:  &role,
 			},
-			want: "active",
+			want: "reconciling",
 		},
 		{
 			name: "completed",
@@ -623,6 +623,23 @@ func TestEvaluationDispositionIsPendingForActiveReview(t *testing.T) {
 	}
 	if !strings.Contains(text, "current turn   implementation#1") {
 		t.Fatalf("description should show active turn:\n%s", text)
+	}
+}
+
+func TestEvaluationDispositionAcceptsIdleController(t *testing.T) {
+	verifierConceded := true
+	session := sessionapi.Session{
+		SessionID:        "sess_idle",
+		Status:           sessionapi.StatusRunning,
+		Runtime:          sessionapi.RuntimeLocal,
+		VerifierConceded: &verifierConceded,
+	}
+
+	var out bytes.Buffer
+	printSessionDescription(&out, session)
+	text := out.String()
+	if !strings.Contains(text, "evaluation     accepted") {
+		t.Fatalf("description should show accepted evaluation for idle controller:\n%s", text)
 	}
 }
 

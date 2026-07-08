@@ -322,7 +322,13 @@ func appendLogBlocks(blocks []logBlock, transcript string, kind string, re *rege
 
 func printLogBlocks(out io.Writer, blocks []logBlock, progressCount int) int {
 	printed := false
+	seen := make(map[string]bool, len(blocks))
 	for _, block := range blocks {
+		key := block.kind + "\x00" + block.text
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		if printed {
 			fmt.Fprintln(out)
 		}
