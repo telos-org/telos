@@ -12,11 +12,11 @@ telos --version
 ```
 
 The installer downloads checksummed `telos` and `telosd` binaries for your
-platform.
+platform (macOS and Linux, amd64/arm64).
 
 ## Quickstart
 
-Write a goal spec:
+Write a goal:
 
 ```markdown
 ---
@@ -33,32 +33,36 @@ Build a small HTTP service with `/healthz`, tests, and local run instructions.
 Run it once:
 
 ```bash
-telos run goal.md --workspace . --until 3
+telos run goal.md --workspace . --until 3   # at most 3 turns
 ```
 
-Local runs execute Goal turns through
-[pi](https://github.com/mariozechner/pi-coding-agent), an open-source coding
-agent:
+Local runs execute goal turns through
+[pi](https://github.com/earendil-works/pi), an open-source coding agent:
 
 ```bash
-npm install -g @mariozechner/pi-coding-agent
+npm install -g @earendil-works/pi-coding-agent
 ```
 
 Configure model credentials for pi before your first run.
 
 ## Run a Goal in Telos Cloud
 
+`run` executes a goal once. `apply` keeps it running.
+
 ```bash
 telos login
-telos apply SPEC.md --scope <scope>
+telos apply goal.md
 telos list --cloud
 ```
 
-`telos apply` runs a persistent `telos` session in the cloud, to execute your long running goal
+`telos apply` holds your goal in a persistent session on
+[Telos Cloud](https://usetelos.ai) — reconciling it, not just executing it
+once. Managed Cloud is in early access; sign up at
+[usetelos.ai](https://usetelos.ai).
 
 ## License
 
-Fair Source (FSL-1.1), converts to Apache-2.0 two years after each major release
+Fair Source (FSL-1.1), converts to Apache-2.0 two years after each release
 
 ## Develop
 

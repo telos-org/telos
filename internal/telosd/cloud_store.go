@@ -8,11 +8,14 @@ import (
 	"strings"
 
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionupdate"
+	"github.com/telos-org/telos/internal/sessionworker"
 )
 
 type sessionSubstrate interface {
 	Apply(session *sessionapi.Session, wakeReason string) error
 	Stop(session *sessionapi.Session) error
+	Wake(session *sessionapi.Session, wakeReason string) error
 }
 
 type cloudSessionStore struct {
@@ -27,7 +30,7 @@ func newCloudSessionStore(
 	materializer *applyPackageMaterializer,
 ) *cloudSessionStore {
 	if base.OnSpecUpdate == nil {
-		base.OnSpecUpdate = projectSpecUpdate
+		base.OnSpecUpdate = sessionupdate.ProjectSpecUpdate
 	}
 	return &cloudSessionStore{
 		FileStore:    base,
@@ -69,20 +72,23 @@ func (s *cloudSessionStore) UpdateSpec(name string, req sessionapi.SessionSpecUp
 		return response, nil
 	}
 	if response.Operation == "unchanged" {
+		if err := s.wake(response.Session, "spec_unchanged"); err != nil {
+			return nil, err
+		}
 		return response, nil
 	}
-	wakeReason := "spec_updated"
 	if response.Operation == "created" {
-		wakeReason = startWakeReason(response.Session)
-	}
-	if err := s.apply(response.Session, wakeReason); err != nil {
-		if response.Operation == "created" {
+		if err := s.apply(response.Session, startWakeReason(response.Session)); err != nil {
 			cleanupErr := s.cleanupWorker(response.Session)
 			removeSessionDir(response.Session)
 			if cleanupErr != nil {
 				return nil, errors.Join(err, cleanupErr)
 			}
+			return nil, err
 		}
+		return response, nil
+	}
+	if err := s.wake(response.Session, "spec_updated"); err != nil {
 		return nil, err
 	}
 	return response, nil
@@ -143,6 +149,43 @@ func (s *cloudSessionStore) apply(session *sessionapi.Session, wakeReason string
 	}
 	if err := s.substrate.Apply(session, wakeReason); err != nil {
 		return fmt.Errorf("launch session %s worker: %w", session.SessionID, err)
+	}
+	return nil
+}
+
+func (s *cloudSessionStore) ensureRootWorkers(wakeReason string) error {
+	sessions, err := s.FileStore.List()
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for i := range sessions {
+		session := &sessions[i]
+		if session.ParentSessionID != nil {
+			continue
+		}
+		if session.SessionKind == nil || *session.SessionKind != sessionapi.KindController {
+			continue
+		}
+		if session.Result != nil && *session.Result == "stopped" {
+			continue
+		}
+		if err := s.apply(session, wakeReason); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
+}
+
+func (s *cloudSessionStore) wake(session *sessionapi.Session, wakeReason string) error {
+	if s.substrate == nil {
+		return nil
+	}
+	if err := s.substrate.Wake(session, wakeReason); err != nil {
+		if errors.Is(err, sessionworker.ErrWorkerNotRunning) {
+			return s.apply(session, wakeReason)
+		}
+		return fmt.Errorf("wake session %s worker: %w", session.SessionID, err)
 	}
 	return nil
 }

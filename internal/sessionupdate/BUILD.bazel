@@ -1,0 +1,13 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "sessionupdate",
+    srcs = ["projection.go"],
+    importpath = "github.com/telos-org/telos/internal/sessionupdate",
+    visibility = ["//:__subpackages__"],
+    deps = [
+        "//internal/evidence",
+        "//internal/game",
+        "//internal/sessionapi",
+    ],
+)

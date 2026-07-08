@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/runtimeclient"
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionworker"
 	"github.com/telos-org/telos/internal/spec"
 )
 
@@ -38,7 +40,7 @@ func cmdLaunch(command, action string, args []string) {
 	untilValue := 0
 	until := &untilValue
 	if command == "run" {
-		until = fs.Int("until", 0, "Run exactly N evaluator review cycles")
+		until = fs.Int("until", 0, "Run at most N evaluator review cycles before failing")
 	}
 	maxCostUSD := fs.Float64("max-cost-usd", 20.0, "Maximum cost in USD")
 	agentTimeout := fs.Int("agent-timeout-sec", 0, "Agent timeout in seconds; 0 disables")
@@ -52,6 +54,10 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	if fs.NArg() < 1 {
 		fmt.Fprintf(os.Stderr, "usage: telos %s SPEC.md [options]\n", command)
+		os.Exit(1)
+	}
+	if command == "apply" && *sessionID != "" && *workspace != "" {
+		fmt.Fprintln(os.Stderr, "error: --workspace can only seed a new session; it cannot be used with --session")
 		os.Exit(1)
 	}
 	specArg := fs.Arg(0)
@@ -83,6 +89,14 @@ func cmdLaunch(command, action string, args []string) {
 			os.Exit(1)
 		}
 		platform = parsedPlatform
+	}
+	if command == "apply" && *sessionID != "" && isLocalApplyID(*sessionID) {
+		if !hasLocalSpec {
+			fmt.Fprintf(os.Stderr, "error: unknown local spec: %s\n", specArg)
+			os.Exit(1)
+		}
+		applyLocalSessionSpec(specPath, *sessionID, *jsonOut)
+		return
 	}
 
 	launchMode, err := decideLaunchMode(
@@ -155,6 +169,57 @@ func cmdLaunch(command, action string, args []string) {
 	} else {
 		printLocalLaunch(os.Stdout, action, session)
 	}
+}
+
+func applyLocalSessionSpec(specPath string, sessionID string, jsonOut bool) {
+	s := store()
+	current, err := s.Get(sessionID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if current.SessionKind != nil && *current.SessionKind != sessionapi.KindController {
+		fmt.Fprintf(os.Stderr, "error: %s is not a controller session\n", sessionID)
+		os.Exit(1)
+	}
+	if current.Status == sessionapi.StatusStopped {
+		fmt.Fprintf(os.Stderr, "error: %s is %s; create a new controller session instead\n", sessionID, current.Status)
+		os.Exit(1)
+	}
+	data, err := os.ReadFile(specPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	response, err := s.UpdateSpecByID(sessionID, sessionapi.SessionSpecUpdateRequest{
+		SpecMarkdown: string(data),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	session := response.Session
+	if session != nil {
+		sessionDir := ""
+		if session.SessionDir != nil {
+			sessionDir = *session.SessionDir
+		}
+		if err := sessionworker.Wake(sessionDir); err != nil {
+			if !errors.Is(err, sessionworker.ErrWorkerNotRunning) {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			if err := sessionworker.Start(sessionDir, sessionapi.RuntimeLocal); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+		}
+	}
+	if jsonOut {
+		printJSON(map[string]any{"operation": response.Operation, "session": session})
+		return
+	}
+	printSessionReceipt(os.Stdout, response.Operation, session)
 }
 
 func printLocalLaunch(out io.Writer, action string, session *cli.LocalSession) {

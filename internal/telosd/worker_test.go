@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -67,6 +68,52 @@ func TestRootWorkerAllowsNoInterval(t *testing.T) {
 	}
 	if manifest.Interval != 0 {
 		t.Fatalf("interval: got %s", manifest.Interval)
+	}
+}
+
+func TestWorkerManifestReadsDesiredState(t *testing.T) {
+	version := 7
+	sessionDir := writeWorkerManifest(t, map[string]any{
+		"session_kind":         "controller",
+		"current_spec_version": version,
+		"package_digest":       "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		"specs": []map[string]any{{
+			"name": "demo",
+		}},
+	})
+
+	manifest, err := LoadWorkerManifest(sessionDir)
+	if err != nil {
+		t.Fatalf("LoadWorkerManifest: %v", err)
+	}
+	if manifest.Desired.SpecVersion != version {
+		t.Fatalf("spec version: got %d", manifest.Desired.SpecVersion)
+	}
+	if manifest.Desired.PackageDigest != "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" {
+		t.Fatalf("package digest: got %q", manifest.Desired.PackageDigest)
+	}
+}
+
+func TestDesiredStateIncludesSpecVersion(t *testing.T) {
+	before := DesiredState{SpecVersion: 1, PackageDigest: "sha256:same"}
+	after := DesiredState{SpecVersion: 2, PackageDigest: "sha256:same"}
+
+	if before.Equal(after) {
+		t.Fatal("desired state should change when only spec version changes")
+	}
+}
+
+func TestDrainWakeClearsBufferedWakeSignals(t *testing.T) {
+	wake := make(chan os.Signal, 2)
+	wake <- syscall.SIGUSR1
+	wake <- syscall.SIGUSR1
+
+	drainWake(wake)
+
+	select {
+	case signal := <-wake:
+		t.Fatalf("unexpected buffered wake after drain: %v", signal)
+	default:
 	}
 }
 

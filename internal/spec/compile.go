@@ -84,6 +84,7 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 		if err != nil {
 			return nil, err
 		}
+		annotateSkillSourceRefs(declared, env.SkillSourceRefs)
 	}
 	var required []*Skill
 	requiredPaths := appendMissingPaths(env.RequiredVerifierSkillPaths, packageRequiredPaths)
@@ -92,6 +93,7 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 		if err != nil {
 			return nil, err
 		}
+		annotateSkillSourceRefs(required, env.SkillSourceRefs)
 	}
 	var verifier []*Skill
 	if !hasPackageManifest {
@@ -143,6 +145,20 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 		RequiredVerifierSkills: reqVerifierSkills,
 		ContentHash:            contentHash,
 	}, nil
+}
+
+func annotateSkillSourceRefs(skills []*Skill, refs map[string]string) {
+	if len(refs) == 0 {
+		return
+	}
+	for _, skill := range skills {
+		if skill == nil || strings.TrimSpace(skill.Path) == "" {
+			continue
+		}
+		if ref, ok := refs[skill.Path]; ok {
+			skill.SourceRef = ref
+		}
+	}
 }
 
 func resolvedCompileBaseDir(envPath string, baseDir string) (string, error) {

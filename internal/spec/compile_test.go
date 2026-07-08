@@ -529,7 +529,7 @@ func TestRenderWithRequiredEvaluationSkills(t *testing.T) {
 	}
 }
 
-func TestRenderControllerPromptIncludesOrchestrationSkill(t *testing.T) {
+func TestRenderControllerPromptDoesNotAutoInjectOrchestrationSkill(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: controller-test\nplatform: local\n---\nBody"), 0o644)
@@ -540,11 +540,11 @@ func TestRenderControllerPromptIncludesOrchestrationSkill(t *testing.T) {
 		PrimarySpecPath: "/tmp/spec.md",
 	})
 
-	if !strings.Contains(task, "## Controller Role") {
+	if !strings.Contains(task, "## Controller Session") {
 		t.Error("controller prompt should include controller role guidance")
 	}
-	if !strings.Contains(task, "`telos-orchestrate`") {
-		t.Error("controller prompt should include telos-orchestrate in effective skills")
+	if strings.Contains(task, "`telos-orchestrate`") {
+		t.Error("controller prompt should not auto-inject telos-orchestrate")
 	}
 	if !strings.Contains(task, "Primary spec: `/tmp/spec.md`") {
 		t.Error("controller prompt should include primary spec path")
@@ -623,33 +623,32 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 	}
 }
 
-func TestRenderVerifierTaskReviewModeUsesReviewContract(t *testing.T) {
+func TestRenderVerifierTaskReviewBudgetUsesStatusContract(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: v0\nname: review-mode\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderVerifierTask(compiled, "", "/tmp/transcript.md", PromptOptions{
-		ReviewMode:   true,
-		ReviewCycles: 2,
+		ReviewBudget:   true,
+		ReviewCycleCap: 2,
 	})
 
 	for _, want := range []string{
-		"<review>",
-		"<summary>",
-		"criteria,score",
-		"Review cycles requested: `2`",
-		"evaluation decision, not a termination decision",
-		"no implementation change is recommended",
-		"preserve the current shape",
-		"revalidate tests, tree state, and named invariants",
-		"distinguish grounded fixes from speculative residual uncertainty",
+		"Review cycle cap: at most `2` verifier cycles",
+		"The final non-empty line must be exactly one status tag",
+		"<status>CONTINUE</status>",
+		"<status>CONCEDE</status>",
 	} {
 		if !strings.Contains(task, want) {
 			t.Fatalf("review-mode prompt missing %q:\n%s", want, task)
 		}
 	}
 	for _, unwanted := range []string{
+		"<review>",
+		"<summary>",
+		"criteria,score",
+		"Do not emit <status> tags",
 		"clear evaluation gradient",
 		"next useful implementation pressure",
 		"handoff summary for the next implementation turn",
@@ -657,9 +656,6 @@ func TestRenderVerifierTaskReviewModeUsesReviewContract(t *testing.T) {
 		if strings.Contains(task, unwanted) {
 			t.Fatalf("review-mode prompt should not contain stale pressure wording %q:\n%s", unwanted, task)
 		}
-	}
-	if strings.Contains(task, "CONCEDE") || strings.Contains(task, "CONTINUE") {
-		t.Fatalf("review-mode prompt should not contain status control tokens:\n%s", task)
 	}
 }
 

@@ -11,6 +11,8 @@ import (
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/runtimeclient"
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionupdate"
+	"github.com/telos-org/telos/internal/sessionworker"
 )
 
 func store() *sessionapi.FileStore {
@@ -21,7 +23,9 @@ func store() *sessionapi.FileStore {
 			root = filepath.Join(".telos", "sessions")
 		}
 	}
-	return sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	store.OnSpecUpdate = sessionupdate.ProjectSpecUpdate
+	return store
 }
 
 func resolveSpecPath(input string) string {
@@ -72,6 +76,10 @@ func localSessionExists(sessionID string) bool {
 
 func isCloudApplyID(id string) bool {
 	return strings.HasPrefix(id, "sess_")
+}
+
+func isLocalApplyID(id string) bool {
+	return strings.HasPrefix(id, "local_")
 }
 
 func getCloudSessionIfConfigured(id string) (*cloud.SessionRecord, bool, error) {
@@ -130,8 +138,17 @@ func getTranscriptFromAnywhere(sessionID string) (string, error) {
 
 func stopSessionAnywhere(sessionID string) (*sessionapi.Session, error) {
 	s := store()
+	var sessionDir string
+	if session, err := s.Get(sessionID); err == nil && session.SessionDir != nil {
+		sessionDir = *session.SessionDir
+	}
 	session, err := s.Stop(sessionID)
 	if err == nil {
+		if sessionDir != "" {
+			if err := sessionworker.Stop(sessionDir); err != nil {
+				return nil, err
+			}
+		}
 		return session, nil
 	}
 

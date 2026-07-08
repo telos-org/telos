@@ -1483,7 +1483,7 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 		t.Fatalf("missing evidence path: %#v", created.Specs)
 	}
 	evidence := `{"event":"agent_complete","round":1,"data":{"cost_usd":0.10}}` + "\n" +
-		`{"event":"game_end","round":2,"data":{"total_cost_usd":1.23,"total_input_tokens":100,"total_output_tokens":30,"total_cache_read_tokens":7,"total_cache_creation_tokens":5,"prover_rounds":1,"verifier_rounds":1,"completion_reason":"review_cycles_complete","verifier_conceded":false}}` + "\n"
+		`{"event":"game_end","round":2,"data":{"total_cost_usd":1.23,"total_input_tokens":100,"total_output_tokens":30,"total_cache_read_tokens":7,"total_cache_creation_tokens":5,"prover_rounds":1,"verifier_rounds":1,"completion_reason":"review_budget_exhausted","verifier_conceded":false}}` + "\n"
 	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
 		t.Fatalf("write evidence: %v", err)
 	}
@@ -1510,7 +1510,7 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 	if session.RoundCount == nil || *session.RoundCount != 2 {
 		t.Fatalf("round count: got %v", session.RoundCount)
 	}
-	if session.CompletionReason == nil || *session.CompletionReason != "review_cycles_complete" {
+	if session.CompletionReason == nil || *session.CompletionReason != "review_budget_exhausted" {
 		t.Fatalf("completion reason: got %v", session.CompletionReason)
 	}
 	if session.VerifierConceded == nil || *session.VerifierConceded {

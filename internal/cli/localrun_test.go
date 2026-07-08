@@ -853,24 +853,23 @@ func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
 			Logs:   "OK\n\n<status>CONCEDE</status>\n",
 		},
 	}
-	t.Setenv("TELOS_CONTROLLER_PROMPT_ENABLED", "1")
 	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
 		t.Fatalf("RunLocalSession: %v", err)
 	}
 
 	task := exec.firstTask()
-	if !strings.Contains(task, "## Controller Role") {
+	if !strings.Contains(task, "## Controller Session") {
 		t.Fatal("controller session should receive controller prompt")
 	}
-	if !strings.Contains(task, "`telos-orchestrate`") {
-		t.Fatal("controller prompt should include telos-orchestrate skill")
+	if strings.Contains(task, "`telos-orchestrate`") {
+		t.Fatal("controller prompt should not auto-inject telos-orchestrate")
 	}
 	if !strings.Contains(task, "Primary spec: `") {
 		t.Fatal("controller prompt should include primary spec path")
 	}
 }
 
-func TestRunLocalControllerSessionUsesBuildPromptByDefault(t *testing.T) {
+func TestRunLocalControllerSessionUsesControllerPromptByDefault(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(t.TempDir(), "telos-output"))
@@ -909,8 +908,8 @@ func TestRunLocalControllerSessionUsesBuildPromptByDefault(t *testing.T) {
 	}
 
 	task := exec.firstTask()
-	if strings.Contains(task, "## Controller Role") {
-		t.Fatal("controller prompt should be opt-in")
+	if !strings.Contains(task, "## Controller Session") {
+		t.Fatal("controller prompt should be enabled by session kind")
 	}
 }
 
@@ -1338,8 +1337,8 @@ func TestSessionArtifactShape(t *testing.T) {
 		filepath.Join("specs", "cli-test", "transcript-"+session.SessionID+".md"),
 		filepath.Join("specs", "cli-test", "spec.md"),
 		filepath.Join("specs", "cli-test", "workspace.tar.gz"),
-		filepath.Join("specs", "cli-test", "turns", "0001-prover", "task.md"),
-		filepath.Join("specs", "cli-test", "turns", "0002-verifier", "task.md"),
+		filepath.Join("specs", "cli-test", "turns", "epoch-0001", "0001-prover", "task.md"),
+		filepath.Join("specs", "cli-test", "turns", "epoch-0001", "0002-verifier", "task.md"),
 	}
 
 	for _, rel := range expected {

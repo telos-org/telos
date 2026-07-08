@@ -590,6 +590,74 @@ func TestPushSkillPackagePublishesSkill(t *testing.T) {
 	}
 }
 
+func TestPushPackageSkillsUsesPublishedPlatformCatalogueSkill(t *testing.T) {
+	catalogue := t.TempDir()
+	skillDir := filepath.Join(catalogue, "k8s-deploy")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: k8s-deploy\n---\nDeploy.\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_SKILLS_DIR", catalogue)
+	resolved, err := spec.LoadSkill(skillDir)
+	if err != nil {
+		t.Fatalf("LoadSkill: %v", err)
+	}
+	digest, _, err := spec.BuildSkillBundle(resolved)
+	if err != nil {
+		t.Fatalf("BuildSkillBundle: %v", err)
+	}
+	postedSkill := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/skills/telos/k8s-deploy/versions/1.0.0":
+			json.NewEncoder(w).Encode(map[string]any{
+				"scope":      "telos",
+				"name":       "k8s-deploy",
+				"version":    "1.0.0",
+				"ref":        "@telos/k8s-deploy:1.0.0",
+				"digest":     digest,
+				"file_count": 1,
+				"source_ref": "@telos/k8s-deploy:1.0.0",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/skills":
+			postedSkill = true
+			http.Error(w, "unexpected skill publish", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	refs, err := pushPackageSkills(
+		cloud.NewClient(srv.URL, "test-token"),
+		&spec.CompiledEnvironment{Skills: []*spec.Skill{{
+			Name:         resolved.Name,
+			Description:  resolved.Description,
+			Instructions: resolved.Instructions,
+			Path:         resolved.Path,
+			SourceRef:    "@telos/k8s-deploy:1.0.0",
+			Tags:         resolved.Tags,
+			Scripts:      resolved.Scripts,
+		}}},
+		"user-abc",
+	)
+	if err != nil {
+		t.Fatalf("pushPackageSkills: %v", err)
+	}
+	if postedSkill {
+		t.Fatal("platform catalogue skill should not be republished")
+	}
+	if refs["k8s-deploy"] != "@telos/k8s-deploy:1.0.0" {
+		t.Fatalf("refs: got %#v", refs)
+	}
+}
+
 func TestLaunchSpecPlatformDoesNotResolveSkills(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
@@ -874,6 +942,97 @@ func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
 	}
 	if got := out.String(); !strings.Contains(got, "ready") {
 		t.Fatalf("output: got %q", got)
+	}
+}
+
+func TestLocalStoreProjectsSpecUpdates(t *testing.T) {
+	root := t.TempDir()
+	configureLocalOnlyTest(t)
+	t.Setenv("TELOS_SESSION_DIR", root)
+	s := store()
+	markdown := "---\nversion: v0\nname: local-update\nplatform: local\n---\n# Local Update\n"
+	kind := sessionapi.KindController
+	session, err := s.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, SessionKind: &kind})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	updated := "---\nversion: v0\nname: local-update\nplatform: local\ninterval: 6h\n---\n# Local Update v2\n"
+
+	if _, err := s.UpdateSpecByID(session.SessionID, sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated}); err != nil {
+		t.Fatalf("UpdateSpecByID: %v", err)
+	}
+
+	transcript, err := s.Transcript(session.SessionID)
+	if err != nil {
+		t.Fatalf("Transcript: %v", err)
+	}
+	for _, want := range []string{
+		"## External Update",
+		"<external_update>",
+		"from version 1 to 2",
+		"Current spec path: `",
+	} {
+		if !strings.Contains(transcript, want) {
+			t.Fatalf("transcript missing %q:\n%s", want, transcript)
+		}
+	}
+	events, err := s.Events(session.SessionID)
+	if err != nil {
+		t.Fatalf("Events: %v", err)
+	}
+	var found bool
+	for _, event := range events {
+		if event.Event == "external_update" {
+			found = true
+			if got := event.Data["current_spec_version"]; got != float64(2) {
+				t.Fatalf("current_spec_version: got %#v", got)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("missing external_update event: %#v", events)
+	}
+}
+
+func TestLocalStoreUpdatesCompletedController(t *testing.T) {
+	root := t.TempDir()
+	configureLocalOnlyTest(t)
+	t.Setenv("TELOS_SESSION_DIR", root)
+	s := store()
+	markdown := "---\nversion: v0\nname: completed-update\nplatform: local\n---\n# Completed Update\n"
+	kind := sessionapi.KindController
+	session, err := s.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, SessionKind: &kind})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	finished := "2026-07-08T00:00:00Z"
+	completed := "completed"
+	if _, err := sessionapi.MutateManifest(filepath.Join(root, session.SessionID, "session.json"), func(m *sessionapi.Manifest) error {
+		m.Runner = nil
+		m.Epochs = []sessionapi.Epoch{{
+			ID:         1,
+			StartedAt:  "2026-07-08T00:00:00Z",
+			FinishedAt: &finished,
+			Result:     &completed,
+		}}
+		return nil
+	}); err != nil {
+		t.Fatalf("MutateManifest: %v", err)
+	}
+	current, err := s.Get(session.SessionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if current.Status != sessionapi.StatusCompleted {
+		t.Fatalf("status: got %s", current.Status)
+	}
+	updated := "---\nversion: v0\nname: completed-update\nplatform: local\ninterval: 6h\n---\n# Completed Update v2\n"
+	response, err := s.UpdateSpecByID(session.SessionID, sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated})
+	if err != nil {
+		t.Fatalf("UpdateSpecByID: %v", err)
+	}
+	if response.Operation != "updated" {
+		t.Fatalf("operation: got %q", response.Operation)
 	}
 }
 

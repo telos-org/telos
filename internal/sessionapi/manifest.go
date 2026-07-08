@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -28,6 +29,7 @@ type Manifest struct {
 	Workspace          *Workspace                 `json:"workspace,omitempty"`
 	Provenance         map[string]any             `json:"provenance"`
 	Access             *ScopedToken               `json:"access,omitempty"`
+	Runner             *Runner                    `json:"runner,omitempty"`
 	Specs              []ManifestSpec             `json:"specs"`
 	Epochs             []Epoch                    `json:"epochs"`
 }
@@ -212,6 +214,34 @@ func WriteManifest(path string, m *Manifest) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+func MutateManifest(path string, mutate func(*Manifest) error) (*Manifest, error) {
+	lockPath := path + ".lock"
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
+	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, err
+	}
+	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
+
+	m, err := ReadManifest(path)
+	if err != nil {
+		return nil, err
+	}
+	if err := mutate(m); err != nil {
+		return nil, err
+	}
+	if err := WriteManifest(path, m); err != nil {
+		return nil, err
+	}
+	return m, nil
 }
 
 func (m *Manifest) LastEpoch() *Epoch {

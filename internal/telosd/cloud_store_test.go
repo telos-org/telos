@@ -8,12 +8,15 @@ import (
 	"testing"
 
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionworker"
 )
 
 type recordingSubstrate struct {
 	applies  []recordedApply
+	wakes    []recordedApply
 	stops    []string
 	applyErr error
+	wakeErr  error
 	stopErr  error
 }
 
@@ -26,6 +29,14 @@ func (s *recordingSubstrate) Apply(session *sessionapi.Session, wakeReason strin
 	s.applies = append(s.applies, recordedApply{sessionID: session.SessionID, wakeReason: wakeReason})
 	if s.applyErr != nil {
 		return s.applyErr
+	}
+	return nil
+}
+
+func (s *recordingSubstrate) Wake(session *sessionapi.Session, wakeReason string) error {
+	s.wakes = append(s.wakes, recordedApply{sessionID: session.SessionID, wakeReason: wakeReason})
+	if s.wakeErr != nil {
+		return s.wakeErr
 	}
 	return nil
 }
@@ -60,11 +71,14 @@ func TestCloudSessionStoreAppliesAndStopsWorkers(t *testing.T) {
 	if _, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: updated}); err != nil {
 		t.Fatal(err)
 	}
-	if len(substrate.applies) != 2 {
+	if len(substrate.applies) != 1 {
 		t.Fatalf("applies after update: got %d", len(substrate.applies))
 	}
-	if substrate.applies[1].sessionID != session.SessionID || substrate.applies[1].wakeReason != "spec_updated" {
-		t.Fatalf("update apply: got %+v", substrate.applies[1])
+	if len(substrate.wakes) != 1 {
+		t.Fatalf("wakes after update: got %d", len(substrate.wakes))
+	}
+	if substrate.wakes[0].sessionID != session.SessionID || substrate.wakes[0].wakeReason != "spec_updated" {
+		t.Fatalf("update wake: got %+v", substrate.wakes[0])
 	}
 
 	if _, err := store.Stop(session.SessionID); err != nil {
@@ -100,7 +114,7 @@ func TestCloudSessionStoreDefaultsSpecPutCreatedSessions(t *testing.T) {
 	}
 }
 
-func TestCloudSessionStoreSkipsApplyForUnchangedSpecPut(t *testing.T) {
+func TestCloudSessionStoreWakesExistingWorkerForUnchangedSpecPut(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{}
 	store := newCloudSessionStore(base, substrate, nil)
@@ -125,6 +139,9 @@ func TestCloudSessionStoreSkipsApplyForUnchangedSpecPut(t *testing.T) {
 	}
 	if len(substrate.applies) != 1 {
 		t.Fatalf("unchanged update should not apply worker: %+v", substrate.applies)
+	}
+	if len(substrate.wakes) != 1 || substrate.wakes[0].wakeReason != "spec_unchanged" {
+		t.Fatalf("unchanged update should wake worker: %+v", substrate.wakes)
 	}
 }
 
@@ -168,6 +185,39 @@ func TestCloudSessionStoreMaterializesPackageDigestUpdates(t *testing.T) {
 	}
 	if err := sessionapi.VerifyPackageDigest(path, pkg.Digest); err != nil {
 		t.Fatalf("VerifyPackageDigest: %v", err)
+	}
+	if len(substrate.applies) != 1 {
+		t.Fatalf("applies: %+v", substrate.applies)
+	}
+	if len(substrate.wakes) != 1 || substrate.wakes[0].wakeReason != "spec_updated" {
+		t.Fatalf("wakes: %+v", substrate.wakes)
+	}
+}
+
+func TestCloudSessionStoreRestartsPackageDigestUpdateWhenWorkerIsNotRunning(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	base.PackageRoot = t.TempDir()
+	substrate := &recordingSubstrate{wakeErr: sessionworker.ErrWorkerNotRunning}
+	pkg := buildMaterializerTestPackage(t, "postgres")
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(pkg.Bytes)
+	}))
+	defer server.Close()
+	t.Setenv("TELOS_PACKAGE_BUNDLE_BASE_URL", server.URL)
+	materializer := newApplyPackageMaterializer(base.PackageRoot, "runtime-token")
+	materializer.client = server.Client()
+	store := newCloudSessionStore(base, substrate, materializer)
+	markdown := "---\nversion: v0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	if _, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown}); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{PackageDigest: pkg.Digest}); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(substrate.wakes) != 1 {
+		t.Fatalf("wakes: %+v", substrate.wakes)
 	}
 	if len(substrate.applies) != 2 || substrate.applies[1].wakeReason != "spec_updated" {
 		t.Fatalf("applies: %+v", substrate.applies)
