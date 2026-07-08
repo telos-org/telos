@@ -223,28 +223,12 @@ func TestCreateControllerRejectsDurationBounds(t *testing.T) {
 func TestCreatePackageTaskPersistsSourcePackage(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	specDir := t.TempDir()
-	specPath := filepath.Join(specDir, "SPEC.md")
 	markdown := "---\nversion: 0.1.0\nname: packaged-task\nplatform: local\n---\n# Packaged Task\n\nUse the package."
-	if err := os.WriteFile(specPath, []byte(markdown), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := spec.CompileEnvironment(specPath)
-	if err != nil {
-		t.Fatalf("CompileEnvironment: %v", err)
-	}
-	pkg, err := spec.BuildApplyPackage(compiled)
-	if err != nil {
-		t.Fatalf("BuildApplyPackage: %v", err)
-	}
-	packagePath := filepath.Join(t.TempDir(), "package.telos")
-	if err := os.WriteFile(packagePath, pkg.Bytes, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	packagePath, digest := writeInlineApplyPackage(t, markdown)
 
 	session, err := store.Create(sessionapi.SessionCreateRequest{
 		PackagePath:   packagePath,
-		PackageDigest: pkg.Digest,
+		PackageDigest: digest,
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -263,6 +247,47 @@ func TestCreatePackageTaskPersistsSourcePackage(t *testing.T) {
 	if _, err := os.Stat(want); err != nil {
 		t.Fatalf("durable package spec missing: %v", err)
 	}
+}
+
+func TestCreatePackageControllerCleansCompileDir(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: 0.1.0\nname: packaged-controller\nplatform: local\n---\n# Packaged Controller\n\nUse the package."
+	packagePath, digest := writeInlineApplyPackage(t, markdown)
+	kind := sessionapi.KindController
+
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		PackagePath:   packagePath,
+		PackageDigest: digest,
+		SessionKind:   &kind,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	assertNoPackageCompileDirs(t, filepath.Join(root, session.SessionID))
+}
+
+func TestPackageSpecUpdateCleansCompileDir(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: 0.1.0\nname: package-update\nplatform: local\n---\n# Package Update\n"
+	kind := sessionapi.KindController
+	session, err := store.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdown,
+		SessionKind:  &kind,
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	packagePath, digest := writeInlineApplyPackage(t, markdown)
+
+	if _, err := store.UpdateSpecByID(session.SessionID, sessionapi.SessionSpecUpdateRequest{
+		PackagePath:   packagePath,
+		PackageDigest: digest,
+	}); err != nil {
+		t.Fatalf("UpdateSpecByID: %v", err)
+	}
+	assertNoPackageCompileDirs(t, filepath.Join(root, session.SessionID))
 }
 
 func TestCreateSessionRejectsInvalidUntil(t *testing.T) {
@@ -2287,6 +2312,39 @@ func assertNonEmpty(t *testing.T, label string, value string) {
 	t.Helper()
 	if value == "" {
 		t.Errorf("%s: expected non-empty string", label)
+	}
+}
+
+func writeInlineApplyPackage(t *testing.T, markdown string) (string, string) {
+	t.Helper()
+	specDir := t.TempDir()
+	specPath := filepath.Join(specDir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte(markdown), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := spec.CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := spec.BuildApplyPackage(compiled)
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+	packagePath := filepath.Join(t.TempDir(), "package.telos")
+	if err := os.WriteFile(packagePath, pkg.Bytes, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return packagePath, pkg.Digest
+}
+
+func assertNoPackageCompileDirs(t *testing.T, sessionDir string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(sessionDir, ".package-compile-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("unexpected package compile dirs: %v", matches)
 	}
 }
 

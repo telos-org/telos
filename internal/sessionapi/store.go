@@ -144,6 +144,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer cleanupPreparedPackageSource(&prepared)
 	specName := prepared.Name
 	if sessionKind == KindController {
 		ids, err := fs.liveTopLevelSessionIDsBySpecName(specName)
@@ -603,6 +604,7 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 	if err != nil {
 		return nil, false, err
 	}
+	defer cleanupPreparedPackageSource(&prepared)
 	var changed bool
 	var previousVersion int
 	var currentVersion int
@@ -1843,16 +1845,17 @@ func writeLineSetDiff(b *strings.Builder, prefix string, text string) {
 }
 
 type preparedRequestSpec struct {
-	Name             string
-	Version          string
-	SourceSpecPath   *string
-	SessionSpecPath  *string
-	ContentHash      *string
-	IntervalSeconds  *int
-	SpecData         []byte
-	PackageData      []byte
-	PackageDigest    *string
-	ApplyPackageLock *spec.ApplyPackageManifest
+	Name              string
+	Version           string
+	SourceSpecPath    *string
+	SessionSpecPath   *string
+	PackageCompileDir string
+	ContentHash       *string
+	IntervalSeconds   *int
+	SpecData          []byte
+	PackageData       []byte
+	PackageDigest     *string
+	ApplyPackageLock  *spec.ApplyPackageManifest
 }
 
 func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRequestSpec, error) {
@@ -1926,15 +1929,16 @@ func prepareApplyPackageSpec(sessionDir string, packagePath string, expectedDige
 		return preparedRequestSpec{}, err
 	}
 	return preparedRequestSpec{
-		Name:             compiled.Environment.Name,
-		Version:          compiled.Environment.Version,
-		SourceSpecPath:   strPtr(specPath),
-		ContentHash:      strPtr(compiled.ContentHash),
-		IntervalSeconds:  compiled.Environment.IntervalSeconds,
-		SpecData:         specData,
-		PackageData:      data,
-		PackageDigest:    strPtr(actualDigest),
-		ApplyPackageLock: manifest,
+		Name:              compiled.Environment.Name,
+		Version:           compiled.Environment.Version,
+		SourceSpecPath:    strPtr(specPath),
+		PackageCompileDir: packageDir,
+		ContentHash:       strPtr(compiled.ContentHash),
+		IntervalSeconds:   compiled.Environment.IntervalSeconds,
+		SpecData:          specData,
+		PackageData:       data,
+		PackageDigest:     strPtr(actualDigest),
+		ApplyPackageLock:  manifest,
 	}, nil
 }
 
@@ -1945,6 +1949,7 @@ func materializePreparedPackageSource(sessionDir string, prepared *preparedReque
 	sourceDir := filepath.Dir(*prepared.SourceSpecPath)
 	packageDir := filepath.Join(sessionDir, "package")
 	if sourceDir == packageDir {
+		prepared.PackageCompileDir = ""
 		return nil
 	}
 	if err := os.RemoveAll(packageDir); err != nil {
@@ -1954,7 +1959,16 @@ func materializePreparedPackageSource(sessionDir string, prepared *preparedReque
 		return fmt.Errorf("persist package source: %w", err)
 	}
 	prepared.SourceSpecPath = strPtr(filepath.Join(packageDir, "SPEC.md"))
+	prepared.PackageCompileDir = ""
 	return nil
+}
+
+func cleanupPreparedPackageSource(prepared *preparedRequestSpec) {
+	if prepared == nil || prepared.PackageCompileDir == "" {
+		return
+	}
+	_ = os.RemoveAll(prepared.PackageCompileDir)
+	prepared.PackageCompileDir = ""
 }
 
 func digestApplyPackage(data []byte, manifest *spec.ApplyPackageManifest) string {
