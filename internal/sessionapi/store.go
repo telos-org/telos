@@ -164,10 +164,31 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	transcriptPath := filepath.Join(specDir, fmt.Sprintf("transcript-%s.md", id))
 	workspacePath := filepath.Join(specDir, "workspace.tar.gz")
 	sessionSpecPath := ""
+	var currentRevision *string
+	var initialVersionEntry map[string]any
 	if len(prepared.SpecData) > 0 {
 		sessionSpecPath = filepath.Join(specDir, "spec.md")
-		if err := writeFileAtomic(sessionSpecPath, prepared.SpecData, 0o644); err != nil {
-			return nil, fmt.Errorf("write session spec: %w", err)
+		if sessionKind == KindController && req.ParentSessionID == nil {
+			paths, metadata, err := fs.installRevision(dir, specName, prepared, revisionInstallOptions{
+				Sequence:       1,
+				ActiveSpecPath: sessionSpecPath,
+			})
+			if err != nil {
+				return nil, err
+			}
+			sessionSpecPath = paths.ActiveSpecPath
+			prepared.SourceSpecPath = strPtr(paths.PackageSpecPath)
+			currentRevision = strPtr(metadata.Version)
+			initialVersionEntry = specVersionEntry(1, paths.SpecPath, prepared.SpecData, nil, prepared.PackageDigest, specVersionMetadata{
+				Revision:        metadata.Version,
+				PackagePath:     paths.PackagePath,
+				ActiveSpecPath:  paths.ActiveSpecPath,
+				PackageSpecPath: paths.PackageSpecPath,
+			})
+		} else {
+			if err := writeFileAtomic(sessionSpecPath, prepared.SpecData, 0o644); err != nil {
+				return nil, fmt.Errorf("write session spec: %w", err)
+			}
 		}
 	}
 	prepared.SessionSpecPath = strPtr(sessionSpecPath)
@@ -189,6 +210,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		SourceSpecPath:   prepared.SourceSpecPath,
 		SessionSpecPath:  prepared.SessionSpecPath,
 		SpecName:         specName,
+		CurrentRevision:  currentRevision,
 		Config:           buildConfig(req),
 		Provenance:       provenance,
 		PackageDigest:    prepared.PackageDigest,
@@ -209,10 +231,10 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	if isTopLevelManifest(&m) && sessionSpecPath != "" {
 		version := 1
 		m.CurrentSpecVersion = &version
-		m.SpecVersions = append(
-			m.SpecVersions,
-			specVersionEntry(version, sessionSpecPath, prepared.SpecData, nil, prepared.PackageDigest),
-		)
+		if initialVersionEntry == nil {
+			initialVersionEntry = specVersionEntry(version, sessionSpecPath, prepared.SpecData, nil, prepared.PackageDigest, specVersionMetadata{})
+		}
+		m.SpecVersions = append(m.SpecVersions, initialVersionEntry)
 	}
 
 	if err := WriteManifest(fs.manifestPath(id), &m); err != nil {
@@ -269,6 +291,12 @@ func (fs *FileStore) createSessionDirWithID(id string, validateCloudID bool) (st
 func validateCreateRequest(req SessionCreateRequest) error {
 	if req.Until != nil && *req.Until <= 0 {
 		return fmt.Errorf("until must be positive: %w", ErrInvalidSession)
+	}
+	if req.UntilSeconds != nil && *req.UntilSeconds <= 0 {
+		return fmt.Errorf("until_seconds must be positive: %w", ErrInvalidSession)
+	}
+	if req.Until != nil && req.UntilSeconds != nil {
+		return fmt.Errorf("set either until or until_seconds, not both: %w", ErrInvalidSession)
 	}
 	hasPackage := strings.TrimSpace(req.PackageDigest) != "" || strings.TrimSpace(req.PackagePath) != ""
 	hasMarkdown := req.SpecMarkdown != nil && strings.TrimSpace(*req.SpecMarkdown) != ""
@@ -574,6 +602,8 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 	var currentVersion int
 	var previousPackageDigest string
 	var previousSpecSHA256 string
+	var previousRevision string
+	var previousSpecPath string
 	var versionEntry map[string]any
 	m, err = MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
 		if m.ParentSessionID != nil && *m.ParentSessionID != "" {
@@ -594,16 +624,33 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		previousVersion = ptrOr(m.CurrentSpecVersion, 1)
 		previousPackageDigest = strValue(m.PackageDigest)
 		previousSpecSHA256 = latestSpecSHA256(m.SpecVersions)
+		previousRevision = strValue(m.CurrentRevision)
+		previousSpecPath = latestSpecPath(m.SpecVersions)
 		if previousSpecSHA256 == specSHA256(prepared.SpecData) && previousPackageDigest == strValue(prepared.PackageDigest) {
 			changed = false
 			return nil
 		}
-		if err := writeFileAtomic(*m.SessionSpecPath, prepared.SpecData, 0o644); err != nil {
-			return fmt.Errorf("write session spec: %w", err)
-		}
 		currentVersion = previousVersion + 1
-		versionEntry = specVersionEntry(currentVersion, *m.SessionSpecPath, prepared.SpecData, &previousVersion, prepared.PackageDigest)
+		paths, metadata, err := fs.installRevision(fs.sessionDir(id), prepared.Name, prepared, revisionInstallOptions{
+			Sequence:         currentVersion,
+			PreviousVersion:  previousRevision,
+			PreviousSpecPath: previousSpecPath,
+			ActiveSpecPath:   *m.SessionSpecPath,
+		})
+		if err != nil {
+			return err
+		}
+		prepared.SourceSpecPath = strPtr(paths.PackageSpecPath)
+		versionEntry = specVersionEntry(currentVersion, paths.SpecPath, prepared.SpecData, &previousVersion, prepared.PackageDigest, specVersionMetadata{
+			Revision:         metadata.Version,
+			PreviousRevision: metadata.PreviousVersion,
+			PackagePath:      paths.PackagePath,
+			ActiveSpecPath:   paths.ActiveSpecPath,
+			PackageSpecPath:  paths.PackageSpecPath,
+			DiffPath:         metadata.DiffPath,
+		})
 		m.CurrentSpecVersion = &currentVersion
+		m.CurrentRevision = strPtr(metadata.Version)
 		m.SpecVersions = append(m.SpecVersions, versionEntry)
 		m.PackageDigest = prepared.PackageDigest
 		m.ApplyPackageLock = prepared.ApplyPackageLock
@@ -633,7 +680,13 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		CurrentSpecSHA256:     stringMapValue(versionEntry, "spec_sha256"),
 		PreviousPackageDigest: previousPackageDigest,
 		CurrentPackageDigest:  strValue(prepared.PackageDigest),
-		SpecPath:              *m.SessionSpecPath,
+		SpecPath:              stringMapValue(versionEntry, "active_spec_path"),
+		PreviousSpecPath:      previousSpecPath,
+		CurrentSpecPath:       stringMapValue(versionEntry, "spec_path"),
+		ActiveSpecPath:        stringMapValue(versionEntry, "active_spec_path"),
+		DiffPath:              stringMapValue(versionEntry, "diff_path"),
+		PreviousRevision:      previousRevision,
+		CurrentRevision:       stringMapValue(versionEntry, "revision"),
 	}))
 	session, err := fs.deriveSession(id, m)
 	return session, true, err
@@ -1335,7 +1388,16 @@ func cloneSpecVersions(versions []map[string]any) []map[string]any {
 	return cloned
 }
 
-func specVersionEntry(version int, specPath string, data []byte, previous *int, packageDigest *string) map[string]any {
+type specVersionMetadata struct {
+	Revision         string
+	PreviousRevision string
+	PackagePath      string
+	ActiveSpecPath   string
+	PackageSpecPath  string
+	DiffPath         string
+}
+
+func specVersionEntry(version int, specPath string, data []byte, previous *int, packageDigest *string, metadata specVersionMetadata) map[string]any {
 	var previousVersion any
 	if previous != nil {
 		previousVersion = *previous
@@ -1351,6 +1413,24 @@ func specVersionEntry(version int, specPath string, data []byte, previous *int, 
 	if packageDigest != nil && *packageDigest != "" {
 		entry["package_digest"] = *packageDigest
 	}
+	if metadata.Revision != "" {
+		entry["revision"] = metadata.Revision
+	}
+	if metadata.PreviousRevision != "" {
+		entry["previous_revision"] = metadata.PreviousRevision
+	}
+	if metadata.PackagePath != "" {
+		entry["package_path"] = metadata.PackagePath
+	}
+	if metadata.ActiveSpecPath != "" {
+		entry["active_spec_path"] = metadata.ActiveSpecPath
+	}
+	if metadata.PackageSpecPath != "" {
+		entry["package_spec_path"] = metadata.PackageSpecPath
+	}
+	if metadata.DiffPath != "" {
+		entry["diff_path"] = metadata.DiffPath
+	}
 	return entry
 }
 
@@ -1359,13 +1439,229 @@ func specSHA256(data []byte) string {
 	return fmt.Sprintf("%x", hash)
 }
 
+type revisionInstallOptions struct {
+	Sequence         int
+	PreviousVersion  string
+	PreviousSpecPath string
+	ActiveSpecPath   string
+}
+
+type revisionPaths struct {
+	Version         string
+	RevisionDir     string
+	SpecPath        string
+	PackagePath     string
+	PackageSpecPath string
+	ActiveSpecPath  string
+	DiffPath        string
+}
+
+type revisionMetadata struct {
+	Version         string `json:"version"`
+	Sequence        int    `json:"sequence"`
+	PreviousVersion string `json:"previous_version,omitempty"`
+	SpecSHA256      string `json:"spec_sha256"`
+	PackageDigest   string `json:"package_digest,omitempty"`
+	SpecPath        string `json:"spec_path"`
+	PackagePath     string `json:"package_path"`
+	PackageSpecPath string `json:"package_spec_path"`
+	ActiveSpecPath  string `json:"active_spec_path"`
+	DiffPath        string `json:"diff_path,omitempty"`
+	CreatedAt       string `json:"created_at"`
+}
+
+func (fs *FileStore) installRevision(sessionDir string, specName string, prepared preparedRequestSpec, opts revisionInstallOptions) (revisionPaths, revisionMetadata, error) {
+	version := strings.TrimSpace(prepared.Version)
+	if version == "" {
+		return revisionPaths{}, revisionMetadata{}, fmt.Errorf("spec version is required for revision install: %w", ErrInvalidSession)
+	}
+	if len(prepared.PackageData) == 0 {
+		return revisionPaths{}, revisionMetadata{}, fmt.Errorf("apply package data is required for revision %s: %w", version, ErrInvalidSession)
+	}
+	paths := revisionLayout(sessionDir, specName, version, opts.ActiveSpecPath)
+	metadata := revisionMetadata{
+		Version:         version,
+		Sequence:        opts.Sequence,
+		PreviousVersion: strings.TrimSpace(opts.PreviousVersion),
+		SpecSHA256:      specSHA256(prepared.SpecData),
+		PackageDigest:   strValue(prepared.PackageDigest),
+		SpecPath:        paths.SpecPath,
+		PackagePath:     paths.PackagePath,
+		PackageSpecPath: paths.PackageSpecPath,
+		ActiveSpecPath:  paths.ActiveSpecPath,
+		CreatedAt:       tsNow(),
+	}
+	if existing, ok, err := readRevisionMetadata(paths.RevisionDir); err != nil {
+		return revisionPaths{}, revisionMetadata{}, err
+	} else if ok {
+		if existing.SpecSHA256 != metadata.SpecSHA256 || existing.PackageDigest != metadata.PackageDigest {
+			return revisionPaths{}, revisionMetadata{}, fmt.Errorf("revision %s already exists with different content: %w", version, ErrConflict)
+		}
+		return revisionPaths{}, revisionMetadata{}, fmt.Errorf("revision %s already exists; rollback/reapply is not supported by PUT: %w", version, ErrConflict)
+	}
+
+	if err := materializeRevision(paths, prepared); err != nil {
+		return revisionPaths{}, revisionMetadata{}, err
+	}
+	if opts.PreviousSpecPath != "" {
+		if err := writeSpecDiff(opts.PreviousSpecPath, paths.SpecPath, paths.DiffPath); err == nil {
+			metadata.DiffPath = paths.DiffPath
+		}
+	}
+	if err := writeRevisionMetadata(filepath.Join(paths.RevisionDir, "revision.json"), metadata); err != nil {
+		return revisionPaths{}, revisionMetadata{}, err
+	}
+	if err := advanceRevisionAliases(sessionDir, paths); err != nil {
+		return revisionPaths{}, revisionMetadata{}, err
+	}
+	return paths, metadata, nil
+}
+
+func revisionLayout(sessionDir string, specName string, version string, activeSpecPath string) revisionPaths {
+	revisionDir := filepath.Join(sessionDir, "revisions", version)
+	if activeSpecPath == "" {
+		activeSpecPath = filepath.Join(sessionDir, "specs", specName, "spec.md")
+	}
+	packagePath := filepath.Join(revisionDir, "package")
+	return revisionPaths{
+		Version:         version,
+		RevisionDir:     revisionDir,
+		SpecPath:        filepath.Join(revisionDir, "SPEC.md"),
+		PackagePath:     packagePath,
+		PackageSpecPath: filepath.Join(packagePath, "SPEC.md"),
+		ActiveSpecPath:  activeSpecPath,
+		DiffPath:        filepath.Join(revisionDir, "spec.diff"),
+	}
+}
+
+func readRevisionMetadata(revisionDir string) (revisionMetadata, bool, error) {
+	data, err := os.ReadFile(filepath.Join(revisionDir, "revision.json"))
+	if errors.Is(err, os.ErrNotExist) {
+		if _, statErr := os.Stat(revisionDir); errors.Is(statErr, os.ErrNotExist) {
+			return revisionMetadata{}, false, nil
+		}
+		return revisionMetadata{}, false, fmt.Errorf("revision dir %s exists without revision.json: %w", revisionDir, ErrConflict)
+	}
+	if err != nil {
+		return revisionMetadata{}, false, err
+	}
+	var metadata revisionMetadata
+	if err := json.Unmarshal(data, &metadata); err != nil {
+		return revisionMetadata{}, false, fmt.Errorf("read revision metadata %s: %w", revisionDir, err)
+	}
+	return metadata, true, nil
+}
+
+func materializeRevision(paths revisionPaths, prepared preparedRequestSpec) error {
+	parent := filepath.Dir(paths.RevisionDir)
+	if err := os.MkdirAll(parent, 0o755); err != nil {
+		return fmt.Errorf("create revisions dir: %w", err)
+	}
+	tmp, err := os.MkdirTemp(parent, ".revision-"+paths.Version+"-")
+	if err != nil {
+		return fmt.Errorf("create revision temp dir: %w", err)
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.RemoveAll(tmp)
+		}
+	}()
+	if err := writeFileAtomic(filepath.Join(tmp, "SPEC.md"), prepared.SpecData, 0o644); err != nil {
+		return fmt.Errorf("write revision spec: %w", err)
+	}
+	if _, err := spec.ExtractApplyPackage(prepared.PackageData, filepath.Join(tmp, "package")); err != nil {
+		return fmt.Errorf("extract revision package: %w", err)
+	}
+	if err := os.Rename(tmp, paths.RevisionDir); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("revision %s already exists: %w", paths.Version, ErrConflict)
+		}
+		return fmt.Errorf("commit revision %s: %w", paths.Version, err)
+	}
+	committed = true
+	return nil
+}
+
+func writeRevisionMetadata(path string, metadata revisionMetadata) error {
+	data, err := json.MarshalIndent(metadata, "", "  ")
+	if err != nil {
+		return err
+	}
+	data = append(data, '\n')
+	return writeFileAtomic(path, data, 0o644)
+}
+
+func advanceRevisionAliases(sessionDir string, paths revisionPaths) error {
+	if err := replaceSymlink(filepath.Join(sessionDir, "revisions", "current"), paths.Version); err != nil {
+		return fmt.Errorf("update current revision link: %w", err)
+	}
+	specTarget, err := filepath.Rel(filepath.Dir(paths.ActiveSpecPath), filepath.Join(sessionDir, "revisions", "current", "SPEC.md"))
+	if err != nil {
+		return err
+	}
+	if err := replaceSymlink(paths.ActiveSpecPath, specTarget); err != nil {
+		return fmt.Errorf("update active spec link: %w", err)
+	}
+	if err := replaceSymlink(filepath.Join(sessionDir, "package"), filepath.Join("revisions", "current", "package")); err != nil {
+		return fmt.Errorf("update active package link: %w", err)
+	}
+	return nil
+}
+
+func replaceSymlink(path string, target string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".tmp")
+	_ = os.Remove(tmp)
+	if err := os.Symlink(target, tmp); err != nil {
+		return err
+	}
+	if err := os.RemoveAll(path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		_ = os.Remove(tmp)
+		return err
+	}
+	return nil
+}
+
+func writeSpecDiff(previousPath string, currentPath string, diffPath string) error {
+	previous, err := os.ReadFile(previousPath)
+	if err != nil {
+		return err
+	}
+	current, err := os.ReadFile(currentPath)
+	if err != nil {
+		return err
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "--- %s\n", previousPath)
+	fmt.Fprintf(&b, "+++ %s\n", currentPath)
+	writeLineSetDiff(&b, "-", string(previous))
+	writeLineSetDiff(&b, "+", string(current))
+	return writeFileAtomic(diffPath, []byte(b.String()), 0o644)
+}
+
+func writeLineSetDiff(b *strings.Builder, prefix string, text string) {
+	lines := strings.Split(strings.TrimRight(text, "\n"), "\n")
+	for _, line := range lines {
+		fmt.Fprintf(b, "%s%s\n", prefix, line)
+	}
+}
+
 type preparedRequestSpec struct {
 	Name             string
+	Version          string
 	SourceSpecPath   *string
 	SessionSpecPath  *string
 	ContentHash      *string
 	IntervalSeconds  *int
 	SpecData         []byte
+	PackageData      []byte
 	PackageDigest    *string
 	ApplyPackageLock *spec.ApplyPackageManifest
 }
@@ -1402,9 +1698,11 @@ func prepareRequestSpec(sessionDir string, req SessionCreateRequest) (preparedRe
 	}
 	prepared := preparedRequestSpec{
 		Name:             compiled.Environment.Name,
+		Version:          compiled.Environment.Version,
 		ContentHash:      strPtr(compiled.ContentHash),
 		IntervalSeconds:  compiled.Environment.IntervalSeconds,
 		SpecData:         data,
+		PackageData:      applyPackage.Bytes,
 		PackageDigest:    strPtr(applyPackage.Digest),
 		ApplyPackageLock: &applyPackage.Manifest,
 	}
@@ -1416,10 +1714,11 @@ func prepareApplyPackageSpec(sessionDir string, packagePath string, expectedDige
 	if err != nil {
 		return preparedRequestSpec{}, fmt.Errorf("read apply package: %w", err)
 	}
-	packageDir := filepath.Join(sessionDir, "package")
-	if err := os.RemoveAll(packageDir); err != nil {
-		return preparedRequestSpec{}, fmt.Errorf("clear package dir: %w", err)
+	packageDir, err := os.MkdirTemp(sessionDir, ".package-compile-")
+	if err != nil {
+		return preparedRequestSpec{}, fmt.Errorf("create package compile dir: %w", err)
 	}
+	defer os.RemoveAll(packageDir)
 	manifest, err := spec.ExtractApplyPackage(data, packageDir)
 	if err != nil {
 		return preparedRequestSpec{}, err
@@ -1440,10 +1739,12 @@ func prepareApplyPackageSpec(sessionDir string, packagePath string, expectedDige
 	}
 	return preparedRequestSpec{
 		Name:             compiled.Environment.Name,
+		Version:          compiled.Environment.Version,
 		SourceSpecPath:   strPtr(specPath),
 		ContentHash:      strPtr(compiled.ContentHash),
 		IntervalSeconds:  compiled.Environment.IntervalSeconds,
 		SpecData:         specData,
+		PackageData:      data,
 		PackageDigest:    strPtr(actualDigest),
 		ApplyPackageLock: manifest,
 	}, nil
@@ -1493,6 +1794,9 @@ func buildConfig(req SessionCreateRequest) SessionConfig {
 	}
 	if req.Until != nil {
 		cfg.Until = *req.Until
+	}
+	if req.UntilSeconds != nil {
+		cfg.UntilSeconds = *req.UntilSeconds
 	}
 	if req.MaxCostUSD != nil {
 		cfg.MaxCostUSD = req.MaxCostUSD
@@ -1561,6 +1865,15 @@ func ptrOr[T any](p *T, def T) T {
 func latestSpecSHA256(versions []map[string]any) string {
 	for i := len(versions) - 1; i >= 0; i-- {
 		if value := stringMapValue(versions[i], "spec_sha256"); value != "" {
+			return value
+		}
+	}
+	return ""
+}
+
+func latestSpecPath(versions []map[string]any) string {
+	for i := len(versions) - 1; i >= 0; i-- {
+		if value := stringMapValue(versions[i], "spec_path"); value != "" {
 			return value
 		}
 	}

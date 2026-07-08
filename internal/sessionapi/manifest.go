@@ -21,6 +21,7 @@ type Manifest struct {
 	SourceSpecPath     *string                    `json:"source_spec_path,omitempty"`
 	SessionSpecPath    *string                    `json:"session_spec_path,omitempty"`
 	SpecName           string                     `json:"spec_name"`
+	CurrentRevision    *string                    `json:"current_revision,omitempty"`
 	CurrentSpecVersion *int                       `json:"current_spec_version,omitempty"`
 	SpecVersions       []map[string]any           `json:"spec_versions,omitempty"`
 	PackageDigest      *string                    `json:"package_digest,omitempty"`
@@ -94,6 +95,7 @@ type ScopedToken struct {
 type SessionConfig struct {
 	Model           string         `json:"model,omitempty"`
 	Until           int            `json:"until,omitempty"`
+	UntilSeconds    int            `json:"until_seconds,omitempty"`
 	MaxCostUSD      *float64       `json:"max_cost_usd,omitempty"`
 	AgentTimeoutSec int            `json:"agent_timeout_sec,omitempty"`
 	Thinking        string         `json:"thinking,omitempty"`
@@ -112,6 +114,7 @@ type InitialManifest struct {
 	SourceSpecPath   *string
 	SessionSpecPath  *string
 	SpecName         string
+	CurrentRevision  *string
 	Config           SessionConfig
 	Workspace        *Workspace
 	Provenance       map[string]any
@@ -176,6 +179,7 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		SourceSpecPath:   input.SourceSpecPath,
 		SessionSpecPath:  input.SessionSpecPath,
 		SpecName:         input.SpecName,
+		CurrentRevision:  input.CurrentRevision,
 		Config:           input.Config,
 		Workspace:        input.Workspace,
 		Provenance:       input.Provenance,
@@ -288,6 +292,9 @@ func (c SessionConfig) MarshalJSON() ([]byte, error) {
 	if c.Until > 0 {
 		m["until"] = c.Until
 	}
+	if c.UntilSeconds > 0 {
+		m["until_seconds"] = c.UntilSeconds
+	}
 	if c.MaxCostUSD != nil {
 		m["max_cost_usd"] = *c.MaxCostUSD
 	}
@@ -317,6 +324,12 @@ func (c *SessionConfig) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("config.until: %w", err)
 		}
 		delete(raw, "until")
+	}
+	if value, ok := raw["until_seconds"]; ok {
+		if err := json.Unmarshal(value, &c.UntilSeconds); err != nil {
+			return fmt.Errorf("config.until_seconds: %w", err)
+		}
+		delete(raw, "until_seconds")
 	}
 	if value, ok := raw["max_cost_usd"]; ok {
 		if err := json.Unmarshal(value, &c.MaxCostUSD); err != nil {

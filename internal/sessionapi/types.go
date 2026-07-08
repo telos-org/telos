@@ -90,6 +90,7 @@ type SessionCreateRequest struct {
 	SessionKind      *SessionKind `json:"-"`
 	ParentSessionID  *string      `json:"parent_session_id,omitempty"`
 	Until            *int         `json:"until,omitempty"`
+	UntilSeconds     *int         `json:"until_seconds,omitempty"`
 	Model            string       `json:"model,omitempty"`
 	Thinking         string       `json:"thinking,omitempty"`
 	MaxCostUSD       *float64     `json:"max_cost_usd,omitempty"`
@@ -120,6 +121,12 @@ type SpecUpdateEvent struct {
 	TranscriptPath        string
 	EvidencePath          string
 	SpecPath              string
+	PreviousSpecPath      string
+	CurrentSpecPath       string
+	ActiveSpecPath        string
+	DiffPath              string
+	PreviousRevision      string
+	CurrentRevision       string
 	EpochID               int
 	PreviousSpecVersion   int
 	CurrentSpecVersion    int

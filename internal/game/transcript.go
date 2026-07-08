@@ -38,6 +38,12 @@ type ExternalUpdate struct {
 	PreviousPackageDigest string
 	CurrentPackageDigest  string
 	SpecPath              string
+	PreviousSpecPath      string
+	CurrentSpecPath       string
+	ActiveSpecPath        string
+	DiffPath              string
+	PreviousRevision      string
+	CurrentRevision       string
 }
 
 // InitializeTranscript creates a transcript header if the file does not exist.
@@ -176,6 +182,12 @@ func AppendExternalUpdate(path string, update ExternalUpdate) error {
 	fmt.Fprintln(f)
 	fmt.Fprintf(f, "- Previous spec version: `%d`\n", update.PreviousSpecVersion)
 	fmt.Fprintf(f, "- Current spec version: `%d`\n", update.CurrentSpecVersion)
+	if update.PreviousRevision != "" {
+		fmt.Fprintf(f, "- Previous revision: `%s`\n", update.PreviousRevision)
+	}
+	if update.CurrentRevision != "" {
+		fmt.Fprintf(f, "- Current revision: `%s`\n", update.CurrentRevision)
+	}
 	if update.PreviousSpecSHA256 != "" {
 		fmt.Fprintf(f, "- Previous spec SHA-256: `%s`\n", update.PreviousSpecSHA256)
 	}
@@ -188,7 +200,19 @@ func AppendExternalUpdate(path string, update ExternalUpdate) error {
 	if update.CurrentPackageDigest != "" {
 		fmt.Fprintf(f, "- Current package digest: `%s`\n", update.CurrentPackageDigest)
 	}
-	if update.SpecPath != "" {
+	if update.PreviousSpecPath != "" {
+		fmt.Fprintf(f, "- Previous spec path: `%s`\n", update.PreviousSpecPath)
+	}
+	if update.CurrentSpecPath != "" {
+		fmt.Fprintf(f, "- Current immutable spec path: `%s`\n", update.CurrentSpecPath)
+	}
+	if update.ActiveSpecPath != "" {
+		fmt.Fprintf(f, "- Active spec path: `%s`\n", update.ActiveSpecPath)
+	}
+	if update.DiffPath != "" {
+		fmt.Fprintf(f, "- Spec diff path: `%s`\n", update.DiffPath)
+	}
+	if update.SpecPath != "" && update.SpecPath != update.ActiveSpecPath && update.SpecPath != update.CurrentSpecPath {
 		fmt.Fprintf(f, "- Current spec path: `%s`\n", update.SpecPath)
 	}
 	fmt.Fprintln(f, "</external_update>")

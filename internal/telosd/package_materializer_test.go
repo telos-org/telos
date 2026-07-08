@@ -142,9 +142,9 @@ func buildMaterializerRefOnlyPackage(t *testing.T, name string) (*spec.ApplyPack
 	return pkg, skillDigest, skillBundle
 }
 
-func buildMaterializerTestPackage(t *testing.T, name string) *spec.ApplyPackage {
+func buildMaterializerTestPackage(t *testing.T, name string, versions ...string) *spec.ApplyPackage {
 	t.Helper()
-	compiled := buildMaterializerTestCompiled(t, name)
+	compiled := buildMaterializerTestCompiled(t, name, versions...)
 	pkg, err := spec.BuildApplyPackage(compiled)
 	if err != nil {
 		t.Fatalf("BuildApplyPackage: %v", err)
@@ -152,13 +152,17 @@ func buildMaterializerTestPackage(t *testing.T, name string) *spec.ApplyPackage 
 	return pkg
 }
 
-func buildMaterializerTestCompiled(t *testing.T, name string) *spec.CompiledEnvironment {
+func buildMaterializerTestCompiled(t *testing.T, name string, versions ...string) *spec.CompiledEnvironment {
 	t.Helper()
+	version := "0.1.0"
+	if len(versions) > 0 && versions[0] != "" {
+		version = versions[0]
+	}
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	if err := os.WriteFile(
 		specPath,
-		[]byte("---\nversion: v0\nname: "+name+"\nplatform: cloud\nskills:\n  - alpha\n---\n# "+name+"\n"),
+		[]byte("---\nversion: "+version+"\nname: "+name+"\nplatform: cloud\nskills:\n  - alpha\n---\n# "+name+"\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)

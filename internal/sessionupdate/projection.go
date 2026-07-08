@@ -31,6 +31,12 @@ func ProjectSpecUpdate(event sessionapi.SpecUpdateEvent) {
 				PreviousPackageDigest: event.PreviousPackageDigest,
 				CurrentPackageDigest:  event.CurrentPackageDigest,
 				SpecPath:              event.SpecPath,
+				PreviousSpecPath:      event.PreviousSpecPath,
+				CurrentSpecPath:       event.CurrentSpecPath,
+				ActiveSpecPath:        event.ActiveSpecPath,
+				DiffPath:              event.DiffPath,
+				PreviousRevision:      event.PreviousRevision,
+				CurrentRevision:       event.CurrentRevision,
 			})
 		}
 	}
@@ -62,6 +68,24 @@ func specUpdateEventData(message string, event sessionapi.SpecUpdateEvent) map[s
 	}
 	if event.CurrentPackageDigest != "" {
 		data["current_package_digest"] = event.CurrentPackageDigest
+	}
+	if event.PreviousSpecPath != "" {
+		data["previous_spec_path"] = event.PreviousSpecPath
+	}
+	if event.CurrentSpecPath != "" {
+		data["current_spec_path"] = event.CurrentSpecPath
+	}
+	if event.ActiveSpecPath != "" {
+		data["active_spec_path"] = event.ActiveSpecPath
+	}
+	if event.DiffPath != "" {
+		data["diff_path"] = event.DiffPath
+	}
+	if event.PreviousRevision != "" {
+		data["previous_revision"] = event.PreviousRevision
+	}
+	if event.CurrentRevision != "" {
+		data["current_revision"] = event.CurrentRevision
 	}
 	return data
 }
