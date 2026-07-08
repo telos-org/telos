@@ -102,6 +102,37 @@ func TestEvidenceResumesSequence(t *testing.T) {
 	}
 }
 
+func TestEvidenceRefreshesSequenceBeforeAppend(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "evidence.jsonl")
+
+	ev1 := New("test-system", path, "sess-003", 0)
+	ev2 := New("test-system", path, "sess-003", 0)
+	ev1.Log("event1", 1, "prover", nil)
+	ev2.Log("event2", 2, "system", nil)
+
+	data, _ := os.ReadFile(path)
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d", len(lines))
+	}
+
+	seenIDs := map[string]bool{}
+	for i, line := range lines {
+		var m map[string]interface{}
+		json.Unmarshal([]byte(line), &m)
+		seq, _ := m["event_seq"].(float64)
+		if int(seq) != i+1 {
+			t.Errorf("line %d: expected seq %d, got %v", i, i+1, seq)
+		}
+		id, _ := m["event_id"].(string)
+		if seenIDs[id] {
+			t.Fatalf("duplicate event_id %q", id)
+		}
+		seenIDs[id] = true
+	}
+}
+
 func TestEvidenceLogAgent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "evidence.jsonl")
