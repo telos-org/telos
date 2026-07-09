@@ -179,8 +179,8 @@ check_contains "describe without args shows usage" "$DESCRIBE_NOARG" "usage: tel
 LOGS_NOARG="$(telos_cmd logs 2>&1 || true)"
 check_contains "logs without args shows usage" "$LOGS_NOARG" "usage: telos logs"
 
-STOP_NOARG="$(telos_cmd stop 2>&1 || true)"
-check_contains "stop without args shows usage" "$STOP_NOARG" "usage: telos stop"
+DELETE_NOARG="$(telos_cmd delete 2>&1 || true)"
+check_contains "delete without args shows usage" "$DELETE_NOARG" "usage: telos delete"
 
 DESCRIBE_MISSING="$(telos_cmd describe nonexistent_session 2>&1 || true)"
 check_contains "describe missing session says not found" "$DESCRIBE_MISSING" "not found"
@@ -189,8 +189,8 @@ check_not_contains "describe missing session has no panic" "$DESCRIBE_MISSING" "
 LOGS_MISSING="$(telos_cmd logs nonexistent_session 2>&1 || true)"
 check_contains "logs missing session says not found" "$LOGS_MISSING" "not found"
 
-STOP_MISSING="$(telos_cmd stop nonexistent_session 2>&1 || true)"
-check_contains "stop missing session says not found" "$STOP_MISSING" "not found"
+DELETE_MISSING="$(telos_cmd delete nonexistent_session 2>&1 || true)"
+check_contains "delete missing session says not found" "$DELETE_MISSING" "not found"
 
 PLAN_MISSING="$(telos_cmd plan nonexistent.md 2>&1 || true)"
 check_contains "plan missing spec is specific" "$PLAN_MISSING" "spec file not found"

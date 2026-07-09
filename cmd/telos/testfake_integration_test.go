@@ -104,14 +104,14 @@ func TestCLIWithTestFakeExecutor(t *testing.T) {
 		t.Fatalf("workspace archive hello.txt: got %q", got)
 	}
 
-	stopOut := runProcess(t, workspace, env, telosBin, "stop", runResp.SessionID, "--json")
-	var stopResp struct {
+	deleteOut := runProcess(t, workspace, env, telosBin, "delete", runResp.SessionID, "--json")
+	var deleteResp struct {
 		SessionID string `json:"session_id"`
 		Status    string `json:"status"`
 	}
-	mustJSON(t, stopOut, &stopResp)
-	if stopResp.SessionID != runResp.SessionID || stopResp.Status != "completed" {
-		t.Fatalf("unexpected stop response: %+v", stopResp)
+	mustJSON(t, deleteOut, &deleteResp)
+	if deleteResp.SessionID != runResp.SessionID || deleteResp.Status != "completed" {
+		t.Fatalf("unexpected delete response: %+v", deleteResp)
 	}
 }
 

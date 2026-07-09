@@ -10,18 +10,32 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
-// -- stop ---------------------------------------------------------------------
+// -- delete -------------------------------------------------------------------
 
-func cmdStop(args []string) {
-	fs := flag.NewFlagSet("stop", flag.ExitOnError)
+func cmdDelete(args []string) {
+	fs := flag.NewFlagSet("delete", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos stop SESSION [--json]")
+		fmt.Fprintln(os.Stderr, "usage: telos delete SESSION [--json]")
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
+
+	if isCloudApplyID(sessionID) {
+		cloudSession, err := deleteCloudSession(sessionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if *jsonOut {
+			printJSON(cloudSession)
+			return
+		}
+		printCloudSessionDeleteReceipt(os.Stdout, *cloudSession)
+		return
+	}
 
 	session, err := stopSessionAnywhere(sessionID)
 	if err == nil {
@@ -29,7 +43,7 @@ func cmdStop(args []string) {
 			printJSON(session)
 			return
 		}
-		printStopReceipt(os.Stdout, *session)
+		printLocalSessionDeleteReceipt(os.Stdout, *session)
 		return
 	}
 
@@ -49,29 +63,6 @@ func cmdStop(args []string) {
 
 	fmt.Fprintf(os.Stderr, "error: %v\n", err)
 	os.Exit(1)
-}
-
-func cmdDelete(args []string) {
-	fs := flag.NewFlagSet("delete", flag.ExitOnError)
-	jsonOut := fs.Bool("json", false, "JSON output")
-	parseFlags(fs, args)
-
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos delete SESSION [--json]")
-		os.Exit(1)
-	}
-	sessionID := fs.Arg(0)
-
-	cloudSession, err := deleteCloudSession(sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if *jsonOut {
-		printJSON(cloudSession)
-		return
-	}
-	printCloudSessionDeleteReceipt(os.Stdout, *cloudSession)
 }
 
 func deleteCloudSession(sessionID string) (*cloud.SessionRecord, error) {
@@ -107,8 +98,8 @@ func printCloudSessionDeleteReceipt(out io.Writer, session cloud.SessionRecord) 
 	printSummaryField(out, "Session", session.ID)
 }
 
-func printStopReceipt(out io.Writer, session sessionapi.Session) {
-	fmt.Fprintf(out, "stopped %s\n\n", stopOperationName(session))
+func printLocalSessionDeleteReceipt(out io.Writer, session sessionapi.Session) {
+	fmt.Fprintf(out, "deleted %s (history preserved)\n\n", deletedSessionName(session))
 	row := displayRow(session)
 	printSummaryField(out, "Name", row.Name)
 	printSummaryField(out, "Target", row.Target)
@@ -117,7 +108,7 @@ func printStopReceipt(out io.Writer, session sessionapi.Session) {
 	printSummaryField(out, "Session", row.Session)
 }
 
-func stopOperationName(session sessionapi.Session) string {
+func deletedSessionName(session sessionapi.Session) string {
 	if name := sessionName(session); name != "-" {
 		return name
 	}

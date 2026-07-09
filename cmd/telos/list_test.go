@@ -753,7 +753,7 @@ func TestPrintSessionReceiptUsesNormalizedSummary(t *testing.T) {
 	}
 }
 
-func TestPrintStopReceiptUsesSessionSummary(t *testing.T) {
+func TestPrintLocalSessionDeleteReceiptUsesSessionSummary(t *testing.T) {
 	name := "gitea"
 	cost := 1.1907
 	session := sessionapi.Session{
@@ -765,10 +765,10 @@ func TestPrintStopReceiptUsesSessionSummary(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printStopReceipt(&out, session)
+	printLocalSessionDeleteReceipt(&out, session)
 	text := out.String()
 	for _, want := range []string{
-		"stopped gitea",
+		"deleted gitea (history preserved)",
 		"Name      gitea",
 		"Target    cloud",
 		"Status    stopped",
@@ -776,12 +776,12 @@ func TestPrintStopReceiptUsesSessionSummary(t *testing.T) {
 		"Session   sess_123",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("stop receipt missing %q:\n%s", want, text)
+			t.Fatalf("delete receipt missing %q:\n%s", want, text)
 		}
 	}
 }
 
-func TestPrintStopReceiptUsesSessionIDForUnnamedSession(t *testing.T) {
+func TestPrintLocalSessionDeleteReceiptUsesSessionIDForUnnamedSession(t *testing.T) {
 	session := sessionapi.Session{
 		SessionID: "sess_123",
 		Runtime:   sessionapi.RuntimeLocal,
@@ -789,17 +789,17 @@ func TestPrintStopReceiptUsesSessionIDForUnnamedSession(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printStopReceipt(&out, session)
+	printLocalSessionDeleteReceipt(&out, session)
 	text := out.String()
 	for _, want := range []string{
-		"stopped sess_123",
+		"deleted sess_123 (history preserved)",
 		"Name      -",
 		"Target    local",
 		"Status    stopped",
 		"Session   sess_123",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("stop receipt missing %q:\n%s", want, text)
+			t.Fatalf("delete receipt missing %q:\n%s", want, text)
 		}
 	}
 }
