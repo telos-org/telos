@@ -136,8 +136,8 @@ func buildMaterializerRefOnlyPackage(t *testing.T, name string) (*spec.ApplyPack
 	if err != nil {
 		t.Fatalf("BuildApplyPackageWithSkillRefs: %v", err)
 	}
-	if pkg.Manifest.Skills["alpha"] != skillDigest {
-		t.Fatalf("package skill digest = %s want %s", pkg.Manifest.Skills["alpha"], skillDigest)
+	if pkg.Manifest.Skills["alpha"].Digest != skillDigest {
+		t.Fatalf("package skill digest = %s want %s", pkg.Manifest.Skills["alpha"].Digest, skillDigest)
 	}
 	return pkg, skillDigest, skillBundle
 }

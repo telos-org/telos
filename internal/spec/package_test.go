@@ -43,14 +43,11 @@ func TestBuildApplyPackageIsDeterministic(t *testing.T) {
 	if first.Manifest.Spec.Digest == "" {
 		t.Fatalf("manifest missing spec digest: %#v", first.Manifest)
 	}
-	if first.Manifest.Skills["alpha"] == "" {
+	if first.Manifest.Skills["alpha"].Digest == "" {
 		t.Fatalf("manifest missing alpha skill digest: %#v", first.Manifest.Skills)
 	}
-	if first.Manifest.SkillProvenance["alpha"].Digest != first.Manifest.Skills["alpha"] {
-		t.Fatalf("manifest alpha provenance mismatch: %#v", first.Manifest.SkillProvenance["alpha"])
-	}
-	if first.Manifest.SkillProvenance["alpha"].Ref != "path:alpha" {
-		t.Fatalf("manifest alpha provenance ref: got %q", first.Manifest.SkillProvenance["alpha"].Ref)
+	if first.Manifest.Skills["alpha"].Ref != "path:alpha" {
+		t.Fatalf("manifest alpha skill ref: got %q", first.Manifest.Skills["alpha"].Ref)
 	}
 
 	entries := tarEntries(t, first.Bytes)
@@ -80,19 +77,22 @@ func TestBuildApplyPackageIsDeterministic(t *testing.T) {
 	if _, ok := manifest["runtime"]; ok {
 		t.Fatalf("manifest should not contain runtime provenance: %#v", manifest)
 	}
-	rawProvenance, ok := manifest["skill_provenance"].(map[string]any)
-	if !ok {
-		t.Fatalf("manifest missing skill_provenance: %#v", manifest)
+	if _, ok := manifest["skill_provenance"]; ok {
+		t.Fatalf("manifest should not contain skill_provenance: %#v", manifest)
 	}
-	alpha, ok := rawProvenance["alpha"].(map[string]any)
+	rawSkills, ok := manifest["skills"].(map[string]any)
 	if !ok {
-		t.Fatalf("manifest missing alpha skill_provenance: %#v", rawProvenance)
+		t.Fatalf("manifest missing skills: %#v", manifest)
 	}
-	if alpha["digest"] != first.Manifest.Skills["alpha"] {
-		t.Fatalf("manifest alpha skill_provenance digest: got %#v want %q", alpha["digest"], first.Manifest.Skills["alpha"])
+	alpha, ok := rawSkills["alpha"].(map[string]any)
+	if !ok {
+		t.Fatalf("manifest missing alpha skill lock: %#v", rawSkills)
+	}
+	if alpha["digest"] != first.Manifest.Skills["alpha"].Digest {
+		t.Fatalf("manifest alpha skill digest: got %#v want %q", alpha["digest"], first.Manifest.Skills["alpha"].Digest)
 	}
 	if alpha["ref"] != "path:alpha" {
-		t.Fatalf("manifest alpha skill_provenance ref: got %#v", alpha["ref"])
+		t.Fatalf("manifest alpha skill ref: got %#v", alpha["ref"])
 	}
 	if _, ok := alpha["origin"]; ok {
 		t.Fatalf("manifest should not contain skill origin: %#v", alpha)
@@ -127,8 +127,8 @@ func TestBuildApplyPackageWithSkillRefsOmitsSkillFiles(t *testing.T) {
 	if _, ok := entries["manifest.json"]; !ok {
 		t.Fatalf("missing manifest.json: %v", sortedEntryNames(entries))
 	}
-	if pkg.Manifest.SkillProvenance["alpha"].Ref != "@user-abc/alpha:0.1.0" {
-		t.Fatalf("skill provenance ref: %#v", pkg.Manifest.SkillProvenance["alpha"])
+	if pkg.Manifest.Skills["alpha"].Ref != "@user-abc/alpha:0.1.0" {
+		t.Fatalf("skill ref: %#v", pkg.Manifest.Skills["alpha"])
 	}
 	if _, err := ExtractApplyPackage(pkg.Bytes, t.TempDir()); err == nil {
 		t.Fatal("ref-only package should require hydration before extraction")
@@ -157,8 +157,8 @@ func TestHydrateApplyPackageFetchesReferencedSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildApplyPackageWithSkillRefs: %v", err)
 	}
-	if bundleDigest != pkg.Manifest.Skills["alpha"] {
-		t.Fatalf("skill digest: bundle %s package %s", bundleDigest, pkg.Manifest.Skills["alpha"])
+	if bundleDigest != pkg.Manifest.Skills["alpha"].Digest {
+		t.Fatalf("skill digest: bundle %s package %s", bundleDigest, pkg.Manifest.Skills["alpha"].Digest)
 	}
 
 	hydrated, manifest, err := HydrateApplyPackage(pkg.Bytes, func(req ApplyPackageSkillFetchRequest) ([]byte, error) {
@@ -170,7 +170,7 @@ func TestHydrateApplyPackageFetchesReferencedSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HydrateApplyPackage: %v", err)
 	}
-	if manifest.Skills["alpha"] != bundleDigest {
+	if manifest.Skills["alpha"].Digest != bundleDigest {
 		t.Fatalf("manifest skill digest: %#v", manifest.Skills)
 	}
 	dest := t.TempDir()
@@ -182,6 +182,71 @@ func TestHydrateApplyPackageFetchesReferencedSkills(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "skills", "alpha", "SKILL.md")); err != nil {
 		t.Fatalf("hydrated skill file: %v", err)
+	}
+}
+
+func TestHydrateApplyPackageFetchesLegacyReferencedSkills(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writePackageTestSpec(t, dir, "package-legacy-hydrate", "alpha")
+	writePackageTestSkill(t, dir, "alpha", map[string]string{
+		"SKILL.md": "---\nname: alpha\n---\nUse alpha.",
+	})
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	bundleDigest, skillBundle, err := BuildSkillBundle(compiled.Skills[0])
+	if err != nil {
+		t.Fatalf("BuildSkillBundle: %v", err)
+	}
+	pkg, err := BuildApplyPackageWithSkillRefs(compiled, map[string]string{
+		"alpha": "@user-abc/alpha:0.1.0",
+	})
+	if err != nil {
+		t.Fatalf("BuildApplyPackageWithSkillRefs: %v", err)
+	}
+	entries := tarEntries(t, pkg.Bytes)
+	legacySkills := map[string]string{}
+	legacyProvenance := map[string]map[string]string{}
+	for name, lock := range pkg.Manifest.Skills {
+		legacySkills[name] = lock.Digest
+		if lock.Ref != "" {
+			legacyProvenance[name] = map[string]string{
+				"digest": lock.Digest,
+				"ref":    lock.Ref,
+			}
+		}
+	}
+	legacyManifest := map[string]any{
+		"schema_version":   ApplyPackageSchemaVersion,
+		"spec":             map[string]string{"digest": pkg.Manifest.Spec.Digest},
+		"skills":           legacySkills,
+		"skill_provenance": legacyProvenance,
+	}
+	manifestData, err := json.Marshal(legacyManifest)
+	if err != nil {
+		t.Fatalf("marshal legacy manifest: %v", err)
+	}
+	entries["manifest.json"] = manifestData
+	legacyPackage, err := writePackageTar(packageFilesFromEntries(entries))
+	if err != nil {
+		t.Fatalf("write legacy package: %v", err)
+	}
+
+	hydrated, manifest, err := HydrateApplyPackage(legacyPackage, func(req ApplyPackageSkillFetchRequest) ([]byte, error) {
+		if req.Name != "alpha" || req.Ref != "@user-abc/alpha:0.1.0" || req.Digest != bundleDigest {
+			t.Fatalf("fetch request: %#v", req)
+		}
+		return skillBundle, nil
+	})
+	if err != nil {
+		t.Fatalf("HydrateApplyPackage: %v", err)
+	}
+	if manifest.Skills["alpha"].Digest != bundleDigest {
+		t.Fatalf("manifest skill digest: %#v", manifest.Skills)
+	}
+	if _, err := ExtractApplyPackage(hydrated, t.TempDir()); err != nil {
+		t.Fatalf("ExtractApplyPackage hydrated: %v", err)
 	}
 }
 
@@ -369,8 +434,8 @@ func TestCompilePackageLocalScopedSkillRef(t *testing.T) {
 	manifest := ApplyPackageManifest{
 		SchemaVersion: ApplyPackageSchemaVersion,
 		Spec:          ApplyPackageSpecEntry{Digest: "sha256:spec"},
-		Skills: map[string]string{
-			"alpha": "sha256:skill",
+		Skills: map[string]ApplyPackageSkillLock{
+			"alpha": {Digest: "sha256:skill"},
 		},
 	}
 	data, err := json.Marshal(manifest)
@@ -421,13 +486,10 @@ func TestCompileUsesPackageManifestInjectedRequiredSkill(t *testing.T) {
 	manifest := ApplyPackageManifest{
 		SchemaVersion: ApplyPackageSchemaVersion,
 		Spec:          ApplyPackageSpecEntry{Digest: "sha256:spec"},
-		Skills: map[string]string{
-			"verify-quality": "sha256:skill",
-		},
-		SkillProvenance: map[string]ApplyPackageSkillProvenance{
+		Skills: map[string]ApplyPackageSkillLock{
 			"verify-quality": {
-				Ref:    "@telos/verify-quality:1.0.0",
 				Digest: "sha256:skill",
+				Ref:    "@telos/verify-quality:1.0.0",
 			},
 		},
 	}
