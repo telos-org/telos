@@ -36,6 +36,30 @@ type ApplyPackageSkillEntry struct {
 	Files  []ApplyPackageFileEntry `json:"-"`
 }
 
+type ApplyPackageSkillLock struct {
+	Digest string `json:"digest"`
+	Ref    string `json:"ref,omitempty"`
+}
+
+func (lock *ApplyPackageSkillLock) UnmarshalJSON(data []byte) error {
+	var digest string
+	if err := json.Unmarshal(data, &digest); err == nil {
+		lock.Digest = digest
+		lock.Ref = ""
+		return nil
+	}
+	var raw struct {
+		Digest string `json:"digest"`
+		Ref    string `json:"ref"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	lock.Digest = raw.Digest
+	lock.Ref = raw.Ref
+	return nil
+}
+
 type ApplyPackageFileEntry struct {
 	Path   string `json:"path"`
 	Mode   string `json:"mode"`
@@ -59,7 +83,7 @@ type ApplyPackageSkillFetcher func(ApplyPackageSkillFetchRequest) ([]byte, error
 type ApplyPackageManifest struct {
 	SchemaVersion   int                                    `json:"schema_version"`
 	Spec            ApplyPackageSpecEntry                  `json:"spec"`
-	Skills          map[string]string                      `json:"skills"`
+	Skills          map[string]ApplyPackageSkillLock       `json:"skills"`
 	SkillProvenance map[string]ApplyPackageSkillProvenance `json:"skill_provenance,omitempty"`
 }
 
@@ -116,10 +140,9 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 	}
 
 	manifest := ApplyPackageManifest{
-		SchemaVersion:   ApplyPackageSchemaVersion,
-		Spec:            specEntry,
-		Skills:          skillDigestMap(skillEntries),
-		SkillProvenance: skillProvenanceMap(skillEntries),
+		SchemaVersion: ApplyPackageSchemaVersion,
+		Spec:          specEntry,
+		Skills:        skillLockMap(skillEntries),
 	}
 	packageDigest := digestPackage(specEntry.Digest, manifest.Skills)
 
@@ -171,13 +194,17 @@ func HydrateApplyPackage(data []byte, fetch ApplyPackageSkillFetcher) ([]byte, *
 			return nil, nil, fmt.Errorf("fetch skill %q: skill fetcher is required", name)
 		}
 		provenance, ok := manifest.SkillProvenance[name]
-		if !ok || strings.TrimSpace(provenance.Ref) == "" {
+		ref := strings.TrimSpace(manifest.skillRef(name))
+		if ref == "" && ok {
+			ref = strings.TrimSpace(provenance.Ref)
+		}
+		if ref == "" {
 			return nil, nil, fmt.Errorf("package missing registry ref for skill %q", name)
 		}
-		expectedDigest := manifest.Skills[name]
+		expectedDigest := manifest.skillDigest(name)
 		bundle, err := fetch(ApplyPackageSkillFetchRequest{
 			Name:   name,
-			Ref:    provenance.Ref,
+			Ref:    ref,
 			Digest: expectedDigest,
 		})
 		if err != nil {
@@ -389,22 +416,31 @@ func validateApplyPackageFilesWithMode(manifest *ApplyPackageManifest, files map
 		}
 		sort.Slice(entries, func(i, j int) bool { return entries[i].Path < entries[j].Path })
 		skillDigest := digestSkill(skillName, entries)
-		if skillDigest != manifest.Skills[skillName] {
-			return fmt.Errorf("skill digest mismatch for %q: got %s want %s", skillName, skillDigest, manifest.Skills[skillName])
+		if skillDigest != manifest.skillDigest(skillName) {
+			return fmt.Errorf("skill digest mismatch for %q: got %s want %s", skillName, skillDigest, manifest.skillDigest(skillName))
 		}
 	}
 	return nil
 }
 
 func packageSkillHasRegistryRef(manifest *ApplyPackageManifest, name string) bool {
-	if manifest == nil || manifest.SkillProvenance == nil {
+	if manifest == nil {
+		return false
+	}
+	if skill, ok := manifest.Skills[name]; ok {
+		ref := strings.TrimSpace(skill.Ref)
+		if ref != "" {
+			return strings.HasPrefix(ref, "@") && strings.TrimSpace(skill.Digest) != ""
+		}
+	}
+	if manifest.SkillProvenance == nil {
 		return false
 	}
 	provenance, ok := manifest.SkillProvenance[name]
 	ref := strings.TrimSpace(provenance.Ref)
 	return ok &&
 		strings.HasPrefix(ref, "@") &&
-		provenance.Digest == manifest.Skills[name]
+		provenance.Digest == manifest.skillDigest(name)
 }
 
 func missingPackageSkillNames(manifest *ApplyPackageManifest, files map[string]packageFile) []string {
@@ -660,20 +696,12 @@ func digestSkill(name string, files []ApplyPackageFileEntry) string {
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }
 
-func skillDigestMap(skills []ApplyPackageSkillEntry) map[string]string {
-	out := make(map[string]string, len(skills))
+func skillLockMap(skills []ApplyPackageSkillEntry) map[string]ApplyPackageSkillLock {
+	out := make(map[string]ApplyPackageSkillLock, len(skills))
 	for _, skill := range skills {
-		out[skill.Name] = skill.Digest
-	}
-	return out
-}
-
-func skillProvenanceMap(skills []ApplyPackageSkillEntry) map[string]ApplyPackageSkillProvenance {
-	out := make(map[string]ApplyPackageSkillProvenance, len(skills))
-	for _, skill := range skills {
-		out[skill.Name] = ApplyPackageSkillProvenance{
-			Ref:    skill.Ref,
+		out[skill.Name] = ApplyPackageSkillLock{
 			Digest: skill.Digest,
+			Ref:    strings.TrimSpace(skill.Ref),
 		}
 	}
 	return out
@@ -716,7 +744,7 @@ func relativePathWithin(root string, path string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
-func digestPackage(specDigest string, skills map[string]string) string {
+func digestPackage(specDigest string, skills map[string]ApplyPackageSkillLock) string {
 	h := sha256.New()
 	writeDigestPart(h, fmt.Sprintf("schema:%d", ApplyPackageSchemaVersion))
 	writeDigestPart(h, "spec:"+specDigest)
@@ -727,9 +755,30 @@ func digestPackage(specDigest string, skills map[string]string) string {
 	sort.Strings(names)
 	for _, name := range names {
 		writeDigestPart(h, name)
-		writeDigestPart(h, skills[name])
+		writeDigestPart(h, skills[name].Digest)
 	}
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))
+}
+
+func (manifest *ApplyPackageManifest) skillDigest(name string) string {
+	if manifest == nil || manifest.Skills == nil {
+		return ""
+	}
+	return strings.TrimSpace(manifest.Skills[name].Digest)
+}
+
+func (manifest *ApplyPackageManifest) skillRef(name string) string {
+	if manifest == nil || manifest.Skills == nil {
+		return ""
+	}
+	ref := strings.TrimSpace(manifest.Skills[name].Ref)
+	if ref != "" {
+		return ref
+	}
+	if manifest.SkillProvenance == nil {
+		return ""
+	}
+	return strings.TrimSpace(manifest.SkillProvenance[name].Ref)
 }
 
 func writeDigestPart(w io.Writer, value string) {
