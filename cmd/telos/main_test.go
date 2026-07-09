@@ -50,7 +50,8 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
-		"apply SPEC.md      Create or update a cloud session from a spec",
+		"apply SPEC.md      Create or update a durable session from a spec",
+		"delete SESSION     Delete a session (local history is preserved)",
 		"version            Show version",
 		"--version",
 		"telos <command> --help",
