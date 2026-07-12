@@ -12,6 +12,7 @@
 //	telos logs [-f] [--verbose] SESSION
 //	telos delete SESSION [--json]
 //	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
+//	telos logout
 //	telos version
 //	telos --version
 package main
@@ -60,6 +61,8 @@ func main() {
 		cmdDelete(os.Args[2:])
 	case "login":
 		cmdLogin(os.Args[2:])
+	case "logout":
+		cmdLogout(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage(os.Stderr)
@@ -83,7 +86,8 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
 	fmt.Fprintln(out, "  logs SESSION       Show session progress")
 	fmt.Fprintln(out, "  delete SESSION     Delete a session (local history is preserved)")
-	fmt.Fprintln(out, "  login              Log in to Telos Cloud")
+	fmt.Fprintln(out, "  login              Log in to Telos Cloud via the browser")
+	fmt.Fprintln(out, "  logout             Log out and revoke this device's token")
 	fmt.Fprintln(out, "  version            Show version")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "global flags:")
