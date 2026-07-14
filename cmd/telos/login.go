@@ -75,11 +75,9 @@ func browserLogin(endpoint string) (string, error) {
 		return "", err
 	}
 
-	fmt.Printf("First, confirm this code in your browser: %s\n", start.UserCode)
-	fmt.Printf("Opening %s\n", start.VerificationURL)
-	if err := openBrowser(start.VerificationURL); err != nil {
-		fmt.Println("Couldn't open a browser here. Visit the link above on any device.")
-	}
+	fmt.Println("Opening your browser to approve this login...")
+	fmt.Printf("If it doesn't open, visit this link on any device: %s\n", start.VerificationURL)
+	_ = openBrowser(start.VerificationURL)
 	fmt.Print("Waiting for approval")
 
 	interval := start.Interval
