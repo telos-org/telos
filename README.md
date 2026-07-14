@@ -16,7 +16,7 @@ platform (macOS and Linux, amd64/arm64).
 
 ## Quickstart
 
-Write a goal:
+Write a goal and save it as `SPEC.md`:
 
 ```markdown
 ---
@@ -33,8 +33,8 @@ Build a small HTTP service with `/healthz`, tests, and local run instructions.
 Run it as a bounded task:
 
 ```bash
-telos run goal.md --workspace . --until 3    # at most 3 review cycles
-telos run goal.md --workspace . --until 30m  # at most 30 minutes
+telos run SPEC.md --workspace . --until 3    # at most 3 review cycles
+telos run SPEC.md --workspace . --until 30m  # at most 30 minutes
 ```
 
 Local runs execute goal turns through
@@ -53,7 +53,7 @@ controller session that keeps reconciling desired state.
 
 ```bash
 telos login
-telos apply goal.md
+telos apply SPEC.md
 telos list --cloud
 ```
 
@@ -61,7 +61,7 @@ To steer an existing controller, edit the same disk spec and apply it back to
 the same session:
 
 ```bash
-telos apply goal.md --session sess_...
+telos apply SPEC.md --session sess_...
 ```
 
 The spec frontmatter `version` is the package version published to Telos Cloud,
