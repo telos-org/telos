@@ -168,6 +168,12 @@ mv "\$tmp_dir/telos" "\$install_dir/telos"
 mv "\$tmp_dir/telosd" "\$install_dir/telosd"
 
 echo "installed telos \$version to \$install_dir"
+if ! command -v pi >/dev/null 2>&1; then
+  echo "pi is required for local runs but was not found on PATH"
+  echo "install pi with: npm install -g @earendil-works/pi-coding-agent"
+  echo "then run pi and use /login to configure model credentials before running telos"
+  echo "pi setup: https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md"
+fi
 if ! command -v telos >/dev/null 2>&1; then
   echo "add \$install_dir to PATH to run telos from any shell"
 fi
