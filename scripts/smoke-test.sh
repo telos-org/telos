@@ -5,7 +5,7 @@
 #   TELOS_SMOKE_BIN=/path/to/telos TELOS_SMOKE_TELOSD=/path/to/telosd ./smoke-test.sh
 #
 # Validates the end-user CLI surface, then launches one tiny isolated local
-# run to cover real session creation, inspection, logs, stop, and persisted
+# run to cover real session creation, inspection, logs, delete, and persisted
 # artifacts.
 
 set -euo pipefail
@@ -53,7 +53,7 @@ telos_fixture() {
 
 cleanup() {
   if [ -n "$FIXTURE_DIR" ] && [ -n "$SESSION_ID" ]; then
-    telos_fixture stop "$SESSION_ID" >/dev/null 2>&1 || true
+    telos_fixture delete "$SESSION_ID" >/dev/null 2>&1 || true
   fi
   if [ -n "$FIXTURE_DIR" ]; then
     rm -rf "$FIXTURE_DIR"
@@ -145,7 +145,7 @@ check_contains "help mentions plan" "$HELP" "plan SPEC.md"
 check_contains "help mentions list" "$HELP" "list"
 check_contains "help mentions describe" "$HELP" "describe SESSION"
 check_contains "help mentions logs" "$HELP" "logs"
-check_contains "help mentions stop" "$HELP" "stop SESSION"
+check_contains "help mentions delete" "$HELP" "delete SESSION"
 check_contains "help mentions --version" "$HELP" "--version"
 
 VERSION="$(telos_cmd --version 2>&1)"
@@ -291,7 +291,7 @@ else
   pass "logs empty output handled"
 fi
 
-echo "=== 7. Artifacts and stop ==="
+echo "=== 7. Artifacts and delete ==="
 
 check "session.json exists" test -f "$SESSION_DIR/session.json"
 
@@ -314,12 +314,12 @@ else
   fail "workspace archive exists"
 fi
 
-STOP_JSON="$(telos_fixture stop "$SESSION_ID" --json 2>&1 || true)"
-if python3 -m json.tool >/dev/null 2>&1 <<<"$STOP_JSON"; then
-  pass "stop --json parses"
+DELETE_JSON="$(telos_fixture delete "$SESSION_ID" --json 2>&1 || true)"
+if python3 -m json.tool >/dev/null 2>&1 <<<"$DELETE_JSON"; then
+  pass "delete --json parses"
 else
-  check_not_contains "stop has no panic" "$STOP_JSON" "panic"
-  pass "stop on terminal session handled"
+  check_not_contains "delete has no panic" "$DELETE_JSON" "panic"
+  pass "delete on terminal session handled"
 fi
 
 echo ""
