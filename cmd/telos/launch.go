@@ -35,7 +35,7 @@ func cmdLaunch(command, action string, args []string) {
 	if command == "apply" {
 		sessionID = fs.String("session", "", "Managed session ID to update")
 	}
-	model := fs.String("model", "", "Model name")
+	model := fs.String("model", "", "pi model as <provider>/<model-id> (e.g. sail-research/zai-org/GLM-5.2-FP8); defaults to $TELOS_MODEL, then the built-in default")
 	thinking := fs.String("thinking", "medium", "Thinking effort")
 	untilValue := ""
 	until := &untilValue
