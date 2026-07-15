@@ -44,7 +44,21 @@ Local runs execute goal turns through
 npm install -g @earendil-works/pi-coding-agent
 ```
 
-Configure model credentials for pi before your first run.
+### Choosing a model
+
+Telos defaults local runs to `sail-research/zai-org/GLM-5.2-FP8`. Configure
+that provider and its credentials in pi before your first run, or select a pi
+model with `--model`:
+
+```bash
+telos run SPEC.md --model openai/gpt-5.1
+```
+
+Model names use `<provider>/<model-id>`. Set `TELOS_MODEL` to keep a different
+default across runs. Providers, models, and credentials are managed by pi; run
+`pi` and use `/login`, and see
+[pi's model documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)
+for configuration details.
 
 ## Apply a Goal
 
