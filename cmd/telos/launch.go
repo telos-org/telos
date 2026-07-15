@@ -35,7 +35,7 @@ func cmdLaunch(command, action string, args []string) {
 	if command == "apply" {
 		sessionID = fs.String("session", "", "Managed session ID to update")
 	}
-	model := fs.String("model", "", "pi model as <provider>/<model-id> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL, then the built-in default")
+	model := fs.String("model", "", "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to openai-codex/gpt-5.5 with high thinking (override with $TELOS_MODEL)")
 	thinking := fs.String("thinking", "", "Thinking effort; defaults to $TELOS_THINKING, then high for local runs")
 	untilValue := ""
 	until := &untilValue
