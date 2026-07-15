@@ -175,6 +175,30 @@ func TestCreateLocalSession(t *testing.T) {
 	}
 }
 
+func TestCreateLocalSessionUsesDefaultModelAndThinking(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.Config.Model != DefaultLocalModel {
+		t.Fatalf("model: got %q, want %q", manifest.Config.Model, DefaultLocalModel)
+	}
+	if manifest.Config.Thinking != DefaultLocalThinking {
+		t.Fatalf("thinking: got %q, want %q", manifest.Config.Thinking, DefaultLocalThinking)
+	}
+}
+
 func TestValidatePiModel(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
@@ -184,9 +208,6 @@ func TestValidatePiModel(t *testing.T) {
 	}
 	modelsJSON := `{
   "providers": {
-    "sail-research": {
-      "models": [{"id": "zai-org/GLM-5.2-FP8"}]
-    },
     "custom": {
       "models": [{"id": "org/model"}]
     }
@@ -229,20 +250,11 @@ func TestValidatePiModel(t *testing.T) {
 	}
 }
 
-func TestValidatePiModelMissingConfig(t *testing.T) {
+func TestValidatePiModelAllowsBuiltInProviderWithoutConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	if err := validatePiModel("openai/gpt-5.1"); err != nil {
-		t.Fatalf("built-in provider should be allowed without models.json: %v", err)
-	}
-	err := validatePiModel(DefaultLocalModel)
-	if err == nil {
-		t.Fatal("default model should require its custom provider")
-	}
-	for _, want := range []string{DefaultLocalModel, "sail-research", "~/.pi/agent/models.json", "--model", "TELOS_MODEL"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("error %q does not mention %s", err, want)
-		}
+	if err := validatePiModel(DefaultLocalModel); err != nil {
+		t.Fatalf("built-in default should be allowed without models.json: %v", err)
 	}
 }
 

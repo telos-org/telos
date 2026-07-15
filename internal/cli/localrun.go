@@ -19,7 +19,10 @@ import (
 	"github.com/telos-org/telos/internal/spec"
 )
 
-const DefaultLocalModel = "sail-research/zai-org/GLM-5.2-FP8"
+const (
+	DefaultLocalModel    = "openai-codex/gpt-5.5"
+	DefaultLocalThinking = "high"
+)
 
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {
@@ -259,7 +262,11 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 	if err := validatePiModel(model); err != nil {
 		return nil, err
 	}
-	return executor.NewPiExecutor(p, model, cfg.Thinking, cfg.AgentTimeoutSec), nil
+	thinking := cfg.Thinking
+	if thinking == "" {
+		thinking = DefaultLocalThinking
+	}
+	return executor.NewPiExecutor(p, model, thinking, cfg.AgentTimeoutSec), nil
 }
 
 type piModelsConfig struct {
@@ -282,31 +289,19 @@ func validatePiModel(model string) error {
 
 	home, err := os.UserHomeDir()
 	if err != nil {
-		if model == DefaultLocalModel {
-			return defaultPiModelError(model, providerName)
-		}
 		return nil
 	}
 	data, err := os.ReadFile(filepath.Join(home, ".pi", "agent", "models.json"))
 	if err != nil {
-		if model == DefaultLocalModel {
-			return defaultPiModelError(model, providerName)
-		}
 		return nil
 	}
 
 	var config piModelsConfig
 	if err := json.Unmarshal(data, &config); err != nil {
-		if model == DefaultLocalModel {
-			return defaultPiModelError(model, providerName)
-		}
 		return nil
 	}
 	provider, configured := config.Providers[providerName]
 	if !configured {
-		if model == DefaultLocalModel {
-			return defaultPiModelError(model, providerName)
-		}
 		return nil
 	}
 	for _, configuredModel := range provider.Models {
@@ -315,10 +310,6 @@ func validatePiModel(model string) error {
 		}
 	}
 	return fmt.Errorf("pi model %q is not configured: provider %q exists in ~/.pi/agent/models.json, but model id %q was not found; choose one with `telos run SPEC.md --model <provider>/<model-id>` or set `TELOS_MODEL=<provider>/<model-id>`", model, providerName, modelID)
-}
-
-func defaultPiModelError(model, provider string) error {
-	return fmt.Errorf("default pi model %q requires provider %q to be configured in ~/.pi/agent/models.json; choose a model available in pi with `telos run SPEC.md --model <provider>/<model-id>` or set `TELOS_MODEL=<provider>/<model-id>`", model, provider)
 }
 
 func primarySpecPath(manifest *sessionapi.Manifest, fallback *string) string {
@@ -473,7 +464,7 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 	}
 	thinking := cfg.Thinking
 	if thinking == "" {
-		thinking = "medium"
+		thinking = DefaultLocalThinking
 	}
 	sessionKind := localSessionKind(cfg)
 
@@ -532,7 +523,7 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 		AgentTimeoutSec: cfg.AgentTimeoutSec,
 	}
 	if lrc.Thinking == "" {
-		lrc.Thinking = "medium"
+		lrc.Thinking = DefaultLocalThinking
 	}
 	return lrc
 }

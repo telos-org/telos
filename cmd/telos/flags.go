@@ -100,7 +100,7 @@ func resolveLocalRunConfigFromFlags(
 	return cli.LocalRunConfig{
 		Workspace:  stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
 		Model:      modelOption(fs, model),
-		Thinking:   stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", "medium"),
+		Thinking:   stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", cli.DefaultLocalThinking),
 		MaxCostUSD: &cost,
 	}, nil
 }

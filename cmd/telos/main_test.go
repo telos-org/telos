@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
@@ -175,6 +176,21 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	}
 	if cfg.MaxCostUSD == nil || *cfg.MaxCostUSD != 12.5 {
 		t.Fatalf("cost: got %v", cfg.MaxCostUSD)
+	}
+}
+
+func TestResolveLocalRunConfigUsesDefaultThinking(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.String("thinking", "", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	parseFlags(fs, []string{"SPEC.md"})
+
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "", 20.0)
+	if err != nil {
+		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
+	}
+	if cfg.Thinking != cli.DefaultLocalThinking {
+		t.Fatalf("thinking: got %q, want %q", cfg.Thinking, cli.DefaultLocalThinking)
 	}
 }
 
