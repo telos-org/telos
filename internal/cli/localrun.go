@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/telos-org/telos/internal/executor"
@@ -248,14 +249,76 @@ func controllerPromptEnabled(manifest *sessionapi.Manifest) bool {
 
 func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecutor, error) {
 	if _, err := exec.LookPath("pi"); err != nil {
-		return nil, fmt.Errorf("local runs use the pi coding agent, but `pi` is not on your PATH; install it with `npm install -g @earendil-works/pi-coding-agent`")
+		return nil, fmt.Errorf("local runs use the pi coding agent, but `pi` is not on your PATH; install it with `npm install -g @earendil-works/pi-coding-agent`, then run `pi` and use `/login` to configure model credentials")
 	}
 	p := platform.NewLocalPlatform(workspace)
 	model := cfg.Model
 	if model == "" {
 		model = DefaultLocalModel
 	}
+	if err := validatePiModel(model); err != nil {
+		return nil, err
+	}
 	return executor.NewPiExecutor(p, model, cfg.Thinking, cfg.AgentTimeoutSec), nil
+}
+
+type piModelsConfig struct {
+	Providers map[string]piProvider `json:"providers"`
+}
+
+type piProvider struct {
+	Models []piModel `json:"models"`
+}
+
+type piModel struct {
+	ID string `json:"id"`
+}
+
+func validatePiModel(model string) error {
+	providerName, modelID, ok := strings.Cut(model, "/")
+	if !ok || providerName == "" || modelID == "" {
+		return fmt.Errorf("pi model %q must use <provider>/<model-id>; choose one with `telos run SPEC.md --model <provider>/<model-id>` or set `TELOS_MODEL=<provider>/<model-id>`", model)
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		if model == DefaultLocalModel {
+			return defaultPiModelError(model, providerName)
+		}
+		return nil
+	}
+	data, err := os.ReadFile(filepath.Join(home, ".pi", "agent", "models.json"))
+	if err != nil {
+		if model == DefaultLocalModel {
+			return defaultPiModelError(model, providerName)
+		}
+		return nil
+	}
+
+	var config piModelsConfig
+	if err := json.Unmarshal(data, &config); err != nil {
+		if model == DefaultLocalModel {
+			return defaultPiModelError(model, providerName)
+		}
+		return nil
+	}
+	provider, configured := config.Providers[providerName]
+	if !configured {
+		if model == DefaultLocalModel {
+			return defaultPiModelError(model, providerName)
+		}
+		return nil
+	}
+	for _, configuredModel := range provider.Models {
+		if configuredModel.ID == modelID {
+			return nil
+		}
+	}
+	return fmt.Errorf("pi model %q is not configured: provider %q exists in ~/.pi/agent/models.json, but model id %q was not found; choose one with `telos run SPEC.md --model <provider>/<model-id>` or set `TELOS_MODEL=<provider>/<model-id>`", model, providerName, modelID)
+}
+
+func defaultPiModelError(model, provider string) error {
+	return fmt.Errorf("default pi model %q requires provider %q to be configured in ~/.pi/agent/models.json; choose a model available in pi with `telos run SPEC.md --model <provider>/<model-id>` or set `TELOS_MODEL=<provider>/<model-id>`", model, provider)
 }
 
 func primarySpecPath(manifest *sessionapi.Manifest, fallback *string) string {

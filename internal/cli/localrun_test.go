@@ -175,6 +175,93 @@ func TestCreateLocalSession(t *testing.T) {
 	}
 }
 
+func TestValidatePiModel(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	modelsPath := filepath.Join(home, ".pi", "agent", "models.json")
+	if err := os.MkdirAll(filepath.Dir(modelsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	modelsJSON := `{
+  "providers": {
+    "sail-research": {
+      "models": [{"id": "zai-org/GLM-5.2-FP8"}]
+    },
+    "custom": {
+      "models": [{"id": "org/model"}]
+    }
+  }
+}`
+	if err := os.WriteFile(modelsPath, []byte(modelsJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		model   string
+		wantErr string
+	}{
+		{name: "default configured", model: DefaultLocalModel},
+		{name: "custom configured", model: "custom/org/model"},
+		{name: "pi built-in provider", model: "openai/gpt-5.1"},
+		{name: "missing model id", model: "custom/org/missing", wantErr: `pi model "custom/org/missing" is not configured`},
+		{name: "missing provider separator", model: "gpt-5.1", wantErr: `pi model "gpt-5.1" must use <provider>/<model-id>`},
+		{name: "missing provider", model: "/gpt-5.1", wantErr: `pi model "/gpt-5.1" must use <provider>/<model-id>`},
+		{name: "missing model", model: "openai/", wantErr: `pi model "openai/" must use <provider>/<model-id>`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePiModel(tt.model)
+			if tt.wantErr == "" && err != nil {
+				t.Fatalf("validatePiModel: %v", err)
+			}
+			if tt.wantErr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErr)) {
+				t.Fatalf("validatePiModel error: got %v, want substring %q", err, tt.wantErr)
+			}
+			if err != nil {
+				for _, want := range []string{"--model", "TELOS_MODEL"} {
+					if !strings.Contains(err.Error(), want) {
+						t.Errorf("error %q does not mention %s", err, want)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestValidatePiModelMissingConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	if err := validatePiModel("openai/gpt-5.1"); err != nil {
+		t.Fatalf("built-in provider should be allowed without models.json: %v", err)
+	}
+	err := validatePiModel(DefaultLocalModel)
+	if err == nil {
+		t.Fatal("default model should require its custom provider")
+	}
+	for _, want := range []string{DefaultLocalModel, "sail-research", "~/.pi/agent/models.json", "--model", "TELOS_MODEL"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q does not mention %s", err, want)
+		}
+	}
+}
+
+func TestValidatePiModelMalformedConfigIsNonFatalForNonDefault(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	modelsPath := filepath.Join(home, ".pi", "agent", "models.json")
+	if err := os.MkdirAll(filepath.Dir(modelsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(modelsPath, []byte("not json"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := validatePiModel("custom/model"); err != nil {
+		t.Fatalf("malformed models.json should not block a non-default model: %v", err)
+	}
+}
+
 func TestCreateLocalSessionRecordsParentSession(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
