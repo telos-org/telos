@@ -126,7 +126,9 @@ def model_env() -> dict[str, str]:
 
 
 def parse_marked_json(stdout: str) -> dict[str, Any]:
-    body = parse_marked_text(stdout, "TELOS_HARBOR_RESULT_BEGIN", "TELOS_HARBOR_RESULT_END")
+    body = parse_marked_text(
+        stdout, "TELOS_HARBOR_RESULT_BEGIN", "TELOS_HARBOR_RESULT_END"
+    )
     if not body:
         return {}
     return json.loads(body)
@@ -170,9 +172,7 @@ class TelosExecutableAgent(BaseInstalledAgent):
         super().__init__(*args, **kwargs)
         self.thinking = thinking
         self.until = int(until)
-        self.max_cost_usd = (
-            None if max_cost_usd in (None, "") else float(max_cost_usd)
-        )
+        self.max_cost_usd = None if max_cost_usd in (None, "") else float(max_cost_usd)
         self.session_timeout_sec = int(session_timeout_sec)
         self.poll_interval_sec = int(poll_interval_sec)
         self.workdir = workdir
@@ -210,7 +210,9 @@ elif command -v apk >/dev/null 2>&1; then
   apk add --no-cache bash ca-certificates curl coreutils git
 fi
 """
-        await self.exec_as_root(environment, f"bash -lc {shlex.quote(command)}", timeout_sec=900)
+        await self.exec_as_root(
+            environment, f"bash -lc {shlex.quote(command)}", timeout_sec=900
+        )
 
     async def _install_telos(self, environment: BaseEnvironment) -> None:
         command = f"""
@@ -372,20 +374,31 @@ done
             transcript_path = self.logs_dir / "telos-harbor-transcript.md"
             transcript_path.write_text(transcript)
             metadata["telos_transcript_log"] = str(transcript_path)
+        evidence = parse_marked_text(
+            result.stdout or "",
+            "TELOS_HARBOR_EVIDENCE_BEGIN",
+            "TELOS_HARBOR_EVIDENCE_END",
+        )
+        if evidence:
+            evidence_path = self.logs_dir / "telos-harbor-evidence.jsonl"
+            evidence_path.write_text(evidence)
+            metadata["telos_evidence_log"] = str(evidence_path)
         if final_session:
             metadata["telos_session"] = final_session
-            context.n_input_tokens = _sum_spec_metric(final_session, "total_input_tokens")
-            context.n_output_tokens = _sum_spec_metric(final_session, "total_output_tokens")
-            context.n_cache_tokens = _sum_spec_metric(final_session, "total_cache_read_tokens")
+            context.n_input_tokens = _sum_spec_tokens(
+                final_session, "total_input_tokens"
+            )
+            context.n_output_tokens = _sum_spec_tokens(
+                final_session, "total_output_tokens"
+            )
+            context.n_cache_tokens = _sum_spec_tokens(
+                final_session, "total_cache_read_tokens"
+            )
             context.cost_usd = _sum_spec_metric(final_session, "total_cost_usd")
         context.metadata = metadata
         self._last_metadata = metadata
 
-        if result.return_code != 0:
-            raise RuntimeError(
-                "telos executable agent failed: "
-                f"exit={result.return_code}; stderr={(result.stderr or '')[-2000:]}"
-            )
+        raise_for_failed_run(result.return_code, result.stderr or "", final_session)
 
     def populate_context_post_run(self, context: AgentContext) -> None:
         if self._last_metadata and not context.metadata:
@@ -434,7 +447,9 @@ fi
         model = self.model_name or os.environ.get("TELOS_MODEL") or "claude-opus-4-6"
         max_cost = "" if self.max_cost_usd is None else str(self.max_cost_usd)
         max_cost_flag = (
-            "" if self.max_cost_usd is None else f" --max-cost-usd {shlex.quote(max_cost)}"
+            ""
+            if self.max_cost_usd is None
+            else f" --max-cost-usd {shlex.quote(max_cost)}"
         )
         return f"""
 {self._shell_prologue()}
@@ -458,6 +473,8 @@ PY
 cat > /tmp/telos-harbor/SPEC.md <<'TELOS_SPEC'
 {spec_markdown}
 TELOS_SPEC
+git config --global --add safe.directory {shlex.quote(workdir)} >/dev/null 2>&1 || true
+git config --global --add safe.directory {shlex.quote(workdir.rstrip("/") + "/.git")} >/dev/null 2>&1 || true
 cd {shlex.quote(workdir)}
 export TELOS_SESSION_DIR=/tmp/telos-harbor/sessions
 run_json="$(telos run /tmp/telos-harbor/SPEC.md --workspace {shlex.quote(workdir)} --model {shlex.quote(model)} --thinking {shlex.quote(self.thinking)} --until {self.until}{max_cost_flag} --json)"
@@ -474,10 +491,28 @@ while :; do
   status="$(json_field /tmp/telos-harbor/describe.json status || true)"
   case "$status" in
     completed|failed|stopped|stale)
-      telos logs "$session_id" --raw > /tmp/telos-harbor/transcript.md || true
+      if ! telos logs "$session_id" --raw > /tmp/telos-harbor/transcript.md 2>/tmp/telos-harbor/logs.err; then
+        telos logs "$session_id" > /tmp/telos-harbor/transcript.md || true
+      fi
       printf 'TELOS_HARBOR_TRANSCRIPT_BEGIN\n'
       cat /tmp/telos-harbor/transcript.md
       printf '\nTELOS_HARBOR_TRANSCRIPT_END\n'
+      printf 'TELOS_HARBOR_EVIDENCE_BEGIN\n'
+      python3 - <<'PY'
+import json
+from pathlib import Path
+
+describe = json.loads(Path('/tmp/telos-harbor/describe.json').read_text())
+for spec in describe.get('specs', []):
+    evidence_path = spec.get('evidence_path')
+    if not evidence_path:
+        continue
+    path = Path(evidence_path)
+    if path.exists():
+        text = path.read_text()
+        print(text, end='' if text.endswith('\\n') else '\\n')
+PY
+      printf 'TELOS_HARBOR_EVIDENCE_END\n'
       printf 'TELOS_HARBOR_RESULT_BEGIN\n'
       cat /tmp/telos-harbor/describe.json
       printf '\nTELOS_HARBOR_RESULT_END\n'
@@ -488,7 +523,7 @@ while :; do
       ;;
   esac
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    telos stop "$session_id" >/dev/null 2>&1 || true
+    telos delete "$session_id" >/dev/null 2>&1 || true
     echo "timed out waiting for Telos session $session_id" >&2
     exit 124
   fi
@@ -499,6 +534,11 @@ done
 
 class TelosAgent(TelosExecutableAgent):
     """Backward-compatible import name for Harbor configs."""
+
+
+def _sum_spec_tokens(session: dict[str, Any], key: str) -> int | None:
+    total = _sum_spec_metric(session, key)
+    return None if total is None else int(total)
 
 
 def _sum_spec_metric(session: dict[str, Any], key: str) -> int | float | None:
@@ -514,3 +554,22 @@ def _sum_spec_metric(session: dict[str, Any], key: str) -> int | float | None:
 
 def is_completed_telos_session(session: dict[str, Any]) -> bool:
     return session.get("status") == "completed"
+
+
+def is_countable_telos_session(session: dict[str, Any]) -> bool:
+    if is_completed_telos_session(session):
+        return True
+    return (
+        session.get("status") == "failed"
+        and session.get("completion_reason") == "review_budget_exhausted"
+    )
+
+
+def raise_for_failed_run(
+    return_code: int, stderr: str, session: dict[str, Any]
+) -> None:
+    if return_code == 0 or is_countable_telos_session(session):
+        return
+    raise RuntimeError(
+        f"telos executable agent failed: exit={return_code}; stderr={stderr[-2000:]}"
+    )
