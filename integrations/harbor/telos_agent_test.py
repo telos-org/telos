@@ -4,8 +4,10 @@ import unittest
 from integrations.harbor.telos_agent import (
     TelosExecutableAgent,
     is_completed_telos_session,
+    is_countable_telos_session,
     parse_marked_json,
     parse_marked_text,
+    raise_for_failed_run,
     render_harbor_spec,
     sanitize_spec_name,
     split_skills,
@@ -32,7 +34,9 @@ class TelosHarborAgentTest(unittest.TestCase):
         self.assertNotIn("telos-pvg", rendered)
 
     def test_sanitize_spec_name(self):
-        self.assertEqual(sanitize_spec_name("SCBench: Circuit Eval"), "scbench-circuit-eval")
+        self.assertEqual(
+            sanitize_spec_name("SCBench: Circuit Eval"), "scbench-circuit-eval"
+        )
         self.assertEqual(sanitize_spec_name("123"), "task-123")
 
     def test_split_skills(self):
@@ -61,6 +65,35 @@ class TelosHarborAgentTest(unittest.TestCase):
         self.assertTrue(is_completed_telos_session({"status": "completed"}))
         self.assertFalse(is_completed_telos_session({"status": "failed"}))
         self.assertFalse(is_completed_telos_session({}))
+
+    def test_is_countable_telos_session_accepts_review_budget_exhaustion(self):
+        self.assertTrue(is_countable_telos_session({"status": "completed"}))
+        self.assertTrue(
+            is_countable_telos_session(
+                {"status": "failed", "completion_reason": "review_budget_exhausted"}
+            )
+        )
+        self.assertFalse(
+            is_countable_telos_session(
+                {"status": "failed", "completion_reason": "max_cost_usd_exceeded"}
+            )
+        )
+        self.assertFalse(is_countable_telos_session({}))
+
+    def test_raise_for_failed_run_spares_countable_sessions(self):
+        raise_for_failed_run(0, "", {})
+        raise_for_failed_run(1, "", {"status": "completed"})
+        raise_for_failed_run(
+            1, "", {"status": "failed", "completion_reason": "review_budget_exhausted"}
+        )
+        with self.assertRaises(RuntimeError):
+            raise_for_failed_run(
+                1,
+                "boom",
+                {"status": "failed", "completion_reason": "max_cost_usd_exceeded"},
+            )
+        with self.assertRaises(RuntimeError):
+            raise_for_failed_run(1, "boom", {})
 
     def test_run_script_preserves_raw_logs_and_fails_non_completed_sessions(self):
         agent = object.__new__(TelosExecutableAgent)
