@@ -4,6 +4,12 @@ set -euo pipefail
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$repo_root"
 
+if [[ -n "${PYTHONPATH:-}" ]]; then
+  export PYTHONPATH="$repo_root:$PYTHONPATH"
+else
+  export PYTHONPATH="$repo_root"
+fi
+
 timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
 
 dataset="${TELOS_HARBOR_DATASET:-gabeorlanski/slopcodebench}"
