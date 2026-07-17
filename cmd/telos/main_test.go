@@ -238,6 +238,25 @@ func TestResolveSessionRuntimeConfigOmitsDefaults(t *testing.T) {
 	}
 }
 
+func TestResolveSessionRuntimeConfigUsesEnvironmentDefaults(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.String("model", "", "")
+	fs.String("thinking", "", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	parseFlags(fs, []string{"SPEC.md"})
+
+	t.Setenv("TELOS_MODEL", "shared/model")
+	t.Setenv("TELOS_THINKING", "medium")
+
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "", 20.0)
+	if err != nil {
+		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
+	}
+	if cfg.Model != "shared/model" || cfg.Thinking != "medium" {
+		t.Fatalf("model/thinking: got %q/%q", cfg.Model, cfg.Thinking)
+	}
+}
+
 func TestUntilFlagValue(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.String("until", "", "")
