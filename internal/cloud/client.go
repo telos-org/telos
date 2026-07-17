@@ -58,6 +58,8 @@ type SessionRecord struct {
 	PackageRef     string  `json:"package_ref"`
 	PackageDigest  string  `json:"package_digest"`
 	RuntimeVersion *string `json:"runtime_version,omitempty"`
+	AgentModel     string  `json:"agent_model,omitempty"`
+	AgentThinking  string  `json:"agent_thinking,omitempty"`
 	ServiceURL     *string `json:"service_url,omitempty"`
 	DashboardURL   *string `json:"dashboard_url,omitempty"`
 	FailureReason  *string `json:"failure_reason,omitempty"`

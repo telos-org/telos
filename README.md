@@ -72,6 +72,11 @@ telos apply SPEC.md
 telos list --cloud
 ```
 
+Hosted deployments pin their effective model when they are created. Override
+the platform default with `--model` and `--thinking` (or `TELOS_MODEL` and
+`TELOS_THINKING`). These settings seed new deployments; existing deployments
+retain their pinned model.
+
 To steer an existing controller, edit the same disk spec and apply it back to
 the same session:
 
