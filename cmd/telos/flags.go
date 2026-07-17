@@ -187,13 +187,7 @@ func stringOptionDefault(fs *flag.FlagSet, name, value, envName, defaultValue st
 }
 
 func modelOption(fs *flag.FlagSet, value string) string {
-	if flagNameSet(fs, "model") {
-		return strings.TrimSpace(value)
-	}
-	if model := strings.TrimSpace(os.Getenv("TELOS_MODEL")); model != "" {
-		return model
-	}
-	return ""
+	return stringOption(fs, "model", value, "TELOS_MODEL")
 }
 
 func positiveFloatOption(fs *flag.FlagSet, name string, value float64, envName string, defaultValue float64) (float64, error) {
