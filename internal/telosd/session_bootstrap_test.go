@@ -103,8 +103,8 @@ func TestSessionBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	if store.creates[0].CloudSessionName != "auth" {
 		t.Fatalf("CloudSessionName = %q want auth", store.creates[0].CloudSessionName)
 	}
-	if store.creates[0].Model != defaultCloudSessionModel {
-		t.Fatalf("Model = %q want %q", store.creates[0].Model, defaultCloudSessionModel)
+	if store.creates[0].Model != fallbackCloudSessionModel {
+		t.Fatalf("Model = %q want %q", store.creates[0].Model, fallbackCloudSessionModel)
 	}
 	if store.creates[0].AgentTimeoutSec != nil {
 		t.Fatalf("AgentTimeoutSec should not default for controller bootstrap: %v", store.creates[0].AgentTimeoutSec)

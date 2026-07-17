@@ -319,8 +319,8 @@ func TestControllerReconcilerLeavesFileStateRunningWhenWorkerStopFails(t *testin
 
 func assertManagedSessionDefaults(t *testing.T, session *sessionapi.Session) {
 	t.Helper()
-	if got, _ := session.Config["model"].(string); got != defaultCloudSessionModel {
-		t.Fatalf("model = %q want %q", got, defaultCloudSessionModel)
+	if got, _ := session.Config["model"].(string); got != fallbackCloudSessionModel {
+		t.Fatalf("model = %q want %q", got, fallbackCloudSessionModel)
 	}
 	if got, _ := session.Config["thinking"].(string); got != defaultCloudSessionThinking {
 		t.Fatalf("thinking = %q want %q", got, defaultCloudSessionThinking)

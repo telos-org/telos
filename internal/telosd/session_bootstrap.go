@@ -19,7 +19,7 @@ type cloudBootstrapSession struct {
 }
 
 const (
-	defaultCloudSessionModel    = "sail-research/moonshotai/Kimi-K2.6"
+	fallbackCloudSessionModel   = "sail-research/zai-org/GLM-5.2-FP8"
 	defaultCloudSessionThinking = "medium"
 	cloudAgentTimeoutEnvVar     = "TELOS_AGENT_TIMEOUT_SEC"
 )
@@ -161,7 +161,7 @@ func cloudSessionModel() string {
 	if model := strings.TrimSpace(os.Getenv("TELOS_CLOUD_DEFAULT_MODEL")); model != "" {
 		return model
 	}
-	return defaultCloudSessionModel
+	return fallbackCloudSessionModel
 }
 
 func cloudSessionThinking() string {
