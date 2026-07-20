@@ -1746,6 +1746,44 @@ func TestGetSessionHydratesEvidenceSummary(t *testing.T) {
 	}
 }
 
+func TestGetSessionHydratesCompletedTurnUsageWithoutGameEnd(t *testing.T) {
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdown := "---\nversion: 0.1.0\nname: live-usage\nplatform: local\n---\n# Live usage\n"
+
+	created, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	evidence := `{"event":"round_start","round":1,"role":"prover","data":{}}` + "\n" +
+		`{"event":"agent_complete","round":1,"role":"prover","data":{"cost_usd":0.10,"input_tokens":100,"output_tokens":20,"cache_read_tokens":30,"cache_creation_tokens":5}}` + "\n" +
+		`{"event":"round_start","round":2,"role":"verifier","data":{}}` + "\n" +
+		`{"event":"agent_complete","round":2,"role":"verifier","data":{"cost_usd":0.25,"input_tokens":200,"output_tokens":40,"cache_read_tokens":60,"cache_creation_tokens":10}}` + "\n"
+	if err := os.WriteFile(*created.Specs[0].EvidencePath, []byte(evidence), 0o644); err != nil {
+		t.Fatalf("write evidence: %v", err)
+	}
+
+	session, err := store.Get(created.SessionID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if session.TotalCostUSD == nil || *session.TotalCostUSD != 0.35 {
+		t.Fatalf("cost: got %v", session.TotalCostUSD)
+	}
+	if session.TotalInputTokens == nil || *session.TotalInputTokens != 300 {
+		t.Fatalf("input tokens: got %v", session.TotalInputTokens)
+	}
+	if session.TotalOutputTokens == nil || *session.TotalOutputTokens != 60 {
+		t.Fatalf("output tokens: got %v", session.TotalOutputTokens)
+	}
+	if session.TotalCacheReadTokens == nil || *session.TotalCacheReadTokens != 90 {
+		t.Fatalf("cache read tokens: got %v", session.TotalCacheReadTokens)
+	}
+	if session.TotalCacheCreateTokens == nil || *session.TotalCacheCreateTokens != 15 {
+		t.Fatalf("cache create tokens: got %v", session.TotalCacheCreateTokens)
+	}
+}
+
 func TestGetSessionHydratesActiveTurnFromEvidence(t *testing.T) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
