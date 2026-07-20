@@ -1280,6 +1280,14 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 				}
 			}
 		case "agent_complete":
+			if summary == nil {
+				summary = &evidenceSummary{}
+			}
+			addEvidenceFloat(&summary.TotalCostUSD, dataField["cost_usd"])
+			addEvidenceInt(&summary.TotalInputTokens, dataField["input_tokens"])
+			addEvidenceInt(&summary.TotalOutputTokens, dataField["output_tokens"])
+			addEvidenceInt(&summary.TotalCacheReadTokens, dataField["cache_read_tokens"])
+			addEvidenceInt(&summary.TotalCacheCreateTokens, dataField["cache_creation_tokens"])
 			if activeRound != nil && activeRole != nil && round != nil && role != nil &&
 				*activeRound == *round && *activeRole == *role {
 				activeRound = nil
@@ -1315,6 +1323,30 @@ func evidenceRoundCount(raw map[string]any, data map[string]any) *int {
 		return &total
 	}
 	return numberAsInt(raw["round"])
+}
+
+func addEvidenceFloat(total **float64, value any) {
+	n := numberAsFloat(value)
+	if n == nil {
+		return
+	}
+	if *total == nil {
+		*total = n
+		return
+	}
+	**total += *n
+}
+
+func addEvidenceInt(total **int, value any) {
+	n := numberAsInt(value)
+	if n == nil {
+		return
+	}
+	if *total == nil {
+		*total = n
+		return
+	}
+	**total += *n
 }
 
 func numberAsFloat(value any) *float64 {
