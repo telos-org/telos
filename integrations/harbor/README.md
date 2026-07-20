@@ -24,7 +24,7 @@ cd /path/to/telos
 OPENAI_API_KEY=... \
 TELOS_HARBOR_MODEL=openai-codex/gpt-5.5 \
 TELOS_HARBOR_UNTIL=1 \
-TELOS_HARBOR_SKILLS='verify-engineering*' \
+TELOS_HARBOR_SKILLS='@telos/verify-engineering:0.1.0*' \
 ./integrations/harbor/run_scbench_circuit_eval.sh
 ```
 
@@ -35,7 +35,7 @@ For the quality-regression run, use repair turns and include the quality rubric:
 
 ```bash
 TELOS_HARBOR_UNTIL=3 \
-TELOS_HARBOR_SKILLS='verify-engineering*,verify-quality*' \
+TELOS_HARBOR_SKILLS='@telos/verify-engineering:0.1.0*,@telos/verify-quality:0.1.0*' \
 ./integrations/harbor/run_scbench_circuit_eval.sh
 ```
 
@@ -45,7 +45,7 @@ To run repeated attempts for the same task, use Harbor attempts:
 TELOS_HARBOR_UNTIL=5 \
 TELOS_HARBOR_N_ATTEMPTS=3 \
 TELOS_HARBOR_N_CONCURRENT=1 \
-TELOS_HARBOR_SKILLS='verify-engineering*,verify-quality*' \
+TELOS_HARBOR_SKILLS='@telos/verify-engineering:0.1.0*,@telos/verify-quality:0.1.0*' \
 ./integrations/harbor/run_scbench_circuit_eval.sh
 ```
 

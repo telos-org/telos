@@ -28,7 +28,7 @@ thinking="${TELOS_HARBOR_THINKING:-high}"
 until="${TELOS_HARBOR_UNTIL:-1}"
 session_timeout_sec="${TELOS_HARBOR_SESSION_TIMEOUT_SEC:-7200}"
 max_cost_usd="${TELOS_HARBOR_MAX_COST_USD:-10}"
-skills="${TELOS_HARBOR_SKILLS:-verify-engineering*}"
+skills="${TELOS_HARBOR_SKILLS:-@telos/verify-engineering:0.1.0*}"
 install_url="${TELOS_HARBOR_TELOS_INSTALL_URL:-https://usetelos.ai/releases/latest/install.sh}"
 
 inject_pi_models="${TELOS_HARBOR_INJECT_PI_MODELS:-true}"

@@ -94,6 +94,10 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintf(os.Stderr, "error: unknown local spec: %s\n", specArg)
 			os.Exit(1)
 		}
+		if err := prepareRegistrySkills(specPath); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 		applyLocalSessionSpec(specPath, *sessionID, *jsonOut)
 		return
 	}
@@ -142,6 +146,10 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	if !hasLocalSpec {
 		fmt.Fprintf(os.Stderr, "error: unknown local spec: %s\n", specArg)
+		os.Exit(1)
+	}
+	if err := prepareRegistrySkills(specPath); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 

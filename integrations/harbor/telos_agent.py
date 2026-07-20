@@ -26,7 +26,7 @@ DEFAULT_SESSION_TIMEOUT_SEC = 7200
 DEFAULT_UNTIL = 3
 DEFAULT_TELOS_INSTALL_URL = "https://usetelos.ai/releases/latest/install.sh"
 DEFAULT_SPEC_NAME = "harbor-task"
-DEFAULT_SKILLS = ("verify-engineering*",)
+DEFAULT_SKILLS = ("@telos/verify-engineering:0.1.0*",)
 
 MODEL_ENV_KEYS = (
     "ANTHROPIC_API_KEY",

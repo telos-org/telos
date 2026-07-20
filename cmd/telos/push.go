@@ -108,6 +108,9 @@ func packageSpec(input string) (*specPackage, error) {
 		}
 		return nil, fmt.Errorf("spec file not found: %s", input)
 	}
+	if err := prepareRegistrySkills(path); err != nil {
+		return nil, err
+	}
 	compiled, err := spec.CompileEnvironment(path)
 	if err != nil {
 		return nil, err
@@ -291,6 +294,12 @@ func pushPackageSkills(
 		if resolved == nil || strings.TrimSpace(resolved.Path) == "" {
 			continue
 		}
+		if ref, ok, err := resolvedRegistrySkillRef(client, resolved); err != nil {
+			return nil, err
+		} else if ok {
+			refs[resolved.Name] = ref
+			continue
+		}
 		if ref, ok, err := platformCatalogueSkillRef(client, resolved); err != nil {
 			return nil, err
 		} else if ok {
@@ -311,6 +320,39 @@ func pushPackageSkills(
 		refs[resolved.Name] = record.Ref
 	}
 	return refs, nil
+}
+
+func resolvedRegistrySkillRef(client *cloud.Client, resolved *spec.Skill) (string, bool, error) {
+	ref, ok := spec.ParseRegistrySkillRef(resolved.SourceRef)
+	if !ok {
+		return "", false, nil
+	}
+	var record *cloud.SkillRecord
+	var err error
+	if ref.Version == "" {
+		record, err = client.GetSkill(ref.Scope, ref.Name)
+	} else {
+		record, err = client.GetSkillVersion(ref.Scope, ref.Name, ref.Version)
+	}
+	if err != nil {
+		return "", true, fmt.Errorf("resolve registry skill %s: %w", ref.Ref, err)
+	}
+	if record.Scope != ref.Scope || record.Name != ref.Name {
+		return "", true, fmt.Errorf("registry skill %s resolved to %s", ref.Ref, record.Ref)
+	}
+	digest, _, err := spec.BuildSkillBundle(resolved)
+	if err != nil {
+		return "", true, fmt.Errorf("bundle registry skill %s: %w", ref.Ref, err)
+	}
+	if record.Digest != digest {
+		return "", true, fmt.Errorf(
+			"registry skill %s digest mismatch: local %s, registry %s",
+			ref.Ref,
+			digest,
+			record.Digest,
+		)
+	}
+	return record.Ref, true, nil
 }
 
 func platformCatalogueSkillRef(client *cloud.Client, resolved *spec.Skill) (string, bool, error) {
@@ -359,21 +401,11 @@ func platformSkillRecord(client *cloud.Client, resolved *spec.Skill) (*cloud.Ski
 }
 
 func registrySkillRefParts(raw string) (scope string, name string, version string, ok bool) {
-	value := strings.TrimSpace(strings.TrimSuffix(raw, "*"))
-	value = strings.TrimSpace(strings.TrimPrefix(value, "skill:"))
-	if !strings.HasPrefix(value, "@") {
-		return "", "", "", false
-	}
-	scoped := strings.TrimPrefix(value, "@")
-	scope, rest, ok := strings.Cut(scoped, "/")
+	ref, ok := spec.ParseRegistrySkillRef(raw)
 	if !ok {
 		return "", "", "", false
 	}
-	name, version, _ = strings.Cut(rest, ":")
-	if scope == "" || name == "" {
-		return "", "", "", false
-	}
-	return scope, name, version, true
+	return ref.Scope, ref.Name, ref.Version, true
 }
 
 func isDefaultCatalogueSkillPath(path string) bool {

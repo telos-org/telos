@@ -140,6 +140,31 @@ func TestClientPublishSkillVersion(t *testing.T) {
 	}
 }
 
+func TestClientDownloadSkillVersionBundle(t *testing.T) {
+	bundle := []byte("skill bundle")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		if r.Method != http.MethodGet || r.URL.Path != "/api/skills/telos/verify-quality/versions/1.2.3/bundle" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write(bundle)
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	got, err := client.DownloadSkillVersionBundle("telos", "verify-quality", "1.2.3")
+	if err != nil {
+		t.Fatalf("DownloadSkillVersionBundle: %v", err)
+	}
+	if string(got) != string(bundle) {
+		t.Fatalf("bundle: got %q", got)
+	}
+}
+
 func TestClientCreateSession(t *testing.T) {
 	var gotBody map[string]any
 	var gotOrgID string

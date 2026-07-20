@@ -61,6 +61,19 @@ Providers, models, and credentials are managed by pi; run `pi` and use
 [pi's model documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)
 for configuration details.
 
+### Using registry skills
+
+Reference an exact registry skill version directly from `SPEC.md`:
+
+```yaml
+skills:
+  - "@telos/verify-engineering:0.1.0*"
+```
+
+Telos downloads the authenticated version, verifies its registry digest, and
+pins the ref and digest in published package locks. The optional `*` marks a
+required evaluation rubric.
+
 ## Apply a Goal
 
 `run` executes bounded task work. `apply` creates or updates a durable

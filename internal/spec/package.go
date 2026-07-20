@@ -173,7 +173,7 @@ func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageManifest, error
 	if err := validateApplyPackageFiles(manifest, files); err != nil {
 		return nil, err
 	}
-	if err := writeApplyPackageFiles(dest, files); err != nil {
+	if err := writePackageFiles(dest, files); err != nil {
 		return nil, err
 	}
 	return manifest, nil
@@ -275,6 +275,25 @@ func VerifySkillBundle(name string, expectedDigest string, data []byte) error {
 	return nil
 }
 
+// ExtractSkillBundle verifies and expands a registry skill bundle into dest.
+func ExtractSkillBundle(name string, expectedDigest string, data []byte, dest string) error {
+	files, err := readSkillBundleFiles(name, data)
+	if err != nil {
+		return err
+	}
+	if digest := digestPackagedSkill(name, files); digest != expectedDigest {
+		return fmt.Errorf("skill digest mismatch for %q: got %s want %s", name, digest, expectedDigest)
+	}
+	entries := make(map[string]packageFile, len(files))
+	for _, file := range files {
+		if _, exists := entries[file.path]; exists {
+			return fmt.Errorf("duplicate skill bundle entry %q", file.path)
+		}
+		entries[file.path] = file
+	}
+	return writePackageFiles(dest, entries)
+}
+
 func readApplyPackage(data []byte) (map[string]packageFile, *ApplyPackageManifest, error) {
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -326,7 +345,7 @@ func readApplyPackage(data []byte) (map[string]packageFile, *ApplyPackageManifes
 	return files, &manifest, nil
 }
 
-func writeApplyPackageFiles(dest string, files map[string]packageFile) error {
+func writePackageFiles(dest string, files map[string]packageFile) error {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return fmt.Errorf("create package dir: %w", err)
 	}
@@ -336,7 +355,7 @@ func writeApplyPackageFiles(dest string, files map[string]packageFile) error {
 			return fmt.Errorf("create package entry dir: %w", err)
 		}
 		if err := os.WriteFile(path, file.data, fs.FileMode(file.mode)); err != nil {
-			return fmt.Errorf("write apply package entry %q: %w", name, err)
+			return fmt.Errorf("write package entry %q: %w", name, err)
 		}
 	}
 	return nil
