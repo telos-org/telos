@@ -1,10 +1,13 @@
 package platform
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -151,6 +154,51 @@ func TestLocalPlatformRunInterrupt(t *testing.T) {
 	if time.Since(start) > 3*time.Second {
 		t.Fatal("interrupt should stop the subprocess promptly")
 	}
+}
+
+func TestLocalPlatformRunInterruptReapsDescendants(t *testing.T) {
+	dir := t.TempDir()
+	p := NewLocalPlatform(dir)
+	pidPath := filepath.Join(dir, "child.pid")
+	var stop atomic.Bool
+	go func() {
+		deadline := time.Now().Add(3 * time.Second)
+		for time.Now().Before(deadline) {
+			if _, err := os.Stat(pidPath); err == nil {
+				stop.Store(true)
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}()
+
+	result := p.Run(
+		[]string{"sh", "-c", "sleep 60 & echo $! > child.pid; wait"},
+		"", nil, 0,
+		func() bool { return stop.Load() },
+		nil,
+	)
+
+	if result.InfraError != "local_interrupted:stop_requested" {
+		t.Fatalf("infra error: got %q", result.InfraError)
+	}
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		t.Fatalf("read child pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		t.Fatalf("parse child pid: %v", err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		err = syscall.Kill(pid, 0)
+		if errors.Is(err, syscall.ESRCH) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("descendant process %d survived interrupted turn", pid)
 }
 
 func TestLocalPlatformRunInvalidCommand(t *testing.T) {
