@@ -23,6 +23,10 @@ func cmdPlan(args []string) {
 		os.Exit(1)
 	}
 	specPath := resolveSpecPath(fs.Arg(0))
+	if err := prepareRegistrySkills(specPath); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	compiled, err := spec.CompileEnvironment(specPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

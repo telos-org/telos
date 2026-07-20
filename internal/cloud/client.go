@@ -263,6 +263,22 @@ func (c *Client) GetSkillVersion(scope, name, version string) (*SkillRecord, err
 	return c.getSkill(path)
 }
 
+func (c *Client) DownloadSkillVersionBundle(scope, name, version string) ([]byte, error) {
+	path := "/api/skills/" +
+		url.PathEscape(strings.TrimSpace(scope)) + "/" +
+		url.PathEscape(strings.TrimSpace(name)) + "/versions/" +
+		url.PathEscape(strings.TrimSpace(version)) + "/bundle"
+	resp, err := c.do("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	return io.ReadAll(resp.Body)
+}
+
 func (c *Client) getSkill(path string) (*SkillRecord, error) {
 	resp, err := c.do("GET", path, nil)
 	if err != nil {

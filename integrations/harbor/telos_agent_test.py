@@ -20,12 +20,14 @@ class TelosHarborAgentTest(unittest.TestCase):
             "Implement checkpoint 1.",
             workdir="/app",
             name="SCBench: Circuit Eval",
-            skills=("verify-engineering*",),
+            skills=("@telos/verify-engineering:0.1.0*",),
         )
 
         self.assertIn("platform: local", rendered)
         self.assertIn("name: scbench-circuit-eval", rendered)
-        self.assertIn("skills:\n  - verify-engineering*", rendered)
+        self.assertIn(
+            "skills:\n  - @telos/verify-engineering:0.1.0*", rendered
+        )
         self.assertIn("# Spec", rendered)
         self.assertIn("Harbor's task working directory is `/app`", rendered)
         self.assertIn("official Harbor benchmark verifier", rendered)
@@ -105,6 +107,7 @@ class TelosHarborAgentTest(unittest.TestCase):
         agent.poll_interval_sec = 5
         script = agent._run_script("---\nversion: 0.1.0\nname: task\n---\nBody", "/app")
 
+        self.assertIn("--workspace /app", script)
         self.assertIn('telos logs "$session_id" --raw', script)
         self.assertIn("retry() {", script)
         self.assertIn("json_field /tmp/telos-harbor/run.json session_id", script)

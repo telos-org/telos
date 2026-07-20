@@ -251,6 +251,11 @@ func resolveSkillPath(baseDir, raw string) (string, error) {
 		if path, ok := resolvePackageLocalRegistrySkill(baseDir, raw); ok {
 			return path, nil
 		}
+		if path, ok, err := resolveCachedRegistrySkill(raw); err != nil {
+			return "", err
+		} else if ok {
+			return path, nil
+		}
 		if path, ok, err := resolvePlatformCatalogueSkill(raw); err != nil {
 			return "", err
 		} else if ok {
@@ -326,21 +331,11 @@ func resolvePackageLocalRegistrySkill(baseDir, raw string) (string, bool) {
 }
 
 func registrySkillParts(raw string) (string, string, bool) {
-	value := strings.TrimSpace(strings.TrimSuffix(raw, "*"))
-	value = strings.TrimSpace(strings.TrimPrefix(value, "skill:"))
-	if !strings.HasPrefix(value, "@") {
-		return "", "", false
-	}
-	scoped := strings.TrimPrefix(value, "@")
-	scope, rest, ok := strings.Cut(scoped, "/")
+	ref, ok := ParseRegistrySkillRef(raw)
 	if !ok {
 		return "", "", false
 	}
-	name, _, _ := strings.Cut(rest, ":")
-	if !dnsRE.MatchString(scope) || !dnsRE.MatchString(name) {
-		return "", "", false
-	}
-	return scope, name, true
+	return ref.Scope, ref.Name, true
 }
 
 func isPlatformSkillScope(scope string) bool {
@@ -383,8 +378,8 @@ func isScopedRegistrySkillRef(raw string) bool {
 }
 
 func registrySkillLocalName(raw string) string {
-	if _, name, ok := registrySkillParts(raw); ok {
-		return name
+	if ref, ok := ParseRegistrySkillRef(raw); ok {
+		return ref.Name
 	}
 	value := strings.TrimSpace(strings.TrimSuffix(raw, "*"))
 	value = strings.TrimPrefix(value, "skill:")

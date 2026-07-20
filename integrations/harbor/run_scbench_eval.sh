@@ -39,7 +39,7 @@ export TELOS_HARBOR_N_ATTEMPTS="${TELOS_HARBOR_N_ATTEMPTS:-1}"
 export TELOS_HARBOR_N_CONCURRENT="${TELOS_HARBOR_N_CONCURRENT:-1}"
 export TELOS_HARBOR_MAX_COST_USD="${TELOS_HARBOR_MAX_COST_USD:-10}"
 export TELOS_HARBOR_SESSION_TIMEOUT_SEC="${TELOS_HARBOR_SESSION_TIMEOUT_SEC:-14400}"
-export TELOS_HARBOR_SKILLS="${TELOS_HARBOR_SKILLS:-verify-engineering*,verify-quality*}"
+export TELOS_HARBOR_SKILLS="${TELOS_HARBOR_SKILLS:-@telos/verify-engineering:0.1.0*,@telos/verify-quality:0.1.0*}"
 
 # API-key auth needs no codex OAuth config and no host models.json.
 export TELOS_HARBOR_INJECT_PI_MODELS="${TELOS_HARBOR_INJECT_PI_MODELS:-false}"

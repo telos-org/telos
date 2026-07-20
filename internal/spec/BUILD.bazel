@@ -6,6 +6,7 @@ go_library(
         "compile.go",
         "embed.go",
         "package.go",
+        "registry.go",
         "render.go",
         "skills.go",
         "spec.go",
@@ -23,6 +24,7 @@ go_test(
     srcs = [
         "compile_test.go",
         "package_test.go",
+        "registry_test.go",
         "skills_test.go",
         "spec_test.go",
     ],
