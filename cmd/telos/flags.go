@@ -91,6 +91,10 @@ func resolveLocalRunConfigFromFlags(
 	workspace string,
 	model string,
 	thinking string,
+	generatorModel string,
+	generatorThinking string,
+	verifierModel string,
+	verifierThinking string,
 	maxCostUSD float64,
 ) (cli.LocalRunConfig, error) {
 	cost, err := positiveFloatOption(fs, "max-cost-usd", maxCostUSD, "TELOS_MAX_COST_USD", 20.0)
@@ -98,11 +102,43 @@ func resolveLocalRunConfigFromFlags(
 		return cli.LocalRunConfig{}, err
 	}
 	return cli.LocalRunConfig{
-		Workspace:  stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
-		Model:      modelOption(fs, model),
-		Thinking:   stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", cli.DefaultLocalThinking),
+		Workspace: stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
+		Model:     modelOption(fs, model),
+		Thinking:  stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", cli.DefaultLocalThinking),
+		Generator: roleConfig(
+			stringOption(fs, "generator-model", generatorModel, "TELOS_GENERATOR_MODEL"),
+			stringOption(fs, "generator-thinking", generatorThinking, "TELOS_GENERATOR_THINKING"),
+		),
+		Verifier: roleConfig(
+			stringOption(fs, "verifier-model", verifierModel, "TELOS_VERIFIER_MODEL"),
+			stringOption(fs, "verifier-thinking", verifierThinking, "TELOS_VERIFIER_THINKING"),
+		),
 		MaxCostUSD: &cost,
 	}, nil
+}
+
+func roleConfig(model, thinking string) *sessionapi.RoleConfig {
+	if model == "" && thinking == "" {
+		return nil
+	}
+	return &sessionapi.RoleConfig{Model: model, Thinking: thinking}
+}
+
+func roleConfigSet(fs *flag.FlagSet) bool {
+	if flagNamesSet(fs, "generator-model", "generator-thinking", "verifier-model", "verifier-thinking") {
+		return true
+	}
+	for _, key := range []string{
+		"TELOS_GENERATOR_MODEL",
+		"TELOS_GENERATOR_THINKING",
+		"TELOS_VERIFIER_MODEL",
+		"TELOS_VERIFIER_THINKING",
+	} {
+		if strings.TrimSpace(os.Getenv(key)) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 type sessionRuntimeConfig struct {
