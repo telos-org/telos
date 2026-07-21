@@ -164,7 +164,7 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	t.Setenv("TELOS_THINKING", "high")
 	t.Setenv("TELOS_MAX_COST_USD", "12.5")
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", "", "", "", "", 20.0)
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -185,12 +185,44 @@ func TestResolveLocalRunConfigUsesDefaultThinking(t *testing.T) {
 	fs.Float64("max-cost-usd", 20.0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "", 20.0)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "", "", "", "", "", 20.0)
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
 	if cfg.Thinking != cli.DefaultLocalThinking {
 		t.Fatalf("thinking: got %q, want %q", cfg.Thinking, cli.DefaultLocalThinking)
+	}
+}
+
+func TestResolveLocalRunConfigUsesOptionalPerRoleOverrides(t *testing.T) {
+	fs := flag.NewFlagSet("run", flag.ContinueOnError)
+	fs.String("workspace", "", "")
+	fs.String("model", "", "")
+	fs.String("thinking", "", "")
+	fs.String("generator-model", "", "")
+	fs.String("generator-thinking", "", "")
+	fs.String("verifier-model", "", "")
+	fs.String("verifier-thinking", "", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	parseFlags(fs, []string{
+		"--generator-model", "openai-codex/gpt-generator",
+		"--generator-thinking", "high",
+		"--verifier-model", "anthropic/claude-verifier",
+		"SPEC.md",
+	})
+
+	cfg, err := resolveLocalRunConfigFromFlags(
+		fs, "", "", "", "openai-codex/gpt-generator", "high",
+		"anthropic/claude-verifier", "", 20.0,
+	)
+	if err != nil {
+		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
+	}
+	if cfg.Generator == nil || cfg.Generator.Model != "openai-codex/gpt-generator" || cfg.Generator.Thinking != "high" {
+		t.Fatalf("generator: got %#v", cfg.Generator)
+	}
+	if cfg.Verifier == nil || cfg.Verifier.Model != "anthropic/claude-verifier" || cfg.Verifier.Thinking != "" {
+		t.Fatalf("verifier: got %#v", cfg.Verifier)
 	}
 }
 

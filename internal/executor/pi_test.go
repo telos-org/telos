@@ -21,6 +21,23 @@ func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	}
 }
 
+func TestPiExecutorResolvesPerRoleConfigWithSharedFallbacks(t *testing.T) {
+	exec := NewPiExecutor(nil, "shared/model", "medium", 0).WithRoleConfig(
+		RoleConfig{Model: "generator/model", Thinking: "high"},
+		RoleConfig{Model: "verifier/model"},
+	)
+
+	if model, thinking := exec.configForRole("prover"); model != "generator/model" || thinking != "high" {
+		t.Fatalf("generator config: got %q/%q", model, thinking)
+	}
+	if model, thinking := exec.configForRole("verifier"); model != "verifier/model" || thinking != "medium" {
+		t.Fatalf("verifier config: got %q/%q", model, thinking)
+	}
+	if model, thinking := exec.configForRole("other"); model != "shared/model" || thinking != "medium" {
+		t.Fatalf("fallback config: got %q/%q", model, thinking)
+	}
+}
+
 func TestBuildPiArgvUsesTextModeWithoutSessionByDefault(t *testing.T) {
 	argv := BuildPiArgv("claude-test", "high", "", "")
 	if len(argv) != 6 {

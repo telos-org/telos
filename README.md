@@ -61,6 +61,18 @@ Providers, models, and credentials are managed by pi; run `pi` and use
 [pi's model documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)
 for configuration details.
 
+Local runs can optionally override the generator and verifier independently:
+
+```bash
+telos run SPEC.md \
+  --generator-model openai-codex/gpt-5.5 --generator-thinking high \
+  --verifier-model anthropic/claude-sonnet-4 --verifier-thinking medium
+```
+
+Omitted role settings inherit `--model` and `--thinking`. The equivalent
+environment variables are `TELOS_GENERATOR_MODEL`, `TELOS_GENERATOR_THINKING`,
+`TELOS_VERIFIER_MODEL`, and `TELOS_VERIFIER_THINKING`.
+
 ### Using registry skills
 
 Reference an exact registry skill version directly from `SPEC.md`:

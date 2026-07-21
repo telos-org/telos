@@ -42,3 +42,26 @@ func TestSessionConfigPreservesUnknownFields(t *testing.T) {
 		t.Fatalf("future_knob was not preserved: %#v", m["future_knob"])
 	}
 }
+
+func TestSessionConfigRoundTripsOptionalRoleConfig(t *testing.T) {
+	cfg := sessionapi.SessionConfig{
+		Model:     "shared/model",
+		Thinking:  "medium",
+		Generator: &sessionapi.RoleConfig{Model: "generator/model", Thinking: "high"},
+		Verifier:  &sessionapi.RoleConfig{Model: "verifier/model", Thinking: "low"},
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded sessionapi.SessionConfig
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	if decoded.Generator == nil || *decoded.Generator != *cfg.Generator {
+		t.Fatalf("generator: got %#v", decoded.Generator)
+	}
+	if decoded.Verifier == nil || *decoded.Verifier != *cfg.Verifier {
+		t.Fatalf("verifier: got %#v", decoded.Verifier)
+	}
+}

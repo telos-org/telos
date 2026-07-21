@@ -94,12 +94,21 @@ type ScopedToken struct {
 
 type SessionConfig struct {
 	Model           string         `json:"model,omitempty"`
+	Generator       *RoleConfig    `json:"generator,omitempty"`
+	Verifier        *RoleConfig    `json:"verifier,omitempty"`
 	Until           int            `json:"until,omitempty"`
 	UntilSeconds    int            `json:"until_seconds,omitempty"`
 	MaxCostUSD      *float64       `json:"max_cost_usd,omitempty"`
 	AgentTimeoutSec int            `json:"agent_timeout_sec,omitempty"`
 	Thinking        string         `json:"thinking,omitempty"`
 	Extra           map[string]any `json:"-"`
+}
+
+// RoleConfig optionally overrides the shared model configuration for one PVG role.
+// Empty fields inherit their value from SessionConfig.Model/Thinking.
+type RoleConfig struct {
+	Model    string `json:"model,omitempty"`
+	Thinking string `json:"thinking,omitempty"`
 }
 
 // InitialManifest is the typed input for creating a session.json before any
@@ -308,6 +317,12 @@ func (c SessionConfig) MarshalJSON() ([]byte, error) {
 	if c.Model != "" {
 		m["model"] = c.Model
 	}
+	if c.Generator != nil {
+		m["generator"] = c.Generator
+	}
+	if c.Verifier != nil {
+		m["verifier"] = c.Verifier
+	}
 	if c.Until > 0 {
 		m["until"] = c.Until
 	}
@@ -337,6 +352,18 @@ func (c *SessionConfig) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("config.model: %w", err)
 		}
 		delete(raw, "model")
+	}
+	if value, ok := raw["generator"]; ok {
+		if err := json.Unmarshal(value, &c.Generator); err != nil {
+			return fmt.Errorf("config.generator: %w", err)
+		}
+		delete(raw, "generator")
+	}
+	if value, ok := raw["verifier"]; ok {
+		if err := json.Unmarshal(value, &c.Verifier); err != nil {
+			return fmt.Errorf("config.verifier: %w", err)
+		}
+		delete(raw, "verifier")
 	}
 	if value, ok := raw["until"]; ok {
 		if err := json.Unmarshal(value, &c.Until); err != nil {
