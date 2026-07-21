@@ -19,37 +19,22 @@ import (
 func cmdLogin(args []string) {
 	fs := flag.NewFlagSet("login", flag.ExitOnError)
 	endpoint := fs.String("endpoint", cloud.DefaultAPIEndpoint, "API endpoint")
-	token := fs.String("token", "", "API token (skips the browser flow)")
-	noPrompt := fs.Bool("no-prompt", false, "Never open a browser or prompt; require --token or TELOS_AUTH_TOKEN")
 	parseFlags(fs, args)
 
 	ep := cloud.NormalizeEndpoint(*endpoint)
 	cfg := config.LoadStoredConfig()
-	tok := *token
-	if tok == "" {
-		tok = os.Getenv(config.AuthTokenEnv)
+	who, loggedIn, err := configuredLogin(ep, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: could not verify existing login: %v\n", err)
+		os.Exit(1)
 	}
-	if tok == "" {
-		who, loggedIn, err := configuredLogin(ep, cfg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: could not verify existing login: %v\n", err)
-			os.Exit(1)
-		}
-		if loggedIn {
-			fmt.Printf("already logged in to %s as %s\n", ep, who)
-			return
-		}
-		if !*noPrompt {
-			browserToken, err := browserLogin(ep)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			tok = browserToken
-		}
+	if loggedIn {
+		fmt.Printf("already logged in to %s as %s\n", ep, who)
+		return
 	}
-	if tok == "" {
-		fmt.Fprintln(os.Stderr, "error: token required")
+	tok, err := browserLogin(ep)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -108,10 +93,6 @@ func browserLogin(endpoint string) (string, error) {
 	}
 	start, err := cloud.StartCLIAuth(endpoint, hostname)
 	if err != nil {
-		if cloud.IsStatus(err, http.StatusNotFound) {
-			// Control plane predates browser login; fall back to pasting.
-			return promptForToken(), nil
-		}
 		return "", err
 	}
 
@@ -158,13 +139,6 @@ func browserLogin(endpoint string) (string, error) {
 	}
 	fmt.Println()
 	return "", errors.New("timed out waiting for approval; run `telos login` again")
-}
-
-func promptForToken() string {
-	var tok string
-	fmt.Print("Telos API token: ")
-	fmt.Scanln(&tok)
-	return tok
 }
 
 func openBrowser(url string) error {
