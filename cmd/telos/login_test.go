@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
+	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
 )
 
@@ -88,5 +89,15 @@ func TestConfiguredLoginSurfacesVerificationFailure(t *testing.T) {
 	}
 	if loggedIn {
 		t.Fatal("unexpected logged-in result")
+	}
+}
+
+func TestBrowserLoginDoesNotPromptForToken(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	_, err := browserLogin(server.URL)
+	if !cloud.IsStatus(err, http.StatusNotFound) {
+		t.Fatalf("error = %v, want HTTP 404", err)
 	}
 }

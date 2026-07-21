@@ -11,7 +11,7 @@
 //	telos describe SESSION [--json]
 //	telos logs [-f] [--verbose] SESSION
 //	telos delete SESSION [--json]
-//	telos login [--endpoint URL] [--token TOKEN] [--no-prompt]
+//	telos login [--endpoint URL]
 //	telos logout
 //	telos version
 //	telos --version
