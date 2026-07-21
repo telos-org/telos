@@ -24,16 +24,28 @@ func cmdLogin(args []string) {
 	parseFlags(fs, args)
 
 	ep := cloud.NormalizeEndpoint(*endpoint)
+	cfg := config.LoadStoredConfig()
 	tok := *token
 	if tok == "" {
-		tok = os.Getenv("TELOS_AUTH_TOKEN")
+		tok = os.Getenv(config.AuthTokenEnv)
 	}
-	if tok == "" && !*noPrompt {
-		var err error
-		tok, err = browserLogin(ep)
+	if tok == "" {
+		who, loggedIn, err := configuredLogin(ep, cfg)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			fmt.Fprintf(os.Stderr, "error: could not verify existing login: %v\n", err)
 			os.Exit(1)
+		}
+		if loggedIn {
+			fmt.Printf("already logged in to %s as %s\n", ep, who)
+			return
+		}
+		if !*noPrompt {
+			browserToken, err := browserLogin(ep)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			tok = browserToken
 		}
 	}
 	if tok == "" {
@@ -41,22 +53,50 @@ func cmdLogin(args []string) {
 		os.Exit(1)
 	}
 
-	cfg := config.LoadConfig()
 	cfg.APIEndpoint = ep
 	cfg.AuthToken = tok
 	if err := config.SaveConfig(cfg); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if me, err := cloud.NewClient(ep, tok).Me(); err == nil {
-		who := me.Subject
-		if me.Email != nil && *me.Email != "" {
-			who = *me.Email
-		}
+	if who, err := loginIdentity(ep, tok); err == nil {
 		fmt.Printf("logged in to %s as %s\n", ep, who)
 		return
 	}
 	fmt.Printf("logged in to %s\n", ep)
+}
+
+func configuredLogin(endpoint string, cfg *config.Config) (string, bool, error) {
+	if cfg.AuthToken == "" {
+		return "", false, nil
+	}
+	configuredEndpoint := cfg.APIEndpoint
+	if configuredEndpoint == "" {
+		configuredEndpoint = cloud.DefaultAPIEndpoint
+	}
+	if cloud.NormalizeEndpoint(configuredEndpoint) != endpoint {
+		return "", false, nil
+	}
+	who, err := loginIdentity(endpoint, cfg.AuthToken)
+	if err != nil {
+		if cloud.IsStatus(err, http.StatusUnauthorized) || cloud.IsStatus(err, http.StatusForbidden) {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return who, true, nil
+}
+
+func loginIdentity(endpoint, token string) (string, error) {
+	me, err := cloud.NewClient(endpoint, token).Me()
+	if err != nil {
+		return "", err
+	}
+	who := me.Subject
+	if me.Email != nil && *me.Email != "" {
+		who = *me.Email
+	}
+	return who, nil
 }
 
 // browserLogin runs the browser handshake: start a login request, send the

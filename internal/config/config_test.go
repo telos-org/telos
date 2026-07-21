@@ -49,6 +49,28 @@ func TestLoadConfigEnvOverride(t *testing.T) {
 	}
 }
 
+func TestLoadStoredConfigIgnoresEnvOverride(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "config.yaml")
+	os.WriteFile(cfgPath, []byte("api_endpoint: https://file.example.com\nauth_token: file-token\norg_id: org_file\n"), 0o644)
+
+	t.Setenv("TELOS_CONFIG", cfgPath)
+	t.Setenv("TELOS_API_ENDPOINT", "https://env.example.com")
+	t.Setenv("TELOS_AUTH_TOKEN", "env-token")
+	t.Setenv("TELOS_ORG_ID", "org_env")
+
+	cfg := LoadStoredConfig()
+	if cfg.APIEndpoint != "https://file.example.com" {
+		t.Errorf("endpoint: got %q", cfg.APIEndpoint)
+	}
+	if cfg.AuthToken != "file-token" {
+		t.Errorf("token: got %q", cfg.AuthToken)
+	}
+	if cfg.OrgID != "org_file" {
+		t.Errorf("org id: got %q", cfg.OrgID)
+	}
+}
+
 func TestLoadConfigMissing(t *testing.T) {
 	t.Setenv("TELOS_CONFIG", filepath.Join(t.TempDir(), "nonexistent.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", "")

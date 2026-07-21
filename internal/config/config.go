@@ -31,8 +31,8 @@ func ConfigPath() string {
 	return filepath.Join(home, ".telos", "config.yaml")
 }
 
-// LoadConfig reads config from disk with env overrides.
-func LoadConfig() *Config {
+// LoadStoredConfig reads config from disk without environment overrides.
+func LoadStoredConfig() *Config {
 	raw := readYAMLFile(ConfigPath())
 	cfg := &Config{}
 	if ep, ok := raw["api_endpoint"].(string); ok {
@@ -44,7 +44,12 @@ func LoadConfig() *Config {
 	if orgID, ok := raw["org_id"].(string); ok {
 		cfg.OrgID = orgID
 	}
-	// Env overrides
+	return cfg
+}
+
+// LoadConfig reads stored config with environment overrides.
+func LoadConfig() *Config {
+	cfg := LoadStoredConfig()
 	if v := os.Getenv(APIEndpointEnv); v != "" {
 		cfg.APIEndpoint = v
 	}
