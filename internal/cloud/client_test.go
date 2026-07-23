@@ -7,9 +7,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -28,6 +30,81 @@ func TestNormalizeEndpoint(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("NormalizeEndpoint(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestControlClientResolvesHandleContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/account/bootstrap" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{
+			"personal_org_id":"org_personal",
+			"organizations":[
+				{"id":"org_telos","handle":"telos","display_name":"Telos","kind":"platform","role":"owner"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	t.Setenv(config.APIEndpointEnv, srv.URL)
+	t.Setenv(config.AuthTokenEnv, "test-token")
+	t.Setenv(config.ContextEnv, "@telos")
+
+	client, err := ControlClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.OrgID != "org_telos" {
+		t.Fatalf("OrgID = %q", client.OrgID)
+	}
+}
+
+func TestControlClientCachesHandleResolution(t *testing.T) {
+	bootstraps := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bootstraps++
+		_, _ = w.Write([]byte(`{
+			"personal_org_id":"org_personal",
+			"organizations":[
+				{"id":"org_telos","handle":"telos","display_name":"Telos","kind":"platform","role":"owner"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	t.Setenv(config.APIEndpointEnv, srv.URL)
+	t.Setenv(config.AuthTokenEnv, "test-token")
+	t.Setenv(config.ContextEnv, "@telos")
+
+	for i := 0; i < 2; i++ {
+		client, err := ControlClient()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if client.OrgID != "org_telos" {
+			t.Fatalf("OrgID = %q", client.OrgID)
+		}
+	}
+	if bootstraps != 1 {
+		t.Fatalf("bootstrap requests = %d, want 1", bootstraps)
+	}
+}
+
+func TestControlClientUsesStableContextWithoutLookup(t *testing.T) {
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	t.Setenv(config.APIEndpointEnv, "https://api.example.com")
+	t.Setenv(config.AuthTokenEnv, "test-token")
+	t.Setenv(config.ContextEnv, "org_telos")
+
+	client, err := ControlClient()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.OrgID != "org_telos" {
+		t.Fatalf("OrgID = %q", client.OrgID)
 	}
 }
 

@@ -12,14 +12,14 @@ const (
 	ConfigPathEnv  = "TELOS_CONFIG"
 	APIEndpointEnv = "TELOS_API_ENDPOINT"
 	AuthTokenEnv   = "TELOS_AUTH_TOKEN"
-	OrgIDEnv       = "TELOS_ORG_ID"
+	ContextEnv     = "TELOS_CONTEXT"
 )
 
 // Config holds user-facing cloud CLI configuration.
 type Config struct {
 	APIEndpoint string `yaml:"api_endpoint,omitempty"`
 	AuthToken   string `yaml:"auth_token,omitempty"`
-	OrgID       string `yaml:"org_id,omitempty"`
+	Context     string `yaml:"context,omitempty"`
 }
 
 // ConfigPath returns the path to the active config file.
@@ -41,8 +41,8 @@ func LoadStoredConfig() *Config {
 	if at, ok := raw["auth_token"].(string); ok {
 		cfg.AuthToken = at
 	}
-	if orgID, ok := raw["org_id"].(string); ok {
-		cfg.OrgID = orgID
+	if context, ok := raw["context"].(string); ok {
+		cfg.Context = context
 	}
 	return cfg
 }
@@ -56,8 +56,8 @@ func LoadConfig() *Config {
 	if v := os.Getenv(AuthTokenEnv); v != "" {
 		cfg.AuthToken = v
 	}
-	if v := os.Getenv(OrgIDEnv); v != "" {
-		cfg.OrgID = v
+	if v := os.Getenv(ContextEnv); v != "" {
+		cfg.Context = v
 	}
 	return cfg
 }
@@ -75,8 +75,8 @@ func SaveConfig(cfg *Config) error {
 	if cfg.AuthToken != "" {
 		m["auth_token"] = cfg.AuthToken
 	}
-	if cfg.OrgID != "" {
-		m["org_id"] = cfg.OrgID
+	if cfg.Context != "" {
+		m["context"] = cfg.Context
 	}
 	data, err := yaml.Marshal(m)
 	if err != nil {

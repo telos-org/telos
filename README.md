@@ -93,8 +93,20 @@ controller session that keeps reconciling desired state.
 
 ```bash
 telos login
+telos config --context @your-org
 telos apply SPEC.md
 telos list --cloud
+```
+
+Cloud commands run in the configured personal, team, or platform context.
+Use `telos config` to show the active context and `telos config --context
+@your-org` to switch it. Omit the context configuration to use your personal
+context; `telos config --context personal` clears a stored organization
+selection. `TELOS_CONTEXT` overrides the stored context for a single command
+or process:
+
+```bash
+TELOS_CONTEXT=@your-org telos list --cloud
 ```
 
 Hosted deployments pin their effective model when they are created. Override
