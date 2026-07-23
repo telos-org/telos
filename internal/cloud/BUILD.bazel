@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "cloud",
     srcs = [
+        "account.go",
         "cliauth.go",
         "client.go",
     ],
@@ -17,9 +18,13 @@ go_library(
 go_test(
     name = "cloud_test",
     srcs = [
+        "account_test.go",
         "cliauth_test.go",
         "client_test.go",
     ],
     embed = [":cloud"],
-    deps = ["//internal/sessionapi"],
+    deps = [
+        "//internal/config",
+        "//internal/sessionapi",
+    ],
 )

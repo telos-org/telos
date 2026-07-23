@@ -170,7 +170,19 @@ func ControlClient() (*Client, error) {
 		return nil, fmt.Errorf("not logged in; run `telos login` first")
 	}
 	client := NewClient(endpoint, token)
-	client.OrgID = cfg.OrgID
+	context := strings.TrimSpace(cfg.Context)
+	if context == "" || context == "personal" {
+		return client, nil
+	}
+	if strings.HasPrefix(context, "org_") {
+		client.OrgID = context
+		return client, nil
+	}
+	organization, err := client.ResolveContext(context)
+	if err != nil {
+		return nil, err
+	}
+	client.OrgID = organization.ID
 	return client, nil
 }
 
