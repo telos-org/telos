@@ -19,9 +19,11 @@ type cloudBootstrapSession struct {
 }
 
 const (
-	fallbackCloudSessionModel   = "telos-bifrost/standard-agent"
+	legacyCloudSessionModel     = "sail-research/zai-org/GLM-5.2-FP8"
+	bifrostCloudSessionModel    = "telos-bifrost/standard-agent"
 	defaultCloudSessionThinking = "medium"
 	cloudAgentTimeoutEnvVar     = "TELOS_AGENT_TIMEOUT_SEC"
+	cloudBifrostEnabledEnvVar   = "TELOS_BIFROST_ENABLED"
 )
 
 type sessionBootstrapReconciler struct {
@@ -161,7 +163,13 @@ func cloudSessionModel() string {
 	if model := strings.TrimSpace(os.Getenv("TELOS_CLOUD_DEFAULT_MODEL")); model != "" {
 		return model
 	}
-	return fallbackCloudSessionModel
+	// The provider extension and its virtual key are deployed by Cloud. Keep
+	// standalone/older hosted runtimes on the known legacy provider until that
+	// deployment explicitly opts them in.
+	if os.Getenv(cloudBifrostEnabledEnvVar) == "1" {
+		return bifrostCloudSessionModel
+	}
+	return legacyCloudSessionModel
 }
 
 func cloudSessionThinking() string {

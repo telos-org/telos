@@ -103,8 +103,8 @@ func TestSessionBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	if store.creates[0].CloudSessionName != "auth" {
 		t.Fatalf("CloudSessionName = %q want auth", store.creates[0].CloudSessionName)
 	}
-	if store.creates[0].Model != fallbackCloudSessionModel {
-		t.Fatalf("Model = %q want %q", store.creates[0].Model, fallbackCloudSessionModel)
+	if store.creates[0].Model != legacyCloudSessionModel {
+		t.Fatalf("Model = %q want %q", store.creates[0].Model, legacyCloudSessionModel)
 	}
 	if store.creates[0].AgentTimeoutSec != nil {
 		t.Fatalf("AgentTimeoutSec should not default for controller bootstrap: %v", store.creates[0].AgentTimeoutSec)
@@ -152,8 +152,18 @@ func TestCloudSessionModelUsesEnvOverride(t *testing.T) {
 
 func TestCloudSessionModelUsesBifrostFallback(t *testing.T) {
 	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "")
+	t.Setenv(cloudBifrostEnabledEnvVar, "1")
 
-	if got := cloudSessionModel(); got != "telos-bifrost/standard-agent" {
+	if got := cloudSessionModel(); got != bifrostCloudSessionModel {
+		t.Fatalf("cloudSessionModel = %q", got)
+	}
+}
+
+func TestCloudSessionModelUsesLegacyFallbackWithoutBifrostExtension(t *testing.T) {
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "")
+	t.Setenv(cloudBifrostEnabledEnvVar, "")
+
+	if got := cloudSessionModel(); got != legacyCloudSessionModel {
 		t.Fatalf("cloudSessionModel = %q", got)
 	}
 }
