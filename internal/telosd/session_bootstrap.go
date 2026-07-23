@@ -19,7 +19,7 @@ type cloudBootstrapSession struct {
 }
 
 const (
-	fallbackCloudSessionModel   = "sail-research/zai-org/GLM-5.2-FP8"
+	fallbackCloudSessionModel   = "telos-bifrost/standard-agent"
 	defaultCloudSessionThinking = "medium"
 	cloudAgentTimeoutEnvVar     = "TELOS_AGENT_TIMEOUT_SEC"
 )

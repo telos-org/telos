@@ -143,9 +143,17 @@ func TestSessionBootstrapMatchesCloudSessionNameBeforeSpecName(t *testing.T) {
 }
 
 func TestCloudSessionModelUsesEnvOverride(t *testing.T) {
-	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "sail-research/custom")
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "telos-bifrost/standard-compaction")
 
-	if got := cloudSessionModel(); got != "sail-research/custom" {
+	if got := cloudSessionModel(); got != "telos-bifrost/standard-compaction" {
+		t.Fatalf("cloudSessionModel = %q", got)
+	}
+}
+
+func TestCloudSessionModelUsesBifrostFallback(t *testing.T) {
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "")
+
+	if got := cloudSessionModel(); got != "telos-bifrost/standard-agent" {
 		t.Fatalf("cloudSessionModel = %q", got)
 	}
 }
