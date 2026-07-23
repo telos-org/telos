@@ -61,6 +61,38 @@ func TestControlClientResolvesHandleContext(t *testing.T) {
 	}
 }
 
+func TestControlClientCachesHandleResolution(t *testing.T) {
+	bootstraps := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		bootstraps++
+		_, _ = w.Write([]byte(`{
+			"personal_org_id":"org_personal",
+			"organizations":[
+				{"id":"org_telos","handle":"telos","display_name":"Telos","kind":"platform","role":"owner"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	t.Setenv(config.APIEndpointEnv, srv.URL)
+	t.Setenv(config.AuthTokenEnv, "test-token")
+	t.Setenv(config.ContextEnv, "@telos")
+
+	for i := 0; i < 2; i++ {
+		client, err := ControlClient()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if client.OrgID != "org_telos" {
+			t.Fatalf("OrgID = %q", client.OrgID)
+		}
+	}
+	if bootstraps != 1 {
+		t.Fatalf("bootstrap requests = %d, want 1", bootstraps)
+	}
+}
+
 func TestControlClientUsesStableContextWithoutLookup(t *testing.T) {
 	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
 	t.Setenv(config.APIEndpointEnv, "https://api.example.com")
