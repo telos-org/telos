@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/telos-org/telos/internal/config"
@@ -158,6 +159,12 @@ func NewClient(endpoint, token string) *Client {
 	}
 }
 
+// resolvedContexts memoizes successful handle resolutions for the life of
+// the process, keyed by endpoint, token, and context so distinct identities
+// never share an entry. Failures are not cached so transient errors stay
+// retryable.
+var resolvedContexts sync.Map
+
 // ControlClient returns a client for the configured Telos control plane.
 func ControlClient() (*Client, error) {
 	cfg := config.LoadConfig()
@@ -178,10 +185,16 @@ func ControlClient() (*Client, error) {
 		client.OrgID = context
 		return client, nil
 	}
+	key := client.Endpoint + "\x00" + token + "\x00" + context
+	if orgID, ok := resolvedContexts.Load(key); ok {
+		client.OrgID = orgID.(string)
+		return client, nil
+	}
 	organization, err := client.ResolveContext(context)
 	if err != nil {
 		return nil, err
 	}
+	resolvedContexts.Store(key, organization.ID)
 	client.OrgID = organization.ID
 	return client, nil
 }
