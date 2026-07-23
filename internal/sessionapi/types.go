@@ -228,6 +228,7 @@ type Session struct {
 	VerifierConceded        *bool            `json:"verifier_conceded,omitempty"`
 	ServiceURL              *string          `json:"service_url,omitempty"`
 	DashboardURL            *string          `json:"dashboard_url,omitempty"`
+	DashboardDoc            *string          `json:"dashboard_doc,omitempty"`
 	CurrentSpecVersion      *int             `json:"current_spec_version,omitempty"`
 	SpecVersions            []map[string]any `json:"spec_versions"`
 	LatestDescendantSession *SessionSummary  `json:"latest_descendant_session,omitempty"`
@@ -250,6 +251,7 @@ type SessionListItem struct {
 	TotalCostUSD       *float64       `json:"total_cost_usd,omitempty"`
 	ServiceURL         *string        `json:"service_url,omitempty"`
 	DashboardURL       *string        `json:"dashboard_url,omitempty"`
+	DashboardDoc       *string        `json:"dashboard_doc,omitempty"`
 	CurrentSpecVersion *int           `json:"current_spec_version,omitempty"`
 }
 
@@ -283,6 +285,7 @@ func SessionListItemFromSession(session Session) SessionListItem {
 		TotalCostUSD:       session.TotalCostUSD,
 		ServiceURL:         session.ServiceURL,
 		DashboardURL:       session.DashboardURL,
+		DashboardDoc:       session.DashboardDoc,
 		CurrentSpecVersion: session.CurrentSpecVersion,
 	}
 }
@@ -303,6 +306,7 @@ func (item SessionListItem) AsSession() Session {
 		TotalCostUSD:       item.TotalCostUSD,
 		ServiceURL:         item.ServiceURL,
 		DashboardURL:       item.DashboardURL,
+		DashboardDoc:       item.DashboardDoc,
 		CurrentSpecVersion: item.CurrentSpecVersion,
 	}
 }

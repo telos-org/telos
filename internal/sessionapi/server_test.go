@@ -1576,6 +1576,83 @@ func TestTranscriptPresent(t *testing.T) {
 	}
 }
 
+// --------- dashboard_doc surfacing ------------------------------------------------------------------------------------------------------------------------------------
+
+func TestDashboardDocSurfaced(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "dd"))
+	workspace := filepath.Join(store.Root, created.SessionID, "workspace")
+	os.MkdirAll(workspace, 0o755)
+
+	getSession := func() sessionapi.Session {
+		resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		assertEqual(t, "status", "200", itoa(resp.StatusCode))
+		var s sessionapi.Session
+		if err := json.NewDecoder(resp.Body).Decode(&s); err != nil {
+			t.Fatal(err)
+		}
+		return s
+	}
+	// Decode the list generically to pin the wire key the control plane reads.
+	listItem := func() map[string]any {
+		resp, err := http.Get(srv.URL + "/api/sessions")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var raw struct {
+			Sessions []map[string]any `json:"sessions"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
+			t.Fatal(err)
+		}
+		if len(raw.Sessions) != 1 {
+			t.Fatalf("expected 1 session, got %d", len(raw.Sessions))
+		}
+		return raw.Sessions[0]
+	}
+
+	// No file: field absent from detail and list.
+	if s := getSession(); s.DashboardDoc != nil {
+		t.Fatalf("expected no dashboard_doc, got %q", *s.DashboardDoc)
+	}
+	if _, ok := listItem()["dashboard_doc"]; ok {
+		t.Fatal("dashboard_doc should be omitted from the list when absent")
+	}
+
+	// Present: served verbatim on detail and list.
+	doc := `root = Page("dd", "Test dashboard", [])`
+	docPath := filepath.Join(workspace, "dashboard.oui")
+	os.WriteFile(docPath, []byte(doc), 0o644)
+	if s := getSession(); s.DashboardDoc == nil || *s.DashboardDoc != doc {
+		t.Fatalf("dashboard_doc = %v, want %q", s.DashboardDoc, doc)
+	}
+	if got := listItem()["dashboard_doc"]; got != doc {
+		t.Fatalf("list dashboard_doc = %v, want %q", got, doc)
+	}
+
+	// Empty file: an explicit retraction — served as "".
+	os.WriteFile(docPath, []byte{}, 0o644)
+	if s := getSession(); s.DashboardDoc == nil || *s.DashboardDoc != "" {
+		t.Fatalf("empty dashboard_doc = %v, want present empty string", s.DashboardDoc)
+	}
+	if got, ok := listItem()["dashboard_doc"]; !ok || got != "" {
+		t.Fatalf("list empty dashboard_doc = %v (present=%v), want \"\"", got, ok)
+	}
+
+	// Oversized file: treated as absent.
+	os.WriteFile(docPath, make([]byte, (256<<10)+1), 0o644)
+	if s := getSession(); s.DashboardDoc != nil {
+		t.Fatal("oversized dashboard_doc should be treated as absent")
+	}
+}
+
 // --------- GET /api/sessions/{id}/events ------------------------------------------------------------------------------------------------------------------------------
 
 func TestEventsEmpty(t *testing.T) {

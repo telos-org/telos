@@ -971,6 +971,12 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 	}
 	applySessionEvidenceSummary(&s)
 
+	if activeWorkspaceExists {
+		if doc, ok := readDashboardDoc(activeWorkspacePath); ok {
+			s.DashboardDoc = &doc
+		}
+	}
+
 	return &s, nil
 }
 
@@ -2063,6 +2069,31 @@ func buildConfig(req SessionCreateRequest) SessionConfig {
 func fileExists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// dashboardDocFilename is the well-known workspace file where an agent
+// authors its OpenUI dashboard document; the cloud control plane mirrors it
+// onto the deployment record as dashboard_doc.
+const dashboardDocFilename = "dashboard.oui"
+
+// maxDashboardDocBytes matches the control plane's cap; larger files are
+// treated as absent rather than bloating every sessions response.
+const maxDashboardDocBytes = 256 << 10
+
+// readDashboardDoc reports the workspace dashboard doc. A present-but-empty
+// file is a meaningful value (it retracts a previously published doc), so the
+// boolean — not the string — signals absence.
+func readDashboardDoc(workspacePath string) (string, bool) {
+	path := filepath.Join(workspacePath, dashboardDocFilename)
+	info, err := os.Stat(path)
+	if err != nil || info.IsDir() || info.Size() > maxDashboardDocBytes {
+		return "", false
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", false
+	}
+	return string(data), true
 }
 
 func strPtr(s string) *string {
