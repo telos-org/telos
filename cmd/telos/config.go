@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"strings"
 	"text/tabwriter"
@@ -24,15 +25,23 @@ func cmdConfig(args []string) {
 		os.Exit(2)
 	}
 
-	effective := config.LoadConfig()
 	if flagNameSet(fs, "context") {
-		setContext(effective, *contextValue)
+		for _, name := range []string{config.APIEndpointEnv, config.AuthTokenEnv} {
+			if os.Getenv(name) != "" {
+				fmt.Fprintf(
+					os.Stderr,
+					"warning: %s is ignored when updating stored context\n",
+					name,
+				)
+			}
+		}
+		setContext(config.LoadStoredConfig(), *contextValue)
 		return
 	}
-	printConfig(effective)
+	printConfig(config.LoadConfig())
 }
 
-func setContext(effective *config.Config, value string) {
+func setContext(stored *config.Config, value string) {
 	if strings.TrimSpace(value) == "" {
 		fmt.Fprintln(
 			os.Stderr,
@@ -40,20 +49,26 @@ func setContext(effective *config.Config, value string) {
 		)
 		os.Exit(2)
 	}
-	client, err := configClient(effective)
+	client, err := configClient(stored)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	organization, err := client.ResolveContext(value)
+	account, err := client.AccountBootstrap()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	organization, err := account.ResolveContext(value)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
-	stored := config.LoadStoredConfig()
-	if strings.TrimSpace(value) == "personal" {
+	contextName := organization.ContextName()
+	if organization.ID == account.PersonalOrgID {
 		stored.Context = ""
+		contextName = "personal"
 	} else {
 		stored.Context = organization.ID
 	}
@@ -61,7 +76,7 @@ func setContext(effective *config.Config, value string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	fmt.Printf("context set to %s\n", organization.ContextName())
+	fmt.Printf("context set to %s\n", contextName)
 	if os.Getenv(config.ContextEnv) != "" {
 		fmt.Fprintf(
 			os.Stderr,
@@ -80,22 +95,42 @@ func printConfig(cfg *config.Config) {
 	if contextName == "" {
 		contextName = "personal"
 	}
+	authentication := "not configured"
+	var statusError error
 	if cfg.AuthToken != "" {
-		if client, err := configClient(cfg); err == nil {
-			if organization, err := client.ResolveContext(cfg.Context); err == nil {
-				contextName = organization.ContextName()
+		authentication = "unavailable"
+		client, err := configClient(cfg)
+		if err != nil {
+			statusError = err
+		} else {
+			account, err := client.AccountBootstrap()
+			if err != nil {
+				statusError = err
+				if cloud.IsStatus(err, http.StatusUnauthorized) ||
+					cloud.IsStatus(err, http.StatusForbidden) {
+					authentication = "invalid"
+				}
+			} else {
+				authentication = "valid"
+				organization, err := account.ResolveContext(cfg.Context)
+				if err != nil {
+					statusError = err
+				} else if organization.ID == account.PersonalOrgID {
+					contextName = "personal"
+				} else {
+					contextName = organization.ContextName()
+				}
 			}
 		}
 	}
 
-	authenticated := "no"
-	if cfg.AuthToken != "" {
-		authenticated = "yes"
-	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(w, "Endpoint\t%s\n", endpoint)
-	fmt.Fprintf(w, "Authenticated\t%s\n", authenticated)
+	fmt.Fprintf(w, "Authentication\t%s\n", authentication)
 	fmt.Fprintf(w, "Context\t%s\n", contextName)
+	if statusError != nil {
+		fmt.Fprintf(w, "Error\t%v\n", statusError)
+	}
 	_ = w.Flush()
 }
 
