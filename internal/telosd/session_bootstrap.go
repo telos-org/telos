@@ -160,13 +160,20 @@ func (r sessionBootstrapReconciler) packagePathForDigest(digest string) (string,
 }
 
 func cloudSessionModel() string {
+	bifrostEnabled := os.Getenv(cloudBifrostEnabledEnvVar) == "1"
 	if model := strings.TrimSpace(os.Getenv("TELOS_CLOUD_DEFAULT_MODEL")); model != "" {
+		// Cloud persists the resolved model on each deployment. Translate the
+		// former hosted default during a rolling upgrade so a runtime with the
+		// Bifrost extension cannot be pinned to the removed Sail provider.
+		if bifrostEnabled && model == legacyCloudSessionModel {
+			return bifrostCloudSessionModel
+		}
 		return model
 	}
 	// The provider extension and its virtual key are deployed by Cloud. Keep
 	// standalone/older hosted runtimes on the known legacy provider until that
 	// deployment explicitly opts them in.
-	if os.Getenv(cloudBifrostEnabledEnvVar) == "1" {
+	if bifrostEnabled {
 		return bifrostCloudSessionModel
 	}
 	return legacyCloudSessionModel

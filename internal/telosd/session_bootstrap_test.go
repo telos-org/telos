@@ -159,6 +159,25 @@ func TestCloudSessionModelUsesBifrostFallback(t *testing.T) {
 	}
 }
 
+func TestCloudSessionModelMigratesLegacyOverrideWithBifrost(t *testing.T) {
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", legacyCloudSessionModel)
+	t.Setenv(cloudBifrostEnabledEnvVar, "1")
+
+	if got := cloudSessionModel(); got != bifrostCloudSessionModel {
+		t.Fatalf("cloudSessionModel = %q want %q", got, bifrostCloudSessionModel)
+	}
+}
+
+func TestCloudSessionModelPreservesCustomOverrideWithBifrost(t *testing.T) {
+	const customModel = "telos-bifrost/standard-compaction"
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", customModel)
+	t.Setenv(cloudBifrostEnabledEnvVar, "1")
+
+	if got := cloudSessionModel(); got != customModel {
+		t.Fatalf("cloudSessionModel = %q want %q", got, customModel)
+	}
+}
+
 func TestCloudSessionModelUsesLegacyFallbackWithoutBifrostExtension(t *testing.T) {
 	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "")
 	t.Setenv(cloudBifrostEnabledEnvVar, "")
