@@ -70,7 +70,7 @@ func setContext(stored *config.Config, value string) {
 		stored.Context = ""
 		contextName = "personal"
 	} else {
-		stored.Context = organization.ID
+		stored.Context = contextName
 	}
 	if err := config.SaveConfig(stored); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
