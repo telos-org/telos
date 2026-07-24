@@ -35,11 +35,45 @@ func TestCmdConfigSetsContextAndPreservesLogin(t *testing.T) {
 		t.Fatalf("output = %q", out)
 	}
 	stored := config.LoadStoredConfig()
-	if stored.Context != "org_telos" {
+	if stored.Context != "@telos" {
 		t.Fatalf("context = %q", stored.Context)
+	}
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), "@telos") ||
+		strings.Contains(string(data), "org_telos") {
+		t.Fatalf("stored config is not handle-based:\n%s", data)
 	}
 	if stored.APIEndpoint != server.URL || stored.AuthToken != "test-token" {
 		t.Fatalf("login config changed: %#v", stored)
+	}
+}
+
+func TestCmdConfigNormalizesOrganizationIDToHandle(t *testing.T) {
+	server := accountBootstrapServer(t)
+	defer server.Close()
+
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv(config.ConfigPathEnv, configPath)
+	t.Setenv(config.APIEndpointEnv, "")
+	t.Setenv(config.AuthTokenEnv, "")
+	t.Setenv(config.ContextEnv, "")
+	if err := config.SaveConfig(&config.Config{
+		APIEndpoint: server.URL,
+		AuthToken:   "test-token",
+		Context:     "org_telos",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	captureStdout(t, func() {
+		cmdConfig([]string{"--context", "org_telos"})
+	})
+
+	if got := config.LoadStoredConfig().Context; got != "@telos" {
+		t.Fatalf("context = %q", got)
 	}
 }
 
@@ -75,7 +109,7 @@ func TestCmdConfigUsesStoredLoginForContextResolution(t *testing.T) {
 	})
 
 	stored := config.LoadStoredConfig()
-	if stored.Context != "org_telos" {
+	if stored.Context != "@telos" {
 		t.Fatalf("context = %q", stored.Context)
 	}
 	if stored.APIEndpoint != storedServer.URL || stored.AuthToken != "test-token" {
