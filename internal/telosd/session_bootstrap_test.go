@@ -103,8 +103,8 @@ func TestSessionBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	if store.creates[0].CloudSessionName != "auth" {
 		t.Fatalf("CloudSessionName = %q want auth", store.creates[0].CloudSessionName)
 	}
-	if store.creates[0].Model != fallbackCloudSessionModel {
-		t.Fatalf("Model = %q want %q", store.creates[0].Model, fallbackCloudSessionModel)
+	if store.creates[0].Model != legacyCloudSessionModel {
+		t.Fatalf("Model = %q want %q", store.creates[0].Model, legacyCloudSessionModel)
 	}
 	if store.creates[0].AgentTimeoutSec != nil {
 		t.Fatalf("AgentTimeoutSec should not default for controller bootstrap: %v", store.creates[0].AgentTimeoutSec)
@@ -143,9 +143,46 @@ func TestSessionBootstrapMatchesCloudSessionNameBeforeSpecName(t *testing.T) {
 }
 
 func TestCloudSessionModelUsesEnvOverride(t *testing.T) {
-	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "sail-research/custom")
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "telos-bifrost/standard-compaction")
 
-	if got := cloudSessionModel(); got != "sail-research/custom" {
+	if got := cloudSessionModel(); got != "telos-bifrost/standard-compaction" {
+		t.Fatalf("cloudSessionModel = %q", got)
+	}
+}
+
+func TestCloudSessionModelUsesBifrostFallback(t *testing.T) {
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "")
+	t.Setenv(cloudBifrostEnabledEnvVar, "1")
+
+	if got := cloudSessionModel(); got != bifrostCloudSessionModel {
+		t.Fatalf("cloudSessionModel = %q", got)
+	}
+}
+
+func TestCloudSessionModelMigratesLegacyOverrideWithBifrost(t *testing.T) {
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", legacyCloudSessionModel)
+	t.Setenv(cloudBifrostEnabledEnvVar, "1")
+
+	if got := cloudSessionModel(); got != bifrostCloudSessionModel {
+		t.Fatalf("cloudSessionModel = %q want %q", got, bifrostCloudSessionModel)
+	}
+}
+
+func TestCloudSessionModelPreservesCustomOverrideWithBifrost(t *testing.T) {
+	const customModel = "telos-bifrost/standard-compaction"
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", customModel)
+	t.Setenv(cloudBifrostEnabledEnvVar, "1")
+
+	if got := cloudSessionModel(); got != customModel {
+		t.Fatalf("cloudSessionModel = %q want %q", got, customModel)
+	}
+}
+
+func TestCloudSessionModelUsesLegacyFallbackWithoutBifrostExtension(t *testing.T) {
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "")
+	t.Setenv(cloudBifrostEnabledEnvVar, "")
+
+	if got := cloudSessionModel(); got != legacyCloudSessionModel {
 		t.Fatalf("cloudSessionModel = %q", got)
 	}
 }
