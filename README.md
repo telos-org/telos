@@ -102,8 +102,10 @@ Cloud commands run in the configured personal, team, or platform context.
 Use `telos config` to show the active context and `telos config --context
 @your-org` to switch it. Omit the context configuration to use your personal
 context; `telos config --context personal` clears a stored organization
-selection. `TELOS_CONTEXT` overrides the stored context for a single command
-or process:
+selection. The stored configuration keeps the user-facing handle as
+`context: "@your-org"`; the CLI resolves its internal organization ID when
+sending requests. `TELOS_CONTEXT` overrides the stored context for a single
+command or process:
 
 ```bash
 TELOS_CONTEXT=@your-org telos list --cloud
