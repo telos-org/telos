@@ -1330,6 +1330,28 @@ func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
 	}
 }
 
+func TestFollowCloudSessionLogsExitsCleanWhenSessionDeleted(t *testing.T) {
+	// The control plane hard-deletes deployments once teardown completes:
+	// both /logs and the session GET 404. The follow loop should treat that
+	// as a clean end of the session, not an error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	err := streamCloudSessionLogs(
+		cloud.NewClient(srv.URL, "test-token"),
+		"sess_123",
+		&out,
+		func(time.Duration) {},
+		false,
+	)
+	if err != nil {
+		t.Fatalf("streamCloudSessionLogs after delete: %v", err)
+	}
+}
+
 func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 	t.Setenv("TELOS_RUNTIME", "")
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
