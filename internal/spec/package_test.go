@@ -522,7 +522,181 @@ func TestCompileUsesPackageManifestInjectedRequiredSkill(t *testing.T) {
 		t.Fatal("missing manifest-injected verify-quality skill")
 	}
 	if len(compiled.RequiredVerifierSkills) != 0 {
-		t.Fatalf("package manifest should not mark required verifier skills: got %#v", compiled.RequiredVerifierSkills)
+		t.Fatalf("unstarred package manifest locks should not mark required verifier skills: got %#v", compiled.RequiredVerifierSkills)
+	}
+}
+
+func TestBuildApplyPackageMarksStarredSkillLocks(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	data := []byte("---\nversion: 0.1.0\nname: package-starred\nplatform: cloud\nskills:\n  - alpha*\n  - beta\n---\nBuild the package.\n")
+	if err := os.WriteFile(specPath, data, 0o644); err != nil {
+		t.Fatalf("write spec: %v", err)
+	}
+	writePackageTestSkill(t, filepath.Join(dir, "skills"), "alpha", map[string]string{
+		"SKILL.md": "---\nname: alpha\n---\nUse alpha.",
+	})
+	writePackageTestSkill(t, filepath.Join(dir, "skills"), "beta", map[string]string{
+		"SKILL.md": "---\nname: beta\n---\nUse beta.",
+	})
+
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	pkg, err := BuildApplyPackage(compiled)
+	if err != nil {
+		t.Fatalf("BuildApplyPackage: %v", err)
+	}
+
+	if !pkg.Manifest.Skills["alpha"].Starred {
+		t.Fatalf("starred skill lock not marked: %#v", pkg.Manifest.Skills["alpha"])
+	}
+	if pkg.Manifest.Skills["beta"].Starred {
+		t.Fatalf("unstarred skill lock marked: %#v", pkg.Manifest.Skills["beta"])
+	}
+
+	entries := tarEntries(t, pkg.Bytes)
+	var manifest map[string]any
+	if err := json.Unmarshal(entries["manifest.json"], &manifest); err != nil {
+		t.Fatalf("manifest.json: %v", err)
+	}
+	rawSkills := manifest["skills"].(map[string]any)
+	alpha := rawSkills["alpha"].(map[string]any)
+	if alpha["starred"] != true {
+		t.Fatalf("manifest alpha lock missing starred: %#v", alpha)
+	}
+	beta := rawSkills["beta"].(map[string]any)
+	if _, ok := beta["starred"]; ok {
+		t.Fatalf("unstarred lock should omit starred key: %#v", beta)
+	}
+
+	// The starred flag is provenance metadata, not package identity.
+	flipped := make(map[string]ApplyPackageSkillLock, len(pkg.Manifest.Skills))
+	for name, lock := range pkg.Manifest.Skills {
+		lock.Starred = !lock.Starred
+		flipped[name] = lock
+	}
+	if got := digestPackage(pkg.Manifest.Spec.Digest, flipped); got != pkg.Digest {
+		t.Fatalf("package digest depends on starred flag: %s != %s", got, pkg.Digest)
+	}
+
+	// The push-time rebuild with registry refs keeps the marker.
+	refPkg, err := BuildApplyPackageWithSkillRefs(compiled, map[string]string{
+		"alpha": "@user-abc/alpha:0.1.0",
+		"beta":  "@user-abc/beta:0.1.0",
+	})
+	if err != nil {
+		t.Fatalf("BuildApplyPackageWithSkillRefs: %v", err)
+	}
+	if !refPkg.Manifest.Skills["alpha"].Starred || refPkg.Manifest.Skills["beta"].Starred {
+		t.Fatalf("ref rebuild lost starred markers: %#v", refPkg.Manifest.Skills)
+	}
+}
+
+func TestApplyPackageSkillLockUnmarshalStarred(t *testing.T) {
+	var lock ApplyPackageSkillLock
+	if err := json.Unmarshal([]byte(`{"digest":"sha256:abc","ref":"@a/b:1.0.0","starred":true}`), &lock); err != nil {
+		t.Fatalf("unmarshal starred lock: %v", err)
+	}
+	if !lock.Starred || lock.Digest != "sha256:abc" || lock.Ref != "@a/b:1.0.0" {
+		t.Fatalf("starred lock round-trip: %#v", lock)
+	}
+	if err := json.Unmarshal([]byte(`{"digest":"sha256:abc"}`), &lock); err != nil {
+		t.Fatalf("unmarshal plain lock: %v", err)
+	}
+	if lock.Starred {
+		t.Fatalf("plain lock should not be starred: %#v", lock)
+	}
+	lock.Starred = true
+	if err := json.Unmarshal([]byte(`"sha256:abc"`), &lock); err != nil {
+		t.Fatalf("unmarshal legacy lock: %v", err)
+	}
+	if lock.Starred {
+		t.Fatalf("legacy string lock should reset starred: %#v", lock)
+	}
+}
+
+func TestCompileHonorsPackageManifestStarredSkill(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	if err := os.WriteFile(
+		specPath,
+		[]byte("---\nversion: 0.1.0\nname: manifest-starred-skill\nplatform: cloud\n---\nUse injected skills.\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	writePackageTestSkill(t, filepath.Join(dir, "skills"), "verify-quality", map[string]string{
+		"SKILL.md": "---\nname: verify-quality\n---\nVerify quality.",
+	})
+	manifest := ApplyPackageManifest{
+		SchemaVersion: ApplyPackageSchemaVersion,
+		Spec:          ApplyPackageSpecEntry{Digest: "sha256:spec"},
+		Skills: map[string]ApplyPackageSkillLock{
+			"verify-quality": {
+				Digest:  "sha256:skill",
+				Ref:     "@telos/verify-quality:1.0.0",
+				Starred: true,
+			},
+		},
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled, err := CompileEnvironmentWithBase(specPath, dir)
+	if err != nil {
+		t.Fatalf("CompileEnvironmentWithBase: %v", err)
+	}
+
+	if len(compiled.RequiredVerifierSkills) != 1 || compiled.RequiredVerifierSkills[0].Name != "verify-quality" {
+		t.Fatalf("starred manifest lock should mark required verifier skill: got %#v", compiled.RequiredVerifierSkills)
+	}
+}
+
+func TestCompileSpecDeclarationOverridesManifestStar(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	if err := os.WriteFile(
+		specPath,
+		[]byte("---\nversion: 0.1.0\nname: spec-wins-star\nplatform: cloud\nskills:\n  - verify-quality\n---\nSpec declares it unstarred.\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	writePackageTestSkill(t, filepath.Join(dir, "skills"), "verify-quality", map[string]string{
+		"SKILL.md": "---\nname: verify-quality\n---\nVerify quality.",
+	})
+	manifest := ApplyPackageManifest{
+		SchemaVersion: ApplyPackageSchemaVersion,
+		Spec:          ApplyPackageSpecEntry{Digest: "sha256:spec"},
+		Skills: map[string]ApplyPackageSkillLock{
+			"verify-quality": {
+				Digest:  "sha256:skill",
+				Starred: true,
+			},
+		},
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled, err := CompileEnvironmentWithBase(specPath, dir)
+	if err != nil {
+		t.Fatalf("CompileEnvironmentWithBase: %v", err)
+	}
+
+	if len(compiled.RequiredVerifierSkills) != 0 {
+		t.Fatalf("spec-declared unstarred skill must override stale manifest star: got %#v", compiled.RequiredVerifierSkills)
 	}
 }
 
