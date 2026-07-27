@@ -2017,7 +2017,14 @@ func digestApplyPackage(data []byte, manifest *spec.ApplyPackageManifest) string
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		writeSpecDigestPart(h, name)
+		// Mirrors digestPackage: a starred (required-rubric) lock is part of
+		// package identity; the marker fires only when set so pre-starred
+		// digests stay stable.
+		if manifest.Skills[name].Starred {
+			writeSpecDigestPart(h, name+"*")
+		} else {
+			writeSpecDigestPart(h, name)
+		}
 		writeSpecDigestPart(h, manifest.Skills[name].Digest)
 	}
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))

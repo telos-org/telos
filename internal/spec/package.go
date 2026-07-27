@@ -784,7 +784,15 @@ func digestPackage(specDigest string, skills map[string]ApplyPackageSkillLock) s
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		writeDigestPart(h, name)
+		// Starred marks a required evaluation rubric — runtime semantics, so
+		// it is part of package identity. The marker perturbs the hash only
+		// when set (skill names cannot contain '*'), keeping every previously
+		// published digest stable.
+		if skills[name].Starred {
+			writeDigestPart(h, name+"*")
+		} else {
+			writeDigestPart(h, name)
+		}
 		writeDigestPart(h, skills[name].Digest)
 	}
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))

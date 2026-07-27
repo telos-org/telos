@@ -571,14 +571,19 @@ func TestBuildApplyPackageMarksStarredSkillLocks(t *testing.T) {
 		t.Fatalf("unstarred lock should omit starred key: %#v", beta)
 	}
 
-	// The starred flag is provenance metadata, not package identity.
+	// Starred changes runtime semantics, so it is part of package identity:
+	// flipping a flag must change the digest, while identical locks digest
+	// deterministically.
+	if got := digestPackage(pkg.Manifest.Spec.Digest, pkg.Manifest.Skills); got != pkg.Digest {
+		t.Fatalf("digest not deterministic for identical locks: %s != %s", got, pkg.Digest)
+	}
 	flipped := make(map[string]ApplyPackageSkillLock, len(pkg.Manifest.Skills))
 	for name, lock := range pkg.Manifest.Skills {
 		lock.Starred = !lock.Starred
 		flipped[name] = lock
 	}
-	if got := digestPackage(pkg.Manifest.Spec.Digest, flipped); got != pkg.Digest {
-		t.Fatalf("package digest depends on starred flag: %s != %s", got, pkg.Digest)
+	if got := digestPackage(pkg.Manifest.Spec.Digest, flipped); got == pkg.Digest {
+		t.Fatalf("package digest must include the starred flag: %s", got)
 	}
 
 	// The push-time rebuild with registry refs keeps the marker.
@@ -697,6 +702,53 @@ func TestCompileSpecDeclarationOverridesManifestStar(t *testing.T) {
 
 	if len(compiled.RequiredVerifierSkills) != 0 {
 		t.Fatalf("spec-declared unstarred skill must override stale manifest star: got %#v", compiled.RequiredVerifierSkills)
+	}
+}
+
+func TestCompileSpecDeclarationOverridesManifestStarByDeclaredName(t *testing.T) {
+	// The spec declares the skill through a directory whose name differs from
+	// the SKILL.md-declared name; the stale manifest star is keyed by the
+	// declared name. The override must match on resolved names, not paths.
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	if err := os.WriteFile(
+		specPath,
+		[]byte("---\nversion: 0.1.0\nname: spec-wins-star-alias\nplatform: cloud\nskills:\n  - local-review\n---\nDeclared unstarred under an alias directory.\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	writePackageTestSkill(t, filepath.Join(dir, "skills"), "local-review", map[string]string{
+		"SKILL.md": "---\nname: verify-security\n---\nReview security.",
+	})
+	writePackageTestSkill(t, filepath.Join(dir, "skills"), "verify-security", map[string]string{
+		"SKILL.md": "---\nname: verify-security\n---\nReview security.",
+	})
+	manifest := ApplyPackageManifest{
+		SchemaVersion: ApplyPackageSchemaVersion,
+		Spec:          ApplyPackageSpecEntry{Digest: "sha256:spec"},
+		Skills: map[string]ApplyPackageSkillLock{
+			"verify-security": {
+				Digest:  "sha256:skill",
+				Starred: true,
+			},
+		},
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled, err := CompileEnvironmentWithBase(specPath, dir)
+	if err != nil {
+		t.Fatalf("CompileEnvironmentWithBase: %v", err)
+	}
+
+	if len(compiled.RequiredVerifierSkills) != 0 {
+		t.Fatalf("spec declaration must override the manifest star by resolved name: got %#v", compiled.RequiredVerifierSkills)
 	}
 }
 
