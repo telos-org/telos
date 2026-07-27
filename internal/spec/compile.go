@@ -76,32 +76,6 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 
 	packageSkillPaths, packageRequiredPaths, hasPackageManifest := packageManifestSkillPaths(compileBaseDir)
 
-	// Spec text is authoritative for skills it declares: a manifest star only
-	// applies to skills the spec itself does not list, so un-starring an
-	// entry in SPEC.md always wins over a previously recorded lock.
-	if len(packageRequiredPaths) > 0 && len(env.SkillPaths) > 0 {
-		declaredAbs := map[string]bool{}
-		declaredNames := map[string]bool{}
-		for _, path := range env.SkillPaths {
-			if abs, err := filepath.Abs(path); err == nil {
-				declaredAbs[abs] = true
-			}
-			declaredNames[filepath.Base(path)] = true
-		}
-		var filtered []string
-		for _, path := range packageRequiredPaths {
-			abs, err := filepath.Abs(path)
-			if err != nil {
-				continue
-			}
-			if declaredAbs[abs] || declaredNames[filepath.Base(path)] {
-				continue
-			}
-			filtered = append(filtered, path)
-		}
-		packageRequiredPaths = filtered
-	}
-
 	// Resolve skills
 	var declared []*Skill
 	skillPaths := appendMissingPaths(env.SkillPaths, packageSkillPaths)
@@ -111,6 +85,38 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 			return nil, err
 		}
 		annotateSkillSourceRefs(declared, env.SkillSourceRefs)
+	}
+
+	// Spec text is authoritative for skills it declares: a manifest star only
+	// applies to skills the spec itself does not list, so un-starring an
+	// entry in SPEC.md always wins over a previously recorded lock. Both
+	// sides are matched by resolved skill name — SKILL.md may declare a name
+	// that differs from its directory, so paths alone cannot be trusted.
+	if len(packageRequiredPaths) > 0 && len(env.SkillPaths) > 0 {
+		specDeclaredAbs := map[string]bool{}
+		for _, path := range env.SkillPaths {
+			if abs, absErr := filepath.Abs(path); absErr == nil {
+				specDeclaredAbs[abs] = true
+			}
+		}
+		specDeclaredNames := map[string]bool{}
+		for _, s := range declared {
+			if abs, absErr := filepath.Abs(s.Path); absErr == nil && specDeclaredAbs[abs] {
+				specDeclaredNames[s.Name] = true
+			}
+		}
+		packageRequired, resolveErr := ResolveSkillsFromPaths(packageRequiredPaths)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		var filtered []string
+		for _, s := range packageRequired {
+			if specDeclaredNames[s.Name] {
+				continue
+			}
+			filtered = append(filtered, s.Path)
+		}
+		packageRequiredPaths = filtered
 	}
 	var required []*Skill
 	requiredPaths := appendMissingPaths(env.RequiredVerifierSkillPaths, packageRequiredPaths)
