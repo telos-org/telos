@@ -249,7 +249,9 @@ func packageManifestSkillPaths(baseDir string) ([]string, []string, bool) {
 			continue
 		}
 		paths = append(paths, path)
-		if lock.Starred {
+		// A schema-1 starred lock is invalid (see validateApplyPackageFiles):
+		// ignore the flag rather than honor a star old readers would drop.
+		if lock.Starred && manifest.SchemaVersion >= ApplyPackageSchemaVersionStarred {
 			starred = append(starred, path)
 		}
 	}
