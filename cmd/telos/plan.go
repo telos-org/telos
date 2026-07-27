@@ -70,6 +70,9 @@ func cmdPlan(args []string) {
 			"namespace":    compiled.Namespace,
 			"lineage":      compiled.Lineage,
 			"skills":       skillNames(compiled.Skills),
+			"required_verifier_skills": skillNames(
+				compiled.RequiredVerifierSkills,
+			),
 		},
 		"session": map[string]interface{}{
 			"lineage":          sessionLineage,
@@ -108,7 +111,7 @@ func printPlanPreview(
 	}
 	printSummaryField(out, "Hash", compiled.ContentHash)
 	if len(compiled.Skills) > 0 {
-		printSummaryField(out, "Skills", strings.Join(skillNames(compiled.Skills), ", "))
+		printSummaryField(out, "Skills", strings.Join(skillDisplayNames(compiled), ", "))
 	}
 }
 
@@ -116,6 +119,24 @@ func skillNames(skills []*spec.Skill) []string {
 	var names []string
 	for _, s := range skills {
 		names = append(names, s.Name)
+	}
+	return names
+}
+
+// skillDisplayNames marks required verifier skills with the same trailing
+// star the spec frontmatter uses to declare them.
+func skillDisplayNames(compiled *spec.CompiledEnvironment) []string {
+	required := map[string]bool{}
+	for _, s := range compiled.RequiredVerifierSkills {
+		required[s.Name] = true
+	}
+	var names []string
+	for _, s := range compiled.Skills {
+		name := s.Name
+		if required[name] {
+			name += "*"
+		}
+		names = append(names, name)
 	}
 	return names
 }

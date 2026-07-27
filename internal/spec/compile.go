@@ -76,6 +76,32 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 
 	packageSkillPaths, packageRequiredPaths, hasPackageManifest := packageManifestSkillPaths(compileBaseDir)
 
+	// Spec text is authoritative for skills it declares: a manifest star only
+	// applies to skills the spec itself does not list, so un-starring an
+	// entry in SPEC.md always wins over a previously recorded lock.
+	if len(packageRequiredPaths) > 0 && len(env.SkillPaths) > 0 {
+		declaredAbs := map[string]bool{}
+		declaredNames := map[string]bool{}
+		for _, path := range env.SkillPaths {
+			if abs, err := filepath.Abs(path); err == nil {
+				declaredAbs[abs] = true
+			}
+			declaredNames[filepath.Base(path)] = true
+		}
+		var filtered []string
+		for _, path := range packageRequiredPaths {
+			abs, err := filepath.Abs(path)
+			if err != nil {
+				continue
+			}
+			if declaredAbs[abs] || declaredNames[filepath.Base(path)] {
+				continue
+			}
+			filtered = append(filtered, path)
+		}
+		packageRequiredPaths = filtered
+	}
+
 	// Resolve skills
 	var declared []*Skill
 	skillPaths := appendMissingPaths(env.SkillPaths, packageSkillPaths)
@@ -207,7 +233,8 @@ func packageManifestSkillPaths(baseDir string) ([]string, []string, bool) {
 		return nil, nil, false
 	}
 	var paths []string
-	for name := range manifest.Skills {
+	var starred []string
+	for name, lock := range manifest.Skills {
 		if !dnsRE.MatchString(name) {
 			continue
 		}
@@ -216,8 +243,11 @@ func packageManifestSkillPaths(baseDir string) ([]string, []string, bool) {
 			continue
 		}
 		paths = append(paths, path)
+		if lock.Starred {
+			starred = append(starred, path)
+		}
 	}
-	return paths, nil, true
+	return paths, starred, true
 }
 
 func isApplyPackageManifest(manifest ApplyPackageManifest) bool {

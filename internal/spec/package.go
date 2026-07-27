@@ -37,8 +37,9 @@ type ApplyPackageSkillEntry struct {
 }
 
 type ApplyPackageSkillLock struct {
-	Digest string `json:"digest"`
-	Ref    string `json:"ref,omitempty"`
+	Digest  string `json:"digest"`
+	Ref     string `json:"ref,omitempty"`
+	Starred bool   `json:"starred,omitempty"`
 }
 
 func (lock *ApplyPackageSkillLock) UnmarshalJSON(data []byte) error {
@@ -46,17 +47,20 @@ func (lock *ApplyPackageSkillLock) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &digest); err == nil {
 		lock.Digest = digest
 		lock.Ref = ""
+		lock.Starred = false
 		return nil
 	}
 	var raw struct {
-		Digest string `json:"digest"`
-		Ref    string `json:"ref"`
+		Digest  string `json:"digest"`
+		Ref     string `json:"ref"`
+		Starred bool   `json:"starred"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	lock.Digest = raw.Digest
 	lock.Ref = raw.Ref
+	lock.Starred = raw.Starred
 	return nil
 }
 
@@ -139,10 +143,16 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 		packageFiles = append(packageFiles, files...)
 	}
 
+	requiredNames := make(map[string]bool, len(compiled.RequiredVerifierSkills))
+	for _, skill := range compiled.RequiredVerifierSkills {
+		if skill != nil {
+			requiredNames[skill.Name] = true
+		}
+	}
 	manifest := ApplyPackageManifest{
 		SchemaVersion: ApplyPackageSchemaVersion,
 		Spec:          specEntry,
-		Skills:        skillLockMap(skillEntries),
+		Skills:        skillLockMap(skillEntries, requiredNames),
 	}
 	packageDigest := digestPackage(specEntry.Digest, manifest.Skills)
 
@@ -715,12 +725,13 @@ func digestSkill(name string, files []ApplyPackageFileEntry) string {
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }
 
-func skillLockMap(skills []ApplyPackageSkillEntry) map[string]ApplyPackageSkillLock {
+func skillLockMap(skills []ApplyPackageSkillEntry, requiredNames map[string]bool) map[string]ApplyPackageSkillLock {
 	out := make(map[string]ApplyPackageSkillLock, len(skills))
 	for _, skill := range skills {
 		out[skill.Name] = ApplyPackageSkillLock{
-			Digest: skill.Digest,
-			Ref:    strings.TrimSpace(skill.Ref),
+			Digest:  skill.Digest,
+			Ref:     strings.TrimSpace(skill.Ref),
+			Starred: requiredNames[skill.Name],
 		}
 	}
 	return out
