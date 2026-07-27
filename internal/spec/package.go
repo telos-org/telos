@@ -409,6 +409,20 @@ func validateApplyPackageFilesWithMode(manifest *ApplyPackageManifest, files map
 	if !applyPackageSchemaSupported(manifest.SchemaVersion) {
 		return fmt.Errorf("unsupported apply package schema_version %d", manifest.SchemaVersion)
 	}
+	if manifest.SchemaVersion < ApplyPackageSchemaVersionStarred {
+		for _, lock := range manifest.Skills {
+			if lock.Starred {
+				// Mirrors the Cloud publish rule: a schema-1 starred lock
+				// would be silently dropped (and its digest mis-derived) by
+				// pre-starred readers, so the combination is invalid even for
+				// locally supplied packages that never pass through Cloud.
+				return fmt.Errorf(
+					"starred skill locks require schema_version %d",
+					ApplyPackageSchemaVersionStarred,
+				)
+			}
+		}
+	}
 	specFile, ok := files["SPEC.md"]
 	if !ok {
 		return fmt.Errorf("apply package missing SPEC.md")
