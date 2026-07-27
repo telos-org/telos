@@ -257,7 +257,7 @@ func packageManifestSkillPaths(baseDir string) ([]string, []string, bool) {
 }
 
 func isApplyPackageManifest(manifest ApplyPackageManifest) bool {
-	return manifest.SchemaVersion == ApplyPackageSchemaVersion &&
+	return applyPackageSchemaSupported(manifest.SchemaVersion) &&
 		strings.TrimSpace(manifest.Spec.Digest) != "" &&
 		manifest.Skills != nil
 }

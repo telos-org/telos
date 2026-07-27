@@ -18,6 +18,28 @@ import (
 
 const ApplyPackageSchemaVersion = 1
 
+// ApplyPackageSchemaVersionStarred gates manifests whose skill locks carry the
+// starred (required-rubric) flag. Starred locks change runtime semantics and
+// are folded into the package digest; older runtimes would silently drop the
+// unknown field and mis-derive the digest, so those packages declare a schema
+// version that pre-starred readers reject outright ("unsupported apply
+// package schema_version") — an actionable upgrade signal instead of a
+// baffling digest mismatch on version-pinned deployments.
+const ApplyPackageSchemaVersionStarred = 2
+
+func applyPackageSchemaSupported(version int) bool {
+	return version == ApplyPackageSchemaVersion || version == ApplyPackageSchemaVersionStarred
+}
+
+func applyPackageSchemaVersionFor(skills map[string]ApplyPackageSkillLock) int {
+	for _, lock := range skills {
+		if lock.Starred {
+			return ApplyPackageSchemaVersionStarred
+		}
+	}
+	return ApplyPackageSchemaVersion
+}
+
 // ApplyPackage is an immutable bundle of the root spec and resolved skills.
 type ApplyPackage struct {
 	Digest   string
@@ -149,12 +171,13 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 			requiredNames[skill.Name] = true
 		}
 	}
+	skillLocks := skillLockMap(skillEntries, requiredNames)
 	manifest := ApplyPackageManifest{
-		SchemaVersion: ApplyPackageSchemaVersion,
+		SchemaVersion: applyPackageSchemaVersionFor(skillLocks),
 		Spec:          specEntry,
-		Skills:        skillLockMap(skillEntries, requiredNames),
+		Skills:        skillLocks,
 	}
-	packageDigest := digestPackage(specEntry.Digest, manifest.Skills)
+	packageDigest := digestPackage(manifest.SchemaVersion, specEntry.Digest, manifest.Skills)
 
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -383,7 +406,7 @@ func validateApplyPackageFilesWithMode(manifest *ApplyPackageManifest, files map
 	if manifest == nil {
 		return fmt.Errorf("apply package missing manifest")
 	}
-	if manifest.SchemaVersion != ApplyPackageSchemaVersion {
+	if !applyPackageSchemaSupported(manifest.SchemaVersion) {
 		return fmt.Errorf("unsupported apply package schema_version %d", manifest.SchemaVersion)
 	}
 	specFile, ok := files["SPEC.md"]
@@ -774,9 +797,9 @@ func relativePathWithin(root string, path string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
-func digestPackage(specDigest string, skills map[string]ApplyPackageSkillLock) string {
+func digestPackage(schemaVersion int, specDigest string, skills map[string]ApplyPackageSkillLock) string {
 	h := sha256.New()
-	writeDigestPart(h, fmt.Sprintf("schema:%d", ApplyPackageSchemaVersion))
+	writeDigestPart(h, fmt.Sprintf("schema:%d", schemaVersion))
 	writeDigestPart(h, "spec:"+specDigest)
 	names := make([]string, 0, len(skills))
 	for name := range skills {
