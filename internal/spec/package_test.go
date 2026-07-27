@@ -555,6 +555,11 @@ func TestBuildApplyPackageMarksStarredSkillLocks(t *testing.T) {
 	if pkg.Manifest.Skills["beta"].Starred {
 		t.Fatalf("unstarred skill lock marked: %#v", pkg.Manifest.Skills["beta"])
 	}
+	// Starred packages declare the gated schema version so pre-starred
+	// runtimes reject them explicitly instead of mis-deriving the digest.
+	if pkg.Manifest.SchemaVersion != ApplyPackageSchemaVersionStarred {
+		t.Fatalf("starred package schema_version: got %d", pkg.Manifest.SchemaVersion)
+	}
 
 	entries := tarEntries(t, pkg.Bytes)
 	var manifest map[string]any
@@ -574,7 +579,7 @@ func TestBuildApplyPackageMarksStarredSkillLocks(t *testing.T) {
 	// Starred changes runtime semantics, so it is part of package identity:
 	// flipping a flag must change the digest, while identical locks digest
 	// deterministically.
-	if got := digestPackage(pkg.Manifest.Spec.Digest, pkg.Manifest.Skills); got != pkg.Digest {
+	if got := digestPackage(pkg.Manifest.SchemaVersion, pkg.Manifest.Spec.Digest, pkg.Manifest.Skills); got != pkg.Digest {
 		t.Fatalf("digest not deterministic for identical locks: %s != %s", got, pkg.Digest)
 	}
 	flipped := make(map[string]ApplyPackageSkillLock, len(pkg.Manifest.Skills))
@@ -582,7 +587,7 @@ func TestBuildApplyPackageMarksStarredSkillLocks(t *testing.T) {
 		lock.Starred = !lock.Starred
 		flipped[name] = lock
 	}
-	if got := digestPackage(pkg.Manifest.Spec.Digest, flipped); got == pkg.Digest {
+	if got := digestPackage(pkg.Manifest.SchemaVersion, pkg.Manifest.Spec.Digest, flipped); got == pkg.Digest {
 		t.Fatalf("package digest must include the starred flag: %s", got)
 	}
 
@@ -636,7 +641,7 @@ func TestCompileHonorsPackageManifestStarredSkill(t *testing.T) {
 		"SKILL.md": "---\nname: verify-quality\n---\nVerify quality.",
 	})
 	manifest := ApplyPackageManifest{
-		SchemaVersion: ApplyPackageSchemaVersion,
+		SchemaVersion: ApplyPackageSchemaVersionStarred,
 		Spec:          ApplyPackageSpecEntry{Digest: "sha256:spec"},
 		Skills: map[string]ApplyPackageSkillLock{
 			"verify-quality": {
@@ -678,7 +683,7 @@ func TestCompileSpecDeclarationOverridesManifestStar(t *testing.T) {
 		"SKILL.md": "---\nname: verify-quality\n---\nVerify quality.",
 	})
 	manifest := ApplyPackageManifest{
-		SchemaVersion: ApplyPackageSchemaVersion,
+		SchemaVersion: ApplyPackageSchemaVersionStarred,
 		Spec:          ApplyPackageSpecEntry{Digest: "sha256:spec"},
 		Skills: map[string]ApplyPackageSkillLock{
 			"verify-quality": {
@@ -725,7 +730,7 @@ func TestCompileSpecDeclarationOverridesManifestStarByDeclaredName(t *testing.T)
 		"SKILL.md": "---\nname: verify-security\n---\nReview security.",
 	})
 	manifest := ApplyPackageManifest{
-		SchemaVersion: ApplyPackageSchemaVersion,
+		SchemaVersion: ApplyPackageSchemaVersionStarred,
 		Spec:          ApplyPackageSpecEntry{Digest: "sha256:spec"},
 		Skills: map[string]ApplyPackageSkillLock{
 			"verify-security": {
