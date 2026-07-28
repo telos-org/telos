@@ -1217,9 +1217,12 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 
 		dataField, _ := raw["data"].(map[string]any)
 		timestamp, _ := raw["ts"].(string)
+		role, _ := raw["role"].(string)
 
 		ev := SessionEvent{
 			Event:       eventName,
+			EventSeq:    eventSeq(raw),
+			Role:        strPtr(role),
 			Timestamp:   strPtr(timestamp),
 			SpecIndex:   spec.Index,
 			SpecName:    strPtr(spec.Name),
@@ -1229,6 +1232,17 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 		events = append(events, ev)
 	}
 	return events, nil
+}
+
+// eventSeq lifts the evidence writer's sequence number; nil for lines that
+// predate seq-stamping.
+func eventSeq(raw map[string]any) *int64 {
+	value, ok := raw["event_seq"].(float64)
+	if !ok {
+		return nil
+	}
+	seq := int64(value)
+	return &seq
 }
 
 type evidenceSummary struct {

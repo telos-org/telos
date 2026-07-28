@@ -318,7 +318,12 @@ func SessionsFromListItems(items []SessionListItem) []Session {
 
 // SessionEvent represents one evidence event from a session.
 type SessionEvent struct {
-	Event       string         `json:"event"`
+	Event string `json:"event"`
+	// EventSeq is the evidence writer's dense 1-based sequence number —
+	// the durable cursor for pagination and stream resume. Nil for lines
+	// written before seq-stamping existed.
+	EventSeq    *int64         `json:"event_seq,omitempty"`
+	Role        *string        `json:"role,omitempty"`
 	Timestamp   *string        `json:"ts,omitempty"`
 	SessionID   *string        `json:"session_id,omitempty"`
 	SpecIndex   *int           `json:"spec_index,omitempty"`
