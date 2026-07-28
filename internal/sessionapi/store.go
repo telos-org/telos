@@ -880,7 +880,38 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 		}
 		events = append(events, specEvents...)
 	}
-	return events, nil
+	return normalizeEventSeqs(events), nil
+}
+
+// durableEventSeqs reports whether the projected seqs can serve as
+// session-wide cursors: every event carries one and the sequence strictly
+// increases across the whole list.
+func durableEventSeqs(events []SessionEvent) bool {
+	var last int64
+	for _, event := range events {
+		if event.EventSeq == nil || *event.EventSeq <= last {
+			return false
+		}
+		last = *event.EventSeq
+	}
+	return true
+}
+
+// normalizeEventSeqs strips event_seq from the projection unless it is
+// durable for the whole session. Two real shapes fail the check: evidence
+// mixing seq-less legacy lines with numbered ones, and multi-spec sessions,
+// whose concatenated per-file sequences restart at 1. Advertising either
+// would hand clients a cursor that filters the wrong events — stripping
+// makes the session read as legacy (full replays, ordinal windows), which
+// is always correct.
+func normalizeEventSeqs(events []SessionEvent) []SessionEvent {
+	if durableEventSeqs(events) {
+		return events
+	}
+	for i := range events {
+		events[i].EventSeq = nil
+	}
+	return events
 }
 
 func (fs *FileStore) emitSpecUpdate(event SpecUpdateEvent) {
