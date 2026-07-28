@@ -1848,6 +1848,83 @@ func TestEventsBadParams(t *testing.T) {
 	}
 }
 
+func TestEventsMixedSeqFileFallsBackToOrdinals(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "emx"))
+	// Seq-less lines ahead of numbered ones: the numbered seqs collide with
+	// the legacy lines' ordinal positions, so none of them are durable.
+	writeEventsFixture(t, store.Root, created.SessionID, "emx", []string{
+		`{"event":"legacy-one"}`,
+		`{"event":"legacy-two"}`,
+		`{"event_seq":1,"event":"new-one"}`,
+		`{"event_seq":2,"event":"new-two"}`,
+	})
+
+	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events")
+	if len(events) != 4 {
+		t.Fatalf("expected 4 events, got %d", len(events))
+	}
+	for i, event := range events {
+		if event.EventSeq != nil {
+			t.Fatalf("event %d: expected event_seq stripped, got %d", i, *event.EventSeq)
+		}
+	}
+	// Windows fall back to ordinals over the whole parsed list — monotonic,
+	// so ?after can never skip new events or replay old ones at the seam.
+	filtered := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?after=2")
+	assertEqual(t, "events", "new-one,new-two", eventNames(filtered))
+}
+
+func TestEventsMultiSpecSeqsNotAdvertised(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	// Two specs, each evidence file numbered independently from 1: the
+	// concatenation is not a usable cursor space, so no seqs may surface.
+	id := "sess_multispec"
+	sessionDir := filepath.Join(store.Root, id)
+	specs := []sessionapi.InitialManifestSpec{}
+	for i, name := range []string{"alpha", "beta"} {
+		specDir := filepath.Join(sessionDir, "specs", name)
+		if err := os.MkdirAll(specDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		evidencePath := filepath.Join(specDir, "evidence.jsonl")
+		lines := `{"event_seq":1,"event":"` + name + `-one"}` + "\n" +
+			`{"event_seq":2,"event":"` + name + `-two"}` + "\n"
+		if err := os.WriteFile(evidencePath, []byte(lines), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		specs = append(specs, sessionapi.InitialManifestSpec{
+			Index:        i,
+			Name:         name,
+			DirName:      name,
+			EvidencePath: &evidencePath,
+		})
+	}
+	m := sessionapi.ManifestFromInitial(sessionapi.InitialManifest{
+		SessionID: id,
+		CreatedAt: "2026-05-18T12:00:00.000Z",
+		SpecName:  "alpha",
+		Specs:     specs,
+	})
+	if err := sessionapi.WriteManifest(filepath.Join(sessionDir, "session.json"), &m); err != nil {
+		t.Fatal(err)
+	}
+
+	events := getEventsList(t, srv.URL+"/api/sessions/"+id+"/events")
+	if len(events) != 4 {
+		t.Fatalf("expected 4 events, got %d", len(events))
+	}
+	for i, event := range events {
+		if event.EventSeq != nil {
+			t.Fatalf("event %d: expected event_seq stripped, got %d", i, *event.EventSeq)
+		}
+	}
+}
+
 func TestEventsSSEResume(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
