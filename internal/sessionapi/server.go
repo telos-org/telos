@@ -51,7 +51,12 @@ func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionHealth}); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+	// capabilities lets never-updated peers detect cursor support without a
+	// version handshake; in-tree health checks only read `ok`.
+	writeJSON(w, http.StatusOK, map[string]string{
+		"ok":           "true",
+		"capabilities": "events_cursor",
+	})
 }
 
 func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
@@ -254,8 +259,23 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
 		return
 	}
+	after, err := nonNegativeIntParam(r, "after")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	before, err := nonNegativeIntParam(r, "before")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	tail, err := nonNegativeIntParam(r, "tail")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {
-		h.streamEvents(w, r, id)
+		h.streamEvents(w, r, id, after)
 		return
 	}
 	events, err := h.store.Events(id)
@@ -267,13 +287,61 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if events == nil {
-		events = []SessionEvent{}
-	}
-	writeJSON(w, http.StatusOK, SessionEventsResponse{Events: events})
+	writeJSON(w, http.StatusOK, SessionEventsResponse{
+		Events: filterEventsWindow(events, after, before, tail),
+	})
 }
 
-func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string) {
+func nonNegativeIntParam(r *http.Request, name string) (int64, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer", name)
+	}
+	return value, nil
+}
+
+// effectiveSeqs assigns each event its cursor position: the durable
+// event_seq where present, else the 1-based position among parsed events.
+// The ordinal fallback is stable — the evidence file is append-only and
+// malformed lines are skipped deterministically — but only genuine seqs
+// are ever advertised as SSE ids.
+func effectiveSeqs(events []SessionEvent) []int64 {
+	seqs := make([]int64, len(events))
+	for i, event := range events {
+		if event.EventSeq != nil {
+			seqs[i] = *event.EventSeq
+		} else {
+			seqs[i] = int64(i + 1)
+		}
+	}
+	return seqs
+}
+
+// filterEventsWindow applies ?after / ?before / ?tail to the event list.
+// Zero values mean "unset": no lower bound, no upper bound, no length cap.
+func filterEventsWindow(events []SessionEvent, after, before, tail int64) []SessionEvent {
+	seqs := effectiveSeqs(events)
+	filtered := make([]SessionEvent, 0, len(events))
+	for i, event := range events {
+		if after > 0 && seqs[i] <= after {
+			continue
+		}
+		if before > 0 && seqs[i] >= before {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	if tail > 0 && int64(len(filtered)) > tail {
+		filtered = filtered[int64(len(filtered))-tail:]
+	}
+	return filtered
+}
+
+func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string, after int64) {
 	if _, err := h.store.Get(id); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -287,6 +355,14 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
+	// Resume: ?after wins over the standard Last-Event-ID reconnect header.
+	if after == 0 {
+		if header := strings.TrimSpace(r.Header.Get("Last-Event-ID")); header != "" {
+			if value, err := strconv.ParseInt(header, 10, 64); err == nil && value > 0 {
+				after = value
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -299,13 +375,24 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		if err != nil {
 			return false
 		}
+		seqs := effectiveSeqs(events)
+		// Seqs are monotonic, so once past the cursor this loop is a no-op.
+		for sent < len(events) && after > 0 && seqs[sent] <= after {
+			sent++
+		}
 		for sent < len(events) {
 			data, err := json.Marshal(events[sent])
 			if err != nil {
 				sent++
 				continue
 			}
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			// Only durable seqs are advertised as SSE ids; an ordinal
+			// would resume wrongly on a client that stored it.
+			if seq := events[sent].EventSeq; seq != nil {
+				_, _ = fmt.Fprintf(w, "id: %d\ndata: %s\n\n", *seq, data)
+			} else {
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			}
 			flusher.Flush()
 			sent++
 		}
