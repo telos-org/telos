@@ -897,13 +897,9 @@ func durableEventSeqs(events []SessionEvent) bool {
 	return true
 }
 
-// normalizeEventSeqs strips event_seq from the projection unless it is
-// durable for the whole session. Two real shapes fail the check: evidence
-// mixing seq-less legacy lines with numbered ones, and multi-spec sessions,
-// whose concatenated per-file sequences restart at 1. Advertising either
-// would hand clients a cursor that filters the wrong events — stripping
-// makes the session read as legacy (full replays, ordinal windows), which
-// is always correct.
+// normalizeEventSeqs strips event_seq unless it is durable for the whole
+// session. Mixed legacy evidence and multi-spec sequences cannot safely
+// resume, so callers replay them without cursor IDs.
 func normalizeEventSeqs(events []SessionEvent) []SessionEvent {
 	if durableEventSeqs(events) {
 		return events
