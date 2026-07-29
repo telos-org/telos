@@ -334,5 +334,6 @@ type SessionEvent struct {
 
 // SessionEventsResponse wraps GET /api/sessions/{id}/events.
 type SessionEventsResponse struct {
-	Events []SessionEvent `json:"events"`
+	Events       []SessionEvent `json:"events"`
+	HeadEventSeq *int64         `json:"head_event_seq,omitempty"`
 }

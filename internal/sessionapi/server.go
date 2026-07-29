@@ -270,6 +270,10 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {
+		if queryParamSet(r, "before") || queryParamSet(r, "tail") {
+			writeError(w, http.StatusBadRequest, "before and tail are not supported for event streams")
+			return
+		}
 		h.streamEvents(w, r, id, after)
 		return
 	}
@@ -283,8 +287,13 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, SessionEventsResponse{
-		Events: filterEventsWindow(events, after, before, tail),
+		Events:       filterEventsWindow(events, after, before, tail),
+		HeadEventSeq: headEventSeq(events),
 	})
+}
+
+func queryParamSet(r *http.Request, name string) bool {
+	return strings.TrimSpace(r.URL.Query().Get(name)) != ""
 }
 
 func nonNegativeIntParam(r *http.Request, name string) (int64, error) {
@@ -321,6 +330,13 @@ func filterEventsWindow(events []SessionEvent, after, before, tail int64) []Sess
 		filtered = filtered[int64(len(filtered))-tail:]
 	}
 	return filtered
+}
+
+func headEventSeq(events []SessionEvent) *int64 {
+	if len(events) == 0 || !durableEventSeqs(events) {
+		return nil
+	}
+	return events[len(events)-1].EventSeq
 }
 
 func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string, after int64) {
