@@ -1711,7 +1711,7 @@ func writeEventsFixture(t *testing.T, root, sessionID, spec string, lines []stri
 	}
 }
 
-func getEventsList(t *testing.T, url string) []sessionapi.SessionEvent {
+func getEventsResponse(t *testing.T, url string) sessionapi.SessionEventsResponse {
 	t.Helper()
 	resp, err := http.Get(url)
 	if err != nil {
@@ -1721,7 +1721,12 @@ func getEventsList(t *testing.T, url string) []sessionapi.SessionEvent {
 	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
 	var evResp sessionapi.SessionEventsResponse
 	json.NewDecoder(resp.Body).Decode(&evResp)
-	return evResp.Events
+	return evResp
+}
+
+func getEventsList(t *testing.T, url string) []sessionapi.SessionEvent {
+	t.Helper()
+	return getEventsResponse(t, url).Events
 }
 
 func eventNames(events []sessionapi.SessionEvent) string {
@@ -1792,8 +1797,19 @@ func TestEventsTail(t *testing.T) {
 	created := createSession(t, srv.URL, createSessionBody(t, "et"))
 	writeEventsFixture(t, store.Root, created.SessionID, "et", cursorFixtureLines)
 
-	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?tail=2")
-	assertEqual(t, "events", "three,four", eventNames(events))
+	response := getEventsResponse(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?tail=2")
+	assertEqual(t, "events", "three,four", eventNames(response.Events))
+	if response.HeadEventSeq == nil || *response.HeadEventSeq != 4 {
+		t.Fatalf("head_event_seq = %v, want 4", response.HeadEventSeq)
+	}
+
+	caughtUp := getEventsResponse(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?after=4")
+	if len(caughtUp.Events) != 0 {
+		t.Fatalf("caught-up events = %#v, want empty", caughtUp.Events)
+	}
+	if caughtUp.HeadEventSeq == nil || *caughtUp.HeadEventSeq != 4 {
+		t.Fatalf("caught-up head_event_seq = %v, want 4", caughtUp.HeadEventSeq)
+	}
 }
 
 func TestEventsBeforeTailCombined(t *testing.T) {
@@ -1980,6 +1996,34 @@ func TestEventsSSEResume(t *testing.T) {
 	body = stream("?after=0", "3")
 	if !strings.Contains(body, `"event":"one"`) {
 		t.Fatalf("expected explicit ?after=0 to override Last-Event-ID, got: %s", body)
+	}
+}
+
+func TestEventsSSERejectsSnapshotWindows(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "essw"))
+	stopSession(t, srv.URL, created.SessionID)
+
+	for _, query := range []string{"before=2", "tail=10"} {
+		req, err := http.NewRequest(
+			http.MethodGet,
+			srv.URL+"/api/sessions/"+created.SessionID+"/events?"+query,
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", query, resp.StatusCode)
+		}
 	}
 }
 
