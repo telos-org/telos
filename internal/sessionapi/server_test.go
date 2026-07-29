@@ -117,9 +117,6 @@ func TestHealthz(t *testing.T) {
 	if body["ok"] != "true" {
 		t.Fatalf("unexpected health body: %#v", body)
 	}
-	if body["capabilities"] != "events_cursor" {
-		t.Fatalf("expected events_cursor capability, got %#v", body)
-	}
 }
 
 func TestCreateSessionPersistsSpecMarkdown(t *testing.T) {
@@ -1811,13 +1808,11 @@ func TestEventsBeforeTailCombined(t *testing.T) {
 	assertEqual(t, "events", "two,three", eventNames(events))
 }
 
-func TestEventsAfterLegacyOrdinal(t *testing.T) {
+func TestEventsLegacyCursorReplaysSafely(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
 	created := createSession(t, srv.URL, createSessionBody(t, "eal"))
-	// No event_seq anywhere: positions fall back to 1-based ordinals over
-	// parsed events only — the malformed line must not shift them.
 	writeEventsFixture(t, store.Root, created.SessionID, "eal", []string{
 		`{"event":"one"}`,
 		`this line is not json`,
@@ -1826,7 +1821,7 @@ func TestEventsAfterLegacyOrdinal(t *testing.T) {
 	})
 
 	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?after=1")
-	assertEqual(t, "events", "two,three", eventNames(events))
+	assertEqual(t, "events", "one,two,three", eventNames(events))
 	tailed := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?tail=2")
 	assertEqual(t, "events", "two,three", eventNames(tailed))
 }
@@ -1848,7 +1843,7 @@ func TestEventsBadParams(t *testing.T) {
 	}
 }
 
-func TestEventsMixedSeqFileFallsBackToOrdinals(t *testing.T) {
+func TestEventsMixedSeqFileReplaysWithoutCursor(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
@@ -1871,10 +1866,8 @@ func TestEventsMixedSeqFileFallsBackToOrdinals(t *testing.T) {
 			t.Fatalf("event %d: expected event_seq stripped, got %d", i, *event.EventSeq)
 		}
 	}
-	// Windows fall back to ordinals over the whole parsed list — monotonic,
-	// so ?after can never skip new events or replay old ones at the seam.
 	filtered := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?after=2")
-	assertEqual(t, "events", "new-one,new-two", eventNames(filtered))
+	assertEqual(t, "events", "legacy-one,legacy-two,new-one,new-two", eventNames(filtered))
 }
 
 func TestEventsMultiSpecSeqsNotAdvertised(t *testing.T) {
@@ -1923,6 +1916,13 @@ func TestEventsMultiSpecSeqsNotAdvertised(t *testing.T) {
 			t.Fatalf("event %d: expected event_seq stripped, got %d", i, *event.EventSeq)
 		}
 	}
+	filtered := getEventsList(t, srv.URL+"/api/sessions/"+id+"/events?after=2")
+	assertEqual(
+		t,
+		"events",
+		"alpha-one,alpha-two,beta-one,beta-two",
+		eventNames(filtered),
+	)
 }
 
 func TestEventsSSEResume(t *testing.T) {
@@ -1976,9 +1976,14 @@ func TestEventsSSEResume(t *testing.T) {
 	if strings.Contains(body, `"event":"three"`) || !strings.Contains(body, `"event":"four"`) {
 		t.Fatalf("expected ?after to win over Last-Event-ID, got: %s", body)
 	}
+
+	body = stream("?after=0", "3")
+	if !strings.Contains(body, `"event":"one"`) {
+		t.Fatalf("expected explicit ?after=0 to override Last-Event-ID, got: %s", body)
+	}
 }
 
-func TestEventsSSELegacyNoIDFrames(t *testing.T) {
+func TestEventsSSELegacyCursorReplaysWithoutIDFrames(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
@@ -1993,6 +1998,7 @@ func TestEventsSSELegacyNoIDFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Last-Event-ID", "99")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)

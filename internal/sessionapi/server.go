@@ -51,12 +51,7 @@ func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionHealth}); !ok {
 		return
 	}
-	// capabilities lets never-updated peers detect cursor support without a
-	// version handshake; in-tree health checks only read `ok`.
-	writeJSON(w, http.StatusOK, map[string]string{
-		"ok":           "true",
-		"capabilities": "events_cursor",
-	})
+	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
 }
 
 func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
@@ -304,33 +299,20 @@ func nonNegativeIntParam(r *http.Request, name string) (int64, error) {
 	return value, nil
 }
 
-// effectiveSeqs assigns each event its cursor position: the durable
-// event_seq where present, else the 1-based position among parsed events.
-// The ordinal fallback is stable — the evidence file is append-only and
-// malformed lines are skipped deterministically — but only genuine seqs
-// are ever advertised as SSE ids.
-func effectiveSeqs(events []SessionEvent) []int64 {
-	seqs := make([]int64, len(events))
-	for i, event := range events {
-		if event.EventSeq != nil {
-			seqs[i] = *event.EventSeq
-		} else {
-			seqs[i] = int64(i + 1)
-		}
-	}
-	return seqs
-}
-
 // filterEventsWindow applies ?after / ?before / ?tail to the event list.
-// Zero values mean "unset": no lower bound, no upper bound, no length cap.
+// after and before are durable event_seq cursors. Events without a durable
+// sequence are retained, preferring a harmless replay over dropping events.
 func filterEventsWindow(events []SessionEvent, after, before, tail int64) []SessionEvent {
-	seqs := effectiveSeqs(events)
 	filtered := make([]SessionEvent, 0, len(events))
-	for i, event := range events {
-		if after > 0 && seqs[i] <= after {
+	for _, event := range events {
+		if event.EventSeq == nil {
+			filtered = append(filtered, event)
 			continue
 		}
-		if before > 0 && seqs[i] >= before {
+		if after > 0 && *event.EventSeq <= after {
+			continue
+		}
+		if before > 0 && *event.EventSeq >= before {
 			continue
 		}
 		filtered = append(filtered, event)
@@ -355,8 +337,9 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
-	// Resume: ?after wins over the standard Last-Event-ID reconnect header.
-	if after == 0 {
+	// An explicit ?after wins over the standard reconnect header, including
+	// ?after=0.
+	if strings.TrimSpace(r.URL.Query().Get("after")) == "" {
 		if header := strings.TrimSpace(r.Header.Get("Last-Event-ID")); header != "" {
 			if value, err := strconv.ParseInt(header, 10, 64); err == nil && value > 0 {
 				after = value
@@ -375,9 +358,10 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		if err != nil {
 			return false
 		}
-		seqs := effectiveSeqs(events)
-		// Seqs are monotonic, so once past the cursor this loop is a no-op.
-		for sent < len(events) && after > 0 && seqs[sent] <= after {
+		// A legacy or multi-spec stream has no durable cursor. Replay it
+		// instead of treating list position as event identity.
+		for sent < len(events) && after > 0 && events[sent].EventSeq != nil &&
+			*events[sent].EventSeq <= after {
 			sent++
 		}
 		for sent < len(events) {
