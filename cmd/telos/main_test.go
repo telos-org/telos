@@ -75,7 +75,7 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root")
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      hello-service",
@@ -109,7 +109,7 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root")
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",

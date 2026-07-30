@@ -2,7 +2,7 @@
 //
 // Public commands:
 //
-//	telos plan SPEC.md [--json]
+//	telos plan SPEC.md [--session SESSION] [--json]
 //	telos push SPEC.md|SKILL_DIR [--scope SCOPE] [--version VERSION] [--json]
 //	telos apply SPEC.md [--session SESSION] [--json]
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
