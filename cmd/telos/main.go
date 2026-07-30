@@ -8,9 +8,11 @@
 //	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
 //	    [--until N|DURATION] [--max-cost-usd USD] [--json]
 //	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
+//	telos get SESSION [--output PATH]
 //	telos describe SESSION [--json]
 //	telos logs [-f] [--verbose] SESSION
 //	telos delete SESSION [--json]
+//	telos pull PACKAGE [--output PATH]
 //	telos login [--endpoint URL]
 //	telos logout
 //	telos config [--context @handle]
@@ -54,12 +56,16 @@ func main() {
 		cmdRun(os.Args[2:])
 	case "list":
 		cmdList(os.Args[2:])
+	case "get":
+		cmdGet(os.Args[2:])
 	case "describe":
 		cmdDescribe(os.Args[2:])
 	case "logs":
 		cmdLogs(os.Args[2:])
 	case "delete":
 		cmdDelete(os.Args[2:])
+	case "pull":
+		cmdPull(os.Args[2:])
 	case "login":
 		cmdLogin(os.Args[2:])
 	case "logout":
@@ -86,9 +92,11 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  apply SPEC.md      Create or update a durable session from a spec")
 	fmt.Fprintln(out, "  run SPEC.md        Run a spec as a bounded task")
 	fmt.Fprintln(out, "  list               List sessions")
+	fmt.Fprintln(out, "  get SESSION        Download a session's package")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
 	fmt.Fprintln(out, "  logs SESSION       Show session progress")
 	fmt.Fprintln(out, "  delete SESSION     Delete a session (local history is preserved)")
+	fmt.Fprintln(out, "  pull PACKAGE       Download a registry package")
 	fmt.Fprintln(out, "  login              Log in to Telos Cloud via the browser")
 	fmt.Fprintln(out, "  logout             Log out and revoke this device's token")
 	fmt.Fprintln(out, "  config             Show or update CLI configuration")
