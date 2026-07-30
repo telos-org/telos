@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -415,6 +416,41 @@ func TestExtractApplyPackageCompilesWithPackageLocalSkills(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("missing extracted alpha skill")
+	}
+}
+
+func TestApplyPackageSpecReturnsVerifiedRoot(t *testing.T) {
+	root := t.TempDir()
+	specPath := filepath.Join(root, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte(`---
+name: demo
+version: 1.0.0
+platform: cloud
+---
+
+# Goal
+
+Serve a demo.
+`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := BuildApplyPackage(compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	markdown, manifest, err := ApplyPackageSpec(pkg.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(markdown), "name: demo") {
+		t.Fatalf("root spec: %s", markdown)
+	}
+	if got := ApplyPackageDigest(manifest); got != pkg.Digest {
+		t.Fatalf("digest: got %s want %s", got, pkg.Digest)
 	}
 }
 
