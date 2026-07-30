@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -115,5 +117,53 @@ func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
 	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", comparison)
 	if !strings.Contains(out.String(), "No spec changes.") {
 		t.Fatalf("plan output:\n%s", out.String())
+	}
+}
+
+func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
+	pkg := testApplyPackage(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/deployments/sess_123":
+			json.NewEncoder(w).Encode(map[string]any{
+				"id":             "sess_123",
+				"name":           "demo",
+				"state":          "healthy",
+				"package_ref":    "@telos/demo:1.2.3",
+				"package_digest": pkg.Digest,
+				"created_at":     "then",
+				"updated_at":     "now",
+			})
+		case "/api/packages/telos/demo/versions/1.2.3/bundle":
+			_, _ = w.Write(pkg.Bytes)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+
+	specPath := filepath.Join(t.TempDir(), "SPEC.md")
+	markdown, _, err := spec.ApplyPackageSpec(pkg.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(specPath, markdown, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		cmdPlan([]string{specPath, "--session", "sess_123", "--json"})
+	})
+	var plan struct {
+		Target struct {
+			WillCreate bool `json:"will_create_session"`
+			WillUpdate bool `json:"will_update_session"`
+		} `json:"target"`
+	}
+	if err := json.Unmarshal([]byte(out), &plan); err != nil {
+		t.Fatal(err)
+	}
+	if plan.Target.WillCreate || !plan.Target.WillUpdate {
+		t.Fatalf("target: got %+v", plan.Target)
 	}
 }

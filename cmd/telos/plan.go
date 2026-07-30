@@ -69,7 +69,6 @@ func cmdPlan(args []string) {
 	}
 	if platform != "local" {
 		targetMode = "cloud"
-		willCreateSession = true
 		userScope = map[string]interface{}{
 			"status": "missing",
 			"label":  "not logged in",
