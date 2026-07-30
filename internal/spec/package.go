@@ -87,6 +87,28 @@ type ApplyPackageManifest struct {
 	SkillProvenance map[string]ApplyPackageSkillProvenance `json:"skill_provenance,omitempty"`
 }
 
+// ApplyPackageDigest returns the content address represented by a package manifest.
+func ApplyPackageDigest(manifest *ApplyPackageManifest) string {
+	if manifest == nil {
+		return ""
+	}
+	return digestPackage(manifest.Spec.Digest, manifest.Skills)
+}
+
+// ApplyPackageSpec verifies a package's declared contents and returns its root spec.
+// Registry-backed skills may remain external references.
+func ApplyPackageSpec(data []byte) ([]byte, *ApplyPackageManifest, error) {
+	files, manifest, err := readApplyPackage(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateApplyPackageFilesAllowReferences(manifest, files); err != nil {
+		return nil, nil, err
+	}
+	root := files["SPEC.md"].data
+	return append([]byte(nil), root...), manifest, nil
+}
+
 type packageFile struct {
 	path string
 	mode int64
