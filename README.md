@@ -120,8 +120,12 @@ the same session:
 ```bash
 telos get sess_... --output SPEC.md
 # edit SPEC.md and bump its immutable package version
+telos plan SPEC.md --session sess_...
 telos apply SPEC.md --session sess_...
 ```
+
+`plan --session` fetches the deployed package and shows its spec diff without
+changing the session.
 
 `get` resolves the exact package attached to a session. `pull` retrieves an
 exact package directly from the registry:
