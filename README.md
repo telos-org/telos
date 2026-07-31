@@ -118,8 +118,24 @@ To steer an existing controller, edit the same disk spec and apply it back to
 the same session:
 
 ```bash
+telos get sess_... --output SPEC.md
+# edit SPEC.md and bump its immutable package version
+telos plan SPEC.md --session sess_...
 telos apply SPEC.md --session sess_...
 ```
+
+`plan --session` fetches the deployed package and shows its spec diff without
+changing the session.
+
+`get` resolves the exact package attached to a session. `pull` retrieves an
+exact package directly from the registry:
+
+```bash
+telos pull @telos/hello-service:0.1.0
+```
+
+Both commands verify the package digest and materialize the complete package by
+default. Pass `--output SPEC.md` when only the root spec is needed.
 
 The spec frontmatter `version` is the package version published to Telos Cloud,
 so the reviewed file, package ref, and backend record stay aligned:

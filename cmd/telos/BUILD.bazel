@@ -17,6 +17,7 @@ go_library(
         "//internal/sessionupdate",
         "//internal/sessionworker",
         "//internal/spec",
+        "@com_github_rogpeppe_go_internal//diff",
     ],
 )
 
