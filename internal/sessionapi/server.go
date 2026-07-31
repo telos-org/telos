@@ -254,8 +254,27 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
 		return
 	}
+	after, err := nonNegativeIntParam(r, "after")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	before, err := nonNegativeIntParam(r, "before")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	tail, err := nonNegativeIntParam(r, "tail")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {
-		h.streamEvents(w, r, id)
+		if queryParamSet(r, "before") || queryParamSet(r, "tail") {
+			writeError(w, http.StatusBadRequest, "before and tail are not supported for event streams")
+			return
+		}
+		h.streamEvents(w, r, id, after)
 		return
 	}
 	events, err := h.store.Events(id)
@@ -267,13 +286,60 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if events == nil {
-		events = []SessionEvent{}
-	}
-	writeJSON(w, http.StatusOK, SessionEventsResponse{Events: events})
+	writeJSON(w, http.StatusOK, SessionEventsResponse{
+		Events:       filterEventsWindow(events, after, before, tail),
+		HeadEventSeq: headEventSeq(events),
+	})
 }
 
-func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string) {
+func queryParamSet(r *http.Request, name string) bool {
+	return strings.TrimSpace(r.URL.Query().Get(name)) != ""
+}
+
+func nonNegativeIntParam(r *http.Request, name string) (int64, error) {
+	raw := strings.TrimSpace(r.URL.Query().Get(name))
+	if raw == "" {
+		return 0, nil
+	}
+	value, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || value < 0 {
+		return 0, fmt.Errorf("%s must be a non-negative integer", name)
+	}
+	return value, nil
+}
+
+// filterEventsWindow applies ?after / ?before / ?tail to the event list.
+// after and before are durable event_seq cursors. Events without a durable
+// sequence are retained, preferring a harmless replay over dropping events.
+func filterEventsWindow(events []SessionEvent, after, before, tail int64) []SessionEvent {
+	filtered := make([]SessionEvent, 0, len(events))
+	for _, event := range events {
+		if event.EventSeq == nil {
+			filtered = append(filtered, event)
+			continue
+		}
+		if after > 0 && *event.EventSeq <= after {
+			continue
+		}
+		if before > 0 && *event.EventSeq >= before {
+			continue
+		}
+		filtered = append(filtered, event)
+	}
+	if tail > 0 && int64(len(filtered)) > tail {
+		filtered = filtered[int64(len(filtered))-tail:]
+	}
+	return filtered
+}
+
+func headEventSeq(events []SessionEvent) *int64 {
+	if len(events) == 0 || !durableEventSeqs(events) {
+		return nil
+	}
+	return events[len(events)-1].EventSeq
+}
+
+func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string, after int64) {
 	if _, err := h.store.Get(id); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -287,6 +353,15 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		writeError(w, http.StatusInternalServerError, "streaming unsupported")
 		return
 	}
+	// An explicit ?after wins over the standard reconnect header, including
+	// ?after=0.
+	if strings.TrimSpace(r.URL.Query().Get("after")) == "" {
+		if header := strings.TrimSpace(r.Header.Get("Last-Event-ID")); header != "" {
+			if value, err := strconv.ParseInt(header, 10, 64); err == nil && value > 0 {
+				after = value
+			}
+		}
+	}
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -299,13 +374,25 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		if err != nil {
 			return false
 		}
+		// A legacy or multi-spec stream has no durable cursor. Replay it
+		// instead of treating list position as event identity.
+		for sent < len(events) && after > 0 && events[sent].EventSeq != nil &&
+			*events[sent].EventSeq <= after {
+			sent++
+		}
 		for sent < len(events) {
 			data, err := json.Marshal(events[sent])
 			if err != nil {
 				sent++
 				continue
 			}
-			_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			// Only durable seqs are advertised as SSE ids; an ordinal
+			// would resume wrongly on a client that stored it.
+			if seq := events[sent].EventSeq; seq != nil {
+				_, _ = fmt.Fprintf(w, "id: %d\ndata: %s\n\n", *seq, data)
+			} else {
+				_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
+			}
 			flusher.Flush()
 			sent++
 		}
