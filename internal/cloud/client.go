@@ -234,6 +234,42 @@ func (c *Client) PublishPackage(scope, name, version string, data []byte) (*Pack
 	return &record, nil
 }
 
+func (c *Client) GetPackageVersion(scope, name, version string) (*PackageVersionRecord, error) {
+	path := "/api/packages/" +
+		url.PathEscape(strings.TrimSpace(scope)) + "/" +
+		url.PathEscape(strings.TrimSpace(name)) + "/versions/" +
+		url.PathEscape(strings.TrimSpace(version))
+	resp, err := c.do("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var record PackageVersionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) DownloadPackageVersionBundle(scope, name, version string) ([]byte, error) {
+	path := "/api/packages/" +
+		url.PathEscape(strings.TrimSpace(scope)) + "/" +
+		url.PathEscape(strings.TrimSpace(name)) + "/versions/" +
+		url.PathEscape(strings.TrimSpace(version)) + "/bundle"
+	resp, err := c.do("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	return io.ReadAll(resp.Body)
+}
+
 func (c *Client) PublishSkillVersion(scope, name, version string, files map[string]SkillFile) (*SkillRecord, error) {
 	type skillFileRequest struct {
 		DataBase64 string `json:"data_base64"`

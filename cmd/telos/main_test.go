@@ -52,7 +52,9 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"usage: telos <command> [args]",
 		"--help",
 		"apply SPEC.md      Create or update a durable session from a spec",
+		"get SESSION        Download a session's package",
 		"delete SESSION     Delete a session (local history is preserved)",
+		"pull PACKAGE       Download a registry package",
 		"version            Show version",
 		"--version",
 		"telos <command> --help",
@@ -73,7 +75,7 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root")
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      hello-service",
@@ -107,7 +109,7 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root")
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",
