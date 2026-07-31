@@ -880,7 +880,34 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 		}
 		events = append(events, specEvents...)
 	}
-	return events, nil
+	return normalizeEventSeqs(events), nil
+}
+
+// durableEventSeqs reports whether the projected seqs can serve as
+// session-wide cursors: every event carries one and the sequence strictly
+// increases across the whole list.
+func durableEventSeqs(events []SessionEvent) bool {
+	var last int64
+	for _, event := range events {
+		if event.EventSeq == nil || *event.EventSeq <= last {
+			return false
+		}
+		last = *event.EventSeq
+	}
+	return true
+}
+
+// normalizeEventSeqs strips event_seq unless it is durable for the whole
+// session. Mixed legacy evidence and multi-spec sequences cannot safely
+// resume, so callers replay them without cursor IDs.
+func normalizeEventSeqs(events []SessionEvent) []SessionEvent {
+	if durableEventSeqs(events) {
+		return events
+	}
+	for i := range events {
+		events[i].EventSeq = nil
+	}
+	return events
 }
 
 func (fs *FileStore) emitSpecUpdate(event SpecUpdateEvent) {
@@ -1217,9 +1244,12 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 
 		dataField, _ := raw["data"].(map[string]any)
 		timestamp, _ := raw["ts"].(string)
+		role, _ := raw["role"].(string)
 
 		ev := SessionEvent{
 			Event:       eventName,
+			EventSeq:    eventSeq(raw),
+			Role:        strPtr(role),
 			Timestamp:   strPtr(timestamp),
 			SpecIndex:   spec.Index,
 			SpecName:    strPtr(spec.Name),
@@ -1229,6 +1259,17 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 		events = append(events, ev)
 	}
 	return events, nil
+}
+
+// eventSeq lifts the evidence writer's sequence number; nil for lines that
+// predate seq-stamping.
+func eventSeq(raw map[string]any) *int64 {
+	value, ok := raw["event_seq"].(float64)
+	if !ok {
+		return nil
+	}
+	seq := int64(value)
+	return &seq
 }
 
 type evidenceSummary struct {
