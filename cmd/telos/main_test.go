@@ -127,6 +127,26 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 }
 
+func TestPrintPlanPreviewStarsRequiredVerifierSkills(t *testing.T) {
+	verifyEngineering := &spec.Skill{Name: "verify-engineering"}
+	compiled := &spec.CompiledEnvironment{
+		Environment: &spec.EnvironmentSpec{Name: "gitea"},
+		ContentHash: "8a8f0c21",
+		Skills: []*spec.Skill{
+			verifyEngineering,
+			{Name: "verify-quality"},
+		},
+		RequiredVerifierSkills: []*spec.Skill{verifyEngineering},
+	}
+
+	var out bytes.Buffer
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root")
+	text := out.String()
+	if !strings.Contains(text, "Skills    verify-engineering*, verify-quality") {
+		t.Fatalf("plan output missing starred skill marker:\n%s", text)
+	}
+}
+
 func TestReorderInterspersedFlagsDashDash(t *testing.T) {
 	fs := flag.NewFlagSet("test", flag.ContinueOnError)
 	fs.Bool("json", false, "")

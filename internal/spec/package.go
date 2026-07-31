@@ -18,6 +18,28 @@ import (
 
 const ApplyPackageSchemaVersion = 1
 
+// ApplyPackageSchemaVersionStarred gates manifests whose skill locks carry the
+// starred (required-rubric) flag. Starred locks change runtime semantics and
+// are folded into the package digest; older runtimes would silently drop the
+// unknown field and mis-derive the digest, so those packages declare a schema
+// version that pre-starred readers reject outright ("unsupported apply
+// package schema_version") — an actionable upgrade signal instead of a
+// baffling digest mismatch on version-pinned deployments.
+const ApplyPackageSchemaVersionStarred = 2
+
+func applyPackageSchemaSupported(version int) bool {
+	return version == ApplyPackageSchemaVersion || version == ApplyPackageSchemaVersionStarred
+}
+
+func applyPackageSchemaVersionFor(skills map[string]ApplyPackageSkillLock) int {
+	for _, lock := range skills {
+		if lock.Starred {
+			return ApplyPackageSchemaVersionStarred
+		}
+	}
+	return ApplyPackageSchemaVersion
+}
+
 // ApplyPackage is an immutable bundle of the root spec and resolved skills.
 type ApplyPackage struct {
 	Digest   string
@@ -37,8 +59,9 @@ type ApplyPackageSkillEntry struct {
 }
 
 type ApplyPackageSkillLock struct {
-	Digest string `json:"digest"`
-	Ref    string `json:"ref,omitempty"`
+	Digest  string `json:"digest"`
+	Ref     string `json:"ref,omitempty"`
+	Starred bool   `json:"starred,omitempty"`
 }
 
 func (lock *ApplyPackageSkillLock) UnmarshalJSON(data []byte) error {
@@ -46,17 +69,20 @@ func (lock *ApplyPackageSkillLock) UnmarshalJSON(data []byte) error {
 	if err := json.Unmarshal(data, &digest); err == nil {
 		lock.Digest = digest
 		lock.Ref = ""
+		lock.Starred = false
 		return nil
 	}
 	var raw struct {
-		Digest string `json:"digest"`
-		Ref    string `json:"ref"`
+		Digest  string `json:"digest"`
+		Ref     string `json:"ref"`
+		Starred bool   `json:"starred"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return err
 	}
 	lock.Digest = raw.Digest
 	lock.Ref = raw.Ref
+	lock.Starred = raw.Starred
 	return nil
 }
 
@@ -161,12 +187,19 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 		packageFiles = append(packageFiles, files...)
 	}
 
-	manifest := ApplyPackageManifest{
-		SchemaVersion: ApplyPackageSchemaVersion,
-		Spec:          specEntry,
-		Skills:        skillLockMap(skillEntries),
+	requiredNames := make(map[string]bool, len(compiled.RequiredVerifierSkills))
+	for _, skill := range compiled.RequiredVerifierSkills {
+		if skill != nil {
+			requiredNames[skill.Name] = true
+		}
 	}
-	packageDigest := digestPackage(specEntry.Digest, manifest.Skills)
+	skillLocks := skillLockMap(skillEntries, requiredNames)
+	manifest := ApplyPackageManifest{
+		SchemaVersion: applyPackageSchemaVersionFor(skillLocks),
+		Spec:          specEntry,
+		Skills:        skillLocks,
+	}
+	packageDigest := digestPackage(manifest.SchemaVersion, specEntry.Digest, manifest.Skills)
 
 	manifestData, err := json.MarshalIndent(manifest, "", "  ")
 	if err != nil {
@@ -395,8 +428,22 @@ func validateApplyPackageFilesWithMode(manifest *ApplyPackageManifest, files map
 	if manifest == nil {
 		return fmt.Errorf("apply package missing manifest")
 	}
-	if manifest.SchemaVersion != ApplyPackageSchemaVersion {
+	if !applyPackageSchemaSupported(manifest.SchemaVersion) {
 		return fmt.Errorf("unsupported apply package schema_version %d", manifest.SchemaVersion)
+	}
+	if manifest.SchemaVersion < ApplyPackageSchemaVersionStarred {
+		for _, lock := range manifest.Skills {
+			if lock.Starred {
+				// Mirrors the Cloud publish rule: a schema-1 starred lock
+				// would be silently dropped (and its digest mis-derived) by
+				// pre-starred readers, so the combination is invalid even for
+				// locally supplied packages that never pass through Cloud.
+				return fmt.Errorf(
+					"starred skill locks require schema_version %d",
+					ApplyPackageSchemaVersionStarred,
+				)
+			}
+		}
 	}
 	specFile, ok := files["SPEC.md"]
 	if !ok {
@@ -737,12 +784,13 @@ func digestSkill(name string, files []ApplyPackageFileEntry) string {
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))
 }
 
-func skillLockMap(skills []ApplyPackageSkillEntry) map[string]ApplyPackageSkillLock {
+func skillLockMap(skills []ApplyPackageSkillEntry, requiredNames map[string]bool) map[string]ApplyPackageSkillLock {
 	out := make(map[string]ApplyPackageSkillLock, len(skills))
 	for _, skill := range skills {
 		out[skill.Name] = ApplyPackageSkillLock{
-			Digest: skill.Digest,
-			Ref:    strings.TrimSpace(skill.Ref),
+			Digest:  skill.Digest,
+			Ref:     strings.TrimSpace(skill.Ref),
+			Starred: requiredNames[skill.Name],
 		}
 	}
 	return out
@@ -785,9 +833,9 @@ func relativePathWithin(root string, path string) (string, bool) {
 	return filepath.ToSlash(rel), true
 }
 
-func digestPackage(specDigest string, skills map[string]ApplyPackageSkillLock) string {
+func digestPackage(schemaVersion int, specDigest string, skills map[string]ApplyPackageSkillLock) string {
 	h := sha256.New()
-	writeDigestPart(h, fmt.Sprintf("schema:%d", ApplyPackageSchemaVersion))
+	writeDigestPart(h, fmt.Sprintf("schema:%d", schemaVersion))
 	writeDigestPart(h, "spec:"+specDigest)
 	names := make([]string, 0, len(skills))
 	for name := range skills {
@@ -795,7 +843,15 @@ func digestPackage(specDigest string, skills map[string]ApplyPackageSkillLock) s
 	}
 	sort.Strings(names)
 	for _, name := range names {
-		writeDigestPart(h, name)
+		// Starred marks a required evaluation rubric — runtime semantics, so
+		// it is part of package identity. The marker perturbs the hash only
+		// when set (skill names cannot contain '*'), keeping every previously
+		// published digest stable.
+		if skills[name].Starred {
+			writeDigestPart(h, name+"*")
+		} else {
+			writeDigestPart(h, name)
+		}
 		writeDigestPart(h, skills[name].Digest)
 	}
 	return fmt.Sprintf("sha256:%x", h.Sum(nil))
