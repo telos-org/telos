@@ -118,7 +118,7 @@ func ApplyPackageDigest(manifest *ApplyPackageManifest) string {
 	if manifest == nil {
 		return ""
 	}
-	return digestPackage(manifest.Spec.Digest, manifest.Skills)
+	return digestPackage(manifest.SchemaVersion, manifest.Spec.Digest, manifest.Skills)
 }
 
 // ApplyPackageSpec verifies a package's declared contents and returns its root spec.
