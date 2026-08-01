@@ -23,7 +23,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *sessionapi.FileStore) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
+	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{}, sessionapi.RuntimeIdentity{})
 	return httptest.NewServer(mux), store
 }
 
@@ -100,7 +100,19 @@ func TestCreateSession(t *testing.T) {
 }
 
 func TestHealthz(t *testing.T) {
-	srv, _ := newTestServer(t)
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	mux := http.NewServeMux()
+	sessionapi.RegisterRoutes(
+		mux,
+		store,
+		sessionapi.AllowAllAuthorizer{},
+		sessionapi.RuntimeIdentity{
+			Version:      "v0.1.3",
+			TelosdDigest: "sha256:" + strings.Repeat("a", 64),
+		},
+	)
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/healthz")
@@ -116,6 +128,12 @@ func TestHealthz(t *testing.T) {
 	}
 	if body["ok"] != "true" {
 		t.Fatalf("unexpected health body: %#v", body)
+	}
+	if body["runtime_version"] != "v0.1.3" {
+		t.Fatalf("runtime version: got %q", body["runtime_version"])
+	}
+	if body["runtime_telosd_digest"] != "sha256:"+strings.Repeat("a", 64) {
+		t.Fatalf("runtime digest: got %q", body["runtime_telosd_digest"])
 	}
 }
 
@@ -806,7 +824,7 @@ func TestApplySessionSpecUpdatesExistingRootFromPackageDigest(t *testing.T) {
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	store.PackageRoot = packageRoot
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
+	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{}, sessionapi.RuntimeIdentity{})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -874,7 +892,7 @@ func TestApplySessionSpecEmitsExternalUpdate(t *testing.T) {
 		emitted = append(emitted, event)
 	}
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
+	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{}, sessionapi.RuntimeIdentity{})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -2564,7 +2582,7 @@ func newBearerTestServer(t *testing.T, operatorToken string) (*httptest.Server, 
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store, sessionapi.NewBearerAuthorizer(store, operatorToken))
+	sessionapi.RegisterRoutes(mux, store, sessionapi.NewBearerAuthorizer(store, operatorToken), sessionapi.RuntimeIdentity{})
 	return httptest.NewServer(mux), store
 }
 
