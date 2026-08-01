@@ -144,6 +144,12 @@ type SessionSpecResponse struct {
 	Version     *int   `json:"version,omitempty"`
 }
 
+// RuntimeIdentity identifies the live telosd process serving the API.
+type RuntimeIdentity struct {
+	Version      string `json:"runtime_version,omitempty"`
+	TelosdDigest string `json:"runtime_telosd_digest,omitempty"`
+}
+
 // --------- Spec types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 // SessionSpec describes one compiled spec entry inside a session.
