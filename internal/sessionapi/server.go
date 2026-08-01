@@ -25,11 +25,11 @@ const maxSessionRequestBytes = 4 << 20
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
 //	GET  /api/healthz
-func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer) {
+func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runtime RuntimeIdentity) {
 	if authorizer == nil {
 		panic("sessionapi.RegisterRoutes requires an authorizer")
 	}
-	h := &handler{store: store, authorizer: authorizer}
+	h := &handler{store: store, authorizer: authorizer, runtime: runtime}
 
 	mux.HandleFunc("GET /api/healthz", h.healthz)
 	mux.HandleFunc("POST /api/sessions", h.createSession)
@@ -45,13 +45,17 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer) {
 type handler struct {
 	store      Store
 	authorizer Authorizer
+	runtime    RuntimeIdentity
 }
 
 func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionHealth}); !ok {
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]string{"ok": "true"})
+	writeJSON(w, http.StatusOK, struct {
+		OK string `json:"ok"`
+		RuntimeIdentity
+	}{OK: "true", RuntimeIdentity: h.runtime})
 }
 
 func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
