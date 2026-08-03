@@ -6,6 +6,10 @@ on:
   pull_request:
   workflow_dispatch:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/master' }}
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -24,6 +28,7 @@ jobs:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    environment: release
     concurrency:
       group: telos-release
       cancel-in-progress: false
@@ -85,4 +90,10 @@ jobs:
           test "$("$verify/telos" --version)" = "telos $VERSION"
 
       - name: Promote release
-        run: scripts/promote-release.sh "${{ steps.version.outputs.version }}"
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          git fetch origin master
+          test "$(git rev-parse origin/master)" = "$GITHUB_SHA"
+          scripts/promote-release.sh "$VERSION"
