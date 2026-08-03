@@ -4,6 +4,7 @@ on:
   push:
     branches: [master]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   test:
@@ -16,3 +17,72 @@ jobs:
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./...
+
+  release:
+    name: publish-release
+    needs: test
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: telos-release
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      TELOS_GCP_PROJECT: telos-experiments
+      TELOS_RELEASE_BUCKET: telos-runtime-artifacts
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_RELEASE_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Resolve immutable release version
+        id: version
+        run: |
+          set -euo pipefail
+          if version="$(git describe --tags --exact-match --match 'v[0-9]*' 2>/dev/null)"; then
+            :
+          else
+            base="$(git describe --tags --abbrev=0 --match 'v[0-9]*')"
+            version="${base}+master.${GITHUB_SHA:0:12}"
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Build and publish immutable release
+        env:
+          TELOS_ALLOW_UNSIGNED_DARWIN: "1"
+        run: scripts/publish-release.sh "${{ steps.version.outputs.version }}"
+
+      - name: Verify published artifacts
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          release="gs://${TELOS_RELEASE_BUCKET}/releases/${VERSION}"
+          verify="$RUNNER_TEMP/release-verify"
+          artifact=telos-linux-amd64
+          mkdir -p "$verify"
+          gcloud storage cp "${release}/SHA256SUMS" "$verify/SHA256SUMS" >/dev/null
+          gcloud storage cp "${release}/${artifact}" "$verify/telos" >/dev/null
+          expected="$(awk -v artifact="$artifact" '$2 == artifact { print $1 }' "$verify/SHA256SUMS")"
+          actual="$(sha256sum "$verify/telos" | awk '{ print $1 }')"
+          test -n "$expected"
+          test "$actual" = "$expected"
+          chmod 0755 "$verify/telos"
+          test "$("$verify/telos" --version)" = "telos $VERSION"
+
+      - name: Promote release
+        run: scripts/promote-release.sh "${{ steps.version.outputs.version }}"
