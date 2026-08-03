@@ -167,3 +167,6 @@ scripts/publish-release.sh
 A protected `master` merge publishes a commit-addressed release, verifies its
 Linux artifact and checksum, and then promotes the `latest` manifest. Versioned
 objects are immutable; a partially failed publication is safe to retry.
+Early-alpha macOS artifacts are intentionally unsigned. macOS users may need to
+approve the downloaded binary explicitly until signing and notarization become
+worth the operational dependency.

@@ -22,8 +22,6 @@ EOF
   exit 1
 fi
 
-gcloud storage buckets describe "gs://${bucket}" --project "${project}" >/dev/null
-
 remote="gs://${bucket}/releases/${version}"
 verify_dir="$(mktemp -d)"
 trap 'rm -rf "${verify_dir}"' EXIT

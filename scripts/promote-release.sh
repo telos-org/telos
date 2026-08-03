@@ -7,8 +7,6 @@ project="${TELOS_GCP_PROJECT:?set TELOS_GCP_PROJECT to the GCP project that owns
 source="gs://${bucket}/releases/${version}"
 target="gs://${bucket}/releases/latest"
 
-gcloud storage buckets describe "gs://${bucket}" --project "${project}" >/dev/null
-
 verify_dir="$(mktemp -d)"
 trap 'rm -rf "${verify_dir}"' EXIT
 gcloud storage cp "${source}/manifest.json" "${verify_dir}/manifest.json" >/dev/null
