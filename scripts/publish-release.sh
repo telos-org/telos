@@ -5,7 +5,6 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 version="${1:-}"
 bucket="${TELOS_RELEASE_BUCKET:-telos-runtime-artifacts}"
 project="${TELOS_GCP_PROJECT:?set TELOS_GCP_PROJECT to the GCP project that owns the release bucket}"
-location="${TELOS_GCS_LOCATION:-us-west1}"
 
 if [[ -z "${version}" ]]; then
   dist="$("${repo_root}/scripts/build-release.sh")"
@@ -23,30 +22,22 @@ EOF
   exit 1
 fi
 
-if ! gcloud storage buckets describe "gs://${bucket}" --project "${project}" >/dev/null 2>&1; then
-  gcloud storage buckets create "gs://${bucket}" \
-    --project "${project}" \
-    --location "${location}" \
-    --uniform-bucket-level-access
+gcloud storage buckets describe "gs://${bucket}" --project "${project}" >/dev/null
+
+remote="gs://${bucket}/releases/${version}"
+if gcloud storage objects describe "${remote}/manifest.json" >/dev/null 2>&1; then
+  verify_dir="$(mktemp -d)"
+  trap 'rm -rf "${verify_dir}"' EXIT
+  gcloud storage cp "${remote}/SHA256SUMS" "${verify_dir}/SHA256SUMS" >/dev/null
+  cmp "${dist}/SHA256SUMS" "${verify_dir}/SHA256SUMS" >/dev/null || {
+    echo "publish-release: ${version} already exists with different artifacts" >&2
+    exit 1
+  }
+  echo "publish-release: ${version} already exists with matching checksums"
+else
+  gcloud storage cp "${dist}/"* "${remote}/" \
+    --cache-control="public,max-age=31536000,immutable" \
+    --if-generation-match=0
 fi
 
-gcloud storage cp "${dist}/"* "gs://${bucket}/releases/${version}/" \
-  --cache-control="public,max-age=31536000,immutable"
-
-gcloud storage cp "${dist}/telos-"* "gs://${bucket}/releases/latest/" \
-  --cache-control="no-cache,max-age=0"
-gcloud storage cp "${dist}/telosd-"* "gs://${bucket}/releases/latest/" \
-  --cache-control="no-cache,max-age=0"
-gcloud storage cp "${dist}/SHA256SUMS" "gs://${bucket}/releases/latest/SHA256SUMS" \
-  --cache-control="no-cache,max-age=0"
-gcloud storage cp "${dist}/manifest.json" "gs://${bucket}/releases/latest/manifest.json" \
-  --cache-control="no-cache,max-age=0"
-gcloud storage cp "${dist}/install.sh" "gs://${bucket}/releases/latest/install.sh" \
-  --cache-control="no-cache,max-age=0"
-
-gcloud storage buckets add-iam-policy-binding "gs://${bucket}" \
-  --member=allUsers \
-  --role=roles/storage.objectViewer \
-  --project "${project}" >/dev/null
-
-echo "https://usetelos.ai/releases/${version}/manifest.json"
+echo "${remote}/manifest.json"
