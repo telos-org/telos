@@ -36,7 +36,6 @@ jobs:
       contents: read
       id-token: write
     env:
-      TELOS_GCP_PROJECT: telos-experiments
       TELOS_RELEASE_BUCKET: telos-runtime-artifacts
     steps:
       - uses: actions/checkout@v4
