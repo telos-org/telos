@@ -86,6 +86,38 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 		}
 		annotateSkillSourceRefs(declared, env.SkillSourceRefs)
 	}
+
+	// Spec text is authoritative for skills it declares: a manifest star only
+	// applies to skills the spec itself does not list, so un-starring an
+	// entry in SPEC.md always wins over a previously recorded lock. Both
+	// sides are matched by resolved skill name — SKILL.md may declare a name
+	// that differs from its directory, so paths alone cannot be trusted.
+	if len(packageRequiredPaths) > 0 && len(env.SkillPaths) > 0 {
+		specDeclaredAbs := map[string]bool{}
+		for _, path := range env.SkillPaths {
+			if abs, absErr := filepath.Abs(path); absErr == nil {
+				specDeclaredAbs[abs] = true
+			}
+		}
+		specDeclaredNames := map[string]bool{}
+		for _, s := range declared {
+			if abs, absErr := filepath.Abs(s.Path); absErr == nil && specDeclaredAbs[abs] {
+				specDeclaredNames[s.Name] = true
+			}
+		}
+		packageRequired, resolveErr := ResolveSkillsFromPaths(packageRequiredPaths)
+		if resolveErr != nil {
+			return nil, resolveErr
+		}
+		var filtered []string
+		for _, s := range packageRequired {
+			if specDeclaredNames[s.Name] {
+				continue
+			}
+			filtered = append(filtered, s.Path)
+		}
+		packageRequiredPaths = filtered
+	}
 	var required []*Skill
 	requiredPaths := appendMissingPaths(env.RequiredVerifierSkillPaths, packageRequiredPaths)
 	if len(requiredPaths) > 0 {
@@ -207,7 +239,8 @@ func packageManifestSkillPaths(baseDir string) ([]string, []string, bool) {
 		return nil, nil, false
 	}
 	var paths []string
-	for name := range manifest.Skills {
+	var starred []string
+	for name, lock := range manifest.Skills {
 		if !dnsRE.MatchString(name) {
 			continue
 		}
@@ -216,12 +249,17 @@ func packageManifestSkillPaths(baseDir string) ([]string, []string, bool) {
 			continue
 		}
 		paths = append(paths, path)
+		// A schema-1 starred lock is invalid (see validateApplyPackageFiles):
+		// ignore the flag rather than honor a star old readers would drop.
+		if lock.Starred && manifest.SchemaVersion >= ApplyPackageSchemaVersionStarred {
+			starred = append(starred, path)
+		}
 	}
-	return paths, nil, true
+	return paths, starred, true
 }
 
 func isApplyPackageManifest(manifest ApplyPackageManifest) bool {
-	return manifest.SchemaVersion == ApplyPackageSchemaVersion &&
+	return applyPackageSchemaSupported(manifest.SchemaVersion) &&
 		strings.TrimSpace(manifest.Spec.Digest) != "" &&
 		manifest.Skills != nil
 }

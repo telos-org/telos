@@ -297,6 +297,47 @@ func TestClientCreateSession(t *testing.T) {
 	}
 }
 
+func TestClientGetsAndDownloadsPackageVersion(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/auth/versions/1.2.3":
+			json.NewEncoder(w).Encode(map[string]any{
+				"scope":      "telos",
+				"name":       "auth",
+				"version":    "1.2.3",
+				"ref":        "@telos/auth:1.2.3",
+				"digest":     "sha256:abc",
+				"created_at": "now",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/auth/versions/1.2.3/bundle":
+			_, _ = w.Write([]byte("package-bundle"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	record, err := client.GetPackageVersion("telos", "auth", "1.2.3")
+	if err != nil {
+		t.Fatalf("GetPackageVersion: %v", err)
+	}
+	if record.Ref != "@telos/auth:1.2.3" || record.Digest != "sha256:abc" {
+		t.Fatalf("record: got %+v", record)
+	}
+	bundle, err := client.DownloadPackageVersionBundle("telos", "auth", "1.2.3")
+	if err != nil {
+		t.Fatalf("DownloadPackageVersionBundle: %v", err)
+	}
+	if string(bundle) != "package-bundle" {
+		t.Fatalf("bundle: got %q", bundle)
+	}
+}
+
 func TestClientUpdateSession(t *testing.T) {
 	var gotBody map[string]string
 	var gotOrgID string

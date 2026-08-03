@@ -144,6 +144,12 @@ type SessionSpecResponse struct {
 	Version     *int   `json:"version,omitempty"`
 }
 
+// RuntimeIdentity identifies the live telosd process serving the API.
+type RuntimeIdentity struct {
+	Version      string `json:"runtime_version,omitempty"`
+	TelosdDigest string `json:"runtime_telosd_digest,omitempty"`
+}
+
 // --------- Spec types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 // SessionSpec describes one compiled spec entry inside a session.
@@ -322,7 +328,12 @@ func SessionsFromListItems(items []SessionListItem) []Session {
 
 // SessionEvent represents one evidence event from a session.
 type SessionEvent struct {
-	Event       string         `json:"event"`
+	Event string `json:"event"`
+	// EventSeq is the evidence writer's dense 1-based sequence number —
+	// the durable cursor for pagination and stream resume. Nil for lines
+	// written before seq-stamping existed.
+	EventSeq    *int64         `json:"event_seq,omitempty"`
+	Role        *string        `json:"role,omitempty"`
 	Timestamp   *string        `json:"ts,omitempty"`
 	SessionID   *string        `json:"session_id,omitempty"`
 	SpecIndex   *int           `json:"spec_index,omitempty"`
@@ -333,5 +344,6 @@ type SessionEvent struct {
 
 // SessionEventsResponse wraps GET /api/sessions/{id}/events.
 type SessionEventsResponse struct {
-	Events []SessionEvent `json:"events"`
+	Events       []SessionEvent `json:"events"`
+	HeadEventSeq *int64         `json:"head_event_seq,omitempty"`
 }

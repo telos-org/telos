@@ -23,7 +23,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *sessionapi.FileStore) {
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
+	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{}, sessionapi.RuntimeIdentity{})
 	return httptest.NewServer(mux), store
 }
 
@@ -100,7 +100,19 @@ func TestCreateSession(t *testing.T) {
 }
 
 func TestHealthz(t *testing.T) {
-	srv, _ := newTestServer(t)
+	root := t.TempDir()
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+	mux := http.NewServeMux()
+	sessionapi.RegisterRoutes(
+		mux,
+		store,
+		sessionapi.AllowAllAuthorizer{},
+		sessionapi.RuntimeIdentity{
+			Version:      "v0.1.3",
+			TelosdDigest: "sha256:" + strings.Repeat("a", 64),
+		},
+	)
+	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/api/healthz")
@@ -116,6 +128,12 @@ func TestHealthz(t *testing.T) {
 	}
 	if body["ok"] != "true" {
 		t.Fatalf("unexpected health body: %#v", body)
+	}
+	if body["runtime_version"] != "v0.1.3" {
+		t.Fatalf("runtime version: got %q", body["runtime_version"])
+	}
+	if body["runtime_telosd_digest"] != "sha256:"+strings.Repeat("a", 64) {
+		t.Fatalf("runtime digest: got %q", body["runtime_telosd_digest"])
 	}
 }
 
@@ -806,7 +824,7 @@ func TestApplySessionSpecUpdatesExistingRootFromPackageDigest(t *testing.T) {
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	store.PackageRoot = packageRoot
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
+	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{}, sessionapi.RuntimeIdentity{})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -874,7 +892,7 @@ func TestApplySessionSpecEmitsExternalUpdate(t *testing.T) {
 		emitted = append(emitted, event)
 	}
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{})
+	sessionapi.RegisterRoutes(mux, store, sessionapi.AllowAllAuthorizer{}, sessionapi.RuntimeIdentity{})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
 
@@ -1720,6 +1738,10 @@ func TestEventsPresent(t *testing.T) {
 	if evResp.Events[0].Data["cost_usd"] != 0.5 {
 		t.Errorf("expected cost_usd=0.5, got %v", evResp.Events[0].Data["cost_usd"])
 	}
+	// Legacy evidence has no event_seq: the projection must not invent one.
+	if evResp.Events[0].EventSeq != nil {
+		t.Errorf("expected nil event_seq, got %v", *evResp.Events[0].EventSeq)
+	}
 
 	assertEqual(t, "event[1].event", "game_end", evResp.Events[1].Event)
 }
@@ -1772,6 +1794,365 @@ func TestEventsSSE(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `data: {"event":"game_end"`) {
 		t.Fatalf("unexpected SSE body: %s", body)
+	}
+}
+
+func writeEventsFixture(t *testing.T, root, sessionID, spec string, lines []string) {
+	t.Helper()
+	path := filepath.Join(root, sessionID, "specs", spec, "evidence.jsonl")
+	os.MkdirAll(filepath.Dir(path), 0o755)
+	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func getEventsResponse(t *testing.T, url string) sessionapi.SessionEventsResponse {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+	var evResp sessionapi.SessionEventsResponse
+	json.NewDecoder(resp.Body).Decode(&evResp)
+	return evResp
+}
+
+func getEventsList(t *testing.T, url string) []sessionapi.SessionEvent {
+	t.Helper()
+	return getEventsResponse(t, url).Events
+}
+
+func eventNames(events []sessionapi.SessionEvent) string {
+	names := make([]string, 0, len(events))
+	for _, event := range events {
+		names = append(names, event.Event)
+	}
+	return strings.Join(names, ",")
+}
+
+// Fixture for the cursor tests: seq-stamped lines with one malformed line —
+// the window params must count only parsed events.
+var cursorFixtureLines = []string{
+	`{"event_seq":1,"event":"one","ts":"2026-05-21T00:00:01.000Z"}`,
+	`{"event_seq":2,"event":"two"}`,
+	`this line is not json`,
+	`{"event_seq":3,"event":"three"}`,
+	`{"event_seq":4,"event":"four"}`,
+}
+
+func TestEventsSeqAndRoleProjected(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "esr"))
+	writeEventsFixture(t, store.Root, created.SessionID, "esr", []string{
+		`{"event_seq":7,"event":"agent_progress","role":"prover","ts":"2026-05-21T00:00:01.000Z","data":{"text":"hi"}}`,
+	})
+
+	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events")
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].EventSeq == nil || *events[0].EventSeq != 7 {
+		t.Fatalf("expected event_seq=7, got %v", events[0].EventSeq)
+	}
+	if events[0].Role == nil || *events[0].Role != "prover" {
+		t.Fatalf("expected role=prover, got %v", events[0].Role)
+	}
+}
+
+func TestEventsAfter(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "ea"))
+	writeEventsFixture(t, store.Root, created.SessionID, "ea", cursorFixtureLines)
+
+	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?after=2")
+	assertEqual(t, "events", "three,four", eventNames(events))
+}
+
+func TestEventsBefore(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "eb"))
+	writeEventsFixture(t, store.Root, created.SessionID, "eb", cursorFixtureLines)
+
+	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?before=3")
+	assertEqual(t, "events", "one,two", eventNames(events))
+}
+
+func TestEventsTail(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "et"))
+	writeEventsFixture(t, store.Root, created.SessionID, "et", cursorFixtureLines)
+
+	response := getEventsResponse(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?tail=2")
+	assertEqual(t, "events", "three,four", eventNames(response.Events))
+	if response.HeadEventSeq == nil || *response.HeadEventSeq != 4 {
+		t.Fatalf("head_event_seq = %v, want 4", response.HeadEventSeq)
+	}
+
+	caughtUp := getEventsResponse(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?after=4")
+	if len(caughtUp.Events) != 0 {
+		t.Fatalf("caught-up events = %#v, want empty", caughtUp.Events)
+	}
+	if caughtUp.HeadEventSeq == nil || *caughtUp.HeadEventSeq != 4 {
+		t.Fatalf("caught-up head_event_seq = %v, want 4", caughtUp.HeadEventSeq)
+	}
+}
+
+func TestEventsBeforeTailCombined(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "ebt"))
+	writeEventsFixture(t, store.Root, created.SessionID, "ebt", cursorFixtureLines)
+
+	// Backward paging: the window before seq 4, newest 2 of it.
+	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?before=4&tail=2")
+	assertEqual(t, "events", "two,three", eventNames(events))
+}
+
+func TestEventsLegacyCursorReplaysSafely(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "eal"))
+	writeEventsFixture(t, store.Root, created.SessionID, "eal", []string{
+		`{"event":"one"}`,
+		`this line is not json`,
+		`{"event":"two"}`,
+		`{"event":"three"}`,
+	})
+
+	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?after=1")
+	assertEqual(t, "events", "one,two,three", eventNames(events))
+	tailed := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?tail=2")
+	assertEqual(t, "events", "two,three", eventNames(tailed))
+}
+
+func TestEventsBadParams(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "ebp"))
+	for _, query := range []string{"after=-1", "before=x", "tail=1.5"} {
+		resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/events?" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: expected 400, got %d", query, resp.StatusCode)
+		}
+	}
+}
+
+func TestEventsMixedSeqFileReplaysWithoutCursor(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "emx"))
+	// Seq-less lines ahead of numbered ones: the numbered seqs collide with
+	// the legacy lines' ordinal positions, so none of them are durable.
+	writeEventsFixture(t, store.Root, created.SessionID, "emx", []string{
+		`{"event":"legacy-one"}`,
+		`{"event":"legacy-two"}`,
+		`{"event_seq":1,"event":"new-one"}`,
+		`{"event_seq":2,"event":"new-two"}`,
+	})
+
+	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events")
+	if len(events) != 4 {
+		t.Fatalf("expected 4 events, got %d", len(events))
+	}
+	for i, event := range events {
+		if event.EventSeq != nil {
+			t.Fatalf("event %d: expected event_seq stripped, got %d", i, *event.EventSeq)
+		}
+	}
+	filtered := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?after=2")
+	assertEqual(t, "events", "legacy-one,legacy-two,new-one,new-two", eventNames(filtered))
+}
+
+func TestEventsMultiSpecSeqsNotAdvertised(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	// Two specs, each evidence file numbered independently from 1: the
+	// concatenation is not a usable cursor space, so no seqs may surface.
+	id := "sess_multispec"
+	sessionDir := filepath.Join(store.Root, id)
+	specs := []sessionapi.InitialManifestSpec{}
+	for i, name := range []string{"alpha", "beta"} {
+		specDir := filepath.Join(sessionDir, "specs", name)
+		if err := os.MkdirAll(specDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		evidencePath := filepath.Join(specDir, "evidence.jsonl")
+		lines := `{"event_seq":1,"event":"` + name + `-one"}` + "\n" +
+			`{"event_seq":2,"event":"` + name + `-two"}` + "\n"
+		if err := os.WriteFile(evidencePath, []byte(lines), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		specs = append(specs, sessionapi.InitialManifestSpec{
+			Index:        i,
+			Name:         name,
+			DirName:      name,
+			EvidencePath: &evidencePath,
+		})
+	}
+	m := sessionapi.ManifestFromInitial(sessionapi.InitialManifest{
+		SessionID: id,
+		CreatedAt: "2026-05-18T12:00:00.000Z",
+		SpecName:  "alpha",
+		Specs:     specs,
+	})
+	if err := sessionapi.WriteManifest(filepath.Join(sessionDir, "session.json"), &m); err != nil {
+		t.Fatal(err)
+	}
+
+	events := getEventsList(t, srv.URL+"/api/sessions/"+id+"/events")
+	if len(events) != 4 {
+		t.Fatalf("expected 4 events, got %d", len(events))
+	}
+	for i, event := range events {
+		if event.EventSeq != nil {
+			t.Fatalf("event %d: expected event_seq stripped, got %d", i, *event.EventSeq)
+		}
+	}
+	filtered := getEventsList(t, srv.URL+"/api/sessions/"+id+"/events?after=2")
+	assertEqual(
+		t,
+		"events",
+		"alpha-one,alpha-two,beta-one,beta-two",
+		eventNames(filtered),
+	)
+}
+
+func TestEventsSSEResume(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "esse"))
+	writeEventsFixture(t, store.Root, created.SessionID, "esse", cursorFixtureLines)
+	stopSession(t, srv.URL, created.SessionID)
+
+	stream := func(query, lastEventID string) string {
+		t.Helper()
+		req, err := http.NewRequest("GET", srv.URL+"/api/sessions/"+created.SessionID+"/events"+query, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		if lastEventID != "" {
+			req.Header.Set("Last-Event-ID", lastEventID)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(body)
+	}
+
+	// ?after resumes past the cursor and frames carry durable ids.
+	body := stream("?after=2", "")
+	if strings.Contains(body, `"event":"two"`) || !strings.Contains(body, `"event":"three"`) {
+		t.Fatalf("expected resume after seq 2, got: %s", body)
+	}
+	if !strings.Contains(body, "id: 3\n") {
+		t.Fatalf("expected id: frames for seq events, got: %s", body)
+	}
+
+	// The standard reconnect header works the same way…
+	body = stream("", "2")
+	if strings.Contains(body, `"event":"two"`) || !strings.Contains(body, `"event":"three"`) {
+		t.Fatalf("expected Last-Event-ID resume, got: %s", body)
+	}
+
+	// …but an explicit ?after wins over it.
+	body = stream("?after=3", "1")
+	if strings.Contains(body, `"event":"three"`) || !strings.Contains(body, `"event":"four"`) {
+		t.Fatalf("expected ?after to win over Last-Event-ID, got: %s", body)
+	}
+
+	body = stream("?after=0", "3")
+	if !strings.Contains(body, `"event":"one"`) {
+		t.Fatalf("expected explicit ?after=0 to override Last-Event-ID, got: %s", body)
+	}
+}
+
+func TestEventsSSERejectsSnapshotWindows(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "essw"))
+	stopSession(t, srv.URL, created.SessionID)
+
+	for _, query := range []string{"before=2", "tail=10"} {
+		req, err := http.NewRequest(
+			http.MethodGet,
+			srv.URL+"/api/sessions/"+created.SessionID+"/events?"+query,
+			nil,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", query, resp.StatusCode)
+		}
+	}
+}
+
+func TestEventsSSELegacyCursorReplaysWithoutIDFrames(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "esl"))
+	writeEventsFixture(t, store.Root, created.SessionID, "esl", []string{
+		`{"event":"game_end","data":{"game_result":"success"}}`,
+	})
+	stopSession(t, srv.URL, created.SessionID)
+
+	req, err := http.NewRequest("GET", srv.URL+"/api/sessions/"+created.SessionID+"/events", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Accept", "text/event-stream")
+	req.Header.Set("Last-Event-ID", "99")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(body), `data: {"event":"game_end"`) {
+		t.Fatalf("unexpected SSE body: %s", body)
+	}
+	// Ordinal positions are not durable cursors: never advertise them.
+	if strings.Contains(string(body), "id: ") {
+		t.Fatalf("expected no id frames for legacy events, got: %s", body)
 	}
 }
 
@@ -2278,7 +2659,7 @@ func newBearerTestServer(t *testing.T, operatorToken string) (*httptest.Server, 
 	root := t.TempDir()
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
 	mux := http.NewServeMux()
-	sessionapi.RegisterRoutes(mux, store, sessionapi.NewBearerAuthorizer(store, operatorToken))
+	sessionapi.RegisterRoutes(mux, store, sessionapi.NewBearerAuthorizer(store, operatorToken), sessionapi.RuntimeIdentity{})
 	return httptest.NewServer(mux), store
 }
 

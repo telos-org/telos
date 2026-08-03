@@ -22,7 +22,7 @@ import (
 // `app.usetelos.ai` both match).
 var cloudAllowedOrigin = regexp.MustCompile(`^https://(.*\.)?usetelos\.ai$|^http://localhost(:[0-9]+)?$|^http://127\.0\.0\.1(:[0-9]+)?$`)
 
-func Run(ctx context.Context, cfg Config) error {
+func Run(ctx context.Context, cfg Config, runtime sessionapi.RuntimeIdentity) error {
 	cfg, err := NormalizeConfig(cfg)
 	if err != nil {
 		return err
@@ -48,7 +48,7 @@ func Run(ctx context.Context, cfg Config) error {
 	}
 	mux := http.NewServeMux()
 	authorizer := authorizerForConfig(cfg, baseStore)
-	sessionapi.RegisterRoutes(mux, store, authorizer)
+	sessionapi.RegisterRoutes(mux, store, authorizer, runtime)
 
 	var lastRequest atomic.Int64
 	lastRequest.Store(time.Now().UnixNano())

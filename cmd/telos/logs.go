@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"regexp"
 	"sort"
@@ -119,6 +120,11 @@ func streamCloudSessionLogs(
 
 		session, err := control.GetSession(sessionID)
 		if err != nil {
+			if cloud.IsStatus(err, http.StatusNotFound) {
+				// The control plane hard-deletes deployments once teardown
+				// completes; a session vanishing mid-follow means it finished.
+				return nil
+			}
 			return err
 		}
 		if cloudSessionStateTerminal(session.State) {

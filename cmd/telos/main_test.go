@@ -52,7 +52,9 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"usage: telos <command> [args]",
 		"--help",
 		"apply SPEC.md      Create or update a durable session from a spec",
+		"get SESSION        Download a session's package",
 		"delete SESSION     Delete a session (local history is preserved)",
+		"pull PACKAGE       Download a registry package",
 		"version            Show version",
 		"--version",
 		"telos <command> --help",
@@ -73,7 +75,7 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root")
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      hello-service",
@@ -107,7 +109,7 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root")
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",
@@ -122,6 +124,26 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("plan output missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestPrintPlanPreviewStarsRequiredVerifierSkills(t *testing.T) {
+	verifyEngineering := &spec.Skill{Name: "verify-engineering"}
+	compiled := &spec.CompiledEnvironment{
+		Environment: &spec.EnvironmentSpec{Name: "gitea"},
+		ContentHash: "8a8f0c21",
+		Skills: []*spec.Skill{
+			verifyEngineering,
+			{Name: "verify-quality"},
+		},
+		RequiredVerifierSkills: []*spec.Skill{verifyEngineering},
+	}
+
+	var out bytes.Buffer
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", nil)
+	text := out.String()
+	if !strings.Contains(text, "Skills    verify-engineering*, verify-quality") {
+		t.Fatalf("plan output missing starred skill marker:\n%s", text)
 	}
 }
 
@@ -1327,6 +1349,28 @@ func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "#1 ready") {
 		t.Fatalf("follow output missing progress:\n%s", out.String())
+	}
+}
+
+func TestFollowCloudSessionLogsExitsCleanWhenSessionDeleted(t *testing.T) {
+	// The control plane hard-deletes deployments once teardown completes:
+	// both /logs and the session GET 404. The follow loop should treat that
+	// as a clean end of the session, not an error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	err := streamCloudSessionLogs(
+		cloud.NewClient(srv.URL, "test-token"),
+		"sess_123",
+		&out,
+		func(time.Duration) {},
+		false,
+	)
+	if err != nil {
+		t.Fatalf("streamCloudSessionLogs after delete: %v", err)
 	}
 }
 
