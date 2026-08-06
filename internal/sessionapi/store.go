@@ -2133,12 +2133,21 @@ const maxDashboardDocBytes = 256 << 10
 // boolean — not the string — signals absence.
 func readDashboardDoc(workspacePath string) (string, bool) {
 	path := filepath.Join(workspacePath, dashboardDocFilename)
-	info, err := os.Stat(path)
+	file, err := os.Open(path)
+	if err != nil {
+		return "", false
+	}
+	defer file.Close()
+
+	info, err := file.Stat()
 	if err != nil || info.IsDir() || info.Size() > maxDashboardDocBytes {
 		return "", false
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
+	// Read from the same descriptor we inspected and keep the read bounded in
+	// case the file grows after Stat. Reading one extra byte distinguishes an
+	// exactly-at-limit document from an oversized one.
+	data, err := io.ReadAll(io.LimitReader(file, maxDashboardDocBytes+1))
+	if err != nil || len(data) > maxDashboardDocBytes {
 		return "", false
 	}
 	return string(data), true
