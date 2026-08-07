@@ -198,7 +198,6 @@ func followCloudSessionLogs(session *cloud.SessionRecord, options logViewOptions
 		printStructuredLogs(os.Stdout, cloudLogHeader(session), page.Events, options)
 		fmt.Fprintln(os.Stdout)
 	}
-	resume := runtimeResumeCursor(page.RuntimeCursor)
 	if err := streamCloudSessionLogsAfter(
 		control,
 		session.ID,
@@ -206,7 +205,7 @@ func followCloudSessionLogs(session *cloud.SessionRecord, options logViewOptions
 		time.Sleep,
 		options.Verbose,
 		jsonOutput,
-		resume,
+		page.RuntimeCursor,
 		cloudLogHeader(session),
 		page.Events,
 	); err != nil {
@@ -235,7 +234,8 @@ func followCloudRawSessionLogs(session *cloud.SessionRecord) {
 		session.ID,
 		os.Stdout,
 		time.Sleep,
-		runtimeResumeCursor(page.RuntimeCursor),
+		page.RuntimeCursor,
+		page.RawEvents,
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -276,8 +276,15 @@ func streamCloudSessionLogsAfter(
 ) error {
 	events := append([]sessionapi.SessionEvent(nil), initialEvents...)
 	currentStatus := deriveOverallLogStatus(header, events)
+	replayCounts := map[string]int(nil)
+	if afterRuntime == nil {
+		replayCounts = sessionEventReplayCounts(initialEvents)
+	}
 	for {
 		streamErr := control.StreamSessionLogsAfter(context.Background(), sessionID, afterRuntime, func(event sessionapi.SessionEvent) error {
+			if consumeSessionEventReplay(replayCounts, event) {
+				return nil
+			}
 			printed, err := printStreamingLogEvent(out, event, verbose, jsonOutput)
 			if err != nil {
 				return err
@@ -327,13 +334,21 @@ func streamCloudRawSessionLogs(
 	out io.Writer,
 	sleep func(time.Duration),
 	afterRuntime *int64,
+	initialEvents []json.RawMessage,
 ) error {
+	replayCounts := map[string]int(nil)
+	if afterRuntime == nil {
+		replayCounts = rawEventReplayCounts(initialEvents)
+	}
 	for {
 		streamErr := control.StreamRawSessionLogsAfter(
 			context.Background(),
 			sessionID,
 			afterRuntime,
 			func(event json.RawMessage) error {
+				if consumeRawEventReplay(replayCounts, event) {
+					return nil
+				}
 				return printRawJSONLogEvents(out, []json.RawMessage{event})
 			},
 		)
@@ -425,14 +440,6 @@ func printStatusTransition(out io.Writer, timestamp string, status overallLogSta
 	})
 }
 
-func runtimeResumeCursor(cursor *int64) *int64 {
-	if cursor != nil {
-		return cursor
-	}
-	zero := int64(0)
-	return &zero
-}
-
 func printRawJSONLogEvents(out io.Writer, events []json.RawMessage) error {
 	for _, event := range events {
 		if !json.Valid(event) {
@@ -446,6 +453,74 @@ func printRawJSONLogEvents(out io.Writer, events []json.RawMessage) error {
 		}
 	}
 	return nil
+}
+
+func sessionEventReplayCounts(events []sessionapi.SessionEvent) map[string]int {
+	counts := make(map[string]int, len(events))
+	for _, event := range events {
+		key, ok := sessionEventReplayKey(event)
+		if ok {
+			counts[key]++
+		}
+	}
+	return counts
+}
+
+func consumeSessionEventReplay(counts map[string]int, event sessionapi.SessionEvent) bool {
+	if len(counts) == 0 {
+		return false
+	}
+	key, ok := sessionEventReplayKey(event)
+	if !ok || counts[key] == 0 {
+		return false
+	}
+	if counts[key] == 1 {
+		delete(counts, key)
+	} else {
+		counts[key]--
+	}
+	return true
+}
+
+func sessionEventReplayKey(event sessionapi.SessionEvent) (string, bool) {
+	data, err := json.Marshal(event)
+	return string(data), err == nil
+}
+
+func rawEventReplayCounts(events []json.RawMessage) map[string]int {
+	counts := make(map[string]int, len(events))
+	for _, event := range events {
+		key, ok := rawEventReplayKey(event)
+		if ok {
+			counts[key]++
+		}
+	}
+	return counts
+}
+
+func consumeRawEventReplay(counts map[string]int, event json.RawMessage) bool {
+	if len(counts) == 0 {
+		return false
+	}
+	key, ok := rawEventReplayKey(event)
+	if !ok || counts[key] == 0 {
+		return false
+	}
+	if counts[key] == 1 {
+		delete(counts, key)
+	} else {
+		counts[key]--
+	}
+	return true
+}
+
+func rawEventReplayKey(event json.RawMessage) (string, bool) {
+	var value any
+	if err := json.Unmarshal(event, &value); err != nil {
+		return "", false
+	}
+	data, err := json.Marshal(value)
+	return string(data), err == nil
 }
 
 func legacyTranscriptFallback(

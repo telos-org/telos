@@ -1481,6 +1481,101 @@ func TestFollowCloudSessionLogsResumesAndPrintsStatusChange(t *testing.T) {
 	}
 }
 
+func TestFollowCloudSessionLogsDeduplicatesLegacyReplay(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/deployments/sess_legacy/logs" {
+			http.NotFound(w, r)
+			return
+		}
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"data: {\"event\":\"agent_progress\",\"data\":{\"text\":\"old activity\"}}\n\n" +
+				"data: {\"event\":\"agent_progress\",\"data\":{\"text\":\"old activity\"}}\n\n" +
+				"data: {\"event\":\"agent_progress\",\"data\":{\"text\":\"new activity\"}}\n\n",
+		))
+	}))
+	defer srv.Close()
+
+	initial := []sessionapi.SessionEvent{
+		{Event: "agent_progress", Data: map[string]any{"text": "old activity"}},
+	}
+	var out bytes.Buffer
+	if err := printJSONLogEvents(&out, initial); err != nil {
+		t.Fatalf("print snapshot: %v", err)
+	}
+	if err := streamCloudSessionLogsAfter(
+		cloud.NewClient(srv.URL, "test-token"),
+		"sess_legacy",
+		&out,
+		func(time.Duration) {},
+		false,
+		true,
+		nil,
+		logHeader{},
+		initial,
+	); err != nil {
+		t.Fatalf("streamCloudSessionLogsAfter: %v", err)
+	}
+	if query != "" {
+		t.Fatalf("legacy stream should not invent a cursor: %q", query)
+	}
+	// One replay is removed, while a genuinely new event with the same payload
+	// still appears after the snapshot's single matching count is consumed.
+	if count := strings.Count(out.String(), `"text":"old activity"`); count != 2 {
+		t.Fatalf("old activity printed %d times:\n%s", count, out.String())
+	}
+	if count := strings.Count(out.String(), `"text":"new activity"`); count != 1 {
+		t.Fatalf("new activity printed %d times:\n%s", count, out.String())
+	}
+}
+
+func TestFollowCloudRawSessionLogsDeduplicatesLegacyReplay(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/deployments/sess_legacy/logs" {
+			http.NotFound(w, r)
+			return
+		}
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"data: {\"round\":1,\"data\":{\"text\":\"old activity\"},\"event\":\"agent_progress\"}\n\n" +
+				"data: {\"event\":\"agent_progress\",\"round\":1,\"data\":{\"text\":\"old activity\"}}\n\n" +
+				"data: {\"event\":\"agent_progress\",\"round\":2,\"data\":{\"text\":\"new activity\"}}\n\n",
+		))
+	}))
+	defer srv.Close()
+
+	initial := []json.RawMessage{
+		json.RawMessage(`{"event":"agent_progress","round":1,"data":{"text":"old activity"}}`),
+	}
+	var out bytes.Buffer
+	if err := printRawJSONLogEvents(&out, initial); err != nil {
+		t.Fatalf("print raw snapshot: %v", err)
+	}
+	if err := streamCloudRawSessionLogs(
+		cloud.NewClient(srv.URL, "test-token"),
+		"sess_legacy",
+		&out,
+		func(time.Duration) {},
+		nil,
+		initial,
+	); err != nil {
+		t.Fatalf("streamCloudRawSessionLogs: %v", err)
+	}
+	if query != "" {
+		t.Fatalf("legacy raw stream should not invent a cursor: %q", query)
+	}
+	if count := strings.Count(out.String(), `"text":"old activity"`); count != 2 {
+		t.Fatalf("old raw activity printed %d times:\n%s", count, out.String())
+	}
+	if count := strings.Count(out.String(), `"text":"new activity"`); count != 1 {
+		t.Fatalf("new raw activity printed %d times:\n%s", count, out.String())
+	}
+}
+
 func TestFollowCloudSessionLogsExitsCleanWhenSessionDeleted(t *testing.T) {
 	// The control plane hard-deletes deployments once teardown completes:
 	// both /logs and the session GET 404. The follow loop should treat that
