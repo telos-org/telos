@@ -473,7 +473,7 @@ func TestClientGetSessionLogs(t *testing.T) {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"events":[` +
-			`{"event":"agent_progress","data":{"kind":"progress_update","text":"ready"}},` +
+			`{"event":"agent_progress","event_seq":7,"role":"verifier","data":{"kind":"progress_update","text":"ready"}},` +
 			`{"event":"runtime.prepare.started","time":"2026-07-04T15:14:52Z","message":"preparing runtime","metadata":{"stage":"prepare"}}` +
 			`]}`))
 	}))
@@ -486,6 +486,9 @@ func TestClientGetSessionLogs(t *testing.T) {
 	}
 	if len(events) != 2 || events[0].Event != "agent_progress" || events[0].Data["text"] != "ready" {
 		t.Fatalf("events: got %#v", events)
+	}
+	if events[0].EventSeq == nil || *events[0].EventSeq != 7 || events[0].Role == nil || *events[0].Role != "verifier" {
+		t.Fatalf("agent event identity: got %#v", events[0])
 	}
 	if events[1].Event != "runtime.prepare.started" || events[1].Data["message"] != "preparing runtime" || events[1].Data["stage"] != "prepare" {
 		t.Fatalf("control event: got %#v", events[1])

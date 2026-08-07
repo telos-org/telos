@@ -88,6 +88,8 @@ type deploymentLogEventsResponse struct {
 
 type deploymentLogEvent struct {
 	Event       string         `json:"event"`
+	EventSeq    *int64         `json:"event_seq,omitempty"`
+	Role        *string        `json:"role,omitempty"`
 	Timestamp   *string        `json:"ts,omitempty"`
 	Time        *string        `json:"time,omitempty"`
 	SessionID   *string        `json:"session_id,omitempty"`
@@ -116,6 +118,8 @@ func (event deploymentLogEvent) asSessionEvent() sessionapi.SessionEvent {
 	}
 	return sessionapi.SessionEvent{
 		Event:       event.Event,
+		EventSeq:    event.EventSeq,
+		Role:        event.Role,
 		Timestamp:   timestamp,
 		SessionID:   event.SessionID,
 		SpecIndex:   event.SpecIndex,

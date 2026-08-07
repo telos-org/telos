@@ -1273,45 +1273,80 @@ func TestPrintLogsVerboseShowsTranscript(t *testing.T) {
 	}
 }
 
-func TestPrintCloudSessionLogsDefaultsToAgentProgress(t *testing.T) {
+func TestPrintStructuredLogsShowsStatusAndSignificantActivity(t *testing.T) {
+	ts1 := "2026-07-01T00:00:00Z"
+	ts2 := "2026-07-01T00:01:00Z"
+	ts3 := "2026-07-01T00:02:00Z"
+	verifier := "verifier"
 	events := []sessionapi.SessionEvent{
-		{Event: "agent_progress", Data: map[string]any{"kind": "progress_update", "text": "ready"}},
-		{Event: "agent_progress", Data: map[string]any{"kind": "review", "text": "criteria,score\nCorrectness,8/10"}},
-		{Event: "agent_complete", Data: map[string]any{"status": "CONTINUE", "model": "test-model", "num_turns": float64(12)}},
-		{Event: "agent_failure_recoverable", Data: map[string]any{"error": "agent_no_output", "consecutive_failures": float64(1), "max_failures": float64(3)}},
-		{Event: "runtime.prepare.started", Data: map[string]any{"message": "preparing runtime", "stage": "prepare"}},
-		{Event: "game_end", Data: map[string]any{"game_result": "failure", "error": "run_duration_exhausted: exceeded 1800 seconds"}},
+		{Event: "agent_progress", Timestamp: &ts1, Data: map[string]any{"text": "Reading package.json"}},
+		{Event: "agent_progress", Timestamp: &ts1, Data: map[string]any{"text": "Implemented the authentication flow. Added session validation."}},
+		{Event: "agent_progress", Timestamp: &ts2, Role: &verifier, Data: map[string]any{"text": "Running the integration checks"}},
+		{Event: "game_end", Timestamp: &ts3, Data: map[string]any{"game_result": "failure", "error": "run_duration_exhausted: exceeded 1800 seconds"}},
 	}
 
 	var out bytes.Buffer
-	printCloudSessionLogEvents(&out, events, false)
+	printStructuredLogs(&out, logHeader{
+		Name:       "palmfall",
+		State:      "healthy",
+		PackageRef: "@telos/palmfall:1.0.0",
+		SessionID:  "sess_123",
+	}, events, logViewOptions{Tail: defaultLogTail})
 	text := out.String()
 	for _, want := range []string{
-		"#1 ready",
-		"Review\ncriteria,score\nCorrectness,8/10",
-		"Agent complete: CONTINUE model=test-model turns=12",
-		"Recoverable failure: agent_no_output (1/3)",
-		"preparing runtime",
-		"Completed: failure (run_duration_exhausted: exceeded 1800 seconds)",
+		"PALMFALL",
+		"Status    Needs attention",
+		"Summary   run_duration_exhausted: exceeded 1800 seconds",
+		"00:00:00  BUILD    Implemented the authentication flow",
+		"00:01:00  VERIFY   Running the integration checks",
+		"00:02:00  VERIFY   Evaluation cycle interrupted",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("cloud session logs missing %q:\n%s", want, text)
+			t.Fatalf("structured logs missing %q:\n%s", want, text)
+		}
+	}
+	for _, unwanted := range []string{"Reading package.json", "game_end"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("structured logs unexpectedly include %q:\n%s", unwanted, text)
 		}
 	}
 }
 
-func TestPrintCloudSessionLogsVerboseShowsJSONEvents(t *testing.T) {
+func TestPrintStructuredLogsVerboseIncludesMinorActivity(t *testing.T) {
 	ts := "2026-07-01T00:00:00Z"
 	events := []sessionapi.SessionEvent{
-		{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"kind": "progress_update", "text": "ready"}},
+		{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"text": "Reading package.json"}},
 	}
 
 	var out bytes.Buffer
-	printCloudSessionLogEvents(&out, events, true)
+	printStructuredLogs(&out, logHeader{Name: "pegfall", State: "healthy", SessionID: "sess_123"}, events, logViewOptions{
+		Verbose: true,
+		Tail:    defaultLogTail,
+	})
 	text := out.String()
+	if !strings.Contains(text, "00:00:00  BUILD    Reading package.json") {
+		t.Fatalf("verbose logs missing minor activity:\n%s", text)
+	}
+}
+
+func TestPrintJSONLogEventsUsesNDJSON(t *testing.T) {
+	ts := "2026-07-01T00:00:00Z"
+	events := []sessionapi.SessionEvent{
+		{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"text": "ready"}},
+		{Event: "game_end", Timestamp: &ts, Data: map[string]any{"game_result": "success"}},
+	}
+
+	var out bytes.Buffer
+	if err := printJSONLogEvents(&out, events); err != nil {
+		t.Fatalf("printJSONLogEvents: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("NDJSON lines: got %d\n%s", len(lines), out.String())
+	}
 	for _, want := range []string{`"event":"agent_progress"`, `"ts":"2026-07-01T00:00:00Z"`, `"text":"ready"`} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("verbose cloud session logs missing %q:\n%s", want, text)
+		if !strings.Contains(lines[0], want) {
+			t.Fatalf("JSON logs missing %q:\n%s", want, lines[0])
 		}
 	}
 }
@@ -1340,6 +1375,7 @@ func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
 		&out,
 		func(time.Duration) {},
 		false,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("streamCloudSessionLogs: %v", err)
@@ -1347,7 +1383,7 @@ func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
 	if logCalls != 1 {
 		t.Fatalf("calls: logs=%d", logCalls)
 	}
-	if !strings.Contains(out.String(), "#1 ready") {
+	if !strings.Contains(out.String(), "BUILD    ready") {
 		t.Fatalf("follow output missing progress:\n%s", out.String())
 	}
 }
@@ -1367,6 +1403,7 @@ func TestFollowCloudSessionLogsExitsCleanWhenSessionDeleted(t *testing.T) {
 		"sess_123",
 		&out,
 		func(time.Duration) {},
+		false,
 		false,
 	)
 	if err != nil {
