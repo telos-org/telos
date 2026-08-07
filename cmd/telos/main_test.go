@@ -1187,6 +1187,56 @@ func TestFollowTranscriptSurfacesRootTranscriptError(t *testing.T) {
 	}
 }
 
+func TestLegacyTranscriptFallbackUsesLocalTranscriptOnlySession(t *testing.T) {
+	root := t.TempDir()
+	configureLocalOnlyTest(t)
+	t.Setenv("TELOS_SESSION_DIR", root)
+	s := store()
+	markdown := "---\nversion: 0.1.0\nname: legacy-logs\nplatform: local\n---\n# Legacy Logs\n"
+	session, err := s.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(session.Specs) == 0 || session.Specs[0].TranscriptPath == nil {
+		t.Fatalf("missing transcript path: %#v", session.Specs)
+	}
+	transcript := "# Transcript\n\n<progress_update>Recovered legacy activity</progress_update>\n"
+	if err := os.WriteFile(*session.Specs[0].TranscriptPath, []byte(transcript), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	events, eventsErr := getEventsFromAnywhere(session.SessionID)
+	got, ok := legacyTranscriptFallback(session.SessionID, events, eventsErr)
+	if !ok || got != transcript {
+		t.Fatalf("fallback: ok=%v, got %q, events=%#v, err=%v", ok, got, events, eventsErr)
+	}
+}
+
+func TestLegacyTranscriptFallbackUsesOlderRootRuntime(t *testing.T) {
+	t.Setenv("TELOS_RUNTIME", "")
+	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/sessions/sess_legacy/events":
+			http.NotFound(w, r)
+		case "/api/sessions/sess_legacy/transcript":
+			_, _ = w.Write([]byte("<progress_update>Recovered root activity</progress_update>"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cluster.Close()
+	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+	t.Setenv("TELOS_API_TOKEN", "scoped-token")
+	t.Setenv("TELOS_SESSION_ID", "sess_parent")
+	t.Setenv("TELOS_API_ENDPOINT", cluster.URL)
+
+	events, eventsErr := getEventsFromAnywhere("sess_legacy")
+	transcript, ok := legacyTranscriptFallback("sess_legacy", events, eventsErr)
+	if !ok || !strings.Contains(transcript, "Recovered root activity") {
+		t.Fatalf("fallback: ok=%v, transcript=%q, events=%#v, err=%v", ok, transcript, events, eventsErr)
+	}
+}
+
 func TestPrintLogsDefaultsToProtocolBlocks(t *testing.T) {
 	transcript := `# Transcript
 
@@ -1273,45 +1323,80 @@ func TestPrintLogsVerboseShowsTranscript(t *testing.T) {
 	}
 }
 
-func TestPrintCloudSessionLogsDefaultsToAgentProgress(t *testing.T) {
+func TestPrintStructuredLogsShowsStatusAndSignificantActivity(t *testing.T) {
+	ts1 := "2026-07-01T00:00:00Z"
+	ts2 := "2026-07-01T00:01:00Z"
+	ts3 := "2026-07-01T00:02:00Z"
+	verifier := "verifier"
 	events := []sessionapi.SessionEvent{
-		{Event: "agent_progress", Data: map[string]any{"kind": "progress_update", "text": "ready"}},
-		{Event: "agent_progress", Data: map[string]any{"kind": "review", "text": "criteria,score\nCorrectness,8/10"}},
-		{Event: "agent_complete", Data: map[string]any{"status": "CONTINUE", "model": "test-model", "num_turns": float64(12)}},
-		{Event: "agent_failure_recoverable", Data: map[string]any{"error": "agent_no_output", "consecutive_failures": float64(1), "max_failures": float64(3)}},
-		{Event: "runtime.prepare.started", Data: map[string]any{"message": "preparing runtime", "stage": "prepare"}},
-		{Event: "game_end", Data: map[string]any{"game_result": "failure", "error": "run_duration_exhausted: exceeded 1800 seconds"}},
+		{Event: "agent_progress", Timestamp: &ts1, Data: map[string]any{"text": "Reading package.json"}},
+		{Event: "agent_progress", Timestamp: &ts1, Data: map[string]any{"text": "Implemented the authentication flow. Added session validation."}},
+		{Event: "agent_progress", Timestamp: &ts2, Role: &verifier, Data: map[string]any{"text": "Running the integration checks"}},
+		{Event: "game_end", Timestamp: &ts3, Data: map[string]any{"game_result": "failure", "error": "run_duration_exhausted: exceeded 1800 seconds"}},
 	}
 
 	var out bytes.Buffer
-	printCloudSessionLogEvents(&out, events, false)
+	printStructuredLogs(&out, logHeader{
+		Name:       "palmfall",
+		State:      "healthy",
+		PackageRef: "@telos/palmfall:1.0.0",
+		SessionID:  "sess_123",
+	}, events, logViewOptions{Tail: defaultLogTail})
 	text := out.String()
 	for _, want := range []string{
-		"#1 ready",
-		"Review\ncriteria,score\nCorrectness,8/10",
-		"Agent complete: CONTINUE model=test-model turns=12",
-		"Recoverable failure: agent_no_output (1/3)",
-		"preparing runtime",
-		"Completed: failure (run_duration_exhausted: exceeded 1800 seconds)",
+		"PALMFALL",
+		"Status    Needs attention",
+		"Summary   run_duration_exhausted: exceeded 1800 seconds",
+		"00:00:00  BUILD    Implemented the authentication flow",
+		"00:01:00  VERIFY   Running the integration checks",
+		"00:02:00  VERIFY   Evaluation cycle interrupted",
 	} {
 		if !strings.Contains(text, want) {
-			t.Fatalf("cloud session logs missing %q:\n%s", want, text)
+			t.Fatalf("structured logs missing %q:\n%s", want, text)
+		}
+	}
+	for _, unwanted := range []string{"Reading package.json", "game_end"} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("structured logs unexpectedly include %q:\n%s", unwanted, text)
 		}
 	}
 }
 
-func TestPrintCloudSessionLogsVerboseShowsJSONEvents(t *testing.T) {
+func TestPrintStructuredLogsVerboseIncludesMinorActivity(t *testing.T) {
 	ts := "2026-07-01T00:00:00Z"
 	events := []sessionapi.SessionEvent{
-		{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"kind": "progress_update", "text": "ready"}},
+		{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"text": "Reading package.json"}},
 	}
 
 	var out bytes.Buffer
-	printCloudSessionLogEvents(&out, events, true)
+	printStructuredLogs(&out, logHeader{Name: "pegfall", State: "healthy", SessionID: "sess_123"}, events, logViewOptions{
+		Verbose: true,
+		Tail:    defaultLogTail,
+	})
 	text := out.String()
+	if !strings.Contains(text, "00:00:00  BUILD    Reading package.json") {
+		t.Fatalf("verbose logs missing minor activity:\n%s", text)
+	}
+}
+
+func TestPrintJSONLogEventsUsesNDJSON(t *testing.T) {
+	ts := "2026-07-01T00:00:00Z"
+	events := []sessionapi.SessionEvent{
+		{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"text": "ready"}},
+		{Event: "game_end", Timestamp: &ts, Data: map[string]any{"game_result": "success"}},
+	}
+
+	var out bytes.Buffer
+	if err := printJSONLogEvents(&out, events); err != nil {
+		t.Fatalf("printJSONLogEvents: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("NDJSON lines: got %d\n%s", len(lines), out.String())
+	}
 	for _, want := range []string{`"event":"agent_progress"`, `"ts":"2026-07-01T00:00:00Z"`, `"text":"ready"`} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("verbose cloud session logs missing %q:\n%s", want, text)
+		if !strings.Contains(lines[0], want) {
+			t.Fatalf("JSON logs missing %q:\n%s", want, lines[0])
 		}
 	}
 }
@@ -1340,6 +1425,7 @@ func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
 		&out,
 		func(time.Duration) {},
 		false,
+		false,
 	)
 	if err != nil {
 		t.Fatalf("streamCloudSessionLogs: %v", err)
@@ -1347,8 +1433,146 @@ func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
 	if logCalls != 1 {
 		t.Fatalf("calls: logs=%d", logCalls)
 	}
-	if !strings.Contains(out.String(), "#1 ready") {
+	if !strings.Contains(out.String(), "BUILD    ready") {
 		t.Fatalf("follow output missing progress:\n%s", out.String())
+	}
+}
+
+func TestFollowCloudSessionLogsResumesAndPrintsStatusChange(t *testing.T) {
+	verifier := "verifier"
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/deployments/sess_123/logs" {
+			http.NotFound(w, r)
+			return
+		}
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"event\":\"agent_complete\",\"event_seq\":8,\"role\":\"verifier\",\"data\":{\"status\":\"CONCEDE\"}}\n\n"))
+	}))
+	defer srv.Close()
+
+	after := int64(7)
+	initial := []sessionapi.SessionEvent{
+		{Event: "agent_progress", EventSeq: &after, Role: &verifier, Data: map[string]any{"text": "Checking the result"}},
+	}
+	var out bytes.Buffer
+	err := streamCloudSessionLogsAfter(
+		cloud.NewClient(srv.URL, "test-token"),
+		"sess_123",
+		&out,
+		func(time.Duration) {},
+		false,
+		false,
+		&after,
+		logHeader{Name: "pegfall", State: "healthy", SessionID: "sess_123"},
+		initial,
+	)
+	if err != nil {
+		t.Fatalf("streamCloudSessionLogsAfter: %v", err)
+	}
+	if query != "after_rt=7" {
+		t.Fatalf("resume query: got %q", query)
+	}
+	for _, want := range []string{"Current spec accepted", "STATUS   Ready"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("follow output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestFollowCloudSessionLogsDeduplicatesLegacyReplay(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/deployments/sess_legacy/logs" {
+			http.NotFound(w, r)
+			return
+		}
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"data: {\"event\":\"agent_progress\",\"data\":{\"text\":\"old activity\"}}\n\n" +
+				"data: {\"event\":\"agent_progress\",\"data\":{\"text\":\"old activity\"}}\n\n" +
+				"data: {\"event\":\"agent_progress\",\"data\":{\"text\":\"new activity\"}}\n\n",
+		))
+	}))
+	defer srv.Close()
+
+	initial := []sessionapi.SessionEvent{
+		{Event: "agent_progress", Data: map[string]any{"text": "old activity"}},
+	}
+	var out bytes.Buffer
+	if err := printJSONLogEvents(&out, initial); err != nil {
+		t.Fatalf("print snapshot: %v", err)
+	}
+	if err := streamCloudSessionLogsAfter(
+		cloud.NewClient(srv.URL, "test-token"),
+		"sess_legacy",
+		&out,
+		func(time.Duration) {},
+		false,
+		true,
+		nil,
+		logHeader{},
+		initial,
+	); err != nil {
+		t.Fatalf("streamCloudSessionLogsAfter: %v", err)
+	}
+	if query != "" {
+		t.Fatalf("legacy stream should not invent a cursor: %q", query)
+	}
+	// One replay is removed, while a genuinely new event with the same payload
+	// still appears after the snapshot's single matching count is consumed.
+	if count := strings.Count(out.String(), `"text":"old activity"`); count != 2 {
+		t.Fatalf("old activity printed %d times:\n%s", count, out.String())
+	}
+	if count := strings.Count(out.String(), `"text":"new activity"`); count != 1 {
+		t.Fatalf("new activity printed %d times:\n%s", count, out.String())
+	}
+}
+
+func TestFollowCloudRawSessionLogsDeduplicatesLegacyReplay(t *testing.T) {
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/deployments/sess_legacy/logs" {
+			http.NotFound(w, r)
+			return
+		}
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(
+			"data: {\"round\":1,\"data\":{\"text\":\"old activity\"},\"event\":\"agent_progress\"}\n\n" +
+				"data: {\"event\":\"agent_progress\",\"round\":1,\"data\":{\"text\":\"old activity\"}}\n\n" +
+				"data: {\"event\":\"agent_progress\",\"round\":2,\"data\":{\"text\":\"new activity\"}}\n\n",
+		))
+	}))
+	defer srv.Close()
+
+	initial := []json.RawMessage{
+		json.RawMessage(`{"event":"agent_progress","round":1,"data":{"text":"old activity"}}`),
+	}
+	var out bytes.Buffer
+	if err := printRawJSONLogEvents(&out, initial); err != nil {
+		t.Fatalf("print raw snapshot: %v", err)
+	}
+	if err := streamCloudRawSessionLogs(
+		cloud.NewClient(srv.URL, "test-token"),
+		"sess_legacy",
+		&out,
+		func(time.Duration) {},
+		nil,
+		initial,
+	); err != nil {
+		t.Fatalf("streamCloudRawSessionLogs: %v", err)
+	}
+	if query != "" {
+		t.Fatalf("legacy raw stream should not invent a cursor: %q", query)
+	}
+	if count := strings.Count(out.String(), `"text":"old activity"`); count != 2 {
+		t.Fatalf("old raw activity printed %d times:\n%s", count, out.String())
+	}
+	if count := strings.Count(out.String(), `"text":"new activity"`); count != 1 {
+		t.Fatalf("new raw activity printed %d times:\n%s", count, out.String())
 	}
 }
 
@@ -1367,6 +1591,7 @@ func TestFollowCloudSessionLogsExitsCleanWhenSessionDeleted(t *testing.T) {
 		"sess_123",
 		&out,
 		func(time.Duration) {},
+		false,
 		false,
 	)
 	if err != nil {

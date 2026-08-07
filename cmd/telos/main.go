@@ -10,7 +10,7 @@
 //	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
 //	telos get SESSION [--output PATH]
 //	telos describe SESSION [--json]
-//	telos logs [-f] [--verbose] SESSION
+//	telos logs [-f] [--verbose|--json|--raw] [--tail N|--all] SESSION
 //	telos delete SESSION [--json]
 //	telos pull PACKAGE [--output PATH]
 //	telos login [--endpoint URL]
@@ -94,7 +94,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  list               List sessions")
 	fmt.Fprintln(out, "  get SESSION        Download a session's package")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
-	fmt.Fprintln(out, "  logs SESSION       Show session progress")
+	fmt.Fprintln(out, "  logs SESSION       Show status and recent activity")
 	fmt.Fprintln(out, "  delete SESSION     Delete a session (local history is preserved)")
 	fmt.Fprintln(out, "  pull PACKAGE       Download a registry package")
 	fmt.Fprintln(out, "  login              Log in to Telos Cloud via the browser")

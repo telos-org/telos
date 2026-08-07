@@ -136,6 +136,24 @@ func getTranscriptFromAnywhere(sessionID string) (string, error) {
 	return "", localSessionNotFoundError(sessionID)
 }
 
+func getEventsFromAnywhere(sessionID string) ([]sessionapi.SessionEvent, error) {
+	s := store()
+	events, err := s.Events(sessionID)
+	if err == nil {
+		return events, nil
+	}
+
+	if ctx, ok := rootSessionContext(); ok {
+		events, err := runtimeclient.New(ctx.endpoint, ctx.token).GetEvents(sessionID)
+		if err == nil {
+			return events, nil
+		}
+		return nil, fmt.Errorf("root event lookup failed: %w", err)
+	}
+
+	return nil, localSessionNotFoundError(sessionID)
+}
+
 func stopSessionAnywhere(sessionID string) (*sessionapi.Session, error) {
 	s := store()
 	var sessionDir string

@@ -83,11 +83,26 @@ type sessionListResponse struct {
 }
 
 type deploymentLogEventsResponse struct {
-	Events []deploymentLogEvent `json:"events"`
+	Events  []json.RawMessage   `json:"events"`
+	Cursors deploymentLogCursor `json:"cursors"`
+}
+
+type deploymentLogCursor struct {
+	Runtime *int64 `json:"rt"`
+}
+
+// SessionLogPage keeps both the normalized events used by the human/JSON
+// views and their original wire records for --raw output.
+type SessionLogPage struct {
+	Events        []sessionapi.SessionEvent
+	RawEvents     []json.RawMessage
+	RuntimeCursor *int64
 }
 
 type deploymentLogEvent struct {
 	Event       string         `json:"event"`
+	EventSeq    *int64         `json:"event_seq,omitempty"`
+	Role        *string        `json:"role,omitempty"`
 	Timestamp   *string        `json:"ts,omitempty"`
 	Time        *string        `json:"time,omitempty"`
 	SessionID   *string        `json:"session_id,omitempty"`
@@ -116,6 +131,8 @@ func (event deploymentLogEvent) asSessionEvent() sessionapi.SessionEvent {
 	}
 	return sessionapi.SessionEvent{
 		Event:       event.Event,
+		EventSeq:    event.EventSeq,
+		Role:        event.Role,
 		Timestamp:   timestamp,
 		SessionID:   event.SessionID,
 		SpecIndex:   event.SpecIndex,
@@ -458,7 +475,15 @@ func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {
 }
 
 func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, error) {
-	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(sessionID)+"/logs", nil)
+	page, err := c.GetSessionLogPage(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	return page.Events, nil
+}
+
+func (c *Client) GetSessionLogPage(sessionID string) (*SessionLogPage, error) {
+	resp, err := c.do("GET", sessionLogsPath(sessionID, nil), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -471,20 +496,61 @@ func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, er
 		return nil, err
 	}
 	events := make([]sessionapi.SessionEvent, 0, len(response.Events))
-	for _, event := range response.Events {
+	for _, raw := range response.Events {
+		var event deploymentLogEvent
+		if err := json.Unmarshal(raw, &event); err != nil {
+			return nil, fmt.Errorf("decode session log event: %w", err)
+		}
 		events = append(events, event.asSessionEvent())
 	}
-	return events, nil
+	return &SessionLogPage{
+		Events:        events,
+		RawEvents:     response.Events,
+		RuntimeCursor: response.Cursors.Runtime,
+	}, nil
 }
 
 func (c *Client) StreamSessionLogs(ctx context.Context, sessionID string, onEvent func(sessionapi.SessionEvent) error) error {
-	return c.streamEvents(ctx, "/api/deployments/"+url.PathEscape(sessionID)+"/logs", func(data []byte) error {
+	return c.StreamSessionLogsAfter(ctx, sessionID, nil, onEvent)
+}
+
+func (c *Client) StreamSessionLogsAfter(
+	ctx context.Context,
+	sessionID string,
+	afterRuntime *int64,
+	onEvent func(sessionapi.SessionEvent) error,
+) error {
+	return c.streamEvents(ctx, sessionLogsPath(sessionID, afterRuntime), func(data []byte) error {
 		var event deploymentLogEvent
 		if err := json.Unmarshal(data, &event); err != nil {
 			return fmt.Errorf("decode session log event: %w", err)
 		}
 		return onEvent(event.asSessionEvent())
 	})
+}
+
+func (c *Client) StreamRawSessionLogsAfter(
+	ctx context.Context,
+	sessionID string,
+	afterRuntime *int64,
+	onEvent func(json.RawMessage) error,
+) error {
+	return c.streamEvents(ctx, sessionLogsPath(sessionID, afterRuntime), func(data []byte) error {
+		if !json.Valid(data) {
+			return errors.New("decode raw session log event: invalid JSON")
+		}
+		return onEvent(append(json.RawMessage(nil), data...))
+	})
+}
+
+func sessionLogsPath(sessionID string, afterRuntime *int64) string {
+	path := "/api/deployments/" + url.PathEscape(sessionID) + "/logs"
+	if afterRuntime == nil {
+		return path
+	}
+	query := url.Values{}
+	query.Set("after_rt", fmt.Sprintf("%d", *afterRuntime))
+	return path + "?" + query.Encode()
 }
 
 // NormalizeEndpoint cleans up an API endpoint URL.
