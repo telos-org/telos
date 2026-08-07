@@ -22,6 +22,16 @@ func TestDeriveOverallLogStatus(t *testing.T) {
 			want:   "Starting",
 		},
 		{
+			name:   "starting failure needs attention",
+			header: logHeader{State: "deploying", Failure: "managed session update failed"},
+			want:   "Needs attention",
+		},
+		{
+			name:   "deleting is stopping instead of working",
+			header: logHeader{State: "deleting"},
+			want:   "Stopped",
+		},
+		{
 			name:   "failed lifecycle wins",
 			header: logHeader{State: "failed", Failure: "runtime unavailable"},
 			events: []sessionapi.SessionEvent{{Event: "game_end", Data: map[string]any{"game_result": "success"}}},
@@ -48,6 +58,42 @@ func TestDeriveOverallLogStatus(t *testing.T) {
 				{Event: "agent_progress", Role: &prover, Data: map[string]any{"text": "Checking service health"}},
 			},
 			want: "Ready",
+		},
+		{
+			name:   "failure after acceptance needs attention",
+			header: logHeader{State: "healthy"},
+			events: []sessionapi.SessionEvent{
+				{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}},
+				{Event: "game_end", Data: map[string]any{"game_result": "failure", "error": "tests failed"}},
+			},
+			want: "Needs attention",
+		},
+		{
+			name:   "work after a failure resumes working",
+			header: logHeader{State: "healthy"},
+			events: []sessionapi.SessionEvent{
+				{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}},
+				{Event: "game_error", Data: map[string]any{"error": "tests failed"}},
+				{Event: "agent_progress", Role: &prover, Data: map[string]any{"text": "Fixing the failing tests"}},
+			},
+			want: "Working",
+		},
+		{
+			name:   "acceptance after a failure is ready",
+			header: logHeader{State: "healthy"},
+			events: []sessionapi.SessionEvent{
+				{Event: "game_error", Data: map[string]any{"error": "tests failed"}},
+				{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}},
+			},
+			want: "Ready",
+		},
+		{
+			name:   "control plane failure needs attention",
+			header: logHeader{State: "healthy"},
+			events: []sessionapi.SessionEvent{
+				{Event: "deployment.update_failed", Data: map[string]any{"reason": "runtime rejected the update"}},
+			},
+			want: "Needs attention",
 		},
 		{
 			name:   "new spec resets acceptance",
@@ -86,6 +132,38 @@ func TestDeriveOverallLogStatus(t *testing.T) {
 				t.Fatalf("status: got %q, want %q (%s)", got.Label, test.want, got.Reason)
 			}
 		})
+	}
+}
+
+func TestRenderedLogRowOnlyTreatsVerifierConcedeAsAcceptance(t *testing.T) {
+	verifier := "verifier"
+	prover := "prover"
+
+	verifierRow, ok := renderedLogRowFromEvent(
+		sessionapi.SessionEvent{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}},
+		false,
+	)
+	if !ok || verifierRow.Summary != "Current spec accepted" {
+		t.Fatalf("verifier completion: got %#v, visible=%v", verifierRow, ok)
+	}
+
+	if proverRow, visible := renderedLogRowFromEvent(
+		sessionapi.SessionEvent{Event: "agent_complete", Role: &prover, Data: map[string]any{"status": "CONCEDE"}},
+		false,
+	); visible {
+		t.Fatalf("prover completion should stay hidden by default: %#v", proverRow)
+	}
+}
+
+func TestDeriveOverallLogStatusUsesLatestCompletionReason(t *testing.T) {
+	verifier := "verifier"
+	status := deriveOverallLogStatus(logHeader{State: "healthy"}, []sessionapi.SessionEvent{
+		{Event: "agent_failure_recoverable", Data: map[string]any{"error": "502 no healthy upstream"}},
+		{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONTINUE"}},
+	})
+
+	if status.Label != "Working" || status.Reason != "Verification requested another iteration." {
+		t.Fatalf("status: got %#v", status)
 	}
 }
 

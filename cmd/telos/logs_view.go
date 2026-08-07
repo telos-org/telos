@@ -74,8 +74,6 @@ func localLogHeader(session *sessionapi.Session) logHeader {
 	updatedAt := ""
 	if session.FinishedAt != nil {
 		updatedAt = *session.FinishedAt
-	} else if session.CreatedAt != nil {
-		updatedAt = *session.CreatedAt
 	}
 	return logHeader{
 		Name:      name,
@@ -151,10 +149,19 @@ func deriveOverallLogStatus(
 	events []sessionapi.SessionEvent,
 ) overallLogStatus {
 	switch strings.ToLower(strings.TrimSpace(header.State)) {
-	case "deleted", "stopped":
-		return overallLogStatus{Label: "Stopped", Reason: firstNonEmpty(header.Failure, "This session was stopped.")}
+	case "deleted", "stopped", "deleting":
+		reason := "This session was stopped."
+		if strings.EqualFold(strings.TrimSpace(header.State), "deleting") {
+			reason = "Stopping this deployment."
+		}
+		return overallLogStatus{Label: "Stopped", Reason: firstNonEmpty(header.Failure, reason)}
 	case "failed", "error", "errored", "stale":
 		return overallLogStatus{Label: "Failed", Reason: firstNonEmpty(header.Failure, "The session could not complete.")}
+	}
+	if strings.TrimSpace(header.Failure) != "" {
+		return overallLogStatus{Label: "Needs attention", Reason: strings.TrimSpace(header.Failure)}
+	}
+	switch strings.ToLower(strings.TrimSpace(header.State)) {
 	case "pending", "provisioning", "deploying":
 		return overallLogStatus{Label: "Starting", Reason: "Preparing the deployment and runtime."}
 	}
@@ -169,7 +176,7 @@ func deriveOverallLogStatus(
 	latestNoticeText := ""
 	for index, event := range events {
 		switch event.Event {
-		case "external_update", "deployment.update_accepted", "deployment.update_dispatched":
+		case "external_update", "deployment.update_accepted":
 			reset = index
 			latestConcede = -1
 			latestContinue = -1
@@ -185,12 +192,20 @@ func deriveOverallLogStatus(
 				latestConcede = index
 			} else if status == "CONTINUE" && role == "verifier" {
 				latestContinue = index
+				latestWork = index
+				latestWorkText = "Verification requested another iteration."
+			} else {
+				latestWork = index
+				latestWorkText = "Implementation turn completed; verification is next."
 			}
 		case "game_end":
 			result := strings.ToLower(eventDataString(event, "game_result"))
+			if result == "" {
+				result = strings.ToLower(eventDataString(event, "result"))
+			}
 			if result == "success" {
 				latestConcede = index
-			} else if result == "failure" {
+			} else if result == "failure" || result == "stopped" {
 				latestFailure = index
 			}
 		case "budget_exceeded", "game_error":
@@ -210,16 +225,20 @@ func deriveOverallLogStatus(
 					latestWorkText = text
 				}
 			}
+		default:
+			if isTerminalLogFailureEvent(event.Event) {
+				latestFailure = index
+			}
 		}
 	}
 
-	if latestConcede > reset && latestConcede > latestContinue {
+	if latestConcede > reset && latestConcede > latestContinue && latestConcede > latestFailure {
 		return overallLogStatus{
 			Label:  "Ready",
 			Reason: "Current spec accepted; latest verification completed successfully.",
 		}
 	}
-	if latestFailure > reset && latestFailure > latestWork {
+	if latestFailure > reset && latestFailure > latestConcede && latestFailure > latestWork {
 		failure := eventFailure(events[latestFailure])
 		return overallLogStatus{
 			Label:  "Needs attention",
@@ -274,7 +293,7 @@ func renderedLogRowFromEvent(
 		}
 		row.Phase = progressPhase(role, "")
 		switch {
-		case status == "CONCEDE":
+		case status == "CONCEDE" && role == "verifier":
 			row.Summary = "Current spec accepted"
 		case role == "verifier":
 			row.Summary = "Verification requested another iteration"
@@ -304,6 +323,9 @@ func renderedLogRowFromEvent(
 	case "game_end":
 		row.Phase = "VERIFY"
 		result := strings.ToLower(eventDataString(event, "game_result"))
+		if result == "" {
+			result = strings.ToLower(eventDataString(event, "result"))
+		}
 		reason := eventDataString(event, "completion_reason")
 		switch result {
 		case "success":
@@ -446,6 +468,16 @@ func eventDataString(event sessionapi.SessionEvent, key string) string {
 	return strings.TrimSpace(value)
 }
 
+func isTerminalLogFailureEvent(event string) bool {
+	name := strings.ToLower(strings.TrimSpace(event))
+	if name == "agent_failure_recoverable" {
+		return false
+	}
+	return strings.HasSuffix(name, ".failed") ||
+		strings.HasSuffix(name, "_failed") ||
+		strings.HasSuffix(name, ".error")
+}
+
 func progressPhase(role string, text string) string {
 	if role == "verifier" {
 		return "VERIFY"
@@ -492,8 +524,14 @@ func eventFailure(event sessionapi.SessionEvent) string {
 	if errorText := eventDataString(event, "error"); errorText != "" {
 		return errorText
 	}
+	if reason := eventDataString(event, "reason"); reason != "" {
+		return reason
+	}
 	if reason := eventDataString(event, "completion_reason"); reason != "" {
 		return humanizeLogToken(reason)
+	}
+	if message := eventDataString(event, "message"); message != "" {
+		return message
 	}
 	return ""
 }

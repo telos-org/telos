@@ -1187,6 +1187,56 @@ func TestFollowTranscriptSurfacesRootTranscriptError(t *testing.T) {
 	}
 }
 
+func TestLegacyTranscriptFallbackUsesLocalTranscriptOnlySession(t *testing.T) {
+	root := t.TempDir()
+	configureLocalOnlyTest(t)
+	t.Setenv("TELOS_SESSION_DIR", root)
+	s := store()
+	markdown := "---\nversion: 0.1.0\nname: legacy-logs\nplatform: local\n---\n# Legacy Logs\n"
+	session, err := s.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if len(session.Specs) == 0 || session.Specs[0].TranscriptPath == nil {
+		t.Fatalf("missing transcript path: %#v", session.Specs)
+	}
+	transcript := "# Transcript\n\n<progress_update>Recovered legacy activity</progress_update>\n"
+	if err := os.WriteFile(*session.Specs[0].TranscriptPath, []byte(transcript), 0o644); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+
+	events, eventsErr := getEventsFromAnywhere(session.SessionID)
+	got, ok := legacyTranscriptFallback(session.SessionID, events, eventsErr)
+	if !ok || got != transcript {
+		t.Fatalf("fallback: ok=%v, got %q, events=%#v, err=%v", ok, got, events, eventsErr)
+	}
+}
+
+func TestLegacyTranscriptFallbackUsesOlderRootRuntime(t *testing.T) {
+	t.Setenv("TELOS_RUNTIME", "")
+	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/sessions/sess_legacy/events":
+			http.NotFound(w, r)
+		case "/api/sessions/sess_legacy/transcript":
+			_, _ = w.Write([]byte("<progress_update>Recovered root activity</progress_update>"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer cluster.Close()
+	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+	t.Setenv("TELOS_API_TOKEN", "scoped-token")
+	t.Setenv("TELOS_SESSION_ID", "sess_parent")
+	t.Setenv("TELOS_API_ENDPOINT", cluster.URL)
+
+	events, eventsErr := getEventsFromAnywhere("sess_legacy")
+	transcript, ok := legacyTranscriptFallback("sess_legacy", events, eventsErr)
+	if !ok || !strings.Contains(transcript, "Recovered root activity") {
+		t.Fatalf("fallback: ok=%v, transcript=%q, events=%#v, err=%v", ok, transcript, events, eventsErr)
+	}
+}
+
 func TestPrintLogsDefaultsToProtocolBlocks(t *testing.T) {
 	transcript := `# Transcript
 
@@ -1385,6 +1435,49 @@ func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "BUILD    ready") {
 		t.Fatalf("follow output missing progress:\n%s", out.String())
+	}
+}
+
+func TestFollowCloudSessionLogsResumesAndPrintsStatusChange(t *testing.T) {
+	verifier := "verifier"
+	var query string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/deployments/sess_123/logs" {
+			http.NotFound(w, r)
+			return
+		}
+		query = r.URL.RawQuery
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"event\":\"agent_complete\",\"event_seq\":8,\"role\":\"verifier\",\"data\":{\"status\":\"CONCEDE\"}}\n\n"))
+	}))
+	defer srv.Close()
+
+	after := int64(7)
+	initial := []sessionapi.SessionEvent{
+		{Event: "agent_progress", EventSeq: &after, Role: &verifier, Data: map[string]any{"text": "Checking the result"}},
+	}
+	var out bytes.Buffer
+	err := streamCloudSessionLogsAfter(
+		cloud.NewClient(srv.URL, "test-token"),
+		"sess_123",
+		&out,
+		func(time.Duration) {},
+		false,
+		false,
+		&after,
+		logHeader{Name: "pegfall", State: "healthy", SessionID: "sess_123"},
+		initial,
+	)
+	if err != nil {
+		t.Fatalf("streamCloudSessionLogsAfter: %v", err)
+	}
+	if query != "after_rt=7" {
+		t.Fatalf("resume query: got %q", query)
+	}
+	for _, want := range []string{"Current spec accepted", "STATUS   Ready"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("follow output missing %q:\n%s", want, out.String())
+		}
 	}
 }
 
