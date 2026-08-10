@@ -74,7 +74,12 @@ func cmdPlan(args []string) {
 			"label":  "not logged in",
 			"detail": "run `telos login` before `telos apply`",
 		}
-		if config.IsConfigured() {
+		cloudConfigured, err := config.IsConfigured()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if cloudConfigured {
 			userScope = map[string]interface{}{
 				"status": "configured",
 				"label":  "cloud control plane",

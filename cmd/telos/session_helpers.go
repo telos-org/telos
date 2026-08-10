@@ -83,7 +83,11 @@ func isLocalApplyID(id string) bool {
 }
 
 func getCloudSessionIfConfigured(id string) (*cloud.SessionRecord, bool, error) {
-	if !config.IsConfigured() {
+	configured, err := config.IsConfigured()
+	if err != nil {
+		return nil, false, err
+	}
+	if !configured {
 		return nil, false, nil
 	}
 	session, err := getCloudSession(id)

@@ -22,7 +22,11 @@ func cmdLogin(args []string) {
 	parseFlags(fs, args)
 
 	ep := cloud.NormalizeEndpoint(*endpoint)
-	cfg := config.LoadStoredConfig()
+	cfg, err := config.LoadStoredConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	who, loggedIn, err := configuredLogin(ep, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: could not verify existing login: %v\n", err)

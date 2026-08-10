@@ -2,8 +2,13 @@
 package config
 
 import (
+	"bytes"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -23,87 +28,129 @@ type Config struct {
 }
 
 // ConfigPath returns the path to the active config file.
-func ConfigPath() string {
-	if override := os.Getenv(ConfigPathEnv); override != "" {
-		return override
+func ConfigPath() (string, error) {
+	if override := strings.TrimSpace(os.Getenv(ConfigPathEnv)); override != "" {
+		return override, nil
 	}
-	home, _ := os.UserHomeDir()
-	return filepath.Join(home, ".telos", "config.yaml")
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("resolve home directory for Telos config: %w", err)
+	}
+	if strings.TrimSpace(home) == "" {
+		return "", errors.New("resolve home directory for Telos config: empty path")
+	}
+	return filepath.Join(home, ".telos", "config.yaml"), nil
 }
 
 // LoadStoredConfig reads config from disk without environment overrides.
-func LoadStoredConfig() *Config {
-	raw := readYAMLFile(ConfigPath())
+func LoadStoredConfig() (*Config, error) {
+	path, err := ConfigPath()
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return &Config{}, nil
+		}
+		return nil, fmt.Errorf("read Telos config %s: %w", path, err)
+	}
+
 	cfg := &Config{}
-	if ep, ok := raw["api_endpoint"].(string); ok {
-		cfg.APIEndpoint = ep
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(cfg); err != nil {
+		if errors.Is(err, io.EOF) {
+			return cfg, nil
+		}
+		return nil, fmt.Errorf("parse Telos config %s: %w", path, err)
 	}
-	if at, ok := raw["auth_token"].(string); ok {
-		cfg.AuthToken = at
+	var extra any
+	if err := decoder.Decode(&extra); err == nil {
+		return nil, fmt.Errorf("parse Telos config %s: multiple YAML documents are not supported", path)
+	} else if !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("parse Telos config %s: %w", path, err)
 	}
-	if context, ok := raw["context"].(string); ok {
-		cfg.Context = context
-	}
-	return cfg
+	return cfg, nil
 }
 
 // LoadConfig reads stored config with environment overrides.
-func LoadConfig() *Config {
-	cfg := LoadStoredConfig()
-	if v := os.Getenv(APIEndpointEnv); v != "" {
-		cfg.APIEndpoint = v
+func LoadConfig() (*Config, error) {
+	cfg, err := LoadStoredConfig()
+	if err != nil {
+		return nil, err
 	}
-	if v := os.Getenv(AuthTokenEnv); v != "" {
-		cfg.AuthToken = v
+	if value := os.Getenv(APIEndpointEnv); value != "" {
+		cfg.APIEndpoint = value
 	}
-	if v := os.Getenv(ContextEnv); v != "" {
-		cfg.Context = v
+	if value := os.Getenv(AuthTokenEnv); value != "" {
+		cfg.AuthToken = value
 	}
-	return cfg
+	if value := os.Getenv(ContextEnv); value != "" {
+		cfg.Context = value
+	}
+	return cfg, nil
 }
 
-// SaveConfig writes config to disk.
+// SaveConfig atomically writes config to disk with credential-safe permissions.
 func SaveConfig(cfg *Config) error {
-	path := ConfigPath()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
+	if cfg == nil {
+		return errors.New("save Telos config: config is nil")
 	}
-	m := map[string]string{}
-	if cfg.APIEndpoint != "" {
-		m["api_endpoint"] = cfg.APIEndpoint
-	}
-	if cfg.AuthToken != "" {
-		m["auth_token"] = cfg.AuthToken
-	}
-	if cfg.Context != "" {
-		m["context"] = cfg.Context
-	}
-	data, err := yaml.Marshal(m)
+	path, err := ConfigPath()
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
-		return err
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return fmt.Errorf("create Telos config directory %s: %w", dir, err)
+	}
+	if strings.TrimSpace(os.Getenv(ConfigPathEnv)) == "" {
+		if err := os.Chmod(dir, 0o700); err != nil {
+			return fmt.Errorf("secure Telos config directory %s: %w", dir, err)
+		}
+	}
+	data, err := yaml.Marshal(cfg)
+	if err != nil {
+		return fmt.Errorf("encode Telos config: %w", err)
+	}
+	return writeConfigAtomic(path, data)
+}
+
+// IsConfigured reports whether cloud credentials are available.
+func IsConfigured() (bool, error) {
+	cfg, err := LoadConfig()
+	if err != nil {
+		return false, err
+	}
+	return cfg.AuthToken != "", nil
+}
+
+func writeConfigAtomic(path string, data []byte) error {
+	file, err := os.CreateTemp(filepath.Dir(path), ".config.yaml.*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temporary Telos config: %w", err)
+	}
+	temporaryPath := file.Name()
+	defer os.Remove(temporaryPath)
+
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("secure temporary Telos config: %w", err)
+	}
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write temporary Telos config: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("flush temporary Telos config: %w", err)
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close temporary Telos config: %w", err)
+	}
+	if err := os.Rename(temporaryPath, path); err != nil {
+		return fmt.Errorf("replace Telos config %s: %w", path, err)
 	}
 	return nil
-}
-
-// IsConfigured returns true if the user has configured cloud access.
-func IsConfigured() bool {
-	return LoadConfig().AuthToken != ""
-}
-
-func readYAMLFile(path string) map[string]interface{} {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return map[string]interface{}{}
-	}
-	var raw map[string]interface{}
-	if err := yaml.Unmarshal(data, &raw); err != nil {
-		return map[string]interface{}{}
-	}
-	if raw == nil {
-		return map[string]interface{}{}
-	}
-	return raw
 }

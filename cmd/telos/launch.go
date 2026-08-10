@@ -106,9 +106,14 @@ func cmdLaunch(command, action string, args []string) {
 		return
 	}
 
+	cloudConfigured, err := config.IsConfigured()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	launchMode, err := decideLaunchMode(
 		platform,
-		config.IsConfigured(),
+		cloudConfigured,
 		localConfigSet,
 	)
 	if err != nil {

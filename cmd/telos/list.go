@@ -40,10 +40,16 @@ func cmdList(args []string) {
 			}
 			sessions = append(sessions, rootSessions...)
 			rootScoped = true
-		} else if config.IsConfigured() {
-			listCloudSessions(*jsonOut, *limit, *wide)
-			return
 		} else {
+			cloudConfigured, err := config.IsConfigured()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			if cloudConfigured {
+				listCloudSessions(*jsonOut, *limit, *wide)
+				return
+			}
 			sessions = append(sessions, listLocalSessions()...)
 		}
 	} else {

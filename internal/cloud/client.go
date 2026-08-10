@@ -212,7 +212,10 @@ var resolvedContexts sync.Map
 
 // ControlClient returns a client for the configured Telos control plane.
 func ControlClient() (*Client, error) {
-	cfg := config.LoadConfig()
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
 	endpoint := cfg.APIEndpoint
 	if endpoint == "" {
 		endpoint = DefaultAPIEndpoint
