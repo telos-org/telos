@@ -7,10 +7,12 @@ user intends one:
 telos login
 telos config
 telos config --context @team-handle
+telos list --context @team-handle
 ```
 
 Use `personal` to return to the personal context. Never guess the target from a
-repository name or prior session.
+repository name or prior session. For one invocation, `--context` takes
+precedence over `TELOS_CONTEXT` and stored configuration without mutating either.
 
 A Cloud spec declares `platform: cloud` and is launched with:
 

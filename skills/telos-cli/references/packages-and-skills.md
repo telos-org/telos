@@ -33,8 +33,10 @@ Pull an immutable package for inspection or reuse:
 
 ```bash
 telos pull @scope/package-name:0.1.0
+telos apply @scope/package-name:0.1.0
 ```
 
 Use `telos get SESSION_ID` when the starting point is a session rather than a
 known registry ref. Telos verifies registry digests before materializing
-packages and skills.
+packages and skills. `apply` verifies and deploys an exact registry package
+without materializing or republishing it.

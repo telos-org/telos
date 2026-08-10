@@ -113,14 +113,23 @@ func packageForSession(control *cloud.Client, sessionID string) (*pulledPackage,
 }
 
 func packageForReference(control *cloud.Client, reference packageReference) (*pulledPackage, error) {
+	pkg, _, err := resolvePackageReference(control, reference)
+	return pkg, err
+}
+
+func resolvePackageReference(
+	control *cloud.Client,
+	reference packageReference,
+) (*pulledPackage, *cloud.PackageVersionRecord, error) {
 	record, err := control.GetPackageVersion(reference.scope, reference.name, reference.version)
 	if err != nil {
-		return nil, fmt.Errorf("resolve %s: %w", reference.ref, err)
+		return nil, nil, fmt.Errorf("resolve %s: %w", reference.ref, err)
 	}
 	if record.Scope != reference.scope ||
 		record.Name != reference.name ||
-		record.Version != reference.version {
-		return nil, fmt.Errorf("resolve %s: registry returned %s", reference.ref, record.Ref)
+		record.Version != reference.version ||
+		record.Ref != reference.ref {
+		return nil, nil, fmt.Errorf("resolve %s: registry returned %s", reference.ref, record.Ref)
 	}
 	data, err := control.DownloadPackageVersionBundle(
 		reference.scope,
@@ -128,13 +137,27 @@ func packageForReference(control *cloud.Client, reference packageReference) (*pu
 		reference.version,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("download %s: %w", reference.ref, err)
+		return nil, nil, fmt.Errorf("download %s: %w", reference.ref, err)
 	}
 	return &pulledPackage{
 		reference: reference,
 		digest:    strings.TrimSpace(record.Digest),
 		data:      data,
-	}, nil
+	}, record, nil
+}
+
+func registryPackageForApply(
+	control *cloud.Client,
+	reference packageReference,
+) (*cloud.PackageVersionRecord, error) {
+	pkg, record, err := resolvePackageReference(control, reference)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := verifiedPackageSpec(pkg); err != nil {
+		return nil, err
+	}
+	return record, nil
 }
 
 func materializePackage(control *cloud.Client, pkg *pulledPackage, output string) (string, error) {

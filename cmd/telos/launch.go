@@ -385,24 +385,40 @@ func applyCloudControl(
 	jsonOut bool,
 	contextOverride string,
 ) {
-	pkg, err := packageSpec(specArg, contextOverride)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	var reference *packageReference
+	if strings.HasPrefix(strings.TrimSpace(specArg), "@") {
+		parsed, err := parsePackageReference(specArg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		reference = &parsed
 	}
 	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	packageRecord, err := pushSpecPackage(control, pkg, "")
+	packageName := ""
+	var packageRecord *cloud.PackageVersionRecord
+	if reference != nil {
+		packageName = reference.name
+		packageRecord, err = registryPackageForApply(control, *reference)
+	} else {
+		var pkg *specPackage
+		pkg, err = packageSpec(specArg, contextOverride)
+		if err == nil {
+			packageName = pkg.name
+			packageRecord, err = pushSpecPackage(control, pkg, "")
+		}
+	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	operation, session, err := applyCloudSessionPackage(
 		control,
-		pkg.name,
+		packageName,
 		packageRecord.Ref,
 		sessionID,
 		runtimeConfig,
