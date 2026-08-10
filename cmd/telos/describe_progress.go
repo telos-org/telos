@@ -20,7 +20,21 @@ type cloudSessionProgress struct {
 	RuntimeProvider          string `json:"runtime_provider,omitempty"`
 	Allocation               string `json:"allocation,omitempty"`
 	Host                     string `json:"host,omitempty"`
+	EpochID                  *int   `json:"epoch_id,omitempty"`
+	Round                    *int   `json:"round,omitempty"`
+	Role                     string `json:"role,omitempty"`
+	Model                    string `json:"model,omitempty"`
+	Thinking                 string `json:"thinking,omitempty"`
+	CumulativeTurns          int    `json:"cumulative_turns,omitempty"`
+	CumulativeWallTimeMS     int64  `json:"cumulative_wall_time_ms,omitempty"`
+	LatestVerifierVerdict    string `json:"latest_verifier_verdict,omitempty"`
+	NextWakeAt               string `json:"next_wake_at,omitempty"`
+	ManagedUpdateRevision    string `json:"managed_update_revision,omitempty"`
+	ManagedUpdateState       string `json:"managed_update_state,omitempty"`
+	ClockSkewSeconds         *int64 `json:"clock_skew_seconds,omitempty"`
 }
+
+const clockSkewWarningThreshold = 30 * time.Second
 
 func loadCloudSessionProgress(
 	session *cloud.SessionRecord,
@@ -44,13 +58,79 @@ func deriveCloudSessionProgress(
 	now time.Time,
 ) cloudSessionProgress {
 	progress := cloudSessionProgress{
-		Stage: fallbackProductStage(session.State),
+		Stage:    fallbackProductStage(session.State),
+		Model:    strings.TrimSpace(session.AgentModel),
+		Thinking: strings.TrimSpace(session.AgentThinking),
 	}
 	if session.FailureReason != nil {
 		progress.WaitingReason = strings.TrimSpace(*session.FailureReason)
 	}
 
 	for _, event := range events {
+		if event.EpochID != nil {
+			value := *event.EpochID
+			progress.EpochID = &value
+		}
+		if event.Round != nil {
+			value := *event.Round
+			progress.Round = &value
+		}
+		if role := eventRole(event); role == "prover" || role == "verifier" {
+			progress.Role = role
+		}
+		if model := eventDataString(event, "model"); model != "" {
+			progress.Model = model
+		}
+		if thinking := eventDataString(event, "thinking"); thinking != "" {
+			progress.Thinking = thinking
+		}
+		if event.Event == "agent_complete" {
+			if turns, ok := numericEventValue(event.Data["num_turns"]); ok && turns > 0 {
+				progress.CumulativeTurns += turns
+			}
+			if durationMS, ok := numericEventValue(event.Data["duration_ms"]); ok && durationMS > 0 {
+				progress.CumulativeWallTimeMS += int64(durationMS)
+			}
+			if eventRole(event) == "verifier" {
+				switch strings.ToUpper(eventDataString(event, "status")) {
+				case "CONCEDE":
+					progress.LatestVerifierVerdict = "accepted"
+				case "CONTINUE":
+					progress.LatestVerifierVerdict = "changes requested"
+				}
+			}
+		}
+		if event.Event == "game_end" {
+			switch strings.ToLower(eventDataString(event, "game_result")) {
+			case "success":
+				progress.LatestVerifierVerdict = "accepted"
+			case "failure":
+				progress.LatestVerifierVerdict = "failed"
+			case "stopped":
+				progress.LatestVerifierVerdict = "stopped"
+			}
+		}
+		if event.Event == "external_update" {
+			progress.ManagedUpdateRevision = firstNonEmpty(
+				eventDataString(event, "current_revision"),
+				eventDataString(event, "current_spec_sha256"),
+				eventDataString(event, "current_package_digest"),
+				eventDataScalarString(event, "current_spec_version"),
+			)
+			progress.ManagedUpdateState = "dispatched"
+		}
+		progress.NextWakeAt = latestEventValue(
+			progress.NextWakeAt,
+			event,
+			"next_wake_at",
+			"scheduled_wake_at",
+		)
+		progress.ClockSkewSeconds = largerClockSkew(
+			progress.ClockSkewSeconds,
+			event.SourceTimestamp,
+			event.ReceivedAt,
+		)
+
 		if stage := eventProductStage(event); stage != "" {
 			if stage != progress.Stage {
 				progress.WaitingReason = ""
@@ -96,6 +176,41 @@ func deriveCloudSessionProgress(
 	progress.StageAgeSeconds = eventAgeSeconds(progress.StageSince, now)
 	progress.LatestActivityAgeSeconds = eventAgeSeconds(progress.LatestActivityAt, now)
 	return progress
+}
+
+func largerClockSkew(current *int64, sourceTimestamp, receivedAt *string) *int64 {
+	if sourceTimestamp == nil || receivedAt == nil {
+		return current
+	}
+	source, sourceErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(*sourceTimestamp))
+	received, receivedErr := time.Parse(time.RFC3339Nano, strings.TrimSpace(*receivedAt))
+	if sourceErr != nil || receivedErr != nil {
+		return current
+	}
+	seconds := int64(received.Sub(source).Seconds())
+	if seconds < 0 {
+		seconds = -seconds
+	}
+	if seconds < int64(clockSkewWarningThreshold/time.Second) {
+		return current
+	}
+	if current == nil || seconds > *current {
+		return &seconds
+	}
+	return current
+}
+
+func eventDataScalarString(event sessionapi.SessionEvent, key string) string {
+	value, ok := event.Data[key]
+	if !ok || value == nil {
+		return ""
+	}
+	switch value.(type) {
+	case string, float64, int, int64:
+		return strings.TrimSpace(fmt.Sprint(value))
+	default:
+		return ""
+	}
 }
 
 func eventProductStage(event sessionapi.SessionEvent) string {
@@ -204,4 +319,15 @@ func formatAge(seconds *int64) string {
 	default:
 		return fmt.Sprintf("%dd %dh", int(duration.Hours())/24, int(duration.Hours())%24)
 	}
+}
+
+func formatDurationMS(milliseconds int64) string {
+	if milliseconds <= 0 {
+		return "0s"
+	}
+	seconds := milliseconds / 1000
+	if milliseconds%1000 != 0 {
+		seconds++
+	}
+	return formatAge(&seconds)
 }

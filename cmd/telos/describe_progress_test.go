@@ -100,6 +100,68 @@ func TestDeriveCloudSessionProgressSurfacesWorkloadBlocker(t *testing.T) {
 	}
 }
 
+func TestDeriveCloudSessionProgressTracksExecutionIdentity(t *testing.T) {
+	completedAt := "2026-08-10T12:00:00Z"
+	sourceAt := "2026-08-10T11:00:00Z"
+	receivedAt := "2026-08-10T12:00:00Z"
+	epoch := 3
+	round := 7
+	role := "verifier"
+	session := &cloud.SessionRecord{
+		State:         "healthy",
+		AgentModel:    "openai-codex/gpt-5.5",
+		AgentThinking: "high",
+	}
+	events := []sessionapi.SessionEvent{
+		{
+			Event:           "agent_complete",
+			EpochID:         &epoch,
+			Round:           &round,
+			Role:            &role,
+			Timestamp:       &completedAt,
+			SourceTimestamp: &sourceAt,
+			ReceivedAt:      &receivedAt,
+			Data: map[string]any{
+				"status":      "CONCEDE",
+				"num_turns":   float64(4),
+				"duration_ms": float64(61_000),
+				"model":       "openai-codex/gpt-5.6",
+			},
+		},
+		{
+			Event: "external_update",
+			Data: map[string]any{
+				"current_revision": "rev_7",
+				"next_wake_at":     "2026-08-10T12:15:00Z",
+				"message":          "Spec updated",
+			},
+		},
+	}
+
+	progress := deriveCloudSessionProgress(session, events, time.Date(2026, 8, 10, 12, 1, 0, 0, time.UTC))
+	if progress.EpochID == nil || *progress.EpochID != 3 || progress.Round == nil || *progress.Round != 7 {
+		t.Fatalf("execution position = %#v", progress)
+	}
+	if progress.Role != "verifier" || progress.Model != "openai-codex/gpt-5.6" || progress.Thinking != "high" {
+		t.Fatalf("active role config = %#v", progress)
+	}
+	if progress.CumulativeTurns != 4 || progress.CumulativeWallTimeMS != 61_000 {
+		t.Fatalf("cumulative execution = %#v", progress)
+	}
+	if progress.LatestVerifierVerdict != "accepted" {
+		t.Fatalf("verdict = %q", progress.LatestVerifierVerdict)
+	}
+	if progress.ManagedUpdateRevision != "rev_7" || progress.ManagedUpdateState != "dispatched" {
+		t.Fatalf("managed update = %#v", progress)
+	}
+	if progress.NextWakeAt != "2026-08-10T12:15:00Z" {
+		t.Fatalf("next wake = %q", progress.NextWakeAt)
+	}
+	if progress.ClockSkewSeconds == nil || *progress.ClockSkewSeconds != 3600 {
+		t.Fatalf("clock skew = %#v", progress.ClockSkewSeconds)
+	}
+}
+
 func TestPrintCloudSessionDescriptionShowsProgressAndVerboseRuntimeDetails(t *testing.T) {
 	session := cloud.SessionRecord{
 		ID:            "sess_123",

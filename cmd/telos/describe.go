@@ -184,6 +184,44 @@ func printCloudSessionDescriptionWithProgress(
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
 	}
+	if progress.EpochID != nil {
+		printSummaryField(out, "Epoch", fmt.Sprint(*progress.EpochID))
+	}
+	if progress.Role != "" {
+		activeRole := progress.Role
+		if progress.Round != nil {
+			activeRole += fmt.Sprintf(" (round %d)", *progress.Round)
+		}
+		printSummaryField(out, "Active role", activeRole)
+	}
+	if progress.Model != "" {
+		printSummaryField(out, "Model", progress.Model)
+	}
+	if progress.Thinking != "" {
+		printSummaryField(out, "Thinking", progress.Thinking)
+	}
+	if progress.CumulativeTurns > 0 {
+		printSummaryField(out, "Agent turns", fmt.Sprint(progress.CumulativeTurns))
+	}
+	if progress.CumulativeWallTimeMS > 0 {
+		printSummaryField(out, "Agent wall time", formatDurationMS(progress.CumulativeWallTimeMS))
+	}
+	if progress.LatestVerifierVerdict != "" {
+		printSummaryField(out, "Verifier", progress.LatestVerifierVerdict)
+	}
+	if progress.NextWakeAt != "" {
+		printSummaryField(out, "Next wake", displayLogDate(progress.NextWakeAt))
+	}
+	if progress.ManagedUpdateRevision != "" {
+		printSummaryField(
+			out,
+			"Spec update",
+			progress.ManagedUpdateRevision+" ("+progress.ManagedUpdateState+")",
+		)
+	}
+	if progress.ClockSkewSeconds != nil {
+		printSummaryField(out, "Clock skew", formatAge(progress.ClockSkewSeconds))
+	}
 	if session.RuntimeVersion != nil && *session.RuntimeVersion != "" {
 		printSummaryField(out, "Runtime", *session.RuntimeVersion)
 	}
