@@ -286,6 +286,24 @@ func renderedLogRowFromEvent(
 	event sessionapi.SessionEvent,
 	verbose bool,
 ) (renderedLogRow, bool) {
+	row, ok := renderedLogRowFromEventBase(event, verbose)
+	if !ok {
+		return renderedLogRow{}, false
+	}
+	if evidence := verboseLogEvidence(event, verbose); evidence != "" {
+		if row.Detail == "" {
+			row.Detail = evidence
+		} else {
+			row.Detail += " · " + evidence
+		}
+	}
+	return row, true
+}
+
+func renderedLogRowFromEventBase(
+	event sessionapi.SessionEvent,
+	verbose bool,
+) (renderedLogRow, bool) {
 	row := renderedLogRow{
 		Timestamp: eventTimestamp(event),
 		Source:    logEventSource(event),
@@ -401,6 +419,10 @@ func renderedLogRowFromEvent(
 	case "external_update":
 		row.Phase = "SPEC"
 		row.Summary = firstNonEmpty(eventDataString(event, "message"), "Spec updated")
+		row.Detail = firstNonEmpty(
+			eventDataString(event, "current_revision"),
+			eventDataString(event, "current_spec_sha256"),
+		)
 		return row, true
 	case "game_start":
 		if !verbose {
@@ -448,6 +470,35 @@ func renderedLogRowFromEvent(
 		return renderedLogRow{}, false
 	}
 	return row, true
+}
+
+func verboseLogEvidence(event sessionapi.SessionEvent, verbose bool) string {
+	if !verbose {
+		return ""
+	}
+	parts := []string{}
+	if event.EventID != nil && strings.TrimSpace(*event.EventID) != "" {
+		parts = append(parts, "evidence="+strings.TrimSpace(*event.EventID))
+	}
+	if event.Event == "workspace_checkpoint" {
+		if path := eventDataString(event, "path"); path != "" {
+			parts = append(parts, "checkpoint_path="+path)
+		}
+	}
+	for _, key := range []string{
+		"commit",
+		"checkpoint",
+		"checkpoint_path",
+		"artifact_path",
+		"evidence_path",
+		"diff_path",
+		"active_spec_path",
+	} {
+		if value := eventDataString(event, key); value != "" {
+			parts = append(parts, key+"="+value)
+		}
+	}
+	return strings.Join(parts, " · ")
 }
 
 func printRenderedLogRow(out io.Writer, row renderedLogRow) {

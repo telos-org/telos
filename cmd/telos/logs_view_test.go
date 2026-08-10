@@ -268,3 +268,30 @@ func TestRenderedLogRowPreservesReviewEvent(t *testing.T) {
 		t.Fatalf("review row: visible=%v row=%#v", visible, row)
 	}
 }
+
+func TestVerboseLogRowLinksStableEvidence(t *testing.T) {
+	eventID := "evt_42"
+	event := sessionapi.SessionEvent{
+		Event:   "workspace_checkpoint",
+		EventID: &eventID,
+		Data: map[string]any{
+			"path":  "/artifacts/checkpoint.tar.gz",
+			"bytes": float64(4096),
+		},
+	}
+	if row, visible := renderedLogRowFromEvent(event, false); visible {
+		t.Fatalf("checkpoint should remain verbose-only: %#v", row)
+	}
+	row, visible := renderedLogRowFromEvent(event, true)
+	if !visible {
+		t.Fatal("verbose checkpoint hidden")
+	}
+	for _, want := range []string{
+		"evidence=evt_42",
+		"checkpoint_path=/artifacts/checkpoint.tar.gz",
+	} {
+		if !strings.Contains(row.Detail, want) {
+			t.Fatalf("verbose detail missing %q: %q", want, row.Detail)
+		}
+	}
+}
