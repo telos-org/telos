@@ -141,7 +141,8 @@ func deriveOverallLogStatus(
 	header logHeader,
 	events []sessionapi.SessionEvent,
 ) overallLogStatus {
-	switch strings.ToLower(strings.TrimSpace(header.State)) {
+	state := strings.ToLower(strings.TrimSpace(header.State))
+	switch state {
 	case "deleted", "stopped", "deleting":
 		reason := "This session was stopped."
 		if strings.EqualFold(strings.TrimSpace(header.State), "deleting") {
@@ -154,10 +155,7 @@ func deriveOverallLogStatus(
 	if strings.TrimSpace(header.Failure) != "" {
 		return overallLogStatus{Label: "Needs attention", Reason: strings.TrimSpace(header.Failure)}
 	}
-	switch strings.ToLower(strings.TrimSpace(header.State)) {
-	case "pending", "provisioning", "deploying":
-		return overallLogStatus{Label: "Starting", Reason: "Preparing the deployment and runtime."}
-	}
+	starting := state == "pending" || state == "provisioning" || state == "deploying"
 
 	reset := -1
 	latestConcede := -1
@@ -240,6 +238,9 @@ func deriveOverallLogStatus(
 	}
 	if latestNotice > reset && latestNotice > latestWork {
 		return overallLogStatus{Label: "Working", Reason: latestNoticeText}
+	}
+	if starting && latestWork <= reset {
+		return overallLogStatus{Label: "Starting", Reason: "Preparing the deployment and runtime."}
 	}
 	return overallLogStatus{
 		Label:  "Working",

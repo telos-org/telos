@@ -1465,7 +1465,7 @@ func TestFollowCloudSessionLogsResumesAndPrintsStatusChange(t *testing.T) {
 		false,
 		false,
 		&after,
-		logHeader{Name: "pegfall", State: "healthy", SessionID: "sess_123"},
+		logHeader{Name: "pegfall", State: "provisioning", SessionID: "sess_123"},
 		initial,
 	)
 	if err != nil {
@@ -1477,6 +1477,114 @@ func TestFollowCloudSessionLogsResumesAndPrintsStatusChange(t *testing.T) {
 	for _, want := range []string{"Current spec accepted", "[system] [STATUS] Ready"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("follow output missing %q:\n%s", want, out.String())
+		}
+	}
+}
+
+func TestFollowCloudSessionLogsReconnectsFromLatestCursor(t *testing.T) {
+	var logCalls int
+	var sessionCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/deployments/sess_reconnect/logs":
+			logCalls++
+			w.Header().Set("Content-Type", "text/event-stream")
+			switch logCalls {
+			case 1:
+				if after := r.URL.Query().Get("after_rt"); after != "" {
+					t.Fatalf("first stream cursor: %q", after)
+				}
+				_, _ = w.Write([]byte("data: {\"event\":\"agent_progress\",\"event_seq\":1,\"data\":{\"text\":\"first activity\"}}\n\n"))
+			case 2:
+				if after := r.URL.Query().Get("after_rt"); after != "1" {
+					t.Fatalf("resume cursor: %q", after)
+				}
+				_, _ = w.Write([]byte("data: {\"event\":\"agent_progress\",\"event_seq\":2,\"data\":{\"text\":\"second activity\"}}\n\n"))
+			default:
+				t.Fatalf("unexpected stream call %d", logCalls)
+			}
+		case "/api/deployments/sess_reconnect":
+			sessionCalls++
+			state := "deploying"
+			if sessionCalls == 2 {
+				state = "deleted"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":    "sess_reconnect",
+				"name":  "reconnect",
+				"state": state,
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	err := streamCloudSessionLogs(
+		cloud.NewClient(srv.URL, "test-token"),
+		"sess_reconnect",
+		&out,
+		func(time.Duration) {},
+		false,
+		false,
+	)
+	if err != nil {
+		t.Fatalf("streamCloudSessionLogs: %v", err)
+	}
+	if logCalls != 2 || sessionCalls != 2 {
+		t.Fatalf("calls: logs=%d sessions=%d", logCalls, sessionCalls)
+	}
+	for _, activity := range []string{"first activity", "second activity"} {
+		if count := strings.Count(out.String(), activity); count != 1 {
+			t.Fatalf("%q rendered %d times:\n%s", activity, count, out.String())
+		}
+	}
+}
+
+func TestFollowCloudRawSessionLogsReconnectsFromLatestCursor(t *testing.T) {
+	var logCalls int
+	var sessionCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/deployments/sess_raw_reconnect/logs":
+			logCalls++
+			w.Header().Set("Content-Type", "text/event-stream")
+			if logCalls == 1 {
+				_, _ = w.Write([]byte("data: {\"event\":\"agent_progress\",\"event_seq\":4,\"data\":{\"text\":\"raw first\"}}\n\n"))
+				return
+			}
+			if after := r.URL.Query().Get("after_rt"); after != "4" {
+				t.Fatalf("raw resume cursor: %q", after)
+			}
+			_, _ = w.Write([]byte("data: {\"event\":\"agent_progress\",\"event_seq\":5,\"data\":{\"text\":\"raw second\"}}\n\n"))
+		case "/api/deployments/sess_raw_reconnect":
+			sessionCalls++
+			state := "healthy"
+			if sessionCalls == 2 {
+				state = "deleted"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"id": "sess_raw_reconnect", "state": state})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	var out bytes.Buffer
+	if err := streamCloudRawSessionLogs(
+		cloud.NewClient(srv.URL, "test-token"),
+		"sess_raw_reconnect",
+		&out,
+		func(time.Duration) {},
+		nil,
+		nil,
+	); err != nil {
+		t.Fatalf("streamCloudRawSessionLogs: %v", err)
+	}
+	for _, activity := range []string{"raw first", "raw second"} {
+		if count := strings.Count(out.String(), activity); count != 1 {
+			t.Fatalf("%q rendered %d times:\n%s", activity, count, out.String())
 		}
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -275,12 +276,13 @@ func streamCloudSessionLogsAfter(
 ) error {
 	events := append([]sessionapi.SessionEvent(nil), initialEvents...)
 	currentStatus := deriveOverallLogStatus(header, events)
-	replayCounts := map[string]int(nil)
-	if afterRuntime == nil {
-		replayCounts = sessionEventReplayCounts(initialEvents)
-	}
+	runtimeCursor := copyLogCursor(afterRuntime)
 	for {
-		streamErr := control.StreamSessionLogsAfter(context.Background(), sessionID, afterRuntime, func(event sessionapi.SessionEvent) error {
+		var replayCounts map[string]int
+		if runtimeCursor == nil {
+			replayCounts = sessionEventReplayCounts(events)
+		}
+		streamErr := control.StreamSessionLogsAfter(context.Background(), sessionID, runtimeCursor, func(event sessionapi.SessionEvent) error {
 			if consumeSessionEventReplay(replayCounts, event) {
 				return nil
 			}
@@ -289,6 +291,7 @@ func streamCloudSessionLogsAfter(
 				return err
 			}
 			events = append(events, event)
+			runtimeCursor = advanceLogCursor(runtimeCursor, event.EventSeq)
 			if !jsonOutput && header.SessionID != "" {
 				nextStatus := deriveOverallLogStatus(header, events)
 				if nextStatus.Label != currentStatus.Label {
@@ -298,13 +301,8 @@ func streamCloudSessionLogsAfter(
 			}
 			return nil
 		})
-		if streamErr == nil {
-			return nil
-		}
-		if streamErr != nil {
-			if !transcriptNotReady(streamErr) {
-				return streamErr
-			}
+		if !retryableCloudLogStreamError(streamErr) {
+			return streamErr
 		}
 
 		session, err := control.GetSession(sessionID)
@@ -316,8 +314,16 @@ func streamCloudSessionLogsAfter(
 			}
 			return err
 		}
+		header = cloudLogHeader(session)
+		if !jsonOutput && header.SessionID != "" {
+			nextStatus := deriveOverallLogStatus(header, events)
+			if nextStatus.Label != currentStatus.Label {
+				printStatusTransition(out, header.UpdatedAt, nextStatus)
+			}
+			currentStatus = nextStatus
+		}
 		if cloudSessionStateTerminal(session.State) {
-			return streamErr
+			return nil
 		}
 		sleep(2 * time.Second)
 	}
@@ -331,26 +337,30 @@ func streamCloudRawSessionLogs(
 	afterRuntime *int64,
 	initialEvents []json.RawMessage,
 ) error {
-	replayCounts := map[string]int(nil)
-	if afterRuntime == nil {
-		replayCounts = rawEventReplayCounts(initialEvents)
-	}
+	events := append([]json.RawMessage(nil), initialEvents...)
+	runtimeCursor := copyLogCursor(afterRuntime)
 	for {
+		var replayCounts map[string]int
+		if runtimeCursor == nil {
+			replayCounts = rawEventReplayCounts(events)
+		}
 		streamErr := control.StreamRawSessionLogsAfter(
 			context.Background(),
 			sessionID,
-			afterRuntime,
+			runtimeCursor,
 			func(event json.RawMessage) error {
 				if consumeRawEventReplay(replayCounts, event) {
 					return nil
 				}
-				return printRawJSONLogEvents(out, []json.RawMessage{event})
+				if err := printRawJSONLogEvents(out, []json.RawMessage{event}); err != nil {
+					return err
+				}
+				events = append(events, append(json.RawMessage(nil), event...))
+				runtimeCursor = advanceLogCursor(runtimeCursor, rawLogEventSequence(event))
+				return nil
 			},
 		)
-		if streamErr == nil {
-			return nil
-		}
-		if !transcriptNotReady(streamErr) {
+		if !retryableCloudLogStreamError(streamErr) {
 			return streamErr
 		}
 
@@ -362,7 +372,7 @@ func streamCloudRawSessionLogs(
 			return err
 		}
 		if cloudSessionStateTerminal(session.State) {
-			return streamErr
+			return nil
 		}
 		sleep(2 * time.Second)
 	}
@@ -517,6 +527,49 @@ func rawEventReplayKey(event json.RawMessage) (string, bool) {
 	return string(data), err == nil
 }
 
+func rawLogEventSequence(event json.RawMessage) *int64 {
+	var envelope struct {
+		EventSeq *int64 `json:"event_seq"`
+	}
+	if json.Unmarshal(event, &envelope) != nil {
+		return nil
+	}
+	return envelope.EventSeq
+}
+
+func copyLogCursor(cursor *int64) *int64 {
+	if cursor == nil {
+		return nil
+	}
+	value := *cursor
+	return &value
+}
+
+func advanceLogCursor(current *int64, candidate *int64) *int64 {
+	if candidate == nil || (current != nil && *candidate <= *current) {
+		return current
+	}
+	value := *candidate
+	return &value
+}
+
+func retryableCloudLogStreamError(err error) bool {
+	if err == nil || transcriptNotReady(err) || errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return true
+	}
+	var netErr net.Error
+	if errors.As(err, &netErr) {
+		return true
+	}
+	var apiErr *cloud.APIError
+	if errors.As(err, &apiErr) {
+		return apiErr.StatusCode == http.StatusRequestTimeout ||
+			apiErr.StatusCode == http.StatusTooManyRequests ||
+			apiErr.StatusCode >= http.StatusInternalServerError
+	}
+	return false
+}
+
 func legacyTranscriptFallback(
 	sessionID string,
 	events []sessionapi.SessionEvent,
@@ -557,8 +610,8 @@ func minimum(left int, right int) int {
 }
 
 func cloudSessionStateTerminal(state string) bool {
-	switch state {
-	case "healthy", "failed", "deleted":
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "deleting", "failed", "deleted", "stopped":
 		return true
 	default:
 		return false
