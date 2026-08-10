@@ -23,36 +23,92 @@ import (
 func cmdLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	follow := fs.Bool("f", false, "Follow logs")
-	verbose := fs.Bool("verbose", false, "Show verbose log events")
+	verbose := fs.Bool("verbose", false, "Include detailed human-readable activity")
+	jsonOutput := fs.Bool("json", false, "Print newline-delimited JSON events")
+	raw := fs.Bool("raw", false, "Print the raw transcript or evidence events")
+	tail := fs.Int("tail", defaultLogTail, "Show the most recent N activity rows")
+	all := fs.Bool("all", false, "Show all activity rows")
 	parseFlags(fs, args)
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--verbose] SESSION")
+		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--verbose|--json|--raw] [--tail N|--all] SESSION")
+		os.Exit(1)
+	}
+	if enabledFlagCount(*verbose, *jsonOutput, *raw) > 1 {
+		fmt.Fprintln(os.Stderr, "error: --verbose, --json, and --raw are mutually exclusive")
+		os.Exit(1)
+	}
+	if *tail < 1 && !*all {
+		fmt.Fprintln(os.Stderr, "error: --tail must be greater than zero")
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
+	options := logViewOptions{Verbose: *verbose, Tail: *tail, All: *all}
 
 	if *follow {
-		if !localSessionExists(sessionID) {
-			if _, found, err := getCloudSessionIfConfigured(sessionID); err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		if session, err := getSessionFromAnywhere(sessionID); err == nil {
+			if *raw {
+				followTranscriptLogs(sessionID, true)
+			} else {
+				followSessionLogs(session, options, *jsonOutput)
+			}
+			return
+		}
+		if session, found, err := getCloudSessionIfConfigured(sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		} else if found {
+			if *raw {
+				followCloudRawSessionLogs(session)
+			} else {
+				followCloudSessionLogs(session, options, *jsonOutput)
+			}
+			return
+		}
+		fmt.Fprintf(os.Stderr, "error: %v\n", localSessionNotFoundError(sessionID))
+		os.Exit(1)
+	}
+
+	if session, err := getSessionFromAnywhere(sessionID); err == nil {
+		if *raw {
+			text, transcriptErr := getTranscriptFromAnywhere(sessionID)
+			if transcriptErr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", transcriptErr)
 				os.Exit(1)
-			} else if found {
-				followCloudSessionLogs(sessionID, *verbose)
+			}
+			printLogs(os.Stdout, text, true)
+			return
+		}
+		events, eventsErr := getEventsFromAnywhere(sessionID)
+		if !*jsonOutput {
+			if transcript, ok := legacyTranscriptFallback(sessionID, events, eventsErr); ok {
+				printLogs(os.Stdout, transcript, false)
 				return
 			}
 		}
-		followLogs(sessionID, *verbose)
+		if eventsErr != nil {
+			if *jsonOutput && transcriptNotReady(eventsErr) {
+				fmt.Fprintln(
+					os.Stderr,
+					"error: structured events are unavailable for this older session; omit --json for readable logs or use --raw for the transcript",
+				)
+				os.Exit(1)
+			}
+			fmt.Fprintf(os.Stderr, "error: %v\n", eventsErr)
+			os.Exit(1)
+		}
+		if *jsonOutput {
+			if eventsErr := printJSONLogEvents(os.Stdout, selectLogEvents(events, options)); eventsErr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", eventsErr)
+				os.Exit(1)
+			}
+			return
+		}
+		printStructuredLogs(os.Stdout, localLogHeader(session), events, options)
 		return
 	}
 
-	text, err := getTranscriptFromAnywhere(sessionID)
-	if err == nil {
-		printLogs(os.Stdout, text, *verbose)
-		return
-	}
-
-	if _, found, cloudErr := getCloudSessionIfConfigured(sessionID); cloudErr != nil {
+	if session, found, cloudErr := getCloudSessionIfConfigured(sessionID); cloudErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
 		os.Exit(1)
 	} else if found {
@@ -61,33 +117,126 @@ func cmdLogs(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", controlErr)
 			os.Exit(1)
 		}
-		events, eventsErr := control.GetSessionLogs(sessionID)
+		page, eventsErr := control.GetSessionLogPage(sessionID)
 		if eventsErr != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", eventsErr)
 			os.Exit(1)
 		}
-		printCloudSessionLogEvents(os.Stdout, events, *verbose)
+		if *raw {
+			if eventsErr := printRawJSONLogEvents(os.Stdout, page.RawEvents); eventsErr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", eventsErr)
+				os.Exit(1)
+			}
+			return
+		}
+		if *jsonOutput {
+			if eventsErr := printJSONLogEvents(os.Stdout, selectLogEvents(page.Events, options)); eventsErr != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", eventsErr)
+				os.Exit(1)
+			}
+			return
+		}
+		printStructuredLogs(os.Stdout, cloudLogHeader(session), page.Events, options)
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	fmt.Fprintf(os.Stderr, "error: %v\n", localSessionNotFoundError(sessionID))
 	os.Exit(1)
 }
 
-func followLogs(sessionID string, verbose bool) {
-	if err := followTranscript(sessionID, os.Stdout, time.Sleep, verbose); err != nil {
+func enabledFlagCount(values ...bool) int {
+	count := 0
+	for _, value := range values {
+		if value {
+			count++
+		}
+	}
+	return count
+}
+
+func followTranscriptLogs(sessionID string, raw bool) {
+	if err := followTranscript(sessionID, os.Stdout, time.Sleep, raw); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
-func followCloudSessionLogs(sessionID string, verbose bool) {
+func followSessionLogs(session *sessionapi.Session, options logViewOptions, jsonOutput bool) {
+	if !jsonOutput {
+		events, eventsErr := getEventsFromAnywhere(session.SessionID)
+		if _, ok := legacyTranscriptFallback(session.SessionID, events, eventsErr); ok {
+			if err := followTranscript(session.SessionID, os.Stdout, time.Sleep, false); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
+	if err := pollSessionLogs(session, os.Stdout, time.Sleep, options, jsonOutput); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func followCloudSessionLogs(session *cloud.SessionRecord, options logViewOptions, jsonOutput bool) {
 	control, err := cloud.ControlClient()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if err := streamCloudSessionLogs(control, sessionID, os.Stdout, time.Sleep, verbose); err != nil {
+	page, err := control.GetSessionLogPage(session.ID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if jsonOutput {
+		if err := printJSONLogEvents(os.Stdout, selectLogEvents(page.Events, options)); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		printStructuredLogs(os.Stdout, cloudLogHeader(session), page.Events, options)
+		fmt.Fprintln(os.Stdout)
+	}
+	if err := streamCloudSessionLogsAfter(
+		control,
+		session.ID,
+		os.Stdout,
+		time.Sleep,
+		options.Verbose,
+		jsonOutput,
+		page.RuntimeCursor,
+		cloudLogHeader(session),
+		page.Events,
+	); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+func followCloudRawSessionLogs(session *cloud.SessionRecord) {
+	control, err := cloud.ControlClient()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	page, err := control.GetSessionLogPage(session.ID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := printRawJSONLogEvents(os.Stdout, page.RawEvents); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if err := streamCloudRawSessionLogs(
+		control,
+		session.ID,
+		os.Stdout,
+		time.Sleep,
+		page.RuntimeCursor,
+		page.RawEvents,
+	); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -99,13 +248,58 @@ func streamCloudSessionLogs(
 	out io.Writer,
 	sleep func(time.Duration),
 	verbose bool,
+	jsonOutput bool,
 ) error {
-	var lastProgressCount int
+	return streamCloudSessionLogsAfter(
+		control,
+		sessionID,
+		out,
+		sleep,
+		verbose,
+		jsonOutput,
+		nil,
+		logHeader{},
+		nil,
+	)
+}
+
+func streamCloudSessionLogsAfter(
+	control *cloud.Client,
+	sessionID string,
+	out io.Writer,
+	sleep func(time.Duration),
+	verbose bool,
+	jsonOutput bool,
+	afterRuntime *int64,
+	header logHeader,
+	initialEvents []sessionapi.SessionEvent,
+) error {
+	events := append([]sessionapi.SessionEvent(nil), initialEvents...)
+	currentStatus := deriveOverallLogStatus(header, events)
+	replayCounts := map[string]int(nil)
+	if afterRuntime == nil {
+		replayCounts = sessionEventReplayCounts(initialEvents)
+	}
 	for {
-		streamErr := control.StreamSessionLogs(context.Background(), sessionID, func(event sessionapi.SessionEvent) error {
-			printed := printCloudSessionLogEvent(out, event, verbose, &lastProgressCount)
-			if printed {
+		streamErr := control.StreamSessionLogsAfter(context.Background(), sessionID, afterRuntime, func(event sessionapi.SessionEvent) error {
+			if consumeSessionEventReplay(replayCounts, event) {
+				return nil
+			}
+			printed, err := printStreamingLogEvent(out, event, verbose, jsonOutput)
+			if err != nil {
+				return err
+			}
+			if printed && !jsonOutput {
 				_, _ = fmt.Fprintln(out)
+			}
+			events = append(events, event)
+			if !jsonOutput && header.SessionID != "" {
+				nextStatus := deriveOverallLogStatus(header, events)
+				if nextStatus.Label != currentStatus.Label {
+					printStatusTransition(out, eventTimestamp(event), nextStatus)
+					_, _ = fmt.Fprintln(out)
+				}
+				currentStatus = nextStatus
 			}
 			return nil
 		})
@@ -132,6 +326,240 @@ func streamCloudSessionLogs(
 		}
 		sleep(2 * time.Second)
 	}
+}
+
+func streamCloudRawSessionLogs(
+	control *cloud.Client,
+	sessionID string,
+	out io.Writer,
+	sleep func(time.Duration),
+	afterRuntime *int64,
+	initialEvents []json.RawMessage,
+) error {
+	replayCounts := map[string]int(nil)
+	if afterRuntime == nil {
+		replayCounts = rawEventReplayCounts(initialEvents)
+	}
+	for {
+		streamErr := control.StreamRawSessionLogsAfter(
+			context.Background(),
+			sessionID,
+			afterRuntime,
+			func(event json.RawMessage) error {
+				if consumeRawEventReplay(replayCounts, event) {
+					return nil
+				}
+				return printRawJSONLogEvents(out, []json.RawMessage{event})
+			},
+		)
+		if streamErr == nil {
+			return nil
+		}
+		if !transcriptNotReady(streamErr) {
+			return streamErr
+		}
+
+		session, err := control.GetSession(sessionID)
+		if err != nil {
+			if cloud.IsStatus(err, http.StatusNotFound) {
+				return nil
+			}
+			return err
+		}
+		if cloudSessionStateTerminal(session.State) {
+			return streamErr
+		}
+		sleep(2 * time.Second)
+	}
+}
+
+func pollSessionLogs(
+	session *sessionapi.Session,
+	out io.Writer,
+	sleep func(time.Duration),
+	options logViewOptions,
+	jsonOutput bool,
+) error {
+	events, err := getEventsFromAnywhere(session.SessionID)
+	if err != nil {
+		return err
+	}
+	if jsonOutput {
+		if err := printJSONLogEvents(out, selectLogEvents(events, options)); err != nil {
+			return err
+		}
+	} else {
+		printStructuredLogs(out, localLogHeader(session), events, options)
+	}
+	currentStatus := deriveOverallLogStatus(localLogHeader(session), events)
+	seen := len(events)
+	if session.Status.IsTerminal() {
+		return nil
+	}
+
+	for {
+		sleep(2 * time.Second)
+		events, err = getEventsFromAnywhere(session.SessionID)
+		if err != nil {
+			return err
+		}
+		for _, event := range events[minimum(seen, len(events)):] {
+			if _, err := printStreamingLogEvent(out, event, options.Verbose, jsonOutput); err != nil {
+				return err
+			}
+		}
+		seen = len(events)
+		session, err = getSessionFromAnywhere(session.SessionID)
+		if err != nil {
+			return err
+		}
+		if !jsonOutput {
+			nextStatus := deriveOverallLogStatus(localLogHeader(session), events)
+			if nextStatus.Label != currentStatus.Label {
+				timestamp := ""
+				if len(events) > 0 {
+					timestamp = eventTimestamp(events[len(events)-1])
+				}
+				printStatusTransition(out, timestamp, nextStatus)
+			}
+			currentStatus = nextStatus
+		}
+		if session.Status.IsTerminal() {
+			return nil
+		}
+	}
+}
+
+func printStatusTransition(out io.Writer, timestamp string, status overallLogStatus) {
+	printRenderedLogRow(out, renderedLogRow{
+		Timestamp: timestamp,
+		Phase:     "STATUS",
+		Summary:   status.Label,
+		Detail:    status.Reason,
+		Count:     1,
+	})
+}
+
+func printRawJSONLogEvents(out io.Writer, events []json.RawMessage) error {
+	for _, event := range events {
+		if !json.Valid(event) {
+			return errors.New("raw session log event is invalid JSON")
+		}
+		if _, err := out.Write(event); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(out); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func sessionEventReplayCounts(events []sessionapi.SessionEvent) map[string]int {
+	counts := make(map[string]int, len(events))
+	for _, event := range events {
+		key, ok := sessionEventReplayKey(event)
+		if ok {
+			counts[key]++
+		}
+	}
+	return counts
+}
+
+func consumeSessionEventReplay(counts map[string]int, event sessionapi.SessionEvent) bool {
+	if len(counts) == 0 {
+		return false
+	}
+	key, ok := sessionEventReplayKey(event)
+	if !ok || counts[key] == 0 {
+		return false
+	}
+	if counts[key] == 1 {
+		delete(counts, key)
+	} else {
+		counts[key]--
+	}
+	return true
+}
+
+func sessionEventReplayKey(event sessionapi.SessionEvent) (string, bool) {
+	data, err := json.Marshal(event)
+	return string(data), err == nil
+}
+
+func rawEventReplayCounts(events []json.RawMessage) map[string]int {
+	counts := make(map[string]int, len(events))
+	for _, event := range events {
+		key, ok := rawEventReplayKey(event)
+		if ok {
+			counts[key]++
+		}
+	}
+	return counts
+}
+
+func consumeRawEventReplay(counts map[string]int, event json.RawMessage) bool {
+	if len(counts) == 0 {
+		return false
+	}
+	key, ok := rawEventReplayKey(event)
+	if !ok || counts[key] == 0 {
+		return false
+	}
+	if counts[key] == 1 {
+		delete(counts, key)
+	} else {
+		counts[key]--
+	}
+	return true
+}
+
+func rawEventReplayKey(event json.RawMessage) (string, bool) {
+	var value any
+	if err := json.Unmarshal(event, &value); err != nil {
+		return "", false
+	}
+	data, err := json.Marshal(value)
+	return string(data), err == nil
+}
+
+func legacyTranscriptFallback(
+	sessionID string,
+	events []sessionapi.SessionEvent,
+	eventsErr error,
+) (string, bool) {
+	if eventsErr == nil && len(events) > 0 {
+		return "", false
+	}
+	transcript, err := getTranscriptFromAnywhere(sessionID)
+	if err != nil || len(logBlocks(transcript)) == 0 {
+		return "", false
+	}
+	return transcript, true
+}
+
+func printStreamingLogEvent(
+	out io.Writer,
+	event sessionapi.SessionEvent,
+	verbose bool,
+	jsonOutput bool,
+) (bool, error) {
+	if jsonOutput {
+		return true, printJSONLogEvents(out, []sessionapi.SessionEvent{event})
+	}
+	row, ok := renderedLogRowFromEvent(event, verbose)
+	if !ok {
+		return false, nil
+	}
+	printRenderedLogRow(out, row)
+	return true, nil
+}
+
+func minimum(left int, right int) int {
+	if left < right {
+		return left
+	}
+	return right
 }
 
 func cloudSessionStateTerminal(state string) bool {
@@ -207,96 +635,6 @@ func printLogs(out io.Writer, transcript string, raw bool) {
 		return
 	}
 	printLogBlocks(out, blocks, 0)
-}
-
-func printCloudSessionLogEvents(out io.Writer, events []sessionapi.SessionEvent, verbose bool) {
-	progressCount := 0
-	printed := false
-	for _, event := range events {
-		if printed {
-			fmt.Fprintln(out)
-		}
-		if printCloudSessionLogEvent(out, event, verbose, &progressCount) {
-			printed = true
-		}
-	}
-	if !printed {
-		fmt.Fprintln(out, "no session log entries")
-	}
-}
-
-func printCloudSessionLogEvent(out io.Writer, event sessionapi.SessionEvent, verbose bool, progressCount *int) bool {
-	if verbose {
-		data, err := json.Marshal(event)
-		if err != nil {
-			return false
-		}
-		fmt.Fprintln(out, string(data))
-		return true
-	}
-	switch event.Event {
-	case "agent_progress":
-		kind, _ := event.Data["kind"].(string)
-		text, _ := event.Data["text"].(string)
-		if strings.TrimSpace(text) == "" {
-			return false
-		}
-		block := logBlock{kind: kind, text: strings.TrimSpace(text)}
-		*progressCount = printLogBlocks(out, []logBlock{block}, *progressCount)
-		return true
-	case "agent_complete":
-		status, _ := event.Data["status"].(string)
-		model, _ := event.Data["model"].(string)
-		turns, hasTurns := numericEventValue(event.Data["num_turns"])
-		if status == "" && model == "" && !hasTurns {
-			return false
-		}
-		fmt.Fprintf(out, "Agent complete: %s", orDash(status))
-		if model != "" {
-			fmt.Fprintf(out, " model=%s", model)
-		}
-		if hasTurns {
-			fmt.Fprintf(out, " turns=%d", turns)
-		}
-		fmt.Fprintln(out)
-		return true
-	case "agent_failure_recoverable":
-		errText, _ := event.Data["error"].(string)
-		if strings.TrimSpace(errText) == "" {
-			return false
-		}
-		current, hasCurrent := numericEventValue(event.Data["consecutive_failures"])
-		maxFailures, hasMax := numericEventValue(event.Data["max_failures"])
-		fmt.Fprintf(out, "Recoverable failure: %s", strings.TrimSpace(errText))
-		if hasCurrent && hasMax {
-			fmt.Fprintf(out, " (%d/%d)", current, maxFailures)
-		}
-		fmt.Fprintln(out)
-		return true
-	case "game_end":
-		if result, _ := event.Data["game_result"].(string); result != "" {
-			fmt.Fprintf(out, "Completed: %s%s\n", result, eventErrorSuffix(event))
-			return true
-		}
-		if reason, _ := event.Data["completion_reason"].(string); reason != "" {
-			fmt.Fprintf(out, "Completed: %s%s\n", reason, eventErrorSuffix(event))
-			return true
-		}
-	}
-	if message, _ := event.Data["message"].(string); strings.TrimSpace(message) != "" {
-		fmt.Fprintln(out, strings.TrimSpace(message))
-		return true
-	}
-	return false
-}
-
-func eventErrorSuffix(event sessionapi.SessionEvent) string {
-	errText, _ := event.Data["error"].(string)
-	errText = strings.TrimSpace(errText)
-	if errText == "" {
-		return ""
-	}
-	return " (" + errText + ")"
 }
 
 func numericEventValue(value any) (int, bool) {
