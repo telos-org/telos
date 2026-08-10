@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -150,6 +151,66 @@ func TestStopRequestWinsBeforeImmediateDesiredStateCycle(t *testing.T) {
 	stop <- syscall.SIGTERM
 	if !stopRequested(stop) {
 		t.Fatal("expected buffered retirement signal to stop the worker")
+	}
+}
+
+func TestFailureBackoffReachesFifteenMinuteCap(t *testing.T) {
+	for failures, want := range map[int]time.Duration{
+		1:   time.Second,
+		7:   64 * time.Second,
+		11:  controllerFailureBackoffCap,
+		100: controllerFailureBackoffCap,
+	} {
+		if got := failureBackoff(failures); got != want {
+			t.Fatalf("failureBackoff(%d) = %s, want %s", failures, got, want)
+		}
+	}
+}
+
+func TestJitteredFailureBackoffStaysWithinBound(t *testing.T) {
+	for failures := 1; failures <= 20; failures++ {
+		base := failureBackoff(failures)
+		for range 20 {
+			got := jitteredFailureBackoff(failures)
+			if got < base-base/5 || got > base {
+				t.Fatalf("jitteredFailureBackoff(%d) = %s, base %s", failures, got, base)
+			}
+		}
+	}
+}
+
+func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
+	evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
+	sessionDir := writeWorkerManifest(t, map[string]any{
+		"session_id":   "sess_123",
+		"session_kind": "controller",
+		"created_at":   "2026-08-10T12:00:00Z",
+		"specs": []map[string]any{{
+			"name":          "demo",
+			"evidence_path": evidencePath,
+		}},
+		"epochs": []map[string]any{{
+			"id":         4,
+			"started_at": "2026-08-10T12:00:00Z",
+		}},
+	})
+
+	logControllerSuspended(sessionDir, "agent_authentication_invalid", "403: inactive virtual key")
+	data, err := os.ReadFile(evidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		`"event":"agent_suspended"`,
+		`"epoch_id":4`,
+		`"blocker_code":"agent_authentication_invalid"`,
+		`"state":"waiting"`,
+		"update the model credentials",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("suspension evidence missing %q:\n%s", want, text)
+		}
 	}
 }
 

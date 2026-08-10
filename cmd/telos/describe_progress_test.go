@@ -92,8 +92,11 @@ func TestDeriveCloudSessionProgressSurfacesWorkloadBlocker(t *testing.T) {
 	if progress.Stage != "workload rollout" {
 		t.Fatalf("stage = %q", progress.Stage)
 	}
-	if progress.WaitingReason != "no-default-storage-class" {
+	if progress.WaitingReason != "PVC pending" {
 		t.Fatalf("waiting reason = %q", progress.WaitingReason)
+	}
+	if progress.BlockerCode != "no-default-storage-class" {
+		t.Fatalf("blocker code = %q", progress.BlockerCode)
 	}
 	if progress.LatestActivity != "PVC pending" {
 		t.Fatalf("latest activity = %q", progress.LatestActivity)

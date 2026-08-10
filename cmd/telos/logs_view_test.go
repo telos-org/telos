@@ -208,6 +208,28 @@ func TestRenderedLogRowTreatsToolActivityAsVerboseTelemetry(t *testing.T) {
 	}
 }
 
+func TestAgentSuspensionIsVisibleAndNeedsAttention(t *testing.T) {
+	event := sessionapi.SessionEvent{
+		Event: "agent_suspended",
+		Data: map[string]any{
+			"error":        "403: inactive virtual key",
+			"blocker_code": "agent_authentication_invalid",
+			"action":       "update the model credentials",
+		},
+	}
+	row, visible := renderedLogRowFromEvent(event, false)
+	if !visible || row.Phase != "BLOCKED" || row.Summary != "Agent execution suspended" {
+		t.Fatalf("suspension row: visible=%v row=%#v", visible, row)
+	}
+	if !strings.Contains(row.Detail, "update the model credentials") {
+		t.Fatalf("suspension detail = %q", row.Detail)
+	}
+	status := deriveOverallLogStatus(logHeader{State: "healthy"}, []sessionapi.SessionEvent{event})
+	if status.Label != "Needs attention" || !strings.Contains(status.Reason, "inactive virtual key") {
+		t.Fatalf("status = %#v", status)
+	}
+}
+
 func TestPrintRenderedLogRowUsesUTCTimestampAndPreservesMultilineDetail(t *testing.T) {
 	var output strings.Builder
 	printRenderedLogRow(&output, renderedLogRow{

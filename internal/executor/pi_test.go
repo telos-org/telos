@@ -21,6 +21,25 @@ func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	}
 }
 
+func TestRecoverableAgentFailureRejectsCredentialErrors(t *testing.T) {
+	for _, errorText := range []string{
+		"403: inactive virtual key",
+		"request failed (HTTP 401)",
+	} {
+		if recoverableAgentFailure(errorText) {
+			t.Fatalf("credential error marked recoverable: %q", errorText)
+		}
+	}
+	for _, errorText := range []string{
+		"429: provider at capacity",
+		"502: no healthy upstream",
+	} {
+		if !recoverableAgentFailure(errorText) {
+			t.Fatalf("transient error marked non-recoverable: %q", errorText)
+		}
+	}
+}
+
 func TestPiExecutorResolvesPerRoleConfigWithSharedFallbacks(t *testing.T) {
 	exec := NewPiExecutor(nil, "shared/model", "medium", 0).WithRoleConfig(
 		RoleConfig{Model: "generator/model", Thinking: "high"},

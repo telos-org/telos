@@ -129,7 +129,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Logs:        result.InfraError,
 			Stats:       stats,
 			Error:       result.InfraError,
-			Recoverable: !result.TimedOut,
+			Recoverable: !result.TimedOut && recoverableAgentFailure(result.InfraError),
 		}
 	}
 
@@ -145,7 +145,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Logs:        reason,
 			Stats:       stats,
 			Error:       reason,
-			Recoverable: true,
+			Recoverable: recoverableAgentFailure(reason),
 		}
 	}
 
@@ -156,7 +156,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Logs:        agentError,
 			Stats:       stats,
 			Error:       agentError,
-			Recoverable: true,
+			Recoverable: recoverableAgentFailure(agentError),
 		}
 	}
 
@@ -181,6 +181,11 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		Logs:   logs,
 		Stats:  stats,
 	}
+}
+
+func recoverableAgentFailure(errorText string) bool {
+	_, blocked := game.AgentFailureBlocker(errorText)
+	return !blocked
 }
 
 type piLiveProjector struct {

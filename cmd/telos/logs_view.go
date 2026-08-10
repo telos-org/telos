@@ -221,7 +221,7 @@ func deriveOverallLogStatus(
 			} else if result == "failure" || result == "stopped" {
 				latestFailure = index
 			}
-		case "budget_exceeded", "game_error":
+		case "budget_exceeded", "game_error", "agent_suspended":
 			latestFailure = index
 		case "agent_failure_recoverable":
 			latestNotice = index
@@ -343,6 +343,22 @@ func renderedLogRowFromEvent(
 		if current, ok := numericEventValue(event.Data["consecutive_failures"]); ok {
 			if maxFailures, hasMax := numericEventValue(event.Data["max_failures"]); hasMax {
 				row.Detail += fmt.Sprintf(" · attempt %d of %d", current, maxFailures)
+			}
+		}
+		row.MultilineDetail = strings.Contains(row.Detail, "\n")
+		return row, true
+	case "agent_suspended":
+		row.Phase = "BLOCKED"
+		row.Summary = "Agent execution suspended"
+		row.Detail = firstNonEmpty(
+			eventDataString(event, "error"),
+			eventDataString(event, "blocker_code"),
+		)
+		if action := eventDataString(event, "action"); action != "" {
+			if row.Detail == "" {
+				row.Detail = action
+			} else {
+				row.Detail += " · " + action
 			}
 		}
 		row.MultilineDetail = strings.Contains(row.Detail, "\n")

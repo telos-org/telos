@@ -17,6 +17,8 @@ type cloudSessionProgress struct {
 	LatestActivityAt         string `json:"latest_activity_at,omitempty"`
 	LatestActivityAgeSeconds *int64 `json:"latest_activity_age_seconds,omitempty"`
 	WaitingReason            string `json:"waiting_reason,omitempty"`
+	BlockerCode              string `json:"blocker_code,omitempty"`
+	WaitingAction            string `json:"waiting_action,omitempty"`
 	RuntimeProvider          string `json:"runtime_provider,omitempty"`
 	Allocation               string `json:"allocation,omitempty"`
 	Host                     string `json:"host,omitempty"`
@@ -148,6 +150,13 @@ func deriveCloudSessionProgress(
 			}
 			progress.LatestActivityAt = row.Timestamp
 			progress.WaitingReason = structuredWaitingReason(event)
+			if progress.WaitingReason != "" {
+				progress.BlockerCode = eventDataString(event, "blocker_code")
+				progress.WaitingAction = eventDataString(event, "action")
+			} else {
+				progress.BlockerCode = ""
+				progress.WaitingAction = ""
+			}
 		}
 
 		progress.RuntimeProvider = latestEventValue(
@@ -270,16 +279,16 @@ func structuredWaitingReason(event sessionapi.SessionEvent) string {
 		strings.HasSuffix(name, ".waiting") ||
 		strings.HasSuffix(name, ".failed") ||
 		strings.HasSuffix(name, ".error") ||
-		name == "agent_failure_recoverable" || name == "game_error"
+		name == "agent_failure_recoverable" || name == "agent_suspended" || name == "game_error"
 	if !waiting {
 		return ""
 	}
 	return firstNonEmpty(
-		eventDataString(event, "blocker_code"),
-		eventDataString(event, "blocker"),
-		eventDataString(event, "reason"),
 		eventDataString(event, "error"),
+		eventDataString(event, "reason"),
 		eventDataString(event, "message"),
+		eventDataString(event, "blocker"),
+		eventDataString(event, "blocker_code"),
 	)
 }
 

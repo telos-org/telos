@@ -240,6 +240,12 @@ func printCloudSessionDescriptionWithProgress(
 	} else if progress.WaitingReason != "" {
 		printSummaryField(out, "Waiting", progress.WaitingReason)
 	}
+	if progress.BlockerCode != "" {
+		printSummaryField(out, "Blocker", progress.BlockerCode)
+	}
+	if progress.WaitingAction != "" {
+		printSummaryField(out, "Action", progress.WaitingAction)
+	}
 	if verbose {
 		if progress.RuntimeProvider != "" {
 			printSummaryField(out, "Runtime provider", progress.RuntimeProvider)
