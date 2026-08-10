@@ -184,26 +184,33 @@ func materializePackage(control *cloud.Client, pkg *pulledPackage, output string
 }
 
 func verifiedPackageSpec(pkg *pulledPackage) ([]byte, error) {
+	rootSpec, _, err := verifiedPackageContents(pkg)
+	return rootSpec, err
+}
+
+func verifiedPackageContents(
+	pkg *pulledPackage,
+) ([]byte, *spec.ApplyPackageManifest, error) {
 	if pkg == nil {
-		return nil, fmt.Errorf("package is required")
+		return nil, nil, fmt.Errorf("package is required")
 	}
 	rootSpec, manifest, err := spec.ApplyPackageSpec(pkg.data)
 	if err != nil {
-		return nil, fmt.Errorf("verify %s: %w", pkg.reference.ref, err)
+		return nil, nil, fmt.Errorf("verify %s: %w", pkg.reference.ref, err)
 	}
 	actualDigest := spec.ApplyPackageDigest(manifest)
 	if pkg.digest == "" {
-		return nil, fmt.Errorf("%s has no package digest", pkg.reference.ref)
+		return nil, nil, fmt.Errorf("%s has no package digest", pkg.reference.ref)
 	}
 	if actualDigest != pkg.digest {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"%s digest mismatch: got %s want %s",
 			pkg.reference.ref,
 			actualDigest,
 			pkg.digest,
 		)
 	}
-	return rootSpec, nil
+	return rootSpec, manifest, nil
 }
 
 func registrySkillFetcher(control *cloud.Client) spec.ApplyPackageSkillFetcher {

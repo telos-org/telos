@@ -159,11 +159,76 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 			WillCreate bool `json:"will_create_session"`
 			WillUpdate bool `json:"will_update_session"`
 		} `json:"target"`
+		Change struct {
+			Current  planSpecState `json:"current"`
+			Proposed planSpecState `json:"proposed"`
+		} `json:"change"`
 	}
 	if err := json.Unmarshal([]byte(out), &plan); err != nil {
 		t.Fatal(err)
 	}
 	if plan.Target.WillCreate || !plan.Target.WillUpdate {
 		t.Fatalf("target: got %+v", plan.Target)
+	}
+	if plan.Change.Current.Version != "1.2.3" || plan.Change.Proposed.Version != "1.2.3" {
+		t.Fatalf("versions: current=%q proposed=%q", plan.Change.Current.Version, plan.Change.Proposed.Version)
+	}
+	if len(plan.Change.Current.Skills) == 0 || len(plan.Change.Proposed.Skills) == 0 {
+		t.Fatalf("skill locks missing: current=%#v proposed=%#v", plan.Change.Current.Skills, plan.Change.Proposed.Skills)
+	}
+	if plan.Change.Current.Skills[0].Digest == "" || plan.Change.Proposed.Skills[0].Digest == "" {
+		t.Fatalf("skill lock digest missing: current=%#v proposed=%#v", plan.Change.Current.Skills, plan.Change.Proposed.Skills)
+	}
+}
+
+func TestPlanSpecStateCapturesIntervalSkillLocksAndRubrics(t *testing.T) {
+	currentIntervalSpec := []byte("---\nname: demo\nversion: 1.0.0\ninterval: 5m\n---\n\n# Goal\n\nCurrent.\n")
+	proposedIntervalSpec := []byte("---\nname: demo\nversion: 1.1.0\ninterval: 10m\n---\n\n# Goal\n\nProposed.\n")
+	currentManifest := &spec.ApplyPackageManifest{Skills: map[string]spec.ApplyPackageSkillLock{
+		"verify-quality": {
+			Ref:    "@telos/verify-quality:1.0.0",
+			Digest: "sha256:current",
+		},
+	}}
+	proposedManifest := &spec.ApplyPackageManifest{Skills: map[string]spec.ApplyPackageSkillLock{
+		"verify-quality": {
+			Ref:     "@telos/verify-quality:1.1.0",
+			Digest:  "sha256:proposed",
+			Starred: true,
+		},
+	}}
+
+	current, err := planSpecStateFromMarkdown(currentIntervalSpec, currentManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed, err := planSpecStateFromMarkdown(proposedIntervalSpec, proposedManifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if current.IntervalSeconds == nil || *current.IntervalSeconds != 300 {
+		t.Fatalf("current interval = %#v", current.IntervalSeconds)
+	}
+	if proposed.IntervalSeconds == nil || *proposed.IntervalSeconds != 600 {
+		t.Fatalf("proposed interval = %#v", proposed.IntervalSeconds)
+	}
+	if len(proposed.Rubrics) != 1 || proposed.Rubrics[0] != "verify-quality" {
+		t.Fatalf("proposed rubrics = %#v", proposed.Rubrics)
+	}
+
+	var out bytes.Buffer
+	printPlanStateDelta(&out, current, proposed)
+	normalized := strings.Join(strings.Fields(out.String()), " ")
+	for _, want := range []string{
+		"Version 1.0.0 -> 1.1.0",
+		"Interval 5m0s -> 10m0s",
+		"verify-quality @telos/verify-quality:1.0.0 sha256:current",
+		"verify-quality @telos/verify-quality:1.1.0 sha256:proposed *",
+		"rubrics  - -> verify-quality",
+	} {
+		want = strings.Join(strings.Fields(want), " ")
+		if !strings.Contains(normalized, want) {
+			t.Fatalf("plan delta missing %q:\n%s", want, out.String())
+		}
 	}
 }

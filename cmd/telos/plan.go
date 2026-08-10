@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
+	"time"
 
 	internaldiff "github.com/rogpeppe/go-internal/diff"
 	"github.com/telos-org/telos/internal/cloud"
@@ -19,6 +21,22 @@ type specComparison struct {
 	sessionID  string
 	currentRef string
 	diff       string
+	current    planSpecState
+	proposed   planSpecState
+}
+
+type planSpecState struct {
+	Version         string          `json:"version,omitempty"`
+	IntervalSeconds *int            `json:"interval_seconds,omitempty"`
+	Skills          []planSkillLock `json:"skills"`
+	Rubrics         []string        `json:"required_rubrics"`
+}
+
+type planSkillLock struct {
+	Name    string `json:"name"`
+	Ref     string `json:"ref,omitempty"`
+	Digest  string `json:"digest"`
+	Starred bool   `json:"required_rubric,omitempty"`
 }
 
 func cmdPlan(args []string) {
@@ -52,6 +70,11 @@ func cmdPlan(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	proposedState, err := planSpecStateForCompiled(compiled, proposedSpec)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: build plan metadata: %v\n", err)
+		os.Exit(1)
+	}
 
 	platform := compiled.Environment.Platform
 	if platform == "" {
@@ -59,7 +82,13 @@ func cmdPlan(args []string) {
 	}
 	var comparison *specComparison
 	if strings.TrimSpace(*sessionID) != "" {
-		comparison, err = compareSessionSpec(*sessionID, proposedSpec, platform, contextOverride)
+		comparison, err = compareSessionSpec(
+			*sessionID,
+			proposedSpec,
+			proposedState,
+			platform,
+			contextOverride,
+		)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -142,6 +171,8 @@ func cmdPlan(args []string) {
 		plan["change"] = map[string]interface{}{
 			"session_id":  comparison.sessionID,
 			"current_ref": comparison.currentRef,
+			"current":     comparison.current,
+			"proposed":    comparison.proposed,
 			"spec_diff":   comparison.diff,
 		}
 	}
@@ -185,6 +216,7 @@ func printPlanPreview(
 	if comparison == nil {
 		return
 	}
+	printPlanStateDelta(out, comparison.current, comparison.proposed)
 	fmt.Fprintln(out)
 	if comparison.diff == "" {
 		fmt.Fprintln(out, "No spec changes.")
@@ -199,6 +231,7 @@ func printPlanPreview(
 func compareSessionSpec(
 	sessionID string,
 	proposed []byte,
+	proposedState planSpecState,
 	platform string,
 	contextOverride string,
 ) (*specComparison, error) {
@@ -212,7 +245,18 @@ func compareSessionSpec(
 		if err != nil {
 			return nil, err
 		}
-		return newSpecComparison(sessionID, "current session", []byte(current.Markdown), proposed), nil
+		currentState, err := planSpecStateFromMarkdown([]byte(current.Markdown), nil)
+		if err != nil {
+			return nil, err
+		}
+		return newSpecComparisonWithStates(
+			sessionID,
+			"current session",
+			[]byte(current.Markdown),
+			proposed,
+			currentState,
+			proposedState,
+		), nil
 	case isCloudApplyID(sessionID):
 		if platform == "local" {
 			return nil, fmt.Errorf("%s is cloud but the proposed spec targets local", sessionID)
@@ -221,7 +265,7 @@ func compareSessionSpec(
 		if err != nil {
 			return nil, err
 		}
-		return compareCloudSessionSpec(control, sessionID, proposed)
+		return compareCloudSessionSpecWithState(control, sessionID, proposed, proposedState)
 	default:
 		return nil, fmt.Errorf("invalid session id %q", sessionID)
 	}
@@ -232,21 +276,65 @@ func compareCloudSessionSpec(
 	sessionID string,
 	proposed []byte,
 ) (*specComparison, error) {
+	proposedState, err := planSpecStateFromMarkdown(proposed, nil)
+	if err != nil {
+		return nil, err
+	}
+	return compareCloudSessionSpecWithState(control, sessionID, proposed, proposedState)
+}
+
+func compareCloudSessionSpecWithState(
+	control *cloud.Client,
+	sessionID string,
+	proposed []byte,
+	proposedState planSpecState,
+) (*specComparison, error) {
 	pkg, err := packageForSession(control, sessionID)
 	if err != nil {
 		return nil, err
 	}
-	current, err := verifiedPackageSpec(pkg)
+	current, manifest, err := verifiedPackageContents(pkg)
 	if err != nil {
 		return nil, err
 	}
-	return newSpecComparison(sessionID, pkg.reference.ref, current, proposed), nil
+	currentState, err := planSpecStateFromMarkdown(current, manifest)
+	if err != nil {
+		return nil, err
+	}
+	return newSpecComparisonWithStates(
+		sessionID,
+		pkg.reference.ref,
+		current,
+		proposed,
+		currentState,
+		proposedState,
+	), nil
 }
 
 func newSpecComparison(sessionID string, currentRef string, current, proposed []byte) *specComparison {
+	return newSpecComparisonWithStates(
+		sessionID,
+		currentRef,
+		current,
+		proposed,
+		planSpecState{},
+		planSpecState{},
+	)
+}
+
+func newSpecComparisonWithStates(
+	sessionID string,
+	currentRef string,
+	current []byte,
+	proposed []byte,
+	currentState planSpecState,
+	proposedState planSpecState,
+) *specComparison {
 	return &specComparison{
 		sessionID:  sessionID,
 		currentRef: currentRef,
+		current:    currentState,
+		proposed:   proposedState,
 		diff: string(internaldiff.Diff(
 			"deployed/SPEC.md",
 			current,
@@ -254,6 +342,122 @@ func newSpecComparison(sessionID string, currentRef string, current, proposed []
 			proposed,
 		)),
 	}
+}
+
+func planSpecStateForCompiled(
+	compiled *spec.CompiledEnvironment,
+	markdown []byte,
+) (planSpecState, error) {
+	pkg, err := spec.BuildApplyPackage(compiled)
+	if err != nil {
+		return planSpecState{}, err
+	}
+	return planSpecStateFromMarkdown(markdown, &pkg.Manifest)
+}
+
+func planSpecStateFromMarkdown(
+	markdown []byte,
+	manifest *spec.ApplyPackageManifest,
+) (planSpecState, error) {
+	raw, _, ok := spec.ParseFrontmatter(string(markdown))
+	if !ok {
+		return planSpecState{}, fmt.Errorf("spec has no valid YAML frontmatter")
+	}
+	state := planSpecState{Skills: []planSkillLock{}, Rubrics: []string{}}
+	if version, ok := raw["version"].(string); ok {
+		state.Version = strings.TrimSpace(version)
+	}
+	if interval, ok := raw["interval"]; ok {
+		duration, err := time.ParseDuration(strings.TrimSpace(fmt.Sprint(interval)))
+		if err != nil || duration < 0 || duration%time.Second != 0 {
+			return planSpecState{}, fmt.Errorf("invalid interval %q", interval)
+		}
+		seconds := int(duration / time.Second)
+		state.IntervalSeconds = &seconds
+	}
+	if manifest == nil {
+		return state, nil
+	}
+	names := make([]string, 0, len(manifest.Skills))
+	for name := range manifest.Skills {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		lock := manifest.Skills[name]
+		ref := strings.TrimSpace(lock.Ref)
+		if ref == "" {
+			ref = strings.TrimSpace(manifest.SkillProvenance[name].Ref)
+		}
+		state.Skills = append(state.Skills, planSkillLock{
+			Name:    name,
+			Ref:     ref,
+			Digest:  strings.TrimSpace(lock.Digest),
+			Starred: lock.Starred,
+		})
+		if lock.Starred {
+			state.Rubrics = append(state.Rubrics, name)
+		}
+	}
+	return state, nil
+}
+
+func printPlanStateDelta(out io.Writer, current, proposed planSpecState) {
+	if !hasPlanSpecState(current) && !hasPlanSpecState(proposed) {
+		return
+	}
+	printSummaryField(out, "Version", planDeltaValue(current.Version, proposed.Version))
+	printSummaryField(
+		out,
+		"Interval",
+		planDeltaValue(formatPlanInterval(current.IntervalSeconds), formatPlanInterval(proposed.IntervalSeconds)),
+	)
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "Skill locks")
+	printDetailField(out, "current", formatPlanSkillLocks(current.Skills))
+	printDetailField(out, "proposed", formatPlanSkillLocks(proposed.Skills))
+	printDetailField(out, "rubrics", planDeltaValue(formatPlanList(current.Rubrics), formatPlanList(proposed.Rubrics)))
+}
+
+func hasPlanSpecState(state planSpecState) bool {
+	return state.Version != "" || state.IntervalSeconds != nil || len(state.Skills) > 0 || len(state.Rubrics) > 0
+}
+
+func planDeltaValue(current, proposed string) string {
+	return firstNonEmpty(current, "-") + " -> " + firstNonEmpty(proposed, "-")
+}
+
+func formatPlanInterval(seconds *int) string {
+	if seconds == nil {
+		return "-"
+	}
+	return (time.Duration(*seconds) * time.Second).String()
+}
+
+func formatPlanSkillLocks(skills []planSkillLock) string {
+	if len(skills) == 0 {
+		return "-"
+	}
+	values := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		value := skill.Name
+		if skill.Ref != "" {
+			value += " " + skill.Ref
+		}
+		value += " " + skill.Digest
+		if skill.Starred {
+			value += " *"
+		}
+		values = append(values, value)
+	}
+	return strings.Join(values, ", ")
+}
+
+func formatPlanList(values []string) string {
+	if len(values) == 0 {
+		return "-"
+	}
+	return strings.Join(values, ", ")
 }
 
 func skillNames(skills []*spec.Skill) []string {
