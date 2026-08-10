@@ -1382,39 +1382,28 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 		role, _ := raw["role"].(string)
 
 		ev := SessionEvent{
-			Event:       eventName,
-			Schema:      stringField(raw, "schema"),
-			EventID:     stringField(raw, "event_id"),
-			EventSeq:    eventSeq(raw),
-			EpochID:     intField(raw, "epoch_id"),
-			Role:        strPtr(role),
-			Timestamp:   strPtr(timestamp),
-			SessionID:   stringField(raw, "session_id"),
-			SpecIndex:   spec.Index,
-			SpecName:    strPtr(spec.Name),
-			SpecDirName: strPtr(spec.DirName),
-			Data:        dataField,
+			Schema:           stringPtrFromAny(raw["schema"]),
+			EventID:          stringPtrFromAny(raw["event_id"]),
+			Event:            eventName,
+			EventSeq:         eventSeq(raw),
+			EpochID:          numberAsInt(raw["epoch_id"]),
+			Round:            numberAsInt(raw["round"]),
+			Role:             strPtr(role),
+			Timestamp:        strPtr(timestamp),
+			SourceTimestamp:  stringPtrFromAny(raw["source_ts"]),
+			ReceivedAt:       stringPtrFromAny(raw["received_at"]),
+			SessionStartedAt: stringPtrFromAny(raw["session_started_at"]),
+			SessionID:        stringPtrFromAny(raw["session_id"]),
+			Source:           stringPtrFromAny(raw["source"]),
+			System:           stringPtrFromAny(raw["system"]),
+			SpecIndex:        spec.Index,
+			SpecName:         strPtr(spec.Name),
+			SpecDirName:      strPtr(spec.DirName),
+			Data:             dataField,
 		}
 		events = append(events, ev)
 	}
 	return events, nil
-}
-
-func stringField(raw map[string]any, key string) *string {
-	value, ok := raw[key].(string)
-	if !ok || value == "" {
-		return nil
-	}
-	return &value
-}
-
-func intField(raw map[string]any, key string) *int {
-	value, ok := raw[key].(float64)
-	if !ok {
-		return nil
-	}
-	result := int(value)
-	return &result
 }
 
 // eventSeq lifts the evidence writer's sequence number; nil for lines that

@@ -454,6 +454,12 @@ func eventDataString(event sessionapi.SessionEvent, key string) string {
 }
 
 func logEventSource(event sessionapi.SessionEvent) string {
+	if event.Source != nil {
+		switch source := strings.ToLower(strings.TrimSpace(*event.Source)); source {
+		case "control", "hostd", "runtime", "agent", "workload":
+			return source
+		}
+	}
 	name := strings.ToLower(strings.TrimSpace(event.Event))
 	switch {
 	case strings.HasPrefix(name, "agent_"):

@@ -342,21 +342,27 @@ func SessionsFromListItems(items []SessionListItem) []Session {
 
 // SessionEvent represents one evidence event from a session.
 type SessionEvent struct {
-	Event string `json:"event"`
+	Schema  *string `json:"schema,omitempty"`
+	EventID *string `json:"event_id,omitempty"`
+	Event   string  `json:"event"`
 	// EventSeq is the evidence writer's dense 1-based sequence number —
 	// the durable cursor for pagination and stream resume. Nil for lines
 	// written before seq-stamping existed.
-	Schema      *string        `json:"schema,omitempty"`
-	EventID     *string        `json:"event_id,omitempty"`
-	EventSeq    *int64         `json:"event_seq,omitempty"`
-	EpochID     *int           `json:"epoch_id,omitempty"`
-	Role        *string        `json:"role,omitempty"`
-	Timestamp   *string        `json:"ts,omitempty"`
-	SessionID   *string        `json:"session_id,omitempty"`
-	SpecIndex   *int           `json:"spec_index,omitempty"`
-	SpecName    *string        `json:"spec_name,omitempty"`
-	SpecDirName *string        `json:"spec_dir_name,omitempty"`
-	Data        map[string]any `json:"data,omitempty"`
+	EventSeq         *int64         `json:"event_seq,omitempty"`
+	EpochID          *int           `json:"epoch_id,omitempty"`
+	Round            *int           `json:"round,omitempty"`
+	Role             *string        `json:"role,omitempty"`
+	Timestamp        *string        `json:"ts,omitempty"`
+	SourceTimestamp  *string        `json:"source_ts,omitempty"`
+	ReceivedAt       *string        `json:"received_at,omitempty"`
+	SessionStartedAt *string        `json:"session_started_at,omitempty"`
+	SessionID        *string        `json:"session_id,omitempty"`
+	Source           *string        `json:"source,omitempty"`
+	System           *string        `json:"system,omitempty"`
+	SpecIndex        *int           `json:"spec_index,omitempty"`
+	SpecName         *string        `json:"spec_name,omitempty"`
+	SpecDirName      *string        `json:"spec_dir_name,omitempty"`
+	Data             map[string]any `json:"data,omitempty"`
 }
 
 // SessionEventsResponse wraps GET /api/sessions/{id}/events.

@@ -511,7 +511,7 @@ func TestClientSessionLogPagePreservesRawEventsAndCursor(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"events":[{"schema":"telos.evidence.v2","event":"agent_progress","event_id":"evt_7","event_seq":7,"round":3,"data":{"text":"ready"}}],"cursors":{"rt":7,"cp":12,"session":"sess_runtime"}}`))
+		_, _ = w.Write([]byte(`{"events":[{"schema":"telos.evidence.v2","event":"agent_progress","event_id":"evt_7","event_seq":7,"epoch_id":2,"round":3,"source":"agent","system":"checkout","data":{"text":"ready"}}],"cursors":{"rt":7,"cp":12,"session":"sess_runtime"}}`))
 	}))
 	defer srv.Close()
 
@@ -522,11 +522,40 @@ func TestClientSessionLogPagePreservesRawEventsAndCursor(t *testing.T) {
 	if len(page.Events) != 1 || page.RuntimeCursor == nil || *page.RuntimeCursor != 7 {
 		t.Fatalf("page: got %#v", page)
 	}
+	event := page.Events[0]
+	if event.Schema == nil || *event.Schema != "telos.evidence.v2" ||
+		event.EventID == nil || *event.EventID != "evt_7" ||
+		event.EpochID == nil || *event.EpochID != 2 ||
+		event.Round == nil || *event.Round != 3 ||
+		event.Source == nil || *event.Source != "agent" ||
+		event.System == nil || *event.System != "checkout" {
+		t.Fatalf("normalized event identity: %#v", event)
+	}
 	raw := string(page.RawEvents[0])
 	for _, field := range []string{`"schema":"telos.evidence.v2"`, `"event_id":"evt_7"`, `"round":3`} {
 		if !strings.Contains(raw, field) {
 			t.Fatalf("raw event dropped %s: %s", field, raw)
 		}
+	}
+}
+
+func TestClientSessionLogUsesReceiptTimeAndPreservesSourceTime(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"events":[{"event":"agent_progress","ts":"2026-07-04T14:14:52Z","time":"2026-07-04T15:14:52Z","data":{"text":"ready"}}]}`))
+	}))
+	defer srv.Close()
+
+	events, err := NewClient(srv.URL, "test-token").GetSessionLogs("sess_123")
+	if err != nil {
+		t.Fatalf("GetSessionLogs: %v", err)
+	}
+	if len(events) != 1 || events[0].Timestamp == nil || *events[0].Timestamp != "2026-07-04T15:14:52Z" {
+		t.Fatalf("public timestamp: %#v", events)
+	}
+	if events[0].ReceivedAt == nil || *events[0].ReceivedAt != "2026-07-04T15:14:52Z" ||
+		events[0].SourceTimestamp == nil || *events[0].SourceTimestamp != "2026-07-04T14:14:52Z" {
+		t.Fatalf("clock provenance: %#v", events[0])
 	}
 }
 

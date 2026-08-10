@@ -1866,7 +1866,7 @@ func TestEventsIdentitySeqAndRoleProjected(t *testing.T) {
 
 	created := createSession(t, srv.URL, createSessionBody(t, "esr"))
 	writeEventsFixture(t, store.Root, created.SessionID, "esr", []string{
-		`{"schema":"telos.evidence.v2","event_id":"sess:event:7","event_seq":7,"session_id":"sess-identity","epoch_id":3,"event":"agent_progress","role":"prover","ts":"2026-05-21T00:00:01.000Z","data":{"text":"hi"}}`,
+		`{"schema":"telos.evidence.v2","event_id":"evt_7","event_seq":7,"epoch_id":2,"event":"agent_progress","round":3,"role":"prover","ts":"2026-05-21T00:00:01.000Z","session_started_at":"2026-05-21T00:00:00.000Z","session_id":"sess_runtime","source":"agent","system":"esr","data":{"text":"hi"}}`,
 	})
 
 	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events")
@@ -1879,17 +1879,15 @@ func TestEventsIdentitySeqAndRoleProjected(t *testing.T) {
 	if events[0].Role == nil || *events[0].Role != "prover" {
 		t.Fatalf("expected role=prover, got %v", events[0].Role)
 	}
-	if events[0].Schema == nil || *events[0].Schema != "telos.evidence.v2" {
-		t.Fatalf("expected schema, got %v", events[0].Schema)
-	}
-	if events[0].EventID == nil || *events[0].EventID != "sess:event:7" {
-		t.Fatalf("expected event_id, got %v", events[0].EventID)
-	}
-	if events[0].SessionID == nil || *events[0].SessionID != "sess-identity" {
-		t.Fatalf("expected session_id, got %v", events[0].SessionID)
-	}
-	if events[0].EpochID == nil || *events[0].EpochID != 3 {
-		t.Fatalf("expected epoch_id, got %v", events[0].EpochID)
+	if events[0].Schema == nil || *events[0].Schema != "telos.evidence.v2" ||
+		events[0].EventID == nil || *events[0].EventID != "evt_7" ||
+		events[0].EpochID == nil || *events[0].EpochID != 2 ||
+		events[0].Round == nil || *events[0].Round != 3 ||
+		events[0].SessionStartedAt == nil || *events[0].SessionStartedAt != "2026-05-21T00:00:00.000Z" ||
+		events[0].SessionID == nil || *events[0].SessionID != "sess_runtime" ||
+		events[0].Source == nil || *events[0].Source != "agent" ||
+		events[0].System == nil || *events[0].System != "esr" {
+		t.Fatalf("event identity not projected: %#v", events[0])
 	}
 }
 

@@ -102,18 +102,27 @@ type SessionLogPage struct {
 }
 
 type deploymentLogEvent struct {
-	Event       string         `json:"event"`
-	EventSeq    *int64         `json:"event_seq,omitempty"`
-	Role        *string        `json:"role,omitempty"`
-	Timestamp   *string        `json:"ts,omitempty"`
-	Time        *string        `json:"time,omitempty"`
-	SessionID   *string        `json:"session_id,omitempty"`
-	SpecIndex   *int           `json:"spec_index,omitempty"`
-	SpecName    *string        `json:"spec_name,omitempty"`
-	SpecDirName *string        `json:"spec_dir_name,omitempty"`
-	Data        map[string]any `json:"data,omitempty"`
-	Message     string         `json:"message,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	Schema           *string        `json:"schema,omitempty"`
+	EventID          *string        `json:"event_id,omitempty"`
+	Event            string         `json:"event"`
+	EventSeq         *int64         `json:"event_seq,omitempty"`
+	EpochID          *int           `json:"epoch_id,omitempty"`
+	Round            *int           `json:"round,omitempty"`
+	Role             *string        `json:"role,omitempty"`
+	Timestamp        *string        `json:"ts,omitempty"`
+	SourceTimestamp  *string        `json:"source_ts,omitempty"`
+	ReceivedAt       *string        `json:"received_at,omitempty"`
+	Time             *string        `json:"time,omitempty"`
+	SessionStartedAt *string        `json:"session_started_at,omitempty"`
+	SessionID        *string        `json:"session_id,omitempty"`
+	Source           *string        `json:"source,omitempty"`
+	System           *string        `json:"system,omitempty"`
+	SpecIndex        *int           `json:"spec_index,omitempty"`
+	SpecName         *string        `json:"spec_name,omitempty"`
+	SpecDirName      *string        `json:"spec_dir_name,omitempty"`
+	Data             map[string]any `json:"data,omitempty"`
+	Message          string         `json:"message,omitempty"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
 }
 
 func (event deploymentLogEvent) asSessionEvent() sessionapi.SessionEvent {
@@ -127,20 +136,37 @@ func (event deploymentLogEvent) asSessionEvent() sessionapi.SessionEvent {
 	for key, value := range event.Metadata {
 		data[key] = value
 	}
-	timestamp := event.Timestamp
+	receivedAt := event.ReceivedAt
+	if receivedAt == nil {
+		receivedAt = event.Time
+	}
+	timestamp := receivedAt
 	if timestamp == nil {
-		timestamp = event.Time
+		timestamp = event.Timestamp
+	}
+	sourceTimestamp := event.SourceTimestamp
+	if sourceTimestamp == nil && receivedAt != nil {
+		sourceTimestamp = event.Timestamp
 	}
 	return sessionapi.SessionEvent{
-		Event:       event.Event,
-		EventSeq:    event.EventSeq,
-		Role:        event.Role,
-		Timestamp:   timestamp,
-		SessionID:   event.SessionID,
-		SpecIndex:   event.SpecIndex,
-		SpecName:    event.SpecName,
-		SpecDirName: event.SpecDirName,
-		Data:        data,
+		Schema:           event.Schema,
+		EventID:          event.EventID,
+		Event:            event.Event,
+		EventSeq:         event.EventSeq,
+		EpochID:          event.EpochID,
+		Round:            event.Round,
+		Role:             event.Role,
+		Timestamp:        timestamp,
+		SourceTimestamp:  sourceTimestamp,
+		ReceivedAt:       receivedAt,
+		SessionStartedAt: event.SessionStartedAt,
+		SessionID:        event.SessionID,
+		Source:           event.Source,
+		System:           event.System,
+		SpecIndex:        event.SpecIndex,
+		SpecName:         event.SpecName,
+		SpecDirName:      event.SpecDirName,
+		Data:             data,
 	}
 }
 
