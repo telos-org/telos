@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -37,14 +35,12 @@ type overallLogStatus struct {
 }
 
 type renderedLogRow struct {
-	Timestamp string
-	Phase     string
-	Summary   string
-	Detail    string
-	GroupKey  string
-	CountNoun string
-	Count     int
-	Order     int
+	Timestamp       string
+	Source          string
+	Phase           string
+	Summary         string
+	Detail          string
+	MultilineDetail bool
 }
 
 func cloudLogHeader(session *cloud.SessionRecord) logHeader {
@@ -103,7 +99,7 @@ func printStructuredLogs(
 	}
 	printSummaryField(out, "Session", header.SessionID)
 
-	rows := collapseRepeatedLogRows(renderLogRows(events, options.Verbose))
+	rows := renderLogRows(events, options.Verbose)
 	if !options.All && options.Tail > 0 && len(rows) > options.Tail {
 		rows = rows[len(rows)-options.Tail:]
 	}
@@ -115,10 +111,7 @@ func printStructuredLogs(
 		return
 	}
 	fmt.Fprintln(out)
-	for index, row := range rows {
-		if index > 0 {
-			fmt.Fprintln(out)
-		}
+	for _, row := range rows {
 		printRenderedLogRow(out, row)
 	}
 }
@@ -256,14 +249,10 @@ func deriveOverallLogStatus(
 
 func renderLogRows(events []sessionapi.SessionEvent, verbose bool) []renderedLogRow {
 	rows := make([]renderedLogRow, 0, len(events))
-	for index, event := range events {
+	for _, event := range events {
 		row, ok := renderedLogRowFromEvent(event, verbose)
 		if !ok {
 			continue
-		}
-		row.Order = index
-		if row.Count == 0 {
-			row.Count = 1
 		}
 		rows = append(rows, row)
 	}
@@ -274,16 +263,32 @@ func renderedLogRowFromEvent(
 	event sessionapi.SessionEvent,
 	verbose bool,
 ) (renderedLogRow, bool) {
-	row := renderedLogRow{Timestamp: eventTimestamp(event), Phase: "SYSTEM"}
+	row := renderedLogRow{
+		Timestamp: eventTimestamp(event),
+		Source:    logEventSource(event),
+		Phase:     "SYSTEM",
+	}
 	role := eventRole(event)
 
 	switch event.Event {
 	case "agent_progress":
 		text := eventDataString(event, "text")
-		if text == "" || (!verbose && isMinorLogAction(text)) {
+		kind := strings.ToLower(eventDataString(event, "kind"))
+		if text == "" || (!verbose && (kind == "tool" || isLegacyToolLogAction(kind, text))) {
 			return renderedLogRow{}, false
 		}
+		if kind == "tool" {
+			row.Phase = "TOOL"
+			row.Summary = text
+			return row, true
+		}
 		row.Phase = progressPhase(role, text)
+		if kind == "review" || kind == "summary" {
+			row.Summary = sentenceCase(kind)
+			row.Detail = text
+			row.MultilineDetail = true
+			return row, true
+		}
 		row.Summary, row.Detail = splitLogText(text)
 		return row, true
 	case "agent_complete":
@@ -317,8 +322,7 @@ func renderedLogRowFromEvent(
 				row.Detail += fmt.Sprintf(" · attempt %d of %d", current, maxFailures)
 			}
 		}
-		row.GroupKey = "retry:" + normalizedErrorKey(errorText)
-		row.CountNoun = "retries"
+		row.MultilineDetail = strings.Contains(row.Detail, "\n")
 		return row, true
 	case "game_end":
 		row.Phase = "VERIFY"
@@ -336,8 +340,6 @@ func renderedLogRowFromEvent(
 		case "failure":
 			row.Summary = "Evaluation cycle interrupted"
 			row.Detail = firstNonEmpty(eventDataString(event, "error"), humanizeLogToken(reason))
-			row.GroupKey = "cycle:" + normalizedErrorKey(row.Detail)
-			row.CountNoun = "cycles"
 		case "stopped":
 			row.Summary = "Evaluation stopped"
 			row.Detail = eventDataString(event, "error")
@@ -345,6 +347,7 @@ func renderedLogRowFromEvent(
 			row.Summary = "Evaluation cycle completed"
 			row.Detail = humanizeLogToken(reason)
 		}
+		row.MultilineDetail = strings.Contains(row.Detail, "\n")
 		return row, true
 	case "budget_exceeded":
 		row.Phase = "SYSTEM"
@@ -395,7 +398,8 @@ func renderedLogRowFromEvent(
 		return renderedLogRow{}, false
 	}
 	if message != "" {
-		row.Summary = sentenceCase(message)
+		row.Summary, row.Detail = splitLogText(message)
+		row.Summary = sentenceCase(row.Summary)
 	} else {
 		row.Summary = humanizeLogToken(event.Event)
 	}
@@ -405,47 +409,27 @@ func renderedLogRowFromEvent(
 	return row, true
 }
 
-func collapseRepeatedLogRows(rows []renderedLogRow) []renderedLogRow {
-	grouped := make(map[string]int)
-	result := make([]renderedLogRow, 0, len(rows))
-	for _, row := range rows {
-		if row.GroupKey == "" {
-			result = append(result, row)
-			continue
-		}
-		index, found := grouped[row.GroupKey]
-		if !found {
-			grouped[row.GroupKey] = len(result)
-			result = append(result, row)
-			continue
-		}
-		current := result[index]
-		if !withinIncidentWindow(current.Timestamp, row.Timestamp) {
-			grouped[row.GroupKey] = len(result)
-			row.GroupKey += ":" + strconv.Itoa(row.Order)
-			result = append(result, row)
-			continue
-		}
-		current.Count += row.Count
-		current.Timestamp = row.Timestamp
-		current.Order = row.Order
-		current.Detail = row.Detail
-		result[index] = current
-	}
-	sort.SliceStable(result, func(i, j int) bool { return result[i].Order < result[j].Order })
-	return result
-}
-
 func printRenderedLogRow(out io.Writer, row renderedLogRow) {
-	timestamp := displayLogTime(row.Timestamp)
-	summary := row.Summary
-	if row.Count > 1 {
-		noun := firstNonEmpty(row.CountNoun, "events")
-		summary += fmt.Sprintf(" · %d %s", row.Count, noun)
+	prefix := fmt.Sprintf(
+		"[%s] [%s] [%s]",
+		displayLogTimestamp(row.Timestamp),
+		strings.ToLower(firstNonEmpty(row.Source, "system")),
+		strings.ToUpper(firstNonEmpty(row.Phase, "system")),
+	)
+	summary := strings.TrimSpace(row.Summary)
+	detail := strings.TrimSpace(row.Detail)
+	if detail == "" {
+		fmt.Fprintf(out, "%s %s\n", prefix, summary)
+		return
 	}
-	fmt.Fprintf(out, "%-8s  %-7s  %s\n", timestamp, row.Phase, summary)
-	if strings.TrimSpace(row.Detail) != "" {
-		fmt.Fprintf(out, "%-8s  %-7s  %s\n", "", "", conciseLogText(row.Detail, 220))
+	if !row.MultilineDetail && !strings.Contains(detail, "\n") {
+		fmt.Fprintf(out, "%s %s — %s\n", prefix, summary, detail)
+		return
+	}
+	fmt.Fprintf(out, "%s %s\n", prefix, summary)
+	indent := strings.Repeat(" ", len(prefix)+1)
+	for _, line := range strings.Split(detail, "\n") {
+		fmt.Fprintf(out, "%s│ %s\n", indent, strings.TrimRight(line, " \t\r"))
 	}
 }
 
@@ -466,6 +450,27 @@ func eventRole(event sessionapi.SessionEvent) string {
 func eventDataString(event sessionapi.SessionEvent, key string) string {
 	value, _ := event.Data[key].(string)
 	return strings.TrimSpace(value)
+}
+
+func logEventSource(event sessionapi.SessionEvent) string {
+	name := strings.ToLower(strings.TrimSpace(event.Event))
+	switch {
+	case strings.HasPrefix(name, "agent_"):
+		return "agent"
+	case strings.HasPrefix(name, "deployment."), name == "external_update":
+		return "control"
+	case strings.HasPrefix(name, "hostd."):
+		return "hostd"
+	case strings.HasPrefix(name, "workload."):
+		return "workload"
+	case strings.HasPrefix(name, "runtime."), strings.HasPrefix(name, "provisioning."):
+		return "runtime"
+	case strings.HasPrefix(name, "game_"), strings.HasPrefix(name, "round_"),
+		strings.HasPrefix(name, "workspace_"), name == "budget_exceeded":
+		return "runtime"
+	default:
+		return "system"
+	}
 }
 
 func isTerminalLogFailureEvent(event string) bool {
@@ -509,6 +514,10 @@ func isMinorLogAction(text string) bool {
 	return false
 }
 
+func isLegacyToolLogAction(kind string, text string) bool {
+	return (kind == "" || kind == "progress_update") && isMinorLogAction(text)
+}
+
 func agentLogDetail(event sessionapi.SessionEvent) string {
 	parts := []string{}
 	if turns, ok := numericEventValue(event.Data["num_turns"]); ok && turns > 0 {
@@ -550,34 +559,6 @@ func friendlyAgentError(errorText string) string {
 	default:
 		return "Agent error, retrying"
 	}
-}
-
-func normalizedErrorKey(value string) string {
-	lower := strings.ToLower(strings.TrimSpace(value))
-	switch {
-	case strings.HasPrefix(lower, "502"):
-		return "provider-502"
-	case strings.Contains(lower, "public routes unavailable"):
-		return "provider-public-routes"
-	case strings.Contains(lower, "no healthy upstream"):
-		return "provider-upstream"
-	case strings.HasPrefix(lower, "429"):
-		return "provider-capacity"
-	case lower == "agent_no_output", strings.Contains(lower, "agent_no_output"):
-		return "agent-no-output"
-	default:
-		return lower
-	}
-}
-
-func withinIncidentWindow(left string, right string) bool {
-	leftTime, leftErr := time.Parse(time.RFC3339Nano, left)
-	rightTime, rightErr := time.Parse(time.RFC3339Nano, right)
-	if leftErr != nil || rightErr != nil {
-		return true
-	}
-	delta := rightTime.Sub(leftTime)
-	return delta >= 0 && delta <= 90*time.Minute
 }
 
 func splitLogText(value string) (string, string) {
@@ -629,12 +610,12 @@ func sentenceCase(value string) string {
 	return string(runes)
 }
 
-func displayLogTime(value string) string {
+func displayLogTimestamp(value string) string {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
-		return "--:--:--"
+		return "unknown-time"
 	}
-	return parsed.Format("15:04:05")
+	return parsed.UTC().Format("2006-01-02T15:04:05Z")
 }
 
 func displayLogDate(value string) string {

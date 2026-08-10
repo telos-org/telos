@@ -1347,9 +1347,9 @@ func TestPrintStructuredLogsShowsStatusAndSignificantActivity(t *testing.T) {
 		"PALMFALL",
 		"Status    Needs attention",
 		"Summary   run_duration_exhausted: exceeded 1800 seconds",
-		"00:00:00  BUILD    Implemented the authentication flow",
-		"00:01:00  VERIFY   Running the integration checks",
-		"00:02:00  VERIFY   Evaluation cycle interrupted",
+		"[2026-07-01T00:00:00Z] [agent] [BUILD] Implemented the authentication flow",
+		"[2026-07-01T00:01:00Z] [agent] [VERIFY] Running the integration checks",
+		"[2026-07-01T00:02:00Z] [runtime] [VERIFY] Evaluation cycle interrupted",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("structured logs missing %q:\n%s", want, text)
@@ -1374,7 +1374,7 @@ func TestPrintStructuredLogsVerboseIncludesMinorActivity(t *testing.T) {
 		Tail:    defaultLogTail,
 	})
 	text := out.String()
-	if !strings.Contains(text, "00:00:00  BUILD    Reading package.json") {
+	if !strings.Contains(text, "[2026-07-01T00:00:00Z] [agent] [BUILD] Reading package.json") {
 		t.Fatalf("verbose logs missing minor activity:\n%s", text)
 	}
 }
@@ -1433,7 +1433,7 @@ func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
 	if logCalls != 1 {
 		t.Fatalf("calls: logs=%d", logCalls)
 	}
-	if !strings.Contains(out.String(), "BUILD    ready") {
+	if !strings.Contains(out.String(), "[agent] [BUILD] ready") {
 		t.Fatalf("follow output missing progress:\n%s", out.String())
 	}
 }
@@ -1474,7 +1474,7 @@ func TestFollowCloudSessionLogsResumesAndPrintsStatusChange(t *testing.T) {
 	if query != "after_rt=7" {
 		t.Fatalf("resume query: got %q", query)
 	}
-	for _, want := range []string{"Current spec accepted", "STATUS   Ready"} {
+	for _, want := range []string{"Current spec accepted", "[system] [STATUS] Ready"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("follow output missing %q:\n%s", want, out.String())
 		}

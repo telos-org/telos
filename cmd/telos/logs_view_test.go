@@ -167,25 +167,7 @@ func TestDeriveOverallLogStatusUsesLatestCompletionReason(t *testing.T) {
 	}
 }
 
-func TestCollapseRepeatedLogRowsGroupsIncidentWindows(t *testing.T) {
-	rows := []renderedLogRow{
-		{Timestamp: "2026-07-01T00:00:00Z", Summary: "Model provider unavailable", GroupKey: "retry:502", CountNoun: "retries", Count: 1, Order: 0},
-		{Timestamp: "2026-07-01T00:20:00Z", Summary: "Model provider unavailable", GroupKey: "retry:502", CountNoun: "retries", Count: 1, Order: 1},
-		{Timestamp: "2026-07-01T01:00:00Z", Summary: "Model provider unavailable", GroupKey: "retry:502", CountNoun: "retries", Count: 1, Order: 2},
-		{Timestamp: "2026-07-01T03:00:00Z", Summary: "Model provider unavailable", GroupKey: "retry:502", CountNoun: "retries", Count: 1, Order: 3},
-		{Timestamp: "2026-07-01T03:15:00Z", Summary: "Model provider unavailable", GroupKey: "retry:502", CountNoun: "retries", Count: 1, Order: 4},
-	}
-
-	got := collapseRepeatedLogRows(rows)
-	if len(got) != 2 {
-		t.Fatalf("incidents: got %d, want 2: %#v", len(got), got)
-	}
-	if got[0].Count != 3 || got[1].Count != 2 {
-		t.Fatalf("incident counts: got %d and %d", got[0].Count, got[1].Count)
-	}
-}
-
-func TestPrintStructuredLogsCollapsesRetries(t *testing.T) {
+func TestPrintStructuredLogsPreservesRepeatedEvents(t *testing.T) {
 	ts1 := "2026-07-01T00:00:00Z"
 	ts2 := "2026-07-01T00:10:00Z"
 	ts3 := "2026-07-01T00:20:00Z"
@@ -198,10 +180,69 @@ func TestPrintStructuredLogsCollapsesRetries(t *testing.T) {
 	var output strings.Builder
 	printStructuredLogs(&output, logHeader{Name: "breachpoint", State: "healthy", SessionID: "sess_456"}, events, logViewOptions{Tail: defaultLogTail})
 	text := output.String()
-	if !strings.Contains(text, "Model provider unavailable · 3 retries") {
-		t.Fatalf("collapsed retry missing:\n%s", text)
-	}
-	if count := strings.Count(text, "RETRY"); count != 1 {
+	if count := strings.Count(text, "[agent] [RETRY]"); count != 3 {
 		t.Fatalf("retry activity rendered %d times:\n%s", count, text)
+	}
+	for _, timestamp := range []string{
+		"[2026-07-01T00:00:00Z]",
+		"[2026-07-01T00:10:00Z]",
+		"[2026-07-01T00:20:00Z]",
+	} {
+		if !strings.Contains(text, timestamp) {
+			t.Fatalf("missing retry timestamp %s:\n%s", timestamp, text)
+		}
+	}
+}
+
+func TestRenderedLogRowTreatsToolActivityAsVerboseTelemetry(t *testing.T) {
+	event := sessionapi.SessionEvent{
+		Event: "agent_progress",
+		Data:  map[string]any{"kind": "tool", "text": "Reading package.json"},
+	}
+	if row, visible := renderedLogRowFromEvent(event, false); visible {
+		t.Fatalf("tool activity should be hidden by default: %#v", row)
+	}
+	row, visible := renderedLogRowFromEvent(event, true)
+	if !visible || row.Phase != "TOOL" || row.Summary != "Reading package.json" {
+		t.Fatalf("verbose tool activity: visible=%v row=%#v", visible, row)
+	}
+}
+
+func TestPrintRenderedLogRowUsesUTCTimestampAndPreservesMultilineDetail(t *testing.T) {
+	var output strings.Builder
+	printRenderedLogRow(&output, renderedLogRow{
+		Timestamp:       "2026-07-01T20:42:18-04:00",
+		Source:          "agent",
+		Phase:           "verify",
+		Summary:         "Review",
+		Detail:          "criterion,score\nCorrectness,8/10",
+		MultilineDetail: true,
+	})
+
+	text := output.String()
+	for _, want := range []string{
+		"[2026-07-02T00:42:18Z] [agent] [VERIFY] Review",
+		"│ criterion,score",
+		"│ Correctness,8/10",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("rendered row missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestRenderedLogRowPreservesReviewEvent(t *testing.T) {
+	verifier := "verifier"
+	event := sessionapi.SessionEvent{
+		Event: "agent_progress",
+		Role:  &verifier,
+		Data: map[string]any{
+			"kind": "review",
+			"text": "criterion,score\nCorrectness,8/10",
+		},
+	}
+	row, visible := renderedLogRowFromEvent(event, false)
+	if !visible || row.Summary != "Review" || !row.MultilineDetail || !strings.Contains(row.Detail, "\n") {
+		t.Fatalf("review row: visible=%v row=%#v", visible, row)
 	}
 }

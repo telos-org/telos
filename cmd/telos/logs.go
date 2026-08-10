@@ -196,7 +196,6 @@ func followCloudSessionLogs(session *cloud.SessionRecord, options logViewOptions
 		}
 	} else {
 		printStructuredLogs(os.Stdout, cloudLogHeader(session), page.Events, options)
-		fmt.Fprintln(os.Stdout)
 	}
 	if err := streamCloudSessionLogsAfter(
 		control,
@@ -285,19 +284,15 @@ func streamCloudSessionLogsAfter(
 			if consumeSessionEventReplay(replayCounts, event) {
 				return nil
 			}
-			printed, err := printStreamingLogEvent(out, event, verbose, jsonOutput)
+			_, err := printStreamingLogEvent(out, event, verbose, jsonOutput)
 			if err != nil {
 				return err
-			}
-			if printed && !jsonOutput {
-				_, _ = fmt.Fprintln(out)
 			}
 			events = append(events, event)
 			if !jsonOutput && header.SessionID != "" {
 				nextStatus := deriveOverallLogStatus(header, events)
 				if nextStatus.Label != currentStatus.Label {
 					printStatusTransition(out, eventTimestamp(event), nextStatus)
-					_, _ = fmt.Fprintln(out)
 				}
 				currentStatus = nextStatus
 			}
@@ -436,7 +431,6 @@ func printStatusTransition(out io.Writer, timestamp string, status overallLogSta
 		Phase:     "STATUS",
 		Summary:   status.Label,
 		Detail:    status.Reason,
-		Count:     1,
 	})
 }
 
