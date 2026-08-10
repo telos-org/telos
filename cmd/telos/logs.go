@@ -29,10 +29,16 @@ func cmdLogs(args []string) {
 	raw := fs.Bool("raw", false, "Print the raw transcript or evidence events")
 	tail := fs.Int("tail", defaultLogTail, "Show the most recent N activity rows")
 	all := fs.Bool("all", false, "Show all activity rows")
+	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
+	contextOverride, err := cloudContextOverride(fs, *contextValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--verbose|--json|--raw] [--tail N|--all] SESSION")
+		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--verbose|--json|--raw] [--tail N|--all] [--context CONTEXT] SESSION")
 		os.Exit(1)
 	}
 	if enabledFlagCount(*verbose, *jsonOutput, *raw) > 1 {
@@ -45,6 +51,23 @@ func cmdLogs(args []string) {
 	}
 	sessionID := fs.Arg(0)
 	options := logViewOptions{Verbose: *verbose, Tail: *tail, All: *all}
+	if contextOverride != "" {
+		session, err := getCloudSession(sessionID, contextOverride)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if *follow {
+			if *raw {
+				followCloudRawSessionLogs(session, contextOverride)
+			} else {
+				followCloudSessionLogs(session, options, *jsonOutput, contextOverride)
+			}
+			return
+		}
+		printCloudSessionLogs(session, options, *jsonOutput, *raw, contextOverride)
+		return
+	}
 
 	if *follow {
 		if session, err := getSessionFromAnywhere(sessionID); err == nil {
@@ -55,14 +78,14 @@ func cmdLogs(args []string) {
 			}
 			return
 		}
-		if session, found, err := getCloudSessionIfConfigured(sessionID); err != nil {
+		if session, _, found, err := getCloudSessionIfConfigured(sessionID, ""); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		} else if found {
 			if *raw {
-				followCloudRawSessionLogs(session)
+				followCloudRawSessionLogs(session, "")
 			} else {
-				followCloudSessionLogs(session, options, *jsonOutput)
+				followCloudSessionLogs(session, options, *jsonOutput, "")
 			}
 			return
 		}
@@ -109,40 +132,56 @@ func cmdLogs(args []string) {
 		return
 	}
 
-	if session, found, cloudErr := getCloudSessionIfConfigured(sessionID); cloudErr != nil {
+	if session, _, found, cloudErr := getCloudSessionIfConfigured(sessionID, ""); cloudErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
 		os.Exit(1)
 	} else if found {
-		control, controlErr := cloud.ControlClient()
-		if controlErr != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", controlErr)
-			os.Exit(1)
-		}
-		page, eventsErr := control.GetSessionLogPage(sessionID)
-		if eventsErr != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", eventsErr)
-			os.Exit(1)
-		}
-		if *raw {
-			if eventsErr := printRawJSONLogEvents(os.Stdout, page.RawEvents); eventsErr != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", eventsErr)
-				os.Exit(1)
-			}
-			return
-		}
-		if *jsonOutput {
-			if eventsErr := printJSONLogEvents(os.Stdout, selectLogEvents(page.Events, options)); eventsErr != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", eventsErr)
-				os.Exit(1)
-			}
-			return
-		}
-		printStructuredLogs(os.Stdout, cloudLogHeader(session), page.Events, options)
+		printCloudSessionLogs(session, options, *jsonOutput, *raw, "")
 		return
 	}
 
 	fmt.Fprintf(os.Stderr, "error: %v\n", localSessionNotFoundError(sessionID))
 	os.Exit(1)
+}
+
+func printCloudSessionLogs(
+	session *cloud.SessionRecord,
+	options logViewOptions,
+	jsonOutput bool,
+	raw bool,
+	contextOverride string,
+) {
+	control, err := cloud.ControlClientForContext(contextOverride)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	page, err := control.GetSessionLogPage(session.ID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if raw {
+		if err := printRawJSONLogEvents(os.Stdout, page.RawEvents); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if jsonOutput {
+		if err := printJSONLogEventsForContext(
+			os.Stdout,
+			selectLogEvents(page.Events, options),
+			resolvedCloudContext(control),
+		); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	header := cloudLogHeader(session)
+	header.Context = resolvedCloudContext(control)
+	printStructuredLogs(os.Stdout, header, page.Events, options)
 }
 
 func enabledFlagCount(values ...bool) int {
@@ -179,8 +218,13 @@ func followSessionLogs(session *sessionapi.Session, options logViewOptions, json
 	}
 }
 
-func followCloudSessionLogs(session *cloud.SessionRecord, options logViewOptions, jsonOutput bool) {
-	control, err := cloud.ControlClient()
+func followCloudSessionLogs(
+	session *cloud.SessionRecord,
+	options logViewOptions,
+	jsonOutput bool,
+	contextOverride string,
+) {
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -191,13 +235,21 @@ func followCloudSessionLogs(session *cloud.SessionRecord, options logViewOptions
 		os.Exit(1)
 	}
 	if jsonOutput {
-		if err := printJSONLogEvents(os.Stdout, selectLogEvents(page.Events, options)); err != nil {
+		if err := printJSONLogEventsForContext(
+			os.Stdout,
+			selectLogEvents(page.Events, options),
+			resolvedCloudContext(control),
+		); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
-		printStructuredLogs(os.Stdout, cloudLogHeader(session), page.Events, options)
+		header := cloudLogHeader(session)
+		header.Context = resolvedCloudContext(control)
+		printStructuredLogs(os.Stdout, header, page.Events, options)
 	}
+	header := cloudLogHeader(session)
+	header.Context = resolvedCloudContext(control)
 	if err := streamCloudSessionLogsAfter(
 		control,
 		session.ID,
@@ -206,7 +258,7 @@ func followCloudSessionLogs(session *cloud.SessionRecord, options logViewOptions
 		options.Verbose,
 		jsonOutput,
 		page.RuntimeCursor,
-		cloudLogHeader(session),
+		header,
 		page.Events,
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -214,8 +266,8 @@ func followCloudSessionLogs(session *cloud.SessionRecord, options logViewOptions
 	}
 }
 
-func followCloudRawSessionLogs(session *cloud.SessionRecord) {
-	control, err := cloud.ControlClient()
+func followCloudRawSessionLogs(session *cloud.SessionRecord, contextOverride string) {
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -286,7 +338,13 @@ func streamCloudSessionLogsAfter(
 			if consumeSessionEventReplay(replayCounts, event) {
 				return nil
 			}
-			_, err := printStreamingLogEvent(out, event, verbose, jsonOutput)
+			_, err := printStreamingLogEvent(
+				out,
+				event,
+				verbose,
+				jsonOutput,
+				resolvedCloudContext(control),
+			)
 			if err != nil {
 				return err
 			}
@@ -315,6 +373,7 @@ func streamCloudSessionLogsAfter(
 			return err
 		}
 		header = cloudLogHeader(session)
+		header.Context = resolvedCloudContext(control)
 		if !jsonOutput && header.SessionID != "" {
 			nextStatus := deriveOverallLogStatus(header, events)
 			if nextStatus.Label != currentStatus.Label {
@@ -409,7 +468,7 @@ func pollSessionLogs(
 			return err
 		}
 		for _, event := range events[minimum(seen, len(events)):] {
-			if _, err := printStreamingLogEvent(out, event, options.Verbose, jsonOutput); err != nil {
+			if _, err := printStreamingLogEvent(out, event, options.Verbose, jsonOutput, ""); err != nil {
 				return err
 			}
 		}
@@ -590,9 +649,14 @@ func printStreamingLogEvent(
 	event sessionapi.SessionEvent,
 	verbose bool,
 	jsonOutput bool,
+	contextName string,
 ) (bool, error) {
 	if jsonOutput {
-		return true, printJSONLogEvents(out, []sessionapi.SessionEvent{event})
+		return true, printJSONLogEventsForContext(
+			out,
+			[]sessionapi.SessionEvent{event},
+			contextName,
+		)
 	}
 	row, ok := renderedLogRowFromEvent(event, verbose)
 	if !ok {

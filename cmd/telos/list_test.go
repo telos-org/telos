@@ -148,6 +148,9 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 	if _, ok := body["deployments"]; ok {
 		t.Fatalf("cloud list json should not expose sessions: %#v", body)
 	}
+	if body["context"] != "personal" {
+		t.Fatalf("cloud list json context: %#v", body["context"])
+	}
 	sessions, ok := body["sessions"].([]any)
 	if !ok || len(sessions) != 1 {
 		t.Fatalf("cloud list json sessions: %#v", body)
@@ -156,6 +159,42 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 	if !ok || session["id"] != "sess_123" || session["status"] != "ready" ||
 		session["status_reason"] != "The agent finished and the verifier accepted the result." {
 		t.Fatalf("cloud list json first session: %#v", sessions[0])
+	}
+}
+
+func TestCmdListContextFlagOverridesEnvironment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/account/bootstrap":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"personal_org_id": "org_personal",
+				"organizations": []map[string]any{
+					{"id": "org_environment", "handle": "environment"},
+					{"id": "org_flag", "handle": "flag"},
+				},
+			})
+		case "/api/deployments":
+			if got := r.Header.Get("X-Telos-Org-Id"); got != "org_flag" {
+				t.Fatalf("organization header = %q, want org_flag", got)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"deployments": []any{}})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+	t.Setenv("TELOS_CONTEXT", "@environment")
+
+	out := captureStdout(t, func() {
+		cmdList([]string{"--context", "@flag", "--json"})
+	})
+	var body map[string]any
+	if err := json.Unmarshal([]byte(out), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["context"] != "org_flag" {
+		t.Fatalf("context = %#v, want org_flag", body["context"])
 	}
 }
 

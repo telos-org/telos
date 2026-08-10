@@ -11,6 +11,10 @@ import (
 )
 
 func prepareRegistrySkills(specPath string) error {
+	return prepareRegistrySkillsForContext(specPath, "")
+}
+
+func prepareRegistrySkillsForContext(specPath, contextOverride string) error {
 	refs, err := spec.RegistrySkillRefs(specPath)
 	if err != nil {
 		return err
@@ -21,7 +25,7 @@ func prepareRegistrySkills(specPath string) error {
 			continue
 		}
 		if client == nil {
-			client, err = cloud.ControlClient()
+			client, err = cloud.ControlClientForContext(contextOverride)
 			if err != nil {
 				return fmt.Errorf("resolve registry skills: %w", err)
 			}

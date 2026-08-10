@@ -212,6 +212,12 @@ var resolvedContexts sync.Map
 
 // ControlClient returns a client for the configured Telos control plane.
 func ControlClient() (*Client, error) {
+	return ControlClientForContext("")
+}
+
+// ControlClientForContext returns a configured client, optionally overriding
+// the environment or stored context for this client only.
+func ControlClientForContext(contextOverride string) (*Client, error) {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		return nil, err
@@ -225,7 +231,10 @@ func ControlClient() (*Client, error) {
 		return nil, fmt.Errorf("not logged in; run `telos login` first")
 	}
 	client := NewClient(endpoint, token)
-	context := strings.TrimSpace(cfg.Context)
+	context := strings.TrimSpace(contextOverride)
+	if context == "" {
+		context = strings.TrimSpace(cfg.Context)
+	}
 	if context == "" || context == "personal" {
 		return client, nil
 	}

@@ -16,13 +16,32 @@ import (
 func cmdDescribe(args []string) {
 	fs := flag.NewFlagSet("describe", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "JSON output")
+	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
+	contextOverride, err := cloudContextOverride(fs, *contextValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos describe SESSION [--json]")
+		fmt.Fprintln(os.Stderr, "usage: telos describe SESSION [--json] [--context CONTEXT]")
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
+	if contextOverride != "" {
+		cloudSession, contextName, err := getCloudSessionForContext(sessionID, contextOverride)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if *jsonOut {
+			printCloudSessionJSON(cloudSession, contextName)
+			return
+		}
+		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		return
+	}
 
 	session, err := getSessionFromAnywhere(sessionID)
 	if err == nil {
@@ -35,17 +54,17 @@ func cmdDescribe(args []string) {
 		return
 	}
 
-	cloudSession, found, cloudErr := getCloudSessionIfConfigured(sessionID)
+	cloudSession, contextName, found, cloudErr := getCloudSessionIfConfigured(sessionID, "")
 	if cloudErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
 		os.Exit(1)
 	}
 	if found {
 		if *jsonOut {
-			printJSON(cloudSession)
+			printCloudSessionJSON(cloudSession, contextName)
 			return
 		}
-		printCloudSessionDescription(os.Stdout, *cloudSession)
+		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
 		return
 	}
 
@@ -53,21 +72,54 @@ func cmdDescribe(args []string) {
 	os.Exit(1)
 }
 
-func getCloudSession(sessionID string) (*cloud.SessionRecord, error) {
-	control, err := cloud.ControlClient()
+func printCloudSessionJSON(session *cloud.SessionRecord, contextName string) {
+	printJSON(struct {
+		*cloud.SessionRecord
+		Context string `json:"context"`
+	}{
+		SessionRecord: session,
+		Context:       contextName,
+	})
+}
+
+func getCloudSession(sessionID, contextOverride string) (*cloud.SessionRecord, error) {
+	session, _, err := getCloudSessionForContext(sessionID, contextOverride)
+	return session, err
+}
+
+func getCloudSessionForContext(
+	sessionID string,
+	contextOverride string,
+) (*cloud.SessionRecord, string, error) {
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return control.GetSession(sessionID)
+	session, err := control.GetSession(sessionID)
+	if err != nil {
+		return nil, "", err
+	}
+	return session, resolvedCloudContext(control), nil
 }
 
 func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
+	printCloudSessionDescriptionForContext(out, session, "")
+}
+
+func printCloudSessionDescriptionForContext(
+	out io.Writer,
+	session cloud.SessionRecord,
+	contextName string,
+) {
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Target", "cloud")
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Package", session.PackageRef)
 	printSummaryField(out, "Digest", session.PackageDigest)
 	printSummaryField(out, "Session", session.ID)
+	if contextName != "" {
+		printSummaryField(out, "Context", contextName)
+	}
 	if session.RuntimeVersion != nil && *session.RuntimeVersion != "" {
 		printSummaryField(out, "Runtime", *session.RuntimeVersion)
 	}
@@ -93,7 +145,11 @@ func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
 	printDetailField(out, "updated", session.UpdatedAt)
 	if cloudSessionInProgress(session.State) {
 		fmt.Fprintln(out)
-		fmt.Fprintf(out, "Inspect   telos logs %s\n", session.ID)
+		if contextName != "" {
+			fmt.Fprintf(out, "Inspect   telos logs --context %s %s\n", contextName, session.ID)
+		} else {
+			fmt.Fprintf(out, "Inspect   telos logs %s\n", session.ID)
+		}
 	}
 }
 

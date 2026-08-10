@@ -31,12 +31,17 @@ type pulledPackage struct {
 func cmdGet(args []string) {
 	fs := flag.NewFlagSet("get", flag.ExitOnError)
 	output := fs.String("output", "", "Destination package directory or Markdown file")
+	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos get SESSION [--output PATH]")
+		fmt.Fprintln(os.Stderr, "usage: telos get SESSION [--output PATH] [--context CONTEXT]")
 		os.Exit(1)
 	}
-	control, err := cloud.ControlClient()
+	contextOverride, err := cloudContextOverride(fs, *contextValue)
+	if err != nil {
+		exitWithError(err)
+	}
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		exitWithError(err)
 	}
@@ -54,16 +59,21 @@ func cmdGet(args []string) {
 func cmdPull(args []string) {
 	fs := flag.NewFlagSet("pull", flag.ExitOnError)
 	output := fs.String("output", "", "Destination package directory or Markdown file")
+	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
 	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos pull @SCOPE/NAME:VERSION [--output PATH]")
+		fmt.Fprintln(os.Stderr, "usage: telos pull @SCOPE/NAME:VERSION [--output PATH] [--context CONTEXT]")
 		os.Exit(1)
 	}
 	reference, err := parsePackageReference(fs.Arg(0))
 	if err != nil {
 		exitWithError(err)
 	}
-	control, err := cloud.ControlClient()
+	contextOverride, err := cloudContextOverride(fs, *contextValue)
+	if err != nil {
+		exitWithError(err)
+	}
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		exitWithError(err)
 	}

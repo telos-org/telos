@@ -21,10 +21,20 @@ func cmdList(args []string) {
 	localOnly := fs.Bool("local", false, "Local sessions only")
 	cloudOnly := fs.Bool("cloud", false, "Cloud sessions only")
 	jsonOut := fs.Bool("json", false, "JSON output")
+	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
+	contextOverride, err := cloudContextOverride(fs, *contextValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
+	if contextOverride != "" && *localOnly {
+		fmt.Fprintln(os.Stderr, "error: --context cannot be used with --local")
+		os.Exit(2)
+	}
 
-	if *cloudOnly {
-		listCloudSessions(*jsonOut, *limit, *wide)
+	if *cloudOnly || contextOverride != "" {
+		listCloudSessions(contextOverride, *jsonOut, *limit, *wide)
 		return
 	}
 
@@ -47,7 +57,7 @@ func cmdList(args []string) {
 				os.Exit(1)
 			}
 			if cloudConfigured {
-				listCloudSessions(*jsonOut, *limit, *wide)
+				listCloudSessions(contextOverride, *jsonOut, *limit, *wide)
 				return
 			}
 			sessions = append(sessions, listLocalSessions()...)
@@ -183,8 +193,8 @@ func limitListSessions(sessions []sessionapi.Session, limit int) []sessionapi.Se
 	return sessions
 }
 
-func listCloudSessions(jsonOut bool, limit int, wide bool) {
-	control, err := cloud.ControlClient()
+func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide bool) {
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -196,12 +206,19 @@ func listCloudSessions(jsonOut bool, limit int, wide bool) {
 	}
 	cloudSessions = limitCloudSessions(cloudSessions, limit)
 	if jsonOut {
-		printJSON(map[string]any{"sessions": cloudSessions})
+		printJSON(map[string]any{
+			"context":  resolvedCloudContext(control),
+			"sessions": cloudSessions,
+		})
 		return
 	}
 	if len(cloudSessions) == 0 {
 		fmt.Println("no sessions")
 		return
+	}
+	if wide {
+		printSummaryField(os.Stdout, "Context", resolvedCloudContext(control))
+		fmt.Println()
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if wide {

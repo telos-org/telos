@@ -23,6 +23,7 @@ type logViewOptions struct {
 type logHeader struct {
 	Name       string
 	State      string
+	Context    string
 	PackageRef string
 	SessionID  string
 	UpdatedAt  string
@@ -91,6 +92,9 @@ func printStructuredLogs(
 	fmt.Fprintln(out)
 	printSummaryField(out, "Status", status.Label)
 	printSummaryField(out, "Summary", status.Reason)
+	if header.Context != "" {
+		printSummaryField(out, "Context", header.Context)
+	}
 	if header.PackageRef != "" {
 		printSummaryField(out, "Spec", header.PackageRef)
 	}
@@ -117,10 +121,28 @@ func printStructuredLogs(
 }
 
 func printJSONLogEvents(out io.Writer, events []sessionapi.SessionEvent) error {
+	return printJSONLogEventsForContext(out, events, "")
+}
+
+func printJSONLogEventsForContext(
+	out io.Writer,
+	events []sessionapi.SessionEvent,
+	contextName string,
+) error {
 	encoder := json.NewEncoder(out)
 	encoder.SetEscapeHTML(false)
 	for _, event := range events {
-		if err := encoder.Encode(event); err != nil {
+		value := any(event)
+		if contextName != "" {
+			value = struct {
+				sessionapi.SessionEvent
+				Context string `json:"context"`
+			}{
+				SessionEvent: event,
+				Context:      contextName,
+			}
+		}
+		if err := encoder.Encode(value); err != nil {
 			return err
 		}
 	}

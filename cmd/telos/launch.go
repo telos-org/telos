@@ -48,7 +48,17 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	maxCostUSD := fs.Float64("max-cost-usd", 20.0, "Maximum cost in USD")
 	jsonOut := fs.Bool("json", false, "JSON output")
+	contextValue := ""
+	contextFlagValue := &contextValue
+	if command == "apply" {
+		contextFlagValue = cloudContextFlag(fs)
+	}
 	parseFlags(fs, args)
+	contextOverride, err := cloudContextOverride(fs, *contextFlagValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
 	localConfigSet := flagNamesSet(fs, "workspace")
 	untilConfig, err := untilFlagValue(fs, *until)
 	if err != nil {
@@ -124,6 +134,10 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintln(os.Stderr, "error: per-role model configuration is currently supported for local runs only")
 		os.Exit(1)
 	}
+	if launchMode == launchLocal && contextOverride != "" {
+		fmt.Fprintln(os.Stderr, "error: --context can only be used with a cloud apply")
+		os.Exit(2)
+	}
 	localRootID, inLocalRoot := localRootSessionID()
 	if inLocalRoot {
 		if command == "apply" {
@@ -154,7 +168,7 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: cloud runtime config flags can only seed a new session; they cannot update an existing session")
 			os.Exit(1)
 		}
-		applyCloudControl(specArg, *sessionID, runtimeConfig, *jsonOut)
+		applyCloudControl(specArg, *sessionID, runtimeConfig, *jsonOut, contextOverride)
 		return
 	}
 	if !hasLocalSpec {
@@ -369,13 +383,14 @@ func applyCloudControl(
 	sessionID string,
 	runtimeConfig sessionRuntimeConfig,
 	jsonOut bool,
+	contextOverride string,
 ) {
-	pkg, err := packageSpec(specArg)
+	pkg, err := packageSpec(specArg, contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	control, err := cloud.ControlClient()
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -398,13 +413,19 @@ func applyCloudControl(
 	}
 	if jsonOut {
 		printJSON(map[string]any{
+			"context":   resolvedCloudContext(control),
 			"operation": operation,
 			"package":   packageRecord,
 			"session":   session,
 		})
 		return
 	}
-	printCloudSessionReceipt(os.Stdout, operation, session)
+	printCloudSessionReceiptForContext(
+		os.Stdout,
+		operation,
+		session,
+		resolvedCloudContext(control),
+	)
 }
 
 func applyCloudSessionPackage(
@@ -456,6 +477,15 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 }
 
 func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.SessionRecord) {
+	printCloudSessionReceiptForContext(out, operation, session, "")
+}
+
+func printCloudSessionReceiptForContext(
+	out io.Writer,
+	operation string,
+	session *cloud.SessionRecord,
+	contextName string,
+) {
 	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Target", "cloud")
@@ -465,6 +495,14 @@ func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.Se
 	printSummaryField(out, "Model", session.AgentModel)
 	printSummaryField(out, "Thinking", session.AgentThinking)
 	printSummaryField(out, "Session", session.ID)
+	if contextName != "" {
+		printSummaryField(out, "Context", contextName)
+		printSummaryField(
+			out,
+			"Logs",
+			fmt.Sprintf("telos logs --context %s %s", contextName, session.ID),
+		)
+	}
 	if session.ServiceURL != nil {
 		printSummaryField(out, "Service URL", *session.ServiceURL)
 	}

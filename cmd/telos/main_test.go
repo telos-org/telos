@@ -75,7 +75,7 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", nil)
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", "root", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      hello-service",
@@ -109,7 +109,7 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", nil)
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", "root", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",
@@ -140,7 +140,7 @@ func TestPrintPlanPreviewStarsRequiredVerifierSkills(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", nil)
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", "root", nil)
 	text := out.String()
 	if !strings.Contains(text, "Skills    verify-engineering*, verify-quality") {
 		t.Fatalf("plan output missing starred skill marker:\n%s", text)
@@ -499,7 +499,7 @@ func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nversion: 1.2.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pkg, err := packageSpec(dir)
+	pkg, err := packageSpec(dir, "")
 	if err != nil {
 		t.Fatalf("packageSpec: %v", err)
 	}
@@ -1398,6 +1398,21 @@ func TestPrintJSONLogEventsUsesNDJSON(t *testing.T) {
 		if !strings.Contains(lines[0], want) {
 			t.Fatalf("JSON logs missing %q:\n%s", want, lines[0])
 		}
+	}
+}
+
+func TestPrintJSONLogEventsIncludesCloudContext(t *testing.T) {
+	events := []sessionapi.SessionEvent{{
+		Event: "agent_progress",
+		Data:  map[string]any{"text": "ready"},
+	}}
+
+	var out bytes.Buffer
+	if err := printJSONLogEventsForContext(&out, events, "org_telos"); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `"context":"org_telos"`) {
+		t.Fatalf("JSON logs missing context:\n%s", out.String())
 	}
 }
 

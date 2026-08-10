@@ -25,14 +25,20 @@ func cmdPlan(args []string) {
 	fs := flag.NewFlagSet("plan", flag.ExitOnError)
 	sessionID := fs.String("session", "", "Managed session ID to compare")
 	jsonOut := fs.Bool("json", false, "JSON output")
+	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
+	contextOverride, err := cloudContextOverride(fs, *contextValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos plan SPEC.md [--session SESSION] [--json]")
+		fmt.Fprintln(os.Stderr, "usage: telos plan SPEC.md [--session SESSION] [--json] [--context CONTEXT]")
 		os.Exit(1)
 	}
 	specPath := resolveSpecPath(fs.Arg(0))
-	if err := prepareRegistrySkills(specPath); err != nil {
+	if err := prepareRegistrySkillsForContext(specPath, contextOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
@@ -53,13 +59,14 @@ func cmdPlan(args []string) {
 	}
 	var comparison *specComparison
 	if strings.TrimSpace(*sessionID) != "" {
-		comparison, err = compareSessionSpec(*sessionID, proposedSpec, platform)
+		comparison, err = compareSessionSpec(*sessionID, proposedSpec, platform, contextOverride)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 	}
 	targetMode := "local"
+	targetContext := ""
 	willCreateSession := comparison == nil
 	sessionLineage := "root"
 	userScope := map[string]interface{}{
@@ -69,23 +76,47 @@ func cmdPlan(args []string) {
 	}
 	if platform != "local" {
 		targetMode = "cloud"
-		userScope = map[string]interface{}{
-			"status": "missing",
-			"label":  "not logged in",
-			"detail": "run `telos login` before `telos apply`",
-		}
-		cloudConfigured, err := config.IsConfigured()
+		cfg, err := config.LoadConfig()
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		if cloudConfigured {
+		targetContext = strings.TrimSpace(contextOverride)
+		if targetContext == "" {
+			targetContext = strings.TrimSpace(cfg.Context)
+		}
+		if targetContext == "" {
+			targetContext = "personal"
+		}
+		userScope = map[string]interface{}{
+			"status":  "missing",
+			"label":   "not logged in",
+			"detail":  "run `telos login` before `telos apply`",
+			"context": targetContext,
+		}
+		if cfg.AuthToken != "" {
+			control, err := cloud.ControlClientForContext(contextOverride)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			targetContext = resolvedCloudContext(control)
 			userScope = map[string]interface{}{
-				"status": "configured",
-				"label":  "cloud control plane",
-				"detail": "stored cloud credentials",
+				"status":  "configured",
+				"label":   "cloud control plane",
+				"detail":  "effective cloud credentials",
+				"context": targetContext,
 			}
 		}
+	}
+	targetScope := map[string]interface{}{
+		"mode":                targetMode,
+		"will_create_session": willCreateSession,
+		"will_update_session": comparison != nil,
+		"will_mutate":         false,
+	}
+	if targetContext != "" {
+		targetScope["context"] = targetContext
 	}
 	plan := map[string]interface{}{
 		"spec": map[string]interface{}{
@@ -104,13 +135,8 @@ func cmdPlan(args []string) {
 			"lineage":          sessionLineage,
 			"interval_seconds": compiled.Environment.IntervalSeconds,
 		},
-		"target": map[string]interface{}{
-			"mode":                targetMode,
-			"will_create_session": willCreateSession,
-			"will_update_session": comparison != nil,
-			"will_mutate":         false,
-		},
-		"user": userScope,
+		"target": targetScope,
+		"user":   userScope,
 	}
 	if comparison != nil {
 		plan["change"] = map[string]interface{}{
@@ -125,7 +151,7 @@ func cmdPlan(args []string) {
 		return
 	}
 
-	printPlanPreview(os.Stdout, compiled, specPath, platform, sessionLineage, comparison)
+	printPlanPreview(os.Stdout, compiled, specPath, platform, targetContext, sessionLineage, comparison)
 }
 
 func printPlanPreview(
@@ -133,11 +159,15 @@ func printPlanPreview(
 	compiled *spec.CompiledEnvironment,
 	specPath string,
 	platform string,
+	contextName string,
 	sessionLineage string,
 	comparison *specComparison,
 ) {
 	printSummaryField(out, "Spec", compiled.Environment.Name)
 	printSummaryField(out, "Target", platform)
+	if contextName != "" {
+		printSummaryField(out, "Context", contextName)
+	}
 	printSummaryField(out, "Lineage", sessionLineage)
 	if comparison != nil {
 		printSummaryField(out, "Session", comparison.sessionID)
@@ -166,7 +196,12 @@ func printPlanPreview(
 	}
 }
 
-func compareSessionSpec(sessionID string, proposed []byte, platform string) (*specComparison, error) {
+func compareSessionSpec(
+	sessionID string,
+	proposed []byte,
+	platform string,
+	contextOverride string,
+) (*specComparison, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	switch {
 	case isLocalApplyID(sessionID):
@@ -182,7 +217,7 @@ func compareSessionSpec(sessionID string, proposed []byte, platform string) (*sp
 		if platform == "local" {
 			return nil, fmt.Errorf("%s is cloud but the proposed spec targets local", sessionID)
 		}
-		control, err := cloud.ControlClient()
+		control, err := cloud.ControlClientForContext(contextOverride)
 		if err != nil {
 			return nil, err
 		}

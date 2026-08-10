@@ -84,7 +84,7 @@ func TestPrintPlanPreviewShowsSessionDiff(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", comparison)
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", "root", comparison)
 	text := out.String()
 	for _, want := range []string{
 		"Session   sess_123",
@@ -114,7 +114,7 @@ func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", comparison)
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", "root", comparison)
 	if !strings.Contains(out.String(), "No spec changes.") {
 		t.Fatalf("plan output:\n%s", out.String())
 	}

@@ -15,25 +15,31 @@ import (
 func cmdDelete(args []string) {
 	fs := flag.NewFlagSet("delete", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "JSON output")
+	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
+	contextOverride, err := cloudContextOverride(fs, *contextValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos delete SESSION [--json]")
+		fmt.Fprintln(os.Stderr, "usage: telos delete SESSION [--json] [--context CONTEXT]")
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
 
-	if isCloudApplyID(sessionID) {
-		cloudSession, err := deleteCloudSession(sessionID)
+	if isCloudApplyID(sessionID) || contextOverride != "" {
+		cloudSession, contextName, err := deleteCloudSessionForContext(sessionID, contextOverride)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		if *jsonOut {
-			printJSON(cloudSession)
+			printCloudSessionJSON(cloudSession, contextName)
 			return
 		}
-		printCloudSessionDeleteReceipt(os.Stdout, *cloudSession)
+		printCloudSessionDeleteReceiptForContext(os.Stdout, *cloudSession, contextName)
 		return
 	}
 
@@ -47,17 +53,17 @@ func cmdDelete(args []string) {
 		return
 	}
 
-	cloudSession, found, cloudErr := deleteCloudSessionIfConfigured(sessionID)
+	cloudSession, contextName, found, cloudErr := deleteCloudSessionIfConfigured(sessionID, "")
 	if cloudErr != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
 		os.Exit(1)
 	}
 	if found {
 		if *jsonOut {
-			printJSON(cloudSession)
+			printCloudSessionJSON(cloudSession, contextName)
 			return
 		}
-		printCloudSessionDeleteReceipt(os.Stdout, *cloudSession)
+		printCloudSessionDeleteReceiptForContext(os.Stdout, *cloudSession, contextName)
 		return
 	}
 
@@ -65,26 +71,44 @@ func cmdDelete(args []string) {
 	os.Exit(1)
 }
 
-func deleteCloudSession(sessionID string) (*cloud.SessionRecord, error) {
-	control, err := cloud.ControlClient()
+func deleteCloudSessionForContext(
+	sessionID string,
+	contextOverride string,
+) (*cloud.SessionRecord, string, error) {
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
-	return control.DeleteSession(sessionID)
+	session, err := control.DeleteSession(sessionID)
+	if err != nil {
+		return nil, "", err
+	}
+	return session, resolvedCloudContext(control), nil
 }
 
-func deleteCloudSessionIfConfigured(sessionID string) (*cloud.SessionRecord, bool, error) {
-	if _, found, err := getCloudSessionIfConfigured(sessionID); err != nil || !found {
-		return nil, found, err
+func deleteCloudSessionIfConfigured(
+	sessionID string,
+	contextOverride string,
+) (*cloud.SessionRecord, string, bool, error) {
+	if _, contextName, found, err := getCloudSessionIfConfigured(sessionID, contextOverride); err != nil || !found {
+		return nil, contextName, found, err
 	}
-	cloudSession, err := deleteCloudSession(sessionID)
+	cloudSession, contextName, err := deleteCloudSessionForContext(sessionID, contextOverride)
 	if err != nil {
-		return nil, true, err
+		return nil, contextName, true, err
 	}
-	return cloudSession, true, nil
+	return cloudSession, contextName, true, nil
 }
 
 func printCloudSessionDeleteReceipt(out io.Writer, session cloud.SessionRecord) {
+	printCloudSessionDeleteReceiptForContext(out, session, "")
+}
+
+func printCloudSessionDeleteReceiptForContext(
+	out io.Writer,
+	session cloud.SessionRecord,
+	contextName string,
+) {
 	switch session.State {
 	case "deleted":
 		fmt.Fprintf(out, "deleted %s\n\n", session.Name)
@@ -96,6 +120,9 @@ func printCloudSessionDeleteReceipt(out io.Writer, session cloud.SessionRecord) 
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Package", session.PackageRef)
 	printSummaryField(out, "Session", session.ID)
+	if contextName != "" {
+		printSummaryField(out, "Context", contextName)
+	}
 }
 
 func printLocalSessionDeleteReceipt(out io.Writer, session sessionapi.Session) {

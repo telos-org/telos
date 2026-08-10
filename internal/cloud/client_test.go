@@ -61,6 +61,47 @@ func TestControlClientResolvesHandleContext(t *testing.T) {
 	}
 }
 
+func TestControlClientContextOverrideWinsOverEnvironment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"personal_org_id":"org_personal",
+			"organizations":[
+				{"id":"org_environment","handle":"environment","display_name":"Environment","kind":"platform","role":"owner"},
+				{"id":"org_flag","handle":"flag","display_name":"Flag","kind":"platform","role":"owner"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	t.Setenv(config.APIEndpointEnv, srv.URL)
+	t.Setenv(config.AuthTokenEnv, "test-token")
+	t.Setenv(config.ContextEnv, "@environment")
+
+	client, err := ControlClientForContext("@flag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.OrgID != "org_flag" {
+		t.Fatalf("OrgID = %q, want org_flag", client.OrgID)
+	}
+}
+
+func TestControlClientPersonalOverrideWinsOverEnvironment(t *testing.T) {
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	t.Setenv(config.APIEndpointEnv, "https://api.example.com")
+	t.Setenv(config.AuthTokenEnv, "test-token")
+	t.Setenv(config.ContextEnv, "@environment")
+
+	client, err := ControlClientForContext("personal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.OrgID != "" {
+		t.Fatalf("OrgID = %q, want personal scope", client.OrgID)
+	}
+}
+
 func TestControlClientCachesHandleResolution(t *testing.T) {
 	bootstraps := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
