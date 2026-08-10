@@ -21,6 +21,9 @@ Give your coding agent an outcome, or start with the canonical
 will help write the smallest verifiable `SPEC.md`, plan it, and choose a bounded
 `telos run` or durable `telos apply` workflow.
 
+For deeper goal-contract guidance, use the checked-in
+[`telos-spec-writing`](skills/telos-spec-writing/SKILL.md) skill.
+
 Use `telos <command> --help` for the exact command surface of the installed
 release.
 

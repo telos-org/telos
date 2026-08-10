@@ -1,0 +1,4 @@
+interface:
+  display_name: "Telos Spec Writing"
+  short_description: "Write clear, verifiable Telos specs"
+  default_prompt: "Use $telos-spec-writing to help me turn this outcome into a clear, verifiable Telos SPEC.md."
