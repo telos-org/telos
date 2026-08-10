@@ -315,9 +315,9 @@ func TestPiLineEventsProjectsSafeToolCallProgress(t *testing.T) {
 		got = append(got, event.Kind+":"+event.Text)
 	}
 	want := []string{
-		"progress_update:Reading spec.md",
-		"progress_update:Running kubectl",
-		"progress_update:Updating workspace",
+		"tool:Reading spec.md",
+		"tool:Running kubectl",
+		"tool:Updating workspace",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("events:\ngot\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))

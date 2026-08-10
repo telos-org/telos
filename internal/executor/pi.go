@@ -292,7 +292,7 @@ func piToolCallEvents(msg map[string]interface{}) []game.LiveAgentEvent {
 			continue
 		}
 		events = append(events, game.LiveAgentEvent{
-			Kind: "progress_update",
+			Kind: "tool",
 			Text: text,
 		})
 	}
