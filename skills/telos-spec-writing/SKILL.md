@@ -104,6 +104,9 @@ For an existing session, prefer:
 telos plan path/to/SPEC.md --session sess_...
 ```
 
+When the target lives outside the configured default, add `--context @handle`
+or `--context personal` to either command instead of mutating shared config.
+
 When editing repository files, also run `git diff --check`. Report validation
 that could not be run instead of implying success.
 

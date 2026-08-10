@@ -67,7 +67,8 @@ Use the intended binary, session, and context:
 ```bash
 telos plan path/to/SPEC.md
 telos plan path/to/SPEC.md --session sess_...
+telos plan path/to/SPEC.md --session sess_... --context @handle
 ```
 
-For a private or organization context, supply the context required by the
-current CLI configuration.
+For a private or organization target, prefer the one-command `--context`
+override when the stored default is not the intended context.
