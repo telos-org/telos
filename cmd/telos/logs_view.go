@@ -413,9 +413,11 @@ func renderedLogRowFromEvent(
 	}
 
 	message := eventDataString(event, "message")
-	if strings.HasPrefix(event.Event, "deployment.") {
+	if strings.HasPrefix(event.Event, "deployment.") || strings.HasPrefix(event.Event, "workload.") {
 		row.Phase = "DEPLOY"
-	} else if strings.HasPrefix(event.Event, "runtime.") || strings.HasPrefix(event.Event, "provisioning.") {
+	} else if strings.HasPrefix(event.Event, "runtime.") ||
+		strings.HasPrefix(event.Event, "provisioning.") ||
+		strings.HasPrefix(event.Event, "hostd.") {
 		row.Phase = "START"
 	} else if !verbose {
 		return renderedLogRow{}, false
