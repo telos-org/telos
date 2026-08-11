@@ -30,3 +30,10 @@ func cloudContextOverride(fs *flag.FlagSet, value string) (string, error) {
 	}
 	return value, nil
 }
+
+func validateCloudSessionContext(sessionID, contextOverride string) error {
+	if isLocalApplyID(strings.TrimSpace(sessionID)) && strings.TrimSpace(contextOverride) != "" {
+		return fmt.Errorf("--context cannot be used with a local session")
+	}
+	return nil
+}

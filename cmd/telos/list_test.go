@@ -320,6 +320,28 @@ func TestPrintCloudSessionDeleteReceiptShowsAsyncDeletion(t *testing.T) {
 	}
 }
 
+func TestPrintCloudSessionDeleteJSONOmitsDescribeProgress(t *testing.T) {
+	session := &cloud.SessionRecord{
+		ID:    "sess_123",
+		Name:  "auth",
+		State: "deleted",
+	}
+
+	out := captureStdout(t, func() {
+		printCloudSessionDeleteJSON(session, "org_telos")
+	})
+	var body map[string]any
+	if err := json.Unmarshal([]byte(out), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["context"] != "org_telos" {
+		t.Fatalf("context = %#v", body["context"])
+	}
+	if _, ok := body["progress"]; ok {
+		t.Fatalf("delete JSON contains describe progress: %#v", body)
+	}
+}
+
 func TestCmdDeleteDeletesCloudSession(t *testing.T) {
 	var deleted bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

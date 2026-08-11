@@ -50,6 +50,10 @@ func cmdLogs(args []string) {
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
+	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
 	options := logViewOptions{Verbose: *verbose, Tail: *tail, All: *all}
 	if contextOverride != "" {
 		session, err := getCloudSession(sessionID, contextOverride)

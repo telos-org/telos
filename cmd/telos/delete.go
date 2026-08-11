@@ -28,6 +28,10 @@ func cmdDelete(args []string) {
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
+	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
 
 	if isCloudApplyID(sessionID) || contextOverride != "" {
 		cloudSession, contextName, err := deleteCloudSessionForContext(sessionID, contextOverride)
@@ -36,7 +40,7 @@ func cmdDelete(args []string) {
 			os.Exit(1)
 		}
 		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
+			printCloudSessionDeleteJSON(cloudSession, contextName)
 			return
 		}
 		printCloudSessionDeleteReceiptForContext(os.Stdout, *cloudSession, contextName)
@@ -60,7 +64,7 @@ func cmdDelete(args []string) {
 	}
 	if found {
 		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
+			printCloudSessionDeleteJSON(cloudSession, contextName)
 			return
 		}
 		printCloudSessionDeleteReceiptForContext(os.Stdout, *cloudSession, contextName)
@@ -69,6 +73,16 @@ func cmdDelete(args []string) {
 
 	fmt.Fprintf(os.Stderr, "error: %v\n", err)
 	os.Exit(1)
+}
+
+func printCloudSessionDeleteJSON(session *cloud.SessionRecord, contextName string) {
+	printJSON(struct {
+		*cloud.SessionRecord
+		Context string `json:"context"`
+	}{
+		SessionRecord: session,
+		Context:       contextName,
+	})
 }
 
 func deleteCloudSessionForContext(

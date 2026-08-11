@@ -31,6 +31,10 @@ func cmdDescribe(args []string) {
 		os.Exit(1)
 	}
 	sessionID := fs.Arg(0)
+	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
 	if contextOverride != "" {
 		cloudSession, contextName, err := getCloudSessionForContext(sessionID, contextOverride)
 		if err != nil {
@@ -88,15 +92,6 @@ func cmdDescribe(args []string) {
 
 	fmt.Fprintf(os.Stderr, "error: %v\n", err)
 	os.Exit(1)
-}
-
-func printCloudSessionJSON(session *cloud.SessionRecord, contextName string) {
-	printCloudSessionJSONWithProgress(
-		session,
-		contextName,
-		deriveCloudSessionProgress(session, nil, time.Now()),
-		nil,
-	)
 }
 
 func printCloudSessionJSONWithProgress(
