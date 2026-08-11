@@ -121,6 +121,7 @@ func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
 }
 
 func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
+	configurePlanVerifierSkills(t)
 	pkg := testApplyPackage(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -179,6 +180,22 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 	if plan.Change.Current.Skills[0].Digest == "" || plan.Change.Proposed.Skills[0].Digest == "" {
 		t.Fatalf("skill lock digest missing: current=%#v proposed=%#v", plan.Change.Current.Skills, plan.Change.Proposed.Skills)
 	}
+}
+
+func configurePlanVerifierSkills(t *testing.T) {
+	t.Helper()
+	catalogue := t.TempDir()
+	for _, name := range []string{"verify-engineering", "verify-quality"} {
+		dir := filepath.Join(catalogue, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		content := []byte("---\nname: " + name + "\n---\nVerify.\n")
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Setenv("TELOS_SKILLS_DIR", catalogue)
 }
 
 func TestPlanSpecStateCapturesIntervalSkillLocksAndRubrics(t *testing.T) {
