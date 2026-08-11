@@ -1280,7 +1280,7 @@ Reload the current spec.
 	}
 }
 
-func TestPrintLogsSuppressesDuplicateProtocolBlocks(t *testing.T) {
+func TestPrintLogsPreservesRepeatedProtocolBlocks(t *testing.T) {
 	transcript := `# Transcript
 
 <progress_update>Checked live state</progress_update>
@@ -1305,11 +1305,11 @@ Reload the current spec.
 	var out bytes.Buffer
 	printLogs(&out, transcript, false)
 	text := out.String()
-	if strings.Count(text, "Checked live state") != 1 {
-		t.Fatalf("expected one progress update, got:\n%s", text)
+	if strings.Count(text, "Checked live state") != 2 {
+		t.Fatalf("expected two progress updates, got:\n%s", text)
 	}
-	if strings.Count(text, "External update") != 1 {
-		t.Fatalf("expected one external update, got:\n%s", text)
+	if strings.Count(text, "External update") != 2 {
+		t.Fatalf("expected two external updates, got:\n%s", text)
 	}
 }
 

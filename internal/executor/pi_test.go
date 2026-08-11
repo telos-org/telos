@@ -327,14 +327,15 @@ func TestReadPiSessionRequiresAssistantMessage(t *testing.T) {
 }
 
 func TestPiLineEventsProjectsSafeToolCallProgress(t *testing.T) {
-	events := piLineEvents(`{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"toolCall","name":"bash","arguments":{"command":"kubectl get pods --token SECRET"}},{"type":"toolCall","name":"bash","arguments":{"command":"git status --short"}}]}}`)
+	events := piLineEvents(`{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"toolCall","name":"read","arguments":{"path":"/tmp/other/spec.md"}},{"type":"toolCall","name":"bash","arguments":{"command":"kubectl get pods --token SECRET"}},{"type":"toolCall","name":"bash","arguments":{"command":"git status --short"}}]}}`)
 
 	got := make([]string, 0, len(events))
 	for _, event := range events {
 		got = append(got, event.Kind+":"+event.Text)
 	}
 	want := []string{
-		"tool:Reading spec.md",
+		"tool:Reading session/spec.md",
+		"tool:Reading other/spec.md",
 		"tool:Running kubectl",
 		"tool:Updating workspace",
 	}
@@ -343,6 +344,33 @@ func TestPiLineEventsProjectsSafeToolCallProgress(t *testing.T) {
 	}
 	if strings.Contains(strings.Join(got, "\n"), "SECRET") {
 		t.Fatalf("tool progress leaked command contents: %v", got)
+	}
+}
+
+func TestPiLiveProjectorPreservesRepeatedActivityWithoutReplayingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	line := `{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/workspace/config.go"}}]}}`
+	var events []game.LiveAgentEvent
+	projector := &piLiveProjector{
+		sessionPath: path,
+		turnState: &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
+			events = append(events, event)
+		}},
+	}
+
+	writePiSession(t, path, line)
+	projector.observeSessionFile(false)
+	projector.observeSessionFile(false)
+	appendPiSession(t, path, line)
+	projector.observeSessionFile(false)
+
+	if len(events) != 2 {
+		t.Fatalf("repeated activity count = %d, want 2: %#v", len(events), events)
+	}
+	for _, event := range events {
+		if event.Kind != "tool" || event.Text != "Reading workspace/config.go" {
+			t.Fatalf("unexpected event: %#v", event)
+		}
 	}
 }
 
