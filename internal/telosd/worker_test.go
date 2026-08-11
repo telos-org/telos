@@ -8,6 +8,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/telos-org/telos/internal/game"
 )
 
 func TestWorkerIntervalReadsSessionManifest(t *testing.T) {
@@ -211,6 +213,77 @@ func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("suspension evidence missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestControllerSuspendsUntilExplicitWake(t *testing.T) {
+	evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
+	sessionDir := writeWorkerManifest(t, map[string]any{
+		"session_id":   "sess_123",
+		"session_kind": "controller",
+		"specs": []map[string]any{{
+			"name":          "demo",
+			"evidence_path": evidencePath,
+		}},
+	})
+	wake := make(chan os.Signal, 1)
+	stop := make(chan os.Signal, 1)
+	t.Cleanup(func() { stop <- syscall.SIGTERM })
+	calls := make(chan int, 2)
+	attempt := 0
+	runSession := func(string) (*game.PVGResult, error) {
+		attempt++
+		calls <- attempt
+		if attempt == 1 {
+			return &game.PVGResult{
+				GameResult: game.GameFailure,
+				Error:      "403: inactive virtual key",
+			}, nil
+		}
+		return &game.PVGResult{GameResult: game.GameStopped}, nil
+	}
+	type workerResult struct {
+		code int
+		err  error
+	}
+	done := make(chan workerResult, 1)
+	go func() {
+		code, err := runSessionWorker(sessionDir, false, runSession, wake, stop)
+		done <- workerResult{code: code, err: err}
+	}()
+
+	select {
+	case got := <-calls:
+		if got != 1 {
+			t.Fatalf("first attempt = %d", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not run the first cycle")
+	}
+	select {
+	case got := <-calls:
+		t.Fatalf("worker retried without a wake signal: attempt %d", got)
+	case result := <-done:
+		t.Fatalf("worker exited while suspended: %#v", result)
+	case <-time.After(failureBackoff(1) + 100*time.Millisecond):
+	}
+
+	wake <- syscall.SIGUSR1
+	select {
+	case got := <-calls:
+		if got != 2 {
+			t.Fatalf("attempt after wake = %d", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not resume after wake")
+	}
+	select {
+	case result := <-done:
+		if result.code != 0 || result.err != nil {
+			t.Fatalf("worker result = %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop after resumed cycle")
 	}
 }
 

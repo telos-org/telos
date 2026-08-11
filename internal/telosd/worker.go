@@ -31,7 +31,16 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	wake := make(chan os.Signal, 1)
 	signal.Notify(wake, syscall.SIGUSR1)
 	defer signal.Stop(wake)
+	return runSessionWorker(sessionDir, once, cli.RunLocalSession, wake, stop)
+}
 
+func runSessionWorker(
+	sessionDir string,
+	once bool,
+	runSession func(string) (*game.PVGResult, error),
+	wake <-chan os.Signal,
+	stop <-chan os.Signal,
+) (int, error) {
 	owner, err := sessionworker.AcquireOwnership(sessionDir, filepath.Join(sessionDir, "runner.log"))
 	if err != nil {
 		if errors.Is(err, sessionworker.ErrWorkerAlreadyRunning) {
@@ -51,7 +60,7 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 		}
 		root := manifest.Kind == sessionapi.KindController
 		desired := manifest.Desired
-		result, err := cli.RunLocalSession(sessionDir)
+		result, err := runSession(sessionDir)
 		if err != nil {
 			if !root || once {
 				return 1, err
