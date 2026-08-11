@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -208,11 +209,7 @@ func printCloudSessionDescriptionWithProgress(
 		printSummaryField(out, "Next wake", displayLogDate(progress.NextWakeAt))
 	}
 	if progress.ManagedUpdateRevision != "" {
-		printSummaryField(
-			out,
-			"Spec update",
-			progress.ManagedUpdateRevision+" ("+progress.ManagedUpdateState+")",
-		)
+		printSummaryField(out, "Spec update", progress.ManagedUpdateRevision)
 	}
 	if progress.ClockSkewSeconds != nil {
 		printSummaryField(out, "Clock skew", formatAge(progress.ClockSkewSeconds))
@@ -220,16 +217,8 @@ func printCloudSessionDescriptionWithProgress(
 	if session.RuntimeVersion != nil && *session.RuntimeVersion != "" {
 		printSummaryField(out, "Runtime", *session.RuntimeVersion)
 	}
-	if session.ServiceURL != nil && *session.ServiceURL != "" {
-		printSummaryField(out, "Service", *session.ServiceURL)
-	} else {
-		printSummaryField(out, "Service", "pending")
-	}
-	if session.DashboardURL != nil && *session.DashboardURL != "" {
-		printSummaryField(out, "Dashboard", *session.DashboardURL)
-	} else {
-		printSummaryField(out, "Dashboard", "pending")
-	}
+	printSummaryField(out, "Service", cloudSessionSurface(session.ServiceURL, session.State))
+	printSummaryField(out, "Dashboard", cloudSessionSurface(session.DashboardURL, session.State))
 	if session.FailureReason != nil && *session.FailureReason != "" {
 		printSummaryField(out, "Error", *session.FailureReason)
 	} else if progress.WaitingReason != "" {
@@ -277,6 +266,25 @@ func cloudSessionDisplayStatus(session cloud.SessionRecord) string {
 		return session.Status
 	}
 	return session.State
+}
+
+func cloudSessionInProgress(state string) bool {
+	switch strings.ToLower(strings.TrimSpace(state)) {
+	case "provisioning", "deploying":
+		return true
+	default:
+		return false
+	}
+}
+
+func cloudSessionSurface(value *string, state string) string {
+	if value != nil && strings.TrimSpace(*value) != "" {
+		return strings.TrimSpace(*value)
+	}
+	if cloudSessionInProgress(state) {
+		return "pending"
+	}
+	return ""
 }
 
 func printSessionDescription(out io.Writer, session sessionapi.Session) {

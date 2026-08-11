@@ -32,7 +32,6 @@ type cloudSessionProgress struct {
 	LatestVerifierVerdict    string `json:"latest_verifier_verdict,omitempty"`
 	NextWakeAt               string `json:"next_wake_at,omitempty"`
 	ManagedUpdateRevision    string `json:"managed_update_revision,omitempty"`
-	ManagedUpdateState       string `json:"managed_update_state,omitempty"`
 	ClockSkewSeconds         *int64 `json:"clock_skew_seconds,omitempty"`
 }
 
@@ -116,7 +115,6 @@ func deriveCloudSessionProgress(
 				eventDataString(event, "current_package_digest"),
 				eventDataScalarString(event, "current_spec_version"),
 			)
-			progress.ManagedUpdateState = "dispatched"
 		}
 		progress.NextWakeAt = latestEventValue(
 			progress.NextWakeAt,
@@ -247,10 +245,33 @@ func eventDataScalarString(event sessionapi.SessionEvent, key string) string {
 }
 
 func eventProductStage(event sessionapi.SessionEvent) string {
-	if stage := normalizeProductStage(eventDataString(event, "stage")); stage != "" {
+	if stage := productStageName(eventDataString(event, "stage")); stage != "" {
 		return stage
 	}
-	return normalizeProductStage(event.Event)
+
+	name := strings.ToLower(strings.TrimSpace(event.Event))
+	switch {
+	case name == "agent_progress", name == "game_start", name == "round_start":
+		return "agent execution"
+	case strings.HasPrefix(name, "runtime.allocation."), strings.HasPrefix(name, "provisioning.allocation."):
+		return "allocation"
+	case strings.HasPrefix(name, "runtime.prepare."), strings.HasPrefix(name, "runtime.guest."), strings.HasPrefix(name, "provisioning.guest."):
+		return "guest restore"
+	case strings.HasPrefix(name, "runtime.restore."):
+		return "restoring"
+	case strings.HasPrefix(name, "runtime.claim."):
+		return "runtime claim"
+	case strings.HasPrefix(name, "workload."), strings.HasPrefix(name, "deployment.rollout."):
+		return "workload rollout"
+	case strings.HasPrefix(name, "runtime.route."), strings.HasPrefix(name, "route."), strings.HasPrefix(name, "deployment.route."):
+		return "route publication"
+	case strings.HasPrefix(name, "runtime.health."), strings.HasPrefix(name, "workload.health."), strings.HasPrefix(name, "health."):
+		return "healthy"
+	case strings.HasPrefix(name, "checkpoint."):
+		return "checkpointing"
+	default:
+		return ""
+	}
 }
 
 func sessionProductStage(event sessionapi.SessionEvent, sessionState string) string {
@@ -262,29 +283,26 @@ func sessionProductStage(event sessionapi.SessionEvent, sessionState string) str
 	}
 }
 
-func normalizeProductStage(value string) string {
-	value = strings.ToLower(strings.TrimSpace(value))
-	switch {
-	case value == "healthy", strings.Contains(value, "health.succeeded"), strings.Contains(value, "healthy"):
+func productStageName(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "healthy":
 		return "healthy"
-	case value == "checkpointing", strings.Contains(value, "checkpoint.started"):
+	case "checkpointing":
 		return "checkpointing"
-	case strings.Contains(value, "guest") && strings.Contains(value, "restore"):
+	case "guest restore", "guest_restore", "prepare", "boot":
 		return "guest restore"
-	case strings.Contains(value, "restor"):
+	case "restore", "restoring":
 		return "restoring"
-	case strings.Contains(value, "allocat"), strings.Contains(value, "schedul"):
+	case "allocation", "scheduling":
 		return "allocation"
-	case strings.Contains(value, "claim"):
+	case "claim", "runtime claim", "runtime_claim":
 		return "runtime claim"
-	case strings.Contains(value, "agent"), strings.HasPrefix(value, "game_"), strings.HasPrefix(value, "round_"):
+	case "agent", "agent execution", "agent_execution":
 		return "agent execution"
-	case strings.Contains(value, "workload"), strings.Contains(value, "rollout"), strings.Contains(value, "deploy"):
+	case "deployment", "rollout", "workload", "workload rollout", "workload_rollout":
 		return "workload rollout"
-	case strings.Contains(value, "route"):
+	case "route", "route publication", "route_publication":
 		return "route publication"
-	case strings.Contains(value, "prepare"), strings.Contains(value, "boot"):
-		return "guest restore"
 	default:
 		return ""
 	}

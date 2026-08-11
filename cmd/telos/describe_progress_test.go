@@ -153,7 +153,7 @@ func TestDeriveCloudSessionProgressTracksExecutionIdentity(t *testing.T) {
 	if progress.LatestVerifierVerdict != "" {
 		t.Fatalf("stale verifier verdict = %q", progress.LatestVerifierVerdict)
 	}
-	if progress.ManagedUpdateRevision != "rev_7" || progress.ManagedUpdateState != "dispatched" {
+	if progress.ManagedUpdateRevision != "rev_7" {
 		t.Fatalf("managed update = %#v", progress)
 	}
 	if progress.NextWakeAt != "2026-08-10T12:15:00Z" {
@@ -161,6 +161,41 @@ func TestDeriveCloudSessionProgressTracksExecutionIdentity(t *testing.T) {
 	}
 	if progress.ClockSkewSeconds == nil || *progress.ClockSkewSeconds != 3600 {
 		t.Fatalf("clock skew = %#v", progress.ClockSkewSeconds)
+	}
+}
+
+func TestDeriveCloudSessionProgressIgnoresUnrelatedDeploymentEvents(t *testing.T) {
+	progressAt := "2026-08-10T12:00:00Z"
+	updateAt := "2026-08-10T12:01:00Z"
+	role := "prover"
+	progress := deriveCloudSessionProgress(
+		&cloud.SessionRecord{State: "healthy"},
+		[]sessionapi.SessionEvent{
+			{Event: "agent_progress", Role: &role, Timestamp: &progressAt},
+			{Event: "deployment.update_accepted", Timestamp: &updateAt},
+		},
+		time.Date(2026, 8, 10, 12, 2, 0, 0, time.UTC),
+	)
+
+	if progress.Stage != "agent execution" || progress.StageSince != progressAt {
+		t.Fatalf("update event changed product stage: %#v", progress)
+	}
+}
+
+func TestPrintCloudSessionDescriptionDoesNotCallTerminalURLsPending(t *testing.T) {
+	session := cloud.SessionRecord{ID: "sess_123", State: "failed"}
+	progress := cloudSessionProgress{Stage: "failed"}
+
+	var out bytes.Buffer
+	printCloudSessionDescriptionWithProgress(&out, session, "", progress, false, nil)
+
+	if strings.Contains(out.String(), "pending") {
+		t.Fatalf("terminal session contains pending surface:\n%s", out.String())
+	}
+	for _, want := range []string{"Service   -", "Dashboard -"} {
+		if !strings.Contains(out.String(), want) {
+			t.Fatalf("description missing %q:\n%s", want, out.String())
+		}
 	}
 }
 
