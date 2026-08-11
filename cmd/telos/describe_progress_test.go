@@ -51,7 +51,6 @@ func TestDeriveCloudSessionProgressUsesStructuredEvents(t *testing.T) {
 			Data:      map[string]any{"kind": "progress_update", "text": "Running integration tests"},
 		},
 	}
-
 	progress := deriveCloudSessionProgress(
 		session,
 		events,
@@ -142,17 +141,17 @@ func TestDeriveCloudSessionProgressTracksExecutionIdentity(t *testing.T) {
 	}
 
 	progress := deriveCloudSessionProgress(session, events, time.Date(2026, 8, 10, 12, 1, 0, 0, time.UTC))
-	if progress.EpochID == nil || *progress.EpochID != 3 || progress.Round == nil || *progress.Round != 7 {
+	if progress.EpochID == nil || *progress.EpochID != 3 || progress.Round != nil {
 		t.Fatalf("execution position = %#v", progress)
 	}
-	if progress.Role != "verifier" || progress.Model != "openai-codex/gpt-5.6" || progress.Thinking != "high" {
-		t.Fatalf("active role config = %#v", progress)
+	if progress.Role != "" || progress.Model != "openai-codex/gpt-5.6" || progress.Thinking != "high" {
+		t.Fatalf("execution config = %#v", progress)
 	}
 	if progress.CumulativeTurns != 4 || progress.CumulativeWallTimeMS != 61_000 {
 		t.Fatalf("cumulative execution = %#v", progress)
 	}
-	if progress.LatestVerifierVerdict != "accepted" {
-		t.Fatalf("verdict = %q", progress.LatestVerifierVerdict)
+	if progress.LatestVerifierVerdict != "" {
+		t.Fatalf("stale verifier verdict = %q", progress.LatestVerifierVerdict)
 	}
 	if progress.ManagedUpdateRevision != "rev_7" || progress.ManagedUpdateState != "dispatched" {
 		t.Fatalf("managed update = %#v", progress)
@@ -162,6 +161,66 @@ func TestDeriveCloudSessionProgressTracksExecutionIdentity(t *testing.T) {
 	}
 	if progress.ClockSkewSeconds == nil || *progress.ClockSkewSeconds != 3600 {
 		t.Fatalf("clock skew = %#v", progress.ClockSkewSeconds)
+	}
+}
+
+func TestDeriveCloudSessionProgressKeepsOnlyActiveRole(t *testing.T) {
+	startedAt := "2026-08-10T12:00:00Z"
+	completedAt := "2026-08-10T12:01:00Z"
+	checkpointAt := "2026-08-10T12:01:01Z"
+	epoch := 2
+	round := 4
+	role := "prover"
+	session := &cloud.SessionRecord{State: "healthy"}
+	events := []sessionapi.SessionEvent{
+		{
+			Event:     "round_start",
+			EpochID:   &epoch,
+			Round:     &round,
+			Role:      &role,
+			Timestamp: &startedAt,
+		},
+		{
+			Event:     "agent_complete",
+			EpochID:   &epoch,
+			Round:     &round,
+			Role:      &role,
+			Timestamp: &completedAt,
+			Data:      map[string]any{"status": "DONE"},
+		},
+		{
+			Event:     "game_end",
+			EpochID:   &epoch,
+			Round:     &round,
+			Timestamp: &completedAt,
+			Data:      map[string]any{"game_result": "success"},
+		},
+		{
+			Event:     "workspace_checkpoint",
+			EpochID:   &epoch,
+			Round:     &round,
+			Timestamp: &checkpointAt,
+		},
+	}
+	active := deriveCloudSessionProgress(
+		session,
+		events[:1],
+		time.Date(2026, 8, 10, 12, 0, 30, 0, time.UTC),
+	)
+	if active.Role != "prover" || active.Round == nil || *active.Round != round {
+		t.Fatalf("active role missing: %#v", active)
+	}
+
+	progress := deriveCloudSessionProgress(
+		session,
+		events,
+		time.Date(2026, 8, 10, 12, 2, 0, 0, time.UTC),
+	)
+	if progress.Role != "" || progress.Round != nil {
+		t.Fatalf("completed role reported active: %#v", progress)
+	}
+	if progress.Stage != "healthy" || progress.StageSince != completedAt {
+		t.Fatalf("completed checkpoint reported as active stage: %#v", progress)
 	}
 }
 

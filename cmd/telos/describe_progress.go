@@ -73,13 +73,7 @@ func deriveCloudSessionProgress(
 			value := *event.EpochID
 			progress.EpochID = &value
 		}
-		if event.Round != nil {
-			value := *event.Round
-			progress.Round = &value
-		}
-		if role := eventRole(event); role == "prover" || role == "verifier" {
-			progress.Role = role
-		}
+		updateActiveAgentPosition(&progress, event)
 		if model := eventDataString(event, "model"); model != "" {
 			progress.Model = model
 		}
@@ -112,6 +106,9 @@ func deriveCloudSessionProgress(
 				progress.LatestVerifierVerdict = "stopped"
 			}
 		}
+		if isManagedUpdateEvent(event.Event) {
+			progress.LatestVerifierVerdict = ""
+		}
 		if event.Event == "external_update" {
 			progress.ManagedUpdateRevision = firstNonEmpty(
 				eventDataString(event, "current_revision"),
@@ -133,7 +130,7 @@ func deriveCloudSessionProgress(
 			event.ReceivedAt,
 		)
 
-		if stage := eventProductStage(event); stage != "" {
+		if stage := sessionProductStage(event, session.State); stage != "" {
 			if stage != progress.Stage {
 				progress.WaitingReason = ""
 				progress.Stage = stage
@@ -187,6 +184,33 @@ func deriveCloudSessionProgress(
 	return progress
 }
 
+func updateActiveAgentPosition(progress *cloudSessionProgress, event sessionapi.SessionEvent) {
+	switch event.Event {
+	case "round_start", "agent_progress":
+		role := eventRole(event)
+		if role != "prover" && role != "verifier" {
+			return
+		}
+		progress.Role = role
+		if event.Round != nil {
+			value := *event.Round
+			progress.Round = &value
+		}
+	case "agent_complete", "agent_suspended", "external_update", "game_end", "workspace_checkpoint":
+		progress.Role = ""
+		progress.Round = nil
+	}
+}
+
+func isManagedUpdateEvent(name string) bool {
+	switch strings.ToLower(strings.TrimSpace(name)) {
+	case "external_update", "deployment.update_accepted", "deployment.update_dispatched":
+		return true
+	default:
+		return false
+	}
+}
+
 func largerClockSkew(current *int64, sourceTimestamp, receivedAt *string) *int64 {
 	if sourceTimestamp == nil || receivedAt == nil {
 		return current
@@ -229,12 +253,21 @@ func eventProductStage(event sessionapi.SessionEvent) string {
 	return normalizeProductStage(event.Event)
 }
 
+func sessionProductStage(event sessionapi.SessionEvent, sessionState string) string {
+	switch event.Event {
+	case "external_update", "game_end", "workspace_checkpoint":
+		return fallbackProductStage(sessionState)
+	default:
+		return eventProductStage(event)
+	}
+}
+
 func normalizeProductStage(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	switch {
 	case value == "healthy", strings.Contains(value, "health.succeeded"), strings.Contains(value, "healthy"):
 		return "healthy"
-	case strings.Contains(value, "checkpoint"):
+	case value == "checkpointing", strings.Contains(value, "checkpoint.started"):
 		return "checkpointing"
 	case strings.Contains(value, "guest") && strings.Contains(value, "restore"):
 		return "guest restore"
