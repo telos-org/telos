@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -12,6 +13,7 @@ import (
 	internaldiff "github.com/rogpeppe/go-internal/diff"
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
+	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
 
@@ -241,11 +243,22 @@ func compareSessionSpec(
 		if platform != "local" {
 			return nil, fmt.Errorf("%s is local but the proposed spec targets %s", sessionID, platform)
 		}
-		current, err := store().Spec(sessionID)
+		localStore := store()
+		current, err := localStore.Spec(sessionID)
 		if err != nil {
 			return nil, err
 		}
-		currentState, err := planSpecStateFromMarkdown([]byte(current.Markdown), nil)
+		localSession, err := localStore.Get(sessionID)
+		if err != nil {
+			return nil, err
+		}
+		if localSession.SessionDir == nil || strings.TrimSpace(*localSession.SessionDir) == "" {
+			return nil, fmt.Errorf("local session %s has no session directory", sessionID)
+		}
+		currentState, err := planLocalSessionSpecState(
+			[]byte(current.Markdown),
+			*localSession.SessionDir,
+		)
 		if err != nil {
 			return nil, err
 		}
@@ -269,6 +282,17 @@ func compareSessionSpec(
 	default:
 		return nil, fmt.Errorf("invalid session id %q", sessionID)
 	}
+}
+
+func planLocalSessionSpecState(
+	markdown []byte,
+	sessionDir string,
+) (planSpecState, error) {
+	manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
+	if err != nil {
+		return planSpecState{}, fmt.Errorf("read current local session metadata: %w", err)
+	}
+	return planSpecStateFromMarkdown(markdown, manifest.ApplyPackageLock)
 }
 
 func compareCloudSessionSpec(

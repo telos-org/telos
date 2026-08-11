@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
 
@@ -182,7 +183,7 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 	}
 }
 
-func configurePlanVerifierSkills(t *testing.T) {
+func configurePlanVerifierSkills(t *testing.T) string {
 	t.Helper()
 	catalogue := t.TempDir()
 	for _, name := range []string{"verify-engineering", "verify-quality"} {
@@ -196,6 +197,81 @@ func configurePlanVerifierSkills(t *testing.T) {
 		}
 	}
 	t.Setenv("TELOS_SKILLS_DIR", catalogue)
+	return catalogue
+}
+
+func TestCompareLocalSessionSpecUsesPersistedSkillLocks(t *testing.T) {
+	catalogue := configurePlanVerifierSkills(t)
+	skillDir := filepath.Join(catalogue, "build-dashboard")
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(skillDir, "SKILL.md"),
+		[]byte("---\nname: build-dashboard\n---\nBuild the dashboard.\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	markdown := []byte(`---
+name: local-plan
+version: 1.0.0
+platform: local
+skills:
+  - build-dashboard*
+---
+
+# Goal
+
+Build it.
+`)
+	root := t.TempDir()
+	t.Setenv("TELOS_SESSION_DIR", root)
+	kind := sessionapi.KindController
+	localStore := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	markdownText := string(markdown)
+	session, err := localStore.Create(sessionapi.SessionCreateRequest{
+		SpecMarkdown: &markdownText,
+		SessionKind:  &kind,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	specPath := filepath.Join(t.TempDir(), "SPEC.md")
+	if err := os.WriteFile(specPath, markdown, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := spec.CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed, err := planSpecStateForCompiled(compiled, markdown)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	comparison, err := compareSessionSpec(
+		session.SessionID,
+		markdown,
+		proposed,
+		"local",
+		"",
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(comparison.current.Skills) != len(comparison.proposed.Skills) {
+		t.Fatalf("skill delta: current=%#v proposed=%#v", comparison.current.Skills, comparison.proposed.Skills)
+	}
+	for i := range comparison.current.Skills {
+		if comparison.current.Skills[i] != comparison.proposed.Skills[i] {
+			t.Fatalf("skill delta: current=%#v proposed=%#v", comparison.current.Skills, comparison.proposed.Skills)
+		}
+	}
+	if len(comparison.current.Rubrics) != 1 || comparison.current.Rubrics[0] != "build-dashboard" {
+		t.Fatalf("current rubrics = %#v", comparison.current.Rubrics)
+	}
 }
 
 func TestPlanSpecStateCapturesIntervalSkillLocksAndRubrics(t *testing.T) {
