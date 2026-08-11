@@ -73,6 +73,10 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintln(os.Stderr, "error: --workspace can only seed a new session; it cannot be used with --session")
 		os.Exit(1)
 	}
+	if err := validateApplySessionContext(*sessionID, contextOverride); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
 	specArg := fs.Arg(0)
 	specPath, hasLocalSpec := existingSpecPath(specArg)
 
@@ -341,6 +345,13 @@ func decideLaunchMode(
 func validateLaunchCommand(command string, mode launchMode) error {
 	if command == "run" && mode == launchCloudApply {
 		return fmt.Errorf("use telos apply to start cloud specs; telos run can only launch cloud specs from inside an existing Telos session")
+	}
+	return nil
+}
+
+func validateApplySessionContext(sessionID string, contextOverride string) error {
+	if isLocalApplyID(strings.TrimSpace(sessionID)) && strings.TrimSpace(contextOverride) != "" {
+		return fmt.Errorf("--context can only be used with a cloud apply")
 	}
 	return nil
 }

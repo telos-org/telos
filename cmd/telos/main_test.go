@@ -173,6 +173,18 @@ func TestFlagNamesSetUsesExplicitFlagsOnly(t *testing.T) {
 	}
 }
 
+func TestValidateApplySessionContextRejectsLocalUpdate(t *testing.T) {
+	err := validateApplySessionContext("local_123", "org_telos")
+	if err == nil || err.Error() != "--context can only be used with a cloud apply" {
+		t.Fatalf("local update context error = %v", err)
+	}
+	for _, sessionID := range []string{"", "sess_123"} {
+		if err := validateApplySessionContext(sessionID, "org_telos"); err != nil {
+			t.Fatalf("cloud context rejected for %q: %v", sessionID, err)
+		}
+	}
+}
+
 func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.String("workspace", "", "")
