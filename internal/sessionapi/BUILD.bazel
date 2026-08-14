@@ -25,3 +25,9 @@ go_test(
         "//internal/spec",
     ],
 )
+
+go_test(
+    name = "sessionapi_store_test",
+    srcs = ["store_test.go"],
+    embed = [":sessionapi"],
+)

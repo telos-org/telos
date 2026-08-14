@@ -167,7 +167,7 @@ func (s *controllerReconciler) apply(session *sessionapi.Session, wakeReason str
 }
 
 func (s *controllerReconciler) ensureRootWorkers(wakeReason string) error {
-	sessions, err := s.FileStore.List()
+	sessions, err := s.FileStore.ListRootWorkerSessions()
 	if err != nil {
 		return err
 	}

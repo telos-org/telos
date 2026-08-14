@@ -103,6 +103,34 @@ func TestDesiredStateIncludesSpecVersion(t *testing.T) {
 	}
 }
 
+func TestLoadCompletedEpochDesiredUsesBoundIdentity(t *testing.T) {
+	sessionDir := writeWorkerManifest(t, map[string]any{
+		"session_kind":         "controller",
+		"current_spec_version": 8,
+		"package_digest":       "sha256:current",
+		"specs":                []map[string]any{{"name": "demo"}},
+		"epochs": []map[string]any{{
+			"id":             4,
+			"started_at":     "2026-08-14T12:00:00.000Z",
+			"finished_at":    "2026-08-14T12:01:00.000Z",
+			"result":         "completed",
+			"spec_version":   7,
+			"package_digest": "sha256:completed",
+		}},
+	})
+
+	desired, ok, err := LoadCompletedEpochDesired(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ok {
+		t.Fatal("expected bound completion identity")
+	}
+	if desired.SpecVersion != 7 || desired.PackageDigest != "sha256:completed" {
+		t.Fatalf("unexpected desired identity: %#v", desired)
+	}
+}
+
 func TestDrainWakeClearsBufferedWakeSignals(t *testing.T) {
 	wake := make(chan os.Signal, 2)
 	wake <- syscall.SIGUSR1
@@ -114,6 +142,14 @@ func TestDrainWakeClearsBufferedWakeSignals(t *testing.T) {
 	case signal := <-wake:
 		t.Fatalf("unexpected buffered wake after drain: %v", signal)
 	default:
+	}
+}
+
+func TestStopRequestWinsBeforeImmediateDesiredStateCycle(t *testing.T) {
+	stop := make(chan os.Signal, 1)
+	stop <- syscall.SIGTERM
+	if !stopRequested(stop) {
+		t.Fatal("expected buffered retirement signal to stop the worker")
 	}
 }
 

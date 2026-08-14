@@ -145,9 +145,12 @@ type SessionSpecResponse struct {
 }
 
 // RuntimeIdentity identifies the live telosd process serving the API.
+const CapabilityEpochFinalizedEventsV1 = "epoch-finalized-events-v1"
+
 type RuntimeIdentity struct {
-	Version      string `json:"runtime_version,omitempty"`
-	TelosdDigest string `json:"runtime_telosd_digest,omitempty"`
+	Version      string   `json:"runtime_version,omitempty"`
+	TelosdDigest string   `json:"runtime_telosd_digest,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
 }
 
 // --------- Spec types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -332,7 +335,10 @@ type SessionEvent struct {
 	// EventSeq is the evidence writer's dense 1-based sequence number —
 	// the durable cursor for pagination and stream resume. Nil for lines
 	// written before seq-stamping existed.
+	Schema      *string        `json:"schema,omitempty"`
+	EventID     *string        `json:"event_id,omitempty"`
 	EventSeq    *int64         `json:"event_seq,omitempty"`
+	EpochID     *int           `json:"epoch_id,omitempty"`
 	Role        *string        `json:"role,omitempty"`
 	Timestamp   *string        `json:"ts,omitempty"`
 	SessionID   *string        `json:"session_id,omitempty"`

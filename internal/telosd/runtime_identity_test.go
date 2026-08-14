@@ -22,6 +22,9 @@ func TestCurrentRuntimeIdentityHashesTheRunningExecutable(t *testing.T) {
 	if !regexp.MustCompile(`^sha256:[0-9a-f]{64}$`).MatchString(identity.TelosdDigest) {
 		t.Fatalf("digest: got %q", identity.TelosdDigest)
 	}
+	if len(identity.Capabilities) != 1 || identity.Capabilities[0] != "epoch-finalized-events-v1" {
+		t.Fatalf("capabilities: %#v", identity.Capabilities)
+	}
 	path, err := runningExecutablePath()
 	if err != nil {
 		t.Fatal(err)

@@ -64,26 +64,41 @@ type ManifestSpec struct {
 }
 
 type Epoch struct {
-	ID         int     `json:"id"`
-	StartedAt  string  `json:"started_at"`
-	FinishedAt *string `json:"finished_at"`
-	Result     *string `json:"result"`
-	Error      *string `json:"error"`
-	Runner     *Runner `json:"runner"`
+	ID                       int      `json:"id"`
+	StartedAt                string   `json:"started_at"`
+	FinishedAt               *string  `json:"finished_at"`
+	Result                   *string  `json:"result"`
+	Error                    *string  `json:"error"`
+	Runner                   *Runner  `json:"runner"`
+	SpecName                 string   `json:"spec_name,omitempty"`
+	SpecVersion              *int     `json:"spec_version,omitempty"`
+	Revision                 *string  `json:"revision,omitempty"`
+	PackageDigest            *string  `json:"package_digest,omitempty"`
+	SpecSHA256               string   `json:"spec_sha256,omitempty"`
+	CompletionReason         *string  `json:"completion_reason,omitempty"`
+	VerifierConceded         *bool    `json:"verifier_conceded,omitempty"`
+	CheckpointSaved          *bool    `json:"checkpoint_saved,omitempty"`
+	CheckpointPath           *string  `json:"checkpoint_path,omitempty"`
+	CheckpointBytes          *int64   `json:"checkpoint_bytes,omitempty"`
+	RoundCount               *int     `json:"round_count,omitempty"`
+	FinalizationKey          string   `json:"finalization_key,omitempty"`
+	FinalizationEventEmitted bool     `json:"finalization_event_emitted,omitempty"`
+	WorkerCapabilities       []string `json:"worker_capabilities,omitempty"`
 }
 
 type Runner struct {
-	Kind         string  `json:"kind,omitempty"`
-	PID          int     `json:"pid,omitempty"`
-	PGID         int     `json:"pgid,omitempty"`
-	LogPath      string  `json:"log_path,omitempty"`
-	InCluster    bool    `json:"in_cluster"`
-	Hostname     string  `json:"hostname,omitempty"`
-	PodName      string  `json:"pod_name,omitempty"`
-	PodNamespace string  `json:"pod_namespace,omitempty"`
-	StartedAt    string  `json:"started_at,omitempty"`
-	FinishedAt   *string `json:"finished_at,omitempty"`
-	Status       string  `json:"status,omitempty"`
+	Kind               string   `json:"kind,omitempty"`
+	PID                int      `json:"pid,omitempty"`
+	PGID               int      `json:"pgid,omitempty"`
+	LogPath            string   `json:"log_path,omitempty"`
+	InCluster          bool     `json:"in_cluster"`
+	Hostname           string   `json:"hostname,omitempty"`
+	PodName            string   `json:"pod_name,omitempty"`
+	PodNamespace       string   `json:"pod_namespace,omitempty"`
+	StartedAt          string   `json:"started_at,omitempty"`
+	FinishedAt         *string  `json:"finished_at,omitempty"`
+	Status             string   `json:"status,omitempty"`
+	WorkerCapabilities []string `json:"worker_capabilities,omitempty"`
 }
 
 type ScopedToken struct {

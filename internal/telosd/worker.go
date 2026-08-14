@@ -86,9 +86,16 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 		}
 		failures = 0
 		if root {
+			completedDesired := desired
+			if completed, ok, err := LoadCompletedEpochDesired(sessionDir); err == nil && ok {
+				completedDesired = completed
+			}
 			current, err := LoadWorkerManifest(sessionDir)
-			if err == nil && !current.Desired.Equal(desired) {
+			if err == nil && !current.Desired.Equal(completedDesired) {
 				drainWake(wake)
+				if stopRequested(stop) {
+					return 0, nil
+				}
 				continue
 			}
 		}
@@ -96,6 +103,32 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 			return 0, nil
 		}
 	}
+}
+
+func stopRequested(stop <-chan os.Signal) bool {
+	select {
+	case <-stop:
+		return true
+	default:
+		return false
+	}
+}
+
+// LoadCompletedEpochDesired returns the immutable desired identity bound to
+// the most recently completed epoch. Legacy epochs do not carry this identity.
+func LoadCompletedEpochDesired(sessionDir string) (DesiredState, bool, error) {
+	m, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
+	if err != nil {
+		return DesiredState{}, false, fmt.Errorf("read worker manifest: %w", err)
+	}
+	epoch := m.LastEpoch()
+	if epoch == nil || epoch.FinishedAt == nil || epoch.SpecVersion == nil {
+		return DesiredState{}, false, nil
+	}
+	return DesiredState{
+		SpecVersion:   *epoch.SpecVersion,
+		PackageDigest: strValue(epoch.PackageDigest),
+	}, true, nil
 }
 
 type WorkerManifest struct {

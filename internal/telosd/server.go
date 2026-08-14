@@ -22,6 +22,8 @@ import (
 // `app.usetelos.ai` both match).
 var cloudAllowedOrigin = regexp.MustCompile(`^https://(.*\.)?usetelos\.ai$|^http://localhost(:[0-9]+)?$|^http://127\.0\.0\.1(:[0-9]+)?$`)
 
+const rootWorkerReconcileInterval = 5 * time.Second
+
 func Run(ctx context.Context, cfg Config, runtime sessionapi.RuntimeIdentity) error {
 	cfg, err := NormalizeConfig(cfg)
 	if err != nil {
@@ -44,6 +46,7 @@ func Run(ctx context.Context, cfg Config, runtime sessionapi.RuntimeIdentity) er
 		if err := reconciler.ensureRootWorkers("server_started"); err != nil {
 			log.Printf("ensure root workers: %v", err)
 		}
+		startRootWorkerReconciler(ctx, reconciler)
 		startSessionBootstrapReconciler(ctx, store, materializer)
 	}
 	mux := http.NewServeMux()
@@ -84,6 +87,23 @@ func Run(ctx context.Context, cfg Config, runtime sessionapi.RuntimeIdentity) er
 		return fmt.Errorf("serve: %w", err)
 	}
 	return nil
+}
+
+func startRootWorkerReconciler(ctx context.Context, reconciler *controllerReconciler) {
+	go func() {
+		ticker := time.NewTicker(rootWorkerReconcileInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := reconciler.ensureRootWorkers("worker_supervision"); err != nil {
+					log.Printf("ensure root workers: %v", err)
+				}
+			}
+		}
+	}()
 }
 
 func storeForConfig(cfg Config) *sessionapi.FileStore {

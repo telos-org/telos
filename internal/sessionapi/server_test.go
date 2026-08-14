@@ -110,6 +110,7 @@ func TestHealthz(t *testing.T) {
 		sessionapi.RuntimeIdentity{
 			Version:      "v0.1.3",
 			TelosdDigest: "sha256:" + strings.Repeat("a", 64),
+			Capabilities: []string{sessionapi.CapabilityEpochFinalizedEventsV1},
 		},
 	)
 	srv := httptest.NewServer(mux)
@@ -122,7 +123,7 @@ func TestHealthz(t *testing.T) {
 	defer resp.Body.Close()
 	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
 
-	var body map[string]string
+	var body map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatal(err)
 	}
@@ -130,10 +131,14 @@ func TestHealthz(t *testing.T) {
 		t.Fatalf("unexpected health body: %#v", body)
 	}
 	if body["runtime_version"] != "v0.1.3" {
-		t.Fatalf("runtime version: got %q", body["runtime_version"])
+		t.Fatalf("runtime version: got %#v", body["runtime_version"])
 	}
 	if body["runtime_telosd_digest"] != "sha256:"+strings.Repeat("a", 64) {
-		t.Fatalf("runtime digest: got %q", body["runtime_telosd_digest"])
+		t.Fatalf("runtime digest: got %#v", body["runtime_telosd_digest"])
+	}
+	capabilities, ok := body["capabilities"].([]any)
+	if !ok || len(capabilities) != 1 || capabilities[0] != sessionapi.CapabilityEpochFinalizedEventsV1 {
+		t.Fatalf("capabilities: got %#v", body["capabilities"])
 	}
 }
 
@@ -1842,13 +1847,13 @@ var cursorFixtureLines = []string{
 	`{"event_seq":4,"event":"four"}`,
 }
 
-func TestEventsSeqAndRoleProjected(t *testing.T) {
+func TestEventsIdentitySeqAndRoleProjected(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
 	created := createSession(t, srv.URL, createSessionBody(t, "esr"))
 	writeEventsFixture(t, store.Root, created.SessionID, "esr", []string{
-		`{"event_seq":7,"event":"agent_progress","role":"prover","ts":"2026-05-21T00:00:01.000Z","data":{"text":"hi"}}`,
+		`{"schema":"telos.evidence.v2","event_id":"sess:event:7","event_seq":7,"session_id":"sess-identity","epoch_id":3,"event":"agent_progress","role":"prover","ts":"2026-05-21T00:00:01.000Z","data":{"text":"hi"}}`,
 	})
 
 	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events")
@@ -1860,6 +1865,18 @@ func TestEventsSeqAndRoleProjected(t *testing.T) {
 	}
 	if events[0].Role == nil || *events[0].Role != "prover" {
 		t.Fatalf("expected role=prover, got %v", events[0].Role)
+	}
+	if events[0].Schema == nil || *events[0].Schema != "telos.evidence.v2" {
+		t.Fatalf("expected schema, got %v", events[0].Schema)
+	}
+	if events[0].EventID == nil || *events[0].EventID != "sess:event:7" {
+		t.Fatalf("expected event_id, got %v", events[0].EventID)
+	}
+	if events[0].SessionID == nil || *events[0].SessionID != "sess-identity" {
+		t.Fatalf("expected session_id, got %v", events[0].SessionID)
+	}
+	if events[0].EpochID == nil || *events[0].EpochID != 3 {
+		t.Fatalf("expected epoch_id, got %v", events[0].EpochID)
 	}
 }
 
@@ -2091,6 +2108,73 @@ func TestEventsSSEResume(t *testing.T) {
 	body = stream("?after=0", "3")
 	if !strings.Contains(body, `"event":"one"`) {
 		t.Fatalf("expected explicit ?after=0 to override Last-Event-ID, got: %s", body)
+	}
+}
+
+func TestEventsSSEWaitsForTerminalEpochFinalization(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "essf"))
+	stopSession(t, srv.URL, created.SessionID)
+	manifestPath := filepath.Join(store.Root, created.SessionID, "session.json")
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch := manifest.LastEpoch()
+	if epoch == nil {
+		t.Fatal("missing terminal epoch")
+	}
+	epoch.FinalizationKey = created.SessionID + ":epoch:00000001:finalized"
+	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan string, 1)
+	errs := make(chan error, 1)
+	go func() {
+		req, reqErr := http.NewRequest(http.MethodGet, srv.URL+"/api/sessions/"+created.SessionID+"/events", nil)
+		if reqErr != nil {
+			errs <- reqErr
+			return
+		}
+		req.Header.Set("Accept", "text/event-stream")
+		resp, requestErr := http.DefaultClient.Do(req)
+		if requestErr != nil {
+			errs <- requestErr
+			return
+		}
+		defer resp.Body.Close()
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			errs <- readErr
+			return
+		}
+		done <- string(body)
+	}()
+
+	select {
+	case body := <-done:
+		t.Fatalf("stream closed before finalization: %s", body)
+	case err := <-errs:
+		t.Fatal(err)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	writeEventsFixture(t, store.Root, created.SessionID, "essf", []string{
+		fmt.Sprintf(`{"schema":"telos.evidence.v2","event_id":"%s:essf:00000001","event_seq":1,"session_id":"%s","epoch_id":1,"event":"epoch_finalized","data":{"finalization_key":"%s"}}`, created.SessionID, created.SessionID, epoch.FinalizationKey),
+	})
+
+	select {
+	case body := <-done:
+		if !strings.Contains(body, `"event":"epoch_finalized"`) {
+			t.Fatalf("missing finalization event: %s", body)
+		}
+	case err := <-errs:
+		t.Fatal(err)
+	case <-time.After(3 * time.Second):
+		t.Fatal("stream did not close after finalization")
 	}
 }
 

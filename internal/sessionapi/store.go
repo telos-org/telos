@@ -753,6 +753,47 @@ func (fs *FileStore) List() ([]Session, error) {
 	return sessions, nil
 }
 
+// ListRootWorkerSessions returns only the manifest fields needed by the cloud
+// worker supervisor. It deliberately avoids the public List derivation path,
+// which summarizes complete evidence logs and dashboard state while holding
+// the store mutation lock.
+func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
+	entries, err := os.ReadDir(fs.Root)
+	if errors.Is(err, os.ErrNotExist) {
+		return []Session{}, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	sessions := make([]Session, 0)
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		manifest, err := ReadManifest(fs.manifestPath(entry.Name()))
+		if err != nil || manifest.ParentSessionID != nil || manifest.SessionKind != KindController {
+			continue
+		}
+		var result *string
+		if epoch := manifest.LastEpoch(); epoch != nil {
+			result = epoch.Result
+		}
+		if result != nil && *result == "stopped" {
+			continue
+		}
+		kind := manifest.SessionKind
+		sessionDir := fs.sessionDir(entry.Name())
+		sessions = append(sessions, Session{
+			SessionID:       manifest.SessionID,
+			SessionKind:     &kind,
+			ParentSessionID: manifest.ParentSessionID,
+			SessionDir:      &sessionDir,
+			Result:          result,
+		})
+	}
+	return sessions, nil
+}
+
 // Get returns a single session by ID.
 func (fs *FileStore) Get(id string) (*Session, error) {
 	fs.mu.Lock()
@@ -1254,9 +1295,13 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 
 		ev := SessionEvent{
 			Event:       eventName,
+			Schema:      stringField(raw, "schema"),
+			EventID:     stringField(raw, "event_id"),
 			EventSeq:    eventSeq(raw),
+			EpochID:     intField(raw, "epoch_id"),
 			Role:        strPtr(role),
 			Timestamp:   strPtr(timestamp),
+			SessionID:   stringField(raw, "session_id"),
 			SpecIndex:   spec.Index,
 			SpecName:    strPtr(spec.Name),
 			SpecDirName: strPtr(spec.DirName),
@@ -1265,6 +1310,23 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 		events = append(events, ev)
 	}
 	return events, nil
+}
+
+func stringField(raw map[string]any, key string) *string {
+	value, ok := raw[key].(string)
+	if !ok || value == "" {
+		return nil
+	}
+	return &value
+}
+
+func intField(raw map[string]any, key string) *int {
+	value, ok := raw[key].(float64)
+	if !ok {
+		return nil
+	}
+	result := int(value)
+	return &result
 }
 
 // eventSeq lifts the evidence writer's sequence number; nil for lines that
