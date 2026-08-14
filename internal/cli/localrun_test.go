@@ -1610,6 +1610,14 @@ func TestRunLocalSessionStopsWhenManifestIsStopped(t *testing.T) {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
 	store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
+	owner, err := sessionworker.AcquireOwnership(
+		session.SessionDir,
+		filepath.Join(session.SessionDir, "runner.log"),
+	)
+	if err != nil {
+		t.Fatalf("AcquireOwnership: %v", err)
+	}
+	t.Cleanup(func() { _ = owner.Release() })
 
 	exec := &fakeExecutor{
 		proverResult: game.TurnResult{
@@ -1638,6 +1646,9 @@ func TestRunLocalSessionStopsWhenManifestIsStopped(t *testing.T) {
 	}
 	if result.GameResult != game.GameStopped {
 		t.Fatalf("game result: got %s", result.GameResult)
+	}
+	if err := owner.Release(); err != nil {
+		t.Fatalf("Release ownership: %v", err)
 	}
 
 	sessionAPI, err := store.Get(session.SessionID)

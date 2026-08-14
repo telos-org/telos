@@ -849,7 +849,6 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		runner = &copy
 	}
 
-	createdSyntheticEpoch := false
 	m, err = MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
 		now := tsNow()
 		stopped := "stopped"
@@ -890,7 +889,6 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 				}
 				BindEpochFinalizationIdentity(m, &epoch)
 				m.Epochs = append(m.Epochs, epoch)
-				createdSyntheticEpoch = true
 			}
 			return nil
 		}
@@ -908,21 +906,18 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		}
 		BindEpochFinalizationIdentity(m, &epoch)
 		m.Epochs = append(m.Epochs, epoch)
-		createdSyntheticEpoch = true
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	terminateRunner(runner)
-	if createdSyntheticEpoch {
-		if _, repairErr := RepairFinalizedEpochEvents(fs.sessionDir(id)); repairErr != nil {
-			return nil, fmt.Errorf("record stopped epoch finalization: %w", repairErr)
-		}
-		m, err = ReadManifest(fs.manifestPath(id))
-		if err != nil {
-			return nil, err
-		}
+	if _, repairErr := RepairFinalizedEpochEvents(fs.sessionDir(id)); repairErr != nil {
+		return nil, fmt.Errorf("record stopped epoch finalization: %w", repairErr)
+	}
+	m, err = ReadManifest(fs.manifestPath(id))
+	if err != nil {
+		return nil, err
 	}
 
 	return fs.deriveSession(id, m)

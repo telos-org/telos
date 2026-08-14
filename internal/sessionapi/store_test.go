@@ -161,6 +161,14 @@ func TestStopOpenEpochPreservesBoundIdentity(t *testing.T) {
 	if _, err := store.Stop(session.SessionID); err != nil {
 		t.Fatal(err)
 	}
+	stoppedManifest, err := ReadManifest(store.manifestPath(session.SessionID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	stoppedEpoch := stoppedManifest.LastEpoch()
+	if stoppedEpoch == nil || !stoppedEpoch.FinalizationEventEmitted {
+		t.Fatalf("Stop returned before repairing the dead worker outbox: %#v", stoppedEpoch)
+	}
 	events, err := store.Events(session.SessionID)
 	if err != nil {
 		t.Fatal(err)
