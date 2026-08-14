@@ -4,6 +4,7 @@ package cli
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -11,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/telos-org/telos/internal/evidence"
 	"github.com/telos-org/telos/internal/executor"
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
@@ -170,7 +170,10 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if err != nil {
 		return nil, fmt.Errorf("read session manifest: %w", err)
 	}
-	repairedFinalization, err := reconcileFinalizedEpochEvents(sessionDir, manifest)
+	repairedFinalization, err := sessionapi.EmitFinalizedEpochEvents(
+		sessionDir,
+		manifest,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("reconcile epoch finalization events: %w", err)
 	}
@@ -218,6 +221,18 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 
 	epochID, err := sessionworker.StartEpoch(sessionDir, manifest)
 	if err != nil {
+		if errors.Is(err, sessionworker.ErrSessionStopped) {
+			if _, eventErr := sessionapi.EmitFinalizedEpochEventsFromDisk(sessionDir); eventErr != nil {
+				return nil, fmt.Errorf(
+					"record stopped epoch finalization: %w",
+					eventErr,
+				)
+			}
+			return &game.PVGResult{
+				GameResult: game.GameStopped,
+				Error:      "stopped by operator",
+			}, nil
+		}
 		return nil, err
 	}
 
@@ -228,10 +243,10 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		agentExec, err = createAgentExecutor(workspace, cfg)
 		if err != nil {
 			fail := &game.PVGResult{GameResult: game.GameFailure, Error: err.Error()}
-			if finishErr := finishEpoch(sessionDir, manifest, fail); finishErr != nil {
+			if finishErr := finishEpoch(sessionDir, epochID, fail); finishErr != nil {
 				return nil, fmt.Errorf("%w; also failed to finish epoch: %v", err, finishErr)
 			}
-			if eventErr := reconcileFinalizedEpochEventsFromDisk(sessionDir); eventErr != nil {
+			if _, eventErr := sessionapi.EmitFinalizedEpochEventsFromDisk(sessionDir); eventErr != nil {
 				return nil, fmt.Errorf("%w; also failed to record epoch finalization: %v", err, eventErr)
 			}
 			return nil, err
@@ -253,10 +268,10 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	result := pvg.Run()
 
 	// Close epoch
-	if err := finishEpoch(sessionDir, manifest, result); err != nil {
+	if err := finishEpoch(sessionDir, epochID, result); err != nil {
 		return result, err
 	}
-	if err := reconcileFinalizedEpochEventsFromDisk(sessionDir); err != nil {
+	if _, err := sessionapi.EmitFinalizedEpochEventsFromDisk(sessionDir); err != nil {
 		return result, fmt.Errorf("record epoch finalization: %w", err)
 	}
 	if manifest.SessionKind != sessionapi.KindController {
@@ -309,81 +324,6 @@ func numericMapValue(values map[string]any, key string) int {
 	}
 }
 
-func reconcileFinalizedEpochEventsFromDisk(sessionDir string) error {
-	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
-	if err != nil {
-		return err
-	}
-	_, err = reconcileFinalizedEpochEvents(sessionDir, manifest)
-	return err
-}
-
-func reconcileFinalizedEpochEvents(sessionDir string, manifest *sessionapi.Manifest) (bool, error) {
-	if manifest == nil || len(manifest.Specs) == 0 {
-		return false, nil
-	}
-	evidencePath := manifest.Specs[0].EvidencePath
-	if evidencePath == nil || *evidencePath == "" {
-		return false, nil
-	}
-	repairedLatest := false
-	for i := range manifest.Epochs {
-		epoch := &manifest.Epochs[i]
-		if epoch.FinalizationEventEmitted || epoch.FinalizationKey == "" || epoch.FinishedAt == nil || epoch.Result == nil {
-			continue
-		}
-		writer := evidence.New(manifest.SpecName, *evidencePath, manifest.SessionID, epoch.ID)
-		_, err := writer.LogEpochFinalized(intValue(epoch.RoundCount), evidence.EpochFinalized{
-			EpochID:          epoch.ID,
-			SpecName:         epoch.SpecName,
-			SpecVersion:      epoch.SpecVersion,
-			Revision:         stringValue(epoch.Revision),
-			PackageDigest:    stringValue(epoch.PackageDigest),
-			SpecSHA256:       epoch.SpecSHA256,
-			EpochStartedAt:   epoch.StartedAt,
-			EpochFinishedAt:  *epoch.FinishedAt,
-			Result:           *epoch.Result,
-			GameResult:       gameResultFromEpoch(*epoch.Result),
-			CompletionReason: stringValue(epoch.CompletionReason),
-			VerifierConceded: boolValue(epoch.VerifierConceded),
-			CheckpointSaved:  boolValue(epoch.CheckpointSaved),
-			CheckpointPath:   stringValue(epoch.CheckpointPath),
-			CheckpointBytes:  epoch.CheckpointBytes,
-			FinalizationKey:  epoch.FinalizationKey,
-			Error:            stringValue(epoch.Error),
-		})
-		if err != nil {
-			return false, fmt.Errorf("epoch %d: %w", epoch.ID, err)
-		}
-		if err := markFinalizationEventEmitted(
-			sessionDir,
-			epoch.ID,
-			epoch.FinalizationKey,
-		); err != nil {
-			return false, fmt.Errorf("mark epoch %d finalization: %w", epoch.ID, err)
-		}
-		epoch.FinalizationEventEmitted = true
-		if i == len(manifest.Epochs)-1 {
-			repairedLatest = true
-		}
-	}
-	return repairedLatest, nil
-}
-
-func markFinalizationEventEmitted(sessionDir string, epochID int, key string) error {
-	_, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(manifest *sessionapi.Manifest) error {
-		for i := range manifest.Epochs {
-			epoch := &manifest.Epochs[i]
-			if epoch.ID == epochID && epoch.FinalizationKey == key {
-				epoch.FinalizationEventEmitted = true
-				return nil
-			}
-		}
-		return fmt.Errorf("epoch %d finalization identity changed", epochID)
-	})
-	return err
-}
-
 func resultFromEpoch(epoch *sessionapi.Epoch) *game.PVGResult {
 	result := &game.PVGResult{
 		SystemName:              epoch.SpecName,
@@ -404,17 +344,6 @@ func resultFromEpoch(epoch *sessionapi.Epoch) *game.PVGResult {
 		}
 	}
 	return result
-}
-
-func gameResultFromEpoch(result string) string {
-	switch result {
-	case "completed":
-		return string(game.GameSuccess)
-	case "stopped":
-		return string(game.GameStopped)
-	default:
-		return string(game.GameFailure)
-	}
 }
 
 func stringValue(value *string) string {
@@ -729,43 +658,52 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	return lrc
 }
 
-func finishEpoch(sessionDir string, manifest *sessionapi.Manifest, result *game.PVGResult) error {
+func finishEpoch(sessionDir string, epochID int, result *game.PVGResult) error {
 	_, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(manifest *sessionapi.Manifest) error {
-		if manifest.IsStopped() && result.GameResult != game.GameStopped {
-			return nil
+		var epoch *sessionapi.Epoch
+		for i := range manifest.Epochs {
+			if manifest.Epochs[i].ID == epochID {
+				epoch = &manifest.Epochs[i]
+				break
+			}
 		}
-		last := manifest.LastEpoch()
-		if last == nil {
-			return nil
+		if epoch == nil {
+			return fmt.Errorf("epoch %d not found", epochID)
 		}
+		externallyStopped := epoch.Result != nil && *epoch.Result == "stopped"
 		finishedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-		last.FinishedAt = &finishedAt
-		last.CompletionReason = stringPtr(result.CompletionReason)
-		last.VerifierConceded = boolPtr(result.VerifierConceded)
-		last.RoundCount = intPtr(result.Rounds)
+		epoch.FinishedAt = &finishedAt
+		if !externallyStopped {
+			epoch.CompletionReason = stringPtr(result.CompletionReason)
+			epoch.VerifierConceded = boolPtr(result.VerifierConceded)
+		}
+		epoch.RoundCount = intPtr(result.Rounds)
 		checkpointSaved := result.WorkspaceCheckpointPath != ""
-		last.CheckpointSaved = &checkpointSaved
-		last.CheckpointPath = stringPtr(result.WorkspaceCheckpointPath)
-		last.CheckpointBytes = fileSize(result.WorkspaceCheckpointPath)
+		epoch.CheckpointSaved = &checkpointSaved
+		epoch.CheckpointPath = stringPtr(result.WorkspaceCheckpointPath)
+		epoch.CheckpointBytes = fileSize(result.WorkspaceCheckpointPath)
+		if externallyStopped {
+			return nil
+		}
 
 		switch result.GameResult {
 		case game.GameSuccess:
 			completed := "completed"
-			last.Result = &completed
+			epoch.Result = &completed
 		case game.GameFailure:
 			failed := "failed"
-			last.Result = &failed
+			epoch.Result = &failed
 			if result.Error != "" {
-				last.Error = &result.Error
+				epoch.Error = &result.Error
 			}
 		case game.GameStopped:
 			stopped := "stopped"
-			last.Result = &stopped
+			epoch.Result = &stopped
 			if result.Error != "" {
-				last.Error = &result.Error
+				epoch.Error = &result.Error
 			} else {
 				err := "stopped by operator"
-				last.Error = &err
+				epoch.Error = &err
 			}
 		}
 		return nil

@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -2116,17 +2117,36 @@ func TestEventsSSEWaitsForTerminalEpochFinalization(t *testing.T) {
 	defer srv.Close()
 
 	created := createSession(t, srv.URL, createSessionBody(t, "essf"))
-	stopSession(t, srv.URL, created.SessionID)
+	sessionDir := filepath.Join(store.Root, created.SessionID)
+	lock, err := os.OpenFile(
+		filepath.Join(sessionDir, "runner.lock"),
+		os.O_CREATE|os.O_RDWR,
+		0o600,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		t.Fatal(err)
+	}
 	manifestPath := filepath.Join(store.Root, created.SessionID, "session.json")
 	manifest, err := sessionapi.ReadManifest(manifestPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	epoch := manifest.LastEpoch()
-	if epoch == nil {
-		t.Fatal("missing terminal epoch")
+	finishedAt := "2026-08-14T12:00:00.000Z"
+	stopped := "stopped"
+	stoppedErr := "stopped by operator"
+	epoch := sessionapi.Epoch{
+		ID:         1,
+		StartedAt:  "2026-08-14T11:59:00.000Z",
+		FinishedAt: &finishedAt,
+		Result:     &stopped,
+		Error:      &stoppedErr,
 	}
-	epoch.FinalizationKey = created.SessionID + ":epoch:00000001:finalized"
+	sessionapi.BindEpochFinalizationIdentity(manifest, &epoch)
+	manifest.Epochs = append(manifest.Epochs, epoch)
 	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -2162,9 +2182,9 @@ func TestEventsSSEWaitsForTerminalEpochFinalization(t *testing.T) {
 	case <-time.After(200 * time.Millisecond):
 	}
 
-	writeEventsFixture(t, store.Root, created.SessionID, "essf", []string{
-		fmt.Sprintf(`{"schema":"telos.evidence.v2","event_id":"%s:essf:00000001","event_seq":1,"session_id":"%s","epoch_id":1,"event":"epoch_finalized","data":{"finalization_key":"%s"}}`, created.SessionID, created.SessionID, epoch.FinalizationKey),
-	})
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+		t.Fatal(err)
+	}
 
 	select {
 	case body := <-done:

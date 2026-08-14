@@ -436,6 +436,12 @@ func terminalFinalizationObserved(session *Session, events []SessionEvent) bool 
 	last := session.Epochs[len(session.Epochs)-1]
 	key, _ := last["finalization_key"].(string)
 	if key == "" {
+		capabilities, _ := last["worker_capabilities"].([]any)
+		for _, capability := range capabilities {
+			if capability == CapabilityEpochFinalizedEventsV1 {
+				return false
+			}
+		}
 		return true
 	}
 	for _, event := range events {

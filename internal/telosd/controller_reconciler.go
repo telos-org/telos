@@ -181,6 +181,19 @@ func (s *controllerReconciler) ensureRootWorkers(wakeReason string) error {
 			continue
 		}
 		if session.Result != nil && *session.Result == "stopped" {
+			if session.SessionDir == nil || *session.SessionDir == "" {
+				continue
+			}
+			if _, err := sessionapi.RepairFinalizedEpochEvents(*session.SessionDir); err != nil {
+				errs = append(
+					errs,
+					fmt.Errorf(
+						"repair session %s finalization: %w",
+						session.SessionID,
+						err,
+					),
+				)
+			}
 			continue
 		}
 		if err := s.apply(session, wakeReason); err != nil {
@@ -233,6 +246,16 @@ func (s *controllerReconciler) Stop(id string) (*sessionapi.Session, error) {
 	session, err = s.FileStore.Stop(id)
 	if err != nil {
 		return nil, err
+	}
+	if session.SessionDir != nil && *session.SessionDir != "" {
+		if _, err := sessionapi.RepairFinalizedEpochEvents(*session.SessionDir); err != nil {
+			return nil, fmt.Errorf(
+				"record session %s stop finalization: %w",
+				session.SessionID,
+				err,
+			)
+		}
+		return s.FileStore.Get(id)
 	}
 	return session, nil
 }

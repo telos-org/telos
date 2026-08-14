@@ -17,6 +17,7 @@ import (
 
 var ErrWorkerNotRunning = errors.New("worker is not running")
 var ErrWorkerAlreadyRunning = errors.New("worker is already running")
+var ErrSessionStopped = errors.New("session is stopped")
 
 type Ownership struct {
 	file *os.File
@@ -397,8 +398,10 @@ func StartEpoch(sessionDir string, manifest *sessionapi.Manifest) (int, error) {
 
 func StartEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid int, logPath string) (int, error) {
 	var epochID int
-	identity := epochIdentity(manifest)
 	_, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(m *sessionapi.Manifest) error {
+		if m.IsStopped() {
+			return ErrSessionStopped
+		}
 		if open := m.OpenEpoch(); open != nil {
 			epochID = open.ID
 			return nil
@@ -408,90 +411,19 @@ func StartEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid 
 		if logPath != "" {
 			runner.LogPath = logPath
 		}
-		m.Epochs = append(m.Epochs, sessionapi.Epoch{
-			ID:              epochID,
-			StartedAt:       time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-			Runner:          &runner,
-			SpecName:        identity.specName,
-			SpecVersion:     identity.specVersion,
-			Revision:        identity.revision,
-			PackageDigest:   identity.packageDigest,
-			SpecSHA256:      identity.specSHA256,
-			FinalizationKey: fmt.Sprintf("%s:epoch:%08d:finalized", identity.sessionID, epochID),
-			WorkerCapabilities: []string{
-				sessionapi.CapabilityEpochFinalizedEventsV1,
-			},
-		})
+		epoch := sessionapi.Epoch{
+			ID:        epochID,
+			StartedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+			Runner:    &runner,
+		}
+		sessionapi.BindEpochFinalizationIdentity(manifest, &epoch)
+		m.Epochs = append(m.Epochs, epoch)
 		return nil
 	})
 	if err != nil {
 		return 0, fmt.Errorf("start epoch: %w", err)
 	}
 	return epochID, nil
-}
-
-type epochRunIdentity struct {
-	sessionID     string
-	specName      string
-	specVersion   *int
-	revision      *string
-	packageDigest *string
-	specSHA256    string
-}
-
-func epochIdentity(manifest *sessionapi.Manifest) epochRunIdentity {
-	if manifest == nil {
-		return epochRunIdentity{}
-	}
-	identity := epochRunIdentity{
-		sessionID:     manifest.SessionID,
-		specName:      manifest.SpecName,
-		specVersion:   cloneInt(manifest.CurrentSpecVersion),
-		revision:      cloneString(manifest.CurrentRevision),
-		packageDigest: cloneString(manifest.PackageDigest),
-	}
-	if manifest.CurrentSpecVersion == nil {
-		return identity
-	}
-	for _, version := range manifest.SpecVersions {
-		if mapInt(version, "version") == *manifest.CurrentSpecVersion {
-			identity.specSHA256 = mapString(version, "spec_sha256")
-			break
-		}
-	}
-	return identity
-}
-
-func cloneInt(value *int) *int {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
-}
-
-func cloneString(value *string) *string {
-	if value == nil {
-		return nil
-	}
-	copy := *value
-	return &copy
-}
-
-func mapInt(values map[string]any, key string) int {
-	switch value := values[key].(type) {
-	case int:
-		return value
-	case float64:
-		return int(value)
-	default:
-		return 0
-	}
-}
-
-func mapString(values map[string]any, key string) string {
-	value, _ := values[key].(string)
-	return value
 }
 
 func RunnerIdentity(pid int) sessionapi.Runner {

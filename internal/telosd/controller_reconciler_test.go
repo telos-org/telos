@@ -183,6 +183,75 @@ func TestRootWorkerReconciliationRepairsFinalizationOutboxAfterWorkerExit(t *tes
 	}
 }
 
+func TestRootWorkerReconciliationRepairsStoppedSessionWithoutRestart(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{}
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.SessionDir == nil {
+		t.Fatal("session dir is missing")
+	}
+	_, err = sessionapi.MutateManifest(
+		filepath.Join(*session.SessionDir, "session.json"),
+		func(manifest *sessionapi.Manifest) error {
+			finishedAt := "2026-08-14T12:00:00.000Z"
+			stopped := "stopped"
+			stoppedErr := "stopped by operator"
+			epoch := sessionapi.Epoch{
+				ID:         1,
+				StartedAt:  "2026-08-14T11:59:00.000Z",
+				FinishedAt: &finishedAt,
+				Result:     &stopped,
+				Error:      &stoppedErr,
+			}
+			sessionapi.BindEpochFinalizationIdentity(manifest, &epoch)
+			manifest.Epochs = append(manifest.Epochs, epoch)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	substrate.applies = nil
+
+	if err := store.ensureRootWorkers("worker_supervision"); err != nil {
+		t.Fatal(err)
+	}
+	if len(substrate.applies) != 0 {
+		t.Fatalf("stopped finalization repair restarted worker: %#v", substrate.applies)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(*session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !manifest.LastEpoch().FinalizationEventEmitted {
+		t.Fatal("stopped finalization outbox marker was not persisted")
+	}
+	events, err := base.Events(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalized := 0
+	for _, event := range events {
+		if event.Event == "epoch_finalized" {
+			finalized++
+		}
+	}
+	if finalized != 1 {
+		t.Fatalf("epoch_finalized events: got %d want 1", finalized)
+	}
+	if err := store.ensureRootWorkers("worker_supervision"); err != nil {
+		t.Fatal(err)
+	}
+	if len(substrate.applies) != 0 {
+		t.Fatalf("repeated repair restarted worker: %#v", substrate.applies)
+	}
+}
+
 func TestControllerReconcilerDefaultsSpecPutCreatedSessions(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
 	substrate := &recordingSubstrate{}

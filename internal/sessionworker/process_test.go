@@ -135,6 +135,39 @@ func TestStartEpochBindsProvidedRevisionIdentity(t *testing.T) {
 	}
 }
 
+func TestStartEpochDoesNotAppendAfterSessionStops(t *testing.T) {
+	sessionDir := t.TempDir()
+	manifest := &sessionapi.Manifest{
+		SessionID:   "sess-stopped",
+		SessionKind: sessionapi.KindController,
+		SpecName:    "controller",
+	}
+	stopped := "stopped"
+	finishedAt := "2026-08-14T12:00:00.000Z"
+	epoch := sessionapi.Epoch{
+		ID:         1,
+		StartedAt:  finishedAt,
+		FinishedAt: &finishedAt,
+		Result:     &stopped,
+	}
+	sessionapi.BindEpochFinalizationIdentity(manifest, &epoch)
+	manifest.Epochs = append(manifest.Epochs, epoch)
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := StartEpochWithRunner(sessionDir, manifest, os.Getpid(), ""); !errors.Is(err, ErrSessionStopped) {
+		t.Fatalf("StartEpochWithRunner error: got %v want %v", err, ErrSessionStopped)
+	}
+	updated, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(updated.Epochs) != 1 {
+		t.Fatalf("epochs: got %d want 1", len(updated.Epochs))
+	}
+}
+
 func TestRunnerIdentityAdvertisesFinalizationCapability(t *testing.T) {
 	runner := RunnerIdentity(42)
 	if !runnerSupportsCapability(&runner, sessionapi.CapabilityEpochFinalizedEventsV1) {

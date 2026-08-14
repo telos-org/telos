@@ -779,7 +779,10 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 			result = epoch.Result
 		}
 		if result != nil && *result == "stopped" {
-			continue
+			last := manifest.LastEpoch()
+			if !epochFinalizationPending(last) {
+				continue
+			}
 		}
 		kind := manifest.SessionKind
 		sessionDir := fs.sessionDir(entry.Name())
@@ -823,7 +826,17 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	}
 
 	s, _ := fs.deriveSession(id, m)
-	if s.Status.IsTerminal() {
+	if s.Status.IsTerminal() && s.Status != StatusStale {
+		if m.IsStopped() {
+			if _, repairErr := RepairFinalizedEpochEvents(fs.sessionDir(id)); repairErr != nil {
+				return nil, fmt.Errorf("repair stopped epoch finalization: %w", repairErr)
+			}
+			m, err = ReadManifest(fs.manifestPath(id))
+			if err != nil {
+				return nil, err
+			}
+			return fs.deriveSession(id, m)
+		}
 		return s, nil
 	}
 
@@ -836,31 +849,81 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		runner = &copy
 	}
 
+	createdSyntheticEpoch := false
 	m, err = MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
 		now := tsNow()
 		stopped := "stopped"
 		stoppedErr := "stopped by operator"
+		completionReason := "stopped"
+		conceded := false
+		checkpointSaved := false
+		roundCount := 0
 
-		if len(m.Epochs) == 0 {
-			m.Epochs = append(m.Epochs, Epoch{
-				ID:         1,
-				StartedAt:  now,
-				FinishedAt: &now,
-				Result:     &stopped,
-				Error:      &stoppedErr,
-			})
-		} else {
-			last := &m.Epochs[len(m.Epochs)-1]
-			last.FinishedAt = &now
-			last.Result = &stopped
-			last.Error = &stoppedErr
+		if m.IsStopped() {
+			return nil
 		}
+		if open := m.OpenEpoch(); open != nil {
+			open.FinishedAt = &now
+			open.Result = &stopped
+			open.Error = &stoppedErr
+			open.CompletionReason = &completionReason
+			if open.VerifierConceded == nil {
+				open.VerifierConceded = &conceded
+			}
+			if open.CheckpointSaved == nil {
+				open.CheckpointSaved = &checkpointSaved
+			}
+			if open.RoundCount == nil {
+				open.RoundCount = &roundCount
+			}
+			if open.FinalizationKey == "" {
+				epoch := Epoch{
+					ID:               len(m.Epochs) + 1,
+					StartedAt:        now,
+					FinishedAt:       &now,
+					Result:           &stopped,
+					Error:            &stoppedErr,
+					CompletionReason: &completionReason,
+					VerifierConceded: &conceded,
+					CheckpointSaved:  &checkpointSaved,
+					RoundCount:       &roundCount,
+				}
+				BindEpochFinalizationIdentity(m, &epoch)
+				m.Epochs = append(m.Epochs, epoch)
+				createdSyntheticEpoch = true
+			}
+			return nil
+		}
+
+		epoch := Epoch{
+			ID:               len(m.Epochs) + 1,
+			StartedAt:        now,
+			FinishedAt:       &now,
+			Result:           &stopped,
+			Error:            &stoppedErr,
+			CompletionReason: &completionReason,
+			VerifierConceded: &conceded,
+			CheckpointSaved:  &checkpointSaved,
+			RoundCount:       &roundCount,
+		}
+		BindEpochFinalizationIdentity(m, &epoch)
+		m.Epochs = append(m.Epochs, epoch)
+		createdSyntheticEpoch = true
 		return nil
 	})
 	if err != nil {
 		return nil, err
 	}
 	terminateRunner(runner)
+	if createdSyntheticEpoch {
+		if _, repairErr := RepairFinalizedEpochEvents(fs.sessionDir(id)); repairErr != nil {
+			return nil, fmt.Errorf("record stopped epoch finalization: %w", repairErr)
+		}
+		m, err = ReadManifest(fs.manifestPath(id))
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	return fs.deriveSession(id, m)
 }
@@ -907,6 +970,13 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
 		}
+		return nil, err
+	}
+	if _, err := RepairFinalizedEpochEvents(fs.sessionDir(id)); err != nil {
+		return nil, fmt.Errorf("repair epoch finalization: %w", err)
+	}
+	m, err = ReadManifest(fs.manifestPath(id))
+	if err != nil {
 		return nil, err
 	}
 

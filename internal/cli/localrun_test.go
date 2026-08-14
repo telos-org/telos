@@ -1068,7 +1068,7 @@ func TestReconcileFinalizedEpochEventRepairsCrashGapOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if appended, err := reconcileFinalizedEpochEvents(session.SessionDir, manifest); err != nil || appended {
+	if appended, err := sessionapi.EmitFinalizedEpochEvents(session.SessionDir, manifest); err != nil || appended {
 		t.Fatalf("idempotent repair: %v", err)
 	}
 	store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
@@ -1122,7 +1122,7 @@ func TestReconcileHistoricalFinalizationDoesNotRepairLatestEpoch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	repairedLatest, err := reconcileFinalizedEpochEvents(dir, manifest)
+	repairedLatest, err := sessionapi.EmitFinalizedEpochEvents(dir, manifest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1135,6 +1135,64 @@ func TestReconcileHistoricalFinalizationDoesNotRepairLatestEpoch(t *testing.T) {
 	}
 	if !updated.Epochs[0].FinalizationEventEmitted {
 		t.Fatal("historical epoch finalization marker was not persisted")
+	}
+}
+
+func TestFinishEpochMergesCheckpointIntoOriginalLegacyEpoch(t *testing.T) {
+	dir := t.TempDir()
+	finishedAt := "2026-08-14T12:00:00.000Z"
+	stopped := "stopped"
+	checkpointSaved := false
+	manifest := &sessionapi.Manifest{
+		SessionID:   "sess-stop-race",
+		SessionKind: sessionapi.KindController,
+		Epochs: []sessionapi.Epoch{
+			{
+				ID:              1,
+				StartedAt:       "2026-08-14T11:59:00.000Z",
+				FinishedAt:      &finishedAt,
+				Result:          &stopped,
+				CheckpointSaved: &checkpointSaved,
+			},
+			{
+				ID:              2,
+				StartedAt:       finishedAt,
+				FinishedAt:      &finishedAt,
+				Result:          &stopped,
+				CheckpointSaved: &checkpointSaved,
+				FinalizationKey: "sess-stop-race:epoch:00000002:finalized",
+			},
+		},
+	}
+	if err := sessionapi.WriteManifest(manifestPath(dir), manifest); err != nil {
+		t.Fatal(err)
+	}
+	checkpointPath := filepath.Join(dir, "checkpoint.tar")
+	if err := os.WriteFile(checkpointPath, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := finishEpoch(dir, 1, &game.PVGResult{
+		GameResult:              game.GameStopped,
+		Rounds:                  3,
+		WorkspaceCheckpointPath: checkpointPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := sessionapi.ReadManifest(manifestPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := updated.Epochs[0]
+	if legacy.CheckpointSaved == nil || !*legacy.CheckpointSaved || legacy.CheckpointBytes == nil || *legacy.CheckpointBytes != 4 {
+		t.Fatalf("legacy checkpoint metadata was not merged: %#v", legacy)
+	}
+	if legacy.RoundCount == nil || *legacy.RoundCount != 3 {
+		t.Fatalf("legacy round count: %#v", legacy.RoundCount)
+	}
+	synthetic := updated.Epochs[1]
+	if synthetic.CheckpointSaved == nil || *synthetic.CheckpointSaved || synthetic.CheckpointBytes != nil {
+		t.Fatalf("synthetic stop absorbed legacy checkpoint: %#v", synthetic)
 	}
 }
 
@@ -1588,6 +1646,40 @@ func TestRunLocalSessionStopsWhenManifestIsStopped(t *testing.T) {
 	}
 	if sessionAPI.Status != sessionapi.StatusStopped {
 		t.Fatalf("status: got %s", sessionAPI.Status)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch := manifest.LastEpoch()
+	if epoch == nil || epoch.CheckpointSaved == nil || !*epoch.CheckpointSaved {
+		t.Fatalf("stopped epoch lost checkpoint metadata: %#v", epoch)
+	}
+	if epoch.CheckpointBytes == nil || *epoch.CheckpointBytes != 4 {
+		t.Fatalf("stopped epoch checkpoint bytes: %#v", epoch.CheckpointBytes)
+	}
+	if !epoch.FinalizationEventEmitted {
+		t.Fatal("stopped epoch finalization marker was not persisted")
+	}
+	events, err := store.Events(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalized := 0
+	for _, event := range events {
+		if event.Event != "epoch_finalized" {
+			continue
+		}
+		finalized++
+		if event.Data["result"] != "stopped" || event.Data["checkpoint_saved"] != true {
+			t.Fatalf("unexpected stopped finalization: %#v", event.Data)
+		}
+		if event.Data["checkpoint_bytes"] != float64(4) {
+			t.Fatalf("unexpected stopped checkpoint bytes: %#v", event.Data)
+		}
+	}
+	if finalized != 1 {
+		t.Fatalf("epoch_finalized events: got %d want 1", finalized)
 	}
 }
 
