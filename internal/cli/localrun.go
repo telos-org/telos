@@ -4,6 +4,7 @@ package cli
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -169,6 +170,18 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if err != nil {
 		return nil, fmt.Errorf("read session manifest: %w", err)
 	}
+	repairedFinalization, err := sessionapi.EmitFinalizedEpochEvents(
+		sessionDir,
+		manifest,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("reconcile epoch finalization events: %w", err)
+	}
+	if repairedFinalization {
+		if epoch := manifest.LastEpoch(); epoch != nil && epoch.FinishedAt != nil {
+			return resultFromEpoch(epoch), nil
+		}
+	}
 	if manifest.IsStopped() {
 		return &game.PVGResult{GameResult: game.GameStopped, Error: "stopped by operator"}, nil
 	}
@@ -181,7 +194,6 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if sessionSpecPath == nil || *sessionSpecPath == "" {
 		return nil, fmt.Errorf("manifest spec missing session_spec_path")
 	}
-
 	// Resolve the session's copied spec against the original spec's directory
 	// so relative `extends` and `skills` paths point at real files on disk
 	// rather than the session's `specs/<name>/` copy.
@@ -189,7 +201,12 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if manifest.SourceSpecPath != nil && *manifest.SourceSpecPath != "" {
 		specBaseDir = filepath.Dir(*manifest.SourceSpecPath)
 	}
-	compiled, err := spec.CompileEnvironmentWithBase(*sessionSpecPath, specBaseDir)
+	compileSpecPath, specBaseDir := boundSpecPaths(
+		manifest,
+		*sessionSpecPath,
+		specBaseDir,
+	)
+	compiled, err := spec.CompileEnvironmentWithBase(compileSpecPath, specBaseDir)
 	if err != nil {
 		return nil, err
 	}
@@ -204,6 +221,18 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 
 	epochID, err := sessionworker.StartEpoch(sessionDir, manifest)
 	if err != nil {
+		if errors.Is(err, sessionworker.ErrSessionStopped) {
+			if _, eventErr := sessionapi.EmitFinalizedEpochEventsFromDisk(sessionDir); eventErr != nil {
+				return nil, fmt.Errorf(
+					"record stopped epoch finalization: %w",
+					eventErr,
+				)
+			}
+			return &game.PVGResult{
+				GameResult: game.GameStopped,
+				Error:      "stopped by operator",
+			}, nil
+		}
 		return nil, err
 	}
 
@@ -214,8 +243,11 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		agentExec, err = createAgentExecutor(workspace, cfg)
 		if err != nil {
 			fail := &game.PVGResult{GameResult: game.GameFailure, Error: err.Error()}
-			if finishErr := finishEpoch(sessionDir, manifest, fail); finishErr != nil {
+			if finishErr := finishEpoch(sessionDir, epochID, fail); finishErr != nil {
 				return nil, fmt.Errorf("%w; also failed to finish epoch: %v", err, finishErr)
+			}
+			if _, eventErr := sessionapi.EmitFinalizedEpochEventsFromDisk(sessionDir); eventErr != nil {
+				return nil, fmt.Errorf("%w; also failed to record epoch finalization: %v", err, eventErr)
 			}
 			return nil, err
 		}
@@ -228,7 +260,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		Verbose:         true,
 		EpochID:         epochID,
 		IsController:    controllerPromptEnabled(manifest),
-		PrimarySpecPath: primarySpecPath(manifest, sessionSpecPath),
+		PrimarySpecPath: compileSpecPath,
 		StopRequested:   func() bool { return sessionStopped(sessionDir) },
 	}
 
@@ -236,8 +268,11 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	result := pvg.Run()
 
 	// Close epoch
-	if err := finishEpoch(sessionDir, manifest, result); err != nil {
+	if err := finishEpoch(sessionDir, epochID, result); err != nil {
 		return result, err
+	}
+	if _, err := sessionapi.EmitFinalizedEpochEventsFromDisk(sessionDir); err != nil {
+		return result, fmt.Errorf("record epoch finalization: %w", err)
 	}
 	if manifest.SessionKind != sessionapi.KindController {
 		if err := cleanupSessionWorkspace(sessionDir, result.WorkspaceCheckpointPath); err != nil {
@@ -246,6 +281,87 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	return result, nil
+}
+
+func boundSpecPaths(manifest *sessionapi.Manifest, fallbackPath, fallbackBase string) (string, string) {
+	versionNumber := boundSpecVersion(manifest)
+	if versionNumber == nil {
+		return fallbackPath, fallbackBase
+	}
+	for _, version := range manifest.SpecVersions {
+		if numericMapValue(version, "version") != *versionNumber {
+			continue
+		}
+		if path, _ := version["spec_path"].(string); path != "" {
+			fallbackPath = path
+		}
+		if packageSpec, _ := version["package_spec_path"].(string); packageSpec != "" {
+			fallbackBase = filepath.Dir(packageSpec)
+		}
+		return fallbackPath, fallbackBase
+	}
+	return fallbackPath, fallbackBase
+}
+
+func boundSpecVersion(manifest *sessionapi.Manifest) *int {
+	if manifest == nil {
+		return nil
+	}
+	if open := manifest.OpenEpoch(); open != nil && open.SpecVersion != nil {
+		return open.SpecVersion
+	}
+	return manifest.CurrentSpecVersion
+}
+
+func numericMapValue(values map[string]any, key string) int {
+	switch value := values[key].(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+func resultFromEpoch(epoch *sessionapi.Epoch) *game.PVGResult {
+	result := &game.PVGResult{
+		SystemName:              epoch.SpecName,
+		Rounds:                  intValue(epoch.RoundCount),
+		VerifierConceded:        boolValue(epoch.VerifierConceded),
+		CompletionReason:        stringValue(epoch.CompletionReason),
+		Error:                   stringValue(epoch.Error),
+		WorkspaceCheckpointPath: stringValue(epoch.CheckpointPath),
+	}
+	if epoch.Result != nil {
+		switch *epoch.Result {
+		case "completed":
+			result.GameResult = game.GameSuccess
+		case "stopped":
+			result.GameResult = game.GameStopped
+		default:
+			result.GameResult = game.GameFailure
+		}
+	}
+	return result
+}
+
+func stringValue(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+func intValue(value *int) int {
+	if value == nil {
+		return 0
+	}
+	return *value
+}
+
+func boolValue(value *bool) bool {
+	return value != nil && *value
 }
 
 func controllerPromptEnabled(manifest *sessionapi.Manifest) bool {
@@ -330,16 +446,6 @@ func validatePiModel(model string) error {
 		}
 	}
 	return fmt.Errorf("pi model %q is not configured: provider %q exists in ~/.pi/agent/models.json, but model id %q was not found; choose one with `telos run SPEC.md --model <provider>/<model-id>` or set `TELOS_MODEL=<provider>/<model-id>`", model, providerName, modelID)
-}
-
-func primarySpecPath(manifest *sessionapi.Manifest, fallback *string) string {
-	if manifest != nil && manifest.SessionSpecPath != nil && *manifest.SessionSpecPath != "" {
-		return *manifest.SessionSpecPath
-	}
-	if fallback != nil {
-		return *fallback
-	}
-	return ""
 }
 
 func newSessionDir(root string) (string, error) {
@@ -552,36 +658,52 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	return lrc
 }
 
-func finishEpoch(sessionDir string, manifest *sessionapi.Manifest, result *game.PVGResult) error {
+func finishEpoch(sessionDir string, epochID int, result *game.PVGResult) error {
 	_, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(manifest *sessionapi.Manifest) error {
-		if manifest.IsStopped() && result.GameResult != game.GameStopped {
-			return nil
+		var epoch *sessionapi.Epoch
+		for i := range manifest.Epochs {
+			if manifest.Epochs[i].ID == epochID {
+				epoch = &manifest.Epochs[i]
+				break
+			}
 		}
-		last := manifest.LastEpoch()
-		if last == nil {
-			return nil
+		if epoch == nil {
+			return fmt.Errorf("epoch %d not found", epochID)
 		}
+		externallyStopped := epoch.Result != nil && *epoch.Result == "stopped"
 		finishedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-		last.FinishedAt = &finishedAt
+		epoch.FinishedAt = &finishedAt
+		if !externallyStopped {
+			epoch.CompletionReason = stringPtr(result.CompletionReason)
+			epoch.VerifierConceded = boolPtr(result.VerifierConceded)
+		}
+		epoch.RoundCount = intPtr(result.Rounds)
+		checkpointSaved := result.WorkspaceCheckpointPath != ""
+		epoch.CheckpointSaved = &checkpointSaved
+		epoch.CheckpointPath = stringPtr(result.WorkspaceCheckpointPath)
+		epoch.CheckpointBytes = fileSize(result.WorkspaceCheckpointPath)
+		if externallyStopped {
+			return nil
+		}
 
 		switch result.GameResult {
 		case game.GameSuccess:
 			completed := "completed"
-			last.Result = &completed
+			epoch.Result = &completed
 		case game.GameFailure:
 			failed := "failed"
-			last.Result = &failed
+			epoch.Result = &failed
 			if result.Error != "" {
-				last.Error = &result.Error
+				epoch.Error = &result.Error
 			}
 		case game.GameStopped:
 			stopped := "stopped"
-			last.Result = &stopped
+			epoch.Result = &stopped
 			if result.Error != "" {
-				last.Error = &result.Error
+				epoch.Error = &result.Error
 			} else {
 				err := "stopped by operator"
-				last.Error = &err
+				epoch.Error = &err
 			}
 		}
 		return nil
@@ -590,6 +712,33 @@ func finishEpoch(sessionDir string, manifest *sessionapi.Manifest, result *game.
 		return fmt.Errorf("finish epoch: %w", err)
 	}
 	return nil
+}
+
+func stringPtr(value string) *string {
+	if value == "" {
+		return nil
+	}
+	return &value
+}
+
+func boolPtr(value bool) *bool {
+	return &value
+}
+
+func intPtr(value int) *int {
+	return &value
+}
+
+func fileSize(path string) *int64 {
+	if path == "" {
+		return nil
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return nil
+	}
+	size := info.Size()
+	return &size
 }
 
 func sessionStopped(sessionDir string) bool {

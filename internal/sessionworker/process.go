@@ -6,6 +6,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,6 +17,7 @@ import (
 
 var ErrWorkerNotRunning = errors.New("worker is not running")
 var ErrWorkerAlreadyRunning = errors.New("worker is already running")
+var ErrSessionStopped = errors.New("session is stopped")
 
 type Ownership struct {
 	file *os.File
@@ -62,7 +66,131 @@ func StartWithOptions(sessionDir string, opts StartOptions) error {
 	if err := cmd.Start(); err != nil {
 		return fmt.Errorf("start worker: %w", err)
 	}
+	go func() {
+		// Detached workers are supervised through their runner lock and manifest,
+		// but the spawning process must still reap the OS child handle.
+		_ = cmd.Wait()
+	}()
 	return nil
+}
+
+// EnsureStartedWithOptions ensures the active worker implements the current
+// durable lifecycle contract. It asks a pre-capability detached worker left
+// across an API-binary rollout to retire after its current cycle, and launches
+// only when no process owns the runner lock. Concurrent launchers remain safe
+// because the worker performs the authoritative ownership check at startup.
+func EnsureStartedWithOptions(sessionDir string, opts StartOptions) error {
+	alive, err := workerAlive(sessionDir)
+	if err != nil {
+		return err
+	}
+	if alive {
+		manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+		if err != nil {
+			return fmt.Errorf("read active worker identity: %w", err)
+		}
+		if runnerSupportsCapability(
+			manifest.Runner,
+			sessionapi.CapabilityEpochFinalizedEventsV1,
+		) {
+			return nil
+		}
+		if manifest.OpenEpoch() != nil {
+			return nil
+		}
+		return requestWorkerRetirement(sessionDir, manifest.Runner)
+	}
+	return StartWithOptions(sessionDir, opts)
+}
+
+func requestWorkerRetirement(sessionDir string, expected *sessionapi.Runner) error {
+	if expected == nil {
+		return nil
+	}
+	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err != nil {
+		return fmt.Errorf("revalidate legacy worker identity: %w", err)
+	}
+	if !sameRunnerIdentity(expected, manifest.Runner) {
+		return nil
+	}
+	if manifest.OpenEpoch() != nil {
+		// The legacy worker may have opened its next epoch after the supervisor's
+		// first idle check. Let it finish rather than interrupting active work.
+		return nil
+	}
+	pid, ok := expected.ProcessID()
+	if !ok || pid == os.Getpid() {
+		return nil
+	}
+	argv, err := processArgv(pid)
+	if err != nil || !workerArgvMatchesSession(argv, sessionDir) {
+		// Failing closed keeps legacy polling active rather than risking a
+		// signal to a recycled PID during a runner-lock handoff.
+		return nil
+	}
+	// SIGTERM is cooperative: the legacy worker finishes an in-flight agent
+	// cycle, then observes its stop channel before the next one. Unlike Stop,
+	// rollout retirement signals only the worker (not its agent process group)
+	// and never escalates to SIGKILL.
+	if err := syscall.Kill(pid, syscall.SIGTERM); err == nil {
+		return nil
+	} else if !errors.Is(err, syscall.ESRCH) {
+		return fmt.Errorf("retire legacy worker process %d: %w", pid, err)
+	}
+	return nil
+}
+
+func processArgv(pid int) ([]string, error) {
+	if runtime.GOOS != "linux" {
+		return nil, fmt.Errorf("process argv inspection is unsupported on %s", runtime.GOOS)
+	}
+	contents, err := os.ReadFile(filepath.Join("/proc", strconv.Itoa(pid), "cmdline"))
+	if err != nil {
+		return nil, err
+	}
+	parts := strings.Split(string(contents), "\x00")
+	if len(parts) > 0 && parts[len(parts)-1] == "" {
+		parts = parts[:len(parts)-1]
+	}
+	return parts, nil
+}
+
+func workerArgvMatchesSession(argv []string, sessionDir string) bool {
+	if len(argv) == 0 || sessionDir == "" || filepath.Base(argv[0]) != "telosd" {
+		return false
+	}
+	for index := 1; index < len(argv); index++ {
+		if argv[index] == "--session-dir" {
+			return index+1 < len(argv) && argv[index+1] == sessionDir
+		}
+		if argv[index] == "--session-dir="+sessionDir {
+			return true
+		}
+	}
+	return false
+}
+
+func sameRunnerIdentity(left, right *sessionapi.Runner) bool {
+	if left == nil || right == nil {
+		return left == right
+	}
+	return left.PID == right.PID &&
+		left.PGID == right.PGID &&
+		left.StartedAt == right.StartedAt &&
+		left.Kind == right.Kind
+}
+
+func runnerSupportsCapability(runner *sessionapi.Runner, capability string) bool {
+	if runner == nil {
+		return false
+	}
+	for _, candidate := range runner.WorkerCapabilities {
+		if candidate == capability {
+			return true
+		}
+	}
+	return false
 }
 
 func Env(sessionDir string, opts StartOptions) []string {
@@ -271,6 +399,9 @@ func StartEpoch(sessionDir string, manifest *sessionapi.Manifest) (int, error) {
 func StartEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid int, logPath string) (int, error) {
 	var epochID int
 	_, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(m *sessionapi.Manifest) error {
+		if m.IsStopped() {
+			return ErrSessionStopped
+		}
 		if open := m.OpenEpoch(); open != nil {
 			epochID = open.ID
 			return nil
@@ -280,11 +411,13 @@ func StartEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid 
 		if logPath != "" {
 			runner.LogPath = logPath
 		}
-		m.Epochs = append(m.Epochs, sessionapi.Epoch{
+		epoch := sessionapi.Epoch{
 			ID:        epochID,
 			StartedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 			Runner:    &runner,
-		})
+		}
+		sessionapi.BindEpochFinalizationIdentity(manifest, &epoch)
+		m.Epochs = append(m.Epochs, epoch)
 		return nil
 	})
 	if err != nil {
@@ -299,6 +432,9 @@ func RunnerIdentity(pid int) sessionapi.Runner {
 		PID:       pid,
 		PGID:      pid,
 		StartedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		WorkerCapabilities: []string{
+			sessionapi.CapabilityEpochFinalizedEventsV1,
+		},
 	}
 }
 

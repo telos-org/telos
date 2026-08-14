@@ -25,7 +25,7 @@ func (s localProcessSubstrate) Apply(session *sessionapi.Session, wakeReason str
 	if sessionDir == "" {
 		return fmt.Errorf("session %s has no session_dir", session.SessionID)
 	}
-	return sessionworker.StartWithOptions(sessionDir, sessionworker.StartOptions{
+	return sessionworker.EnsureStartedWithOptions(sessionDir, sessionworker.StartOptions{
 		Runtime:    sessionapi.RuntimeCloud,
 		WakeReason: wakeReason,
 	})

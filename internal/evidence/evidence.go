@@ -2,6 +2,7 @@
 package evidence
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -41,16 +42,24 @@ func New(systemName string, path string, sessionID string, epochID int) *Evidenc
 	}
 }
 
-// Log writes a single evidence event.
+// Log writes a single best-effort evidence event. Lifecycle events that must
+// be durable use log directly and return its error to the session worker.
 func (e *Evidence) Log(event string, roundNum int, role string, data map[string]interface{}) {
+	_, _ = e.log(event, roundNum, role, data, "")
+}
+
+func (e *Evidence) log(event string, roundNum int, role string, data map[string]interface{}, dedupeKey string) (bool, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	lock, err := lockEvidenceFile(e.Path)
 	if err != nil {
-		return
+		return false, err
 	}
 	defer unlockEvidenceFile(lock)
+	if dedupeKey != "" && hasFinalizationKey(e.Path, dedupeKey) {
+		return false, nil
+	}
 
 	if lastSeq := lastEventSeq(e.Path); lastSeq > e.eventSeq {
 		e.eventSeq = lastSeq
@@ -74,15 +83,43 @@ func (e *Evidence) Log(event string, roundNum int, role string, data map[string]
 		record["data"] = map[string]interface{}{}
 	}
 
-	line, _ := json.Marshal(record)
+	line, err := json.Marshal(record)
+	if err != nil {
+		return false, err
+	}
 	f, err := os.OpenFile(e.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return
+		return false, err
 	}
 	defer f.Close()
-	f.Write(line)
-	f.Write([]byte("\n"))
-	f.Sync()
+	line = append(line, '\n')
+	if needsLeadingNewline(e.Path) {
+		line = append([]byte{'\n'}, line...)
+	}
+	if _, err := f.Write(line); err != nil {
+		return false, err
+	}
+	if err := f.Sync(); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func needsLeadingNewline(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil || info.Size() == 0 {
+		return false
+	}
+	last := []byte{0}
+	if _, err := f.ReadAt(last, info.Size()-1); err != nil {
+		return false
+	}
+	return last[0] != '\n'
 }
 
 // LogAgent logs an agent completion event.
@@ -123,6 +160,55 @@ func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRound
 	})
 }
 
+// EpochFinalized is the immutable lifecycle record for one completed worker
+// epoch. Package and spec identity describe the inputs bound when the epoch
+// started, not mutable session state observed after it finished.
+type EpochFinalized struct {
+	EpochID          int
+	SpecName         string
+	SpecVersion      *int
+	Revision         string
+	PackageDigest    string
+	SpecSHA256       string
+	EpochStartedAt   string
+	EpochFinishedAt  string
+	Result           string
+	GameResult       string
+	CompletionReason string
+	VerifierConceded bool
+	CheckpointSaved  bool
+	CheckpointPath   string
+	CheckpointBytes  *int64
+	FinalizationKey  string
+	Error            string
+}
+
+// LogEpochFinalized durably and idempotently appends an epoch_finalized event.
+func (e *Evidence) LogEpochFinalized(roundNum int, finalized EpochFinalized) (bool, error) {
+	data := map[string]interface{}{
+		"epoch_id":          finalized.EpochID,
+		"spec_name":         finalized.SpecName,
+		"spec_version":      finalized.SpecVersion,
+		"revision":          finalized.Revision,
+		"package_digest":    finalized.PackageDigest,
+		"spec_sha256":       finalized.SpecSHA256,
+		"epoch_started_at":  finalized.EpochStartedAt,
+		"epoch_finished_at": finalized.EpochFinishedAt,
+		"result":            finalized.Result,
+		"game_result":       finalized.GameResult,
+		"completion_reason": finalized.CompletionReason,
+		"verifier_conceded": finalized.VerifierConceded,
+		"checkpoint_saved":  finalized.CheckpointSaved,
+		"checkpoint_path":   finalized.CheckpointPath,
+		"finalization_key":  finalized.FinalizationKey,
+		"error":             finalized.Error,
+	}
+	if finalized.CheckpointBytes != nil {
+		data["checkpoint_bytes"] = *finalized.CheckpointBytes
+	}
+	return e.log("epoch_finalized", roundNum, "system", data, finalized.FinalizationKey)
+}
+
 // LogWorkspaceCheckpoint logs a workspace checkpoint event.
 func (e *Evidence) LogWorkspaceCheckpoint(roundNum int, path string) {
 	data := map[string]interface{}{"path": path}
@@ -139,24 +225,69 @@ func (e *Evidence) LogWorkspaceCheckpoint(roundNum int, path string) {
 func (e *Evidence) Close() {}
 
 func lastEventSeq(path string) int {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return 0
-	}
-	lines := splitLines(string(data))
-	for i := len(lines) - 1; i >= 0; i-- {
-		if lines[i] == "" {
-			continue
+	seq := 0
+	visitEvidenceLinesReverse(path, func(record map[string]interface{}) bool {
+		value, ok := record["event_seq"].(float64)
+		if !ok {
+			return false
 		}
-		var m map[string]interface{}
-		if json.Unmarshal([]byte(lines[i]), &m) == nil {
-			if seq, ok := m["event_seq"].(float64); ok {
-				return int(seq)
+		seq = int(value)
+		return true
+	})
+	return seq
+}
+
+func hasFinalizationKey(path string, key string) bool {
+	found := false
+	visitEvidenceLinesReverse(path, func(record map[string]interface{}) bool {
+		payload, _ := record["data"].(map[string]interface{})
+		if value, _ := payload["finalization_key"].(string); value == key {
+			found = true
+			return true
+		}
+		return false
+	})
+	return found
+}
+
+func visitEvidenceLinesReverse(path string, visit func(map[string]interface{}) bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return
+	}
+	const chunkSize int64 = 64 * 1024
+	end := info.Size()
+	var carry []byte
+	for end > 0 {
+		start := max(end-chunkSize, 0)
+		chunk := make([]byte, end-start)
+		if _, err := f.ReadAt(chunk, start); err != nil {
+			return
+		}
+		combined := append(chunk, carry...)
+		lines := bytes.Split(combined, []byte{'\n'})
+		firstComplete := 0
+		if start > 0 {
+			firstComplete = 1
+		}
+		for i := len(lines) - 1; i >= firstComplete; i-- {
+			line := bytes.TrimSpace(lines[i])
+			if len(line) == 0 {
+				continue
+			}
+			var record map[string]interface{}
+			if json.Unmarshal(line, &record) == nil && visit(record) {
+				return
 			}
 		}
-		break
+		carry = append([]byte(nil), lines[0]...)
+		end = start
 	}
-	return 0
 }
 
 func splitLines(s string) []string {

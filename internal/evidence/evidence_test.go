@@ -179,6 +179,82 @@ func TestEvidenceLogGameEnd(t *testing.T) {
 	}
 }
 
+func TestEpochFinalizedIsDurableAndIdempotent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "evidence.jsonl")
+	version := 3
+	checkpointBytes := int64(42)
+	finalized := EpochFinalized{
+		EpochID:          7,
+		SpecName:         "controller",
+		SpecVersion:      &version,
+		Revision:         "0.3.0",
+		PackageDigest:    "sha256:package",
+		SpecSHA256:       "sha256:spec",
+		EpochStartedAt:   "2026-08-14T12:00:00.000Z",
+		EpochFinishedAt:  "2026-08-14T12:01:00.000Z",
+		Result:           "completed",
+		GameResult:       "success",
+		CompletionReason: "verifier_conceded",
+		VerifierConceded: true,
+		CheckpointSaved:  true,
+		CheckpointPath:   "/tmp/workspace.tar.gz",
+		CheckpointBytes:  &checkpointBytes,
+		FinalizationKey:  "sess-007:epoch:00000007:finalized",
+	}
+
+	ev := New("controller", path, "sess-007", 7)
+	if appended, err := ev.LogEpochFinalized(2, finalized); err != nil || !appended {
+		t.Fatalf("first append: %v", err)
+	}
+	if appended, err := ev.LogEpochFinalized(2, finalized); err != nil || appended {
+		t.Fatalf("idempotent append: %v", err)
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) != 1 {
+		t.Fatalf("expected one event, got %d", len(lines))
+	}
+	var record map[string]interface{}
+	if err := json.Unmarshal([]byte(lines[0]), &record); err != nil {
+		t.Fatal(err)
+	}
+	if record["event"] != "epoch_finalized" || int(record["epoch_id"].(float64)) != 7 {
+		t.Fatalf("unexpected event identity: %#v", record)
+	}
+	payload := record["data"].(map[string]interface{})
+	if payload["package_digest"] != "sha256:package" || payload["verifier_conceded"] != true {
+		t.Fatalf("unexpected finalization payload: %#v", payload)
+	}
+}
+
+func TestEvidenceSequenceIgnoresMalformedTrailingLine(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evidence.jsonl")
+	if err := os.WriteFile(path, []byte("{\"event_seq\":4,\"event\":\"valid\"}\n{\"event_seq\":"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ev := New("test-system", path, "sess-008", 1)
+	ev.Log("after-malformed", 1, "system", nil)
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(string(data), "\n")
+	var record map[string]interface{}
+	if err := json.Unmarshal([]byte(lines[len(lines)-2]), &record); err != nil {
+		t.Fatalf("last line: %v", err)
+	}
+	if got := int(record["event_seq"].(float64)); got != 5 {
+		t.Fatalf("event_seq: got %d want 5", got)
+	}
+}
+
 func TestEvidenceNilData(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "evidence.jsonl")

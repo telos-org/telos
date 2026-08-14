@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -24,6 +25,25 @@ type recordedApply struct {
 	sessionID  string
 	wakeReason string
 }
+
+type inlineWorkerSubstrate struct{}
+
+func (inlineWorkerSubstrate) Apply(session *sessionapi.Session, _ string) error {
+	if session.SessionDir == nil {
+		return errors.New("session dir is missing")
+	}
+	code, err := RunSessionWorker(*session.SessionDir, true)
+	if err != nil {
+		return err
+	}
+	if code != 0 {
+		return errors.New("worker returned a nonzero exit code")
+	}
+	return nil
+}
+
+func (inlineWorkerSubstrate) Wake(*sessionapi.Session, string) error { return nil }
+func (inlineWorkerSubstrate) Stop(*sessionapi.Session) error         { return nil }
 
 func (s *recordingSubstrate) Apply(session *sessionapi.Session, wakeReason string) error {
 	s.applies = append(s.applies, recordedApply{sessionID: session.SessionID, wakeReason: wakeReason})
@@ -86,6 +106,149 @@ func TestControllerReconcilerAppliesAndStopsWorkers(t *testing.T) {
 	}
 	if len(substrate.stops) != 1 || substrate.stops[0] != session.SessionID {
 		t.Fatalf("stops: got %+v", substrate.stops)
+	}
+}
+
+func TestRootWorkerReconciliationRepairsFinalizationOutboxAfterWorkerExit(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{}
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.SessionDir == nil {
+		t.Fatal("session dir is missing")
+	}
+	finishedAt := "2026-08-14T12:00:00.000Z"
+	completed := "completed"
+	completionReason := "verifier_conceded"
+	conceded := true
+	checkpointSaved := true
+	rounds := 2
+	_, err = sessionapi.MutateManifest(
+		filepath.Join(*session.SessionDir, "session.json"),
+		func(manifest *sessionapi.Manifest) error {
+			manifest.Epochs = append(manifest.Epochs, sessionapi.Epoch{
+				ID:                 1,
+				StartedAt:          "2026-08-14T11:59:00.000Z",
+				FinishedAt:         &finishedAt,
+				Result:             &completed,
+				SpecName:           manifest.SpecName,
+				SpecVersion:        manifest.CurrentSpecVersion,
+				Revision:           manifest.CurrentRevision,
+				PackageDigest:      manifest.PackageDigest,
+				SpecSHA256:         "sha256:bound-spec",
+				CompletionReason:   &completionReason,
+				VerifierConceded:   &conceded,
+				CheckpointSaved:    &checkpointSaved,
+				RoundCount:         &rounds,
+				FinalizationKey:    session.SessionID + ":epoch:00000001:finalized",
+				WorkerCapabilities: []string{sessionapi.CapabilityEpochFinalizedEventsV1},
+			})
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Use the real worker entrypoint behind the same Apply boundary used by the
+	// periodic server supervisor. Its startup repair must emit the event and
+	// exit without beginning another agent cycle.
+	store.substrate = inlineWorkerSubstrate{}
+	if err := store.ensureRootWorkers("worker_supervision"); err != nil {
+		t.Fatal(err)
+	}
+	events, err := base.Events(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalized := 0
+	for _, event := range events {
+		if event.Event == "epoch_finalized" {
+			finalized++
+		}
+	}
+	if finalized != 1 {
+		t.Fatalf("epoch_finalized events: got %d want 1", finalized)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(*session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !manifest.LastEpoch().FinalizationEventEmitted {
+		t.Fatal("finalization outbox marker was not persisted")
+	}
+}
+
+func TestRootWorkerReconciliationRepairsStoppedSessionWithoutRestart(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{}
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if session.SessionDir == nil {
+		t.Fatal("session dir is missing")
+	}
+	_, err = sessionapi.MutateManifest(
+		filepath.Join(*session.SessionDir, "session.json"),
+		func(manifest *sessionapi.Manifest) error {
+			finishedAt := "2026-08-14T12:00:00.000Z"
+			stopped := "stopped"
+			stoppedErr := "stopped by operator"
+			epoch := sessionapi.Epoch{
+				ID:         1,
+				StartedAt:  "2026-08-14T11:59:00.000Z",
+				FinishedAt: &finishedAt,
+				Result:     &stopped,
+				Error:      &stoppedErr,
+			}
+			sessionapi.BindEpochFinalizationIdentity(manifest, &epoch)
+			manifest.Epochs = append(manifest.Epochs, epoch)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	substrate.applies = nil
+
+	if err := store.ensureRootWorkers("worker_supervision"); err != nil {
+		t.Fatal(err)
+	}
+	if len(substrate.applies) != 0 {
+		t.Fatalf("stopped finalization repair restarted worker: %#v", substrate.applies)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(*session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !manifest.LastEpoch().FinalizationEventEmitted {
+		t.Fatal("stopped finalization outbox marker was not persisted")
+	}
+	events, err := base.Events(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalized := 0
+	for _, event := range events {
+		if event.Event == "epoch_finalized" {
+			finalized++
+		}
+	}
+	if finalized != 1 {
+		t.Fatalf("epoch_finalized events: got %d want 1", finalized)
+	}
+	if err := store.ensureRootWorkers("worker_supervision"); err != nil {
+		t.Fatal(err)
+	}
+	if len(substrate.applies) != 0 {
+		t.Fatalf("repeated repair restarted worker: %#v", substrate.applies)
 	}
 }
 

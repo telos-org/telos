@@ -939,6 +939,261 @@ func TestRunLocalSessionWithFakeExecutor(t *testing.T) {
 	if sessionAPI.Status != sessionapi.StatusCompleted {
 		t.Errorf("status: got %s", sessionAPI.Status)
 	}
+
+	events, err := store.Events(session.SessionID)
+	if err != nil {
+		t.Fatalf("store.Events: %v", err)
+	}
+	gameEndIndex := -1
+	checkpointIndex := -1
+	finalizedIndex := -1
+	var finalized sessionapi.SessionEvent
+	for i, event := range events {
+		switch event.Event {
+		case "game_end":
+			gameEndIndex = i
+		case "workspace_checkpoint":
+			checkpointIndex = i
+		case "epoch_finalized":
+			finalizedIndex = i
+			finalized = event
+		}
+	}
+	if gameEndIndex < 0 || checkpointIndex <= gameEndIndex || finalizedIndex <= checkpointIndex {
+		t.Fatalf("unexpected lifecycle event order: game_end=%d checkpoint=%d finalized=%d", gameEndIndex, checkpointIndex, finalizedIndex)
+	}
+	if finalized.Schema == nil || *finalized.Schema != "telos.evidence.v2" || finalized.EventID == nil {
+		t.Fatalf("missing durable event identity: %#v", finalized)
+	}
+	if finalized.SessionID == nil || *finalized.SessionID != session.SessionID || finalized.EpochID == nil || *finalized.EpochID != 1 {
+		t.Fatalf("unexpected session/epoch identity: %#v", finalized)
+	}
+	if finalized.Data["result"] != "completed" || finalized.Data["completion_reason"] != "verifier_conceded" || finalized.Data["verifier_conceded"] != true {
+		t.Fatalf("unexpected finalization data: %#v", finalized.Data)
+	}
+	if finalized.Data["checkpoint_saved"] != true || finalized.Data["checkpoint_bytes"] != float64(4) {
+		t.Fatalf("unexpected checkpoint data: %#v", finalized.Data)
+	}
+}
+
+func TestBoundSpecPathsUseImmutableOpenEpochVersion(t *testing.T) {
+	version := 2
+	openVersion := 1
+	manifest := &sessionapi.Manifest{
+		CurrentSpecVersion: &version,
+		Epochs: []sessionapi.Epoch{{
+			ID:          1,
+			SpecVersion: &openVersion,
+		}},
+		SpecVersions: []map[string]any{
+			{
+				"version":           float64(1),
+				"spec_path":         "/revisions/one/SPEC.md",
+				"package_spec_path": "/revisions/one/package/SPEC.md",
+			},
+			{"version": float64(2), "spec_path": "/revisions/two/SPEC.md"},
+		},
+	}
+	path, base := boundSpecPaths(manifest, "/specs/current/SPEC.md", "/current/package")
+	if path != "/revisions/one/SPEC.md" {
+		t.Fatalf("bound spec path: got %q", path)
+	}
+	if base != "/revisions/one/package" {
+		t.Fatalf("bound spec base: got %q", base)
+	}
+}
+
+func TestReconcileFinalizedEpochEventRepairsCrashGapOnce(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	originalDir, _ := os.Getwd()
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	defer os.Chdir(originalDir)
+
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec := &fakeExecutor{
+		proverResult: game.TurnResult{Role: "prover", Status: game.StatusContinue},
+		verifierResult: game.TurnResult{
+			Role:   "verifier",
+			Status: game.StatusConcede,
+			Logs:   "<status>CONCEDE</status>",
+		},
+	}
+	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
+		t.Fatal(err)
+	}
+
+	manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	evidencePath := *manifest.Specs[0].EvidencePath
+	data, err := os.ReadFile(evidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+	if len(lines) == 0 || !strings.Contains(lines[len(lines)-1], `"event":"epoch_finalized"`) {
+		t.Fatalf("expected final event, got %q", lines)
+	}
+	withoutFinalization := strings.Join(lines[:len(lines)-1], "\n") + "\n"
+	if err := os.WriteFile(evidencePath, []byte(withoutFinalization), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	manifest.LastEpoch().FinalizationEventEmitted = false
+	if err := sessionapi.WriteManifest(manifestPath(session.SessionDir), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	repairExecutor := &fakeExecutor{
+		proverResult:   game.TurnResult{Role: "prover", Status: game.StatusContinue},
+		verifierResult: game.TurnResult{Role: "verifier", Status: game.StatusConcede},
+	}
+	repairedResult, err := RunLocalSessionWithExecutor(session.SessionDir, repairExecutor)
+	if err != nil {
+		t.Fatalf("repair run: %v", err)
+	}
+	if repairedResult.GameResult != game.GameSuccess {
+		t.Fatalf("repaired result: %s", repairedResult.GameResult)
+	}
+	if len(repairExecutor.tasks) != 0 {
+		t.Fatalf("repair must not start another agent cycle: %d tasks", len(repairExecutor.tasks))
+	}
+	manifest, err = sessionapi.ReadManifest(manifestPath(session.SessionDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if appended, err := sessionapi.EmitFinalizedEpochEvents(session.SessionDir, manifest); err != nil || appended {
+		t.Fatalf("idempotent repair: %v", err)
+	}
+	store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
+	events, err := store.Events(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	count := 0
+	for _, event := range events {
+		if event.Event == "epoch_finalized" {
+			count++
+		}
+	}
+	if count != 1 {
+		t.Fatalf("finalization count: got %d want 1", count)
+	}
+}
+
+func TestReconcileHistoricalFinalizationDoesNotRepairLatestEpoch(t *testing.T) {
+	dir := t.TempDir()
+	evidencePath := filepath.Join(dir, "evidence.jsonl")
+	finishedAt := "2026-08-14T12:00:00.000Z"
+	completed := "completed"
+	manifest := &sessionapi.Manifest{
+		SessionID:   "sess_history",
+		SessionKind: sessionapi.KindController,
+		SpecName:    "service",
+		Specs: []sessionapi.ManifestSpec{{
+			Name:         "service",
+			EvidencePath: &evidencePath,
+		}},
+		Epochs: []sessionapi.Epoch{
+			{
+				ID:              1,
+				StartedAt:       "2026-08-14T11:58:00.000Z",
+				FinishedAt:      &finishedAt,
+				Result:          &completed,
+				FinalizationKey: "sess_history:epoch:00000001:finalized",
+			},
+			{
+				ID:                       2,
+				StartedAt:                "2026-08-14T11:59:00.000Z",
+				FinishedAt:               &finishedAt,
+				Result:                   &completed,
+				FinalizationKey:          "sess_history:epoch:00000002:finalized",
+				FinalizationEventEmitted: true,
+			},
+		},
+	}
+	if err := sessionapi.WriteManifest(manifestPath(dir), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	repairedLatest, err := sessionapi.EmitFinalizedEpochEvents(dir, manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repairedLatest {
+		t.Fatal("repairing a historical epoch must not be treated as repairing the latest epoch")
+	}
+	updated, err := sessionapi.ReadManifest(manifestPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !updated.Epochs[0].FinalizationEventEmitted {
+		t.Fatal("historical epoch finalization marker was not persisted")
+	}
+}
+
+func TestFinishEpochMergesCheckpointIntoOriginalLegacyEpoch(t *testing.T) {
+	dir := t.TempDir()
+	finishedAt := "2026-08-14T12:00:00.000Z"
+	stopped := "stopped"
+	checkpointSaved := false
+	manifest := &sessionapi.Manifest{
+		SessionID:   "sess-stop-race",
+		SessionKind: sessionapi.KindController,
+		Epochs: []sessionapi.Epoch{
+			{
+				ID:              1,
+				StartedAt:       "2026-08-14T11:59:00.000Z",
+				FinishedAt:      &finishedAt,
+				Result:          &stopped,
+				CheckpointSaved: &checkpointSaved,
+			},
+			{
+				ID:              2,
+				StartedAt:       finishedAt,
+				FinishedAt:      &finishedAt,
+				Result:          &stopped,
+				CheckpointSaved: &checkpointSaved,
+				FinalizationKey: "sess-stop-race:epoch:00000002:finalized",
+			},
+		},
+	}
+	if err := sessionapi.WriteManifest(manifestPath(dir), manifest); err != nil {
+		t.Fatal(err)
+	}
+	checkpointPath := filepath.Join(dir, "checkpoint.tar")
+	if err := os.WriteFile(checkpointPath, []byte("data"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := finishEpoch(dir, 1, &game.PVGResult{
+		GameResult:              game.GameStopped,
+		Rounds:                  3,
+		WorkspaceCheckpointPath: checkpointPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := sessionapi.ReadManifest(manifestPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacy := updated.Epochs[0]
+	if legacy.CheckpointSaved == nil || !*legacy.CheckpointSaved || legacy.CheckpointBytes == nil || *legacy.CheckpointBytes != 4 {
+		t.Fatalf("legacy checkpoint metadata was not merged: %#v", legacy)
+	}
+	if legacy.RoundCount == nil || *legacy.RoundCount != 3 {
+		t.Fatalf("legacy round count: %#v", legacy.RoundCount)
+	}
+	synthetic := updated.Epochs[1]
+	if synthetic.CheckpointSaved == nil || *synthetic.CheckpointSaved || synthetic.CheckpointBytes != nil {
+		t.Fatalf("synthetic stop absorbed legacy checkpoint: %#v", synthetic)
+	}
 }
 
 func TestCreateLocalSessionPersistsUntil(t *testing.T) {
@@ -1355,6 +1610,14 @@ func TestRunLocalSessionStopsWhenManifestIsStopped(t *testing.T) {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
 	store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
+	owner, err := sessionworker.AcquireOwnership(
+		session.SessionDir,
+		filepath.Join(session.SessionDir, "runner.log"),
+	)
+	if err != nil {
+		t.Fatalf("AcquireOwnership: %v", err)
+	}
+	t.Cleanup(func() { _ = owner.Release() })
 
 	exec := &fakeExecutor{
 		proverResult: game.TurnResult{
@@ -1384,6 +1647,9 @@ func TestRunLocalSessionStopsWhenManifestIsStopped(t *testing.T) {
 	if result.GameResult != game.GameStopped {
 		t.Fatalf("game result: got %s", result.GameResult)
 	}
+	if err := owner.Release(); err != nil {
+		t.Fatalf("Release ownership: %v", err)
+	}
 
 	sessionAPI, err := store.Get(session.SessionID)
 	if err != nil {
@@ -1391,6 +1657,40 @@ func TestRunLocalSessionStopsWhenManifestIsStopped(t *testing.T) {
 	}
 	if sessionAPI.Status != sessionapi.StatusStopped {
 		t.Fatalf("status: got %s", sessionAPI.Status)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	epoch := manifest.LastEpoch()
+	if epoch == nil || epoch.CheckpointSaved == nil || !*epoch.CheckpointSaved {
+		t.Fatalf("stopped epoch lost checkpoint metadata: %#v", epoch)
+	}
+	if epoch.CheckpointBytes == nil || *epoch.CheckpointBytes != 4 {
+		t.Fatalf("stopped epoch checkpoint bytes: %#v", epoch.CheckpointBytes)
+	}
+	if !epoch.FinalizationEventEmitted {
+		t.Fatal("stopped epoch finalization marker was not persisted")
+	}
+	events, err := store.Events(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	finalized := 0
+	for _, event := range events {
+		if event.Event != "epoch_finalized" {
+			continue
+		}
+		finalized++
+		if event.Data["result"] != "stopped" || event.Data["checkpoint_saved"] != true {
+			t.Fatalf("unexpected stopped finalization: %#v", event.Data)
+		}
+		if event.Data["checkpoint_bytes"] != float64(4) {
+			t.Fatalf("unexpected stopped checkpoint bytes: %#v", event.Data)
+		}
+	}
+	if finalized != 1 {
+		t.Fatalf("epoch_finalized events: got %d want 1", finalized)
 	}
 }
 

@@ -412,8 +412,11 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		}
 		session, err := h.store.Get(id)
 		if err == nil && session.Status.IsTerminal() {
-			emitAvailable()
-			return
+			events, eventsErr := h.store.Events(id)
+			if eventsErr != nil || terminalFinalizationObserved(session, events) {
+				emitAvailable()
+				return
+			}
 		}
 		select {
 		case <-r.Context().Done():
@@ -424,6 +427,32 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		case <-poll.C:
 		}
 	}
+}
+
+func terminalFinalizationObserved(session *Session, events []SessionEvent) bool {
+	if session == nil || len(session.Epochs) == 0 {
+		return true
+	}
+	last := session.Epochs[len(session.Epochs)-1]
+	key, _ := last["finalization_key"].(string)
+	if key == "" {
+		capabilities, _ := last["worker_capabilities"].([]any)
+		for _, capability := range capabilities {
+			if capability == CapabilityEpochFinalizedEventsV1 {
+				return false
+			}
+		}
+		return true
+	}
+	for _, event := range events {
+		if event.Event != "epoch_finalized" {
+			continue
+		}
+		if eventKey, _ := event.Data["finalization_key"].(string); eventKey == key {
+			return true
+		}
+	}
+	return false
 }
 
 // --------- JSON helpers ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
