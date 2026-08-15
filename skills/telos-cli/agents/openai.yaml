@@ -1,0 +1,4 @@
+interface:
+  display_name: "Telos CLI"
+  short_description: "Run and manage goals with Telos"
+  default_prompt: "Use $telos-cli to turn this software outcome into the smallest verifiable Telos goal, plan it, and execute it with the appropriate bounded or durable workflow."
