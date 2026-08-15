@@ -93,7 +93,7 @@ func printCloudSessionDeleteReceipt(out io.Writer, session cloud.SessionRecord) 
 	}
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Target", "cloud")
-	printSummaryField(out, "Status", session.State)
+	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Package", session.PackageRef)
 	printSummaryField(out, "Session", session.ID)
 }

@@ -454,7 +454,7 @@ func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.Se
 	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Target", "cloud")
-	printSummaryField(out, "Status", session.State)
+	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
 	printSummaryField(out, "Package", session.PackageRef)
 	printSummaryField(out, "Digest", session.PackageDigest)
 	printSummaryField(out, "Model", session.AgentModel)

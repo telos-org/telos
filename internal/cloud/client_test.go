@@ -390,6 +390,7 @@ func TestClientListSessions(t *testing.T) {
 				"id":             "sess_123",
 				"name":           "auth",
 				"state":          "healthy",
+				"status":         "ready",
 				"package_ref":    "@telos/auth:1.2.3",
 				"package_digest": "sha256:abc",
 				"created_at":     "then",
@@ -404,7 +405,8 @@ func TestClientListSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListSessions: %v", err)
 	}
-	if len(sessions) != 1 || sessions[0].ID != "sess_123" || sessions[0].Name != "auth" {
+	if len(sessions) != 1 || sessions[0].ID != "sess_123" ||
+		sessions[0].Name != "auth" || sessions[0].Status != "ready" {
 		t.Fatalf("sessions: got %+v", sessions)
 	}
 }
@@ -419,6 +421,8 @@ func TestClientGetSession(t *testing.T) {
 			"id":             "sess_123",
 			"name":           "auth",
 			"state":          "healthy",
+			"status":         "ready",
+			"status_reason":  "The agent finished and the verifier accepted the result.",
 			"package_ref":    "@telos/auth:1.2.3",
 			"package_digest": "sha256:abc",
 			"created_at":     "then",
@@ -432,7 +436,9 @@ func TestClientGetSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSession: %v", err)
 	}
-	if session.ID != "sess_123" || session.PackageRef != "@telos/auth:1.2.3" {
+	if session.ID != "sess_123" || session.PackageRef != "@telos/auth:1.2.3" ||
+		session.Status != "ready" ||
+		session.StatusReason != "The agent finished and the verifier accepted the result." {
 		t.Fatalf("session: got %+v", session)
 	}
 }

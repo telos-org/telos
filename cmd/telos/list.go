@@ -210,7 +210,7 @@ func listCloudSessions(jsonOut bool, limit int, wide bool) {
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				session.Name,
 				"cloud",
-				session.State,
+				cloudSessionDisplayStatus(session),
 				session.PackageRef,
 				serviceURL,
 				dashboardURL,
@@ -221,7 +221,7 @@ func listCloudSessions(jsonOut bool, limit int, wide bool) {
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 			session.Name,
 			"cloud",
-			session.State,
+			cloudSessionDisplayStatus(session),
 			serviceURL,
 			session.ID,
 		)
