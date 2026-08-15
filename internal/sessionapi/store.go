@@ -17,6 +17,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -1084,6 +1085,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		CurrentSpecVersion:    m.CurrentSpecVersion,
 		SpecVersions:          cloneSpecVersions(m.SpecVersions),
 		Reconciliation:        deriveReconciliation(m, primarySummary),
+		DashboardDocStatus:    DashboardDocumentStatusAbsent,
 	}
 
 	if s.Config == nil {
@@ -1101,7 +1103,9 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 	applySessionEvidenceSummary(&s)
 
 	if activeWorkspaceExists {
-		if doc, ok := readDashboardDoc(activeWorkspacePath); ok {
+		doc, status := readDashboardDoc(activeWorkspacePath)
+		s.DashboardDocStatus = status
+		if status == DashboardDocumentStatusValid || status == DashboardDocumentStatusRetracted {
 			s.DashboardDoc = &doc
 		}
 	}
@@ -2312,38 +2316,37 @@ func fileExists(path string) bool {
 // onto the deployment record as dashboard_doc.
 const dashboardDocFilename = "dashboard.oui"
 
-// maxDashboardDocBytes matches the control plane's cap; larger files are
-// treated as absent rather than bloating every sessions response.
+// maxDashboardDocBytes matches the control plane's cap.
 const maxDashboardDocBytes = 256 << 10
 
-// readDashboardDoc reports the workspace dashboard doc. A present-but-empty
-// file is a meaningful value (it retracts a previously published doc), so the
-// boolean — not the string — signals absence.
-func readDashboardDoc(workspacePath string) (string, bool) {
+// readDashboardDoc reports the workspace dashboard doc and why no body was
+// returned. A present-but-empty file is a meaningful retraction.
+func readDashboardDoc(workspacePath string) (string, DashboardDocumentStatus) {
 	path := filepath.Join(workspacePath, dashboardDocFilename)
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxDashboardDocBytes {
-		return "", false
+	file, err := openDashboardDocFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return "", DashboardDocumentStatusAbsent
 	}
-
-	file, err := os.Open(path)
 	if err != nil {
-		return "", false
+		return "", DashboardDocumentStatusInvalid
 	}
 	defer file.Close()
 
-	info, err = file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxDashboardDocBytes {
-		return "", false
+	openedInfo, err := file.Stat()
+	if err != nil || !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxDashboardDocBytes {
+		return "", DashboardDocumentStatusInvalid
 	}
 	// Read from the same descriptor we inspected and keep the read bounded in
 	// case the file grows after Stat. Reading one extra byte distinguishes an
 	// exactly-at-limit document from an oversized one.
 	data, err := io.ReadAll(io.LimitReader(file, maxDashboardDocBytes+1))
-	if err != nil || len(data) > maxDashboardDocBytes {
-		return "", false
+	if err != nil || len(data) > maxDashboardDocBytes || !utf8.Valid(data) {
+		return "", DashboardDocumentStatusInvalid
 	}
-	return string(data), true
+	if len(data) == 0 {
+		return "", DashboardDocumentStatusRetracted
+	}
+	return string(data), DashboardDocumentStatusValid
 }
 
 func strPtr(s string) *string {

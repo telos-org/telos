@@ -40,6 +40,17 @@ const (
 	RuntimeCloud SessionRuntime = "cloud"
 )
 
+// DashboardDocumentStatus describes the dashboard document in the active
+// workspace without making callers infer meaning from an omitted body.
+type DashboardDocumentStatus string
+
+const (
+	DashboardDocumentStatusValid     DashboardDocumentStatus = "valid"
+	DashboardDocumentStatusRetracted DashboardDocumentStatus = "retracted"
+	DashboardDocumentStatusAbsent    DashboardDocumentStatus = "absent"
+	DashboardDocumentStatusInvalid   DashboardDocumentStatus = "invalid"
+)
+
 func (r *SessionRuntime) UnmarshalJSON(data []byte) error {
 	var value string
 	if err := json.Unmarshal(data, &value); err != nil {
@@ -215,37 +226,38 @@ type Session struct {
 	Status          SessionStatus `json:"status"`
 	CreatedAt       *string       `json:"created_at,omitempty"`
 
-	Runtime                SessionRuntime   `json:"runtime"`
-	Launcher               *string          `json:"launcher,omitempty"`
-	SessionSpecPath        *string          `json:"session_spec_path,omitempty"`
-	SessionDir             *string          `json:"session_dir,omitempty"`
-	ActiveWorkspacePath    *string          `json:"active_workspace_path,omitempty"`
-	ActiveWorkspaceExists  *bool            `json:"active_workspace_exists,omitempty"`
-	Config                 map[string]any   `json:"config"`
-	Workspace              *Workspace       `json:"workspace,omitempty"`
-	Provenance             map[string]any   `json:"provenance"`
-	Specs                  []SessionSpec    `json:"specs"`
-	Epochs                 []map[string]any `json:"epochs"`
-	CurrentEpoch           *int             `json:"current_epoch,omitempty"`
-	CurrentSpec            *CurrentSpec     `json:"current_spec,omitempty"`
-	CurrentRound           *int             `json:"current_round,omitempty"`
-	CurrentRole            *string          `json:"current_role,omitempty"`
-	FinishedAt             *string          `json:"finished_at,omitempty"`
-	Result                 *string          `json:"result,omitempty"`
-	Error                  *string          `json:"error,omitempty"`
-	TotalCostUSD           *float64         `json:"total_cost_usd,omitempty"`
-	TotalInputTokens       *int             `json:"total_input_tokens,omitempty"`
-	TotalOutputTokens      *int             `json:"total_output_tokens,omitempty"`
-	TotalCacheReadTokens   *int             `json:"total_cache_read_tokens,omitempty"`
-	TotalCacheCreateTokens *int             `json:"total_cache_creation_tokens,omitempty"`
-	RoundCount             *int             `json:"round_count,omitempty"`
-	CompletionReason       *string          `json:"completion_reason,omitempty"`
-	VerifierConceded       *bool            `json:"verifier_conceded,omitempty"`
-	ServiceURL             *string          `json:"service_url,omitempty"`
-	DashboardURL           *string          `json:"dashboard_url,omitempty"`
-	DashboardDoc           *string          `json:"dashboard_doc,omitempty"`
-	CurrentSpecVersion     *int             `json:"current_spec_version,omitempty"`
-	SpecVersions           []map[string]any `json:"spec_versions"`
+	Runtime                SessionRuntime          `json:"runtime"`
+	Launcher               *string                 `json:"launcher,omitempty"`
+	SessionSpecPath        *string                 `json:"session_spec_path,omitempty"`
+	SessionDir             *string                 `json:"session_dir,omitempty"`
+	ActiveWorkspacePath    *string                 `json:"active_workspace_path,omitempty"`
+	ActiveWorkspaceExists  *bool                   `json:"active_workspace_exists,omitempty"`
+	Config                 map[string]any          `json:"config"`
+	Workspace              *Workspace              `json:"workspace,omitempty"`
+	Provenance             map[string]any          `json:"provenance"`
+	Specs                  []SessionSpec           `json:"specs"`
+	Epochs                 []map[string]any        `json:"epochs"`
+	CurrentEpoch           *int                    `json:"current_epoch,omitempty"`
+	CurrentSpec            *CurrentSpec            `json:"current_spec,omitempty"`
+	CurrentRound           *int                    `json:"current_round,omitempty"`
+	CurrentRole            *string                 `json:"current_role,omitempty"`
+	FinishedAt             *string                 `json:"finished_at,omitempty"`
+	Result                 *string                 `json:"result,omitempty"`
+	Error                  *string                 `json:"error,omitempty"`
+	TotalCostUSD           *float64                `json:"total_cost_usd,omitempty"`
+	TotalInputTokens       *int                    `json:"total_input_tokens,omitempty"`
+	TotalOutputTokens      *int                    `json:"total_output_tokens,omitempty"`
+	TotalCacheReadTokens   *int                    `json:"total_cache_read_tokens,omitempty"`
+	TotalCacheCreateTokens *int                    `json:"total_cache_creation_tokens,omitempty"`
+	RoundCount             *int                    `json:"round_count,omitempty"`
+	CompletionReason       *string                 `json:"completion_reason,omitempty"`
+	VerifierConceded       *bool                   `json:"verifier_conceded,omitempty"`
+	ServiceURL             *string                 `json:"service_url,omitempty"`
+	DashboardURL           *string                 `json:"dashboard_url,omitempty"`
+	DashboardDoc           *string                 `json:"dashboard_doc,omitempty"`
+	DashboardDocStatus     DashboardDocumentStatus `json:"dashboard_doc_status,omitempty"`
+	CurrentSpecVersion     *int                    `json:"current_spec_version,omitempty"`
+	SpecVersions           []map[string]any        `json:"spec_versions"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
 }
@@ -254,21 +266,22 @@ type Session struct {
 
 // SessionListItem is the product-facing summary returned by GET /api/sessions.
 type SessionListItem struct {
-	SessionID          string         `json:"session_id"`
-	ParentSessionID    *string        `json:"parent_session_id,omitempty"`
-	SpecName           *string        `json:"spec_name,omitempty"`
-	Status             SessionStatus  `json:"status"`
-	CreatedAt          *string        `json:"created_at,omitempty"`
-	Runtime            SessionRuntime `json:"runtime"`
-	CurrentRound       *int           `json:"current_round,omitempty"`
-	CurrentRole        *string        `json:"current_role,omitempty"`
-	Result             *string        `json:"result,omitempty"`
-	Error              *string        `json:"error,omitempty"`
-	TotalCostUSD       *float64       `json:"total_cost_usd,omitempty"`
-	ServiceURL         *string        `json:"service_url,omitempty"`
-	DashboardURL       *string        `json:"dashboard_url,omitempty"`
-	DashboardDoc       *string        `json:"dashboard_doc,omitempty"`
-	CurrentSpecVersion *int           `json:"current_spec_version,omitempty"`
+	SessionID          string                  `json:"session_id"`
+	ParentSessionID    *string                 `json:"parent_session_id,omitempty"`
+	SpecName           *string                 `json:"spec_name,omitempty"`
+	Status             SessionStatus           `json:"status"`
+	CreatedAt          *string                 `json:"created_at,omitempty"`
+	Runtime            SessionRuntime          `json:"runtime"`
+	CurrentRound       *int                    `json:"current_round,omitempty"`
+	CurrentRole        *string                 `json:"current_role,omitempty"`
+	Result             *string                 `json:"result,omitempty"`
+	Error              *string                 `json:"error,omitempty"`
+	TotalCostUSD       *float64                `json:"total_cost_usd,omitempty"`
+	ServiceURL         *string                 `json:"service_url,omitempty"`
+	DashboardURL       *string                 `json:"dashboard_url,omitempty"`
+	DashboardDoc       *string                 `json:"dashboard_doc,omitempty"`
+	DashboardDocStatus DashboardDocumentStatus `json:"dashboard_doc_status,omitempty"`
+	CurrentSpecVersion *int                    `json:"current_spec_version,omitempty"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
 }
@@ -304,6 +317,7 @@ func SessionListItemFromSession(session Session) SessionListItem {
 		ServiceURL:         session.ServiceURL,
 		DashboardURL:       session.DashboardURL,
 		DashboardDoc:       session.DashboardDoc,
+		DashboardDocStatus: session.DashboardDocStatus,
 		CurrentSpecVersion: session.CurrentSpecVersion,
 		Reconciliation:     session.Reconciliation,
 	}
@@ -326,6 +340,7 @@ func (item SessionListItem) AsSession() Session {
 		ServiceURL:         item.ServiceURL,
 		DashboardURL:       item.DashboardURL,
 		DashboardDoc:       item.DashboardDoc,
+		DashboardDocStatus: item.DashboardDocStatus,
 		CurrentSpecVersion: item.CurrentSpecVersion,
 		Reconciliation:     item.Reconciliation,
 	}
