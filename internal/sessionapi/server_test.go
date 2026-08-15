@@ -350,8 +350,11 @@ func TestCloudCreateSessionHonorsExplicitChildTaskKind(t *testing.T) {
 	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindTask {
 		t.Fatalf("session_kind: got %#v", session.SessionKind)
 	}
-	if session.CurrentSpecVersion != nil {
-		t.Fatalf("child should not have current_spec_version: %#v", session.CurrentSpecVersion)
+	if session.CurrentSpecVersion == nil || *session.CurrentSpecVersion != 1 {
+		t.Fatalf("current_spec_version: %#v", session.CurrentSpecVersion)
+	}
+	if len(session.SpecVersions) != 1 || session.SpecVersions[0]["revision"] != "0.1.0" {
+		t.Fatalf("child spec identity: %#v", session.SpecVersions)
 	}
 }
 
@@ -1465,10 +1468,16 @@ func TestListSessionsJSONShape(t *testing.T) {
 			t.Fatalf("list summary should not include %q: %#v", key, session)
 		}
 	}
-	for _, key := range []string{"session_id", "spec_name", "status", "runtime"} {
+	for _, key := range []string{
+		"session_id", "spec_name", "status", "runtime", "reconciliation",
+	} {
 		if _, ok := session[key]; !ok {
 			t.Fatalf("list summary missing %q: %#v", key, session)
 		}
+	}
+	reconciliation := session["reconciliation"].(map[string]any)
+	if reconciliation["state"] != "pending" {
+		t.Fatalf("reconciliation: %#v", reconciliation)
 	}
 }
 
@@ -1492,6 +1501,9 @@ func TestGetSession(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&session)
 	assertEqual(t, "session_id", created.SessionID, session.SessionID)
 	assertEqual(t, "status", "pending", string(session.Status))
+	if session.Reconciliation == nil || session.Reconciliation.State != sessionapi.ReconciliationPending {
+		t.Fatalf("reconciliation: %#v", session.Reconciliation)
+	}
 }
 
 func TestGetSessionNotFound(t *testing.T) {
@@ -2138,14 +2150,10 @@ func TestEventsSSEWaitsForTerminalEpochFinalization(t *testing.T) {
 	finishedAt := "2026-08-14T12:00:00.000Z"
 	stopped := "stopped"
 	stoppedErr := "stopped by operator"
-	epoch := sessionapi.Epoch{
-		ID:         1,
-		StartedAt:  "2026-08-14T11:59:00.000Z",
-		FinishedAt: &finishedAt,
-		Result:     &stopped,
-		Error:      &stoppedErr,
-	}
-	sessionapi.BindEpochFinalizationIdentity(manifest, &epoch)
+	epoch := sessionapi.NewEpoch(manifest, 1, "2026-08-14T11:59:00.000Z", nil)
+	epoch.FinishedAt = &finishedAt
+	epoch.Result = &stopped
+	epoch.Error = &stoppedErr
 	manifest.Epochs = append(manifest.Epochs, epoch)
 	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
 		t.Fatal(err)

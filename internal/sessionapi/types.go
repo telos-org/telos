@@ -190,14 +190,20 @@ type CurrentSpec struct {
 
 // --------- Session types ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
-// SessionSummary is the minimal identification of a session.
-type SessionSummary struct {
-	SessionID       string        `json:"session_id"`
-	SessionKind     *SessionKind  `json:"-"`
-	ParentSessionID *string       `json:"parent_session_id,omitempty"`
-	SpecName        *string       `json:"spec_name,omitempty"`
-	Status          SessionStatus `json:"status"`
-	CreatedAt       *string       `json:"created_at,omitempty"`
+type ReconciliationState string
+
+const (
+	ReconciliationPending  ReconciliationState = "pending"
+	ReconciliationAccepted ReconciliationState = "accepted"
+	ReconciliationFailed   ReconciliationState = "failed"
+)
+
+// SessionReconciliation projects the latest durable outcome for the current
+// desired spec generation.
+type SessionReconciliation struct {
+	PackageDigest string              `json:"package_digest,omitempty"`
+	State         ReconciliationState `json:"state"`
+	Error         string              `json:"error,omitempty"`
 }
 
 // Session is the full API representation returned by get/create/stop.
@@ -209,38 +215,39 @@ type Session struct {
 	Status          SessionStatus `json:"status"`
 	CreatedAt       *string       `json:"created_at,omitempty"`
 
-	Runtime                 SessionRuntime   `json:"runtime"`
-	Launcher                *string          `json:"launcher,omitempty"`
-	SessionSpecPath         *string          `json:"session_spec_path,omitempty"`
-	SessionDir              *string          `json:"session_dir,omitempty"`
-	ActiveWorkspacePath     *string          `json:"active_workspace_path,omitempty"`
-	ActiveWorkspaceExists   *bool            `json:"active_workspace_exists,omitempty"`
-	Config                  map[string]any   `json:"config"`
-	Workspace               *Workspace       `json:"workspace,omitempty"`
-	Provenance              map[string]any   `json:"provenance"`
-	Specs                   []SessionSpec    `json:"specs"`
-	Epochs                  []map[string]any `json:"epochs"`
-	CurrentEpoch            *int             `json:"current_epoch,omitempty"`
-	CurrentSpec             *CurrentSpec     `json:"current_spec,omitempty"`
-	CurrentRound            *int             `json:"current_round,omitempty"`
-	CurrentRole             *string          `json:"current_role,omitempty"`
-	FinishedAt              *string          `json:"finished_at,omitempty"`
-	Result                  *string          `json:"result,omitempty"`
-	Error                   *string          `json:"error,omitempty"`
-	TotalCostUSD            *float64         `json:"total_cost_usd,omitempty"`
-	TotalInputTokens        *int             `json:"total_input_tokens,omitempty"`
-	TotalOutputTokens       *int             `json:"total_output_tokens,omitempty"`
-	TotalCacheReadTokens    *int             `json:"total_cache_read_tokens,omitempty"`
-	TotalCacheCreateTokens  *int             `json:"total_cache_creation_tokens,omitempty"`
-	RoundCount              *int             `json:"round_count,omitempty"`
-	CompletionReason        *string          `json:"completion_reason,omitempty"`
-	VerifierConceded        *bool            `json:"verifier_conceded,omitempty"`
-	ServiceURL              *string          `json:"service_url,omitempty"`
-	DashboardURL            *string          `json:"dashboard_url,omitempty"`
-	DashboardDoc            *string          `json:"dashboard_doc,omitempty"`
-	CurrentSpecVersion      *int             `json:"current_spec_version,omitempty"`
-	SpecVersions            []map[string]any `json:"spec_versions"`
-	LatestDescendantSession *SessionSummary  `json:"latest_descendant_session,omitempty"`
+	Runtime                SessionRuntime   `json:"runtime"`
+	Launcher               *string          `json:"launcher,omitempty"`
+	SessionSpecPath        *string          `json:"session_spec_path,omitempty"`
+	SessionDir             *string          `json:"session_dir,omitempty"`
+	ActiveWorkspacePath    *string          `json:"active_workspace_path,omitempty"`
+	ActiveWorkspaceExists  *bool            `json:"active_workspace_exists,omitempty"`
+	Config                 map[string]any   `json:"config"`
+	Workspace              *Workspace       `json:"workspace,omitempty"`
+	Provenance             map[string]any   `json:"provenance"`
+	Specs                  []SessionSpec    `json:"specs"`
+	Epochs                 []map[string]any `json:"epochs"`
+	CurrentEpoch           *int             `json:"current_epoch,omitempty"`
+	CurrentSpec            *CurrentSpec     `json:"current_spec,omitempty"`
+	CurrentRound           *int             `json:"current_round,omitempty"`
+	CurrentRole            *string          `json:"current_role,omitempty"`
+	FinishedAt             *string          `json:"finished_at,omitempty"`
+	Result                 *string          `json:"result,omitempty"`
+	Error                  *string          `json:"error,omitempty"`
+	TotalCostUSD           *float64         `json:"total_cost_usd,omitempty"`
+	TotalInputTokens       *int             `json:"total_input_tokens,omitempty"`
+	TotalOutputTokens      *int             `json:"total_output_tokens,omitempty"`
+	TotalCacheReadTokens   *int             `json:"total_cache_read_tokens,omitempty"`
+	TotalCacheCreateTokens *int             `json:"total_cache_creation_tokens,omitempty"`
+	RoundCount             *int             `json:"round_count,omitempty"`
+	CompletionReason       *string          `json:"completion_reason,omitempty"`
+	VerifierConceded       *bool            `json:"verifier_conceded,omitempty"`
+	ServiceURL             *string          `json:"service_url,omitempty"`
+	DashboardURL           *string          `json:"dashboard_url,omitempty"`
+	DashboardDoc           *string          `json:"dashboard_doc,omitempty"`
+	CurrentSpecVersion     *int             `json:"current_spec_version,omitempty"`
+	SpecVersions           []map[string]any `json:"spec_versions"`
+
+	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
 }
 
 // --------- Response types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -262,6 +269,8 @@ type SessionListItem struct {
 	DashboardURL       *string        `json:"dashboard_url,omitempty"`
 	DashboardDoc       *string        `json:"dashboard_doc,omitempty"`
 	CurrentSpecVersion *int           `json:"current_spec_version,omitempty"`
+
+	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
 }
 
 // SessionListResponse wraps GET /api/sessions.
@@ -296,6 +305,7 @@ func SessionListItemFromSession(session Session) SessionListItem {
 		DashboardURL:       session.DashboardURL,
 		DashboardDoc:       session.DashboardDoc,
 		CurrentSpecVersion: session.CurrentSpecVersion,
+		Reconciliation:     session.Reconciliation,
 	}
 }
 
@@ -317,6 +327,7 @@ func (item SessionListItem) AsSession() Session {
 		DashboardURL:       item.DashboardURL,
 		DashboardDoc:       item.DashboardDoc,
 		CurrentSpecVersion: item.CurrentSpecVersion,
+		Reconciliation:     item.Reconciliation,
 	}
 }
 

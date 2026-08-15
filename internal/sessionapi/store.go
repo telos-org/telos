@@ -190,6 +190,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 				PackageSpecPath: paths.PackageSpecPath,
 			})
 		} else {
+			currentRevision = strPtr(prepared.Version)
 			if err := materializePreparedPackageSource(dir, &prepared); err != nil {
 				return nil, err
 			}
@@ -235,11 +236,18 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 			IntervalSeconds: prepared.IntervalSeconds,
 		}},
 	})
-	if isTopLevelManifest(&m) && sessionSpecPath != "" {
+	if sessionSpecPath != "" {
 		version := 1
 		m.CurrentSpecVersion = &version
 		if initialVersionEntry == nil {
-			initialVersionEntry = specVersionEntry(version, sessionSpecPath, prepared.SpecData, nil, prepared.PackageDigest, specVersionMetadata{})
+			initialVersionEntry = specVersionEntry(
+				version,
+				sessionSpecPath,
+				prepared.SpecData,
+				nil,
+				prepared.PackageDigest,
+				specVersionMetadata{Revision: prepared.Version},
+			)
 		}
 		m.SpecVersions = append(m.SpecVersions, initialVersionEntry)
 	}
@@ -753,10 +761,10 @@ func (fs *FileStore) List() ([]Session, error) {
 	return sessions, nil
 }
 
-// ListRootWorkerSessions returns only the manifest fields needed by the cloud
-// worker supervisor. It deliberately avoids the public List derivation path,
-// which summarizes complete evidence logs and dashboard state while holding
-// the store mutation lock.
+// ListRootWorkerSessions returns the runnable roots needed by the cloud worker
+// supervisor. Before excluding a stopped root, it idempotently closes any
+// crash gap between the terminal manifest write and finalization evidence.
+// Runnable roots are still returned when an unrelated repair fails.
 func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -766,6 +774,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 		return nil, err
 	}
 	sessions := make([]Session, 0)
+	var repairErrs []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -774,18 +783,22 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 		if err != nil || manifest.ParentSessionID != nil || manifest.SessionKind != KindController {
 			continue
 		}
+		sessionDir := fs.sessionDir(entry.Name())
+		if manifest.IsStopped() {
+			if _, err := repairEpochFinalization(sessionDir); err != nil {
+				repairErrs = append(repairErrs, fmt.Errorf(
+					"repair session %s finalization: %w",
+					manifest.SessionID,
+					err,
+				))
+			}
+			continue
+		}
 		var result *string
 		if epoch := manifest.LastEpoch(); epoch != nil {
 			result = epoch.Result
 		}
-		if result != nil && *result == "stopped" {
-			last := manifest.LastEpoch()
-			if !epochFinalizationPending(last) {
-				continue
-			}
-		}
 		kind := manifest.SessionKind
-		sessionDir := fs.sessionDir(entry.Name())
 		sessions = append(sessions, Session{
 			SessionID:       manifest.SessionID,
 			SessionKind:     &kind,
@@ -794,7 +807,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 			Result:          result,
 		})
 	}
-	return sessions, nil
+	return sessions, errors.Join(repairErrs...)
 }
 
 // Get returns a single session by ID.
@@ -826,17 +839,13 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	}
 
 	s, _ := fs.deriveSession(id, m)
-	if s.Status.IsTerminal() && s.Status != StatusStale {
-		if m.IsStopped() {
-			if _, repairErr := RepairFinalizedEpochEvents(fs.sessionDir(id)); repairErr != nil {
-				return nil, fmt.Errorf("repair stopped epoch finalization: %w", repairErr)
-			}
-			m, err = ReadManifest(fs.manifestPath(id))
-			if err != nil {
-				return nil, err
-			}
-			return fs.deriveSession(id, m)
+	if m.IsStopped() {
+		if _, repairErr := repairEpochFinalization(fs.sessionDir(id)); repairErr != nil {
+			return nil, fmt.Errorf("repair stopped epoch finalization: %w", repairErr)
 		}
+		return fs.deriveSession(id, m)
+	}
+	if s.Status.IsTerminal() && s.Status != StatusStale && m.SessionKind != KindController {
 		return s, nil
 	}
 
@@ -858,9 +867,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		checkpointSaved := false
 		roundCount := 0
 
-		if m.IsStopped() {
-			return nil
-		}
+		m.DesiredStatus = DesiredStatusStopped
 		if open := m.OpenEpoch(); open != nil {
 			open.FinishedAt = &now
 			open.Result = &stopped
@@ -875,36 +882,19 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 			if open.RoundCount == nil {
 				open.RoundCount = &roundCount
 			}
-			if open.FinalizationKey == "" {
-				epoch := Epoch{
-					ID:               len(m.Epochs) + 1,
-					StartedAt:        now,
-					FinishedAt:       &now,
-					Result:           &stopped,
-					Error:            &stoppedErr,
-					CompletionReason: &completionReason,
-					VerifierConceded: &conceded,
-					CheckpointSaved:  &checkpointSaved,
-					RoundCount:       &roundCount,
-				}
-				BindEpochFinalizationIdentity(m, &epoch)
-				m.Epochs = append(m.Epochs, epoch)
+			if epochSupportsFinalization(open) {
+				return nil
 			}
-			return nil
 		}
 
-		epoch := Epoch{
-			ID:               len(m.Epochs) + 1,
-			StartedAt:        now,
-			FinishedAt:       &now,
-			Result:           &stopped,
-			Error:            &stoppedErr,
-			CompletionReason: &completionReason,
-			VerifierConceded: &conceded,
-			CheckpointSaved:  &checkpointSaved,
-			RoundCount:       &roundCount,
-		}
-		BindEpochFinalizationIdentity(m, &epoch)
+		epoch := NewEpoch(m, len(m.Epochs)+1, now, nil)
+		epoch.FinishedAt = &now
+		epoch.Result = &stopped
+		epoch.Error = &stoppedErr
+		epoch.CompletionReason = &completionReason
+		epoch.VerifierConceded = &conceded
+		epoch.CheckpointSaved = &checkpointSaved
+		epoch.RoundCount = &roundCount
 		m.Epochs = append(m.Epochs, epoch)
 		return nil
 	})
@@ -912,7 +902,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		return nil, err
 	}
 	terminateRunner(runner)
-	if _, repairErr := RepairFinalizedEpochEvents(fs.sessionDir(id)); repairErr != nil {
+	if _, repairErr := repairEpochFinalization(fs.sessionDir(id)); repairErr != nil {
 		return nil, fmt.Errorf("record stopped epoch finalization: %w", repairErr)
 	}
 	m, err = ReadManifest(fs.manifestPath(id))
@@ -967,7 +957,7 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 		}
 		return nil, err
 	}
-	if _, err := RepairFinalizedEpochEvents(fs.sessionDir(id)); err != nil {
+	if _, err := repairEpochFinalization(fs.sessionDir(id)); err != nil {
 		return nil, fmt.Errorf("repair epoch finalization: %w", err)
 	}
 	m, err = ReadManifest(fs.manifestPath(id))
@@ -1048,8 +1038,13 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 	dir := fs.sessionDir(id)
 
 	specs := make([]SessionSpec, len(m.Specs))
+	var primarySummary *evidenceSummary
 	for i, ms := range m.Specs {
-		specs[i] = deriveSpec(ms)
+		summary, _ := readEvidenceSummary(ms.EvidencePath)
+		specs[i] = deriveSpec(ms, summary)
+		if i == 0 {
+			primarySummary = summary
+		}
 	}
 
 	epochs := make([]map[string]any, len(m.Epochs))
@@ -1088,6 +1083,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		Epochs:                epochs,
 		CurrentSpecVersion:    m.CurrentSpecVersion,
 		SpecVersions:          cloneSpecVersions(m.SpecVersions),
+		Reconciliation:        deriveReconciliation(m, primarySummary),
 	}
 
 	if s.Config == nil {
@@ -1113,7 +1109,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 	return &s, nil
 }
 
-func deriveSpec(ms ManifestSpec) SessionSpec {
+func deriveSpec(ms ManifestSpec, summary *evidenceSummary) SessionSpec {
 	ss := SessionSpec{
 		Index:           ms.Index,
 		Name:            strPtr(ms.Name),
@@ -1138,7 +1134,7 @@ func deriveSpec(ms ManifestSpec) SessionSpec {
 		exists := fileExists(*ms.WorkspacePath)
 		ss.WorkspaceExists = &exists
 	}
-	if summary, err := readEvidenceSummary(ms.EvidencePath); err == nil && summary != nil {
+	if summary != nil {
 		ss.TotalCostUSD = summary.TotalCostUSD
 		ss.TotalInputTokens = summary.TotalInputTokens
 		ss.TotalOutputTokens = summary.TotalOutputTokens
@@ -1152,6 +1148,33 @@ func deriveSpec(ms ManifestSpec) SessionSpec {
 	}
 
 	return ss
+}
+
+func deriveReconciliation(m *Manifest, summary *evidenceSummary) *SessionReconciliation {
+	if m == nil || m.CurrentSpecVersion == nil {
+		return nil
+	}
+	version := *m.CurrentSpecVersion
+	reconciliation := &SessionReconciliation{
+		PackageDigest: ptrOr(m.PackageDigest, ""),
+		State:         ReconciliationPending,
+	}
+	if summary != nil {
+		if finalized, ok := summary.Finalizations[version]; ok {
+			latestEpochID := 0
+			for i := range m.Epochs {
+				epoch := &m.Epochs[i]
+				if ptrOr(epoch.SpecVersion, 0) == version && epoch.ID > latestEpochID {
+					latestEpochID = epoch.ID
+				}
+			}
+			if finalized.EpochID >= latestEpochID {
+				reconciliation.State = finalized.State
+				reconciliation.Error = finalized.Error
+			}
+		}
+	}
+	return reconciliation
 }
 
 func applySessionEvidenceSummary(session *Session) {
@@ -1416,6 +1439,13 @@ type evidenceSummary struct {
 	VerifierConceded       *bool
 	CurrentRound           *int
 	CurrentRole            *string
+	Finalizations          map[int]epochFinalization
+}
+
+type epochFinalization struct {
+	EpochID int
+	State   ReconciliationState
+	Error   string
 }
 
 func readEvidenceSummary(path *string) (*evidenceSummary, error) {
@@ -1430,6 +1460,7 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 	var summary *evidenceSummary
 	var activeRound *int
 	var activeRole *string
+	finalizations := make(map[int]epochFinalization)
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1480,13 +1511,43 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 				CompletionReason:       stringPtrFromAny(dataField["completion_reason"]),
 				VerifierConceded:       boolPtrFromAny(dataField["verifier_conceded"]),
 			}
+		case "epoch_finalized":
+			version := numberAsInt(dataField["spec_version"])
+			epochID := numberAsInt(dataField["epoch_id"])
+			if version == nil || epochID == nil {
+				continue
+			}
+			finalized := epochFinalization{
+				EpochID: *epochID,
+				State:   reconciliationState(dataField),
+				Error:   ptrOr(stringPtrFromAny(dataField["error"]), ""),
+			}
+			if previous, ok := finalizations[*version]; !ok || finalized.EpochID > previous.EpochID {
+				finalizations[*version] = finalized
+			}
 		}
+	}
+	if summary == nil && len(finalizations) > 0 {
+		summary = &evidenceSummary{}
 	}
 	if summary != nil {
 		summary.CurrentRound = activeRound
 		summary.CurrentRole = activeRole
+		summary.Finalizations = finalizations
 	}
 	return summary, nil
+}
+
+func reconciliationState(data map[string]any) ReconciliationState {
+	result, _ := data["result"].(string)
+	completionReason, _ := data["completion_reason"].(string)
+	verifierConceded, _ := data["verifier_conceded"].(bool)
+	checkpointSaved, _ := data["checkpoint_saved"].(bool)
+	if result == "completed" && completionReason == "verifier_conceded" &&
+		verifierConceded && checkpointSaved {
+		return ReconciliationAccepted
+	}
+	return ReconciliationFailed
 }
 
 func evidenceRoundCount(raw map[string]any, data map[string]any) *int {

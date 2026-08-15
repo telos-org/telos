@@ -99,8 +99,9 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	}
 	sourceSpecPath := absSpec
 	sessionSpecPath := state.SpecPath()
-	var currentRevision *string
-	var currentSpecVersion *int
+	currentRevision := strPtr(compiled.Environment.Version)
+	version := 1
+	currentSpecVersion := &version
 	var specVersions []map[string]any
 	var packageDigest *string
 	var applyPackageLock *spec.ApplyPackageManifest
@@ -112,8 +113,6 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 		sourceSpecPath = revision.PackageSpecPath
 		sessionSpecPath = revision.ActiveSpecPath
 		currentRevision = strPtr(revision.Version)
-		version := 1
-		currentSpecVersion = &version
 		packageDigest = strPtr(revision.PackageDigest)
 		applyPackageLock = revision.ApplyPackageLock
 		specVersions = []map[string]any{{
@@ -132,6 +131,13 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 		if err := os.WriteFile(state.SpecPath(), data, 0o644); err != nil {
 			return nil, fmt.Errorf("write session spec: %w", err)
 		}
+		specVersions = []map[string]any{{
+			"version":     version,
+			"revision":    compiled.Environment.Version,
+			"spec_path":   state.SpecPath(),
+			"spec_sha256": specDataSHA256(data),
+			"created_at":  time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		}}
 	}
 
 	if err := writeLocalManifest(sessionDir, compiled, sourceSpecPath, sessionSpecPath, state, cfg, workspace, currentRevision, currentSpecVersion, specVersions, packageDigest, applyPackageLock); err != nil {
@@ -170,10 +176,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if err != nil {
 		return nil, fmt.Errorf("read session manifest: %w", err)
 	}
-	repairedFinalization, err := sessionapi.EmitFinalizedEpochEvents(
-		sessionDir,
-		manifest,
-	)
+	repairedFinalization, err := sessionapi.EmitPendingEpochFinalization(sessionDir)
 	if err != nil {
 		return nil, fmt.Errorf("reconcile epoch finalization events: %w", err)
 	}
@@ -222,7 +225,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	epochID, err := sessionworker.StartEpoch(sessionDir, manifest)
 	if err != nil {
 		if errors.Is(err, sessionworker.ErrSessionStopped) {
-			if _, eventErr := sessionapi.EmitFinalizedEpochEventsFromDisk(sessionDir); eventErr != nil {
+			if _, eventErr := sessionapi.EmitPendingEpochFinalization(sessionDir); eventErr != nil {
 				return nil, fmt.Errorf(
 					"record stopped epoch finalization: %w",
 					eventErr,
@@ -246,7 +249,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 			if finishErr := finishEpoch(sessionDir, epochID, fail); finishErr != nil {
 				return nil, fmt.Errorf("%w; also failed to finish epoch: %v", err, finishErr)
 			}
-			if _, eventErr := sessionapi.EmitFinalizedEpochEventsFromDisk(sessionDir); eventErr != nil {
+			if _, eventErr := sessionapi.EmitPendingEpochFinalization(sessionDir); eventErr != nil {
 				return nil, fmt.Errorf("%w; also failed to record epoch finalization: %v", err, eventErr)
 			}
 			return nil, err
@@ -271,7 +274,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if err := finishEpoch(sessionDir, epochID, result); err != nil {
 		return result, err
 	}
-	if _, err := sessionapi.EmitFinalizedEpochEventsFromDisk(sessionDir); err != nil {
+	if _, err := sessionapi.EmitPendingEpochFinalization(sessionDir); err != nil {
 		return result, fmt.Errorf("record epoch finalization: %w", err)
 	}
 	if manifest.SessionKind != sessionapi.KindController {

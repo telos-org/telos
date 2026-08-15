@@ -127,9 +127,6 @@ func TestStartEpochBindsProvidedRevisionIdentity(t *testing.T) {
 	if epoch.SpecSHA256 != "sha256:old-spec" {
 		t.Fatalf("spec sha: %q", epoch.SpecSHA256)
 	}
-	if epoch.FinalizationKey != "sess-controller:epoch:00000001:finalized" {
-		t.Fatalf("finalization key: %q", epoch.FinalizationKey)
-	}
 	if len(epoch.WorkerCapabilities) != 1 || epoch.WorkerCapabilities[0] != sessionapi.CapabilityEpochFinalizedEventsV1 {
 		t.Fatalf("worker capabilities: %#v", epoch.WorkerCapabilities)
 	}
@@ -138,19 +135,16 @@ func TestStartEpochBindsProvidedRevisionIdentity(t *testing.T) {
 func TestStartEpochDoesNotAppendAfterSessionStops(t *testing.T) {
 	sessionDir := t.TempDir()
 	manifest := &sessionapi.Manifest{
-		SessionID:   "sess-stopped",
-		SessionKind: sessionapi.KindController,
-		SpecName:    "controller",
+		SessionID:     "sess-stopped",
+		SessionKind:   sessionapi.KindController,
+		DesiredStatus: sessionapi.DesiredStatusStopped,
+		SpecName:      "controller",
 	}
 	stopped := "stopped"
 	finishedAt := "2026-08-14T12:00:00.000Z"
-	epoch := sessionapi.Epoch{
-		ID:         1,
-		StartedAt:  finishedAt,
-		FinishedAt: &finishedAt,
-		Result:     &stopped,
-	}
-	sessionapi.BindEpochFinalizationIdentity(manifest, &epoch)
+	epoch := sessionapi.NewEpoch(manifest, 1, finishedAt, nil)
+	epoch.FinishedAt = &finishedAt
+	epoch.Result = &stopped
 	manifest.Epochs = append(manifest.Epochs, epoch)
 	if err := sessionapi.WriteManifest(manifestPath(sessionDir), manifest); err != nil {
 		t.Fatal(err)

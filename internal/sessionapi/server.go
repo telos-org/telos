@@ -434,16 +434,22 @@ func terminalFinalizationObserved(session *Session, events []SessionEvent) bool 
 		return true
 	}
 	last := session.Epochs[len(session.Epochs)-1]
-	key, _ := last["finalization_key"].(string)
-	if key == "" {
-		capabilities, _ := last["worker_capabilities"].([]any)
-		for _, capability := range capabilities {
-			if capability == CapabilityEpochFinalizedEventsV1 {
-				return false
-			}
+	capabilities, _ := last["worker_capabilities"].([]any)
+	supportsFinalization := false
+	for _, capability := range capabilities {
+		if capability == CapabilityEpochFinalizedEventsV1 {
+			supportsFinalization = true
+			break
 		}
+	}
+	if !supportsFinalization {
 		return true
 	}
+	epochID := numericMapValue(last, "id")
+	if epochID == 0 {
+		return true
+	}
+	key := epochFinalizationKey(session.SessionID, epochID)
 	for _, event := range events {
 		if event.Event != "epoch_finalized" {
 			continue

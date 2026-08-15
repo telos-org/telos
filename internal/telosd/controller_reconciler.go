@@ -167,35 +167,13 @@ func (s *controllerReconciler) apply(session *sessionapi.Session, wakeReason str
 }
 
 func (s *controllerReconciler) ensureRootWorkers(wakeReason string) error {
-	sessions, err := s.FileStore.ListRootWorkerSessions()
-	if err != nil {
-		return err
-	}
+	sessions, listErr := s.FileStore.ListRootWorkerSessions()
 	var errs []error
+	if listErr != nil {
+		errs = append(errs, listErr)
+	}
 	for i := range sessions {
 		session := &sessions[i]
-		if session.ParentSessionID != nil {
-			continue
-		}
-		if session.SessionKind == nil || *session.SessionKind != sessionapi.KindController {
-			continue
-		}
-		if session.Result != nil && *session.Result == "stopped" {
-			if session.SessionDir == nil || *session.SessionDir == "" {
-				continue
-			}
-			if _, err := sessionapi.RepairFinalizedEpochEvents(*session.SessionDir); err != nil {
-				errs = append(
-					errs,
-					fmt.Errorf(
-						"repair session %s finalization: %w",
-						session.SessionID,
-						err,
-					),
-				)
-			}
-			continue
-		}
 		if err := s.apply(session, wakeReason); err != nil {
 			errs = append(errs, err)
 		}
@@ -234,7 +212,7 @@ func startWakeReason(session *sessionapi.Session) string {
 }
 
 func (s *controllerReconciler) Stop(id string) (*sessionapi.Session, error) {
-	session, err := s.FileStore.Get(id)
+	session, err := s.FileStore.Stop(id)
 	if err != nil {
 		return nil, err
 	}
@@ -243,21 +221,12 @@ func (s *controllerReconciler) Stop(id string) (*sessionapi.Session, error) {
 			return nil, fmt.Errorf("stop session %s worker: %w", session.SessionID, err)
 		}
 	}
-	session, err = s.FileStore.Stop(id)
-	if err != nil {
-		return nil, err
-	}
 	if session.SessionDir != nil && *session.SessionDir != "" {
-		if _, err := sessionapi.RepairFinalizedEpochEvents(*session.SessionDir); err != nil {
-			return nil, fmt.Errorf(
-				"record session %s stop finalization: %w",
-				session.SessionID,
-				err,
-			)
+		if _, err := sessionapi.EmitPendingEpochFinalization(*session.SessionDir); err != nil {
+			return nil, fmt.Errorf("record session %s stop finalization: %w", session.SessionID, err)
 		}
-		return s.FileStore.Get(id)
 	}
-	return session, nil
+	return s.FileStore.Get(id)
 }
 
 func (s *controllerReconciler) applyCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.SessionCreateRequest {
