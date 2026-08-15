@@ -9,7 +9,7 @@ target="gs://${bucket}/releases/latest"
 verify_dir="$(mktemp -d)"
 trap 'rm -rf "${verify_dir}"' EXIT
 gcloud storage cp "${source}/manifest.json" "${verify_dir}/manifest.json" >/dev/null
-published_version="$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["version"])' "${verify_dir}/manifest.json")"
+published_version="$(jq -er .version "${verify_dir}/manifest.json")"
 if [[ "${published_version}" != "${version}" ]]; then
   echo "promote-release: manifest contains ${published_version}, expected ${version}" >&2
   exit 1
@@ -26,6 +26,7 @@ for artifact in \
   telosd-darwin-arm64 \
   telosd-linux-amd64 \
   telosd-linux-arm64 \
+  telos-cli-skill.tar.gz \
   SHA256SUMS \
   install.sh
 do

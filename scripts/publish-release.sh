@@ -21,6 +21,51 @@ EOF
   exit 1
 fi
 
+if [[ -z "${TELOS_AUTH_TOKEN:-}" ]]; then
+  echo "publish-release: TELOS_AUTH_TOKEN is required to publish @telos/telos-cli" >&2
+  exit 1
+fi
+command -v jq >/dev/null 2>&1 || {
+  echo "publish-release: jq is required" >&2
+  exit 1
+}
+
+case "$(uname -s)-$(uname -m)" in
+  Darwin-x86_64) publisher="${dist}/telos-darwin-amd64" ;;
+  Darwin-arm64) publisher="${dist}/telos-darwin-arm64" ;;
+  Linux-x86_64) publisher="${dist}/telos-linux-amd64" ;;
+  Linux-aarch64|Linux-arm64) publisher="${dist}/telos-linux-arm64" ;;
+  *)
+    echo "publish-release: unsupported publisher host $(uname -s)-$(uname -m)" >&2
+    exit 1
+    ;;
+esac
+
+skill_version="${version#v}"
+skill_ref="@telos/telos-cli:${skill_version}"
+skill_json="$(
+  "${publisher}" push "${repo_root}/skills/telos-cli" \
+    --scope telos \
+    --version "${skill_version}" \
+    --json
+)"
+published_ref="$(jq -er '.skill.ref' <<<"${skill_json}")"
+published_digest="$(jq -er '.skill.digest' <<<"${skill_json}")"
+published_version="$(jq -er '.skill.version' <<<"${skill_json}")"
+if [[ "${published_ref}" != "${skill_ref}" || "${published_version}" != "${skill_version}" ]]; then
+  echo "publish-release: registry returned ${published_ref}, expected ${skill_ref}" >&2
+  exit 1
+fi
+if [[ ! "${published_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+  echo "publish-release: registry returned invalid skill digest ${published_digest}" >&2
+  exit 1
+fi
+manifest_tmp="${dist}/manifest.json.tmp"
+jq --arg ref "${published_ref}" --arg digest "${published_digest}" \
+  '.skills = [{ref: $ref, digest: $digest, artifact: "telos-cli-skill.tar.gz"}]' \
+  "${dist}/manifest.json" >"${manifest_tmp}"
+mv "${manifest_tmp}" "${dist}/manifest.json"
+
 remote="gs://${bucket}/releases/${version}"
 verify_dir="$(mktemp -d)"
 trap 'rm -rf "${verify_dir}"' EXIT
@@ -51,6 +96,7 @@ for artifact in \
   telosd-darwin-arm64 \
   telosd-linux-amd64 \
   telosd-linux-arm64 \
+  telos-cli-skill.tar.gz \
   SHA256SUMS \
   install.sh
 do

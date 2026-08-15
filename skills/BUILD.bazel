@@ -1,0 +1,10 @@
+load("@rules_pkg//pkg:tar.bzl", "pkg_tar")
+
+pkg_tar(
+    name = "telos_cli_bundle",
+    srcs = glob(["telos-cli/**"]),
+    extension = "tar.gz",
+    mode = "0644",
+    strip_prefix = "telos-cli",
+    visibility = ["//visibility:public"],
+)

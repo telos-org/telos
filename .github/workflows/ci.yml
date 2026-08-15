@@ -68,6 +68,9 @@ jobs:
       - name: Build and publish immutable release
         env:
           TELOS_ALLOW_UNSIGNED_DARWIN: "1"
+          TELOS_API_ENDPOINT: https://api.usetelos.ai
+          TELOS_AUTH_TOKEN: ${{ secrets.TELOS_REGISTRY_TOKEN }}
+          TELOS_CONTEXT: "@telos"
         run: scripts/publish-release.sh "${{ steps.version.outputs.version }}"
 
       - name: Verify published artifacts
@@ -78,15 +81,40 @@ jobs:
           release="gs://${TELOS_RELEASE_BUCKET}/releases/${VERSION}"
           verify="$RUNNER_TEMP/release-verify"
           artifact=telos-linux-amd64
+          skill_artifact=telos-cli-skill.tar.gz
           mkdir -p "$verify"
           gcloud storage cp "${release}/SHA256SUMS" "$verify/SHA256SUMS" >/dev/null
+          gcloud storage cp "${release}/manifest.json" "$verify/manifest.json" >/dev/null
           gcloud storage cp "${release}/${artifact}" "$verify/telos" >/dev/null
+          gcloud storage cp "${release}/${skill_artifact}" "$verify/${skill_artifact}" >/dev/null
           expected="$(awk -v artifact="$artifact" '$2 == artifact { print $1 }' "$verify/SHA256SUMS")"
           actual="$(sha256sum "$verify/telos" | awk '{ print $1 }')"
           test -n "$expected"
           test "$actual" = "$expected"
           chmod 0755 "$verify/telos"
           test "$("$verify/telos" --version)" = "telos $VERSION"
+          skill_expected="$(awk -v artifact="$skill_artifact" '$2 == artifact { print $1 }' "$verify/SHA256SUMS")"
+          skill_actual="$(sha256sum "$verify/$skill_artifact" | awk '{ print $1 }')"
+          test -n "$skill_expected"
+          test "$skill_actual" = "$skill_expected"
+          mkdir -p "$verify/skill"
+          tar -xzf "$verify/$skill_artifact" -C "$verify/skill"
+          diff -ru skills/telos-cli "$verify/skill"
+          test -z "$(find "$verify/skill" -type f ! -perm 0644 -print -quit)"
+
+          skill_version="${VERSION#v}"
+          skill_ref="$(jq -er '.skills[0].ref' "$verify/manifest.json")"
+          skill_digest="$(jq -er '.skills[0].digest' "$verify/manifest.json")"
+          test "$skill_ref" = "@telos/telos-cli:$skill_version"
+          printf '%s' "$skill_digest" | grep -Eq '^sha256:[a-f0-9]{64}$'
+          registry_bundle="$verify/registry-skill.tar.gz"
+          curl -fsSL \
+            "https://api.usetelos.ai/api/skills/telos/telos-cli/versions/$skill_version/bundle" \
+            -o "$registry_bundle"
+          mkdir -p "$verify/registry-skill"
+          tar -xzf "$registry_bundle" -C "$verify/registry-skill"
+          diff -ru skills/telos-cli "$verify/registry-skill"
+          test -z "$(find "$verify/registry-skill" -type f ! -perm 0644 -print -quit)"
 
       - name: Promote release
         env:

@@ -1,8 +1,7 @@
-# telos
+# Telos
 
-`telos` is a goal-oriented agent runtime. 
-
-Use `telos` to turn software goals into running services. Maintain and manage goals, not code.
+Telos is a goal-oriented agent runtime. It turns declarative software outcomes
+into bounded agent runs or durable reconciled services.
 
 ## Install
 
@@ -11,164 +10,32 @@ curl -fsSL https://usetelos.ai/install.sh | sh
 telos --version
 ```
 
-The installer downloads checksummed `telos` and `telosd` binaries for your
-platform (macOS and Linux, amd64/arm64).
+The checksummed installer supports macOS and Linux on amd64 and arm64. It
+installs `telos`, `telosd`, and the open
+[`@telos/telos-cli`](skills/telos-cli/SKILL.md) agent skill. That skill is the
+canonical usage documentation for humans working through interactive coding
+agents.
 
-## Quickstart
+Give your coding agent an outcome, or start with the canonical
+[quickstart prompt](skills/telos-cli/assets/quickstart-prompt.txt). The agent
+will help write the smallest verifiable `SPEC.md`, plan it, and choose a bounded
+`telos run` or durable `telos apply` workflow.
 
-Write a goal and save it as `SPEC.md`:
-
-```markdown
----
-version: 0.1.0
-name: hello-service
-platform: local
----
-
-# Goal
-
-Build a small HTTP service with `/healthz`, tests, and local run instructions.
-```
-
-Run it as a bounded task:
-
-```bash
-telos run SPEC.md --workspace . --until 3    # at most 3 review cycles
-telos run SPEC.md --workspace . --until 30m  # at most 30 minutes
-```
-
-Local runs execute goal turns through
-[pi](https://github.com/earendil-works/pi), an open-source coding agent:
-
-```bash
-npm install -g @earendil-works/pi-coding-agent
-```
-
-### Choosing a model
-
-Telos defaults local runs to `openai-codex/gpt-5.5` with high thinking effort.
-Authenticate that provider in pi before your first run, or select another pi
-model with `--model`:
-
-```bash
-telos run SPEC.md --model openai-codex/gpt-5.5 --thinking high
-```
-
-Model names use `<provider>/<model-id>`. Set `TELOS_MODEL` to keep a different
-default across runs; use `TELOS_THINKING` to change the thinking effort.
-Providers, models, and credentials are managed by pi; run `pi` and use
-`/login`, and see
-[pi's model documentation](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/models.md)
-for configuration details.
-
-Local runs can optionally override the generator and verifier independently:
-
-```bash
-telos run SPEC.md \
-  --generator-model openai-codex/gpt-5.5 --generator-thinking high \
-  --verifier-model anthropic/claude-sonnet-4 --verifier-thinking medium
-```
-
-Omitted role settings inherit `--model` and `--thinking`. The equivalent
-environment variables are `TELOS_GENERATOR_MODEL`, `TELOS_GENERATOR_THINKING`,
-`TELOS_VERIFIER_MODEL`, and `TELOS_VERIFIER_THINKING`.
-
-### Using registry skills
-
-Reference an exact registry skill version directly from `SPEC.md`:
-
-```yaml
-skills:
-  - "@telos/verify-engineering:0.1.0*"
-```
-
-Telos downloads the authenticated version, verifies its registry digest, and
-pins the ref and digest in published package locks. The optional `*` marks a
-required evaluation rubric.
-
-## Apply a Goal
-
-`run` executes bounded task work. `apply` creates or updates a durable
-controller session that keeps reconciling desired state.
-
-```bash
-telos login
-telos config --context @your-org
-telos apply SPEC.md
-telos list --cloud
-```
-
-Cloud commands run in the configured personal, team, or platform context.
-Use `telos config` to show the active context and `telos config --context
-@your-org` to switch it. Omit the context configuration to use your personal
-context; `telos config --context personal` clears a stored organization
-selection. The stored configuration keeps the user-facing handle as
-`context: "@your-org"`; the CLI resolves its internal organization ID when
-sending requests. `TELOS_CONTEXT` overrides the stored context for a single
-command or process:
-
-```bash
-TELOS_CONTEXT=@your-org telos list --cloud
-```
-
-Hosted deployments pin their effective model when they are created. Override
-the platform default with `--model` and `--thinking` (or `TELOS_MODEL` and
-`TELOS_THINKING`). These settings seed new deployments; existing deployments
-retain their pinned model.
-
-To steer an existing controller, edit the same disk spec and apply it back to
-the same session:
-
-```bash
-telos get sess_... --output SPEC.md
-# edit SPEC.md and bump its immutable package version
-telos plan SPEC.md --session sess_...
-telos apply SPEC.md --session sess_...
-```
-
-`plan --session` fetches the deployed package and shows its spec diff without
-changing the session.
-
-`get` resolves the exact package attached to a session. `pull` retrieves an
-exact package directly from the registry:
-
-```bash
-telos pull @telos/hello-service:0.1.0
-```
-
-Both commands verify the package digest and materialize the complete package by
-default. Pass `--output SPEC.md` when only the root spec is needed.
-
-The spec frontmatter `version` is the package version published to Telos Cloud,
-so the reviewed file, package ref, and backend record stay aligned:
-
-```yaml
-version: 0.1.1
-```
-
-Managed Cloud is in early access; sign up at
-[usetelos.ai](https://usetelos.ai).
-
-## License
-
-Fair Source (FSL-1.1), converts to Apache-2.0 two years after each release
+Use `telos <command> --help` for the exact command surface of the installed
+release.
 
 ## Develop
 
 ```bash
 go test ./...
 go build ./cmd/telos ./cmd/telosd
-```
-Release builds use Bazel:
-
-```bash
 bazel test //...
-scripts/publish-release.sh
 ```
 
-A protected `master` merge publishes a commit-addressed release, verifies its
-Linux artifact and checksum, and then promotes the `latest` manifest. Versioned
-objects are immutable; a partially failed publication is safe to retry.
-Early-alpha macOS artifacts are intentionally unsigned. macOS users may need to
-approve the downloaded binary explicitly until signing and notarization become
-worth the operational dependency.
+Release builds use `scripts/publish-release.sh`. Protected `master` merges
+publish immutable, commit-addressed binaries and the canonical skill bundle,
+verify them, and promote `latest` only after the complete release exists.
+
+## License
+
+Fair Source (FSL-1.1), converting to Apache-2.0 two years after each release.
