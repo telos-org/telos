@@ -70,6 +70,7 @@ jobs:
           TELOS_ALLOW_UNSIGNED_DARWIN: "1"
           TELOS_API_ENDPOINT: https://api.usetelos.ai
           TELOS_AUTH_TOKEN: ${{ secrets.TELOS_REGISTRY_TOKEN }}
+          TELOS_CONTEXT: "@telos"
         run: scripts/publish-release.sh "${{ steps.version.outputs.version }}"
 
       - name: Verify published artifacts
