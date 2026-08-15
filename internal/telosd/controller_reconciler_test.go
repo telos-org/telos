@@ -20,6 +20,7 @@ type recordingSubstrate struct {
 	applyErr error
 	wakeErr  error
 	stopErr  error
+	stopHook func() error
 }
 
 type recordedApply struct {
@@ -64,10 +65,58 @@ func (s *recordingSubstrate) Wake(session *sessionapi.Session, wakeReason string
 
 func (s *recordingSubstrate) Stop(session *sessionapi.Session) error {
 	s.stops = append(s.stops, session.SessionID)
+	if s.stopHook != nil {
+		return s.stopHook()
+	}
 	if s.stopErr != nil {
 		return s.stopErr
 	}
 	return nil
+}
+
+func TestControllerStopRepairsAfterWorkerReleasesOwnership(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{}
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := sessionworker.AcquireOwnership(
+		*session.SessionDir,
+		filepath.Join(*session.SessionDir, "runner.log"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owner.Release() })
+	substrate.stopHook = owner.Release
+	manifest, err := sessionapi.ReadManifest(filepath.Join(*session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = sessionapi.MutateManifest(
+		filepath.Join(*session.SessionDir, "session.json"),
+		func(current *sessionapi.Manifest) error {
+			epoch := sessionapi.NewEpoch(
+				manifest,
+				1,
+				"2026-08-14T12:00:00.000Z",
+				manifest.Runner,
+			)
+			current.Epochs = append(current.Epochs, epoch)
+			return nil
+		},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := store.Stop(session.SessionID); err != nil {
+		t.Fatal(err)
+	}
+	assertFinalizationEvidence(t, *session.SessionDir)
 }
 
 func TestControllerReconcilerAppliesAndStopsWorkers(t *testing.T) {

@@ -8,9 +8,10 @@ import (
 	"github.com/telos-org/telos/internal/evidence"
 )
 
-// EmitPendingEpochFinalization publishes the latest terminal epoch exactly
-// once. The evidence writer deduplicates the deterministic finalization key,
-// so a crash never requires a second acknowledgement in the manifest.
+// EmitPendingEpochFinalization publishes terminal epochs exactly once. The
+// evidence writer deduplicates deterministic finalization keys, so a crash
+// never requires a second acknowledgement in the manifest. The bool reports
+// whether the latest epoch was appended during this call.
 func EmitPendingEpochFinalization(sessionDir string) (bool, error) {
 	manifest, err := ReadManifest(filepath.Join(sessionDir, "session.json"))
 	if err != nil {
@@ -23,11 +24,38 @@ func EmitPendingEpochFinalization(sessionDir string) (bool, error) {
 	if evidencePath == nil || *evidencePath == "" {
 		return false, nil
 	}
-	epoch := manifest.LastEpoch()
-	if !epochNeedsFinalization(epoch) {
-		return false, nil
+	finalized := make(map[string]struct{})
+	if events, err := readEvidenceFile(*evidencePath, &manifest.Specs[0]); err == nil {
+		for _, event := range events {
+			if event.Event != "epoch_finalized" {
+				continue
+			}
+			if key, ok := event.Data["finalization_key"].(string); ok {
+				finalized[key] = struct{}{}
+			}
+		}
 	}
+	appendedLatest := false
+	for i := range manifest.Epochs {
+		epoch := &manifest.Epochs[i]
+		if !epochNeedsFinalization(epoch) {
+			continue
+		}
+		if _, ok := finalized[epochFinalizationKey(manifest.SessionID, epoch.ID)]; ok {
+			continue
+		}
+		appended, err := emitEpochFinalization(manifest, epoch, *evidencePath)
+		if err != nil {
+			return false, fmt.Errorf("epoch %d: %w", epoch.ID, err)
+		}
+		if i == len(manifest.Epochs)-1 && appended {
+			appendedLatest = true
+		}
+	}
+	return appendedLatest, nil
+}
 
+func emitEpochFinalization(manifest *Manifest, epoch *Epoch, evidencePath string) (bool, error) {
 	specName := epoch.SpecName
 	if specName == "" {
 		specName = manifest.SpecName
@@ -35,7 +63,7 @@ func EmitPendingEpochFinalization(sessionDir string) (bool, error) {
 	key := epochFinalizationKey(manifest.SessionID, epoch.ID)
 	writer := evidence.New(
 		specName,
-		*evidencePath,
+		evidencePath,
 		manifest.SessionID,
 		epoch.ID,
 	)
@@ -61,10 +89,7 @@ func EmitPendingEpochFinalization(sessionDir string) (bool, error) {
 			Error:            ptrOr(epoch.Error, ""),
 		},
 	)
-	if err != nil {
-		return false, fmt.Errorf("epoch %d: %w", epoch.ID, err)
-	}
-	return appended, nil
+	return appended, err
 }
 
 // repairEpochFinalization publishes only after the worker releases ownership,

@@ -1087,7 +1087,7 @@ func TestReconcileFinalizedEpochEventRepairsCrashGapOnce(t *testing.T) {
 	}
 }
 
-func TestEmitPendingEpochFinalizationOnlyPublishesLatestEpoch(t *testing.T) {
+func TestEmitPendingEpochFinalizationPublishesAllTerminalEpochs(t *testing.T) {
 	dir := t.TempDir()
 	evidencePath := filepath.Join(dir, "evidence.jsonl")
 	finishedAt := "2026-08-14T12:00:00.000Z"
@@ -1132,7 +1132,7 @@ func TestEmitPendingEpochFinalizationOnlyPublishesLatestEpoch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(string(data), "epoch:00000001:finalized") ||
+	if !strings.Contains(string(data), "epoch:00000001:finalized") ||
 		!strings.Contains(string(data), "epoch:00000002:finalized") {
 		t.Fatalf("unexpected finalization evidence: %s", data)
 	}

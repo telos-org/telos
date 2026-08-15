@@ -1038,8 +1038,13 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 	dir := fs.sessionDir(id)
 
 	specs := make([]SessionSpec, len(m.Specs))
+	var primarySummary *evidenceSummary
 	for i, ms := range m.Specs {
-		specs[i] = deriveSpec(ms)
+		summary, _ := readEvidenceSummary(ms.EvidencePath)
+		specs[i] = deriveSpec(ms, summary)
+		if i == 0 {
+			primarySummary = summary
+		}
 	}
 
 	epochs := make([]map[string]any, len(m.Epochs))
@@ -1078,6 +1083,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		Epochs:                epochs,
 		CurrentSpecVersion:    m.CurrentSpecVersion,
 		SpecVersions:          cloneSpecVersions(m.SpecVersions),
+		Reconciliation:        deriveReconciliation(m, primarySummary),
 	}
 
 	if s.Config == nil {
@@ -1103,7 +1109,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 	return &s, nil
 }
 
-func deriveSpec(ms ManifestSpec) SessionSpec {
+func deriveSpec(ms ManifestSpec, summary *evidenceSummary) SessionSpec {
 	ss := SessionSpec{
 		Index:           ms.Index,
 		Name:            strPtr(ms.Name),
@@ -1128,7 +1134,7 @@ func deriveSpec(ms ManifestSpec) SessionSpec {
 		exists := fileExists(*ms.WorkspacePath)
 		ss.WorkspaceExists = &exists
 	}
-	if summary, err := readEvidenceSummary(ms.EvidencePath); err == nil && summary != nil {
+	if summary != nil {
 		ss.TotalCostUSD = summary.TotalCostUSD
 		ss.TotalInputTokens = summary.TotalInputTokens
 		ss.TotalOutputTokens = summary.TotalOutputTokens
@@ -1142,6 +1148,33 @@ func deriveSpec(ms ManifestSpec) SessionSpec {
 	}
 
 	return ss
+}
+
+func deriveReconciliation(m *Manifest, summary *evidenceSummary) *SessionReconciliation {
+	if m == nil || m.CurrentSpecVersion == nil {
+		return nil
+	}
+	version := *m.CurrentSpecVersion
+	reconciliation := &SessionReconciliation{
+		PackageDigest: ptrOr(m.PackageDigest, ""),
+		State:         ReconciliationPending,
+	}
+	if summary != nil {
+		if finalized, ok := summary.Finalizations[version]; ok {
+			latestEpochID := 0
+			for i := range m.Epochs {
+				epoch := &m.Epochs[i]
+				if ptrOr(epoch.SpecVersion, 0) == version && epoch.ID > latestEpochID {
+					latestEpochID = epoch.ID
+				}
+			}
+			if finalized.EpochID >= latestEpochID {
+				reconciliation.State = finalized.State
+				reconciliation.Error = finalized.Error
+			}
+		}
+	}
+	return reconciliation
 }
 
 func applySessionEvidenceSummary(session *Session) {
@@ -1406,6 +1439,13 @@ type evidenceSummary struct {
 	VerifierConceded       *bool
 	CurrentRound           *int
 	CurrentRole            *string
+	Finalizations          map[int]epochFinalization
+}
+
+type epochFinalization struct {
+	EpochID int
+	State   ReconciliationState
+	Error   string
 }
 
 func readEvidenceSummary(path *string) (*evidenceSummary, error) {
@@ -1420,6 +1460,7 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 	var summary *evidenceSummary
 	var activeRound *int
 	var activeRole *string
+	finalizations := make(map[int]epochFinalization)
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1470,13 +1511,43 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 				CompletionReason:       stringPtrFromAny(dataField["completion_reason"]),
 				VerifierConceded:       boolPtrFromAny(dataField["verifier_conceded"]),
 			}
+		case "epoch_finalized":
+			version := numberAsInt(dataField["spec_version"])
+			epochID := numberAsInt(dataField["epoch_id"])
+			if version == nil || epochID == nil {
+				continue
+			}
+			finalized := epochFinalization{
+				EpochID: *epochID,
+				State:   reconciliationState(dataField),
+				Error:   ptrOr(stringPtrFromAny(dataField["error"]), ""),
+			}
+			if previous, ok := finalizations[*version]; !ok || finalized.EpochID > previous.EpochID {
+				finalizations[*version] = finalized
+			}
 		}
+	}
+	if summary == nil && len(finalizations) > 0 {
+		summary = &evidenceSummary{}
 	}
 	if summary != nil {
 		summary.CurrentRound = activeRound
 		summary.CurrentRole = activeRole
+		summary.Finalizations = finalizations
 	}
 	return summary, nil
+}
+
+func reconciliationState(data map[string]any) ReconciliationState {
+	result, _ := data["result"].(string)
+	completionReason, _ := data["completion_reason"].(string)
+	verifierConceded, _ := data["verifier_conceded"].(bool)
+	checkpointSaved, _ := data["checkpoint_saved"].(bool)
+	if result == "completed" && completionReason == "verifier_conceded" &&
+		verifierConceded && checkpointSaved {
+		return ReconciliationAccepted
+	}
+	return ReconciliationFailed
 }
 
 func evidenceRoundCount(raw map[string]any, data map[string]any) *int {

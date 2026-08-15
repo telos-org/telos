@@ -1468,10 +1468,16 @@ func TestListSessionsJSONShape(t *testing.T) {
 			t.Fatalf("list summary should not include %q: %#v", key, session)
 		}
 	}
-	for _, key := range []string{"session_id", "spec_name", "status", "runtime"} {
+	for _, key := range []string{
+		"session_id", "spec_name", "status", "runtime", "reconciliation",
+	} {
 		if _, ok := session[key]; !ok {
 			t.Fatalf("list summary missing %q: %#v", key, session)
 		}
+	}
+	reconciliation := session["reconciliation"].(map[string]any)
+	if reconciliation["state"] != "pending" {
+		t.Fatalf("reconciliation: %#v", reconciliation)
 	}
 }
 
@@ -1495,6 +1501,9 @@ func TestGetSession(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&session)
 	assertEqual(t, "session_id", created.SessionID, session.SessionID)
 	assertEqual(t, "status", "pending", string(session.Status))
+	if session.Reconciliation == nil || session.Reconciliation.State != sessionapi.ReconciliationPending {
+		t.Fatalf("reconciliation: %#v", session.Reconciliation)
+	}
 }
 
 func TestGetSessionNotFound(t *testing.T) {

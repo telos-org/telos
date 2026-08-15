@@ -221,6 +221,11 @@ func (s *controllerReconciler) Stop(id string) (*sessionapi.Session, error) {
 			return nil, fmt.Errorf("stop session %s worker: %w", session.SessionID, err)
 		}
 	}
+	if session.SessionDir != nil && *session.SessionDir != "" {
+		if _, err := sessionapi.EmitPendingEpochFinalization(*session.SessionDir); err != nil {
+			return nil, fmt.Errorf("record session %s stop finalization: %w", session.SessionID, err)
+		}
+	}
 	return s.FileStore.Get(id)
 }
 
