@@ -56,6 +56,8 @@ type SessionRecord struct {
 	ID             string  `json:"id"`
 	Name           string  `json:"name"`
 	State          string  `json:"state"`
+	Status         string  `json:"status,omitempty"`
+	StatusReason   string  `json:"status_reason,omitempty"`
 	PackageRef     string  `json:"package_ref"`
 	PackageDigest  string  `json:"package_digest"`
 	RuntimeVersion *string `json:"runtime_version,omitempty"`

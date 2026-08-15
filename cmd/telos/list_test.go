@@ -82,6 +82,7 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 				"id":             "sess_123",
 				"name":           "auth",
 				"state":          "healthy",
+				"status":         "ready",
 				"package_ref":    "@telos/auth:1.0.0",
 				"package_digest": "sha256:abc",
 				"service_url":    "https://auth.example.com",
@@ -101,7 +102,7 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 		"NAME",
 		"PACKAGE",
 		"auth",
-		"healthy",
+		"ready",
 		"@telos/auth:1.0.0",
 		"sess_123",
 	} {
@@ -125,6 +126,8 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 				"id":             "sess_123",
 				"name":           "auth",
 				"state":          "healthy",
+				"status":         "ready",
+				"status_reason":  "The agent finished and the verifier accepted the result.",
 				"package_ref":    "@telos/auth:1.0.0",
 				"package_digest": "sha256:abc",
 				"created_at":     "then",
@@ -150,7 +153,8 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 		t.Fatalf("cloud list json sessions: %#v", body)
 	}
 	session, ok := sessions[0].(map[string]any)
-	if !ok || session["id"] != "sess_123" {
+	if !ok || session["id"] != "sess_123" || session["status"] != "ready" ||
+		session["status_reason"] != "The agent finished and the verifier accepted the result." {
 		t.Fatalf("cloud list json first session: %#v", sessions[0])
 	}
 }
@@ -163,6 +167,8 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 		ID:             "sess_123",
 		Name:           "auth",
 		State:          "healthy",
+		Status:         "ready",
+		StatusReason:   "The agent finished and the verifier accepted the result.",
 		PackageRef:     "@telos/auth:1.0.0",
 		PackageDigest:  "sha256:abc",
 		RuntimeVersion: &runtime,
@@ -178,13 +184,15 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 	for _, want := range []string{
 		"Name      auth",
 		"Target    cloud",
-		"Status    healthy",
+		"Status    ready",
 		"Package   @telos/auth:1.0.0",
 		"Session   sess_123",
 		"Service   https://auth.example.com",
 		"Dashboard https://dashboard.example.com",
 		"Runtime   0.1.0",
 		"Lifecycle",
+		"state          healthy",
+		"status reason  The agent finished and the verifier accepted the result.",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("cloud session description missing %q:\n%s", want, text)

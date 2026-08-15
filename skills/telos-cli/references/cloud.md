@@ -38,6 +38,12 @@ ready only after the runtime has reconciled the matching package digest and the
 verifier has accepted it. Do not interpret allocation success, an HTTP process
 starting, or stale events as goal acceptance.
 
+For an agent-readable acceptance check, require both fields:
+
+```bash
+telos describe SESSION_ID --json | jq -e '.status == "ready"'
+```
+
 To update an existing deployment, retrieve or edit its spec, bump the immutable
 package version, inspect the diff, and apply to the same session:
 

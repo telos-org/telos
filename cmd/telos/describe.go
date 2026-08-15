@@ -64,7 +64,7 @@ func getCloudSession(sessionID string) (*cloud.SessionRecord, error) {
 func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Target", "cloud")
-	printSummaryField(out, "Status", session.State)
+	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Package", session.PackageRef)
 	printSummaryField(out, "Digest", session.PackageDigest)
 	printSummaryField(out, "Session", session.ID)
@@ -85,12 +85,23 @@ func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
 
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "Lifecycle")
+	printDetailField(out, "state", session.State)
+	if session.StatusReason != "" {
+		printDetailField(out, "status reason", session.StatusReason)
+	}
 	printDetailField(out, "created", session.CreatedAt)
 	printDetailField(out, "updated", session.UpdatedAt)
 	if cloudSessionInProgress(session.State) {
 		fmt.Fprintln(out)
 		fmt.Fprintf(out, "Inspect   telos logs %s\n", session.ID)
 	}
+}
+
+func cloudSessionDisplayStatus(session cloud.SessionRecord) string {
+	if session.Status != "" {
+		return session.Status
+	}
+	return session.State
 }
 
 func cloudSessionInProgress(state string) bool {
