@@ -190,6 +190,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 				PackageSpecPath: paths.PackageSpecPath,
 			})
 		} else {
+			currentRevision = strPtr(prepared.Version)
 			if err := materializePreparedPackageSource(dir, &prepared); err != nil {
 				return nil, err
 			}
@@ -235,11 +236,18 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 			IntervalSeconds: prepared.IntervalSeconds,
 		}},
 	})
-	if isTopLevelManifest(&m) && sessionSpecPath != "" {
+	if sessionSpecPath != "" {
 		version := 1
 		m.CurrentSpecVersion = &version
 		if initialVersionEntry == nil {
-			initialVersionEntry = specVersionEntry(version, sessionSpecPath, prepared.SpecData, nil, prepared.PackageDigest, specVersionMetadata{})
+			initialVersionEntry = specVersionEntry(
+				version,
+				sessionSpecPath,
+				prepared.SpecData,
+				nil,
+				prepared.PackageDigest,
+				specVersionMetadata{Revision: prepared.Version},
+			)
 		}
 		m.SpecVersions = append(m.SpecVersions, initialVersionEntry)
 	}
@@ -753,10 +761,10 @@ func (fs *FileStore) List() ([]Session, error) {
 	return sessions, nil
 }
 
-// ListRootWorkerSessions returns only the manifest fields needed by the cloud
-// worker supervisor. It deliberately avoids the public List derivation path,
-// which summarizes complete evidence logs and dashboard state while holding
-// the store mutation lock.
+// ListRootWorkerSessions returns the runnable roots needed by the cloud worker
+// supervisor. Before excluding a stopped root, it idempotently closes any
+// crash gap between the terminal manifest write and finalization evidence.
+// Runnable roots are still returned when an unrelated repair fails.
 func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -766,6 +774,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 		return nil, err
 	}
 	sessions := make([]Session, 0)
+	var repairErrs []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -774,18 +783,22 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 		if err != nil || manifest.ParentSessionID != nil || manifest.SessionKind != KindController {
 			continue
 		}
+		sessionDir := fs.sessionDir(entry.Name())
+		if manifest.IsStopped() {
+			if _, err := repairEpochFinalization(sessionDir); err != nil {
+				repairErrs = append(repairErrs, fmt.Errorf(
+					"repair session %s finalization: %w",
+					manifest.SessionID,
+					err,
+				))
+			}
+			continue
+		}
 		var result *string
 		if epoch := manifest.LastEpoch(); epoch != nil {
 			result = epoch.Result
 		}
-		if result != nil && *result == "stopped" {
-			last := manifest.LastEpoch()
-			if !epochFinalizationPending(last) {
-				continue
-			}
-		}
 		kind := manifest.SessionKind
-		sessionDir := fs.sessionDir(entry.Name())
 		sessions = append(sessions, Session{
 			SessionID:       manifest.SessionID,
 			SessionKind:     &kind,
@@ -794,7 +807,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 			Result:          result,
 		})
 	}
-	return sessions, nil
+	return sessions, errors.Join(repairErrs...)
 }
 
 // Get returns a single session by ID.
@@ -826,17 +839,13 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	}
 
 	s, _ := fs.deriveSession(id, m)
-	if s.Status.IsTerminal() && s.Status != StatusStale {
-		if m.IsStopped() {
-			if _, repairErr := RepairFinalizedEpochEvents(fs.sessionDir(id)); repairErr != nil {
-				return nil, fmt.Errorf("repair stopped epoch finalization: %w", repairErr)
-			}
-			m, err = ReadManifest(fs.manifestPath(id))
-			if err != nil {
-				return nil, err
-			}
-			return fs.deriveSession(id, m)
+	if m.IsStopped() {
+		if _, repairErr := repairEpochFinalization(fs.sessionDir(id)); repairErr != nil {
+			return nil, fmt.Errorf("repair stopped epoch finalization: %w", repairErr)
 		}
+		return fs.deriveSession(id, m)
+	}
+	if s.Status.IsTerminal() && s.Status != StatusStale && m.SessionKind != KindController {
 		return s, nil
 	}
 
@@ -858,9 +867,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		checkpointSaved := false
 		roundCount := 0
 
-		if m.IsStopped() {
-			return nil
-		}
+		m.DesiredStatus = DesiredStatusStopped
 		if open := m.OpenEpoch(); open != nil {
 			open.FinishedAt = &now
 			open.Result = &stopped
@@ -875,36 +882,19 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 			if open.RoundCount == nil {
 				open.RoundCount = &roundCount
 			}
-			if open.FinalizationKey == "" {
-				epoch := Epoch{
-					ID:               len(m.Epochs) + 1,
-					StartedAt:        now,
-					FinishedAt:       &now,
-					Result:           &stopped,
-					Error:            &stoppedErr,
-					CompletionReason: &completionReason,
-					VerifierConceded: &conceded,
-					CheckpointSaved:  &checkpointSaved,
-					RoundCount:       &roundCount,
-				}
-				BindEpochFinalizationIdentity(m, &epoch)
-				m.Epochs = append(m.Epochs, epoch)
+			if epochSupportsFinalization(open) {
+				return nil
 			}
-			return nil
 		}
 
-		epoch := Epoch{
-			ID:               len(m.Epochs) + 1,
-			StartedAt:        now,
-			FinishedAt:       &now,
-			Result:           &stopped,
-			Error:            &stoppedErr,
-			CompletionReason: &completionReason,
-			VerifierConceded: &conceded,
-			CheckpointSaved:  &checkpointSaved,
-			RoundCount:       &roundCount,
-		}
-		BindEpochFinalizationIdentity(m, &epoch)
+		epoch := NewEpoch(m, len(m.Epochs)+1, now, nil)
+		epoch.FinishedAt = &now
+		epoch.Result = &stopped
+		epoch.Error = &stoppedErr
+		epoch.CompletionReason = &completionReason
+		epoch.VerifierConceded = &conceded
+		epoch.CheckpointSaved = &checkpointSaved
+		epoch.RoundCount = &roundCount
 		m.Epochs = append(m.Epochs, epoch)
 		return nil
 	})
@@ -912,7 +902,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		return nil, err
 	}
 	terminateRunner(runner)
-	if _, repairErr := RepairFinalizedEpochEvents(fs.sessionDir(id)); repairErr != nil {
+	if _, repairErr := repairEpochFinalization(fs.sessionDir(id)); repairErr != nil {
 		return nil, fmt.Errorf("record stopped epoch finalization: %w", repairErr)
 	}
 	m, err = ReadManifest(fs.manifestPath(id))
@@ -967,7 +957,7 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 		}
 		return nil, err
 	}
-	if _, err := RepairFinalizedEpochEvents(fs.sessionDir(id)); err != nil {
+	if _, err := repairEpochFinalization(fs.sessionDir(id)); err != nil {
 		return nil, fmt.Errorf("repair epoch finalization: %w", err)
 	}
 	m, err = ReadManifest(fs.manifestPath(id))

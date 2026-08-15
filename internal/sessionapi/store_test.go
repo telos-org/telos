@@ -69,16 +69,37 @@ func TestListRootWorkerSessionsReadsOnlyEligibleManifests(t *testing.T) {
 	write("sess_child", KindController, &parent, nil)
 	write("sess_task", KindTask, nil, nil)
 	write("sess_stopped", KindController, nil, &stopped)
+	write("sess_interrupted", KindController, nil, &stopped)
+	if _, err := MutateManifest(
+		filepath.Join(root, "sess_interrupted", "session.json"),
+		func(manifest *Manifest) error {
+			manifest.DesiredStatus = DesiredStatusRunning
+			return nil
+		},
+	); err != nil {
+		t.Fatal(err)
+	}
 
 	sessions, err := store.ListRootWorkerSessions()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(sessions) != 1 || sessions[0].SessionID != "sess_root" {
+	if len(sessions) != 2 {
 		t.Fatalf("root worker sessions: %#v", sessions)
 	}
-	if sessions[0].SessionDir == nil || *sessions[0].SessionDir != filepath.Join(root, "sess_root") {
-		t.Fatalf("session dir: %#v", sessions[0].SessionDir)
+	byID := map[string]Session{}
+	for _, session := range sessions {
+		byID[session.SessionID] = session
+	}
+	rootSession, ok := byID["sess_root"]
+	if !ok {
+		t.Fatalf("missing root session: %#v", sessions)
+	}
+	if _, ok := byID["sess_interrupted"]; !ok {
+		t.Fatalf("explicit running intent was lost: %#v", sessions)
+	}
+	if rootSession.SessionDir == nil || *rootSession.SessionDir != filepath.Join(root, "sess_root") {
+		t.Fatalf("session dir: %#v", rootSession.SessionDir)
 	}
 }
 
@@ -107,11 +128,8 @@ func TestStopBeforeWorkerEmitsBoundFinalizationExactlyOnce(t *testing.T) {
 	if epoch.PackageDigest == nil || *epoch.PackageDigest == "" || epoch.SpecSHA256 == "" {
 		t.Fatalf("missing bound package identity: %#v", epoch)
 	}
-	if epoch.FinalizationKey != session.SessionID+":epoch:00000001:finalized" {
-		t.Fatalf("finalization key: %q", epoch.FinalizationKey)
-	}
-	if !epoch.FinalizationEventEmitted {
-		t.Fatal("finalization marker was not persisted")
+	if !epochSupportsFinalization(epoch) {
+		t.Fatalf("finalization capability: %#v", epoch.WorkerCapabilities)
 	}
 
 	assertSingleStoppedFinalization(t, store, session.SessionID, epoch)
@@ -137,12 +155,12 @@ func TestStopOpenEpochPreservesBoundIdentity(t *testing.T) {
 		"version":     oldVersion,
 		"spec_sha256": "sha256:old-spec",
 	}}
-	epoch := Epoch{
-		ID:        1,
-		StartedAt: "2026-08-14T11:59:00.000Z",
-		Runner:    &Runner{PID: 999999},
-	}
-	BindEpochFinalizationIdentity(manifest, &epoch)
+	epoch := NewEpoch(
+		manifest,
+		1,
+		"2026-08-14T11:59:00.000Z",
+		&Runner{PID: 999999},
+	)
 	manifest.Epochs = append(manifest.Epochs, epoch)
 	newVersion := 2
 	newRevision := "revision-new"
@@ -160,14 +178,6 @@ func TestStopOpenEpochPreservesBoundIdentity(t *testing.T) {
 
 	if _, err := store.Stop(session.SessionID); err != nil {
 		t.Fatal(err)
-	}
-	stoppedManifest, err := ReadManifest(store.manifestPath(session.SessionID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	stoppedEpoch := stoppedManifest.LastEpoch()
-	if stoppedEpoch == nil || !stoppedEpoch.FinalizationEventEmitted {
-		t.Fatalf("Stop returned before repairing the dead worker outbox: %#v", stoppedEpoch)
 	}
 	events, err := store.Events(session.SessionID)
 	if err != nil {
@@ -222,11 +232,11 @@ func TestStopLegacyOpenEpochEmitsSeparateCurrentStopIdentity(t *testing.T) {
 		t.Fatalf("epochs: got %d want 2", len(updated.Epochs))
 	}
 	legacy := updated.Epochs[0]
-	if legacy.Result == nil || *legacy.Result != "stopped" || legacy.FinalizationKey != "" {
+	if legacy.Result == nil || *legacy.Result != "stopped" || epochSupportsFinalization(&legacy) {
 		t.Fatalf("legacy epoch was rebound: %#v", legacy)
 	}
 	synthetic := updated.Epochs[1]
-	if synthetic.FinalizationKey == "" || !synthetic.FinalizationEventEmitted {
+	if !epochSupportsFinalization(&synthetic) {
 		t.Fatalf("synthetic stop was not finalized: %#v", synthetic)
 	}
 	events, err := store.Events(session.SessionID)
@@ -254,14 +264,9 @@ func TestStopIdleControllerAppendsEpochWithoutRewritingHistory(t *testing.T) {
 	}
 	completed := "completed"
 	finishedAt := "2026-08-14T11:58:00.000Z"
-	epoch := Epoch{
-		ID:                       1,
-		StartedAt:                "2026-08-14T11:57:00.000Z",
-		FinishedAt:               &finishedAt,
-		Result:                   &completed,
-		FinalizationEventEmitted: true,
-	}
-	BindEpochFinalizationIdentity(manifest, &epoch)
+	epoch := NewEpoch(manifest, 1, "2026-08-14T11:57:00.000Z", nil)
+	epoch.FinishedAt = &finishedAt
+	epoch.Result = &completed
 	manifest.Epochs = append(manifest.Epochs, epoch)
 	if err := WriteManifest(store.manifestPath(session.SessionID), manifest); err != nil {
 		t.Fatal(err)
@@ -304,8 +309,8 @@ func TestSecondStopRepairsPersistedFinalizationOutbox(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !epochFinalizationPending(pending.LastEpoch()) {
-		t.Fatalf("stop did not persist repairable outbox: %#v", pending.LastEpoch())
+	if !epochNeedsFinalization(pending.LastEpoch()) {
+		t.Fatalf("stop did not persist repairable terminal epoch: %#v", pending.LastEpoch())
 	}
 	evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
 	pending.Specs[0].EvidencePath = &evidencePath
@@ -346,7 +351,7 @@ func assertSingleStoppedFinalization(
 		t.Fatalf("epoch_finalized events: got %d want 1", len(finalized))
 	}
 	data := finalized[0].Data
-	if data["finalization_key"] != epoch.FinalizationKey || data["result"] != "stopped" {
+	if data["finalization_key"] != epochFinalizationKey(sessionID, epoch.ID) || data["result"] != "stopped" {
 		t.Fatalf("unexpected stopped finalization: %#v", data)
 	}
 	if data["checkpoint_saved"] != false || data["verifier_conceded"] != false {

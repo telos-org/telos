@@ -14,6 +14,7 @@ import (
 type Manifest struct {
 	SessionID          string                     `json:"session_id"`
 	SessionKind        SessionKind                `json:"session_kind"`
+	DesiredStatus      SessionDesiredStatus       `json:"desired_status,omitempty"`
 	Runtime            SessionRuntime             `json:"runtime,omitempty"`
 	CreatedAt          string                     `json:"created_at"`
 	Launcher           string                     `json:"launcher"`
@@ -64,27 +65,32 @@ type ManifestSpec struct {
 }
 
 type Epoch struct {
-	ID                       int      `json:"id"`
-	StartedAt                string   `json:"started_at"`
-	FinishedAt               *string  `json:"finished_at"`
-	Result                   *string  `json:"result"`
-	Error                    *string  `json:"error"`
-	Runner                   *Runner  `json:"runner"`
-	SpecName                 string   `json:"spec_name,omitempty"`
-	SpecVersion              *int     `json:"spec_version,omitempty"`
-	Revision                 *string  `json:"revision,omitempty"`
-	PackageDigest            *string  `json:"package_digest,omitempty"`
-	SpecSHA256               string   `json:"spec_sha256,omitempty"`
-	CompletionReason         *string  `json:"completion_reason,omitempty"`
-	VerifierConceded         *bool    `json:"verifier_conceded,omitempty"`
-	CheckpointSaved          *bool    `json:"checkpoint_saved,omitempty"`
-	CheckpointPath           *string  `json:"checkpoint_path,omitempty"`
-	CheckpointBytes          *int64   `json:"checkpoint_bytes,omitempty"`
-	RoundCount               *int     `json:"round_count,omitempty"`
-	FinalizationKey          string   `json:"finalization_key,omitempty"`
-	FinalizationEventEmitted bool     `json:"finalization_event_emitted,omitempty"`
-	WorkerCapabilities       []string `json:"worker_capabilities,omitempty"`
+	ID                 int      `json:"id"`
+	StartedAt          string   `json:"started_at"`
+	FinishedAt         *string  `json:"finished_at"`
+	Result             *string  `json:"result"`
+	Error              *string  `json:"error"`
+	Runner             *Runner  `json:"runner"`
+	SpecName           string   `json:"spec_name,omitempty"`
+	SpecVersion        *int     `json:"spec_version,omitempty"`
+	Revision           *string  `json:"revision,omitempty"`
+	PackageDigest      *string  `json:"package_digest,omitempty"`
+	SpecSHA256         string   `json:"spec_sha256,omitempty"`
+	CompletionReason   *string  `json:"completion_reason,omitempty"`
+	VerifierConceded   *bool    `json:"verifier_conceded,omitempty"`
+	CheckpointSaved    *bool    `json:"checkpoint_saved,omitempty"`
+	CheckpointPath     *string  `json:"checkpoint_path,omitempty"`
+	CheckpointBytes    *int64   `json:"checkpoint_bytes,omitempty"`
+	RoundCount         *int     `json:"round_count,omitempty"`
+	WorkerCapabilities []string `json:"worker_capabilities,omitempty"`
 }
+
+type SessionDesiredStatus string
+
+const (
+	DesiredStatusRunning SessionDesiredStatus = "running"
+	DesiredStatusStopped SessionDesiredStatus = "stopped"
+)
 
 type Runner struct {
 	Kind               string   `json:"kind,omitempty"`
@@ -198,6 +204,7 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 	return Manifest{
 		SessionID:          input.SessionID,
 		SessionKind:        input.SessionKind,
+		DesiredStatus:      DesiredStatusRunning,
 		Runtime:            input.Runtime,
 		CreatedAt:          input.CreatedAt,
 		Launcher:           input.Launcher,
@@ -308,8 +315,73 @@ func (m *Manifest) OpenEpoch() *Epoch {
 }
 
 func (m *Manifest) IsStopped() bool {
+	if m == nil {
+		return false
+	}
+	switch m.DesiredStatus {
+	case DesiredStatusStopped:
+		return true
+	case DesiredStatusRunning:
+		return false
+	}
+	// Manifests created before desired_status used the final epoch as session
+	// intent. Keep that narrow read-side compatibility path during migration.
 	last := m.LastEpoch()
 	return last != nil && last.Result != nil && *last.Result == "stopped"
+}
+
+// NewEpoch snapshots the spec and worker identity for one execution.
+func NewEpoch(manifest *Manifest, id int, startedAt string, runner *Runner) Epoch {
+	epoch := Epoch{
+		ID:                 id,
+		StartedAt:          startedAt,
+		Runner:             runner,
+		WorkerCapabilities: []string{CapabilityEpochFinalizedEventsV1},
+	}
+	if manifest == nil {
+		return epoch
+	}
+	epoch.SpecName = manifest.SpecName
+	epoch.SpecVersion = clonePtr(manifest.CurrentSpecVersion)
+	epoch.Revision = clonePtr(manifest.CurrentRevision)
+	epoch.PackageDigest = clonePtr(manifest.PackageDigest)
+	epoch.SpecSHA256 = specSHA256ForVersion(
+		manifest.SpecVersions,
+		manifest.CurrentSpecVersion,
+	)
+	return epoch
+}
+
+func specSHA256ForVersion(versions []map[string]any, version *int) string {
+	if version == nil {
+		return ""
+	}
+	for _, candidate := range versions {
+		if numericMapValue(candidate, "version") == *version {
+			value, _ := candidate["spec_sha256"].(string)
+			return value
+		}
+	}
+	return ""
+}
+
+func numericMapValue(values map[string]any, key string) int {
+	switch value := values[key].(type) {
+	case int:
+		return value
+	case float64:
+		return int(value)
+	default:
+		return 0
+	}
+}
+
+func clonePtr[T any](value *T) *T {
+	if value == nil {
+		return nil
+	}
+	copy := *value
+	return &copy
 }
 
 func (c SessionConfig) AsMap() map[string]any {

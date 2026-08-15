@@ -411,12 +411,12 @@ func StartEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid 
 		if logPath != "" {
 			runner.LogPath = logPath
 		}
-		epoch := sessionapi.Epoch{
-			ID:        epochID,
-			StartedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-			Runner:    &runner,
-		}
-		sessionapi.BindEpochFinalizationIdentity(manifest, &epoch)
+		epoch := sessionapi.NewEpoch(
+			manifest,
+			epochID,
+			time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+			&runner,
+		)
 		m.Epochs = append(m.Epochs, epoch)
 		return nil
 	})

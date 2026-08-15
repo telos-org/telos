@@ -350,8 +350,11 @@ func TestCloudCreateSessionHonorsExplicitChildTaskKind(t *testing.T) {
 	if session.SessionKind == nil || *session.SessionKind != sessionapi.KindTask {
 		t.Fatalf("session_kind: got %#v", session.SessionKind)
 	}
-	if session.CurrentSpecVersion != nil {
-		t.Fatalf("child should not have current_spec_version: %#v", session.CurrentSpecVersion)
+	if session.CurrentSpecVersion == nil || *session.CurrentSpecVersion != 1 {
+		t.Fatalf("current_spec_version: %#v", session.CurrentSpecVersion)
+	}
+	if len(session.SpecVersions) != 1 || session.SpecVersions[0]["revision"] != "0.1.0" {
+		t.Fatalf("child spec identity: %#v", session.SpecVersions)
 	}
 }
 
@@ -2138,14 +2141,10 @@ func TestEventsSSEWaitsForTerminalEpochFinalization(t *testing.T) {
 	finishedAt := "2026-08-14T12:00:00.000Z"
 	stopped := "stopped"
 	stoppedErr := "stopped by operator"
-	epoch := sessionapi.Epoch{
-		ID:         1,
-		StartedAt:  "2026-08-14T11:59:00.000Z",
-		FinishedAt: &finishedAt,
-		Result:     &stopped,
-		Error:      &stoppedErr,
-	}
-	sessionapi.BindEpochFinalizationIdentity(manifest, &epoch)
+	epoch := sessionapi.NewEpoch(manifest, 1, "2026-08-14T11:59:00.000Z", nil)
+	epoch.FinishedAt = &finishedAt
+	epoch.Result = &stopped
+	epoch.Error = &stoppedErr
 	manifest.Epochs = append(manifest.Epochs, epoch)
 	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
 		t.Fatal(err)
