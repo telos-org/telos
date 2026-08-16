@@ -103,6 +103,57 @@ func TestListRootWorkerSessionsReadsOnlyEligibleManifests(t *testing.T) {
 	}
 }
 
+func TestListRootWorkerSessionsRepairsTerminalChild(t *testing.T) {
+	store, root := createCloudStoreSession(t)
+	markdown := "---\nversion: 0.1.0\nname: child\nplatform: cloud\n---\n# Child\n"
+	kind := KindTask
+	child, err := store.Create(SessionCreateRequest{
+		SpecMarkdown:    &markdown,
+		SessionKind:     &kind,
+		ParentSessionID: &root.SessionID,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := ReadManifest(store.manifestPath(child.SessionID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	finishedAt := "2026-08-14T12:00:00.000Z"
+	completed := "completed"
+	completionReason := "verifier_conceded"
+	conceded := true
+	checkpointSaved := true
+	epoch := NewEpoch(manifest, 1, "2026-08-14T11:59:00.000Z", nil)
+	epoch.FinishedAt = &finishedAt
+	epoch.Result = &completed
+	epoch.CompletionReason = &completionReason
+	epoch.VerifierConceded = &conceded
+	epoch.CheckpointSaved = &checkpointSaved
+	manifest.Epochs = append(manifest.Epochs, epoch)
+	if err := WriteManifest(store.manifestPath(child.SessionID), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	pending, err := store.Get(child.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pending.Reconciliation == nil || pending.Reconciliation.State != ReconciliationPending {
+		t.Fatalf("reconciliation before repair: %#v", pending.Reconciliation)
+	}
+	if _, err := store.ListRootWorkerSessions(); err != nil {
+		t.Fatal(err)
+	}
+	repaired, err := store.Get(child.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if repaired.Reconciliation == nil || repaired.Reconciliation.State != ReconciliationAccepted {
+		t.Fatalf("reconciliation after repair: %#v", repaired.Reconciliation)
+	}
+}
+
 func TestStopBeforeWorkerEmitsBoundFinalizationExactlyOnce(t *testing.T) {
 	store, session := createCloudStoreSession(t)
 

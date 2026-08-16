@@ -762,8 +762,8 @@ func (fs *FileStore) List() ([]Session, error) {
 }
 
 // ListRootWorkerSessions returns the runnable roots needed by the cloud worker
-// supervisor. Before excluding a stopped root, it idempotently closes any
-// crash gap between the terminal manifest write and finalization evidence.
+// supervisor. It also closes terminal finalization crash gaps for sessions
+// that will not be relaunched, including child tasks and stopped roots.
 // Runnable roots are still returned when an unrelated repair fails.
 func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 	entries, err := os.ReadDir(fs.Root)
@@ -780,18 +780,30 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 			continue
 		}
 		manifest, err := ReadManifest(fs.manifestPath(entry.Name()))
-		if err != nil || manifest.ParentSessionID != nil || manifest.SessionKind != KindController {
+		if err != nil {
 			continue
 		}
 		sessionDir := fs.sessionDir(entry.Name())
-		if manifest.IsStopped() {
-			if _, err := repairEpochFinalization(sessionDir); err != nil {
-				repairErrs = append(repairErrs, fmt.Errorf(
-					"repair session %s finalization: %w",
-					manifest.SessionID,
-					err,
-				))
+		rootController := isTopLevelManifest(manifest) && manifest.SessionKind == KindController
+		if !rootController || manifest.IsStopped() {
+			for i := range manifest.Epochs {
+				if !epochNeedsFinalization(&manifest.Epochs[i]) {
+					continue
+				}
+				if _, err := repairEpochFinalization(sessionDir); err != nil {
+					repairErrs = append(repairErrs, fmt.Errorf(
+						"repair session %s finalization: %w",
+						manifest.SessionID,
+						err,
+					))
+				}
+				break
 			}
+		}
+		if !rootController {
+			continue
+		}
+		if manifest.IsStopped() {
 			continue
 		}
 		var result *string
