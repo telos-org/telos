@@ -2,19 +2,31 @@ package telosd
 
 import (
 	"fmt"
+	"os"
+	"strings"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/sessionworker"
 )
 
-type localProcessSubstrate struct{}
+type localProcessSubstrate struct {
+	checkpointRoot      string
+	checkpointSessionID string
+}
 
 func newLocalProcessSubstrate() localProcessSubstrate {
 	return localProcessSubstrate{}
 }
 
-func newSessionSubstrate(Config) (sessionSubstrate, error) {
-	return newLocalProcessSubstrate(), nil
+func newSessionSubstrate(cfg Config) (sessionSubstrate, error) {
+	substrate := newLocalProcessSubstrate()
+	if cfg.Mode == ModeCloud {
+		if sessionID := strings.TrimSpace(os.Getenv("TELOS_SESSION_ID")); sessionID != "" {
+			substrate.checkpointRoot = cfg.Root
+			substrate.checkpointSessionID = sessionID
+		}
+	}
+	return substrate, nil
 }
 
 func (s localProcessSubstrate) Apply(session *sessionapi.Session, wakeReason string) error {
@@ -26,8 +38,10 @@ func (s localProcessSubstrate) Apply(session *sessionapi.Session, wakeReason str
 		return fmt.Errorf("session %s has no session_dir", session.SessionID)
 	}
 	return sessionworker.EnsureStartedWithOptions(sessionDir, sessionworker.StartOptions{
-		Runtime:    sessionapi.RuntimeCloud,
-		WakeReason: wakeReason,
+		Runtime:             sessionapi.RuntimeCloud,
+		WakeReason:          wakeReason,
+		CheckpointRoot:      s.checkpointRoot,
+		CheckpointSessionID: s.checkpointSessionID,
 	})
 }
 

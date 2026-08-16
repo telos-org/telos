@@ -24,6 +24,28 @@ will help write the smallest verifiable `SPEC.md`, plan it, and choose a bounded
 Use `telos <command> --help` for the exact command surface of the installed
 release.
 
+## Managed Cloud snapshot safety
+
+A claimed Cloud runtime (`TELOS_SESSION_ID=sess_...`) advertises
+`checkpoint_safe_point` in the live `/api/healthz` `capabilities` list. The
+Cloud host can then call the authenticated, operator-only
+`POST /internal/checkpoint/prepare` and `POST /internal/checkpoint/resume`
+endpoints for that exact session claim.
+
+Prepare durably closes admission for session changes, bootstrap and worker
+supervision, and worker cycles before waiting for admitted work to finish.
+Every prepare and resume includes the same `operation_id`, so a late
+resume from an older snapshot cannot reopen work paused for a newer snapshot.
+A timeout or process restart leaves admission closed for that operation until
+its explicit, idempotent resume. Existing deployments gain this capability
+only when deliberately pinned to a runtime release that contains it.
+
+Checkpoint state uses durable files and fails closed if initialized state is
+missing, malformed, or replaced by a symbolic link. The runtime and other
+tools running as the same Unix user are still one trusted security boundary:
+these checks protect against corruption and accidental path replacement, not
+against a malicious program already running as that same user.
+
 ## Develop
 
 ```bash

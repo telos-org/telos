@@ -145,7 +145,10 @@ type SessionSpecResponse struct {
 }
 
 // RuntimeIdentity identifies the live telosd process serving the API.
-const CapabilityEpochFinalizedEventsV1 = "epoch-finalized-events-v1"
+const (
+	CapabilityEpochFinalizedEventsV1 = "epoch-finalized-events-v1"
+	CapabilityCheckpointSafePoint    = "checkpoint_safe_point"
+)
 
 type RuntimeIdentity struct {
 	Version      string   `json:"runtime_version,omitempty"`

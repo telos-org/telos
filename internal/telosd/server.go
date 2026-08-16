@@ -32,6 +32,15 @@ func Run(ctx context.Context, cfg Config, runtime sessionapi.RuntimeIdentity) er
 	if err := os.MkdirAll(SessionsRoot(cfg.Root), 0o755); err != nil {
 		return fmt.Errorf("create sessions root: %w", err)
 	}
+	safePoint, err := checkpointSafePointForConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("initialize checkpoint safe point: %w", err)
+	}
+	runtime.Capabilities = setRuntimeCapability(
+		runtime.Capabilities,
+		checkpointSafePointCapability,
+		safePoint != nil,
+	)
 
 	baseStore := storeForConfig(cfg)
 	store := sessionapi.Store(baseStore)
@@ -43,15 +52,23 @@ func Run(ctx context.Context, cfg Config, runtime sessionapi.RuntimeIdentity) er
 		materializer := newApplyPackageMaterializer(baseStore.PackageRoot, cfg.Auth.Token)
 		reconciler := newControllerReconciler(baseStore, substrate, materializer, cloudControllerDefaults())
 		store = reconciler
-		if err := reconciler.ensureRootWorkers("server_started"); err != nil {
+		if err := withCheckpointLease(safePoint, func() error {
+			return reconciler.ensureRootWorkers("server_started")
+		}); err != nil && !errors.Is(err, errCheckpointAdmissionClosed) {
 			log.Printf("ensure root workers: %v", err)
 		}
-		startRootWorkerReconciler(ctx, reconciler)
-		startSessionBootstrapReconciler(ctx, store, materializer)
+		startRootWorkerReconciler(ctx, reconciler, safePoint)
+		startSessionBootstrapReconciler(ctx, store, materializer, safePoint)
+		if safePoint != nil {
+			store = checkpointStore{Store: store, safePoint: safePoint}
+		}
 	}
 	mux := http.NewServeMux()
 	authorizer := authorizerForConfig(cfg, baseStore)
 	sessionapi.RegisterRoutes(mux, store, authorizer, runtime)
+	if safePoint != nil {
+		registerCheckpointRoutes(mux, safePoint, authorizer)
+	}
 
 	var lastRequest atomic.Int64
 	lastRequest.Store(time.Now().UnixNano())
@@ -89,7 +106,24 @@ func Run(ctx context.Context, cfg Config, runtime sessionapi.RuntimeIdentity) er
 	return nil
 }
 
-func startRootWorkerReconciler(ctx context.Context, reconciler *controllerReconciler) {
+func setRuntimeCapability(capabilities []string, capability string, enabled bool) []string {
+	result := make([]string, 0, len(capabilities)+1)
+	for _, existing := range capabilities {
+		if existing != capability {
+			result = append(result, existing)
+		}
+	}
+	if enabled {
+		result = append(result, capability)
+	}
+	return result
+}
+
+func startRootWorkerReconciler(
+	ctx context.Context,
+	reconciler *controllerReconciler,
+	safePoint *checkpointSafePoint,
+) {
 	go func() {
 		ticker := time.NewTicker(rootWorkerReconcileInterval)
 		defer ticker.Stop()
@@ -98,7 +132,9 @@ func startRootWorkerReconciler(ctx context.Context, reconciler *controllerReconc
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				if err := reconciler.ensureRootWorkers("worker_supervision"); err != nil {
+				if err := withCheckpointLease(safePoint, func() error {
+					return reconciler.ensureRootWorkers("worker_supervision")
+				}); err != nil && !errors.Is(err, errCheckpointAdmissionClosed) {
 					log.Printf("ensure root workers: %v", err)
 				}
 			}

@@ -43,6 +43,8 @@ done
   echo "TELOS_SESSION_ID=$TELOS_SESSION_ID"
   echo "TELOS_API_TOKEN=$TELOS_API_TOKEN"
   echo "TELOS_WAKE_REASON=$TELOS_WAKE_REASON"
+  echo "TELOS_CHECKPOINT_ROOT=$TELOS_CHECKPOINT_ROOT"
+  echo "TELOS_CHECKPOINT_SESSION_ID=$TELOS_CHECKPOINT_SESSION_ID"
 } > "$session_dir/worker.env"
 `), 0o755); err != nil {
 		t.Fatal(err)
@@ -56,7 +58,10 @@ done
 		t.Fatalf("Create: %v", err)
 	}
 
-	substrate := newLocalProcessSubstrate()
+	substrate := localProcessSubstrate{
+		checkpointRoot:      dir,
+		checkpointSessionID: "sess_deployment_123",
+	}
 	if err := substrate.Apply(session, "controller_started"); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -79,9 +84,27 @@ done
 		"TELOS_RUNTIME=cloud",
 		"TELOS_SESSION_ID=" + session.SessionID,
 		"TELOS_WAKE_REASON=controller_started",
+		"TELOS_CHECKPOINT_ROOT=" + dir,
+		"TELOS_CHECKPOINT_SESSION_ID=sess_deployment_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("worker env missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestNewSessionSubstrateScopesCheckpointAdmissionToClaimedCloudRuntime(t *testing.T) {
+	t.Setenv("TELOS_SESSION_ID", "sess_deployment_123")
+	root := t.TempDir()
+	substrate, err := newSessionSubstrate(Config{Mode: ModeCloud, Root: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	local, ok := substrate.(localProcessSubstrate)
+	if !ok {
+		t.Fatalf("substrate: got %T", substrate)
+	}
+	if local.checkpointRoot != root || local.checkpointSessionID != "sess_deployment_123" {
+		t.Fatalf("checkpoint scope: root=%q session=%q", local.checkpointRoot, local.checkpointSessionID)
 	}
 }

@@ -2,6 +2,7 @@ package telosd
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -26,17 +27,19 @@ const (
 
 type sessionBootstrapReconciler struct {
 	packageRoot     string
-	materializer    *applyPackageMaterializer
+	materializer    packageMaterializer
 	model           string
 	thinking        string
 	agentTimeoutSec *int
 	store           sessionapi.Store
+	safePoint       *checkpointSafePoint
 }
 
 func startSessionBootstrapReconciler(
 	ctx context.Context,
 	store sessionapi.Store,
 	materializer *applyPackageMaterializer,
+	safePoint *checkpointSafePoint,
 ) {
 	if os.Getenv("TELOS_SESSION_BOOTSTRAP_ENABLED") == "0" {
 		return
@@ -52,6 +55,7 @@ func startSessionBootstrapReconciler(
 		thinking:        cloudSessionThinking(),
 		agentTimeoutSec: cloudAgentTimeoutSec(),
 		store:           store,
+		safePoint:       safePoint,
 	}
 	if r.packageRoot == "" {
 		return
@@ -89,6 +93,18 @@ func bootstrapSessionFromEnv() (cloudBootstrapSession, bool) {
 }
 
 func (r sessionBootstrapReconciler) reconcile(sessions []cloudBootstrapSession) error {
+	var lease *checkpointLease
+	if r.safePoint != nil {
+		var err error
+		lease, err = r.safePoint.acquire()
+		if err != nil {
+			if errors.Is(err, errCheckpointAdmissionClosed) {
+				return fmt.Errorf("checkpoint preparation has closed bootstrap work: %w", sessionapi.ErrConflict)
+			}
+			return err
+		}
+		defer lease.release()
+	}
 	current, err := r.store.List()
 	if err != nil {
 		return fmt.Errorf("list local sessions: %w", err)
@@ -143,7 +159,8 @@ func (r sessionBootstrapReconciler) packagePathForDigest(digest string) (string,
 		if err == nil {
 			return path, nil
 		}
-		if r.materializer.bundleBase != "" {
+		concrete, ok := r.materializer.(*applyPackageMaterializer)
+		if !ok || concrete.bundleBase != "" {
 			return "", err
 		}
 	}

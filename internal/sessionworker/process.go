@@ -37,8 +37,10 @@ func (o *Ownership) Release() error {
 }
 
 type StartOptions struct {
-	Runtime    sessionapi.SessionRuntime
-	WakeReason string
+	Runtime             sessionapi.SessionRuntime
+	WakeReason          string
+	CheckpointRoot      string
+	CheckpointSessionID string
 }
 
 func Start(sessionDir string, runtime sessionapi.SessionRuntime) error {
@@ -89,10 +91,7 @@ func EnsureStartedWithOptions(sessionDir string, opts StartOptions) error {
 		if err != nil {
 			return fmt.Errorf("read active worker identity: %w", err)
 		}
-		if runnerSupportsCapability(
-			manifest.Runner,
-			sessionapi.CapabilityEpochFinalizedEventsV1,
-		) {
+		if runnerSupportsRequiredCapabilities(manifest.Runner, opts) {
 			return nil
 		}
 		if manifest.OpenEpoch() != nil {
@@ -193,16 +192,83 @@ func runnerSupportsCapability(runner *sessionapi.Runner, capability string) bool
 	return false
 }
 
+// ActiveWorkerSupportsCapabilities reports whether a currently running worker
+// advertises every required capability. An inactive session is ready because
+// its next worker will be launched with the current StartOptions.
+func ActiveWorkerSupportsCapabilities(sessionDir string, capabilities ...string) (bool, error) {
+	alive, err := workerAlive(sessionDir)
+	if err != nil {
+		return false, err
+	}
+	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err != nil {
+		return false, fmt.Errorf("read active worker identity: %w", err)
+	}
+	if !alive {
+		pid, recorded := manifest.Runner.ProcessID()
+		if !recorded {
+			return true, nil
+		}
+		stillRunning, err := processStillRunning(pid)
+		if err != nil {
+			return false, fmt.Errorf("inspect worker cleanup process %d: %w", pid, err)
+		}
+		// A legacy worker releases its runner lock just before clearing its
+		// manifest record. Keep preparation closed across that cleanup gap.
+		return !stillRunning, nil
+	}
+	for _, capability := range capabilities {
+		if !runnerSupportsCapability(manifest.Runner, capability) {
+			return false, nil
+		}
+	}
+	return true, nil
+}
+
+func processStillRunning(pid int) (bool, error) {
+	if pid <= 0 {
+		return false, nil
+	}
+	err := syscall.Kill(pid, 0)
+	if err == nil || errors.Is(err, syscall.EPERM) {
+		return true, nil
+	}
+	if errors.Is(err, syscall.ESRCH) {
+		return false, nil
+	}
+	return false, err
+}
+
+func runnerSupportsRequiredCapabilities(runner *sessionapi.Runner, opts StartOptions) bool {
+	if !runnerSupportsCapability(runner, sessionapi.CapabilityEpochFinalizedEventsV1) {
+		return false
+	}
+	if checkpointAdmissionConfigured(opts.CheckpointRoot, opts.CheckpointSessionID) {
+		return runnerSupportsCapability(runner, sessionapi.CapabilityCheckpointSafePoint)
+	}
+	return true
+}
+
+func checkpointAdmissionConfigured(root, sessionID string) bool {
+	return strings.TrimSpace(root) != "" && strings.TrimSpace(sessionID) != ""
+}
+
 func Env(sessionDir string, opts StartOptions) []string {
 	runtime := opts.Runtime
 	if runtime == "" {
 		runtime = sessionapi.RuntimeLocal
 	}
-	env := append(os.Environ(),
+	env := append(withoutCheckpointEnvironment(os.Environ()),
 		"TELOS_RUNTIME="+string(runtime),
 		"TELOS_SESSION_DIR="+filepath.Dir(sessionDir),
 		"TELOS_SESSION_ID="+filepath.Base(sessionDir),
 	)
+	if checkpointAdmissionConfigured(opts.CheckpointRoot, opts.CheckpointSessionID) {
+		env = append(env,
+			"TELOS_CHECKPOINT_ROOT="+opts.CheckpointRoot,
+			"TELOS_CHECKPOINT_SESSION_ID="+opts.CheckpointSessionID,
+		)
+	}
 	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
 	if err == nil {
 		if manifest.ParentSessionID != nil {
@@ -219,6 +285,18 @@ func Env(sessionDir string, opts StartOptions) []string {
 		)
 	}
 	return env
+}
+
+func withoutCheckpointEnvironment(env []string) []string {
+	filtered := make([]string, 0, len(env))
+	for _, entry := range env {
+		if strings.HasPrefix(entry, "TELOS_CHECKPOINT_ROOT=") ||
+			strings.HasPrefix(entry, "TELOS_CHECKPOINT_SESSION_ID=") {
+			continue
+		}
+		filtered = append(filtered, entry)
+	}
+	return filtered
 }
 
 func Stop(sessionDir string) error {
@@ -427,14 +505,19 @@ func StartEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid 
 }
 
 func RunnerIdentity(pid int) sessionapi.Runner {
+	capabilities := []string{sessionapi.CapabilityEpochFinalizedEventsV1}
+	if checkpointAdmissionConfigured(
+		os.Getenv("TELOS_CHECKPOINT_ROOT"),
+		os.Getenv("TELOS_CHECKPOINT_SESSION_ID"),
+	) {
+		capabilities = append(capabilities, sessionapi.CapabilityCheckpointSafePoint)
+	}
 	return sessionapi.Runner{
-		Kind:      "local-subprocess",
-		PID:       pid,
-		PGID:      pid,
-		StartedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		WorkerCapabilities: []string{
-			sessionapi.CapabilityEpochFinalizedEventsV1,
-		},
+		Kind:               "local-subprocess",
+		PID:                pid,
+		PGID:               pid,
+		StartedAt:          time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		WorkerCapabilities: capabilities,
 	}
 }
 

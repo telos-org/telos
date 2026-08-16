@@ -2,11 +2,24 @@ package telosd
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
+
+type blockingBootstrapMaterializer struct {
+	started chan struct{}
+	release chan struct{}
+}
+
+func (m *blockingBootstrapMaterializer) Ensure(context.Context, string) (string, error) {
+	close(m.started)
+	<-m.release
+	return "", errors.New("test materialization stopped")
+}
 
 type fakeReconcileStore struct {
 	sessions []sessionapi.Session
@@ -111,6 +124,45 @@ func TestSessionBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	}
 }
 
+func TestSessionBootstrapMaterializationParticipatesInCheckpointDrain(t *testing.T) {
+	safePoint := newTestCheckpointSafePoint(t)
+	materializer := &blockingBootstrapMaterializer{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	reconciler := sessionBootstrapReconciler{
+		packageRoot:  t.TempDir(),
+		materializer: materializer,
+		store:        &fakeReconcileStore{},
+		safePoint:    safePoint,
+	}
+	reconcileDone := make(chan error, 1)
+	go func() {
+		reconcileDone <- reconciler.reconcile([]cloudBootstrapSession{{
+			CloudSessionID: testCheckpointSessionID,
+			Name:           "auth",
+			PackageDigest:  "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		}})
+	}()
+	select {
+	case <-materializer.started:
+	case <-time.After(time.Second):
+		t.Fatal("bootstrap materializer did not start")
+	}
+
+	status, inFlight, err := safePoint.prepare(context.Background(), testCheckpointOperationID)
+	if err != nil || status != "timeout" || inFlight != 1 {
+		t.Fatalf("prepare: status=%q in_flight=%d err=%v", status, inFlight, err)
+	}
+	close(materializer.release)
+	if err := <-reconcileDone; err == nil {
+		t.Fatal("expected blocking test materializer error")
+	}
+	if _, err := reconciler.safePoint.acquire(); !errors.Is(err, errCheckpointAdmissionClosed) {
+		t.Fatalf("bootstrap admission after prepare timeout: got %v", err)
+	}
+}
+
 func TestSessionBootstrapMatchesCloudSessionNameBeforeSpecName(t *testing.T) {
 	digest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	specName := "auth-v2"
@@ -210,7 +262,7 @@ func TestSessionBootstrapCanBeDisabled(t *testing.T) {
 	t.Setenv("TELOS_PACKAGE_ROOT", t.TempDir())
 	store := &fakeReconcileStore{}
 
-	startSessionBootstrapReconciler(context.Background(), store, nil)
+	startSessionBootstrapReconciler(context.Background(), store, nil, nil)
 
 	if len(store.creates) != 0 || len(store.stops) != 0 {
 		t.Fatalf("expected disabled bootstrap to do nothing, creates=%#v stops=%#v", store.creates, store.stops)

@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "telosd",
     srcs = [
+        "checkpoint_safe_point.go",
         "config.go",
         "controller_reconciler.go",
         "local_process_worker.go",
@@ -29,6 +30,7 @@ go_library(
 go_test(
     name = "telosd_test",
     srcs = [
+        "checkpoint_safe_point_test.go",
         "config_test.go",
         "controller_reconciler_test.go",
         "package_materializer_test.go",

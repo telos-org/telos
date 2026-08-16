@@ -23,6 +23,10 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	if err != nil {
 		return 1, err
 	}
+	safePoint, err := checkpointSafePointForWorker()
+	if err != nil {
+		return 1, fmt.Errorf("initialize checkpoint safe point: %w", err)
+	}
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 	defer signal.Stop(stop)
@@ -30,19 +34,46 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	signal.Notify(wake, syscall.SIGUSR1)
 	defer signal.Stop(wake)
 
+	lease, stopped, err := waitForCheckpointAdmission(safePoint, wake, stop)
+	if err != nil {
+		return 1, err
+	}
+	if stopped {
+		return 0, nil
+	}
 	owner, err := sessionworker.AcquireOwnership(sessionDir, filepath.Join(sessionDir, "runner.log"))
 	if err != nil {
+		lease.release()
 		if errors.Is(err, sessionworker.ErrWorkerAlreadyRunning) {
 			return 0, nil
 		}
 		return 1, err
 	}
-	defer wakeParent(sessionDir)
-	defer clearRunner(sessionDir, os.Getpid())
-	defer owner.Release()
+	defer func() {
+		if lease == nil && safePoint != nil {
+			cleanupLease, _, cleanupErr := waitForCheckpointAdmission(safePoint, nil, nil)
+			if cleanupErr == nil {
+				lease = cleanupLease
+			}
+		}
+		finishCheckpointWork(lease, func() {
+			clearRunner(sessionDir, os.Getpid())
+			_ = owner.Release()
+			wakeParent(sessionDir)
+		})
+	}()
 
 	failures := 0
 	for {
+		if lease == nil {
+			lease, stopped, err = waitForCheckpointAdmission(safePoint, wake, stop)
+			if err != nil {
+				return 1, err
+			}
+			if stopped {
+				return 0, nil
+			}
+		}
 		manifest, err := LoadWorkerManifest(sessionDir)
 		if err != nil {
 			return 1, err
@@ -56,6 +87,8 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 			}
 			fmt.Fprintf(os.Stderr, "root session cycle failed: %v\n", err)
 			failures++
+			lease.release()
+			lease = nil
 			if waitForNextCycle(wake, stop, failureBackoff(failures)) {
 				return 0, nil
 			}
@@ -79,6 +112,8 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 			} else {
 				fmt.Fprintf(os.Stderr, "root session cycle failed: %s\n", result.GameResult)
 			}
+			lease.release()
+			lease = nil
 			if waitForNextCycle(wake, stop, failureBackoff(failures)) {
 				return 0, nil
 			}
@@ -96,12 +131,58 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 				if stopRequested(stop) {
 					return 0, nil
 				}
+				lease.release()
+				lease = nil
 				continue
 			}
 		}
+		lease.release()
+		lease = nil
 		if waitForNextCycle(wake, stop, controllerInterval(manifest.Interval)) {
 			return 0, nil
 		}
+	}
+}
+
+func finishCheckpointWork(lease *checkpointLease, cleanup func()) {
+	defer lease.release()
+	if cleanup != nil {
+		cleanup()
+	}
+}
+
+func waitForCheckpointAdmission(safePoint *checkpointSafePoint, wake, stop <-chan os.Signal) (*checkpointLease, bool, error) {
+	if safePoint == nil {
+		return nil, false, nil
+	}
+	for {
+		lease, err := safePoint.acquire()
+		if err == nil {
+			return lease, false, nil
+		}
+		if !errors.Is(err, errCheckpointAdmissionClosed) {
+			return nil, false, fmt.Errorf("acquire checkpoint work lease: %w", err)
+		}
+		if waitForCheckpointRetry(safePoint.pollInterval, wake, stop) {
+			return nil, true, nil
+		}
+	}
+}
+
+// Go 1.23 and later timer channels are synchronous. Stopping and then draining
+// a timer can therefore block forever if the timer became ready concurrently
+// but the signal case won the select.
+func waitForCheckpointRetry(delay time.Duration, wake, stop <-chan os.Signal) bool {
+	timer := time.NewTimer(delay)
+	select {
+	case <-timer.C:
+		return false
+	case <-wake:
+		timer.Stop()
+		return false
+	case <-stop:
+		timer.Stop()
+		return true
 	}
 }
 

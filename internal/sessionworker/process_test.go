@@ -4,10 +4,39 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
+
+func TestEnvPropagatesCheckpointAdmissionScope(t *testing.T) {
+	t.Setenv("TELOS_CHECKPOINT_ROOT", "/stale-root")
+	t.Setenv("TELOS_CHECKPOINT_SESSION_ID", "sess_stale")
+	sessionDir := t.TempDir()
+	env := Env(sessionDir, StartOptions{
+		Runtime:             sessionapi.RuntimeCloud,
+		CheckpointRoot:      "/telos-state",
+		CheckpointSessionID: "sess_deployment_123",
+	})
+	joined := strings.Join(env, "\n")
+	for _, want := range []string{
+		"TELOS_CHECKPOINT_ROOT=/telos-state",
+		"TELOS_CHECKPOINT_SESSION_ID=sess_deployment_123",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Fatalf("worker environment missing %q", want)
+		}
+	}
+	if strings.Contains(joined, "/stale-root") || strings.Contains(joined, "sess_stale") {
+		t.Fatalf("worker environment retained stale checkpoint scope:\n%s", joined)
+	}
+
+	disabled := strings.Join(Env(sessionDir, StartOptions{Runtime: sessionapi.RuntimeCloud}), "\n")
+	if strings.Contains(disabled, "TELOS_CHECKPOINT_") {
+		t.Fatalf("worker environment retained checkpoint admission while disabled:\n%s", disabled)
+	}
+}
 
 func TestAcquireOwnershipIsExclusiveAndRecordsTopLevelRunner(t *testing.T) {
 	sessionDir := t.TempDir()
@@ -35,6 +64,63 @@ func TestAcquireOwnershipIsExclusiveAndRecordsTopLevelRunner(t *testing.T) {
 	}
 	if manifest.Runner == nil || manifest.Runner.PID != os.Getpid() {
 		t.Fatalf("top-level runner not recorded: %#v", manifest.Runner)
+	}
+}
+
+func TestActiveWorkerCapabilityReadiness(t *testing.T) {
+	sessionDir := t.TempDir()
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), &sessionapi.Manifest{
+		SessionID:   filepath.Base(sessionDir),
+		SessionKind: sessionapi.KindController,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TELOS_CHECKPOINT_ROOT", "")
+	t.Setenv("TELOS_CHECKPOINT_SESSION_ID", "")
+	legacyOwner, err := AcquireOwnership(sessionDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready, err := ActiveWorkerSupportsCapabilities(
+		sessionDir,
+		sessionapi.CapabilityCheckpointSafePoint,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Fatal("active legacy worker was accepted as checkpoint-aware")
+	}
+	if err := legacyOwner.Release(); err != nil {
+		t.Fatal(err)
+	}
+	ready, err = ActiveWorkerSupportsCapabilities(
+		sessionDir,
+		sessionapi.CapabilityCheckpointSafePoint,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ready {
+		t.Fatal("worker cleanup gap was accepted before its runner record was cleared")
+	}
+
+	t.Setenv("TELOS_CHECKPOINT_ROOT", "/telos-state")
+	t.Setenv("TELOS_CHECKPOINT_SESSION_ID", "sess_deployment_123")
+	checkpointOwner, err := AcquireOwnership(sessionDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer checkpointOwner.Release()
+	ready, err = ActiveWorkerSupportsCapabilities(
+		sessionDir,
+		sessionapi.CapabilityCheckpointSafePoint,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !ready {
+		t.Fatal("active checkpoint-aware worker was rejected")
 	}
 }
 
@@ -76,6 +162,8 @@ func TestStartEpochWithRunnerPreservesOpenEpochRunner(t *testing.T) {
 }
 
 func TestStartEpochBindsProvidedRevisionIdentity(t *testing.T) {
+	t.Setenv("TELOS_CHECKPOINT_ROOT", "")
+	t.Setenv("TELOS_CHECKPOINT_SESSION_ID", "")
 	sessionDir := t.TempDir()
 	oldVersion := 1
 	oldRevision := "0.1.0"
@@ -163,9 +251,41 @@ func TestStartEpochDoesNotAppendAfterSessionStops(t *testing.T) {
 }
 
 func TestRunnerIdentityAdvertisesFinalizationCapability(t *testing.T) {
+	t.Setenv("TELOS_CHECKPOINT_ROOT", "")
+	t.Setenv("TELOS_CHECKPOINT_SESSION_ID", "")
 	runner := RunnerIdentity(42)
 	if !runnerSupportsCapability(&runner, sessionapi.CapabilityEpochFinalizedEventsV1) {
 		t.Fatalf("runner capabilities: %#v", runner.WorkerCapabilities)
+	}
+	if runnerSupportsCapability(&runner, sessionapi.CapabilityCheckpointSafePoint) {
+		t.Fatalf("unscoped worker advertised checkpoint participation: %#v", runner.WorkerCapabilities)
+	}
+}
+
+func TestRunnerIdentityAdvertisesCheckpointCapabilityOnlyWithCompleteScope(t *testing.T) {
+	t.Setenv("TELOS_CHECKPOINT_ROOT", "/telos-state")
+	t.Setenv("TELOS_CHECKPOINT_SESSION_ID", "")
+	partial := RunnerIdentity(42)
+	if runnerSupportsCapability(&partial, sessionapi.CapabilityCheckpointSafePoint) {
+		t.Fatalf("partially scoped worker advertised checkpoint participation: %#v", partial.WorkerCapabilities)
+	}
+
+	t.Setenv("TELOS_CHECKPOINT_SESSION_ID", "sess_deployment_123")
+	claimed := RunnerIdentity(42)
+	if !runnerSupportsCapability(&claimed, sessionapi.CapabilityCheckpointSafePoint) {
+		t.Fatalf("scoped worker capabilities: %#v", claimed.WorkerCapabilities)
+	}
+	if !runnerSupportsRequiredCapabilities(&claimed, StartOptions{
+		CheckpointRoot:      "/telos-state",
+		CheckpointSessionID: "sess_deployment_123",
+	}) {
+		t.Fatalf("scoped worker did not meet rollout requirements: %#v", claimed.WorkerCapabilities)
+	}
+	if runnerSupportsRequiredCapabilities(&partial, StartOptions{
+		CheckpointRoot:      "/telos-state",
+		CheckpointSessionID: "sess_deployment_123",
+	}) {
+		t.Fatal("legacy worker was accepted for checkpoint-aware rollout")
 	}
 }
 
