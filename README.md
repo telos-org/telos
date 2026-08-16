@@ -52,9 +52,9 @@ telos describe SESSION_ID
 telos logs SESSION_ID
 ```
 
-`plan` previews the contract without changing anything. `apply` creates or
-updates a persistent Goal in Telos Cloud. Ready means the verifier accepted the
-exact running revision.
+`plan` previews the contract without changing the Goal or target state. `apply`
+creates or updates a persistent Goal in Telos Cloud. Ready means the verifier
+accepted the exact running revision.
 
 Read the [Telos documentation](https://usetelos.ai/docs) for the complete
 workflow.
