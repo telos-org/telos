@@ -2321,19 +2321,14 @@ const maxDashboardDocBytes = 256 << 10
 // boolean — not the string — signals absence.
 func readDashboardDoc(workspacePath string) (string, bool) {
 	path := filepath.Join(workspacePath, dashboardDocFilename)
-	info, err := os.Lstat(path)
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxDashboardDocBytes {
-		return "", false
-	}
-
-	file, err := os.Open(path)
+	file, err := openDashboardDocFile(path)
 	if err != nil {
 		return "", false
 	}
 	defer file.Close()
 
-	info, err = file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxDashboardDocBytes {
+	openedInfo, err := file.Stat()
+	if err != nil || !openedInfo.Mode().IsRegular() || openedInfo.Size() > maxDashboardDocBytes {
 		return "", false
 	}
 	// Read from the same descriptor we inspected and keep the read bounded in

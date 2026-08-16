@@ -4,6 +4,8 @@ go_library(
     name = "sessionapi",
     srcs = [
         "auth.go",
+        "dashboard_doc_open_other.go",
+        "dashboard_doc_open_unix.go",
         "finalization.go",
         "manifest.go",
         "server.go",
@@ -32,6 +34,9 @@ go_test(
 
 go_test(
     name = "sessionapi_store_test",
-    srcs = ["store_test.go"],
+    srcs = [
+        "store_dashboard_doc_unix_test.go",
+        "store_test.go",
+    ],
     embed = [":sessionapi"],
 )
