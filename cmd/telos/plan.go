@@ -58,23 +58,14 @@ func cmdPlan(args []string) {
 		os.Exit(1)
 	}
 	specPath := resolveSpecPath(fs.Arg(0))
-	if err := prepareRegistrySkillsForContext(specPath, contextOverride); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	compiled, err := spec.CompileEnvironment(specPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
 	proposedSpec, err := os.ReadFile(specPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	proposedState, err := planSpecStateForCompiled(compiled, proposedSpec)
+	compiled, proposedState, err := compilePlanSpec(specPath, contextOverride, proposedSpec)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: build plan metadata: %v\n", err)
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -185,6 +176,28 @@ func cmdPlan(args []string) {
 	}
 
 	printPlanPreview(os.Stdout, compiled, specPath, platform, targetContext, sessionLineage, comparison)
+}
+
+func compilePlanSpec(
+	specPath string,
+	contextOverride string,
+	markdown []byte,
+) (*spec.CompiledEnvironment, planSpecState, error) {
+	var compiled *spec.CompiledEnvironment
+	var state planSpecState
+	err := withPlanRegistrySkills(specPath, contextOverride, func() error {
+		var err error
+		compiled, err = spec.CompileEnvironment(specPath)
+		if err != nil {
+			return err
+		}
+		state, err = planSpecStateForCompiled(compiled, markdown)
+		if err != nil {
+			return fmt.Errorf("build plan metadata: %w", err)
+		}
+		return nil
+	})
+	return compiled, state, err
 }
 
 func printPlanPreview(

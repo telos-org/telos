@@ -37,6 +37,50 @@ func prepareRegistrySkillsForContext(specPath, contextOverride string) error {
 	return nil
 }
 
+func withPlanRegistrySkills(
+	specPath string,
+	contextOverride string,
+	compile func() error,
+) error {
+	refs, err := spec.RegistrySkillRefs(specPath)
+	if err != nil {
+		return err
+	}
+	missing := false
+	for _, ref := range refs {
+		if ref.Version != "" && !registrySkillCached(ref) {
+			missing = true
+			break
+		}
+	}
+	if !missing {
+		return compile()
+	}
+
+	cache, err := os.MkdirTemp("", "telos-plan-skills-")
+	if err != nil {
+		return fmt.Errorf("create temporary plan skill cache: %w", err)
+	}
+	defer os.RemoveAll(cache)
+
+	previous, existed := os.LookupEnv(spec.RegistrySkillsDirEnv)
+	if err := os.Setenv(spec.RegistrySkillsDirEnv, cache); err != nil {
+		return fmt.Errorf("select temporary plan skill cache: %w", err)
+	}
+	defer func() {
+		if existed {
+			_ = os.Setenv(spec.RegistrySkillsDirEnv, previous)
+		} else {
+			_ = os.Unsetenv(spec.RegistrySkillsDirEnv)
+		}
+	}()
+
+	if err := prepareRegistrySkillsForContext(specPath, contextOverride); err != nil {
+		return err
+	}
+	return compile()
+}
+
 func registrySkillCached(ref spec.RegistrySkillRef) bool {
 	path := spec.RegistrySkillPath(ref)
 	if path == "" {
