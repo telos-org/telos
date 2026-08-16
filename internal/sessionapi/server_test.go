@@ -1654,54 +1654,38 @@ func TestDashboardDocSurfaced(t *testing.T) {
 		return raw.Sessions[0]
 	}
 
-	// No file: body absent, status explicit.
-	if s := getSession(); s.DashboardDoc != nil || s.DashboardDocStatus != sessionapi.DashboardDocumentStatusAbsent {
-		t.Fatalf("missing dashboard returned doc %v with status %q", s.DashboardDoc, s.DashboardDocStatus)
+	// No file: field absent from detail and list.
+	if s := getSession(); s.DashboardDoc != nil {
+		t.Fatalf("expected no dashboard_doc, got %q", *s.DashboardDoc)
 	}
-	item := listItem()
-	if _, ok := item["dashboard_doc"]; ok {
+	if _, ok := listItem()["dashboard_doc"]; ok {
 		t.Fatal("dashboard_doc should be omitted from the list when absent")
-	}
-	if got := item["dashboard_doc_status"]; got != "absent" {
-		t.Fatalf("list dashboard_doc_status = %v, want absent", got)
 	}
 
 	// Present: served verbatim on detail and list.
 	doc := `root = Page("dd", "Test dashboard", [])`
 	docPath := filepath.Join(workspace, "dashboard.oui")
 	os.WriteFile(docPath, []byte(doc), 0o644)
-	if s := getSession(); s.DashboardDoc == nil || *s.DashboardDoc != doc || s.DashboardDocStatus != sessionapi.DashboardDocumentStatusValid {
-		t.Fatalf("dashboard_doc = %v with status %q, want valid %q", s.DashboardDoc, s.DashboardDocStatus, doc)
+	if s := getSession(); s.DashboardDoc == nil || *s.DashboardDoc != doc {
+		t.Fatalf("dashboard_doc = %v, want %q", s.DashboardDoc, doc)
 	}
-	item = listItem()
-	if got := item["dashboard_doc"]; got != doc {
+	if got := listItem()["dashboard_doc"]; got != doc {
 		t.Fatalf("list dashboard_doc = %v, want %q", got, doc)
-	}
-	if got := item["dashboard_doc_status"]; got != "valid" {
-		t.Fatalf("list dashboard_doc_status = %v, want valid", got)
 	}
 
 	// Empty file: an explicit retraction — served as "".
 	os.WriteFile(docPath, []byte{}, 0o644)
-	if s := getSession(); s.DashboardDoc == nil || *s.DashboardDoc != "" || s.DashboardDocStatus != sessionapi.DashboardDocumentStatusRetracted {
-		t.Fatalf("empty dashboard_doc = %v with status %q, want retracted", s.DashboardDoc, s.DashboardDocStatus)
+	if s := getSession(); s.DashboardDoc == nil || *s.DashboardDoc != "" {
+		t.Fatalf("empty dashboard_doc = %v, want present empty string", s.DashboardDoc)
 	}
-	item = listItem()
-	if got, ok := item["dashboard_doc"]; !ok || got != "" {
+	if got, ok := listItem()["dashboard_doc"]; !ok || got != "" {
 		t.Fatalf("list empty dashboard_doc = %v (present=%v), want \"\"", got, ok)
 	}
-	if got := item["dashboard_doc_status"]; got != "retracted" {
-		t.Fatalf("list dashboard_doc_status = %v, want retracted", got)
-	}
 
-	// Oversized and non-UTF-8 files are invalid, not silently absent.
+	// Oversized file: treated as absent.
 	os.WriteFile(docPath, make([]byte, (256<<10)+1), 0o644)
-	if s := getSession(); s.DashboardDoc != nil || s.DashboardDocStatus != sessionapi.DashboardDocumentStatusInvalid {
-		t.Fatalf("oversized dashboard returned doc %v with status %q", s.DashboardDoc, s.DashboardDocStatus)
-	}
-	os.WriteFile(docPath, []byte{0xff, 0xfe}, 0o644)
-	if s := getSession(); s.DashboardDoc != nil || s.DashboardDocStatus != sessionapi.DashboardDocumentStatusInvalid {
-		t.Fatalf("non-UTF-8 dashboard returned doc %v with status %q", s.DashboardDoc, s.DashboardDocStatus)
+	if s := getSession(); s.DashboardDoc != nil {
+		t.Fatal("oversized dashboard_doc should be treated as absent")
 	}
 }
 

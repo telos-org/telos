@@ -7,21 +7,12 @@ import (
 	"syscall"
 )
 
-// openDashboardDocFile refuses symlinks and opens nonblocking so an
-// agent-controlled path replacement cannot block or redirect telosd.
+// O_NOFOLLOW rejects final-component symlinks; O_NONBLOCK prevents a FIFO
+// replacement from blocking telosd.
 func openDashboardDocFile(path string) (*os.File, error) {
-	fd, err := syscall.Open(
+	return os.OpenFile(
 		path,
-		syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW|syscall.O_CLOEXEC,
+		os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_NOFOLLOW,
 		0,
 	)
-	if err != nil {
-		return nil, err
-	}
-	file := os.NewFile(uintptr(fd), path)
-	if file == nil {
-		_ = syscall.Close(fd)
-		return nil, syscall.EBADF
-	}
-	return file, nil
 }
