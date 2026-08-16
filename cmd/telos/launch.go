@@ -120,16 +120,7 @@ func cmdLaunch(command, action string, args []string) {
 		return
 	}
 
-	cloudConfigured, err := config.IsConfigured()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	launchMode, err := decideLaunchMode(
-		platform,
-		cloudConfigured,
-		localConfigSet,
-	)
+	launchMode, err := resolveLaunchMode(platform, localConfigSet)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -324,6 +315,20 @@ const (
 	launchLocal      launchMode = "local"
 	launchCloudApply launchMode = "cloud-apply"
 )
+
+func resolveLaunchMode(platform string, localConfigSet bool) (launchMode, error) {
+	if platform == "local" {
+		return launchLocal, nil
+	}
+	if localConfigSet {
+		return decideLaunchMode(platform, false, true)
+	}
+	cloudConfigured, err := config.IsConfigured()
+	if err != nil {
+		return "", err
+	}
+	return decideLaunchMode(platform, cloudConfigured, false)
+}
 
 func decideLaunchMode(
 	platform string,

@@ -15,6 +15,7 @@ import (
 
 	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -439,6 +440,26 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 				t.Fatalf("mode: got %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestResolveLaunchModeKeepsLocalRunsIndependentOfCloudConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("context: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.ConfigPathEnv, configPath)
+
+	mode, err := resolveLaunchMode("local", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != launchLocal {
+		t.Fatalf("mode = %q, want %q", mode, launchLocal)
+	}
+
+	if _, err := resolveLaunchMode("cloud", false); err == nil || !strings.Contains(err.Error(), configPath) {
+		t.Fatalf("cloud config error = %v, want path %s", err, configPath)
 	}
 }
 
