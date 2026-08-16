@@ -1,31 +1,64 @@
 # Telos
 
-Telos is a goal-oriented agent runtime. It turns declarative software outcomes
-into bounded agent runs or durable reconciled services.
+**Declarative software.**
+
+Describe the software you want in `SPEC.md`. `telos apply` turns that contract
+into verified running software.
 
 ## Install
 
 ```bash
 curl -fsSL https://usetelos.ai/install.sh | sh
-telos --version
+telos login
 ```
 
-The checksummed installer supports macOS and Linux on amd64 and arm64. It
-installs `telos`, `telosd`, and the open
-[`@telos/telos-cli`](skills/telos-cli/SKILL.md) agent skill. That skill is the
-canonical usage documentation for humans working through interactive coding
-agents.
+The installer supports macOS and Linux on amd64 and arm64.
 
-Give your coding agent an outcome, or start with the canonical
-[quickstart prompt](skills/telos-cli/assets/quickstart-prompt.txt). The agent
-will help write the smallest verifiable `SPEC.md`, plan it, and choose a bounded
-`telos run` or durable `telos apply` workflow.
+## Prompt
 
-For deeper goal-contract guidance, use the checked-in
-[`telos-spec-writing`](skills/telos-spec-writing/SKILL.md) skill.
+Give your coding agent an outcome:
 
-Use `telos <command> --help` for the exact command surface of the installed
-release.
+> Use Telos to turn this outcome into verified running software: &lt;describe
+> what should remain true&gt;. Install it with
+> `curl -fsSL https://usetelos.ai/install.sh | sh` if needed. Run `telos login`
+> and pause for browser approval if Cloud authentication is missing. Write the
+> smallest verifiable `SPEC.md`, review it with me, run `telos plan`, and use
+> `telos apply` after I approve. Wait for Ready, then show me the verifier
+> evidence.
+
+## Specification
+
+A specification describes the outcome, important constraints, and evidence of
+success. It does not prescribe the implementation.
+
+```markdown
+---
+name: hello-service
+version: 0.1.0
+platform: cloud
+---
+
+# Goal
+
+Run an HTTP service with persistent Postgres storage and a verified `/healthz`
+endpoint.
+```
+
+## Apply
+
+```bash
+telos plan SPEC.md
+telos apply SPEC.md
+telos describe SESSION_ID
+telos logs SESSION_ID
+```
+
+`plan` previews the contract without changing anything. `apply` creates or
+updates a persistent Goal in Telos Cloud. Ready means the verifier accepted the
+exact running revision.
+
+Read the [Telos documentation](https://usetelos.ai/docs) for the complete
+workflow.
 
 ## Develop
 
@@ -35,10 +68,26 @@ go build ./cmd/telos ./cmd/telosd
 bazel test //...
 ```
 
-Release builds use `scripts/publish-release.sh`. Protected `master` merges
-publish immutable, commit-addressed binaries and the canonical skill bundle,
-verify them, and promote `latest` only after the complete release exists.
-
 ## License
 
 Fair Source (FSL-1.1), converting to Apache-2.0 two years after each release.
+
+## Local runs
+
+`telos run` executes a bounded Goal and stops. For a human, it is an imperative
+tool for completing one piece of work within a limit. For an agent, it is a
+declarative subsystem for satisfying a bounded subgoal and returning evidence.
+
+Local runs use the open source
+[pi coding agent](https://github.com/earendil-works/pi):
+
+```bash
+npm install -g @earendil-works/pi-coding-agent
+pi # use /login to connect a model provider
+telos run SPEC.md --workspace . --until 3
+telos describe SESSION_ID
+telos logs SESSION_ID
+```
+
+Callers supply the Goal and observe its state and evidence through `describe`
+and `logs`; the implementation remains a black box.
