@@ -14,7 +14,8 @@ Use `personal` to return to the personal context. Never guess the target from a
 repository name or prior session. For one invocation, `--context` takes
 precedence over `TELOS_CONTEXT` and stored configuration without mutating either.
 
-A Cloud spec declares `platform: cloud` and is launched with:
+A persistent Cloud Goal declares `platform: cloud` in its spec and is launched
+with:
 
 ```bash
 telos plan SPEC.md
@@ -36,11 +37,12 @@ telos logs SESSION_ID
 ```
 
 Cloud readiness is a projection of telosd reconciliation. A deployment becomes
-ready only after the runtime has reconciled the matching package digest and the
-verifier has accepted it. Do not interpret allocation success, an HTTP process
-starting, or stale events as goal acceptance.
+`ready` only after the runtime has reconciled the matching package digest and
+the verifier has accepted it. Do not interpret allocation success, an HTTP
+process starting, or stale events as Goal acceptance. `Ready` is revision
+scoped: it confirms the current package, not a future drift check or repair.
 
-For an agent-readable acceptance check, require both fields:
+For an agent-readable acceptance check:
 
 ```bash
 telos describe SESSION_ID --json | jq -e '.status == "ready"'
