@@ -18,13 +18,10 @@ The installer supports macOS and Linux on amd64 and arm64.
 
 Give your coding agent an outcome:
 
-> Use Telos to turn this outcome into verified running software: &lt;describe
-> what should remain true&gt;. Install it with
-> `curl -fsSL https://usetelos.ai/install.sh | sh` if needed. Run `telos login`
-> and pause for browser approval if Cloud authentication is missing. Write the
-> smallest verifiable `SPEC.md`, review it with me, run `telos plan`, and use
-> `telos apply` after I approve. Wait for Ready, then show me the verifier
-> evidence.
+> Use Telos for this Goal: &lt;what should remain true&gt;. Install and sign in if
+> needed. Draft the smallest verifiable `SPEC.md`, then show me `telos plan`.
+> After I approve, run `telos apply` and return the verifier evidence when it
+> reaches Ready.
 
 ## Specification
 
