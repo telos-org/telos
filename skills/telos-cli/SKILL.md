@@ -1,6 +1,6 @@
 ---
 name: telos-cli
-description: Install and use the Telos CLI to turn software outcomes into bounded runs or durable managed services. Use for Telos setup, SPEC.md authoring, plan/run/apply workflows, cloud login and context, session inspection, publishing or pulling packages and skills, nested child goals, and Telos troubleshooting.
+description: Install and use the Telos CLI to apply persistent Goals or run bounded work. Use for Telos setup, SPEC.md authoring, plan/apply/run workflows, cloud login and context, session inspection, publishing or pulling packages and skills, nested child goals, and Telos troubleshooting.
 metadata:
   registry: "@telos/telos-cli"
   quickstart_prompt: "assets/quickstart-prompt.txt"
@@ -10,8 +10,9 @@ metadata:
 # Telos CLI
 
 Use Telos as the non-interactive execution layer behind the user's interactive
-coding agent. Keep the human in control of product intent and consequential
-mutations; let Telos implement and independently verify a clear goal.
+coding agent. The Goal is the durable outcome; `SPEC.md` is its executable
+contract. Keep the human in control of product intent and consequential
+mutations; let Telos implement and independently verify the current revision.
 
 ## Start from the live system
 
@@ -26,7 +27,7 @@ mutations; let Telos implement and independently verify a clear goal.
 Read only the reference needed for the current task:
 
 - [references/goals.md](references/goals.md) for writing a spec and choosing
-  `run` versus `apply`.
+  `apply` versus `run`.
 - [references/cloud.md](references/cloud.md) for managed deployments, login,
   context, updates, and status.
 - [references/packages-and-skills.md](references/packages-and-skills.md) for
@@ -48,16 +49,17 @@ Validate before mutation:
 telos plan SPEC.md
 ```
 
-For bounded local work:
-
-```bash
-telos run SPEC.md --workspace . --until 3
-```
-
-For a durable local controller or a managed Cloud deployment:
+For a persistent Goal in Telos Cloud:
 
 ```bash
 telos apply SPEC.md
+```
+
+Use `telos run` as the bounded execution subsystem for one-off work or child
+goals that should stop at a clear limit:
+
+```bash
+telos run SPEC.md --workspace . --until 3
 ```
 
 Use the session ID returned by Telos. Observe the real session instead of
@@ -80,8 +82,8 @@ output when another agent must parse the result.
 - Preserve immutable package versions. Change content by publishing a new
   version, then plan and apply that version deliberately.
 - Do not report completion until the implementation agent finishes and the
-  verifier accepts the result. For managed services, also require the Cloud
-  deployment to report its truthful ready state.
+  verifier accepts the exact current revision. For managed Goals, also require
+  the Cloud deployment to report `ready` and present the verifier evidence.
 - Do not expose tokens, runtime allocation IDs, provider details, or other
   control-plane internals in user-facing artifacts.
 
