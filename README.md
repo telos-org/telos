@@ -13,6 +13,8 @@ telos login
 ```
 
 The installer supports macOS and Linux on amd64 and arm64.
+It also installs the canonical
+[`@telos/telos-cli`](skills/telos-cli/SKILL.md) agent skill.
 
 ## Prompt
 
@@ -57,18 +59,6 @@ exact running revision.
 Read the [Telos documentation](https://usetelos.ai/docs) for the complete
 workflow.
 
-## Develop
-
-```bash
-go test ./...
-go build ./cmd/telos ./cmd/telosd
-bazel test //...
-```
-
-## License
-
-Fair Source (FSL-1.1), converting to Apache-2.0 two years after each release.
-
 ## Local runs
 
 `telos run` executes a bounded Goal and stops. For a human, it is an imperative
@@ -88,3 +78,15 @@ telos logs SESSION_ID
 
 Callers supply the Goal and observe its state and evidence through `describe`
 and `logs`; the implementation remains a black box.
+
+## Develop
+
+```bash
+go test ./...
+go build ./cmd/telos ./cmd/telosd
+bazel test //...
+```
+
+## License
+
+Fair Source (FSL-1.1), converting to Apache-2.0 two years after each release.
