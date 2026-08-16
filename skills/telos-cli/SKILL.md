@@ -72,9 +72,11 @@ declarative subgoal. Inspect it with the same `describe` and `logs` commands.
 
 ## Guardrails
 
-- `plan`, `list`, `describe`, `logs`, and `get` are read-only.
-- `run`, `apply`, `push`, and `delete` mutate state or spend resources. Confirm
-  the target and authorization first.
+- `plan`, `list`, `describe`, and `logs` do not change the Goal or target state.
+- `get` and `pull` materialize local files. `login`, `logout`, and
+  `config --context` update local credentials or configuration.
+- `run`, `apply`, `push`, and `delete` mutate execution or registry state and
+  may spend resources. Confirm the target and authorization first.
 - Never guess a session, organization, package version, or deployment target.
 - Package versions are immutable. Publish a new version for changed bytes.
 - Do not report completion until the implementation agent finishes and the
