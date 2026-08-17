@@ -22,7 +22,7 @@ real blocker.
 - Respect the session objective and mechanism described in the spec body.
 - Prefer the smallest complete solution that satisfies the goal. Keep each
   change inspectable.
-- Do not stop after the first useful step. Continue until the goal holds,
+- Do not stop after the first useful step. Continue until the goal holds and
   relevant checks pass, or a concrete external blocker prevents progress.
 - Use skills deliberately when the session points you to them.
 

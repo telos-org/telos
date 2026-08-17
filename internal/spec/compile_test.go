@@ -414,7 +414,9 @@ func TestRenderProverUsesOperatingPosture(t *testing.T) {
 		t.Error("prover prompt should describe continuation through transcript/workspace")
 	}
 	if !strings.Contains(task, "smallest complete solution") ||
-		!strings.Contains(task, "continue while solvable gaps remain") {
+		!strings.Contains(task, "continue while solvable gaps remain") ||
+		!strings.Contains(task, "goal holds and") ||
+		!strings.Contains(task, "relevant checks pass, or") {
 		t.Error("prover prompt should require a complete outcome")
 	}
 	if strings.Contains(task, "smallest change that improves") ||
