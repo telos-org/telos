@@ -76,13 +76,11 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", "root", nil)
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      hello-service",
 		"Target    local",
-		"Lineage   root",
-		"Mutates   no",
 		"Path      ./SPEC.md",
 		"Hash      8a8f0c21",
 		"Skills    verify-engineering",
@@ -91,7 +89,7 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 			t.Fatalf("plan output missing %q:\n%s", want, text)
 		}
 	}
-	for _, notWant := range []string{"Namespace", "Plan for", "No sessions"} {
+	for _, notWant := range []string{"Namespace", "Plan for", "No sessions", "Lineage", "Mutates"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("plan output should not contain %q:\n%s", notWant, text)
 		}
@@ -110,13 +108,11 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", "root", nil)
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",
 		"Target    cloud",
-		"Lineage   root",
-		"Mutates   no",
 		"Path      ./SPEC.md",
 		"Namespace ns-gitea",
 		"Hash      8a8f0c21",
@@ -141,7 +137,7 @@ func TestPrintPlanPreviewStarsRequiredVerifierSkills(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", "root", nil)
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", nil)
 	text := out.String()
 	if !strings.Contains(text, "Skills    verify-engineering*, verify-quality") {
 		t.Fatalf("plan output missing starred skill marker:\n%s", text)

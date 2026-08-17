@@ -85,7 +85,7 @@ func TestPrintPlanPreviewShowsSessionDiff(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", "root", comparison)
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", comparison)
 	text := out.String()
 	for _, want := range []string{
 		"Session   sess_123",
@@ -115,7 +115,7 @@ func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", "root", comparison)
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", comparison)
 	if !strings.Contains(out.String(), "No spec changes.") {
 		t.Fatalf("plan output:\n%s", out.String())
 	}
@@ -157,7 +157,9 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 		cmdPlan([]string{specPath, "--session", "sess_123", "--json"})
 	})
 	var plan struct {
-		Target struct {
+		Spec    map[string]any `json:"spec"`
+		Session map[string]any `json:"session"`
+		Target  struct {
 			WillCreate bool `json:"will_create_session"`
 			WillUpdate bool `json:"will_update_session"`
 		} `json:"target"`
@@ -171,6 +173,20 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 	}
 	if plan.Target.WillCreate || !plan.Target.WillUpdate {
 		t.Fatalf("target: got %+v", plan.Target)
+	}
+	if _, ok := plan.Spec["lineage"]; ok {
+		t.Fatalf("spec lineage should be omitted: %#v", plan.Spec)
+	}
+	if _, ok := plan.Session["lineage"]; ok {
+		t.Fatalf("session lineage should be omitted: %#v", plan.Session)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal([]byte(out), &raw); err != nil {
+		t.Fatal(err)
+	}
+	target := raw["target"].(map[string]any)
+	if _, ok := target["will_mutate"]; ok {
+		t.Fatalf("will_mutate should be omitted: %#v", target)
 	}
 	if plan.Change.Current.Version != "1.2.3" || plan.Change.Proposed.Version != "1.2.3" {
 		t.Fatalf("versions: current=%q proposed=%q", plan.Change.Current.Version, plan.Change.Proposed.Version)

@@ -90,7 +90,6 @@ func cmdPlan(args []string) {
 	targetMode := "local"
 	targetContext := ""
 	willCreateSession := comparison == nil
-	sessionLineage := "root"
 	userScope := map[string]interface{}{
 		"status": "local",
 		"label":  "local workspace",
@@ -135,7 +134,6 @@ func cmdPlan(args []string) {
 		"mode":                targetMode,
 		"will_create_session": willCreateSession,
 		"will_update_session": comparison != nil,
-		"will_mutate":         false,
 	}
 	if targetContext != "" {
 		targetScope["context"] = targetContext
@@ -147,14 +145,12 @@ func cmdPlan(args []string) {
 			"content_hash": compiled.ContentHash,
 			"platform":     platform,
 			"namespace":    compiled.Namespace,
-			"lineage":      compiled.Lineage,
 			"skills":       skillNames(compiled.Skills),
 			"required_verifier_skills": skillNames(
 				compiled.RequiredVerifierSkills,
 			),
 		},
 		"session": map[string]interface{}{
-			"lineage":          sessionLineage,
 			"interval_seconds": compiled.Environment.IntervalSeconds,
 		},
 		"target": targetScope,
@@ -175,7 +171,7 @@ func cmdPlan(args []string) {
 		return
 	}
 
-	printPlanPreview(os.Stdout, compiled, specPath, platform, targetContext, sessionLineage, comparison)
+	printPlanPreview(os.Stdout, compiled, specPath, platform, targetContext, comparison)
 }
 
 func compilePlanSpec(
@@ -206,7 +202,6 @@ func printPlanPreview(
 	specPath string,
 	platform string,
 	contextName string,
-	sessionLineage string,
 	comparison *specComparison,
 ) {
 	printSummaryField(out, "Spec", compiled.Environment.Name)
@@ -214,12 +209,10 @@ func printPlanPreview(
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
 	}
-	printSummaryField(out, "Lineage", sessionLineage)
 	if comparison != nil {
 		printSummaryField(out, "Session", comparison.sessionID)
 		printSummaryField(out, "Current", comparison.currentRef)
 	}
-	printSummaryField(out, "Mutates", "no")
 	printSummaryField(out, "Path", specPath)
 	if platform != "local" {
 		printSummaryField(out, "Namespace", compiled.Namespace)
