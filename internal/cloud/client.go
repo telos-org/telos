@@ -2,9 +2,7 @@
 package cloud
 
 import (
-	"bufio"
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -85,20 +83,14 @@ type sessionListResponse struct {
 }
 
 type deploymentLogEventsResponse struct {
-	Events  []json.RawMessage   `json:"events"`
-	Cursors deploymentLogCursor `json:"cursors"`
-}
-
-type deploymentLogCursor struct {
-	Runtime *int64 `json:"rt"`
+	Events []json.RawMessage `json:"events"`
 }
 
 // SessionLogPage keeps both the normalized events used by the human/JSON
 // views and their original wire records for --raw output.
 type SessionLogPage struct {
-	Events        []sessionapi.SessionEvent
-	RawEvents     []json.RawMessage
-	RuntimeCursor *int64
+	Events    []sessionapi.SessionEvent
+	RawEvents []json.RawMessage
 }
 
 type deploymentLogEvent struct {
@@ -523,7 +515,7 @@ func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, er
 }
 
 func (c *Client) GetSessionLogPage(sessionID string) (*SessionLogPage, error) {
-	resp, err := c.do("GET", sessionLogsPath(sessionID, nil), nil)
+	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(sessionID)+"/logs", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -544,53 +536,9 @@ func (c *Client) GetSessionLogPage(sessionID string) (*SessionLogPage, error) {
 		events = append(events, event.asSessionEvent())
 	}
 	return &SessionLogPage{
-		Events:        events,
-		RawEvents:     response.Events,
-		RuntimeCursor: response.Cursors.Runtime,
+		Events:    events,
+		RawEvents: response.Events,
 	}, nil
-}
-
-func (c *Client) StreamSessionLogs(ctx context.Context, sessionID string, onEvent func(sessionapi.SessionEvent) error) error {
-	return c.StreamSessionLogsAfter(ctx, sessionID, nil, onEvent)
-}
-
-func (c *Client) StreamSessionLogsAfter(
-	ctx context.Context,
-	sessionID string,
-	afterRuntime *int64,
-	onEvent func(sessionapi.SessionEvent) error,
-) error {
-	return c.streamEvents(ctx, sessionLogsPath(sessionID, afterRuntime), func(data []byte) error {
-		var event deploymentLogEvent
-		if err := json.Unmarshal(data, &event); err != nil {
-			return fmt.Errorf("decode session log event: %w", err)
-		}
-		return onEvent(event.asSessionEvent())
-	})
-}
-
-func (c *Client) StreamRawSessionLogsAfter(
-	ctx context.Context,
-	sessionID string,
-	afterRuntime *int64,
-	onEvent func(json.RawMessage) error,
-) error {
-	return c.streamEvents(ctx, sessionLogsPath(sessionID, afterRuntime), func(data []byte) error {
-		if !json.Valid(data) {
-			return errors.New("decode raw session log event: invalid JSON")
-		}
-		return onEvent(append(json.RawMessage(nil), data...))
-	})
-}
-
-func sessionLogsPath(sessionID string, afterRuntime *int64) string {
-	path := "/api/deployments/" + url.PathEscape(sessionID) + "/logs"
-	if afterRuntime == nil {
-		return path
-	}
-	query := url.Values{}
-	query.Set("after_rt", fmt.Sprintf("%d", *afterRuntime))
-	return path + "?" + query.Encode()
 }
 
 // NormalizeEndpoint cleans up an API endpoint URL.
@@ -600,64 +548,6 @@ func NormalizeEndpoint(endpoint string) string {
 		endpoint = "https://" + endpoint
 	}
 	return endpoint
-}
-
-func (c *Client) streamEvents(ctx context.Context, path string, onData func([]byte) error) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+path, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", UserAgent)
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	if strings.TrimSpace(c.OrgID) != "" {
-		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(c.OrgID))
-	}
-	client := http.DefaultClient
-	if c.HTTP != nil {
-		clone := *c.HTTP
-		clone.Timeout = 0
-		client = &clone
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return readError(resp)
-	}
-
-	reader := bufio.NewReader(resp.Body)
-	for {
-		line, readErr := reader.ReadString('\n')
-		if readErr != nil && len(line) == 0 {
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return readErr
-		}
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data:") {
-			if readErr != nil {
-				break
-			}
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if err := onData([]byte(payload)); err != nil {
-			return err
-		}
-		if readErr != nil {
-			break
-		}
-	}
-	return nil
 }
 
 func (c *Client) do(method, path string, body []byte) (*http.Response, error) {

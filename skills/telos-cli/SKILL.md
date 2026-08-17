@@ -49,16 +49,17 @@ Review the contract with the user. After approval:
 telos apply SPEC.md
 ```
 
-Follow the returned session until the exact revision is Ready:
+Poll the returned session with a bounded timeout until the exact revision is
+Ready:
 
 ```bash
-telos describe SESSION_ID
-telos logs -f SESSION_ID
+telos describe SESSION_ID --json
 ```
 
-Ready means the exact revision passed verification and is running. Show the
-user that evidence. Poll `describe` instead when a stream is unnecessary, and
-use `--json` when another program needs structured state.
+Ready means the exact revision passed verification and is running. Once it is
+Ready, collect a finite evidence snapshot with `telos logs SESSION_ID` and show
+the user the result. Stop polling on a terminal failure or when the timeout
+expires.
 
 ## Run bounded work
 

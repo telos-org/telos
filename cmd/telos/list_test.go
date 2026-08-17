@@ -291,7 +291,7 @@ func TestPrintCloudSessionReceiptShowsNextUsefulAction(t *testing.T) {
 		"Revision  sha256:abc",
 		"Context   @personal",
 		"Service   https://auth.example.com",
-		"Logs      telos logs -f --context @personal sess_123",
+		"Logs      telos logs --context @personal sess_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("cloud session receipt missing %q:\n%s", want, text)

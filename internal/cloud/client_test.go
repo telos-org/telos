@@ -1,7 +1,6 @@
 package cloud
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -545,7 +544,7 @@ func TestClientGetSessionLogs(t *testing.T) {
 	}
 }
 
-func TestClientSessionLogPagePreservesRawEventsAndCursor(t *testing.T) {
+func TestClientSessionLogPagePreservesRawEvents(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/deployments/sess_123/logs" {
 			http.NotFound(w, r)
@@ -560,7 +559,7 @@ func TestClientSessionLogPagePreservesRawEventsAndCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSessionLogPage: %v", err)
 	}
-	if len(page.Events) != 1 || page.RuntimeCursor == nil || *page.RuntimeCursor != 7 {
+	if len(page.Events) != 1 || len(page.RawEvents) != 1 {
 		t.Fatalf("page: got %#v", page)
 	}
 	event := page.Events[0]
@@ -597,73 +596,6 @@ func TestClientSessionLogUsesReceiptTimeAndPreservesSourceTime(t *testing.T) {
 	if events[0].ReceivedAt == nil || *events[0].ReceivedAt != "2026-07-04T15:14:52Z" ||
 		events[0].SourceTimestamp == nil || *events[0].SourceTimestamp != "2026-07-04T14:14:52Z" {
 		t.Fatalf("clock provenance: %#v", events[0])
-	}
-}
-
-func TestClientStreamSessionLogs(t *testing.T) {
-	var gotOrgID string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/deployments/sess_123/logs" {
-			http.NotFound(w, r)
-			return
-		}
-		gotOrgID = r.Header.Get("X-Telos-Org-Id")
-		if r.Header.Get("Accept") != "text/event-stream" {
-			t.Fatalf("Accept: got %q", r.Header.Get("Accept"))
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"event\":\"runtime.route.succeeded\",\"time\":\"2026-07-04T15:15:00Z\",\"message\":\"service route configured\",\"metadata\":{\"stage\":\"route\"}}\n\n"))
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "test-token")
-	client.OrgID = "org_telos"
-	var events []sessionapi.SessionEvent
-	err := client.StreamSessionLogs(context.Background(), "sess_123", func(event sessionapi.SessionEvent) error {
-		events = append(events, event)
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("StreamSessionLogs: %v", err)
-	}
-	if len(events) != 1 || events[0].Event != "runtime.route.succeeded" || events[0].Data["message"] != "service route configured" {
-		t.Fatalf("events: got %#v", events)
-	}
-	if events[0].Data["stage"] != "route" {
-		t.Fatalf("event metadata: got %#v", events[0].Data)
-	}
-	if gotOrgID != "org_telos" {
-		t.Fatalf("org header: got %q", gotOrgID)
-	}
-}
-
-func TestClientStreamRawSessionLogsUsesResumeCursor(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/deployments/sess_123/logs" || r.URL.Query().Get("after_rt") != "41" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"event\":\"agent_progress\",\"event_id\":\"evt_42\",\"round\":4}\n\n"))
-	}))
-	defer srv.Close()
-
-	after := int64(41)
-	var events []json.RawMessage
-	err := NewClient(srv.URL, "test-token").StreamRawSessionLogsAfter(
-		context.Background(),
-		"sess_123",
-		&after,
-		func(event json.RawMessage) error {
-			events = append(events, event)
-			return nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("StreamRawSessionLogsAfter: %v", err)
-	}
-	if len(events) != 1 || !strings.Contains(string(events[0]), `"event_id":"evt_42"`) {
-		t.Fatalf("raw stream events: %s", events)
 	}
 }
 

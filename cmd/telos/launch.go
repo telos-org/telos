@@ -532,9 +532,9 @@ func printCloudSessionReceiptForContext(
 	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
 		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
 	}
-	logsCommand := fmt.Sprintf("telos logs -f %s", session.ID)
+	logsCommand := fmt.Sprintf("telos logs %s", session.ID)
 	if contextName != "" {
-		logsCommand = fmt.Sprintf("telos logs -f --context %s %s", contextName, session.ID)
+		logsCommand = fmt.Sprintf("telos logs --context %s %s", contextName, session.ID)
 	}
 	printSummaryField(out, "Logs", logsCommand)
 }
