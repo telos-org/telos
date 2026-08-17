@@ -42,24 +42,20 @@ func New(systemName string, path string, sessionID string, epochID int) *Evidenc
 	}
 }
 
-// Log writes a single best-effort evidence event. Lifecycle events that must
-// be durable use log directly and return its error to the session worker.
+// Log writes a single best-effort evidence event.
 func (e *Evidence) Log(event string, roundNum int, role string, data map[string]interface{}) {
-	_, _ = e.log(event, roundNum, role, data, "")
+	_ = e.log(event, roundNum, role, data)
 }
 
-func (e *Evidence) log(event string, roundNum int, role string, data map[string]interface{}, dedupeKey string) (bool, error) {
+func (e *Evidence) log(event string, roundNum int, role string, data map[string]interface{}) error {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
 	lock, err := lockEvidenceFile(e.Path)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer unlockEvidenceFile(lock)
-	if dedupeKey != "" && hasFinalizationKey(e.Path, dedupeKey) {
-		return false, nil
-	}
 
 	if lastSeq := lastEventSeq(e.Path); lastSeq > e.eventSeq {
 		e.eventSeq = lastSeq
@@ -85,11 +81,11 @@ func (e *Evidence) log(event string, roundNum int, role string, data map[string]
 
 	line, err := json.Marshal(record)
 	if err != nil {
-		return false, err
+		return err
 	}
 	f, err := os.OpenFile(e.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
-		return false, err
+		return err
 	}
 	defer f.Close()
 	line = append(line, '\n')
@@ -97,12 +93,12 @@ func (e *Evidence) log(event string, roundNum int, role string, data map[string]
 		line = append([]byte{'\n'}, line...)
 	}
 	if _, err := f.Write(line); err != nil {
-		return false, err
+		return err
 	}
 	if err := f.Sync(); err != nil {
-		return false, err
+		return err
 	}
-	return true, nil
+	return nil
 }
 
 func needsLeadingNewline(path string) bool {
@@ -160,55 +156,6 @@ func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRound
 	})
 }
 
-// EpochFinalized is the immutable lifecycle record for one completed worker
-// epoch. Package and spec identity describe the inputs bound when the epoch
-// started, not mutable session state observed after it finished.
-type EpochFinalized struct {
-	EpochID          int
-	SpecName         string
-	SpecVersion      *int
-	Revision         string
-	PackageDigest    string
-	SpecSHA256       string
-	EpochStartedAt   string
-	EpochFinishedAt  string
-	Result           string
-	GameResult       string
-	CompletionReason string
-	VerifierConceded bool
-	CheckpointSaved  bool
-	CheckpointPath   string
-	CheckpointBytes  *int64
-	FinalizationKey  string
-	Error            string
-}
-
-// LogEpochFinalized durably and idempotently appends an epoch_finalized event.
-func (e *Evidence) LogEpochFinalized(roundNum int, finalized EpochFinalized) (bool, error) {
-	data := map[string]interface{}{
-		"epoch_id":          finalized.EpochID,
-		"spec_name":         finalized.SpecName,
-		"spec_version":      finalized.SpecVersion,
-		"revision":          finalized.Revision,
-		"package_digest":    finalized.PackageDigest,
-		"spec_sha256":       finalized.SpecSHA256,
-		"epoch_started_at":  finalized.EpochStartedAt,
-		"epoch_finished_at": finalized.EpochFinishedAt,
-		"result":            finalized.Result,
-		"game_result":       finalized.GameResult,
-		"completion_reason": finalized.CompletionReason,
-		"verifier_conceded": finalized.VerifierConceded,
-		"checkpoint_saved":  finalized.CheckpointSaved,
-		"checkpoint_path":   finalized.CheckpointPath,
-		"finalization_key":  finalized.FinalizationKey,
-		"error":             finalized.Error,
-	}
-	if finalized.CheckpointBytes != nil {
-		data["checkpoint_bytes"] = *finalized.CheckpointBytes
-	}
-	return e.log("epoch_finalized", roundNum, "system", data, finalized.FinalizationKey)
-}
-
 // LogWorkspaceCheckpoint logs a workspace checkpoint event.
 func (e *Evidence) LogWorkspaceCheckpoint(roundNum int, path string) {
 	data := map[string]interface{}{"path": path}
@@ -235,19 +182,6 @@ func lastEventSeq(path string) int {
 		return true
 	})
 	return seq
-}
-
-func hasFinalizationKey(path string, key string) bool {
-	found := false
-	visitEvidenceLinesReverse(path, func(record map[string]interface{}) bool {
-		payload, _ := record["data"].(map[string]interface{})
-		if value, _ := payload["finalization_key"].(string); value == key {
-			found = true
-			return true
-		}
-		return false
-	})
-	return found
 }
 
 func visitEvidenceLinesReverse(path string, visit func(map[string]interface{}) bool) {

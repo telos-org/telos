@@ -3,12 +3,12 @@ package executor
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/telos-org/telos/internal/game"
@@ -17,18 +17,10 @@ import (
 
 // PiExecutor runs Pi as one PVG agent turn on the given LocalPlatform.
 type PiExecutor struct {
-	Platform  *platform.LocalPlatform
-	Model     string
-	Thinking  string
-	Timeout   int
-	Generator RoleConfig
-	Verifier  RoleConfig
-}
-
-// RoleConfig optionally overrides the shared model configuration for one PVG role.
-type RoleConfig struct {
+	Platform *platform.LocalPlatform
 	Model    string
 	Thinking string
+	Timeout  int
 }
 
 const piEnvPromptMaxBytes = 256 * 1024
@@ -46,35 +38,10 @@ func NewPiExecutor(p *platform.LocalPlatform, model, thinking string, timeout in
 	}
 }
 
-// WithRoleConfig sets optional generator and verifier overrides.
-func (pe *PiExecutor) WithRoleConfig(generator, verifier RoleConfig) *PiExecutor {
-	pe.Generator = generator
-	pe.Verifier = verifier
-	return pe
-}
-
-func (pe *PiExecutor) configForRole(role string) (string, string) {
-	config := RoleConfig{}
-	if role == "prover" {
-		config = pe.Generator
-	} else if role == "verifier" {
-		config = pe.Verifier
-	}
-	model := config.Model
-	if model == "" {
-		model = pe.Model
-	}
-	thinking := config.Thinking
-	if thinking == "" {
-		thinking = pe.Thinking
-	}
-	return model, thinking
-}
-
 // ExecuteTurn runs one Pi agent turn.
 func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.TurnState) game.TurnResult {
 	var stats game.TurnStats
-	model, thinking := pe.configForRole(role)
+	model, thinking := pe.Model, pe.Thinking
 	stats.Model = model
 	var agentError string
 	var taskPath string
@@ -97,11 +64,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	if projector != nil {
 		defer projector.Stop()
 	}
-	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, func(line string) {
-		if projector != nil {
-			projector.ObserveLine(line)
-		}
-	})
+	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, nil)
 
 	logs := strings.Join(result.RawLines, "\n")
 	if sessionPath != "" {
@@ -129,7 +92,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Logs:        result.InfraError,
 			Stats:       stats,
 			Error:       result.InfraError,
-			Recoverable: !result.TimedOut,
+			Recoverable: !result.TimedOut && recoverableAgentFailure(result.InfraError),
 		}
 	}
 
@@ -145,7 +108,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Logs:        reason,
 			Stats:       stats,
 			Error:       reason,
-			Recoverable: true,
+			Recoverable: recoverableAgentFailure(reason),
 		}
 	}
 
@@ -156,7 +119,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Logs:        agentError,
 			Stats:       stats,
 			Error:       agentError,
-			Recoverable: true,
+			Recoverable: recoverableAgentFailure(agentError),
 		}
 	}
 
@@ -183,12 +146,16 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	}
 }
 
+func recoverableAgentFailure(errorText string) bool {
+	_, blocked := game.AgentFailureBlocker(errorText)
+	return !blocked
+}
+
 type piLiveProjector struct {
 	sessionPath string
 	turnState   *game.TurnState
+	offset      int64
 
-	mu   sync.Mutex
-	seen map[string]bool
 	stop chan struct{}
 	done chan struct{}
 }
@@ -200,7 +167,6 @@ func startPiLiveProjector(sessionPath string, turnState *game.TurnState) *piLive
 	p := &piLiveProjector{
 		sessionPath: sessionPath,
 		turnState:   turnState,
-		seen:        map[string]bool{},
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 	}
@@ -211,13 +177,7 @@ func startPiLiveProjector(sessionPath string, turnState *game.TurnState) *piLive
 func (p *piLiveProjector) Stop() {
 	close(p.stop)
 	<-p.done
-	p.observeSessionFile()
-}
-
-func (p *piLiveProjector) ObserveLine(line string) {
-	for _, event := range piLineEvents(line) {
-		p.emit(event)
-	}
+	p.observeSessionFile(true)
 }
 
 func (p *piLiveProjector) watch() {
@@ -227,35 +187,45 @@ func (p *piLiveProjector) watch() {
 	for {
 		select {
 		case <-ticker.C:
-			p.observeSessionFile()
+			p.observeSessionFile(false)
 		case <-p.stop:
 			return
 		}
 	}
 }
 
-func (p *piLiveProjector) observeSessionFile() {
+func (p *piLiveProjector) observeSessionFile(final bool) {
 	data, err := os.ReadFile(p.sessionPath)
 	if err != nil {
 		return
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	if int64(len(data)) < p.offset {
+		p.offset = 0
+	}
+	remaining := data[p.offset:]
+	limit := len(remaining)
+	if !final {
+		lastNewline := bytes.LastIndexByte(remaining, '\n')
+		if lastNewline < 0 {
+			return
+		}
+		limit = lastNewline + 1
+	}
+	if limit == 0 {
+		return
+	}
+	p.offset += int64(limit)
+	for _, line := range strings.Split(string(remaining[:limit]), "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
-		p.ObserveLine(line)
+		for _, event := range piLineEvents(line) {
+			p.emit(event)
+		}
 	}
 }
 
 func (p *piLiveProjector) emit(event game.LiveAgentEvent) {
-	key := event.Kind + "\x00" + event.Text
-	p.mu.Lock()
-	if p.seen[key] {
-		p.mu.Unlock()
-		return
-	}
-	p.seen[key] = true
-	p.mu.Unlock()
 	p.turnState.OnLiveEvent(event)
 }
 
@@ -292,7 +262,7 @@ func piToolCallEvents(msg map[string]interface{}) []game.LiveAgentEvent {
 			continue
 		}
 		events = append(events, game.LiveAgentEvent{
-			Kind: "progress_update",
+			Kind: "tool",
 			Text: text,
 		})
 	}
@@ -335,6 +305,12 @@ func safePathLabel(path string) string {
 	label := parts[len(parts)-1]
 	if label == "" || label == "." || label == ".." {
 		return "file"
+	}
+	if len(parts) > 1 {
+		parent := parts[len(parts)-2]
+		if parent != "" && parent != "." && parent != ".." {
+			return parent + "/" + label
+		}
 	}
 	return label
 }

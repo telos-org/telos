@@ -47,6 +47,5 @@ func runtimeIdentity(version string, executable io.Reader) (sessionapi.RuntimeId
 	return sessionapi.RuntimeIdentity{
 		Version:      version,
 		TelosdDigest: fmt.Sprintf("sha256:%x", hasher.Sum(nil)),
-		Capabilities: []string{sessionapi.CapabilityEpochFinalizedEventsV1},
 	}, nil
 }

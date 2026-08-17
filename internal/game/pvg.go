@@ -182,7 +182,7 @@ func (p *PVG) runVerifierTurn(workspace string, promptOpts spec.PromptOptions, d
 }
 
 func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
-	if !turn.Recoverable {
+	if _, blocked := AgentFailureBlocker(turn.Error); blocked || !turn.Recoverable {
 		p.Result.Error = turn.Error
 		return true
 	}

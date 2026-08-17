@@ -4,9 +4,12 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/telos-org/telos/internal/game"
 )
 
 func TestWorkerIntervalReadsSessionManifest(t *testing.T) {
@@ -150,6 +153,137 @@ func TestStopRequestWinsBeforeImmediateDesiredStateCycle(t *testing.T) {
 	stop <- syscall.SIGTERM
 	if !stopRequested(stop) {
 		t.Fatal("expected buffered retirement signal to stop the worker")
+	}
+}
+
+func TestFailureBackoffReachesFifteenMinuteCap(t *testing.T) {
+	for failures, want := range map[int]time.Duration{
+		1:   time.Second,
+		7:   64 * time.Second,
+		11:  controllerFailureBackoffCap,
+		100: controllerFailureBackoffCap,
+	} {
+		if got := failureBackoff(failures); got != want {
+			t.Fatalf("failureBackoff(%d) = %s, want %s", failures, got, want)
+		}
+	}
+}
+
+func TestJitteredFailureBackoffStaysWithinBound(t *testing.T) {
+	for failures := 1; failures <= 20; failures++ {
+		base := failureBackoff(failures)
+		for range 20 {
+			got := jitteredFailureBackoff(failures)
+			if got < base-base/5 || got > base {
+				t.Fatalf("jitteredFailureBackoff(%d) = %s, base %s", failures, got, base)
+			}
+		}
+	}
+}
+
+func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
+	evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
+	sessionDir := writeWorkerManifest(t, map[string]any{
+		"session_id":   "sess_123",
+		"session_kind": "controller",
+		"created_at":   "2026-08-10T12:00:00Z",
+		"specs": []map[string]any{{
+			"name":          "demo",
+			"evidence_path": evidencePath,
+		}},
+		"epochs": []map[string]any{{
+			"id":         4,
+			"started_at": "2026-08-10T12:00:00Z",
+		}},
+	})
+
+	logControllerSuspended(sessionDir, "agent_authentication_invalid", "403: inactive virtual key")
+	data, err := os.ReadFile(evidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(data)
+	for _, want := range []string{
+		`"event":"agent_suspended"`,
+		`"epoch_id":4`,
+		`"blocker_code":"agent_authentication_invalid"`,
+		`"state":"waiting"`,
+		"update the model credentials",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("suspension evidence missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestControllerSuspendsUntilExplicitWake(t *testing.T) {
+	evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
+	sessionDir := writeWorkerManifest(t, map[string]any{
+		"session_id":   "sess_123",
+		"session_kind": "controller",
+		"specs": []map[string]any{{
+			"name":          "demo",
+			"evidence_path": evidencePath,
+		}},
+	})
+	wake := make(chan os.Signal, 1)
+	stop := make(chan os.Signal, 1)
+	t.Cleanup(func() { stop <- syscall.SIGTERM })
+	calls := make(chan int, 2)
+	attempt := 0
+	runSession := func(string) (*game.PVGResult, error) {
+		attempt++
+		calls <- attempt
+		if attempt == 1 {
+			return &game.PVGResult{
+				GameResult: game.GameFailure,
+				Error:      "403: inactive virtual key",
+			}, nil
+		}
+		return &game.PVGResult{GameResult: game.GameStopped}, nil
+	}
+	type workerResult struct {
+		code int
+		err  error
+	}
+	done := make(chan workerResult, 1)
+	go func() {
+		code, err := runSessionWorker(sessionDir, false, runSession, wake, stop)
+		done <- workerResult{code: code, err: err}
+	}()
+
+	select {
+	case got := <-calls:
+		if got != 1 {
+			t.Fatalf("first attempt = %d", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not run the first cycle")
+	}
+	select {
+	case got := <-calls:
+		t.Fatalf("worker retried without a wake signal: attempt %d", got)
+	case result := <-done:
+		t.Fatalf("worker exited while suspended: %#v", result)
+	case <-time.After(failureBackoff(1) + 100*time.Millisecond):
+	}
+
+	wake <- syscall.SIGUSR1
+	select {
+	case got := <-calls:
+		if got != 2 {
+			t.Fatalf("attempt after wake = %d", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not resume after wake")
+	}
+	select {
+	case result := <-done:
+		if result.code != 0 || result.err != nil {
+			t.Fatalf("worker result = %#v", result)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("worker did not stop after resumed cycle")
 	}
 }
 

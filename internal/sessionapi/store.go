@@ -762,9 +762,7 @@ func (fs *FileStore) List() ([]Session, error) {
 }
 
 // ListRootWorkerSessions returns the runnable roots needed by the cloud worker
-// supervisor. Before excluding a stopped root, it idempotently closes any
-// crash gap between the terminal manifest write and finalization evidence.
-// Runnable roots are still returned when an unrelated repair fails.
+// supervisor.
 func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -774,24 +772,19 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 		return nil, err
 	}
 	sessions := make([]Session, 0)
-	var repairErrs []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
 		manifest, err := ReadManifest(fs.manifestPath(entry.Name()))
-		if err != nil || manifest.ParentSessionID != nil || manifest.SessionKind != KindController {
+		if err != nil {
 			continue
 		}
-		sessionDir := fs.sessionDir(entry.Name())
+		rootController := isTopLevelManifest(manifest) && manifest.SessionKind == KindController
+		if !rootController {
+			continue
+		}
 		if manifest.IsStopped() {
-			if _, err := repairEpochFinalization(sessionDir); err != nil {
-				repairErrs = append(repairErrs, fmt.Errorf(
-					"repair session %s finalization: %w",
-					manifest.SessionID,
-					err,
-				))
-			}
 			continue
 		}
 		var result *string
@@ -799,6 +792,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 			result = epoch.Result
 		}
 		kind := manifest.SessionKind
+		sessionDir := fs.sessionDir(entry.Name())
 		sessions = append(sessions, Session{
 			SessionID:       manifest.SessionID,
 			SessionKind:     &kind,
@@ -807,7 +801,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 			Result:          result,
 		})
 	}
-	return sessions, errors.Join(repairErrs...)
+	return sessions, nil
 }
 
 // Get returns a single session by ID.
@@ -840,10 +834,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 
 	s, _ := fs.deriveSession(id, m)
 	if m.IsStopped() {
-		if _, repairErr := repairEpochFinalization(fs.sessionDir(id)); repairErr != nil {
-			return nil, fmt.Errorf("repair stopped epoch finalization: %w", repairErr)
-		}
-		return fs.deriveSession(id, m)
+		return s, nil
 	}
 	if s.Status.IsTerminal() && s.Status != StatusStale && m.SessionKind != KindController {
 		return s, nil
@@ -882,9 +873,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 			if open.RoundCount == nil {
 				open.RoundCount = &roundCount
 			}
-			if epochSupportsFinalization(open) {
-				return nil
-			}
+			return nil
 		}
 
 		epoch := NewEpoch(m, len(m.Epochs)+1, now, nil)
@@ -902,9 +891,6 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		return nil, err
 	}
 	terminateRunner(runner)
-	if _, repairErr := repairEpochFinalization(fs.sessionDir(id)); repairErr != nil {
-		return nil, fmt.Errorf("record stopped epoch finalization: %w", repairErr)
-	}
 	m, err = ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		return nil, err
@@ -957,14 +943,6 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 		}
 		return nil, err
 	}
-	if _, err := repairEpochFinalization(fs.sessionDir(id)); err != nil {
-		return nil, fmt.Errorf("repair epoch finalization: %w", err)
-	}
-	m, err = ReadManifest(fs.manifestPath(id))
-	if err != nil {
-		return nil, err
-	}
-
 	var events []SessionEvent
 	for _, spec := range m.Specs {
 		if spec.EvidencePath == nil || *spec.EvidencePath == "" {
@@ -1038,13 +1016,9 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 	dir := fs.sessionDir(id)
 
 	specs := make([]SessionSpec, len(m.Specs))
-	var primarySummary *evidenceSummary
 	for i, ms := range m.Specs {
 		summary, _ := readEvidenceSummary(ms.EvidencePath)
 		specs[i] = deriveSpec(ms, summary)
-		if i == 0 {
-			primarySummary = summary
-		}
 	}
 
 	epochs := make([]map[string]any, len(m.Epochs))
@@ -1083,7 +1057,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		Epochs:                epochs,
 		CurrentSpecVersion:    m.CurrentSpecVersion,
 		SpecVersions:          cloneSpecVersions(m.SpecVersions),
-		Reconciliation:        deriveReconciliation(m, primarySummary),
+		Reconciliation:        deriveReconciliation(m),
 	}
 
 	if s.Config == nil {
@@ -1150,7 +1124,7 @@ func deriveSpec(ms ManifestSpec, summary *evidenceSummary) SessionSpec {
 	return ss
 }
 
-func deriveReconciliation(m *Manifest, summary *evidenceSummary) *SessionReconciliation {
+func deriveReconciliation(m *Manifest) *SessionReconciliation {
 	if m == nil || m.CurrentSpecVersion == nil {
 		return nil
 	}
@@ -1159,20 +1133,25 @@ func deriveReconciliation(m *Manifest, summary *evidenceSummary) *SessionReconci
 		PackageDigest: ptrOr(m.PackageDigest, ""),
 		State:         ReconciliationPending,
 	}
-	if summary != nil {
-		if finalized, ok := summary.Finalizations[version]; ok {
-			latestEpochID := 0
-			for i := range m.Epochs {
-				epoch := &m.Epochs[i]
-				if ptrOr(epoch.SpecVersion, 0) == version && epoch.ID > latestEpochID {
-					latestEpochID = epoch.ID
-				}
-			}
-			if finalized.EpochID >= latestEpochID {
-				reconciliation.State = finalized.State
-				reconciliation.Error = finalized.Error
-			}
+	for i := len(m.Epochs) - 1; i >= 0; i-- {
+		epoch := &m.Epochs[i]
+		if ptrOr(epoch.SpecVersion, 0) != version ||
+			ptrOr(epoch.PackageDigest, "") != reconciliation.PackageDigest {
+			continue
 		}
+		if epoch.FinishedAt == nil || epoch.Result == nil {
+			return reconciliation
+		}
+		if *epoch.Result == "completed" &&
+			ptrOr(epoch.CompletionReason, "") == "verifier_conceded" &&
+			ptrOr(epoch.VerifierConceded, false) &&
+			ptrOr(epoch.CheckpointSaved, false) {
+			reconciliation.State = ReconciliationAccepted
+			return reconciliation
+		}
+		reconciliation.State = ReconciliationFailed
+		reconciliation.Error = ptrOr(epoch.Error, "")
+		return reconciliation
 	}
 	return reconciliation
 }
@@ -1382,39 +1361,28 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 		role, _ := raw["role"].(string)
 
 		ev := SessionEvent{
-			Event:       eventName,
-			Schema:      stringField(raw, "schema"),
-			EventID:     stringField(raw, "event_id"),
-			EventSeq:    eventSeq(raw),
-			EpochID:     intField(raw, "epoch_id"),
-			Role:        strPtr(role),
-			Timestamp:   strPtr(timestamp),
-			SessionID:   stringField(raw, "session_id"),
-			SpecIndex:   spec.Index,
-			SpecName:    strPtr(spec.Name),
-			SpecDirName: strPtr(spec.DirName),
-			Data:        dataField,
+			Schema:           stringPtrFromAny(raw["schema"]),
+			EventID:          stringPtrFromAny(raw["event_id"]),
+			Event:            eventName,
+			EventSeq:         eventSeq(raw),
+			EpochID:          numberAsInt(raw["epoch_id"]),
+			Round:            numberAsInt(raw["round"]),
+			Role:             strPtr(role),
+			Timestamp:        strPtr(timestamp),
+			SourceTimestamp:  stringPtrFromAny(raw["source_ts"]),
+			ReceivedAt:       stringPtrFromAny(raw["received_at"]),
+			SessionStartedAt: stringPtrFromAny(raw["session_started_at"]),
+			SessionID:        stringPtrFromAny(raw["session_id"]),
+			Source:           stringPtrFromAny(raw["source"]),
+			System:           stringPtrFromAny(raw["system"]),
+			SpecIndex:        spec.Index,
+			SpecName:         strPtr(spec.Name),
+			SpecDirName:      strPtr(spec.DirName),
+			Data:             dataField,
 		}
 		events = append(events, ev)
 	}
 	return events, nil
-}
-
-func stringField(raw map[string]any, key string) *string {
-	value, ok := raw[key].(string)
-	if !ok || value == "" {
-		return nil
-	}
-	return &value
-}
-
-func intField(raw map[string]any, key string) *int {
-	value, ok := raw[key].(float64)
-	if !ok {
-		return nil
-	}
-	result := int(value)
-	return &result
 }
 
 // eventSeq lifts the evidence writer's sequence number; nil for lines that
@@ -1439,13 +1407,6 @@ type evidenceSummary struct {
 	VerifierConceded       *bool
 	CurrentRound           *int
 	CurrentRole            *string
-	Finalizations          map[int]epochFinalization
-}
-
-type epochFinalization struct {
-	EpochID int
-	State   ReconciliationState
-	Error   string
 }
 
 func readEvidenceSummary(path *string) (*evidenceSummary, error) {
@@ -1460,7 +1421,6 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 	var summary *evidenceSummary
 	var activeRound *int
 	var activeRole *string
-	finalizations := make(map[int]epochFinalization)
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1511,43 +1471,13 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 				CompletionReason:       stringPtrFromAny(dataField["completion_reason"]),
 				VerifierConceded:       boolPtrFromAny(dataField["verifier_conceded"]),
 			}
-		case "epoch_finalized":
-			version := numberAsInt(dataField["spec_version"])
-			epochID := numberAsInt(dataField["epoch_id"])
-			if version == nil || epochID == nil {
-				continue
-			}
-			finalized := epochFinalization{
-				EpochID: *epochID,
-				State:   reconciliationState(dataField),
-				Error:   ptrOr(stringPtrFromAny(dataField["error"]), ""),
-			}
-			if previous, ok := finalizations[*version]; !ok || finalized.EpochID > previous.EpochID {
-				finalizations[*version] = finalized
-			}
 		}
-	}
-	if summary == nil && len(finalizations) > 0 {
-		summary = &evidenceSummary{}
 	}
 	if summary != nil {
 		summary.CurrentRound = activeRound
 		summary.CurrentRole = activeRole
-		summary.Finalizations = finalizations
 	}
 	return summary, nil
-}
-
-func reconciliationState(data map[string]any) ReconciliationState {
-	result, _ := data["result"].(string)
-	completionReason, _ := data["completion_reason"].(string)
-	verifierConceded, _ := data["verifier_conceded"].(bool)
-	checkpointSaved, _ := data["checkpoint_saved"].(bool)
-	if result == "completed" && completionReason == "verifier_conceded" &&
-		verifierConceded && checkpointSaved {
-		return ReconciliationAccepted
-	}
-	return ReconciliationFailed
 }
 
 func evidenceRoundCount(raw map[string]any, data map[string]any) *int {

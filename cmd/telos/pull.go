@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -29,14 +28,16 @@ type pulledPackage struct {
 }
 
 func cmdGet(args []string) {
-	fs := flag.NewFlagSet("get", flag.ExitOnError)
+	fs := newCommandFlagSet("get", "telos get SESSION [flags]")
 	output := fs.String("output", "", "Destination package directory or Markdown file")
+	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
-	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos get SESSION [--output PATH]")
-		os.Exit(1)
+	requireArgCount(fs, 1, "one SESSION")
+	contextOverride, err := cloudContextOverride(fs, *contextValue)
+	if err != nil {
+		exitWithError(err)
 	}
-	control, err := cloud.ControlClient()
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		exitWithError(err)
 	}
@@ -52,18 +53,20 @@ func cmdGet(args []string) {
 }
 
 func cmdPull(args []string) {
-	fs := flag.NewFlagSet("pull", flag.ExitOnError)
+	fs := newCommandFlagSet("pull", "telos pull PACKAGE [flags]")
 	output := fs.String("output", "", "Destination package directory or Markdown file")
+	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
-	if fs.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos pull @SCOPE/NAME:VERSION [--output PATH]")
-		os.Exit(1)
-	}
+	requireArgCount(fs, 1, "one PACKAGE")
 	reference, err := parsePackageReference(fs.Arg(0))
 	if err != nil {
 		exitWithError(err)
 	}
-	control, err := cloud.ControlClient()
+	contextOverride, err := cloudContextOverride(fs, *contextValue)
+	if err != nil {
+		exitWithError(err)
+	}
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		exitWithError(err)
 	}
@@ -103,14 +106,23 @@ func packageForSession(control *cloud.Client, sessionID string) (*pulledPackage,
 }
 
 func packageForReference(control *cloud.Client, reference packageReference) (*pulledPackage, error) {
+	pkg, _, err := resolvePackageReference(control, reference)
+	return pkg, err
+}
+
+func resolvePackageReference(
+	control *cloud.Client,
+	reference packageReference,
+) (*pulledPackage, *cloud.PackageVersionRecord, error) {
 	record, err := control.GetPackageVersion(reference.scope, reference.name, reference.version)
 	if err != nil {
-		return nil, fmt.Errorf("resolve %s: %w", reference.ref, err)
+		return nil, nil, fmt.Errorf("resolve %s: %w", reference.ref, err)
 	}
 	if record.Scope != reference.scope ||
 		record.Name != reference.name ||
-		record.Version != reference.version {
-		return nil, fmt.Errorf("resolve %s: registry returned %s", reference.ref, record.Ref)
+		record.Version != reference.version ||
+		record.Ref != reference.ref {
+		return nil, nil, fmt.Errorf("resolve %s: registry returned %s", reference.ref, record.Ref)
 	}
 	data, err := control.DownloadPackageVersionBundle(
 		reference.scope,
@@ -118,13 +130,27 @@ func packageForReference(control *cloud.Client, reference packageReference) (*pu
 		reference.version,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("download %s: %w", reference.ref, err)
+		return nil, nil, fmt.Errorf("download %s: %w", reference.ref, err)
 	}
 	return &pulledPackage{
 		reference: reference,
 		digest:    strings.TrimSpace(record.Digest),
 		data:      data,
-	}, nil
+	}, record, nil
+}
+
+func registryPackageForApply(
+	control *cloud.Client,
+	reference packageReference,
+) (*cloud.PackageVersionRecord, error) {
+	pkg, record, err := resolvePackageReference(control, reference)
+	if err != nil {
+		return nil, err
+	}
+	if _, err := verifiedPackageSpec(pkg); err != nil {
+		return nil, err
+	}
+	return record, nil
 }
 
 func materializePackage(control *cloud.Client, pkg *pulledPackage, output string) (string, error) {
@@ -151,26 +177,33 @@ func materializePackage(control *cloud.Client, pkg *pulledPackage, output string
 }
 
 func verifiedPackageSpec(pkg *pulledPackage) ([]byte, error) {
+	rootSpec, _, err := verifiedPackageContents(pkg)
+	return rootSpec, err
+}
+
+func verifiedPackageContents(
+	pkg *pulledPackage,
+) ([]byte, *spec.ApplyPackageManifest, error) {
 	if pkg == nil {
-		return nil, fmt.Errorf("package is required")
+		return nil, nil, fmt.Errorf("package is required")
 	}
 	rootSpec, manifest, err := spec.ApplyPackageSpec(pkg.data)
 	if err != nil {
-		return nil, fmt.Errorf("verify %s: %w", pkg.reference.ref, err)
+		return nil, nil, fmt.Errorf("verify %s: %w", pkg.reference.ref, err)
 	}
 	actualDigest := spec.ApplyPackageDigest(manifest)
 	if pkg.digest == "" {
-		return nil, fmt.Errorf("%s has no package digest", pkg.reference.ref)
+		return nil, nil, fmt.Errorf("%s has no package digest", pkg.reference.ref)
 	}
 	if actualDigest != pkg.digest {
-		return nil, fmt.Errorf(
+		return nil, nil, fmt.Errorf(
 			"%s digest mismatch: got %s want %s",
 			pkg.reference.ref,
 			actualDigest,
 			pkg.digest,
 		)
 	}
-	return rootSpec, nil
+	return rootSpec, manifest, nil
 }
 
 func registrySkillFetcher(control *cloud.Client) spec.ApplyPackageSkillFetcher {

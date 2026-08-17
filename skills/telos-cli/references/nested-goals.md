@@ -1,8 +1,7 @@
 # Nested child goals
 
-A running Telos agent may use `telos run` to launch bounded child work. telosd
-automatically records the current session as the child's lineage and scopes the
-request through the environment-local Sessions API.
+A running Telos agent may use `telos run` to launch bounded child work. Telos
+automatically scopes it to the current parent session.
 
 Use a child only when decomposition creates a genuinely independent result or
 reduces the parent agent's context burden. Prefer direct work for small tasks.
@@ -21,8 +20,6 @@ Rules:
   results before creating more.
 - A child may not create or update a durable controller with `telos apply`.
   That mutation remains a top-level operator action.
-- `parent_session_id` records lineage; it does not define whether a session is
-  a controller or task.
 - Do not pass user or Cloud credentials into the child spec. Telos supplies the
   scoped environment-local capability needed to create and inspect children.
 - The parent remains responsible for integrating and verifying child output.

@@ -32,8 +32,6 @@ type LocalRunConfig struct {
 	Workspace       string
 	Model           string
 	Thinking        string
-	Generator       *sessionapi.RoleConfig
-	Verifier        *sessionapi.RoleConfig
 	Until           int
 	UntilSeconds    int
 	MaxCostUSD      *float64
@@ -176,15 +174,6 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if err != nil {
 		return nil, fmt.Errorf("read session manifest: %w", err)
 	}
-	repairedFinalization, err := sessionapi.EmitPendingEpochFinalization(sessionDir)
-	if err != nil {
-		return nil, fmt.Errorf("reconcile epoch finalization events: %w", err)
-	}
-	if repairedFinalization {
-		if epoch := manifest.LastEpoch(); epoch != nil && epoch.FinishedAt != nil {
-			return resultFromEpoch(epoch), nil
-		}
-	}
 	if manifest.IsStopped() {
 		return &game.PVGResult{GameResult: game.GameStopped, Error: "stopped by operator"}, nil
 	}
@@ -225,12 +214,6 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	epochID, err := sessionworker.StartEpoch(sessionDir, manifest)
 	if err != nil {
 		if errors.Is(err, sessionworker.ErrSessionStopped) {
-			if _, eventErr := sessionapi.EmitPendingEpochFinalization(sessionDir); eventErr != nil {
-				return nil, fmt.Errorf(
-					"record stopped epoch finalization: %w",
-					eventErr,
-				)
-			}
 			return &game.PVGResult{
 				GameResult: game.GameStopped,
 				Error:      "stopped by operator",
@@ -248,9 +231,6 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 			fail := &game.PVGResult{GameResult: game.GameFailure, Error: err.Error()}
 			if finishErr := finishEpoch(sessionDir, epochID, fail); finishErr != nil {
 				return nil, fmt.Errorf("%w; also failed to finish epoch: %v", err, finishErr)
-			}
-			if _, eventErr := sessionapi.EmitPendingEpochFinalization(sessionDir); eventErr != nil {
-				return nil, fmt.Errorf("%w; also failed to record epoch finalization: %v", err, eventErr)
 			}
 			return nil, err
 		}
@@ -273,9 +253,6 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	// Close epoch
 	if err := finishEpoch(sessionDir, epochID, result); err != nil {
 		return result, err
-	}
-	if _, err := sessionapi.EmitPendingEpochFinalization(sessionDir); err != nil {
-		return result, fmt.Errorf("record epoch finalization: %w", err)
 	}
 	if manifest.SessionKind != sessionapi.KindController {
 		if err := cleanupSessionWorkspace(sessionDir, result.WorkspaceCheckpointPath); err != nil {
@@ -327,46 +304,6 @@ func numericMapValue(values map[string]any, key string) int {
 	}
 }
 
-func resultFromEpoch(epoch *sessionapi.Epoch) *game.PVGResult {
-	result := &game.PVGResult{
-		SystemName:              epoch.SpecName,
-		Rounds:                  intValue(epoch.RoundCount),
-		VerifierConceded:        boolValue(epoch.VerifierConceded),
-		CompletionReason:        stringValue(epoch.CompletionReason),
-		Error:                   stringValue(epoch.Error),
-		WorkspaceCheckpointPath: stringValue(epoch.CheckpointPath),
-	}
-	if epoch.Result != nil {
-		switch *epoch.Result {
-		case "completed":
-			result.GameResult = game.GameSuccess
-		case "stopped":
-			result.GameResult = game.GameStopped
-		default:
-			result.GameResult = game.GameFailure
-		}
-	}
-	return result
-}
-
-func stringValue(value *string) string {
-	if value == nil {
-		return ""
-	}
-	return *value
-}
-
-func intValue(value *int) int {
-	if value == nil {
-		return 0
-	}
-	return *value
-}
-
-func boolValue(value *bool) bool {
-	return value != nil && *value
-}
-
 func controllerPromptEnabled(manifest *sessionapi.Manifest) bool {
 	return manifest.SessionKind == sessionapi.KindController
 }
@@ -383,29 +320,11 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 	if err := validatePiModel(model); err != nil {
 		return nil, err
 	}
-	if cfg.Generator != nil && cfg.Generator.Model != "" {
-		if err := validatePiModel(cfg.Generator.Model); err != nil {
-			return nil, fmt.Errorf("generator model: %w", err)
-		}
-	}
-	if cfg.Verifier != nil && cfg.Verifier.Model != "" {
-		if err := validatePiModel(cfg.Verifier.Model); err != nil {
-			return nil, fmt.Errorf("verifier model: %w", err)
-		}
-	}
 	thinking := cfg.Thinking
 	if thinking == "" {
 		thinking = DefaultLocalThinking
 	}
-	return executor.NewPiExecutor(p, model, thinking, cfg.AgentTimeoutSec).
-		WithRoleConfig(toExecutorRoleConfig(cfg.Generator), toExecutorRoleConfig(cfg.Verifier)), nil
-}
-
-func toExecutorRoleConfig(config *sessionapi.RoleConfig) executor.RoleConfig {
-	if config == nil {
-		return executor.RoleConfig{}
-	}
-	return executor.RoleConfig{Model: config.Model, Thinking: config.Thinking}
+	return executor.NewPiExecutor(p, model, thinking, cfg.AgentTimeoutSec), nil
 }
 
 type piModelsConfig struct {
@@ -615,8 +534,6 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		ApplyPackageLock:   applyPackageLock,
 		Config: sessionapi.SessionConfig{
 			Model:           model,
-			Generator:       cfg.Generator,
-			Verifier:        cfg.Verifier,
 			Until:           cfg.Until,
 			UntilSeconds:    cfg.UntilSeconds,
 			MaxCostUSD:      cfg.MaxCostUSD,
@@ -648,8 +565,6 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	lrc := LocalRunConfig{
 		Model:           cfg.Model,
 		Thinking:        cfg.Thinking,
-		Generator:       cfg.Generator,
-		Verifier:        cfg.Verifier,
 		Until:           cfg.Until,
 		UntilSeconds:    cfg.UntilSeconds,
 		MaxCostUSD:      cfg.MaxCostUSD,

@@ -10,7 +10,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -111,7 +110,6 @@ func TestHealthz(t *testing.T) {
 		sessionapi.RuntimeIdentity{
 			Version:      "v0.1.3",
 			TelosdDigest: "sha256:" + strings.Repeat("a", 64),
-			Capabilities: []string{sessionapi.CapabilityEpochFinalizedEventsV1},
 		},
 	)
 	srv := httptest.NewServer(mux)
@@ -137,9 +135,8 @@ func TestHealthz(t *testing.T) {
 	if body["runtime_telosd_digest"] != "sha256:"+strings.Repeat("a", 64) {
 		t.Fatalf("runtime digest: got %#v", body["runtime_telosd_digest"])
 	}
-	capabilities, ok := body["capabilities"].([]any)
-	if !ok || len(capabilities) != 1 || capabilities[0] != sessionapi.CapabilityEpochFinalizedEventsV1 {
-		t.Fatalf("capabilities: got %#v", body["capabilities"])
+	if _, ok := body["capabilities"]; ok {
+		t.Fatalf("unexpected capabilities: %#v", body["capabilities"])
 	}
 }
 
@@ -1866,7 +1863,7 @@ func TestEventsIdentitySeqAndRoleProjected(t *testing.T) {
 
 	created := createSession(t, srv.URL, createSessionBody(t, "esr"))
 	writeEventsFixture(t, store.Root, created.SessionID, "esr", []string{
-		`{"schema":"telos.evidence.v2","event_id":"sess:event:7","event_seq":7,"session_id":"sess-identity","epoch_id":3,"event":"agent_progress","role":"prover","ts":"2026-05-21T00:00:01.000Z","data":{"text":"hi"}}`,
+		`{"schema":"telos.evidence.v2","event_id":"evt_7","event_seq":7,"epoch_id":2,"event":"agent_progress","round":3,"role":"prover","ts":"2026-05-21T00:00:01.000Z","session_started_at":"2026-05-21T00:00:00.000Z","session_id":"sess_runtime","source":"agent","system":"esr","data":{"text":"hi"}}`,
 	})
 
 	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events")
@@ -1879,17 +1876,15 @@ func TestEventsIdentitySeqAndRoleProjected(t *testing.T) {
 	if events[0].Role == nil || *events[0].Role != "prover" {
 		t.Fatalf("expected role=prover, got %v", events[0].Role)
 	}
-	if events[0].Schema == nil || *events[0].Schema != "telos.evidence.v2" {
-		t.Fatalf("expected schema, got %v", events[0].Schema)
-	}
-	if events[0].EventID == nil || *events[0].EventID != "sess:event:7" {
-		t.Fatalf("expected event_id, got %v", events[0].EventID)
-	}
-	if events[0].SessionID == nil || *events[0].SessionID != "sess-identity" {
-		t.Fatalf("expected session_id, got %v", events[0].SessionID)
-	}
-	if events[0].EpochID == nil || *events[0].EpochID != 3 {
-		t.Fatalf("expected epoch_id, got %v", events[0].EpochID)
+	if events[0].Schema == nil || *events[0].Schema != "telos.evidence.v2" ||
+		events[0].EventID == nil || *events[0].EventID != "evt_7" ||
+		events[0].EpochID == nil || *events[0].EpochID != 2 ||
+		events[0].Round == nil || *events[0].Round != 3 ||
+		events[0].SessionStartedAt == nil || *events[0].SessionStartedAt != "2026-05-21T00:00:00.000Z" ||
+		events[0].SessionID == nil || *events[0].SessionID != "sess_runtime" ||
+		events[0].Source == nil || *events[0].Source != "agent" ||
+		events[0].System == nil || *events[0].System != "esr" {
+		t.Fatalf("event identity not projected: %#v", events[0])
 	}
 }
 
@@ -2124,24 +2119,11 @@ func TestEventsSSEResume(t *testing.T) {
 	}
 }
 
-func TestEventsSSEWaitsForTerminalEpochFinalization(t *testing.T) {
+func TestEventsSSEClosesForTerminalSession(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
 	created := createSession(t, srv.URL, createSessionBody(t, "essf"))
-	sessionDir := filepath.Join(store.Root, created.SessionID)
-	lock, err := os.OpenFile(
-		filepath.Join(sessionDir, "runner.lock"),
-		os.O_CREATE|os.O_RDWR,
-		0o600,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		t.Fatal(err)
-	}
 	manifestPath := filepath.Join(store.Root, created.SessionID, "session.json")
 	manifest, err := sessionapi.ReadManifest(manifestPath)
 	if err != nil {
@@ -2159,50 +2141,19 @@ func TestEventsSSEWaitsForTerminalEpochFinalization(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	done := make(chan string, 1)
-	errs := make(chan error, 1)
-	go func() {
-		req, reqErr := http.NewRequest(http.MethodGet, srv.URL+"/api/sessions/"+created.SessionID+"/events", nil)
-		if reqErr != nil {
-			errs <- reqErr
-			return
-		}
-		req.Header.Set("Accept", "text/event-stream")
-		resp, requestErr := http.DefaultClient.Do(req)
-		if requestErr != nil {
-			errs <- requestErr
-			return
-		}
-		defer resp.Body.Close()
-		body, readErr := io.ReadAll(resp.Body)
-		if readErr != nil {
-			errs <- readErr
-			return
-		}
-		done <- string(body)
-	}()
-
-	select {
-	case body := <-done:
-		t.Fatalf("stream closed before finalization: %s", body)
-	case err := <-errs:
-		t.Fatal(err)
-	case <-time.After(200 * time.Millisecond):
-	}
-
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_UN); err != nil {
+	req, err := http.NewRequest(http.MethodGet, srv.URL+"/api/sessions/"+created.SessionID+"/events", nil)
+	if err != nil {
 		t.Fatal(err)
 	}
-
-	select {
-	case body := <-done:
-		if !strings.Contains(body, `"event":"epoch_finalized"`) {
-			t.Fatalf("missing finalization event: %s", body)
-		}
-	case err := <-errs:
+	req.Header.Set("Accept", "text/event-stream")
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
 		t.Fatal(err)
-	case <-time.After(3 * time.Second):
-		t.Fatal("stream did not close after finalization")
+	}
+	defer resp.Body.Close()
+	if _, err := io.ReadAll(resp.Body); err != nil {
+		t.Fatal(err)
 	}
 }
 

@@ -97,6 +97,26 @@ func TestLocalPlatformRunFailure(t *testing.T) {
 	}
 }
 
+func TestLocalPlatformRunCapturesCompleteStderr(t *testing.T) {
+	dir := t.TempDir()
+	p := NewLocalPlatform(dir)
+
+	result := p.Run(
+		[]string{"sh", "-c", `exec 1>&2; i=0; while [ "$i" -lt 8192 ]; do printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n'; i=$((i + 1)); done; printf 'stderr-tail\n'; exit 23`},
+		"", nil, 10, nil, nil,
+	)
+
+	if result.ReturnCode != 23 {
+		t.Fatalf("expected exit code 23, got %d", result.ReturnCode)
+	}
+	if got, want := len(result.Stderr), 8192*65+len("stderr-tail\n"); got != want {
+		t.Fatalf("stderr length: got %d, want %d", got, want)
+	}
+	if !strings.HasSuffix(result.Stderr, "stderr-tail\n") {
+		t.Fatalf("stderr is incomplete: got %d bytes", len(result.Stderr))
+	}
+}
+
 func TestLocalPlatformRunWithoutTimeout(t *testing.T) {
 	dir := t.TempDir()
 	p := NewLocalPlatform(dir)

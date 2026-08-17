@@ -6,7 +6,6 @@ go_library(
         "auth.go",
         "dashboard_doc_open_other.go",
         "dashboard_doc_open_unix.go",
-        "finalization.go",
         "manifest.go",
         "server.go",
         "store.go",
@@ -15,7 +14,6 @@ go_library(
     importpath = "github.com/telos-org/telos/internal/sessionapi",
     visibility = ["//:__subpackages__"],
     deps = [
-        "//internal/evidence",
         "//internal/spec",
     ],
 )

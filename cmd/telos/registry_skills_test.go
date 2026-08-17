@@ -13,25 +13,7 @@ import (
 )
 
 func TestPrepareRegistrySkillsCachesAndPinsExactVersion(t *testing.T) {
-	sourceDir := filepath.Join(t.TempDir(), "verify-test")
-	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(sourceDir, "SKILL.md"),
-		[]byte("---\nname: verify-test\n---\nVerify the result.\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
-	skill, err := spec.LoadSkill(sourceDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	digest, bundle, err := spec.BuildSkillBundle(skill)
-	if err != nil {
-		t.Fatal(err)
-	}
+	digest, bundle := testRegistrySkillBundle(t, "verify-test")
 
 	metadataRequests := 0
 	bundleRequests := 0
@@ -117,4 +99,85 @@ func TestPrepareRegistrySkillsCachesAndPinsExactVersion(t *testing.T) {
 	if metadataRequests != 2 || bundleRequests != 1 {
 		t.Fatalf("cached prepare made network requests: metadata=%d bundle=%d", metadataRequests, bundleRequests)
 	}
+}
+
+func TestCompilePlanSpecLeavesPersistentRegistryCacheUntouched(t *testing.T) {
+	digest, bundle := testRegistrySkillBundle(t, "verify-test")
+	metadataRequests := 0
+	bundleRequests := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/skills/telos/verify-test/versions/1.2.3":
+			metadataRequests++
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope":   "telos",
+				"name":    "verify-test",
+				"version": "1.2.3",
+				"ref":     "@telos/verify-test:1.2.3",
+				"digest":  digest,
+			})
+		case "/api/skills/telos/verify-test/versions/1.2.3/bundle":
+			bundleRequests++
+			_, _ = w.Write(bundle)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	persistentCache := filepath.Join(t.TempDir(), "registry-cache")
+	t.Setenv("TELOS_API_ENDPOINT", srv.URL)
+	t.Setenv("TELOS_AUTH_TOKEN", "test-token")
+	t.Setenv(spec.RegistrySkillsDirEnv, persistentCache)
+	t.Setenv("TELOS_SKILLS_DIR", t.TempDir())
+	markdown := []byte("---\nversion: 0.1.0\nname: remote-skill\nplatform: local\nskills: '@telos/verify-test:1.2.3*'\n---\nUse the remote skill.\n")
+	specPath := filepath.Join(t.TempDir(), "SPEC.md")
+	if err := os.WriteFile(specPath, markdown, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	compiled, state, err := compilePlanSpec(specPath, "", markdown)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(compiled.Skills) != 1 || compiled.Skills[0].Instructions != "Verify the result." {
+		t.Fatalf("compiled skills: %#v", compiled.Skills)
+	}
+	if len(state.Skills) != 1 || state.Skills[0].Digest != digest || !state.Skills[0].Starred {
+		t.Fatalf("planned skill locks: %#v", state.Skills)
+	}
+	if got := os.Getenv(spec.RegistrySkillsDirEnv); got != persistentCache {
+		t.Fatalf("registry cache environment = %q, want %q", got, persistentCache)
+	}
+	ref, _ := spec.ParseRegistrySkillRef("@telos/verify-test:1.2.3")
+	if _, err := os.Stat(spec.RegistrySkillPath(ref)); !os.IsNotExist(err) {
+		t.Fatalf("plan populated persistent registry cache: %v", err)
+	}
+	if metadataRequests != 1 || bundleRequests != 1 {
+		t.Fatalf("registry requests: metadata=%d bundle=%d", metadataRequests, bundleRequests)
+	}
+}
+
+func testRegistrySkillBundle(t *testing.T, name string) (string, []byte) {
+	t.Helper()
+	sourceDir := filepath.Join(t.TempDir(), name)
+	if err := os.MkdirAll(sourceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(sourceDir, "SKILL.md"),
+		[]byte("---\nname: "+name+"\n---\nVerify the result.\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	skill, err := spec.LoadSkill(sourceDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, bundle, err := spec.BuildSkillBundle(skill)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return digest, bundle
 }

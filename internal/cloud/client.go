@@ -2,9 +2,7 @@
 package cloud
 
 import (
-	"bufio"
 	"bytes"
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -85,35 +83,38 @@ type sessionListResponse struct {
 }
 
 type deploymentLogEventsResponse struct {
-	Events  []json.RawMessage   `json:"events"`
-	Cursors deploymentLogCursor `json:"cursors"`
-}
-
-type deploymentLogCursor struct {
-	Runtime *int64 `json:"rt"`
+	Events []json.RawMessage `json:"events"`
 }
 
 // SessionLogPage keeps both the normalized events used by the human/JSON
 // views and their original wire records for --raw output.
 type SessionLogPage struct {
-	Events        []sessionapi.SessionEvent
-	RawEvents     []json.RawMessage
-	RuntimeCursor *int64
+	Events    []sessionapi.SessionEvent
+	RawEvents []json.RawMessage
 }
 
 type deploymentLogEvent struct {
-	Event       string         `json:"event"`
-	EventSeq    *int64         `json:"event_seq,omitempty"`
-	Role        *string        `json:"role,omitempty"`
-	Timestamp   *string        `json:"ts,omitempty"`
-	Time        *string        `json:"time,omitempty"`
-	SessionID   *string        `json:"session_id,omitempty"`
-	SpecIndex   *int           `json:"spec_index,omitempty"`
-	SpecName    *string        `json:"spec_name,omitempty"`
-	SpecDirName *string        `json:"spec_dir_name,omitempty"`
-	Data        map[string]any `json:"data,omitempty"`
-	Message     string         `json:"message,omitempty"`
-	Metadata    map[string]any `json:"metadata,omitempty"`
+	Schema           *string        `json:"schema,omitempty"`
+	EventID          *string        `json:"event_id,omitempty"`
+	Event            string         `json:"event"`
+	EventSeq         *int64         `json:"event_seq,omitempty"`
+	EpochID          *int           `json:"epoch_id,omitempty"`
+	Round            *int           `json:"round,omitempty"`
+	Role             *string        `json:"role,omitempty"`
+	Timestamp        *string        `json:"ts,omitempty"`
+	SourceTimestamp  *string        `json:"source_ts,omitempty"`
+	ReceivedAt       *string        `json:"received_at,omitempty"`
+	Time             *string        `json:"time,omitempty"`
+	SessionStartedAt *string        `json:"session_started_at,omitempty"`
+	SessionID        *string        `json:"session_id,omitempty"`
+	Source           *string        `json:"source,omitempty"`
+	System           *string        `json:"system,omitempty"`
+	SpecIndex        *int           `json:"spec_index,omitempty"`
+	SpecName         *string        `json:"spec_name,omitempty"`
+	SpecDirName      *string        `json:"spec_dir_name,omitempty"`
+	Data             map[string]any `json:"data,omitempty"`
+	Message          string         `json:"message,omitempty"`
+	Metadata         map[string]any `json:"metadata,omitempty"`
 }
 
 func (event deploymentLogEvent) asSessionEvent() sessionapi.SessionEvent {
@@ -127,20 +128,37 @@ func (event deploymentLogEvent) asSessionEvent() sessionapi.SessionEvent {
 	for key, value := range event.Metadata {
 		data[key] = value
 	}
-	timestamp := event.Timestamp
+	receivedAt := event.ReceivedAt
+	if receivedAt == nil {
+		receivedAt = event.Time
+	}
+	timestamp := receivedAt
 	if timestamp == nil {
-		timestamp = event.Time
+		timestamp = event.Timestamp
+	}
+	sourceTimestamp := event.SourceTimestamp
+	if sourceTimestamp == nil && receivedAt != nil {
+		sourceTimestamp = event.Timestamp
 	}
 	return sessionapi.SessionEvent{
-		Event:       event.Event,
-		EventSeq:    event.EventSeq,
-		Role:        event.Role,
-		Timestamp:   timestamp,
-		SessionID:   event.SessionID,
-		SpecIndex:   event.SpecIndex,
-		SpecName:    event.SpecName,
-		SpecDirName: event.SpecDirName,
-		Data:        data,
+		Schema:           event.Schema,
+		EventID:          event.EventID,
+		Event:            event.Event,
+		EventSeq:         event.EventSeq,
+		EpochID:          event.EpochID,
+		Round:            event.Round,
+		Role:             event.Role,
+		Timestamp:        timestamp,
+		SourceTimestamp:  sourceTimestamp,
+		ReceivedAt:       receivedAt,
+		SessionStartedAt: event.SessionStartedAt,
+		SessionID:        event.SessionID,
+		Source:           event.Source,
+		System:           event.System,
+		SpecIndex:        event.SpecIndex,
+		SpecName:         event.SpecName,
+		SpecDirName:      event.SpecDirName,
+		Data:             data,
 	}
 }
 
@@ -186,7 +204,16 @@ var resolvedContexts sync.Map
 
 // ControlClient returns a client for the configured Telos control plane.
 func ControlClient() (*Client, error) {
-	cfg := config.LoadConfig()
+	return ControlClientForContext("")
+}
+
+// ControlClientForContext returns a configured client, optionally overriding
+// the environment or stored context for this client only.
+func ControlClientForContext(contextOverride string) (*Client, error) {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
 	endpoint := cfg.APIEndpoint
 	if endpoint == "" {
 		endpoint = DefaultAPIEndpoint
@@ -196,7 +223,10 @@ func ControlClient() (*Client, error) {
 		return nil, fmt.Errorf("not logged in; run `telos login` first")
 	}
 	client := NewClient(endpoint, token)
-	context := strings.TrimSpace(cfg.Context)
+	context := strings.TrimSpace(contextOverride)
+	if context == "" {
+		context = strings.TrimSpace(cfg.Context)
+	}
 	if context == "" || context == "personal" {
 		return client, nil
 	}
@@ -485,7 +515,7 @@ func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, er
 }
 
 func (c *Client) GetSessionLogPage(sessionID string) (*SessionLogPage, error) {
-	resp, err := c.do("GET", sessionLogsPath(sessionID, nil), nil)
+	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(sessionID)+"/logs", nil)
 	if err != nil {
 		return nil, err
 	}
@@ -506,53 +536,9 @@ func (c *Client) GetSessionLogPage(sessionID string) (*SessionLogPage, error) {
 		events = append(events, event.asSessionEvent())
 	}
 	return &SessionLogPage{
-		Events:        events,
-		RawEvents:     response.Events,
-		RuntimeCursor: response.Cursors.Runtime,
+		Events:    events,
+		RawEvents: response.Events,
 	}, nil
-}
-
-func (c *Client) StreamSessionLogs(ctx context.Context, sessionID string, onEvent func(sessionapi.SessionEvent) error) error {
-	return c.StreamSessionLogsAfter(ctx, sessionID, nil, onEvent)
-}
-
-func (c *Client) StreamSessionLogsAfter(
-	ctx context.Context,
-	sessionID string,
-	afterRuntime *int64,
-	onEvent func(sessionapi.SessionEvent) error,
-) error {
-	return c.streamEvents(ctx, sessionLogsPath(sessionID, afterRuntime), func(data []byte) error {
-		var event deploymentLogEvent
-		if err := json.Unmarshal(data, &event); err != nil {
-			return fmt.Errorf("decode session log event: %w", err)
-		}
-		return onEvent(event.asSessionEvent())
-	})
-}
-
-func (c *Client) StreamRawSessionLogsAfter(
-	ctx context.Context,
-	sessionID string,
-	afterRuntime *int64,
-	onEvent func(json.RawMessage) error,
-) error {
-	return c.streamEvents(ctx, sessionLogsPath(sessionID, afterRuntime), func(data []byte) error {
-		if !json.Valid(data) {
-			return errors.New("decode raw session log event: invalid JSON")
-		}
-		return onEvent(append(json.RawMessage(nil), data...))
-	})
-}
-
-func sessionLogsPath(sessionID string, afterRuntime *int64) string {
-	path := "/api/deployments/" + url.PathEscape(sessionID) + "/logs"
-	if afterRuntime == nil {
-		return path
-	}
-	query := url.Values{}
-	query.Set("after_rt", fmt.Sprintf("%d", *afterRuntime))
-	return path + "?" + query.Encode()
 }
 
 // NormalizeEndpoint cleans up an API endpoint URL.
@@ -562,64 +548,6 @@ func NormalizeEndpoint(endpoint string) string {
 		endpoint = "https://" + endpoint
 	}
 	return endpoint
-}
-
-func (c *Client) streamEvents(ctx context.Context, path string, onData func([]byte) error) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.Endpoint+path, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("User-Agent", UserAgent)
-	if c.Token != "" {
-		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	if strings.TrimSpace(c.OrgID) != "" {
-		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(c.OrgID))
-	}
-	client := http.DefaultClient
-	if c.HTTP != nil {
-		clone := *c.HTTP
-		clone.Timeout = 0
-		client = &clone
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return readError(resp)
-	}
-
-	reader := bufio.NewReader(resp.Body)
-	for {
-		line, readErr := reader.ReadString('\n')
-		if readErr != nil && len(line) == 0 {
-			if errors.Is(readErr, io.EOF) {
-				break
-			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			return readErr
-		}
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data:") {
-			if readErr != nil {
-				break
-			}
-			continue
-		}
-		payload := strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if err := onData([]byte(payload)); err != nil {
-			return err
-		}
-		if readErr != nil {
-			break
-		}
-	}
-	return nil
 }
 
 func (c *Client) do(method, path string, body []byte) (*http.Response, error) {

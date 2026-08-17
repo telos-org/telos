@@ -127,9 +127,6 @@ func TestStartEpochBindsProvidedRevisionIdentity(t *testing.T) {
 	if epoch.SpecSHA256 != "sha256:old-spec" {
 		t.Fatalf("spec sha: %q", epoch.SpecSHA256)
 	}
-	if len(epoch.WorkerCapabilities) != 1 || epoch.WorkerCapabilities[0] != sessionapi.CapabilityEpochFinalizedEventsV1 {
-		t.Fatalf("worker capabilities: %#v", epoch.WorkerCapabilities)
-	}
 }
 
 func TestStartEpochDoesNotAppendAfterSessionStops(t *testing.T) {
@@ -159,40 +156,5 @@ func TestStartEpochDoesNotAppendAfterSessionStops(t *testing.T) {
 	}
 	if len(updated.Epochs) != 1 {
 		t.Fatalf("epochs: got %d want 1", len(updated.Epochs))
-	}
-}
-
-func TestRunnerIdentityAdvertisesFinalizationCapability(t *testing.T) {
-	runner := RunnerIdentity(42)
-	if !runnerSupportsCapability(&runner, sessionapi.CapabilityEpochFinalizedEventsV1) {
-		t.Fatalf("runner capabilities: %#v", runner.WorkerCapabilities)
-	}
-}
-
-func TestWorkerArgvMustMatchSessionBeforeRetirement(t *testing.T) {
-	sessionDir := "/var/lib/telos/sessions/sess_1"
-	if !workerArgvMatchesSession(
-		[]string{"/usr/local/bin/telosd", "--session-dir", sessionDir},
-		sessionDir,
-	) {
-		t.Fatal("expected exact telosd session command to match")
-	}
-	if !workerArgvMatchesSession(
-		[]string{"/usr/local/bin/telosd", "--session-dir=" + sessionDir},
-		sessionDir,
-	) {
-		t.Fatal("expected exact telosd session assignment to match")
-	}
-	if workerArgvMatchesSession(
-		[]string{"/usr/local/bin/telosd", "--session-dir", "/var/lib/telos/sessions/sess_10"},
-		sessionDir,
-	) {
-		t.Fatal("must not match a different session")
-	}
-	if workerArgvMatchesSession(
-		[]string{"/usr/local/bin/telosd-helper", "--session-dir", sessionDir},
-		sessionDir,
-	) {
-		t.Fatal("must not match an unrelated recycled PID")
 	}
 }

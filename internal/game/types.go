@@ -46,7 +46,7 @@ type TurnResult struct {
 	Recoverable bool
 }
 
-// LiveAgentEvent is a user-visible progress artifact emitted before a turn exits.
+// LiveAgentEvent is structured agent activity emitted before a turn exits.
 type LiveAgentEvent struct {
 	Kind string
 	Text string

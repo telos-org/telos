@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io/fs"
 	"os"
@@ -35,14 +34,17 @@ var packageSemverRE = regexp.MustCompile(
 var packageVersionNumberRE = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
 
 func cmdPush(args []string) {
-	fs := flag.NewFlagSet("push", flag.ExitOnError)
+	fs := newCommandFlagSet("push", "telos push SPEC.md|SKILL_DIR [flags]")
 	scope := fs.String("scope", "", "Package scope")
 	version := fs.String("version", "", "Version override for skill or package publishing")
 	jsonOut := fs.Bool("json", false, "JSON output")
+	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos push SPEC.md|SKILL_DIR [--scope SCOPE] [--version VERSION] [--json]")
-		os.Exit(1)
+	requireArgCount(fs, 1, "one SPEC.md or SKILL_DIR")
+	contextOverride, err := cloudContextOverride(fs, *contextValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
 	}
 
 	input := fs.Arg(0)
@@ -50,7 +52,7 @@ func cmdPush(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	} else if ok {
-		client, err := cloud.ControlClient()
+		client, err := cloud.ControlClientForContext(contextOverride)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -62,8 +64,9 @@ func cmdPush(args []string) {
 		}
 		if *jsonOut {
 			printJSON(map[string]any{
-				"name":  skill.name,
-				"skill": record,
+				"context": resolvedCloudContext(client),
+				"name":    skill.name,
+				"skill":   record,
 			})
 			return
 		}
@@ -71,7 +74,7 @@ func cmdPush(args []string) {
 		return
 	}
 
-	pkg, err := packageSpec(input)
+	pkg, err := packageSpec(input, contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -79,7 +82,7 @@ func cmdPush(args []string) {
 	if strings.TrimSpace(*version) != "" {
 		pkg.version = *version
 	}
-	client, err := cloud.ControlClient()
+	client, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -91,6 +94,7 @@ func cmdPush(args []string) {
 	}
 	if *jsonOut {
 		printJSON(map[string]any{
+			"context": resolvedCloudContext(client),
 			"name":    pkg.name,
 			"version": pkg.version,
 			"package": record,
@@ -100,7 +104,7 @@ func cmdPush(args []string) {
 	printPushReceipt(pkg.name, record)
 }
 
-func packageSpec(input string) (*specPackage, error) {
+func packageSpec(input, contextOverride string) (*specPackage, error) {
 	path, ok := existingSpecPath(input)
 	if !ok {
 		if input == "" {
@@ -108,7 +112,7 @@ func packageSpec(input string) (*specPackage, error) {
 		}
 		return nil, fmt.Errorf("spec file not found: %s", input)
 	}
-	if err := prepareRegistrySkills(path); err != nil {
+	if err := prepareRegistrySkillsForContext(path, contextOverride); err != nil {
 		return nil, err
 	}
 	compiled, err := spec.CompileEnvironment(path)

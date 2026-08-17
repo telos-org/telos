@@ -82,18 +82,25 @@ func isLocalApplyID(id string) bool {
 	return strings.HasPrefix(id, "local_")
 }
 
-func getCloudSessionIfConfigured(id string) (*cloud.SessionRecord, bool, error) {
-	if !config.IsConfigured() {
-		return nil, false, nil
+func getCloudSessionIfConfigured(
+	id string,
+	contextOverride string,
+) (*cloud.SessionRecord, string, bool, error) {
+	configured, err := config.IsConfigured()
+	if err != nil {
+		return nil, "", false, err
 	}
-	session, err := getCloudSession(id)
+	if !configured {
+		return nil, "", false, nil
+	}
+	session, contextName, err := getCloudSessionForContext(id, contextOverride)
 	if err != nil {
 		if strings.Contains(err.Error(), "(HTTP 404)") {
-			return nil, false, nil
+			return nil, "", false, nil
 		}
-		return nil, true, err
+		return nil, contextName, true, err
 	}
-	return session, true, nil
+	return session, contextName, true, nil
 }
 
 func getSessionFromAnywhere(sessionID string) (*sessionapi.Session, error) {

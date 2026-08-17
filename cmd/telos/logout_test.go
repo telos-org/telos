@@ -23,7 +23,10 @@ func TestLogoutDoesNotPersistEnvironmentOverrides(t *testing.T) {
 
 	cmdLogout(nil)
 
-	stored := config.LoadStoredConfig()
+	stored, err := config.LoadStoredConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if stored.AuthToken != "" {
 		t.Fatalf("stored token was not cleared")
 	}

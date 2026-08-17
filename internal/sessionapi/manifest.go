@@ -65,24 +65,23 @@ type ManifestSpec struct {
 }
 
 type Epoch struct {
-	ID                 int      `json:"id"`
-	StartedAt          string   `json:"started_at"`
-	FinishedAt         *string  `json:"finished_at"`
-	Result             *string  `json:"result"`
-	Error              *string  `json:"error"`
-	Runner             *Runner  `json:"runner"`
-	SpecName           string   `json:"spec_name,omitempty"`
-	SpecVersion        *int     `json:"spec_version,omitempty"`
-	Revision           *string  `json:"revision,omitempty"`
-	PackageDigest      *string  `json:"package_digest,omitempty"`
-	SpecSHA256         string   `json:"spec_sha256,omitempty"`
-	CompletionReason   *string  `json:"completion_reason,omitempty"`
-	VerifierConceded   *bool    `json:"verifier_conceded,omitempty"`
-	CheckpointSaved    *bool    `json:"checkpoint_saved,omitempty"`
-	CheckpointPath     *string  `json:"checkpoint_path,omitempty"`
-	CheckpointBytes    *int64   `json:"checkpoint_bytes,omitempty"`
-	RoundCount         *int     `json:"round_count,omitempty"`
-	WorkerCapabilities []string `json:"worker_capabilities,omitempty"`
+	ID               int     `json:"id"`
+	StartedAt        string  `json:"started_at"`
+	FinishedAt       *string `json:"finished_at"`
+	Result           *string `json:"result"`
+	Error            *string `json:"error"`
+	Runner           *Runner `json:"runner"`
+	SpecName         string  `json:"spec_name,omitempty"`
+	SpecVersion      *int    `json:"spec_version,omitempty"`
+	Revision         *string `json:"revision,omitempty"`
+	PackageDigest    *string `json:"package_digest,omitempty"`
+	SpecSHA256       string  `json:"spec_sha256,omitempty"`
+	CompletionReason *string `json:"completion_reason,omitempty"`
+	VerifierConceded *bool   `json:"verifier_conceded,omitempty"`
+	CheckpointSaved  *bool   `json:"checkpoint_saved,omitempty"`
+	CheckpointPath   *string `json:"checkpoint_path,omitempty"`
+	CheckpointBytes  *int64  `json:"checkpoint_bytes,omitempty"`
+	RoundCount       *int    `json:"round_count,omitempty"`
 }
 
 type SessionDesiredStatus string
@@ -93,18 +92,17 @@ const (
 )
 
 type Runner struct {
-	Kind               string   `json:"kind,omitempty"`
-	PID                int      `json:"pid,omitempty"`
-	PGID               int      `json:"pgid,omitempty"`
-	LogPath            string   `json:"log_path,omitempty"`
-	InCluster          bool     `json:"in_cluster"`
-	Hostname           string   `json:"hostname,omitempty"`
-	PodName            string   `json:"pod_name,omitempty"`
-	PodNamespace       string   `json:"pod_namespace,omitempty"`
-	StartedAt          string   `json:"started_at,omitempty"`
-	FinishedAt         *string  `json:"finished_at,omitempty"`
-	Status             string   `json:"status,omitempty"`
-	WorkerCapabilities []string `json:"worker_capabilities,omitempty"`
+	Kind         string  `json:"kind,omitempty"`
+	PID          int     `json:"pid,omitempty"`
+	PGID         int     `json:"pgid,omitempty"`
+	LogPath      string  `json:"log_path,omitempty"`
+	InCluster    bool    `json:"in_cluster"`
+	Hostname     string  `json:"hostname,omitempty"`
+	PodName      string  `json:"pod_name,omitempty"`
+	PodNamespace string  `json:"pod_namespace,omitempty"`
+	StartedAt    string  `json:"started_at,omitempty"`
+	FinishedAt   *string `json:"finished_at,omitempty"`
+	Status       string  `json:"status,omitempty"`
 }
 
 type ScopedToken struct {
@@ -115,21 +113,12 @@ type ScopedToken struct {
 
 type SessionConfig struct {
 	Model           string         `json:"model,omitempty"`
-	Generator       *RoleConfig    `json:"generator,omitempty"`
-	Verifier        *RoleConfig    `json:"verifier,omitempty"`
 	Until           int            `json:"until,omitempty"`
 	UntilSeconds    int            `json:"until_seconds,omitempty"`
 	MaxCostUSD      *float64       `json:"max_cost_usd,omitempty"`
 	AgentTimeoutSec int            `json:"agent_timeout_sec,omitempty"`
 	Thinking        string         `json:"thinking,omitempty"`
 	Extra           map[string]any `json:"-"`
-}
-
-// RoleConfig optionally overrides the shared model configuration for one PVG role.
-// Empty fields inherit their value from SessionConfig.Model/Thinking.
-type RoleConfig struct {
-	Model    string `json:"model,omitempty"`
-	Thinking string `json:"thinking,omitempty"`
 }
 
 // InitialManifest is the typed input for creating a session.json before any
@@ -333,10 +322,9 @@ func (m *Manifest) IsStopped() bool {
 // NewEpoch snapshots the spec and worker identity for one execution.
 func NewEpoch(manifest *Manifest, id int, startedAt string, runner *Runner) Epoch {
 	epoch := Epoch{
-		ID:                 id,
-		StartedAt:          startedAt,
-		Runner:             runner,
-		WorkerCapabilities: []string{CapabilityEpochFinalizedEventsV1},
+		ID:        id,
+		StartedAt: startedAt,
+		Runner:    runner,
 	}
 	if manifest == nil {
 		return epoch
@@ -404,12 +392,6 @@ func (c SessionConfig) MarshalJSON() ([]byte, error) {
 	if c.Model != "" {
 		m["model"] = c.Model
 	}
-	if c.Generator != nil {
-		m["generator"] = c.Generator
-	}
-	if c.Verifier != nil {
-		m["verifier"] = c.Verifier
-	}
 	if c.Until > 0 {
 		m["until"] = c.Until
 	}
@@ -439,18 +421,6 @@ func (c *SessionConfig) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("config.model: %w", err)
 		}
 		delete(raw, "model")
-	}
-	if value, ok := raw["generator"]; ok {
-		if err := json.Unmarshal(value, &c.Generator); err != nil {
-			return fmt.Errorf("config.generator: %w", err)
-		}
-		delete(raw, "generator")
-	}
-	if value, ok := raw["verifier"]; ok {
-		if err := json.Unmarshal(value, &c.Verifier); err != nil {
-			return fmt.Errorf("config.verifier: %w", err)
-		}
-		delete(raw, "verifier")
 	}
 	if value, ok := raw["until"]; ok {
 		if err := json.Unmarshal(value, &c.Until); err != nil {

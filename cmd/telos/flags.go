@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/telos-org/telos/internal/cli"
@@ -16,11 +17,73 @@ type boolFlag interface {
 	IsBoolFlag() bool
 }
 
+func newCommandFlagSet(name, synopsis string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "usage: %s\n", synopsis)
+		w := tabwriter.NewWriter(fs.Output(), 0, 4, 2, ' ', 0)
+		hasFlags := false
+		fs.VisitAll(func(option *flag.Flag) {
+			if !hasFlags {
+				fmt.Fprintln(fs.Output(), "\nflags:")
+				hasFlags = true
+			}
+			name := "--" + option.Name
+			if len(option.Name) == 1 {
+				name = "-" + option.Name
+			}
+			if kind := flagValueKind(option); kind != "" {
+				name += " " + kind
+			}
+			description := option.Usage
+			if visibleFlagDefault(option) {
+				description += " (default " + option.DefValue + ")"
+			}
+			fmt.Fprintf(w, "  %s\t%s\n", name, description)
+		})
+		if hasFlags {
+			_ = w.Flush()
+		}
+	}
+	return fs
+}
+
+func flagValueKind(option *flag.Flag) string {
+	if value, ok := option.Value.(boolFlag); ok && value.IsBoolFlag() {
+		return ""
+	}
+	getter, ok := option.Value.(flag.Getter)
+	if !ok {
+		return "value"
+	}
+	switch getter.Get().(type) {
+	case int:
+		return "int"
+	case float64:
+		return "float"
+	default:
+		return "string"
+	}
+}
+
+func visibleFlagDefault(option *flag.Flag) bool {
+	return option.DefValue != "" && option.DefValue != "0" && option.DefValue != "false"
+}
+
 func parseFlags(fs *flag.FlagSet, args []string) {
 	ordered := reorderInterspersedFlags(fs, args)
 	if err := fs.Parse(ordered); err != nil {
 		os.Exit(2)
 	}
+}
+
+func requireArgCount(fs *flag.FlagSet, count int, expected string) {
+	if fs.NArg() == count {
+		return
+	}
+	fmt.Fprintf(fs.Output(), "error: expected %s\n\n", expected)
+	fs.Usage()
+	os.Exit(2)
 }
 
 func reorderInterspersedFlags(fs *flag.FlagSet, args []string) []string {
@@ -57,6 +120,9 @@ func reorderInterspersedFlags(fs *flag.FlagSet, args []string) []string {
 }
 
 func flagIsBool(fs *flag.FlagSet, arg string) bool {
+	if isHelpArg(arg) {
+		return true
+	}
 	name := strings.TrimLeft(arg, "-")
 	if idx := strings.Index(name, "="); idx >= 0 {
 		name = name[:idx]
@@ -91,10 +157,6 @@ func resolveLocalRunConfigFromFlags(
 	workspace string,
 	model string,
 	thinking string,
-	generatorModel string,
-	generatorThinking string,
-	verifierModel string,
-	verifierThinking string,
 	maxCostUSD float64,
 ) (cli.LocalRunConfig, error) {
 	cost, err := positiveFloatOption(fs, "max-cost-usd", maxCostUSD, "TELOS_MAX_COST_USD", 20.0)
@@ -102,43 +164,11 @@ func resolveLocalRunConfigFromFlags(
 		return cli.LocalRunConfig{}, err
 	}
 	return cli.LocalRunConfig{
-		Workspace: stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
-		Model:     modelOption(fs, model),
-		Thinking:  stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", cli.DefaultLocalThinking),
-		Generator: roleConfig(
-			stringOption(fs, "generator-model", generatorModel, "TELOS_GENERATOR_MODEL"),
-			stringOption(fs, "generator-thinking", generatorThinking, "TELOS_GENERATOR_THINKING"),
-		),
-		Verifier: roleConfig(
-			stringOption(fs, "verifier-model", verifierModel, "TELOS_VERIFIER_MODEL"),
-			stringOption(fs, "verifier-thinking", verifierThinking, "TELOS_VERIFIER_THINKING"),
-		),
+		Workspace:  stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
+		Model:      modelOption(fs, model),
+		Thinking:   stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", cli.DefaultLocalThinking),
 		MaxCostUSD: &cost,
 	}, nil
-}
-
-func roleConfig(model, thinking string) *sessionapi.RoleConfig {
-	if model == "" && thinking == "" {
-		return nil
-	}
-	return &sessionapi.RoleConfig{Model: model, Thinking: thinking}
-}
-
-func roleConfigSet(fs *flag.FlagSet) bool {
-	if flagNamesSet(fs, "generator-model", "generator-thinking", "verifier-model", "verifier-thinking") {
-		return true
-	}
-	for _, key := range []string{
-		"TELOS_GENERATOR_MODEL",
-		"TELOS_GENERATOR_THINKING",
-		"TELOS_VERIFIER_MODEL",
-		"TELOS_VERIFIER_THINKING",
-	} {
-		if strings.TrimSpace(os.Getenv(key)) != "" {
-			return true
-		}
-	}
-	return false
 }
 
 type sessionRuntimeConfig struct {

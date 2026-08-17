@@ -1,23 +1,5 @@
-// Command telos is the public Telos CLI.
-//
-// Public commands:
-//
-//	telos plan SPEC.md [--session SESSION] [--json]
-//	telos push SPEC.md|SKILL_DIR [--scope SCOPE] [--version VERSION] [--json]
-//	telos apply SPEC.md [--session SESSION] [--json]
-//	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
-//	    [--until N|DURATION] [--max-cost-usd USD] [--json]
-//	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
-//	telos get SESSION [--output PATH]
-//	telos describe SESSION [--json]
-//	telos logs [-f] [--verbose|--json|--raw] [--tail N|--all] SESSION
-//	telos delete SESSION [--json]
-//	telos pull PACKAGE [--output PATH]
-//	telos login [--endpoint URL]
-//	telos logout
-//	telos config [--context @handle]
-//	telos version
-//	telos --version
+// Command telos is the public Telos CLI. Run telos --help for its command
+// surface and telos COMMAND --help for current flags.
 package main
 
 import (
@@ -86,18 +68,20 @@ func isHelpArg(arg string) bool {
 func usage(out io.Writer) {
 	fmt.Fprintln(out, "usage: telos <command> [args]")
 	fmt.Fprintln(out, "")
-	fmt.Fprintln(out, "commands:")
-	fmt.Fprintln(out, "  plan SPEC.md       Preview a spec without running it")
-	fmt.Fprintln(out, "  push SPEC.md       Publish a versioned spec or skill for reuse")
-	fmt.Fprintln(out, "  apply SPEC.md      Create or update a durable session from a spec")
-	fmt.Fprintln(out, "  run SPEC.md        Run a spec as a bounded task")
-	fmt.Fprintln(out, "  list               List sessions")
-	fmt.Fprintln(out, "  get SESSION        Download a session's package")
-	fmt.Fprintln(out, "  describe SESSION   Show session details")
-	fmt.Fprintln(out, "  logs SESSION       Show status and recent activity")
-	fmt.Fprintln(out, "  delete SESSION     Delete a session (local history is preserved)")
-	fmt.Fprintln(out, "  pull PACKAGE       Download a registry package")
+	fmt.Fprintln(out, "core commands:")
 	fmt.Fprintln(out, "  login              Log in to Telos Cloud via the browser")
+	fmt.Fprintln(out, "  plan SPEC.md       Preview a spec without running it")
+	fmt.Fprintln(out, "  apply SPEC.md      Create or update a durable session from a spec")
+	fmt.Fprintln(out, "  list               List sessions")
+	fmt.Fprintln(out, "  describe SESSION   Show session details")
+	fmt.Fprintln(out, "  logs SESSION       Show recent activity")
+	fmt.Fprintln(out, "  delete SESSION     Delete a session")
+	fmt.Fprintln(out, "")
+	fmt.Fprintln(out, "other commands:")
+	fmt.Fprintln(out, "  run SPEC.md        Run a spec as a bounded task")
+	fmt.Fprintln(out, "  push SPEC.md       Publish a versioned spec or skill for reuse")
+	fmt.Fprintln(out, "  pull PACKAGE       Download a registry package")
+	fmt.Fprintln(out, "  get SESSION        Download a session's package")
 	fmt.Fprintln(out, "  logout             Log out and revoke this device's token")
 	fmt.Fprintln(out, "  config             Show or update CLI configuration")
 	fmt.Fprintln(out, "  version            Show version")

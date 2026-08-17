@@ -80,35 +80,17 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 		result.InfraError = fmt.Sprintf("stdout_pipe: %v", err)
 		return result
 	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		result.InfraError = fmt.Sprintf("stderr_pipe: %v", err)
-		return result
-	}
+	var stderrBuf strings.Builder
+	cmd.Stderr = &stderrBuf
 
 	if err := cmd.Start(); err != nil {
 		result.InfraError = fmt.Sprintf("local_spawn_failed:%v", err)
 		return result
 	}
 
-	doneCh := make(chan struct{})
-	var stderrBuf strings.Builder
-
+	stdoutDone := make(chan struct{})
 	go func() {
-		buf := make([]byte, 65536)
-		for {
-			n, err := stderr.Read(buf)
-			if n > 0 {
-				stderrBuf.Write(buf[:n])
-			}
-			if err != nil {
-				break
-			}
-		}
-	}()
-
-	go func() {
-		defer close(doneCh)
+		defer close(stdoutDone)
 		buf := make([]byte, 65536)
 		lineBuf := ""
 		for {
@@ -172,7 +154,7 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 		}()
 	}
 
-	<-doneCh
+	<-stdoutDone
 	err = cmd.Wait()
 	if timer != nil {
 		timer.Stop()

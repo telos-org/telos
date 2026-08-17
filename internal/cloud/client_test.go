@@ -1,7 +1,6 @@
 package cloud
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"io"
@@ -58,6 +57,47 @@ func TestControlClientResolvesHandleContext(t *testing.T) {
 	}
 	if client.OrgID != "org_telos" {
 		t.Fatalf("OrgID = %q", client.OrgID)
+	}
+}
+
+func TestControlClientContextOverrideWinsOverEnvironment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"personal_org_id":"org_personal",
+			"organizations":[
+				{"id":"org_environment","handle":"environment","display_name":"Environment","kind":"platform","role":"owner"},
+				{"id":"org_flag","handle":"flag","display_name":"Flag","kind":"platform","role":"owner"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	t.Setenv(config.APIEndpointEnv, srv.URL)
+	t.Setenv(config.AuthTokenEnv, "test-token")
+	t.Setenv(config.ContextEnv, "@environment")
+
+	client, err := ControlClientForContext("@flag")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.OrgID != "org_flag" {
+		t.Fatalf("OrgID = %q, want org_flag", client.OrgID)
+	}
+}
+
+func TestControlClientPersonalOverrideWinsOverEnvironment(t *testing.T) {
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	t.Setenv(config.APIEndpointEnv, "https://api.example.com")
+	t.Setenv(config.AuthTokenEnv, "test-token")
+	t.Setenv(config.ContextEnv, "@environment")
+
+	client, err := ControlClientForContext("personal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.OrgID != "" {
+		t.Fatalf("OrgID = %q, want personal scope", client.OrgID)
 	}
 }
 
@@ -504,14 +544,14 @@ func TestClientGetSessionLogs(t *testing.T) {
 	}
 }
 
-func TestClientSessionLogPagePreservesRawEventsAndCursor(t *testing.T) {
+func TestClientSessionLogPagePreservesRawEvents(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/deployments/sess_123/logs" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"events":[{"schema":"telos.evidence.v2","event":"agent_progress","event_id":"evt_7","event_seq":7,"round":3,"data":{"text":"ready"}}],"cursors":{"rt":7,"cp":12,"session":"sess_runtime"}}`))
+		_, _ = w.Write([]byte(`{"events":[{"schema":"telos.evidence.v2","event":"agent_progress","event_id":"evt_7","event_seq":7,"epoch_id":2,"round":3,"source":"agent","system":"checkout","data":{"text":"ready"}}],"cursors":{"rt":7,"cp":12,"session":"sess_runtime"}}`))
 	}))
 	defer srv.Close()
 
@@ -519,8 +559,17 @@ func TestClientSessionLogPagePreservesRawEventsAndCursor(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetSessionLogPage: %v", err)
 	}
-	if len(page.Events) != 1 || page.RuntimeCursor == nil || *page.RuntimeCursor != 7 {
+	if len(page.Events) != 1 || len(page.RawEvents) != 1 {
 		t.Fatalf("page: got %#v", page)
+	}
+	event := page.Events[0]
+	if event.Schema == nil || *event.Schema != "telos.evidence.v2" ||
+		event.EventID == nil || *event.EventID != "evt_7" ||
+		event.EpochID == nil || *event.EpochID != 2 ||
+		event.Round == nil || *event.Round != 3 ||
+		event.Source == nil || *event.Source != "agent" ||
+		event.System == nil || *event.System != "checkout" {
+		t.Fatalf("normalized event identity: %#v", event)
 	}
 	raw := string(page.RawEvents[0])
 	for _, field := range []string{`"schema":"telos.evidence.v2"`, `"event_id":"evt_7"`, `"round":3`} {
@@ -530,70 +579,23 @@ func TestClientSessionLogPagePreservesRawEventsAndCursor(t *testing.T) {
 	}
 }
 
-func TestClientStreamSessionLogs(t *testing.T) {
-	var gotOrgID string
+func TestClientSessionLogUsesReceiptTimeAndPreservesSourceTime(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/deployments/sess_123/logs" {
-			http.NotFound(w, r)
-			return
-		}
-		gotOrgID = r.Header.Get("X-Telos-Org-Id")
-		if r.Header.Get("Accept") != "text/event-stream" {
-			t.Fatalf("Accept: got %q", r.Header.Get("Accept"))
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"event\":\"runtime.route.succeeded\",\"time\":\"2026-07-04T15:15:00Z\",\"message\":\"service route configured\",\"metadata\":{\"stage\":\"route\"}}\n\n"))
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"events":[{"event":"agent_progress","ts":"2026-07-04T14:14:52Z","time":"2026-07-04T15:14:52Z","data":{"text":"ready"}}]}`))
 	}))
 	defer srv.Close()
 
-	client := NewClient(srv.URL, "test-token")
-	client.OrgID = "org_telos"
-	var events []sessionapi.SessionEvent
-	err := client.StreamSessionLogs(context.Background(), "sess_123", func(event sessionapi.SessionEvent) error {
-		events = append(events, event)
-		return nil
-	})
+	events, err := NewClient(srv.URL, "test-token").GetSessionLogs("sess_123")
 	if err != nil {
-		t.Fatalf("StreamSessionLogs: %v", err)
+		t.Fatalf("GetSessionLogs: %v", err)
 	}
-	if len(events) != 1 || events[0].Event != "runtime.route.succeeded" || events[0].Data["message"] != "service route configured" {
-		t.Fatalf("events: got %#v", events)
+	if len(events) != 1 || events[0].Timestamp == nil || *events[0].Timestamp != "2026-07-04T15:14:52Z" {
+		t.Fatalf("public timestamp: %#v", events)
 	}
-	if events[0].Data["stage"] != "route" {
-		t.Fatalf("event metadata: got %#v", events[0].Data)
-	}
-	if gotOrgID != "org_telos" {
-		t.Fatalf("org header: got %q", gotOrgID)
-	}
-}
-
-func TestClientStreamRawSessionLogsUsesResumeCursor(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/deployments/sess_123/logs" || r.URL.Query().Get("after_rt") != "41" {
-			http.NotFound(w, r)
-			return
-		}
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"event\":\"agent_progress\",\"event_id\":\"evt_42\",\"round\":4}\n\n"))
-	}))
-	defer srv.Close()
-
-	after := int64(41)
-	var events []json.RawMessage
-	err := NewClient(srv.URL, "test-token").StreamRawSessionLogsAfter(
-		context.Background(),
-		"sess_123",
-		&after,
-		func(event json.RawMessage) error {
-			events = append(events, event)
-			return nil
-		},
-	)
-	if err != nil {
-		t.Fatalf("StreamRawSessionLogsAfter: %v", err)
-	}
-	if len(events) != 1 || !strings.Contains(string(events[0]), `"event_id":"evt_42"`) {
-		t.Fatalf("raw stream events: %s", events)
+	if events[0].ReceivedAt == nil || *events[0].ReceivedAt != "2026-07-04T15:14:52Z" ||
+		events[0].SourceTimestamp == nil || *events[0].SourceTimestamp != "2026-07-04T14:14:52Z" {
+		t.Fatalf("clock provenance: %#v", events[0])
 	}
 }
 

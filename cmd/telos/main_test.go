@@ -11,10 +11,10 @@ import (
 	"reflect"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -44,6 +44,36 @@ func TestReorderInterspersedFlags(t *testing.T) {
 	}
 }
 
+func TestCommandFlagUsageUsesPublicFlagSyntax(t *testing.T) {
+	fs := newCommandFlagSet("logs", "telos logs SESSION [flags]")
+	fs.Bool("q", false, "Quiet output")
+	fs.Bool("json", false, "Print JSON")
+	fs.String("context", "", "Cloud context")
+	fs.Int("tail", 50, "Recent rows")
+	var out bytes.Buffer
+	fs.SetOutput(&out)
+	fs.Usage()
+
+	text := out.String()
+	for _, want := range []string{
+		"usage: telos logs SESSION [flags]",
+		"--context string",
+		"-q",
+		"--json",
+		"--tail int",
+		"(default 50)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("command usage missing %q:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{"Usage of logs:", "\n  -context string", "\n  -json"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("command usage should omit %q:\n%s", notWant, text)
+		}
+	}
+}
+
 func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	var out bytes.Buffer
 	usage(&out)
@@ -53,7 +83,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"--help",
 		"apply SPEC.md      Create or update a durable session from a spec",
 		"get SESSION        Download a session's package",
-		"delete SESSION     Delete a session (local history is preserved)",
+		"delete SESSION     Delete a session",
 		"pull PACKAGE       Download a registry package",
 		"version            Show version",
 		"--version",
@@ -75,13 +105,11 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", nil)
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      hello-service",
 		"Target    local",
-		"Lineage   root",
-		"Mutates   no",
 		"Path      ./SPEC.md",
 		"Hash      8a8f0c21",
 		"Skills    verify-engineering",
@@ -90,7 +118,7 @@ func TestPrintPlanPreviewLocal(t *testing.T) {
 			t.Fatalf("plan output missing %q:\n%s", want, text)
 		}
 	}
-	for _, notWant := range []string{"Namespace", "Plan for", "No sessions"} {
+	for _, notWant := range []string{"Namespace", "Plan for", "No sessions", "Lineage", "Mutates"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("plan output should not contain %q:\n%s", notWant, text)
 		}
@@ -109,13 +137,11 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "root", nil)
+	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",
 		"Target    cloud",
-		"Lineage   root",
-		"Mutates   no",
 		"Path      ./SPEC.md",
 		"Namespace ns-gitea",
 		"Hash      8a8f0c21",
@@ -140,7 +166,7 @@ func TestPrintPlanPreviewStarsRequiredVerifierSkills(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "root", nil)
+	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", nil)
 	text := out.String()
 	if !strings.Contains(text, "Skills    verify-engineering*, verify-quality") {
 		t.Fatalf("plan output missing starred skill marker:\n%s", text)
@@ -173,6 +199,18 @@ func TestFlagNamesSetUsesExplicitFlagsOnly(t *testing.T) {
 	}
 }
 
+func TestValidateCloudSessionContextRejectsLocalSession(t *testing.T) {
+	err := validateCloudSessionContext("local_123", "org_telos")
+	if err == nil || err.Error() != "--context cannot be used with a local session" {
+		t.Fatalf("local update context error = %v", err)
+	}
+	for _, sessionID := range []string{"", "sess_123"} {
+		if err := validateCloudSessionContext(sessionID, "org_telos"); err != nil {
+			t.Fatalf("cloud context rejected for %q: %v", sessionID, err)
+		}
+	}
+}
+
 func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.String("workspace", "", "")
@@ -186,7 +224,7 @@ func TestResolveLocalRunConfigUsesEnvironmentDefaults(t *testing.T) {
 	t.Setenv("TELOS_THINKING", "high")
 	t.Setenv("TELOS_MAX_COST_USD", "12.5")
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", "", "", "", "", 20.0)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "medium", 20.0)
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
@@ -207,44 +245,12 @@ func TestResolveLocalRunConfigUsesDefaultThinking(t *testing.T) {
 	fs.Float64("max-cost-usd", 20.0, "")
 	parseFlags(fs, []string{"SPEC.md"})
 
-	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "", "", "", "", "", 20.0)
+	cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "", 20.0)
 	if err != nil {
 		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
 	}
 	if cfg.Thinking != cli.DefaultLocalThinking {
 		t.Fatalf("thinking: got %q, want %q", cfg.Thinking, cli.DefaultLocalThinking)
-	}
-}
-
-func TestResolveLocalRunConfigUsesOptionalPerRoleOverrides(t *testing.T) {
-	fs := flag.NewFlagSet("run", flag.ContinueOnError)
-	fs.String("workspace", "", "")
-	fs.String("model", "", "")
-	fs.String("thinking", "", "")
-	fs.String("generator-model", "", "")
-	fs.String("generator-thinking", "", "")
-	fs.String("verifier-model", "", "")
-	fs.String("verifier-thinking", "", "")
-	fs.Float64("max-cost-usd", 20.0, "")
-	parseFlags(fs, []string{
-		"--generator-model", "openai-codex/gpt-generator",
-		"--generator-thinking", "high",
-		"--verifier-model", "anthropic/claude-verifier",
-		"SPEC.md",
-	})
-
-	cfg, err := resolveLocalRunConfigFromFlags(
-		fs, "", "", "", "openai-codex/gpt-generator", "high",
-		"anthropic/claude-verifier", "", 20.0,
-	)
-	if err != nil {
-		t.Fatalf("resolveLocalRunConfigFromFlags: %v", err)
-	}
-	if cfg.Generator == nil || cfg.Generator.Model != "openai-codex/gpt-generator" || cfg.Generator.Thinking != "high" {
-		t.Fatalf("generator: got %#v", cfg.Generator)
-	}
-	if cfg.Verifier == nil || cfg.Verifier.Model != "anthropic/claude-verifier" || cfg.Verifier.Thinking != "" {
-		t.Fatalf("verifier: got %#v", cfg.Verifier)
 	}
 }
 
@@ -430,6 +436,79 @@ func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
 	}
 }
 
+func TestResolveLaunchModeKeepsLocalRunsIndependentOfCloudConfig(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("context: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.ConfigPathEnv, configPath)
+
+	mode, err := resolveLaunchMode("local", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mode != launchLocal {
+		t.Fatalf("mode = %q, want %q", mode, launchLocal)
+	}
+
+	if _, err := resolveLaunchMode("cloud", false); err == nil || !strings.Contains(err.Error(), configPath) {
+		t.Fatalf("cloud config error = %v, want path %s", err, configPath)
+	}
+}
+
+func TestValidateApplySessionPlatformRejectsCrossedTargets(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+		platform  string
+		wantErr   string
+	}{
+		{
+			name:      "local session with cloud spec",
+			sessionID: "local_123",
+			platform:  "cloud",
+			wantErr:   "requires a platform: local spec",
+		},
+		{
+			name:      "cloud session with local spec",
+			sessionID: "sess_123",
+			platform:  "local",
+			wantErr:   "cannot apply a platform: local spec",
+		},
+		{
+			name:      "unknown session namespace",
+			sessionID: "deployment_123",
+			platform:  "cloud",
+			wantErr:   "invalid session id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateApplySessionPlatform(tt.sessionID, tt.platform)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error: got %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateApplySessionPlatformAcceptsMatchingTargets(t *testing.T) {
+	for _, target := range []struct {
+		sessionID string
+		platform  string
+	}{
+		{sessionID: "", platform: "local"},
+		{sessionID: "local_123", platform: "local"},
+		{sessionID: "sess_123", platform: "cloud"},
+		{sessionID: "sess_123", platform: ""},
+	} {
+		if err := validateApplySessionPlatform(target.sessionID, target.platform); err != nil {
+			t.Fatalf("validate %q/%q: %v", target.sessionID, target.platform, err)
+		}
+	}
+}
+
 func TestSessionCreateRequestForLocalSpec(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nname: demo\n---\n# Demo\n"), 0o644); err != nil {
@@ -499,7 +578,7 @@ func TestPackageSpecBuildsApplyPackage(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nversion: 1.2.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	pkg, err := packageSpec(dir)
+	pkg, err := packageSpec(dir, "")
 	if err != nil {
 		t.Fatalf("packageSpec: %v", err)
 	}
@@ -987,50 +1066,6 @@ func TestLocalRootSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
 	}
 }
 
-func TestFollowTranscriptWaitsForTranscript(t *testing.T) {
-	root := t.TempDir()
-	configureLocalOnlyTest(t)
-	t.Setenv("TELOS_SESSION_DIR", root)
-	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: 0.1.0\nname: follow-test\nplatform: local\n---\n# Follow\n"
-
-	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	var out bytes.Buffer
-	slept := false
-	err = followTranscript(session.SessionID, &out, func(time.Duration) {
-		if slept {
-			t.Fatal("unexpected second sleep")
-		}
-		slept = true
-		path := session.Specs[0].TranscriptPath
-		if path == nil || *path == "" {
-			t.Fatal("missing transcript path")
-		}
-		if err := os.MkdirAll(filepath.Dir(*path), 0o755); err != nil {
-			t.Fatalf("mkdir transcript dir: %v", err)
-		}
-		if err := os.WriteFile(*path, []byte("# Transcript\n<progress_update>ready</progress_update>\n"), 0o644); err != nil {
-			t.Fatalf("write transcript: %v", err)
-		}
-		if _, err := store.Stop(session.SessionID); err != nil {
-			t.Fatalf("Stop: %v", err)
-		}
-	}, false)
-	if err != nil {
-		t.Fatalf("followTranscript: %v", err)
-	}
-	if !slept {
-		t.Fatal("expected follow to wait for transcript creation")
-	}
-	if got := out.String(); !strings.Contains(got, "ready") {
-		t.Fatalf("output: got %q", got)
-	}
-}
-
 func TestLocalStoreProjectsSpecUpdates(t *testing.T) {
 	root := t.TempDir()
 	configureLocalOnlyTest(t)
@@ -1120,70 +1155,6 @@ func TestLocalStoreUpdatesCompletedController(t *testing.T) {
 	}
 	if response.Operation != "updated" {
 		t.Fatalf("operation: got %q", response.Operation)
-	}
-}
-
-func TestFollowTranscriptErrorsWhenTerminalWithoutTranscript(t *testing.T) {
-	root := t.TempDir()
-	t.Setenv("TELOS_SESSION_DIR", root)
-	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: 0.1.0\nname: missing-transcript\nplatform: local\n---\n# Missing\n"
-
-	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	if _, err := store.Stop(session.SessionID); err != nil {
-		t.Fatalf("Stop: %v", err)
-	}
-
-	var out bytes.Buffer
-	err = followTranscript(session.SessionID, &out, func(time.Duration) {
-		t.Fatal("terminal session should not sleep")
-	}, false)
-	if err == nil {
-		t.Fatal("expected missing terminal transcript to fail")
-	}
-	if !strings.Contains(err.Error(), "transcript") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestFollowTranscriptSurfacesRootTranscriptError(t *testing.T) {
-	t.Setenv("TELOS_RUNTIME", "")
-	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/sessions/sess_running/transcript":
-			http.Error(w, `{"detail":"transcript backend failed"}`, http.StatusInternalServerError)
-		case "/api/sessions/sess_running":
-			json.NewEncoder(w).Encode(map[string]any{
-				"session_id": "sess_running",
-				"runtime":    "cloud",
-				"status":     "running",
-				"config":     map[string]any{},
-				"provenance": map[string]any{},
-				"specs":      []any{},
-				"epochs":     []any{},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer cluster.Close()
-	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
-	t.Setenv("TELOS_API_TOKEN", "scoped-token")
-	t.Setenv("TELOS_SESSION_ID", "sess_parent")
-	t.Setenv("TELOS_API_ENDPOINT", cluster.URL)
-
-	var out bytes.Buffer
-	err := followTranscript("sess_running", &out, func(time.Duration) {
-		t.Fatal("500 transcript errors should not sleep")
-	}, false)
-	if err == nil {
-		t.Fatal("expected transcript error")
-	}
-	if !strings.Contains(err.Error(), "root transcript lookup failed") {
-		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -1280,7 +1251,7 @@ Reload the current spec.
 	}
 }
 
-func TestPrintLogsSuppressesDuplicateProtocolBlocks(t *testing.T) {
+func TestPrintLogsPreservesRepeatedProtocolBlocks(t *testing.T) {
 	transcript := `# Transcript
 
 <progress_update>Checked live state</progress_update>
@@ -1305,25 +1276,25 @@ Reload the current spec.
 	var out bytes.Buffer
 	printLogs(&out, transcript, false)
 	text := out.String()
-	if strings.Count(text, "Checked live state") != 1 {
-		t.Fatalf("expected one progress update, got:\n%s", text)
+	if strings.Count(text, "Checked live state") != 2 {
+		t.Fatalf("expected two progress updates, got:\n%s", text)
 	}
-	if strings.Count(text, "External update") != 1 {
-		t.Fatalf("expected one external update, got:\n%s", text)
+	if strings.Count(text, "External update") != 2 {
+		t.Fatalf("expected two external updates, got:\n%s", text)
 	}
 }
 
-func TestPrintLogsVerboseShowsTranscript(t *testing.T) {
+func TestPrintLogsRawShowsTranscript(t *testing.T) {
 	transcript := "# Transcript\nraw content\n<progress_update>Progress</progress_update>\n"
 
 	var out bytes.Buffer
 	printLogs(&out, transcript, true)
 	if out.String() != transcript {
-		t.Fatalf("verbose output mismatch:\n%s", out.String())
+		t.Fatalf("raw output mismatch:\n%s", out.String())
 	}
 }
 
-func TestPrintStructuredLogsShowsStatusAndSignificantActivity(t *testing.T) {
+func TestPrintStructuredLogsShowsSignificantActivity(t *testing.T) {
 	ts1 := "2026-07-01T00:00:00Z"
 	ts2 := "2026-07-01T00:01:00Z"
 	ts3 := "2026-07-01T00:02:00Z"
@@ -1336,20 +1307,12 @@ func TestPrintStructuredLogsShowsStatusAndSignificantActivity(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printStructuredLogs(&out, logHeader{
-		Name:       "palmfall",
-		State:      "healthy",
-		PackageRef: "@telos/palmfall:1.0.0",
-		SessionID:  "sess_123",
-	}, events, logViewOptions{Tail: defaultLogTail})
+	printStructuredLogs(&out, events, logViewOptions{Tail: defaultLogTail})
 	text := out.String()
 	for _, want := range []string{
-		"PALMFALL",
-		"Status    Needs attention",
-		"Summary   run_duration_exhausted: exceeded 1800 seconds",
-		"00:00:00  BUILD    Implemented the authentication flow",
-		"00:01:00  VERIFY   Running the integration checks",
-		"00:02:00  VERIFY   Evaluation cycle interrupted",
+		"[2026-07-01T00:00:00Z] [INFO] Implemented the authentication flow",
+		"[2026-07-01T00:01:00Z] [INFO] Running the integration checks",
+		"[2026-07-01T00:02:00Z] [ERROR] Execution failed",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("structured logs missing %q:\n%s", want, text)
@@ -1362,20 +1325,17 @@ func TestPrintStructuredLogsShowsStatusAndSignificantActivity(t *testing.T) {
 	}
 }
 
-func TestPrintStructuredLogsVerboseIncludesMinorActivity(t *testing.T) {
+func TestPrintStructuredLogsHidesMinorActivity(t *testing.T) {
 	ts := "2026-07-01T00:00:00Z"
 	events := []sessionapi.SessionEvent{
 		{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"text": "Reading package.json"}},
 	}
 
 	var out bytes.Buffer
-	printStructuredLogs(&out, logHeader{Name: "pegfall", State: "healthy", SessionID: "sess_123"}, events, logViewOptions{
-		Verbose: true,
-		Tail:    defaultLogTail,
-	})
+	printStructuredLogs(&out, events, logViewOptions{Tail: defaultLogTail})
 	text := out.String()
-	if !strings.Contains(text, "00:00:00  BUILD    Reading package.json") {
-		t.Fatalf("verbose logs missing minor activity:\n%s", text)
+	if strings.Contains(text, "Reading package.json") || !strings.Contains(text, "No activity yet.") {
+		t.Fatalf("logs should hide minor activity:\n%s", text)
 	}
 }
 
@@ -1401,201 +1361,18 @@ func TestPrintJSONLogEventsUsesNDJSON(t *testing.T) {
 	}
 }
 
-func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
-	var logCalls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_123/logs":
-			logCalls++
-			if r.Header.Get("Accept") != "text/event-stream" {
-				t.Fatalf("Accept: got %q", r.Header.Get("Accept"))
-			}
-			w.Header().Set("Content-Type", "text/event-stream")
-			_, _ = w.Write([]byte("data: {\"event\":\"agent_progress\",\"data\":{\"kind\":\"progress_update\",\"text\":\"ready\"}}\n\n"))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
+func TestPrintJSONLogEventsIncludesCloudContext(t *testing.T) {
+	events := []sessionapi.SessionEvent{{
+		Event: "agent_progress",
+		Data:  map[string]any{"text": "ready"},
+	}}
 
 	var out bytes.Buffer
-	err := streamCloudSessionLogs(
-		cloud.NewClient(srv.URL, "test-token"),
-		"sess_123",
-		&out,
-		func(time.Duration) {},
-		false,
-		false,
-	)
-	if err != nil {
-		t.Fatalf("streamCloudSessionLogs: %v", err)
+	if err := printJSONLogEventsForContext(&out, events, "org_telos"); err != nil {
+		t.Fatal(err)
 	}
-	if logCalls != 1 {
-		t.Fatalf("calls: logs=%d", logCalls)
-	}
-	if !strings.Contains(out.String(), "BUILD    ready") {
-		t.Fatalf("follow output missing progress:\n%s", out.String())
-	}
-}
-
-func TestFollowCloudSessionLogsResumesAndPrintsStatusChange(t *testing.T) {
-	verifier := "verifier"
-	var query string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/deployments/sess_123/logs" {
-			http.NotFound(w, r)
-			return
-		}
-		query = r.URL.RawQuery
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte("data: {\"event\":\"agent_complete\",\"event_seq\":8,\"role\":\"verifier\",\"data\":{\"status\":\"CONCEDE\"}}\n\n"))
-	}))
-	defer srv.Close()
-
-	after := int64(7)
-	initial := []sessionapi.SessionEvent{
-		{Event: "agent_progress", EventSeq: &after, Role: &verifier, Data: map[string]any{"text": "Checking the result"}},
-	}
-	var out bytes.Buffer
-	err := streamCloudSessionLogsAfter(
-		cloud.NewClient(srv.URL, "test-token"),
-		"sess_123",
-		&out,
-		func(time.Duration) {},
-		false,
-		false,
-		&after,
-		logHeader{Name: "pegfall", State: "healthy", SessionID: "sess_123"},
-		initial,
-	)
-	if err != nil {
-		t.Fatalf("streamCloudSessionLogsAfter: %v", err)
-	}
-	if query != "after_rt=7" {
-		t.Fatalf("resume query: got %q", query)
-	}
-	for _, want := range []string{"Current spec accepted", "STATUS   Ready"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("follow output missing %q:\n%s", want, out.String())
-		}
-	}
-}
-
-func TestFollowCloudSessionLogsDeduplicatesLegacyReplay(t *testing.T) {
-	var query string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/deployments/sess_legacy/logs" {
-			http.NotFound(w, r)
-			return
-		}
-		query = r.URL.RawQuery
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte(
-			"data: {\"event\":\"agent_progress\",\"data\":{\"text\":\"old activity\"}}\n\n" +
-				"data: {\"event\":\"agent_progress\",\"data\":{\"text\":\"old activity\"}}\n\n" +
-				"data: {\"event\":\"agent_progress\",\"data\":{\"text\":\"new activity\"}}\n\n",
-		))
-	}))
-	defer srv.Close()
-
-	initial := []sessionapi.SessionEvent{
-		{Event: "agent_progress", Data: map[string]any{"text": "old activity"}},
-	}
-	var out bytes.Buffer
-	if err := printJSONLogEvents(&out, initial); err != nil {
-		t.Fatalf("print snapshot: %v", err)
-	}
-	if err := streamCloudSessionLogsAfter(
-		cloud.NewClient(srv.URL, "test-token"),
-		"sess_legacy",
-		&out,
-		func(time.Duration) {},
-		false,
-		true,
-		nil,
-		logHeader{},
-		initial,
-	); err != nil {
-		t.Fatalf("streamCloudSessionLogsAfter: %v", err)
-	}
-	if query != "" {
-		t.Fatalf("legacy stream should not invent a cursor: %q", query)
-	}
-	// One replay is removed, while a genuinely new event with the same payload
-	// still appears after the snapshot's single matching count is consumed.
-	if count := strings.Count(out.String(), `"text":"old activity"`); count != 2 {
-		t.Fatalf("old activity printed %d times:\n%s", count, out.String())
-	}
-	if count := strings.Count(out.String(), `"text":"new activity"`); count != 1 {
-		t.Fatalf("new activity printed %d times:\n%s", count, out.String())
-	}
-}
-
-func TestFollowCloudRawSessionLogsDeduplicatesLegacyReplay(t *testing.T) {
-	var query string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/deployments/sess_legacy/logs" {
-			http.NotFound(w, r)
-			return
-		}
-		query = r.URL.RawQuery
-		w.Header().Set("Content-Type", "text/event-stream")
-		_, _ = w.Write([]byte(
-			"data: {\"round\":1,\"data\":{\"text\":\"old activity\"},\"event\":\"agent_progress\"}\n\n" +
-				"data: {\"event\":\"agent_progress\",\"round\":1,\"data\":{\"text\":\"old activity\"}}\n\n" +
-				"data: {\"event\":\"agent_progress\",\"round\":2,\"data\":{\"text\":\"new activity\"}}\n\n",
-		))
-	}))
-	defer srv.Close()
-
-	initial := []json.RawMessage{
-		json.RawMessage(`{"event":"agent_progress","round":1,"data":{"text":"old activity"}}`),
-	}
-	var out bytes.Buffer
-	if err := printRawJSONLogEvents(&out, initial); err != nil {
-		t.Fatalf("print raw snapshot: %v", err)
-	}
-	if err := streamCloudRawSessionLogs(
-		cloud.NewClient(srv.URL, "test-token"),
-		"sess_legacy",
-		&out,
-		func(time.Duration) {},
-		nil,
-		initial,
-	); err != nil {
-		t.Fatalf("streamCloudRawSessionLogs: %v", err)
-	}
-	if query != "" {
-		t.Fatalf("legacy raw stream should not invent a cursor: %q", query)
-	}
-	if count := strings.Count(out.String(), `"text":"old activity"`); count != 2 {
-		t.Fatalf("old raw activity printed %d times:\n%s", count, out.String())
-	}
-	if count := strings.Count(out.String(), `"text":"new activity"`); count != 1 {
-		t.Fatalf("new raw activity printed %d times:\n%s", count, out.String())
-	}
-}
-
-func TestFollowCloudSessionLogsExitsCleanWhenSessionDeleted(t *testing.T) {
-	// The control plane hard-deletes deployments once teardown completes:
-	// both /logs and the session GET 404. The follow loop should treat that
-	// as a clean end of the session, not an error.
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.NotFound(w, r)
-	}))
-	defer srv.Close()
-
-	var out bytes.Buffer
-	err := streamCloudSessionLogs(
-		cloud.NewClient(srv.URL, "test-token"),
-		"sess_123",
-		&out,
-		func(time.Duration) {},
-		false,
-		false,
-	)
-	if err != nil {
-		t.Fatalf("streamCloudSessionLogs after delete: %v", err)
+	if !strings.Contains(out.String(), `"context":"org_telos"`) {
+		t.Fatalf("JSON logs missing context:\n%s", out.String())
 	}
 }
 

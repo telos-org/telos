@@ -43,25 +43,23 @@ func TestSessionConfigPreservesUnknownFields(t *testing.T) {
 	}
 }
 
-func TestSessionConfigRoundTripsOptionalRoleConfig(t *testing.T) {
-	cfg := sessionapi.SessionConfig{
-		Model:     "shared/model",
-		Thinking:  "medium",
-		Generator: &sessionapi.RoleConfig{Model: "generator/model", Thinking: "high"},
-		Verifier:  &sessionapi.RoleConfig{Model: "verifier/model", Thinking: "low"},
+func TestSessionConfigPreservesLegacyRoleConfigAsUnknownFields(t *testing.T) {
+	data := []byte(`{"model":"shared/model","generator":{"model":"generator/model"},"verifier":{"model":"verifier/model"}}`)
+	var cfg sessionapi.SessionConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
 	}
-	data, err := json.Marshal(cfg)
+	roundTrip, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var decoded sessionapi.SessionConfig
-	if err := json.Unmarshal(data, &decoded); err != nil {
+	var decoded map[string]any
+	if err := json.Unmarshal(roundTrip, &decoded); err != nil {
 		t.Fatal(err)
 	}
-	if decoded.Generator == nil || *decoded.Generator != *cfg.Generator {
-		t.Fatalf("generator: got %#v", decoded.Generator)
-	}
-	if decoded.Verifier == nil || *decoded.Verifier != *cfg.Verifier {
-		t.Fatalf("verifier: got %#v", decoded.Verifier)
+	for _, key := range []string{"generator", "verifier"} {
+		if _, ok := decoded[key].(map[string]any); !ok {
+			t.Fatalf("legacy %s config was not preserved: %#v", key, decoded[key])
+		}
 	}
 }

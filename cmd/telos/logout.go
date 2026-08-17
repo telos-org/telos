@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 
@@ -12,10 +11,15 @@ import (
 // -- logout -------------------------------------------------------------------
 
 func cmdLogout(args []string) {
-	fs := flag.NewFlagSet("logout", flag.ExitOnError)
+	fs := newCommandFlagSet("logout", "telos logout")
 	parseFlags(fs, args)
+	requireArgCount(fs, 0, "no positional arguments")
 
-	effective := config.LoadConfig()
+	effective, err := config.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	if effective.AuthToken == "" {
 		fmt.Println("not logged in")
 		return
@@ -33,7 +37,11 @@ func cmdLogout(args []string) {
 		}
 	}
 
-	stored := config.LoadStoredConfig()
+	stored, err := config.LoadStoredConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	stored.AuthToken = ""
 	if err := config.SaveConfig(stored); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

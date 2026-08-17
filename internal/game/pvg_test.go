@@ -297,6 +297,27 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 	}
 }
 
+func TestPVGDoesNotRetryCredentialFailure(t *testing.T) {
+	compiled := compileTestSpec(t)
+	dir := t.TempDir()
+	state := NewPVGState("pvg-test", filepath.Join(dir, "specs", "pvg-test"), "test-session-auth")
+	state.Ensure()
+	exec := &fakeExecutor{proverResults: []TurnResult{{
+		Role:        "prover",
+		Status:      StatusContinue,
+		Error:       "403: inactive virtual key",
+		Recoverable: true,
+	}}}
+
+	result := NewPVG(compiled, exec, state, PVGConfig{}).Run()
+	if result.GameResult != GameFailure || result.Rounds != 1 {
+		t.Fatalf("result = %#v", result)
+	}
+	if result.Error != "403: inactive virtual key" {
+		t.Fatalf("error = %q", result.Error)
+	}
+}
+
 func TestPVGUntilFailsWhenReviewBudgetExhausted(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()

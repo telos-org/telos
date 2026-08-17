@@ -4,130 +4,69 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"sort"
-	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
 
-	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 const defaultLogTail = 50
 
 type logViewOptions struct {
-	Verbose bool
-	Tail    int
-	All     bool
-}
-
-type logHeader struct {
-	Name       string
-	State      string
-	PackageRef string
-	SessionID  string
-	UpdatedAt  string
-	Failure    string
-}
-
-type overallLogStatus struct {
-	Label  string
-	Reason string
+	Tail int
+	All  bool
 }
 
 type renderedLogRow struct {
-	Timestamp string
-	Phase     string
-	Summary   string
-	Detail    string
-	GroupKey  string
-	CountNoun string
-	Count     int
-	Order     int
-}
-
-func cloudLogHeader(session *cloud.SessionRecord) logHeader {
-	failure := ""
-	if session.FailureReason != nil {
-		failure = strings.TrimSpace(*session.FailureReason)
-	}
-	return logHeader{
-		Name:       session.Name,
-		State:      session.State,
-		PackageRef: session.PackageRef,
-		SessionID:  session.ID,
-		UpdatedAt:  session.UpdatedAt,
-		Failure:    failure,
-	}
-}
-
-func localLogHeader(session *sessionapi.Session) logHeader {
-	name := session.SessionID
-	if session.SpecName != nil && strings.TrimSpace(*session.SpecName) != "" {
-		name = strings.TrimSpace(*session.SpecName)
-	}
-	failure := ""
-	if session.Error != nil {
-		failure = strings.TrimSpace(*session.Error)
-	}
-	updatedAt := ""
-	if session.FinishedAt != nil {
-		updatedAt = *session.FinishedAt
-	}
-	return logHeader{
-		Name:      name,
-		State:     string(session.Status),
-		SessionID: session.SessionID,
-		UpdatedAt: updatedAt,
-		Failure:   failure,
-	}
+	Timestamp       string
+	Level           string
+	Summary         string
+	Detail          string
+	MultilineDetail bool
 }
 
 func printStructuredLogs(
 	out io.Writer,
-	header logHeader,
 	events []sessionapi.SessionEvent,
 	options logViewOptions,
 ) {
-	status := deriveOverallLogStatus(header, events)
-	fmt.Fprintln(out, strings.ToUpper(header.Name))
-	fmt.Fprintln(out)
-	printSummaryField(out, "Status", status.Label)
-	printSummaryField(out, "Summary", status.Reason)
-	if header.PackageRef != "" {
-		printSummaryField(out, "Spec", header.PackageRef)
-	}
-	if header.UpdatedAt != "" {
-		printSummaryField(out, "Updated", displayLogDate(header.UpdatedAt))
-	}
-	printSummaryField(out, "Session", header.SessionID)
-
-	rows := collapseRepeatedLogRows(renderLogRows(events, options.Verbose))
+	rows := renderLogRows(events)
 	if !options.All && options.Tail > 0 && len(rows) > options.Tail {
 		rows = rows[len(rows)-options.Tail:]
 	}
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "ACTIVITY")
 	if len(rows) == 0 {
-		fmt.Fprintln(out)
 		fmt.Fprintln(out, "No activity yet.")
 		return
 	}
-	fmt.Fprintln(out)
-	for index, row := range rows {
-		if index > 0 {
-			fmt.Fprintln(out)
-		}
+	for _, row := range rows {
 		printRenderedLogRow(out, row)
 	}
 }
 
 func printJSONLogEvents(out io.Writer, events []sessionapi.SessionEvent) error {
+	return printJSONLogEventsForContext(out, events, "")
+}
+
+func printJSONLogEventsForContext(
+	out io.Writer,
+	events []sessionapi.SessionEvent,
+	contextName string,
+) error {
 	encoder := json.NewEncoder(out)
 	encoder.SetEscapeHTML(false)
 	for _, event := range events {
-		if err := encoder.Encode(event); err != nil {
+		value := any(event)
+		if contextName != "" {
+			value = struct {
+				sessionapi.SessionEvent
+				Context string `json:"context"`
+			}{
+				SessionEvent: event,
+				Context:      contextName,
+			}
+		}
+		if err := encoder.Encode(value); err != nil {
 			return err
 		}
 	}
@@ -144,184 +83,79 @@ func selectLogEvents(
 	return events[len(events)-options.Tail:]
 }
 
-func deriveOverallLogStatus(
-	header logHeader,
-	events []sessionapi.SessionEvent,
-) overallLogStatus {
-	switch strings.ToLower(strings.TrimSpace(header.State)) {
-	case "deleted", "stopped", "deleting":
-		reason := "This session was stopped."
-		if strings.EqualFold(strings.TrimSpace(header.State), "deleting") {
-			reason = "Stopping this deployment."
-		}
-		return overallLogStatus{Label: "Stopped", Reason: firstNonEmpty(header.Failure, reason)}
-	case "failed", "error", "errored", "stale":
-		return overallLogStatus{Label: "Failed", Reason: firstNonEmpty(header.Failure, "The session could not complete.")}
-	}
-	if strings.TrimSpace(header.Failure) != "" {
-		return overallLogStatus{Label: "Needs attention", Reason: strings.TrimSpace(header.Failure)}
-	}
-	switch strings.ToLower(strings.TrimSpace(header.State)) {
-	case "pending", "provisioning", "deploying":
-		return overallLogStatus{Label: "Starting", Reason: "Preparing the deployment and runtime."}
-	}
-
-	reset := -1
-	latestConcede := -1
-	latestContinue := -1
-	latestFailure := -1
-	latestWork := -1
-	latestWorkText := ""
-	latestNotice := -1
-	latestNoticeText := ""
-	for index, event := range events {
-		switch event.Event {
-		case "external_update", "deployment.update_accepted":
-			reset = index
-			latestConcede = -1
-			latestContinue = -1
-			latestFailure = -1
-			latestWork = -1
-			latestWorkText = ""
-			latestNotice = -1
-			latestNoticeText = ""
-		case "agent_complete":
-			status := strings.ToUpper(eventDataString(event, "status"))
-			role := eventRole(event)
-			if status == "CONCEDE" && role == "verifier" {
-				latestConcede = index
-			} else if status == "CONTINUE" && role == "verifier" {
-				latestContinue = index
-				latestWork = index
-				latestWorkText = "Verification requested another iteration."
-			} else {
-				latestWork = index
-				latestWorkText = "Implementation turn completed; verification is next."
-			}
-		case "game_end":
-			result := strings.ToLower(eventDataString(event, "game_result"))
-			if result == "" {
-				result = strings.ToLower(eventDataString(event, "result"))
-			}
-			if result == "success" {
-				latestConcede = index
-			} else if result == "failure" || result == "stopped" {
-				latestFailure = index
-			}
-		case "budget_exceeded", "game_error":
-			latestFailure = index
-		case "agent_failure_recoverable":
-			latestNotice = index
-			notice := strings.TrimSuffix(
-				friendlyAgentError(eventDataString(event, "error")),
-				", retrying",
-			)
-			latestNoticeText = notice + "; retrying."
-		case "game_start", "agent_progress":
-			latestWork = index
-			if event.Event == "agent_progress" {
-				text := eventDataString(event, "text")
-				if text != "" && !isMinorLogAction(text) {
-					latestWorkText = text
-				}
-			}
-		default:
-			if isTerminalLogFailureEvent(event.Event) {
-				latestFailure = index
-			}
-		}
-	}
-
-	if latestConcede > reset && latestConcede > latestContinue && latestConcede > latestFailure {
-		return overallLogStatus{
-			Label:  "Ready",
-			Reason: "Current spec accepted; latest verification completed successfully.",
-		}
-	}
-	if latestFailure > reset && latestFailure > latestConcede && latestFailure > latestWork {
-		failure := eventFailure(events[latestFailure])
-		return overallLogStatus{
-			Label:  "Needs attention",
-			Reason: firstNonEmpty(failure, "Progress stopped on an evaluation error."),
-		}
-	}
-	if latestNotice > reset && latestNotice > latestWork {
-		return overallLogStatus{Label: "Working", Reason: latestNoticeText}
-	}
-	return overallLogStatus{
-		Label:  "Working",
-		Reason: firstNonEmpty(conciseLogText(latestWorkText, 120), "Implementing or verifying the current spec."),
-	}
-}
-
-func renderLogRows(events []sessionapi.SessionEvent, verbose bool) []renderedLogRow {
+func renderLogRows(events []sessionapi.SessionEvent) []renderedLogRow {
 	rows := make([]renderedLogRow, 0, len(events))
-	for index, event := range events {
-		row, ok := renderedLogRowFromEvent(event, verbose)
+	for _, event := range events {
+		row, ok := renderedLogRowFromEvent(event)
 		if !ok {
 			continue
 		}
-		row.Order = index
-		if row.Count == 0 {
-			row.Count = 1
+		if len(rows) > 0 && sameLogMessage(rows[len(rows)-1], row) {
+			continue
 		}
 		rows = append(rows, row)
 	}
 	return rows
 }
 
-func renderedLogRowFromEvent(
-	event sessionapi.SessionEvent,
-	verbose bool,
-) (renderedLogRow, bool) {
-	row := renderedLogRow{Timestamp: eventTimestamp(event), Phase: "SYSTEM"}
+func sameLogMessage(left, right renderedLogRow) bool {
+	return left.Level == right.Level && left.Summary == right.Summary && left.Detail == right.Detail
+}
+
+func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, bool) {
+	row := renderedLogRow{
+		Timestamp: eventTimestamp(event),
+		Level:     "INFO",
+	}
 	role := eventRole(event)
 
 	switch event.Event {
 	case "agent_progress":
 		text := eventDataString(event, "text")
-		if text == "" || (!verbose && isMinorLogAction(text)) {
+		kind := strings.ToLower(eventDataString(event, "kind"))
+		if text == "" || kind == "tool" || kind == "review" || kind == "summary" ||
+			isLegacyToolLogAction(kind, text) {
 			return renderedLogRow{}, false
 		}
-		row.Phase = progressPhase(role, text)
 		row.Summary, row.Detail = splitLogText(text)
 		return row, true
 	case "agent_complete":
 		status := strings.ToUpper(eventDataString(event, "status"))
-		if status == "" {
+		if status != "CONCEDE" || role != "verifier" {
 			return renderedLogRow{}, false
 		}
-		row.Phase = progressPhase(role, "")
-		switch {
-		case status == "CONCEDE" && role == "verifier":
-			row.Summary = "Current spec accepted"
-		case role == "verifier":
-			row.Summary = "Verification requested another iteration"
-		case verbose:
-			row.Summary = "Implementation turn completed"
-		default:
-			return renderedLogRow{}, false
-		}
-		row.Detail = agentLogDetail(event)
+		row.Summary = "Current revision accepted"
 		return row, true
 	case "agent_failure_recoverable":
 		errorText := eventDataString(event, "error")
 		if errorText == "" {
 			return renderedLogRow{}, false
 		}
-		row.Phase = "RETRY"
-		row.Summary = friendlyAgentError(errorText)
-		row.Detail = errorText
+		row.Level = "WARNING"
+		row.Summary = friendlyAgentError(errorText) + "; retrying"
 		if current, ok := numericEventValue(event.Data["consecutive_failures"]); ok {
 			if maxFailures, hasMax := numericEventValue(event.Data["max_failures"]); hasMax {
-				row.Detail += fmt.Sprintf(" · attempt %d of %d", current, maxFailures)
+				row.Detail = fmt.Sprintf("attempt %d of %d", current, maxFailures)
 			}
 		}
-		row.GroupKey = "retry:" + normalizedErrorKey(errorText)
-		row.CountNoun = "retries"
+		return row, true
+	case "agent_suspended":
+		row.Level = "ERROR"
+		row.Summary = "Execution suspended"
+		row.Detail = firstNonEmpty(
+			eventDataString(event, "error"),
+			eventDataString(event, "blocker_code"),
+		)
+		if action := eventDataString(event, "action"); action != "" {
+			if row.Detail == "" {
+				row.Detail = action
+			} else {
+				row.Detail += " · " + action
+			}
+		}
+		row.MultilineDetail = strings.Contains(row.Detail, "\n")
 		return row, true
 	case "game_end":
-		row.Phase = "VERIFY"
 		result := strings.ToLower(eventDataString(event, "game_result"))
 		if result == "" {
 			result = strings.ToLower(eventDataString(event, "result"))
@@ -329,73 +163,56 @@ func renderedLogRowFromEvent(
 		reason := eventDataString(event, "completion_reason")
 		switch result {
 		case "success":
-			row.Summary = "Current spec accepted"
-			if reason != "" && reason != "success" {
-				row.Detail = humanizeLogToken(reason)
-			}
+			row.Summary = "Current revision accepted"
 		case "failure":
-			row.Summary = "Evaluation cycle interrupted"
+			row.Level = "ERROR"
+			row.Summary = "Execution failed"
 			row.Detail = firstNonEmpty(eventDataString(event, "error"), humanizeLogToken(reason))
-			row.GroupKey = "cycle:" + normalizedErrorKey(row.Detail)
-			row.CountNoun = "cycles"
 		case "stopped":
-			row.Summary = "Evaluation stopped"
+			row.Level = "WARNING"
+			row.Summary = "Execution stopped"
 			row.Detail = eventDataString(event, "error")
 		default:
-			row.Summary = "Evaluation cycle completed"
-			row.Detail = humanizeLogToken(reason)
+			return renderedLogRow{}, false
 		}
+		row.MultilineDetail = strings.Contains(row.Detail, "\n")
 		return row, true
 	case "budget_exceeded":
-		row.Phase = "SYSTEM"
-		row.Summary = "Budget requires attention"
+		row.Level = "ERROR"
+		row.Summary = "Budget exceeded"
 		row.Detail = eventDataString(event, "error")
 		return row, true
 	case "game_error":
-		row.Phase = "SYSTEM"
-		row.Summary = "Evaluation error"
+		row.Level = "ERROR"
+		row.Summary = "Execution error"
 		row.Detail = eventDataString(event, "error")
 		return row, true
 	case "external_update":
-		row.Phase = "SPEC"
-		row.Summary = firstNonEmpty(eventDataString(event, "message"), "Spec updated")
+		row.Summary = firstNonEmpty(eventDataString(event, "message"), "Revision updated")
+		row.Detail = firstNonEmpty(
+			eventDataString(event, "current_revision"),
+			eventDataString(event, "current_spec_sha256"),
+		)
 		return row, true
-	case "game_start":
-		if !verbose {
-			return renderedLogRow{}, false
-		}
-		row.Phase = "VERIFY"
-		row.Summary = "Evaluation cycle started"
-		return row, true
-	case "round_start":
-		if !verbose {
-			return renderedLogRow{}, false
-		}
-		row.Phase = progressPhase(role, "")
-		row.Summary = sentenceCase(firstNonEmpty(role, "Agent")) + " round started"
-		return row, true
-	case "workspace_checkpoint":
-		if !verbose {
-			return renderedLogRow{}, false
-		}
-		row.Phase = "SYSTEM"
-		row.Summary = "Workspace checkpoint saved"
-		if size, ok := numericEventValue(event.Data["bytes"]); ok {
-			row.Detail = formatLogBytes(int64(size))
-		}
-		return row, true
-	}
-
-	message := eventDataString(event, "message")
-	if strings.HasPrefix(event.Event, "deployment.") {
-		row.Phase = "DEPLOY"
-	} else if strings.HasPrefix(event.Event, "runtime.") || strings.HasPrefix(event.Event, "provisioning.") {
-		row.Phase = "START"
-	} else if !verbose {
+	case "game_start", "round_start", "workspace_checkpoint":
 		return renderedLogRow{}, false
 	}
+
+	if isRoutineLogEvent(event.Event) {
+		return renderedLogRow{}, false
+	}
+	message := eventDataString(event, "message")
+	if !strings.HasPrefix(event.Event, "deployment.") &&
+		!strings.HasPrefix(event.Event, "workload.") &&
+		!strings.HasPrefix(event.Event, "runtime.") &&
+		!strings.HasPrefix(event.Event, "provisioning.") &&
+		!strings.HasPrefix(event.Event, "hostd.") {
+		return renderedLogRow{}, false
+	}
+	row.Level = logLevelForEvent(event)
 	if message != "" {
-		row.Summary = sentenceCase(message)
+		row.Summary, row.Detail = splitLogText(message)
+		row.Summary = sentenceCase(row.Summary)
 	} else {
 		row.Summary = humanizeLogToken(event.Event)
 	}
@@ -405,47 +222,46 @@ func renderedLogRowFromEvent(
 	return row, true
 }
 
-func collapseRepeatedLogRows(rows []renderedLogRow) []renderedLogRow {
-	grouped := make(map[string]int)
-	result := make([]renderedLogRow, 0, len(rows))
-	for _, row := range rows {
-		if row.GroupKey == "" {
-			result = append(result, row)
-			continue
-		}
-		index, found := grouped[row.GroupKey]
-		if !found {
-			grouped[row.GroupKey] = len(result)
-			result = append(result, row)
-			continue
-		}
-		current := result[index]
-		if !withinIncidentWindow(current.Timestamp, row.Timestamp) {
-			grouped[row.GroupKey] = len(result)
-			row.GroupKey += ":" + strconv.Itoa(row.Order)
-			result = append(result, row)
-			continue
-		}
-		current.Count += row.Count
-		current.Timestamp = row.Timestamp
-		current.Order = row.Order
-		current.Detail = row.Detail
-		result[index] = current
+func isRoutineLogEvent(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	return strings.Contains(name, "heartbeat") ||
+		strings.Contains(name, "lease.renew") ||
+		strings.HasSuffix(name, ".poll")
+}
+
+func logLevelForEvent(event sessionapi.SessionEvent) string {
+	name := strings.ToLower(strings.TrimSpace(event.Event))
+	state := strings.ToLower(eventDataString(event, "state"))
+	switch {
+	case isTerminalLogFailureEvent(name), state == "failed":
+		return "ERROR"
+	case strings.HasSuffix(name, ".waiting"), strings.Contains(name, "retry"), state == "waiting":
+		return "WARNING"
+	default:
+		return "INFO"
 	}
-	sort.SliceStable(result, func(i, j int) bool { return result[i].Order < result[j].Order })
-	return result
 }
 
 func printRenderedLogRow(out io.Writer, row renderedLogRow) {
-	timestamp := displayLogTime(row.Timestamp)
-	summary := row.Summary
-	if row.Count > 1 {
-		noun := firstNonEmpty(row.CountNoun, "events")
-		summary += fmt.Sprintf(" · %d %s", row.Count, noun)
+	prefix := fmt.Sprintf(
+		"[%s] [%s]",
+		displayLogTimestamp(row.Timestamp),
+		strings.ToUpper(firstNonEmpty(row.Level, "INFO")),
+	)
+	summary := strings.TrimSpace(row.Summary)
+	detail := strings.TrimSpace(row.Detail)
+	if detail == "" {
+		fmt.Fprintf(out, "%s %s\n", prefix, summary)
+		return
 	}
-	fmt.Fprintf(out, "%-8s  %-7s  %s\n", timestamp, row.Phase, summary)
-	if strings.TrimSpace(row.Detail) != "" {
-		fmt.Fprintf(out, "%-8s  %-7s  %s\n", "", "", conciseLogText(row.Detail, 220))
+	if !row.MultilineDetail && !strings.Contains(detail, "\n") {
+		fmt.Fprintf(out, "%s %s — %s\n", prefix, summary, detail)
+		return
+	}
+	fmt.Fprintf(out, "%s %s\n", prefix, summary)
+	indent := strings.Repeat(" ", len(prefix)+1)
+	for _, line := range strings.Split(detail, "\n") {
+		fmt.Fprintf(out, "%s│ %s\n", indent, strings.TrimRight(line, " \t\r"))
 	}
 }
 
@@ -478,17 +294,6 @@ func isTerminalLogFailureEvent(event string) bool {
 		strings.HasSuffix(name, ".error")
 }
 
-func progressPhase(role string, text string) string {
-	if role == "verifier" {
-		return "VERIFY"
-	}
-	lower := strings.ToLower(text)
-	if strings.Contains(lower, "test") || strings.Contains(lower, "probe") || strings.Contains(lower, "check") {
-		return "TEST"
-	}
-	return "BUILD"
-}
-
 func isMinorLogAction(text string) bool {
 	trimmed := strings.TrimSpace(text)
 	for _, prefix := range []string{
@@ -509,31 +314,8 @@ func isMinorLogAction(text string) bool {
 	return false
 }
 
-func agentLogDetail(event sessionapi.SessionEvent) string {
-	parts := []string{}
-	if turns, ok := numericEventValue(event.Data["num_turns"]); ok && turns > 0 {
-		parts = append(parts, fmt.Sprintf("%d turns", turns))
-	}
-	if model := eventDataString(event, "model"); model != "" {
-		parts = append(parts, model)
-	}
-	return strings.Join(parts, " · ")
-}
-
-func eventFailure(event sessionapi.SessionEvent) string {
-	if errorText := eventDataString(event, "error"); errorText != "" {
-		return errorText
-	}
-	if reason := eventDataString(event, "reason"); reason != "" {
-		return reason
-	}
-	if reason := eventDataString(event, "completion_reason"); reason != "" {
-		return humanizeLogToken(reason)
-	}
-	if message := eventDataString(event, "message"); message != "" {
-		return message
-	}
-	return ""
+func isLegacyToolLogAction(kind string, text string) bool {
+	return (kind == "" || kind == "progress_update") && isMinorLogAction(text)
 }
 
 func friendlyAgentError(errorText string) string {
@@ -544,40 +326,12 @@ func friendlyAgentError(errorText string) string {
 	case strings.HasPrefix(lower, "429"):
 		return "Model provider at capacity"
 	case strings.Contains(lower, "socket connection was closed"):
-		return "Agent connection interrupted"
+		return "Execution connection interrupted"
 	case lower == "agent_no_output":
-		return "Agent returned no output"
+		return "Execution returned no output"
 	default:
-		return "Agent error, retrying"
+		return "Execution error"
 	}
-}
-
-func normalizedErrorKey(value string) string {
-	lower := strings.ToLower(strings.TrimSpace(value))
-	switch {
-	case strings.HasPrefix(lower, "502"):
-		return "provider-502"
-	case strings.Contains(lower, "public routes unavailable"):
-		return "provider-public-routes"
-	case strings.Contains(lower, "no healthy upstream"):
-		return "provider-upstream"
-	case strings.HasPrefix(lower, "429"):
-		return "provider-capacity"
-	case lower == "agent_no_output", strings.Contains(lower, "agent_no_output"):
-		return "agent-no-output"
-	default:
-		return lower
-	}
-}
-
-func withinIncidentWindow(left string, right string) bool {
-	leftTime, leftErr := time.Parse(time.RFC3339Nano, left)
-	rightTime, rightErr := time.Parse(time.RFC3339Nano, right)
-	if leftErr != nil || rightErr != nil {
-		return true
-	}
-	delta := rightTime.Sub(leftTime)
-	return delta >= 0 && delta <= 90*time.Minute
 }
 
 func splitLogText(value string) (string, string) {
@@ -629,38 +383,12 @@ func sentenceCase(value string) string {
 	return string(runes)
 }
 
-func displayLogTime(value string) string {
+func displayLogTimestamp(value string) string {
 	parsed, err := time.Parse(time.RFC3339Nano, value)
 	if err != nil {
-		return "--:--:--"
+		return "unknown-time"
 	}
-	return parsed.Format("15:04:05")
-}
-
-func displayLogDate(value string) string {
-	parsed, err := time.Parse(time.RFC3339Nano, value)
-	if err != nil {
-		return value
-	}
-	return parsed.UTC().Format("2006-01-02 15:04:05 UTC")
-}
-
-func formatLogBytes(value int64) string {
-	const (
-		kib = int64(1024)
-		mib = 1024 * kib
-		gib = 1024 * mib
-	)
-	switch {
-	case value >= gib:
-		return fmt.Sprintf("%.1f GiB", float64(value)/float64(gib))
-	case value >= mib:
-		return fmt.Sprintf("%.1f MiB", float64(value)/float64(mib))
-	case value >= kib:
-		return fmt.Sprintf("%.1f KiB", float64(value)/float64(kib))
-	default:
-		return fmt.Sprintf("%d B", value)
-	}
+	return parsed.UTC().Format("2006-01-02T15:04:05Z")
 }
 
 func firstNonEmpty(values ...string) string {

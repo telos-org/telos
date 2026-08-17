@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,12 +16,17 @@ import (
 // -- login --------------------------------------------------------------------
 
 func cmdLogin(args []string) {
-	fs := flag.NewFlagSet("login", flag.ExitOnError)
+	fs := newCommandFlagSet("login", "telos login [flags]")
 	endpoint := fs.String("endpoint", cloud.DefaultAPIEndpoint, "API endpoint")
 	parseFlags(fs, args)
+	requireArgCount(fs, 0, "no positional arguments")
 
 	ep := cloud.NormalizeEndpoint(*endpoint)
-	cfg := config.LoadStoredConfig()
+	cfg, err := config.LoadStoredConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	who, loggedIn, err := configuredLogin(ep, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: could not verify existing login: %v\n", err)

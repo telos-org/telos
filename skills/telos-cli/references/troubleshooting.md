@@ -7,7 +7,7 @@ telos --version
 telos config
 telos plan SPEC.md
 telos describe SESSION_ID
-telos logs --verbose SESSION_ID
+telos logs SESSION_ID
 ```
 
 Use `--json` when exact fields or automated diagnosis matter. Do not paste
@@ -41,7 +41,7 @@ to overwrite it.
 
 ## Deployment is not ready
 
-Inspect `describe` and `logs` before retrying. Distinguish agent work, verifier
+Inspect `describe` and `logs` before retrying. Distinguish active work, revision
 rejection, package-digest mismatch, runtime failure, and public-service failure.
 Do not create a second deployment merely to hide an actionable state in the
 first one.

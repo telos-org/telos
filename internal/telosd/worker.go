@@ -3,6 +3,7 @@ package telosd
 import (
 	"errors"
 	"fmt"
+	"math/rand/v2"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/cli"
+	"github.com/telos-org/telos/internal/evidence"
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/sessionworker"
@@ -29,7 +31,16 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	wake := make(chan os.Signal, 1)
 	signal.Notify(wake, syscall.SIGUSR1)
 	defer signal.Stop(wake)
+	return runSessionWorker(sessionDir, once, cli.RunLocalSession, wake, stop)
+}
 
+func runSessionWorker(
+	sessionDir string,
+	once bool,
+	runSession func(string) (*game.PVGResult, error),
+	wake <-chan os.Signal,
+	stop <-chan os.Signal,
+) (int, error) {
 	owner, err := sessionworker.AcquireOwnership(sessionDir, filepath.Join(sessionDir, "runner.log"))
 	if err != nil {
 		if errors.Is(err, sessionworker.ErrWorkerAlreadyRunning) {
@@ -49,14 +60,14 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 		}
 		root := manifest.Kind == sessionapi.KindController
 		desired := manifest.Desired
-		result, err := cli.RunLocalSession(sessionDir)
+		result, err := runSession(sessionDir)
 		if err != nil {
 			if !root || once {
 				return 1, err
 			}
 			fmt.Fprintf(os.Stderr, "root session cycle failed: %v\n", err)
 			failures++
-			if waitForNextCycle(wake, stop, failureBackoff(failures)) {
+			if waitForNextCycle(wake, stop, jitteredFailureBackoff(failures)) {
 				return 0, nil
 			}
 			continue
@@ -73,13 +84,22 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 		} else if result.GameResult == game.GameStopped {
 			return 0, nil
 		} else if result.GameResult != game.GameSuccess {
+			if blockerCode, blocked := game.AgentFailureBlocker(result.Error); blocked {
+				fmt.Fprintf(os.Stderr, "root session agent suspended: %s\n", result.Error)
+				logControllerSuspended(sessionDir, blockerCode, result.Error)
+				failures = 0
+				if waitForNextCycle(wake, stop, 0) {
+					return 0, nil
+				}
+				continue
+			}
 			failures++
 			if result.Error != "" {
 				fmt.Fprintf(os.Stderr, "root session cycle failed: %s\n", result.Error)
 			} else {
 				fmt.Fprintf(os.Stderr, "root session cycle failed: %s\n", result.GameResult)
 			}
-			if waitForNextCycle(wake, stop, failureBackoff(failures)) {
+			if waitForNextCycle(wake, stop, jitteredFailureBackoff(failures)) {
 				return 0, nil
 			}
 			continue
@@ -183,12 +203,51 @@ func failureBackoff(failures int) time.Duration {
 	if failures < 1 {
 		failures = 1
 	}
-	seconds := 1 << min(failures-1, 6)
+	seconds := 1 << min(failures-1, 20)
 	backoff := time.Duration(seconds) * time.Second
 	if backoff > controllerFailureBackoffCap {
 		return controllerFailureBackoffCap
 	}
 	return backoff
+}
+
+func jitteredFailureBackoff(failures int) time.Duration {
+	base := failureBackoff(failures)
+	window := base / 5
+	if window <= 0 {
+		return base
+	}
+	return base - window + time.Duration(rand.Int64N(int64(window)+1))
+}
+
+func logControllerSuspended(sessionDir, blockerCode, errorText string) {
+	manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
+	if err != nil || len(manifest.Specs) == 0 {
+		return
+	}
+	specManifest := manifest.Specs[0]
+	if specManifest.EvidencePath == nil || *specManifest.EvidencePath == "" {
+		return
+	}
+	epochID := 0
+	if last := manifest.LastEpoch(); last != nil {
+		epochID = last.ID
+	}
+	ev := evidence.New(
+		specManifest.Name,
+		*specManifest.EvidencePath,
+		manifest.SessionID,
+		epochID,
+	)
+	if manifest.CreatedAt != "" {
+		ev.StartedAt = manifest.CreatedAt
+	}
+	ev.Log("agent_suspended", 0, "system", map[string]interface{}{
+		"state":        "waiting",
+		"blocker_code": blockerCode,
+		"error":        errorText,
+		"action":       "update the model credentials, then re-apply the spec or explicitly wake the session",
+	})
 }
 
 func waitForNextCycle(wake <-chan os.Signal, stop <-chan os.Signal, delay time.Duration) bool {

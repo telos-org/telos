@@ -100,6 +100,94 @@ func TestPackageForReferenceUsesRegistryDigest(t *testing.T) {
 	}
 }
 
+func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
+	pkg := testApplyPackage(t)
+	var published bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope":      "telos",
+				"name":       "demo",
+				"version":    "1.2.3",
+				"ref":        "@telos/demo:1.2.3",
+				"digest":     pkg.Digest,
+				"created_at": "now",
+			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3/bundle":
+			_, _ = w.Write(pkg.Bytes)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/packages":
+			published = true
+			http.Error(w, "unexpected publish", http.StatusInternalServerError)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
+			var request map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if request["name"] != "demo" || request["package_ref"] != "@telos/demo:1.2.3" {
+				t.Fatalf("deployment request = %#v", request)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":             "sess_registry",
+				"name":           "demo",
+				"state":          "provisioning",
+				"package_ref":    "@telos/demo:1.2.3",
+				"package_digest": pkg.Digest,
+				"created_at":     "then",
+				"updated_at":     "now",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	configureCloudTest(t, srv.URL)
+	t.Setenv("TELOS_CONTEXT", "")
+
+	out := captureStdout(t, func() {
+		cmdApply([]string{"@telos/demo:1.2.3", "--json"})
+	})
+	if published {
+		t.Fatal("registry apply republished the package")
+	}
+	var result map[string]any
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("apply JSON: %v\n%s", err, out)
+	}
+	if result["operation"] != "created" || result["context"] != "personal" {
+		t.Fatalf("apply result = %#v", result)
+	}
+}
+
+func TestRegistryPackageForApplyRejectsDigestMismatch(t *testing.T) {
+	pkg := testApplyPackage(t)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/bundle"):
+			_, _ = w.Write(pkg.Bytes)
+		default:
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope":   "telos",
+				"name":    "demo",
+				"version": "1.2.3",
+				"ref":     "@telos/demo:1.2.3",
+				"digest":  "sha256:0000000000000000000000000000000000000000000000000000000000000000",
+			})
+		}
+	}))
+	defer srv.Close()
+	reference, err := parsePackageReference("@telos/demo:1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = registryPackageForApply(cloud.NewClient(srv.URL, "token"), reference)
+	if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
+		t.Fatalf("digest mismatch error = %v", err)
+	}
+}
+
 func TestMaterializePackageDirectoryAndMarkdown(t *testing.T) {
 	pkg := testApplyPackage(t)
 	pulled := &pulledPackage{

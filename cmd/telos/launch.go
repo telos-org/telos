@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -28,8 +27,8 @@ func cmdApply(args []string) {
 }
 
 func cmdLaunch(command, action string, args []string) {
-	fs := flag.NewFlagSet(command, flag.ExitOnError)
-	workspace := fs.String("workspace", "", "Workspace directory")
+	fs := newCommandFlagSet(command, fmt.Sprintf("telos %s SPEC.md [flags]", command))
+	workspace := fs.String("workspace", "", "Workspace directory for local specs")
 	sessionIDValue := ""
 	sessionID := &sessionIDValue
 	if command == "apply" {
@@ -37,31 +36,39 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	model := fs.String("model", "", "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL")
 	thinking := fs.String("thinking", "", "Thinking effort; defaults to $TELOS_THINKING, then high for local runs")
-	generatorModel := fs.String("generator-model", "", "Optional generator model; defaults to --model")
-	generatorThinking := fs.String("generator-thinking", "", "Optional generator thinking effort; defaults to --thinking")
-	verifierModel := fs.String("verifier-model", "", "Optional verifier model; defaults to --model")
-	verifierThinking := fs.String("verifier-thinking", "", "Optional verifier thinking effort; defaults to --thinking")
 	untilValue := ""
 	until := &untilValue
 	if command == "run" {
 		until = fs.String("until", "", "Run at most N review cycles or duration like 30m")
 	}
-	maxCostUSD := fs.Float64("max-cost-usd", 20.0, "Maximum cost in USD")
+	maxCostUSD := fs.Float64("max-cost-usd", 0, "Maximum local execution cost in USD; defaults to 20")
 	jsonOut := fs.Bool("json", false, "JSON output")
+	contextValue := ""
+	contextFlagValue := &contextValue
+	if command == "apply" {
+		contextFlagValue = cloudContextFlag(fs)
+	}
 	parseFlags(fs, args)
+	*sessionID = strings.TrimSpace(*sessionID)
+	contextOverride, err := cloudContextOverride(fs, *contextFlagValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
 	localConfigSet := flagNamesSet(fs, "workspace")
 	untilConfig, err := untilFlagValue(fs, *until)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if fs.NArg() < 1 {
-		fmt.Fprintf(os.Stderr, "usage: telos %s SPEC.md [options]\n", command)
-		os.Exit(1)
-	}
+	requireArgCount(fs, 1, "one SPEC.md")
 	if command == "apply" && *sessionID != "" && *workspace != "" {
 		fmt.Fprintln(os.Stderr, "error: --workspace can only seed a new session; it cannot be used with --session")
 		os.Exit(1)
+	}
+	if err := validateCloudSessionContext(*sessionID, contextOverride); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
 	}
 	specArg := fs.Arg(0)
 	specPath, hasLocalSpec := existingSpecPath(specArg)
@@ -93,6 +100,12 @@ func cmdLaunch(command, action string, args []string) {
 		}
 		platform = parsedPlatform
 	}
+	if command == "apply" {
+		if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	}
 	if command == "apply" && *sessionID != "" && isLocalApplyID(*sessionID) {
 		if !hasLocalSpec {
 			fmt.Fprintf(os.Stderr, "error: unknown local spec: %s\n", specArg)
@@ -106,18 +119,14 @@ func cmdLaunch(command, action string, args []string) {
 		return
 	}
 
-	launchMode, err := decideLaunchMode(
-		platform,
-		config.IsConfigured(),
-		localConfigSet,
-	)
+	launchMode, err := resolveLaunchMode(platform, localConfigSet)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if launchMode != launchLocal && roleConfigSet(fs) {
-		fmt.Fprintln(os.Stderr, "error: per-role model configuration is currently supported for local runs only")
-		os.Exit(1)
+	if launchMode == launchLocal && contextOverride != "" {
+		fmt.Fprintln(os.Stderr, "error: --context can only be used with a cloud apply")
+		os.Exit(2)
 	}
 	localRootID, inLocalRoot := localRootSessionID()
 	if inLocalRoot {
@@ -149,7 +158,7 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: cloud runtime config flags can only seed a new session; they cannot update an existing session")
 			os.Exit(1)
 		}
-		applyCloudControl(specArg, *sessionID, runtimeConfig, *jsonOut)
+		applyCloudControl(specArg, *sessionID, runtimeConfig, *jsonOut, contextOverride)
 		return
 	}
 	if !hasLocalSpec {
@@ -166,10 +175,6 @@ func cmdLaunch(command, action string, args []string) {
 		*workspace,
 		*model,
 		*thinking,
-		*generatorModel,
-		*generatorThinking,
-		*verifierModel,
-		*verifierThinking,
 		*maxCostUSD,
 	)
 	if err != nil {
@@ -295,12 +300,46 @@ func launchSpecPlatform(specPath string) (string, error) {
 	return value, nil
 }
 
+func validateApplySessionPlatform(sessionID, platform string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	switch {
+	case isLocalApplyID(sessionID):
+		if platform != "local" {
+			return fmt.Errorf("local session %q requires a platform: local spec", sessionID)
+		}
+	case isCloudApplyID(sessionID):
+		if platform == "local" {
+			return fmt.Errorf("cloud session %q cannot apply a platform: local spec", sessionID)
+		}
+	default:
+		return fmt.Errorf("invalid session id %q", sessionID)
+	}
+	return nil
+}
+
 type launchMode string
 
 const (
 	launchLocal      launchMode = "local"
 	launchCloudApply launchMode = "cloud-apply"
 )
+
+func resolveLaunchMode(platform string, localConfigSet bool) (launchMode, error) {
+	if platform == "local" {
+		return launchLocal, nil
+	}
+	if localConfigSet {
+		return decideLaunchMode(platform, false, true)
+	}
+	cloudConfigured, err := config.IsConfigured()
+	if err != nil {
+		return "", err
+	}
+	return decideLaunchMode(platform, cloudConfigured, false)
+}
 
 func decideLaunchMode(
 	platform string,
@@ -364,25 +403,42 @@ func applyCloudControl(
 	sessionID string,
 	runtimeConfig sessionRuntimeConfig,
 	jsonOut bool,
+	contextOverride string,
 ) {
-	pkg, err := packageSpec(specArg)
+	var reference *packageReference
+	if strings.HasPrefix(strings.TrimSpace(specArg), "@") {
+		parsed, err := parsePackageReference(specArg)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		reference = &parsed
+	}
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	control, err := cloud.ControlClient()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	packageName := ""
+	var packageRecord *cloud.PackageVersionRecord
+	if reference != nil {
+		packageName = reference.name
+		packageRecord, err = registryPackageForApply(control, *reference)
+	} else {
+		var pkg *specPackage
+		pkg, err = packageSpec(specArg, contextOverride)
+		if err == nil {
+			packageName = pkg.name
+			packageRecord, err = pushSpecPackage(control, pkg, "")
+		}
 	}
-	packageRecord, err := pushSpecPackage(control, pkg, "")
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	operation, session, err := applyCloudSessionPackage(
 		control,
-		pkg.name,
+		packageName,
 		packageRecord.Ref,
 		sessionID,
 		runtimeConfig,
@@ -393,13 +449,19 @@ func applyCloudControl(
 	}
 	if jsonOut {
 		printJSON(map[string]any{
+			"context":   resolvedCloudContext(control),
 			"operation": operation,
 			"package":   packageRecord,
 			"session":   session,
 		})
 		return
 	}
-	printCloudSessionReceipt(os.Stdout, operation, session)
+	printCloudSessionReceiptForContext(
+		os.Stdout,
+		operation,
+		session,
+		resolvedCloudContext(control),
+	)
 }
 
 func applyCloudSessionPackage(
@@ -443,29 +505,38 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	name := sessionName(*session)
 	fmt.Fprintf(out, "%s %s\n\n", operation, name)
 	row := displayRow(*session)
-	printSummaryField(out, "Name", row.Name)
-	printSummaryField(out, "Target", row.Target)
 	printSummaryField(out, "Status", row.Status)
-	printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	printSummaryField(out, "Session", row.Session)
+	if session.TotalCostUSD != nil {
+		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
+	}
 }
 
 func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.SessionRecord) {
+	printCloudSessionReceiptForContext(out, operation, session, "")
+}
+
+func printCloudSessionReceiptForContext(
+	out io.Writer,
+	operation string,
+	session *cloud.SessionRecord,
+	contextName string,
+) {
 	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
-	printSummaryField(out, "Name", session.Name)
-	printSummaryField(out, "Target", "cloud")
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
-	printSummaryField(out, "Package", session.PackageRef)
-	printSummaryField(out, "Digest", session.PackageDigest)
-	printSummaryField(out, "Model", session.AgentModel)
-	printSummaryField(out, "Thinking", session.AgentThinking)
 	printSummaryField(out, "Session", session.ID)
-	if session.ServiceURL != nil {
-		printSummaryField(out, "Service URL", *session.ServiceURL)
+	printSummaryField(out, "Revision", session.PackageDigest)
+	if contextName != "" {
+		printSummaryField(out, "Context", contextName)
 	}
-	if session.DashboardURL != nil {
-		printSummaryField(out, "Dashboard URL", *session.DashboardURL)
+	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
+		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
 	}
+	logsCommand := fmt.Sprintf("telos logs %s", session.ID)
+	if contextName != "" {
+		logsCommand = fmt.Sprintf("telos logs --context %s %s", contextName, session.ID)
+	}
+	printSummaryField(out, "Logs", logsCommand)
 }
 
 func sessionKindForCommand(command string) sessionapi.SessionKind {

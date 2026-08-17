@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -15,16 +14,35 @@ import (
 // -- list ---------------------------------------------------------------------
 
 func cmdList(args []string) {
-	fs := flag.NewFlagSet("list", flag.ExitOnError)
+	fs := newCommandFlagSet("list", "telos list [flags]")
 	limit := fs.Int("limit", 0, "Limit results")
 	wide := fs.Bool("wide", false, "Wide output")
 	localOnly := fs.Bool("local", false, "Local sessions only")
 	cloudOnly := fs.Bool("cloud", false, "Cloud sessions only")
 	jsonOut := fs.Bool("json", false, "JSON output")
+	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
+	requireArgCount(fs, 0, "no positional arguments")
+	if *localOnly && *cloudOnly {
+		fmt.Fprintln(os.Stderr, "error: --local and --cloud are mutually exclusive")
+		os.Exit(2)
+	}
+	if *limit < 0 {
+		fmt.Fprintln(os.Stderr, "error: --limit must be non-negative")
+		os.Exit(2)
+	}
+	contextOverride, err := cloudContextOverride(fs, *contextValue)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
+	if contextOverride != "" && *localOnly {
+		fmt.Fprintln(os.Stderr, "error: --context cannot be used with --local")
+		os.Exit(2)
+	}
 
-	if *cloudOnly {
-		listCloudSessions(*jsonOut, *limit, *wide)
+	if *cloudOnly || contextOverride != "" {
+		listCloudSessions(contextOverride, *jsonOut, *limit, *wide)
 		return
 	}
 
@@ -40,10 +58,16 @@ func cmdList(args []string) {
 			}
 			sessions = append(sessions, rootSessions...)
 			rootScoped = true
-		} else if config.IsConfigured() {
-			listCloudSessions(*jsonOut, *limit, *wide)
-			return
 		} else {
+			cloudConfigured, err := config.IsConfigured()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			if cloudConfigured {
+				listCloudSessions(contextOverride, *jsonOut, *limit, *wide)
+				return
+			}
 			sessions = append(sessions, listLocalSessions()...)
 		}
 	} else {
@@ -70,7 +94,7 @@ func cmdList(args []string) {
 	if effectiveWide {
 		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPARENT\tCOST\tSESSION")
 	} else {
-		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tCOST\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
 	}
 	for _, sess := range visible {
 		row := displayRow(sess)
@@ -85,11 +109,9 @@ func cmdList(args []string) {
 			)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\n",
 			row.Name,
-			row.Target,
 			row.Status,
-			row.Cost,
 			row.Session,
 		)
 	}
@@ -177,8 +199,8 @@ func limitListSessions(sessions []sessionapi.Session, limit int) []sessionapi.Se
 	return sessions
 }
 
-func listCloudSessions(jsonOut bool, limit int, wide bool) {
-	control, err := cloud.ControlClient()
+func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide bool) {
+	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -190,39 +212,41 @@ func listCloudSessions(jsonOut bool, limit int, wide bool) {
 	}
 	cloudSessions = limitCloudSessions(cloudSessions, limit)
 	if jsonOut {
-		printJSON(map[string]any{"sessions": cloudSessions})
+		printJSON(map[string]any{
+			"context":  resolvedCloudContext(control),
+			"sessions": cloudSessions,
+		})
 		return
 	}
 	if len(cloudSessions) == 0 {
 		fmt.Println("no sessions")
 		return
 	}
+	if wide {
+		printSummaryField(os.Stdout, "Context", resolvedCloudContext(control))
+		fmt.Println()
+	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if wide {
-		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPACKAGE\tSERVICE\tDASHBOARD\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tREVISION\tSERVICE\tSESSION")
 	} else {
-		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tURL\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
 	}
 	for _, session := range cloudSessions {
 		serviceURL := optionalSessionString(session.ServiceURL)
-		dashboardURL := optionalSessionString(session.DashboardURL)
 		if wide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 				session.Name,
-				"cloud",
 				cloudSessionDisplayStatus(session),
-				session.PackageRef,
+				session.PackageDigest,
 				serviceURL,
-				dashboardURL,
 				session.ID,
 			)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\n",
 			session.Name,
-			"cloud",
 			cloudSessionDisplayStatus(session),
-			serviceURL,
 			session.ID,
 		)
 	}
@@ -250,13 +274,6 @@ func sessionName(sess sessionapi.Session) string {
 	return "-"
 }
 
-func sessionLineage(sess sessionapi.Session) string {
-	if isTopLevelSession(sess) {
-		return "root"
-	}
-	return "child"
-}
-
 func sessionParent(sess sessionapi.Session) string {
 	if sess.ParentSessionID != nil && *sess.ParentSessionID != "" {
 		return *sess.ParentSessionID
@@ -273,32 +290,6 @@ func sessionCost(sess sessionapi.Session) string {
 		return "-"
 	}
 	return fmt.Sprintf("$%.2f", *sess.TotalCostUSD)
-}
-
-func sessionTurn(sess sessionapi.Session) string {
-	if sess.CurrentRound == nil || sess.CurrentRole == nil || *sess.CurrentRole == "" {
-		return "-"
-	}
-	return fmt.Sprintf("%s#%d", displayRole(*sess.CurrentRole), *sess.CurrentRound)
-}
-
-// displayRole maps internal game roles to the terms used everywhere else in
-// user-facing output.
-func displayRole(role string) string {
-	switch role {
-	case "prover":
-		return "implementation"
-	case "verifier":
-		return "evaluation"
-	}
-	return role
-}
-
-func sessionArtifact(sess sessionapi.Session) string {
-	if url := sessionServiceURL(sess); url != "" {
-		return url
-	}
-	return "-"
 }
 
 func sessionServiceURL(sess sessionapi.Session) string {

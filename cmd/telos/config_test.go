@@ -34,7 +34,10 @@ func TestCmdConfigSetsContextAndPreservesLogin(t *testing.T) {
 	if !strings.Contains(out, "context set to @telos") {
 		t.Fatalf("output = %q", out)
 	}
-	stored := config.LoadStoredConfig()
+	stored, err := config.LoadStoredConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if stored.Context != "@telos" {
 		t.Fatalf("context = %q", stored.Context)
 	}
@@ -72,7 +75,11 @@ func TestCmdConfigNormalizesOrganizationIDToHandle(t *testing.T) {
 		cmdConfig([]string{"--context", "org_telos"})
 	})
 
-	if got := config.LoadStoredConfig().Context; got != "@telos" {
+	stored, err := config.LoadStoredConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := stored.Context; got != "@telos" {
 		t.Fatalf("context = %q", got)
 	}
 }
@@ -108,7 +115,10 @@ func TestCmdConfigUsesStoredLoginForContextResolution(t *testing.T) {
 		cmdConfig([]string{"--context", "@telos"})
 	})
 
-	stored := config.LoadStoredConfig()
+	stored, err := config.LoadStoredConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
 	if stored.Context != "@telos" {
 		t.Fatalf("context = %q", stored.Context)
 	}
@@ -145,6 +155,17 @@ func TestCmdConfigShowsResolvedContextWithoutExposingToken(t *testing.T) {
 	if got := configOutputValue(t, out, "Authentication"); got != "valid" {
 		t.Fatalf("authentication = %q", got)
 	}
+	for label, want := range map[string]string{
+		"Config file":           configPath,
+		"Config file source":    "environment (TELOS_CONFIG)",
+		"Endpoint source":       "stored file",
+		"Authentication source": "stored file",
+		"Context source":        "stored file",
+	} {
+		if got := configOutputValue(t, out, label); got != want {
+			t.Fatalf("%s = %q, want %q", label, got, want)
+		}
+	}
 	if strings.Contains(out, "test-token") {
 		t.Fatalf("output leaked auth token: %q", out)
 	}
@@ -175,7 +196,11 @@ func TestCmdConfigClearsResolvedPersonalContext(t *testing.T) {
 			if !strings.Contains(out, "context set to personal") {
 				t.Fatalf("output = %q", out)
 			}
-			if got := config.LoadStoredConfig().Context; got != "" {
+			stored, err := config.LoadStoredConfig()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := stored.Context; got != "" {
 				t.Fatalf("context = %q, want personal default", got)
 			}
 			data, err := os.ReadFile(configPath)
@@ -266,10 +291,21 @@ func accountBootstrapServer(t *testing.T) *httptest.Server {
 
 func configOutputValue(t *testing.T, output, label string) string {
 	t.Helper()
+	labelFields := strings.Fields(label)
 	for _, line := range strings.Split(output, "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 2 && fields[0] == label {
-			return strings.Join(fields[1:], " ")
+		if len(fields) <= len(labelFields) {
+			continue
+		}
+		matches := true
+		for index, labelField := range labelFields {
+			if fields[index] != labelField {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return strings.Join(fields[len(labelFields):], " ")
 		}
 	}
 	t.Fatalf("output %q has no %s row", output, label)

@@ -413,6 +413,16 @@ func TestRenderProverUsesOperatingPosture(t *testing.T) {
 	if !strings.Contains(task, "continue from the append-only transcript") {
 		t.Error("prover prompt should describe continuation through transcript/workspace")
 	}
+	if !strings.Contains(task, "smallest complete solution") ||
+		!strings.Contains(task, "continue while solvable gaps remain") ||
+		!strings.Contains(task, "goal holds and") ||
+		!strings.Contains(task, "relevant checks pass, or") {
+		t.Error("prover prompt should require a complete outcome")
+	}
+	if strings.Contains(task, "smallest change that improves") ||
+		strings.Contains(task, "Prefer incremental, inspectable changes") {
+		t.Error("prover prompt should not encourage partial turns")
+	}
 }
 
 func TestRenderWithSkillsRoster(t *testing.T) {
@@ -608,10 +618,15 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 
 	for _, task := range []string{proverTask, verifierTask} {
 		for _, want := range []string{
-			"meaningful milestones",
-			"Before any operation expected to take more than 60 seconds",
-			"about once per minute",
-			"do not save all progress for the final response",
+			"agent-decided directional updates and proof of liveness",
+			"when a material result, a new blocker, or the next action changes",
+			"with no new result, send brief liveness updates",
+			"Simplified Technical English (ASD-STE100)",
+			"active voice",
+			"one topic per sentence",
+			"no more than 25 words per sentence",
+			"Do not report routine file reads, commands, or plans",
+			"Do not save all progress updates for the final response",
 		} {
 			if !strings.Contains(task, want) {
 				t.Fatalf("prompt missing progress guidance %q:\n%s", want, task)
@@ -620,6 +635,14 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 		if strings.Contains(task, `phase=`) || strings.Contains(task, `timestamp=`) {
 			t.Fatalf("progress guidance should not require model-owned metadata:\n%s", task)
 		}
+		for _, unwanted := range []string{"after planning", "after scoping", "about once per minute"} {
+			if strings.Contains(task, unwanted) {
+				t.Fatalf("progress guidance should not prescribe %q:\n%s", unwanted, task)
+			}
+		}
+	}
+	if !strings.Contains(verifierTask, "do not stop after the first passing check or the first blocker") {
+		t.Fatal("evaluation prompt should require a complete bounded review")
 	}
 }
 
