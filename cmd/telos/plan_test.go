@@ -180,6 +180,12 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 	if _, ok := plan.Session["lineage"]; ok {
 		t.Fatalf("session lineage should be omitted: %#v", plan.Session)
 	}
+	if _, ok := plan.Spec["required_verifier_skills"]; ok {
+		t.Fatalf("plan should not expose internal verifier roles: %#v", plan.Spec)
+	}
+	if _, ok := plan.Spec["required_rubrics"]; !ok {
+		t.Fatalf("plan should expose required rubrics: %#v", plan.Spec)
+	}
 	var raw map[string]any
 	if err := json.Unmarshal([]byte(out), &raw); err != nil {
 		t.Fatal(err)
@@ -285,12 +291,19 @@ Build it.
 			t.Fatalf("skill delta: current=%#v proposed=%#v", comparison.current.Skills, comparison.proposed.Skills)
 		}
 	}
-	if len(comparison.current.Rubrics) != 1 || comparison.current.Rubrics[0] != "build-dashboard" {
-		t.Fatalf("current rubrics = %#v", comparison.current.Rubrics)
+	required := false
+	for _, skill := range comparison.current.Skills {
+		if skill.Name == "build-dashboard" && skill.Starred {
+			required = true
+			break
+		}
+	}
+	if !required {
+		t.Fatalf("current required skill = %#v", comparison.current.Skills)
 	}
 }
 
-func TestPlanSpecStateCapturesIntervalSkillLocksAndRubrics(t *testing.T) {
+func TestPlanSpecStateCapturesResolvedChanges(t *testing.T) {
 	currentIntervalSpec := []byte("---\nname: demo\nversion: 1.0.0\ninterval: 5m\n---\n\n# Goal\n\nCurrent.\n")
 	proposedIntervalSpec := []byte("---\nname: demo\nversion: 1.1.0\ninterval: 10m\n---\n\n# Goal\n\nProposed.\n")
 	currentManifest := &spec.ApplyPackageManifest{Skills: map[string]spec.ApplyPackageSkillLock{
@@ -321,8 +334,8 @@ func TestPlanSpecStateCapturesIntervalSkillLocksAndRubrics(t *testing.T) {
 	if proposed.IntervalSeconds == nil || *proposed.IntervalSeconds != 600 {
 		t.Fatalf("proposed interval = %#v", proposed.IntervalSeconds)
 	}
-	if len(proposed.Rubrics) != 1 || proposed.Rubrics[0] != "verify-quality" {
-		t.Fatalf("proposed rubrics = %#v", proposed.Rubrics)
+	if len(proposed.Skills) != 1 || !proposed.Skills[0].Starred {
+		t.Fatalf("proposed required skill = %#v", proposed.Skills)
 	}
 
 	var out bytes.Buffer
@@ -333,11 +346,33 @@ func TestPlanSpecStateCapturesIntervalSkillLocksAndRubrics(t *testing.T) {
 		"Interval 5m0s -> 10m0s",
 		"verify-quality @telos/verify-quality:1.0.0 sha256:current",
 		"verify-quality @telos/verify-quality:1.1.0 sha256:proposed *",
-		"rubrics  - -> verify-quality",
 	} {
 		want = strings.Join(strings.Fields(want), " ")
 		if !strings.Contains(normalized, want) {
 			t.Fatalf("plan delta missing %q:\n%s", want, out.String())
 		}
+	}
+	if strings.Contains(normalized, "rubrics") {
+		t.Fatalf("starred skill locks already express required rubrics:\n%s", out.String())
+	}
+}
+
+func TestPrintPlanStateDeltaOmitsUnchangedResolvedState(t *testing.T) {
+	interval := 300
+	state := planSpecState{
+		Version:         "1.0.0",
+		IntervalSeconds: &interval,
+		Skills: []planSkillLock{{
+			Name:    "verify-quality",
+			Ref:     "@telos/verify-quality:1.0.0",
+			Digest:  "sha256:same",
+			Starred: true,
+		}},
+	}
+
+	var out bytes.Buffer
+	printPlanStateDelta(&out, state, state)
+	if out.Len() != 0 {
+		t.Fatalf("unchanged resolved state should be silent:\n%s", out.String())
 	}
 }

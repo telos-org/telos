@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -31,7 +32,6 @@ type planSpecState struct {
 	Version         string          `json:"version,omitempty"`
 	IntervalSeconds *int            `json:"interval_seconds,omitempty"`
 	Skills          []planSkillLock `json:"skills"`
-	Rubrics         []string        `json:"required_rubrics"`
 }
 
 type planSkillLock struct {
@@ -146,7 +146,7 @@ func cmdPlan(args []string) {
 			"platform":     platform,
 			"namespace":    compiled.Namespace,
 			"skills":       skillNames(compiled.Skills),
-			"required_verifier_skills": skillNames(
+			"required_rubrics": skillNames(
 				compiled.RequiredVerifierSkills,
 			),
 		},
@@ -393,7 +393,7 @@ func planSpecStateFromMarkdown(
 	if !ok {
 		return planSpecState{}, fmt.Errorf("spec has no valid YAML frontmatter")
 	}
-	state := planSpecState{Skills: []planSkillLock{}, Rubrics: []string{}}
+	state := planSpecState{Skills: []planSkillLock{}}
 	if version, ok := raw["version"].(string); ok {
 		state.Version = strings.TrimSpace(version)
 	}
@@ -425,32 +425,33 @@ func planSpecStateFromMarkdown(
 			Digest:  strings.TrimSpace(lock.Digest),
 			Starred: lock.Starred,
 		})
-		if lock.Starred {
-			state.Rubrics = append(state.Rubrics, name)
-		}
 	}
 	return state, nil
 }
 
 func printPlanStateDelta(out io.Writer, current, proposed planSpecState) {
-	if !hasPlanSpecState(current) && !hasPlanSpecState(proposed) {
+	currentInterval := formatPlanInterval(current.IntervalSeconds)
+	proposedInterval := formatPlanInterval(proposed.IntervalSeconds)
+	versionChanged := current.Version != proposed.Version
+	intervalChanged := currentInterval != proposedInterval
+	skillsChanged := !slices.Equal(current.Skills, proposed.Skills)
+	if !versionChanged && !intervalChanged && !skillsChanged {
 		return
 	}
-	printSummaryField(out, "Version", planDeltaValue(current.Version, proposed.Version))
-	printSummaryField(
-		out,
-		"Interval",
-		planDeltaValue(formatPlanInterval(current.IntervalSeconds), formatPlanInterval(proposed.IntervalSeconds)),
-	)
-	fmt.Fprintln(out)
-	fmt.Fprintln(out, "Skill locks")
-	printDetailField(out, "current", formatPlanSkillLocks(current.Skills))
-	printDetailField(out, "proposed", formatPlanSkillLocks(proposed.Skills))
-	printDetailField(out, "rubrics", planDeltaValue(formatPlanList(current.Rubrics), formatPlanList(proposed.Rubrics)))
-}
-
-func hasPlanSpecState(state planSpecState) bool {
-	return state.Version != "" || state.IntervalSeconds != nil || len(state.Skills) > 0 || len(state.Rubrics) > 0
+	if versionChanged {
+		printSummaryField(out, "Version", planDeltaValue(current.Version, proposed.Version))
+	}
+	if intervalChanged {
+		printSummaryField(out, "Interval", planDeltaValue(currentInterval, proposedInterval))
+	}
+	if skillsChanged {
+		if versionChanged || intervalChanged {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintln(out, "Skill locks")
+		printDetailField(out, "current", formatPlanSkillLocks(current.Skills))
+		printDetailField(out, "proposed", formatPlanSkillLocks(proposed.Skills))
+	}
 }
 
 func planDeltaValue(current, proposed string) string {
@@ -483,13 +484,6 @@ func formatPlanSkillLocks(skills []planSkillLock) string {
 	return strings.Join(values, ", ")
 }
 
-func formatPlanList(values []string) string {
-	if len(values) == 0 {
-		return "-"
-	}
-	return strings.Join(values, ", ")
-}
-
 func skillNames(skills []*spec.Skill) []string {
 	var names []string
 	for _, s := range skills {
@@ -498,8 +492,8 @@ func skillNames(skills []*spec.Skill) []string {
 	return names
 }
 
-// skillDisplayNames marks required verifier skills with the same trailing
-// star the spec frontmatter uses to declare them.
+// skillDisplayNames marks required rubrics with the same trailing star used in
+// spec frontmatter.
 func skillDisplayNames(compiled *spec.CompiledEnvironment) []string {
 	required := map[string]bool{}
 	for _, s := range compiled.RequiredVerifierSkills {
