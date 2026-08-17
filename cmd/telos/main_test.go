@@ -457,6 +457,59 @@ func TestResolveLaunchModeKeepsLocalRunsIndependentOfCloudConfig(t *testing.T) {
 	}
 }
 
+func TestValidateApplySessionPlatformRejectsCrossedTargets(t *testing.T) {
+	tests := []struct {
+		name      string
+		sessionID string
+		platform  string
+		wantErr   string
+	}{
+		{
+			name:      "local session with cloud spec",
+			sessionID: "local_123",
+			platform:  "cloud",
+			wantErr:   "requires a platform: local spec",
+		},
+		{
+			name:      "cloud session with local spec",
+			sessionID: "sess_123",
+			platform:  "local",
+			wantErr:   "cannot apply a platform: local spec",
+		},
+		{
+			name:      "unknown session namespace",
+			sessionID: "deployment_123",
+			platform:  "cloud",
+			wantErr:   "invalid session id",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateApplySessionPlatform(tt.sessionID, tt.platform)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error: got %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateApplySessionPlatformAcceptsMatchingTargets(t *testing.T) {
+	for _, target := range []struct {
+		sessionID string
+		platform  string
+	}{
+		{sessionID: "", platform: "local"},
+		{sessionID: "local_123", platform: "local"},
+		{sessionID: "sess_123", platform: "cloud"},
+		{sessionID: "sess_123", platform: ""},
+	} {
+		if err := validateApplySessionPlatform(target.sessionID, target.platform); err != nil {
+			t.Fatalf("validate %q/%q: %v", target.sessionID, target.platform, err)
+		}
+	}
+}
+
 func TestSessionCreateRequestForLocalSpec(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nname: demo\n---\n# Demo\n"), 0o644); err != nil {

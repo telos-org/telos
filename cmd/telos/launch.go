@@ -49,6 +49,7 @@ func cmdLaunch(command, action string, args []string) {
 		contextFlagValue = cloudContextFlag(fs)
 	}
 	parseFlags(fs, args)
+	*sessionID = strings.TrimSpace(*sessionID)
 	contextOverride, err := cloudContextOverride(fs, *contextFlagValue)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -98,6 +99,12 @@ func cmdLaunch(command, action string, args []string) {
 			os.Exit(1)
 		}
 		platform = parsedPlatform
+	}
+	if command == "apply" {
+		if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	if command == "apply" && *sessionID != "" && isLocalApplyID(*sessionID) {
 		if !hasLocalSpec {
@@ -291,6 +298,26 @@ func launchSpecPlatform(specPath string) (string, error) {
 		return "", fmt.Errorf("%s: invalid platform '%s' (valid: cloud, local)", specPath, value)
 	}
 	return value, nil
+}
+
+func validateApplySessionPlatform(sessionID, platform string) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return nil
+	}
+	switch {
+	case isLocalApplyID(sessionID):
+		if platform != "local" {
+			return fmt.Errorf("local session %q requires a platform: local spec", sessionID)
+		}
+	case isCloudApplyID(sessionID):
+		if platform == "local" {
+			return fmt.Errorf("cloud session %q cannot apply a platform: local spec", sessionID)
+		}
+	default:
+		return fmt.Errorf("invalid session id %q", sessionID)
+	}
+	return nil
 }
 
 type launchMode string
