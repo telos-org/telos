@@ -53,10 +53,6 @@ telos plan SPEC.md --session SESSION_ID
 telos apply SPEC.md --session SESSION_ID
 ```
 
-Do not use parentage to infer task versus controller behavior. `run` creates a
-bounded task; `apply` creates or updates a controller. A parent session ID is
-lineage only.
-
 ## Observe acceptance
 
 The command returning a session ID means the work was accepted, not completed.

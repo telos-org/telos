@@ -1,23 +1,5 @@
-// Command telos is the public Telos CLI.
-//
-// Public commands:
-//
-//	telos plan SPEC.md [--session SESSION] [--json]
-//	telos push SPEC.md|SKILL_DIR [--scope SCOPE] [--version VERSION] [--json]
-//	telos apply SPEC.md [--session SESSION] [--json]
-//	telos run SPEC.md [--workspace DIR] [--model MODEL] [--thinking EFFORT]
-//	    [--until N|DURATION] [--max-cost-usd USD] [--json]
-//	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
-//	telos get SESSION [--output PATH]
-//	telos describe SESSION [--json]
-//	telos logs [-f] [--json|--raw] [--tail N|--all] [--context CONTEXT] SESSION
-//	telos delete SESSION [--json]
-//	telos pull PACKAGE [--output PATH]
-//	telos login [--endpoint URL]
-//	telos logout
-//	telos config [--context @handle]
-//	telos version
-//	telos --version
+// Command telos is the public Telos CLI. Run telos --help for its command
+// surface and telos COMMAND --help for current flags.
 package main
 
 import (
