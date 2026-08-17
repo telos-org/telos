@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"text/tabwriter"
 	"time"
 
 	"github.com/telos-org/telos/internal/cli"
@@ -16,11 +17,73 @@ type boolFlag interface {
 	IsBoolFlag() bool
 }
 
+func newCommandFlagSet(name, synopsis string) *flag.FlagSet {
+	fs := flag.NewFlagSet(name, flag.ExitOnError)
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "usage: %s\n", synopsis)
+		w := tabwriter.NewWriter(fs.Output(), 0, 4, 2, ' ', 0)
+		hasFlags := false
+		fs.VisitAll(func(option *flag.Flag) {
+			if !hasFlags {
+				fmt.Fprintln(fs.Output(), "\nflags:")
+				hasFlags = true
+			}
+			name := "--" + option.Name
+			if len(option.Name) == 1 {
+				name = "-" + option.Name
+			}
+			if kind := flagValueKind(option); kind != "" {
+				name += " " + kind
+			}
+			description := option.Usage
+			if visibleFlagDefault(option) {
+				description += " (default " + option.DefValue + ")"
+			}
+			fmt.Fprintf(w, "  %s\t%s\n", name, description)
+		})
+		if hasFlags {
+			_ = w.Flush()
+		}
+	}
+	return fs
+}
+
+func flagValueKind(option *flag.Flag) string {
+	if value, ok := option.Value.(boolFlag); ok && value.IsBoolFlag() {
+		return ""
+	}
+	getter, ok := option.Value.(flag.Getter)
+	if !ok {
+		return "value"
+	}
+	switch getter.Get().(type) {
+	case int:
+		return "int"
+	case float64:
+		return "float"
+	default:
+		return "string"
+	}
+}
+
+func visibleFlagDefault(option *flag.Flag) bool {
+	return option.DefValue != "" && option.DefValue != "0" && option.DefValue != "false"
+}
+
 func parseFlags(fs *flag.FlagSet, args []string) {
 	ordered := reorderInterspersedFlags(fs, args)
 	if err := fs.Parse(ordered); err != nil {
 		os.Exit(2)
 	}
+}
+
+func requireArgCount(fs *flag.FlagSet, count int, expected string) {
+	if fs.NArg() == count {
+		return
+	}
+	fmt.Fprintf(fs.Output(), "error: expected %s\n\n", expected)
+	fs.Usage()
+	os.Exit(2)
 }
 
 func reorderInterspersedFlags(fs *flag.FlagSet, args []string) []string {
@@ -57,6 +120,9 @@ func reorderInterspersedFlags(fs *flag.FlagSet, args []string) []string {
 }
 
 func flagIsBool(fs *flag.FlagSet, arg string) bool {
+	if isHelpArg(arg) {
+		return true
+	}
 	name := strings.TrimLeft(arg, "-")
 	if idx := strings.Index(name, "="); idx >= 0 {
 		name = name[:idx]

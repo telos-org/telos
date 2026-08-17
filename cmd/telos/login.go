@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -17,9 +16,10 @@ import (
 // -- login --------------------------------------------------------------------
 
 func cmdLogin(args []string) {
-	fs := flag.NewFlagSet("login", flag.ExitOnError)
+	fs := newCommandFlagSet("login", "telos login [flags]")
 	endpoint := fs.String("endpoint", cloud.DefaultAPIEndpoint, "API endpoint")
 	parseFlags(fs, args)
+	requireArgCount(fs, 0, "no positional arguments")
 
 	ep := cloud.NormalizeEndpoint(*endpoint)
 	cfg, err := config.LoadStoredConfig()

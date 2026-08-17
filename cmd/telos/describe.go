@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -14,7 +13,7 @@ import (
 // -- describe -----------------------------------------------------------------
 
 func cmdDescribe(args []string) {
-	fs := flag.NewFlagSet("describe", flag.ExitOnError)
+	fs := newCommandFlagSet("describe", "telos describe SESSION [flags]")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -24,10 +23,7 @@ func cmdDescribe(args []string) {
 		os.Exit(2)
 	}
 
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos describe SESSION [--json] [--context CONTEXT]")
-		os.Exit(1)
-	}
+	requireArgCount(fs, 1, "one SESSION")
 	sessionID := fs.Arg(0)
 	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -13,7 +12,7 @@ import (
 // -- delete -------------------------------------------------------------------
 
 func cmdDelete(args []string) {
-	fs := flag.NewFlagSet("delete", flag.ExitOnError)
+	fs := newCommandFlagSet("delete", "telos delete SESSION [flags]")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -23,10 +22,7 @@ func cmdDelete(args []string) {
 		os.Exit(2)
 	}
 
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos delete SESSION [--json] [--context CONTEXT]")
-		os.Exit(1)
-	}
+	requireArgCount(fs, 1, "one SESSION")
 	sessionID := fs.Arg(0)
 	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

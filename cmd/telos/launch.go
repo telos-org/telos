@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -28,8 +27,8 @@ func cmdApply(args []string) {
 }
 
 func cmdLaunch(command, action string, args []string) {
-	fs := flag.NewFlagSet(command, flag.ExitOnError)
-	workspace := fs.String("workspace", "", "Workspace directory")
+	fs := newCommandFlagSet(command, fmt.Sprintf("telos %s SPEC.md [flags]", command))
+	workspace := fs.String("workspace", "", "Workspace directory for local specs")
 	sessionIDValue := ""
 	sessionID := &sessionIDValue
 	if command == "apply" {
@@ -42,7 +41,7 @@ func cmdLaunch(command, action string, args []string) {
 	if command == "run" {
 		until = fs.String("until", "", "Run at most N review cycles or duration like 30m")
 	}
-	maxCostUSD := fs.Float64("max-cost-usd", 20.0, "Maximum cost in USD")
+	maxCostUSD := fs.Float64("max-cost-usd", 0, "Maximum local execution cost in USD; defaults to 20")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := ""
 	contextFlagValue := &contextValue
@@ -61,10 +60,7 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if fs.NArg() < 1 {
-		fmt.Fprintf(os.Stderr, "usage: telos %s SPEC.md [options]\n", command)
-		os.Exit(1)
-	}
+	requireArgCount(fs, 1, "one SPEC.md")
 	if command == "apply" && *sessionID != "" && *workspace != "" {
 		fmt.Fprintln(os.Stderr, "error: --workspace can only seed a new session; it cannot be used with --session")
 		os.Exit(1)

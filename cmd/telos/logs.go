@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net"
@@ -22,7 +21,7 @@ import (
 // -- logs ---------------------------------------------------------------------
 
 func cmdLogs(args []string) {
-	fs := flag.NewFlagSet("logs", flag.ExitOnError)
+	fs := newCommandFlagSet("logs", "telos logs SESSION [flags]")
 	follow := fs.Bool("f", false, "Follow logs")
 	jsonOutput := fs.Bool("json", false, "Print newline-delimited JSON events")
 	raw := fs.Bool("raw", false, "Print the raw transcript or evidence events")
@@ -36,17 +35,22 @@ func cmdLogs(args []string) {
 		os.Exit(2)
 	}
 
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--json|--raw] [--tail N|--all] [--context CONTEXT] SESSION")
-		os.Exit(1)
-	}
+	requireArgCount(fs, 1, "one SESSION")
 	if enabledFlagCount(*jsonOutput, *raw) > 1 {
 		fmt.Fprintln(os.Stderr, "error: --json and --raw are mutually exclusive")
-		os.Exit(1)
+		os.Exit(2)
+	}
+	if *all && flagNameSet(fs, "tail") {
+		fmt.Fprintln(os.Stderr, "error: --all and --tail are mutually exclusive")
+		os.Exit(2)
+	}
+	if *raw && (*all || flagNameSet(fs, "tail")) {
+		fmt.Fprintln(os.Stderr, "error: --raw cannot be combined with --all or --tail")
+		os.Exit(2)
 	}
 	if *tail < 1 && !*all {
 		fmt.Fprintln(os.Stderr, "error: --tail must be greater than zero")
-		os.Exit(1)
+		os.Exit(2)
 	}
 	sessionID := fs.Arg(0)
 	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {

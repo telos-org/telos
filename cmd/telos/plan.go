@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io"
 	"os"
@@ -42,7 +41,7 @@ type planSkillLock struct {
 }
 
 func cmdPlan(args []string) {
-	fs := flag.NewFlagSet("plan", flag.ExitOnError)
+	fs := newCommandFlagSet("plan", "telos plan SPEC.md [flags]")
 	sessionID := fs.String("session", "", "Managed session ID to compare")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
@@ -53,10 +52,7 @@ func cmdPlan(args []string) {
 		os.Exit(2)
 	}
 
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos plan SPEC.md [--session SESSION] [--json] [--context CONTEXT]")
-		os.Exit(1)
-	}
+	requireArgCount(fs, 1, "one SPEC.md")
 	specPath := resolveSpecPath(fs.Arg(0))
 	proposedSpec, err := os.ReadFile(specPath)
 	if err != nil {

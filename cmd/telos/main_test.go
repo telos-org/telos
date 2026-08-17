@@ -45,6 +45,36 @@ func TestReorderInterspersedFlags(t *testing.T) {
 	}
 }
 
+func TestCommandFlagUsageUsesPublicFlagSyntax(t *testing.T) {
+	fs := newCommandFlagSet("logs", "telos logs SESSION [flags]")
+	fs.Bool("f", false, "Follow logs")
+	fs.Bool("json", false, "Print JSON")
+	fs.String("context", "", "Cloud context")
+	fs.Int("tail", 50, "Recent rows")
+	var out bytes.Buffer
+	fs.SetOutput(&out)
+	fs.Usage()
+
+	text := out.String()
+	for _, want := range []string{
+		"usage: telos logs SESSION [flags]",
+		"--context string",
+		"-f",
+		"--json",
+		"--tail int",
+		"(default 50)",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("command usage missing %q:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{"Usage of logs:", "\n  -context string", "\n  -json"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("command usage should omit %q:\n%s", notWant, text)
+		}
+	}
+}
+
 func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	var out bytes.Buffer
 	usage(&out)

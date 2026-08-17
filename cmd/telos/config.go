@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,17 +12,14 @@ import (
 )
 
 func cmdConfig(args []string) {
-	fs := flag.NewFlagSet("config", flag.ExitOnError)
+	fs := newCommandFlagSet("config", "telos config [flags]")
 	contextValue := fs.String(
 		"context",
 		"",
 		"Cloud context as @handle, organization ID, or personal",
 	)
 	parseFlags(fs, args)
-	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: telos config [--context @handle]")
-		os.Exit(2)
-	}
+	requireArgCount(fs, 0, "no positional arguments")
 
 	if flagNameSet(fs, "context") {
 		for _, name := range []string{config.APIEndpointEnv, config.AuthTokenEnv} {

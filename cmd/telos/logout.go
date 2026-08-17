@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 
@@ -12,8 +11,9 @@ import (
 // -- logout -------------------------------------------------------------------
 
 func cmdLogout(args []string) {
-	fs := flag.NewFlagSet("logout", flag.ExitOnError)
+	fs := newCommandFlagSet("logout", "telos logout")
 	parseFlags(fs, args)
+	requireArgCount(fs, 0, "no positional arguments")
 
 	effective, err := config.LoadConfig()
 	if err != nil {

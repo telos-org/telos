@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"os"
 	"text/tabwriter"
@@ -15,7 +14,7 @@ import (
 // -- list ---------------------------------------------------------------------
 
 func cmdList(args []string) {
-	fs := flag.NewFlagSet("list", flag.ExitOnError)
+	fs := newCommandFlagSet("list", "telos list [flags]")
 	limit := fs.Int("limit", 0, "Limit results")
 	wide := fs.Bool("wide", false, "Wide output")
 	localOnly := fs.Bool("local", false, "Local sessions only")
@@ -23,6 +22,15 @@ func cmdList(args []string) {
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
+	requireArgCount(fs, 0, "no positional arguments")
+	if *localOnly && *cloudOnly {
+		fmt.Fprintln(os.Stderr, "error: --local and --cloud are mutually exclusive")
+		os.Exit(2)
+	}
+	if *limit < 0 {
+		fmt.Fprintln(os.Stderr, "error: --limit must be non-negative")
+		os.Exit(2)
+	}
 	contextOverride, err := cloudContextOverride(fs, *contextValue)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

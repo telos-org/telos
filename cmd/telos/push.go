@@ -1,7 +1,6 @@
 package main
 
 import (
-	"flag"
 	"fmt"
 	"io/fs"
 	"os"
@@ -35,16 +34,13 @@ var packageSemverRE = regexp.MustCompile(
 var packageVersionNumberRE = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
 
 func cmdPush(args []string) {
-	fs := flag.NewFlagSet("push", flag.ExitOnError)
+	fs := newCommandFlagSet("push", "telos push SPEC.md|SKILL_DIR [flags]")
 	scope := fs.String("scope", "", "Package scope")
 	version := fs.String("version", "", "Version override for skill or package publishing")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
-	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos push SPEC.md|SKILL_DIR [--scope SCOPE] [--version VERSION] [--json] [--context CONTEXT]")
-		os.Exit(1)
-	}
+	requireArgCount(fs, 1, "one SPEC.md or SKILL_DIR")
 	contextOverride, err := cloudContextOverride(fs, *contextValue)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
