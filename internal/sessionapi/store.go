@@ -762,9 +762,7 @@ func (fs *FileStore) List() ([]Session, error) {
 }
 
 // ListRootWorkerSessions returns the runnable roots needed by the cloud worker
-// supervisor. It also closes terminal finalization crash gaps for sessions
-// that will not be relaunched, including child tasks and stopped roots.
-// Runnable roots are still returned when an unrelated repair fails.
+// supervisor.
 func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
@@ -774,7 +772,6 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 		return nil, err
 	}
 	sessions := make([]Session, 0)
-	var repairErrs []error
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -783,23 +780,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 		if err != nil {
 			continue
 		}
-		sessionDir := fs.sessionDir(entry.Name())
 		rootController := isTopLevelManifest(manifest) && manifest.SessionKind == KindController
-		if !rootController || manifest.IsStopped() {
-			for i := range manifest.Epochs {
-				if !epochNeedsFinalization(&manifest.Epochs[i]) {
-					continue
-				}
-				if _, err := repairEpochFinalization(sessionDir); err != nil {
-					repairErrs = append(repairErrs, fmt.Errorf(
-						"repair session %s finalization: %w",
-						manifest.SessionID,
-						err,
-					))
-				}
-				break
-			}
-		}
 		if !rootController {
 			continue
 		}
@@ -811,6 +792,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 			result = epoch.Result
 		}
 		kind := manifest.SessionKind
+		sessionDir := fs.sessionDir(entry.Name())
 		sessions = append(sessions, Session{
 			SessionID:       manifest.SessionID,
 			SessionKind:     &kind,
@@ -819,7 +801,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 			Result:          result,
 		})
 	}
-	return sessions, errors.Join(repairErrs...)
+	return sessions, nil
 }
 
 // Get returns a single session by ID.
@@ -852,10 +834,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 
 	s, _ := fs.deriveSession(id, m)
 	if m.IsStopped() {
-		if _, repairErr := repairEpochFinalization(fs.sessionDir(id)); repairErr != nil {
-			return nil, fmt.Errorf("repair stopped epoch finalization: %w", repairErr)
-		}
-		return fs.deriveSession(id, m)
+		return s, nil
 	}
 	if s.Status.IsTerminal() && s.Status != StatusStale && m.SessionKind != KindController {
 		return s, nil
@@ -894,9 +873,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 			if open.RoundCount == nil {
 				open.RoundCount = &roundCount
 			}
-			if epochSupportsFinalization(open) {
-				return nil
-			}
+			return nil
 		}
 
 		epoch := NewEpoch(m, len(m.Epochs)+1, now, nil)
@@ -914,9 +891,6 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		return nil, err
 	}
 	terminateRunner(runner)
-	if _, repairErr := repairEpochFinalization(fs.sessionDir(id)); repairErr != nil {
-		return nil, fmt.Errorf("record stopped epoch finalization: %w", repairErr)
-	}
 	m, err = ReadManifest(fs.manifestPath(id))
 	if err != nil {
 		return nil, err
@@ -969,14 +943,6 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 		}
 		return nil, err
 	}
-	if _, err := repairEpochFinalization(fs.sessionDir(id)); err != nil {
-		return nil, fmt.Errorf("repair epoch finalization: %w", err)
-	}
-	m, err = ReadManifest(fs.manifestPath(id))
-	if err != nil {
-		return nil, err
-	}
-
 	var events []SessionEvent
 	for _, spec := range m.Specs {
 		if spec.EvidencePath == nil || *spec.EvidencePath == "" {
@@ -1050,13 +1016,9 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 	dir := fs.sessionDir(id)
 
 	specs := make([]SessionSpec, len(m.Specs))
-	var primarySummary *evidenceSummary
 	for i, ms := range m.Specs {
 		summary, _ := readEvidenceSummary(ms.EvidencePath)
 		specs[i] = deriveSpec(ms, summary)
-		if i == 0 {
-			primarySummary = summary
-		}
 	}
 
 	epochs := make([]map[string]any, len(m.Epochs))
@@ -1095,7 +1057,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		Epochs:                epochs,
 		CurrentSpecVersion:    m.CurrentSpecVersion,
 		SpecVersions:          cloneSpecVersions(m.SpecVersions),
-		Reconciliation:        deriveReconciliation(m, primarySummary),
+		Reconciliation:        deriveReconciliation(m),
 	}
 
 	if s.Config == nil {
@@ -1162,7 +1124,7 @@ func deriveSpec(ms ManifestSpec, summary *evidenceSummary) SessionSpec {
 	return ss
 }
 
-func deriveReconciliation(m *Manifest, summary *evidenceSummary) *SessionReconciliation {
+func deriveReconciliation(m *Manifest) *SessionReconciliation {
 	if m == nil || m.CurrentSpecVersion == nil {
 		return nil
 	}
@@ -1171,20 +1133,25 @@ func deriveReconciliation(m *Manifest, summary *evidenceSummary) *SessionReconci
 		PackageDigest: ptrOr(m.PackageDigest, ""),
 		State:         ReconciliationPending,
 	}
-	if summary != nil {
-		if finalized, ok := summary.Finalizations[version]; ok {
-			latestEpochID := 0
-			for i := range m.Epochs {
-				epoch := &m.Epochs[i]
-				if ptrOr(epoch.SpecVersion, 0) == version && epoch.ID > latestEpochID {
-					latestEpochID = epoch.ID
-				}
-			}
-			if finalized.EpochID >= latestEpochID {
-				reconciliation.State = finalized.State
-				reconciliation.Error = finalized.Error
-			}
+	for i := len(m.Epochs) - 1; i >= 0; i-- {
+		epoch := &m.Epochs[i]
+		if ptrOr(epoch.SpecVersion, 0) != version ||
+			ptrOr(epoch.PackageDigest, "") != reconciliation.PackageDigest {
+			continue
 		}
+		if epoch.FinishedAt == nil || epoch.Result == nil {
+			return reconciliation
+		}
+		if *epoch.Result == "completed" &&
+			ptrOr(epoch.CompletionReason, "") == "verifier_conceded" &&
+			ptrOr(epoch.VerifierConceded, false) &&
+			ptrOr(epoch.CheckpointSaved, false) {
+			reconciliation.State = ReconciliationAccepted
+			return reconciliation
+		}
+		reconciliation.State = ReconciliationFailed
+		reconciliation.Error = ptrOr(epoch.Error, "")
+		return reconciliation
 	}
 	return reconciliation
 }
@@ -1440,13 +1407,6 @@ type evidenceSummary struct {
 	VerifierConceded       *bool
 	CurrentRound           *int
 	CurrentRole            *string
-	Finalizations          map[int]epochFinalization
-}
-
-type epochFinalization struct {
-	EpochID int
-	State   ReconciliationState
-	Error   string
 }
 
 func readEvidenceSummary(path *string) (*evidenceSummary, error) {
@@ -1461,7 +1421,6 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 	var summary *evidenceSummary
 	var activeRound *int
 	var activeRole *string
-	finalizations := make(map[int]epochFinalization)
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -1512,43 +1471,13 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 				CompletionReason:       stringPtrFromAny(dataField["completion_reason"]),
 				VerifierConceded:       boolPtrFromAny(dataField["verifier_conceded"]),
 			}
-		case "epoch_finalized":
-			version := numberAsInt(dataField["spec_version"])
-			epochID := numberAsInt(dataField["epoch_id"])
-			if version == nil || epochID == nil {
-				continue
-			}
-			finalized := epochFinalization{
-				EpochID: *epochID,
-				State:   reconciliationState(dataField),
-				Error:   ptrOr(stringPtrFromAny(dataField["error"]), ""),
-			}
-			if previous, ok := finalizations[*version]; !ok || finalized.EpochID > previous.EpochID {
-				finalizations[*version] = finalized
-			}
 		}
-	}
-	if summary == nil && len(finalizations) > 0 {
-		summary = &evidenceSummary{}
 	}
 	if summary != nil {
 		summary.CurrentRound = activeRound
 		summary.CurrentRole = activeRole
-		summary.Finalizations = finalizations
 	}
 	return summary, nil
-}
-
-func reconciliationState(data map[string]any) ReconciliationState {
-	result, _ := data["result"].(string)
-	completionReason, _ := data["completion_reason"].(string)
-	verifierConceded, _ := data["verifier_conceded"].(bool)
-	checkpointSaved, _ := data["checkpoint_saved"].(bool)
-	if result == "completed" && completionReason == "verifier_conceded" &&
-		verifierConceded && checkpointSaved {
-		return ReconciliationAccepted
-	}
-	return ReconciliationFailed
 }
 
 func evidenceRoundCount(raw map[string]any, data map[string]any) *int {
