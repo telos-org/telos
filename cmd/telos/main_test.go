@@ -54,7 +54,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"--help",
 		"apply SPEC.md      Create or update a durable session from a spec",
 		"get SESSION        Download a session's package",
-		"delete SESSION     Delete a session (local history is preserved)",
+		"delete SESSION     Delete a session",
 		"pull PACKAGE       Download a registry package",
 		"version            Show version",
 		"--version",

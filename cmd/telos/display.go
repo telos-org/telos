@@ -2,9 +2,6 @@ package main
 
 import (
 	"fmt"
-	"net/url"
-	"path/filepath"
-	"runtime"
 	"strings"
 
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -94,21 +91,6 @@ func epochValueEmpty(value any) bool {
 		return strings.TrimSpace(text) == ""
 	}
 	return false
-}
-
-func fileURI(path string) string {
-	if path == "" {
-		return ""
-	}
-	abs, err := filepath.Abs(path)
-	if err != nil {
-		abs = path
-	}
-	if runtime.GOOS == "windows" {
-		abs = "/" + strings.ReplaceAll(abs, `\`, `/`)
-	}
-	u := url.URL{Scheme: "file", Path: abs}
-	return u.String()
 }
 
 func formatDetailCost(value *float64) string {

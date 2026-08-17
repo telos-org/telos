@@ -96,22 +96,49 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 	configureCloudTest(t, srv.URL)
 
 	out := captureStdout(t, func() {
-		cmdList([]string{"--wide"})
+		cmdList(nil)
 	})
 	for _, want := range []string{
 		"NAME",
-		"PACKAGE",
+		"STATUS",
+		"SESSION",
 		"auth",
 		"ready",
-		"@telos/auth:1.0.0",
 		"sess_123",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("list output missing %q:\n%s", want, out)
 		}
 	}
-	if strings.Contains(out, "DEPLOYMENT") || !strings.Contains(out, "SESSION") {
-		t.Fatalf("list output should be session-shaped:\n%s", out)
+	for _, notWant := range []string{"TARGET", "REVISION", "SERVICE", "PACKAGE", "DASHBOARD"} {
+		if strings.Contains(out, notWant) {
+			t.Fatalf("default list output should omit %q:\n%s", notWant, out)
+		}
+	}
+
+	wideOut := captureStdout(t, func() {
+		cmdList([]string{"--wide"})
+	})
+	for _, want := range []string{
+		"NAME",
+		"STATUS",
+		"REVISION",
+		"SERVICE",
+		"SESSION",
+		"auth",
+		"ready",
+		"sha256:abc",
+		"https://auth.example.com",
+		"sess_123",
+	} {
+		if !strings.Contains(wideOut, want) {
+			t.Fatalf("wide list output missing %q:\n%s", want, wideOut)
+		}
+	}
+	for _, notWant := range []string{"TARGET", "PACKAGE", "DASHBOARD", "@telos/auth:1.0.0"} {
+		if strings.Contains(wideOut, notWant) {
+			t.Fatalf("wide list output should omit %q:\n%s", notWant, wideOut)
+		}
 	}
 }
 
@@ -238,6 +265,45 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 	}
 }
 
+func TestPrintCloudSessionReceiptShowsNextUsefulAction(t *testing.T) {
+	serviceURL := "https://auth.example.com"
+	dashboardURL := "https://dashboard.example.com"
+	session := &cloud.SessionRecord{
+		ID:            "sess_123",
+		Name:          "auth",
+		State:         "deploying",
+		Status:        "working",
+		PackageRef:    "@telos/auth:1.0.0",
+		PackageDigest: "sha256:abc",
+		AgentModel:    "provider/model",
+		AgentThinking: "high",
+		ServiceURL:    &serviceURL,
+		DashboardURL:  &dashboardURL,
+	}
+
+	var out bytes.Buffer
+	printCloudSessionReceiptForContext(&out, "created", session, "@personal")
+	text := out.String()
+	for _, want := range []string{
+		"created auth",
+		"Status    working",
+		"Session   sess_123",
+		"Revision  sha256:abc",
+		"Context   @personal",
+		"Service   https://auth.example.com",
+		"Logs      telos logs -f --context @personal sess_123",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("cloud session receipt missing %q:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{"Name", "Target", "Package", "Digest", "Model", "Thinking", "Dashboard"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("cloud session receipt should omit %q:\n%s", notWant, text)
+		}
+	}
+}
+
 func TestPrintCloudSessionDescriptionOmitsUnavailableSurfaces(t *testing.T) {
 	dashboardURL := "https://dashboard.example.com"
 	session := cloud.SessionRecord{
@@ -331,14 +397,16 @@ func TestPrintCloudSessionDeleteReceiptUsesSessionSummary(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"deleted auth",
-		"Name      auth",
-		"Target    cloud",
 		"Status    deleted",
-		"Package   @telos/auth:1.0.0",
 		"Session   sess_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("cloud session stop receipt missing %q:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{"Name", "Target", "Package"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("cloud session delete receipt should omit %q:\n%s", notWant, text)
 		}
 	}
 }
@@ -467,18 +535,6 @@ func captureStdout(t *testing.T, fn func()) string {
 		t.Fatal(err)
 	}
 	return string(out)
-}
-
-func TestSessionTurnShowsActiveRoleAndRound(t *testing.T) {
-	round := 3
-	role := "verifier"
-	got := sessionTurn(sessionapi.Session{CurrentRound: &round, CurrentRole: &role})
-	if got != "evaluation#3" {
-		t.Fatalf("session turn: got %q", got)
-	}
-	if got := sessionTurn(sessionapi.Session{}); got != "-" {
-		t.Fatalf("empty session turn: got %q", got)
-	}
 }
 
 func TestSessionDisplayStatusDerivesHumanState(t *testing.T) {
@@ -844,14 +900,17 @@ func TestPrintSessionReceiptUsesNormalizedSummary(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"updated gitea",
-		"Name      gitea",
-		"Target    cloud",
 		"Status    idle",
-		"Cost      $1.1907",
 		"Session   sess_123",
+		"Cost      $1.1907",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("receipt missing %q:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{"Name", "Target"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("receipt should omit %q:\n%s", notWant, text)
 		}
 	}
 }
@@ -872,14 +931,17 @@ func TestPrintLocalSessionDeleteReceiptUsesSessionSummary(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"deleted gitea (history preserved)",
-		"Name      gitea",
-		"Target    cloud",
 		"Status    stopped",
-		"Cost      $1.1907",
 		"Session   sess_123",
+		"Cost      $1.1907",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("delete receipt missing %q:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{"Name", "Target"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("delete receipt should omit %q:\n%s", notWant, text)
 		}
 	}
 }
@@ -896,13 +958,16 @@ func TestPrintLocalSessionDeleteReceiptUsesSessionIDForUnnamedSession(t *testing
 	text := out.String()
 	for _, want := range []string{
 		"deleted sess_123 (history preserved)",
-		"Name      -",
-		"Target    local",
 		"Status    stopped",
 		"Session   sess_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("delete receipt missing %q:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{"Name", "Target", "Cost"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("delete receipt should omit %q:\n%s", notWant, text)
 		}
 	}
 }

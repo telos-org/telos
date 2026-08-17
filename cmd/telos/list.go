@@ -86,7 +86,7 @@ func cmdList(args []string) {
 	if effectiveWide {
 		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPARENT\tCOST\tSESSION")
 	} else {
-		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tCOST\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
 	}
 	for _, sess := range visible {
 		row := displayRow(sess)
@@ -101,11 +101,9 @@ func cmdList(args []string) {
 			)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\n",
 			row.Name,
-			row.Target,
 			row.Status,
-			row.Cost,
 			row.Session,
 		)
 	}
@@ -222,30 +220,25 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if wide {
-		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPACKAGE\tSERVICE\tDASHBOARD\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tREVISION\tSERVICE\tSESSION")
 	} else {
-		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tURL\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
 	}
 	for _, session := range cloudSessions {
 		serviceURL := optionalSessionString(session.ServiceURL)
-		dashboardURL := optionalSessionString(session.DashboardURL)
 		if wide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 				session.Name,
-				"cloud",
 				cloudSessionDisplayStatus(session),
-				session.PackageRef,
+				session.PackageDigest,
 				serviceURL,
-				dashboardURL,
 				session.ID,
 			)
 			continue
 		}
-		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+		fmt.Fprintf(w, "%s\t%s\t%s\n",
 			session.Name,
-			"cloud",
 			cloudSessionDisplayStatus(session),
-			serviceURL,
 			session.ID,
 		)
 	}
@@ -273,13 +266,6 @@ func sessionName(sess sessionapi.Session) string {
 	return "-"
 }
 
-func sessionLineage(sess sessionapi.Session) string {
-	if isTopLevelSession(sess) {
-		return "root"
-	}
-	return "child"
-}
-
 func sessionParent(sess sessionapi.Session) string {
 	if sess.ParentSessionID != nil && *sess.ParentSessionID != "" {
 		return *sess.ParentSessionID
@@ -296,32 +282,6 @@ func sessionCost(sess sessionapi.Session) string {
 		return "-"
 	}
 	return fmt.Sprintf("$%.2f", *sess.TotalCostUSD)
-}
-
-func sessionTurn(sess sessionapi.Session) string {
-	if sess.CurrentRound == nil || sess.CurrentRole == nil || *sess.CurrentRole == "" {
-		return "-"
-	}
-	return fmt.Sprintf("%s#%d", displayRole(*sess.CurrentRole), *sess.CurrentRound)
-}
-
-// displayRole maps internal game roles to the terms used everywhere else in
-// user-facing output.
-func displayRole(role string) string {
-	switch role {
-	case "prover":
-		return "implementation"
-	case "verifier":
-		return "evaluation"
-	}
-	return role
-}
-
-func sessionArtifact(sess sessionapi.Session) string {
-	if url := sessionServiceURL(sess); url != "" {
-		return url
-	}
-	return "-"
 }
 
 func sessionServiceURL(sess sessionapi.Session) string {

@@ -482,11 +482,11 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	name := sessionName(*session)
 	fmt.Fprintf(out, "%s %s\n\n", operation, name)
 	row := displayRow(*session)
-	printSummaryField(out, "Name", row.Name)
-	printSummaryField(out, "Target", row.Target)
 	printSummaryField(out, "Status", row.Status)
-	printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	printSummaryField(out, "Session", row.Session)
+	if session.TotalCostUSD != nil {
+		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
+	}
 }
 
 func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.SessionRecord) {
@@ -500,28 +500,20 @@ func printCloudSessionReceiptForContext(
 	contextName string,
 ) {
 	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
-	printSummaryField(out, "Name", session.Name)
-	printSummaryField(out, "Target", "cloud")
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
-	printSummaryField(out, "Package", session.PackageRef)
-	printSummaryField(out, "Digest", session.PackageDigest)
-	printSummaryField(out, "Model", session.AgentModel)
-	printSummaryField(out, "Thinking", session.AgentThinking)
 	printSummaryField(out, "Session", session.ID)
+	printSummaryField(out, "Revision", session.PackageDigest)
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
-		printSummaryField(
-			out,
-			"Logs",
-			fmt.Sprintf("telos logs --context %s %s", contextName, session.ID),
-		)
 	}
-	if session.ServiceURL != nil {
-		printSummaryField(out, "Service URL", *session.ServiceURL)
+	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
+		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
 	}
-	if session.DashboardURL != nil {
-		printSummaryField(out, "Dashboard URL", *session.DashboardURL)
+	logsCommand := fmt.Sprintf("telos logs -f %s", session.ID)
+	if contextName != "" {
+		logsCommand = fmt.Sprintf("telos logs -f --context %s %s", contextName, session.ID)
 	}
+	printSummaryField(out, "Logs", logsCommand)
 }
 
 func sessionKindForCommand(command string) sessionapi.SessionKind {

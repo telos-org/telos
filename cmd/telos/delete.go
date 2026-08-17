@@ -129,10 +129,7 @@ func printCloudSessionDeleteReceiptForContext(
 	default:
 		fmt.Fprintf(out, "delete requested for %s\n\n", session.Name)
 	}
-	printSummaryField(out, "Name", session.Name)
-	printSummaryField(out, "Target", "cloud")
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
-	printSummaryField(out, "Package", session.PackageRef)
 	printSummaryField(out, "Session", session.ID)
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
@@ -142,11 +139,11 @@ func printCloudSessionDeleteReceiptForContext(
 func printLocalSessionDeleteReceipt(out io.Writer, session sessionapi.Session) {
 	fmt.Fprintf(out, "deleted %s (history preserved)\n\n", deletedSessionName(session))
 	row := displayRow(session)
-	printSummaryField(out, "Name", row.Name)
-	printSummaryField(out, "Target", row.Target)
 	printSummaryField(out, "Status", row.Status)
-	printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	printSummaryField(out, "Session", row.Session)
+	if session.TotalCostUSD != nil {
+		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
+	}
 }
 
 func deletedSessionName(session sessionapi.Session) string {
