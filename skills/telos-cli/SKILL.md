@@ -53,11 +53,12 @@ Follow the returned session until the exact revision is Ready:
 
 ```bash
 telos describe SESSION_ID
-telos logs SESSION_ID
+telos logs -f SESSION_ID
 ```
 
-Ready means the verifier accepted the current running revision. Show the user
-that evidence.
+Ready means the exact revision passed verification and is running. Show the
+user that evidence. Poll `describe` instead when a stream is unnecessary, and
+use `--json` when another program needs structured state.
 
 ## Run bounded work
 
@@ -79,12 +80,13 @@ declarative subgoal. Inspect it with the same `describe` and `logs` commands.
   may spend resources. Confirm the target and authorization first.
 - Never guess a session, organization, package version, or deployment target.
 - Package versions are immutable. Publish a new version for changed bytes.
-- Do not report completion until the implementation agent finishes and the
-  verifier accepts the exact current revision.
+- Do not report completion until the observed session state confirms acceptance
+  of the exact current revision. For managed Goals, require `ready` and probe
+  public behavior when the contract exposes it.
 - Do not expose tokens, runtime allocation IDs, provider details, or other
   control-plane internals in user-facing artifacts.
 
 ## Handoff
 
-Report the spec, target, session ID, commands run, observed state, and verifier
-evidence. Say plainly what was planned, published, launched, updated, or deleted.
+Report the spec, target, session ID, commands run, observed state, and evidence.
+Say plainly what was planned, published, launched, updated, or deleted.

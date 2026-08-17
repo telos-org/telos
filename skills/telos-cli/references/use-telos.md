@@ -47,8 +47,8 @@ telos describe SESSION_ID
 telos logs SESSION_ID
 ```
 
-Ready means the verifier accepted the exact running revision.
-Your coding agent follows the session and returns the evidence.
+Ready means the exact revision passed verification and is running. Your coding
+agent follows the session and returns the evidence.
 
 ## Local runs
 

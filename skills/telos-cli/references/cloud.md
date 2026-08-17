@@ -23,10 +23,7 @@ telos apply SPEC.md
 ```
 
 `apply` publishes the exact package and creates the managed deployment. Record
-the returned package ref, digest, and session ID. New deployments use the
-platform's current default runtime unless the control plane explicitly pins a
-different release; existing deployments retain their stored runtime version
-and digest.
+the returned revision digest and session ID.
 
 Inspect Cloud state with:
 
@@ -36,11 +33,10 @@ telos describe SESSION_ID
 telos logs SESSION_ID
 ```
 
-Cloud readiness is a projection of telosd reconciliation. A deployment becomes
-`ready` only after the runtime has reconciled the matching package digest and
-the verifier has accepted it. Do not interpret allocation success, an HTTP
-process starting, or stale events as Goal acceptance. `Ready` is revision
-scoped: it confirms the current package, not a future drift check or repair.
+A deployment becomes `ready` only after the matching revision has been
+reconciled and accepted. Do not interpret allocation success, an HTTP process
+starting, or stale events as Goal acceptance. `Ready` is revision scoped: it
+confirms the current package, not a future drift check or repair.
 
 For an agent-readable acceptance check:
 

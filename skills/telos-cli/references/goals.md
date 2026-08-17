@@ -67,7 +67,7 @@ telos describe SESSION_ID
 telos logs SESSION_ID
 ```
 
-Treat implementation completion plus verifier acceptance as the result for the
-current revision. For a managed Goal, require Cloud to report `ready`. For a
-service, also probe its public behavior. Tests or logs do not substitute for
-the live contract they claim to verify.
+Require the observed session state to confirm acceptance of the current
+revision. For a managed Goal, require Cloud to report `ready`. For a service,
+also probe its public behavior. Tests or logs do not substitute for the live
+contract they claim to verify.

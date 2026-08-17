@@ -26,8 +26,8 @@ skills:
   - "@scope/skill-name:0.1.0"
 ```
 
-A trailing `*` makes the skill a required verifier rubric. Use it only when
-passing that rubric is part of the contract.
+A trailing `*` makes passing the skill's rubric required. Use it only when that
+rubric is part of the contract.
 
 Pull an immutable package for inspection or reuse:
 

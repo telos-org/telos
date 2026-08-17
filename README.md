@@ -22,8 +22,8 @@ Give your coding agent an outcome:
 
 > Use Telos for this Goal: &lt;what should remain true&gt;. Install and sign in if
 > needed. Draft the smallest verifiable `SPEC.md`, then show me `telos plan`.
-> After I approve, run `telos apply` and return the verifier evidence when it
-> reaches Ready.
+> After I approve, run `telos apply` and return the evidence when it reaches
+> Ready.
 
 ## Specification
 
@@ -53,8 +53,8 @@ telos logs SESSION_ID
 ```
 
 `plan` previews the contract without changing the Goal or target state. `apply`
-creates or updates a persistent Goal in Telos Cloud. Ready means the verifier
-accepted the exact running revision.
+creates or updates a persistent Goal in Telos Cloud. Ready means the exact
+revision passed verification and is running.
 
 Read the [Telos documentation](https://usetelos.ai/docs) for the complete
 workflow.
