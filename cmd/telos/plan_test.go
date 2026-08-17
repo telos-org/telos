@@ -160,8 +160,7 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 		Spec    map[string]any `json:"spec"`
 		Session map[string]any `json:"session"`
 		Target  struct {
-			WillCreate bool `json:"will_create_session"`
-			WillUpdate bool `json:"will_update_session"`
+			Operation string `json:"operation"`
 		} `json:"target"`
 		Change struct {
 			Current  planSpecState `json:"current"`
@@ -171,7 +170,7 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &plan); err != nil {
 		t.Fatal(err)
 	}
-	if plan.Target.WillCreate || !plan.Target.WillUpdate {
+	if plan.Target.Operation != "update" {
 		t.Fatalf("target: got %+v", plan.Target)
 	}
 	if _, ok := plan.Spec["lineage"]; ok {
@@ -191,8 +190,13 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	target := raw["target"].(map[string]any)
-	if _, ok := target["will_mutate"]; ok {
-		t.Fatalf("will_mutate should be omitted: %#v", target)
+	for _, key := range []string{"will_mutate", "will_create_session", "will_update_session"} {
+		if _, ok := target[key]; ok {
+			t.Fatalf("redundant target field %q should be omitted: %#v", key, target)
+		}
+	}
+	if _, ok := raw["user"]; ok {
+		t.Fatalf("plan should omit synthetic user metadata: %#v", raw["user"])
 	}
 	if plan.Change.Current.Version != "1.2.3" || plan.Change.Proposed.Version != "1.2.3" {
 		t.Fatalf("versions: current=%q proposed=%q", plan.Change.Current.Version, plan.Change.Proposed.Version)

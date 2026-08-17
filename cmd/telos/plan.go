@@ -89,12 +89,6 @@ func cmdPlan(args []string) {
 	}
 	targetMode := "local"
 	targetContext := ""
-	willCreateSession := comparison == nil
-	userScope := map[string]interface{}{
-		"status": "local",
-		"label":  "local workspace",
-		"detail": "no cloud auth required",
-	}
 	if platform != "local" {
 		targetMode = "cloud"
 		cfg, err := config.LoadConfig()
@@ -109,12 +103,6 @@ func cmdPlan(args []string) {
 		if targetContext == "" {
 			targetContext = "personal"
 		}
-		userScope = map[string]interface{}{
-			"status":  "missing",
-			"label":   "not logged in",
-			"detail":  "run `telos login` before `telos apply`",
-			"context": targetContext,
-		}
 		if cfg.AuthToken != "" {
 			control, err := cloud.ControlClientForContext(contextOverride)
 			if err != nil {
@@ -122,18 +110,15 @@ func cmdPlan(args []string) {
 				os.Exit(1)
 			}
 			targetContext = resolvedCloudContext(control)
-			userScope = map[string]interface{}{
-				"status":  "configured",
-				"label":   "cloud control plane",
-				"detail":  "effective cloud credentials",
-				"context": targetContext,
-			}
 		}
 	}
+	targetOperation := "create"
+	if comparison != nil {
+		targetOperation = "update"
+	}
 	targetScope := map[string]interface{}{
-		"mode":                targetMode,
-		"will_create_session": willCreateSession,
-		"will_update_session": comparison != nil,
+		"mode":      targetMode,
+		"operation": targetOperation,
 	}
 	if targetContext != "" {
 		targetScope["context"] = targetContext
@@ -154,7 +139,6 @@ func cmdPlan(args []string) {
 			"interval_seconds": compiled.Environment.IntervalSeconds,
 		},
 		"target": targetScope,
-		"user":   userScope,
 	}
 	if comparison != nil {
 		plan["change"] = map[string]interface{}{
