@@ -20,7 +20,10 @@ real blocker.
 
 - Operate against the real artifact and runtime, not an imagined system.
 - Respect the session objective and mechanism described in the spec body.
-- Prefer incremental, inspectable changes over large opaque jumps.
+- Prefer the smallest complete solution that satisfies the goal. Keep each
+  change inspectable.
+- Do not stop after the first useful step. Continue until the goal holds,
+  relevant checks pass, or a concrete external blocker prevents progress.
 - Use skills deliberately when the session points you to them.
 
 ## Design for independent review

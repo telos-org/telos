@@ -413,6 +413,14 @@ func TestRenderProverUsesOperatingPosture(t *testing.T) {
 	if !strings.Contains(task, "continue from the append-only transcript") {
 		t.Error("prover prompt should describe continuation through transcript/workspace")
 	}
+	if !strings.Contains(task, "smallest complete solution") ||
+		!strings.Contains(task, "continue while solvable gaps remain") {
+		t.Error("prover prompt should require a complete outcome")
+	}
+	if strings.Contains(task, "smallest change that improves") ||
+		strings.Contains(task, "Prefer incremental, inspectable changes") {
+		t.Error("prover prompt should not encourage partial turns")
+	}
 }
 
 func TestRenderWithSkillsRoster(t *testing.T) {
@@ -620,6 +628,9 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 		if strings.Contains(task, `phase=`) || strings.Contains(task, `timestamp=`) {
 			t.Fatalf("progress guidance should not require model-owned metadata:\n%s", task)
 		}
+	}
+	if !strings.Contains(verifierTask, "do not stop after the first passing check or the first blocker") {
+		t.Fatal("evaluation prompt should require a complete bounded review")
 	}
 }
 
