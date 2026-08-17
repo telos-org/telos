@@ -17,18 +17,10 @@ import (
 
 // PiExecutor runs Pi as one PVG agent turn on the given LocalPlatform.
 type PiExecutor struct {
-	Platform  *platform.LocalPlatform
-	Model     string
-	Thinking  string
-	Timeout   int
-	Generator RoleConfig
-	Verifier  RoleConfig
-}
-
-// RoleConfig optionally overrides the shared model configuration for one PVG role.
-type RoleConfig struct {
+	Platform *platform.LocalPlatform
 	Model    string
 	Thinking string
+	Timeout  int
 }
 
 const piEnvPromptMaxBytes = 256 * 1024
@@ -46,35 +38,10 @@ func NewPiExecutor(p *platform.LocalPlatform, model, thinking string, timeout in
 	}
 }
 
-// WithRoleConfig sets optional generator and verifier overrides.
-func (pe *PiExecutor) WithRoleConfig(generator, verifier RoleConfig) *PiExecutor {
-	pe.Generator = generator
-	pe.Verifier = verifier
-	return pe
-}
-
-func (pe *PiExecutor) configForRole(role string) (string, string) {
-	config := RoleConfig{}
-	if role == "prover" {
-		config = pe.Generator
-	} else if role == "verifier" {
-		config = pe.Verifier
-	}
-	model := config.Model
-	if model == "" {
-		model = pe.Model
-	}
-	thinking := config.Thinking
-	if thinking == "" {
-		thinking = pe.Thinking
-	}
-	return model, thinking
-}
-
 // ExecuteTurn runs one Pi agent turn.
 func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.TurnState) game.TurnResult {
 	var stats game.TurnStats
-	model, thinking := pe.configForRole(role)
+	model, thinking := pe.Model, pe.Thinking
 	stats.Model = model
 	var agentError string
 	var taskPath string

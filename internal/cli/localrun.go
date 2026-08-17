@@ -32,8 +32,6 @@ type LocalRunConfig struct {
 	Workspace       string
 	Model           string
 	Thinking        string
-	Generator       *sessionapi.RoleConfig
-	Verifier        *sessionapi.RoleConfig
 	Until           int
 	UntilSeconds    int
 	MaxCostUSD      *float64
@@ -383,29 +381,11 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 	if err := validatePiModel(model); err != nil {
 		return nil, err
 	}
-	if cfg.Generator != nil && cfg.Generator.Model != "" {
-		if err := validatePiModel(cfg.Generator.Model); err != nil {
-			return nil, fmt.Errorf("generator model: %w", err)
-		}
-	}
-	if cfg.Verifier != nil && cfg.Verifier.Model != "" {
-		if err := validatePiModel(cfg.Verifier.Model); err != nil {
-			return nil, fmt.Errorf("verifier model: %w", err)
-		}
-	}
 	thinking := cfg.Thinking
 	if thinking == "" {
 		thinking = DefaultLocalThinking
 	}
-	return executor.NewPiExecutor(p, model, thinking, cfg.AgentTimeoutSec).
-		WithRoleConfig(toExecutorRoleConfig(cfg.Generator), toExecutorRoleConfig(cfg.Verifier)), nil
-}
-
-func toExecutorRoleConfig(config *sessionapi.RoleConfig) executor.RoleConfig {
-	if config == nil {
-		return executor.RoleConfig{}
-	}
-	return executor.RoleConfig{Model: config.Model, Thinking: config.Thinking}
+	return executor.NewPiExecutor(p, model, thinking, cfg.AgentTimeoutSec), nil
 }
 
 type piModelsConfig struct {
@@ -615,8 +595,6 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		ApplyPackageLock:   applyPackageLock,
 		Config: sessionapi.SessionConfig{
 			Model:           model,
-			Generator:       cfg.Generator,
-			Verifier:        cfg.Verifier,
 			Until:           cfg.Until,
 			UntilSeconds:    cfg.UntilSeconds,
 			MaxCostUSD:      cfg.MaxCostUSD,
@@ -648,8 +626,6 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	lrc := LocalRunConfig{
 		Model:           cfg.Model,
 		Thinking:        cfg.Thinking,
-		Generator:       cfg.Generator,
-		Verifier:        cfg.Verifier,
 		Until:           cfg.Until,
 		UntilSeconds:    cfg.UntilSeconds,
 		MaxCostUSD:      cfg.MaxCostUSD,

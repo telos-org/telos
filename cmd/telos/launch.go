@@ -37,10 +37,6 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	model := fs.String("model", "", "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL")
 	thinking := fs.String("thinking", "", "Thinking effort; defaults to $TELOS_THINKING, then high for local runs")
-	generatorModel := fs.String("generator-model", "", "Optional generator model; defaults to --model")
-	generatorThinking := fs.String("generator-thinking", "", "Optional generator thinking effort; defaults to --thinking")
-	verifierModel := fs.String("verifier-model", "", "Optional verifier model; defaults to --model")
-	verifierThinking := fs.String("verifier-thinking", "", "Optional verifier thinking effort; defaults to --thinking")
 	untilValue := ""
 	until := &untilValue
 	if command == "run" {
@@ -125,10 +121,6 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if launchMode != launchLocal && roleConfigSet(fs) {
-		fmt.Fprintln(os.Stderr, "error: per-role model configuration is currently supported for local runs only")
-		os.Exit(1)
-	}
 	if launchMode == launchLocal && contextOverride != "" {
 		fmt.Fprintln(os.Stderr, "error: --context can only be used with a cloud apply")
 		os.Exit(2)
@@ -180,10 +172,6 @@ func cmdLaunch(command, action string, args []string) {
 		*workspace,
 		*model,
 		*thinking,
-		*generatorModel,
-		*generatorThinking,
-		*verifierModel,
-		*verifierThinking,
 		*maxCostUSD,
 	)
 	if err != nil {
