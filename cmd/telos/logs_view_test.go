@@ -1,297 +1,152 @@
 package main
 
 import (
+	"bytes"
 	"strings"
 	"testing"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
-func TestDeriveOverallLogStatus(t *testing.T) {
-	verifier := "verifier"
-	prover := "prover"
-	tests := []struct {
-		name   string
-		header logHeader
-		events []sessionapi.SessionEvent
-		want   string
-	}{
-		{
-			name:   "starting follows lifecycle",
-			header: logHeader{State: "provisioning"},
-			want:   "Starting",
+func TestRenderedLogRowKeepsMaterialProgress(t *testing.T) {
+	timestamp := "2026-08-10T12:00:00Z"
+	row, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
+		Event:     "agent_progress",
+		Timestamp: &timestamp,
+		Data: map[string]any{
+			"kind": "progress_update",
+			"text": "Running integration tests",
 		},
-		{
-			name:   "starting failure needs attention",
-			header: logHeader{State: "deploying", Failure: "managed session update failed"},
-			want:   "Needs attention",
-		},
-		{
-			name:   "deleting is stopping instead of working",
-			header: logHeader{State: "deleting"},
-			want:   "Stopped",
-		},
-		{
-			name:   "failed lifecycle wins",
-			header: logHeader{State: "failed", Failure: "runtime unavailable"},
-			events: []sessionapi.SessionEvent{{Event: "game_end", Data: map[string]any{"game_result": "success"}}},
-			want:   "Failed",
-		},
-		{
-			name:   "verifier acceptance is ready",
-			header: logHeader{State: "healthy"},
-			events: []sessionapi.SessionEvent{{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}}},
-			want:   "Ready",
-		},
-		{
-			name:   "prover concede is not ready",
-			header: logHeader{State: "healthy"},
-			events: []sessionapi.SessionEvent{{Event: "agent_complete", Role: &prover, Data: map[string]any{"status": "CONCEDE"}}},
-			want:   "Working",
-		},
-		{
-			name:   "routine work does not revoke acceptance",
-			header: logHeader{State: "healthy"},
-			events: []sessionapi.SessionEvent{
-				{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}},
-				{Event: "game_start", Data: map[string]any{}},
-				{Event: "agent_progress", Role: &prover, Data: map[string]any{"text": "Checking service health"}},
-			},
-			want: "Ready",
-		},
-		{
-			name:   "failure after acceptance needs attention",
-			header: logHeader{State: "healthy"},
-			events: []sessionapi.SessionEvent{
-				{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}},
-				{Event: "game_end", Data: map[string]any{"game_result": "failure", "error": "tests failed"}},
-			},
-			want: "Needs attention",
-		},
-		{
-			name:   "work after a failure resumes working",
-			header: logHeader{State: "healthy"},
-			events: []sessionapi.SessionEvent{
-				{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}},
-				{Event: "game_error", Data: map[string]any{"error": "tests failed"}},
-				{Event: "agent_progress", Role: &prover, Data: map[string]any{"text": "Fixing the failing tests"}},
-			},
-			want: "Working",
-		},
-		{
-			name:   "acceptance after a failure is ready",
-			header: logHeader{State: "healthy"},
-			events: []sessionapi.SessionEvent{
-				{Event: "game_error", Data: map[string]any{"error": "tests failed"}},
-				{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}},
-			},
-			want: "Ready",
-		},
-		{
-			name:   "control plane failure needs attention",
-			header: logHeader{State: "healthy"},
-			events: []sessionapi.SessionEvent{
-				{Event: "deployment.update_failed", Data: map[string]any{"reason": "runtime rejected the update"}},
-			},
-			want: "Needs attention",
-		},
-		{
-			name:   "new spec resets acceptance",
-			header: logHeader{State: "healthy"},
-			events: []sessionapi.SessionEvent{
-				{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}},
-				{Event: "external_update", Data: map[string]any{"message": "Spec updated"}},
-				{Event: "agent_progress", Role: &prover, Data: map[string]any{"text": "Implementing the new spec"}},
-			},
-			want: "Working",
-		},
-		{
-			name:   "stopped evaluation needs attention",
-			header: logHeader{State: "healthy"},
-			events: []sessionapi.SessionEvent{
-				{Event: "agent_progress", Role: &prover, Data: map[string]any{"text": "Running tests"}},
-				{Event: "game_end", Data: map[string]any{"game_result": "failure", "error": "tests failed"}},
-			},
-			want: "Needs attention",
-		},
-		{
-			name:   "recoverable provider incident stays working",
-			header: logHeader{State: "healthy"},
-			events: []sessionapi.SessionEvent{
-				{Event: "agent_progress", Role: &prover, Data: map[string]any{"text": "Implementing the API"}},
-				{Event: "agent_failure_recoverable", Data: map[string]any{"error": "502 no healthy upstream"}},
-			},
-			want: "Working",
-		},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			got := deriveOverallLogStatus(test.header, test.events)
-			if got.Label != test.want {
-				t.Fatalf("status: got %q, want %q (%s)", got.Label, test.want, got.Reason)
-			}
-		})
-	}
-}
-
-func TestRenderedLogRowOnlyTreatsVerifierConcedeAsAcceptance(t *testing.T) {
-	verifier := "verifier"
-	prover := "prover"
-
-	verifierRow, ok := renderedLogRowFromEvent(
-		sessionapi.SessionEvent{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}},
-		false,
-	)
-	if !ok || verifierRow.Summary != "Current spec accepted" {
-		t.Fatalf("verifier completion: got %#v, visible=%v", verifierRow, ok)
-	}
-
-	if proverRow, visible := renderedLogRowFromEvent(
-		sessionapi.SessionEvent{Event: "agent_complete", Role: &prover, Data: map[string]any{"status": "CONCEDE"}},
-		false,
-	); visible {
-		t.Fatalf("prover completion should stay hidden by default: %#v", proverRow)
-	}
-}
-
-func TestDeriveOverallLogStatusUsesLatestCompletionReason(t *testing.T) {
-	verifier := "verifier"
-	status := deriveOverallLogStatus(logHeader{State: "healthy"}, []sessionapi.SessionEvent{
-		{Event: "agent_failure_recoverable", Data: map[string]any{"error": "502 no healthy upstream"}},
-		{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONTINUE"}},
 	})
-
-	if status.Label != "Working" || status.Reason != "Verification requested another iteration." {
-		t.Fatalf("status: got %#v", status)
+	if !visible {
+		t.Fatal("material progress should be visible")
+	}
+	if row.Level != "INFO" || row.Summary != "Running integration tests" {
+		t.Fatalf("row = %#v", row)
 	}
 }
 
-func TestPrintStructuredLogsPreservesRepeatedEvents(t *testing.T) {
-	ts1 := "2026-07-01T00:00:00Z"
-	ts2 := "2026-07-01T00:10:00Z"
-	ts3 := "2026-07-01T00:20:00Z"
-	events := []sessionapi.SessionEvent{
-		{Event: "agent_failure_recoverable", Timestamp: &ts1, Data: map[string]any{"error": "502 no healthy upstream"}},
-		{Event: "agent_failure_recoverable", Timestamp: &ts2, Data: map[string]any{"error": "502 no healthy upstream"}},
-		{Event: "agent_failure_recoverable", Timestamp: &ts3, Data: map[string]any{"error": "502 no healthy upstream"}},
-	}
-
-	var output strings.Builder
-	printStructuredLogs(&output, logHeader{Name: "breachpoint", State: "healthy", SessionID: "sess_456"}, events, logViewOptions{Tail: defaultLogTail})
-	text := output.String()
-	if count := strings.Count(text, "[agent] [RETRY]"); count != 3 {
-		t.Fatalf("retry activity rendered %d times:\n%s", count, text)
-	}
-	for _, timestamp := range []string{
-		"[2026-07-01T00:00:00Z]",
-		"[2026-07-01T00:10:00Z]",
-		"[2026-07-01T00:20:00Z]",
+func TestRenderedLogRowHidesToolAndEngineChatter(t *testing.T) {
+	role := "verifier"
+	for _, event := range []sessionapi.SessionEvent{
+		{Event: "agent_progress", Data: map[string]any{"kind": "tool", "text": "Reading main.go"}},
+		{Event: "agent_progress", Data: map[string]any{"kind": "progress_update", "text": "Editing main.go"}},
+		{Event: "agent_progress", Data: map[string]any{"kind": "review", "text": "The other model requested changes"}},
+		{Event: "agent_progress", Data: map[string]any{"kind": "summary", "text": "Internal turn summary"}},
+		{Event: "game_start"},
+		{Event: "round_start", Role: &role},
+		{Event: "workspace_checkpoint"},
+		{Event: "runtime.heartbeat", Data: map[string]any{"message": "alive"}},
 	} {
-		if !strings.Contains(text, timestamp) {
-			t.Fatalf("missing retry timestamp %s:\n%s", timestamp, text)
+		if row, visible := renderedLogRowFromEvent(event); visible {
+			t.Fatalf("event %q should be hidden: %#v", event.Event, row)
 		}
 	}
 }
 
-func TestRenderedLogRowTreatsToolActivityAsVerboseTelemetry(t *testing.T) {
-	event := sessionapi.SessionEvent{
-		Event: "agent_progress",
-		Data:  map[string]any{"kind": "tool", "text": "Reading package.json"},
+func TestRenderedLogRowOnlyTreatsAcceptedRevisionAsCompletion(t *testing.T) {
+	verifier := "verifier"
+	prover := "prover"
+	accepted, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
+		Event: "agent_complete",
+		Role:  &verifier,
+		Data:  map[string]any{"status": "CONCEDE"},
+	})
+	if !visible || accepted.Summary != "Current revision accepted" {
+		t.Fatalf("accepted row = %#v visible=%v", accepted, visible)
 	}
-	if row, visible := renderedLogRowFromEvent(event, false); visible {
-		t.Fatalf("tool activity should be hidden by default: %#v", row)
-	}
-	row, visible := renderedLogRowFromEvent(event, true)
-	if !visible || row.Phase != "TOOL" || row.Summary != "Reading package.json" {
-		t.Fatalf("verbose tool activity: visible=%v row=%#v", visible, row)
+	if row, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
+		Event: "agent_complete",
+		Role:  &prover,
+		Data:  map[string]any{"status": "CONCEDE"},
+	}); visible {
+		t.Fatalf("implementation completion should be hidden: %#v", row)
 	}
 }
 
-func TestAgentSuspensionIsVisibleAndNeedsAttention(t *testing.T) {
-	event := sessionapi.SessionEvent{
-		Event: "agent_suspended",
+func TestRenderedLogRowUsesStandardSeverityLevels(t *testing.T) {
+	retry, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
+		Event: "agent_failure_recoverable",
 		Data: map[string]any{
-			"error":        "403: inactive virtual key",
-			"blocker_code": "agent_authentication_invalid",
-			"action":       "update the model credentials",
+			"error":                "502: no healthy upstream",
+			"consecutive_failures": 2,
+			"max_failures":         5,
+		},
+	})
+	if !visible || retry.Level != "WARNING" || retry.Summary != "Model provider unavailable; retrying" || retry.Detail != "attempt 2 of 5" {
+		t.Fatalf("retry row = %#v visible=%v", retry, visible)
+	}
+
+	failure, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
+		Event: "workload.rollout.failed",
+		Data:  map[string]any{"message": "Provisioning failed: quota exhausted"},
+	})
+	if !visible || failure.Level != "ERROR" || failure.Summary != "Provisioning failed" || failure.Detail != "quota exhausted" {
+		t.Fatalf("failure row = %#v visible=%v", failure, visible)
+	}
+
+	waiting, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
+		Event: "workload.rollout.waiting",
+		Data:  map[string]any{"message": "Waiting for capacity"},
+	})
+	if !visible || waiting.Level != "WARNING" {
+		t.Fatalf("waiting row = %#v visible=%v", waiting, visible)
+	}
+}
+
+func TestPrintStructuredLogsUsesCompactPythonStyleLines(t *testing.T) {
+	timestamp := "2026-08-10T12:00:00Z"
+	events := []sessionapi.SessionEvent{
+		{
+			Event:     "agent_progress",
+			Timestamp: &timestamp,
+			Data:      map[string]any{"kind": "tool", "text": "Reading main.go"},
+		},
+		{
+			Event:     "deployment.accepted",
+			Timestamp: &timestamp,
+			Data:      map[string]any{"message": "Accepted managed session"},
 		},
 	}
-	row, visible := renderedLogRowFromEvent(event, false)
-	if !visible || row.Phase != "BLOCKED" || row.Summary != "Agent execution suspended" {
-		t.Fatalf("suspension row: visible=%v row=%#v", visible, row)
+
+	var output bytes.Buffer
+	printStructuredLogs(&output, events, logViewOptions{Tail: defaultLogTail})
+	text := output.String()
+	if !strings.Contains(text, "[2026-08-10T12:00:00Z] [INFO] Accepted managed session") {
+		t.Fatalf("logs = %q", text)
 	}
-	if !strings.Contains(row.Detail, "update the model credentials") {
-		t.Fatalf("suspension detail = %q", row.Detail)
-	}
-	status := deriveOverallLogStatus(logHeader{State: "healthy"}, []sessionapi.SessionEvent{event})
-	if status.Label != "Needs attention" || !strings.Contains(status.Reason, "inactive virtual key") {
-		t.Fatalf("status = %#v", status)
+	for _, forbidden := range []string{"ACTIVITY", "Status", "Summary", "Session", "[agent]", "[BUILD]", "[VERIFY]", "Reading main.go"} {
+		if strings.Contains(text, forbidden) {
+			t.Fatalf("logs should omit %q: %q", forbidden, text)
+		}
 	}
 }
 
-func TestPrintRenderedLogRowUsesUTCTimestampAndPreservesMultilineDetail(t *testing.T) {
-	var output strings.Builder
+func TestRenderLogRowsCollapsesAdjacentDuplicateMessages(t *testing.T) {
+	verifier := "verifier"
+	events := []sessionapi.SessionEvent{
+		{Event: "agent_complete", Role: &verifier, Data: map[string]any{"status": "CONCEDE"}},
+		{Event: "game_end", Data: map[string]any{"game_result": "success"}},
+	}
+	rows := renderLogRows(events)
+	if len(rows) != 1 || rows[0].Summary != "Current revision accepted" {
+		t.Fatalf("rows = %#v", rows)
+	}
+}
+
+func TestPrintRenderedLogRowIndentsMultilineDetails(t *testing.T) {
+	var output bytes.Buffer
 	printRenderedLogRow(&output, renderedLogRow{
-		Timestamp:       "2026-07-01T20:42:18-04:00",
-		Source:          "agent",
-		Phase:           "verify",
-		Summary:         "Review",
-		Detail:          "criterion,score\nCorrectness,8/10",
+		Timestamp:       "2026-08-10T12:00:00Z",
+		Level:           "ERROR",
+		Summary:         "Execution suspended",
+		Detail:          "authentication failed\nrun telos login",
 		MultilineDetail: true,
 	})
-
 	text := output.String()
-	for _, want := range []string{
-		"[2026-07-02T00:42:18Z] [agent] [VERIFY] Review",
-		"│ criterion,score",
-		"│ Correctness,8/10",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("rendered row missing %q:\n%s", want, text)
-		}
-	}
-}
-
-func TestRenderedLogRowPreservesReviewEvent(t *testing.T) {
-	verifier := "verifier"
-	event := sessionapi.SessionEvent{
-		Event: "agent_progress",
-		Role:  &verifier,
-		Data: map[string]any{
-			"kind": "review",
-			"text": "criterion,score\nCorrectness,8/10",
-		},
-	}
-	row, visible := renderedLogRowFromEvent(event, false)
-	if !visible || row.Summary != "Review" || !row.MultilineDetail || !strings.Contains(row.Detail, "\n") {
-		t.Fatalf("review row: visible=%v row=%#v", visible, row)
-	}
-}
-
-func TestVerboseLogRowLinksStableEvidence(t *testing.T) {
-	eventID := "evt_42"
-	event := sessionapi.SessionEvent{
-		Event:   "workspace_checkpoint",
-		EventID: &eventID,
-		Data: map[string]any{
-			"path":  "/artifacts/checkpoint.tar.gz",
-			"bytes": float64(4096),
-		},
-	}
-	if row, visible := renderedLogRowFromEvent(event, false); visible {
-		t.Fatalf("checkpoint should remain verbose-only: %#v", row)
-	}
-	row, visible := renderedLogRowFromEvent(event, true)
-	if !visible {
-		t.Fatal("verbose checkpoint hidden")
-	}
-	for _, want := range []string{
-		"evidence=evt_42",
-		"checkpoint_path=/artifacts/checkpoint.tar.gz",
-	} {
-		if !strings.Contains(row.Detail, want) {
-			t.Fatalf("verbose detail missing %q: %q", want, row.Detail)
-		}
+	if !strings.Contains(text, "[2026-08-10T12:00:00Z] [ERROR] Execution suspended\n") ||
+		!strings.Contains(text, "│ authentication failed\n") ||
+		!strings.Contains(text, "│ run telos login\n") {
+		t.Fatalf("multiline log row = %q", text)
 	}
 }

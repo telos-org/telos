@@ -93,10 +93,10 @@ func TestCLIWithTestFakeExecutor(t *testing.T) {
 		t.Fatalf("total cost: got %#v", describeResp.TotalCostUSD)
 	}
 
-	logsOut := runProcess(t, workspace, env, telosBin, "logs", "--verbose", runResp.SessionID)
-	for _, want := range []string{"Status    Ready", "Prover round started", "Current spec accepted"} {
+	logsOut := runProcess(t, workspace, env, telosBin, "logs", runResp.SessionID)
+	for _, want := range []string{"[INFO]", "Current revision accepted"} {
 		if !strings.Contains(logsOut, want) {
-			t.Fatalf("verbose logs missing %q:\n%s", want, logsOut)
+			t.Fatalf("logs missing %q:\n%s", want, logsOut)
 		}
 	}
 	rawLogsOut := runProcess(t, workspace, env, telosBin, "logs", "--raw", runResp.SessionID)

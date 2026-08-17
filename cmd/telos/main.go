@@ -10,7 +10,7 @@
 //	telos list [--limit N] [--wide] [--local] [--cloud] [--json]
 //	telos get SESSION [--output PATH]
 //	telos describe SESSION [--json]
-//	telos logs [-f] [--verbose|--json|--raw] [--tail N|--all] [--context CONTEXT] SESSION
+//	telos logs [-f] [--json|--raw] [--tail N|--all] [--context CONTEXT] SESSION
 //	telos delete SESSION [--json]
 //	telos pull PACKAGE [--output PATH]
 //	telos login [--endpoint URL]

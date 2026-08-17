@@ -24,7 +24,6 @@ import (
 func cmdLogs(args []string) {
 	fs := flag.NewFlagSet("logs", flag.ExitOnError)
 	follow := fs.Bool("f", false, "Follow logs")
-	verbose := fs.Bool("verbose", false, "Include detailed human-readable activity")
 	jsonOutput := fs.Bool("json", false, "Print newline-delimited JSON events")
 	raw := fs.Bool("raw", false, "Print the raw transcript or evidence events")
 	tail := fs.Int("tail", defaultLogTail, "Show the most recent N activity rows")
@@ -38,11 +37,11 @@ func cmdLogs(args []string) {
 	}
 
 	if fs.NArg() < 1 {
-		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--verbose|--json|--raw] [--tail N|--all] [--context CONTEXT] SESSION")
+		fmt.Fprintln(os.Stderr, "usage: telos logs [-f] [--json|--raw] [--tail N|--all] [--context CONTEXT] SESSION")
 		os.Exit(1)
 	}
-	if enabledFlagCount(*verbose, *jsonOutput, *raw) > 1 {
-		fmt.Fprintln(os.Stderr, "error: --verbose, --json, and --raw are mutually exclusive")
+	if enabledFlagCount(*jsonOutput, *raw) > 1 {
+		fmt.Fprintln(os.Stderr, "error: --json and --raw are mutually exclusive")
 		os.Exit(1)
 	}
 	if *tail < 1 && !*all {
@@ -54,7 +53,7 @@ func cmdLogs(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
-	options := logViewOptions{Verbose: *verbose, Tail: *tail, All: *all}
+	options := logViewOptions{Tail: *tail, All: *all}
 	if contextOverride != "" {
 		session, err := getCloudSession(sessionID, contextOverride)
 		if err != nil {
@@ -97,7 +96,7 @@ func cmdLogs(args []string) {
 		os.Exit(1)
 	}
 
-	if session, err := getSessionFromAnywhere(sessionID); err == nil {
+	if _, err := getSessionFromAnywhere(sessionID); err == nil {
 		if *raw {
 			text, transcriptErr := getTranscriptFromAnywhere(sessionID)
 			if transcriptErr != nil {
@@ -132,7 +131,7 @@ func cmdLogs(args []string) {
 			}
 			return
 		}
-		printStructuredLogs(os.Stdout, localLogHeader(session), events, options)
+		printStructuredLogs(os.Stdout, events, options)
 		return
 	}
 
@@ -183,9 +182,7 @@ func printCloudSessionLogs(
 		}
 		return
 	}
-	header := cloudLogHeader(session)
-	header.Context = resolvedCloudContext(control)
-	printStructuredLogs(os.Stdout, header, page.Events, options)
+	printStructuredLogs(os.Stdout, page.Events, options)
 }
 
 func enabledFlagCount(values ...bool) int {
@@ -248,21 +245,15 @@ func followCloudSessionLogs(
 			os.Exit(1)
 		}
 	} else {
-		header := cloudLogHeader(session)
-		header.Context = resolvedCloudContext(control)
-		printStructuredLogs(os.Stdout, header, page.Events, options)
+		printStructuredLogs(os.Stdout, page.Events, options)
 	}
-	header := cloudLogHeader(session)
-	header.Context = resolvedCloudContext(control)
 	if err := streamCloudSessionLogsAfter(
 		control,
 		session.ID,
 		os.Stdout,
 		time.Sleep,
-		options.Verbose,
 		jsonOutput,
 		page.RuntimeCursor,
-		header,
 		page.Events,
 	); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -303,7 +294,6 @@ func streamCloudSessionLogs(
 	sessionID string,
 	out io.Writer,
 	sleep func(time.Duration),
-	verbose bool,
 	jsonOutput bool,
 ) error {
 	return streamCloudSessionLogsAfter(
@@ -311,10 +301,8 @@ func streamCloudSessionLogs(
 		sessionID,
 		out,
 		sleep,
-		verbose,
 		jsonOutput,
 		nil,
-		logHeader{},
 		nil,
 	)
 }
@@ -324,14 +312,11 @@ func streamCloudSessionLogsAfter(
 	sessionID string,
 	out io.Writer,
 	sleep func(time.Duration),
-	verbose bool,
 	jsonOutput bool,
 	afterRuntime *int64,
-	header logHeader,
 	initialEvents []sessionapi.SessionEvent,
 ) error {
 	events := append([]sessionapi.SessionEvent(nil), initialEvents...)
-	currentStatus := deriveOverallLogStatus(header, events)
 	runtimeCursor := copyLogCursor(afterRuntime)
 	for {
 		var replayCounts map[string]int
@@ -345,7 +330,6 @@ func streamCloudSessionLogsAfter(
 			_, err := printStreamingLogEvent(
 				out,
 				event,
-				verbose,
 				jsonOutput,
 				resolvedCloudContext(control),
 			)
@@ -354,13 +338,6 @@ func streamCloudSessionLogsAfter(
 			}
 			events = append(events, event)
 			runtimeCursor = advanceLogCursor(runtimeCursor, event.EventSeq)
-			if !jsonOutput && header.SessionID != "" {
-				nextStatus := deriveOverallLogStatus(header, events)
-				if nextStatus.Label != currentStatus.Label {
-					printStatusTransition(out, eventTimestamp(event), nextStatus)
-				}
-				currentStatus = nextStatus
-			}
 			return nil
 		})
 		if !retryableCloudLogStreamError(streamErr) {
@@ -375,15 +352,6 @@ func streamCloudSessionLogsAfter(
 				return nil
 			}
 			return err
-		}
-		header = cloudLogHeader(session)
-		header.Context = resolvedCloudContext(control)
-		if !jsonOutput && header.SessionID != "" {
-			nextStatus := deriveOverallLogStatus(header, events)
-			if nextStatus.Label != currentStatus.Label {
-				printStatusTransition(out, header.UpdatedAt, nextStatus)
-			}
-			currentStatus = nextStatus
 		}
 		if cloudSessionStateTerminal(session.State) {
 			return nil
@@ -457,9 +425,8 @@ func pollSessionLogs(
 			return err
 		}
 	} else {
-		printStructuredLogs(out, localLogHeader(session), events, options)
+		printStructuredLogs(out, events, options)
 	}
-	currentStatus := deriveOverallLogStatus(localLogHeader(session), events)
 	seen := len(events)
 	if session.Status.IsTerminal() {
 		return nil
@@ -472,7 +439,7 @@ func pollSessionLogs(
 			return err
 		}
 		for _, event := range events[minimum(seen, len(events)):] {
-			if _, err := printStreamingLogEvent(out, event, options.Verbose, jsonOutput, ""); err != nil {
+			if _, err := printStreamingLogEvent(out, event, jsonOutput, ""); err != nil {
 				return err
 			}
 		}
@@ -481,30 +448,10 @@ func pollSessionLogs(
 		if err != nil {
 			return err
 		}
-		if !jsonOutput {
-			nextStatus := deriveOverallLogStatus(localLogHeader(session), events)
-			if nextStatus.Label != currentStatus.Label {
-				timestamp := ""
-				if len(events) > 0 {
-					timestamp = eventTimestamp(events[len(events)-1])
-				}
-				printStatusTransition(out, timestamp, nextStatus)
-			}
-			currentStatus = nextStatus
-		}
 		if session.Status.IsTerminal() {
 			return nil
 		}
 	}
-}
-
-func printStatusTransition(out io.Writer, timestamp string, status overallLogStatus) {
-	printRenderedLogRow(out, renderedLogRow{
-		Timestamp: timestamp,
-		Phase:     "STATUS",
-		Summary:   status.Label,
-		Detail:    status.Reason,
-	})
 }
 
 func printRawJSONLogEvents(out io.Writer, events []json.RawMessage) error {
@@ -651,7 +598,6 @@ func legacyTranscriptFallback(
 func printStreamingLogEvent(
 	out io.Writer,
 	event sessionapi.SessionEvent,
-	verbose bool,
 	jsonOutput bool,
 	contextName string,
 ) (bool, error) {
@@ -662,7 +608,7 @@ func printStreamingLogEvent(
 			contextName,
 		)
 	}
-	row, ok := renderedLogRowFromEvent(event, verbose)
+	row, ok := renderedLogRowFromEvent(event)
 	if !ok {
 		return false, nil
 	}

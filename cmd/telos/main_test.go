@@ -1342,17 +1342,17 @@ Reload the current spec.
 	}
 }
 
-func TestPrintLogsVerboseShowsTranscript(t *testing.T) {
+func TestPrintLogsRawShowsTranscript(t *testing.T) {
 	transcript := "# Transcript\nraw content\n<progress_update>Progress</progress_update>\n"
 
 	var out bytes.Buffer
 	printLogs(&out, transcript, true)
 	if out.String() != transcript {
-		t.Fatalf("verbose output mismatch:\n%s", out.String())
+		t.Fatalf("raw output mismatch:\n%s", out.String())
 	}
 }
 
-func TestPrintStructuredLogsShowsStatusAndSignificantActivity(t *testing.T) {
+func TestPrintStructuredLogsShowsSignificantActivity(t *testing.T) {
 	ts1 := "2026-07-01T00:00:00Z"
 	ts2 := "2026-07-01T00:01:00Z"
 	ts3 := "2026-07-01T00:02:00Z"
@@ -1365,20 +1365,12 @@ func TestPrintStructuredLogsShowsStatusAndSignificantActivity(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printStructuredLogs(&out, logHeader{
-		Name:       "palmfall",
-		State:      "healthy",
-		PackageRef: "@telos/palmfall:1.0.0",
-		SessionID:  "sess_123",
-	}, events, logViewOptions{Tail: defaultLogTail})
+	printStructuredLogs(&out, events, logViewOptions{Tail: defaultLogTail})
 	text := out.String()
 	for _, want := range []string{
-		"PALMFALL",
-		"Status    Needs attention",
-		"Summary   run_duration_exhausted: exceeded 1800 seconds",
-		"[2026-07-01T00:00:00Z] [agent] [BUILD] Implemented the authentication flow",
-		"[2026-07-01T00:01:00Z] [agent] [VERIFY] Running the integration checks",
-		"[2026-07-01T00:02:00Z] [runtime] [VERIFY] Evaluation cycle interrupted",
+		"[2026-07-01T00:00:00Z] [INFO] Implemented the authentication flow",
+		"[2026-07-01T00:01:00Z] [INFO] Running the integration checks",
+		"[2026-07-01T00:02:00Z] [ERROR] Execution failed",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("structured logs missing %q:\n%s", want, text)
@@ -1391,20 +1383,17 @@ func TestPrintStructuredLogsShowsStatusAndSignificantActivity(t *testing.T) {
 	}
 }
 
-func TestPrintStructuredLogsVerboseIncludesMinorActivity(t *testing.T) {
+func TestPrintStructuredLogsHidesMinorActivity(t *testing.T) {
 	ts := "2026-07-01T00:00:00Z"
 	events := []sessionapi.SessionEvent{
 		{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"text": "Reading package.json"}},
 	}
 
 	var out bytes.Buffer
-	printStructuredLogs(&out, logHeader{Name: "pegfall", State: "healthy", SessionID: "sess_123"}, events, logViewOptions{
-		Verbose: true,
-		Tail:    defaultLogTail,
-	})
+	printStructuredLogs(&out, events, logViewOptions{Tail: defaultLogTail})
 	text := out.String()
-	if !strings.Contains(text, "[2026-07-01T00:00:00Z] [agent] [BUILD] Reading package.json") {
-		t.Fatalf("verbose logs missing minor activity:\n%s", text)
+	if strings.Contains(text, "Reading package.json") || !strings.Contains(text, "No activity yet.") {
+		t.Fatalf("logs should hide minor activity:\n%s", text)
 	}
 }
 
@@ -1469,7 +1458,6 @@ func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
 		&out,
 		func(time.Duration) {},
 		false,
-		false,
 	)
 	if err != nil {
 		t.Fatalf("streamCloudSessionLogs: %v", err)
@@ -1477,12 +1465,12 @@ func TestFollowCloudSessionLogsStreamsEvents(t *testing.T) {
 	if logCalls != 1 {
 		t.Fatalf("calls: logs=%d", logCalls)
 	}
-	if !strings.Contains(out.String(), "[agent] [BUILD] ready") {
+	if !strings.Contains(out.String(), "[INFO] ready") {
 		t.Fatalf("follow output missing progress:\n%s", out.String())
 	}
 }
 
-func TestFollowCloudSessionLogsResumesAndPrintsStatusChange(t *testing.T) {
+func TestFollowCloudSessionLogsResumesAtRuntimeCursor(t *testing.T) {
 	verifier := "verifier"
 	var query string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1507,9 +1495,7 @@ func TestFollowCloudSessionLogsResumesAndPrintsStatusChange(t *testing.T) {
 		&out,
 		func(time.Duration) {},
 		false,
-		false,
 		&after,
-		logHeader{Name: "pegfall", State: "provisioning", SessionID: "sess_123"},
 		initial,
 	)
 	if err != nil {
@@ -1518,10 +1504,11 @@ func TestFollowCloudSessionLogsResumesAndPrintsStatusChange(t *testing.T) {
 	if query != "after_rt=7" {
 		t.Fatalf("resume query: got %q", query)
 	}
-	for _, want := range []string{"Current spec accepted", "[system] [STATUS] Ready"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("follow output missing %q:\n%s", want, out.String())
-		}
+	if !strings.Contains(out.String(), "Current revision accepted") {
+		t.Fatalf("follow output missing accepted revision:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "STATUS") || strings.Contains(out.String(), "Ready") {
+		t.Fatalf("follow output should not synthesize status:\n%s", out.String())
 	}
 }
 
@@ -1570,7 +1557,6 @@ func TestFollowCloudSessionLogsReconnectsFromLatestCursor(t *testing.T) {
 		"sess_reconnect",
 		&out,
 		func(time.Duration) {},
-		false,
 		false,
 	)
 	if err != nil {
@@ -1662,10 +1648,8 @@ func TestFollowCloudSessionLogsDeduplicatesLegacyReplay(t *testing.T) {
 		"sess_legacy",
 		&out,
 		func(time.Duration) {},
-		false,
 		true,
 		nil,
-		logHeader{},
 		initial,
 	); err != nil {
 		t.Fatalf("streamCloudSessionLogsAfter: %v", err)
@@ -1743,7 +1727,6 @@ func TestFollowCloudSessionLogsExitsCleanWhenSessionDeleted(t *testing.T) {
 		"sess_123",
 		&out,
 		func(time.Duration) {},
-		false,
 		false,
 	)
 	if err != nil {
