@@ -501,13 +501,8 @@ func TestCompilePackageLocalScopedSkillRef(t *testing.T) {
 	}
 }
 
-func TestCompileUsesPackageManifestInjectedRequiredSkill(t *testing.T) {
+func TestCompileUsesPackageManifestSkill(t *testing.T) {
 	dir := t.TempDir()
-	defaultSkills := filepath.Join(dir, "default-skills")
-	writePackageTestSkill(t, defaultSkills, "verify-engineering", map[string]string{
-		"SKILL.md": "---\nname: verify-engineering\n---\nDo not inject from catalogue.",
-	})
-	t.Setenv("TELOS_SKILLS_DIR", defaultSkills)
 	specPath := filepath.Join(dir, "SPEC.md")
 	if err := os.WriteFile(
 		specPath,
@@ -544,9 +539,6 @@ func TestCompileUsesPackageManifestInjectedRequiredSkill(t *testing.T) {
 
 	var found bool
 	for _, skill := range compiled.Skills {
-		if skill.Name == "verify-engineering" {
-			t.Fatalf("package manifest compile loaded default catalogue skill: %s", skill.Path)
-		}
 		if skill.Name == "verify-quality" {
 			found = true
 			if skill.Path != filepath.Join(dir, "skills", "verify-quality") {

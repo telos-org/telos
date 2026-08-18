@@ -74,7 +74,7 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 	context := cluster
 	lineage := computeLineage(namespace, extendsCompiled)
 
-	packageSkillPaths, packageRequiredPaths, hasPackageManifest := packageManifestSkillPaths(compileBaseDir)
+	packageSkillPaths, packageRequiredPaths, _ := packageManifestSkillPaths(compileBaseDir)
 
 	// Resolve skills
 	var declared []*Skill
@@ -127,15 +127,10 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 		}
 		annotateSkillSourceRefs(required, env.SkillSourceRefs)
 	}
-	var verifier []*Skill
-	if !hasPackageManifest {
-		verifier = ResolveDefaultVerifierSkills()
-	}
-
-	// Merge: declared + required + verifier, dedup by name
+	// Merge declared and required skills, deduped by name.
 	byName := map[string]*Skill{}
 	var order []string
-	for _, list := range [][]*Skill{declared, required, verifier} {
+	for _, list := range [][]*Skill{declared, required} {
 		for _, s := range list {
 			if _, exists := byName[s.Name]; !exists {
 				byName[s.Name] = s
