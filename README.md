@@ -18,9 +18,6 @@ for local runs.
 
 ### Via your coding agent
 
-Give your coding agent the same setup prompt used on
-[usetelos.ai](https://usetelos.ai):
-
 ```text
 Set up Telos.
 
