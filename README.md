@@ -34,9 +34,8 @@ Set up Telos.
 
 The Goal specification (`SPEC.md`) is the main entrypoint to a `telos` program.
 
-Skills are modular libraries imported by the specification. They package
-reusable instructions, references, scripts, and assets, and can be loaded from
-a local path or an immutable registry reference.
+Skills are modular libraries imported by a spec. Load them from a local path or
+pin them to an immutable registry version.
 
 ```markdown
 ---
@@ -114,8 +113,8 @@ telos plan SPEC.md --session SESSION_ID
 telos apply SPEC.md --session SESSION_ID
 ```
 
-The agent system picks up the delta and incrementally reconciles the live
-software toward the new desired state.
+`telos` applies the delta and incrementally reconciles the live software toward
+the new desired state.
 
 Read the [Telos documentation](https://usetelos.ai/docs) for the complete
 workflow.
