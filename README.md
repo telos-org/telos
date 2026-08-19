@@ -106,7 +106,7 @@ Common Cloud statuses:
 - `ready` — the displayed revision is running and verified.
 - `needs_attention` or `failed` — check `Reason` for details.
 
-Follow agent updates and verification evidence with:
+Follow agent updates with:
 
 ```bash
 telos logs SESSION_ID
