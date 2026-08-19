@@ -56,9 +56,8 @@ available, preserve stored data across restarts, and return evidence for both.
 
 ## Apply
 
-`telos apply` makes the approved specification the desired state of a
-persistent Goal. It hands the exact `SPEC.md` and its resolved skills to
-background agents that implement, deploy, and verify the revision.
+`telos apply` continuously reconciles a persistent Goal toward the desired
+state in `SPEC.md`.
 
 First, preview the contract without changing the Goal or its target state:
 
