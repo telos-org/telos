@@ -358,6 +358,7 @@ func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
 		"write to the same workspace when the change is evaluation code",
 		"integration probes, fixtures, scripts, or minimal counterexamples",
 		"natural test location or a small `evaluation/` directory",
+		"Prefer extending an existing durable probe",
 	} {
 		if !strings.Contains(task, want) {
 			t.Fatalf("verifier prompt missing %q:\n%s", want, task)
@@ -382,15 +383,16 @@ func TestRenderProverUsesOperatingPosture(t *testing.T) {
 	if !strings.Contains(task, "continue from the append-only transcript") {
 		t.Error("prover prompt should describe continuation through transcript/workspace")
 	}
-	if !strings.Contains(task, "smallest complete solution") ||
-		!strings.Contains(task, "continue while solvable gaps remain") ||
-		!strings.Contains(task, "goal holds and") ||
-		!strings.Contains(task, "relevant checks pass, or") {
-		t.Error("prover prompt should require a complete outcome")
+	if !strings.Contains(task, "highest-leverage related set") ||
+		!strings.Contains(task, "highest-leverage unmet obligation") ||
+		!strings.Contains(task, "tested, committed checkpoint") ||
+		!strings.Contains(task, "independently reviewable increment") ||
+		!strings.Contains(task, "Duration alone is not a reason to yield") ||
+		!strings.Contains(task, "highest-value next action") {
+		t.Error("prover prompt should require a complete reviewable increment")
 	}
-	if strings.Contains(task, "smallest change that improves") ||
-		strings.Contains(task, "Prefer incremental, inspectable changes") {
-		t.Error("prover prompt should not encourage partial turns")
+	if strings.Contains(task, "smallest change that improves") {
+		t.Error("prover prompt should not encourage superficial turns")
 	}
 }
 
@@ -541,8 +543,8 @@ func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 	compiled, _ := CompileEnvironment(specPath)
 	proverTask := RenderProverTask(compiled, "", "/tmp/transcript.md")
 
-	if !strings.Contains(proverTask, "First action every turn: read this transcript path") {
-		t.Error("implementation prompt should require reading transcript first")
+	if !strings.Contains(proverTask, "First action every turn: read the latest transcript entries") {
+		t.Error("implementation prompt should require reading recent transcript state first")
 	}
 	if !strings.Contains(proverTask, "If the transcript only contains the header, proceed from scratch against the spec") {
 		t.Error("implementation prompt should explain first-turn/header-only transcript")
@@ -552,11 +554,14 @@ func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 	}
 
 	verifierTask := RenderVerifierTask(compiled, "", "/tmp/transcript.md")
-	if !strings.Contains(verifierTask, "First action every turn: read this transcript path") {
-		t.Error("evaluation prompt should require reading transcript first")
+	if !strings.Contains(verifierTask, "First action every turn: read the latest transcript entries") {
+		t.Error("evaluation prompt should require reading recent transcript state first")
 	}
 	if !strings.Contains(verifierTask, "identify the implementation claims") {
 		t.Error("evaluation prompt should require identifying implementation claims")
+	}
+	if !strings.Contains(verifierTask, "Recheck prior blockers and implementation claims first") {
+		t.Error("evaluation prompt should prioritize the current delta")
 	}
 }
 
