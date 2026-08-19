@@ -13,8 +13,7 @@ telos login
 
 The installer supports macOS and Linux on amd64 and arm64.
 
-`telos login` signs in to Telos Cloud and is required for `telos apply`, but not
-for local runs.
+`telos login` signs in to Telos Cloud and is required for `telos apply`.
 
 ### Via your coding agent
 
