@@ -90,10 +90,11 @@ Revision  sha256:abc123...
 Service   https://hello-service.example.com
 ```
 
-The status is `working` while Telos reconciles the Goal. `ready` means the
-displayed revision is running and has passed every required rubric and
-independent verification. If a session needs attention or fails, `describe`
-also shows a `Reason`.
+Status values:
+
+- `working` — reconciliation is in progress.
+- `ready` — the displayed revision is running and verified.
+- `needs_attention` or `failed` — check `Reason` for details.
 
 Follow agent updates and verification evidence with:
 
