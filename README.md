@@ -13,6 +13,9 @@ telos login
 
 The installer supports macOS and Linux on amd64 and arm64.
 
+`telos login` signs in to Telos Cloud and is required for `telos apply`, but not
+for local runs.
+
 ### Via your coding agent
 
 Give your coding agent the same setup prompt used on
@@ -111,6 +114,8 @@ telos run SPEC.md --workspace . --until 3
 telos describe SESSION_ID
 telos logs SESSION_ID
 ```
+
+`--until 3` stops the run after at most three review cycles.
 
 ## License
 
