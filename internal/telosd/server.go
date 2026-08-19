@@ -41,6 +41,9 @@ func Run(ctx context.Context, cfg Config, runtime sessionapi.RuntimeIdentity) er
 			return err
 		}
 		materializer := newApplyPackageMaterializer(baseStore.PackageRoot, cfg.Auth.Token)
+		if err := installPlatformSkills(ctx, materializer); err != nil {
+			return err
+		}
 		reconciler := newControllerReconciler(baseStore, substrate, materializer, cloudControllerDefaults())
 		store = reconciler
 		if err := reconciler.ensureRootWorkers("server_started"); err != nil {
