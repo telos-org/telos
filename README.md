@@ -2,9 +2,8 @@
 
 `telos` is a goal-oriented programming system.
 
-**The expected workflow is human ↔ interactive coding agent ↔ `telos`. Your
-coding agent should drive the CLI; `telos` is optimized for the agent
-experience.**
+> Telos works best as a collaboration between you, your coding agent, and
+> `telos`. You define the Goal and approve changes; your agent handles the CLI.
 
 ## Install
 
