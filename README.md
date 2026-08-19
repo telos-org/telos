@@ -2,10 +2,6 @@
 
 `telos` is a goal-oriented programming system.
 
-> Work with your coding agent to write and iterate on your Goal spec, and have
-> the agent drive `telos` for you. The CLI is optimized for the agent
-> experience.
-
 ## Install
 
 ### Via the CLI
@@ -29,7 +25,12 @@ Set up Telos.
 - Read the installed `telos-cli` skill to get started.
 ```
 
-## Specifications
+## Get Started
+
+> Work with your coding agent to write and iterate on your Goal spec, and have
+> the agent drive `telos` for you.
+>
+> The CLI is optimized for the agent experience.
 
 `SPEC.md` is the `main` entrypoint to a `telos` program. It declares the Goal,
 the target platform, and the evidence required for success.
