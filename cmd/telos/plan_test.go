@@ -122,7 +122,6 @@ func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
 }
 
 func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
-	configurePlanVerifierSkills(t)
 	pkg := testApplyPackage(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -201,33 +200,20 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 	if plan.Change.Current.Version != "1.2.3" || plan.Change.Proposed.Version != "1.2.3" {
 		t.Fatalf("versions: current=%q proposed=%q", plan.Change.Current.Version, plan.Change.Proposed.Version)
 	}
-	if len(plan.Change.Current.Skills) == 0 || len(plan.Change.Proposed.Skills) == 0 {
-		t.Fatalf("skill locks missing: current=%#v proposed=%#v", plan.Change.Current.Skills, plan.Change.Proposed.Skills)
-	}
-	if plan.Change.Current.Skills[0].Digest == "" || plan.Change.Proposed.Skills[0].Digest == "" {
-		t.Fatalf("skill lock digest missing: current=%#v proposed=%#v", plan.Change.Current.Skills, plan.Change.Proposed.Skills)
+	if len(plan.Change.Current.Skills) != 0 || len(plan.Change.Proposed.Skills) != 0 {
+		t.Fatalf("undeclared skills were injected: current=%#v proposed=%#v", plan.Change.Current.Skills, plan.Change.Proposed.Skills)
 	}
 }
 
-func configurePlanVerifierSkills(t *testing.T) string {
+func configurePlanSkillsCatalogue(t *testing.T) string {
 	t.Helper()
 	catalogue := t.TempDir()
-	for _, name := range []string{"verify-engineering", "verify-quality"} {
-		dir := filepath.Join(catalogue, name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		content := []byte("---\nname: " + name + "\n---\nVerify.\n")
-		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), content, 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
 	t.Setenv("TELOS_SKILLS_DIR", catalogue)
 	return catalogue
 }
 
 func TestCompareLocalSessionSpecUsesPersistedSkillLocks(t *testing.T) {
-	catalogue := configurePlanVerifierSkills(t)
+	catalogue := configurePlanSkillsCatalogue(t)
 	skillDir := filepath.Join(catalogue, "build-dashboard")
 	if err := os.MkdirAll(skillDir, 0o755); err != nil {
 		t.Fatal(err)

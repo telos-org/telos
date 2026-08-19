@@ -36,7 +36,7 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 		renderSessionContext(compiled, RoleProver, options),
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleProver, options),
-		renderSkillsRoster(compiled, RoleProver, options),
+		renderSkillsRoster(compiled),
 		renderTranscriptProtocol(transcriptPath, RoleProver),
 		renderWorkspace(workspace, RoleProver),
 		renderOutputContract(RoleProver, options),
@@ -55,7 +55,7 @@ func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath
 		renderSessionContext(compiled, RoleVerifier, options),
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleVerifier, options),
-		renderSkillsRoster(compiled, RoleVerifier, options),
+		renderSkillsRoster(compiled),
 		renderTranscriptProtocol(transcriptPath, RoleVerifier),
 		renderWorkspace(workspace, RoleVerifier),
 		renderOutputContract(RoleVerifier, options),
@@ -181,8 +181,8 @@ func renderRequiredEvaluationRubrics(compiled *CompiledEnvironment, role Role, o
 	return strings.Join(lines, "\n")
 }
 
-func renderSkillsRoster(compiled *CompiledEnvironment, role Role, opts PromptOptions) string {
-	skills := effectiveSkills(compiled, role, opts)
+func renderSkillsRoster(compiled *CompiledEnvironment) string {
+	skills := compiled.Skills
 	if len(skills) == 0 {
 		return ""
 	}
@@ -223,42 +223,6 @@ func appendSkillPointers(lines []string, skills []*Skill) []string {
 	}
 	lines = append(lines, "")
 	return lines
-}
-
-func effectiveSkills(compiled *CompiledEnvironment, role Role, opts PromptOptions) []*Skill {
-	skills := append([]*Skill{}, compiled.Skills...)
-	if role == RoleProver {
-		skills = implementationSkills(skills, compiled.RequiredVerifierSkills)
-	}
-	return skills
-}
-
-func implementationSkills(skills []*Skill, requiredVerifierSkills []*Skill) []*Skill {
-	required := map[string]bool{}
-	for _, skill := range requiredVerifierSkills {
-		required[skill.Name] = true
-	}
-	defaultVerifier := map[string]bool{}
-	for _, name := range DefaultVerifierSkills {
-		defaultVerifier[name] = true
-	}
-	filtered := make([]*Skill, 0, len(skills))
-	for _, skill := range skills {
-		if defaultVerifier[skill.Name] && !required[skill.Name] {
-			continue
-		}
-		filtered = append(filtered, skill)
-	}
-	return filtered
-}
-
-func hasSkill(skills []*Skill, name string) bool {
-	for _, s := range skills {
-		if s.Name == name {
-			return true
-		}
-	}
-	return false
 }
 
 func renderTranscriptProtocol(transcriptPath string, role Role) string {

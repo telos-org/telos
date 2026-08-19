@@ -11,12 +11,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// DefaultVerifierSkills are the names of always-included verifier skills.
-var DefaultVerifierSkills = []string{
-	"verify-quality",
-	"verify-engineering",
-}
-
 var scriptExtensions = map[string]string{
 	".py":   "python",
 	".sh":   "bash",
@@ -181,27 +175,6 @@ func resolveOnePath(abs string) ([]*Skill, error) {
 	}
 	sort.Slice(skills, func(i, j int) bool { return skills[i].Name < skills[j].Name })
 	return skills, nil
-}
-
-// ResolveDefaultVerifierSkills loads the default verifier skills.
-func ResolveDefaultVerifierSkills() []*Skill {
-	dir := DefaultSkillsDir()
-	if dir == "" {
-		return nil
-	}
-	var skills []*Skill
-	for _, name := range DefaultVerifierSkills {
-		skillDir := filepath.Join(dir, name)
-		if _, err := os.Stat(filepath.Join(skillDir, "SKILL.md")); err != nil {
-			continue
-		}
-		s, err := LoadSkill(skillDir)
-		if err != nil {
-			continue
-		}
-		skills = append(skills, s)
-	}
-	return skills
 }
 
 // ResolveDefaultSkill loads a single default catalogue skill by name.

@@ -196,20 +196,8 @@ func TestCompileWithAbsoluteExtendsPath(t *testing.T) {
 	}
 }
 
-func TestCompileWithoutDeclaredSkillsOnlyIncludesVerifierSkills(t *testing.T) {
+func TestCompileWithoutDeclaredSkillsHasNoSkills(t *testing.T) {
 	dir := t.TempDir()
-	defaultSkills := filepath.Join(dir, "default-skills")
-	for _, name := range []string{"verify-engineering", "verify-quality"} {
-		skillDir := filepath.Join(defaultSkills, name)
-		if err := os.MkdirAll(skillDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: "+name+"\n---\nVerify."), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Setenv("TELOS_SKILLS_DIR", defaultSkills)
-
 	specPath := filepath.Join(dir, "SPEC.md")
 	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: cloud-default\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
@@ -219,28 +207,13 @@ func TestCompileWithoutDeclaredSkillsOnlyIncludesVerifierSkills(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompileEnvironment: %v", err)
 	}
-	names := map[string]bool{}
-	for _, s := range compiled.Skills {
-		names[s.Name] = true
-	}
-	if names["catalogue-deploy"] {
-		t.Fatal("skills must be explicit; cloud specs should not implicitly load catalogue skills")
-	}
-	if !names["verify-engineering"] || !names["verify-quality"] {
-		t.Fatal("expected default verifier skills")
+	if len(compiled.Skills) != 0 {
+		t.Fatalf("undeclared skills were injected: %#v", compiled.Skills)
 	}
 }
 
 func TestCompileIgnoresUnrelatedManifestJSON(t *testing.T) {
 	dir := t.TempDir()
-	defaultSkills := filepath.Join(dir, "default-skills")
-	for _, name := range []string{"verify-engineering", "verify-quality"} {
-		writePackageTestSkill(t, defaultSkills, name, map[string]string{
-			"SKILL.md": "---\nname: " + name + "\n---\nVerify.",
-		})
-	}
-	t.Setenv("TELOS_SKILLS_DIR", defaultSkills)
-
 	specPath := filepath.Join(dir, "SPEC.md")
 	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: app-manifest\nplatform: cloud\n---\nBody"), 0o644); err != nil {
 		t.Fatal(err)
@@ -253,12 +226,8 @@ func TestCompileIgnoresUnrelatedManifestJSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CompileEnvironment: %v", err)
 	}
-	names := map[string]bool{}
-	for _, skill := range compiled.Skills {
-		names[skill.Name] = true
-	}
-	if !names["verify-engineering"] || !names["verify-quality"] {
-		t.Fatalf("unrelated manifest.json suppressed default verifier skills: %#v", names)
+	if len(compiled.Skills) != 0 {
+		t.Fatalf("unrelated manifest.json injected skills: %#v", compiled.Skills)
 	}
 }
 
@@ -448,18 +417,9 @@ func TestRenderWithSkillsRoster(t *testing.T) {
 	}
 }
 
-func TestRenderProverHidesDefaultVerifierSkills(t *testing.T) {
+func TestRenderUsesDeclaredSkillsForBothRoles(t *testing.T) {
 	dir := t.TempDir()
 	defaultSkills := filepath.Join(dir, "default-skills")
-	for _, name := range []string{"verify-engineering", "verify-quality"} {
-		skillDir := filepath.Join(defaultSkills, name)
-		if err := os.MkdirAll(skillDir, 0o755); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte("---\nname: "+name+"\ndescription: "+name+"\n---\nVerify."), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
 	implSkillDir := filepath.Join(defaultSkills, "k8s-deploy")
 	if err := os.MkdirAll(implSkillDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -480,19 +440,12 @@ func TestRenderProverHidesDefaultVerifierSkills(t *testing.T) {
 
 	proverTask := RenderProverTask(compiled, "", "")
 	if !strings.Contains(proverTask, "`k8s-deploy`") {
-		t.Fatalf("prover prompt missing implementation skill:\n%s", proverTask)
-	}
-	for _, unwanted := range []string{"`verify-engineering`", "`verify-quality`"} {
-		if strings.Contains(proverTask, unwanted) {
-			t.Fatalf("prover prompt should not advertise default verifier skill %s:\n%s", unwanted, proverTask)
-		}
+		t.Fatalf("prover prompt missing declared skill:\n%s", proverTask)
 	}
 
 	verifierTask := RenderVerifierTask(compiled, "", "")
-	for _, want := range []string{"`k8s-deploy`", "`verify-engineering`", "`verify-quality`"} {
-		if !strings.Contains(verifierTask, want) {
-			t.Fatalf("verifier prompt missing %s:\n%s", want, verifierTask)
-		}
+	if !strings.Contains(verifierTask, "`k8s-deploy`") {
+		t.Fatalf("verifier prompt missing declared skill:\n%s", verifierTask)
 	}
 }
 
