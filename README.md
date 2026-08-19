@@ -1,5 +1,7 @@
 # telos
 
+`telos` is a goal-oriented programming system.
+
 ## Install
 
 ### Via the CLI
@@ -26,10 +28,16 @@ Set up Telos.
 
 ## Specifications
 
-`SPEC.md` is the main entrypoint to a `telos` program. Its frontmatter declares
-the program's name, version, target platform, and imported skills. Its body
-states the Goal: the observable outcome, important constraints, state that must
-survive, and evidence that counts as success.
+`SPEC.md` is the `main` entrypoint to a `telos` program. It declares the Goal,
+the target platform, and the evidence required for success.
+
+Skills are modular libraries imported by the specification. They package
+reusable instructions, references, scripts, and assets, and can be loaded from
+a local path or an immutable registry reference.
+
+A starred skill is also a required evaluation rubric. The verifier evaluates
+the result against every starred skill, and the revision cannot become Ready
+until all of them pass.
 
 ```markdown
 ---
@@ -47,15 +55,7 @@ Run an HTTP service with persistent Postgres storage. Keep `/healthz`
 available, preserve stored data across restarts, and return evidence for both.
 ```
 
-Skills are modular libraries for a Goal. Each skill is rooted at `SKILL.md` and
-can carry reusable instructions, references, scripts, and assets. A spec can
-import a skill from a relative path or by immutable registry reference.
-
-A trailing `*` makes the skill a required evaluation rubric. The verifier must
-evaluate the result against every starred skill, and the revision cannot become
-Ready while any required rubric fails.
-
-## Declarative application
+## Apply
 
 `telos apply` makes the approved specification the desired state of a
 persistent Goal. It hands the exact `SPEC.md` and its resolved skills to
