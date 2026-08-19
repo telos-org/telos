@@ -1,11 +1,12 @@
-# Telos
+# telos
 
-**Declarative software.**
-
-Describe the software you want in `SPEC.md`. `telos apply` turns that contract
-into verified running software.
+`telos` is a goal-oriented programming system. You describe what should remain
+true; agents implement the current revision, and an independent verifier checks
+the result against the Goal.
 
 ## Install
+
+### Via the CLI
 
 ```bash
 curl -fsSL https://usetelos.ai/install.sh | sh
@@ -13,57 +14,94 @@ telos login
 ```
 
 The installer supports macOS and Linux on amd64 and arm64.
-It also installs the canonical
-[`@telos/telos-cli`](skills/telos-cli/SKILL.md) agent skill.
 
-## Prompt
+### Via your coding agent
 
-Give your coding agent an outcome:
+Give your coding agent the same setup prompt used on
+[usetelos.ai](https://usetelos.ai):
 
-> Use Telos for this Goal: &lt;what should remain true&gt;. Install and sign in if
-> needed. Draft the smallest verifiable `SPEC.md`, then show me `telos plan`.
-> After I approve, run `telos apply` and return the evidence when it reaches
-> Ready.
+> Set up Telos.
+>
+> - Install it with `curl -fsSL https://usetelos.ai/install.sh | sh`.
+> - Run `telos login` to sign in to Telos Cloud.
+> - Read the installed `telos-cli` skill to get started.
 
-## Specification
+## Specifications
 
-A specification describes the outcome, important constraints, and evidence of
-success. It does not prescribe the implementation.
+`SPEC.md` is the main entrypoint to a `telos` program. Its frontmatter declares
+the program's name, version, target platform, and imported skills. Its body
+states the Goal: the observable outcome, important constraints, state that must
+survive, and evidence that counts as success.
 
 ```markdown
 ---
 name: hello-service
 version: 0.1.0
 platform: cloud
+skills:
+  - skills/postgres
+  - "@scope/service-readiness:1.0.0*"
 ---
 
 # Goal
 
-Run an HTTP service with persistent Postgres storage and a verified `/healthz`
-endpoint.
+Run an HTTP service with persistent Postgres storage. Keep `/healthz`
+available, preserve stored data across restarts, and return evidence for both.
 ```
 
-## Apply
+Skills are modular libraries for a Goal. Each skill is rooted at `SKILL.md` and
+can carry reusable instructions, references, scripts, and assets. A spec can
+import a skill from a relative path or by immutable registry reference.
+
+A trailing `*` makes the skill a required evaluation rubric. The verifier must
+evaluate the result against every starred skill, and the revision cannot become
+Ready while any required rubric fails.
+
+## Declarative application
+
+`telos apply` makes the approved specification the desired state of a
+persistent Goal. It hands the exact `SPEC.md` and its resolved skills to
+background agents that implement, deploy, and verify the revision.
+
+First, preview the contract without changing the Goal or its target state:
 
 ```bash
 telos plan SPEC.md
+```
+
+After reviewing the plan, apply it:
+
+```bash
 telos apply SPEC.md
+```
+
+`apply` returns a session ID when the revision is accepted for work, not when it
+is complete. Follow the session and inspect its evidence:
+
+```bash
 telos describe SESSION_ID
 telos logs SESSION_ID
 ```
 
-`plan` previews the contract without changing the Goal or target state. `apply`
-creates or updates a persistent Goal in Telos Cloud. Ready means the exact
-revision passed verification and is running.
+Ready means the running software produced from the exact specification and
+locked skill revisions passed every required rubric and independent
+verification.
+
+To change an existing Goal, edit `SPEC.md`, bump its version, and apply the new
+revision to the same session:
+
+```bash
+telos plan SPEC.md --session SESSION_ID
+telos apply SPEC.md --session SESSION_ID
+```
 
 Read the [Telos documentation](https://usetelos.ai/docs) for the complete
 workflow.
 
 ## Local runs
 
-`telos run` executes a bounded Goal and stops. For a human, it is an imperative
-tool for completing one piece of work within a limit. For an agent, it is a
-declarative subsystem for satisfying a bounded subgoal and returning evidence.
+`telos run` executes a bounded Goal in a local workspace and stops. Use it for
+one piece of work that does not need the persistent lifecycle of `telos apply`.
 
 Local runs use the open source
 [pi coding agent](https://github.com/earendil-works/pi):
@@ -74,17 +112,6 @@ pi # use /login to connect a model provider
 telos run SPEC.md --workspace . --until 3
 telos describe SESSION_ID
 telos logs SESSION_ID
-```
-
-Callers supply the Goal and observe its state and evidence through `describe`
-and `logs`; the implementation remains a black box.
-
-## Develop
-
-```bash
-go test ./...
-go build ./cmd/telos ./cmd/telosd
-bazel test //...
 ```
 
 ## License
