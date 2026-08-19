@@ -32,16 +32,15 @@ Set up Telos.
 >
 > The CLI is optimized for the agent experience.
 
-`SPEC.md` is the `main` entrypoint to a `telos` program. It declares the Goal,
-the target platform, and the evidence required for success.
+The Goal specification (`SPEC.md`) is the main entrypoint to a `telos` program.
 
 Skills are modular libraries imported by the specification. They package
 reusable instructions, references, scripts, and assets, and can be loaded from
 a local path or an immutable registry reference.
 
-A starred skill is also a required evaluation rubric. The verifier evaluates
-the result against every starred skill, and the revision cannot become Ready
-until all of them pass.
+Starred skills set quality, process, or other subjective bars. An independent
+evaluation uses them as required rubrics, and each must pass before the revision
+becomes Ready.
 
 ```markdown
 ---
