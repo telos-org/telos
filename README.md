@@ -23,7 +23,8 @@ telos login
 
 The installer supports macOS and Linux on amd64 and arm64.
 
-`telos login` signs in to Telos Cloud and is required for `telos apply`.
+`telos login` signs in to Telos Cloud and is required when `telos apply` targets
+Cloud.
 
 ## Get Started
 
@@ -36,6 +37,8 @@ The Goal specification (`SPEC.md`) is the main entrypoint to a `telos` program.
 
 Skills are modular libraries imported by a spec. Load them from a local path or
 pin them to an immutable registry version.
+
+An illustrative Goal spec:
 
 ```markdown
 ---
@@ -54,13 +57,13 @@ available, preserve stored data across restarts, and return evidence for both.
 ```
 
 **A trailing `*` makes a skill a required rubric.** Use starred skills for
-quality, process, or subjective requirements. Ready requires each one to pass
-an independent evaluation.
+quality, process, or subjective requirements. The revision must pass every
+starred rubric in an independent evaluation before Ready.
 
 ## Apply
 
-`telos apply` continuously reconciles a persistent Goal toward the desired
-state in `SPEC.md`.
+`telos apply` reconciles a persistent Goal toward the desired state in
+`SPEC.md`.
 
 First, preview the contract without changing the Goal or its target state:
 
@@ -93,7 +96,7 @@ Revision  sha256:abc123...
 Service   https://hello-service.example.com
 ```
 
-Status values:
+Common Cloud statuses:
 
 - `working` — reconciliation is in progress.
 - `ready` — the displayed revision is running and verified.
@@ -113,8 +116,7 @@ telos plan SPEC.md --session SESSION_ID
 telos apply SPEC.md --session SESSION_ID
 ```
 
-`telos` applies the delta and incrementally reconciles the live software toward
-the new desired state.
+`telos` reconciles the existing live software toward the new desired state.
 
 Read the [Telos documentation](https://usetelos.ai/docs) for the complete
 workflow.
