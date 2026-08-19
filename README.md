@@ -1,9 +1,5 @@
 # telos
 
-`telos` is a goal-oriented programming system. You describe what should remain
-true; agents implement the current revision, and an independent verifier checks
-the result against the Goal.
-
 ## Install
 
 ### Via the CLI
@@ -20,11 +16,13 @@ The installer supports macOS and Linux on amd64 and arm64.
 Give your coding agent the same setup prompt used on
 [usetelos.ai](https://usetelos.ai):
 
-> Set up Telos.
->
-> - Install it with `curl -fsSL https://usetelos.ai/install.sh | sh`.
-> - Run `telos login` to sign in to Telos Cloud.
-> - Read the installed `telos-cli` skill to get started.
+```text
+Set up Telos.
+
+- Install it with `curl -fsSL https://usetelos.ai/install.sh | sh`.
+- Run `telos login` to sign in to Telos Cloud.
+- Read the installed `telos-cli` skill to get started.
+```
 
 ## Specifications
 
