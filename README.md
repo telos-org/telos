@@ -4,6 +4,16 @@
 
 ## Install
 
+### Via your coding agent
+
+```text
+Set up Telos.
+
+- Install it with `curl -fsSL https://usetelos.ai/install.sh | sh`.
+- Run `telos login` to sign in to Telos Cloud.
+- Read the installed `telos-cli` skill to get started.
+```
+
 ### Via the CLI
 
 ```bash
@@ -14,16 +24,6 @@ telos login
 The installer supports macOS and Linux on amd64 and arm64.
 
 `telos login` signs in to Telos Cloud and is required for `telos apply`.
-
-### Via your coding agent
-
-```text
-Set up Telos.
-
-- Install it with `curl -fsSL https://usetelos.ai/install.sh | sh`.
-- Run `telos login` to sign in to Telos Cloud.
-- Read the installed `telos-cli` skill to get started.
-```
 
 ## Get Started
 
