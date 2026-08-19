@@ -38,10 +38,6 @@ Skills are modular libraries imported by the specification. They package
 reusable instructions, references, scripts, and assets, and can be loaded from
 a local path or an immutable registry reference.
 
-Starred skills set quality, process, or other subjective bars. An independent
-evaluation uses them as required rubrics, and each must pass before the revision
-becomes Ready.
-
 ```markdown
 ---
 name: hello-service
@@ -57,6 +53,10 @@ skills:
 Run an HTTP service with persistent Postgres storage. Keep `/healthz`
 available, preserve stored data across restarts, and return evidence for both.
 ```
+
+**A trailing `*` makes a skill a required rubric.** Use starred skills for
+quality, process, or subjective requirements. Ready requires each one to pass
+an independent evaluation.
 
 ## Apply
 
