@@ -71,25 +71,46 @@ After reviewing the plan, apply it:
 telos apply SPEC.md
 ```
 
-`apply` returns a session ID when the revision is accepted for work, not when it
-is complete. Follow the session and inspect its evidence:
+`apply` returns a session ID when the revision is accepted for work. The work
+then continues in the background.
+
+After applying, use `telos list` to find the session and `telos describe` to
+check its status:
+
+```console
+$ telos list
+NAME           STATUS  SESSION
+hello-service  ready   sess_123
+
+$ telos describe sess_123
+Name      hello-service
+Status    ready
+Session   sess_123
+Revision  sha256:abc123...
+Service   https://hello-service.example.com
+```
+
+The status is `working` while Telos reconciles the Goal. `ready` means the
+displayed revision is running and has passed every required rubric and
+independent verification. If a session needs attention or fails, `describe`
+also shows a `Reason`.
+
+Follow agent updates and verification evidence with:
 
 ```bash
-telos describe SESSION_ID
 telos logs SESSION_ID
 ```
 
-Ready means the running software produced from the exact specification and
-locked skill revisions passed every required rubric and independent
-verification.
-
-To change an existing Goal, edit `SPEC.md`, bump its version, and apply the new
+To update a live Goal, edit `SPEC.md`, bump its version, and apply the new
 revision to the same session:
 
 ```bash
 telos plan SPEC.md --session SESSION_ID
 telos apply SPEC.md --session SESSION_ID
 ```
+
+The agent system picks up the delta and incrementally reconciles the live
+software toward the new desired state.
 
 Read the [Telos documentation](https://usetelos.ai/docs) for the complete
 workflow.
