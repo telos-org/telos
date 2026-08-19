@@ -1,6 +1,7 @@
 # telos
 
-`telos` is a goal-oriented programming system.
+`telos` is a goal-oriented programming system. It turns a spec into running
+software, then verifies the result.
 
 ## Install
 
@@ -35,25 +36,28 @@ Cloud.
 
 The Goal specification (`SPEC.md`) is the main entrypoint to a `telos` program.
 
-Skills are modular libraries imported by a spec. Load them from a local path or
-pin them to an immutable registry version.
-
-An illustrative Goal spec:
+A minimal `SPEC.md`:
 
 ```markdown
 ---
 name: hello-service
 version: 0.1.0
 platform: cloud
-skills:
-  - skills/postgres
-  - "@scope/service-readiness:1.0.0*"
 ---
 
 # Goal
 
 Run an HTTP service with persistent Postgres storage. Keep `/healthz`
 available, preserve stored data across restarts, and return evidence for both.
+```
+
+Skills are modular libraries imported by a spec. Load them from a local path or
+pin them to an immutable registry version:
+
+```yaml
+skills:
+  - path/to/postgres-skill
+  - "@scope/service-readiness:1.0.0*"
 ```
 
 **A trailing `*` makes a skill a required rubric.** Use starred skills for
@@ -65,7 +69,7 @@ starred rubric in an independent evaluation before Ready.
 `telos apply` reconciles a persistent Goal toward the desired state in
 `SPEC.md`.
 
-First, preview the contract without changing the Goal or its target state:
+First, preview the spec without changing the Goal or its target state:
 
 ```bash
 telos plan SPEC.md
@@ -128,6 +132,8 @@ one piece of work that does not need the persistent lifecycle of `telos apply`.
 
 Local runs use the open source
 [pi coding agent](https://github.com/earendil-works/pi):
+
+For a spec with `platform: local`:
 
 ```bash
 npm install -g @earendil-works/pi-coding-agent
