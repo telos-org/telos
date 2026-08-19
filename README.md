@@ -1,7 +1,6 @@
 # telos
 
-`telos` is a goal-oriented programming system. It turns a spec into running
-software.
+`telos` is a goal-oriented programming system.
 
 ## Install
 
