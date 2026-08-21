@@ -85,6 +85,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"get SESSION        Download a session's package",
 		"delete SESSION     Delete a session",
 		"pull PACKAGE       Download a registry package",
+		"registry           Discover, inspect, and manage registry identities",
 		"version            Show version",
 		"--version",
 		"telos <command> --help",
@@ -763,6 +764,7 @@ func TestPushPackageSkillsUsesPublishedPlatformCatalogueSkill(t *testing.T) {
 			Scripts:      resolved.Scripts,
 		}}},
 		"user-abc",
+		"",
 	)
 	if err != nil {
 		t.Fatalf("pushPackageSkills: %v", err)
@@ -772,6 +774,224 @@ func TestPushPackageSkillsUsesPublishedPlatformCatalogueSkill(t *testing.T) {
 	}
 	if refs["k8s-deploy"] != "@telos/k8s-deploy:1.0.0" {
 		t.Fatalf("refs: got %#v", refs)
+	}
+}
+
+func TestPushPackageSkillCreatesNewPublicDependency(t *testing.T) {
+	skill := &skillPackage{
+		name:    "verify",
+		version: "1.0.0",
+		files: map[string]cloud.SkillFile{
+			"SKILL.md": {Mode: "0644", Data: []byte("verify")},
+		},
+	}
+	posted := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/skills/alice/verify":
+			http.NotFound(w, r)
+		case r.Method == http.MethodPost && r.URL.Path == "/api/skills":
+			posted = true
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if body["visibility"] != "public" {
+				t.Fatalf("visibility: got %#v", body["visibility"])
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope": "alice", "name": "verify", "version": "1.0.0",
+				"ref": "@alice/verify:1.0.0", "visibility": "public",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	record, err := pushPackageSkill(
+		cloud.NewClient(srv.URL, "test-token"),
+		skill,
+		"alice",
+		"public",
+	)
+	if err != nil {
+		t.Fatalf("pushPackageSkill: %v", err)
+	}
+	if !posted || record.Ref != "@alice/verify:1.0.0" {
+		t.Fatalf("record: got %+v, posted=%v", record, posted)
+	}
+}
+
+func TestPushPackageSkillRejectsExistingPrivateDependency(t *testing.T) {
+	posted := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/skills/alice/verify":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope": "alice", "name": "verify", "version": "1.0.0",
+				"ref": "@alice/verify:1.0.0", "visibility": "private",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/skills":
+			posted = true
+			http.Error(w, "unexpected publish", http.StatusInternalServerError)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	_, err := pushPackageSkill(
+		cloud.NewClient(srv.URL, "test-token"),
+		&skillPackage{name: "verify"},
+		"alice",
+		"public",
+	)
+	if err == nil || !strings.Contains(
+		err.Error(),
+		"telos registry visibility skill @alice/verify public --confirm @alice/verify",
+	) {
+		t.Fatalf("error: got %v", err)
+	}
+	if posted {
+		t.Fatal("existing private dependency was republished")
+	}
+}
+
+func TestPushPackageSkillRecoversFromConcurrentPublicCreate(t *testing.T) {
+	getCount := 0
+	postCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/skills/alice/verify":
+			getCount++
+			if getCount == 1 {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope": "alice", "name": "verify", "version": "1.0.0",
+				"ref": "@alice/verify:1.0.0", "visibility": "public",
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/skills":
+			postCount++
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			if postCount == 1 {
+				if body["visibility"] != "public" {
+					t.Fatalf("initial visibility: got %#v", body["visibility"])
+				}
+				http.Error(w, "created concurrently", http.StatusBadRequest)
+				return
+			}
+			if _, exists := body["visibility"]; exists {
+				t.Fatalf("retry selected existing visibility: %#v", body)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope": "alice", "name": "verify", "version": "1.0.0",
+				"ref": "@alice/verify:1.0.0", "visibility": "public",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	record, err := pushPackageSkill(
+		cloud.NewClient(srv.URL, "test-token"),
+		&skillPackage{
+			name:    "verify",
+			version: "1.0.0",
+			files: map[string]cloud.SkillFile{
+				"SKILL.md": {Mode: "0644", Data: []byte("verify")},
+			},
+		},
+		"alice",
+		"public",
+	)
+	if err != nil {
+		t.Fatalf("pushPackageSkill: %v", err)
+	}
+	if record.Ref != "@alice/verify:1.0.0" || getCount != 2 || postCount != 2 {
+		t.Fatalf("record=%+v get=%d post=%d", record, getCount, postCount)
+	}
+}
+
+func TestDefaultPublishScopeUsesSelectedOrganization(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/api/account/bootstrap" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"personal_org_id": "org_personal",
+			"organizations": []map[string]any{
+				{"id": "org_personal", "default_publish_scope": "alice"},
+				{"id": "org_team", "default_publish_scope": "acme"},
+			},
+		})
+	}))
+	defer srv.Close()
+	client := cloud.NewClient(srv.URL, "test-token")
+	client.OrgID = "org_team"
+
+	scope, err := defaultPublishScope(client)
+	if err != nil {
+		t.Fatalf("defaultPublishScope: %v", err)
+	}
+	if scope != "acme" {
+		t.Fatalf("scope: got %q", scope)
+	}
+}
+
+func TestPublicPackagePublishErrorExplainsPrivateDependencyPromotion(t *testing.T) {
+	err := publicPackagePublishError(&cloud.APIError{
+		StatusCode: http.StatusBadRequest,
+		Detail:     "public package dependency is private: @alice/verify:1.0.0",
+	})
+	if !strings.Contains(
+		err.Error(),
+		"telos registry visibility skill @alice/verify public --confirm @alice/verify",
+	) {
+		t.Fatalf("error: got %v", err)
+	}
+}
+
+func TestPublicPackagePublishErrorUsesStableDependencyCodes(t *testing.T) {
+	tests := []struct {
+		code string
+		want string
+	}{
+		{"registry_dependency_digest_mismatch", "rebuild the package lock"},
+		{"registry_dependency_unavailable", "missing or inaccessible"},
+		{"registry_dependency_not_downloadable", "not anonymously downloadable"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.code, func(t *testing.T) {
+			err := publicPackagePublishError(&cloud.APIError{
+				StatusCode: http.StatusBadRequest,
+				Code:       tt.code,
+				Detail:     "dependency failure",
+			})
+			if !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("error: got %v", err)
+			}
+		})
+	}
+}
+
+func TestRegistryPublicationErrorExplainsCustomizationIdentityCollision(t *testing.T) {
+	err := registryPublicationError(&cloud.APIError{
+		StatusCode: http.StatusConflict,
+		Code:       "registry_customization_target_occupied",
+		Detail:     "customization target must be a new private identity",
+	})
+	for _, want := range []string{"different top-level name", "changing only --version"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("error missing %q: %v", want, err)
+		}
 	}
 }
 

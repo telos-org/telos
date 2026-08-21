@@ -79,7 +79,12 @@ func TestPrepareRegistrySkillsCachesAndPinsExactVersion(t *testing.T) {
 		t.Fatalf("source ref: got %q", compiled.Skills[0].SourceRef)
 	}
 
-	refs, err := pushPackageSkills(cloud.NewClient(srv.URL, "test-token"), compiled, "user-scope")
+	refs, err := pushPackageSkills(
+		cloud.NewClient(srv.URL, "test-token"),
+		compiled,
+		"user-scope",
+		"",
+	)
 	if err != nil {
 		t.Fatalf("pushPackageSkills: %v", err)
 	}

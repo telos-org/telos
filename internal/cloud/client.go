@@ -33,6 +33,49 @@ type PackageVersionRecord struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type PackageRecord struct {
+	Scope         string                 `json:"scope"`
+	Name          string                 `json:"name"`
+	Ref           string                 `json:"ref"`
+	DisplayName   *string                `json:"display_name,omitempty"`
+	Description   *string                `json:"description,omitempty"`
+	Visibility    string                 `json:"visibility"`
+	Tags          []string               `json:"tags"`
+	LatestVersion *PackageVersionRecord  `json:"latest_version,omitempty"`
+	Versions      []PackageVersionRecord `json:"versions,omitempty"`
+	CreatedAt     string                 `json:"created_at"`
+	UpdatedAt     string                 `json:"updated_at"`
+	CanManage     bool                   `json:"can_manage"`
+}
+
+type RegistryVisibilityBlocker struct {
+	Code    string  `json:"code"`
+	Message string  `json:"message"`
+	Ref     *string `json:"ref,omitempty"`
+}
+
+type RegistryVisibilityPreflight struct {
+	ArtifactKind      string                      `json:"artifact_kind"`
+	Scope             string                      `json:"scope"`
+	Name              string                      `json:"name"`
+	CurrentVisibility string                      `json:"current_visibility"`
+	TargetVisibility  string                      `json:"target_visibility"`
+	IdentityRevision  int                         `json:"identity_revision"`
+	VersionCount      int                         `json:"version_count"`
+	VersionSetDigest  string                      `json:"version_set_digest"`
+	ConfirmationToken string                      `json:"confirmation_token"`
+	Warning           *string                     `json:"warning,omitempty"`
+	Blockers          []RegistryVisibilityBlocker `json:"blockers"`
+}
+
+type Capabilities struct {
+	DeploymentRevisionHistory  bool `json:"deployment_revision_history"`
+	DeploymentRevisionMessages bool `json:"deployment_revision_messages"`
+	DeploymentPackageRedeploy  bool `json:"deployment_package_redeploy"`
+	DeploymentSnapshotRestore  bool `json:"deployment_snapshot_restore"`
+	RegistryPrivacy            bool `json:"registry_privacy"`
+}
+
 type SkillFile struct {
 	Mode string
 	Data []byte
@@ -48,6 +91,16 @@ type SkillRecord struct {
 	Metadata    map[string]any `json:"metadata,omitempty"`
 	FileCount   int            `json:"file_count"`
 	SourceRef   string         `json:"source_ref"`
+	Visibility  string         `json:"visibility"`
+	CanManage   bool           `json:"can_manage"`
+}
+
+type packageListResponse struct {
+	Packages []PackageRecord `json:"packages"`
+}
+
+type skillListResponse struct {
+	Skills []SkillRecord `json:"skills"`
 }
 
 type SessionRecord struct {
@@ -172,6 +225,7 @@ type Client struct {
 
 type APIError struct {
 	StatusCode int
+	Code       string
 	Detail     string
 }
 
@@ -248,12 +302,45 @@ func ControlClientForContext(contextOverride string) (*Client, error) {
 	return client, nil
 }
 
+// RegistryReadClientForContext returns an authenticated Registry client when
+// credentials are configured and otherwise returns an anonymous client for
+// public Registry reads. An explicitly selected organization always requires
+// authentication.
+func RegistryReadClientForContext(contextOverride string) (*Client, error) {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cfg.AuthToken) != "" {
+		return ControlClientForContext(contextOverride)
+	}
+	context := strings.TrimSpace(contextOverride)
+	if context != "" && context != "personal" {
+		return nil, fmt.Errorf("--context requires login; run `telos login` first")
+	}
+	endpoint := cfg.APIEndpoint
+	if endpoint == "" {
+		endpoint = DefaultAPIEndpoint
+	}
+	return NewClient(endpoint, ""), nil
+}
+
 // NewClientFromConfig creates a client from the user's config file.
 func NewClientFromConfig() (*Client, error) {
 	return ControlClient()
 }
 
 func (c *Client) PublishPackage(scope, name, version string, data []byte) (*PackageVersionRecord, error) {
+	return c.PublishPackageWithVisibility(scope, name, version, data, "")
+}
+
+func (c *Client) PublishPackageWithVisibility(
+	scope string,
+	name string,
+	version string,
+	data []byte,
+	visibility string,
+) (*PackageVersionRecord, error) {
 	payload := map[string]any{
 		"name":        name,
 		"data_base64": base64.StdEncoding.EncodeToString(data),
@@ -263,6 +350,9 @@ func (c *Client) PublishPackage(scope, name, version string, data []byte) (*Pack
 	}
 	if strings.TrimSpace(version) != "" {
 		payload["version"] = version
+	}
+	if strings.TrimSpace(visibility) != "" {
+		payload["visibility"] = strings.TrimSpace(visibility)
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -277,6 +367,83 @@ func (c *Client) PublishPackage(scope, name, version string, data []byte) (*Pack
 		return nil, readError(resp)
 	}
 	var record PackageVersionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) CustomizePackage(
+	sourceScope string,
+	sourceName string,
+	sourceVersion string,
+	targetScope string,
+	targetName string,
+	targetVersion string,
+	data []byte,
+) (*PackageVersionRecord, error) {
+	payload := map[string]any{
+		"name":        targetName,
+		"data_base64": base64.StdEncoding.EncodeToString(data),
+	}
+	if strings.TrimSpace(targetScope) != "" {
+		payload["scope"] = strings.TrimSpace(targetScope)
+	}
+	if strings.TrimSpace(targetVersion) != "" {
+		payload["version"] = strings.TrimSpace(targetVersion)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	path := "/api/packages/" +
+		url.PathEscape(strings.TrimSpace(sourceScope)) + "/" +
+		url.PathEscape(strings.TrimSpace(sourceName)) + "/versions/" +
+		url.PathEscape(strings.TrimSpace(sourceVersion)) + "/customize"
+	resp, err := c.do("POST", path, body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, readError(resp)
+	}
+	var record PackageVersionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) ListPackages() ([]PackageRecord, error) {
+	resp, err := c.do("GET", "/api/packages", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response packageListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return response.Packages, nil
+}
+
+func (c *Client) GetPackage(scope, name string) (*PackageRecord, error) {
+	path := "/api/packages/" +
+		url.PathEscape(strings.TrimSpace(scope)) + "/" +
+		url.PathEscape(strings.TrimSpace(name))
+	resp, err := c.do("GET", path, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var record PackageRecord
 	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
 		return nil, err
 	}
@@ -320,6 +487,16 @@ func (c *Client) DownloadPackageVersionBundle(scope, name, version string) ([]by
 }
 
 func (c *Client) PublishSkillVersion(scope, name, version string, files map[string]SkillFile) (*SkillRecord, error) {
+	return c.PublishSkillVersionWithVisibility(scope, name, version, files, "")
+}
+
+func (c *Client) PublishSkillVersionWithVisibility(
+	scope string,
+	name string,
+	version string,
+	files map[string]SkillFile,
+	visibility string,
+) (*SkillRecord, error) {
 	type skillFileRequest struct {
 		DataBase64 string `json:"data_base64"`
 		Mode       string `json:"mode"`
@@ -341,6 +518,9 @@ func (c *Client) PublishSkillVersion(scope, name, version string, files map[stri
 	if strings.TrimSpace(version) != "" {
 		payload["version"] = version
 	}
+	if strings.TrimSpace(visibility) != "" {
+		payload["visibility"] = strings.TrimSpace(visibility)
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -358,6 +538,75 @@ func (c *Client) PublishSkillVersion(scope, name, version string, files map[stri
 		return nil, err
 	}
 	return &record, nil
+}
+
+func (c *Client) CustomizeSkillVersion(
+	sourceScope string,
+	sourceName string,
+	sourceVersion string,
+	targetScope string,
+	targetName string,
+	targetVersion string,
+	files map[string]SkillFile,
+) (*SkillRecord, error) {
+	type skillFileRequest struct {
+		DataBase64 string `json:"data_base64"`
+		Mode       string `json:"mode"`
+	}
+	bodyFiles := make(map[string]skillFileRequest, len(files))
+	for path, file := range files {
+		bodyFiles[path] = skillFileRequest{
+			DataBase64: base64.StdEncoding.EncodeToString(file.Data),
+			Mode:       file.Mode,
+		}
+	}
+	payload := map[string]any{
+		"name":  targetName,
+		"files": bodyFiles,
+	}
+	if strings.TrimSpace(targetScope) != "" {
+		payload["scope"] = strings.TrimSpace(targetScope)
+	}
+	if strings.TrimSpace(targetVersion) != "" {
+		payload["version"] = strings.TrimSpace(targetVersion)
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return nil, err
+	}
+	path := "/api/skills/" +
+		url.PathEscape(strings.TrimSpace(sourceScope)) + "/" +
+		url.PathEscape(strings.TrimSpace(sourceName)) + "/versions/" +
+		url.PathEscape(strings.TrimSpace(sourceVersion)) + "/customize"
+	resp, err := c.do("POST", path, body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return nil, readError(resp)
+	}
+	var record SkillRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) ListSkills() ([]SkillRecord, error) {
+	resp, err := c.do("GET", "/api/skills", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response skillListResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return response.Skills, nil
 }
 
 func (c *Client) GetSkill(scope, name string) (*SkillRecord, error) {
@@ -403,6 +652,131 @@ func (c *Client) getSkill(path string) (*SkillRecord, error) {
 		return nil, err
 	}
 	return &record, nil
+}
+
+func (c *Client) RegistryCapabilities() (*Capabilities, error) {
+	resp, err := c.do("GET", "/api/capabilities", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var capabilities Capabilities
+	if err := json.NewDecoder(resp.Body).Decode(&capabilities); err != nil {
+		return nil, err
+	}
+	return &capabilities, nil
+}
+
+func (c *Client) PreflightPackageVisibility(
+	scope string,
+	name string,
+	visibility string,
+) (*RegistryVisibilityPreflight, error) {
+	return c.preflightRegistryVisibility("packages", scope, name, visibility)
+}
+
+func (c *Client) PreflightSkillVisibility(
+	scope string,
+	name string,
+	visibility string,
+) (*RegistryVisibilityPreflight, error) {
+	return c.preflightRegistryVisibility("skills", scope, name, visibility)
+}
+
+func (c *Client) preflightRegistryVisibility(
+	kind string,
+	scope string,
+	name string,
+	visibility string,
+) (*RegistryVisibilityPreflight, error) {
+	body, err := json.Marshal(map[string]string{
+		"visibility": strings.TrimSpace(visibility),
+	})
+	if err != nil {
+		return nil, err
+	}
+	path := "/api/" + kind + "/" +
+		url.PathEscape(strings.TrimSpace(scope)) + "/" +
+		url.PathEscape(strings.TrimSpace(name)) + "/visibility/preflight"
+	resp, err := c.do("POST", path, body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var preflight RegistryVisibilityPreflight
+	if err := json.NewDecoder(resp.Body).Decode(&preflight); err != nil {
+		return nil, err
+	}
+	return &preflight, nil
+}
+
+func (c *Client) ChangePackageVisibility(
+	scope string,
+	name string,
+	visibility string,
+	confirmationToken string,
+) (*PackageRecord, error) {
+	body, err := registryVisibilityApplyBody(visibility, confirmationToken)
+	if err != nil {
+		return nil, err
+	}
+	path := "/api/packages/" +
+		url.PathEscape(strings.TrimSpace(scope)) + "/" +
+		url.PathEscape(strings.TrimSpace(name)) + "/visibility"
+	resp, err := c.do("PUT", path, body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var record PackageRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func (c *Client) ChangeSkillVisibility(
+	scope string,
+	name string,
+	visibility string,
+	confirmationToken string,
+) (*SkillRecord, error) {
+	body, err := registryVisibilityApplyBody(visibility, confirmationToken)
+	if err != nil {
+		return nil, err
+	}
+	path := "/api/skills/" +
+		url.PathEscape(strings.TrimSpace(scope)) + "/" +
+		url.PathEscape(strings.TrimSpace(name)) + "/visibility"
+	resp, err := c.do("PUT", path, body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var record SkillRecord
+	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
+		return nil, err
+	}
+	return &record, nil
+}
+
+func registryVisibilityApplyBody(visibility, confirmationToken string) ([]byte, error) {
+	return json.Marshal(map[string]string{
+		"visibility":         strings.TrimSpace(visibility),
+		"confirmation_token": strings.TrimSpace(confirmationToken),
+	})
 }
 
 func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error) {
@@ -580,6 +954,17 @@ func readError(resp *http.Response) error {
 	data, _ := io.ReadAll(resp.Body)
 	var m map[string]any
 	if json.Unmarshal(data, &m) == nil {
+		if rawError, ok := m["error"].(map[string]any); ok {
+			code, _ := rawError["code"].(string)
+			message, _ := rawError["message"].(string)
+			if code != "" || message != "" {
+				return &APIError{
+					StatusCode: resp.StatusCode,
+					Code:       code,
+					Detail:     message,
+				}
+			}
+		}
 		if detail, ok := m["detail"].(string); ok {
 			return &APIError{StatusCode: resp.StatusCode, Detail: detail}
 		}

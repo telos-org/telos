@@ -2173,31 +2173,7 @@ func digestApplyPackage(data []byte, manifest *spec.ApplyPackageManifest) string
 		sum := sha256.Sum256(data)
 		return fmt.Sprintf("sha256:%x", sum)
 	}
-	h := sha256.New()
-	writeSpecDigestPart(h, fmt.Sprintf("schema:%d", manifest.SchemaVersion))
-	writeSpecDigestPart(h, "spec:"+manifest.Spec.Digest)
-	names := make([]string, 0, len(manifest.Skills))
-	for name := range manifest.Skills {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		// Mirrors digestPackage: a starred (required-rubric) lock is part of
-		// package identity; the marker fires only when set so pre-starred
-		// digests stay stable.
-		if manifest.Skills[name].Starred {
-			writeSpecDigestPart(h, name+"*")
-		} else {
-			writeSpecDigestPart(h, name)
-		}
-		writeSpecDigestPart(h, manifest.Skills[name].Digest)
-	}
-	return fmt.Sprintf("sha256:%x", h.Sum(nil))
-}
-
-func writeSpecDigestPart(w io.Writer, value string) {
-	_, _ = io.WriteString(w, value)
-	_, _ = w.Write([]byte{0})
+	return spec.ApplyPackageDigest(manifest)
 }
 
 func materializedSpecDir(data []byte) string {

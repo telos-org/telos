@@ -1,0 +1,17 @@
+{
+  "schema_version": 3,
+  "spec": "---\nname: golden-v3\nversion: 1.0.0\nplatform: cloud\n---\nGolden V3 package.\n",
+  "spec_digest": "sha256:3ddb9637c43889b8b92135a9768a5b7a05758d1d33d153617b9871a0fe347fe0",
+  "skills": {
+    "lint": {
+      "digest": "sha256:2222222222222222222222222222222222222222222222222222222222222222",
+      "ref": "@alice/lint:1.2.3"
+    },
+    "review": {
+      "digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+      "ref": "@telos/review:2.0.0",
+      "starred": true
+    }
+  },
+  "expected_digest": "sha256:c524f3fb7d8a636b2647d969ba4dc9a724522d312dd76635e55fe5501a19e4dd"
+}
