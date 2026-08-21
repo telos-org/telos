@@ -1,7 +1,9 @@
 package telosd
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/telos-org/telos/internal/bundlelimits"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -128,6 +131,25 @@ func TestApplyPackageMaterializerRejectsWrongDigest(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("package cache entry should not exist after failed verify: %v", err)
+	}
+}
+
+func TestApplyPackageMaterializerRejectsOversizedBundleResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprint(bundlelimits.MaxCompressedBytes+1))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	materializer := newApplyPackageMaterializer(t.TempDir(), "runtime-token")
+	materializer.client = server.Client()
+	var out bytes.Buffer
+	err := materializer.fetch(context.Background(), server.URL, "skill test", &out)
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("expected bounded response rejection, got %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("oversized response wrote %d bytes", out.Len())
 	}
 }
 

@@ -429,6 +429,16 @@ func TestClientDownloadSkillVersionBundle(t *testing.T) {
 	}
 }
 
+func TestReadBundleResponseRejectsUnknownLengthOverLimit(t *testing.T) {
+	response := &http.Response{
+		Body:          io.NopCloser(strings.NewReader("12345")),
+		ContentLength: -1,
+	}
+	if _, err := readBundleResponseWithLimit(response, "skill bundle", 4); err == nil || !strings.Contains(err.Error(), "skill bundle exceeds 4 bytes") {
+		t.Fatalf("expected bounded body rejection, got %v", err)
+	}
+}
+
 func TestClientCreateSession(t *testing.T) {
 	var gotBody map[string]any
 	var gotOrgID string
