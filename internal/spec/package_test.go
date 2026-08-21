@@ -100,6 +100,161 @@ func TestBuildApplyPackageIsDeterministic(t *testing.T) {
 	}
 }
 
+func TestApplyPackageV3GoldenVector(t *testing.T) {
+	data, err := os.ReadFile("testdata/apply-package-v3-golden.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vector struct {
+		SchemaVersion  int                              `json:"schema_version"`
+		Spec           string                           `json:"spec"`
+		SpecDigest     string                           `json:"spec_digest"`
+		Skills         map[string]ApplyPackageSkillLock `json:"skills"`
+		ExpectedDigest string                           `json:"expected_digest"`
+	}
+	if err := json.Unmarshal(data, &vector); err != nil {
+		t.Fatal(err)
+	}
+	if got := digestBytes([]byte(vector.Spec)); got != vector.SpecDigest {
+		t.Fatalf("spec digest: got %s want %s", got, vector.SpecDigest)
+	}
+	manifest := ApplyPackageManifest{
+		SchemaVersion: vector.SchemaVersion,
+		Spec:          ApplyPackageSpecEntry{Digest: vector.SpecDigest},
+		Skills:        vector.Skills,
+	}
+	if got := ApplyPackageDigest(&manifest); got != vector.ExpectedDigest {
+		t.Fatalf("package digest: got %s want %s", got, vector.ExpectedDigest)
+	}
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := writePackageTar([]packageFile{
+		{path: "SPEC.md", mode: 0o644, data: []byte(vector.Spec)},
+		{path: "manifest.json", mode: 0o644, data: manifestData},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, parsed, err := ApplyPackageSpec(bundle); err != nil {
+		t.Fatalf("read golden V3 package: %v", err)
+	} else if got := ApplyPackageDigest(parsed); got != vector.ExpectedDigest {
+		t.Fatalf("parsed package digest: got %s want %s", got, vector.ExpectedDigest)
+	}
+
+	changed := manifest
+	changed.Skills = map[string]ApplyPackageSkillLock{}
+	for name, lock := range manifest.Skills {
+		changed.Skills[name] = lock
+	}
+	lock := changed.Skills["lint"]
+	lock.Ref = "@bob/lint:1.2.3"
+	changed.Skills["lint"] = lock
+	if ApplyPackageDigest(&changed) == vector.ExpectedDigest {
+		t.Fatal("changing an exact skill ref must change the V3 package digest")
+	}
+}
+
+func TestApplyPackageManifestV3RejectsUnknownFieldsRecursively(t *testing.T) {
+	for name, raw := range map[string]string{
+		"manifest": `{"schema_version":3,"spec":{"digest":"sha256:x"},"skills":{},"future":true}`,
+		"spec":     `{"schema_version":3,"spec":{"digest":"sha256:x","future":true},"skills":{}}`,
+		"lock":     `{"schema_version":3,"spec":{"digest":"sha256:x"},"skills":{"alpha":{"digest":"sha256:y","ref":"@alice/alpha:1.0.0","future":true}}}`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			var manifest ApplyPackageManifest
+			if err := json.Unmarshal([]byte(raw), &manifest); err == nil {
+				t.Fatal("expected V3 manifest with an unknown field to be rejected")
+			}
+		})
+	}
+}
+
+func TestApplyPackageManifestLegacyToleratesUnknownFields(t *testing.T) {
+	raw := `{"schema_version":1,"spec":{"digest":"sha256:x","compiler":"legacy"},"skills":{"alpha":{"digest":"sha256:y","legacy":true}},"runtime":"v1"}`
+	var manifest ApplyPackageManifest
+	if err := json.Unmarshal([]byte(raw), &manifest); err != nil {
+		t.Fatalf("legacy manifest compatibility: %v", err)
+	}
+	if manifest.SchemaVersion != ApplyPackageSchemaVersion {
+		t.Fatalf("schema version: got %d", manifest.SchemaVersion)
+	}
+	if manifest.Skills["alpha"].Digest != "sha256:y" {
+		t.Fatalf("skill lock: %#v", manifest.Skills["alpha"])
+	}
+}
+
+func TestBuildApplyPackageWithSkillRefsUsesV3AndRequiresCanonicalExactRefs(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writePackageTestSpec(t, dir, "package-v3-refs", "alpha")
+	writePackageTestSkill(t, dir, "alpha", map[string]string{
+		"SKILL.md": "---\nname: alpha\n---\nUse alpha.",
+	})
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := BuildApplyPackageWithSkillRefs(compiled, map[string]string{
+		"alpha": "@alice/alpha:1.0.0",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pkg.Manifest.SchemaVersion != ApplyPackageSchemaVersionExactRefs {
+		t.Fatalf("schema version: got %d want %d", pkg.Manifest.SchemaVersion, ApplyPackageSchemaVersionExactRefs)
+	}
+	for _, invalid := range []string{
+		"@alice/alpha",
+		" @alice/alpha:1.0.0",
+		"@Alice/alpha:1.0.0",
+		"skill:@alice/alpha:1.0.0",
+		"@alice/different:1.0.0",
+	} {
+		if _, err := BuildApplyPackageWithSkillRefs(compiled, map[string]string{"alpha": invalid}); err == nil {
+			t.Fatalf("expected non-canonical ref %q to fail", invalid)
+		}
+	}
+	if _, err := BuildApplyPackageWithSkillRefs(compiled, map[string]string{}); err == nil {
+		t.Fatal("expected a missing exact ref to fail")
+	}
+}
+
+func TestApplyPackageV3RegistryReaderRejectsEmbeddedSkillFiles(t *testing.T) {
+	specData := []byte("---\nname: package-v3-embedded\nversion: 1.0.0\nplatform: cloud\n---\nTest.\n")
+	skillData := []byte("---\nname: alpha\n---\nUse alpha.\n")
+	entry := ApplyPackageFileEntry{
+		Path:   "SKILL.md",
+		Mode:   "0644",
+		Digest: digestFile("SKILL.md", 0o644, skillData),
+	}
+	manifest := ApplyPackageManifest{
+		SchemaVersion: ApplyPackageSchemaVersionExactRefs,
+		Spec:          ApplyPackageSpecEntry{Digest: digestBytes(specData)},
+		Skills: map[string]ApplyPackageSkillLock{
+			"alpha": {
+				Digest: digestSkill("alpha", []ApplyPackageFileEntry{entry}),
+				Ref:    "@alice/alpha:1.0.0",
+			},
+		},
+	}
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bundle, err := writePackageTar([]packageFile{
+		{path: "SPEC.md", mode: 0o644, data: specData},
+		{path: "manifest.json", mode: 0o644, data: manifestData},
+		{path: "skills/alpha/SKILL.md", mode: 0o644, data: skillData},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := ApplyPackageSpec(bundle); err == nil || !strings.Contains(err.Error(), "must not embed") {
+		t.Fatalf("expected embedded V3 skill rejection, got %v", err)
+	}
+}
+
 func TestBuildApplyPackageWithSkillRefsOmitsSkillFiles(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writePackageTestSpec(t, dir, "package-ref-only", "alpha")
@@ -183,6 +338,60 @@ func TestHydrateApplyPackageFetchesReferencedSkills(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(dest, "skills", "alpha", "SKILL.md")); err != nil {
 		t.Fatalf("hydrated skill file: %v", err)
+	}
+}
+
+func TestHydrateApplyPackageEnforcesAggregateSkillLimits(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writePackageTestSpec(t, dir, "package-hydrate-limits", "alpha")
+	writePackageTestSkill(t, dir, "alpha", map[string]string{
+		"SKILL.md":    "---\nname: alpha\n---\nUse alpha.",
+		"reference/a": "alpha",
+	})
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	bundleDigest, skillBundle, err := BuildSkillBundle(compiled.Skills[0])
+	if err != nil {
+		t.Fatalf("BuildSkillBundle: %v", err)
+	}
+	pkg, err := BuildApplyPackageWithSkillRefs(compiled, map[string]string{
+		"alpha": "@user-abc/alpha:0.1.0",
+	})
+	if err != nil {
+		t.Fatalf("BuildApplyPackageWithSkillRefs: %v", err)
+	}
+	packageFiles, _, err := readApplyPackage(pkg.Bytes)
+	if err != nil {
+		t.Fatalf("readApplyPackage: %v", err)
+	}
+	skillFiles, err := readSkillBundleFiles("alpha", skillBundle)
+	if err != nil {
+		t.Fatalf("readSkillBundleFiles: %v", err)
+	}
+	packageBytes := packageFileBytes(packageFiles)
+	skillBytes := int64(0)
+	for _, file := range skillFiles {
+		skillBytes += int64(len(file.data))
+	}
+	fetch := func(ApplyPackageSkillFetchRequest) ([]byte, error) {
+		return skillBundle, nil
+	}
+
+	fileLimits := defaultArchiveReadLimits()
+	fileLimits.maxFiles = len(packageFiles) + len(skillFiles) - 1
+	if _, _, err := hydrateApplyPackageWithLimits(pkg.Bytes, fetch, fileLimits); err == nil || !strings.Contains(err.Error(), "contains more than") {
+		t.Fatalf("expected aggregate file-count rejection, got %v", err)
+	}
+
+	byteLimits := defaultArchiveReadLimits()
+	byteLimits.maxExpandedBytes = packageBytes + skillBytes - 1
+	if _, _, err := hydrateApplyPackageWithLimits(pkg.Bytes, fetch, byteLimits); err == nil || !strings.Contains(err.Error(), "expanded content exceeds") {
+		t.Fatalf("expected aggregate expanded-size rejection, got %v", err)
+	}
+	if pkg.Manifest.Skills["alpha"].Digest != bundleDigest {
+		t.Fatalf("skill digest: got %s want %s", pkg.Manifest.Skills["alpha"].Digest, bundleDigest)
 	}
 }
 
@@ -921,6 +1130,110 @@ func TestExtractApplyPackageRejectsDuplicateEntries(t *testing.T) {
 	if _, err := ExtractApplyPackage(data, t.TempDir()); err == nil {
 		t.Fatal("expected duplicate package entry to be rejected")
 	}
+}
+
+func TestReadSkillBundleFilesEnforcesArchiveLimits(t *testing.T) {
+	bundle, err := writePackageTarPreservingOrder([]packageFile{
+		{path: "SKILL.md", mode: 0o644, data: []byte("skill")},
+		{path: "reference/a", mode: 0o644, data: []byte("data")},
+	})
+	if err != nil {
+		t.Fatalf("writePackageTarPreservingOrder: %v", err)
+	}
+	limits := archiveReadLimits{
+		maxFiles:           2,
+		maxExpandedBytes:   9,
+		maxEntryBytes:      5,
+		maxPathBytes:       64,
+		maxArchiveBytes:    1024 * 1024,
+		maxCompressedBytes: int64(len(bundle)),
+	}
+	files, err := readSkillBundleFilesWithLimits("alpha", bundle, limits)
+	if err != nil {
+		t.Fatalf("exact limits: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("exact limits file count: got %d want 2", len(files))
+	}
+
+	tests := []struct {
+		name   string
+		adjust func(*archiveReadLimits)
+		want   string
+	}{
+		{
+			name: "compressed body",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxCompressedBytes--
+			},
+			want: "compressed content exceeds",
+		},
+		{
+			name: "file count",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxFiles--
+			},
+			want: "contains more than",
+		},
+		{
+			name: "single entry",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxEntryBytes--
+			},
+			want: "entry \"SKILL.md\" exceeds",
+		},
+		{
+			name: "expanded content",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxExpandedBytes--
+			},
+			want: "expanded content exceeds",
+		},
+		{
+			name: "path",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxPathBytes = len("SKILL.md") - 1
+			},
+			want: "entry path exceeds",
+		},
+		{
+			name: "archive body",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxArchiveBytes = 1
+			},
+			want: "read skill bundle",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			limited := limits
+			test.adjust(&limited)
+			if _, err := readSkillBundleFilesWithLimits("alpha", bundle, limited); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestReadSkillBundleFilesRejectsDuplicateEntries(t *testing.T) {
+	bundle, err := writePackageTarPreservingOrder([]packageFile{
+		{path: "SKILL.md", mode: 0o644, data: []byte("first")},
+		{path: "SKILL.md", mode: 0o644, data: []byte("second")},
+	})
+	if err != nil {
+		t.Fatalf("writePackageTarPreservingOrder: %v", err)
+	}
+	if _, err := readSkillBundleFiles("alpha", bundle); err == nil || !strings.Contains(err.Error(), "duplicate skill bundle entry") {
+		t.Fatalf("expected duplicate entry rejection, got %v", err)
+	}
+}
+
+func packageFileBytes(files map[string]packageFile) int64 {
+	total := int64(0)
+	for _, file := range files {
+		total += int64(len(file.data))
+	}
+	return total
 }
 
 func writePackageTarPreservingOrder(files []packageFile) ([]byte, error) {

@@ -1,7 +1,9 @@
 package telosd
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -9,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/telos-org/telos/internal/bundlelimits"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -58,6 +61,12 @@ func TestApplyPackageMaterializerHydratesReferencedSkills(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer runtime-token" {
 			t.Fatalf("Authorization = %q", got)
 		}
+		if got := r.Header.Get("X-Telos-Deployment-Id"); got != "dep_123" {
+			t.Fatalf("X-Telos-Deployment-Id = %q", got)
+		}
+		if got := r.Header.Get("X-Telos-Registry-Revision-Id"); got != "rev_123" {
+			t.Fatalf("X-Telos-Registry-Revision-Id = %q", got)
+		}
 		switch {
 		case strings.Contains(r.URL.Path, "/packages/blobs/"):
 			packageHits++
@@ -77,6 +86,8 @@ func TestApplyPackageMaterializerHydratesReferencedSkills(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv("TELOS_PACKAGE_BUNDLE_BASE_URL", server.URL+"/api/packages/blobs")
+	t.Setenv("TELOS_SESSION_ID", "dep_123")
+	t.Setenv("TELOS_REGISTRY_REVISION_ID", "rev_123")
 
 	materializer := newApplyPackageMaterializer(root, "runtime-token")
 	materializer.client = server.Client()
@@ -120,6 +131,25 @@ func TestApplyPackageMaterializerRejectsWrongDigest(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("package cache entry should not exist after failed verify: %v", err)
+	}
+}
+
+func TestApplyPackageMaterializerRejectsOversizedBundleResponse(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Length", fmt.Sprint(bundlelimits.MaxCompressedBytes+1))
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	materializer := newApplyPackageMaterializer(t.TempDir(), "runtime-token")
+	materializer.client = server.Client()
+	var out bytes.Buffer
+	err := materializer.fetch(context.Background(), server.URL, "skill test", &out)
+	if err == nil || !strings.Contains(err.Error(), "response exceeds") {
+		t.Fatalf("expected bounded response rejection, got %v", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("oversized response wrote %d bytes", out.Len())
 	}
 }
 
