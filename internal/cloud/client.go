@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/telos-org/telos/internal/bundlelimits"
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
@@ -483,7 +484,7 @@ func (c *Client) DownloadPackageVersionBundle(scope, name, version string) ([]by
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	return io.ReadAll(resp.Body)
+	return readBundleResponse(resp, "package bundle")
 }
 
 func (c *Client) PublishSkillVersion(scope, name, version string, files map[string]SkillFile) (*SkillRecord, error) {
@@ -635,7 +636,25 @@ func (c *Client) DownloadSkillVersionBundle(scope, name, version string) ([]byte
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	return io.ReadAll(resp.Body)
+	return readBundleResponse(resp, "skill bundle")
+}
+
+func readBundleResponse(resp *http.Response, label string) ([]byte, error) {
+	return readBundleResponseWithLimit(resp, label, bundlelimits.MaxCompressedBytes)
+}
+
+func readBundleResponseWithLimit(resp *http.Response, label string, maxBytes int64) ([]byte, error) {
+	if resp.ContentLength > maxBytes {
+		return nil, fmt.Errorf("%s exceeds %d bytes", label, maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", label, err)
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%s exceeds %d bytes", label, maxBytes)
+	}
+	return data, nil
 }
 
 func (c *Client) getSkill(path string) (*SkillRecord, error) {

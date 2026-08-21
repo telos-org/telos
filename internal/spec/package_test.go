@@ -341,6 +341,60 @@ func TestHydrateApplyPackageFetchesReferencedSkills(t *testing.T) {
 	}
 }
 
+func TestHydrateApplyPackageEnforcesAggregateSkillLimits(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writePackageTestSpec(t, dir, "package-hydrate-limits", "alpha")
+	writePackageTestSkill(t, dir, "alpha", map[string]string{
+		"SKILL.md":    "---\nname: alpha\n---\nUse alpha.",
+		"reference/a": "alpha",
+	})
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatalf("CompileEnvironment: %v", err)
+	}
+	bundleDigest, skillBundle, err := BuildSkillBundle(compiled.Skills[0])
+	if err != nil {
+		t.Fatalf("BuildSkillBundle: %v", err)
+	}
+	pkg, err := BuildApplyPackageWithSkillRefs(compiled, map[string]string{
+		"alpha": "@user-abc/alpha:0.1.0",
+	})
+	if err != nil {
+		t.Fatalf("BuildApplyPackageWithSkillRefs: %v", err)
+	}
+	packageFiles, _, err := readApplyPackage(pkg.Bytes)
+	if err != nil {
+		t.Fatalf("readApplyPackage: %v", err)
+	}
+	skillFiles, err := readSkillBundleFiles("alpha", skillBundle)
+	if err != nil {
+		t.Fatalf("readSkillBundleFiles: %v", err)
+	}
+	packageBytes := packageFileBytes(packageFiles)
+	skillBytes := int64(0)
+	for _, file := range skillFiles {
+		skillBytes += int64(len(file.data))
+	}
+	fetch := func(ApplyPackageSkillFetchRequest) ([]byte, error) {
+		return skillBundle, nil
+	}
+
+	fileLimits := defaultArchiveReadLimits()
+	fileLimits.maxFiles = len(packageFiles) + len(skillFiles) - 1
+	if _, _, err := hydrateApplyPackageWithLimits(pkg.Bytes, fetch, fileLimits); err == nil || !strings.Contains(err.Error(), "contains more than") {
+		t.Fatalf("expected aggregate file-count rejection, got %v", err)
+	}
+
+	byteLimits := defaultArchiveReadLimits()
+	byteLimits.maxExpandedBytes = packageBytes + skillBytes - 1
+	if _, _, err := hydrateApplyPackageWithLimits(pkg.Bytes, fetch, byteLimits); err == nil || !strings.Contains(err.Error(), "expanded content exceeds") {
+		t.Fatalf("expected aggregate expanded-size rejection, got %v", err)
+	}
+	if pkg.Manifest.Skills["alpha"].Digest != bundleDigest {
+		t.Fatalf("skill digest: got %s want %s", pkg.Manifest.Skills["alpha"].Digest, bundleDigest)
+	}
+}
+
 func TestHydrateApplyPackageFetchesLegacyReferencedSkills(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writePackageTestSpec(t, dir, "package-legacy-hydrate", "alpha")
@@ -1076,6 +1130,110 @@ func TestExtractApplyPackageRejectsDuplicateEntries(t *testing.T) {
 	if _, err := ExtractApplyPackage(data, t.TempDir()); err == nil {
 		t.Fatal("expected duplicate package entry to be rejected")
 	}
+}
+
+func TestReadSkillBundleFilesEnforcesArchiveLimits(t *testing.T) {
+	bundle, err := writePackageTarPreservingOrder([]packageFile{
+		{path: "SKILL.md", mode: 0o644, data: []byte("skill")},
+		{path: "reference/a", mode: 0o644, data: []byte("data")},
+	})
+	if err != nil {
+		t.Fatalf("writePackageTarPreservingOrder: %v", err)
+	}
+	limits := archiveReadLimits{
+		maxFiles:           2,
+		maxExpandedBytes:   9,
+		maxEntryBytes:      5,
+		maxPathBytes:       64,
+		maxArchiveBytes:    1024 * 1024,
+		maxCompressedBytes: int64(len(bundle)),
+	}
+	files, err := readSkillBundleFilesWithLimits("alpha", bundle, limits)
+	if err != nil {
+		t.Fatalf("exact limits: %v", err)
+	}
+	if len(files) != 2 {
+		t.Fatalf("exact limits file count: got %d want 2", len(files))
+	}
+
+	tests := []struct {
+		name   string
+		adjust func(*archiveReadLimits)
+		want   string
+	}{
+		{
+			name: "compressed body",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxCompressedBytes--
+			},
+			want: "compressed content exceeds",
+		},
+		{
+			name: "file count",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxFiles--
+			},
+			want: "contains more than",
+		},
+		{
+			name: "single entry",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxEntryBytes--
+			},
+			want: "entry \"SKILL.md\" exceeds",
+		},
+		{
+			name: "expanded content",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxExpandedBytes--
+			},
+			want: "expanded content exceeds",
+		},
+		{
+			name: "path",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxPathBytes = len("SKILL.md") - 1
+			},
+			want: "entry path exceeds",
+		},
+		{
+			name: "archive body",
+			adjust: func(limits *archiveReadLimits) {
+				limits.maxArchiveBytes = 1
+			},
+			want: "read skill bundle",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			limited := limits
+			test.adjust(&limited)
+			if _, err := readSkillBundleFilesWithLimits("alpha", bundle, limited); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("expected %q, got %v", test.want, err)
+			}
+		})
+	}
+}
+
+func TestReadSkillBundleFilesRejectsDuplicateEntries(t *testing.T) {
+	bundle, err := writePackageTarPreservingOrder([]packageFile{
+		{path: "SKILL.md", mode: 0o644, data: []byte("first")},
+		{path: "SKILL.md", mode: 0o644, data: []byte("second")},
+	})
+	if err != nil {
+		t.Fatalf("writePackageTarPreservingOrder: %v", err)
+	}
+	if _, err := readSkillBundleFiles("alpha", bundle); err == nil || !strings.Contains(err.Error(), "duplicate skill bundle entry") {
+		t.Fatalf("expected duplicate entry rejection, got %v", err)
+	}
+}
+
+func packageFileBytes(files map[string]packageFile) int64 {
+	total := int64(0)
+	for _, file := range files {
+		total += int64(len(file.data))
+	}
+	return total
 }
 
 func writePackageTarPreservingOrder(files []packageFile) ([]byte, error) {

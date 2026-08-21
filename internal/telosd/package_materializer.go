@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/telos-org/telos/internal/bundlelimits"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -197,8 +198,15 @@ func (m *applyPackageMaterializer) fetch(ctx context.Context, rawURL string, lab
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("fetch %s: HTTP %d", label, response.StatusCode)
 	}
-	if _, err := io.Copy(out, response.Body); err != nil {
+	if response.ContentLength > bundlelimits.MaxCompressedBytes {
+		return fmt.Errorf("fetch %s: response exceeds %d bytes", label, bundlelimits.MaxCompressedBytes)
+	}
+	written, err := io.Copy(out, io.LimitReader(response.Body, bundlelimits.MaxCompressedBytes+1))
+	if err != nil {
 		return fmt.Errorf("read %s: %w", label, err)
+	}
+	if written > bundlelimits.MaxCompressedBytes {
+		return fmt.Errorf("fetch %s: response exceeds %d bytes", label, bundlelimits.MaxCompressedBytes)
 	}
 	return nil
 }

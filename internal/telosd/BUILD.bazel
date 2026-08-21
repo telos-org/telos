@@ -17,6 +17,7 @@ go_library(
     importpath = "github.com/telos-org/telos/internal/telosd",
     visibility = ["//:__subpackages__"],
     deps = [
+        "//internal/bundlelimits",
         "//internal/cli",
         "//internal/evidence",
         "//internal/game",
@@ -42,6 +43,7 @@ go_test(
     ],
     embed = [":telosd"],
     deps = [
+        "//internal/bundlelimits",
         "//internal/sessionapi",
         "//internal/spec",
     ],

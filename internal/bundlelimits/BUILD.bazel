@@ -1,0 +1,8 @@
+load("@rules_go//go:def.bzl", "go_library")
+
+go_library(
+    name = "bundlelimits",
+    srcs = ["limits.go"],
+    importpath = "github.com/telos-org/telos/internal/bundlelimits",
+    visibility = ["//:__subpackages__"],
+)
