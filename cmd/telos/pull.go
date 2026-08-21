@@ -66,9 +66,14 @@ func cmdPull(args []string) {
 	if err != nil {
 		exitWithError(err)
 	}
-	control, err := cloud.ControlClientForContext(contextOverride)
+	control, err := cloud.RegistryReadClientForContext(contextOverride)
 	if err != nil {
 		exitWithError(err)
+	}
+	if control.Token == "" {
+		if err := requireRegistryPrivacyCapability(control); err != nil {
+			exitWithError(err)
+		}
 	}
 	pkg, err := packageForReference(control, reference)
 	if err != nil {

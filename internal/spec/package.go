@@ -18,6 +18,12 @@ import (
 
 const ApplyPackageSchemaVersion = 1
 
+const (
+	applyPackageMaxFiles         = 2048
+	applyPackageMaxExpandedBytes = 64 * 1024 * 1024
+	applyPackageMaxSpecBytes     = 1024 * 1024
+)
+
 // ApplyPackageSchemaVersionStarred gates manifests whose skill locks carry the
 // starred (required-rubric) flag. Starred locks change runtime semantics and
 // are folded into the package digest; older runtimes would silently drop the
@@ -27,8 +33,16 @@ const ApplyPackageSchemaVersion = 1
 // baffling digest mismatch on version-pinned deployments.
 const ApplyPackageSchemaVersionStarred = 2
 
+// ApplyPackageSchemaVersionExactRefs identifies registry packages whose skill
+// closure is made entirely of canonical, exact @scope/name:version locks. The
+// ref is part of package identity in this schema: two different skill
+// identities with the same content digest are deliberately different inputs.
+const ApplyPackageSchemaVersionExactRefs = 3
+
 func applyPackageSchemaSupported(version int) bool {
-	return version == ApplyPackageSchemaVersion || version == ApplyPackageSchemaVersionStarred
+	return version == ApplyPackageSchemaVersion ||
+		version == ApplyPackageSchemaVersionStarred ||
+		version == ApplyPackageSchemaVersionExactRefs
 }
 
 func applyPackageSchemaVersionFor(skills map[string]ApplyPackageSkillLock) int {
@@ -113,6 +127,62 @@ type ApplyPackageManifest struct {
 	SkillProvenance map[string]ApplyPackageSkillProvenance `json:"skill_provenance,omitempty"`
 }
 
+func (manifest *ApplyPackageManifest) UnmarshalJSON(data []byte) error {
+	var header struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return err
+	}
+	if header.SchemaVersion == ApplyPackageSchemaVersionExactRefs {
+		var strict struct {
+			SchemaVersion int `json:"schema_version"`
+			Spec          struct {
+				Digest string `json:"digest"`
+			} `json:"spec"`
+			Skills map[string]struct {
+				Digest  string `json:"digest"`
+				Ref     string `json:"ref"`
+				Starred bool   `json:"starred"`
+			} `json:"skills"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&strict); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			if err == nil {
+				return fmt.Errorf("manifest.json contains multiple JSON values")
+			}
+			return err
+		}
+		skills := make(map[string]ApplyPackageSkillLock, len(strict.Skills))
+		for name, lock := range strict.Skills {
+			skills[name] = ApplyPackageSkillLock{
+				Digest:  lock.Digest,
+				Ref:     lock.Ref,
+				Starred: lock.Starred,
+			}
+		}
+		*manifest = ApplyPackageManifest{
+			SchemaVersion: strict.SchemaVersion,
+			Spec: ApplyPackageSpecEntry{
+				Digest: strict.Spec.Digest,
+			},
+			Skills: skills,
+		}
+		return nil
+	}
+	type manifestAlias ApplyPackageManifest
+	var decoded manifestAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*manifest = ApplyPackageManifest(decoded)
+	return nil
+}
+
 // ApplyPackageDigest returns the content address represented by a package manifest.
 func ApplyPackageDigest(manifest *ApplyPackageManifest) string {
 	if manifest == nil {
@@ -129,6 +199,9 @@ func ApplyPackageSpec(data []byte) ([]byte, *ApplyPackageManifest, error) {
 		return nil, nil, err
 	}
 	if err := validateApplyPackageFilesAllowReferences(manifest, files); err != nil {
+		return nil, nil, err
+	}
+	if err := validateRegistryApplyPackageShape(manifest, files); err != nil {
 		return nil, nil, err
 	}
 	root := files["SPEC.md"].data
@@ -172,7 +245,20 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 	for _, skill := range sortedSkills(compiled.Skills) {
 		registryRef := ""
 		if skill != nil {
-			registryRef = strings.TrimSpace(skillRefs[skill.Name])
+			rawRef := skillRefs[skill.Name]
+			registryRef = strings.TrimSpace(rawRef)
+			if skillRefs != nil {
+				if rawRef != registryRef {
+					return nil, fmt.Errorf("registry skill ref for %q must be canonical", skill.Name)
+				}
+				parsed, ok := ParseRegistrySkillRef(registryRef)
+				if !ok || parsed.Version == "" || parsed.Ref != registryRef {
+					return nil, fmt.Errorf("registry skill ref for %q must be exact and canonical", skill.Name)
+				}
+				if parsed.Name != skill.Name {
+					return nil, fmt.Errorf("registry skill ref for %q must use the same skill name", skill.Name)
+				}
+			}
 		}
 		entry, files, err := packageSkill(
 			skill,
@@ -194,8 +280,12 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 		}
 	}
 	skillLocks := skillLockMap(skillEntries, requiredNames)
+	schemaVersion := applyPackageSchemaVersionFor(skillLocks)
+	if skillRefs != nil {
+		schemaVersion = ApplyPackageSchemaVersionExactRefs
+	}
 	manifest := ApplyPackageManifest{
-		SchemaVersion: applyPackageSchemaVersionFor(skillLocks),
+		SchemaVersion: schemaVersion,
 		Spec:          specEntry,
 		Skills:        skillLocks,
 	}
@@ -242,6 +332,9 @@ func HydrateApplyPackage(data []byte, fetch ApplyPackageSkillFetcher) ([]byte, *
 		return nil, nil, err
 	}
 	if err := validateApplyPackageFilesAllowReferences(manifest, files); err != nil {
+		return nil, nil, err
+	}
+	if err := validateRegistryApplyPackageShape(manifest, files); err != nil {
 		return nil, nil, err
 	}
 	for _, name := range missingPackageSkillNames(manifest, files) {
@@ -358,6 +451,7 @@ func readApplyPackage(data []byte) (map[string]packageFile, *ApplyPackageManifes
 
 	var manifestData []byte
 	files := map[string]packageFile{}
+	var expandedBytes int64
 	tr := tar.NewReader(gz)
 	for {
 		header, err := tr.Next()
@@ -370,6 +464,9 @@ func readApplyPackage(data []byte) (map[string]packageFile, *ApplyPackageManifes
 		if header.Typeflag != tar.TypeReg {
 			return nil, nil, fmt.Errorf("unsupported apply package entry %q", header.Name)
 		}
+		if len(files) >= applyPackageMaxFiles {
+			return nil, nil, fmt.Errorf("apply package contains more than %d files", applyPackageMaxFiles)
+		}
 		name, err := safePackageEntry(header.Name)
 		if err != nil {
 			return nil, nil, err
@@ -377,9 +474,22 @@ func readApplyPackage(data []byte) (map[string]packageFile, *ApplyPackageManifes
 		if _, exists := files[name]; exists {
 			return nil, nil, fmt.Errorf("duplicate apply package entry %q", name)
 		}
-		fileData, err := io.ReadAll(tr)
+		if header.Size < 0 {
+			return nil, nil, fmt.Errorf("invalid apply package entry size %q", name)
+		}
+		expandedBytes += header.Size
+		if expandedBytes > applyPackageMaxExpandedBytes {
+			return nil, nil, fmt.Errorf("apply package expanded content exceeds %d bytes", applyPackageMaxExpandedBytes)
+		}
+		if name == "SPEC.md" && header.Size > applyPackageMaxSpecBytes {
+			return nil, nil, fmt.Errorf("apply package SPEC.md exceeds %d bytes", applyPackageMaxSpecBytes)
+		}
+		fileData, err := io.ReadAll(io.LimitReader(tr, header.Size+1))
 		if err != nil {
 			return nil, nil, fmt.Errorf("read apply package entry %q: %w", name, err)
+		}
+		if int64(len(fileData)) != header.Size {
+			return nil, nil, fmt.Errorf("apply package entry size mismatch %q", name)
 		}
 		mode := fs.FileMode(header.Mode).Perm()
 		if mode == 0 {
@@ -445,6 +555,21 @@ func validateApplyPackageFilesWithMode(manifest *ApplyPackageManifest, files map
 			}
 		}
 	}
+	if manifest.SchemaVersion == ApplyPackageSchemaVersionExactRefs {
+		if len(manifest.SkillProvenance) != 0 {
+			return fmt.Errorf("schema_version %d does not allow skill_provenance", ApplyPackageSchemaVersionExactRefs)
+		}
+		for name, lock := range manifest.Skills {
+			ref := strings.TrimSpace(lock.Ref)
+			parsed, ok := ParseRegistrySkillRef(ref)
+			if !ok || parsed.Version == "" || parsed.Ref != ref || lock.Ref != ref {
+				return fmt.Errorf("schema_version %d skill %q must use an exact canonical ref", ApplyPackageSchemaVersionExactRefs, name)
+			}
+			if parsed.Name != name {
+				return fmt.Errorf("schema_version %d skill %q must match ref name %q", ApplyPackageSchemaVersionExactRefs, name, parsed.Name)
+			}
+		}
+	}
 	specFile, ok := files["SPEC.md"]
 	if !ok {
 		return fmt.Errorf("apply package missing SPEC.md")
@@ -506,6 +631,21 @@ func validateApplyPackageFilesWithMode(manifest *ApplyPackageManifest, files map
 		skillDigest := digestSkill(skillName, entries)
 		if skillDigest != manifest.skillDigest(skillName) {
 			return fmt.Errorf("skill digest mismatch for %q: got %s want %s", skillName, skillDigest, manifest.skillDigest(skillName))
+		}
+	}
+	return nil
+}
+
+func validateRegistryApplyPackageShape(manifest *ApplyPackageManifest, files map[string]packageFile) error {
+	if manifest == nil || manifest.SchemaVersion != ApplyPackageSchemaVersionExactRefs {
+		return nil
+	}
+	for name := range manifest.Skills {
+		prefix := "skills/" + name + "/"
+		for path := range files {
+			if strings.HasPrefix(path, prefix) {
+				return fmt.Errorf("schema_version %d skill %q must not embed skill files", ApplyPackageSchemaVersionExactRefs, name)
+			}
 		}
 	}
 	return nil
@@ -685,9 +825,13 @@ func packageFilesFromMap(files map[string]packageFile) []packageFile {
 }
 
 func safePackageEntry(name string) (string, error) {
-	name = filepath.ToSlash(strings.TrimSpace(name))
-	if name == "" || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "../") || strings.Contains(name, "/../") {
+	if name == "" || name != strings.TrimSpace(name) || strings.Contains(name, `\`) || strings.ContainsRune(name, 0) || strings.HasPrefix(name, "/") || strings.Contains(name, "//") {
 		return "", fmt.Errorf("unsafe apply package entry %q", name)
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("unsafe apply package entry %q", name)
+		}
 	}
 	return name, nil
 }
@@ -851,6 +995,9 @@ func digestPackage(schemaVersion int, specDigest string, skills map[string]Apply
 			writeDigestPart(h, name+"*")
 		} else {
 			writeDigestPart(h, name)
+		}
+		if schemaVersion == ApplyPackageSchemaVersionExactRefs {
+			writeDigestPart(h, skills[name].Ref)
 		}
 		writeDigestPart(h, skills[name].Digest)
 	}

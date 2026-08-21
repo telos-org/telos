@@ -3,6 +3,7 @@ package cloud
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,22 @@ func TestNormalizeEndpoint(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("NormalizeEndpoint(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestReadErrorPreservesStableRegistryCode(t *testing.T) {
+	err := readError(&http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body: io.NopCloser(strings.NewReader(
+			`{"error":{"code":"registry_dependency_digest_mismatch","message":"digest mismatch"}}`,
+		)),
+	})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type: %T", err)
+	}
+	if apiErr.Code != "registry_dependency_digest_mismatch" || apiErr.Detail != "digest mismatch" {
+		t.Fatalf("APIError: %+v", apiErr)
 	}
 }
 
@@ -145,6 +162,136 @@ func TestControlClientUsesStableContextWithoutLookup(t *testing.T) {
 	}
 	if client.OrgID != "org_telos" {
 		t.Fatalf("OrgID = %q", client.OrgID)
+	}
+}
+
+func TestRegistryReadClientAllowsAnonymousReadsButNotExplicitOrgContext(t *testing.T) {
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	t.Setenv(config.APIEndpointEnv, "https://api.example.com")
+	t.Setenv(config.AuthTokenEnv, "")
+	t.Setenv(config.ContextEnv, "@stored-team")
+
+	client, err := RegistryReadClientForContext("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if client.Token != "" || client.OrgID != "" {
+		t.Fatalf("anonymous Registry client = %+v", client)
+	}
+	if _, err := RegistryReadClientForContext("@explicit-team"); err == nil ||
+		!strings.Contains(err.Error(), "requires login") {
+		t.Fatalf("explicit anonymous org context error = %v", err)
+	}
+}
+
+func TestClientRegistryPrivacyCommandsUseExplicitWireContracts(t *testing.T) {
+	requests := map[string]map[string]any{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Method + " " + r.URL.Path
+		if r.Method == http.MethodPost || r.Method == http.MethodPut {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			requests[key] = body
+		}
+		switch key {
+		case "GET /api/capabilities":
+			_ = json.NewEncoder(w).Encode(map[string]any{"registry_privacy": true})
+		case "POST /api/packages":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope": "alice", "name": "demo", "version": "1.0.0",
+				"ref": "@alice/demo:1.0.0", "digest": "sha256:package",
+			})
+		case "POST /api/packages/telos/demo/versions/1.0.0/customize":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope": "alice", "name": "demo-fork", "version": "1.0.0",
+				"ref": "@alice/demo-fork:1.0.0", "digest": "sha256:fork",
+			})
+		case "POST /api/packages/alice/demo/visibility/preflight":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"artifact_kind": "package", "scope": "alice", "name": "demo",
+				"current_visibility": "private", "target_visibility": "public",
+				"identity_revision": 1, "version_count": 2,
+				"version_set_digest": "sha256:versions",
+				"confirmation_token": "sha256:confirmation", "blockers": []any{},
+			})
+		case "PUT /api/packages/alice/demo/visibility":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope": "alice", "name": "demo", "ref": "@alice/demo",
+				"visibility": "public",
+			})
+		case "POST /api/skills":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope": "alice", "name": "lint", "version": "1.0.0",
+				"ref": "@alice/lint:1.0.0", "digest": "sha256:skill",
+				"visibility": "public",
+			})
+		case "POST /api/skills/telos/lint/versions/1.0.0/customize":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope": "alice", "name": "lint-fork", "version": "1.0.0",
+				"ref": "@alice/lint-fork:1.0.0", "digest": "sha256:skill-fork",
+				"visibility": "private",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	capabilities, err := client.RegistryCapabilities()
+	if err != nil || !capabilities.RegistryPrivacy {
+		t.Fatalf("RegistryCapabilities = %+v, %v", capabilities, err)
+	}
+	if _, err := client.PublishPackageWithVisibility(
+		"alice", "demo", "1.0.0", []byte("package"), "public",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CustomizePackage(
+		"telos", "demo", "1.0.0", "alice", "demo-fork", "1.0.0", []byte("fork"),
+	); err != nil {
+		t.Fatal(err)
+	}
+	preflight, err := client.PreflightPackageVisibility("alice", "demo", "public")
+	if err != nil || preflight.VersionCount != 2 {
+		t.Fatalf("preflight = %+v, %v", preflight, err)
+	}
+	if _, err := client.ChangePackageVisibility(
+		"alice", "demo", "public", preflight.ConfirmationToken,
+	); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]SkillFile{"SKILL.md": {Mode: "0644", Data: []byte("skill")}}
+	if _, err := client.PublishSkillVersionWithVisibility(
+		"alice", "lint", "1.0.0", files, "public",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := client.CustomizeSkillVersion(
+		"telos", "lint", "1.0.0", "alice", "lint-fork", "1.0.0", files,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	if requests["POST /api/packages"]["visibility"] != "public" {
+		t.Fatalf("package publish body = %#v", requests["POST /api/packages"])
+	}
+	packageCustomize := requests["POST /api/packages/telos/demo/versions/1.0.0/customize"]
+	if _, exists := packageCustomize["visibility"]; exists {
+		t.Fatal("package customization sent visibility")
+	}
+	if requests["PUT /api/packages/alice/demo/visibility"]["confirmation_token"] !=
+		"sha256:confirmation" {
+		t.Fatalf("visibility body = %#v", requests["PUT /api/packages/alice/demo/visibility"])
+	}
+	if requests["POST /api/skills"]["visibility"] != "public" {
+		t.Fatalf("skill publish body = %#v", requests["POST /api/skills"])
+	}
+	skillCustomize := requests["POST /api/skills/telos/lint/versions/1.0.0/customize"]
+	if _, exists := skillCustomize["visibility"]; exists {
+		t.Fatal("skill customization sent visibility")
 	}
 }
 

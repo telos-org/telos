@@ -28,5 +28,6 @@ go_test(
         "skills_test.go",
         "spec_test.go",
     ],
+    data = ["testdata/apply-package-v3-golden.json"],
     embed = [":spec"],
 )

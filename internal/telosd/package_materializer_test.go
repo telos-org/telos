@@ -58,6 +58,12 @@ func TestApplyPackageMaterializerHydratesReferencedSkills(t *testing.T) {
 		if got := r.Header.Get("Authorization"); got != "Bearer runtime-token" {
 			t.Fatalf("Authorization = %q", got)
 		}
+		if got := r.Header.Get("X-Telos-Deployment-Id"); got != "dep_123" {
+			t.Fatalf("X-Telos-Deployment-Id = %q", got)
+		}
+		if got := r.Header.Get("X-Telos-Registry-Revision-Id"); got != "rev_123" {
+			t.Fatalf("X-Telos-Registry-Revision-Id = %q", got)
+		}
 		switch {
 		case strings.Contains(r.URL.Path, "/packages/blobs/"):
 			packageHits++
@@ -77,6 +83,8 @@ func TestApplyPackageMaterializerHydratesReferencedSkills(t *testing.T) {
 	}))
 	defer server.Close()
 	t.Setenv("TELOS_PACKAGE_BUNDLE_BASE_URL", server.URL+"/api/packages/blobs")
+	t.Setenv("TELOS_SESSION_ID", "dep_123")
+	t.Setenv("TELOS_REGISTRY_REVISION_ID", "rev_123")
 
 	materializer := newApplyPackageMaterializer(root, "runtime-token")
 	materializer.client = server.Client()

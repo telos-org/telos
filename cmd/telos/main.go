@@ -48,6 +48,8 @@ func main() {
 		cmdDelete(os.Args[2:])
 	case "pull":
 		cmdPull(os.Args[2:])
+	case "registry":
+		cmdRegistry(os.Args[2:])
 	case "login":
 		cmdLogin(os.Args[2:])
 	case "logout":
@@ -81,6 +83,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  run SPEC.md        Run a spec as a bounded task")
 	fmt.Fprintln(out, "  push SPEC.md       Publish a versioned spec or skill for reuse")
 	fmt.Fprintln(out, "  pull PACKAGE       Download a registry package")
+	fmt.Fprintln(out, "  registry           Discover, inspect, and manage registry identities")
 	fmt.Fprintln(out, "  get SESSION        Download a session's package")
 	fmt.Fprintln(out, "  logout             Log out and revoke this device's token")
 	fmt.Fprintln(out, "  config             Show or update CLI configuration")
