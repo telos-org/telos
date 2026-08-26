@@ -362,6 +362,9 @@ func validatePiModel(model string) error {
 	if !configured {
 		return nil
 	}
+	if len(provider.Models) == 0 {
+		return nil
+	}
 	for _, configuredModel := range provider.Models {
 		if configuredModel.ID == modelID {
 			return nil

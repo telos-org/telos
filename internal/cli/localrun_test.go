@@ -258,6 +258,29 @@ func TestValidatePiModelAllowsBuiltInProviderWithoutConfig(t *testing.T) {
 	}
 }
 
+func TestValidatePiModelAllowsProviderOverrideWithoutModelCatalog(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	modelsPath := filepath.Join(home, ".pi", "agent", "models.json")
+	if err := os.MkdirAll(filepath.Dir(modelsPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	modelsJSON := `{
+  "providers": {
+    "openai-codex": {
+      "baseUrl": "https://gateway.example.test/chatgpt"
+    }
+  }
+}`
+	if err := os.WriteFile(modelsPath, []byte(modelsJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := validatePiModel("openai-codex/gpt-5.6-sol"); err != nil {
+		t.Fatalf("provider overrides preserve Pi's built-in model catalog: %v", err)
+	}
+}
+
 func TestValidatePiModelMalformedConfigIsNonFatalForNonDefault(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
