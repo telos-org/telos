@@ -374,48 +374,6 @@ func (c *Client) PublishPackageWithVisibility(
 	return &record, nil
 }
 
-func (c *Client) CustomizePackage(
-	sourceScope string,
-	sourceName string,
-	sourceVersion string,
-	targetScope string,
-	targetName string,
-	targetVersion string,
-	data []byte,
-) (*PackageVersionRecord, error) {
-	payload := map[string]any{
-		"name":        targetName,
-		"data_base64": base64.StdEncoding.EncodeToString(data),
-	}
-	if strings.TrimSpace(targetScope) != "" {
-		payload["scope"] = strings.TrimSpace(targetScope)
-	}
-	if strings.TrimSpace(targetVersion) != "" {
-		payload["version"] = strings.TrimSpace(targetVersion)
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	path := "/api/packages/" +
-		url.PathEscape(strings.TrimSpace(sourceScope)) + "/" +
-		url.PathEscape(strings.TrimSpace(sourceName)) + "/versions/" +
-		url.PathEscape(strings.TrimSpace(sourceVersion)) + "/customize"
-	resp, err := c.do("POST", path, body)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, readError(resp)
-	}
-	var record PackageVersionRecord
-	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
-		return nil, err
-	}
-	return &record, nil
-}
-
 func (c *Client) ListPackages() ([]PackageRecord, error) {
 	resp, err := c.do("GET", "/api/packages", nil)
 	if err != nil {
@@ -527,59 +485,6 @@ func (c *Client) PublishSkillVersionWithVisibility(
 		return nil, err
 	}
 	resp, err := c.do("POST", "/api/skills", body)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, readError(resp)
-	}
-	var record SkillRecord
-	if err := json.NewDecoder(resp.Body).Decode(&record); err != nil {
-		return nil, err
-	}
-	return &record, nil
-}
-
-func (c *Client) CustomizeSkillVersion(
-	sourceScope string,
-	sourceName string,
-	sourceVersion string,
-	targetScope string,
-	targetName string,
-	targetVersion string,
-	files map[string]SkillFile,
-) (*SkillRecord, error) {
-	type skillFileRequest struct {
-		DataBase64 string `json:"data_base64"`
-		Mode       string `json:"mode"`
-	}
-	bodyFiles := make(map[string]skillFileRequest, len(files))
-	for path, file := range files {
-		bodyFiles[path] = skillFileRequest{
-			DataBase64: base64.StdEncoding.EncodeToString(file.Data),
-			Mode:       file.Mode,
-		}
-	}
-	payload := map[string]any{
-		"name":  targetName,
-		"files": bodyFiles,
-	}
-	if strings.TrimSpace(targetScope) != "" {
-		payload["scope"] = strings.TrimSpace(targetScope)
-	}
-	if strings.TrimSpace(targetVersion) != "" {
-		payload["version"] = strings.TrimSpace(targetVersion)
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	path := "/api/skills/" +
-		url.PathEscape(strings.TrimSpace(sourceScope)) + "/" +
-		url.PathEscape(strings.TrimSpace(sourceName)) + "/versions/" +
-		url.PathEscape(strings.TrimSpace(sourceVersion)) + "/customize"
-	resp, err := c.do("POST", path, body)
 	if err != nil {
 		return nil, err
 	}

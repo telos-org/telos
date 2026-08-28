@@ -84,7 +84,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"apply SPEC.md      Create or update a durable session from a spec",
 		"get SESSION        Download a session's package",
 		"delete SESSION     Delete a session",
-		"pull PACKAGE       Download a registry package",
+		"pull PACKAGE       Download a package; use `pull skill REF` for a skill",
 		"registry           Discover, inspect, and manage registry identities",
 		"version            Show version",
 		"--version",
@@ -93,6 +93,29 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("usage missing %q:\n%s", want, text)
 		}
+	}
+}
+
+func TestPullAndRegistryUsageKeepFrequentPullAtTopLevel(t *testing.T) {
+	fs, _, _ := newPullFlagSet()
+	var pullOut bytes.Buffer
+	fs.SetOutput(&pullOut)
+	fs.Usage()
+	for _, want := range []string{
+		"telos pull @scope/name:version",
+		"telos pull skill @scope/name:version",
+		"--context string",
+		"--output string",
+	} {
+		if !strings.Contains(pullOut.String(), want) {
+			t.Fatalf("pull usage missing %q:\n%s", want, pullOut.String())
+		}
+	}
+
+	var registryOut bytes.Buffer
+	registryUsage(&registryOut)
+	if strings.Contains(registryOut.String(), "pull skill") {
+		t.Fatalf("registry usage still contains skill pull:\n%s", registryOut.String())
 	}
 }
 
@@ -982,16 +1005,14 @@ func TestPublicPackagePublishErrorUsesStableDependencyCodes(t *testing.T) {
 	}
 }
 
-func TestRegistryPublicationErrorExplainsCustomizationIdentityCollision(t *testing.T) {
+func TestRegistryPublicationErrorExplainsIdentityKindCollision(t *testing.T) {
 	err := registryPublicationError(&cloud.APIError{
 		StatusCode: http.StatusConflict,
-		Code:       "registry_customization_target_occupied",
-		Detail:     "customization target must be a new private identity",
+		Code:       "registry_identity_kind_conflict",
+		Detail:     "identity belongs to another artifact kind",
 	})
-	for _, want := range []string{"different top-level name", "changing only --version"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Fatalf("error missing %q: %v", want, err)
-		}
+	if !strings.Contains(err.Error(), "choose a different package or skill name") {
+		t.Fatalf("error: got %v", err)
 	}
 }
 

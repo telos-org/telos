@@ -43,11 +43,6 @@ func cmdPush(args []string) {
 		false,
 		"Create the new identity (and a package's new local skills) as public",
 	)
-	customizeFrom := fs.String(
-		"from",
-		"",
-		"Create a private customization from an exact public @scope/name:version",
-	)
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -57,17 +52,6 @@ func cmdPush(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
-	if *public && strings.TrimSpace(*customizeFrom) != "" {
-		fmt.Fprintln(os.Stderr, "error: --public cannot be combined with --from; customizations start private")
-		os.Exit(2)
-	}
-	if source := strings.TrimSpace(*customizeFrom); source != "" {
-		if _, err := parsePackageReference(source); err != nil {
-			fmt.Fprintf(os.Stderr, "error: --from %v\n", err)
-			os.Exit(2)
-		}
-	}
-
 	input := fs.Arg(0)
 	if skill, ok, err := packageSkillDir(input, *version); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -84,32 +68,11 @@ func cmdPush(args []string) {
 				os.Exit(1)
 			}
 		}
-		var record *cloud.SkillRecord
-		if source := strings.TrimSpace(*customizeFrom); source != "" {
-			reference, parseErr := parsePackageReference(source)
-			if parseErr != nil {
-				fmt.Fprintf(os.Stderr, "error: --from %v\n", parseErr)
-				os.Exit(2)
-			}
-			record, err = client.CustomizeSkillVersion(
-				reference.scope,
-				reference.name,
-				reference.version,
-				*scope,
-				skill.name,
-				skill.version,
-				skill.files,
-			)
-			if err != nil {
-				err = registryPublicationError(err)
-			}
-		} else {
-			visibility := ""
-			if *public {
-				visibility = "public"
-			}
-			record, err = pushSkillPackageWithVisibility(client, skill, *scope, visibility)
+		visibility := ""
+		if *public {
+			visibility = "public"
 		}
+		record, err := pushSkillPackageWithVisibility(client, skill, *scope, visibility)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -149,12 +112,11 @@ func cmdPush(args []string) {
 	if *public {
 		visibility = "public"
 	}
-	record, err := pushSpecPackageWithOptions(
+	record, err := pushSpecPackageWithVisibility(
 		client,
 		pkg,
 		*scope,
 		visibility,
-		strings.TrimSpace(*customizeFrom),
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -306,7 +268,7 @@ func readSkillPublishFiles(root string) (map[string]cloud.SkillFile, error) {
 }
 
 func pushSpecPackage(client *cloud.Client, pkg *specPackage, scope string) (*cloud.PackageVersionRecord, error) {
-	return pushSpecPackageWithOptions(client, pkg, scope, "", "")
+	return pushSpecPackageWithVisibility(client, pkg, scope, "")
 }
 
 func pushSpecPackageVersion(
@@ -315,36 +277,33 @@ func pushSpecPackageVersion(
 	scope string,
 	version string,
 ) (*cloud.PackageVersionRecord, error) {
-	return pushSpecPackageVersionWithOptions(client, pkg, scope, version, "", "")
+	return pushSpecPackageVersionWithVisibility(client, pkg, scope, version, "")
 }
 
-func pushSpecPackageWithOptions(
+func pushSpecPackageWithVisibility(
 	client *cloud.Client,
 	pkg *specPackage,
 	scope string,
 	visibility string,
-	customizeFrom string,
 ) (*cloud.PackageVersionRecord, error) {
 	if pkg == nil {
 		return nil, fmt.Errorf("package is required")
 	}
-	return pushSpecPackageVersionWithOptions(
+	return pushSpecPackageVersionWithVisibility(
 		client,
 		pkg,
 		scope,
 		pkg.version,
 		visibility,
-		customizeFrom,
 	)
 }
 
-func pushSpecPackageVersionWithOptions(
+func pushSpecPackageVersionWithVisibility(
 	client *cloud.Client,
 	pkg *specPackage,
 	scope string,
 	version string,
 	visibility string,
-	customizeFrom string,
 ) (*cloud.PackageVersionRecord, error) {
 	if pkg == nil {
 		return nil, fmt.Errorf("package is required")
@@ -369,25 +328,6 @@ func pushSpecPackageVersionWithOptions(
 	pkg.digest = rebuilt.Digest
 	pkg.bytes = rebuilt.Bytes
 	pkg.version = version
-	if strings.TrimSpace(customizeFrom) != "" {
-		source, err := parsePackageReference(customizeFrom)
-		if err != nil {
-			return nil, fmt.Errorf("--from %w", err)
-		}
-		record, err := client.CustomizePackage(
-			source.scope,
-			source.name,
-			source.version,
-			scope,
-			pkg.name,
-			version,
-			pkg.bytes,
-		)
-		if err != nil {
-			return nil, registryPublicationError(err)
-		}
-		return record, nil
-	}
 	record, err := client.PublishPackageWithVisibility(
 		scope,
 		pkg.name,
@@ -433,9 +373,9 @@ func registryPublicationError(err error) error {
 		return err
 	}
 	switch apiErr.Code {
-	case "registry_customization_target_occupied", "registry_identity_kind_conflict":
+	case "registry_identity_kind_conflict":
 		return fmt.Errorf(
-			"customization target is already occupied; choose a different top-level name in SPEC.md or SKILL.md (changing only --version cannot resolve this conflict): %w",
+			"Registry identity is already used by another artifact kind; choose a different package or skill name: %w",
 			err,
 		)
 	case "registry_dependency_not_downloadable":

@@ -203,11 +203,6 @@ func TestClientRegistryPrivacyCommandsUseExplicitWireContracts(t *testing.T) {
 				"scope": "alice", "name": "demo", "version": "1.0.0",
 				"ref": "@alice/demo:1.0.0", "digest": "sha256:package",
 			})
-		case "POST /api/packages/telos/demo/versions/1.0.0/customize":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"scope": "alice", "name": "demo-fork", "version": "1.0.0",
-				"ref": "@alice/demo-fork:1.0.0", "digest": "sha256:fork",
-			})
 		case "POST /api/packages/alice/demo/visibility/preflight":
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"artifact_kind": "package", "scope": "alice", "name": "demo",
@@ -227,12 +222,6 @@ func TestClientRegistryPrivacyCommandsUseExplicitWireContracts(t *testing.T) {
 				"ref": "@alice/lint:1.0.0", "digest": "sha256:skill",
 				"visibility": "public",
 			})
-		case "POST /api/skills/telos/lint/versions/1.0.0/customize":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"scope": "alice", "name": "lint-fork", "version": "1.0.0",
-				"ref": "@alice/lint-fork:1.0.0", "digest": "sha256:skill-fork",
-				"visibility": "private",
-			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -246,11 +235,6 @@ func TestClientRegistryPrivacyCommandsUseExplicitWireContracts(t *testing.T) {
 	}
 	if _, err := client.PublishPackageWithVisibility(
 		"alice", "demo", "1.0.0", []byte("package"), "public",
-	); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := client.CustomizePackage(
-		"telos", "demo", "1.0.0", "alice", "demo-fork", "1.0.0", []byte("fork"),
 	); err != nil {
 		t.Fatal(err)
 	}
@@ -269,18 +253,8 @@ func TestClientRegistryPrivacyCommandsUseExplicitWireContracts(t *testing.T) {
 	); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.CustomizeSkillVersion(
-		"telos", "lint", "1.0.0", "alice", "lint-fork", "1.0.0", files,
-	); err != nil {
-		t.Fatal(err)
-	}
-
 	if requests["POST /api/packages"]["visibility"] != "public" {
 		t.Fatalf("package publish body = %#v", requests["POST /api/packages"])
-	}
-	packageCustomize := requests["POST /api/packages/telos/demo/versions/1.0.0/customize"]
-	if _, exists := packageCustomize["visibility"]; exists {
-		t.Fatal("package customization sent visibility")
 	}
 	if requests["PUT /api/packages/alice/demo/visibility"]["confirmation_token"] !=
 		"sha256:confirmation" {
@@ -288,10 +262,6 @@ func TestClientRegistryPrivacyCommandsUseExplicitWireContracts(t *testing.T) {
 	}
 	if requests["POST /api/skills"]["visibility"] != "public" {
 		t.Fatalf("skill publish body = %#v", requests["POST /api/skills"])
-	}
-	skillCustomize := requests["POST /api/skills/telos/lint/versions/1.0.0/customize"]
-	if _, exists := skillCustomize["visibility"]; exists {
-		t.Fatal("skill customization sent visibility")
 	}
 }
 

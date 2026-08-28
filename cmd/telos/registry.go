@@ -1,16 +1,14 @@
 package main
 
 import (
-	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"text/tabwriter"
 
 	"github.com/telos-org/telos/internal/cloud"
-	"github.com/telos-org/telos/internal/spec"
 )
 
 type registryReference struct {
@@ -30,8 +28,6 @@ func cmdRegistry(args []string) {
 		cmdRegistryList(args[1:])
 	case "inspect":
 		cmdRegistryInspect(args[1:])
-	case "pull":
-		cmdRegistryPull(args[1:])
 	case "visibility":
 		cmdRegistryVisibility(args[1:])
 	default:
@@ -41,105 +37,13 @@ func cmdRegistry(args []string) {
 	}
 }
 
-func registryUsage(out *os.File) {
+func registryUsage(out io.Writer) {
 	fmt.Fprintln(out, "usage: telos registry <command> [args]")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "commands:")
 	fmt.Fprintln(out, "  list packages|skills                         Discover accessible identities")
 	fmt.Fprintln(out, "  inspect package|skill @scope/name[:version] Inspect an identity or version")
-	fmt.Fprintln(out, "  pull skill @scope/name:version [--output DIR] Pull and verify a skill")
 	fmt.Fprintln(out, "  visibility package|skill @scope/name MODE   Change identity-wide visibility")
-}
-
-func cmdRegistryPull(args []string) {
-	fs := newCommandFlagSet(
-		"registry pull",
-		"telos registry pull skill @scope/name:version [flags]",
-	)
-	output := fs.String("output", "", "Destination skill directory")
-	contextValue := cloudContextFlag(fs)
-	parseFlags(fs, args)
-	requireArgCount(fs, 2, "skill and an exact @scope/name:version")
-	if kind := strings.ToLower(strings.TrimSpace(fs.Arg(0))); kind != "skill" && kind != "skills" {
-		fmt.Fprintln(os.Stderr, "error: registry pull currently supports skill")
-		os.Exit(2)
-	}
-	reference, err := parseRegistryReference(fs.Arg(1))
-	if err != nil {
-		exitWithError(err)
-	}
-	if reference.version == "" {
-		fmt.Fprintln(os.Stderr, "error: registry skill pull requires an exact version")
-		os.Exit(2)
-	}
-	client := registryReadClient(fs, *contextValue)
-	destination, record, err := pullRegistrySkill(client, reference, *output)
-	if err != nil {
-		exitWithError(err)
-	}
-	fmt.Printf("pulled %s (%s) to %s\n", record.Ref, record.Digest, destination)
-}
-
-func pullRegistrySkill(
-	client *cloud.Client,
-	reference registryReference,
-	output string,
-) (string, *cloud.SkillRecord, error) {
-	if client == nil {
-		return "", nil, fmt.Errorf("Registry client is required")
-	}
-	if reference.version == "" {
-		return "", nil, fmt.Errorf("skill pull requires an exact Registry version")
-	}
-	record, err := client.GetSkillVersion(
-		reference.scope,
-		reference.name,
-		reference.version,
-	)
-	if err != nil {
-		return "", nil, fmt.Errorf("resolve @%s/%s:%s: %w", reference.scope, reference.name, reference.version, err)
-	}
-	if record.Scope != reference.scope || record.Name != reference.name || record.Version != reference.version {
-		return "", nil, fmt.Errorf("Registry returned mismatched skill %s", record.Ref)
-	}
-	bundle, err := client.DownloadSkillVersionBundle(
-		reference.scope,
-		reference.name,
-		reference.version,
-	)
-	if err != nil {
-		return "", nil, fmt.Errorf("download %s: %w", record.Ref, err)
-	}
-	if err := spec.VerifySkillBundle(reference.name, record.Digest, bundle); err != nil {
-		return "", nil, fmt.Errorf("verify %s: %w", record.Ref, err)
-	}
-	destination := strings.TrimSpace(output)
-	if destination == "" {
-		destination = reference.name
-	}
-	destination = filepath.Clean(destination)
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		return "", nil, err
-	}
-	if err := os.Mkdir(destination, 0o755); err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return "", nil, fmt.Errorf("%s already exists", destination)
-		}
-		return "", nil, err
-	}
-	// The successful Mkdir is the ownership boundary: only this invocation's
-	// directory may be removed if extraction fails. A concurrent creator can
-	// no longer be overwritten or deleted after a check-then-act gap.
-	if err := spec.ExtractSkillBundle(
-		reference.name,
-		record.Digest,
-		bundle,
-		destination,
-	); err != nil {
-		_ = os.RemoveAll(destination)
-		return "", nil, fmt.Errorf("extract %s: %w", record.Ref, err)
-	}
-	return destination, record, nil
 }
 
 func cmdRegistryList(args []string) {

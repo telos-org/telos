@@ -65,6 +65,59 @@ func TestPullRegistrySkillDownloadsVerifiesAndExtractsExactVersion(t *testing.T)
 	}
 }
 
+func TestCmdPullRoutesSkillWithInterspersedFlags(t *testing.T) {
+	tests := []struct {
+		name string
+		args func(string) []string
+	}{
+		{
+			name: "resource first",
+			args: func(destination string) []string {
+				return []string{
+					"skill",
+					"@telos/verify-quality:1.2.3",
+					"--output",
+					destination,
+				}
+			},
+		},
+		{
+			name: "flags first",
+			args: func(destination string) []string {
+				return []string{
+					"--context",
+					"personal",
+					"--output",
+					destination,
+					"skill",
+					"@telos/verify-quality:1.2.3",
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			digest, bundle := testRegistrySkillBundle(t, "verify-quality")
+			srv := registrySkillPullServer(t, digest, bundle)
+			defer srv.Close()
+			configureCloudTest(t, srv.URL)
+			destination := filepath.Join(t.TempDir(), "pulled-skill")
+
+			output := captureStdout(t, func() {
+				cmdPull(tt.args(destination))
+			})
+
+			if !strings.Contains(output, "pulled @telos/verify-quality:1.2.3") {
+				t.Fatalf("pull output = %q", output)
+			}
+			if _, err := os.Stat(filepath.Join(destination, "SKILL.md")); err != nil {
+				t.Fatalf("SKILL.md: %v", err)
+			}
+		})
+	}
+}
+
 func TestPullRegistrySkillDoesNotModifyExistingDestination(t *testing.T) {
 	digest, bundle := testRegistrySkillBundle(t, "verify-quality")
 	srv := registrySkillPullServer(t, digest, bundle)
