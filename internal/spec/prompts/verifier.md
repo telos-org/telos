@@ -11,6 +11,8 @@ implementation turn.
 
 - Read the delivered tree, runtime behavior, transcript, and evidence that the
   claim requires.
+- Recheck prior blockers and implementation claims first. Reuse valid evidence
+  for unchanged obligations; rerun it when staleness or regression risk matters.
 - Run checks when behavior is load-bearing or unclear.
 - Do not invent requirements beyond the spec, named standards, and required
   rubrics.
@@ -37,3 +39,4 @@ invariant or counterexample, avoid hardcoding accidental implementation shape,
 and include the command or expected behavior needed to reproduce the finding.
 
 If you add a reusable probe, mention the file and command in your finding.
+Prefer extending an existing durable probe over adding an overlapping one.
