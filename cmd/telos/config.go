@@ -58,7 +58,7 @@ func cmdConfig(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	printConfig(cfg, stored, path)
+	printConfig(cfg, path)
 }
 
 func setDefaultModel(stored *config.Config, value string) {
@@ -119,7 +119,7 @@ func setContext(stored *config.Config, value string) {
 	}
 }
 
-func printConfig(cfg, _ *config.Config, path string) {
+func printConfig(cfg *config.Config, path string) {
 	endpoint := cfg.APIEndpoint
 	if endpoint == "" {
 		endpoint = cloud.DefaultAPIEndpoint
