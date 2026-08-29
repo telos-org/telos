@@ -419,6 +419,11 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	runtimeConfig.Model, err = configuredCloudModel(runtimeConfig.Model)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 	packageName := ""
 	var packageRecord *cloud.PackageVersionRecord
 	if reference != nil {
@@ -485,11 +490,15 @@ func applyCloudSessionPackage(
 		return "updated", session, err
 	}
 
+	inference, err := resolveCloudInference(control, runtimeConfig.Model)
+	if err != nil {
+		return "", nil, err
+	}
 	session, err := control.CreateSession(cloud.SessionCreateOptions{
 		Name:          name,
 		PackageRef:    packageRef,
-		AgentModel:    runtimeConfig.Model,
 		AgentThinking: runtimeConfig.Thinking,
+		Inference:     inference,
 	})
 	return "created", session, err
 }

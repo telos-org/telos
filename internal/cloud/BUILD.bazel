@@ -6,6 +6,7 @@ go_library(
         "account.go",
         "cliauth.go",
         "client.go",
+        "inference.go",
     ],
     importpath = "github.com/telos-org/telos/internal/cloud",
     visibility = ["//:__subpackages__"],

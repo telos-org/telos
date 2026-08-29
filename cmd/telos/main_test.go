@@ -1099,6 +1099,47 @@ func TestApplyCloudSessionPackageCreates(t *testing.T) {
 	}
 }
 
+func TestApplyCloudSessionPackageResolvesNamedSubscription(t *testing.T) {
+	var created map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
+			_, _ = w.Write([]byte(`{"connections":[{"id":"conn_rohan","name":"openai-rohan","provider":"chatgpt-codex","status":"connected"}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
+			if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = w.Write([]byte(`{"id":"sess_123","name":"auth","state":"provisioning","package_ref":"@user-abc/auth:0.1.0","package_digest":"sha256:new","created_at":"now","updated_at":"now"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	_, _, err := applyCloudSessionPackage(
+		cloud.NewClient(srv.URL, "test-token"),
+		"auth",
+		"@user-abc/auth:0.1.0",
+		"",
+		sessionRuntimeConfig{Model: "openai-rohan/gpt-5.6-sol"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inference, ok := created["inference"].(map[string]any)
+	if !ok {
+		t.Fatalf("inference = %#v", created["inference"])
+	}
+	if inference["source"] != "subscription" ||
+		inference["connection_id"] != "conn_rohan" ||
+		inference["model"] != "gpt-5.6-sol" {
+		t.Fatalf("inference = %#v", inference)
+	}
+	if _, exists := created["agent_model"]; exists {
+		t.Fatalf("named subscription leaked into agent_model: %#v", created)
+	}
+}
+
 func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 	var updated bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

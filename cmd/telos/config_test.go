@@ -156,11 +156,8 @@ func TestCmdConfigShowsResolvedContextWithoutExposingToken(t *testing.T) {
 		t.Fatalf("authentication = %q", got)
 	}
 	for label, want := range map[string]string{
-		"Config file":           configPath,
-		"Config file source":    "environment (TELOS_CONFIG)",
-		"Endpoint source":       "stored file",
-		"Authentication source": "stored file",
-		"Context source":        "stored file",
+		"Config file":   configPath,
+		"Default model": "workspace default",
 	} {
 		if got := configOutputValue(t, out, label); got != want {
 			t.Fatalf("%s = %q, want %q", label, got, want)
@@ -168,6 +165,36 @@ func TestCmdConfigShowsResolvedContextWithoutExposingToken(t *testing.T) {
 	}
 	if strings.Contains(out, "test-token") {
 		t.Fatalf("output leaked auth token: %q", out)
+	}
+	if strings.Contains(strings.ToLower(out), "source") {
+		t.Fatalf("output contains implementation-source noise: %q", out)
+	}
+	for _, want := range []string{"openai-rohan", "chatgpt-codex", "owner@example.com", "connected"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output %q does not contain subscription value %q", out, want)
+		}
+	}
+}
+
+func TestCmdConfigSetsCloudDefaultModel(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	t.Setenv(config.ConfigPathEnv, configPath)
+	if err := config.SaveConfig(&config.Config{AuthToken: "test-token"}); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		cmdConfig([]string{"--model", "openai-rohan/gpt-5.6-sol"})
+	})
+	if !strings.Contains(out, "default model set to openai-rohan/gpt-5.6-sol") {
+		t.Fatalf("output = %q", out)
+	}
+	stored, err := config.LoadStoredConfig()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.DefaultModel != "openai-rohan/gpt-5.6-sol" || stored.AuthToken != "test-token" {
+		t.Fatalf("stored config = %#v", stored)
 	}
 }
 
@@ -272,20 +299,24 @@ func TestCmdConfigShowsUnauthenticatedLocalValues(t *testing.T) {
 func accountBootstrapServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet || r.URL.Path != "/api/account/bootstrap" {
-			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
-		}
 		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
 			t.Fatalf("Authorization = %q", got)
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/account/bootstrap":
+			_, _ = w.Write([]byte(`{
 			"personal_org_id": "org_personal",
 			"organizations": [
 				{"id":"org_personal","handle":"grohan","display_name":"Rohan","role":"owner","default_publish_scope":"grohan"},
 				{"id":"org_telos","handle":"telos","display_name":"Telos","kind":"platform","role":"owner","default_publish_scope":"telos"}
 			]
 		}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
+			_, _ = w.Write([]byte(`{"connections":[{"id":"conn_1","name":"openai-rohan","provider":"chatgpt-codex","status":"connected","account_label":"owner@example.com","plan":"pro"}]}`))
+		default:
+			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
+		}
 	}))
 }
 
