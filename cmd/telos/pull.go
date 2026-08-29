@@ -2,6 +2,7 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -19,6 +20,12 @@ type packageReference struct {
 	name    string
 	version string
 	ref     string
+}
+
+type registryReference struct {
+	scope   string
+	name    string
+	version string
 }
 
 type pulledPackage struct {
@@ -53,23 +60,33 @@ func cmdGet(args []string) {
 }
 
 func cmdPull(args []string) {
-	fs := newCommandFlagSet("pull", "telos pull PACKAGE [flags]")
-	output := fs.String("output", "", "Destination package directory or Markdown file")
-	contextValue := cloudContextFlag(fs)
+	fs, output, contextValue := newPullFlagSet()
 	parseFlags(fs, args)
-	requireArgCount(fs, 1, "one PACKAGE")
+	if fs.NArg() > 0 && strings.EqualFold(strings.TrimSpace(fs.Arg(0)), "skill") {
+		requireArgCount(fs, 2, "skill and an exact @scope/name:version")
+		reference, err := parseRegistryReference(fs.Arg(1))
+		if err != nil {
+			exitWithError(err)
+		}
+		if reference.version == "" {
+			fmt.Fprintln(os.Stderr, "error: skill pull requires an exact version")
+			os.Exit(2)
+		}
+		client := registryReadClient(fs, *contextValue)
+		destination, record, err := pullRegistrySkill(client, reference, *output)
+		if err != nil {
+			exitWithError(err)
+		}
+		fmt.Printf("pulled %s (%s) to %s\n", record.Ref, record.Digest, destination)
+		return
+	}
+
+	requireArgCount(fs, 1, "one PACKAGE or skill and an exact @scope/name:version")
 	reference, err := parsePackageReference(fs.Arg(0))
 	if err != nil {
 		exitWithError(err)
 	}
-	contextOverride, err := cloudContextOverride(fs, *contextValue)
-	if err != nil {
-		exitWithError(err)
-	}
-	control, err := cloud.ControlClientForContext(contextOverride)
-	if err != nil {
-		exitWithError(err)
-	}
+	control := registryReadClient(fs, *contextValue)
 	pkg, err := packageForReference(control, reference)
 	if err != nil {
 		exitWithError(err)
@@ -79,6 +96,127 @@ func cmdPull(args []string) {
 		exitWithError(err)
 	}
 	printPackageReceipt("pulled", pkg, path)
+}
+
+func newPullFlagSet() (*flag.FlagSet, *string, *string) {
+	fs := newCommandFlagSet(
+		"pull",
+		"telos pull @scope/name:version [flags]\n"+
+			"       telos pull skill @scope/name:version [flags]",
+	)
+	output := fs.String("output", "", "Destination package or skill path")
+	contextValue := cloudContextFlag(fs)
+	return fs, output, contextValue
+}
+
+func registryReadClient(fs *flag.FlagSet, contextValue string) *cloud.Client {
+	contextOverride, err := cloudContextOverride(fs, contextValue)
+	if err != nil {
+		exitWithError(err)
+	}
+	client, err := cloud.RegistryReadClientForContext(contextOverride)
+	if err != nil {
+		exitWithError(err)
+	}
+	if client.Token == "" {
+		if err := requireRegistryPrivacyCapability(client); err != nil {
+			exitWithError(err)
+		}
+	}
+	return client
+}
+
+func parseRegistryReference(raw string) (registryReference, error) {
+	value := strings.TrimSpace(raw)
+	if !strings.HasPrefix(value, "@") {
+		return registryReference{}, fmt.Errorf("registry reference must start with @scope/name")
+	}
+	scope, rest, ok := strings.Cut(strings.TrimPrefix(value, "@"), "/")
+	if !ok {
+		return registryReference{}, fmt.Errorf("invalid registry reference %q", value)
+	}
+	name, version, ok := strings.Cut(rest, ":")
+	if !ok || strings.Contains(version, ":") || !packageSemverRE.MatchString(version) {
+		return registryReference{}, fmt.Errorf("skill reference requires an exact semantic version")
+	}
+	if !packageRefSegmentRE.MatchString(scope) || !packageRefSegmentRE.MatchString(name) {
+		return registryReference{}, fmt.Errorf("invalid registry reference %q", value)
+	}
+	canonical := "@" + scope + "/" + name + ":" + version
+	if canonical != value {
+		return registryReference{}, fmt.Errorf("registry reference must be canonical: %s", canonical)
+	}
+	return registryReference{scope: scope, name: name, version: version}, nil
+}
+
+func pullRegistrySkill(
+	client *cloud.Client,
+	reference registryReference,
+	output string,
+) (string, *cloud.SkillRecord, error) {
+	if client == nil {
+		return "", nil, fmt.Errorf("Registry client is required")
+	}
+	if reference.version == "" {
+		return "", nil, fmt.Errorf("skill pull requires an exact Registry version")
+	}
+	record, err := client.GetSkillVersion(
+		reference.scope,
+		reference.name,
+		reference.version,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf(
+			"resolve @%s/%s:%s: %w",
+			reference.scope,
+			reference.name,
+			reference.version,
+			err,
+		)
+	}
+	if record.Scope != reference.scope ||
+		record.Name != reference.name ||
+		record.Version != reference.version {
+		return "", nil, fmt.Errorf("Registry returned mismatched skill %s", record.Ref)
+	}
+	bundle, err := client.DownloadSkillVersionBundle(
+		reference.scope,
+		reference.name,
+		reference.version,
+	)
+	if err != nil {
+		return "", nil, fmt.Errorf("download %s: %w", record.Ref, err)
+	}
+	if err := spec.VerifySkillBundle(reference.name, record.Digest, bundle); err != nil {
+		return "", nil, fmt.Errorf("verify %s: %w", record.Ref, err)
+	}
+	destination := strings.TrimSpace(output)
+	if destination == "" {
+		destination = reference.name
+	}
+	destination = filepath.Clean(destination)
+	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
+		return "", nil, err
+	}
+	if err := os.Mkdir(destination, 0o755); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return "", nil, fmt.Errorf("%s already exists", destination)
+		}
+		return "", nil, err
+	}
+	// The successful Mkdir is the ownership boundary: only this invocation's
+	// directory may be removed if extraction fails. A concurrent creator can
+	// no longer be overwritten or deleted after a check-then-act gap.
+	if err := spec.ExtractSkillBundle(
+		reference.name,
+		record.Digest,
+		bundle,
+		destination,
+	); err != nil {
+		_ = os.RemoveAll(destination)
+		return "", nil, fmt.Errorf("extract %s: %w", record.Ref, err)
+	}
+	return destination, record, nil
 }
 
 func packageForSession(control *cloud.Client, sessionID string) (*pulledPackage, error) {

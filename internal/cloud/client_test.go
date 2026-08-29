@@ -3,6 +3,7 @@ package cloud
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -29,6 +30,22 @@ func TestNormalizeEndpoint(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("NormalizeEndpoint(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestReadErrorPreservesStableRegistryCode(t *testing.T) {
+	err := readError(&http.Response{
+		StatusCode: http.StatusBadRequest,
+		Body: io.NopCloser(strings.NewReader(
+			`{"error":{"code":"registry_dependency_digest_mismatch","message":"digest mismatch"}}`,
+		)),
+	})
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type: %T", err)
+	}
+	if apiErr.Code != "registry_dependency_digest_mismatch" || apiErr.Detail != "digest mismatch" {
+		t.Fatalf("APIError: %+v", apiErr)
 	}
 }
 
@@ -145,6 +162,61 @@ func TestControlClientUsesStableContextWithoutLookup(t *testing.T) {
 	}
 	if client.OrgID != "org_telos" {
 		t.Fatalf("OrgID = %q", client.OrgID)
+	}
+}
+
+func TestClientRegistryPrivacyPublishingUsesExplicitWireContracts(t *testing.T) {
+	requests := map[string]map[string]any{}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := r.Method + " " + r.URL.Path
+		if r.Method == http.MethodPost {
+			var body map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			requests[key] = body
+		}
+		switch key {
+		case "GET /api/capabilities":
+			_ = json.NewEncoder(w).Encode(map[string]any{"registry_privacy": true})
+		case "POST /api/packages":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope": "alice", "name": "demo", "version": "1.0.0",
+				"ref": "@alice/demo:1.0.0", "digest": "sha256:package",
+			})
+		case "POST /api/skills":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope": "alice", "name": "lint", "version": "1.0.0",
+				"ref": "@alice/lint:1.0.0", "digest": "sha256:skill",
+				"visibility": "public",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	capabilities, err := client.RegistryCapabilities()
+	if err != nil || !capabilities.RegistryPrivacy {
+		t.Fatalf("RegistryCapabilities = %+v, %v", capabilities, err)
+	}
+	if _, err := client.PublishPackageWithVisibility(
+		"alice", "demo", "1.0.0", []byte("package"), "public",
+	); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]SkillFile{"SKILL.md": {Mode: "0644", Data: []byte("skill")}}
+	if _, err := client.PublishSkillVersionWithVisibility(
+		"alice", "lint", "1.0.0", files, "public",
+	); err != nil {
+		t.Fatal(err)
+	}
+	if requests["POST /api/packages"]["visibility"] != "public" {
+		t.Fatalf("package publish body = %#v", requests["POST /api/packages"])
+	}
+	if requests["POST /api/skills"]["visibility"] != "public" {
+		t.Fatalf("skill publish body = %#v", requests["POST /api/skills"])
 	}
 }
 
@@ -279,6 +351,16 @@ func TestClientDownloadSkillVersionBundle(t *testing.T) {
 	}
 	if string(got) != string(bundle) {
 		t.Fatalf("bundle: got %q", got)
+	}
+}
+
+func TestReadBundleResponseRejectsUnknownLengthOverLimit(t *testing.T) {
+	response := &http.Response{
+		Body:          io.NopCloser(strings.NewReader("12345")),
+		ContentLength: -1,
+	}
+	if _, err := readBundleResponseWithLimit(response, "skill bundle", 4); err == nil || !strings.Contains(err.Error(), "skill bundle exceeds 4 bytes") {
+		t.Fatalf("expected bounded body rejection, got %v", err)
 	}
 }
 

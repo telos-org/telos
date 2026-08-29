@@ -14,9 +14,37 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/telos-org/telos/internal/bundlelimits"
 )
 
 const ApplyPackageSchemaVersion = 1
+
+const (
+	applyPackageMaxFiles         = bundlelimits.MaxFiles
+	applyPackageMaxExpandedBytes = bundlelimits.MaxExpandedBytes
+	applyPackageMaxSpecBytes     = 1024 * 1024
+)
+
+type archiveReadLimits struct {
+	maxFiles           int
+	maxExpandedBytes   int64
+	maxEntryBytes      int64
+	maxPathBytes       int
+	maxArchiveBytes    int64
+	maxCompressedBytes int64
+}
+
+func defaultArchiveReadLimits() archiveReadLimits {
+	return archiveReadLimits{
+		maxFiles:           bundlelimits.MaxFiles,
+		maxExpandedBytes:   bundlelimits.MaxExpandedBytes,
+		maxEntryBytes:      bundlelimits.MaxEntryBytes,
+		maxPathBytes:       bundlelimits.MaxPathBytes,
+		maxArchiveBytes:    bundlelimits.MaxArchiveBytes,
+		maxCompressedBytes: bundlelimits.MaxCompressedBytes,
+	}
+}
 
 // ApplyPackageSchemaVersionStarred gates manifests whose skill locks carry the
 // starred (required-rubric) flag. Starred locks change runtime semantics and
@@ -27,8 +55,16 @@ const ApplyPackageSchemaVersion = 1
 // baffling digest mismatch on version-pinned deployments.
 const ApplyPackageSchemaVersionStarred = 2
 
+// ApplyPackageSchemaVersionExactRefs identifies registry packages whose skill
+// closure is made entirely of canonical, exact @scope/name:version locks. The
+// ref is part of package identity in this schema: two different skill
+// identities with the same content digest are deliberately different inputs.
+const ApplyPackageSchemaVersionExactRefs = 3
+
 func applyPackageSchemaSupported(version int) bool {
-	return version == ApplyPackageSchemaVersion || version == ApplyPackageSchemaVersionStarred
+	return version == ApplyPackageSchemaVersion ||
+		version == ApplyPackageSchemaVersionStarred ||
+		version == ApplyPackageSchemaVersionExactRefs
 }
 
 func applyPackageSchemaVersionFor(skills map[string]ApplyPackageSkillLock) int {
@@ -113,6 +149,62 @@ type ApplyPackageManifest struct {
 	SkillProvenance map[string]ApplyPackageSkillProvenance `json:"skill_provenance,omitempty"`
 }
 
+func (manifest *ApplyPackageManifest) UnmarshalJSON(data []byte) error {
+	var header struct {
+		SchemaVersion int `json:"schema_version"`
+	}
+	if err := json.Unmarshal(data, &header); err != nil {
+		return err
+	}
+	if header.SchemaVersion == ApplyPackageSchemaVersionExactRefs {
+		var strict struct {
+			SchemaVersion int `json:"schema_version"`
+			Spec          struct {
+				Digest string `json:"digest"`
+			} `json:"spec"`
+			Skills map[string]struct {
+				Digest  string `json:"digest"`
+				Ref     string `json:"ref"`
+				Starred bool   `json:"starred"`
+			} `json:"skills"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(data))
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&strict); err != nil {
+			return err
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			if err == nil {
+				return fmt.Errorf("manifest.json contains multiple JSON values")
+			}
+			return err
+		}
+		skills := make(map[string]ApplyPackageSkillLock, len(strict.Skills))
+		for name, lock := range strict.Skills {
+			skills[name] = ApplyPackageSkillLock{
+				Digest:  lock.Digest,
+				Ref:     lock.Ref,
+				Starred: lock.Starred,
+			}
+		}
+		*manifest = ApplyPackageManifest{
+			SchemaVersion: strict.SchemaVersion,
+			Spec: ApplyPackageSpecEntry{
+				Digest: strict.Spec.Digest,
+			},
+			Skills: skills,
+		}
+		return nil
+	}
+	type manifestAlias ApplyPackageManifest
+	var decoded manifestAlias
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+	*manifest = ApplyPackageManifest(decoded)
+	return nil
+}
+
 // ApplyPackageDigest returns the content address represented by a package manifest.
 func ApplyPackageDigest(manifest *ApplyPackageManifest) string {
 	if manifest == nil {
@@ -129,6 +221,9 @@ func ApplyPackageSpec(data []byte) ([]byte, *ApplyPackageManifest, error) {
 		return nil, nil, err
 	}
 	if err := validateApplyPackageFilesAllowReferences(manifest, files); err != nil {
+		return nil, nil, err
+	}
+	if err := validateRegistryApplyPackageShape(manifest, files); err != nil {
 		return nil, nil, err
 	}
 	root := files["SPEC.md"].data
@@ -172,7 +267,20 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 	for _, skill := range sortedSkills(compiled.Skills) {
 		registryRef := ""
 		if skill != nil {
-			registryRef = strings.TrimSpace(skillRefs[skill.Name])
+			rawRef := skillRefs[skill.Name]
+			registryRef = strings.TrimSpace(rawRef)
+			if skillRefs != nil {
+				if rawRef != registryRef {
+					return nil, fmt.Errorf("registry skill ref for %q must be canonical", skill.Name)
+				}
+				parsed, ok := ParseRegistrySkillRef(registryRef)
+				if !ok || parsed.Version == "" || parsed.Ref != registryRef {
+					return nil, fmt.Errorf("registry skill ref for %q must be exact and canonical", skill.Name)
+				}
+				if parsed.Name != skill.Name {
+					return nil, fmt.Errorf("registry skill ref for %q must use the same skill name", skill.Name)
+				}
+			}
 		}
 		entry, files, err := packageSkill(
 			skill,
@@ -194,8 +302,12 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 		}
 	}
 	skillLocks := skillLockMap(skillEntries, requiredNames)
+	schemaVersion := applyPackageSchemaVersionFor(skillLocks)
+	if skillRefs != nil {
+		schemaVersion = ApplyPackageSchemaVersionExactRefs
+	}
 	manifest := ApplyPackageManifest{
-		SchemaVersion: applyPackageSchemaVersionFor(skillLocks),
+		SchemaVersion: schemaVersion,
 		Spec:          specEntry,
 		Skills:        skillLocks,
 	}
@@ -237,6 +349,14 @@ func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageManifest, error
 // HydrateApplyPackage returns a self-contained package tarball by fetching any
 // registry-backed skill blobs referenced by the package manifest.
 func HydrateApplyPackage(data []byte, fetch ApplyPackageSkillFetcher) ([]byte, *ApplyPackageManifest, error) {
+	return hydrateApplyPackageWithLimits(data, fetch, defaultArchiveReadLimits())
+}
+
+func hydrateApplyPackageWithLimits(
+	data []byte,
+	fetch ApplyPackageSkillFetcher,
+	limits archiveReadLimits,
+) ([]byte, *ApplyPackageManifest, error) {
 	files, manifest, err := readApplyPackage(data)
 	if err != nil {
 		return nil, nil, err
@@ -244,7 +364,14 @@ func HydrateApplyPackage(data []byte, fetch ApplyPackageSkillFetcher) ([]byte, *
 	if err := validateApplyPackageFilesAllowReferences(manifest, files); err != nil {
 		return nil, nil, err
 	}
+	if err := validateRegistryApplyPackageShape(manifest, files); err != nil {
+		return nil, nil, err
+	}
 	for _, name := range missingPackageSkillNames(manifest, files) {
+		remaining, err := remainingArchiveReadLimits(files, limits)
+		if err != nil {
+			return nil, nil, err
+		}
 		if fetch == nil {
 			return nil, nil, fmt.Errorf("fetch skill %q: skill fetcher is required", name)
 		}
@@ -265,7 +392,7 @@ func HydrateApplyPackage(data []byte, fetch ApplyPackageSkillFetcher) ([]byte, *
 		if err != nil {
 			return nil, nil, fmt.Errorf("fetch skill %q: %w", name, err)
 		}
-		skillFiles, err := readSkillBundleFiles(name, bundle)
+		skillFiles, err := readSkillBundleFilesWithLimits(name, bundle, remaining)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -290,6 +417,9 @@ func HydrateApplyPackage(data []byte, fetch ApplyPackageSkillFetcher) ([]byte, *
 	hydrated, err := writePackageTar(packageFilesFromMap(files))
 	if err != nil {
 		return nil, nil, err
+	}
+	if int64(len(hydrated)) > limits.maxCompressedBytes {
+		return nil, nil, fmt.Errorf("hydrated apply package compressed content exceeds %d bytes", limits.maxCompressedBytes)
 	}
 	return hydrated, manifest, nil
 }
@@ -350,6 +480,9 @@ func ExtractSkillBundle(name string, expectedDigest string, data []byte, dest st
 }
 
 func readApplyPackage(data []byte) (map[string]packageFile, *ApplyPackageManifest, error) {
+	if int64(len(data)) > bundlelimits.MaxCompressedBytes {
+		return nil, nil, fmt.Errorf("apply package compressed content exceeds %d bytes", bundlelimits.MaxCompressedBytes)
+	}
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
 		return nil, nil, fmt.Errorf("open apply package: %w", err)
@@ -358,17 +491,28 @@ func readApplyPackage(data []byte) (map[string]packageFile, *ApplyPackageManifes
 
 	var manifestData []byte
 	files := map[string]packageFile{}
-	tr := tar.NewReader(gz)
+	var expandedBytes int64
+	archive := &io.LimitedReader{R: gz, N: bundlelimits.MaxArchiveBytes + 1}
+	tr := tar.NewReader(archive)
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
+			if archive.N == 0 {
+				return nil, nil, fmt.Errorf("apply package archive exceeds %d bytes", bundlelimits.MaxArchiveBytes)
+			}
 			break
 		}
 		if err != nil {
 			return nil, nil, fmt.Errorf("read apply package: %w", err)
 		}
+		if len(header.Name) > bundlelimits.MaxPathBytes {
+			return nil, nil, fmt.Errorf("apply package entry path exceeds %d bytes", bundlelimits.MaxPathBytes)
+		}
 		if header.Typeflag != tar.TypeReg {
 			return nil, nil, fmt.Errorf("unsupported apply package entry %q", header.Name)
+		}
+		if len(files) >= applyPackageMaxFiles {
+			return nil, nil, fmt.Errorf("apply package contains more than %d files", applyPackageMaxFiles)
 		}
 		name, err := safePackageEntry(header.Name)
 		if err != nil {
@@ -377,9 +521,25 @@ func readApplyPackage(data []byte) (map[string]packageFile, *ApplyPackageManifes
 		if _, exists := files[name]; exists {
 			return nil, nil, fmt.Errorf("duplicate apply package entry %q", name)
 		}
-		fileData, err := io.ReadAll(tr)
+		if header.Size < 0 {
+			return nil, nil, fmt.Errorf("invalid apply package entry size %q", name)
+		}
+		if header.Size > bundlelimits.MaxEntryBytes {
+			return nil, nil, fmt.Errorf("apply package entry %q exceeds %d bytes", name, bundlelimits.MaxEntryBytes)
+		}
+		if header.Size > applyPackageMaxExpandedBytes-expandedBytes {
+			return nil, nil, fmt.Errorf("apply package expanded content exceeds %d bytes", applyPackageMaxExpandedBytes)
+		}
+		expandedBytes += header.Size
+		if name == "SPEC.md" && header.Size > applyPackageMaxSpecBytes {
+			return nil, nil, fmt.Errorf("apply package SPEC.md exceeds %d bytes", applyPackageMaxSpecBytes)
+		}
+		fileData, err := io.ReadAll(io.LimitReader(tr, header.Size+1))
 		if err != nil {
 			return nil, nil, fmt.Errorf("read apply package entry %q: %w", name, err)
+		}
+		if int64(len(fileData)) != header.Size {
+			return nil, nil, fmt.Errorf("apply package entry size mismatch %q", name)
 		}
 		mode := fs.FileMode(header.Mode).Perm()
 		if mode == 0 {
@@ -445,6 +605,21 @@ func validateApplyPackageFilesWithMode(manifest *ApplyPackageManifest, files map
 			}
 		}
 	}
+	if manifest.SchemaVersion == ApplyPackageSchemaVersionExactRefs {
+		if len(manifest.SkillProvenance) != 0 {
+			return fmt.Errorf("schema_version %d does not allow skill_provenance", ApplyPackageSchemaVersionExactRefs)
+		}
+		for name, lock := range manifest.Skills {
+			ref := strings.TrimSpace(lock.Ref)
+			parsed, ok := ParseRegistrySkillRef(ref)
+			if !ok || parsed.Version == "" || parsed.Ref != ref || lock.Ref != ref {
+				return fmt.Errorf("schema_version %d skill %q must use an exact canonical ref", ApplyPackageSchemaVersionExactRefs, name)
+			}
+			if parsed.Name != name {
+				return fmt.Errorf("schema_version %d skill %q must match ref name %q", ApplyPackageSchemaVersionExactRefs, name, parsed.Name)
+			}
+		}
+	}
 	specFile, ok := files["SPEC.md"]
 	if !ok {
 		return fmt.Errorf("apply package missing SPEC.md")
@@ -506,6 +681,21 @@ func validateApplyPackageFilesWithMode(manifest *ApplyPackageManifest, files map
 		skillDigest := digestSkill(skillName, entries)
 		if skillDigest != manifest.skillDigest(skillName) {
 			return fmt.Errorf("skill digest mismatch for %q: got %s want %s", skillName, skillDigest, manifest.skillDigest(skillName))
+		}
+	}
+	return nil
+}
+
+func validateRegistryApplyPackageShape(manifest *ApplyPackageManifest, files map[string]packageFile) error {
+	if manifest == nil || manifest.SchemaVersion != ApplyPackageSchemaVersionExactRefs {
+		return nil
+	}
+	for name := range manifest.Skills {
+		prefix := "skills/" + name + "/"
+		for path := range files {
+			if strings.HasPrefix(path, prefix) {
+				return fmt.Errorf("schema_version %d skill %q must not embed skill files", ApplyPackageSchemaVersionExactRefs, name)
+			}
 		}
 	}
 	return nil
@@ -607,8 +797,22 @@ func packageSkill(
 }
 
 func readSkillBundleFiles(name string, data []byte) ([]packageFile, error) {
+	return readSkillBundleFilesWithLimits(name, data, defaultArchiveReadLimits())
+}
+
+func readSkillBundleFilesWithLimits(
+	name string,
+	data []byte,
+	limits archiveReadLimits,
+) ([]packageFile, error) {
 	if _, err := packagePathName(name); err != nil {
 		return nil, err
+	}
+	if limits.maxFiles < 0 || limits.maxExpandedBytes < 0 || limits.maxEntryBytes < 0 || limits.maxPathBytes < 0 || limits.maxArchiveBytes < 0 || limits.maxCompressedBytes < 0 {
+		return nil, fmt.Errorf("invalid skill bundle limits")
+	}
+	if int64(len(data)) > limits.maxCompressedBytes {
+		return nil, fmt.Errorf("skill bundle %q compressed content exceeds %d bytes", name, limits.maxCompressedBytes)
 	}
 	gz, err := gzip.NewReader(bytes.NewReader(data))
 	if err != nil {
@@ -617,25 +821,53 @@ func readSkillBundleFiles(name string, data []byte) ([]packageFile, error) {
 	defer gz.Close()
 
 	files := []packageFile{}
-	tr := tar.NewReader(gz)
+	seen := map[string]struct{}{}
+	var expandedBytes int64
+	archive := &io.LimitedReader{R: gz, N: limits.maxArchiveBytes + 1}
+	tr := tar.NewReader(archive)
 	for {
 		header, err := tr.Next()
 		if err == io.EOF {
+			if archive.N == 0 {
+				return nil, fmt.Errorf("skill bundle %q archive exceeds %d bytes", name, limits.maxArchiveBytes)
+			}
 			break
 		}
 		if err != nil {
 			return nil, fmt.Errorf("read skill bundle %q: %w", name, err)
 		}
+		if len(header.Name) > limits.maxPathBytes {
+			return nil, fmt.Errorf("skill bundle entry path exceeds %d bytes", limits.maxPathBytes)
+		}
 		if header.Typeflag != tar.TypeReg {
 			return nil, fmt.Errorf("unsupported skill bundle entry %q", header.Name)
+		}
+		if len(files) >= limits.maxFiles {
+			return nil, fmt.Errorf("skill bundle %q contains more than %d files", name, limits.maxFiles)
 		}
 		path, err := safePackageEntry(header.Name)
 		if err != nil {
 			return nil, err
 		}
-		fileData, err := io.ReadAll(tr)
+		if _, exists := seen[path]; exists {
+			return nil, fmt.Errorf("duplicate skill bundle entry %q", path)
+		}
+		if header.Size < 0 {
+			return nil, fmt.Errorf("invalid skill bundle entry size %q", path)
+		}
+		if header.Size > limits.maxEntryBytes {
+			return nil, fmt.Errorf("skill bundle entry %q exceeds %d bytes", path, limits.maxEntryBytes)
+		}
+		if header.Size > limits.maxExpandedBytes-expandedBytes {
+			return nil, fmt.Errorf("skill bundle %q expanded content exceeds %d bytes", name, limits.maxExpandedBytes)
+		}
+		expandedBytes += header.Size
+		fileData, err := io.ReadAll(io.LimitReader(tr, header.Size+1))
 		if err != nil {
 			return nil, fmt.Errorf("read skill bundle entry %q: %w", path, err)
+		}
+		if int64(len(fileData)) != header.Size {
+			return nil, fmt.Errorf("skill bundle entry size mismatch %q", path)
 		}
 		mode := fs.FileMode(header.Mode).Perm()
 		if mode == 0 {
@@ -646,12 +878,41 @@ func readSkillBundleFiles(name string, data []byte) ([]packageFile, error) {
 			mode: int64(normalizedPackageMode(mode)),
 			data: fileData,
 		})
+		seen[path] = struct{}{}
 	}
 	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
 	if !packageFilesContainSkillMarkdown(files) {
 		return nil, fmt.Errorf("skill bundle %q missing SKILL.md", name)
 	}
 	return files, nil
+}
+
+func remainingArchiveReadLimits(
+	files map[string]packageFile,
+	limits archiveReadLimits,
+) (archiveReadLimits, error) {
+	if limits.maxFiles < 0 || limits.maxExpandedBytes < 0 || limits.maxEntryBytes < 0 || limits.maxPathBytes < 0 || limits.maxArchiveBytes < 0 || limits.maxCompressedBytes < 0 {
+		return archiveReadLimits{}, fmt.Errorf("invalid apply package limits")
+	}
+	if len(files) > limits.maxFiles {
+		return archiveReadLimits{}, fmt.Errorf("apply package contains more than %d files", limits.maxFiles)
+	}
+	expandedBytes := int64(0)
+	for _, file := range files {
+		size := int64(len(file.data))
+		if size > limits.maxExpandedBytes-expandedBytes {
+			return archiveReadLimits{}, fmt.Errorf("apply package expanded content exceeds %d bytes", limits.maxExpandedBytes)
+		}
+		expandedBytes += size
+	}
+	return archiveReadLimits{
+		maxFiles:           limits.maxFiles - len(files),
+		maxExpandedBytes:   limits.maxExpandedBytes - expandedBytes,
+		maxEntryBytes:      limits.maxEntryBytes,
+		maxPathBytes:       limits.maxPathBytes,
+		maxArchiveBytes:    limits.maxArchiveBytes,
+		maxCompressedBytes: limits.maxCompressedBytes,
+	}, nil
 }
 
 func packageFilesContainSkillMarkdown(files []packageFile) bool {
@@ -685,9 +946,13 @@ func packageFilesFromMap(files map[string]packageFile) []packageFile {
 }
 
 func safePackageEntry(name string) (string, error) {
-	name = filepath.ToSlash(strings.TrimSpace(name))
-	if name == "" || strings.HasPrefix(name, "/") || strings.HasPrefix(name, "../") || strings.Contains(name, "/../") {
+	if name == "" || name != strings.TrimSpace(name) || strings.Contains(name, `\`) || strings.ContainsRune(name, 0) || strings.HasPrefix(name, "/") || strings.Contains(name, "//") {
 		return "", fmt.Errorf("unsafe apply package entry %q", name)
+	}
+	for _, part := range strings.Split(name, "/") {
+		if part == "" || part == "." || part == ".." {
+			return "", fmt.Errorf("unsafe apply package entry %q", name)
+		}
 	}
 	return name, nil
 }
@@ -851,6 +1116,9 @@ func digestPackage(schemaVersion int, specDigest string, skills map[string]Apply
 			writeDigestPart(h, name+"*")
 		} else {
 			writeDigestPart(h, name)
+		}
+		if schemaVersion == ApplyPackageSchemaVersionExactRefs {
+			writeDigestPart(h, skills[name].Ref)
 		}
 		writeDigestPart(h, skills[name].Digest)
 	}

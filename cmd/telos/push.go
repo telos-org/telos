@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -37,6 +38,11 @@ func cmdPush(args []string) {
 	fs := newCommandFlagSet("push", "telos push SPEC.md|SKILL_DIR [flags]")
 	scope := fs.String("scope", "", "Package scope")
 	version := fs.String("version", "", "Version override for skill or package publishing")
+	public := fs.Bool(
+		"public",
+		false,
+		"Create the new identity (and a package's new local skills) as public",
+	)
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -46,7 +52,6 @@ func cmdPush(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
-
 	input := fs.Arg(0)
 	if skill, ok, err := packageSkillDir(input, *version); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -57,7 +62,17 @@ func cmdPush(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		record, err := pushSkillPackage(client, skill, *scope)
+		if *public {
+			if err := requireRegistryPrivacyCapability(client); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+		}
+		visibility := ""
+		if *public {
+			visibility = "public"
+		}
+		record, err := pushSkillPackageWithVisibility(client, skill, *scope, visibility)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -87,7 +102,22 @@ func cmdPush(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	record, err := pushSpecPackage(client, pkg, *scope)
+	if *public {
+		if err := requireRegistryPrivacyCapability(client); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	visibility := ""
+	if *public {
+		visibility = "public"
+	}
+	record, err := pushSpecPackageWithVisibility(
+		client,
+		pkg,
+		*scope,
+		visibility,
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -102,6 +132,17 @@ func cmdPush(args []string) {
 		return
 	}
 	printPushReceipt(pkg.name, record)
+}
+
+func requireRegistryPrivacyCapability(client *cloud.Client) error {
+	capabilities, err := client.RegistryCapabilities()
+	if err != nil {
+		return fmt.Errorf("check Registry rollout: %w", err)
+	}
+	if !capabilities.RegistryPrivacy {
+		return fmt.Errorf("Registry public access is not enabled on this control plane")
+	}
+	return nil
 }
 
 func packageSpec(input, contextOverride string) (*specPackage, error) {
@@ -238,7 +279,7 @@ func readSkillPublishFiles(root string) (map[string]cloud.SkillFile, error) {
 }
 
 func pushSpecPackage(client *cloud.Client, pkg *specPackage, scope string) (*cloud.PackageVersionRecord, error) {
-	return pushSpecPackageVersion(client, pkg, scope, pkg.version)
+	return pushSpecPackageWithVisibility(client, pkg, scope, "")
 }
 
 func pushSpecPackageVersion(
@@ -246,6 +287,34 @@ func pushSpecPackageVersion(
 	pkg *specPackage,
 	scope string,
 	version string,
+) (*cloud.PackageVersionRecord, error) {
+	return pushSpecPackageVersionWithVisibility(client, pkg, scope, version, "")
+}
+
+func pushSpecPackageWithVisibility(
+	client *cloud.Client,
+	pkg *specPackage,
+	scope string,
+	visibility string,
+) (*cloud.PackageVersionRecord, error) {
+	if pkg == nil {
+		return nil, fmt.Errorf("package is required")
+	}
+	return pushSpecPackageVersionWithVisibility(
+		client,
+		pkg,
+		scope,
+		pkg.version,
+		visibility,
+	)
+}
+
+func pushSpecPackageVersionWithVisibility(
+	client *cloud.Client,
+	pkg *specPackage,
+	scope string,
+	version string,
+	visibility string,
 ) (*cloud.PackageVersionRecord, error) {
 	if pkg == nil {
 		return nil, fmt.Errorf("package is required")
@@ -259,26 +328,94 @@ func pushSpecPackageVersion(
 		}
 		version = normalized
 	}
-	skillRefs, err := pushPackageSkills(client, pkg.compiled, scope)
+	skillRefs, err := pushPackageSkills(client, pkg.compiled, scope, visibility)
 	if err != nil {
 		return nil, err
 	}
-	if len(skillRefs) > 0 {
-		rebuilt, err := spec.BuildApplyPackageWithSkillRefs(pkg.compiled, skillRefs)
-		if err != nil {
-			return nil, err
-		}
-		pkg.digest = rebuilt.Digest
-		pkg.bytes = rebuilt.Bytes
+	rebuilt, err := spec.BuildApplyPackageWithSkillRefs(pkg.compiled, skillRefs)
+	if err != nil {
+		return nil, err
 	}
+	pkg.digest = rebuilt.Digest
+	pkg.bytes = rebuilt.Bytes
 	pkg.version = version
-	return client.PublishPackage(scope, pkg.name, version, pkg.bytes)
+	record, err := client.PublishPackageWithVisibility(
+		scope,
+		pkg.name,
+		version,
+		pkg.bytes,
+		visibility,
+	)
+	if err != nil {
+		return nil, publicPackagePublishError(err)
+	}
+	return record, err
+}
+
+func publicPackagePublishError(err error) error {
+	var apiErr *cloud.APIError
+	if !errors.As(err, &apiErr) {
+		return err
+	}
+	if apiErr.StatusCode == 400 {
+		const privatePrefix = "public package dependency is private: "
+		if index := strings.Index(apiErr.Detail, privatePrefix); apiErr.Code == "registry_dependency_private" || index >= 0 {
+			ref := strings.TrimSpace(apiErr.Detail)
+			if index >= 0 {
+				ref = strings.TrimSpace(apiErr.Detail[index+len(privatePrefix):])
+			}
+			if _, parseErr := parsePackageReference(ref); parseErr == nil {
+				return fmt.Errorf(
+					"public package requires %s to be public; change its visibility in Telos before retrying",
+					ref,
+				)
+			}
+		}
+	}
+	return registryPublicationError(err)
+}
+
+func registryPublicationError(err error) error {
+	var apiErr *cloud.APIError
+	if !errors.As(err, &apiErr) {
+		return err
+	}
+	switch apiErr.Code {
+	case "registry_identity_kind_conflict":
+		return fmt.Errorf(
+			"Registry identity is already used by another artifact kind; choose a different package or skill name: %w",
+			err,
+		)
+	case "registry_dependency_not_downloadable":
+		return fmt.Errorf(
+			"public package dependency is not anonymously downloadable: %w",
+			err,
+		)
+	case "registry_dependency_digest_mismatch":
+		return fmt.Errorf(
+			"package dependency digest does not match its exact Registry version; rebuild the package lock: %w",
+			err,
+		)
+	case "registry_dependency_unavailable":
+		return fmt.Errorf(
+			"package dependency is missing or inaccessible in this Registry context: %w",
+			err,
+		)
+	}
+	if strings.Contains(apiErr.Detail, "public package dependency is unavailable") {
+		return fmt.Errorf(
+			"public package dependency is not anonymously downloadable: %w",
+			err,
+		)
+	}
+	return err
 }
 
 func pushPackageSkills(
 	client *cloud.Client,
 	compiled *spec.CompiledEnvironment,
 	scope string,
+	visibility string,
 ) (map[string]string, error) {
 	if compiled == nil {
 		return nil, nil
@@ -294,6 +431,7 @@ func pushPackageSkills(
 		return skills[i].Name < skills[j].Name
 	})
 	refs := map[string]string{}
+	publishScope := strings.TrimSpace(scope)
 	for _, resolved := range skills {
 		if resolved == nil || strings.TrimSpace(resolved.Path) == "" {
 			continue
@@ -317,13 +455,98 @@ func pushPackageSkills(
 		if !ok {
 			return nil, fmt.Errorf("skill %q is not publishable: %s", resolved.Name, resolved.Path)
 		}
-		record, err := pushSkillPackage(client, skill, scope)
+		if visibility == "public" && publishScope == "" {
+			publishScope, err = defaultPublishScope(client)
+			if err != nil {
+				return nil, err
+			}
+		}
+		record, err := pushPackageSkill(
+			client,
+			skill,
+			publishScope,
+			visibility,
+		)
 		if err != nil {
 			return nil, err
 		}
 		refs[resolved.Name] = record.Ref
 	}
 	return refs, nil
+}
+
+func defaultPublishScope(client *cloud.Client) (string, error) {
+	account, err := client.AccountBootstrap()
+	if err != nil {
+		return "", fmt.Errorf("resolve default publish scope: %w", err)
+	}
+	orgID := strings.TrimSpace(client.OrgID)
+	if orgID == "" {
+		orgID = account.PersonalOrgID
+	}
+	for _, organization := range account.Organizations {
+		if organization.ID != orgID || organization.DefaultPublishScope == nil {
+			continue
+		}
+		scope := strings.TrimSpace(*organization.DefaultPublishScope)
+		if scope != "" {
+			return scope, nil
+		}
+	}
+	return "", fmt.Errorf("selected organization has no default publish scope")
+}
+
+func pushPackageSkill(
+	client *cloud.Client,
+	skill *skillPackage,
+	scope string,
+	visibility string,
+) (*cloud.SkillRecord, error) {
+	if visibility != "public" {
+		return pushSkillPackage(client, skill, scope)
+	}
+
+	existing, err := client.GetSkill(scope, skill.name)
+	if err == nil {
+		if existing.Visibility != "public" {
+			return nil, privatePublicPackageDependencyError(scope, skill.name)
+		}
+		return pushSkillPackage(client, skill, scope)
+	}
+	if !cloud.IsStatus(err, 404) {
+		return nil, fmt.Errorf("inspect package skill @%s/%s: %w", scope, skill.name, err)
+	}
+
+	record, publishErr := pushSkillPackageWithVisibility(
+		client,
+		skill,
+		scope,
+		"public",
+	)
+	if publishErr == nil {
+		return record, nil
+	}
+
+	// A concurrent creator or a committed-but-lost response can make the
+	// create race look like a failure. Re-read policy, then retry content
+	// publication without ever sending initial visibility to an identity that
+	// now exists.
+	existing, inspectErr := client.GetSkill(scope, skill.name)
+	if inspectErr != nil {
+		return nil, publishErr
+	}
+	if existing.Visibility != "public" {
+		return nil, privatePublicPackageDependencyError(scope, skill.name)
+	}
+	return pushSkillPackage(client, skill, scope)
+}
+
+func privatePublicPackageDependencyError(scope, name string) error {
+	ref := fmt.Sprintf("@%s/%s", scope, name)
+	return fmt.Errorf(
+		"public package requires %s to be public; change its visibility in Telos before retrying",
+		ref,
+	)
 }
 
 func resolvedRegistrySkillRef(client *cloud.Client, resolved *spec.Skill) (string, bool, error) {
@@ -433,11 +656,26 @@ func isDefaultCatalogueSkillPath(path string) bool {
 }
 
 func pushSkillPackage(client *cloud.Client, skill *skillPackage, scope string) (*cloud.SkillRecord, error) {
+	return pushSkillPackageWithVisibility(client, skill, scope, "")
+}
+
+func pushSkillPackageWithVisibility(
+	client *cloud.Client,
+	skill *skillPackage,
+	scope string,
+	visibility string,
+) (*cloud.SkillRecord, error) {
 	if skill == nil {
 		return nil, fmt.Errorf("skill is required")
 	}
 	scope = strings.TrimSpace(scope)
-	return client.PublishSkillVersion(scope, skill.name, skill.version, skill.files)
+	return client.PublishSkillVersionWithVisibility(
+		scope,
+		skill.name,
+		skill.version,
+		skill.files,
+		visibility,
+	)
 }
 
 func normalizePackageVersion(raw string) (string, error) {

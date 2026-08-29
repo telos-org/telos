@@ -49,6 +49,7 @@ func TestPrepareRegistrySkillsCachesAndPinsExactVersion(t *testing.T) {
 
 	cache := t.TempDir()
 	catalogue := t.TempDir()
+	t.Setenv("TELOS_CONFIG", filepath.Join(t.TempDir(), "config.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", srv.URL)
 	t.Setenv("TELOS_AUTH_TOKEN", "test-token")
 	t.Setenv(spec.RegistrySkillsDirEnv, cache)
@@ -79,7 +80,12 @@ func TestPrepareRegistrySkillsCachesAndPinsExactVersion(t *testing.T) {
 		t.Fatalf("source ref: got %q", compiled.Skills[0].SourceRef)
 	}
 
-	refs, err := pushPackageSkills(cloud.NewClient(srv.URL, "test-token"), compiled, "user-scope")
+	refs, err := pushPackageSkills(
+		cloud.NewClient(srv.URL, "test-token"),
+		compiled,
+		"user-scope",
+		"",
+	)
 	if err != nil {
 		t.Fatalf("pushPackageSkills: %v", err)
 	}
@@ -126,6 +132,7 @@ func TestCompilePlanSpecLeavesPersistentRegistryCacheUntouched(t *testing.T) {
 	defer srv.Close()
 
 	persistentCache := filepath.Join(t.TempDir(), "registry-cache")
+	t.Setenv("TELOS_CONFIG", filepath.Join(t.TempDir(), "config.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", srv.URL)
 	t.Setenv("TELOS_AUTH_TOKEN", "test-token")
 	t.Setenv(spec.RegistrySkillsDirEnv, persistentCache)

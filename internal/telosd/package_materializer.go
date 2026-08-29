@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/telos-org/telos/internal/bundlelimits"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -20,18 +21,22 @@ import (
 const defaultPackageFetchTimeout = 60 * time.Second
 
 type applyPackageMaterializer struct {
-	root        string
-	bundleBase  string
-	bearerToken string
-	client      *http.Client
+	root         string
+	bundleBase   string
+	bearerToken  string
+	deploymentID string
+	revisionID   string
+	client       *http.Client
 }
 
 func newApplyPackageMaterializer(root string, bearerToken string) *applyPackageMaterializer {
 	return &applyPackageMaterializer{
-		root:        strings.TrimSpace(root),
-		bundleBase:  strings.TrimRight(strings.TrimSpace(os.Getenv("TELOS_PACKAGE_BUNDLE_BASE_URL")), "/"),
-		bearerToken: strings.TrimSpace(bearerToken),
-		client:      &http.Client{Timeout: packageFetchTimeout()},
+		root:         strings.TrimSpace(root),
+		bundleBase:   strings.TrimRight(strings.TrimSpace(os.Getenv("TELOS_PACKAGE_BUNDLE_BASE_URL")), "/"),
+		bearerToken:  strings.TrimSpace(bearerToken),
+		deploymentID: strings.TrimSpace(os.Getenv("TELOS_SESSION_ID")),
+		revisionID:   strings.TrimSpace(os.Getenv("TELOS_REGISTRY_REVISION_ID")),
+		client:       &http.Client{Timeout: packageFetchTimeout()},
 	}
 }
 
@@ -178,6 +183,12 @@ func (m *applyPackageMaterializer) fetch(ctx context.Context, rawURL string, lab
 		return fmt.Errorf("create %s fetch request: %w", label, err)
 	}
 	request.Header.Set("Authorization", "Bearer "+m.bearerToken)
+	if m.deploymentID != "" {
+		request.Header.Set("X-Telos-Deployment-Id", m.deploymentID)
+	}
+	if m.revisionID != "" {
+		request.Header.Set("X-Telos-Registry-Revision-Id", m.revisionID)
+	}
 	request.Header.Set("User-Agent", "telos-package-materializer/0")
 	response, err := m.client.Do(request)
 	if err != nil {
@@ -187,8 +198,15 @@ func (m *applyPackageMaterializer) fetch(ctx context.Context, rawURL string, lab
 	if response.StatusCode != http.StatusOK {
 		return fmt.Errorf("fetch %s: HTTP %d", label, response.StatusCode)
 	}
-	if _, err := io.Copy(out, response.Body); err != nil {
+	if response.ContentLength > bundlelimits.MaxCompressedBytes {
+		return fmt.Errorf("fetch %s: response exceeds %d bytes", label, bundlelimits.MaxCompressedBytes)
+	}
+	written, err := io.Copy(out, io.LimitReader(response.Body, bundlelimits.MaxCompressedBytes+1))
+	if err != nil {
 		return fmt.Errorf("read %s: %w", label, err)
+	}
+	if written > bundlelimits.MaxCompressedBytes {
+		return fmt.Errorf("fetch %s: response exceeds %d bytes", label, bundlelimits.MaxCompressedBytes)
 	}
 	return nil
 }

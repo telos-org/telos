@@ -16,7 +16,10 @@ go_library(
     ]),
     importpath = "github.com/telos-org/telos/internal/spec",
     visibility = ["//:__subpackages__"],
-    deps = ["@in_gopkg_yaml_v3//:yaml_v3"],
+    deps = [
+        "//internal/bundlelimits",
+        "@in_gopkg_yaml_v3//:yaml_v3",
+    ],
 )
 
 go_test(
@@ -28,5 +31,6 @@ go_test(
         "skills_test.go",
         "spec_test.go",
     ],
+    data = ["testdata/apply-package-v3-golden.json"],
     embed = [":spec"],
 )

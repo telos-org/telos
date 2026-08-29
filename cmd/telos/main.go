@@ -80,7 +80,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "other commands:")
 	fmt.Fprintln(out, "  run SPEC.md        Run a spec as a bounded task")
 	fmt.Fprintln(out, "  push SPEC.md       Publish a versioned spec or skill for reuse")
-	fmt.Fprintln(out, "  pull PACKAGE       Download a registry package")
+	fmt.Fprintln(out, "  pull PACKAGE       Download a package; use `pull skill REF` for a skill")
 	fmt.Fprintln(out, "  get SESSION        Download a session's package")
 	fmt.Fprintln(out, "  logout             Log out and revoke this device's token")
 	fmt.Fprintln(out, "  config             Show or update CLI configuration")

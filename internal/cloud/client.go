@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/telos-org/telos/internal/bundlelimits"
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
@@ -33,6 +34,14 @@ type PackageVersionRecord struct {
 	CreatedAt string `json:"created_at"`
 }
 
+type Capabilities struct {
+	DeploymentRevisionHistory  bool `json:"deployment_revision_history"`
+	DeploymentRevisionMessages bool `json:"deployment_revision_messages"`
+	DeploymentPackageRedeploy  bool `json:"deployment_package_redeploy"`
+	DeploymentSnapshotRestore  bool `json:"deployment_snapshot_restore"`
+	RegistryPrivacy            bool `json:"registry_privacy"`
+}
+
 type SkillFile struct {
 	Mode string
 	Data []byte
@@ -48,6 +57,8 @@ type SkillRecord struct {
 	Metadata    map[string]any `json:"metadata,omitempty"`
 	FileCount   int            `json:"file_count"`
 	SourceRef   string         `json:"source_ref"`
+	Visibility  string         `json:"visibility"`
+	CanManage   bool           `json:"can_manage"`
 }
 
 type SessionRecord struct {
@@ -172,6 +183,7 @@ type Client struct {
 
 type APIError struct {
 	StatusCode int
+	Code       string
 	Detail     string
 }
 
@@ -248,12 +260,43 @@ func ControlClientForContext(contextOverride string) (*Client, error) {
 	return client, nil
 }
 
+// RegistryReadClientForContext permits anonymous reads only when no
+// organization context was explicitly selected.
+func RegistryReadClientForContext(contextOverride string) (*Client, error) {
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(cfg.AuthToken) != "" {
+		return ControlClientForContext(contextOverride)
+	}
+	context := strings.TrimSpace(contextOverride)
+	if context != "" && context != "personal" {
+		return nil, fmt.Errorf("--context requires login; run `telos login` first")
+	}
+	endpoint := cfg.APIEndpoint
+	if endpoint == "" {
+		endpoint = DefaultAPIEndpoint
+	}
+	return NewClient(endpoint, ""), nil
+}
+
 // NewClientFromConfig creates a client from the user's config file.
 func NewClientFromConfig() (*Client, error) {
 	return ControlClient()
 }
 
 func (c *Client) PublishPackage(scope, name, version string, data []byte) (*PackageVersionRecord, error) {
+	return c.PublishPackageWithVisibility(scope, name, version, data, "")
+}
+
+func (c *Client) PublishPackageWithVisibility(
+	scope string,
+	name string,
+	version string,
+	data []byte,
+	visibility string,
+) (*PackageVersionRecord, error) {
 	payload := map[string]any{
 		"name":        name,
 		"data_base64": base64.StdEncoding.EncodeToString(data),
@@ -263,6 +306,9 @@ func (c *Client) PublishPackage(scope, name, version string, data []byte) (*Pack
 	}
 	if strings.TrimSpace(version) != "" {
 		payload["version"] = version
+	}
+	if strings.TrimSpace(visibility) != "" {
+		payload["visibility"] = strings.TrimSpace(visibility)
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -316,10 +362,20 @@ func (c *Client) DownloadPackageVersionBundle(scope, name, version string) ([]by
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	return io.ReadAll(resp.Body)
+	return readBundleResponse(resp, "package bundle")
 }
 
 func (c *Client) PublishSkillVersion(scope, name, version string, files map[string]SkillFile) (*SkillRecord, error) {
+	return c.PublishSkillVersionWithVisibility(scope, name, version, files, "")
+}
+
+func (c *Client) PublishSkillVersionWithVisibility(
+	scope string,
+	name string,
+	version string,
+	files map[string]SkillFile,
+	visibility string,
+) (*SkillRecord, error) {
 	type skillFileRequest struct {
 		DataBase64 string `json:"data_base64"`
 		Mode       string `json:"mode"`
@@ -340,6 +396,9 @@ func (c *Client) PublishSkillVersion(scope, name, version string, files map[stri
 	}
 	if strings.TrimSpace(version) != "" {
 		payload["version"] = version
+	}
+	if strings.TrimSpace(visibility) != "" {
+		payload["visibility"] = strings.TrimSpace(visibility)
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -386,7 +445,25 @@ func (c *Client) DownloadSkillVersionBundle(scope, name, version string) ([]byte
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	return io.ReadAll(resp.Body)
+	return readBundleResponse(resp, "skill bundle")
+}
+
+func readBundleResponse(resp *http.Response, label string) ([]byte, error) {
+	return readBundleResponseWithLimit(resp, label, bundlelimits.MaxCompressedBytes)
+}
+
+func readBundleResponseWithLimit(resp *http.Response, label string, maxBytes int64) ([]byte, error) {
+	if resp.ContentLength > maxBytes {
+		return nil, fmt.Errorf("%s exceeds %d bytes", label, maxBytes)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes+1))
+	if err != nil {
+		return nil, fmt.Errorf("read %s: %w", label, err)
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("%s exceeds %d bytes", label, maxBytes)
+	}
+	return data, nil
 }
 
 func (c *Client) getSkill(path string) (*SkillRecord, error) {
@@ -403,6 +480,22 @@ func (c *Client) getSkill(path string) (*SkillRecord, error) {
 		return nil, err
 	}
 	return &record, nil
+}
+
+func (c *Client) RegistryCapabilities() (*Capabilities, error) {
+	resp, err := c.do("GET", "/api/capabilities", nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var capabilities Capabilities
+	if err := json.NewDecoder(resp.Body).Decode(&capabilities); err != nil {
+		return nil, err
+	}
+	return &capabilities, nil
 }
 
 func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error) {
@@ -580,6 +673,17 @@ func readError(resp *http.Response) error {
 	data, _ := io.ReadAll(resp.Body)
 	var m map[string]any
 	if json.Unmarshal(data, &m) == nil {
+		if rawError, ok := m["error"].(map[string]any); ok {
+			code, _ := rawError["code"].(string)
+			message, _ := rawError["message"].(string)
+			if code != "" || message != "" {
+				return &APIError{
+					StatusCode: resp.StatusCode,
+					Code:       code,
+					Detail:     message,
+				}
+			}
+		}
 		if detail, ok := m["detail"].(string); ok {
 			return &APIError{StatusCode: resp.StatusCode, Detail: detail}
 		}
