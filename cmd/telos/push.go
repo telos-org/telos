@@ -134,6 +134,17 @@ func cmdPush(args []string) {
 	printPushReceipt(pkg.name, record)
 }
 
+func requireRegistryPrivacyCapability(client *cloud.Client) error {
+	capabilities, err := client.RegistryCapabilities()
+	if err != nil {
+		return fmt.Errorf("check Registry rollout: %w", err)
+	}
+	if !capabilities.RegistryPrivacy {
+		return fmt.Errorf("Registry public access is not enabled on this control plane")
+	}
+	return nil
+}
+
 func packageSpec(input, contextOverride string) (*specPackage, error) {
 	path, ok := existingSpecPath(input)
 	if !ok {
@@ -353,13 +364,10 @@ func publicPackagePublishError(err error) error {
 			if index >= 0 {
 				ref = strings.TrimSpace(apiErr.Detail[index+len(privatePrefix):])
 			}
-			if parsed, parseErr := parsePackageReference(ref); parseErr == nil {
-				identity := "@" + parsed.scope + "/" + parsed.name
+			if _, parseErr := parsePackageReference(ref); parseErr == nil {
 				return fmt.Errorf(
-					"public package requires %s to be public; change it explicitly with `telos registry visibility skill %s public --confirm %s`",
+					"public package requires %s to be public; change its visibility in Telos before retrying",
 					ref,
-					identity,
-					identity,
 				)
 			}
 		}
@@ -536,9 +544,7 @@ func pushPackageSkill(
 func privatePublicPackageDependencyError(scope, name string) error {
 	ref := fmt.Sprintf("@%s/%s", scope, name)
 	return fmt.Errorf(
-		"public package requires %s to be public; change it explicitly with `telos registry visibility skill %s public --confirm %s`",
-		ref,
-		ref,
+		"public package requires %s to be public; change its visibility in Telos before retrying",
 		ref,
 	)
 }

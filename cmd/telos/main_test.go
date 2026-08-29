@@ -85,7 +85,6 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"get SESSION        Download a session's package",
 		"delete SESSION     Delete a session",
 		"pull PACKAGE       Download a package; use `pull skill REF` for a skill",
-		"registry           Discover, inspect, and manage registry identities",
 		"version            Show version",
 		"--version",
 		"telos <command> --help",
@@ -96,7 +95,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	}
 }
 
-func TestPullAndRegistryUsageKeepFrequentPullAtTopLevel(t *testing.T) {
+func TestPullUsageKeepsFrequentPullAtTopLevel(t *testing.T) {
 	fs, _, _ := newPullFlagSet()
 	var pullOut bytes.Buffer
 	fs.SetOutput(&pullOut)
@@ -110,12 +109,6 @@ func TestPullAndRegistryUsageKeepFrequentPullAtTopLevel(t *testing.T) {
 		if !strings.Contains(pullOut.String(), want) {
 			t.Fatalf("pull usage missing %q:\n%s", want, pullOut.String())
 		}
-	}
-
-	var registryOut bytes.Buffer
-	registryUsage(&registryOut)
-	if strings.Contains(registryOut.String(), "pull skill") {
-		t.Fatalf("registry usage still contains skill pull:\n%s", registryOut.String())
 	}
 }
 
@@ -872,7 +865,7 @@ func TestPushPackageSkillRejectsExistingPrivateDependency(t *testing.T) {
 	)
 	if err == nil || !strings.Contains(
 		err.Error(),
-		"telos registry visibility skill @alice/verify public --confirm @alice/verify",
+		"change its visibility in Telos",
 	) {
 		t.Fatalf("error: got %v", err)
 	}
@@ -976,7 +969,7 @@ func TestPublicPackagePublishErrorExplainsPrivateDependencyPromotion(t *testing.
 	})
 	if !strings.Contains(
 		err.Error(),
-		"telos registry visibility skill @alice/verify public --confirm @alice/verify",
+		"change its visibility in Telos",
 	) {
 		t.Fatalf("error: got %v", err)
 	}
