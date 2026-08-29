@@ -18,8 +18,18 @@ func cmdConfig(args []string) {
 		"",
 		"Cloud context as @handle, organization ID, or personal",
 	)
+	modelValue := fs.String(
+		"model",
+		"",
+		"Default model for new Cloud deployments; empty clears it",
+	)
 	parseFlags(fs, args)
 	requireArgCount(fs, 0, "no positional arguments")
+	stored, err := config.LoadStoredConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
 
 	if flagNameSet(fs, "context") {
 		for _, name := range []string{config.APIEndpointEnv, config.AuthTokenEnv} {
@@ -31,20 +41,14 @@ func cmdConfig(args []string) {
 				)
 			}
 		}
-		stored, err := config.LoadStoredConfig()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
 		setContext(stored, *contextValue)
 		return
 	}
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	if flagNameSet(fs, "model") {
+		setDefaultModel(stored, *modelValue)
+		return
 	}
-	stored, err := config.LoadStoredConfig()
+	cfg, err := config.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -55,6 +59,19 @@ func cmdConfig(args []string) {
 		os.Exit(1)
 	}
 	printConfig(cfg, stored, path)
+}
+
+func setDefaultModel(stored *config.Config, value string) {
+	stored.DefaultModel = strings.TrimSpace(value)
+	if err := config.SaveConfig(stored); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	if stored.DefaultModel == "" {
+		fmt.Println("default model cleared")
+		return
+	}
+	fmt.Printf("default model set to %s\n", stored.DefaultModel)
 }
 
 func setContext(stored *config.Config, value string) {
@@ -102,7 +119,7 @@ func setContext(stored *config.Config, value string) {
 	}
 }
 
-func printConfig(cfg, stored *config.Config, path string) {
+func printConfig(cfg, _ *config.Config, path string) {
 	endpoint := cfg.APIEndpoint
 	if endpoint == "" {
 		endpoint = cloud.DefaultAPIEndpoint
@@ -113,6 +130,7 @@ func printConfig(cfg, stored *config.Config, path string) {
 	}
 	authentication := "not configured"
 	var statusError error
+	var connections []cloud.SubscriptionConnection
 	if cfg.AuthToken != "" {
 		authentication = "unavailable"
 		client, err := configClient(cfg)
@@ -136,40 +154,48 @@ func printConfig(cfg, stored *config.Config, path string) {
 				} else {
 					contextName = organization.ContextName()
 				}
+				if statusError == nil {
+					client.OrgID = organization.ID
+					connections, err = client.ListSubscriptionConnections()
+					if err != nil {
+						statusError = err
+					}
+				}
 			}
 		}
+	}
+	defaultModel := strings.TrimSpace(cfg.DefaultModel)
+	if defaultModel == "" {
+		defaultModel = "workspace default"
 	}
 
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(w, "Config file\t%s\n", path)
-	fmt.Fprintf(w, "Config file source\t%s\n", configPathSource())
 	fmt.Fprintf(w, "Endpoint\t%s\n", endpoint)
-	fmt.Fprintf(w, "Endpoint source\t%s\n", configValueSource(config.APIEndpointEnv, stored.APIEndpoint != "", "default"))
 	fmt.Fprintf(w, "Authentication\t%s\n", authentication)
-	fmt.Fprintf(w, "Authentication source\t%s\n", configValueSource(config.AuthTokenEnv, stored.AuthToken != "", "not set"))
 	fmt.Fprintf(w, "Context\t%s\n", contextName)
-	fmt.Fprintf(w, "Context source\t%s\n", configValueSource(config.ContextEnv, stored.Context != "", "default"))
+	fmt.Fprintf(w, "Default model\t%s\n", defaultModel)
+	if authentication == "valid" {
+		fmt.Fprintln(w, "Subscriptions")
+		for _, connection := range connections {
+			account := ""
+			if connection.AccountLabel != nil {
+				account = *connection.AccountLabel
+			}
+			fmt.Fprintf(
+				w,
+				"  %s\t%s\t%s\t%s\n",
+				connection.Name,
+				connection.Provider,
+				account,
+				connection.Status,
+			)
+		}
+	}
 	if statusError != nil {
 		fmt.Fprintf(w, "Error\t%v\n", statusError)
 	}
 	_ = w.Flush()
-}
-
-func configPathSource() string {
-	if strings.TrimSpace(os.Getenv(config.ConfigPathEnv)) != "" {
-		return "environment (" + config.ConfigPathEnv + ")"
-	}
-	return "default"
-}
-
-func configValueSource(environmentVariable string, stored bool, fallback string) string {
-	if os.Getenv(environmentVariable) != "" {
-		return "environment (" + environmentVariable + ")"
-	}
-	if stored {
-		return "stored file"
-	}
-	return fallback
 }
 
 func configClient(cfg *config.Config) (*cloud.Client, error) {

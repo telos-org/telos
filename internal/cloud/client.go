@@ -128,6 +128,7 @@ type SessionCreateOptions struct {
 	AgentModel      string
 	AgentThinking   string
 	AgentTimeoutSec *int
+	Inference       *InferenceSelection
 }
 
 // The hosted control API still exposes cloud sessions at /api/deployments.
@@ -713,6 +714,9 @@ func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error
 	}
 	if strings.TrimSpace(opts.AgentThinking) != "" {
 		payload["agent_thinking"] = strings.TrimSpace(opts.AgentThinking)
+	}
+	if opts.Inference != nil {
+		payload["inference"] = opts.Inference
 	}
 	if opts.AgentTimeoutSec != nil {
 		payload["agent_timeout_sec"] = *opts.AgentTimeoutSec

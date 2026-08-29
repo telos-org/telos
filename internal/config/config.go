@@ -22,9 +22,10 @@ const (
 
 // Config holds user-facing cloud CLI configuration.
 type Config struct {
-	APIEndpoint string `yaml:"api_endpoint,omitempty"`
-	AuthToken   string `yaml:"auth_token,omitempty"`
-	Context     string `yaml:"context,omitempty"`
+	APIEndpoint  string `yaml:"api_endpoint,omitempty"`
+	AuthToken    string `yaml:"auth_token,omitempty"`
+	Context      string `yaml:"context,omitempty"`
+	DefaultModel string `yaml:"default_model,omitempty"`
 }
 
 // ConfigPath returns the path to the active config file.
