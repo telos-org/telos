@@ -49,6 +49,7 @@ func TestPrepareRegistrySkillsCachesAndPinsExactVersion(t *testing.T) {
 
 	cache := t.TempDir()
 	catalogue := t.TempDir()
+	t.Setenv("TELOS_CONFIG", filepath.Join(t.TempDir(), "config.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", srv.URL)
 	t.Setenv("TELOS_AUTH_TOKEN", "test-token")
 	t.Setenv(spec.RegistrySkillsDirEnv, cache)
@@ -131,6 +132,7 @@ func TestCompilePlanSpecLeavesPersistentRegistryCacheUntouched(t *testing.T) {
 	defer srv.Close()
 
 	persistentCache := filepath.Join(t.TempDir(), "registry-cache")
+	t.Setenv("TELOS_CONFIG", filepath.Join(t.TempDir(), "config.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", srv.URL)
 	t.Setenv("TELOS_AUTH_TOKEN", "test-token")
 	t.Setenv(spec.RegistrySkillsDirEnv, persistentCache)
