@@ -22,6 +22,12 @@ type packageReference struct {
 	ref     string
 }
 
+type registryReference struct {
+	scope   string
+	name    string
+	version string
+}
+
 type pulledPackage struct {
 	reference packageReference
 	digest    string
@@ -101,6 +107,46 @@ func newPullFlagSet() (*flag.FlagSet, *string, *string) {
 	output := fs.String("output", "", "Destination package or skill path")
 	contextValue := cloudContextFlag(fs)
 	return fs, output, contextValue
+}
+
+func registryReadClient(fs *flag.FlagSet, contextValue string) *cloud.Client {
+	contextOverride, err := cloudContextOverride(fs, contextValue)
+	if err != nil {
+		exitWithError(err)
+	}
+	client, err := cloud.RegistryReadClientForContext(contextOverride)
+	if err != nil {
+		exitWithError(err)
+	}
+	if client.Token == "" {
+		if err := requireRegistryPrivacyCapability(client); err != nil {
+			exitWithError(err)
+		}
+	}
+	return client
+}
+
+func parseRegistryReference(raw string) (registryReference, error) {
+	value := strings.TrimSpace(raw)
+	if !strings.HasPrefix(value, "@") {
+		return registryReference{}, fmt.Errorf("registry reference must start with @scope/name")
+	}
+	scope, rest, ok := strings.Cut(strings.TrimPrefix(value, "@"), "/")
+	if !ok {
+		return registryReference{}, fmt.Errorf("invalid registry reference %q", value)
+	}
+	name, version, ok := strings.Cut(rest, ":")
+	if !ok || strings.Contains(version, ":") || !packageSemverRE.MatchString(version) {
+		return registryReference{}, fmt.Errorf("skill reference requires an exact semantic version")
+	}
+	if !packageRefSegmentRE.MatchString(scope) || !packageRefSegmentRE.MatchString(name) {
+		return registryReference{}, fmt.Errorf("invalid registry reference %q", value)
+	}
+	canonical := "@" + scope + "/" + name + ":" + version
+	if canonical != value {
+		return registryReference{}, fmt.Errorf("registry reference must be canonical: %s", canonical)
+	}
+	return registryReference{scope: scope, name: name, version: version}, nil
 }
 
 func pullRegistrySkill(
