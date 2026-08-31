@@ -1,57 +1,64 @@
 # Telos Cloud
 
-Authenticate once, inspect the active target, and select a team only when the
-user intends one:
+Telos Cloud gives a persistent Goal a managed runtime, stable session identity,
+and a public service surface when the Goal exposes one.
+
+## Choose the context
+
+`telos config` shows the active account, context, and default model:
 
 ```bash
 telos login
 telos config
+```
+
+The personal workspace is named `personal`. Team workspaces use their handle:
+
+```bash
 telos config --context @team-handle
 telos list --context @team-handle
 ```
 
-Use `personal` to return to the personal context. For one invocation, `--context` takes
-precedence over `TELOS_CONTEXT` and stored configuration without mutating either.
+`telos config --context personal` returns to the personal workspace. A
+command-level `--context` overrides `TELOS_CONTEXT` and stored configuration
+for that invocation without changing either.
 
-A persistent Cloud Goal declares `platform: cloud` in its spec and is launched
-with:
+## Apply a Cloud Goal
+
+A managed spec declares `platform: cloud`:
 
 ```bash
 telos plan SPEC.md
 telos apply SPEC.md
 ```
 
-`apply` publishes the exact package and creates the managed deployment. Record
-the returned revision digest and session ID.
-
-Inspect Cloud state with:
+`apply` publishes the immutable spec package and creates a deployment for it.
+The receipt identifies the context, revision digest, and session to follow:
 
 ```bash
-telos list --cloud
 telos describe SESSION_ID
 telos logs SESSION_ID
 ```
 
-A deployment becomes `ready` only after the matching revision has been
-reconciled and accepted. Do not interpret allocation success, an HTTP process
-starting, or stale events as Goal acceptance. `Ready` is revision scoped: it
-confirms the current package, not a future drift check or repair.
+The deployment becomes `ready` when the displayed revision has been
+reconciled and accepted. [The Goal lifecycle](lifecycle.md) describes every
+state and the evidence behind it.
 
-For an agent-readable acceptance check:
+## Revise it
 
-```bash
-telos describe SESSION_ID --json | jq -e '.status == "ready"'
-```
-
-To update an existing deployment, retrieve or edit its spec, bump the immutable
-package version, inspect the diff, and apply to the same session:
+Retrieve the current spec when it is not already available locally:
 
 ```bash
 telos get SESSION_ID --output SPEC.md
+```
+
+Edit the contract, bump its version, and compare it with the deployed package:
+
+```bash
 telos plan SPEC.md --session SESSION_ID
 telos apply SPEC.md --session SESSION_ID
 ```
 
-Deletion is consequential. Confirm the exact session and preservation intent
-before `telos delete SESSION_ID`; do not use existing deployments as rollout
-canaries.
+The new package is immutable, while the Goal keeps the same session and
+history. `telos delete SESSION_ID` stops the deployment when deleting it is
+part of the requested lifecycle.

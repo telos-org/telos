@@ -1,167 +1,220 @@
 ---
 title: Use Telos
-description: Give Telos a goal, and it builds, runs, and verifies the software behind it.
+description: Give Telos a Goal, then follow it from a proposed contract to verified software.
 ---
 
-## What Telos does
+# Use Telos
 
-You state what should remain true. Telos writes the implementation, deploys
-it, verifies it against your contract, and keeps it aligned as the contract
-changes. **You do not write or review the implementation** — the Goal is the
-artifact you keep.
+Telos is a goal-oriented programming system. You describe what the software
+should do in `SPEC.md`; Telos assigns agents to implement, run, and verify the
+current revision.
 
-That contract is a `SPEC.md`. It outlives every agent and revision that tries
-to satisfy it.
+The spec is the durable artifact. Implementations can change as the Goal
+evolves, while the Goal keeps its identity, history, and evidence.
 
-This page walks one Goal from nothing to a running, verified service.
+This guide follows one small service from its first spec through a live update.
 
-## 1. Install
+## Install
+
+The CLI is designed to be driven by your coding agent. You can ask it:
+
+```text
+Set up Telos.
+
+- Install it with `curl -fsSL https://usetelos.ai/install.sh | sh`.
+- Run `telos login` so I can approve access in the browser.
+- Read the installed `telos-cli` skill before continuing.
+```
+
+Or install and sign in directly:
 
 ```bash
 curl -fsSL https://usetelos.ai/install.sh | sh
 telos login
 ```
 
-`telos login` pauses for browser approval. Confirm where commands will land
-before running anything that spends:
+`telos login` opens a browser approval flow. Once it completes, `telos config`
+shows the account and Cloud context the CLI will use:
 
 ```console
 $ telos config
 Config file     ~/.telos/config.yaml
 Endpoint        https://api.usetelos.ai
 Authentication  valid
-Context         @telos
+Context         personal
 Default model   workspace default
+Subscriptions
 ```
 
-## 2. Write the contract
+## Describe the Goal
 
-Smallest useful spec: an observable outcome, what must survive, and how
-success is proven.
+Create `SPEC.md`:
 
 ```markdown
 ---
-name: status-page
+name: reading-list
 version: 0.1.0
 platform: cloud
 ---
 
 # Goal
 
-Run a public status page for our services.
+Run a public service for a shared reading list.
 
-- `GET /api/status` returns every service with its current state.
-- Incident history survives restarts and redeploys.
+- `POST /books` adds a title.
+- `GET /books` returns the current list.
+- Books remain available when the application restarts.
 
 # Acceptance
 
-- A newly reported incident appears on the public page within 60 seconds.
+- Add a title, restart the application, and confirm that `GET /books` still
+  returns it.
 ```
 
-`platform: cloud` runs it as a managed deployment. `platform: local` runs it
-on this machine. See [Goals and specifications](goals.md) for the full shape,
-and [Packages and skills](packages-and-skills.md) to attach skills or a
-required rubric.
+This contract names the behavior that matters without choosing a framework,
+database, or deployment layout. `platform: cloud` gives the Goal a managed,
+persistent lifecycle. A local spec uses `platform: local` instead.
 
-## 3. Preview
+[Goals and specifications](goals.md) covers the complete spec shape.
+[Packages and skills](packages-and-skills.md) shows how to import reusable
+capabilities and evaluation rubrics.
+
+## Preview the first revision
+
+`plan` validates the spec and shows where it will run without changing any
+remote state:
 
 ```console
 $ telos plan SPEC.md
-Spec      status-page
+Spec      reading-list
 Target    cloud
-Context   @telos
-Path      SPEC.md
-Namespace ns-status-page
-Hash      e29c25796f22f453
+Context   personal
+Path      /Users/alice/reading-list/SPEC.md
+Namespace ns-reading-list
+Hash      799e5c31172afb26
 ```
 
-A first `plan` confirms identity and target — which spec, which context, what
-it hashes to. It does not describe the work. The reviewable diff comes later,
-once there is a deployed revision to compare against.
+The first plan has no deployed revision to compare with, so it shows the
+Goal's identity, target, namespace, and content hash.
 
-## 4. Apply
+## Apply it
 
 ```console
 $ telos apply SPEC.md
-created status-page
+created reading-list
 
 Status    working
 Session   sess_c7d2f0a4e8
-Revision  sha256:8f21c47a...
-Logs      telos logs sess_c7d2f0a4e8
+Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
+Context   personal
+Logs      telos logs --context personal sess_c7d2f0a4e8
 ```
 
-`apply` returns as soon as the work is accepted, not when it is finished.
-Agents build, test, and deploy in the background. **The session ID is stable
-for the life of the Goal** — every later revision reuses it.
+`working` means Cloud accepted this revision and is reconciling it. The
+session ID remains the identity of the Goal across later revisions.
 
-## 5. Wait for Ready
+Follow progress with the commands printed in the receipt:
+
+```bash
+telos describe sess_c7d2f0a4e8
+telos logs sess_c7d2f0a4e8
+```
+
+Log messages reflect the actual implementation and verification work, so they
+vary from Goal to Goal. By default, `logs` shows the 50 most recent activity
+rows.
+
+## Observe Ready
+
+When reconciliation succeeds, `describe` reports the exact accepted revision
+and any public service URL:
 
 ```console
 $ telos describe sess_c7d2f0a4e8
-Name      status-page
+Name      reading-list
 Status    ready
 Session   sess_c7d2f0a4e8
-Revision  sha256:8f21c47a...
-Service   https://status-page-c7d2f0a4e8.usetelos.ai
+Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
+Context   personal
+Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 ```
 
-`ready` means that exact revision passed verification and is running. Poll
-`describe` with a bounded timeout; stop on a terminal failure. The four states
-and what each proves are in [The Goal lifecycle](lifecycle.md).
+`ready` belongs to that revision digest: Cloud reconciled it and its latest
+verification passed. The service URL is the next piece of evidence. Exercise
+the routes named by the spec and confirm that their behavior matches the
+contract.
 
-Trace the work with:
+## Revise the same Goal
 
-```console
-$ telos logs sess_c7d2f0a4e8
-[12:00:00Z] [INFO] Accepted managed session
-[12:04:22Z] [INFO] Implemented persistent incident history
-[12:08:47Z] [INFO] Service URL verified
-[12:11:06Z] [INFO] Running the required service checks
-[12:15:31Z] [INFO] Current revision accepted
+Suppose the reading list now needs attribution. Bump the version and add the
+new behavior to the same spec:
+
+```markdown
+version: 0.2.0
+
+# Goal
+
+- Every book records who added it.
 ```
 
-`logs` shows the 50 most recent rows; pass `--all` or `--tail N` for more.
-
-Then use the live service. It is the claim; the logs are not.
-
-## 6. Change the contract
-
-Edit the spec, bump its version, and plan against the durable session. This
-form produces a real diff:
+Plan against the existing session:
 
 ```console
 $ telos plan SPEC.md --session sess_c7d2f0a4e8
+Spec      reading-list
+Target    cloud
+Context   personal
 Session   sess_c7d2f0a4e8
-Current   sha256:8f21c47a...
+Current   @alice/reading-list:0.1.0
+Path      /Users/alice/reading-list/SPEC.md
+Namespace ns-reading-list
+Hash      9e8d86776e85ffbc
 Version   0.1.0 -> 0.2.0
 
-+ 30 days of uptime history render for each service.
+--- deployed/SPEC.md
++++ proposed/SPEC.md
+@@ -1,6 +1,6 @@
+ ---
+ name: reading-list
+-version: 0.1.0
++version: 0.2.0
+ platform: cloud
+ ---
+
+@@ -11,6 +11,7 @@
+ - `POST /books` adds a title.
+ - `GET /books` returns the current list.
+ - Books remain available when the application restarts.
++- Every book records who added it.
 ```
+
+Unlike the first preview, a session-aware plan includes the package currently
+deployed and a unified diff of the proposed contract. Apply the revision to
+that same session:
 
 ```bash
 telos apply SPEC.md --session sess_c7d2f0a4e8
 ```
 
-Agents reconcile the change incrementally. The session, its history, and the
-service URL stay stable.
+Cloud reconciles the change while preserving the Goal's session and history.
+The new revision moves through `working` and `ready` like the first.
 
-## Bounded work
+## Run bounded work
 
-`apply` is for a Goal that should persist. For one bounded piece of work that
-should stop at a limit, use `run`:
+Some work has a natural stopping point rather than a persistent service
+lifecycle. A local spec can run for at most three review cycles:
 
 ```bash
 telos run SPEC.md --workspace . --until 3
 ```
 
-It stops at the bound and returns evidence. It does not create a durable
-Goal — only `apply` does.
+`run` returns a session with logs and evidence, then stops at the bound.
+`apply` is the persistent lifecycle used by the reading-list example.
 
-## Next
+## Go deeper
 
-- [The Goal lifecycle](lifecycle.md) — states, revisions, and what Ready proves
-- [Goals and specifications](goals.md) — writing the contract
-- [Telos Cloud](cloud.md) — contexts, teams, and managed deployments
-- [Models and inference](inference.md) — managed tiers or your own subscription
-- [Troubleshooting](troubleshooting.md) — when something does not reach Ready
+- [The Goal lifecycle](lifecycle.md) explains states, revisions, and evidence.
+- [Goals and specifications](goals.md) explains what the contract can express.
+- [Telos Cloud](cloud.md) covers contexts, teams, and managed deployments.
+- [Models and inference](inference.md) covers managed models and connected subscriptions.
+- [Troubleshooting](troubleshooting.md) starts from the state Telos actually reports.

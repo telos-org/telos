@@ -10,92 +10,99 @@ metadata:
 
 # Telos CLI
 
-Use Telos behind the user's interactive coding agent. `SPEC.md` is the Goal's
-executable contract. Keep the user in control of intent and mutations; let
-Telos implement and verify the current revision.
+Telos turns a `SPEC.md` into either a persistent Goal or a bounded run. The
+spec is the executable contract: it describes the outcome and its evidence,
+while Telos implements and verifies a revision that satisfies it.
 
-## Begin with the live system
+## Start with the live system
 
-1. Read the repository's `AGENTS.md` and inspect the relevant code.
-2. Run `telos --version` and `telos <command> --help`. If Telos is absent, read
-   [Install Telos](references/install.md).
-3. For Cloud work, run `telos login` and confirm the target with `telos config`.
-4. Decide whether the Goal is persistent (`apply`) or bounded (`run`).
+Read the repository's `AGENTS.md` and inspect the relevant code before drafting
+the Goal. Then check the installed CLI:
 
-Read only the reference needed for the current task:
+```bash
+telos --version
+telos <command> --help
+```
 
-- [Use Telos](references/use-telos.md) for the concise end-to-end workflow
-- [Goals and specifications](references/goals.md)
+If Telos is absent, read [Install Telos](references/install.md). Cloud work also
+needs an authenticated account and an explicit target:
+
+```bash
+telos login
+telos config
+```
+
+Choose the lifecycle that matches the requested outcome:
+
+| Lifecycle | Command | Use it for |
+| --- | --- | --- |
+| Persistent Goal | `telos apply` | Software that should retain identity and evolve across revisions. |
+| Bounded run | `telos run` | One piece of work that ends at a cycle, time, or cost limit. |
+
+Read the reference that matches the task:
+
+- [Use Telos](references/use-telos.md) for the end-to-end workflow
+- [Goals and specifications](references/goals.md) for writing `SPEC.md`
 - [The Goal lifecycle](references/lifecycle.md) for states, revisions, and evidence
-- [Telos Cloud](references/cloud.md)
-- [Models and inference](references/inference.md)
-- [Packages and skills](references/packages-and-skills.md)
-- [Nested Goals](references/nested-goals.md)
-- [Troubleshooting](references/troubleshooting.md)
+- [Telos Cloud](references/cloud.md) for contexts and managed deployments
+- [Models and inference](references/inference.md) for Cloud and local model selection
+- [Packages and skills](references/packages-and-skills.md) for the registry
+- [Nested Goals](references/nested-goals.md) for bounded child work
+- [Troubleshooting](references/troubleshooting.md) for failed or stalled work
 
 ## Apply a persistent Goal
 
-Draft the smallest `SPEC.md` that states the observable outcome, important
-constraints, and evidence of success. Avoid prescribing ordinary implementation
-choices.
-
-Plan first:
+Write the smallest spec that states the observable outcome, important
+constraints, and evidence of success. Preview the contract before applying it:
 
 ```bash
 telos plan SPEC.md
-```
-
-Review the contract with the user. After approval:
-
-```bash
 telos apply SPEC.md
 ```
 
-Poll the returned session with a bounded timeout until the exact revision is
-Ready:
+`apply` returns a session ID as soon as Cloud accepts the revision. Follow that
+session until the matching revision becomes `ready`, or until the displayed
+state and reason call for a new decision:
 
 ```bash
 telos describe SESSION_ID --json
+telos logs SESSION_ID
 ```
 
-Ready means the exact revision passed verification and is running. Once it is
-Ready, collect a finite evidence snapshot with `telos logs SESSION_ID` and show
-the user the result. Stop polling on a terminal failure or when the timeout
-expires.
+When the Goal exposes a service, verify the live service as well as the Telos
+state. A later revision uses the same session:
+
+```bash
+telos plan SPEC.md --session SESSION_ID
+telos apply SPEC.md --session SESSION_ID
+```
 
 ## Run bounded work
 
-Use `run` for one-off work or a child Goal that should stop at a clear limit:
+`run` executes one Goal in a local workspace and stops at its bound:
 
 ```bash
 telos run SPEC.md --workspace . --until 3
 ```
 
-For a human it is bounded imperative work. For an agent it is a bounded
-declarative subgoal. Inspect it with the same `describe` and `logs` commands.
+Inside a Telos session, the same command creates a bounded child Goal. Its
+session is inspected with `describe` and `logs` like any other run.
 
-## Guardrails
+## Command effects
 
-- `plan`, `list`, `describe`, and `logs` do not change the Goal or target state.
+- `plan`, `list`, `describe`, and `logs` inspect state.
 - `get` and `pull` materialize local files. `login`, `logout`, and
-  `config --context` update local credentials or configuration.
-- `run`, `apply`, `push`, and `delete` mutate execution or registry state and
-  may spend resources. Confirm the target and authorization first.
-- Never guess a session, organization, package version, or deployment target.
-- Package versions are immutable. Publish a new version for changed bytes.
-- Do not report completion until the observed session state confirms acceptance
-  of the exact current revision. For managed Goals, require `ready` and probe
-  public behavior when the contract exposes it.
-- Do not expose tokens, runtime allocation IDs, provider details, or other
-  control-plane internals in user-facing artifacts.
-- Do not pipe and execute the installer when the user only asked for advice.
-  Show the command; run it when installation is part of the authorized task.
-- Launch the fewest child Goals needed and inspect their results before
-  creating more. Avoid recursive fan-out.
-- Give child work an observable deliverable and a finite cycle, time, or cost
-  bound. The parent integrates and verifies what a child returns.
+  `config --context` change local authentication or configuration.
+- `run`, `apply`, `push`, and `delete` change execution or registry state and
+  may spend resources. Their target and mutation must be part of the user's
+  request.
+- Package versions are immutable; changed content receives a new version.
+- Completion is an observed state, not a successful submission. For managed
+  Goals, it is `ready` for the current revision plus any live behavior promised
+  by the spec.
 
-## Handoff
+## Return the result
 
-Report the spec, target, session ID, commands run, observed state, and evidence.
-Say plainly what was planned, published, launched, updated, or deleted.
+Report the spec, target, session ID, current revision and state, and the
+evidence that supports the result. Distinguish work that was planned, applied,
+published, updated, or deleted.

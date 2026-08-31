@@ -1,83 +1,95 @@
 ---
 title: Models and inference
-description: Choose managed Telos inference or connect an existing ChatGPT or Grok subscription.
+description: Choose managed inference or a connected subscription for Cloud, and choose a pi model for local runs.
 group: Platform
 ---
 
 # Models and inference
 
-Every Cloud Goal runs on an inference connection. Telos supplies one by
-default; the user can instead connect a subscription they already pay for.
+Cloud Goals and local runs select models at different execution boundaries.
+Cloud resolves a managed tier or a subscription connection. Local runs pass a
+provider and model directly to `pi`.
 
-## Managed tiers
+## Cloud Goals
 
-Two managed models need no setup and bill through Telos:
+Every new Cloud Goal receives an inference selection. Telos provides two
+managed tiers:
 
 ```bash
 telos apply SPEC.md --model telos/default
 telos apply SPEC.md --model telos/max
 ```
 
-`telos/default` is what a Goal uses when nothing selects a model.
+`telos/default` is the standard managed tier. `telos/max` selects the larger
+managed tier. Both are operated and billed by Telos, so they need no separate
+provider setup.
 
-## A user's own subscription
+A Cloud selection is made when the session is created. Later revisions keep
+the session's existing inference configuration.
 
-Telos can drive an existing ChatGPT account (OpenAI Codex models) or Grok
-account (xAI models) instead. Work then bills against that subscription rather
-than Telos.
+### Connected subscriptions
 
-**Connecting is a browser action, and an agent cannot do it.** There is no
-`telos` command that connects a subscription. When a user wants one, stop and
-tell them to connect it in the Telos app; then continue.
-
-Once connected, `telos config` lists it:
+Cloud can also use a ChatGPT or Grok subscription connected in the Telos app.
+Once connected, it appears in `telos config`:
 
 ```console
 $ telos config
 Config file     ~/.telos/config.yaml
 Endpoint        https://api.usetelos.ai
 Authentication  valid
-Context         @telos
+Context         personal
 Default model   workspace default
 Subscriptions
-  ChatGPT  chatgpt-codex    connected
+  MyChatGPT  chatgpt-codex  alice@example.com  connected
 ```
 
-The columns are connection name, provider, account, and status. **The first
-column is the name to use** — it is a label the user chose, not the provider
-id. Select a model on that connection as `<connection-name>/<model-name>`:
+The first value is the connection name chosen by the user. Combine that name
+with a model as `<connection-name>/<model-name>`:
 
 ```bash
-telos apply SPEC.md --model ChatGPT/gpt-5.5
+telos apply SPEC.md --model MyChatGPT/gpt-5.5
 ```
 
-The connection must report `connected`. A name that does not match, or matches
-more than one connection, is an error rather than a fallback.
+The selected connection must exist exactly once and report `connected`.
+Connection creation and browser authorization happen in the Telos app; the CLI
+uses connections that are already available.
 
-## Where a model is chosen
+### Cloud selection order
 
-`--model` accepts exactly three forms: `telos/default`, `telos/max`, or
-`<connection-name>/<model-name>`. Anything else is rejected.
+For a new Cloud session, Telos resolves the model in this order:
 
-Resolution order, highest first:
+1. `--model` on `telos apply`
+2. `TELOS_MODEL`
+3. the stored value set by `telos config --model`
+4. the standard managed tier
 
-1. `--model` on `telos apply` or `telos run`
-2. `$TELOS_MODEL`
-3. the stored default from `telos config --model`
-4. `telos/default`
+The Cloud forms are `telos/default`, `telos/max`, and
+`<connection-name>/<model-name>`.
 
-Set the stored default for new Cloud deployments with:
+Set or clear the stored Cloud default with:
 
 ```bash
 telos config --model telos/max
-telos config --model ""      # clear it
+telos config --model ""
 ```
 
-Read the current value from the `Default model` row of `telos config`;
-`workspace default` there means nothing is stored and rule 4 applies.
+`telos config` prints `workspace default` when no value is stored.
 
 ## Local runs
 
-`telos run` on a `platform: local` spec uses the `pi` runtime and the model
-provider authenticated on that machine. Managed Cloud deployments never use a
-workstation's local model credentials.
+A `platform: local` spec runs through the `pi` coding agent installed on the
+same machine:
+
+```bash
+telos run SPEC.md --workspace . --model openai-codex/gpt-5.5
+```
+
+Local model names use pi's `<provider>/<model-id>` form. Selection order is:
+
+1. `--model` on `telos run`
+2. `TELOS_MODEL`
+3. `openai-codex/gpt-5.5`
+
+The stored Cloud default from `telos config --model` does not participate in
+local selection. Provider authentication comes from the local pi installation;
+run `pi` and use `/login` to configure it.
