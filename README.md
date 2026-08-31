@@ -129,10 +129,8 @@ workflow.
 `telos run` executes a bounded Goal in a local workspace and stops. Use it for
 one piece of work that does not need the persistent lifecycle of `telos apply`.
 
-Local runs use the open source
-[pi coding agent](https://github.com/earendil-works/pi):
-
-For a spec with `platform: local`:
+Local runs execute through [pi](https://github.com/earendil-works/pi), the open
+source coding agent Telos drives. For a spec with `platform: local`:
 
 ```bash
 npm install -g @earendil-works/pi-coding-agent
