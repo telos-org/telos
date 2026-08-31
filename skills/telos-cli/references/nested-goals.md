@@ -1,46 +1,33 @@
-# Nested child goals
-
-A running Telos agent can delegate an independent, bounded result to another
-Telos run. The child becomes its own session while remaining linked to the
-parent.
-
-For example, a parent implementing a service might delegate a compatibility
-report:
-
-```markdown
 ---
-name: compatibility-report
-version: 0.1.0
-platform: local
+title: Nested Goals
+description: Delegate bounded child work from a running Telos session and integrate its evidence.
+group: Concepts
 ---
 
-# Goal
+# Nested Goals
 
-Compare the current API responses with the v1 fixtures and return a report of
-every incompatible change, with the fixture and response that prove it.
-```
-
-Inside the parent session:
+A nested Goal is the [bounded-run](bounded-runs.md) workflow launched from
+inside another Telos session. The child receives its own session and remains
+linked to its parent.
 
 ```bash
 telos run path/to/CHILD_SPEC.md --until 2 --max-cost-usd 5
 ```
 
-`--until` accepts a review-cycle count or a duration such as `30m`.
-`--max-cost-usd` adds a spend bound. Telos supplies the environment-local
-capability needed to create and inspect the child, so the spec contains no user
-or Cloud credentials.
+The child spec uses `platform: local`. `--until` accepts a review-cycle count or
+a duration such as `30m`; `--max-cost-usd` adds a spend bound. Telos supplies
+the environment-local capability to create and inspect the child, so the spec
+contains no user or Cloud credentials.
 
 A child can produce files, tests, analysis, or another observable deliverable.
-Persistent `telos apply` is a top-level lifecycle and is unavailable inside a
-session; nested work uses `run`.
+Persistent `telos apply` is a top-level lifecycle; nested work uses `run`.
 
-The submission receipt contains the child session ID. Follow it like any other
-run:
+The submission receipt contains the child session ID:
 
 ```bash
 telos describe CHILD_SESSION_ID
 telos logs CHILD_SESSION_ID
 ```
 
-The parent can then inspect, integrate, and verify the child's result.
+The parent inspects the result, integrates anything it needs, and verifies the
+child evidence against the parent Goal.
