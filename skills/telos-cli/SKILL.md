@@ -26,7 +26,9 @@ Read only the reference needed for the current task:
 
 - [Use Telos](references/use-telos.md) for the concise end-to-end workflow
 - [Goals and specifications](references/goals.md)
+- [The Goal lifecycle](references/lifecycle.md) for states, revisions, and evidence
 - [Telos Cloud](references/cloud.md)
+- [Models and inference](references/inference.md)
 - [Packages and skills](references/packages-and-skills.md)
 - [Nested Goals](references/nested-goals.md)
 - [Troubleshooting](references/troubleshooting.md)
