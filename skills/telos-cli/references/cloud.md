@@ -10,8 +10,7 @@ telos config --context @team-handle
 telos list --context @team-handle
 ```
 
-Use `personal` to return to the personal context. Never guess the target from a
-repository name or prior session. For one invocation, `--context` takes
+Use `personal` to return to the personal context. For one invocation, `--context` takes
 precedence over `TELOS_CONTEXT` and stored configuration without mutating either.
 
 A persistent Cloud Goal declares `platform: cloud` in its spec and is launched

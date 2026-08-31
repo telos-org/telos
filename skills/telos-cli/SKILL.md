@@ -88,6 +88,12 @@ declarative subgoal. Inspect it with the same `describe` and `logs` commands.
   public behavior when the contract exposes it.
 - Do not expose tokens, runtime allocation IDs, provider details, or other
   control-plane internals in user-facing artifacts.
+- Do not pipe and execute the installer when the user only asked for advice.
+  Show the command; run it when installation is part of the authorized task.
+- Launch the fewest child Goals needed and inspect their results before
+  creating more. Avoid recursive fan-out.
+- Give child work an observable deliverable and a finite cycle, time, or cost
+  bound. The parent integrates and verifies what a child returns.
 
 ## Handoff
 

@@ -12,18 +12,16 @@ Inside a Telos session:
 telos run path/to/CHILD_SPEC.md --until 2 --max-cost-usd 5
 ```
 
-Rules:
+What a child can and cannot do:
 
-- Always give child work an observable deliverable and a finite cycle, time, or
-  cost bound.
-- Avoid recursive fan-out. Launch the fewest children needed and inspect their
-  results before creating more.
-- A child may not create or update a durable controller with `telos apply`.
-  That mutation remains a top-level operator action.
-- Do not pass user or Cloud credentials into the child spec. Telos supplies the
-  scoped environment-local capability needed to create and inspect children.
-- The parent remains responsible for integrating and verifying child output.
+- A child may not create or update a durable Goal with `telos apply`. That
+  mutation stays a top-level operator action.
+- A child needs no credentials of its own. Telos supplies the scoped,
+  environment-local capability for creating and inspecting children, so user
+  and Cloud credentials never belong in a child spec.
+- A child accepts the same bounds as any `run`: `--until` for cycles or
+  duration, `--max-cost-usd` for spend.
 
-Use `telos list --wide`, `telos describe CHILD_SESSION_ID`, and
-`telos logs CHILD_SESSION_ID` to inspect child work. Never treat successful
-submission as successful completion.
+Inspect child work with `telos list --wide`, `telos describe CHILD_SESSION_ID`,
+and `telos logs CHILD_SESSION_ID`. Submission is not completion — see
+[The Goal lifecycle](lifecycle.md).

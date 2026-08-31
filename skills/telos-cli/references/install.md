@@ -31,7 +31,3 @@ Local runs use the `pi` coding-agent runtime. If it is absent, follow the
 installer's current setup message and authenticate the intended model provider
 before launching a local goal. Managed Cloud deployments do not use the
 workstation's local model credentials.
-
-Do not silently pipe and execute a remote installer when the user only asked
-for advice. Show the command, or run it when installation is part of the
-authorized task.
