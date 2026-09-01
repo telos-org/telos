@@ -31,8 +31,11 @@ func cmdLaunch(command, action string, args []string) {
 	workspace := fs.String("workspace", "", "Workspace directory for local specs")
 	sessionIDValue := ""
 	sessionID := &sessionIDValue
+	forceValue := false
+	force := &forceValue
 	if command == "apply" {
 		sessionID = fs.String("session", "", "Managed session ID to update")
+		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
 	}
 	model := fs.String("model", "", "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL")
 	thinking := fs.String("thinking", "", "Thinking effort; defaults to $TELOS_THINKING, then high for local runs")
@@ -105,6 +108,10 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		if err := validateForceApply(*force, *sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	if command == "apply" && *sessionID != "" && isLocalApplyID(*sessionID) {
 		if !hasLocalSpec {
@@ -158,7 +165,14 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: cloud runtime config flags can only seed a new session; they cannot update an existing session")
 			os.Exit(1)
 		}
-		applyCloudControl(specArg, *sessionID, runtimeConfig, *jsonOut, contextOverride)
+		applyCloudControl(
+			specArg,
+			*sessionID,
+			runtimeConfig,
+			*force,
+			*jsonOut,
+			contextOverride,
+		)
 		return
 	}
 	if !hasLocalSpec {
@@ -402,6 +416,7 @@ func applyCloudControl(
 	specArg string,
 	sessionID string,
 	runtimeConfig sessionRuntimeConfig,
+	force bool,
 	jsonOut bool,
 	contextOverride string,
 ) {
@@ -447,6 +462,7 @@ func applyCloudControl(
 		packageRecord.Ref,
 		sessionID,
 		runtimeConfig,
+		force,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -475,19 +491,23 @@ func applyCloudSessionPackage(
 	packageRef string,
 	sessionID string,
 	runtimeConfig sessionRuntimeConfig,
+	force bool,
 ) (string, *cloud.SessionRecord, error) {
 	if sessionID != "" {
 		if !isCloudApplyID(sessionID) {
 			return "", nil, fmt.Errorf("invalid cloud session id %q", sessionID)
 		}
-		session, err := control.UpdateSession(sessionID, packageRef)
+		session, err := control.UpdateSession(sessionID, cloud.SessionUpdateOptions{
+			PackageRef: packageRef,
+			Force:      force,
+		})
 		if err != nil && cloud.IsStatus(err, 409) {
 			current, getErr := control.GetSession(sessionID)
 			if getErr == nil && current.PackageRef == packageRef {
 				return "unchanged", current, nil
 			}
 		}
-		return "updated", session, err
+		return "updated", session, actionableDeploymentUpdateError(err, force)
 	}
 
 	inference, err := resolveCloudInference(control, runtimeConfig.Model)
@@ -503,8 +523,40 @@ func applyCloudSessionPackage(
 	return "created", session, err
 }
 
+func actionableDeploymentUpdateError(err error, force bool) error {
+	if force {
+		return err
+	}
+	var apiErr *cloud.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != 409 || apiErr.Code != "snapshot_pending" {
+		return err
+	}
+	return &snapshotPendingUpdateError{cause: err}
+}
+
+type snapshotPendingUpdateError struct {
+	cause error
+}
+
+func (e *snapshotPendingUpdateError) Error() string {
+	return "The current revision has not been snapshotted.\n" +
+		"Deploying now means you won’t be able to restore its exact workspace and runtime state.\n\n" +
+		"To deploy anyway, retry the same command with --force."
+}
+
+func (e *snapshotPendingUpdateError) Unwrap() error {
+	return e.cause
+}
+
 func cloudRuntimeConfigSet(cfg sessionRuntimeConfig) bool {
 	return cfg.Model != "" || cfg.Thinking != ""
+}
+
+func validateForceApply(force bool, sessionID string) error {
+	if force && !isCloudApplyID(sessionID) {
+		return errors.New("--force requires --session with a cloud deployment ID")
+	}
+	return nil
 }
 
 func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session) {

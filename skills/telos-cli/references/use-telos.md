@@ -202,6 +202,21 @@ The Goal, session, deployment, and history stay the same; only the immutable
 revision changes. Observe the new digest through `working` to `ready`, then
 exercise the updated API behavior.
 
+### Deploy without a restorable snapshot
+
+If the current revision has not been snapshotted, you will get a warning saying
+that deploying now means you won’t be able to restore its exact workspace and
+runtime state. To continue anyway, retry the update with `--force`:
+
+```bash
+telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal --force
+```
+
+This bypass applies only to the missing-snapshot gate. Active operations,
+authorization, runtime availability, and stale-revision protection still
+apply. Without `--force`, the update remains rejected and the current revision
+continues serving.
+
 For another contract, continue with [Write a SPEC.md](goals.md). Use
 [Bounded runs](bounded-runs.md) for local work and
 [Troubleshooting](troubleshooting.md) when observed state diverges from the

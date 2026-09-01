@@ -93,6 +93,25 @@ telos plan SPEC.md --session SESSION_ID --context CONTEXT
 telos apply SPEC.md --session SESSION_ID --context CONTEXT
 ```
 
+A healthy revision may still be waiting for its restorable snapshot. If that
+snapshot gate rejects the update, do not bypass it silently. Tell the user:
+
+> The current revision has not been snapshotted.
+>
+> Deploying now means you won’t be able to restore its exact workspace and
+> runtime state.
+
+Obtain explicit approval for that loss, then retry the same Cloud session
+update with `--force`:
+
+```bash
+telos apply SPEC.md --session SESSION_ID --context CONTEXT --force
+```
+
+`--force` is only valid for an existing Cloud session update. It bypasses this
+snapshot gate only; it does not bypass authorization, active operations,
+runtime availability, or stale-revision protection.
+
 [Use Telos](references/use-telos.md) follows this loop with one service.
 [The Goal lifecycle](references/lifecycle.md) gives a bounded observation
 pattern and explains every reported state.
