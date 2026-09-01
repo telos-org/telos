@@ -1,6 +1,6 @@
 ---
 name: telos-cli
-description: Install and use the Telos CLI to apply persistent Goals or run bounded work. Use for Telos setup, SPEC.md authoring, plan/apply/run workflows, cloud login and context, session inspection, publishing or pulling packages and skills, nested child goals, and Telos troubleshooting.
+description: Install and use the Telos CLI to apply persistent Goals or run bounded work. Use for Telos setup, SPEC.md authoring, plan/apply/run workflows, Cloud login and context, session inspection, publishing or pulling packages and skills, nested child Goals, and Telos troubleshooting.
 metadata:
   registry: "@telos/telos-cli"
   quickstart_prompt: "assets/quickstart-prompt.txt"
@@ -10,84 +10,134 @@ metadata:
 
 # Telos CLI
 
-Use Telos behind the user's interactive coding agent. `SPEC.md` is the Goal's
-executable contract. Keep the user in control of intent and mutations; let
-Telos implement and verify the current revision.
+This skill is the public operating contract for Telos. Its linked references
+form the user-facing documentation surface.
 
-## Begin with the live system
+Telos works from a `SPEC.md`: an authored contract for an observable outcome
+and the evidence that proves it. `apply` gives that outcome a persistent Cloud
+identity; `run` executes bounded local work. See
+[The Goal lifecycle](references/lifecycle.md) for the relationship between a
+Goal, its spec, revisions, session, and deployment.
 
-1. Read the repository's `AGENTS.md` and inspect the relevant code.
-2. Run `telos --version` and `telos <command> --help`. If Telos is absent, read
-   [Install Telos](references/install.md).
-3. For Cloud work, run `telos login` and confirm the target with `telos config`.
-4. Decide whether the Goal is persistent (`apply`) or bounded (`run`).
+## Before you act
 
-Read only the reference needed for the current task:
+Read the repository's `AGENTS.md`, inspect the relevant code, and check the
+installed CLI before drafting the Goal:
 
-- [Use Telos](references/use-telos.md) for the concise end-to-end workflow
-- [Goals and specifications](references/goals.md)
-- [Telos Cloud](references/cloud.md)
-- [Packages and skills](references/packages-and-skills.md)
-- [Nested Goals](references/nested-goals.md)
-- [Troubleshooting](references/troubleshooting.md)
+```bash
+telos --version
+telos <command> --help
+```
+
+If Telos is absent, read [Install Telos](references/install.md). Cloud work also
+needs an authenticated account and a confirmed context:
+
+```bash
+telos login
+telos config
+```
+
+Choose the lifecycle that matches the requested outcome:
+
+| Lifecycle | Command | Result |
+| --- | --- | --- |
+| Persistent Goal | `telos apply` | One Cloud session and deployment that evolve across revisions. |
+| Bounded run | `telos run` | A local session that stops at its cycle, time, or cost bound. |
+
+## Authorization
+
+Before `run`, `apply`, `push`, or `delete`, present the resolved action and
+target to the user and obtain approval. Include the spec and workspace for a
+run, the session and context for an apply or delete, and the scope and package
+version for a push. `run` and `apply` may spend money. Never infer a session,
+context, scope, package version, or destructive target.
 
 ## Apply a persistent Goal
 
-Draft the smallest `SPEC.md` that states the observable outcome, important
-constraints, and evidence of success. Avoid prescribing ordinary implementation
-choices.
+Before authoring a Cloud Goal, read [Telos Cloud](references/cloud.md) and
+confirm that its delivery, storage, and external-service needs fit the managed
+runtime.
 
-Plan first:
+1. Write the smallest `platform: cloud` spec that states the outcome,
+   meaningful constraints, and observable acceptance evidence.
+2. Choose the Cloud context explicitly and preview without changing remote
+   state. Replace `CONTEXT` with `personal` or the intended `@team-handle`:
+
+   ```bash
+   telos plan SPEC.md --context CONTEXT
+   ```
+
+3. Confirm that the plan shows the intended target and context. Present that
+   resolved Cloud mutation to the user, obtain approval, then apply it:
+
+   ```bash
+   telos apply SPEC.md --context CONTEXT
+   ```
+
+4. Capture the session ID and revision digest from the receipt. Observe that
+   session until the same revision becomes `ready`, or until its state and
+   reason require a decision:
+
+   ```bash
+   telos describe SESSION_ID --context CONTEXT --json
+   telos logs SESSION_ID --context CONTEXT
+   ```
+
+5. Verify the live behavior promised by the spec. Submission, a running
+   process, and old green evidence are not completion of the current revision.
+
+Revise the same Goal by editing `SPEC.md`, bumping its version, and applying to
+the existing session:
 
 ```bash
-telos plan SPEC.md
+telos plan SPEC.md --session SESSION_ID --context CONTEXT
+telos apply SPEC.md --session SESSION_ID --context CONTEXT
 ```
 
-Review the contract with the user. After approval:
-
-```bash
-telos apply SPEC.md
-```
-
-Poll the returned session with a bounded timeout until the exact revision is
-Ready:
-
-```bash
-telos describe SESSION_ID --json
-```
-
-Ready means the exact revision passed verification and is running. Once it is
-Ready, collect a finite evidence snapshot with `telos logs SESSION_ID` and show
-the user the result. Stop polling on a terminal failure or when the timeout
-expires.
+[Use Telos](references/use-telos.md) follows this loop with one service.
+[The Goal lifecycle](references/lifecycle.md) gives a bounded observation
+pattern and explains every reported state.
 
 ## Run bounded work
 
-Use `run` for one-off work or a child Goal that should stop at a clear limit:
+`run` requires a `platform: local` spec and a cycle, time, or cost bound suited
+to the task. Resolve the source workspace and bounds, then obtain user approval
+before starting it:
 
 ```bash
-telos run SPEC.md --workspace . --until 3
+telos run REPORT_SPEC.md --workspace . --until 3
 ```
 
-For a human it is bounded imperative work. For an agent it is a bounded
-declarative subgoal. Inspect it with the same `describe` and `logs` commands.
+Read [Bounded runs](references/bounded-runs.md) for the complete local workflow.
+Inside a Telos session, the same command creates a linked child session; see
+[Nested Goals](references/nested-goals.md).
 
-## Guardrails
+## Command effects
 
-- `plan`, `list`, `describe`, and `logs` do not change the Goal or target state.
-- `get` and `pull` materialize local files. `login`, `logout`, and
-  `config --context` update local credentials or configuration.
-- `run`, `apply`, `push`, and `delete` mutate execution or registry state and
-  may spend resources. Confirm the target and authorization first.
-- Never guess a session, organization, package version, or deployment target.
-- Package versions are immutable. Publish a new version for changed bytes.
-- Do not report completion until the observed session state confirms acceptance
-  of the exact current revision. For managed Goals, require `ready` and probe
-  public behavior when the contract exposes it.
-- Do not expose tokens, runtime allocation IDs, provider details, or other
-  control-plane internals in user-facing artifacts.
+| Effect | Commands |
+| --- | --- |
+| Inspect state | `plan`, `list`, `describe`, `logs` |
+| Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context`, `config --model` |
+| Start bounded local execution; may spend money | `run` |
+| Publish or change remote state; `apply` may spend money | `apply`, `push`, `delete` |
 
-## Handoff
+Package versions are immutable, so changed content receives a new version.
 
-Report the spec, target, session ID, commands run, observed state, and evidence.
-Say plainly what was planned, published, launched, updated, or deleted.
+## Return the result
+
+Report the spec, target, context, session ID, current revision and state, and
+the evidence behind the result. Distinguish work that was planned, applied,
+published, updated, or deleted.
+
+## References
+
+- [Use Telos](references/use-telos.md) — one persistent Goal from first plan through revision
+- [Write a SPEC.md](references/goals.md) — contract shape and expressive boundary
+- [The Goal lifecycle](references/lifecycle.md) — identity, states, revisions, and evidence
+- [Glossary](references/glossary.md) — canonical Telos product vocabulary
+- [Bounded runs](references/bounded-runs.md) — local work with an explicit stopping bound
+- [Telos Cloud](references/cloud.md) — contexts and managed-runtime preflight
+- [Models and inference](references/inference.md) — Cloud and local model selection
+- [Packages and skills](references/packages-and-skills.md) — immutable registry artifacts and rubrics
+- [Nested Goals](references/nested-goals.md) — bounded child work
+- [Troubleshooting](references/troubleshooting.md) — symptom-led diagnosis
