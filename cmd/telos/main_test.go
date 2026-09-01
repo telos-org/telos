@@ -1304,12 +1304,13 @@ func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
 	}
 	want := "The current revision has not been snapshotted.\n" +
 		"Deploying now means you won’t be able to restore its exact workspace and runtime state.\n\n" +
-		"To deploy anyway, retry the same command with --force. (HTTP 409)"
+		"To deploy anyway, retry the same command with --force."
 	if err.Error() != want {
 		t.Fatalf("error:\n got: %q\nwant: %q", err, want)
 	}
 	var apiErr *cloud.APIError
-	if !errors.As(err, &apiErr) || apiErr.Code != "snapshot_pending" {
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict ||
+		apiErr.Code != "snapshot_pending" || apiErr.Detail != "internal snapshot gate detail" {
 		t.Fatalf("structured error not preserved: %#v", err)
 	}
 

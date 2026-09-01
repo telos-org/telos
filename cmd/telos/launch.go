@@ -531,13 +531,21 @@ func actionableDeploymentUpdateError(err error, force bool) error {
 	if !errors.As(err, &apiErr) || apiErr.StatusCode != 409 || apiErr.Code != "snapshot_pending" {
 		return err
 	}
-	return &cloud.APIError{
-		StatusCode: apiErr.StatusCode,
-		Code:       apiErr.Code,
-		Detail: "The current revision has not been snapshotted.\n" +
-			"Deploying now means you won’t be able to restore its exact workspace and runtime state.\n\n" +
-			"To deploy anyway, retry the same command with --force.",
-	}
+	return &snapshotPendingUpdateError{cause: err}
+}
+
+type snapshotPendingUpdateError struct {
+	cause error
+}
+
+func (e *snapshotPendingUpdateError) Error() string {
+	return "The current revision has not been snapshotted.\n" +
+		"Deploying now means you won’t be able to restore its exact workspace and runtime state.\n\n" +
+		"To deploy anyway, retry the same command with --force."
+}
+
+func (e *snapshotPendingUpdateError) Unwrap() error {
+	return e.cause
 }
 
 func cloudRuntimeConfigSet(cfg sessionRuntimeConfig) bool {
