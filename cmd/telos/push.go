@@ -79,7 +79,7 @@ func cmdPush(args []string) {
 		}
 		if *jsonOut {
 			printJSON(map[string]any{
-				"context": resolvedCloudContext(client),
+				"context": client.ContextName(),
 				"name":    skill.name,
 				"skill":   record,
 			})
@@ -124,7 +124,7 @@ func cmdPush(args []string) {
 	}
 	if *jsonOut {
 		printJSON(map[string]any{
-			"context": resolvedCloudContext(client),
+			"context": client.ContextName(),
 			"name":    pkg.name,
 			"version": pkg.version,
 			"package": record,
