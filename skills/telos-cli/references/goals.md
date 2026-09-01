@@ -1,12 +1,16 @@
-# Goals, specs, and execution modes
+---
+title: Write a SPEC.md
+description: Express a Goal as an observable contract and choose the execution lifecycle it needs.
+group: Concepts
+---
 
-A Goal is the outcome that should remain true. `SPEC.md` expresses that Goal as
-an executable contract. Sessions and agents are replaceable attempts to satisfy
-the current revision of the contract.
+# Write a `SPEC.md`
 
-## Write the contract
+A Goal is the outcome that should remain true. `SPEC.md` is its authored
+contract: frontmatter tells Telos how to run it, while the Markdown body tells
+agents what to make true and how success can be observed.
 
-A new `SPEC.md` should usually have this shape:
+## Start with a complete minimal contract
 
 ```markdown
 ---
@@ -17,53 +21,73 @@ platform: cloud
 
 # Goal
 
-State the observable outcome, what existing behavior or state must survive,
-and the evidence that proves success.
+State the observable outcome and the behavior that must remain true.
+
+# Acceptance
+
+- Name the evidence that demonstrates the outcome.
 ```
 
-Use a DNS-compatible lowercase name and semantic version. Set `platform` to
-`local` for work on the current machine or repository, and `cloud` for a
-managed deployment.
+This file is valid as written. Add the other frontmatter fields only when the
+Goal uses them:
 
-Keep the goal declarative. Specify stable interfaces, security boundaries,
-persistence, compatibility, and failure behavior when they matter. Avoid a
-step-by-step implementation recipe.
+| Field | Meaning |
+| --- | --- |
+| `name` | Required lowercase, DNS-compatible identity. Keep it stable across revisions. |
+| `version` | Required semantic version for this immutable revision. Bump it when the contract changes. |
+| `platform` | `cloud` for a managed persistent Goal or `local` for a bounded run. Omitted values currently resolve to Cloud; explicit is clearer. |
+| `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
+| `interval` | A positive duration ending in `s`, `m`, or `h`, such as `30m` or `6h`, carried as the contract's reconciliation interval. |
+| `tags` | A YAML list of string labels. The default is an empty list. |
 
-## Choose apply or run
+For example:
 
-Use `telos apply` for a persistent Goal that should retain identity across
-implementation attempts and spec revisions. Cloud specs are started and
-updated with `apply`.
-
-Use `telos run` as the bounded execution subsystem. For a human, it performs
-one imperative piece of work within a limit. For an agent, it satisfies a
-bounded declarative subgoal and returns evidence. Give it an explicit cycle,
-time, or cost bound when practical.
-
-Before launch:
-
-```bash
-telos plan SPEC.md
+```yaml
+skills:
+  - path/to/local-skill
+  - "@scope/readiness:1.0.0*"
+interval: 6h
+tags:
+  - production
 ```
 
-For an existing controller, compare the proposed contract to the deployed one:
+The body is Markdown, not a fixed form schema. `# Goal` and `# Acceptance` are
+useful conventions rather than specially parsed fields. Add sections for
+interfaces, compatibility, data lifecycle, security boundaries, failure
+behavior, or evidence when they change what a correct result means.
 
-```bash
-telos plan SPEC.md --session SESSION_ID
-telos apply SPEC.md --session SESSION_ID
+## Express the contract, not an implementation recipe
+
+A useful spec names observable behavior and leaves implementation choices open
+where several designs would satisfy it. For example:
+
+```markdown
+# Goal
+
+Run a public reading-list service. Books remain available when the application
+restarts.
+
+# Acceptance
+
+- Add a book, restart the application, and retrieve the same book.
 ```
 
-## Observe acceptance
+That contract permits the agent to choose an appropriate framework and
+datastore. A framework, schema, deployment shape, or compatibility requirement
+belongs in the spec when it is itself part of the promised outcome.
 
-The command returning a session ID means the work was accepted, not completed.
-Use:
+A spec can select a lifecycle, import capabilities and rubrics, and describe
+the desired state. It does not grant credentials, network access, registry
+permissions, or a platform capability. Confirm those surfaces separately
+before applying a Cloud Goal; [Telos Cloud](cloud.md) describes that preflight.
 
-```bash
-telos describe SESSION_ID
-telos logs SESSION_ID
-```
+## Choose `apply` or `run`
 
-Require the observed session state to confirm acceptance of the current
-revision. For a managed Goal, require Cloud to report `ready`. For a service,
-also probe its public behavior. Tests or logs do not substitute for the live
-contract they claim to verify.
+| Need | Spec | Command |
+| --- | --- | --- |
+| A managed outcome that keeps its identity and evolves | `platform: cloud` | `telos apply` |
+| One local result with a stopping bound | `platform: local` | `telos run` |
+
+Follow [Use Telos](use-telos.md) for a persistent service or
+[Bounded runs](bounded-runs.md) for a local result. The identity created by each
+path is explained in [The Goal lifecycle](lifecycle.md).
