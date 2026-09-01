@@ -461,7 +461,7 @@ func TestClientGetsAndDownloadsPackageVersion(t *testing.T) {
 }
 
 func TestClientUpdateSession(t *testing.T) {
-	var gotBody map[string]string
+	var gotBodies []map[string]any
 	var gotOrgID string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPut || r.URL.Path != "/api/deployments/sess_123" {
@@ -469,9 +469,11 @@ func TestClientUpdateSession(t *testing.T) {
 			return
 		}
 		gotOrgID = r.Header.Get("X-Telos-Org-Id")
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
+		gotBodies = append(gotBodies, body)
 		json.NewEncoder(w).Encode(map[string]any{
 			"id":             "sess_123",
 			"name":           "auth",
@@ -486,15 +488,29 @@ func TestClientUpdateSession(t *testing.T) {
 
 	client := NewClient(srv.URL, "test-token")
 	client.OrgID = " org_telos "
-	session, err := client.UpdateSession("sess_123", "@telos/auth:1.2.4")
+	session, err := client.UpdateSession("sess_123", SessionUpdateOptions{
+		PackageRef: "@telos/auth:1.2.4",
+	})
 	if err != nil {
 		t.Fatalf("UpdateSession: %v", err)
 	}
 	if session.ID != "sess_123" || session.PackageDigest != "sha256:def" || session.State != "deploying" {
 		t.Fatalf("session: got %+v", session)
 	}
-	if gotBody["package_ref"] != "@telos/auth:1.2.4" {
-		t.Fatalf("body: got %#v", gotBody)
+	if len(gotBodies) != 1 || gotBodies[0]["package_ref"] != "@telos/auth:1.2.4" {
+		t.Fatalf("body: got %#v", gotBodies)
+	}
+	if _, exists := gotBodies[0]["force"]; exists {
+		t.Fatalf("normal update sent force: %#v", gotBodies[0])
+	}
+	if _, err := client.UpdateSession("sess_123", SessionUpdateOptions{
+		PackageRef: "@telos/auth:1.2.4",
+		Force:      true,
+	}); err != nil {
+		t.Fatalf("forced UpdateSession: %v", err)
+	}
+	if len(gotBodies) != 2 || gotBodies[1]["force"] != true {
+		t.Fatalf("forced body: got %#v", gotBodies)
 	}
 	if gotOrgID != "org_telos" {
 		t.Fatalf("org header: got %q", gotOrgID)

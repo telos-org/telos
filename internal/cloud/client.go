@@ -88,6 +88,11 @@ type SessionCreateOptions struct {
 	Inference       *InferenceSelection
 }
 
+type SessionUpdateOptions struct {
+	PackageRef string `json:"package_ref"`
+	Force      bool   `json:"force,omitempty"`
+}
+
 // The hosted control API still exposes cloud sessions at /api/deployments.
 // Keep that wire contract here and expose session-shaped methods to the CLI.
 type sessionListResponse struct {
@@ -535,8 +540,8 @@ func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error
 	return &response, nil
 }
 
-func (c *Client) UpdateSession(sessionID, packageRef string) (*SessionRecord, error) {
-	body, err := json.Marshal(map[string]string{"package_ref": packageRef})
+func (c *Client) UpdateSession(sessionID string, opts SessionUpdateOptions) (*SessionRecord, error) {
+	body, err := json.Marshal(opts)
 	if err != nil {
 		return nil, err
 	}

@@ -526,6 +526,23 @@ func TestValidateApplySessionPlatformAcceptsMatchingTargets(t *testing.T) {
 	}
 }
 
+func TestValidateForceApplyRequiresCloudUpdate(t *testing.T) {
+	for _, sessionID := range []string{"", "local_123"} {
+		err := validateForceApply(true, sessionID)
+		if err == nil || !strings.Contains(err.Error(), "requires --session") {
+			t.Fatalf("forced %q: got %v", sessionID, err)
+		}
+	}
+	for _, sessionID := range []string{"", "local_123", "sess_123"} {
+		if err := validateForceApply(false, sessionID); err != nil {
+			t.Fatalf("normal %q: %v", sessionID, err)
+		}
+	}
+	if err := validateForceApply(true, "sess_123"); err != nil {
+		t.Fatalf("forced cloud update: %v", err)
+	}
+}
+
 func TestSessionCreateRequestForLocalSpec(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nname: demo\n---\n# Demo\n"), 0o644); err != nil {
@@ -1087,6 +1104,7 @@ func TestApplyCloudSessionPackageCreates(t *testing.T) {
 		"@user-abc/auth:0.1.0",
 		"",
 		sessionRuntimeConfig{},
+		false,
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1122,6 +1140,7 @@ func TestApplyCloudSessionPackageResolvesNamedSubscription(t *testing.T) {
 		"@user-abc/auth:0.1.0",
 		"",
 		sessionRuntimeConfig{Model: "openai-rohan/gpt-5.6-sol"},
+		false,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1146,12 +1165,15 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 		switch {
 		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
 			updated = true
-			var body map[string]string
+			var body map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
 			if body["package_ref"] != "@user-abc/auth:0.1.1" {
 				t.Fatalf("body: got %#v", body)
+			}
+			if body["force"] != true {
+				t.Fatalf("force: got %#v", body["force"])
 			}
 			json.NewEncoder(w).Encode(map[string]any{
 				"id":             "sess_123",
@@ -1174,6 +1196,7 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 		"@user-abc/auth:0.1.1",
 		"sess_123",
 		sessionRuntimeConfig{},
+		true,
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1189,6 +1212,7 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
 	var updateCalls int
 	var getCalls int
+	currentPackageRef := "@user-abc/auth:0.1.1"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
@@ -1200,7 +1224,7 @@ func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
 				"id":             "sess_123",
 				"name":           "auth",
 				"state":          "healthy",
-				"package_ref":    "@user-abc/auth:0.1.1",
+				"package_ref":    currentPackageRef,
 				"package_digest": "sha256:new",
 				"created_at":     "then",
 				"updated_at":     "now",
@@ -1217,6 +1241,7 @@ func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
 		"@user-abc/auth:0.1.1",
 		"sess_123",
 		sessionRuntimeConfig{},
+		false,
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1228,6 +1253,25 @@ func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
 		t.Fatalf("session: got %+v", session)
 	}
 	if updateCalls != 1 || getCalls != 1 {
+		t.Fatalf("calls: update=%d get=%d", updateCalls, getCalls)
+	}
+
+	currentPackageRef = "@user-abc/auth:0.1.0"
+	operation, session, err = applyCloudSessionPackage(
+		cloud.NewClient(srv.URL, "test-token"),
+		"auth",
+		"@user-abc/auth:0.1.1",
+		"sess_123",
+		sessionRuntimeConfig{},
+		true,
+	)
+	if err == nil {
+		t.Fatal("forced update hid an unrelated conflict")
+	}
+	if operation != "updated" || session != nil {
+		t.Fatalf("operation=%q session=%+v", operation, session)
+	}
+	if updateCalls != 2 || getCalls != 2 {
 		t.Fatalf("calls: update=%d get=%d", updateCalls, getCalls)
 	}
 }

@@ -103,6 +103,7 @@ func TestPackageForReferenceUsesRegistryDigest(t *testing.T) {
 func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	pkg := testApplyPackage(t)
 	var published bool
+	var forcedUpdate bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3":
@@ -137,6 +138,24 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 				"created_at":     "then",
 				"updated_at":     "now",
 			})
+		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_registry":
+			var request map[string]any
+			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+				t.Fatal(err)
+			}
+			if len(request) != 2 || request["package_ref"] != "@telos/demo:1.2.3" || request["force"] != true {
+				t.Fatalf("forced deployment request = %#v", request)
+			}
+			forcedUpdate = true
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id":             "sess_registry",
+				"name":           "demo",
+				"state":          "deploying",
+				"package_ref":    "@telos/demo:1.2.3",
+				"package_digest": pkg.Digest,
+				"created_at":     "then",
+				"updated_at":     "now",
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -157,6 +176,25 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	}
 	if result["operation"] != "created" || result["context"] != "personal" {
 		t.Fatalf("apply result = %#v", result)
+	}
+
+	out = captureStdout(t, func() {
+		cmdApply([]string{
+			"@telos/demo:1.2.3",
+			"--session", "sess_registry",
+			"--force",
+			"--json",
+		})
+	})
+	if !forcedUpdate {
+		t.Fatal("forced registry apply did not update the deployment")
+	}
+	result = map[string]any{}
+	if err := json.Unmarshal([]byte(out), &result); err != nil {
+		t.Fatalf("forced apply JSON: %v\n%s", err, out)
+	}
+	if result["operation"] != "updated" || result["context"] != "personal" {
+		t.Fatalf("forced apply result = %#v", result)
 	}
 }
 
