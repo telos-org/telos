@@ -44,7 +44,7 @@ A managed Goal reports:
 | `working` | Cloud is preparing the runtime, implementing the spec, or verifying the revision. |
 | `ready` | The current reconciliation completed and its latest verification passed. |
 | `needs_attention` | Reconciliation stopped after a failed run, rejected verification, or unexpected session stop. The reason identifies the next decision. |
-| `stopped` | The deployment was stopped or deleted. |
+| `stopped` | The deployment is stopped or its deletion has begun. |
 
 ## `ready` belongs to a revision
 
@@ -58,9 +58,11 @@ Public-route publication has its own surface probe and can finish after the
 managed state first becomes `ready`. A public service also needs a non-empty
 `service_url` from `describe --json` before external verification can begin.
 
-Older compatibility deployments can project `ready` from a completed execution
-without digest-bound reconciliation, and the current CLI does not expose that
-status provenance. Live behavior is therefore required evidence even when the
+### Compatibility note
+
+Older deployments can project `ready` from a completed execution without
+digest-bound reconciliation, and the current CLI does not expose that status
+provenance. Live behavior is therefore required evidence even when the
 displayed digest matches the receipt.
 
 ## Observe without waiting forever
@@ -111,12 +113,28 @@ The Goal, session, deployment, and history remain stable. The new immutable
 revision moves through the same lifecycle. [Use Telos](use-telos.md) shows the
 full diff and receipt.
 
-## Stop a Goal
+## Delete a Goal
+
+Resolve the session and context, explain the consequences below, and obtain the
+user's approval before running:
 
 ```bash
 telos delete SESSION_ID --context CONTEXT
 ```
 
-Deletion stops the deployment. A Goal in `needs_attention` retains its session,
-history, and failure reason, so a corrected revision can continue on the same
-identity.
+Cloud deletion is irreversible. It tears down the environment and application,
+including PVC data; removes public routes, the deployment record, integration
+attachments, and Goal history. Teardown is asynchronous, so the receipt may
+report that deletion was requested while cleanup continues. Once cleanup
+finishes, `list` omits the Goal and subsequent `describe` calls return not
+found.
+
+Local deletion has different semantics:
+
+```bash
+telos delete LOCAL_SESSION_ID
+```
+
+It stops the local session and preserves its history. A Goal in
+`needs_attention` also retains its Cloud history until the user either applies
+a corrected revision or explicitly deletes it.

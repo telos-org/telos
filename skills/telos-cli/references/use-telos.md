@@ -92,7 +92,8 @@ Hash      799e5c31172afb26
 
 Confirm the target and context before continuing. The first plan has no
 deployed revision to compare, so it shows the Goal identity, namespace, and
-content hash.
+content hash. Present the resolved Cloud mutation to the user and obtain
+approval before applying it.
 
 ## Apply it
 
@@ -201,10 +202,32 @@ The Goal, session, deployment, and history stay the same; only the immutable
 revision changes. Observe the new digest through `working` to `ready`, then
 exercise the updated API behavior.
 
-## Continue from here
+For another contract, continue with [Write a SPEC.md](goals.md). Use
+[Bounded runs](bounded-runs.md) for local work and
+[Troubleshooting](troubleshooting.md) when observed state diverges from the
+contract.
 
-- [Write a SPEC.md](goals.md) to express another contract.
-- [The Goal lifecycle](lifecycle.md) to understand identity and state.
-- [Bounded runs](bounded-runs.md) for local work with a stopping point.
-- [Models and inference](inference.md) to choose Cloud or local inference.
-- [Troubleshooting](troubleshooting.md) when observed state diverges from the contract.
+## Resume later
+
+Return through the same context and recover the session ID from `list`:
+
+```bash
+telos list --context personal
+telos describe SESSION_ID --context personal
+```
+
+Continue revisions on that session so its identity and history remain joined.
+
+## Delete the Goal
+
+Cloud deletion is irreversible. After the user approves the exact session,
+context, and loss of the environment, application and PVC data, routes,
+attachments, deployment record, and history, run:
+
+```bash
+telos delete SESSION_ID --context personal
+```
+
+Teardown continues asynchronously; subsequent inspection eventually returns
+not found. [The Goal lifecycle](lifecycle.md#delete-a-goal) distinguishes this
+from local deletion, which preserves session history.

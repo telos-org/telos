@@ -53,10 +53,10 @@ runtime failure, and public-service failure. Continue the same session when it
 contains an actionable failure; create another deployment only for a distinct
 Goal.
 
-Legacy compatibility deployments can report `ready` from a completed execution
-without exposing whether reconciliation was digest-bound. The CLI cannot
-distinguish that provenance, so verify live behavior for every service even
-when the displayed digest matches.
+The lifecycle's [compatibility note](lifecycle.md#compatibility-note)
+explains why some older deployments lack digest-bound status provenance.
+Regardless of provenance, verify the live behavior promised by every service
+spec.
 
 ## Nested run is rejected
 

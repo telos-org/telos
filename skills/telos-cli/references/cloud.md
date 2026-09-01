@@ -55,17 +55,16 @@ The Cloud agent receives the full `telos-cloud` operating skill inside the
 environment. It explains delivery, persistence, networking, and verification
 in detail.
 
-The current CLI cannot bind an integration atomically with a new deployment.
-When the first reconciliation needs credentialed agent-time access, use a
-creation surface that binds the integration before the environment's initial
-agent claim, or treat that Goal as unsupported by the CLI path.
+## Current integration limits
 
-AWS and HMAC signing policies can be attached later and consumed by a later
-revision because they add request credentials at the outbound boundary. Static
-replacement is different: its agent placeholder is delivered only in the
-initial claim, so a post-creation attachment cannot retrofit it into the
-existing agent environment. A missing image path or workload connector is
-likewise a platform constraint, not something `SPEC.md` can create.
+| Limit | Consequence |
+| --- | --- |
+| CLI creation | The CLI cannot attach an integration before the first reconciliation. Use a creation surface that binds it before the initial agent claim, or treat that dependency as unsupported by the CLI path. |
+| AWS and HMAC signing | A later attachment can sign requests for a later revision because no agent placeholder is required. |
+| Static replacement | Its placeholder is delivered only in the initial claim. A post-creation attachment cannot add it to the existing agent environment. |
+
+A missing image path or workload connector is likewise a platform constraint,
+not something `SPEC.md` can create.
 
 ## Apply and observe
 

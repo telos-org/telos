@@ -41,6 +41,14 @@ Choose the lifecycle that matches the requested outcome:
 | Persistent Goal | `telos apply` | One Cloud session and deployment that evolve across revisions. |
 | Bounded run | `telos run` | A local session that stops at its cycle, time, or cost bound. |
 
+## Authorization
+
+Before `run`, `apply`, `push`, or `delete`, present the resolved action and
+target to the user and obtain approval. Include the spec and workspace for a
+run, the session and context for an apply or delete, and the scope and package
+version for a push. `run` and `apply` may spend money. Never infer a session,
+context, scope, package version, or destructive target.
+
 ## Apply a persistent Goal
 
 Before authoring a Cloud Goal, read [Telos Cloud](references/cloud.md) and
@@ -56,7 +64,8 @@ runtime.
    telos plan SPEC.md --context CONTEXT
    ```
 
-3. Confirm that the plan shows the intended target and context, then apply it:
+3. Confirm that the plan shows the intended target and context. Present that
+   resolved Cloud mutation to the user, obtain approval, then apply it:
 
    ```bash
    telos apply SPEC.md --context CONTEXT
@@ -89,7 +98,8 @@ pattern and explains every reported state.
 ## Run bounded work
 
 `run` requires a `platform: local` spec and a cycle, time, or cost bound suited
-to the task:
+to the task. Resolve the source workspace and bounds, then obtain user approval
+before starting it:
 
 ```bash
 telos run REPORT_SPEC.md --workspace . --until 3
@@ -105,11 +115,10 @@ Inside a Telos session, the same command creates a linked child session; see
 | --- | --- |
 | Inspect state | `plan`, `list`, `describe`, `logs` |
 | Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context`, `config --model` |
-| Start bounded local execution | `run` |
-| Publish, update, spend, or stop remote work | `apply`, `push`, `delete` |
+| Start bounded local execution; may spend money | `run` |
+| Publish or change remote state; `apply` may spend money | `apply`, `push`, `delete` |
 
-Resolve the target and context before a remote mutation. Package versions are
-immutable, so changed content receives a new version.
+Package versions are immutable, so changed content receives a new version.
 
 ## Return the result
 

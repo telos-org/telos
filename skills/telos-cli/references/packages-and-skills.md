@@ -18,6 +18,9 @@ verified later.
 
 ## Publish
 
+Resolve the intended scope, name, and immutable version, present them to the
+user, and obtain approval before publishing.
+
 Publish a spec package:
 
 ```bash

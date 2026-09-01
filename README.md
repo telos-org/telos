@@ -76,7 +76,7 @@ First, preview the spec without changing the Goal or its target state:
 telos plan SPEC.md --context personal
 ```
 
-After reviewing the plan, apply it:
+After reviewing and approving the resolved action and context, apply it:
 
 ```bash
 telos apply SPEC.md --context personal
@@ -103,12 +103,9 @@ Context   personal
 Service   https://reading-list.example.com
 ```
 
-Common Cloud statuses:
-
-- `working` — reconciliation is in progress.
-- `ready` — current managed runtimes completed reconciliation and the latest verification passed.
-- `needs_attention` — check `Reason` for the decision that stopped reconciliation.
-- `stopped` — the deployment was stopped or deleted.
+Cloud reports `working`, `ready`, `needs_attention`, or `stopped`.
+[The lifecycle](skills/telos-cli/references/lifecycle.md) is authoritative for
+their revision, route-publication, and compatibility semantics.
 
 For a service, exercise the live behavior in the spec before treating the Goal
 as complete.
