@@ -10,6 +10,9 @@ metadata:
 
 # Telos CLI
 
+This skill is the public operating contract for Telos. Its linked references
+form the user-facing documentation surface.
+
 Telos works from a `SPEC.md`: an authored contract for an observable outcome
 and the evidence that proves it. `apply` gives that outcome a persistent Cloud
 identity; `run` executes bounded local work. See

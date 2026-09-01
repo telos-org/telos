@@ -40,8 +40,9 @@ target.
 ## Preflight the managed runtime
 
 A spec describes desired behavior; it cannot add a missing platform surface.
-Before applying, identify how the implementation will fit these current Cloud
-capabilities:
+Public egress is default-deny: Cloud provides the common read paths below, and
+other agent requests need a matching integration. Before applying, identify
+how the implementation will fit these current Cloud capabilities:
 
 | Need | Current Cloud path |
 | --- | --- |
