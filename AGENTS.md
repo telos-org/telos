@@ -22,3 +22,25 @@ Cloud behavior, lifecycle semantics, and safety or approval boundaries.
 
 A user-facing CLI change is incomplete while its canonical documentation still
 describes the old behavior.
+
+## Write for the documentation's audience
+
+The CLI documentation bundle serves two audiences. Do not mix their voices:
+
+- `skills/telos-cli/SKILL.md` is agent-facing. Write direct instructions to the
+  agent, including when it must explain a risk or obtain user approval.
+- `skills/telos-cli/references/*.md` is customer-facing because these pages are
+  rendered in the Web guide. Address the customer directly as "you." Explain
+  what Telos does, what the customer will see, and what they can do next.
+- Never put agent instructions such as "tell the user," "ask the user," "obtain
+  approval," "present this warning," or "do not retry automatically" in a
+  customer-facing reference. Move that policy to `SKILL.md` or rewrite it from
+  the customer's perspective.
+- Keep documented behavior consistent with the CLI and UI, but do not duplicate
+  exact runtime warning or error text unless quoting it materially helps the
+  customer. Prefer explaining when the message appears and the customer's next
+  action.
+
+Before committing a changed reference, read it as a customer. If a sentence
+instructs an agent instead of helping the customer use Telos, move it to
+`SKILL.md` or rewrite it.
