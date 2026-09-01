@@ -93,6 +93,20 @@ func TestLoadEnvironmentRejectsPackageVersion(t *testing.T) {
 	}
 }
 
+func TestLoadEnvironmentRejectsExtends(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	os.WriteFile(specPath, []byte("---\nversion: 1.2.3\nname: child\nextends: ../parent/SPEC.md\n---\nBody"), 0o644)
+
+	_, err := LoadEnvironment(specPath)
+	if err == nil {
+		t.Fatal("expected extends to be rejected")
+	}
+	if !strings.Contains(err.Error(), "extends is no longer supported") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestLoadEnvironmentInvalidVersion(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")

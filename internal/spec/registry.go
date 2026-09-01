@@ -76,49 +76,33 @@ func RegistrySkillPath(ref RegistrySkillRef) string {
 	return filepath.Join(root, ref.Scope, ref.Name, ref.Version)
 }
 
-// RegistrySkillRefs returns all registry skills declared by a spec and its
-// local extends chain.
+// RegistrySkillRefs returns all registry skills declared by a spec.
 func RegistrySkillRefs(specPath string) ([]RegistrySkillRef, error) {
-	seenSpecs := map[string]bool{}
+	abs, err := filepath.Abs(specPath)
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(abs)
+	if err != nil {
+		return nil, fmt.Errorf("read spec %s: %w", abs, err)
+	}
+	raw, _, ok := ParseFrontmatter(string(data))
+	if !ok {
+		return nil, fmt.Errorf("%s has no valid YAML frontmatter", abs)
+	}
+	if _, ok := raw["extends"]; ok {
+		return nil, fmt.Errorf("%s: extends is no longer supported", abs)
+	}
+
 	seenRefs := map[string]bool{}
 	var refs []RegistrySkillRef
-	var visit func(string) error
-	visit = func(path string) error {
-		abs, err := filepath.Abs(path)
-		if err != nil {
-			return err
+	for _, value := range rawSkillValues(raw["skills"]) {
+		ref, ok := ParseRegistrySkillRef(value)
+		if !ok || seenRefs[ref.Ref] {
+			continue
 		}
-		if seenSpecs[abs] {
-			return nil
-		}
-		seenSpecs[abs] = true
-		data, err := os.ReadFile(abs)
-		if err != nil {
-			return fmt.Errorf("read spec %s: %w", abs, err)
-		}
-		raw, _, ok := ParseFrontmatter(string(data))
-		if !ok {
-			return fmt.Errorf("%s has no valid YAML frontmatter", abs)
-		}
-		for _, value := range rawSkillValues(raw["skills"]) {
-			ref, ok := ParseRegistrySkillRef(value)
-			if !ok || seenRefs[ref.Ref] {
-				continue
-			}
-			seenRefs[ref.Ref] = true
-			refs = append(refs, ref)
-		}
-		if value, ok := raw["extends"]; ok {
-			parent, err := resolvePath(filepath.Dir(abs), fmt.Sprint(value))
-			if err != nil {
-				return fmt.Errorf("'extends' points to non-existent path: %s", err)
-			}
-			return visit(parent)
-		}
-		return nil
-	}
-	if err := visit(specPath); err != nil {
-		return nil, err
+		seenRefs[ref.Ref] = true
+		refs = append(refs, ref)
 	}
 	sort.Slice(refs, func(i, j int) bool { return refs[i].Ref < refs[j].Ref })
 	return refs, nil

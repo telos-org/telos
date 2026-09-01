@@ -25,18 +25,14 @@ func TestParseRegistrySkillRef(t *testing.T) {
 	}
 }
 
-func TestRegistrySkillRefsIncludesExtendsChain(t *testing.T) {
+func TestRegistrySkillRefsReturnsDeclaredSkills(t *testing.T) {
 	dir := t.TempDir()
-	parent := filepath.Join(dir, "parent.md")
-	child := filepath.Join(dir, "SPEC.md")
-	if err := os.WriteFile(parent, []byte("---\nversion: 0.1.0\nname: parent\nskills: '@acme/base:2.0.0'\n---\nParent."), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(child, []byte("---\nversion: 0.1.0\nname: child\nextends: ./parent.md\nskills:\n  - '@telos/check:1.2.3*'\n  - '@acme/base:2.0.0'\n---\nChild."), 0o644); err != nil {
+	specPath := filepath.Join(dir, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: registry-skills\nskills:\n  - '@telos/check:1.2.3*'\n  - '@acme/base:2.0.0'\n---\nBody."), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	refs, err := RegistrySkillRefs(child)
+	refs, err := RegistrySkillRefs(specPath)
 	if err != nil {
 		t.Fatalf("RegistrySkillRefs: %v", err)
 	}
@@ -45,6 +41,18 @@ func TestRegistrySkillRefsIncludesExtendsChain(t *testing.T) {
 	}
 	if refs[0].Ref != "@acme/base:2.0.0" || refs[1].Ref != "@telos/check:1.2.3" {
 		t.Fatalf("refs: got %#v", refs)
+	}
+}
+
+func TestRegistrySkillRefsRejectsExtends(t *testing.T) {
+	specPath := filepath.Join(t.TempDir(), "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: child\nextends: ./parent.md\nskills: '@telos/check:1.2.3'\n---\nBody."), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := RegistrySkillRefs(specPath)
+	if err == nil {
+		t.Fatal("expected extends to be rejected")
 	}
 }
 

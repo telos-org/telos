@@ -16,7 +16,6 @@ import (
 	"strings"
 
 	"github.com/telos-org/telos/internal/sessionapi"
-	"github.com/telos-org/telos/internal/spec"
 )
 
 // pathExists reports whether path is present. Returns (false, err) for any
@@ -49,7 +48,6 @@ const (
 	outputRootEnv = "TELOS_OUTPUT_ROOT"
 
 	workspaceModeEmpty    = "empty"
-	workspaceModeArtifact = "artifact"
 	workspaceModeGitClone = "git_clone"
 	workspaceModeSnapshot = "snapshot"
 
@@ -151,14 +149,10 @@ func LocalOutputRoot() (string, error) {
 	return filepath.Join(home, ".cache", "telos"), nil
 }
 
-func prepareSessionWorkspace(sessionDir string, source string, compiled *spec.CompiledEnvironment, sessionsRoot string) (*sessionapi.Workspace, error) {
+func prepareSessionWorkspace(sessionDir string, source string) (*sessionapi.Workspace, error) {
 	active := activeWorkspacePath(sessionDir)
 	if err := os.RemoveAll(active); err != nil {
 		return nil, fmt.Errorf("reset session workspace: %w", err)
-	}
-
-	if compiled != nil && compiled.ExtendsCompiled != nil {
-		return prepareArtifactWorkspace(active, source, compiled.ExtendsCompiled, sessionsRoot)
 	}
 
 	if strings.TrimSpace(source) == "" {
@@ -212,8 +206,8 @@ func ensureSessionWorkspace(sessionDir string, manifest *sessionapi.Manifest) er
 	if archive == "" {
 		// Only initialize an empty workspace if the manifest never recorded a
 		// source workspace (fresh API-backed session) or already declared the
-		// empty mode. Otherwise the recorded mode (git_clone, snapshot,
-		// artifact) requires real source state and we must not silently
+		// empty mode. Otherwise the recorded mode (git_clone or snapshot)
+		// requires real source state and we must not silently
 		// downgrade to an empty repo — the original source is gone and the
 		// runner has no way to fetch it back.
 		if manifest.Workspace != nil && manifest.Workspace.Mode != "" && manifest.Workspace.Mode != workspaceModeEmpty {
@@ -277,34 +271,6 @@ func cleanupSessionWorkspace(sessionDir string, resultPath string) error {
 	return os.RemoveAll(activeWorkspacePath(sessionDir))
 }
 
-func prepareArtifactWorkspace(dest string, source string, parent *spec.CompiledEnvironment, sessionsRoot string) (*sessionapi.Workspace, error) {
-	binding, err := resolveExtendedWorkspaceArtifact(sessionsRoot, parent)
-	if err != nil {
-		return nil, err
-	}
-	info, err := os.Stat(binding.WorkspacePath)
-	if err != nil {
-		return nil, fmt.Errorf("inspect extended workspace artifact: %w", err)
-	}
-	if info.IsDir() {
-		if err := copySnapshot(binding.WorkspacePath, dest); err != nil {
-			return nil, fmt.Errorf("copy extended workspace: %w", err)
-		}
-	} else if err := extractWorkspaceArtifact(binding.WorkspacePath, dest); err != nil {
-		return nil, fmt.Errorf("extract extended workspace artifact: %w", err)
-	}
-	base, err := workspaceHeadCommit(dest)
-	if err != nil {
-		return nil, err
-	}
-	return &sessionapi.Workspace{
-		Mode:       workspaceModeArtifact,
-		Source:     source,
-		BaseCommit: base,
-		Extends:    binding,
-	}, nil
-}
-
 func cloneGitWorkspace(source string, dest string) (*sessionapi.Workspace, error) {
 	if dirty, err := gitDirtyStatus(source); err != nil {
 		return nil, fmt.Errorf("inspect workspace status: %w", err)
@@ -349,101 +315,6 @@ func cloneGitWorkspace(source string, dest string) (*sessionapi.Workspace, error
 		Source:     source,
 		BaseCommit: base,
 	}, nil
-}
-
-func resolveExtendedWorkspaceArtifact(sessionsRoot string, parent *spec.CompiledEnvironment) (*sessionapi.WorkspaceArtifactBinding, error) {
-	entries, err := os.ReadDir(sessionsRoot)
-	if err != nil {
-		return nil, fmt.Errorf("read local sessions: %w", err)
-	}
-
-	var best *sessionapi.WorkspaceArtifactBinding
-	bestStamp := ""
-	currentControllerID := currentLocalControllerSessionID()
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		sessionDir := filepath.Join(sessionsRoot, entry.Name())
-		manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
-		if err != nil {
-			continue
-		}
-		stamp := manifestCompletionStamp(manifest)
-		for _, sessionSpec := range manifest.Specs {
-			if sessionSpec.ContentHash == nil || *sessionSpec.ContentHash != parent.ContentHash {
-				continue
-			}
-			if currentControllerID != "" &&
-				manifest.SessionID == currentControllerID &&
-				manifest.SessionKind == sessionapi.KindController {
-				active := activeWorkspacePath(sessionDir)
-				ok, err := dirExists(active)
-				if err != nil {
-					return nil, fmt.Errorf("inspect active workspace %s: %w", active, err)
-				}
-				if ok {
-					return &sessionapi.WorkspaceArtifactBinding{
-						SpecPath:      parent.Environment.Path,
-						SpecName:      parent.Environment.Name,
-						ContentHash:   parent.ContentHash,
-						SessionID:     manifest.SessionID,
-						WorkspacePath: active,
-					}, nil
-				}
-			}
-			if !manifestCompleted(manifest) {
-				continue
-			}
-			if sessionSpec.WorkspacePath == nil || *sessionSpec.WorkspacePath == "" {
-				continue
-			}
-			ok, err := pathExists(*sessionSpec.WorkspacePath)
-			if err != nil {
-				return nil, fmt.Errorf("inspect workspace artifact %s: %w", *sessionSpec.WorkspacePath, err)
-			}
-			if !ok {
-				continue
-			}
-			if best != nil && stamp <= bestStamp {
-				continue
-			}
-			bestStamp = stamp
-			best = &sessionapi.WorkspaceArtifactBinding{
-				SpecPath:      parent.Environment.Path,
-				SpecName:      parent.Environment.Name,
-				ContentHash:   parent.ContentHash,
-				SessionID:     manifest.SessionID,
-				WorkspacePath: *sessionSpec.WorkspacePath,
-			}
-		}
-	}
-	if best == nil {
-		return nil, fmt.Errorf("extended spec %q (%s) has no completed local workspace artifact; run the parent spec first", parent.Environment.Name, parent.ContentHash)
-	}
-	return best, nil
-}
-
-func currentLocalControllerSessionID() string {
-	if strings.TrimSpace(os.Getenv("TELOS_RUNTIME")) != string(sessionapi.RuntimeLocal) {
-		return ""
-	}
-	return strings.TrimSpace(os.Getenv("TELOS_SESSION_ID"))
-}
-
-func manifestCompleted(manifest *sessionapi.Manifest) bool {
-	if manifest == nil {
-		return false
-	}
-	last := manifest.LastEpoch()
-	return last != nil && last.Result != nil && *last.Result == "completed"
-}
-
-func manifestCompletionStamp(manifest *sessionapi.Manifest) string {
-	if last := manifest.LastEpoch(); last != nil && last.FinishedAt != nil {
-		return *last.FinishedAt
-	}
-	return manifest.CreatedAt
 }
 
 func ensureScopeMarker(scope string, sessionsRoot string) error {

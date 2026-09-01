@@ -77,7 +77,7 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 		return nil, err
 	}
 
-	workspace, err := prepareSessionWorkspace(sessionDir, sourceWorkspace, compiled, sessionsRoot)
+	workspace, err := prepareSessionWorkspace(sessionDir, sourceWorkspace)
 	if err != nil {
 		return nil, err
 	}
@@ -187,8 +187,8 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		return nil, fmt.Errorf("manifest spec missing session_spec_path")
 	}
 	// Resolve the session's copied spec against the original spec's directory
-	// so relative `extends` and `skills` paths point at real files on disk
-	// rather than the session's `specs/<name>/` copy.
+	// so relative skill paths point at real files on disk rather than the
+	// session's `specs/<name>/` copy.
 	specBaseDir := ""
 	if manifest.SourceSpecPath != nil && *manifest.SourceSpecPath != "" {
 		specBaseDir = filepath.Dir(*manifest.SourceSpecPath)

@@ -1,7 +1,6 @@
 package spec
 
 import (
-	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -59,62 +58,6 @@ func TestCompileWithSkills(t *testing.T) {
 	}
 }
 
-func TestCompileWithExtendsUsesParentNamespaceAndHash(t *testing.T) {
-	dir := t.TempDir()
-	basePath := filepath.Join(dir, "base", "SPEC.md")
-	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(basePath, []byte("---\nversion: 0.1.0\nname: base-spec\nplatform: local\n---\nBase body"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	childPath := filepath.Join(dir, "child", "SPEC.md")
-	if err := os.MkdirAll(filepath.Dir(childPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(childPath, []byte("---\nversion: 0.1.0\nname: child-spec\nplatform: local\nextends: ../base/SPEC.md\n---\nChild body"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	base, err := CompileEnvironment(basePath)
-	if err != nil {
-		t.Fatalf("CompileEnvironment base: %v", err)
-	}
-	child, err := CompileEnvironment(childPath)
-	if err != nil {
-		t.Fatalf("CompileEnvironment child: %v", err)
-	}
-	if child.ExtendsCompiled == nil {
-		t.Fatal("expected child to keep compiled parent")
-	}
-	if child.Namespace != base.Namespace {
-		t.Fatalf("namespace: got %q, want %q", child.Namespace, base.Namespace)
-	}
-	if len(child.Lineage) != 1 || child.Lineage[0] != base.Namespace {
-		t.Fatalf("lineage: got %#v", child.Lineage)
-	}
-	ir := ToIRJSON(child)
-	extends, ok := ir["extends"].(map[string]interface{})
-	if !ok {
-		t.Fatalf("expected extends in IR, got %#v", ir["extends"])
-	}
-	if extends["name"] != "base-spec" || extends["namespace"] != base.Namespace {
-		t.Fatalf("unexpected extends IR: %#v", extends)
-	}
-
-	originalHash := child.ContentHash
-	if err := os.WriteFile(basePath, []byte("---\nversion: 0.1.0\nname: base-spec\nplatform: local\n---\nChanged base body"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	changed, err := CompileEnvironment(childPath)
-	if err != nil {
-		t.Fatalf("CompileEnvironment changed child: %v", err)
-	}
-	if changed.ContentHash == originalHash {
-		t.Fatal("child hash should change when extended parent changes")
-	}
-}
-
 func TestCompileEnvironmentWithBaseResolvesRelativeSkillsAgainstOverride(t *testing.T) {
 	dir := t.TempDir()
 	srcDir := filepath.Join(dir, "src")
@@ -163,36 +106,6 @@ func TestCompileEnvironmentWithBaseResolvesRelativeSkillsAgainstOverride(t *test
 	}
 	if !found {
 		t.Fatal("rel-skill should resolve via override baseDir")
-	}
-}
-
-func TestCompileWithAbsoluteExtendsPath(t *testing.T) {
-	dir := t.TempDir()
-	basePath := filepath.Join(dir, "base", "SPEC.md")
-	if err := os.MkdirAll(filepath.Dir(basePath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(basePath, []byte("---\nversion: 0.1.0\nname: base-abs\nplatform: local\n---\nBase body"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	childPath := filepath.Join(dir, "child", "SPEC.md")
-	if err := os.MkdirAll(filepath.Dir(childPath), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	childSpec := fmt.Sprintf("---\nversion: 0.1.0\nname: child-abs\nplatform: local\nextends: %s\n---\nChild body", basePath)
-	if err := os.WriteFile(childPath, []byte(childSpec), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	child, err := CompileEnvironment(childPath)
-	if err != nil {
-		t.Fatalf("CompileEnvironment child: %v", err)
-	}
-	if child.ExtendsCompiled == nil {
-		t.Fatal("expected child to keep compiled parent")
-	}
-	if child.Environment.ExtendsPath != basePath {
-		t.Fatalf("extends path: got %q, want %q", child.Environment.ExtendsPath, basePath)
 	}
 }
 
@@ -282,6 +195,12 @@ func TestToIRJSON(t *testing.T) {
 	}
 	if ir["platform"] != "local" {
 		t.Errorf("platform: got %v", ir["platform"])
+	}
+	if _, ok := ir["extends"]; ok {
+		t.Fatalf("extends should not be present in compiled IR: %#v", ir)
+	}
+	if _, ok := ir["lineage"]; ok {
+		t.Fatalf("extends lineage should not be present in compiled IR: %#v", ir)
 	}
 }
 

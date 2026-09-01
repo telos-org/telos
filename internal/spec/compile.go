@@ -15,8 +15,6 @@ type CompiledEnvironment struct {
 	Namespace              string
 	Cluster                string
 	Context                string
-	Lineage                []string
-	ExtendsCompiled        *CompiledEnvironment
 	Skills                 []*Skill
 	RequiredVerifierSkills []*Skill
 	ContentHash            string
@@ -28,51 +26,26 @@ func CompileEnvironment(specPath string) (*CompiledEnvironment, error) {
 }
 
 // CompileEnvironmentWithBase is like CompileEnvironment but resolves the
-// root spec's relative `extends` and `skills` paths against baseDir. An
-// empty baseDir falls back to the spec's directory. Transitively `extends`-d
-// specs continue to resolve relative to their own directories.
+// root spec's relative `skills` paths against baseDir. An empty baseDir falls
+// back to the spec's directory.
 func CompileEnvironmentWithBase(specPath string, baseDir string) (*CompiledEnvironment, error) {
 	abs, err := filepath.Abs(specPath)
 	if err != nil {
 		return nil, err
 	}
-	return compileEnv(abs, baseDir, nil)
-}
-
-func compileEnv(envPath string, baseDir string, visited map[string]bool) (*CompiledEnvironment, error) {
-	if visited == nil {
-		visited = map[string]bool{}
-	}
-	if visited[envPath] {
-		return nil, fmt.Errorf("cycle detected: %s already in compilation chain", envPath)
-	}
-	visited[envPath] = true
-
-	compileBaseDir, err := resolvedCompileBaseDir(envPath, baseDir)
+	compileBaseDir, err := resolvedCompileBaseDir(abs, baseDir)
 	if err != nil {
 		return nil, err
 	}
 
-	env, err := LoadEnvironmentWithBase(envPath, baseDir)
+	env, err := LoadEnvironmentWithBase(abs, baseDir)
 	if err != nil {
 		return nil, err
-	}
-
-	var extendsCompiled *CompiledEnvironment
-	if env.ExtendsPath != "" {
-		extendsCompiled, err = compileEnv(env.ExtendsPath, "", visited)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	namespace := fmt.Sprintf("ns-%s", env.Name)
-	if extendsCompiled != nil {
-		namespace = extendsCompiled.Namespace
-	}
 	cluster := "telos"
 	context := cluster
-	lineage := computeLineage(namespace, extendsCompiled)
 
 	packageSkillPaths, packageRequiredPaths, _ := packageManifestSkillPaths(compileBaseDir)
 
@@ -155,7 +128,7 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 		}
 	}
 
-	contentHash, err := merkleHash(env, extendsCompiled, skills)
+	contentHash, err := merkleHash(env, skills)
 	if err != nil {
 		return nil, err
 	}
@@ -166,8 +139,6 @@ func compileEnv(envPath string, baseDir string, visited map[string]bool) (*Compi
 		Namespace:              namespace,
 		Cluster:                cluster,
 		Context:                context,
-		Lineage:                lineage,
-		ExtendsCompiled:        extendsCompiled,
 		Skills:                 skills,
 		RequiredVerifierSkills: reqVerifierSkills,
 		ContentHash:            contentHash,
@@ -259,22 +230,6 @@ func isApplyPackageManifest(manifest ApplyPackageManifest) bool {
 		manifest.Skills != nil
 }
 
-func computeLineage(namespace string, extendsCompiled *CompiledEnvironment) []string {
-	seen := map[string]bool{namespace: true}
-	lineage := []string{namespace}
-	if extendsCompiled == nil {
-		return lineage
-	}
-	for _, ns := range extendsCompiled.Lineage {
-		if seen[ns] {
-			continue
-		}
-		seen[ns] = true
-		lineage = append(lineage, ns)
-	}
-	return lineage
-}
-
 // ToIRJSON serializes a compiled environment to the inspectable IR format.
 func ToIRJSON(c *CompiledEnvironment) map[string]interface{} {
 	var skillList []map[string]interface{}
@@ -293,15 +248,6 @@ func ToIRJSON(c *CompiledEnvironment) map[string]interface{} {
 	if platform == "" {
 		platform = "cloud"
 	}
-	var extends any
-	if c.ExtendsCompiled != nil {
-		extends = map[string]interface{}{
-			"name":         c.ExtendsCompiled.Environment.Name,
-			"path":         c.Environment.ExtendsPath,
-			"namespace":    c.ExtendsCompiled.Namespace,
-			"content_hash": c.ExtendsCompiled.ContentHash,
-		}
-	}
 	return map[string]interface{}{
 		"kind":             "telos.compiled_environment.v1",
 		"name":             c.Environment.Name,
@@ -309,8 +255,6 @@ func ToIRJSON(c *CompiledEnvironment) map[string]interface{} {
 		"namespace":        c.Namespace,
 		"cluster":          c.Cluster,
 		"context":          c.Context,
-		"lineage":          c.Lineage,
-		"extends":          extends,
 		"interval_seconds": c.Environment.IntervalSeconds,
 		"tags":             c.Environment.Tags,
 		"platform":         platform,

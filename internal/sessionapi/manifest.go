@@ -37,18 +37,9 @@ type Manifest struct {
 }
 
 type Workspace struct {
-	Mode       string                    `json:"mode"`
-	Source     string                    `json:"source,omitempty"`
-	BaseCommit string                    `json:"base_commit,omitempty"`
-	Extends    *WorkspaceArtifactBinding `json:"extends,omitempty"`
-}
-
-type WorkspaceArtifactBinding struct {
-	SpecPath      string `json:"spec_path,omitempty"`
-	SpecName      string `json:"spec_name,omitempty"`
-	ContentHash   string `json:"content_hash,omitempty"`
-	SessionID     string `json:"session_id,omitempty"`
-	WorkspacePath string `json:"workspace_path,omitempty"`
+	Mode       string `json:"mode"`
+	Source     string `json:"source,omitempty"`
+	BaseCommit string `json:"base_commit,omitempty"`
 }
 
 type ManifestSpec struct {

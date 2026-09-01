@@ -52,7 +52,6 @@ def render_harbor_spec(
     workdir: str,
     name: str = DEFAULT_SPEC_NAME,
     skills: tuple[str, ...] = DEFAULT_SKILLS,
-    extends: str | None = None,
 ) -> str:
     frontmatter = [
         "---",
@@ -60,8 +59,6 @@ def render_harbor_spec(
         f"name: {sanitize_spec_name(name)}",
         "platform: local",
     ]
-    if extends:
-        frontmatter.append(f"extends: {extends}")
     if skills:
         frontmatter.append("skills:")
         for skill in skills:

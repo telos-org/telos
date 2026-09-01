@@ -33,7 +33,6 @@ type EnvironmentSpec struct {
 	Path                       string
 	Version                    string
 	Name                       string
-	ExtendsPath                string
 	SkillPaths                 []string // nil means "not declared"
 	SkillSourceRefs            map[string]string
 	SpecText                   string
@@ -65,18 +64,18 @@ func IsSemver(version string) bool {
 	return semverRE.MatchString(strings.TrimSpace(version))
 }
 
-// LoadEnvironment loads and validates a SPEC.md file. Relative `extends` and
-// `skills` paths resolve against the spec's own directory.
+// LoadEnvironment loads and validates a SPEC.md file. Relative `skills` paths
+// resolve against the spec's own directory.
 func LoadEnvironment(specPath string) (*EnvironmentSpec, error) {
 	return LoadEnvironmentWithBase(specPath, "")
 }
 
 // LoadEnvironmentWithBase is like LoadEnvironment but resolves relative
-// `extends` and `skills` paths against baseDir instead of the spec's own
-// directory. An empty baseDir falls back to the spec's directory. This is
-// used by the session runner when the spec has been copied into a session
-// directory but its relative references must still resolve against the
-// original location on disk.
+// `skills` paths against baseDir instead of the spec's own directory. An empty
+// baseDir falls back to the spec's directory. This is used by the session
+// runner when the spec has been copied into a session directory but its
+// relative references must still resolve against the original location on
+// disk.
 func LoadEnvironmentWithBase(specPath string, baseDir string) (*EnvironmentSpec, error) {
 	absPath, err := filepath.Abs(specPath)
 	if err != nil {
@@ -116,6 +115,9 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 	if strings.TrimSpace(requireStr(raw, "package_version", path)) != "" {
 		return nil, fmt.Errorf("%s: package_version is no longer supported; use version", path)
 	}
+	if _, ok := raw["extends"]; ok {
+		return nil, fmt.Errorf("%s: extends is no longer supported", path)
+	}
 	name := requireStr(raw, "name", path)
 	if name == "" {
 		return nil, fmt.Errorf("%s: missing required field 'name'", path)
@@ -133,15 +135,6 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 		Version:  version,
 		Name:     name,
 		SpecText: specBody,
-	}
-
-	// extends
-	if v, ok := raw["extends"]; ok {
-		resolved, err := resolvePath(baseDir, fmt.Sprint(v))
-		if err != nil {
-			return nil, fmt.Errorf("'extends' points to non-existent path: %s", err)
-		}
-		env.ExtendsPath = resolved
 	}
 
 	// platform
@@ -437,15 +430,12 @@ func skillFingerprint(s *Skill) string {
 	return sha256str(parts...)
 }
 
-func merkleHash(env *EnvironmentSpec, extendsCompiled *CompiledEnvironment, skills []*Skill) (string, error) {
+func merkleHash(env *EnvironmentSpec, skills []*Skill) (string, error) {
 	specData, err := os.ReadFile(env.Path)
 	if err != nil {
 		return "", fmt.Errorf("read spec for content hash: %w", err)
 	}
 	parts := []string{env.SpecText, string(specData)}
-	if extendsCompiled != nil {
-		parts = append(parts, extendsCompiled.ContentHash)
-	}
 	sorted := make([]*Skill, len(skills))
 	copy(sorted, skills)
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Name < sorted[j].Name })
