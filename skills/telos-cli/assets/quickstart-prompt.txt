@@ -1,1 +1,0 @@
-Use Telos for this Goal: <what should remain true>. Install and sign in if needed. Draft the smallest verifiable `SPEC.md`, then show me `telos plan`. After I approve, run `telos apply` and return the evidence when it reaches Ready.

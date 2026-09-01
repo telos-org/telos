@@ -1,6 +1,6 @@
 ---
 title: Use Telos
-description: Give Telos a Goal, then follow it from a proposed contract to verified software.
+description: Each Goal keeps its spec, revisions, deployment, and verification evidence together.
 group: Getting started
 ---
 
