@@ -1,4 +1,3 @@
 interface:
   display_name: "Telos CLI"
   short_description: "Apply persistent Goals with Telos"
-  default_prompt: "Use $telos-cli to turn this outcome into the smallest verifiable persistent Goal, review its SPEC.md with me, plan it, apply it after I approve, and show me the evidence when it reaches Ready."

@@ -3,7 +3,6 @@ name: telos-cli
 description: Install and use the Telos CLI to apply persistent Goals or run bounded work. Use for Telos setup, SPEC.md authoring, plan/apply/run workflows, Cloud login and context, session inspection, publishing or pulling packages and skills, nested child Goals, and Telos troubleshooting.
 metadata:
   registry: "@telos/telos-cli"
-  quickstart_prompt: "assets/quickstart-prompt.txt"
   public_guide: "references/use-telos.md"
   source_repository: "https://github.com/telos-org/telos"
 ---
