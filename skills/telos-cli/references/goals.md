@@ -37,7 +37,6 @@ Goal uses them:
 | `version` | Required semantic version for this immutable revision. Bump it when the contract changes. |
 | `platform` | `cloud` for a managed persistent Goal or `local` for a bounded run. Omitted values currently resolve to Cloud; explicit is clearer. |
 | `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
-| `extends` | A relative path to a parent spec. It reuses lineage and namespace and can seed a local child workspace from a completed parent; it does not insert the parent's Markdown into the child prompt. Restate every obligation the child must satisfy. |
 | `interval` | A positive duration ending in `s`, `m`, or `h`, such as `30m` or `6h`, carried as the contract's reconciliation interval. |
 | `tags` | A YAML list of string labels. The default is an empty list. |
 
@@ -47,7 +46,6 @@ For example:
 skills:
   - path/to/local-skill
   - "@scope/readiness:1.0.0*"
-extends: ../foundation/SPEC.md
 interval: 6h
 tags:
   - production

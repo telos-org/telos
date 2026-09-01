@@ -9,6 +9,9 @@ group: Concepts
 Telos separates the outcome you author from the immutable revisions and
 execution that make it true.
 
+The [Glossary](glossary.md) defines the wider Telos vocabulary. These five
+objects form the persistent lifecycle:
+
 | Term | Public meaning |
 | --- | --- |
 | Goal | The durable outcome and identity that persist across spec revisions. |

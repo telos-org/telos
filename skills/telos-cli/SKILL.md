@@ -131,6 +131,7 @@ published, updated, or deleted.
 - [Use Telos](references/use-telos.md) — one persistent Goal from first plan through revision
 - [Write a SPEC.md](references/goals.md) — contract shape and expressive boundary
 - [The Goal lifecycle](references/lifecycle.md) — identity, states, revisions, and evidence
+- [Glossary](references/glossary.md) — canonical Telos product vocabulary
 - [Bounded runs](references/bounded-runs.md) — local work with an explicit stopping bound
 - [Telos Cloud](references/cloud.md) — contexts and managed-runtime preflight
 - [Models and inference](references/inference.md) — Cloud and local model selection
