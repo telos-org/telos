@@ -204,17 +204,9 @@ exercise the updated API behavior.
 
 ### Deploy without a restorable snapshot
 
-Cloud normally rejects an update until the healthy current revision has a
-restorable snapshot. If that gate rejects the apply, do not retry automatically
-or hide the consequence. Present this warning exactly:
-
-> The current revision has not been snapshotted.
->
-> Deploying now means you won’t be able to restore its exact workspace and
-> runtime state.
-
-After the user explicitly approves that loss, retry the same session and
-context with `--force`:
+If the current revision has not been snapshotted, you will get a warning saying
+that deploying now means you won’t be able to restore its exact workspace and
+runtime state. To continue anyway, retry the update with `--force`:
 
 ```bash
 telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal --force

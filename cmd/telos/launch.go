@@ -507,7 +507,7 @@ func applyCloudSessionPackage(
 				return "unchanged", current, nil
 			}
 		}
-		return "updated", session, err
+		return "updated", session, actionableDeploymentUpdateError(err, force)
 	}
 
 	inference, err := resolveCloudInference(control, runtimeConfig.Model)
@@ -521,6 +521,23 @@ func applyCloudSessionPackage(
 		Inference:     inference,
 	})
 	return "created", session, err
+}
+
+func actionableDeploymentUpdateError(err error, force bool) error {
+	if force {
+		return err
+	}
+	var apiErr *cloud.APIError
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != 409 || apiErr.Code != "snapshot_pending" {
+		return err
+	}
+	return &cloud.APIError{
+		StatusCode: apiErr.StatusCode,
+		Code:       apiErr.Code,
+		Detail: "The current revision has not been snapshotted.\n" +
+			"Deploying now means you won’t be able to restore its exact workspace and runtime state.\n\n" +
+			"To deploy anyway, retry the same command with --force.",
+	}
 }
 
 func cloudRuntimeConfigSet(cfg sessionRuntimeConfig) bool {

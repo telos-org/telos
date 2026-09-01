@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"flag"
 	"net/http"
 	"net/http/httptest"
@@ -1273,6 +1274,69 @@ func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
 	}
 	if updateCalls != 2 || getCalls != 2 {
 		t.Fatalf("calls: update=%d get=%d", updateCalls, getCalls)
+	}
+}
+
+func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":{"code":"snapshot_pending","message":"internal snapshot gate detail"}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_123":
+			_, _ = w.Write([]byte(`{"id":"sess_123","name":"auth","state":"healthy","package_ref":"@user-abc/auth:0.1.0","package_digest":"sha256:old","created_at":"then","updated_at":"now"}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	_, _, err := applyCloudSessionPackage(
+		cloud.NewClient(srv.URL, "test-token"),
+		"auth",
+		"@user-abc/auth:0.1.1",
+		"sess_123",
+		sessionRuntimeConfig{},
+		false,
+	)
+	if err == nil {
+		t.Fatal("expected snapshot pending error")
+	}
+	want := "The current revision has not been snapshotted.\n" +
+		"Deploying now means you won’t be able to restore its exact workspace and runtime state.\n\n" +
+		"To deploy anyway, retry the same command with --force. (HTTP 409)"
+	if err.Error() != want {
+		t.Fatalf("error:\n got: %q\nwant: %q", err, want)
+	}
+	var apiErr *cloud.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "snapshot_pending" {
+		t.Fatalf("structured error not preserved: %#v", err)
+	}
+
+	_, _, err = applyCloudSessionPackage(
+		cloud.NewClient(srv.URL, "test-token"),
+		"auth",
+		"@user-abc/auth:0.1.1",
+		"sess_123",
+		sessionRuntimeConfig{},
+		true,
+	)
+	if err == nil || strings.Contains(err.Error(), "retry the same command with --force") {
+		t.Fatalf("forced retry received an invalid force suggestion: %v", err)
+	}
+	apiErr = nil
+	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict ||
+		apiErr.Code != "snapshot_pending" || apiErr.Detail != "internal snapshot gate detail" {
+		t.Fatalf("forced retry changed the original error: %#v", err)
+	}
+
+	unrelated := &cloud.APIError{
+		StatusCode: http.StatusConflict,
+		Code:       "operation_in_progress",
+		Detail:     "deployment operation is already in progress",
+	}
+	if got := actionableDeploymentUpdateError(unrelated, false); got != unrelated {
+		t.Fatalf("unrelated conflict changed: got %#v want %#v", got, unrelated)
 	}
 }
 
