@@ -49,8 +49,8 @@ func runSessionWorker(
 		return 1, err
 	}
 	defer wakeParent(sessionDir)
-	defer clearRunner(sessionDir, os.Getpid())
 	defer owner.Release()
+	defer clearRunner(sessionDir, os.Getpid())
 
 	failures := 0
 	for {

@@ -6,10 +6,29 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/telos-org/telos/internal/runtimeenv"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
+func TestEnvIncludesRuntimeCredentialEnvironmentPath(t *testing.T) {
+	sessionDir := t.TempDir()
+	path := filepath.Join(t.TempDir(), "credential-environment.json")
+	environment := Env(sessionDir, StartOptions{
+		Runtime:                          sessionapi.RuntimeCloud,
+		RuntimeCredentialEnvironmentPath: path,
+	})
+
+	want := runtimeenv.PathEnvironmentVariable + "=" + path
+	for _, entry := range environment {
+		if entry == want {
+			return
+		}
+	}
+	t.Fatalf("runtime credential environment path missing from %v", environment)
+}
+
 func TestAcquireOwnershipIsExclusiveAndRecordsTopLevelRunner(t *testing.T) {
+	t.Setenv(runtimeenv.PathEnvironmentVariable, "")
 	sessionDir := t.TempDir()
 	if err := sessionapi.WriteManifest(manifestPath(sessionDir), &sessionapi.Manifest{
 		SessionID:   filepath.Base(sessionDir),
@@ -35,6 +54,72 @@ func TestAcquireOwnershipIsExclusiveAndRecordsTopLevelRunner(t *testing.T) {
 	}
 	if manifest.Runner == nil || manifest.Runner.PID != os.Getpid() {
 		t.Fatalf("top-level runner not recorded: %#v", manifest.Runner)
+	}
+	if len(manifest.Runner.Capabilities) != 0 {
+		t.Fatalf("unconfigured worker advertised capabilities: %#v", manifest.Runner.Capabilities)
+	}
+}
+
+func TestRuntimeCredentialEnvironmentCapabilityStatusUsesLiveConfiguredRunner(t *testing.T) {
+	sessionDir := t.TempDir()
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), &sessionapi.Manifest{
+		SessionID:   filepath.Base(sessionDir),
+		SessionKind: sessionapi.KindController,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(runtimeenv.PathEnvironmentVariable, filepath.Join(t.TempDir(), "credential-environment.json"))
+	owner, err := AcquireOwnership(sessionDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	live, supported, err := RuntimeCredentialEnvironmentCapabilityStatus(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !live || !supported {
+		t.Fatalf("configured live worker: live=%t supported=%t", live, supported)
+	}
+	if err := owner.Release(); err != nil {
+		t.Fatal(err)
+	}
+	live, supported, err = RuntimeCredentialEnvironmentCapabilityStatus(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if live || supported {
+		t.Fatalf("stale runner record: live=%t supported=%t", live, supported)
+	}
+}
+
+func TestRuntimeCredentialEnvironmentCapabilityStatusRejectsStaleRunnerPID(t *testing.T) {
+	sessionDir := t.TempDir()
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), &sessionapi.Manifest{
+		SessionID:   filepath.Base(sessionDir),
+		SessionKind: sessionapi.KindController,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(runtimeenv.PathEnvironmentVariable, filepath.Join(t.TempDir(), "credential-environment.json"))
+	owner, err := AcquireOwnership(sessionDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Release()
+	if _, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(manifest *sessionapi.Manifest) error {
+		manifest.Runner.PID = 1 << 30
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	live, supported, err := RuntimeCredentialEnvironmentCapabilityStatus(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !live || supported {
+		t.Fatalf("stale PID capability: live=%t supported=%t", live, supported)
 	}
 }
 

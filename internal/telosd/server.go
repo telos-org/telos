@@ -13,6 +13,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/telos-org/telos/internal/runtimeenv"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -35,7 +36,12 @@ func Run(ctx context.Context, cfg Config, runtime sessionapi.RuntimeIdentity) er
 
 	baseStore := storeForConfig(cfg)
 	store := sessionapi.Store(baseStore)
+	var runtimeCredentialEnvironmentStore *runtimeenv.Store
 	if cfg.Mode == ModeCloud {
+		runtimeCredentialEnvironmentStore, err = initializeRuntimeCredentialEnvironment(cfg.Root)
+		if err != nil {
+			return fmt.Errorf("initialize runtime credential environment: %w", err)
+		}
 		substrate, err := newSessionSubstrate(cfg)
 		if err != nil {
 			return err
@@ -55,6 +61,16 @@ func Run(ctx context.Context, cfg Config, runtime sessionapi.RuntimeIdentity) er
 	mux := http.NewServeMux()
 	authorizer := authorizerForConfig(cfg, baseStore)
 	sessionapi.RegisterRoutes(mux, store, authorizer, runtime)
+	if cfg.Mode == ModeCloud {
+		registerRuntimeCredentialEnvironmentRoutes(
+			mux,
+			runtimeCredentialEnvironmentStore,
+			authorizer,
+			func() (bool, error) {
+				return runtimeCredentialEnvironmentWorkersSupported(baseStore)
+			},
+		)
+	}
 
 	var lastRequest atomic.Int64
 	lastRequest.Store(time.Now().UnixNano())

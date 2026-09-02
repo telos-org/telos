@@ -1,0 +1,14 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+
+go_library(
+    name = "runtimeenv",
+    srcs = ["environment.go"],
+    importpath = "github.com/telos-org/telos/internal/runtimeenv",
+    visibility = ["//:__subpackages__"],
+)
+
+go_test(
+    name = "runtimeenv_test",
+    srcs = ["environment_test.go"],
+    embed = [":runtimeenv"],
+)

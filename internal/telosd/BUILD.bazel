@@ -9,6 +9,7 @@ go_library(
         "package_materializer.go",
         "platform_skills.go",
         "runtime_identity.go",
+        "runtime_credential_environment.go",
         "server.go",
         "session_bootstrap.go",
         "session_worker_helpers.go",
@@ -21,6 +22,7 @@ go_library(
         "//internal/cli",
         "//internal/evidence",
         "//internal/game",
+        "//internal/runtimeenv",
         "//internal/sessionapi",
         "//internal/sessionupdate",
         "//internal/sessionworker",
@@ -34,9 +36,11 @@ go_test(
     srcs = [
         "config_test.go",
         "controller_reconciler_test.go",
+        "local_process_worker_test.go",
         "package_materializer_test.go",
         "platform_skills_test.go",
         "runtime_identity_test.go",
+        "runtime_credential_environment_test.go",
         "server_test.go",
         "session_bootstrap_test.go",
         "worker_test.go",
@@ -44,7 +48,9 @@ go_test(
     embed = [":telosd"],
     deps = [
         "//internal/bundlelimits",
+        "//internal/runtimeenv",
         "//internal/sessionapi",
+        "//internal/sessionworker",
         "//internal/spec",
     ],
 )

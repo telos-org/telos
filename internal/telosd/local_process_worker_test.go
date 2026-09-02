@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/telos-org/telos/internal/runtimeenv"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -22,8 +23,12 @@ func TestNewSessionSubstrateDefaultsToLocalProcess(t *testing.T) {
 	if err != nil {
 		t.Fatalf("newSessionSubstrate: %v", err)
 	}
-	if _, ok := substrate.(localProcessSubstrate); !ok {
+	local, ok := substrate.(localProcessSubstrate)
+	if !ok {
 		t.Fatalf("substrate: got %T", substrate)
+	}
+	if got, want := local.runtimeCredentialEnvironmentPath, runtimeenv.Path(cfg.Root); got != want {
+		t.Fatalf("runtime credential environment path: got %q want %q", got, want)
 	}
 }
 
@@ -43,7 +48,9 @@ done
   echo "TELOS_SESSION_ID=$TELOS_SESSION_ID"
   echo "TELOS_API_TOKEN=$TELOS_API_TOKEN"
   echo "TELOS_WAKE_REASON=$TELOS_WAKE_REASON"
-} > "$session_dir/worker.env"
+  echo "TELOS_RUNTIME_CREDENTIAL_ENV_FILE=$TELOS_RUNTIME_CREDENTIAL_ENV_FILE"
+} > "$session_dir/worker.env.tmp"
+mv "$session_dir/worker.env.tmp" "$session_dir/worker.env"
 `), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -56,7 +63,8 @@ done
 		t.Fatalf("Create: %v", err)
 	}
 
-	substrate := newLocalProcessSubstrate()
+	runtimeCredentialEnvironmentPath := filepath.Join(dir, "credential-environment.json")
+	substrate := newLocalProcessSubstrate(runtimeCredentialEnvironmentPath)
 	if err := substrate.Apply(session, "controller_started"); err != nil {
 		t.Fatalf("Apply: %v", err)
 	}
@@ -79,6 +87,7 @@ done
 		"TELOS_RUNTIME=cloud",
 		"TELOS_SESSION_ID=" + session.SessionID,
 		"TELOS_WAKE_REASON=controller_started",
+		"TELOS_RUNTIME_CREDENTIAL_ENV_FILE=" + runtimeCredentialEnvironmentPath,
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("worker env missing %q:\n%s", want, text)

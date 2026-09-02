@@ -5,10 +5,12 @@ go_library(
     srcs = ["platform.go"],
     importpath = "github.com/telos-org/telos/internal/platform",
     visibility = ["//:__subpackages__"],
+    deps = ["//internal/runtimeenv"],
 )
 
 go_test(
     name = "platform_test",
     srcs = ["platform_test.go"],
     embed = [":platform"],
+    deps = ["//internal/runtimeenv"],
 )

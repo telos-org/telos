@@ -83,17 +83,18 @@ const (
 )
 
 type Runner struct {
-	Kind         string  `json:"kind,omitempty"`
-	PID          int     `json:"pid,omitempty"`
-	PGID         int     `json:"pgid,omitempty"`
-	LogPath      string  `json:"log_path,omitempty"`
-	InCluster    bool    `json:"in_cluster"`
-	Hostname     string  `json:"hostname,omitempty"`
-	PodName      string  `json:"pod_name,omitempty"`
-	PodNamespace string  `json:"pod_namespace,omitempty"`
-	StartedAt    string  `json:"started_at,omitempty"`
-	FinishedAt   *string `json:"finished_at,omitempty"`
-	Status       string  `json:"status,omitempty"`
+	Kind         string   `json:"kind,omitempty"`
+	PID          int      `json:"pid,omitempty"`
+	PGID         int      `json:"pgid,omitempty"`
+	LogPath      string   `json:"log_path,omitempty"`
+	Capabilities []string `json:"capabilities,omitempty"`
+	InCluster    bool     `json:"in_cluster"`
+	Hostname     string   `json:"hostname,omitempty"`
+	PodName      string   `json:"pod_name,omitempty"`
+	PodNamespace string   `json:"pod_namespace,omitempty"`
+	StartedAt    string   `json:"started_at,omitempty"`
+	FinishedAt   *string  `json:"finished_at,omitempty"`
+	Status       string   `json:"status,omitempty"`
 }
 
 type ScopedToken struct {
