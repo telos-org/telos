@@ -63,6 +63,15 @@ func (account *AccountBootstrapRecord) ResolveContext(value string) (*Organizati
 	return nil, fmt.Errorf("context %q is unavailable to this account", value)
 }
 
+func (account *AccountBootstrapRecord) CanonicalContextName(
+	organization *OrganizationRecord,
+) string {
+	if organization.ID == account.PersonalOrgID {
+		return "personal"
+	}
+	return organization.ContextName()
+}
+
 func (organization *OrganizationRecord) ContextName() string {
 	if organization.Handle != nil && *organization.Handle != "" {
 		return "@" + *organization.Handle

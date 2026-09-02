@@ -185,6 +185,8 @@ type Client struct {
 	Token    string
 	OrgID    string
 	HTTP     *http.Client
+
+	contextName string
 }
 
 type APIError struct {
@@ -214,11 +216,28 @@ func NewClient(endpoint, token string) *Client {
 	}
 }
 
-// resolvedContexts memoizes successful handle resolutions for the life of
+type resolvedContext struct {
+	orgID string
+	name  string
+}
+
+// resolvedContexts memoizes successful context resolutions for the life of
 // the process, keyed by endpoint, token, and context so distinct identities
 // never share an entry. Failures are not cached so transient errors stay
 // retryable.
 var resolvedContexts sync.Map
+
+// ContextName returns the canonical name of the selected context while OrgID
+// remains the stable identifier used for API routing.
+func (c *Client) ContextName() string {
+	if name := strings.TrimSpace(c.contextName); name != "" {
+		return name
+	}
+	if orgID := strings.TrimSpace(c.OrgID); orgID != "" {
+		return orgID
+	}
+	return "personal"
+}
 
 // ControlClient returns a client for the configured Telos control plane.
 func ControlClient() (*Client, error) {
@@ -248,21 +267,25 @@ func ControlClientForContext(contextOverride string) (*Client, error) {
 	if context == "" || context == "personal" {
 		return client, nil
 	}
-	if strings.HasPrefix(context, "org_") {
-		client.OrgID = context
-		return client, nil
-	}
 	key := client.Endpoint + "\x00" + token + "\x00" + context
-	if orgID, ok := resolvedContexts.Load(key); ok {
-		client.OrgID = orgID.(string)
+	if cached, ok := resolvedContexts.Load(key); ok {
+		resolved := cached.(resolvedContext)
+		client.OrgID = resolved.orgID
+		client.contextName = resolved.name
 		return client, nil
 	}
-	organization, err := client.ResolveContext(context)
+	account, err := client.AccountBootstrap()
 	if err != nil {
 		return nil, err
 	}
-	resolvedContexts.Store(key, organization.ID)
+	organization, err := account.ResolveContext(context)
+	if err != nil {
+		return nil, err
+	}
+	contextName := account.CanonicalContextName(organization)
+	resolvedContexts.Store(key, resolvedContext{orgID: organization.ID, name: contextName})
 	client.OrgID = organization.ID
+	client.contextName = contextName
 	return client, nil
 }
 

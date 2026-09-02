@@ -105,7 +105,7 @@ func cmdPlan(args []string) {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
 			}
-			targetContext = resolvedCloudContext(control)
+			targetContext = control.ContextName()
 		}
 	}
 	targetOperation := "create"

@@ -93,7 +93,7 @@ func deleteCloudSessionForContext(
 	if err != nil {
 		return nil, "", err
 	}
-	return session, resolvedCloudContext(control), nil
+	return session, control.ContextName(), nil
 }
 
 func deleteCloudSessionIfConfigured(
