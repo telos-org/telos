@@ -8,3 +8,12 @@ pkg_tar(
     strip_prefix = "telos-cli",
     visibility = ["//visibility:public"],
 )
+
+pkg_tar(
+    name = "telos_spec_bundle",
+    srcs = glob(["telos-spec/**"]),
+    extension = "tar.gz",
+    mode = "0644",
+    strip_prefix = "telos-spec",
+    visibility = ["//visibility:public"],
+)

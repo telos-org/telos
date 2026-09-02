@@ -1,6 +1,6 @@
 ---
 name: telos-cli
-description: Install and use the Telos CLI to apply persistent Goals or run bounded work. Use for Telos setup, SPEC.md authoring, plan/apply/run workflows, Cloud login and context, session inspection, publishing or pulling packages and skills, nested child Goals, and Telos troubleshooting.
+description: Install and operate the Telos CLI after a Goal contract is defined. Use for Telos setup, plan/apply/run workflows, Cloud login and context, session inspection, publishing or pulling packages and runtime skills, nested child Goals, and Telos troubleshooting.
 metadata:
   registry: "@telos/telos-cli"
   public_guide: "references/use-telos.md"
@@ -18,10 +18,21 @@ identity; `run` executes bounded local work. See
 [The Goal lifecycle](references/lifecycle.md) for the relationship between a
 Goal, its spec, revisions, session, and deployment.
 
+## Keep operations separate from authoring
+
+This skill owns Telos installation, validation, execution, observation, and
+Registry operations. Use the installed `telos-spec` skill when the user wants
+to create, improve, or review a `SPEC.md`. Do not make both skills lead the same
+authoring request.
+
+When an operational request reveals a small spec error, explain it and return
+to `telos-spec` for contract changes. Do not silently rewrite the Goal as part
+of `plan`, `apply`, or `run`.
+
 ## Before you act
 
 Read the repository's `AGENTS.md`, inspect the relevant code, and check the
-installed CLI before drafting the Goal:
+installed CLI before operating on the Goal:
 
 ```bash
 telos --version
@@ -53,12 +64,13 @@ context, scope, package version, or destructive target.
 
 ## Apply a persistent Goal
 
-Before authoring a Cloud Goal, read [Telos Cloud](references/cloud.md) and
+Before applying a Cloud Goal, read [Telos Cloud](references/cloud.md) and
 confirm that its delivery, storage, and external-service needs fit the managed
 runtime.
 
-1. Write the smallest `platform: cloud` spec that states the outcome,
-   meaningful constraints, and observable acceptance evidence.
+1. Confirm that the existing spec uses `platform: cloud` and states the
+   outcome, meaningful constraints, and observable acceptance evidence. If the
+   contract needs to be created or changed, use `telos-spec` before continuing.
 2. Choose the Cloud context explicitly and preview without changing remote
    state. Replace `CONTEXT` with `personal` or the intended `@team-handle`:
 
@@ -85,8 +97,9 @@ runtime.
 5. Verify the live behavior promised by the spec. Submission, a running
    process, and old green evidence are not completion of the current revision.
 
-Revise the same Goal by editing `SPEC.md`, bumping its version, and applying to
-the existing session:
+Revise the same Goal by using `telos-spec` to change the contract and choose the
+next version. Resume this operational skill only after that authoring step,
+then plan and apply to the existing session:
 
 ```bash
 telos plan SPEC.md --session SESSION_ID --context CONTEXT

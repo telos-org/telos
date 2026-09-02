@@ -647,6 +647,9 @@ func TestPackageSkillDirBuildsSkillPublishPayload(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(scripts, "deploy.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	if err := os.WriteFile(filepath.Join(dir, ".telos-managed"), []byte("@telos/k8s-deploy\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	skill, ok, err := packageSkillDir(dir, "1.0")
 	if err != nil {
@@ -663,6 +666,9 @@ func TestPackageSkillDirBuildsSkillPublishPayload(t *testing.T) {
 	}
 	if skill.files["scripts/deploy.sh"].Mode != "0755" {
 		t.Fatalf("script file: got %#v", skill.files["scripts/deploy.sh"])
+	}
+	if _, ok := skill.files[".telos-managed"]; ok {
+		t.Fatal("installer ownership marker must not be published")
 	}
 }
 

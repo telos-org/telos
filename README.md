@@ -11,7 +11,8 @@ Set up Telos.
 
 - Install it with `curl -fsSL https://usetelos.ai/install.sh | sh`.
 - Run `telos login` to sign in to Telos Cloud.
-- Read the installed `telos-cli` skill to get started.
+- Use the installed `telos-spec` skill to write a Goal contract.
+- Use the installed `telos-cli` skill to plan and apply it.
 ```
 
 ### Via the CLI
@@ -32,6 +33,12 @@ Cloud.
 > the agent drive `telos` for you.
 >
 > The CLI is optimized for the agent experience.
+
+Invoke the conversational spec writer explicitly with `$telos-spec` in Codex or
+`/telos-spec` in Claude Code. It asks only for decisions that materially change
+the contract, derives sections from the product, and can create, improve, or
+review `SPEC.md`. Use `telos-cli` after the contract is ready for operational
+commands such as `plan` and `apply`.
 
 The Goal specification (`SPEC.md`) is the main entry point to a `telos`
 program. This example creates a persistent Cloud Goal; use an explicit context
