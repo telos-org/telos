@@ -127,6 +127,38 @@ func TestControlClientPersonalOverrideWinsOverEnvironment(t *testing.T) {
 	}
 }
 
+func TestControlClientCanonicalizesPersonalOrganizationContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"personal_org_id":"org_personal",
+			"organizations":[
+				{"id":"org_personal","handle":"grohan","display_name":"Rohan","kind":"personal","role":"owner"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	t.Setenv(config.APIEndpointEnv, srv.URL)
+	t.Setenv(config.AuthTokenEnv, "test-token")
+	t.Setenv(config.ContextEnv, "")
+
+	for _, context := range []string{"@grohan", "org_personal"} {
+		t.Run(context, func(t *testing.T) {
+			client, err := ControlClientForContext(context)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client.OrgID != "org_personal" {
+				t.Fatalf("OrgID = %q, want org_personal", client.OrgID)
+			}
+			if client.ContextName() != "personal" {
+				t.Fatalf("ContextName = %q, want personal", client.ContextName())
+			}
+		})
+	}
+}
+
 func TestControlClientCachesHandleResolution(t *testing.T) {
 	bootstraps := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

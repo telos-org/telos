@@ -274,11 +274,15 @@ func ControlClientForContext(contextOverride string) (*Client, error) {
 		client.contextName = resolved.name
 		return client, nil
 	}
-	organization, err := client.ResolveContext(context)
+	account, err := client.AccountBootstrap()
 	if err != nil {
 		return nil, err
 	}
-	contextName := organization.ContextName()
+	organization, err := account.ResolveContext(context)
+	if err != nil {
+		return nil, err
+	}
+	contextName := account.CanonicalContextName(organization)
 	resolvedContexts.Store(key, resolvedContext{orgID: organization.ID, name: contextName})
 	client.OrgID = organization.ID
 	client.contextName = contextName

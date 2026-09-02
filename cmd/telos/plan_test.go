@@ -122,7 +122,7 @@ func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
 	}
 }
 
-func TestPlanShowsHandleContext(t *testing.T) {
+func TestPlanShowsCanonicalContext(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/account/bootstrap" {
 			http.NotFound(w, r)
@@ -131,6 +131,13 @@ func TestPlanShowsHandleContext(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"personal_org_id": "org_personal",
 			"organizations": []map[string]any{
+				{
+					"id":           "org_personal",
+					"handle":       "grohan",
+					"display_name": "Rohan",
+					"kind":         "personal",
+					"role":         "owner",
+				},
 				{
 					"id":           "org_telos",
 					"handle":       "telos",
@@ -145,9 +152,6 @@ func TestPlanShowsHandleContext(t *testing.T) {
 
 	configureCloudTest(t, srv.URL)
 	t.Setenv(config.ContextEnv, "")
-	if err := config.SaveConfig(&config.Config{Context: "org_telos"}); err != nil {
-		t.Fatal(err)
-	}
 	specPath := filepath.Join(t.TempDir(), "SPEC.md")
 	if err := os.WriteFile(specPath, []byte(`---
 name: demo
@@ -162,14 +166,29 @@ Serve a demo.
 		t.Fatal(err)
 	}
 
-	out := captureStdout(t, func() {
-		cmdPlan([]string{specPath})
-	})
-	if got := configOutputValue(t, out, "Context"); got != "@telos" {
-		t.Fatalf("Context = %q, want @telos\n%s", got, out)
-	}
-	if strings.Contains(out, "org_telos") {
-		t.Fatalf("plan exposed internal organization ID:\n%s", out)
+	for _, tt := range []struct {
+		name   string
+		stored string
+		want   string
+		hidden string
+	}{
+		{name: "team", stored: "org_telos", want: "@telos", hidden: "org_telos"},
+		{name: "personal", stored: "org_personal", want: "personal", hidden: "org_personal"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := config.SaveConfig(&config.Config{Context: tt.stored}); err != nil {
+				t.Fatal(err)
+			}
+			out := captureStdout(t, func() {
+				cmdPlan([]string{specPath})
+			})
+			if got := configOutputValue(t, out, "Context"); got != tt.want {
+				t.Fatalf("Context = %q, want %q\n%s", got, tt.want, out)
+			}
+			if strings.Contains(out, tt.hidden) {
+				t.Fatalf("plan exposed internal organization ID:\n%s", out)
+			}
+		})
 	}
 }
 
