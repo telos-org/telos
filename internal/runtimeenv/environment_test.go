@@ -89,6 +89,76 @@ func TestInitializedStoreFailsClosedWhenStateDisappears(t *testing.T) {
 	}
 }
 
+func TestInitializeRepairsPodRecreationPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	store := NewStore(path)
+	if _, err := store.Put(7, map[string]string{"TOKEN": "opaque"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(path, 0o660); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := Read(path); !errors.Is(err, ErrInvalidState) {
+		t.Fatalf("strict read of 0660 state: got %v want ErrInvalidState", err)
+	}
+
+	status, err := NewStore(path).Initialize()
+	if err != nil {
+		t.Fatalf("initialize 0660 state: %v", err)
+	}
+	if status.Generation != 7 || status.Count != 1 {
+		t.Fatalf("repaired state changed contents: %#v", status)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("repaired permissions: got %o want 600", got)
+	}
+}
+
+func TestInitializeRejectsUnsafeStateFiles(t *testing.T) {
+	t.Run("other-readable", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.json")
+		store := NewStore(path)
+		if _, err := store.Put(1, map[string]string{"TOKEN": "opaque"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(path, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewStore(path).Initialize(); !errors.Is(err, ErrInvalidState) {
+			t.Fatalf("initialize 0644 state: got %v want ErrInvalidState", err)
+		}
+	})
+
+	t.Run("symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "target.json")
+		if err := os.WriteFile(target, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		path := filepath.Join(dir, "state.json")
+		if err := os.Symlink(target, path); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewStore(path).Initialize(); !errors.Is(err, ErrInvalidState) {
+			t.Fatalf("initialize symlink: got %v want ErrInvalidState", err)
+		}
+	})
+
+	t.Run("nonregular", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "state.json")
+		if err := os.Mkdir(path, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := NewStore(path).Initialize(); !errors.Is(err, ErrInvalidState) {
+			t.Fatalf("initialize directory: got %v want ErrInvalidState", err)
+		}
+	})
+}
+
 func TestStoreGenerationAndIdempotency(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	store := NewStore(path)

@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 )
 
 const (
@@ -101,6 +102,9 @@ func (s *Store) Initialize() (Status, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	if err := normalizeStatePermissions(s.path); err != nil {
+		return Status{}, err
+	}
 	state, seeded, err := Read(s.path)
 	if err != nil {
 		return Status{}, err
@@ -119,6 +123,42 @@ func (s *Store) Initialize() (Status, error) {
 	}
 	s.requireState = true
 	return statusFor(state, true), nil
+}
+
+// normalizeStatePermissions repairs group-only access introduced by the pod
+// init container while refusing symlinks, nonregular files, and any file that
+// was exposed to other users. Read remains strict for every runtime reload.
+func normalizeStatePermissions(path string) error {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_CLOEXEC|syscall.O_NOFOLLOW|syscall.O_NONBLOCK, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if errors.Is(err, syscall.ELOOP) {
+		return fmt.Errorf("%w: unsafe state file", ErrInvalidState)
+	}
+	if err != nil {
+		return fmt.Errorf("open runtime credential environment state for permission repair: %w", err)
+	}
+	file := os.NewFile(uintptr(fd), path)
+	info, statErr := file.Stat()
+	if statErr != nil {
+		_ = file.Close()
+		return fmt.Errorf("inspect runtime credential environment state for permission repair: %w", statErr)
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o007 != 0 {
+		_ = file.Close()
+		return fmt.Errorf("%w: unsafe state file", ErrInvalidState)
+	}
+	if info.Mode().Perm() != 0o600 {
+		if err := file.Chmod(0o600); err != nil {
+			_ = file.Close()
+			return fmt.Errorf("repair runtime credential environment state permissions: %w", err)
+		}
+	}
+	if err := file.Close(); err != nil {
+		return fmt.Errorf("close runtime credential environment state after permission repair: %w", err)
+	}
+	return nil
 }
 
 // Get returns non-secret capability and synchronization status.

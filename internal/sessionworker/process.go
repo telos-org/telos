@@ -18,6 +18,7 @@ import (
 var ErrWorkerNotRunning = errors.New("worker is not running")
 var ErrWorkerAlreadyRunning = errors.New("worker is already running")
 var ErrSessionStopped = errors.New("session is stopped")
+var ErrWorkerReadinessTransient = errors.New("worker readiness is transient")
 
 const RuntimeCredentialEnvironmentCapability = "runtime-credential-environment-v1"
 
@@ -229,15 +230,18 @@ func RuntimeCredentialEnvironmentCapabilityStatus(sessionDir string) (live bool,
 		return true, false, fmt.Errorf("read live worker manifest: %w", err)
 	}
 	if manifest.Runner == nil {
-		return true, false, nil
+		return true, false, fmt.Errorf("%w: live worker has no runner identity", ErrWorkerReadinessTransient)
+	}
+	if manifest.Runner.Kind != "local-subprocess" || strings.TrimSpace(manifest.Runner.StartedAt) == "" {
+		return true, false, fmt.Errorf("%w: live worker runner identity is incomplete", ErrWorkerReadinessTransient)
 	}
 	pid, ok := manifest.Runner.ProcessID()
 	if !ok {
-		return true, false, nil
+		return true, false, fmt.Errorf("%w: live worker runner PID is invalid", ErrWorkerReadinessTransient)
 	}
 	if err := syscall.Kill(pid, 0); err != nil {
 		if errors.Is(err, syscall.ESRCH) {
-			return true, false, nil
+			return true, false, fmt.Errorf("%w: live worker runner PID is not alive", ErrWorkerReadinessTransient)
 		}
 		if !errors.Is(err, syscall.EPERM) {
 			return true, false, fmt.Errorf("probe live worker process %d: %w", pid, err)

@@ -64,11 +64,7 @@ func (h *runtimeCredentialEnvironmentHandler) get(w http.ResponseWriter, r *http
 	}
 	status.Supported, err = h.workersSupported()
 	if err != nil {
-		writeRuntimeCredentialEnvironmentError(
-			w,
-			http.StatusInternalServerError,
-			"runtime credential environment worker readiness is unavailable",
-		)
+		writeRuntimeCredentialEnvironmentReadinessError(w, err)
 		return
 	}
 	writeRuntimeCredentialEnvironmentJSON(w, http.StatusOK, status)
@@ -80,11 +76,7 @@ func (h *runtimeCredentialEnvironmentHandler) put(w http.ResponseWriter, r *http
 	}
 	supported, err := h.workersSupported()
 	if err != nil {
-		writeRuntimeCredentialEnvironmentError(
-			w,
-			http.StatusInternalServerError,
-			"runtime credential environment worker readiness is unavailable",
-		)
+		writeRuntimeCredentialEnvironmentReadinessError(w, err)
 		return
 	}
 	if !supported {
@@ -158,6 +150,22 @@ func runtimeCredentialEnvironmentWorkersSupported(store *sessionapi.FileStore) (
 		}
 	}
 	return true, nil
+}
+
+func writeRuntimeCredentialEnvironmentReadinessError(w http.ResponseWriter, err error) {
+	if errors.Is(err, sessionworker.ErrWorkerReadinessTransient) {
+		writeRuntimeCredentialEnvironmentError(
+			w,
+			http.StatusServiceUnavailable,
+			"runtime credential environment worker readiness is pending",
+		)
+		return
+	}
+	writeRuntimeCredentialEnvironmentError(
+		w,
+		http.StatusInternalServerError,
+		"runtime credential environment worker readiness is unavailable",
+	)
 }
 
 func (h *runtimeCredentialEnvironmentHandler) authorize(w http.ResponseWriter, r *http.Request) bool {

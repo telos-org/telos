@@ -115,11 +115,41 @@ func TestRuntimeCredentialEnvironmentCapabilityStatusRejectsStaleRunnerPID(t *te
 	}
 
 	live, supported, err := RuntimeCredentialEnvironmentCapabilityStatus(sessionDir)
-	if err != nil {
-		t.Fatal(err)
+	if !errors.Is(err, ErrWorkerReadinessTransient) {
+		t.Fatalf("stale PID readiness: got %v want ErrWorkerReadinessTransient", err)
 	}
 	if !live || supported {
 		t.Fatalf("stale PID capability: live=%t supported=%t", live, supported)
+	}
+}
+
+func TestRuntimeCredentialEnvironmentCapabilityStatusTreatsIncompleteRunnerAsTransient(t *testing.T) {
+	sessionDir := t.TempDir()
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), &sessionapi.Manifest{
+		SessionID:   filepath.Base(sessionDir),
+		SessionKind: sessionapi.KindController,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(runtimeenv.PathEnvironmentVariable, filepath.Join(t.TempDir(), "credential-environment.json"))
+	owner, err := AcquireOwnership(sessionDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Release()
+	if _, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(manifest *sessionapi.Manifest) error {
+		manifest.Runner.Kind = ""
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	live, supported, err := RuntimeCredentialEnvironmentCapabilityStatus(sessionDir)
+	if !errors.Is(err, ErrWorkerReadinessTransient) {
+		t.Fatalf("incomplete runner readiness: got %v want ErrWorkerReadinessTransient", err)
+	}
+	if !live || supported {
+		t.Fatalf("incomplete runner capability: live=%t supported=%t", live, supported)
 	}
 }
 

@@ -302,6 +302,47 @@ func TestRuntimeCredentialEnvironmentFailsClosedForUnreadableLiveWorker(t *testi
 	}
 }
 
+func TestRuntimeCredentialEnvironmentReturnsUnavailableDuringWorkerHandoff(t *testing.T) {
+	root := t.TempDir()
+	sessions := sessionapi.NewFileStore(filepath.Join(root, "sessions"), sessionapi.RuntimeCloud)
+	stateStore, err := initializeRuntimeCredentialEnvironment(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(runtimeenv.PathEnvironmentVariable, runtimeenv.Path(root))
+	owner := acquireRuntimeCredentialEnvironmentTestWorker(t, sessions.Root, "sess-handoff", sessionapi.KindController)
+	defer owner.Release()
+	manifestPath := filepath.Join(sessions.Root, "sess-handoff", "session.json")
+	if _, err := sessionapi.MutateManifest(manifestPath, func(manifest *sessionapi.Manifest) error {
+		manifest.Runner = nil
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	mux := runtimeCredentialEnvironmentMux(stateStore, sessions, "operator-token")
+	response := serveRuntimeCredentialEnvironmentRequest(t, mux, http.MethodGet, "")
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("get: got %d want 503: %s", response.Code, response.Body.String())
+	}
+	response = serveRuntimeCredentialEnvironmentRequest(
+		t,
+		mux,
+		http.MethodPut,
+		`{"generation":1,"environment":{"TOKEN":"opaque"}}`,
+	)
+	if response.Code != http.StatusServiceUnavailable {
+		t.Fatalf("put: got %d want 503: %s", response.Code, response.Body.String())
+	}
+	status, err := stateStore.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Generation != 0 || status.Count != 0 {
+		t.Fatalf("transient readiness mutated state: %#v", status)
+	}
+}
+
 func runtimeCredentialEnvironmentTestMux(t *testing.T, operatorToken string) (*http.ServeMux, string) {
 	t.Helper()
 	root := t.TempDir()
