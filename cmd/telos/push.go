@@ -247,16 +247,19 @@ func readSkillPublishFiles(root string) (map[string]cloud.SkillFile, error) {
 		if entry.IsDir() {
 			return nil
 		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		if filepath.ToSlash(rel) == ".telos-managed" {
+			return nil
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
 		if !info.Mode().IsRegular() {
 			return fmt.Errorf("skill contains non-regular file: %s", path)
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
 		}
 		data, err := os.ReadFile(path)
 		if err != nil {

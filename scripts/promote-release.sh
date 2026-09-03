@@ -27,6 +27,7 @@ for artifact in \
   telosd-linux-amd64 \
   telosd-linux-arm64 \
   telos-cli-skill.tar.gz \
+  telos-spec-skill.tar.gz \
   SHA256SUMS \
   install.sh
 do

@@ -1,0 +1,5 @@
+interface:
+  display_name: "Telos Spec"
+  short_description: "Write clear, verifiable Telos specs"
+  default_prompt: "Use $telos-spec to help me create, improve, or review a Telos SPEC.md."
+

@@ -33,6 +33,10 @@ Publish a skill directory containing `SKILL.md`:
 telos push path/to/skill --scope your-scope
 ```
 
+The release installer may place a root `.telos-managed` ownership marker in a
+bundled skill. `telos push` excludes that local installer metadata from the
+published skill.
+
 The version can come from frontmatter or an explicit `--version`. Registry
 versions are immutable; changed bytes receive a new version. Capture the
 returned ref and digest.

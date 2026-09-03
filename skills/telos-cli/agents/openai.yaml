@@ -1,3 +1,4 @@
 interface:
   display_name: "Telos CLI"
-  short_description: "Apply persistent Goals with Telos"
+  short_description: "Operate and observe Telos Goals"
+  default_prompt: "Use $telos-cli to plan, run, apply, or inspect an existing Telos Goal."

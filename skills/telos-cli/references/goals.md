@@ -10,6 +10,10 @@ A Goal is the outcome that should remain true. `SPEC.md` is its authored
 contract: frontmatter tells Telos how to run it, while the Markdown body tells
 agents what to make true and how success can be observed.
 
+The Telos installer includes a conversational `telos-spec` skill. Invoke it
+explicitly with `$telos-spec` in Codex or `/telos-spec` in Claude Code when you
+want your coding agent to create, improve, or review this contract with you.
+
 ## Start with a complete minimal contract
 
 ```markdown

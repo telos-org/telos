@@ -21,8 +21,10 @@ EOF
   exit 1
 fi
 
+"${repo_root}/scripts/test-release-installer.sh" "${dist}" "${version}"
+
 if [[ -z "${TELOS_AUTH_TOKEN:-}" ]]; then
-  echo "publish-release: TELOS_AUTH_TOKEN is required to publish @telos/telos-cli" >&2
+  echo "publish-release: TELOS_AUTH_TOKEN is required to publish bundled skills" >&2
   exit 1
 fi
 command -v jq >/dev/null 2>&1 || {
@@ -42,27 +44,52 @@ case "$(uname -s)-$(uname -m)" in
 esac
 
 skill_version="${version#v}"
-skill_ref="@telos/telos-cli:${skill_version}"
-skill_json="$(
-  "${publisher}" push "${repo_root}/skills/telos-cli" \
-    --scope telos \
-    --version "${skill_version}" \
-    --json
-)"
-published_ref="$(jq -er '.skill.ref' <<<"${skill_json}")"
-published_digest="$(jq -er '.skill.digest' <<<"${skill_json}")"
-published_version="$(jq -er '.skill.version' <<<"${skill_json}")"
-if [[ "${published_ref}" != "${skill_ref}" || "${published_version}" != "${skill_version}" ]]; then
-  echo "publish-release: registry returned ${published_ref}, expected ${skill_ref}" >&2
-  exit 1
-fi
-if [[ ! "${published_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
-  echo "publish-release: registry returned invalid skill digest ${published_digest}" >&2
-  exit 1
-fi
+published_ref=""
+published_digest=""
+
+publish_skill() {
+  local skill_name="$1"
+  local skill_dir="${repo_root}/skills/${skill_name}"
+  local expected_ref="@telos/${skill_name}:${skill_version}"
+  local skill_json
+  local published_version
+
+  skill_json="$(
+    "${publisher}" push "${skill_dir}" \
+      --scope telos \
+      --version "${skill_version}" \
+      --json
+  )"
+  published_ref="$(jq -er '.skill.ref' <<<"${skill_json}")"
+  published_digest="$(jq -er '.skill.digest' <<<"${skill_json}")"
+  published_version="$(jq -er '.skill.version' <<<"${skill_json}")"
+  if [[ "${published_ref}" != "${expected_ref}" || "${published_version}" != "${skill_version}" ]]; then
+    echo "publish-release: registry returned ${published_ref}, expected ${expected_ref}" >&2
+    exit 1
+  fi
+  if [[ ! "${published_digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+    echo "publish-release: registry returned invalid skill digest ${published_digest}" >&2
+    exit 1
+  fi
+}
+
+publish_skill "telos-cli"
+cli_skill_ref="${published_ref}"
+cli_skill_digest="${published_digest}"
+publish_skill "telos-spec"
+spec_skill_ref="${published_ref}"
+spec_skill_digest="${published_digest}"
+
 manifest_tmp="${dist}/manifest.json.tmp"
-jq --arg ref "${published_ref}" --arg digest "${published_digest}" \
-  '.skills = [{ref: $ref, digest: $digest, artifact: "telos-cli-skill.tar.gz"}]' \
+jq \
+  --arg cli_ref "${cli_skill_ref}" \
+  --arg cli_digest "${cli_skill_digest}" \
+  --arg spec_ref "${spec_skill_ref}" \
+  --arg spec_digest "${spec_skill_digest}" \
+  '.skills = [
+    {ref: $cli_ref, digest: $cli_digest, artifact: "telos-cli-skill.tar.gz"},
+    {ref: $spec_ref, digest: $spec_digest, artifact: "telos-spec-skill.tar.gz"}
+  ]' \
   "${dist}/manifest.json" >"${manifest_tmp}"
 mv "${manifest_tmp}" "${dist}/manifest.json"
 
@@ -97,6 +124,7 @@ for artifact in \
   telosd-linux-amd64 \
   telosd-linux-arm64 \
   telos-cli-skill.tar.gz \
+  telos-spec-skill.tar.gz \
   SHA256SUMS \
   install.sh
 do
