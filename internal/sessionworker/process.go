@@ -6,15 +6,21 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 
+	"github.com/telos-org/telos/internal/runtimeenv"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 var ErrWorkerNotRunning = errors.New("worker is not running")
 var ErrWorkerAlreadyRunning = errors.New("worker is already running")
 var ErrSessionStopped = errors.New("session is stopped")
+var ErrWorkerReadinessTransient = errors.New("worker readiness is transient")
+
+const RuntimeCredentialEnvironmentCapability = "runtime-credential-environment-v1"
 
 type Ownership struct {
 	file *os.File
@@ -34,8 +40,9 @@ func (o *Ownership) Release() error {
 }
 
 type StartOptions struct {
-	Runtime    sessionapi.SessionRuntime
-	WakeReason string
+	Runtime                          sessionapi.SessionRuntime
+	WakeReason                       string
+	RuntimeCredentialEnvironmentPath string
 }
 
 func Start(sessionDir string, runtime sessionapi.SessionRuntime) error {
@@ -107,6 +114,9 @@ func Env(sessionDir string, opts StartOptions) []string {
 			"TELOS_WAKE_REASON="+opts.WakeReason,
 			"TELOS_WAKE_ID="+opts.WakeReason+":"+time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		)
+	}
+	if opts.RuntimeCredentialEnvironmentPath != "" {
+		env = append(env, runtimeenv.PathEnvironmentVariable+"="+opts.RuntimeCredentialEnvironmentPath)
 	}
 	return env
 }
@@ -189,6 +199,9 @@ func AcquireOwnership(sessionDir string, logPath string) (*Ownership, error) {
 		return nil, fmt.Errorf("acquire runner lock: %w", err)
 	}
 	runner := RunnerIdentity(os.Getpid())
+	if strings.TrimSpace(os.Getenv(runtimeenv.PathEnvironmentVariable)) != "" {
+		runner.Capabilities = []string{RuntimeCredentialEnvironmentCapability}
+	}
 	if logPath != "" {
 		runner.LogPath = logPath
 	}
@@ -201,6 +214,40 @@ func AcquireOwnership(sessionDir string, logPath string) (*Ownership, error) {
 		return nil, fmt.Errorf("record runner: %w", err)
 	}
 	return &Ownership{file: lock}, nil
+}
+
+// RuntimeCredentialEnvironmentCapabilityStatus reports whether a live worker
+// owns the session and, if so, whether that exact runner advertised dynamic
+// runtime credential environment support. A dead session has no unsafe worker
+// and will be relaunched by the current telosd binary.
+func RuntimeCredentialEnvironmentCapabilityStatus(sessionDir string) (live bool, supported bool, err error) {
+	live, err = workerAlive(sessionDir)
+	if err != nil || !live {
+		return live, false, err
+	}
+	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err != nil {
+		return true, false, fmt.Errorf("read live worker manifest: %w", err)
+	}
+	if manifest.Runner == nil {
+		return true, false, fmt.Errorf("%w: live worker has no runner identity", ErrWorkerReadinessTransient)
+	}
+	if manifest.Runner.Kind != "local-subprocess" || strings.TrimSpace(manifest.Runner.StartedAt) == "" {
+		return true, false, fmt.Errorf("%w: live worker runner identity is incomplete", ErrWorkerReadinessTransient)
+	}
+	pid, ok := manifest.Runner.ProcessID()
+	if !ok {
+		return true, false, fmt.Errorf("%w: live worker runner PID is invalid", ErrWorkerReadinessTransient)
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		if errors.Is(err, syscall.ESRCH) {
+			return true, false, fmt.Errorf("%w: live worker runner PID is not alive", ErrWorkerReadinessTransient)
+		}
+		if !errors.Is(err, syscall.EPERM) {
+			return true, false, fmt.Errorf("probe live worker process %d: %w", pid, err)
+		}
+	}
+	return true, slices.Contains(manifest.Runner.Capabilities, RuntimeCredentialEnvironmentCapability), nil
 }
 
 func workerAlive(sessionDir string) (bool, error) {

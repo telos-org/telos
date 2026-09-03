@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/telos-org/telos/internal/runtimeenv"
 )
 
 func TestLocalPlatformRun(t *testing.T) {
@@ -83,6 +85,155 @@ func TestLocalPlatformRunWithEnv(t *testing.T) {
 	}
 }
 
+func TestWorkspaceProcessEnvReloadsRuntimeCredentialEnvironment(t *testing.T) {
+	t.Setenv("MODAL_TOKEN_ID", "stale-one")
+	t.Setenv("MODAL_TOKEN_SECRET", "stale-two")
+	path := runtimeenv.Path(t.TempDir())
+	t.Setenv(runtimeenv.PathEnvironmentVariable, path)
+	store := runtimeenv.NewStore(path)
+	if _, err := store.Put(1, map[string]string{
+		"MODAL_TOKEN_ID":     "opaque-one",
+		"MODAL_TOKEN_SECRET": "opaque-two",
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := runtimeCredentialProcessEnv(workspaceProcessEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstValues := testEnvironmentMap(first)
+	if firstValues["MODAL_TOKEN_ID"] != "opaque-one" || firstValues["MODAL_TOKEN_SECRET"] != "opaque-two" {
+		t.Fatalf("initial credential environment missing: %v", firstValues)
+	}
+
+	if _, err := store.Put(2, map[string]string{"NEW_TOKEN": "opaque-three"}); err != nil {
+		t.Fatal(err)
+	}
+	second, err := runtimeCredentialProcessEnv(workspaceProcessEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondValues := testEnvironmentMap(second)
+	if _, ok := secondValues["MODAL_TOKEN_ID"]; ok {
+		t.Fatal("detached MODAL_TOKEN_ID remained in the next process environment")
+	}
+	if _, ok := secondValues["MODAL_TOKEN_SECRET"]; ok {
+		t.Fatal("detached MODAL_TOKEN_SECRET remained in the next process environment")
+	}
+	if secondValues["NEW_TOKEN"] != "opaque-three" {
+		t.Fatalf("attached NEW_TOKEN missing: %v", secondValues)
+	}
+
+	if _, err := store.Put(3, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	third, err := runtimeCredentialProcessEnv(workspaceProcessEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := testEnvironmentMap(third)["NEW_TOKEN"]; ok {
+		t.Fatal("detached NEW_TOKEN remained in the next process environment")
+	}
+}
+
+func TestWorkspaceProcessEnvPreservesLegacyEnvironmentWhenStateIsAbsent(t *testing.T) {
+	t.Setenv("LEGACY_INTEGRATION_TOKEN", "legacy-placeholder")
+	t.Setenv(runtimeenv.PathEnvironmentVariable, "")
+
+	environment, err := runtimeCredentialProcessEnv(workspaceProcessEnv())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := testEnvironmentMap(environment)["LEGACY_INTEGRATION_TOKEN"]; got != "legacy-placeholder" {
+		t.Fatalf("legacy environment: got %q want legacy-placeholder", got)
+	}
+}
+
+func TestRuntimeCredentialEnvironmentIsFinalOverlayAuthority(t *testing.T) {
+	dir := t.TempDir()
+	path := runtimeenv.Path(dir)
+	t.Setenv(runtimeenv.PathEnvironmentVariable, path)
+	t.Setenv("TOKEN", "inherited")
+	store := runtimeenv.NewStore(path)
+	if _, err := store.Put(1, map[string]string{"TOKEN": "credential-placeholder"}); err != nil {
+		t.Fatal(err)
+	}
+	platform := NewLocalPlatform(dir)
+	platform.Env = map[string]string{"TOKEN": "platform-overlay"}
+
+	result := platform.Run(
+		[]string{"sh", "-c", "printf '%s\\n' \"$TOKEN\""},
+		"",
+		map[string]string{"TOKEN": "per-call-overlay"},
+		10,
+		nil,
+		nil,
+	)
+	if result.InfraError != "" || result.ReturnCode != 0 {
+		t.Fatalf("run failed: %#v", result)
+	}
+	if len(result.RawLines) != 1 || result.RawLines[0] != "credential-placeholder" {
+		t.Fatalf("managed credential did not win final overlay: %v", result.RawLines)
+	}
+
+	if _, err := store.Put(2, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+	result = platform.Run(
+		[]string{"sh", "-c", `if [ "${TOKEN+x}" = x ]; then printf '%s\n' "$TOKEN"; else printf 'missing\n'; fi`},
+		"",
+		map[string]string{"TOKEN": "per-call-overlay"},
+		10,
+		nil,
+		nil,
+	)
+	if result.InfraError != "" || result.ReturnCode != 0 {
+		t.Fatalf("run after detach failed: %#v", result)
+	}
+	if len(result.RawLines) != 1 || result.RawLines[0] != "missing" {
+		t.Fatalf("later overlay reintroduced detached credential: %v", result.RawLines)
+	}
+}
+
+func TestLocalPlatformDoesNotSpawnWhenConfiguredRuntimeCredentialEnvironmentIsMissing(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv(runtimeenv.PathEnvironmentVariable, filepath.Join(dir, "missing.json"))
+	marker := filepath.Join(dir, "spawned")
+
+	result := NewLocalPlatform(dir).Run(
+		[]string{"sh", "-c", "touch \"$1\"", "test", marker},
+		"", nil, 10, nil, nil,
+	)
+	if result.InfraError != "runtime_credential_environment_invalid" {
+		t.Fatalf("infra error: got %q", result.InfraError)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("command unexpectedly spawned: %v", err)
+	}
+}
+
+func TestLocalPlatformDoesNotSpawnWithCorruptRuntimeCredentialEnvironment(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "credential-environment.json")
+	if err := os.WriteFile(path, []byte("not-json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(runtimeenv.PathEnvironmentVariable, path)
+	marker := filepath.Join(dir, "spawned")
+
+	result := NewLocalPlatform(dir).Run(
+		[]string{"sh", "-c", "touch \"$1\"", "test", marker},
+		"", nil, 10, nil, nil,
+	)
+	if result.InfraError != "runtime_credential_environment_invalid" {
+		t.Fatalf("infra error: got %q", result.InfraError)
+	}
+	if _, err := os.Stat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("command unexpectedly spawned: %v", err)
+	}
+}
+
 func TestLocalPlatformRunFailure(t *testing.T) {
 	dir := t.TempDir()
 	p := NewLocalPlatform(dir)
@@ -95,6 +246,17 @@ func TestLocalPlatformRunFailure(t *testing.T) {
 	if result.ReturnCode != 42 {
 		t.Errorf("expected exit code 42, got %d", result.ReturnCode)
 	}
+}
+
+func testEnvironmentMap(environment []string) map[string]string {
+	values := make(map[string]string, len(environment))
+	for _, entry := range environment {
+		name, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[name] = value
+		}
+	}
+	return values
 }
 
 func TestLocalPlatformRunCapturesCompleteStderr(t *testing.T) {

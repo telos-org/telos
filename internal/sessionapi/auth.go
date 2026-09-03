@@ -38,12 +38,13 @@ type Caller struct {
 type AccessAction string
 
 const (
-	ActionHealth            AccessAction = "health"
-	ActionCreateSession     AccessAction = "create_session"
-	ActionUpdateSessionSpec AccessAction = "update_session_spec"
-	ActionListSessions      AccessAction = "list_sessions"
-	ActionReadSession       AccessAction = "read_session"
-	ActionStopSession       AccessAction = "stop_session"
+	ActionHealth                             AccessAction = "health"
+	ActionCreateSession                      AccessAction = "create_session"
+	ActionUpdateSessionSpec                  AccessAction = "update_session_spec"
+	ActionListSessions                       AccessAction = "list_sessions"
+	ActionReadSession                        AccessAction = "read_session"
+	ActionStopSession                        AccessAction = "stop_session"
+	ActionManageRuntimeCredentialEnvironment AccessAction = "manage_runtime_credential_environment"
 )
 
 type AccessRequest struct {
@@ -171,6 +172,11 @@ func authorizeCaller(store *FileStore, caller Caller, req AccessRequest) error {
 		return requireSessionAccess(store, caller, req.SessionID, ScopeSessionsRead)
 	case ActionStopSession:
 		return requireSessionAccess(store, caller, req.SessionID, ScopeSessionsStop)
+	case ActionManageRuntimeCredentialEnvironment:
+		if caller.Role != RoleOperator {
+			return authError{status: http.StatusForbidden, detail: "runtime operator access required"}
+		}
+		return nil
 	default:
 		return authError{status: http.StatusForbidden, detail: "unsupported session API action"}
 	}

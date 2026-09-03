@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/telos-org/telos/internal/runtimeenv"
 )
 
 const (
@@ -68,6 +70,11 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 	}
 	if task != "" {
 		mergedEnv = append(mergedEnv, TaskEnvVar+"="+task)
+	}
+	mergedEnv, err := runtimeCredentialProcessEnv(mergedEnv)
+	if err != nil {
+		result.InfraError = "runtime_credential_environment_invalid"
+		return result
 	}
 
 	cmd := exec.Command(argv[0], argv[1:]...)
@@ -305,6 +312,21 @@ func workspaceProcessEnv() []string {
 		env = append(env, e)
 	}
 	return env
+}
+
+func runtimeCredentialProcessEnv(env []string) ([]string, error) {
+	path := strings.TrimSpace(os.Getenv(runtimeenv.PathEnvironmentVariable))
+	if path == "" {
+		return env, nil
+	}
+	state, seeded, err := runtimeenv.Read(path)
+	if err != nil {
+		return nil, err
+	}
+	if !seeded {
+		return nil, fmt.Errorf("runtime credential environment is configured but missing")
+	}
+	return runtimeenv.Apply(env, state), nil
 }
 
 func workspaceFileListing(workspace string) string {

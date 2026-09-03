@@ -5,12 +5,18 @@ go_library(
     srcs = ["process.go"],
     importpath = "github.com/telos-org/telos/internal/sessionworker",
     visibility = ["//:__subpackages__"],
-    deps = ["//internal/sessionapi"],
+    deps = [
+        "//internal/runtimeenv",
+        "//internal/sessionapi",
+    ],
 )
 
 go_test(
     name = "sessionworker_test",
     srcs = ["process_test.go"],
     embed = [":sessionworker"],
-    deps = ["//internal/sessionapi"],
+    deps = [
+        "//internal/runtimeenv",
+        "//internal/sessionapi",
+    ],
 )
