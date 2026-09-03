@@ -66,6 +66,7 @@ type Store interface {
 	List() ([]Session, error)
 	Get(id string) (*Session, error)
 	Stop(id string) (*Session, error)
+	OpenWorkspaceArchive(id string) (*os.File, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
 }
@@ -897,6 +898,69 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	}
 
 	return fs.deriveSession(id, m)
+}
+
+// OpenWorkspaceArchive opens the latest completely saved root-workspace
+// checkpoint. Checkpoints are atomically renamed into place by the runner, so
+// an open file descriptor always refers to one complete archive even if the
+// next checkpoint replaces it concurrently.
+func (fs *FileStore) OpenWorkspaceArchive(id string) (*os.File, error) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+
+	if id == "" || id == "." || id == ".." || filepath.Base(id) != id {
+		return nil, fmt.Errorf("invalid session id %q: %w", id, ErrInvalidSession)
+	}
+
+	root, err := os.OpenRoot(fs.Root)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+		}
+		return nil, err
+	}
+	defer root.Close()
+
+	manifestFile, err := openRootRegularFile(root, filepath.Join(id, "session.json"))
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+		}
+		if errors.Is(err, os.ErrInvalid) {
+			return nil, fmt.Errorf("session %s has an invalid manifest: %w", id, ErrInvalidSession)
+		}
+		return nil, err
+	}
+	var manifest Manifest
+	decodeErr := json.NewDecoder(manifestFile).Decode(&manifest)
+	closeErr := manifestFile.Close()
+	if decodeErr != nil {
+		return nil, fmt.Errorf("parse manifest for session %s: %w", id, decodeErr)
+	}
+	if closeErr != nil {
+		return nil, closeErr
+	}
+	if manifest.SessionID != id || !isTopLevelManifest(&manifest) {
+		return nil, fmt.Errorf("session %s is not a root session: %w", id, ErrInvalidSession)
+	}
+	if !specDirNameRE.MatchString(manifest.SpecName) {
+		return nil, fmt.Errorf("session %s has an invalid spec name: %w", id, ErrInvalidSession)
+	}
+
+	archive, err := openRootRegularFile(
+		root,
+		filepath.Join(id, "specs", manifest.SpecName, "workspace.tar.gz"),
+	)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, fmt.Errorf("session %s workspace archive is not ready: %w", id, ErrConflict)
+		}
+		if errors.Is(err, os.ErrInvalid) {
+			return nil, fmt.Errorf("session %s workspace archive is not a regular file: %w", id, ErrConflict)
+		}
+		return nil, err
+	}
+	return archive, nil
 }
 
 // Transcript returns the session transcript markdown for the first spec.

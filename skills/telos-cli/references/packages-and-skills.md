@@ -68,4 +68,6 @@ Use `telos get SESSION_ID --context CONTEXT` when the starting point is a
 session rather than a known registry ref. Telos verifies registry digests
 before materializing packages and skills. `apply` deploys an exact registry
 package without materializing or republishing it. [The Goal lifecycle](lifecycle.md)
-explains how that package digest identifies a revision.
+explains how that package digest identifies a revision. `telos get` retrieves
+the immutable input package; use `telos download SESSION_ID` when you need the
+files from the agent's saved Cloud workspace instead.

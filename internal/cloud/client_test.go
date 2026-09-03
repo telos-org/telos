@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -30,6 +31,85 @@ func TestNormalizeEndpoint(t *testing.T) {
 		if got != tt.expected {
 			t.Errorf("NormalizeEndpoint(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestClientDownloadsSessionWorkspaceArchive(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("method = %q", r.Method)
+		}
+		if r.URL.Path != "/api/deployments/sess_123/workspace/archive" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
+			t.Fatalf("Authorization = %q", got)
+		}
+		if got := r.Header.Get("X-Telos-Org-Id"); got != "org_test" {
+			t.Fatalf("X-Telos-Org-Id = %q", got)
+		}
+		w.Header().Set("Content-Type", "application/gzip")
+		_, _ = io.WriteString(w, "checkpoint ")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		_, _ = io.WriteString(w, "bytes")
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	client.OrgID = "org_test"
+	var archive strings.Builder
+	if err := client.DownloadSessionWorkspaceArchive("sess_123", &archive); err != nil {
+		t.Fatal(err)
+	}
+	if got := archive.String(); got != "checkpoint bytes" {
+		t.Fatalf("archive = %q", got)
+	}
+}
+
+func TestClientWorkspaceArchiveAllowsSlowStreamingBody(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "first ")
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+		}
+		time.Sleep(30 * time.Millisecond)
+		_, _ = io.WriteString(w, "second")
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	client.HTTP.Timeout = time.Millisecond
+	var archive strings.Builder
+	if err := client.DownloadSessionWorkspaceArchive("sess_123", &archive); err != nil {
+		t.Fatal(err)
+	}
+	if got := archive.String(); got != "first second" {
+		t.Fatalf("archive = %q", got)
+	}
+	if got := client.HTTP.Timeout; got != time.Millisecond {
+		t.Fatalf("shared HTTP timeout changed to %s", got)
+	}
+}
+
+func TestClientWorkspaceArchivePreservesAPIError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPaymentRequired)
+		_, _ = io.WriteString(w, `{"detail":"downloading workspaces requires the pro plan"}`)
+	}))
+	defer srv.Close()
+
+	client := NewClient(srv.URL, "test-token")
+	err := client.DownloadSessionWorkspaceArchive("sess_123", io.Discard)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error type = %T", err)
+	}
+	if apiErr.StatusCode != http.StatusPaymentRequired ||
+		apiErr.Detail != "downloading workspaces requires the pro plan" {
+		t.Fatalf("APIError = %+v", apiErr)
 	}
 }
 
