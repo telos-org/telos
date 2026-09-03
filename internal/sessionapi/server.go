@@ -22,6 +22,7 @@ const maxSessionRequestBytes = 4 << 20
 //	GET  /api/sessions/{id}/spec
 //	PUT  /api/sessions/{name}/spec
 //	POST /api/sessions/{id}/stop
+//	GET  /api/sessions/{id}/workspace/archive
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
 //	GET  /api/healthz
@@ -38,6 +39,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("GET /api/sessions/{id}/spec", h.getSpec)
 	mux.HandleFunc("PUT /api/sessions/{name}/spec", h.updateSpec)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
+	mux.HandleFunc("GET /api/sessions/{id}/workspace/archive", h.getWorkspaceArchive)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
 }
@@ -232,6 +234,39 @@ func (h *handler) stopSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, session)
+}
+
+func (h *handler) getWorkspaceArchive(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
+		return
+	}
+	archive, err := h.store.OpenWorkspaceArchive(id)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrInvalidSession):
+			writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrConflict):
+			writeError(w, http.StatusConflict, "workspace archive is not ready")
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	defer archive.Close()
+
+	info, err := archive.Stat()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Disposition", `attachment; filename="telos-workspace.tar.gz"`)
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	http.ServeContent(w, r, "telos-workspace.tar.gz", info.ModTime(), archive)
 }
 
 func (h *handler) getTranscript(w http.ResponseWriter, r *http.Request) {

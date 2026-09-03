@@ -1,6 +1,7 @@
 package sessionapi
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -100,6 +101,43 @@ func TestListRootWorkerSessionsReadsOnlyEligibleManifests(t *testing.T) {
 	}
 	if rootSession.SessionDir == nil || *rootSession.SessionDir != filepath.Join(root, "sess_root") {
 		t.Fatalf("session dir: %#v", rootSession.SessionDir)
+	}
+}
+
+func TestOpenWorkspaceArchiveKeepsCompleteCheckpointDuringReplacement(t *testing.T) {
+	store, session := createCloudStoreSession(t)
+	archivePath := filepath.Join(store.Root, session.SessionID, "specs", "service", "workspace.tar.gz")
+	if err := os.WriteFile(archivePath, []byte("first checkpoint"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	archive, err := store.OpenWorkspaceArchive(session.SessionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer archive.Close()
+
+	nextPath := archivePath + ".partial"
+	if err := os.WriteFile(nextPath, []byte("second checkpoint"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(nextPath, archivePath); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := io.ReadAll(archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "first checkpoint" {
+		t.Fatalf("opened checkpoint changed during replacement: %q", got)
+	}
+	latest, err := os.ReadFile(archivePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(latest) != "second checkpoint" {
+		t.Fatalf("replacement checkpoint = %q", latest)
 	}
 }
 

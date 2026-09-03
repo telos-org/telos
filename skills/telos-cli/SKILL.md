@@ -1,6 +1,6 @@
 ---
 name: telos-cli
-description: Install and use the Telos CLI to apply persistent Goals or run bounded work. Use for Telos setup, SPEC.md authoring, plan/apply/run workflows, Cloud login and context, session inspection, publishing or pulling packages and skills, nested child Goals, and Telos troubleshooting.
+description: Install and use the Telos CLI to apply persistent Goals or run bounded work. Use for Telos setup, SPEC.md authoring, plan/apply/run workflows, Cloud login and context, session inspection and workspace downloads, publishing or pulling packages and skills, nested child Goals, and Telos troubleshooting.
 metadata:
   registry: "@telos/telos-cli"
   public_guide: "references/use-telos.md"
@@ -82,6 +82,18 @@ runtime.
    telos logs SESSION_ID --context CONTEXT
    ```
 
+Managers of a Pro Cloud workspace can download its latest completely saved
+agent workspace from deployments provisioned with runtime `v0.1.6` or newer,
+without loading the archive into CLI memory:
+
+```bash
+telos download SESSION_ID
+```
+
+This uses the active Cloud context and writes
+`telos-workspace-SESSION_ID.tar.gz` in the current directory. Use `--context`
+only when you need to select a different Cloud workspace.
+
 5. Verify the live behavior promised by the spec. Submission, a running
    process, and old green evidence are not completion of the current revision.
 
@@ -135,7 +147,7 @@ Inside a Telos session, the same command creates a linked child session; see
 | Effect | Commands |
 | --- | --- |
 | Inspect state | `plan`, `list`, `describe`, `logs` |
-| Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context`, `config --model` |
+| Materialize files or change local configuration | `get`, `pull`, `download`, `login`, `logout`, `config --context`, `config --model` |
 | Start bounded local execution; may spend money | `run` |
 | Publish or change remote state; `apply` may spend money | `apply`, `push`, `delete` |
 

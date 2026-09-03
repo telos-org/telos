@@ -615,6 +615,64 @@ func (c *Client) GetSession(sessionID string) (*SessionRecord, error) {
 	return &response, nil
 }
 
+// DownloadSessionWorkspaceArchive streams the latest completely saved
+// workspace checkpoint to dst without holding the archive in memory.
+func (c *Client) DownloadSessionWorkspaceArchive(sessionID string, dst io.Writer) error {
+	sessionID = strings.TrimSpace(sessionID)
+	if sessionID == "" {
+		return fmt.Errorf("session ID is required")
+	}
+	if dst == nil {
+		return fmt.Errorf("workspace archive destination is required")
+	}
+	streamHTTP, closeIdleConnections := c.httpClientForStreaming()
+	defer closeIdleConnections()
+	streamClient := *c
+	streamClient.HTTP = streamHTTP
+	resp, err := streamClient.do(
+		"GET",
+		"/api/deployments/"+url.PathEscape(sessionID)+"/workspace/archive",
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return readError(resp)
+	}
+	if _, err := io.Copy(dst, resp.Body); err != nil {
+		return fmt.Errorf("read workspace archive: %w", err)
+	}
+	return nil
+}
+
+// httpClientForStreaming keeps connection and response-header timeouts while
+// removing the total request timeout, which otherwise also limits body reads.
+func (c *Client) httpClientForStreaming() (*http.Client, func()) {
+	base := c.HTTP
+	if base == nil {
+		base = http.DefaultClient
+	}
+	client := *base
+	client.Timeout = 0
+
+	transport := client.Transport
+	if transport == nil {
+		transport = http.DefaultTransport
+	}
+	baseTransport, ok := transport.(*http.Transport)
+	if !ok {
+		return &client, func() {}
+	}
+	streamTransport := baseTransport.Clone()
+	if streamTransport.ResponseHeaderTimeout == 0 {
+		streamTransport.ResponseHeaderTimeout = DefaultTimeout
+	}
+	client.Transport = streamTransport
+	return &client, streamTransport.CloseIdleConnections
+}
+
 func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {
 	resp, err := c.do("DELETE", "/api/deployments/"+url.PathEscape(sessionID), nil)
 	if err != nil {
