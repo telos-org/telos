@@ -75,6 +75,9 @@ func TestControlClientResolvesHandleContext(t *testing.T) {
 	if client.OrgID != "org_telos" {
 		t.Fatalf("OrgID = %q", client.OrgID)
 	}
+	if client.ContextName() != "@telos" {
+		t.Fatalf("ContextName = %q, want @telos", client.ContextName())
+	}
 }
 
 func TestControlClientContextOverrideWinsOverEnvironment(t *testing.T) {
@@ -101,6 +104,9 @@ func TestControlClientContextOverrideWinsOverEnvironment(t *testing.T) {
 	if client.OrgID != "org_flag" {
 		t.Fatalf("OrgID = %q, want org_flag", client.OrgID)
 	}
+	if client.ContextName() != "@flag" {
+		t.Fatalf("ContextName = %q, want @flag", client.ContextName())
+	}
 }
 
 func TestControlClientPersonalOverrideWinsOverEnvironment(t *testing.T) {
@@ -115,6 +121,41 @@ func TestControlClientPersonalOverrideWinsOverEnvironment(t *testing.T) {
 	}
 	if client.OrgID != "" {
 		t.Fatalf("OrgID = %q, want personal scope", client.OrgID)
+	}
+	if client.ContextName() != "personal" {
+		t.Fatalf("ContextName = %q, want personal", client.ContextName())
+	}
+}
+
+func TestControlClientCanonicalizesPersonalOrganizationContext(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"personal_org_id":"org_personal",
+			"organizations":[
+				{"id":"org_personal","handle":"grohan","display_name":"Rohan","kind":"personal","role":"owner"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	t.Setenv(config.APIEndpointEnv, srv.URL)
+	t.Setenv(config.AuthTokenEnv, "test-token")
+	t.Setenv(config.ContextEnv, "")
+
+	for _, context := range []string{"@grohan", "org_personal"} {
+		t.Run(context, func(t *testing.T) {
+			client, err := ControlClientForContext(context)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client.OrgID != "org_personal" {
+				t.Fatalf("OrgID = %q, want org_personal", client.OrgID)
+			}
+			if client.ContextName() != "personal" {
+				t.Fatalf("ContextName = %q, want personal", client.ContextName())
+			}
+		})
 	}
 }
 
@@ -144,15 +185,31 @@ func TestControlClientCachesHandleResolution(t *testing.T) {
 		if client.OrgID != "org_telos" {
 			t.Fatalf("OrgID = %q", client.OrgID)
 		}
+		if client.ContextName() != "@telos" {
+			t.Fatalf("ContextName = %q, want @telos", client.ContextName())
+		}
 	}
 	if bootstraps != 1 {
 		t.Fatalf("bootstrap requests = %d, want 1", bootstraps)
 	}
 }
 
-func TestControlClientUsesStableContextWithoutLookup(t *testing.T) {
+func TestControlClientResolvesStableContextName(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/account/bootstrap" {
+			t.Fatalf("path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{
+			"personal_org_id":"org_personal",
+			"organizations":[
+				{"id":"org_telos","handle":"telos","display_name":"Telos","kind":"platform","role":"owner"}
+			]
+		}`))
+	}))
+	defer srv.Close()
+
 	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
-	t.Setenv(config.APIEndpointEnv, "https://api.example.com")
+	t.Setenv(config.APIEndpointEnv, srv.URL)
 	t.Setenv(config.AuthTokenEnv, "test-token")
 	t.Setenv(config.ContextEnv, "org_telos")
 
@@ -162,6 +219,9 @@ func TestControlClientUsesStableContextWithoutLookup(t *testing.T) {
 	}
 	if client.OrgID != "org_telos" {
 		t.Fatalf("OrgID = %q", client.OrgID)
+	}
+	if client.ContextName() != "@telos" {
+		t.Fatalf("ContextName = %q, want @telos", client.ContextName())
 	}
 }
 

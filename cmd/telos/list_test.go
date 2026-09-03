@@ -220,8 +220,8 @@ func TestCmdListContextFlagOverridesEnvironment(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &body); err != nil {
 		t.Fatal(err)
 	}
-	if body["context"] != "org_flag" {
-		t.Fatalf("context = %#v, want org_flag", body["context"])
+	if body["context"] != "@flag" {
+		t.Fatalf("context = %#v, want @flag", body["context"])
 	}
 }
 

@@ -102,7 +102,7 @@ func getCloudSessionForContext(
 	if err != nil {
 		return nil, "", err
 	}
-	return session, resolvedCloudContext(control), nil
+	return session, control.ContextName(), nil
 }
 
 func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {

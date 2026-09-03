@@ -98,10 +98,9 @@ func setContext(stored *config.Config, value string) {
 		os.Exit(1)
 	}
 
-	contextName := organization.ContextName()
+	contextName := account.CanonicalContextName(organization)
 	if organization.ID == account.PersonalOrgID {
 		stored.Context = ""
-		contextName = "personal"
 	} else {
 		stored.Context = contextName
 	}
@@ -149,10 +148,8 @@ func printConfig(cfg *config.Config, path string) {
 				organization, err := account.ResolveContext(cfg.Context)
 				if err != nil {
 					statusError = err
-				} else if organization.ID == account.PersonalOrgID {
-					contextName = "personal"
 				} else {
-					contextName = organization.ContextName()
+					contextName = account.CanonicalContextName(organization)
 				}
 				if statusError == nil {
 					client.OrgID = organization.ID
