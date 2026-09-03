@@ -4,8 +4,6 @@ import (
 	"flag"
 	"fmt"
 	"strings"
-
-	"github.com/telos-org/telos/internal/cloud"
 )
 
 func cloudContextFlag(fs *flag.FlagSet) *string {
@@ -14,13 +12,6 @@ func cloudContextFlag(fs *flag.FlagSet) *string {
 		"",
 		"Cloud context for this command as @handle, organization ID, or personal",
 	)
-}
-
-func resolvedCloudContext(client *cloud.Client) string {
-	if context := strings.TrimSpace(client.OrgID); context != "" {
-		return context
-	}
-	return "personal"
 }
 
 func cloudContextOverride(fs *flag.FlagSet, value string) (string, error) {

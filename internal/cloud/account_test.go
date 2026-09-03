@@ -76,3 +76,38 @@ func TestResolveContext(t *testing.T) {
 		})
 	}
 }
+
+func TestCanonicalContextName(t *testing.T) {
+	personalHandle := "grohan"
+	teamHandle := "telos"
+	account := AccountBootstrapRecord{PersonalOrgID: "org_personal"}
+
+	tests := []struct {
+		name         string
+		organization OrganizationRecord
+		want         string
+	}{
+		{
+			name:         "personal",
+			organization: OrganizationRecord{ID: "org_personal", Handle: &personalHandle},
+			want:         "personal",
+		},
+		{
+			name:         "team handle",
+			organization: OrganizationRecord{ID: "org_telos", Handle: &teamHandle},
+			want:         "@telos",
+		},
+		{
+			name:         "team id",
+			organization: OrganizationRecord{ID: "org_legacy"},
+			want:         "org_legacy",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := account.CanonicalContextName(&tt.organization); got != tt.want {
+				t.Fatalf("CanonicalContextName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

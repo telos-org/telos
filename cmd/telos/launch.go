@@ -470,7 +470,7 @@ func applyCloudControl(
 	}
 	if jsonOut {
 		printJSON(map[string]any{
-			"context":   resolvedCloudContext(control),
+			"context":   control.ContextName(),
 			"operation": operation,
 			"package":   packageRecord,
 			"session":   session,
@@ -481,7 +481,7 @@ func applyCloudControl(
 		os.Stdout,
 		operation,
 		session,
-		resolvedCloudContext(control),
+		control.ContextName(),
 	)
 }
 

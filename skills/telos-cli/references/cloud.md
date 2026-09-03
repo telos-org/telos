@@ -31,6 +31,10 @@ telos config --context @team-handle
 telos list --context @team-handle
 ```
 
+Commands also accept a stable organization ID when you have one. Receipts and
+JSON output still show `personal` or the team's `@handle`, keeping the visible
+context consistent across commands.
+
 `telos config --context personal` returns to the personal context. A
 command-level `--context` overrides `TELOS_CONTEXT` and stored configuration
 for that invocation without changing either. Carry the chosen context through

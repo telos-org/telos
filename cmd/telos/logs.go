@@ -142,7 +142,7 @@ func printCloudSessionLogs(
 		if err := printJSONLogEventsForContext(
 			os.Stdout,
 			selectLogEvents(page.Events, options),
-			resolvedCloudContext(control),
+			control.ContextName(),
 		); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)

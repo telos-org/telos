@@ -213,7 +213,7 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 	cloudSessions = limitCloudSessions(cloudSessions, limit)
 	if jsonOut {
 		printJSON(map[string]any{
-			"context":  resolvedCloudContext(control),
+			"context":  control.ContextName(),
 			"sessions": cloudSessions,
 		})
 		return
@@ -223,7 +223,7 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 		return
 	}
 	if wide {
-		printSummaryField(os.Stdout, "Context", resolvedCloudContext(control))
+		printSummaryField(os.Stdout, "Context", control.ContextName())
 		fmt.Println()
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
