@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -632,15 +633,19 @@ func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {
 }
 
 func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, error) {
-	page, err := c.GetSessionLogPage(sessionID)
+	page, err := c.GetSessionLogPage(sessionID, 0)
 	if err != nil {
 		return nil, err
 	}
 	return page.Events, nil
 }
 
-func (c *Client) GetSessionLogPage(sessionID string) (*SessionLogPage, error) {
-	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(sessionID)+"/logs", nil)
+func (c *Client) GetSessionLogPage(sessionID string, tail int) (*SessionLogPage, error) {
+	path := "/api/deployments/" + url.PathEscape(sessionID) + "/logs"
+	if tail > 0 {
+		path += "?tail=" + strconv.Itoa(tail)
+	}
+	resp, err := c.do("GET", path, nil)
 	if err != nil {
 		return nil, err
 	}
