@@ -238,7 +238,7 @@ type packageFile struct {
 }
 
 // Package skills are relocated; keep the root spec's imports portable too.
-func portablePackageSpec(data []byte, refs []string, locks map[string]ApplyPackageSkillLock) ([]byte, error) {
+func portablePackageSpec(data []byte, refs []string, locks map[string]ApplyPackageSkillLock, compiled *CompiledEnvironment) ([]byte, error) {
 	if len(refs) == 0 {
 		return data, nil
 	}
@@ -253,9 +253,15 @@ func portablePackageSpec(data []byte, refs []string, locks map[string]ApplyPacka
 	if header == nil {
 		return nil, fmt.Errorf("package root spec frontmatter must be a mapping")
 	}
-	portable := true
-	for _, ref := range rawSkillValues(header["skills"]) {
-		if !packageSkillRefPortable(ref, locks) {
+	namesByPath := make(map[string]string, len(compiled.Skills))
+	for _, skill := range compiled.Skills {
+		namesByPath[skill.Path] = skill.Name
+	}
+	imports := rawSkillValues(header["skills"])
+	paths := compiled.Environment.SkillPaths
+	portable := len(imports) == len(paths)
+	for i, ref := range imports {
+		if !portable || !packageSkillRefPortable(ref, namesByPath[paths[i]], locks) {
 			portable = false
 			break
 		}
@@ -274,17 +280,17 @@ func portablePackageSpec(data []byte, refs []string, locks map[string]ApplyPacka
 	return append(out, data[match[3]:]...), nil
 }
 
-func packageSkillRefPortable(raw string, locks map[string]ApplyPackageSkillLock) bool {
+func packageSkillRefPortable(raw, resolvedName string, locks map[string]ApplyPackageSkillLock) bool {
 	raw = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(raw), "*"))
 	if ref, ok := ParseRegistrySkillRef(raw); ok {
 		lock, exists := locks[ref.Name]
-		return exists && ref.Ref == lock.Ref
+		return exists && ref.Name == resolvedName && ref.Ref == lock.Ref
 	}
 	for _, candidate := range skillPathCandidates(raw) {
 		path := filepath.Clean(candidate)
 		name := strings.TrimPrefix(path, "skills"+string(filepath.Separator))
 		if _, ok := locks[name]; ok {
-			return true
+			return name == resolvedName
 		}
 	}
 	return false
@@ -360,7 +366,7 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 		}
 		refs = append(refs, ref)
 	}
-	specData, err = portablePackageSpec(specData, refs, skillLocks)
+	specData, err = portablePackageSpec(specData, refs, skillLocks, compiled)
 	if err != nil {
 		return nil, err
 	}

@@ -174,7 +174,7 @@ func TestApplyPackageAlreadyPortableSourceRemainsIdentical(t *testing.T) {
 
 func TestApplyPackageRelocatesAuthoredSkillPaths(t *testing.T) {
 	for _, registry := range []bool{false, true} {
-		for _, layout := range []string{"rubrics", "absolute", "different-name"} {
+		for _, layout := range []string{"rubrics", "absolute", "different-name", "name-collision", "name-collision-base", "name-collision-duplicate"} {
 			name := layout + "/embedded"
 			if registry {
 				name = layout + "/registry"
@@ -183,12 +183,22 @@ func TestApplyPackageRelocatesAuthoredSkillPaths(t *testing.T) {
 				source := t.TempDir()
 				skillDir := filepath.Join(source, "rubrics", "alpha")
 				ref := "./rubrics/alpha*"
+				implementationDir := "beta"
+				implementationRef := "beta"
 				switch layout {
 				case "absolute":
 					ref = skillDir + "*"
 				case "different-name":
 					skillDir = filepath.Join(source, "rubrics", "review")
 					ref = "./rubrics/review*"
+				case "name-collision", "name-collision-base", "name-collision-duplicate":
+					skillDir = filepath.Join(source, "beta")
+					ref = "beta*"
+					implementationDir = "alpha"
+					implementationRef = "alpha"
+					if layout == "name-collision-duplicate" {
+						implementationRef += ", beta"
+					}
 				}
 				if err := os.MkdirAll(skillDir, 0o755); err != nil {
 					t.Fatal(err)
@@ -204,18 +214,24 @@ func TestApplyPackageRelocatesAuthoredSkillPaths(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(skillDir, "references", "checks.md"), checks, 0o644); err != nil {
 					t.Fatal(err)
 				}
-				writePackageTestSkill(t, source, "beta", map[string]string{
+				writePackageTestSkill(t, source, implementationDir, map[string]string{
 					"SKILL.md": "---\nname: beta\ndescription: Implement the product.\n---\nBuild the service.\n",
 				})
 				body := "# Goal\n\nKeep every requirement and all rubric stars.\n"
-				original := []byte("---\nname: portable-package\nversion: 1.0.0\nplatform: cloud\nskills: [\"" + ref + "\", beta]\n---\n\n" + body)
+				original := []byte("---\nname: portable-package\nversion: 1.0.0\nplatform: cloud\nskills: [\"" + ref + "\", " + implementationRef + "]\n---\n\n" + body)
 				path := filepath.Join(source, "SPEC.md")
+				if layout == "name-collision-base" {
+					path = filepath.Join(t.TempDir(), "SPEC.md")
+				}
 				if err := os.WriteFile(path, original, 0o644); err != nil {
 					t.Fatal(err)
 				}
-				compiled, err := CompileEnvironment(path)
+				compiled, err := CompileEnvironmentWithBase(path, source)
 				if err != nil {
 					t.Fatal(err)
+				}
+				if len(compiled.RequiredVerifierSkills) != 1 || compiled.RequiredVerifierSkills[0].Name != "alpha" {
+					t.Fatal("source did not bind alpha as the required rubric")
 				}
 				var refs map[string]string
 				if registry {
