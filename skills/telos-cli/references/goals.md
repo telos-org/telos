@@ -44,12 +44,17 @@ For example:
 
 ```yaml
 skills:
-  - path/to/local-skill
+  - ./skills/product
   - "@scope/readiness:1.0.0*"
 interval: 6h
 tags:
   - production
 ```
+
+Use local directories containing `SKILL.md` or exact registry refs. The `*`
+marks a required acceptance rubric; directory names have no rubric semantics.
+See [Packages and skills](packages-and-skills.md) for the skill format and
+how local references are packaged.
 
 The body is Markdown, not a fixed form schema. `# Goal` and `# Acceptance` are
 useful conventions rather than specially parsed fields. Add sections for

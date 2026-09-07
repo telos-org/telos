@@ -5,13 +5,314 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
 )
+
+func TestApplyPackagePreservesYamlAliases(t *testing.T) {
+	dir := t.TempDir()
+	writePackageTestSkill(t, dir, "alpha", map[string]string{"SKILL.md": "---\nname: alpha\ndescription: Review service.\n---\nReview.\n"})
+	path := filepath.Join(dir, "SPEC.md")
+	data := []byte("---\nname: alias-spec\nversion: 1.0.0\nplatform: cloud\nskills: &selected [alpha]\ntags: *selected\n---\nBuild the service.\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := CompileEnvironment(path)
+	if err != nil {
+		t.Fatalf("source: %v", err)
+	}
+	pkg, err := BuildApplyPackage(compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dest := t.TempDir()
+	if _, err := ExtractApplyPackage(pkg.Bytes, dest); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(tarEntries(t, pkg.Bytes)["SPEC.md"], data) {
+		t.Fatal("changed already-portable aliased source")
+	}
+	if _, err := CompileEnvironment(filepath.Join(dest, "SPEC.md")); err != nil {
+		t.Fatalf("packaged: %v", err)
+	}
+}
+
+func TestApplyPackageRelocationPreservesAliasedMetadata(t *testing.T) {
+	for _, registry := range []bool{false, true} {
+		for name, fields := range map[string]string{
+			"sequence": "skills: &selected [\"./rubrics/alpha*\"]\ntags: *selected\n",
+			"scalar":   "skills: &selected \"./rubrics/alpha*\"\ntags: [*selected]\n",
+			"import":   "tags: &selected [\"./rubrics/alpha*\"]\nskills: *selected\n",
+			"merge":    "defaults: &defaults {skills: [\"./rubrics/alpha*\"], tags: [review]}\n<<: *defaults\n",
+		} {
+			t.Run(fmt.Sprintf("registry=%t/%s", registry, name), func(t *testing.T) {
+				dir := t.TempDir()
+				writePackageTestSkill(t, filepath.Join(dir, "rubrics"), "alpha", map[string]string{
+					"SKILL.md": "---\nname: alpha\ndescription: Review service.\n---\nReview.\n",
+				})
+				path := filepath.Join(dir, "SPEC.md")
+				body := "Build the service.\n"
+				if err := os.WriteFile(path, []byte("---\nname: aliased-metadata\nversion: 1.0.0\nplatform: cloud\n"+fields+"---\n"+body), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				compiled, err := CompileEnvironment(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var refs map[string]string
+				if registry {
+					refs = map[string]string{"alpha": "@example/alpha:1.0.0"}
+				}
+				pkg, err := BuildApplyPackageWithSkillRefs(compiled, refs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data := pkg.Bytes
+				if registry {
+					_, bundle, err := BuildSkillBundle(compiled.Skills[0])
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, _, err = HydrateApplyPackage(data, func(ApplyPackageSkillFetchRequest) ([]byte, error) { return bundle, nil })
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				dest := t.TempDir()
+				if _, err := ExtractApplyPackage(data, dest); err != nil {
+					t.Fatal(err)
+				}
+				relocated, err := CompileEnvironment(filepath.Join(dest, "SPEC.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !slices.Equal(relocated.Environment.Tags, compiled.Environment.Tags) {
+					t.Fatal("changed aliased metadata")
+				}
+				if len(relocated.RequiredVerifierSkills) != 1 || relocated.RequiredVerifierSkills[0].Name != "alpha" {
+					t.Fatal("lost required rubric")
+				}
+				if !bytes.HasSuffix(tarEntries(t, pkg.Bytes)["SPEC.md"], []byte("---\n"+body)) {
+					t.Fatal("changed body")
+				}
+			})
+		}
+	}
+}
+
+func TestApplyPackageNoopKeepsDigest(t *testing.T) {
+	for _, registry := range []bool{false, true} {
+		for _, ref := range []string{"@example/alpha:1.0.0*", "./skills/alpha*", "skills/alpha*", "alpha*", "./alpha*", "skill:alpha*"} {
+			t.Run(fmt.Sprintf("registry=%t/%s", registry, ref), func(t *testing.T) {
+				dir := t.TempDir()
+				skillDir := writePackageTestSkill(t, filepath.Join(dir, "skills"), "alpha", map[string]string{"SKILL.md": "---\nname: alpha\ndescription: Review service.\n---\nReview.\n"})
+				skill, err := LoadSkill(skillDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				skillDigest, _, err := BuildSkillBundle(skill)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data := []byte("---\nname: registry-noop\nversion: 1.0.0\nplatform: cloud\nskills:\n  - \"" + ref + "\"\n---\nBuild the service.\n")
+				manifest := ApplyPackageManifest{SchemaVersion: ApplyPackageSchemaVersionExactRefs, Spec: ApplyPackageSpecEntry{Digest: digestBytes(data)}, Skills: map[string]ApplyPackageSkillLock{"alpha": {Digest: skillDigest, Ref: "@example/alpha:1.0.0", Starred: true}}}
+				var refs map[string]string
+				if registry {
+					refs = map[string]string{"alpha": "@example/alpha:1.0.0"}
+				} else {
+					manifest.SchemaVersion = ApplyPackageSchemaVersionStarred
+					manifest.Skills["alpha"] = ApplyPackageSkillLock{Digest: skillDigest, Ref: "path:skills/alpha", Starred: true}
+				}
+				manifestData, err := json.Marshal(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifestData, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dir, "SPEC.md")
+				if err := os.WriteFile(path, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				compiled, err := CompileEnvironment(path)
+				if err != nil {
+					t.Fatalf("source: %v", err)
+				}
+				pkg, err := BuildApplyPackageWithSkillRefs(compiled, refs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if pkg.Manifest.Skills["alpha"] != manifest.Skills["alpha"] {
+					t.Fatal("skill lock changed")
+				}
+				if want := ApplyPackageDigest(&manifest); pkg.Digest != want {
+					t.Fatalf("unchanged source and locks changed digest from %s to %s", want, pkg.Digest)
+				}
+			})
+		}
+	}
+}
+
+func TestApplyPackageAlreadyPortableSourceRemainsIdentical(t *testing.T) {
+	dir := t.TempDir()
+	writePackageTestSkill(t, filepath.Join(dir, "skills"), "alpha", map[string]string{"SKILL.md": "---\nname: alpha\ndescription: Review service.\n---\nReview.\n"})
+	path := filepath.Join(dir, "SPEC.md")
+	data := []byte("---\nname: existing-service\nversion: 1.0.0\nplatform: cloud\nskills:\n  - ./skills/alpha\n---\nBuild the service.\n")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := CompileEnvironment(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := BuildApplyPackage(compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := tarEntries(t, pkg.Bytes)["SPEC.md"]
+	if !bytes.Equal(root, data) {
+		t.Fatalf("changed already-portable source:\n%s", root)
+	}
+}
+
+func TestApplyPackageRelocatesAuthoredSkillPaths(t *testing.T) {
+	for _, registry := range []bool{false, true} {
+		for _, layout := range []string{"rubrics", "absolute", "different-name", "name-collision", "name-collision-base", "name-collision-duplicate"} {
+			name := layout + "/embedded"
+			if registry {
+				name = layout + "/registry"
+			}
+			t.Run(name, func(t *testing.T) {
+				source := t.TempDir()
+				skillDir := filepath.Join(source, "rubrics", "alpha")
+				ref := "./rubrics/alpha*"
+				implementationDir := "beta"
+				implementationRef := "beta"
+				switch layout {
+				case "absolute":
+					ref = skillDir + "*"
+				case "different-name":
+					skillDir = filepath.Join(source, "rubrics", "review")
+					ref = "./rubrics/review*"
+				case "name-collision", "name-collision-base", "name-collision-duplicate":
+					skillDir = filepath.Join(source, "beta")
+					ref = "beta*"
+					implementationDir = "alpha"
+					implementationRef = "alpha"
+					if layout == "name-collision-duplicate" {
+						implementationRef += ", beta"
+					}
+				}
+				if err := os.MkdirAll(skillDir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+				skillData := []byte("---\nname: alpha\ndescription: Review acceptance requirements.\n---\nRead [checks](references/checks.md).\n")
+				if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), skillData, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.MkdirAll(filepath.Join(skillDir, "references"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				checks := []byte("Verify saved records survive a restart.\n")
+				if err := os.WriteFile(filepath.Join(skillDir, "references", "checks.md"), checks, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				writePackageTestSkill(t, source, implementationDir, map[string]string{
+					"SKILL.md": "---\nname: beta\ndescription: Implement the product.\n---\nBuild the service.\n",
+				})
+				body := "# Goal\n\nKeep every requirement and all rubric stars.\n"
+				original := []byte("---\nname: portable-package\nversion: 1.0.0\nplatform: cloud\nskills: [\"" + ref + "\", " + implementationRef + "]\n---\n\n" + body)
+				path := filepath.Join(source, "SPEC.md")
+				if layout == "name-collision-base" {
+					path = filepath.Join(t.TempDir(), "SPEC.md")
+				}
+				if err := os.WriteFile(path, original, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				compiled, err := CompileEnvironmentWithBase(path, source)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(compiled.RequiredVerifierSkills) != 1 || compiled.RequiredVerifierSkills[0].Name != "alpha" {
+					t.Fatal("source did not bind alpha as the required rubric")
+				}
+				var refs map[string]string
+				if registry {
+					refs = map[string]string{"alpha": "@example/alpha:1.0.0", "beta": "@example/beta:1.0.0"}
+				}
+				pkg, err := BuildApplyPackageWithSkillRefs(compiled, refs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !pkg.Manifest.Skills["alpha"].Starred {
+					t.Fatal("lost required rubric lock")
+				}
+				if pkg.Manifest.Skills["beta"].Starred {
+					t.Fatal("made an implementation skill a required rubric")
+				}
+				if !bytes.HasSuffix(tarEntries(t, pkg.Bytes)["SPEC.md"], []byte("---\n\n"+body)) {
+					t.Fatal("changed spec body")
+				}
+				unchanged, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !bytes.Equal(original, unchanged) {
+					t.Fatal("modified authored spec")
+				}
+				data := pkg.Bytes
+				if registry {
+					bundles := map[string][]byte{}
+					for _, skill := range compiled.Skills {
+						_, bundle, err := BuildSkillBundle(skill)
+						if err != nil {
+							t.Fatal(err)
+						}
+						bundles[skill.Name] = bundle
+					}
+					data, _, err = HydrateApplyPackage(data, func(req ApplyPackageSkillFetchRequest) ([]byte, error) {
+						if req.Ref != refs[req.Name] {
+							t.Fatalf("unexpected ref: %s", req.Ref)
+						}
+						return bundles[req.Name], nil
+					})
+					if err != nil {
+						t.Fatal(err)
+					}
+				}
+				dest := t.TempDir()
+				if _, err := ExtractApplyPackage(data, dest); err != nil {
+					t.Fatal(err)
+				}
+				relocated, err := CompileEnvironment(filepath.Join(dest, "SPEC.md"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(relocated.Skills) != 2 || relocated.Skills[0].Path != filepath.Join(dest, "skills", "alpha") || relocated.Skills[1].Path != filepath.Join(dest, "skills", "beta") {
+					t.Fatal("skill did not resolve within extracted package")
+				}
+				if len(relocated.RequiredVerifierSkills) != 1 || relocated.RequiredVerifierSkills[0].Name != "alpha" {
+					t.Fatal("lost required rubric after relocation")
+				}
+				for relative, want := range map[string][]byte{"SKILL.md": skillData, "references/checks.md": checks} {
+					got, err := os.ReadFile(filepath.Join(dest, "skills", "alpha", relative))
+					if err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(got, want) {
+						t.Fatalf("changed skill file %s", relative)
+					}
+				}
+			})
+		}
+	}
+}
 
 func TestBuildApplyPackageIsDeterministic(t *testing.T) {
 	dir := t.TempDir()

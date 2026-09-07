@@ -713,7 +713,7 @@ func TestClientSessionLogPagePreservesRawEvents(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	page, err := NewClient(srv.URL, "test-token").GetSessionLogPage("sess_123")
+	page, err := NewClient(srv.URL, "test-token").GetSessionLogPage("sess_123", 0)
 	if err != nil {
 		t.Fatalf("GetSessionLogPage: %v", err)
 	}
@@ -734,6 +734,21 @@ func TestClientSessionLogPagePreservesRawEvents(t *testing.T) {
 		if !strings.Contains(raw, field) {
 			t.Fatalf("raw event dropped %s: %s", field, raw)
 		}
+	}
+}
+
+func TestClientSessionLogPageRequestsTail(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/deployments/sess_123/logs" || r.URL.Query().Get("tail") != "50" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(`{"events":[]}`))
+	}))
+	defer srv.Close()
+
+	if _, err := NewClient(srv.URL, "test-token").GetSessionLogPage("sess_123", 50); err != nil {
+		t.Fatalf("GetSessionLogPage: %v", err)
 	}
 }
 

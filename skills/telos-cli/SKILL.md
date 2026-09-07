@@ -53,6 +53,12 @@ context, scope, package version, or destructive target.
 
 ## Apply a persistent Goal
 
+Before drafting a spec, read [Write a SPEC.md](references/goals.md). When
+authoring or importing skills and rubrics, also read
+[Packages and skills](references/packages-and-skills.md). Prefer
+`skills/<name>/SKILL.md` for new local skills; a trailing `*` on the spec's
+skill reference, not a directory name, makes its rubric required.
+
 Before authoring a Cloud Goal, read [Telos Cloud](references/cloud.md) and
 confirm that its delivery, storage, and external-service needs fit the managed
 runtime.

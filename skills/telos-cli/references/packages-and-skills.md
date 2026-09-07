@@ -16,10 +16,50 @@ verified later.
 | Digest | The content identity of the exact bytes used by a revision. |
 | Rubric | A skill that an independent verifier must use when deciding whether the revision passes. |
 
+## Author local skills
+
+`SPEC.md` defines your Goal and imports skills. Each skill is a directory with
+its own `SKILL.md`, following the [Agent Skills format](https://agentskills.io/specification).
+Use `skills/<name>/SKILL.md` as the convention for new local skills. For example,
+`skills/readiness/SKILL.md` can contain:
+
+```markdown
+---
+name: readiness
+description: Verify the service's public behavior and persistence before acceptance.
+---
+
+Check the public endpoint and confirm saved records survive a restart.
+```
+
+Keep supporting files inside the skill directory and reference them relative
+to that directory, such as `references/checks.md`. The skill's `name` must
+match its directory name.
+
+Import local skills from your `SPEC.md`:
+
+```yaml
+skills:
+  - ./skills/product
+  - "./skills/readiness*"
+```
+
+Paths resolve relative to `SPEC.md`. Other directory layouts are supported;
+the trailing `*`, not a folder named `rubrics`, makes passing a rubric required.
+The `skills:` imports and `*` marker belong to Telos's spec contract, not the
+Agent Skills format.
+
+When local imports need relocation, Telos rewrites the bundled spec's imports
+to exact skill refs for registry packages or `./skills/<name>` for embedded
+packages. Required-rubric markers and other frontmatter values are preserved,
+including values shared through YAML aliases. Already-portable specs keep
+their original bytes so republishing unchanged inputs retains their digest.
+Your authored files and the contents of each skill remain unchanged. You do
+not need to rearrange your source directories to match the package layout.
+
 ## Publish
 
-Resolve the intended scope, name, and immutable version, present them to the
-user, and obtain approval before publishing.
+Choose the intended scope, name, and immutable version before publishing.
 
 Publish a spec package:
 

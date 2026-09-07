@@ -16,6 +16,8 @@ import (
 
 // -- logs ---------------------------------------------------------------------
 
+const maxCloudLogTail = 1000
+
 func cmdLogs(args []string) {
 	fs := newCommandFlagSet("logs", "telos logs SESSION [flags]")
 	jsonOutput := fs.Bool("json", false, "Print newline-delimited JSON events")
@@ -126,7 +128,11 @@ func printCloudSessionLogs(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	page, err := control.GetSessionLogPage(session.ID)
+	tail := options.Tail
+	if raw || options.All || tail > maxCloudLogTail {
+		tail = 0
+	}
+	page, err := control.GetSessionLogPage(session.ID, tail)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
