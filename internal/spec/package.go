@@ -254,6 +254,10 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 	if err != nil {
 		return nil, fmt.Errorf("read root spec: %w", err)
 	}
+	specData, err = portablePackageSpec(specData, compiled, skillRefs)
+	if err != nil {
+		return nil, err
+	}
 	specEntry := ApplyPackageSpecEntry{
 		Digest: digestBytes(specData),
 	}
