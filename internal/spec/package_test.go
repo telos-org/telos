@@ -106,47 +106,56 @@ func TestApplyPackageRelocationPreservesAliasedMetadata(t *testing.T) {
 	}
 }
 
-func TestApplyPackageRegistryNoopKeepsDigest(t *testing.T) {
-	for _, ref := range []string{"@example/alpha:1.0.0*", "./skills/alpha*", "skills/alpha*", "alpha*", "./alpha*", "skill:alpha*"} {
-		t.Run(ref, func(t *testing.T) {
-			dir := t.TempDir()
-			skillDir := writePackageTestSkill(t, filepath.Join(dir, "skills"), "alpha", map[string]string{"SKILL.md": "---\nname: alpha\ndescription: Review service.\n---\nReview.\n"})
-			skill, err := LoadSkill(skillDir)
-			if err != nil {
-				t.Fatal(err)
-			}
-			skillDigest, _, err := BuildSkillBundle(skill)
-			if err != nil {
-				t.Fatal(err)
-			}
-			data := []byte("---\nname: registry-noop\nversion: 1.0.0\nplatform: cloud\nskills:\n  - \"" + ref + "\"\n---\nBuild the service.\n")
-			manifest := ApplyPackageManifest{SchemaVersion: ApplyPackageSchemaVersionExactRefs, Spec: ApplyPackageSpecEntry{Digest: digestBytes(data)}, Skills: map[string]ApplyPackageSkillLock{"alpha": {Digest: skillDigest, Ref: "@example/alpha:1.0.0", Starred: true}}}
-			manifestData, err := json.Marshal(manifest)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifestData, 0o644); err != nil {
-				t.Fatal(err)
-			}
-			path := filepath.Join(dir, "SPEC.md")
-			if err := os.WriteFile(path, data, 0o644); err != nil {
-				t.Fatal(err)
-			}
-			compiled, err := CompileEnvironment(path)
-			if err != nil {
-				t.Fatalf("source: %v", err)
-			}
-			pkg, err := BuildApplyPackageWithSkillRefs(compiled, map[string]string{"alpha": "@example/alpha:1.0.0"})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if pkg.Manifest.Skills["alpha"] != manifest.Skills["alpha"] {
-				t.Fatal("skill lock changed")
-			}
-			if want := ApplyPackageDigest(&manifest); pkg.Digest != want {
-				t.Fatalf("unchanged registry source and locks changed digest from %s to %s", want, pkg.Digest)
-			}
-		})
+func TestApplyPackageNoopKeepsDigest(t *testing.T) {
+	for _, registry := range []bool{false, true} {
+		for _, ref := range []string{"@example/alpha:1.0.0*", "./skills/alpha*", "skills/alpha*", "alpha*", "./alpha*", "skill:alpha*"} {
+			t.Run(fmt.Sprintf("registry=%t/%s", registry, ref), func(t *testing.T) {
+				dir := t.TempDir()
+				skillDir := writePackageTestSkill(t, filepath.Join(dir, "skills"), "alpha", map[string]string{"SKILL.md": "---\nname: alpha\ndescription: Review service.\n---\nReview.\n"})
+				skill, err := LoadSkill(skillDir)
+				if err != nil {
+					t.Fatal(err)
+				}
+				skillDigest, _, err := BuildSkillBundle(skill)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data := []byte("---\nname: registry-noop\nversion: 1.0.0\nplatform: cloud\nskills:\n  - \"" + ref + "\"\n---\nBuild the service.\n")
+				manifest := ApplyPackageManifest{SchemaVersion: ApplyPackageSchemaVersionExactRefs, Spec: ApplyPackageSpecEntry{Digest: digestBytes(data)}, Skills: map[string]ApplyPackageSkillLock{"alpha": {Digest: skillDigest, Ref: "@example/alpha:1.0.0", Starred: true}}}
+				var refs map[string]string
+				if registry {
+					refs = map[string]string{"alpha": "@example/alpha:1.0.0"}
+				} else {
+					manifest.SchemaVersion = ApplyPackageSchemaVersionStarred
+					manifest.Skills["alpha"] = ApplyPackageSkillLock{Digest: skillDigest, Ref: "path:skills/alpha", Starred: true}
+				}
+				manifestData, err := json.Marshal(manifest)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "manifest.json"), manifestData, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(dir, "SPEC.md")
+				if err := os.WriteFile(path, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+				compiled, err := CompileEnvironment(path)
+				if err != nil {
+					t.Fatalf("source: %v", err)
+				}
+				pkg, err := BuildApplyPackageWithSkillRefs(compiled, refs)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if pkg.Manifest.Skills["alpha"] != manifest.Skills["alpha"] {
+					t.Fatal("skill lock changed")
+				}
+				if want := ApplyPackageDigest(&manifest); pkg.Digest != want {
+					t.Fatalf("unchanged source and locks changed digest from %s to %s", want, pkg.Digest)
+				}
+			})
+		}
 	}
 }
 

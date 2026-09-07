@@ -284,7 +284,8 @@ func packageSkillRefPortable(raw, resolvedName string, locks map[string]ApplyPac
 	raw = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(raw), "*"))
 	if ref, ok := ParseRegistrySkillRef(raw); ok {
 		lock, exists := locks[ref.Name]
-		return exists && ref.Name == resolvedName && ref.Ref == lock.Ref
+		_, registry := ParseRegistrySkillRef(lock.Ref)
+		return exists && ref.Name == resolvedName && (!registry || ref.Ref == lock.Ref)
 	}
 	for _, candidate := range skillPathCandidates(raw) {
 		path := filepath.Clean(candidate)
