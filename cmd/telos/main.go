@@ -28,6 +28,8 @@ func main() {
 	case "version":
 		fmt.Println("telos " + Version)
 		return
+	case "update":
+		cmdUpdate(os.Args[2:])
 	case "plan":
 		cmdPlan(os.Args[2:])
 	case "push":
@@ -85,6 +87,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  logout             Log out and revoke this device's token")
 	fmt.Fprintln(out, "  config             Show or update CLI configuration")
 	fmt.Fprintln(out, "  version            Show version")
+	fmt.Fprintln(out, "  update [VERSION]   Update this CLI to latest or an exact release")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "global flags:")
 	fmt.Fprintln(out, "  -h, --help         Show help")

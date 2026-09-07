@@ -28,7 +28,9 @@ telos --version
 telos <command> --help
 ```
 
-If Telos is absent, read [Install Telos](references/install.md). Cloud work also
+For installation or a requested CLI update, read
+[Install Telos](references/install.md). `telos update [VERSION]` replaces only
+the CLI, not `telosd`, installed skills, or deployed runtimes. Cloud work also
 needs an authenticated account and a confirmed context:
 
 ```bash

@@ -87,6 +87,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"delete SESSION     Delete a session",
 		"pull PACKAGE       Download a package; use `pull skill REF` for a skill",
 		"version            Show version",
+		"update [VERSION]   Update this CLI to latest or an exact release",
 		"--version",
 		"telos <command> --help",
 	} {
