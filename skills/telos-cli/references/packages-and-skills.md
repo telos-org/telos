@@ -49,9 +49,11 @@ the trailing `*`, not a folder named `rubrics`, makes passing a rubric required.
 The `skills:` imports and `*` marker belong to Telos's spec contract, not the
 Agent Skills format.
 
-When you package a spec, Telos rewrites the bundled spec's skill imports to
-portable references while preserving required-rubric markers. Registry
-packages use exact skill refs; embedded packages use `./skills/<name>`.
+When local imports need relocation, Telos rewrites the bundled spec's imports
+to exact skill refs for registry packages or `./skills/<name>` for embedded
+packages. Required-rubric markers and other frontmatter values are preserved,
+including values shared through YAML aliases. Already-portable specs keep
+their original bytes so republishing unchanged inputs retains their digest.
 Your authored files and the contents of each skill remain unchanged. You do
 not need to rearrange your source directories to match the package layout.
 

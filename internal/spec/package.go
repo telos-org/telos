@@ -238,7 +238,7 @@ type packageFile struct {
 }
 
 // Package skills are relocated; keep the root spec's imports portable too.
-func portablePackageSpec(data []byte, refs []string) ([]byte, error) {
+func portablePackageSpec(data []byte, refs []string, locks map[string]ApplyPackageSkillLock) ([]byte, error) {
 	if len(refs) == 0 {
 		return data, nil
 	}
@@ -246,37 +246,48 @@ func portablePackageSpec(data []byte, refs []string) ([]byte, error) {
 	if match == nil {
 		return nil, fmt.Errorf("package root spec has no YAML frontmatter")
 	}
-	var document yaml.Node
-	if err := yaml.Unmarshal(data[match[2]:match[3]], &document); err != nil {
+	var header map[string]any
+	if err := yaml.Unmarshal(data[match[2]:match[3]], &header); err != nil {
 		return nil, fmt.Errorf("parse package root spec: %w", err)
 	}
-	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+	if header == nil {
 		return nil, fmt.Errorf("package root spec frontmatter must be a mapping")
 	}
-	var skills yaml.Node
-	if err := skills.Encode(refs); err != nil {
-		return nil, fmt.Errorf("encode package skill references: %w", err)
-	}
-	root := document.Content[0]
-	index := len(root.Content)
-	for i := 0; i < len(root.Content); i += 2 {
-		if root.Content[i].Value == "skills" {
-			index = i
+	portable := true
+	for _, ref := range rawSkillValues(header["skills"]) {
+		if !packageSkillRefPortable(ref, locks) {
+			portable = false
 			break
 		}
 	}
-	if index == len(root.Content) {
-		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "skills"}, &skills)
-	} else {
-		root.Content[index+1] = &skills
+	if portable {
+		return data, nil
 	}
-	header, err := yaml.Marshal(&document)
+	// Decode aliases before replacing skills so other fields retain their values.
+	header["skills"] = refs
+	encoded, err := yaml.Marshal(header)
 	if err != nil {
 		return nil, fmt.Errorf("encode package root spec: %w", err)
 	}
 	out := append([]byte(nil), data[:match[2]]...)
-	out = append(out, header...)
+	out = append(out, encoded...)
 	return append(out, data[match[3]:]...), nil
+}
+
+func packageSkillRefPortable(raw string, locks map[string]ApplyPackageSkillLock) bool {
+	raw = strings.TrimSpace(strings.TrimSuffix(strings.TrimSpace(raw), "*"))
+	if ref, ok := ParseRegistrySkillRef(raw); ok {
+		lock, exists := locks[ref.Name]
+		return exists && ref.Ref == lock.Ref
+	}
+	for _, candidate := range skillPathCandidates(raw) {
+		path := filepath.Clean(candidate)
+		name := strings.TrimPrefix(path, "skills"+string(filepath.Separator))
+		if _, ok := locks[name]; ok {
+			return true
+		}
+	}
+	return false
 }
 
 // BuildApplyPackage creates a deterministic tar.gz containing the root spec,
@@ -349,7 +360,7 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 		}
 		refs = append(refs, ref)
 	}
-	specData, err = portablePackageSpec(specData, refs)
+	specData, err = portablePackageSpec(specData, refs, skillLocks)
 	if err != nil {
 		return nil, err
 	}
