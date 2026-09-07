@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/bundlelimits"
+	"gopkg.in/yaml.v3"
 )
 
 const ApplyPackageSchemaVersion = 1
@@ -236,6 +237,48 @@ type packageFile struct {
 	data []byte
 }
 
+// Package skills are relocated; keep the root spec's imports portable too.
+func portablePackageSpec(data []byte, refs []string) ([]byte, error) {
+	if len(refs) == 0 {
+		return data, nil
+	}
+	match := frontmatterRE.FindSubmatchIndex(data)
+	if match == nil {
+		return nil, fmt.Errorf("package root spec has no YAML frontmatter")
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(data[match[2]:match[3]], &document); err != nil {
+		return nil, fmt.Errorf("parse package root spec: %w", err)
+	}
+	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("package root spec frontmatter must be a mapping")
+	}
+	var skills yaml.Node
+	if err := skills.Encode(refs); err != nil {
+		return nil, fmt.Errorf("encode package skill references: %w", err)
+	}
+	root := document.Content[0]
+	index := len(root.Content)
+	for i := 0; i < len(root.Content); i += 2 {
+		if root.Content[i].Value == "skills" {
+			index = i
+			break
+		}
+	}
+	if index == len(root.Content) {
+		root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "skills"}, &skills)
+	} else {
+		root.Content[index+1] = &skills
+	}
+	header, err := yaml.Marshal(&document)
+	if err != nil {
+		return nil, fmt.Errorf("encode package root spec: %w", err)
+	}
+	out := append([]byte(nil), data[:match[2]]...)
+	out = append(out, header...)
+	return append(out, data[match[3]:]...), nil
+}
+
 // BuildApplyPackage creates a deterministic tar.gz containing the root spec,
 // resolved skills, and manifest.json.
 func BuildApplyPackage(compiled *CompiledEnvironment) (*ApplyPackage, error) {
@@ -254,19 +297,7 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 	if err != nil {
 		return nil, fmt.Errorf("read root spec: %w", err)
 	}
-	specData, err = portablePackageSpec(specData, compiled, skillRefs)
-	if err != nil {
-		return nil, err
-	}
-	specEntry := ApplyPackageSpecEntry{
-		Digest: digestBytes(specData),
-	}
-
-	packageFiles := []packageFile{{
-		path: "SPEC.md",
-		mode: 0o644,
-		data: specData,
-	}}
+	var packageFiles []packageFile
 	skillEntries := make([]ApplyPackageSkillEntry, 0, len(compiled.Skills))
 	for _, skill := range sortedSkills(compiled.Skills) {
 		registryRef := ""
@@ -306,6 +337,24 @@ func BuildApplyPackageWithSkillRefs(compiled *CompiledEnvironment, skillRefs map
 		}
 	}
 	skillLocks := skillLockMap(skillEntries, requiredNames)
+	refs := make([]string, 0, len(compiled.Skills))
+	for _, skill := range compiled.Skills {
+		lock := skillLocks[skill.Name]
+		ref := "./skills/" + skill.Name
+		if skillRefs != nil {
+			ref = lock.Ref
+		}
+		if lock.Starred {
+			ref += "*"
+		}
+		refs = append(refs, ref)
+	}
+	specData, err = portablePackageSpec(specData, refs)
+	if err != nil {
+		return nil, err
+	}
+	specEntry := ApplyPackageSpecEntry{Digest: digestBytes(specData)}
+	packageFiles = append(packageFiles, packageFile{path: "SPEC.md", mode: 0o644, data: specData})
 	schemaVersion := applyPackageSchemaVersionFor(skillLocks)
 	if skillRefs != nil {
 		schemaVersion = ApplyPackageSchemaVersionExactRefs
