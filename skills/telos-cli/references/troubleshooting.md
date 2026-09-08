@@ -40,8 +40,9 @@ through the Cloud workflow.
 
 ## Cloud status or log checks lose their connection
 
-Telos automatically retries brief connection interruptions while reading Cloud
-session lists, session details, logs, and account information for your context.
+Telos automatically retries brief connection interruptions, refused connections,
+and temporary DNS lookup failures while reading Cloud session lists, session
+details, logs, and account information for your context.
 Each read makes up to three attempts with short, increasing, randomized waits.
 The attempts and waits share the normal 30-second timeout for that read; a
 command can perform more than one read. This recovery also covers a connection
@@ -49,8 +50,9 @@ that drops partway through a response.
 
 If you still receive a connection error, repeat the read with the same session
 and context. A failed status or log check does not by itself mean the remote
-session stopped. Authentication failures and other API error responses are
-returned without retrying. Session creation, updates, deletion, and login token
+session stopped. Permanent DNS failures, such as an unknown hostname, certificate
+errors, authentication failures, and other API error responses are returned
+without retrying. Session creation, updates, deletion, and login token
 claims are not automatically resubmitted by this recovery mechanism.
 
 ## Plan or publish rejects a spec or skill

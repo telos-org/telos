@@ -89,7 +89,14 @@ func retryableReadError(err error) bool {
 	}
 	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) ||
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) ||
-		errors.Is(err, syscall.EPIPE) {
+		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNREFUSED) {
+		return true
+	}
+	// DNS resolvers mark failures such as SERVFAIL as temporary without
+	// marking them as timeouts. Inspect DNS errors through all wrappers;
+	// net.Error.Temporary is deprecated and includes unrelated local failures.
+	var dnsError *net.DNSError
+	if errors.As(err, &dnsError) && dnsError.IsTemporary {
 		return true
 	}
 	var networkError net.Error
