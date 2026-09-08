@@ -17,3 +17,26 @@ func openDashboardDocFile(path string) (*os.File, error) {
 	}
 	return os.Open(path)
 }
+
+func openRootRegularFile(root *os.Root, path string) (*os.File, error) {
+	before, err := root.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !before.Mode().IsRegular() {
+		return nil, os.ErrInvalid
+	}
+	file, err := root.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	opened, openedErr := file.Stat()
+	after, afterErr := root.Lstat(path)
+	if openedErr != nil || afterErr != nil || !opened.Mode().IsRegular() ||
+		!after.Mode().IsRegular() ||
+		(!os.SameFile(opened, before) && !os.SameFile(opened, after)) {
+		file.Close()
+		return nil, os.ErrInvalid
+	}
+	return file, nil
+}

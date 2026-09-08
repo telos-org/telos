@@ -40,6 +40,8 @@ func main() {
 		cmdList(os.Args[2:])
 	case "get":
 		cmdGet(os.Args[2:])
+	case "download":
+		cmdDownload(os.Args[2:])
 	case "describe":
 		cmdDescribe(os.Args[2:])
 	case "logs":
@@ -82,6 +84,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  push SPEC.md       Publish a versioned spec or skill for reuse")
 	fmt.Fprintln(out, "  pull PACKAGE       Download a package; use `pull skill REF` for a skill")
 	fmt.Fprintln(out, "  get SESSION        Download a session's package")
+	fmt.Fprintln(out, "  download SESSION   Download a saved Pro Cloud workspace")
 	fmt.Fprintln(out, "  logout             Log out and revoke this device's token")
 	fmt.Fprintln(out, "  config             Show or update CLI configuration")
 	fmt.Fprintln(out, "  version            Show version")

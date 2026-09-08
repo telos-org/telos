@@ -1566,6 +1566,98 @@ func TestStopSessionNotFound(t *testing.T) {
 	assertEqual(t, "status_code", "404", itoa(resp.StatusCode))
 }
 
+// --------- GET /api/sessions/{id}/workspace/archive ----------------------------------------------------------------------------------------------------------
+
+func TestWorkspaceArchiveNotReady(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "workspace"))
+	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/workspace/archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusConflict {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 409 before the first checkpoint, got %d: %s", resp.StatusCode, body)
+	}
+	archivePath := filepath.Join(store.Root, created.SessionID, "specs", "workspace", "workspace.tar.gz")
+	for _, path := range []string{archivePath, archivePath + ".partial"} {
+		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("download request created %s: %v", path, err)
+		}
+	}
+}
+
+func TestWorkspaceArchivePresent(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+
+	created := createSession(t, srv.URL, createSessionBody(t, "workspace"))
+	want := []byte("complete checkpoint bytes")
+	archivePath := filepath.Join(store.Root, created.SessionID, "specs", "workspace", "workspace.tar.gz")
+	if err := os.WriteFile(archivePath, want, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/workspace/archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+	if got := resp.Header.Get("Content-Type"); got != "application/gzip" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+	if got := resp.Header.Get("Content-Disposition"); got != `attachment; filename="telos-workspace.tar.gz"` {
+		t.Fatalf("Content-Disposition = %q", got)
+	}
+	if got := resp.Header.Get("Cache-Control"); got != "no-store" {
+		t.Fatalf("Cache-Control = %q", got)
+	}
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("archive body = %q, want %q", got, want)
+	}
+}
+
+func TestWorkspaceArchiveSessionNotFound(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/sessions/missing/workspace/archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 404, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestWorkspaceArchiveRequiresAuthentication(t *testing.T) {
+	srv, _ := newBearerTestServer(t, "operator-token")
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/sessions/sess_private/workspace/archive")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 401, got %d: %s", resp.StatusCode, body)
+	}
+}
+
 // --------- GET /api/sessions/{id}/transcript ------------------------------------------------------------------------------------------------------------------
 
 func TestTranscriptNotFound(t *testing.T) {

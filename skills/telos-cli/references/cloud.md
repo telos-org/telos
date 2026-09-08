@@ -38,8 +38,33 @@ context consistent across commands.
 `telos config --context personal` returns to the personal context. A
 command-level `--context` overrides `TELOS_CONTEXT` and stored configuration
 for that invocation without changing either. Carry the chosen context through
-`plan`, `apply`, `describe`, `logs`, and `delete` so each action has one visible
-target.
+`plan`, `apply`, `describe`, `logs`, `download`, and `delete` so each action has
+one visible target.
+
+## Download a saved workspace
+
+If you are a manager of a Pro workspace, you can download the agent's latest
+completely saved root workspace as a compressed archive:
+
+```bash
+telos download SESSION_ID
+```
+
+This uses your active Cloud context and writes
+`telos-workspace-SESSION_ID.tar.gz` in the current directory. Use `--context`
+only when you need to select a different Cloud workspace.
+
+The deployment must have been provisioned with runtime `v0.1.6` or newer.
+Older deployments keep their immutable runtime and cannot use workspace
+download; create a new deployment on `v0.1.6` or newer instead. The download
+contains the full saved workspace, including files created or changed by
+agents. It does not take a live snapshot while an agent is writing. Before the
+first completed checkpoint, Telos reports that the archive is not ready. During
+active work, the archive may be one completed cycle behind.
+
+Telos creates the archive file with private permissions and does not overwrite
+an existing file. The command requires a Pro workspace; teammates without
+manager access cannot download it.
 
 ## Preflight the managed runtime
 

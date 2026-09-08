@@ -2,6 +2,7 @@ package telosd
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"testing"
 
@@ -57,6 +58,9 @@ func (s *fakeReconcileStore) UpdateSpec(string, sessionapi.SessionSpecUpdateRequ
 	return nil, sessionapi.ErrNotFound
 }
 func (s *fakeReconcileStore) Get(string) (*sessionapi.Session, error) {
+	return nil, sessionapi.ErrNotFound
+}
+func (s *fakeReconcileStore) OpenWorkspaceArchive(string) (*os.File, error) {
 	return nil, sessionapi.ErrNotFound
 }
 func (s *fakeReconcileStore) Transcript(string) (string, error) {

@@ -84,6 +84,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"--help",
 		"apply SPEC.md      Create or update a durable session from a spec",
 		"get SESSION        Download a session's package",
+		"download SESSION   Download a saved Pro Cloud workspace",
 		"delete SESSION     Delete a session",
 		"pull PACKAGE       Download a package; use `pull skill REF` for a skill",
 		"version            Show version",
