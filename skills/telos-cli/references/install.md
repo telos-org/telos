@@ -18,6 +18,10 @@ It installs `telos` and `telosd` under
 `${TELOS_INSTALL_DIR:-$HOME/.local/bin}` and this skill under
 `${TELOS_AGENT_SKILLS_DIR:-$HOME/.agents/skills}/telos-cli`.
 
+Cloud-only use does not require `pi` on your machine, including when you use
+Claude Code or Codex to operate Telos Cloud. The installer's `pi` setup
+instructions apply only to local Telos runs.
+
 For Cloud work, sign in and confirm the target context:
 
 ```bash
@@ -27,7 +31,7 @@ telos config
 
 Then continue with [Use Telos](use-telos.md).
 
-For a local run, install `pi` if the installer reports it missing and
+For a local run, install `pi` if it is not already installed and
 authenticate the intended provider with `pi` → `/login`. Then follow
 [Bounded runs](bounded-runs.md). Managed Cloud deployments do not use the
 workstation's local model credentials.
