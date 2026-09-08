@@ -13,6 +13,7 @@ Start with the command that can distinguish the observed symptom:
 | `telos` is unavailable | `command -v telos` | Binary path or missing installation |
 | A local run will not start | `telos plan SPEC.md` | Platform or spec validation error |
 | Cloud authentication or target is wrong | `telos config` | Authentication and active context |
+| An agent or CI job waits for browser login | Check the job's authentication setup against [token authentication](cloud.md#token-authentication-for-agents-and-ci) | A supplied `TELOS_AUTH_TOKEN` lets the job run Cloud commands directly |
 | A spec is rejected | `telos plan SPEC.md` | First validation error |
 | A skill publish is rejected | Read the original `push` error and inspect the local frontmatter | Invalid bundle input or immutable-version conflict |
 | A deployment is not `ready` | `telos describe SESSION_ID --context CONTEXT --json` | Status, digest, and reason |
@@ -34,8 +35,20 @@ supported by the installed release.
 ## Cloud authentication or context is wrong
 
 `telos config` shows whether authentication is valid and which context the CLI
-will use. Log in again if needed, then pass the intended `--context` explicitly
-through the Cloud workflow.
+will use without displaying the token. Pass the intended `--context`
+explicitly through the Cloud workflow.
+
+For an agent or CI job, supply a valid Telos API token as `TELOS_AUTH_TOKEN`
+and run the Cloud command directly. `TELOS_TOKEN` is not a supported alias.
+Running `telos login` can still request browser approval because it checks
+saved credentials rather than the environment token. See
+[Cloud authentication](cloud.md#authenticate) for setup and a CI example.
+
+A non-empty `TELOS_AUTH_TOKEN` takes precedence over the saved login. If it
+is rejected, replace or unset that override before retrying; signing in again
+will not change the environment value. Without an injected token, use
+`telos login` when a person can approve it in a browser. An unattended job
+needs its token supplied before it can proceed.
 
 ## Plan or publish rejects a spec or skill
 
