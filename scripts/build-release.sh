@@ -209,9 +209,9 @@ fi
 echo "installed telos \$version to \$install_dir"
 echo "installed @telos/telos-cli:${skill_version} to \$agent_skills_dir/telos-cli"
 if ! command -v pi >/dev/null 2>&1; then
-  echo "pi is required for local runs but was not found on PATH"
-  echo "install pi with: npm install -g @earendil-works/pi-coding-agent"
-  echo "then run pi and use /login to configure model credentials before running telos"
+  echo "Cloud-only use, including with Claude Code or Codex, does not require pi locally."
+  echo "For local Telos runs, install pi with: npm install -g @earendil-works/pi-coding-agent"
+  echo "Then run pi and use /login to configure model credentials before your first local run."
   echo "pi setup: https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md"
 fi
 if ! command -v telos >/dev/null 2>&1; then
