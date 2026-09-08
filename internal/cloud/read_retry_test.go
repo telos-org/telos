@@ -5,9 +5,11 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"os"
 	"strings"
 	"syscall"
 	"testing"
@@ -28,16 +30,22 @@ func TestMonitoringReadRetriesOnlyTransientErrors(t *testing.T) {
 		attempts int
 	}{
 		{"reset", &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}, 3},
+		{"connection_refused", syscall.ECONNREFUSED, 3},
+		{"wrapped_connection_refused", &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}, 3},
 		{"aborted", syscall.ECONNABORTED, 3},
 		{"broken_pipe", syscall.EPIPE, 3},
 		{"eof", io.EOF, 3},
 		{"truncated_body", io.ErrUnexpectedEOF, 3},
 		{"timeout", &net.DNSError{Err: "temporary timeout", IsTimeout: true}, 3},
+		{"temporary_dns", &net.DNSError{Err: "server misbehaving", IsTemporary: true}, 3},
+		{"wrapped_temporary_dns", &net.OpError{Op: "dial", Net: "tcp", Err: fmt.Errorf("resolve endpoint: %w", &net.DNSError{Err: "server misbehaving", IsTemporary: true})}, 3},
 		// Transport timeouts can match DeadlineExceeded before the operation's
 		// deadline expires (for example, ResponseHeaderTimeout).
 		{"transport_deadline", &net.OpError{Op: "read", Net: "tcp", Err: context.DeadlineExceeded}, 3},
 		{"canceled", context.Canceled, 1},
 		{"unknown_host", &net.DNSError{Err: "no such host", IsNotFound: true}, 1},
+		{"permanent_dns", &net.DNSError{Err: "invalid DNS response"}, 1},
+		{"canceled_temporary_dns", &net.DNSError{Err: "lookup canceled", IsTemporary: true, UnwrapErr: context.Canceled}, 1},
 		{"certificate", x509.UnknownAuthorityError{}, 1},
 		{"invalid_json", &json.SyntaxError{}, 1},
 		{"unexpected_error", errors.New("unsupported protocol"), 1},
@@ -64,36 +72,47 @@ func TestMonitoringReadRetriesOnlyTransientErrors(t *testing.T) {
 }
 
 func TestMonitoringReadRecoversOnLastAttempt(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		var starts []time.Time
-		client := NewClient("https://api.example.test", "")
-		client.HTTP.Transport = readRetryTransport(func(*http.Request) (*http.Response, error) {
-			starts = append(starts, time.Now())
-			if len(starts) < 3 {
-				return nil, syscall.ECONNRESET
-			}
-			return &http.Response{
-				StatusCode: http.StatusOK,
-				Body:       io.NopCloser(strings.NewReader(`{"id":"session-test","state":"running"}`)),
-			}, nil
+	for _, test := range []struct {
+		name string
+		err  error
+	}{
+		{"connection_reset", syscall.ECONNRESET},
+		{"connection_refused", &net.OpError{Op: "dial", Net: "tcp", Err: os.NewSyscallError("connect", syscall.ECONNREFUSED)}},
+		{"temporary_dns", &net.DNSError{Err: "server misbehaving", IsTemporary: true}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				var starts []time.Time
+				client := NewClient("https://api.example.test", "")
+				client.HTTP.Transport = readRetryTransport(func(*http.Request) (*http.Response, error) {
+					starts = append(starts, time.Now())
+					if len(starts) < 3 {
+						return nil, test.err
+					}
+					return &http.Response{
+						StatusCode: http.StatusOK,
+						Body:       io.NopCloser(strings.NewReader(`{"id":"session-test","state":"running"}`)),
+					}, nil
+				})
+				result, err := client.GetSession("session-test")
+				if err != nil || result.ID != "session-test" || result.State != "running" {
+					t.Fatalf("result = %v, error = %v", result, err)
+				}
+				if len(starts) != 3 {
+					t.Fatalf("attempts = %d, want 3", len(starts))
+				}
+				for index, bounds := range [][2]time.Duration{
+					{125 * time.Millisecond, 250 * time.Millisecond},
+					{250 * time.Millisecond, 500 * time.Millisecond},
+				} {
+					wait := starts[index+1].Sub(starts[index])
+					if wait < bounds[0] || wait >= bounds[1] {
+						t.Errorf("wait %d = %v, want [%v, %v)", index+1, wait, bounds[0], bounds[1])
+					}
+				}
+			})
 		})
-		result, err := client.GetSession("session-test")
-		if err != nil || result.ID != "session-test" || result.State != "running" {
-			t.Fatalf("result = %v, error = %v", result, err)
-		}
-		if len(starts) != 3 {
-			t.Fatalf("attempts = %d, want 3", len(starts))
-		}
-		for index, bounds := range [][2]time.Duration{
-			{125 * time.Millisecond, 250 * time.Millisecond},
-			{250 * time.Millisecond, 500 * time.Millisecond},
-		} {
-			wait := starts[index+1].Sub(starts[index])
-			if wait < bounds[0] || wait >= bounds[1] {
-				t.Errorf("wait %d = %v, want [%v, %v)", index+1, wait, bounds[0], bounds[1])
-			}
-		}
-	})
+	}
 }
 
 func TestMonitoringReadSharesTimeoutAcrossAttempts(t *testing.T) {
