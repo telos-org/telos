@@ -36,10 +36,9 @@ approval while it remains valid.
 ### Token authentication for agents and CI
 
 For an unattended job, supply an existing Telos API token through the
-`TELOS_AUTH_TOKEN` environment variable. An environment variable is a named
-setting passed to a program when it starts. Set it through your runner's
-secret store, then run Cloud commands directly; the job needs no `telos login`
-step or browser approval.
+`TELOS_AUTH_TOKEN` environment variable using your runner's secret store.
+Run Cloud commands directly; the job needs no `telos login` step or browser
+approval.
 
 Obtain the token before the job starts. For example, an approved `telos login`
 creates the saved device token described above. Store the token privately in

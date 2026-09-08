@@ -34,21 +34,14 @@ supported by the installed release.
 
 ## Cloud authentication or context is wrong
 
-`telos config` shows whether authentication is valid and which context the CLI
-will use without displaying the token. Pass the intended `--context`
-explicitly through the Cloud workflow.
+Check `telos config` for authentication status and the active context, then
+pass the intended `--context` explicitly.
 
-For an agent or CI job, supply a valid Telos API token as `TELOS_AUTH_TOKEN`
-and run the Cloud command directly. `TELOS_TOKEN` is not a supported alias.
-Running `telos login` can still request browser approval because it checks
-saved credentials rather than the environment token. See
-[Cloud authentication](cloud.md#authenticate) for setup and a CI example.
-
-A non-empty `TELOS_AUTH_TOKEN` takes precedence over the saved login. If it
-is rejected, replace or unset that override before retrying; signing in again
-will not change the environment value. Without an injected token, use
-`telos login` when a person can approve it in a browser. An unattended job
-needs its token supplied before it can proceed.
+If an injected `TELOS_AUTH_TOKEN` is rejected, replace or unset it; browser
+login does not change the override. If an unattended job waits for browser
+approval, supply a valid token and run the Cloud command directly. See
+[Cloud authentication](cloud.md#authenticate) for setup, precedence, and a CI
+example.
 
 ## Plan or publish rejects a spec or skill
 
