@@ -36,9 +36,6 @@ func cmdUpdate(args []string) {
 	}
 	requested := fs.Arg(0)
 	executable, err := os.Executable()
-	if err == nil && Version == "dev" {
-		err = fmt.Errorf("development builds must be rebuilt from source; install a released CLI to use telos update")
-	}
 	client := &http.Client{
 		Timeout: 2 * time.Minute,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -67,6 +64,9 @@ func cmdUpdate(args []string) {
 }
 
 func updateCLI(executable, current, requested, baseURL string, client *http.Client) (string, error) {
+	if current == "dev" || strings.HasPrefix(current, "v0.0.0-dev.") {
+		return "", fmt.Errorf("development builds must be rebuilt from source; install a released CLI to use telos update")
+	}
 	version := requested
 	if version == "" {
 		version = "latest"

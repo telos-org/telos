@@ -22,6 +22,37 @@ func updateTestManifest(version string) string {
 		version, runtime.GOOS, runtime.GOARCH, "telos-"+runtime.GOOS+"-"+runtime.GOARCH)
 }
 
+func TestCLIUpdateRejectsDevelopmentBuilds(t *testing.T) {
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.Error(w, "unexpected release request", http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	for _, current := range []string{"dev", "v0.0.0-dev.a7f94f8013ea"} {
+		for _, requested := range []string{"latest", "v0.1.5"} {
+			t.Run(current+"/"+requested, func(t *testing.T) {
+				dir := t.TempDir()
+				target := filepath.Join(dir, "telos")
+				if err := os.WriteFile(target, []byte("original"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := updateCLI(target, current, requested, srv.URL, srv.Client()); err == nil || !strings.Contains(err.Error(), "development builds must be rebuilt from source") {
+					t.Fatalf("error = %v", err)
+				}
+				data, err := os.ReadFile(target)
+				if err != nil || string(data) != "original" {
+					t.Fatalf("original changed: %q, %v", data, err)
+				}
+				assertNoUpdateStage(t, dir)
+			})
+		}
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("development build made %d release requests", requests.Load())
+	}
+}
+
 func TestCLIUpdateReleaseSelection(t *testing.T) {
 	for _, requested := range []string{"", "latest", "v0.1.5+master.abc123", "0.1.5+master.abc123"} {
 		t.Run(requested, func(t *testing.T) {
@@ -55,7 +86,7 @@ func TestCLIUpdateReleaseSelection(t *testing.T) {
 			}))
 			defer srv.Close()
 			// An explicit older release is allowed: no semver ordering blocks rollback.
-			got, err := updateCLI(target, "v0.2.0", requested, srv.URL, srv.Client())
+			got, err := updateCLI(target, "v0.2.0+master.def456", requested, srv.URL, srv.Client())
 			if err != nil {
 				t.Fatal(err)
 			}
