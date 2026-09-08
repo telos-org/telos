@@ -1,6 +1,6 @@
 ---
 name: telos-cli
-description: Install and use the Telos CLI to apply persistent Goals or run bounded work. Use for Telos setup, SPEC.md authoring, plan/apply/run workflows, Cloud login and context, session inspection, publishing or pulling packages and skills, nested child Goals, and Telos troubleshooting.
+description: Install and use the Telos CLI to apply persistent Goals or run bounded work. Use for Telos setup, SPEC.md authoring, plan/apply/run workflows, Cloud authentication and context, unattended agents and CI, session inspection, publishing or pulling packages and skills, nested child Goals, and Telos troubleshooting.
 metadata:
   registry: "@telos/telos-cli"
   public_guide: "references/use-telos.md"
@@ -30,13 +30,25 @@ telos <command> --help
 
 For installation or a requested CLI update, read
 [Install Telos](references/install.md). `telos update [VERSION]` replaces only
-the CLI, not `telosd`, installed skills, or deployed runtimes. Cloud work also
-needs an authenticated account and a confirmed context:
+the CLI, not `telosd`, installed skills, or deployed runtimes. For Cloud work,
+check authentication and context without displaying credentials:
 
 ```bash
-telos login
 telos config
 ```
+
+Reuse a valid saved login or a supplied `TELOS_AUTH_TOKEN`. Telos already
+supports non-interactive authentication for agents and CI through this
+environment variable; `TELOS_TOKEN` is not a supported alias. Set the intended
+context with `TELOS_CONTEXT` or a command's `--context` flag.
+
+Run Cloud commands directly when a token is supplied. `telos login` checks
+saved credentials and may start browser approval even when `TELOS_AUTH_TOKEN`
+is set. Use it when credentials are needed and a person can approve the login.
+For an unattended job with missing or rejected credentials, report that it
+needs a valid token instead of starting a browser login. Read
+[Cloud authentication](references/cloud.md#authenticate) for token setup,
+environment precedence, and a CI example.
 
 Choose the lifecycle that matches the requested outcome:
 
@@ -162,7 +174,7 @@ published, updated, or deleted.
 - [The Goal lifecycle](references/lifecycle.md) — identity, states, revisions, and evidence
 - [Glossary](references/glossary.md) — canonical Telos product vocabulary
 - [Bounded runs](references/bounded-runs.md) — local work with an explicit stopping bound
-- [Telos Cloud](references/cloud.md) — contexts and managed-runtime preflight
+- [Telos Cloud](references/cloud.md) — browser and token authentication, CI, contexts, and managed-runtime preflight
 - [Models and inference](references/inference.md) — Cloud and local model selection
 - [Packages and skills](references/packages-and-skills.md) — immutable registry artifacts and rubrics
 - [Nested Goals](references/nested-goals.md) — bounded child work

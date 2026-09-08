@@ -1,6 +1,6 @@
 ---
 title: Telos Cloud
-description: Choose a Cloud context and confirm that a Goal fits the managed runtime before applying it.
+description: Authenticate through a browser or a token for agents and CI, choose a Cloud context, and confirm that a Goal fits the managed runtime.
 group: Platform
 ---
 
@@ -14,15 +14,77 @@ A CLI **context** selects the personal or team Cloud workspace that owns the
 deployment. Inside an environment, **workspace** means the agent's retained
 filesystem. The two uses are related but not interchangeable.
 
-## Choose the context
+## Authenticate
 
-`telos config` shows the active account, context, and machine-local default
-model:
+Telos supports both browser login and non-interactive token authentication.
+A token is a secret login credential that the CLI sends with Cloud requests.
+
+### Browser login on your computer
+
+For an initial interactive login:
 
 ```bash
 telos login
 telos config
 ```
+
+Approve the login in your browser. The CLI saves the resulting device API
+token as `auth_token` in `~/.telos/config.yaml`, or the file selected by
+`TELOS_CONFIG`. Later Cloud commands reuse that token without another browser
+approval while it remains valid.
+
+### Token authentication for agents and CI
+
+For an unattended job, supply an existing Telos API token through the
+`TELOS_AUTH_TOKEN` environment variable using your runner's secret store.
+Run Cloud commands directly; the job needs no `telos login` step or browser
+approval.
+
+Obtain the token before the job starts. For example, an approved `telos login`
+creates the saved device token described above. Store the token privately in
+the runner's secret settings without printing it in logs or committing it to
+the repository. A job using that token loses access if the token is revoked.
+
+Once the CLI is installed, this GitHub Actions step uses a repository secret
+named `TELOS_AUTH_TOKEN` to check access to your personal workspace:
+
+```yaml
+- name: Check Telos access
+  env:
+    TELOS_AUTH_TOKEN: ${{ secrets.TELOS_AUTH_TOKEN }}
+    TELOS_CONTEXT: personal
+  run: |
+    telos config
+    telos list --cloud --json
+```
+
+Use the intended `@team-handle` instead of `personal` for a team workspace.
+`telos config` reports authentication status without showing the token;
+`telos list --cloud --json` makes a read-only Cloud request and fails if access
+is rejected. The token authenticates an existing account and its permissions.
+
+### Configuration precedence
+
+| Setting | Effect |
+| --- | --- |
+| `TELOS_AUTH_TOKEN` | A non-empty value overrides the saved `auth_token`. |
+| `TELOS_API_ENDPOINT` | A non-empty value overrides the saved API endpoint. With neither set, Cloud defaults to `https://api.usetelos.ai`. |
+| `TELOS_CONTEXT` | A non-empty value overrides the saved context; a command's `--context` flag takes precedence over both. |
+| `TELOS_CONFIG` | Selects a configuration file instead of `~/.telos/config.yaml`. |
+
+The Cloud account token setting is `TELOS_AUTH_TOKEN`. `TELOS_TOKEN` is not a
+supported alias, and `TELOS_API_TOKEN` serves a separate runtime session role.
+
+`telos login` checks the saved login rather than `TELOS_AUTH_TOKEN` and may
+open a browser if no valid saved login exists. When you supply a token through
+the environment, check it with `telos config` and run your Cloud command
+directly. If that token is rejected, replace or unset the override; a new
+browser login does not replace the token in the environment.
+
+## Choose the context
+
+`telos config` shows authentication status, the active context, and the
+machine-local default model.
 
 The personal context is `personal`. Team contexts use their handle:
 
@@ -40,6 +102,10 @@ command-level `--context` overrides `TELOS_CONTEXT` and stored configuration
 for that invocation without changing either. Carry the chosen context through
 `plan`, `apply`, `describe`, `logs`, and `delete` so each action has one visible
 target.
+
+For jobs using injected credentials, choose the context with `TELOS_CONTEXT`
+or `--context`. `telos config --context` changes saved configuration and uses
+saved credentials rather than the token and endpoint environment overrides.
 
 ## Preflight the managed runtime
 

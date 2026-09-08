@@ -13,6 +13,7 @@ Start with the command that can distinguish the observed symptom:
 | `telos` is unavailable | `command -v telos` | Binary path or missing installation |
 | A local run will not start | `telos plan SPEC.md` | Platform or spec validation error |
 | Cloud authentication or target is wrong | `telos config` | Authentication and active context |
+| An agent or CI job waits for browser login | Check the job's authentication setup against [token authentication](cloud.md#token-authentication-for-agents-and-ci) | A supplied `TELOS_AUTH_TOKEN` lets the job run Cloud commands directly |
 | A spec is rejected | `telos plan SPEC.md` | First validation error |
 | A skill publish is rejected | Read the original `push` error and inspect the local frontmatter | Invalid bundle input or immutable-version conflict |
 | A deployment is not `ready` | `telos describe SESSION_ID --context CONTEXT --json` | Status, digest, and reason |
@@ -33,9 +34,14 @@ supported by the installed release.
 
 ## Cloud authentication or context is wrong
 
-`telos config` shows whether authentication is valid and which context the CLI
-will use. Log in again if needed, then pass the intended `--context` explicitly
-through the Cloud workflow.
+Check `telos config` for authentication status and the active context, then
+pass the intended `--context` explicitly.
+
+If an injected `TELOS_AUTH_TOKEN` is rejected, replace or unset it; browser
+login does not change the override. If an unattended job waits for browser
+approval, supply a valid token and run the Cloud command directly. See
+[Cloud authentication](cloud.md#authenticate) for setup, precedence, and a CI
+example.
 
 ## Plan or publish rejects a spec or skill
 

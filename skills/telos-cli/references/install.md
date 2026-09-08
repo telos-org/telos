@@ -22,12 +22,16 @@ Cloud-only use does not require `pi` on your machine, including when you use
 Claude Code or Codex to operate Telos Cloud. The installer's `pi` setup
 instructions apply only to local Telos runs.
 
-For Cloud work, sign in and confirm the target context:
+For first-time interactive Cloud setup, sign in and confirm the target context:
 
 ```bash
 telos login
 telos config
 ```
+
+Agents and CI jobs can use an existing token supplied as `TELOS_AUTH_TOKEN`
+and run Cloud commands without a browser login step. See
+[Cloud authentication](cloud.md#authenticate) for token setup and a CI example.
 
 Then continue with [Use Telos](use-telos.md).
 

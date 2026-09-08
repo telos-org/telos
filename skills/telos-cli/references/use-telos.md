@@ -19,8 +19,11 @@ the command and field shapes match the current CLI.
 
 ## Sign in and choose a context
 
-Install Telos first if needed, then authenticate and inspect the available
-Cloud contexts:
+Install Telos first if needed. For first-time interactive setup, authenticate
+and inspect the available Cloud contexts as shown below. If you already have
+a valid saved login, proceed to `telos config`. Agents and CI can instead
+supply `TELOS_AUTH_TOKEN` and skip `telos login`; see
+[Cloud authentication](cloud.md#authenticate).
 
 ```console
 $ telos login
