@@ -3,6 +3,7 @@ package cloud
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -585,35 +586,15 @@ func (c *Client) UpdateSession(sessionID string, opts SessionUpdateOptions) (*Se
 }
 
 func (c *Client) ListSessions() ([]SessionRecord, error) {
-	resp, err := c.do("GET", "/api/deployments", nil)
+	response, err := getJSONWithRetry[sessionListResponse](context.Background(), c, "/api/deployments")
 	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, readError(resp)
-	}
-	var response sessionListResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
 	return response.Sessions, nil
 }
 
 func (c *Client) GetSession(sessionID string) (*SessionRecord, error) {
-	resp, err := c.do("GET", "/api/deployments/"+url.PathEscape(sessionID), nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, readError(resp)
-	}
-	var response SessionRecord
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+	return getJSONWithRetry[SessionRecord](context.Background(), c, "/api/deployments/"+url.PathEscape(sessionID))
 }
 
 func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {
@@ -645,16 +626,8 @@ func (c *Client) GetSessionLogPage(sessionID string, tail int) (*SessionLogPage,
 	if tail > 0 {
 		path += "?tail=" + strconv.Itoa(tail)
 	}
-	resp, err := c.do("GET", path, nil)
+	response, err := getJSONWithRetry[deploymentLogEventsResponse](context.Background(), c, path)
 	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, readError(resp)
-	}
-	var response deploymentLogEventsResponse
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
 	events := make([]sessionapi.SessionEvent, 0, len(response.Events))
@@ -685,11 +658,15 @@ func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
 }
 
 func (c *Client) doRaw(method, path string, body []byte, contentType string) (*http.Response, error) {
+	return c.doRawContext(context.Background(), method, path, body, contentType)
+}
+
+func (c *Client) doRawContext(ctx context.Context, method, path string, body []byte, contentType string) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, c.Endpoint+path, bodyReader)
+	req, err := http.NewRequestWithContext(ctx, method, c.Endpoint+path, bodyReader)
 	if err != nil {
 		return nil, err
 	}

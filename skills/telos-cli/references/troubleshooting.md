@@ -13,6 +13,7 @@ Start with the command that can distinguish the observed symptom:
 | `telos` is unavailable | `command -v telos` | Binary path or missing installation |
 | A local run will not start | `telos plan SPEC.md` | Platform or spec validation error |
 | Cloud authentication or target is wrong | `telos config` | Authentication and active context |
+| A Cloud status or log check loses its connection | Repeat the read with the same session and context | Connection error and the next successful status or log response |
 | A spec is rejected | `telos plan SPEC.md` | First validation error |
 | A skill publish is rejected | Read the original `push` error and inspect the local frontmatter | Invalid bundle input or immutable-version conflict |
 | A deployment is not `ready` | `telos describe SESSION_ID --context CONTEXT --json` | Status, digest, and reason |
@@ -36,6 +37,21 @@ supported by the installed release.
 `telos config` shows whether authentication is valid and which context the CLI
 will use. Log in again if needed, then pass the intended `--context` explicitly
 through the Cloud workflow.
+
+## Cloud status or log checks lose their connection
+
+Telos automatically retries brief connection interruptions while reading Cloud
+session lists, session details, logs, and account information for your context.
+Each read makes up to three attempts with short, increasing, randomized waits.
+The attempts and waits share the normal 30-second timeout for that read; a
+command can perform more than one read. This recovery also covers a connection
+that drops partway through a response.
+
+If you still receive a connection error, repeat the read with the same session
+and context. A failed status or log check does not by itself mean the remote
+session stopped. Authentication failures and other API error responses are
+returned without retrying. Session creation, updates, deletion, and login token
+claims are not automatically resubmitted by this recovery mechanism.
 
 ## Plan or publish rejects a spec or skill
 

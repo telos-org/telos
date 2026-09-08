@@ -1,9 +1,8 @@
 package cloud
 
 import (
-	"encoding/json"
+	"context"
 	"fmt"
-	"net/http"
 	"strings"
 )
 
@@ -22,19 +21,7 @@ type AccountBootstrapRecord struct {
 }
 
 func (c *Client) AccountBootstrap() (*AccountBootstrapRecord, error) {
-	resp, err := c.do("GET", "/api/account/bootstrap", nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, readError(resp)
-	}
-	var account AccountBootstrapRecord
-	if err := json.NewDecoder(resp.Body).Decode(&account); err != nil {
-		return nil, err
-	}
-	return &account, nil
+	return getJSONWithRetry[AccountBootstrapRecord](context.Background(), c, "/api/account/bootstrap")
 }
 
 func (c *Client) ResolveContext(value string) (*OrganizationRecord, error) {

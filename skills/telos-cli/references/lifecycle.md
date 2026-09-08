@@ -87,6 +87,10 @@ An agent observation loop has four operations:
 4. Stop if the digest changes or the 30-minute deadline expires, then return the
    last state instead of waiting indefinitely.
 
+Cloud monitoring reads automatically retry brief connection interruptions within
+each read's timeout. See [connection recovery](troubleshooting.md#cloud-status-or-log-checks-lose-their-connection)
+for the retry limits and what to do if a read still fails.
+
 `logs` supplies the work and verification evidence behind the state:
 
 ```bash
