@@ -95,6 +95,9 @@ func Env(sessionDir string, opts StartOptions) []string {
 	)
 	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
 	if err == nil {
+		if manifest.Config.Model != "" {
+			env = append(env, "TELOS_MODEL="+manifest.Config.Model)
+		}
 		if manifest.ParentSessionID != nil {
 			env = append(env, "TELOS_PARENT_SESSION_ID="+*manifest.ParentSessionID)
 		}

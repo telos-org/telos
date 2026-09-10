@@ -225,14 +225,14 @@ func (s *controllerReconciler) Stop(id string) (*sessionapi.Session, error) {
 }
 
 func (s *controllerReconciler) applyCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.SessionCreateRequest {
+	if strings.TrimSpace(req.Model) == "" {
+		req.Model = s.defaults.Model
+	}
 	if req.ParentSessionID != nil {
 		return req
 	}
 	if req.SessionKind != nil && *req.SessionKind == sessionapi.KindTask {
 		return req
-	}
-	if strings.TrimSpace(req.Model) == "" {
-		req.Model = s.defaults.Model
 	}
 	if strings.TrimSpace(req.Thinking) == "" {
 		req.Thinking = s.defaults.Thinking
