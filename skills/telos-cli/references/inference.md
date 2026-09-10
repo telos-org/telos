@@ -98,6 +98,11 @@ Local model names use pi's `<provider>/<model-id>` form. Selection order is:
 2. `TELOS_MODEL`
 3. `openai-codex/gpt-5.5`
 
+Inside a running Telos worker, `TELOS_MODEL` defaults to that worker's selected
+model, so nested runs use the same inference provider and model unless you
+override it. Hosted child tasks submitted without a model through the Sessions
+API use the deployment's selected model.
+
 The stored Cloud default from `telos config --model` does not participate in
 local selection. Provider authentication comes from the local pi installation;
 run `pi` and use `/login` to configure it.

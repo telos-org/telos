@@ -19,6 +19,11 @@ a duration such as `30m`; `--max-cost-usd` adds a spend bound. Telos supplies
 the environment-local capability to create and inspect the child, so the spec
 contains no user or Cloud credentials.
 
+Nested runs use the parent worker's selected inference model by default through
+`TELOS_MODEL`. You can choose a different model with `--model`; the environment
+must have credentials for that provider. In Cloud, child tasks submitted without
+a model through the Sessions API use the deployment's selected model.
+
 A child can produce files, tests, analysis, or another observable deliverable.
 Persistent `telos apply` is a top-level lifecycle; nested work uses `run`.
 
