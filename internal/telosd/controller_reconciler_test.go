@@ -434,3 +434,37 @@ func assertManagedSessionDefaults(t *testing.T, session *sessionapi.Session) {
 		t.Fatalf("agent_timeout_sec should not default for controllers: %v", session.Config["agent_timeout_sec"])
 	}
 }
+
+func TestHostedTasksUseDeploymentModelUnlessExplicitlySelected(t *testing.T) {
+	const model = "anthropic/claude-sonnet-4-6"
+	for _, kind := range []string{"child", "task", "explicit-child"} {
+		t.Run(kind, func(t *testing.T) {
+			t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", model)
+			base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+			store := newControllerReconciler(base, &recordingSubstrate{}, nil, cloudControllerDefaults())
+			rootSpec := "---\nversion: 0.1.0\nname: parent\nplatform: cloud\n---\n# Parent\n"
+			parent, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &rootSpec})
+			if err != nil {
+				t.Fatal(err)
+			}
+			childSpec := "---\nversion: 0.1.0\nname: child\nplatform: cloud\n---\n# Child\n"
+			task := sessionapi.KindTask
+			req := sessionapi.SessionCreateRequest{SpecMarkdown: &childSpec, SessionKind: &task}
+			want := model
+			if kind != "task" {
+				req.ParentSessionID = &parent.SessionID
+			}
+			if kind == "explicit-child" {
+				req.Model = "anthropic/claude-opus-4-6"
+				want = req.Model
+			}
+			child, err := store.Create(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got, _ := child.Config["model"].(string); got != want {
+				t.Fatalf("model = %q, want %q", got, want)
+			}
+		})
+	}
+}

@@ -10,10 +10,7 @@ go_library(
 
 go_test(
     name = "sessionworker_test",
-    srcs = [
-        "inference_env_test.go",
-        "process_test.go",
-    ],
+    srcs = ["process_test.go"],
     embed = [":sessionworker"],
     deps = ["//internal/sessionapi"],
 )
