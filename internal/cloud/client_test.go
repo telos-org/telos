@@ -713,7 +713,10 @@ func TestClientSessionLogPagePreservesRawEvents(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	page, err := NewClient(srv.URL, "test-token").GetSessionLogPage("sess_123", 0)
+	page, err := NewClient(srv.URL, "test-token").GetSessionLogPage(
+		"sess_123",
+		SessionLogPageQuery{},
+	)
 	if err != nil {
 		t.Fatalf("GetSessionLogPage: %v", err)
 	}
@@ -737,18 +740,55 @@ func TestClientSessionLogPagePreservesRawEvents(t *testing.T) {
 	}
 }
 
-func TestClientSessionLogPageRequestsTail(t *testing.T) {
+func TestClientSessionLogPageRequestsWindow(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/deployments/sess_123/logs" || r.URL.Query().Get("tail") != "50" {
+		query := r.URL.Query()
+		if r.URL.Path != "/api/deployments/sess_123/logs" ||
+			query.Get("tail") != "50" ||
+			query.Get("before_rt") != "30" ||
+			query.Get("before_cp") != "4" {
 			http.NotFound(w, r)
 			return
 		}
-		_, _ = w.Write([]byte(`{"events":[]}`))
+		_, _ = w.Write([]byte(`{"events":[{"event":"r29","event_seq":29},{"event":"deployment.accepted","seq":3}]}`))
 	}))
 	defer srv.Close()
 
-	if _, err := NewClient(srv.URL, "test-token").GetSessionLogPage("sess_123", 50); err != nil {
+	beforeRuntime := int64(30)
+	beforeControl := int64(4)
+	page, err := NewClient(srv.URL, "test-token").GetSessionLogPage(
+		"sess_123",
+		SessionLogPageQuery{
+			Tail:          50,
+			BeforeRuntime: &beforeRuntime,
+			BeforeControl: &beforeControl,
+		},
+	)
+	if err != nil {
 		t.Fatalf("GetSessionLogPage: %v", err)
+	}
+	if !page.CanPageBackward || page.BeforeRuntime == nil || *page.BeforeRuntime != 29 ||
+		page.BeforeControl == nil || *page.BeforeControl != 3 {
+		t.Fatalf("page cursors: got %#v", page)
+	}
+}
+
+func TestClientSessionLogPageMarksAStalledCursorUnpageable(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"events":[{"event":"r30","event_seq":30}]}`))
+	}))
+	defer srv.Close()
+
+	beforeRuntime := int64(30)
+	page, err := NewClient(srv.URL, "test-token").GetSessionLogPage(
+		"sess_123",
+		SessionLogPageQuery{Tail: 50, BeforeRuntime: &beforeRuntime},
+	)
+	if err != nil {
+		t.Fatalf("GetSessionLogPage: %v", err)
+	}
+	if page.CanPageBackward {
+		t.Fatalf("stalled page can continue: %#v", page)
 	}
 }
 
