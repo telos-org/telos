@@ -104,11 +104,21 @@ type deploymentLogEventsResponse struct {
 	Events []json.RawMessage `json:"events"`
 }
 
-// SessionLogPage keeps both the normalized events used by the human/JSON
-// views and their original wire records for --raw output.
+// SessionLogPageQuery selects one bounded window of merged Cloud events.
+type SessionLogPageQuery struct {
+	Tail          int
+	BeforeRuntime *int64
+	BeforeControl *int64
+}
+
+// SessionLogPage keeps normalized and raw events plus their oldest source
+// cursors, which select the next page backward.
 type SessionLogPage struct {
-	Events    []sessionapi.SessionEvent
-	RawEvents []json.RawMessage
+	Events          []sessionapi.SessionEvent
+	RawEvents       []json.RawMessage
+	BeforeRuntime   *int64
+	BeforeControl   *int64
+	CanPageBackward bool
 }
 
 type deploymentLogEvent struct {
@@ -116,6 +126,7 @@ type deploymentLogEvent struct {
 	EventID          *string        `json:"event_id,omitempty"`
 	Event            string         `json:"event"`
 	EventSeq         *int64         `json:"event_seq,omitempty"`
+	ControlSeq       *int64         `json:"seq,omitempty"`
 	EpochID          *int           `json:"epoch_id,omitempty"`
 	Round            *int           `json:"round,omitempty"`
 	Role             *string        `json:"role,omitempty"`
@@ -633,17 +644,30 @@ func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {
 }
 
 func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, error) {
-	page, err := c.GetSessionLogPage(sessionID, 0)
+	page, err := c.GetSessionLogPage(sessionID, SessionLogPageQuery{})
 	if err != nil {
 		return nil, err
 	}
 	return page.Events, nil
 }
 
-func (c *Client) GetSessionLogPage(sessionID string, tail int) (*SessionLogPage, error) {
+func (c *Client) GetSessionLogPage(
+	sessionID string,
+	query SessionLogPageQuery,
+) (*SessionLogPage, error) {
 	path := "/api/deployments/" + url.PathEscape(sessionID) + "/logs"
-	if tail > 0 {
-		path += "?tail=" + strconv.Itoa(tail)
+	params := url.Values{}
+	if query.Tail > 0 {
+		params.Set("tail", strconv.Itoa(query.Tail))
+	}
+	if query.BeforeRuntime != nil {
+		params.Set("before_rt", strconv.FormatInt(*query.BeforeRuntime, 10))
+	}
+	if query.BeforeControl != nil {
+		params.Set("before_cp", strconv.FormatInt(*query.BeforeControl, 10))
+	}
+	if encoded := params.Encode(); encoded != "" {
+		path += "?" + encoded
 	}
 	resp, err := c.do("GET", path, nil)
 	if err != nil {
@@ -658,16 +682,36 @@ func (c *Client) GetSessionLogPage(sessionID string, tail int) (*SessionLogPage,
 		return nil, err
 	}
 	events := make([]sessionapi.SessionEvent, 0, len(response.Events))
+	beforeRuntime := query.BeforeRuntime
+	beforeControl := query.BeforeControl
+	canPageBackward := len(response.Events) > 0
+	cursorAdvanced := false
 	for _, raw := range response.Events {
 		var event deploymentLogEvent
 		if err := json.Unmarshal(raw, &event); err != nil {
 			return nil, fmt.Errorf("decode session log event: %w", err)
 		}
+		if event.EventSeq == nil && event.ControlSeq == nil {
+			canPageBackward = false
+		}
+		if event.EventSeq != nil && (beforeRuntime == nil || *event.EventSeq < *beforeRuntime) {
+			value := *event.EventSeq
+			beforeRuntime = &value
+			cursorAdvanced = true
+		}
+		if event.ControlSeq != nil && (beforeControl == nil || *event.ControlSeq < *beforeControl) {
+			value := *event.ControlSeq
+			beforeControl = &value
+			cursorAdvanced = true
+		}
 		events = append(events, event.asSessionEvent())
 	}
 	return &SessionLogPage{
-		Events:    events,
-		RawEvents: response.Events,
+		Events:          events,
+		RawEvents:       response.Events,
+		BeforeRuntime:   beforeRuntime,
+		BeforeControl:   beforeControl,
+		CanPageBackward: canPageBackward && cursorAdvanced,
 	}, nil
 }
 
