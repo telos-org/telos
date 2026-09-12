@@ -57,6 +57,9 @@ Choose the lifecycle that matches the requested outcome:
 | Persistent Goal | `telos apply` | One Cloud session and deployment that evolve across revisions. |
 | Bounded run | `telos run` | A local session that stops at its cycle, time, or cost bound. |
 
+For model selection and `--thinking` on `apply` or `run`, read
+[Models and inference](references/inference.md).
+
 ## Authorization
 
 Before `run`, `apply`, `push`, or `delete`, present the resolved action and
