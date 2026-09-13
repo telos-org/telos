@@ -83,6 +83,24 @@ with `--session` rejects an effective model selection from `--model` or
 `TELOS_MODEL`; the stored machine-local default is ignored for the update. An
 explicit `--model ""` clears a non-empty environment override for that command.
 
+## Thinking effort
+
+`--thinking` sets reasoning effort for both implementation and verification,
+not a turn timeout. It works with managed and subscription inference; supported
+levels depend on the model and provider.
+
+```bash
+telos apply SPEC.md --context CONTEXT --thinking high
+telos run REPORT_SPEC.md --workspace . --until 3 --thinking high
+```
+
+`--thinking` overrides `TELOS_THINKING`. Otherwise, Cloud uses its service
+default (currently `medium`), while local runs default to `high`.
+
+Cloud thinking is fixed at creation: `apply --session` rejects a non-empty
+override. Unset `TELOS_THINKING` or pass `--thinking ""` to keep the existing
+setting when updating the spec.
+
 ## Local runs
 
 A `platform: local` spec runs through the `pi` coding agent installed on the
