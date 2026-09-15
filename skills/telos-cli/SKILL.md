@@ -158,7 +158,7 @@ Inside a Telos session, the same command creates a linked child session; see
 | Effect | Commands |
 | --- | --- |
 | Inspect state | `plan`, `list`, `describe`, `logs` |
-| Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context`, `config --model` |
+| Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context` |
 | Start bounded local execution; may spend money | `run` |
 | Publish or change remote state; `apply` may spend money | `apply`, `push`, `delete` |
 
