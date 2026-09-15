@@ -18,6 +18,7 @@ import (
 )
 
 const controllerFailureBackoffCap = 15 * time.Minute
+const controllerCredentialRetryInterval = 5 * time.Minute
 
 func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	var err error
@@ -54,6 +55,9 @@ func runSessionWorker(
 
 	failures := 0
 	for {
+		if stopRequested(stop) {
+			return 0, nil
+		}
 		manifest, err := LoadWorkerManifest(sessionDir)
 		if err != nil {
 			return 1, err
@@ -85,10 +89,15 @@ func runSessionWorker(
 			return 0, nil
 		} else if result.GameResult != game.GameSuccess {
 			if blockerCode, blocked := game.AgentFailureBlocker(result.Error); blocked {
+				delay := time.Duration(0)
+				if blockerCode == "agent_authentication_invalid" || blockerCode == "agent_access_denied" {
+					// Credentials and permissions may change without a spec update.
+					delay = controllerCredentialRetryInterval
+				}
 				fmt.Fprintf(os.Stderr, "root session agent suspended: %s\n", result.Error)
-				logControllerSuspended(sessionDir, blockerCode, result.Error)
+				logControllerSuspended(sessionDir, blockerCode, result.Error, delay)
 				failures = 0
-				if waitForNextCycle(wake, stop, 0) {
+				if waitForNextCycle(wake, stop, delay) {
 					return 0, nil
 				}
 				continue
@@ -220,7 +229,7 @@ func jitteredFailureBackoff(failures int) time.Duration {
 	return base - window + time.Duration(rand.Int64N(int64(window)+1))
 }
 
-func logControllerSuspended(sessionDir, blockerCode, errorText string) {
+func logControllerSuspended(sessionDir, blockerCode, errorText string, retryAfter time.Duration) {
 	manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
 	if err != nil || len(manifest.Specs) == 0 {
 		return
@@ -242,12 +251,17 @@ func logControllerSuspended(sessionDir, blockerCode, errorText string) {
 	if manifest.CreatedAt != "" {
 		ev.StartedAt = manifest.CreatedAt
 	}
-	ev.Log("agent_suspended", 0, "system", map[string]interface{}{
+	details := map[string]interface{}{
 		"state":        "waiting",
 		"blocker_code": blockerCode,
 		"error":        errorText,
 		"action":       "update the model credentials, then re-apply the spec or explicitly wake the session",
-	})
+	}
+	if retryAfter > 0 {
+		details["retry_after_seconds"] = retryAfter.Seconds()
+		details["action"] = "update the model credentials or permissions; the controller will retry automatically"
+	}
+	ev.Log("agent_suspended", 0, "system", details)
 }
 
 func waitForNextCycle(wake <-chan os.Signal, stop <-chan os.Signal, delay time.Duration) bool {
