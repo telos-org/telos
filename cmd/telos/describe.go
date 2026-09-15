@@ -118,6 +118,7 @@ func printCloudSessionDescriptionForContext(
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Session", session.ID)
 	printSummaryField(out, "Revision", session.PackageDigest)
+	printCloudInferenceSummary(out, session)
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
 	}

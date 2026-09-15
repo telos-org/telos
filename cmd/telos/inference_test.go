@@ -13,6 +13,14 @@ import (
 
 func TestResolveCloudInference(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/inference/api-keys" {
+			_, _ = w.Write([]byte(`{"connections":[]}`))
+			return
+		}
+		if r.URL.Path == "/api/inference/catalog" {
+			_, _ = w.Write([]byte(`{"models":[{"id":"gpt-5.6-sol","provider":"chatgpt-codex"}]}`))
+			return
+		}
 		if r.Method != http.MethodGet || r.URL.Path != "/api/inference/connections" {
 			http.NotFound(w, r)
 			return
@@ -25,11 +33,11 @@ func TestResolveCloudInference(t *testing.T) {
 	defer server.Close()
 	client := cloud.NewClient(server.URL, "token")
 
-	managed, err := resolveCloudInference(client, "telos/max")
+	managed, err := resolveCloudInference(client, "telos/max", "")
 	if err != nil || managed.Source != "managed" || managed.Tier != "max" {
 		t.Fatalf("managed = %#v, err = %v", managed, err)
 	}
-	subscription, err := resolveCloudInference(client, "openai-rohan/gpt-5.6-sol")
+	subscription, err := resolveCloudInference(client, "openai-rohan/gpt-5.6-sol", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,10 +46,10 @@ func TestResolveCloudInference(t *testing.T) {
 		subscription.Model != "gpt-5.6-sol" {
 		t.Fatalf("subscription = %#v", subscription)
 	}
-	if _, err := resolveCloudInference(client, "openai-james/gpt-5.6-sol"); err == nil {
+	if _, err := resolveCloudInference(client, "openai-james/gpt-5.6-sol", ""); err == nil {
 		t.Fatal("needs-attention connection resolved")
 	}
-	if _, err := resolveCloudInference(client, "missing/gpt-5.6-sol"); err == nil {
+	if _, err := resolveCloudInference(client, "missing/gpt-5.6-sol", ""); err == nil {
 		t.Fatal("missing connection resolved")
 	}
 }
@@ -78,6 +86,17 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 				Source: "subscription", ConnectionID: "conn_rohan", Model: "gpt-5.6-sol",
 			},
 		},
+		{
+			name:  "API key override",
+			flags: []string{"--model", "Work Anthropic/claude-test", "--thinking", "high"},
+			want:  &cloud.InferenceSelection{Source: "byok", ConnectionID: "key_work", Model: "claude-test"},
+		},
+		{
+			name:  "connection ID override with provider-prefixed model",
+			env:   "telos/max",
+			flags: []string{"--connection-id", "api-key:key_router", "--model", "anthropic/claude-test"},
+			want:  &cloud.InferenceSelection{Source: "byok", ConnectionID: "key_router", Model: "anthropic/claude-test"},
+		},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			requests := make(chan map[string]json.RawMessage, 1)
@@ -92,6 +111,12 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 					_, _ = w.Write(pkg.Bytes)
 				case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
 					_, _ = w.Write([]byte(`{"connections":[{"id":"conn_rohan","name":"openai-rohan","provider":"chatgpt-codex","status":"connected"}]}`))
+				case r.Method == http.MethodGet && r.URL.Path == "/api/inference/api-keys":
+					_, _ = w.Write([]byte(`{"connections":[{"id":"key_work","name":"Work Anthropic","provider":"anthropic"},{"id":"key_router","name":"Work/Router","provider":"openrouter"}]}`))
+				case r.Method == http.MethodGet && r.URL.Path == "/api/inference/catalog":
+					_, _ = w.Write([]byte(`{"models":[{"id":"gpt-5.6-sol","provider":"chatgpt-codex"}]}`))
+				case r.Method == http.MethodGet && r.URL.Path == "/api/inference/api-keys/catalog":
+					_, _ = w.Write([]byte(`{"enabled":true,"connections":[{"connection_id":"key_work","models":[{"id":"claude-test","provider":"anthropic"}]},{"connection_id":"key_router","models":[{"id":"anthropic/claude-test","provider":"openrouter"}]}]}`))
 				case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
 					var request map[string]json.RawMessage
 					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {

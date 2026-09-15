@@ -33,13 +33,16 @@ func cmdLaunch(command, action string, args []string) {
 	sessionID := &sessionIDValue
 	forceValue := false
 	force := &forceValue
+	connectionIDValue := ""
+	connectionID := &connectionIDValue
 	if command == "apply" {
 		sessionID = fs.String("session", "", "Managed session ID to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
+		connectionID = fs.String("connection-id", "", "Cloud connection ID (optionally api-key:ID or subscription:ID); requires --model with a raw model ID")
 	}
 	modelHelp := "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	if command == "apply" {
-		modelHelp = "Cloud: telos/default, telos/max, or <connection-name>/<model-name>; local: <provider>/<model>; defaults to $TELOS_MODEL, then the workspace preference for Cloud"
+		modelHelp = "Cloud: telos/default, telos/max, or <subscription-or-key-name>/<model-id>; local: <provider>/<model>; defaults to $TELOS_MODEL, then the workspace preference for Cloud"
 	}
 	model := fs.String("model", "", modelHelp)
 	thinking := fs.String("thinking", "", "Thinking effort; defaults to $TELOS_THINKING, then high for local runs")
@@ -56,6 +59,10 @@ func cmdLaunch(command, action string, args []string) {
 		contextFlagValue = cloudContextFlag(fs)
 	}
 	parseFlags(fs, args)
+	if flagNameSet(fs, "connection-id") && (strings.TrimSpace(*connectionID) == "" || !flagNameSet(fs, "model") || strings.TrimSpace(*model) == "") {
+		fmt.Fprintln(os.Stderr, "error: --connection-id requires a non-empty connection ID and an explicit --model with a raw model ID")
+		os.Exit(2)
+	}
 	*sessionID = strings.TrimSpace(*sessionID)
 	contextOverride, err := cloudContextOverride(fs, *contextFlagValue)
 	if err != nil {
@@ -108,6 +115,10 @@ func cmdLaunch(command, action string, args []string) {
 		platform = parsedPlatform
 	}
 	if command == "apply" {
+		if *connectionID != "" && platform == "local" {
+			fmt.Fprintln(os.Stderr, "error: --connection-id is only supported for new Cloud deployments")
+			os.Exit(2)
+		}
 		if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -176,6 +187,7 @@ func cmdLaunch(command, action string, args []string) {
 			*force,
 			*jsonOut,
 			contextOverride,
+			*connectionID,
 		)
 		return
 	}
@@ -423,6 +435,7 @@ func applyCloudControl(
 	force bool,
 	jsonOut bool,
 	contextOverride string,
+	connectionID string,
 ) {
 	var reference *packageReference
 	if strings.HasPrefix(strings.TrimSpace(specArg), "@") {
@@ -437,6 +450,14 @@ func applyCloudControl(
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+	var inference *cloud.InferenceSelection
+	if sessionID == "" {
+		inference, err = resolveCloudInference(control, runtimeConfig.Model, connectionID)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 	}
 	packageName := ""
 	var packageRecord *cloud.PackageVersionRecord
@@ -462,6 +483,7 @@ func applyCloudControl(
 		sessionID,
 		runtimeConfig,
 		force,
+		inference,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -491,6 +513,7 @@ func applyCloudSessionPackage(
 	sessionID string,
 	runtimeConfig sessionRuntimeConfig,
 	force bool,
+	inference *cloud.InferenceSelection,
 ) (string, *cloud.SessionRecord, error) {
 	if sessionID != "" {
 		if !isCloudApplyID(sessionID) {
@@ -509,10 +532,6 @@ func applyCloudSessionPackage(
 		return "updated", session, actionableDeploymentUpdateError(err, force)
 	}
 
-	inference, err := resolveCloudInference(control, runtimeConfig.Model)
-	if err != nil {
-		return "", nil, err
-	}
 	session, err := control.CreateSession(cloud.SessionCreateOptions{
 		Name:          name,
 		PackageRef:    packageRef,
@@ -586,6 +605,7 @@ func printCloudSessionReceiptForContext(
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
 	printSummaryField(out, "Session", session.ID)
 	printSummaryField(out, "Revision", session.PackageDigest)
+	printCloudInferenceSummary(out, *session)
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
 	}

@@ -83,9 +83,11 @@ browser login does not replace the token in the environment.
 
 ## Choose the context
 
-`telos config` shows authentication status, the active context, and connected
-subscriptions. Choose the workspace's default model under **Inference** in the
-Telos app. See [Models and inference](inference.md) for deployment overrides.
+`telos config` shows authentication status, the active context, the workspace
+model default, subscriptions, and saved API-key connections. Use
+`telos config --models` to discover model selections. Set the shared default
+with `telos config --workspace-model` or under **Inference** in the Telos app.
+See [Models and inference](inference.md) for model flags and deployment overrides.
 
 The personal context is `personal`. Team contexts use their handle:
 
@@ -98,8 +100,8 @@ Commands also accept a stable organization ID when you have one. Receipts and
 JSON output still show `personal` or the team's `@handle`, keeping the visible
 context consistent across commands.
 
-`telos config --context personal` returns to the personal context. A
-command-level `--context` overrides `TELOS_CONTEXT` and stored configuration
+`telos config --context personal` returns to the personal context. On deployment
+commands, `--context` overrides `TELOS_CONTEXT` and stored configuration
 for that invocation without changing either. Carry the chosen context through
 `plan`, `apply`, `describe`, `logs`, and `delete` so each action has one visible
 target.
@@ -107,6 +109,10 @@ target.
 For jobs using injected credentials, choose the context with `TELOS_CONTEXT`
 or `--context`. `telos config --context` changes saved configuration and uses
 saved credentials rather than the token and endpoint environment overrides.
+Run that setter separately from other config actions. To inspect models or
+change the shared model default in another workspace without saving a local
+context, use `TELOS_CONTEXT=@team-handle telos config --models` or
+`TELOS_CONTEXT=@team-handle telos config --workspace-model telos/max`.
 
 ## Preflight the managed runtime
 
