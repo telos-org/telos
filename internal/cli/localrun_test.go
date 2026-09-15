@@ -117,6 +117,56 @@ func checkpointCompletedWorkspace(t *testing.T, session *LocalSession, specName 
 	return workspacePath
 }
 
+func TestRunLocalSessionRecoversAfterCredentialFailure(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	t.Chdir(dir)
+	session, err := CreateLocalSession(specPath, LocalRunConfig{SessionKind: sessionapi.KindController})
+	if err != nil {
+		t.Fatal(err)
+	}
+	workspaceFile := filepath.Join(session.SessionDir, "workspace", "partial-work.txt")
+	exec := &fakeExecutor{
+		proverResult: game.TurnResult{
+			Role: "prover", Status: game.StatusContinue,
+			Error: "401: invalid x-api-key",
+		},
+		onExecute: func(string) {
+			if err := os.WriteFile(workspaceFile, []byte("work before the key expired"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	failed, err := RunLocalSessionWithExecutor(session.SessionDir, exec)
+	if err != nil || failed.GameResult != game.GameFailure {
+		t.Fatalf("first cycle: %#v, %v", failed, err)
+	}
+	exec.proverResult = game.TurnResult{Role: "prover", Status: game.StatusContinue, Logs: "done"}
+	exec.verifierResult = game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "<status>CONCEDE</status>"}
+	exec.onExecute = func(string) {
+		data, err := os.ReadFile(workspaceFile)
+		if err != nil || string(data) != "work before the key expired" {
+			t.Fatalf("partial work was not preserved: %q, %v", data, err)
+		}
+	}
+	recovered, err := RunLocalSessionWithExecutor(session.SessionDir, exec)
+	if err != nil || recovered.GameResult != game.GameSuccess {
+		t.Fatalf("recovery cycle: %#v, %v", recovered, err)
+	}
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if manifest.SessionID != session.SessionID || len(manifest.Epochs) != 2 {
+		t.Fatalf("expected two epochs in the original session: %#v", manifest)
+	}
+	for i, want := range []string{"failed", "completed"} {
+		if got := manifest.Epochs[i].Result; got == nil || *got != want {
+			t.Fatalf("epoch %d result = %v, want %s", i+1, got, want)
+		}
+	}
+}
+
 func TestCreateLocalSession(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
