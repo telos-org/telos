@@ -37,7 +37,8 @@ Config file     ~/.telos/config.yaml
 Endpoint        https://api.usetelos.ai
 Authentication  valid
 Context         personal
-Subscriptions
+Workspace model telos/default
+Connections
 ```
 
 [Install Telos](install.md) covers first-time setup and PATH repair. This
@@ -94,8 +95,7 @@ Hash      799e5c31172afb26
 
 Confirm the target and context before continuing. The first plan has no
 deployed revision to compare, so it shows the Goal identity, namespace, and
-content hash. Present the resolved Cloud mutation to the user and obtain
-approval before applying it.
+content hash. Applying it creates a Cloud deployment and may incur charges.
 
 ## Apply it
 
@@ -106,6 +106,9 @@ created reading-list
 Status    working
 Session   sess_c7d2f0a4e8
 Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
+Inference Managed
+Model     telos/default
+Thinking  medium (requested)
 Context   personal
 Logs      telos logs --context personal sess_c7d2f0a4e8
 ```
@@ -136,6 +139,9 @@ Name      reading-list
 Status    ready
 Session   sess_c7d2f0a4e8
 Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
+Inference Managed
+Model     telos/default
+Thinking  medium (requested)
 Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 ```
@@ -195,6 +201,9 @@ updated reading-list
 Status    working
 Session   sess_c7d2f0a4e8
 Revision  sha256:3211e85fe81bd70aa74726d4ce0dc68d729d816826a21b62b18eb86074ff3317
+Inference Managed
+Model     telos/default
+Thinking  medium (requested)
 Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 Logs      telos logs --context personal sess_c7d2f0a4e8

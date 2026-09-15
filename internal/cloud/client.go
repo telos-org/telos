@@ -63,21 +63,22 @@ type SkillRecord struct {
 }
 
 type SessionRecord struct {
-	ID             string  `json:"id"`
-	Name           string  `json:"name"`
-	State          string  `json:"state"`
-	Status         string  `json:"status,omitempty"`
-	StatusReason   string  `json:"status_reason,omitempty"`
-	PackageRef     string  `json:"package_ref"`
-	PackageDigest  string  `json:"package_digest"`
-	RuntimeVersion *string `json:"runtime_version,omitempty"`
-	AgentModel     string  `json:"agent_model,omitempty"`
-	AgentThinking  string  `json:"agent_thinking,omitempty"`
-	ServiceURL     *string `json:"service_url,omitempty"`
-	DashboardURL   *string `json:"dashboard_url,omitempty"`
-	FailureReason  *string `json:"failure_reason,omitempty"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	State          string            `json:"state"`
+	Status         string            `json:"status,omitempty"`
+	StatusReason   string            `json:"status_reason,omitempty"`
+	PackageRef     string            `json:"package_ref"`
+	PackageDigest  string            `json:"package_digest"`
+	RuntimeVersion *string           `json:"runtime_version,omitempty"`
+	AgentModel     string            `json:"agent_model,omitempty"`
+	AgentThinking  string            `json:"agent_thinking,omitempty"`
+	Inference      *InferenceSummary `json:"inference,omitempty"`
+	ServiceURL     *string           `json:"service_url,omitempty"`
+	DashboardURL   *string           `json:"dashboard_url,omitempty"`
+	FailureReason  *string           `json:"failure_reason,omitempty"`
+	CreatedAt      string            `json:"created_at"`
+	UpdatedAt      string            `json:"updated_at"`
 }
 
 type SessionCreateOptions struct {

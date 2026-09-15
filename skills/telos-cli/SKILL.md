@@ -62,11 +62,13 @@ For model selection and `--thinking` on `apply` or `run`, read
 
 ## Authorization
 
-Before `run`, `apply`, `push`, or `delete`, present the resolved action and
-target to the user and obtain approval. Include the spec and workspace for a
-run, the session and context for an apply or delete, and the scope and package
-version for a push. `run` and `apply` may spend money. Never infer a session,
-context, scope, package version, or destructive target.
+Before `run`, `apply`, `push`, `delete`, or `config --workspace-model`, present
+the resolved action and target to the user and obtain approval. Include the spec
+and workspace for a run, the session and context for an apply or delete, and
+the scope and package version for a push. `run` and `apply` may spend money. Never infer a session,
+context, scope, package version, or destructive target. For a workspace model
+change, include the selected context and inference selection; it changes the
+default for future CLI and web deployments in that workspace.
 
 ## Apply a persistent Goal
 
@@ -157,10 +159,11 @@ Inside a Telos session, the same command creates a linked child session; see
 
 | Effect | Commands |
 | --- | --- |
-| Inspect state | `plan`, `list`, `describe`, `logs` |
+| Inspect state | `config`, `config --models`, `plan`, `list`, `describe`, `logs` |
+| Refresh model discovery caches | `config --models --refresh` |
 | Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context` |
 | Start bounded local execution; may spend money | `run` |
-| Publish or change remote state; `apply` may spend money | `apply`, `push`, `delete` |
+| Publish or change remote state; `apply` may spend money | `apply`, `push`, `delete`, `config --workspace-model` |
 
 Package versions are immutable, so changed content receives a new version.
 

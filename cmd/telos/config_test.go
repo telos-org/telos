@@ -167,9 +167,14 @@ func TestCmdConfigShowsResolvedContextWithoutExposingToken(t *testing.T) {
 	if strings.Contains(strings.ToLower(out), "source") {
 		t.Fatalf("output contains implementation-source noise: %q", out)
 	}
-	for _, want := range []string{"openai-rohan", "chatgpt-codex", "owner@example.com", "connected"} {
+	for _, want := range []string{"openai-rohan", "Subscription", "connected", "Work Anthropic", "API key", "saved"} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("output %q does not contain subscription value %q", out, want)
+			t.Fatalf("output %q does not contain connection value %q", out, want)
+		}
+	}
+	for _, detail := range []string{"chatgpt-codex", "owner@example.com", "conn_1", "key_work"} {
+		if strings.Contains(out, detail) {
+			t.Fatalf("normal output contains connection detail %q: %q", detail, out)
 		}
 	}
 }
@@ -290,6 +295,10 @@ func accountBootstrapServer(t *testing.T) *httptest.Server {
 		}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
 			_, _ = w.Write([]byte(`{"connections":[{"id":"conn_1","name":"openai-rohan","provider":"chatgpt-codex","status":"connected","account_label":"owner@example.com","plan":"pro"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/api-keys":
+			_, _ = w.Write([]byte(`{"connections":[{"id":"key_work","name":"Work Anthropic","provider":"anthropic"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/preference":
+			_, _ = w.Write([]byte(`{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`))
 		default:
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}
