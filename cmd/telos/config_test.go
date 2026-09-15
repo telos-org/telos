@@ -155,13 +155,11 @@ func TestCmdConfigShowsResolvedContextWithoutExposingToken(t *testing.T) {
 	if got := configOutputValue(t, out, "Authentication"); got != "valid" {
 		t.Fatalf("authentication = %q", got)
 	}
-	for label, want := range map[string]string{
-		"Config file":   configPath,
-		"Default model": "workspace default",
-	} {
-		if got := configOutputValue(t, out, label); got != want {
-			t.Fatalf("%s = %q, want %q", label, got, want)
-		}
+	if got := configOutputValue(t, out, "Config file"); got != configPath {
+		t.Fatalf("config path = %q, want %q", got, configPath)
+	}
+	if strings.Contains(out, "Default model") {
+		t.Fatalf("output still advertises a machine-local model default: %q", out)
 	}
 	if strings.Contains(out, "test-token") {
 		t.Fatalf("output leaked auth token: %q", out)
@@ -173,28 +171,6 @@ func TestCmdConfigShowsResolvedContextWithoutExposingToken(t *testing.T) {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output %q does not contain subscription value %q", out, want)
 		}
-	}
-}
-
-func TestCmdConfigSetsCloudDefaultModel(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	t.Setenv(config.ConfigPathEnv, configPath)
-	if err := config.SaveConfig(&config.Config{AuthToken: "test-token"}); err != nil {
-		t.Fatal(err)
-	}
-
-	out := captureStdout(t, func() {
-		cmdConfig([]string{"--model", "openai-rohan/gpt-5.6-sol"})
-	})
-	if !strings.Contains(out, "default model set to openai-rohan/gpt-5.6-sol") {
-		t.Fatalf("output = %q", out)
-	}
-	stored, err := config.LoadStoredConfig()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stored.DefaultModel != "openai-rohan/gpt-5.6-sol" || stored.AuthToken != "test-token" {
-		t.Fatalf("stored config = %#v", stored)
 	}
 }
 

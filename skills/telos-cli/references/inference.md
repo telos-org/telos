@@ -35,7 +35,6 @@ Config file     ~/.telos/config.yaml
 Endpoint        https://api.usetelos.ai
 Authentication  valid
 Context         personal
-Default model   workspace default
 Subscriptions
   MyChatGPT  chatgpt-codex  alice@example.com  connected
 ```
@@ -53,35 +52,39 @@ uses connections already available to the selected context.
 
 ### Cloud selection order
 
-A Cloud inference selection is fixed when the session is created. The CLI
-resolves an explicit selection in this order:
+A Cloud inference selection is fixed when the session is created. New sessions
+use this selection order:
 
 1. `--model` on `telos apply`
 2. `TELOS_MODEL`
-3. the machine-local value set by `telos config --model`
+3. the selected context's workspace inference preference
+4. Telos Default
 
-If all three are empty, the CLI sends no selection and Cloud uses the chosen
-context's workspace inference preference. A workspace with no saved preference
-uses the standard managed tier.
+When neither `--model` nor `TELOS_MODEL` supplies a model, the CLI sends no
+selection. Cloud then uses the workspace preference, including a saved API-key
+default. Choose that preference under **Inference** in the Telos app. A
+workspace with no saved preference uses the standard managed tier.
 
-The Cloud forms are `telos/default`, `telos/max`, and
+The explicit Cloud model forms are `telos/default`, `telos/max`, and
 `<connection-name>/<model-name>`.
 
-Set or clear the machine-local default with:
+Use `--model` for one deployment, or `TELOS_MODEL` for a terminal session or
+script. An explicitly empty `--model` clears the environment override for that
+command and lets Cloud use the workspace preference:
 
 ```bash
-telos config --model telos/max
-telos config --model ""
+telos apply SPEC.md --model "" --context CONTEXT
 ```
 
-This value is not scoped per context. Clearing it means “defer to the workspace
-preference.” The `workspace default` label printed by `telos config` does not
-identify the model or subscription that the workspace will choose.
+`telos config --model` is no longer supported. If your configuration file
+contains `default_model` from an older CLI version, Telos ignores it and removes
+it the next time the CLI saves that configuration. Your saved authentication
+and context remain available.
 
 Later revisions keep the session's existing inference configuration. Applying
 with `--session` rejects an effective model selection from `--model` or
-`TELOS_MODEL`; the stored machine-local default is ignored for the update. An
-explicit `--model ""` clears a non-empty environment override for that command.
+`TELOS_MODEL`. Omit the override, unset `TELOS_MODEL`, or pass `--model ""` to
+keep the existing selection when updating the spec.
 
 ## Thinking effort
 
@@ -121,6 +124,5 @@ model, so nested runs use the same inference provider and model unless you
 override it. Hosted child tasks submitted without a model through the Sessions
 API use the deployment's selected model.
 
-The stored Cloud default from `telos config --model` does not participate in
-local selection. Provider authentication comes from the local pi installation;
-run `pi` and use `/login` to configure it.
+Provider authentication comes from the local pi installation; run `pi` and use
+`/login` to configure it.
