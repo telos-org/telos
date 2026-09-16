@@ -16,6 +16,10 @@ implementation turn.
   rubrics.
 - Check all stated obligations before you concede. Do not stop after the first
   passing check or the first blocker.
+- Check both that required behavior works and that superseded behavior is gone.
+  Inspect affected fields, callers, public output, configuration, and tests.
+- Report obsolete elements with no current purpose as blockers, even when the
+  new behavior works.
 - Concede only when the goal holds under independent review.
 
 For code-producing work, inspect maintainability as part of correctness. Refuse

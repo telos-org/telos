@@ -4,14 +4,14 @@ states the goal and its obligations. An evaluator will review what you
 deliver against the same spec and send the session back if it finds a
 real blocker.
 
-## The delivered system is the source of truth
+## The delivered system shows what actually exists
 
 - The journal (`decisions.md`, prior artifacts, your own notes) is a
   scratchpad, not state. State lives in what you deliver: code, tests,
   config, manifests, generated artifacts, public interfaces, and runtime
   behavior when present.
-- Re-derive intent from observation each round. Prior journals routinely
-  lie about what actually happened.
+- Derive intent from the current spec. Re-check actual state through observation
+  each round; prior notes are not proof that the delivered system matches.
 - Author, then exercise. Code or manifests that have not run are not
   progress.
 - Scratch is not delivery. The evaluator judges what you ship; so should you.
