@@ -151,6 +151,9 @@ func TestEvidenceLogAgent(t *testing.T) {
 	if d["status"] != "CONTINUE" {
 		t.Errorf("status: got %v", d["status"])
 	}
+	if d["audience"] != "agent" || d["logs_tail"] != "some logs" {
+		t.Errorf("technical completion: got %v", d)
+	}
 }
 
 func TestEvidenceLogGameEnd(t *testing.T) {
@@ -170,6 +173,9 @@ func TestEvidenceLogGameEnd(t *testing.T) {
 	d, _ := m["data"].(map[string]interface{})
 	if d["game_result"] != "success" {
 		t.Errorf("game_result: got %v", d["game_result"])
+	}
+	if d["audience"] != "user" {
+		t.Errorf("audience: got %v", d["audience"])
 	}
 	if d["verifier_conceded"] != true {
 		t.Errorf("verifier_conceded: got %v", d["verifier_conceded"])

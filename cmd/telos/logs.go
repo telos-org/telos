@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -65,7 +66,8 @@ func cmdLogs(args []string) {
 		return
 	}
 
-	if _, err := getSessionFromAnywhere(sessionID); err == nil {
+	if session, err := getSessionFromAnywhere(sessionID); err == nil {
+		options.Active = session.Status == sessionapi.StatusRunning
 		if *raw {
 			text, transcriptErr := getTranscriptFromAnywhere(sessionID)
 			if transcriptErr != nil {
@@ -123,6 +125,8 @@ func printCloudSessionLogs(
 	raw bool,
 	contextOverride string,
 ) {
+	status := cloudSessionDisplayStatus(*session)
+	options.Active = status == "working" || status == "in_progress" || status == "running"
 	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -136,6 +140,15 @@ func printCloudSessionLogs(
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+	// A raw event window can consist entirely of hidden tool activity. Page
+	// only the human view; raw and JSON retain their event-tail contract.
+	if !raw && !jsonOutput && tail > 0 {
+		page, err = expandCloudHumanLogs(control, session.ID, page, options.Tail)
+		if err != nil {
+			options.Active = false
+			fmt.Fprintf(os.Stderr, "Some progress updates could not be loaded: %v\n", err)
+		}
 	}
 	if raw {
 		if err := printRawJSONLogEvents(os.Stdout, page.RawEvents); err != nil {
@@ -156,6 +169,154 @@ func printCloudSessionLogs(
 		return
 	}
 	printStructuredLogs(os.Stdout, page.Events, options)
+}
+
+func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *cloud.SessionLogPage, tail int) (*cloud.SessionLogPage, error) {
+	combined := *initial
+	page := initial
+	var beforeRuntime, beforeControl *int64
+	if initial.Cursors != nil {
+		beforeRuntime = afterCloudLogHead(initial.Cursors.Runtime)
+		beforeControl = afterCloudLogHead(initial.Cursors.Control)
+	}
+	seen := make(map[string]bool)
+	for {
+		if page.Cursors != nil && page.Cursors.SessionKnown && page.Cursors.Session == nil {
+			return &combined, errors.New("the runtime could not be reached; earlier activity may still be available")
+		}
+		if len(renderLogRows(combined.Events)) >= tail {
+			return &combined, nil
+		}
+		keys, runtime, controlPlane := cloudLogPagePositions(page.RawEvents)
+		if page.Cursors == nil || keys == nil && len(page.RawEvents) > 0 {
+			// Older servers and runtimes cannot page by durable event identity.
+			// Preserve their existing full-history fallback, once per command.
+			if page == initial && len(page.RawEvents) < tail {
+				return &combined, nil
+			}
+			full, err := control.GetSessionLogPage(sessionID, 0)
+			if err != nil {
+				return &combined, err
+			}
+			if full.Cursors != nil && full.Cursors.SessionKnown && full.Cursors.Session == nil {
+				return &combined, errors.New("the runtime could not be reached; earlier activity may still be available")
+			}
+			if cloudLogSessionChanged(initial, full) {
+				return &combined, errors.New("the session changed while loading earlier activity; run telos logs again to view the new session")
+			}
+			return full, nil
+		}
+		for _, key := range keys {
+			seen[key] = true
+		}
+		if runtime != nil && (beforeRuntime == nil || *runtime < *beforeRuntime) {
+			beforeRuntime = runtime
+		}
+		if controlPlane != nil && (beforeControl == nil || *controlPlane < *beforeControl) {
+			beforeControl = controlPlane
+		}
+		if beforeRuntime == nil && beforeControl == nil {
+			return &combined, nil
+		}
+		next, err := control.GetSessionLogPageBefore(sessionID, maxCloudLogTail, beforeRuntime, beforeControl)
+		if err != nil {
+			return &combined, err
+		}
+		if next.Cursors != nil && next.Cursors.SessionKnown && next.Cursors.Session == nil {
+			return &combined, errors.New("the runtime could not be reached; earlier activity may still be available")
+		}
+		if cloudLogSessionChanged(initial, next) {
+			return &combined, errors.New("the session changed while loading earlier activity; run telos logs again to view the new session")
+		}
+		if len(next.RawEvents) == 0 {
+			return &combined, nil
+		}
+		nextKeys, nextRuntime, nextControl := cloudLogPagePositions(next.RawEvents)
+		if next.Cursors == nil || nextKeys == nil {
+			page = next
+			continue
+		}
+		advanced := nextRuntime != nil && (beforeRuntime == nil || *nextRuntime < *beforeRuntime) ||
+			nextControl != nil && (beforeControl == nil || *nextControl < *beforeControl)
+		if !advanced {
+			return &combined, errors.New("the server did not return an older activity page")
+		}
+		olderEvents := make([]sessionapi.SessionEvent, 0, len(next.Events))
+		olderRaw := make([]json.RawMessage, 0, len(next.RawEvents))
+		for index, key := range nextKeys {
+			if !seen[key] {
+				olderEvents = append(olderEvents, next.Events[index])
+				olderRaw = append(olderRaw, next.RawEvents[index])
+				seen[key] = true
+			}
+		}
+		combined.Events = append(olderEvents, combined.Events...)
+		combined.RawEvents = append(olderRaw, combined.RawEvents...)
+		sortCloudLogPage(&combined)
+		page = next
+	}
+}
+
+func cloudLogSessionChanged(initial, next *cloud.SessionLogPage) bool {
+	return initial.Cursors != nil && initial.Cursors.Session != nil && next.Cursors != nil && next.Cursors.Session != nil && *initial.Cursors.Session != *next.Cursors.Session
+}
+
+func sortCloudLogPage(page *cloud.SessionLogPage) {
+	type timedEvent struct {
+		event sessionapi.SessionEvent
+		raw   json.RawMessage
+		time  time.Time
+	}
+	ordered := make([]timedEvent, len(page.Events))
+	for index, event := range page.Events {
+		timestamp, _ := time.Parse(time.RFC3339Nano, eventTimestamp(event))
+		ordered[index] = timedEvent{event: event, raw: page.RawEvents[index], time: timestamp}
+	}
+	sort.SliceStable(ordered, func(left, right int) bool {
+		return ordered[left].time.Before(ordered[right].time)
+	})
+	for index, event := range ordered {
+		page.Events[index], page.RawEvents[index] = event.event, event.raw
+	}
+}
+
+func afterCloudLogHead(head *int64) *int64 {
+	if head == nil {
+		return nil
+	}
+	before := *head + 1
+	if before <= 0 {
+		return nil
+	}
+	return &before
+}
+
+func cloudLogPagePositions(events []json.RawMessage) (keys []string, runtime, control *int64) {
+	keys = make([]string, 0, len(events))
+	for _, raw := range events {
+		var event struct {
+			Runtime *int64 `json:"event_seq"`
+			Control *int64 `json:"seq"`
+		}
+		if json.Unmarshal(raw, &event) != nil {
+			return nil, nil, nil
+		}
+		switch {
+		case event.Runtime != nil && *event.Runtime > 0:
+			keys = append(keys, fmt.Sprintf("rt:%d", *event.Runtime))
+			if runtime == nil || *event.Runtime < *runtime {
+				runtime = event.Runtime
+			}
+		case event.Control != nil && *event.Control > 0:
+			keys = append(keys, fmt.Sprintf("cp:%d", *event.Control))
+			if control == nil || *event.Control < *control {
+				control = event.Control
+			}
+		default:
+			return nil, nil, nil
+		}
+	}
+	return keys, runtime, control
 }
 
 func enabledFlagCount(values ...bool) int {

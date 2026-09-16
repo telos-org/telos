@@ -93,7 +93,31 @@ An agent observation loop has four operations:
 telos logs SESSION_ID --context CONTEXT
 ```
 
-The default view contains the 50 most recent activity rows:
+The default view contains the 50 most recent activity rows.
+
+New runtimes report progress in the language of your spec: what requirement is
+being worked on, what changed, and what blocks the next step. Routine tool
+activity and technical agent handoffs remain available in the underlying
+records. Older sessions retain their original progress filtering and completion
+messages. In JSON output, new `agent_progress` records identify human updates
+with `data.audience: "user"` and technical activity with `data.audience: "agent"`.
+Both remain available in the underlying evidence.
+
+If an active session on a new runtime has not reported human-facing progress for
+five minutes, you see the age and last reported activity. Technical activity
+does not reset that timer. This does not imply that the agent has stopped;
+delay explanations appear when the agent has an observed reason to report.
+
+Hidden technical activity does not count toward `--tail`. On current Cloud
+servers, Telos loads older pages as needed to find the requested activity rows.
+If older history is unavailable or the session changes while loading, you keep
+the available rows and see a notice that the history is incomplete. Older
+servers may require a full-history request.
+
+On new runtimes, the completion entry appears when Telos confirms that the
+evaluation cycle has ended. An evaluation cycle completing does not mean the entire Goal is finished:
+a controller may correctly be waiting for child work. Use the current revision's
+state and the evidence required by your spec to assess completion.
 
 | View | Command |
 | --- | --- |

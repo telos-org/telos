@@ -283,6 +283,7 @@ func renderWorkspace(workspace string, role Role) string {
 func renderOutputContract(role Role, opts PromptOptions) string {
 	if role == RoleProver {
 		return strings.Join([]string{
+			renderUserProgressProtocol(),
 			"## Output",
 			"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
 			"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
@@ -298,6 +299,7 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		}, "\n")
 	}
 	lines := []string{
+		renderUserProgressProtocol(),
 		"## Output",
 		"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
 		"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
@@ -327,6 +329,22 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		"- <status>CONCEDE</status> only if the goal and applicable quality bars hold under independent review",
 	)
 	return strings.Join(lines, "\n")
+}
+
+func renderUserProgressProtocol() string {
+	return `## Updates for the spec author
+- Send a <user_update>...</user_update> when you begin meaningful work, establish a result, change direction, or encounter a blocker.
+- Write the entire tag and its message on one line starting at column zero, outside code blocks. Use one or two plain-language sentences, at most 1200 bytes, with no nested tags.
+- Address the person who wrote the spec. Name the goal requirement, package behavior, or skill requirement you are working on; explain what changed or remains uncertain.
+- Example: <user_update>Checking whether the bot can resume after a restart without submitting the same order twice.</user_update>
+- Example: <user_update>The restart check found a duplicate-order risk. I am fixing recovery before testing it again.</user_update>
+- Use the spec author's vocabulary. Omit routine file reads, commands, source-code identifiers, hashes, and unexplained test counts.
+- Translate internal work into its purpose for the spec author. Do not use internal evaluation or workspace terms such as "concede", "PVG", "artifact hygiene", or "tree check"; say what requirement you are verifying or what remains before the review is finished.
+- Distinguish work underway, an implementation claim, a check result, and independent verification. A successful controller cycle or running child does not mean the whole goal is complete.
+- During a known wait, name what is being awaited and why when observed. Do not invent a delay reason, ETA, percentage, or claim of liveness.
+- These messages are presentation only and are excluded from the agent handoff. Keep all technical claims, evidence, findings, uncertainty, and existing progress_update blocks in your normal technical response.
+- Include a final user_update in the same assistant response as your complete technical final response. State which goal requirements were satisfied or remain blocked, what you actually checked, and any remaining uncertainty. Never finish with a separate user-update-only assistant message, and keep the evaluator's status tag as the final non-empty line.
+`
 }
 
 func joinNonEmpty(parts []string) string {

@@ -101,7 +101,32 @@ type sessionListResponse struct {
 }
 
 type deploymentLogEventsResponse struct {
-	Events []json.RawMessage `json:"events"`
+	Events  []json.RawMessage  `json:"events"`
+	Cursors *SessionLogCursors `json:"cursors"`
+}
+
+type SessionLogCursors struct {
+	Runtime      *int64  `json:"rt"`
+	Control      *int64  `json:"cp"`
+	Session      *string `json:"session"`
+	SessionKnown bool    `json:"-"`
+}
+
+func (cursors *SessionLogCursors) UnmarshalJSON(data []byte) error {
+	type cursorFields SessionLogCursors
+	var wire struct {
+		cursorFields
+		Session json.RawMessage `json:"session"`
+	}
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*cursors = SessionLogCursors(wire.cursorFields)
+	cursors.SessionKnown = len(wire.Session) > 0
+	if cursors.SessionKnown {
+		return json.Unmarshal(wire.Session, &cursors.Session)
+	}
+	return nil
 }
 
 // SessionLogPage keeps both the normalized events used by the human/JSON
@@ -109,6 +134,7 @@ type deploymentLogEventsResponse struct {
 type SessionLogPage struct {
 	Events    []sessionapi.SessionEvent
 	RawEvents []json.RawMessage
+	Cursors   *SessionLogCursors
 }
 
 type deploymentLogEvent struct {
@@ -641,9 +667,23 @@ func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, er
 }
 
 func (c *Client) GetSessionLogPage(sessionID string, tail int) (*SessionLogPage, error) {
+	return c.GetSessionLogPageBefore(sessionID, tail, nil, nil)
+}
+
+func (c *Client) GetSessionLogPageBefore(sessionID string, tail int, beforeRuntime, beforeControl *int64) (*SessionLogPage, error) {
 	path := "/api/deployments/" + url.PathEscape(sessionID) + "/logs"
+	query := url.Values{}
 	if tail > 0 {
-		path += "?tail=" + strconv.Itoa(tail)
+		query.Set("tail", strconv.Itoa(tail))
+	}
+	if beforeRuntime != nil {
+		query.Set("before_rt", strconv.FormatInt(*beforeRuntime, 10))
+	}
+	if beforeControl != nil {
+		query.Set("before_cp", strconv.FormatInt(*beforeControl, 10))
+	}
+	if len(query) > 0 {
+		path += "?" + query.Encode()
 	}
 	resp, err := c.do("GET", path, nil)
 	if err != nil {
@@ -668,6 +708,7 @@ func (c *Client) GetSessionLogPage(sessionID string, tail int) (*SessionLogPage,
 	return &SessionLogPage{
 		Events:    events,
 		RawEvents: response.Events,
+		Cursors:   response.Cursors,
 	}, nil
 }
 
