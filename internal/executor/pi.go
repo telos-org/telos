@@ -244,7 +244,11 @@ func piLineEvents(line string) []game.LiveAgentEvent {
 	if !ok || getString(msg, "role") != "assistant" {
 		return nil
 	}
-	events := game.ExtractLiveAgentEvents(assistantText(msg))
+	technical, updates := game.SplitUserUpdates(assistantTextBlocks(msg)...)
+	events := game.ExtractLiveAgentEvents(technical)
+	for _, text := range updates {
+		events = append(events, game.LiveAgentEvent{Kind: "user_update", Text: text})
+	}
 	events = append(events, piToolCallEvents(msg)...)
 	return events
 }
@@ -392,6 +396,7 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 
 	var summary PiSessionSummary
 	var finalAssistant map[string]interface{}
+	var technicalText string
 	reader := bufio.NewReader(f)
 	for {
 		line, err := reader.ReadString('\n')
@@ -403,7 +408,17 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 				if msg, ok := entry["message"].(map[string]interface{}); ok {
 					switch getString(msg, "role") {
 					case "assistant":
-						finalAssistant = msg
+						blocks := assistantTextBlocks(msg)
+						raw := strings.Join(blocks, "")
+						technical, _ := game.SplitUserUpdates(blocks...)
+						// A presentation-only message cannot replace the technical
+						// final response (including the evaluator's status).
+						if strings.TrimSpace(technical) != "" || technical == raw || len(piToolCallEvents(msg)) > 0 {
+							technicalText = technical
+							finalAssistant = msg
+						} else if finalAssistant == nil || errorFromPiMessage(msg) != "" {
+							finalAssistant = msg
+						}
 						summary.Stats = mergeTurnStats(summary.Stats, statsFromPiMessage(msg))
 					case "toolResult", "bashExecution":
 						summary.Stats.NumTurns++
@@ -422,12 +437,12 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 		return PiSessionSummary{}, fmt.Errorf("no assistant message in pi session")
 	}
 
-	summary.Logs = assistantText(finalAssistant)
+	summary.Logs = technicalText
 	summary.Error = errorFromPiMessage(finalAssistant)
 	return summary, nil
 }
 
-func assistantText(msg map[string]interface{}) string {
+func assistantTextBlocks(msg map[string]interface{}) []string {
 	content, _ := msg["content"].([]interface{})
 	var parts []string
 	for _, block := range content {
@@ -443,7 +458,7 @@ func assistantText(msg map[string]interface{}) string {
 			parts = append(parts, text)
 		}
 	}
-	return strings.Join(parts, "")
+	return parts
 }
 
 func statsFromPiMessage(msg map[string]interface{}) game.TurnStats {

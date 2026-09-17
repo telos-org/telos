@@ -720,6 +720,11 @@ func TestClientSessionLogPagePreservesRawEvents(t *testing.T) {
 	if len(page.Events) != 1 || len(page.RawEvents) != 1 {
 		t.Fatalf("page: got %#v", page)
 	}
+	if page.Cursors == nil || page.Cursors.Runtime == nil || *page.Cursors.Runtime != 7 ||
+		page.Cursors.Control == nil || *page.Cursors.Control != 12 ||
+		!page.Cursors.SessionKnown || page.Cursors.Session == nil || *page.Cursors.Session != "sess_runtime" {
+		t.Fatalf("cursor envelope: %#v", page.Cursors)
+	}
 	event := page.Events[0]
 	if event.Schema == nil || *event.Schema != "telos.evidence.v2" ||
 		event.EventID == nil || *event.EventID != "evt_7" ||
@@ -749,6 +754,37 @@ func TestClientSessionLogPageRequestsTail(t *testing.T) {
 
 	if _, err := NewClient(srv.URL, "test-token").GetSessionLogPage("sess_123", 50); err != nil {
 		t.Fatalf("GetSessionLogPage: %v", err)
+	}
+}
+
+func TestClientSessionLogPageRequestsBeforeCursors(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if query.Get("tail") != "1000" || query.Get("before_rt") != "30" || query.Get("before_cp") != "0" {
+			t.Errorf("query = %q", r.URL.RawQuery)
+		}
+		_, _ = w.Write([]byte(`{"events":[],"cursors":{"rt":90,"cp":null,"session":null}}`))
+	}))
+	defer srv.Close()
+	runtime, control := int64(30), int64(0)
+	page, err := NewClient(srv.URL, "test-token").GetSessionLogPageBefore("sess_123", 1000, &runtime, &control)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if page.Cursors == nil || !page.Cursors.SessionKnown || page.Cursors.Session != nil {
+		t.Fatalf("runtime-unreachable envelope: %#v", page.Cursors)
+	}
+}
+
+func TestSessionLogCursorsDistinguishMissingSessionFromUnreachable(t *testing.T) {
+	for _, input := range []string{`{"rt":12,"cp":4}`, `{"rt":12,"cp":4,"session":null}`} {
+		var cursors SessionLogCursors
+		if err := json.Unmarshal([]byte(input), &cursors); err != nil {
+			t.Fatal(err)
+		}
+		if cursors.SessionKnown != strings.Contains(input, "session") || cursors.Session != nil {
+			t.Fatalf("cursors for %s: %#v", input, cursors)
+		}
 	}
 }
 

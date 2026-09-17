@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,140 @@ import (
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 )
+
+func TestUserUpdatesCannotReplaceFinalTechnicalMessage(t *testing.T) {
+	for _, human := range []string{
+		"<user_update>The restart check passed.</user_update>\n",
+		"<user_update>\nThe check passed.\n</user_update>\n",
+		"<user_update>" + strings.Repeat("x", 9000) + "</user_update>\n",
+	} {
+		path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+		writePiSession(t, path, `{}`)
+		technical := strings.Repeat("technical evidence\n", 600) + "<status>CONCEDE</status>\n"
+		for _, content := range []string{human + technical, human} {
+			entry, err := json.Marshal(map[string]any{"message": map[string]any{
+				"role": "assistant", "content": []any{map[string]any{"type": "text", "text": content}},
+			}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			appendPiSession(t, path, string(entry))
+		}
+		summary, err := ReadPiSession(path)
+		if err != nil || summary.Logs != technical || game.ExtractStatus(summary.Logs) != game.StatusConcede {
+			t.Fatalf("human message changed technical handoff: error=%v logs=%q", err, summary.Logs)
+		}
+		raw, _ := os.ReadFile(path)
+		if !strings.Contains(string(raw), "user_update") {
+			t.Fatal("raw artifact lost human message")
+		}
+	}
+}
+
+func TestPiLineEventsSeparatesHumanUpdatesFromTechnicalProgress(t *testing.T) {
+	line := `{"message":{"role":"assistant","content":[{"type":"text","text":"<user_update>Checking restart recovery.</user_update>\n<progress_update>Technical replay evidence.</progress_update>"}]}}`
+	events := piLineEvents(line)
+	if len(events) != 2 || events[0].Kind != "progress_update" || events[1].Kind != "user_update" {
+		t.Fatalf("events=%#v", events)
+	}
+}
+
+func TestPiTextBlocksPreserveTechnicalHandoffAndEveryHumanUpdate(t *testing.T) {
+	// Shape observed in a real GPT-5.5 final response: a standalone human
+	// block without a newline, then technical evidence and another human update.
+	first := "The restart and retry checks pass, including the submitted-body conflict case. No reading-list service process is left running."
+	second := "The reading-list service now saves books and duplicate-request protection across restarts."
+	technical := "Implemented the reading-list service requirements.\n\nChanges:\n- Persisted books and retry records.\n\n<progress_update>Restart evidence checked.</progress_update>\n<status>CONCEDE</status>"
+	entry, err := json.Marshal(map[string]any{"message": map[string]any{
+		"role": "assistant", "content": []any{
+			map[string]any{"type": "text", "text": "<user_update>" + first + "</user_update>"},
+			map[string]any{"type": "text", "text": strings.Replace(technical, "<progress_update>", "<user_update>"+second+"</user_update>\n<progress_update>", 1)},
+		},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, string(entry))
+	summary, err := ReadPiSession(path)
+	if err != nil || summary.Logs != technical || game.ExtractStatus(summary.Logs) != game.StatusConcede {
+		t.Fatalf("text-block boundary changed handoff: error=%v logs=%q", err, summary.Logs)
+	}
+	var human []string
+	for _, event := range piLineEvents(string(entry)) {
+		if event.Kind == "user_update" {
+			human = append(human, event.Text)
+		}
+	}
+	if len(human) != 2 || human[0] != first || human[1] != second {
+		t.Fatalf("text-block boundary lost human updates: %q", human)
+	}
+}
+
+func TestPresentationDoesNotHideAgentErrorsOrReuseStatusAfterToolWork(t *testing.T) {
+	technical := map[string]any{"role": "assistant", "content": []any{map[string]any{
+		"type": "text", "text": "Evidence checked.\n<status>CONCEDE</status>",
+	}}}
+	human := map[string]any{"role": "assistant", "content": []any{map[string]any{
+		"type": "text", "text": "<user_update>Checking the next requirement.</user_update>",
+	}}}
+	for _, tc := range []struct {
+		name     string
+		messages []map[string]any
+		wantErr  string
+		emptyLog bool
+	}{
+		{
+			name: "previous truncation",
+			messages: []map[string]any{
+				{"role": "assistant", "stopReason": "length", "content": technical["content"]}, human,
+			},
+			wantErr: "agent_output_truncated:length",
+		},
+		{
+			name: "presentation truncation",
+			messages: []map[string]any{
+				technical, {"role": "assistant", "stopReason": "length", "content": human["content"]},
+			},
+			wantErr: "agent_output_truncated:length",
+		},
+		{
+			name: "previous provider error",
+			messages: []map[string]any{
+				{"role": "assistant", "errorMessage": "403: inactive virtual key", "content": technical["content"]}, human,
+			},
+			wantErr: "403: inactive virtual key",
+		},
+		{
+			name: "tool work invalidates earlier final response",
+			messages: []map[string]any{
+				technical,
+				{"role": "assistant", "content": []any{
+					map[string]any{"type": "text", "text": "<user_update>Checking recovery.</user_update>"},
+					map[string]any{"type": "toolCall", "name": "bash", "arguments": map[string]any{"command": "true"}},
+				}},
+				human,
+			},
+			emptyLog: true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+			writePiSession(t, path, `{}`)
+			for _, msg := range tc.messages {
+				entry, err := json.Marshal(map[string]any{"message": msg})
+				if err != nil {
+					t.Fatal(err)
+				}
+				appendPiSession(t, path, string(entry))
+			}
+			summary, err := ReadPiSession(path)
+			if err != nil || summary.Error != tc.wantErr || (tc.emptyLog && summary.Logs != "") {
+				t.Fatalf("summary=%+v error=%v", summary, err)
+			}
+		})
+	}
+}
 
 func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	exec := NewPiExecutor(nil, "claude-test", "", 0)
