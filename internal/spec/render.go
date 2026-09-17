@@ -25,6 +25,7 @@ type PromptOptions struct {
 func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
 	preamble, _ := ReadPrompt("prover.md")
+	currentSpec, _ := ReadPrompt("current-spec.md")
 	if options.Controller {
 		controller, _ := ReadPrompt("controller.md")
 		preamble = joinNonEmpty([]string{controller, "", preamble})
@@ -34,6 +35,7 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 		"",
 		renderPlatformPreamble(compiled),
 		renderSessionContext(compiled, RoleProver, options),
+		currentSpec,
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleProver, options),
 		renderSkillsRoster(compiled),
@@ -48,11 +50,13 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
 	preamble := renderVerifierPreamble(options)
+	currentSpec, _ := ReadPrompt("current-spec.md")
 	parts := []string{
 		preamble,
 		"",
 		renderPlatformPreamble(compiled),
 		renderSessionContext(compiled, RoleVerifier, options),
+		currentSpec,
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleVerifier, options),
 		renderSkillsRoster(compiled),
@@ -116,10 +120,9 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 			"### Operating Posture",
 			"- continue from the append-only transcript, workspace, and live environment",
 			"- if unresolved evaluator findings exist, resolve all related findings that the current goal requires before broadening the work",
-			"- if the evaluator says no implementation change is recommended, preserve the current shape and revalidate tests, tree state, and named invariants only",
-			"- otherwise implement the smallest complete solution that makes the delivered system satisfy the goal",
+			"- treat a no-change evaluator recommendation as guidance only for the spec revision it reviewed; revalidate the current state against the current spec before deciding whether changes are needed",
+			"- implement the smallest complete solution that makes the delivered system satisfy the goal",
 			"- after each change, re-check the whole goal and continue while solvable gaps remain",
-			"- preserve valid existing work and live state unless the spec explicitly allows replacement",
 			"",
 		)
 	} else {

@@ -116,6 +116,20 @@ telos plan SPEC.md --session SESSION_ID --context CONTEXT
 telos apply SPEC.md --session SESSION_ID --context CONTEXT
 ```
 
+For spec revisions, use the current contract to judge what belongs in the
+delivered system. Reuse existing work that serves it and remove elements that
+only served superseded requirements; do not require an explicit deletion list.
+Verify both the new behavior and the retirement of obsolete behavior. Preserve
+required data while migrating, and distinguish temporary compatibility work
+from a completed cutover. Earlier evaluator approval applies only to the spec
+revision it reviewed.
+
+Focus retirement checks on changed requirements and their affected code, data,
+and interfaces. Reuse prior independent retirement checks when their evidence
+remains sufficient and the relevant spec, implementation, and live state are
+unchanged. An implementation agent's report does not replace independent
+evaluation.
+
 A healthy revision may still be waiting for its restorable snapshot. If that
 snapshot gate rejects the update, do not bypass it silently. Tell the user:
 
