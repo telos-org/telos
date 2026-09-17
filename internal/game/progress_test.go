@@ -5,6 +5,42 @@ import (
 	"testing"
 )
 
+func TestUserUpdatesPreservePlainTextComparisons(t *testing.T) {
+	technical := "Independent check still found a blocker.\n<status>CONTINUE</status>\n"
+	for _, text := range []string{
+		"Orders costing > $25 are rejected without changing your balance.",
+		"An order is accepted only when its cost is < the available cash.",
+		"Quotes aged <= 30 seconds pass; quotes aged > 30 seconds are rejected.",
+		"The price must satisfy 0<price and price<1; your balance stays >= $0.",
+		"Orders with cost<balance and quantity>0 can be checked.",
+	} {
+		got, updates := SplitUserUpdates("<user_update>" + text + "</user_update>\n" + technical)
+		if got != technical || ExtractStatus(got) != StatusContinue {
+			t.Fatalf("comparison changed technical handoff: %q", got)
+		}
+		if len(updates) != 1 || updates[0] != text {
+			t.Errorf("comparison update lost: text=%q updates=%q", text, updates)
+		}
+	}
+}
+
+func TestUserUpdatesStillRejectNestedTags(t *testing.T) {
+	technical := "Independent check still found a blocker.\n<status>CONTINUE</status>\n"
+	for _, text := range []string{
+		"<status>CONCEDE</status>",
+		"<progress_update>Hidden technical claim.</progress_update>",
+		"The balance is <strong>saved</strong>.",
+		"<result checked=\"true\">Saved.</result>",
+		"Saved.<br/>",
+		"<user_update>Nested update.</user_update>",
+	} {
+		got, updates := SplitUserUpdates("<user_update>" + text + "</user_update>\n" + technical)
+		if got != technical || ExtractStatus(got) != StatusContinue || len(updates) != 0 {
+			t.Errorf("nested tag escaped: text=%q technical=%q updates=%q", text, got, updates)
+		}
+	}
+}
+
 func TestSplitUserUpdatesPreservesTechnicalResponse(t *testing.T) {
 	technical := "Reproduced the failure with evaluation/restart.go.\n<progress_update>Technical evidence retained.</progress_update>\n<status>CONCEDE</status>\n"
 	for _, presentation := range []string{

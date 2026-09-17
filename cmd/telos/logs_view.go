@@ -208,7 +208,7 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 		case "success":
 			row.Summary = "Current revision accepted"
 			if audience == "user" {
-				row.Summary = "Evaluation cycle completed"
+				row.Summary = "This round of checks passed"
 			}
 		case "failure":
 			row.Level = "ERROR"

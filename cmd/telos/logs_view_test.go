@@ -188,7 +188,7 @@ func TestRenderedLogRowWaitsForRuntimeCycleCompletion(t *testing.T) {
 		Event: "game_end",
 		Data:  map[string]any{"audience": "user", "game_result": "success"},
 	})
-	if !visible || accepted.Summary != "Evaluation cycle completed" {
+	if !visible || accepted.Summary != "This round of checks passed" {
 		t.Fatalf("completed row = %#v visible=%v", accepted, visible)
 	}
 	if row, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{

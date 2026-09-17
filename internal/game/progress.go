@@ -1,6 +1,11 @@
 package game
 
-import "strings"
+import (
+	"regexp"
+	"strings"
+)
+
+var userUpdateTagRE = regexp.MustCompile(`</?[A-Za-z][A-Za-z0-9:_-]*(?:\s+[A-Za-z_:][A-Za-z0-9:_.-]*\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'=<>]+))*\s*/?>`)
 
 // SplitUserUpdates separates presentation from the technical response. Fenced
 // and indented examples stay technical. An unclosed presentation block is
@@ -55,7 +60,7 @@ func SplitUserUpdates(blocks ...string) (string, []string) {
 				continue
 			}
 			body = strings.Join(strings.Fields(body), " ")
-			if strings.TrimSpace(suffix) == "" && body != "" && len(body) <= 1200 && !strings.ContainsAny(body, "<>") {
+			if strings.TrimSpace(suffix) == "" && body != "" && len(body) <= 1200 && !userUpdateTagRE.MatchString(body) {
 				updates = append(updates, body)
 			}
 			pending.Reset()

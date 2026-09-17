@@ -94,7 +94,7 @@ func TestCLIWithTestFakeExecutor(t *testing.T) {
 	}
 
 	logsOut := runProcess(t, workspace, env, telosBin, "logs", runResp.SessionID)
-	for _, want := range []string{"[INFO]", "Evaluation cycle completed"} {
+	for _, want := range []string{"[INFO]", "This round of checks passed"} {
 		if !strings.Contains(logsOut, want) {
 			t.Fatalf("logs missing %q:\n%s", want, logsOut)
 		}
