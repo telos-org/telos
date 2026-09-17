@@ -37,7 +37,11 @@ func cmdLaunch(command, action string, args []string) {
 		sessionID = fs.String("session", "", "Managed session ID to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
 	}
-	model := fs.String("model", "", "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL")
+	modelHelp := "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
+	if command == "apply" {
+		modelHelp = "Cloud: telos/default, telos/max, or <connection-name>/<model-name>; local: <provider>/<model>; defaults to $TELOS_MODEL, then the workspace preference for Cloud"
+	}
+	model := fs.String("model", "", modelHelp)
 	thinking := fs.String("thinking", "", "Thinking effort; defaults to $TELOS_THINKING, then high for local runs")
 	untilValue := ""
 	until := &untilValue
@@ -430,11 +434,6 @@ func applyCloudControl(
 		reference = &parsed
 	}
 	control, err := cloud.ControlClientForContext(contextOverride)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	runtimeConfig.Model, err = configuredCloudModel(runtimeConfig.Model)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)

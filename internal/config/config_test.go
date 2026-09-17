@@ -31,6 +31,46 @@ func TestLoadConfigFromFile(t *testing.T) {
 	}
 }
 
+func TestLegacyModelDefaultIsIgnoredAndRemovedOnSave(t *testing.T) {
+	cfgPath := filepath.Join(t.TempDir(), "config.yaml")
+	contents := "api_endpoint: https://saved.example.com\nauth_token: saved-token\ncontext: org_saved\ndefault_model: telos/max\n"
+	if err := os.WriteFile(cfgPath, []byte(contents), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(ConfigPathEnv, cfgPath)
+
+	cfg := loadStoredConfigForTest(t)
+	want := Config{
+		APIEndpoint: "https://saved.example.com",
+		AuthToken:   "saved-token",
+		Context:     "org_saved",
+	}
+	if *cfg != want {
+		t.Fatalf("stored config = %#v, want %#v", cfg, want)
+	}
+	data, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != contents {
+		t.Fatal("reading the legacy config changed its contents")
+	}
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatal(err)
+	}
+	data, err = os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(data), "default_model") {
+		t.Fatal("saved config retained the removed model preference")
+	}
+	if got := loadStoredConfigForTest(t); *got != want {
+		t.Fatalf("saved config = %#v, want %#v", got, want)
+	}
+	assertMode(t, cfgPath, 0o600)
+}
+
 func TestLoadConfigEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
