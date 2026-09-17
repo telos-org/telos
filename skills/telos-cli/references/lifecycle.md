@@ -95,13 +95,18 @@ telos logs SESSION_ID --context CONTEXT
 
 The default view contains the 50 most recent activity rows.
 
-New runtimes report progress in the language of your spec: what requirement is
-being worked on, what changed, and what blocks the next step. Routine tool
-activity and technical agent handoffs remain available in the underlying
-records. Older sessions retain their original progress filtering and completion
-messages. In JSON output, new `agent_progress` records identify human updates
-with `data.audience: "user"` and technical activity with `data.audience: "agent"`.
-Both remain available in the underlying evidence.
+New runtimes report progress toward your Goal in terms of the behavior you
+requested: what is being worked on, what was learned, and what blocks the next
+step. An update can explain that saved data survived a service restart without
+listing the files or commands used to check it. Agents are instructed to
+distinguish implementation checks from independent verification and describe
+only the behavior actually checked.
+
+Routine tool activity, detailed check results, and technical agent handoffs
+remain available in the underlying records. Older sessions retain their original
+progress filtering and completion messages. In JSON output, new `agent_progress`
+records identify human updates with `data.audience: "user"` and technical activity
+with `data.audience: "agent"`. Both remain available in the underlying evidence.
 
 If an active session on a new runtime has not reported human-facing progress for
 five minutes, you see the age and last reported activity. Technical activity
