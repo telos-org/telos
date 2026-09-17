@@ -18,11 +18,6 @@ func cmdConfig(args []string) {
 		"",
 		"Cloud context as @handle, organization ID, or personal",
 	)
-	modelValue := fs.String(
-		"model",
-		"",
-		"Default model for new Cloud deployments; empty clears it",
-	)
 	parseFlags(fs, args)
 	requireArgCount(fs, 0, "no positional arguments")
 	stored, err := config.LoadStoredConfig()
@@ -44,10 +39,6 @@ func cmdConfig(args []string) {
 		setContext(stored, *contextValue)
 		return
 	}
-	if flagNameSet(fs, "model") {
-		setDefaultModel(stored, *modelValue)
-		return
-	}
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -59,19 +50,6 @@ func cmdConfig(args []string) {
 		os.Exit(1)
 	}
 	printConfig(cfg, path)
-}
-
-func setDefaultModel(stored *config.Config, value string) {
-	stored.DefaultModel = strings.TrimSpace(value)
-	if err := config.SaveConfig(stored); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if stored.DefaultModel == "" {
-		fmt.Println("default model cleared")
-		return
-	}
-	fmt.Printf("default model set to %s\n", stored.DefaultModel)
 }
 
 func setContext(stored *config.Config, value string) {
@@ -161,17 +139,11 @@ func printConfig(cfg *config.Config, path string) {
 			}
 		}
 	}
-	defaultModel := strings.TrimSpace(cfg.DefaultModel)
-	if defaultModel == "" {
-		defaultModel = "workspace default"
-	}
-
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	fmt.Fprintf(w, "Config file\t%s\n", path)
 	fmt.Fprintf(w, "Endpoint\t%s\n", endpoint)
 	fmt.Fprintf(w, "Authentication\t%s\n", authentication)
 	fmt.Fprintf(w, "Context\t%s\n", contextName)
-	fmt.Fprintf(w, "Default model\t%s\n", defaultModel)
 	if authentication == "valid" {
 		fmt.Fprintln(w, "Subscriptions")
 		for _, connection := range connections {

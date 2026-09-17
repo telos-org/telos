@@ -22,10 +22,9 @@ const (
 
 // Config holds user-facing cloud CLI configuration.
 type Config struct {
-	APIEndpoint  string `yaml:"api_endpoint,omitempty"`
-	AuthToken    string `yaml:"auth_token,omitempty"`
-	Context      string `yaml:"context,omitempty"`
-	DefaultModel string `yaml:"default_model,omitempty"`
+	APIEndpoint string `yaml:"api_endpoint,omitempty"`
+	AuthToken   string `yaml:"auth_token,omitempty"`
+	Context     string `yaml:"context,omitempty"`
 }
 
 // ConfigPath returns the path to the active config file.
@@ -57,12 +56,16 @@ func LoadStoredConfig() (*Config, error) {
 		return nil, fmt.Errorf("read Telos config %s: %w", path, err)
 	}
 
-	cfg := &Config{}
+	// Accept the removed model preference without retaining or saving it.
+	var stored struct {
+		Config       `yaml:",inline"`
+		DefaultModel string `yaml:"default_model,omitempty"`
+	}
 	decoder := yaml.NewDecoder(bytes.NewReader(data))
 	decoder.KnownFields(true)
-	if err := decoder.Decode(cfg); err != nil {
+	if err := decoder.Decode(&stored); err != nil {
 		if errors.Is(err, io.EOF) {
-			return cfg, nil
+			return &stored.Config, nil
 		}
 		return nil, fmt.Errorf("parse Telos config %s: %w", path, err)
 	}
@@ -72,7 +75,7 @@ func LoadStoredConfig() (*Config, error) {
 	} else if !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parse Telos config %s: %w", path, err)
 	}
-	return cfg, nil
+	return &stored.Config, nil
 }
 
 // LoadConfig reads stored config with environment overrides.

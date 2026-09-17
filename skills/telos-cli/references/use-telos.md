@@ -37,7 +37,6 @@ Config file     ~/.telos/config.yaml
 Endpoint        https://api.usetelos.ai
 Authentication  valid
 Context         personal
-Default model   workspace default
 Subscriptions
 ```
 

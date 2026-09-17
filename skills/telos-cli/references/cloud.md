@@ -83,8 +83,9 @@ browser login does not replace the token in the environment.
 
 ## Choose the context
 
-`telos config` shows authentication status, the active context, and the
-machine-local default model.
+`telos config` shows authentication status, the active context, and connected
+subscriptions. Choose the workspace's default model under **Inference** in the
+Telos app. See [Models and inference](inference.md) for deployment overrides.
 
 The personal context is `personal`. Team contexts use their handle:
 
