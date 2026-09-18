@@ -102,6 +102,12 @@ The default view contains the 50 most recent activity rows:
 | Underlying transcript and evidence events | `telos logs SESSION_ID --context CONTEXT --raw` |
 | Newline-delimited event records | `telos logs SESSION_ID --context CONTEXT --json` |
 
+New automatic tool-activity notices, such as “Reading app/main.py,” are recorded
+in the structured evidence log without being appended to the shared transcript.
+You can inspect those notices with `logs --json`. The transcript still records
+agent-written progress updates, implementation and evaluation reports, and
+operator updates. Existing transcript entries are preserved.
+
 ## Move a persistent Goal forward
 
 Edit `SPEC.md`, bump its version, and compare the proposed contract with the
