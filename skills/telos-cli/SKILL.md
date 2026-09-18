@@ -9,8 +9,8 @@ metadata:
 
 # Telos CLI
 
-This skill is the public operating contract for Telos. Its linked references
-form the user-facing documentation surface.
+Use this skill to operate Telos on the user's behalf. Its linked references
+are the customer-facing documentation and ship with the same CLI release.
 
 Telos works from a `SPEC.md`: an authored contract for an observable outcome
 and the evidence that proves it. `apply` gives that outcome a persistent Cloud
@@ -60,21 +60,28 @@ Choose the lifecycle that matches the requested outcome:
 For model selection and `--thinking` on `apply` or `run`, read
 [Models and inference](references/inference.md).
 
-## Authorization
-
-Before `run`, `apply`, `push`, or `delete`, present the resolved action and
-target to the user and obtain approval. Include the spec and workspace for a
-run, the session and context for an apply or delete, and the scope and package
-version for a push. `run` and `apply` may spend money. Never infer a session,
-context, scope, package version, or destructive target.
-
-## Apply a persistent Goal
-
-Before drafting a spec, read [Write a SPEC.md](references/goals.md). When
-authoring or importing skills and rubrics, also read
+Before drafting either kind of spec, read [Write a SPEC.md](references/goals.md).
+When authoring or importing skills and rubrics, also read
 [Packages and skills](references/packages-and-skills.md). Prefer
 `skills/<name>/SKILL.md` for new local skills; a trailing `*` on the spec's
 skill reference, not a directory name, makes its rubric required.
+
+## Authorization
+
+Before `run`, `apply`, `push`, or `delete`, resolve and present the action and
+target. Include the spec, source workspace, and bounds for a run; whether an
+apply creates or updates a Goal, its context, and any existing session; the
+scope and immutable version for a push; and the exact session, context, and
+consequences for a delete. `run` and `apply` may spend money.
+
+Use explicit approval already given in the conversation when it covers that
+same action, target, and bounds. Otherwise, finish the spec and any available
+plan before requesting the missing approval. A request to draft or inspect
+does not authorize execution, publication, or deletion. Resolve targets from
+the user's instructions, configuration, and receipts; ask when they remain
+ambiguous.
+
+## Apply a persistent Goal
 
 Before authoring a Cloud Goal, read [Telos Cloud](references/cloud.md) and
 confirm that its delivery, storage, and external-service needs fit the managed
@@ -89,16 +96,19 @@ runtime.
    telos plan SPEC.md --context CONTEXT
    ```
 
-3. Confirm that the plan shows the intended target and context. Present that
-   resolved Cloud mutation to the user, obtain approval, then apply it:
+3. Confirm that the plan shows the intended target and context. Once the
+   resolved action is authorized, apply it:
 
    ```bash
    telos apply SPEC.md --context CONTEXT
    ```
 
-4. Capture the session ID and revision digest from the receipt. Observe that
-   session until the same revision becomes `ready`, or until its state and
-   reason require a decision:
+4. Capture the session ID and revision digest from the receipt. Poll
+   `describe --json` about every 15 seconds, comparing `package_digest` with
+   that digest. Use a 30-minute observation deadline unless the task calls for
+   another bound. Stop at `needs_attention`, `stopped`, a changed digest, or
+   the deadline and report the last state and reason. At `ready`, a public
+   service also needs a non-empty `service_url` before external verification:
 
    ```bash
    telos describe SESSION_ID --context CONTEXT --json
@@ -107,6 +117,7 @@ runtime.
 
 5. Verify the live behavior promised by the spec. Submission, a running
    process, and old green evidence are not completion of the current revision.
+   An observation deadline ends monitoring; it does not stop or delete the Goal.
 
 Revise the same Goal by editing `SPEC.md`, bumping its version, and applying to
 the existing session:
@@ -115,6 +126,11 @@ the existing session:
 telos plan SPEC.md --session SESSION_ID --context CONTEXT
 telos apply SPEC.md --session SESSION_ID --context CONTEXT
 ```
+
+Updates retain the session's inference settings. If an inherited `TELOS_MODEL`
+or `TELOS_THINKING` makes an update fail, use the guidance in
+[Models and inference](references/inference.md) to omit those overrides while
+keeping the same session.
 
 A healthy revision may still be waiting for its restorable snapshot. If that
 snapshot gate rejects the update, do not bypass it silently. Tell the user:
@@ -136,22 +152,32 @@ snapshot gate only; it does not bypass authorization, active operations,
 runtime availability, or stale-revision protection.
 
 [Use Telos](references/use-telos.md) follows this loop with one service.
-[The Goal lifecycle](references/lifecycle.md) gives a bounded observation
-pattern and explains every reported state.
+[The Goal lifecycle](references/lifecycle.md) explains the reported states,
+revision evidence, and deletion semantics.
 
 ## Run bounded work
 
-`run` requires a `platform: local` spec and a cycle, time, or cost bound suited
-to the task. Resolve the source workspace and bounds, then obtain user approval
-before starting it:
+For a top-level local run, read [Bounded runs](references/bounded-runs.md).
+Use a `platform: local` spec and choose a cycle, time, or cost bound suited to
+the task. Check local `pi` authentication and the source workspace first: a Git
+source must be clean, including a newly written spec. Keep the spec outside
+that checkout or include it in the intended source commit. Do not discard or
+silently commit the user's work to satisfy the cleanliness requirement.
+
+Once the source and bounds are authorized, start the run:
 
 ```bash
 telos run REPORT_SPEC.md --workspace . --until 3
 ```
 
-Read [Bounded runs](references/bounded-runs.md) for the complete local workflow.
-Inside a Telos session, the same command creates a linked child session; see
-[Nested Goals](references/nested-goals.md).
+Capture the session ID, inspect its status and evidence, and retrieve the
+checkpoint described in [Bounded runs](references/bounded-runs.md). The result
+lives in an isolated workspace; do not report that the source checkout was
+updated. Reaching a bound is not evidence that acceptance passed.
+
+Inside a Telos session, read [Nested Goals](references/nested-goals.md) and use
+`run` for a linked child. A hosted child launch rejects `--workspace`; it does
+not use the top-level source-checkout workflow.
 
 ## Command effects
 
@@ -159,6 +185,7 @@ Inside a Telos session, the same command creates a linked child session; see
 | --- | --- |
 | Inspect state | `plan`, `list`, `describe`, `logs` |
 | Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context` |
+| Replace the invoked CLI executable | `update` |
 | Start bounded local execution; may spend money | `run` |
 | Publish or change remote state; `apply` may spend money | `apply`, `push`, `delete` |
 

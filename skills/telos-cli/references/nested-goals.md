@@ -19,6 +19,11 @@ a duration such as `30m`; `--max-cost-usd` adds a spend bound. Telos supplies
 the environment-local capability to create and inspect the child, so the spec
 contains no user or Cloud credentials.
 
+For a child launched from a hosted session, omit `--workspace`: the runtime
+supplies the child's workspace, and the CLI rejects that local configuration
+flag. The top-level workflow for cloning a local source checkout does not
+apply to this launch.
+
 Nested runs use the parent worker's selected inference model by default through
 `TELOS_MODEL`. You can choose a different model with `--model`; the environment
 must have credentials for that provider. In Cloud, child tasks submitted without

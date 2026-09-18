@@ -11,7 +11,7 @@ Start with the command that can distinguish the observed symptom:
 | Symptom | First check | Decisive evidence |
 | --- | --- | --- |
 | `telos` is unavailable | `command -v telos` | Binary path or missing installation |
-| A local run will not start | `telos plan SPEC.md` | Platform or spec validation error |
+| A local run will not start | `telos plan SPEC.md`, then `git status --short` in a Git source | Invalid spec, dirty source, or missing local pi setup |
 | Cloud authentication or target is wrong | `telos config` | Authentication and active context |
 | An agent or CI job waits for browser login | Check the job's authentication setup against [token authentication](cloud.md#token-authentication-for-agents-and-ci) | A supplied `TELOS_AUTH_TOKEN` lets the job run Cloud commands directly |
 | A spec is rejected | `telos plan SPEC.md` | First validation error |
@@ -31,6 +31,13 @@ installer when the binary is absent or not the intended release.
 run requires `platform: local`, `pi` on `PATH`, and an authenticated provider.
 `telos run --help` shows the model, thinking, cycle, time, and cost flags
 supported by the installed release.
+
+A successful plan does not validate the source checkout or provider login.
+If the run reports a dirty Git source, include the intended changes in a
+commit or select a clean checkout containing the source you want to run.
+A newly created spec inside the repository also counts as an untracked file;
+you can keep it outside the source checkout and pass its path instead.
+[Bounded runs](bounded-runs.md) explains source preparation and result retrieval.
 
 ## Cloud authentication or context is wrong
 
