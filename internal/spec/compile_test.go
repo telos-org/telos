@@ -383,16 +383,18 @@ func TestRenderProverUsesOperatingPosture(t *testing.T) {
 	if !strings.Contains(task, "continue from the append-only transcript") {
 		t.Error("prover prompt should describe continuation through transcript/workspace")
 	}
-	if !strings.Contains(task, "highest-leverage related set") ||
+	if !strings.Contains(task, "close every related finding this context can settle") ||
 		!strings.Contains(task, "highest-leverage unmet obligation") ||
+		!strings.Contains(task, "keep closing clear follow-on obligations") ||
 		!strings.Contains(task, "tested, committed checkpoint") ||
-		!strings.Contains(task, "independently reviewable increment") ||
+		!strings.Contains(task, "Do not yield after the first increment") ||
 		!strings.Contains(task, "Duration alone is not a reason to yield") ||
-		!strings.Contains(task, "highest-value next action") {
-		t.Error("prover prompt should require a complete reviewable increment")
+		!strings.Contains(task, "goal holds and") {
+		t.Error("prover prompt should keep closing clear work before yielding")
 	}
-	if strings.Contains(task, "smallest change that improves") {
-		t.Error("prover prompt should not encourage superficial turns")
+	if strings.Contains(task, "smallest change that improves") ||
+		strings.Contains(task, "highest-value next action") {
+		t.Error("prover prompt should not encourage early yields")
 	}
 }
 

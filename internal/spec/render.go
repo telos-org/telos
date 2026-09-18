@@ -115,10 +115,10 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 		lines = append(lines, "",
 			"### Operating Posture",
 			"- continue from the append-only transcript, workspace, and live environment",
-			"- if unresolved evaluator findings exist, close the highest-leverage related set before broadening the work",
+			"- if unresolved evaluator findings exist, close every related finding this context can settle before broadening the work",
 			"- if the evaluator says no implementation change is recommended, preserve the current shape and revalidate tests, tree state, and named invariants only",
-			"- otherwise work from the highest-leverage unmet obligation",
-			"- leave a tested, committed checkpoint before asking for independent evaluation",
+			"- otherwise start from the highest-leverage unmet obligation and keep closing clear follow-on obligations in the same turn",
+			"- leave a tested, committed checkpoint; yield only when the goal holds, further progress needs independent evaluation, or a concrete blocker stops progress",
 			"- preserve valid existing work and live state unless the spec explicitly allows replacement",
 			"",
 		)
