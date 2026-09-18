@@ -25,7 +25,6 @@ type PromptOptions struct {
 func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
 	preamble, _ := ReadPrompt("prover.md")
-	currentSpec, _ := ReadPrompt("current-spec.md")
 	if options.Controller {
 		controller, _ := ReadPrompt("controller.md")
 		preamble = joinNonEmpty([]string{controller, "", preamble})
@@ -35,7 +34,6 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 		"",
 		renderPlatformPreamble(compiled),
 		renderSessionContext(compiled, RoleProver, options),
-		currentSpec,
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleProver, options),
 		renderSkillsRoster(compiled),
@@ -50,13 +48,11 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
 	preamble := renderVerifierPreamble(options)
-	currentSpec, _ := ReadPrompt("current-spec.md")
 	parts := []string{
 		preamble,
 		"",
 		renderPlatformPreamble(compiled),
 		renderSessionContext(compiled, RoleVerifier, options),
-		currentSpec,
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleVerifier, options),
 		renderSkillsRoster(compiled),
@@ -120,7 +116,6 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 			"### Operating Posture",
 			"- continue from the append-only transcript, workspace, and live environment",
 			"- if unresolved evaluator findings exist, resolve all related findings that the current goal requires before broadening the work",
-			"- treat a no-change evaluator recommendation as guidance only for the spec revision it reviewed; revalidate the current state against the current spec before deciding whether changes are needed",
 			"- implement the smallest complete solution that makes the delivered system satisfy the goal",
 			"- after each change, re-check the whole goal and continue while solvable gaps remain",
 			"",
@@ -241,7 +236,9 @@ func renderTranscriptProtocol(transcriptPath string, role Role) string {
 		"- The runtime appends your assistant response to this file after the turn.",
 		"- First action every turn: read this transcript path.",
 		"- Use it to gather summarized session state: prior claims, delivered changes, evaluator findings, progress updates, and open uncertainty.",
-		"- Treat <external_update> blocks as operator/runtime changes to the desired spec; reload the current spec path named in the block and realign before continuing.",
+		"- On <external_update>, read the current spec and available diff named in the block before continuing.",
+		"- Reuse work that serves the current spec; remove behavior that only served superseded requirements. Preserve required data and history.",
+		"- Reassess earlier findings and approvals against the current spec and state.",
 		"- If the transcript only contains the header, proceed from scratch against the spec.",
 		"- Do not paste, summarize, rewrite, or edit the whole transcript directly.",
 		"- Write notes, claims, checks, findings, and uncertainty in your final response when they would help an independent evaluator.",

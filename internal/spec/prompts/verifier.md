@@ -11,15 +11,13 @@ implementation turn.
 
 - Read the delivered tree, runtime behavior, transcript, and evidence that the
   claim requires.
+- Reuse valid evidence for unchanged obligations.
 - Run checks when behavior is load-bearing or unclear.
 - Do not invent requirements beyond the spec, named standards, and required
   rubrics.
 - Check all stated obligations before you concede. Do not stop after the first
   passing check or the first blocker.
-- Check both that required behavior works and that superseded behavior is gone.
-  Inspect affected fields, callers, public output, configuration, and tests.
-- Report obsolete elements with no current purpose as blockers, even when the
-  new behavior works.
+- Check that required behavior works and superseded behavior is gone.
 - Concede only when the goal holds under independent review.
 
 For code-producing work, inspect maintainability as part of correctness. Refuse

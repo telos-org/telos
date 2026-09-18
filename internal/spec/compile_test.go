@@ -262,60 +262,8 @@ func TestRenderVerifierTask(t *testing.T) {
 	if !strings.Contains(task, "Check something.") {
 		t.Error("should contain spec body")
 	}
-	if !strings.Contains(task, "superseded behavior is gone") ||
-		!strings.Contains(task, "obsolete elements with no current purpose as blockers") {
+	if !strings.Contains(task, "required behavior works and superseded behavior is gone") {
 		t.Error("verifier prompt should check retirement as well as new behavior")
-	}
-}
-
-func TestRenderTasksIncludeCurrentSpecPolicy(t *testing.T) {
-	policy, err := ReadPrompt("current-spec.md")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(policy) == "" {
-		t.Fatal("current spec policy must not be empty")
-	}
-
-	for _, platform := range []string{"local", "cloud"} {
-		t.Run(platform, func(t *testing.T) {
-			specPath := filepath.Join(t.TempDir(), "SPEC.md")
-			body := "---\nversion: 0.2.0\nname: cutover-test\nplatform: " + platform + "\n---\nThe primary identifier is newId."
-			if err := os.WriteFile(specPath, []byte(body), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			compiled, err := CompileEnvironment(specPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, mode := range []struct {
-				name    string
-				options PromptOptions
-			}{
-				{name: "task"},
-				{name: "controller", options: PromptOptions{Controller: true}},
-			} {
-				t.Run(mode.name, func(t *testing.T) {
-					for _, role := range []struct {
-						name   string
-						render func(*CompiledEnvironment, string, string, ...PromptOptions) string
-					}{
-						{name: "executor", render: RenderProverTask},
-						{name: "evaluator", render: RenderVerifierTask},
-					} {
-						t.Run(role.name, func(t *testing.T) {
-							task := role.render(compiled, "", "/tmp/transcript.md", mode.options)
-							if strings.Count(task, policy) != 1 {
-								t.Error("rendered task must include the shared current spec policy exactly once")
-							}
-							if strings.Contains(task, "preserve valid existing work and live state unless the spec explicitly allows replacement") {
-								t.Error("rendered task must not require explicit permission to retire obsolete work")
-							}
-						})
-					}
-				})
-			}
-		})
 	}
 }
 
@@ -355,10 +303,6 @@ func TestRenderProverUsesOperatingPosture(t *testing.T) {
 	}
 	if !strings.Contains(task, "continue from the append-only transcript") {
 		t.Error("prover prompt should describe continuation through transcript/workspace")
-	}
-	if !strings.Contains(task, "guidance only for the spec revision it reviewed") ||
-		!strings.Contains(task, "revalidate the current state against the current spec") {
-		t.Error("a previous no-change recommendation must not override the current spec")
 	}
 	if !strings.Contains(task, "smallest complete solution") ||
 		!strings.Contains(task, "continue while solvable gaps remain") ||
@@ -535,6 +479,18 @@ func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 	}
 	if !strings.Contains(verifierTask, "identify the implementation claims") {
 		t.Error("evaluation prompt should require identifying implementation claims")
+	}
+	for _, task := range []string{proverTask, verifierTask} {
+		for _, want := range []string{
+			"read the current spec and available diff",
+			"remove behavior that only served superseded requirements",
+			"Preserve required data and history",
+			"Reassess earlier findings and approvals against the current spec and state",
+		} {
+			if !strings.Contains(task, want) {
+				t.Errorf("prompt missing spec-update guidance %q", want)
+			}
+		}
 	}
 }
 

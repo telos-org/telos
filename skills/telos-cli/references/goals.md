@@ -81,21 +81,10 @@ That contract permits the agent to choose an appropriate framework and
 datastore. A framework, schema, deployment shape, or compatibility requirement
 belongs in the spec when it is itself part of the promised outcome.
 
-When you revise a spec, describe the complete current contract. You do not need
-to enumerate every obsolete implementation detail for removal. Telos instructs
-its agents to reuse work that still serves the current requirements and remove
-elements whose only purpose was a superseded requirement. For example, when
-`newId` replaces `oldId` as an object's identifier, an `oldId` field with no
-remaining purpose should disappear from the current object and its output.
-Supporting code can remain even when the spec does not name it. Required data
-and history must be preserved during migration; temporary compatibility support
-needs a concrete transition purpose and a removal condition.
-
-Cleanup checks focus on the requirements you changed and the code, data, and
-interfaces they affect. Telos can reuse previous independent cleanup checks
-when their evidence remains sufficient and the relevant spec, implementation,
-and live state are unchanged. An executor's completion report does not replace
-the evaluator's independent review.
+Your revised spec describes the complete current contract. Telos reuses work
+that still serves it and removes behavior that only served superseded
+requirements. You do not need to list every obsolete implementation detail;
+required data and history must still be preserved.
 
 A spec can select a lifecycle, import capabilities and rubrics, and describe
 the desired state. It does not grant credentials, network access, registry
