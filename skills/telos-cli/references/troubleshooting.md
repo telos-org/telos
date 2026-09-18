@@ -64,6 +64,19 @@ explains why some older deployments lack digest-bound status provenance.
 Regardless of provenance, verify the live behavior promised by every service
 spec.
 
+### Model credentials were rejected
+
+If a persistent Goal fails with a provider authentication or access error,
+fix its inference key or provider permissions. The controller retries every
+five minutes, so it can recover without another spec change. The next cycle
+uses the same workspace; it does not restore a snapshot or resume the exact
+failed model turn. While the key remains invalid, retries continue to fail.
+
+An explicitly stopped Goal stays stopped. Bounded tasks do not retry this way,
+and invalid model configuration still requires an update and an explicit wake.
+Older runtimes without this recovery behavior wait for an explicit wake after
+credential failures.
+
 ## Nested run is rejected
 
 Nested execution supports `telos run`, not `telos apply`. The original run

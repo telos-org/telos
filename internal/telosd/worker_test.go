@@ -5,8 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/telos-org/telos/internal/game"
@@ -197,7 +199,7 @@ func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
 		}},
 	})
 
-	logControllerSuspended(sessionDir, "agent_authentication_invalid", "403: inactive virtual key")
+	logControllerSuspended(sessionDir, "agent_authentication_invalid", "403: inactive virtual key", controllerCredentialRetryInterval)
 	data, err := os.ReadFile(evidencePath)
 	if err != nil {
 		t.Fatal(err)
@@ -208,7 +210,9 @@ func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
 		`"epoch_id":4`,
 		`"blocker_code":"agent_authentication_invalid"`,
 		`"state":"waiting"`,
+		`"retry_after_seconds":300`,
 		"update the model credentials",
+		"retry automatically",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("suspension evidence missing %q:\n%s", want, text)
@@ -216,7 +220,7 @@ func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
 	}
 }
 
-func TestControllerSuspendsUntilExplicitWake(t *testing.T) {
+func TestControllerConfigurationFailureSuspendsUntilExplicitWake(t *testing.T) {
 	evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
 	sessionDir := writeWorkerManifest(t, map[string]any{
 		"session_id":   "sess_123",
@@ -237,7 +241,7 @@ func TestControllerSuspendsUntilExplicitWake(t *testing.T) {
 		if attempt == 1 {
 			return &game.PVGResult{
 				GameResult: game.GameFailure,
-				Error:      "403: inactive virtual key",
+				Error:      "unknown model",
 			}, nil
 		}
 		return &game.PVGResult{GameResult: game.GameStopped}, nil
@@ -284,6 +288,143 @@ func TestControllerSuspendsUntilExplicitWake(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("worker did not stop after resumed cycle")
+	}
+}
+
+func TestControllerRetriesCredentialFailures(t *testing.T) {
+	for _, providerError := range []string{"401: invalid x-api-key", "403: forbidden", "403: inactive virtual key"} {
+		t.Run(providerError, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				sessionDir := writeWorkerManifest(t, map[string]any{
+					"session_kind": "controller",
+					"specs":        []map[string]any{{"name": "demo"}},
+				})
+				stop := make(chan os.Signal, 1)
+				defer func() { stop <- syscall.SIGTERM }()
+				var attempts atomic.Int32
+				var keyFixed atomic.Bool
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					code, err := runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+						attempts.Add(1)
+						if !keyFixed.Load() {
+							return &game.PVGResult{GameResult: game.GameFailure, Error: providerError}, nil
+						}
+						return &game.PVGResult{GameResult: game.GameSuccess}, nil
+					}, make(chan os.Signal), stop)
+					if code != 0 || err != nil {
+						t.Errorf("worker returned %d, %v", code, err)
+					}
+				}()
+				synctest.Wait()
+				if attempts.Load() != 1 {
+					t.Fatalf("initial attempts = %d", attempts.Load())
+				}
+				time.Sleep(controllerCredentialRetryInterval - time.Second)
+				synctest.Wait()
+				if attempts.Load() != 1 {
+					t.Fatalf("retried too soon: %d attempts", attempts.Load())
+				}
+				time.Sleep(time.Second)
+				synctest.Wait()
+				if attempts.Load() != 2 {
+					t.Fatalf("expected one retry with the invalid key, got %d attempts", attempts.Load())
+				}
+				keyFixed.Store(true)
+				time.Sleep(controllerCredentialRetryInterval)
+				synctest.Wait()
+				if attempts.Load() != 3 {
+					t.Fatalf("did not recover without a wake: %d attempts", attempts.Load())
+				}
+				time.Sleep(2 * controllerCredentialRetryInterval)
+				synctest.Wait()
+				if attempts.Load() != 3 {
+					t.Fatalf("retried after success with no interval: %d attempts", attempts.Load())
+				}
+				stop <- syscall.SIGTERM
+				<-done
+			})
+		})
+	}
+}
+
+func TestCredentialRetryRespectsWakeAndStop(t *testing.T) {
+	for _, signal := range []os.Signal{syscall.SIGUSR1, syscall.SIGTERM} {
+		t.Run(signal.String(), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				sessionDir := writeWorkerManifest(t, map[string]any{
+					"session_kind": "controller",
+					"specs":        []map[string]any{{"name": "demo"}},
+				})
+				wake := make(chan os.Signal, 1)
+				stop := make(chan os.Signal, 1)
+				defer func() { stop <- syscall.SIGTERM }()
+				var attempts atomic.Int32
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					code, err := runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+						attempts.Add(1)
+						return &game.PVGResult{GameResult: game.GameFailure, Error: "401: unauthorized"}, nil
+					}, wake, stop)
+					if code != 0 || err != nil {
+						t.Errorf("worker returned %d, %v", code, err)
+					}
+				}()
+				synctest.Wait()
+				if signal == syscall.SIGUSR1 {
+					wake <- signal
+				} else {
+					stop <- signal
+				}
+				synctest.Wait()
+				want := int32(1)
+				if signal == syscall.SIGUSR1 {
+					want = 2
+					stop <- syscall.SIGTERM
+				}
+				<-done
+				time.Sleep(2 * controllerCredentialRetryInterval)
+				if attempts.Load() != want {
+					t.Fatalf("attempts = %d, want %d", attempts.Load(), want)
+				}
+			})
+		})
+	}
+}
+
+func TestCredentialFailureDoesNotRetryBoundedWork(t *testing.T) {
+	for _, kind := range []string{"task", "controller"} {
+		t.Run(kind, func(t *testing.T) {
+			sessionDir := writeWorkerManifest(t, map[string]any{
+				"session_kind": kind,
+				"specs":        []map[string]any{{"name": "demo"}},
+			})
+			attempts := 0
+			_, _ = runSessionWorker(sessionDir, kind == "controller", func(string) (*game.PVGResult, error) {
+				attempts++
+				return &game.PVGResult{GameResult: game.GameFailure, Error: "401: unauthorized"}, nil
+			}, make(chan os.Signal), make(chan os.Signal))
+			if attempts != 1 {
+				t.Fatalf("bounded work ran %d times", attempts)
+			}
+		})
+	}
+}
+
+func TestStoppedWorkerDoesNotRetryWithPendingWake(t *testing.T) {
+	sessionDir := writeWorkerManifest(t, map[string]any{"session_kind": "controller"})
+	wake := make(chan os.Signal, 1)
+	stop := make(chan os.Signal, 1)
+	wake <- syscall.SIGUSR1
+	stop <- syscall.SIGTERM
+	code, err := runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+		t.Fatal("worker ran with a pending stop")
+		return nil, nil
+	}, wake, stop)
+	if code != 0 || err != nil {
+		t.Fatalf("worker returned %d, %v", code, err)
 	}
 }
 
