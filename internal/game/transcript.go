@@ -137,8 +137,9 @@ func ExtractLiveAgentEvents(text string) []LiveAgentEvent {
 }
 
 // AppendLiveAgentEvent appends a mid-turn progress artifact to the transcript.
+// Tool activity is kept in structured evidence instead of the shared transcript.
 func AppendLiveAgentEvent(path string, role string, roleRound int, turnID string, event LiveAgentEvent) error {
-	if event.Kind == "" || strings.TrimSpace(event.Text) == "" {
+	if event.Kind == "" || event.Kind == "tool" || strings.TrimSpace(event.Text) == "" {
 		return nil
 	}
 	label := "Implementation"
