@@ -94,8 +94,8 @@ Hash      799e5c31172afb26
 
 Confirm the target and context before continuing. The first plan has no
 deployed revision to compare, so it shows the Goal identity, namespace, and
-content hash. Present the resolved Cloud mutation to the user and obtain
-approval before applying it.
+content hash. Applying this plan creates a new persistent Goal and may incur
+inference charges. Continue when that is the action you intend.
 
 ## Apply it
 
@@ -237,9 +237,9 @@ Continue revisions on that session so its identity and history remain joined.
 
 ## Delete the Goal
 
-Cloud deletion is irreversible. After the user approves the exact session,
-context, and loss of the environment, application and PVC data, routes,
-attachments, deployment record, and history, run:
+Cloud deletion is irreversible: it removes the environment, application and
+PVC data, routes, attachments, deployment record, and history. Confirm the
+session and context identify the Goal you intend to delete, then run:
 
 ```bash
 telos delete SESSION_ID --context personal

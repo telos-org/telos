@@ -70,22 +70,28 @@ displayed digest matches the receipt.
 
 ## Observe without waiting forever
 
-Use the context, session, and digest from the `apply` receipt. Unless the Goal
-suggests a different runtime, use a 30-minute observation deadline:
+Use the context, session, and digest from the `apply` receipt. Choose how long
+you want to monitor the revision; 30 minutes is a useful starting point:
 
 ```bash
 telos describe SESSION_ID --context CONTEXT --json
 ```
 
-An agent observation loop has four operations:
+For a bounded check of progress:
 
-1. Run `describe --json` every 15 seconds.
+1. Run `describe --json` about every 15 seconds.
 2. Read `status` and `package_digest` from each response.
 3. Continue at `working`. Finish at `ready` when no public route is required;
    for a public service, finish when `ready` also includes `service_url`.
-   Return the reason at `needs_attention` or `stopped`.
-4. Stop if the digest changes or the 30-minute deadline expires, then return the
-   last state instead of waiting indefinitely.
+   At `needs_attention` or `stopped`, inspect the reason and logs before deciding
+   what to change.
+4. Stop monitoring if the digest changes or your deadline expires. A changed
+   digest means the session has moved to another revision; the original receipt
+   no longer identifies its current work.
+
+This deadline is your observation limit, not a CLI timeout. Ending monitoring
+does not stop the Goal or its inference usage. Once the expected revision is
+`ready`, verify the behavior promised by your spec.
 
 `logs` supplies the work and verification evidence behind the state:
 
@@ -118,8 +124,8 @@ full diff and receipt.
 
 ## Delete a Goal
 
-Resolve the session and context, explain the consequences below, and obtain the
-user's approval before running:
+Check the session and context, and review the deletion consequences below
+before running:
 
 ```bash
 telos delete SESSION_ID --context CONTEXT
@@ -139,5 +145,5 @@ telos delete LOCAL_SESSION_ID
 ```
 
 It stops the local session and preserves its history. A Goal in
-`needs_attention` also retains its Cloud history until the user either applies
-a corrected revision or explicitly deletes it.
+`needs_attention` also retains its Cloud history until you either apply
+a corrected revision or explicitly delete it.
