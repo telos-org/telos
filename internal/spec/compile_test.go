@@ -262,7 +262,7 @@ func TestRenderVerifierTask(t *testing.T) {
 	if !strings.Contains(task, "Check something.") {
 		t.Error("should contain spec body")
 	}
-	if !strings.Contains(task, "required behavior works and superseded behavior is gone") {
+	if !strings.Contains(task, "including removal of superseded behavior") {
 		t.Error("verifier prompt should check retirement as well as new behavior")
 	}
 }
@@ -276,9 +276,8 @@ func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
 	task := RenderVerifierTask(compiled, "=== FILES ===\n./main.go", "")
 
 	for _, want := range []string{
-		"Persist Useful Probes",
-		"write to the same workspace when the change is evaluation code",
-		"integration probes, fixtures, scripts, or minimal counterexamples",
+		"You may add and commit useful tests or probes",
+		"must not change the implementation",
 		"natural test location or a small `evaluation/` directory",
 	} {
 		if !strings.Contains(task, want) {
@@ -306,8 +305,8 @@ func TestRenderProverUsesOperatingPosture(t *testing.T) {
 	}
 	if !strings.Contains(task, "smallest complete solution") ||
 		!strings.Contains(task, "continue while solvable gaps remain") ||
-		!strings.Contains(task, "goal holds and") ||
-		!strings.Contains(task, "relevant checks pass, or") {
+		!strings.Contains(task, "Continue while actionable obligations remain") ||
+		!strings.Contains(task, "Exercise your changes") {
 		t.Error("prover prompt should require a complete outcome")
 	}
 	if strings.Contains(task, "smallest change that improves") ||
