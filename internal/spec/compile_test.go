@@ -277,8 +277,8 @@ func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
 
 	for _, want := range []string{
 		"You may add and commit useful tests or probes",
-		"must not change the implementation",
-		"natural test location or a small `evaluation/` directory",
+		"do not change the implementation",
+		"project's test location or `evaluation/`",
 	} {
 		if !strings.Contains(task, want) {
 			t.Fatalf("verifier prompt missing %q:\n%s", want, task)
@@ -289,7 +289,7 @@ func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
 	}
 }
 
-func TestRenderProverUsesOperatingPosture(t *testing.T) {
+func TestRenderProverRequiresCompleteOutcome(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: continuation-test\nplatform: local\n---\nBody"), 0o644)
@@ -300,12 +300,8 @@ func TestRenderProverUsesOperatingPosture(t *testing.T) {
 	if strings.Contains(task, "# Build:") || strings.Contains(task, "# Fix:") {
 		t.Error("prover prompt should not use build/fix titles")
 	}
-	if !strings.Contains(task, "continue from the append-only transcript") {
-		t.Error("prover prompt should describe continuation through transcript/workspace")
-	}
 	if !strings.Contains(task, "smallest complete solution") ||
-		!strings.Contains(task, "continue while solvable gaps remain") ||
-		!strings.Contains(task, "Continue while actionable obligations remain") ||
+		!strings.Contains(task, "Continue while you can make progress toward the goal") ||
 		!strings.Contains(task, "Exercise your changes") {
 		t.Error("prover prompt should require a complete outcome")
 	}
@@ -333,8 +329,8 @@ func TestRenderWithSkillsRoster(t *testing.T) {
 	if !strings.Contains(task, "`my-skill`") {
 		t.Error("should contain skill name")
 	}
-	if !strings.Contains(task, "prompts reference names instead of inlining skill bodies") {
-		t.Error("should explain skill-name routing without inlining skill bodies")
+	if strings.Contains(task, "Instructions") {
+		t.Error("should reference skills without inlining their bodies")
 	}
 }
 
@@ -382,34 +378,19 @@ func TestRenderWithRequiredEvaluationSkills(t *testing.T) {
 	compiled, _ := CompileEnvironment(specPath)
 
 	proverTask := RenderProverTask(compiled, "", "")
-	if !strings.Contains(proverTask, "Required Evaluation Rubrics") {
-		t.Error("prover should see required evaluation rubrics")
-	}
-	if !strings.Contains(proverTask, "load these starred skills by name") {
-		t.Error("prover should see skill-name rubric guidance")
-	}
-	if !strings.Contains(proverTask, "required evaluation rubric") {
-		t.Error("prover should see required marker in skills roster")
-	}
-	if strings.Contains(proverTask, "Must follow") {
-		t.Error("prover prompt should not inline skill instructions")
-	}
-
 	verifierTask := RenderVerifierTask(compiled, "", "")
-	if !strings.Contains(verifierTask, "Required Evaluation Rubrics") {
-		t.Error("verifier should see required evaluation rubrics")
+	for _, task := range []string{proverTask, verifierTask} {
+		if !strings.Contains(task, "`crit-skill` - required evaluation rubric") {
+			t.Error("required skill must be marked in both roles")
+		}
+		if strings.Contains(task, "Must follow") {
+			t.Error("prompt should not inline skill instructions")
+		}
 	}
-	if !strings.Contains(verifierTask, "mandatory grading rubrics") {
-		t.Error("verifier should see rubric instructions")
-	}
-	if !strings.Contains(verifierTask, "Use each mounted skill by name") {
-		t.Error("verifier should see mounted skill-name guidance")
-	}
-	if !strings.Contains(verifierTask, "`crit-skill`") {
-		t.Error("verifier should see required skill name")
-	}
-	if strings.Contains(verifierTask, "Must follow") {
-		t.Error("verifier prompt should not inline skill instructions")
+	for _, want := range []string{"Load every required rubric", "PASS or FAIL with evidence for each", "Any failure blocks concession"} {
+		if !strings.Contains(verifierTask, want) {
+			t.Errorf("verifier missing mandatory rubric instruction %q", want)
+		}
 	}
 }
 
@@ -461,33 +442,18 @@ func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 
 	compiled, _ := CompileEnvironment(specPath)
 	proverTask := RenderProverTask(compiled, "", "/tmp/transcript.md")
-
-	if !strings.Contains(proverTask, "First action every turn: read this transcript path") {
-		t.Error("implementation prompt should require reading transcript first")
-	}
-	if !strings.Contains(proverTask, "If the transcript only contains the header, proceed from scratch against the spec") {
-		t.Error("implementation prompt should explain first-turn/header-only transcript")
-	}
-	if !strings.Contains(proverTask, "identify unresolved evaluator findings") {
-		t.Error("implementation prompt should require identifying unresolved evaluator findings")
-	}
-
 	verifierTask := RenderVerifierTask(compiled, "", "/tmp/transcript.md")
-	if !strings.Contains(verifierTask, "First action every turn: read this transcript path") {
-		t.Error("evaluation prompt should require reading transcript first")
-	}
-	if !strings.Contains(verifierTask, "identify the implementation claims") {
-		t.Error("evaluation prompt should require identifying implementation claims")
-	}
 	for _, task := range []string{proverTask, verifierTask} {
 		for _, want := range []string{
+			"Read the transcript for current spec updates and unresolved findings before acting",
 			"read the current spec and available diff",
 			"remove behavior that only served superseded requirements",
 			"Preserve required data and history",
 			"Reassess earlier findings and approvals against the current spec and state",
+			"Do not edit the transcript",
 		} {
 			if !strings.Contains(task, want) {
-				t.Errorf("prompt missing spec-update guidance %q", want)
+				t.Errorf("prompt missing transcript guidance %q", want)
 			}
 		}
 	}
@@ -504,15 +470,10 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 
 	for _, task := range []string{proverTask, verifierTask} {
 		for _, want := range []string{
-			"agent-decided directional updates and proof of liveness",
-			"when a material result, a new blocker, or the next action changes",
-			"with no new result, send brief liveness updates",
-			"Simplified Technical English (ASD-STE100)",
-			"active voice",
-			"one topic per sentence",
-			"no more than 25 words per sentence",
-			"Do not report routine file reads, commands, or plans",
-			"Do not save all progress updates for the final response",
+			"<progress_update>...</progress_update>",
+			"meaningful changes, results, blockers, and long operations or waits",
+			"report only observed progress",
+			"final <progress_update>...</progress_update> in the same response",
 		} {
 			if !strings.Contains(task, want) {
 				t.Fatalf("prompt missing progress guidance %q:\n%s", want, task)
@@ -527,7 +488,7 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 			}
 		}
 	}
-	if !strings.Contains(verifierTask, "do not stop after the first passing check or the first blocker") {
+	if !strings.Contains(verifierTask, "In one bounded pass, review every obligation") {
 		t.Fatal("evaluation prompt should require a complete bounded review")
 	}
 }
@@ -545,7 +506,7 @@ func TestRenderVerifierTaskReviewBudgetUsesStatusContract(t *testing.T) {
 
 	for _, want := range []string{
 		"Review cycle cap: at most `2` verifier cycles",
-		"The final non-empty line must be exactly one status tag",
+		"exactly one status tag on its own final line",
 		"<status>CONTINUE</status>",
 		"<status>CONCEDE</status>",
 	} {
@@ -575,18 +536,18 @@ func TestRenderVerifierTaskGatesControllerOnlyTaskState(t *testing.T) {
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderVerifierTask(compiled, "", "/tmp/transcript.md")
-	if strings.Contains(task, "if any required task is pending") {
+	if strings.Contains(task, "waiting for an inspected pending/running child") {
 		t.Fatalf("leaf task verifier should not include controller task-state rule:\n%s", task)
 	}
 
 	controllerTask := RenderVerifierTask(compiled, "", "/tmp/transcript.md", PromptOptions{Controller: true})
-	if !strings.Contains(controllerTask, "pending or running child task is valid waiting work") {
+	if !strings.Contains(controllerTask, "waiting for an inspected pending/running child") {
 		t.Fatalf("controller verifier should include controller task-state rule:\n%s", controllerTask)
 	}
-	if !strings.Contains(controllerTask, "CONCEDE</status> for that cycle if the correct next controller action is simply to wait") {
+	if !strings.Contains(controllerTask, "Waiting does not mean the goal is complete") {
 		t.Fatalf("controller verifier should allow clean wait cycles:\n%s", controllerTask)
 	}
-	if !strings.Contains(controllerTask, "CONTINUE</status> if a child is stopped, failed, terminal but uninspected") {
+	if !strings.Contains(controllerTask, "Relevant failed or stopped children, and completed children with uninspected or missing expected results, are blockers") {
 		t.Fatalf("controller verifier should still block bad child state:\n%s", controllerTask)
 	}
 }

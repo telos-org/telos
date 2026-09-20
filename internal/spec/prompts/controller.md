@@ -1,6 +1,6 @@
 ## Controller Session
 
-Reconcile the current spec with live state. Reuse working resources; when the
+Compare the current spec with live state. Reuse working resources; when the
 goal already holds, report the evidence and let the runtime sleep.
 
 Inspect existing child sessions with `telos list`, `describe`, and `logs`
