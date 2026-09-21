@@ -12,135 +12,55 @@ import (
 	"github.com/telos-org/telos/internal/config"
 )
 
-type configOptions struct {
-	Context, WorkspaceModel, ConnectionID          string
-	ContextSet, WorkspaceModelSet, ConnectionIDSet bool
-	Models, Refresh, JSON                          bool
-}
-
 func cmdConfig(args []string) {
 	fs := newCommandFlagSet("config", "telos config [flags]")
 	contextValue := fs.String("context", "", "Save the Cloud context as @handle, organization ID, or personal")
-	models := fs.Bool("models", false, "List Cloud models and copyable deployment selectors")
-	refresh := fs.Bool("refresh", false, "With --models, refresh API-key catalogs and reload subscription models")
-	workspaceModel := fs.String("workspace-model", "", "Set the shared workspace default for future CLI and web deployments")
-	connectionID := fs.String("connection-id", "", "With --workspace-model, select a connection ID and supply a raw model ID")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	parseFlags(fs, args)
 	requireArgCount(fs, 0, "no positional arguments")
-	opts := configOptions{
-		Context: *contextValue, WorkspaceModel: *workspaceModel, ConnectionID: *connectionID,
-		ContextSet: flagNameSet(fs, "context"), WorkspaceModelSet: flagNameSet(fs, "workspace-model"), ConnectionIDSet: flagNameSet(fs, "connection-id"),
-		Models: *models, Refresh: *refresh, JSON: *jsonOut,
-	}
-	if err := validateConfigOptions(opts); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(2)
-	}
-	if err := runConfig(opts); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-}
-
-func validateConfigOptions(opts configOptions) error {
-	if opts.ContextSet && (opts.Models || opts.WorkspaceModelSet || opts.Refresh || opts.ConnectionIDSet) {
-		return fmt.Errorf("--context changes the saved CLI context and must be used separately; use TELOS_CONTEXT to scope another config operation")
-	}
-	if opts.ContextSet && strings.TrimSpace(opts.Context) == "" {
-		return fmt.Errorf("--context requires @handle, organization ID, or personal")
-	}
-	if opts.Models && opts.WorkspaceModelSet {
-		return fmt.Errorf("--models and --workspace-model cannot be combined")
-	}
-	if opts.Refresh && !opts.Models {
-		return fmt.Errorf("--refresh requires --models")
-	}
-	if opts.WorkspaceModelSet && strings.TrimSpace(opts.WorkspaceModel) == "" {
-		return fmt.Errorf("--workspace-model requires a model; use telos/default to choose the managed default")
-	}
-	if opts.ConnectionIDSet && (!opts.WorkspaceModelSet || strings.TrimSpace(opts.ConnectionID) == "") {
-		return fmt.Errorf("--connection-id requires a non-empty ID and --workspace-model with a raw model ID")
-	}
-	return nil
-}
-
-func runConfig(opts configOptions) error {
-	if opts.ContextSet {
+	if flagNameSet(fs, "context") {
+		if strings.TrimSpace(*contextValue) == "" {
+			fmt.Fprintln(os.Stderr, "error: --context requires @handle, organization ID, or personal")
+			os.Exit(2)
+		}
 		stored, err := config.LoadStoredConfig()
 		if err != nil {
-			return err
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
 		}
 		for _, name := range []string{config.APIEndpointEnv, config.AuthTokenEnv} {
 			if os.Getenv(name) != "" {
 				fmt.Fprintf(os.Stderr, "warning: %s is ignored when updating stored context\n", name)
 			}
 		}
-		contextName, err := setContext(stored, opts.Context)
+		contextName, err := setContext(stored, *contextValue)
 		if err != nil {
-			return err
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
 		}
-		if opts.JSON {
-			printJSON(map[string]string{"context": contextName, "scope": "local"})
+		if *jsonOut {
+			printJSON(map[string]string{"context": contextName})
 		} else {
 			fmt.Printf("context set to %s\n", contextName)
 		}
-		return nil
-	}
-	if opts.WorkspaceModelSet {
-		client, err := cloud.ControlClient()
-		if err != nil {
-			return err
-		}
-		selection, err := resolveCloudInference(client, opts.WorkspaceModel, opts.ConnectionID)
-		if err != nil {
-			return err
-		}
-		preference, err := client.SetInferencePreference(*selection)
-		if err != nil {
-			return fmt.Errorf("could not change the default for %s: %w", client.ContextName(), err)
-		}
-		if opts.JSON {
-			printJSON(struct {
-				Context   string                   `json:"context"`
-				Scope     string                   `json:"scope"`
-				Selection cloud.InferenceSelection `json:"selection"`
-			}{client.ContextName(), "workspace", preference.Selection})
-		} else {
-			fmt.Printf("Workspace default for %s set to %s.\nApplies to future CLI and web deployments. Existing deployments keep their settings.\n", client.ContextName(), strings.TrimSpace(opts.WorkspaceModel))
-			if value := strings.TrimSpace(os.Getenv("TELOS_MODEL")); value != "" {
-				fmt.Printf("TELOS_MODEL (%s) still overrides this default for CLI deployments.\n", value)
-			}
-		}
-		return nil
-	}
-	if opts.Models {
-		client, err := cloud.ControlClient()
-		if err != nil {
-			return err
-		}
-		catalog := loadModelCatalog(client, opts.Refresh)
-		printModelCatalog(catalog, opts.JSON)
-		if len(catalog.Errors) > 0 {
-			return fmt.Errorf("some model information is unavailable; see the reported connection errors")
-		}
-		return nil
+		return
 	}
 	cfg, err := config.LoadConfig()
 	if err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 	path, err := config.ConfigPath()
 	if err != nil {
-		return err
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
 	report := loadConfigReport(cfg, path)
-	if opts.JSON {
+	if *jsonOut {
 		printJSON(report)
 	} else {
 		printConfigReport(report)
 	}
-	return nil
 }
 
 func setContext(stored *config.Config, value string) (string, error) {
@@ -219,7 +139,7 @@ func loadConfigReport(cfg *config.Config, path string) configReport {
 	var preference *cloud.InferencePreference
 	var preferenceErr error
 	var wg sync.WaitGroup
-	wg.Go(func() { inventory = loadInferenceConnections(client, "") })
+	wg.Go(func() { inventory = loadInferenceConnections(client) })
 	wg.Go(func() { preference, preferenceErr = client.InferencePreference() })
 	wg.Wait()
 	report.Connections, report.Errors = inventory.Connections, inventory.Issues
@@ -264,7 +184,7 @@ func inferenceSelectionName(selection cloud.InferenceSelection, connections []in
 			return connection.Name + "/" + selection.Model
 		}
 	}
-	return selection.ConnectionID + "/" + selection.Model
+	return selection.Model + " (connection unavailable)"
 }
 
 func configClient(cfg *config.Config) (*cloud.Client, error) {

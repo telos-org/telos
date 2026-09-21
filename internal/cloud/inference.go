@@ -3,7 +3,6 @@ package cloud
 import (
 	"encoding/json"
 	"net/http"
-	"net/url"
 )
 
 type SubscriptionConnection struct {
@@ -34,7 +33,6 @@ type APIKeyConnection struct {
 
 type InferenceModel struct {
 	ID            string   `json:"id"`
-	Label         string   `json:"label"`
 	Provider      string   `json:"provider"`
 	ConnectionIDs []string `json:"connection_ids,omitempty"`
 }
@@ -42,7 +40,6 @@ type InferenceModel struct {
 type ConnectionCatalog struct {
 	ConnectionID string           `json:"connection_id"`
 	Models       []InferenceModel `json:"models"`
-	FetchedAt    *string          `json:"fetched_at"`
 	Error        *string          `json:"error"`
 }
 
@@ -65,7 +62,7 @@ type InferenceSummary struct {
 
 func (c *Client) ListSubscriptionConnections() ([]SubscriptionConnection, error) {
 	var result subscriptionConnectionList
-	err := c.inferenceJSON(http.MethodGet, "/api/inference/connections", nil, &result)
+	err := c.inferenceJSON("/api/inference/connections", &result)
 	return result.Connections, err
 }
 
@@ -73,7 +70,7 @@ func (c *Client) ListAPIKeyConnections() ([]APIKeyConnection, error) {
 	var result struct {
 		Connections []APIKeyConnection `json:"connections"`
 	}
-	err := c.inferenceJSON(http.MethodGet, "/api/inference/api-keys", nil, &result)
+	err := c.inferenceJSON("/api/inference/api-keys", &result)
 	return result.Connections, err
 }
 
@@ -81,41 +78,24 @@ func (c *Client) SubscriptionCatalog() ([]InferenceModel, error) {
 	var result struct {
 		Models []InferenceModel `json:"models"`
 	}
-	err := c.inferenceJSON(http.MethodGet, "/api/inference/catalog", nil, &result)
+	err := c.inferenceJSON("/api/inference/catalog", &result)
 	return result.Models, err
 }
 
 func (c *Client) APIKeyCatalog() (*APIKeyCatalog, error) {
 	var result APIKeyCatalog
-	err := c.inferenceJSON(http.MethodGet, "/api/inference/api-keys/catalog", nil, &result)
-	return &result, err
-}
-
-func (c *Client) RefreshAPIKeyCatalog(connectionID string) (*ConnectionCatalog, error) {
-	var result ConnectionCatalog
-	path := "/api/inference/api-keys/" + url.PathEscape(connectionID) + "/catalog/refresh"
-	err := c.inferenceJSON(http.MethodPost, path, nil, &result)
+	err := c.inferenceJSON("/api/inference/api-keys/catalog", &result)
 	return &result, err
 }
 
 func (c *Client) InferencePreference() (*InferencePreference, error) {
 	var result InferencePreference
-	err := c.inferenceJSON(http.MethodGet, "/api/inference/preference", nil, &result)
+	err := c.inferenceJSON("/api/inference/preference", &result)
 	return &result, err
 }
 
-func (c *Client) SetInferencePreference(selection InferenceSelection) (*InferencePreference, error) {
-	body, err := json.Marshal(InferencePreference{Selection: selection})
-	if err != nil {
-		return nil, err
-	}
-	var result InferencePreference
-	err = c.inferenceJSON(http.MethodPut, "/api/inference/preference", body, &result)
-	return &result, err
-}
-
-func (c *Client) inferenceJSON(method, path string, body []byte, result any) error {
-	resp, err := c.do(method, path, body)
+func (c *Client) inferenceJSON(path string, result any) error {
+	resp, err := c.do(http.MethodGet, path, nil)
 	if err != nil {
 		return err
 	}

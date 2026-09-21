@@ -33,11 +33,11 @@ func TestResolveCloudInference(t *testing.T) {
 	defer server.Close()
 	client := cloud.NewClient(server.URL, "token")
 
-	managed, err := resolveCloudInference(client, "telos/max", "")
+	managed, err := resolveCloudInference(client, "telos/max")
 	if err != nil || managed.Source != "managed" || managed.Tier != "max" {
 		t.Fatalf("managed = %#v, err = %v", managed, err)
 	}
-	subscription, err := resolveCloudInference(client, "openai-rohan/gpt-5.6-sol", "")
+	subscription, err := resolveCloudInference(client, "openai-rohan/gpt-5.6-sol")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -46,10 +46,10 @@ func TestResolveCloudInference(t *testing.T) {
 		subscription.Model != "gpt-5.6-sol" {
 		t.Fatalf("subscription = %#v", subscription)
 	}
-	if _, err := resolveCloudInference(client, "openai-james/gpt-5.6-sol", ""); err == nil {
+	if _, err := resolveCloudInference(client, "openai-james/gpt-5.6-sol"); err == nil {
 		t.Fatal("needs-attention connection resolved")
 	}
-	if _, err := resolveCloudInference(client, "missing/gpt-5.6-sol", ""); err == nil {
+	if _, err := resolveCloudInference(client, "missing/gpt-5.6-sol"); err == nil {
 		t.Fatal("missing connection resolved")
 	}
 }
@@ -92,9 +92,9 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 			want:  &cloud.InferenceSelection{Source: "byok", ConnectionID: "key_work", Model: "claude-test"},
 		},
 		{
-			name:  "connection ID override with provider-prefixed model",
+			name:  "named connection with provider-prefixed model",
 			env:   "telos/max",
-			flags: []string{"--connection-id", "api-key:key_router", "--model", "anthropic/claude-test"},
+			flags: []string{"--model", "Work/Router/anthropic/claude-test"},
 			want:  &cloud.InferenceSelection{Source: "byok", ConnectionID: "key_router", Model: "anthropic/claude-test"},
 		},
 	} {

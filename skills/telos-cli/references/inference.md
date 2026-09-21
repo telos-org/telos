@@ -1,6 +1,6 @@
 ---
 title: Models and inference
-description: Discover Cloud models, choose managed inference, a subscription, or a saved API key, and set the workspace default.
+description: Use the workspace default or select managed inference, a subscription, or a saved API-key connection for one deployment.
 group: Platform
 ---
 
@@ -36,31 +36,11 @@ including connection IDs and account details, without credentials. Config
 inspection reports authentication and lookup errors in its output; it is not
 an authentication success exit-code check.
 
-## Discover models
-
-List available models with copyable deployment options:
-
-```bash
-telos config --models
-telos config --models --json
-telos config --models --refresh
-```
-
-The listing groups models by connection and includes the managed
-`telos/default` and `telos/max` choices. `--refresh` refreshes API-key catalogs
-and reloads the subscription catalog. Forcing an API-key refresh requires
-workspace operator access.
-
-Errors are reported per connection without hiding other results. Cached models
-from a failed refresh are marked `stale`. The command exits unsuccessfully if
-any part of the listing failed; JSON output still contains the results and
-errors. Deployment selection requires a successful catalog check for the
-chosen connection and model.
-
 ## Override one new deployment
 
-For a subscription or API key, use `<connection-name>/<model-id>`. Copy a
-selection from the model listing and quote names containing spaces:
+For a subscription or API key, use `<connection-name>/<model-id>`. Choose a
+model available to that connection under **Inference** in the Telos app, and
+quote names containing spaces:
 
 ```bash
 telos apply SPEC.md --context CONTEXT --model MyChatGPT/gpt-5.5
@@ -68,10 +48,14 @@ telos apply SPEC.md --context CONTEXT --model "Work Anthropic/MODEL_ID"
 ```
 
 Replace `MODEL_ID` with an available model ID. The CLI determines whether the
-named connection is a subscription or API key. Names are case-sensitive and
-must identify exactly one connection. A subscription must report `connected`,
-and the model must be available to the selected connection. Explicit selections
-are checked before the CLI publishes a spec package.
+named connection is a subscription or API key. Names are case-sensitive, and
+the selection must identify exactly one connection. If names make the
+selection ambiguous, rename the connections in the app. Model IDs containing
+`/`, such as OpenRouter's provider-prefixed IDs, are preserved. A subscription
+must report `connected`, and the model must be available to the selected
+connection. Explicit selections are checked before the CLI publishes a spec
+package. If a connection or model cannot be checked, the command stops with
+an error.
 
 To use managed inference:
 
@@ -88,54 +72,11 @@ telos apply @scope/package:version --context CONTEXT \
   --model "Work Anthropic/MODEL_ID" --thinking high
 ```
 
-### Select by connection ID
+## Use the workspace default
 
-If names collide or a name contains `/`, use a stable connection reference
-from `telos config --json` or `telos config --models --json` and an explicit
-raw model ID:
-
-```bash
-telos apply SPEC.md --context CONTEXT \
-  --connection-id api-key:KEY_ID --model MODEL_ID
-telos apply SPEC.md --context CONTEXT \
-  --connection-id subscription:CONNECTION_ID --model MODEL_ID
-```
-
-The `api-key:` and `subscription:` prefixes inspect only the chosen connection
-type, so an unrelated discovery outage does not block selection. An unqualified
-connection ID also works when both connection lists are available and the ID
-is unique. Model IDs containing `/`, such as OpenRouter's provider-prefixed IDs,
-are preserved. With `--connection-id`, supply `--model` explicitly; it does not
-come from `TELOS_MODEL`.
-
-## Set the workspace default
-
-`--workspace-model` updates the shared default for future deployments from both
-the CLI and web. It requires workspace operator access:
-
-```bash
-telos config --workspace-model "Work Anthropic/MODEL_ID"
-telos config --workspace-model telos/default
-telos config --connection-id api-key:KEY_ID --workspace-model MODEL_ID --json
-```
-
-Existing deployments retain their saved inference. This command does not
-change your local config file or save a thinking preference. An active
-`TELOS_MODEL` still overrides the workspace preference for CLI deployments.
-
-The command uses the selected context. To target another workspace for a
-single config operation, set `TELOS_CONTEXT`:
-
-```bash
-TELOS_CONTEXT=@team-handle telos config --models
-TELOS_CONTEXT=@team-handle telos config --workspace-model telos/max
-```
-
-`telos config --context @team-handle` retains its separate meaning: it changes
-the saved CLI context. It cannot be combined with `--models`, `--refresh`, or
-`--workspace-model`. See [Cloud authentication](cloud.md#choose-the-context).
-
-### Selection order
+Set the shared default under **Inference** in the Telos app. It applies to
+future CLI and web deployments in that workspace. `telos config` displays it;
+existing deployments retain their saved inference.
 
 New Cloud deployments use:
 
@@ -204,9 +145,8 @@ telos run REPORT_SPEC.md --workspace . --until 3 \
 ```
 
 Local names use Pi's `<provider>/<model-id>` form. Selection order is `--model`,
-then `TELOS_MODEL`, then `openai-codex/gpt-5.5`. Cloud connection names and
-`--connection-id` do not configure local credentials. Run `pi` and use `/login`
-to configure them.
+then `TELOS_MODEL`, then `openai-codex/gpt-5.5`. Local credentials come from Pi;
+run `pi` and use `/login` to configure them.
 
 Inside a Telos worker, `TELOS_MODEL` defaults to that worker's selected model.
 Nested runs inherit that model unless overridden. Hosted child tasks submitted
