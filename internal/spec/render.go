@@ -31,7 +31,6 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 	}
 	parts := []string{
 		preamble,
-		renderPlatformPreamble(compiled),
 		renderSessionContext(compiled, options),
 		renderSpec(compiled),
 		renderSkillsRoster(compiled, RoleProver),
@@ -48,7 +47,6 @@ func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath
 	preamble, _ := ReadPrompt("verifier.md")
 	parts := []string{
 		preamble,
-		renderPlatformPreamble(compiled),
 		renderSessionContext(compiled, options),
 		renderSpec(compiled),
 		renderSkillsRoster(compiled, RoleVerifier),
@@ -66,18 +64,6 @@ func promptOptions(opts []PromptOptions) PromptOptions {
 	return opts[0]
 }
 
-func renderPlatformPreamble(compiled *CompiledEnvironment) string {
-	platform := compiled.Environment.Platform
-	if platform == "" {
-		platform = "cloud"
-	}
-	text, err := ReadPrompt("preamble/" + platform + ".md")
-	if err != nil {
-		return ""
-	}
-	return text
-}
-
 func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) string {
 	platform := compiled.Environment.Platform
 	if platform == "" {
@@ -87,6 +73,7 @@ func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) str
 		"## Session",
 		"",
 		fmt.Sprintf("- Spec: `%s`", compiled.Environment.Name),
+		fmt.Sprintf("- Platform: `%s`", platform),
 	}
 	if opts.Controller {
 		lines = append(lines, "- Session kind: `controller`")
@@ -98,7 +85,10 @@ func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) str
 		lines = append(lines, fmt.Sprintf("- Review cycle cap: at most `%d` verifier cycles", opts.ReviewCycleCap))
 	}
 	if platform != "local" {
-		lines = append(lines, fmt.Sprintf("- Namespace: `%s`", compiled.Namespace))
+		lines = append(lines,
+			fmt.Sprintf("- Namespace: `%s`", compiled.Namespace),
+			"- The runtime supplies session identity and CLI credentials.",
+		)
 	}
 
 	return strings.Join(lines, "\n")
@@ -159,10 +149,12 @@ func renderTranscriptProtocol(transcriptPath string) string {
 }
 
 func renderWorkspace(workspace string) string {
-	if workspace == "" {
-		return ""
+	text := "## Workspace\n\nDurable working tree; use git history to inspect prior work.\n" +
+		"Child tasks use isolated workspaces. Inspect their transcripts and evidence; extract `workspace.tar.gz` checkpoints to integrate results, including git state.\n"
+	if workspace != "" {
+		text += "\n```\n" + workspace + "\n```\n"
 	}
-	return "## Workspace\n\nDurable working tree; use git history to inspect prior work.\n\n```\n" + workspace + "\n```\n"
+	return text
 }
 
 func renderOutputContract(role Role, opts PromptOptions) string {
