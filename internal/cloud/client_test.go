@@ -457,7 +457,7 @@ func TestClientCreateSession(t *testing.T) {
 	session, err := client.CreateSession(SessionCreateOptions{
 		Name:            "auth",
 		PackageRef:      "@telos/auth:1.2.3",
-		AgentModel:      "sail-research/test-model",
+		Inference:       &InferenceSelection{Source: "managed", Tier: "max"},
 		AgentThinking:   "high",
 		AgentTimeoutSec: &timeout,
 	})
@@ -469,10 +469,17 @@ func TestClientCreateSession(t *testing.T) {
 	}
 	if gotBody["name"] != "auth" ||
 		gotBody["package_ref"] != "@telos/auth:1.2.3" ||
-		gotBody["agent_model"] != "sail-research/test-model" ||
+
 		gotBody["agent_thinking"] != "high" ||
 		gotBody["agent_timeout_sec"] != float64(1800) {
 		t.Fatalf("body: got %#v", gotBody)
+	}
+	if _, legacy := gotBody["agent_model"]; legacy {
+		t.Fatalf("creation serialized a legacy model: %#v", gotBody)
+	}
+	selection, ok := gotBody["inference"].(map[string]any)
+	if !ok || selection["source"] != "managed" || selection["tier"] != "max" {
+		t.Fatalf("inference selection: %#v", gotBody["inference"])
 	}
 	if gotOrgID != "org_telos" {
 		t.Fatalf("org header: got %q", gotOrgID)
