@@ -226,11 +226,12 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 	}
 	turnID := fmt.Sprintf("%04d-%s", roundNum, role)
 	ts.OnLiveEvent = func(event LiveAgentEvent) {
-		audience := "agent"
-		if event.Kind == "user_update" {
-			audience = "user"
-		} else if err := AppendLiveAgentEvent(p.State.TranscriptPath, role, roleRound, turnID, event); err != nil {
+		if err := AppendLiveAgentEvent(p.State.TranscriptPath, role, roleRound, turnID, event); err != nil {
 			return
+		}
+		audience := "agent"
+		if event.Kind == "progress_update" {
+			audience = "user"
 		}
 		p.Evidence.Log("agent_progress", roundNum, role, map[string]interface{}{
 			"audience": audience,

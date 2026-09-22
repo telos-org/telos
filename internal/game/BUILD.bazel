@@ -4,7 +4,6 @@ go_library(
     name = "game",
     srcs = [
         "agent_failure.go",
-        "progress.go",
         "pvg.go",
         "state.go",
         "transcript.go",
@@ -22,7 +21,6 @@ go_test(
     name = "game_test",
     srcs = [
         "agent_failure_test.go",
-        "progress_test.go",
         "pvg_test.go",
         "state_test.go",
         "transcript_test.go",

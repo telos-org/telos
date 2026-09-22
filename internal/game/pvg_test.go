@@ -143,8 +143,8 @@ func TestPVGHumanProgressLeavesTechnicalHandoffIntact(t *testing.T) {
 	}
 	exec := &fakeExecutor{
 		onTurn: func(ts *TurnState) {
-			ts.OnLiveEvent(LiveAgentEvent{Kind: "user_update", Text: "Checking restart recovery without duplicate orders."})
-			ts.OnLiveEvent(LiveAgentEvent{Kind: "progress_update", Text: "Replay evidence: evaluation/restart.go."})
+			ts.OnLiveEvent(LiveAgentEvent{Kind: "progress_update", Text: "Checking restart recovery without duplicate orders."})
+			ts.OnLiveEvent(LiveAgentEvent{Kind: "review", Text: "Replay evidence: evaluation/restart.go."})
 		},
 		verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: "Verified technical evidence.\n<status>CONCEDE</status>"}},
 	}
@@ -153,7 +153,7 @@ func TestPVGHumanProgressLeavesTechnicalHandoffIntact(t *testing.T) {
 		t.Fatalf("result=%+v", result)
 	}
 	transcript := ReadTranscript(state.TranscriptPath)
-	if strings.Contains(transcript, "duplicate orders") || !strings.Contains(transcript, "evaluation/restart.go") || !strings.Contains(transcript, "Verified technical evidence") {
+	if !strings.Contains(transcript, "duplicate orders") || !strings.Contains(transcript, "evaluation/restart.go") || !strings.Contains(transcript, "Verified technical evidence") {
 		t.Fatalf("technical transcript was changed: %s", transcript)
 	}
 	data, err := os.ReadFile(state.EvidencePath)
@@ -182,12 +182,12 @@ func TestPVGHumanProgressLeavesTechnicalHandoffIntact(t *testing.T) {
 			switch body["audience"] {
 			case "user":
 				humanCount++
-				if body["kind"] != "user_update" || body["text"] != "Checking restart recovery without duplicate orders." {
+				if body["kind"] != "progress_update" || body["text"] != "Checking restart recovery without duplicate orders." {
 					t.Fatalf("human update changed: %#v", event)
 				}
 			case "agent":
 				technicalCount++
-				if body["kind"] != "progress_update" || body["text"] != "Replay evidence: evaluation/restart.go." {
+				if body["kind"] != "review" || body["text"] != "Replay evidence: evaluation/restart.go." {
 					t.Fatalf("technical update changed: %#v", event)
 				}
 			default:

@@ -281,41 +281,26 @@ func renderWorkspace(workspace string, role Role) string {
 }
 
 func renderOutputContract(role Role, opts PromptOptions) string {
-	if role == RoleProver {
-		return strings.Join([]string{
-			"## Output for technical handoff",
-			"These requirements apply to the technical response and <progress_update> blocks. Human-facing <user_update> messages follow the separate instructions below.",
-			"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
-			"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
-			"- Write concise Markdown with claims, evidence, changes made, and remaining uncertainty",
-			"- Use <progress_update>...</progress_update> blocks for agent-decided directional updates and proof of liveness",
-			"- Send a directional update when a material result, a new blocker, or the next action changes",
-			"- During extended work with no new result, send brief liveness updates that name the active operation or wait",
-			"- Apply these Simplified Technical English (ASD-STE100) rules to each technical progress_update: use active voice, one topic per sentence, and no more than 25 words per sentence",
-			"- State what changed or what blocks progress; include the next action when it helps the observer",
-			"- Do not report routine file reads, commands, or plans",
-			"- Do not save all progress updates for the final response",
-			"- End every turn with one final <progress_update>what you did this round</progress_update>",
-			renderUserProgressProtocol(role),
-		}, "\n")
-	}
 	lines := []string{
-		"## Output for technical handoff",
-		"These requirements apply to the technical response and <progress_update> blocks. Human-facing <user_update> messages follow the separate instructions below.",
-		"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
-		"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
-		"- Write concise Markdown; blocking findings first",
-		"- Use <progress_update>...</progress_update> blocks for agent-decided directional updates and proof of liveness",
-		"- Send a directional update when a material result, a new blocker, or the next action changes",
-		"- During extended evaluation with no new result, send brief liveness updates that name the active probe or wait",
-		"- Apply these Simplified Technical English (ASD-STE100) rules to each technical progress_update: use active voice, one topic per sentence, and no more than 25 words per sentence",
-		"- State what changed or what blocks progress; include the next action when it helps the observer",
-		"- Do not report routine file reads, commands, or plans",
-		"- Do not save all progress updates for the final response",
-		"- End every turn with one final <progress_update>what you found or why you concede</progress_update>",
+		"## Output and progress",
+		"- Your response is appended to the transcript automatically; do not edit it or add duplicate turn headings",
+		"- Keep technical claims, evidence, findings, and uncertainty in your Markdown report",
+		"- Use <progress_update>...</progress_update> for short updates to the person waiting for the result, usually one sentence of 10–20 words",
+		"- Send an update when meaningful work begins, a result is established, direction changes, or a blocker appears; during a wait, report only the activity or reason you observed",
+		"- Describe the requested behavior in everyday words. Keep file names, commands, test inventories, and internal agent roles in the report",
+		"- Example: <progress_update>Retrying a test order after a restart no longer charges your balance twice.</progress_update>",
+		"- Report only what you established; a passing check or running child does not mean the whole Goal is complete",
+		"- Finish with your report and one final progress_update in the same response; do not send a separate update-only final response",
+	}
+	if role == RoleProver {
+		lines = append(lines, "- The final update names the change and its readiness to be checked; do not claim independent verification")
+		return strings.Join(lines, "\n")
+	}
+	lines = append(lines,
+		"- Put blocking findings first; the final update states what you independently confirmed or what still blocks progress",
 		"- The final non-empty line must be exactly one status tag",
 		"- <status>CONTINUE</status> if you found a concrete goal violation",
-	}
+	)
 	if opts.Controller {
 		lines = append(lines,
 			"- For controller cycles, a pending or running child task is valid waiting work when the controller observed it first, launched no competing work, and did not claim final goal satisfaction",
@@ -328,34 +313,8 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		`- If "Required Evaluation Rubrics" are present, include a "Required Rubrics Applied" section with PASS/FAIL and evidence for each required rubric`,
 		"- If any required rubric is FAIL, the final status must be <status>CONTINUE</status>",
 		"- <status>CONCEDE</status> only if the goal and applicable quality bars hold under independent review",
-		renderUserProgressProtocol(role),
 	)
 	return strings.Join(lines, "\n")
-}
-
-func renderUserProgressProtocol(role Role) string {
-	finalUpdate := "- In your final user_update, name the most important change you made and its readiness to be checked. Do not claim independent verification. Example: <user_update>The change to prevent double charges is ready to be checked.</user_update>"
-	if role == RoleVerifier {
-		finalUpdate = "- In your final user_update, report the most important result you independently confirmed or the remaining blocker. Describe the outcome directly; do not say it is ready for a review you have already performed. Example: <user_update>Confirmed: retrying your test order after a restart does not charge twice.</user_update>"
-	}
-	return `## Updates for the spec author
-- Send a <user_update>...</user_update> when you begin meaningful work, establish a result, change direction, or encounter a blocker.
-- Write the entire tag and its message on one line starting at column zero, outside code blocks, at most 1200 bytes, with no nested tags.
-- Write for the person waiting to use the result. Name the requested behavior and explain what you are changing for them, what you confirmed, or what prevents them from using it. They have not read your code or technical handoff.
-- Choose one main point and use a short sentence, usually 10–20 words. Add a second sentence only for an important limit or next action. This also applies to the final update: do not turn it into a checklist of completed work.
-- Use everyday words for the behavior: a test order, a saved balance, saved records, a restart, or a check. Translate implementation and testing terms such as fixture, ledger, checkpoint, artifact, and evaluation cycle into what they mean for the person using the result. Keep a technical term only when it is essential to their decision.
-- Keep files, commands, hashes, test inventories, routine setup, and internal agent roles in technical progress. Describe the result instead of how you tested it.
-- Example of work underway: <user_update>I'm checking that restarting the service cannot charge you twice for the same order.</user_update>
-- Example of a checked result: <user_update>Your test balance survives a restart, and retrying the same order does not charge twice.</user_update>
-- Examples illustrate wording, not evidence. Distinguish work underway, what you built, your own checks, and independent verification. Before independent verification, report readiness to be checked rather than declaring the goal satisfied.
-- Limit result claims to the behaviors and cases actually checked. Passing selected checks does not establish that every invalid input is rejected or that the system is ready for all uses.
-- A successful controller cycle or running child does not mean the whole goal is complete. If work remains, name the result you are waiting for without exposing internal agent roles.
-- During a known wait, name what is being awaited and why when observed. Do not invent a delay reason, ETA, percentage, or claim of liveness.
-- Before sending, replace any test inventory or internal term with the single behavior that matters most to the person using the result.
-- These messages are presentation only and are excluded from the agent handoff. Keep all technical claims, evidence, findings, uncertainty, and existing progress_update blocks in your normal technical response.
-` + finalUpdate + `
-- Include the final user_update in the same assistant response as your complete technical final response. Never finish with a separate user-update-only assistant message, and keep the evaluator's status tag as the final non-empty line.
-`
 }
 
 func joinNonEmpty(parts []string) string {

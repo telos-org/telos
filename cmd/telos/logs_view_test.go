@@ -12,8 +12,8 @@ import (
 func TestHumanProgressIsCompleteAndTechnicalRecordsStayInJSON(t *testing.T) {
 	text := "Checking whether the bot can resume safely after a restart. The position limits must still hold, and orders must not be submitted twice after reconnecting."
 	events := []sessionapi.SessionEvent{
-		{Event: "agent_progress", Data: map[string]any{"audience": "agent", "kind": "progress_update", "text": "All four md5s match; 42/42 units."}},
-		{Event: "agent_progress", Data: map[string]any{"audience": "user", "kind": "user_update", "text": text}},
+		{Event: "agent_progress", Data: map[string]any{"audience": "agent", "kind": "review", "text": "All four md5s match; 42/42 units."}},
+		{Event: "agent_progress", Data: map[string]any{"audience": "user", "kind": "progress_update", "text": text}},
 	}
 	rows := renderLogRows(events)
 	if len(rows) != 1 || rows[0].Summary != text {
@@ -37,7 +37,7 @@ func TestProgressAudienceIsExplicitAndWorksWithoutOtherHistory(t *testing.T) {
 	} {
 		for _, audience := range []string{"user", "agent", "future-audience"} {
 			event := sessionapi.SessionEvent{Event: "agent_progress", Data: map[string]any{
-				"audience": audience, "kind": "user_update", "text": text,
+				"audience": audience, "kind": "progress_update", "text": text,
 			}}
 			rows := renderLogRows([]sessionapi.SessionEvent{event})
 			if audience == "user" {
@@ -97,7 +97,7 @@ func TestUnmarkedLogsKeepOriginalOutput(t *testing.T) {
 func TestQuietProgressDoesNotInventAWaitReason(t *testing.T) {
 	now := time.Date(2026, 9, 16, 12, 6, 0, 0, time.UTC)
 	ts := "2026-09-16T12:01:00Z"
-	events := []sessionapi.SessionEvent{{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"audience": "user", "kind": "user_update", "text": "Checking restart recovery."}}}
+	events := []sessionapi.SessionEvent{{Event: "agent_progress", Timestamp: &ts, Data: map[string]any{"audience": "user", "kind": "progress_update", "text": "Checking restart recovery."}}}
 	var out bytes.Buffer
 	printLogSilence(&out, events, now.Add(-time.Second))
 	if out.Len() != 0 {
@@ -110,7 +110,7 @@ func TestQuietProgressDoesNotInventAWaitReason(t *testing.T) {
 	out.Reset()
 	fresh := now.Format(time.RFC3339)
 	technical := sessionapi.SessionEvent{Event: "agent_progress", Timestamp: &fresh, Data: map[string]any{
-		"audience": "agent", "kind": "progress_update", "text": "42/42 units.",
+		"audience": "agent", "kind": "review", "text": "42/42 units.",
 	}}
 	printLogSilence(&out, append(events, technical), now)
 	if !strings.Contains(out.String(), "No new progress update for 5m0s. Last reported activity: Checking restart recovery.") {
