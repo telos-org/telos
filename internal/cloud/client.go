@@ -84,7 +84,6 @@ type SessionRecord struct {
 type SessionCreateOptions struct {
 	Name            string
 	PackageRef      string
-	AgentModel      string
 	AgentThinking   string
 	AgentTimeoutSec *int
 	Inference       *InferenceSelection
@@ -533,9 +532,6 @@ func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error
 	payload := map[string]any{
 		"name":        opts.Name,
 		"package_ref": opts.PackageRef,
-	}
-	if strings.TrimSpace(opts.AgentModel) != "" {
-		payload["agent_model"] = strings.TrimSpace(opts.AgentModel)
 	}
 	if strings.TrimSpace(opts.AgentThinking) != "" {
 		payload["agent_thinking"] = strings.TrimSpace(opts.AgentThinking)
