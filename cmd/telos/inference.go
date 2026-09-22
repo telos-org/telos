@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"slices"
 	"strings"
 	"sync"
 
@@ -87,9 +86,6 @@ func resolveCloudInference(client *cloud.Client, model string) (*cloud.Inference
 	if connection.Source == "subscription" && connection.Status != "connected" {
 		return nil, fmt.Errorf("subscription %q is %s; reconnect it at %s", connection.Name, connection.Status, inferenceSettingsURL)
 	}
-	if err := validateInferenceModel(client, connection, modelID); err != nil {
-		return nil, err
-	}
 	return &cloud.InferenceSelection{Source: connection.Source, ConnectionID: connection.ID, Model: modelID}, nil
 }
 
@@ -112,46 +108,6 @@ func selectInferenceConnection(connections []inferenceConnection, model string) 
 		return inferenceConnection{}, "", fmt.Errorf("a model ID is required; choose one at %s", inferenceSettingsURL)
 	}
 	return connection, modelID, nil
-}
-
-func validateInferenceModel(client *cloud.Client, connection inferenceConnection, modelID string) error {
-	if connection.Source == "subscription" {
-		models, err := client.SubscriptionCatalog()
-		if err != nil {
-			return fmt.Errorf("could not verify models for %q: %w", connection.Name, err)
-		}
-		for _, model := range models {
-			if model.ID == modelID && subscriptionModelAvailable(model, connection) {
-				return nil
-			}
-		}
-	} else {
-		catalog, err := client.APIKeyCatalog()
-		if err != nil {
-			return fmt.Errorf("could not verify models for %q: %w", connection.Name, err)
-		}
-		if !catalog.Enabled {
-			return fmt.Errorf("API-key inference is unavailable in this workspace")
-		}
-		for _, entry := range catalog.Connections {
-			if entry.ConnectionID != connection.ID {
-				continue
-			}
-			if entry.Error != nil && *entry.Error != "" {
-				return fmt.Errorf("could not verify models for %q: %s; check the connection at %s", connection.Name, *entry.Error, inferenceSettingsURL)
-			}
-			for _, model := range entry.Models {
-				if model.ID == modelID && model.Provider == connection.Provider {
-					return nil
-				}
-			}
-		}
-	}
-	return fmt.Errorf("model %q is unavailable for %q; check available models at %s", modelID, connection.Name, inferenceSettingsURL)
-}
-
-func subscriptionModelAvailable(model cloud.InferenceModel, connection inferenceConnection) bool {
-	return model.Provider == connection.Provider && (model.ConnectionIDs == nil || slices.Contains(model.ConnectionIDs, connection.ID))
 }
 
 func formatInferenceIssues(issues []inferenceIssue) string {

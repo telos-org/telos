@@ -51,11 +51,11 @@ Replace `MODEL_ID` with an available model ID. The CLI determines whether the
 named connection is a subscription or API key. Names are case-sensitive, and
 the selection must identify exactly one connection. If names make the
 selection ambiguous, rename the connections in the app. Model IDs containing
-`/`, such as OpenRouter's provider-prefixed IDs, are preserved. A subscription
-must report `connected`, and the model must be available to the selected
-connection. Explicit selections are checked before the CLI publishes a spec
-package. If a connection or model cannot be checked, the command stops with
-an error.
+`/`, such as OpenRouter's provider-prefixed IDs, are preserved. The CLI checks
+the connection name and subscription status before publishing a spec package.
+Cloud validates model access before creating the deployment. If Cloud rejects
+the model, `apply` reports the error; a local spec package may already have
+been published.
 
 To use managed inference:
 

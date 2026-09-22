@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -326,4 +328,40 @@ func configOutputValue(t *testing.T, output, label string) string {
 	}
 	t.Fatalf("output %q has no %s row", output, label)
 	return ""
+}
+
+func TestConfigJSONShowsWorkspaceDefaultAndOverridesWithoutKeys(t *testing.T) {
+	server := inferenceTestServer(t, nil)
+	defer server.Close()
+	configureCloudTest(t, server.URL)
+	t.Setenv("TELOS_CONTEXT", "@telos")
+	t.Setenv("TELOS_MODEL", "telos/max")
+	t.Setenv("TELOS_THINKING", "high")
+	path := os.Getenv("TELOS_CONFIG")
+	before := []byte("context: personal\n")
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() { cmdConfig([]string{"--json"}) })
+	var report configReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Authentication != "valid" || report.Context != "@telos" || report.WorkspaceDefault == nil || report.WorkspaceDefault.Source != "byok" || report.ModelOverride != "telos/max" || report.ThinkingOverride != "high" {
+		t.Fatalf("report = %#v", report)
+	}
+	for _, connection := range report.Connections {
+		if connection.Source == "byok" && connection.Status != "saved" {
+			t.Fatalf("stored key claims a connection test: %#v", connection)
+		}
+	}
+	for _, secret := range []string{"control-token", "never-print-this-key", "auth_token", "api_key"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("JSON exposed a credential field/value: %q", secret)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("config inspection changed saved settings: %s, %v", after, err)
+	}
 }

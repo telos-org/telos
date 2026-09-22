@@ -172,6 +172,33 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	}
 }
 
+func printCloudInferenceSummary(out io.Writer, session cloud.SessionRecord) {
+	model := session.AgentModel
+	if summary := session.Inference; summary != nil {
+		printSummaryField(out, "Inference", inferenceSourceLabel(summary.Source))
+		if summary.ConnectionName != "" {
+			printSummaryField(out, "Connection", summary.ConnectionName)
+		}
+		if summary.Model != "" {
+			model = summary.Model
+		}
+		if summary.Source == "managed" {
+			if model == "" && summary.Tier != "" {
+				model = "telos/" + summary.Tier
+			}
+			if model == "telos-bifrost/telos/default" || model == "telos-bifrost/telos/max" {
+				model = strings.TrimPrefix(model, "telos-bifrost/")
+			}
+		}
+	}
+	if model != "" {
+		printSummaryField(out, "Model", model)
+	}
+	if session.AgentThinking != "" {
+		printSummaryField(out, "Thinking", session.AgentThinking+" (requested)")
+	}
+}
+
 func printSummaryField(out io.Writer, label string, value string) {
 	fmt.Fprintf(out, "%-9s %s\n", label, orDash(value))
 }

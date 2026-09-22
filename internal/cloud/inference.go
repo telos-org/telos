@@ -31,23 +31,6 @@ type APIKeyConnection struct {
 	Provider string `json:"provider"`
 }
 
-type InferenceModel struct {
-	ID            string   `json:"id"`
-	Provider      string   `json:"provider"`
-	ConnectionIDs []string `json:"connection_ids,omitempty"`
-}
-
-type ConnectionCatalog struct {
-	ConnectionID string           `json:"connection_id"`
-	Models       []InferenceModel `json:"models"`
-	Error        *string          `json:"error"`
-}
-
-type APIKeyCatalog struct {
-	Enabled     bool                `json:"enabled"`
-	Connections []ConnectionCatalog `json:"connections"`
-}
-
 type InferencePreference struct {
 	Selection InferenceSelection `json:"selection"`
 }
@@ -72,20 +55,6 @@ func (c *Client) ListAPIKeyConnections() ([]APIKeyConnection, error) {
 	}
 	err := c.inferenceJSON("/api/inference/api-keys", &result)
 	return result.Connections, err
-}
-
-func (c *Client) SubscriptionCatalog() ([]InferenceModel, error) {
-	var result struct {
-		Models []InferenceModel `json:"models"`
-	}
-	err := c.inferenceJSON("/api/inference/catalog", &result)
-	return result.Models, err
-}
-
-func (c *Client) APIKeyCatalog() (*APIKeyCatalog, error) {
-	var result APIKeyCatalog
-	err := c.inferenceJSON("/api/inference/api-keys/catalog", &result)
-	return &result, err
 }
 
 func (c *Client) InferencePreference() (*InferencePreference, error) {
