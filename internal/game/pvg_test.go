@@ -20,11 +20,14 @@ type fakeExecutor struct {
 	workspaceText   string
 	checkpointOK    bool
 	turnDirs        []string
-	liveEvents      []LiveAgentEvent
 	delay           time.Duration
+	onTurn          func(*TurnState)
 }
 
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) TurnResult {
+	if f.onTurn != nil {
+		f.onTurn(ts)
+	}
 	if f.delay > 0 {
 		deadline := time.Now().Add(f.delay)
 		for time.Now().Before(deadline) {
@@ -36,11 +39,7 @@ func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) Turn
 	}
 	if ts != nil {
 		f.turnDirs = append(f.turnDirs, ts.Dir)
-		if ts.OnLiveEvent != nil {
-			for _, event := range f.liveEvents {
-				ts.OnLiveEvent(event)
-			}
-		}
+
 	}
 	if role == "prover" {
 		if f.proverIdx < len(f.proverResults) {
@@ -135,79 +134,6 @@ func TestPVGVerifierConcedes(t *testing.T) {
 	}
 	if !strings.Contains(transcript, "## Result") {
 		t.Error("transcript should contain result")
-	}
-}
-
-func TestPVGLiveToolEventsRemainInEvidenceOnly(t *testing.T) {
-	compiled := compileTestSpec(t)
-	state := NewPVGState("pvg-test", t.TempDir(), "test-session-live-events")
-	liveEvents := []LiveAgentEvent{
-		{Kind: "tool", Text: "Reading app/main.py"},
-		{Kind: "tool", Text: "Running shell command"},
-		{Kind: "progress_update", Text: "Reading app/main.py revealed missing input validation."},
-		{Kind: "review", Text: "The input validation tests pass."},
-		{Kind: "summary", Text: "Input validation is ready."},
-	}
-	exec := &fakeExecutor{
-		liveEvents: liveEvents,
-		proverResults: []TurnResult{
-			{Role: "prover", Status: StatusContinue, Logs: "Added input validation."},
-		},
-		verifierResults: []TurnResult{
-			{Role: "verifier", Status: StatusConcede, Logs: "Accepted the validation change."},
-		},
-	}
-	if result := NewPVG(compiled, exec, state, PVGConfig{}).Run(); result.GameResult != GameSuccess {
-		t.Fatalf("result: %s error=%q", result.GameResult, result.Error)
-	}
-
-	transcript := ReadTranscript(state.TranscriptPath)
-	if strings.Contains(transcript, "<tool>") {
-		t.Errorf("transcript contains automatic tool notices:\n%s", transcript)
-	}
-	for _, event := range liveEvents {
-		if event.Kind == "tool" {
-			continue
-		}
-		block := "<" + event.Kind + ">" + event.Text + "</" + event.Kind + ">"
-		if count := strings.Count(transcript, block); count != 2 {
-			t.Errorf("expected %q in both turns, got %d copies", block, count)
-		}
-	}
-	for _, report := range []string{"Added input validation.", "Accepted the validation change."} {
-		if !strings.Contains(transcript, report) {
-			t.Errorf("transcript lost completed report %q", report)
-		}
-	}
-
-	data, err := os.ReadFile(state.EvidencePath)
-	if err != nil {
-		t.Fatalf("read evidence: %v", err)
-	}
-	progressByRole := make(map[string][]LiveAgentEvent)
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		var record struct {
-			Event string         `json:"event"`
-			Role  string         `json:"role"`
-			Data  LiveAgentEvent `json:"data"`
-		}
-		if err := json.Unmarshal([]byte(line), &record); err != nil {
-			t.Fatalf("decode evidence: %v", err)
-		}
-		if record.Event == "agent_progress" {
-			progressByRole[record.Role] = append(progressByRole[record.Role], record.Data)
-		}
-	}
-	for _, role := range []string{"prover", "verifier"} {
-		got := progressByRole[role]
-		if len(got) != len(liveEvents) {
-			t.Fatalf("%s evidence: got %d live events, want %d", role, len(got), len(liveEvents))
-		}
-		for i, want := range liveEvents {
-			if got[i] != want {
-				t.Errorf("%s evidence event %d: got %#v, want %#v", role, i, got[i], want)
-			}
-		}
 	}
 }
 
@@ -597,5 +523,82 @@ func TestPVGWorkspaceCheckpoint(t *testing.T) {
 	}
 	if _, err := os.Stat(result.WorkspaceCheckpointPath); err != nil {
 		t.Errorf("workspace checkpoint file missing: %v", err)
+	}
+}
+
+func TestPVGLiveToolEventsRemainInEvidenceOnly(t *testing.T) {
+	compiled := compileTestSpec(t)
+	state := NewPVGState("pvg-test", t.TempDir(), "test-session-live-events")
+	liveEvents := []LiveAgentEvent{
+		{Kind: "tool", Text: "Reading app/main.py"},
+		{Kind: "tool", Text: "Running shell command"},
+		{Kind: "progress_update", Text: "Reading app/main.py revealed missing input validation."},
+		{Kind: "review", Text: "The input validation tests pass."},
+		{Kind: "summary", Text: "Input validation is ready."},
+	}
+	exec := &fakeExecutor{
+		onTurn: func(ts *TurnState) {
+			for _, event := range liveEvents {
+				ts.OnLiveEvent(event)
+			}
+		},
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "Added input validation."},
+		},
+		verifierResults: []TurnResult{
+			{Role: "verifier", Status: StatusConcede, Logs: "Accepted the validation change."},
+		},
+	}
+	if result := NewPVG(compiled, exec, state, PVGConfig{}).Run(); result.GameResult != GameSuccess {
+		t.Fatalf("result: %s error=%q", result.GameResult, result.Error)
+	}
+
+	transcript := ReadTranscript(state.TranscriptPath)
+	if strings.Contains(transcript, "<tool>") {
+		t.Errorf("transcript contains automatic tool notices:\n%s", transcript)
+	}
+	for _, event := range liveEvents {
+		if event.Kind == "tool" {
+			continue
+		}
+		block := "<" + event.Kind + ">" + event.Text + "</" + event.Kind + ">"
+		if count := strings.Count(transcript, block); count != 2 {
+			t.Errorf("expected %q in both turns, got %d copies", block, count)
+		}
+	}
+	for _, report := range []string{"Added input validation.", "Accepted the validation change."} {
+		if !strings.Contains(transcript, report) {
+			t.Errorf("transcript lost completed report %q", report)
+		}
+	}
+
+	data, err := os.ReadFile(state.EvidencePath)
+	if err != nil {
+		t.Fatalf("read evidence: %v", err)
+	}
+	progressByRole := make(map[string][]LiveAgentEvent)
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var record struct {
+			Event string         `json:"event"`
+			Role  string         `json:"role"`
+			Data  LiveAgentEvent `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode evidence: %v", err)
+		}
+		if record.Event == "agent_progress" {
+			progressByRole[record.Role] = append(progressByRole[record.Role], record.Data)
+		}
+	}
+	for _, role := range []string{"prover", "verifier"} {
+		got := progressByRole[role]
+		if len(got) != len(liveEvents) {
+			t.Fatalf("%s evidence: got %d live events, want %d", role, len(got), len(liveEvents))
+		}
+		for i, want := range liveEvents {
+			if got[i] != want {
+				t.Errorf("%s evidence event %d: got %#v, want %#v", role, i, got[i], want)
+			}
+		}
 	}
 }
