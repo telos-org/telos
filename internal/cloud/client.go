@@ -698,6 +698,10 @@ func (c *Client) doRaw(method, path string, body []byte, contentType string) (*h
 		req.Header.Set("Content-Type", contentType)
 	}
 	req.Header.Set("User-Agent", UserAgent)
+	// Temporary discovery negotiation until the Cloud/client cutover.
+	if method == http.MethodGet && path == "/api/inference/connections" {
+		req.Header.Set("X-Telos-Inference-Version", "2")
+	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}

@@ -296,9 +296,7 @@ func accountBootstrapServer(t *testing.T) *httptest.Server {
 			]
 		}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
-			_, _ = w.Write([]byte(`{"connections":[{"id":"conn_1","name":"openai-rohan","provider":"chatgpt-codex","status":"connected","account_label":"owner@example.com","plan":"pro"}]}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/api-keys":
-			_, _ = w.Write([]byte(`{"connections":[{"id":"key_work","name":"Work Anthropic","provider":"anthropic"}]}`))
+			_, _ = w.Write([]byte(`{"errors":{},"connections":[{"source":"subscription","id":"conn_1","name":"openai-rohan","provider":"chatgpt-codex","status":"connected","account_label":"owner@example.com","plan":"pro"},{"source":"byok","status":"saved","id":"key_work","name":"Work Anthropic","provider":"anthropic"}]}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/preference":
 			_, _ = w.Write([]byte(`{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`))
 		default:

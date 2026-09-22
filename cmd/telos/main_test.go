@@ -1125,7 +1125,7 @@ func TestApplyCloudSessionPackageSendsSubscriptionSelection(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
-			_, _ = w.Write([]byte(`{"connections":[{"id":"conn_rohan","name":"openai-rohan","provider":"chatgpt-codex","status":"connected"}]}`))
+			_, _ = w.Write([]byte(`{"errors":{},"connections":[{"source":"subscription","id":"conn_rohan","name":"openai-rohan","provider":"chatgpt-codex","status":"connected"}]}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
 			if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
 				t.Fatal(err)

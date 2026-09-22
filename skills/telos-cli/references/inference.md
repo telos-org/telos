@@ -37,6 +37,14 @@ inspection reports authentication and lookup failures in its output, using
 an `error` string in JSON. Available settings still appear when a lookup fails.
 Config inspection is not an authentication success exit-code check.
 
+The CLI reads one shared connection list from Cloud. If a connection source is
+unavailable, config still shows available connections and reports the error.
+Named selection waits for a complete list, since the unavailable source could
+contain another connection with the same name. Managed selections continue to
+work. This CLI requires Cloud's shared inference-discovery API; an older Cloud
+must be updated before you can select a named connection. JSON connection
+account details use `account_label`.
+
 ## Override one new deployment
 
 For a subscription or API key, use `<connection-name>/<model-id>`. Choose a

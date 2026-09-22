@@ -2,16 +2,18 @@ package cloud
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 )
 
-type SubscriptionConnection struct {
-	ID           string  `json:"id"`
-	Name         string  `json:"name"`
-	Provider     string  `json:"provider"`
-	Status       string  `json:"status"`
-	AccountLabel *string `json:"account_label"`
-	Plan         *string `json:"plan"`
+type InferenceConnection struct {
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Source   string `json:"source"`
+	Provider string `json:"provider"`
+	Status   string `json:"status"`
+	Account  string `json:"account_label,omitempty"`
 }
 
 type InferenceSelection struct {
@@ -19,12 +21,6 @@ type InferenceSelection struct {
 	Tier         string `json:"tier,omitempty"`
 	ConnectionID string `json:"connection_id,omitempty"`
 	Model        string `json:"model,omitempty"`
-}
-
-type APIKeyConnection struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	Provider string `json:"provider"`
 }
 
 type InferenceSummary struct {
@@ -35,20 +31,22 @@ type InferenceSummary struct {
 	ConnectionName string `json:"connection_name,omitempty"`
 }
 
-func (c *Client) ListSubscriptionConnections() ([]SubscriptionConnection, error) {
+func (c *Client) ListInferenceConnections() ([]InferenceConnection, error) {
 	var result struct {
-		Connections []SubscriptionConnection `json:"connections"`
+		Connections []InferenceConnection `json:"connections"`
+		Errors      map[string]string     `json:"errors"`
 	}
-	err := c.inferenceJSON("/api/inference/connections", &result)
-	return result.Connections, err
-}
-
-func (c *Client) ListAPIKeyConnections() ([]APIKeyConnection, error) {
-	var result struct {
-		Connections []APIKeyConnection `json:"connections"`
+	if err := c.inferenceJSON("/api/inference/connections", &result); err != nil {
+		return nil, err
 	}
-	err := c.inferenceJSON("/api/inference/api-keys", &result)
-	return result.Connections, err
+	if result.Errors == nil {
+		return nil, fmt.Errorf("Cloud does not support unified inference discovery; update Cloud before selecting a named connection")
+	}
+	var failures []error
+	for source, message := range result.Errors {
+		failures = append(failures, fmt.Errorf("%s: %s", source, message))
+	}
+	return result.Connections, errors.Join(failures...)
 }
 
 func (c *Client) InferencePreference() (*InferenceSelection, error) {

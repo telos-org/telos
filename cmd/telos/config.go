@@ -92,21 +92,21 @@ func setContext(stored *config.Config, value string) (string, error) {
 }
 
 type configReport struct {
-	ConfigFile       string                    `json:"config_file"`
-	Endpoint         string                    `json:"endpoint"`
-	Authentication   string                    `json:"authentication"`
-	Context          string                    `json:"context"`
-	WorkspaceDefault *cloud.InferenceSelection `json:"workspace_default,omitempty"`
-	Connections      []inferenceConnection     `json:"connections"`
-	ModelOverride    string                    `json:"model_override,omitempty"`
-	ThinkingOverride string                    `json:"thinking_override,omitempty"`
-	Error            string                    `json:"error,omitempty"`
+	ConfigFile       string                      `json:"config_file"`
+	Endpoint         string                      `json:"endpoint"`
+	Authentication   string                      `json:"authentication"`
+	Context          string                      `json:"context"`
+	WorkspaceDefault *cloud.InferenceSelection   `json:"workspace_default,omitempty"`
+	Connections      []cloud.InferenceConnection `json:"connections"`
+	ModelOverride    string                      `json:"model_override,omitempty"`
+	ThinkingOverride string                      `json:"thinking_override,omitempty"`
+	Error            string                      `json:"error,omitempty"`
 }
 
 func loadConfigReport(cfg *config.Config, path string) configReport {
 	report := configReport{
 		ConfigFile: path, Endpoint: cfg.APIEndpoint, Context: strings.TrimSpace(cfg.Context),
-		Authentication: "not configured", Connections: []inferenceConnection{},
+		Authentication: "not configured", Connections: []cloud.InferenceConnection{},
 		ModelOverride: strings.TrimSpace(os.Getenv("TELOS_MODEL")), ThinkingOverride: strings.TrimSpace(os.Getenv("TELOS_THINKING")),
 	}
 	if report.Endpoint == "" {
@@ -138,7 +138,7 @@ func loadConfigReport(cfg *config.Config, path string) configReport {
 	client.OrgID = organization.ID
 	var connectionsErr, preferenceErr error
 	var wg sync.WaitGroup
-	wg.Go(func() { report.Connections, connectionsErr = loadInferenceConnections(client) })
+	wg.Go(func() { report.Connections, connectionsErr = client.ListInferenceConnections() })
 	wg.Go(func() { report.WorkspaceDefault, preferenceErr = client.InferencePreference() })
 	wg.Wait()
 	if preferenceErr != nil {
@@ -176,7 +176,7 @@ func printConfigReport(report configReport) {
 	_ = w.Flush()
 }
 
-func inferenceSelectionName(selection cloud.InferenceSelection, connections []inferenceConnection) string {
+func inferenceSelectionName(selection cloud.InferenceSelection, connections []cloud.InferenceConnection) string {
 	if selection.Source == "managed" {
 		return "telos/" + selection.Tier
 	}
