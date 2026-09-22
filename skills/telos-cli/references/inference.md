@@ -33,8 +33,9 @@ API keys are labeled `saved`; that label does not claim their provider access
 has been tested. `TELOS_MODEL` and `TELOS_THINKING` overrides appear separately
 from the workspace default. `telos config --json` returns structured settings,
 including connection IDs and account details, without credentials. Config
-inspection reports authentication and lookup errors in its output; it is not
-an authentication success exit-code check.
+inspection reports authentication and lookup failures in its output, using
+an `error` string in JSON. Available settings still appear when a lookup fails.
+Config inspection is not an authentication success exit-code check.
 
 ## Override one new deployment
 

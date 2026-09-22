@@ -239,6 +239,13 @@ func TestCloudInferenceRequiresCompleteConnectionInventory(t *testing.T) {
 				},
 			})
 			defer server.Close()
+			configureCloudTest(t, server.URL)
+			t.Setenv("TELOS_CONTEXT", "")
+			out := captureStdout(t, func() { cmdConfig([]string{"--json"}) })
+			var report configReport
+			if err := json.Unmarshal([]byte(out), &report); err != nil || !strings.Contains(report.Error, "unavailable") || len(report.Connections) == 0 || report.WorkspaceDefault == nil {
+				t.Fatalf("partial config lost available settings or lookup error: %s, %v", out, err)
+			}
 			client := cloud.NewClient(server.URL, "token")
 			for _, model := range []string{"Work Anthropic/claude-test", "My ChatGPT/gpt-test"} {
 				if _, err := resolveCloudInference(client, model); err == nil || !strings.Contains(err.Error(), "cannot resolve") {

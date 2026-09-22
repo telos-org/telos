@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -19,17 +20,7 @@ type inferenceConnection struct {
 	Account  string `json:"account,omitempty"`
 }
 
-type inferenceIssue struct {
-	Source  string `json:"source"`
-	Message string `json:"message"`
-}
-
-type inferenceInventory struct {
-	Connections []inferenceConnection
-	Issues      []inferenceIssue
-}
-
-func loadInferenceConnections(client *cloud.Client) inferenceInventory {
+func loadInferenceConnections(client *cloud.Client) ([]inferenceConnection, error) {
 	var subscriptions []cloud.SubscriptionConnection
 	var keys []cloud.APIKeyConnection
 	var subscriptionErr, keyErr error
@@ -37,31 +28,31 @@ func loadInferenceConnections(client *cloud.Client) inferenceInventory {
 	wg.Go(func() { subscriptions, subscriptionErr = client.ListSubscriptionConnections() })
 	wg.Go(func() { keys, keyErr = client.ListAPIKeyConnections() })
 	wg.Wait()
-	result := inferenceInventory{Connections: []inferenceConnection{}}
+	connections := []inferenceConnection{}
 	if subscriptionErr != nil {
-		result.Issues = append(result.Issues, inferenceIssue{Source: "subscription", Message: subscriptionErr.Error()})
+		subscriptionErr = fmt.Errorf("subscriptions: %w", subscriptionErr)
 	} else {
 		for _, connection := range subscriptions {
 			account := ""
 			if connection.AccountLabel != nil {
 				account = *connection.AccountLabel
 			}
-			result.Connections = append(result.Connections, inferenceConnection{
+			connections = append(connections, inferenceConnection{
 				ID: connection.ID, Name: connection.Name, Source: "subscription", Provider: connection.Provider,
 				Status: connection.Status, Account: account,
 			})
 		}
 	}
 	if keyErr != nil {
-		result.Issues = append(result.Issues, inferenceIssue{Source: "byok", Message: keyErr.Error()})
+		keyErr = fmt.Errorf("API keys: %w", keyErr)
 	} else {
 		for _, connection := range keys {
-			result.Connections = append(result.Connections, inferenceConnection{
+			connections = append(connections, inferenceConnection{
 				ID: connection.ID, Name: connection.Name, Source: "byok", Provider: connection.Provider, Status: "saved",
 			})
 		}
 	}
-	return result
+	return connections, errors.Join(subscriptionErr, keyErr)
 }
 
 func resolveCloudInference(client *cloud.Client, model string) (*cloud.InferenceSelection, error) {
@@ -75,11 +66,11 @@ func resolveCloudInference(client *cloud.Client, model string) (*cloud.Inference
 	if !strings.Contains(model, "/") {
 		return nil, fmt.Errorf("--model must be telos/default, telos/max, or <connection-name>/<model-id>")
 	}
-	inventory := loadInferenceConnections(client)
-	if len(inventory.Issues) > 0 {
-		return nil, fmt.Errorf("cannot resolve inference connections: %s", formatInferenceIssues(inventory.Issues))
+	connections, err := loadInferenceConnections(client)
+	if err != nil {
+		return nil, fmt.Errorf("cannot resolve inference connections: %w", err)
 	}
-	connection, modelID, err := selectInferenceConnection(inventory.Connections, model)
+	connection, modelID, err := selectInferenceConnection(connections, model)
 	if err != nil {
 		return nil, err
 	}
@@ -108,15 +99,6 @@ func selectInferenceConnection(connections []inferenceConnection, model string) 
 		return inferenceConnection{}, "", fmt.Errorf("a model ID is required; choose one at %s", inferenceSettingsURL)
 	}
 	return connection, modelID, nil
-}
-
-func formatInferenceIssues(issues []inferenceIssue) string {
-	parts := make([]string, 0, len(issues))
-	for _, issue := range issues {
-		label := inferenceSourceLabel(issue.Source)
-		parts = append(parts, label+": "+issue.Message)
-	}
-	return strings.Join(parts, "; ")
 }
 
 func inferenceSourceLabel(source string) string {

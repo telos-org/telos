@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -99,7 +100,7 @@ type configReport struct {
 	Connections      []inferenceConnection     `json:"connections"`
 	ModelOverride    string                    `json:"model_override,omitempty"`
 	ThinkingOverride string                    `json:"thinking_override,omitempty"`
-	Errors           []inferenceIssue          `json:"errors,omitempty"`
+	Error            string                    `json:"error,omitempty"`
 }
 
 func loadConfigReport(cfg *config.Config, path string) configReport {
@@ -124,29 +125,27 @@ func loadConfigReport(cfg *config.Config, path string) configReport {
 		if cloud.IsStatus(err, http.StatusUnauthorized) || cloud.IsStatus(err, http.StatusForbidden) {
 			report.Authentication = "invalid"
 		}
-		report.Errors = append(report.Errors, inferenceIssue{Source: "Authentication", Message: err.Error()})
+		report.Error = "authentication: " + err.Error()
 		return report
 	}
 	report.Authentication = "valid"
 	organization, err := account.ResolveContext(cfg.Context)
 	if err != nil {
-		report.Errors = append(report.Errors, inferenceIssue{Source: "Context", Message: err.Error()})
+		report.Error = "context: " + err.Error()
 		return report
 	}
 	report.Context = account.CanonicalContextName(organization)
 	client.OrgID = organization.ID
-	var inventory inferenceInventory
-	var preference *cloud.InferencePreference
-	var preferenceErr error
+	var connectionsErr, preferenceErr error
 	var wg sync.WaitGroup
-	wg.Go(func() { inventory = loadInferenceConnections(client) })
-	wg.Go(func() { preference, preferenceErr = client.InferencePreference() })
+	wg.Go(func() { report.Connections, connectionsErr = loadInferenceConnections(client) })
+	wg.Go(func() { report.WorkspaceDefault, preferenceErr = client.InferencePreference() })
 	wg.Wait()
-	report.Connections, report.Errors = inventory.Connections, inventory.Issues
 	if preferenceErr != nil {
-		report.Errors = append(report.Errors, inferenceIssue{Source: "Workspace default", Message: preferenceErr.Error()})
-	} else {
-		report.WorkspaceDefault = &preference.Selection
+		preferenceErr = fmt.Errorf("workspace default: %w", preferenceErr)
+	}
+	if err := errors.Join(connectionsErr, preferenceErr); err != nil {
+		report.Error = err.Error()
 	}
 	return report
 }
@@ -169,8 +168,10 @@ func printConfigReport(report configReport) {
 			fmt.Fprintf(w, "  %s\t%s\t%s\n", connection.Name, inferenceSourceLabel(connection.Source), connection.Status)
 		}
 	}
-	for _, issue := range report.Errors {
-		fmt.Fprintf(w, "Error\t%s\n", formatInferenceIssues([]inferenceIssue{issue}))
+	if report.Error != "" {
+		for _, line := range strings.Split(report.Error, "\n") {
+			fmt.Fprintf(w, "Error\t%s\n", line)
+		}
 	}
 	_ = w.Flush()
 }

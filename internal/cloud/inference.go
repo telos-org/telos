@@ -14,10 +14,6 @@ type SubscriptionConnection struct {
 	Plan         *string `json:"plan"`
 }
 
-type subscriptionConnectionList struct {
-	Connections []SubscriptionConnection `json:"connections"`
-}
-
 type InferenceSelection struct {
 	Source       string `json:"source"`
 	Tier         string `json:"tier,omitempty"`
@@ -31,10 +27,6 @@ type APIKeyConnection struct {
 	Provider string `json:"provider"`
 }
 
-type InferencePreference struct {
-	Selection InferenceSelection `json:"selection"`
-}
-
 type InferenceSummary struct {
 	Source         string `json:"source"`
 	Tier           string `json:"tier,omitempty"`
@@ -44,7 +36,9 @@ type InferenceSummary struct {
 }
 
 func (c *Client) ListSubscriptionConnections() ([]SubscriptionConnection, error) {
-	var result subscriptionConnectionList
+	var result struct {
+		Connections []SubscriptionConnection `json:"connections"`
+	}
 	err := c.inferenceJSON("/api/inference/connections", &result)
 	return result.Connections, err
 }
@@ -57,10 +51,14 @@ func (c *Client) ListAPIKeyConnections() ([]APIKeyConnection, error) {
 	return result.Connections, err
 }
 
-func (c *Client) InferencePreference() (*InferencePreference, error) {
-	var result InferencePreference
-	err := c.inferenceJSON("/api/inference/preference", &result)
-	return &result, err
+func (c *Client) InferencePreference() (*InferenceSelection, error) {
+	var result struct {
+		Selection InferenceSelection `json:"selection"`
+	}
+	if err := c.inferenceJSON("/api/inference/preference", &result); err != nil {
+		return nil, err
+	}
+	return &result.Selection, nil
 }
 
 func (c *Client) inferenceJSON(path string, result any) error {
