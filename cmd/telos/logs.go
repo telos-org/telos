@@ -180,80 +180,82 @@ func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *clou
 		beforeControl = afterCloudLogHead(initial.Cursors.Control)
 	}
 	seen := make(map[string]bool)
+	fullHistory := false
 	for {
 		if page.Cursors != nil && page.Cursors.SessionKnown && page.Cursors.Session == nil {
 			return &combined, errors.New("the runtime could not be reached; earlier activity may still be available")
 		}
-		if len(renderLogRows(combined.Events)) >= tail {
-			return &combined, nil
+		if cloudLogSessionChanged(initial, page) {
+			return &combined, errors.New("the session changed while loading earlier activity; run telos logs again to view the new session")
+		}
+		if fullHistory {
+			return page, nil
 		}
 		keys, runtime, controlPlane := cloudLogPagePositions(page.RawEvents)
-		if page.Cursors == nil || keys == nil && len(page.RawEvents) > 0 {
-			// Older servers and runtimes cannot page by durable event identity.
-			// Preserve their existing full-history fallback, once per command.
-			if page == initial && len(page.RawEvents) < tail {
+		if page != initial {
+			if len(page.RawEvents) == 0 {
 				return &combined, nil
 			}
-			full, err := control.GetSessionLogPage(sessionID, 0)
-			if err != nil {
-				return &combined, err
+			advanced := runtime != nil && (beforeRuntime == nil || *runtime < *beforeRuntime) ||
+				controlPlane != nil && (beforeControl == nil || *controlPlane < *beforeControl)
+			if page.Cursors != nil && keys != nil && !advanced {
+				return &combined, errors.New("the server did not return an older activity page")
 			}
-			if full.Cursors != nil && full.Cursors.SessionKnown && full.Cursors.Session == nil {
-				return &combined, errors.New("the runtime could not be reached; earlier activity may still be available")
-			}
-			if cloudLogSessionChanged(initial, full) {
-				return &combined, errors.New("the session changed while loading earlier activity; run telos logs again to view the new session")
-			}
-			return full, nil
 		}
-		for _, key := range keys {
-			seen[key] = true
+		if page == initial || page.Cursors != nil && keys != nil {
+			var events []sessionapi.SessionEvent
+			var rawEvents []json.RawMessage
+			for index, event := range page.Events {
+				if keys != nil && seen[keys[index]] {
+					continue
+				}
+				// Hidden tool activity need not accumulate while searching history.
+				// Turn endings still matter to the quiet notice.
+				_, visible := renderedLogRowFromEvent(event)
+				if !visible && event.Event != "agent_complete" && event.Event != "agent_suspended" && event.Event != "game_end" {
+					continue
+				}
+				if keys != nil {
+					seen[keys[index]] = true
+				}
+				events = append(events, event)
+				rawEvents = append(rawEvents, page.RawEvents[index])
+			}
+			if page == initial {
+				combined.Events = nil
+				combined.RawEvents = nil
+			}
+			combined.Events = append(events, combined.Events...)
+			combined.RawEvents = append(rawEvents, combined.RawEvents...)
+			sortCloudLogPage(&combined)
+			if len(renderLogRows(combined.Events)) >= tail {
+				return &combined, nil
+			}
 		}
+
 		if runtime != nil && (beforeRuntime == nil || *runtime < *beforeRuntime) {
 			beforeRuntime = runtime
 		}
 		if controlPlane != nil && (beforeControl == nil || *controlPlane < *beforeControl) {
 			beforeControl = controlPlane
 		}
-		if beforeRuntime == nil && beforeControl == nil {
-			return &combined, nil
+		var err error
+		if page.Cursors == nil || keys == nil {
+			if page == initial && len(page.RawEvents) < tail {
+				return &combined, nil
+			}
+			// Read legacy history once when durable cursors are unavailable.
+			page, err = control.GetSessionLogPage(sessionID, 0)
+			fullHistory = true
+		} else {
+			if beforeRuntime == nil && beforeControl == nil {
+				return &combined, nil
+			}
+			page, err = control.GetSessionLogPageBefore(sessionID, maxCloudLogTail, beforeRuntime, beforeControl)
 		}
-		next, err := control.GetSessionLogPageBefore(sessionID, maxCloudLogTail, beforeRuntime, beforeControl)
 		if err != nil {
 			return &combined, err
 		}
-		if next.Cursors != nil && next.Cursors.SessionKnown && next.Cursors.Session == nil {
-			return &combined, errors.New("the runtime could not be reached; earlier activity may still be available")
-		}
-		if cloudLogSessionChanged(initial, next) {
-			return &combined, errors.New("the session changed while loading earlier activity; run telos logs again to view the new session")
-		}
-		if len(next.RawEvents) == 0 {
-			return &combined, nil
-		}
-		nextKeys, nextRuntime, nextControl := cloudLogPagePositions(next.RawEvents)
-		if next.Cursors == nil || nextKeys == nil {
-			page = next
-			continue
-		}
-		advanced := nextRuntime != nil && (beforeRuntime == nil || *nextRuntime < *beforeRuntime) ||
-			nextControl != nil && (beforeControl == nil || *nextControl < *beforeControl)
-		if !advanced {
-			return &combined, errors.New("the server did not return an older activity page")
-		}
-		olderEvents := make([]sessionapi.SessionEvent, 0, len(next.Events))
-		olderRaw := make([]json.RawMessage, 0, len(next.RawEvents))
-		for index, key := range nextKeys {
-			if !seen[key] {
-				olderEvents = append(olderEvents, next.Events[index])
-				olderRaw = append(olderRaw, next.RawEvents[index])
-				seen[key] = true
-			}
-		}
-		combined.Events = append(olderEvents, combined.Events...)
-		combined.RawEvents = append(olderRaw, combined.RawEvents...)
-		sortCloudLogPage(&combined)
-		page = next
 	}
 }
 
