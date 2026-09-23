@@ -141,15 +141,6 @@ func printCloudSessionLogs(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	// A raw event window can consist entirely of hidden tool activity. Page
-	// only the human view; raw and JSON retain their event-tail contract.
-	if !raw && !jsonOutput && tail > 0 {
-		page, err = expandCloudHumanLogs(control, session.ID, page, options.Tail)
-		if err != nil {
-			options.Active = false
-			fmt.Fprintf(os.Stderr, "Some progress updates could not be loaded: %v\n", err)
-		}
-	}
 	if raw {
 		if err := printRawJSONLogEvents(os.Stdout, page.RawEvents); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -168,11 +159,19 @@ func printCloudSessionLogs(
 		}
 		return
 	}
-	printStructuredLogs(os.Stdout, page.Events, options)
+	events := page.Events
+	if tail > 0 {
+		events, err = expandCloudHumanLogs(control, session.ID, page, options.Tail)
+		if err != nil {
+			options.Active = false
+			fmt.Fprintf(os.Stderr, "Some progress updates could not be loaded: %v\n", err)
+		}
+	}
+	printStructuredLogs(os.Stdout, events, options)
 }
 
-func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *cloud.SessionLogPage, tail int) (*cloud.SessionLogPage, error) {
-	combined := *initial
+func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *cloud.SessionLogPage, tail int) ([]sessionapi.SessionEvent, error) {
+	combined := initial.Events
 	page := initial
 	var beforeRuntime, beforeControl *int64
 	if initial.Cursors != nil {
@@ -183,28 +182,27 @@ func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *clou
 	fullHistory := false
 	for {
 		if page.Cursors != nil && page.Cursors.SessionKnown && page.Cursors.Session == nil {
-			return &combined, errors.New("the runtime could not be reached; earlier activity may still be available")
+			return combined, errors.New("the runtime could not be reached; earlier activity may still be available")
 		}
 		if cloudLogSessionChanged(initial, page) {
-			return &combined, errors.New("the session changed while loading earlier activity; run telos logs again to view the new session")
+			return combined, errors.New("the session changed while loading earlier activity; run telos logs again to view the new session")
 		}
 		if fullHistory {
-			return page, nil
+			return page.Events, nil
 		}
 		keys, runtime, controlPlane := cloudLogPagePositions(page.RawEvents)
 		if page != initial {
 			if len(page.RawEvents) == 0 {
-				return &combined, nil
+				return combined, nil
 			}
 			advanced := runtime != nil && (beforeRuntime == nil || *runtime < *beforeRuntime) ||
 				controlPlane != nil && (beforeControl == nil || *controlPlane < *beforeControl)
 			if page.Cursors != nil && keys != nil && !advanced {
-				return &combined, errors.New("the server did not return an older activity page")
+				return combined, errors.New("the server did not return an older activity page")
 			}
 		}
 		if page == initial || page.Cursors != nil && keys != nil {
 			var events []sessionapi.SessionEvent
-			var rawEvents []json.RawMessage
 			for index, event := range page.Events {
 				if keys != nil && seen[keys[index]] {
 					continue
@@ -219,17 +217,14 @@ func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *clou
 					seen[keys[index]] = true
 				}
 				events = append(events, event)
-				rawEvents = append(rawEvents, page.RawEvents[index])
 			}
 			if page == initial {
-				combined.Events = nil
-				combined.RawEvents = nil
+				combined = nil
 			}
-			combined.Events = append(events, combined.Events...)
-			combined.RawEvents = append(rawEvents, combined.RawEvents...)
-			sortCloudLogPage(&combined)
-			if len(renderLogRows(combined.Events)) >= tail {
-				return &combined, nil
+			combined = append(events, combined...)
+			sortCloudLogEvents(combined)
+			if len(renderLogRows(combined)) >= tail {
+				return combined, nil
 			}
 		}
 
@@ -242,19 +237,19 @@ func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *clou
 		var err error
 		if page.Cursors == nil || keys == nil {
 			if page == initial && len(page.RawEvents) < tail {
-				return &combined, nil
+				return combined, nil
 			}
 			// Read legacy history once when durable cursors are unavailable.
 			page, err = control.GetSessionLogPage(sessionID, 0)
 			fullHistory = true
 		} else {
 			if beforeRuntime == nil && beforeControl == nil {
-				return &combined, nil
+				return combined, nil
 			}
 			page, err = control.GetSessionLogPageBefore(sessionID, maxCloudLogTail, beforeRuntime, beforeControl)
 		}
 		if err != nil {
-			return &combined, err
+			return combined, err
 		}
 	}
 }
@@ -263,22 +258,21 @@ func cloudLogSessionChanged(initial, next *cloud.SessionLogPage) bool {
 	return initial.Cursors != nil && initial.Cursors.Session != nil && next.Cursors != nil && next.Cursors.Session != nil && *initial.Cursors.Session != *next.Cursors.Session
 }
 
-func sortCloudLogPage(page *cloud.SessionLogPage) {
+func sortCloudLogEvents(events []sessionapi.SessionEvent) {
 	type timedEvent struct {
 		event sessionapi.SessionEvent
-		raw   json.RawMessage
 		time  time.Time
 	}
-	ordered := make([]timedEvent, len(page.Events))
-	for index, event := range page.Events {
+	ordered := make([]timedEvent, len(events))
+	for index, event := range events {
 		timestamp, _ := time.Parse(time.RFC3339Nano, eventTimestamp(event))
-		ordered[index] = timedEvent{event: event, raw: page.RawEvents[index], time: timestamp}
+		ordered[index] = timedEvent{event: event, time: timestamp}
 	}
 	sort.SliceStable(ordered, func(left, right int) bool {
 		return ordered[left].time.Before(ordered[right].time)
 	})
 	for index, event := range ordered {
-		page.Events[index], page.RawEvents[index] = event.event, event.raw
+		events[index] = event.event
 	}
 }
 

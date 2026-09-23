@@ -26,12 +26,12 @@ func TestCloudHumanLogsPagePastHiddenEventsAndRetainAbsentSourceCursor(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := expandCloudHumanLogs(client, "session_1", first, 2)
+	events, err := expandCloudHumanLogs(client, "session_1", first, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *calls != 3 || len(renderLogRows(page.Events)) != 2 || len(page.Events) != 2 {
-		t.Fatalf("calls=%d events=%d rows=%#v", *calls, len(page.Events), renderLogRows(page.Events))
+	if *calls != 3 || len(renderLogRows(events)) != 2 || len(events) != 2 {
+		t.Fatalf("calls=%d events=%d rows=%#v", *calls, len(events), renderLogRows(events))
 	}
 }
 
@@ -48,12 +48,12 @@ func TestCloudHumanLogsDeduplicateOverlappingPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := expandCloudHumanLogs(client, "session_1", first, 2)
+	events, err := expandCloudHumanLogs(client, "session_1", first, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *calls != 3 || len(page.Events) != 2 || len(page.RawEvents) != 2 {
-		t.Fatalf("calls=%d page=%#v", *calls, page)
+	if *calls != 3 || len(events) != 2 {
+		t.Fatalf("calls=%d page=%#v", *calls, events)
 	}
 }
 
@@ -67,14 +67,14 @@ func TestCloudHumanLogsMergeSourcesByReceiptTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := expandCloudHumanLogs(client, "session_1", first, 3)
+	events, err := expandCloudHumanLogs(client, "session_1", first, 3)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"Earlier control update.", "Middle runtime update.", "Latest runtime update."}
 	for index, text := range want {
-		if page.Events[index].Data["text"] != text || !strings.Contains(string(page.RawEvents[index]), text) {
-			t.Fatalf("event/raw pairing or ordering at %d: %#v %s", index, page.Events[index], page.RawEvents[index])
+		if events[index].Data["text"] != text {
+			t.Fatalf("event ordering at %d: %#v", index, events[index])
 		}
 	}
 }
@@ -96,12 +96,12 @@ func TestCloudHumanLogsKeepSnapshotWhenOlderHistoryIsUnavailable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			page, err := expandCloudHumanLogs(client, "session_1", first, 2)
+			events, err := expandCloudHumanLogs(client, "session_1", first, 2)
 			if err == nil || !strings.Contains(err.Error(), test.want) || *calls != 2 {
 				t.Fatalf("calls=%d err=%v", *calls, err)
 			}
-			if len(page.Events) != 1 || page.Events[0].Data["text"] != "Checking risk limits." {
-				t.Fatalf("partial or different session was merged: %#v", page.Events)
+			if len(events) != 1 || events[0].Data["text"] != "Checking risk limits." {
+				t.Fatalf("partial or different session was merged: %#v", events)
 			}
 		})
 	}
@@ -116,9 +116,9 @@ func TestCloudHumanLogsStopAtEmptyReachablePage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := expandCloudHumanLogs(client, "session_1", first, 2)
-	if err != nil || *calls != 2 || len(page.Events) != 0 {
-		t.Fatalf("calls=%d page=%#v err=%v", *calls, page, err)
+	events, err := expandCloudHumanLogs(client, "session_1", first, 2)
+	if err != nil || *calls != 2 || len(events) != 0 {
+		t.Fatalf("calls=%d page=%#v err=%v", *calls, events, err)
 	}
 }
 
@@ -134,9 +134,9 @@ func TestCloudHumanLogsUseOneLegacyFallback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			page, err := expandCloudHumanLogs(client, "session_1", first, 2)
-			if err != nil || *calls != 2 || len(renderLogRows(page.Events)) != 1 {
-				t.Fatalf("calls=%d page=%#v err=%v", *calls, page, err)
+			events, err := expandCloudHumanLogs(client, "session_1", first, 2)
+			if err != nil || *calls != 2 || len(renderLogRows(events)) != 1 {
+				t.Fatalf("calls=%d page=%#v err=%v", *calls, events, err)
 			}
 		})
 	}
@@ -152,9 +152,9 @@ func TestCloudHumanLogsDoNotReplaceSnapshotWithAnotherSessionDuringLegacyFallbac
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := expandCloudHumanLogs(client, "session_1", first, 2)
-	if err == nil || !strings.Contains(err.Error(), "session changed") || *calls != 3 || page.Events[0].Data["text"] != "Original session." {
-		t.Fatalf("calls=%d page=%#v err=%v", *calls, page, err)
+	events, err := expandCloudHumanLogs(client, "session_1", first, 2)
+	if err == nil || !strings.Contains(err.Error(), "session changed") || *calls != 3 || events[0].Data["text"] != "Original session." {
+		t.Fatalf("calls=%d page=%#v err=%v", *calls, events, err)
 	}
 }
 
@@ -227,9 +227,9 @@ func TestCloudHumanLogsKeepAvailableRowsWhenInitiallyUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := expandCloudHumanLogs(client, "session_1", first, 2)
-	if err == nil || *calls != 1 || len(page.Events) != 1 || len(page.RawEvents) != 1 {
-		t.Fatalf("available history lost: page=%#v err=%v calls=%d", page, err, *calls)
+	events, err := expandCloudHumanLogs(client, "session_1", first, 2)
+	if err == nil || *calls != 1 || len(events) != 1 {
+		t.Fatalf("available history lost: page=%#v err=%v calls=%d", events, err, *calls)
 	}
 }
 
@@ -242,12 +242,12 @@ func TestCloudHumanLogsRetainTurnEndingsForQuietNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	page, err := expandCloudHumanLogs(client, "session_1", first, 1)
+	events, err := expandCloudHumanLogs(client, "session_1", first, 1)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var output bytes.Buffer
-	printStructuredLogs(&output, page.Events, logViewOptions{Tail: 1, Active: true})
+	printStructuredLogs(&output, events, logViewOptions{Tail: 1, Active: true})
 	if !strings.Contains(output.String(), "Checking recovery.") || strings.Contains(output.String(), "No new progress update") {
 		t.Fatalf("turn ending lost: %s", output.String())
 	}
