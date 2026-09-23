@@ -63,27 +63,27 @@ type SkillRecord struct {
 }
 
 type SessionRecord struct {
-	ID             string  `json:"id"`
-	Name           string  `json:"name"`
-	State          string  `json:"state"`
-	Status         string  `json:"status,omitempty"`
-	StatusReason   string  `json:"status_reason,omitempty"`
-	PackageRef     string  `json:"package_ref"`
-	PackageDigest  string  `json:"package_digest"`
-	RuntimeVersion *string `json:"runtime_version,omitempty"`
-	AgentModel     string  `json:"agent_model,omitempty"`
-	AgentThinking  string  `json:"agent_thinking,omitempty"`
-	ServiceURL     *string `json:"service_url,omitempty"`
-	DashboardURL   *string `json:"dashboard_url,omitempty"`
-	FailureReason  *string `json:"failure_reason,omitempty"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	ID             string            `json:"id"`
+	Name           string            `json:"name"`
+	State          string            `json:"state"`
+	Status         string            `json:"status,omitempty"`
+	StatusReason   string            `json:"status_reason,omitempty"`
+	PackageRef     string            `json:"package_ref"`
+	PackageDigest  string            `json:"package_digest"`
+	RuntimeVersion *string           `json:"runtime_version,omitempty"`
+	AgentModel     string            `json:"agent_model,omitempty"`
+	AgentThinking  string            `json:"agent_thinking,omitempty"`
+	Inference      *InferenceSummary `json:"inference,omitempty"`
+	ServiceURL     *string           `json:"service_url,omitempty"`
+	DashboardURL   *string           `json:"dashboard_url,omitempty"`
+	FailureReason  *string           `json:"failure_reason,omitempty"`
+	CreatedAt      string            `json:"created_at"`
+	UpdatedAt      string            `json:"updated_at"`
 }
 
 type SessionCreateOptions struct {
 	Name            string
 	PackageRef      string
-	AgentModel      string
 	AgentThinking   string
 	AgentTimeoutSec *int
 	Inference       *InferenceSelection
@@ -533,9 +533,6 @@ func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error
 		"name":        opts.Name,
 		"package_ref": opts.PackageRef,
 	}
-	if strings.TrimSpace(opts.AgentModel) != "" {
-		payload["agent_model"] = strings.TrimSpace(opts.AgentModel)
-	}
 	if strings.TrimSpace(opts.AgentThinking) != "" {
 		payload["agent_thinking"] = strings.TrimSpace(opts.AgentThinking)
 	}
@@ -697,6 +694,10 @@ func (c *Client) doRaw(method, path string, body []byte, contentType string) (*h
 		req.Header.Set("Content-Type", contentType)
 	}
 	req.Header.Set("User-Agent", UserAgent)
+	// Temporary discovery negotiation until the Cloud/client cutover.
+	if method == http.MethodGet && path == "/api/inference/connections" {
+		req.Header.Set("X-Telos-Inference-Version", "2")
+	}
 	if c.Token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.Token)
 	}

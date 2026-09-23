@@ -1,6 +1,8 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -167,9 +169,14 @@ func TestCmdConfigShowsResolvedContextWithoutExposingToken(t *testing.T) {
 	if strings.Contains(strings.ToLower(out), "source") {
 		t.Fatalf("output contains implementation-source noise: %q", out)
 	}
-	for _, want := range []string{"openai-rohan", "chatgpt-codex", "owner@example.com", "connected"} {
+	for _, want := range []string{"openai-rohan", "Subscription", "connected", "Work Anthropic", "API key", "saved"} {
 		if !strings.Contains(out, want) {
-			t.Fatalf("output %q does not contain subscription value %q", out, want)
+			t.Fatalf("output %q does not contain connection value %q", out, want)
+		}
+	}
+	for _, detail := range []string{"chatgpt-codex", "owner@example.com", "conn_1", "key_work"} {
+		if strings.Contains(out, detail) {
+			t.Fatalf("normal output contains connection detail %q: %q", detail, out)
 		}
 	}
 }
@@ -289,7 +296,9 @@ func accountBootstrapServer(t *testing.T) *httptest.Server {
 			]
 		}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
-			_, _ = w.Write([]byte(`{"connections":[{"id":"conn_1","name":"openai-rohan","provider":"chatgpt-codex","status":"connected","account_label":"owner@example.com","plan":"pro"}]}`))
+			_, _ = w.Write([]byte(`{"errors":{},"connections":[{"source":"subscription","id":"conn_1","name":"openai-rohan","provider":"chatgpt-codex","status":"connected","account_label":"owner@example.com","plan":"pro"},{"source":"byok","status":"saved","id":"key_work","name":"Work Anthropic","provider":"anthropic"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/preference":
+			_, _ = w.Write([]byte(`{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`))
 		default:
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}
@@ -317,4 +326,40 @@ func configOutputValue(t *testing.T, output, label string) string {
 	}
 	t.Fatalf("output %q has no %s row", output, label)
 	return ""
+}
+
+func TestConfigJSONShowsWorkspaceDefaultAndOverridesWithoutKeys(t *testing.T) {
+	server := inferenceTestServer(t, nil)
+	defer server.Close()
+	configureCloudTest(t, server.URL)
+	t.Setenv("TELOS_CONTEXT", "@telos")
+	t.Setenv("TELOS_MODEL", "telos/max")
+	t.Setenv("TELOS_THINKING", "high")
+	path := os.Getenv("TELOS_CONFIG")
+	before := []byte("context: personal\n")
+	if err := os.WriteFile(path, before, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() { cmdConfig([]string{"--json"}) })
+	var report configReport
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatal(err)
+	}
+	if report.Authentication != "valid" || report.Context != "@telos" || report.WorkspaceDefault == nil || report.WorkspaceDefault.Source != "byok" || report.ModelOverride != "telos/max" || report.ThinkingOverride != "high" {
+		t.Fatalf("report = %#v", report)
+	}
+	for _, connection := range report.Connections {
+		if connection.Source == "byok" && connection.Status != "saved" {
+			t.Fatalf("stored key claims a connection test: %#v", connection)
+		}
+	}
+	for _, secret := range []string{"control-token", "never-print-this-key", "auth_token", "api_key"} {
+		if strings.Contains(out, secret) {
+			t.Fatalf("JSON exposed a credential field/value: %q", secret)
+		}
+	}
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("config inspection changed saved settings: %s, %v", after, err)
+	}
 }

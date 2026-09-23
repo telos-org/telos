@@ -7,57 +7,63 @@ import (
 	"github.com/telos-org/telos/internal/cloud"
 )
 
-func resolveCloudInference(
-	client *cloud.Client,
-	model string,
-) (*cloud.InferenceSelection, error) {
+const inferenceSettingsURL = "https://usetelos.ai/workspace?tab=inference"
+
+func resolveCloudInference(client *cloud.Client, model string) (*cloud.InferenceSelection, error) {
 	model = strings.TrimSpace(model)
 	if model == "" {
 		return nil, nil
 	}
 	if model == "telos/default" || model == "telos/max" {
-		return &cloud.InferenceSelection{
-			Source: "managed",
-			Tier:   strings.TrimPrefix(model, "telos/"),
-		}, nil
+		return &cloud.InferenceSelection{Source: "managed", Tier: strings.TrimPrefix(model, "telos/")}, nil
 	}
-
-	connectionName, modelName, ok := strings.Cut(model, "/")
-	if !ok || connectionName == "" || modelName == "" {
-		return nil, fmt.Errorf(
-			"--model must be telos/default, telos/max, or <connection-name>/<model-name>",
-		)
+	if !strings.Contains(model, "/") {
+		return nil, fmt.Errorf("--model must be telos/default, telos/max, or <connection-name>/<model-id>")
 	}
-	connections, err := client.ListSubscriptionConnections()
+	connections, err := client.ListInferenceConnections()
 	if err != nil {
-		return nil, fmt.Errorf("list subscription connections: %w", err)
+		return nil, fmt.Errorf("cannot resolve inference connections: %w", err)
 	}
-	var selected *cloud.SubscriptionConnection
-	for i := range connections {
-		if connections[i].Name != connectionName {
-			continue
+	connection, modelID, err := selectInferenceConnection(connections, model)
+	if err != nil {
+		return nil, err
+	}
+	if connection.Source == "subscription" && connection.Status != "connected" {
+		return nil, fmt.Errorf("subscription %q is %s; reconnect it at %s", connection.Name, connection.Status, inferenceSettingsURL)
+	}
+	return &cloud.InferenceSelection{Source: connection.Source, ConnectionID: connection.ID, Model: modelID}, nil
+}
+
+func selectInferenceConnection(connections []cloud.InferenceConnection, model string) (cloud.InferenceConnection, string, error) {
+	var matches []cloud.InferenceConnection
+	for _, connection := range connections {
+		if strings.HasPrefix(model, connection.Name+"/") {
+			matches = append(matches, connection)
 		}
-		if selected != nil {
-			return nil, fmt.Errorf("subscription connection name %q is ambiguous", connectionName)
-		}
-		selected = &connections[i]
 	}
-	if selected == nil {
-		return nil, fmt.Errorf(
-			"subscription connection %q was not found; run `telos config` to list connections",
-			connectionName,
-		)
+	if len(matches) == 0 {
+		return cloud.InferenceConnection{}, "", fmt.Errorf("inference connection was not found; run `telos config` to list connections")
 	}
-	if selected.Status != "connected" {
-		return nil, fmt.Errorf(
-			"subscription connection %q is %s",
-			connectionName,
-			selected.Status,
-		)
+	if len(matches) > 1 {
+		return cloud.InferenceConnection{}, "", fmt.Errorf("inference selection is ambiguous; rename the connections at %s so the selection identifies one connection", inferenceSettingsURL)
 	}
-	return &cloud.InferenceSelection{
-		Source:       "subscription",
-		ConnectionID: selected.ID,
-		Model:        modelName,
-	}, nil
+	connection := matches[0]
+	modelID := strings.TrimPrefix(model, connection.Name+"/")
+	if strings.TrimSpace(modelID) == "" {
+		return cloud.InferenceConnection{}, "", fmt.Errorf("a model ID is required; choose one at %s", inferenceSettingsURL)
+	}
+	return connection, modelID, nil
+}
+
+func inferenceSourceLabel(source string) string {
+	switch source {
+	case "byok":
+		return "API key"
+	case "subscription":
+		return "Subscription"
+	case "managed":
+		return "Managed"
+	default:
+		return source
+	}
 }

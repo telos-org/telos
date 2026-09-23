@@ -118,6 +118,7 @@ func printCloudSessionDescriptionForContext(
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Session", session.ID)
 	printSummaryField(out, "Revision", session.PackageDigest)
+	printCloudInferenceSummary(out, session)
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
 	}
@@ -168,6 +169,33 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	}
 	if session.Error != nil && strings.TrimSpace(*session.Error) != "" {
 		printSummaryField(out, "Reason", strings.TrimSpace(*session.Error))
+	}
+}
+
+func printCloudInferenceSummary(out io.Writer, session cloud.SessionRecord) {
+	model := session.AgentModel
+	if summary := session.Inference; summary != nil {
+		printSummaryField(out, "Inference", inferenceSourceLabel(summary.Source))
+		if summary.ConnectionName != "" {
+			printSummaryField(out, "Connection", summary.ConnectionName)
+		}
+		if summary.Model != "" {
+			model = summary.Model
+		}
+		if summary.Source == "managed" {
+			if model == "" && summary.Tier != "" {
+				model = "telos/" + summary.Tier
+			}
+			if model == "telos-bifrost/telos/default" || model == "telos-bifrost/telos/max" {
+				model = strings.TrimPrefix(model, "telos-bifrost/")
+			}
+		}
+	}
+	if model != "" {
+		printSummaryField(out, "Model", model)
+	}
+	if session.AgentThinking != "" {
+		printSummaryField(out, "Thinking", session.AgentThinking+" (requested)")
 	}
 }
 
