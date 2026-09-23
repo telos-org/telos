@@ -5,19 +5,7 @@ import (
 	"strings"
 
 	"github.com/telos-org/telos/internal/cloud"
-	"github.com/telos-org/telos/internal/config"
 )
-
-func configuredCloudModel(model string) (string, error) {
-	if model = strings.TrimSpace(model); model != "" {
-		return model, nil
-	}
-	cfg, err := config.LoadConfig()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(cfg.DefaultModel), nil
-}
 
 func resolveCloudInference(
 	client *cloud.Client,
