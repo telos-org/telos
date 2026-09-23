@@ -138,12 +138,14 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 				"created_at":     "then",
 				"updated_at":     "now",
 			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_registry":
+			_, _ = w.Write([]byte(`{"id":"sess_registry","package_ref":"@telos/demo:1.2.2","current_revision_id":"rev_7"}`))
 		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_registry":
 			var request map[string]any
 			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 				t.Fatal(err)
 			}
-			if len(request) != 2 || request["package_ref"] != "@telos/demo:1.2.3" || request["force"] != true {
+			if len(request) != 3 || request["expected_current_revision_id"] != "rev_7" || request["package_ref"] != "@telos/demo:1.2.3" || request["force"] != true {
 				t.Fatalf("forced deployment request = %#v", request)
 			}
 			forcedUpdate = true

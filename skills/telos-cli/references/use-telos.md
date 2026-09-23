@@ -94,35 +94,45 @@ Hash      799e5c31172afb26
 
 Confirm the target and context before continuing. The first plan has no
 deployed revision to compare, so it shows the Goal identity, namespace, and
-content hash. Present the resolved Cloud mutation to the user and obtain
-approval before applying it.
+content hash. Check the proposed Cloud change before applying it.
 
 ## Apply it
 
 ```console
 $ telos apply SPEC.md --context personal
-created reading-list
+requested reading-list
 
-Status    working
+Request   req_initial
+Status    queued
+Action    create
 Session   sess_c7d2f0a4e8
-Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
+Proposed  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
+Current   not deployed yet
+Queue     1
 Context   personal
-Logs      telos logs --context personal sess_c7d2f0a4e8
+Review    https://usetelos.ai/deployments/sess_c7d2f0a4e8?org=org_alice&request=req_initial&tab=change-requests
 ```
 
-`working` means Cloud accepted this revision and is reconciling it. Keep both
-the session ID and revision digest: the session identifies the Goal, while the
-digest identifies the exact contract now being implemented.
+With Change Requests enabled on Cloud, `requested` means the proposal was
+accepted into the queue. Open the review URL to follow it. Confirmation is off
+by default, so the initial request executes automatically when its turn
+arrives. To require confirmation before the first launch, add
+`--require-confirmation` to the creation command.
 
-Follow progress with the context printed in the receipt:
+Keep the session ID and proposed digest: the session identifies the Goal, and
+the digest identifies the exact contract submitted. Once the request is
+applied, `working` means Cloud is reconciling that revision. Follow progress
+with the context printed in the receipt:
 
 ```bash
 telos describe sess_c7d2f0a4e8 --context personal --json
 telos logs sess_c7d2f0a4e8 --context personal
 ```
 
+[Change Requests](change-requests.md) explains the queue, confirmation, and
+JSON receipt. Older Cloud servers return an immediate `created` receipt.
 [The Goal lifecycle](lifecycle.md) gives the polling interval, stopping
-conditions, and evidence rules for this observation step.
+conditions, and evidence rules after execution starts.
 
 ## Observe `ready`
 
@@ -163,6 +173,7 @@ Target    cloud
 Context   personal
 Session   sess_c7d2f0a4e8
 Current   @alice/reading-list:0.1.0
+Confirm   off (queued changes apply automatically)
 Path      /Users/alice/reading-list/SPEC.md
 Namespace ns-reading-list
 Hash      9e8d86776e85ffbc
@@ -190,19 +201,29 @@ contract change. Apply that new revision to the same session:
 
 ```console
 $ telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal
-updated reading-list
+requested reading-list
 
-Status    working
+Request   req_update
+Status    queued
+Action    update
 Session   sess_c7d2f0a4e8
-Revision  sha256:3211e85fe81bd70aa74726d4ce0dc68d729d816826a21b62b18eb86074ff3317
+Proposed  sha256:3211e85fe81bd70aa74726d4ce0dc68d729d816826a21b62b18eb86074ff3317
+Current   rev_initial (unchanged)
+Queue     1
 Context   personal
-Service   https://reading-list-c7d2f0a4e8.usetelos.ai
-Logs      telos logs --context personal sess_c7d2f0a4e8
+Review    https://usetelos.ai/deployments/sess_c7d2f0a4e8?org=org_alice&request=req_update&tab=change-requests
 ```
 
-The Goal, session, deployment, and history stay the same; only the immutable
-revision changes. Observe the new digest through `working` to `ready`, then
-exercise the updated API behavior.
+The current revision keeps running while the request waits. At the front of
+the queue, Telos compares the proposed package with the then-current revision.
+If confirmation is enabled in Settings, an authorized user must choose
+**Confirm & Apply** in the dashboard. The requester can confirm their own
+request if authorized.
+
+When the request executes, the Goal, session, deployment, and history stay the
+same; only the immutable revision changes. Observe the new digest through
+`working` to `ready`, then exercise the updated API behavior. Older Cloud
+servers return an immediate `updated` or `unchanged` receipt.
 
 ### Deploy without a restorable snapshot
 
@@ -215,9 +236,9 @@ telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal --force
 ```
 
 This bypass applies only to the missing-snapshot gate. Active operations,
-authorization, runtime availability, and stale-revision protection still
-apply. Without `--force`, the update remains rejected and the current revision
-continues serving.
+authorization, confirmation requirements, runtime availability, and
+stale-revision protection still apply. A queued request may wait for an active
+operation or snapshot to finish; `--force` never skips dashboard confirmation.
 
 For another contract, continue with [Write a SPEC.md](goals.md). Use
 [Bounded runs](bounded-runs.md) for local work and
@@ -237,9 +258,9 @@ Continue revisions on that session so its identity and history remain joined.
 
 ## Delete the Goal
 
-Cloud deletion is irreversible. After the user approves the exact session,
-context, and loss of the environment, application and PVC data, routes,
-attachments, deployment record, and history, run:
+Cloud deletion is irreversible. Check the session and context, and confirm
+that you want to remove the environment, application and PVC data, routes,
+attachments, deployment record, and history before running:
 
 ```bash
 telos delete SESSION_ID --context personal

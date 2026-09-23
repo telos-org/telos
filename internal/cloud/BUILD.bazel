@@ -4,6 +4,7 @@ go_library(
     name = "cloud",
     srcs = [
         "account.go",
+        "change_requests.go",
         "cliauth.go",
         "client.go",
         "inference.go",
@@ -21,6 +22,7 @@ go_test(
     name = "cloud_test",
     srcs = [
         "account_test.go",
+        "change_requests_test.go",
         "cliauth_test.go",
         "client_test.go",
     ],

@@ -96,9 +96,13 @@ runtime.
    telos apply SPEC.md --context CONTEXT
    ```
 
-4. Capture the session ID and revision digest from the receipt. Observe that
-   session until the same revision becomes `ready`, or until its state and
-   reason require a decision:
+4. Inspect the receipt's `operation`. If it is `requested`, report the request
+   ID, status, proposed digest, and review URL. A queued or unconfirmed request
+   is not an applied revision: stop the deployment observation loop and return
+   the request to the user. Do not confirm through another credential, retry
+   apply, or treat the current deployment's `ready` as success of the proposal.
+   For an executed revision, capture its session ID and digest and observe
+   until that same revision becomes `ready`, or its state requires a decision:
 
    ```bash
    telos describe SESSION_ID --context CONTEXT --json
@@ -133,7 +137,14 @@ telos apply SPEC.md --session SESSION_ID --context CONTEXT --force
 
 `--force` is only valid for an existing Cloud session update. It bypasses this
 snapshot gate only; it does not bypass authorization, active operations,
-runtime availability, or stale-revision protection.
+runtime availability, confirmation requirements, or stale-revision protection.
+
+For a user-authorized requirement to confirm the initial launch, add
+`--require-confirmation` when creating a new Cloud deployment. This flag is
+create-only; do not use it to override an existing deployment's policy.
+Confirmation happens in the dashboard, and an authorized requester can confirm
+their own request. Read [Change Requests](references/change-requests.md) before
+working with confirmation settings, queued submissions, or their receipts.
 
 [Use Telos](references/use-telos.md) follows this loop with one service.
 [The Goal lifecycle](references/lifecycle.md) gives a bounded observation
@@ -168,13 +179,15 @@ Package versions are immutable, so changed content receives a new version.
 
 Report the spec, target, context, session ID, current revision and state, and
 the evidence behind the result. Distinguish work that was planned, applied,
-published, updated, or deleted.
+published, requested, updated, or deleted. A requested change remains pending
+until its recorded action executes; verification is a separate result.
 
 ## References
 
 - [Use Telos](references/use-telos.md) — one persistent Goal from first plan through revision
 - [Write a SPEC.md](references/goals.md) — contract shape and expressive boundary
 - [The Goal lifecycle](references/lifecycle.md) — identity, states, revisions, and evidence
+- [Change Requests](references/change-requests.md) — queued changes, confirmation, and request receipts
 - [Glossary](references/glossary.md) — canonical Telos product vocabulary
 - [Bounded runs](references/bounded-runs.md) — local work with an explicit stopping bound
 - [Telos Cloud](references/cloud.md) — browser and token authentication, CI, contexts, and managed-runtime preflight

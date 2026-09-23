@@ -33,9 +33,12 @@ func cmdLaunch(command, action string, args []string) {
 	sessionID := &sessionIDValue
 	forceValue := false
 	force := &forceValue
+	requireConfirmationValue := false
+	requireConfirmationFlag := &requireConfirmationValue
 	if command == "apply" {
 		sessionID = fs.String("session", "", "Managed session ID to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
+		requireConfirmationFlag = fs.Bool("require-confirmation", false, "Require dashboard confirmation for a new Cloud deployment")
 	}
 	modelHelp := "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	if command == "apply" {
@@ -108,6 +111,10 @@ func cmdLaunch(command, action string, args []string) {
 		platform = parsedPlatform
 	}
 	if command == "apply" {
+		if flagNameSet(fs, "require-confirmation") && (*sessionID != "" || platform == "local") {
+			fmt.Fprintln(os.Stderr, "error: --require-confirmation can only configure a new Cloud deployment; use its Settings page to change an existing deployment")
+			os.Exit(1)
+		}
 		if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -156,6 +163,10 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudApply:
+		var requireConfirmation *bool
+		if flagNameSet(fs, "require-confirmation") {
+			requireConfirmation = requireConfirmationFlag
+		}
 		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -176,6 +187,7 @@ func cmdLaunch(command, action string, args []string) {
 			*force,
 			*jsonOut,
 			contextOverride,
+			requireConfirmation,
 		)
 		return
 	}
@@ -423,6 +435,7 @@ func applyCloudControl(
 	force bool,
 	jsonOut bool,
 	contextOverride string,
+	requireConfirmation *bool,
 ) {
 	var reference *packageReference
 	if strings.HasPrefix(strings.TrimSpace(specArg), "@") {
@@ -437,6 +450,17 @@ func applyCloudControl(
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+	if requireConfirmation != nil {
+		capabilities, err := control.DeploymentCapabilities()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if !capabilities.DeploymentChangeRequests {
+			fmt.Fprintln(os.Stderr, "error: this Cloud server does not support --require-confirmation; update Cloud before using this option")
+			os.Exit(1)
+		}
 	}
 	packageName := ""
 	var packageRecord *cloud.PackageVersionRecord
@@ -455,31 +479,41 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	operation, session, err := applyCloudSessionPackage(
+	operation, result, err := applyCloudSessionPackage(
 		control,
 		packageName,
 		packageRecord.Ref,
 		sessionID,
 		runtimeConfig,
 		force,
+		requireConfirmation,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	if jsonOut {
-		printJSON(map[string]any{
+		receipt := map[string]any{
 			"context":   control.ContextName(),
 			"operation": operation,
 			"package":   packageRecord,
-			"session":   session,
-		})
+			"session":   result.Deployment,
+		}
+		if result.ChangeRequest != nil {
+			receipt["change_request"] = result.ChangeRequest
+			receipt["review_url"] = cloudRequestReviewURL(control, *result.ChangeRequest)
+		}
+		printJSON(receipt)
+		return
+	}
+	if result.ChangeRequest != nil {
+		printCloudChangeRequestReceipt(os.Stdout, result, control.ContextName(), cloudRequestReviewURL(control, *result.ChangeRequest))
 		return
 	}
 	printCloudSessionReceiptForContext(
 		os.Stdout,
 		operation,
-		session,
+		result.Deployment,
 		control.ContextName(),
 	)
 }
@@ -491,35 +525,51 @@ func applyCloudSessionPackage(
 	sessionID string,
 	runtimeConfig sessionRuntimeConfig,
 	force bool,
-) (string, *cloud.SessionRecord, error) {
+	requireConfirmation *bool,
+) (string, *cloud.SessionMutationResult, error) {
 	if sessionID != "" {
+		if requireConfirmation != nil {
+			return "", nil, fmt.Errorf("--require-confirmation can only configure a new Cloud deployment")
+		}
 		if !isCloudApplyID(sessionID) {
 			return "", nil, fmt.Errorf("invalid cloud session id %q", sessionID)
 		}
-		session, err := control.UpdateSession(sessionID, cloud.SessionUpdateOptions{
-			PackageRef: packageRef,
-			Force:      force,
-		})
-		if err != nil && cloud.IsStatus(err, 409) {
-			current, getErr := control.GetSession(sessionID)
-			if getErr == nil && current.PackageRef == packageRef {
-				return "unchanged", current, nil
-			}
+		current, err := control.GetSession(sessionID)
+		if err != nil {
+			return "", nil, err
 		}
-		return "updated", session, actionableDeploymentUpdateError(err, force)
+		result, err := control.UpdateSession(sessionID, cloud.SessionUpdateOptions{
+			PackageRef:                packageRef,
+			Force:                     force,
+			ExpectedCurrentRevisionID: current.CurrentRevisionID,
+		})
+		if err != nil {
+			return "updated", nil, actionableDeploymentUpdateError(err, force)
+		}
+		if result.ChangeRequest != nil {
+			return "requested", result, nil
+		}
+		if result.Deployment.PackageRef == current.PackageRef && result.Deployment.CurrentRevisionID == current.CurrentRevisionID {
+			return "unchanged", result, nil
+		}
+		return "updated", result, nil
 	}
 
 	inference, err := resolveCloudInference(control, runtimeConfig.Model)
 	if err != nil {
 		return "", nil, err
 	}
-	session, err := control.CreateSession(cloud.SessionCreateOptions{
-		Name:          name,
-		PackageRef:    packageRef,
-		AgentThinking: runtimeConfig.Thinking,
-		Inference:     inference,
+	result, err := control.CreateSession(cloud.SessionCreateOptions{
+		Name:                name,
+		PackageRef:          packageRef,
+		AgentThinking:       runtimeConfig.Thinking,
+		Inference:           inference,
+		RequireConfirmation: requireConfirmation,
 	})
-	return "created", session, err
+	if err == nil && result.ChangeRequest != nil {
+		return "requested", result, nil
+	}
+	return "created", result, err
 }
 
 func actionableDeploymentUpdateError(err error, force bool) error {

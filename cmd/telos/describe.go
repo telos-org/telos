@@ -35,11 +35,7 @@ func cmdDescribe(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
-			return
-		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		describeCloudSession(cloudSession, contextName, *jsonOut)
 		return
 	}
 
@@ -60,11 +56,7 @@ func cmdDescribe(args []string) {
 		os.Exit(1)
 	}
 	if found {
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
-			return
-		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		describeCloudSession(cloudSession, contextName, *jsonOut)
 		return
 	}
 
@@ -72,16 +64,38 @@ func cmdDescribe(args []string) {
 	os.Exit(1)
 }
 
-func printCloudSessionJSON(
+func describeCloudSession(
 	session *cloud.SessionRecord,
 	contextName string,
+	jsonOut bool,
 ) {
+	control, err := cloud.ControlClientForContext(contextName)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	requests, err := pendingCloudChangeRequests(control, session.ID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: read change requests: %v\n", err)
+		os.Exit(1)
+	}
+	if jsonOut {
+		printCloudSessionJSON(session, contextName, requests...)
+		return
+	}
+	printCloudSessionDescriptionForContext(os.Stdout, *session, contextName)
+	printPendingCloudChangeRequests(os.Stdout, control, requests)
+}
+
+func printCloudSessionJSON(session *cloud.SessionRecord, contextName string, requests ...cloud.ChangeRequestRecord) {
 	printJSON(struct {
 		*cloud.SessionRecord
-		Context string `json:"context,omitempty"`
+		Context               string                      `json:"context,omitempty"`
+		PendingChangeRequests []cloud.ChangeRequestRecord `json:"pending_change_requests,omitempty"`
 	}{
-		SessionRecord: session,
-		Context:       contextName,
+		SessionRecord:         session,
+		Context:               contextName,
+		PendingChangeRequests: requests,
 	})
 }
 
@@ -117,7 +131,11 @@ func printCloudSessionDescriptionForContext(
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Session", session.ID)
-	printSummaryField(out, "Revision", session.PackageDigest)
+	if session.State == "pending" && session.CurrentRevisionID == "" {
+		printSummaryField(out, "Revision", "not deployed yet")
+	} else {
+		printSummaryField(out, "Revision", session.PackageDigest)
+	}
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
 	}
@@ -139,6 +157,9 @@ func cloudSessionDisplayStatus(session cloud.SessionRecord) string {
 func cloudSessionReason(session cloud.SessionRecord) string {
 	if session.FailureReason != nil && strings.TrimSpace(*session.FailureReason) != "" {
 		return strings.TrimSpace(*session.FailureReason)
+	}
+	if session.State == "pending" && session.CurrentRevisionID == "" {
+		return strings.TrimSpace(session.StatusReason)
 	}
 	switch strings.ToLower(strings.TrimSpace(cloudSessionDisplayStatus(session))) {
 	case "needs_attention", "needs attention", "failed", "stopped":

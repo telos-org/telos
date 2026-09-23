@@ -141,9 +141,12 @@ not something `SPEC.md` can create.
 ## Apply and observe
 
 Use the workflow in [Use Telos](use-telos.md), passing the same explicit context
-through every Cloud command. `apply` publishes an immutable spec package and
-creates the deployment. The receipt identifies the context, revision digest,
-and stable session to follow.
+through every Cloud command. `apply` publishes an immutable spec package and,
+on Cloud versions with Change Requests enabled, submits a queued proposal.
+The receipt identifies the context, proposed digest, stable session, and
+request review URL. A request may wait for confirmation before it executes.
+See [Change Requests](change-requests.md) for settings and initial-launch
+confirmation. Older Cloud servers return the immediate deployment receipt.
 
 [The Goal lifecycle](lifecycle.md) owns state, revision, observation, and
 deletion semantics. [Models and inference](inference.md) explains how the new

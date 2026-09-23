@@ -20,11 +20,12 @@ import (
 // -- plan ---------------------------------------------------------------------
 
 type specComparison struct {
-	sessionID  string
-	currentRef string
-	diff       string
-	current    planSpecState
-	proposed   planSpecState
+	sessionID    string
+	currentRef   string
+	diff         string
+	current      planSpecState
+	proposed     planSpecState
+	changePolicy *cloud.ChangePolicy
 }
 
 type planSpecState struct {
@@ -144,6 +145,9 @@ func cmdPlan(args []string) {
 			"proposed":    comparison.proposed,
 			"spec_diff":   comparison.diff,
 		}
+		if comparison.changePolicy != nil {
+			plan["change_policy"] = comparison.changePolicy
+		}
 	}
 
 	if *jsonOut {
@@ -192,6 +196,13 @@ func printPlanPreview(
 	if comparison != nil {
 		printSummaryField(out, "Session", comparison.sessionID)
 		printSummaryField(out, "Current", comparison.currentRef)
+		if comparison.changePolicy != nil {
+			confirmation := "off (queued changes apply automatically)"
+			if comparison.changePolicy.RequireConfirmation {
+				confirmation = "required in the dashboard"
+			}
+			printSummaryField(out, "Confirm", confirmation)
+		}
 	}
 	printSummaryField(out, "Path", specPath)
 	if platform != "local" {
@@ -311,14 +322,25 @@ func compareCloudSessionSpecWithState(
 	if err != nil {
 		return nil, err
 	}
-	return newSpecComparisonWithStates(
+	comparison := newSpecComparisonWithStates(
 		sessionID,
 		pkg.reference.ref,
 		current,
 		proposed,
 		currentState,
 		proposedState,
-	), nil
+	)
+	capabilities, err := control.DeploymentCapabilities()
+	if err != nil {
+		return nil, err
+	}
+	if capabilities.DeploymentChangeRequests {
+		comparison.changePolicy, err = control.GetChangePolicy(sessionID)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return comparison, nil
 }
 
 func newSpecComparison(sessionID string, currentRef string, current, proposed []byte) *specComparison {

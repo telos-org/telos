@@ -92,6 +92,8 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 					_, _ = w.Write(pkg.Bytes)
 				case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
 					_, _ = w.Write([]byte(`{"connections":[{"id":"conn_rohan","name":"openai-rohan","provider":"chatgpt-codex","status":"connected"}]}`))
+				case r.Method == http.MethodGet && r.URL.Path == "/api/capabilities":
+					_, _ = w.Write([]byte(`{}`))
 				case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
 					var request map[string]json.RawMessage
 					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {

@@ -27,8 +27,12 @@ Persistent: SPEC.md → plan → apply → Goal/session/deployment → revision 
 Bounded:    local spec → run with a bound → run session → evidence
 ```
 
-`apply` returns after Cloud accepts a revision for work. Reconciliation
-continues in the background; `describe` reports the managed Goal state.
+`apply` returns after Cloud accepts the submission. With
+[Change Requests](change-requests.md), the receipt's operation is `requested`:
+the proposal waits in the deployment's queue and may require dashboard
+confirmation. A queued proposal has not changed the current revision.
+After execution, reconciliation continues in the background; `describe`
+reports the managed Goal state and pending requests separately.
 
 ## Read the state layers
 
@@ -51,7 +55,8 @@ A managed Goal reports:
 
 ## `ready` belongs to a revision
 
-Capture the revision digest returned by `apply`, then compare it with
+After the Change Request is applied, capture its proposed digest (or the
+revision digest from an older server's immediate receipt), then compare it with
 `package_digest` from `describe --json`. On current reconciliation-aware
 runtimes, `ready` means reconciliation completed and the latest verification
 passed for that displayed digest. The service itself completes the evidence:
@@ -70,14 +75,20 @@ displayed digest matches the receipt.
 
 ## Observe without waiting forever
 
-Use the context, session, and digest from the `apply` receipt. Unless the Goal
+For a `requested` receipt, first follow its review URL to track the request.
+If it is queued or awaiting confirmation, the old revision's status does not
+describe the proposal. `describe --json` includes `pending_change_requests`
+separately; initial creation has no current revision yet.
+
+Once the requested action has executed, use the context, session, and proposed
+digest from the `apply` receipt. Unless the Goal
 suggests a different runtime, use a 30-minute observation deadline:
 
 ```bash
 telos describe SESSION_ID --context CONTEXT --json
 ```
 
-An agent observation loop has four operations:
+You can observe an executing revision as follows:
 
 1. Run `describe --json` every 15 seconds.
 2. Read `status` and `package_digest` from each response.
@@ -112,14 +123,14 @@ telos plan SPEC.md --session SESSION_ID --context CONTEXT
 telos apply SPEC.md --session SESSION_ID --context CONTEXT
 ```
 
-The Goal, session, deployment, and history remain stable. The new immutable
-revision moves through the same lifecycle. [Use Telos](use-telos.md) shows the
-full diff and receipt.
+The Goal, session, deployment, and history remain stable. The submission enters
+the queue; when executed, the new immutable revision moves through the same
+lifecycle. [Use Telos](use-telos.md) shows the full diff and receipt.
 
 ## Delete a Goal
 
-Resolve the session and context, explain the consequences below, and obtain the
-user's approval before running:
+Check the session and context, and confirm that you want to remove the Cloud
+environment and its data before running:
 
 ```bash
 telos delete SESSION_ID --context CONTEXT

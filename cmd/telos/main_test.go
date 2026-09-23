@@ -1107,6 +1107,7 @@ func TestApplyCloudSessionPackageCreates(t *testing.T) {
 		"",
 		sessionRuntimeConfig{},
 		false,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1114,7 +1115,7 @@ func TestApplyCloudSessionPackageCreates(t *testing.T) {
 	if operation != "created" || !created {
 		t.Fatalf("operation=%q created=%v", operation, created)
 	}
-	if session.ID != "sess_123" {
+	if session.Deployment.ID != "sess_123" {
 		t.Fatalf("session: got %+v", session)
 	}
 }
@@ -1143,6 +1144,7 @@ func TestApplyCloudSessionPackageResolvesNamedSubscription(t *testing.T) {
 		"",
 		sessionRuntimeConfig{Model: "openai-rohan/gpt-5.6-sol"},
 		false,
+		nil,
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1165,6 +1167,8 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 	var updated bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_123":
+			_, _ = w.Write([]byte(`{"id":"sess_123","package_ref":"@user-abc/auth:0.1.0","current_revision_id":"rev_7"}`))
 		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
 			updated = true
 			var body map[string]any
@@ -1173,6 +1177,9 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 			}
 			if body["package_ref"] != "@user-abc/auth:0.1.1" {
 				t.Fatalf("body: got %#v", body)
+			}
+			if body["expected_current_revision_id"] != "rev_7" {
+				t.Fatalf("expected current revision: got %#v", body)
 			}
 			if body["force"] != true {
 				t.Fatalf("force: got %#v", body["force"])
@@ -1199,6 +1206,7 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 		"sess_123",
 		sessionRuntimeConfig{},
 		true,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1206,75 +1214,37 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 	if operation != "updated" || !updated {
 		t.Fatalf("operation=%q updated=%v", operation, updated)
 	}
-	if session.ID != "sess_123" {
+	if session.Deployment.ID != "sess_123" {
 		t.Fatalf("session: got %+v", session)
 	}
 }
 
-func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
-	var updateCalls int
-	var getCalls int
-	currentPackageRef := "@user-abc/auth:0.1.1"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
-			updateCalls++
-			http.Error(w, "conflict", http.StatusConflict)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_123":
-			getCalls++
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "sess_123",
-				"name":           "auth",
-				"state":          "healthy",
-				"package_ref":    currentPackageRef,
-				"package_digest": "sha256:new",
-				"created_at":     "then",
-				"updated_at":     "now",
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	operation, session, err := applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		false,
-	)
-	if err != nil {
-		t.Fatalf("applyCloudSessionPackage: %v", err)
-	}
-	if operation != "unchanged" {
-		t.Fatalf("operation: got %q want unchanged", operation)
-	}
-	if session.ID != "sess_123" || session.PackageRef != "@user-abc/auth:0.1.1" {
-		t.Fatalf("session: got %+v", session)
-	}
-	if updateCalls != 1 || getCalls != 1 {
-		t.Fatalf("calls: update=%d get=%d", updateCalls, getCalls)
-	}
-
-	currentPackageRef = "@user-abc/auth:0.1.0"
-	operation, session, err = applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		true,
-	)
-	if err == nil {
-		t.Fatal("forced update hid an unrelated conflict")
-	}
-	if operation != "updated" || session != nil {
-		t.Fatalf("operation=%q session=%+v", operation, session)
-	}
-	if updateCalls != 2 || getCalls != 2 {
-		t.Fatalf("calls: update=%d get=%d", updateCalls, getCalls)
+func TestApplyCloudSessionPackageDoesNotHideConflictForCurrentPackage(t *testing.T) {
+	for _, code := range []string{"", "change_request_pending", "review_required", "operation_in_progress", "stale_revision"} {
+		t.Run(code, func(t *testing.T) {
+			var updateCalls, getCalls int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
+					updateCalls++
+					w.WriteHeader(http.StatusConflict)
+					_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": code, "message": "conflict"}})
+				case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_123":
+					getCalls++
+					_, _ = w.Write([]byte(`{"id":"sess_123","package_ref":"@user-abc/auth:0.1.1","current_revision_id":"rev_7"}`))
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+			_, result, err := applyCloudSessionPackage(cloud.NewClient(srv.URL, "test-token"), "auth", "@user-abc/auth:0.1.1", "sess_123", sessionRuntimeConfig{}, false, nil)
+			if !cloud.IsStatus(err, http.StatusConflict) || result != nil {
+				t.Fatalf("conflict was hidden: result=%+v err=%v", result, err)
+			}
+			if updateCalls != 1 || getCalls != 1 {
+				t.Fatalf("calls: update=%d get=%d", updateCalls, getCalls)
+			}
+		})
 	}
 }
 
@@ -1299,6 +1269,7 @@ func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
 		"sess_123",
 		sessionRuntimeConfig{},
 		false,
+		nil,
 	)
 	if err == nil {
 		t.Fatal("expected snapshot pending error")
@@ -1322,6 +1293,7 @@ func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
 		"sess_123",
 		sessionRuntimeConfig{},
 		true,
+		nil,
 	)
 	if err == nil || strings.Contains(err.Error(), "retry the same command with --force") {
 		t.Fatalf("forced retry received an invalid force suggestion: %v", err)
