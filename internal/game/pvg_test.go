@@ -21,9 +21,13 @@ type fakeExecutor struct {
 	checkpointOK    bool
 	turnDirs        []string
 	delay           time.Duration
+	onTurn          func(*TurnState)
 }
 
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) TurnResult {
+	if f.onTurn != nil {
+		f.onTurn(ts)
+	}
 	if f.delay > 0 {
 		deadline := time.Now().Add(f.delay)
 		for time.Now().Before(deadline) {
@@ -129,6 +133,70 @@ func TestPVGVerifierConcedes(t *testing.T) {
 	}
 	if !strings.Contains(transcript, "## Result") {
 		t.Error("transcript should contain result")
+	}
+}
+
+func TestPVGHumanProgressLeavesTechnicalHandoffIntact(t *testing.T) {
+	state := NewPVGState("pvg-test", t.TempDir(), "human-progress")
+	if err := state.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	exec := &fakeExecutor{
+		onTurn: func(ts *TurnState) {
+			ts.OnLiveEvent(LiveAgentEvent{Kind: "progress_update", Text: "Checking restart recovery without duplicate orders."})
+			ts.OnLiveEvent(LiveAgentEvent{Kind: "review", Text: "Replay evidence: evaluation/restart.go."})
+		},
+		verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: "Verified technical evidence.\n<status>CONCEDE</status>"}},
+	}
+	result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{EpochID: 7}).Run()
+	if result.GameResult != GameSuccess || !result.VerifierConceded {
+		t.Fatalf("result=%+v", result)
+	}
+	transcript := ReadTranscript(state.TranscriptPath)
+	if !strings.Contains(transcript, "duplicate orders") || !strings.Contains(transcript, "evaluation/restart.go") || !strings.Contains(transcript, "Verified technical evidence") {
+		t.Fatalf("technical transcript was changed: %s", transcript)
+	}
+	data, err := os.ReadFile(state.EvidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	humanCount := 0
+	technicalCount := 0
+	phaseCount := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		body := event["data"].(map[string]any)
+		if event["event"] == "round_start" {
+			phaseCount++
+			if body["audience"] != "user" {
+				t.Fatalf("phase must identify new human presentation: %#v", event)
+			}
+		}
+		if event["event"] == "agent_progress" {
+			if event["epoch_id"] != float64(7) || event["session_id"] != "human-progress" || body["turn_id"] == "" {
+				t.Fatalf("missing provenance: %#v", event)
+			}
+			switch body["audience"] {
+			case "user":
+				humanCount++
+				if body["kind"] != "progress_update" || body["text"] != "Checking restart recovery without duplicate orders." {
+					t.Fatalf("human update changed: %#v", event)
+				}
+			case "agent":
+				technicalCount++
+				if body["kind"] != "review" || body["text"] != "Replay evidence: evaluation/restart.go." {
+					t.Fatalf("technical update changed: %#v", event)
+				}
+			default:
+				t.Fatalf("new progress must identify its audience: %#v", event)
+			}
+		}
+	}
+	if humanCount != 2 || technicalCount != 2 || phaseCount != 2 {
+		t.Fatalf("got human=%d technical=%d phases=%d", humanCount, technicalCount, phaseCount)
 	}
 }
 

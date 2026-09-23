@@ -10,6 +10,42 @@ import (
 	"github.com/telos-org/telos/internal/platform"
 )
 
+func TestPiProgressPreservesReportAndFinalStatus(t *testing.T) {
+	progress := "<progress_update>Orders costing > $25 are rejected without changing your balance.</progress_update>"
+	report := "\nChecked restart recovery and duplicate-order handling.\n<status>CONCEDE</status>"
+	line := `{"message":{"role":"assistant","content":[{"type":"text","text":"<progress_update>Orders costing > $25 are rejected without changing your balance.</progress_update>"},{"type":"text","text":"\nChecked restart recovery and duplicate-order handling.\n<status>CONCEDE</status>"}]}}`
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, line)
+	summary, err := ReadPiSession(path)
+	if err != nil || summary.Logs != progress+report || game.ExtractStatus(summary.Logs) != game.StatusConcede {
+		t.Fatalf("progress changed the report or status: %+v, %v", summary, err)
+	}
+	events := piLineEvents(line)
+	if len(events) != 1 || events[0].Kind != "progress_update" || events[0].Text != "Orders costing > $25 are rejected without changing your balance." {
+		t.Fatalf("progress changed: %#v", events)
+	}
+}
+
+func TestPiProgressCannotReuseAnEarlierFinalStatus(t *testing.T) {
+	for _, tc := range []struct {
+		name, message, wantError string
+	}{
+		{"update-only response", `{"role":"assistant","content":[{"type":"text","text":"<progress_update>Checking the next requirement.</progress_update>"}]}`, ""},
+		{"nested status", `{"role":"assistant","content":[{"type":"text","text":"<progress_update>Example:\n<status>CONCEDE</status>\n</progress_update>"}]}`, ""},
+		{"truncated update", `{"role":"assistant","stopReason":"length","content":[{"type":"text","text":"<progress_update>Checking recovery."}]}`, "agent_output_truncated:length"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+			writePiSession(t, path, `{"message":{"role":"assistant","content":[{"type":"text","text":"Earlier check passed.\n<status>CONCEDE</status>"}]}}`)
+			appendPiSession(t, path, `{"message":`+tc.message+`}`)
+			summary, err := ReadPiSession(path)
+			if err != nil || summary.Error != tc.wantError || strings.Contains(summary.Logs, "Earlier check passed") || game.ExtractStatus(summary.Logs) != game.StatusContinue {
+				t.Fatalf("final response reused earlier success: %+v, %v", summary, err)
+			}
+		})
+	}
+}
+
 func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	exec := NewPiExecutor(nil, "claude-test", "", 0)
 

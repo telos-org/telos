@@ -14,8 +14,9 @@ import (
 const defaultLogTail = 50
 
 type logViewOptions struct {
-	Tail int
-	All  bool
+	Tail   int
+	All    bool
+	Active bool
 }
 
 type renderedLogRow struct {
@@ -42,6 +43,38 @@ func printStructuredLogs(
 	for _, row := range rows {
 		printRenderedLogRow(out, row)
 	}
+	if options.Active {
+		printLogSilence(out, events, time.Now())
+	}
+}
+
+func printLogSilence(out io.Writer, events []sessionapi.SessionEvent, now time.Time) {
+	var latest *renderedLogRow
+	for _, event := range events {
+		if event.Event == "game_end" || event.Event == "agent_complete" || event.Event == "agent_suspended" {
+			latest = nil
+			continue
+		}
+		row, visible := renderedLogRowFromEvent(event)
+		if !visible {
+			continue
+		}
+		// A later visible status or legacy message supersedes the previous
+		// activity. Hidden technical events do not reset the human timer.
+		latest = nil
+		if eventDataString(event, "audience") == "user" &&
+			(event.Event == "agent_progress" || event.Event == "round_start") {
+			latest = &row
+		}
+	}
+	if latest == nil {
+		return
+	}
+	started, err := time.Parse(time.RFC3339Nano, latest.Timestamp)
+	if err != nil || now.Sub(started) < 5*time.Minute {
+		return
+	}
+	fmt.Fprintf(out, "No new progress update for %s. Last reported activity: %s\n", now.Sub(started).Truncate(time.Minute), latest.Summary)
 }
 
 func printJSONLogEvents(out io.Writer, events []sessionapi.SessionEvent) error {
@@ -108,10 +141,19 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 		Level:     "INFO",
 	}
 	role := eventRole(event)
+	audience := eventDataString(event, "audience")
 
 	switch event.Event {
 	case "agent_progress":
 		text := eventDataString(event, "text")
+		if audience == "user" {
+			row.Summary = text
+			return row, text != ""
+		}
+		// Unmarked historical records retain their original filtering and text.
+		if audience != "" {
+			return renderedLogRow{}, false
+		}
 		kind := strings.ToLower(eventDataString(event, "kind"))
 		if text == "" || kind == "tool" || kind == "review" || kind == "summary" ||
 			isLegacyToolLogAction(kind, text) {
@@ -120,8 +162,9 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 		row.Summary, row.Detail = splitLogText(text)
 		return row, true
 	case "agent_complete":
+		// New technical turns wait for game_end. Keep historical acceptance rows.
 		status := strings.ToUpper(eventDataString(event, "status"))
-		if status != "CONCEDE" || role != "verifier" {
+		if audience != "" || status != "CONCEDE" || role != "verifier" {
 			return renderedLogRow{}, false
 		}
 		row.Summary = "Current revision accepted"
@@ -164,6 +207,9 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 		switch result {
 		case "success":
 			row.Summary = "Current revision accepted"
+			if audience == "user" {
+				row.Summary = "This round of checks passed"
+			}
 		case "failure":
 			row.Level = "ERROR"
 			row.Summary = "Execution failed"
@@ -194,7 +240,17 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 			eventDataString(event, "current_spec_sha256"),
 		)
 		return row, true
-	case "game_start", "round_start", "workspace_checkpoint":
+	case "round_start":
+		if audience != "user" {
+			return renderedLogRow{}, false
+		}
+		if role == "verifier" {
+			row.Summary = "Checking the result against the spec"
+		} else if role == "prover" {
+			row.Summary = "Working on the spec requirements"
+		}
+		return row, row.Summary != ""
+	case "game_start", "workspace_checkpoint":
 		return renderedLogRow{}, false
 	}
 

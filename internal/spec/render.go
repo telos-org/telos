@@ -281,38 +281,26 @@ func renderWorkspace(workspace string, role Role) string {
 }
 
 func renderOutputContract(role Role, opts PromptOptions) string {
-	if role == RoleProver {
-		return strings.Join([]string{
-			"## Output",
-			"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
-			"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
-			"- Write concise Markdown with claims, evidence, changes made, and remaining uncertainty",
-			"- Use <progress_update>...</progress_update> blocks for agent-decided directional updates and proof of liveness",
-			"- Send a directional update when a material result, a new blocker, or the next action changes",
-			"- During extended work with no new result, send brief liveness updates that name the active operation or wait",
-			"- Apply these Simplified Technical English (ASD-STE100) rules to each update: use active voice, one topic per sentence, and no more than 25 words per sentence",
-			"- State what changed or what blocks progress; include the next action when it helps the observer",
-			"- Do not report routine file reads, commands, or plans",
-			"- Do not save all progress updates for the final response",
-			"- End every turn with one final <progress_update>what you did this round</progress_update>",
-		}, "\n")
-	}
 	lines := []string{
-		"## Output",
-		"- Your assistant response is appended to the transcript automatically; do not write to `/dev/stdout` or edit the transcript file directly",
-		"- Do not add a duplicate turn heading; the runtime writes turn headings and metadata",
-		"- Write concise Markdown; blocking findings first",
-		"- Use <progress_update>...</progress_update> blocks for agent-decided directional updates and proof of liveness",
-		"- Send a directional update when a material result, a new blocker, or the next action changes",
-		"- During extended evaluation with no new result, send brief liveness updates that name the active probe or wait",
-		"- Apply these Simplified Technical English (ASD-STE100) rules to each update: use active voice, one topic per sentence, and no more than 25 words per sentence",
-		"- State what changed or what blocks progress; include the next action when it helps the observer",
-		"- Do not report routine file reads, commands, or plans",
-		"- Do not save all progress updates for the final response",
-		"- End every turn with one final <progress_update>what you found or why you concede</progress_update>",
+		"## Output and progress",
+		"- Your response is appended to the transcript automatically; do not edit it or add duplicate turn headings",
+		"- Keep technical claims, evidence, findings, and uncertainty in your Markdown report",
+		"- Use <progress_update>...</progress_update> for short updates to the person waiting for the result, usually one sentence of 10–20 words",
+		"- Send an update when meaningful work begins, a result is established, direction changes, or a blocker appears; during a wait, report only the activity or reason you observed",
+		"- Describe the requested behavior in everyday words. Keep file names, commands, test inventories, and internal agent roles in the report",
+		"- Example: <progress_update>Retrying a test order after a restart no longer charges your balance twice.</progress_update>",
+		"- Report only what you established; a passing check or running child does not mean the whole Goal is complete",
+		"- Finish with your report and one final progress_update in the same response; do not send a separate update-only final response",
+	}
+	if role == RoleProver {
+		lines = append(lines, "- The final update names the change and its readiness to be checked; do not claim independent verification")
+		return strings.Join(lines, "\n")
+	}
+	lines = append(lines,
+		"- Put blocking findings first; the final update states what you independently confirmed or what still blocks progress",
 		"- The final non-empty line must be exactly one status tag",
 		"- <status>CONTINUE</status> if you found a concrete goal violation",
-	}
+	)
 	if opts.Controller {
 		lines = append(lines,
 			"- For controller cycles, a pending or running child task is valid waiting work when the controller observed it first, launched no competing work, and did not claim final goal satisfaction",
