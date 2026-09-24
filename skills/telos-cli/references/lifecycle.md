@@ -27,10 +27,12 @@ Persistent: SPEC.md → plan → apply → Goal/session/deployment → revision 
 Bounded:    local spec → run with a bound → run session → evidence
 ```
 
-`apply` returns after Cloud accepts the submission. With
+`apply` returns after Cloud responds to the submission. With
 [Change Requests](change-requests.md), the receipt's operation is `requested`:
-the proposal waits in the deployment's queue and may require dashboard
-confirmation. A queued proposal has not changed the current revision.
+the request's status may already be `applying` or `applied`, or it may be
+waiting for earlier work or dashboard confirmation. A queued proposal has
+not changed the current revision. The command does not wait for the agent
+to finish or verify the resulting revision.
 After execution, reconciliation continues in the background; `describe`
 reports the managed Goal state and pending requests separately.
 
@@ -75,10 +77,12 @@ displayed digest matches the receipt.
 
 ## Observe without waiting forever
 
-For a `requested` receipt, first follow its review URL to track the request.
-If it is queued or awaiting confirmation, the old revision's status does not
-describe the proposal. `describe --json` includes `pending_change_requests`
-separately; initial creation has no current revision yet.
+For a `requested` receipt, check `change_request.status`. If it is already
+`applied`, continue with the resulting revision below. Otherwise, follow its
+review URL to track the request. If it is queued or awaiting confirmation,
+the old revision's status does not describe the proposal. `describe --json`
+includes `pending_change_requests` separately. An initial creation still queued
+or awaiting confirmation has no current revision yet.
 
 Once the requested action has executed, use the context, session, and proposed
 digest from the `apply` receipt. Unless the Goal

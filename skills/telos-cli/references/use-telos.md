@@ -103,20 +103,21 @@ $ telos apply SPEC.md --context personal
 requested reading-list
 
 Request   req_initial
-Status    queued
+Status    applying
 Action    create
 Session   sess_c7d2f0a4e8
 Proposed  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
-Current   not deployed yet
+Current   rev_initial
 Queue     1
 Context   personal
 Review    https://usetelos.ai/deployments/sess_c7d2f0a4e8?org=org_alice&request=req_initial&tab=change-requests
 ```
 
 With Change Requests enabled on Cloud, `requested` means the proposal was
-accepted into the queue. Open the review URL to follow it. Confirmation is off
-by default, so the initial request executes automatically when its turn
-arrives. To require confirmation before the first launch, add
+recorded. Confirmation is off by default, so an eligible request starts during
+`apply`; its receipt may already say `applying` or `applied`. The command does
+not wait for the agent to finish. Open the review URL to follow the request.
+To require confirmation before the first launch, add
 `--require-confirmation` to the creation command.
 
 Keep the session ID and proposed digest: the session identifies the Goal, and
@@ -204,21 +205,21 @@ $ telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal
 requested reading-list
 
 Request   req_update
-Status    queued
+Status    applied
 Action    update
 Session   sess_c7d2f0a4e8
 Proposed  sha256:3211e85fe81bd70aa74726d4ce0dc68d729d816826a21b62b18eb86074ff3317
-Current   rev_initial (unchanged)
-Queue     1
+Current   rev_updated
 Context   personal
 Review    https://usetelos.ai/deployments/sess_c7d2f0a4e8?org=org_alice&request=req_update&tab=change-requests
 ```
 
-The current revision keeps running while the request waits. At the front of
-the queue, Telos compares the proposed package with the then-current revision.
-If confirmation is enabled in Settings, an authorized user must choose
-**Confirm & Apply** in the dashboard. The requester can confirm their own
-request if authorized.
+This example applied during the CLI request. If a request must wait for
+earlier work or confirmation, the current revision keeps running. When a
+request reaches the front of the queue, Telos compares the proposed package
+with the then-current revision. If confirmation is enabled in Settings,
+an authorized user must choose **Confirm** in the dashboard, which starts
+the saved change. The requester can confirm their own request if authorized.
 
 When the request executes, the Goal, session, deployment, and history stay the
 same; only the immutable revision changes. Observe the new digest through

@@ -142,9 +142,11 @@ not something `SPEC.md` can create.
 
 Use the workflow in [Use Telos](use-telos.md), passing the same explicit context
 through every Cloud command. `apply` publishes an immutable spec package and,
-on Cloud versions with Change Requests enabled, submits a queued proposal.
+on Cloud versions with Change Requests enabled, submits a Change Request.
 The receipt identifies the context, proposed digest, stable session, and
-request review URL. A request may wait for confirmation before it executes.
+request review URL. An eligible request starts executing during `apply`; its
+receipt may already show `applying` or `applied`. Other requests wait for earlier
+work or dashboard confirmation. The CLI does not wait for the agent to finish.
 See [Change Requests](change-requests.md) for settings and initial-launch
 confirmation. Older Cloud servers return the immediate deployment receipt.
 

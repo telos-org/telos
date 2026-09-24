@@ -7,9 +7,10 @@ group: Concepts
 # Change Requests
 
 On Cloud versions with Change Requests enabled, `telos apply` publishes the
-immutable package and submits a request. The command returns immediately with
-`operation: "requested"` in JSON output. Submission does not mean the proposed
-revision is running or verified.
+immutable package and submits a request. The command returns after Cloud responds,
+with `operation: "requested"` in JSON output. Check `change_request.status` to
+see whether the request is waiting, applying, or already applied. The command
+does not wait for the agent to finish or verify the resulting revision.
 
 Your deployment's **Change Requests** tab contains proposals submitted through
 both the CLI and dashboard. Requests are processed in order, with one request
@@ -18,10 +19,17 @@ being confirmed or executed at a time. Later submissions wait in the queue.
 ## Require confirmation
 
 An organization owner can enable **Require confirmation before applying** on a
-deployment's Settings page. With confirmation off, each request executes
-automatically when its turn arrives. With it on, an authorized owner or admin
-must open the request and choose **Confirm & Apply**. An authorized requester
-can confirm their own proposal; there is no required reviewer count.
+deployment's Settings page. With confirmation off, an eligible request starts
+executing during `apply`. Requests behind earlier work wait for their turn.
+With confirmation on, an authorized owner or admin must open the request and
+choose **Confirm**. An authorized requester can confirm their own proposal;
+there is no required reviewer count.
+
+Confirming starts the saved change through the same deployment update path.
+For an available runtime, update and redeploy send the new spec before the
+confirmation response returns. Creation and restore retain their asynchronous
+lifecycles, and the existing deployment reconciler recovers interrupted or
+temporarily blocked work and advances the queue.
 
 To require confirmation before a new deployment's first launch:
 
@@ -62,15 +70,18 @@ Status    queued
 Action    update
 Session   sess_c7d2f0a4e8
 Proposed  sha256:3211e8...
-Current   rev_7 (unchanged)
+Current   rev_7
 Queue     2
 Context   @team-handle
 Review    https://usetelos.ai/deployments/sess_c7d2f0a4e8?org=org_team&request=req_42&tab=change-requests
 ```
 
 With `--json`, the receipt includes `context`, `operation`, `package`, `session`,
-`change_request`, and `review_url`. The session describes the existing
-deployment; its `ready` status does not apply to the proposed package.
+`change_request`, and `review_url`. The session describes the current deployment
+after Cloud processes the request. An eligible update may already report
+`status: "applied"` and show its new current revision. If the request is still
+queued or awaiting confirmation, the current deployment's `ready` status does
+not apply to the proposed package.
 
 `telos describe SESSION_ID --context @team-handle` displays pending requests
 separately from the current revision. Its JSON output includes

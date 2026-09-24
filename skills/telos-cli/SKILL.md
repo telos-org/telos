@@ -97,10 +97,12 @@ runtime.
    ```
 
 4. Inspect the receipt's `operation`. If it is `requested`, report the request
-   ID, status, proposed digest, and review URL. A queued or unconfirmed request
-   is not an applied revision: stop the deployment observation loop and return
-   the request to the user. Do not confirm through another credential, retry
-   apply, or treat the current deployment's `ready` as success of the proposal.
+   ID, status, proposed digest, and review URL. Check `change_request.status`:
+   the request may already be `applying` or `applied` when the command returns.
+   A queued or unconfirmed request is not an applied revision: stop the deployment
+   observation loop and return the request to the user. Do not confirm through
+   another credential, retry apply, or treat the current deployment's `ready`
+   as success of the proposal.
    For an executed revision, capture its session ID and digest and observe
    until that same revision becomes `ready`, or its state requires a decision:
 
@@ -179,8 +181,9 @@ Package versions are immutable, so changed content receives a new version.
 
 Report the spec, target, context, session ID, current revision and state, and
 the evidence behind the result. Distinguish work that was planned, applied,
-published, requested, updated, or deleted. A requested change remains pending
-until its recorded action executes; verification is a separate result.
+published, requested, updated, or deleted. The `requested` receipt operation
+identifies a Change Request; its status says whether execution is pending,
+underway, or applied. Verification is a separate result.
 
 ## References
 

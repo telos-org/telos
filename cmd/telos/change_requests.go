@@ -44,7 +44,7 @@ func printCloudChangeRequestReceipt(out io.Writer, result *cloud.SessionMutation
 	printSummaryField(out, "Session", deployment.ID)
 	printSummaryField(out, "Proposed", request.PackageDigest)
 	if deployment.CurrentRevisionID != "" {
-		printSummaryField(out, "Current", deployment.CurrentRevisionID+" (unchanged)")
+		printSummaryField(out, "Current", deployment.CurrentRevisionID)
 	} else if request.Action == "create" {
 		printSummaryField(out, "Current", "not deployed yet")
 	}

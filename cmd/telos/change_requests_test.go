@@ -49,13 +49,69 @@ func TestApplyCloudSessionPackageReturnsRequestWithoutPolling(t *testing.T) {
 	}
 	var out bytes.Buffer
 	printCloudChangeRequestReceipt(&out, result, "@acme", "https://app.example.com/review")
-	for _, want := range []string{"requested books", "Status    awaiting confirmation", "Current   rev_7 (unchanged)", "Proposed  sha256:new", "Review    https://app.example.com/review"} {
+	for _, want := range []string{"requested books", "Status    awaiting confirmation", "Current   rev_7", "Proposed  sha256:new", "Review    https://app.example.com/review"} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("receipt missing %q: %s", want, out.String())
 		}
 	}
 	if strings.Contains(out.String(), "ready") || strings.Contains(out.String(), "Logs") {
 		t.Fatalf("pending receipt implies new revision is active: %s", out.String())
+	}
+}
+
+func TestApplyCloudSessionPackageReportsInlineResultWithoutPolling(t *testing.T) {
+	for _, status := range []string{"applying", "applied"} {
+		t.Run(status, func(t *testing.T) {
+			var getCalls, putCalls int
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/capabilities":
+					_, _ = w.Write([]byte(`{"deployment_change_requests":true}`))
+				case "/api/deployments/sess_123":
+					if r.Method == http.MethodGet {
+						getCalls++
+						_, _ = w.Write([]byte(`{"id":"sess_123","package_ref":"@acme/books:1.0.0","current_revision_id":"rev_7","status":"ready"}`))
+						return
+					}
+					putCalls++
+					w.WriteHeader(http.StatusAccepted)
+					revisionID := "rev_8"
+					_ = json.NewEncoder(w).Encode(cloud.SessionMutationResult{
+						Outcome: "requested",
+						Deployment: &cloud.SessionRecord{
+							ID: "sess_123", Name: "books", CurrentRevisionID: revisionID, Status: "working",
+						},
+						ChangeRequest: &cloud.ChangeRequestRecord{
+							ID: "req_42", DeploymentID: "sess_123", Action: "update", Status: status,
+							PackageDigest: "sha256:new", ResultRevisionID: &revisionID,
+						},
+					})
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer srv.Close()
+			operation, result, err := applyCloudSessionPackage(cloud.NewClient(srv.URL, "token"), "books", "@acme/books:2.0.0", "sess_123", sessionRuntimeConfig{}, false, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if operation != "requested" || result.Deployment.CurrentRevisionID != "rev_8" || result.ChangeRequest.Status != status || putCalls != 1 || getCalls != 1 {
+				t.Fatalf("operation=%s result=%+v get=%d put=%d", operation, result, getCalls, putCalls)
+			}
+			var out bytes.Buffer
+			printCloudChangeRequestReceipt(&out, result, "@acme", "https://app.example.com/review")
+			for _, want := range []string{"requested books", "Status    " + status, "Current   rev_8", "Proposed  sha256:new"} {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("receipt missing %q: %s", want, out.String())
+				}
+			}
+			for _, unwanted := range []string{"unchanged", "rev_7", "ready"} {
+				if strings.Contains(out.String(), unwanted) {
+					t.Fatalf("receipt misrepresents inline execution: %s", out.String())
+				}
+			}
+		})
 	}
 }
 
