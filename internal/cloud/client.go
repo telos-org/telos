@@ -3,6 +3,7 @@ package cloud
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,7 @@ type PackageVersionRecord struct {
 }
 
 type Capabilities struct {
+	DeploymentPlans            bool `json:"deployment_plans"`
 	DeploymentChangeRequests   bool `json:"deployment_change_requests"`
 	DeploymentRevisionHistory  bool `json:"deployment_revision_history"`
 	DeploymentRevisionMessages bool `json:"deployment_revision_messages"`
@@ -83,13 +85,13 @@ type SessionRecord struct {
 }
 
 type SessionCreateOptions struct {
-	Name                string
-	PackageRef          string
-	AgentModel          string
-	AgentThinking       string
-	AgentTimeoutSec     *int
-	Inference           *InferenceSelection
-	RequireConfirmation *bool
+	Name                string              `json:"name"`
+	PackageRef          string              `json:"package_ref"`
+	AgentModel          string              `json:"agent_model,omitempty"`
+	AgentThinking       string              `json:"agent_thinking,omitempty"`
+	AgentTimeoutSec     *int                `json:"agent_timeout_sec,omitempty"`
+	Inference           *InferenceSelection `json:"inference,omitempty"`
+	RequireConfirmation *bool               `json:"require_confirmation,omitempty"`
 }
 
 type SessionUpdateOptions struct {
@@ -191,7 +193,9 @@ type Client struct {
 	OrgID    string
 	HTTP     *http.Client
 
-	contextName string
+	contextName    string
+	planArtifacts  bool
+	requestContext context.Context
 }
 
 type APIError struct {
@@ -219,6 +223,14 @@ func NewClient(endpoint, token string) *Client {
 		Token:    token,
 		HTTP:     &http.Client{Timeout: DefaultTimeout},
 	}
+}
+
+// WithContext returns a client whose requests stop when the operation is
+// canceled, without changing the original client's recovery requests.
+func (c *Client) WithContext(ctx context.Context) *Client {
+	copy := *c
+	copy.requestContext = ctx
+	return &copy
 }
 
 type resolvedContext struct {
@@ -348,7 +360,11 @@ func (c *Client) PublishPackageWithVisibility(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("POST", "/api/packages", body)
+	path := "/api/packages"
+	if c.planArtifacts {
+		path = "/api/deployment-plans/packages"
+	}
+	resp, err := c.do("POST", path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -438,7 +454,11 @@ func (c *Client) PublishSkillVersionWithVisibility(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("POST", "/api/skills", body)
+	path := "/api/skills"
+	if c.planArtifacts {
+		path = "/api/deployment-plans/skills"
+	}
+	resp, err := c.do("POST", path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -703,7 +723,14 @@ func (c *Client) doRawWithHeaders(method, path string, body []byte, contentType 
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, c.Endpoint+path, bodyReader)
+	ctx := c.requestContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.Endpoint+path, bodyReader)
 	if err != nil {
 		return nil, err
 	}

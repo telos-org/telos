@@ -13,34 +13,43 @@ type ChangeRequestActor struct {
 }
 
 type ChangeRequestRecord struct {
-	ID                  string              `json:"id"`
-	DeploymentID        string              `json:"deployment_id"`
-	Action              string              `json:"action"`
-	Status              string              `json:"status"`
-	RequireConfirmation bool                `json:"require_confirmation"`
-	RequestedBy         ChangeRequestActor  `json:"requested_by"`
-	ConfirmedBy         *ChangeRequestActor `json:"confirmed_by"`
-	CreatedAt           string              `json:"created_at"`
-	UpdatedAt           string              `json:"updated_at"`
-	ConfirmedAt         *string             `json:"confirmed_at"`
-	Message             string              `json:"message"`
-	PackageRef          string              `json:"package_ref"`
-	PackageDigest       string              `json:"package_digest"`
-	AuthoredRevisionID  *string             `json:"authored_revision_id"`
-	BaseRevisionID      *string             `json:"base_revision_id"`
-	SourceRevisionID    *string             `json:"source_revision_id"`
-	ResultRevisionID    *string             `json:"result_revision_id"`
-	OperationID         *string             `json:"operation_id"`
-	Error               *string             `json:"error"`
-	QueuePosition       *int                `json:"queue_position"`
-	CanConfirm          bool                `json:"can_confirm"`
-	CanDiscard          bool                `json:"can_discard"`
-	CanRetry            bool                `json:"can_retry"`
-	Force               bool                `json:"force"`
-	ReviewURL           string              `json:"review_url"`
+	ID                  string                  `json:"id"`
+	Mode                string                  `json:"mode"`
+	AutoConfirm         bool                    `json:"auto_confirm"`
+	ExpiresAt           *string                 `json:"expires_at"`
+	Preview             *DeploymentPlanPreview  `json:"preview"`
+	Creation            *DeploymentPlanCreation `json:"creation"`
+	DeploymentID        string                  `json:"deployment_id"`
+	Action              string                  `json:"action"`
+	Status              string                  `json:"status"`
+	RequireConfirmation bool                    `json:"require_confirmation"`
+	RequestedBy         ChangeRequestActor      `json:"requested_by"`
+	ConfirmedBy         *ChangeRequestActor     `json:"confirmed_by"`
+	CreatedAt           string                  `json:"created_at"`
+	UpdatedAt           string                  `json:"updated_at"`
+	ConfirmedAt         *string                 `json:"confirmed_at"`
+	Message             string                  `json:"message"`
+	PackageRef          string                  `json:"package_ref"`
+	PackageDigest       string                  `json:"package_digest"`
+	AuthoredRevisionID  *string                 `json:"authored_revision_id"`
+	BaseRevisionID      *string                 `json:"base_revision_id"`
+	SourceRevisionID    *string                 `json:"source_revision_id"`
+	SourceSnapshotID    *string                 `json:"source_snapshot_id"`
+	ResultRevisionID    *string                 `json:"result_revision_id"`
+	OperationID         *string                 `json:"operation_id"`
+	Error               *string                 `json:"error"`
+	QueuePosition       *int                    `json:"queue_position"`
+	CanConfirm          bool                    `json:"can_confirm"`
+	CanDiscard          bool                    `json:"can_discard"`
+	CanRetry            bool                    `json:"can_retry"`
+	Force               bool                    `json:"force"`
+	ReviewURL           string                  `json:"review_url"`
 }
 
 func (r ChangeRequestRecord) Pending() bool {
+	if r.Mode == "preview" {
+		return false
+	}
 	switch r.Status {
 	case "queued", "awaiting_confirmation", "confirmed", "applying":
 		return true

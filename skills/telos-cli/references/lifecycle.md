@@ -27,12 +27,11 @@ Persistent: SPEC.md → plan → apply → Goal/session/deployment → revision 
 Bounded:    local spec → run with a bound → run session → evidence
 ```
 
-`apply` returns after Cloud responds to the submission. With
-[Change Requests](change-requests.md), the receipt's operation is `requested`:
-the request's status may already be `applying` or `applied`, or it may be
-waiting for earlier work or dashboard confirmation. A queued proposal has
-not changed the current revision. The command does not wait for the agent
-to finish or verify the resulting revision.
+Cloud `plan` creates a preview without applying it; `plan --out=FILE` saves an
+immutable proposal for later confirmation. `apply SPEC.md` waits its turn,
+prepares a fresh plan, and asks for confirmation. `apply FILE` confirms the exact
+saved request. A successful apply receipt reports confirmed, applying, or applied
+work, not successful agent verification. See [Change Requests](change-requests.md).
 After execution, reconciliation continues in the background; `describe`
 reports the managed Goal state and pending requests separately.
 
@@ -77,12 +76,12 @@ displayed digest matches the receipt.
 
 ## Observe without waiting forever
 
-For a `requested` receipt, check `change_request.status`. If it is already
-`applied`, continue with the resulting revision below. Otherwise, follow its
-review URL to track the request. If it is queued or awaiting confirmation,
-the old revision's status does not describe the proposal. `describe --json`
-includes `pending_change_requests` separately. An initial creation still queued
-or awaiting confirmation has no current revision yet.
+For a saved plan's `requested` receipt, follow its review URL until an authorized
+owner or admin confirms it. If it is queued or awaiting confirmation, the old
+revision's status does not describe the proposal. `describe --json` includes
+`pending_change_requests` separately. An initial creation waiting for confirmation
+has no current revision yet. After apply returns, check the same request until
+its result revision is available; confirmation and agent verification are separate.
 
 Once the requested action has executed, use the context, session, and proposed
 digest from the `apply` receipt. Unless the Goal
@@ -119,8 +118,9 @@ The default view contains the 50 most recent activity rows:
 
 ## Move a persistent Goal forward
 
-Edit `SPEC.md`, bump its version, and compare the proposed contract with the
-deployed revision:
+Edit `SPEC.md` and compare the proposed contract with the deployed revision.
+A version bump is an optional label for a privately staged plan; publishing a
+changed named package with `telos push` still requires a new version:
 
 ```bash
 telos plan SPEC.md --session SESSION_ID --context CONTEXT

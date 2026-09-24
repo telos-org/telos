@@ -79,60 +79,43 @@ boundary between a desired outcome and an available platform capability.
 
 ## Preview the first revision
 
-`plan` validates the spec and shows where it will run without changing remote
-state:
+`plan` validates your spec and saves a preview in Cloud without deploying:
 
-```console
-$ telos plan SPEC.md --context personal
-Spec      reading-list
-Target    cloud
-Context   personal
-Path      /Users/alice/reading-list/SPEC.md
-Namespace ns-reading-list
-Hash      799e5c31172afb26
+```bash
+telos plan SPEC.md --context personal
 ```
 
-Confirm the target and context before continuing. The first plan has no
-deployed revision to compare, so it shows the Goal identity, namespace, and
-content hash. Check the proposed Cloud change before applying it.
+The terminal shows the proposed spec and skill changes and a dashboard link.
+The initial plan compares your spec with an empty deployment. Anyone with the
+appropriate access can inspect the preview, but it cannot be applied directly.
+Add `--out=change.plan` to save an immutable proposal for later confirmation.
 
 ## Apply it
 
-```console
-$ telos apply SPEC.md --context personal
-requested reading-list
-
-Request   req_initial
-Status    applying
-Action    create
-Session   sess_c7d2f0a4e8
-Proposed  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
-Current   rev_initial
-Queue     1
-Context   personal
-Review    https://usetelos.ai/deployments/sess_c7d2f0a4e8?org=org_alice&request=req_initial&tab=change-requests
+```bash
+telos apply SPEC.md --context personal
 ```
 
-With Change Requests enabled on Cloud, `requested` means the proposal was
-recorded. Confirmation is off by default, so an eligible request starts during
-`apply`; its receipt may already say `applying` or `applied`. The command does
-not wait for the agent to finish. Open the review URL to follow the request.
-To require confirmation before the first launch, add
-`--require-confirmation` to the creation command.
+This creates a regular request, waits for its turn, displays a fresh plan, and
+asks `Apply these changes? Type yes to confirm:`. Type `yes` to proceed, or confirm
+the same request through its dashboard link. For authorized noninteractive
+execution, use `--yes --json`. Fresh apply requires Apply permission: owners and
+admins have it in an organization, while members can propose with `plan --out`.
 
-Keep the session ID and proposed digest: the session identifies the Goal, and
-the digest identifies the exact contract submitted. Once the request is
-applied, `working` means Cloud is reconciling that revision. Follow progress
-with the context printed in the receipt:
+The receipt identifies the request, session, review URL, and resulting revision
+when available. Confirmed, applying, and applied are request states; they do not
+mean that the agent has finished verification. Once execution starts, follow
+the deployment using its session ID and selected context:
 
 ```bash
 telos describe sess_c7d2f0a4e8 --context personal --json
 telos logs sess_c7d2f0a4e8 --context personal
 ```
 
-[Change Requests](change-requests.md) explains the queue, confirmation, and
-JSON receipt. Older Cloud servers return an immediate `created` receipt.
-[The Goal lifecycle](lifecycle.md) gives the polling interval, stopping
+[Change Requests](change-requests.md) explains saved proposals, queue behavior,
+permissions, deployment settings, and JSON receipts. Cloud plan and apply
+require a compatible server; older servers return an upgrade error.
+[The Goal lifecycle](lifecycle.md) gives the observation deadline, stopping
 conditions, and evidence rules after execution starts.
 
 ## Observe `ready`
@@ -163,74 +146,55 @@ verifiable until that URL exists.
 
 ## Revise the same Goal
 
-Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump
-its version to `0.2.0`, and add “Every book records who added it” to the Goal.
-Plan against the existing session:
+Suppose the reading list now needs attribution. Edit the same `SPEC.md` and add
+“Every book records who added it” to the Goal. You can also increment its spec
+version to `0.2.0` to label that change. Save a proposal against the existing
+session:
 
-```console
-$ telos plan SPEC.md --session sess_c7d2f0a4e8 --context personal
-Spec      reading-list
-Target    cloud
-Context   personal
-Session   sess_c7d2f0a4e8
-Current   @alice/reading-list:0.1.0
-Confirm   off (queued changes apply automatically)
-Path      /Users/alice/reading-list/SPEC.md
-Namespace ns-reading-list
-Hash      9e8d86776e85ffbc
-Version   0.1.0 -> 0.2.0
+```bash
+telos plan SPEC.md --session sess_c7d2f0a4e8 --context personal --out=attribution.plan
+```
 
---- deployed/SPEC.md
-+++ proposed/SPEC.md
-@@ -1,6 +1,6 @@
- ---
- name: reading-list
--version: 0.1.0
-+version: 0.2.0
- platform: cloud
- ---
+The terminal and dashboard show the diff. For example:
 
-@@ -11,6 +11,7 @@
+```diff
  - `POST /books` adds a title.
  - `GET /books` returns the current list.
  - Books remain available when the application restarts.
 +- Every book records who added it.
 ```
 
-The session-aware plan identifies the deployed package and displays the
-contract change. Apply that new revision to the same session:
+The saved request preserves your spec, skill digests, and the baseline revision.
+Private plan artifacts receive content-addressed Registry versions; resubmitting
+a changed proposal does not require bumping the spec's version. Ordinary
+`telos push` still publishes immutable named package versions.
 
-```console
-$ telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal
-requested reading-list
+When you are ready, confirm the exact saved proposal:
 
-Request   req_update
-Status    applied
-Action    update
-Session   sess_c7d2f0a4e8
-Proposed  sha256:3211e85fe81bd70aa74726d4ce0dc68d729d816826a21b62b18eb86074ff3317
-Current   rev_updated
-Context   personal
-Review    https://usetelos.ai/deployments/sess_c7d2f0a4e8?org=org_alice&request=req_update&tab=change-requests
+```bash
+telos apply attribution.plan --context personal
 ```
 
-This example applied during the CLI request. If a request must wait for
-earlier work or confirmation, the current revision keeps running. When a
-request reaches the front of the queue, Telos compares the proposed package
-with the then-current revision. If confirmation is enabled in Settings,
-an authorized user must choose **Confirm** in the dashboard, which starts
-the saved change. The requester can confirm their own request if authorized.
+This command needs Apply permission and asks no additional question. You can
+instead confirm the request on its dashboard page. If another change has moved
+the deployment to a new revision, this saved request is stale: update your spec
+and create a new proposal. Telos does not merge specs.
 
-When the request executes, the Goal, session, deployment, and history stay the
-same; only the immutable revision changes. Observe the new digest through
-`working` to `ready`, then exercise the updated API behavior. Older Cloud
-servers return an immediate `updated` or `unchanged` receipt.
+Alternatively, `telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal`
+queues a new regular request, prepares its plan when it reaches the front, and
+asks for confirmation then. The current revision keeps reconciling while it
+waits. The Goal, session, deployment, and history stay the same when the new
+revision executes. Observe that revision through `working` to `ready`, then
+exercise the updated API behavior.
 
 ### Deploy without a restorable snapshot
 
-If the current revision has not been snapshotted, you will get a warning saying
-that deploying now means you won’t be able to restore its exact workspace and
-runtime state. To continue anyway, retry the update with `--force`:
+A confirmed request can wait for the current revision's snapshot before it
+executes. Wait for the snapshot to finish, or discard that unstarted request on
+its dashboard and create a new proposal with `--force`. Applying with this bypass
+can leave the previous revision without an exact workspace and runtime restore
+point. A second ordinary apply would queue behind the blocked first request; it
+does not change that request's frozen flags.
 
 ```bash
 telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal --force
@@ -239,7 +203,7 @@ telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal --force
 This bypass applies only to the missing-snapshot gate. Active operations,
 authorization, confirmation requirements, runtime availability, and
 stale-revision protection still apply. A queued request may wait for an active
-operation or snapshot to finish; `--force` never skips dashboard confirmation.
+operation or snapshot to finish; `--force` never supplies confirmation by itself.
 
 For another contract, continue with [Write a SPEC.md](goals.md). Use
 [Bounded runs](bounded-runs.md) for local work and

@@ -82,6 +82,9 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			requests := make(chan map[string]json.RawMessage, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveDeploymentPlanPrerequisites(w, r) {
+					return
+				}
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3":
 					_ = json.NewEncoder(w).Encode(map[string]string{
@@ -94,15 +97,17 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 					_, _ = w.Write([]byte(`{"connections":[{"id":"conn_rohan","name":"openai-rohan","provider":"chatgpt-codex","status":"connected"}]}`))
 				case r.Method == http.MethodGet && r.URL.Path == "/api/capabilities":
 					_, _ = w.Write([]byte(`{}`))
-				case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
+				case r.Method == http.MethodPost && r.URL.Path == "/api/deployment-plans":
 					var request map[string]json.RawMessage
 					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 						t.Errorf("decode deployment request: %v", err)
 						http.Error(w, "invalid request", http.StatusBadRequest)
 						return
 					}
-					requests <- request
-					_, _ = w.Write([]byte(`{"id":"sess_test","name":"demo","state":"provisioning"}`))
+					var create map[string]json.RawMessage
+					_ = json.Unmarshal(request["create"], &create)
+					requests <- create
+					_ = json.NewEncoder(w).Encode(testDeploymentPlan("apply", "applied"))
 				default:
 					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 					http.NotFound(w, r)
@@ -118,7 +123,7 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 				t.Fatal(err)
 			}
 			captureStdout(t, func() {
-				cmdApply(append([]string{"@telos/demo:1.2.3", "--json"}, tt.flags...))
+				cmdApply(append([]string{"@telos/demo:1.2.3", "--json", "--yes"}, tt.flags...))
 			})
 
 			var request map[string]json.RawMessage

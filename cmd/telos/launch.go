@@ -27,7 +27,11 @@ func cmdApply(args []string) {
 }
 
 func cmdLaunch(command, action string, args []string) {
-	fs := newCommandFlagSet(command, fmt.Sprintf("telos %s SPEC.md [flags]", command))
+	inputHelp := "SPEC.md"
+	if command == "apply" {
+		inputHelp = "SPEC.md|PLAN"
+	}
+	fs := newCommandFlagSet(command, fmt.Sprintf("telos %s %s [flags]", command, inputHelp))
 	workspace := fs.String("workspace", "", "Workspace directory for local specs")
 	sessionIDValue := ""
 	sessionID := &sessionIDValue
@@ -35,10 +39,13 @@ func cmdLaunch(command, action string, args []string) {
 	force := &forceValue
 	requireConfirmationValue := false
 	requireConfirmationFlag := &requireConfirmationValue
+	yes := false
 	if command == "apply" {
 		sessionID = fs.String("session", "", "Managed session ID to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
-		requireConfirmationFlag = fs.Bool("require-confirmation", false, "Require dashboard confirmation for a new Cloud deployment")
+		requireConfirmationFlag = fs.Bool("require-confirmation", false, "Require confirmation for future changes to a new Cloud deployment")
+		fs.BoolVar(&yes, "yes", false, "Confirm a new Cloud plan automatically; requires Apply permission")
+		fs.BoolVar(&yes, "y", false, "Shorthand for --yes")
 	}
 	modelHelp := "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	if command == "apply" {
@@ -71,7 +78,11 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	requireArgCount(fs, 1, "one SPEC.md")
+	if command == "apply" {
+		requireArgCount(fs, 1, "one SPEC.md or saved plan file")
+	} else {
+		requireArgCount(fs, 1, "one SPEC.md")
+	}
 	if command == "apply" && *sessionID != "" && *workspace != "" {
 		fmt.Fprintln(os.Stderr, "error: --workspace can only seed a new session; it cannot be used with --session")
 		os.Exit(1)
@@ -99,6 +110,28 @@ func cmdLaunch(command, action string, args []string) {
 		}
 		runCloudChildSession(specArg, ctx, untilConfig, runtimeConfig, *jsonOut, action)
 		return
+	}
+	if command == "apply" && hasLocalSpec {
+		bookmark, err := readSavedDeploymentPlan(specPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if bookmark != nil {
+			if _, inSession := localRootSessionID(); inSession {
+				fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session")
+				os.Exit(1)
+			}
+			if flagNamesSet(fs, "session", "workspace", "force", "require-confirmation", "model", "thinking", "max-cost-usd") {
+				fmt.Fprintln(os.Stderr, "error: a saved plan freezes its target and inputs; --session, --workspace, --force, --require-confirmation, --model, --thinking, and --max-cost-usd cannot be used with it")
+				os.Exit(2)
+			}
+			if err := runSavedCloudApply(bookmark, contextOverride, *jsonOut); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
 	}
 
 	platform := ""
@@ -180,15 +213,14 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: cloud runtime config flags can only seed a new session; they cannot update an existing session")
 			os.Exit(1)
 		}
-		applyCloudControl(
-			specArg,
-			*sessionID,
-			runtimeConfig,
-			*force,
-			*jsonOut,
-			contextOverride,
-			requireConfirmation,
-		)
+		if err := runCloudApply(cloudPlanInput{
+			specArg: specArg, sessionID: *sessionID, runtimeConfig: runtimeConfig,
+			force: *force, contextOverride: contextOverride, requireConfirmation: requireConfirmation,
+			mode: "apply", autoConfirm: yes,
+		}, *jsonOut); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if !hasLocalSpec {
@@ -428,150 +460,6 @@ func runCloudChildSession(
 	printSessionReceipt(os.Stdout, action, session)
 }
 
-func applyCloudControl(
-	specArg string,
-	sessionID string,
-	runtimeConfig sessionRuntimeConfig,
-	force bool,
-	jsonOut bool,
-	contextOverride string,
-	requireConfirmation *bool,
-) {
-	var reference *packageReference
-	if strings.HasPrefix(strings.TrimSpace(specArg), "@") {
-		parsed, err := parsePackageReference(specArg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		reference = &parsed
-	}
-	control, err := cloud.ControlClientForContext(contextOverride)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if requireConfirmation != nil {
-		capabilities, err := control.DeploymentCapabilities()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		if !capabilities.DeploymentChangeRequests {
-			fmt.Fprintln(os.Stderr, "error: this Cloud server does not support --require-confirmation; update Cloud before using this option")
-			os.Exit(1)
-		}
-	}
-	packageName := ""
-	var packageRecord *cloud.PackageVersionRecord
-	if reference != nil {
-		packageName = reference.name
-		packageRecord, err = registryPackageForApply(control, *reference)
-	} else {
-		var pkg *specPackage
-		pkg, err = packageSpec(specArg, contextOverride)
-		if err == nil {
-			packageName = pkg.name
-			packageRecord, err = pushSpecPackage(control, pkg, "")
-		}
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	operation, result, err := applyCloudSessionPackage(
-		control,
-		packageName,
-		packageRecord.Ref,
-		sessionID,
-		runtimeConfig,
-		force,
-		requireConfirmation,
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if jsonOut {
-		receipt := map[string]any{
-			"context":   control.ContextName(),
-			"operation": operation,
-			"package":   packageRecord,
-			"session":   result.Deployment,
-		}
-		if result.ChangeRequest != nil {
-			receipt["change_request"] = result.ChangeRequest
-			receipt["review_url"] = cloudRequestReviewURL(control, *result.ChangeRequest)
-		}
-		printJSON(receipt)
-		return
-	}
-	if result.ChangeRequest != nil {
-		printCloudChangeRequestReceipt(os.Stdout, result, control.ContextName(), cloudRequestReviewURL(control, *result.ChangeRequest))
-		return
-	}
-	printCloudSessionReceiptForContext(
-		os.Stdout,
-		operation,
-		result.Deployment,
-		control.ContextName(),
-	)
-}
-
-func applyCloudSessionPackage(
-	control *cloud.Client,
-	name string,
-	packageRef string,
-	sessionID string,
-	runtimeConfig sessionRuntimeConfig,
-	force bool,
-	requireConfirmation *bool,
-) (string, *cloud.SessionMutationResult, error) {
-	if sessionID != "" {
-		if requireConfirmation != nil {
-			return "", nil, fmt.Errorf("--require-confirmation can only configure a new Cloud deployment")
-		}
-		if !isCloudApplyID(sessionID) {
-			return "", nil, fmt.Errorf("invalid cloud session id %q", sessionID)
-		}
-		current, err := control.GetSession(sessionID)
-		if err != nil {
-			return "", nil, err
-		}
-		result, err := control.UpdateSession(sessionID, cloud.SessionUpdateOptions{
-			PackageRef:                packageRef,
-			Force:                     force,
-			ExpectedCurrentRevisionID: current.CurrentRevisionID,
-		})
-		if err != nil {
-			return "updated", nil, actionableDeploymentUpdateError(err, force)
-		}
-		if result.ChangeRequest != nil {
-			return "requested", result, nil
-		}
-		if result.Deployment.PackageRef == current.PackageRef && result.Deployment.CurrentRevisionID == current.CurrentRevisionID {
-			return "unchanged", result, nil
-		}
-		return "updated", result, nil
-	}
-
-	inference, err := resolveCloudInference(control, runtimeConfig.Model)
-	if err != nil {
-		return "", nil, err
-	}
-	result, err := control.CreateSession(cloud.SessionCreateOptions{
-		Name:                name,
-		PackageRef:          packageRef,
-		AgentThinking:       runtimeConfig.Thinking,
-		Inference:           inference,
-		RequireConfirmation: requireConfirmation,
-	})
-	if err == nil && result.ChangeRequest != nil {
-		return "requested", result, nil
-	}
-	return "created", result, err
-}
-
 func actionableDeploymentUpdateError(err error, force bool) error {
 	if force {
 		return err
@@ -620,33 +508,6 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	if session.TotalCostUSD != nil {
 		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	}
-}
-
-func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.SessionRecord) {
-	printCloudSessionReceiptForContext(out, operation, session, "")
-}
-
-func printCloudSessionReceiptForContext(
-	out io.Writer,
-	operation string,
-	session *cloud.SessionRecord,
-	contextName string,
-) {
-	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
-	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
-	printSummaryField(out, "Session", session.ID)
-	printSummaryField(out, "Revision", session.PackageDigest)
-	if contextName != "" {
-		printSummaryField(out, "Context", contextName)
-	}
-	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
-		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
-	}
-	logsCommand := fmt.Sprintf("telos logs %s", session.ID)
-	if contextName != "" {
-		logsCommand = fmt.Sprintf("telos logs --context %s %s", contextName, session.ID)
-	}
-	printSummaryField(out, "Logs", logsCommand)
 }
 
 func sessionKindForCommand(command string) sessionapi.SessionKind {

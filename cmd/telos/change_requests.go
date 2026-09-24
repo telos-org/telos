@@ -34,29 +34,6 @@ func cloudRequestReviewURL(control *cloud.Client, request cloud.ChangeRequestRec
 	return cloudChangeRequestURL(control, request.DeploymentID, request.ID)
 }
 
-func printCloudChangeRequestReceipt(out io.Writer, result *cloud.SessionMutationResult, contextName, reviewURL string) {
-	request := result.ChangeRequest
-	deployment := result.Deployment
-	fmt.Fprintf(out, "requested %s\n\n", deployment.Name)
-	printSummaryField(out, "Request", request.ID)
-	printSummaryField(out, "Status", changeRequestStatus(request.Status))
-	printSummaryField(out, "Action", request.Action)
-	printSummaryField(out, "Session", deployment.ID)
-	printSummaryField(out, "Proposed", request.PackageDigest)
-	if deployment.CurrentRevisionID != "" {
-		printSummaryField(out, "Current", deployment.CurrentRevisionID)
-	} else if request.Action == "create" {
-		printSummaryField(out, "Current", "not deployed yet")
-	}
-	if request.QueuePosition != nil {
-		printSummaryField(out, "Queue", fmt.Sprint(*request.QueuePosition))
-	}
-	if contextName != "" {
-		printSummaryField(out, "Context", contextName)
-	}
-	printSummaryField(out, "Review", reviewURL)
-}
-
 func changeRequestStatus(status string) string {
 	switch status {
 	case "awaiting_confirmation":

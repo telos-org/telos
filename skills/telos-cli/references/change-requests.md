@@ -1,123 +1,184 @@
 ---
 title: Change Requests
-description: Queue deployment changes and optionally confirm them before execution.
+description: Preview changes, save proposals for review, and confirm an exact deployment change.
 group: Concepts
 ---
 
 # Change Requests
 
-On Cloud versions with Change Requests enabled, `telos apply` publishes the
-immutable package and submits a request. The command returns after Cloud responds,
-with `operation: "requested"` in JSON output. Check `change_request.status` to
-see whether the request is waiting, applying, or already applied. The command
-does not wait for the agent to finish or verify the resulting revision.
+Cloud plans show the proposed spec and pinned skill changes in your terminal
+and provide a dashboard link. Confirmation authorizes the agent to work toward
+the proposed spec. It does not approve the implementation that the agent will
+build. The current revision can keep reconciling while a proposal waits.
 
-Your deployment's **Change Requests** tab contains proposals submitted through
-both the CLI and dashboard. Requests are processed in order, with one request
-being confirmed or executed at a time. Later submissions wait in the queue.
+Every organization member can plan changes for deployments they can access.
+Only owners and admins can apply them. An authorized requester can confirm
+their own proposal; there is no required number of independent reviewers.
+Cloud enforces the same permission checks for API tokens and dashboard users.
 
-## Require confirmation
-
-An organization owner can enable **Require confirmation before applying** on a
-deployment's Settings page. With confirmation off, an eligible request starts
-executing during `apply`. Requests behind earlier work wait for their turn.
-With confirmation on, an authorized owner or admin must open the request and
-choose **Confirm**. An authorized requester can confirm their own proposal;
-there is no required reviewer count.
-
-Confirming starts the saved change through the same deployment update path.
-For an available runtime, update and redeploy send the new spec before the
-confirmation response returns. Creation and restore retain their asynchronous
-lifecycles, and the existing deployment reconciler recovers interrupted or
-temporarily blocked work and advances the queue.
-
-To require confirmation before a new deployment's first launch:
-
-```bash
-telos apply SPEC.md --context @team-handle --require-confirmation
-```
-
-The deployment identity is reserved, but no runtime or current revision exists
-until the initial request executes. While it waits, `describe` shows that no
-revision is deployed; `plan --session` and `pull` have no deployed revision to
-read. This option requires a Cloud server with
-Change Requests enabled and the server's permission to configure the setting.
-It cannot be combined with `--session` or a local apply. Use the deployment's
-Settings page to change an existing deployment's policy.
-
-Disabling the setting does not automatically release a request that already
-requires confirmation. Confirmation is available in the dashboard, not through
-an API token or a CLI approval command.
-
-## Submit an update
+## Preview without applying
 
 ```bash
 telos plan SPEC.md --session SESSION_ID --context @team-handle
+```
+
+This creates a preview-only plan in Cloud, prints the proposed changes, and
+provides a preview dashboard link. Anyone with permission to view the deployment
+can inspect it. A preview cannot be applied, even by an owner. Nothing deploys.
+Omit `--session` to preview creating a new deployment.
+
+Planning uploads private, content-addressed spec and skill artifacts to the
+Registry. It does not publish or overwrite a reusable package version. Existing
+Registry references can also be planned directly:
+
+```bash
+telos plan @scope/package-name:0.1.0 --context @team-handle
+```
+
+## Save a proposal for review
+
+```bash
+telos plan SPEC.md --session SESSION_ID --context @team-handle --out=change.plan
+```
+
+This saves an immutable Change Request, prints its changes and dashboard link,
+and writes a small JSON reference to `change.plan`. The command exits without
+applying. The deployment's **Change Requests** tab contains the saved proposal.
+Share its link with an owner or admin, who can confirm it on the dashboard.
+The reviewer does not need the local file.
+
+The filename and extension are your choice. An illustrative file is:
+
+```json
+{
+  "version": 1,
+  "change_request_id": "cr_example",
+  "deployment_id": "sess_example",
+  "context": "@team-handle",
+  "org_id": "org_team",
+  "api_endpoint": "https://api.usetelos.ai"
+}
+```
+
+`version` identifies the reference file format. The exact proposal and baseline
+revision live in Cloud. The file contains no token or secret values, and holding
+it grants no permission. Telos refuses to overwrite an existing output file.
+Removing the local file does not discard the Cloud request.
+
+For a new deployment, `--model`, `--thinking`, and `--require-confirmation`
+are frozen when you create its plan. The last option configures confirmation
+for subsequent deployment changes; saved proposals always require confirmation.
+For an update, `--force` records the snapshot bypass in the saved proposal.
+The review output shows frozen creation settings and any snapshot bypass.
+
+## Confirm a saved proposal
+
+```bash
+telos apply change.plan --context @team-handle
+```
+
+This command is the confirmation: it does not ask for another `yes` and does not
+prepare a new plan. Telos checks your Apply permission, the selected API endpoint
+and organization, and the saved request's validity. Local edits made after saving
+the proposal are not included. Mutation flags such as `--session`, `--model`,
+and `--force` cannot change the saved inputs.
+
+An owner or admin can instead confirm the same request on its dashboard page.
+A retry or simultaneous CLI and dashboard confirmation uses the same request
+and cannot create a second revision. A failed or discarded request returns an
+error rather than reporting that it applied.
+
+## Plan and apply together
+
+```bash
 telos apply SPEC.md --session SESSION_ID --context @team-handle
 ```
 
-The session-aware plan shows whether confirmation is required. It previews
-the currently deployed spec; the final request preview is prepared when the
-request reaches the front of the queue, after earlier changes have executed.
-
-An illustrative receipt is:
+This creates a new regular request and waits for its turn. Once it reaches the
+front of the deployment's queue, Cloud prepares a plan against the then-current
+revision. The CLI prints that plan and its dashboard link, then asks:
 
 ```text
-requested reading-list
-
-Request   req_42
-Status    queued
-Action    update
-Session   sess_c7d2f0a4e8
-Proposed  sha256:3211e8...
-Current   rev_7
-Queue     2
-Context   @team-handle
-Review    https://usetelos.ai/deployments/sess_c7d2f0a4e8?org=org_team&request=req_42&tab=change-requests
+Apply these changes? Type yes to confirm:
 ```
 
-With `--json`, the receipt includes `context`, `operation`, `package`, `session`,
-`change_request`, and `review_url`. The session describes the current deployment
-after Cloud processes the request. An eligible update may already report
-`status: "applied"` and show its new current revision. If the request is still
-queued or awaiting confirmation, the current deployment's `ready` status does
-not apply to the proposed package.
+Type `yes`, or confirm the same request on the dashboard. Either confirms the
+request. Cloud applies it through the existing deployment update pipeline when
+the deployment is available. The CLI returns its
+confirmed, applying, or applied status; it does not wait for the agent's
+verification. A member without Apply permission is rejected before uploading
+artifacts or creating this request, with guidance to use `plan --out` instead.
 
-`telos describe SESSION_ID --context @team-handle` displays pending requests
-separately from the current revision. Its JSON output includes
-`pending_change_requests`. Open the receipt's review URL to inspect the request
-and its result. Once applied, verify the resulting revision using
-[the Goal lifecycle](lifecycle.md).
+Typing anything other than `yes`, reaching end of input, or pressing Ctrl-C
+while waiting for a turn or interactive confirmation attempts to discard the
+request and release its turn. A lost
+network connection can prevent cancellation; the error includes the dashboard
+link so you can inspect or discard the request there. Closing the terminal after
+confirmation does not undo an executing change.
 
-## Understand the preview and history
+## Agents and CI
 
-A request preserves its exact spec package, skill digests, and action inputs.
-When its turn arrives, its preview compares those inputs with the current
-revision. Queued proposals are not merged: an older proposal can remove an
-earlier request's changes, and that removal appears in its preview.
+`--yes` (or `-y`) confirms a fresh plan automatically when its turn arrives.
+It does not grant Apply permission or bypass stale-revision checks.
 
-If the reviewed baseline changes before execution, the request becomes
-outdated. Update the proposal and submit a new request. Edited package content
-needs a new registry version. Discarding a request does not delete its already
-published package.
+```bash
+# Submit a proposal for review, without prompting or deploying.
+telos plan SPEC.md --session SESSION_ID --context @team-handle --out=change.plan --json
 
-The same confirmation rule covers initial deployment, spec and skill updates,
-historical revision redeploys, and snapshot restores. Restores add a revision;
-they do not erase history. Local draft restoration, network settings, secret
-rotation, sharing, and deletion are separate actions.
+# Confirm that exact proposal, when your credentials allow applying.
+telos apply change.plan --context @team-handle --json
 
-Confirmation authorizes the agent to work toward the proposed spec or perform
-the recorded deployment action. It does not approve a finished implementation.
-The existing revision can keep reconciling while requests wait. Applied,
-verification passed, and snapshot available are separate results.
+# Prepare and confirm a new proposal, when authorized.
+telos apply SPEC.md --session SESSION_ID --context @team-handle --yes --json
+```
 
-`--force` only expresses the existing snapshot bypass for an update. It does
-not skip confirmation, permission checks, or stale-revision protection.
+`--json` never prompts and keeps stdout machine-readable. A fresh Cloud apply
+requires `--yes` when stdin or the prompt stream is not a terminal, or whenever
+`--json` is set. Otherwise it fails before uploads or request creation. A terminal
+check detects whether prompting is possible, not whether the caller is human.
+Use a member's token when an agent should propose changes that an admin reviews.
 
-## Older Cloud servers
+JSON receipts include `operation`, `context`, `session_id`, `change_request`, and
+`review_url`. New plans also include `package`; saved plans include `plan_file`.
+The request includes its immutable preview, mode, status, expiry, and resulting
+revision when one exists. A queued regular request has no prepared preview yet.
 
-When Change Requests are unavailable, ordinary apply retains the existing
-`created`, `updated`, or `unchanged` receipt. `--require-confirmation` fails
-before publishing or creating a deployment rather than silently deploying
-without the requested protection. A failure to read server capabilities is
-also reported as an error.
+## Queues and conflicting proposals
+
+Regular `apply SPEC.md` requests take turns. If Alice is waiting for confirmation,
+Ben's regular apply waits before planning. Ben's plan uses the revision present
+when his turn arrives. Confirmation holds the turn until the request executes,
+is discarded, or expires.
+
+Saved requests wait outside that queue. Alice and Ben can both save plans based
+on Revision 7. If Alice applies hers, Ben's saved proposal is discarded as stale.
+Ben must incorporate any desired changes into his spec and create a new request.
+Telos does not merge proposals or carry an old confirmation to new content.
+
+A saved plan may be prepared while a regular apply is waiting, but it cannot
+apply while another request owns the deployment's turn. Any later deployment
+revision can make that saved plan stale, including redeploy or restore. Request
+expiry is displayed in the receipt and dashboard; expiry never approves a change.
+
+## Deployment settings and results
+
+An organization owner can enable **Require confirmation before applying** in a
+deployment's Settings page. This protects dashboard deployment changes such as
+updates, redeploys, and restores. Turning it off does not release proposals that
+already require confirmation, and never gives members Apply permission.
+CLI saved plans and interactive apply retain their explicit confirmation flows.
+
+`--force` only records permission to bypass the missing-snapshot gate. It does
+not bypass confirmation, permissions, active operations, or baseline checks.
+If an unstarted request is already waiting for a snapshot, wait for it or discard
+it on the dashboard before submitting a new proposal with `--force`. A second
+regular apply otherwise waits behind the first; saved inputs cannot be edited.
+An applied request, successful verification, and an available snapshot are
+separate results. Use `telos describe SESSION_ID --context @team-handle` and
+[the Goal lifecycle](lifecycle.md) to follow the resulting revision.
+
+Cloud plan and apply require a server advertising deployment plan support. Older
+servers produce an upgrade error; the CLI does not fall back to immediate
+unreviewed deployment. Local `platform: local` plans remain local, do not provide
+a dashboard link, and reject `--out`. Local apply keeps its existing noninteractive
+behavior; `--yes` is accepted but adds no permission or new prompt.

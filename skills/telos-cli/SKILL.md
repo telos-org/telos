@@ -62,8 +62,7 @@ For model selection and `--thinking` on `apply` or `run`, read
 
 ## Authorization
 
-Before `run`, `apply`, `push`, or `delete`, present the resolved action and
-target to the user and obtain approval. Include the spec and workspace for a
+Before `run`, `apply`, `push`, or `delete`, use the user's existing authorization when it covers the resolved action and target. Otherwise, present them and obtain approval. Include the spec and workspace for a
 run, the session and context for an apply or delete, and the scope and package
 version for a push. `run` and `apply` may spend money. Never infer a session,
 context, scope, package version, or destructive target.
@@ -82,29 +81,39 @@ runtime.
 
 1. Write the smallest `platform: cloud` spec that states the outcome,
    meaningful constraints, and observable acceptance evidence.
-2. Choose the Cloud context explicitly and preview without changing remote
-   state. Replace `CONTEXT` with `personal` or the intended `@team-handle`:
+2. Choose the Cloud context explicitly and create a saved proposal. Replace
+   `CONTEXT` with `personal` or the intended `@team-handle`:
 
    ```bash
-   telos plan SPEC.md --context CONTEXT
+   telos plan SPEC.md --context CONTEXT --out=change.plan --json
    ```
 
-3. Confirm that the plan shows the intended target and context. Present that
-   resolved Cloud mutation to the user, obtain approval, then apply it:
+   Cloud planning uploads private Registry artifacts and creates a remote plan;
+   it does not deploy. Without `--out`, the plan is preview-only and cannot be
+   applied. Local plans remain local and reject `--out`.
+
+3. Present the proposal's context, request ID, and review URL. A member can submit
+   this proposal but only an owner or admin can apply it. If someone else must
+   review it, return the link and stop. Do not escalate to another credential.
+   When the user has authorized applying this exact proposal and your credential
+   has Apply permission, confirm it without another terminal prompt:
 
    ```bash
-   telos apply SPEC.md --context CONTEXT
+   telos apply change.plan --context CONTEXT --json
    ```
 
-4. Inspect the receipt's `operation`. If it is `requested`, report the request
-   ID, status, proposed digest, and review URL. Check `change_request.status`:
-   the request may already be `applying` or `applied` when the command returns.
-   A queued or unconfirmed request is not an applied revision: stop the deployment
-   observation loop and return the request to the user. Do not confirm through
-   another credential, retry apply, or treat the current deployment's `ready`
-   as success of the proposal.
-   For an executed revision, capture its session ID and digest and observe
-   until that same revision becomes `ready`, or its state requires a decision:
+   Alternatively, for an authorized fresh spec, use `telos apply SPEC.md --yes
+   --json --context CONTEXT`. This takes a queue turn, prepares a fresh plan, and
+   confirms automatically. `-y` is shorthand for `--yes`. Never infer permission
+   from the lack of a terminal. Fresh Cloud apply without `--yes` requires an
+   interactive terminal and rejects `--json` before uploads or request creation.
+   Do not pipe `yes` to work around that check.
+
+4. Inspect `change_request.status`. Saved requests return `operation: "requested"`
+   and await confirmation; do not treat the current deployment's `ready` state
+   as success of that proposal. Applied/confirmed/applying receipts identify
+   authorized work, not completed verification. Capture the session ID and
+   resulting revision/digest and observe that same revision:
 
    ```bash
    telos describe SESSION_ID --context CONTEXT --json
@@ -114,39 +123,49 @@ runtime.
 5. Verify the live behavior promised by the spec. Submission, a running
    process, and old green evidence are not completion of the current revision.
 
-Revise the same Goal by editing `SPEC.md`, bumping its version, and applying to
-the existing session:
+Revise the same Goal by editing `SPEC.md` and applying to the existing session.
+You may bump the spec version as a human-readable label; private plan artifacts
+use digest-derived Registry versions and do not require a version bump:
 
 ```bash
 telos plan SPEC.md --session SESSION_ID --context CONTEXT
-telos apply SPEC.md --session SESSION_ID --context CONTEXT
+telos apply SPEC.md --session SESSION_ID --context CONTEXT --yes --json
 ```
 
-A healthy revision may still be waiting for its restorable snapshot. If that
-snapshot gate rejects the update, do not bypass it silently. Tell the user:
+A healthy revision may still be waiting for its restorable snapshot. A confirmed
+request can wait at this gate without executing. Prefer waiting for the snapshot.
+If the user wants to bypass it, explain:
 
 > The current revision has not been snapshotted.
 >
 > Deploying now means you won’t be able to restore its exact workspace and
 > runtime state.
 
-Obtain explicit approval for that loss, then retry the same Cloud session
-update with `--force`:
+Use explicit authorization for that loss. If an earlier unstarted request is
+blocking the deployment, have it discarded on its dashboard first; submitting a
+second regular apply would only queue behind it. Then create a new proposal with
+`--force` (a saved request cannot be changed to add the flag):
 
 ```bash
-telos apply SPEC.md --session SESSION_ID --context CONTEXT --force
+telos apply SPEC.md --session SESSION_ID --context CONTEXT --force --yes --json
 ```
 
 `--force` is only valid for an existing Cloud session update. It bypasses this
 snapshot gate only; it does not bypass authorization, active operations,
 runtime availability, confirmation requirements, or stale-revision protection.
 
-For a user-authorized requirement to confirm the initial launch, add
-`--require-confirmation` when creating a new Cloud deployment. This flag is
-create-only; do not use it to override an existing deployment's policy.
-Confirmation happens in the dashboard, and an authorized requester can confirm
-their own request. Read [Change Requests](references/change-requests.md) before
-working with confirmation settings, queued submissions, or their receipts.
+Saved plans freeze the proposal and baseline. A different deployment revision
+makes them stale; update the spec and create a new request instead of retrying
+confirmation with changed inputs. Regular apply waits in order before planning;
+saved plans wait outside that queue. No request automatically merges other work.
+A saved file is only a reference and grants no access. Check its context/API
+binding; never change a file's endpoint to redirect a credential.
+
+`--require-confirmation` on a create plan/apply configures subsequent deployment
+changes; it does not add an independent reviewer requirement. Authorized users
+can confirm through the dashboard or CLI, including their own requests.
+Read [Change Requests](references/change-requests.md) for the full contract,
+queue behavior, cancellation, and immutable file format.
 
 [Use Telos](references/use-telos.md) follows this loop with one service.
 [The Goal lifecycle](references/lifecycle.md) gives a bounded observation
@@ -170,7 +189,8 @@ Inside a Telos session, the same command creates a linked child session; see
 
 | Effect | Commands |
 | --- | --- |
-| Inspect state | `plan`, `list`, `describe`, `logs` |
+| Inspect state | Local `plan`, `list`, `describe`, `logs` |
+| Upload private artifacts and record a preview or saved proposal without deploying | Cloud `plan`, `plan --out=FILE` |
 | Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context` |
 | Start bounded local execution; may spend money | `run` |
 | Publish or change remote state; `apply` may spend money | `apply`, `push`, `delete` |
@@ -182,8 +202,8 @@ Package versions are immutable, so changed content receives a new version.
 Report the spec, target, context, session ID, current revision and state, and
 the evidence behind the result. Distinguish work that was planned, applied,
 published, requested, updated, or deleted. The `requested` receipt operation
-identifies a Change Request; its status says whether execution is pending,
-underway, or applied. Verification is a separate result.
+identifies an unconfirmed saved Change Request; confirmed, applying, and applied
+receipts report its later execution state. Verification is a separate result.
 
 ## References
 
