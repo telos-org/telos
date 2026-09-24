@@ -140,15 +140,16 @@ Use a member's token when an agent should propose changes that an admin reviews.
 
 JSON receipts include `operation`, `context`, `session_id`, `change_request`, and
 `review_url`. New plans also include `package`; saved plans include `plan_file`.
-The request includes its immutable preview, mode, status, expiry, and resulting
+The request includes its immutable preview, mode, status, and resulting
 revision when one exists. A queued regular request has no prepared preview yet.
 
 ## Queues and conflicting proposals
 
 Regular `apply SPEC.md` requests take turns. If Alice is waiting for confirmation,
 Ben's regular apply waits before planning. Ben's plan uses the revision present
-when his turn arrives. Confirmation holds the turn until the request executes,
-is discarded, or expires.
+when his turn arrives. Waiting for confirmation holds the turn until the request
+executes or is discarded. Requests do not expire, so discard an abandoned regular
+apply on the dashboard to let the next request proceed.
 
 Saved requests wait outside that queue. Alice and Ben can both save plans based
 on Revision 7. If Alice applies hers, Ben's saved proposal is discarded as stale.
@@ -157,8 +158,8 @@ Telos does not merge proposals or carry an old confirmation to new content.
 
 A saved plan may be prepared while a regular apply is waiting, but it cannot
 apply while another request owns the deployment's turn. Any later deployment
-revision can make that saved plan stale, including redeploy or restore. Request
-expiry is displayed in the receipt and dashboard; expiry never approves a change.
+revision can make that saved plan stale, including redeploy or restore. Saved
+plans and previews have no time-based expiry.
 
 ## Deployment settings and results
 

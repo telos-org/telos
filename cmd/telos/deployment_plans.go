@@ -527,9 +527,6 @@ func printDeploymentPlan(out io.Writer, control *cloud.Client, request *cloud.Ch
 		printSummaryField(out, "Snapshot", "bypass allowed (--force)")
 		fmt.Fprintln(out, "The current revision may not have a restore point when this change applies.")
 	}
-	if request.ExpiresAt != nil {
-		printSummaryField(out, "Expires", *request.ExpiresAt)
-	}
 	if request.QueuePosition != nil {
 		printSummaryField(out, "Queue", fmt.Sprint(*request.QueuePosition))
 	}

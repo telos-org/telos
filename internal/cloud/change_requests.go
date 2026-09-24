@@ -16,7 +16,6 @@ type ChangeRequestRecord struct {
 	ID                  string                  `json:"id"`
 	Mode                string                  `json:"mode"`
 	AutoConfirm         bool                    `json:"auto_confirm"`
-	ExpiresAt           *string                 `json:"expires_at"`
 	Preview             *DeploymentPlanPreview  `json:"preview"`
 	Creation            *DeploymentPlanCreation `json:"creation"`
 	DeploymentID        string                  `json:"deployment_id"`

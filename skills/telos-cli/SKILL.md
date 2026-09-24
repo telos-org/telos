@@ -157,7 +157,9 @@ runtime availability, confirmation requirements, or stale-revision protection.
 Saved plans freeze the proposal and baseline. A different deployment revision
 makes them stale; update the spec and create a new request instead of retrying
 confirmation with changed inputs. Regular apply waits in order before planning;
-saved plans wait outside that queue. No request automatically merges other work.
+saved plans wait outside that queue. Plans and Change Requests do not expire.
+An abandoned regular apply holds its turn until it is applied or discarded.
+No request automatically merges other work.
 A saved file is only a reference and grants no access. Check its context/API
 binding; never change a file's endpoint to redirect a credential.
 
