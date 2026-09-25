@@ -223,7 +223,7 @@ func TestRenderProverTask(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: render-test\nplatform: local\n---\n# Task\n\nDo something."), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "", "")
+	task := RenderProverTask(compiled, "")
 
 	if strings.Contains(task, "# Build:") || strings.Contains(task, "# Fix:") {
 		t.Error("prover prompt should not derive build/fix semantics from the round number")
@@ -251,7 +251,7 @@ func TestRenderVerifierTask(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: verify-test\nplatform: local\n---\n# Task\n\nCheck something."), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderVerifierTask(compiled, "", "")
+	task := RenderVerifierTask(compiled, "")
 
 	if strings.Contains(task, "# Verify:") {
 		t.Error("verifier prompt should not use a synthetic title")
@@ -273,7 +273,7 @@ func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: reusable-eval\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderVerifierTask(compiled, "=== FILES ===\n./main.go", "")
+	task := RenderVerifierTask(compiled, "")
 
 	for _, want := range []string{
 		"You may add and commit useful tests or probes",
@@ -295,7 +295,7 @@ func TestRenderProverRequiresCompleteOutcome(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: continuation-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "", "")
+	task := RenderProverTask(compiled, "")
 
 	if strings.Contains(task, "# Build:") || strings.Contains(task, "# Fix:") {
 		t.Error("prover prompt should not use build/fix titles")
@@ -321,7 +321,7 @@ func TestRenderWithSkillsRoster(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: roster-test\nplatform: local\nskills:\n  - my-skill\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "", "")
+	task := RenderProverTask(compiled, "")
 
 	if !strings.Contains(task, "## Skills") {
 		t.Error("should contain skills section")
@@ -355,12 +355,12 @@ func TestRenderUsesDeclaredSkillsForBothRoles(t *testing.T) {
 		t.Fatalf("CompileEnvironment: %v", err)
 	}
 
-	proverTask := RenderProverTask(compiled, "", "")
+	proverTask := RenderProverTask(compiled, "")
 	if !strings.Contains(proverTask, "`k8s-deploy`") {
 		t.Fatalf("prover prompt missing declared skill:\n%s", proverTask)
 	}
 
-	verifierTask := RenderVerifierTask(compiled, "", "")
+	verifierTask := RenderVerifierTask(compiled, "")
 	if !strings.Contains(verifierTask, "`k8s-deploy`") {
 		t.Fatalf("verifier prompt missing declared skill:\n%s", verifierTask)
 	}
@@ -377,8 +377,8 @@ func TestRenderWithRequiredEvaluationSkills(t *testing.T) {
 
 	compiled, _ := CompileEnvironment(specPath)
 
-	proverTask := RenderProverTask(compiled, "", "")
-	verifierTask := RenderVerifierTask(compiled, "", "")
+	proverTask := RenderProverTask(compiled, "")
+	verifierTask := RenderVerifierTask(compiled, "")
 	for _, task := range []string{proverTask, verifierTask} {
 		if !strings.Contains(task, "`crit-skill` - required evaluation rubric") {
 			t.Error("required skill must be marked in both roles")
@@ -400,7 +400,7 @@ func TestRenderControllerPromptDoesNotAutoInjectOrchestrationSkill(t *testing.T)
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: controller-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "", "/tmp/transcript.md", PromptOptions{
+	task := RenderProverTask(compiled, "/tmp/transcript.md", PromptOptions{
 		Controller:      true,
 		PrimarySpecPath: "/tmp/spec.md",
 	})
@@ -422,7 +422,7 @@ func TestRenderTranscriptProtocolDoesNotDumpTranscript(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: transcript-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "", "/tmp/transcript.md")
+	task := RenderProverTask(compiled, "/tmp/transcript.md")
 
 	if !strings.Contains(task, "## Transcript") {
 		t.Error("should contain transcript protocol section")
@@ -441,8 +441,8 @@ func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: transcript-read\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	proverTask := RenderProverTask(compiled, "", "/tmp/transcript.md")
-	verifierTask := RenderVerifierTask(compiled, "", "/tmp/transcript.md")
+	proverTask := RenderProverTask(compiled, "/tmp/transcript.md")
+	verifierTask := RenderVerifierTask(compiled, "/tmp/transcript.md")
 	for _, task := range []string{proverTask, verifierTask} {
 		for _, want := range []string{
 			"Read the transcript for current spec updates and unresolved findings before acting",
@@ -465,8 +465,8 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: progress-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	proverTask := RenderProverTask(compiled, "", "/tmp/transcript.md")
-	verifierTask := RenderVerifierTask(compiled, "", "/tmp/transcript.md")
+	proverTask := RenderProverTask(compiled, "/tmp/transcript.md")
+	verifierTask := RenderVerifierTask(compiled, "/tmp/transcript.md")
 
 	for _, task := range []string{proverTask, verifierTask} {
 		for _, want := range []string{
@@ -499,7 +499,7 @@ func TestRenderVerifierTaskReviewBudgetUsesStatusContract(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: review-mode\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderVerifierTask(compiled, "", "/tmp/transcript.md", PromptOptions{
+	task := RenderVerifierTask(compiled, "/tmp/transcript.md", PromptOptions{
 		ReviewBudget:   true,
 		ReviewCycleCap: 2,
 	})
@@ -535,12 +535,12 @@ func TestRenderVerifierTaskGatesControllerOnlyTaskState(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: task-state\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderVerifierTask(compiled, "", "/tmp/transcript.md")
+	task := RenderVerifierTask(compiled, "/tmp/transcript.md")
 	if strings.Contains(task, "waiting for an inspected pending/running child") {
 		t.Fatalf("leaf task verifier should not include controller task-state rule:\n%s", task)
 	}
 
-	controllerTask := RenderVerifierTask(compiled, "", "/tmp/transcript.md", PromptOptions{Controller: true})
+	controllerTask := RenderVerifierTask(compiled, "/tmp/transcript.md", PromptOptions{Controller: true})
 	if !strings.Contains(controllerTask, "waiting for an inspected pending/running child") {
 		t.Fatalf("controller verifier should include controller task-state rule:\n%s", controllerTask)
 	}
@@ -552,19 +552,19 @@ func TestRenderVerifierTaskGatesControllerOnlyTaskState(t *testing.T) {
 	}
 }
 
-func TestRenderWithWorkspace(t *testing.T) {
+func TestRenderWorkspaceGuidance(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: ws-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "=== FILES ===\n./main.go", "")
+	task := RenderProverTask(compiled, "")
 
 	if !strings.Contains(task, "## Workspace") {
 		t.Error("should contain workspace section")
 	}
-	if !strings.Contains(task, "./main.go") {
-		t.Error("should contain workspace content")
+	if !strings.Contains(task, "workspace.tar.gz") {
+		t.Error("should describe child workspace checkpoints")
 	}
 	if strings.Contains(task, "/workspace/output") {
 		t.Fatalf("workspace prompt should not hardcode container paths:\n%s", task)

@@ -22,7 +22,7 @@ type PromptOptions struct {
 }
 
 // RenderProverTask builds the full prover task prompt.
-func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
+func RenderProverTask(compiled *CompiledEnvironment, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
 	preamble, _ := ReadPrompt("prover.md")
 	if options.Controller {
@@ -35,14 +35,14 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 		renderSpec(compiled),
 		renderSkillsRoster(compiled, RoleProver),
 		renderTranscriptProtocol(transcriptPath),
-		renderWorkspace(workspace),
+		renderWorkspace(),
 		renderOutputContract(RoleProver, options),
 	}
 	return joinNonEmpty(parts)
 }
 
 // RenderVerifierTask builds the full verifier task prompt.
-func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath string, opts ...PromptOptions) string {
+func RenderVerifierTask(compiled *CompiledEnvironment, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
 	preamble, _ := ReadPrompt("verifier.md")
 	parts := []string{
@@ -51,7 +51,7 @@ func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath
 		renderSpec(compiled),
 		renderSkillsRoster(compiled, RoleVerifier),
 		renderTranscriptProtocol(transcriptPath),
-		renderWorkspace(workspace),
+		renderWorkspace(),
 		renderOutputContract(RoleVerifier, options),
 	}
 	return joinNonEmpty(parts)
@@ -148,13 +148,9 @@ func renderTranscriptProtocol(transcriptPath string) string {
 	}, "\n")
 }
 
-func renderWorkspace(workspace string) string {
-	text := "## Workspace\n\nDurable working tree; use git history to inspect prior work.\n" +
+func renderWorkspace() string {
+	return "## Workspace\n\nDurable working tree; use git history to inspect prior work.\n" +
 		"Child tasks use isolated workspaces. Inspect their transcripts and evidence; extract `workspace.tar.gz` checkpoints to integrate results, including git state.\n"
-	if workspace != "" {
-		text += "\n```\n" + workspace + "\n```\n"
-	}
-	return text
 }
 
 func renderOutputContract(role Role, opts PromptOptions) string {

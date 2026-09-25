@@ -47,10 +47,6 @@ func (f *fakeExecutor) taskAt(i int) string {
 	return f.tasks[i]
 }
 
-func (f *fakeExecutor) WorkspaceState() string {
-	return "=== FILES ===\n(no files)"
-}
-
 func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {
 	os.MkdirAll(filepath.Dir(dest), 0o755)
 	os.WriteFile(dest, []byte("fake"), 0o644)

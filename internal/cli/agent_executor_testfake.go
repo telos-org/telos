@@ -31,8 +31,7 @@ func createAgentExecutor(workspace string, cfg LocalRunConfig) (game.AgentExecut
 }
 
 type testFakeScenario struct {
-	WorkspaceState string         `json:"workspace_state"`
-	Turns          []testFakeTurn `json:"turns"`
+	Turns []testFakeTurn `json:"turns"`
 }
 
 type testFakeTurn struct {
@@ -136,13 +135,6 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 			Model:               turn.Model,
 		},
 	}
-}
-
-func (e *testFakeExecutor) WorkspaceState() string {
-	if e.scenario.WorkspaceState != "" {
-		return e.scenario.WorkspaceState
-	}
-	return platform.NewLocalPlatform(e.workspace).WorkspaceState()
 }
 
 func (e *testFakeExecutor) CheckpointWorkspace(dest string) bool {

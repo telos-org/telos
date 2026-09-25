@@ -71,7 +71,6 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 
 func (p *PVG) runDefaultLoop() *PVGResult {
 	promptOpts := p.promptOptions()
-	workspace := ""
 	recoverableFailures := 0
 	reviewCyclesCompleted := 0
 	deadline := p.runDeadline()
@@ -83,7 +82,7 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 		if p.shouldStop(deadline) {
 			return p.end(GameStopped)
 		}
-		turn := p.runProverTurn(workspace, promptOpts, deadline)
+		turn := p.runProverTurn(promptOpts, deadline)
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
@@ -101,14 +100,13 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 			return p.end(GameFailure)
 		}
 
-		workspace = p.Executor.WorkspaceState()
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
 		if p.shouldStop(deadline) {
 			return p.end(GameStopped)
 		}
-		turn = p.runVerifierTurn(workspace, promptOpts, deadline)
+		turn = p.runVerifierTurn(promptOpts, deadline)
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
@@ -140,7 +138,6 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 		if p.overBudget(p.Result.Rounds, "verifier") {
 			return p.end(GameFailure)
 		}
-		workspace = p.Executor.WorkspaceState()
 	}
 }
 
@@ -161,23 +158,23 @@ func (p *PVG) runDurationExhausted(deadline time.Time) bool {
 	return !deadline.IsZero() && time.Now().After(deadline)
 }
 
-func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
+func (p *PVG) runProverTurn(promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
 	p.Result.Rounds++
 	p.Result.ProverRounds++
 	roundNum := p.Result.Rounds
 	p.Evidence.Log("round_start", roundNum, "prover", nil)
 
-	task := spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
+	task := spec.RenderProverTask(p.Compiled, p.State.TranscriptPath, promptOpts)
 	return p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task, deadline)
 }
 
-func (p *PVG) runVerifierTurn(workspace string, promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
+func (p *PVG) runVerifierTurn(promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
 	p.Result.Rounds++
 	p.Result.VerifierRounds++
 	roundNum := p.Result.Rounds
 	p.Evidence.Log("round_start", roundNum, "verifier", nil)
 
-	task := spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
+	task := spec.RenderVerifierTask(p.Compiled, p.State.TranscriptPath, promptOpts)
 	return p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task, deadline)
 }
 

@@ -55,7 +55,6 @@ type LiveAgentEvent struct {
 // AgentExecutor runs one PVG agent turn.
 type AgentExecutor interface {
 	ExecuteTurn(task string, role string, turnState *TurnState) TurnResult
-	WorkspaceState() string
 	CheckpointWorkspace(dest string) bool
 }
 
