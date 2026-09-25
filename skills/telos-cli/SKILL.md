@@ -91,6 +91,9 @@ runtime.
    Cloud planning uploads private Registry artifacts and creates a remote plan;
    it does not deploy. Without `--out`, the plan is preview-only and cannot be
    applied. Local plans remain local and reject `--out`.
+   Newly uploaded proposals stay private for all roles and are hidden from
+   Library lists, even after applying. Keep explicit Registry publishing separate
+   from deployment approval; use `telos push` only when publishing is authorized.
 
 3. Present the proposal's context, request ID, and review URL. A member can submit
    this proposal but only an owner or admin can apply it. If someone else must

@@ -47,6 +47,14 @@ Registry references can also be planned directly:
 telos plan @scope/package-name:0.1.0 --context @team-handle
 ```
 
+This private storage is used for newly uploaded proposals from every role,
+including owners and admins, in both the CLI and web. Internal proposal packages
+and skills do not appear in Library lists or search. Confirming a request uses the
+same private files; it does not publish a Library release or make them public.
+You can inspect proposed changes in Change Requests and applied revisions in
+deployment History. To publish a reusable release, use
+[`telos push`](packages-and-skills.md#publish) separately.
+
 ## Save a proposal for review
 
 ```bash

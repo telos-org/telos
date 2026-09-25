@@ -59,6 +59,16 @@ not need to rearrange your source directories to match the package layout.
 
 ## Publish
 
+Cloud planning and applying store newly uploaded spec and skill files privately,
+for every role. These internal proposal artifacts stay out of Library lists and
+search, including after a request is confirmed. They remain available through
+the request and deployment revision. An existing published package can be
+deployed directly without copying or republishing it.
+
+Publishing is a separate action that creates a reusable Library release. It
+requires Registry publishing permission; permission to plan does not grant it.
+Applying a private proposal does not change its visibility or add a release.
+
 Choose the intended scope, name, and immutable version before publishing.
 
 Publish a spec package:
