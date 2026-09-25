@@ -124,7 +124,7 @@ changed named package with `telos push` still requires a new version:
 
 ```bash
 telos plan SPEC.md --session SESSION_ID --context CONTEXT
-telos apply SPEC.md --session SESSION_ID --context CONTEXT
+telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --context CONTEXT
 ```
 
 The Goal, session, deployment, and history remain stable. The submission enters

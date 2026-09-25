@@ -38,11 +38,14 @@ func cmdLaunch(command, action string, args []string) {
 	forceValue := false
 	force := &forceValue
 	yes := false
+	message := ""
 	if command == "apply" {
 		sessionID = fs.String("session", "", "Managed session ID to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
 		fs.BoolVar(&yes, "yes", false, "Confirm a new Cloud plan automatically; requires Apply permission")
 		fs.BoolVar(&yes, "y", false, "Shorthand for --yes")
+		fs.StringVar(&message, "message", "", "Describe the change; required for a fresh Cloud apply")
+		fs.StringVar(&message, "m", "", "Shorthand for --message")
 	}
 	modelHelp := "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	if command == "apply" {
@@ -119,8 +122,8 @@ func cmdLaunch(command, action string, args []string) {
 				fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session")
 				os.Exit(1)
 			}
-			if flagNamesSet(fs, "session", "workspace", "force", "model", "thinking", "max-cost-usd") {
-				fmt.Fprintln(os.Stderr, "error: a saved plan freezes its target and inputs; --session, --workspace, --force, --model, --thinking, and --max-cost-usd cannot be used with it")
+			if flagNamesSet(fs, "session", "workspace", "force", "model", "thinking", "max-cost-usd", "message", "m") {
+				fmt.Fprintln(os.Stderr, "error: a saved plan freezes its target, message, and inputs; --session, --workspace, --force, --model, --thinking, --max-cost-usd, and --message cannot be used with it")
 				os.Exit(2)
 			}
 			if err := runSavedCloudApply(bookmark, contextOverride, *jsonOut); err != nil {
@@ -141,6 +144,10 @@ func cmdLaunch(command, action string, args []string) {
 		platform = parsedPlatform
 	}
 	if command == "apply" {
+		if (platform == "local" || isLocalApplyID(*sessionID)) && flagNamesSet(fs, "message", "m") {
+			fmt.Fprintln(os.Stderr, "error: --message requires a Cloud Change Request")
+			os.Exit(2)
+		}
 		if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -189,6 +196,11 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudApply:
+		message, err = normalizePlanMessage(message, true)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(2)
+		}
 		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -205,7 +217,7 @@ func cmdLaunch(command, action string, args []string) {
 		if err := runCloudApply(cloudPlanInput{
 			specArg: specArg, sessionID: *sessionID, runtimeConfig: runtimeConfig,
 			force: *force, contextOverride: contextOverride,
-			mode: "apply", autoConfirm: yes,
+			mode: "apply", autoConfirm: yes, revisionMessage: message,
 		}, *jsonOut); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)

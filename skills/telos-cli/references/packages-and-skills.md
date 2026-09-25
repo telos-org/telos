@@ -101,7 +101,7 @@ Pull an immutable package for inspection or reuse:
 
 ```bash
 telos pull @scope/package-name:0.1.0
-telos apply @scope/package-name:0.1.0 --context CONTEXT
+telos apply @scope/package-name:0.1.0 --message "Launch the application" --context CONTEXT
 ```
 
 Use `telos get SESSION_ID --context CONTEXT` when the starting point is a

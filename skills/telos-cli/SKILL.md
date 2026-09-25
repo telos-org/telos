@@ -85,7 +85,7 @@ runtime.
    `CONTEXT` with `personal` or the intended `@team-handle`:
 
    ```bash
-   telos plan SPEC.md --context CONTEXT --out=change.plan --json
+   telos plan SPEC.md --context CONTEXT --out=change.plan --json --message "Record book ownership"
    ```
 
    Cloud planning uploads private Registry artifacts and creates a remote plan;
@@ -102,7 +102,7 @@ runtime.
    telos apply change.plan --context CONTEXT --json
    ```
 
-   Alternatively, for an authorized fresh spec, use `telos apply SPEC.md --yes
+   Alternatively, for an authorized fresh spec, use `telos apply SPEC.md --message "Record book ownership" --yes
    --json --context CONTEXT`. This takes a queue turn, prepares a fresh plan, and
    confirms automatically. `-y` is shorthand for `--yes`. Never infer permission
    from the lack of a terminal. Fresh Cloud apply without `--yes` requires an
@@ -129,7 +129,7 @@ use digest-derived Registry versions and do not require a version bump:
 
 ```bash
 telos plan SPEC.md --session SESSION_ID --context CONTEXT
-telos apply SPEC.md --session SESSION_ID --context CONTEXT --yes --json
+telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --context CONTEXT --yes --json
 ```
 
 A healthy revision may still be waiting for its restorable snapshot. A confirmed
@@ -147,7 +147,7 @@ second regular apply would only queue behind it. Then create a new proposal with
 `--force` (a saved request cannot be changed to add the flag):
 
 ```bash
-telos apply SPEC.md --session SESSION_ID --context CONTEXT --force --yes --json
+telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --context CONTEXT --force --yes --json
 ```
 
 `--force` is only valid for an existing Cloud session update. It bypasses this
@@ -162,6 +162,12 @@ An abandoned regular apply holds its turn until it is applied or discarded.
 No request automatically merges other work.
 A saved file is only a reference and grants no access. Check its context/API
 binding; never change a file's endpoint to redirect a credential.
+
+When creating a Change Request with `plan --out` or fresh Cloud `apply`, supply
+`--message` (or `-m`) with a concise description of the intended change. Messages
+must be nonblank, single-line, and at most 200 Unicode characters. `--yes` and
+`--json` do not waive this requirement. Preview-only plans may omit a message;
+applying a saved plan retains its original message and rejects overrides.
 
 Deployment changes require explicit confirmation by an owner or admin, including
 web submissions. There is no per-deployment confirmation setting or independent

@@ -88,12 +88,12 @@ telos plan SPEC.md --context personal
 The terminal shows the proposed spec and skill changes and a dashboard link.
 The initial plan compares your spec with an empty deployment. Anyone with the
 appropriate access can inspect the preview, but it cannot be applied directly.
-Add `--out=change.plan` to save an immutable proposal for later confirmation.
+Add `--out=change.plan --message "Launch the reading list"` to save an immutable proposal for later confirmation.
 
 ## Apply it
 
 ```bash
-telos apply SPEC.md --context personal
+telos apply SPEC.md --message "Launch the reading list" --context personal
 ```
 
 This creates a regular request, waits for its turn, displays a fresh plan, and
@@ -152,7 +152,7 @@ version to `0.2.0` to label that change. Save a proposal against the existing
 session:
 
 ```bash
-telos plan SPEC.md --session sess_c7d2f0a4e8 --context personal --out=attribution.plan
+telos plan SPEC.md --session sess_c7d2f0a4e8 --context personal --out=attribution.plan --message "Record book ownership"
 ```
 
 The terminal and dashboard show the diff. For example:
@@ -180,7 +180,7 @@ instead confirm the request on its dashboard page. If another change has moved
 the deployment to a new revision, this saved request is stale: update your spec
 and create a new proposal. Telos does not merge specs.
 
-Alternatively, `telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal`
+Alternatively, `telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 --context personal`
 queues a new regular request, prepares its plan when it reaches the front, and
 asks for confirmation then. The current revision keeps reconciling while it
 waits. The Goal, session, deployment, and history stay the same when the new
@@ -197,7 +197,7 @@ point. A second ordinary apply would queue behind the blocked first request; it
 does not change that request's frozen flags.
 
 ```bash
-telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal --force
+telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 --context personal --force
 ```
 
 This bypass applies only to the missing-snapshot gate. Active operations,

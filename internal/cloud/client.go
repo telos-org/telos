@@ -85,6 +85,7 @@ type SessionRecord struct {
 }
 
 type SessionCreateOptions struct {
+	RevisionMessage string              `json:"revision_message,omitempty"`
 	Name            string              `json:"name"`
 	PackageRef      string              `json:"package_ref"`
 	AgentModel      string              `json:"agent_model,omitempty"`
@@ -94,6 +95,7 @@ type SessionCreateOptions struct {
 }
 
 type SessionUpdateOptions struct {
+	RevisionMessage           string `json:"revision_message,omitempty"`
 	PackageRef                string `json:"package_ref"`
 	Force                     bool   `json:"force,omitempty"`
 	ExpectedCurrentRevisionID string `json:"expected_current_revision_id,omitempty"`
@@ -571,6 +573,9 @@ func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionMutationResul
 	}
 	if opts.AgentTimeoutSec != nil {
 		payload["agent_timeout_sec"] = *opts.AgentTimeoutSec
+	}
+	if opts.RevisionMessage != "" {
+		payload["revision_message"] = opts.RevisionMessage
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

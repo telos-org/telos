@@ -18,8 +18,8 @@ Cloud Goals and local runs select models at different points:
 Telos provides two managed tiers:
 
 ```bash
-telos apply SPEC.md --model telos/default --context CONTEXT
-telos apply SPEC.md --model telos/max --context CONTEXT
+telos apply SPEC.md --message "Launch with the selected model" --model telos/default --context CONTEXT
+telos apply SPEC.md --message "Launch with the selected model" --model telos/max --context CONTEXT
 ```
 
 `telos/default` is the standard managed tier. `telos/max` selects the larger
@@ -43,7 +43,7 @@ The first value is the user-chosen connection name. Combine it with a model as
 `<connection-name>/<model-name>`:
 
 ```bash
-telos apply SPEC.md --model MyChatGPT/gpt-5.5 --context CONTEXT
+telos apply SPEC.md --message "Launch with the selected model" --model MyChatGPT/gpt-5.5 --context CONTEXT
 ```
 
 The selected connection must exist exactly once and report `connected`.
@@ -73,7 +73,7 @@ script. An explicitly empty `--model` clears the environment override for that
 command and lets Cloud use the workspace preference:
 
 ```bash
-telos apply SPEC.md --model "" --context CONTEXT
+telos apply SPEC.md --message "Use the workspace model preference" --model "" --context CONTEXT
 ```
 
 `telos config --model` is no longer supported. If your configuration file
@@ -93,7 +93,7 @@ not a turn timeout. It works with managed and subscription inference; supported
 levels depend on the model and provider.
 
 ```bash
-telos apply SPEC.md --context CONTEXT --thinking high
+telos apply SPEC.md --message "Launch with high thinking effort" --context CONTEXT --thinking high
 telos run REPORT_SPEC.md --workspace . --until 3 --thinking high
 ```
 

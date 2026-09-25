@@ -21,6 +21,59 @@ import (
 
 const testPlanSpec = "---\nname: demo\nversion: 1.2.3\nplatform: cloud\nskills: []\n---\n\nServe a demo.\n"
 
+func TestPlanMessageValidationBeforeAnyNetwork(t *testing.T) {
+	for _, value := range []string{"", " \u2003\u00a0 ", "two\nlines", "bad\x00text", "split\u2028line", "split\u2029paragraph", strings.Repeat("🚀", 201)} {
+		for _, mode := range []string{"saved", "apply"} {
+			t.Run(mode+"/"+value, func(t *testing.T) {
+				var calls atomic.Int32
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); http.NotFound(w, r) }))
+				defer server.Close()
+				_, _, err := createCloudPlan(cloud.NewClient(server.URL, "token"), cloudPlanInput{specArg: "SPEC.md", mode: mode, autoConfirm: mode == "apply", revisionMessage: value})
+				if err == nil || !strings.Contains(err.Error(), "--message") || calls.Load() != 0 {
+					t.Fatalf("err=%v calls=%d", err, calls.Load())
+				}
+			})
+		}
+	}
+	message := strings.Repeat("🚀", 200)
+	if got, err := normalizePlanMessage("  "+message+"  ", true); err != nil || got != message {
+		t.Fatalf("valid Unicode message rejected: %q %v", got, err)
+	}
+	if got, err := normalizePlanMessage("", false); err != nil || got != "" {
+		t.Fatalf("preview requires a message: %q %v", got, err)
+	}
+}
+
+func TestCLIRequiresMessageAndRejectsSavedOverrides(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("invalid message made API call: %s", r.URL.Path)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+	configureCloudTest(t, server.URL)
+	specPath := filepath.Join(t.TempDir(), "SPEC.md")
+	_ = os.WriteFile(specPath, []byte(testPlanSpec), 0o600)
+	savedPath := filepath.Join(t.TempDir(), "change.plan")
+	bookmark := savedDeploymentPlan{Version: savedPlanVersion, ChangeRequestID: "cr_saved", DeploymentID: "sess_123", Context: "personal", OrgID: "org_personal", APIEndpoint: server.URL}
+	encoded, _ := json.Marshal(bookmark)
+	_ = os.WriteFile(savedPath, encoded, 0o600)
+	for _, args := range [][]string{
+		{"plan", specPath, "--out=" + filepath.Join(t.TempDir(), "new.plan")},
+		{"apply", specPath, "--yes", "--json"},
+		{"apply", "@acme/books:1.0.0", "--yes", "-m", "  "},
+		{"apply", savedPath, "--message", "Replace the saved message"},
+		{"apply", savedPath, "-m", ""},
+	} {
+		command := exec.Command(os.Args[0], "-test.run=^TestCLIPlanApplySubprocess$")
+		encoded, _ := json.Marshal(args)
+		command.Env = append(os.Environ(), "TELOS_TEST_PLAN_COMMAND="+string(encoded))
+		output, err := command.CombinedOutput()
+		if err == nil || !strings.Contains(string(output), "--message") {
+			t.Fatalf("args=%v err=%v output=%s", args, err, output)
+		}
+	}
+}
+
 func testDeploymentPlan(mode, status string) cloud.ChangeRequestRecord {
 	base := "rev_7"
 	return cloud.ChangeRequestRecord{
@@ -102,7 +155,7 @@ func TestPlanPermissionAndCapabilityFailurePrecedeUploads(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			_, _, err := createCloudPlan(cloud.NewClient(server.URL, "token"), cloudPlanInput{specArg: "not-needed.md", mode: "apply"})
+			_, _, err := createCloudPlan(cloud.NewClient(server.URL, "token"), cloudPlanInput{specArg: "not-needed.md", mode: "apply", revisionMessage: "Update the demo"})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err=%v", err)
 			}
@@ -129,7 +182,7 @@ func TestCancellationDuringUploadCannotSubmitAutoConfirmedApply(t *testing.T) {
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "SPEC.md")
 	_ = os.WriteFile(path, []byte(testPlanSpec), 0o600)
-	_, _, err := createCloudPlan(cloud.NewClient(server.URL, "token").WithContext(ctx), cloudPlanInput{specArg: path, mode: "apply", autoConfirm: true})
+	_, _, err := createCloudPlan(cloud.NewClient(server.URL, "token").WithContext(ctx), cloudPlanInput{specArg: path, mode: "apply", autoConfirm: true, revisionMessage: "Update the demo"})
 	if !errors.Is(err, context.Canceled) || submissions.Load() != 0 {
 		t.Fatalf("canceled upload submitted apply: err=%v submissions=%d", err, submissions.Load())
 	}
@@ -150,7 +203,7 @@ func TestMemberCanSavePrivatePlanAndBookmarkWithoutDeploying(t *testing.T) {
 			submissions++
 			var options cloud.DeploymentPlanOptions
 			_ = json.NewDecoder(r.Body).Decode(&options)
-			if options.Mode != "saved" || options.AutoConfirm || options.Create == nil || options.Create.PackageRef != "@personal/plan-artifact:1.0.0" {
+			if options.Mode != "saved" || options.AutoConfirm || options.Create == nil || options.Create.PackageRef != "@personal/plan-artifact:1.0.0" || options.Create.RevisionMessage != "Create the demo" {
 				t.Errorf("wrong saved proposal: %+v", options)
 			}
 			request := testDeploymentPlan("saved", "awaiting_confirmation")
@@ -170,7 +223,7 @@ func TestMemberCanSavePrivatePlanAndBookmarkWithoutDeploying(t *testing.T) {
 	}
 	path := filepath.Join(t.TempDir(), "anything.extension")
 	out := captureStdout(t, func() {
-		cmdPlan([]string{specPath, "--out=" + path, "--json"})
+		cmdPlan([]string{specPath, "--out=" + path, "--json", "-m", "  Create the demo  "})
 	})
 	var receipt map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(out), &receipt); err != nil || string(receipt["operation"]) != `"requested"` {
@@ -496,7 +549,7 @@ func TestCLIErrorsBeforeAnyNetworkForMissingConfirmationAndLocalOut(t *testing.T
 	localPath := filepath.Join(t.TempDir(), "SPEC.md")
 	_ = os.WriteFile(localPath, []byte(strings.Replace(testPlanSpec, "platform: cloud", "platform: local", 1)), 0o600)
 	for _, args := range [][]string{
-		{"apply", specPath}, {"apply", specPath, "--json"}, {"plan", localPath, "--out=local.plan"},
+		{"apply", specPath, "--message", "Update the demo"}, {"apply", specPath, "--json", "--message", "Update the demo"}, {"plan", localPath, "--out=local.plan"},
 	} {
 		command := exec.Command(os.Args[0], "-test.run=^TestCLIPlanApplySubprocess$")
 		encoded, _ := json.Marshal(args)

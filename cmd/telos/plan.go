@@ -43,6 +43,9 @@ func cmdPlan(args []string) {
 	sessionID := fs.String("session", "", "Managed session ID to compare")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	output := fs.String("out", "", "Save a Cloud Change Request and write its reference to this file")
+	message := ""
+	fs.StringVar(&message, "message", "", "Describe the change; required with --out")
+	fs.StringVar(&message, "m", "", "Shorthand for --message")
 	model := fs.String("model", "", "Model for a new Cloud deployment; defaults to $TELOS_MODEL")
 	thinking := fs.String("thinking", "", "Thinking effort for a new Cloud deployment; defaults to $TELOS_THINKING")
 	force := fs.Bool("force", false, "Save the snapshot bypass for an existing Cloud deployment")
@@ -84,17 +87,22 @@ func cmdPlan(args []string) {
 		if flagNameSet(fs, "out") {
 			mode = "saved"
 		}
+		message, err = normalizePlanMessage(message, mode == "saved")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(2)
+		}
 		if err := runCloudPlan(cloudPlanInput{
 			specArg: fs.Arg(0), sessionID: *sessionID, contextOverride: contextOverride,
-			runtimeConfig: runtimeConfig, force: *force, mode: mode,
+			runtimeConfig: runtimeConfig, force: *force, mode: mode, revisionMessage: message,
 		}, *output, *jsonOut); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
-	if flagNamesSet(fs, "out", "model", "thinking", "force") || contextOverride != "" {
-		fmt.Fprintln(os.Stderr, "error: --out, --context, --model, --thinking, and --force require a Cloud plan")
+	if flagNamesSet(fs, "out", "model", "thinking", "force", "message", "m") || contextOverride != "" {
+		fmt.Fprintln(os.Stderr, "error: --out, --context, --model, --thinking, --force, and --message require a Cloud plan")
 		os.Exit(2)
 	}
 	markdown, err := os.ReadFile(specPath)

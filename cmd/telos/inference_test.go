@@ -123,7 +123,7 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 				t.Fatal(err)
 			}
 			captureStdout(t, func() {
-				cmdApply(append([]string{"@telos/demo:1.2.3", "--json", "--yes"}, tt.flags...))
+				cmdApply(append([]string{"@telos/demo:1.2.3", "--json", "--yes", "--message", "Deploy the reading list"}, tt.flags...))
 			})
 
 			var request map[string]json.RawMessage

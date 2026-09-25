@@ -84,7 +84,9 @@ func TestCmdApplyJSONReturnsInitialChangeRequest(t *testing.T) {
 	}))
 	defer server.Close()
 	configureCloudTest(t, server.URL)
-	out := captureStdout(t, func() { cmdApply([]string{"@telos/demo:1.2.3", "--json", "--yes"}) })
+	out := captureStdout(t, func() {
+		cmdApply([]string{"@telos/demo:1.2.3", "--json", "--yes", "--message", "Deploy the reading list"})
+	})
 	var receipt struct {
 		Operation string                    `json:"operation"`
 		Request   cloud.ChangeRequestRecord `json:"change_request"`

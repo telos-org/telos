@@ -141,8 +141,8 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	configureCloudTest(t, server.URL)
 	t.Setenv("TELOS_CONTEXT", "")
 	for _, args := range [][]string{
-		{"@telos/demo:1.2.3", "--json", "--yes"},
-		{"@telos/demo:1.2.3", "--session", "sess_registry", "--force", "--json", "-y"},
+		{"@telos/demo:1.2.3", "--json", "--yes", "--message", "Deploy the reading list"},
+		{"@telos/demo:1.2.3", "--session", "sess_registry", "--force", "--json", "-y", "-m", "Deploy the reading list"},
 	} {
 		out := captureStdout(t, func() { cmdApply(args) })
 		var result map[string]any

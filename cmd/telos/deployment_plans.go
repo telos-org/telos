@@ -15,6 +15,8 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	internaldiff "github.com/rogpeppe/go-internal/diff"
 	"github.com/telos-org/telos/internal/cloud"
@@ -42,6 +44,26 @@ type cloudPlanInput struct {
 	contextOverride string
 	mode            string
 	autoConfirm     bool
+	revisionMessage string
+}
+
+func normalizePlanMessage(message string, required bool) (string, error) {
+	if !utf8.ValidString(message) {
+		return "", fmt.Errorf("--message must contain valid UTF-8 text")
+	}
+	for _, character := range message {
+		if unicode.IsControl(character) || character == '\u2028' || character == '\u2029' {
+			return "", fmt.Errorf("--message must be a single line without control characters")
+		}
+	}
+	message = strings.TrimSpace(message)
+	if required && message == "" {
+		return "", fmt.Errorf("--message is required when creating a Change Request; describe the change with --message \"Record who added each book\"")
+	}
+	if utf8.RuneCountInString(message) > 200 {
+		return "", fmt.Errorf("--message must be 200 characters or fewer")
+	}
+	return message, nil
 }
 
 func checkFreshApplyConfirmation(yes, jsonOut, stdinTTY, promptTTY bool) error {
@@ -49,7 +71,7 @@ func checkFreshApplyConfirmation(yes, jsonOut, stdinTTY, promptTTY bool) error {
 		return nil
 	}
 	if jsonOut || !stdinTTY || !promptTTY {
-		return fmt.Errorf("interactive confirmation is unavailable; use `telos apply SPEC.md --yes` to confirm automatically, or `telos plan SPEC.md --out=change.plan` to submit a Change Request for review")
+		return fmt.Errorf("interactive confirmation is unavailable; use `telos apply SPEC.md --message \"Describe the change\" --yes` to confirm automatically, or `telos plan SPEC.md --out=change.plan --message \"Describe the change\"` to submit a Change Request for review")
 	}
 	return nil
 }
@@ -67,7 +89,7 @@ func cloudPlanPreflight(control *cloud.Client, sessionID, mode string) error {
 		return err
 	}
 	if mode == "apply" && !access.CanApply {
-		return fmt.Errorf("Apply permission is required; use `telos plan SPEC.md --out=change.plan` to submit a Change Request for an owner or admin to confirm")
+		return fmt.Errorf("Apply permission is required; use `telos plan SPEC.md --out=change.plan --message \"Describe the change\"` to submit a Change Request for an owner or admin to confirm")
 	}
 	if !access.CanPlan {
 		return fmt.Errorf("you do not have permission to plan changes for this deployment or context")
@@ -76,6 +98,10 @@ func cloudPlanPreflight(control *cloud.Client, sessionID, mode string) error {
 }
 
 func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloud.ChangeRequestRecord, *cloud.PackageVersionRecord, error) {
+	message, err := normalizePlanMessage(input.revisionMessage, input.mode != "preview")
+	if err != nil {
+		return nil, nil, err
+	}
 	if err := cloudPlanPreflight(control, input.sessionID, input.mode); err != nil {
 		return nil, nil, err
 	}
@@ -89,6 +115,7 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloud.Change
 		}
 		options.Update = &cloud.SessionUpdateOptions{
 			Force: input.force, ExpectedCurrentRevisionID: current.CurrentRevisionID,
+			RevisionMessage: message,
 		}
 	} else {
 		inference, err := resolveCloudInference(control, input.runtimeConfig.Model)
@@ -97,6 +124,7 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloud.Change
 		}
 		options.Create = &cloud.SessionCreateOptions{
 			AgentThinking: input.runtimeConfig.Thinking, Inference: inference,
+			RevisionMessage: message,
 		}
 	}
 	var record *cloud.PackageVersionRecord
@@ -501,6 +529,9 @@ func printDeploymentPlan(out io.Writer, control *cloud.Client, request *cloud.Ch
 	printSummaryField(out, "Request", request.ID)
 	printSummaryField(out, "Mode", request.Mode)
 	printSummaryField(out, "Status", changeRequestStatus(request.Status))
+	if request.Message != "" {
+		printSummaryField(out, "Message", request.Message)
+	}
 	if request.Error != nil {
 		printSummaryField(out, "Reason", *request.Error)
 	}
@@ -545,7 +576,7 @@ func printDeploymentPlan(out io.Writer, control *cloud.Client, request *cloud.Ch
 		fmt.Fprintln(out, "No spec changes.")
 	}
 	if request.Mode == "preview" {
-		fmt.Fprintln(out, "Preview only. Use --out=FILE to save a Change Request that can be applied.")
+		fmt.Fprintln(out, "Preview only. Use --out=FILE with --message to save a Change Request that can be applied.")
 	}
 }
 

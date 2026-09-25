@@ -16,6 +16,18 @@ Only owners and admins can apply them. An authorized requester can confirm
 their own proposal; there is no required number of independent reviewers.
 Cloud enforces the same permission checks for API tokens and dashboard users.
 
+## Write a message for each Change Request
+
+New Change Requests require `--message "Describe the change"` (or `-m`).
+This applies to `plan --out` and fresh Cloud `apply`, including `--yes` and
+`--json`. The CLI rejects missing or blank messages before uploading artifacts.
+Use one line, up to 200 Unicode characters; surrounding spaces are trimmed.
+The message becomes the request title and the resulting revision's history entry.
+
+Preview-only `plan` does not require a message. Applying a saved plan keeps its
+original message and rejects `--message` overrides. In the web submission dialog,
+the required revision-message field starts empty; suggested text is a placeholder.
+
 ## Preview without applying
 
 ```bash
@@ -38,7 +50,7 @@ telos plan @scope/package-name:0.1.0 --context @team-handle
 ## Save a proposal for review
 
 ```bash
-telos plan SPEC.md --session SESSION_ID --context @team-handle --out=change.plan
+telos plan SPEC.md --session SESSION_ID --context @team-handle --out=change.plan --message "Record book ownership"
 ```
 
 This saves an immutable Change Request, prints its changes and dashboard link,
@@ -80,7 +92,7 @@ This command is the confirmation: it does not ask for another `yes` and does not
 prepare a new plan. Telos checks your Apply permission, the selected API endpoint
 and organization, and the saved request's validity. Local edits made after saving
 the proposal are not included. Mutation flags such as `--session`, `--model`,
-and `--force` cannot change the saved inputs.
+`--force`, and `--message` cannot change the saved inputs.
 
 An owner or admin can instead confirm the same request on its dashboard page.
 A retry or simultaneous CLI and dashboard confirmation uses the same request
@@ -90,7 +102,7 @@ error rather than reporting that it applied.
 ## Plan and apply together
 
 ```bash
-telos apply SPEC.md --session SESSION_ID --context @team-handle
+telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --context @team-handle
 ```
 
 This creates a new regular request and waits for its turn. Once it reaches the
@@ -122,13 +134,13 @@ It does not grant Apply permission or bypass stale-revision checks.
 
 ```bash
 # Submit a proposal for review, without prompting or deploying.
-telos plan SPEC.md --session SESSION_ID --context @team-handle --out=change.plan --json
+telos plan SPEC.md --session SESSION_ID --context @team-handle --out=change.plan --json --message "Record book ownership"
 
 # Confirm that exact proposal, when your credentials allow applying.
 telos apply change.plan --context @team-handle --json
 
 # Prepare and confirm a new proposal, when authorized.
-telos apply SPEC.md --session SESSION_ID --context @team-handle --yes --json
+telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --context @team-handle --yes --json
 ```
 
 `--json` never prompts and keeps stdout machine-readable. A fresh Cloud apply
