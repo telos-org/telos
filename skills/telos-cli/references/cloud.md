@@ -141,9 +141,15 @@ not something `SPEC.md` can create.
 ## Apply and observe
 
 Use the workflow in [Use Telos](use-telos.md), passing the same explicit context
-through every Cloud command. `apply` publishes an immutable spec package and
-creates the deployment. The receipt identifies the context, revision digest,
-and stable session to follow.
+through every Cloud command. `plan` uploads private Registry artifacts and creates
+an inspectable preview. Add `--out=change.plan` to save a Change Request that an
+owner or admin can confirm on the dashboard or with `telos apply change.plan`.
+A fresh `apply SPEC.md` waits its turn, prepares a plan, and asks for confirmation;
+use `--yes --json` for authorized unattended execution. Members can submit saved
+plans but cannot apply. The CLI does not wait for the agent's verification.
+See [Change Requests](change-requests.md) for the complete command contract,
+permissions, queue behavior, and deployment settings. Cloud plan/apply require
+a compatible server and never fall back to an unreviewed immediate deployment.
 
 [The Goal lifecycle](lifecycle.md) owns state, revision, observation, and
 deletion semantics. [Models and inference](inference.md) explains how the new

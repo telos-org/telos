@@ -27,15 +27,25 @@ func cmdApply(args []string) {
 }
 
 func cmdLaunch(command, action string, args []string) {
-	fs := newCommandFlagSet(command, fmt.Sprintf("telos %s SPEC.md [flags]", command))
+	inputHelp := "SPEC.md"
+	if command == "apply" {
+		inputHelp = "SPEC.md|PLAN"
+	}
+	fs := newCommandFlagSet(command, fmt.Sprintf("telos %s %s [flags]", command, inputHelp))
 	workspace := fs.String("workspace", "", "Workspace directory for local specs")
 	sessionIDValue := ""
 	sessionID := &sessionIDValue
 	forceValue := false
 	force := &forceValue
+	yes := false
+	message := ""
 	if command == "apply" {
 		sessionID = fs.String("session", "", "Managed session ID to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
+		fs.BoolVar(&yes, "yes", false, "Confirm a new Cloud plan automatically; requires Apply permission")
+		fs.BoolVar(&yes, "y", false, "Shorthand for --yes")
+		fs.StringVar(&message, "message", "", "Describe the change; required for a fresh Cloud apply")
+		fs.StringVar(&message, "m", "", "Shorthand for --message")
 	}
 	modelHelp := "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	if command == "apply" {
@@ -68,7 +78,11 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	requireArgCount(fs, 1, "one SPEC.md")
+	if command == "apply" {
+		requireArgCount(fs, 1, "one SPEC.md or saved plan file")
+	} else {
+		requireArgCount(fs, 1, "one SPEC.md")
+	}
 	if command == "apply" && *sessionID != "" && *workspace != "" {
 		fmt.Fprintln(os.Stderr, "error: --workspace can only seed a new session; it cannot be used with --session")
 		os.Exit(1)
@@ -97,6 +111,28 @@ func cmdLaunch(command, action string, args []string) {
 		runCloudChildSession(specArg, ctx, untilConfig, runtimeConfig, *jsonOut, action)
 		return
 	}
+	if command == "apply" && hasLocalSpec {
+		bookmark, err := readSavedDeploymentPlan(specPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		if bookmark != nil {
+			if _, inSession := localRootSessionID(); inSession {
+				fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session")
+				os.Exit(1)
+			}
+			if flagNamesSet(fs, "session", "workspace", "force", "model", "thinking", "max-cost-usd", "message", "m") {
+				fmt.Fprintln(os.Stderr, "error: a saved plan freezes its target, message, and inputs; --session, --workspace, --force, --model, --thinking, --max-cost-usd, and --message cannot be used with it")
+				os.Exit(2)
+			}
+			if err := runSavedCloudApply(bookmark, contextOverride, *jsonOut); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
 
 	platform := ""
 	if hasLocalSpec {
@@ -108,6 +144,10 @@ func cmdLaunch(command, action string, args []string) {
 		platform = parsedPlatform
 	}
 	if command == "apply" {
+		if (platform == "local" || isLocalApplyID(*sessionID)) && flagNamesSet(fs, "message", "m") {
+			fmt.Fprintln(os.Stderr, "error: --message requires a Cloud Change Request")
+			os.Exit(2)
+		}
 		if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -156,6 +196,11 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudApply:
+		message, err = normalizePlanMessage(message, true)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(2)
+		}
 		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -169,14 +214,14 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: cloud runtime config flags can only seed a new session; they cannot update an existing session")
 			os.Exit(1)
 		}
-		applyCloudControl(
-			specArg,
-			*sessionID,
-			runtimeConfig,
-			*force,
-			*jsonOut,
-			contextOverride,
-		)
+		if err := runCloudApply(cloudPlanInput{
+			specArg: specArg, sessionID: *sessionID, runtimeConfig: runtimeConfig,
+			force: *force, contextOverride: contextOverride,
+			mode: "apply", autoConfirm: yes, revisionMessage: message,
+		}, *jsonOut); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 		return
 	}
 	if !hasLocalSpec {
@@ -416,112 +461,6 @@ func runCloudChildSession(
 	printSessionReceipt(os.Stdout, action, session)
 }
 
-func applyCloudControl(
-	specArg string,
-	sessionID string,
-	runtimeConfig sessionRuntimeConfig,
-	force bool,
-	jsonOut bool,
-	contextOverride string,
-) {
-	var reference *packageReference
-	if strings.HasPrefix(strings.TrimSpace(specArg), "@") {
-		parsed, err := parsePackageReference(specArg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		reference = &parsed
-	}
-	control, err := cloud.ControlClientForContext(contextOverride)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	packageName := ""
-	var packageRecord *cloud.PackageVersionRecord
-	if reference != nil {
-		packageName = reference.name
-		packageRecord, err = registryPackageForApply(control, *reference)
-	} else {
-		var pkg *specPackage
-		pkg, err = packageSpec(specArg, contextOverride)
-		if err == nil {
-			packageName = pkg.name
-			packageRecord, err = pushSpecPackage(control, pkg, "")
-		}
-	}
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	operation, session, err := applyCloudSessionPackage(
-		control,
-		packageName,
-		packageRecord.Ref,
-		sessionID,
-		runtimeConfig,
-		force,
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if jsonOut {
-		printJSON(map[string]any{
-			"context":   control.ContextName(),
-			"operation": operation,
-			"package":   packageRecord,
-			"session":   session,
-		})
-		return
-	}
-	printCloudSessionReceiptForContext(
-		os.Stdout,
-		operation,
-		session,
-		control.ContextName(),
-	)
-}
-
-func applyCloudSessionPackage(
-	control *cloud.Client,
-	name string,
-	packageRef string,
-	sessionID string,
-	runtimeConfig sessionRuntimeConfig,
-	force bool,
-) (string, *cloud.SessionRecord, error) {
-	if sessionID != "" {
-		if !isCloudApplyID(sessionID) {
-			return "", nil, fmt.Errorf("invalid cloud session id %q", sessionID)
-		}
-		session, err := control.UpdateSession(sessionID, cloud.SessionUpdateOptions{
-			PackageRef: packageRef,
-			Force:      force,
-		})
-		if err != nil && cloud.IsStatus(err, 409) {
-			current, getErr := control.GetSession(sessionID)
-			if getErr == nil && current.PackageRef == packageRef {
-				return "unchanged", current, nil
-			}
-		}
-		return "updated", session, actionableDeploymentUpdateError(err, force)
-	}
-
-	inference, err := resolveCloudInference(control, runtimeConfig.Model)
-	if err != nil {
-		return "", nil, err
-	}
-	session, err := control.CreateSession(cloud.SessionCreateOptions{
-		Name:          name,
-		PackageRef:    packageRef,
-		AgentThinking: runtimeConfig.Thinking,
-		Inference:     inference,
-	})
-	return "created", session, err
-}
-
 func actionableDeploymentUpdateError(err error, force bool) error {
 	if force {
 		return err
@@ -570,33 +509,6 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	if session.TotalCostUSD != nil {
 		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	}
-}
-
-func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.SessionRecord) {
-	printCloudSessionReceiptForContext(out, operation, session, "")
-}
-
-func printCloudSessionReceiptForContext(
-	out io.Writer,
-	operation string,
-	session *cloud.SessionRecord,
-	contextName string,
-) {
-	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
-	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
-	printSummaryField(out, "Session", session.ID)
-	printSummaryField(out, "Revision", session.PackageDigest)
-	if contextName != "" {
-		printSummaryField(out, "Context", contextName)
-	}
-	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
-		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
-	}
-	logsCommand := fmt.Sprintf("telos logs %s", session.ID)
-	if contextName != "" {
-		logsCommand = fmt.Sprintf("telos logs --context %s %s", contextName, session.ID)
-	}
-	printSummaryField(out, "Logs", logsCommand)
 }
 
 func sessionKindForCommand(command string) sessionapi.SessionKind {

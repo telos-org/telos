@@ -82,7 +82,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
-		"apply SPEC.md      Create or update a durable session from a spec",
+		"apply SPEC|PLAN    Confirm a new spec or a saved Change Request",
 		"get SESSION        Download a session's package",
 		"delete SESSION     Delete a session",
 		"pull PACKAGE       Download a package; use `pull skill REF` for a skill",
@@ -1072,273 +1072,22 @@ func TestNormalizePackageVersion(t *testing.T) {
 	}
 }
 
-func TestApplyCloudSessionPackageCreates(t *testing.T) {
-	var created bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
-			created = true
-			var body map[string]string
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatal(err)
-			}
-			if body["name"] != "auth" || body["package_ref"] != "@user-abc/auth:0.1.0" {
-				t.Fatalf("body: got %#v", body)
-			}
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "sess_123",
-				"name":           "auth",
-				"state":          "provisioning",
-				"package_ref":    "@user-abc/auth:0.1.0",
-				"package_digest": "sha256:new",
-				"created_at":     "now",
-				"updated_at":     "now",
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	operation, session, err := applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.0",
-		"",
-		sessionRuntimeConfig{},
-		false,
-	)
-	if err != nil {
-		t.Fatalf("applyCloudSessionPackage: %v", err)
-	}
-	if operation != "created" || !created {
-		t.Fatalf("operation=%q created=%v", operation, created)
-	}
-	if session.ID != "sess_123" {
-		t.Fatalf("session: got %+v", session)
-	}
-}
-
-func TestApplyCloudSessionPackageResolvesNamedSubscription(t *testing.T) {
-	var created map[string]any
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
-			_, _ = w.Write([]byte(`{"connections":[{"id":"conn_rohan","name":"openai-rohan","provider":"chatgpt-codex","status":"connected"}]}`))
-		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
-			if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
-				t.Fatal(err)
-			}
-			_, _ = w.Write([]byte(`{"id":"sess_123","name":"auth","state":"provisioning","package_ref":"@user-abc/auth:0.1.0","package_digest":"sha256:new","created_at":"now","updated_at":"now"}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	_, _, err := applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.0",
-		"",
-		sessionRuntimeConfig{Model: "openai-rohan/gpt-5.6-sol"},
-		false,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	inference, ok := created["inference"].(map[string]any)
-	if !ok {
-		t.Fatalf("inference = %#v", created["inference"])
-	}
-	if inference["source"] != "subscription" ||
-		inference["connection_id"] != "conn_rohan" ||
-		inference["model"] != "gpt-5.6-sol" {
-		t.Fatalf("inference = %#v", inference)
-	}
-	if _, exists := created["agent_model"]; exists {
-		t.Fatalf("named subscription leaked into agent_model: %#v", created)
-	}
-}
-
-func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
-	var updated bool
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
-			updated = true
-			var body map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatal(err)
-			}
-			if body["package_ref"] != "@user-abc/auth:0.1.1" {
-				t.Fatalf("body: got %#v", body)
-			}
-			if body["force"] != true {
-				t.Fatalf("force: got %#v", body["force"])
-			}
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "sess_123",
-				"name":           "auth",
-				"state":          "deploying",
-				"package_ref":    "@user-abc/auth:0.1.1",
-				"package_digest": "sha256:new",
-				"created_at":     "then",
-				"updated_at":     "now",
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	operation, session, err := applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		true,
-	)
-	if err != nil {
-		t.Fatalf("applyCloudSessionPackage: %v", err)
-	}
-	if operation != "updated" || !updated {
-		t.Fatalf("operation=%q updated=%v", operation, updated)
-	}
-	if session.ID != "sess_123" {
-		t.Fatalf("session: got %+v", session)
-	}
-}
-
-func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
-	var updateCalls int
-	var getCalls int
-	currentPackageRef := "@user-abc/auth:0.1.1"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
-			updateCalls++
-			http.Error(w, "conflict", http.StatusConflict)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_123":
-			getCalls++
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "sess_123",
-				"name":           "auth",
-				"state":          "healthy",
-				"package_ref":    currentPackageRef,
-				"package_digest": "sha256:new",
-				"created_at":     "then",
-				"updated_at":     "now",
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	operation, session, err := applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		false,
-	)
-	if err != nil {
-		t.Fatalf("applyCloudSessionPackage: %v", err)
-	}
-	if operation != "unchanged" {
-		t.Fatalf("operation: got %q want unchanged", operation)
-	}
-	if session.ID != "sess_123" || session.PackageRef != "@user-abc/auth:0.1.1" {
-		t.Fatalf("session: got %+v", session)
-	}
-	if updateCalls != 1 || getCalls != 1 {
-		t.Fatalf("calls: update=%d get=%d", updateCalls, getCalls)
-	}
-
-	currentPackageRef = "@user-abc/auth:0.1.0"
-	operation, session, err = applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		true,
-	)
-	if err == nil {
-		t.Fatal("forced update hid an unrelated conflict")
-	}
-	if operation != "updated" || session != nil {
-		t.Fatalf("operation=%q session=%+v", operation, session)
-	}
-	if updateCalls != 2 || getCalls != 2 {
-		t.Fatalf("calls: update=%d get=%d", updateCalls, getCalls)
-	}
-}
-
-func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
-			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(`{"error":{"code":"snapshot_pending","message":"internal snapshot gate detail"}}`))
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_123":
-			_, _ = w.Write([]byte(`{"id":"sess_123","name":"auth","state":"healthy","package_ref":"@user-abc/auth:0.1.0","package_digest":"sha256:old","created_at":"then","updated_at":"now"}`))
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	_, _, err := applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		false,
-	)
-	if err == nil {
-		t.Fatal("expected snapshot pending error")
-	}
-	want := "The current revision has not been snapshotted.\n" +
-		"Deploying now means you won’t be able to restore its exact workspace and runtime state.\n\n" +
-		"To deploy anyway, retry the same command with --force."
-	if err.Error() != want {
-		t.Fatalf("error:\n got: %q\nwant: %q", err, want)
+func TestSnapshotPendingSuggestsForceAndPreservesAPIError(t *testing.T) {
+	original := &cloud.APIError{StatusCode: http.StatusConflict, Code: "snapshot_pending", Detail: "internal snapshot gate detail"}
+	err := actionableDeploymentUpdateError(original, false)
+	if err == nil || !strings.Contains(err.Error(), "won’t be able to restore") || !strings.Contains(err.Error(), "--force") {
+		t.Fatalf("snapshot error=%v", err)
 	}
 	var apiErr *cloud.APIError
-	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict ||
-		apiErr.Code != "snapshot_pending" || apiErr.Detail != "internal snapshot gate detail" {
-		t.Fatalf("structured error not preserved: %#v", err)
+	if !errors.As(err, &apiErr) || apiErr != original {
+		t.Fatalf("structured error lost: %v", err)
 	}
-
-	_, _, err = applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		true,
-	)
-	if err == nil || strings.Contains(err.Error(), "retry the same command with --force") {
-		t.Fatalf("forced retry received an invalid force suggestion: %v", err)
+	if got := actionableDeploymentUpdateError(original, true); got != original {
+		t.Fatalf("forced request should not suggest force again: %v", got)
 	}
-	apiErr = nil
-	if !errors.As(err, &apiErr) || apiErr.StatusCode != http.StatusConflict ||
-		apiErr.Code != "snapshot_pending" || apiErr.Detail != "internal snapshot gate detail" {
-		t.Fatalf("forced retry changed the original error: %#v", err)
-	}
-
-	unrelated := &cloud.APIError{
-		StatusCode: http.StatusConflict,
-		Code:       "operation_in_progress",
-		Detail:     "deployment operation is already in progress",
-	}
+	unrelated := &cloud.APIError{StatusCode: http.StatusConflict, Code: "stale_revision", Detail: "changed"}
 	if got := actionableDeploymentUpdateError(unrelated, false); got != unrelated {
-		t.Fatalf("unrelated conflict changed: got %#v want %#v", got, unrelated)
+		t.Fatalf("unrelated conflict changed: %v", got)
 	}
 }
 

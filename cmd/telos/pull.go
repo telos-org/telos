@@ -224,6 +224,9 @@ func packageForSession(control *cloud.Client, sessionID string) (*pulledPackage,
 	if err != nil {
 		return nil, err
 	}
+	if session.State == "pending" && session.CurrentRevisionID == "" {
+		return nil, fmt.Errorf("session %s has no deployed revision yet; inspect its initial Change Request in the dashboard", session.ID)
+	}
 	reference, err := parsePackageReference(session.PackageRef)
 	if err != nil {
 		return nil, fmt.Errorf("session %s has invalid package_ref: %w", session.ID, err)

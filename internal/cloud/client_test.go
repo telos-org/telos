@@ -464,7 +464,7 @@ func TestClientCreateSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateSession: %v", err)
 	}
-	if session.ID != "sess_123" || session.Name != "auth" || session.State != "provisioning" {
+	if session.Deployment.ID != "sess_123" || session.Deployment.Name != "auth" || session.Deployment.State != "provisioning" {
 		t.Fatalf("session: got %+v", session)
 	}
 	if gotBody["name"] != "auth" ||
@@ -554,7 +554,7 @@ func TestClientUpdateSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("UpdateSession: %v", err)
 	}
-	if session.ID != "sess_123" || session.PackageDigest != "sha256:def" || session.State != "deploying" {
+	if session.Deployment.ID != "sess_123" || session.Deployment.PackageDigest != "sha256:def" || session.Deployment.State != "deploying" {
 		t.Fatalf("session: got %+v", session)
 	}
 	if len(gotBodies) != 1 || gotBodies[0]["package_ref"] != "@telos/auth:1.2.4" {

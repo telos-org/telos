@@ -3,6 +3,7 @@ package cloud
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -36,6 +37,8 @@ type PackageVersionRecord struct {
 }
 
 type Capabilities struct {
+	DeploymentPlans            bool `json:"deployment_plans"`
+	DeploymentChangeRequests   bool `json:"deployment_change_requests"`
 	DeploymentRevisionHistory  bool `json:"deployment_revision_history"`
 	DeploymentRevisionMessages bool `json:"deployment_revision_messages"`
 	DeploymentPackageRedeploy  bool `json:"deployment_package_redeploy"`
@@ -63,35 +66,39 @@ type SkillRecord struct {
 }
 
 type SessionRecord struct {
-	ID             string  `json:"id"`
-	Name           string  `json:"name"`
-	State          string  `json:"state"`
-	Status         string  `json:"status,omitempty"`
-	StatusReason   string  `json:"status_reason,omitempty"`
-	PackageRef     string  `json:"package_ref"`
-	PackageDigest  string  `json:"package_digest"`
-	RuntimeVersion *string `json:"runtime_version,omitempty"`
-	AgentModel     string  `json:"agent_model,omitempty"`
-	AgentThinking  string  `json:"agent_thinking,omitempty"`
-	ServiceURL     *string `json:"service_url,omitempty"`
-	DashboardURL   *string `json:"dashboard_url,omitempty"`
-	FailureReason  *string `json:"failure_reason,omitempty"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	ID                string  `json:"id"`
+	Name              string  `json:"name"`
+	State             string  `json:"state"`
+	Status            string  `json:"status,omitempty"`
+	StatusReason      string  `json:"status_reason,omitempty"`
+	PackageRef        string  `json:"package_ref"`
+	PackageDigest     string  `json:"package_digest"`
+	CurrentRevisionID string  `json:"current_revision_id,omitempty"`
+	RuntimeVersion    *string `json:"runtime_version,omitempty"`
+	AgentModel        string  `json:"agent_model,omitempty"`
+	AgentThinking     string  `json:"agent_thinking,omitempty"`
+	ServiceURL        *string `json:"service_url,omitempty"`
+	DashboardURL      *string `json:"dashboard_url,omitempty"`
+	FailureReason     *string `json:"failure_reason,omitempty"`
+	CreatedAt         string  `json:"created_at"`
+	UpdatedAt         string  `json:"updated_at"`
 }
 
 type SessionCreateOptions struct {
-	Name            string
-	PackageRef      string
-	AgentModel      string
-	AgentThinking   string
-	AgentTimeoutSec *int
-	Inference       *InferenceSelection
+	RevisionMessage string              `json:"revision_message,omitempty"`
+	Name            string              `json:"name"`
+	PackageRef      string              `json:"package_ref"`
+	AgentModel      string              `json:"agent_model,omitempty"`
+	AgentThinking   string              `json:"agent_thinking,omitempty"`
+	AgentTimeoutSec *int                `json:"agent_timeout_sec,omitempty"`
+	Inference       *InferenceSelection `json:"inference,omitempty"`
 }
 
 type SessionUpdateOptions struct {
-	PackageRef string `json:"package_ref"`
-	Force      bool   `json:"force,omitempty"`
+	RevisionMessage           string `json:"revision_message,omitempty"`
+	PackageRef                string `json:"package_ref"`
+	Force                     bool   `json:"force,omitempty"`
+	ExpectedCurrentRevisionID string `json:"expected_current_revision_id,omitempty"`
 }
 
 // The hosted control API still exposes cloud sessions at /api/deployments.
@@ -187,7 +194,9 @@ type Client struct {
 	OrgID    string
 	HTTP     *http.Client
 
-	contextName string
+	contextName    string
+	planArtifacts  bool
+	requestContext context.Context
 }
 
 type APIError struct {
@@ -215,6 +224,14 @@ func NewClient(endpoint, token string) *Client {
 		Token:    token,
 		HTTP:     &http.Client{Timeout: DefaultTimeout},
 	}
+}
+
+// WithContext returns a client whose requests stop when the operation is
+// canceled, without changing the original client's recovery requests.
+func (c *Client) WithContext(ctx context.Context) *Client {
+	copy := *c
+	copy.requestContext = ctx
+	return &copy
 }
 
 type resolvedContext struct {
@@ -344,7 +361,11 @@ func (c *Client) PublishPackageWithVisibility(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("POST", "/api/packages", body)
+	path := "/api/packages"
+	if c.planArtifacts {
+		path = "/api/deployment-plans/packages"
+	}
+	resp, err := c.do("POST", path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -434,7 +455,11 @@ func (c *Client) PublishSkillVersionWithVisibility(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("POST", "/api/skills", body)
+	path := "/api/skills"
+	if c.planArtifacts {
+		path = "/api/deployment-plans/skills"
+	}
+	resp, err := c.do("POST", path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -528,7 +553,11 @@ func (c *Client) RegistryCapabilities() (*Capabilities, error) {
 	return &capabilities, nil
 }
 
-func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error) {
+func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionMutationResult, error) {
+	capabilities, err := c.DeploymentCapabilities()
+	if err != nil {
+		return nil, err
+	}
 	payload := map[string]any{
 		"name":        opts.Name,
 		"package_ref": opts.PackageRef,
@@ -545,43 +574,42 @@ func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error
 	if opts.AgentTimeoutSec != nil {
 		payload["agent_timeout_sec"] = *opts.AgentTimeoutSec
 	}
+	if opts.RevisionMessage != "" {
+		payload["revision_message"] = opts.RevisionMessage
+	}
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("POST", "/api/deployments", body)
+	resp, err := c.doSessionMutation("POST", "/api/deployments", body, capabilities.DeploymentChangeRequests)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusAccepted {
 		return nil, readError(resp)
 	}
-	var response SessionRecord
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+	return readSessionMutationResponse(resp)
 }
 
-func (c *Client) UpdateSession(sessionID string, opts SessionUpdateOptions) (*SessionRecord, error) {
+func (c *Client) UpdateSession(sessionID string, opts SessionUpdateOptions) (*SessionMutationResult, error) {
+	capabilities, err := c.DeploymentCapabilities()
+	if err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(opts)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("PUT", "/api/deployments/"+url.PathEscape(sessionID), body)
+	resp, err := c.doSessionMutation("PUT", "/api/deployments/"+url.PathEscape(sessionID), body, capabilities.DeploymentChangeRequests)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
 		return nil, readError(resp)
 	}
-	var response SessionRecord
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
-	return &response, nil
+	return readSessionMutationResponse(resp)
 }
 
 func (c *Client) ListSessions() ([]SessionRecord, error) {
@@ -685,11 +713,22 @@ func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
 }
 
 func (c *Client) doRaw(method, path string, body []byte, contentType string) (*http.Response, error) {
+	return c.doRawWithHeaders(method, path, body, contentType, nil)
+}
+
+func (c *Client) doRawWithHeaders(method, path string, body []byte, contentType string, headers map[string]string) (*http.Response, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)
 	}
-	req, err := http.NewRequest(method, c.Endpoint+path, bodyReader)
+	ctx := c.requestContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, method, c.Endpoint+path, bodyReader)
 	if err != nil {
 		return nil, err
 	}
@@ -702,6 +741,9 @@ func (c *Client) doRaw(method, path string, body []byte, contentType string) (*h
 	}
 	if strings.TrimSpace(c.OrgID) != "" {
 		req.Header.Set("X-Telos-Org-Id", strings.TrimSpace(c.OrgID))
+	}
+	for name, value := range headers {
+		req.Header.Set(name, value)
 	}
 	return c.HTTP.Do(req)
 }
