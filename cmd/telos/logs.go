@@ -128,11 +128,13 @@ func printCloudSessionLogs(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	tail := options.Tail
-	if raw || options.All || tail > maxCloudLogTail {
-		tail = 0
-	}
-	page, err := control.GetSessionLogPage(session.ID, tail)
+	page, err := getCloudSessionLogPage(
+		control,
+		session.ID,
+		options,
+		jsonOutput,
+		raw,
+	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -156,6 +158,51 @@ func printCloudSessionLogs(
 		return
 	}
 	printStructuredLogs(os.Stdout, page.Events, options)
+}
+
+func getCloudSessionLogPage(
+	control *cloud.Client,
+	sessionID string,
+	options logViewOptions,
+	jsonOutput bool,
+	raw bool,
+) (*cloud.SessionLogPage, error) {
+	if raw || options.All || options.Tail > maxCloudLogTail {
+		return control.GetSessionLogPage(sessionID, cloud.SessionLogPageQuery{})
+	}
+	if jsonOutput {
+		return control.GetSessionLogPage(
+			sessionID,
+			cloud.SessionLogPageQuery{Tail: options.Tail},
+		)
+	}
+
+	query := cloud.SessionLogPageQuery{Tail: maxCloudLogTail}
+	page, err := control.GetSessionLogPage(sessionID, query)
+	if err != nil {
+		return nil, err
+	}
+	pageSize := len(page.Events)
+	for len(renderLogRows(page.Events)) < options.Tail && pageSize == maxCloudLogTail {
+		if !page.CanPageBackward {
+			return control.GetSessionLogPage(sessionID, cloud.SessionLogPageQuery{})
+		}
+		query.BeforeRuntime = page.BeforeRuntime
+		query.BeforeControl = page.BeforeControl
+		older, err := control.GetSessionLogPage(sessionID, query)
+		if err != nil {
+			return nil, err
+		}
+		pageSize = len(older.Events)
+		if pageSize == maxCloudLogTail && !older.CanPageBackward {
+			return control.GetSessionLogPage(sessionID, cloud.SessionLogPageQuery{})
+		}
+		page.Events = append(older.Events, page.Events...)
+		page.BeforeRuntime = older.BeforeRuntime
+		page.BeforeControl = older.BeforeControl
+		page.CanPageBackward = older.CanPageBackward
+	}
+	return page, nil
 }
 
 func enabledFlagCount(values ...bool) int {
