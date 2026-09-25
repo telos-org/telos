@@ -72,11 +72,10 @@ func TestCmdApplyJSONReturnsInitialChangeRequest(t *testing.T) {
 			mutations++
 			var body cloud.DeploymentPlanOptions
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body.Create == nil || body.Create.RequireConfirmation == nil || !*body.Create.RequireConfirmation || !body.AutoConfirm {
-				t.Errorf("initial policy/confirmation missing: %+v", body)
+			if body.Create == nil || !body.AutoConfirm {
+				t.Errorf("explicit confirmation missing: %+v", body)
 			}
 			request := testDeploymentPlan("apply", "applied")
-			request.RequireConfirmation = true
 			_ = json.NewEncoder(w).Encode(request)
 		default:
 			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -85,7 +84,7 @@ func TestCmdApplyJSONReturnsInitialChangeRequest(t *testing.T) {
 	}))
 	defer server.Close()
 	configureCloudTest(t, server.URL)
-	out := captureStdout(t, func() { cmdApply([]string{"@telos/demo:1.2.3", "--require-confirmation", "--json", "--yes"}) })
+	out := captureStdout(t, func() { cmdApply([]string{"@telos/demo:1.2.3", "--json", "--yes"}) })
 	var receipt struct {
 		Operation string                    `json:"operation"`
 		Request   cloud.ChangeRequestRecord `json:"change_request"`
@@ -94,7 +93,7 @@ func TestCmdApplyJSONReturnsInitialChangeRequest(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Operation != "applied" || receipt.Request.ID != "cr_saved" || !receipt.Request.RequireConfirmation || receipt.ReviewURL != "https://example.com/changes/cr_saved" || mutations != 1 {
+	if receipt.Operation != "applied" || receipt.Request.ID != "cr_saved" || receipt.ReviewURL != "https://example.com/changes/cr_saved" || mutations != 1 {
 		t.Fatalf("receipt=%s mutations=%d", out, mutations)
 	}
 }

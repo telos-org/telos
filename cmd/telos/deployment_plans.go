@@ -35,14 +35,13 @@ type savedDeploymentPlan struct {
 }
 
 type cloudPlanInput struct {
-	specArg             string
-	sessionID           string
-	runtimeConfig       sessionRuntimeConfig
-	force               bool
-	requireConfirmation *bool
-	contextOverride     string
-	mode                string
-	autoConfirm         bool
+	specArg         string
+	sessionID       string
+	runtimeConfig   sessionRuntimeConfig
+	force           bool
+	contextOverride string
+	mode            string
+	autoConfirm     bool
 }
 
 func checkFreshApplyConfirmation(yes, jsonOut, stdinTTY, promptTTY bool) error {
@@ -98,7 +97,6 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloud.Change
 		}
 		options.Create = &cloud.SessionCreateOptions{
 			AgentThinking: input.runtimeConfig.Thinking, Inference: inference,
-			RequireConfirmation: input.requireConfirmation,
 		}
 	}
 	var record *cloud.PackageVersionRecord

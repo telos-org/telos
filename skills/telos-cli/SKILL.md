@@ -163,9 +163,10 @@ No request automatically merges other work.
 A saved file is only a reference and grants no access. Check its context/API
 binding; never change a file's endpoint to redirect a credential.
 
-`--require-confirmation` on a create plan/apply configures subsequent deployment
-changes; it does not add an independent reviewer requirement. Authorized users
-can confirm through the dashboard or CLI, including their own requests.
+Deployment changes require explicit confirmation by an owner or admin, including
+web submissions. There is no per-deployment confirmation setting or independent
+reviewer requirement. Authorized users can confirm their own requests through
+the dashboard or CLI; `--yes` explicitly confirms a fresh CLI apply.
 Read [Change Requests](references/change-requests.md) for the full contract,
 queue behavior, cancellation, and immutable file format.
 

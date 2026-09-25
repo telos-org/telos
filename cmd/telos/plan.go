@@ -46,7 +46,6 @@ func cmdPlan(args []string) {
 	model := fs.String("model", "", "Model for a new Cloud deployment; defaults to $TELOS_MODEL")
 	thinking := fs.String("thinking", "", "Thinking effort for a new Cloud deployment; defaults to $TELOS_THINKING")
 	force := fs.Bool("force", false, "Save the snapshot bypass for an existing Cloud deployment")
-	requireConfirmation := fs.Bool("require-confirmation", false, "Require confirmation for future changes to a new Cloud deployment")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
 	contextOverride, err := cloudContextOverride(fs, *contextValue)
@@ -77,29 +76,25 @@ func cmdPlan(args []string) {
 		runtimeConfig := sessionRuntimeConfig{
 			Model: modelOption(fs, *model), Thinking: stringOption(fs, "thinking", *thinking, "TELOS_THINKING"),
 		}
-		if *sessionID != "" && (cloudRuntimeConfigSet(runtimeConfig) || flagNameSet(fs, "require-confirmation")) {
-			fmt.Fprintln(os.Stderr, "error: --model, --thinking, and --require-confirmation can only configure a new Cloud deployment")
+		if *sessionID != "" && cloudRuntimeConfigSet(runtimeConfig) {
+			fmt.Fprintln(os.Stderr, "error: --model and --thinking can only configure a new Cloud deployment")
 			os.Exit(2)
 		}
 		mode := "preview"
 		if flagNameSet(fs, "out") {
 			mode = "saved"
 		}
-		var policy *bool
-		if flagNameSet(fs, "require-confirmation") {
-			policy = requireConfirmation
-		}
 		if err := runCloudPlan(cloudPlanInput{
 			specArg: fs.Arg(0), sessionID: *sessionID, contextOverride: contextOverride,
-			runtimeConfig: runtimeConfig, force: *force, requireConfirmation: policy, mode: mode,
+			runtimeConfig: runtimeConfig, force: *force, mode: mode,
 		}, *output, *jsonOut); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 		return
 	}
-	if flagNamesSet(fs, "out", "model", "thinking", "force", "require-confirmation") || contextOverride != "" {
-		fmt.Fprintln(os.Stderr, "error: --out, --context, --model, --thinking, --force, and --require-confirmation require a Cloud plan")
+	if flagNamesSet(fs, "out", "model", "thinking", "force") || contextOverride != "" {
+		fmt.Fprintln(os.Stderr, "error: --out, --context, --model, --thinking, and --force require a Cloud plan")
 		os.Exit(2)
 	}
 	markdown, err := os.ReadFile(specPath)

@@ -37,13 +37,10 @@ func cmdLaunch(command, action string, args []string) {
 	sessionID := &sessionIDValue
 	forceValue := false
 	force := &forceValue
-	requireConfirmationValue := false
-	requireConfirmationFlag := &requireConfirmationValue
 	yes := false
 	if command == "apply" {
 		sessionID = fs.String("session", "", "Managed session ID to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
-		requireConfirmationFlag = fs.Bool("require-confirmation", false, "Require confirmation for future changes to a new Cloud deployment")
 		fs.BoolVar(&yes, "yes", false, "Confirm a new Cloud plan automatically; requires Apply permission")
 		fs.BoolVar(&yes, "y", false, "Shorthand for --yes")
 	}
@@ -122,8 +119,8 @@ func cmdLaunch(command, action string, args []string) {
 				fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session")
 				os.Exit(1)
 			}
-			if flagNamesSet(fs, "session", "workspace", "force", "require-confirmation", "model", "thinking", "max-cost-usd") {
-				fmt.Fprintln(os.Stderr, "error: a saved plan freezes its target and inputs; --session, --workspace, --force, --require-confirmation, --model, --thinking, and --max-cost-usd cannot be used with it")
+			if flagNamesSet(fs, "session", "workspace", "force", "model", "thinking", "max-cost-usd") {
+				fmt.Fprintln(os.Stderr, "error: a saved plan freezes its target and inputs; --session, --workspace, --force, --model, --thinking, and --max-cost-usd cannot be used with it")
 				os.Exit(2)
 			}
 			if err := runSavedCloudApply(bookmark, contextOverride, *jsonOut); err != nil {
@@ -144,10 +141,6 @@ func cmdLaunch(command, action string, args []string) {
 		platform = parsedPlatform
 	}
 	if command == "apply" {
-		if flagNameSet(fs, "require-confirmation") && (*sessionID != "" || platform == "local") {
-			fmt.Fprintln(os.Stderr, "error: --require-confirmation can only configure a new Cloud deployment; use its Settings page to change an existing deployment")
-			os.Exit(1)
-		}
 		if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -196,10 +189,6 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudApply:
-		var requireConfirmation *bool
-		if flagNameSet(fs, "require-confirmation") {
-			requireConfirmation = requireConfirmationFlag
-		}
 		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -215,7 +204,7 @@ func cmdLaunch(command, action string, args []string) {
 		}
 		if err := runCloudApply(cloudPlanInput{
 			specArg: specArg, sessionID: *sessionID, runtimeConfig: runtimeConfig,
-			force: *force, contextOverride: contextOverride, requireConfirmation: requireConfirmation,
+			force: *force, contextOverride: contextOverride,
 			mode: "apply", autoConfirm: yes,
 		}, *jsonOut); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)

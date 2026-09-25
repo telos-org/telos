@@ -85,13 +85,12 @@ type SessionRecord struct {
 }
 
 type SessionCreateOptions struct {
-	Name                string              `json:"name"`
-	PackageRef          string              `json:"package_ref"`
-	AgentModel          string              `json:"agent_model,omitempty"`
-	AgentThinking       string              `json:"agent_thinking,omitempty"`
-	AgentTimeoutSec     *int                `json:"agent_timeout_sec,omitempty"`
-	Inference           *InferenceSelection `json:"inference,omitempty"`
-	RequireConfirmation *bool               `json:"require_confirmation,omitempty"`
+	Name            string              `json:"name"`
+	PackageRef      string              `json:"package_ref"`
+	AgentModel      string              `json:"agent_model,omitempty"`
+	AgentThinking   string              `json:"agent_thinking,omitempty"`
+	AgentTimeoutSec *int                `json:"agent_timeout_sec,omitempty"`
+	Inference       *InferenceSelection `json:"inference,omitempty"`
 }
 
 type SessionUpdateOptions struct {
@@ -557,9 +556,6 @@ func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionMutationResul
 	if err != nil {
 		return nil, err
 	}
-	if opts.RequireConfirmation != nil && !capabilities.DeploymentChangeRequests {
-		return nil, fmt.Errorf("this Cloud server does not support --require-confirmation; update Cloud before using this option")
-	}
 	payload := map[string]any{
 		"name":        opts.Name,
 		"package_ref": opts.PackageRef,
@@ -575,9 +571,6 @@ func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionMutationResul
 	}
 	if opts.AgentTimeoutSec != nil {
 		payload["agent_timeout_sec"] = *opts.AgentTimeoutSec
-	}
-	if opts.RequireConfirmation != nil {
-		payload["require_confirmation"] = *opts.RequireConfirmation
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {

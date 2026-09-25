@@ -65,9 +65,8 @@ revision live in Cloud. The file contains no token or secret values, and holding
 it grants no permission. Telos refuses to overwrite an existing output file.
 Removing the local file does not discard the Cloud request.
 
-For a new deployment, `--model`, `--thinking`, and `--require-confirmation`
-are frozen when you create its plan. The last option configures confirmation
-for subsequent deployment changes; saved proposals always require confirmation.
+For a new deployment, `--model` and `--thinking` are frozen when you create
+its plan. Saved proposals always require explicit confirmation.
 For an update, `--force` records the snapshot bypass in the saved proposal.
 The review output shows frozen creation settings and any snapshot bypass.
 
@@ -161,13 +160,14 @@ apply while another request owns the deployment's turn. Any later deployment
 revision can make that saved plan stale, including redeploy or restore. Saved
 plans and previews have no time-based expiry.
 
-## Deployment settings and results
+## Web confirmation and deployment results
 
-An organization owner can enable **Require confirmation before applying** in a
-deployment's Settings page. This protects dashboard deployment changes such as
-updates, redeploys, and restores. Turning it off does not release proposals that
-already require confirmation, and never gives members Apply permission.
-CLI saved plans and interactive apply retain their explicit confirmation flows.
+Web submissions create Change Requests, including new deployments, updates,
+redeploys, and restores. An owner or admin inspects the proposal and clicks
+**Confirm & Apply**. You can confirm your own request if you have Apply permission.
+There is no per-deployment confirmation setting. CLI saved plans and interactive
+apply retain their explicit confirmation flows; `--yes` confirms a fresh CLI
+apply automatically without granting additional permissions.
 
 `--force` only records permission to bypass the missing-snapshot gate. It does
 not bypass confirmation, permissions, active operations, or baseline checks.
