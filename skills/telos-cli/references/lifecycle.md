@@ -27,6 +27,10 @@ Persistent: SPEC.md → plan → apply → Goal/session/deployment → revision 
 Bounded:    local spec → run with a bound → run session → evidence
 ```
 
+Both paths use the same implementation/evaluation loop. Persistent sessions
+sleep between cycles and resume on updates, child completion, or configured
+wakeups; bounded sessions stop when complete or when a bound is reached.
+
 `apply` returns after Cloud accepts a revision for work. Reconciliation
 continues in the background; `describe` reports the managed Goal state.
 

@@ -65,7 +65,7 @@ type PVGConfig struct {
 	MaxCostUSD      *float64
 	Verbose         bool
 	EpochID         int
-	IsController    bool
+	Persistent      bool
 	PrimarySpecPath string
 	StopRequested   func() bool
 }

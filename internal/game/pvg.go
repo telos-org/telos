@@ -209,7 +209,7 @@ func (p *PVG) shouldStop(deadline time.Time) bool {
 
 func (p *PVG) promptOptions() spec.PromptOptions {
 	return spec.PromptOptions{
-		Controller:      p.Config.IsController,
+		Persistent:      p.Config.Persistent,
 		PrimarySpecPath: p.Config.PrimarySpecPath,
 		ReviewBudget:    p.reviewBudgetMode(),
 		ReviewCycleCap:  p.Config.Until,

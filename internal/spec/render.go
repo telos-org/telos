@@ -15,7 +15,7 @@ const (
 
 // PromptOptions carries session metadata that affects prompt rendering.
 type PromptOptions struct {
-	Controller      bool
+	Persistent      bool
 	PrimarySpecPath string
 	ReviewBudget    bool
 	ReviewCycleCap  int
@@ -24,13 +24,9 @@ type PromptOptions struct {
 // RenderProverTask builds the full prover task prompt.
 func RenderProverTask(compiled *CompiledEnvironment, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
-	preamble, _ := ReadPrompt("prover.md")
-	if options.Controller {
-		controller, _ := ReadPrompt("controller.md")
-		preamble = joinNonEmpty([]string{controller, preamble})
-	}
+	role, _ := ReadPrompt("prover.md")
 	parts := []string{
-		preamble,
+		role,
 		renderSessionContext(compiled, options),
 		renderSpec(compiled),
 		renderSkillsRoster(compiled, RoleProver),
@@ -44,9 +40,9 @@ func RenderProverTask(compiled *CompiledEnvironment, transcriptPath string, opts
 // RenderVerifierTask builds the full verifier task prompt.
 func RenderVerifierTask(compiled *CompiledEnvironment, transcriptPath string, opts ...PromptOptions) string {
 	options := promptOptions(opts)
-	preamble, _ := ReadPrompt("verifier.md")
+	role, _ := ReadPrompt("verifier.md")
 	parts := []string{
-		preamble,
+		role,
 		renderSessionContext(compiled, options),
 		renderSpec(compiled),
 		renderSkillsRoster(compiled, RoleVerifier),
@@ -69,14 +65,17 @@ func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) str
 	if platform == "" {
 		platform = "cloud"
 	}
+	lifecycle := "bounded"
+	if opts.Persistent {
+		lifecycle = "persistent"
+	}
 	lines := []string{
 		"## Session",
 		"",
 		fmt.Sprintf("- Spec: `%s`", compiled.Environment.Name),
 		fmt.Sprintf("- Platform: `%s`", platform),
-	}
-	if opts.Controller {
-		lines = append(lines, "- Session kind: `controller`")
+		fmt.Sprintf("- Lifecycle: `%s`", lifecycle),
+		"- Root goal changes (`telos apply`) are reserved for operators.",
 	}
 	if opts.PrimarySpecPath != "" {
 		lines = append(lines, fmt.Sprintf("- Primary spec: `%s`", opts.PrimarySpecPath))
@@ -150,6 +149,7 @@ func renderTranscriptProtocol(transcriptPath string) string {
 
 func renderWorkspace() string {
 	return "## Workspace\n\nDurable working tree; use git history to inspect prior work.\n" +
+		"Inspect existing child sessions before launching more.\n" +
 		"Child tasks use isolated workspaces. Inspect their transcripts and evidence; extract `workspace.tar.gz` checkpoints to integrate results, including git state.\n"
 }
 
@@ -164,7 +164,7 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		lines = append(lines, "- The final update states what is ready for independent review; do not claim independent verification.")
 		return strings.Join(lines, "\n")
 	}
-	if opts.Controller {
+	if opts.Persistent {
 		lines = append(lines,
 			"- Concede this cycle when the goal holds, or the only next action is waiting for an inspected pending/running child and no duplicate work was launched. Waiting does not mean the goal is complete.",
 			"- Relevant failed or stopped children, and completed children with uninspected or missing expected results, are blockers.",

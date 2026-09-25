@@ -394,25 +394,25 @@ func TestRenderWithRequiredEvaluationSkills(t *testing.T) {
 	}
 }
 
-func TestRenderControllerPromptDoesNotAutoInjectOrchestrationSkill(t *testing.T) {
+func TestRenderPersistentSessionContext(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: controller-test\nplatform: local\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: persistent-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderProverTask(compiled, "/tmp/transcript.md", PromptOptions{
-		Controller:      true,
+		Persistent:      true,
 		PrimarySpecPath: "/tmp/spec.md",
 	})
 
-	if !strings.Contains(task, "## Controller Session") {
-		t.Error("controller prompt should include controller role guidance")
+	if !strings.Contains(task, "Lifecycle: `persistent`") {
+		t.Error("prompt should identify the persistent lifecycle")
 	}
 	if strings.Contains(task, "`telos-orchestrate`") {
-		t.Error("controller prompt should not auto-inject telos-orchestrate")
+		t.Error("persistent session prompt should not auto-inject telos-orchestrate")
 	}
 	if !strings.Contains(task, "Primary spec: `/tmp/spec.md`") {
-		t.Error("controller prompt should include primary spec path")
+		t.Error("persistent session prompt should include primary spec path")
 	}
 }
 
@@ -529,7 +529,7 @@ func TestRenderVerifierTaskReviewBudgetUsesStatusContract(t *testing.T) {
 	}
 }
 
-func TestRenderVerifierTaskGatesControllerOnlyTaskState(t *testing.T) {
+func TestRenderVerifierTaskAllowsWaitingOnlyForPersistentSessions(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: task-state\nplatform: local\n---\nBody"), 0o644)
@@ -537,18 +537,18 @@ func TestRenderVerifierTaskGatesControllerOnlyTaskState(t *testing.T) {
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderVerifierTask(compiled, "/tmp/transcript.md")
 	if strings.Contains(task, "waiting for an inspected pending/running child") {
-		t.Fatalf("leaf task verifier should not include controller task-state rule:\n%s", task)
+		t.Fatalf("bounded verifier must not concede while waiting for children:\n%s", task)
 	}
 
-	controllerTask := RenderVerifierTask(compiled, "/tmp/transcript.md", PromptOptions{Controller: true})
-	if !strings.Contains(controllerTask, "waiting for an inspected pending/running child") {
-		t.Fatalf("controller verifier should include controller task-state rule:\n%s", controllerTask)
+	persistentTask := RenderVerifierTask(compiled, "/tmp/transcript.md", PromptOptions{Persistent: true})
+	if !strings.Contains(persistentTask, "waiting for an inspected pending/running child") {
+		t.Fatalf("persistent verifier should allow waiting for inspected children:\n%s", persistentTask)
 	}
-	if !strings.Contains(controllerTask, "Waiting does not mean the goal is complete") {
-		t.Fatalf("controller verifier should allow clean wait cycles:\n%s", controllerTask)
+	if !strings.Contains(persistentTask, "Waiting does not mean the goal is complete") {
+		t.Fatalf("waiting must not claim goal completion:\n%s", persistentTask)
 	}
-	if !strings.Contains(controllerTask, "Relevant failed or stopped children, and completed children with uninspected or missing expected results, are blockers") {
-		t.Fatalf("controller verifier should still block bad child state:\n%s", controllerTask)
+	if !strings.Contains(persistentTask, "Relevant failed or stopped children, and completed children with uninspected or missing expected results, are blockers") {
+		t.Fatalf("persistent verifier should still block bad child state:\n%s", persistentTask)
 	}
 }
 

@@ -988,7 +988,7 @@ func TestLocalWorkerEnvIncludesSessionContext(t *testing.T) {
 	}
 }
 
-func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
+func TestRunLocalSessionUsesUpdatedLifecycleContext(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 
@@ -1028,18 +1028,18 @@ func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
 	}
 
 	task := exec.firstTask()
-	if !strings.Contains(task, "## Controller Session") {
-		t.Fatal("controller session should receive controller prompt")
+	if !strings.Contains(task, "Lifecycle: `persistent`") {
+		t.Fatal("persistent session should receive lifecycle context")
 	}
 	if strings.Contains(task, "`telos-orchestrate`") {
-		t.Fatal("controller prompt should not auto-inject telos-orchestrate")
+		t.Fatal("persistent session prompt should not auto-inject telos-orchestrate")
 	}
 	if !strings.Contains(task, "Primary spec: `") {
-		t.Fatal("controller prompt should include primary spec path")
+		t.Fatal("persistent session prompt should include primary spec path")
 	}
 }
 
-func TestRunLocalControllerSessionUsesControllerPromptByDefault(t *testing.T) {
+func TestRunLocalPersistentSessionUsesLifecycleContext(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(t.TempDir(), "telos-output"))
@@ -1078,8 +1078,8 @@ func TestRunLocalControllerSessionUsesControllerPromptByDefault(t *testing.T) {
 	}
 
 	task := exec.firstTask()
-	if !strings.Contains(task, "## Controller Session") {
-		t.Fatal("controller prompt should be enabled by session kind")
+	if !strings.Contains(task, "Lifecycle: `persistent`") {
+		t.Fatal("persistent session prompt should be enabled by session kind")
 	}
 }
 
