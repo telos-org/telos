@@ -116,6 +116,10 @@ telos plan SPEC.md --session SESSION_ID --context CONTEXT
 telos apply SPEC.md --session SESSION_ID --context CONTEXT
 ```
 
+When revising a Goal, reuse work that serves the current spec and preserve
+required data and history. Verify that the new behavior works and superseded
+behavior is gone; earlier approval does not establish the new revision's success.
+
 A healthy revision may still be waiting for its restorable snapshot. If that
 snapshot gate rejects the update, do not bypass it silently. Tell the user:
 

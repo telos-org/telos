@@ -55,7 +55,6 @@ type LiveAgentEvent struct {
 // AgentExecutor runs one PVG agent turn.
 type AgentExecutor interface {
 	ExecuteTurn(task string, role string, turnState *TurnState) TurnResult
-	WorkspaceState() string
 	CheckpointWorkspace(dest string) bool
 }
 
@@ -66,7 +65,7 @@ type PVGConfig struct {
 	MaxCostUSD      *float64
 	Verbose         bool
 	EpochID         int
-	IsController    bool
+	Persistent      bool
 	PrimarySpecPath string
 	StopRequested   func() bool
 }

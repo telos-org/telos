@@ -242,7 +242,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		MaxCostUSD:      cfg.MaxCostUSD,
 		Verbose:         true,
 		EpochID:         epochID,
-		IsController:    controllerPromptEnabled(manifest),
+		Persistent:      manifest.SessionKind == sessionapi.KindController,
 		PrimarySpecPath: compileSpecPath,
 		StopRequested:   func() bool { return sessionStopped(sessionDir) },
 	}
@@ -302,10 +302,6 @@ func numericMapValue(values map[string]any, key string) int {
 	default:
 		return 0
 	}
-}
-
-func controllerPromptEnabled(manifest *sessionapi.Manifest) bool {
-	return manifest.SessionKind == sessionapi.KindController
 }
 
 func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecutor, error) {
