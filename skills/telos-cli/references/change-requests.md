@@ -39,6 +39,11 @@ provides a preview dashboard link. Anyone with permission to view the deployment
 can inspect it. A preview cannot be applied, even by an owner. Nothing deploys.
 Omit `--session` to preview creating a new deployment.
 
+The terminal preview identifies the spec, Cloud target, workspace, and deployment.
+For an existing deployment, it also shows the current package and the base revision
+used for the comparison. The dashboard link opens the same preview. Confirmation
+status and request messages appear on saved Change Requests and apply receipts.
+
 Planning uploads private, content-addressed spec and skill artifacts to the
 Registry. It does not publish or overwrite a reusable package version. Existing
 Registry references can also be planned directly:

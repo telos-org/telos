@@ -28,7 +28,7 @@ func TestPlanMessageValidationBeforeAnyNetwork(t *testing.T) {
 				var calls atomic.Int32
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); http.NotFound(w, r) }))
 				defer server.Close()
-				_, _, err := createCloudPlan(cloud.NewClient(server.URL, "token"), cloudPlanInput{specArg: "SPEC.md", mode: mode, autoConfirm: mode == "apply", revisionMessage: value})
+				_, err := createCloudPlan(cloud.NewClient(server.URL, "token"), cloudPlanInput{specArg: "SPEC.md", mode: mode, autoConfirm: mode == "apply", revisionMessage: value})
 				if err == nil || !strings.Contains(err.Error(), "--message") || calls.Load() != 0 {
 					t.Fatalf("err=%v calls=%d", err, calls.Load())
 				}
@@ -155,7 +155,7 @@ func TestPlanPermissionAndCapabilityFailurePrecedeUploads(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			_, _, err := createCloudPlan(cloud.NewClient(server.URL, "token"), cloudPlanInput{specArg: "not-needed.md", mode: "apply", revisionMessage: "Update the demo"})
+			_, err := createCloudPlan(cloud.NewClient(server.URL, "token"), cloudPlanInput{specArg: "not-needed.md", mode: "apply", revisionMessage: "Update the demo"})
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("err=%v", err)
 			}
@@ -182,7 +182,7 @@ func TestCancellationDuringUploadCannotSubmitAutoConfirmedApply(t *testing.T) {
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "SPEC.md")
 	_ = os.WriteFile(path, []byte(testPlanSpec), 0o600)
-	_, _, err := createCloudPlan(cloud.NewClient(server.URL, "token").WithContext(ctx), cloudPlanInput{specArg: path, mode: "apply", autoConfirm: true, revisionMessage: "Update the demo"})
+	_, err := createCloudPlan(cloud.NewClient(server.URL, "token").WithContext(ctx), cloudPlanInput{specArg: path, mode: "apply", autoConfirm: true, revisionMessage: "Update the demo"})
 	if !errors.Is(err, context.Canceled) || submissions.Load() != 0 {
 		t.Fatalf("canceled upload submitted apply: err=%v submissions=%d", err, submissions.Load())
 	}

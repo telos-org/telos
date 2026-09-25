@@ -47,6 +47,13 @@ type cloudPlanInput struct {
 	revisionMessage string
 }
 
+type cloudPlanResult struct {
+	request       *cloud.ChangeRequestRecord
+	packageRecord *cloud.PackageVersionRecord
+	specName      string
+	currentRef    string
+}
+
 func normalizePlanMessage(message string, required bool) (string, error) {
 	if !utf8.ValidString(message) {
 		return "", fmt.Errorf("--message must contain valid UTF-8 text")
@@ -97,22 +104,24 @@ func cloudPlanPreflight(control *cloud.Client, sessionID, mode string) error {
 	return nil
 }
 
-func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloud.ChangeRequestRecord, *cloud.PackageVersionRecord, error) {
+func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloudPlanResult, error) {
 	message, err := normalizePlanMessage(input.revisionMessage, input.mode != "preview")
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if err := cloudPlanPreflight(control, input.sessionID, input.mode); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	options := cloud.DeploymentPlanOptions{
 		Mode: input.mode, DeploymentID: input.sessionID, AutoConfirm: input.autoConfirm,
 	}
+	var currentRef string
 	if input.sessionID != "" {
 		current, err := control.GetSession(input.sessionID)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
+		currentRef = current.PackageRef
 		options.Update = &cloud.SessionUpdateOptions{
 			Force: input.force, ExpectedCurrentRevisionID: current.CurrentRevisionID,
 			RevisionMessage: message,
@@ -120,7 +129,7 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloud.Change
 	} else {
 		inference, err := resolveCloudInference(control, input.runtimeConfig.Model)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		options.Create = &cloud.SessionCreateOptions{
 			AgentThinking: input.runtimeConfig.Thinking, Inference: inference,
@@ -132,12 +141,12 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloud.Change
 	if strings.HasPrefix(strings.TrimSpace(input.specArg), "@") {
 		reference, err := parsePackageReference(input.specArg)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		name = reference.name
 		record, err = registryPackageForApply(control, reference)
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	} else {
 		path := resolveSpecPath(input.specArg)
@@ -151,7 +160,7 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloud.Change
 			return err
 		})
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 	}
 	if options.Create != nil {
@@ -162,15 +171,17 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloud.Change
 	}
 	request, err := control.CreateDeploymentPlan(options)
 	if err != nil {
-		return nil, nil, actionableDeploymentUpdateError(err, input.force)
+		return nil, actionableDeploymentUpdateError(err, input.force)
 	}
 	if request.Mode != input.mode {
-		return nil, nil, fmt.Errorf("Cloud returned a %q request for a %q plan", request.Mode, input.mode)
+		return nil, fmt.Errorf("Cloud returned a %q request for a %q plan", request.Mode, input.mode)
 	}
 	if input.mode != "apply" && request.Preview == nil {
-		return nil, nil, fmt.Errorf("Cloud returned a plan without a preview; request %s", request.ID)
+		return nil, fmt.Errorf("Cloud returned a plan without a preview; request %s", request.ID)
 	}
-	return request, record, nil
+	return &cloudPlanResult{
+		request: request, packageRecord: record, specName: name, currentRef: currentRef,
+	}, nil
 }
 
 func cloudPlanOrgID(control *cloud.Client) (string, error) {
@@ -318,10 +329,11 @@ func runCloudPlan(input cloudPlanInput, output string, jsonOut bool) error {
 			return err
 		}
 	}
-	request, pkg, err := createCloudPlan(control, input)
+	plan, err := createCloudPlan(control, input)
 	if err != nil {
 		return err
 	}
+	request, pkg := plan.request, plan.packageRecord
 	if writer != nil {
 		if err := writer.save(newSavedDeploymentPlan(control, request, orgID)); err != nil {
 			return fmt.Errorf("Change Request %s was saved, but its local reference could not be written: %w; review it at %s", request.ID, err, cloudRequestReviewURL(control, *request))
@@ -331,7 +343,11 @@ func runCloudPlan(input cloudPlanInput, output string, jsonOut bool) error {
 		printDeploymentPlanJSON(control, request, pkg, output)
 		return nil
 	}
-	printDeploymentPlan(os.Stdout, control, request)
+	if request.Mode == "preview" {
+		printDeploymentPreview(os.Stdout, control, plan)
+	} else {
+		printDeploymentPlan(os.Stdout, control, request)
+	}
 	if output != "" {
 		printSummaryField(os.Stdout, "Saved", output)
 	}
@@ -349,10 +365,11 @@ func runCloudApply(input cloudPlanInput, jsonOut bool) error {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	request, pkg, err := createCloudPlan(control.WithContext(ctx), input)
+	plan, err := createCloudPlan(control.WithContext(ctx), input)
 	if err != nil {
 		return err
 	}
+	request, pkg := plan.request, plan.packageRecord
 	if !jsonOut {
 		printDeploymentPlan(os.Stdout, control, request)
 	}
@@ -525,6 +542,22 @@ func deploymentPlanState(markdown string, skills []cloud.DeploymentPlanSkill) pl
 	return state
 }
 
+func printDeploymentPreview(out io.Writer, control *cloud.Client, plan *cloudPlanResult) {
+	request := plan.request
+	printSummaryField(out, "Spec", plan.specName)
+	printSummaryField(out, "Target", "cloud")
+	printSummaryField(out, "Context", control.ContextName())
+	printSummaryField(out, "Session", request.DeploymentID)
+	if plan.currentRef != "" {
+		printSummaryField(out, "Current", plan.currentRef)
+	}
+	printSummaryField(out, "Review", cloudRequestReviewURL(control, *request))
+	if request.Error != nil {
+		printSummaryField(out, "Reason", *request.Error)
+	}
+	printDeploymentPlanDetails(out, request)
+}
+
 func printDeploymentPlan(out io.Writer, control *cloud.Client, request *cloud.ChangeRequestRecord) {
 	printSummaryField(out, "Request", request.ID)
 	printSummaryField(out, "Mode", request.Mode)
@@ -538,8 +571,14 @@ func printDeploymentPlan(out io.Writer, control *cloud.Client, request *cloud.Ch
 	printSummaryField(out, "Context", control.ContextName())
 	printSummaryField(out, "Session", request.DeploymentID)
 	printSummaryField(out, "Review", cloudRequestReviewURL(control, *request))
+	printDeploymentPlanDetails(out, request)
+}
+
+func printDeploymentPlanDetails(out io.Writer, request *cloud.ChangeRequestRecord) {
 	if creation := request.Creation; creation != nil {
-		printSummaryField(out, "Name", creation.Name)
+		if request.Mode != "preview" {
+			printSummaryField(out, "Name", creation.Name)
+		}
 		if creation.AgentModel != nil {
 			printSummaryField(out, "Model", *creation.AgentModel)
 		}
