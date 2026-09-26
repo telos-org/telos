@@ -1,8 +1,10 @@
 package executor
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -357,6 +359,201 @@ func TestPiLiveProjectorPreservesRepeatedActivityWithoutReplayingFile(t *testing
 	}
 }
 
+func TestPiLiveProjectorBuffersPartialLines(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	var events []game.LiveAgentEvent
+	projector := &piLiveProjector{
+		sessionPath: path,
+		turnState: &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
+			events = append(events, event)
+		}},
+	}
+	// The file may not exist when the watcher starts.
+	projector.observeSessionFile(false)
+	writePiSession(t, path, `{"message":{"role":"user","content":"ignored"}}`)
+	projector.observeSessionFile(false)
+
+	// A record can exceed bufio.Scanner's default limit and split inside UTF-8.
+	body := strings.Repeat("x", 96*1024) + " café"
+	line := piProgressLine(body)
+	split := strings.Index(line, "é") + 1
+	for _, part := range []string{line[:split], line[split:]} {
+		appendPiBytes(t, path, part)
+		projector.observeSessionFile(false)
+		projector.observeSessionFile(false)
+		if len(events) != 0 {
+			t.Fatalf("emitted an unfinished record: %#v", events)
+		}
+	}
+	appendPiBytes(t, path, "\ninvalid JSON\n\n"+piProgressLine("next")+"\n")
+	projector.observeSessionFile(false)
+	projector.observeSessionFile(true)
+	want := []game.LiveAgentEvent{
+		{Kind: "progress_update", Text: body},
+		{Kind: "progress_update", Text: "next"},
+	}
+	if !slices.Equal(events, want) {
+		t.Fatalf("partial records were lost, changed, or replayed (got %d events)", len(events))
+	}
+}
+
+func TestPiLiveProjectorFlushesFinalLineOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	var events []game.LiveAgentEvent
+	projector := &piLiveProjector{
+		sessionPath: path,
+		turnState: &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
+			events = append(events, event)
+		}},
+	}
+	if err := os.WriteFile(path, []byte(piProgressLine("last")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projector.observeSessionFile(false)
+	if len(events) != 0 {
+		t.Fatal("emitted final record before the final drain")
+	}
+	projector.observeSessionFile(true)
+	projector.observeSessionFile(true)
+	appendPiBytes(t, path, "\n")
+	projector.observeSessionFile(false)
+	if !slices.Equal(events, []game.LiveAgentEvent{{Kind: "progress_update", Text: "last"}}) {
+		t.Fatalf("final drain events = %#v", events)
+	}
+}
+
+func TestPiLiveProjectorResetsOnFileChange(t *testing.T) {
+	for _, change := range []string{"same-size replacement", "larger replacement", "truncation"} {
+		t.Run(change, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+			var events []game.LiveAgentEvent
+			projector := &piLiveProjector{
+				sessionPath: path,
+				turnState: &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
+					events = append(events, event)
+				}},
+			}
+			original := piProgressLine("old") + "\n" + piProgressLine("unfinished")[:25]
+			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			projector.observeSessionFile(false)
+			replacement := piProgressLine("new") + "\n"
+			if change == "truncation" {
+				if err := os.Truncate(path, 0); err != nil {
+					t.Fatal(err)
+				}
+				projector.observeSessionFile(false)
+				appendPiBytes(t, path, replacement)
+			} else {
+				replacement += strings.Repeat("\n", len(original)-len(replacement))
+				if change == "larger replacement" {
+					replacement += "\n"
+				}
+				if err := os.WriteFile(path+".new", []byte(replacement), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(path+".new", path); err != nil {
+					t.Fatal(err)
+				}
+			}
+			projector.observeSessionFile(false)
+			projector.observeSessionFile(true)
+			want := []game.LiveAgentEvent{
+				{Kind: "progress_update", Text: "old"},
+				{Kind: "progress_update", Text: "new"},
+			}
+			if !slices.Equal(events, want) {
+				t.Fatalf("events after file change = %#v, want %#v", events, want)
+			}
+		})
+	}
+}
+
+func TestPiLiveProjectorDefersConcurrentAppendUntilNextPoll(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	writePiSession(t, path, piProgressLine("first"))
+	var events []game.LiveAgentEvent
+	projector := &piLiveProjector{
+		sessionPath: path,
+		turnState: &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
+			events = append(events, event)
+			if len(events) == 1 {
+				appendPiSession(t, path, piProgressLine("second"))
+			}
+		}},
+	}
+	projector.observeSessionFile(false)
+	if len(events) != 1 {
+		t.Fatalf("poll should stop at its initial file size, got %d events", len(events))
+	}
+	projector.observeSessionFile(false)
+	projector.observeSessionFile(true)
+	want := []game.LiveAgentEvent{
+		{Kind: "progress_update", Text: "first"},
+		{Kind: "progress_update", Text: "second"},
+	}
+	if !slices.Equal(events, want) {
+		t.Fatalf("events = %#v, want %#v", events, want)
+	}
+}
+
+// Run this same benchmark against both revisions. Setup and appends are outside
+// the timer; allocations and time measure one live poll after history was read.
+func BenchmarkPiLiveProjectorPoll(b *testing.B) {
+	for _, historyMiB := range []int{1, 16, 64} {
+		for _, appendEvent := range []bool{false, true} {
+			name := fmt.Sprintf("history_%dMiB/append_%t", historyMiB, appendEvent)
+			b.Run(name, func(b *testing.B) {
+				path := filepath.Join(b.TempDir(), "pi-session.jsonl")
+				f, err := os.Create(path)
+				if err != nil {
+					b.Fatal(err)
+				}
+				defer f.Close()
+				chunk := strings.Repeat("{\"type\":\"session\"}\n", 4096)
+				var size int64
+				for size < int64(historyMiB*1024*1024) {
+					n, err := f.WriteString(chunk)
+					if err != nil {
+						b.Fatal(err)
+					}
+					size += int64(n)
+				}
+				count := 0
+				projector := &piLiveProjector{
+					sessionPath: path,
+					offset:      size,
+					turnState: &game.TurnState{OnLiveEvent: func(game.LiveAgentEvent) {
+						count++
+					}},
+				}
+				line := piProgressLine("benchmark") + "\n"
+				b.ReportAllocs()
+				b.ResetTimer()
+				for i := 0; i < b.N; i++ {
+					if appendEvent {
+						b.StopTimer()
+						if _, err := f.WriteString(line); err != nil {
+							b.Fatal(err)
+						}
+						b.StartTimer()
+					}
+					projector.observeSessionFile(false)
+				}
+				b.StopTimer()
+				if appendEvent && count != b.N {
+					b.Fatalf("emitted %d events, want %d", count, b.N)
+				}
+			})
+		}
+	}
+}
+
+func piProgressLine(text string) string {
+	return fmt.Sprintf(`{"message":{"role":"assistant","content":[{"type":"text","text":"<progress_update>%s</progress_update>"}]}}`, text)
+}
+
 func writePiSession(t *testing.T, path string, line string) {
 	t.Helper()
 	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
@@ -366,12 +563,17 @@ func writePiSession(t *testing.T, path string, line string) {
 
 func appendPiSession(t *testing.T, path string, line string) {
 	t.Helper()
+	appendPiBytes(t, path, line+"\n")
+}
+
+func appendPiBytes(t *testing.T, path string, data string) {
+	t.Helper()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer f.Close()
-	if _, err := f.WriteString(line + "\n"); err != nil {
+	if _, err := f.WriteString(data); err != nil {
 		t.Fatal(err)
 	}
 }
