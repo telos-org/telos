@@ -297,7 +297,7 @@ func TestPrintCloudSessionReceiptShowsNextUsefulAction(t *testing.T) {
 			t.Fatalf("cloud session receipt missing %q:\n%s", want, text)
 		}
 	}
-	for _, notWant := range []string{"Name", "Target", "Package", "Digest", "Model", "Thinking", "Dashboard"} {
+	for _, notWant := range []string{"Name", "Target", "Package", "Digest", "Dashboard"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("cloud session receipt should omit %q:\n%s", notWant, text)
 		}

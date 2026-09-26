@@ -1107,6 +1107,7 @@ func TestApplyCloudSessionPackageCreates(t *testing.T) {
 		"",
 		sessionRuntimeConfig{},
 		false,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1119,12 +1120,12 @@ func TestApplyCloudSessionPackageCreates(t *testing.T) {
 	}
 }
 
-func TestApplyCloudSessionPackageResolvesNamedSubscription(t *testing.T) {
+func TestApplyCloudSessionPackageSendsSubscriptionSelection(t *testing.T) {
 	var created map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
-			_, _ = w.Write([]byte(`{"connections":[{"id":"conn_rohan","name":"openai-rohan","provider":"chatgpt-codex","status":"connected"}]}`))
+			_, _ = w.Write([]byte(`{"errors":{},"connections":[{"source":"subscription","id":"conn_rohan","name":"openai-rohan","provider":"chatgpt-codex","status":"connected"}]}`))
 		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
 			if err := json.NewDecoder(r.Body).Decode(&created); err != nil {
 				t.Fatal(err)
@@ -1141,8 +1142,9 @@ func TestApplyCloudSessionPackageResolvesNamedSubscription(t *testing.T) {
 		"auth",
 		"@user-abc/auth:0.1.0",
 		"",
-		sessionRuntimeConfig{Model: "openai-rohan/gpt-5.6-sol"},
+		sessionRuntimeConfig{},
 		false,
+		&cloud.InferenceSelection{Source: "subscription", ConnectionID: "conn_rohan", Model: "gpt-5.6-sol"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1199,6 +1201,7 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 		"sess_123",
 		sessionRuntimeConfig{},
 		true,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1244,6 +1247,7 @@ func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
 		"sess_123",
 		sessionRuntimeConfig{},
 		false,
+		nil,
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1266,6 +1270,7 @@ func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
 		"sess_123",
 		sessionRuntimeConfig{},
 		true,
+		nil,
 	)
 	if err == nil {
 		t.Fatal("forced update hid an unrelated conflict")
@@ -1299,6 +1304,7 @@ func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
 		"sess_123",
 		sessionRuntimeConfig{},
 		false,
+		nil,
 	)
 	if err == nil {
 		t.Fatal("expected snapshot pending error")
@@ -1322,6 +1328,7 @@ func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
 		"sess_123",
 		sessionRuntimeConfig{},
 		true,
+		nil,
 	)
 	if err == nil || strings.Contains(err.Error(), "retry the same command with --force") {
 		t.Fatalf("forced retry received an invalid force suggestion: %v", err)

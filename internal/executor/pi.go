@@ -3,7 +3,6 @@ package executor
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -155,6 +154,8 @@ type piLiveProjector struct {
 	sessionPath string
 	turnState   *game.TurnState
 	offset      int64
+	fileInfo    os.FileInfo
+	pending     []byte
 
 	stop chan struct{}
 	done chan struct{}
@@ -195,38 +196,49 @@ func (p *piLiveProjector) watch() {
 }
 
 func (p *piLiveProjector) observeSessionFile(final bool) {
-	data, err := os.ReadFile(p.sessionPath)
+	f, err := os.Open(p.sessionPath)
 	if err != nil {
 		return
 	}
-	if int64(len(data)) < p.offset {
-		p.offset = 0
-	}
-	remaining := data[p.offset:]
-	limit := len(remaining)
-	if !final {
-		lastNewline := bytes.LastIndexByte(remaining, '\n')
-		if lastNewline < 0 {
-			return
-		}
-		limit = lastNewline + 1
-	}
-	if limit == 0 {
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
 		return
 	}
-	p.offset += int64(limit)
-	for _, line := range strings.Split(string(remaining[:limit]), "\n") {
-		if strings.TrimSpace(line) == "" {
-			continue
+	if info.Size() < p.offset || (p.fileInfo != nil && !os.SameFile(p.fileInfo, info)) {
+		p.offset = 0
+		p.pending = nil
+	}
+	p.fileInfo = info
+	if p.offset < info.Size() {
+		// Read only new bytes, stopping at this poll's snapshot even if Pi keeps
+		// writing. Keep an unfinished record so idle polls don't reread it.
+		reader := bufio.NewReader(io.NewSectionReader(f, p.offset, info.Size()-p.offset))
+		for {
+			line, err := reader.ReadBytes('\n')
+			p.offset += int64(len(line))
+			p.pending = append(p.pending, line...)
+			if len(line) > 0 && line[len(line)-1] == '\n' {
+				p.emitPendingLine()
+			}
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				return
+			}
 		}
-		for _, event := range piLineEvents(line) {
-			p.emit(event)
-		}
+	}
+	if final && len(p.pending) > 0 {
+		p.emitPendingLine()
 	}
 }
 
-func (p *piLiveProjector) emit(event game.LiveAgentEvent) {
-	p.turnState.OnLiveEvent(event)
+func (p *piLiveProjector) emitPendingLine() {
+	for _, event := range piLineEvents(string(p.pending)) {
+		p.turnState.OnLiveEvent(event)
+	}
+	p.pending = nil
 }
 
 func piLineEvents(line string) []game.LiveAgentEvent {

@@ -85,3 +85,49 @@ Per-trial logs include:
 - `telos-harbor-spec.md`
 - `telos-harbor-stdout.log`
 - `telos-harbor-stderr.log`
+
+## Compare exact local builds
+
+To compare a baseline and a code change, build `telos` and `telosd` from each
+revision into separate directories. Build for the task container's OS and CPU,
+not your host: these commands target Linux amd64, including when run on macOS.
+Use `GOARCH=arm64` instead if your task containers use arm64.
+
+Run this in the clean baseline checkout, using its commit as the version label:
+
+```bash
+mkdir -p /tmp/telos-baseline
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath \
+  -ldflags "-X main.Version=baseline-$(git rev-parse --short HEAD)" \
+  -o /tmp/telos-baseline/ ./cmd/telos ./cmd/telosd
+```
+
+Run the same build in the changed checkout with `candidate` in the label and
+`/tmp/telos-candidate/` as the output directory. Save the baseline commit and
+the candidate commit or patch alongside the results. Then use the updated
+Harbor shim for both runs, selecting only the binary directory differently:
+
+```bash
+TELOS_HARBOR_TELOS_BINARY_DIR=/tmp/telos-baseline \
+TELOS_HARBOR_JOB_NAME=telos-baseline \
+./integrations/harbor/run_scbench_circuit_eval.sh
+
+TELOS_HARBOR_TELOS_BINARY_DIR=/tmp/telos-candidate \
+TELOS_HARBOR_JOB_NAME=telos-candidate \
+./integrations/harbor/run_scbench_circuit_eval.sh
+```
+
+These commands run the model and incur normal benchmark costs. The directory
+is on the machine running Harbor; the shim uploads both binaries into each
+task container, replacing any existing Telos installation and selecting the
+uploaded daemon even if the container has a different `TELOSD_PATH`. Missing or
+unexecutable binaries fail installation instead of falling back to a release.
+Direct Harbor invocations can use `--ak telos_binary_dir=/absolute/build/path`.
+This option requires `install_telos=true`, the default. Each trial records
+the installed versions and SHA-256 hashes in `telos-harbor-build.log`.
+
+Keep the task set, model, thinking level, turn and cost limits, skills, Pi
+version, Harbor version, and container images the same in both runs. Save
+those versions/settings with your results; selecting a binary directory pins
+Telos only. Compare pass rates across repeated attempts, alongside cost and
+runtime. Log-reader microbenchmarks measure efficiency, not task quality.
