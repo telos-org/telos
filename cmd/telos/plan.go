@@ -42,7 +42,7 @@ func cmdPlan(args []string) {
 	fs := newCommandFlagSet("plan", "telos plan SPEC.md [--out=FILE] [flags]")
 	sessionID := fs.String("session", "", "Managed session ID to compare")
 	jsonOut := fs.Bool("json", false, "JSON output")
-	output := fs.String("out", "", "Save a Cloud Change Request and write its reference to this file")
+	output := fs.String("out", "", "Save a Cloud plan and write its reference to this file")
 	message := ""
 	fs.StringVar(&message, "message", "", "Describe the change; required with --out")
 	fs.StringVar(&message, "m", "", "Shorthand for --message")

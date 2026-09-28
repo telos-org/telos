@@ -34,6 +34,19 @@ func cloudRequestReviewURL(control *cloud.Client, request cloud.ChangeRequestRec
 	return cloudChangeRequestURL(control, request.DeploymentID, request.ID)
 }
 
+func cloudPlanDeploymentURL(control *cloud.Client, request cloud.ChangeRequestRecord) string {
+	base, err := url.Parse(cloudRequestReviewURL(control, request))
+	if err != nil {
+		return ""
+	}
+	base.Path = "/goals/" + url.PathEscape(request.DeploymentID)
+	query := base.Query()
+	query.Del("tab")
+	query.Del("request")
+	base.RawQuery = query.Encode()
+	return base.String()
+}
+
 func changeRequestStatus(status string) string {
 	switch status {
 	case "awaiting_confirmation":

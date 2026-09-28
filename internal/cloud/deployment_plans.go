@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 )
 
 type DeploymentPlanSkill struct {
@@ -30,8 +31,9 @@ type DeploymentPlanCreation struct {
 }
 
 type DeploymentPlanAccess struct {
-	CanPlan  bool `json:"can_plan"`
-	CanApply bool `json:"can_apply"`
+	RequiresChangeRequests *bool `json:"requires_change_requests"`
+	CanPlan                bool  `json:"can_plan"`
+	CanApply               bool  `json:"can_apply"`
 }
 
 type DeploymentPlanOptions struct {
@@ -78,7 +80,11 @@ func (c *Client) CreateDeploymentPlan(options DeploymentPlanOptions) (*ChangeReq
 	return c.deploymentPlanRequest(http.MethodPost, "/api/deployment-plans", body)
 }
 
+// Plan IDs identify proposals stored outside the Change Request system.
 func changeRequestPath(deploymentID, requestID string) string {
+	if strings.HasPrefix(requestID, "plan_") {
+		return "/api/deployment-plans/" + url.PathEscape(requestID)
+	}
 	return "/api/deployments/" + url.PathEscape(deploymentID) + "/change-requests/" + url.PathEscape(requestID)
 }
 
@@ -93,7 +99,11 @@ func (c *Client) ConfirmChangeRequest(request ChangeRequestRecord) (*ChangeReque
 	if err != nil {
 		return nil, err
 	}
-	return c.deploymentPlanRequest(http.MethodPost, changeRequestPath(request.DeploymentID, request.ID)+"/confirm", body)
+	action := "/confirm"
+	if request.Kind == "plan" {
+		action = "/apply"
+	}
+	return c.deploymentPlanRequest(http.MethodPost, changeRequestPath(request.DeploymentID, request.ID)+action, body)
 }
 
 func (c *Client) DiscardChangeRequest(deploymentID, requestID string) (*ChangeRequestRecord, error) {

@@ -145,7 +145,7 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	if command == "apply" {
 		if (platform == "local" || isLocalApplyID(*sessionID)) && flagNamesSet(fs, "message", "m") {
-			fmt.Fprintln(os.Stderr, "error: --message requires a Cloud Change Request")
+			fmt.Fprintln(os.Stderr, "error: --message requires a Cloud deployment")
 			os.Exit(2)
 		}
 		if err := validateApplySessionPlatform(*sessionID, platform); err != nil {

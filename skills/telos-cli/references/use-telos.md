@@ -185,20 +185,20 @@ the deployment to a new revision, this saved request is stale: update your spec
 and create a new proposal. Telos does not merge specs.
 
 Alternatively, `telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 --context personal`
-queues a new regular request, prepares its plan when it reaches the front, and
-asks for confirmation then. The current revision keeps reconciling while it
+prepares a plan and asks for confirmation. On a protected deployment, it queues
+a Change Request and prepares the comparison when its turn arrives. The current revision keeps reconciling while it
 waits. The Goal, session, deployment, and history stay the same when the new
 revision executes. Observe that revision through `working` to `ready`, then
 exercise the updated API behavior.
 
 ### Deploy without a restorable snapshot
 
-A confirmed request can wait for the current revision's snapshot before it
-executes. Wait for the snapshot to finish, or discard that unstarted request on
-its dashboard and create a new proposal with `--force`. Applying with this bypass
-can leave the previous revision without an exact workspace and runtime restore
-point. A second ordinary apply would queue behind the blocked first request; it
-does not change that request's frozen flags.
+A protected request can wait for the current revision's snapshot. An unprotected
+apply stops and returns its plan link if the snapshot is not ready. On that page,
+you can wait and retry, or choose Apply Now. You can also create a fresh CLI plan
+with `--force`. Applying with this bypass can leave the previous revision without
+an exact workspace and runtime restore point. A second protected regular apply
+queues behind the first request; an unprotected plan does not reserve a turn.
 
 ```bash
 telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 --context personal --force

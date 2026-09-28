@@ -28,9 +28,9 @@ Bounded:    local spec → run with a bound → run session → evidence
 ```
 
 Cloud `plan` creates a preview without applying it; `plan --out=FILE` saves an
-immutable proposal for later confirmation. `apply SPEC.md` waits its turn,
-prepares a fresh plan, and asks for confirmation. `apply FILE` confirms the exact
-saved request. A successful apply receipt reports confirmed, applying, or applied
+immutable proposal for later confirmation. `apply SPEC.md` prepares a fresh plan
+and asks for confirmation; protected deployments first wait for their queue turn.
+`apply FILE` confirms the exact saved proposal. A successful apply receipt reports confirmed, applying, or applied
 work, not successful agent verification. See [Change Requests](change-requests.md).
 After execution, reconciliation continues in the background; `describe`
 reports the managed Goal state and pending requests separately.
@@ -56,7 +56,7 @@ A managed Goal reports:
 
 ## `ready` belongs to a revision
 
-After the Change Request is applied, capture its proposed digest (or the
+After the plan or Change Request is applied, capture its proposed digest (or the
 revision digest from an older server's immediate receipt), then compare it with
 `package_digest` from `describe --json`. On current reconciliation-aware
 runtimes, `ready` means reconciliation completed and the latest verification
@@ -76,7 +76,9 @@ displayed digest matches the receipt.
 
 ## Observe without waiting forever
 
-For a saved plan's `requested` receipt, follow its review URL until an authorized
+Unprotected saved plans report `planned` and have a preview link. Apply them
+through that page or `telos apply FILE`; they do not appear in Change Requests.
+For a protected saved plan's `requested` receipt, follow its review URL until an authorized
 owner or admin confirms it. If it is queued or awaiting confirmation, the old
 revision's status does not describe the proposal. `describe --json` includes
 `pending_change_requests` separately. An initial creation waiting for confirmation
@@ -158,9 +160,9 @@ telos plan SPEC.md --session SESSION_ID --context CONTEXT
 telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --context CONTEXT
 ```
 
-The Goal, session, deployment, and history remain stable. The submission enters
-the queue; when executed, the new immutable revision moves through the same
-lifecycle. [Use Telos](use-telos.md) shows the full diff and receipt.
+The Goal, session, deployment, and history remain stable. Protected submissions
+enter the Change Request queue; unprotected updates apply directly after your
+confirmation. Both create an immutable revision with the same lifecycle. [Use Telos](use-telos.md) shows the full diff and receipt.
 
 ## Delete a Goal
 

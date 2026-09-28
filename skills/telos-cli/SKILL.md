@@ -100,8 +100,10 @@ runtime.
    Library lists, even after applying. Keep explicit Registry publishing separate
    from deployment approval; use `telos push` only when publishing is authorized.
 
-3. Present the proposal's context, request ID, and review URL. A member can submit
-   this proposal but only an owner or admin can apply it. If someone else must
+3. Present the proposal's context, plan or request ID, and dashboard URL. On a
+   protected deployment, only an owner or admin can apply it. For an unprotected
+   deployment, an authorized editor can apply; any workspace member can create
+   a new deployment. If someone else must
    review it, return the link and stop. Do not escalate to another credential.
    When the user has authorized applying this exact proposal and your credential
    has Apply permission, confirm it without another terminal prompt:
@@ -111,8 +113,8 @@ runtime.
    ```
 
    Alternatively, for an authorized fresh spec, use `telos apply SPEC.md --message "Record book ownership" --yes
-   --json --context CONTEXT`. This takes a queue turn, prepares a fresh plan, and
-   confirms automatically. `-y` is shorthand for `--yes`. Never infer permission
+   --json --context CONTEXT`. This prepares a fresh plan and confirms automatically.
+   Protected deployments take a queue turn before preparing the comparison. `-y` is shorthand for `--yes`. Never infer permission
    from the lack of a terminal. Fresh Cloud apply without `--yes` requires an
    interactive terminal and rejects `--json` before uploads or request creation.
    Do not pipe `yes` to work around that check.
@@ -149,10 +151,11 @@ If the user wants to bypass it, explain:
 > Deploying now means you won’t be able to restore its exact workspace and
 > runtime state.
 
-Use explicit authorization for that loss. If an earlier unstarted request is
-blocking the deployment, have it discarded on its dashboard first; submitting a
-second regular apply would only queue behind it. Then create a new proposal with
-`--force` (a saved request cannot be changed to add the flag):
+Use explicit authorization for that loss. The dashboard's Apply Now action can
+allow the snapshot bypass for the waiting proposal. Alternatively, discard a
+blocking protected request before creating a fresh proposal with `--force`;
+another protected regular apply would otherwise queue behind it. An unprotected
+plan does not reserve a queue turn. A local saved file cannot override its flags:
 
 ```bash
 telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --context CONTEXT --force --yes --json
@@ -164,23 +167,29 @@ runtime availability, confirmation requirements, or stale-revision protection.
 
 Saved plans freeze the proposal and baseline. A different deployment revision
 makes them stale; update the spec and create a new request instead of retrying
-confirmation with changed inputs. Regular apply waits in order before planning;
-saved plans wait outside that queue. Plans and Change Requests do not expire.
+confirmation with changed inputs. On protected deployments, regular apply waits
+in order before planning; saved plans wait outside that queue. Unprotected plans
+never create Change Requests or reserve a turn while waiting for confirmation;
+if another apply changes the baseline, create a fresh plan. Plans and Change Requests do not expire.
 An abandoned regular apply holds its turn until it is applied or discarded.
 No request automatically merges other work.
 A saved file is only a reference and grants no access. Check its context/API
 binding; never change a file's endpoint to redirect a credential.
 
-When creating a Change Request with `plan --out` or fresh Cloud `apply`, supply
+When saving a plan with `plan --out` or running fresh Cloud `apply`, supply
 `--message` (or `-m`) with a concise description of the intended change. Messages
 must be nonblank, single-line, and at most 200 Unicode characters. `--yes` and
 `--json` do not waive this requirement. Preview-only plans may omit a message;
 applying a saved plan retains its original message and rejects overrides.
 
-Deployment changes require explicit confirmation by an owner or admin, including
-web submissions. There is no per-deployment confirmation setting or independent
-reviewer requirement. Authorized users can confirm their own requests through
-the dashboard or CLI; `--yes` explicitly confirms a fresh CLI apply.
+New deployments are unprotected. Owners/admins can enable Require change requests
+in a deployment's Settings. Protected updates, redeploys, and restores require
+owner/admin confirmation; authorized users can confirm their own requests.
+Unprotected writes use the ordinary deployment pipeline without Change Requests.
+CLI fresh apply still requires its own confirmation, or explicit `--yes`.
+Do not turn off protection to bypass a review. A policy change or stale baseline
+requires a fresh plan. A direct snapshot failure stops rather than waiting in a
+queue; return its preview link so the user can wait and retry or choose Apply Now.
 Read [Change Requests](references/change-requests.md) for the full contract,
 queue behavior, cancellation, and immutable file format.
 
@@ -220,7 +229,10 @@ Report the spec, target, context, session ID, current revision and state, and
 the evidence behind the result. Distinguish work that was planned, applied,
 published, requested, updated, or deleted. The `requested` receipt operation
 identifies an unconfirmed saved Change Request; confirmed, applying, and applied
-receipts report its later execution state. Verification is a separate result.
+receipts report its later execution state. Unprotected receipts use `plan` and
+`preview_url`, with `operation: planned` for a saved plan and `deployment_url`
+after execution starts. They contain no `change_request`. Verification is a
+separate result.
 
 ## References
 

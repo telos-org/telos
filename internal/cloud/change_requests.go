@@ -13,6 +13,8 @@ type ChangeRequestActor struct {
 }
 
 type ChangeRequestRecord struct {
+	Kind               string                  `json:"kind,omitempty"`
+	ErrorCode          *string                 `json:"error_code,omitempty"`
 	ID                 string                  `json:"id"`
 	Mode               string                  `json:"mode"`
 	AutoConfirm        bool                    `json:"auto_confirm"`
