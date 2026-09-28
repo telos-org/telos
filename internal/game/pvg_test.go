@@ -21,9 +21,13 @@ type fakeExecutor struct {
 	checkpointOK    bool
 	turnDirs        []string
 	delay           time.Duration
+	onTurn          func(*TurnState)
 }
 
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) TurnResult {
+	if f.onTurn != nil {
+		f.onTurn(ts)
+	}
 	if f.delay > 0 {
 		deadline := time.Now().Add(f.delay)
 		for time.Now().Before(deadline) {
@@ -35,6 +39,7 @@ func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) Turn
 	}
 	if ts != nil {
 		f.turnDirs = append(f.turnDirs, ts.Dir)
+
 	}
 	if role == "prover" {
 		if f.proverIdx < len(f.proverResults) {
@@ -129,6 +134,70 @@ func TestPVGVerifierConcedes(t *testing.T) {
 	}
 	if !strings.Contains(transcript, "## Result") {
 		t.Error("transcript should contain result")
+	}
+}
+
+func TestPVGHumanProgressLeavesTechnicalHandoffIntact(t *testing.T) {
+	state := NewPVGState("pvg-test", t.TempDir(), "human-progress")
+	if err := state.Ensure(); err != nil {
+		t.Fatal(err)
+	}
+	exec := &fakeExecutor{
+		onTurn: func(ts *TurnState) {
+			ts.OnLiveEvent(LiveAgentEvent{Kind: "progress_update", Text: "Checking restart recovery without duplicate orders."})
+			ts.OnLiveEvent(LiveAgentEvent{Kind: "review", Text: "Replay evidence: evaluation/restart.go."})
+		},
+		verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: "Verified technical evidence.\n<status>CONCEDE</status>"}},
+	}
+	result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{EpochID: 7}).Run()
+	if result.GameResult != GameSuccess || !result.VerifierConceded {
+		t.Fatalf("result=%+v", result)
+	}
+	transcript := ReadTranscript(state.TranscriptPath)
+	if !strings.Contains(transcript, "duplicate orders") || !strings.Contains(transcript, "evaluation/restart.go") || !strings.Contains(transcript, "Verified technical evidence") {
+		t.Fatalf("technical transcript was changed: %s", transcript)
+	}
+	data, err := os.ReadFile(state.EvidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	humanCount := 0
+	technicalCount := 0
+	phaseCount := 0
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var event map[string]any
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		body := event["data"].(map[string]any)
+		if event["event"] == "round_start" {
+			phaseCount++
+			if body["audience"] != "user" {
+				t.Fatalf("phase must identify new human presentation: %#v", event)
+			}
+		}
+		if event["event"] == "agent_progress" {
+			if event["epoch_id"] != float64(7) || event["session_id"] != "human-progress" || body["turn_id"] == "" {
+				t.Fatalf("missing provenance: %#v", event)
+			}
+			switch body["audience"] {
+			case "user":
+				humanCount++
+				if body["kind"] != "progress_update" || body["text"] != "Checking restart recovery without duplicate orders." {
+					t.Fatalf("human update changed: %#v", event)
+				}
+			case "agent":
+				technicalCount++
+				if body["kind"] != "review" || body["text"] != "Replay evidence: evaluation/restart.go." {
+					t.Fatalf("technical update changed: %#v", event)
+				}
+			default:
+				t.Fatalf("new progress must identify its audience: %#v", event)
+			}
+		}
+	}
+	if humanCount != 2 || technicalCount != 2 || phaseCount != 2 {
+		t.Fatalf("got human=%d technical=%d phases=%d", humanCount, technicalCount, phaseCount)
 	}
 }
 
@@ -518,5 +587,82 @@ func TestPVGWorkspaceCheckpoint(t *testing.T) {
 	}
 	if _, err := os.Stat(result.WorkspaceCheckpointPath); err != nil {
 		t.Errorf("workspace checkpoint file missing: %v", err)
+	}
+}
+
+func TestPVGLiveToolEventsRemainInEvidenceOnly(t *testing.T) {
+	compiled := compileTestSpec(t)
+	state := NewPVGState("pvg-test", t.TempDir(), "test-session-live-events")
+	liveEvents := []LiveAgentEvent{
+		{Kind: "tool", Text: "Reading app/main.py"},
+		{Kind: "tool", Text: "Running shell command"},
+		{Kind: "progress_update", Text: "Reading app/main.py revealed missing input validation."},
+		{Kind: "review", Text: "The input validation tests pass."},
+		{Kind: "summary", Text: "Input validation is ready."},
+	}
+	exec := &fakeExecutor{
+		onTurn: func(ts *TurnState) {
+			for _, event := range liveEvents {
+				ts.OnLiveEvent(event)
+			}
+		},
+		proverResults: []TurnResult{
+			{Role: "prover", Status: StatusContinue, Logs: "Added input validation."},
+		},
+		verifierResults: []TurnResult{
+			{Role: "verifier", Status: StatusConcede, Logs: "Accepted the validation change."},
+		},
+	}
+	if result := NewPVG(compiled, exec, state, PVGConfig{}).Run(); result.GameResult != GameSuccess {
+		t.Fatalf("result: %s error=%q", result.GameResult, result.Error)
+	}
+
+	transcript := ReadTranscript(state.TranscriptPath)
+	if strings.Contains(transcript, "<tool>") {
+		t.Errorf("transcript contains automatic tool notices:\n%s", transcript)
+	}
+	for _, event := range liveEvents {
+		if event.Kind == "tool" {
+			continue
+		}
+		block := "<" + event.Kind + ">" + event.Text + "</" + event.Kind + ">"
+		if count := strings.Count(transcript, block); count != 2 {
+			t.Errorf("expected %q in both turns, got %d copies", block, count)
+		}
+	}
+	for _, report := range []string{"Added input validation.", "Accepted the validation change."} {
+		if !strings.Contains(transcript, report) {
+			t.Errorf("transcript lost completed report %q", report)
+		}
+	}
+
+	data, err := os.ReadFile(state.EvidencePath)
+	if err != nil {
+		t.Fatalf("read evidence: %v", err)
+	}
+	progressByRole := make(map[string][]LiveAgentEvent)
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var record struct {
+			Event string         `json:"event"`
+			Role  string         `json:"role"`
+			Data  LiveAgentEvent `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatalf("decode evidence: %v", err)
+		}
+		if record.Event == "agent_progress" {
+			progressByRole[record.Role] = append(progressByRole[record.Role], record.Data)
+		}
+	}
+	for _, role := range []string{"prover", "verifier"} {
+		got := progressByRole[role]
+		if len(got) != len(liveEvents) {
+			t.Fatalf("%s evidence: got %d live events, want %d", role, len(got), len(liveEvents))
+		}
+		for i, want := range liveEvents {
+			if got[i] != want {
+				t.Errorf("%s evidence event %d: got %#v, want %#v", role, i, got[i], want)
+			}
+		}
 	}
 }

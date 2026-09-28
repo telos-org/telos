@@ -83,9 +83,10 @@ browser login does not replace the token in the environment.
 
 ## Choose the context
 
-`telos config` shows authentication status, the active context, and connected
-subscriptions. Choose the workspace's default model under **Inference** in the
-Telos app. See [Models and inference](inference.md) for deployment overrides.
+`telos config` shows authentication status, the active context, the workspace
+model default, subscriptions, and saved API-key connections. Choose available
+models and set the shared default under **Inference** in the Telos app.
+See [Models and inference](inference.md) to override one deployment with `--model`.
 
 The personal context is `personal`. Team contexts use their handle:
 
@@ -98,8 +99,8 @@ Commands also accept a stable organization ID when you have one. Receipts and
 JSON output still show `personal` or the team's `@handle`, keeping the visible
 context consistent across commands.
 
-`telos config --context personal` returns to the personal context. A
-command-level `--context` overrides `TELOS_CONTEXT` and stored configuration
+`telos config --context personal` returns to the personal context. On deployment
+commands, `--context` overrides `TELOS_CONTEXT` and stored configuration
 for that invocation without changing either. Carry the chosen context through
 `plan`, `apply`, `describe`, `logs`, and `delete` so each action has one visible
 target.

@@ -37,7 +37,8 @@ Config file     ~/.telos/config.yaml
 Endpoint        https://api.usetelos.ai
 Authentication  valid
 Context         personal
-Subscriptions
+Workspace model telos/default
+Connections
 ```
 
 [Install Telos](install.md) covers first-time setup and PATH repair. This
@@ -130,6 +131,9 @@ Name      reading-list
 Status    ready
 Session   sess_c7d2f0a4e8
 Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
+Inference Managed
+Model     telos/default
+Thinking  medium (requested)
 Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 ```

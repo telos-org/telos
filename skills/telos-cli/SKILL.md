@@ -60,6 +60,11 @@ Choose the lifecycle that matches the requested outcome:
 For model selection and `--thinking` on `apply` or `run`, read
 [Models and inference](references/inference.md).
 
+For Cloud, use `telos config` to inspect saved connections and the workspace
+default. Select a saved subscription or API-key connection with the existing
+`--model CONNECTION/MODEL` form. Manage connections, available models, and
+shared defaults under **Inference** in the Telos app.
+
 ## Authorization
 
 Before `run`, `apply`, `push`, or `delete`, use the user's existing authorization when it covers the resolved action and target. Otherwise, present them and obtain approval. Include the spec and workspace for a
@@ -201,7 +206,7 @@ Inside a Telos session, the same command creates a linked child session; see
 
 | Effect | Commands |
 | --- | --- |
-| Inspect state | Local `plan`, `list`, `describe`, `logs` |
+| Inspect state | `config`, local `plan`, `list`, `describe`, `logs` |
 | Upload private artifacts and record a preview or saved proposal without deploying | Cloud `plan`, `plan --out=FILE` |
 | Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context` |
 | Start bounded local execution; may spend money | `run` |
