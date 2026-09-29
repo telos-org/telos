@@ -149,9 +149,12 @@ telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --con
 Explicit Registry publishing with `telos push` still requires an unused version
 for changed content.
 
-A healthy revision may still be waiting for its restorable snapshot. A confirmed
-request can wait at this gate without executing. Prefer waiting for the snapshot.
-If the user wants to bypass it, explain:
+A healthy revision may still be waiting for its restorable snapshot. If it is
+missing, Cloud leaves the proposal pending and unconfirmed. The CLI exits with
+an error and its dashboard link, including with `--yes`; it does not keep polling
+or automatically apply when the snapshot becomes ready. The dashboard's Wait
+action leaves it pending until someone confirms again. Prefer waiting for the
+snapshot. If the user wants to bypass it, explain:
 
 > The current revision has not been snapshotted.
 >
@@ -202,8 +205,8 @@ or discard them. CLI fresh apply still requires its own confirmation, or explici
 `--yes`. Do not turn off protection to bypass a review. Cloud checks current
 permissions when applying. A direct plan prepared before protection was enabled
 requires a fresh request; saved Change Requests remain subject to the new policy.
-A stale baseline requires a fresh plan. A direct snapshot failure stops rather than waiting in a
-queue; return its preview link so the user can wait and retry or choose Apply Now.
+A stale baseline requires a fresh plan. Return the dashboard link after a
+missing-snapshot error so the user can confirm later or choose Apply Now.
 Read [Change Requests](references/change-requests.md) for the full contract,
 queue behavior, cancellation, and immutable file format.
 

@@ -196,9 +196,11 @@ Plans and requests have no time-based expiry.
 
 An interrupted direct apply can be retried from the same saved file or plan
 page. Cloud resumes the admitted operation without creating another revision.
-If a direct apply stops because a snapshot is missing, the CLI returns an error
-and the preview link instead of polling a queue. Wait and retry, or choose
-**Apply Now** on that page. A fresh CLI update can use `--force` to allow the
+If a snapshot is missing, your plan or Change Request stays pending and
+unconfirmed. The CLI returns an error and the dashboard link, even with `--yes`.
+On the dashboard, **Wait** leaves it pending until you confirm again. Snapshot
+completion alone does not apply it. Choose **Apply Now** to proceed without a
+snapshot. A fresh CLI update can use `--force` to allow the
 snapshot bypass. This may leave the previous revision without a restore point;
 it does not bypass permissions, active operations, protection, or stale checks.
 

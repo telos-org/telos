@@ -369,6 +369,111 @@ func TestQueuedAutomaticApplyStillPrintsItsPreparedPlan(t *testing.T) {
 	}
 }
 
+func TestApplyMissingSnapshotLeavesRequestPending(t *testing.T) {
+	for _, mode := range []string{"interactive", "automatic", "queued automatic"} {
+		t.Run(mode, func(t *testing.T) {
+			blocked := testDeploymentPlan("apply", "awaiting_confirmation")
+			reason, code := "The current revision must finish snapshotting before it can change.", "snapshot_pending"
+			blocked.Error, blocked.ErrorCode = &reason, &code
+			initial := blocked
+			switch mode {
+			case "interactive":
+				initial.Error, initial.ErrorCode = nil, nil
+			case "queued automatic":
+				initial.Status, initial.Preview = "queued", nil
+				initial.Error, initial.ErrorCode = nil, nil
+			}
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if calls.Add(1) > 1 {
+					t.Error("snapshot choice caused another API call")
+				}
+				wantMethod, wantPath := http.MethodGet, "/api/deployments/sess_123/change-requests/cr_saved"
+				if mode == "interactive" {
+					wantMethod, wantPath = http.MethodPost, wantPath+"/confirm"
+				}
+				if mode == "automatic" || r.Method != wantMethod || r.URL.Path != wantPath {
+					t.Errorf("unexpected snapshot action: %s %s", r.Method, r.URL.Path)
+				}
+				_ = json.NewEncoder(w).Encode(blocked)
+			}))
+			defer server.Close()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			var prompt bytes.Buffer
+			request, err := awaitCloudApply(ctx, cloud.NewClient(server.URL, "token"), &initial, mode != "interactive",
+				strings.NewReader("yes\n"), io.Discard, &prompt, time.Millisecond)
+			if request != nil || err == nil || ctx.Err() != nil {
+				t.Fatalf("did not stop for a snapshot choice: request=%+v err=%v ctx=%v", request, err, ctx.Err())
+			}
+			for _, want := range []string{"still pending", reason, "Confirm again", "Apply Now", blocked.ReviewURL} {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("missing %q from snapshot guidance: %v", want, err)
+				}
+			}
+			wantCalls := int32(1)
+			if mode == "automatic" {
+				wantCalls = 0
+			}
+			if calls.Load() != wantCalls || (mode != "interactive" && prompt.Len() != 0) {
+				t.Fatalf("calls=%d want=%d prompt=%s", calls.Load(), wantCalls, prompt.String())
+			}
+		})
+	}
+}
+
+func TestSavedApplyMissingSnapshotDoesNotReportApproval(t *testing.T) {
+	var confirmations atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDeploymentPlanPrerequisites(w, r) {
+			return
+		}
+		request := testDeploymentPlan("saved", "awaiting_confirmation")
+		switch r.Method + " " + r.URL.Path {
+		case "GET /api/deployments/sess_123/change-requests/cr_saved":
+		case "POST /api/deployments/sess_123/change-requests/cr_saved/confirm":
+			confirmations.Add(1)
+			reason, code := "No snapshot is available.", "snapshot_pending"
+			request.Error, request.ErrorCode = &reason, &code
+		default:
+			t.Errorf("unexpected saved snapshot action: %s %s", r.Method, r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(request)
+	}))
+	defer server.Close()
+	configureCloudTest(t, server.URL)
+	bookmark := &savedDeploymentPlan{Version: 1, ChangeRequestID: "cr_saved", DeploymentID: "sess_123", Context: "personal", OrgID: "org_personal", APIEndpoint: server.URL}
+	var applyErr error
+	output := captureStdout(t, func() { applyErr = runSavedCloudApply(bookmark, "", true) })
+	if applyErr == nil || !strings.Contains(applyErr.Error(), "still pending") || !strings.Contains(applyErr.Error(), "https://example.com/changes/cr_saved") || output != "" || confirmations.Load() != 1 {
+		t.Fatalf("saved snapshot failure reported approval: err=%v output=%s confirms=%d", applyErr, output, confirmations.Load())
+	}
+}
+
+func TestSnapshotChoiceAfterLostConfirmationResponse(t *testing.T) {
+	var confirmations, reads atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			confirmations.Add(1)
+			http.Error(w, `{"detail":"acknowledgement lost"}`, http.StatusBadGateway)
+			return
+		}
+		reads.Add(1)
+		request := testDeploymentPlan("saved", "awaiting_confirmation")
+		reason, code := "No snapshot is available.", "snapshot_pending"
+		request.Error, request.ErrorCode = &reason, &code
+		_ = json.NewEncoder(w).Encode(request)
+	}))
+	defer server.Close()
+	initial := testDeploymentPlan("saved", "awaiting_confirmation")
+	request, err := confirmCloudRequest(cloud.NewClient(server.URL, "token"), &initial)
+	if request != nil || err == nil || !strings.Contains(err.Error(), "still pending") || !strings.Contains(err.Error(), initial.ReviewURL) || confirmations.Load() != 1 || reads.Load() != 1 {
+		t.Fatalf("lost response hid snapshot choice: request=%+v err=%v confirms=%d reads=%d", request, err, confirmations.Load(), reads.Load())
+	}
+}
+
 func TestInteractiveNoEOFAndCancellationDiscardOnlyUnstartedRequest(t *testing.T) {
 	for _, tt := range []struct {
 		name, input string

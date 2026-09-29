@@ -200,10 +200,12 @@ exercise the updated API behavior.
 
 ### Deploy without a restorable snapshot
 
-A protected request can wait for the current revision's snapshot. An unprotected
-apply stops and returns its plan link if the snapshot is not ready. On that page,
-you can wait and retry, or choose Apply Now. You can also create a fresh CLI plan
-with `--force`. Applying with this bypass can leave the previous revision without
+If the current revision's snapshot is missing, your proposal stays pending and
+unconfirmed. The CLI stops with an error and a dashboard link, even with `--yes`.
+On that page, **Wait** leaves it pending until you confirm again; it will not
+apply automatically when the snapshot is ready. Choose **Apply Now** to proceed
+without the snapshot. You can also create a fresh CLI plan with `--force`.
+Applying with this bypass can leave the previous revision without
 an exact workspace and runtime restore point. A second protected regular apply
 queues behind the first request; an unprotected plan does not reserve a turn.
 

@@ -485,9 +485,23 @@ func directPlanError(control *cloud.Client, request *cloud.ChangeRequestRecord) 
 	return fmt.Errorf("%s Inspect the plan and retry at %s", reason, cloudRequestReviewURL(control, *request))
 }
 
+func snapshotConfirmationError(control *cloud.Client, request *cloud.ChangeRequestRecord) error {
+	if request.Status != "awaiting_confirmation" || request.ErrorCode == nil || *request.ErrorCode != "snapshot_pending" {
+		return nil
+	}
+	reason := "The current deployment has no available snapshot."
+	if request.Error != nil {
+		reason = *request.Error
+	}
+	return fmt.Errorf("%s %s is still pending. %s Confirm again after the snapshot is ready, or choose Apply Now to proceed without one: %s", proposalLabel(request), request.ID, reason, cloudRequestReviewURL(control, *request))
+}
+
 func confirmCloudRequest(control *cloud.Client, request *cloud.ChangeRequestRecord) (*cloud.ChangeRequestRecord, error) {
 	confirmed, err := control.ConfirmChangeRequest(*request)
 	if err == nil {
+		if err := snapshotConfirmationError(control, confirmed); err != nil {
+			return nil, err
+		}
 		if confirmed.Kind == "plan" && (confirmed.Error != nil || !requestStarted(confirmed)) {
 			return nil, directPlanError(control, confirmed)
 		}
@@ -498,6 +512,11 @@ func confirmCloudRequest(control *cloud.Client, request *cloud.ChangeRequestReco
 	}
 	// A dashboard confirmation or a lost acknowledgement may have won the race.
 	current, readErr := control.GetChangeRequest(request.DeploymentID, request.ID)
+	if readErr == nil {
+		if err := snapshotConfirmationError(control, current); err != nil {
+			return nil, err
+		}
+	}
 	if readErr == nil && requestStarted(current) {
 		if current.Kind == "plan" && current.Error != nil {
 			return nil, directPlanError(control, current)
@@ -533,6 +552,9 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 		if request.Preview != nil && !printedPreview {
 			printDeploymentPlan(previewOut, control, request)
 			printedPreview = true
+		}
+		if err := snapshotConfirmationError(control, request); err != nil {
+			return nil, err
 		}
 		if request.Kind == "plan" && (request.Error != nil || (autoConfirm && !requestStarted(request))) {
 			return nil, directPlanError(control, request)
