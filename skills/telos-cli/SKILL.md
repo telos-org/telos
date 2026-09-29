@@ -185,6 +185,10 @@ Change Request, and does not reserve a turn while waiting for confirmation.
 If another apply changes the baseline, create a fresh plan. Plans and Change Requests do not expire.
 An abandoned regular apply holds its turn until it is applied or discarded.
 No request automatically merges other work.
+Wait for an existing deployment's runtime provisioning to finish before submitting
+or applying changes. Cloud rejects these mutations while provisioning; `--force`
+does not bypass that guard. Read-only previews, status inspection, and deletion
+remain available. Do not treat an agent's ongoing work as runtime provisioning.
 A saved file is only a reference and grants no access. Check its context/API
 binding; never change a file's endpoint to redirect a credential.
 

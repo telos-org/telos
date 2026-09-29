@@ -182,6 +182,12 @@ is a separate content-addressed identifier.
 
 ## Concurrent changes and retries
 
+While an existing deployment's runtime is provisioning, you can inspect it or
+create a preview, but must wait before saving or applying changes, redeploying,
+restoring, or changing deployment settings. You can still delete the deployment
+or discard a request. `--force` cannot skip provisioning. These controls become
+available once setup finishes, even while the agent is still working.
+
 Two unprotected plans can start from the same revision. Whichever applies first
 changes the deployment; the second is then stale. Create a fresh plan against
 the new revision. Cloud never merges or silently changes a saved proposal.
