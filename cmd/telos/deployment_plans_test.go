@@ -141,6 +141,7 @@ func TestPlanPermissionAndCapabilityFailurePrecedeUploads(t *testing.T) {
 	}{
 		{"old Cloud", `{}`, `{"can_plan":true,"can_apply":true}`, "does not support deployment plans"},
 		{"member cannot apply", `{"deployment_plans":true}`, `{"can_plan":true,"can_apply":false}`, "--out=change.plan"},
+		{"unprotected plan-only member", `{"deployment_plans":true}`, `{"can_plan":true,"can_apply":false,"requires_change_requests":false}`, "Change Request for an authorized editor"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

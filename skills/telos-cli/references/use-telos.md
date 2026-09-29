@@ -89,7 +89,8 @@ telos plan SPEC.md --context personal
 The terminal shows the proposed spec and skill changes and a dashboard link.
 The initial plan compares your spec with an empty deployment. Anyone with the
 appropriate access can inspect the preview, but it cannot be applied directly.
-Add `--out=change.plan --message "Launch the reading list"` to save an immutable proposal for later confirmation.
+Add `--out=change.plan --message "Launch the reading list"` to save an immutable
+Change Request for later confirmation, even when requests are optional.
 
 ## Apply it
 
@@ -97,16 +98,21 @@ Add `--out=change.plan --message "Launch the reading list"` to save an immutable
 telos apply SPEC.md --message "Launch the reading list" --context personal
 ```
 
-This creates a regular request, waits for its turn, displays a fresh plan, and
-asks `Apply these changes? Type yes to confirm:`. Type `yes` to proceed, or confirm
-the same request through its dashboard link. For authorized noninteractive
-execution, use `--yes --json`. Fresh apply requires Apply permission: owners and
-admins have it in an organization, while members can propose with `plan --out`.
+For a new deployment, this displays a fresh plan and asks
+`Apply these changes? Type yes to confirm:`. Type `yes` to proceed, or apply the
+same plan through its dashboard link. Any workspace member can create a new
+deployment, and creation starts directly without a Change Request. For authorized
+noninteractive execution, use `--yes --json`.
 
-The receipt identifies the request, session, review URL, and resulting revision
-when available. Confirmed, applying, and applied are request states; they do not
-mean that the agent has finished verification. Once execution starts, follow
-the deployment using its session ID and selected context:
+On an existing deployment, authorized editors can apply directly unless its
+Settings require Change Requests. Protected updates enter the request queue and
+need owner/admin confirmation. Use `plan --out` to save a request for someone
+else to confirm, whether or not protection is enabled.
+
+The receipt identifies the plan or request, session, dashboard URL, and resulting
+revision when available. Applying or applied does not mean that the agent has
+finished verification. Once execution starts, follow the deployment using its
+session ID and selected context:
 
 ```bash
 telos describe sess_c7d2f0a4e8 --context personal --json

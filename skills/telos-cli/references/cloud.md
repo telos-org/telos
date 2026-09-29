@@ -143,11 +143,13 @@ not something `SPEC.md` can create.
 
 Use the workflow in [Use Telos](use-telos.md), passing the same explicit context
 through every Cloud command. `plan` uploads private Registry artifacts and creates
-an inspectable preview. Add `--out=change.plan` to save the exact proposal for
-later application through the dashboard or `telos apply change.plan`.
+an inspectable preview. Add `--out=change.plan` to save the exact proposal as a
+Change Request for later application through the dashboard or
+`telos apply change.plan`, even when requests are optional.
 New deployments are unprotected and any workspace member can create one. Owners
 and admins can enable Require change requests in Settings; protected changes
-need their confirmation. Unprotected changes create no Change Requests.
+need their confirmation. Direct unprotected changes create no Change Requests;
+you can still explicitly submit one from the Web or with `plan --out`.
 A fresh `apply SPEC.md` shows a preview link and asks for confirmation; use
 `--yes --json` for authorized unattended execution. Protected regular applies
 wait for their queue turn. The CLI does not wait for the agent's verification.

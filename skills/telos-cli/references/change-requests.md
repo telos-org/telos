@@ -14,7 +14,9 @@ starts the agent working toward that spec; successful verification comes later.
 
 New deployments start **unprotected**. Any workspace member can create one, and
 the creator can edit it. An authorized editor can update, redeploy, or restore an
-unprotected deployment directly. These actions create no Change Requests.
+unprotected deployment directly. These direct actions create no Change Requests.
+You can still choose to submit a Change Request from the Web or save one with
+`telos plan --out=FILE`. The Change Requests tab remains available in either mode.
 
 An owner or admin can turn on **Require change requests** in a deployment's
 **Settings**. After that, updates, redeploys, and restores go through Change
@@ -22,10 +24,13 @@ Requests. Members can propose changes; an owner or admin must confirm them.
 You can confirm your own request if you have Apply permission. There is no
 required number of independent reviewers.
 
-Existing deployments keep their protection when this feature rolls out. Finish
-or discard open requests before changing the setting. Changing it never applies
-a waiting proposal. A direct plan prepared before protection was enabled cannot
-bypass the new setting: create a fresh plan to submit a Change Request.
+Existing deployments keep their protection when this feature rolls out. You can
+change the setting with pending requests: they remain open, and regular applies
+keep their queue positions. Wait for an apply already executing to finish before
+changing the setting. Switching protection off never applies or discards a waiting
+proposal. Cloud checks the current setting and your permissions when applying.
+A direct plan prepared before protection was enabled cannot bypass the new
+setting: create a fresh plan to submit a Change Request.
 
 ## Preview without applying
 
@@ -51,21 +56,22 @@ telos plan SPEC.md --session SESSION_ID --context @team-handle --out=change.plan
 ```
 
 The command shows the comparison and dashboard link, saves a small local JSON
-reference, then exits without deploying.
+reference, then exits without deploying. Using `--out` always deliberately saves
+a Change Request, even when requests are optional.
 
-- **Unprotected deployment:** it saves a plan outside Change Requests. An
-  authorized editor can apply it from the plan page or CLI.
+- **Unprotected deployment:** the request appears in the Change Requests tab.
+  An authorized editor can confirm it from the dashboard or CLI.
 - **Protected deployment:** it saves a Change Request in the deployment's
   Change Requests tab. Share its link with an owner or admin to confirm.
-- **New deployment:** it saves a plan. No deployment starts until a workspace
+- **New deployment:** it saves a request. No deployment starts until a workspace
   member applies it.
 
-The filename and extension are your choice. An unprotected plan file looks like:
+The filename and extension are your choice. The reference file looks like:
 
 ```json
 {
   "version": 1,
-  "plan_id": "plan_example",
+  "change_request_id": "cr_example",
   "deployment_id": "sess_example",
   "context": "@team-handle",
   "org_id": "org_team",
@@ -73,10 +79,10 @@ The filename and extension are your choice. An unprotected plan file looks like:
 }
 ```
 
-A protected proposal uses `"change_request_id": "cr_example"` instead of
-`plan_id`. Existing saved request files continue to work. `version` identifies
-the reference format; the frozen inputs live in Cloud. The file contains no
-credentials and grants no permission. The CLI refuses to overwrite an existing
+Older saved files may contain `plan_id` instead of `change_request_id`; the CLI
+continues to support those direct plans while current permissions and protection
+allow them. `version` identifies the reference format; the frozen inputs live in
+Cloud. The file contains no credentials and grants no permission. The CLI refuses to overwrite an existing
 file. Deleting it does not discard the remote proposal.
 
 ## Apply a saved proposal
@@ -91,9 +97,9 @@ saved inputs, excluding edits you made after saving. Flags such as `--session`,
 current permissions, deployment protection, and the proposal's starting revision.
 Repeated application cannot create another deployment or revision.
 
-The dashboard has **Apply** for a direct saved plan and **Confirm & Apply** for
-a Change Request. Preview-only pages have neither action. After application,
-follow the deployment link to see live progress and History.
+The request page has **Confirm & Apply** when you have permission. Older direct
+saved plans have **Apply** on their plan page. Preview-only pages have neither
+action. After application, follow the deployment link to see live progress and History.
 
 ## Plan and apply together
 
@@ -113,8 +119,9 @@ reserve a queue turn while you consider the plan. A protected regular apply
 enters the deployment's queue, prepares its comparison when it reaches the
 front, and then asks the same question. You can also confirm on the dashboard.
 
-Without Apply permission, fresh apply stops before uploading. For a protected
-deployment, use `plan --out=FILE` to propose a change for an owner or admin.
+Without Apply permission, fresh apply stops before uploading. Use
+`plan --out=FILE` to propose a change for someone who can apply it: an authorized
+editor when protection is off, or an owner or admin when it is on.
 Typing another answer, EOF, or Ctrl-C attempts to discard an unconfirmed plan
 or request. A lost connection may prevent cancellation; use its dashboard link
 to check. Closing the terminal after confirmation does not undo the change.
@@ -143,8 +150,9 @@ stream is not a terminal, or when `--json` is set. Otherwise the command fails
 before uploading. `--json` keeps stdout machine-readable.
 
 Direct-plan receipts include `plan`, `preview_url`, `session_id`, and `operation`.
-Saved plans report `planned`; execution reports `applying` or `applied` and adds
-`deployment_url`. Protected receipts use `change_request` and `review_url`;
+Preview-only receipts report `preview`; unconfirmed direct applies report
+`planned`. Execution reports `applying` or `applied` and adds `deployment_url`.
+Change Request receipts use `change_request` and `review_url`;
 an unconfirmed saved request reports `requested`. Saved receipts include
 `plan_file`. Neither an applied receipt nor its resulting revision means the
 agent has finished verification.
@@ -158,6 +166,9 @@ the new revision. Cloud never merges or silently changes a saved proposal.
 Protected regular applies take turns. Waiting for confirmation holds the turn.
 Saved Change Requests wait outside that queue but cannot apply while another
 request owns the turn. They can become stale when that request finishes.
+An optional saved request does not block direct updates. If a direct update
+applies first, the saved request becomes outdated. Turning protection off does
+not let a new direct update jump past an existing regular apply in the queue.
 Plans and requests have no time-based expiry.
 
 An interrupted direct apply can be retried from the same saved file or plan

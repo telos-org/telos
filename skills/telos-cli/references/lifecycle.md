@@ -28,7 +28,8 @@ Bounded:    local spec → run with a bound → run session → evidence
 ```
 
 Cloud `plan` creates a preview without applying it; `plan --out=FILE` saves an
-immutable proposal for later confirmation. `apply SPEC.md` prepares a fresh plan
+immutable Change Request for later confirmation, with or without deployment
+protection. `apply SPEC.md` prepares a fresh plan
 and asks for confirmation; protected deployments first wait for their queue turn.
 `apply FILE` confirms the exact saved proposal. A successful apply receipt reports confirmed, applying, or applied
 work, not successful agent verification. See [Change Requests](change-requests.md).
@@ -76,10 +77,11 @@ displayed digest matches the receipt.
 
 ## Observe without waiting forever
 
-Unprotected saved plans report `planned` and have a preview link. Apply them
-through that page or `telos apply FILE`; they do not appear in Change Requests.
-For a protected saved plan's `requested` receipt, follow its review URL until an authorized
-owner or admin confirms it. If it is queued or awaiting confirmation, the old
+Saved Change Requests report `requested` and have a review link. Apply them
+through that page or `telos apply FILE` when you have permission. An authorized
+editor can confirm an optional request; protected requests require an owner or
+admin. A fresh unprotected apply uses a direct plan and creates no Change Request.
+If a request is queued or awaiting confirmation, the old
 revision's status does not describe the proposal. `describe --json` includes
 `pending_change_requests` separately. An initial creation waiting for confirmation
 has no current revision yet. After apply returns, check the same request until

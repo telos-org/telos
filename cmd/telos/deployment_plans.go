@@ -98,7 +98,7 @@ func cloudPlanPreflight(control *cloud.Client, sessionID, mode string) error {
 	}
 	if mode == "apply" && !access.CanApply {
 		if access.RequiresChangeRequests != nil && !*access.RequiresChangeRequests {
-			return fmt.Errorf("deployment editing permission is required; save a plan with `telos plan SPEC.md --out=change.plan --message \"Describe the change\"` and share its link with an owner or editor")
+			return fmt.Errorf("deployment editing permission is required; use `telos plan SPEC.md --out=change.plan --message \"Describe the change\"` to submit a Change Request for an authorized editor to confirm")
 		}
 		return fmt.Errorf("Apply permission is required; use `telos plan SPEC.md --out=change.plan --message \"Describe the change\"` to submit a Change Request for an owner or admin to confirm")
 	}
@@ -675,11 +675,7 @@ func printDeploymentPlanDetails(out io.Writer, request *cloud.ChangeRequestRecor
 		fmt.Fprintln(out, "No spec changes.")
 	}
 	if request.Mode == "preview" {
-		if request.Kind == "plan" {
-			fmt.Fprintln(out, "Preview only. Use --out=FILE with --message to save a plan that can be applied.")
-		} else {
-			fmt.Fprintln(out, "Preview only. Use --out=FILE with --message to save a Change Request that can be applied.")
-		}
+		fmt.Fprintln(out, "Preview only. Use --out=FILE with --message to save a Change Request that can be applied.")
 	}
 }
 

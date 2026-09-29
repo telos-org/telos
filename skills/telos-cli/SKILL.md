@@ -93,14 +93,15 @@ runtime.
    telos plan SPEC.md --context CONTEXT --out=change.plan --json --message "Record book ownership"
    ```
 
-   Cloud planning uploads private Registry artifacts and creates a remote plan;
-   it does not deploy. Without `--out`, the plan is preview-only and cannot be
-   applied. Local plans remain local and reject `--out`.
+   Cloud planning uploads private Registry artifacts. With `--out`, it saves a
+   Change Request even when the deployment does not require one; it does not
+   deploy. Without `--out`, the plan is preview-only and cannot be applied.
+   Local plans remain local and reject `--out`.
    Newly uploaded proposals stay private for all roles and are hidden from
    Library lists, even after applying. Keep explicit Registry publishing separate
    from deployment approval; use `telos push` only when publishing is authorized.
 
-3. Present the proposal's context, plan or request ID, and dashboard URL. On a
+3. Present the proposal's context, request ID, and dashboard URL. On a
    protected deployment, only an owner or admin can apply it. For an unprotected
    deployment, an authorized editor can apply; any workspace member can create
    a new deployment. If someone else must
@@ -168,9 +169,10 @@ runtime availability, confirmation requirements, or stale-revision protection.
 Saved plans freeze the proposal and baseline. A different deployment revision
 makes them stale; update the spec and create a new request instead of retrying
 confirmation with changed inputs. On protected deployments, regular apply waits
-in order before planning; saved plans wait outside that queue. Unprotected plans
-never create Change Requests or reserve a turn while waiting for confirmation;
-if another apply changes the baseline, create a fresh plan. Plans and Change Requests do not expire.
+in order before planning. Saved Change Requests wait outside that queue whether
+protection is on or off. Unprotected fresh apply creates a direct plan, not a
+Change Request, and does not reserve a turn while waiting for confirmation.
+If another apply changes the baseline, create a fresh plan. Plans and Change Requests do not expire.
 An abandoned regular apply holds its turn until it is applied or discarded.
 No request automatically merges other work.
 A saved file is only a reference and grants no access. Check its context/API
@@ -185,10 +187,15 @@ applying a saved plan retains its original message and rejects overrides.
 New deployments are unprotected. Owners/admins can enable Require change requests
 in a deployment's Settings. Protected updates, redeploys, and restores require
 owner/admin confirmation; authorized users can confirm their own requests.
-Unprotected writes use the ordinary deployment pipeline without Change Requests.
-CLI fresh apply still requires its own confirmation, or explicit `--yes`.
-Do not turn off protection to bypass a review. A policy change or stale baseline
-requires a fresh plan. A direct snapshot failure stops rather than waiting in a
+Unprotected direct writes use the ordinary deployment pipeline without Change
+Requests; `plan --out` deliberately saves an optional Change Request. The Web
+also offers optional request submission. Turning protection off preserves
+pending requests and existing regular apply queue positions. It does not apply
+or discard them. CLI fresh apply still requires its own confirmation, or explicit
+`--yes`. Do not turn off protection to bypass a review. Cloud checks current
+permissions when applying. A direct plan prepared before protection was enabled
+requires a fresh request; saved Change Requests remain subject to the new policy.
+A stale baseline requires a fresh plan. A direct snapshot failure stops rather than waiting in a
 queue; return its preview link so the user can wait and retry or choose Apply Now.
 Read [Change Requests](references/change-requests.md) for the full contract,
 queue behavior, cancellation, and immutable file format.
@@ -229,9 +236,12 @@ Report the spec, target, context, session ID, current revision and state, and
 the evidence behind the result. Distinguish work that was planned, applied,
 published, requested, updated, or deleted. The `requested` receipt operation
 identifies an unconfirmed saved Change Request; confirmed, applying, and applied
-receipts report its later execution state. Unprotected receipts use `plan` and
-`preview_url`, with `operation: planned` for a saved plan and `deployment_url`
-after execution starts. They contain no `change_request`. Verification is a
+receipts report its later execution state, regardless of protection. Direct
+preview/apply receipts use `plan` and `preview_url`. A preview reports
+`operation: preview`; an unconfirmed direct apply reports `operation: planned`.
+Direct applies include `deployment_url` after execution starts. They contain no
+`change_request`. Older Cloud releases may also return a direct saved plan;
+preserve its `plan_id` reference and use the returned routes. Verification is a
 separate result.
 
 ## References
