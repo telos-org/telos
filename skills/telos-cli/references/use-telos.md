@@ -157,9 +157,9 @@ verifiable until that URL exists.
 ## Revise the same Goal
 
 Suppose the reading list now needs attribution. Edit the same `SPEC.md` and add
-“Every book records who added it” to the Goal. You can also increment its spec
-version to `0.2.0` to label that change. Save a proposal against the existing
-session:
+“Every book records who added it” to the Goal. You can leave its version alone:
+Cloud prepares an unused version before showing the plan. Save a proposal
+against the existing session:
 
 ```bash
 telos plan SPEC.md --session sess_c7d2f0a4e8 --context personal --out=attribution.plan --message "Record book ownership"
@@ -174,10 +174,11 @@ The terminal and dashboard show the diff. For example:
 +- Every book records who added it.
 ```
 
-The saved request preserves your spec, skill digests, and the baseline revision.
-Private plan artifacts receive content-addressed Registry versions; resubmitting
-a changed proposal does not require bumping the spec's version. Ordinary
-`telos push` still publishes immutable named package versions.
+The saved request preserves the final spec and version shown in the diff,
+package digest, skill digests, and baseline revision. Your local `SPEC.md` stays
+unchanged. Web edits use the same version preparation. Resubmitting a changed
+proposal does not require a manual bump; ordinary `telos push` still requires a
+new Registry version when publishing changed content.
 
 When you are ready, confirm the exact saved proposal:
 

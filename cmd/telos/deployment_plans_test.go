@@ -475,7 +475,7 @@ func TestPlanOutputPreservesCreationSettingsAndSnapshotBypass(t *testing.T) {
 			t.Errorf("review omitted %q: %s", want, output.String())
 		}
 	}
-	jsonOutput := captureStdout(t, func() { printDeploymentPlanJSON(control, &request, nil, "") })
+	jsonOutput := captureStdout(t, func() { printDeploymentPlanJSON(control, &request, "") })
 	var receipt struct {
 		Request cloud.ChangeRequestRecord `json:"change_request"`
 	}

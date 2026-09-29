@@ -154,13 +154,17 @@ operator updates. Existing transcript entries are preserved.
 ## Move a persistent Goal forward
 
 Edit `SPEC.md` and compare the proposed contract with the deployed revision.
-A version bump is an optional label for a privately staged plan; publishing a
-changed named package with `telos push` still requires a new version:
+Cloud prepares an unused spec version for changed content before review, for
+both CLI and Web edits. You do not need to bump it manually. The CLI shows
+Cloud's final version and diff without changing your local `SPEC.md`:
 
 ```bash
 telos plan SPEC.md --session SESSION_ID --context CONTEXT
 telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --context CONTEXT
 ```
+
+Publishing a changed named package with `telos push` still requires a new
+Registry version.
 
 The Goal, session, deployment, and history remain stable. Protected submissions
 enter the Change Request queue; unprotected updates apply directly after your

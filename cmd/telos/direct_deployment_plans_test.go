@@ -328,7 +328,7 @@ func TestDirectPreviewOutputDoesNotDescribeAChangeRequest(t *testing.T) {
 			t.Errorf("preview missing %q: %s", wanted, output.String())
 		}
 	}
-	jsonOutput := captureStdout(t, func() { printDeploymentPlanJSON(control, &plan, nil, "") })
+	jsonOutput := captureStdout(t, func() { printDeploymentPlanJSON(control, &plan, "") })
 	var receipt map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(jsonOutput), &receipt); err != nil || string(receipt["operation"]) != `"preview"` || receipt["plan"] == nil || receipt["change_request"] != nil || receipt["preview_url"] == nil || receipt["deployment_url"] != nil {
 		t.Fatalf("invalid direct preview receipt: %s parse=%v", jsonOutput, err)

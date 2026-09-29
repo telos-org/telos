@@ -49,6 +49,23 @@ and remain available through the plan or deployment History. Use
 [`telos push`](packages-and-skills.md#publish) separately to publish a release.
 You can also plan an existing package, such as `@scope/package-name:0.1.0`.
 
+## Versions in Cloud plans
+
+You do not need to bump the version in `SPEC.md` for Cloud edits. Cloud prepares
+an unused spec version for changed content before the plan is ready to review.
+CLI and Web submissions follow the same rule. The terminal and dashboard show
+the final version and spec diff; the CLI leaves your local `SPEC.md` unchanged.
+
+A protected regular apply prepares its version and comparison when it reaches
+the front of the queue. A saved plan prepares them immediately and freezes the
+result. Cloud does not change that saved version, package, or skill locks after
+review. If its starting revision changes, create a new plan.
+
+Named Registry releases remain immutable. When a deployment needs a different
+version, Cloud can derive a private proposal from a published package without
+changing the original release. Publishing changed content with `telos push`
+still requires a new Registry version.
+
 ## Save an exact proposal
 
 ```bash
@@ -156,6 +173,12 @@ Change Request receipts use `change_request` and `review_url`;
 an unconfirmed saved request reports `requested`. Saved receipts include
 `plan_file`. Neither an applied receipt nor its resulting revision means the
 agent has finished verification.
+
+The receipt's `package.ref` and `package.digest` identify Cloud's prepared
+artifact, which may differ from the original upload. The proposed spec is in
+`plan.preview.proposed_spec` or `change_request.preview.proposed_spec`. Use that
+spec for the final deployment version; a private artifact's Registry version
+is a separate content-addressed identifier.
 
 ## Concurrent changes and retries
 

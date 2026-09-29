@@ -135,13 +135,19 @@ runtime.
    process, and old green evidence are not completion of the current revision.
 
 Revise the same Goal by editing `SPEC.md` and applying to the existing session.
-You may bump the spec version as a human-readable label; private plan artifacts
-use digest-derived Registry versions and do not require a version bump:
+Cloud prepares an unused spec version automatically before review, using the
+same rules for CLI and Web edits. Do not require a manual version bump for Cloud
+changes. Inspect the returned spec diff and package digest: Cloud may have
+prepared a different package from the upload, while the local `SPEC.md` stays
+unchanged:
 
 ```bash
 telos plan SPEC.md --session SESSION_ID --context CONTEXT
 telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --context CONTEXT --yes --json
 ```
+
+Explicit Registry publishing with `telos push` still requires an unused version
+for changed content.
 
 A healthy revision may still be waiting for its restorable snapshot. A confirmed
 request can wait at this gate without executing. Prefer waiting for the snapshot.
@@ -166,10 +172,11 @@ telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --con
 snapshot gate only; it does not bypass authorization, active operations,
 runtime availability, confirmation requirements, or stale-revision protection.
 
-Saved plans freeze the proposal and baseline. A different deployment revision
-makes them stale; update the spec and create a new request instead of retrying
-confirmation with changed inputs. On protected deployments, regular apply waits
-in order before planning. Saved Change Requests wait outside that queue whether
+Saved plans freeze the finalized spec, package digest, skill locks, and baseline.
+A different deployment revision makes them stale; update the spec and create a
+new request instead of retrying confirmation with changed inputs. On protected
+deployments, regular apply waits in order before Cloud prepares its final
+version and comparison. Saved Change Requests wait outside that queue whether
 protection is on or off. Unprotected fresh apply creates a direct plan, not a
 Change Request, and does not reserve a turn while waiting for confirmation.
 If another apply changes the baseline, create a fresh plan. Plans and Change Requests do not expire.

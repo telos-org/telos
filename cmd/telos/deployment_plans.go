@@ -49,10 +49,9 @@ type cloudPlanInput struct {
 }
 
 type cloudPlanResult struct {
-	request       *cloud.ChangeRequestRecord
-	packageRecord *cloud.PackageVersionRecord
-	specName      string
-	currentRef    string
+	request    *cloud.ChangeRequestRecord
+	specName   string
+	currentRef string
 }
 
 func normalizePlanMessage(message string, required bool) (string, error) {
@@ -184,7 +183,7 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloudPlanRes
 		return nil, fmt.Errorf("Cloud returned a plan without a preview; request %s", request.ID)
 	}
 	return &cloudPlanResult{
-		request: request, packageRecord: record, specName: name, currentRef: currentRef,
+		request: request, specName: name, currentRef: currentRef,
 	}, nil
 }
 
@@ -343,14 +342,14 @@ func runCloudPlan(input cloudPlanInput, output string, jsonOut bool) error {
 	if err != nil {
 		return err
 	}
-	request, pkg := plan.request, plan.packageRecord
+	request := plan.request
 	if writer != nil {
 		if err := writer.save(newSavedDeploymentPlan(control, request, orgID)); err != nil {
 			return fmt.Errorf("Plan %s was saved, but its local reference could not be written: %w; review it at %s", request.ID, err, cloudRequestReviewURL(control, *request))
 		}
 	}
 	if jsonOut {
-		printDeploymentPlanJSON(control, request, pkg, output)
+		printDeploymentPlanJSON(control, request, output)
 		return nil
 	}
 	if request.Mode == "preview" {
@@ -379,7 +378,7 @@ func runCloudApply(input cloudPlanInput, jsonOut bool) error {
 	if err != nil {
 		return err
 	}
-	request, pkg := plan.request, plan.packageRecord
+	request := plan.request
 	if !jsonOut {
 		printDeploymentPlan(os.Stdout, control, request)
 	}
@@ -389,7 +388,7 @@ func runCloudApply(input cloudPlanInput, jsonOut bool) error {
 		return err
 	}
 	if jsonOut {
-		printDeploymentPlanJSON(control, request, pkg, "")
+		printDeploymentPlanJSON(control, request, "")
 	} else {
 		printDeploymentPlanResult(os.Stdout, control, request)
 	}
@@ -445,7 +444,7 @@ func runSavedCloudApply(bookmark *savedDeploymentPlan, contextOverride string, j
 	// Explicit saved-plan application is itself confirmation. Once confirmed,
 	// a disconnected terminal cannot revoke that authorization.
 	if jsonOut {
-		printDeploymentPlanJSON(control, request, nil, "")
+		printDeploymentPlanJSON(control, request, "")
 	} else {
 		printDeploymentPlanResult(os.Stdout, control, request)
 	}
@@ -697,7 +696,7 @@ func printDeploymentPlanResult(out io.Writer, control *cloud.Client, request *cl
 	printSummaryField(out, "Describe", "telos describe "+request.DeploymentID+" --context "+control.ContextName())
 }
 
-func printDeploymentPlanJSON(control *cloud.Client, request *cloud.ChangeRequestRecord, pkg *cloud.PackageVersionRecord, output string) {
+func printDeploymentPlanJSON(control *cloud.Client, request *cloud.ChangeRequestRecord, output string) {
 	operation := request.Status
 	if request.Mode == "preview" {
 		operation = "preview"
@@ -719,7 +718,14 @@ func printDeploymentPlanJSON(control *cloud.Client, request *cloud.ChangeRequest
 			receipt["deployment_url"] = cloudPlanDeploymentURL(control, *request)
 		}
 	}
-	if pkg != nil {
+	if request.PackageRef != "" {
+		// Cloud may prepare a new package version before confirmation, including
+		// after a queued request reaches its turn. Report that final artifact,
+		// never the original upload or its metadata.
+		pkg := map[string]string{"ref": request.PackageRef, "digest": request.PackageDigest}
+		if reference, err := parsePackageReference(request.PackageRef); err == nil {
+			pkg["scope"], pkg["name"], pkg["version"] = reference.scope, reference.name, reference.version
+		}
 		receipt["package"] = pkg
 	}
 	if output != "" {
