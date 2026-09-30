@@ -39,6 +39,8 @@ Goal uses them:
 | `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
 | `interval` | A positive duration ending in `s`, `m`, or `h`, such as `30m` or `6h`, carried as the contract's reconciliation interval. |
 | `tags` | A YAML list of string labels. The default is an empty list. |
+| `integrations` | Workspace integration IDs, or `{ id, name }` entries. Declare together with `allowlist`. |
+| `allowlist` | HTTPS rules with `host`, optional `methods`, and optional `paths`. Declare together with `integrations`. |
 
 For example:
 
@@ -61,6 +63,50 @@ useful conventions rather than specially parsed fields. Add sections for
 interfaces, compatibility, data lifecycle, security boundaries, failure
 behavior, or evidence when they change what a correct result means.
 
+## Declare integrations and network access
+
+For a Cloud Goal that calls an external API, add both fields to its frontmatter:
+
+```yaml
+integrations:
+  - id: sec_stripe_example
+    name: Stripe Production
+allowlist:
+  - host: api.stripe.com
+    methods: [GET]
+    paths: [/v1/customers, /v1/customers/*]
+```
+
+Replace the example ID and name with values from `telos integrations list` in
+the deployment's workspace. The ID selects the integration; the name is a
+readable label that Cloud checks against the saved name. ID-only entries such
+as `integrations: [sec_stripe_example]` also work. Secret values stay in the
+workspace integration, not in this file.
+
+Use a DNS host without a URL scheme and uppercase HTTP methods. Restrict paths
+to the requests your Goal needs. Omitting `methods` or `paths`, or setting
+either to `[]`, leaves that part of the rule unrestricted. An allowlist rule
+permits a request; it does not supply credentials. The integration's credential
+policy must also support an authenticated request.
+Use `integrations: []` when the request needs no credentials.
+
+These lists describe the complete desired deployment access, not additions to
+an earlier list. Applying a revision removes entries left out of the lists.
+Use both empty lists to remove all Goal-declared integrations and network rules:
+
+```yaml
+integrations: []
+allowlist: []
+```
+
+This does not delete the reusable workspace integrations or remove
+platform-managed inference credentials. A new Goal with no custom access can
+omit both fields. When updating a deployment that has custom access, Cloud
+requires both fields explicitly. Nonempty declarations require a Cloud Goal.
+
+See [Telos Cloud](cloud.md#integrations-and-network-access) for credential
+setup, backend support, permissions, and runtime limits.
+
 ## Express the contract, not an implementation recipe
 
 A useful spec names observable behavior and leaves implementation choices open
@@ -81,10 +127,11 @@ That contract permits the agent to choose an appropriate framework and
 datastore. A framework, schema, deployment shape, or compatibility requirement
 belongs in the spec when it is itself part of the promised outcome.
 
-A spec can select a lifecycle, import capabilities and rubrics, and describe
-the desired state. It does not grant credentials, network access, registry
-permissions, or a platform capability. Confirm those surfaces separately
-before applying a Cloud Goal; [Telos Cloud](cloud.md) describes that preflight.
+A Goal can select a lifecycle, import skills and rubrics, and declare deployment
+integrations and network access. On a supporting Cloud backend, applying the
+revision configures that access after authorization checks. The declarations
+do not contain secret values, grant registry permissions, or create missing
+platform capabilities. [Telos Cloud](cloud.md) describes those boundaries.
 
 ## Choose `apply` or `run`
 

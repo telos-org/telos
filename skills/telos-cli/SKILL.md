@@ -85,6 +85,20 @@ Before authoring a Cloud Goal, read [Telos Cloud](references/cloud.md) and
 confirm that its delivery, storage, and external-service needs fit the managed
 runtime.
 
+For external APIs, identify the required hosts, methods, paths, and workspace
+integrations before applying. Use `telos integrations list --context CONTEXT`
+to find IDs and names. If setup is missing, run
+`telos integrations add --context CONTEXT` and give the returned credential
+form link to the user. Keep secret values out of chat and the Goal.
+
+Declare the complete desired `integrations` and `allowlist` together using
+[the frontmatter format](references/goals.md#declare-integrations-and-network-access).
+Include access additions and removals in the user's apply approval. A plan is
+a preview, not proof that credentials or network access work. If Cloud support
+is unavailable, report the blocker rather than dropping the declarations or
+using direct attachment APIs. Verify the deployed application's integration
+behavior before reporting success; an agent-side request alone is insufficient.
+
 1. Write the smallest `platform: cloud` spec that states the outcome,
    meaningful constraints, and observable acceptance evidence.
 2. Choose the Cloud context explicitly and preview without changing remote
@@ -162,7 +176,8 @@ Inside a Telos session, the same command creates a linked child session; see
 
 | Effect | Commands |
 | --- | --- |
-| Inspect state | `config`, `plan`, `list`, `describe`, `logs` |
+| Inspect state | `config`, `plan`, `list`, `describe`, `logs`, `integrations list` |
+| Print a credential-setup link; no browser or remote mutation | `integrations add` |
 | Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context` |
 | Start bounded local execution; may spend money | `run` |
 | Publish or change remote state; `apply` may spend money | `apply`, `push`, `delete` |
