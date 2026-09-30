@@ -16,6 +16,50 @@ import (
 	"github.com/telos-org/telos/internal/spec"
 )
 
+func TestPlanShowsAccessChangesIncludingRemovals(t *testing.T) {
+	current, err := planSpecStateFromMarkdown([]byte("---\nname: test\nversion: 1.0.0\nintegrations: [sec_stripe]\nallowlist: [{host: api.stripe.com, methods: [POST], paths: ['/v1/*']}]\n---\nBody"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed, err := planSpecStateFromMarkdown([]byte("---\nname: test\nversion: 1.0.0\nintegrations: []\nallowlist: []\n---\nBody"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	printPlanStateDelta(&out, current, proposed)
+	for _, expected := range []string{"Access", "sec_stripe", "api.stripe.com", "POST", "/v1/*", "integrations: none; allowlist: none"} {
+		if !strings.Contains(out.String(), expected) {
+			t.Fatalf("access delta omitted %q: %s", expected, out.String())
+		}
+	}
+	encoded, _ := json.Marshal(proposed)
+	if !strings.Contains(string(encoded), `"access":{"integrations":[],"allowlist":[]}`) {
+		t.Fatalf("JSON plan omitted explicit removal: %s", encoded)
+	}
+}
+
+func TestPlanDistinguishesIntegrationLabelsFromPermissionChanges(t *testing.T) {
+	current := planSpecState{Access: &spec.AccessSpec{
+		Integrations: []string{"sec_stripe"}, Allowlist: []spec.NetworkRule{},
+	}}
+	proposed := planSpecState{Access: &spec.AccessSpec{
+		Integrations: []string{"sec_stripe"}, Allowlist: []spec.NetworkRule{},
+		IntegrationNames: map[string]string{"sec_stripe": "Stripe production"},
+	}}
+	var out bytes.Buffer
+	printPlanStateDelta(&out, current, proposed)
+	if !strings.Contains(out.String(), "Integration labels (permissions unchanged)") || !strings.Contains(out.String(), `"Stripe production" (sec_stripe)`) {
+		t.Fatalf("label-only change presented incorrectly: %s", out.String())
+	}
+	out.Reset()
+	proposed.Access.Integrations = []string{"sec_other"}
+	proposed.Access.IntegrationNames = map[string]string{"sec_other": "Stripe production"}
+	printPlanStateDelta(&out, current, proposed)
+	if !strings.Contains(out.String(), "Access") || strings.Contains(out.String(), "permissions unchanged") {
+		t.Fatalf("same label hid an ID change: %s", out.String())
+	}
+}
+
 func TestCompareCloudSessionSpecShowsDeployedDiff(t *testing.T) {
 	pkg := testApplyPackage(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "spec",
     srcs = [
+        "access.go",
         "compile.go",
         "embed.go",
         "package.go",
@@ -25,6 +26,7 @@ go_library(
 go_test(
     name = "spec_test",
     srcs = [
+        "access_test.go",
         "compile_test.go",
         "package_test.go",
         "registry_test.go",
