@@ -36,6 +36,7 @@ type PackageVersionRecord struct {
 }
 
 type Capabilities struct {
+	DeploymentSpecAccess       bool `json:"deployment_spec_access"`
 	DeploymentRevisionHistory  bool `json:"deployment_revision_history"`
 	DeploymentRevisionMessages bool `json:"deployment_revision_messages"`
 	DeploymentPackageRedeploy  bool `json:"deployment_package_redeploy"`
