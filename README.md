@@ -31,13 +31,12 @@ Cloud.
 > Work with your coding agent to write and iterate on your Goal spec, and have
 > the agent drive `telos` for you.
 >
-> The CLI is optimized for the agent experience.
+> The CLI is built for the agent experience.
 
 The Goal specification (`SPEC.md`) is the main entry point to a `telos`
-program. This example creates a persistent Cloud Goal; use an explicit context
-so the plan and the apply address the same workspace.
+program. 
 
-A minimal `SPEC.md`:
+An example `SPEC.md`:
 
 ```markdown
 ---
@@ -53,7 +52,7 @@ restarts, and the result includes evidence of the write–restart–read sequenc
 ```
 
 Skills are modular libraries imported by a spec. Load them from a local path or
-pin them to an immutable registry version:
+pin them to a hosted registry version:
 
 ```yaml
 skills:
@@ -86,8 +85,7 @@ telos apply SPEC.md --context personal
 then continues in the background.
 
 After applying, use `telos list` to find the session and `telos describe` to
-check its status. Once the public-route probe succeeds, `describe` also prints
-the Service URL:
+check its status.  `describe` also prints the Service URL:
 
 ```console
 $ telos list --context personal
