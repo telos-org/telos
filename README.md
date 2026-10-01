@@ -64,7 +64,7 @@ skills:
 quality, process, or subjective requirements. The revision must pass every
 starred rubric in an independent evaluation before `ready`.
 
-## Apply
+## Usage
 
 `telos apply` reconciles a persistent Goal toward the desired state in
 `SPEC.md`.
