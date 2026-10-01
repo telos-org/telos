@@ -10,8 +10,6 @@ group: Concepts
 development, benchmarking, and [nested execution](nested-goals.md). A local
 run executes bounded work in an isolated workspace and stops.
 
-## Set up local execution
-
 Local runs use the [pi](https://github.com/earendil-works/pi) coding agent.
 If pi is not already installed, install it and open it to authenticate with
 `/login`:
@@ -21,11 +19,7 @@ npm install -g @earendil-works/pi-coding-agent
 pi
 ```
 
-Exit pi after authentication.
-
-## Run a bounded Goal
-
-Create `REPORT_SPEC.md`:
+Exit pi after authentication, then create `REPORT_SPEC.md`:
 
 ```markdown
 ---
