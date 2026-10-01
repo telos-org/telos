@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -39,6 +41,60 @@ func TestSavedFilesPinUpdateAndPreparedPlan(t *testing.T) {
 	request.PreparedPlanID, request.LegacyConfirmationValid, request.PlanStale = "cp_first", &valid, true
 	if err := validateSavedRequest(&bookmark, &request); err == nil || !strings.Contains(err.Error(), "deployment changed") {
 		t.Fatalf("stale error=%v", err)
+	}
+}
+
+func TestRequestUpdateWritesExactReferenceForEveryRequest(t *testing.T) {
+	for _, mode := range []string{"saved", "apply"} {
+		t.Run(mode, func(t *testing.T) {
+			var updates, confirmations int
+			current := testDeploymentPlan(mode, "awaiting_confirmation")
+			current.UpdateNumber, current.PreparedPlanID, current.CanEdit = 1, "cp_first", true
+			current.CurrentRevisionID = current.BaseRevisionID
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if serveDeploymentPlanPrerequisites(w, r) {
+					return
+				}
+				switch r.URL.Path {
+				case "/api/change-requests/cr_saved":
+					_ = json.NewEncoder(w).Encode(current)
+				case "/api/deployments/sess_123/change-requests/cr_saved/updates":
+					updates++
+					var body cloud.RequestUpdateOptions
+					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+						t.Error(err)
+					}
+					if body.ExpectedUpdateNumber != 1 || body.ExpectedCurrentRevisionID == nil || *body.ExpectedCurrentRevisionID != "rev_7" || body.PackageRef == "" {
+						t.Errorf("body=%+v", body)
+					}
+					current.UpdateNumber, current.PreparedPlanID = 2, "cp_second"
+					_ = json.NewEncoder(w).Encode(current)
+				default:
+					confirmations++
+					t.Errorf("unexpected mutation %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			configureCloudTest(t, server.URL)
+			specPath := filepath.Join(t.TempDir(), "SPEC.md")
+			if err := os.WriteFile(specPath, []byte(testPlanSpec), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			output := filepath.Join(t.TempDir(), "corrected.plan")
+			captureStdout(t, func() {
+				if err := runCloudRequestUpdate(specPath, "cr_saved", "", "", output, true); err != nil {
+					t.Fatal(err)
+				}
+			})
+			saved, err := readSavedDeploymentPlan(output)
+			if err != nil || saved.UpdateNumber != 2 || saved.PreparedPlanID != "cp_second" || saved.ChangeRequestID != "cr_saved" {
+				t.Fatalf("saved=%+v err=%v", saved, err)
+			}
+			if updates != 1 || confirmations != 0 {
+				t.Fatalf("updates=%d confirmations=%d", updates, confirmations)
+			}
+		})
 	}
 }
 

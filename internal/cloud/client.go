@@ -794,7 +794,11 @@ func readError(resp *http.Response) error {
 	data, _ := io.ReadAll(resp.Body)
 	var m map[string]any
 	if json.Unmarshal(data, &m) == nil {
-		if rawError, ok := m["error"].(map[string]any); ok {
+		for _, key := range []string{"error", "detail"} {
+			rawError, ok := m[key].(map[string]any)
+			if !ok {
+				continue
+			}
 			code, _ := rawError["code"].(string)
 			message, _ := rawError["message"].(string)
 			if code != "" || message != "" {

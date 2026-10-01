@@ -9,6 +9,7 @@ go_library(
         "client.go",
         "deployment_plans.go",
         "inference.go",
+        "request_merges.go",
     ],
     importpath = "github.com/telos-org/telos/internal/cloud",
     visibility = ["//:__subpackages__"],

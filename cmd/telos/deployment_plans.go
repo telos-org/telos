@@ -333,7 +333,7 @@ func validateSavedRequest(bookmark *savedDeploymentPlan, request *cloud.ChangeRe
 		if request.Kind == "plan" {
 			return fmt.Errorf("the deployment changed after this plan was prepared; nothing was applied; prepare a fresh plan against session %s", request.DeploymentID)
 		}
-		return fmt.Errorf("the deployment changed after this plan was prepared; nothing was applied; review and reconcile request %s in the dashboard before confirming its new plan", request.ID)
+		return fmt.Errorf("the deployment changed after this plan was prepared; nothing was applied; reconcile it with telos plan --request %s --reconcile NEW_DIR", request.ID)
 	}
 	return nil
 }

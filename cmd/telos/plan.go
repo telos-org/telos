@@ -40,6 +40,9 @@ type planSkillLock struct {
 
 func cmdPlan(args []string) {
 	fs := newCommandFlagSet("plan", "telos plan SPEC.md [--out=FILE] [flags]")
+	requestID := fs.String("request", "", "Update an existing unconfirmed Change Request")
+	reconcile := fs.String("reconcile", "", "Prepare a request merge in a new directory; requires --request")
+	resolve := fs.String("resolve", "", "Save resolved files from a request merge directory; requires --request")
 	sessionID := fs.String("session", "", "Managed session ID to compare")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	output := fs.String("out", "", "Save a Cloud Change Request and write its reference to this file")
@@ -56,6 +59,27 @@ func cmdPlan(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
+	if flagNamesSet(fs, "reconcile", "resolve") {
+		if strings.TrimSpace(*requestID) == "" || flagNamesSet(fs, "session", "model", "thinking", "force") ||
+			(flagNameSet(fs, "reconcile") && flagNamesSet(fs, "resolve", "out", "message", "m")) ||
+			(flagNameSet(fs, "reconcile") && strings.TrimSpace(*reconcile) == "") ||
+			(flagNameSet(fs, "resolve") && strings.TrimSpace(*resolve) == "") ||
+			(flagNameSet(fs, "out") && strings.TrimSpace(*output) == "") {
+			fmt.Fprintln(os.Stderr, "error: use --request ID with either --reconcile NEW_DIR or --resolve DIR; only --resolve accepts --out and --message; --session, --model, --thinking, and --force are not supported")
+			os.Exit(2)
+		}
+		requireArgCount(fs, 0, "no positional arguments with --reconcile or --resolve")
+		if flagNameSet(fs, "reconcile") {
+			err = runCloudRequestReconcile(strings.TrimSpace(*requestID), *reconcile, contextOverride, *jsonOut)
+		} else {
+			err = runCloudRequestResolve(strings.TrimSpace(*requestID), *resolve, contextOverride, message, *output, *jsonOut)
+		}
+		if err != nil {
+			reportRequestPlanError(err, *jsonOut)
+			os.Exit(1)
+		}
+		return
+	}
 	requireArgCount(fs, 1, "one SPEC.md")
 	*sessionID = strings.TrimSpace(*sessionID)
 	specPath := resolveSpecPath(fs.Arg(0))
@@ -70,6 +94,21 @@ func cmdPlan(args []string) {
 	if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
+	}
+	if flagNameSet(fs, "request") {
+		if strings.TrimSpace(*requestID) == "" || platform == "local" || flagNamesSet(fs, "session", "model", "thinking", "force") {
+			fmt.Fprintln(os.Stderr, "error: --request requires a Cloud request ID and cannot be combined with --session, --model, --thinking, or --force")
+			os.Exit(2)
+		}
+		if flagNameSet(fs, "out") && strings.TrimSpace(*output) == "" {
+			fmt.Fprintln(os.Stderr, "error: --out requires a filename")
+			os.Exit(2)
+		}
+		if err := runCloudRequestUpdate(fs.Arg(0), strings.TrimSpace(*requestID), contextOverride, message, *output, *jsonOut); err != nil {
+			reportRequestPlanError(err, *jsonOut)
+			os.Exit(1)
+		}
+		return
 	}
 	if platform != "local" {
 		if err := validateForceApply(*force, *sessionID); err != nil {

@@ -181,18 +181,39 @@ stale; the request stays open with its URL and discussion. Unprotected fresh
 apply creates a direct plan without a Change Request. Neither an unconfirmed
 request nor a direct plan reserves an execution turn. Plans do not expire.
 
-Requests may be edited or reconciled in Web while unconfirmed. Every update
-creates a new immutable plan; old saved files never silently identify it.
-Review the new full-package plan and obtain fresh apply authorization before
-confirmation. A stale request stays open with its URL and discussion. Its author
-can reconcile it with the current deployment in Web, including explicit conflict
-resolution. Never treat a clean text merge as proof of correct combined behavior.
+To correct an existing unconfirmed create/update request, use
+`telos plan SPEC.md --request REQUEST_ID --context CONTEXT`. This changes the
+remote proposal, so obtain authorization to update that request first. It retains
+its URL and comments, adds an immutable update, and clears earlier confirmation
+and snapshot-bypass choices. Any request can save its exact new reference with
+`--out=NEW_FILE`. Never rewrite an old saved file to point at a replacement plan.
+Plain `plan` still previews; `plan --out` opens one kind of Change Request.
 
-With fresh `apply --yes`, the CLI first prepares a plan and then explicitly
-confirms only that exact plan. It never stores permission for future request
-updates. Saved references pin both the request update and prepared plan ID;
-replaced or stale plans fail without applying different contents. Older v1 files
-remain valid only while their original proposal is unchanged.
+An ordinary update refuses stale requests before upload. Reconcile explicitly:
+
+```bash
+telos plan --request REQUEST_ID --reconcile NEW_DIR --context CONTEXT --json
+# Inspect base/, current/, proposed/, and merged/; resolve each conflict explicitly.
+telos plan --request REQUEST_ID --resolve NEW_DIR --context CONTEXT --out=updated.plan --json
+```
+
+`--reconcile` writes exact source trees, a candidate, and pinned `merge.json`.
+It applies nothing and does not update the request. A `merge_conflicts` error
+returns nonzero while preserving the workspace and structured conflict details.
+Set every conflict's resolution choice in the manifest. For `merged`, edit the
+candidate file or delete it deliberately. Never infer conflict resolution from
+removed markers alone. Preserve unrelated changes; do not choose a whole side
+just to make the command succeed. Binary conflicts require an exact source side.
+
+`--resolve` validates and creates a new immutable plan, even for clean merges.
+A `stale_merge` error means a source changed again: retain the draft, prepare a
+new workspace, and reconcile against those exact sources. Treat
+`invalid_resolution` separately from unresolved `merge_conflicts` and network
+errors. Never turn a preparation failure into a clean merge. Inspect the new
+full-package plan and obtain fresh apply authorization: previous confirmation,
+including `--yes`, never applies to a replaced or reconciled plan. With fresh
+`apply --yes`, the CLI first prepares a plan and then explicitly confirms only
+that exact plan; it never stores permission for future request updates.
 
 Wait for an existing deployment's runtime provisioning to finish before submitting
 or applying changes. Cloud rejects these mutations while provisioning; `--force`

@@ -106,21 +106,101 @@ allow them. `version` identifies the reference format; the frozen inputs live in
 Cloud. The file contains no credentials and grants no permission. The CLI refuses to overwrite an existing
 file. Deleting it does not discard the remote proposal.
 
-## Review updates to a request
+## Correct an existing request
 
-In Web, use **Edit**, **Update request**, and **Add comment**. An eligible author
-or deployment manager can correct an unconfirmed create or update request. The
-request keeps its URL and discussion; each update has a new immutable plan.
-Comments never approve or close a request. Once confirmed or applying, its
-contents are fixed. **Discard** closes an abandoned request.
+You can keep the same request and discussion when a reviewer asks for a correction:
+
+```bash
+telos plan SPEC.md --request cr_42 --context @team-handle
+```
+
+This submits a new immutable update to `cr_42`. The request keeps its URL and
+comments; the previous update and its prepared plan remain inspectable in Web.
+Omit `--message` to keep its title, or supply a new message. You must be the
+author or a deployment manager, and the request must still be unconfirmed.
+Restore and redeploy requests keep their original source and cannot be edited.
+
+For any request, you can also write a new exact saved reference:
+
+```bash
+telos plan SPEC.md --request cr_42 --context @team-handle --out=corrected.plan
+telos apply corrected.plan --context @team-handle
+```
+
+An update prepares a new immutable plan immediately. It clears previous
+confirmation and snapshot-bypass choices. You must review and confirm the new
+plan before it runs. A request waiting for review never holds an execution turn.
+
+Without `--request`, `plan` remains a preview, and `plan --out` opens a new
+request. `--request` cannot be combined with `--session`, `--model`, `--thinking`,
+or `--force`. It uses the deployment and creation settings already in the request.
+
+In Web, use **Edit**, **Update request**, and **Add comment**. Comments
+show the update they refer to and never approve or close the request. Once
+confirmed or applying, its contents are fixed. **Discard** closes an abandoned
+request. An update number such as Update 2 is separate from the spec's version.
 
 Saved files identify one exact update and prepared plan. An old file fails if
 that plan was replaced, even if the deployment has not changed. A plan also
-becomes stale when another apply changes the deployment. Its request stays open:
-reconcile it against the current deployment in Web, resolve any conflicts, then
-review and confirm the new plan there. Reconciliation never carries forward an
-earlier confirmation, even when all text merges cleanly. Older v1 files work
-only while their original plan remains unchanged.
+becomes stale when another apply changes the deployment. The request stays open:
+use the reconciliation workflow below to combine your proposal with the current
+deployment and prepare a new plan. An ordinary `plan SPEC.md --request` update
+refuses a stale request before uploading. Older v1 files work only while their
+original plan remains unchanged.
+
+## Reconcile changes from the current deployment
+
+When another request applies first, reconcile your existing proposal instead of
+replacing the deployment with an older copy of its package:
+
+```bash
+telos plan --request cr_42 --reconcile ./cr-42-merge --context @team-handle --json
+```
+
+Use a new directory. Telos writes `base/` (the proposal's starting package),
+`current/` (the current deployment), `proposed/` (your request), and `merged/`
+(the candidate result). The workspace also contains `merge.json`, which pins
+the request update, deployment revision, API endpoint, and context. Preparation
+changes no request and applies nothing.
+
+A clean merge returns `operation: "merge_prepared"`. Conflicts return a nonzero
+exit status and `error.code: "merge_conflicts"`, with structured conflict IDs,
+paths, kinds, and all three versions. The files and manifest are still saved.
+A text conflict contains familiar conflict markers in `merged/`.
+
+For each entry in `merge.json`'s `resolutions`, set `choice` to:
+
+- `base`, `current`, or `proposed` to use that exact file version.
+- `merged` to use your edited file under `merged/`, or delete that file to
+  resolve it as a deletion.
+
+Removing markers alone does not mark a conflict resolved. Every conflict needs
+an explicit choice. Binary conflicts require an existing source version; custom
+binary edits are not supported. Files under `.telos/skills/` describe whether a
+skill is required; they are merge metadata, not files published inside a skill.
+
+Review the merged package, then save it as a new plan on the same request:
+
+```bash
+telos plan --request cr_42 --resolve ./cr-42-merge --context @team-handle --out=updated.plan --json
+```
+
+This creates a new immutable update and prints its final preview. It never
+applies or carries forward an old confirmation. Review the diff before an
+authorized person runs `telos apply updated.plan` or confirms in Web. A clean
+text merge can still need corrections to make the combined behavior sensible.
+
+If the deployment or request changed again, Cloud returns `stale_merge` and
+keeps your local files untouched. Prepare a new workspace and transfer your
+edits after comparing the new inputs. `invalid_resolution` identifies an invalid
+choice, file, or package; `merge_conflicts` identifies unresolved conflicts.
+With `--json`, each error has a machine-readable `error.code` and a nonzero exit
+status. Network or preparation failures never claim a clean merge.
+
+`--reconcile` and `--resolve` require `--request` and take no positional spec.
+They cannot be combined with each other, `--session`, `--model`, `--thinking`, or
+`--force`. Only `--resolve` accepts `--message` and `--out`. Neither command runs
+an apply, and the local saved-plan reference format remains version 2.
 
 ## Apply a saved proposal
 
@@ -169,7 +249,9 @@ to check. Closing the terminal after confirmation does not undo the change.
 Opening a request or applying a fresh spec requires `--message` (or `-m`): one nonblank line, up to
 200 Unicode characters. It becomes the proposal title and deployment History
 entry. Preview-only planning may omit it. Applying a saved file retains its
-original message. Web deployment forms require the same message.
+original message. Updating with `--request` can retain the existing message,
+including when writing a replacement saved file. Web deployment forms require
+the same message.
 
 ```bash
 # Save without prompting or deploying.
