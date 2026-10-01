@@ -41,7 +41,6 @@ type DeploymentPlanOptions struct {
 	DeploymentID string                `json:"deployment_id,omitempty"`
 	Create       *SessionCreateOptions `json:"create,omitempty"`
 	Update       *SessionUpdateOptions `json:"update,omitempty"`
-	AutoConfirm  bool                  `json:"auto_confirm,omitempty"`
 }
 
 // PlanArtifactClient stages private, content-addressed Registry artifacts. The
@@ -95,7 +94,8 @@ func (c *Client) GetChangeRequest(deploymentID, requestID string) (*ChangeReques
 func (c *Client) ConfirmChangeRequest(request ChangeRequestRecord) (*ChangeRequestRecord, error) {
 	body, err := json.Marshal(struct {
 		ExpectedCurrentRevisionID *string `json:"expected_current_revision_id"`
-	}{request.BaseRevisionID})
+		ExpectedPlanID            string  `json:"expected_plan_id,omitempty"`
+	}{request.BaseRevisionID, request.PreparedPlanID})
 	if err != nil {
 		return nil, err
 	}
@@ -106,8 +106,15 @@ func (c *Client) ConfirmChangeRequest(request ChangeRequestRecord) (*ChangeReque
 	return c.deploymentPlanRequest(http.MethodPost, changeRequestPath(request.DeploymentID, request.ID)+action, body)
 }
 
-func (c *Client) DiscardChangeRequest(deploymentID, requestID string) (*ChangeRequestRecord, error) {
-	return c.deploymentPlanRequest(http.MethodPost, changeRequestPath(deploymentID, requestID)+"/discard", []byte(`{}`))
+func (c *Client) DiscardChangeRequest(request ChangeRequestRecord) (*ChangeRequestRecord, error) {
+	body, err := json.Marshal(struct {
+		ExpectedUpdateNumber int    `json:"expected_update_number,omitempty"`
+		ExpectedPlanID       string `json:"expected_plan_id,omitempty"`
+	}{request.UpdateNumber, request.PreparedPlanID})
+	if err != nil {
+		return nil, err
+	}
+	return c.deploymentPlanRequest(http.MethodPost, changeRequestPath(request.DeploymentID, request.ID)+"/discard", body)
 }
 
 func (c *Client) deploymentPlanRequest(method, path string, body []byte) (*ChangeRequestRecord, error) {

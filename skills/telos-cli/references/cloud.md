@@ -151,10 +151,11 @@ and admins can enable Require change requests in Settings; protected changes
 need their confirmation. Direct unprotected changes create no Change Requests;
 you can still explicitly submit one from the Web or with `plan --out`.
 A fresh `apply SPEC.md` shows a preview link and asks for confirmation; use
-`--yes --json` for authorized unattended execution. Protected regular applies
-wait for their queue turn. The CLI does not wait for the agent's verification.
+`--yes --json` for authorized unattended execution. Each request prepares its
+plan immediately; only execution takes turns. The CLI does not wait for the
+agent's verification.
 See [Change Requests](change-requests.md) for the complete command contract,
-permissions, queue behavior, and deployment settings. Cloud plan/apply require
+permissions, reconciliation, concurrent applies, and deployment settings. Cloud plan/apply require
 a compatible server and never fall back to an unreviewed immediate deployment.
 
 [The Goal lifecycle](lifecycle.md) owns state, revision, observation, and

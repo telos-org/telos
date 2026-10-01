@@ -115,12 +115,12 @@ runtime.
 
    Alternatively, for an authorized fresh spec, use `telos apply SPEC.md --message "Record book ownership" --yes
    --json --context CONTEXT`. This prepares a fresh plan and confirms automatically.
-   Protected deployments take a queue turn before preparing the comparison. `-y` is shorthand for `--yes`. Never infer permission
+   Every request prepares its comparison immediately; only execution takes turns. `-y` is shorthand for `--yes`. Never infer permission
    from the lack of a terminal. Fresh Cloud apply without `--yes` requires an
    interactive terminal and rejects `--json` before uploads or request creation.
    Do not pipe `yes` to work around that check.
 
-4. Inspect `change_request.status`. Saved requests return `operation: "requested"`
+4. Inspect `change_request.status`. Unconfirmed requests return `operation: "requested"`
    and await confirmation; do not treat the current deployment's `ready` state
    as success of that proposal. Applied/confirmed/applying receipts identify
    authorized work, not completed verification. Capture the session ID and
@@ -162,10 +162,9 @@ snapshot. If the user wants to bypass it, explain:
 > runtime state.
 
 Use explicit authorization for that loss. The dashboard's Apply Now action can
-allow the snapshot bypass for the waiting proposal. Alternatively, discard a
-blocking protected request before creating a fresh proposal with `--force`;
-another protected regular apply would otherwise queue behind it. An unprotected
-plan does not reserve a queue turn. A local saved file cannot override its flags:
+allow the snapshot bypass for the waiting proposal. Alternatively, create a fresh
+proposal with `--force`. Unconfirmed requests do not reserve an execution turn.
+A local saved file cannot override its flags:
 
 ```bash
 telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --context CONTEXT --force --yes --json
@@ -175,16 +174,26 @@ telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --con
 snapshot gate only; it does not bypass authorization, active operations,
 runtime availability, confirmation requirements, or stale-revision protection.
 
-Saved plans freeze the finalized spec, package digest, skill locks, and baseline.
-A different deployment revision makes them stale; update the spec and create a
-new request instead of retrying confirmation with changed inputs. On protected
-deployments, regular apply waits in order before Cloud prepares its final
-version and comparison. Saved Change Requests wait outside that queue whether
-protection is on or off. Unprotected fresh apply creates a direct plan, not a
-Change Request, and does not reserve a turn while waiting for confirmation.
-If another apply changes the baseline, create a fresh plan. Plans and Change Requests do not expire.
-An abandoned regular apply holds its turn until it is applied or discarded.
-No request automatically merges other work.
+Plans freeze the finalized spec, package digest, skill locks, and baseline.
+Every Change Request prepares immediately and can be reviewed independently.
+Only execution is serialized. A different deployment revision makes a plan
+stale; the request stays open with its URL and discussion. Unprotected fresh
+apply creates a direct plan without a Change Request. Neither an unconfirmed
+request nor a direct plan reserves an execution turn. Plans do not expire.
+
+Requests may be edited or reconciled in Web while unconfirmed. Every update
+creates a new immutable plan; old saved files never silently identify it.
+Review the new full-package plan and obtain fresh apply authorization before
+confirmation. A stale request stays open with its URL and discussion. Its author
+can reconcile it with the current deployment in Web, including explicit conflict
+resolution. Never treat a clean text merge as proof of correct combined behavior.
+
+With fresh `apply --yes`, the CLI first prepares a plan and then explicitly
+confirms only that exact plan. It never stores permission for future request
+updates. Saved references pin both the request update and prepared plan ID;
+replaced or stale plans fail without applying different contents. Older v1 files
+remain valid only while their original proposal is unchanged.
+
 Wait for an existing deployment's runtime provisioning to finish before submitting
 or applying changes. Cloud rejects these mutations while provisioning; `--force`
 does not bypass that guard. Read-only previews, status inspection, and deletion
@@ -204,15 +213,14 @@ owner/admin confirmation; authorized users can confirm their own requests.
 Unprotected direct writes use the ordinary deployment pipeline without Change
 Requests; `plan --out` deliberately saves an optional Change Request. The Web
 also offers optional request submission. Turning protection off preserves
-pending requests and existing regular apply queue positions. It does not apply
-or discard them. CLI fresh apply still requires its own confirmation, or explicit
+pending requests. It does not apply or discard them. CLI fresh apply still requires its own confirmation, or explicit
 `--yes`. Do not turn off protection to bypass a review. Cloud checks current
 permissions when applying. A direct plan prepared before protection was enabled
 requires a fresh request; saved Change Requests remain subject to the new policy.
 A stale baseline requires a fresh plan. Return the dashboard link after a
 missing-snapshot error so the user can confirm later or choose Apply Now.
 Read [Change Requests](references/change-requests.md) for the full contract,
-queue behavior, cancellation, and immutable file format.
+concurrent execution, reconciliation, cancellation, and immutable file format.
 
 [Use Telos](references/use-telos.md) follows this loop with one service.
 [The Goal lifecycle](references/lifecycle.md) gives a bounded observation
@@ -249,7 +257,7 @@ Package versions are immutable, so changed content receives a new version.
 Report the spec, target, context, session ID, current revision and state, and
 the evidence behind the result. Distinguish work that was planned, applied,
 published, requested, updated, or deleted. The `requested` receipt operation
-identifies an unconfirmed saved Change Request; confirmed, applying, and applied
+identifies an unconfirmed Change Request; confirmed, applying, and applied
 receipts report its later execution state, regardless of protection. Direct
 preview/apply receipts use `plan` and `preview_url`. A preview reports
 `operation: preview`; an unconfirmed direct apply reports `operation: planned`.
@@ -263,7 +271,7 @@ separate result.
 - [Use Telos](references/use-telos.md) — one persistent Goal from first plan through revision
 - [Write a SPEC.md](references/goals.md) — contract shape and expressive boundary
 - [The Goal lifecycle](references/lifecycle.md) — identity, states, revisions, and evidence
-- [Change Requests](references/change-requests.md) — queued changes, confirmation, and request receipts
+- [Change Requests](references/change-requests.md) — review, reconciliation, exact confirmation, and request receipts
 - [Glossary](references/glossary.md) — canonical Telos product vocabulary
 - [Bounded runs](references/bounded-runs.md) — local work with an explicit stopping bound
 - [Telos Cloud](references/cloud.md) — browser and token authentication, CI, contexts, and managed-runtime preflight

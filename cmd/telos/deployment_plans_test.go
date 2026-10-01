@@ -28,7 +28,7 @@ func TestPlanMessageValidationBeforeAnyNetwork(t *testing.T) {
 				var calls atomic.Int32
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1); http.NotFound(w, r) }))
 				defer server.Close()
-				_, err := createCloudPlan(cloud.NewClient(server.URL, "token"), cloudPlanInput{specArg: "SPEC.md", mode: mode, autoConfirm: mode == "apply", revisionMessage: value})
+				_, err := createCloudPlan(cloud.NewClient(server.URL, "token"), cloudPlanInput{specArg: "SPEC.md", mode: mode, yes: mode == "apply", revisionMessage: value})
 				if err == nil || !strings.Contains(err.Error(), "--message") || calls.Load() != 0 {
 					t.Fatalf("err=%v calls=%d", err, calls.Load())
 				}
@@ -54,7 +54,7 @@ func TestCLIRequiresMessageAndRejectsSavedOverrides(t *testing.T) {
 	specPath := filepath.Join(t.TempDir(), "SPEC.md")
 	_ = os.WriteFile(specPath, []byte(testPlanSpec), 0o600)
 	savedPath := filepath.Join(t.TempDir(), "change.plan")
-	bookmark := savedDeploymentPlan{Version: savedPlanVersion, ChangeRequestID: "cr_saved", DeploymentID: "sess_123", Context: "personal", OrgID: "org_personal", APIEndpoint: server.URL}
+	bookmark := savedDeploymentPlan{Version: savedPlanVersion, UpdateNumber: 1, PreparedPlanID: "cp_original", ChangeRequestID: "cr_saved", DeploymentID: "sess_123", Context: "personal", OrgID: "org_personal", APIEndpoint: server.URL}
 	encoded, _ := json.Marshal(bookmark)
 	_ = os.WriteFile(savedPath, encoded, 0o600)
 	for _, args := range [][]string{
@@ -141,6 +141,7 @@ func TestPlanPermissionAndCapabilityFailurePrecedeUploads(t *testing.T) {
 	}{
 		{"old Cloud", `{}`, `{"can_plan":true,"can_apply":true}`, "does not support deployment plans"},
 		{"member cannot apply", `{"deployment_plans":true}`, `{"can_plan":true,"can_apply":false}`, "--out=change.plan"},
+		{"protected proposer cannot apply", `{"deployment_plans":true}`, `{"can_plan":true,"can_apply":false,"requires_change_requests":true}`, "--out=change.plan"},
 		{"unprotected plan-only member", `{"deployment_plans":true}`, `{"can_plan":true,"can_apply":false,"requires_change_requests":false}`, "Change Request for an authorized editor"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -183,7 +184,7 @@ func TestCancellationDuringUploadCannotSubmitAutoConfirmedApply(t *testing.T) {
 	defer server.Close()
 	path := filepath.Join(t.TempDir(), "SPEC.md")
 	_ = os.WriteFile(path, []byte(testPlanSpec), 0o600)
-	_, err := createCloudPlan(cloud.NewClient(server.URL, "token").WithContext(ctx), cloudPlanInput{specArg: path, mode: "apply", autoConfirm: true, revisionMessage: "Update the demo"})
+	_, err := createCloudPlan(cloud.NewClient(server.URL, "token").WithContext(ctx), cloudPlanInput{specArg: path, mode: "apply", yes: true, revisionMessage: "Update the demo"})
 	if !errors.Is(err, context.Canceled) || submissions.Load() != 0 {
 		t.Fatalf("canceled upload submitted apply: err=%v submissions=%d", err, submissions.Load())
 	}
@@ -204,7 +205,7 @@ func TestMemberCanSavePrivatePlanAndBookmarkWithoutDeploying(t *testing.T) {
 			submissions++
 			var options cloud.DeploymentPlanOptions
 			_ = json.NewDecoder(r.Body).Decode(&options)
-			if options.Mode != "saved" || options.AutoConfirm || options.Create == nil || options.Create.PackageRef != "@personal/plan-artifact:1.0.0" || options.Create.RevisionMessage != "Create the demo" {
+			if options.Mode != "saved" || options.Create == nil || options.Create.PackageRef != "@personal/plan-artifact:1.0.0" || options.Create.RevisionMessage != "Create the demo" {
 				t.Errorf("wrong saved proposal: %+v", options)
 			}
 			request := testDeploymentPlan("saved", "awaiting_confirmation")

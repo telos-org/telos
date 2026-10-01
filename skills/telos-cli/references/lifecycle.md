@@ -28,9 +28,10 @@ Bounded:    local spec → run with a bound → run session → evidence
 ```
 
 Cloud `plan` creates a preview without applying it; `plan --out=FILE` saves an
-immutable Change Request for later confirmation, with or without deployment
+immutable plan in a Change Request for later confirmation, with or without deployment
 protection. `apply SPEC.md` prepares a fresh plan
-and asks for confirmation; protected deployments first wait for their queue turn.
+and asks for confirmation; protected deployments open a Change Request with the
+plan immediately available for review.
 `apply FILE` confirms the exact saved proposal. A successful apply receipt reports confirmed, applying, or applied
 work, not successful agent verification. See [Change Requests](change-requests.md).
 After execution, reconciliation continues in the background; `describe`
@@ -81,7 +82,7 @@ Saved Change Requests report `requested` and have a review link. Apply them
 through that page or `telos apply FILE` when you have permission. An authorized
 editor can confirm an optional request; protected requests require an owner or
 admin. A fresh unprotected apply uses a direct plan and creates no Change Request.
-If a request is queued or awaiting confirmation, the old
+If a request is preparing or awaiting confirmation, the old
 revision's status does not describe the proposal. `describe --json` includes
 `pending_change_requests` separately. An initial creation waiting for confirmation
 has no current revision yet. After apply returns, check the same request until
@@ -167,8 +168,8 @@ Publishing a changed named package with `telos push` still requires a new
 Registry version.
 
 The Goal, session, deployment, and history remain stable. Protected submissions
-enter the Change Request queue; unprotected updates apply directly after your
-confirmation. Both create an immutable revision with the same lifecycle. [Use Telos](use-telos.md) shows the full diff and receipt.
+open a Change Request; unprotected updates apply directly after your
+confirmation. Requests can be reviewed independently, while execution takes turns. Both create an immutable revision with the same lifecycle. [Use Telos](use-telos.md) shows the full diff and receipt.
 
 ## Delete a Goal
 

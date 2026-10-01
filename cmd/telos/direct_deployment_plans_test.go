@@ -49,7 +49,7 @@ func TestUnprotectedPlanOutSavesOptionalChangeRequest(t *testing.T) {
 					if err := json.NewDecoder(r.Body).Decode(&options); err != nil {
 						t.Error(err)
 					}
-					if options.Mode != "saved" || options.AutoConfirm {
+					if options.Mode != "saved" {
 						t.Errorf("optional request can deploy automatically: %+v", options)
 					}
 					request := testDeploymentPlan("saved", "awaiting_confirmation")
@@ -113,7 +113,7 @@ func TestLegacyDirectSavedPlanWritesPlanReference(t *testing.T) {
 		if err := json.NewDecoder(r.Body).Decode(&options); err != nil {
 			t.Error(err)
 		}
-		if options.Mode != "saved" || options.AutoConfirm || options.Create == nil || options.Create.RevisionMessage != "Create the demo" {
+		if options.Mode != "saved" || options.Create == nil || options.Create.RevisionMessage != "Create the demo" {
 			t.Errorf("unexpected saved proposal: %+v", options)
 		}
 		plan := testDirectDeploymentPlan("saved", "awaiting_confirmation")
@@ -351,7 +351,7 @@ func TestDirectCLIYesSnapshotFailureExitsWithDashboardLink(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&options); err != nil {
 				t.Error(err)
 			}
-			if options.Mode != "apply" || !options.AutoConfirm || options.Update == nil || options.Update.ExpectedCurrentRevisionID != "rev_7" {
+			if options.Mode != "apply" || options.Update == nil || options.Update.ExpectedCurrentRevisionID != "rev_7" {
 				t.Errorf("invalid automatic apply submission: %+v", options)
 			}
 			plan := testDirectDeploymentPlan("apply", "awaiting_confirmation")

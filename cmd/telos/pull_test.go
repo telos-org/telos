@@ -117,7 +117,7 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 		case "/api/deployment-plans":
 			var options cloud.DeploymentPlanOptions
 			_ = json.NewDecoder(r.Body).Decode(&options)
-			if options.Mode != "apply" || !options.AutoConfirm {
+			if options.Mode != "apply" {
 				t.Errorf("unexpected mode: %+v", options)
 			}
 			if options.Create != nil {

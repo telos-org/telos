@@ -25,8 +25,8 @@ You can confirm your own request if you have Apply permission. There is no
 required number of independent reviewers.
 
 Existing deployments keep their protection when this feature rolls out. You can
-change the setting with pending requests: they remain open, and regular applies
-keep their queue positions. Wait for an apply already executing to finish before
+change the setting with pending requests: they remain open and independently
+reviewable. Wait for an apply already executing to finish before
 changing the setting. Switching protection off never applies or discards a waiting
 proposal. Cloud checks the current setting and your permissions when applying.
 A direct plan prepared before protection was enabled cannot bypass the new
@@ -56,10 +56,11 @@ an unused spec version for changed content before the plan is ready to review.
 CLI and Web submissions follow the same rule. The terminal and dashboard show
 the final version and spec diff; the CLI leaves your local `SPEC.md` unchanged.
 
-A protected regular apply prepares its version and comparison when it reaches
-the front of the queue. A saved plan prepares them immediately and freezes the
-result. Cloud does not change that saved version, package, or skill locks after
-review. If its starting revision changes, create a new plan.
+Every request prepares its version and comparison immediately. Opening a request
+does not reserve the deployment or block other reviews. Its plan freezes the
+version, package, skill locks, and starting revision. Cloud never changes an
+approved plan's inputs. If the deployment changes, reconcile the request and
+review its new plan before applying.
 
 Named Registry releases remain immutable. When a deployment needs a different
 version, Cloud can derive a private proposal from a published package without
@@ -73,8 +74,9 @@ telos plan SPEC.md --session SESSION_ID --context @team-handle --out=change.plan
 ```
 
 The command shows the comparison and dashboard link, saves a small local JSON
-reference, then exits without deploying. Using `--out` always deliberately saves
-a Change Request, even when requests are optional.
+reference, then exits without deploying. Using `--out` opens a Change Request,
+even when requests are optional. There is one kind of request; the local file
+identifies one exact plan within it, rather than a separate saved-request type.
 
 - **Unprotected deployment:** the request appears in the Change Requests tab.
   An authorized editor can confirm it from the dashboard or CLI.
@@ -87,8 +89,10 @@ The filename and extension are your choice. The reference file looks like:
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "change_request_id": "cr_example",
+  "update_number": 1,
+  "prepared_plan_id": "cp_example",
   "deployment_id": "sess_example",
   "context": "@team-handle",
   "org_id": "org_team",
@@ -101,6 +105,22 @@ continues to support those direct plans while current permissions and protection
 allow them. `version` identifies the reference format; the frozen inputs live in
 Cloud. The file contains no credentials and grants no permission. The CLI refuses to overwrite an existing
 file. Deleting it does not discard the remote proposal.
+
+## Review updates to a request
+
+In Web, use **Edit**, **Update request**, and **Add comment**. An eligible author
+or deployment manager can correct an unconfirmed create or update request. The
+request keeps its URL and discussion; each update has a new immutable plan.
+Comments never approve or close a request. Once confirmed or applying, its
+contents are fixed. **Discard** closes an abandoned request.
+
+Saved files identify one exact update and prepared plan. An old file fails if
+that plan was replaced, even if the deployment has not changed. A plan also
+becomes stale when another apply changes the deployment. Its request stays open:
+reconcile it against the current deployment in Web, resolve any conflicts, then
+review and confirm the new plan there. Reconciliation never carries forward an
+earlier confirmation, even when all text merges cleanly. Older v1 files work
+only while their original plan remains unchanged.
 
 ## Apply a saved proposal
 
@@ -132,9 +152,10 @@ Apply these changes? Type yes to confirm:
 ```
 
 Typing `yes` applies directly. This creates no Change Request and does not
-reserve a queue turn while you consider the plan. A protected regular apply
-enters the deployment's queue, prepares its comparison when it reaches the
-front, and then asks the same question. You can also confirm on the dashboard.
+reserve the deployment while you consider the plan. A protected apply opens a
+Change Request, prepares its comparison immediately, and asks the same question.
+You can also confirm on the dashboard. Only execution is serialized; another
+apply may make your plan stale while you review it.
 
 Without Apply permission, fresh apply stops before uploading. Use
 `plan --out=FILE` to propose a change for someone who can apply it: an authorized
@@ -145,7 +166,7 @@ to check. Closing the terminal after confirmation does not undo the change.
 
 ## Messages, agents, and CI
 
-Saving or applying requires `--message` (or `-m`): one nonblank line, up to
+Opening a request or applying a fresh spec requires `--message` (or `-m`): one nonblank line, up to
 200 Unicode characters. It becomes the proposal title and deployment History
 entry. Preview-only planning may omit it. Applying a saved file retains its
 original message. Web deployment forms require the same message.
@@ -161,8 +182,9 @@ telos apply change.plan --context @team-handle --json
 telos apply SPEC.md --session SESSION_ID --context @team-handle --message "Record book ownership" --yes --json
 ```
 
-`--yes` (or `-y`) supplies your confirmation, without granting permissions or
-bypassing protection. Fresh Cloud apply requires it when stdin or the prompt
+`--yes` (or `-y`) confirms only the exact plan prepared by that invocation,
+without granting permissions or bypassing protection. It never authorizes a
+later edit or automatically reconciled replacement. Fresh Cloud apply requires it when stdin or the prompt
 stream is not a terminal, or when `--json` is set. Otherwise the command fails
 before uploading. `--json` keeps stdout machine-readable.
 
@@ -170,7 +192,7 @@ Direct-plan receipts include `plan`, `preview_url`, `session_id`, and `operation
 Preview-only receipts report `preview`; unconfirmed direct applies report
 `planned`. Execution reports `applying` or `applied` and adds `deployment_url`.
 Change Request receipts use `change_request` and `review_url`;
-an unconfirmed saved request reports `requested`. Saved receipts include
+an unconfirmed request reports `requested`. Saved-reference receipts include
 `plan_file`. Neither an applied receipt nor its resulting revision means the
 agent has finished verification.
 
@@ -188,16 +210,15 @@ restoring, or changing deployment settings. You can still delete the deployment
 or discard a request. `--force` cannot skip provisioning. These controls become
 available once setup finishes, even while the agent is still working.
 
-Two unprotected plans can start from the same revision. Whichever applies first
-changes the deployment; the second is then stale. Create a fresh plan against
-the new revision. Cloud never merges or silently changes a saved proposal.
+Several requests can start from the same revision and be reviewed at once.
+Only one apply can execute on a deployment at a time. If another apply owns the
+deployment, wait for it to finish; Cloud rechecks the exact plan and baseline
+before execution. When that apply changes the deployment, the other plans become
+stale while their requests, links, and comments remain open.
 
-Protected regular applies take turns. Waiting for confirmation holds the turn.
-Saved Change Requests wait outside that queue but cannot apply while another
-request owns the turn. They can become stale when that request finishes.
-An optional saved request does not block direct updates. If a direct update
-applies first, the saved request becomes outdated. Turning protection off does
-not let a new direct update jump past an existing regular apply in the queue.
+Reconciliation creates a new plan that needs fresh confirmation, even when its
+text merges cleanly. Existing confirmations never carry across it. Requests
+waiting for review do not block direct updates on an unprotected deployment.
 Plans and requests have no time-based expiry.
 
 An interrupted direct apply can be retried from the same saved file or plan

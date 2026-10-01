@@ -90,7 +90,7 @@ The terminal shows the proposed spec and skill changes and a dashboard link.
 The initial plan compares your spec with an empty deployment. Anyone with the
 appropriate access can inspect the preview, but it cannot be applied directly.
 Add `--out=change.plan --message "Launch the reading list"` to save an immutable
-Change Request for later confirmation, even when requests are optional.
+plan in a Change Request for later confirmation, even when requests are optional.
 
 ## Apply it
 
@@ -105,8 +105,8 @@ deployment, and creation starts directly without a Change Request. For authorize
 noninteractive execution, use `--yes --json`.
 
 On an existing deployment, authorized editors can apply directly unless its
-Settings require Change Requests. Protected updates enter the request queue and
-need owner/admin confirmation. Use `plan --out` to save a request for someone
+Settings require Change Requests. Protected updates open a request with an
+immediately prepared plan and need owner/admin confirmation. Use `plan --out` to save a request for someone
 else to confirm, whether or not protection is enabled.
 
 The receipt identifies the plan or request, session, dashboard URL, and resulting
@@ -119,7 +119,7 @@ telos describe sess_c7d2f0a4e8 --context personal --json
 telos logs sess_c7d2f0a4e8 --context personal
 ```
 
-[Change Requests](change-requests.md) explains saved proposals, queue behavior,
+[Change Requests](change-requests.md) explains exact plans, concurrent requests,
 permissions, deployment settings, and JSON receipts. Cloud plan and apply
 require a compatible server; older servers return an upgrade error.
 [The Goal lifecycle](lifecycle.md) gives the observation deadline, stopping
@@ -174,7 +174,7 @@ The terminal and dashboard show the diff. For example:
 +- Every book records who added it.
 ```
 
-The saved request preserves the final spec and version shown in the diff,
+The plan preserves the final spec and version shown in the diff,
 package digest, skill digests, and baseline revision. Your local `SPEC.md` stays
 unchanged. Web edits use the same version preparation. Resubmitting a changed
 proposal does not require a manual bump; ordinary `telos push` still requires a
@@ -188,13 +188,15 @@ telos apply attribution.plan --context personal
 
 This command needs Apply permission and asks no additional question. You can
 instead confirm the request on its dashboard page. If another change has moved
-the deployment to a new revision, this saved request is stale: update your spec
-and create a new proposal. Telos does not merge specs.
+the deployment to a new revision, the plan is stale while its request stays open.
+Reconcile the request against the current deployment in Web and resolve any
+conflicts explicitly. Review and confirm that new plan on the request page;
+earlier confirmation never carries over, and the old saved file remains invalid.
 
 Alternatively, `telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 --context personal`
-prepares a plan and asks for confirmation. On a protected deployment, it queues
-a Change Request and prepares the comparison when its turn arrives. The current revision keeps reconciling while it
-waits. The Goal, session, deployment, and history stay the same when the new
+prepares a plan and asks for confirmation. On a protected deployment, it opens
+a Change Request and prepares the comparison immediately. The current revision
+keeps reconciling while it waits for confirmation. The Goal, session, deployment, and history stay the same when the new
 revision executes. Observe that revision through `working` to `ready`, then
 exercise the updated API behavior.
 
@@ -206,8 +208,8 @@ On that page, **Wait** leaves it pending until you confirm again; it will not
 apply automatically when the snapshot is ready. Choose **Apply Now** to proceed
 without the snapshot. You can also create a fresh CLI plan with `--force`.
 Applying with this bypass can leave the previous revision without
-an exact workspace and runtime restore point. A second protected regular apply
-queues behind the first request; an unprotected plan does not reserve a turn.
+an exact workspace and runtime restore point. A pending request does not reserve
+an execution turn or prevent reviewing other requests.
 
 ```bash
 telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 --context personal --force
@@ -215,8 +217,8 @@ telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 
 
 This bypass applies only to the missing-snapshot gate. Active operations,
 authorization, confirmation requirements, runtime availability, and
-stale-revision protection still apply. A queued request may wait for an active
-operation or snapshot to finish; `--force` never supplies confirmation by itself.
+stale-revision protection still apply. An apply must wait for any executing
+operation to finish; `--force` never supplies confirmation by itself.
 
 For another contract, continue with [Write a SPEC.md](goals.md). Use
 [Bounded runs](bounded-runs.md) for local work and

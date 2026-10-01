@@ -72,7 +72,7 @@ func TestCmdApplyJSONReturnsInitialChangeRequest(t *testing.T) {
 			mutations++
 			var body cloud.DeploymentPlanOptions
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body.Create == nil || !body.AutoConfirm {
+			if body.Create == nil {
 				t.Errorf("explicit confirmation missing: %+v", body)
 			}
 			request := testDeploymentPlan("apply", "applied")

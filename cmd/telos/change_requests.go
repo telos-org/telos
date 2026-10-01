@@ -49,6 +49,8 @@ func cloudPlanDeploymentURL(control *cloud.Client, request cloud.ChangeRequestRe
 
 func changeRequestStatus(status string) string {
 	switch status {
+	case "queued":
+		return "preparing plan"
 	case "awaiting_confirmation":
 		return "awaiting confirmation"
 	default:

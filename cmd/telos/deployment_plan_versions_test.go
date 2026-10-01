@@ -85,7 +85,7 @@ func TestCloudPlanOutputUsesPreparedVersionAndPackage(t *testing.T) {
 				if err := os.WriteFile(source, []byte(testPlanSpec), 0o600); err != nil {
 					t.Fatal(err)
 				}
-				input := cloudPlanInput{specArg: source, sessionID: "sess_123", mode: tt.mode, revisionMessage: "Update the demo", autoConfirm: tt.mode == "apply"}
+				input := cloudPlanInput{specArg: source, sessionID: "sess_123", mode: tt.mode, revisionMessage: "Update the demo", yes: tt.mode == "apply"}
 				var bookmarkPath string
 				if tt.mode == "saved" {
 					bookmarkPath = filepath.Join(t.TempDir(), "change.plan")

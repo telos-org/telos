@@ -23,11 +23,13 @@ import (
 	"golang.org/x/term"
 )
 
-const savedPlanVersion = 1
+const savedPlanVersion = 2
 
 // A bookmark identifies a server-owned proposal, never credentials or executable
 // inputs. The configured endpoint/context must match before it can be used.
 type savedDeploymentPlan struct {
+	UpdateNumber    int    `json:"update_number,omitempty"`
+	PreparedPlanID  string `json:"prepared_plan_id,omitempty"`
 	Version         int    `json:"version"`
 	ChangeRequestID string `json:"change_request_id,omitempty"`
 	PlanID          string `json:"plan_id,omitempty"`
@@ -44,7 +46,7 @@ type cloudPlanInput struct {
 	force           bool
 	contextOverride string
 	mode            string
-	autoConfirm     bool
+	yes             bool
 	revisionMessage string
 }
 
@@ -116,7 +118,7 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloudPlanRes
 		return nil, err
 	}
 	options := cloud.DeploymentPlanOptions{
-		Mode: input.mode, DeploymentID: input.sessionID, AutoConfirm: input.autoConfirm,
+		Mode: input.mode, DeploymentID: input.sessionID,
 	}
 	var currentRef string
 	if input.sessionID != "" {
@@ -139,32 +141,9 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloudPlanRes
 			RevisionMessage: message,
 		}
 	}
-	var record *cloud.PackageVersionRecord
-	var name string
-	if strings.HasPrefix(strings.TrimSpace(input.specArg), "@") {
-		reference, err := parsePackageReference(input.specArg)
-		if err != nil {
-			return nil, err
-		}
-		name = reference.name
-		record, err = registryPackageForApply(control, reference)
-		if err != nil {
-			return nil, err
-		}
-	} else {
-		path := resolveSpecPath(input.specArg)
-		err := withPlanRegistrySkills(path, input.contextOverride, func() error {
-			pkg, err := packageSpec(path, input.contextOverride)
-			if err != nil {
-				return err
-			}
-			name = pkg.name
-			record, err = pushSpecPackage(control.PlanArtifactClient(), pkg, "")
-			return err
-		})
-		if err != nil {
-			return nil, err
-		}
+	record, name, err := stageCloudPlanPackage(control, input.specArg, input.contextOverride)
+	if err != nil {
+		return nil, err
 	}
 	if options.Create != nil {
 		options.Create.Name = name
@@ -176,7 +155,7 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloudPlanRes
 	if err != nil {
 		return nil, actionableDeploymentUpdateError(err, input.force)
 	}
-	if request.Mode != input.mode {
+	if request.Mode != input.mode && (request.Kind == "plan" || input.mode == "preview" || request.Mode == "preview") {
 		return nil, fmt.Errorf("Cloud returned a %q request for a %q plan", request.Mode, input.mode)
 	}
 	if input.mode != "apply" && request.Preview == nil {
@@ -185,6 +164,37 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloudPlanRes
 	return &cloudPlanResult{
 		request: request, specName: name, currentRef: currentRef,
 	}, nil
+}
+
+func stageCloudPlanPackage(control *cloud.Client, specArg, contextOverride string) (*cloud.PackageVersionRecord, string, error) {
+	var record *cloud.PackageVersionRecord
+	var name string
+	if strings.HasPrefix(strings.TrimSpace(specArg), "@") {
+		reference, err := parsePackageReference(specArg)
+		if err != nil {
+			return nil, "", err
+		}
+		name = reference.name
+		record, err = registryPackageForApply(control, reference)
+		if err != nil {
+			return nil, "", err
+		}
+	} else {
+		path := resolveSpecPath(specArg)
+		err := withPlanRegistrySkills(path, contextOverride, func() error {
+			pkg, err := packageSpec(path, contextOverride)
+			if err != nil {
+				return err
+			}
+			name = pkg.name
+			record, err = pushSpecPackage(control.PlanArtifactClient(), pkg, "")
+			return err
+		})
+		if err != nil {
+			return nil, "", err
+		}
+	}
+	return record, name, nil
 }
 
 func cloudPlanOrgID(control *cloud.Client) (string, error) {
@@ -210,6 +220,12 @@ func newSavedDeploymentPlan(control *cloud.Client, request *cloud.ChangeRequestR
 		bookmark.PlanID = request.ID
 	} else {
 		bookmark.ChangeRequestID = request.ID
+		bookmark.UpdateNumber = request.UpdateNumber
+		bookmark.PreparedPlanID = request.PreparedPlanID
+		// Older servers have immutable requests and only understand v1 files.
+		if request.PreparedPlanID == "" {
+			bookmark.Version = 1
+		}
 	}
 	return bookmark
 }
@@ -291,13 +307,35 @@ func readSavedDeploymentPlan(path string) (*savedDeploymentPlan, error) {
 	if err := json.Unmarshal(data, &bookmark); err != nil {
 		return nil, fmt.Errorf("invalid saved plan file: %w", err)
 	}
-	if bookmark.Version != savedPlanVersion {
+	if bookmark.Version != 1 && bookmark.Version != savedPlanVersion {
 		return nil, fmt.Errorf("unsupported saved plan format %d; update the Telos CLI or create a new saved plan", bookmark.Version)
 	}
 	if (bookmark.ChangeRequestID == "") == (bookmark.PlanID == "") || bookmark.DeploymentID == "" || bookmark.Context == "" || bookmark.OrgID == "" || bookmark.APIEndpoint == "" {
 		return nil, fmt.Errorf("invalid saved plan file: one plan or request ID, deployment, context, organization, and API endpoint are required")
 	}
+	if bookmark.Version >= 2 && bookmark.ChangeRequestID != "" && (bookmark.PreparedPlanID == "" || bookmark.UpdateNumber < 1) {
+		return nil, fmt.Errorf("invalid saved plan file: an exact prepared plan and update number are required")
+	}
 	return &bookmark, nil
+}
+
+func validateSavedRequest(bookmark *savedDeploymentPlan, request *cloud.ChangeRequestRecord) error {
+	if bookmark.ChangeRequestID != "" {
+		if bookmark.Version == 1 {
+			if request.LegacyConfirmationValid != nil && !*request.LegacyConfirmationValid {
+				return fmt.Errorf("this saved file refers to the original plan of %s, which was replaced; review the request and save a new plan", request.ID)
+			}
+		} else if bookmark.PreparedPlanID != request.PreparedPlanID || bookmark.UpdateNumber != request.UpdateNumber {
+			return fmt.Errorf("%s Update %d's saved plan was replaced; review Update %d and save a new plan", request.ID, bookmark.UpdateNumber, request.UpdateNumber)
+		}
+	}
+	if request.PlanStale {
+		if request.Kind == "plan" {
+			return fmt.Errorf("the deployment changed after this plan was prepared; nothing was applied; prepare a fresh plan against session %s", request.DeploymentID)
+		}
+		return fmt.Errorf("the deployment changed after this plan was prepared; nothing was applied; review and reconcile request %s in the dashboard before confirming its new plan", request.ID)
+	}
+	return nil
 }
 
 func validateSavedDeploymentPlan(control *cloud.Client, bookmark *savedDeploymentPlan) error {
@@ -364,7 +402,7 @@ func runCloudPlan(input cloudPlanInput, output string, jsonOut bool) error {
 }
 
 func runCloudApply(input cloudPlanInput, jsonOut bool) error {
-	if err := checkFreshApplyConfirmation(input.autoConfirm, jsonOut,
+	if err := checkFreshApplyConfirmation(input.yes, jsonOut,
 		term.IsTerminal(int(os.Stdin.Fd())), term.IsTerminal(int(os.Stderr.Fd()))); err != nil {
 		return err
 	}
@@ -382,7 +420,7 @@ func runCloudApply(input cloudPlanInput, jsonOut bool) error {
 	if !jsonOut {
 		printDeploymentPlan(os.Stdout, control, request)
 	}
-	request, err = awaitCloudApply(ctx, control, request, input.autoConfirm, os.Stdin,
+	request, err = awaitCloudApply(ctx, control, request, input.yes, os.Stdin,
 		planOutputWriter(jsonOut), os.Stderr, time.Second)
 	if err != nil {
 		return err
@@ -411,11 +449,14 @@ func runSavedCloudApply(bookmark *savedDeploymentPlan, contextOverride string, j
 	if err != nil {
 		return err
 	}
-	if request.Mode != "saved" {
+	if request.Mode != "saved" && request.Mode != "apply" {
 		return fmt.Errorf("this file does not identify a saved plan; preview-only plans cannot be applied")
 	}
 	if request.ID != planID || request.DeploymentID != bookmark.DeploymentID || (request.Kind == "plan") != (bookmark.PlanID != "") {
 		return fmt.Errorf("Cloud returned a different plan than the saved file")
+	}
+	if err := validateSavedRequest(bookmark, request); err != nil {
+		return err
 	}
 	sessionID := bookmark.DeploymentID
 	if request.Kind == "plan" && request.Action == "create" {
@@ -496,9 +537,30 @@ func snapshotConfirmationError(control *cloud.Client, request *cloud.ChangeReque
 	return fmt.Errorf("%s %s is still pending. %s Confirm again after the snapshot is ready, or choose Apply Now to proceed without one: %s", proposalLabel(request), request.ID, reason, cloudRequestReviewURL(control, *request))
 }
 
+// A poll or recovery read must never replace the proposal the user reviewed.
+func sameCloudPlan(expected, current *cloud.ChangeRequestRecord) bool {
+	if expected.ID != current.ID || expected.DeploymentID != current.DeploymentID || (expected.Kind == "plan") != (current.Kind == "plan") {
+		return false
+	}
+	if expected.UpdateNumber > 0 && expected.UpdateNumber != current.UpdateNumber {
+		return false
+	}
+	if expected.PreparedPlanID != "" {
+		return expected.PreparedPlanID == current.PreparedPlanID
+	}
+	return current.LegacyConfirmationValid == nil || *current.LegacyConfirmationValid
+}
+
+func replacedPlanError(request *cloud.ChangeRequestRecord) error {
+	return fmt.Errorf("the plan for %s changed while you were reviewing; nothing was confirmed by this command; review the latest update in the dashboard", request.ID)
+}
+
 func confirmCloudRequest(control *cloud.Client, request *cloud.ChangeRequestRecord) (*cloud.ChangeRequestRecord, error) {
 	confirmed, err := control.ConfirmChangeRequest(*request)
 	if err == nil {
+		if !sameCloudPlan(request, confirmed) {
+			return nil, replacedPlanError(request)
+		}
 		if err := snapshotConfirmationError(control, confirmed); err != nil {
 			return nil, err
 		}
@@ -513,6 +575,9 @@ func confirmCloudRequest(control *cloud.Client, request *cloud.ChangeRequestReco
 	// A dashboard confirmation or a lost acknowledgement may have won the race.
 	current, readErr := control.GetChangeRequest(request.DeploymentID, request.ID)
 	if readErr == nil {
+		if !sameCloudPlan(request, current) {
+			return nil, replacedPlanError(request)
+		}
 		if err := snapshotConfirmationError(control, current); err != nil {
 			return nil, err
 		}
@@ -527,10 +592,10 @@ func confirmCloudRequest(control *cloud.Client, request *cloud.ChangeRequestReco
 }
 
 func discardUnstartedCloudRequest(control *cloud.Client, request *cloud.ChangeRequestRecord) (*cloud.ChangeRequestRecord, error) {
-	discarded, err := control.DiscardChangeRequest(request.DeploymentID, request.ID)
+	discarded, err := control.DiscardChangeRequest(*request)
 	if err != nil {
 		current, readErr := control.GetChangeRequest(request.DeploymentID, request.ID)
-		if readErr == nil && requestStarted(current) {
+		if readErr == nil && sameCloudPlan(request, current) && requestStarted(current) {
 			return current, nil
 		}
 		return nil, fmt.Errorf("could not discard plan %s: %w; inspect or discard it at %s", request.ID, err, cloudRequestReviewURL(control, *request))
@@ -542,7 +607,7 @@ func discardUnstartedCloudRequest(control *cloud.Client, request *cloud.ChangeRe
 }
 
 func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.ChangeRequestRecord,
-	autoConfirm bool, input io.Reader, previewOut, promptOut io.Writer, pollInterval time.Duration,
+	yes bool, input io.Reader, previewOut, promptOut io.Writer, pollInterval time.Duration,
 ) (*cloud.ChangeRequestRecord, error) {
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
@@ -556,18 +621,29 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 		if err := snapshotConfirmationError(control, request); err != nil {
 			return nil, err
 		}
-		if request.Kind == "plan" && (request.Error != nil || (autoConfirm && !requestStarted(request))) {
+		if request.Kind == "plan" && request.Error != nil {
 			return nil, directPlanError(control, request)
 		}
 		if requestStarted(request) {
 			return request, nil
 		}
+		if ctx.Err() != nil {
+			return discardUnstartedCloudRequest(control, request)
+		}
 		if request.Status != "queued" && request.Status != "awaiting_confirmation" {
 			return nil, requestStoppedError(request)
 		}
-		if request.Status == "awaiting_confirmation" && !autoConfirm && answer == nil {
+		if request.Status == "awaiting_confirmation" && answer == nil {
 			if request.Preview == nil {
 				return nil, fmt.Errorf("Cloud did not provide a reviewable plan for request %s", request.ID)
+			}
+			if request.PlanStale {
+				return nil, fmt.Errorf("the deployment changed after this plan was prepared; nothing was confirmed; review a new plan at %s", cloudRequestReviewURL(control, *request))
+			}
+			// --yes authorizes this exact prepared plan, never a future update.
+			// In particular, do not send auto_confirm when creating the proposal.
+			if yes {
+				return confirmCloudRequest(control, request)
 			}
 			fmt.Fprint(promptOut, "Apply these changes? Type yes to confirm: ")
 			response := make(chan bool, 1)
@@ -582,7 +658,7 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 		case <-ctx.Done():
 			return discardUnstartedCloudRequest(control, request)
 		case yes := <-answer:
-			if !yes {
+			if !yes || ctx.Err() != nil {
 				return discardUnstartedCloudRequest(control, request)
 			}
 			return confirmCloudRequest(control, request)
@@ -590,6 +666,9 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 			current, err := control.GetChangeRequest(request.DeploymentID, request.ID)
 			if err != nil {
 				return nil, fmt.Errorf("could not observe plan %s: %w; inspect it at %s", request.ID, err, cloudRequestReviewURL(control, *request))
+			}
+			if !sameCloudPlan(request, current) {
+				return nil, replacedPlanError(request)
 			}
 			request = current
 		}
@@ -633,10 +712,11 @@ func printDeploymentPreview(out io.Writer, control *cloud.Client, plan *cloudPla
 func printDeploymentPlan(out io.Writer, control *cloud.Client, request *cloud.ChangeRequestRecord) {
 	if request.Kind == "plan" {
 		printSummaryField(out, "Plan", request.ID)
-		printSummaryField(out, "Mode", request.Mode)
 	} else {
 		printSummaryField(out, "Request", request.ID)
-		printSummaryField(out, "Mode", request.Mode)
+		if request.UpdateNumber > 0 {
+			printSummaryField(out, "Update", fmt.Sprint(request.UpdateNumber))
+		}
 		printSummaryField(out, "Status", changeRequestStatus(request.Status))
 	}
 	if request.Message != "" {
@@ -676,11 +756,8 @@ func printDeploymentPlanDetails(out io.Writer, request *cloud.ChangeRequestRecor
 		printSummaryField(out, "Snapshot", "bypass allowed (--force)")
 		fmt.Fprintln(out, "The current revision may not have a restore point when this change applies.")
 	}
-	if request.QueuePosition != nil {
-		printSummaryField(out, "Queue", fmt.Sprint(*request.QueuePosition))
-	}
 	if request.Preview == nil {
-		fmt.Fprintln(out, "Waiting for this request's turn before preparing its plan.")
+		fmt.Fprintln(out, "Preparing the plan.")
 		return
 	}
 	if request.BaseRevisionID != nil {
@@ -741,8 +818,7 @@ func printDeploymentPlanJSON(control *cloud.Client, request *cloud.ChangeRequest
 		}
 	}
 	if request.PackageRef != "" {
-		// Cloud may prepare a new package version before confirmation, including
-		// after a queued request reaches its turn. Report that final artifact,
+		// Cloud may prepare a new package version before confirmation. Report that final artifact,
 		// never the original upload or its metadata.
 		pkg := map[string]string{"ref": request.PackageRef, "digest": request.PackageDigest}
 		if reference, err := parsePackageReference(request.PackageRef); err == nil {

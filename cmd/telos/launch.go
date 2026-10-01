@@ -217,7 +217,7 @@ func cmdLaunch(command, action string, args []string) {
 		if err := runCloudApply(cloudPlanInput{
 			specArg: specArg, sessionID: *sessionID, runtimeConfig: runtimeConfig,
 			force: *force, contextOverride: contextOverride,
-			mode: "apply", autoConfirm: yes, revisionMessage: message,
+			mode: "apply", yes: yes, revisionMessage: message,
 		}, *jsonOut); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
