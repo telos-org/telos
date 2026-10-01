@@ -6,9 +6,24 @@ group: Concepts
 
 # Bounded runs
 
-Use `telos run` for work with a natural stopping point: an analysis, migration,
-focused implementation, or other result that does not need a persistent Cloud
-deployment.
+`telos apply` is the primary interface. Use `telos run` primarily for harness
+development, benchmarking, and [nested execution](nested-goals.md). A local
+run executes bounded work in an isolated workspace and stops.
+
+## Set up local execution
+
+Local runs use the [pi](https://github.com/earendil-works/pi) coding agent.
+If pi is not already installed, install it and open it to authenticate with
+`/login`:
+
+```bash
+npm install -g @earendil-works/pi-coding-agent
+pi
+```
+
+Exit pi after authentication.
+
+## Run a bounded Goal
 
 Create `REPORT_SPEC.md`:
 
@@ -31,9 +46,9 @@ that prove it.
 - Each incompatibility cites both the fixture and observed response.
 ```
 
-Preview the contract, then run it in the current repository for at most three
-review cycles. Resolve the spec, source checkout, and bounds, and obtain the
-user's approval before starting the run:
+Preview the contract and check the source checkout and bounds before starting
+the run. This example runs in an isolated copy of the current repository for
+at most three review cycles:
 
 ```bash
 telos plan REPORT_SPEC.md
