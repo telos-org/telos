@@ -602,3 +602,32 @@ func TestAutomaticPlanPreservesEditsMadeDuringUpload(t *testing.T) {
 		t.Fatal("local edit overwritten")
 	}
 }
+
+func TestBodyResolutionPreservesExactCloudHeader(t *testing.T) {
+	for _, newline := range []string{"\n", "\r\n"} {
+		t.Run(map[string]string{"\n": "lf", "\r\n": "crlf"}[newline], func(t *testing.T) {
+			workspace := testRequestMergeWorkspace(t)
+			source := "---\n# Preserve this comment.\nname: demo\nversion: 1.2.3\nskills: [\"@telos/check:1.0.0*\"] # Preserve this too.\nplatform: cloud\n---\n\n<<<<<<< Current deployment\nCurrent body.\n||||||| Original\nOriginal body.\n=======\nLocal body.\n>>>>>>> Your proposed changes"
+			source = strings.ReplaceAll(source, "\n", newline)
+			workspace.Merge.Files[0].Merged = mergeText(source)
+			workspace.SkillPaths = map[string]string{"check": "custom/check"}
+			workspace.Merge.Files = append(workspace.Merge.Files, cloud.RequestMergeFile{Path: "skills/check/SKILL.md", Merged: mergeText("---\nname: check\n---\nCheck status.\n")}, cloud.RequestMergeFile{Path: ".telos/skills/check.json", Kind: "skill_metadata", Merged: mergeText("{\"required\":true}\n")})
+			installTestMerge(t, &workspace)
+			data, _ := os.ReadFile(filepath.Join(workspace.Root, "SPEC.md"))
+			header, _, ok := mergeSpecParts(string(data))
+			if !ok {
+				t.Fatal("missing local header")
+			}
+			editedBody := newline + "Keep both reviewed changes." // Deliberately no trailing newline.
+			_ = os.WriteFile(filepath.Join(workspace.Root, "SPEC.md"), []byte(header+editedBody), 0o600)
+			_, files, err := requestMergeEdits(&workspace, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			originalHeader, _, _ := mergeSpecParts(source)
+			if got := files["SPEC.md"]; got == nil || got.Content == nil || *got.Content != originalHeader+editedBody {
+				t.Fatalf("body resolution changed header or whitespace: %+v", got)
+			}
+		})
+	}
+}

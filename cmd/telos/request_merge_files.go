@@ -775,12 +775,43 @@ func (w *requestMergeWorkspace) readLocalFiles() (map[string]*cloud.MergeFile, e
 		if err != nil {
 			return nil, err
 		}
+		// Local paths are only an editing convenience. If the author did not
+		// edit frontmatter, retain Cloud's exact header instead of introducing
+		// path/format changes alongside a body-only conflict resolution.
+		originals := map[string]*cloud.MergeFile{}
+		for _, original := range w.Merge.Files {
+			originals[original.Path] = original.Merged
+		}
+		localized, localErr := w.localFiles(originals)
+		if localErr == nil && localized[w.SpecName] != nil && localized[w.SpecName].Content != nil && originals["SPEC.md"] != nil && originals["SPEC.md"].Content != nil {
+			editedHeader, editedBody, editedOK := mergeSpecParts(*file.Content)
+			localHeader, _, localOK := mergeSpecParts(*localized[w.SpecName].Content)
+			cloudHeader, _, cloudOK := mergeSpecParts(*originals["SPEC.md"].Content)
+			if editedOK && localOK && cloudOK && editedHeader == localHeader {
+				content = cloudHeader + editedBody
+			}
+		}
 		copy := *file
 		copy.Content = &content
 		result["SPEC.md"] = &copy
 	}
 	w.Written = snapshot
 	return result, nil
+}
+
+func mergeSpecParts(content string) (header, body string, ok bool) {
+	lines := strings.SplitAfter(content, "\n")
+	if len(lines) < 2 || strings.TrimSpace(lines[0]) != "---" {
+		return "", "", false
+	}
+	offset := len(lines[0])
+	for _, line := range lines[1:] {
+		offset += len(line)
+		if strings.TrimSpace(line) == "---" {
+			return content[:offset], content[offset:], true
+		}
+	}
+	return "", "", false
 }
 
 func localSpecRequirements(content string, paths map[string]string) (map[string]bool, error) {
