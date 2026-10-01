@@ -189,28 +189,40 @@ and snapshot-bypass choices. Any request can save its exact new reference with
 `--out=NEW_FILE`. Never rewrite an old saved file to point at a replacement plan.
 Plain `plan` still previews; `plan --out` opens one kind of Change Request.
 
-An ordinary update refuses stale requests before upload. Reconcile explicitly:
+Use the tracked local package to update a request. When the request originated
+in Web or on another computer, first check out its exact proposal:
 
 ```bash
-telos plan --request REQUEST_ID --reconcile NEW_DIR --context CONTEXT --json
-# Inspect base/, current/, proposed/, and merged/; resolve each conflict explicitly.
-telos plan --request REQUEST_ID --resolve NEW_DIR --context CONTEXT --out=updated.plan --json
+telos get REQUEST_ID --output ./request --context CONTEXT
+telos plan ./request/SPEC.md --request REQUEST_ID --context CONTEXT --out=updated.plan --json
 ```
 
-`--reconcile` writes exact source trees, a candidate, and pinned `merge.json`.
-It applies nothing and does not update the request. A `merge_conflicts` error
-returns nonzero while preserving the workspace and structured conflict details.
-Set every conflict's resolution choice in the manifest. For `merged`, edit the
-candidate file or delete it deliberately. Never infer conflict resolution from
-removed markers alone. Preserve unrelated changes; do not choose a whole side
-just to make the command succeed. Binary conflicts require an exact source side.
+`plan SPEC.md --request` automatically combines the local proposal with the
+latest deployment using the recorded request baseline. A clean merge saves a
+new immutable request update and plan, and synchronizes the combined package to
+local files. It never applies. Initial CLI request creation records local
+ancestry automatically; do not remove or edit its internal `.telos` state to
+bypass a stale-request or workspace check.
 
-`--resolve` validates and creates a new immutable plan, even for clean merges.
-A `stale_merge` error means a source changed again: retain the draft, prepare a
-new workspace, and reconcile against those exact sources. Treat
-`invalid_resolution` separately from unresolved `merge_conflicts` and network
-errors. Never turn a preparation failure into a clean merge. Inspect the new
-full-package plan and obtain fresh apply authorization: previous confirmation,
+A `merge_conflicts` error returns nonzero with structured conflicts and keeps
+the request unchanged. Resolve text markers in the normal SPEC or skill files,
+then rerun the same command. Preserve unrelated edits and inspect all three
+sources in JSON output before choosing a resolution. Nontext conflicts require
+an explicit `--resolve 'PATH=current'`, `--resolve 'PATH=proposed'`, or
+`--resolve 'PATH=local'` choice; repeat the flag for multiple paths. Do not choose
+a whole side merely to make the command succeed. Custom binary replacements
+are not supported as local resolutions; choose an exact source side.
+Add new skills or change Registry dependency references after saving the
+resolved update, using another ordinary `plan --request`; neither plan needs
+to be applied first. Expand flow-style or aliased frontmatter before planning
+when the CLI reports that it cannot rewrite those fields safely.
+
+If the request or deployment changes while resolving, preserve local drafts
+and obtain a fresh checkout before transferring the intended edits. Do not
+silently rebind the old resolution to new source versions. Treat
+`invalid_resolution` separately from unresolved `merge_conflicts`, stale input,
+and network errors. Never turn a preparation failure into a clean merge.
+Inspect the new full-package plan and obtain fresh apply authorization: previous confirmation,
 including `--yes`, never applies to a replaced or reconciled plan. With fresh
 `apply --yes`, the CLI first prepares a plan and then explicitly confirms only
 that exact plan; it never stores permission for future request updates.

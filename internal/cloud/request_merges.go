@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
-	"strconv"
 )
 
 type MergeFile struct {
@@ -25,9 +23,19 @@ type RequestMergeFile struct {
 }
 
 type MergeConflict struct {
-	ID   string `json:"id"`
-	Path string `json:"path"`
-	Kind string `json:"kind"`
+	ID      string        `json:"id"`
+	Path    string        `json:"path"`
+	Kind    string        `json:"kind"`
+	Regions []MergeRegion `json:"regions,omitempty"`
+}
+
+type MergeRegion struct {
+	BaseStart     int `json:"base_start"`
+	BaseEnd       int `json:"base_end"`
+	CurrentStart  int `json:"current_start"`
+	CurrentEnd    int `json:"current_end"`
+	ProposedStart int `json:"proposed_start"`
+	ProposedEnd   int `json:"proposed_end"`
 }
 
 type RequestMerge struct {
@@ -60,14 +68,19 @@ type RequestMergeOptions struct {
 	Resolutions               []MergeResolution `json:"resolutions"`
 	Files                     []MergeFileEdit   `json:"files,omitempty"`
 	RevisionMessage           string            `json:"revision_message,omitempty"`
+	PackageRef                string            `json:"package_ref,omitempty"`
 }
 
-func (c *Client) PrepareRequestMerge(request ChangeRequestRecord) (*RequestMerge, error) {
-	query := url.Values{"expected_update_number": {strconv.Itoa(request.UpdateNumber)}}
-	if request.CurrentRevisionID != nil {
-		query.Set("expected_current_revision_id", *request.CurrentRevisionID)
+func (c *Client) PrepareRequestMergePackage(request ChangeRequestRecord, packageRef string) (*RequestMerge, error) {
+	body, err := json.Marshal(struct {
+		ExpectedUpdateNumber      int     `json:"expected_update_number"`
+		ExpectedCurrentRevisionID *string `json:"expected_current_revision_id"`
+		PackageRef                string  `json:"package_ref"`
+	}{request.UpdateNumber, request.CurrentRevisionID, packageRef})
+	if err != nil {
+		return nil, err
 	}
-	resp, err := c.do(http.MethodGet, changeRequestPath(request.DeploymentID, request.ID)+"/merge?"+query.Encode(), nil)
+	resp, err := c.do(http.MethodPost, changeRequestPath(request.DeploymentID, request.ID)+"/merge/prepare", body)
 	if err != nil {
 		return nil, err
 	}
@@ -79,10 +92,14 @@ func (c *Client) PrepareRequestMerge(request ChangeRequestRecord) (*RequestMerge
 	if err := json.NewDecoder(resp.Body).Decode(&merge); err != nil {
 		return nil, err
 	}
-	if merge.MergeID == "" || merge.RequestID != request.ID || merge.UpdateNumber != request.UpdateNumber {
+	if merge.MergeID == "" || merge.RequestID != request.ID || merge.UpdateNumber != request.UpdateNumber || merge.PreparedPlanID != request.PreparedPlanID || !sameRevision(merge.CurrentRevisionID, request.CurrentRevisionID) {
 		return nil, fmt.Errorf("Cloud returned a different request merge; nothing was saved")
 	}
 	return &merge, nil
+}
+
+func sameRevision(a, b *string) bool {
+	return a == nil && b == nil || a != nil && b != nil && *a == *b
 }
 
 func (c *Client) ResolveRequestMerge(request ChangeRequestRecord, options RequestMergeOptions) (*ChangeRequestRecord, error) {

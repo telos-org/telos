@@ -54,7 +54,9 @@ You can also plan an existing package, such as `@scope/package-name:0.1.0`.
 You do not need to bump the version in `SPEC.md` for Cloud edits. Cloud prepares
 an unused spec version for changed content before the plan is ready to review.
 CLI and Web submissions follow the same rule. The terminal and dashboard show
-the final version and spec diff; the CLI leaves your local `SPEC.md` unchanged.
+the final version and spec diff. Initial plans leave your local `SPEC.md`
+unchanged; updating an existing request synchronizes the combined package to
+your local files.
 
 Every request prepares its version and comparison immediately. Opening a request
 does not reserve the deployment or block other reviews. Its plan freezes the
@@ -114,6 +116,23 @@ You can keep the same request and discussion when a reviewer asks for a correcti
 telos plan SPEC.md --request cr_42 --context @team-handle
 ```
 
+Use the same local package that created the request. For a request created in
+Web, on another computer, or in an older CLI, check out its current proposal
+before editing:
+
+```bash
+telos get cr_42 --output ./csv-request --context @team-handle
+# Edit ./csv-request/SPEC.md and its skills.
+telos plan ./csv-request/SPEC.md --request cr_42 --context @team-handle --out=corrected.plan
+```
+
+Request updates use a local SPEC and its skill files. The checkout includes the
+full package and records the exact request update
+your edits start from. It refuses to replace an existing destination. Requests
+created locally record that information automatically. If somebody updates the
+request in the meantime, your old checkout cannot silently replace their work;
+keep your edits and get the current request into another directory first.
+
 This submits a new immutable update to `cr_42`. The request keeps its URL and
 comments; the previous update and its prepared plan remain inspectable in Web.
 Omit `--message` to keep its title, or supply a new message. You must be the
@@ -143,64 +162,83 @@ request. An update number such as Update 2 is separate from the spec's version.
 Saved files identify one exact update and prepared plan. An old file fails if
 that plan was replaced, even if the deployment has not changed. A plan also
 becomes stale when another apply changes the deployment. The request stays open:
-use the reconciliation workflow below to combine your proposal with the current
-deployment and prepare a new plan. An ordinary `plan SPEC.md --request` update
-refuses a stale request before uploading. Older v1 files work only while their
-original plan remains unchanged.
+run `plan SPEC.md --request` again to combine your proposal with the current
+deployment and prepare a new plan. Older v1 files work only while their original
+plan remains unchanged.
 
-## Reconcile changes from the current deployment
+## Update from the current deployment
 
-When another request applies first, reconcile your existing proposal instead of
-replacing the deployment with an older copy of its package:
-
-```bash
-telos plan --request cr_42 --reconcile ./cr-42-merge --context @team-handle --json
-```
-
-Use a new directory. Telos writes `base/` (the proposal's starting package),
-`current/` (the current deployment), `proposed/` (your request), and `merged/`
-(the candidate result). The workspace also contains `merge.json`, which pins
-the request update, deployment revision, API endpoint, and context. Preparation
-changes no request and applies nothing.
-
-A clean merge returns `operation: "merge_prepared"`. Conflicts return a nonzero
-exit status and `error.code: "merge_conflicts"`, with structured conflict IDs,
-paths, kinds, and all three versions. The files and manifest are still saved.
-A text conflict contains familiar conflict markers in `merged/`.
-
-For each entry in `merge.json`'s `resolutions`, set `choice` to:
-
-- `base`, `current`, or `proposed` to use that exact file version.
-- `merged` to use your edited file under `merged/`, or delete that file to
-  resolve it as a deletion.
-
-Removing markers alone does not mark a conflict resolved. Every conflict needs
-an explicit choice. Binary conflicts require an existing source version; custom
-binary edits are not supported. Files under `.telos/skills/` describe whether a
-skill is required; they are merge metadata, not files published inside a skill.
-
-Review the merged package, then save it as a new plan on the same request:
+Every `plan --request` includes your latest local edits and checks the current
+deployment. You do not need a separate update or reconciliation flag:
 
 ```bash
-telos plan --request cr_42 --resolve ./cr-42-merge --context @team-handle --out=updated.plan --json
+telos plan SPEC.md --request cr_42 --context @team-handle --out=updated.plan
 ```
 
-This creates a new immutable update and prints its final preview. It never
-applies or carries forward an old confirmation. Review the diff before an
-authorized person runs `telos apply updated.plan` or confirms in Web. A clean
-text merge can still need corrections to make the combined behavior sensible.
+For example, your request adds CSV export while somebody else deploys an audit
+log. When those changes do not conflict, Telos combines them, saves a new update
+and plan on the same request, and updates your local files with the result.
+Review the new plan before applying; the command never applies it for you.
 
-If the deployment or request changed again, Cloud returns `stale_merge` and
-keeps your local files untouched. Prepare a new workspace and transfer your
-edits after comparing the new inputs. `invalid_resolution` identifies an invalid
-choice, file, or package; `merge_conflicts` identifies unresolved conflicts.
-With `--json`, each error has a machine-readable `error.code` and a nonzero exit
-status. Network or preparation failures never claim a clean merge.
+When changes conflict, the command stops without updating the remote request or
+writing a saved-plan reference. Text conflicts appear directly in your normal
+files:
 
-`--reconcile` and `--resolve` require `--request` and take no positional spec.
-They cannot be combined with each other, `--session`, `--model`, `--thinking`, or
-`--force`. Only `--resolve` accepts `--message` and `--out`. Neither command runs
-an apply, and the local saved-plan reference format remains version 2.
+```text
+  <<<<<<< Current deployment
+  Check health every 30 seconds.
+  ||||||| Original
+  Check health every 60 seconds.
+  =======
+  Check health every 15 seconds.
+  >>>>>>> Your proposed changes
+```
+
+Edit those sections to the intended result, remove the markers, and rerun the
+same command:
+
+```bash
+telos plan SPEC.md --request cr_42 --context @team-handle --out=updated.plan
+```
+
+For a binary asset, deletion, executable-mode change, or another conflict
+without editable text markers, select the intended result explicitly:
+
+```bash
+telos plan SPEC.md --request cr_42 --context @team-handle \
+  --resolve 'skills/observability/assets/status.png=current' --out=updated.plan
+```
+
+`current` keeps the deployment's file; `proposed` keeps your submitted file.
+Either choice also preserves a deletion when that side has no file. `local`
+uses your edited working file or deliberate deletion. Repeat `--resolve` for
+multiple paths, using the paths printed in the conflict instructions. Binary
+and required-skill metadata conflicts support the exact current or proposed side;
+custom local binary replacements are not supported. Ordinary text conflicts
+need no flag or manually edited bookkeeping file.
+
+During conflict resolution, you can edit existing skills, remove them, change
+their required setting, and add text resources. To add a new skill or change a
+Registry skill's scope/version, save the resolved update first, then make that
+change and run `plan --request` again. Neither update needs to be applied first.
+
+Automatic merging requires explicit top-level frontmatter keys on separate
+lines. If you use flow-style mappings or YAML aliases, expand them before
+planning; the CLI refuses to rewrite those formats rather than damage the spec.
+
+Every successful merge creates a new immutable update and plan. It clears old
+confirmation and snapshot-bypass choices. An authorized person reviews the diff
+and runs `telos apply updated.plan` or confirms in Web. A clean text merge can
+still need corrections to make the combined behavior sensible.
+
+If the request or deployment changes again while you resolve conflicts, the
+command stops and preserves your files. Keep your draft, check out the current
+request, and transfer your intended edits after comparing the new inputs.
+Telos will not silently apply an old resolution to different source versions.
+With `--json`, conflict details include source versions, paths, kinds, the
+mapping to your local file paths, and
+machine-readable errors with a nonzero exit status. The saved-plan reference
+format remains version 2.
 
 ## Apply a saved proposal
 

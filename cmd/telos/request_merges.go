@@ -1,48 +1,45 @@
 package main
 
 import (
-	"bytes"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"io/fs"
 	"os"
-	"path"
-	"path/filepath"
 	"sort"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/telos-org/telos/internal/cloud"
 )
 
-const (
-	requestMergeManifest  = "merge.json"
-	maxMergePackageBytes  = 16 << 20
-	maxMergeManifestBytes = 128 << 20
-)
+type requestConflictChoice struct{ Path, Choice string }
+type requestConflictChoices []requestConflictChoice
 
-// The workspace pins the exact merge and account. Editing its resolution choices
-// never authorizes application; Cloud checks the same identities again on save.
-type requestMergeWorkspace struct {
-	Version      int                     `json:"version"`
-	Context      string                  `json:"context"`
-	OrgID        string                  `json:"org_id"`
-	APIEndpoint  string                  `json:"api_endpoint"`
-	DeploymentID string                  `json:"deployment_id"`
-	Merge        cloud.RequestMerge      `json:"merge"`
-	Resolutions  []cloud.MergeResolution `json:"resolutions"`
+func (c *requestConflictChoices) String() string { return "" }
+func (c *requestConflictChoices) Set(value string) error {
+	index := strings.LastIndex(value, "=")
+	name, choice, ok := "", "", index > 0
+	if ok {
+		name, choice = value[:index], value[index+1:]
+	}
+	if !ok || !validMergePath(name) || (choice != "current" && choice != "proposed" && choice != "local") {
+		return fmt.Errorf("use --resolve PATH=current|proposed|local for a reported conflict")
+	}
+	for _, previous := range *c {
+		if previous.Path == name {
+			return fmt.Errorf("duplicate resolution for %s", name)
+		}
+	}
+	*c = append(*c, requestConflictChoice{name, choice})
+	return nil
 }
 
 type requestMergeError struct {
 	code, message, workspace string
 	merge                    *cloud.RequestMerge
+	paths                    map[string]string
 }
 
 func (e *requestMergeError) Error() string { return e.message }
-
 func reportRequestPlanError(err error, jsonOut bool) {
 	if !jsonOut {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -59,338 +56,227 @@ func reportRequestPlanError(err error, jsonOut bool) {
 		code = mergeError.code
 		if mergeError.workspace != "" {
 			receipt["workspace"] = mergeError.workspace
+		}
+		if mergeError.merge != nil {
 			receipt["merge"] = mergeError.merge
+			receipt["local_paths"] = mergeError.paths
 		}
 	}
 	receipt["error"] = map[string]string{"code": code, "message": err.Error()}
 	printJSON(receipt)
 }
 
-func runCloudRequestReconcile(requestID, directory, contextOverride string, jsonOut bool) error {
-	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("--reconcile requires a new directory; refusing to replace %s", directory)
-	}
-	control, err := cloud.ControlClientForContext(contextOverride)
-	if err != nil {
-		return err
-	}
-	request, err := editableCloudRequest(control, requestID)
-	if err != nil {
-		return err
-	}
-	merge, err := control.PrepareRequestMerge(*request)
-	if err != nil {
-		return err
-	}
-	orgID, err := cloudPlanOrgID(control)
-	if err != nil {
-		return err
-	}
-	workspace := requestMergeWorkspace{
-		Version: 1, Context: control.ContextName(), OrgID: orgID, APIEndpoint: control.Endpoint,
-		DeploymentID: request.DeploymentID, Merge: *merge, Resolutions: []cloud.MergeResolution{},
-	}
-	for _, conflict := range merge.Conflicts {
-		workspace.Resolutions = append(workspace.Resolutions, cloud.MergeResolution{ConflictID: conflict.ID})
-	}
-	if err := writeRequestMergeWorkspace(directory, workspace); err != nil {
-		return err
-	}
-	if len(merge.Conflicts) != 0 {
-		return &requestMergeError{
-			code: "merge_conflicts", workspace: directory, merge: merge,
-			message: fmt.Sprintf("%d conflicts saved in %s; edit merged files and choose each resolution in merge.json, then run telos plan --request %s --resolve %s", len(merge.Conflicts), directory, requestID, directory),
+func requestMergeConflictError(workspace *requestMergeWorkspace, unresolved []cloud.MergeConflict) error {
+	lines := []string{"resolve conflicts, then rerun the same telos plan command:"}
+	for _, conflict := range unresolved {
+		local := workspace.localPath(conflict.Path)
+		if conflict.Kind == "content" {
+			lines = append(lines, "  "+local+" (edit the conflict markers)")
+		} else {
+			options := "current|proposed|local"
+			if conflict.Kind == "binary" || conflict.Kind == "metadata" {
+				options = "current|proposed"
+			}
+			lines = append(lines, fmt.Sprintf("  %s (%s): --resolve '%s=%s'", local, conflict.Kind, conflict.Path, options))
 		}
 	}
-	if jsonOut {
-		printJSON(map[string]any{"operation": "merge_prepared", "workspace": directory, "merge": merge})
-	} else {
-		printSummaryField(os.Stdout, "Workspace", directory)
-		fmt.Fprintf(os.Stdout, "No text conflicts. Review merged files, then run telos plan --request %s --resolve %s\n", requestID, directory)
-	}
-	return nil
-}
-
-func validMergePath(name string) bool {
-	if !fs.ValidPath(name) || strings.Contains(name, "\\") {
-		return false
-	}
-	parts := strings.Split(name, "/")
-	return name == "SPEC.md" || (len(parts) >= 3 && parts[0] == "skills") ||
-		(len(parts) == 3 && parts[0] == ".telos" && parts[1] == "skills" && strings.HasSuffix(parts[2], ".json"))
-}
-
-func mergeFileBytes(file *cloud.MergeFile) ([]byte, error) {
-	if (file.Content == nil) == (file.DataBase64 == nil) || (file.Mode != "0644" && file.Mode != "0755") {
-		return nil, fmt.Errorf("invalid merge file encoding or mode")
-	}
-	if file.Content != nil {
-		return []byte(*file.Content), nil
-	}
-	return base64.StdEncoding.DecodeString(*file.DataBase64)
-}
-
-func writeRequestMergeWorkspace(directory string, workspace requestMergeWorkspace) (err error) {
-	if err := os.Mkdir(directory, 0o700); err != nil {
-		return err
-	}
-	defer func() {
-		if err != nil {
-			_ = os.RemoveAll(directory)
-		}
-	}()
-	root, err := os.OpenRoot(directory)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	for _, tree := range []string{"base", "current", "proposed", "merged"} {
-		if err := root.Mkdir(tree, 0o700); err != nil {
-			return err
-		}
-	}
+	lines = append(lines, "The request has not been updated. --resolve selects the current deployment, your uploaded proposal, or an explicitly edited local file/deletion. Binary conflicts require current or proposed.")
+	paths := map[string]string{}
 	for _, file := range workspace.Merge.Files {
-		if !validMergePath(file.Path) {
-			return fmt.Errorf("unsafe merge path %q", file.Path)
+		paths[file.Path] = workspace.localPath(file.Path)
+	}
+	return &requestMergeError{code: "merge_conflicts", message: strings.Join(lines, "\n"), workspace: workspace.Root, merge: &workspace.Merge, paths: paths}
+}
+
+func requestMergeEdits(workspace *requestMergeWorkspace, choices []requestConflictChoice) (*cloud.RequestMergeOptions, map[string]*cloud.MergeFile, error) {
+	options := &cloud.RequestMergeOptions{MergeID: workspace.Merge.MergeID, ExpectedUpdateNumber: workspace.Merge.UpdateNumber,
+		ExpectedCurrentRevisionID: workspace.Merge.CurrentRevisionID, PackageRef: workspace.PackageRef, Resolutions: []cloud.MergeResolution{}}
+	selected := map[string]string{}
+	conflicts := map[string]cloud.MergeConflict{}
+	for _, conflict := range workspace.Merge.Conflicts {
+		conflicts[conflict.Path] = conflict
+	}
+	for _, choice := range choices {
+		if _, ok := conflicts[choice.Path]; !ok || selected[choice.Path] != "" {
+			return nil, nil, fmt.Errorf("%s is not an unresolved conflict", choice.Path)
 		}
-		for _, tree := range []struct {
-			name string
-			file *cloud.MergeFile
-		}{{"base", file.Base}, {"current", file.Current}, {"proposed", file.Proposed}, {"merged", file.Merged}} {
-			if tree.file == nil {
+		selected[choice.Path] = choice.Choice
+	}
+	files, err := workspace.readLocalFiles()
+	if err != nil {
+		return nil, nil, err
+	}
+	results := map[string]*cloud.MergeFile{}
+	unresolved := []cloud.MergeConflict{}
+	for _, original := range workspace.Merge.Files {
+		file := files[original.Path]
+		conflict, hasConflict := conflicts[original.Path]
+		choice := selected[original.Path]
+		if hasConflict && choice == "" {
+			if conflict.Kind != "content" || file == nil || file.Content == nil || containsMergeMarkers(*file.Content) {
+				unresolved = append(unresolved, conflict)
 				continue
 			}
-			data, err := mergeFileBytes(tree.file)
-			if err != nil {
-				return fmt.Errorf("%s: %w", file.Path, err)
-			}
-			name := path.Join(tree.name, file.Path)
-			if err := root.MkdirAll(path.Dir(name), 0o700); err != nil {
-				return err
-			}
-			mode := os.FileMode(0o600)
-			if tree.file.Mode == "0755" {
-				mode = 0o700
-			}
-			output, err := root.OpenFile(name, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
-			if err != nil {
-				return err
-			}
-			_, writeErr := output.Write(data)
-			closeErr := output.Close()
-			if err := errors.Join(writeErr, closeErr); err != nil {
-				return err
-			}
+			choice = "local"
 		}
-	}
-	data, err := json.MarshalIndent(workspace, "", "  ")
-	if err != nil {
-		return err
-	}
-	return root.WriteFile(requestMergeManifest, append(data, '\n'), 0o600)
-}
-
-func readRequestMergeWorkspace(root *os.Root) (*requestMergeWorkspace, error) {
-	file, err := root.Open(requestMergeManifest)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxMergeManifestBytes {
-		return nil, fmt.Errorf("merge.json must be a regular file no larger than 128 MiB")
-	}
-	data, err := io.ReadAll(io.LimitReader(file, maxMergeManifestBytes+1))
-	if err != nil || len(data) > maxMergeManifestBytes {
-		return nil, fmt.Errorf("could not read merge.json within its 128 MiB limit")
-	}
-	var workspace requestMergeWorkspace
-	if err := json.Unmarshal(data, &workspace); err != nil {
-		return nil, fmt.Errorf("invalid merge.json: %w", err)
-	}
-	if workspace.Version != 1 || workspace.DeploymentID == "" || workspace.Merge.MergeID == "" || workspace.Merge.RequestID == "" || workspace.Merge.UpdateNumber < 1 {
-		return nil, fmt.Errorf("invalid merge.json identity; prepare a new reconciliation workspace")
-	}
-	return &workspace, nil
-}
-
-func readMergeFile(root *os.Root, name string) ([]byte, error) {
-	file, err := root.Open(name)
-	if err != nil {
-		return nil, err
-	}
-	defer file.Close()
-	info, err := file.Stat()
-	if err != nil || !info.Mode().IsRegular() || info.Size() > maxMergePackageBytes {
-		return nil, fmt.Errorf("%s must be a regular file no larger than 16 MiB", name)
-	}
-	data, err := io.ReadAll(io.LimitReader(file, maxMergePackageBytes+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > maxMergePackageBytes {
-		return nil, fmt.Errorf("%s exceeds 16 MiB", name)
-	}
-	return data, nil
-}
-
-func requestMergeEdits(root *os.Root, workspace *requestMergeWorkspace) (*cloud.RequestMergeOptions, error) {
-	options := &cloud.RequestMergeOptions{
-		MergeID: workspace.Merge.MergeID, ExpectedUpdateNumber: workspace.Merge.UpdateNumber,
-		ExpectedCurrentRevisionID: workspace.Merge.CurrentRevisionID, Resolutions: []cloud.MergeResolution{},
-	}
-	conflictByID := map[string]cloud.MergeConflict{}
-	for _, conflict := range workspace.Merge.Conflicts {
-		conflictByID[conflict.ID] = conflict
-	}
-	choices := map[string]string{}
-	for _, resolution := range workspace.Resolutions {
-		conflict, found := conflictByID[resolution.ConflictID]
-		if !found || choices[conflict.Path] != "" {
-			return nil, &requestMergeError{code: "invalid_resolution", message: "merge.json contains unknown or duplicate conflict resolutions"}
-		}
-		switch resolution.Choice {
-		case "base", "current", "proposed", "merged":
-			choices[conflict.Path] = resolution.Choice
-		default:
-			return nil, &requestMergeError{code: "merge_conflicts", message: "choose base, current, proposed, or merged for every conflict in merge.json; removing markers alone does not resolve a conflict"}
-		}
-		resolution.Content = nil
-		options.Resolutions = append(options.Resolutions, resolution)
-	}
-	if len(options.Resolutions) != len(conflictByID) {
-		return nil, &requestMergeError{code: "merge_conflicts", message: "merge.json must explicitly resolve every conflict"}
-	}
-	files := map[string]cloud.MergeFileEdit{}
-	totalBytes := 0
-	err := fs.WalkDir(root.FS(), "merged", func(name string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		relative := strings.TrimPrefix(name, "merged/")
-		if !validMergePath(relative) || !entry.Type().IsRegular() {
-			return fmt.Errorf("only regular package files are allowed in merged/: %s", relative)
-		}
-		if choice := choices[relative]; choice != "" && choice != "merged" {
-			return nil
-		}
-		data, err := readMergeFile(root, name)
-		if err != nil {
-			return err
-		}
-		totalBytes += len(data)
-		if totalBytes > maxMergePackageBytes {
-			return fmt.Errorf("merged package exceeds 16 MiB")
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		mode := "0644"
-		if info.Mode()&0o111 != 0 {
-			mode = "0755"
-		}
-		// Unchanged binaries are preserved by Cloud; custom binary merges are
-		// intentionally unsupported. Conflicts can choose an exact source side.
-		for _, original := range workspace.Merge.Files {
-			if original.Path == relative && original.Merged != nil {
-				previous, err := mergeFileBytes(original.Merged)
-				if err != nil {
-					return err
+		if hasConflict {
+			resolution := cloud.MergeResolution{ConflictID: conflict.ID, Choice: choice}
+			switch choice {
+			case "current":
+				file = original.Current
+			case "proposed":
+				file = original.Proposed
+			case "local":
+				if original.Kind == "skill_metadata" {
+					return nil, nil, fmt.Errorf("%s is skill requirement metadata; choose current or proposed", original.Path)
 				}
-				if choices[relative] != "merged" && bytes.Equal(previous, data) && original.Merged.Mode == mode {
-					return nil
+				if mergeFileBinary(original.Base) || mergeFileBinary(original.Current) || mergeFileBinary(original.Proposed) {
+					return nil, nil, fmt.Errorf("%s is binary; resolve it with --resolve '%s=current' or --resolve '%s=proposed'", original.Path, original.Path, original.Path)
 				}
-				break
+				resolution.Choice = "merged"
+				if file != nil {
+					resolution.Content = file.Content
+				}
 			}
+			options.Resolutions = append(options.Resolutions, resolution)
 		}
-		if !utf8.Valid(data) || bytes.ContainsRune(data, 0) {
-			return &requestMergeError{code: "invalid_resolution", message: fmt.Sprintf("%s is binary; choose base, current, or proposed in merge.json", relative)}
-		}
-		content := string(data)
-		files[relative] = cloud.MergeFileEdit{Path: relative, Content: &content, Mode: mode}
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, original := range workspace.Merge.Files {
-		if !validMergePath(original.Path) {
-			return nil, fmt.Errorf("unsafe merge path %q", original.Path)
-		}
-		if choice := choices[original.Path]; choice != "" && choice != "merged" {
+		results[original.Path] = file
+		if choice == "current" || choice == "proposed" {
 			continue
 		}
-		if _, err := root.Lstat(path.Join("merged", original.Path)); errors.Is(err, os.ErrNotExist) && original.Merged != nil {
-			files[original.Path] = cloud.MergeFileEdit{Path: original.Path}
-		} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, err
+		if !sameMergeFile(original.Merged, file) || choice == "local" {
+			if mergeFileBinary(file) || mergeFileBinary(original.Merged) {
+				return nil, nil, fmt.Errorf("%s has custom binary edits; keep an exact source version and make additional binary edits in a later request update", original.Path)
+			}
+			edit := cloud.MergeFileEdit{Path: original.Path}
+			if file != nil {
+				edit.Content, edit.Mode = file.Content, file.Mode
+			}
+			options.Files = append(options.Files, edit)
 		}
+		delete(files, original.Path)
 	}
-	for i := range options.Resolutions {
-		resolution := &options.Resolutions[i]
-		if resolution.Choice == "merged" {
-			resolution.Content = files[conflictByID[resolution.ConflictID].Path].Content
+	if len(unresolved) > 0 {
+		return nil, nil, requestMergeConflictError(workspace, unresolved)
+	}
+	// New regular text resources inside an existing skill are allowed during resolution.
+	for name, file := range files {
+		if file == nil {
+			continue
 		}
-	}
-	for _, file := range files {
-		options.Files = append(options.Files, file)
+		if _, exists := results[name]; exists {
+			continue
+		}
+		if mergeFileBinary(file) {
+			return nil, nil, fmt.Errorf("%s is a new binary file; add it in a later request update", name)
+		}
+		results[name] = file
+		options.Files = append(options.Files, cloud.MergeFileEdit{Path: name, Content: file.Content, Mode: file.Mode})
 	}
 	sort.Slice(options.Files, func(i, j int) bool { return options.Files[i].Path < options.Files[j].Path })
-	return options, nil
+	return options, results, nil
 }
 
-func runCloudRequestResolve(requestID, directory, contextOverride, message, output string, jsonOut bool) error {
-	message, err := normalizePlanMessage(message, false)
-	if err != nil {
-		return err
-	}
-	root, err := os.OpenRoot(directory)
-	if err != nil {
-		return err
-	}
-	defer root.Close()
-	workspace, err := readRequestMergeWorkspace(root)
-	if err != nil {
-		return err
-	}
-	if workspace.Merge.RequestID != requestID {
-		return fmt.Errorf("workspace belongs to request %s, not %s", workspace.Merge.RequestID, requestID)
-	}
-	control, err := cloud.ControlClientForContext(contextOverride)
-	if err != nil {
-		return err
-	}
-	if err := validateSavedDeploymentPlan(control, &savedDeploymentPlan{Context: workspace.Context, OrgID: workspace.OrgID, APIEndpoint: workspace.APIEndpoint}); err != nil {
-		return err
-	}
-	options, err := requestMergeEdits(root, workspace)
-	if err != nil {
-		var mergeError *requestMergeError
-		if errors.As(err, &mergeError) {
-			return err
+func containsMergeMarkers(value string) bool {
+	for _, line := range strings.Split(value, "\n") {
+		if strings.HasPrefix(line, "<<<<<<< Current deployment") || strings.HasPrefix(line, "||||||| Original") || strings.HasPrefix(line, ">>>>>>> Your proposed changes") {
+			return true
 		}
-		return &requestMergeError{code: "invalid_resolution", message: err.Error()}
 	}
-	options.RevisionMessage = message
-	var writer *savedPlanWriter
-	if output != "" {
-		writer, err = prepareSavedPlanWriter(output)
+	return false
+}
+func mergeFileBinary(file *cloud.MergeFile) bool { return file != nil && file.Content == nil }
+func sameMergeFile(a, b *cloud.MergeFile) bool {
+	if a == nil || b == nil {
+		return a == nil && b == nil
+	}
+	left, le := mergeFileBytes(a)
+	right, re := mergeFileBytes(b)
+	return le == nil && re == nil && string(left) == string(right) && a.Mode == b.Mode
+}
+
+// The merge response itself is pinned by Cloud. The local state records the
+// originating request and candidate; it never grants permission to apply.
+func saveMergedRequest(control *cloud.Client, request *cloud.ChangeRequestRecord, workspace *requestMergeWorkspace, choices []requestConflictChoice, message string, writer *savedPlanWriter, output string, jsonOut bool) error {
+	options := workspace.Outgoing
+	files := workspace.Result
+	if options == nil {
+		var err error
+		options, files, err = requestMergeEdits(workspace, choices)
 		if err != nil {
 			return err
 		}
-		defer writer.close()
+		options.RevisionMessage = message
+		workspace.Outgoing = options
+		workspace.Result = files
+		if err := workspace.save(); err != nil {
+			return err
+		}
 	}
-	request := cloud.ChangeRequestRecord{ID: requestID, DeploymentID: workspace.DeploymentID}
-	updated, err := control.ResolveRequestMerge(request, *options)
+	updated, err := control.ResolveRequestMerge(*request, *options)
 	if err != nil {
+		var apiError *cloud.APIError
+		if errors.As(err, &apiError) && apiError.StatusCode >= 400 && apiError.StatusCode < 500 && apiError.StatusCode != 409 {
+			workspace.Outgoing = nil
+			_ = workspace.save()
+		}
 		return err
 	}
-	if updated.ID != requestID || updated.DeploymentID != workspace.DeploymentID || updated.UpdateNumber != workspace.Merge.UpdateNumber+1 || updated.PreparedPlanID == "" {
-		return fmt.Errorf("Cloud returned an unexpected merge result; inspect request %s; local files are preserved in %s", requestID, filepath.Clean(directory))
+	if updated.ID != request.ID || updated.DeploymentID != request.DeploymentID || updated.UpdateNumber != workspace.Merge.UpdateNumber+1 || updated.PreparedPlanID == "" {
+		return fmt.Errorf("Cloud returned an unexpected request update; inspect request %s; local files are preserved", request.ID)
+	}
+	// Persist the accepted result before changing local files. If synchronization
+	// is interrupted, the same command finishes it without creating another update.
+	workspace.Saved = updated
+	workspace.Result = files
+	if updated.Preview != nil {
+		value := updated.Preview.ProposedSpec
+		workspace.Result["SPEC.md"] = &cloud.MergeFile{Content: &value, Mode: "0644"}
+	}
+	if err := workspace.save(); err != nil {
+		return fmt.Errorf("request %s was updated, but local recovery state could not be saved: %w; inspect the request before retrying", request.ID, err)
+	}
+	return finishMergedRequest(control, workspace, writer, output, jsonOut)
+}
+func finishMergedRequest(control *cloud.Client, workspace *requestMergeWorkspace, writer *savedPlanWriter, output string, jsonOut bool) error {
+	if err := workspace.materialize(workspace.Result, false); err != nil {
+		return fmt.Errorf("request %s was updated; local synchronization is pending: %w; rerun the same command after restoring the affected files", workspace.Saved.ID, err)
+	}
+	updated := workspace.Saved
+	workspace.Merge = cloud.RequestMerge{RequestID: updated.ID, UpdateNumber: updated.UpdateNumber, PreparedPlanID: updated.PreparedPlanID}
+	workspace.PackageRef = ""
+	workspace.Materialized = false
+	workspace.Outgoing = nil
+	workspace.Result = nil
+	workspace.Saved = nil
+	workspace.Original = nil
+	workspace.Written = nil
+	if err := workspace.save(); err != nil {
+		return err
 	}
 	return writeUpdatedRequestPlan(control, updated, writer, workspace.OrgID, output, jsonOut)
+}
+
+func loadRequestMergeWorkspace(root, specName, requestID string) (*requestMergeWorkspace, error) {
+	filename := requestStatePath(requestID)
+	handle, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, err
+	}
+	defer handle.Close()
+	data, err := readSafeMergeFile(handle, filename)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var result requestMergeWorkspace
+	if err := json.Unmarshal(data, &result); err != nil {
+		return nil, fmt.Errorf("invalid local request state: %w", err)
+	}
+	if result.Version != 1 || result.Root != root || result.SpecName != specName || result.Merge.RequestID != requestID || result.Merge.UpdateNumber < 1 {
+		return nil, fmt.Errorf("local request state belongs to a different package or request")
+	}
+	return &result, nil
 }

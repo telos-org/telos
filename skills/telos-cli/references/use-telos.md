@@ -189,9 +189,12 @@ telos apply attribution.plan --context personal
 This command needs Apply permission and asks no additional question. You can
 instead confirm the request on its dashboard page. If another change has moved
 the deployment to a new revision, the plan is stale while its request stays open.
-Use `telos plan --request REQUEST_ID --reconcile NEW_DIR` to prepare a three-way
-merge, resolve conflicts explicitly, and save a new plan with
-`telos plan --request REQUEST_ID --resolve NEW_DIR --out=updated.plan`.
+Run `telos plan SPEC.md --request REQUEST_ID --context personal --out=updated.plan`
+from the original local package. It combines your proposal with the current
+deployment and saves a new plan when changes merge cleanly. If conflicts appear
+in your files, resolve them and rerun the same command. On another computer,
+first use `telos get REQUEST_ID --context personal --output ./request` to obtain
+the request's exact proposal and record where your edits start.
 Review that plan before applying it; earlier confirmation never carries over.
 
 Alternatively, `telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 --context personal`

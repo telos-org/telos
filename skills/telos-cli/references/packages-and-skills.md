@@ -116,7 +116,12 @@ telos apply @scope/package-name:0.1.0 --message "Launch the application" --conte
 ```
 
 Use `telos get SESSION_ID --context CONTEXT` when the starting point is a
-session rather than a known registry ref. Telos verifies registry digests
+session rather than a known registry ref. To work on an existing Change Request,
+use `telos get REQUEST_ID --output ./request --context CONTEXT`. It downloads the
+complete proposal and records the exact update your edits start from; you can
+then use `plan ./request/SPEC.md --request REQUEST_ID` to submit corrections.
+Request checkouts require a directory and refuse to overwrite an existing path.
+Telos verifies registry digests
 before materializing packages and skills. `apply` reads the exact Registry
 package and prepares its deployment plan. If the deployment needs a new spec
 version, Cloud derives a private proposal and shows its final version and diff

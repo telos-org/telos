@@ -81,6 +81,10 @@ func TestRequestUpdateWritesExactReferenceForEveryRequest(t *testing.T) {
 			if err := os.WriteFile(specPath, []byte(testPlanSpec), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			control, _ := cloud.ControlClientForContext("")
+			if err := recordRequestWorkspace(control, &current, specPath); err != nil {
+				t.Fatal(err)
+			}
 			output := filepath.Join(t.TempDir(), "corrected.plan")
 			captureStdout(t, func() {
 				if err := runCloudRequestUpdate(specPath, "cr_saved", "", "", output, true); err != nil {
