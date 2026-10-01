@@ -133,18 +133,14 @@ sessions, revisions, states, and evidence.
 `telos run` executes a bounded Goal in a local workspace and stops. Use it for
 one piece of work that does not need the persistent lifecycle of `telos apply`.
 
-Local runs execute through [pi](https://github.com/earendil-works/pi), the open
-source coding agent Telos drives. Install pi once, then open it to authenticate
-with `/login`:
+:warning: Local runs are primarily for `telos-in-telos` or benchmarking the harness implementation. The primary interface is `telos apply`.
+
+Local runs depend on a [pi](https://github.com/earendil-works/pi) installation. Install pi once, then open it to authenticate with `/login`:
 
 ```bash
 npm install -g @earendil-works/pi-coding-agent
 pi
 ```
-
-Exit pi after authentication. [Bounded runs](skills/telos-cli/references/bounded-runs.md)
-provides a complete local spec, an explicit stopping bound, and the commands to
-inspect and extract the accepted workspace checkpoint.
 
 ## License
 
