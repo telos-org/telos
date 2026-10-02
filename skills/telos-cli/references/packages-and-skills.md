@@ -59,6 +59,17 @@ not need to rearrange your source directories to match the package layout.
 
 ## Publish
 
+Cloud planning and applying store newly uploaded spec and skill files privately,
+for every role. These internal proposal artifacts stay out of Library lists and
+search, including after a request is confirmed. They remain available through
+the request and deployment revision. Cloud prepares an unused spec version for
+changed deployment content before review, whether you submit from CLI or Web.
+Your local source files stay unchanged.
+
+Publishing is a separate action that creates a reusable Library release. It
+requires Registry publishing permission; permission to plan does not grant it.
+Applying a private proposal does not change its visibility or add a release.
+
 Choose the intended scope, name, and immutable version before publishing.
 
 Publish a spec package:
@@ -101,11 +112,14 @@ Pull an immutable package for inspection or reuse:
 
 ```bash
 telos pull @scope/package-name:0.1.0
-telos apply @scope/package-name:0.1.0 --context CONTEXT
+telos apply @scope/package-name:0.1.0 --message "Launch the application" --context CONTEXT
 ```
 
 Use `telos get SESSION_ID --context CONTEXT` when the starting point is a
 session rather than a known registry ref. Telos verifies registry digests
-before materializing packages and skills. `apply` deploys an exact registry
-package without materializing or republishing it. [The Goal lifecycle](lifecycle.md)
-explains how that package digest identifies a revision.
+before materializing packages and skills. `apply` reads the exact Registry
+package and prepares its deployment plan. If the deployment needs a new spec
+version, Cloud derives a private proposal and shows its final version and diff
+before confirmation. The published ref and its bytes remain unchanged; applying
+does not republish the package. [The Goal lifecycle](lifecycle.md) explains how
+the final proposal's digest identifies the revision.

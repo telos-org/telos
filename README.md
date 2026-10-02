@@ -78,7 +78,7 @@ telos plan SPEC.md --context personal
 After reviewing and approving the resolved action and context, apply it:
 
 ```bash
-telos apply SPEC.md --context personal
+telos apply SPEC.md --message "Launch the application" --context personal
 ```
 
 `apply` returns a session ID when the revision is accepted for work. The work
@@ -114,12 +114,13 @@ Follow agent updates with:
 telos logs SESSION_ID --context personal
 ```
 
-To update a live Goal, edit `SPEC.md`, bump its version, and apply the new
-revision to the same session:
+To update a live Goal, edit `SPEC.md` and apply to the same session. Cloud
+prepares an unused version for changed content before review; the terminal and
+dashboard show the final version and diff. Your local file stays unchanged:
 
 ```bash
 telos plan SPEC.md --session SESSION_ID --context personal
-telos apply SPEC.md --session SESSION_ID --context personal
+telos apply SPEC.md --message "Update the application" --session SESSION_ID --context personal
 ```
 
 `telos` reconciles the existing live software toward the new desired state.

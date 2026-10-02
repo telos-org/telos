@@ -34,7 +34,7 @@ Goal uses them:
 | Field | Meaning |
 | --- | --- |
 | `name` | Required lowercase, DNS-compatible identity. Keep it stable across revisions. |
-| `version` | Required semantic version for this immutable revision. Bump it when the contract changes. |
+| `version` | Required semantic version. Cloud prepares an unused version for changed content before review, so Cloud edits need no manual bump. Publishing changed content with `telos push` still needs a new Registry version. |
 | `platform` | `cloud` for a managed persistent Goal or `local` for a bounded run. Omitted values currently resolve to Cloud; explicit is clearer. |
 | `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
 | `interval` | A positive duration ending in `s`, `m`, or `h`, such as `30m` or `6h`, carried as the contract's reconciliation interval. |

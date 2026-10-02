@@ -27,8 +27,15 @@ Persistent: SPEC.md → plan → apply → Goal/session/deployment → revision 
 Bounded:    local spec → run with a bound → run session → evidence
 ```
 
-`apply` returns after Cloud accepts a revision for work. Reconciliation
-continues in the background; `describe` reports the managed Goal state.
+Cloud `plan` creates a preview without applying it; `plan --out=FILE` saves an
+immutable plan in a Change Request for later confirmation, with or without deployment
+protection. `apply SPEC.md` prepares a fresh plan
+and asks for confirmation; protected deployments open a Change Request with the
+plan immediately available for review.
+`apply FILE` confirms the exact saved proposal. A successful apply receipt reports confirmed, applying, or applied
+work, not successful agent verification. See [Change Requests](change-requests.md).
+After execution, reconciliation continues in the background; `describe`
+reports the managed Goal state and pending requests separately.
 
 ## Read the state layers
 
@@ -51,7 +58,8 @@ A managed Goal reports:
 
 ## `ready` belongs to a revision
 
-Capture the revision digest returned by `apply`, then compare it with
+After the plan or Change Request is applied, capture its proposed digest (or the
+revision digest from an older server's immediate receipt), then compare it with
 `package_digest` from `describe --json`. On current reconciliation-aware
 runtimes, `ready` means reconciliation completed and the latest verification
 passed for that displayed digest. The service itself completes the evidence:
@@ -70,14 +78,25 @@ displayed digest matches the receipt.
 
 ## Observe without waiting forever
 
-Use the context, session, and digest from the `apply` receipt. Unless the Goal
+Saved Change Requests report `requested` and have a review link. Apply them
+through that page or `telos apply FILE` when you have permission. An authorized
+editor can confirm an optional request; protected requests require an owner or
+admin. A fresh unprotected apply uses a direct plan and creates no Change Request.
+If a request is preparing or awaiting confirmation, the old
+revision's status does not describe the proposal. `describe --json` includes
+`pending_change_requests` separately. An initial creation waiting for confirmation
+has no current revision yet. After apply returns, check the same request until
+its result revision is available; confirmation and agent verification are separate.
+
+Once the requested action has executed, use the context, session, and proposed
+digest from the `apply` receipt. Unless the Goal
 suggests a different runtime, use a 30-minute observation deadline:
 
 ```bash
 telos describe SESSION_ID --context CONTEXT --json
 ```
 
-An agent observation loop has four operations:
+You can observe an executing revision as follows:
 
 1. Run `describe --json` every 15 seconds.
 2. Read `status` and `package_digest` from each response.
@@ -135,22 +154,27 @@ operator updates. Existing transcript entries are preserved.
 
 ## Move a persistent Goal forward
 
-Edit `SPEC.md`, bump its version, and compare the proposed contract with the
-deployed revision:
+Edit `SPEC.md` and compare the proposed contract with the deployed revision.
+Cloud prepares an unused spec version for changed content before review, for
+both CLI and Web edits. You do not need to bump it manually. The CLI shows
+Cloud's final version and diff without changing your local `SPEC.md`:
 
 ```bash
 telos plan SPEC.md --session SESSION_ID --context CONTEXT
-telos apply SPEC.md --session SESSION_ID --context CONTEXT
+telos apply SPEC.md --message "Record book ownership" --session SESSION_ID --context CONTEXT
 ```
 
-The Goal, session, deployment, and history remain stable. The new immutable
-revision moves through the same lifecycle. [Use Telos](use-telos.md) shows the
-full diff and receipt.
+Publishing a changed named package with `telos push` still requires a new
+Registry version.
+
+The Goal, session, deployment, and history remain stable. Protected submissions
+open a Change Request; unprotected updates apply directly after your
+confirmation. Requests can be reviewed independently, while execution takes turns. Both create an immutable revision with the same lifecycle. [Use Telos](use-telos.md) shows the full diff and receipt.
 
 ## Delete a Goal
 
-Resolve the session and context, explain the consequences below, and obtain the
-user's approval before running:
+Check the session and context, and confirm that you want to remove the Cloud
+environment and its data before running:
 
 ```bash
 telos delete SESSION_ID --context CONTEXT

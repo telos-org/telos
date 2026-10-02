@@ -52,8 +52,8 @@ model available to that connection under **Inference** in the Telos app, and
 quote names containing spaces:
 
 ```bash
-telos apply SPEC.md --context CONTEXT --model MyChatGPT/gpt-5.5
-telos apply SPEC.md --context CONTEXT --model "Work Anthropic/MODEL_ID"
+telos apply SPEC.md --message "Launch with the selected model" --context CONTEXT --model MyChatGPT/gpt-5.5
+telos apply SPEC.md --message "Launch with the selected model" --context CONTEXT --model "Work Anthropic/MODEL_ID"
 ```
 
 Replace `MODEL_ID` with an available model ID. The CLI determines whether the
@@ -61,23 +61,24 @@ named connection is a subscription or API key. Names are case-sensitive, and
 the selection must identify exactly one connection. If names make the
 selection ambiguous, rename the connections in the app. Model IDs containing
 `/`, such as OpenRouter's provider-prefixed IDs, are preserved. The CLI checks
-the connection name and subscription status before publishing a spec package.
-Cloud validates model access before creating the deployment. If Cloud rejects
-the model, `apply` reports the error; a local spec package may already have
-been published.
+the connection name and subscription status before staging a private proposal
+package.
+Cloud validates model access before creating the plan. If Cloud rejects
+the model, the command reports the error; a private proposal package may
+already have been staged. This does not publish a Library release.
 
 To use managed inference:
 
 ```bash
-telos apply SPEC.md --context CONTEXT --model telos/default
-telos apply SPEC.md --context CONTEXT --model telos/max
+telos apply SPEC.md --message "Launch with the selected model" --context CONTEXT --model telos/default
+telos apply SPEC.md --message "Launch with the selected model" --context CONTEXT --model telos/max
 ```
 
 Both managed tiers are operated and billed by Telos and need no provider
 connection. All these options also work with a published package:
 
 ```bash
-telos apply @scope/package:version --context CONTEXT \
+telos apply @scope/package:version --message "Launch with the selected model" --context CONTEXT \
   --model "Work Anthropic/MODEL_ID" --thinking high
 ```
 
@@ -89,7 +90,7 @@ existing deployments retain their saved inference.
 
 New Cloud deployments use:
 
-1. `--model` on `telos apply`
+1. `--model` on `telos plan` or `telos apply`
 2. `TELOS_MODEL`
 3. the selected context's workspace inference preference
 4. Telos Default
@@ -99,7 +100,7 @@ the workspace preference. An explicitly empty `--model` suppresses an
 environment override for that command:
 
 ```bash
-telos apply SPEC.md --context CONTEXT --model ""
+telos apply SPEC.md --message "Launch with the selected model" --context CONTEXT --model ""
 ```
 
 `telos config --model` is no longer supported. If an older configuration file
@@ -114,7 +115,7 @@ Supported levels and how the requested effort is applied depend on the model
 and provider.
 
 ```bash
-telos apply SPEC.md --context CONTEXT --thinking high
+telos apply SPEC.md --message "Launch with the selected model" --context CONTEXT --thinking high
 telos run REPORT_SPEC.md --workspace . --until 3 --thinking high
 ```
 
@@ -129,15 +130,16 @@ the saved connection, model, and thinking effort. `apply --session` rejects
 non-empty model or thinking overrides, including environment overrides:
 
 ```bash
-telos apply SPEC.md --session SESSION_ID --context CONTEXT \
+telos apply SPEC.md --message "Update the reading list" --session SESSION_ID --context CONTEXT \
   --model "" --thinking ""
 ```
 
 The empty flags clear environment overrides for that invocation. They do not
 reset the existing deployment to the workspace preference.
 
-Deployment receipts and `telos describe` show the saved inference connection,
-model, and requested thinking effort when Cloud returns those fields:
+A new-deployment plan shows its frozen inference settings. `telos describe`
+shows the saved connection, model, and requested thinking effort when Cloud
+returns those fields:
 
 ```bash
 telos describe SESSION_ID --context CONTEXT

@@ -80,52 +80,50 @@ boundary between a desired outcome and an available platform capability.
 
 ## Preview the first revision
 
-`plan` validates the spec and shows where it will run without changing remote
-state:
+`plan` validates your spec and saves a preview in Cloud without deploying:
 
-```console
-$ telos plan SPEC.md --context personal
-Spec      reading-list
-Target    cloud
-Context   personal
-Path      /Users/alice/reading-list/SPEC.md
-Namespace ns-reading-list
-Hash      799e5c31172afb26
+```bash
+telos plan SPEC.md --context personal
 ```
 
-Confirm the target and context before continuing. The first plan has no
-deployed revision to compare, so it shows the Goal identity, namespace, and
-content hash. Applying it creates a Cloud deployment and may incur charges.
+The terminal shows the proposed spec and skill changes and a dashboard link.
+The initial plan compares your spec with an empty deployment. Anyone with the
+appropriate access can inspect the preview, but it cannot be applied directly.
+Add `--out=change.plan --message "Launch the reading list"` to save an immutable
+plan in a Change Request for later confirmation, even when requests are optional.
 
 ## Apply it
 
-```console
-$ telos apply SPEC.md --context personal
-created reading-list
-
-Status    working
-Session   sess_c7d2f0a4e8
-Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
-Inference Managed
-Model     telos/default
-Thinking  medium (requested)
-Context   personal
-Logs      telos logs --context personal sess_c7d2f0a4e8
+```bash
+telos apply SPEC.md --message "Launch the reading list" --context personal
 ```
 
-`working` means Cloud accepted this revision and is reconciling it. Keep both
-the session ID and revision digest: the session identifies the Goal, while the
-digest identifies the exact contract now being implemented.
+For a new deployment, this displays a fresh plan and asks
+`Apply these changes? Type yes to confirm:`. Type `yes` to proceed, or apply the
+same plan through its dashboard link. Any workspace member can create a new
+deployment, and creation starts directly without a Change Request. For authorized
+noninteractive execution, use `--yes --json`.
 
-Follow progress with the context printed in the receipt:
+On an existing deployment, authorized editors can apply directly unless its
+Settings require Change Requests. Protected updates open a request with an
+immediately prepared plan and need owner/admin confirmation. Use `plan --out` to save a request for someone
+else to confirm, whether or not protection is enabled.
+
+The receipt identifies the plan or request, session, dashboard URL, and resulting
+revision when available. Applying or applied does not mean that the agent has
+finished verification. Once execution starts, follow the deployment using its
+session ID and selected context:
 
 ```bash
 telos describe sess_c7d2f0a4e8 --context personal --json
 telos logs sess_c7d2f0a4e8 --context personal
 ```
 
-[The Goal lifecycle](lifecycle.md) gives the polling interval, stopping
-conditions, and evidence rules for this observation step.
+[Change Requests](change-requests.md) explains exact plans, concurrent requests,
+permissions, deployment settings, and JSON receipts. Cloud plan and apply
+require a compatible server; older servers return an upgrade error.
+[The Goal lifecycle](lifecycle.md) gives the observation deadline, stopping
+conditions, and evidence rules after execution starts.
 
 ## Observe `ready`
 
@@ -158,75 +156,69 @@ verifiable until that URL exists.
 
 ## Revise the same Goal
 
-Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump
-its version to `0.2.0`, and add “Every book records who added it” to the Goal.
-Plan against the existing session:
+Suppose the reading list now needs attribution. Edit the same `SPEC.md` and add
+“Every book records who added it” to the Goal. You can leave its version alone:
+Cloud prepares an unused version before showing the plan. Save a proposal
+against the existing session:
 
-```console
-$ telos plan SPEC.md --session sess_c7d2f0a4e8 --context personal
-Spec      reading-list
-Target    cloud
-Context   personal
-Session   sess_c7d2f0a4e8
-Current   @alice/reading-list:0.1.0
-Path      /Users/alice/reading-list/SPEC.md
-Namespace ns-reading-list
-Hash      9e8d86776e85ffbc
-Version   0.1.0 -> 0.2.0
+```bash
+telos plan SPEC.md --session sess_c7d2f0a4e8 --context personal --out=attribution.plan --message "Record book ownership"
+```
 
---- deployed/SPEC.md
-+++ proposed/SPEC.md
-@@ -1,6 +1,6 @@
- ---
- name: reading-list
--version: 0.1.0
-+version: 0.2.0
- platform: cloud
- ---
+The terminal and dashboard show the diff. For example:
 
-@@ -11,6 +11,7 @@
+```diff
  - `POST /books` adds a title.
  - `GET /books` returns the current list.
  - Books remain available when the application restarts.
 +- Every book records who added it.
 ```
 
-The session-aware plan identifies the deployed package and displays the
-contract change. Apply that new revision to the same session:
+The plan preserves the final spec and version shown in the diff,
+package digest, skill digests, and baseline revision. Your local `SPEC.md` stays
+unchanged. Web edits use the same version preparation. Resubmitting a changed
+proposal does not require a manual bump; ordinary `telos push` still requires a
+new Registry version when publishing changed content.
 
-```console
-$ telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal
-updated reading-list
+When you are ready, confirm the exact saved proposal:
 
-Status    working
-Session   sess_c7d2f0a4e8
-Revision  sha256:3211e85fe81bd70aa74726d4ce0dc68d729d816826a21b62b18eb86074ff3317
-Inference Managed
-Model     telos/default
-Thinking  medium (requested)
-Context   personal
-Service   https://reading-list-c7d2f0a4e8.usetelos.ai
-Logs      telos logs --context personal sess_c7d2f0a4e8
+```bash
+telos apply attribution.plan --context personal
 ```
 
-The Goal, session, deployment, and history stay the same; only the immutable
-revision changes. Observe the new digest through `working` to `ready`, then
+This command needs Apply permission and asks no additional question. You can
+instead confirm the request on its dashboard page. If another change has moved
+the deployment to a new revision, the plan is stale while its request stays open.
+Reconcile the request against the current deployment in Web and resolve any
+conflicts explicitly. Review and confirm that new plan on the request page;
+earlier confirmation never carries over, and the old saved file remains invalid.
+
+Alternatively, `telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 --context personal`
+prepares a plan and asks for confirmation. On a protected deployment, it opens
+a Change Request and prepares the comparison immediately. The current revision
+keeps reconciling while it waits for confirmation. The Goal, session, deployment, and history stay the same when the new
+revision executes. Observe that revision through `working` to `ready`, then
 exercise the updated API behavior.
 
 ### Deploy without a restorable snapshot
 
-If the current revision has not been snapshotted, you will get a warning saying
-that deploying now means you won’t be able to restore its exact workspace and
-runtime state. To continue anyway, retry the update with `--force`:
+If the current revision's snapshot is missing, your proposal stays pending and
+unconfirmed. The CLI stops with an error and a dashboard link, even with `--yes`.
+On that page, **Wait** leaves it pending until you confirm again; it will not
+apply automatically when the snapshot is ready. Choose **Apply Now** to proceed
+without the snapshot. You can also create a fresh CLI plan with `--force`.
+Applying with this bypass can leave the previous revision without
+an exact workspace and runtime restore point. A pending request does not reserve
+an execution turn or prevent reviewing other requests.
 
 ```bash
-telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal --force
+telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 --context personal --force
 ```
 
 This bypass applies only to the missing-snapshot gate. Active operations,
-authorization, runtime availability, and stale-revision protection still
-apply. Without `--force`, the update remains rejected and the current revision
-continues serving.
+authorization, confirmation requirements, runtime availability, and
+stale-revision protection still apply. An apply must wait for any executing
+operation to finish; `--force` never supplies confirmation by itself.
 
 For another contract, continue with [Write a SPEC.md](goals.md). Use
 [Bounded runs](bounded-runs.md) for local work and
@@ -246,9 +238,9 @@ Continue revisions on that session so its identity and history remain joined.
 
 ## Delete the Goal
 
-Cloud deletion is irreversible. After the user approves the exact session,
-context, and loss of the environment, application and PVC data, routes,
-attachments, deployment record, and history, run:
+Cloud deletion is irreversible. Check the session and context, and confirm
+that you want to remove the environment, application and PVC data, routes,
+attachments, deployment record, and history before running:
 
 ```bash
 telos delete SESSION_ID --context personal

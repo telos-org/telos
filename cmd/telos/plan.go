@@ -11,8 +11,6 @@ import (
 	"time"
 
 	internaldiff "github.com/rogpeppe/go-internal/diff"
-	"github.com/telos-org/telos/internal/cloud"
-	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -41,9 +39,16 @@ type planSkillLock struct {
 }
 
 func cmdPlan(args []string) {
-	fs := newCommandFlagSet("plan", "telos plan SPEC.md [flags]")
+	fs := newCommandFlagSet("plan", "telos plan SPEC.md [--out=FILE] [flags]")
 	sessionID := fs.String("session", "", "Managed session ID to compare")
 	jsonOut := fs.Bool("json", false, "JSON output")
+	output := fs.String("out", "", "Save a Cloud Change Request and write its reference to this file")
+	message := ""
+	fs.StringVar(&message, "message", "", "Describe the change; required with --out")
+	fs.StringVar(&message, "m", "", "Shorthand for --message")
+	model := fs.String("model", "", "Model for a new Cloud deployment; defaults to $TELOS_MODEL")
+	thinking := fs.String("thinking", "", "Thinking effort for a new Cloud deployment; defaults to $TELOS_THINKING")
+	force := fs.Bool("force", false, "Save the snapshot bypass for an existing Cloud deployment")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
 	contextOverride, err := cloudContextOverride(fs, *contextValue)
@@ -51,107 +56,97 @@ func cmdPlan(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
-
 	requireArgCount(fs, 1, "one SPEC.md")
+	*sessionID = strings.TrimSpace(*sessionID)
 	specPath := resolveSpecPath(fs.Arg(0))
-	proposedSpec, err := os.ReadFile(specPath)
+	platform := "cloud"
+	if !strings.HasPrefix(fs.Arg(0), "@") {
+		platform, err = launchSpecPlatform(specPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+	}
+	if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
+	if platform != "local" {
+		if err := validateForceApply(*force, *sessionID); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(2)
+		}
+		runtimeConfig := sessionRuntimeConfig{
+			Model: modelOption(fs, *model), Thinking: stringOption(fs, "thinking", *thinking, "TELOS_THINKING"),
+		}
+		if *sessionID != "" && cloudRuntimeConfigSet(runtimeConfig) {
+			fmt.Fprintln(os.Stderr, "error: --model and --thinking can only configure a new Cloud deployment")
+			os.Exit(2)
+		}
+		mode := "preview"
+		if flagNameSet(fs, "out") {
+			mode = "saved"
+		}
+		message, err = normalizePlanMessage(message, mode == "saved")
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(2)
+		}
+		if err := runCloudPlan(cloudPlanInput{
+			specArg: fs.Arg(0), sessionID: *sessionID, contextOverride: contextOverride,
+			runtimeConfig: runtimeConfig, force: *force, mode: mode, revisionMessage: message,
+		}, *output, *jsonOut); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if flagNamesSet(fs, "out", "model", "thinking", "force", "message", "m") || contextOverride != "" {
+		fmt.Fprintln(os.Stderr, "error: --out, --context, --model, --thinking, --force, and --message require a Cloud plan")
+		os.Exit(2)
+	}
+	markdown, err := os.ReadFile(specPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	compiled, proposedState, err := compilePlanSpec(specPath, contextOverride, proposedSpec)
+	compiled, state, err := compilePlanSpec(specPath, "", markdown)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
-	}
-
-	platform := compiled.Environment.Platform
-	if platform == "" {
-		platform = "cloud"
 	}
 	var comparison *specComparison
-	if strings.TrimSpace(*sessionID) != "" {
-		comparison, err = compareSessionSpec(
-			*sessionID,
-			proposedSpec,
-			proposedState,
-			platform,
-			contextOverride,
-		)
+	if *sessionID != "" {
+		comparison, err = compareSessionSpec(*sessionID, markdown, state, platform, "")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 	}
-	targetMode := "local"
-	targetContext := ""
-	if platform != "local" {
-		targetMode = "cloud"
-		cfg, err := config.LoadConfig()
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		targetContext = strings.TrimSpace(contextOverride)
-		if targetContext == "" {
-			targetContext = strings.TrimSpace(cfg.Context)
-		}
-		if targetContext == "" {
-			targetContext = "personal"
-		}
-		if cfg.AuthToken != "" {
-			control, err := cloud.ControlClientForContext(contextOverride)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			targetContext = control.ContextName()
-		}
-	}
-	targetOperation := "create"
-	if comparison != nil {
-		targetOperation = "update"
-	}
-	targetScope := map[string]interface{}{
-		"mode":      targetMode,
-		"operation": targetOperation,
-	}
-	if targetContext != "" {
-		targetScope["context"] = targetContext
-	}
-	plan := map[string]interface{}{
-		"spec": map[string]interface{}{
-			"name":         compiled.Environment.Name,
-			"path":         specPath,
-			"content_hash": compiled.ContentHash,
-			"platform":     platform,
-			"namespace":    compiled.Namespace,
-			"skills":       skillNames(compiled.Skills),
-			"required_rubrics": skillNames(
-				compiled.RequiredVerifierSkills,
-			),
-		},
-		"session": map[string]interface{}{
-			"interval_seconds": compiled.Environment.IntervalSeconds,
-		},
-		"target": targetScope,
-	}
-	if comparison != nil {
-		plan["change"] = map[string]interface{}{
-			"session_id":  comparison.sessionID,
-			"current_ref": comparison.currentRef,
-			"current":     comparison.current,
-			"proposed":    comparison.proposed,
-			"spec_diff":   comparison.diff,
-		}
-	}
-
 	if *jsonOut {
+		operation := "create"
+		if comparison != nil {
+			operation = "update"
+		}
+		plan := map[string]any{
+			"spec": map[string]any{
+				"name": compiled.Environment.Name, "path": specPath, "content_hash": compiled.ContentHash,
+				"platform": platform, "namespace": compiled.Namespace, "skills": skillNames(compiled.Skills),
+				"required_rubrics": skillNames(compiled.RequiredVerifierSkills),
+			},
+			"session": map[string]any{"interval_seconds": compiled.Environment.IntervalSeconds},
+			"target":  map[string]any{"mode": "local", "operation": operation},
+		}
+		if comparison != nil {
+			plan["change"] = map[string]any{
+				"session_id": comparison.sessionID, "current_ref": comparison.currentRef,
+				"current": comparison.current, "proposed": comparison.proposed, "spec_diff": comparison.diff,
+			}
+		}
 		printJSON(plan)
 		return
 	}
-
-	printPlanPreview(os.Stdout, compiled, specPath, platform, targetContext, comparison)
+	printPlanPreview(os.Stdout, compiled, specPath, platform, "", comparison)
 }
 
 func compilePlanSpec(
@@ -256,15 +251,6 @@ func compareSessionSpec(
 			currentState,
 			proposedState,
 		), nil
-	case isCloudApplyID(sessionID):
-		if platform == "local" {
-			return nil, fmt.Errorf("%s is cloud but the proposed spec targets local", sessionID)
-		}
-		control, err := cloud.ControlClientForContext(contextOverride)
-		if err != nil {
-			return nil, err
-		}
-		return compareCloudSessionSpecWithState(control, sessionID, proposed, proposedState)
 	default:
 		return nil, fmt.Errorf("invalid session id %q", sessionID)
 	}
@@ -279,46 +265,6 @@ func planLocalSessionSpecState(
 		return planSpecState{}, fmt.Errorf("read current local session metadata: %w", err)
 	}
 	return planSpecStateFromMarkdown(markdown, manifest.ApplyPackageLock)
-}
-
-func compareCloudSessionSpec(
-	control *cloud.Client,
-	sessionID string,
-	proposed []byte,
-) (*specComparison, error) {
-	proposedState, err := planSpecStateFromMarkdown(proposed, nil)
-	if err != nil {
-		return nil, err
-	}
-	return compareCloudSessionSpecWithState(control, sessionID, proposed, proposedState)
-}
-
-func compareCloudSessionSpecWithState(
-	control *cloud.Client,
-	sessionID string,
-	proposed []byte,
-	proposedState planSpecState,
-) (*specComparison, error) {
-	pkg, err := packageForSession(control, sessionID)
-	if err != nil {
-		return nil, err
-	}
-	current, manifest, err := verifiedPackageContents(pkg)
-	if err != nil {
-		return nil, err
-	}
-	currentState, err := planSpecStateFromMarkdown(current, manifest)
-	if err != nil {
-		return nil, err
-	}
-	return newSpecComparisonWithStates(
-		sessionID,
-		pkg.reference.ref,
-		current,
-		proposed,
-		currentState,
-		proposedState,
-	), nil
 }
 
 func newSpecComparison(sessionID string, currentRef string, current, proposed []byte) *specComparison {
