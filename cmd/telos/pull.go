@@ -35,11 +35,11 @@ type pulledPackage struct {
 }
 
 func cmdGet(args []string) {
-	fs := newCommandFlagSet("get", "telos get SESSION [flags]")
+	fs := newCommandFlagSet("get", "telos get SESSION|REQUEST [flags]")
 	output := fs.String("output", "", "Destination package directory or Markdown file")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
-	requireArgCount(fs, 1, "one SESSION")
+	requireArgCount(fs, 1, "one SESSION or REQUEST")
 	contextOverride, err := cloudContextOverride(fs, *contextValue)
 	if err != nil {
 		exitWithError(err)
@@ -47,6 +47,14 @@ func cmdGet(args []string) {
 	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		exitWithError(err)
+	}
+	if requestID := strings.TrimSpace(fs.Arg(0)); strings.HasPrefix(requestID, "cr_") {
+		request, path, err := checkoutRequest(control, requestID, *output)
+		if err != nil {
+			exitWithError(err)
+		}
+		fmt.Printf("got request %s Update %d to %s\n", request.ID, request.UpdateNumber, path)
+		return
 	}
 	pkg, err := packageForSession(control, fs.Arg(0))
 	if err != nil {

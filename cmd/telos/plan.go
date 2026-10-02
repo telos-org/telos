@@ -40,6 +40,9 @@ type planSkillLock struct {
 
 func cmdPlan(args []string) {
 	fs := newCommandFlagSet("plan", "telos plan SPEC.md [--out=FILE] [flags]")
+	requestID := fs.String("request", "", "Update an existing unconfirmed Change Request")
+	var resolutions requestConflictChoices
+	fs.Var(&resolutions, "resolve", "Resolve a non-text conflict by whole file: PATH=deployed|proposed|local (repeatable; requires --request)")
 	sessionID := fs.String("session", "", "Managed session ID to compare")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	output := fs.String("out", "", "Save a Cloud Change Request and write its reference to this file")
@@ -60,7 +63,7 @@ func cmdPlan(args []string) {
 	*sessionID = strings.TrimSpace(*sessionID)
 	specPath := resolveSpecPath(fs.Arg(0))
 	platform := "cloud"
-	if !strings.HasPrefix(fs.Arg(0), "@") {
+	if !strings.HasPrefix(fs.Arg(0), "@") && !flagNameSet(fs, "request") {
 		platform, err = launchSpecPlatform(specPath)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -69,6 +72,25 @@ func cmdPlan(args []string) {
 	}
 	if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
+	if flagNameSet(fs, "request") {
+		if strings.TrimSpace(*requestID) == "" || platform == "local" || flagNamesSet(fs, "session", "model", "thinking", "force") {
+			fmt.Fprintln(os.Stderr, "error: --request requires a Cloud request ID and cannot be combined with --session, --model, --thinking, or --force")
+			os.Exit(2)
+		}
+		if flagNameSet(fs, "out") && strings.TrimSpace(*output) == "" {
+			fmt.Fprintln(os.Stderr, "error: --out requires a filename")
+			os.Exit(2)
+		}
+		if err := runCloudRequestUpdate(fs.Arg(0), strings.TrimSpace(*requestID), contextOverride, message, *output, *jsonOut, resolutions...); err != nil {
+			reportRequestPlanError(err, *jsonOut)
+			os.Exit(1)
+		}
+		return
+	}
+	if len(resolutions) > 0 {
+		fmt.Fprintln(os.Stderr, "error: --resolve requires --request and an existing local conflict")
 		os.Exit(2)
 	}
 	if platform != "local" {

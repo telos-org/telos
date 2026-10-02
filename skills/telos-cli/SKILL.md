@@ -181,18 +181,58 @@ stale; the request stays open with its URL and discussion. Unprotected fresh
 apply creates a direct plan without a Change Request. Neither an unconfirmed
 request nor a direct plan reserves an execution turn. Plans do not expire.
 
-Requests may be edited or reconciled in Web while unconfirmed. Every update
-creates a new immutable plan; old saved files never silently identify it.
-Review the new full-package plan and obtain fresh apply authorization before
-confirmation. A stale request stays open with its URL and discussion. Its author
-can reconcile it with the current deployment in Web, including explicit conflict
-resolution. Never treat a clean text merge as proof of correct combined behavior.
+To correct an existing unconfirmed create/update request, use
+`telos plan SPEC.md --request REQUEST_ID --context CONTEXT`. This changes the
+remote proposal, so obtain authorization to update that request first. It retains
+its URL and comments, adds an immutable update, and clears earlier confirmation
+and snapshot-bypass choices. Any request can save its exact new reference with
+`--out=NEW_FILE`. Never rewrite an old saved file to point at a replacement plan.
+Plain `plan` still previews; `plan --out` opens one kind of Change Request.
 
-With fresh `apply --yes`, the CLI first prepares a plan and then explicitly
-confirms only that exact plan. It never stores permission for future request
-updates. Saved references pin both the request update and prepared plan ID;
-replaced or stale plans fail without applying different contents. Older v1 files
-remain valid only while their original proposal is unchanged.
+Use the tracked local package to update a request. When the request originated
+in Web or on another computer, first check out its exact proposal:
+
+```bash
+telos get REQUEST_ID --output ./request --context CONTEXT
+telos plan ./request/SPEC.md --request REQUEST_ID --context CONTEXT --out=updated.plan --json
+```
+
+`plan SPEC.md --request` automatically combines the local proposal with the
+latest deployment using the recorded request baseline. A clean merge saves a
+new immutable request update and plan, and synchronizes the combined package to
+local files. It never applies. Initial CLI request creation records local
+ancestry automatically; do not remove or edit its internal `.telos` state to
+bypass a stale-request or workspace check.
+
+A `merge_conflicts` error returns nonzero with structured conflicts and keeps
+the request unchanged. Resolve each text block in the normal SPEC or skill
+files, then rerun the same command. In editable blocks, current is the proposal
+and incoming is the deployed version, matching Web. Keep the intended side or
+combine both; preserve other blocks and clean changes. Original/base is omitted
+from these blocks but remains available in JSON for inspecting all three sources.
+Already-open drafts from older CLI versions keep their existing labels; use
+the labels in those files instead of assuming the new side order.
+Nontext conflicts require a whole-file `--resolve 'PATH=deployed'`,
+`--resolve 'PATH=proposed'`, or `--resolve 'PATH=local'` choice; repeat the flag
+for multiple paths. Do not choose
+a whole side merely to make the command succeed. The legacy flag value `current`
+still means deployed, as does JSON's `current` field; never interpret either as
+the editor's current/proposal side. Custom binary replacements
+are not supported as local resolutions; choose an exact source side.
+Add new skills or change Registry dependency references after saving the
+resolved update, using another ordinary `plan --request`; neither plan needs
+to be applied first. Expand flow-style or aliased frontmatter before planning
+when the CLI reports that it cannot rewrite those fields safely.
+
+If the request or deployment changes while resolving, preserve local drafts
+and obtain a fresh checkout before transferring the intended edits. Do not
+silently rebind the old resolution to new source versions. Treat
+`invalid_resolution` separately from unresolved `merge_conflicts`, stale input,
+and network errors. Never turn a preparation failure into a clean merge.
+Inspect the new full-package plan and obtain fresh apply authorization: previous confirmation,
+including `--yes`, never applies to a replaced or reconciled plan. With fresh
+`apply --yes`, the CLI first prepares a plan and then explicitly confirms only
+that exact plan; it never stores permission for future request updates.
 
 Wait for an existing deployment's runtime provisioning to finish before submitting
 or applying changes. Cloud rejects these mutations while provisioning; `--force`

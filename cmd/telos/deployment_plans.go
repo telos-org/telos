@@ -161,6 +161,9 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloudPlanRes
 	if input.mode != "apply" && request.Preview == nil {
 		return nil, fmt.Errorf("Cloud returned a plan without a preview; request %s", request.ID)
 	}
+	if err := recordRequestWorkspace(control, request, input.specArg); err != nil {
+		return nil, fmt.Errorf("request %s was created but local tracking could not be saved: %w; review %s", request.ID, err, cloudRequestReviewURL(control, *request))
+	}
 	return &cloudPlanResult{
 		request: request, specName: name, currentRef: currentRef,
 	}, nil
@@ -333,7 +336,7 @@ func validateSavedRequest(bookmark *savedDeploymentPlan, request *cloud.ChangeRe
 		if request.Kind == "plan" {
 			return fmt.Errorf("the deployment changed after this plan was prepared; nothing was applied; prepare a fresh plan against session %s", request.DeploymentID)
 		}
-		return fmt.Errorf("the deployment changed after this plan was prepared; nothing was applied; review and reconcile request %s in the dashboard before confirming its new plan", request.ID)
+		return fmt.Errorf("the deployment changed after this plan was prepared; nothing was applied; prepare a new plan with telos plan SPEC.md --request %s", request.ID)
 	}
 	return nil
 }

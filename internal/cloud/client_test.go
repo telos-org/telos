@@ -842,6 +842,19 @@ func TestReadErrorPreservesStructuredDetail(t *testing.T) {
 	}
 }
 
+func TestReadErrorPreservesPlanConflictCodeAndMessage(t *testing.T) {
+	resp := &http.Response{
+		StatusCode: http.StatusConflict,
+		Body:       io.NopCloser(strings.NewReader(`{"detail":{"code":"plan_replaced","message":"Review the latest plan before confirming."}}`)),
+	}
+	err := readError(resp)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "plan_replaced" ||
+		apiErr.Detail != "Review the latest plan before confirming." || apiErr.StatusCode != http.StatusConflict {
+		t.Fatalf("expected structured plan conflict, got %v", err)
+	}
+}
+
 func TestSharedAPIModel(t *testing.T) {
 	// Verify that local and cloud share the same Session type
 	// by round-tripping through JSON

@@ -83,7 +83,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"usage: telos <command> [args]",
 		"--help",
 		"apply SPEC|PLAN    Confirm a new spec or a saved Change Request",
-		"get SESSION        Download a session's package",
+		"get SESSION|REQUEST Download a deployment or request package",
 		"delete SESSION     Delete a session",
 		"pull PACKAGE       Download a package; use `pull skill REF` for a skill",
 		"version            Show version",

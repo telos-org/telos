@@ -117,6 +117,25 @@ func (c *Client) DiscardChangeRequest(request ChangeRequestRecord) (*ChangeReque
 	return c.deploymentPlanRequest(http.MethodPost, changeRequestPath(request.DeploymentID, request.ID)+"/discard", body)
 }
 
+func (c *Client) FindChangeRequest(requestID string) (*ChangeRequestRecord, error) {
+	return c.deploymentPlanRequest(http.MethodGet, "/api/change-requests/"+url.PathEscape(requestID), nil)
+}
+
+type RequestUpdateOptions struct {
+	ExpectedUpdateNumber      int     `json:"expected_update_number"`
+	ExpectedCurrentRevisionID *string `json:"expected_current_revision_id"`
+	PackageRef                string  `json:"package_ref"`
+	RevisionMessage           string  `json:"revision_message,omitempty"`
+}
+
+func (c *Client) UpdateChangeRequest(request ChangeRequestRecord, options RequestUpdateOptions) (*ChangeRequestRecord, error) {
+	body, err := json.Marshal(options)
+	if err != nil {
+		return nil, err
+	}
+	return c.deploymentPlanRequest(http.MethodPost, changeRequestPath(request.DeploymentID, request.ID)+"/updates", body)
+}
+
 func (c *Client) deploymentPlanRequest(method, path string, body []byte) (*ChangeRequestRecord, error) {
 	resp, err := c.do(method, path, body)
 	if err != nil {
