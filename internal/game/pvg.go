@@ -162,7 +162,7 @@ func (p *PVG) runProverTurn(promptOpts spec.PromptOptions, deadline time.Time) T
 	p.Result.Rounds++
 	p.Result.ProverRounds++
 	roundNum := p.Result.Rounds
-	p.Evidence.Log("round_start", roundNum, "prover", nil)
+	p.Evidence.Log("round_start", roundNum, "prover", map[string]interface{}{"audience": "user"})
 
 	task := spec.RenderProverTask(p.Compiled, p.State.TranscriptPath, promptOpts)
 	return p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task, deadline)
@@ -172,7 +172,7 @@ func (p *PVG) runVerifierTurn(promptOpts spec.PromptOptions, deadline time.Time)
 	p.Result.Rounds++
 	p.Result.VerifierRounds++
 	roundNum := p.Result.Rounds
-	p.Evidence.Log("round_start", roundNum, "verifier", nil)
+	p.Evidence.Log("round_start", roundNum, "verifier", map[string]interface{}{"audience": "user"})
 
 	task := spec.RenderVerifierTask(p.Compiled, p.State.TranscriptPath, promptOpts)
 	return p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task, deadline)
@@ -226,10 +226,15 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 		if err := AppendLiveAgentEvent(p.State.TranscriptPath, role, roleRound, turnID, event); err != nil {
 			return
 		}
+		audience := "agent"
+		if event.Kind == "progress_update" {
+			audience = "user"
+		}
 		p.Evidence.Log("agent_progress", roundNum, role, map[string]interface{}{
-			"kind":    event.Kind,
-			"text":    event.Text,
-			"turn_id": turnID,
+			"audience": audience,
+			"kind":     event.Kind,
+			"text":     event.Text,
+			"turn_id":  turnID,
 		})
 	}
 	if err := WriteTurnTask(ts, task); err != nil {

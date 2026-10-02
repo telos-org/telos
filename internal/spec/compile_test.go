@@ -471,9 +471,13 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 	for _, task := range []string{proverTask, verifierTask} {
 		for _, want := range []string{
 			"<progress_update>...</progress_update>",
-			"meaningful changes, results, blockers, and long operations or waits",
-			"report only observed progress",
+			"person waiting for the result",
+			"meaningful work begins",
+			"during a wait",
+			"everyday words",
+			"technical claims, evidence, findings, and uncertainty",
 			"final <progress_update>...</progress_update> in the same response",
+			"does not mean the whole Goal is complete",
 		} {
 			if !strings.Contains(task, want) {
 				t.Fatalf("prompt missing progress guidance %q:\n%s", want, task)
@@ -482,7 +486,7 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 		if strings.Contains(task, `phase=`) || strings.Contains(task, `timestamp=`) {
 			t.Fatalf("progress guidance should not require model-owned metadata:\n%s", task)
 		}
-		for _, unwanted := range []string{"after planning", "after scoping", "about once per minute"} {
+		for _, unwanted := range []string{"<user_update>", "after planning", "after scoping", "about once per minute"} {
 			if strings.Contains(task, unwanted) {
 				t.Fatalf("progress guidance should not prescribe %q:\n%s", unwanted, task)
 			}

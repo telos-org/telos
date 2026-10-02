@@ -164,6 +164,7 @@ class TelosExecutableAgent(BaseInstalledAgent):
         inject_pi_models: bool | str = True,
         pi_config_source: str | None = None,
         telos_install_url: str = DEFAULT_TELOS_INSTALL_URL,
+        telos_binary_dir: str | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
@@ -181,6 +182,9 @@ class TelosExecutableAgent(BaseInstalledAgent):
         self.inject_pi_models = as_bool(inject_pi_models)
         self.pi_config_source = pi_config_source
         self.telos_install_url = telos_install_url
+        self.telos_binary_dir = telos_binary_dir
+        if telos_binary_dir and not self.install_telos:
+            raise ValueError("telos_binary_dir requires install_telos=true")
         self._last_metadata: dict[str, Any] = {}
 
     def get_version_command(self) -> str | None:
@@ -212,6 +216,9 @@ fi
         )
 
     async def _install_telos(self, environment: BaseEnvironment) -> None:
+        if self.telos_binary_dir:
+            await self._install_local_telos(environment)
+            return
         command = f"""
 {self._shell_prologue()}
 if command -v telos >/dev/null 2>&1 && command -v telosd >/dev/null 2>&1; then
@@ -233,6 +240,38 @@ telosd --version
             env=model_env(),
             timeout_sec=900,
         )
+
+    async def _install_local_telos(self, environment: BaseEnvironment) -> None:
+        source_dir = Path(self.telos_binary_dir or "").expanduser().resolve()
+        binaries = [source_dir / name for name in ("telos", "telosd")]
+        for binary in binaries:
+            if not binary.is_file():
+                raise FileNotFoundError(f"Missing local Telos binary: {binary}")
+
+        prepare = 'set -eu; mkdir -p "$HOME/.local/bin"; printf %s "$HOME/.local/bin"'
+        result = await self.exec_as_agent(
+            environment, f"bash -lc {shlex.quote(prepare)}", timeout_sec=30
+        )
+        remote_dir = (result.stdout or "").strip()
+        if not remote_dir.startswith("/"):
+            raise RuntimeError("Could not determine the agent's binary directory")
+
+        remote_binaries = [f"{remote_dir}/{binary.name}" for binary in binaries]
+        for source, target in zip(binaries, remote_binaries):
+            await environment.upload_file(source, target)
+        paths = " ".join(shlex.quote(path) for path in remote_binaries)
+        # Uploads can be owned by root, even when the agent runs as another user.
+        await self.exec_as_root(environment, f"chmod 0755 {paths}", timeout_sec=30)
+        verify = (
+            "set -eu\n"
+            + "\n".join(f"{shlex.quote(path)} --version" for path in remote_binaries)
+            + f"\nsha256sum {paths}\n"
+        )
+        result = await self.exec_as_agent(
+            environment, f"bash -lc {shlex.quote(verify)}", timeout_sec=30
+        )
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        (self.logs_dir / "telos-harbor-build.log").write_text(result.stdout or "")
 
     async def _install_pi(self, environment: BaseEnvironment) -> None:
         command = f"""
@@ -448,8 +487,15 @@ fi
             if self.max_cost_usd is None
             else f" --max-cost-usd {shlex.quote(max_cost)}"
         )
+        pinned_build = ""
+        if self.telos_binary_dir:
+            pinned_build = (
+                'export PATH="$HOME/.local/bin:$PATH"\n'
+                'export TELOSD_PATH="$HOME/.local/bin/telosd"'
+            )
         return f"""
 {self._shell_prologue()}
+{pinned_build}
 mkdir -p /tmp/telos-harbor /tmp/telos-scratch
 json_field() {{
   python3 - "$1" "$2" <<'PY'
