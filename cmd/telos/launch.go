@@ -502,10 +502,16 @@ func requireCloudAccessCapability(control *cloud.Client, access *spec.AccessSpec
 	}
 	capabilities, err := control.RegistryCapabilities()
 	if err != nil {
-		return fmt.Errorf("cannot verify support for goal-defined integrations and network access; goal not applied: %w", err)
+		return fmt.Errorf("cannot verify support for goal-defined external access; goal not applied: %w", err)
 	}
-	if !capabilities.DeploymentSpecAccess {
-		return fmt.Errorf("goal not applied: this Cloud backend does not support goal-defined integrations and network access; use a backend with deployment_spec_access support")
+	capability := "deployment_spec_access"
+	supported := capabilities.DeploymentSpecAccess
+	if access.Egress != nil {
+		capability = "deployment_egress_credentials"
+		supported = capabilities.DeploymentEgressCredentials
+	}
+	if !supported {
+		return fmt.Errorf("goal not applied: this Cloud backend does not support this external access format; use a backend with %s support", capability)
 	}
 	return nil
 }

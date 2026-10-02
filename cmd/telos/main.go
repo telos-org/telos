@@ -58,6 +58,8 @@ func main() {
 		cmdConfig(os.Args[2:])
 	case "integrations":
 		cmdIntegrations(os.Args[2:])
+	case "credentials":
+		cmdCredentials(os.Args[2:])
 	default:
 		fmt.Fprintf(os.Stderr, "unknown command: %s\n", os.Args[1])
 		usage(os.Stderr)
@@ -88,7 +90,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  get SESSION        Download a session's package")
 	fmt.Fprintln(out, "  logout             Log out and revoke this device's token")
 	fmt.Fprintln(out, "  config             Show or update CLI configuration")
-	fmt.Fprintln(out, "  integrations       List workspace integrations or get the creation link")
+	fmt.Fprintln(out, "  credentials        List workspace credentials or get the secure setup link")
 	fmt.Fprintln(out, "  version            Show version")
 	fmt.Fprintln(out, "  update [VERSION]   Update this CLI to latest or an exact release")
 	fmt.Fprintln(out, "")

@@ -85,15 +85,16 @@ Before authoring a Cloud Goal, read [Telos Cloud](references/cloud.md) and
 confirm that its delivery, storage, and external-service needs fit the managed
 runtime.
 
-For external APIs, identify the required hosts, methods, paths, and workspace
-integrations before applying. Use `telos integrations list --context CONTEXT`
+For external APIs, identify the required destinations and any workspace
+credentials before applying. Use `telos credentials list --context CONTEXT`
 to find IDs and names. If setup is missing, run
-`telos integrations add --context CONTEXT` and give the returned credential
+`telos credentials add --context CONTEXT` and give the returned credential
 form link to the user. Keep secret values out of chat and the Goal.
 
-Declare the complete desired `integrations` and `allowlist` together using
-[the frontmatter format](references/goals.md#declare-integrations-and-network-access).
-Include access additions and removals in the user's apply approval. A plan is
+Declare the complete desired `egress`, binding optional credentials to each
+destination using [the frontmatter format](references/goals.md#declare-external-access).
+Omitted methods and paths allow all requests to that host; make that breadth
+clear in the user's apply approval, including additions and removals. A plan is
 a preview, not proof that credentials or network access work. If Cloud support
 is unavailable, report the blocker rather than dropping the declarations or
 using direct attachment APIs. Verify the deployed application's integration
@@ -176,8 +177,8 @@ Inside a Telos session, the same command creates a linked child session; see
 
 | Effect | Commands |
 | --- | --- |
-| Inspect state | `config`, `plan`, `list`, `describe`, `logs`, `integrations list` |
-| Print a credential-setup link; no browser or remote mutation | `integrations add` |
+| Inspect state | `config`, `plan`, `list`, `describe`, `logs`, `credentials list` |
+| Print a credential-setup link; no browser or remote mutation | `credentials add` |
 | Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context` |
 | Start bounded local execution; may spend money | `run` |
 | Publish or change remote state; `apply` may spend money | `apply`, `push`, `delete` |

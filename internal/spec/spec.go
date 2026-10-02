@@ -152,8 +152,8 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 	if err != nil {
 		return nil, fmt.Errorf("%s: %w", path, err)
 	}
-	if env.Platform == "local" && access != nil && (len(access.Integrations) > 0 || len(access.Allowlist) > 0) {
-		return nil, fmt.Errorf("%s: integrations and allowlist require platform: cloud", path)
+	if env.Platform == "local" && access != nil && (len(access.Egress) > 0 || len(access.Integrations) > 0 || len(access.Allowlist) > 0) {
+		return nil, fmt.Errorf("%s: external access declarations require platform: cloud", path)
 	}
 	env.Access = access
 

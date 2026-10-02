@@ -31,6 +31,9 @@ func TestCloudAccessCLIProcess(t *testing.T) {
 func TestCloudApplyAccessCapabilities(t *testing.T) {
 	const grant = "integrations: [{id: sec_stripe, name: Stripe}]\nallowlist: [{host: api.stripe.com}]\n"
 	const revoke = "integrations: []\nallowlist: []\n"
+	const egress = "egress: [{host: api.example.com, credentials: sec-example}]\n"
+	const publicEgress = "egress: [{host: public.example.com}]\n"
+	const revokeEgress = "egress: []\n"
 	for _, source := range []string{"local", "registry"} {
 		for _, operation := range []string{"create", "update"} {
 			for _, tc := range []struct {
@@ -49,6 +52,16 @@ func TestCloudApplyAccessCapabilities(t *testing.T) {
 				{"malformed response", grant, `{`, 200, false},
 				{"invalid capability type", grant, `{"deployment_spec_access":"true"}`, 200, false},
 				{"null capability", revoke, `{"deployment_spec_access":null}`, 200, false},
+				{"supported egress", egress, `{"deployment_egress_credentials":true}`, 200, true},
+				{"supported public egress", publicEgress, `{"deployment_egress_credentials":true}`, 200, true},
+				{"supported revoke egress", revokeEgress, `{"deployment_egress_credentials":true}`, 200, true},
+				{"old support is insufficient", egress, `{"deployment_spec_access":true}`, 200, false},
+				{"old support cannot revoke egress", revokeEgress, `{"deployment_spec_access":true}`, 200, false},
+				{"old support cannot grant public egress", publicEgress, `{"deployment_spec_access":true}`, 200, false},
+				{"disabled egress", egress, `{"deployment_spec_access":true,"deployment_egress_credentials":false}`, 200, false},
+				{"invalid egress capability", egress, `{"deployment_egress_credentials":"true"}`, 200, false},
+				{"null egress capability", revokeEgress, `{"deployment_egress_credentials":null}`, 200, false},
+				{"unavailable egress capability", egress, `{"detail":"Unavailable"}`, 503, false},
 				{"legacy goal", "", `{"detail":"Not Found"}`, 404, true},
 			} {
 				t.Run(source+"/"+operation+"/"+tc.name, func(t *testing.T) {

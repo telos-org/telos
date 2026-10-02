@@ -18,17 +18,29 @@ type integrationMetadata struct {
 }
 
 func cmdIntegrations(args []string) {
+	cmdWorkspaceCredentials(args, true)
+}
+
+func cmdCredentials(args []string) {
+	cmdWorkspaceCredentials(args, false)
+}
+
+func cmdWorkspaceCredentials(args []string, legacy bool) {
+	command := "credentials"
+	if legacy {
+		command = "integrations"
+	}
 	if len(args) == 0 || isHelpArg(args[0]) {
-		fmt.Println("usage: telos integrations <list|add> [flags]")
-		fmt.Println("  list   List reusable integrations in the selected workspace")
-		fmt.Println("  add    Print the workspace's web form for adding an integration")
+		fmt.Printf("usage: telos %s <list|add> [flags]\n", command)
+		fmt.Println("  list   List reusable credentials in the selected workspace")
+		fmt.Println("  add    Print the workspace's secure form for adding credentials")
 		return
 	}
 	if args[0] != "list" && args[0] != "add" {
-		fmt.Fprintf(os.Stderr, "error: unknown integrations command %q\n", args[0])
+		fmt.Fprintf(os.Stderr, "error: unknown %s command %q\n", command, args[0])
 		os.Exit(2)
 	}
-	fs := newCommandFlagSet("integrations "+args[0], "telos integrations "+args[0]+" [flags]")
+	fs := newCommandFlagSet(command+" "+args[0], "telos "+command+" "+args[0]+" [flags]")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args[1:])
@@ -55,7 +67,7 @@ func cmdIntegrations(args []string) {
 			return
 		}
 		fmt.Println(link)
-		fmt.Println("Enter credentials in the web form, then reference its integration ID in SPEC.md.")
+		fmt.Println("Enter credentials in the secure web form, then reference the saved ID on the appropriate egress destination in your goal.")
 		return
 	}
 	secrets, err := control.ListSecrets()
@@ -77,14 +89,11 @@ func cmdIntegrations(args []string) {
 		integrations = append(integrations, integrationMetadata{ID: secret.ID, Name: secret.Name, Keys: keys})
 	}
 	if *jsonOut {
-		printJSON(struct {
-			Context      string                `json:"context"`
-			Integrations []integrationMetadata `json:"integrations"`
-		}{Context: control.ContextName(), Integrations: integrations})
+		printJSON(map[string]interface{}{"context": control.ContextName(), command: integrations})
 		return
 	}
 	if len(integrations) == 0 {
-		fmt.Println("no integrations listed")
+		fmt.Println("no credentials listed")
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
@@ -97,7 +106,7 @@ func cmdIntegrations(args []string) {
 
 func integrationAddURL(control *cloud.Client) (string, error) {
 	if cloud.NormalizeEndpoint(control.Endpoint) != cloud.DefaultAPIEndpoint {
-		return "", fmt.Errorf("integration setup links require the official https://api.usetelos.ai control plane")
+		return "", fmt.Errorf("credential setup links require the official https://api.usetelos.ai control plane")
 	}
 	if control.OrgID == "" {
 		organization, err := control.ResolveContext("personal")

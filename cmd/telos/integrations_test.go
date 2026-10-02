@@ -35,19 +35,30 @@ func TestIntegrationListUsesSelectedWorkspaceAndOmitsSecrets(t *testing.T) {
 	t.Setenv("TELOS_AUTH_TOKEN", "test-token")
 	t.Setenv("TELOS_API_ENDPOINT", server.URL)
 	t.Setenv("TELOS_CONTEXT", "personal")
-	output := captureStdout(t, func() { cmdIntegrations([]string{"list", "--context", "@team", "--json"}) })
-	var result struct {
-		Context      string                `json:"context"`
-		Integrations []integrationMetadata `json:"integrations"`
-	}
-	if err := json.Unmarshal([]byte(output), &result); err != nil {
-		t.Fatal(err)
-	}
-	if result.Context != "@team" || len(result.Integrations) != 1 || result.Integrations[0].ID != "sec_stripe" || result.Integrations[0].Keys[0] != "STRIPE_KEY" {
-		t.Fatalf("wrong metadata: %s", output)
-	}
-	if strings.Contains(output, "private-") || strings.Contains(output, "sec_managed") {
-		t.Fatalf("sensitive or managed metadata exposed: %s", output)
+	for _, tc := range []struct {
+		name string
+		run  func([]string)
+	}{
+		{"credentials", cmdCredentials},
+		{"integrations", cmdIntegrations},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := captureStdout(t, func() { tc.run([]string{"list", "--context", "@team", "--json"}) })
+			var result map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(output), &result); err != nil {
+				t.Fatal(err)
+			}
+			var credentials []integrationMetadata
+			if err := json.Unmarshal(result[tc.name], &credentials); err != nil {
+				t.Fatal(err)
+			}
+			if string(result["context"]) != `"@team"` || len(credentials) != 1 || credentials[0].ID != "sec_stripe" || credentials[0].Keys[0] != "STRIPE_KEY" {
+				t.Fatalf("wrong metadata: %s", output)
+			}
+			if strings.Contains(output, "private-") || strings.Contains(output, "sec_managed") {
+				t.Fatalf("sensitive or managed metadata exposed: %s", output)
+			}
+		})
 	}
 }
 

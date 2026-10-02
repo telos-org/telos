@@ -109,40 +109,48 @@ For jobs using injected credentials, choose the context with `TELOS_CONTEXT`
 or `--context`. `telos config --context` changes saved configuration and uses
 saved credentials rather than the token and endpoint environment overrides.
 
-## Integrations and network access
+## Credentials and external access
 
-Integrations are reusable credentials stored in your personal or team workspace.
+Credentials are reusable bundles stored in your personal or team workspace.
 List them, or get the web form for adding one, using the same context as your
 deployment. Replace `CONTEXT` with `personal` or your `@team-handle`:
 
 ```bash
-telos integrations list --context CONTEXT
-telos integrations add --context CONTEXT
+telos credentials list --context CONTEXT
+telos credentials add --context CONTEXT
 ```
 
-- `list` shows integration IDs, names, and credential key names, never values.
-  Platform-managed integrations are omitted.
+- `list` shows saved IDs, names, and credential key names, never values.
+  Platform-managed credentials are omitted.
 - `add` prints a workspace-specific setup link. It does not open a browser,
-  create the integration, or attach it to a deployment. Open the link yourself,
-  save credentials in the form, then run `list` to obtain the ID and name.
+  save a credential, or attach it to a deployment. Open the link yourself,
+  save credentials in the form, then run `list` to obtain the saved ID.
 - Both commands accept `--json`. Setup links require the official Telos Cloud
   endpoint; `add` rejects custom endpoints.
+- `integrations` remains a compatibility alias; its JSON list retains the
+  `integrations` key. The new command uses `credentials`.
 
-Reference the saved integration and required network rules in your Goal's
-[frontmatter](goals.md#declare-integrations-and-network-access). For creation,
+Bind the saved credential to each appropriate destination in your Goal's
+[`egress` frontmatter](goals.md#declare-external-access). For creation,
 Cloud binds declared access before the agent starts. To add or remove access
 later, revise the Goal and apply it to the same session. Web access edits also
 go through a Goal revision or Change Request, not a separate attachment action.
 
-Cloud checks workspace permissions, integration availability, and runtime
+Cloud checks workspace permissions, credential availability, and runtime
 support. Deployment access changes require workspace owner/admin privileges
-and any applicable deployment approval. Saving an integration alone does not
+and any applicable deployment approval. Saving a credential alone does not
 grant a deployment access to it.
 
-`plan` previews declarations; it does not establish that access works. Before
-uploading or deploying a Goal with these fields, `apply` requires the backend
-to advertise `deployment_spec_access`. Missing support or an unreadable
-capability response stops the apply. This also covers registry packages,
+Credentials may be shared across destinations and deployments. Removing one
+binding does not delete the saved credential. Rotating or revoking a shared
+credential can affect every deployment using it.
+
+`plan` shows each destination's credential reference and restrictions; it does
+not establish that access works. Before uploading or deploying a Goal with
+`egress`, `apply` requires the backend to advertise `deployment_egress_credentials`.
+Legacy paired `integrations` and `allowlist` fields require `deployment_spec_access`.
+Missing support or an unreadable capability response stops the apply.
+This also covers registry packages,
 empty lists that revoke access, and updates using `--force`. Goals without
 these fields remain compatible with older backends.
 
@@ -150,8 +158,8 @@ these fields remain compatible with older backends.
 
 A spec describes desired behavior; it cannot add a missing platform surface.
 Public egress is default-deny: Cloud provides the common read paths below, and
-other agent requests need a matching Goal allowlist rule. Authenticated
-requests also need an appropriate declared integration. Before applying,
+other agent requests need a matching Goal egress rule. Authenticated
+requests also need an appropriate credential on that rule. Before applying,
 identify how the implementation will fit these Cloud capabilities:
 
 | Need | Current Cloud path |
@@ -159,25 +167,25 @@ identify how the implementation will fit these Cloud capabilities:
 | Deliver a workload | Use a digest-pinned published image, a repository's existing image publication workflow, or a read-only ConfigMap for a small interpreted service. |
 | Keep application data | Mount a persistent volume claim. Its lifecycle is bound to the claim and Cloud environment. |
 | Fetch build dependencies | Docker Hub images, PyPI packages, npm packages, and Telos artifacts have built-in read access. |
-| Reach another public API from the agent | Declare the required HTTPS allowlist rules and, for authenticated requests, a workspace integration. |
+| Reach another public API from the agent | Declare HTTPS destinations in `egress`, with workspace credential IDs where authentication is needed. |
 | Reach another service from the deployed application | No general managed credential connector is currently injected into Kubernetes workloads. |
 
 The Cloud agent receives the full `telos-cloud` operating skill inside the
 environment. It explains delivery, persistence, networking, and verification
 in detail.
 
-## Current integration limits
+## Current credential limits
 
 | Limit | Consequence |
 | --- | --- |
-| Startup environment variables | Include integrations that require these at creation. Cloud rejects adding them to an already-running deployment. |
-| Public credential markers, AWS, and HMAC signing | A Goal update can add an integration that needs no new startup variables, with matching network rules. |
+| Startup environment variables | Include credentials that require these at creation. Cloud rejects adding them to an already-running deployment. |
+| Public credential markers, AWS, and HMAC signing | A Goal update can add credentials that need no new startup variables, bound to the appropriate destinations. |
 
 A missing image path or workload connector is likewise a platform constraint,
 not something `SPEC.md` can create.
 
 Verify the external API call from the deployed application before relying on
-it. A saved integration, successful apply, or agent-side request does not prove
+it. A saved credential, successful apply, or agent-side request does not prove
 that the application has a working credential path.
 
 ## Apply and observe

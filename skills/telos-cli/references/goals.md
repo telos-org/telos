@@ -39,8 +39,7 @@ Goal uses them:
 | `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
 | `interval` | A positive duration ending in `s`, `m`, or `h`, such as `30m` or `6h`, carried as the contract's reconciliation interval. |
 | `tags` | A YAML list of string labels. The default is an empty list. |
-| `integrations` | Workspace integration IDs, or `{ id, name }` entries. Declare together with `allowlist`. |
-| `allowlist` | HTTPS rules with `host`, optional `methods`, and optional `paths`. Declare together with `integrations`. |
+| `egress` | HTTPS destinations with `host`, optional `credentials` ID, and optional `methods` and `paths` restrictions. |
 
 For example:
 
@@ -63,48 +62,51 @@ useful conventions rather than specially parsed fields. Add sections for
 interfaces, compatibility, data lifecycle, security boundaries, failure
 behavior, or evidence when they change what a correct result means.
 
-## Declare integrations and network access
+## Declare external access
 
-For a Cloud Goal that calls an external API, add both fields to its frontmatter:
+For a Cloud Goal that calls external services, add destinations to its frontmatter:
 
 ```yaml
-integrations:
-  - id: sec_stripe_example
-    name: Stripe Production
-allowlist:
+egress:
+  - host: public.example.com
   - host: api.stripe.com
+    credentials: sec-stripe-example
     methods: [GET]
     paths: [/v1/customers, /v1/customers/*]
 ```
 
-Replace the example ID and name with values from `telos integrations list` in
-the deployment's workspace. The ID selects the integration; the name is a
-readable label that Cloud checks against the saved name. ID-only entries such
-as `integrations: [sec_stripe_example]` also work. Secret values stay in the
-workspace integration, not in this file.
+Replace the example ID with a saved ID from `telos credentials list` in the
+deployment's workspace. Names and secret values stay in the workspace credential
+store, not in this file. Existing `sec_` IDs remain valid alongside new `sec-` IDs.
 
-Use a DNS host without a URL scheme and uppercase HTTP methods. Restrict paths
-to the requests your Goal needs. Omitting `methods` or `paths`, or setting
-either to `[]`, leaves that part of the rule unrestricted. An allowlist rule
-permits a request; it does not supply credentials. The integration's credential
-policy must also support an authenticated request.
-Use `integrations: []` when the request needs no credentials.
+- `host` is a DNS hostname without a URL scheme. Credentials require an exact
+  hostname, not a wildcard.
+- `credentials` selects authentication for that destination. Omit it for
+  network-only access. The same ID can be used on multiple approved hosts.
+- `methods` and `paths` restrict that destination, not the shared credential.
+  Omitting either, or using `[]`, means all methods or all paths. Do not write
+  a literal `*` list item for these defaults.
+- Use uppercase HTTP methods. Credential paths are exact paths or prefixes
+  ending in `/*`. A goal cannot expand the credential's provider-side permissions.
 
-These lists describe the complete desired deployment access, not additions to
-an earlier list. Applying a revision removes entries left out of the lists.
-Use both empty lists to remove all Goal-declared integrations and network rules:
+`egress` describes the complete desired deployment access. Applying a revision
+removes entries left out. Remove all goal-declared access with:
 
 ```yaml
-integrations: []
-allowlist: []
+egress: []
 ```
 
-This does not delete the reusable workspace integrations or remove
-platform-managed inference credentials. A new Goal with no custom access can
-omit both fields. When updating a deployment that has custom access, Cloud
-requires both fields explicitly. Nonempty declarations require a Cloud Goal.
+This does not delete reusable workspace credentials or remove platform-managed
+inference access. A new Goal with no custom access can omit the declaration.
+When updating a deployment with custom access, declare the desired access
+explicitly. Nonempty declarations require a Cloud Goal.
 
-See [Telos Cloud](cloud.md#integrations-and-network-access) for credential
+Older goals using paired `integrations` and `allowlist` fields remain supported.
+Do not mix those fields with `egress`. Their separate lists do not identify
+which credential belongs to which host; choose the bindings explicitly when
+converting them.
+
+See [Telos Cloud](cloud.md#credentials-and-external-access) for credential
 setup, backend support, permissions, and runtime limits.
 
 ## Express the contract, not an implementation recipe
@@ -128,7 +130,7 @@ datastore. A framework, schema, deployment shape, or compatibility requirement
 belongs in the spec when it is itself part of the promised outcome.
 
 A Goal can select a lifecycle, import skills and rubrics, and declare deployment
-integrations and network access. On a supporting Cloud backend, applying the
+credentials and network access. On a supporting Cloud backend, applying the
 revision configures that access after authorization checks. The declarations
 do not contain secret values, grant registry permissions, or create missing
 platform capabilities. [Telos Cloud](cloud.md) describes those boundaries.

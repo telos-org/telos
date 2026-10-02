@@ -205,8 +205,12 @@ func printPlanPreview(
 		printSummaryField(out, "Skills", strings.Join(skillDisplayNames(compiled), ", "))
 	}
 	if access := compiled.Environment.Access; comparison == nil && access != nil {
-		printSummaryField(out, "Integrations", formatPlanIntegrations(access))
-		printSummaryField(out, "Allowlist", formatPlanAllowlist(access.Allowlist))
+		if access.Egress != nil {
+			printSummaryField(out, "Access", formatPlanAccess(access))
+		} else {
+			printSummaryField(out, "Integrations", formatPlanIntegrations(access))
+			printSummaryField(out, "Allowlist", formatPlanAllowlist(access.Allowlist))
+		}
 	}
 	if comparison == nil {
 		return
@@ -462,6 +466,21 @@ func formatPlanAccess(access *spec.AccessSpec) string {
 	if access == nil {
 		return "not declared"
 	}
+	if access.Egress != nil {
+		entries := make([]string, 0, len(access.Egress))
+		for _, rule := range access.Egress {
+			methods, paths := slices.Clone(rule.Methods), slices.Clone(rule.Paths)
+			slices.Sort(methods)
+			slices.Sort(paths)
+			entries = append(entries, fmt.Sprintf("%s (credentials: %s; methods: %s; paths: %s)",
+				rule.Host, firstNonEmpty(rule.Credentials, "none"),
+				firstNonEmpty(strings.Join(methods, ", "), "all"),
+				firstNonEmpty(strings.Join(paths, ", "), "*")))
+		}
+		slices.Sort(entries)
+		entries = slices.Compact(entries)
+		return "egress: " + firstNonEmpty(strings.Join(entries, "; "), "none")
+	}
 	return "integrations: " + formatPlanIntegrations(access) +
 		"; allowlist: " + formatPlanAllowlist(access.Allowlist)
 }
@@ -481,6 +500,9 @@ func formatPlanIntegrations(access *spec.AccessSpec) string {
 func samePlanPermissions(current, proposed *spec.AccessSpec) bool {
 	if current == nil || proposed == nil {
 		return current == proposed
+	}
+	if current.Egress != nil || proposed.Egress != nil {
+		return current.Egress != nil && proposed.Egress != nil && formatPlanAccess(current) == formatPlanAccess(proposed)
 	}
 	currentIDs, proposedIDs := slices.Clone(current.Integrations), slices.Clone(proposed.Integrations)
 	slices.Sort(currentIDs)
