@@ -81,6 +81,11 @@ That contract permits the agent to choose an appropriate framework and
 datastore. A framework, schema, deployment shape, or compatibility requirement
 belongs in the spec when it is itself part of the promised outcome.
 
+Your revised spec describes the complete current contract. Telos reuses work
+that still serves it and removes behavior that only served superseded
+requirements. You do not need to list every obsolete implementation detail;
+required data and history must still be preserved.
+
 A spec can select a lifecycle, import capabilities and rubrics, and describe
 the desired state. It does not grant credentials, network access, registry
 permissions, or a platform capability. Confirm those surfaces separately

@@ -5,7 +5,6 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,11 +14,7 @@ import (
 	"time"
 )
 
-const (
-	TaskEnvVar            = "TELOS_TASK"
-	FileListLimit         = 200
-	WorkspaceStateExclude = ".git .telos __pycache__"
-)
+const TaskEnvVar = "TELOS_TASK"
 
 // CommandResult is the outcome of one platform run.
 type CommandResult struct {
@@ -182,19 +177,6 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 	return result
 }
 
-// WorkspaceState returns a text snapshot of the workspace for prompts.
-func (p *LocalPlatform) WorkspaceState() string {
-	files := workspaceFileListing(p.Workspace)
-	parts := []string{"=== FILES ===", files}
-	if gitStatus := gitText([]string{"status", "--short"}, p.Workspace); gitStatus != "" {
-		parts = append(parts, "=== GIT STATUS ===", gitStatus)
-	}
-	if gitDiff := gitText([]string{"diff", "--stat"}, p.Workspace); gitDiff != "" {
-		parts = append(parts, "=== GIT DIFF STAT ===", gitDiff)
-	}
-	return strings.Join(parts, "\n")
-}
-
 // CheckpointWorkspace creates a tar.gz of the workspace.
 func (p *LocalPlatform) CheckpointWorkspace(dest string) bool {
 	abs, _ := filepath.Abs(dest)
@@ -305,40 +287,4 @@ func workspaceProcessEnv() []string {
 		env = append(env, e)
 	}
 	return env
-}
-
-func workspaceFileListing(workspace string) string {
-	excludes := map[string]bool{".git": true, ".telos": true, "__pycache__": true}
-	var files []string
-	filepath.Walk(workspace, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return nil
-		}
-		if info.IsDir() && excludes[info.Name()] {
-			return filepath.SkipDir
-		}
-		if !info.IsDir() {
-			rel, _ := filepath.Rel(workspace, path)
-			files = append(files, "./"+filepath.ToSlash(rel))
-			if len(files) >= FileListLimit {
-				files = append(files, "...")
-				return io.EOF
-			}
-		}
-		return nil
-	})
-	if len(files) == 0 {
-		return "(no files)"
-	}
-	return strings.Join(files, "\n")
-}
-
-func gitText(args []string, cwd string) string {
-	cmd := exec.Command("git", args...)
-	cmd.Dir = cwd
-	out, err := cmd.Output()
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(string(out))
 }
