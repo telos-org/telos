@@ -30,6 +30,7 @@ session_timeout_sec="${TELOS_HARBOR_SESSION_TIMEOUT_SEC:-7200}"
 max_cost_usd="${TELOS_HARBOR_MAX_COST_USD:-10}"
 skills="${TELOS_HARBOR_SKILLS:-@telos/verify-engineering:0.1.0*}"
 install_url="${TELOS_HARBOR_TELOS_INSTALL_URL:-https://usetelos.ai/releases/latest/install.sh}"
+binary_dir="${TELOS_HARBOR_TELOS_BINARY_DIR:-}"
 
 inject_pi_models="${TELOS_HARBOR_INJECT_PI_MODELS:-true}"
 pi_config_source="${TELOS_HARBOR_PI_CONFIG_SOURCE:-}"
@@ -68,6 +69,10 @@ args=(
   --yes
   --debug
 )
+
+if [[ -n "$binary_dir" ]]; then
+  args+=(--ak "telos_binary_dir=$binary_dir")
+fi
 
 if [[ -n "$pi_config_source" && "$environment" == "docker" ]]; then
   mounts="$(

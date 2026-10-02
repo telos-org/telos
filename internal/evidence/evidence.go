@@ -136,12 +136,15 @@ func (e *Evidence) LogAgent(roundNum int, role string, status string, logsTail s
 			}
 		}
 	}
+	// Technical turn completion is distinct from runtime-confirmed completion.
+	data["audience"] = "agent"
 	e.Log("agent_complete", roundNum, role, data)
 }
 
 // LogGameEnd logs the terminal game result.
 func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRounds int, conceded bool, costUSD float64, inputTokens, outputTokens, cacheRead, cacheCreate int, errMsg string, completionReason string) {
 	e.Log("game_end", rounds, "system", map[string]interface{}{
+		"audience":                    "user",
 		"game_result":                 result,
 		"completion_reason":           completionReason,
 		"prover_rounds":               proverRounds,

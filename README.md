@@ -33,13 +33,12 @@ needs no additional login step; see
 > Work with your coding agent to write and iterate on your Goal spec, and have
 > the agent drive `telos` for you.
 >
-> The CLI is optimized for the agent experience.
+> The CLI is built for the agent experience.
 
 The Goal specification (`SPEC.md`) is the main entry point to a `telos`
-program. This example creates a persistent Cloud Goal; use an explicit context
-so the plan and the apply address the same workspace.
+program.
 
-A minimal `SPEC.md`:
+An example `SPEC.md`:
 
 ```markdown
 ---
@@ -67,7 +66,7 @@ skills:
 quality, process, or subjective requirements. The revision must pass every
 starred rubric in an independent evaluation before `ready`.
 
-## Apply
+## Usage
 
 `telos apply` reconciles a persistent Goal toward the desired state in
 `SPEC.md`.
@@ -88,8 +87,7 @@ telos apply SPEC.md --context personal
 then continues in the background.
 
 After applying, use `telos list` to find the session and `telos describe` to
-check its status. Once the public-route probe succeeds, `describe` also prints
-the Service URL:
+check its status. Once the service is published, `describe` also prints its URL:
 
 ```console
 $ telos list --context personal
@@ -134,21 +132,14 @@ sessions, revisions, states, and evidence.
 
 ## Local runs
 
-`telos run` executes a bounded Goal in a local workspace and stops. Use it for
-one piece of work that does not need the persistent lifecycle of `telos apply`.
+`telos apply` is the primary interface. For harness development, benchmarking,
+and nested execution, `telos run` executes bounded local work. See
+[Bounded runs](skills/telos-cli/references/bounded-runs.md) for setup and usage.
 
-Local runs execute through [pi](https://github.com/earendil-works/pi), the open
-source coding agent Telos drives. Install pi once, then open it to authenticate
-with `/login`:
+## Acknowledgements
 
-```bash
-npm install -g @earendil-works/pi-coding-agent
-pi
-```
-
-Exit pi after authentication. [Bounded runs](skills/telos-cli/references/bounded-runs.md)
-provides a complete local spec, an explicit stopping bound, and the commands to
-inspect and extract the accepted workspace checkpoint.
+Telos's agent execution is powered by [Pi](https://github.com/earendil-works/pi),
+the open-source coding agent.
 
 ## License
 

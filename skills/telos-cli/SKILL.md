@@ -50,7 +50,9 @@ needs a valid token instead of starting a browser login. Read
 [Cloud authentication](references/cloud.md#authenticate) for token setup,
 environment precedence, and a CI example.
 
-Choose the lifecycle that matches the requested outcome:
+Use `telos apply` as the primary interface. Use `telos run` primarily for
+harness development, benchmarking, and bounded child work inside a Telos
+session. Choose the lifecycle that matches the requested outcome:
 
 | Lifecycle | Command | Result |
 | --- | --- | --- |
@@ -59,6 +61,11 @@ Choose the lifecycle that matches the requested outcome:
 
 For model selection and `--thinking` on `apply` or `run`, read
 [Models and inference](references/inference.md).
+
+For Cloud, use `telos config` to inspect saved connections and the workspace
+default. Select a saved subscription or API-key connection with the existing
+`--model CONNECTION/MODEL` form. Manage connections, available models, and
+shared defaults under **Inference** in the Telos app.
 
 Before drafting either kind of spec, read [Write a SPEC.md](references/goals.md).
 When authoring or importing skills and rubrics, also read
@@ -183,7 +190,7 @@ not use the top-level source-checkout workflow.
 
 | Effect | Commands |
 | --- | --- |
-| Inspect state | `plan`, `list`, `describe`, `logs` |
+| Inspect state | `config`, `plan`, `list`, `describe`, `logs` |
 | Materialize files or change local configuration | `get`, `pull`, `login`, `logout`, `config --context` |
 | Replace the invoked CLI executable | `update` |
 | Start bounded local execution; may spend money | `run` |

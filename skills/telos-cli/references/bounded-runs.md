@@ -6,15 +6,23 @@ group: Concepts
 
 # Bounded runs
 
-Use `telos run` for work with a natural stopping point: an analysis, migration,
-focused implementation, or other result that does not need a persistent Cloud
-deployment.
+`telos apply` is the primary interface. Use `telos run` primarily for harness
+development, benchmarking, and [nested execution](nested-goals.md). A local
+run executes bounded work in an isolated workspace and stops.
 
-Before starting, [install Telos and authenticate local pi](install.md).
-Local runs use your pi provider credentials; a Telos Cloud login does not
-configure them.
+Local runs use the [pi](https://github.com/earendil-works/pi) coding agent.
+Before starting, [install Telos](install.md). Local runs use your pi provider
+credentials; a Telos Cloud login does not configure them.
 
-Create `REPORT_SPEC.md`:
+If pi is not already installed, install it and open it to authenticate with
+`/login`:
+
+```bash
+npm install -g @earendil-works/pi-coding-agent
+pi
+```
+
+Exit pi after authentication, then create `REPORT_SPEC.md`:
 
 ```markdown
 ---

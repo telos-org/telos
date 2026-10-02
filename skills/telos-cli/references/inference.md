@@ -1,96 +1,117 @@
 ---
 title: Models and inference
-description: Choose managed inference or a connected subscription for Cloud, and choose a pi model for local runs.
+description: Use the workspace default or select managed inference, a subscription, or a saved API-key connection for one deployment.
 group: Platform
 ---
 
 # Models and inference
 
-Cloud Goals and local runs select models at different points:
+Cloud Goals select managed inference, a connected subscription, or a saved API
+key when the session is created. Local runs select a provider and model from
+the local `pi` installation.
 
-| Execution | Selection |
-| --- | --- |
-| New Cloud session | Telos resolves a managed tier or connected subscription and retains it across revisions. |
-| Local run | The local `pi` installation receives a provider and model for that run. |
+## Inspect Cloud inference
 
-## Cloud Goals
-
-Telos provides two managed tiers:
-
-```bash
-telos apply SPEC.md --model telos/default --context CONTEXT
-telos apply SPEC.md --model telos/max --context CONTEXT
-```
-
-`telos/default` is the standard managed tier. `telos/max` selects the larger
-managed tier. Both are operated and billed by Telos, so they need no separate
-provider setup.
-
-Cloud can also use a ChatGPT or Grok subscription connected in the Telos app.
-Once connected, it appears in `telos config`:
+Add and manage connections under **Inference** in your workspace in the Telos
+app. Cloud supports ChatGPT and Grok subscriptions, plus API keys for OpenAI,
+Anthropic, OpenRouter, and xAI. The CLI uses saved connections; it does not
+accept provider secrets or start provider authorization.
 
 ```console
 $ telos config
-Config file     ~/.telos/config.yaml
-Endpoint        https://api.usetelos.ai
-Authentication  valid
-Context         personal
-Subscriptions
-  MyChatGPT  chatgpt-codex  alice@example.com  connected
+Config file      ~/.telos/config.yaml
+Endpoint         https://api.usetelos.ai
+Authentication   valid
+Context          personal
+Workspace model  telos/default
+Connections
+  MyChatGPT       Subscription  connected
+  Work Anthropic  API key       saved
 ```
 
-The first value is the user-chosen connection name. Combine it with a model as
-`<connection-name>/<model-name>`:
+API keys are labeled `saved`; that label does not claim their provider access
+has been tested. `TELOS_MODEL` and `TELOS_THINKING` overrides appear separately
+from the workspace default. `telos config --json` returns structured settings,
+including connection IDs and account details, without credentials. Config
+inspection reports authentication and lookup failures in its output, using
+an `error` string in JSON. Available settings still appear when a lookup fails.
+Config inspection is not an authentication success exit-code check.
+
+The CLI reads one shared connection list from Cloud. If a connection source is
+unavailable, config still shows available connections and reports the error.
+Named selection waits for a complete list, since the unavailable source could
+contain another connection with the same name. Managed selections continue to
+work. This CLI requires Cloud's shared inference-discovery API; an older Cloud
+must be updated before you can select a named connection. JSON connection
+account details use `account_label`.
+
+## Override one new deployment
+
+For a subscription or API key, use `<connection-name>/<model-id>`. Choose a
+model available to that connection under **Inference** in the Telos app, and
+quote names containing spaces:
 
 ```bash
-telos apply SPEC.md --model MyChatGPT/gpt-5.5 --context CONTEXT
+telos apply SPEC.md --context CONTEXT --model MyChatGPT/gpt-5.5
+telos apply SPEC.md --context CONTEXT --model "Work Anthropic/MODEL_ID"
 ```
 
-The selected connection must exist exactly once and report `connected`.
-Connection creation and browser authorization happen in the Telos app; the CLI
-uses connections already available to the selected context.
+Replace `MODEL_ID` with an available model ID. The CLI determines whether the
+named connection is a subscription or API key. Names are case-sensitive, and
+the selection must identify exactly one connection. If names make the
+selection ambiguous, rename the connections in the app. Model IDs containing
+`/`, such as OpenRouter's provider-prefixed IDs, are preserved. The CLI checks
+the connection name and subscription status before publishing a spec package.
+Cloud validates model access before creating the deployment. If Cloud rejects
+the model, `apply` reports the error; a local spec package may already have
+been published.
 
-### Cloud selection order
+To use managed inference:
 
-A Cloud inference selection is fixed when the session is created. New sessions
-use this selection order:
+```bash
+telos apply SPEC.md --context CONTEXT --model telos/default
+telos apply SPEC.md --context CONTEXT --model telos/max
+```
+
+Both managed tiers are operated and billed by Telos and need no provider
+connection. All these options also work with a published package:
+
+```bash
+telos apply @scope/package:version --context CONTEXT \
+  --model "Work Anthropic/MODEL_ID" --thinking high
+```
+
+## Use the workspace default
+
+Set the shared default under **Inference** in the Telos app. It applies to
+future CLI and web deployments in that workspace. `telos config` displays it;
+existing deployments retain their saved inference.
+
+New Cloud deployments use:
 
 1. `--model` on `telos apply`
 2. `TELOS_MODEL`
 3. the selected context's workspace inference preference
 4. Telos Default
 
-When neither `--model` nor `TELOS_MODEL` supplies a model, the CLI sends no
-selection. Cloud then uses the workspace preference, including a saved API-key
-default. Choose that preference under **Inference** in the Telos app. A
-workspace with no saved preference uses the standard managed tier.
-
-The explicit Cloud model forms are `telos/default`, `telos/max`, and
-`<connection-name>/<model-name>`.
-
-Use `--model` for one deployment, or `TELOS_MODEL` for a terminal session or
-script. An explicitly empty `--model` clears the environment override for that
-command and lets Cloud use the workspace preference:
+With no model override, the CLI omits the inference selection and Cloud resolves
+the workspace preference. An explicitly empty `--model` suppresses an
+environment override for that command:
 
 ```bash
-telos apply SPEC.md --model "" --context CONTEXT
+telos apply SPEC.md --context CONTEXT --model ""
 ```
 
-`telos config --model` is no longer supported. If your configuration file
-contains `default_model` from an older CLI version, Telos ignores it and removes
-it the next time the CLI saves that configuration. Your saved authentication
-and context remain available.
-
-Later revisions keep the session's existing inference configuration. Applying
-with `--session` rejects an effective model selection from `--model` or
-`TELOS_MODEL`. Omit the override, unset `TELOS_MODEL`, or pass `--model ""` to
-keep the existing selection when updating the spec.
+`telos config --model` is no longer supported. If an older configuration file
+contains `default_model`, Telos ignores it and removes it the next time the
+CLI saves that configuration. Saved authentication and context are retained.
 
 ## Thinking effort
 
-`--thinking` sets reasoning effort for both implementation and verification,
-not a turn timeout. It works with managed and subscription inference; supported
-levels depend on the model and provider.
+`--thinking` requests reasoning effort for both implementation and verification,
+not a turn timeout. It works with managed, subscription, and API-key inference.
+Supported levels and how the requested effort is applied depend on the model
+and provider.
 
 ```bash
 telos apply SPEC.md --context CONTEXT --thinking high
@@ -98,31 +119,44 @@ telos run REPORT_SPEC.md --workspace . --until 3 --thinking high
 ```
 
 `--thinking` overrides `TELOS_THINKING`. Otherwise, Cloud uses its service
-default (currently `medium`), while local runs default to `high`.
+default (currently `medium`), while local runs default to `high`. A receipt
+shows the requested effort; it does not claim a provider used that exact level.
 
-Cloud thinking is fixed at creation: `apply --session` rejects a non-empty
-override. Unset `TELOS_THINKING` or pass `--thinking ""` to keep the existing
-setting when updating the spec.
+## Update and inspect a deployment
+
+Inference is fixed when a Cloud session is created. Later spec revisions keep
+the saved connection, model, and thinking effort. `apply --session` rejects
+non-empty model or thinking overrides, including environment overrides:
+
+```bash
+telos apply SPEC.md --session SESSION_ID --context CONTEXT \
+  --model "" --thinking ""
+```
+
+The empty flags clear environment overrides for that invocation. They do not
+reset the existing deployment to the workspace preference.
+
+Deployment receipts and `telos describe` show the saved inference connection,
+model, and requested thinking effort when Cloud returns those fields:
+
+```bash
+telos describe SESSION_ID --context CONTEXT
+telos describe SESSION_ID --context CONTEXT --json
+```
 
 ## Local runs
 
-A `platform: local` spec runs through the `pi` coding agent installed on the
-same machine:
+A `platform: local` spec uses the local `pi` coding agent and its credentials:
 
 ```bash
-telos run REPORT_SPEC.md --workspace . --model openai-codex/gpt-5.5
+telos run REPORT_SPEC.md --workspace . --until 3 \
+  --model openai-codex/gpt-5.5
 ```
 
-Local model names use pi's `<provider>/<model-id>` form. Selection order is:
+Local names use Pi's `<provider>/<model-id>` form. Selection order is `--model`,
+then `TELOS_MODEL`, then `openai-codex/gpt-5.5`. Local credentials come from Pi;
+run `pi` and use `/login` to configure them.
 
-1. `--model` on `telos run`
-2. `TELOS_MODEL`
-3. `openai-codex/gpt-5.5`
-
-Inside a running Telos worker, `TELOS_MODEL` defaults to that worker's selected
-model, so nested runs use the same inference provider and model unless you
-override it. Hosted child tasks submitted without a model through the Sessions
-API use the deployment's selected model.
-
-Provider authentication comes from the local pi installation; run `pi` and use
-`/login` to configure it.
+Inside a Telos worker, `TELOS_MODEL` defaults to that worker's selected model.
+Nested runs inherit that model unless overridden. Hosted child tasks submitted
+without a model through the Sessions API use the deployment's selected model.
