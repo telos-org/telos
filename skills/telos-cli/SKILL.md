@@ -205,12 +205,19 @@ ancestry automatically; do not remove or edit its internal `.telos` state to
 bypass a stale-request or workspace check.
 
 A `merge_conflicts` error returns nonzero with structured conflicts and keeps
-the request unchanged. Resolve text markers in the normal SPEC or skill files,
-then rerun the same command. Preserve unrelated edits and inspect all three
-sources in JSON output before choosing a resolution. Nontext conflicts require
-an explicit `--resolve 'PATH=current'`, `--resolve 'PATH=proposed'`, or
-`--resolve 'PATH=local'` choice; repeat the flag for multiple paths. Do not choose
-a whole side merely to make the command succeed. Custom binary replacements
+the request unchanged. Resolve each text block in the normal SPEC or skill
+files, then rerun the same command. In editable blocks, current is the proposal
+and incoming is the deployed version, matching Web. Keep the intended side or
+combine both; preserve other blocks and clean changes. Original/base is omitted
+from these blocks but remains available in JSON for inspecting all three sources.
+Already-open drafts from older CLI versions keep their existing labels; use
+the labels in those files instead of assuming the new side order.
+Nontext conflicts require a whole-file `--resolve 'PATH=deployed'`,
+`--resolve 'PATH=proposed'`, or `--resolve 'PATH=local'` choice; repeat the flag
+for multiple paths. Do not choose
+a whole side merely to make the command succeed. The legacy flag value `current`
+still means deployed, as does JSON's `current` field; never interpret either as
+the editor's current/proposal side. Custom binary replacements
 are not supported as local resolutions; choose an exact source side.
 Add new skills or change Registry dependency references after saving the
 resolved update, using another ordinary `plan --request`; neither plan needs

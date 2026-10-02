@@ -185,37 +185,48 @@ writing a saved-plan reference. Text conflicts appear directly in your normal
 files:
 
 ```text
-  <<<<<<< Current deployment
-  Check health every 30 seconds.
-  ||||||| Original
-  Check health every 60 seconds.
-  =======
+  <<<<<<< Proposed version (current change)
   Check health every 15 seconds.
-  >>>>>>> Your proposed changes
+  =======
+  Check health every 30 seconds.
+  >>>>>>> Deployed version (incoming change)
 ```
 
-Edit those sections to the intended result, remove the markers, and rerun the
-same command:
+The order matches Web: **Current** is your proposal; **Incoming** is the deployed
+version. Editors that recognize conflict markers can offer **Accept Current**,
+**Accept Incoming**, and **Accept Both** for each block. You can also edit the
+text directly. Keeping both places the proposal before the deployed text;
+check that the combined result makes sense.
+
+Resolve each block separately, keeping clean changes elsewhere in the file.
+The original/base text is hidden from these blocks, but still used for the
+three-way merge. Remove the markers and rerun the same command:
 
 ```bash
 telos plan SPEC.md --request cr_42 --context @team-handle --out=updated.plan
 ```
+
+If you started resolving conflicts with an older CLI, your existing draft and
+its version labels stay unchanged. Follow the labels already in that file.
 
 For a binary asset, deletion, executable-mode change, or another conflict
 without editable text markers, select the intended result explicitly:
 
 ```bash
 telos plan SPEC.md --request cr_42 --context @team-handle \
-  --resolve 'skills/observability/assets/status.png=current' --out=updated.plan
+  --resolve 'skills/observability/assets/status.png=deployed' --out=updated.plan
 ```
 
-`current` keeps the deployment's file; `proposed` keeps your submitted file.
+`deployed` keeps the deployment's whole file; `proposed` keeps your submitted file.
 Either choice also preserves a deletion when that side has no file. `local`
 uses your edited working file or deliberate deletion. Repeat `--resolve` for
 multiple paths, using the paths printed in the conflict instructions. Binary
-and required-skill metadata conflicts support the exact current or proposed side;
+and required-skill metadata conflicts support the exact deployed or proposed side;
 custom local binary replacements are not supported. Ordinary text conflicts
-need no flag or manually edited bookkeeping file.
+are resolved per block in the file; whole-file side flags are rejected for them.
+The legacy `--resolve 'PATH=current'` still means **deployed**, so existing
+commands keep their meaning. Prefer `deployed` to avoid confusing it with your
+editor's Current label.
 
 During conflict resolution, you can edit existing skills, remove them, change
 their required setting, and add text resources. To add a new skill or change a
@@ -236,9 +247,10 @@ command stops and preserves your files. Keep your draft, check out the current
 request, and transfer your intended edits after comparing the new inputs.
 Telos will not silently apply an old resolution to different source versions.
 With `--json`, conflict details include source versions, paths, kinds, the
-mapping to your local file paths, and
-machine-readable errors with a nonzero exit status. The saved-plan reference
-format remains version 2.
+mapping to your local file paths, and machine-readable errors with a nonzero
+exit status. These raw Cloud fields keep their existing meanings: `base` is the
+original, `current` is deployed, and `proposed` is your proposal. The saved-plan
+reference format remains version 2.
 
 ## Apply a saved proposal
 

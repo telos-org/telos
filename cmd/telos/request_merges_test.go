@@ -82,9 +82,11 @@ func TestRequestNonTextConflictsRequireExplicitChoices(t *testing.T) {
 			if !errors.As(err, &conflict) || conflict.code != "merge_conflicts" {
 				t.Fatalf("%s silently resolved: %v", kind, err)
 			}
-			options, files, err := requestMergeEdits(&workspace, []requestConflictChoice{{"SPEC.md", "current"}})
-			if err != nil || options.Resolutions[0].Choice != "current" || !sameMergeFile(files["SPEC.md"], workspace.Merge.Files[0].Current) {
-				t.Fatalf("options=%+v err=%v", options, err)
+			for _, choice := range []string{"deployed", "current"} {
+				options, files, err := requestMergeEdits(&workspace, []requestConflictChoice{{"SPEC.md", choice}})
+				if err != nil || options.Resolutions[0].Choice != "current" || !sameMergeFile(files["SPEC.md"], workspace.Merge.Files[0].Current) {
+					t.Fatalf("choice=%s options=%+v err=%v", choice, options, err)
+				}
 			}
 		})
 	}
@@ -228,7 +230,7 @@ func TestAutomaticRequestPlanCleanAndConflicted(t *testing.T) {
 					t.Fatalf("err=%v resolves=%d", runErr, resolves)
 				}
 				data, _ := os.ReadFile(specPath)
-				if !strings.Contains(string(data), "<<<<<<< Current deployment") {
+				if !strings.Contains(string(data), "<<<<<<< Proposed version (current change)") || strings.Contains(string(data), "||||||| Original") {
 					t.Fatal("no local conflict markers")
 				}
 				_ = os.WriteFile(specPath, []byte(finalSpec), 0o600)
@@ -292,6 +294,9 @@ func TestConflictFlagAcceptsPathsNotWorkspaceDirectories(t *testing.T) {
 	}
 	if err := flags.Set("skills/check/icon.png=proposed"); err == nil {
 		t.Fatal("duplicate choices accepted")
+	}
+	if err := flags.Set("skills/check/other.png=deployed"); err != nil {
+		t.Fatal(err)
 	}
 }
 func TestRequestUnknownAncestryJSONExit(t *testing.T) {

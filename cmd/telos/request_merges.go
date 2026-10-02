@@ -21,8 +21,8 @@ func (c *requestConflictChoices) Set(value string) error {
 	if ok {
 		name, choice = value[:index], value[index+1:]
 	}
-	if !ok || !validMergePath(name) || (choice != "current" && choice != "proposed" && choice != "local") {
-		return fmt.Errorf("use --resolve PATH=current|proposed|local for a reported conflict")
+	if !ok || !validMergePath(name) || (choice != "deployed" && choice != "current" && choice != "proposed" && choice != "local") {
+		return fmt.Errorf("use --resolve PATH=deployed|proposed|local for a reported non-text conflict")
 	}
 	for _, previous := range *c {
 		if previous.Path == name {
@@ -68,19 +68,28 @@ func reportRequestPlanError(err error, jsonOut bool) {
 
 func requestMergeConflictError(workspace *requestMergeWorkspace, unresolved []cloud.MergeConflict) error {
 	lines := []string{"resolve conflicts, then rerun the same telos plan command:"}
+	textConflict, fileConflict := false, false
 	for _, conflict := range unresolved {
 		local := workspace.localPath(conflict.Path)
 		if conflict.Kind == "content" {
+			textConflict = true
 			lines = append(lines, "  "+local+" (edit the conflict markers)")
 		} else {
-			options := "current|proposed|local"
+			fileConflict = true
+			options := "deployed|proposed|local"
 			if conflict.Kind == "binary" || conflict.Kind == "metadata" {
-				options = "current|proposed"
+				options = "deployed|proposed"
 			}
 			lines = append(lines, fmt.Sprintf("  %s (%s): --resolve '%s=%s'", local, conflict.Kind, conflict.Path, options))
 		}
 	}
-	lines = append(lines, "The request has not been updated. --resolve selects the current deployment, your uploaded proposal, or an explicitly edited local file/deletion. Binary conflicts require current or proposed.")
+	if textConflict {
+		lines = append(lines, "Resolve each text block in your editor, using the version labels shown in the file.")
+	}
+	if fileConflict {
+		lines = append(lines, "--resolve selects a whole file or deletion: deployed, proposed, or your edited local version.")
+	}
+	lines = append(lines, "The request has not been updated.")
 	paths := map[string]string{}
 	for _, file := range workspace.Merge.Files {
 		paths[file.Path] = workspace.localPath(file.Path)
@@ -97,10 +106,18 @@ func requestMergeEdits(workspace *requestMergeWorkspace, choices []requestConfli
 		conflicts[conflict.Path] = conflict
 	}
 	for _, choice := range choices {
-		if _, ok := conflicts[choice.Path]; !ok || selected[choice.Path] != "" {
+		conflict, ok := conflicts[choice.Path]
+		if !ok || selected[choice.Path] != "" {
 			return nil, nil, fmt.Errorf("%s is not an unresolved conflict", choice.Path)
 		}
+		if conflict.Kind == "content" && choice.Choice != "local" {
+			return nil, nil, fmt.Errorf("%s has text conflicts; resolve each block in the file and rerun without --resolve for this path", choice.Path)
+		}
 		selected[choice.Path] = choice.Choice
+		// Preserve the legacy current=deployed meaning; editor current means proposed.
+		if choice.Choice == "deployed" {
+			selected[choice.Path] = "current"
+		}
 	}
 	files, err := workspace.readLocalFiles()
 	if err != nil {
@@ -128,10 +145,10 @@ func requestMergeEdits(workspace *requestMergeWorkspace, choices []requestConfli
 				file = original.Proposed
 			case "local":
 				if original.Kind == "skill_metadata" {
-					return nil, nil, fmt.Errorf("%s is skill requirement metadata; choose current or proposed", original.Path)
+					return nil, nil, fmt.Errorf("%s is skill requirement metadata; choose deployed or proposed", original.Path)
 				}
 				if mergeFileBinary(original.Base) || mergeFileBinary(original.Current) || mergeFileBinary(original.Proposed) {
-					return nil, nil, fmt.Errorf("%s is binary; resolve it with --resolve '%s=current' or --resolve '%s=proposed'", original.Path, original.Path, original.Path)
+					return nil, nil, fmt.Errorf("%s is binary; resolve it with --resolve '%s=deployed' or --resolve '%s=proposed'", original.Path, original.Path, original.Path)
 				}
 				resolution.Choice = "merged"
 				if file != nil {
@@ -139,6 +156,9 @@ func requestMergeEdits(workspace *requestMergeWorkspace, choices []requestConfli
 				}
 			}
 			options.Resolutions = append(options.Resolutions, resolution)
+		}
+		if file != nil && file.Content != nil && containsMergeMarkers(*file.Content) {
+			return nil, nil, fmt.Errorf("%s still contains conflict markers; resolve them before rerunning", original.Path)
 		}
 		results[original.Path] = file
 		if choice == "current" || choice == "proposed" {
@@ -170,6 +190,9 @@ func requestMergeEdits(workspace *requestMergeWorkspace, choices []requestConfli
 		if mergeFileBinary(file) {
 			return nil, nil, fmt.Errorf("%s is a new binary file; add it in a later request update", name)
 		}
+		if file.Content != nil && containsMergeMarkers(*file.Content) {
+			return nil, nil, fmt.Errorf("%s still contains conflict markers; resolve them before rerunning", name)
+		}
 		results[name] = file
 		options.Files = append(options.Files, cloud.MergeFileEdit{Path: name, Content: file.Content, Mode: file.Mode})
 	}
@@ -177,14 +200,6 @@ func requestMergeEdits(workspace *requestMergeWorkspace, choices []requestConfli
 	return options, results, nil
 }
 
-func containsMergeMarkers(value string) bool {
-	for _, line := range strings.Split(value, "\n") {
-		if strings.HasPrefix(line, "<<<<<<< Current deployment") || strings.HasPrefix(line, "||||||| Original") || strings.HasPrefix(line, ">>>>>>> Your proposed changes") {
-			return true
-		}
-	}
-	return false
-}
 func mergeFileBinary(file *cloud.MergeFile) bool { return file != nil && file.Content == nil }
 func sameMergeFile(a, b *cloud.MergeFile) bool {
 	if a == nil || b == nil {

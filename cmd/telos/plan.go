@@ -42,7 +42,7 @@ func cmdPlan(args []string) {
 	fs := newCommandFlagSet("plan", "telos plan SPEC.md [--out=FILE] [flags]")
 	requestID := fs.String("request", "", "Update an existing unconfirmed Change Request")
 	var resolutions requestConflictChoices
-	fs.Var(&resolutions, "resolve", "Resolve a non-text conflict: PATH=current|proposed|local (repeatable; requires --request)")
+	fs.Var(&resolutions, "resolve", "Resolve a non-text conflict by whole file: PATH=deployed|proposed|local (repeatable; requires --request)")
 	sessionID := fs.String("session", "", "Managed session ID to compare")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	output := fs.String("out", "", "Save a Cloud Change Request and write its reference to this file")

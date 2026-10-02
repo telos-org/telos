@@ -547,6 +547,21 @@ func (w *requestMergeWorkspace) materialize(files map[string]*cloud.MergeFile, i
 	if err != nil {
 		return err
 	}
+	if initial {
+		for _, conflict := range w.Merge.Conflicts {
+			file := targets[w.localPath(conflict.Path)]
+			if conflict.Kind != "content" || file == nil || file.Content == nil {
+				continue
+			}
+			content, err := requestConflictText(*file.Content)
+			if err != nil {
+				return fmt.Errorf("%s: %w", conflict.Path, err)
+			}
+			copy := *file
+			copy.Content = &content
+			targets[w.localPath(conflict.Path)] = &copy
+		}
+	}
 	collisions := map[string]bool{}
 	for name, file := range targets {
 		if file == nil {
