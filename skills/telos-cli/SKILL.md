@@ -9,8 +9,8 @@ metadata:
 
 # Telos CLI
 
-Use this skill to operate Telos on the user's behalf. Its linked references
-are the customer-facing documentation and ship with the same CLI release.
+This skill bundle is the canonical Telos CLI documentation for users and agents.
+It ships with every release and supplies the guide at `usetelos.ai/docs`.
 
 Telos works from a `SPEC.md`: an authored contract for an observable outcome
 and the evidence that proves it. `apply` gives that outcome a persistent Cloud
