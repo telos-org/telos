@@ -11,12 +11,13 @@ Start with the command that can distinguish the observed symptom:
 | Symptom | First check | Decisive evidence |
 | --- | --- | --- |
 | `telos` is unavailable | `command -v telos` | Binary path or missing installation |
-| A local run will not start | `telos plan SPEC.md` | Platform or spec validation error |
+| A local run will not start | `telos plan SPEC.md`, then `git status --short` in a Git source | Invalid spec, dirty source, or missing local pi setup |
 | Cloud authentication or target is wrong | `telos config` | Authentication and active context |
 | An agent or CI job waits for browser login | Check the job's authentication setup against [token authentication](cloud.md#token-authentication-for-agents-and-ci) | A supplied `TELOS_AUTH_TOKEN` lets the job run Cloud commands directly |
 | A spec is rejected | `telos plan SPEC.md` | First validation error |
 | A skill publish is rejected | Read the original `push` error and inspect the local frontmatter | Invalid bundle input or immutable-version conflict |
 | A deployment is not `ready` | `telos describe SESSION_ID --context CONTEXT --json` | Status, digest, and reason |
+| A Cloud update is rejected | Read the original `apply` error | Inference override, missing snapshot, or another update conflict |
 | A nested run is rejected | `telos plan CHILD_SPEC.md` plus the original run error | Child platform/spec error or unavailable parent capability |
 
 ## Command not found
@@ -31,6 +32,13 @@ installer when the binary is absent or not the intended release.
 run requires `platform: local`, `pi` on `PATH`, and an authenticated provider.
 `telos run --help` shows the model, thinking, cycle, time, and cost flags
 supported by the installed release.
+
+A successful plan does not validate the source checkout or provider login.
+If the run reports a dirty Git source, include the intended changes in a
+commit or select a clean checkout containing the source you want to run.
+A newly created spec inside the repository also counts as an untracked file;
+you can keep it outside the source checkout and pass its path instead.
+[Bounded runs](bounded-runs.md) explains source preparation and result retrieval.
 
 ## Cloud authentication or context is wrong
 
@@ -63,6 +71,33 @@ The lifecycle's [compatibility note](lifecycle.md#compatibility-note)
 explains why some older deployments lack digest-bound status provenance.
 Regardless of provenance, verify the live behavior promised by every service
 spec.
+
+## Cloud update is rejected
+
+An update keeps the session's inference settings. If the error reports a model
+or thinking override, clear environment overrides for that invocation:
+
+```bash
+telos apply SPEC.md --session SESSION_ID --context CONTEXT \
+  --model "" --thinking ""
+```
+
+These flags preserve the existing selection. See
+[Models and inference](inference.md#update-and-inspect-a-deployment).
+
+If the error reports a missing snapshot, the current revision continues
+serving. Continuing without that snapshot means you cannot restore its exact
+workspace and runtime state. To accept that loss and proceed, retry the same
+update with `--force`:
+
+```bash
+telos apply SPEC.md --session SESSION_ID --context CONTEXT --force
+```
+
+`--force` only bypasses the missing-snapshot gate for an existing Cloud session.
+Active operations, authorization, runtime availability, and stale-revision
+protection still apply. For any other rejection, follow the original error
+before retrying.
 
 ## Nested run is rejected
 

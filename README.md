@@ -23,8 +23,10 @@ telos login
 
 The installer supports macOS and Linux on amd64 and arm64.
 
-`telos login` signs in to Telos Cloud and is required when `telos apply` targets
-Cloud.
+Cloud deployments require authentication. Use `telos login` interactively, or
+supply `TELOS_AUTH_TOKEN` for agents and CI. An existing valid login or token
+needs no additional login step; see
+[Cloud authentication](skills/telos-cli/references/cloud.md#authenticate).
 
 ## Get started
 

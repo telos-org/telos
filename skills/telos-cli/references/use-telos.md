@@ -95,7 +95,8 @@ Hash      799e5c31172afb26
 
 Confirm the target and context before continuing. The first plan has no
 deployed revision to compare, so it shows the Goal identity, namespace, and
-content hash. Applying it creates a Cloud deployment and may incur charges.
+content hash. Applying this plan creates a new persistent Goal and may incur
+inference charges. Continue when that is the action you intend.
 
 ## Apply it
 
@@ -213,25 +214,8 @@ The Goal, session, deployment, and history stay the same; only the immutable
 revision changes. Observe the new digest through `working` to `ready`, then
 exercise the updated API behavior.
 
-### Deploy without a restorable snapshot
-
-If the current revision has not been snapshotted, you will get a warning saying
-that deploying now means you won’t be able to restore its exact workspace and
-runtime state. To continue anyway, retry the update with `--force`:
-
-```bash
-telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal --force
-```
-
-This bypass applies only to the missing-snapshot gate. Active operations,
-authorization, runtime availability, and stale-revision protection still
-apply. Without `--force`, the update remains rejected and the current revision
-continues serving.
-
-For another contract, continue with [Write a SPEC.md](goals.md). Use
-[Bounded runs](bounded-runs.md) for local work and
-[Troubleshooting](troubleshooting.md) when observed state diverges from the
-contract.
+If the update is rejected, see
+[Troubleshooting](troubleshooting.md#cloud-update-is-rejected) before retrying.
 
 ## Resume later
 
@@ -246,9 +230,9 @@ Continue revisions on that session so its identity and history remain joined.
 
 ## Delete the Goal
 
-Cloud deletion is irreversible. After the user approves the exact session,
-context, and loss of the environment, application and PVC data, routes,
-attachments, deployment record, and history, run:
+Cloud deletion is irreversible: it removes the environment, application and
+PVC data, routes, attachments, deployment record, and history. Confirm the
+session and context identify the Goal you intend to delete, then run:
 
 ```bash
 telos delete SESSION_ID --context personal
