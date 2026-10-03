@@ -49,15 +49,9 @@ that prove it.
 Git repository—or snapshots a non-Git directory—into an isolated session
 workspace. The run does not edit the source checkout directly.
 
-For Git sources, the worktree must have no tracked or untracked changes apart
-from Telos's own `.telos` marker. Git submodules and Git LFS are not included in
-the isolated workspace; Telos rejects repositories that use either rather than
-starting from incomplete source.
-
-This includes the `REPORT_SPEC.md` you just created. If you keep the spec in
-the source repository, commit it with the intended source changes before
-running. Alternatively, save the spec outside the checkout and pass that path
-to both `plan` and `run`; the source checkout must still be clean. Relative
+For Git sources, the worktree must be clean, including the `REPORT_SPEC.md`
+you just created. Commit the spec with the intended source changes, or save
+it outside the checkout and pass that path to both `plan` and `run`. Relative
 skill imports resolve from the spec's directory, not from `--workspace`.
 
 Check the intended Git source with:
@@ -66,17 +60,10 @@ Check the intended Git source with:
 git status --short
 ```
 
-By default, the first local run creates `.telos` in the source checkout as a
-symlink to the external session store. The marker lets later `list`, `describe`,
-`logs`, and `delete` commands find sessions for that checkout. It is not the
-active workspace and is excluded from cleanliness checks and snapshots. Setting
-`TELOS_SESSION_DIR` selects a session store explicitly and suppresses the
-marker.
-
 ## Preview and run
 
 From the prepared source checkout, validate the contract, then run it for at
-most three review cycles with a `$20` cost ceiling:
+most three review cycles with a `$20` cost threshold:
 
 ```bash
 telos plan REPORT_SPEC.md
@@ -87,9 +74,10 @@ telos run REPORT_SPEC.md --workspace . --until 3 --max-cost-usd 20
 pi can authenticate. Complete the setup above before starting the run.
 
 `--until` also accepts a duration such as `30m`. A top-level local run has a
-default `$20` cost ceiling. An explicit `--max-cost-usd` takes precedence over
-`TELOS_MAX_COST_USD`, which takes precedence over that default. Choose bounds
-that give the task room to finish while keeping its stopping condition
+default `$20` cost threshold. Cost is checked between agent turns, so a turn
+can take the total above the threshold. An explicit `--max-cost-usd` takes
+precedence over `TELOS_MAX_COST_USD`, which takes precedence over that default.
+Choose bounds that give the task room to finish while keeping the stopping condition
 explicit. Reaching a bound stops further work; it does not prove that your
 acceptance criteria passed.
 
@@ -103,10 +91,11 @@ telos logs SESSION_ID
 ```
 
 Inspect the status and verification evidence before treating the task as
-complete. `telos describe SESSION_ID --json` exposes a saved workspace
-checkpoint as `specs[0].workspace_path` when one is available. The path alone
-does not prove acceptance. Replace `WORKSPACE_PATH` below with that value and
-extract the `tar.gz` into a separate result directory:
+complete. Once the run has finished, use `telos describe SESSION_ID --json`
+and confirm `specs[0].workspace_exists` is `true`. Replace `WORKSPACE_PATH`
+below with `specs[0].workspace_path` and extract the checkpoint into a separate
+result directory. The path is assigned before the archive is created, so its
+presence alone does not mean a checkpoint is available.
 
 ```bash
 mkdir -p telos-result
@@ -122,3 +111,15 @@ A bounded session can complete, fail, stop at its bound, or become stale. It
 does not create or update a persistent Cloud Goal. [Models and inference](inference.md)
 explains local `pi` selection. When a running Telos agent creates this session
 as a child, the additional lineage rules are in [Nested Goals](nested-goals.md).
+
+## Source and session storage details
+
+Telos rejects Git sources that use submodules or Git LFS because the isolated
+workspace cannot include them. The cleanliness check excludes Telos's own
+`.telos` marker.
+
+By default, the first local run creates `.telos` in the source checkout as a
+symlink to the external session store. It lets later `list`, `describe`,
+`logs`, and `delete` commands find sessions for that checkout. The marker is
+excluded from source snapshots. Set `TELOS_SESSION_DIR` to select a session
+store explicitly and suppress the marker.

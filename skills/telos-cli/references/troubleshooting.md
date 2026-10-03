@@ -17,6 +17,7 @@ Start with the command that can distinguish the observed symptom:
 | A spec is rejected | `telos plan SPEC.md` | First validation error |
 | A skill publish is rejected | Read the original `push` error and inspect the local frontmatter | Invalid bundle input or immutable-version conflict |
 | A deployment is not `ready` | `telos describe SESSION_ID --context CONTEXT --json` | Status, digest, and reason |
+| A Cloud update is rejected | Read the original `apply` error | Inference override, missing snapshot, or another update conflict |
 | A nested run is rejected | `telos plan CHILD_SPEC.md` plus the original run error | Child platform/spec error or unavailable parent capability |
 
 ## Command not found
@@ -70,6 +71,33 @@ The lifecycle's [compatibility note](lifecycle.md#compatibility-note)
 explains why some older deployments lack digest-bound status provenance.
 Regardless of provenance, verify the live behavior promised by every service
 spec.
+
+## Cloud update is rejected
+
+An update keeps the session's inference settings. If the error reports a model
+or thinking override, clear environment overrides for that invocation:
+
+```bash
+telos apply SPEC.md --session SESSION_ID --context CONTEXT \
+  --model "" --thinking ""
+```
+
+These flags preserve the existing selection. See
+[Models and inference](inference.md#update-and-inspect-a-deployment).
+
+If the error reports a missing snapshot, the current revision continues
+serving. Continuing without that snapshot means you cannot restore its exact
+workspace and runtime state. To accept that loss and proceed, retry the same
+update with `--force`:
+
+```bash
+telos apply SPEC.md --session SESSION_ID --context CONTEXT --force
+```
+
+`--force` only bypasses the missing-snapshot gate for an existing Cloud session.
+Active operations, authorization, runtime availability, and stale-revision
+protection still apply. For any other rejection, follow the original error
+before retrying.
 
 ## Nested run is rejected
 

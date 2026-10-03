@@ -28,28 +28,6 @@ telos --version
 telos <command> --help
 ```
 
-For installation or a requested CLI update, read
-[Install Telos](references/install.md). `telos update [VERSION]` replaces only
-the CLI, not `telosd`, installed skills, or deployed runtimes. For Cloud work,
-check authentication and context without displaying credentials:
-
-```bash
-telos config
-```
-
-Reuse a valid saved login or a supplied `TELOS_AUTH_TOKEN`. Telos already
-supports non-interactive authentication for agents and CI through this
-environment variable; `TELOS_TOKEN` is not a supported alias. Set the intended
-context with `TELOS_CONTEXT` or a command's `--context` flag.
-
-Run Cloud commands directly when a token is supplied. `telos login` checks
-saved credentials and may start browser approval even when `TELOS_AUTH_TOKEN`
-is set. Use it when credentials are needed and a person can approve the login.
-For an unattended job with missing or rejected credentials, report that it
-needs a valid token instead of starting a browser login. Read
-[Cloud authentication](references/cloud.md#authenticate) for token setup,
-environment precedence, and a CI example.
-
 Use `telos apply` as the primary interface. Use `telos run` primarily for
 harness development, benchmarking, and bounded child work inside a Telos
 session. Choose the lifecycle that matches the requested outcome:
@@ -59,13 +37,9 @@ session. Choose the lifecycle that matches the requested outcome:
 | Persistent Goal | `telos apply` | One Cloud session and deployment that evolve across revisions. |
 | Bounded run | `telos run` | A local session that stops at its cycle, time, or cost bound. |
 
-For model selection and `--thinking` on `apply` or `run`, read
-[Models and inference](references/inference.md).
-
-For Cloud, use `telos config` to inspect saved connections and the workspace
-default. Select a saved subscription or API-key connection with the existing
-`--model CONNECTION/MODEL` form. Manage connections, available models, and
-shared defaults under **Inference** in the Telos app.
+If the CLI is missing or an update is requested, read
+[Install Telos](references/install.md). For model selection or `--thinking`,
+read [Models and inference](references/inference.md).
 
 Before drafting either kind of spec, read [Write a SPEC.md](references/goals.md).
 When authoring or importing skills and rubrics, also read
@@ -90,9 +64,20 @@ ambiguous.
 
 ## Apply a persistent Goal
 
-Before authoring a Cloud Goal, read [Telos Cloud](references/cloud.md) and
-confirm that its delivery, storage, and external-service needs fit the managed
-runtime.
+Check Cloud authentication, context, and inference defaults without displaying
+credentials:
+
+```bash
+telos config
+```
+
+Reuse a valid saved login or supplied `TELOS_AUTH_TOKEN` and run Cloud commands
+directly. If authentication is missing, read
+[Cloud authentication](references/cloud.md#authenticate). Use `telos login`
+only when a person can approve it; an unattended job needs a valid token.
+
+Read [Telos Cloud](references/cloud.md) to confirm that the Goal's delivery,
+storage, and external-service needs fit the managed runtime.
 
 1. Write the smallest `platform: cloud` spec that states the outcome,
    meaningful constraints, and observable acceptance evidence.
@@ -134,21 +119,22 @@ telos plan SPEC.md --session SESSION_ID --context CONTEXT
 telos apply SPEC.md --session SESSION_ID --context CONTEXT
 ```
 
-Updates retain the session's inference settings. If an inherited `TELOS_MODEL`
-or `TELOS_THINKING` makes an update fail, use the guidance in
-[Models and inference](references/inference.md) to omit those overrides while
-keeping the same session.
+Updates retain the session's inference settings.
 
-A healthy revision may still be waiting for its restorable snapshot. If that
-snapshot gate rejects the update, do not bypass it silently. Tell the user:
+[Use Telos](references/use-telos.md) follows this loop with one service.
+[The Goal lifecycle](references/lifecycle.md) explains the reported states,
+revision evidence, and deletion semantics.
 
-> The current revision has not been snapshotted.
->
-> Deploying now means you won’t be able to restore its exact workspace and
-> runtime state.
+### If an update is rejected
 
-Obtain explicit approval for that loss, then retry the same Cloud session
-update with `--force`:
+If an inherited `TELOS_MODEL` or `TELOS_THINKING` makes an update fail, omit
+those overrides as described in [Models and inference](references/inference.md)
+while keeping the same session.
+
+If the missing-snapshot gate rejects an update, explain that continuing loses
+the ability to restore the current revision's exact workspace and runtime
+state. Obtain explicit approval for that loss before retrying the same Cloud
+session with `--force`:
 
 ```bash
 telos apply SPEC.md --session SESSION_ID --context CONTEXT --force
@@ -157,10 +143,6 @@ telos apply SPEC.md --session SESSION_ID --context CONTEXT --force
 `--force` is only valid for an existing Cloud session update. It bypasses this
 snapshot gate only; it does not bypass authorization, active operations,
 runtime availability, or stale-revision protection.
-
-[Use Telos](references/use-telos.md) follows this loop with one service.
-[The Goal lifecycle](references/lifecycle.md) explains the reported states,
-revision evidence, and deletion semantics.
 
 ## Run bounded work
 
@@ -209,6 +191,7 @@ published, updated, or deleted.
 - [Use Telos](references/use-telos.md) — one persistent Goal from first plan through revision
 - [Write a SPEC.md](references/goals.md) — contract shape and expressive boundary
 - [The Goal lifecycle](references/lifecycle.md) — identity, states, revisions, and evidence
+- [Inspect logs](references/logs.md) — progress, history, and detailed evidence
 - [Glossary](references/glossary.md) — canonical Telos product vocabulary
 - [Bounded runs](references/bounded-runs.md) — local work with an explicit stopping bound
 - [Telos Cloud](references/cloud.md) — browser and token authentication, CI, contexts, and managed-runtime preflight
