@@ -14,21 +14,21 @@ import (
 	"time"
 )
 
-type readReviewBody struct {
+type readRetryBody struct {
 	io.Reader
 	closed bool
 }
 
-func (body *readReviewBody) Close() error {
+func (body *readRetryBody) Close() error {
 	body.closed = true
 	return nil
 }
 
-type readReviewTruncatedBody struct {
+type readRetryTruncatedBody struct {
 	data string
 }
 
-func (body *readReviewTruncatedBody) Read(p []byte) (int, error) {
+func (body *readRetryTruncatedBody) Read(p []byte) (int, error) {
 	n := copy(p, body.data)
 	body.data = body.data[n:]
 	if len(body.data) > 0 {
@@ -37,11 +37,11 @@ func (body *readReviewTruncatedBody) Read(p []byte) (int, error) {
 	return n, io.ErrUnexpectedEOF
 }
 
-type readReviewStalledBody struct {
+type readRetryStalledBody struct {
 	ctx context.Context
 }
 
-func (body readReviewStalledBody) Read([]byte) (int, error) {
+func (body readRetryStalledBody) Read([]byte) (int, error) {
 	<-body.ctx.Done()
 	return 0, body.ctx.Err()
 }
@@ -60,7 +60,7 @@ func TestMonitoringReadCompleteMalformedJSONIsTerminal(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				attempts := 0
-				body := &readReviewBody{Reader: strings.NewReader(tt.body)}
+				body := &readRetryBody{Reader: strings.NewReader(tt.body)}
 				client := NewClient("https://api.example.test", "test-token")
 				client.HTTP.Transport = readRetryTransport(func(req *http.Request) (*http.Response, error) {
 					attempts++
@@ -98,10 +98,10 @@ func TestMonitoringReadCompleteJSONInTruncatedHTTPBodyRetries(t *testing.T) {
 		attempts := 0
 		// A JSON decoder can accept this first object before noticing that the
 		// HTTP response is incomplete. No fields from it may survive the retry.
-		firstBody := &readReviewBody{Reader: &readReviewTruncatedBody{
+		firstBody := &readRetryBody{Reader: &readRetryTruncatedBody{
 			data: `{"id":"first","name":"discarded","failure_reason":"stale"}`,
 		}}
-		secondBody := &readReviewBody{Reader: strings.NewReader(`{"id":"second"}`)}
+		secondBody := &readRetryBody{Reader: strings.NewReader(`{"id":"second"}`)}
 		client := NewClient("https://api.example.test", "test-token")
 		client.HTTP.Transport = readRetryTransport(func(req *http.Request) (*http.Response, error) {
 			attempts++
@@ -135,12 +135,12 @@ func TestMonitoringReadTerminalStatusSurvivesErrorBodyDeadline(t *testing.T) {
 		t.Run(http.StatusText(status), func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				attempts := 0
-				var body *readReviewBody
+				var body *readRetryBody
 				client := NewClient("https://api.example.test", "test-token")
 				client.HTTP.Timeout = time.Second
 				client.HTTP.Transport = readRetryTransport(func(req *http.Request) (*http.Response, error) {
 					attempts++
-					body = &readReviewBody{Reader: readReviewStalledBody{ctx: req.Context()}}
+					body = &readRetryBody{Reader: readRetryStalledBody{ctx: req.Context()}}
 					return &http.Response{StatusCode: status, Body: body}, nil
 				})
 

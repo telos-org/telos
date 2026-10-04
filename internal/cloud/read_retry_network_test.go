@@ -17,7 +17,7 @@ import (
 // These tests use real HTTP connections independently of the retry helper.
 // Disable connection reuse so net/http's own stale-connection retry cannot
 // conceal missing application retries or change the observed attempt count.
-func TestAdversarialCloudReadsRecoverOnWire(t *testing.T) {
+func TestNetworkCloudReadsRecoverOnWire(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
@@ -58,18 +58,24 @@ func TestAdversarialCloudReadsRecoverOnWire(t *testing.T) {
 			},
 		},
 		{
-			name:     "log page",
+			name:     "log page with cursors",
 			path:     "/api/deployments/sess%2Fwith%20space%3Fx/logs",
-			query:    "tail=2",
+			query:    "before_cp=0&before_rt=125&tail=2",
 			partial:  `{"events":[{"event":"discard-me","event_id":"stale","event_seq":100},`,
-			complete: `{"events":[{"event":"agent_progress","event_id":"evt_101","event_seq":101,"data":{"text":"first"},"extension":"preserve"},{"event":"agent_progress","event_id":"evt_102","event_seq":102,"data":{"text":"second"}}]}`,
+			complete: `{"events":[{"event":"agent_progress","event_id":"evt_101","event_seq":101,"data":{"text":"first"},"extension":"preserve"},{"event":"agent_progress","event_id":"evt_102","event_seq":102,"data":{"text":"second"}}],"cursors":{"rt":101,"cp":0,"session":"runtime-session"}}`,
 			check: func(t *testing.T, client *Client) {
-				page, err := client.GetSessionLogPage("sess/with space?x", 2)
+				runtime, control := int64(125), int64(0)
+				page, err := client.GetSessionLogPageBefore("sess/with space?x", 2, &runtime, &control)
 				if err != nil {
 					t.Fatal(err)
 				}
 				if len(page.Events) != 2 || len(page.RawEvents) != 2 {
 					t.Fatalf("recovered page lost or duplicated events: %+v", page)
+				}
+				if page.Cursors == nil || page.Cursors.Runtime == nil || *page.Cursors.Runtime != 101 ||
+					page.Cursors.Control == nil || *page.Cursors.Control != 0 ||
+					!page.Cursors.SessionKnown || page.Cursors.Session == nil || *page.Cursors.Session != "runtime-session" {
+					t.Fatalf("retry lost pagination cursors: %+v", page.Cursors)
 				}
 				for index, event := range page.Events {
 					wantSequence := int64(101 + index)
@@ -112,16 +118,16 @@ func TestAdversarialCloudReadsRecoverOnWire(t *testing.T) {
 				headersObserved := make(chan struct{})
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					attempt := attempts.Add(1)
-					assertAdversarialRequest(t, r, http.MethodGet, "/proxy"+test.path, test.query)
+					assertNetworkRequest(t, r, http.MethodGet, "/proxy"+test.path, test.query)
 					if attempt == 1 {
-						breakAdversarialResponse(t, w, failure, http.StatusOK, test.partial, headersObserved)
+						breakNetworkResponse(t, w, failure, http.StatusOK, test.partial, headersObserved)
 						return
 					}
 					w.Header().Set("Content-Type", "application/json")
 					_, _ = io.WriteString(w, test.complete)
 				}))
 				t.Cleanup(server.Close)
-				client := newAdversarialClient(t, server.URL+"/proxy", headersObserved)
+				client := newNetworkClient(t, server.URL+"/proxy", headersObserved)
 				test.check(t, client)
 				if got := attempts.Load(); got != 2 {
 					t.Fatalf("server received %d requests after one recoverable failure, want 2", got)
@@ -131,18 +137,18 @@ func TestAdversarialCloudReadsRecoverOnWire(t *testing.T) {
 	}
 }
 
-func TestAdversarialCloudReadExhaustionReturnsNoPartialLogs(t *testing.T) {
+func TestNetworkCloudReadExhaustionReturnsNoPartialLogs(t *testing.T) {
 	t.Parallel()
 	var attempts atomic.Int32
 	headersObserved := make(chan struct{})
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attempts.Add(1)
-		assertAdversarialRequest(t, r, http.MethodGet, "/api/deployments/sess_123/logs", "tail=2")
-		breakAdversarialResponse(t, w, "truncated content length", http.StatusOK,
+		assertNetworkRequest(t, r, http.MethodGet, "/api/deployments/sess_123/logs", "tail=2")
+		breakNetworkResponse(t, w, "truncated content length", http.StatusOK,
 			`{"events":[{"event":"agent_progress","event_id":"partial","event_seq":1},`, headersObserved)
 	}))
 	t.Cleanup(server.Close)
-	client := newAdversarialClient(t, server.URL, headersObserved)
+	client := newNetworkClient(t, server.URL, headersObserved)
 	page, err := client.GetSessionLogPage("sess_123", 2)
 	if err == nil || page != nil {
 		t.Fatalf("exhausted read exposed a partial page or hid the error: page=%+v, err=%v", page, err)
@@ -155,7 +161,7 @@ func TestAdversarialCloudReadExhaustionReturnsNoPartialLogs(t *testing.T) {
 	}
 }
 
-func TestAdversarialCloudHTTPFailuresStayTerminal(t *testing.T) {
+func TestNetworkCloudHTTPFailuresStayTerminal(t *testing.T) {
 	t.Parallel()
 	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound, http.StatusTooManyRequests, http.StatusServiceUnavailable} {
 		for _, brokenBody := range []bool{false, true} {
@@ -166,7 +172,7 @@ func TestAdversarialCloudHTTPFailuresStayTerminal(t *testing.T) {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					attempts.Add(1)
 					if brokenBody {
-						breakAdversarialResponse(t, w, "reset during body", status, `{"detail":"interrupted`, headersObserved)
+						breakNetworkResponse(t, w, "reset during body", status, `{"detail":"interrupted`, headersObserved)
 						return
 					}
 					w.Header().Set("Retry-After", "1")
@@ -174,7 +180,7 @@ func TestAdversarialCloudHTTPFailuresStayTerminal(t *testing.T) {
 					_, _ = io.WriteString(w, `{"detail":"terminal response"}`)
 				}))
 				t.Cleanup(server.Close)
-				client := newAdversarialClient(t, server.URL, headersObserved)
+				client := newNetworkClient(t, server.URL, headersObserved)
 				record, err := client.GetSession("sess_123")
 				if record != nil || !IsStatus(err, status) {
 					t.Fatalf("HTTP failure lost its status: record=%+v, err=%v, want HTTP %d", record, err, status)
@@ -187,7 +193,7 @@ func TestAdversarialCloudHTTPFailuresStayTerminal(t *testing.T) {
 	}
 }
 
-func TestAdversarialCloudMutationResponseLossNeverReplays(t *testing.T) {
+func TestNetworkCloudMutationResponseLossNeverReplays(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name   string
@@ -227,19 +233,19 @@ func TestAdversarialCloudMutationResponseLossNeverReplays(t *testing.T) {
 				var mutations atomic.Int32
 				headersObserved := make(chan struct{})
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					assertAdversarialRequest(t, r, test.method, test.path, "")
+					assertNetworkRequest(t, r, test.method, test.path, "")
 					if _, err := io.Copy(io.Discard, r.Body); err != nil {
 						t.Errorf("read mutation request: %v", err)
 					}
 					// Model an accepted mutation whose response is then lost.
 					if mutations.Add(1) == 1 {
-						breakAdversarialResponse(t, w, failure, http.StatusOK, `{"id":"sess_123","state":`, headersObserved)
+						breakNetworkResponse(t, w, failure, http.StatusOK, `{"id":"sess_123","state":`, headersObserved)
 						return
 					}
 					_, _ = io.WriteString(w, `{"id":"duplicate-mutation","state":"healthy"}`)
 				}))
 				t.Cleanup(server.Close)
-				client := newAdversarialClient(t, server.URL, headersObserved)
+				client := newNetworkClient(t, server.URL, headersObserved)
 				record, err := test.call(client)
 				if err == nil || record != nil {
 					t.Fatalf("lost mutation response did not remain an error: record=%+v, err=%v", record, err)
@@ -258,7 +264,7 @@ func (roundTrip adversarialRoundTripper) RoundTrip(request *http.Request) (*http
 	return roundTrip(request)
 }
 
-func newAdversarialClient(t *testing.T, endpoint string, headersObserved chan struct{}) *Client {
+func newNetworkClient(t *testing.T, endpoint string, headersObserved chan struct{}) *Client {
 	t.Helper()
 	transport := &http.Transport{DisableKeepAlives: true}
 	t.Cleanup(transport.CloseIdleConnections)
@@ -278,7 +284,7 @@ func newAdversarialClient(t *testing.T, endpoint string, headersObserved chan st
 	return client
 }
 
-func assertAdversarialRequest(t *testing.T, request *http.Request, method, path, query string) {
+func assertNetworkRequest(t *testing.T, request *http.Request, method, path, query string) {
 	t.Helper()
 	if request.Method != method || request.URL.EscapedPath() != path || request.URL.RawQuery != query {
 		t.Errorf("request changed: got %s %s, want %s %s with query %q", request.Method, request.RequestURI, method, path, query)
@@ -294,7 +300,7 @@ func assertAdversarialRequest(t *testing.T, request *http.Request, method, path,
 	}
 }
 
-func breakAdversarialResponse(t *testing.T, writer http.ResponseWriter, failure string, status int, partial string, headersObserved <-chan struct{}) {
+func breakNetworkResponse(t *testing.T, writer http.ResponseWriter, failure string, status int, partial string, headersObserved <-chan struct{}) {
 	t.Helper()
 	connection, buffered, err := writer.(http.Hijacker).Hijack()
 	if err != nil {

@@ -24,9 +24,9 @@ go_test(
         "account_test.go",
         "cliauth_test.go",
         "client_test.go",
-        "read_retry_review_test.go",
+        "read_retry_body_test.go",
+        "read_retry_network_test.go",
         "read_retry_test.go",
-        "retry_adversarial_test.go",
     ],
     embed = [":cloud"],
     deps = [

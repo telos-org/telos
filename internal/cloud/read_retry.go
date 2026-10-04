@@ -32,18 +32,11 @@ func getJSONWithRetry[T any](ctx context.Context, c *Client, path string) (*T, e
 			return nil, err
 		}
 		result, err := getJSONAttempt[T](ctx, c, path)
-		if err == nil {
-			return result, nil
-		}
-		var apiError *APIError
-		if errors.As(err, &apiError) {
-			return nil, err
+		if err == nil || attempt+1 == readMaxAttempts || !retryableReadError(err) {
+			return result, err
 		}
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
-		}
-		if attempt+1 >= readMaxAttempts || !retryableReadError(err) {
-			return nil, err
 		}
 
 		// Equal jitter spreads clients across the latter half of each backoff.
@@ -68,14 +61,11 @@ func getJSONAttempt[T any](ctx context.Context, c *Client, path string) (*T, err
 	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	// Finish reading the HTTP body before decoding. A truncated transfer is
-	// retryable; malformed JSON in a complete response is a terminal API bug.
+	// Complete the transfer so truncated bodies retry, but malformed JSON does not.
 	data, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
-	// Each attempt owns its result, so partial data cannot leak into a later
-	// response or the caller's log output.
 	var result T
 	if err := json.Unmarshal(data, &result); err != nil {
 		return nil, err
@@ -92,9 +82,7 @@ func retryableReadError(err error) bool {
 		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNREFUSED) {
 		return true
 	}
-	// DNS resolvers mark failures such as SERVFAIL as temporary without
-	// marking them as timeouts. Inspect DNS errors through all wrappers;
-	// net.Error.Temporary is deprecated and includes unrelated local failures.
+	// SERVFAIL can be temporary without being a timeout.
 	var dnsError *net.DNSError
 	if errors.As(err, &dnsError) && dnsError.IsTemporary {
 		return true
