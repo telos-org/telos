@@ -62,10 +62,10 @@ Prefix the shell receiving the installer pipe:
 curl -fsSL https://usetelos.ai/install.sh | TELOS_INSTALL_VERSION=v0.1.2 sh
 ```
 
-## Update the CLI
+## Update your installation
 
-Update the currently running CLI to the latest promoted release, or choose
-an exact release:
+Update your installed Telos components to the latest promoted release, or
+choose an exact release:
 
 ```bash
 telos update
@@ -74,21 +74,34 @@ telos update v0.1.5+master.db65a24fa89d
 telos --version
 ```
 
-An explicit older version rolls the CLI back. If you already have the selected
-version, the command makes no changes. Exact versions accept an optional `v`
+An explicit older version rolls the installed components back. If all components
+already match the selected release, none are replaced. An update also repairs
+outdated or missing skill files and an outdated companion runtime when the CLI
+itself is already current. Exact versions accept an optional `v`
 prefix; a `+master.<commit>` suffix identifies an immutable build, not a new
 semantic-version tag.
 
-The updater downloads the matching macOS or Linux binary, checks its SHA-256
-checksum, and atomically replaces the executable you invoked. A failed download
-or checksum check leaves the existing CLI untouched. Its directory must be
-writable; the updater does not request elevated privileges. Symlinks continue
-to point at the updated executable.
+The updater targets the executable you invoked, the installed CLI skill, and
+any `telosd` installed beside that executable. A Cloud client installation
+stays lightweight: an update does not add `telosd`. The skill directory is
+remembered by the installer; `TELOS_AGENT_SKILLS_DIR` overrides it. For an older
+installation without that record, the default is `~/.agents/skills/telos-cli`.
+Set `TELOS_AGENT_SKILLS_DIR` once if you previously installed the skill elsewhere.
 
-Only `telos` changes. Your configuration, credentials, `telosd`, installed skill
-bundle, and deployed sessions are unchanged. To update the full local
-installation, rerun the installer above instead. Older CLIs without `update`
-also need the installer once to get this command.
+Every artifact comes from one immutable release and passes SHA-256 verification
+before any installed component is replaced. A failed download, checksum check,
+or skill extraction leaves existing components intact. Each binary replacement
+is atomic, and a replacement error rolls back the components already replaced.
+The binary and skill directories must be writable; the updater does not request
+elevated privileges. Binary and skill symlinks continue to point at their updated
+targets. The bundled skill directory is replaced, including removal of obsolete
+files, so keep personal skills in separate directories.
+
+Your configuration and credentials remain in place. Running local sessions
+continue with their current processes; new processes use the updated runtime.
+Cloud deployment runtimes are rolled out by Cloud automation independently of
+your workstation update. Older CLIs without `update` need the installer once to
+get this command.
 
 If you installed Telos with a package manager, update through that manager.
 The updater refuses recognized Homebrew, Nix, Snap, and MacPorts paths.

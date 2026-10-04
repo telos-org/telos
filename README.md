@@ -30,6 +30,9 @@ no local `telosd` or `pi`. To add local execution:
 curl -fsSL https://usetelos.ai/install.sh | TELOS_INSTALL_LOCAL=1 sh
 ```
 
+`telos update` keeps your CLI, bundled skill, and any companion local runtime
+on the same release. Managed Cloud runtimes are updated by Cloud automation.
+
 Cloud deployments require authentication. Use `telos login` interactively, or
 supply `TELOS_AUTH_TOKEN` for agents and CI. An existing valid login or token
 needs no additional login step; see
