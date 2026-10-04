@@ -796,6 +796,15 @@ func retryableReadError(err error) bool {
 		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNREFUSED) {
 		return true
 	}
+	// net/http's HTTP/2 stream error is unexported. Match only internal-error
+	// resets sent by the peer, including errors wrapped by http.Client.Do.
+	for cause := err; cause != nil; cause = errors.Unwrap(cause) {
+		message := cause.Error()
+		if strings.HasPrefix(message, "stream error: stream ID ") &&
+			strings.HasSuffix(message, "; INTERNAL_ERROR; received from peer") {
+			return true
+		}
+	}
 	// SERVFAIL can be temporary without being a timeout.
 	var dnsError *net.DNSError
 	if errors.As(err, &dnsError) && dnsError.IsTemporary {

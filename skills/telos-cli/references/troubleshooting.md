@@ -59,8 +59,9 @@ and temporary DNS lookup failures while reading Cloud session lists, session
 details, logs, and account information for your context.
 Each read makes up to three attempts with short, increasing, randomized waits.
 The attempts and waits share the normal 30-second timeout for that read; a
-command can perform more than one read. This recovery also covers a connection
-that drops partway through a response.
+command can perform more than one read. This recovery also covers connections
+that drop partway through a response and HTTP/2 streams reset by an internal
+server error.
 
 If you still receive a connection error, repeat the read with the same session
 and context. A failed status or log check does not by itself mean the remote

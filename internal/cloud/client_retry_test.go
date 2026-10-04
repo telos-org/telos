@@ -52,6 +52,8 @@ func TestMonitoringReadRetriesOnlyTransientErrors(t *testing.T) {
 		{"canceled_temporary_dns", &net.DNSError{Err: "lookup canceled", IsTemporary: true, UnwrapErr: context.Canceled}, 1},
 		{"certificate", x509.UnknownAuthorityError{}, 1},
 		{"invalid_json", &json.SyntaxError{}, 1},
+		{"http2_protocol_error", errors.New("stream error: stream ID 1; PROTOCOL_ERROR; received from peer"), 1},
+		{"http2_local_internal_error", errors.New("stream error: stream ID 1; INTERNAL_ERROR; local protocol failure"), 1},
 		{"unexpected_error", errors.New("unsupported protocol"), 1},
 	}
 	for _, test := range tests {
@@ -392,6 +394,70 @@ func TestMonitoringReadResponseHeaderTimeoutRetries(t *testing.T) {
 	}
 	if got := attempts.Load(); got != 2 {
 		t.Fatalf("attempts = %d, want 2", got)
+	}
+}
+
+func TestNetworkCloudHTTP2StreamReset(t *testing.T) {
+	for _, test := range []struct {
+		name          string
+		body          string
+		beforeHeaders bool
+		failures      int32
+		status        int
+		wantAttempts  int32
+	}{
+		{name: "before headers", beforeHeaders: true, failures: 1, status: http.StatusOK, wantAttempts: 2},
+		{name: "partial JSON", body: `{"id":"stale","name":"discard-me","state":`, failures: 1, status: http.StatusOK, wantAttempts: 2},
+		{name: "complete JSON", body: `{"id":"stale","name":"discard-me"}`, failures: 1, status: http.StatusOK, wantAttempts: 2},
+		{name: "exhausted", body: `{"id":"stale","name":"discard-me"}`, failures: 3, status: http.StatusOK, wantAttempts: 3},
+		{name: "terminal HTTP status", body: `{"detail":"interrupted`, failures: 1, status: http.StatusUnauthorized, wantAttempts: 1},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			var attempts atomic.Int32
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.ProtoMajor != 2 {
+					t.Errorf("protocol = %s, want HTTP/2", r.Proto)
+				}
+				assertNetworkRequest(t, r, http.MethodGet, "/api/deployments/sess_123", "")
+				if attempts.Add(1) <= test.failures {
+					if !test.beforeHeaders {
+						w.WriteHeader(test.status)
+						_, _ = io.WriteString(w, test.body)
+						w.(http.Flusher).Flush()
+					}
+					// Aborting the handler sends RST_STREAM(INTERNAL_ERROR).
+					panic(http.ErrAbortHandler)
+				}
+				_, _ = io.WriteString(w, `{"id":"fresh","state":"running"}`)
+			}))
+			server.EnableHTTP2 = true
+			server.StartTLS()
+			t.Cleanup(server.Close)
+			client := NewClient(server.URL, "local-test-token")
+			client.OrgID = " org_retry "
+			client.HTTP = server.Client()
+			client.HTTP.Timeout = 5 * time.Second
+
+			result, err := client.GetSession("sess_123")
+			switch {
+			case test.status != http.StatusOK:
+				if result != nil || !IsStatus(err, test.status) {
+					t.Fatalf("result = %+v, error = %v; want HTTP %d", result, err, test.status)
+				}
+			case test.failures == 3:
+				if result != nil || err == nil || !strings.Contains(err.Error(), "INTERNAL_ERROR; received from peer") {
+					t.Fatalf("result = %+v, error = %v; want exhausted stream reset with no partial record", result, err)
+				}
+			default:
+				if err != nil || result == nil || result.ID != "fresh" || result.Name != "" || result.State != "running" {
+					t.Fatalf("result = %+v, error = %v; want only the recovered record", result, err)
+				}
+			}
+			if got := attempts.Load(); got != test.wantAttempts {
+				t.Fatalf("attempts = %d, want %d", got, test.wantAttempts)
+			}
+		})
 	}
 }
 
