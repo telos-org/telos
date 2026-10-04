@@ -62,20 +62,20 @@ class InstallReleaseTest(unittest.TestCase):
             )
         )
 
-    def install(self, local=False, remember_skills=False, extra_env=None):
+    def install(self, local=False, remember_skills=False, extra_env=None, args=()):
         env = dict(os.environ)
-        env.pop("TELOS_INSTALL_LOCAL", None)
         env["TELOS_INSTALL_DIR"] = str(self.binaries)
         env["TELOS_RELEASE_BASE_URL"] = (self.root / "releases").as_uri()
         if remember_skills:
             env.pop("TELOS_AGENT_SKILLS_DIR", None)
         else:
             env["TELOS_AGENT_SKILLS_DIR"] = str(self.skills)
-        if local:
-            env["TELOS_INSTALL_LOCAL"] = "1"
         env.update(extra_env or {})
+        command = ["sh", str(self.installer), *args]
+        if local:
+            command.append("--with-telosd")
         return subprocess.run(
-            ["sh", str(self.installer)],
+            command,
             env=env,
             text=True,
             capture_output=True,
@@ -114,6 +114,50 @@ class InstallReleaseTest(unittest.TestCase):
         result = self.install(local=True)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assert_installed(local=True)
+
+    def test_help_and_unknown_options_do_not_install(self):
+        for option in ("--help", "-h", "--with-telos"):
+            with self.subTest(option=option):
+                result = self.install(args=(option,))
+                if option == "--with-telos":
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("unknown option", result.stderr)
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("--with-telosd", result.stdout)
+                    self.assertIn("TELOS_INSTALL_DIR", result.stdout)
+                self.assertFalse(self.binaries.exists())
+                self.assertFalse(self.skills.exists())
+
+    def test_piped_installer_accepts_runtime_flag(self):
+        env = dict(os.environ)
+        env["TELOS_INSTALL_DIR"] = str(self.binaries)
+        env["TELOS_AGENT_SKILLS_DIR"] = str(self.skills)
+        env["TELOS_RELEASE_BASE_URL"] = (self.root / "releases").as_uri()
+        result = subprocess.run(
+            ["sh", "-s", "--", "--with-telosd"],
+            input=self.installer.read_text(),
+            env=env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_installed(local=True)
+
+    def test_default_locations_are_under_home(self):
+        home = self.root / "home"
+        result = self.install(
+            extra_env={
+                "HOME": str(home),
+                "TELOS_INSTALL_DIR": "",
+                "TELOS_AGENT_SKILLS_DIR": "",
+            }
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.binaries = home / ".local/bin"
+        self.skills = home / ".agents/skills"
+        self.assert_installed()
 
     def test_reinstall_preserves_existing_local_runtime_and_custom_skill_path(self):
         self.assertEqual(self.install(local=True).returncode, 0)

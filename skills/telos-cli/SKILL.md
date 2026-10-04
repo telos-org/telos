@@ -39,10 +39,10 @@ session. Choose the lifecycle that matches the requested outcome:
 
 If the CLI is missing or an update is requested, read
 [Install Telos](references/install.md). The default installation needs no local
-daemon for Cloud work. Request `TELOS_INSTALL_LOCAL=1` only when local execution
-is needed. Use `telos update` to update the user's installed CLI, bundled skill,
-and companion local runtime together. Managed runtime releases belong to Cloud
-automation, independently of workstation updates. For model selection or
+daemon for Cloud work. Pass the installer's `--with-telosd` flag only when local
+execution is needed. Use `telos update` to update the user's installed CLI,
+bundled skill, and companion local runtime together. Managed runtime releases
+belong to Cloud automation, independently of workstation updates. For model selection or
 `--thinking`,
 read [Models and inference](references/inference.md).
 

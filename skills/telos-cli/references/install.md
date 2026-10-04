@@ -18,6 +18,20 @@ It installs `telos` under `${TELOS_INSTALL_DIR:-$HOME/.local/bin}` and the
 CLI skill and documentation under
 `${TELOS_AGENT_SKILLS_DIR:-$HOME/.agents/skills}/telos-cli`.
 
+To choose a different binary directory, set `TELOS_INSTALL_DIR` on the shell
+running the installer:
+
+```bash
+curl -fsSL https://usetelos.ai/install.sh | TELOS_INSTALL_DIR=/custom/bin sh
+```
+
+The installer does not read `XDG_BIN_HOME`. Add your chosen directory to `PATH`.
+You can inspect installer options and directory defaults before installing:
+
+```bash
+curl -fsSL https://usetelos.ai/install.sh | sh -s -- --help
+```
+
 Cloud use does not require `telosd` or `pi` on your machine, including when you
 use Claude Code or Codex to operate Telos Cloud. The managed runtime is
 installed and updated by Cloud automation.
@@ -41,7 +55,7 @@ For harness development, benchmarking, or other local execution, include
 `telosd` explicitly:
 
 ```bash
-curl -fsSL https://usetelos.ai/install.sh | TELOS_INSTALL_LOCAL=1 sh
+curl -fsSL https://usetelos.ai/install.sh | sh -s -- --with-telosd
 ```
 
 This installs the CLI, skill, and local runtime from the same release. Then
@@ -55,7 +69,7 @@ execution. Inside a hosted Telos session, help also shows `run` for nested work
 through that environment's runtime API.
 
 Rerunning the installer retains and updates an existing `telosd` beside the
-CLI, even without `TELOS_INSTALL_LOCAL=1`. It also remembers the skill directory
+CLI, even without `--with-telosd`. It also remembers the skill directory
 from the previous installation; `TELOS_AGENT_SKILLS_DIR` selects a different
 directory when supplied.
 

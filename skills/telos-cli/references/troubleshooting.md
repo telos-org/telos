@@ -32,7 +32,8 @@ installer when the binary is absent or not the intended release.
 `telos plan` identifies malformed frontmatter or a platform mismatch. A local
 run requires `platform: local`, the `telosd` session runtime, `pi` on `PATH`,
 and an authenticated provider. If the error reports a missing `telosd`, add
-[local execution](install.md#add-local-execution) with `TELOS_INSTALL_LOCAL=1`.
+[local execution](install.md#add-local-execution) with the installer's
+`--with-telosd` flag.
 `telos run --help` shows the model, thinking, cycle, time, and cost flags
 supported by the installed release.
 

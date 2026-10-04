@@ -27,7 +27,7 @@ The default installation includes the CLI and its skill/docs. Cloud use needs
 no local `telosd` or `pi`. To add local execution:
 
 ```bash
-curl -fsSL https://usetelos.ai/install.sh | TELOS_INSTALL_LOCAL=1 sh
+curl -fsSL https://usetelos.ai/install.sh | sh -s -- --with-telosd
 ```
 
 `telos update` keeps your CLI, bundled skill, and any companion local runtime

@@ -1,17 +1,39 @@
 #!/usr/bin/env sh
 set -eu
 
+install_telosd=0
+for option in "$@"; do
+  case "$option" in
+    --with-telosd) install_telosd=1 ;;
+    --help|-h)
+      cat <<'EOF'
+Usage: install.sh [--with-telosd] [--help]
+
+Install the Telos CLI and bundled skill. An existing telosd is also updated.
+
+  --with-telosd  Include the daemon for local execution.
+  --help, -h    Show this help.
+
+Environment:
+  TELOS_INSTALL_DIR       Binary directory (default: $HOME/.local/bin).
+  TELOS_AGENT_SKILLS_DIR  Skill directory (default: $HOME/.agents/skills).
+                         Reinstalls remember the previous skill directory.
+EOF
+      exit 0
+      ;;
+    *)
+      echo "telos install: unknown option: $option; use --help for usage" >&2
+      exit 1
+      ;;
+  esac
+done
+
 release_base_url="${TELOS_RELEASE_BASE_URL:-https://usetelos.ai/releases}"
 version="@TELOS_VERSION@"
 install_dir="${TELOS_INSTALL_DIR:-$HOME/.local/bin}"
 agent_skills_dir="${TELOS_AGENT_SKILLS_DIR:-$HOME/.agents/skills}"
-install_local="${TELOS_INSTALL_LOCAL:-0}"
-case "$install_local" in
-  0|1) ;;
-  *) echo "telos install: TELOS_INSTALL_LOCAL must be 0 or 1" >&2; exit 1 ;;
-esac
 if [ -e "$install_dir/telosd" ] || [ -L "$install_dir/telosd" ]; then
-  install_local=1
+  install_telosd=1
 fi
 if [ -z "${TELOS_AGENT_SKILLS_DIR:-}" ] && [ -f "$install_dir/.telos-skill-path" ]; then
   agent_skills_dir="$(dirname "$(cat "$install_dir/.telos-skill-path")")"
@@ -113,7 +135,7 @@ download_verified() {
 
 binaries="telos"
 components="telos .telos-skill-path"
-if [ "$install_local" -eq 1 ]; then
+if [ "$install_telosd" -eq 1 ]; then
   binaries="$binaries telosd"
   components="$components telosd"
 fi
@@ -156,10 +178,10 @@ committed=1
 
 echo "installed telos $version to $install_dir"
 echo "installed @telos/telos-cli:@TELOS_SKILL_VERSION@ to $agent_skills_dir/telos-cli"
-if [ "$install_local" -eq 1 ]; then
+if [ "$install_telosd" -eq 1 ]; then
   echo "installed telosd $version to $install_dir"
 fi
-if [ "$install_local" -eq 1 ] && ! command -v pi >/dev/null 2>&1; then
+if [ "$install_telosd" -eq 1 ] && ! command -v pi >/dev/null 2>&1; then
   echo "For local Telos runs, install pi with: npm install -g @earendil-works/pi-coding-agent"
   echo "Then run pi and use /login to configure model credentials before your first local run."
   echo "pi setup: https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md"

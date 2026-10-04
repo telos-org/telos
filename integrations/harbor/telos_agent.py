@@ -229,7 +229,7 @@ fi
 mkdir -p "$HOME/.local/bin"
 install_script="$(mktemp)"
 retry 5 curl -fsSL {shlex.quote(self.telos_install_url)} -o "$install_script"
-TELOS_INSTALL_LOCAL=1 TELOS_INSTALL_DIR="$HOME/.local/bin" sh "$install_script"
+TELOS_INSTALL_DIR="$HOME/.local/bin" sh "$install_script" --with-telosd
 rm -f "$install_script"
 telos --version
 telosd --version
