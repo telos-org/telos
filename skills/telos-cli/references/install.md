@@ -49,6 +49,11 @@ install `pi` if needed and authenticate your provider with `pi` → `/login`.
 Follow [Bounded runs](bounded-runs.md). Managed Cloud deployments do not use
 your local model credentials.
 
+Top-level help shows `run` when an executable local runtime is available.
+If you invoke `telos run` without it, the error explains how to add local
+execution. Inside a hosted Telos session, help also shows `run` for nested work
+through that environment's runtime API.
+
 Rerunning the installer retains and updates an existing `telosd` beside the
 CLI, even without `TELOS_INSTALL_LOCAL=1`. It also remembers the skill directory
 from the previous installation; `TELOS_AGENT_SKILLS_DIR` selects a different

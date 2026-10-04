@@ -153,6 +153,9 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 
 // SubmitLocalSession creates a session and starts its worker in the background.
 func SubmitLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, error) {
+	if _, err := sessionworker.ResolveTelosd(); err != nil {
+		return nil, err
+	}
 	session, err := CreateLocalSession(specPath, cfg)
 	if err != nil {
 		return nil, err
