@@ -49,32 +49,32 @@ case "$arch" in
 esac
 
 base_url="$release_base_url/$version"
-tmp_dir="$(mktemp -d)"
-bin_stage=""
+mkdir -p "$install_dir"
+install_dir="$(cd "$install_dir" && pwd)"
+bin_stage="$(mktemp -d "$install_dir/.telos-install.XXXXXX")"
 skill_target=""
 skill_stage=""
 skill_backup=""
+replacing=0
 committed=0
 cleanup() {
-  if [ "$committed" -eq 0 ]; then
+  if [ "$replacing" -eq 1 ] && [ "$committed" -eq 0 ]; then
     if [ -n "$skill_backup" ] && { [ -e "$skill_backup" ] || [ -L "$skill_backup" ]; }; then
       if [ -e "$skill_target" ] || [ -L "$skill_target" ]; then
         rm -rf "$skill_target"
       fi
       mv "$skill_backup" "$skill_target" || return
       skill_backup=""
-    elif [ -n "$bin_stage" ] && [ -f "$bin_stage/skill.installed" ]; then
+    elif [ ! -d "$skill_stage" ]; then
       rm -rf "$skill_target"
     fi
-    if [ -n "$bin_stage" ]; then
-      for component in telos telosd .telos-skill-path; do
-        if [ -e "$bin_stage/$component.previous" ] || [ -L "$bin_stage/$component.previous" ]; then
-          mv -f "$bin_stage/$component.previous" "$install_dir/$component" || return
-        elif [ -f "$bin_stage/$component.installed" ]; then
-          rm -f "$install_dir/$component"
-        fi
-      done
-    fi
+    for component in $components; do
+      if [ -e "$bin_stage/$component.previous" ] || [ -L "$bin_stage/$component.previous" ]; then
+        mv -f "$bin_stage/$component.previous" "$install_dir/$component" || return
+      elif [ ! -e "$bin_stage/$component" ]; then
+        rm -f "$install_dir/$component"
+      fi
+    done
   fi
   if [ -n "$skill_stage" ]; then
     rm -rf "$skill_stage"
@@ -82,20 +82,17 @@ cleanup() {
   if [ -n "$skill_backup" ]; then
     rm -rf "$skill_backup"
   fi
-  if [ -n "$bin_stage" ]; then
-    rm -rf "$bin_stage"
-  fi
-  rm -rf "$tmp_dir"
+  rm -rf "$bin_stage"
 }
 trap cleanup EXIT INT TERM
 
-curl -fsSL "$base_url/SHA256SUMS" -o "$tmp_dir/SHA256SUMS"
+curl -fsSL "$base_url/SHA256SUMS" -o "$bin_stage/SHA256SUMS"
 
 download_verified() {
   artifact="$1"
   dest="$2"
   curl -fsSL "$base_url/$artifact" -o "$dest"
-  expected="$(awk -v file="$artifact" '$2 == file { print $1 }' "$tmp_dir/SHA256SUMS")"
+  expected="$(awk -v file="$artifact" '$2 == file { print $1 }' "$bin_stage/SHA256SUMS")"
   if [ -z "$expected" ]; then
     echo "telos install: checksum missing for $artifact" >&2
     exit 1
@@ -114,29 +111,23 @@ download_verified() {
   fi
 }
 
-download_verified "telos-$os-$arch" "$tmp_dir/telos"
-if [ "$install_local" -eq 1 ]; then
-  download_verified "telosd-$os-$arch" "$tmp_dir/telosd"
-fi
-download_verified "telos-cli-skill.tar.gz" "$tmp_dir/telos-cli-skill.tar.gz"
-
-mkdir -p "$install_dir"
-install_dir="$(cd "$install_dir" && pwd)"
-bin_stage="$(mktemp -d "$install_dir/.telos-install.XXXXXX")"
+binaries="telos"
 components="telos .telos-skill-path"
-cp "$tmp_dir/telos" "$bin_stage/telos"
-chmod 0755 "$bin_stage/telos"
 if [ "$install_local" -eq 1 ]; then
+  binaries="$binaries telosd"
   components="$components telosd"
-  cp "$tmp_dir/telosd" "$bin_stage/telosd"
-  chmod 0755 "$bin_stage/telosd"
 fi
+for binary in $binaries; do
+  download_verified "$binary-$os-$arch" "$bin_stage/$binary"
+  chmod 0755 "$bin_stage/$binary"
+done
+download_verified "telos-cli-skill.tar.gz" "$bin_stage/telos-cli-skill.tar.gz"
 
 mkdir -p "$agent_skills_dir"
 agent_skills_dir="$(cd "$agent_skills_dir" && pwd)"
 skill_target="$agent_skills_dir/telos-cli"
 skill_stage="$(mktemp -d "$agent_skills_dir/.telos-cli.XXXXXX")"
-tar -xzf "$tmp_dir/telos-cli-skill.tar.gz" -C "$skill_stage"
+tar -xzf "$bin_stage/telos-cli-skill.tar.gz" -C "$skill_stage"
 chmod 0755 "$skill_stage"
 if [ ! -f "$skill_stage/SKILL.md" ]; then
   echo "telos install: telos-cli skill is missing SKILL.md" >&2
@@ -152,16 +143,14 @@ for component in $components; do
     ln "$install_dir/$component" "$bin_stage/$component.previous"
   fi
 done
+replacing=1
 if [ -e "$skill_target" ] || [ -L "$skill_target" ]; then
   skill_backup="$skill_stage.previous"
   mv "$skill_target" "$skill_backup"
 fi
 mv "$skill_stage" "$skill_target"
-skill_stage=""
-touch "$bin_stage/skill.installed"
 for component in $components; do
   mv -f "$bin_stage/$component" "$install_dir/$component"
-  touch "$bin_stage/$component.installed"
 done
 committed=1
 
