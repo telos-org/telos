@@ -14,6 +14,7 @@ Start with the command that can distinguish the observed symptom:
 | A local run will not start | `telos plan SPEC.md`, then `git status --short` in a Git source | Invalid spec, dirty source, or missing local pi setup |
 | Cloud authentication or target is wrong | `telos config` | Authentication and active context |
 | An agent or CI job waits for browser login | Check the job's authentication setup against [token authentication](cloud.md#token-authentication-for-agents-and-ci) | A supplied `TELOS_AUTH_TOKEN` lets the job run Cloud commands directly |
+| A Cloud status or log check loses its connection | Repeat the read with the same session and context | Connection error and the next successful status or log response |
 | A spec is rejected | `telos plan SPEC.md` | First validation error |
 | A skill publish is rejected | Read the original `push` error and inspect the local frontmatter | Invalid bundle input or immutable-version conflict |
 | A deployment is not `ready` | `telos describe SESSION_ID --context CONTEXT --json` | Status, digest, and reason |
@@ -50,6 +51,23 @@ login does not change the override. If an unattended job waits for browser
 approval, supply a valid token and run the Cloud command directly. See
 [Cloud authentication](cloud.md#authenticate) for setup, precedence, and a CI
 example.
+
+## Cloud status or log checks lose their connection
+
+Telos automatically retries brief connection interruptions, refused connections,
+and temporary DNS lookup failures while reading Cloud session lists, session
+details, logs, and account information for your context.
+Each read makes up to three attempts with short, increasing, randomized waits.
+The attempts and waits share the normal 30-second timeout for that read; a
+command can perform more than one read. This recovery also covers a connection
+that drops partway through a response.
+
+If you still receive a connection error, repeat the read with the same session
+and context. A failed status or log check does not by itself mean the remote
+session stopped. Permanent DNS failures, such as an unknown hostname, certificate
+errors, authentication failures, and other API error responses are returned
+without retrying. Session creation, updates, deletion, and login token
+claims are not automatically resubmitted by this recovery mechanism.
 
 ## Plan or publish rejects a spec or skill
 

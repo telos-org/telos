@@ -22,6 +22,7 @@ go_test(
     srcs = [
         "account_test.go",
         "cliauth_test.go",
+        "client_retry_test.go",
         "client_test.go",
     ],
     embed = [":cloud"],

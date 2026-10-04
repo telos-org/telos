@@ -78,6 +78,10 @@ This deadline is your observation limit, not a CLI timeout. Ending monitoring
 does not stop the Goal or its inference usage. Once the expected revision is
 `ready`, verify the behavior promised by your spec.
 
+Cloud monitoring reads automatically retry brief connection interruptions within
+each read's timeout. See [connection recovery](troubleshooting.md#cloud-status-or-log-checks-lose-their-connection)
+for the retry limits and what to do if a read still fails.
+
 Read the work and verification evidence with:
 
 ```bash
