@@ -72,18 +72,24 @@ explains why some older deployments lack digest-bound status provenance.
 Regardless of provenance, verify the live behavior promised by every service
 spec.
 
-### Model credentials were rejected
+## Model credentials or quota were rejected
 
-If a persistent Goal fails with a provider authentication or access error,
-fix its inference key or provider permissions. The controller retries every
-five minutes, so it can recover without another spec change. The next cycle
-uses the same workspace; it does not restore a snapshot or resume the exact
-failed model turn. While the key remains invalid, retries continue to fail.
+If your Goal reports an invalid key, denied access, or exhausted provider
+credits, fix the inference key, permissions, or provider balance. Telos ends
+that cycle immediately instead of launching more agent turns with the same
+blocker.
 
-An explicitly stopped Goal stays stopped. Bounded tasks do not retry this way,
-and invalid model configuration still requires an update and an explicit wake.
-Older runtimes without this recovery behavior wait for an explicit wake after
-credential failures.
+A persistent Goal retries with increasing, randomized waits: roughly one
+minute at first, doubling up to a 15-minute cap. It can recover after you fix
+the provider without another spec change. An explicit wake starts the next
+cycle sooner. Retries use the same workspace in a new cycle; partially
+completed actions can be repeated, and the exact failed model turn is not
+resumed.
+
+Stopped Goals stay stopped. Bounded runs end with the provider error rather
+than retrying whole cycles. Invalid model configuration still requires a fix
+and an explicit wake. Older runtimes may wait indefinitely after credential
+failures or keep attempting turns after credit exhaustion.
 
 ## Cloud update is rejected
 

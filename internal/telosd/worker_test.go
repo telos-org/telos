@@ -165,7 +165,7 @@ func TestFailureBackoffReachesFifteenMinuteCap(t *testing.T) {
 		11:  controllerFailureBackoffCap,
 		100: controllerFailureBackoffCap,
 	} {
-		if got := failureBackoff(failures); got != want {
+		if got := failureBackoff(failures, time.Second); got != want {
 			t.Fatalf("failureBackoff(%d) = %s, want %s", failures, got, want)
 		}
 	}
@@ -173,9 +173,9 @@ func TestFailureBackoffReachesFifteenMinuteCap(t *testing.T) {
 
 func TestJitteredFailureBackoffStaysWithinBound(t *testing.T) {
 	for failures := 1; failures <= 20; failures++ {
-		base := failureBackoff(failures)
+		base := failureBackoff(failures, time.Second)
 		for range 20 {
-			got := jitteredFailureBackoff(failures)
+			got := jitteredFailureBackoff(failures, time.Second)
 			if got < base-base/5 || got > base {
 				t.Fatalf("jitteredFailureBackoff(%d) = %s, base %s", failures, got, base)
 			}
@@ -199,7 +199,7 @@ func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
 		}},
 	})
 
-	logControllerSuspended(sessionDir, "agent_authentication_invalid", "403: inactive virtual key", controllerCredentialRetryInterval)
+	logControllerSuspended(sessionDir, "agent_authentication_invalid", "403: inactive virtual key", time.Minute)
 	data, err := os.ReadFile(evidencePath)
 	if err != nil {
 		t.Fatal(err)
@@ -210,9 +210,9 @@ func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
 		`"epoch_id":4`,
 		`"blocker_code":"agent_authentication_invalid"`,
 		`"state":"waiting"`,
-		`"retry_after_seconds":300`,
-		"update the model credentials",
-		"retry automatically",
+		`"retry_after_seconds":60`,
+		"fix the provider credentials",
+		"retry in 1m0s",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("suspension evidence missing %q:\n%s", want, text)
@@ -269,7 +269,7 @@ func TestControllerConfigurationFailureSuspendsUntilExplicitWake(t *testing.T) {
 		t.Fatalf("worker retried without a wake signal: attempt %d", got)
 	case result := <-done:
 		t.Fatalf("worker exited while suspended: %#v", result)
-	case <-time.After(failureBackoff(1) + 100*time.Millisecond):
+	case <-time.After(failureBackoff(1, time.Second) + 100*time.Millisecond):
 	}
 
 	wake <- syscall.SIGUSR1
@@ -291,8 +291,12 @@ func TestControllerConfigurationFailureSuspendsUntilExplicitWake(t *testing.T) {
 	}
 }
 
-func TestControllerRetriesCredentialFailures(t *testing.T) {
-	for _, providerError := range []string{"401: invalid x-api-key", "403: forbidden", "403: inactive virtual key"} {
+func TestControllerProviderRecoveryBacksOffAndReturnsToIdle(t *testing.T) {
+	for _, providerError := range []string{
+		"401: invalid x-api-key", "403: forbidden", "403: inactive virtual key",
+		"400: Your credit balance is too low to access the Anthropic API",
+		"429: insufficient_quota",
+	} {
 		t.Run(providerError, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				sessionDir := writeWorkerManifest(t, map[string]any{
@@ -300,47 +304,48 @@ func TestControllerRetriesCredentialFailures(t *testing.T) {
 					"specs":        []map[string]any{{"name": "demo"}},
 				})
 				stop := make(chan os.Signal, 1)
+				wake := make(chan os.Signal, 1)
 				defer func() { stop <- syscall.SIGTERM }()
+				starts := make(chan time.Time, 1)
 				var attempts atomic.Int32
-				var keyFixed atomic.Bool
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
 					code, err := runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
-						attempts.Add(1)
-						if !keyFixed.Load() {
+						attempt := attempts.Add(1)
+						starts <- time.Now()
+						if attempt <= 7 || attempt == 9 {
 							return &game.PVGResult{GameResult: game.GameFailure, Error: providerError}, nil
 						}
 						return &game.PVGResult{GameResult: game.GameSuccess}, nil
-					}, make(chan os.Signal), stop)
+					}, wake, stop)
 					if code != 0 || err != nil {
 						t.Errorf("worker returned %d, %v", code, err)
 					}
 				}()
-				synctest.Wait()
-				if attempts.Load() != 1 {
-					t.Fatalf("initial attempts = %d", attempts.Load())
+				previous := <-starts
+				for _, upper := range []time.Duration{
+					time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute,
+					15 * time.Minute, 15 * time.Minute, 15 * time.Minute,
+				} {
+					next := <-starts
+					elapsed := next.Sub(previous)
+					if elapsed < upper*4/5 || elapsed > upper {
+						t.Fatalf("retry after %v, want [%v, %v]", elapsed, upper*4/5, upper)
+					}
+					previous = next
 				}
-				time.Sleep(controllerCredentialRetryInterval - time.Second)
 				synctest.Wait()
-				if attempts.Load() != 1 {
-					t.Fatalf("retried too soon: %d attempts", attempts.Load())
-				}
-				time.Sleep(time.Second)
+				time.Sleep(time.Hour)
 				synctest.Wait()
-				if attempts.Load() != 2 {
-					t.Fatalf("expected one retry with the invalid key, got %d attempts", attempts.Load())
-				}
-				keyFixed.Store(true)
-				time.Sleep(controllerCredentialRetryInterval)
-				synctest.Wait()
-				if attempts.Load() != 3 {
-					t.Fatalf("did not recover without a wake: %d attempts", attempts.Load())
-				}
-				time.Sleep(2 * controllerCredentialRetryInterval)
-				synctest.Wait()
-				if attempts.Load() != 3 {
+				if attempts.Load() != 8 {
 					t.Fatalf("retried after success with no interval: %d attempts", attempts.Load())
+				}
+				wake <- syscall.SIGUSR1
+				previous = <-starts
+				next := <-starts
+				if elapsed := next.Sub(previous); elapsed < 48*time.Second || elapsed > time.Minute {
+					t.Fatalf("backoff did not reset after success: %v", elapsed)
 				}
 				stop <- syscall.SIGTERM
 				<-done
@@ -385,7 +390,7 @@ func TestCredentialRetryRespectsWakeAndStop(t *testing.T) {
 					stop <- syscall.SIGTERM
 				}
 				<-done
-				time.Sleep(2 * controllerCredentialRetryInterval)
+				time.Sleep(2 * time.Minute)
 				if attempts.Load() != want {
 					t.Fatalf("attempts = %d, want %d", attempts.Load(), want)
 				}
