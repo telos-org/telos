@@ -387,6 +387,28 @@ func TestPVGDoesNotRetryCredentialFailure(t *testing.T) {
 	}
 }
 
+func TestPVGQuotaFailureDoesNotStartAnotherAgentTurn(t *testing.T) {
+	for _, role := range []string{"prover", "verifier"} {
+		t.Run(role, func(t *testing.T) {
+			compiled := compileTestSpec(t)
+			state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-quota")
+			state.Ensure()
+			failure := TurnResult{Role: role, Error: "400: Your credit balance is too low to access the Anthropic API", Recoverable: true}
+			exec := &fakeExecutor{proverResults: []TurnResult{failure}}
+			wantRounds := 1
+			if role == "verifier" {
+				exec.proverResults = []TurnResult{{Role: "prover", Status: StatusContinue, Logs: "partial work"}}
+				exec.verifierResults = []TurnResult{failure}
+				wantRounds = 2
+			}
+			result := NewPVG(compiled, exec, state, PVGConfig{}).Run()
+			if result.GameResult != GameFailure || result.Rounds != wantRounds || result.Error != failure.Error {
+				t.Fatalf("quota failure started another turn: %#v", result)
+			}
+		})
+	}
+}
+
 func TestPVGUntilFailsWhenReviewBudgetExhausted(t *testing.T) {
 	compiled := compileTestSpec(t)
 	dir := t.TempDir()

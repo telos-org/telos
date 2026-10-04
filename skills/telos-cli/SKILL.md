@@ -125,6 +125,12 @@ Updates retain the session's inference settings.
 [The Goal lifecycle](references/lifecycle.md) explains the reported states,
 revision evidence, and deletion semantics.
 
+For provider credential or quota failures, inspect the reason and follow
+[provider recovery](references/troubleshooting.md#model-credentials-or-quota-were-rejected).
+Persistent controllers retry automatically with backoff; report that waiting
+state instead of repeatedly reapplying the spec. Recovery starts a new cycle
+in the existing workspace, so do not promise exact turn resumption.
+
 ### If an update is rejected
 
 If an inherited `TELOS_MODEL` or `TELOS_THINKING` makes an update fail, omit
