@@ -455,6 +455,9 @@ func applyCloudControl(
 		var pkg *specPackage
 		pkg, err = packageSpec(specArg, contextOverride)
 		if err == nil {
+			err = requireCloudAccessCapability(control, pkg.compiled.Environment.Access)
+		}
+		if err == nil {
 			packageName = pkg.name
 			packageRecord, err = pushSpecPackage(control, pkg, "")
 		}
@@ -491,6 +494,26 @@ func applyCloudControl(
 		session,
 		control.ContextName(),
 	)
+}
+
+func requireCloudAccessCapability(control *cloud.Client, access *spec.AccessSpec) error {
+	if access == nil {
+		return nil
+	}
+	capabilities, err := control.RegistryCapabilities()
+	if err != nil {
+		return fmt.Errorf("cannot verify support for goal-defined external access; goal not applied: %w", err)
+	}
+	capability := "deployment_spec_access"
+	supported := capabilities.DeploymentSpecAccess
+	if access.Egress != nil {
+		capability = "deployment_egress_credentials"
+		supported = capabilities.DeploymentEgressCredentials
+	}
+	if !supported {
+		return fmt.Errorf("goal not applied: this Cloud backend does not support this external access format; use a backend with %s support", capability)
+	}
+	return nil
 }
 
 func applyCloudSessionPackage(

@@ -258,6 +258,7 @@ func ToIRJSON(c *CompiledEnvironment) map[string]interface{} {
 		"interval_seconds": c.Environment.IntervalSeconds,
 		"tags":             c.Environment.Tags,
 		"platform":         platform,
+		"access":           c.Environment.Access,
 		"skills":           skillList,
 	}
 }

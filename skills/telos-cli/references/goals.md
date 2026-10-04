@@ -39,6 +39,7 @@ Goal uses them:
 | `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
 | `interval` | A positive duration ending in `s`, `m`, or `h`, such as `30m` or `6h`, carried as the contract's reconciliation interval. |
 | `tags` | A YAML list of string labels. The default is an empty list. |
+| `egress` | HTTPS destinations with `host`, optional `credentials` ID, and optional `methods` and `paths` restrictions. |
 
 For example:
 
@@ -61,6 +62,53 @@ useful conventions rather than specially parsed fields. Add sections for
 interfaces, compatibility, data lifecycle, security boundaries, failure
 behavior, or evidence when they change what a correct result means.
 
+## Declare external access
+
+For a Cloud Goal that calls external services, add destinations to its frontmatter:
+
+```yaml
+egress:
+  - host: public.example.com
+  - host: api.stripe.com
+    credentials: sec-stripe-example
+    methods: [GET]
+    paths: [/v1/customers, /v1/customers/*]
+```
+
+Replace the example ID with a saved ID from `telos credentials list` in the
+deployment's workspace. Names and secret values stay in the workspace credential
+store, not in this file. Existing `sec_` IDs remain valid alongside new `sec-` IDs.
+
+- `host` is a DNS hostname without a URL scheme. Credentials require an exact
+  hostname, not a wildcard.
+- `credentials` selects authentication for that destination. Omit it for
+  network-only access. The same ID can be used on multiple approved hosts.
+- `methods` and `paths` restrict that destination, not the shared credential.
+  Omitting either, or using `[]`, means all methods or all paths. Do not write
+  a literal `*` list item for these defaults.
+- Use uppercase HTTP methods. Credential paths are exact paths or prefixes
+  ending in `/*`. A goal cannot expand the credential's provider-side permissions.
+
+`egress` describes the complete desired deployment access. Applying a revision
+removes entries left out. Remove all goal-declared access with:
+
+```yaml
+egress: []
+```
+
+This does not delete reusable workspace credentials or remove platform-managed
+inference access. A new Goal with no custom access can omit the declaration.
+When updating a deployment with custom access, declare the desired access
+explicitly. Nonempty declarations require a Cloud Goal.
+
+Older goals using paired `integrations` and `allowlist` fields remain supported.
+Do not mix those fields with `egress`. Their separate lists do not identify
+which credential belongs to which host; choose the bindings explicitly when
+converting them.
+
+See [Telos Cloud](cloud.md#credentials-and-external-access) for credential
+setup, backend support, permissions, and runtime limits.
+
 ## Express the contract, not an implementation recipe
 
 A useful spec names observable behavior and leaves implementation choices open
@@ -81,10 +129,11 @@ That contract permits the agent to choose an appropriate framework and
 datastore. A framework, schema, deployment shape, or compatibility requirement
 belongs in the spec when it is itself part of the promised outcome.
 
-A spec can select a lifecycle, import capabilities and rubrics, and describe
-the desired state. It does not grant credentials, network access, registry
-permissions, or a platform capability. Confirm those surfaces separately
-before applying a Cloud Goal; [Telos Cloud](cloud.md) describes that preflight.
+A Goal can select a lifecycle, import skills and rubrics, and declare deployment
+credentials and network access. On a supporting Cloud backend, applying the
+revision configures that access after authorization checks. The declarations
+do not contain secret values, grant registry permissions, or create missing
+platform capabilities. [Telos Cloud](cloud.md) describes those boundaries.
 
 ## Choose `apply` or `run`
 

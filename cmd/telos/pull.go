@@ -285,7 +285,19 @@ func registryPackageForApply(
 	if err != nil {
 		return nil, err
 	}
-	if _, err := verifiedPackageSpec(pkg); err != nil {
+	markdown, err := verifiedPackageSpec(pkg)
+	if err != nil {
+		return nil, err
+	}
+	raw, _, ok := spec.ParseFrontmatter(string(markdown))
+	if !ok {
+		return nil, fmt.Errorf("%s has invalid goal frontmatter", reference.ref)
+	}
+	access, err := spec.ParseAccess(raw)
+	if err != nil {
+		return nil, err
+	}
+	if err := requireCloudAccessCapability(control, access); err != nil {
 		return nil, err
 	}
 	return record, nil

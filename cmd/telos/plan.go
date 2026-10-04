@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -28,9 +29,10 @@ type specComparison struct {
 }
 
 type planSpecState struct {
-	Version         string          `json:"version,omitempty"`
-	IntervalSeconds *int            `json:"interval_seconds,omitempty"`
-	Skills          []planSkillLock `json:"skills"`
+	Version         string           `json:"version,omitempty"`
+	IntervalSeconds *int             `json:"interval_seconds,omitempty"`
+	Skills          []planSkillLock  `json:"skills"`
+	Access          *spec.AccessSpec `json:"access"`
 }
 
 type planSkillLock struct {
@@ -125,6 +127,7 @@ func cmdPlan(args []string) {
 			"path":         specPath,
 			"content_hash": compiled.ContentHash,
 			"platform":     platform,
+			"access":       compiled.Environment.Access,
 			"namespace":    compiled.Namespace,
 			"skills":       skillNames(compiled.Skills),
 			"required_rubrics": skillNames(
@@ -200,6 +203,14 @@ func printPlanPreview(
 	printSummaryField(out, "Hash", compiled.ContentHash)
 	if len(compiled.Skills) > 0 {
 		printSummaryField(out, "Skills", strings.Join(skillDisplayNames(compiled), ", "))
+	}
+	if access := compiled.Environment.Access; comparison == nil && access != nil {
+		if access.Egress != nil {
+			printSummaryField(out, "Access", formatPlanAccess(access))
+		} else {
+			printSummaryField(out, "Integrations", formatPlanIntegrations(access))
+			printSummaryField(out, "Allowlist", formatPlanAllowlist(access.Allowlist))
+		}
 	}
 	if comparison == nil {
 		return
@@ -374,6 +385,11 @@ func planSpecStateFromMarkdown(
 		return planSpecState{}, fmt.Errorf("spec has no valid YAML frontmatter")
 	}
 	state := planSpecState{Skills: []planSkillLock{}}
+	access, err := spec.ParseAccess(raw)
+	if err != nil {
+		return state, err
+	}
+	state.Access = access
 	if version, ok := raw["version"].(string); ok {
 		state.Version = strings.TrimSpace(version)
 	}
@@ -415,7 +431,10 @@ func printPlanStateDelta(out io.Writer, current, proposed planSpecState) {
 	versionChanged := current.Version != proposed.Version
 	intervalChanged := currentInterval != proposedInterval
 	skillsChanged := !slices.Equal(current.Skills, proposed.Skills)
-	if !versionChanged && !intervalChanged && !skillsChanged {
+	currentAccess := formatPlanAccess(current.Access)
+	proposedAccess := formatPlanAccess(proposed.Access)
+	accessChanged := currentAccess != proposedAccess
+	if !versionChanged && !intervalChanged && !skillsChanged && !accessChanged {
 		return
 	}
 	if versionChanged {
@@ -423,6 +442,15 @@ func printPlanStateDelta(out io.Writer, current, proposed planSpecState) {
 	}
 	if intervalChanged {
 		printSummaryField(out, "Interval", planDeltaValue(currentInterval, proposedInterval))
+	}
+	if accessChanged {
+		if samePlanPermissions(current.Access, proposed.Access) {
+			fmt.Fprintln(out, "Integration labels (permissions unchanged)")
+		} else {
+			fmt.Fprintln(out, "Access")
+		}
+		printDetailField(out, "current", currentAccess)
+		printDetailField(out, "proposed", proposedAccess)
 	}
 	if skillsChanged {
 		if versionChanged || intervalChanged {
@@ -432,6 +460,62 @@ func printPlanStateDelta(out io.Writer, current, proposed planSpecState) {
 		printDetailField(out, "current", formatPlanSkillLocks(current.Skills))
 		printDetailField(out, "proposed", formatPlanSkillLocks(proposed.Skills))
 	}
+}
+
+func formatPlanAccess(access *spec.AccessSpec) string {
+	if access == nil {
+		return "not declared"
+	}
+	if access.Egress != nil {
+		entries := make([]string, 0, len(access.Egress))
+		for _, rule := range access.Egress {
+			methods, paths := slices.Clone(rule.Methods), slices.Clone(rule.Paths)
+			slices.Sort(methods)
+			slices.Sort(paths)
+			entries = append(entries, fmt.Sprintf("%s (credentials: %s; methods: %s; paths: %s)",
+				rule.Host, firstNonEmpty(rule.Credentials, "none"),
+				firstNonEmpty(strings.Join(methods, ", "), "all"),
+				firstNonEmpty(strings.Join(paths, ", "), "*")))
+		}
+		slices.Sort(entries)
+		entries = slices.Compact(entries)
+		return "egress: " + firstNonEmpty(strings.Join(entries, "; "), "none")
+	}
+	return "integrations: " + formatPlanIntegrations(access) +
+		"; allowlist: " + formatPlanAllowlist(access.Allowlist)
+}
+
+func formatPlanIntegrations(access *spec.AccessSpec) string {
+	values := make([]string, 0, len(access.Integrations))
+	for _, id := range access.Integrations {
+		if name := access.IntegrationNames[id]; name != "" {
+			values = append(values, fmt.Sprintf("%q (%s)", name, id))
+		} else {
+			values = append(values, id)
+		}
+	}
+	return firstNonEmpty(strings.Join(values, ", "), "none")
+}
+
+func samePlanPermissions(current, proposed *spec.AccessSpec) bool {
+	if current == nil || proposed == nil {
+		return current == proposed
+	}
+	if current.Egress != nil || proposed.Egress != nil {
+		return current.Egress != nil && proposed.Egress != nil && formatPlanAccess(current) == formatPlanAccess(proposed)
+	}
+	currentIDs, proposedIDs := slices.Clone(current.Integrations), slices.Clone(proposed.Integrations)
+	slices.Sort(currentIDs)
+	slices.Sort(proposedIDs)
+	return slices.Equal(currentIDs, proposedIDs) && formatPlanAllowlist(current.Allowlist) == formatPlanAllowlist(proposed.Allowlist)
+}
+
+func formatPlanAllowlist(rules []spec.NetworkRule) string {
+	if len(rules) == 0 {
+		return "none"
+	}
+	encoded, _ := json.Marshal(rules)
+	return string(encoded)
 }
 
 func planDeltaValue(current, proposed string) string {

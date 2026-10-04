@@ -38,7 +38,8 @@ type EnvironmentSpec struct {
 	SpecText                   string
 	IntervalSeconds            *int
 	Tags                       []string
-	Platform                   string // "local" or "cloud"
+	Platform                   string      // "local" or "cloud"
+	Access                     *AccessSpec // nil means no access declaration
 	RequiredVerifierSkillPaths []string
 }
 
@@ -145,6 +146,16 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 		}
 		env.Platform = p
 	}
+
+	// Workspace access is enforced by the Cloud control plane.
+	access, err := ParseAccess(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	if env.Platform == "local" && access != nil && (len(access.Egress) > 0 || len(access.Integrations) > 0 || len(access.Allowlist) > 0) {
+		return nil, fmt.Errorf("%s: external access declarations require platform: cloud", path)
+	}
+	env.Access = access
 
 	// skills
 	if v, ok := raw["skills"]; ok {

@@ -16,6 +16,98 @@ import (
 	"github.com/telos-org/telos/internal/spec"
 )
 
+func TestPlanShowsAccessChangesIncludingRemovals(t *testing.T) {
+	current, err := planSpecStateFromMarkdown([]byte("---\nname: test\nversion: 1.0.0\nintegrations: [sec_stripe]\nallowlist: [{host: api.stripe.com, methods: [POST], paths: ['/v1/*']}]\n---\nBody"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed, err := planSpecStateFromMarkdown([]byte("---\nname: test\nversion: 1.0.0\nintegrations: []\nallowlist: []\n---\nBody"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	printPlanStateDelta(&out, current, proposed)
+	for _, expected := range []string{"Access", "sec_stripe", "api.stripe.com", "POST", "/v1/*", "integrations: none; allowlist: none"} {
+		if !strings.Contains(out.String(), expected) {
+			t.Fatalf("access delta omitted %q: %s", expected, out.String())
+		}
+	}
+	encoded, _ := json.Marshal(proposed)
+	if !strings.Contains(string(encoded), `"access":{"integrations":[],"allowlist":[]}`) {
+		t.Fatalf("JSON plan omitted explicit removal: %s", encoded)
+	}
+}
+
+func TestPlanDistinguishesIntegrationLabelsFromPermissionChanges(t *testing.T) {
+	current := planSpecState{Access: &spec.AccessSpec{
+		Integrations: []string{"sec_stripe"}, Allowlist: []spec.NetworkRule{},
+	}}
+	proposed := planSpecState{Access: &spec.AccessSpec{
+		Integrations: []string{"sec_stripe"}, Allowlist: []spec.NetworkRule{},
+		IntegrationNames: map[string]string{"sec_stripe": "Stripe production"},
+	}}
+	var out bytes.Buffer
+	printPlanStateDelta(&out, current, proposed)
+	if !strings.Contains(out.String(), "Integration labels (permissions unchanged)") || !strings.Contains(out.String(), `"Stripe production" (sec_stripe)`) {
+		t.Fatalf("label-only change presented incorrectly: %s", out.String())
+	}
+	out.Reset()
+	proposed.Access.Integrations = []string{"sec_other"}
+	proposed.Access.IntegrationNames = map[string]string{"sec_other": "Stripe production"}
+	printPlanStateDelta(&out, current, proposed)
+	if !strings.Contains(out.String(), "Access") || strings.Contains(out.String(), "permissions unchanged") {
+		t.Fatalf("same label hid an ID change: %s", out.String())
+	}
+}
+
+func TestPlanShowsHostCredentialBindingsDefaultsAndChanges(t *testing.T) {
+	parse := func(fields string) planSpecState {
+		t.Helper()
+		state, err := planSpecStateFromMarkdown([]byte("---\nname: test\nversion: 1.0.0\n"+fields+"---\nBody"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	current := parse("egress: [{host: api.example.com, credentials: sec-one}, {host: public.example.com}]\n")
+	proposed := parse("egress: [{host: api.example.com, credentials: sec-two}, {host: public.example.com}]\n")
+	var out bytes.Buffer
+	printPlanStateDelta(&out, current, proposed)
+	for _, expected := range []string{
+		"Access", "api.example.com (credentials: sec-one; methods: all; paths: *)",
+		"api.example.com (credentials: sec-two; methods: all; paths: *)",
+		"public.example.com (credentials: none; methods: all; paths: *)",
+	} {
+		if !strings.Contains(out.String(), expected) {
+			t.Fatalf("missing binding/default %q: %s", expected, out.String())
+		}
+	}
+	if strings.Contains(out.String(), "permissions unchanged") || samePlanPermissions(current.Access, proposed.Access) {
+		t.Fatalf("credential-only change was treated as a label edit: %s", out.String())
+	}
+	out.Reset()
+	printPlanPreview(&out, &spec.CompiledEnvironment{Environment: &spec.EnvironmentSpec{
+		Name: "test", Access: proposed.Access,
+	}}, "SPEC.md", "cloud", "personal", nil)
+	if !strings.Contains(out.String(), "api.example.com (credentials: sec-two; methods: all; paths: *)") {
+		t.Fatalf("initial preview hid access binding: %s", out.String())
+	}
+	out.Reset()
+	proposed = parse("egress: []\n")
+	printPlanStateDelta(&out, current, proposed)
+	if !strings.Contains(out.String(), "egress: none") {
+		t.Fatalf("missing explicit revocation: %s", out.String())
+	}
+	encoded, _ := json.Marshal(proposed)
+	if !strings.Contains(string(encoded), `"access":{"egress":[]}`) || strings.Contains(string(encoded), "allowlist") {
+		t.Fatalf("new plan schema lost explicit revocation or emitted legacy fields: %s", encoded)
+	}
+	proposed = parse("egress: [{host: api.example.com, credentials: sec-one, methods: [GET], paths: ['/reports/*']}]\n")
+	if got := formatPlanAccess(proposed.Access); !strings.Contains(got, "credentials: sec-one; methods: GET; paths: /reports/*") {
+		t.Fatalf("restricted binding missing: %s", got)
+	}
+}
+
 func TestCompareCloudSessionSpecShowsDeployedDiff(t *testing.T) {
 	pkg := testApplyPackage(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -435,5 +527,43 @@ func TestPrintPlanStateDeltaOmitsUnchangedResolvedState(t *testing.T) {
 	printPlanStateDelta(&out, state, state)
 	if out.Len() != 0 {
 		t.Fatalf("unchanged resolved state should be silent:\n%s", out.String())
+	}
+}
+
+func TestPlanEgressOrderingDoesNotChangePermissions(t *testing.T) {
+	read := func(rules string) planSpecState {
+		t.Helper()
+		state, err := planSpecStateFromMarkdown([]byte("---\nname: demo\nversion: 1.0.0\negress:\n"+rules+"---\n"), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return state
+	}
+	current := read(`  - host: public.example.com
+  - host: api.example.com
+    credentials: sec-example
+    methods: [POST, GET]
+    paths: [/z/*, /a/*]
+`)
+	proposed := read(`  - host: api.example.com
+    credentials: sec-example
+    methods: [GET, POST]
+    paths: [/a/*, /z/*]
+  - host: public.example.com
+  - host: api.example.com
+    credentials: sec-example
+    methods: [POST, GET]
+    paths: [/z/*, /a/*]
+`)
+	if !samePlanPermissions(current.Access, proposed.Access) {
+		t.Fatal("ordering and repeated equivalent rows changed permissions")
+	}
+	var out bytes.Buffer
+	printPlanStateDelta(&out, current, proposed)
+	if out.Len() != 0 {
+		t.Fatalf("equivalent access should not produce an access delta: %s", out.String())
+	}
+	if current.Access.Egress[1].Methods[0] != "POST" || current.Access.Egress[1].Paths[0] != "/z/*" {
+		t.Fatal("formatting mutated the authored rule order")
 	}
 }

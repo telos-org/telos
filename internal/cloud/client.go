@@ -36,11 +36,13 @@ type PackageVersionRecord struct {
 }
 
 type Capabilities struct {
-	DeploymentRevisionHistory  bool `json:"deployment_revision_history"`
-	DeploymentRevisionMessages bool `json:"deployment_revision_messages"`
-	DeploymentPackageRedeploy  bool `json:"deployment_package_redeploy"`
-	DeploymentSnapshotRestore  bool `json:"deployment_snapshot_restore"`
-	RegistryPrivacy            bool `json:"registry_privacy"`
+	DeploymentEgressCredentials bool `json:"deployment_egress_credentials"`
+	DeploymentSpecAccess        bool `json:"deployment_spec_access"`
+	DeploymentRevisionHistory   bool `json:"deployment_revision_history"`
+	DeploymentRevisionMessages  bool `json:"deployment_revision_messages"`
+	DeploymentPackageRedeploy   bool `json:"deployment_package_redeploy"`
+	DeploymentSnapshotRestore   bool `json:"deployment_snapshot_restore"`
+	RegistryPrivacy             bool `json:"registry_privacy"`
 }
 
 type SkillFile struct {
