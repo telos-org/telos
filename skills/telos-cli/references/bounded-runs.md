@@ -11,7 +11,8 @@ development, benchmarking, and [nested execution](nested-goals.md). A local
 run executes bounded work in an isolated workspace and stops.
 
 Local runs use the [pi](https://github.com/earendil-works/pi) coding agent.
-Before starting, [install Telos](install.md). Local runs use your pi provider
+Before starting, [install Telos with local execution](install.md#add-local-execution),
+which includes the `telosd` session runtime. Local runs use your pi provider
 credentials; a Telos Cloud login does not configure them.
 
 If pi is not already installed, install it and open it to authenticate with

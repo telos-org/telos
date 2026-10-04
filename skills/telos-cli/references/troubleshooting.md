@@ -11,7 +11,7 @@ Start with the command that can distinguish the observed symptom:
 | Symptom | First check | Decisive evidence |
 | --- | --- | --- |
 | `telos` is unavailable | `command -v telos` | Binary path or missing installation |
-| A local run will not start | `telos plan SPEC.md`, then `git status --short` in a Git source | Invalid spec, dirty source, or missing local pi setup |
+| A local run will not start | `telos plan SPEC.md`, then `git status --short` in a Git source | Invalid spec, dirty source, or missing local runtime or pi setup |
 | Cloud authentication or target is wrong | `telos config` | Authentication and active context |
 | An agent or CI job waits for browser login | Check the job's authentication setup against [token authentication](cloud.md#token-authentication-for-agents-and-ci) | A supplied `TELOS_AUTH_TOKEN` lets the job run Cloud commands directly |
 | A Cloud status or log check loses its connection | Repeat the read with the same session and context | Connection error and the next successful status or log response |
@@ -30,7 +30,9 @@ installer when the binary is absent or not the intended release.
 ## Local run cannot start
 
 `telos plan` identifies malformed frontmatter or a platform mismatch. A local
-run requires `platform: local`, `pi` on `PATH`, and an authenticated provider.
+run requires `platform: local`, the `telosd` session runtime, `pi` on `PATH`,
+and an authenticated provider. If the error reports a missing `telosd`, add
+[local execution](install.md#add-local-execution) with `TELOS_INSTALL_LOCAL=1`.
 `telos run --help` shows the model, thinking, cycle, time, and cost flags
 supported by the installed release.
 

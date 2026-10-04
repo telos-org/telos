@@ -14,13 +14,13 @@ telos --version
 telos --help
 ```
 
-It installs `telos` and `telosd` under
-`${TELOS_INSTALL_DIR:-$HOME/.local/bin}` and this skill under
+It installs `telos` under `${TELOS_INSTALL_DIR:-$HOME/.local/bin}` and the
+CLI skill and documentation under
 `${TELOS_AGENT_SKILLS_DIR:-$HOME/.agents/skills}/telos-cli`.
 
-Cloud-only use does not require `pi` on your machine, including when you use
-Claude Code or Codex to operate Telos Cloud. The installer's `pi` setup
-instructions apply only to local Telos runs.
+Cloud use does not require `telosd` or `pi` on your machine, including when you
+use Claude Code or Codex to operate Telos Cloud. The managed runtime is
+installed and updated by Cloud automation.
 
 For first-time interactive Cloud setup, sign in and confirm the target context:
 
@@ -35,10 +35,24 @@ and run Cloud commands without a browser login step. See
 
 Then continue with [Use Telos](use-telos.md).
 
-For a local run, install `pi` if it is not already installed and
-authenticate the intended provider with `pi` → `/login`. Then follow
-[Bounded runs](bounded-runs.md). Managed Cloud deployments do not use the
-workstation's local model credentials.
+## Add local execution
+
+For harness development, benchmarking, or other local execution, include
+`telosd` explicitly:
+
+```bash
+curl -fsSL https://usetelos.ai/install.sh | TELOS_INSTALL_LOCAL=1 sh
+```
+
+This installs the CLI, skill, and local runtime from the same release. Then
+install `pi` if needed and authenticate your provider with `pi` → `/login`.
+Follow [Bounded runs](bounded-runs.md). Managed Cloud deployments do not use
+your local model credentials.
+
+Rerunning the installer retains and updates an existing `telosd` beside the
+CLI, even without `TELOS_INSTALL_LOCAL=1`. It also remembers the skill directory
+from the previous installation; `TELOS_AGENT_SKILLS_DIR` selects a different
+directory when supplied.
 
 ## Install an exact release
 

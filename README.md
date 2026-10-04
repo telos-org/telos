@@ -23,6 +23,13 @@ telos login
 
 The installer supports macOS and Linux on amd64 and arm64.
 
+The default installation includes the CLI and its skill/docs. Cloud use needs
+no local `telosd` or `pi`. To add local execution:
+
+```bash
+curl -fsSL https://usetelos.ai/install.sh | TELOS_INSTALL_LOCAL=1 sh
+```
+
 Cloud deployments require authentication. Use `telos login` interactively, or
 supply `TELOS_AUTH_TOKEN` for agents and CI. An existing valid login or token
 needs no additional login step; see

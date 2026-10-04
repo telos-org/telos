@@ -38,7 +38,10 @@ session. Choose the lifecycle that matches the requested outcome:
 | Bounded run | `telos run` | A local session that stops at its cycle, time, or cost bound. |
 
 If the CLI is missing or an update is requested, read
-[Install Telos](references/install.md). For model selection or `--thinking`,
+[Install Telos](references/install.md). The default installation needs no local
+daemon for Cloud work. Request `TELOS_INSTALL_LOCAL=1` only when local execution
+is needed. Managed runtime releases belong to Cloud automation, independently
+of workstation installs. For model selection or `--thinking`,
 read [Models and inference](references/inference.md).
 
 Before drafting either kind of spec, read [Write a SPEC.md](references/goals.md).
@@ -149,8 +152,10 @@ runtime availability, or stale-revision protection.
 For a top-level local run, read [Bounded runs](references/bounded-runs.md).
 Use a `platform: local` spec and choose a cycle, time, or cost bound suited to
 the task. Check local `pi` authentication and the source workspace first: a Git
-source must be clean, including a newly written spec. Keep the spec outside
-that checkout or include it in the intended source commit. Do not discard or
+source must be clean, including a newly written spec. Confirm that the local
+`telosd` runtime is installed, using the local installation option above when
+needed. Keep the spec outside that checkout or include it in the intended source
+commit. Do not discard or
 silently commit the user's work to satisfy the cleanliness requirement.
 
 Once the source and bounds are authorized, start the run:

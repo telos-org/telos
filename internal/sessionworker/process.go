@@ -278,7 +278,7 @@ func resolveTelosd() (string, error) {
 	if path, err := exec.LookPath("telosd"); err == nil {
 		return path, nil
 	}
-	return "", fmt.Errorf("telosd not found; install telosd next to telos or set TELOSD_PATH")
+	return "", fmt.Errorf("local execution requires telosd; install the local runtime with `curl -fsSL https://usetelos.ai/install.sh | TELOS_INSTALL_LOCAL=1 sh`, or set TELOSD_PATH to an existing telosd")
 }
 
 func StartEpoch(sessionDir string, manifest *sessionapi.Manifest) (int, error) {
