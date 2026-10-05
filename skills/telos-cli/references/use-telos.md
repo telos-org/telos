@@ -1,14 +1,13 @@
 ---
 title: Use Telos
-description: Each Goal keeps its spec, revisions, deployment, and verification evidence together.
+description: Get started with building on Telos.
 group: Getting started
 ---
 
 # Use Telos
 
-Telos is a goal-oriented programming system. You describe what the software
-should do in `SPEC.md`; Telos assigns agents to implement, run, and verify the
-current revision.
+Telos is a goal-oriented programming system. Telos treats the goal specification as the source of truth, and background agents own the software lifecycle beneath it. 
+
 
 The spec is the durable source. Implementations can change as the Goal evolves,
 while its session, deployment, history, and evidence remain connected.
@@ -17,13 +16,37 @@ This guide follows one small service from its first spec through a live update.
 Generated IDs, digests, paths, and URLs in the transcripts are illustrative;
 the command and field shapes match the current CLI.
 
-## Sign in and choose a context
+## Installation
 
-Install Telos first if needed. For first-time interactive setup, authenticate
-and inspect the available Cloud contexts as shown below. If you already have
-a valid saved login, proceed to `telos config`. Agents and CI can instead
-supply `TELOS_AUTH_TOKEN` and skip `telos login`; see
-[Cloud authentication](cloud.md#authenticate).
+Install telos with
+
+```console
+curl -fsSL https://usetelos.ai/install.sh | sh
+```
+
+This will install the `telos` binary into your `$HOME/.local/bin` or `$TELOS_INSTALL_DIR`. This also packages with it the coupled `telos-cli` agent skill, installed under `$HOME/.agents/skills/`. The `telos` binary is self-contained, and you can check the installed version with:
+
+```console
+telos --version
+```
+
+If you want to update your local installation, use:
+
+```console
+telos update
+```
+to install the latest stable version
+
+or
+
+```console
+telos update $VERSION
+```
+to install a specific release. 
+
+## Sign in 
+
+For first-time interactive setup, authenticate with Telos Cloud as shown below.
 
 ```console
 $ telos login
@@ -31,22 +54,28 @@ Opening your browser to approve this login...
 If it doesn't open, visit this link on any device: https://usetelos.ai/cli-auth?code=...
 Waiting for approval...
 logged in to https://api.usetelos.ai as alice@example.com
+```
 
+For non-interactive use (such as agents, CI and other automation) you can instead supply `TELOS_AUTH_TOKEN`. API tokens can be provisioned [on the web dashboard](https://usetelos.ai/account?tab=tokens).
+
+To validate your signed-in configuration, run
+
+```
 $ telos config
 Config file     ~/.telos/config.yaml
 Endpoint        https://api.usetelos.ai
 Authentication  valid
 Context         personal
 Workspace model telos/default
-Connections
 ```
 
-[Install Telos](install.md) covers first-time setup and PATH repair. This
-walkthrough uses the personal context explicitly on every Cloud command.
+Congratulations! You are now ready to run your goals on Telos.
 
-## Describe the Goal
+## An example Goal
 
-Create `SPEC.md`:
+This section serves as a walkthrough of the lifecycle of a goal specification on Telos.
+
+Start by writing a preliminary `SPEC.md` for your service:
 
 ```markdown
 ---
@@ -69,36 +98,27 @@ Run a public service for a shared reading list.
   returns it.
 ```
 
-The contract names the behavior that matters without choosing a framework,
-database, or deployment layout. Before applying, confirm that the service fits
-the [managed Cloud runtime](cloud.md). This one does: a small interpreted
-service can be delivered from source, and environment-local persistent storage
-can satisfy its restart requirement.
+Writing good goals is important enough of a topic that we've dedicated [an entire section to it](goals.md), but at a framework level, the above example covers the minimal required items.
 
-[Write a SPEC.md](goals.md) covers every supported frontmatter field and the
-boundary between a desired outcome and an available platform capability.
+## Plan
 
-## Preview the first revision
-
-`plan` validates the spec and shows where it will run without changing remote
-state:
+Once you are happy with the goal specification, `telos plan` validates the spec and shows you a dry-run of what the spec would look like when applied.
 
 ```console
 $ telos plan SPEC.md --context personal
 Spec      reading-list
 Target    cloud
 Context   personal
-Path      /Users/alice/reading-list/SPEC.md
-Namespace ns-reading-list
-Hash      799e5c31172afb26
+Path      /Users/alice/reading-list/SPEC.md ?? -> is this really needed?
+Namespace ns-reading-list ->> seems false now? 
+Hash      799e5c31172afb26 --> ?? is this really needed?
 ```
 
-Confirm the target and context before continuing. The first plan has no
-deployed revision to compare, so it shows the Goal identity, namespace, and
-content hash. Applying this plan creates a new persistent Goal and may incur
-inference charges. Continue when that is the action you intend.
+The first plan has no deployed version to compare against, so it shows the Goalidentity, context, and content hash. 
 
 ## Apply it
+
+Once the plan looks good, use `telos apply` to deploy the spec in the cloud environment.
 
 ```console
 $ telos apply SPEC.md --context personal
@@ -114,27 +134,25 @@ Context   personal
 Logs      telos logs --context personal sess_c7d2f0a4e8
 ```
 
-`working` means Cloud accepted this revision and is reconciling it. Keep both
-the session ID and revision digest: the session identifies the Goal, while the
-digest identifies the exact contract now being implemented.
-
-Follow progress with the context printed in the receipt:
+The `apply` command returns immediately and launches a session in the cloud. You can monitor status (at different levels of detail and verbosity0 of your active goal at any time with: 
 
 ```bash
-telos describe sess_c7d2f0a4e8 --context personal --json
-telos logs sess_c7d2f0a4e8 --context personal
+$ telos describe sess_c7d2f0a4e8 --context personal --json
+*todo need example*
 ```
 
-[The Goal lifecycle](lifecycle.md) gives the polling interval, stopping
-conditions, and evidence rules for this observation step.
+or
 
-## Observe `ready`
+```bash
+$ telos logs sess_c7d2f0a4e8 --context personal
+*todo need example*
+```
 
-When reconciliation succeeds, `describe` reports the accepted revision. The
-public route is published after its own surface probe; once that succeeds,
-`describe` also includes `Service`:
+## Wait for readiness
 
-```console
+When reconciliation succeeds, `describe` reports the accepted goal as `ready` and exposes a public handle.
+
+```console  **I think too much slop output in here as well!*
 $ telos describe sess_c7d2f0a4e8 --context personal
 Name      reading-list
 Status    ready
@@ -147,21 +165,17 @@ Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 ```
 
-On current managed runtimes, this `ready` result belongs to the displayed
-revision digest. The Cloud agent's evidence should include the promised
-write–restart–read sequence. From outside the environment, exercise
-`POST /books` and `GET /books` through the public URL and confirm the live
-behavior independently.
+Once ready, open the service and poke around? In this case, we'll exercise
 
-If `ready` appears before `Service`, keep observing `describe` for route
-publication within the same deadline. A public service is not externally
-verifiable until that URL exists.
+Exercise `POST /books` and `GET /books` through the public URL and confirm the live behavior independently.
 
-## Revise the same Goal
+## Updating the Goal
 
 Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump
 its version to `0.2.0`, and add “Every book records who added it” to the Goal.
 Plan against the existing session:
+
+*below notes - not sure if should add explicit `--context personal`*
 
 ```console
 $ telos plan SPEC.md --session sess_c7d2f0a4e8 --context personal
@@ -197,7 +211,7 @@ contract change. Apply that new revision to the same session:
 
 ```console
 $ telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal
-updated reading-list
+updated reading-list ->>??? is this the wrong output / outdated?
 
 Status    working
 Session   sess_c7d2f0a4e8
