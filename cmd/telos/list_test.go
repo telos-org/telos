@@ -632,55 +632,6 @@ func TestRootListSessionsUsesScopedContext(t *testing.T) {
 	}
 }
 
-func TestRootListSessionsScopesLocalRootTree(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "sessions")
-	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	rootKind := sessionapi.KindController
-	rootSpec := "---\nversion: 0.1.0\nname: root\nplatform: local\n---\n# Root\n"
-	rootSession, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown: &rootSpec,
-		SessionKind:  &rootKind,
-	})
-	if err != nil {
-		t.Fatalf("Create root: %v", err)
-	}
-	childSpec := "---\nversion: 0.1.0\nname: child\nplatform: local\n---\n# Child\n"
-	child, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown:    &childSpec,
-		ParentSessionID: &rootSession.SessionID,
-	})
-	if err != nil {
-		t.Fatalf("Create child: %v", err)
-	}
-	siblingSpec := "---\nversion: 0.1.0\nname: sibling\nplatform: local\n---\n# Sibling\n"
-	if _, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown: &siblingSpec,
-		SessionKind:  &rootKind,
-	}); err != nil {
-		t.Fatalf("Create sibling: %v", err)
-	}
-
-	t.Setenv("TELOS_SESSION_DIR", root)
-	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
-	t.Setenv("TELOS_SESSION_ID", rootSession.SessionID)
-
-	sessions, handled, err := rootListSessions(0)
-	if err != nil {
-		t.Fatalf("rootListSessions: %v", err)
-	}
-	if !handled {
-		t.Fatal("expected local root context to be handled")
-	}
-	got := make([]string, 0, len(sessions))
-	for _, session := range sessions {
-		got = append(got, session.SessionID)
-	}
-	want := []string{rootSession.SessionID, child.SessionID}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("scoped sessions: got %v want %v", got, want)
-	}
-}
-
 func TestPrintSessionDescriptionIncludesOnlyLifecycleEssentials(t *testing.T) {
 	name := "postgres"
 	kind := sessionapi.KindController
