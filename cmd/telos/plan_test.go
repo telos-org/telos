@@ -85,7 +85,7 @@ func TestPrintPlanPreviewShowsSessionDiff(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", comparison)
+	printPlanPreview(&out, compiled, "./SPEC.md", "personal", comparison)
 	text := out.String()
 	for _, want := range []string{
 		"Session   sess_123",
@@ -115,7 +115,7 @@ func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", comparison)
+	printPlanPreview(&out, compiled, "./SPEC.md", "personal", comparison)
 	if !strings.Contains(out.String(), "No spec changes.") {
 		t.Fatalf("plan output:\n%s", out.String())
 	}
@@ -283,7 +283,7 @@ func configurePlanSkillsCatalogue(t *testing.T) string {
 }
 
 func TestCompareSessionSpecRejectsLocalSession(t *testing.T) {
-	_, err := compareSessionSpec("local_123", nil, planSpecState{}, "cloud", "")
+	_, err := compareSessionSpec("local_123", nil, planSpecState{}, "")
 	if err == nil || !strings.Contains(err.Error(), "only compares Telos Cloud sessions") {
 		t.Fatalf("error = %v, want local session rejection", err)
 	}

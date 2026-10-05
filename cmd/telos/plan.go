@@ -63,17 +63,12 @@ func cmdPlan(args []string) {
 		os.Exit(1)
 	}
 
-	platform := compiled.Environment.Platform
-	if platform == "" {
-		platform = "cloud"
-	}
 	var comparison *specComparison
 	if strings.TrimSpace(*sessionID) != "" {
 		comparison, err = compareSessionSpec(
 			*sessionID,
 			proposedSpec,
 			proposedState,
-			platform,
 			contextOverride,
 		)
 		if err != nil {
@@ -81,48 +76,40 @@ func cmdPlan(args []string) {
 			os.Exit(1)
 		}
 	}
-	targetMode := "local"
-	targetContext := ""
-	if platform != "local" {
-		targetMode = "cloud"
-		cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	targetContext := strings.TrimSpace(contextOverride)
+	if targetContext == "" {
+		targetContext = strings.TrimSpace(cfg.Context)
+	}
+	if targetContext == "" {
+		targetContext = "personal"
+	}
+	if cfg.AuthToken != "" {
+		control, err := cloud.ControlClientForContext(contextOverride)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		targetContext = strings.TrimSpace(contextOverride)
-		if targetContext == "" {
-			targetContext = strings.TrimSpace(cfg.Context)
-		}
-		if targetContext == "" {
-			targetContext = "personal"
-		}
-		if cfg.AuthToken != "" {
-			control, err := cloud.ControlClientForContext(contextOverride)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			targetContext = control.ContextName()
-		}
+		targetContext = control.ContextName()
 	}
 	targetOperation := "create"
 	if comparison != nil {
 		targetOperation = "update"
 	}
 	targetScope := map[string]interface{}{
-		"mode":      targetMode,
+		"mode":      "cloud",
 		"operation": targetOperation,
-	}
-	if targetContext != "" {
-		targetScope["context"] = targetContext
+		"context":   targetContext,
 	}
 	plan := map[string]interface{}{
 		"spec": map[string]interface{}{
 			"name":         compiled.Environment.Name,
 			"path":         specPath,
 			"content_hash": compiled.ContentHash,
-			"platform":     platform,
 			"namespace":    compiled.Namespace,
 			"skills":       skillNames(compiled.Skills),
 			"required_rubrics": skillNames(
@@ -149,7 +136,7 @@ func cmdPlan(args []string) {
 		return
 	}
 
-	printPlanPreview(os.Stdout, compiled, specPath, platform, targetContext, comparison)
+	printPlanPreview(os.Stdout, compiled, specPath, targetContext, comparison)
 }
 
 func compilePlanSpec(
@@ -178,23 +165,18 @@ func printPlanPreview(
 	out io.Writer,
 	compiled *spec.CompiledEnvironment,
 	specPath string,
-	platform string,
 	contextName string,
 	comparison *specComparison,
 ) {
 	printSummaryField(out, "Spec", compiled.Environment.Name)
-	printSummaryField(out, "Target", platform)
-	if contextName != "" {
-		printSummaryField(out, "Context", contextName)
-	}
+	printSummaryField(out, "Target", "cloud")
+	printSummaryField(out, "Context", contextName)
 	if comparison != nil {
 		printSummaryField(out, "Session", comparison.sessionID)
 		printSummaryField(out, "Current", comparison.currentRef)
 	}
 	printSummaryField(out, "Path", specPath)
-	if platform != "local" {
-		printSummaryField(out, "Namespace", compiled.Namespace)
-	}
+	printSummaryField(out, "Namespace", compiled.Namespace)
 	printSummaryField(out, "Hash", compiled.ContentHash)
 	if len(compiled.Skills) > 0 {
 		printSummaryField(out, "Skills", strings.Join(skillDisplayNames(compiled), ", "))
@@ -218,7 +200,6 @@ func compareSessionSpec(
 	sessionID string,
 	proposed []byte,
 	proposedState planSpecState,
-	platform string,
 	contextOverride string,
 ) (*specComparison, error) {
 	sessionID = strings.TrimSpace(sessionID)
@@ -226,9 +207,6 @@ func compareSessionSpec(
 	case isLocalApplyID(sessionID):
 		return nil, fmt.Errorf("%s is a local session; telos plan --session only compares Telos Cloud sessions", sessionID)
 	case isCloudApplyID(sessionID):
-		if platform == "local" {
-			return nil, fmt.Errorf("%s is cloud but the proposed spec targets local", sessionID)
-		}
 		control, err := cloud.ControlClientForContext(contextOverride)
 		if err != nil {
 			return nil, err

@@ -992,6 +992,58 @@ func TestLocalWorkerEnvIncludesSessionContext(t *testing.T) {
 	}
 }
 
+func TestRunLocalSessionPreambleFollowsRuntime(t *testing.T) {
+	for _, tt := range []struct {
+		runtime       sessionapi.SessionRuntime
+		preamble      string
+		wantNamespace bool
+	}{
+		{runtime: sessionapi.RuntimeLocal, preamble: "## Platform: local"},
+		{runtime: sessionapi.RuntimeCloud, preamble: "## Target: cloud", wantNamespace: true},
+	} {
+		t.Run(string(tt.runtime), func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(dir, "telos-output"))
+			specPath := filepath.Join(dir, "SPEC.md")
+			if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: preamble\n---\n# Preamble\n\nTest body."), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			orig, _ := os.Getwd()
+			os.Chdir(dir)
+			defer os.Chdir(orig)
+
+			session, err := CreateLocalSession(specPath, LocalRunConfig{})
+			if err != nil {
+				t.Fatalf("CreateLocalSession: %v", err)
+			}
+			manifestPath := filepath.Join(session.SessionDir, "session.json")
+			manifest, err := sessionapi.ReadManifest(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest.Runtime = tt.runtime
+			if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
+				t.Fatal(err)
+			}
+
+			exec := &fakeExecutor{
+				proverResult:   game.TurnResult{Role: "prover", Status: game.StatusContinue, Logs: "Done."},
+				verifierResult: game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "OK\n\n<status>CONCEDE</status>\n"},
+			}
+			if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
+				t.Fatalf("RunLocalSession: %v", err)
+			}
+			task := exec.firstTask()
+			if !strings.Contains(task, tt.preamble) {
+				t.Fatalf("prompt missing %q:\n%s", tt.preamble, task)
+			}
+			if got := strings.Contains(task, "- Namespace: `"); got != tt.wantNamespace {
+				t.Fatalf("namespace in prompt = %v, want %v", got, tt.wantNamespace)
+			}
+		})
+	}
+}
+
 func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)

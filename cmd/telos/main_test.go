@@ -114,36 +114,6 @@ func TestPullUsageKeepsFrequentPullAtTopLevel(t *testing.T) {
 	}
 }
 
-func TestPrintPlanPreviewLocal(t *testing.T) {
-	compiled := &spec.CompiledEnvironment{
-		Environment: &spec.EnvironmentSpec{Name: "hello-service"},
-		ContentHash: "8a8f0c21",
-		Skills: []*spec.Skill{
-			{Name: "verify-engineering"},
-		},
-	}
-
-	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", nil)
-	text := out.String()
-	for _, want := range []string{
-		"Spec      hello-service",
-		"Target    local",
-		"Path      ./SPEC.md",
-		"Hash      8a8f0c21",
-		"Skills    verify-engineering",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("plan output missing %q:\n%s", want, text)
-		}
-	}
-	for _, notWant := range []string{"Namespace", "Plan for", "No sessions", "Lineage", "Mutates"} {
-		if strings.Contains(text, notWant) {
-			t.Fatalf("plan output should not contain %q:\n%s", notWant, text)
-		}
-	}
-}
-
 func TestPrintPlanPreviewCloud(t *testing.T) {
 	compiled := &spec.CompiledEnvironment{
 		Environment: &spec.EnvironmentSpec{Name: "gitea"},
@@ -156,11 +126,12 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", nil)
+	printPlanPreview(&out, compiled, "./SPEC.md", "personal", nil)
 	text := out.String()
 	for _, want := range []string{
 		"Spec      gitea",
 		"Target    cloud",
+		"Context   personal",
 		"Path      ./SPEC.md",
 		"Namespace ns-gitea",
 		"Hash      8a8f0c21",
@@ -168,6 +139,11 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("plan output missing %q:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{"Plan for", "No sessions", "Lineage", "Mutates"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("plan output should not contain %q:\n%s", notWant, text)
 		}
 	}
 }
@@ -185,7 +161,7 @@ func TestPrintPlanPreviewStarsRequiredVerifierSkills(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", nil)
+	printPlanPreview(&out, compiled, "./SPEC.md", "personal", nil)
 	text := out.String()
 	if !strings.Contains(text, "Skills    verify-engineering*, verify-quality") {
 		t.Fatalf("plan output missing starred skill marker:\n%s", text)
@@ -464,51 +440,19 @@ func TestValidateForceApplyRequiresCloudUpdate(t *testing.T) {
 	}
 }
 
-func TestValidateApplyTargetRejectsLocalExecution(t *testing.T) {
-	dir := t.TempDir()
-	localSpec := filepath.Join(dir, "LOCAL.md")
-	if err := os.WriteFile(localSpec, []byte("---\nversion: 0.1.0\nname: local\nplatform: local\n---\n# Local\n"), 0o644); err != nil {
-		t.Fatal(err)
+func TestValidateApplySession(t *testing.T) {
+	for _, sessionID := range []string{"", "sess_123"} {
+		if err := validateApplySession(sessionID); err != nil {
+			t.Fatalf("validate %q: %v", sessionID, err)
+		}
 	}
-	goalSpec := filepath.Join(dir, "SPEC.md")
-	if err := os.WriteFile(goalSpec, []byte("---\nversion: 0.1.0\nname: goal\n---\n# Goal\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	for _, tt := range []struct {
-		name      string
-		specPath  string
-		sessionID string
-		wantErr   string
-	}{
-		{name: "local spec", specPath: localSpec, wantErr: "remove `platform: local`"},
-		{name: "local session", specPath: goalSpec, sessionID: "local_123", wantErr: "only updates Telos Cloud sessions"},
-		{name: "unknown session namespace", specPath: goalSpec, sessionID: "deployment_123", wantErr: "invalid session id"},
+	for sessionID, wantErr := range map[string]string{
+		"local_123":      "only updates Telos Cloud sessions",
+		"deployment_123": "invalid session id",
 	} {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateApplyTarget(tt.specPath, true, tt.sessionID)
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("error: got %v, want containing %q", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateApplyTargetAcceptsCloudDeployments(t *testing.T) {
-	dir := t.TempDir()
-	for name, platform := range map[string]string{"UNSET.md": "", "CLOUD.md": "platform: cloud\n"} {
-		specPath := filepath.Join(dir, name)
-		if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: goal\n"+platform+"---\n# Goal\n"), 0o644); err != nil {
-			t.Fatal(err)
+		if err := validateApplySession(sessionID); err == nil || !strings.Contains(err.Error(), wantErr) {
+			t.Fatalf("validate %q: got %v, want containing %q", sessionID, err, wantErr)
 		}
-		for _, sessionID := range []string{"", "sess_123"} {
-			if err := validateApplyTarget(specPath, true, sessionID); err != nil {
-				t.Fatalf("validate %s with %q: %v", name, sessionID, err)
-			}
-		}
-	}
-	if err := validateApplyTarget("@scope/goal:1.0.0", false, ""); err != nil {
-		t.Fatalf("validate registry package: %v", err)
 	}
 }
 
@@ -989,26 +933,6 @@ func TestRegistryPublicationErrorExplainsIdentityKindCollision(t *testing.T) {
 	})
 	if !strings.Contains(err.Error(), "choose a different package or skill name") {
 		t.Fatalf("error: got %v", err)
-	}
-}
-
-func TestLaunchSpecPlatformDoesNotResolveSkills(t *testing.T) {
-	dir := t.TempDir()
-	specPath := filepath.Join(dir, "SPEC.md")
-	if err := os.WriteFile(
-		specPath,
-		[]byte("---\nversion: 0.1.0\nname: hosted\nplatform: cloud\nskills:\n  - server-side-only\n---\n# Hosted\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	platform, err := launchSpecPlatform(specPath)
-	if err != nil {
-		t.Fatalf("launchSpecPlatform: %v", err)
-	}
-	if platform != "cloud" {
-		t.Fatalf("platform: got %q", platform)
 	}
 }
 

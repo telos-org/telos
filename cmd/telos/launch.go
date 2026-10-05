@@ -12,7 +12,6 @@ import (
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/runtimeclient"
 	"github.com/telos-org/telos/internal/sessionapi"
-	"github.com/telos-org/telos/internal/spec"
 )
 
 // -- run ----------------------------------------------------------------------
@@ -105,7 +104,7 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session; use telos run to launch nested specs")
 			os.Exit(1)
 		}
-		if err := validateApplyTarget(specPath, hasLocalSpec, *sessionID); err != nil {
+		if err := validateApplySession(*sessionID); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -204,40 +203,9 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func launchSpecPlatform(specPath string) (string, error) {
-	data, err := os.ReadFile(specPath)
-	if err != nil {
-		return "", err
-	}
-	raw, _, ok := spec.ParseFrontmatter(string(data))
-	if !ok {
-		return "", fmt.Errorf("%s has no valid YAML frontmatter", specPath)
-	}
-	platform, ok := raw["platform"]
-	if !ok {
-		return "", nil
-	}
-	value := fmt.Sprint(platform)
-	if value != "local" && value != "cloud" {
-		return "", fmt.Errorf("%s: invalid platform '%s' (valid: cloud, local)", specPath, value)
-	}
-	return value, nil
-}
-
-// validateApplyTarget rejects anything that would make apply mean local
-// execution. telos apply always deploys to Telos Cloud; local work is
-// telos run. The deprecated platform field is still parsed so existing specs
-// and registry packages keep working, but only `local` changes the outcome.
-func validateApplyTarget(specPath string, hasLocalSpec bool, sessionID string) error {
-	if hasLocalSpec {
-		platform, err := launchSpecPlatform(specPath)
-		if err != nil {
-			return err
-		}
-		if platform == "local" {
-			return errors.New("telos apply only deploys to Telos Cloud; remove `platform: local` to deploy this spec, or use `telos run` to run it locally")
-		}
-	}
+// validateApplySession accepts only Telos Cloud sessions: telos apply always
+// deploys to Telos Cloud, and local work is telos run.
+func validateApplySession(sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
 	switch {
 	case sessionID == "", isCloudApplyID(sessionID):

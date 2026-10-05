@@ -244,6 +244,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		EpochID:         epochID,
 		IsController:    controllerPromptEnabled(manifest),
 		PrimarySpecPath: compileSpecPath,
+		LocalRuntime:    manifest.ResolvedRuntime(sessionapi.SessionRuntime(os.Getenv("TELOS_RUNTIME"))) == sessionapi.RuntimeLocal,
 		StopRequested:   func() bool { return sessionStopped(sessionDir) },
 	}
 
