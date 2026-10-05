@@ -1,27 +1,37 @@
 # Repository Instructions
 
-## Keep CLI behavior and documentation together
+## The CLI guide is written by hand
 
 `skills/telos-cli/` is the canonical user and agent documentation for the
 Telos CLI. It ships in every Telos release, and `usetelos.ai/docs` renders the
 version named by `/releases/latest/manifest.json`.
 
-Any user-visible CLI change must update the relevant documentation in the same
-pull request. This includes commands, flags, defaults, validation, output,
-Cloud behavior, lifecycle semantics, and safety or approval boundaries.
+Do not add, edit, or delete anything under `skills/telos-cli/` unless the
+person you are working with asks you to change that specific text. Do not draft
+replacement prose for it, in the repository or in a pull request.
 
-- Update `skills/telos-cli/SKILL.md` when agent workflow or authorization
-  guidance changes.
-- Update the relevant `skills/telos-cli/references/*.md` page so the rendered
-  Web guide matches the released CLI. New reference pages must be linked from
-  `SKILL.md` to become part of the guide.
-- Keep examples and warning text synchronized with the actual CLI behavior.
-- Run `bazel build //skills:telos_cli_bundle` when the skill changes.
-- State in the pull request when a Telos release must be published and promoted
-  before the updated CLI or guide becomes available to users.
+## Flag documentation impact
 
-A user-facing CLI change is incomplete while its canonical documentation still
-describes the old behavior.
+When a pull request changes user-visible CLI behavior, add a **Documentation
+impact** section to its description. User-visible behavior includes commands,
+flags, defaults, validation, output, Cloud behavior, lifecycle semantics, and
+safety or approval boundaries. List:
+
+- each page and section the change makes inaccurate, by path and heading;
+- the sentence or example that is now wrong, quoted;
+- what is now true, as plain facts rather than replacement prose.
+
+A user-visible change is not ready to release until the guide matches it. State
+in the pull request when a Telos release must wait for a documentation update,
+and when a release must be published and promoted before the change reaches
+users.
+
+## When you are asked to edit the guide
+
+- Run `bazel build //skills:telos_cli_bundle` after changing the skill.
+- `SKILL.md` must link every reference page, and every page it links must
+  exist. The Web guide only renders linked pages, and one missing page breaks
+  the entire guide.
 
 ## Write for the documentation's audience
 
