@@ -374,6 +374,23 @@ func TestThinkingOptionRejectsUnknownEnvironmentLevel(t *testing.T) {
 	}
 }
 
+func TestResolveSessionRuntimeConfigIgnoresBudgetWithoutBoundedFlag(t *testing.T) {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	fs.String("model", "", "")
+	fs.String("thinking", "", "")
+	parseFlags(fs, []string{"SPEC.md"})
+
+	t.Setenv("TELOS_MAX_COST_USD", "5")
+
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "", 0)
+	if err != nil {
+		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
+	}
+	if cfg.MaxCostUSD != nil {
+		t.Fatalf("max cost: got %v, want none for apply", *cfg.MaxCostUSD)
+	}
+}
+
 func TestUntilFlagValue(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.String("until", "", "")
@@ -430,142 +447,6 @@ func TestUntilFlagValueRejectsSubsecondDuration(t *testing.T) {
 	}
 }
 
-func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
-	tests := []struct {
-		name            string
-		platform        string
-		cloudConfigured bool
-		localConfigSet  bool
-		want            launchMode
-		wantErr         string
-	}{
-		{
-			name:     "local spec runs locally",
-			platform: "local",
-			want:     launchLocal,
-		},
-		{
-			name:           "local spec accepts local flags",
-			platform:       "local",
-			localConfigSet: true,
-			want:           launchLocal,
-		},
-		{
-			name:            "unspecified platform is cloud",
-			cloudConfigured: true,
-			want:            launchCloudApply,
-		},
-		{
-			name:    "unspecified platform requires cloud login",
-			wantErr: "runs in Telos Cloud",
-		},
-		{
-			name:           "cloud rejects local flags",
-			platform:       "cloud",
-			localConfigSet: true,
-			wantErr:        "local run config flags require a platform: local spec",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := decideLaunchMode(
-				tt.platform,
-				tt.cloudConfigured,
-				tt.localConfigSet,
-			)
-			if tt.wantErr != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q", tt.wantErr)
-				}
-				if !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("error: got %q, want %q", err.Error(), tt.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("decideLaunchMode: %v", err)
-			}
-			if got != tt.want {
-				t.Fatalf("mode: got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResolveLaunchModeKeepsLocalRunsIndependentOfCloudConfig(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(configPath, []byte("context: [\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(config.ConfigPathEnv, configPath)
-
-	mode, err := resolveLaunchMode("local", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode != launchLocal {
-		t.Fatalf("mode = %q, want %q", mode, launchLocal)
-	}
-
-	if _, err := resolveLaunchMode("cloud", false); err == nil || !strings.Contains(err.Error(), configPath) {
-		t.Fatalf("cloud config error = %v, want path %s", err, configPath)
-	}
-}
-
-func TestValidateApplySessionPlatformRejectsCrossedTargets(t *testing.T) {
-	tests := []struct {
-		name      string
-		sessionID string
-		platform  string
-		wantErr   string
-	}{
-		{
-			name:      "local session with cloud spec",
-			sessionID: "local_123",
-			platform:  "cloud",
-			wantErr:   "requires a platform: local spec",
-		},
-		{
-			name:      "cloud session with local spec",
-			sessionID: "sess_123",
-			platform:  "local",
-			wantErr:   "cannot apply a platform: local spec",
-		},
-		{
-			name:      "unknown session namespace",
-			sessionID: "deployment_123",
-			platform:  "cloud",
-			wantErr:   "invalid session id",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateApplySessionPlatform(tt.sessionID, tt.platform)
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("error: got %v, want containing %q", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateApplySessionPlatformAcceptsMatchingTargets(t *testing.T) {
-	for _, target := range []struct {
-		sessionID string
-		platform  string
-	}{
-		{sessionID: "", platform: "local"},
-		{sessionID: "local_123", platform: "local"},
-		{sessionID: "sess_123", platform: "cloud"},
-		{sessionID: "sess_123", platform: ""},
-	} {
-		if err := validateApplySessionPlatform(target.sessionID, target.platform); err != nil {
-			t.Fatalf("validate %q/%q: %v", target.sessionID, target.platform, err)
-		}
-	}
-}
-
 func TestValidateForceApplyRequiresCloudUpdate(t *testing.T) {
 	for _, sessionID := range []string{"", "local_123"} {
 		err := validateForceApply(true, sessionID)
@@ -583,6 +464,76 @@ func TestValidateForceApplyRequiresCloudUpdate(t *testing.T) {
 	}
 }
 
+func TestValidateApplyTargetRejectsLocalExecution(t *testing.T) {
+	dir := t.TempDir()
+	localSpec := filepath.Join(dir, "LOCAL.md")
+	if err := os.WriteFile(localSpec, []byte("---\nversion: 0.1.0\nname: local\nplatform: local\n---\n# Local\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	goalSpec := filepath.Join(dir, "SPEC.md")
+	if err := os.WriteFile(goalSpec, []byte("---\nversion: 0.1.0\nname: goal\n---\n# Goal\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, tt := range []struct {
+		name      string
+		specPath  string
+		sessionID string
+		wantErr   string
+	}{
+		{name: "local spec", specPath: localSpec, wantErr: "remove `platform: local`"},
+		{name: "local session", specPath: goalSpec, sessionID: "local_123", wantErr: "only updates Telos Cloud sessions"},
+		{name: "unknown session namespace", specPath: goalSpec, sessionID: "deployment_123", wantErr: "invalid session id"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validateApplyTarget(tt.specPath, true, tt.sessionID)
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error: got %v, want containing %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateApplyTargetAcceptsCloudDeployments(t *testing.T) {
+	dir := t.TempDir()
+	for name, platform := range map[string]string{"UNSET.md": "", "CLOUD.md": "platform: cloud\n"} {
+		specPath := filepath.Join(dir, name)
+		if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: goal\n"+platform+"---\n# Goal\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		for _, sessionID := range []string{"", "sess_123"} {
+			if err := validateApplyTarget(specPath, true, sessionID); err != nil {
+				t.Fatalf("validate %s with %q: %v", name, sessionID, err)
+			}
+		}
+	}
+	if err := validateApplyTarget("@scope/goal:1.0.0", false, ""); err != nil {
+		t.Fatalf("validate registry package: %v", err)
+	}
+}
+
+func TestRequireCloudLogin(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("context: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.ConfigPathEnv, configPath)
+	t.Setenv(config.AuthTokenEnv, "")
+	if err := requireCloudLogin(); err == nil || !strings.Contains(err.Error(), configPath) {
+		t.Fatalf("config error = %v, want path %s", err, configPath)
+	}
+
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	if err := requireCloudLogin(); err == nil || !strings.Contains(err.Error(), "telos login") {
+		t.Fatalf("missing login error = %v", err)
+	}
+
+	t.Setenv(config.AuthTokenEnv, "token")
+	if err := requireCloudLogin(); err != nil {
+		t.Fatalf("token login: %v", err)
+	}
+}
+
 func TestSessionCreateRequestForLocalSpec(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nname: demo\n---\n# Demo\n"), 0o644); err != nil {
@@ -595,31 +546,6 @@ func TestSessionCreateRequestForLocalSpec(t *testing.T) {
 	}
 	if req.SpecMarkdown == nil || !strings.Contains(*req.SpecMarkdown, "name: demo") {
 		t.Fatalf("expected spec markdown, got %#v", req)
-	}
-}
-
-func TestSessionKindForCommand(t *testing.T) {
-	if got := sessionKindForCommand("apply"); got != sessionapi.KindController {
-		t.Fatalf("apply kind: got %q", got)
-	}
-	if got := sessionKindForCommand("run"); got != sessionapi.KindTask {
-		t.Fatalf("run kind: got %q", got)
-	}
-}
-
-func TestValidateLaunchCommandRejectsCloudRunOutsideRoot(t *testing.T) {
-	err := validateLaunchCommand("run", launchCloudApply)
-	if err == nil {
-		t.Fatal("expected cloud run rejection")
-	}
-	if !strings.Contains(err.Error(), "use telos apply") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if err := validateLaunchCommand("apply", launchCloudApply); err != nil {
-		t.Fatalf("apply should be allowed: %v", err)
-	}
-	if err := validateLaunchCommand("run", launchLocal); err != nil {
-		t.Fatalf("local run should be allowed: %v", err)
 	}
 }
 
