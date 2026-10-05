@@ -1550,7 +1550,7 @@ func TestSessionArtifactShape(t *testing.T) {
 	json.Unmarshal(data, &m)
 
 	requiredKeys := []string{
-		"session_id", "session_kind", "created_at", "launcher",
+		"session_id", "session_kind", "runtime", "created_at",
 		"source_spec_path", "session_spec_path", "spec_name",
 		"config", "provenance", "specs", "epochs",
 	}

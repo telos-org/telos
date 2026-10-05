@@ -525,7 +525,6 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		SessionKind:        sessionKind,
 		Runtime:            sessionapi.RuntimeLocal,
 		CreatedAt:          time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		Launcher:           "local",
 		ParentSessionID:    cfg.ParentSessionID,
 		SourceSpecPath:     &sourceSpecPath,
 		SessionSpecPath:    &sessionSpecPath,
@@ -543,8 +542,7 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 			AgentTimeoutSec: cfg.AgentTimeoutSec,
 			Thinking:        thinking,
 		},
-		Workspace:  workspace,
-		Provenance: map[string]any{"mode": "local"},
+		Workspace: workspace,
 		Specs: []sessionapi.InitialManifestSpec{{
 			Index:           0,
 			Name:            compiled.Environment.Name,
