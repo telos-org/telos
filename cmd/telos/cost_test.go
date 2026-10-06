@@ -107,7 +107,7 @@ func TestCloudCostProviderColumnFollowsDisplayedInference(t *testing.T) {
 			if strings.Contains(text, "PROVIDER ESTIMATE") != test.provider || !strings.Contains(text, "TELOS SPEND") {
 				t.Fatalf("incorrect columns:\n%s", text)
 			}
-			if test.provider && (!strings.Contains(text, "Anthropic Unavailable") || !strings.Contains(text, "—")) {
+			if test.provider && (!strings.Contains(text, "Unavailable (Anthropic)") || !strings.Contains(text, "—")) {
 				t.Fatalf("missing vs inapplicable estimates:\n%s", text)
 			}
 			if strings.Contains(text, "Total") || strings.Contains(text, "aggregate") {
@@ -167,7 +167,7 @@ func TestCommandsEnrichOnlyRequestedGoalsAndShareCostJSON(t *testing.T) {
 		t.Fatalf("compact list fetched costs: %s", compact)
 	}
 	wide := captureStdout(t, func() { cmdList([]string{"--wide", "--limit", "1"}) })
-	if !strings.Contains(wide, "Anthropic ~$3.40") || strings.Contains(wide, "hidden") {
+	if !strings.Contains(wide, "~$3.40 (Anthropic)") || strings.Contains(wide, "hidden") {
 		t.Fatalf("wide list: %s", wide)
 	}
 	listJSON := captureStdout(t, func() { cmdList([]string{"--json", "--limit", "1"}) })

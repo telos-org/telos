@@ -138,7 +138,7 @@ func cloudProviderEstimateLabel(session cloud.SessionRecord) string {
 	if session.Cost != nil && session.Cost.ExternalInference != nil {
 		amount = session.Cost.ExternalInference.EstimatedCostMicroUSD
 	}
-	value := providerLabel(session.Inference.Provider) + " " + formatCostEstimate(amount)
+	value := formatCostEstimate(amount) + " (" + providerLabel(session.Inference.Provider) + ")"
 	if session.Inference.Source == "subscription" {
 		value += " (API-equivalent)"
 	}
