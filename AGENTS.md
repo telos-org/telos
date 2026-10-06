@@ -1,12 +1,13 @@
 # Repository Instructions
 
-## The CLI guide is written by hand
+## Do not edit the CLI guide
 
-`skills/telos-cli/` is the Telos CLI guide. It ships with every release and is
-rendered at `usetelos.ai/docs`.
+`skills/telos-cli/` is the Telos CLI guide, rendered at `usetelos.ai/docs`. It
+is written by hand. **Agents do not add, edit, move, or delete anything in it,
+or draft replacement prose for it**, including as part of a CLI change.
 
-Do not edit anything under `skills/telos-cli/` unless you are asked to change
-that specific text, and do not draft replacement prose for it.
+The only exception is an explicit request, from the person you are working
+with, for a specific change there.
 
 ## Flag documentation impact
 
@@ -18,14 +19,3 @@ and output, add a **Documentation impact** section to its description:
 - what is now true, as plain facts.
 
 The change is not ready to release until the guide matches it.
-
-## Editing the guide
-
-When you are asked to edit it:
-
-- `SKILL.md` is for agents: direct instructions, including when to explain a
-  risk or get approval. `references/*.md` is for customers: address them as
-  "you", and never instruct an agent there.
-- `SKILL.md` must link every reference page, and every linked page must exist.
-  One missing page breaks the whole Web guide.
-- Run `bazel build //skills:telos_cli_bundle`.
