@@ -80,7 +80,6 @@ Start by writing a preliminary `SPEC.md` for your service:
 ---
 name: reading-list
 version: 0.1.0
-platform: cloud
 ---
 
 # Goal
@@ -194,10 +193,10 @@ Version   0.1.0 -> 0.2.0
  name: reading-list
 -version: 0.1.0
 +version: 0.2.0
- platform: cloud
  ---
 
-@@ -11,6 +11,7 @@
+ # Goal
+@@ -10,6 +10,7 @@
  - `POST /books` adds a title.
  - `GET /books` returns the current list.
  - Books remain available when the application restarts.
