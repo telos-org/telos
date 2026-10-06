@@ -8,7 +8,6 @@ group: Getting started
 
 Telos is a goal-oriented programming system. Telos treats the goal specification as the source of truth, and background agents own the software lifecycle beneath it. 
 
-
 The spec is the durable source. Implementations can change as the Goal evolves,
 while its session, deployment, history, and evidence remain connected.
 
@@ -150,7 +149,7 @@ $ telos logs sess_c7d2f0a4e8 --context personal
 
 ## Wait for readiness
 
-When reconciliation succeeds, `describe` reports the accepted goal as `ready` and exposes a public handle.
+When the system is done working, `describe` reports the accepted goal as `ready` and exposes a public handle.
 
 ```console  **I think too much slop output in here as well!*
 $ telos describe sess_c7d2f0a4e8 --context personal
@@ -165,14 +164,13 @@ Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 ```
 
-Once ready, open the service and poke around? In this case, we'll exercise
-
-Exercise `POST /books` and `GET /books` through the public URL and confirm the live behavior independently.
+Once ready, open the service and verify that the behaviour is as desired.
+In this case, you would exercise `POST /books` and `GET /books` through the public URL to confirm everything is in order.
 
 ## Updating the Goal
 
-Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump
-its version to `0.2.0`, and add “Every book records who added it” to the Goal.
+Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump its version to `0.2.0`, and add “Every book records who added it” to the Goal.
+
 Plan against the existing session:
 
 *below notes - not sure if should add explicit `--context personal`*
@@ -224,34 +222,23 @@ Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 Logs      telos logs --context personal sess_c7d2f0a4e8
 ```
 
-The Goal, session, deployment, and history stay the same; only the immutable
-revision changes. Observe the new digest through `working` to `ready`, then
-exercise the updated API behavior.
+This applies the update in-place, and the system begins reconciling towards the new desired goal. Continue to monitor status from `working` to `ready`, then exercise the updated API behavior.
 
-If the update is rejected, see
-[Troubleshooting](troubleshooting.md#cloud-update-is-rejected) before retrying.
-
-## Resume later
-
-Return through the same context and recover the session ID from `list`:
-
-```bash
-telos list --context personal
-telos describe SESSION_ID --context personal
-```
-
-Continue revisions on that session so its identity and history remain joined.
 
 ## Delete the Goal
 
-Cloud deletion is irreversible: it removes the environment, application and
-PVC data, routes, attachments, deployment record, and history. Confirm the
-session and context identify the Goal you intend to delete, then run:
+If you would like to delete your goal, its corresponding agent workspace, and the sandbox it lives in - you can run:
 
 ```bash
-telos delete SESSION_ID --context personal
+$ telos delete SESSION_ID --context personal
 ```
 
-Teardown continues asynchronously; subsequent inspection eventually returns
-not found. [The Goal lifecycle](lifecycle.md#delete-a-goal) distinguishes this
-from local deletion, which preserves session history.
+> Deleting a goal is irreversible - please proceed with caution.
+> A goal can remain deleting for up to 10 minutes - as background processes reconcile billing data and inflight inference requests.
+
+You can confirm a goal is deleting, and eventually deleted, by inspecting output of 
+
+```
+$ telos list
+```
+
