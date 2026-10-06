@@ -27,6 +27,18 @@ interval: xx
 
 ```
 
+## Frontmatter
+
+The frontmatter supports the following fields:
+
+| Field | Meaning |
+| --- | --- |
+| `name` | Required lowercase, DNS-compatible identity. Keep it stable across revisions. |
+| `version` | Required semantic version for this immutable revision. Bump it when the contract changes. |
+| `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
+| `interval` | A positive duration ending in `s`, `m`, or `h`, such as `30m` or `6h`, carried as the contract's reconciliation interval. |
+| `tags` | A YAML list of string labels. The default is an empty list. |
+
 ## The Entrypoint
 
 Telos translates the goal specification to a live software service and continuously reconciles the service against the desired specification.
