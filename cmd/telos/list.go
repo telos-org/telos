@@ -235,10 +235,8 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 
 func printCloudSessionList(out io.Writer, sessions []cloud.SessionRecord, wide bool) {
 	providerColumn := false
-	spendWidth := len("TELOS SPEND")
 	for _, session := range sessions {
 		providerColumn = providerColumn || hasExternalInference(session)
-		spendWidth = max(spendWidth, len(cloudSpendLabel(session)))
 	}
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	if wide {
@@ -253,12 +251,11 @@ func printCloudSessionList(out io.Writer, sessions []cloud.SessionRecord, wide b
 	for _, session := range sessions {
 		serviceURL := optionalSessionString(session.ServiceURL)
 		if wide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%*s\t",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t",
 				session.Name,
 				cloudSessionDisplayStatus(session),
 				session.PackageDigest,
 				serviceURL,
-				spendWidth,
 				cloudSpendLabel(session),
 			)
 			if providerColumn {

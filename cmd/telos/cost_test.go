@@ -107,6 +107,13 @@ func TestCloudCostProviderColumnFollowsDisplayedInference(t *testing.T) {
 			if strings.Contains(text, "PROVIDER ESTIMATE") != test.provider || !strings.Contains(text, "TELOS SPEND") {
 				t.Fatalf("incorrect columns:\n%s", text)
 			}
+			lines := strings.Split(strings.TrimSpace(text), "\n")
+			spendColumn := strings.Index(lines[0], "TELOS SPEND")
+			for _, line := range lines[1:] {
+				if strings.Index(line, "$") != spendColumn {
+					t.Fatalf("spend must align with its header:\n%s", text)
+				}
+			}
 			if test.provider && (!strings.Contains(text, "Unavailable (Anthropic)") || !strings.Contains(text, "—")) {
 				t.Fatalf("missing vs inapplicable estimates:\n%s", text)
 			}
