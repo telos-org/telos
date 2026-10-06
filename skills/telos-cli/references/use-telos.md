@@ -39,7 +39,7 @@ to install the latest stable version
 or
 
 ```console
-telos update $VERSION
+telos update <version>
 ```
 to install a specific release. 
 
@@ -107,9 +107,9 @@ $ telos plan SPEC.md --context personal
 Spec      reading-list
 Target    cloud
 Context   personal
-Path      /Users/alice/reading-list/SPEC.md ?? -> is this really needed?
-Namespace ns-reading-list ->> seems false now? 
-Hash      799e5c31172afb26 --> ?? is this really needed?
+Path      /Users/alice/reading-list/SPEC.md TODO(grohan): is this really needed?
+Namespace ns-reading-list TODO(grohan): seems false now?
+Hash      799e5c31172afb26 TODO(grohan): is this really needed?
 ```
 
 The first plan has no deployed version to compare against, so it shows the Goalidentity, context, and content hash. 
@@ -136,21 +136,23 @@ The `apply` command returns immediately and launches a session in the cloud. You
 
 ```bash
 $ telos describe sess_c7d2f0a4e8 --context personal --json
-*todo need example*
+TODO(grohan): need example
 ```
 
 or
 
 ```bash
 $ telos logs sess_c7d2f0a4e8 --context personal
-*todo need example*
+TODO(grohan): need example
 ```
 
 ## Wait for readiness
 
 When the system is done working, `describe` reports the accepted goal as `ready` and exposes a public handle.
 
-```console  **I think too much slop output in here as well!*
+TODO(grohan): I think too much slop output in here as well!
+
+```console
 $ telos describe sess_c7d2f0a4e8 --context personal
 Name      reading-list
 Status    ready
@@ -172,7 +174,7 @@ Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump it
 
 Plan against the existing session:
 
-*below notes - not sure if should add explicit `--context personal`*
+TODO(grohan): below notes - not sure if should add explicit `--context personal`
 
 ```console
 $ telos plan SPEC.md --session sess_c7d2f0a4e8 --context personal
@@ -208,7 +210,7 @@ contract change. Apply that new revision to the same session:
 
 ```console
 $ telos apply SPEC.md --session sess_c7d2f0a4e8 --context personal
-updated reading-list ->>??? is this the wrong output / outdated?
+updated reading-list TODO(grohan): is this the wrong output / outdated?
 
 Status    working
 Session   sess_c7d2f0a4e8
@@ -229,7 +231,7 @@ This applies the update in-place, and the system begins reconciling towards the 
 If you would like to delete your goal, its corresponding agent workspace, and the sandbox it lives in - you can run:
 
 ```bash
-$ telos delete SESSION_ID --context personal
+$ telos delete <session-id> --context personal
 ```
 
 > Deleting a goal is irreversible - please proceed with caution.

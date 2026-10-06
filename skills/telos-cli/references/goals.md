@@ -14,12 +14,12 @@ The goal specification (`SPEC.md`) is the entrypoint to a Telos program. We'll w
 ```markdown
 ---
 name: a-descriptive-name
-version: x.y.z
+version: 0.1.0
 skills:
  - foo-skill
  - bar-skill
  - baz-rubric*
-interval: xx
+interval: 6h
 ---
 
 <your-goal-here>
@@ -46,7 +46,7 @@ Within this file, describe the service you want. Focus on the high level intent 
 
 Implementation details, such as choice of programming language, code structure, etc should be intentionally ommitted. The focus is entirely on system design.
 
-Writing high quality specs is a non-trivial problem! We've written more about it [here]
+Writing high quality specs is a non-trivial problem! We've written more about it [here] (TODO(grohan): link to the spec-writing guide)
 
 ## Skills 
 
@@ -87,11 +87,11 @@ Packages of type B can reference packages of type A. For example, suppose we hav
 ```
 ---
 name: undersea-survival
-version: a.b.c
+version: 0.1.0
 skills:
  - @telos/how-to-fish:1.0.2
  - another-skill
-interval: xx
+interval: 6h
 ---
 
 ...
@@ -102,7 +102,7 @@ Telos cloud manages a hosted registry of packages of both types. The method for 
 
 Use `telos push SPEC.md|SKILL_DIR` to push up your package, optionally with an explicit `--context` (that is otherwise derived from your default in `telos config`)
 
-To fetch a package locally, for inspection or modification, you can run `telos pull @scope/name:version` (TODO(grohan): why the fuck is it called scope and not context?).
+To fetch a package locally, for inspection or modification, you can run `telos pull @<scope>/<name>:<version>` (TODO(grohan): why the fuck is it called scope and not context?).
 
 (TODO(grohan): we should not have both `telos pull` and `telos pull skill`!)
 

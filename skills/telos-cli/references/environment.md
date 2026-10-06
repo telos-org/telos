@@ -42,7 +42,7 @@ Telos follows a strict networking model, with limited ingress and egress by defa
 
 The only entry points into a goal's runtime environment are:
 
-- the product API or UI, accessed through the managed hostname (`spec-name-<sha>.usetelos.ai`)
+- the product API or UI, accessed through the managed hostname (`<name>-<session-id>.usetelos.ai`)
 - the administration dashboard, accessed via the web UI and restricted to authenticated Telos operators. TODO(grohan): read more about dashboard, where?
 
 ### Egress
@@ -62,7 +62,7 @@ For most real-world use cases, this is insufficient, so Telos also supports conf
 ```yaml
 ---
 name: a-noble-goal
-platform: cloud
+version: 0.1.0
 egress:
   - host: public.example.com
   - host: api.example.com
