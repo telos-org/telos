@@ -31,18 +31,18 @@ func costDisplaySession() cloud.SessionRecord {
 func TestCloudCostDescriptionAlignmentAndHierarchy(t *testing.T) {
 	var out bytes.Buffer
 	printCloudSessionDescriptionForContext(&out, costDisplaySession(), "@team")
-	want := "Name                  byok-demo\n" +
-		"Status                ready\n" +
-		"Session               sess_cost\n" +
-		"Revision              sha256:abc\n" +
-		"Inference             API key\n" +
-		"Context               @team\n" +
-		"Service               https://example.com\n" +
+	want := "Name           byok-demo\n" +
+		"Status         ready\n" +
+		"Session        sess_cost\n" +
+		"Revision       sha256:abc\n" +
+		"Inference      API key\n" +
+		"Context        @team\n" +
+		"Service        https://example.com\n" +
 		"Cost\n" +
-		"  Telos spend          $1.25\n" +
-		"    Compute            $1.00\n" +
-		"    Storage            $0.25\n" +
-		"  Anthropic estimate  ~$3.40\n"
+		"  Telos spend   $1.25\n" +
+		"    Compute     $1.00\n" +
+		"    Storage     $0.25\n" +
+		"  Anthropic    ~$3.40\n"
 	if out.String() != want {
 		t.Fatalf("description differs from agreed layout:\n%s\nwant:\n%s", out.String(), want)
 	}
@@ -79,7 +79,7 @@ func TestCloudCostDescriptionManagedSubscriptionAndAdjustments(t *testing.T) {
 	out.Reset()
 	printCloudSessionDescription(&out, session)
 	text = out.String()
-	if !strings.Contains(text, "Codex estimate") || !strings.Contains(text, "~$6.40 (API-equivalent)") || !strings.Contains(text, "Detailed breakdown unavailable") {
+	if !strings.Contains(text, "  Codex ") || !strings.Contains(text, "~$6.40 (API-equivalent)") || !strings.Contains(text, "Detailed breakdown unavailable") {
 		t.Fatalf("subscription or unavailable breakdown meaning lost:\n%s", text)
 	}
 	if strings.Index(text, "Reason") > strings.Index(text, "\nCost\n") || strings.Contains(text, "\n\nCost") {

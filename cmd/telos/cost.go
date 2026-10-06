@@ -78,7 +78,7 @@ func cloudCostFields(session cloud.SessionRecord) []descriptionField {
 	}
 	if external := cost.ExternalInference; external != nil {
 		field := descriptionField{
-			label:  "  " + providerLabel(external.Provider) + " estimate",
+			label:  "  " + providerLabel(external.Provider),
 			value:  formatCostEstimate(external.EstimatedCostMicroUSD),
 			amount: external.EstimatedCostMicroUSD != nil,
 		}
