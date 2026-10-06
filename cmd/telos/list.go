@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"io"
 	"os"
 	"text/tabwriter"
 
@@ -211,6 +212,9 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 		os.Exit(1)
 	}
 	cloudSessions = limitCloudSessions(cloudSessions, limit)
+	if wide || jsonOut {
+		control.PopulateSessionCosts(cloudSessions)
+	}
 	if jsonOut {
 		printJSON(map[string]any{
 			"context":  control.ContextName(),
@@ -226,22 +230,41 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 		printSummaryField(os.Stdout, "Context", control.ContextName())
 		fmt.Println()
 	}
-	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
+	printCloudSessionList(os.Stdout, cloudSessions, wide)
+}
+
+func printCloudSessionList(out io.Writer, sessions []cloud.SessionRecord, wide bool) {
+	providerColumn := false
+	spendWidth := len("TELOS SPEND")
+	for _, session := range sessions {
+		providerColumn = providerColumn || hasExternalInference(session)
+		spendWidth = max(spendWidth, len(cloudSpendLabel(session)))
+	}
+	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	if wide {
-		fmt.Fprintln(w, "NAME\tSTATUS\tREVISION\tSERVICE\tSESSION")
+		fmt.Fprint(w, "NAME\tSTATUS\tREVISION\tSERVICE\tTELOS SPEND\t")
+		if providerColumn {
+			fmt.Fprint(w, "PROVIDER ESTIMATE\t")
+		}
+		fmt.Fprintln(w, "SESSION")
 	} else {
 		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
 	}
-	for _, session := range cloudSessions {
+	for _, session := range sessions {
 		serviceURL := optionalSessionString(session.ServiceURL)
 		if wide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%*s\t",
 				session.Name,
 				cloudSessionDisplayStatus(session),
 				session.PackageDigest,
 				serviceURL,
-				session.ID,
+				spendWidth,
+				cloudSpendLabel(session),
 			)
+			if providerColumn {
+				fmt.Fprintf(w, "%s\t", cloudProviderEstimateLabel(session))
+			}
+			fmt.Fprintln(w, session.ID)
 			continue
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\n",

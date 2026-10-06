@@ -81,6 +81,7 @@ type SessionRecord struct {
 	AgentModel     string            `json:"agent_model,omitempty"`
 	AgentThinking  string            `json:"agent_thinking,omitempty"`
 	Inference      *InferenceSummary `json:"inference,omitempty"`
+	Cost           *SessionCost      `json:"cost,omitempty"`
 	ServiceURL     *string           `json:"service_url,omitempty"`
 	DashboardURL   *string           `json:"dashboard_url,omitempty"`
 	FailureReason  *string           `json:"failure_reason,omitempty"`

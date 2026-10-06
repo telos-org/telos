@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -29,47 +30,47 @@ func cmdDescribe(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
-	if contextOverride != "" {
-		cloudSession, contextName, err := getCloudSessionForContext(sessionID, contextOverride)
-		if err != nil {
+	var localErr error
+	if contextOverride == "" {
+		session, err := getSessionFromAnywhere(sessionID)
+		if err == nil {
+			if *jsonOut {
+				printJSON(session)
+			} else {
+				printSessionDescription(os.Stdout, *session)
+			}
+			return
+		}
+		localErr = err
+		configured, err := config.IsConfigured()
+		if err != nil || !configured {
+			if err == nil {
+				err = localErr
+			}
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
-			return
-		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
-		return
 	}
-
-	session, err := getSessionFromAnywhere(sessionID)
-	if err == nil {
-		if *jsonOut {
-			printJSON(session)
-			return
-		}
-
-		printSessionDescription(os.Stdout, *session)
-		return
-	}
-
-	cloudSession, contextName, found, cloudErr := getCloudSessionIfConfigured(sessionID, "")
-	if cloudErr != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
+	control, err := cloud.ControlClientForContext(contextOverride)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if found {
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
-			return
+	session, err := control.GetSession(sessionID)
+	if err != nil {
+		if localErr != nil && cloud.IsStatus(err, 404) {
+			err = localErr
 		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
-		return
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
-
-	fmt.Fprintf(os.Stderr, "error: %v\n", err)
-	os.Exit(1)
+	sessions := []cloud.SessionRecord{*session}
+	control.PopulateSessionCosts(sessions)
+	if *jsonOut {
+		printCloudSessionJSON(&sessions[0], control.ContextName())
+	} else {
+		printCloudSessionDescriptionForContext(os.Stdout, sessions[0], control.ContextName())
+	}
 }
 
 func printCloudSessionJSON(
@@ -114,20 +115,24 @@ func printCloudSessionDescriptionForContext(
 	session cloud.SessionRecord,
 	contextName string,
 ) {
-	printSummaryField(out, "Name", session.Name)
-	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
-	printSummaryField(out, "Session", session.ID)
-	printSummaryField(out, "Revision", session.PackageDigest)
-	printCloudInferenceSummary(out, session)
+	fields := []descriptionField{
+		{label: "Name", value: orDash(session.Name)},
+		{label: "Status", value: orDash(cloudSessionDisplayStatus(session))},
+		{label: "Session", value: orDash(session.ID)},
+		{label: "Revision", value: orDash(session.PackageDigest)},
+	}
+	fields = append(fields, cloudInferenceFields(session)...)
 	if contextName != "" {
-		printSummaryField(out, "Context", contextName)
+		fields = append(fields, descriptionField{label: "Context", value: contextName})
 	}
 	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
-		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
+		fields = append(fields, descriptionField{label: "Service", value: strings.TrimSpace(*session.ServiceURL)})
 	}
 	if reason := cloudSessionReason(session); reason != "" {
-		printSummaryField(out, "Reason", reason)
+		fields = append(fields, descriptionField{label: "Reason", value: reason})
 	}
+	fields = append(fields, cloudCostFields(session)...)
+	printDescriptionFields(out, fields)
 }
 
 func cloudSessionDisplayStatus(session cloud.SessionRecord) string {
@@ -173,11 +178,18 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 }
 
 func printCloudInferenceSummary(out io.Writer, session cloud.SessionRecord) {
+	for _, field := range cloudInferenceFields(session) {
+		printSummaryField(out, field.label, field.value)
+	}
+}
+
+func cloudInferenceFields(session cloud.SessionRecord) []descriptionField {
+	var fields []descriptionField
 	model := session.AgentModel
 	if summary := session.Inference; summary != nil {
-		printSummaryField(out, "Inference", inferenceSourceLabel(summary.Source))
+		fields = append(fields, descriptionField{label: "Inference", value: inferenceSourceLabel(summary.Source)})
 		if summary.ConnectionName != "" {
-			printSummaryField(out, "Connection", summary.ConnectionName)
+			fields = append(fields, descriptionField{label: "Connection", value: summary.ConnectionName})
 		}
 		if summary.Model != "" {
 			model = summary.Model
@@ -192,11 +204,12 @@ func printCloudInferenceSummary(out io.Writer, session cloud.SessionRecord) {
 		}
 	}
 	if model != "" {
-		printSummaryField(out, "Model", model)
+		fields = append(fields, descriptionField{label: "Model", value: model})
 	}
 	if session.AgentThinking != "" {
-		printSummaryField(out, "Thinking", session.AgentThinking+" (requested)")
+		fields = append(fields, descriptionField{label: "Thinking", value: session.AgentThinking + " (requested)"})
 	}
+	return fields
 }
 
 func printSummaryField(out io.Writer, label string, value string) {
