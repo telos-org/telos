@@ -125,7 +125,7 @@ created reading-list
 Status    working
 Session   sess_c7d2f0a4e8
 Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
-Inference Managed
+Inference Managed TODO(grohan): remove
 Model     telos/default
 Thinking  medium (requested)
 Context   personal

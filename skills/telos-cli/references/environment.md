@@ -74,6 +74,8 @@ egress:
 
 Each entry in `egress` specifies a host and optionally restricts HTTP methods and URL paths on that host. A host without `methods` or `paths` allows traffic via all methods and all paths.
 
+## Credentials
+
 For authenticated requests, it is also possible to securely inject credentials. The workflow for this is as follows:
 
 1. Create a credential entry (name and secret) on the web app (TODO(grohan): link to the webpage where you can add in the credential)
