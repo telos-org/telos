@@ -1,4 +1,3 @@
-
 ---
 title: Goals
 description: An overview of the framework behind the Telos cloud platform.
@@ -15,7 +14,7 @@ The goal specification (`SPEC.md`) is the entrypoint to a Telos program. We'll w
 ```markdown
 ---
 name: a-descriptive-name
-version: 
+version: x.y.z
 skills:
  - foo-skill
  - bar-skill
@@ -73,6 +72,40 @@ Independent evaluation lets the system work persistently until an arbitrary set 
 
 Humans organisations exhibit similar tendencies too - there's a reason students don't grade your own homework or why developer teams enforce peer code review!
 
-On framework design: you might notice some similarities to the C programming language. You could conceptualize a `SPEC.md` as equivalent to a `main.c` and skill files like `#include`s. Framed this way, the purposes and shapes of the primitives in the Telos ecosystem should feel a lot more familiar.
 
+## Packaging
 
+Having defined the goal `SPEC.md` (the entrypoint), skills, and rubrics, a natural next question is the packaging and distribution of these artifacts. Telos supports two forms of packaging:
+
+- Packages with just a skill (A)
+- Packages comprising a spec, with associated skills (B)
+
+The naming convention adopted for both is of the form `@<context>/<name>:<version>`
+
+Packages of type B can reference packages of type A. For example, suppose we have a skill `@telos/how-to-fish:1.0.2`, a goal's frontmatter could reference it as follows:
+
+```
+---
+name: undersea-survival
+version: a.b.c
+skills:
+ - @telos/how-to-fish:1.0.2
+ - another-skill
+interval: xx
+---
+
+...
+
+```
+
+Telos cloud manages a hosted registry of packages of both types. The method for interaction with this hosted registry is simple:
+
+Use `telos push SPEC.md|SKILL_DIR` to push up your package, optionally with an explicit `--context` (that is otherwise derived from your default in `telos config`)
+
+To fetch a package locally, for inspection or modification, you can run `telos pull @scope/name:version` (TODO(grohan): why the fuck is it called scope and not context?).
+
+(TODO(grohan): we should not have both `telos pull` and `telos pull skill`!)
+
+## A mental model
+
+On framework design: you might notice some similarities to the C programming language. You could conceptualize a `SPEC.md` as equivalent to a `main.c` and skill files like `#include`s. Framed this way, the purposes and shapes of the primitives in the Telos ecosystem should feel a lot more familiar, and you can even go as far as to treat type A packages as "libraries"  and type B packages as "binaries"!
