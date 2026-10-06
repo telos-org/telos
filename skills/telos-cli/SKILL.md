@@ -91,7 +91,7 @@ to find IDs and names. If setup is missing, run
 `telos credentials add --context CONTEXT` and give the returned credential
 form link to the user. Keep secret values out of chat and the Goal.
 
-Declare the complete desired `egress`, binding optional credentials to each
+Declare the complete desired `network`, binding optional credentials to each
 destination using [the frontmatter format](references/goals.md#declare-external-access).
 Omitted methods and paths allow all requests to that host; make that breadth
 clear in the user's apply approval, including additions and removals. A plan is

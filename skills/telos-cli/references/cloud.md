@@ -131,7 +131,7 @@ telos credentials add --context CONTEXT
   `integrations` key. The new command uses `credentials`.
 
 Bind the saved credential to each appropriate destination in your Goal's
-[`egress` frontmatter](goals.md#declare-external-access). For creation,
+[`network` frontmatter](goals.md#declare-external-access). For creation,
 Cloud binds declared access before the agent starts. To add or remove access
 later, revise the Goal and apply it to the same session. Web access edits also
 go through a Goal revision or Change Request, not a separate attachment action.
@@ -147,7 +147,9 @@ credential can affect every deployment using it.
 
 `plan` shows each destination's credential reference and restrictions; it does
 not establish that access works. Before uploading or deploying a Goal with
-`egress`, `apply` requires the backend to advertise `deployment_egress_credentials`.
+`network` (or its legacy `egress` alias), `apply` requires the backend to advertise
+`deployment_network_credentials`. The older `deployment_egress_credentials` flag
+alone is insufficient for this CLI.
 Legacy paired `integrations` and `allowlist` fields require `deployment_spec_access`.
 Missing support or an unreadable capability response stops the apply.
 This also covers registry packages,
@@ -158,7 +160,7 @@ these fields remain compatible with older backends.
 
 A spec describes desired behavior; it cannot add a missing platform surface.
 Public egress is default-deny: Cloud provides the common read paths below, and
-other agent requests need a matching Goal egress rule. Authenticated
+other agent requests need a matching Goal network rule. Authenticated
 requests also need an appropriate credential on that rule. Before applying,
 identify how the implementation will fit these Cloud capabilities:
 
@@ -167,7 +169,7 @@ identify how the implementation will fit these Cloud capabilities:
 | Deliver a workload | Use a digest-pinned published image, a repository's existing image publication workflow, or a read-only ConfigMap for a small interpreted service. |
 | Keep application data | Mount a persistent volume claim. Its lifecycle is bound to the claim and Cloud environment. |
 | Fetch build dependencies | Docker Hub images, PyPI packages, npm packages, and Telos artifacts have built-in read access. |
-| Reach another public API from the agent | Declare HTTPS destinations in `egress`, with workspace credential IDs where authentication is needed. |
+| Reach another public API from the agent | Declare HTTPS destinations in `network`, with workspace credential IDs where authentication is needed. |
 | Reach another service from the deployed application | No general managed credential connector is currently injected into Kubernetes workloads. |
 
 The Cloud agent receives the full `telos-cloud` operating skill inside the

@@ -39,7 +39,7 @@ Goal uses them:
 | `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
 | `interval` | A positive duration ending in `s`, `m`, or `h`, such as `30m` or `6h`, carried as the contract's reconciliation interval. |
 | `tags` | A YAML list of string labels. The default is an empty list. |
-| `egress` | HTTPS destinations with `host`, optional `credentials` ID, and optional `methods` and `paths` restrictions. |
+| `network` | HTTPS destinations with `host`, optional `credentials` ID, and optional `methods` and `paths` restrictions. |
 
 For example:
 
@@ -67,7 +67,7 @@ behavior, or evidence when they change what a correct result means.
 For a Cloud Goal that calls external services, add destinations to its frontmatter:
 
 ```yaml
-egress:
+network:
   - host: public.example.com
   - host: api.stripe.com
     credentials: sec-stripe-example
@@ -89,11 +89,11 @@ store, not in this file. Existing `sec_` IDs remain valid alongside new `sec-` I
 - Use uppercase HTTP methods. Credential paths are exact paths or prefixes
   ending in `/*`. A goal cannot expand the credential's provider-side permissions.
 
-`egress` describes the complete desired deployment access. Applying a revision
+`network` describes the complete desired deployment access. Applying a revision
 removes entries left out. Remove all goal-declared access with:
 
 ```yaml
-egress: []
+network: []
 ```
 
 This does not delete reusable workspace credentials or remove platform-managed
@@ -101,10 +101,11 @@ inference access. A new Goal with no custom access can omit the declaration.
 When updating a deployment with custom access, declare the desired access
 explicitly. Nonempty declarations require a Cloud Goal.
 
+`egress` remains a legacy alias for `network`. Use only one of them.
 Older goals using paired `integrations` and `allowlist` fields remain supported.
-Do not mix those fields with `egress`. Their separate lists do not identify
-which credential belongs to which host; choose the bindings explicitly when
-converting them.
+Do not mix those fields with either combined format. Their separate lists do not
+identify which credential belongs to which host; choose the bindings explicitly
+when converting them.
 
 See [Telos Cloud](cloud.md#credentials-and-external-access) for credential
 setup, backend support, permissions, and runtime limits.

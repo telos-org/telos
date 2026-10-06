@@ -506,9 +506,9 @@ func requireCloudAccessCapability(control *cloud.Client, access *spec.AccessSpec
 	}
 	capability := "deployment_spec_access"
 	supported := capabilities.DeploymentSpecAccess
-	if access.Egress != nil {
-		capability = "deployment_egress_credentials"
-		supported = capabilities.DeploymentEgressCredentials
+	if access.Network != nil {
+		capability = "deployment_network_credentials"
+		supported = capabilities.DeploymentNetworkCredentials
 	}
 	if !supported {
 		return fmt.Errorf("goal not applied: this Cloud backend does not support this external access format; use a backend with %s support", capability)

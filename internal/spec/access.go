@@ -12,7 +12,7 @@ import (
 // AccessSpec declares host-bound credentials and HTTPS permissions, or legacy access.
 // Credential values are stored separately by the Cloud control plane.
 type AccessSpec struct {
-	Egress           []EgressRule      `json:"egress,omitempty"` // non-nil selects the host-bound schema, including an explicit []
+	Network          []EgressRule      `json:"network,omitempty"` // non-nil selects the host-bound schema, including an explicit []
 	Integrations     []string          `json:"integrations"`
 	Allowlist        []NetworkRule     `json:"allowlist"`
 	IntegrationNames map[string]string `json:"integration_names,omitempty"` // review labels; IDs determine access
@@ -24,10 +24,10 @@ type EgressRule struct {
 }
 
 func (a AccessSpec) MarshalJSON() ([]byte, error) {
-	if a.Egress != nil {
+	if a.Network != nil {
 		return json.Marshal(struct {
-			Egress []EgressRule `json:"egress"`
-		}{a.Egress})
+			Network []EgressRule `json:"network"`
+		}{a.Network})
 	}
 	type legacy AccessSpec
 	return json.Marshal(legacy(a))
@@ -47,16 +47,21 @@ var (
 	networkPathRE             = regexp.MustCompile(`^/[A-Za-z0-9._~!$&'()*+,;=:@/*-]*$`)
 )
 
-// ParseAccess reads host-bound egress or the legacy paired fields. A nil result means
+// ParseAccess reads host-bound network or the legacy paired fields. A nil result means
 // the spec has no access declaration; an empty declaration is explicit.
 func ParseAccess(raw map[string]interface{}) (*AccessSpec, error) {
 	integrations, hasIntegrations := raw["integrations"]
 	allowlist, hasAllowlist := raw["allowlist"]
-	if egress, exists := raw["egress"]; exists {
-		if hasIntegrations || hasAllowlist {
-			return nil, fmt.Errorf("'egress' cannot be combined with 'integrations' or 'allowlist'")
+	network, hasNetwork := raw["network"]
+	egress, hasEgress := raw["egress"]
+	if hasNetwork || hasEgress {
+		if (hasNetwork && hasEgress) || hasIntegrations || hasAllowlist {
+			return nil, fmt.Errorf("use only one access format: 'network', legacy 'egress', or paired 'integrations' and 'allowlist'")
 		}
-		return parseEgress(egress)
+		if hasEgress {
+			network = egress
+		}
+		return parseEgress(network)
 	}
 	if !hasIntegrations && !hasAllowlist {
 		return nil, nil
@@ -91,15 +96,15 @@ func ParseAccess(raw map[string]interface{}) (*AccessSpec, error) {
 func parseEgress(value interface{}) (*AccessSpec, error) {
 	rows, ok := value.([]interface{})
 	if !ok || len(rows) > 10000 {
-		return nil, fmt.Errorf("'egress' must be a list of at most 10000 rules")
+		return nil, fmt.Errorf("'network' must be a list of at most 10000 rules")
 	}
-	access := &AccessSpec{Egress: make([]EgressRule, 0, len(rows))}
+	access := &AccessSpec{Network: make([]EgressRule, 0, len(rows))}
 	seen := make(map[string]bool, len(rows))
 	credentials := map[string]bool{}
 	for index, row := range rows {
 		raw, ok := row.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("egress rule %d: must be a mapping", index+1)
+			return nil, fmt.Errorf("network rule %d: must be a mapping", index+1)
 		}
 		network := make(map[string]interface{}, len(raw))
 		for key, value := range raw {
@@ -109,36 +114,36 @@ func parseEgress(value interface{}) (*AccessSpec, error) {
 		}
 		rule, err := parseNetworkRule(network)
 		if err != nil {
-			return nil, fmt.Errorf("egress rule %d: %w", index+1, err)
+			return nil, fmt.Errorf("network rule %d: %w", index+1, err)
 		}
 		for _, method := range rule.Methods {
 			if len(method) > 16 {
-				return nil, fmt.Errorf("egress rule %d: methods must be at most 16 characters", index+1)
+				return nil, fmt.Errorf("network rule %d: methods must be at most 16 characters", index+1)
 			}
 		}
 		entry := EgressRule{NetworkRule: rule}
 		if value, exists := raw["credentials"]; exists {
 			id, ok := value.(string)
 			if !ok || !integrationIDRE.MatchString(id) {
-				return nil, fmt.Errorf("egress rule %d: credentials must be a workspace credential ID beginning with sec- or sec_", index+1)
+				return nil, fmt.Errorf("network rule %d: credentials must be a workspace credential ID beginning with sec- or sec_", index+1)
 			}
 			if strings.HasPrefix(rule.Host, "*.") {
-				return nil, fmt.Errorf("egress rule %d: credentials require an exact hostname", index+1)
+				return nil, fmt.Errorf("network rule %d: credentials require an exact hostname", index+1)
 			}
 			for _, path := range rule.Paths {
 				if strings.Contains(strings.TrimSuffix(path, "/*"), "*") {
-					return nil, fmt.Errorf("egress rule %d: credential paths must be exact or end in /*", index+1)
+					return nil, fmt.Errorf("network rule %d: credential paths must be exact or end in /*", index+1)
 				}
 			}
 			entry.Credentials = id
 			credentials[id] = true
 			if len(credentials) > 100 {
-				return nil, fmt.Errorf("'egress' may reference at most 100 unique credentials")
+				return nil, fmt.Errorf("'network' may reference at most 100 unique credentials")
 			}
 		}
 		key, _ := json.Marshal(entry)
 		if !seen[string(key)] {
-			access.Egress = append(access.Egress, entry)
+			access.Network = append(access.Network, entry)
 			seen[string(key)] = true
 		}
 	}

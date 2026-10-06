@@ -69,8 +69,12 @@ func TestPlanShowsHostCredentialBindingsDefaultsAndChanges(t *testing.T) {
 		}
 		return state
 	}
-	current := parse("egress: [{host: api.example.com, credentials: sec-one}, {host: public.example.com}]\n")
-	proposed := parse("egress: [{host: api.example.com, credentials: sec-two}, {host: public.example.com}]\n")
+	current := parse("network: [{host: api.example.com, credentials: sec-one}, {host: public.example.com}]\n")
+	legacy := parse("egress: [{host: api.example.com, credentials: sec-one}, {host: public.example.com}]\n")
+	if !samePlanPermissions(current.Access, legacy.Access) {
+		t.Fatal("renaming egress to network must not change permissions")
+	}
+	proposed := parse("network: [{host: api.example.com, credentials: sec-two}, {host: public.example.com}]\n")
 	var out bytes.Buffer
 	printPlanStateDelta(&out, current, proposed)
 	for _, expected := range []string{
@@ -93,16 +97,16 @@ func TestPlanShowsHostCredentialBindingsDefaultsAndChanges(t *testing.T) {
 		t.Fatalf("initial preview hid access binding: %s", out.String())
 	}
 	out.Reset()
-	proposed = parse("egress: []\n")
+	proposed = parse("network: []\n")
 	printPlanStateDelta(&out, current, proposed)
-	if !strings.Contains(out.String(), "egress: none") {
+	if !strings.Contains(out.String(), "network: none") {
 		t.Fatalf("missing explicit revocation: %s", out.String())
 	}
 	encoded, _ := json.Marshal(proposed)
-	if !strings.Contains(string(encoded), `"access":{"egress":[]}`) || strings.Contains(string(encoded), "allowlist") {
+	if !strings.Contains(string(encoded), `"access":{"network":[]}`) || strings.Contains(string(encoded), "allowlist") {
 		t.Fatalf("new plan schema lost explicit revocation or emitted legacy fields: %s", encoded)
 	}
-	proposed = parse("egress: [{host: api.example.com, credentials: sec-one, methods: [GET], paths: ['/reports/*']}]\n")
+	proposed = parse("network: [{host: api.example.com, credentials: sec-one, methods: [GET], paths: ['/reports/*']}]\n")
 	if got := formatPlanAccess(proposed.Access); !strings.Contains(got, "credentials: sec-one; methods: GET; paths: /reports/*") {
 		t.Fatalf("restricted binding missing: %s", got)
 	}
@@ -533,7 +537,7 @@ func TestPrintPlanStateDeltaOmitsUnchangedResolvedState(t *testing.T) {
 func TestPlanEgressOrderingDoesNotChangePermissions(t *testing.T) {
 	read := func(rules string) planSpecState {
 		t.Helper()
-		state, err := planSpecStateFromMarkdown([]byte("---\nname: demo\nversion: 1.0.0\negress:\n"+rules+"---\n"), nil)
+		state, err := planSpecStateFromMarkdown([]byte("---\nname: demo\nversion: 1.0.0\nnetwork:\n"+rules+"---\n"), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -563,7 +567,7 @@ func TestPlanEgressOrderingDoesNotChangePermissions(t *testing.T) {
 	if out.Len() != 0 {
 		t.Fatalf("equivalent access should not produce an access delta: %s", out.String())
 	}
-	if current.Access.Egress[1].Methods[0] != "POST" || current.Access.Egress[1].Paths[0] != "/z/*" {
+	if current.Access.Network[1].Methods[0] != "POST" || current.Access.Network[1].Paths[0] != "/z/*" {
 		t.Fatal("formatting mutated the authored rule order")
 	}
 }

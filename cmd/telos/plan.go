@@ -205,7 +205,7 @@ func printPlanPreview(
 		printSummaryField(out, "Skills", strings.Join(skillDisplayNames(compiled), ", "))
 	}
 	if access := compiled.Environment.Access; comparison == nil && access != nil {
-		if access.Egress != nil {
+		if access.Network != nil {
 			printSummaryField(out, "Access", formatPlanAccess(access))
 		} else {
 			printSummaryField(out, "Integrations", formatPlanIntegrations(access))
@@ -466,9 +466,9 @@ func formatPlanAccess(access *spec.AccessSpec) string {
 	if access == nil {
 		return "not declared"
 	}
-	if access.Egress != nil {
-		entries := make([]string, 0, len(access.Egress))
-		for _, rule := range access.Egress {
+	if access.Network != nil {
+		entries := make([]string, 0, len(access.Network))
+		for _, rule := range access.Network {
 			methods, paths := slices.Clone(rule.Methods), slices.Clone(rule.Paths)
 			slices.Sort(methods)
 			slices.Sort(paths)
@@ -479,7 +479,7 @@ func formatPlanAccess(access *spec.AccessSpec) string {
 		}
 		slices.Sort(entries)
 		entries = slices.Compact(entries)
-		return "egress: " + firstNonEmpty(strings.Join(entries, "; "), "none")
+		return "network: " + firstNonEmpty(strings.Join(entries, "; "), "none")
 	}
 	return "integrations: " + formatPlanIntegrations(access) +
 		"; allowlist: " + formatPlanAllowlist(access.Allowlist)
@@ -501,8 +501,8 @@ func samePlanPermissions(current, proposed *spec.AccessSpec) bool {
 	if current == nil || proposed == nil {
 		return current == proposed
 	}
-	if current.Egress != nil || proposed.Egress != nil {
-		return current.Egress != nil && proposed.Egress != nil && formatPlanAccess(current) == formatPlanAccess(proposed)
+	if current.Network != nil || proposed.Network != nil {
+		return current.Network != nil && proposed.Network != nil && formatPlanAccess(current) == formatPlanAccess(proposed)
 	}
 	currentIDs, proposedIDs := slices.Clone(current.Integrations), slices.Clone(proposed.Integrations)
 	slices.Sort(currentIDs)

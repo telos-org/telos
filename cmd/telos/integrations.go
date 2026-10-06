@@ -67,7 +67,7 @@ func cmdWorkspaceCredentials(args []string, legacy bool) {
 			return
 		}
 		fmt.Println(link)
-		fmt.Println("Enter credentials in the secure web form, then reference the saved ID on the appropriate egress destination in your goal.")
+		fmt.Println("Enter credentials in the secure web form, then reference the saved ID on the appropriate network destination in your goal.")
 		return
 	}
 	secrets, err := control.ListSecrets()
