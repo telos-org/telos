@@ -1,6 +1,6 @@
 ---
 title: The Telos Cloud Environment
-description: Everything you need to know about the Telos cloud environment - networking, secrets, resources, developer toolchain, and more
+description: Everything you need to know about the Telos cloud environment - networking, secrets, resources, developer toolchain, and more.
 group: Platform
 ---
 
