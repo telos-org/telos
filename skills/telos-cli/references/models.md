@@ -8,8 +8,7 @@ Telos is designed to be flexible and neutral to model choice, and supports the o
 
 You can select a model from the CLI with `--model <connection-name>/<model-id>`. A default can be set in `telos config` or in the web UI (TODO(grohan): impl the PUT to `/api/inference/preference`). Telos also exposes standard "thinking effort" values (`--thinking [low,medium,high,xhigh]`).
 
-
-## Managed Inference
+## Managed inference
 
 Telos exposes `telos/default` and `telos/max` as managed inference models. These abstract routing to frontier open and frontier closed models, respectively.
 
@@ -19,9 +18,9 @@ The value of Telos-managed inference is to provide a cost-efficient, reliable op
 - Intelligent model routing (routes requests to different models based on the workload)
 - Increased rate limits and prioritization
 
-## Bring Your Own Inference
+## Bring your own inference
 
-Telos lets you bring your own inference, configurable at https://usetelos.ai/workspace?tab=inference
+Telos lets you bring your own inference, configurable at <https://usetelos.ai/workspace?tab=inference>.
 
 ### API key
 
@@ -35,6 +34,5 @@ For individual developers or small teams, most token spend goes through subscrip
 - xAI
 
 As of October 2026, Anthropic is unsupported since connecting third-party applications to their subscription is against their terms of service.
-
 
 TODO(grohan): mutability of model choice mid-goal?

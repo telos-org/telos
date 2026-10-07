@@ -1,5 +1,5 @@
 ---
-title: The Telos Cloud Environment
+title: The Telos Cloud environment
 description: Everything you need to know about the Telos Cloud environment — networking, secrets, resources, developer toolchain, and more.
 group: Platform
 ---
@@ -89,10 +89,8 @@ A few additional details on this feature:
 - Network-only entries can use wildcard hosts
 - One credential can serve multiple declared hosts
 
-
 TODO(grohan): some notes on credential impl and why its safe and invisible to the agent and shit
 
-TODO(grohan) fit in the quote: "An agent is nothing without its environment"
-
+TODO(grohan): fit in the quote: "An agent is nothing without its environment"
 
 TODO(grohan): need to add in the tools appendix

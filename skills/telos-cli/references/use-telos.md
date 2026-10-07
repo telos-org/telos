@@ -4,9 +4,7 @@ description: Get started with building on Telos.
 group: Getting started
 ---
 
-# Use Telos
-
-Telos is a goal-oriented programming system. Telos treats the goal specification as the source of truth, and background agents own the software lifecycle beneath it. 
+Telos is a goal-oriented programming system. Telos treats the goal specification as the source of truth, and background agents own the software lifecycle beneath it.
 
 Implementations can change as the Goal evolves,
 while its session, deployment, history, and evidence remain connected.
@@ -17,33 +15,33 @@ the command and field shapes match the current CLI.
 
 ## Installation
 
-Install Telos with
+Install Telos with:
 
 ```console
-curl -fsSL https://usetelos.ai/install.sh | sh
+$ curl -fsSL https://usetelos.ai/install.sh | sh
 ```
 
 This will install the `telos` binary into your `$HOME/.local/bin` or `$TELOS_INSTALL_DIR`. This also packages with it the coupled `telos-cli` agent skill, installed under `$HOME/.agents/skills/`. The `telos` binary is self-contained, and you can check the installed version with:
 
 ```console
-telos --version
+$ telos --version
 ```
 
 If you want to update your local installation, use:
 
 ```console
-telos update
+$ telos update
 ```
-to install the latest stable version
+to install the latest stable version.
 
 or
 
 ```console
-telos update <version>
+$ telos update <version>
 ```
-to install a specific release. 
+to install a specific release.
 
-## Sign in 
+## Sign in
 
 For first-time interactive setup, authenticate with Telos Cloud as shown below.
 
@@ -55,9 +53,9 @@ Waiting for approval...
 logged in to https://api.usetelos.ai as alice@example.com
 ```
 
-To validate your signed-in configuration, run
+To validate your signed-in configuration, run:
 
-```
+```console
 $ telos config
 Config file     ~/.telos/config.yaml
 Endpoint        https://api.usetelos.ai
@@ -110,7 +108,7 @@ Namespace ns-reading-list TODO(grohan): seems false now?
 Hash      799e5c31172afb26 TODO(grohan): is this really needed?
 ```
 
-The first plan has no deployed version to compare against, so it shows the Goal identity, context, and content hash. 
+The first plan has no deployed version to compare against, so it shows the Goal identity, context, and content hash.
 
 ## Apply it
 
@@ -136,7 +134,7 @@ The `apply` command returns immediately and launches a session in the cloud.
 
 You can monitor your active Goal at different levels of detail and verbosity. To see an overview of all your active Goals:
 
-```bash
+```console
 $ telos list
 TODO(grohan): need example
 ```
@@ -152,7 +150,7 @@ TODO(grohan): need example
 
 To follow the agent's work in detail:
 
-```bash
+```console
 $ telos logs sess_c7d2f0a4e8
 TODO(grohan): need example
 ```
@@ -178,12 +176,12 @@ Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 ```
 
-Once ready, open the service and verify that the behaviour is as desired.
+Once ready, open the service and verify that the behavior is as desired.
 In this case, you would exercise `POST /books` and `GET /books` through the public URL to confirm everything is in order.
 
 ## Iterating on the Goal
 
-Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump its version to `0.2.0`, and add “Every book records who added it” to the Goal.
+Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump its version to `0.2.0`, and add "Every book records who added it" to the Goal.
 
 Plan against the existing session:
 
@@ -236,8 +234,7 @@ Logs      telos logs --context personal sess_c7d2f0a4e8
 
 This applies the update in-place, and the system begins reconciling towards the new desired Goal. Continue to monitor status from `working` to `ready`, then exercise the updated API behavior.
 
-
-Suppose the spec has updated under you (by your coworker), you can fetch the deployed package with
+Suppose the spec has updated under you (by your coworker), you can fetch the deployed package with:
 
 ```console
 $ telos get <session-id>
@@ -246,7 +243,6 @@ $ telos get <session-id>
 This writes the goal spec and its skills to a directory named after the Goal. Use `--output <dir>` to choose the directory, or `--output SPEC.md` to fetch only the spec.
 
 TODO(grohan): why do we even support `--output SPEC.md`
-
 
 ## Delete the Goal
 
@@ -266,7 +262,7 @@ Context   personal
 
 The Goal disappears from `telos list` as soon as you delete it.
 
-## Advanced Configuration
+## Advanced configuration
 
 For advanced use — such as scripting, CI, or custom development setups — you can configure various defaults.
 
@@ -281,4 +277,3 @@ In terms of precedence, flags override environment variables, and environment va
 | `TELOS_THINKING` | Thinking effort for new Goals: `low`, `medium`, `high` or `xhigh`. | `medium` |
 | `TELOS_INSTALL_DIR` | Where the installer puts `telos`. | `~/.local/bin` |
 | `TELOS_AGENT_SKILLS_DIR` | Where the installer puts the `telos-cli` skill. | `~/.agents/skills` |
-
