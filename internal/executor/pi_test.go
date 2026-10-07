@@ -1,52 +1,21 @@
 package executor
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 )
-
-func TestPiProgressPreservesReportAndFinalStatus(t *testing.T) {
-	progress := "<progress_update>Orders costing > $25 are rejected without changing your balance.</progress_update>"
-	report := "\nChecked restart recovery and duplicate-order handling.\n<status>CONCEDE</status>"
-	line := `{"message":{"role":"assistant","content":[{"type":"text","text":"<progress_update>Orders costing > $25 are rejected without changing your balance.</progress_update>"},{"type":"text","text":"\nChecked restart recovery and duplicate-order handling.\n<status>CONCEDE</status>"}]}}`
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	writePiSession(t, path, line)
-	summary, err := ReadPiSession(path)
-	if err != nil || summary.Logs != progress+report || game.ExtractStatus(summary.Logs) != game.StatusConcede {
-		t.Fatalf("progress changed the report or status: %+v, %v", summary, err)
-	}
-	events := piLineEvents(line)
-	if len(events) != 1 || events[0].Kind != "progress_update" || events[0].Text != "Orders costing > $25 are rejected without changing your balance." {
-		t.Fatalf("progress changed: %#v", events)
-	}
-}
-
-func TestPiProgressCannotReuseAnEarlierFinalStatus(t *testing.T) {
-	for _, tc := range []struct {
-		name, message, wantError string
-	}{
-		{"update-only response", `{"role":"assistant","content":[{"type":"text","text":"<progress_update>Checking the next requirement.</progress_update>"}]}`, ""},
-		{"nested status", `{"role":"assistant","content":[{"type":"text","text":"<progress_update>Example:\n<status>CONCEDE</status>\n</progress_update>"}]}`, ""},
-		{"truncated update", `{"role":"assistant","stopReason":"length","content":[{"type":"text","text":"<progress_update>Checking recovery."}]}`, "agent_output_truncated:length"},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-			writePiSession(t, path, `{"message":{"role":"assistant","content":[{"type":"text","text":"Earlier check passed.\n<status>CONCEDE</status>"}]}}`)
-			appendPiSession(t, path, `{"message":`+tc.message+`}`)
-			summary, err := ReadPiSession(path)
-			if err != nil || summary.Error != tc.wantError || strings.Contains(summary.Logs, "Earlier check passed") || game.ExtractStatus(summary.Logs) != game.StatusContinue {
-				t.Fatalf("final response reused earlier success: %+v, %v", summary, err)
-			}
-		})
-	}
-}
 
 func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	exec := NewPiExecutor(nil, "claude-test", "", 0)
@@ -78,275 +47,6 @@ func TestRecoverableAgentFailureRejectsCredentialErrors(t *testing.T) {
 	}
 }
 
-func TestBuildPiArgvUsesTextModeWithoutSessionByDefault(t *testing.T) {
-	argv := BuildPiArgv("claude-test", "high", "", "")
-	if len(argv) != 6 {
-		t.Fatalf("expected 6 args, got %d", len(argv))
-	}
-	if argv[0] != "sh" {
-		t.Errorf("first arg: got %q", argv[0])
-	}
-	if argv[4] != "claude-test" {
-		t.Errorf("model arg: got %q", argv[4])
-	}
-	if argv[5] != "high" {
-		t.Errorf("thinking arg: got %q", argv[5])
-	}
-	if !strings.Contains(argv[2], `prompt="${TELOS_TASK}"`) {
-		t.Errorf("task prompt is not expanded from env: %s", argv[2])
-	}
-	if !strings.Contains(argv[2], `--mode text`) {
-		t.Errorf("pi should run in text mode: %s", argv[2])
-	}
-	if !strings.Contains(argv[2], `--no-session`) {
-		t.Errorf("fallback path should stay ephemeral: %s", argv[2])
-	}
-	if strings.Contains(argv[2], `--mode json`) {
-		t.Errorf("pi should not use the streaming json event mode: %s", argv[2])
-	}
-	if strings.Contains(argv[2], `--no-extensions`) {
-		t.Errorf("pi should allow configured extensions: %s", argv[2])
-	}
-	if !strings.Contains(argv[2], `TELOS_PI_APPEND_SYSTEM_PROMPT`) ||
-		!strings.Contains(argv[2], `--append-system-prompt "$append_file"`) {
-		t.Errorf("hosted append system prompt is not wired: %s", argv[2])
-	}
-}
-
-func TestBuildPiArgvUsesTaskFileAndSessionFile(t *testing.T) {
-	argv := BuildPiArgv("claude-test", "high", "/tmp/task.md", "/tmp/pi-session.jsonl")
-	if len(argv) != 8 {
-		t.Fatalf("expected 8 args, got %d", len(argv))
-	}
-	if argv[6] != "@/tmp/task.md" {
-		t.Errorf("task file arg: got %q", argv[6])
-	}
-	if argv[7] != "/tmp/pi-session.jsonl" {
-		t.Errorf("session file arg: got %q", argv[7])
-	}
-	if !strings.Contains(argv[2], `--session "$4"`) {
-		t.Errorf("pi session file is not selected from argv: %s", argv[2])
-	}
-	if strings.Contains(argv[2], `-p "${TELOS_TASK}"`) {
-		t.Errorf("task env is still expanded directly into argv: %s", argv[2])
-	}
-}
-
-func TestBuildPiArgvUsesSessionFileWithoutTaskFile(t *testing.T) {
-	argv := BuildPiArgv("claude-test", "high", "", "/tmp/pi-session.jsonl")
-	if len(argv) != 8 {
-		t.Fatalf("expected 8 args with empty task placeholder, got %d", len(argv))
-	}
-	if argv[6] != "" {
-		t.Errorf("task placeholder: got %q", argv[6])
-	}
-	if argv[7] != "/tmp/pi-session.jsonl" {
-		t.Errorf("session file arg: got %q", argv[7])
-	}
-}
-
-func TestExecuteTurnIncludesStderrOnPiFailure(t *testing.T) {
-	workspace := t.TempDir()
-	home := filepath.Join(t.TempDir(), "home")
-	bin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	piPath := filepath.Join(bin, "pi")
-	script := "#!/bin/sh\necho \"EROFS: read-only file system\" >&2\nexit 1\n"
-	if err := os.WriteFile(piPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	p := platform.NewLocalPlatform(workspace)
-	p.Env = map[string]string{"HOME": home}
-	exec := NewPiExecutor(p, "test-model", "high", 0)
-
-	result := exec.ExecuteTurn("do it", "prover", nil)
-
-	if result.Error == "" || !strings.Contains(result.Error, "pi_failed:1") {
-		t.Fatalf("error: got %q", result.Error)
-	}
-	if !strings.Contains(result.Logs, "[stderr]") ||
-		!strings.Contains(result.Logs, "EROFS: read-only file system") {
-		t.Fatalf("logs should include stderr, got %q", result.Logs)
-	}
-}
-
-func TestExecuteTurnUsesEnvPromptForNormalSessionTask(t *testing.T) {
-	workspace := t.TempDir()
-	home := filepath.Join(t.TempDir(), "home")
-	bin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	piPath := filepath.Join(bin, "pi")
-	script := `#!/bin/sh
-printf '%s\n' "$@" > "$HOME/argv.txt"
-printf '%s' "$TELOS_TASK" > "$HOME/task-env.txt"
-session=""
-while [ "$#" -gt 0 ]; do
-  if [ "$1" = "--session" ]; then
-    shift
-    session="$1"
-  fi
-  shift || true
-done
-mkdir -p "$(dirname "$session")"
-printf '%s\n' '{"type":"message","message":{"role":"assistant","content":[{"type":"text","text":"done\n<status>CONCEDE</status>\n"}],"stopReason":"stop"}}' > "$session"
-`
-	if err := os.WriteFile(piPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	state := game.NewPVGState("spec", t.TempDir(), "sess")
-	turn := state.Turn(1, 1, "prover")
-	task := "small controller task"
-	if err := game.WriteTurnTask(turn, task); err != nil {
-		t.Fatal(err)
-	}
-
-	p := platform.NewLocalPlatform(workspace)
-	p.Env = map[string]string{"HOME": home}
-	exec := NewPiExecutor(p, "test-model", "high", 0)
-
-	result := exec.ExecuteTurn(task, "prover", turn)
-
-	if result.Status != game.StatusConcede {
-		t.Fatalf("status: got %q logs=%q error=%q", result.Status, result.Logs, result.Error)
-	}
-	taskEnv, err := os.ReadFile(filepath.Join(home, "task-env.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(taskEnv) != task {
-		t.Fatalf("TELOS_TASK: got %q want %q", string(taskEnv), task)
-	}
-	argv, err := os.ReadFile(filepath.Join(home, "argv.txt"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.Contains(string(argv), "@"+turn.TaskPath()) {
-		t.Fatalf("normal session task should not use Pi @file prompt:\n%s", string(argv))
-	}
-}
-
-func TestExecuteTurnTreatsTimeoutAsTerminalFailure(t *testing.T) {
-	workspace := t.TempDir()
-	home := filepath.Join(t.TempDir(), "home")
-	bin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	piPath := filepath.Join(bin, "pi")
-	script := "#!/bin/sh\nsleep 5\n"
-	if err := os.WriteFile(piPath, []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	p := platform.NewLocalPlatform(workspace)
-	p.Env = map[string]string{"HOME": home}
-	exec := NewPiExecutor(p, "test-model", "high", 1)
-
-	result := exec.ExecuteTurn("do it", "prover", nil)
-
-	if result.Error != "local_timeout:1" {
-		t.Fatalf("error: got %q", result.Error)
-	}
-	if result.Recoverable {
-		t.Fatalf("timeout should be terminal, got recoverable result: %#v", result)
-	}
-}
-
-func TestReadPiSessionExtractsAssistantTextStatsAndTurns(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
-	appendPiSession(t, path, `{"type":"message","id":"u","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"user","content":"do it","timestamp":1770000000000}}`)
-	appendPiSession(t, path, `{"type":"message","id":"t","parentId":"u","timestamp":"2026-05-21T00:00:02Z","message":{"role":"toolResult","toolCallId":"call_1","toolName":"bash","content":[{"type":"text","text":"ok"}],"isError":false,"timestamp":1770000000001}}`)
-	appendPiSession(t, path, `{"type":"message","id":"a","parentId":"t","timestamp":"2026-05-21T00:00:03Z","message":{"role":"assistant","provider":"openai-codex","model":"gpt-5.5","stopReason":"stop","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"Implemented it.\n\n<status>CONCEDE</status>\n"}],"usage":{"input":10,"output":20,"cacheRead":30,"cacheWrite":40,"totalTokens":100,"cost":{"input":0.1,"output":0.2,"cacheRead":0.3,"cacheWrite":0.4,"total":1.0}},"timestamp":1770000000002}}`)
-
-	summary, err := ReadPiSession(path)
-	if err != nil {
-		t.Fatalf("ReadPiSession: %v", err)
-	}
-	if summary.Logs != "Implemented it.\n\n<status>CONCEDE</status>\n" {
-		t.Fatalf("logs: got %q", summary.Logs)
-	}
-	if summary.Error != "" {
-		t.Fatalf("error: got %q", summary.Error)
-	}
-	want := game.TurnStats{
-		CostUSD:             1.0,
-		NumTurns:            1,
-		InputTokens:         10,
-		OutputTokens:        20,
-		CacheReadTokens:     30,
-		CacheCreationTokens: 40,
-		Model:               "gpt-5.5",
-	}
-	if summary.Stats != want {
-		t.Fatalf("stats: got %+v want %+v", summary.Stats, want)
-	}
-}
-
-func TestReadPiSessionUsesLastAssistantTextAndAggregatesAssistantUsage(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
-	appendPiSession(t, path, `{"type":"message","id":"a1","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"stop","content":[{"type":"text","text":"first"}],"usage":{"input":1,"output":1,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.1}}}}`)
-	appendPiSession(t, path, `{"type":"message","id":"a2","parentId":"a1","timestamp":"2026-05-21T00:00:02Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"stop","content":[{"type":"text","text":"second"}],"usage":{"input":2,"output":3,"cacheRead":4,"cacheWrite":5,"cost":{"total":0.6}}}}`)
-
-	summary, err := ReadPiSession(path)
-	if err != nil {
-		t.Fatalf("ReadPiSession: %v", err)
-	}
-	if summary.Logs != "second" {
-		t.Fatalf("logs: got %q", summary.Logs)
-	}
-	if summary.Stats.InputTokens != 3 || summary.Stats.OutputTokens != 4 ||
-		summary.Stats.CacheReadTokens != 4 || summary.Stats.CacheCreationTokens != 5 ||
-		summary.Stats.CostUSD != 0.7 {
-		t.Fatalf("stats should sum all assistant usage: %+v", summary.Stats)
-	}
-}
-
-func TestReadPiSessionMapsLengthStopToRecoverableError(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
-	appendPiSession(t, path, `{"type":"message","id":"a","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"length","content":[{"type":"text","text":"partial"}],"usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.3}}}}`)
-
-	summary, err := ReadPiSession(path)
-	if err != nil {
-		t.Fatalf("ReadPiSession: %v", err)
-	}
-	if summary.Error != "agent_output_truncated:length" {
-		t.Fatalf("error: got %q", summary.Error)
-	}
-}
-
-func TestReadPiSessionIgnoresTransientErrors(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
-	appendPiSession(t, path, `{"type":"message","id":"a","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"error","errorMessage":"overloaded_error: try again","content":[{"type":"text","text":"partial"}],"usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.3}}}}`)
-
-	summary, err := ReadPiSession(path)
-	if err != nil {
-		t.Fatalf("ReadPiSession: %v", err)
-	}
-	if summary.Error != "" {
-		t.Fatalf("transient error should be ignored, got %q", summary.Error)
-	}
-}
-
-func TestReadPiSessionRequiresAssistantMessage(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
-
-	_, err := ReadPiSession(path)
-	if err == nil || !strings.Contains(err.Error(), "no assistant message") {
-		t.Fatalf("expected no assistant error, got %v", err)
-	}
-}
-
 func TestPiLineEventsProjectsSafeToolCallProgress(t *testing.T) {
 	events := piLineEvents(`{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"toolCall","name":"read","arguments":{"path":"/tmp/other/spec.md"}},{"type":"toolCall","name":"bash","arguments":{"command":"kubectl get pods --token SECRET"}},{"type":"toolCall","name":"bash","arguments":{"command":"git status --short"}}]}}`)
 
@@ -368,248 +68,416 @@ func TestPiLineEventsProjectsSafeToolCallProgress(t *testing.T) {
 	}
 }
 
-func TestPiLiveProjectorPreservesRepeatedActivityWithoutReplayingFile(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	line := `{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/workspace/config.go"}}]}}`
-	var events []game.LiveAgentEvent
-	projector := &piLiveProjector{
-		sessionPath: path,
-		turnState: &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
-			events = append(events, event)
-		}},
-	}
-
-	writePiSession(t, path, line)
-	projector.observeSessionFile(false)
-	projector.observeSessionFile(false)
-	appendPiSession(t, path, line)
-	projector.observeSessionFile(false)
-
-	if len(events) != 2 {
-		t.Fatalf("repeated activity count = %d, want 2: %#v", len(events), events)
-	}
-	for _, event := range events {
-		if event.Kind != "tool" || event.Text != "Reading workspace/config.go" {
-			t.Fatalf("unexpected event: %#v", event)
+func TestPiStreamUsesFinalMessageAndAggregatesUsage(t *testing.T) {
+	var stream piStream
+	for _, line := range []string{
+		`{"message":{"role":"assistant","model":"first","stopReason":"error","errorMessage":"overloaded_error","content":[{"type":"text","text":"old <status>CONCEDE</status>"}],"usage":{"input":1,"output":2,"cost":{"total":0.25}}}}`,
+		`{"message":{"role":"toolResult"}}`,
+		`{"message":{"role":"assistant","model":"second","content":[{"type":"thinking","thinking":"hidden"},{"type":"text","text":"<progress_update>Checking again.</progress_update>"}],"usage":{"input":3,"output":4,"cacheRead":5,"cacheWrite":6,"cost":{"total":0.5}}}}`,
+	} {
+		var record map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &record); err != nil {
+			t.Fatal(err)
 		}
+		stream.message(record)
+	}
+	want := game.TurnStats{Model: "second", NumTurns: 1, InputTokens: 4, OutputTokens: 6, CacheReadTokens: 5, CacheCreationTokens: 6, CostUSD: 0.75}
+	if stream.stats != want || stream.err != "" || strings.Contains(stream.logs, "old") || strings.Contains(stream.logs, "hidden") || game.ExtractStatus(stream.logs) != game.StatusContinue {
+		t.Fatalf("wrong stream summary: %+v", stream)
 	}
 }
 
-func TestPiLiveProjectorBuffersPartialLines(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	var events []game.LiveAgentEvent
-	projector := &piLiveProjector{
-		sessionPath: path,
-		turnState: &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
-			events = append(events, event)
-		}},
-	}
-	// The file may not exist when the watcher starts.
-	projector.observeSessionFile(false)
-	writePiSession(t, path, `{"message":{"role":"user","content":"ignored"}}`)
-	projector.observeSessionFile(false)
-
-	// A record can exceed bufio.Scanner's default limit and split inside UTF-8.
-	body := strings.Repeat("x", 96*1024) + " café"
-	line := piProgressLine(body)
-	split := strings.Index(line, "é") + 1
-	for _, part := range []string{line[:split], line[split:]} {
-		appendPiBytes(t, path, part)
-		projector.observeSessionFile(false)
-		projector.observeSessionFile(false)
-		if len(events) != 0 {
-			t.Fatalf("emitted an unfinished record: %#v", events)
-		}
-	}
-	appendPiBytes(t, path, "\ninvalid JSON\n\n"+piProgressLine("next")+"\n")
-	projector.observeSessionFile(false)
-	projector.observeSessionFile(true)
-	want := []game.LiveAgentEvent{
-		{Kind: "progress_update", Text: body},
-		{Kind: "progress_update", Text: "next"},
-	}
-	if !slices.Equal(events, want) {
-		t.Fatalf("partial records were lost, changed, or replayed (got %d events)", len(events))
-	}
-}
-
-func TestPiLiveProjectorFlushesFinalLineOnce(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	var events []game.LiveAgentEvent
-	projector := &piLiveProjector{
-		sessionPath: path,
-		turnState: &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
-			events = append(events, event)
-		}},
-	}
-	if err := os.WriteFile(path, []byte(piProgressLine("last")), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	projector.observeSessionFile(false)
-	if len(events) != 0 {
-		t.Fatal("emitted final record before the final drain")
-	}
-	projector.observeSessionFile(true)
-	projector.observeSessionFile(true)
-	appendPiBytes(t, path, "\n")
-	projector.observeSessionFile(false)
-	if !slices.Equal(events, []game.LiveAgentEvent{{Kind: "progress_update", Text: "last"}}) {
-		t.Fatalf("final drain events = %#v", events)
-	}
-}
-
-func TestPiLiveProjectorResetsOnFileChange(t *testing.T) {
-	for _, change := range []string{"same-size replacement", "larger replacement", "truncation"} {
-		t.Run(change, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-			var events []game.LiveAgentEvent
-			projector := &piLiveProjector{
-				sessionPath: path,
-				turnState: &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
-					events = append(events, event)
-				}},
-			}
-			original := piProgressLine("old") + "\n" + piProgressLine("unfinished")[:25]
-			if err := os.WriteFile(path, []byte(original), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			projector.observeSessionFile(false)
-			replacement := piProgressLine("new") + "\n"
-			if change == "truncation" {
-				if err := os.Truncate(path, 0); err != nil {
-					t.Fatal(err)
+func TestExecuteTurnRPCCompletion(t *testing.T) {
+	for _, tc := range []struct{ scenario, wantError string }{
+		{"normal", ""},
+		{"retry", ""},
+		{"provider_error", "overloaded_error: exhausted"},
+		{"truncated", "agent_output_truncated:length"},
+		{"aborted", "agent_failed:aborted"},
+		{"early_exit", "pi_rpc_exited_before_settled"},
+		{"handled", "pi_prompt_handled"},
+		{"rejected", "inactive virtual key"},
+		{"malformed", "pi_rpc_protocol"},
+		{"malformed_then_success", "pi_rpc_protocol"},
+		{"legacy_version", ""},
+		{"dialog", ""},
+		{"stderr", "EROFS: read-only file system"},
+	} {
+		t.Run(tc.scenario, func(t *testing.T) {
+			pe := helperExecutor(t, tc.scenario)
+			result := pe.ExecuteTurn("work", "prover", nil)
+			if tc.wantError == "" {
+				if result.Error != "" || result.Status != game.StatusConcede || !strings.HasSuffix(result.Logs, "<status>CONCEDE</status>") {
+					t.Fatalf("result: status=%s error=%q log bytes=%d", result.Status, result.Error, len(result.Logs))
 				}
-				projector.observeSessionFile(false)
-				appendPiBytes(t, path, replacement)
-			} else {
-				replacement += strings.Repeat("\n", len(original)-len(replacement))
-				if change == "larger replacement" {
-					replacement += "\n"
-				}
-				if err := os.WriteFile(path+".new", []byte(replacement), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Rename(path+".new", path); err != nil {
-					t.Fatal(err)
-				}
+			} else if !strings.Contains(result.Error, tc.wantError) || result.Status != game.StatusContinue {
+				t.Fatalf("wanted error %q: %+v", tc.wantError, result)
 			}
-			projector.observeSessionFile(false)
-			projector.observeSessionFile(true)
-			want := []game.LiveAgentEvent{
-				{Kind: "progress_update", Text: "old"},
-				{Kind: "progress_update", Text: "new"},
+			if tc.scenario == "rejected" && result.Recoverable {
+				t.Fatal("configuration failure must be terminal")
 			}
-			if !slices.Equal(events, want) {
-				t.Fatalf("events after file change = %#v, want %#v", events, want)
+			if _, err := pe.SetModel(context.Background(), "provider", "other"); !errors.Is(err, ErrPiNotRunning) {
+				t.Fatalf("control after exit: %v", err)
 			}
 		})
 	}
 }
 
-func TestPiLiveProjectorDefersConcurrentAppendUntilNextPoll(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	writePiSession(t, path, piProgressLine("first"))
-	var events []game.LiveAgentEvent
-	projector := &piLiveProjector{
-		sessionPath: path,
-		turnState: &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
-			events = append(events, event)
-			if len(events) == 1 {
-				appendPiSession(t, path, piProgressLine("second"))
+func TestExecuteTurnRPCTransmitsLargePromptAndSessionOptions(t *testing.T) {
+	pe := helperExecutor(t, "normal")
+	pe.Platform.Env["TELOS_PI_APPEND_SYSTEM_PROMPT"] = "hosted instructions\nsecond line"
+	state := game.NewPVGState("spec", t.TempDir(), "sess").Turn(1, 1, "prover")
+	task := strings.Repeat("quotes \" newline\nseparator\u2028 ", 20000)
+	result := pe.ExecuteTurn(task, "prover", state)
+	if result.Error != "" {
+		t.Fatal(result.Error)
+	}
+	data, err := os.ReadFile(filepath.Join(pe.Platform.Workspace, "prompt.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var prompt struct{ Message string }
+	if err := json.Unmarshal(data, &prompt); err != nil || prompt.Message != task {
+		t.Fatalf("prompt corrupted: %v, bytes=%d", err, len(prompt.Message))
+	}
+	argsData, err := os.ReadFile(filepath.Join(pe.Platform.Workspace, "args.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args []string
+	if err := json.Unmarshal(argsData, &args); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(strings.Join(args, "\n"), "--mode\nrpc") || !strings.Contains(strings.Join(args, "\n"), "--session\n"+state.PiSessionPath()) {
+		t.Fatalf("wrong args: %v", args)
+	}
+	for i, arg := range args {
+		if arg == "--append-system-prompt" {
+			content, err := os.ReadFile(args[i+1])
+			if err != nil || string(content) != pe.Platform.Env["TELOS_PI_APPEND_SYSTEM_PROMPT"] {
+				t.Fatalf("append prompt: %q, %v", content, err)
 			}
-		}},
+			os.Remove(args[i+1])
+			return
+		}
 	}
-	projector.observeSessionFile(false)
-	if len(events) != 1 {
-		t.Fatalf("poll should stop at its initial file size, got %d events", len(events))
+	t.Fatal("missing appended system prompt")
+}
+
+func TestExecuteTurnRPCControls(t *testing.T) {
+	pe := helperExecutor(t, "controls")
+	started := make(chan struct{}, 1)
+	state := &game.TurnState{Dir: t.TempDir(), OnLiveEvent: func(e game.LiveAgentEvent) { started <- struct{}{} }}
+	resultCh := make(chan game.TurnResult, 1)
+	go func() { resultCh <- pe.ExecuteTurn("work", "prover", state) }()
+	select {
+	case <-started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Pi never started")
 	}
-	projector.observeSessionFile(false)
-	projector.observeSessionFile(true)
-	want := []game.LiveAgentEvent{
-		{Kind: "progress_update", Text: "first"},
-		{Kind: "progress_update", Text: "second"},
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if _, err := pe.SetModel(ctx, "provider", "missing"); err == nil || !strings.Contains(err.Error(), "Model not found") {
+		t.Fatalf("invalid model: %v", err)
 	}
-	if !slices.Equal(events, want) {
-		t.Fatalf("events = %#v, want %#v", events, want)
+	for _, level := range []string{"banana", "xhigh", "max"} {
+		if _, err := pe.SetThinkingLevel(ctx, level); err == nil || !strings.Contains(err.Error(), "unsupported thinking") {
+			t.Fatalf("invalid thinking %q: %v", level, err)
+		}
+	}
+	settings, err := pe.SetModel(ctx, "provider", "second")
+	if err != nil || settings != (PiSettings{"provider", "second", "low"}) {
+		t.Fatalf("model readback: %+v, %v", settings, err)
+	}
+	settings, err = pe.SetThinkingLevel(ctx, "high")
+	if err != nil || settings != (PiSettings{"provider", "second", "high"}) {
+		t.Fatalf("thinking readback: %+v, %v", settings, err)
+	}
+	select {
+	case result := <-resultCh:
+		if result.Error != "" || result.Status != game.StatusConcede {
+			t.Fatalf("result: status=%s error=%q log bytes=%d", result.Status, result.Error, len(result.Logs))
+		}
+	case <-ctx.Done():
+		t.Fatal("Pi did not finish")
+	}
+	if pe.Model != "first" || pe.Thinking != "medium" {
+		t.Fatal("invocation controls changed future defaults")
 	}
 }
 
-// Run this same benchmark against both revisions. Setup and appends are outside
-// the timer; allocations and time measure one live poll after history was read.
-func BenchmarkPiLiveProjectorPoll(b *testing.B) {
-	for _, historyMiB := range []int{1, 16, 64} {
-		for _, appendEvent := range []bool{false, true} {
-			name := fmt.Sprintf("history_%dMiB/append_%t", historyMiB, appendEvent)
-			b.Run(name, func(b *testing.B) {
-				path := filepath.Join(b.TempDir(), "pi-session.jsonl")
-				f, err := os.Create(path)
-				if err != nil {
-					b.Fatal(err)
+func TestExecuteTurnRPCStopAndTimeout(t *testing.T) {
+	for _, kind := range []string{"timeout", "stop"} {
+		t.Run(kind, func(t *testing.T) {
+			pe := helperExecutor(t, "hang")
+			var stop atomic.Bool
+			state := &game.TurnState{Dir: t.TempDir(), StopRequested: stop.Load, OnLiveEvent: func(game.LiveAgentEvent) {
+				if kind == "stop" {
+					stop.Store(true)
 				}
-				defer f.Close()
-				chunk := strings.Repeat("{\"type\":\"session\"}\n", 4096)
-				var size int64
-				for size < int64(historyMiB*1024*1024) {
-					n, err := f.WriteString(chunk)
-					if err != nil {
-						b.Fatal(err)
-					}
-					size += int64(n)
+			}}
+			if kind == "timeout" {
+				pe.Timeout = 1
+			}
+			result := pe.ExecuteTurn("work", "prover", state)
+			want := "local_timeout:1"
+			if kind == "stop" {
+				want = "local_interrupted:stop_requested"
+			}
+			if result.Error != want || result.Recoverable {
+				t.Fatalf("result: status=%s error=%q log bytes=%d", result.Status, result.Error, len(result.Logs))
+			}
+		})
+	}
+}
+
+func helperExecutor(t *testing.T, scenario string) *PiExecutor {
+	t.Helper()
+	workspace := t.TempDir()
+	home := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nexec " + shellQuote(executable) + " -test.run=^TestPiHelperProcess$ -- \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := platform.NewLocalPlatform(workspace)
+	p.Env = map[string]string{"HOME": home, "TELOS_PI_HELPER": scenario, "GORACE": "atexit_sleep_ms=0"}
+	return NewPiExecutor(p, "first", "medium", 10)
+}
+
+func shellQuote(value string) string { return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'" }
+
+// The test binary doubles as an isolated Pi process, exercising real OS pipes,
+// argv, cancellation, and process exit without a model server or API credentials.
+func TestPiHelperProcess(t *testing.T) {
+	scenario := os.Getenv("TELOS_PI_HELPER")
+	if scenario == "" {
+		return
+	}
+	if os.Args[len(os.Args)-1] == "--version" {
+		if version := os.Getenv("TELOS_PI_HELPER_VERSION"); version != "" {
+			if version == "error" {
+				os.Exit(1)
+			}
+			fmt.Println(version)
+		} else if scenario == "legacy_version" {
+			fmt.Println("0.84.2")
+		} else {
+			fmt.Println(piLiveSettingsVersion)
+		}
+		os.Exit(0)
+	}
+	args, _ := json.Marshal(os.Args)
+	_ = os.WriteFile("args.json", args, 0o600)
+	enc := json.NewEncoder(os.Stdout)
+	emit := func(record interface{}) {
+		if enc.Encode(record) != nil {
+			os.Exit(3)
+		}
+	}
+	message := func(text, reason, errorMessage string) {
+		emit(map[string]interface{}{"type": "message_end", "message": map[string]interface{}{"role": "assistant", "model": "second", "content": []interface{}{map[string]interface{}{"type": "text", "text": text}}, "stopReason": reason, "errorMessage": errorMessage}})
+	}
+	finish := func() {
+		message(strings.Repeat("x", 70000)+"\n<status>CONCEDE</status>", "stop", "")
+		emit(map[string]string{"type": "agent_end"})
+		emit(map[string]string{"type": "agent_settled"})
+	}
+	model, thinking := "first", "medium"
+	dec := json.NewDecoder(os.Stdin)
+	for {
+		var request map[string]interface{}
+		if err := dec.Decode(&request); err != nil {
+			if err == io.EOF {
+				if strings.HasSuffix(scenario, "_hang_exit") {
+					time.Sleep(time.Minute)
 				}
-				count := 0
-				projector := &piLiveProjector{
-					sessionPath: path,
-					offset:      size,
-					turnState: &game.TurnState{OnLiveEvent: func(game.LiveAgentEvent) {
-						count++
-					}},
-				}
-				line := piProgressLine("benchmark") + "\n"
-				b.ReportAllocs()
-				b.ResetTimer()
-				for i := 0; i < b.N; i++ {
-					if appendEvent {
-						b.StopTimer()
-						if _, err := f.WriteString(line); err != nil {
-							b.Fatal(err)
+				os.Exit(0)
+			}
+			os.Exit(2)
+		}
+		command := getString(request, "type")
+		if command == "set_model" || command == "set_thinking_level" {
+			_ = os.WriteFile(command+".received", []byte("received"), 0o600)
+		}
+		response := map[string]interface{}{"id": request["id"], "type": "response", "command": command, "success": true}
+		switch command {
+		case "prompt":
+			data, _ := json.Marshal(request)
+			_ = os.WriteFile("prompt.json", data, 0o600)
+			response["data"] = map[string]string{"disposition": "started"}
+			if scenario == "legacy_version" {
+				// Pi 0.84.2 acknowledges prompts without disposition data.
+				delete(response, "data")
+			}
+			if scenario == "handled" {
+				response["data"] = map[string]string{"disposition": "handled"}
+			}
+			if scenario == "rejected" || scenario == "rejected_hang_exit" {
+				response["success"], response["error"] = false, "403: inactive virtual key"
+			}
+			emit(response)
+			switch scenario {
+			case "handled", "rejected", "rejected_hang_exit":
+			case "malformed":
+				fmt.Println("bad stdout")
+			case "malformed_then_success":
+				fmt.Println("bad stdout")
+				finish()
+			case "stderr":
+				fmt.Fprintln(os.Stderr, "EROFS: read-only file system")
+				os.Exit(1)
+			case "provider_error":
+				message("partial <status>CONCEDE</status>", "error", "overloaded_error: exhausted")
+				emit(map[string]string{"type": "agent_settled"})
+			case "truncated":
+				message("partial", "length", "")
+				emit(map[string]string{"type": "agent_settled"})
+			case "aborted":
+				message("partial", "aborted", "")
+				emit(map[string]string{"type": "agent_settled"})
+			case "early_exit":
+				message("<status>CONCEDE</status>", "stop", "")
+				os.Exit(0)
+			case "retry":
+				message("failed", "error", "api_error: retrying")
+				emit(map[string]string{"type": "agent_end"})
+				time.Sleep(20 * time.Millisecond)
+				finish()
+			case "denied_controls":
+				message("<progress_update>Running.</progress_update>", "stop", "")
+				go func() {
+					for {
+						if _, err := os.Stat("release"); err == nil {
+							finish()
+							return
 						}
-						b.StartTimer()
+						time.Sleep(10 * time.Millisecond)
 					}
-					projector.observeSessionFile(false)
-				}
-				b.StopTimer()
-				if appendEvent && count != b.N {
-					b.Fatalf("emitted %d events, want %d", count, b.N)
-				}
-			})
+				}()
+			case "controls", "hang":
+				message("<progress_update>Running.</progress_update>", "stop", "")
+				emit(map[string]string{"type": "agent_end"})
+			case "dialog":
+				emit(map[string]interface{}{"type": "extension_ui_request", "id": "dialog", "method": "confirm"})
+			default:
+				finish()
+			}
+		case "get_available_models":
+			response["data"] = map[string]interface{}{"models": []map[string]string{{"provider": "provider", "id": "first"}, {"provider": "provider", "id": "second"}}}
+			emit(response)
+		case "set_model":
+			if request["modelId"] == "missing" {
+				response["success"], response["error"] = false, "Model not found"
+			} else {
+				model, thinking = getString(request, "modelId"), "low"
+			}
+			emit(response)
+		case "get_available_thinking_levels":
+			response["data"] = map[string]interface{}{"levels": []string{"off", "low", "medium", "high"}}
+			emit(response)
+		case "set_thinking_level":
+			thinking = getString(request, "level")
+			emit(response)
+		case "get_state":
+			response["data"] = map[string]interface{}{"model": map[string]string{"provider": "provider", "id": model}, "thinkingLevel": thinking}
+			emit(response)
+			if thinking == "high" {
+				finish()
+			}
+		case "extension_ui_response":
+			if request["id"] != "dialog" || request["cancelled"] != true {
+				os.Exit(4)
+			}
+			finish()
 		}
 	}
 }
 
-func piProgressLine(text string) string {
-	return fmt.Sprintf(`{"message":{"role":"assistant","content":[{"type":"text","text":"<progress_update>%s</progress_update>"}]}}`, text)
-}
-
-func writePiSession(t *testing.T, path string, line string) {
-	t.Helper()
-	if err := os.WriteFile(path, []byte(line+"\n"), 0o644); err != nil {
-		t.Fatal(err)
+func TestExecuteTurnRPCShutdownDeadlinePreservesCause(t *testing.T) {
+	for _, tc := range []struct{ scenario, wantError string }{
+		{"normal_hang_exit", "pi_rpc_shutdown_timeout"},
+		{"rejected_hang_exit", "pi prompt: 403: inactive virtual key"},
+	} {
+		t.Run(tc.scenario, func(t *testing.T) {
+			pe := helperExecutor(t, tc.scenario)
+			result := pe.ExecuteTurn("work", "prover", nil)
+			if result.Error != tc.wantError {
+				t.Fatalf("error: got %q want %q", result.Error, tc.wantError)
+			}
+		})
 	}
 }
 
-func appendPiSession(t *testing.T, path string, line string) {
-	t.Helper()
-	appendPiBytes(t, path, line+"\n")
+func TestExecuteTurnRPCProgressCanConfigureAndFinishesBeforeReturn(t *testing.T) {
+	pe := helperExecutor(t, "controls")
+	callbackDone := make(chan error, 1)
+	state := &game.TurnState{Dir: t.TempDir(), OnLiveEvent: func(game.LiveAgentEvent) {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		_, err := pe.SetThinkingLevel(ctx, "high")
+		// Keep the callback alive past process exit to exercise draining.
+		time.Sleep(100 * time.Millisecond)
+		callbackDone <- err
+	}}
+	result := pe.ExecuteTurn("work", "prover", state)
+	if result.Error != "" {
+		t.Fatal(result.Error)
+	}
+	select {
+	case err := <-callbackDone:
+		if err != nil {
+			t.Fatalf("callback RPC deadlocked: %v", err)
+		}
+	default:
+		t.Fatal("ExecuteTurn returned before its progress callback")
+	}
 }
 
-func appendPiBytes(t *testing.T, path string, data string) {
-	t.Helper()
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		t.Fatal(err)
+func TestExecuteTurnRPCLegacyVersionAcceptsLargePrompt(t *testing.T) {
+	pe := helperExecutor(t, "legacy_version")
+	result := pe.ExecuteTurn(strings.Repeat("x", 1<<20), "prover", nil)
+	if result.Error != "" || result.Status != game.StatusConcede {
+		t.Fatalf("ordinary legacy run failed: %q, status=%s", result.Error, result.Status)
 	}
-	defer f.Close()
-	if _, err := f.WriteString(data); err != nil {
-		t.Fatal(err)
+}
+
+func TestExecuteTurnRPCUnverifiedVersionsRunWithoutLiveChanges(t *testing.T) {
+	for _, version := range []string{"0.84.2", "1.0.5", "unknown\nversion \"banner\"", "error"} {
+		t.Run(version, func(t *testing.T) {
+			pe := helperExecutor(t, "denied_controls")
+			pe.Platform.Env["TELOS_PI_HELPER_VERSION"] = version
+			results := make(chan error, 2)
+			state := &game.TurnState{Dir: t.TempDir(), OnLiveEvent: func(game.LiveAgentEvent) {
+				ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+				defer cancel()
+				_, modelErr := pe.SetModel(ctx, "provider", "second")
+				results <- modelErr
+				_, thinkingErr := pe.SetThinkingLevel(ctx, "high")
+				results <- thinkingErr
+				_ = os.WriteFile(filepath.Join(pe.Platform.Workspace, "release"), []byte("go"), 0o600)
+			}}
+			result := pe.ExecuteTurn("work", "prover", state)
+			if result.Error != "" || result.Status != game.StatusConcede {
+				t.Fatalf("ordinary run was rejected: %q, status=%s", result.Error, result.Status)
+			}
+			for range 2 {
+				if err := <-results; !errors.Is(err, ErrPiLiveSettingsUnsupported) {
+					t.Fatalf("control should be unsupported: %v", err)
+				}
+			}
+			for _, command := range []string{"set_model", "set_thinking_level"} {
+				if _, err := os.Stat(filepath.Join(pe.Platform.Workspace, command+".received")); !os.IsNotExist(err) {
+					t.Fatalf("unsupported mutation reached Pi: %s", command)
+				}
+			}
+		})
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -263,6 +264,9 @@ var thinkingLevels = []string{"low", "medium", "high", "xhigh"}
 
 // thinkingOption returns the requested thinking level, or "" when none is set.
 func thinkingOption(fs *flag.FlagSet, value string) (string, error) {
+	if level, ok := inheritedInferenceOption(fs, "thinking", "TELOS_THINKING", "TELOS_INHERITED_THINKING"); ok {
+		return level, nil
+	}
 	level := stringOption(fs, "thinking", value, "TELOS_THINKING")
 	if level != "" && !slices.Contains(thinkingLevels, level) {
 		return "", fmt.Errorf("--thinking / TELOS_THINKING must be one of %s; got %q", strings.Join(thinkingLevels, ", "), level)
@@ -271,7 +275,34 @@ func thinkingOption(fs *flag.FlagSet, value string) (string, error) {
 }
 
 func modelOption(fs *flag.FlagSet, value string) string {
+	if model, ok := inheritedInferenceOption(fs, "model", "TELOS_MODEL", "TELOS_INHERITED_MODEL"); ok {
+		return model
+	}
 	return stringOption(fs, "model", value, "TELOS_MODEL")
+}
+
+// A running tool inherits the worker's original environment. Resolve inherited
+// defaults from its parent session so a later nested run sees confirmed changes.
+func inheritedInferenceOption(fs *flag.FlagSet, flagName, envName, inheritedName string) (string, bool) {
+	if flagNameSet(fs, flagName) {
+		return "", false
+	}
+	inherited, ok := os.LookupEnv(inheritedName)
+	if !ok || os.Getenv(envName) != inherited {
+		return "", false
+	}
+	root, id := os.Getenv("TELOS_SESSION_DIR"), os.Getenv("TELOS_SESSION_ID")
+	if root == "" || id == "" || filepath.Base(id) != id {
+		return "", false
+	}
+	m, err := sessionapi.ReadManifest(filepath.Join(root, id, "session.json"))
+	if err != nil {
+		return "", false
+	}
+	if flagName == "model" {
+		return m.Config.Model, m.Config.Model != ""
+	}
+	return m.Config.Thinking, m.Config.Thinking != ""
 }
 
 func positiveFloatOption(fs *flag.FlagSet, name string, value float64, envName string, defaultValue float64) (float64, error) {

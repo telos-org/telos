@@ -2,6 +2,7 @@ package telosd
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,7 +11,112 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
+
+func TestPendingInferenceDoesNotBypassFailedWorkerBackoff(t *testing.T) {
+	dir := writeWorkerManifest(t, map[string]any{"session_id": "sess_controller", "session_kind": "controller"})
+	store := sessionapi.NewFileStore(filepath.Dir(dir), sessionapi.RuntimeLocal)
+	model := "provider/new"
+	if _, err := store.UpdateInference(filepath.Base(dir), sessionapi.InferenceUpdateRequest{RequestID: "change", Model: &model}); err != nil {
+		t.Fatal(err)
+	}
+	stop, wake := make(chan os.Signal, 1), make(chan os.Signal)
+	done, calls := make(chan error, 1), make(chan struct{}, 8)
+	go func() {
+		_, err := runSessionWorker(dir, false, func(string, <-chan struct{}) (*game.PVGResult, error) {
+			calls <- struct{}{}
+			return nil, errors.New("Pi not found")
+		}, wake, stop)
+		done <- err
+	}()
+	t.Cleanup(func() {
+		stop <- syscall.SIGTERM
+		select {
+		case <-done:
+		case <-time.After(2 * time.Second):
+			t.Error("worker failed to stop")
+		}
+	})
+	select {
+	case <-calls:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not start")
+	}
+	select {
+	case <-calls:
+		t.Fatal("pending inference bypassed failure backoff")
+	case <-time.After(300 * time.Millisecond):
+	}
+	state, err := store.Inference(filepath.Base(dir))
+	if err != nil || state.Update.Status != "rejected" {
+		t.Fatalf("failed startup left change active: %+v %v", state, err)
+	}
+}
+
+func TestCompletedTaskRejectsInferenceBeforeWorkerReleasesOwnership(t *testing.T) {
+	dir := writeWorkerManifest(t, map[string]any{"session_id": "sess_controller", "session_kind": "task"})
+	store := sessionapi.NewFileStore(filepath.Dir(dir), sessionapi.RuntimeLocal)
+	_, err := runSessionWorker(dir, true, func(string, <-chan struct{}) (*game.PVGResult, error) {
+		finished := "2026-10-07T12:00:00Z"
+		_, err := sessionapi.MutateManifest(filepath.Join(dir, "session.json"), func(m *sessionapi.Manifest) error {
+			m.Epochs = append(m.Epochs, sessionapi.Epoch{ID: 1, FinishedAt: &finished})
+			return nil
+		})
+		if err != nil {
+			return nil, err
+		}
+		model := "provider/new"
+		if _, err := store.UpdateInference(filepath.Base(dir), sessionapi.InferenceUpdateRequest{RequestID: "late", Model: &model}); !errors.Is(err, sessionapi.ErrConflict) {
+			t.Errorf("completed task accepted change while releasing worker: %v", err)
+		}
+		return &game.PVGResult{GameResult: game.GameSuccess}, nil
+	}, make(chan os.Signal), make(chan os.Signal))
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestIdleWorkerWakesOnlyForUnconsumedInference(t *testing.T) {
+	dir := writeWorkerManifest(t, map[string]any{"session_id": "sess_controller", "session_kind": "controller"})
+	path := filepath.Join(dir, "session.json")
+	if _, err := sessionapi.MutateManifest(path, func(m *sessionapi.Manifest) error {
+		m.InferenceUpdate = &sessionapi.InferenceUpdate{Status: "applied", Revision: 1}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	stop, done := make(chan os.Signal, 1), make(chan bool, 1)
+	notifications := make(chan struct{}, 1)
+	notifications <- struct{}{}
+	defer func() { stop <- syscall.SIGTERM }()
+	go func() { done <- waitForNextSessionCycle(dir, make(chan os.Signal), stop, notifications, 0) }()
+	select {
+	case <-done:
+		t.Fatal("already applied settings woke another cycle")
+	case <-time.After(250 * time.Millisecond):
+	}
+	if _, err := sessionapi.MutateManifest(path, func(m *sessionapi.Manifest) error {
+		m.InferenceUpdate.Status = "pending"
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+		t.Fatal("settings change was polled without a notification")
+	case <-time.After(300 * time.Millisecond):
+	}
+	notifications <- struct{}{}
+	select {
+	case stopped := <-done:
+		if stopped {
+			t.Fatal("pending settings stopped worker")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("idle worker did not consume pending settings")
+	}
+}
 
 func TestWorkerIntervalReadsSessionManifest(t *testing.T) {
 	sessionDir := writeWorkerManifest(t, map[string]any{
@@ -231,7 +337,7 @@ func TestControllerSuspendsUntilExplicitWake(t *testing.T) {
 	t.Cleanup(func() { stop <- syscall.SIGTERM })
 	calls := make(chan int, 2)
 	attempt := 0
-	runSession := func(string) (*game.PVGResult, error) {
+	runSession := func(string, <-chan struct{}) (*game.PVGResult, error) {
 		attempt++
 		calls <- attempt
 		if attempt == 1 {

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionworker"
 )
 
 // Allow the bare apex usetelos.ai as well as any *.usetelos.ai subdomain. The
@@ -51,6 +52,9 @@ func Run(ctx context.Context, cfg Config, runtime sessionapi.RuntimeIdentity) er
 		}
 		startRootWorkerReconciler(ctx, reconciler)
 		startSessionBootstrapReconciler(ctx, store, materializer)
+	}
+	if err := recoverInferenceNotifications(baseStore); err != nil {
+		log.Printf("recover inference notifications: %v", err)
 	}
 	mux := http.NewServeMux()
 	authorizer := authorizerForConfig(cfg, baseStore)
@@ -115,7 +119,49 @@ func storeForConfig(cfg Config) *sessionapi.FileStore {
 		store.PackageRoot = os.Getenv("TELOS_PACKAGE_ROOT")
 		return store
 	}
-	return sessionapi.NewFileStore(SessionsRoot(cfg.Root), sessionapi.RuntimeLocal)
+	store := sessionapi.NewFileStore(SessionsRoot(cfg.Root), sessionapi.RuntimeLocal)
+	store.OnInferenceUpdate = func(id string) error {
+		dir := filepath.Join(store.Root, id)
+		err := sessionworker.NotifyInference(dir)
+		if errors.Is(err, sessionworker.ErrWorkerNotRunning) {
+			return sessionworker.StartWithOptions(dir, sessionworker.StartOptions{Runtime: sessionapi.RuntimeLocal, WakeReason: "inference_updated"})
+		}
+		return err
+	}
+	return store
+}
+
+// A server may have exited after saving a request but before notifying a worker
+// that survived it. Replay notification once at startup, including child tasks.
+func recoverInferenceNotifications(store *sessionapi.FileStore) error {
+	entries, err := os.ReadDir(store.Root)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		m, err := sessionapi.ReadManifest(filepath.Join(store.Root, entry.Name(), "session.json"))
+		if err != nil {
+			errs = append(errs, err)
+			continue
+		}
+		if m.IsStopped() || m.InferenceUpdate == nil || m.InferenceUpdate.Status != "pending" {
+			continue
+		}
+		if epoch := m.LastEpoch(); m.SessionKind == sessionapi.KindTask && epoch != nil && epoch.FinishedAt != nil {
+			continue
+		}
+		if _, err := store.UpdateInference(entry.Name(), m.InferenceUpdate.InferenceUpdateRequest); err != nil {
+			errs = append(errs, err)
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func authorizerForConfig(cfg Config, store *sessionapi.FileStore) sessionapi.Authorizer {

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -40,6 +41,63 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
+	mux.HandleFunc("GET /api/sessions/{id}/inference", h.getInference)
+	mux.HandleFunc("PUT /api/sessions/{id}/inference", h.updateInference)
+}
+
+func (h *handler) getInference(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
+		return
+	}
+	response, err := h.store.Inference(id)
+	if err != nil {
+		writeInferenceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
+}
+
+func (h *handler) updateInference(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionUpdateInference, SessionID: id}); !ok {
+		return
+	}
+	var req InferenceUpdateRequest
+	r.Body = http.MaxBytesReader(w, r.Body, 72<<10)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+		writeError(w, http.StatusBadRequest, "expected a single JSON request")
+		return
+	}
+	response, err := h.store.UpdateInference(id, req)
+	if err != nil {
+		writeInferenceError(w, err)
+		return
+	}
+	status := http.StatusOK
+	if response.Update != nil && (response.Update.Status == "pending" || response.Update.Status == "applying") {
+		status = http.StatusAccepted
+	}
+	writeJSON(w, status, response)
+}
+
+func writeInferenceError(w http.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	switch {
+	case errors.Is(err, ErrNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, ErrInvalidSession):
+		status = http.StatusBadRequest
+	case errors.Is(err, ErrConflict):
+		status = http.StatusConflict
+	}
+	writeError(w, status, err.Error())
 }
 
 type handler struct {

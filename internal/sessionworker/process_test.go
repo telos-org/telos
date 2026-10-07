@@ -6,9 +6,100 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
+
+func TestInferenceNotificationRecoveryAndCleanup(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "session")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessionapi.WriteManifest(manifestPath(dir), &sessionapi.Manifest{SessionID: "session", SessionKind: sessionapi.KindController}); err != nil {
+		t.Fatal(err)
+	}
+	if err := NotifyInference(dir); !errors.Is(err, ErrWorkerNotRunning) {
+		t.Fatalf("missing worker: %v", err)
+	}
+	owner, err := AcquireOwnership(dir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Release()
+	m, err := sessionapi.ReadManifest(manifestPath(dir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	socket := m.Runner.InferenceSocket
+	info, err := os.Stat(filepath.Dir(socket))
+	if err != nil || info.Mode().Perm() != 0o700 {
+		t.Fatalf("socket directory must be private: %v %v", info, err)
+	}
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	store.OnInferenceUpdate = func(string) error { return NotifyInference(dir) }
+	thinking := "high"
+	request := sessionapi.InferenceUpdateRequest{RequestID: "change", Thinking: &thinking}
+	for _, endpoint := range []string{"", filepath.Join(filepath.Dir(socket), "stale.sock")} {
+		if _, err := sessionapi.MutateManifest(manifestPath(dir), func(m *sessionapi.Manifest) error {
+			m.Runner.InferenceSocket = endpoint
+			return nil
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := store.UpdateInference("session", request); err == nil {
+			t.Fatal("unavailable endpoint must report failed delivery")
+		}
+		state, err := store.Inference("session")
+		if err != nil || state.Revision != 1 || state.Update.Status != "pending" {
+			t.Fatalf("failed delivery lost durable request: %+v %v", state, err)
+		}
+	}
+	if _, err := sessionapi.MutateManifest(manifestPath(dir), func(m *sessionapi.Manifest) error {
+		m.Runner.InferenceSocket = socket
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		state, err := store.UpdateInference("session", request)
+		if err != nil || state.Revision != 1 {
+			t.Fatalf("retry changed request identity: %+v %v", state, err)
+		}
+		select {
+		case <-owner.Inference:
+		case <-time.After(time.Second):
+			t.Fatal("retry did not notify worker")
+		}
+	}
+	// A burst must not block the receiver when no turn is consuming notifications.
+	for range 100 {
+		if err := NotifyInference(dir); err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner.StopNotifications()
+	if err := NotifyInference(dir); err == nil || errors.Is(err, ErrWorkerNotRunning) {
+		t.Fatalf("exiting worker must reject delivery while retaining ownership: %v", err)
+	}
+	if _, err := store.UpdateInference("session", request); err == nil {
+		t.Fatal("exiting worker acknowledged a request it cannot consume")
+	}
+	if err := sessionapi.SettleInferenceUpdate(manifestPath(dir), "worker exited"); err != nil {
+		t.Fatal(err)
+	}
+	state, err := store.Inference("session")
+	if err != nil || state.Update.Status != "rejected" {
+		t.Fatalf("shutdown did not settle saved request: %+v %v", state, err)
+	}
+	if err := owner.Release(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Dir(socket)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("notification directory leaked: %v", err)
+	}
+}
 
 func TestAcquireOwnershipIsExclusiveAndRecordsTopLevelRunner(t *testing.T) {
 	sessionDir := t.TempDir()
@@ -169,6 +260,7 @@ func TestWorkerExportsSelectedModelForNestedCLI(t *testing.T) {
 		Runtime:     sessionapi.RuntimeCloud,
 	}
 	manifest.Config.Model = model
+	manifest.Config.Thinking = "max"
 	if err := sessionapi.WriteManifest(manifestPath(sessionDir), manifest); err != nil {
 		t.Fatal(err)
 	}
@@ -179,5 +271,8 @@ func TestWorkerExportsSelectedModelForNestedCLI(t *testing.T) {
 	}
 	if got := environment["TELOS_MODEL"]; got != model {
 		t.Fatalf("nested CLI model = %q, want %q", got, model)
+	}
+	if environment["TELOS_THINKING"] != "max" || environment["TELOS_INHERITED_THINKING"] != "max" || environment["TELOS_INHERITED_MODEL"] != model {
+		t.Fatal("worker did not mark its model and thinking defaults as inherited")
 	}
 }

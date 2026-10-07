@@ -3,6 +3,7 @@ package sessionworker
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,13 +18,18 @@ var ErrWorkerAlreadyRunning = errors.New("worker is already running")
 var ErrSessionStopped = errors.New("session is stopped")
 
 type Ownership struct {
-	file *os.File
+	file      *os.File
+	Inference <-chan struct{}
+	notify    net.PacketConn
+	notifyDir string
+	done      chan struct{}
 }
 
 func (o *Ownership) Release() error {
 	if o == nil || o.file == nil {
 		return nil
 	}
+	o.StopNotifications()
 	err := syscall.Flock(int(o.file.Fd()), syscall.LOCK_UN)
 	closeErr := o.file.Close()
 	o.file = nil
@@ -31,6 +37,18 @@ func (o *Ownership) Release() error {
 		return err
 	}
 	return closeErr
+}
+
+// StopNotifications prevents successful delivery to an exiting worker while it
+// still holds ownership and settles the last saved request.
+func (o *Ownership) StopNotifications() {
+	if o == nil || o.notify == nil {
+		return
+	}
+	_ = o.notify.Close()
+	<-o.done
+	_ = os.RemoveAll(o.notifyDir)
+	o.notify = nil
 }
 
 type StartOptions struct {
@@ -96,7 +114,10 @@ func Env(sessionDir string, opts StartOptions) []string {
 	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
 	if err == nil {
 		if manifest.Config.Model != "" {
-			env = append(env, "TELOS_MODEL="+manifest.Config.Model)
+			env = append(env, "TELOS_MODEL="+manifest.Config.Model, "TELOS_INHERITED_MODEL="+manifest.Config.Model)
+		}
+		if manifest.Config.Thinking != "" {
+			env = append(env, "TELOS_THINKING="+manifest.Config.Thinking, "TELOS_INHERITED_THINKING="+manifest.Config.Thinking)
 		}
 		if manifest.ParentSessionID != nil {
 			env = append(env, "TELOS_PARENT_SESSION_ID="+*manifest.ParentSessionID)
@@ -179,6 +200,35 @@ func Wake(sessionDir string) error {
 	return ErrWorkerNotRunning
 }
 
+// NotifyInference sends only a notification; the durable manifest holds the
+// request. A unique socket identifies its owner without risking a recycled PID.
+func NotifyInference(sessionDir string) error {
+	alive, err := workerAlive(sessionDir)
+	if err != nil {
+		return err
+	}
+	if !alive {
+		return ErrWorkerNotRunning
+	}
+	m, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err != nil {
+		return err
+	}
+	if m.Runner == nil || m.Runner.InferenceSocket == "" {
+		return errors.New("worker settings notifications unavailable; worker may be starting or require an upgrade")
+	}
+	conn, err := net.DialTimeout("unixgram", m.Runner.InferenceSocket, time.Second)
+	if err != nil {
+		return fmt.Errorf("connect to worker settings notifications: %w", err)
+	}
+	defer conn.Close()
+	if err := conn.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+		return err
+	}
+	_, err = conn.Write([]byte{1})
+	return err
+}
+
 func AcquireOwnership(sessionDir string, logPath string) (*Ownership, error) {
 	lock, err := openRunnerLock(sessionDir)
 	if err != nil {
@@ -191,7 +241,37 @@ func AcquireOwnership(sessionDir string, logPath string) (*Ownership, error) {
 		}
 		return nil, fmt.Errorf("acquire runner lock: %w", err)
 	}
+	owner := &Ownership{file: lock}
+	// Keep socket paths short even when session directories exceed Unix limits.
+	notifyDir, err := os.MkdirTemp("/tmp", "telos-notify-")
+	if err != nil {
+		_ = owner.Release()
+		return nil, err
+	}
+	socketPath := filepath.Join(notifyDir, "inference.sock")
+	conn, err := net.ListenPacket("unixgram", socketPath)
+	if err != nil {
+		_ = os.RemoveAll(notifyDir)
+		_ = owner.Release()
+		return nil, err
+	}
+	notifications := make(chan struct{}, 1)
+	owner.Inference, owner.notify, owner.notifyDir, owner.done = notifications, conn, notifyDir, make(chan struct{})
+	go func() {
+		defer close(owner.done)
+		var b [1]byte
+		for {
+			if _, _, err := conn.ReadFrom(b[:]); err != nil {
+				return
+			}
+			select {
+			case notifications <- struct{}{}:
+			default:
+			}
+		}
+	}()
 	runner := RunnerIdentity(os.Getpid())
+	runner.InferenceSocket = socketPath
 	if logPath != "" {
 		runner.LogPath = logPath
 	}
@@ -199,11 +279,10 @@ func AcquireOwnership(sessionDir string, logPath string) (*Ownership, error) {
 		m.Runner = &runner
 		return nil
 	}); err != nil {
-		_ = syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
-		lock.Close()
+		_ = owner.Release()
 		return nil, fmt.Errorf("record runner: %w", err)
 	}
-	return &Ownership{file: lock}, nil
+	return owner, nil
 }
 
 func workerAlive(sessionDir string) (bool, error) {
