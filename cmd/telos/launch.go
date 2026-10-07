@@ -27,7 +27,11 @@ func cmdApply(args []string) {
 }
 
 func cmdLaunch(command, action string, args []string) {
-	fs := newCommandFlagSet(command, fmt.Sprintf("telos %s SPEC.md [flags]", command))
+	synopsis := fmt.Sprintf("telos %s SPEC.md [flags]", command)
+	if command == "apply" {
+		synopsis += "\n       telos apply --session SESSION [--model MODEL] [--thinking LEVEL] [flags]"
+	}
+	fs := newCommandFlagSet(command, synopsis)
 	workspace := fs.String("workspace", "", "Workspace directory for local specs")
 	sessionIDValue := ""
 	sessionID := &sessionIDValue
@@ -38,11 +42,13 @@ func cmdLaunch(command, action string, args []string) {
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
 	}
 	modelHelp := "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
+	thinkingHelp := "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs"
 	if command == "apply" {
-		modelHelp = "Cloud: telos/default, telos/max, or <subscription-or-key-name>/<model-id>; local: <provider>/<model>; defaults to $TELOS_MODEL, then the workspace preference for Cloud"
+		modelHelp = "Cloud: telos/default, telos/max, or <connection-name>/<model-id>; local: <provider>/<model>. Creation defaults to $TELOS_MODEL, then the Cloud workspace preference; updates require an explicit flag without SPEC.md"
+		thinkingHelp = "Creation: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high locally. Updates: a model-supported level, explicitly supplied without SPEC.md"
 	}
 	model := fs.String("model", "", modelHelp)
-	thinking := fs.String("thinking", "", "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs")
+	thinking := fs.String("thinking", "", thinkingHelp)
 	untilValue := ""
 	until := &untilValue
 	if command == "run" {
@@ -68,6 +74,33 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	if command == "apply" {
+		_, inCloudSession := rootSessionContext()
+		_, inLocalSession := localRootSessionID()
+		if inCloudSession || inLocalSession {
+			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session; use telos run to launch nested specs")
+			os.Exit(1)
+		}
+		if err := validateApplyInferenceFlags(fs, *sessionID, *model, *thinking); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(2)
+		}
+		if fs.NArg() == 0 {
+			receipt, err := applySessionInference(*sessionID, strings.TrimSpace(*model), strings.TrimSpace(*thinking), contextOverride)
+			if receipt != nil {
+				if *jsonOut {
+					printJSON(receipt)
+				} else {
+					printInferenceReceipt(os.Stdout, receipt)
+				}
+			}
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+	}
 	requireArgCount(fs, 1, "one SPEC.md")
 	if command == "apply" && *sessionID != "" && *workspace != "" {
 		fmt.Fprintln(os.Stderr, "error: --workspace can only seed a new session; it cannot be used with --session")
@@ -81,10 +114,6 @@ func cmdLaunch(command, action string, args []string) {
 	specPath, hasLocalSpec := existingSpecPath(specArg)
 
 	if ctx, ok := rootSessionContext(); ok {
-		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session; use telos run to launch nested specs")
-			os.Exit(1)
-		}
 		if localConfigSet {
 			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a Telos session")
 			os.Exit(1)
@@ -141,10 +170,6 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	localRootID, inLocalRoot := localRootSessionID()
 	if inLocalRoot {
-		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session; use telos run to launch nested specs")
-			os.Exit(1)
-		}
 		if launchMode != launchLocal {
 			fmt.Fprintln(os.Stderr, "error: a local Telos session can only launch specs with platform: local")
 			os.Exit(1)
@@ -156,17 +181,16 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	switch launchMode {
 	case launchCloudApply:
-		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+		var runtimeConfig sessionRuntimeConfig
+		if *sessionID == "" {
+			runtimeConfig, err = resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
 		}
-		if runtimeConfig.MaxCostUSD != nil {
+		if runtimeConfig.MaxCostUSD != nil || (*sessionID != "" && flagNameSet(fs, "max-cost-usd")) {
 			fmt.Fprintln(os.Stderr, "error: --max-cost-usd is not supported for cloud apply yet")
-			os.Exit(1)
-		}
-		if *sessionID != "" && cloudRuntimeConfigSet(runtimeConfig) {
-			fmt.Fprintln(os.Stderr, "error: cloud runtime config flags can only seed a new session; they cannot update an existing session")
 			os.Exit(1)
 		}
 		applyCloudControl(
@@ -551,10 +575,6 @@ func (e *snapshotPendingUpdateError) Error() string {
 
 func (e *snapshotPendingUpdateError) Unwrap() error {
 	return e.cause
-}
-
-func cloudRuntimeConfigSet(cfg sessionRuntimeConfig) bool {
-	return cfg.Model != "" || cfg.Thinking != ""
 }
 
 func validateForceApply(force bool, sessionID string) error {

@@ -1,10 +1,12 @@
 package cloud
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 type InferenceConnection struct {
@@ -29,6 +31,48 @@ type InferenceSummary struct {
 	Provider       string `json:"provider,omitempty"`
 	Model          string `json:"model,omitempty"`
 	ConnectionName string `json:"connection_name,omitempty"`
+}
+
+type DeploymentInferenceRequest struct {
+	RequestID        string              `json:"request_id"`
+	ExpectedRevision int                 `json:"expected_revision"`
+	Inference        *InferenceSelection `json:"inference,omitempty"`
+	AgentThinking    *string             `json:"agent_thinking,omitempty"`
+}
+
+type DeploymentInferenceState struct {
+	Inference     InferenceSummary            `json:"inference"`
+	AgentModel    string                      `json:"agent_model"`
+	AgentThinking string                      `json:"agent_thinking"`
+	Revision      int                         `json:"revision"`
+	Request       *DeploymentInferenceRequest `json:"request,omitempty"`
+	Status        string                      `json:"status,omitempty"`
+	Error         string                      `json:"error,omitempty"`
+}
+
+func (c *Client) GetDeploymentInference(id string) (*DeploymentInferenceState, error) {
+	return getJSONWithRetry[DeploymentInferenceState](context.Background(), c, "/api/deployments/"+url.PathEscape(id)+"/inference")
+}
+
+// Writes are single-attempt: a lost response may follow a saved change.
+func (c *Client) UpdateDeploymentInference(id string, request DeploymentInferenceRequest) (*DeploymentInferenceState, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do(http.MethodPut, "/api/deployments/"+url.PathEscape(id)+"/inference", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+		return nil, readError(resp)
+	}
+	var state DeploymentInferenceState
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		return nil, err
+	}
+	return &state, nil
 }
 
 func (c *Client) ListInferenceConnections() ([]InferenceConnection, error) {

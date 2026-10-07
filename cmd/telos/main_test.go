@@ -82,7 +82,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
-		"apply SPEC.md      Create or update a durable session from a spec",
+		"apply [SPEC.md]    Create a session, update its spec, or change model/thinking",
 		"get SESSION        Download a session's package",
 		"delete SESSION     Delete a session",
 		"pull PACKAGE       Download a package; use `pull skill REF` for a skill",
