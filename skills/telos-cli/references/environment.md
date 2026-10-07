@@ -1,14 +1,14 @@
 ---
 title: The Telos Cloud Environment
-description: Everything you need to know about the Telos cloud environment - networking, secrets, resources, developer toolchain, and more.
+description: Everything you need to know about the Telos Cloud environment — networking, secrets, resources, developer toolchain, and more.
 group: Platform
 ---
 
-The Telos Cloud environment is the place where your goals are translated into running software.
+The Telos Cloud environment is the place where your Goals are translated into running software.
 
 ## Overview
 
-Each goal gets its own persistent VM that runs a lightweight Kubernetes cluster.
+Each Goal gets its own persistent VM that runs a lightweight Kubernetes cluster.
 
 The Telos agent harness lives inside this VM and has access to a full `git` workspace, developer toolchain, and permissions to launch and manage services (inside the VM). This lets the agent own the full build, test, and deploy lifecycle.
 
@@ -16,7 +16,7 @@ The Telos agent harness lives inside this VM and has access to a full `git` work
 
 ## Toolchain
 
-Any agent's capability is bounded by the list of tools that are accessible to it. Here is a list of the tools that are baked into the Telos cloud environment. Tools are packaged via [Nix](https://nixos.org) to ensure hermetic and consistent deployments.
+Any agent's capability is bounded by the list of tools that are accessible to it. Here is a list of the tools that are baked into the Telos Cloud environment. Tools are packaged via [Nix](https://nixos.org) to ensure hermetic and consistent deployments.
 
 A compact overview of the available tools is below:
 
@@ -40,7 +40,7 @@ Telos follows a strict networking model, with limited ingress and egress by defa
 
 ### Ingress
 
-The only entry points into a goal's runtime environment are:
+The only entry points into a Goal's runtime environment are:
 
 - the product API or UI, accessed through the managed hostname (`<name>-<session-id>.usetelos.ai`)
 - the administration dashboard, accessed via the web UI and restricted to authenticated Telos operators. TODO(grohan): read more about dashboard, where?
@@ -55,9 +55,9 @@ By default, the Telos system has a limited set of egress points out of its runti
 | PyPI | Download Python packages | `pypi.org`, `files.pythonhosted.org` |
 | npm | Download `npm` packages | `registry.npmjs.org` |
 
-Access is limited to the read-only HTTPS methods and paths needed for these downloads - it does not allow arbitrary requests to these hosts.
+Access is limited to the read-only HTTPS methods and paths needed for these downloads — it does not allow arbitrary requests to these hosts.
 
-For most real-world use cases, this is insufficient, so Telos also supports configuring additional outbound HTTPS access in your goal's YAML frontmatter, for example:
+For most real-world use cases, this is insufficient, so Telos also supports configuring additional outbound HTTPS access in your Goal's YAML frontmatter, for example:
 
 ```yaml
 ---

@@ -9,12 +9,11 @@ metadata:
 
 # Telos
 
-This file is an index into canonical Telos CLI user guide.
+This is the index of the Telos CLI guide. It ships with every Telos release and is published at `usetelos.ai/docs`.
 
-It ships with every release and supplies the guide at `usetelos.ai/docs`.
+## Guide
 
-## References
-
-- [Getting Started](references/use-telos.md) — one persistent Goal from first plan through revision
-- [The Anatomy of a Goal](references/goals.md) — contract shape and expressive boundary
-... more to come !
+- [Use Telos](references/use-telos.md) — install, sign in, and take one Goal from first plan to deletion
+- [Goals](references/goals.md) — the Goal specification, skills, rubrics, and packages
+- [The Telos Cloud Environment](references/environment.md) — the VM, toolchain, and network access each Goal runs with
+- [Models](references/models.md) — managed inference, your own API keys, and subscriptions

@@ -4,20 +4,20 @@ description: An overview of the LLM inference options exposed by Telos.
 group: Platform
 ---
 
-Telos is designed to be flexible and neutral to model choice. We support the following options
+Telos is designed to be flexible and neutral to model choice, and supports the options below.
 
-All model choice can be selected via the CLI (`--model <connection-name>/<model-id>`). A default can be in `telos config` or via the web UI. (TODO(grohan): impl the PUT to `/api/inference/preference`). Telos also exposes standard "thinking effort" values (`--thinking [low,medium,high,xhigh]`)
+You can select a model from the CLI with `--model <connection-name>/<model-id>`. A default can be set in `telos config` or in the web UI (TODO(grohan): impl the PUT to `/api/inference/preference`). Telos also exposes standard "thinking effort" values (`--thinking [low,medium,high,xhigh]`).
 
 
 ## Managed Inference
 
-Telos exposes `telos/default` and `telos/max` as managed inference models. These abstract routing to frontier open and frontier closed models respectively.
+Telos exposes `telos/default` and `telos/max` as managed inference models. These abstract routing to frontier open and frontier closed models, respectively.
 
 The value of Telos-managed inference is to provide a cost-efficient, reliable option:
 
 - Reliable inference (automatic provider rotation in case of downtime)
 - Intelligent model routing (routes requests to different models based on the workload)
-- Increased rate limits and prioritization.
+- Increased rate limits and prioritization
 
 ## Bring Your Own Inference
 

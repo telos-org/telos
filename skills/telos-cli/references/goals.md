@@ -1,10 +1,10 @@
 ---
 title: Goals
-description: An overview of the framework behind the Telos cloud platform.
+description: An overview of the framework behind the Telos Cloud platform.
 group: Platform
 ---
 
-Telos is built on top of goals as the durable unit of work. But a goal is not *just* a markdown file. There are a few components to the programming system, designed to make it flexible and maximally useful to the end user.
+Telos is built on top of Goals as the durable unit of work. But a Goal is not *just* a markdown file. There are a few components to the programming system, designed to make it flexible and maximally useful to the end user.
 
 
 # The Goal Specification
@@ -50,14 +50,14 @@ Writing high quality specs is a non-trivial problem! We've written more about it
 
 ## Skills 
 
-A single `SPEC.md` is often not enough to describe your goal in full detail. Telos lets you modularize with [agent skills](https://agentskills.io/), specified in YAML frontmatter up top. Agent skills are great to provide the system with additional capabilities or expertise or alternatively simply organize information into modular compontents that could be reused.
+A single `SPEC.md` is often not enough to describe your Goal in full detail. Telos lets you modularize with [agent skills](https://agentskills.io/), specified in YAML frontmatter up top. Agent skills are great to provide the system with additional capabilities or expertise or alternatively simply organize information into modular compontents that could be reused.
 
 A few examples include:
 - a company design system specific skill (logos, assets, CSS, and prose)
 - a third party API reference skill (eg: Salesforce, JIRA, GitHub)
 - a submodule of the desired service (eg: backend API system of a multi-component service)
 
-In each case, the skills serve different purposes - bundling information, providing expertise, and organizing information. 
+In each case, the skills serve different purposes — bundling information, providing expertise, and organizing information. 
 
 
 ## Rubrics
@@ -68,9 +68,9 @@ Rubrics are skills that are marked with trailing asterisks `*`. These skills are
 - agents are non-deterministic processes that may sometimes skip instructions or terminate early
 - due to the autoregressive nature of LLMs, agents tend to grade their own work favourably and tend to have blind spots.
 
-Independent evaluation lets the system work persistently until an arbitrary set of criterion - including the spec and rubrics - are verified.
+Independent evaluation lets the system work persistently until an arbitrary set of criterion — including the spec and rubrics — are verified.
 
-Humans organisations exhibit similar tendencies too - there's a reason students don't grade your own homework or why developer teams enforce peer code review!
+Humans organisations exhibit similar tendencies too — there's a reason students don't grade your own homework or why developer teams enforce peer code review!
 
 
 ## Packaging
@@ -82,14 +82,14 @@ Having defined the goal `SPEC.md` (the entrypoint), skills, and rubrics, a natur
 
 The naming convention adopted for both is of the form `@<context>/<name>:<version>`
 
-Packages of type B can reference packages of type A. For example, suppose we have a skill `@telos/how-to-fish:1.0.2`, a goal's frontmatter could reference it as follows:
+Packages of type B can reference packages of type A. For example, suppose we have a skill `@telos/how-to-fish:1.0.2`, a Goal's frontmatter could reference it as follows:
 
 ```
 ---
 name: undersea-survival
 version: 0.1.0
 skills:
- - @telos/how-to-fish:1.0.2
+ - "@telos/how-to-fish:1.0.2"
  - another-skill
 interval: 6h
 ---
@@ -98,7 +98,7 @@ interval: 6h
 
 ```
 
-Telos cloud manages a hosted registry of packages of both types. The method for interaction with this hosted registry is simple:
+Telos Cloud manages a hosted registry of packages of both types. The method for interaction with this hosted registry is simple:
 
 Use `telos push SPEC.md|SKILL_DIR` to push up your package, optionally with an explicit `--context` (that is otherwise derived from your default in `telos config`)
 
