@@ -132,21 +132,32 @@ The `apply` command returns immediately and launches a session in the cloud.
 
 ## Watch it work
 
-You can monitor your active Goal at different levels of detail and verbosity. To see an overview of all your active Goals:
+You can monitor your active Goal at different levels of detail and verbosity. 
+
+For a one-line overview of all running goals:
 
 ```console
 $ telos list
 TODO(grohan): need example
 ```
 
-`telos list` and `telos describe` report one of four statuses. `describe` also shows the reason.
+For a description of a specific goal:
 
-| Status | Meaning |
-|---|---|
-| `working` | Telos is preparing the Goal's environment, implementing the current spec, or verifying it. |
-| `ready` | The system accepted the current Goal, and the service is live. |
-| `needs_attention` | The latest run failed or stopped unexpectedly. `telos describe` shows why. |
-| `stopped` | The Goal has stopped running, usually because you deleted it. |
+
+```console
+$ telos describe sess_c7d2f0a4e8
+Name      reading-list
+Status    ready
+Session   sess_c7d2f0a4e8
+Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
+Model     telos/default
+Thinking  medium (requested)
+Context   personal
+Service   https://reading-list-c7d2f0a4e8.usetelos.ai
+```
+
+For scripts and agents, `telos describe --json` returns the same information as JSON. 
+
 
 To follow the agent's work in detail:
 
@@ -155,26 +166,19 @@ $ telos logs sess_c7d2f0a4e8
 TODO(grohan): need example
 ```
 
-For scripts and agents, `telos describe --json` returns the same information as JSON. Rely on its `status` field.
+`telos list` and `telos describe` report one of four statuses, and `describe` also shows the reason. Here's hwo to interpret them
 
-## Wait for readiness
+| Status | Meaning |
+|---|---|
+| `working` | Telos is preparing the Goal's environment, implementing the current spec, or verifying it. |
+| `ready` | The system accepted the current Goal, and the service is live. |
+| `needs_attention` | The latest run failed or stopped unexpectedly. `telos describe` shows why. |
+| `stopped` | The Goal has stopped running, usually because you deleted it. |
+
 
 When the system is done working, `describe` reports the accepted Goal as `ready` and exposes a public handle.
 
 TODO(grohan): I think too much slop output in here as well!
-
-```console
-$ telos describe sess_c7d2f0a4e8
-Name      reading-list
-Status    ready
-Session   sess_c7d2f0a4e8
-Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
-Inference Managed
-Model     telos/default
-Thinking  medium (requested)
-Context   personal
-Service   https://reading-list-c7d2f0a4e8.usetelos.ai
-```
 
 Once ready, open the service and verify that the behavior is as desired.
 In this case, you would exercise `POST /books` and `GET /books` through the public URL to confirm everything is in order.

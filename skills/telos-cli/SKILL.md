@@ -16,4 +16,4 @@ This is the index of the Telos CLI guide. It ships with every Telos release and 
 - [Use Telos](references/use-telos.md) — install, sign in, and take one Goal from first plan to deletion
 - [Goals](references/goals.md) — the Goal specification, skills, rubrics, and packages
 - [The Telos Cloud environment](references/environment.md) — the VM, toolchain, and network access each Goal runs with
-- [Models](references/models.md) — managed inference, your own API keys, and subscriptions
+- [Models](references/models.md) — inference options when using Telos: managed inference and bring your own keys/subscriptions
