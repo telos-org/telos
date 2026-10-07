@@ -46,6 +46,7 @@ export default function (pi) {
     };
     record("request-" + number + ".json", {
       pid: process.pid, model: model.id, thinking: options?.reasoning,
+      api: model.api, contextWindow: model.contextWindow, maxTokens: model.maxTokens,
       messages: context.messages, headers: options?.headers,
     });
     (async () => {
@@ -101,6 +102,9 @@ export default function (pi) {
       }],
       streamSimple,
     };
+    if (suffix === "b" && process.env.TELOS_PI_PROBE_PHASE === "combined_matching_stream_definition") {
+      config.models[0].api = "different-stream-api";
+    }
     if (process.env.TELOS_PI_PROBE_PHASE?.includes("native")) {
       pi.registerProvider({
         id: provider, name: "Native offline provider", baseUrl: config.baseUrl,

@@ -31,18 +31,29 @@ func (pe *PiExecutor) SetModelDefinition(ctx context.Context, provider, model st
 	return pe.SetSettings(ctx, PiSettingsUpdate{Provider: provider, Model: model, ModelDefinition: definition})
 }
 
-func (pe *PiExecutor) registerModelDefinition(ctx context.Context, rpc *piRPC, provider string, definition json.RawMessage) error {
+func (pe *PiExecutor) registerModelDefinition(ctx context.Context, rpc *piRPC, provider, model string, definition json.RawMessage) error {
 	if pe.ModelConfigPath == "" {
 		return fmt.Errorf("%w: model definition updates are not enabled", ErrPiSettingsRejected)
 	}
-	if err := rpc.requireCommand(ctx, "telos-internal-refresh-model"); err != nil {
+	const command = "telos-internal-refresh-model"
+	if err := rpc.requireCommand(ctx, command); err != nil {
 		return err
 	}
-	if err := WritePiModelDefinition(pe.ModelConfigPath, provider, definition); err != nil {
+	data, err := rpc.callExtension(ctx, command, map[string]interface{}{"provider": provider, "definition": definition})
+	if err != nil {
 		return err
 	}
-	_, err := rpc.call(ctx, "prompt", map[string]interface{}{"message": "/telos-internal-refresh-model"})
-	return err
+	var registered struct{ Provider, Model, Error string }
+	if err := json.Unmarshal(data, &registered); err != nil {
+		return fmt.Errorf("Pi model registration: %w", err)
+	}
+	if registered.Error != "" {
+		return fmt.Errorf("%w: %s", ErrPiSettingsRejected, registered.Error)
+	}
+	if registered.Provider != provider || registered.Model != model {
+		return errors.New("Pi returned a different model during registration")
+	}
+	return nil
 }
 
 func (rpc *piRPC) requireCommand(ctx context.Context, name string) error {

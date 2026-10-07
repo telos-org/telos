@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -20,11 +21,24 @@ import (
 )
 
 func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
-	for _, phase := range []string{"request", "tool", "before_prompt", "definition", "legacy", "combined", "combined_tool", "combined_boundary", "combined_unknown", "combined_rejected", "combined_unsupported", "combined_missing", "combined_override", "combined_definition", "combined_definition_rejected", "combined_definition_headers", "combined_thinking", "combined_model", "combined_repeated", "combined_metadata", "combined_native", "combined_native_definition"} {
+	for _, phase := range []string{
+		"request", "tool", "before_prompt", "definition", "legacy",
+		"combined", "combined_tool", "combined_boundary", "combined_unknown",
+		"combined_rejected", "combined_unsupported", "combined_missing", "combined_override",
+		"combined_definition", "combined_definition_rejected", "combined_definition_headers",
+		"combined_thinking", "combined_model", "combined_repeated", "combined_metadata",
+		"combined_native", "combined_native_definition",
+		"existing_definition", "combined_existing_definition",
+		"matching_definition", "combined_matching_definition", "combined_partial_definition",
+		"combined_stream_definition", "combined_stream_implicit_definition",
+		"combined_matching_stream_definition",
+		"combined_extension_definition", "combined_extension_partial_definition",
+	} {
 		t.Run(phase, func(t *testing.T) {
 			combined := strings.HasPrefix(phase, "combined")
 			boundary := phase == "combined_boundary" || phase == "combined_unknown"
-			rejected := strings.HasSuffix(phase, "rejected") || phase == "combined_unsupported" || phase == "combined_override" || phase == "combined_missing" || phase == "combined_native_definition"
+			existingDefinition := phase == "existing_definition" || phase == "combined_existing_definition"
+			rejected := strings.HasSuffix(phase, "rejected") || phase == "combined_unsupported" || phase == "combined_override" || phase == "combined_missing" || phase == "combined_native_definition" || existingDefinition || strings.HasPrefix(phase, "combined_stream_") || strings.HasPrefix(phase, "combined_extension_") || phase == "combined_matching_stream_definition"
 			binaryEnv := "TELOS_TEST_PI_BINARY"
 			if phase == "legacy" {
 				binaryEnv = "TELOS_TEST_LEGACY_PI_BINARY"
@@ -127,8 +141,39 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			var definition json.RawMessage
 			if strings.Contains(phase, "definition") {
 				model = "rpc-a/probe-c"
-				definition = json.RawMessage(`{"id":"probe-c","name":"New offline model","api":"telos-offline-test","reasoning":true,"input":["text"],"contextWindow":128000,"maxTokens":4096,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}`)
-				if err := os.WriteFile(filepath.Join(agent, "models.json"), []byte(`{"providers":{"rpc-a":{"api":"telos-offline-test","apiKey":"test-only","baseUrl":"https://unused.invalid"}}}`), 0o600); err != nil {
+				definition = json.RawMessage(`{"id":"probe-c","name":"New offline model","api":"telos-offline-test","reasoning":true,"input":["text"],"contextWindow":256000,"maxTokens":8192,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}`)
+				if err := os.WriteFile(filepath.Join(agent, "models.json"), []byte(`{"providers":{"rpc-a":{"api":"telos-offline-test","apiKey":"test-only","baseUrl":"https://unused.invalid"},"rpc-b":{"api":"telos-offline-test","apiKey":"test-only","baseUrl":"https://unused.invalid","models":[{"id":"probe-b","name":"Offline test","reasoning":true,"contextWindow":128000,"maxTokens":4096,"headers":{"x-telos-model-header":"preserved"}}]}}}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if existingDefinition {
+				model = "rpc-a/probe-a"
+				definition = json.RawMessage(`{"id":"probe-a","api":"telos-offline-test","contextWindow":256000,"maxTokens":8192}`)
+			}
+			if phase == "matching_definition" || phase == "combined_matching_definition" || phase == "combined_extension_definition" || phase == "combined_matching_stream_definition" {
+				model = "rpc-b/probe-b"
+				// Field order is irrelevant, including inside the cost object.
+				definition = json.RawMessage(`{"id":"probe-b","name":"Offline test","api":"telos-offline-test","reasoning":true,"input":["text"],"contextWindow":128000,"maxTokens":4096,"cost":{"cacheWrite":0,"input":0,"cacheRead":0,"output":0}}`)
+				if phase == "combined_matching_stream_definition" {
+					definition = json.RawMessage(strings.Replace(string(definition), "telos-offline-test", "different-stream-api", 1))
+				}
+			}
+			if phase == "combined_partial_definition" || phase == "combined_extension_partial_definition" {
+				model = "rpc-b/probe-b"
+				definition = json.RawMessage(`{"id":"probe-b"}`)
+			}
+			if phase == "combined_stream_definition" {
+				definition = json.RawMessage(`{"id":"probe-c","api":"different-stream-api","reasoning":true}`)
+			}
+			if strings.HasPrefix(phase, "combined_extension_") {
+				// An extension-only model cannot be reconstructed from this file.
+				if err := os.WriteFile(filepath.Join(agent, "models.json"), []byte(`{"providers":{}}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if phase == "combined_stream_implicit_definition" {
+				definition = json.RawMessage(`{"id":"probe-c","reasoning":true}`)
+				if err := os.WriteFile(filepath.Join(agent, "models.json"), []byte(`{"providers":{"rpc-a":{"api":"different-stream-api","apiKey":"test-only","baseUrl":"https://unused.invalid"}}}`), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -139,12 +184,17 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 				result <- e.ExecuteTurn("Run the tool and report success.", "prover", &game.TurnState{Dir: dir, StopRequested: stop.Load})
 			}()
 			wait(func() bool { _, err := os.Stat(filepath.Join(dir, "request-1.json")); return err == nil })
+			overlayPath := filepath.Join(dir, "inference-model.json")
+			originalOverlay, err := os.ReadFile(overlayPath)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if phase == "tool" || phase == "combined_tool" {
 				wait(func() bool { _, err := os.Stat(filepath.Join(dir, "tool-started")); return err == nil })
 			}
 			if phase != "before_prompt" {
 				want := "applied"
-				if phase == "legacy" {
+				if phase == "legacy" || rejected {
 					want = "rejected"
 				}
 				if phase == "request" {
@@ -229,12 +279,18 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			if phase == "combined_native_definition" && !strings.Contains(current.Update.Error, "native provider") {
 				t.Fatalf("unexpected native metadata rejection: %+v", current.Update)
 			}
+			if existingDefinition && !strings.Contains(current.Update.Error, "Cannot change model metadata") {
+				t.Fatalf("metadata replacement was not explicitly rejected: %+v", current.Update)
+			}
+			if (strings.HasPrefix(phase, "combined_stream_") || phase == "combined_matching_stream_definition") && !strings.Contains(current.Update.Error, "streaming API") {
+				t.Fatalf("provider API replacement was not explicitly rejected: %+v", current.Update)
+			}
 			level := "high"
 			wantStatus := "applied"
 			if phase == "legacy" {
 				wantStatus = "rejected"
 			}
-			if !combined {
+			if !combined && !rejected {
 				update(sessionapi.InferenceUpdateRequest{RequestID: "thinking", ExpectedRevision: current.Revision, Thinking: &level}, wantStatus)
 			}
 			if phase == "combined_thinking" {
@@ -251,10 +307,23 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 				}
 			}
 			if phase == "combined_metadata" {
-				// Rejected metadata must not change the physical entry used by the
-				// already-selected high-thinking route.
-				bad := json.RawMessage(`{"id":"probe-b","reasoning":false,"api":"telos-offline-test"}`)
-				update(sessionapi.InferenceUpdateRequest{RequestID: "bad-metadata", ExpectedRevision: current.Revision, Model: &model, Thinking: &level, ModelDefinition: bad}, "rejected")
+				// Neither combined nor model-only changes may rewrite a physical
+				// entry that the already-selected route will resolve again.
+				for _, bad := range []json.RawMessage{
+					json.RawMessage(`{"id":"probe-b","reasoning":false}`),
+					json.RawMessage(`{"id":"probe-b","api":"different-stream-api"}`),
+					json.RawMessage(`{"id":"probe-b","thinkingLevelMap":{"high":12345}}`),
+					json.RawMessage(`{"id":"probe-b","compat":{"supportsDeveloperRole":false}}`),
+				} {
+					for _, thinking := range []*string{&level, nil} {
+						current, err := store.Inference("session")
+						if err != nil {
+							t.Fatal(err)
+						}
+						requestID := fmt.Sprintf("bad-metadata-%d", current.Revision)
+						update(sessionapi.InferenceUpdateRequest{RequestID: requestID, ExpectedRevision: current.Revision, Model: &model, Thinking: thinking, ModelDefinition: bad}, "rejected")
+					}
+				}
 			}
 			for _, name := range []string{"request-release", "tool-release", "second-response-release"} {
 				if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
@@ -274,6 +343,9 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			}
 			var second struct {
 				Model, Thinking string
+				API             string
+				ContextWindow   int
+				MaxTokens       int
 				Messages        []json.RawMessage
 				Headers         map[string]string
 			}
@@ -295,6 +367,18 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			if second.Model != wantModel || second.Thinking != wantThinking || !bytes.Contains(data, []byte("preserved tool result")) {
 				t.Fatalf("next request lost settings or tool result: %s", data)
 			}
+			wantContext, wantMaxTokens := 128000, 4096
+			if wantModel == "probe-c" {
+				wantContext, wantMaxTokens = 256000, 8192
+			}
+			if second.API != "telos-offline-test" || second.ContextWindow != wantContext || second.MaxTokens != wantMaxTokens {
+				t.Fatalf("next request used different model metadata: %s", data)
+			}
+			if strings.Contains(phase, "matching_definition") || phase == "combined_partial_definition" || strings.HasPrefix(phase, "combined_extension_") {
+				if second.Headers["x-telos-model-header"] != "preserved" {
+					t.Fatalf("metadata update dropped existing model headers: %s", data)
+				}
+			}
 			if phase == "combined_definition_headers" && second.Headers["x-telos-model-header"] != "preserved" {
 				t.Fatalf("adding model metadata dropped existing model headers: %s", data)
 			}
@@ -305,6 +389,15 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			saved, err := sessionapi.ReadManifest(manifestPath(dir))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if (rejected || phase == "combined_metadata") && len(saved.InferenceModelDefinition) != 0 {
+				t.Fatalf("rejected metadata overwrote the saved definition: %s", saved.InferenceModelDefinition)
+			}
+			if rejected || phase == "combined_metadata" {
+				overlay, err := os.ReadFile(overlayPath)
+				if err != nil || !bytes.Equal(overlay, originalOverlay) {
+					t.Fatalf("rejected metadata changed the startup overlay: %s %v", overlay, err)
+				}
 			}
 			if phase == "combined_unknown" {
 				wantModel, wantThinking = "probe-a", "medium"
@@ -326,6 +419,15 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			if err != nil || json.Unmarshal(data, &second) != nil || second.Model != wantModel || second.Thinking != wantThinking {
 				t.Fatalf("restart lost settings: %s %v", data, err)
 			}
+			if second.API != "telos-offline-test" || second.ContextWindow != wantContext || second.MaxTokens != wantMaxTokens {
+				t.Fatalf("restart changed model metadata: %s", data)
+			}
+			if strings.Contains(phase, "matching_definition") || phase == "combined_partial_definition" || strings.HasPrefix(phase, "combined_extension_") {
+				if second.Headers["x-telos-model-header"] != "preserved" {
+					t.Fatalf("restart dropped existing model headers: %s", data)
+				}
+			}
+
 		})
 	}
 }

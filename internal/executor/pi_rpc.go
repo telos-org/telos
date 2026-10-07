@@ -51,7 +51,7 @@ func (pe *PiExecutor) SetSettings(ctx context.Context, update PiSettingsUpdate) 
 		}
 		if update.Model != "" {
 			if len(update.ModelDefinition) > 0 {
-				if err := pe.registerModelDefinition(ctx, rpc, update.Provider, update.ModelDefinition); err != nil {
+				if err := pe.registerModelDefinition(ctx, rpc, update.Provider, update.Model, update.ModelDefinition); err != nil {
 					return err
 				}
 			}
