@@ -42,7 +42,7 @@ func cmdLaunch(command, action string, args []string) {
 		modelHelp = "Cloud: telos/default, telos/max, or <subscription-or-key-name>/<model-id>; local: <provider>/<model>; defaults to $TELOS_MODEL, then the workspace preference for Cloud"
 	}
 	model := fs.String("model", "", modelHelp)
-	thinking := fs.String("thinking", "", "Thinking effort; defaults to $TELOS_THINKING, then high for local runs")
+	thinking := fs.String("thinking", "", "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs")
 	untilValue := ""
 	until := &untilValue
 	if command == "run" {

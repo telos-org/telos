@@ -336,6 +336,44 @@ func TestResolveSessionRuntimeConfigUsesEnvironmentDefaults(t *testing.T) {
 	}
 }
 
+func TestThinkingOptionAcceptsSupportedLevels(t *testing.T) {
+	for _, level := range thinkingLevels {
+		fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+		fs.String("thinking", "", "")
+		parseFlags(fs, []string{"--thinking", level, "SPEC.md"})
+
+		got, err := thinkingOption(fs, level)
+		if err != nil || got != level {
+			t.Fatalf("thinkingOption(%q) = %q, %v", level, got, err)
+		}
+	}
+}
+
+func TestThinkingOptionRejectsUnknownLevels(t *testing.T) {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	fs.String("thinking", "", "")
+	fs.Float64("max-cost-usd", 20.0, "")
+	parseFlags(fs, []string{"--thinking", "max", "SPEC.md"})
+
+	if _, err := resolveSessionRuntimeConfigFromFlags(fs, "", "max", 20.0); err == nil || !strings.Contains(err.Error(), "low, medium, high, xhigh") {
+		t.Fatalf("session config: got %v", err)
+	}
+	if _, err := resolveLocalRunConfigFromFlags(fs, "", "", "max", 20.0); err == nil {
+		t.Fatal("local run config accepted an unknown thinking level")
+	}
+}
+
+func TestThinkingOptionRejectsUnknownEnvironmentLevel(t *testing.T) {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	fs.String("thinking", "", "")
+	parseFlags(fs, []string{"SPEC.md"})
+	t.Setenv("TELOS_THINKING", "minimal")
+
+	if _, err := thinkingOption(fs, ""); err == nil || !strings.Contains(err.Error(), `"minimal"`) {
+		t.Fatalf("got %v", err)
+	}
+}
+
 func TestUntilFlagValue(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.String("until", "", "")
