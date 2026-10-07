@@ -20,10 +20,11 @@ import (
 )
 
 func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
-	for _, phase := range []string{"request", "tool", "before_prompt", "definition", "legacy", "combined", "combined_tool", "combined_partial", "combined_definition", "combined_definition_partial"} {
+	for _, phase := range []string{"request", "tool", "before_prompt", "definition", "legacy", "combined", "combined_tool", "combined_boundary", "combined_unknown", "combined_rejected", "combined_unsupported", "combined_missing", "combined_override", "combined_definition", "combined_definition_rejected", "combined_definition_headers", "combined_thinking", "combined_model", "combined_repeated", "combined_metadata", "combined_native", "combined_native_definition"} {
 		t.Run(phase, func(t *testing.T) {
 			combined := strings.HasPrefix(phase, "combined")
-			partial := strings.HasSuffix(phase, "partial")
+			boundary := phase == "combined_boundary" || phase == "combined_unknown"
+			rejected := strings.HasSuffix(phase, "rejected") || phase == "combined_unsupported" || phase == "combined_override" || phase == "combined_missing" || phase == "combined_native_definition"
 			binaryEnv := "TELOS_TEST_PI_BINARY"
 			if phase == "legacy" {
 				binaryEnv = "TELOS_TEST_LEGACY_PI_BINARY"
@@ -54,6 +55,11 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(agent, "settings.json"), []byte(`{"compaction":{"enabled":false},"retry":{"enabled":false}}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
+			if phase == "combined_override" {
+				if err := os.WriteFile(filepath.Join(agent, "settings.json"), []byte(`{"compaction":{"enabled":false,"modelOverrides":{"rpc-b/probe-b":{"reserveTokens":5000}}},"retry":{"enabled":false}}`), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			manifest := &sessionapi.Manifest{SessionID: "session", SessionKind: sessionapi.KindController, Config: sessionapi.SessionConfig{Model: "rpc-a/probe-a", Thinking: "medium"}}
 			if err := sessionapi.WriteManifest(manifestPath(dir), manifest); err != nil {
 				t.Fatal(err)
@@ -72,11 +78,15 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			if phase == "combined_tool" {
 				p.Env["TELOS_PI_PROBE_PHASE"] = "tool"
 			}
+			if boundary {
+				p.Env["TELOS_PI_PROBE_PHASE"] = "atomic_boundary"
+			}
 			pi := executor.NewPiExecutor(p, "rpc-a/probe-a", "medium", 20)
 			e := &sessionInferenceExecutor{sessionDir: dir, pi: pi, notifications: owner.Inference}
 			var stop atomic.Bool
 			defer stop.Store(true)
 			result := make(chan game.TurnResult, 1)
+			var interrupted *game.TurnResult
 			deadline := time.Now().Add(18 * time.Second)
 			wait := func(check func() bool) {
 				t.Helper()
@@ -111,6 +121,9 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 				})
 			}
 			model := "rpc-b/probe-b"
+			if phase == "combined_missing" {
+				model = "rpc-b/missing"
+			}
 			var definition json.RawMessage
 			if strings.Contains(phase, "definition") {
 				model = "rpc-a/probe-c"
@@ -145,12 +158,57 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 				req := sessionapi.InferenceUpdateRequest{RequestID: "model", ExpectedRevision: revision, Model: &model, ModelDefinition: definition}
 				if combined {
 					level := "high"
-					if partial {
-						level, want = "banana", "partial"
+					if strings.HasSuffix(phase, "rejected") || phase == "combined_unsupported" {
+						level, want = "banana", "rejected"
+						if phase == "combined_unsupported" {
+							level = "xhigh"
+						}
+					}
+					if rejected {
+						want = "rejected"
 					}
 					req.Thinking = &level
 				}
-				update(req, want)
+				if boundary {
+					update(req, "pending")
+					wait(func() bool { _, err := os.Stat(filepath.Join(dir, "model-select-started")); return err == nil })
+					for _, name := range []string{"request-release", "tool-release"} {
+						if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
+							t.Fatal(err)
+						}
+					}
+					wait(func() bool { _, err := os.Stat(filepath.Join(dir, "request-2.json")); return err == nil })
+					current, err := store.Inference("session")
+					if err != nil || current.Update.Status != "applying" {
+						t.Fatalf("request did not race the outstanding model command: %+v %v", current, err)
+					}
+					if phase == "combined_unknown" {
+						// The pair is already being used, but its acknowledgement
+						// has not arrived. End Pi at that point to test recovery.
+						stop.Store(true)
+						select {
+						case done := <-result:
+							interrupted = &done
+						case <-time.After(10 * time.Second):
+							t.Fatal("Pi did not stop during settings change")
+						}
+						if !strings.Contains(interrupted.Error, "local_interrupted") {
+							t.Fatalf("interrupted change: %+v", interrupted)
+						}
+						stop.Store(false)
+						want = "unknown"
+					} else {
+						if err := os.WriteFile(filepath.Join(dir, "model-select-release"), nil, 0o600); err != nil {
+							t.Fatal(err)
+						}
+						wait(func() bool {
+							current, err := store.Inference("session")
+							return err == nil && current.Update.Status == "applied"
+						})
+					}
+				} else {
+					update(req, want)
+				}
 				if combined {
 					replay, err := store.UpdateInference("session", req)
 					if err != nil || replay.Revision != 1 || replay.Update.Status != want {
@@ -168,6 +226,9 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			if phase == "combined_native_definition" && !strings.Contains(current.Update.Error, "native provider") {
+				t.Fatalf("unexpected native metadata rejection: %+v", current.Update)
+			}
 			level := "high"
 			wantStatus := "applied"
 			if phase == "legacy" {
@@ -176,23 +237,45 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			if !combined {
 				update(sessionapi.InferenceUpdateRequest{RequestID: "thinking", ExpectedRevision: current.Revision, Thinking: &level}, wantStatus)
 			}
-			for _, name := range []string{"request-release", "tool-release"} {
+			if phase == "combined_thinking" {
+				level := "low"
+				update(sessionapi.InferenceUpdateRequest{RequestID: "after-pair", ExpectedRevision: current.Revision, Thinking: &level}, "applied")
+			}
+			if phase == "combined_model" || phase == "combined_definition_headers" {
+				model = "rpc-a/probe-a"
+				update(sessionapi.InferenceUpdateRequest{RequestID: "after-pair", ExpectedRevision: current.Revision, Model: &model}, "applied")
+			}
+			if phase == "combined_repeated" {
+				for i, level := range []string{"low", "medium", "high"} {
+					update(sessionapi.InferenceUpdateRequest{RequestID: "pair-" + level, ExpectedRevision: current.Revision + i, Model: &model, Thinking: &level}, "applied")
+				}
+			}
+			if phase == "combined_metadata" {
+				// Rejected metadata must not change the physical entry used by the
+				// already-selected high-thinking route.
+				bad := json.RawMessage(`{"id":"probe-b","reasoning":false,"api":"telos-offline-test"}`)
+				update(sessionapi.InferenceUpdateRequest{RequestID: "bad-metadata", ExpectedRevision: current.Revision, Model: &model, Thinking: &level, ModelDefinition: bad}, "rejected")
+			}
+			for _, name := range []string{"request-release", "tool-release", "second-response-release"} {
 				if err := os.WriteFile(filepath.Join(dir, name), nil, 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}
 			var completed game.TurnResult
-			select {
-			case completed = <-result:
-			case <-time.After(10 * time.Second):
-				t.Fatal("Pi did not finish")
-			}
-			if completed.Error != "" || completed.Status != game.StatusConcede {
-				t.Fatalf("turn: %+v", completed)
+			if interrupted == nil {
+				select {
+				case completed = <-result:
+				case <-time.After(10 * time.Second):
+					t.Fatal("Pi did not finish")
+				}
+				if completed.Error != "" || completed.Status != game.StatusConcede {
+					t.Fatalf("turn: %+v", completed)
+				}
 			}
 			var second struct {
 				Model, Thinking string
 				Messages        []json.RawMessage
+				Headers         map[string]string
 			}
 			data, err := os.ReadFile(filepath.Join(dir, "request-2.json"))
 			if err != nil || json.Unmarshal(data, &second) != nil {
@@ -200,14 +283,20 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			}
 			_, wantModel, _ := strings.Cut(model, "/")
 			wantThinking := "high"
-			if partial {
-				wantThinking = "medium"
+			if rejected {
+				wantModel, wantThinking = "probe-a", "medium"
+			}
+			if phase == "combined_thinking" {
+				wantThinking = "low"
 			}
 			if phase == "legacy" {
 				wantModel, wantThinking = "probe-a", "medium"
 			}
 			if second.Model != wantModel || second.Thinking != wantThinking || !bytes.Contains(data, []byte("preserved tool result")) {
 				t.Fatalf("next request lost settings or tool result: %s", data)
+			}
+			if phase == "combined_definition_headers" && second.Headers["x-telos-model-header"] != "preserved" {
+				t.Fatalf("adding model metadata dropped existing model headers: %s", data)
 			}
 			if phase == "legacy" {
 				return
@@ -216,6 +305,12 @@ func TestInferenceRealPiAPIAndPersistence(t *testing.T) {
 			saved, err := sessionapi.ReadManifest(manifestPath(dir))
 			if err != nil {
 				t.Fatal(err)
+			}
+			if phase == "combined_unknown" {
+				wantModel, wantThinking = "probe-a", "medium"
+				if saved.Config.Model != "rpc-a/probe-a" || saved.Config.Thinking != "medium" {
+					t.Fatalf("unconfirmed pair overwrote saved defaults: %+v", saved.Config)
+				}
 			}
 			freshPi, err := createPiExecutor(dir, manifestToConfig(saved))
 			if err != nil {

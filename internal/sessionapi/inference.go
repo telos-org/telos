@@ -16,8 +16,8 @@ type InferenceSettings struct {
 	Thinking string `json:"thinking"`
 }
 
-// A request changes model, thinking, or both. Model is applied first; confirmed
-// partial outcomes persist the actual settings when thinking validation fails.
+// A request changes model, thinking, or both. Combined changes select the pair
+// atomically; historical partial outcomes remain readable for compatibility.
 type InferenceUpdateRequest struct {
 	RequestID        string          `json:"request_id"`
 	ExpectedRevision int             `json:"expected_revision"`

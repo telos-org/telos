@@ -20,10 +20,6 @@ var ErrPiLiveSettingsUnsupported = fmt.Errorf("live model/thinking changes requi
 // ErrPiSettingsRejected means validation rejected a change before mutation.
 var ErrPiSettingsRejected = errors.New("pi settings rejected")
 
-// ErrPiSettingsPartiallyApplied accompanies confirmed settings when the model
-// was set but thinking validation rejected the second part before mutation.
-var ErrPiSettingsPartiallyApplied = errors.New("pi settings partially applied")
-
 const piCommandTimeout = 30 * time.Second
 const piShutdownTimeout = 5 * time.Second
 
@@ -43,13 +39,16 @@ type PiSettingsUpdate struct {
 }
 
 // SetSettings serializes one requested update and reads back its actual result.
-// Model is applied before thinking. Pi may start inference between commands;
-// this is one tracked operation, not an atomic change between model requests.
+// Combined changes select one immutable Pi route containing both settings, so
+// even a request starting while set_model awaits hooks sees the complete pair.
 func (pe *PiExecutor) SetSettings(ctx context.Context, update PiSettingsUpdate) (PiSettings, error) {
 	if (update.Provider == "") != (update.Model == "") || (update.Model == "" && update.Thinking == "") || (update.Model == "" && len(update.ModelDefinition) > 0) {
 		return PiSettings{}, fmt.Errorf("%w: provide a model and/or thinking level", ErrPiSettingsRejected)
 	}
 	settings, err := pe.configure(ctx, func(ctx context.Context, rpc *piRPC) error {
+		if update.Model != "" && update.Thinking != "" {
+			return pe.setSettingsPair(ctx, rpc, update)
+		}
 		if update.Model != "" {
 			if len(update.ModelDefinition) > 0 {
 				if err := pe.registerModelDefinition(ctx, rpc, update.Provider, update.ModelDefinition); err != nil {
@@ -61,16 +60,21 @@ func (pe *PiExecutor) SetSettings(ctx context.Context, update PiSettingsUpdate) 
 			}
 		}
 		if update.Thinking != "" {
-			err := rpc.setThinkingLevel(ctx, update.Thinking)
-			if update.Model != "" && errors.Is(err, ErrPiSettingsRejected) {
-				return fmt.Errorf("%w: model set, but %v", ErrPiSettingsPartiallyApplied, err)
+			current, bundled, err := rpc.getSettings(ctx)
+			if err != nil {
+				return err
 			}
-			return err
+			if bundled {
+				update.Provider, update.Model = current.Provider, current.Model
+				return pe.setSettingsPair(ctx, rpc, update)
+			}
+			return rpc.setThinkingLevel(ctx, update.Thinking)
 		}
 		return nil
 	})
-	if errors.Is(err, ErrPiSettingsPartiallyApplied) && (settings.Provider != update.Provider || settings.Model != update.Model) {
-		return PiSettings{}, errors.New("Pi returned a different model after a partial settings change")
+	if err == nil && ((update.Model != "" && (settings.Provider != update.Provider || settings.Model != update.Model)) ||
+		(update.Thinking != "" && settings.Thinking != update.Thinking)) {
+		return PiSettings{}, errors.New("Pi returned different settings than requested")
 	}
 	return settings, err
 }
@@ -144,8 +148,8 @@ func (pe *PiExecutor) configure(ctx context.Context, apply func(context.Context,
 	if err := rpc.requireLiveSettings(ctx); err != nil {
 		return PiSettings{}, err
 	}
-	// Serialize our controls, including validation and readback. Pi itself handles
-	// RPC commands concurrently; this does not make two separate updates atomic.
+	// Serialize our controls, including preparation and readback. Pi's immutable
+	// route, rather than this transport lock, makes a combined change atomic.
 	select {
 	case rpc.control <- struct{}{}:
 		defer func() { <-rpc.control }()
@@ -154,25 +158,35 @@ func (pe *PiExecutor) configure(ctx context.Context, apply func(context.Context,
 	case <-rpc.done:
 		return PiSettings{}, rpc.closedError()
 	}
-	applyErr := apply(ctx, rpc)
-	if applyErr != nil && !errors.Is(applyErr, ErrPiSettingsPartiallyApplied) {
-		return PiSettings{}, applyErr
+	if err := apply(ctx, rpc); err != nil {
+		return PiSettings{}, err
 	}
+	settings, _, err := rpc.getSettings(ctx)
+	return settings, err
+}
+
+func (rpc *piRPC) getSettings(ctx context.Context) (PiSettings, bool, error) {
 	data, err := rpc.call(ctx, "get_state", nil)
 	if err != nil {
-		return PiSettings{}, fmt.Errorf("pi accepted settings but readback failed: %w", err)
+		return PiSettings{}, false, fmt.Errorf("pi settings readback failed: %w", err)
 	}
 	var state struct {
-		Model         struct{ Provider, ID string }
+		Model         struct{ Provider, ID, API string }
 		ThinkingLevel string
 	}
 	if err := json.Unmarshal(data, &state); err != nil {
-		return PiSettings{}, fmt.Errorf("pi settings: %w", err)
+		return PiSettings{}, false, fmt.Errorf("pi settings: %w", err)
 	}
 	if state.Model.Provider == "" || state.Model.ID == "" || state.ThinkingLevel == "" {
-		return PiSettings{}, errors.New("Pi returned incomplete settings")
+		return PiSettings{}, false, errors.New("Pi returned incomplete settings")
 	}
-	return PiSettings{Provider: state.Model.Provider, Model: state.Model.ID, Thinking: state.ThinkingLevel}, applyErr
+	if pair, ok := rpc.settingsModels[state.Model.Provider+"/"+state.Model.ID]; ok {
+		if state.Model.API != "pi-virtual" || state.ThinkingLevel != pair.Thinking {
+			return PiSettings{}, false, errors.New("Pi returned inconsistent settings for its prepared route")
+		}
+		return pair, true, nil
+	}
+	return PiSettings{Provider: state.Model.Provider, Model: state.Model.ID, Thinking: state.ThinkingLevel}, false, nil
 }
 
 type piResponse struct {
@@ -203,6 +217,9 @@ type piRPC struct {
 	err               error
 	capabilitiesReady chan struct{}
 	liveSettings      bool
+	// Only prepared routes from this invocation may be normalized to physical
+	// settings. Access is serialized by control; model IDs are never decoded.
+	settingsModels map[string]PiSettings
 }
 
 func newPiRPC() *piRPC {
@@ -211,6 +228,7 @@ func newPiRPC() *piRPC {
 		ready:   make(chan struct{}), done: make(chan struct{}),
 		writes: make(chan piWrite), control: make(chan struct{}, 1),
 		capabilitiesReady: make(chan struct{}),
+		settingsModels:    make(map[string]PiSettings),
 	}
 }
 
@@ -279,6 +297,27 @@ func (rpc *piRPC) start(stdin io.WriteCloser) {
 }
 
 func (rpc *piRPC) call(ctx context.Context, command string, fields map[string]interface{}) (json.RawMessage, error) {
+	return rpc.request(ctx, command, func(id string) (map[string]interface{}, error) {
+		if fields == nil {
+			fields = make(map[string]interface{})
+		}
+		fields["id"], fields["type"] = id, command
+		return fields, nil
+	})
+}
+
+func (rpc *piRPC) callExtension(ctx context.Context, command string, fields map[string]interface{}) (json.RawMessage, error) {
+	return rpc.request(ctx, command, func(id string) (map[string]interface{}, error) {
+		fields["id"] = id
+		data, err := json.Marshal(fields)
+		return map[string]interface{}{
+			// Pi's prompt acknowledgement is separate from the extension's result.
+			"id": id + "-prompt", "type": "prompt", "message": "/" + command + " " + string(data),
+		}, err
+	})
+}
+
+func (rpc *piRPC) request(ctx context.Context, command string, build func(string) (map[string]interface{}, error)) (json.RawMessage, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -298,12 +337,12 @@ func (rpc *piRPC) call(ctx context.Context, command string, fields map[string]in
 		delete(rpc.pending, id)
 		rpc.mu.Unlock()
 	}()
-	if fields == nil {
-		fields = make(map[string]interface{})
+	fields, err := build(id)
+	if err != nil {
+		return nil, err
 	}
-	fields["id"], fields["type"] = id, command
 	var reply piResponse
-	err := rpc.send(ctx, fields)
+	err = rpc.send(ctx, fields)
 	if err == nil {
 		select {
 		case reply = <-response:

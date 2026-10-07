@@ -53,23 +53,22 @@ func (pe *PiExecutor) ExecuteTurn(task, role string, turnState *game.TurnState) 
 		pe.active = nil
 		pe.mu.Unlock()
 	}()
-	childEnv := map[string]string{"TELOS_ROLE": role}
-	if pe.ModelConfigPath != "" {
-		extension, err := os.CreateTemp("", "telos-pi-models-*.mjs")
-		if err != nil {
-			return game.TurnResult{Role: role, Error: err.Error()}
-		}
-		defer os.Remove(extension.Name())
-		_, writeErr := extension.Write(piModelsExtension)
-		closeErr := extension.Close()
-		if writeErr != nil {
-			return game.TurnResult{Role: role, Error: writeErr.Error()}
-		}
-		if closeErr != nil {
-			return game.TurnResult{Role: role, Error: closeErr.Error()}
-		}
-		childEnv["TELOS_PI_MODEL_CONFIG"] = pe.ModelConfigPath
-		childEnv["TELOS_PI_MODEL_EXTENSION"] = extension.Name()
+	extension, err := os.CreateTemp("", "telos-pi-models-*.mjs")
+	if err != nil {
+		return game.TurnResult{Role: role, Error: err.Error()}
+	}
+	defer os.Remove(extension.Name())
+	_, writeErr := extension.Write(piModelsExtension)
+	closeErr := extension.Close()
+	if writeErr != nil {
+		return game.TurnResult{Role: role, Error: writeErr.Error()}
+	}
+	if closeErr != nil {
+		return game.TurnResult{Role: role, Error: closeErr.Error()}
+	}
+	childEnv := map[string]string{
+		"TELOS_ROLE": role, "TELOS_PI_MODEL_CONFIG": pe.ModelConfigPath,
+		"TELOS_PI_MODEL_EXTENSION": extension.Name(),
 	}
 
 	var sessionPath string
@@ -152,6 +151,10 @@ func (pe *PiExecutor) ExecuteTurn(task, role string, turnState *game.TurnState) 
 				rpc.close(ErrPiNotRunning)
 			case "extension_ui_request":
 				switch getString(record, "method") {
+				case "setStatus":
+					if getString(record, "statusKey") == "telos-internal-settings" {
+						rpc.respond(getString(record, "statusText"))
+					}
 				case "select", "confirm", "input", "editor":
 					// Headless turns cannot answer dialogs. Match Pi's non-UI
 					// cancellation behavior without ever blocking its reader.

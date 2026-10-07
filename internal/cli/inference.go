@@ -128,8 +128,7 @@ func applyInferenceUpdate(ctx context.Context, path string, pi inferenceControll
 		desired.Thinking = *update.Thinking
 	}
 	settings, err := pi.SetSettings(ctx, desired)
-	partial := errors.Is(err, executor.ErrPiSettingsPartiallyApplied)
-	if err != nil && !partial {
+	if err != nil {
 		status := "unknown"
 		if errors.Is(err, executor.ErrPiLiveSettingsUnsupported) || errors.Is(err, executor.ErrPiSettingsRejected) {
 			status = "rejected"
@@ -140,14 +139,10 @@ func applyInferenceUpdate(ctx context.Context, path string, pi inferenceControll
 		return true, sessionapi.FinishInferenceUpdate(path, update.RequestID, "unknown", "Pi returned incomplete settings", nil)
 	}
 	confirmed := sessionapi.InferenceSettings{Model: settings.Provider + "/" + settings.Model, Thinking: settings.Thinking}
-	if (partial && (update.Model == nil || update.Thinking == nil)) ||
-		(update.Model != nil && *update.Model != confirmed.Model) ||
+	if (update.Model != nil && *update.Model != confirmed.Model) ||
 		(update.Model == nil && m.Config.Model != confirmed.Model) ||
-		(!partial && update.Thinking != nil && *update.Thinking != confirmed.Thinking) {
+		(update.Thinking != nil && *update.Thinking != confirmed.Thinking) {
 		return true, sessionapi.FinishInferenceUpdate(path, update.RequestID, "unknown", "Pi returned different settings than requested", nil)
-	}
-	if partial {
-		return false, sessionapi.FinishInferenceUpdate(path, update.RequestID, "partial", err.Error(), &confirmed)
 	}
 	return false, sessionapi.FinishInferenceUpdate(path, update.RequestID, "applied", "", &confirmed)
 }

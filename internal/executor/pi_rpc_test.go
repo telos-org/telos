@@ -128,7 +128,10 @@ func (w settingsReplyWriter) Write(data []byte) (int, error) {
 		return 0, err
 	}
 	if response := w.reply(request); response != nil {
-		response["id"], response["success"] = request["id"], true
+		if response["id"] == nil {
+			response["id"] = request["id"]
+		}
+		response["success"] = true
 		line, _ := json.Marshal(response)
 		w.rpc.respond(string(line))
 	}
@@ -138,7 +141,7 @@ func (w settingsReplyWriter) Write(data []byte) (int, error) {
 func (w settingsReplyWriter) Close() error { return nil }
 
 func TestPiCombinedSettingsOutcomes(t *testing.T) {
-	for _, phase := range []string{"applied", "partial", "missing-model", "thinking-timeout", "bad-readback", "partial-bad-readback", "partial-wrong-model"} {
+	for _, phase := range []string{"applied", "rejected", "missing-extension", "prepare-timeout", "commit-timeout", "bad-preparation", "bad-readback", "unowned-readback", "wrong-thinking"} {
 		t.Run(phase, func(t *testing.T) {
 			rpc := newPiRPC()
 			rpc.setLiveSettingsSupport(true)
@@ -147,6 +150,7 @@ func TestPiCombinedSettingsOutcomes(t *testing.T) {
 			var mu sync.Mutex
 			var commands []string
 			model, thinking := "old", "medium"
+			const preparedID = "telos-internal-settings-test"
 			rpc.start(settingsReplyWriter{rpc, func(request map[string]any) map[string]any {
 				mu.Lock()
 				defer mu.Unlock()
@@ -154,35 +158,54 @@ func TestPiCombinedSettingsOutcomes(t *testing.T) {
 				commands = append(commands, command)
 				var data any
 				switch command {
-				case "get_available_models":
-					data = map[string]any{"models": []map[string]string{{"provider": "p", "id": "new"}}}
+				case "get_commands":
+					data = map[string]any{"commands": []map[string]string{{"name": "telos-internal-prepare-settings"}}}
+					if phase == "missing-extension" {
+						data = map[string]any{"commands": []any{}}
+					}
+				case "prompt":
+					var prepared map[string]string
+					_, body, _ := strings.Cut(request["message"].(string), " ")
+					if err := json.Unmarshal([]byte(body), &prepared); err != nil {
+						t.Error(err)
+					}
+					if phase == "prepare-timeout" {
+						return nil
+					}
+					data = map[string]string{"provider": "p", "model": "new", "thinking": "high", "modelId": preparedID}
+					if phase == "rejected" {
+						data = map[string]string{"error": "Unsupported thinking level"}
+					}
+					if phase == "bad-preparation" {
+						data = map[string]string{"provider": "p", "model": "different", "thinking": "high", "modelId": preparedID}
+					}
+					// A successful native prompt ACK must not mask rejection or loss
+					// of the extension's separate preparation result.
+					ack, _ := json.Marshal(map[string]any{"id": request["id"], "success": true})
+					rpc.respond(string(ack))
+					return map[string]any{"id": prepared["id"], "data": data}
 				case "set_model":
-					model, thinking = "new", "low"
-				case "get_available_thinking_levels":
-					data = map[string]any{"levels": []string{"low", "high"}}
-				case "set_thinking_level":
-					thinking = request["level"].(string)
-					if phase == "thinking-timeout" {
-						return nil // The mutation happened, but its reply was lost.
+					model, thinking = request["modelId"].(string), "high"
+					if phase == "commit-timeout" {
+						return nil // The entire pair changed, but its reply was lost.
 					}
 				case "get_state":
-					if phase == "partial-wrong-model" {
-						model = "unexpected"
+					if phase == "unowned-readback" {
+						model = "telos-internal-settings-unowned"
 					}
-					data = map[string]any{"model": map[string]string{"provider": "p", "id": model}, "thinkingLevel": thinking}
-					if strings.HasSuffix(phase, "bad-readback") {
+					if phase == "wrong-thinking" {
+						thinking = "low"
+					}
+					data = map[string]any{"model": map[string]string{"provider": "p", "id": model, "api": "pi-virtual"}, "thinkingLevel": thinking}
+					if phase == "bad-readback" {
 						data = map[string]any{}
 					}
+				default:
+					t.Errorf("unexpected separate settings command: %s", command)
 				}
 				return map[string]any{"data": data}
 			}})
 			update := PiSettingsUpdate{Provider: "p", Model: "new", Thinking: "high"}
-			if strings.HasPrefix(phase, "partial") {
-				update.Thinking = "banana"
-			}
-			if phase == "missing-model" {
-				update.Model = "missing"
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 			defer cancel()
 			settings, err := pe.SetSettings(ctx, update)
@@ -191,21 +214,20 @@ func TestPiCombinedSettingsOutcomes(t *testing.T) {
 			mu.Unlock()
 			switch phase {
 			case "applied":
-				if err != nil || settings != (PiSettings{"p", "new", "high"}) || !reflect.DeepEqual(gotCommands, []string{"get_available_models", "set_model", "get_available_thinking_levels", "set_thinking_level", "get_state"}) {
+				if err != nil || settings != (PiSettings{"p", "new", "high"}) || !reflect.DeepEqual(gotCommands, []string{"get_commands", "prompt", "set_model", "get_state"}) {
 					t.Fatalf("combined: %+v %v %v", settings, err, gotCommands)
 				}
-			case "partial":
-				if !errors.Is(err, ErrPiSettingsPartiallyApplied) || errors.Is(err, ErrPiSettingsRejected) || settings != (PiSettings{"p", "new", "low"}) || !reflect.DeepEqual(gotCommands, []string{"get_available_models", "set_model", "get_available_thinking_levels", "get_state"}) {
-					t.Fatalf("partial: %+v %v %v", settings, err, gotCommands)
-				}
-			case "missing-model":
-				if !errors.Is(err, ErrPiSettingsRejected) || !reflect.DeepEqual(gotCommands, []string{"get_available_models"}) {
-					t.Fatalf("model rejection sent another command: %v %v", err, gotCommands)
+			case "rejected", "missing-extension":
+				if !errors.Is(err, ErrPiSettingsRejected) || model != "old" || thinking != "medium" {
+					t.Fatalf("rejection changed settings: %+v %s %s %v %v", settings, model, thinking, err, gotCommands)
 				}
 			default:
-				if err == nil || errors.Is(err, ErrPiSettingsPartiallyApplied) || errors.Is(err, ErrPiSettingsRejected) || settings != (PiSettings{}) {
+				if err == nil || errors.Is(err, ErrPiSettingsRejected) || settings != (PiSettings{}) {
 					t.Fatalf("uncertain outcome: %+v %v", settings, err)
 				}
+			}
+			if phase == "commit-timeout" && (model != preparedID || thinking != "high") {
+				t.Fatalf("lost reply split the pair: %s %s", model, thinking)
 			}
 		})
 	}

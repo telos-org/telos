@@ -12,14 +12,22 @@ export default function (pi) {
     renameSync(path + ".tmp", path);
   };
   const quote = (value) => "'" + value.replaceAll("'", "'\\''") + "'";
-  const waitForRelease = async (signal) => {
-    while (!existsSync(join(directory, "request-release"))) {
+  const waitForRelease = async (signal, file = "request-release") => {
+    while (!existsSync(join(directory, file))) {
       if (signal?.aborted) {
         throw new Error("Request aborted");
       }
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
   };
+  // Loaded before Telos's extension: a later model_select callback cannot fix
+  // a split pair while this handler yields to the next provider request.
+  pi.on("model_select", async (event, ctx) => {
+    if (process.env.TELOS_PI_PROBE_PHASE === "atomic_boundary" && event.source === "set") {
+      record("model-select-started", {});
+      await waitForRelease(ctx.signal, "model-select-release");
+    }
+  });
   const streamSimple = (model, context, options) => {
     const stream = createAssistantMessageEventStream();
     const number = ++requestCount;
@@ -38,7 +46,7 @@ export default function (pi) {
     };
     record("request-" + number + ".json", {
       pid: process.pid, model: model.id, thinking: options?.reasoning,
-      messages: context.messages,
+      messages: context.messages, headers: options?.headers,
     });
     (async () => {
       try {
@@ -58,6 +66,9 @@ export default function (pi) {
           stream.push({ type: "toolcall_end", contentIndex: 0, toolCall, partial: message });
           message.stopReason = "toolUse";
         } else {
+          if (process.env.TELOS_PI_PROBE_PHASE === "atomic_boundary") {
+            await waitForRelease(options?.signal, "second-response-release");
+          }
           const content = "Complete.\n<status>CONCEDE</status>";
           message.content.push({ type: "text", text: content });
           stream.push({ type: "text_start", contentIndex: 0, partial: message });
@@ -77,16 +88,28 @@ export default function (pi) {
     return stream;
   };
   for (const suffix of ["a", "b"]) {
-    pi.registerProvider("rpc-" + suffix, {
+    const provider = "rpc-" + suffix;
+    const config = {
       api: "telos-offline-test",
       apiKey: "test-only",
       baseUrl: "https://unused.invalid",
       models: [{
         id: "probe-" + suffix, name: "Offline test", reasoning: true,
+        headers: { "x-telos-model-header": "preserved" },
         input: ["text"], contextWindow: 128000, maxTokens: 4096,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       }],
       streamSimple,
-    });
+    };
+    if (process.env.TELOS_PI_PROBE_PHASE?.includes("native")) {
+      pi.registerProvider({
+        id: provider, name: "Native offline provider", baseUrl: config.baseUrl,
+        auth: { apiKey: { name: "Test key", resolve: async () => ({ auth: { apiKey: "test-only" } }) } },
+        getModels: () => config.models.map((model) => ({ ...model, provider, api: config.api, baseUrl: config.baseUrl })),
+        stream: streamSimple, streamSimple,
+      });
+    } else {
+      pi.registerProvider(provider, config);
+    }
   }
 }
