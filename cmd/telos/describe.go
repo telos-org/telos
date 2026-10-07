@@ -1,12 +1,15 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"strings"
 
 	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -30,46 +33,113 @@ func cmdDescribe(args []string) {
 		os.Exit(2)
 	}
 	if contextOverride != "" {
-		cloudSession, contextName, err := getCloudSessionForContext(sessionID, contextOverride)
+		description, err := describeCloudSession(sessionID, contextOverride)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
-			return
-		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		printCloudDescription(description, *jsonOut)
 		return
 	}
 
 	session, err := getSessionFromAnywhere(sessionID)
 	if err == nil {
+		var settings *inferenceReceipt
+		var settingsError string
+		if isLocalApplyID(sessionID) {
+			state, readErr := store().Inference(sessionID)
+			if readErr != nil {
+				settingsError = readErr.Error()
+			} else {
+				settings = localInferenceReceipt(sessionID, state)
+			}
+		}
 		if *jsonOut {
-			printJSON(session)
+			printJSON(struct {
+				*sessionapi.Session
+				InferenceState *inferenceReceipt `json:"inference_state,omitempty"`
+				InferenceError string            `json:"inference_error,omitempty"`
+			}{session, settings, settingsError})
 			return
 		}
 
 		printSessionDescription(os.Stdout, *session)
+		if settings != nil {
+			printInferenceSettings(os.Stdout, settings)
+		}
+		if settingsError != "" {
+			printSummaryField(os.Stdout, "Settings", "unavailable: "+settingsError)
+		}
 		return
 	}
 
-	cloudSession, contextName, found, cloudErr := getCloudSessionIfConfigured(sessionID, "")
-	if cloudErr != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
+	configured, configErr := config.IsConfigured()
+	if configErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", configErr)
 		os.Exit(1)
 	}
-	if found {
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
+	if configured {
+		description, cloudErr := describeCloudSession(sessionID, "")
+		if cloudErr == nil {
+			printCloudDescription(description, *jsonOut)
 			return
 		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
-		return
+		var apiErr *cloud.APIError
+		if !errors.As(cloudErr, &apiErr) || apiErr.StatusCode != http.StatusNotFound {
+			fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
+			os.Exit(1)
+		}
 	}
 
 	fmt.Fprintf(os.Stderr, "error: %v\n", err)
 	os.Exit(1)
+}
+
+type cloudDescription struct {
+	*cloud.SessionRecord
+	Context        string            `json:"context,omitempty"`
+	InferenceState *inferenceReceipt `json:"inference_state,omitempty"`
+	InferenceError string            `json:"inference_error,omitempty"`
+}
+
+// Only describe fetches live settings; ordinary session reads keep their contract.
+func describeCloudSession(sessionID, contextOverride string) (*cloudDescription, error) {
+	control, err := cloud.ControlClientForContext(contextOverride)
+	if err != nil {
+		return nil, err
+	}
+	session, err := control.GetSession(sessionID)
+	if err != nil {
+		return nil, err
+	}
+	description := &cloudDescription{SessionRecord: session, Context: control.ContextName()}
+	state, err := control.GetDeploymentInference(sessionID)
+	if err == nil {
+		description.InferenceState, err = cloudInferenceReceipt(sessionID, description.Context, state)
+		if err == nil {
+			// This read may be newer than GetSession; keep displayed values consistent.
+			session.AgentModel, session.AgentThinking = state.AgentModel, state.AgentThinking
+			session.Inference = &state.Inference
+		}
+	}
+	if err != nil {
+		var apiErr *cloud.APIError
+		if !errors.As(err, &apiErr) || (apiErr.StatusCode != http.StatusNotFound && apiErr.StatusCode != http.StatusMethodNotAllowed && apiErr.StatusCode != http.StatusNotImplemented) {
+			description.InferenceError = err.Error()
+		}
+	}
+	return description, nil
+}
+
+func printCloudDescription(description *cloudDescription, jsonOut bool) {
+	if jsonOut {
+		printJSON(description)
+		return
+	}
+	printCloudSessionDetails(os.Stdout, *description.SessionRecord, description.Context, description.InferenceState)
+	if description.InferenceError != "" {
+		printSummaryField(os.Stdout, "Settings", "unavailable: "+description.InferenceError)
+	}
 }
 
 func printCloudSessionJSON(
@@ -114,11 +184,25 @@ func printCloudSessionDescriptionForContext(
 	session cloud.SessionRecord,
 	contextName string,
 ) {
+	printCloudSessionDetails(out, session, contextName, nil)
+}
+
+func printCloudSessionDetails(out io.Writer, session cloud.SessionRecord, contextName string, settings *inferenceReceipt) {
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Session", session.ID)
 	printSummaryField(out, "Revision", session.PackageDigest)
-	printCloudInferenceSummary(out, session)
+	if settings == nil {
+		printCloudInferenceSummary(out, session)
+	} else {
+		if summary := session.Inference; summary != nil {
+			printSummaryField(out, "Inference", inferenceSourceLabel(summary.Source))
+			if summary.ConnectionName != "" {
+				printSummaryField(out, "Connection", summary.ConnectionName)
+			}
+		}
+		printInferenceSettings(out, settings)
+	}
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
 	}
