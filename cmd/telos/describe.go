@@ -149,6 +149,37 @@ func cloudSessionReason(session cloud.SessionRecord) string {
 	}
 }
 
+// cloudSessionModel names a Goal's model the way --model selects it:
+// telos/<tier> for managed inference, <connection-name>/<model-id> for a
+// saved API key or subscription. Viewers who cannot see the connection name
+// get the model ID and its source instead.
+func cloudSessionModel(session cloud.SessionRecord) string {
+	model := session.AgentModel
+	summary := session.Inference
+	if summary == nil {
+		return model
+	}
+	if summary.Model != "" {
+		model = summary.Model
+	}
+	if summary.Source == "managed" {
+		if model == "" && summary.Tier != "" {
+			model = "telos/" + summary.Tier
+		}
+		if model == "telos-bifrost/telos/default" || model == "telos-bifrost/telos/max" {
+			model = strings.TrimPrefix(model, "telos-bifrost/")
+		}
+		return model
+	}
+	if model == "" {
+		return ""
+	}
+	if summary.ConnectionName != "" {
+		return summary.ConnectionName + "/" + model
+	}
+	return model + " (" + inferenceSourceLabel(summary.Source) + ")"
+}
+
 func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	row := displayRow(session)
 	printSummaryField(out, "Name", row.Name)
@@ -173,25 +204,7 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 }
 
 func printCloudInferenceSummary(out io.Writer, session cloud.SessionRecord) {
-	model := session.AgentModel
-	if summary := session.Inference; summary != nil {
-		printSummaryField(out, "Inference", inferenceSourceLabel(summary.Source))
-		if summary.ConnectionName != "" {
-			printSummaryField(out, "Connection", summary.ConnectionName)
-		}
-		if summary.Model != "" {
-			model = summary.Model
-		}
-		if summary.Source == "managed" {
-			if model == "" && summary.Tier != "" {
-				model = "telos/" + summary.Tier
-			}
-			if model == "telos-bifrost/telos/default" || model == "telos-bifrost/telos/max" {
-				model = strings.TrimPrefix(model, "telos-bifrost/")
-			}
-		}
-	}
-	if model != "" {
+	if model := cloudSessionModel(session); model != "" {
 		printSummaryField(out, "Model", model)
 	}
 	if session.AgentThinking != "" {
