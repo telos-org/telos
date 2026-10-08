@@ -31,6 +31,7 @@ type LocalRunConfig struct {
 	ParentSessionID *string
 	Workspace       string
 	Model           string
+	ModelDefinition json.RawMessage
 	Thinking        string
 	Until           int
 	UntilSeconds    int
@@ -236,6 +237,10 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		}
 	}
 
+	if pi, ok := agentExec.(*executor.PiExecutor); ok {
+		agentExec = &sessionInferenceExecutor{sessionDir: sessionDir, pi: pi}
+	}
+
 	pvgCfg := game.PVGConfig{
 		Until:           cfg.Until,
 		UntilSeconds:    cfg.UntilSeconds,
@@ -317,7 +322,11 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 	if model == "" {
 		model = DefaultLocalModel
 	}
-	if err := validatePiModel(model); err != nil {
+	if len(cfg.ModelDefinition) == 0 {
+		if err := validatePiModel(model); err != nil {
+			return nil, err
+		}
+	} else if err := (sessionapi.InferenceUpdateRequest{RequestID: "startup", Model: &model, ModelDefinition: cfg.ModelDefinition}).Validate(); err != nil {
 		return nil, err
 	}
 	thinking := cfg.Thinking
@@ -327,50 +336,15 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 	return executor.NewPiExecutor(p, model, thinking, cfg.AgentTimeoutSec), nil
 }
 
-type piModelsConfig struct {
-	Providers map[string]piProvider `json:"providers"`
-}
-
-type piProvider struct {
-	Models []piModel `json:"models"`
-}
-
-type piModel struct {
-	ID string `json:"id"`
-}
-
 func validatePiModel(model string) error {
 	providerName, modelID, ok := strings.Cut(model, "/")
 	if !ok || providerName == "" || modelID == "" {
 		return fmt.Errorf("pi model %q must use <provider>/<model-id>; choose one with `telos run SPEC.md --model <provider>/<model-id>` or set `TELOS_MODEL=<provider>/<model-id>`", model)
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".pi", "agent", "models.json"))
-	if err != nil {
-		return nil
-	}
-
-	var config piModelsConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil
-	}
-	provider, configured := config.Providers[providerName]
-	if !configured {
-		return nil
-	}
-	if len(provider.Models) == 0 {
-		return nil
-	}
-	for _, configuredModel := range provider.Models {
-		if configuredModel.ID == modelID {
-			return nil
-		}
-	}
-	return fmt.Errorf("pi model %q is not configured: provider %q exists in ~/.pi/agent/models.json, but model id %q was not found; choose one with `telos run SPEC.md --model <provider>/<model-id>` or set `TELOS_MODEL=<provider>/<model-id>`", model, providerName, modelID)
+	// models.json supplements Pi's built-in and extension catalogs. Pi validates
+	// queued settings at startup; this preflight only checks the identifier shape.
+	return nil
 }
 
 func newSessionDir(root string) (string, error) {
@@ -518,23 +492,31 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		thinking = DefaultLocalThinking
 	}
 	sessionKind := localSessionKind(cfg)
+	definition := cfg.ModelDefinition
+	if len(definition) == 0 && cfg.ParentSessionID != nil && filepath.Base(*cfg.ParentSessionID) == *cfg.ParentSessionID {
+		parent, err := sessionapi.ReadManifest(filepath.Join(filepath.Dir(sessionDir), *cfg.ParentSessionID, "session.json"))
+		if err == nil && parent.Config.Model == model {
+			definition = parent.InferenceModelDefinition
+		}
+	}
 
 	manifestPath := filepath.Join(sessionDir, "session.json")
 	err := sessionapi.WriteInitialManifest(manifestPath, sessionapi.InitialManifest{
-		SessionID:          filepath.Base(sessionDir),
-		SessionKind:        sessionKind,
-		Runtime:            sessionapi.RuntimeLocal,
-		CreatedAt:          time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		Launcher:           "local",
-		ParentSessionID:    cfg.ParentSessionID,
-		SourceSpecPath:     &sourceSpecPath,
-		SessionSpecPath:    &sessionSpecPath,
-		SpecName:           compiled.Environment.Name,
-		CurrentRevision:    currentRevision,
-		CurrentSpecVersion: currentSpecVersion,
-		SpecVersions:       specVersions,
-		PackageDigest:      packageDigest,
-		ApplyPackageLock:   applyPackageLock,
+		SessionID:                filepath.Base(sessionDir),
+		InferenceModelDefinition: definition,
+		SessionKind:              sessionKind,
+		Runtime:                  sessionapi.RuntimeLocal,
+		CreatedAt:                time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		Launcher:                 "local",
+		ParentSessionID:          cfg.ParentSessionID,
+		SourceSpecPath:           &sourceSpecPath,
+		SessionSpecPath:          &sessionSpecPath,
+		SpecName:                 compiled.Environment.Name,
+		CurrentRevision:          currentRevision,
+		CurrentSpecVersion:       currentSpecVersion,
+		SpecVersions:             specVersions,
+		PackageDigest:            packageDigest,
+		ApplyPackageLock:         applyPackageLock,
 		Config: sessionapi.SessionConfig{
 			Model:           model,
 			Until:           cfg.Until,
@@ -567,6 +549,7 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	cfg := manifest.Config
 	lrc := LocalRunConfig{
 		Model:           cfg.Model,
+		ModelDefinition: manifest.InferenceModelDefinition,
 		Thinking:        cfg.Thinking,
 		Until:           cfg.Until,
 		UntilSeconds:    cfg.UntilSeconds,
@@ -594,6 +577,9 @@ func finishEpoch(sessionDir string, epochID int, result *game.PVGResult) error {
 		externallyStopped := epoch.Result != nil && *epoch.Result == "stopped"
 		finishedAt := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
 		epoch.FinishedAt = &finishedAt
+		if manifest.SessionKind == sessionapi.KindTask || result.GameResult == game.GameStopped || externallyStopped {
+			sessionapi.SettleInferenceUpdateInManifest(manifest, "session finished before the next turn could activate the settings")
+		}
 		if !externallyStopped {
 			epoch.CompletionReason = stringPtr(result.CompletionReason)
 			epoch.VerifierConceded = boolPtr(result.VerifierConceded)

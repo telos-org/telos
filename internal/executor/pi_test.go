@@ -3,6 +3,7 @@ package executor
 import (
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,6 +12,37 @@ import (
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 )
+
+func TestPiStartupReceiptFailureExitsBeforePrompt(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is needed to exercise the startup extension")
+	}
+	for _, thinking := range []string{"high", "imaginary"} {
+		t.Run(thinking, func(t *testing.T) {
+			dir := t.TempDir()
+			config := filepath.Join(dir, "config.json")
+			data := fmt.Sprintf(`{"model":"provider/model","thinking":%q,"attempt_id":"test","receipt_path":%q}`, thinking, filepath.Join(dir, "missing", "receipt.json"))
+			if err := os.WriteFile(config, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			script := fmt.Sprintf(`
+const { default: initialize } = await import("data:text/javascript;base64," + Buffer.from(%q).toString("base64"));
+let onStart;
+await initialize({ on: (_event, handler) => { onStart = handler; }, getThinkingLevel: () => "high" });
+const model = { provider: "provider", id: "model", api: "test" };
+onStart({}, { model, modelRegistry: { find: () => model } });
+console.log("PROMPT_SENT");
+`, string(piStartupExtension))
+			cmd := exec.Command(node, "--input-type=module", "-e", script)
+			cmd.Env = append(os.Environ(), "TELOS_PI_STARTUP_CONFIG="+config)
+			output, err := cmd.CombinedOutput()
+			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 78 || strings.Contains(string(output), "PROMPT_SENT") {
+				t.Fatalf("failed to stop before prompt: %s, %v", output, err)
+			}
+		})
+	}
+}
 
 func TestPiProgressPreservesReportAndFinalStatus(t *testing.T) {
 	progress := "<progress_update>Orders costing > $25 are rejected without changing your balance.</progress_update>"

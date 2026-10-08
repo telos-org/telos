@@ -263,6 +263,10 @@ var thinkingLevels = []string{"low", "medium", "high", "xhigh"}
 
 // thinkingOption returns the requested thinking level, or "" when none is set.
 func thinkingOption(fs *flag.FlagSet, value string) (string, error) {
+	// A child inherits its parent's accepted level, including off/minimal.
+	if inherited := os.Getenv("TELOS_INHERITED_THINKING"); inherited != "" && !flagNameSet(fs, "thinking") && os.Getenv("TELOS_THINKING") == inherited {
+		return inherited, nil
+	}
 	level := stringOption(fs, "thinking", value, "TELOS_THINKING")
 	if level != "" && !slices.Contains(thinkingLevels, level) {
 		return "", fmt.Errorf("--thinking / TELOS_THINKING must be one of %s; got %q", strings.Join(thinkingLevels, ", "), level)

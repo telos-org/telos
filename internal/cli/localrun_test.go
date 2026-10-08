@@ -225,7 +225,7 @@ func TestValidatePiModel(t *testing.T) {
 		{name: "default configured", model: DefaultLocalModel},
 		{name: "custom configured", model: "custom/org/model"},
 		{name: "pi built-in provider", model: "openai/gpt-5.1"},
-		{name: "missing model id", model: "custom/org/missing", wantErr: `pi model "custom/org/missing" is not configured`},
+		{name: "registry may contain additional models", model: "custom/org/extension-model"},
 		{name: "missing provider separator", model: "gpt-5.1", wantErr: `pi model "gpt-5.1" must use <provider>/<model-id>`},
 		{name: "missing provider", model: "/gpt-5.1", wantErr: `pi model "/gpt-5.1" must use <provider>/<model-id>`},
 		{name: "missing model", model: "openai/", wantErr: `pi model "openai/" must use <provider>/<model-id>`},
@@ -258,7 +258,7 @@ func TestValidatePiModelAllowsBuiltInProviderWithoutConfig(t *testing.T) {
 	}
 }
 
-func TestValidatePiModelAllowsProviderOverrideWithoutModelCatalog(t *testing.T) {
+func TestValidatePiModelAllowsBuiltinModelAlongsideCustomCatalog(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	modelsPath := filepath.Join(home, ".pi", "agent", "models.json")
@@ -268,7 +268,8 @@ func TestValidatePiModelAllowsProviderOverrideWithoutModelCatalog(t *testing.T) 
 	modelsJSON := `{
   "providers": {
     "openai-codex": {
-      "baseUrl": "https://gateway.example.test/chatgpt"
+      "baseUrl": "https://gateway.example.test/chatgpt",
+      "models": [{"id": "custom-model"}]
     }
   }
 }`

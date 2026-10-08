@@ -73,7 +73,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "core commands:")
 	fmt.Fprintln(out, "  login              Log in to Telos Cloud via the browser")
 	fmt.Fprintln(out, "  plan SPEC.md       Preview a spec without running it")
-	fmt.Fprintln(out, "  apply SPEC.md      Create or update a durable session from a spec")
+	fmt.Fprintln(out, "  apply [SPEC.md]    Create a session, update its spec, or change model/thinking")
 	fmt.Fprintln(out, "  list               List sessions")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
 	fmt.Fprintln(out, "  logs SESSION       Show recent activity")
