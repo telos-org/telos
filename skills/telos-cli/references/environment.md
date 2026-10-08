@@ -63,7 +63,7 @@ For most real-world use cases, this is insufficient, so Telos also supports conf
 ---
 name: a-noble-goal
 version: 0.1.0
-egress:
+network:
   - host: public.example.com
   - host: api.example.com
     credentials: sec-example
@@ -72,14 +72,14 @@ egress:
 ---
 ```
 
-Each entry in `egress` specifies a host and optionally restricts HTTP methods and URL paths on that host. A host without `methods` or `paths` allows traffic via all methods and all paths.
+Each entry in `network` specifies a host and optionally restricts HTTP methods and URL paths on that host. A host without `methods` or `paths` allows traffic via all methods and all paths.
 
 ## Credentials
 
 For authenticated requests, it is also possible to securely inject credentials. The workflow for this is as follows:
 
 1. Create a credential entry (name and secret) on the web app (TODO(grohan): link to the webpage where you can add in the credential)
-2. Add the credential's destination host to `egress` in your Goal's frontmatter.
+2. Add the credential's destination host to `network` in your Goal's frontmatter.
 3. Associate that host with the credential ID that you just created using `credentials`.
 
 A few additional details on this feature:

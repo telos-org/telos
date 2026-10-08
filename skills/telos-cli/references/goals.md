@@ -27,7 +27,7 @@ interval: 6h
 
 ### Frontmatter
 
-The frontmatter supports the following fields:
+The markdown frontmatter (YAML block at the top of `SPEC.md`) supports the following fields:
 
 | Field | Meaning |
 | --- | --- |
@@ -45,7 +45,7 @@ Within this file, describe the service you want. Focus on the high-level intent 
 
 Implementation details, such as choice of programming language, code structure, etc., should be intentionally omitted. The focus is entirely on system design.
 
-Writing high-quality specs is a non-trivial problem! We've written more about it [here] (TODO(grohan): link to the spec-writing guide)
+Writing high-quality specs is a non-trivial problem! Our reccomendation is for users to focus on describing externally-visible outcomes: API design, constraints, and behaviours, as opposed to implementation details.
 
 ## Skills
 
@@ -99,10 +99,10 @@ Telos Cloud manages a hosted registry of packages of both types. The method for 
 
 Use `telos push <SPEC.md|skill-dir>` to push up your package, optionally with an explicit `--context` (that is otherwise derived from your default in `telos config`).
 
-To fetch a package locally, for inspection or modification, you can run `telos pull @<scope>/<name>:<version>` (TODO(grohan): why the fuck is it called scope and not context?).
-
-(TODO(grohan): we should not have both `telos pull` and `telos pull skill`!)
+To fetch a package locally, for inspection or modification, you can run `telos pull @<context>/<name>:<version>` 
 
 ## A mental model
 
-On framework design: you might notice some similarities to the C programming language. You could conceptualize a `SPEC.md` as equivalent to a `main.c` and skill files like `#include`s. Framed this way, the purposes and shapes of the primitives in the Telos ecosystem should feel a lot more familiar, and you can even go as far as to treat type A packages as "libraries" and type B packages as "binaries"!
+On framework design: you might notice some similarities to the C programming language. You could conceptualize a `SPEC.md` as equivalent to a `main.c` and skill files like `#include`d headers.
+
+Framed this way, the purposes and shapes of the primitives in the Telos ecosystem should feel a lot more familiar, and you can even go as far as to treat type A packages as reusable "libraries" and type B packages as "binaries"!
