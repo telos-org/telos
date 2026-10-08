@@ -50,9 +50,13 @@ export default function (pi) {
           }
           const started = quote(join(directory, "tool-started"));
           const released = quote(join(directory, "tool-release"));
+          const environment = quote(join(directory, "tool-thinking"));
           const toolCall = {
             type: "toolCall", id: "call_probe", name: "bash",
-            arguments: { command: "printf started > " + started + "; while [ ! -f " + released + " ]; do sleep 0.02; done; printf 'preserved tool result'" },
+            arguments: {
+              command: "printf '%s\\n%s\\n' \"$TELOS_THINKING\" \"$TELOS_INHERITED_THINKING\" > " + environment +
+                "; printf started > " + started + "; while [ ! -f " + released + " ]; do sleep 0.02; done; printf 'preserved tool result'",
+            },
           };
           message.content.push(toolCall);
           stream.push({ type: "toolcall_start", contentIndex: 0, partial: message });

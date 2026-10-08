@@ -198,6 +198,15 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 			if state.Update.Status != wantStatus || state.Settings.Model != model || state.Settings.Thinking != thinking {
 				t.Fatalf("next turn settings: %+v update=%+v", state, state.Update)
 			}
+			envThinking := thinking
+			assertToolThinking := func(turnDir string) {
+				t.Helper()
+				data, err := os.ReadFile(filepath.Join(turnDir, "tool-thinking"))
+				if err != nil || string(data) != envThinking+"\n"+envThinking+"\n" {
+					t.Fatalf("tool inherited unsupported thinking: %q, want %q twice: %v", data, envThinking, err)
+				}
+			}
+			assertToolThinking(verifier)
 			if phase == "rejected_from_clamped" {
 				thinking = initialActualThinking
 			}
@@ -221,11 +230,13 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 			// A new executor restores confirmed settings or activates the next queued pair.
 			if phase == "follow_up" {
 				thinking = "low"
+				envThinking = thinking
 			}
 			e = &sessionInferenceExecutor{sessionDir: dir, pi: executor.NewPiExecutor(p, "turn-a/probe-a", initialThinking, 15)}
 			restart := start("restart")
 			restarted := waitFile(filepath.Join(restart, "request-1.json"))
 			finish(restart)
+			assertToolThinking(restart)
 			if !bytes.Contains(restarted, []byte(fmt.Sprintf(`"model":%q`, wantModel))) || !bytes.Contains(restarted, []byte(fmt.Sprintf(`"thinking":%q`, thinking))) {
 				t.Fatalf("restart lost settings: %s", restarted)
 			}
