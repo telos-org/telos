@@ -121,7 +121,6 @@ created reading-list
 Status    working
 Session   sess_c7d2f0a4e8
 Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
-Inference Managed TODO(grohan): remove
 Model     telos/default
 Thinking  medium (requested)
 Context   personal
@@ -132,17 +131,38 @@ The `apply` command returns immediately and launches a session in the cloud.
 
 ## Watch it work
 
-You can monitor your active Goal at different levels of detail and verbosity. 
+You can monitor your active Goal at different levels of detail and verbosity.
 
-For a one-line overview of all running goals:
+For a one-line overview of all running Goals:
 
 ```console
 $ telos list
 TODO(grohan): need example
 ```
 
-For a description of a specific goal:
+For a description of a specific Goal, run `telos describe sess_c7d2f0a4e8`.
 
+For scripts and agents, `telos describe --json` returns the same information as JSON.
+
+To follow the agent's work in detail:
+
+```console
+$ telos logs sess_c7d2f0a4e8
+TODO(grohan): need example
+```
+
+`telos list` and `telos describe` report one of four statuses. When a Goal needs attention or has stopped, `describe` also shows why. Here's how to interpret them:
+
+| Status | Meaning |
+|---|---|
+| `working` | Telos is preparing the Goal's environment, implementing the current spec, or verifying it. |
+| `ready` | The system accepted the current Goal, and the service is live. |
+| `needs_attention` | The latest run failed or stopped unexpectedly. `telos describe` shows why. |
+| `stopped` | The Goal has stopped running, usually because you deleted it. |
+
+When the system is done working, `describe` reports the accepted Goal as `ready` and exposes a public handle.
+
+TODO(grohan): I think too much slop output in here as well!
 
 ```console
 $ telos describe sess_c7d2f0a4e8
@@ -155,30 +175,6 @@ Thinking  medium (requested)
 Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 ```
-
-For scripts and agents, `telos describe --json` returns the same information as JSON. 
-
-
-To follow the agent's work in detail:
-
-```console
-$ telos logs sess_c7d2f0a4e8
-TODO(grohan): need example
-```
-
-`telos list` and `telos describe` report one of four statuses, and `describe` also shows the reason. Here's hwo to interpret them
-
-| Status | Meaning |
-|---|---|
-| `working` | Telos is preparing the Goal's environment, implementing the current spec, or verifying it. |
-| `ready` | The system accepted the current Goal, and the service is live. |
-| `needs_attention` | The latest run failed or stopped unexpectedly. `telos describe` shows why. |
-| `stopped` | The Goal has stopped running, usually because you deleted it. |
-
-
-When the system is done working, `describe` reports the accepted Goal as `ready` and exposes a public handle.
-
-TODO(grohan): I think too much slop output in here as well!
 
 Once ready, open the service and verify that the behavior is as desired.
 In this case, you would exercise `POST /books` and `GET /books` through the public URL to confirm everything is in order.
@@ -228,7 +224,6 @@ updated reading-list TODO(grohan): is this the wrong output / outdated?
 Status    working
 Session   sess_c7d2f0a4e8
 Revision  sha256:3211e85fe81bd70aa74726d4ce0dc68d729d816826a21b62b18eb86074ff3317
-Inference Managed
 Model     telos/default
 Thinking  medium (requested)
 Context   personal
