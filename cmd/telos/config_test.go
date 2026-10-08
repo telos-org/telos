@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
 )
 
@@ -177,6 +178,33 @@ func TestCmdConfigShowsResolvedContextWithoutExposingToken(t *testing.T) {
 	for _, detail := range []string{"chatgpt-codex", "owner@example.com", "conn_1", "key_work"} {
 		if strings.Contains(out, detail) {
 			t.Fatalf("normal output contains connection detail %q: %q", detail, out)
+		}
+	}
+}
+
+func TestConfigReportListsManagedInferenceFirst(t *testing.T) {
+	for _, connections := range [][]cloud.InferenceConnection{
+		{},
+		{{Source: "byok", ID: "key_work", Name: "Work Anthropic", Status: "saved"}},
+	} {
+		out := captureStdout(t, func() {
+			printConfigReport(configReport{Authentication: "valid", Context: "personal", Connections: connections})
+		})
+		lines := strings.Split(out, "\n")
+		for index, line := range lines {
+			if strings.TrimSpace(line) != "Inference" {
+				continue
+			}
+			if index+1 >= len(lines) || strings.Join(strings.Fields(lines[index+1]), " ") != "telos Managed telos/default, telos/max" {
+				t.Fatalf("managed inference is not listed first:\n%s", out)
+			}
+			if len(connections) > 0 && !strings.Contains(lines[index+2], "Work Anthropic") {
+				t.Fatalf("saved sources do not follow managed inference:\n%s", out)
+			}
+			break
+		}
+		if !strings.Contains(out, "telos/default, telos/max") {
+			t.Fatalf("output has no managed inference row:\n%s", out)
 		}
 	}
 }
