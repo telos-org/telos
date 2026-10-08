@@ -2,147 +2,217 @@
 package executor
 
 import (
-	"bufio"
+	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"os"
 	"strings"
-	"time"
+	"sync"
+	"sync/atomic"
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 )
 
-// PiExecutor runs Pi as one PVG agent turn on the given LocalPlatform.
+// PiExecutor runs one Pi subprocess per PVG turn. Its initial settings are fixed
+// defaults; SetModel and SetThinkingLevel configure only the active invocation.
 type PiExecutor struct {
 	Platform *platform.LocalPlatform
 	Model    string
 	Thinking string
 	Timeout  int
-}
+	// BeforePrompt may configure this invocation before its first model request.
+	// It runs off the protocol reader and must not call ExecuteTurn recursively.
+	BeforePrompt    func(context.Context) error
+	ModelConfigPath string
 
-const piEnvPromptMaxBytes = 256 * 1024
+	mu     sync.Mutex
+	active *piRPC
+}
 
 // NewPiExecutor creates a new Pi executor.
 func NewPiExecutor(p *platform.LocalPlatform, model, thinking string, timeout int) *PiExecutor {
 	if thinking == "" {
 		thinking = "medium"
 	}
-	return &PiExecutor{
-		Platform: p,
-		Model:    model,
-		Thinking: thinking,
-		Timeout:  timeout,
-	}
+	return &PiExecutor{Platform: p, Model: model, Thinking: thinking, Timeout: timeout}
 }
 
-// ExecuteTurn runs one Pi agent turn.
-func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.TurnState) game.TurnResult {
-	var stats game.TurnStats
-	model, thinking := pe.Model, pe.Thinking
-	stats.Model = model
-	var agentError string
-	var taskPath string
+// ExecuteTurn runs one Pi invocation, including its tools and automatic retries.
+func (pe *PiExecutor) ExecuteTurn(task, role string, turnState *game.TurnState) game.TurnResult {
+	rpc := newPiRPC()
+	pe.mu.Lock()
+	if pe.active != nil {
+		pe.mu.Unlock()
+		return game.TurnResult{Role: role, Status: game.StatusContinue, Error: "pi_already_running"}
+	}
+	pe.active = rpc
+	pe.mu.Unlock()
+	defer func() {
+		pe.mu.Lock()
+		pe.active = nil
+		pe.mu.Unlock()
+	}()
+	extension, err := os.CreateTemp("", "telos-pi-models-*.mjs")
+	if err != nil {
+		return game.TurnResult{Role: role, Error: err.Error()}
+	}
+	defer os.Remove(extension.Name())
+	_, writeErr := extension.Write(piModelsExtension)
+	closeErr := extension.Close()
+	if writeErr != nil {
+		return game.TurnResult{Role: role, Error: writeErr.Error()}
+	}
+	if closeErr != nil {
+		return game.TurnResult{Role: role, Error: closeErr.Error()}
+	}
+	childEnv := map[string]string{
+		"TELOS_ROLE": role, "TELOS_PI_MODEL_CONFIG": pe.ModelConfigPath,
+		"TELOS_PI_MODEL_EXTENSION": extension.Name(),
+	}
+
 	var sessionPath string
-	var stopRequested func() bool
 	if turnState != nil {
-		taskPath = turnState.TaskPath()
 		sessionPath = turnState.PiSessionPath()
-		stopRequested = turnState.StopRequested
 	}
-
-	taskEnv := task
-	promptPath := ""
-	if taskPath != "" && len(task) > piEnvPromptMaxBytes {
-		promptPath = taskPath
-		taskEnv = ""
+	argv := BuildPiArgv(pe.Model, pe.Thinking, sessionPath)
+	stream := piStream{stats: game.TurnStats{Model: pe.Model}}
+	var protocolError string
+	var userStopped atomic.Bool
+	// Live projections are optional. Keep slow observers off the protocol reader;
+	// a full queue drops progress only, never completion, errors, or usage.
+	var liveEvents chan game.LiveAgentEvent
+	if turnState != nil && turnState.OnLiveEvent != nil {
+		liveEvents = make(chan game.LiveAgentEvent, 128)
+		liveDone := make(chan struct{})
+		defer func() { close(liveEvents); <-liveDone }()
+		go func() {
+			defer close(liveDone)
+			for event := range liveEvents {
+				turnState.OnLiveEvent(event)
+			}
+		}()
 	}
-	argv := BuildPiArgv(model, thinking, promptPath, sessionPath)
-	projector := startPiLiveProjector(sessionPath, turnState)
-	if projector != nil {
-		defer projector.Stop()
-	}
-	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, nil)
-
-	logs := strings.Join(result.RawLines, "\n")
-	if sessionPath != "" {
-		summary, err := ReadPiSession(sessionPath)
-		if err == nil {
-			logs = summary.Logs
-			stats = mergeTurnStats(stats, summary.Stats)
-			agentError = summary.Error
-		} else if result.ReturnCode == 0 && result.InfraError == "" {
-			return game.TurnResult{
-				Role:        role,
-				Status:      game.StatusContinue,
-				Logs:        fmt.Sprintf("pi_session_unavailable:%v", err),
-				Stats:       stats,
-				Error:       fmt.Sprintf("pi_session_unavailable:%v", err),
-				Recoverable: true,
+	promptDone := make(chan struct{})
+	go func() {
+		defer close(promptDone)
+		ctx, cancel := context.WithTimeout(context.Background(), piCommandTimeout)
+		defer cancel()
+		if pe.BeforePrompt != nil {
+			if err := pe.BeforePrompt(ctx); err != nil {
+				rpc.close(err)
+				return
 			}
 		}
+		data, err := rpc.call(ctx, "prompt", map[string]interface{}{"message": task})
+		if err == nil && len(data) > 0 {
+			var accepted struct{ Disposition string }
+			if err = json.Unmarshal(data, &accepted); err == nil && accepted.Disposition == "handled" {
+				err = fmt.Errorf("pi_prompt_handled: no agent run started")
+			}
+		}
+		if err != nil {
+			rpc.close(err)
+		}
+	}()
+	interrupt := func() bool {
+		if turnState != nil && turnState.StopRequested != nil && turnState.StopRequested() {
+			userStopped.Store(true)
+			return true
+		}
+		return rpc.shutdownExpired()
 	}
-
+	result := pe.Platform.RunWithStdin(argv,
+		childEnv, pe.Timeout, interrupt, rpc.start, func(line string) {
+			var record map[string]interface{}
+			if err := json.Unmarshal([]byte(line), &record); err != nil {
+				protocolError = fmt.Sprintf("pi_rpc_protocol: %v", err)
+				rpc.close(fmt.Errorf("%s", protocolError))
+				return
+			}
+			switch getString(record, "type") {
+			case "telos_pi_capabilities":
+				supported, _ := record["liveSettings"].(bool)
+				rpc.setLiveSettingsSupport(supported)
+			case "response":
+				rpc.respond(line)
+			case "message_end":
+				stream.message(record)
+				if liveEvents != nil {
+					for _, event := range piLineEvents(line) {
+						select {
+						case liveEvents <- event:
+						default:
+						}
+					}
+				}
+			case "agent_settled":
+				stream.settled = true
+				rpc.close(ErrPiNotRunning)
+			case "extension_ui_request":
+				switch getString(record, "method") {
+				case "setStatus":
+					if getString(record, "statusKey") == "telos-internal-settings" {
+						rpc.respond(getString(record, "statusText"))
+					}
+				case "select", "confirm", "input", "editor":
+					// Headless turns cannot answer dialogs. Match Pi's non-UI
+					// cancellation behavior without ever blocking its reader.
+					go func() {
+						ctx, cancel := context.WithTimeout(context.Background(), piCommandTimeout)
+						defer cancel()
+						_ = rpc.send(ctx, map[string]interface{}{"type": "extension_ui_response", "id": record["id"], "cancelled": true})
+					}()
+				}
+			}
+		})
+	rpc.close(ErrPiNotRunning)
+	<-promptDone
+	stream.stats.DurationMS = result.DurationMS
+	failure := func(reason string, recoverable bool) game.TurnResult {
+		return game.TurnResult{Role: role, Status: game.StatusContinue, Logs: reason,
+			Stats: stream.stats, Error: reason, Recoverable: recoverable}
+	}
+	if result.TimedOut {
+		return failure(fmt.Sprintf("local_timeout:%d", pe.Timeout), false)
+	}
+	if userStopped.Load() {
+		return failure("local_interrupted:stop_requested", false)
+	}
+	if protocolError != "" {
+		return failure(protocolError, true)
+	}
+	if cause := rpc.closedError(); cause != ErrPiNotRunning {
+		reason := cause.Error()
+		if stderr := strings.TrimSpace(result.Stderr); stderr != "" {
+			reason += "\n[stderr]\n" + stderr
+		}
+		return failure(reason, recoverableAgentFailure(reason))
+	}
+	if result.Interrupted {
+		reason := orDefault(stream.err, "pi_rpc_shutdown_timeout")
+		return failure(reason, recoverableAgentFailure(reason))
+	}
 	if result.InfraError != "" {
-		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        result.InfraError,
-			Stats:       stats,
-			Error:       result.InfraError,
-			Recoverable: !result.TimedOut && recoverableAgentFailure(result.InfraError),
-		}
+		return failure(result.InfraError, recoverableAgentFailure(result.InfraError))
 	}
-
-	stderrTrimmed := strings.TrimSpace(result.Stderr)
 	if result.ReturnCode != 0 {
-		reason := orDefault(agentError, fmt.Sprintf("pi_failed:%d", result.ReturnCode))
-		if agentError == "" && stderrTrimmed != "" {
-			reason = fmt.Sprintf("%s\n[stderr]\n%s", reason, stderrTrimmed)
+		reason := orDefault(stream.err, fmt.Sprintf("pi_failed:%d", result.ReturnCode))
+		if stderr := strings.TrimSpace(result.Stderr); stderr != "" {
+			reason += "\n[stderr]\n" + stderr
 		}
-		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        reason,
-			Stats:       stats,
-			Error:       reason,
-			Recoverable: recoverableAgentFailure(reason),
-		}
+		return failure(reason, recoverableAgentFailure(reason))
 	}
-
-	if agentError != "" {
-		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        agentError,
-			Stats:       stats,
-			Error:       agentError,
-			Recoverable: recoverableAgentFailure(agentError),
-		}
+	if stream.err != "" {
+		return failure(stream.err, recoverableAgentFailure(stream.err))
 	}
-
-	if strings.TrimSpace(logs) == "" {
-		detail := "Pi produced no assistant text."
-		if stderrTrimmed != "" {
-			detail = fmt.Sprintf("%s\n[stderr]\n%s", detail, stderrTrimmed)
-		}
-		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        detail,
-			Stats:       stats,
-			Error:       "agent_no_output",
-			Recoverable: true,
-		}
+	if !stream.settled {
+		return failure("pi_rpc_exited_before_settled", true)
 	}
-
-	return game.TurnResult{
-		Role:   role,
-		Status: game.ExtractStatus(logs),
-		Logs:   logs,
-		Stats:  stats,
+	if strings.TrimSpace(stream.logs) == "" {
+		return failure("agent_no_output", true)
 	}
+	return game.TurnResult{Role: role, Status: game.ExtractStatus(stream.logs), Logs: stream.logs, Stats: stream.stats}
 }
 
 func recoverableAgentFailure(errorText string) bool {
@@ -150,95 +220,30 @@ func recoverableAgentFailure(errorText string) bool {
 	return !blocked
 }
 
-type piLiveProjector struct {
-	sessionPath string
-	turnState   *game.TurnState
-	offset      int64
-	fileInfo    os.FileInfo
-	pending     []byte
-
-	stop chan struct{}
-	done chan struct{}
+// Only completed messages count toward text and usage. message_update contains
+// repeated partial snapshots. agent_end is not final: Pi may retry afterward.
+type piStream struct {
+	logs    string
+	stats   game.TurnStats
+	err     string
+	settled bool
 }
 
-func startPiLiveProjector(sessionPath string, turnState *game.TurnState) *piLiveProjector {
-	if sessionPath == "" || turnState == nil || turnState.OnLiveEvent == nil {
-		return nil
-	}
-	p := &piLiveProjector{
-		sessionPath: sessionPath,
-		turnState:   turnState,
-		stop:        make(chan struct{}),
-		done:        make(chan struct{}),
-	}
-	go p.watch()
-	return p
-}
-
-func (p *piLiveProjector) Stop() {
-	close(p.stop)
-	<-p.done
-	p.observeSessionFile(true)
-}
-
-func (p *piLiveProjector) watch() {
-	defer close(p.done)
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			p.observeSessionFile(false)
-		case <-p.stop:
-			return
-		}
-	}
-}
-
-func (p *piLiveProjector) observeSessionFile(final bool) {
-	f, err := os.Open(p.sessionPath)
-	if err != nil {
+func (stream *piStream) message(record map[string]interface{}) {
+	msg, ok := record["message"].(map[string]interface{})
+	if !ok {
 		return
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
-		return
+	switch getString(msg, "role") {
+	case "assistant":
+		stream.logs = assistantText(msg)
+		stream.err = errorFromPiMessage(msg)
+		// With multiple models, Model labels the last response; usage and cost
+		// are summed from the actual messages, including earlier models.
+		stream.stats = mergeTurnStats(stream.stats, statsFromPiMessage(msg))
+	case "toolResult", "bashExecution":
+		stream.stats.NumTurns++
 	}
-	if info.Size() < p.offset || (p.fileInfo != nil && !os.SameFile(p.fileInfo, info)) {
-		p.offset = 0
-		p.pending = nil
-	}
-	p.fileInfo = info
-	if p.offset < info.Size() {
-		// Read only new bytes, stopping at this poll's snapshot even if Pi keeps
-		// writing. Keep an unfinished record so idle polls don't reread it.
-		reader := bufio.NewReader(io.NewSectionReader(f, p.offset, info.Size()-p.offset))
-		for {
-			line, err := reader.ReadBytes('\n')
-			p.offset += int64(len(line))
-			p.pending = append(p.pending, line...)
-			if len(line) > 0 && line[len(line)-1] == '\n' {
-				p.emitPendingLine()
-			}
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return
-			}
-		}
-	}
-	if final && len(p.pending) > 0 {
-		p.emitPendingLine()
-	}
-}
-
-func (p *piLiveProjector) emitPendingLine() {
-	for _, event := range piLineEvents(string(p.pending)) {
-		p.turnState.OnLiveEvent(event)
-	}
-	p.pending = nil
 }
 
 func piLineEvents(line string) []game.LiveAgentEvent {
@@ -353,90 +358,29 @@ func (pe *PiExecutor) CheckpointWorkspace(dest string) bool {
 	return pe.Platform.CheckpointWorkspace(dest)
 }
 
-// BuildPiArgv builds the Pi command line.
-func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
+// Only live settings changes require this audited version. Older Pi releases
+// persist those commands as global defaults, but can still execute normal turns.
+const piLiveSettingsVersion = "1.0.4"
+
+// BuildPiArgv starts RPC mode. Prompts travel over stdin, so large tasks need
+// neither environment variables nor @file arguments (unsupported by Pi RPC).
+func BuildPiArgv(model, thinking, sessionPath string) []string {
 	script := `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; ` +
 		`if ! command -v pi >/dev/null 2>&1; then ` +
 		`for nvm_script in "${NVM_DIR:-}/nvm.sh" "$HOME/.nvm/nvm.sh" "/usr/local/nvm/nvm.sh"; do ` +
-		`[ -s "$nvm_script" ] || continue; ` +
-		`. "$nvm_script"; ` +
-		`break; ` +
-		`done; ` +
-		`fi; ` +
-		fmt.Sprintf(`prompt="${%s}"; `, platform.TaskEnvVar) +
-		`if [ -n "${3:-}" ]; then prompt="$3"; fi; ` +
+		`[ -s "$nvm_script" ] || continue; . "$nvm_script"; break; done; fi; ` +
+		`pi_version="$(pi --version 2>/dev/null)" || pi_version=""; ` +
+		`live_settings=false; if [ "$pi_version" = "$4" ]; then live_settings=true; fi; ` +
+		`printf '{"type":"telos_pi_capabilities","liveSettings":%s}\n' "$live_settings"; ` +
+		`model="$1"; thinking="$2"; session="${3:-}"; ` +
+		`set -- --mode rpc --model "$model" --thinking "$thinking"; ` +
+		`if [ -n "$session" ]; then set -- "$@" --session "$session"; else set -- "$@" --no-session; fi; ` +
+		`if [ -n "${TELOS_PI_MODEL_EXTENSION:-}" ]; then set -- "$@" --extension "$TELOS_PI_MODEL_EXTENSION"; fi; ` +
 		`append_prompt="${TELOS_PI_APPEND_SYSTEM_PROMPT:-}"; ` +
-		`append_file=""; ` +
-		`if [ -n "$append_prompt" ]; then append_file="$(mktemp)"; printf '%s' "$append_prompt" > "$append_file"; fi; ` +
-		`if [ -n "${4:-}" ]; then ` +
-		`if [ -n "$append_file" ]; then exec pi --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --session "$4" -p "$prompt"; fi; ` +
-		`exec pi --mode text --model "$1" --thinking "$2" --session "$4" -p "$prompt"; ` +
-		`fi; ` +
-		`if [ -n "$append_file" ]; then exec pi --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --no-session -p "$prompt"; fi; ` +
-		`exec pi --mode text --model "$1" --thinking "$2" --no-session -p "$prompt"`
-	argv := []string{"sh", "-c", script, "pi", model, thinking}
-	if taskPath != "" {
-		argv = append(argv, "@"+taskPath)
-	} else if sessionPath != "" {
-		argv = append(argv, "")
-	}
-	if sessionPath != "" {
-		argv = append(argv, sessionPath)
-	}
-	return argv
-}
-
-// -- Pi session parsing -------------------------------------------------------
-
-type PiSessionSummary struct {
-	Logs  string
-	Stats game.TurnStats
-	Error string
-}
-
-// ReadPiSession reads Pi's compact session JSONL file for a completed turn.
-func ReadPiSession(path string) (PiSessionSummary, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return PiSessionSummary{}, err
-	}
-	defer f.Close()
-
-	var summary PiSessionSummary
-	var finalAssistant map[string]interface{}
-	reader := bufio.NewReader(f)
-	for {
-		line, err := reader.ReadString('\n')
-		if strings.TrimSpace(line) != "" {
-			var entry map[string]interface{}
-			dec := json.NewDecoder(strings.NewReader(line))
-			dec.UseNumber()
-			if dec.Decode(&entry) == nil {
-				if msg, ok := entry["message"].(map[string]interface{}); ok {
-					switch getString(msg, "role") {
-					case "assistant":
-						finalAssistant = msg
-						summary.Stats = mergeTurnStats(summary.Stats, statsFromPiMessage(msg))
-					case "toolResult", "bashExecution":
-						summary.Stats.NumTurns++
-					}
-				}
-			}
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return PiSessionSummary{}, err
-		}
-	}
-	if finalAssistant == nil {
-		return PiSessionSummary{}, fmt.Errorf("no assistant message in pi session")
-	}
-
-	summary.Logs = assistantText(finalAssistant)
-	summary.Error = errorFromPiMessage(finalAssistant)
-	return summary, nil
+		`if [ -n "$append_prompt" ]; then append_file="$(mktemp)"; printf '%s' "$append_prompt" > "$append_file"; ` +
+		`set -- "$@" --append-system-prompt "$append_file"; fi; ` +
+		`exec pi "$@"`
+	return []string{"sh", "-c", script, "pi", model, thinking, sessionPath, piLiveSettingsVersion}
 }
 
 func assistantText(msg map[string]interface{}) string {
@@ -482,7 +426,14 @@ func errorFromPiMessage(msg map[string]interface{}) string {
 	if getString(msg, "stopReason") == "length" {
 		return "agent_output_truncated:length"
 	}
-	return extractMessageError(msg)
+	if message := getString(msg, "errorMessage"); message != "" {
+		return message
+	}
+	switch getString(msg, "stopReason") {
+	case "error", "aborted":
+		return "agent_failed:" + getString(msg, "stopReason")
+	}
+	return ""
 }
 
 func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
@@ -493,30 +444,10 @@ func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
 	base.OutputTokens += extra.OutputTokens
 	base.CacheReadTokens += extra.CacheReadTokens
 	base.CacheCreationTokens += extra.CacheCreationTokens
-	if base.Model == "" {
+	if extra.Model != "" {
 		base.Model = extra.Model
 	}
 	return base
-}
-
-func extractMessageError(msg map[string]interface{}) string {
-	em := getString(msg, "errorMessage")
-	if em == "" {
-		return ""
-	}
-	if isTransientError(em) {
-		return ""
-	}
-	return em
-}
-
-func isTransientError(err string) bool {
-	for _, t := range []string{"overloaded_error", "rate_limit_error", "api_error"} {
-		if strings.Contains(err, t) {
-			return true
-		}
-	}
-	return false
 }
 
 func getString(m map[string]interface{}, key string) string {

@@ -52,6 +52,17 @@ func NewLocalPlatform(workspace string) *LocalPlatform {
 
 // Run executes a command in the workspace.
 func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, timeout int, interrupt InterruptRequested, onLine OnStdoutLine) *CommandResult {
+	return p.run(argv, task, env, timeout, interrupt, nil, onLine)
+}
+
+// RunWithStdin gives onStart the running child's stdin. Stdout is delivered to
+// onLine instead of being retained in RawLines. The reader and timeout are active
+// before onStart runs; closing stdin requests an orderly child shutdown.
+func (p *LocalPlatform) RunWithStdin(argv []string, env map[string]string, timeout int, interrupt InterruptRequested, onStart func(io.WriteCloser), onLine OnStdoutLine) *CommandResult {
+	return p.run(argv, "", env, timeout, interrupt, onStart, onLine)
+}
+
+func (p *LocalPlatform) run(argv []string, task string, env map[string]string, timeout int, interrupt InterruptRequested, onStart func(io.WriteCloser), onLine OnStdoutLine) *CommandResult {
 	result := &CommandResult{}
 	started := time.Now()
 
@@ -74,6 +85,17 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 	cmd.Dir = p.Workspace
 	cmd.Env = mergedEnv
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+
+	var stdin io.WriteCloser
+	if onStart != nil {
+		var err error
+		stdin, err = cmd.StdinPipe()
+		if err != nil {
+			result.InfraError = fmt.Sprintf("stdin_pipe: %v", err)
+			return result
+		}
+		defer stdin.Close()
+	}
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -105,7 +127,9 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 					line := strings.TrimRight(lineBuf[:idx], "\r")
 					lineBuf = lineBuf[idx+1:]
 					if line != "" {
-						result.RawLines = append(result.RawLines, line)
+						if onStart == nil {
+							result.RawLines = append(result.RawLines, line)
+						}
 						if onLine != nil {
 							onLine(line)
 						}
@@ -114,7 +138,9 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 			}
 			if err != nil {
 				if lineBuf != "" {
-					result.RawLines = append(result.RawLines, lineBuf)
+					if onStart == nil {
+						result.RawLines = append(result.RawLines, lineBuf)
+					}
 					if onLine != nil {
 						onLine(lineBuf)
 					}
@@ -154,6 +180,9 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 		}()
 	}
 
+	if onStart != nil {
+		onStart(stdin)
+	}
 	<-stdoutDone
 	err = cmd.Wait()
 	if timer != nil {

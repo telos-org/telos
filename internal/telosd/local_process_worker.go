@@ -44,5 +44,8 @@ func (s localProcessSubstrate) Wake(session *sessionapi.Session, wakeReason stri
 	if sessionDir == "" {
 		return sessionworker.ErrWorkerNotRunning
 	}
+	if wakeReason == "inference_updated" {
+		return sessionworker.NotifyInference(sessionDir)
+	}
 	return sessionworker.Wake(sessionDir)
 }

@@ -31,6 +31,7 @@ type LocalRunConfig struct {
 	ParentSessionID *string
 	Workspace       string
 	Model           string
+	ModelDefinition json.RawMessage
 	Thinking        string
 	Until           int
 	UntilSeconds    int
@@ -168,8 +169,18 @@ func RunLocalSession(sessionDir string) (*game.PVGResult, error) {
 	return RunLocalSessionWithExecutor(sessionDir, nil)
 }
 
+// RunLocalSessionWithNotifications accepts settings notifications from the
+// process that owns this session's runner lock.
+func RunLocalSessionWithNotifications(sessionDir string, notifications <-chan struct{}) (*game.PVGResult, error) {
+	return runLocalSession(sessionDir, nil, notifications)
+}
+
 // RunLocalSessionWithExecutor runs a session with an optional custom executor.
 func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*game.PVGResult, error) {
+	return runLocalSession(sessionDir, exec, nil)
+}
+
+func runLocalSession(sessionDir string, exec game.AgentExecutor, notifications <-chan struct{}) (*game.PVGResult, error) {
 	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
 	if err != nil {
 		return nil, fmt.Errorf("read session manifest: %w", err)
@@ -234,6 +245,10 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 			}
 			return nil, err
 		}
+	}
+
+	if pi, ok := agentExec.(*executor.PiExecutor); ok {
+		agentExec = &sessionInferenceExecutor{sessionDir: sessionDir, pi: pi, notifications: notifications}
 	}
 
 	pvgCfg := game.PVGConfig{
@@ -317,8 +332,14 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 	if model == "" {
 		model = DefaultLocalModel
 	}
-	if err := validatePiModel(model); err != nil {
-		return nil, err
+	var modelErr error
+	if len(cfg.ModelDefinition) > 0 {
+		modelErr = (sessionapi.InferenceUpdateRequest{RequestID: "startup", Model: &model, ModelDefinition: cfg.ModelDefinition}).Validate()
+	} else {
+		modelErr = validatePiModel(model)
+	}
+	if modelErr != nil {
+		return nil, modelErr
 	}
 	thinking := cfg.Thinking
 	if thinking == "" {
@@ -518,23 +539,31 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		thinking = DefaultLocalThinking
 	}
 	sessionKind := localSessionKind(cfg)
+	definition := cfg.ModelDefinition
+	if len(definition) == 0 && cfg.ParentSessionID != nil && filepath.Base(*cfg.ParentSessionID) == *cfg.ParentSessionID {
+		parent, err := sessionapi.ReadManifest(filepath.Join(filepath.Dir(sessionDir), *cfg.ParentSessionID, "session.json"))
+		if err == nil && parent.Config.Model == model {
+			definition = parent.InferenceModelDefinition
+		}
+	}
 
 	manifestPath := filepath.Join(sessionDir, "session.json")
 	err := sessionapi.WriteInitialManifest(manifestPath, sessionapi.InitialManifest{
-		SessionID:          filepath.Base(sessionDir),
-		SessionKind:        sessionKind,
-		Runtime:            sessionapi.RuntimeLocal,
-		CreatedAt:          time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		Launcher:           "local",
-		ParentSessionID:    cfg.ParentSessionID,
-		SourceSpecPath:     &sourceSpecPath,
-		SessionSpecPath:    &sessionSpecPath,
-		SpecName:           compiled.Environment.Name,
-		CurrentRevision:    currentRevision,
-		CurrentSpecVersion: currentSpecVersion,
-		SpecVersions:       specVersions,
-		PackageDigest:      packageDigest,
-		ApplyPackageLock:   applyPackageLock,
+		SessionID:                filepath.Base(sessionDir),
+		SessionKind:              sessionKind,
+		Runtime:                  sessionapi.RuntimeLocal,
+		CreatedAt:                time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		Launcher:                 "local",
+		ParentSessionID:          cfg.ParentSessionID,
+		InferenceModelDefinition: definition,
+		SourceSpecPath:           &sourceSpecPath,
+		SessionSpecPath:          &sessionSpecPath,
+		SpecName:                 compiled.Environment.Name,
+		CurrentRevision:          currentRevision,
+		CurrentSpecVersion:       currentSpecVersion,
+		SpecVersions:             specVersions,
+		PackageDigest:            packageDigest,
+		ApplyPackageLock:         applyPackageLock,
 		Config: sessionapi.SessionConfig{
 			Model:           model,
 			Until:           cfg.Until,
@@ -567,6 +596,7 @@ func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	cfg := manifest.Config
 	lrc := LocalRunConfig{
 		Model:           cfg.Model,
+		ModelDefinition: manifest.InferenceModelDefinition,
 		Thinking:        cfg.Thinking,
 		Until:           cfg.Until,
 		UntilSeconds:    cfg.UntilSeconds,

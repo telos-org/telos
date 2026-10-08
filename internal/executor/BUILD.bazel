@@ -1,9 +1,16 @@
 load("@rules_go//go:def.bzl", "go_library", "go_test")
 
+exports_files(["testdata/pi_offline_provider.js"], visibility = ["//internal/cli:__pkg__"])
+
 go_library(
     name = "executor",
-    srcs = ["pi.go"],
+    srcs = [
+        "pi.go",
+        "pi_models.go",
+        "pi_rpc.go",
+    ],
     importpath = "github.com/telos-org/telos/internal/executor",
+    embedsrcs = ["pi_models.js"],
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/game",
@@ -13,7 +20,17 @@ go_library(
 
 go_test(
     name = "executor_test",
-    srcs = ["pi_test.go"],
+    srcs = [
+        "pi_integration_test.go",
+        "pi_models_test.go",
+        "pi_offline_test.go",
+        "pi_rpc_test.go",
+        "pi_test.go",
+    ],
+    data = ["testdata/pi_offline_provider.js"],
     embed = [":executor"],
-    deps = ["//internal/game"],
+    deps = [
+        "//internal/game",
+        "//internal/platform",
+    ],
 )

@@ -31,13 +31,13 @@ func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	wake := make(chan os.Signal, 1)
 	signal.Notify(wake, syscall.SIGUSR1)
 	defer signal.Stop(wake)
-	return runSessionWorker(sessionDir, once, cli.RunLocalSession, wake, stop)
+	return runSessionWorker(sessionDir, once, cli.RunLocalSessionWithNotifications, wake, stop)
 }
 
 func runSessionWorker(
 	sessionDir string,
 	once bool,
-	runSession func(string) (*game.PVGResult, error),
+	runSession func(string, <-chan struct{}) (*game.PVGResult, error),
 	wake <-chan os.Signal,
 	stop <-chan os.Signal,
 ) (int, error) {
@@ -51,6 +51,8 @@ func runSessionWorker(
 	defer wakeParent(sessionDir)
 	defer clearRunner(sessionDir, os.Getpid())
 	defer owner.Release()
+	defer sessionapi.SettleInferenceUpdate(filepath.Join(sessionDir, "session.json"), "session worker exited before confirming the change")
+	defer owner.StopNotifications()
 
 	failures := 0
 	for {
@@ -60,14 +62,19 @@ func runSessionWorker(
 		}
 		root := manifest.Kind == sessionapi.KindController
 		desired := manifest.Desired
-		result, err := runSession(sessionDir)
+		result, err := runSession(sessionDir, owner.Inference)
+		if err != nil || (result != nil && result.GameResult != game.GameSuccess) {
+			if settleErr := sessionapi.SettleInferenceUpdate(filepath.Join(sessionDir, "session.json"), "session cycle failed before confirming the change"); settleErr != nil {
+				return 1, errors.Join(err, settleErr)
+			}
+		}
 		if err != nil {
 			if !root || once {
 				return 1, err
 			}
 			fmt.Fprintf(os.Stderr, "root session cycle failed: %v\n", err)
 			failures++
-			if waitForNextCycle(wake, stop, jitteredFailureBackoff(failures)) {
+			if waitForNextSessionCycle(sessionDir, wake, stop, owner.Inference, jitteredFailureBackoff(failures)) {
 				return 0, nil
 			}
 			continue
@@ -88,7 +95,7 @@ func runSessionWorker(
 				fmt.Fprintf(os.Stderr, "root session agent suspended: %s\n", result.Error)
 				logControllerSuspended(sessionDir, blockerCode, result.Error)
 				failures = 0
-				if waitForNextCycle(wake, stop, 0) {
+				if waitForNextSessionCycle(sessionDir, wake, stop, owner.Inference, 0) {
 					return 0, nil
 				}
 				continue
@@ -99,7 +106,7 @@ func runSessionWorker(
 			} else {
 				fmt.Fprintf(os.Stderr, "root session cycle failed: %s\n", result.GameResult)
 			}
-			if waitForNextCycle(wake, stop, jitteredFailureBackoff(failures)) {
+			if waitForNextSessionCycle(sessionDir, wake, stop, owner.Inference, jitteredFailureBackoff(failures)) {
 				return 0, nil
 			}
 			continue
@@ -119,7 +126,7 @@ func runSessionWorker(
 				continue
 			}
 		}
-		if waitForNextCycle(wake, stop, controllerInterval(manifest.Interval)) {
+		if waitForNextSessionCycle(sessionDir, wake, stop, owner.Inference, controllerInterval(manifest.Interval)) {
 			return 0, nil
 		}
 	}
@@ -251,23 +258,32 @@ func logControllerSuspended(sessionDir, blockerCode, errorText string) {
 }
 
 func waitForNextCycle(wake <-chan os.Signal, stop <-chan os.Signal, delay time.Duration) bool {
-	if delay <= 0 {
+	return waitForNextSessionCycle("", wake, stop, nil, delay)
+}
+
+func waitForNextSessionCycle(sessionDir string, wake <-chan os.Signal, stop <-chan os.Signal, inference <-chan struct{}, delay time.Duration) bool {
+	var deadline <-chan time.Time
+	if delay > 0 {
+		timer := time.NewTimer(delay)
+		defer timer.Stop()
+		deadline = timer.C
+	}
+	for {
+		if sessionDir != "" {
+			m, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
+			if err == nil && m.InferenceUpdate != nil && m.InferenceUpdate.Status == "pending" {
+				return stopRequested(stop)
+			}
+		}
 		select {
 		case <-wake:
 			return false
 		case <-stop:
 			return true
+		case <-deadline:
+			return false
+		case <-inference:
 		}
-	}
-	timer := time.NewTimer(delay)
-	defer timer.Stop()
-	select {
-	case <-timer.C:
-		return false
-	case <-wake:
-		return false
-	case <-stop:
-		return true
 	}
 }
 

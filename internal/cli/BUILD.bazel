@@ -6,6 +6,7 @@ go_library(
         "agent_executor_default.go",
         "agent_executor_testfake.go",
         "localrun.go",
+        "inference.go",
         "workspace.go",
     ],
     importpath = "github.com/telos-org/telos/internal/cli",
@@ -23,11 +24,14 @@ go_library(
 go_test(
     name = "cli_test",
     srcs = [
+        "inference_test.go",
         "localrun_test.go",
         "workspace_test.go",
     ],
     embed = [":cli"],
+    data = ["//internal/executor:testdata/pi_offline_provider.js"],
     deps = [
+        "//internal/executor",
         "//internal/game",
         "//internal/platform",
         "//internal/sessionapi",

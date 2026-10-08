@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -44,12 +45,20 @@ func newControllerReconciler(
 	if base.OnSpecUpdate == nil {
 		base.OnSpecUpdate = sessionupdate.ProjectSpecUpdate
 	}
-	return &controllerReconciler{
+	reconciler := &controllerReconciler{
 		FileStore:    base,
 		substrate:    substrate,
 		materializer: materializer,
 		defaults:     defaults,
 	}
+	base.OnInferenceUpdate = func(id string) error {
+		session, err := base.Get(id)
+		if err != nil {
+			return err
+		}
+		return reconciler.wake(session, "inference_updated")
+	}
+	return reconciler
 }
 
 func (s *controllerReconciler) Create(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
@@ -225,6 +234,24 @@ func (s *controllerReconciler) Stop(id string) (*sessionapi.Session, error) {
 }
 
 func (s *controllerReconciler) applyCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.SessionCreateRequest {
+	parent := os.Getenv("TELOS_SESSION_ID")
+	if req.ParentSessionID != nil {
+		parent = *req.ParentSessionID
+	}
+	if parent != "" && filepath.Base(parent) == parent {
+		m, err := sessionapi.ReadManifest(filepath.Join(s.Root, parent, "session.json"))
+		if err == nil {
+			if req.Model == "" {
+				req.Model = m.Config.Model
+			}
+			if req.Thinking == "" {
+				req.Thinking = m.Config.Thinking
+			}
+			if req.Model == m.Config.Model {
+				req.ModelDefinition = m.InferenceModelDefinition
+			}
+		}
+	}
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = s.defaults.Model
 	}
