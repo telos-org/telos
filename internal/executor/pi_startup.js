@@ -46,6 +46,8 @@ export default async function (pi) {
         throw new Error("Pi did not accept the requested inference connection");
       }
       report(undefined, config.model, thinking);
+      process.env.TELOS_THINKING = thinking;
+      process.env.TELOS_INHERITED_THINKING = thinking;
     } catch (error) {
       // Pi swallows extension errors. Even if the receipt cannot be written,
       // validation failure must terminate before the prompt is dispatched.
