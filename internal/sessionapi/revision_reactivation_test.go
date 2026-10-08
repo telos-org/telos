@@ -227,3 +227,204 @@ func TestReactivationRejectsHistoricalPackageContentChanges(t *testing.T) {
 		t.Fatalf("changed historical spec must conflict: %v", err)
 	}
 }
+
+func TestReactivationRecoversAfterManifestWriteFailure(t *testing.T) {
+	for _, scenario := range []string{"same package", "missing metadata", "damaged package", "different historical package", "current package"} {
+		t.Run(scenario, func(t *testing.T) {
+			root, packageRoot := t.TempDir(), t.TempDir()
+			store := sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+			store.PackageRoot = packageRoot
+			packages := []*spec.ApplyPackage{
+				writeTestApplyPackage(t, packageRoot, "probe", "alpha", "0.1.0"),
+				writeTestApplyPackage(t, packageRoot, "probe", "beta", "0.1.1"),
+				writeTestApplyPackage(t, packageRoot, "probe", "gamma", "0.1.2"),
+			}
+			var result *sessionapi.SessionSpecUpdateResponse
+			for _, pkg := range packages {
+				var err error
+				result, err = store.UpdateSpec("probe", sessionapi.SessionSpecUpdateRequest{PackageDigest: pkg.Digest})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			sessionDir := filepath.Join(root, result.Session.SessionID)
+			manifestPath := filepath.Join(sessionDir, "session.json")
+			read := func(path string) string {
+				t.Helper()
+				data, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return string(data)
+			}
+			before := read(manifestPath)
+			committed := make(map[string]string)
+			for _, version := range []string{"0.1.0", "0.1.1", "0.1.2"} {
+				dir := filepath.Join(sessionDir, "revisions", version)
+				if err := filepath.WalkDir(dir, func(path string, entry os.DirEntry, err error) error {
+					if err != nil {
+						return err
+					}
+					if !entry.IsDir() {
+						committed[path] = read(path)
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var events []sessionapi.SpecUpdateEvent
+			store.OnSpecUpdate = func(event sessionapi.SpecUpdateEvent) { events = append(events, event) }
+			if err := os.Mkdir(manifestPath+".tmp", 0o700); err != nil {
+				t.Fatal(err)
+			}
+			_, err := store.UpdateSpec("probe", sessionapi.SessionSpecUpdateRequest{PackageDigest: packages[0].Digest})
+			if err == nil || !strings.Contains(err.Error(), "session.json.tmp") {
+				t.Fatalf("expected manifest write failure, got %v", err)
+			}
+			if read(manifestPath) != before || len(events) != 0 {
+				t.Fatal("failed update committed history or emitted an event")
+			}
+			currentSpec, _, err := spec.ApplyPackageSpec(packages[2].Bytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if read(*result.Session.SessionSpecPath) != string(currentSpec) {
+				t.Error("failed update left uncommitted spec active")
+			}
+			if err := os.Remove(manifestPath + ".tmp"); err != nil {
+				t.Fatal(err)
+			}
+			activationDir := filepath.Join(sessionDir, "revisions", "activations", "4")
+			target := packages[0]
+			switch scenario {
+			case "missing metadata":
+				if err := os.Remove(filepath.Join(activationDir, "revision.json")); err != nil {
+					t.Fatal(err)
+				}
+			case "damaged package":
+				if err := os.WriteFile(filepath.Join(activationDir, "package", "skills", "alpha", "SKILL.md"), []byte("damaged"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "different historical package":
+				target = packages[1]
+			case "current package":
+				target = packages[2]
+			}
+			// A process crash can leave the active link ahead of the saved manifest.
+			currentLink := filepath.Join(sessionDir, "revisions", "current")
+			if err := os.Remove(currentLink); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(filepath.Join("activations", "4"), currentLink); err != nil {
+				t.Fatal(err)
+			}
+			store = sessionapi.NewFileStore(root, sessionapi.RuntimeCloud)
+			store.PackageRoot = packageRoot
+			store.OnSpecUpdate = func(event sessionapi.SpecUpdateEvent) { events = append(events, event) }
+			result, err = store.UpdateSpec("probe", sessionapi.SessionSpecUpdateRequest{PackageDigest: target.Digest})
+			if err != nil {
+				t.Fatalf("retry after clearing manifest fault: %v", err)
+			}
+			manifest, err := sessionapi.ReadManifest(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if scenario == "current package" {
+				if result.Operation != "unchanged" || read(manifestPath) != before || len(events) != 0 {
+					t.Fatal("current-package retry changed committed history or emitted an event")
+				}
+			} else if result.Operation != "updated" || *manifest.CurrentSpecVersion != 4 || len(manifest.SpecVersions) != 4 || len(events) != 1 {
+				t.Fatalf("retry did not commit exactly one update: %#v, events=%d", manifest, len(events))
+			}
+			if len(events) == 1 {
+				event := events[0]
+				if event.PreviousSpecVersion != 3 || event.CurrentSpecVersion != 4 || event.PreviousPackageDigest != packages[2].Digest || event.CurrentPackageDigest != target.Digest {
+					t.Fatalf("retry recorded the wrong transition: %#v", event)
+				}
+				diff := read(event.DiffPath)
+				if !strings.HasPrefix(diff, "--- "+event.PreviousSpecPath+"\n+++ "+event.CurrentSpecPath+"\n") || !strings.Contains(diff, "-version: 0.1.2") {
+					t.Fatalf("retry recorded the wrong diff: %s", diff)
+				}
+			}
+			expectedSpec, _, err := spec.ApplyPackageSpec(target.Bytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if *manifest.PackageDigest != target.Digest {
+				t.Fatal("retry committed the wrong package")
+			}
+			for _, path := range []string{*manifest.SessionSpecPath, *manifest.SourceSpecPath, filepath.Join(sessionDir, "package", "SPEC.md")} {
+				if read(path) != string(expectedSpec) {
+					t.Fatalf("retry left incorrect spec at %s", path)
+				}
+			}
+			for skill := range target.Manifest.Skills {
+				if !strings.Contains(read(filepath.Join(sessionDir, "package", "skills", skill, "SKILL.md")), "Use "+skill+".") {
+					t.Fatal("retry reused damaged or mismatched package contents")
+				}
+			}
+			for path, contents := range committed {
+				if read(path) != contents {
+					t.Fatalf("retry changed committed history at %s", path)
+				}
+			}
+		})
+	}
+}
+
+func TestReactivationDoesNotReplaceDirectoryReferencedByHistory(t *testing.T) {
+	for _, field := range []string{"spec_path", "package_path", "package_spec_path", "diff_path"} {
+		t.Run(field, func(t *testing.T) {
+			store := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+			store.PackageRoot = t.TempDir()
+			first := writeTestApplyPackage(t, store.PackageRoot, "probe", "alpha", "0.1.0")
+			second := writeTestApplyPackage(t, store.PackageRoot, "probe", "beta", "0.1.1")
+			created, err := store.UpdateSpec("probe", sessionapi.SessionSpecUpdateRequest{PackageDigest: first.Digest})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.UpdateSpec("probe", sessionapi.SessionSpecUpdateRequest{PackageDigest: second.Digest}); err != nil {
+				t.Fatal(err)
+			}
+			sessionDir := filepath.Join(store.Root, created.Session.SessionID)
+			manifestPath := filepath.Join(sessionDir, "session.json")
+			manifest, err := sessionapi.ReadManifest(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			fileName := "SPEC.md"
+			if field == "package_spec_path" {
+				fileName = filepath.Join("package", "SPEC.md")
+			} else if field == "diff_path" {
+				fileName = "spec.diff"
+			}
+			protectedSpecPath := filepath.Join(sessionDir, "revisions", "activations", "3", fileName)
+			if err := os.MkdirAll(filepath.Dir(protectedSpecPath), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			contents, _, err := spec.ApplyPackageSpec(first.Bytes)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(protectedSpecPath, contents, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			manifest.SpecVersions[0][field] = protectedSpecPath
+			if field == "package_path" {
+				manifest.SpecVersions[0][field] = filepath.Dir(protectedSpecPath)
+			}
+			if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
+				t.Fatal(err)
+			}
+			_, err = store.UpdateSpec("probe", sessionapi.SessionSpecUpdateRequest{PackageDigest: first.Digest})
+			if !errors.Is(err, sessionapi.ErrConflict) || !strings.Contains(err.Error(), "committed history") {
+				t.Fatalf("expected committed history conflict, got %v", err)
+			}
+			actual, err := os.ReadFile(protectedSpecPath)
+			if err != nil || string(actual) != string(contents) {
+				t.Fatalf("committed revision was changed: %s, %v", actual, err)
+			}
+		})
+	}
+}
