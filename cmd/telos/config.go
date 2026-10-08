@@ -163,7 +163,7 @@ func printConfigReport(report configReport) {
 		fmt.Fprintf(w, "Thinking override\t%s (TELOS_THINKING)\n", report.ThinkingOverride)
 	}
 	if report.Authentication == "valid" {
-		fmt.Fprintln(w, "API keys and subscriptions")
+		fmt.Fprintln(w, "Inference")
 		for _, connection := range report.Connections {
 			fmt.Fprintf(w, "  %s\t%s\t%s\n", connection.Name, inferenceSourceLabel(connection.Source), connection.Status)
 		}

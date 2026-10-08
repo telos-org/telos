@@ -45,7 +45,7 @@ func selectInferenceConnection(connections []cloud.InferenceConnection, model st
 		return cloud.InferenceConnection{}, "", fmt.Errorf("no saved API key or subscription matches --model %q; run `telos config` to list them", model)
 	}
 	if len(matches) > 1 {
-		return cloud.InferenceConnection{}, "", fmt.Errorf("--model %q is ambiguous: more than one saved API key or subscription matches it; rename them at %s so each name is unique", model, inferenceSettingsURL)
+		return cloud.InferenceConnection{}, "", fmt.Errorf("--model %q matches more than one saved API key or subscription; rename them at %s so each name is unique", model, inferenceSettingsURL)
 	}
 	connection := matches[0]
 	modelID := strings.TrimPrefix(model, connection.Name+"/")

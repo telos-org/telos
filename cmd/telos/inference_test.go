@@ -224,7 +224,7 @@ func TestCloudInferenceRejectsAmbiguityAndPreservesModelSlashes(t *testing.T) {
 		{ID: "slash", Name: "Work/Router", Source: "byok"},
 	}
 	for _, model := range []string{"Work/model", "Work/Router/vendor/model"} {
-		if _, _, err := selectInferenceConnection(connections, model); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		if _, _, err := selectInferenceConnection(connections, model); err == nil || !strings.Contains(err.Error(), "matches more than one") {
 			t.Fatalf("selector %q: %v", model, err)
 		}
 	}
