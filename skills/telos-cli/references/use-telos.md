@@ -57,11 +57,13 @@ To validate your signed-in configuration, run:
 
 ```console
 $ telos config
-Config file     ~/.telos/config.yaml
-Endpoint        https://api.usetelos.ai
-Authentication  valid
-Context         personal
-Workspace model telos/default
+Config file      ~/.telos/config.yaml
+Endpoint         https://api.usetelos.ai
+Authentication   valid
+Context          personal
+Workspace model  telos/default
+Inference
+  telos  Managed  telos/default, telos/max
 ```
 
 Congratulations! You are now ready to run your Goals on Telos.
@@ -101,14 +103,11 @@ Once you are happy with the goal specification, `telos plan` validates the spec 
 ```console
 $ telos plan SPEC.md
 Spec      reading-list
-Target    cloud
+Version   0.1.0
 Context   personal
-Path      /Users/alice/reading-list/SPEC.md TODO(grohan): is this really needed?
-Namespace ns-reading-list TODO(grohan): seems false now?
-Hash      799e5c31172afb26 TODO(grohan): is this really needed?
 ```
 
-The first plan has no deployed version to compare against, so it shows the Goal identity, context, and content hash.
+The first plan has no deployed version to compare against, so it shows the Goal's name, version, and context.
 
 ## Apply it
 
@@ -120,11 +119,11 @@ created reading-list
 
 Status    working
 Session   sess_c7d2f0a4e8
-Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
+Revision  sha256:8f21c47a91ee
 Model     telos/default
-Thinking  medium (requested)
+Thinking  medium
 Context   personal
-Logs      telos logs --context personal sess_c7d2f0a4e8
+Logs      telos logs sess_c7d2f0a4e8
 ```
 
 The `apply` command returns immediately and launches a session in the cloud.
@@ -137,7 +136,8 @@ For a one-line overview of all running Goals:
 
 ```console
 $ telos list
-TODO(grohan): need example
+NAME          STATUS   SESSION
+reading-list  working  sess_c7d2f0a4e8
 ```
 
 For a description of a specific Goal, run `telos describe sess_c7d2f0a4e8`.
@@ -148,7 +148,12 @@ To follow the agent's work in detail:
 
 ```console
 $ telos logs sess_c7d2f0a4e8
-TODO(grohan): need example
+...
+[2026-10-08T17:02:11Z] [INFO] Working on the spec requirements
+[2026-10-08T17:06:48Z] [INFO] Stood up POST /books and GET /books per goal requirements
+[2026-10-08T17:11:23Z] [INFO] Stored the reading list in PostgreSQL backed by persistent storage
+[2026-10-08T17:14:05Z] [INFO] Checking the result against the spec
+...
 ```
 
 `telos list` and `telos describe` report one of four statuses. When a Goal needs attention or has stopped, `describe` also shows why. Here's how to interpret them:
@@ -162,16 +167,14 @@ TODO(grohan): need example
 
 When the system is done working, `describe` reports the accepted Goal as `ready` and exposes a public handle.
 
-TODO(grohan): I think too much slop output in here as well!
-
 ```console
 $ telos describe sess_c7d2f0a4e8
 Name      reading-list
 Status    ready
 Session   sess_c7d2f0a4e8
-Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
+Revision  sha256:8f21c47a91ee
 Model     telos/default
-Thinking  medium (requested)
+Thinking  medium
 Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 ```
@@ -188,13 +191,9 @@ Plan against the existing session:
 ```console
 $ telos plan SPEC.md --session sess_c7d2f0a4e8
 Spec      reading-list
-Target    cloud
 Context   personal
 Session   sess_c7d2f0a4e8
 Current   @alice/reading-list:0.1.0
-Path      /Users/alice/reading-list/SPEC.md
-Namespace ns-reading-list
-Hash      9e8d86776e85ffbc
 Version   0.1.0 -> 0.2.0
 
 --- deployed/SPEC.md
@@ -219,16 +218,16 @@ contract change. Apply that new revision to the same session:
 
 ```console
 $ telos apply SPEC.md --session sess_c7d2f0a4e8
-updated reading-list TODO(grohan): is this the wrong output / outdated?
+updated reading-list
 
 Status    working
 Session   sess_c7d2f0a4e8
-Revision  sha256:3211e85fe81bd70aa74726d4ce0dc68d729d816826a21b62b18eb86074ff3317
+Revision  sha256:3211e85fe81b
 Model     telos/default
-Thinking  medium (requested)
+Thinking  medium
 Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
-Logs      telos logs --context personal sess_c7d2f0a4e8
+Logs      telos logs sess_c7d2f0a4e8
 ```
 
 This applies the update in-place, and the system begins reconciling towards the new desired Goal. Continue to monitor status from `working` to `ready`, then exercise the updated API behavior.
@@ -239,9 +238,7 @@ Suppose the spec has updated under you (by your coworker), you can fetch the dep
 $ telos get <session-id>
 ```
 
-This writes the goal spec and its skills to a directory named after the Goal. Use `--output <dir>` to choose the directory, or `--output SPEC.md` to fetch only the spec.
-
-TODO(grohan): why do we even support `--output SPEC.md`
+This writes the goal spec and its skills to a directory named after the Goal. Use `--output <dir>` to override the directory name.
 
 ## Delete the Goal
 

@@ -6,7 +6,7 @@ group: Platform
 
 Telos is designed to be flexible and neutral to model choice, and supports the options below.
 
-You can select a model from the CLI with `--model <name>/<model-id>`, where `<name>` is `telos` for managed inference or the name you gave your API key or subscription. A default can be set in `telos config` or in the web UI (TODO(grohan): impl the PUT to `/api/inference/preference`). Telos also exposes standard "thinking effort" values (`--thinking [low,medium,high,xhigh]`).
+You can select a model from the CLI with `--model <name>/<model-id>`, where `<name>` is `telos` for managed inference or the name you gave your API key or subscription. A default can be set in the web UI. Telos also exposes standard "thinking effort" values (`--thinking [low,medium,high,xhigh]`).
 
 ## Managed inference
 
@@ -34,5 +34,3 @@ For individual developers or small teams, most token spend goes through subscrip
 - xAI
 
 As of October 2026, Anthropic is unsupported since connecting third-party applications to their subscription is against their terms of service.
-
-TODO(grohan): mutability of model choice mid-goal?
