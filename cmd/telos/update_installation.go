@@ -30,9 +30,7 @@ type releaseReplacement struct {
 	component string
 	target    string
 	stage     string
-	backup    string
 	directory bool
-	installed bool
 }
 
 func updateInstallation(target, artifact string, manifest cliReleaseManifest, baseURL, sums string, client *http.Client) (installationUpdate, error) {
@@ -386,47 +384,52 @@ func releaseFileTree(root string) (map[string]releaseFile, error) {
 	return files, err
 }
 
+// installReleaseReplacements renames each verified artifact over its target.
+// Every artifact is staged beside its target, so a file is replaced by one
+// atomic rename and is never missing or half-written. The CLI comes last, so a
+// failed rename leaves a working CLI to run the update again with.
 func installReleaseReplacements(replacements []*releaseReplacement) error {
-	rollback := func(cause error) error {
-		for i := len(replacements) - 1; i >= 0; i-- {
-			replacement := replacements[i]
-			if replacement.backup != "" {
-				if replacement.directory && replacement.installed {
-					cause = errors.Join(cause, os.RemoveAll(replacement.target))
-				}
-				if err := os.Rename(replacement.backup, replacement.target); err != nil {
-					cause = errors.Join(cause, fmt.Errorf("restore %s from %s: %w", replacement.target, replacement.backup, err))
-				}
-			} else if replacement.installed {
-				cause = errors.Join(cause, os.RemoveAll(replacement.target))
-			}
-		}
-		return cause
-	}
+	var updated []string
 	for _, replacement := range replacements {
-		if _, err := os.Lstat(replacement.target); err == nil {
-			backup := replacement.stage + ".previous"
-			if replacement.directory {
-				err = os.Rename(replacement.target, backup)
-			} else {
-				err = os.Link(replacement.target, backup)
+		if err := replaceReleaseTarget(replacement); err != nil {
+			if len(updated) > 0 {
+				err = fmt.Errorf("%w; updated %s; run `telos update` again to finish", err, strings.Join(updated, ", "))
 			}
-			if err != nil {
-				return rollback(fmt.Errorf("back up %s: %w", replacement.target, err))
-			}
-			replacement.backup = backup
-		} else if !os.IsNotExist(err) {
-			return rollback(err)
+			return err
 		}
+		if replacement.component != "" {
+			updated = append(updated, replacement.component)
+		}
+	}
+	return nil
+}
+
+func replaceReleaseTarget(replacement *releaseReplacement) error {
+	if !replacement.directory {
 		if err := os.Rename(replacement.stage, replacement.target); err != nil {
-			return rollback(fmt.Errorf("replace %s: %w", replacement.target, err))
+			return fmt.Errorf("replace %s: %w", replacement.target, err)
 		}
-		replacement.installed = true
+		return nil
 	}
-	for _, replacement := range replacements {
-		if replacement.backup != "" {
-			os.RemoveAll(replacement.backup)
+	// A directory cannot be renamed over another, so the previous one moves
+	// aside first and comes back if the new one cannot take its place.
+	previous := replacement.stage + ".previous"
+	if err := os.Rename(replacement.target, previous); os.IsNotExist(err) {
+		previous = ""
+	} else if err != nil {
+		return fmt.Errorf("replace %s: %w", replacement.target, err)
+	}
+	if err := os.Rename(replacement.stage, replacement.target); err != nil {
+		err = fmt.Errorf("replace %s: %w", replacement.target, err)
+		if previous != "" {
+			if restoreErr := os.Rename(previous, replacement.target); restoreErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore %s from %s: %w", replacement.target, previous, restoreErr))
+			}
 		}
+		return err
+	}
+	if previous != "" {
+		os.RemoveAll(previous)
 	}
 	return nil
 }

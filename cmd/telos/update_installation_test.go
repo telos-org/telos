@@ -145,40 +145,76 @@ func TestInstallationUpdateCloudClientKeepsRuntimeAbsent(t *testing.T) {
 	}
 }
 
-func TestInstallationUpdateRollsBackReplacementFailure(t *testing.T) {
-	dir := t.TempDir()
-	runtime := filepath.Join(dir, "telosd")
-	skill := filepath.Join(dir, "telos-cli")
-	if err := os.WriteFile(runtime, []byte("old runtime"), 0o755); err != nil {
-		t.Fatal(err)
+func TestInstallationUpdateReplacementFailures(t *testing.T) {
+	setup := func(t *testing.T) (dir, daemon, skill, cli string) {
+		dir = t.TempDir()
+		daemon = filepath.Join(dir, "telosd")
+		skill = filepath.Join(dir, "telos-cli")
+		cli = filepath.Join(dir, "telos")
+		for path, data := range map[string]string{daemon: "old runtime", cli: "old CLI", filepath.Join(skill, "SKILL.md"): "old skill"} {
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(data), 0o755); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir, daemon, skill, cli
 	}
-	if err := os.MkdirAll(skill, 0o755); err != nil {
-		t.Fatal(err)
+	stageFile := func(t *testing.T, path, data string) string {
+		if err := os.WriteFile(path, []byte(data), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return path
 	}
-	if err := os.WriteFile(filepath.Join(skill, "SKILL.md"), []byte("old skill"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runtimeStage := filepath.Join(dir, "runtime-stage")
-	if err := os.WriteFile(runtimeStage, []byte("new runtime"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	skillStage := filepath.Join(dir, "skill-stage")
-	if err := os.MkdirAll(skillStage, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	replacements := []*releaseReplacement{
-		{target: runtime, stage: runtimeStage},
-		{target: skill, stage: skillStage, directory: true},
-		{target: filepath.Join(dir, "telos"), stage: filepath.Join(dir, "missing-stage")},
-	}
-	if err := installReleaseReplacements(replacements); err == nil {
-		t.Fatal("expected replacement failure")
-	}
-	for path, want := range map[string]string{runtime: "old runtime", filepath.Join(skill, "SKILL.md"): "old skill"} {
+	assertFile := func(t *testing.T, path, want string) {
+		t.Helper()
 		if data, err := os.ReadFile(path); err != nil || string(data) != want {
-			t.Fatalf("rollback %s = %q, %v", path, data, err)
+			t.Fatalf("%s = %q, %v; want %q", path, data, err, want)
 		}
 	}
+	assertNoPrevious := func(t *testing.T, dir string) {
+		t.Helper()
+		if leftovers, _ := filepath.Glob(filepath.Join(dir, "*.previous")); len(leftovers) != 0 {
+			t.Fatalf("left previous copies behind: %v", leftovers)
+		}
+	}
+
+	t.Run("a failed skill swap restores the previous skill", func(t *testing.T) {
+		dir, daemon, skill, cli := setup(t)
+		err := installReleaseReplacements([]*releaseReplacement{
+			{component: "telos-cli skill", target: skill, stage: filepath.Join(dir, "missing-skill-stage"), directory: true},
+			{component: "telos", target: cli, stage: stageFile(t, filepath.Join(dir, "cli-stage"), "new CLI")},
+		})
+		if err == nil || strings.Contains(err.Error(), "telos update") {
+			t.Fatalf("error = %v; want a failure that updated nothing", err)
+		}
+		assertFile(t, filepath.Join(skill, "SKILL.md"), "old skill")
+		assertFile(t, daemon, "old runtime")
+		assertFile(t, cli, "old CLI")
+		assertNoPrevious(t, dir)
+	})
+
+	t.Run("a later failure names what was updated and keeps the CLI", func(t *testing.T) {
+		dir, daemon, skill, cli := setup(t)
+		skillStage := filepath.Join(dir, "skill-stage")
+		if err := os.MkdirAll(skillStage, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		stageFile(t, filepath.Join(skillStage, "SKILL.md"), "new skill")
+		err := installReleaseReplacements([]*releaseReplacement{
+			{component: "telosd", target: daemon, stage: stageFile(t, filepath.Join(dir, "runtime-stage"), "new runtime")},
+			{component: "telos-cli skill", target: skill, stage: skillStage, directory: true},
+			{component: "telos", target: cli, stage: filepath.Join(dir, "missing-cli-stage")},
+		})
+		if err == nil || !strings.Contains(err.Error(), "updated telosd, telos-cli skill; run `telos update` again to finish") {
+			t.Fatalf("error = %v", err)
+		}
+		assertFile(t, daemon, "new runtime")
+		assertFile(t, filepath.Join(skill, "SKILL.md"), "new skill")
+		assertFile(t, cli, "old CLI")
+		assertNoPrevious(t, dir)
+	})
 }
 
 func TestInstallationUpdateRejectsUnsafeSkillBeforeReplacingAnything(t *testing.T) {

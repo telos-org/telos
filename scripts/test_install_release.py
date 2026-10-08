@@ -195,63 +195,113 @@ class InstallReleaseTest(unittest.TestCase):
         self.assertEqual(list(self.binaries.glob(".telos-install.*")), [])
         self.assertEqual(list(self.skills.glob(".telos-cli.*")), [])
 
-    def test_replacement_failures_restore_existing_installation(self):
-        self.assertEqual(self.install(local=True).returncode, 0)
+    def install_with_failing_move(self, failure, local=False):
+        """Install with an `mv` that fails, or terminates the installer, at one step."""
         tools = self.root / "tools"
-        tools.mkdir()
+        tools.mkdir(exist_ok=True)
         move = tools / "mv"
         move.write_text(
             "#!/bin/sh\n"
             'if [ "$1" = -f ]; then shift; fi\n'
-            'if [ "$INSTALL_TEST_FAILURE" = skill-backup ] && '
-            '[ "$1" = "$INSTALL_TEST_SKILL_TARGET" ]; then exit 73; fi\n'
-            'if [ "$INSTALL_TEST_FAILURE" = cli-replacement ] && '
-            '[ "${1##*/}" = telos ] && [ "$2" = "$INSTALL_TEST_CLI_TARGET" ]; then exit 73; fi\n'
-            'if [ "$INSTALL_TEST_FAILURE" = daemon-replacement ] && '
-            '[ "${1##*/}" = telosd ] && [ "$2" = "$INSTALL_TEST_DAEMON_TARGET" ]; then exit 73; fi\n'
+            'case "$INSTALL_TEST_FAILURE" in\n'
+            '  skill-aside) [ "$1" = "$INSTALL_TEST_SKILL_TARGET" ] && exit 73 ;;\n'
+            '  daemon-replacement) [ "$2" = "$INSTALL_TEST_DAEMON_TARGET" ] && exit 73 ;;\n'
+            '  cli-replacement) [ "$2" = "$INSTALL_TEST_CLI_TARGET" ] && exit 73 ;;\n'
+            '  terminate) [ "$2" = "$INSTALL_TEST_CLI_TARGET" ] && kill -TERM "$PPID" && exit 73 ;;\n'
+            "esac\n"
             'exec /bin/mv "$@"\n'
         )
         move.chmod(0o755)
-        for failure in ("skill-backup", "cli-replacement", "daemon-replacement"):
-            with self.subTest(failure=failure):
-                (self.binaries / "telos").write_bytes(b"old CLI")
-                (self.binaries / "telosd").write_bytes(b"old runtime")
-                (self.skills / "telos-cli" / "SKILL.md").write_bytes(b"old skill")
-                result = self.install(
-                    extra_env={
-                        "PATH": str(tools) + os.pathsep + os.environ["PATH"],
-                        "INSTALL_TEST_FAILURE": failure,
-                        "INSTALL_TEST_SKILL_TARGET": str(self.skills / "telos-cli"),
-                        "INSTALL_TEST_CLI_TARGET": str(self.binaries / "telos"),
-                        "INSTALL_TEST_DAEMON_TARGET": str(self.binaries / "telosd"),
-                    }
-                )
-                self.assertNotEqual(result.returncode, 0)
-                self.assertEqual((self.binaries / "telos").read_bytes(), b"old CLI")
-                self.assertEqual((self.binaries / "telosd").read_bytes(), b"old runtime")
-                self.assertEqual((self.skills / "telos-cli" / "SKILL.md").read_bytes(), b"old skill")
-                self.assertEqual(
-                    (self.binaries / ".telos-skill-path").read_text(),
-                    str(self.skills / "telos-cli") + "\n",
-                )
-                self.assertEqual(list(self.binaries.glob(".telos-install.*")), [])
-                self.assertEqual(list(self.skills.glob(".telos-cli.*")), [])
-
-        shutil.rmtree(self.binaries)
-        shutil.rmtree(self.skills)
-        result = self.install(
-            local=True,
+        return self.install(
+            local=local,
             extra_env={
                 "PATH": str(tools) + os.pathsep + os.environ["PATH"],
-                "INSTALL_TEST_FAILURE": "daemon-replacement",
+                "INSTALL_TEST_FAILURE": failure,
                 "INSTALL_TEST_SKILL_TARGET": str(self.skills / "telos-cli"),
                 "INSTALL_TEST_CLI_TARGET": str(self.binaries / "telos"),
                 "INSTALL_TEST_DAEMON_TARGET": str(self.binaries / "telosd"),
             },
         )
+
+    def assert_no_staging_left(self):
+        self.assertEqual(list(self.binaries.glob(".telos-install.*")), [])
+        self.assertEqual(list(self.skills.glob(".telos-cli.*")), [])
+
+    def test_replacement_failures_keep_a_working_cli(self):
+        self.assertEqual(self.install(local=True).returncode, 0)
+        # Each failure lists what is new afterwards; the CLI is always the old one.
+        for failure, updated in (
+            ("skill-aside", ()),
+            ("daemon-replacement", ("skill",)),
+            ("cli-replacement", ("skill", "daemon")),
+        ):
+            with self.subTest(failure=failure):
+                (self.binaries / "telos").write_bytes(b"old CLI")
+                (self.binaries / "telosd").write_bytes(b"old runtime")
+                (self.skills / "telos-cli" / "SKILL.md").write_bytes(b"old skill")
+                result = self.install_with_failing_move(failure)
+                self.assertNotEqual(result.returncode, 0)
+                if updated:
+                    self.assertIn("run the installer again to finish", result.stderr)
+                self.assertEqual((self.binaries / "telos").read_bytes(), b"old CLI")
+                self.assertEqual(
+                    (self.binaries / "telosd").read_bytes(),
+                    (self.release / self.daemon_artifact).read_bytes()
+                    if "daemon" in updated
+                    else b"old runtime",
+                )
+                self.assertEqual(
+                    (self.skills / "telos-cli" / "SKILL.md").read_bytes(),
+                    b"released skill" if "skill" in updated else b"old skill",
+                )
+                self.assert_no_staging_left()
+                result = self.install()
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assert_installed(local=True)
+
+        shutil.rmtree(self.binaries)
+        shutil.rmtree(self.skills)
+        result = self.install_with_failing_move("daemon-replacement", local=True)
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(list(self.binaries.iterdir()), [])
-        self.assertEqual(list(self.skills.iterdir()), [])
+        self.assertFalse((self.binaries / "telos").exists())
+        self.assertFalse((self.binaries / "telosd").exists())
+        self.assert_no_staging_left()
+        result = self.install(local=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_installed(local=True)
+
+    def test_termination_cleans_up_once_and_keeps_the_cli(self):
+        self.assertEqual(self.install(local=True).returncode, 0)
+        (self.binaries / "telos").write_bytes(b"old CLI")
+        result = self.install_with_failing_move("terminate")
+        self.assertEqual(result.returncode, 143, result.stderr)
+        self.assertEqual((self.binaries / "telos").read_bytes(), b"old CLI")
+        self.assertEqual((self.skills / "telos-cli" / "SKILL.md").read_bytes(), b"released skill")
+        self.assertTrue((self.binaries / "telosd").exists())
+        self.assert_no_staging_left()
+
+    def test_symlinked_installation_is_updated_where_it_points(self):
+        self.assertEqual(self.install(local=True).returncode, 0)
+        real = self.root / "real bin"
+        real.mkdir()
+        for name, link in (("telos", real / "telos"), ("telosd", Path("..") / "real bin" / "telosd")):
+            (real / name).write_bytes(b"old " + name.encode())
+            (self.binaries / name).unlink()
+            (self.binaries / name).symlink_to(link)
+        real_skill = self.root / "real skill"
+        shutil.move(str(self.skills / "telos-cli"), str(real_skill))
+        (real_skill / "SKILL.md").write_bytes(b"old skill")
+        (self.skills / "telos-cli").symlink_to(real_skill)
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assert_installed(local=True)
+        for path in (self.binaries / "telos", self.binaries / "telosd", self.skills / "telos-cli"):
+            self.assertTrue(path.is_symlink(), path)
+        self.assertEqual((real / "telos").read_bytes(), (self.release / self.cli_artifact).read_bytes())
+        self.assertEqual((real / "telosd").read_bytes(), (self.release / self.daemon_artifact).read_bytes())
+        self.assertEqual((real_skill / "SKILL.md").read_bytes(), b"released skill")
+        self.assertEqual(list(real.glob(".telos-install.*")), [])
+        self.assertEqual(list(self.root.glob(".telos-cli.*")), [])
 
     def test_release_builder_keeps_both_binaries_for_hosted_bootstrap(self):
         repository = self.root / "repo"
