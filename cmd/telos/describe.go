@@ -220,11 +220,8 @@ func printCloudSessionDetails(out io.Writer, session cloud.SessionRecord, contex
 	if settings == nil {
 		printCloudInferenceSummary(out, session)
 	} else {
-		if summary := session.Inference; summary != nil {
-			printSummaryField(out, "Inference", inferenceSourceLabel(summary.Source))
-			if summary.ConnectionName != "" {
-				printSummaryField(out, "Connection", summary.ConnectionName)
-			}
+		if summary := session.Inference; summary != nil && summary.ConnectionName != "" {
+			printSummaryField(out, "Connection", summary.ConnectionName)
 		}
 		printInferenceDescription(out, settings)
 	}

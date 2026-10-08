@@ -344,7 +344,7 @@ func TestDescribeInferenceCompatibilityAndFreshness(t *testing.T) {
 					if !strings.Contains(text, "Model     "+model) || !strings.Contains(text, "Thinking  "+thinking) {
 						t.Fatalf("text settings disagreed with change state: %s", text)
 					}
-					for _, unwanted := range []string{"Settings", "Request", "(requested)", "applied", "other-browser"} {
+					for _, unwanted := range []string{"Inference", "Settings", "Request", "(requested)", "applied", "other-browser"} {
 						if strings.Contains(text, unwanted) {
 							t.Fatalf("describe exposed stale settings or request details %q: %s", unwanted, text)
 						}
