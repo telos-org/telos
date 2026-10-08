@@ -46,6 +46,12 @@ func main() {
 		cmdDescribe(os.Args[2:])
 	case "logs":
 		cmdLogs(os.Args[2:])
+	case "history":
+		cmdHistory(os.Args[2:])
+	case "diff":
+		cmdRevisionDiff(os.Args[2:])
+	case "restore", "redeploy":
+		cmdRevisionAction(os.Args[1], os.Args[2:])
 	case "delete":
 		cmdDelete(os.Args[2:])
 	case "pull":
@@ -77,6 +83,10 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  list               List sessions")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
 	fmt.Fprintln(out, "  logs SESSION       Show recent activity")
+	fmt.Fprintln(out, "  history SESSION    List or inspect deployment revisions")
+	fmt.Fprintln(out, "  diff SESSION A [B] Compare revision A with B or the current revision")
+	fmt.Fprintln(out, "  restore SESSION    Restore a revision's saved snapshot")
+	fmt.Fprintln(out, "  redeploy SESSION   Deploy a historical revision's package again")
 	fmt.Fprintln(out, "  delete SESSION     Delete a session")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "other commands:")

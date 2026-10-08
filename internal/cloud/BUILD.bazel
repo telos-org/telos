@@ -7,6 +7,7 @@ go_library(
         "cliauth.go",
         "client.go",
         "inference.go",
+        "revisions.go",
     ],
     importpath = "github.com/telos-org/telos/internal/cloud",
     visibility = ["//:__subpackages__"],
@@ -24,6 +25,7 @@ go_test(
         "cliauth_test.go",
         "client_retry_test.go",
         "client_test.go",
+        "revisions_test.go",
     ],
     embed = [":cloud"],
     deps = [
