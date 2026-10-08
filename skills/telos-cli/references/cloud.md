@@ -14,10 +14,6 @@ A CLI **context** selects the personal or team Cloud workspace that owns the
 deployment. Inside an environment, **workspace** means the agent's retained
 filesystem. The two uses are related but not interchangeable.
 
-Your computer needs only the `telos` CLI. Cloud automation installs and updates
-the managed runtime, including `telosd`; you do not need `telosd` or `pi` locally
-to deploy and observe a Cloud Goal.
-
 ## Authenticate
 
 Telos supports both browser login and non-interactive token authentication.
