@@ -211,7 +211,7 @@ func inferenceDescribeCommand(sessionID, contextName string) string {
 	if contextName != "" {
 		command += " --context " + shellQuote(contextName)
 	}
-	return command
+	return command + " --json"
 }
 
 func printInferenceReceipt(out io.Writer, receipt *inferenceReceipt) {
@@ -219,20 +219,12 @@ func printInferenceReceipt(out io.Writer, receipt *inferenceReceipt) {
 	if receipt.Context != "" {
 		printSummaryField(out, "Context", receipt.Context)
 	}
-	printInferenceSettings(out, receipt)
-	if receipt.Status == "pending" || receipt.Status == "applying" {
-		fmt.Fprintf(out, "\nQueued for the next prover or verifier turn. Idle sessions wait for their next scheduled or triggered turn.\nCheck with: %s\n", inferenceDescribeCommand(receipt.SessionID, receipt.Context))
-	}
-}
-
-func printInferenceSettings(out io.Writer, receipt *inferenceReceipt) {
 	status := receipt.Status
 	if status == "" {
 		status = "no change requested"
 	}
 	printSummaryField(out, "Settings", fmt.Sprintf("%s (revision %d)", status, receipt.Revision))
-	printSummaryField(out, "Model", strings.TrimPrefix(receipt.Settings.Model, "telos-bifrost/"))
-	printSummaryField(out, "Thinking", receipt.Settings.Thinking)
+	printInferenceSettings(out, receipt.Settings)
 	if receipt.RequestID != "" {
 		printSummaryField(out, "Request", receipt.RequestID)
 	}
@@ -248,4 +240,12 @@ func printInferenceSettings(out io.Writer, receipt *inferenceReceipt) {
 	if receipt.Status == "pending" || receipt.Status == "applying" || receipt.Status == "unknown" {
 		fmt.Fprintln(out, "Model and thinking above are the last confirmed settings; this change is not confirmed.")
 	}
+	if receipt.Status == "pending" || receipt.Status == "applying" {
+		fmt.Fprintf(out, "\nQueued for the next prover or verifier turn. Idle sessions wait for their next scheduled or triggered turn.\nCheck with: %s\n", inferenceDescribeCommand(receipt.SessionID, receipt.Context))
+	}
+}
+
+func printInferenceSettings(out io.Writer, settings sessionapi.InferenceSettings) {
+	printSummaryField(out, "Model", strings.TrimPrefix(settings.Model, "telos-bifrost/"))
+	printSummaryField(out, "Thinking", settings.Thinking)
 }

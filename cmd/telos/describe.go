@@ -65,7 +65,7 @@ func cmdDescribe(args []string) {
 
 		printSessionDescription(os.Stdout, *session)
 		if settings != nil {
-			printInferenceSettings(os.Stdout, settings)
+			printInferenceSettings(os.Stdout, settings.Settings)
 		}
 		if settingsError != "" {
 			printSummaryField(os.Stdout, "Settings", "unavailable: "+settingsError)
@@ -201,7 +201,7 @@ func printCloudSessionDetails(out io.Writer, session cloud.SessionRecord, contex
 				printSummaryField(out, "Connection", summary.ConnectionName)
 			}
 		}
-		printInferenceSettings(out, settings)
+		printInferenceSettings(out, settings.Settings)
 	}
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)

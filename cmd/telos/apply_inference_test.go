@@ -228,7 +228,7 @@ func TestApplyInferenceOutcomesAndLostReplies(t *testing.T) {
 				if outcome == "partial" && (receipt.Settings.Model != "telos-bifrost/telos/max" || receipt.Settings.Thinking != "medium") {
 					t.Fatalf("partial result lied about confirmed pair: %s", stdout)
 				}
-			} else if !strings.Contains(stderr, submittedID) || !strings.Contains(stderr, "telos describe") || stdout != "" {
+			} else if !strings.Contains(stderr, submittedID) || !strings.Contains(stderr, "telos describe") || !strings.Contains(stderr, "--json") || stdout != "" {
 				t.Fatalf("unconfirmed request lost identity or suggested success: %s %s", stdout, stderr)
 			}
 		})
@@ -247,8 +247,17 @@ func TestApplyLocalInferenceQueuesAndDescribeShowsConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := captureStdout(t, func() { cmdApply([]string{"--session", id, "--model", "provider/new", "--thinking", "max"}) })
-	if !strings.Contains(out, "Queued for the next prover or verifier turn") || !strings.Contains(out, "provider/old") || !strings.Contains(out, "last confirmed settings") {
+	if !strings.Contains(out, "Queued for the next prover or verifier turn") || !strings.Contains(out, "provider/old") || !strings.Contains(out, "last confirmed settings") || !strings.Contains(out, "--json") {
 		t.Fatalf("pending receipt: %s", out)
+	}
+	out = captureStdout(t, func() { cmdDescribe([]string{id}) })
+	if !strings.Contains(out, "Model     provider/old") || !strings.Contains(out, "Thinking  medium") {
+		t.Fatalf("describe omitted confirmed settings while pending: %s", out)
+	}
+	for _, unwanted := range []string{"Settings", "Request", "pending", "provider/new", "not confirmed"} {
+		if strings.Contains(out, unwanted) {
+			t.Fatalf("describe exposed request details %q: %s", unwanted, out)
+		}
 	}
 	update, err := sessionapi.ClaimInferenceUpdate(path, "attempt", "receipt.json", sessionapi.InferenceSettings{})
 	if err != nil || update == nil || *update.Model != "provider/new" || *update.Thinking != "max" {
@@ -300,8 +309,13 @@ func TestDescribeInferenceCompatibilityAndFreshness(t *testing.T) {
 					if description.InferenceState == nil || description.InferenceState.Status != "applied" || description.AgentModel != "telos-bifrost/telos/max" || description.AgentThinking != "high" {
 						t.Fatalf("describe showed stale session settings with applied status: %s", out)
 					}
-					if strings.Contains(text, "telos/default") || strings.Contains(text, "medium") || strings.Contains(text, "(requested)") || !strings.Contains(text, "applied") {
+					if !strings.Contains(text, "Model     telos/max") || !strings.Contains(text, "Thinking  high") {
 						t.Fatalf("text settings disagreed with confirmed result: %s", text)
+					}
+					for _, unwanted := range []string{"telos/default", "medium", "Settings", "Request", "(requested)", "applied", "other-browser"} {
+						if strings.Contains(text, unwanted) {
+							t.Fatalf("describe exposed stale settings or request details %q: %s", unwanted, text)
+						}
 					}
 				case http.StatusForbidden:
 					if description.InferenceError == "" || !strings.Contains(text, "unavailable:") {
