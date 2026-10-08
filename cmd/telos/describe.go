@@ -51,7 +51,7 @@ func cmdDescribe(args []string) {
 			if readErr != nil {
 				settingsError = readErr.Error()
 			} else {
-				settings = &inferenceDescription{Settings: state.Settings}
+				settings = describeInference(localInferenceReceipt(sessionID, state))
 			}
 		}
 		if *jsonOut {
@@ -65,7 +65,7 @@ func cmdDescribe(args []string) {
 
 		printSessionDescription(os.Stdout, *session)
 		if settings != nil {
-			printInferenceSettings(os.Stdout, settings.Settings)
+			printInferenceDescription(os.Stdout, settings)
 		}
 		if settingsError != "" {
 			printSummaryField(os.Stdout, "Settings", "unavailable: "+settingsError)
@@ -97,6 +97,25 @@ func cmdDescribe(args []string) {
 
 type inferenceDescription struct {
 	Settings sessionapi.InferenceSettings `json:"settings"`
+	// Queued targets are displayed only in text output.
+	queuedModel    string
+	queuedThinking string
+}
+
+func describeInference(receipt *inferenceReceipt) *inferenceDescription {
+	description := &inferenceDescription{Settings: receipt.Settings}
+	if receipt.Status == "pending" || receipt.Status == "applying" {
+		description.queuedModel = receipt.RequestedModel
+		description.queuedThinking = receipt.RequestedThinking
+	}
+	return description
+}
+
+func printInferenceDescription(out io.Writer, description *inferenceDescription) {
+	model := strings.TrimPrefix(description.Settings.Model, "telos-bifrost/")
+	queuedModel := strings.TrimPrefix(description.queuedModel, "telos-bifrost/")
+	printSummaryField(out, "Model", inferenceSettingChange(model, queuedModel, "pending"))
+	printSummaryField(out, "Thinking", inferenceSettingChange(description.Settings.Thinking, description.queuedThinking, "pending"))
 }
 
 type cloudDescription struct {
@@ -122,7 +141,7 @@ func describeCloudSession(sessionID, contextOverride string) (*cloudDescription,
 		var receipt *inferenceReceipt
 		receipt, err = cloudInferenceReceipt(sessionID, description.Context, state)
 		if err == nil {
-			description.InferenceState = &inferenceDescription{Settings: receipt.Settings}
+			description.InferenceState = describeInference(receipt)
 			// This read may be newer than GetSession; keep displayed values consistent.
 			session.AgentModel, session.AgentThinking = state.AgentModel, state.AgentThinking
 			session.Inference = &state.Inference
@@ -207,7 +226,7 @@ func printCloudSessionDetails(out io.Writer, session cloud.SessionRecord, contex
 				printSummaryField(out, "Connection", summary.ConnectionName)
 			}
 		}
-		printInferenceSettings(out, settings.Settings)
+		printInferenceDescription(out, settings)
 	}
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)

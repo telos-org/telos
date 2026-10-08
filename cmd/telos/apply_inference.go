@@ -244,8 +244,3 @@ func inferenceSettingChange(current, requested, status string) string {
 	}
 	return fmt.Sprintf("%s -> %s (%s)", orDash(current), requested, label)
 }
-
-func printInferenceSettings(out io.Writer, settings sessionapi.InferenceSettings) {
-	printSummaryField(out, "Model", strings.TrimPrefix(settings.Model, "telos-bifrost/"))
-	printSummaryField(out, "Thinking", settings.Thinking)
-}

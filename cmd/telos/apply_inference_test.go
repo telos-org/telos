@@ -252,10 +252,10 @@ func TestApplyLocalInferenceQueuesAndDescribeShowsConfirmation(t *testing.T) {
 		t.Fatalf("pending receipt: %s", out)
 	}
 	out = captureStdout(t, func() { cmdDescribe([]string{id}) })
-	if !strings.Contains(out, "Model     provider/old") || !strings.Contains(out, "Thinking  medium") {
-		t.Fatalf("describe omitted confirmed settings while pending: %s", out)
+	if !strings.Contains(out, "Model     provider/old -> provider/new (next turn)") || !strings.Contains(out, "Thinking  medium -> max (next turn)") {
+		t.Fatalf("describe omitted queued settings: %s", out)
 	}
-	for _, unwanted := range []string{"Settings", "Request", "pending", "provider/new", "not confirmed"} {
+	for _, unwanted := range []string{"Settings", "Request", "pending", "not confirmed"} {
 		if strings.Contains(out, unwanted) {
 			t.Fatalf("describe exposed request details %q: %s", unwanted, out)
 		}
@@ -269,26 +269,47 @@ func TestApplyLocalInferenceQueuesAndDescribeShowsConfirmation(t *testing.T) {
 	if err := sessionapi.FinishInferenceUpdate(path, update.RequestID, "applied", "", &sessionapi.InferenceSettings{Model: "provider/new", Thinking: "max"}); err != nil {
 		t.Fatal(err)
 	}
+	out = captureStdout(t, func() { cmdDescribe([]string{id}) })
+	if !strings.Contains(out, "Model     provider/new") || !strings.Contains(out, "Thinking  max") || strings.Contains(out, "->") {
+		t.Fatalf("describe did not settle on confirmed settings: %s", out)
+	}
 	out = captureStdout(t, func() { cmdDescribe([]string{id, "--json"}) })
 	assertDescribeInferenceSettings(t, out, sessionapi.InferenceSettings{Model: "provider/new", Thinking: "max"})
 }
 
 func TestDescribeInferenceCompatibilityAndFreshness(t *testing.T) {
-	for _, statusCode := range []int{http.StatusOK, http.StatusNotFound, http.StatusMethodNotAllowed, http.StatusNotImplemented, http.StatusForbidden} {
-		t.Run(http.StatusText(statusCode), func(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		statusCode int
+		status     string
+	}{
+		{"pending", http.StatusOK, "pending"},
+		{"applying", http.StatusOK, "applying"},
+		{"applied", http.StatusOK, "applied"},
+		{"rejected", http.StatusOK, "rejected"},
+		{"unknown", http.StatusOK, "unknown"},
+		{"not found", http.StatusNotFound, ""},
+		{"method not allowed", http.StatusMethodNotAllowed, ""},
+		{"not implemented", http.StatusNotImplemented, ""},
+		{"forbidden", http.StatusForbidden, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
 			server := inferenceTestServer(t, map[string]http.HandlerFunc{
 				"GET /api/deployments/sess_test": func(w http.ResponseWriter, r *http.Request) {
 					_ = json.NewEncoder(w).Encode(cloud.SessionRecord{ID: "sess_test", State: "running", AgentModel: "telos-bifrost/telos/default", AgentThinking: "medium"})
 				},
 				"GET /api/deployments/sess_test/inference": func(w http.ResponseWriter, r *http.Request) {
-					if statusCode != http.StatusOK {
-						http.Error(w, "settings unavailable", statusCode)
+					if tt.statusCode != http.StatusOK {
+						http.Error(w, "settings unavailable", tt.statusCode)
 						return
 					}
 					state := initialCloudInference()
-					state.AgentModel, state.AgentThinking = "telos-bifrost/telos/max", "high"
-					state.Request = &cloud.DeploymentInferenceRequest{RequestID: "other-browser", ExpectedRevision: 6, Inference: &cloud.InferenceSelection{Source: "managed", Tier: "max"}}
-					state.Status = "applied"
+					if tt.status == "applied" {
+						state.AgentModel, state.AgentThinking = "telos-bifrost/telos/max", "high"
+					}
+					thinking := "high"
+					state.Request = &cloud.DeploymentInferenceRequest{RequestID: "other-browser", ExpectedRevision: 6, Inference: &cloud.InferenceSelection{Source: "managed", Tier: "max"}, AgentThinking: &thinking}
+					state.Status = tt.status
 					_ = json.NewEncoder(w).Encode(state)
 				},
 			})
@@ -302,16 +323,28 @@ func TestDescribeInferenceCompatibilityAndFreshness(t *testing.T) {
 					t.Fatalf("describe lost existing fields: %v %s", err, out)
 				}
 				text := captureStdout(t, func() { cmdDescribe(args) })
-				switch statusCode {
+				switch tt.statusCode {
 				case http.StatusOK:
-					assertDescribeInferenceSettings(t, out, sessionapi.InferenceSettings{Model: "telos-bifrost/telos/max", Thinking: "high"})
-					if description.AgentModel != "telos-bifrost/telos/max" || description.AgentThinking != "high" {
+					confirmed := sessionapi.InferenceSettings{Model: "telos-bifrost/telos/default", Thinking: "medium"}
+					model, thinking := "telos/default", "medium"
+					if tt.status == "applied" {
+						confirmed = sessionapi.InferenceSettings{Model: "telos-bifrost/telos/max", Thinking: "high"}
+						model, thinking = "telos/max", "high"
+					}
+					assertDescribeInferenceSettings(t, out, confirmed)
+					if description.AgentModel != confirmed.Model || description.AgentThinking != confirmed.Thinking {
 						t.Fatalf("describe showed stale session settings: %s", out)
 					}
-					if !strings.Contains(text, "Model     telos/max") || !strings.Contains(text, "Thinking  high") {
-						t.Fatalf("text settings disagreed with confirmed result: %s", text)
+					if tt.status == "pending" || tt.status == "applying" {
+						model += " -> telos/max (next turn)"
+						thinking += " -> high (next turn)"
+					} else if strings.Contains(text, "->") {
+						t.Fatalf("describe showed an inactive change as queued: %s", text)
 					}
-					for _, unwanted := range []string{"telos/default", "medium", "Settings", "Request", "(requested)", "applied", "other-browser"} {
+					if !strings.Contains(text, "Model     "+model) || !strings.Contains(text, "Thinking  "+thinking) {
+						t.Fatalf("text settings disagreed with change state: %s", text)
+					}
+					for _, unwanted := range []string{"Settings", "Request", "(requested)", "applied", "other-browser"} {
 						if strings.Contains(text, unwanted) {
 							t.Fatalf("describe exposed stale settings or request details %q: %s", unwanted, text)
 						}
