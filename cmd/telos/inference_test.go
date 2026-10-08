@@ -318,7 +318,7 @@ func TestCloudApplyInferenceErrors(t *testing.T) {
 	}{
 		{"API key model rejected by Cloud", []string{"apply", path, "--model", "Work Anthropic/missing"}, "model is unavailable for this connection (HTTP 422)", 1},
 		{"subscription model rejected by Cloud", []string{"apply", path, "--model", "My ChatGPT/missing"}, "model is unavailable for this connection (HTTP 422)", 1},
-		{"missing connection", []string{"apply", path, "--model", "Missing/model"}, "not found", 0},
+		{"missing API key or subscription", []string{"apply", path, "--model", "Missing/model"}, "no saved API key or subscription matches", 0},
 		{"missing model", []string{"apply", path, "--model", "Work Anthropic/"}, "model ID is required", 0},
 		{"invalid syntax", []string{"apply", path, "--model", "Work Anthropic"}, "--model must be", 0},
 		{"model cannot change existing deployment", []string{"apply", path, "--session", "sess_existing", "--model", "Work Anthropic/claude-test"}, "cannot update an existing", 0},

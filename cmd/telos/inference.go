@@ -18,7 +18,7 @@ func resolveCloudInference(client *cloud.Client, model string) (*cloud.Inference
 		return &cloud.InferenceSelection{Source: "managed", Tier: strings.TrimPrefix(model, "telos/")}, nil
 	}
 	if !strings.Contains(model, "/") {
-		return nil, fmt.Errorf("--model must be telos/default, telos/max, or <connection-name>/<model-id>")
+		return nil, fmt.Errorf("--model must be telos/default, telos/max, or <name>/<model-id> for a saved API key or subscription")
 	}
 	connections, err := client.ListInferenceConnections()
 	if err != nil {
@@ -42,10 +42,10 @@ func selectInferenceConnection(connections []cloud.InferenceConnection, model st
 		}
 	}
 	if len(matches) == 0 {
-		return cloud.InferenceConnection{}, "", fmt.Errorf("inference connection was not found; run `telos config` to list connections")
+		return cloud.InferenceConnection{}, "", fmt.Errorf("no saved API key or subscription matches --model %q; run `telos config` to list them", model)
 	}
 	if len(matches) > 1 {
-		return cloud.InferenceConnection{}, "", fmt.Errorf("inference selection is ambiguous; rename the connections at %s so the selection identifies one connection", inferenceSettingsURL)
+		return cloud.InferenceConnection{}, "", fmt.Errorf("--model %q is ambiguous: more than one saved API key or subscription matches it; rename them at %s so each name is unique", model, inferenceSettingsURL)
 	}
 	connection := matches[0]
 	modelID := strings.TrimPrefix(model, connection.Name+"/")

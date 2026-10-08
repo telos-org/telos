@@ -39,7 +39,7 @@ func cmdLaunch(command, action string, args []string) {
 	}
 	modelHelp := "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	if command == "apply" {
-		modelHelp = "Cloud: telos/default, telos/max, or <subscription-or-key-name>/<model-id>; local: <provider>/<model>; defaults to $TELOS_MODEL, then the workspace preference for Cloud"
+		modelHelp = "Cloud: telos/default, telos/max, or <name>/<model-id> for a saved API key or subscription; local: <provider>/<model>; defaults to $TELOS_MODEL, then the workspace preference for Cloud"
 	}
 	model := fs.String("model", "", modelHelp)
 	thinking := fs.String("thinking", "", "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs")
