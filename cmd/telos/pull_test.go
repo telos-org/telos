@@ -100,6 +100,76 @@ func TestPackageForReferenceUsesRegistryDigest(t *testing.T) {
 	}
 }
 
+func TestPullPackageFallsBackToSkill(t *testing.T) {
+	digest, bundle := testRegistrySkillBundle(t, "verify-test")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/skills/telos/verify-test/versions/1.2.3":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope":   "telos",
+				"name":    "verify-test",
+				"version": "1.2.3",
+				"ref":     "@telos/verify-test:1.2.3",
+				"digest":  digest,
+			})
+		case "/api/skills/telos/verify-test/versions/1.2.3/bundle":
+			_, _ = w.Write(bundle)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	client := cloud.NewClient(srv.URL, "token")
+
+	reference, err := parsePackageReference("@telos/verify-test:1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "verify-test")
+	gotDigest, path, err := pullPackage(client, reference, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotDigest != digest || path != output {
+		t.Fatalf("pulled digest=%q path=%q", gotDigest, path)
+	}
+	if data, err := os.ReadFile(filepath.Join(output, "SKILL.md")); err != nil || !strings.Contains(string(data), "Verify the result.") {
+		t.Fatalf("pulled SKILL.md = %q, %v", data, err)
+	}
+
+	missing, err := parsePackageReference("@telos/missing:1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := pullPackage(client, missing, filepath.Join(t.TempDir(), "missing")); err == nil ||
+		err.Error() != "no package or skill found for @telos/missing:1.0.0" {
+		t.Fatalf("missing reference error = %v", err)
+	}
+}
+
+func TestPullPackageDoesNotHidePackageErrors(t *testing.T) {
+	skillRequested := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/skills/") {
+			skillRequested = true
+		}
+		http.Error(w, "registry unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	reference, err := parsePackageReference("@telos/demo:1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := pullPackage(cloud.NewClient(srv.URL, "token"), reference, filepath.Join(t.TempDir(), "demo")); err == nil ||
+		!strings.Contains(err.Error(), "resolve @telos/demo:1.2.3") {
+		t.Fatalf("error = %v", err)
+	}
+	if skillRequested {
+		t.Fatal("a package lookup failure fell back to the skill registry")
+	}
+}
+
 func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	pkg := testApplyPackage(t)
 	var published bool
