@@ -345,18 +345,43 @@ func TestCloudReceiptShowsSavedInference(t *testing.T) {
 	session := cloud.SessionRecord{ID: "sess_test", AgentModel: "internal/model", AgentThinking: "high", Inference: &cloud.InferenceSummary{Source: "byok", ConnectionName: "Work Anthropic", Provider: "anthropic", Model: "claude-test"}}
 	var out bytes.Buffer
 	printCloudSessionDescription(&out, session)
-	for _, want := range []string{"API key", "Work Anthropic", "claude-test", "high (requested)"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("description omitted %q: %s", want, out.String())
-		}
+	if got := configOutputValue(t, out.String(), "Model"); got != "Work Anthropic/claude-test" {
+		t.Fatalf("displayed model = %q, want the --model selection: %s", got, out.String())
 	}
-	if strings.Contains(out.String(), "internal/model") {
-		t.Fatal("description replaced the public selection with the internal runtime model")
+	if !strings.Contains(out.String(), "high (requested)") {
+		t.Fatalf("description omitted thinking: %s", out.String())
+	}
+	for _, unwanted := range []string{"internal/model", "Inference", "Connection"} {
+		if strings.Contains(out.String(), unwanted) {
+			t.Fatalf("description includes %q: %s", unwanted, out.String())
+		}
 	}
 	encoded := captureStdout(t, func() { printCloudSessionJSON(&session, "@telos") })
 	var decoded struct{ Inference cloud.InferenceSummary }
 	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil || decoded.Inference.ConnectionName != "Work Anthropic" {
 		t.Fatalf("JSON omitted inference: %s, %v", encoded, err)
+	}
+}
+
+func TestCloudSessionModelMatchesModelSelection(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		agentModel string
+		summary    *cloud.InferenceSummary
+		want       string
+	}{
+		{"managed", "telos-bifrost/telos/max", &cloud.InferenceSummary{Source: "managed", Tier: "max"}, "telos/max"},
+		{"api key", "internal/model", &cloud.InferenceSummary{Source: "byok", ConnectionName: "Work Anthropic", Model: "claude-test"}, "Work Anthropic/claude-test"},
+		{"subscription", "internal/model", &cloud.InferenceSummary{Source: "subscription", ConnectionName: "ChatGPT", Model: "gpt-test"}, "ChatGPT/gpt-test"},
+		{"hidden connection", "internal/model", &cloud.InferenceSummary{Source: "subscription", Model: "gpt-test"}, "gpt-test (Subscription)"},
+		{"no inference summary", "internal/model", nil, "internal/model"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			session := cloud.SessionRecord{AgentModel: tt.agentModel, Inference: tt.summary}
+			if got := cloudSessionModel(session); got != tt.want {
+				t.Fatalf("cloudSessionModel = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
