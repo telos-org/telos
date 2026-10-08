@@ -89,12 +89,15 @@ type InferenceUpdate struct {
 }
 
 type InferenceResponse struct {
-	ConnectionSwitching bool              `json:"connection_switching"`
+	// GET checks availability; a mutation that does not need the check omits it.
+	ConnectionSwitching *bool             `json:"connection_switching,omitempty"`
 	ApplyAt             string            `json:"apply_at"`
 	Settings            InferenceSettings `json:"settings"`
 	Revision            int               `json:"revision"`
 	Update              *InferenceUpdate  `json:"update,omitempty"`
 }
+
+var ErrInferenceUnavailable = errors.New("Pi capability check unavailable")
 
 var inferenceRequestID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
@@ -155,7 +158,7 @@ func (r InferenceUpdateRequest) Validate() error {
 	return nil
 }
 
-func inferenceResponse(m *Manifest, connectionSwitching bool) *InferenceResponse {
+func inferenceResponse(m *Manifest, connectionSwitching *bool) *InferenceResponse {
 	r := &InferenceResponse{ConnectionSwitching: connectionSwitching, ApplyAt: "next_turn", Settings: InferenceSettings{Model: m.Config.Model, Thinking: m.Config.Thinking}, Update: m.InferenceUpdate}
 	if m.InferenceConnection != nil {
 		r.Settings.ConnectionID = m.InferenceConnection.ID
@@ -182,7 +185,11 @@ func (fs *FileStore) Inference(id string) (*InferenceResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	return inferenceResponse(m, platform.PiSupportsInferenceConnections()), nil
+	supported, err := platform.PiSupportsInferenceConnections()
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrInferenceUnavailable, err)
+	}
+	return inferenceResponse(m, &supported), nil
 }
 
 func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error) {
@@ -192,7 +199,7 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 	if !safeSessionID(id) {
 		return nil, ErrNotFound
 	}
-	connectionSwitching := platform.PiSupportsInferenceConnections()
+	var connectionSwitching *bool
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
 		current := inferenceResponse(m, connectionSwitching)
 		if current.Update != nil && current.Update.RequestID == req.RequestID {
@@ -213,8 +220,15 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 		if current.Update != nil && (current.Update.Status == "pending" || current.Update.Status == "applying") {
 			return fmt.Errorf("%w: an inference change is already in progress", ErrConflict)
 		}
-		if (req.Connection != nil || m.InferenceConnection != nil) && !connectionSwitching {
-			return fmt.Errorf("%w: inference connection switching requires the compiled Pi 1.0.4 or newer 1.x runtime", ErrInvalidSession)
+		if req.Connection != nil || m.InferenceConnection != nil {
+			supported, err := platform.PiSupportsInferenceConnections()
+			if err != nil {
+				return fmt.Errorf("%w: %v", ErrInferenceUnavailable, err)
+			}
+			connectionSwitching = &supported
+			if !supported {
+				return fmt.Errorf("%w: inference connection switching requires the compiled Pi 1.0.4 or newer 1.x runtime", ErrInvalidSession)
+			}
 		}
 		if req.Connection == nil && req.Model != nil && m.InferenceConnection != nil && !strings.HasPrefix(*req.Model, m.InferenceConnection.Provider+"/") {
 			return fmt.Errorf("%w: changing providers requires a prepared connection", ErrInvalidSession)

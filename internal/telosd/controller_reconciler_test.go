@@ -21,7 +21,7 @@ func TestInferenceConnectionsSurviveBootstrapAndChildCreation(t *testing.T) {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\nprintf 'TELOS_PI_CONNECTION_SWITCHING\\n'\n"), 0o755); err != nil {
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\nprintf '{\"connection_switching\":true,\"executable\":\"%s\"}\\n' \"$0\"\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)

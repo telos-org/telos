@@ -166,7 +166,7 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 				}
 				finish(prover)
 				state, err := store.Inference("session")
-				if err != nil || state.ConnectionSwitching || state.Update != nil || state.Revision != 0 {
+				if err != nil || state.ConnectionSwitching == nil || *state.ConnectionSwitching || state.Update != nil || state.Revision != 0 {
 					t.Fatalf("legacy request changed saved state: %+v %v", state, err)
 				}
 				return
@@ -416,8 +416,8 @@ func TestInferenceMissingReceiptDoesNotReplayPrompt(t *testing.T) {
 	p.Env = map[string]string{"HOME": home}
 	e := &sessionInferenceExecutor{sessionDir: dir, pi: executor.NewPiExecutor(p, m.Config.Model, m.Config.Thinking, 5)}
 	e.ExecuteTurn("Do work once.", "prover", &game.TurnState{Dir: dir})
-	state, err := store.Inference("session")
-	if err != nil || state.Update.Status != "unknown" || state.Settings.Model != m.Config.Model {
+	state, err := sessionapi.ReadManifest(manifestPath(dir))
+	if err != nil || state.InferenceUpdate.Status != "unknown" || state.Config.Model != m.Config.Model {
 		t.Fatalf("unconfirmed startup: %+v %v", state, err)
 	}
 	calls, err := os.ReadFile(filepath.Join(home, "calls"))

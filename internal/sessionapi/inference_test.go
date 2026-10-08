@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,7 +26,7 @@ func TestInferenceConnectionIsDurableAndRedacted(t *testing.T) {
 	definition := json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`)
 	req := InferenceUpdateRequest{RequestID: "connection", Model: &model, ModelDefinition: definition, Connection: connection}
 	state, err := store.UpdateInference("session", req)
-	if err != nil || !state.ConnectionSwitching || state.Settings.ConnectionID != "" || state.Update.Connection.APIKey != "" {
+	if err != nil || state.ConnectionSwitching == nil || !*state.ConnectionSwitching || state.Settings.ConnectionID != "" || state.Update.Connection.APIKey != "" {
 		t.Fatalf("pending response: %+v %v", state, err)
 	}
 	encoded, _ := json.Marshal(state)
@@ -70,21 +71,20 @@ func TestInferenceConnectionIsDurableAndRedacted(t *testing.T) {
 	}
 }
 
-func setInferencePi(t *testing.T, supported bool) {
+func setInferencePi(t *testing.T, supported bool) string {
 	t.Helper()
 	home := t.TempDir()
 	bin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\nexit 78\n"
-	if supported {
-		script = "#!/bin/sh\nprintf 'TELOS_PI_CONNECTION_SWITCHING\\n'\n"
-	}
-	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+	script := fmt.Sprintf("#!/bin/sh\nprintf '{\"connection_switching\":%t,\"executable\":\"%%s\"}\\n' \"$0\"\n", supported)
+	path := filepath.Join(bin, "pi")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	return path
 }
 
 func TestInferenceConnectionCapabilityGatesNewRequests(t *testing.T) {
@@ -97,7 +97,7 @@ func TestInferenceConnectionCapabilityGatesNewRequests(t *testing.T) {
 	}
 	setInferencePi(t, false)
 	state, err := store.Inference("session")
-	if err != nil || state.ConnectionSwitching {
+	if err != nil || state.ConnectionSwitching == nil || *state.ConnectionSwitching {
 		t.Fatalf("unsupported Pi advertised connection switching: %+v %v", state, err)
 	}
 	before, _ := os.ReadFile(path)
@@ -111,7 +111,7 @@ func TestInferenceConnectionCapabilityGatesNewRequests(t *testing.T) {
 	// A Pi upgrade is visible to the same store without a runtime restart.
 	setInferencePi(t, true)
 	state, err = store.UpdateInference("session", req)
-	if err != nil || !state.ConnectionSwitching || state.Update.Status != "pending" {
+	if err != nil || state.ConnectionSwitching == nil || !*state.ConnectionSwitching || state.Update.Status != "pending" {
 		t.Fatalf("supported Pi rejected connection: %+v %v", state, err)
 	}
 	claimed, err := ClaimInferenceUpdate(path, "attempt", "receipt.json", InferenceSettings{})
@@ -124,7 +124,7 @@ func TestInferenceConnectionCapabilityGatesNewRequests(t *testing.T) {
 	setInferencePi(t, false)
 	// Replaying a completed request is still safe after a downgrade.
 	state, err = store.UpdateInference("session", req)
-	if err != nil || state.ConnectionSwitching || state.Update.Status != "applied" {
+	if err != nil || state.ConnectionSwitching != nil || state.Update.Status != "applied" {
 		t.Fatalf("capability change broke replay: %+v %v", state, err)
 	}
 	// Thinking-only changes still use the confirmed connection at startup.
@@ -143,8 +143,106 @@ func TestInferenceLegacyPiCanStillQueueModelAndThinking(t *testing.T) {
 	setInferencePi(t, false)
 	model, thinking := "provider/new", "high"
 	state, err := store.UpdateInference("session", InferenceUpdateRequest{RequestID: "settings", Model: &model, Thinking: &thinking})
-	if err != nil || state.ConnectionSwitching || state.Update.Status != "pending" {
+	if err != nil || state.ConnectionSwitching != nil || state.Update.Status != "pending" {
 		t.Fatalf("legacy model/thinking update: %+v %v", state, err)
+	}
+}
+
+func TestInferenceCapabilityFailureIsRetryable(t *testing.T) {
+	store, path := inferenceStore(t)
+	binary := setInferencePi(t, true)
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho private-probe-error >&2\nexit 78\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	model := "provider/new"
+	req := InferenceUpdateRequest{
+		RequestID: "connection", Model: &model, Connection: testInferenceConnection(),
+		ModelDefinition: json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`),
+	}
+	before, _ := os.ReadFile(path)
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, store, NewBearerAuthorizer(store, "operator-token"), RuntimeIdentity{})
+	for _, method := range []string{"GET", "PUT"} {
+		data, _ := json.Marshal(req)
+		request := httptest.NewRequest(method, "/api/sessions/session/inference", bytes.NewReader(data))
+		request.Header.Set("Authorization", "Bearer operator-token")
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable || strings.Contains(response.Body.String(), "private-probe-error") {
+			t.Fatalf("failed probe must be retryable: %d %s", response.Code, response.Body.String())
+		}
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("failed probe consumed or rejected the change request")
+	}
+	setInferencePi(t, true)
+	state, err := store.UpdateInference("session", req)
+	if err != nil || state.Update.Status != "pending" || state.Revision != 1 {
+		t.Fatalf("probe recovery did not accept the same request: %+v %v", state, err)
+	}
+}
+
+func TestInferenceReplayAndPlainSettingsDoNotProbe(t *testing.T) {
+	for _, connection := range []bool{false, true} {
+		t.Run(fmt.Sprintf("connection=%t", connection), func(t *testing.T) {
+			store, path := inferenceStore(t)
+			binary := setInferencePi(t, true)
+			model, thinking := "provider/new", "high"
+			req := InferenceUpdateRequest{RequestID: "initial", Model: &model}
+			if connection {
+				req.Connection = testInferenceConnection()
+				req.ModelDefinition = json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`)
+			}
+			if _, err := store.UpdateInference("session", req); err != nil {
+				t.Fatal(err)
+			}
+			probed := filepath.Join(t.TempDir(), "probed")
+			failure := fmt.Sprintf("#!/bin/sh\necho checked > %q\nexit 1\n", probed)
+			if err := os.WriteFile(binary, []byte(failure), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, phase := range []string{"pending", "applied"} {
+				if phase == "applied" {
+					claimed, err := ClaimInferenceUpdate(path, "attempt", "receipt.json", InferenceSettings{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", claimed.Settings); err != nil {
+						t.Fatal(err)
+					}
+				}
+				state, err := store.UpdateInference("session", req)
+				if err != nil || state.Update.Status != phase || state.ConnectionSwitching != nil {
+					t.Fatalf("probe outage broke %s replay: %+v %v", phase, state, err)
+				}
+				data, _ := json.Marshal(state)
+				if bytes.Contains(data, []byte("connection_switching")) {
+					t.Fatal("skipped check reported an unsupported capability")
+				}
+			}
+			if _, err := os.Stat(probed); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("exact replay ran the capability probe: %v", err)
+			}
+			before, _ := os.ReadFile(path)
+			state, err := store.UpdateInference("session", InferenceUpdateRequest{RequestID: "thinking", ExpectedRevision: 1, Thinking: &thinking})
+			if connection {
+				if !errors.Is(err, ErrInferenceUnavailable) {
+					t.Fatalf("confirmed connection needs a successful check: %+v %v", state, err)
+				}
+				after, _ := os.ReadFile(path)
+				if !bytes.Equal(before, after) {
+					t.Fatal("retryable error changed confirmed settings or request state")
+				}
+			} else {
+				if err != nil || state.Update.Status != "pending" || state.ConnectionSwitching != nil {
+					t.Fatalf("plain settings unnecessarily required capability: %+v %v", state, err)
+				}
+				if _, err := os.Stat(probed); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("plain settings ran the capability probe: %v", err)
+				}
+			}
+		})
 	}
 }
 
@@ -200,6 +298,7 @@ func TestInferenceConnectionValidation(t *testing.T) {
 
 func inferenceStore(t *testing.T) (*FileStore, string) {
 	t.Helper()
+	setInferencePi(t, false)
 	store := NewFileStore(t.TempDir(), RuntimeLocal)
 	path := filepath.Join(store.Root, "session", "session.json")
 	m := &Manifest{SessionID: "session", SessionKind: KindController, Config: SessionConfig{Model: "provider/old", Thinking: "medium"}}
