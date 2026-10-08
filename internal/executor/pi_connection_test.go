@@ -7,14 +7,18 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/sha1"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -39,6 +43,23 @@ func TestPiConnectionsRouteModelsAndToolsSeparately(t *testing.T) {
 			t.Fatal("CI must provide TELOS_TEST_PI_BINARY for native Pi routing tests")
 		}
 		t.Skip("set TELOS_TEST_PI_BINARY to exercise native Pi HTTP transport")
+	}
+	for _, api := range []string{"openai-completions", "openai-responses", "anthropic-messages", "openai-codex-responses"} {
+		t.Run(api, func(t *testing.T) { testPiConnectionTransport(t, binary, api) })
+	}
+}
+
+func testPiConnectionTransport(t *testing.T, binary, api string) {
+	provider, path := "telos-bifrost", "/v1/chat/completions"
+	baseURL := "https://models.test/v1"
+	switch api {
+	case "openai-responses":
+		provider, path = "openai", "/v1/responses"
+	case "anthropic-messages":
+		provider, path = "anthropic", "/v1/messages"
+		baseURL = "https://models.test"
+	case "openai-codex-responses":
+		provider, path = "openai-codex", "/v1/codex/responses"
 	}
 	root := t.TempDir()
 	certificate, ca := piConnectionTestCertificate(t)
@@ -67,15 +88,29 @@ func TestPiConnectionsRouteModelsAndToolsSeparately(t *testing.T) {
 	runs := make([]*invocation, 0, 2)
 	for i := 0; i < 2; i++ {
 		run := &invocation{key: "telos-proxy-" + strings.Repeat(string(rune('a'+i)), 43), profileID: fmt.Sprintf("profile-%d", i), modelID: "probe"}
+		if api == "openai-codex-responses" {
+			claims := base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"telos-proxy"}}`))
+			run.key = "telos-proxy." + claims + "." + strings.Repeat(string(rune('a'+i)), 43)
+		}
 		if i == 1 {
 			run.modelID = "configured-child-model"
 		}
-		proxy := piConnectionTestProxy(t, certificate, func(r *http.Request) (string, string) {
-			if r.Host != "models.test" || r.URL.Path != "/v1/chat/completions" {
+		checkHeaders := func(r *http.Request) {
+			if r.Host != "models.test" || r.URL.Path != path {
 				t.Errorf("tool request escaped to model proxy: %s%s", r.Host, r.URL.Path)
 			}
-			if r.Header.Get("Authorization") != "Bearer "+run.key || r.Header.Get("x-bf-vk") != run.key {
+			if api == "anthropic-messages" {
+				if r.Header.Get("x-api-key") != run.key {
+					t.Error("Anthropic request used the wrong account credential")
+				}
+			} else if r.Header.Get("Authorization") != "Bearer "+run.key {
 				t.Error("model request used the wrong account credential")
+			}
+			if provider == "telos-bifrost" && r.Header.Get("x-bf-vk") != run.key {
+				t.Error("managed request used the wrong virtual key")
+			}
+			if api == "openai-codex-responses" && r.Header.Get("chatgpt-account-id") != "telos-proxy" {
+				t.Error("Codex request used the wrong account ID")
 			}
 			for name, values := range r.Header {
 				for _, value := range values {
@@ -84,23 +119,62 @@ func TestPiConnectionsRouteModelsAndToolsSeparately(t *testing.T) {
 					}
 				}
 			}
-			body, _ := io.ReadAll(r.Body)
+		}
+		checkBody := func(body []byte) int32 {
 			var payload map[string]any
 			if err := json.Unmarshal(body, &payload); err != nil || payload["model"] != run.modelID {
 				t.Errorf("selected model metadata lost: %s, %v", body, err)
 			}
-			if run.modelID == "configured-child-model" && payload["max_tokens"] != float64(3072) {
+			if api == "openai-completions" && run.modelID == "configured-child-model" && payload["max_tokens"] != float64(3072) {
 				t.Errorf("configured model override lost: %s", body)
 			}
 			call := run.calls.Add(1)
-			if call == 1 {
-				return "text/event-stream", piConnectionCompletion(map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"index": 0, "id": "call_tool", "type": "function", "function": map[string]any{"name": "bash", "arguments": `{"command":"test \"$OPENAI_ORG_ID\" = stale-sdk-org && test \"$OPENAI_PROJECT_ID\" = stale-sdk-project && curl --fail --silent https://tools.test/check"}`}}}}, "tool_calls")
-			}
-			if !bytes.Contains(body, []byte("general-tool-output")) {
+			if call > 1 && !bytes.Contains(body, []byte("general-tool-output")) {
 				t.Error("model follow-up lost the tool result")
 			}
-			return "text/event-stream", piConnectionCompletion(map[string]any{"role": "assistant", "content": "Complete.\n<status>CONCEDE</status>"}, "stop")
-		})
+			return call
+		}
+		var proxy *httptest.Server
+		if api == "openai-codex-responses" {
+			proxy = piConnectionTestTunnel(t, certificate, func(connection net.Conn, reader *bufio.Reader, r *http.Request) {
+				checkHeaders(r)
+				if r.Method != "GET" || !strings.EqualFold(r.Header.Get("Upgrade"), "websocket") {
+					t.Error("Codex must use its WebSocket transport; SSE fallback is not coverage")
+					return
+				}
+				accept := sha1.Sum([]byte(r.Header.Get("Sec-WebSocket-Key") + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"))
+				_, _ = fmt.Fprintf(connection, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: %s\r\n\r\n", base64.StdEncoding.EncodeToString(accept[:]))
+				for {
+					opcode, body, err := piConnectionReadFrame(reader)
+					if err != nil || opcode == 8 {
+						return
+					}
+					if opcode == 9 {
+						_ = piConnectionWriteFrame(connection, 10, body)
+						continue
+					}
+					if opcode != 1 {
+						t.Errorf("unexpected WebSocket opcode %d", opcode)
+						return
+					}
+					call := checkBody(body)
+					for _, event := range piConnectionResponseEvents(call == 1) {
+						data, _ := json.Marshal(event)
+						if err := piConnectionWriteFrame(connection, 1, data); err != nil {
+							t.Error(err)
+							return
+						}
+					}
+				}
+			})
+		} else {
+			proxy = piConnectionTestProxy(t, certificate, func(r *http.Request) (string, string) {
+				checkHeaders(r)
+				body, _ := io.ReadAll(r.Body)
+				call := checkBody(body)
+				return "text/event-stream", piConnectionStream(api, run.modelID, call == 1)
+			})
+		}
 		defer proxy.Close()
 		dir := filepath.Join(root, run.profileID)
 		if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -114,10 +188,14 @@ func TestPiConnectionsRouteModelsAndToolsSeparately(t *testing.T) {
 			}
 			return path
 		}
-		write("settings.json", []byte(`{"compaction":{"enabled":false},"retry":{"enabled":false},"transport":"sse"}`))
+		transport := "sse"
+		if api == "openai-codex-responses" {
+			transport = "websocket"
+		}
+		write("settings.json", []byte(fmt.Sprintf(`{"compaction":{"enabled":false},"retry":{"enabled":false},"transport":%q}`, transport)))
 		extension := write("startup.js", piStartupExtension)
 		run.receipt = filepath.Join(dir, "receipt.json")
-		definition := json.RawMessage(fmt.Sprintf(`{"id":%q,"name":"Probe","api":"openai-completions","reasoning":false,"input":["text"],"contextWindow":128000,"maxTokens":4096,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}`, run.modelID))
+		definition := json.RawMessage(fmt.Sprintf(`{"id":%q,"name":"Probe","api":%q,"reasoning":false,"input":["text"],"contextWindow":128000,"maxTokens":4096,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}`, run.modelID, api))
 		var configured map[string]any
 		if err := json.Unmarshal(definition, &configured); err != nil {
 			t.Fatal(err)
@@ -135,15 +213,17 @@ func TestPiConnectionsRouteModelsAndToolsSeparately(t *testing.T) {
 			// obtains its definition and overrides from the configured registry.
 			definition = nil
 			override["maxTokens"] = 3072
-			override["compat"] = map[string]string{"maxTokensField": "max_tokens"}
+			if api == "openai-completions" {
+				override["compat"] = map[string]string{"maxTokensField": "max_tokens"}
+			}
 		}
-		modelsData, _ := json.Marshal(map[string]any{"providers": map[string]any{"telos-bifrost": map[string]any{
-			"baseUrl": "https://old.test/v1", "api": "openai-completions", "apiKey": "stale-key", "headers": staleHeaders("provider"),
+		modelsData, _ := json.Marshal(map[string]any{"providers": map[string]any{provider: map[string]any{
+			"baseUrl": "https://old.test/v1", "api": api, "apiKey": "stale-key", "headers": staleHeaders("provider"),
 			"models": []any{configured}, "modelOverrides": map[string]any{run.modelID: override},
 		}}})
 		write("models.json", modelsData)
-		config := PiStartupConfig{RequestID: "switch", AttemptID: run.profileID, Model: "telos-bifrost/" + run.modelID, Thinking: "off", Definition: definition, ReceiptPath: run.receipt,
-			Connection: &sessionapi.InferenceConnection{ID: run.profileID, Provider: "telos-bifrost", BaseURL: "https://models.test/v1", ProxyURL: proxy.URL, APIKey: run.key, AuthHeader: i == 1}}
+		config := PiStartupConfig{RequestID: "switch", AttemptID: run.profileID, Model: provider + "/" + run.modelID, Thinking: "off", Definition: definition, ReceiptPath: run.receipt,
+			Connection: &sessionapi.InferenceConnection{ID: run.profileID, Provider: provider, BaseURL: baseURL, ProxyURL: proxy.URL, APIKey: run.key, AuthHeader: i == 1 && api != "anthropic-messages"}}
 		// The extension is invoked directly to use local test proxy ports. The
 		// operator API separately tests the production address/port allowlist.
 		data, _ := json.Marshal(config)
@@ -186,7 +266,131 @@ func piConnectionCompletion(delta map[string]any, finish string) string {
 	return "data: " + string(data) + "\n\ndata: " + string(done) + "\n\ndata: [DONE]\n\n"
 }
 
+const piConnectionToolArguments = `{"command":"test \"$OPENAI_ORG_ID\" = stale-sdk-org && test \"$OPENAI_PROJECT_ID\" = stale-sdk-project && curl --fail --silent https://tools.test/check"}`
+const piConnectionFinalText = "Complete.\n<status>CONCEDE</status>"
+
+func piConnectionResponseEvents(tool bool) []map[string]any {
+	item := map[string]any{"type": "message", "id": "msg_final", "role": "assistant", "status": "completed", "content": []any{map[string]any{"type": "output_text", "text": piConnectionFinalText, "annotations": []any{}}}}
+	id := "resp_final"
+	if tool {
+		id = "resp_tool"
+		item = map[string]any{"type": "function_call", "id": "fc_tool", "call_id": "call_tool", "name": "bash", "arguments": piConnectionToolArguments, "status": "completed"}
+	}
+	response := map[string]any{"id": id, "status": "completed", "output": []any{item}, "usage": map[string]any{"input_tokens": 1, "output_tokens": 1, "total_tokens": 2}}
+	events := []map[string]any{
+		{"type": "response.created", "response": map[string]any{"id": id}},
+		{"type": "response.output_item.added", "output_index": 0, "item": item},
+	}
+	if !tool {
+		events = append(events, map[string]any{"type": "response.output_text.delta", "output_index": 0, "content_index": 0, "delta": piConnectionFinalText})
+	}
+	return append(events,
+		map[string]any{"type": "response.output_item.done", "output_index": 0, "item": item},
+		map[string]any{"type": "response.completed", "response": response},
+	)
+}
+
+func piConnectionStream(api, model string, tool bool) string {
+	if api == "openai-completions" {
+		if tool {
+			return piConnectionCompletion(map[string]any{"role": "assistant", "tool_calls": []any{map[string]any{"index": 0, "id": "call_tool", "type": "function", "function": map[string]any{"name": "bash", "arguments": piConnectionToolArguments}}}}, "tool_calls")
+		}
+		return piConnectionCompletion(map[string]any{"role": "assistant", "content": piConnectionFinalText}, "stop")
+	}
+	events := piConnectionResponseEvents(tool)
+	if api == "anthropic-messages" {
+		block := map[string]any{"type": "text", "text": ""}
+		delta := map[string]any{"type": "text_delta", "text": piConnectionFinalText}
+		reason := "end_turn"
+		if tool {
+			block = map[string]any{"type": "tool_use", "id": "call_tool", "name": "bash", "input": map[string]any{}}
+			delta = map[string]any{"type": "input_json_delta", "partial_json": piConnectionToolArguments}
+			reason = "tool_use"
+		}
+		events = []map[string]any{
+			{"type": "message_start", "message": map[string]any{"id": "msg_probe", "type": "message", "role": "assistant", "model": model, "content": []any{}, "usage": map[string]int{"input_tokens": 1, "output_tokens": 0}}},
+			{"type": "content_block_start", "index": 0, "content_block": block},
+			{"type": "content_block_delta", "index": 0, "delta": delta},
+			{"type": "content_block_stop", "index": 0},
+			{"type": "message_delta", "delta": map[string]any{"stop_reason": reason, "stop_sequence": nil}, "usage": map[string]int{"output_tokens": 1}},
+			{"type": "message_stop"},
+		}
+	}
+	var stream strings.Builder
+	for _, event := range events {
+		data, _ := json.Marshal(event)
+		fmt.Fprintf(&stream, "event: %s\ndata: %s\n\n", event["type"], data)
+	}
+	return stream.String()
+}
+
+// The test server only needs complete masked client frames and unmasked replies.
+// Keep the protocol fixture local instead of adding a runtime WebSocket dependency.
+func piConnectionReadFrame(reader io.Reader) (byte, []byte, error) {
+	var header [2]byte
+	if _, err := io.ReadFull(reader, header[:]); err != nil {
+		return 0, nil, err
+	}
+	if header[0]&0x80 == 0 || header[1]&0x80 == 0 {
+		return 0, nil, fmt.Errorf("expected complete masked WebSocket frame")
+	}
+	size := uint64(header[1] & 0x7f)
+	if size == 126 {
+		var extended [2]byte
+		if _, err := io.ReadFull(reader, extended[:]); err != nil {
+			return 0, nil, err
+		}
+		size = uint64(binary.BigEndian.Uint16(extended[:]))
+	} else if size == 127 {
+		var extended [8]byte
+		if _, err := io.ReadFull(reader, extended[:]); err != nil {
+			return 0, nil, err
+		}
+		size = binary.BigEndian.Uint64(extended[:])
+	}
+	if size > 1<<20 {
+		return 0, nil, fmt.Errorf("unexpected WebSocket payload length %d", size)
+	}
+	var mask [4]byte
+	if _, err := io.ReadFull(reader, mask[:]); err != nil {
+		return 0, nil, err
+	}
+	data := make([]byte, size)
+	if _, err := io.ReadFull(reader, data); err != nil {
+		return 0, nil, err
+	}
+	for i := range data {
+		data[i] ^= mask[i%4]
+	}
+	return header[0] & 0x0f, data, nil
+}
+
+func piConnectionWriteFrame(writer io.Writer, opcode byte, data []byte) error {
+	var frame bytes.Buffer
+	frame.WriteByte(0x80 | opcode)
+	if len(data) < 126 {
+		frame.WriteByte(byte(len(data)))
+	} else {
+		frame.WriteByte(127)
+		_ = binary.Write(&frame, binary.BigEndian, uint64(len(data)))
+	}
+	frame.Write(data)
+	_, err := writer.Write(frame.Bytes())
+	return err
+}
+
 func piConnectionTestProxy(t *testing.T, certificate tls.Certificate, respond func(*http.Request) (string, string)) *httptest.Server {
+	t.Helper()
+	return piConnectionTestTunnel(t, certificate, func(connection net.Conn, _ *bufio.Reader, request *http.Request) {
+		kind, body := respond(request)
+		response := &http.Response{StatusCode: 200, ProtoMajor: 1, ProtoMinor: 1, Header: http.Header{"Content-Type": {kind}}, Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body)), Close: true}
+		if err := response.Write(connection); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+func piConnectionTestTunnel(t *testing.T, certificate tls.Certificate, respond func(net.Conn, *bufio.Reader, *http.Request)) *httptest.Server {
 	t.Helper()
 	var connections sync.WaitGroup
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -208,17 +412,14 @@ func piConnectionTestProxy(t *testing.T, certificate tls.Certificate, respond fu
 		_ = buffered.Flush()
 		secure := tls.Server(connection, &tls.Config{Certificates: []tls.Certificate{certificate}, MinVersion: tls.VersionTLS12})
 		defer secure.Close()
-		request, err := http.ReadRequest(bufio.NewReader(secure))
+		reader := bufio.NewReader(secure)
+		request, err := http.ReadRequest(reader)
 		if err != nil {
 			t.Error(err)
 			return
 		}
 		defer request.Body.Close()
-		kind, body := respond(request)
-		response := &http.Response{StatusCode: 200, ProtoMajor: 1, ProtoMinor: 1, Header: http.Header{"Content-Type": {kind}}, Body: io.NopCloser(strings.NewReader(body)), ContentLength: int64(len(body)), Close: true}
-		if err := response.Write(secure); err != nil {
-			t.Error(err)
-		}
+		respond(secure, reader, request)
 	}))
 	t.Cleanup(func() { server.Close(); connections.Wait() })
 	return server
