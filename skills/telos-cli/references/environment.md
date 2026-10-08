@@ -1,6 +1,6 @@
 ---
 title: The Telos Cloud environment
-description: Everything you need to know about the Telos Cloud environment — networking, secrets, resources, developer toolchain, and more.
+description: Everything you need to know about the Telos Cloud environment — the VM, developer toolchain, networking, and credentials.
 group: Platform
 ---
 
@@ -12,13 +12,9 @@ Each Goal gets its own persistent VM that runs a lightweight Kubernetes cluster.
 
 The Telos agent harness lives inside this VM and has access to a full `git` workspace, developer toolchain, and permissions to launch and manage services (inside the VM). This lets the agent own the full build, test, and deploy lifecycle.
 
-<sketch-of-cell-architecture-in-an-agent-friendly-way>
-
 ## Toolchain
 
-Any agent's capability is bounded by the list of tools that are accessible to it. Here is a list of the tools that are baked into the Telos Cloud environment. Tools are packaged via [Nix](https://nixos.org) to ensure hermetic and consistent deployments.
-
-A compact overview of the available tools is below:
+Any agent's capability is bounded by the tools it can use. Every Telos Cloud environment includes the tools below, packaged with [Nix](https://nixos.org) for hermetic, consistent deployments.
 
 | Capability | Included tools |
 |---|---|
@@ -32,8 +28,6 @@ A compact overview of the available tools is below:
 | Data processing and file inspection | `jq`, `yq`, `grep`, `sed`, `gawk`, `diff`, `find`, `file`, `tree`, `less` |
 | Secrets management | OpenBao CLI (`bao`), Vault CLI (`vault`) |
 
-The full list of tools is available in the appendix of this file (TODO(grohan): add this in)
-
 ## Networking
 
 Telos follows a strict networking model, with limited ingress and egress by default.
@@ -43,7 +37,7 @@ Telos follows a strict networking model, with limited ingress and egress by defa
 The only entry points into a Goal's runtime environment are:
 
 - the product API or UI, accessed through the managed hostname (`<name>-<session-id>.usetelos.ai`)
-- the administration dashboard, accessed via the web UI and restricted to authenticated Telos operators. TODO(grohan): read more about dashboard, where?
+- the administration dashboard, accessed via the web UI and restricted to workspace administrators.
 
 ### Egress
 
@@ -78,9 +72,9 @@ Each entry in `network` specifies a host and optionally restricts HTTP methods a
 
 For authenticated requests, it is also possible to securely inject credentials. The workflow for this is as follows:
 
-1. Create a credential entry (name and secret) on the web app (TODO(grohan): link to the webpage where you can add in the credential)
+1. Create a credential (a name and its secret value) on the [web dashboard](https://usetelos.ai/workspace?tab=credentials). Telos gives it an ID, such as `sec-example`.
 2. Add the credential's destination host to `network` in your Goal's frontmatter.
-3. Associate that host with the credential ID that you just created using `credentials`.
+3. Associate that host with the credential's ID using `credentials`.
 
 A few additional details on this feature:
 
@@ -89,8 +83,6 @@ A few additional details on this feature:
 - Network-only entries can use wildcard hosts
 - One credential can serve multiple declared hosts
 
-TODO(grohan): some notes on credential impl and why its safe and invisible to the agent and shit
+Credentials are encrypted at rest and never enter your Goal's VM. Instead, a proxy outside the VM adds them to requests that match your `network` rules.
 
-TODO(grohan): fit in the quote: "An agent is nothing without its environment"
-
-TODO(grohan): need to add in the tools appendix
+In short, **your Goal can use credentials, but never see them**. It can still make any request your rules allow, so we recommend using a least-privilege key and narrowing access with `methods` and `paths`.
