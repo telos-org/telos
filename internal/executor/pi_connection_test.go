@@ -35,6 +35,9 @@ import (
 func TestPiConnectionsRouteModelsAndToolsSeparately(t *testing.T) {
 	binary := os.Getenv("TELOS_TEST_PI_BINARY")
 	if binary == "" {
+		if os.Getenv("CI") != "" {
+			t.Fatal("CI must provide TELOS_TEST_PI_BINARY for native Pi routing tests")
+		}
 		t.Skip("set TELOS_TEST_PI_BINARY to exercise native Pi HTTP transport")
 	}
 	root := t.TempDir()

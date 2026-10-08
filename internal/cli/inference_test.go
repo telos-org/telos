@@ -18,7 +18,7 @@ import (
 )
 
 func TestInferenceRealPiNextTurn(t *testing.T) {
-	for _, phase := range []string{"request", "tool", "follow_up", "empty_defaults", "model_only", "thinking_only", "invalid_thinking", "rejected_from_clamped", "clamped_thinking", "unknown_model", "definition", "bad_definition", "legacy", "legacy_definition", "connection", "connection_same_model", "connection_rejected", "connection_follow_up", "connection_return", "legacy_connection"} {
+	for _, phase := range []string{"request", "tool", "follow_up", "empty_defaults", "model_only", "thinking_only", "invalid_thinking", "rejected_from_clamped", "clamped_thinking", "unknown_model", "definition", "bad_definition", "legacy", "legacy_definition", "connection", "connection_same_model", "connection_rejected", "connection_follow_up", "connection_return", "legacy_connection", "downgraded_connection"} {
 		t.Run(phase, func(t *testing.T) {
 			connectionPhase := strings.Contains(phase, "connection")
 			binaryEnv := "TELOS_TEST_PI_BINARY"
@@ -27,6 +27,9 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 			}
 			binary := os.Getenv(binaryEnv)
 			if binary == "" {
+				if os.Getenv("CI") != "" {
+					t.Fatal("CI must provide " + binaryEnv + " for real Pi turn tests")
+				}
 				t.Skip("set " + binaryEnv + " to run real Pi")
 			}
 			root, home := t.TempDir(), t.TempDir()
@@ -46,6 +49,7 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 				}
 			}
 			write(filepath.Join(bin, "pi"), script, 0o755)
+			t.Setenv("HOME", home)
 			write(filepath.Join(agent, "settings.json"), `{"compaction":{"enabled":false},"retry":{"enabled":false}}`, 0o600)
 			write(filepath.Join(agent, "models.json"), `{"providers":{"turn-b":{"api":"telos-offline-test","baseUrl":"https://unused.invalid","apiKey":"test-only"}}}`, 0o600)
 			manifest := &sessionapi.Manifest{SessionID: "session", SessionKind: sessionapi.KindController, Config: sessionapi.SessionConfig{Model: "turn-a/probe-a", Thinking: "medium"}}
@@ -128,7 +132,7 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 				request.Model = nil
 				model = "turn-a/probe-a"
 			}
-			rejected := phase == "rejected_from_clamped" || phase == "invalid_thinking" || phase == "clamped_thinking" || phase == "unknown_model" || phase == "bad_definition" || phase == "connection_rejected" || phase == "legacy_connection"
+			rejected := phase == "rejected_from_clamped" || phase == "invalid_thinking" || phase == "clamped_thinking" || phase == "unknown_model" || phase == "bad_definition" || phase == "connection_rejected" || phase == "downgraded_connection"
 			if phase == "invalid_thinking" || phase == "rejected_from_clamped" {
 				thinking = "imaginary"
 			}
@@ -156,6 +160,17 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 				}
 			}
 			queued, err := store.UpdateInference("session", request)
+			if phase == "legacy_connection" {
+				if err == nil || !strings.Contains(err.Error(), "compiled Pi 1.0.4") {
+					t.Fatalf("legacy connection request was not rejected immediately: %+v %v", queued, err)
+				}
+				finish(prover)
+				state, err := store.Inference("session")
+				if err != nil || state.ConnectionSwitching || state.Update != nil || state.Revision != 0 {
+					t.Fatalf("legacy request changed saved state: %+v %v", state, err)
+				}
+				return
+			}
 			if err != nil || queued.Update.Status != "pending" || queued.Settings.Model != manifest.Config.Model {
 				t.Fatalf("queue: %+v %v", queued, err)
 			}
@@ -167,6 +182,16 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 			pending, _ := store.Inference("session")
 			if pending.Update.Status != "pending" {
 				t.Fatalf("applied before next turn: %+v", pending)
+			}
+			if phase == "downgraded_connection" {
+				legacy := os.Getenv("TELOS_TEST_LEGACY_PI_BINARY")
+				if legacy == "" {
+					if os.Getenv("CI") != "" {
+						t.Fatal("CI must provide TELOS_TEST_LEGACY_PI_BINARY for downgrade tests")
+					}
+					t.Skip("set TELOS_TEST_LEGACY_PI_BINARY to test a downgrade after acceptance")
+				}
+				write(filepath.Join(bin, "pi"), strings.Replace(script, quote(binary), quote(legacy), 1), 0o755)
 			}
 			verifier := start("verifier")
 			second := waitFile(filepath.Join(verifier, "request-1.json"))

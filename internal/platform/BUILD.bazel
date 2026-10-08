@@ -2,13 +2,14 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "platform",
-    srcs = ["platform.go"],
+    srcs = ["platform.go", "pi.go"],
+    embedsrcs = ["pi_capabilities.js"],
     importpath = "github.com/telos-org/telos/internal/platform",
     visibility = ["//:__subpackages__"],
 )
 
 go_test(
     name = "platform_test",
-    srcs = ["platform_test.go"],
+    srcs = ["platform_test.go", "pi_test.go"],
     embed = [":platform"],
 )

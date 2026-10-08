@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,6 +19,7 @@ func testInferenceConnection() *InferenceConnection {
 
 func TestInferenceConnectionIsDurableAndRedacted(t *testing.T) {
 	store, path := inferenceStore(t)
+	setInferencePi(t, true)
 	model := "provider/new"
 	connection := testInferenceConnection()
 	definition := json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`)
@@ -65,6 +67,84 @@ func TestInferenceConnectionIsDurableAndRedacted(t *testing.T) {
 	state, err = NewFileStore(store.Root, RuntimeLocal).Inference("session")
 	if err != nil || state.Settings.ConnectionID != connection.ID || state.Settings.Thinking != thinking {
 		t.Fatalf("confirmed connection: %+v %v", state, err)
+	}
+}
+
+func setInferencePi(t *testing.T, supported bool) {
+	t.Helper()
+	home := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nexit 78\n"
+	if supported {
+		script = "#!/bin/sh\nprintf 'TELOS_PI_CONNECTION_SWITCHING\\n'\n"
+	}
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+}
+
+func TestInferenceConnectionCapabilityGatesNewRequests(t *testing.T) {
+	store, path := inferenceStore(t)
+	model, thinking := "provider/new", "high"
+	req := InferenceUpdateRequest{
+		RequestID: "connection", Model: &model, Thinking: &thinking,
+		Connection:      testInferenceConnection(),
+		ModelDefinition: json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`),
+	}
+	setInferencePi(t, false)
+	state, err := store.Inference("session")
+	if err != nil || state.ConnectionSwitching {
+		t.Fatalf("unsupported Pi advertised connection switching: %+v %v", state, err)
+	}
+	before, _ := os.ReadFile(path)
+	if _, err := store.UpdateInference("session", req); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("unsupported Pi accepted connection: %v", err)
+	}
+	after, _ := os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("rejected connection changed the session")
+	}
+	// A Pi upgrade is visible to the same store without a runtime restart.
+	setInferencePi(t, true)
+	state, err = store.UpdateInference("session", req)
+	if err != nil || !state.ConnectionSwitching || state.Update.Status != "pending" {
+		t.Fatalf("supported Pi rejected connection: %+v %v", state, err)
+	}
+	claimed, err := ClaimInferenceUpdate(path, "attempt", "receipt.json", InferenceSettings{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", claimed.Settings); err != nil {
+		t.Fatal(err)
+	}
+	setInferencePi(t, false)
+	// Replaying a completed request is still safe after a downgrade.
+	state, err = store.UpdateInference("session", req)
+	if err != nil || state.ConnectionSwitching || state.Update.Status != "applied" {
+		t.Fatalf("capability change broke replay: %+v %v", state, err)
+	}
+	// Thinking-only changes still use the confirmed connection at startup.
+	before, _ = os.ReadFile(path)
+	if _, err := store.UpdateInference("session", InferenceUpdateRequest{RequestID: "thinking", ExpectedRevision: 1, Thinking: &thinking}); !errors.Is(err, ErrInvalidSession) {
+		t.Fatalf("unsupported Pi accepted change on confirmed connection: %v", err)
+	}
+	after, _ = os.ReadFile(path)
+	if !bytes.Equal(before, after) {
+		t.Fatal("rejected thinking change changed the session")
+	}
+}
+
+func TestInferenceLegacyPiCanStillQueueModelAndThinking(t *testing.T) {
+	store, _ := inferenceStore(t)
+	setInferencePi(t, false)
+	model, thinking := "provider/new", "high"
+	state, err := store.UpdateInference("session", InferenceUpdateRequest{RequestID: "settings", Model: &model, Thinking: &thinking})
+	if err != nil || state.ConnectionSwitching || state.Update.Status != "pending" {
+		t.Fatalf("legacy model/thinking update: %+v %v", state, err)
 	}
 }
 

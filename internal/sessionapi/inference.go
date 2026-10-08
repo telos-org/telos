@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/telos-org/telos/internal/platform"
 )
 
 type InferenceSettings struct {
@@ -153,8 +155,8 @@ func (r InferenceUpdateRequest) Validate() error {
 	return nil
 }
 
-func inferenceResponse(m *Manifest) *InferenceResponse {
-	r := &InferenceResponse{ConnectionSwitching: true, ApplyAt: "next_turn", Settings: InferenceSettings{Model: m.Config.Model, Thinking: m.Config.Thinking}, Update: m.InferenceUpdate}
+func inferenceResponse(m *Manifest, connectionSwitching bool) *InferenceResponse {
+	r := &InferenceResponse{ConnectionSwitching: connectionSwitching, ApplyAt: "next_turn", Settings: InferenceSettings{Model: m.Config.Model, Thinking: m.Config.Thinking}, Update: m.InferenceUpdate}
 	if m.InferenceConnection != nil {
 		r.Settings.ConnectionID = m.InferenceConnection.ID
 	}
@@ -180,7 +182,7 @@ func (fs *FileStore) Inference(id string) (*InferenceResponse, error) {
 	if err != nil {
 		return nil, err
 	}
-	return inferenceResponse(m), nil
+	return inferenceResponse(m, platform.PiSupportsInferenceConnections()), nil
 }
 
 func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error) {
@@ -190,8 +192,9 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 	if !safeSessionID(id) {
 		return nil, ErrNotFound
 	}
+	connectionSwitching := platform.PiSupportsInferenceConnections()
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
-		current := inferenceResponse(m)
+		current := inferenceResponse(m, connectionSwitching)
 		if current.Update != nil && current.Update.RequestID == req.RequestID {
 			if current.Update.ExpectedRevision != req.ExpectedRevision || !sameOptionalString(current.Update.Model, req.Model) || !sameOptionalString(current.Update.Thinking, req.Thinking) || !sameJSON(current.Update.ModelDefinition, req.ModelDefinition) || !reflect.DeepEqual(m.InferenceUpdate.Connection, req.Connection) {
 				return fmt.Errorf("%w: request_id already used with different settings", ErrConflict)
@@ -210,6 +213,9 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 		if current.Update != nil && (current.Update.Status == "pending" || current.Update.Status == "applying") {
 			return fmt.Errorf("%w: an inference change is already in progress", ErrConflict)
 		}
+		if (req.Connection != nil || m.InferenceConnection != nil) && !connectionSwitching {
+			return fmt.Errorf("%w: inference connection switching requires the compiled Pi 1.0.4 or newer 1.x runtime", ErrInvalidSession)
+		}
 		if req.Connection == nil && req.Model != nil && m.InferenceConnection != nil && !strings.HasPrefix(*req.Model, m.InferenceConnection.Provider+"/") {
 			return fmt.Errorf("%w: changing providers requires a prepared connection", ErrInvalidSession)
 		}
@@ -222,7 +228,7 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 	if err != nil {
 		return nil, err
 	}
-	return inferenceResponse(m), nil
+	return inferenceResponse(m, connectionSwitching), nil
 }
 
 func safeSessionID(id string) bool {

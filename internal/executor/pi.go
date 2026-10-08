@@ -384,14 +384,7 @@ func buildPiArgv(model, thinking, taskPath, sessionPath string, startup bool) []
 	if startup {
 		piCommand += ` -e "$TELOS_PI_STARTUP_EXTENSION"`
 	}
-	script := `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; ` +
-		`if ! command -v pi >/dev/null 2>&1; then ` +
-		`for nvm_script in "${NVM_DIR:-}/nvm.sh" "$HOME/.nvm/nvm.sh" "/usr/local/nvm/nvm.sh"; do ` +
-		`[ -s "$nvm_script" ] || continue; ` +
-		`. "$nvm_script"; ` +
-		`break; ` +
-		`done; ` +
-		`fi; ` +
+	script := platform.PiShellSetup +
 		fmt.Sprintf(`prompt="${%s}"; `, platform.TaskEnvVar) +
 		`if [ -n "${3:-}" ]; then prompt="$3"; fi; ` +
 		`append_prompt="${TELOS_PI_APPEND_SYSTEM_PROMPT:-}"; ` +
