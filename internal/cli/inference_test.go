@@ -18,7 +18,7 @@ import (
 )
 
 func TestInferenceRealPiNextTurn(t *testing.T) {
-	for _, phase := range []string{"request", "tool", "follow_up", "empty_defaults", "model_only", "thinking_only", "invalid_thinking", "rejected_from_clamped", "clamped_thinking", "unknown_model", "definition", "bad_definition", "legacy", "legacy_definition", "connection", "connection_same_model", "connection_rejected", "connection_follow_up", "connection_return", "legacy_connection", "downgraded_connection"} {
+	for _, phase := range []string{"request", "tool", "follow_up", "empty_defaults", "model_only", "model_only_nonreasoning", "model_only_clamped", "thinking_only", "invalid_thinking", "rejected_from_clamped", "clamped_thinking", "unknown_model", "definition", "bad_definition", "legacy", "legacy_definition", "connection", "connection_same_model", "connection_rejected", "connection_follow_up", "connection_return", "legacy_connection", "downgraded_connection"} {
 		t.Run(phase, func(t *testing.T) {
 			connectionPhase := strings.Contains(phase, "connection")
 			binaryEnv := "TELOS_TEST_PI_BINARY"
@@ -54,7 +54,7 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 			write(filepath.Join(agent, "models.json"), `{"providers":{"turn-b":{"api":"telos-offline-test","baseUrl":"https://unused.invalid","apiKey":"test-only"}}}`, 0o600)
 			manifest := &sessionapi.Manifest{SessionID: "session", SessionKind: sessionapi.KindController, Config: sessionapi.SessionConfig{Model: "turn-a/probe-a", Thinking: "medium"}}
 			initialThinking, initialActualThinking := "medium", "medium"
-			if phase == "rejected_from_clamped" {
+			if phase == "rejected_from_clamped" || phase == "model_only_clamped" {
 				initialThinking, initialActualThinking = "xhigh", "high"
 				manifest.Config.Thinking = initialThinking
 			}
@@ -124,9 +124,14 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 			}
 			model, thinking := "turn-b/probe-b", "high"
 			request := sessionapi.InferenceUpdateRequest{RequestID: "change", Model: &model, Thinking: &thinking}
-			if phase == "model_only" {
+			if strings.HasPrefix(phase, "model_only") {
 				request.Thinking = nil
 				thinking = "medium"
+				if phase == "model_only_nonreasoning" {
+					thinking = "off"
+				} else if phase == "model_only_clamped" {
+					thinking = "high"
+				}
 			}
 			if phase == "thinking_only" || phase == "empty_defaults" {
 				request.Model = nil
@@ -299,7 +304,7 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 }
 
 func TestInferenceReceiptRecovery(t *testing.T) {
-	for _, outcome := range []string{"accepted", "rejected", "missing", "stale_attempt", "wrong_pair", "wrong_connection"} {
+	for _, outcome := range []string{"accepted", "inherited_thinking", "rejected", "missing", "stale_attempt", "wrong_pair", "wrong_connection"} {
 		t.Run(outcome, func(t *testing.T) {
 			dir := t.TempDir()
 			path, receiptPath := filepath.Join(dir, "session.json"), filepath.Join(dir, "receipt.json")
@@ -312,6 +317,10 @@ func TestInferenceReceiptRecovery(t *testing.T) {
 					InferenceUpdateRequest: sessionapi.InferenceUpdateRequest{RequestID: "change", Model: &model, Thinking: &thinking, Connection: &sessionapi.InferenceConnection{ID: "new"}},
 					Revision:               1, Status: "applying", AttemptID: "current", ReceiptPath: receiptPath,
 				},
+			}
+			if outcome == "inherited_thinking" {
+				m.InferenceUpdate.Thinking = nil
+				thinking = "off"
 			}
 			if err := sessionapi.WriteManifest(path, m); err != nil {
 				t.Fatal(err)
@@ -342,7 +351,7 @@ func TestInferenceReceiptRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantStatus := "unknown"
-			if outcome == "accepted" {
+			if outcome == "accepted" || outcome == "inherited_thinking" {
 				wantStatus = "applied"
 			}
 			if outcome == "rejected" {
@@ -351,7 +360,7 @@ func TestInferenceReceiptRecovery(t *testing.T) {
 			if saved.InferenceUpdate.Status != wantStatus {
 				t.Fatalf("unexpected outcome: %+v", saved.InferenceUpdate)
 			}
-			if outcome == "accepted" {
+			if outcome == "accepted" || outcome == "inherited_thinking" {
 				if saved.Config.Model != model || saved.Config.Thinking != thinking || saved.InferenceConnection.ID != "new" {
 					t.Fatalf("lost accepted pair: %+v", saved.Config)
 				}

@@ -72,6 +72,7 @@ func (e *sessionInferenceExecutor) ExecuteTurn(task, role string, ts *game.TurnS
 		}
 		if update != nil {
 			e.pi.Startup.RequestID = update.RequestID
+			e.pi.Startup.AllowThinkingAdjustment = update.Thinking == nil
 			e.pi.OnStartup = func() {
 				settled, persistErr = confirmTurnInference(path, m)
 				stop.Store(persistErr != nil)
@@ -141,9 +142,12 @@ func confirmTurnInference(path string, m *sessionapi.Manifest) (bool, error) {
 	if u.Settings != nil {
 		want = *u.Settings
 	}
-	if r.Model != want.Model || r.Thinking != want.Thinking || r.ConnectionID != want.ConnectionID {
+	if r.Model != want.Model || r.Thinking == "" || (u.Thinking != nil && r.Thinking != want.Thinking) || r.ConnectionID != want.ConnectionID {
 		return true, sessionapi.FinishInferenceUpdate(path, u.RequestID, "unknown", "Pi startup receipt does not match the queued settings", nil)
 	}
+	// An omitted thinking level inherits the previous default, which Pi may
+	// lower for the new model. Save the actual level for all subsequent turns.
+	want.Thinking = r.Thinking
 	return true, sessionapi.FinishInferenceUpdate(path, u.RequestID, "applied", "", &want)
 }
 

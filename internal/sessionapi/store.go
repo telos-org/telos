@@ -70,6 +70,7 @@ type Store interface {
 	Events(id string) ([]SessionEvent, error)
 	Inference(id string) (*InferenceResponse, error)
 	UpdateInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error)
+	CancelInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error)
 }
 
 // --------- FileStore ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

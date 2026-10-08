@@ -43,6 +43,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
 	mux.HandleFunc("GET /api/sessions/{id}/inference", h.getInference)
 	mux.HandleFunc("PUT /api/sessions/{id}/inference", h.updateInference)
+	mux.HandleFunc("POST /api/sessions/{id}/inference/cancel", h.cancelInference)
 }
 
 func (h *handler) getInference(w http.ResponseWriter, r *http.Request) {
@@ -59,6 +60,14 @@ func (h *handler) getInference(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) updateInference(w http.ResponseWriter, r *http.Request) {
+	h.mutateInference(w, r, false)
+}
+
+func (h *handler) cancelInference(w http.ResponseWriter, r *http.Request) {
+	h.mutateInference(w, r, true)
+}
+
+func (h *handler) mutateInference(w http.ResponseWriter, r *http.Request, cancel bool) {
 	id := r.PathValue("id")
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionUpdateInference, SessionID: id}); !ok {
 		return
@@ -75,7 +84,13 @@ func (h *handler) updateInference(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "expected a single JSON request")
 		return
 	}
-	response, err := h.store.UpdateInference(id, req)
+	var response *InferenceResponse
+	var err error
+	if cancel {
+		response, err = h.store.CancelInference(id, req)
+	} else {
+		response, err = h.store.UpdateInference(id, req)
+	}
 	if err != nil {
 		writeInferenceError(w, err)
 		return

@@ -8,7 +8,8 @@ export default async function (pi) {
   let config;
   try {
     config = JSON.parse(readFileSync(process.env.TELOS_PI_STARTUP_CONFIG, "utf8"));
-  } catch {
+  } catch (error) {
+    writeSync(2, "Telos could not read Pi startup configuration: " + String(error) + "\n");
     process.exit(78);
   }
   let startupError;
@@ -31,8 +32,12 @@ export default async function (pi) {
       const model = ctx.modelRegistry.find(provider, id);
       // Pi can synthesize an unknown model and silently clamp thinking levels.
       if (!model || model.api === "pi-virtual") throw new Error("Model is not registered: " + config.model);
-      if (ctx.model?.provider !== provider || ctx.model?.id !== id || pi.getThinkingLevel() !== config.thinking) {
-        throw new Error("Pi did not accept the requested model and thinking level");
+      if (ctx.model?.provider !== provider || ctx.model?.id !== id) {
+        throw new Error("Pi did not select the requested model: " + config.model);
+      }
+      const thinking = pi.getThinkingLevel();
+      if (!thinking || (!config.allow_thinking_adjustment && thinking !== config.thinking)) {
+        throw new Error("Pi selected thinking level " + thinking + "; requested " + config.thinking);
       }
       if (config.definition && Object.keys(config.definition).some((key) => !isDeepStrictEqual(config.definition[key], model[key]))) {
         throw new Error("Pi did not accept the requested model definition");
@@ -40,7 +45,7 @@ export default async function (pi) {
       if (config.connection && (model.baseUrl !== config.connection.base_url || ctx.model?.baseUrl !== config.connection.base_url)) {
         throw new Error("Pi did not accept the requested inference connection");
       }
-      report(undefined, config.model, config.thinking);
+      report(undefined, config.model, thinking);
     } catch (error) {
       // Pi swallows extension errors. Even if the receipt cannot be written,
       // validation failure must terminate before the prompt is dispatched.

@@ -74,6 +74,10 @@ func (s *fakeReconcileStore) UpdateInference(string, sessionapi.InferenceUpdateR
 	return nil, sessionapi.ErrNotFound
 }
 
+func (s *fakeReconcileStore) CancelInference(string, sessionapi.InferenceUpdateRequest) (*sessionapi.InferenceResponse, error) {
+	return nil, sessionapi.ErrNotFound
+}
+
 func TestSessionBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	pkg := buildMaterializerTestPackage(t, "auth")
 	digest := pkg.Digest
