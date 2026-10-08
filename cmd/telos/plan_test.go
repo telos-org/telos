@@ -85,7 +85,7 @@ func TestPrintPlanPreviewShowsSessionDiff(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "personal", comparison)
+	printPlanPreview(&out, compiled, "personal", comparison)
 	text := out.String()
 	for _, want := range []string{
 		"Session   sess_123",
@@ -115,7 +115,7 @@ func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "personal", comparison)
+	printPlanPreview(&out, compiled, "personal", comparison)
 	if !strings.Contains(out.String(), "No spec changes.") {
 		t.Fatalf("plan output:\n%s", out.String())
 	}
@@ -329,7 +329,7 @@ func TestPlanSpecStateCapturesResolvedChanges(t *testing.T) {
 	normalized := strings.Join(strings.Fields(out.String()), " ")
 	for _, want := range []string{
 		"Version 1.0.0 -> 1.1.0",
-		"Interval 5m0s -> 10m0s",
+		"Interval 5m -> 10m",
 		"verify-quality @telos/verify-quality:1.0.0 sha256:current",
 		"verify-quality @telos/verify-quality:1.1.0 sha256:proposed *",
 	} {
@@ -360,5 +360,16 @@ func TestPrintPlanStateDeltaOmitsUnchangedResolvedState(t *testing.T) {
 	printPlanStateDelta(&out, state, state)
 	if out.Len() != 0 {
 		t.Fatalf("unchanged resolved state should be silent:\n%s", out.String())
+	}
+}
+
+func TestFormatPlanIntervalMatchesSpecStyle(t *testing.T) {
+	for seconds, want := range map[int]string{45: "45s", 30 * 60: "30m", 6 * 60 * 60: "6h", 90 * 60: "1h30m", 60*60 + 30: "1h0m30s"} {
+		if got := formatPlanInterval(&seconds); got != want {
+			t.Fatalf("formatPlanInterval(%d) = %q, want %q", seconds, got, want)
+		}
+	}
+	if got := formatPlanInterval(nil); got != "-" {
+		t.Fatalf("formatPlanInterval(nil) = %q", got)
 	}
 }
