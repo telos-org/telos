@@ -221,7 +221,7 @@ func printCloudInferenceSummary(out io.Writer, session cloud.SessionRecord) {
 		printSummaryField(out, "Model", model)
 	}
 	if session.AgentThinking != "" {
-		printSummaryField(out, "Thinking", session.AgentThinking+" (requested)")
+		printSummaryField(out, "Thinking", session.AgentThinking)
 	}
 }
 
