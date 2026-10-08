@@ -84,7 +84,7 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 				"state":          "healthy",
 				"status":         "ready",
 				"package_ref":    "@telos/auth:1.0.0",
-				"package_digest": "sha256:abc",
+				"package_digest": "sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a",
 				"service_url":    "https://auth.example.com",
 				"dashboard_url":  "https://dashboard.example.com",
 				"created_at":     "then",
@@ -127,7 +127,7 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 		"SESSION",
 		"auth",
 		"ready",
-		"sha256:abc",
+		"sha256:8f21c47a91ee ",
 		"https://auth.example.com",
 		"sess_123",
 	} {
@@ -135,7 +135,7 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 			t.Fatalf("wide list output missing %q:\n%s", want, wideOut)
 		}
 	}
-	for _, notWant := range []string{"TARGET", "PACKAGE", "DASHBOARD", "@telos/auth:1.0.0"} {
+	for _, notWant := range []string{"TARGET", "PACKAGE", "DASHBOARD", "@telos/auth:1.0.0", "8f21c47a91ee1"} {
 		if strings.Contains(wideOut, notWant) {
 			t.Fatalf("wide list output should omit %q:\n%s", notWant, wideOut)
 		}
@@ -238,7 +238,7 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 		Status:        "ready",
 		StatusReason:  "The agent finished and the verifier accepted the result.",
 		PackageRef:    "@telos/auth:1.0.0",
-		PackageDigest: "sha256:abc",
+		PackageDigest: "sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a",
 		ServiceURL:    &serviceURL,
 		DashboardURL:  &dashboardURL,
 		CreatedAt:     "then",
@@ -252,7 +252,7 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 		"Name      auth",
 		"Status    ready",
 		"Session   sess_123",
-		"Revision  sha256:abc",
+		"Revision  sha256:8f21c47a91ee\n",
 		"Service   https://auth.example.com",
 	} {
 		if !strings.Contains(text, want) {
@@ -277,7 +277,7 @@ func TestPrintCloudSessionReceiptShowsNextUsefulAction(t *testing.T) {
 		State:         "deploying",
 		Status:        "working",
 		PackageRef:    "@telos/auth:1.0.0",
-		PackageDigest: "sha256:abc",
+		PackageDigest: "sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a",
 		AgentModel:    "provider/model",
 		AgentThinking: "high",
 		ServiceURL:    &serviceURL,
@@ -291,7 +291,7 @@ func TestPrintCloudSessionReceiptShowsNextUsefulAction(t *testing.T) {
 		"created auth",
 		"Status    working",
 		"Session   sess_123",
-		"Revision  sha256:abc",
+		"Revision  sha256:8f21c47a91ee\n",
 		"Context   personal",
 		"Service   https://auth.example.com",
 		"Logs      telos logs sess_123\n",

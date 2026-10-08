@@ -242,7 +242,7 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
 				session.Name,
 				cloudSessionDisplayStatus(session),
-				session.PackageDigest,
+				shortRevision(session.PackageDigest),
 				serviceURL,
 				session.ID,
 			)

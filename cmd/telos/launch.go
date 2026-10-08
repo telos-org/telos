@@ -438,7 +438,7 @@ func printCloudSessionReceiptForContext(
 	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
 	printSummaryField(out, "Session", session.ID)
-	printSummaryField(out, "Revision", session.PackageDigest)
+	printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
 	printCloudInferenceSummary(out, *session)
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)

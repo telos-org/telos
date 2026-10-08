@@ -130,7 +130,7 @@ func printCloudSessionDescriptionForContext(
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Session", session.ID)
-	printSummaryField(out, "Revision", session.PackageDigest)
+	printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
 	printCloudInferenceSummary(out, session)
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
@@ -148,6 +148,16 @@ func cloudSessionDisplayStatus(session cloud.SessionRecord) string {
 		return session.Status
 	}
 	return session.State
+}
+
+// shortRevision abbreviates a sha256 package digest to its first 12 hex
+// digits for human output. --json keeps the full digest.
+func shortRevision(digest string) string {
+	hex, ok := strings.CutPrefix(digest, "sha256:")
+	if !ok || len(hex) <= 12 {
+		return digest
+	}
+	return "sha256:" + hex[:12]
 }
 
 func cloudSessionReason(session cloud.SessionRecord) string {
