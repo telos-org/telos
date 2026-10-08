@@ -268,7 +268,7 @@ func ResolveTelosd() (string, error) {
 	if configured := os.Getenv("TELOSD_PATH"); configured != "" {
 		path, err := exec.LookPath(configured)
 		if err != nil {
-			return "", fmt.Errorf("TELOSD_PATH does not select an executable telosd: %w; add local execution with `curl -fsSL https://usetelos.ai/install.sh | TELOS_INSTALL_LOCAL=1 sh`", err)
+			return "", fmt.Errorf("TELOSD_PATH does not select an executable telosd: %w; add local execution with `curl -fsSL https://usetelos.ai/install.sh | sh -s -- --with-telosd`", err)
 		}
 		return path, nil
 	}
@@ -283,7 +283,7 @@ func ResolveTelosd() (string, error) {
 	if path, err := exec.LookPath("telosd"); err == nil {
 		return path, nil
 	}
-	return "", fmt.Errorf("local execution requires telosd; install the local runtime with `curl -fsSL https://usetelos.ai/install.sh | TELOS_INSTALL_LOCAL=1 sh`, or set TELOSD_PATH to an existing telosd")
+	return "", fmt.Errorf("local execution requires telosd; install the local runtime with `curl -fsSL https://usetelos.ai/install.sh | sh -s -- --with-telosd`, or set TELOSD_PATH to an existing telosd")
 }
 
 func StartEpoch(sessionDir string, manifest *sessionapi.Manifest) (int, error) {

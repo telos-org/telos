@@ -19,7 +19,7 @@ func TestSubmitLocalSessionWithoutRuntimeCreatesNoSession(t *testing.T) {
 	t.Chdir(workspace)
 	t.Setenv("TELOSD_PATH", filepath.Join(workspace, "missing-telosd"))
 	_, err := SubmitLocalSession(filepath.Join(workspace, "SPEC.md"), LocalRunConfig{Workspace: workspace})
-	if err == nil || !strings.Contains(err.Error(), "TELOS_INSTALL_LOCAL=1") {
+	if err == nil || !strings.Contains(err.Error(), "sh -s -- --with-telosd") {
 		t.Fatalf("missing runtime error = %v", err)
 	}
 	entries, err := os.ReadDir(workspace)
