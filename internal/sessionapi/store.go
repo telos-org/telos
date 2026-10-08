@@ -1724,7 +1724,7 @@ func (fs *FileStore) ensureStablePreviousSpecPath(sessionDir string, specName st
 		version = specVersionFromMarkdown(data)
 	}
 	if spec.IsSemver(version) {
-		paths := revisionLayout(sessionDir, specName, version, activeSpecPath)
+		paths := revisionLayout(sessionDir, specName, version, filepath.Join(sessionDir, "revisions", version), activeSpecPath)
 		if err := fs.snapshotLegacyRevision(sessionDir, paths, sequence, data, packageDigest); err != nil {
 			return "", "", err
 		}
@@ -1866,28 +1866,31 @@ func (fs *FileStore) installRevision(sessionDir string, specName string, prepare
 	if len(prepared.PackageData) == 0 {
 		return revisionPaths{}, revisionMetadata{}, fmt.Errorf("apply package data is required for revision %s: %w", version, ErrInvalidSession)
 	}
-	paths := revisionLayout(sessionDir, specName, version, opts.ActiveSpecPath)
+	revisionDir := filepath.Join(sessionDir, "revisions", version)
+	specHash := specSHA256(prepared.SpecData)
+	packageDigest := strValue(prepared.PackageDigest)
+	if existing, ok, err := readRevisionMetadata(revisionDir); err != nil {
+		return revisionPaths{}, revisionMetadata{}, err
+	} else if ok {
+		if existing.SpecSHA256 != specHash || existing.PackageDigest != packageDigest {
+			return revisionPaths{}, revisionMetadata{}, fmt.Errorf("revision %s already exists with different content: %w", version, ErrConflict)
+		}
+		// Preserve the old package and transition while recording a new activation.
+		revisionDir = filepath.Join(sessionDir, "revisions", "activations", fmt.Sprint(opts.Sequence))
+	}
+	paths := revisionLayout(sessionDir, specName, version, revisionDir, opts.ActiveSpecPath)
 	metadata := revisionMetadata{
 		Version:         version,
 		Sequence:        opts.Sequence,
 		PreviousVersion: strings.TrimSpace(opts.PreviousVersion),
-		SpecSHA256:      specSHA256(prepared.SpecData),
-		PackageDigest:   strValue(prepared.PackageDigest),
+		SpecSHA256:      specHash,
+		PackageDigest:   packageDigest,
 		SpecPath:        paths.SpecPath,
 		PackagePath:     paths.PackagePath,
 		PackageSpecPath: paths.PackageSpecPath,
 		ActiveSpecPath:  paths.ActiveSpecPath,
 		CreatedAt:       tsNow(),
 	}
-	if existing, ok, err := readRevisionMetadata(paths.RevisionDir); err != nil {
-		return revisionPaths{}, revisionMetadata{}, err
-	} else if ok {
-		if existing.SpecSHA256 != metadata.SpecSHA256 || existing.PackageDigest != metadata.PackageDigest {
-			return revisionPaths{}, revisionMetadata{}, fmt.Errorf("revision %s already exists with different content: %w", version, ErrConflict)
-		}
-		return revisionPaths{}, revisionMetadata{}, fmt.Errorf("revision %s already exists; rollback/reapply is not supported by PUT: %w", version, ErrConflict)
-	}
-
 	if err := materializeRevision(paths, prepared); err != nil {
 		return revisionPaths{}, revisionMetadata{}, err
 	}
@@ -1905,8 +1908,7 @@ func (fs *FileStore) installRevision(sessionDir string, specName string, prepare
 	return paths, metadata, nil
 }
 
-func revisionLayout(sessionDir string, specName string, version string, activeSpecPath string) revisionPaths {
-	revisionDir := filepath.Join(sessionDir, "revisions", version)
+func revisionLayout(sessionDir string, specName string, version string, revisionDir string, activeSpecPath string) revisionPaths {
 	if activeSpecPath == "" {
 		activeSpecPath = filepath.Join(sessionDir, "specs", specName, "spec.md")
 	}
@@ -1981,7 +1983,11 @@ func writeRevisionMetadata(path string, metadata revisionMetadata) error {
 }
 
 func advanceRevisionAliases(sessionDir string, paths revisionPaths) error {
-	if err := replaceSymlink(filepath.Join(sessionDir, "revisions", "current"), paths.Version); err != nil {
+	revisionTarget, err := filepath.Rel(filepath.Join(sessionDir, "revisions"), paths.RevisionDir)
+	if err != nil {
+		return err
+	}
+	if err := replaceSymlink(filepath.Join(sessionDir, "revisions", "current"), revisionTarget); err != nil {
 		return fmt.Errorf("update current revision link: %w", err)
 	}
 	specTarget, err := filepath.Rel(filepath.Dir(paths.ActiveSpecPath), filepath.Join(sessionDir, "revisions", "current", "SPEC.md"))
