@@ -3,7 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
-// This extension only validates startup. It accepts no commands or live updates.
+// This extension prepares and validates one turn. It accepts no live updates.
 export default async function (pi) {
   let config;
   try {
@@ -16,7 +16,7 @@ export default async function (pi) {
   const report = (error, model, thinking) => {
     const receipt = {
       request_id: config.request_id, attempt_id: config.attempt_id,
-      model, thinking, error,
+      model, thinking, connection_id: config.connection?.id, error,
     };
     writeFileSync(config.receipt_path + ".tmp", JSON.stringify(receipt), { mode: 0o600 });
     renameSync(config.receipt_path + ".tmp", config.receipt_path);
@@ -36,6 +36,9 @@ export default async function (pi) {
       }
       if (config.definition && Object.keys(config.definition).some((key) => !isDeepStrictEqual(config.definition[key], model[key]))) {
         throw new Error("Pi did not accept the requested model definition");
+      }
+      if (config.connection && (model.baseUrl !== config.connection.base_url || ctx.model?.baseUrl !== config.connection.base_url)) {
+        throw new Error("Pi did not accept the requested inference connection");
       }
       report(undefined, config.model, config.thinking);
     } catch (error) {
@@ -71,20 +74,76 @@ export default async function (pi) {
     for (const model of existing.models || []) {
       definitions.set(model.id, normalize(model));
     }
-    const config = { ...existing, api: definition.api ?? existing.api };
+    const config = { ...existing, api: definition?.api ?? existing.api };
     if (provider === "openrouter" && (!existing.baseUrl || ["https://openrouter.ai/api", "https://openrouter.ai/api/v1"].includes(existing.baseUrl.replace(/\/$/, "")))) {
       config.baseUrl = config.api === "anthropic-messages" ? "https://openrouter.ai/api" : "https://openrouter.ai/api/v1";
       config.authHeader = existing.authHeader ?? true;
     }
-    definitions.set(definition.id, normalize(definition, config.baseUrl));
+    if (definition) definitions.set(definition.id, normalize(definition, config.baseUrl));
     config.models = [...definitions.values()];
     return config;
   }
-  if (config.definition) {
+  if (config.connection || config.definition) {
     try {
       ({ getBuiltinModels } = await import("@earendil-works/pi-ai/providers/all"));
       const provider = config.model.slice(0, config.model.indexOf("/"));
-      pi.registerProvider(provider, providerConfig(provider, config.definition));
+      if (config.connection) {
+        const { VERSION } = await import("@earendil-works/pi-coding-agent");
+        const [major, minor, patch] = VERSION.split(".").map(Number);
+        if (typeof Bun === "undefined" || major !== 1 || !(minor > 0 || (minor === 0 && patch >= 4))) {
+          throw new Error("Inference connection switching requires the compiled Pi 1.0.4 or newer 1.x runtime");
+        }
+        const { getApiProvider } = await import("@earendil-works/pi-ai/compat");
+        const id = config.model.slice(config.model.indexOf("/") + 1);
+        const definition = providerConfig(provider, config.definition).models.find((model) => model.id === id);
+        if (!definition) throw new Error("Model is not registered for the inference connection: " + config.model);
+        const adapter = getApiProvider(definition.api);
+        if (!adapter) throw new Error("Unsupported inference API: " + definition.api);
+        const nativeFetch = globalThis.fetch.bind(globalThis);
+        const proxy = config.connection.proxy_url;
+        const headers = {
+          // The OpenAI SDK otherwise restores account routing from process.env.
+          ...(["openai-completions", "openai-responses"].includes(definition.api) ? {
+            "OpenAI-Organization": null,
+            "OpenAI-Project": null,
+          } : {}),
+          ...(config.connection.auth_header ? { Authorization: `Bearer ${config.connection.api_key}` } : {}),
+          ...(provider === "telos-bifrost" ? { "x-bf-vk": config.connection.api_key } : {}),
+        };
+        // This registration belongs to this invocation. Replacing an account
+        // must not inherit the previous provider's auth, headers, or endpoint.
+        pi.registerProvider(provider, {
+          api: definition.api,
+          apiKey: config.connection.api_key,
+          baseUrl: config.connection.base_url,
+          authHeader: config.connection.auth_header || false,
+          models: [{ ...definition, headers: undefined, baseUrl: config.connection.base_url }],
+          streamSimple: (model, context, options) => adapter.streamSimple({
+            ...model,
+            provider,
+            api: definition.api,
+            baseUrl: config.connection.base_url,
+            headers: undefined,
+          }, context, {
+            ...options,
+            apiKey: config.connection.api_key,
+            // Pi composes models.json and stored-auth headers after registration.
+            // Only this connection's headers may reach its native adapter.
+            headers,
+            fetch: (input, init) => nativeFetch(input, { ...init, proxy }),
+            // Codex WebSocket requests read provider-scoped proxy variables.
+            // Tool subprocesses retain the ordinary process environment.
+            env: {
+              ...options?.env,
+              HTTP_PROXY: proxy, HTTPS_PROXY: proxy, ALL_PROXY: proxy,
+              http_proxy: proxy, https_proxy: proxy, all_proxy: proxy,
+              OPENCLAW_PROXY_URL: proxy, NO_PROXY: "", no_proxy: "",
+            },
+          }),
+        });
+      } else {
+        pi.registerProvider(provider, providerConfig(provider, config.definition));
+      }
     } catch (error) {
       startupError = error;
     }

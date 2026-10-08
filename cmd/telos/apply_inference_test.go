@@ -45,6 +45,41 @@ func initialCloudInference() cloud.DeploymentInferenceState {
 	}
 }
 
+func TestInferenceConnectionChangesNameBothConnections(t *testing.T) {
+	for _, tt := range []struct {
+		name, source, target string
+		current, requested   cloud.InferenceSummary
+		selection            cloud.InferenceSelection
+	}{
+		{"different key same model", "Old key/model", "New key/model", cloud.InferenceSummary{Source: "byok", Model: "model", ConnectionName: "Old key"}, cloud.InferenceSummary{Source: "byok", Model: "model", ConnectionName: "New key"}, cloud.InferenceSelection{Source: "byok", ConnectionID: "new-key", Model: "model"}},
+		{"managed to subscription", "telos/default", "ChatGPT/model", cloud.InferenceSummary{Source: "managed", Tier: "default"}, cloud.InferenceSummary{Source: "subscription", Model: "model", ConnectionName: "ChatGPT"}, cloud.InferenceSelection{Source: "subscription", ConnectionID: "sub", Model: "model"}},
+		{"subscription to managed", "ChatGPT/model", "telos/max", cloud.InferenceSummary{Source: "subscription", Model: "model", ConnectionName: "ChatGPT"}, cloud.InferenceSummary{Source: "managed", Tier: "max"}, cloud.InferenceSelection{Source: "managed", Tier: "max"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			state := initialCloudInference()
+			state.Inference, state.RequestedInference = tt.current, &tt.requested
+			state.Status, state.Request = "pending", &cloud.DeploymentInferenceRequest{RequestID: "request", Inference: &tt.selection}
+			receipt, err := cloudInferenceReceipt("session", "@workspace", &state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, print := range []func(*bytes.Buffer){
+				func(out *bytes.Buffer) { printInferenceReceipt(out, receipt) },
+				func(out *bytes.Buffer) { printInferenceDescription(out, describeInference(receipt)) },
+			} {
+				var out bytes.Buffer
+				print(&out)
+				if !strings.Contains(out.String(), tt.source+" -> "+tt.target+" (next turn)") {
+					t.Fatalf("connection change not displayed: %s", out.String())
+				}
+			}
+			if receipt.Settings.Model != state.AgentModel {
+				t.Fatal("display labels changed structured confirmed model")
+			}
+		})
+	}
+}
+
 func TestApplyInferenceExplicitSettings(t *testing.T) {
 	for _, tt := range []struct {
 		name, model, thinking string

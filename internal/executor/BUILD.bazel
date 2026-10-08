@@ -9,14 +9,15 @@ go_library(
     deps = [
         "//internal/game",
         "//internal/platform",
+        "//internal/sessionapi",
     ],
 )
 
 go_test(
     name = "executor_test",
-    srcs = ["pi_test.go"],
+    srcs = ["pi_test.go", "pi_connection_test.go"],
     embed = [":executor"],
-    deps = ["//internal/game"],
+    deps = ["//internal/game", "//internal/sessionapi"],
 )
 
 filegroup(

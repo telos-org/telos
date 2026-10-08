@@ -18,8 +18,9 @@ import (
 )
 
 func TestInferenceRealPiNextTurn(t *testing.T) {
-	for _, phase := range []string{"request", "tool", "follow_up", "empty_defaults", "model_only", "thinking_only", "invalid_thinking", "rejected_from_clamped", "clamped_thinking", "unknown_model", "definition", "bad_definition", "legacy", "legacy_definition"} {
+	for _, phase := range []string{"request", "tool", "follow_up", "empty_defaults", "model_only", "thinking_only", "invalid_thinking", "rejected_from_clamped", "clamped_thinking", "unknown_model", "definition", "bad_definition", "legacy", "legacy_definition", "connection", "connection_same_model", "connection_rejected", "connection_follow_up", "connection_return", "legacy_connection"} {
 		t.Run(phase, func(t *testing.T) {
+			connectionPhase := strings.Contains(phase, "connection")
 			binaryEnv := "TELOS_TEST_PI_BINARY"
 			if strings.HasPrefix(phase, "legacy") {
 				binaryEnv = "TELOS_TEST_LEGACY_PI_BINARY"
@@ -63,6 +64,9 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 			store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 			p := platform.NewLocalPlatform(dir)
 			p.Env = map[string]string{"HOME": home, "PI_CODING_AGENT_DIR": agent, "PI_TELEMETRY": "0", "TELOS_PI_PROBE_PHASE": phase}
+			if connectionPhase {
+				p.Env["HTTPS_PROXY"] = "http://general-proxy.invalid:18080"
+			}
 			e := &sessionInferenceExecutor{sessionDir: dir, pi: executor.NewPiExecutor(p, "turn-a/probe-a", initialThinking, 15)}
 			var stop atomic.Bool
 			defer stop.Store(true)
@@ -124,7 +128,7 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 				request.Model = nil
 				model = "turn-a/probe-a"
 			}
-			rejected := phase == "rejected_from_clamped" || phase == "invalid_thinking" || phase == "clamped_thinking" || phase == "unknown_model" || phase == "bad_definition"
+			rejected := phase == "rejected_from_clamped" || phase == "invalid_thinking" || phase == "clamped_thinking" || phase == "unknown_model" || phase == "bad_definition" || phase == "connection_rejected" || phase == "legacy_connection"
 			if phase == "invalid_thinking" || phase == "rejected_from_clamped" {
 				thinking = "imaginary"
 			}
@@ -138,6 +142,17 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 				request.ModelDefinition = json.RawMessage(`{"id":"probe-b","name":"Offline test","api":"telos-offline-test","reasoning":true,"input":["text"],"contextWindow":256000,"maxTokens":8192,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}`)
 				if phase == "bad_definition" {
 					request.ModelDefinition = json.RawMessage(`{"id":"probe-b","contextWindow":"invalid"}`)
+				}
+			}
+			if connectionPhase {
+				if phase == "connection_same_model" {
+					model = "turn-a/probe-a"
+				}
+				provider, id, _ := strings.Cut(model, "/")
+				request.Connection = &sessionapi.InferenceConnection{ID: "new-connection", Provider: provider, BaseURL: "https://new-account.invalid/v1", ProxyURL: "http://172.31.255.1:20004", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
+				request.ModelDefinition = json.RawMessage(fmt.Sprintf(`{"id":%q,"name":"Offline test","api":"telos-offline-test","reasoning":true,"input":["text"],"contextWindow":256000,"maxTokens":8192,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}`, id))
+				if phase == "connection_rejected" {
+					thinking = "imaginary"
 				}
 			}
 			queued, err := store.UpdateInference("session", request)
@@ -155,7 +170,7 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 			}
 			verifier := start("verifier")
 			second := waitFile(filepath.Join(verifier, "request-1.json"))
-			if phase == "follow_up" {
+			if phase == "follow_up" || phase == "connection_follow_up" || phase == "connection_return" {
 				deadline := time.Now().Add(time.Second)
 				for {
 					state, err := store.Inference("session")
@@ -171,7 +186,14 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 					time.Sleep(10 * time.Millisecond)
 				}
 				level := "low"
-				if _, err := store.UpdateInference("session", sessionapi.InferenceUpdateRequest{RequestID: "follow-up", ExpectedRevision: 1, Thinking: &level}); err != nil {
+				followUp := sessionapi.InferenceUpdateRequest{RequestID: "follow-up", ExpectedRevision: 1, Thinking: &level}
+				if phase == "connection_return" {
+					originalModel := "turn-a/probe-a"
+					followUp.Model = &originalModel
+					followUp.ModelDefinition = json.RawMessage(`{"id":"probe-a","name":"Offline test","api":"telos-offline-test","reasoning":true,"input":["text"],"contextWindow":128000,"maxTokens":4096,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}`)
+					followUp.Connection = &sessionapi.InferenceConnection{ID: "original-connection", Provider: "turn-a", BaseURL: "https://original-account.invalid/v1", ProxyURL: "http://172.31.255.1:20000", APIKey: "telos-proxy-" + strings.Repeat("b", 43)}
+				}
+				if _, err := store.UpdateInference("session", followUp); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -181,7 +203,7 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 				t.Fatal(err)
 			}
 			wantStatus := "applied"
-			if phase == "follow_up" {
+			if phase == "follow_up" || phase == "connection_follow_up" || phase == "connection_return" {
 				wantStatus = "pending"
 			}
 			if rejected {
@@ -205,14 +227,27 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 			if before.PID == after.PID || after.Model != wantModel || after.Thinking != thinking {
 				t.Fatalf("new process did not use complete pair: %s", second)
 			}
+			if connectionPhase && !rejected {
+				for _, value := range []string{`"baseUrl":"https://new-account.invalid/v1"`, `"apiKey":"` + request.Connection.APIKey + `"`, `"proxy":"http://172.31.255.1:20004"`, `"processProxy":"http://general-proxy.invalid:18080"`} {
+					if !bytes.Contains(second, []byte(value)) {
+						t.Fatalf("new connection not used (%s): %s", value, second)
+					}
+				}
+				if state.Settings.ConnectionID != request.Connection.ID {
+					t.Fatalf("connection was not confirmed: %+v", state.Settings)
+				}
+			}
 			if phase == "definition" || phase == "legacy_definition" {
 				if after.ContextWindow != 256000 || after.MaxTokens != 8192 || after.API != "telos-offline-test" {
 					t.Fatalf("metadata was not used: %s", second)
 				}
 			}
 			// A new executor restores confirmed settings or activates the next queued pair.
-			if phase == "follow_up" {
+			if phase == "follow_up" || phase == "connection_follow_up" || phase == "connection_return" {
 				thinking = "low"
+			}
+			if phase == "connection_return" {
+				wantModel = "probe-a"
 			}
 			e = &sessionInferenceExecutor{sessionDir: dir, pi: executor.NewPiExecutor(p, "turn-a/probe-a", initialThinking, 15)}
 			restart := start("restart")
@@ -221,28 +256,42 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 			if !bytes.Contains(restarted, []byte(fmt.Sprintf(`"model":%q`, wantModel))) || !bytes.Contains(restarted, []byte(fmt.Sprintf(`"thinking":%q`, thinking))) {
 				t.Fatalf("restart lost settings: %s", restarted)
 			}
+			if connectionPhase && !rejected {
+				wantKey := request.Connection.APIKey
+				if phase == "connection_return" {
+					wantKey = "telos-proxy-" + strings.Repeat("b", 43)
+				}
+				if !bytes.Contains(restarted, []byte(fmt.Sprintf(`"apiKey":%q`, wantKey))) {
+					t.Fatalf("restart lost connection: %s", restarted)
+				}
+				models, _ := os.ReadFile(filepath.Join(agent, "models.json"))
+				if bytes.Contains(models, []byte("telos-proxy")) || bytes.Contains(models, []byte("new-account")) {
+					t.Fatalf("connection overwrote shared provider file: %s", models)
+				}
+			}
 		})
 	}
 }
 
 func TestInferenceReceiptRecovery(t *testing.T) {
-	for _, outcome := range []string{"accepted", "rejected", "missing", "stale_attempt", "wrong_pair"} {
+	for _, outcome := range []string{"accepted", "rejected", "missing", "stale_attempt", "wrong_pair", "wrong_connection"} {
 		t.Run(outcome, func(t *testing.T) {
 			dir := t.TempDir()
 			path, receiptPath := filepath.Join(dir, "session.json"), filepath.Join(dir, "receipt.json")
 			model, thinking := "provider/new", "high"
 			m := &sessionapi.Manifest{
-				SessionKind: sessionapi.KindController,
-				Config:      sessionapi.SessionConfig{Model: "provider/old", Thinking: "medium"},
+				SessionKind:         sessionapi.KindController,
+				Config:              sessionapi.SessionConfig{Model: "provider/old", Thinking: "medium"},
+				InferenceConnection: &sessionapi.InferenceConnection{ID: "old"},
 				InferenceUpdate: &sessionapi.InferenceUpdate{
-					InferenceUpdateRequest: sessionapi.InferenceUpdateRequest{RequestID: "change", Model: &model, Thinking: &thinking},
+					InferenceUpdateRequest: sessionapi.InferenceUpdateRequest{RequestID: "change", Model: &model, Thinking: &thinking, Connection: &sessionapi.InferenceConnection{ID: "new"}},
 					Revision:               1, Status: "applying", AttemptID: "current", ReceiptPath: receiptPath,
 				},
 			}
 			if err := sessionapi.WriteManifest(path, m); err != nil {
 				t.Fatal(err)
 			}
-			r := executor.PiStartupReceipt{RequestID: "change", AttemptID: "current", Model: model, Thinking: thinking}
+			r := executor.PiStartupReceipt{RequestID: "change", AttemptID: "current", Model: model, Thinking: thinking, ConnectionID: "new"}
 			switch outcome {
 			case "rejected":
 				r.Error = "unsupported settings"
@@ -250,6 +299,8 @@ func TestInferenceReceiptRecovery(t *testing.T) {
 				r.AttemptID = "previous"
 			case "wrong_pair":
 				r.Thinking = "low"
+			case "wrong_connection":
+				r.ConnectionID = "old"
 			}
 			if outcome != "missing" {
 				data, _ := json.Marshal(r)
@@ -276,10 +327,10 @@ func TestInferenceReceiptRecovery(t *testing.T) {
 				t.Fatalf("unexpected outcome: %+v", saved.InferenceUpdate)
 			}
 			if outcome == "accepted" {
-				if saved.Config.Model != model || saved.Config.Thinking != thinking {
+				if saved.Config.Model != model || saved.Config.Thinking != thinking || saved.InferenceConnection.ID != "new" {
 					t.Fatalf("lost accepted pair: %+v", saved.Config)
 				}
-			} else if saved.Config.Model != "provider/old" || saved.Config.Thinking != "medium" {
+			} else if saved.Config.Model != "provider/old" || saved.Config.Thinking != "medium" || saved.InferenceConnection.ID != "old" {
 				t.Fatalf("changed unconfirmed settings: %+v", saved.Config)
 			}
 		})

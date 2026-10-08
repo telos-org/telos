@@ -27,16 +27,17 @@ const (
 
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {
-	SessionKind     sessionapi.SessionKind
-	ParentSessionID *string
-	Workspace       string
-	Model           string
-	ModelDefinition json.RawMessage
-	Thinking        string
-	Until           int
-	UntilSeconds    int
-	MaxCostUSD      *float64
-	AgentTimeoutSec int
+	SessionKind         sessionapi.SessionKind
+	ParentSessionID     *string
+	Workspace           string
+	Model               string
+	ModelDefinition     json.RawMessage
+	InferenceConnection *sessionapi.InferenceConnection
+	Thinking            string
+	Until               int
+	UntilSeconds        int
+	MaxCostUSD          *float64
+	AgentTimeoutSec     int
 }
 
 // LocalSession holds the result of session creation.
@@ -493,10 +494,16 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 	}
 	sessionKind := localSessionKind(cfg)
 	definition := cfg.ModelDefinition
-	if len(definition) == 0 && cfg.ParentSessionID != nil && filepath.Base(*cfg.ParentSessionID) == *cfg.ParentSessionID {
+	connection := cfg.InferenceConnection
+	if cfg.ParentSessionID != nil && filepath.Base(*cfg.ParentSessionID) == *cfg.ParentSessionID {
 		parent, err := sessionapi.ReadManifest(filepath.Join(filepath.Dir(sessionDir), *cfg.ParentSessionID, "session.json"))
-		if err == nil && parent.Config.Model == model {
-			definition = parent.InferenceModelDefinition
+		if err == nil {
+			if len(definition) == 0 && parent.Config.Model == model {
+				definition = parent.InferenceModelDefinition
+			}
+			if connection == nil && parent.InferenceConnection != nil && strings.HasPrefix(model, parent.InferenceConnection.Provider+"/") {
+				connection = parent.InferenceConnection
+			}
 		}
 	}
 
@@ -504,6 +511,7 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 	err := sessionapi.WriteInitialManifest(manifestPath, sessionapi.InitialManifest{
 		SessionID:                filepath.Base(sessionDir),
 		InferenceModelDefinition: definition,
+		InferenceConnection:      connection,
 		SessionKind:              sessionKind,
 		Runtime:                  sessionapi.RuntimeLocal,
 		CreatedAt:                time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
@@ -548,13 +556,14 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 func manifestToConfig(manifest *sessionapi.Manifest) LocalRunConfig {
 	cfg := manifest.Config
 	lrc := LocalRunConfig{
-		Model:           cfg.Model,
-		ModelDefinition: manifest.InferenceModelDefinition,
-		Thinking:        cfg.Thinking,
-		Until:           cfg.Until,
-		UntilSeconds:    cfg.UntilSeconds,
-		MaxCostUSD:      cfg.MaxCostUSD,
-		AgentTimeoutSec: cfg.AgentTimeoutSec,
+		Model:               cfg.Model,
+		ModelDefinition:     manifest.InferenceModelDefinition,
+		InferenceConnection: manifest.InferenceConnection,
+		Thinking:            cfg.Thinking,
+		Until:               cfg.Until,
+		UntilSeconds:        cfg.UntilSeconds,
+		MaxCostUSD:          cfg.MaxCostUSD,
+		AgentTimeoutSec:     cfg.AgentTimeoutSec,
 	}
 	if lrc.Thinking == "" {
 		lrc.Thinking = DefaultLocalThinking

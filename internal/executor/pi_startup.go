@@ -6,26 +6,30 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 //go:embed pi_startup.js
 var piStartupExtension []byte
 
 type PiStartupConfig struct {
-	RequestID   string          `json:"request_id"`
-	AttemptID   string          `json:"attempt_id"`
-	Model       string          `json:"model"`
-	Thinking    string          `json:"thinking"`
-	Definition  json.RawMessage `json:"definition,omitempty"`
-	ReceiptPath string          `json:"receipt_path"`
+	RequestID   string                          `json:"request_id"`
+	AttemptID   string                          `json:"attempt_id"`
+	Model       string                          `json:"model"`
+	Thinking    string                          `json:"thinking"`
+	Definition  json.RawMessage                 `json:"definition,omitempty"`
+	Connection  *sessionapi.InferenceConnection `json:"connection,omitempty"`
+	ReceiptPath string                          `json:"receipt_path"`
 }
 
 type PiStartupReceipt struct {
-	RequestID string `json:"request_id"`
-	AttemptID string `json:"attempt_id"`
-	Model     string `json:"model"`
-	Thinking  string `json:"thinking"`
-	Error     string `json:"error,omitempty"`
+	RequestID    string `json:"request_id"`
+	AttemptID    string `json:"attempt_id"`
+	Model        string `json:"model"`
+	Thinking     string `json:"thinking"`
+	ConnectionID string `json:"connection_id,omitempty"`
+	Error        string `json:"error,omitempty"`
 }
 
 func ReadPiStartupReceipt(path string) (PiStartupReceipt, error) {
@@ -40,6 +44,11 @@ func ReadPiStartupReceipt(path string) (PiStartupReceipt, error) {
 func (pe *PiExecutor) prepareStartup() (map[string]string, error) {
 	if pe.Startup == nil {
 		return nil, nil
+	}
+	if pe.Startup.Connection != nil {
+		if err := pe.Startup.Connection.Validate(pe.Startup.Model); err != nil {
+			return nil, err
+		}
 	}
 	dir := filepath.Dir(pe.Startup.ReceiptPath)
 	if err := os.MkdirAll(dir, 0o700); err != nil {

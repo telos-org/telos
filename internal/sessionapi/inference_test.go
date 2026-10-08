@@ -7,9 +7,116 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 )
+
+func testInferenceConnection() *InferenceConnection {
+	return &InferenceConnection{ID: "grant-new", Provider: "provider", BaseURL: "https://models.example/v1", ProxyURL: "http://172.31.255.1:20000", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
+}
+
+func TestInferenceConnectionIsDurableAndRedacted(t *testing.T) {
+	store, path := inferenceStore(t)
+	model := "provider/new"
+	connection := testInferenceConnection()
+	definition := json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`)
+	req := InferenceUpdateRequest{RequestID: "connection", Model: &model, ModelDefinition: definition, Connection: connection}
+	state, err := store.UpdateInference("session", req)
+	if err != nil || !state.ConnectionSwitching || state.Settings.ConnectionID != "" || state.Update.Connection.APIKey != "" {
+		t.Fatalf("pending response: %+v %v", state, err)
+	}
+	encoded, _ := json.Marshal(state)
+	if strings.Contains(string(encoded), connection.APIKey) {
+		t.Fatal("response exposed the prepared placeholder")
+	}
+	if _, err := store.UpdateInference("session", req); err != nil {
+		t.Fatalf("redacted response broke durable retry: %v", err)
+	}
+	different := *connection
+	different.APIKey = "telos-proxy-" + strings.Repeat("b", 43)
+	other := req
+	other.Connection = &different
+	if _, err := store.UpdateInference("session", other); !errors.Is(err, ErrConflict) {
+		t.Fatalf("reusing request id changed credentials: %v", err)
+	}
+	update, err := ClaimInferenceUpdate(path, "attempt", "receipt.json", InferenceSettings{})
+	if err != nil || update.Connection.APIKey != connection.APIKey || update.Settings.ConnectionID != connection.ID {
+		t.Fatalf("claim lost prepared connection: %+v %v", update, err)
+	}
+	if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", update.Settings); err != nil {
+		t.Fatal(err)
+	}
+	thinking := "high"
+	if _, err := store.UpdateInference("session", InferenceUpdateRequest{RequestID: "thinking", ExpectedRevision: 1, Thinking: &thinking}); err != nil {
+		t.Fatal(err)
+	}
+	update, err = ClaimInferenceUpdate(path, "next-attempt", "next.json", InferenceSettings{})
+	if err != nil || update.Settings.ConnectionID != connection.ID {
+		t.Fatalf("thinking change lost connection: %+v %v", update, err)
+	}
+	if err := FinishInferenceUpdate(path, "thinking", "applied", "", update.Settings); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := ReadManifest(path)
+	if err != nil || saved.InferenceConnection == nil || *saved.InferenceConnection != *connection {
+		t.Fatalf("restart lost connection: %+v %v", saved, err)
+	}
+	state, err = NewFileStore(store.Root, RuntimeLocal).Inference("session")
+	if err != nil || state.Settings.ConnectionID != connection.ID || state.Settings.Thinking != thinking {
+		t.Fatalf("confirmed connection: %+v %v", state, err)
+	}
+}
+
+func TestInferenceConnectionValidation(t *testing.T) {
+	model := "provider/new"
+	definition := json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`)
+	for _, name := range []string{"valid", "codex", "secret", "command", "environment", "bad_codex", "http", "url_auth", "url_query", "proxy_host", "proxy_port", "proxy_suffix", "proxy_range", "provider", "id", "no_model", "no_definition", "partial_definition"} {
+		t.Run(name, func(t *testing.T) {
+			req := InferenceUpdateRequest{RequestID: "request", Model: &model, ModelDefinition: definition, Connection: testInferenceConnection()}
+			switch name {
+			case "codex":
+				req.Connection.APIKey = "telos-proxy.eyJodHRwczovL2FwaS5vcGVuYWkuY29tL2F1dGgiOnsiY2hhdGdwdF9hY2NvdW50X2lkIjoidGVsb3MtcHJveHkifX0." + strings.Repeat("b", 43)
+			case "secret":
+				req.Connection.APIKey = "sk-real-secret"
+			case "command":
+				req.Connection.APIKey = "!cat /etc/passwd"
+			case "environment":
+				req.Connection.APIKey = "$ANTHROPIC_API_KEY"
+			case "bad_codex":
+				req.Connection.APIKey = "telos-proxy.e30." + strings.Repeat("a", 43)
+			case "http":
+				req.Connection.BaseURL = "http://models.example/v1"
+			case "url_auth":
+				req.Connection.BaseURL = "https://user:secret@models.example/v1"
+			case "url_query":
+				req.Connection.BaseURL = "https://models.example/v1?api_key=secret"
+			case "proxy_host":
+				req.Connection.ProxyURL = "http://127.0.0.1:20000"
+			case "proxy_port":
+				req.Connection.ProxyURL = "http://172.31.255.1:20001"
+			case "proxy_suffix":
+				req.Connection.ProxyURL = "http://172.31.255.1:20000/"
+			case "proxy_range":
+				req.Connection.ProxyURL = "http://172.31.255.1:20256"
+			case "provider":
+				req.Connection.Provider = "other"
+			case "id":
+				req.Connection.ID = "../grant"
+			case "no_model":
+				req.Model = nil
+			case "no_definition":
+				req.ModelDefinition = nil
+			case "partial_definition":
+				req.ModelDefinition = json.RawMessage(`{"id":"new"}`)
+			}
+			err := req.Validate()
+			if (err == nil) != (name == "valid" || name == "codex") {
+				t.Fatalf("validation: %v", err)
+			}
+		})
+	}
+}
 
 func inferenceStore(t *testing.T) (*FileStore, string) {
 	t.Helper()

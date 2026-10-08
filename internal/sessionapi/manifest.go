@@ -30,6 +30,7 @@ type Manifest struct {
 	Config                   SessionConfig              `json:"config"`
 	InferenceUpdate          *InferenceUpdate           `json:"inference_update,omitempty"`
 	InferenceModelDefinition json.RawMessage            `json:"inference_model_definition,omitempty"`
+	InferenceConnection      *InferenceConnection       `json:"inference_connection,omitempty"`
 	Workspace                *Workspace                 `json:"workspace,omitempty"`
 	Provenance               map[string]any             `json:"provenance"`
 	Access                   *ScopedToken               `json:"access,omitempty"`
@@ -131,6 +132,7 @@ type InitialManifest struct {
 	SpecVersions             []map[string]any
 	Config                   SessionConfig
 	InferenceModelDefinition json.RawMessage
+	InferenceConnection      *InferenceConnection
 	Workspace                *Workspace
 	Provenance               map[string]any
 	PackageDigest            *string
@@ -200,6 +202,7 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		SpecVersions:             cloneSpecVersionMaps(input.SpecVersions),
 		Config:                   input.Config,
 		InferenceModelDefinition: input.InferenceModelDefinition,
+		InferenceConnection:      input.InferenceConnection,
 		Workspace:                input.Workspace,
 		Provenance:               input.Provenance,
 		PackageDigest:            input.PackageDigest,
