@@ -251,6 +251,15 @@ func WriteManifest(path string, m *Manifest) error {
 }
 
 func MutateManifest(path string, mutate func(*Manifest) error) (*Manifest, error) {
+	return withLockedManifest(path, func(m *Manifest) error {
+		if err := mutate(m); err != nil {
+			return err
+		}
+		return WriteManifest(path, m)
+	})
+}
+
+func withLockedManifest(path string, action func(*Manifest) error) (*Manifest, error) {
 	lockPath := path + ".lock"
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -269,10 +278,7 @@ func MutateManifest(path string, mutate func(*Manifest) error) (*Manifest, error
 	if err != nil {
 		return nil, err
 	}
-	if err := mutate(m); err != nil {
-		return nil, err
-	}
-	if err := WriteManifest(path, m); err != nil {
+	if err := action(m); err != nil {
 		return nil, err
 	}
 	return m, nil
