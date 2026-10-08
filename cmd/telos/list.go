@@ -242,7 +242,7 @@ func printCloudSessionList(out io.Writer, sessions []cloud.SessionRecord, wide b
 	if wide {
 		fmt.Fprint(w, "NAME\tSTATUS\tREVISION\tSERVICE\tTELOS SPEND\t")
 		if providerColumn {
-			fmt.Fprint(w, "PROVIDER ESTIMATE\t")
+			fmt.Fprint(w, "PROVIDER COST\t")
 		}
 		fmt.Fprintln(w, "SESSION")
 	} else {
@@ -259,7 +259,7 @@ func printCloudSessionList(out io.Writer, sessions []cloud.SessionRecord, wide b
 				cloudSpendLabel(session),
 			)
 			if providerColumn {
-				fmt.Fprintf(w, "%s\t", cloudProviderEstimateLabel(session))
+				fmt.Fprintf(w, "%s\t", cloudProviderCostLabel(session))
 			}
 			fmt.Fprintln(w, session.ID)
 			continue

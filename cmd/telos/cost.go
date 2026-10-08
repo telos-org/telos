@@ -79,7 +79,7 @@ func cloudCostFields(session cloud.SessionRecord) []descriptionField {
 	if external := cost.ExternalInference; external != nil {
 		field := descriptionField{
 			label:  "  " + providerLabel(external.Provider),
-			value:  formatCostEstimate(external.EstimatedCostMicroUSD),
+			value:  formatCostAmount(external.EstimatedCostMicroUSD),
 			amount: external.EstimatedCostMicroUSD != nil,
 		}
 		if external.EstimateKind == "api_equivalent" {
@@ -105,13 +105,6 @@ func formatCostAmount(amount *int64) string {
 	return formatMicroUSD(*amount)
 }
 
-func formatCostEstimate(amount *int64) string {
-	if amount == nil {
-		return "Unavailable"
-	}
-	return "~" + formatMicroUSD(*amount)
-}
-
 func cloudSpendLabel(session cloud.SessionRecord) string {
 	if session.Cost == nil {
 		return "Unavailable"
@@ -127,7 +120,7 @@ func hasExternalInference(session cloud.SessionRecord) bool {
 	return session.Inference != nil && (session.Inference.Source == "byok" || session.Inference.Source == "subscription")
 }
 
-func cloudProviderEstimateLabel(session cloud.SessionRecord) string {
+func cloudProviderCostLabel(session cloud.SessionRecord) string {
 	if !hasExternalInference(session) {
 		if session.Inference == nil || session.Inference.Source != "managed" {
 			return "Unavailable"
@@ -138,7 +131,7 @@ func cloudProviderEstimateLabel(session cloud.SessionRecord) string {
 	if session.Cost != nil && session.Cost.ExternalInference != nil {
 		amount = session.Cost.ExternalInference.EstimatedCostMicroUSD
 	}
-	value := formatCostEstimate(amount) + " (" + providerLabel(session.Inference.Provider) + ")"
+	value := formatCostAmount(amount) + " (" + providerLabel(session.Inference.Provider) + ")"
 	if session.Inference.Source == "subscription" {
 		value += " (API-equivalent)"
 	}

@@ -39,10 +39,10 @@ func TestCloudCostDescriptionAlignmentAndHierarchy(t *testing.T) {
 		"Context        @team\n" +
 		"Service        https://example.com\n" +
 		"Cost\n" +
-		"  Telos spend   $1.25\n" +
-		"    Compute     $1.00\n" +
-		"    Storage     $0.25\n" +
-		"  Anthropic    ~$3.40\n"
+		"  Telos spend  $1.25\n" +
+		"    Compute    $1.00\n" +
+		"    Storage    $0.25\n" +
+		"  Anthropic    $3.40\n"
 	if out.String() != want {
 		t.Fatalf("description differs from agreed layout:\n%s\nwant:\n%s", out.String(), want)
 	}
@@ -79,7 +79,7 @@ func TestCloudCostDescriptionManagedSubscriptionAndAdjustments(t *testing.T) {
 	out.Reset()
 	printCloudSessionDescription(&out, session)
 	text = out.String()
-	if !strings.Contains(text, "  Codex ") || !strings.Contains(text, "~$6.40 (API-equivalent)") || !strings.Contains(text, "Detailed breakdown unavailable") {
+	if !strings.Contains(text, "  Codex ") || !strings.Contains(text, "$6.40 (API-equivalent)") || !strings.Contains(text, "Detailed breakdown unavailable") {
 		t.Fatalf("subscription or unavailable breakdown meaning lost:\n%s", text)
 	}
 	if strings.Index(text, "Reason") > strings.Index(text, "\nCost\n") || strings.Contains(text, "\n\nCost") {
@@ -97,14 +97,14 @@ func TestCloudCostProviderColumnFollowsDisplayedInference(t *testing.T) {
 		provider bool
 	}{
 		{"managed only", []cloud.SessionRecord{managed}, false},
-		{"mixed with unavailable estimate", []cloud.SessionRecord{managed, external}, true},
+		{"mixed with unavailable provider cost", []cloud.SessionRecord{managed, external}, true},
 		{"external excluded by limit", limitCloudSessions([]cloud.SessionRecord{managed, external}, 1), false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			var out bytes.Buffer
 			printCloudSessionList(&out, test.sessions, true)
 			text := out.String()
-			if strings.Contains(text, "PROVIDER ESTIMATE") != test.provider || !strings.Contains(text, "TELOS SPEND") {
+			if strings.Contains(text, "PROVIDER COST") != test.provider || !strings.Contains(text, "TELOS SPEND") {
 				t.Fatalf("incorrect columns:\n%s", text)
 			}
 			lines := strings.Split(strings.TrimSpace(text), "\n")
@@ -115,7 +115,7 @@ func TestCloudCostProviderColumnFollowsDisplayedInference(t *testing.T) {
 				}
 			}
 			if test.provider && (!strings.Contains(text, "Unavailable (Anthropic)") || !strings.Contains(text, "—")) {
-				t.Fatalf("missing vs inapplicable estimates:\n%s", text)
+				t.Fatalf("missing vs inapplicable provider costs:\n%s", text)
 			}
 			if strings.Contains(text, "Total") || strings.Contains(text, "aggregate") {
 				t.Fatalf("unexpected aggregate:\n%s", text)
@@ -174,7 +174,7 @@ func TestCommandsEnrichOnlyRequestedGoalsAndShareCostJSON(t *testing.T) {
 		t.Fatalf("compact list fetched costs: %s", compact)
 	}
 	wide := captureStdout(t, func() { cmdList([]string{"--wide", "--limit", "1"}) })
-	if !strings.Contains(wide, "~$3.40 (Anthropic)") || strings.Contains(wide, "hidden") {
+	if !strings.Contains(wide, "$3.40 (Anthropic)") || strings.Contains(wide, "hidden") || strings.Contains(wide, "~") || strings.Contains(strings.ToLower(wide), "estimate") {
 		t.Fatalf("wide list: %s", wide)
 	}
 	listJSON := captureStdout(t, func() { cmdList([]string{"--json", "--limit", "1"}) })
@@ -207,7 +207,7 @@ func TestCommandsEnrichOnlyRequestedGoalsAndShareCostJSON(t *testing.T) {
 	}
 }
 
-func TestSubscriptionEstimateMeaningSurvivesUnavailableData(t *testing.T) {
+func TestSubscriptionCostMeaningSurvivesUnavailableData(t *testing.T) {
 	session := costDisplaySession()
 	session.Inference = &cloud.InferenceSummary{Source: "subscription", Provider: "chatgpt-codex"}
 	session.Cost.ExternalInference = &cloud.ExternalInferenceCost{Provider: "chatgpt-codex", EstimateKind: "api_equivalent"}
@@ -218,7 +218,10 @@ func TestSubscriptionEstimateMeaningSurvivesUnavailableData(t *testing.T) {
 		printCloudSessionList(&list, []cloud.SessionRecord{session}, true)
 		for _, output := range []string{detail.String(), list.String()} {
 			if !strings.Contains(output, "(API-equivalent)") || (amount == nil && !strings.Contains(output, "Unavailable")) {
-				t.Fatalf("subscription estimate lost meaning: %s", output)
+				t.Fatalf("subscription cost lost meaning: %s", output)
+			}
+			if strings.Contains(output, "~") || strings.Contains(strings.ToLower(output), "estimate") {
+				t.Fatalf("unexpected estimate notation: %s", output)
 			}
 		}
 	}
