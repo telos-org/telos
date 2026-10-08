@@ -247,10 +247,10 @@ func TestApplyLocalInferenceQueuesAndDescribeShowsConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := captureStdout(t, func() { cmdApply([]string{"--session", id, "--model", "provider/new", "--thinking", "max"}) })
-	if !strings.Contains(out, "Queued for the next prover or verifier turn") || !strings.Contains(out, "Model     provider/old -> provider/new (requested)") || !strings.Contains(out, "Thinking  medium -> max (requested)") || !strings.Contains(out, "Requested settings are not yet confirmed.") || !strings.Contains(out, "Check confirmed settings with: telos describe") {
+	if !strings.Contains(out, "Queued for the next prover or verifier turn") || !strings.Contains(out, "Model     provider/old -> provider/new (next turn)") || !strings.Contains(out, "Thinking  medium -> max (next turn)") || !strings.Contains(out, "Check confirmed settings with: telos describe") {
 		t.Fatalf("pending receipt: %s", out)
 	}
-	for _, unwanted := range []string{"\nRequest ", "Requested model", "Requested thinking"} {
+	for _, unwanted := range []string{"\nSettings ", "revision", "\nRequest ", "Requested model", "Requested thinking", "(requested)"} {
 		if strings.Contains(out, unwanted) {
 			t.Fatalf("apply exposed a separate request field %q: %s", unwanted, out)
 		}

@@ -219,11 +219,6 @@ func printInferenceReceipt(out io.Writer, receipt *inferenceReceipt) {
 	if receipt.Context != "" {
 		printSummaryField(out, "Context", receipt.Context)
 	}
-	status := receipt.Status
-	if status == "" {
-		status = "no change requested"
-	}
-	printSummaryField(out, "Settings", fmt.Sprintf("%s (revision %d)", status, receipt.Revision))
 	model := strings.TrimPrefix(receipt.Settings.Model, "telos-bifrost/")
 	requestedModel := strings.TrimPrefix(receipt.RequestedModel, "telos-bifrost/")
 	printSummaryField(out, "Model", inferenceSettingChange(model, requestedModel, receipt.Status))
@@ -231,8 +226,8 @@ func printInferenceReceipt(out io.Writer, receipt *inferenceReceipt) {
 	if receipt.Error != "" {
 		printSummaryField(out, "Error", receipt.Error)
 	}
-	if receipt.Status == "pending" || receipt.Status == "applying" || receipt.Status == "unknown" {
-		fmt.Fprintln(out, "Requested settings are not yet confirmed.")
+	if receipt.Status == "unknown" {
+		fmt.Fprintln(out, "Could not confirm whether the change took effect.")
 	}
 	if receipt.Status == "pending" || receipt.Status == "applying" {
 		fmt.Fprintf(out, "\nQueued for the next prover or verifier turn. Idle sessions wait for their next scheduled or triggered turn.\nCheck confirmed settings with: %s\n", inferenceDescribeCommand(receipt.SessionID, receipt.Context))
@@ -243,7 +238,14 @@ func inferenceSettingChange(current, requested, status string) string {
 	if requested == "" || requested == current || status == "applied" {
 		return current
 	}
-	return fmt.Sprintf("%s -> %s (requested)", orDash(current), requested)
+	label := "unconfirmed"
+	switch status {
+	case "pending", "applying":
+		label = "next turn"
+	case "rejected":
+		label = "rejected"
+	}
+	return fmt.Sprintf("%s -> %s (%s)", orDash(current), requested, label)
 }
 
 func printInferenceSettings(out io.Writer, settings sessionapi.InferenceSettings) {
