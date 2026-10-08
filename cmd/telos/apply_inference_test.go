@@ -28,6 +28,23 @@ func configureInferenceApplyTest(t *testing.T, endpoint string) {
 	t.Setenv("TELOS_MAX_COST_USD", "not-a-number")
 }
 
+func configureLocalInferenceApplyTest(t *testing.T) {
+	t.Helper()
+	configureInferenceApplyTest(t, "http://unused.invalid")
+	// These tests exercise settings persistence and output, without model calls.
+	// Model/thinking changes also work with Pi lacking connection switching.
+	home := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '{\"connection_switching\":false,\"executable\":\"%s\"}\\n' \"$0\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+}
+
 func inferenceCLIProcess(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 	command := exec.Command(os.Args[0], append([]string{"-test.run=^TestInferenceCLIProcess$", "--"}, args...)...)
@@ -271,7 +288,7 @@ func TestApplyInferenceOutcomesAndLostReplies(t *testing.T) {
 }
 
 func TestApplyLocalInferenceQueuesAndDescribeShowsConfirmation(t *testing.T) {
-	configureInferenceApplyTest(t, "http://unused.invalid")
+	configureLocalInferenceApplyTest(t)
 	root := t.TempDir()
 	t.Setenv("TELOS_SESSION_DIR", root)
 	id := "local_settings"
@@ -416,7 +433,7 @@ func assertDescribeInferenceSettings(t *testing.T, output string, expected sessi
 }
 
 func TestApplyLocalInferenceRetryKeepsQueuedRequest(t *testing.T) {
-	configureInferenceApplyTest(t, "http://unused.invalid")
+	configureLocalInferenceApplyTest(t)
 	root := t.TempDir()
 	t.Setenv("TELOS_SESSION_DIR", root)
 	id := "local_retry"
