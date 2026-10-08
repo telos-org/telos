@@ -26,9 +26,9 @@ type revisionActionReceipt struct {
 }
 
 func cmdRevisionAction(action string, args []string) {
-	fs := newCommandFlagSet(action, "telos "+action+" SESSION --revision REVISION [flags]")
+	fs := newCommandFlagSet(action, "telos "+action+" SESSION --revision REVISION --message MESSAGE [flags]")
 	selector := fs.String("revision", "", "Source revision number or full revision ID (required)")
-	message := fs.String("message", "", "Revision message (at most 200 characters)")
+	message := fs.String("message", "", "Revision message (required; at most 200 characters)")
 	wait := fs.Bool("wait", false, "Wait for the operation and its exact result revision")
 	timeout := fs.Duration("timeout", 10*time.Minute, "Maximum observation time with --wait")
 	jsonOut := fs.Bool("json", false, "JSON receipt; with --wait, print the final result")
@@ -137,7 +137,13 @@ func normalizeCLIRevisionMessage(message string) (string, error) {
 			return "", fmt.Errorf("revision messages must be a single line without control characters")
 		}
 	}
-	message = strings.TrimSpace(message)
+	// JavaScript trim() also treats U+FEFF as whitespace in the web form.
+	message = strings.TrimFunc(message, func(r rune) bool {
+		return unicode.IsSpace(r) || r == '\ufeff'
+	})
+	if message == "" {
+		return "", fmt.Errorf("--message is required and must not be blank")
+	}
 	if utf8.RuneCountInString(message) > 200 {
 		return "", fmt.Errorf("revision messages must be at most 200 characters")
 	}
@@ -149,7 +155,7 @@ func revisionActionAllowed(action string, source *cloud.Revision, currentID stri
 	if !capability.Allowed {
 		reason := revisionReason(revisionString(capability.Reason))
 		if action == "restore" && revisionActionCapability("redeploy", source, currentID, capabilities).Allowed {
-			reason += "; package redeploy is available with telos redeploy SESSION --revision " + fmt.Sprint(source.Sequence)
+			reason += "; package redeploy is available with telos redeploy SESSION --revision " + fmt.Sprint(source.Sequence) + " --message MESSAGE"
 		}
 		return fmt.Errorf("cannot %s revision %d: %s", action, source.Sequence, reason)
 	}

@@ -232,6 +232,36 @@ func TestRevisionActionCLIAcceptsOnceAndWaitsForExactResult(t *testing.T) {
 	}
 }
 
+func TestRevisionActionCLIRequiresMessageBeforeNetwork(t *testing.T) {
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1) }))
+	defer server.Close()
+	configureCloudTest(t, server.URL)
+	for _, action := range []string{"restore", "redeploy"} {
+		for _, tt := range []struct {
+			name  string
+			flags []string
+		}{
+			{"missing", nil},
+			{"empty", []string{"--message", ""}},
+			{"spaces", []string{"--message", "   "}},
+			{"Unicode spaces", []string{"--message", "\u2003\u00a0"}},
+			{"BOM whitespace", []string{"--message", "\ufeff \ufeff"}},
+		} {
+			t.Run(action+"/"+tt.name, func(t *testing.T) {
+				args := append([]string{action, "sess_test", "--revision", "7"}, tt.flags...)
+				stdout, stderr, code := runRevisionCLI(t, args...)
+				if code != 1 || stdout != "" || !strings.Contains(stderr, "--message is required and must not be blank") {
+					t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout, stderr)
+				}
+			})
+		}
+	}
+	if requests.Load() != 0 {
+		t.Fatalf("commands without a message made %d requests", requests.Load())
+	}
+}
+
 func TestRevisionActionCLIReportsFailuresWithoutRetry(t *testing.T) {
 	for _, tt := range []struct {
 		name, response, want string
@@ -253,7 +283,7 @@ func TestRevisionActionCLIReportsFailuresWithoutRetry(t *testing.T) {
 					fmt.Fprint(w, tt.response)
 				},
 			})
-			stdout, stderr, code := runRevisionCLI(t, "restore", "sess_test", "--revision", "7", "--wait", "--timeout", "20ms", "--json")
+			stdout, stderr, code := runRevisionCLI(t, "restore", "sess_test", "--revision", "7", "--message", "Back to stable", "--wait", "--timeout", "20ms", "--json")
 			if code != 1 || !strings.Contains(stderr, tt.want) || posts.Load() != 1 {
 				t.Fatalf("exit=%d stdout=%s stderr=%s posts=%d", code, stdout, stderr, posts.Load())
 			}
@@ -285,7 +315,7 @@ func TestRevisionActionsRespectCapabilitiesWithoutFallback(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(cloud.RevisionPage{CurrentRevisionID: "rev_12", Revisions: []cloud.Revision{revision}})
 				},
 			})
-			_, stderr, code := runRevisionCLI(t, tt.action, "sess_test", "--revision", strconv.Itoa(tt.sequence))
+			_, stderr, code := runRevisionCLI(t, tt.action, "sess_test", "--revision", strconv.Itoa(tt.sequence), "--message", "Back to stable")
 			if code != 1 || !strings.Contains(stderr, revisionReason(tt.reason)) {
 				t.Fatalf("exit=%d stderr=%s", code, stderr)
 			}
@@ -346,7 +376,7 @@ func TestWaitRevisionOperationCancellation(t *testing.T) {
 
 func TestRevisionMessageUnicodeLimit(t *testing.T) {
 	message := strings.Repeat("界", 200)
-	if got, err := normalizeCLIRevisionMessage(" " + message + " "); err != nil || got != message {
+	if got, err := normalizeCLIRevisionMessage("\ufeff " + message + " \ufeff"); err != nil || got != message {
 		t.Fatalf("valid Unicode message rejected: %v", err)
 	}
 	for _, invalid := range []string{message + "界", "a\nb", "a\tb", "a\x1bb", "a\u2028b"} {
