@@ -187,6 +187,9 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 		session["status_reason"] != "The agent finished and the verifier accepted the result." {
 		t.Fatalf("cloud list json first session: %#v", sessions[0])
 	}
+	if _, ok := session["state"]; ok {
+		t.Fatalf("cloud list json exposes the raw state: %#v", session)
+	}
 }
 
 func TestCmdListContextFlagOverridesEnvironment(t *testing.T) {
@@ -380,10 +383,23 @@ func TestPrintCloudSessionJSONContainsOnlyAuthoritativeRecord(t *testing.T) {
 	if body["id"] != "sess_123" || body["status"] != "working" || body["context"] != "org_telos" {
 		t.Fatalf("cloud session JSON: %#v", body)
 	}
-	for _, key := range []string{"progress", "progress_error", "stage", "latest_activity", "waiting_action"} {
+	for _, key := range []string{"state", "progress", "progress_error", "stage", "latest_activity", "waiting_action"} {
 		if _, ok := body[key]; ok {
-			t.Fatalf("cloud session JSON contains derived field %q: %#v", key, body)
+			t.Fatalf("cloud session JSON contains %q: %#v", key, body)
 		}
+	}
+
+	// A control plane that predates status still reports one.
+	session.Status = ""
+	out = captureStdout(t, func() {
+		printCloudSessionJSON(session, "org_telos")
+	})
+	body = map[string]any{}
+	if err := json.Unmarshal([]byte(out), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["status"] != "deploying" {
+		t.Fatalf("cloud session JSON without a Cloud status: %#v", body)
 	}
 }
 

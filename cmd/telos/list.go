@@ -212,9 +212,13 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 	}
 	cloudSessions = limitCloudSessions(cloudSessions, limit)
 	if jsonOut {
+		sessions := make([]cloudSessionJSON, 0, len(cloudSessions))
+		for index := range cloudSessions {
+			sessions = append(sessions, newCloudSessionJSON(&cloudSessions[index]))
+		}
 		printJSON(map[string]any{
 			"context":  control.ContextName(),
-			"sessions": cloudSessions,
+			"sessions": sessions,
 		})
 		return
 	}

@@ -72,16 +72,29 @@ func cmdDescribe(args []string) {
 	os.Exit(1)
 }
 
+// cloudSessionJSON is a Cloud session as describe and list print it. Callers
+// read status and status_reason; the raw lifecycle state is left out.
+type cloudSessionJSON struct {
+	*cloud.SessionRecord
+	// State stays nil so it hides the record's raw state.
+	State  *string `json:"state,omitempty"`
+	Status string  `json:"status,omitempty"`
+}
+
+func newCloudSessionJSON(session *cloud.SessionRecord) cloudSessionJSON {
+	return cloudSessionJSON{SessionRecord: session, Status: cloudSessionDisplayStatus(*session)}
+}
+
 func printCloudSessionJSON(
 	session *cloud.SessionRecord,
 	contextName string,
 ) {
 	printJSON(struct {
-		*cloud.SessionRecord
+		cloudSessionJSON
 		Context string `json:"context,omitempty"`
 	}{
-		SessionRecord: session,
-		Context:       contextName,
+		cloudSessionJSON: newCloudSessionJSON(session),
+		Context:          contextName,
 	})
 }
 
