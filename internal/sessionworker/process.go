@@ -321,10 +321,11 @@ func StartEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid 
 
 func RunnerIdentity(pid int) sessionapi.Runner {
 	return sessionapi.Runner{
-		Kind:      "local-subprocess",
-		PID:       pid,
-		PGID:      pid,
-		StartedAt: time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		Kind:             "local-subprocess",
+		PID:              pid,
+		PGID:             pid,
+		StartedAt:        time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		InferenceUpdates: true,
 	}
 }
 

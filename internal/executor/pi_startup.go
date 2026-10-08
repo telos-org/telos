@@ -12,12 +12,13 @@ import (
 var piStartupExtension []byte
 
 type PiStartupConfig struct {
-	RequestID   string          `json:"request_id"`
-	AttemptID   string          `json:"attempt_id"`
-	Model       string          `json:"model"`
-	Thinking    string          `json:"thinking"`
-	Definition  json.RawMessage `json:"definition,omitempty"`
-	ReceiptPath string          `json:"receipt_path"`
+	RequestID               string          `json:"request_id"`
+	AttemptID               string          `json:"attempt_id"`
+	Model                   string          `json:"model"`
+	Thinking                string          `json:"thinking"`
+	AllowThinkingAdjustment bool            `json:"allow_thinking_adjustment,omitempty"`
+	Definition              json.RawMessage `json:"definition,omitempty"`
+	ReceiptPath             string          `json:"receipt_path"`
 }
 
 type PiStartupReceipt struct {

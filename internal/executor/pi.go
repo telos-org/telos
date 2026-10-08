@@ -119,6 +119,14 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	stderrTrimmed := strings.TrimSpace(result.Stderr)
 	if result.ReturnCode != 0 {
 		reason := orDefault(agentError, fmt.Sprintf("pi_failed:%d", result.ReturnCode))
+		if pe.Startup != nil {
+			receipt, err := ReadPiStartupReceipt(pe.Startup.ReceiptPath)
+			if err == nil && receipt.AttemptID == pe.Startup.AttemptID && receipt.RequestID == pe.Startup.RequestID && receipt.Error != "" {
+				reason = "pi_startup: " + receipt.Error
+			} else if result.ReturnCode == 78 {
+				reason = "pi_startup: startup validation failed without a matching receipt; check the installed Pi version and startup configuration"
+			}
+		}
 		if agentError == "" && stderrTrimmed != "" {
 			reason = fmt.Sprintf("%s\n[stderr]\n%s", reason, stderrTrimmed)
 		}

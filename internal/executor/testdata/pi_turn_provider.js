@@ -37,7 +37,7 @@ export default function (pi) {
       },
     };
     record("request-" + number + ".json", {
-      pid: process.pid, model: model.id, thinking: options?.reasoning,
+      pid: process.pid, model: model.id, thinking: options?.reasoning ?? "off",
       api: model.api, contextWindow: model.contextWindow, maxTokens: model.maxTokens,
       messages: context.messages, headers: options?.headers,
     });
@@ -84,7 +84,8 @@ export default function (pi) {
       apiKey: "test-only",
       baseUrl: "https://unused.invalid",
       models: [{
-        id: "probe-" + suffix, name: "Offline test", reasoning: true,
+        id: "probe-" + suffix, name: "Offline test",
+        reasoning: suffix !== "b" || process.env.TELOS_PI_PROBE_PHASE !== "model_only_nonreasoning",
         headers: { "x-telos-model-header": "preserved" },
         input: ["text"], contextWindow: 128000, maxTokens: 4096,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

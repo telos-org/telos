@@ -1,6 +1,7 @@
 package executor
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,41 @@ import (
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 )
+
+func TestPiStartupFailureIncludesReceiptDiagnostic(t *testing.T) {
+	for _, current := range []bool{true, false} {
+		t.Run(fmt.Sprint(current), func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, ".local", "bin")
+			if err := os.MkdirAll(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\nexit 78\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			p := platform.NewLocalPlatform(dir)
+			p.Env = map[string]string{"HOME": dir}
+			e := NewPiExecutor(p, "provider/model", "medium", 5)
+			e.Startup = &PiStartupConfig{AttemptID: "current", Model: e.Model, Thinking: e.Thinking, ReceiptPath: filepath.Join(dir, "receipt.json")}
+			receipt := PiStartupReceipt{AttemptID: "current", Error: "Pi selected thinking level off; requested medium"}
+			if !current {
+				receipt.AttemptID = "previous"
+			}
+			data, _ := json.Marshal(receipt)
+			if err := os.WriteFile(e.Startup.ReceiptPath, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result := e.ExecuteTurn("test", "prover", nil)
+			want := "pi_startup: " + receipt.Error
+			if !current {
+				want = "pi_startup: startup validation failed without a matching receipt; check the installed Pi version and startup configuration"
+			}
+			if result.Error != want {
+				t.Fatalf("startup error = %q, want %q", result.Error, want)
+			}
+		})
+	}
+}
 
 func TestPiStartupReceiptFailureExitsBeforePrompt(t *testing.T) {
 	node, err := exec.LookPath("node")

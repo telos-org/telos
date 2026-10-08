@@ -120,10 +120,13 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
 		current := inferenceResponse(m)
 		if current.Update != nil && current.Update.RequestID == req.RequestID {
-			if current.Update.ExpectedRevision != req.ExpectedRevision || !sameOptionalString(current.Update.Model, req.Model) || !sameOptionalString(current.Update.Thinking, req.Thinking) || !sameJSON(current.Update.ModelDefinition, req.ModelDefinition) {
+			if !sameInferenceRequest(current.Update.InferenceUpdateRequest, req) {
 				return fmt.Errorf("%w: request_id already used with different settings", ErrConflict)
 			}
 			return nil
+		}
+		if err := requireInferenceWorker(m); err != nil {
+			return err
 		}
 		if current.Revision != req.ExpectedRevision {
 			return fmt.Errorf("%w: inference settings changed; reload before submitting another change", ErrConflict)
@@ -147,6 +150,66 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 		return nil, err
 	}
 	return inferenceResponse(m), nil
+}
+
+// CancelInference also records cancellation before a delayed PUT has arrived.
+// Keeping the original request as a rejected update prevents that PUT from
+// resurrecting it, using the same revision and retry rules as UpdateInference.
+func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error) {
+	if err := req.Validate(); err != nil {
+		return nil, err
+	}
+	if !safeSessionID(id) {
+		return nil, ErrNotFound
+	}
+	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
+		current := inferenceResponse(m)
+		if update := current.Update; update != nil && update.RequestID == req.RequestID {
+			if !sameInferenceRequest(update.InferenceUpdateRequest, req) {
+				return fmt.Errorf("%w: request_id already used with different settings", ErrConflict)
+			}
+			if update.Status == "rejected" {
+				return nil
+			}
+			if update.Status != "pending" {
+				return fmt.Errorf("%w: inference change has already started and cannot be cancelled", ErrConflict)
+			}
+		} else if current.Revision != req.ExpectedRevision || (current.Update != nil && (current.Update.Status == "pending" || current.Update.Status == "applying")) {
+			return fmt.Errorf("%w: inference settings changed; reload before cancelling", ErrConflict)
+		}
+		if err := requireInferenceWorker(m); err != nil {
+			return err
+		}
+		m.InferenceUpdate = &InferenceUpdate{
+			InferenceUpdateRequest: req, Revision: req.ExpectedRevision + 1,
+			Status: "rejected", Error: "inference change cancelled before the next turn", UpdatedAt: inferenceTimestamp(),
+		}
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, err
+	}
+	return inferenceResponse(m), nil
+}
+
+func requireInferenceWorker(m *Manifest) error {
+	runner := m.Runner
+	if runner == nil {
+		if epoch := m.OpenEpoch(); epoch != nil {
+			runner = epoch.Runner
+		}
+	}
+	if runner != nil && !runner.InferenceUpdates {
+		return fmt.Errorf("%w: this session worker does not support inference changes; restart it with the updated telosd before changing settings", ErrConflict)
+	}
+	return nil
+}
+
+func sameInferenceRequest(a, b InferenceUpdateRequest) bool {
+	return a.ExpectedRevision == b.ExpectedRevision && sameOptionalString(a.Model, b.Model) && sameOptionalString(a.Thinking, b.Thinking) && sameJSON(a.ModelDefinition, b.ModelDefinition)
 }
 
 func safeSessionID(id string) bool {
