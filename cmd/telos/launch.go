@@ -335,6 +335,7 @@ func applyCloudControl(
 		operation,
 		session,
 		control.ContextName(),
+		followUpContext(control, contextOverride),
 	)
 }
 
@@ -424,7 +425,7 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 }
 
 func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.SessionRecord) {
-	printCloudSessionReceiptForContext(out, operation, session, "")
+	printCloudSessionReceiptForContext(out, operation, session, "", "")
 }
 
 func printCloudSessionReceiptForContext(
@@ -432,6 +433,7 @@ func printCloudSessionReceiptForContext(
 	operation string,
 	session *cloud.SessionRecord,
 	contextName string,
+	logsContext string,
 ) {
 	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
@@ -444,9 +446,10 @@ func printCloudSessionReceiptForContext(
 	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
 		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
 	}
+	// The hint names a context only when the saved one would select another.
 	logsCommand := fmt.Sprintf("telos logs %s", session.ID)
-	if contextName != "" {
-		logsCommand = fmt.Sprintf("telos logs --context %s %s", contextName, session.ID)
+	if logsContext != "" {
+		logsCommand = fmt.Sprintf("telos logs --context %s %s", logsContext, session.ID)
 	}
 	printSummaryField(out, "Logs", logsCommand)
 }

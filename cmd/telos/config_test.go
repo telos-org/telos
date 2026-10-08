@@ -391,3 +391,37 @@ func TestConfigJSONShowsWorkspaceDefaultAndOverridesWithoutKeys(t *testing.T) {
 		t.Fatalf("config inspection changed saved settings: %s, %v", after, err)
 	}
 }
+
+func TestFollowUpContextNamesOnlyAContextOtherThanTheDefault(t *testing.T) {
+	server := accountBootstrapServer(t)
+	defer server.Close()
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "config.yaml"))
+	t.Setenv(config.APIEndpointEnv, "")
+	t.Setenv(config.AuthTokenEnv, "")
+	if err := config.SaveConfig(&config.Config{APIEndpoint: server.URL, AuthToken: "test-token", Context: "org_telos"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		override, environment, want string
+	}{
+		{"", "", ""},
+		{"@telos", "", ""},
+		{"org_telos", "", ""},
+		{"personal", "", "personal"},
+		{"@grohan", "", "personal"},
+		// A later command reads TELOS_CONTEXT too, so it needs a flag only
+		// when this one selected something else.
+		{"", "personal", ""},
+		{"personal", "personal", ""},
+		{"org_telos", "personal", "@telos"},
+	} {
+		t.Setenv(config.ContextEnv, test.environment)
+		control, err := cloud.ControlClientForContext(test.override)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := followUpContext(control, test.override); got != test.want {
+			t.Fatalf("followUpContext(override %q, TELOS_CONTEXT %q) = %q, want %q", test.override, test.environment, got, test.want)
+		}
+	}
+}
