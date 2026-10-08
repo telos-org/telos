@@ -379,7 +379,7 @@ func extractPackageDirectory(data []byte, destination string) error {
 func parsePackageReference(raw string) (packageReference, error) {
 	value := strings.TrimSpace(raw)
 	if !strings.HasPrefix(value, "@") {
-		return packageReference{}, fmt.Errorf("package must be an exact @scope/name:version reference")
+		return packageReference{}, fmt.Errorf("package must be an exact @context/name:version reference")
 	}
 	scope, rest, ok := strings.Cut(strings.TrimPrefix(value, "@"), "/")
 	if !ok {
