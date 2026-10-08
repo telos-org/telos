@@ -125,6 +125,7 @@ telos credentials add --context CONTEXT
 - `add` prints a workspace-specific setup link. It does not open a browser,
   save a credential, or attach it to a deployment. Open the link yourself,
   save credentials in the form, then run `list` to obtain the saved ID.
+  The link uses `https://usetelos.ai/credentials/new?org=YOUR_WORKSPACE_ID`.
 - Both commands accept `--json`. Setup links require the official Telos Cloud
   endpoint; `add` rejects custom endpoints.
 - `integrations` remains a compatibility alias; its JSON list retains the

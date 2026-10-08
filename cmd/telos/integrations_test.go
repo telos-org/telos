@@ -83,12 +83,12 @@ func TestIntegrationAddProducesWorkspaceLinkUsingReadOnlyLookup(t *testing.T) {
 		return http.DefaultTransport.RoundTrip(r)
 	})
 	link, err := integrationAddURL(control)
-	if err != nil || link != "https://usetelos.ai/integrations/new?org=org_personal" {
+	if err != nil || link != "https://usetelos.ai/credentials/new?org=org_personal" {
 		t.Fatalf("wrong personal workspace link: %s %v", link, err)
 	}
 	control.OrgID = "org_team"
 	link, err = integrationAddURL(control)
-	if err != nil || link != "https://usetelos.ai/integrations/new?org=org_team" {
+	if err != nil || link != "https://usetelos.ai/credentials/new?org=org_team" {
 		t.Fatalf("wrong team workspace link: %s %v", link, err)
 	}
 	if _, err := integrationAddURL(cloud.NewClient("https://other.example.com", "token")); err == nil {

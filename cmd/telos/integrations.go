@@ -115,5 +115,5 @@ func integrationAddURL(control *cloud.Client) (string, error) {
 		}
 		control.OrgID = organization.ID
 	}
-	return "https://usetelos.ai/integrations/new?" + url.Values{"org": {control.OrgID}}.Encode(), nil
+	return "https://usetelos.ai/credentials/new?" + url.Values{"org": {control.OrgID}}.Encode(), nil
 }
