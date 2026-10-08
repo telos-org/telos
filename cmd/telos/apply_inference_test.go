@@ -228,7 +228,7 @@ func TestApplyInferenceOutcomesAndLostReplies(t *testing.T) {
 				if outcome == "partial" && (receipt.Settings.Model != "telos-bifrost/telos/max" || receipt.Settings.Thinking != "medium") {
 					t.Fatalf("partial result lied about confirmed pair: %s", stdout)
 				}
-			} else if !strings.Contains(stderr, submittedID) || !strings.Contains(stderr, "telos describe") || !strings.Contains(stderr, "--json") || stdout != "" {
+			} else if !strings.Contains(stderr, submittedID) || !strings.Contains(stderr, "Check confirmed settings with: telos describe") || stdout != "" {
 				t.Fatalf("unconfirmed request lost identity or suggested success: %s %s", stdout, stderr)
 			}
 		})
@@ -247,7 +247,7 @@ func TestApplyLocalInferenceQueuesAndDescribeShowsConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := captureStdout(t, func() { cmdApply([]string{"--session", id, "--model", "provider/new", "--thinking", "max"}) })
-	if !strings.Contains(out, "Queued for the next prover or verifier turn") || !strings.Contains(out, "provider/old") || !strings.Contains(out, "last confirmed settings") || !strings.Contains(out, "--json") {
+	if !strings.Contains(out, "Queued for the next prover or verifier turn") || !strings.Contains(out, "provider/old") || !strings.Contains(out, "last confirmed settings") || !strings.Contains(out, "Check confirmed settings with: telos describe") {
 		t.Fatalf("pending receipt: %s", out)
 	}
 	out = captureStdout(t, func() { cmdDescribe([]string{id}) })
@@ -259,6 +259,8 @@ func TestApplyLocalInferenceQueuesAndDescribeShowsConfirmation(t *testing.T) {
 			t.Fatalf("describe exposed request details %q: %s", unwanted, out)
 		}
 	}
+	out = captureStdout(t, func() { cmdDescribe([]string{id, "--json"}) })
+	assertDescribeInferenceSettings(t, out, sessionapi.InferenceSettings{Model: "provider/old", Thinking: "medium"})
 	update, err := sessionapi.ClaimInferenceUpdate(path, "attempt", "receipt.json", sessionapi.InferenceSettings{})
 	if err != nil || update == nil || *update.Model != "provider/new" || *update.Thinking != "max" {
 		t.Fatalf("saved update = %+v, %v", update, err)
@@ -267,12 +269,7 @@ func TestApplyLocalInferenceQueuesAndDescribeShowsConfirmation(t *testing.T) {
 		t.Fatal(err)
 	}
 	out = captureStdout(t, func() { cmdDescribe([]string{id, "--json"}) })
-	var description struct {
-		InferenceState *inferenceReceipt `json:"inference_state"`
-	}
-	if err := json.Unmarshal([]byte(out), &description); err != nil || description.InferenceState == nil || description.InferenceState.Status != "applied" || description.InferenceState.Settings.Model != "provider/new" {
-		t.Fatalf("describe omitted confirmed result: %s, %v", out, err)
-	}
+	assertDescribeInferenceSettings(t, out, sessionapi.InferenceSettings{Model: "provider/new", Thinking: "max"})
 }
 
 func TestDescribeInferenceCompatibilityAndFreshness(t *testing.T) {
@@ -306,8 +303,9 @@ func TestDescribeInferenceCompatibilityAndFreshness(t *testing.T) {
 				text := captureStdout(t, func() { cmdDescribe(args) })
 				switch statusCode {
 				case http.StatusOK:
-					if description.InferenceState == nil || description.InferenceState.Status != "applied" || description.AgentModel != "telos-bifrost/telos/max" || description.AgentThinking != "high" {
-						t.Fatalf("describe showed stale session settings with applied status: %s", out)
+					assertDescribeInferenceSettings(t, out, sessionapi.InferenceSettings{Model: "telos-bifrost/telos/max", Thinking: "high"})
+					if description.AgentModel != "telos-bifrost/telos/max" || description.AgentThinking != "high" {
+						t.Fatalf("describe showed stale session settings: %s", out)
 					}
 					if !strings.Contains(text, "Model     telos/max") || !strings.Contains(text, "Thinking  high") {
 						t.Fatalf("text settings disagreed with confirmed result: %s", text)
@@ -328,6 +326,23 @@ func TestDescribeInferenceCompatibilityAndFreshness(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func assertDescribeInferenceSettings(t *testing.T, output string, expected sessionapi.InferenceSettings) {
+	t.Helper()
+	var description struct {
+		InferenceState map[string]json.RawMessage `json:"inference_state"`
+	}
+	if err := json.Unmarshal([]byte(output), &description); err != nil {
+		t.Fatal(err)
+	}
+	if len(description.InferenceState) != 1 {
+		t.Fatalf("describe must only include confirmed inference settings: %s", output)
+	}
+	var settings sessionapi.InferenceSettings
+	if err := json.Unmarshal(description.InferenceState["settings"], &settings); err != nil || settings != expected {
+		t.Fatalf("describe settings = %+v, want %+v: %v", settings, expected, err)
 	}
 }
 

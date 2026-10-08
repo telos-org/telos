@@ -203,7 +203,7 @@ func inferenceOutcomeError(receipt *inferenceReceipt) error {
 }
 
 func inferenceSubmissionError(sessionID, contextName, requestID string, err error) error {
-	return fmt.Errorf("settings request %s: %w\nInspect its outcome before retrying: %s", requestID, err, inferenceDescribeCommand(sessionID, contextName))
+	return fmt.Errorf("settings request %s: %w\nCheck confirmed settings with: %s", requestID, err, inferenceDescribeCommand(sessionID, contextName))
 }
 
 func inferenceDescribeCommand(sessionID, contextName string) string {
@@ -211,7 +211,7 @@ func inferenceDescribeCommand(sessionID, contextName string) string {
 	if contextName != "" {
 		command += " --context " + shellQuote(contextName)
 	}
-	return command + " --json"
+	return command
 }
 
 func printInferenceReceipt(out io.Writer, receipt *inferenceReceipt) {
@@ -241,7 +241,7 @@ func printInferenceReceipt(out io.Writer, receipt *inferenceReceipt) {
 		fmt.Fprintln(out, "Model and thinking above are the last confirmed settings; this change is not confirmed.")
 	}
 	if receipt.Status == "pending" || receipt.Status == "applying" {
-		fmt.Fprintf(out, "\nQueued for the next prover or verifier turn. Idle sessions wait for their next scheduled or triggered turn.\nCheck with: %s\n", inferenceDescribeCommand(receipt.SessionID, receipt.Context))
+		fmt.Fprintf(out, "\nQueued for the next prover or verifier turn. Idle sessions wait for their next scheduled or triggered turn.\nCheck confirmed settings with: %s\n", inferenceDescribeCommand(receipt.SessionID, receipt.Context))
 	}
 }
 

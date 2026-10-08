@@ -44,21 +44,21 @@ func cmdDescribe(args []string) {
 
 	session, err := getSessionFromAnywhere(sessionID)
 	if err == nil {
-		var settings *inferenceReceipt
+		var settings *inferenceDescription
 		var settingsError string
 		if isLocalApplyID(sessionID) {
 			state, readErr := store().Inference(sessionID)
 			if readErr != nil {
 				settingsError = readErr.Error()
 			} else {
-				settings = localInferenceReceipt(sessionID, state)
+				settings = &inferenceDescription{Settings: state.Settings}
 			}
 		}
 		if *jsonOut {
 			printJSON(struct {
 				*sessionapi.Session
-				InferenceState *inferenceReceipt `json:"inference_state,omitempty"`
-				InferenceError string            `json:"inference_error,omitempty"`
+				InferenceState *inferenceDescription `json:"inference_state,omitempty"`
+				InferenceError string                `json:"inference_error,omitempty"`
 			}{session, settings, settingsError})
 			return
 		}
@@ -95,11 +95,15 @@ func cmdDescribe(args []string) {
 	os.Exit(1)
 }
 
+type inferenceDescription struct {
+	Settings sessionapi.InferenceSettings `json:"settings"`
+}
+
 type cloudDescription struct {
 	*cloud.SessionRecord
-	Context        string            `json:"context,omitempty"`
-	InferenceState *inferenceReceipt `json:"inference_state,omitempty"`
-	InferenceError string            `json:"inference_error,omitempty"`
+	Context        string                `json:"context,omitempty"`
+	InferenceState *inferenceDescription `json:"inference_state,omitempty"`
+	InferenceError string                `json:"inference_error,omitempty"`
 }
 
 // Only describe fetches live settings; ordinary session reads keep their contract.
@@ -115,8 +119,10 @@ func describeCloudSession(sessionID, contextOverride string) (*cloudDescription,
 	description := &cloudDescription{SessionRecord: session, Context: control.ContextName()}
 	state, err := control.GetDeploymentInference(sessionID)
 	if err == nil {
-		description.InferenceState, err = cloudInferenceReceipt(sessionID, description.Context, state)
+		var receipt *inferenceReceipt
+		receipt, err = cloudInferenceReceipt(sessionID, description.Context, state)
 		if err == nil {
+			description.InferenceState = &inferenceDescription{Settings: receipt.Settings}
 			// This read may be newer than GetSession; keep displayed values consistent.
 			session.AgentModel, session.AgentThinking = state.AgentModel, state.AgentThinking
 			session.Inference = &state.Inference
@@ -187,7 +193,7 @@ func printCloudSessionDescriptionForContext(
 	printCloudSessionDetails(out, session, contextName, nil)
 }
 
-func printCloudSessionDetails(out io.Writer, session cloud.SessionRecord, contextName string, settings *inferenceReceipt) {
+func printCloudSessionDetails(out io.Writer, session cloud.SessionRecord, contextName string, settings *inferenceDescription) {
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Session", session.ID)
