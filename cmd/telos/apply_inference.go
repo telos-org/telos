@@ -229,9 +229,6 @@ func printInferenceReceipt(out io.Writer, receipt *inferenceReceipt) {
 	if receipt.Status == "unknown" {
 		fmt.Fprintln(out, "Could not confirm whether the change took effect.")
 	}
-	if receipt.Status == "pending" || receipt.Status == "applying" {
-		fmt.Fprintf(out, "\nQueued for the next prover or verifier turn. Idle sessions wait for their next scheduled or triggered turn.\nCheck confirmed settings with: %s\n", inferenceDescribeCommand(receipt.SessionID, receipt.Context))
-	}
 }
 
 func inferenceSettingChange(current, requested, status string) string {
