@@ -163,7 +163,7 @@ func printConfigReport(report configReport) {
 		fmt.Fprintf(w, "Thinking override\t%s (TELOS_THINKING)\n", report.ThinkingOverride)
 	}
 	if report.Authentication == "valid" {
-		fmt.Fprintln(w, "Connections")
+		fmt.Fprintln(w, "Inference")
 		for _, connection := range report.Connections {
 			fmt.Fprintf(w, "  %s\t%s\t%s\n", connection.Name, inferenceSourceLabel(connection.Source), connection.Status)
 		}
@@ -185,7 +185,7 @@ func inferenceSelectionName(selection cloud.InferenceSelection, connections []cl
 			return connection.Name + "/" + selection.Model
 		}
 	}
-	return selection.Model + " (connection unavailable)"
+	return selection.Model + " (API key or subscription not found)"
 }
 
 func configClient(cfg *config.Config) (*cloud.Client, error) {
