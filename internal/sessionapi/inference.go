@@ -38,10 +38,11 @@ type InferenceUpdate struct {
 }
 
 type InferenceResponse struct {
-	ApplyAt  string            `json:"apply_at"`
-	Settings InferenceSettings `json:"settings"`
-	Revision int               `json:"revision"`
-	Update   *InferenceUpdate  `json:"update,omitempty"`
+	ApplyAt     string            `json:"apply_at"`
+	Settings    InferenceSettings `json:"settings"`
+	Revision    int               `json:"revision"`
+	Update      *InferenceUpdate  `json:"update,omitempty"`
+	UpdateError string            `json:"update_error,omitempty"`
 }
 
 var inferenceRequestID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
@@ -92,6 +93,9 @@ func inferenceResponse(m *Manifest) *InferenceResponse {
 	r := &InferenceResponse{ApplyAt: "next_turn", Settings: InferenceSettings{Model: m.Config.Model, Thinking: m.Config.Thinking}, Update: m.InferenceUpdate}
 	if r.Update != nil {
 		r.Revision = r.Update.Revision
+	}
+	if err := requireInferenceWorker(m); err != nil {
+		r.UpdateError = err.Error()
 	}
 	return r
 }
