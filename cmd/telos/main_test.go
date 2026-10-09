@@ -85,7 +85,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"apply SPEC.md      Create or update a durable session from a spec",
 		"get SESSION        Download a session's package",
 		"delete SESSION     Delete a session",
-		"pull PACKAGE       Download a package; use `pull skill REF` for a skill",
+		"pull PACKAGE       Download a spec or skill package",
 		"version            Show version",
 		"update [VERSION]   Update installed Telos components to one release",
 		"--version",
@@ -103,14 +103,16 @@ func TestPullUsageKeepsFrequentPullAtTopLevel(t *testing.T) {
 	fs.SetOutput(&pullOut)
 	fs.Usage()
 	for _, want := range []string{
-		"telos pull @scope/name:version",
-		"telos pull skill @scope/name:version",
+		"telos pull @context/name:version",
 		"--context string",
 		"--output string",
 	} {
 		if !strings.Contains(pullOut.String(), want) {
 			t.Fatalf("pull usage missing %q:\n%s", want, pullOut.String())
 		}
+	}
+	if strings.Contains(pullOut.String(), "pull skill") {
+		t.Fatalf("pull usage still mentions pull skill:\n%s", pullOut.String())
 	}
 }
 
