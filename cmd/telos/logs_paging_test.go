@@ -87,7 +87,7 @@ func TestCloudHumanLogsKeepSnapshotWhenOlderHistoryIsUnavailable(t *testing.T) {
 		want string
 	}{
 		{"unreachable", logPage(`{"event":"deployment.status","seq":1,"message":"partial"}`, "null"), "runtime could not be reached"},
-		{"session changed", logPage(`{"event":"agent_progress","event_seq":1,"data":{"audience":"user","kind":"progress_update","text":"New session."}}`, `"runtime_2"`), "session changed"},
+		{"session changed", logPage(`{"event":"agent_progress","event_seq":1,"data":{"audience":"user","kind":"progress_update","text":"New session."}}`, `"runtime_2"`), "Goal restarted"},
 		{"server ignored cursor", initial, "older activity page"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -153,7 +153,7 @@ func TestCloudHumanLogsDoNotReplaceSnapshotWithAnotherSessionDuringLegacyFallbac
 		t.Fatal(err)
 	}
 	events, err := expandCloudHumanLogs(client, "session_1", first, 2)
-	if err == nil || !strings.Contains(err.Error(), "session changed") || *calls != 3 || events[0].Data["text"] != "Original session." {
+	if err == nil || !strings.Contains(err.Error(), "Goal restarted") || *calls != 3 || events[0].Data["text"] != "Original session." {
 		t.Fatalf("calls=%d page=%#v err=%v", *calls, events, err)
 	}
 }

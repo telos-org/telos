@@ -74,8 +74,10 @@ func localSessionExists(sessionID string) bool {
 	return err == nil
 }
 
+// isCloudApplyID reports whether id names a Telos Cloud Goal. Cloud IDs are
+// opaque: anything that is not a local Goal ID is Cloud's to resolve.
 func isCloudApplyID(id string) bool {
-	return strings.HasPrefix(id, "sess_")
+	return id != "" && !isLocalApplyID(id)
 }
 
 func isLocalApplyID(id string) bool {
@@ -95,7 +97,7 @@ func getCloudSessionIfConfigured(
 	}
 	session, contextName, err := getCloudSessionForContext(id, contextOverride)
 	if err != nil {
-		if strings.Contains(err.Error(), "(HTTP 404)") {
+		if cloud.IsStatus(err, 404) {
 			return nil, "", false, nil
 		}
 		return nil, contextName, true, err
@@ -138,7 +140,7 @@ func getTranscriptFromAnywhere(sessionID string) (string, error) {
 	}
 
 	if localSessionExists(sessionID) {
-		return "", fmt.Errorf("transcript for session %s: %w", sessionID, sessionapi.ErrNotFound)
+		return "", fmt.Errorf("transcript for Goal %s: %w", sessionID, sessionapi.ErrNotFound)
 	}
 	return "", localSessionNotFoundError(sessionID)
 }
@@ -198,8 +200,11 @@ type localSessionNotFound struct {
 }
 
 func (e localSessionNotFound) Error() string {
+	if !isLocalApplyID(e.sessionID) {
+		return fmt.Sprintf("Goal %s not found", e.sessionID)
+	}
 	return fmt.Sprintf(
-		"session %s not found in %s\n\nLocal sessions are workspace-scoped. Run this command from the workspace where the session was created, or set:\n\n  TELOS_SESSION_DIR=/path/to/.telos/sessions",
+		"Goal %s not found in %s\n\nLocal Goals are workspace-scoped. Run this command from the workspace where the Goal was created, or set:\n\n  TELOS_SESSION_DIR=/path/to/.telos/sessions",
 		e.sessionID,
 		e.root,
 	)
@@ -207,4 +212,26 @@ func (e localSessionNotFound) Error() string {
 
 func (e localSessionNotFound) Unwrap() error {
 	return sessionapi.ErrNotFound
+}
+
+// goalNotFound words Cloud's 404 for a Goal the way the CLI names it.
+func goalNotFound(err error, id, contextName string) error {
+	if !cloud.IsStatus(err, 404) {
+		return err
+	}
+	return &goalNotFoundError{id: id, context: contextName, cause: err}
+}
+
+type goalNotFoundError struct {
+	id      string
+	context string
+	cause   error
+}
+
+func (e *goalNotFoundError) Error() string {
+	return fmt.Sprintf("Goal %s not found in %s", e.id, e.context)
+}
+
+func (e *goalNotFoundError) Unwrap() error {
+	return e.cause
 }
