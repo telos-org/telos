@@ -39,7 +39,12 @@ func cmdDescribe(args []string) {
 			printCloudSessionJSON(cloudSession, contextName)
 			return
 		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		printCloudSessionDescriptionForContext(
+			os.Stdout,
+			*cloudSession,
+			contextName,
+			followUpContextName(contextOverride, contextName),
+		)
 		return
 	}
 
@@ -64,7 +69,7 @@ func cmdDescribe(args []string) {
 			printCloudSessionJSON(cloudSession, contextName)
 			return
 		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName, "")
 		return
 	}
 
@@ -119,13 +124,16 @@ func getCloudSessionForContext(
 }
 
 func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
-	printCloudSessionDescriptionForContext(out, session, "")
+	printCloudSessionDescriptionForContext(out, session, "", "")
 }
 
+// printCloudSessionDescriptionForContext names followUp in suggested commands
+// when the saved context would select another one.
 func printCloudSessionDescriptionForContext(
 	out io.Writer,
 	session cloud.SessionRecord,
 	contextName string,
+	followUp string,
 ) {
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
@@ -141,6 +149,22 @@ func printCloudSessionDescriptionForContext(
 	if reason := cloudSessionReason(session); reason != "" {
 		printSummaryField(out, "Reason", reason)
 	}
+	if cloudSessionDisplayStatus(session) == "needs_attention" {
+		printSummaryField(out, "Next", needsAttentionNextStep(session.ID, followUp))
+	}
+}
+
+// needsAttentionNextStep tells the owner of a Goal that needs attention how
+// to move it forward.
+func needsAttentionNextStep(goalID, followUp string) string {
+	contextFlag := ""
+	if followUp != "" {
+		contextFlag = " --context " + followUp
+	}
+	return fmt.Sprintf(
+		"Fix the spec, then: telos apply SPEC.md --goal %s%s, or telos delete %s%s",
+		goalID, contextFlag, goalID, contextFlag,
+	)
 }
 
 func cloudSessionDisplayStatus(session cloud.SessionRecord) string {
