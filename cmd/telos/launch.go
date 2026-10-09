@@ -111,6 +111,10 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		if !hasLocalSpec && !strings.HasPrefix(strings.TrimSpace(specArg), "@") {
+			fmt.Fprintf(os.Stderr, "error: %v\n", specFileNotFound(specArg))
+			os.Exit(1)
+		}
 		if err := requireCloudLogin(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -135,7 +139,7 @@ func cmdLaunch(command, action string, args []string) {
 		return
 	}
 	if !hasLocalSpec {
-		fmt.Fprintf(os.Stderr, "error: unknown local spec: %s\n", specArg)
+		fmt.Fprintf(os.Stderr, "error: %v\n", specFileNotFound(specArg))
 		os.Exit(1)
 	}
 	if err := prepareRegistrySkills(specPath); err != nil {
