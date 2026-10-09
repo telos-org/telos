@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -209,6 +210,52 @@ func TestConfigReportListsManagedInferenceFirst(t *testing.T) {
 	}
 }
 
+func TestCmdConfigListsCredentialsForNetworkRules(t *testing.T) {
+	server := accountBootstrapServer(t)
+	defer server.Close()
+	configureCloudTest(t, server.URL)
+	t.Setenv(config.AuthTokenEnv, "test-token")
+
+	out := captureStdout(t, func() { cmdConfig(nil) })
+	if got := configOutputValue(t, out, "Reading list API"); got != "sec_reading" {
+		t.Fatalf("credential row = %q\n%s", got, out)
+	}
+	if strings.Contains(out, "sec_bifrost_1") || strings.Contains(out, "READING_TOKEN") {
+		t.Fatalf("config lists a managed credential or a key name:\n%s", out)
+	}
+
+	var report configReport
+	if err := json.Unmarshal([]byte(captureStdout(t, func() { cmdConfig([]string{"--json"}) })), &report); err != nil {
+		t.Fatal(err)
+	}
+	if want := []cloud.Credential{{ID: "sec_reading", Name: "Reading list API"}}; !reflect.DeepEqual(report.Credentials, want) {
+		t.Fatalf("credentials = %#v, want %#v", report.Credentials, want)
+	}
+}
+
+func TestConfigReportShowsCredentialsOnlyWhenKnown(t *testing.T) {
+	for _, tt := range []struct {
+		credentials []cloud.Credential
+		want        string
+	}{
+		{nil, ""},
+		{[]cloud.Credential{}, "none"},
+	} {
+		out := captureStdout(t, func() {
+			printConfigReport(configReport{Authentication: "valid", Context: "personal", Credentials: tt.credentials})
+		})
+		if tt.credentials == nil {
+			if strings.Contains(out, "Credentials") {
+				t.Fatalf("unknown credentials are listed:\n%s", out)
+			}
+			continue
+		}
+		if got := configOutputValue(t, out, "Credentials"); got != tt.want {
+			t.Fatalf("Credentials = %q, want %q", got, tt.want)
+		}
+	}
+}
+
 func TestCmdConfigClearsResolvedPersonalContext(t *testing.T) {
 	server := accountBootstrapServer(t)
 	defer server.Close()
@@ -327,6 +374,8 @@ func accountBootstrapServer(t *testing.T) *httptest.Server {
 			_, _ = w.Write([]byte(`{"errors":{},"connections":[{"source":"subscription","id":"conn_1","name":"openai-rohan","provider":"chatgpt-codex","status":"connected","account_label":"owner@example.com","plan":"pro"},{"source":"byok","status":"saved","id":"key_work","name":"Work Anthropic","provider":"anthropic"}]}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/preference":
 			_, _ = w.Write([]byte(`{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/secrets":
+			_, _ = w.Write([]byte(`{"secrets":[{"id":"sec_reading","name":"Reading list API","credentials":[{"key":"READING_TOKEN"}],"managed_by":null},{"id":"sec_bifrost_1","name":"Telos inference","credentials":[],"managed_by":"bifrost"}]}`))
 		default:
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}
