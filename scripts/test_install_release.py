@@ -159,6 +159,23 @@ class InstallReleaseTest(unittest.TestCase):
         self.skills = home / ".agents/skills"
         self.assert_installed()
 
+    def test_missing_path_entry_prints_the_line_to_add(self):
+        home = self.root / "home"
+        for shell, profile in (("/bin/zsh", "~/.zshrc"), ("/bin/sh", "~/.profile")):
+            with self.subTest(shell=shell):
+                result = self.install(
+                    extra_env={
+                        "HOME": str(home),
+                        "SHELL": shell,
+                        "PATH": "/usr/bin:/bin",
+                        "TELOS_INSTALL_DIR": "",
+                    }
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                line = 'export PATH="$HOME/.local/bin:$PATH"'
+                self.assertIn(f"  echo '{line}' >> {profile}\n", result.stdout)
+                self.assertIn(f"Then open a new terminal, or run: {line}\n", result.stdout)
+
     def test_reinstall_preserves_existing_local_runtime_and_custom_skill_path(self):
         self.assertEqual(self.install(local=True).returncode, 0)
         (self.binaries / "telosd").write_bytes(b"older runtime")
