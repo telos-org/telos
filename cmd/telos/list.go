@@ -210,10 +210,7 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 	for index, session := range cloudSessions {
 		serviceURL := optionalSessionString(session.ServiceURL)
 		if wide {
-			cloudSpend, inference := "-", "-"
-			if cost := costs[index]; cost != nil {
-				cloudSpend, inference = costCell(cost.Cloud.USD), costCell(cost.Inference.USD)
-			}
+			cloudSpend, inference := costCells(costs[index])
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				session.Name,
 				cloudSessionDisplayStatus(session),

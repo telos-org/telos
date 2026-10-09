@@ -15,11 +15,7 @@ type GoalBilling struct {
 
 // ListSessionsWithBilling lists the context's Goals with each one's billing.
 func (c *Client) ListSessionsWithBilling() ([]SessionRecord, error) {
-	response, err := getJSONWithRetry[sessionListResponse](context.Background(), c, "/api/deployments?include_billing=true")
-	if err != nil {
-		return nil, err
-	}
-	return response.Sessions, nil
+	return c.listSessions("/api/deployments?include_billing=true")
 }
 
 // InferenceCost returns the inference cost a Goal's runtime has recorded on

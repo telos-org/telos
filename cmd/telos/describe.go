@@ -71,7 +71,7 @@ func describeCloudGoal(
 	jsonOut bool,
 ) {
 	var control *cloud.Client
-	if needsInferenceLookup(*session) {
+	if hasCost(*session) && billedByProvider(*session) {
 		control, _ = cloud.ControlClientForContext(contextOverride)
 	}
 	cost := goalCosts(control, []cloud.SessionRecord{*session})[0]

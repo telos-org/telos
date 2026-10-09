@@ -19,8 +19,9 @@ const costLookupWorkers = 4
 
 // goalCost is what a Cloud Goal has cost so far. Cloud is compute and storage,
 // billed by Telos. Inference is billed by Telos on Telos inference, by the
-// provider on your own API key, or covered by your subscription. A nil amount
-// could not be read.
+// provider on your own API key, or covered by your subscription. --json has
+// exact dollars, describe and list round to cents, and a nil amount could not
+// be read.
 type goalCost struct {
 	Cloud     cloudCost     `json:"cloud"`
 	Inference inferenceCost `json:"inference"`
@@ -30,18 +31,40 @@ type cloudCost struct {
 	USD        *float64 `json:"usd"`
 	ComputeUSD *float64 `json:"compute_usd"`
 	StorageUSD *float64 `json:"storage_usd"`
+	// compute and storage are in micro-USD.
+	compute, storage *int64
 }
 
 type inferenceCost struct {
 	USD      *float64 `json:"usd"`
 	Source   string   `json:"source,omitempty"`
 	Provider string   `json:"provider,omitempty"`
+	// microUSD is the amount in micro-USD.
+	microUSD *int64
+}
+
+func newCloudCost(computeMicroUSD, storageMicroUSD int64) cloudCost {
+	return cloudCost{
+		USD:        dollars(computeMicroUSD + storageMicroUSD),
+		ComputeUSD: dollars(computeMicroUSD),
+		StorageUSD: dollars(storageMicroUSD),
+		compute:    &computeMicroUSD,
+		storage:    &storageMicroUSD,
+	}
+}
+
+func newInferenceCost(source, provider string, microUSD *int64) inferenceCost {
+	cost := inferenceCost{Source: source, Provider: provider, microUSD: microUSD}
+	if microUSD != nil {
+		cost.USD = dollars(*microUSD)
+	}
+	return cost
 }
 
 // goalCosts reads each Goal's cost from the billing Cloud returned with it,
 // plus one runtime lookup per Goal on your own API key or subscription. A Goal
-// without billing, such as one shared from another workspace by link, has no
-// cost here.
+// shared from another workspace by link has no cost here, nor does a Goal
+// Cloud returned without billing unless the list says your workspace owns it.
 func goalCosts(control *cloud.Client, goals []cloud.SessionRecord) []*goalCost {
 	ctx, cancel := context.WithTimeout(context.Background(), costLookupTimeout)
 	defer cancel()
@@ -57,7 +80,7 @@ func goalCosts(control *cloud.Client, goals []cloud.SessionRecord) []*goalCost {
 		})
 	}
 	for index, goal := range goals {
-		if control != nil && needsInferenceLookup(goal) {
+		if control != nil && hasCost(goal) && billedByProvider(goal) {
 			lookups <- index
 		}
 	}
@@ -66,37 +89,38 @@ func goalCosts(control *cloud.Client, goals []cloud.SessionRecord) []*goalCost {
 
 	costs := make([]*goalCost, len(goals))
 	for index, goal := range goals {
-		billing := goal.Billing
-		if billing == nil {
+		if !hasCost(goal) {
 			continue
 		}
 		cost := &goalCost{}
-		if goal.Inference != nil {
-			cost.Inference.Source = goal.Inference.Source
-			cost.Inference.Provider = goal.Inference.Provider
-		}
-		if billing.ComputeMicroUSD != nil && billing.StorageMicroUSD != nil {
-			cost.Cloud = cloudCost{
-				USD:        dollars(*billing.ComputeMicroUSD + *billing.StorageMicroUSD),
-				ComputeUSD: dollars(*billing.ComputeMicroUSD),
-				StorageUSD: dollars(*billing.StorageMicroUSD),
+		var inference *int64
+		if billing := goal.Billing; billing != nil {
+			if billing.ComputeMicroUSD != nil && billing.StorageMicroUSD != nil {
+				cost.Cloud = newCloudCost(*billing.ComputeMicroUSD, *billing.StorageMicroUSD)
 			}
+			inference = &billing.InferenceMicroUSD
 		}
-		if cost.Inference.Source == "managed" {
-			cost.Inference.USD = dollars(billing.InferenceMicroUSD)
+		if billedByProvider(goal) {
+			inference = external[index]
 		}
-		if external[index] != nil {
-			cost.Inference.USD = dollars(*external[index])
+		source, provider := "", ""
+		if goal.Inference != nil {
+			source, provider = goal.Inference.Source, goal.Inference.Provider
 		}
+		cost.Inference = newInferenceCost(source, provider, inference)
 		costs[index] = cost
 	}
 	return costs
 }
 
-// needsInferenceLookup reports whether a Goal's inference cost comes from its
-// runtime: inference on your own API key or subscription, in your workspace.
-func needsInferenceLookup(goal cloud.SessionRecord) bool {
-	return goal.Billing != nil && goal.Inference != nil && goal.Inference.Source != "managed"
+func hasCost(goal cloud.SessionRecord) bool {
+	return goal.Billing != nil || goal.AccessSource == "owned"
+}
+
+// billedByProvider reports whether a Goal's inference runs on your own API key
+// or subscription, whose cost its runtime records.
+func billedByProvider(goal cloud.SessionRecord) bool {
+	return goal.Inference != nil && (goal.Inference.Source == "byok" || goal.Inference.Source == "subscription")
 }
 
 func dollars(microUSD int64) *float64 {
@@ -104,8 +128,22 @@ func dollars(microUSD int64) *float64 {
 	return &usd
 }
 
-func formatUSD(usd float64) string {
-	return fmt.Sprintf("$%.2f", usd)
+// cents rounds micro-USD half up to whole cents.
+func cents(microUSD int64) int64 {
+	return (microUSD + 5_000) / 10_000
+}
+
+func formatCents(cents int64) string {
+	return fmt.Sprintf("$%d.%02d", cents/100, cents%100)
+}
+
+// formatMicroUSD shows an amount in cents; a charge under half a cent shows as
+// <$0.01 rather than nothing.
+func formatMicroUSD(microUSD int64) string {
+	if microUSD > 0 && cents(microUSD) == 0 {
+		return "<$0.01"
+	}
+	return formatCents(cents(microUSD))
 }
 
 func printGoalCost(out io.Writer, cost *goalCost) {
@@ -116,48 +154,55 @@ func printGoalCost(out io.Writer, cost *goalCost) {
 	printSummaryField(out, "Inference", inferenceCostText(cost.Inference))
 }
 
+// cloudCostTotal is the Cloud amount as describe and list show it: the sum of
+// the rounded parts, so the breakdown adds up. It is empty when unreadable.
+func cloudCostTotal(cost cloudCost) string {
+	if cost.compute == nil || cost.storage == nil {
+		return ""
+	}
+	if total := cents(*cost.compute) + cents(*cost.storage); total > 0 {
+		return formatCents(total)
+	}
+	return formatMicroUSD(*cost.compute + *cost.storage)
+}
+
 // cloudCostText reads "$1.25 (compute $1.00, storage $0.25)".
 func cloudCostText(cost cloudCost) string {
-	if cost.USD == nil {
+	total := cloudCostTotal(cost)
+	if total == "" {
 		return "unavailable"
 	}
 	var parts []string
-	for _, part := range []struct {
-		name string
-		usd  *float64
-	}{{"compute", cost.ComputeUSD}, {"storage", cost.StorageUSD}} {
-		if part.usd != nil && formatUSD(*part.usd) != formatUSD(0) {
-			parts = append(parts, part.name+" "+formatUSD(*part.usd))
-		}
+	if compute := cents(*cost.compute); compute > 0 {
+		parts = append(parts, "compute "+formatCents(compute))
+	}
+	if storage := cents(*cost.storage); storage > 0 {
+		parts = append(parts, "storage "+formatCents(storage))
 	}
 	if len(parts) == 0 {
-		return formatUSD(*cost.USD)
+		return total
 	}
-	return fmt.Sprintf("%s (%s)", formatUSD(*cost.USD), strings.Join(parts, ", "))
+	return total + " (" + strings.Join(parts, ", ") + ")"
 }
 
 // inferenceCostText reads "$3.40 (Anthropic API key)", naming who bills it.
 func inferenceCostText(cost inferenceCost) string {
 	amount := "unavailable"
-	if cost.USD != nil {
-		amount = formatUSD(*cost.USD)
+	if cost.microUSD != nil {
+		amount = formatMicroUSD(*cost.microUSD)
 	}
-	if payer := inferencePayer(cost); payer != "" {
-		return amount + " (" + payer + ")"
-	}
-	return amount
+	return amount + " (" + inferencePayer(cost) + ")"
 }
 
 func inferencePayer(cost inferenceCost) string {
 	switch cost.Source {
-	case "managed":
-		return "Telos"
 	case "byok":
 		return strings.TrimSpace(providerName(cost.Provider) + " API key")
 	case "subscription":
 		return strings.TrimSpace(providerName(cost.Provider) + " subscription")
 	default:
-		return ""
+		// Anything else is in Telos billing.
+		return "Telos"
 	}
 }
 
@@ -167,7 +212,7 @@ var providerNames = map[string]string{
 	"openrouter":    "OpenRouter",
 	"xai":           "xAI",
 	"chatgpt-codex": "ChatGPT",
-	"xai-grok":      "Grok",
+	"xai-grok":      "xAI",
 }
 
 func providerName(provider string) string {
@@ -177,10 +222,19 @@ func providerName(provider string) string {
 	return provider
 }
 
-// costCell is a list --wide amount: ? when it could not be read.
-func costCell(usd *float64) string {
-	if usd == nil {
-		return "?"
+// costCells are a Goal's list --wide amounts: - when it has no cost here, and
+// ? when an amount could not be read.
+func costCells(cost *goalCost) (string, string) {
+	if cost == nil {
+		return "-", "-"
 	}
-	return formatUSD(*usd)
+	cloudAmount := cloudCostTotal(cost.Cloud)
+	if cloudAmount == "" {
+		cloudAmount = "?"
+	}
+	inference := "?"
+	if cost.Inference.microUSD != nil {
+		inference = formatMicroUSD(*cost.Inference.microUSD)
+	}
+	return cloudAmount, inference
 }
