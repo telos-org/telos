@@ -1382,6 +1382,32 @@ func TestCompileIgnoresStarredLockInSchemaV1(t *testing.T) {
 	}
 }
 
+func TestApplyPackageFilesPreservesArchiveContentsAndRejectsTampering(t *testing.T) {
+	pkg := buildPackageTestPackage(t, "package-read-only")
+	entries, modes := tarEntries(t, pkg.Bytes), tarEntryModes(t, pkg.Bytes)
+	files, err := ApplyPackageFiles(pkg.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != len(entries) {
+		t.Fatalf("got %d files, want %d", len(files), len(entries))
+	}
+	for path, data := range entries {
+		file := files[path]
+		if !bytes.Equal(file.Data, data) || int64(file.Mode) != modes[path] {
+			t.Fatalf("changed archived contents or mode for %s", path)
+		}
+	}
+	entries["skills/alpha/SKILL.md"] = []byte("tampered skill")
+	tampered, err := writePackageTar(packageFilesFromEntries(entries))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ApplyPackageFiles(tampered); err == nil {
+		t.Fatal("read unverified skill contents")
+	}
+}
+
 func TestExtractApplyPackageRejectsUnmanifestedFiles(t *testing.T) {
 	pkg := buildPackageTestPackage(t, "package-extra-file")
 	entries := tarEntries(t, pkg.Bytes)

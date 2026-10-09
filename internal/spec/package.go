@@ -129,6 +129,11 @@ type ApplyPackageFileEntry struct {
 	Digest string `json:"digest"`
 }
 
+type ApplyPackageFileContents struct {
+	Data []byte
+	Mode fs.FileMode
+}
+
 type ApplyPackageSkillProvenance struct {
 	Ref    string `json:"ref"`
 	Digest string `json:"digest"`
@@ -415,6 +420,23 @@ func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageManifest, error
 		return nil, err
 	}
 	return manifest, nil
+}
+
+// ApplyPackageFiles reads verified, fully hydrated files without changing their
+// archived modes through filesystem permissions or the process umask.
+func ApplyPackageFiles(data []byte) (map[string]ApplyPackageFileContents, error) {
+	files, manifest, err := readApplyPackage(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateApplyPackageFiles(manifest, files); err != nil {
+		return nil, err
+	}
+	contents := make(map[string]ApplyPackageFileContents, len(files))
+	for path, file := range files {
+		contents[path] = ApplyPackageFileContents{Data: file.data, Mode: fs.FileMode(file.mode)}
+	}
+	return contents, nil
 }
 
 // HydrateApplyPackage returns a self-contained package tarball by fetching any
