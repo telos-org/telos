@@ -1,6 +1,8 @@
 package telosd
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,53 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/sessionworker"
 )
+
+func TestInferenceDefaultsReachChildrenWithoutSchedulingAnExtraCycle(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{}
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: parent\nplatform: cloud\n---\n# Parent\n"
+	parent, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := "provider/new"
+	definition := json.RawMessage(`{"id":"new","api":"openai-responses"}`)
+	if _, err := store.UpdateInference(parent.SessionID, sessionapi.InferenceUpdateRequest{RequestID: "switch", Model: &model, ModelDefinition: definition}); err != nil {
+		t.Fatal(err)
+	}
+	if len(substrate.wakes) != 0 || len(substrate.applies) != 1 {
+		t.Fatalf("queued settings must not wake the worker or start another cycle: %+v", substrate)
+	}
+	path := filepath.Join(*parent.SessionDir, "session.json")
+	if _, err := sessionapi.ClaimInferenceUpdate(path, "attempt", "receipt.json", sessionapi.InferenceSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessionapi.FinishInferenceUpdate(path, "switch", "applied", "", &sessionapi.InferenceSettings{Model: model, Thinking: "max"}); err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, ParentSessionID: &parent.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := sessionapi.ReadManifest(filepath.Join(*child.SessionDir, "session.json"))
+	var compact bytes.Buffer
+	if err == nil {
+		err = json.Compact(&compact, m.InferenceModelDefinition)
+	}
+	if err != nil || m.Config.Model != model || m.Config.Thinking != "max" || !bytes.Equal(compact.Bytes(), definition) {
+		t.Fatalf("child lost inference defaults: %+v %v", m, err)
+	}
+	parent = child
+	inherited := store.applyCreateDefaults(sessionapi.SessionCreateRequest{ParentSessionID: &parent.SessionID})
+	if inherited.Model != model || inherited.Thinking != "max" || len(inherited.ModelDefinition) == 0 {
+		t.Fatal("inherited defaults depend on having an update record")
+	}
+	explicit := store.applyCreateDefaults(sessionapi.SessionCreateRequest{ParentSessionID: &parent.SessionID, Model: "provider/explicit", Thinking: "low"})
+	if explicit.Model != "provider/explicit" || explicit.Thinking != "low" || len(explicit.ModelDefinition) != 0 {
+		t.Fatalf("explicit child settings changed: %+v", explicit)
+	}
+}
 
 type recordingSubstrate struct {
 	applies  []recordedApply

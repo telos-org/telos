@@ -1,8 +1,10 @@
 package executor
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,6 +13,72 @@ import (
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 )
+
+func TestPiStartupFailureIncludesReceiptDiagnostic(t *testing.T) {
+	for _, current := range []bool{true, false} {
+		t.Run(fmt.Sprint(current), func(t *testing.T) {
+			dir := t.TempDir()
+			bin := filepath.Join(dir, ".local", "bin")
+			if err := os.MkdirAll(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\nexit 78\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			p := platform.NewLocalPlatform(dir)
+			p.Env = map[string]string{"HOME": dir}
+			e := NewPiExecutor(p, "provider/model", "medium", 5)
+			e.Startup = &PiStartupConfig{AttemptID: "current", Model: e.Model, Thinking: e.Thinking, ReceiptPath: filepath.Join(dir, "receipt.json")}
+			receipt := PiStartupReceipt{AttemptID: "current", Error: "Pi selected thinking level off; requested medium"}
+			if !current {
+				receipt.AttemptID = "previous"
+			}
+			data, _ := json.Marshal(receipt)
+			if err := os.WriteFile(e.Startup.ReceiptPath, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			result := e.ExecuteTurn("test", "prover", nil)
+			want := "pi_startup: " + receipt.Error
+			if !current {
+				want = "pi_startup: startup validation failed without a matching receipt; check the installed Pi version and startup configuration"
+			}
+			if result.Error != want {
+				t.Fatalf("startup error = %q, want %q", result.Error, want)
+			}
+		})
+	}
+}
+
+func TestPiStartupReceiptFailureExitsBeforePrompt(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is needed to exercise the startup extension")
+	}
+	for _, thinking := range []string{"high", "imaginary"} {
+		t.Run(thinking, func(t *testing.T) {
+			dir := t.TempDir()
+			config := filepath.Join(dir, "config.json")
+			data := fmt.Sprintf(`{"model":"provider/model","thinking":%q,"attempt_id":"test","receipt_path":%q}`, thinking, filepath.Join(dir, "missing", "receipt.json"))
+			if err := os.WriteFile(config, []byte(data), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			script := fmt.Sprintf(`
+const { default: initialize } = await import("data:text/javascript;base64," + Buffer.from(%q).toString("base64"));
+let onStart;
+await initialize({ on: (_event, handler) => { onStart = handler; }, getThinkingLevel: () => "high" });
+const model = { provider: "provider", id: "model", api: "test" };
+onStart({}, { model, modelRegistry: { find: () => model } });
+console.log("PROMPT_SENT");
+`, string(piStartupExtension))
+			cmd := exec.Command(node, "--input-type=module", "-e", script)
+			cmd.Env = append(os.Environ(), "TELOS_PI_STARTUP_CONFIG="+config)
+			output, err := cmd.CombinedOutput()
+			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 78 || strings.Contains(string(output), "PROMPT_SENT") {
+				t.Fatalf("failed to stop before prompt: %s, %v", output, err)
+			}
+		})
+	}
+}
 
 func TestPiProgressPreservesReportAndFinalStatus(t *testing.T) {
 	progress := "<progress_update>Orders costing > $25 are rejected without changing your balance.</progress_update>"

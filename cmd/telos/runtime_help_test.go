@@ -40,7 +40,7 @@ func TestUsageShowsRunForAvailableExecution(t *testing.T) {
 			if strings.Contains(out.String(), "run SPEC.md") != test.show {
 				t.Fatalf("unexpected run visibility:\n%s", out.String())
 			}
-			for _, command := range []string{"apply SPEC.md", "list", "describe SESSION", "logs SESSION", "update [VERSION]"} {
+			for _, command := range []string{"apply [SPEC.md]", "list", "describe SESSION", "logs SESSION", "update [VERSION]"} {
 				if !strings.Contains(out.String(), command) {
 					t.Fatalf("Cloud client help lost %s", command)
 				}

@@ -34,7 +34,7 @@ func TestAcquireOwnershipIsExclusiveAndRecordsTopLevelRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Runner == nil || manifest.Runner.PID != os.Getpid() {
+	if manifest.Runner == nil || manifest.Runner.PID != os.Getpid() || !manifest.Runner.InferenceUpdates {
 		t.Fatalf("top-level runner not recorded: %#v", manifest.Runner)
 	}
 }
@@ -73,6 +73,40 @@ func TestStartEpochWithRunnerPreservesOpenEpochRunner(t *testing.T) {
 	}
 	if got := updated.OpenEpoch().Runner.LogPath; got != oldLog {
 		t.Fatalf("epoch runner should be history, got log %q want %q", got, oldLog)
+	}
+}
+
+func TestInferenceQueuedWithoutWorkerSurvivesSupportedRestart(t *testing.T) {
+	root := t.TempDir()
+	sessionDir := filepath.Join(root, "session")
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), &sessionapi.Manifest{
+		SessionID: "session", SessionKind: sessionapi.KindController,
+		Config: sessionapi.SessionConfig{Model: "provider/old", Thinking: "medium"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	thinking := "high"
+	if _, err := store.UpdateInference("session", sessionapi.InferenceUpdateRequest{RequestID: "queued", Thinking: &thinking}); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := AcquireOwnership(sessionDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Release()
+	state, err := store.Inference("session")
+	if err != nil || state.Update == nil || state.Update.RequestID != "queued" || state.Update.Status != "pending" {
+		t.Fatalf("startup discarded queued settings: %+v %v", state, err)
+	}
+	if _, err := sessionapi.ClaimInferenceUpdate(manifestPath(sessionDir), "attempt", "receipt.json", sessionapi.InferenceSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := sessionapi.FinishInferenceUpdate(manifestPath(sessionDir), "queued", "applied", "", &sessionapi.InferenceSettings{Model: "provider/old", Thinking: thinking}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := store.UpdateInference("session", sessionapi.InferenceUpdateRequest{RequestID: "idle", ExpectedRevision: 1, Thinking: &thinking}); err != nil {
+		t.Fatalf("supported idle worker rejected settings: %v", err)
 	}
 }
 
