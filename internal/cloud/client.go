@@ -81,6 +81,8 @@ type SessionRecord struct {
 	AgentModel     string            `json:"agent_model,omitempty"`
 	AgentThinking  string            `json:"agent_thinking,omitempty"`
 	Inference      *InferenceSummary `json:"inference,omitempty"`
+	Billing        *GoalBilling      `json:"billing,omitempty"`
+	AccessSource   string            `json:"access_source,omitempty"`
 	ServiceURL     *string           `json:"service_url,omitempty"`
 	DashboardURL   *string           `json:"dashboard_url,omitempty"`
 	FailureReason  *string           `json:"failure_reason,omitempty"`
@@ -615,7 +617,11 @@ func (c *Client) UpdateSession(sessionID string, opts SessionUpdateOptions) (*Se
 }
 
 func (c *Client) ListSessions() ([]SessionRecord, error) {
-	response, err := getJSONWithRetry[sessionListResponse](context.Background(), c, "/api/deployments")
+	return c.listSessions("/api/deployments")
+}
+
+func (c *Client) listSessions(path string) ([]SessionRecord, error) {
+	response, err := getJSONWithRetry[sessionListResponse](context.Background(), c, path)
 	if err != nil {
 		return nil, err
 	}
