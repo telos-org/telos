@@ -224,7 +224,7 @@ func TestCloudInferenceRejectsAmbiguityAndPreservesModelSlashes(t *testing.T) {
 		{ID: "slash", Name: "Work/Router", Source: "byok"},
 	}
 	for _, model := range []string{"Work/model", "Work/Router/vendor/model"} {
-		if _, _, err := selectInferenceConnection(connections, model); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		if _, _, err := selectInferenceConnection(connections, model); err == nil || !strings.Contains(err.Error(), "matches more than one") {
 			t.Fatalf("selector %q: %v", model, err)
 		}
 	}
@@ -318,7 +318,7 @@ func TestCloudApplyInferenceErrors(t *testing.T) {
 	}{
 		{"API key model rejected by Cloud", []string{"apply", path, "--model", "Work Anthropic/missing"}, "model is unavailable for this connection (HTTP 422)", 1},
 		{"subscription model rejected by Cloud", []string{"apply", path, "--model", "My ChatGPT/missing"}, "model is unavailable for this connection (HTTP 422)", 1},
-		{"missing connection", []string{"apply", path, "--model", "Missing/model"}, "not found", 0},
+		{"missing API key or subscription", []string{"apply", path, "--model", "Missing/model"}, "no saved API key or subscription matches", 0},
 		{"missing model", []string{"apply", path, "--model", "Work Anthropic/"}, "model ID is required", 0},
 		{"invalid syntax", []string{"apply", path, "--model", "Work Anthropic"}, "--model must be", 0},
 		{"model cannot change existing deployment", []string{"apply", path, "--session", "sess_existing", "--model", "Work Anthropic/claude-test"}, "cannot update an existing", 0},
@@ -345,18 +345,43 @@ func TestCloudReceiptShowsSavedInference(t *testing.T) {
 	session := cloud.SessionRecord{ID: "sess_test", AgentModel: "internal/model", AgentThinking: "high", Inference: &cloud.InferenceSummary{Source: "byok", ConnectionName: "Work Anthropic", Provider: "anthropic", Model: "claude-test"}}
 	var out bytes.Buffer
 	printCloudSessionDescription(&out, session)
-	for _, want := range []string{"API key", "Work Anthropic", "claude-test", "high (requested)"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("description omitted %q: %s", want, out.String())
-		}
+	if got := configOutputValue(t, out.String(), "Model"); got != "Work Anthropic/claude-test" {
+		t.Fatalf("displayed model = %q, want the --model selection: %s", got, out.String())
 	}
-	if strings.Contains(out.String(), "internal/model") {
-		t.Fatal("description replaced the public selection with the internal runtime model")
+	if got := configOutputValue(t, out.String(), "Thinking"); got != "high" {
+		t.Fatalf("displayed thinking = %q, want high: %s", got, out.String())
+	}
+	for _, unwanted := range []string{"internal/model", "Inference", "Connection"} {
+		if strings.Contains(out.String(), unwanted) {
+			t.Fatalf("description includes %q: %s", unwanted, out.String())
+		}
 	}
 	encoded := captureStdout(t, func() { printCloudSessionJSON(&session, "@telos") })
 	var decoded struct{ Inference cloud.InferenceSummary }
 	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil || decoded.Inference.ConnectionName != "Work Anthropic" {
 		t.Fatalf("JSON omitted inference: %s, %v", encoded, err)
+	}
+}
+
+func TestCloudSessionModelMatchesModelSelection(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		agentModel string
+		summary    *cloud.InferenceSummary
+		want       string
+	}{
+		{"managed", "telos-bifrost/telos/max", &cloud.InferenceSummary{Source: "managed", Tier: "max"}, "telos/max"},
+		{"api key", "internal/model", &cloud.InferenceSummary{Source: "byok", ConnectionName: "Work Anthropic", Model: "claude-test"}, "Work Anthropic/claude-test"},
+		{"subscription", "internal/model", &cloud.InferenceSummary{Source: "subscription", ConnectionName: "ChatGPT", Model: "gpt-test"}, "ChatGPT/gpt-test"},
+		{"hidden connection", "internal/model", &cloud.InferenceSummary{Source: "subscription", Model: "gpt-test"}, "gpt-test (Subscription)"},
+		{"no inference summary", "internal/model", nil, "internal/model"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			session := cloud.SessionRecord{AgentModel: tt.agentModel, Inference: tt.summary}
+			if got := cloudSessionModel(session); got != tt.want {
+				t.Fatalf("cloudSessionModel = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

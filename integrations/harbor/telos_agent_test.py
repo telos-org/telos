@@ -24,7 +24,7 @@ from integrations.harbor.telos_agent import (
 
 
 class TelosHarborAgentTest(unittest.TestCase):
-    def test_render_harbor_spec_is_local_telos_spec(self):
+    def test_render_harbor_spec(self):
         rendered = render_harbor_spec(
             "Implement checkpoint 1.",
             workdir="/app",
@@ -32,7 +32,7 @@ class TelosHarborAgentTest(unittest.TestCase):
             skills=("@telos/verify-engineering:0.1.0*",),
         )
 
-        self.assertIn("platform: local", rendered)
+        self.assertNotIn("platform:", rendered)
         self.assertIn("name: scbench-circuit-eval", rendered)
         self.assertIn(
             "skills:\n  - @telos/verify-engineering:0.1.0*", rendered

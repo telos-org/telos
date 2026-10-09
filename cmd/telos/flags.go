@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"text/tabwriter"
@@ -163,10 +164,17 @@ func resolveLocalRunConfigFromFlags(
 	if err != nil {
 		return cli.LocalRunConfig{}, err
 	}
+	level, err := thinkingOption(fs, thinking)
+	if err != nil {
+		return cli.LocalRunConfig{}, err
+	}
+	if level == "" {
+		level = cli.DefaultLocalThinking
+	}
 	return cli.LocalRunConfig{
 		Workspace:  stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
 		Model:      modelOption(fs, model),
-		Thinking:   stringOptionDefault(fs, "thinking", thinking, "TELOS_THINKING", cli.DefaultLocalThinking),
+		Thinking:   level,
 		MaxCostUSD: &cost,
 	}, nil
 }
@@ -188,9 +196,17 @@ func resolveSessionRuntimeConfigFromFlags(
 	thinking string,
 	maxCostUSD float64,
 ) (sessionRuntimeConfig, error) {
+	level, err := thinkingOption(fs, thinking)
+	if err != nil {
+		return sessionRuntimeConfig{}, err
+	}
 	cfg := sessionRuntimeConfig{
 		Model:    modelOption(fs, model),
-		Thinking: stringOption(fs, "thinking", thinking, "TELOS_THINKING"),
+		Thinking: level,
+	}
+	// Only bounded commands define a cost budget; a persistent apply has none.
+	if fs.Lookup("max-cost-usd") == nil {
+		return cfg, nil
 	}
 	if flagNameSet(fs, "max-cost-usd") || strings.TrimSpace(os.Getenv("TELOS_MAX_COST_USD")) != "" {
 		cost, err := positiveFloatOption(fs, "max-cost-usd", maxCostUSD, "TELOS_MAX_COST_USD", 20.0)
@@ -245,11 +261,17 @@ func stringOption(fs *flag.FlagSet, name, value, envName string) string {
 	return strings.TrimSpace(os.Getenv(envName))
 }
 
-func stringOptionDefault(fs *flag.FlagSet, name, value, envName, defaultValue string) string {
-	if got := stringOption(fs, name, value, envName); got != "" {
-		return got
+// thinkingLevels are the thinking efforts Telos accepts. The level reaches the
+// agent unchanged, so the CLI rejects any other value before work launches.
+var thinkingLevels = []string{"low", "medium", "high", "xhigh"}
+
+// thinkingOption returns the requested thinking level, or "" when none is set.
+func thinkingOption(fs *flag.FlagSet, value string) (string, error) {
+	level := stringOption(fs, "thinking", value, "TELOS_THINKING")
+	if level != "" && !slices.Contains(thinkingLevels, level) {
+		return "", fmt.Errorf("--thinking / TELOS_THINKING must be one of %s; got %q", strings.Join(thinkingLevels, ", "), level)
 	}
-	return defaultValue
+	return level, nil
 }
 
 func modelOption(fs *flag.FlagSet, value string) string {

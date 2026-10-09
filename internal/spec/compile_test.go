@@ -193,9 +193,6 @@ func TestToIRJSON(t *testing.T) {
 	if ir["name"] != "ir-test" {
 		t.Errorf("name: got %v", ir["name"])
 	}
-	if ir["platform"] != "local" {
-		t.Errorf("platform: got %v", ir["platform"])
-	}
 	if _, ok := ir["extends"]; ok {
 		t.Fatalf("extends should not be present in compiled IR: %#v", ir)
 	}
@@ -242,6 +239,23 @@ func TestRenderProverTask(t *testing.T) {
 	}
 	if !strings.Contains(task, "## Output") {
 		t.Error("should contain output contract")
+	}
+}
+
+func TestRenderSessionContextFollowsRuntime(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: runtime-test\nplatform: local\n---\n# Task\n\nDo something."), 0o644)
+
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if task := RenderProverTask(compiled, ""); !strings.Contains(task, "- Runtime: `cloud`") || !strings.Contains(task, "- Namespace: `") {
+		t.Error("a session should default to the cloud runtime whatever the spec declares")
+	}
+	if task := RenderVerifierTask(compiled, "", PromptOptions{LocalRuntime: true}); !strings.Contains(task, "- Runtime: `local`") || strings.Contains(task, "- Namespace: `") {
+		t.Error("a local session should name the local runtime without a namespace")
 	}
 }
 
