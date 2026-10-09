@@ -253,7 +253,7 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 }
 
 // CancelInference also records cancellation before a delayed PUT has arrived.
-// Keeping the original request as a rejected update prevents that PUT from
+// Keeping the original request as a terminal update prevents that PUT from
 // resurrecting it, using the same revision and retry rules as UpdateInference.
 func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error) {
 	if err := req.Validate(); err != nil {
@@ -264,11 +264,12 @@ func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*In
 	}
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
 		current := inferenceResponse(m, nil)
-		if update := current.Update; update != nil && update.RequestID == req.RequestID {
+		matched := current.Update != nil && current.Update.RequestID == req.RequestID
+		if update := current.Update; matched {
 			if !sameInferenceRequest(m.InferenceUpdate.InferenceUpdateRequest, req) {
 				return fmt.Errorf("%w: request_id already used with different settings", ErrConflict)
 			}
-			if update.Status == "rejected" {
+			if update.Status == "rejected" || (update.Status == "unknown" && update.Connection != nil) {
 				return nil
 			}
 			if update.Status != "pending" {
@@ -280,9 +281,14 @@ func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*In
 		if err := requireInferenceWorker(m); err != nil {
 			return err
 		}
+		status, detail := "rejected", "inference change cancelled before the next turn"
+		if !matched && req.Connection != nil {
+			// Missing history cannot prove no child previously used this connection.
+			status, detail = "unknown", "inference change cancelled for future turns; prior connection history is unavailable"
+		}
 		m.InferenceUpdate = &InferenceUpdate{
 			InferenceUpdateRequest: req, Revision: req.ExpectedRevision + 1,
-			Status: "rejected", Error: "inference change cancelled before the next turn", UpdatedAt: inferenceTimestamp(),
+			Status: status, Error: detail, UpdatedAt: inferenceTimestamp(),
 		}
 		return nil
 	})

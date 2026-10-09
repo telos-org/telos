@@ -88,8 +88,8 @@ func setInferencePi(t *testing.T, supported bool) string {
 }
 
 func TestInferenceConnectionCancellationFencesPreparedAndDelayedHandoffs(t *testing.T) {
-	for _, queued := range []bool{false, true} {
-		t.Run(fmt.Sprintf("queued=%t", queued), func(t *testing.T) {
+	for _, stage := range []string{"unprepared", "prepared", "queued"} {
+		t.Run(stage, func(t *testing.T) {
 			store, path := inferenceStore(t)
 			binary := setInferencePi(t, true)
 			model := "provider/new"
@@ -97,7 +97,7 @@ func TestInferenceConnectionCancellationFencesPreparedAndDelayedHandoffs(t *test
 				RequestID: "connection", Model: &model, Connection: testInferenceConnection(),
 				ModelDefinition: json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`),
 			}
-			if queued {
+			if stage == "queued" {
 				if _, err := store.UpdateInference("session", req); err != nil {
 					t.Fatal(err)
 				}
@@ -107,26 +107,42 @@ func TestInferenceConnectionCancellationFencesPreparedAndDelayedHandoffs(t *test
 				t.Fatal(err)
 			}
 			cancelRequest := req
-			if !queued {
+			if stage == "unprepared" {
 				// Cloud may cancel before credential preparation has completed.
 				cancelRequest.Connection = nil
 			}
+			wantStatus := "rejected"
+			if stage == "prepared" {
+				wantStatus = "unknown"
+			}
 			state, err := store.CancelInference("session", cancelRequest)
-			if err != nil || state.Update.Status != "rejected" || state.Settings.ConnectionID != "" {
+			if err != nil || state.Update.Status != wantStatus || state.Revision != 1 || state.Settings.ConnectionID != "" {
 				t.Fatalf("cancel connection: %+v %v", state, err)
+			}
+			if wantStatus == "unknown" && !strings.Contains(state.Update.Error, "prior connection history is unavailable") {
+				t.Fatalf("missing history was reported as a known rejection: %+v", state.Update)
 			}
 			if state.Update.Connection != nil && state.Update.Connection.APIKey != "" {
 				t.Fatal("cancel response exposed the prepared placeholder")
 			}
+			// A lost cancellation reply is replayable after a process restart.
+			store = NewFileStore(store.Root, RuntimeLocal)
+			if again, err := store.CancelInference("session", cancelRequest); err != nil || again.Update.Status != wantStatus || again.Revision != state.Revision || again.Update.Error != state.Update.Error {
+				t.Fatalf("cancel replay changed its recorded outcome: %+v %v", again, err)
+			}
 			late, err := store.UpdateInference("session", req)
-			if queued && (err != nil || late.Update.Status != "rejected") {
+			if stage != "unprepared" && (err != nil || late.Update.Status != wantStatus) {
 				t.Fatalf("prepared replay escaped cancellation: %+v %v", late, err)
 			}
-			if !queued && !errors.Is(err, ErrConflict) {
+			if stage == "unprepared" && !errors.Is(err, ErrConflict) {
 				t.Fatalf("late preparation escaped the cancellation tombstone: %+v %v", late, err)
 			}
 			if claimed, err := ClaimInferenceUpdate(path, "attempt", "receipt", InferenceSettings{}); err != nil || claimed != nil {
 				t.Fatalf("cancelled connection was claimed: %+v %v", claimed, err)
+			}
+			level := "high"
+			if next, err := store.UpdateInference("session", InferenceUpdateRequest{RequestID: "next", ExpectedRevision: 1, Thinking: &level}); err != nil || next.Revision != 2 || next.Update.Status != "pending" {
+				t.Fatalf("terminal cancellation blocked the next request: %+v %v", next, err)
 			}
 		})
 	}
