@@ -222,8 +222,12 @@ func TestDescribeReadsTheGoalsCostInItsContext(t *testing.T) {
 		case "/api/account/bootstrap":
 			_, _ = w.Write([]byte(`{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","handle":"person","role":"owner"},{"id":"org_telos","handle":"telos","role":"owner"}]}`))
 		case "/api/deployments/goal_key":
-			_, _ = w.Write([]byte(`{"id":"goal_key","name":"byok-demo","status":"ready","inference":{"source":"byok","provider":"anthropic"},
-				"billing":{"inference_micro_usd":0,"compute_micro_usd":1000000,"storage_micro_usd":250000}}`))
+			// Like Cloud for a member who isn't an operator: billing only when asked.
+			billing := ""
+			if r.URL.Query().Get("include_billing") == "true" {
+				billing = `,"billing":{"inference_micro_usd":0,"compute_micro_usd":1000000,"storage_micro_usd":250000}`
+			}
+			_, _ = w.Write([]byte(`{"id":"goal_key","name":"byok-demo","status":"ready","inference":{"source":"byok","provider":"anthropic"}` + billing + `}`))
 		case "/api/deployments/goal_key/inference-usage":
 			_, _ = w.Write([]byte(`{"estimated_cost_micro_usd":3400000}`))
 		default:

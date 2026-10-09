@@ -18,6 +18,12 @@ func (c *Client) ListSessionsWithBilling() ([]SessionRecord, error) {
 	return c.listSessions("/api/deployments?include_billing=true")
 }
 
+// GetSessionWithBilling returns a Goal with its billing, which Cloud gives
+// workspace members who aren't operators only when asked.
+func (c *Client) GetSessionWithBilling(sessionID string) (*SessionRecord, error) {
+	return getJSONWithRetry[SessionRecord](context.Background(), c, "/api/deployments/"+url.PathEscape(sessionID)+"?include_billing=true")
+}
+
 // InferenceCost returns the inference cost a Goal's runtime has recorded on
 // your own API key or subscription, or nil when it has none to report.
 func (c *Client) InferenceCost(ctx context.Context, deploymentID string) (*int64, error) {

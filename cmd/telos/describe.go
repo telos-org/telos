@@ -71,8 +71,13 @@ func describeCloudGoal(
 	jsonOut bool,
 ) {
 	var control *cloud.Client
-	if hasCost(*session) && billedByProvider(*session) {
+	if session.Billing == nil || billedByProvider(*session) {
 		control, _ = cloud.ControlClientForContext(contextOverride)
+	}
+	if control != nil && session.Billing == nil {
+		if withBilling, err := control.GetSessionWithBilling(session.ID); err == nil {
+			session = withBilling
+		}
 	}
 	cost := goalCosts(control, []cloud.SessionRecord{*session})[0]
 	if jsonOut {
