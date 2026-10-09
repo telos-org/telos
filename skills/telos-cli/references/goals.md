@@ -1,98 +1,108 @@
 ---
-title: Write a SPEC.md
-description: Express a Goal as an observable contract and choose the execution lifecycle it needs.
-group: Concepts
+title: Goals
+description: An overview of the framework behind the Telos Cloud platform.
+group: Platform
 ---
 
-# Write a `SPEC.md`
+Telos is built on top of Goals as the durable unit of work. But a Goal is not *just* a markdown file. There are a few components to the programming system, designed to make it flexible and maximally useful to the end user.
 
-A Goal is the outcome that should remain true. `SPEC.md` is its authored
-contract: frontmatter tells Telos how to run it, while the Markdown body tells
-agents what to make true and how success can be observed.
+## The Goal specification
 
-## Start with a complete minimal contract
+The goal specification (`SPEC.md`) is the entrypoint to a Telos program. We'll walk through an example below:
 
 ```markdown
 ---
-name: short-stable-name
+name: a-descriptive-name
 version: 0.1.0
-platform: cloud
+skills:
+ - foo-skill
+ - bar-skill
+ - baz-rubric*
+interval: 6h
 ---
 
-# Goal
+<your-goal-here>
 
-State the observable outcome and the behavior that must remain true.
-
-# Acceptance
-
-- Name the evidence that demonstrates the outcome.
 ```
 
-This file is valid as written. Add the other frontmatter fields only when the
-Goal uses them:
+### Frontmatter
+
+The markdown frontmatter (YAML block at the top of `SPEC.md`) supports the following fields:
 
 | Field | Meaning |
 | --- | --- |
 | `name` | Required lowercase, DNS-compatible identity. Keep it stable across revisions. |
 | `version` | Required semantic version for this immutable revision. Bump it when the contract changes. |
-| `platform` | `cloud` for a managed persistent Goal or `local` for a bounded run. Omitted values currently resolve to Cloud; explicit is clearer. |
 | `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
 | `interval` | A positive duration ending in `s`, `m`, or `h`, such as `30m` or `6h`, carried as the contract's reconciliation interval. |
 | `tags` | A YAML list of string labels. The default is an empty list. |
 
-For example:
+### The entrypoint
 
-```yaml
-skills:
-  - ./skills/product
-  - "@scope/readiness:1.0.0*"
-interval: 6h
-tags:
-  - production
-```
+Telos translates the goal specification to a live software service and continuously reconciles the service against the desired specification.
 
-Use local directories containing `SKILL.md` or exact registry refs. The `*`
-marks a required acceptance rubric; directory names have no rubric semantics.
-See [Packages and skills](packages-and-skills.md) for the skill format and
-how local references are packaged.
+Within this file, describe the service you want. Focus on the high-level intent of the system, observable surfaces, API endpoints, functional and non-functional requirements, and other visible constraints.
 
-The body is Markdown, not a fixed form schema. `# Goal` and `# Acceptance` are
-useful conventions rather than specially parsed fields. Add sections for
-interfaces, compatibility, data lifecycle, security boundaries, failure
-behavior, or evidence when they change what a correct result means.
+Implementation details, such as choice of programming language, code structure, etc., should be intentionally omitted. The focus is entirely on system design.
 
-## Express the contract, not an implementation recipe
+Writing high-quality specs is a non-trivial problem! Our reccomendation is for users to focus on describing externally-visible outcomes: API design, constraints, and behaviours, as opposed to implementation details.
 
-A useful spec names observable behavior and leaves implementation choices open
-where several designs would satisfy it. For example:
+## Skills
+
+A single `SPEC.md` is often not enough to describe your Goal in full detail. Telos lets you modularize with [agent skills](https://agentskills.io/), specified in YAML frontmatter up top. Agent skills are great to provide the system with additional capabilities or expertise or alternatively simply organize information into modular components that could be reused.
+
+A few examples include:
+- a company design system specific skill (logos, assets, CSS, and prose)
+- a third-party API reference skill (e.g., Salesforce, JIRA, GitHub)
+- a submodule of the desired service (e.g., backend API system of a multi-component service)
+
+In each case, the skills serve different purposes — bundling information, providing expertise, and organizing information.
+
+## Rubrics
+
+Rubrics are skills that are marked with a trailing asterisk (`*`). These skills are treated as required acceptance criteria that an independent evaluator agent can enforce and grade against. Rubrics are important for a few reasons:
+
+- skills can provide additional context, but are ultimately primarily informational as opposed to binding
+- agents are non-deterministic processes that may sometimes skip instructions or terminate early
+- due to the autoregressive nature of LLMs, agents tend to grade their own work favorably and tend to have blind spots
+
+Independent evaluation lets the system work persistently until an arbitrary set of criteria — including the spec and rubrics — is verified.
+
+Human organizations exhibit similar tendencies too — there's a reason students don't grade their own homework or why developer teams enforce peer code review!
+
+## Packaging
+
+Having defined the goal `SPEC.md` (the entrypoint), skills, and rubrics, a natural next question is the packaging and distribution of these artifacts. Telos supports two forms of packaging:
+
+- Packages with just a skill (A)
+- Packages comprising a spec, with associated skills (B)
+
+The naming convention adopted for both is of the form `@<context>/<name>:<version>`.
+
+Packages of type B can reference packages of type A. For example, suppose we have a skill `@telos/how-to-fish:1.0.2`, a Goal's frontmatter could reference it as follows:
 
 ```markdown
-# Goal
+---
+name: undersea-survival
+version: 0.1.0
+skills:
+ - "@telos/how-to-fish:1.0.2"
+ - another-skill
+interval: 6h
+---
 
-Run a public reading-list service. Books remain available when the application
-restarts.
+...
 
-# Acceptance
-
-- Add a book, restart the application, and retrieve the same book.
 ```
 
-That contract permits the agent to choose an appropriate framework and
-datastore. A framework, schema, deployment shape, or compatibility requirement
-belongs in the spec when it is itself part of the promised outcome.
+Telos Cloud manages a hosted registry of packages of both types. The method for interaction with this hosted registry is simple:
 
-A spec can select a lifecycle, import capabilities and rubrics, and describe
-the desired state. It does not grant credentials, network access, registry
-permissions, or a platform capability. Confirm those surfaces separately
-before applying a Cloud Goal; [Telos Cloud](cloud.md) describes that preflight.
+Use `telos push <SPEC.md|skill-dir>` to push up your package, optionally with an explicit `--context` (that is otherwise derived from your default in `telos config`).
 
-## Choose `apply` or `run`
+To fetch a package locally, for inspection or modification, you can run `telos pull @<context>/<name>:<version>` 
 
-| Need | Spec | Command |
-| --- | --- | --- |
-| A managed outcome that keeps its identity and evolves | `platform: cloud` | `telos apply` |
-| One local result with a stopping bound | `platform: local` | `telos run` |
+## A mental model
 
-Follow [Use Telos](use-telos.md) for a persistent service or
-[Bounded runs](bounded-runs.md) for a local result. The identity created by each
-path is explained in [The Goal lifecycle](lifecycle.md).
+On framework design: you might notice some similarities to the C programming language. You could conceptualize a `SPEC.md` as equivalent to a `main.c` and skill files like `#include`d headers.
+
+Framed this way, the purposes and shapes of the primitives in the Telos ecosystem should feel a lot more familiar, and you can even go as far as to treat type A packages as reusable "libraries" and type B packages as "binaries"!
