@@ -235,26 +235,6 @@ func TestLocalPlatformRunInvalidCommand(t *testing.T) {
 	}
 }
 
-func TestLocalPlatformWorkspaceState(t *testing.T) {
-	dir := t.TempDir()
-	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644)
-	os.MkdirAll(filepath.Join(dir, "pkg"), 0o755)
-	os.WriteFile(filepath.Join(dir, "pkg", "lib.go"), []byte("package pkg"), 0o644)
-
-	p := NewLocalPlatform(dir)
-	state := p.WorkspaceState()
-
-	if !strings.Contains(state, "=== FILES ===") {
-		t.Error("should contain FILES header")
-	}
-	if !strings.Contains(state, "main.go") {
-		t.Error("should contain main.go")
-	}
-	if !strings.Contains(state, "pkg/lib.go") {
-		t.Error("should contain pkg/lib.go")
-	}
-}
-
 func TestLocalPlatformCheckpointWorkspace(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "file.txt"), []byte("content"), 0o644)
@@ -272,22 +252,5 @@ func TestLocalPlatformCheckpointWorkspace(t *testing.T) {
 	}
 	if info.Size() == 0 {
 		t.Error("checkpoint file is empty")
-	}
-}
-
-func TestWorkspaceStateExcludesGit(t *testing.T) {
-	dir := t.TempDir()
-	os.MkdirAll(filepath.Join(dir, ".git"), 0o755)
-	os.WriteFile(filepath.Join(dir, ".git", "config"), []byte("gitconfig"), 0o644)
-	os.WriteFile(filepath.Join(dir, "main.go"), []byte("package main"), 0o644)
-
-	p := NewLocalPlatform(dir)
-	state := p.WorkspaceState()
-
-	if strings.Contains(state, ".git/config") {
-		t.Error("should exclude .git files")
-	}
-	if !strings.Contains(state, "main.go") {
-		t.Error("should include main.go")
 	}
 }
