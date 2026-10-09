@@ -98,9 +98,8 @@ func cmdLaunch(command, action string, args []string) {
 		return
 	}
 
-	localRootID, inLocalRoot := localRootSessionID()
 	if command == "apply" {
-		if inLocalRoot {
+		if insideTelosSession() {
 			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session; use telos run to launch nested specs")
 			os.Exit(1)
 		}
@@ -155,12 +154,8 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	cfg.SessionKind = sessionapi.KindTask
 	cfg.Until = untilConfig.ReviewCycles
 	cfg.UntilSeconds = untilConfig.Seconds
-	if inLocalRoot {
-		cfg.ParentSessionID = &localRootID
-	}
 
 	session, err := cli.SubmitLocalSession(specPath, cfg)
 	if err != nil {

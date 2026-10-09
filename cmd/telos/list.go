@@ -119,14 +119,6 @@ func cmdList(args []string) {
 }
 
 func rootListSessions(limit int) ([]sessionapi.Session, bool, error) {
-	if sessionID, ok := localRootSessionID(); ok {
-		sessions, err := store().List()
-		if err != nil {
-			return nil, true, fmt.Errorf("local root session list failed: %w", err)
-		}
-		return sessionTreeForRoot(sessions, sessionID), true, nil
-	}
-
 	ctx, ok := rootSessionContext()
 	if !ok {
 		return nil, false, nil
@@ -136,39 +128,6 @@ func rootListSessions(limit int) ([]sessionapi.Session, bool, error) {
 		return nil, true, fmt.Errorf("root session list failed: %w", err)
 	}
 	return sessions, true, nil
-}
-
-func sessionTreeForRoot(sessions []sessionapi.Session, rootID string) []sessionapi.Session {
-	byID := make(map[string]sessionapi.Session, len(sessions))
-	childrenByParent := make(map[string][]sessionapi.Session)
-	for _, session := range sessions {
-		byID[session.SessionID] = session
-		if session.ParentSessionID != nil && *session.ParentSessionID != "" {
-			childrenByParent[*session.ParentSessionID] = append(childrenByParent[*session.ParentSessionID], session)
-		}
-	}
-
-	root, ok := byID[rootID]
-	if !ok {
-		return nil
-	}
-
-	out := []sessionapi.Session{root}
-	seen := map[string]bool{rootID: true}
-	queue := []string{rootID}
-	for len(queue) > 0 {
-		parentID := queue[0]
-		queue = queue[1:]
-		for _, child := range childrenByParent[parentID] {
-			if seen[child.SessionID] {
-				continue
-			}
-			seen[child.SessionID] = true
-			out = append(out, child)
-			queue = append(queue, child.SessionID)
-		}
-	}
-	return out
 }
 
 func listLocalSessions() []sessionapi.Session {

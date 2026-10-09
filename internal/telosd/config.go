@@ -11,23 +11,10 @@ import (
 
 const ConfigKind = "telosd.config.v1"
 
-type Mode string
-
-const (
-	ModeLocal Mode = "local"
-	ModeCloud Mode = "cloud"
-)
-
-type AuthType string
-
-const (
-	AuthLocal  AuthType = "local"
-	AuthBearer AuthType = "bearer"
-)
-
+// Config configures the telosd server inside a Telos Cloud environment. Local
+// runs start telosd only as a session worker, which needs no config.
 type Config struct {
 	Kind      string        `yaml:"kind"`
-	Mode      Mode          `yaml:"mode"`
 	Root      string        `yaml:"root"`
 	Token     string        `yaml:"token"`
 	TokenFile string        `yaml:"token_file"`
@@ -37,16 +24,12 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Transport   string `yaml:"transport"`
-	Listen      string `yaml:"listen"`
-	Socket      string `yaml:"socket"`
-	IdleSeconds int    `yaml:"idle_seconds"`
+	Listen string `yaml:"listen"`
 }
 
 type AuthConfig struct {
-	Type      AuthType `yaml:"type"`
-	Token     string   `yaml:"token"`
-	TokenFile string   `yaml:"token_file"`
+	Token     string `yaml:"token"`
+	TokenFile string `yaml:"token_file"`
 }
 
 type RuntimeConfig struct {
@@ -67,15 +50,6 @@ func LoadConfig(path string) (Config, error) {
 	return NormalizeConfig(cfg)
 }
 
-func DefaultConfig(mode Mode) Config {
-	cfg := Config{
-		Kind: ConfigKind,
-		Mode: mode,
-	}
-	normalized, _ := NormalizeConfig(cfg)
-	return normalized
-}
-
 func NormalizeConfig(cfg Config) (Config, error) {
 	if cfg.Kind == "" {
 		cfg.Kind = ConfigKind
@@ -89,92 +63,33 @@ func NormalizeConfig(cfg Config) (Config, error) {
 	if cfg.Auth.TokenFile == "" {
 		cfg.Auth.TokenFile = cfg.TokenFile
 	}
-	if cfg.Mode == "" {
-		cfg.Mode = ModeLocal
+	if cfg.Root == "" {
+		cfg.Root = "/telos-state"
 	}
-	switch cfg.Mode {
-	case ModeLocal:
-		if cfg.Root == "" {
-			cfg.Root = ".telos"
-		}
-		if cfg.Auth.Type == "" {
-			cfg.Auth.Type = AuthLocal
-		}
-		if cfg.Server.Transport == "" {
-			cfg.Server.Transport = "unix"
-		}
-		if cfg.Server.Socket == "" {
-			cfg.Server.Socket = filepath.Join(cfg.Root, "run", "telosd.sock")
-		}
-		if cfg.Server.IdleSeconds == 0 {
-			cfg.Server.IdleSeconds = 300
-		}
-	case ModeCloud:
-		if cfg.Root == "" {
-			cfg.Root = "/telos-state"
-		}
-		if cfg.Auth.Type == "" {
-			cfg.Auth.Type = AuthBearer
-		}
-		if cfg.Server.Transport == "" {
-			cfg.Server.Transport = "http"
-		}
-		if cfg.Server.Listen == "" {
-			cfg.Server.Listen = "0.0.0.0:8000"
-		}
-		if cfg.Runtime.ArtifactBaseURL == "" {
-			cfg.Runtime.ArtifactBaseURL = "https://storage.googleapis.com/telos-runtime-artifacts/releases"
-		}
-		if cfg.Runtime.ArtifactVersion == "" {
-			cfg.Runtime.ArtifactVersion = "latest"
-		}
-		if cfg.Runtime.MountPath == "" {
-			cfg.Runtime.MountPath = "/telos-runtime"
-		}
-	default:
-		return Config{}, fmt.Errorf("invalid mode %q", cfg.Mode)
+	if cfg.Server.Listen == "" {
+		cfg.Server.Listen = "0.0.0.0:8000"
 	}
-	if cfg.Mode == ModeLocal && cfg.Auth.Type != AuthLocal {
-		return Config{}, fmt.Errorf("local mode requires auth.type %q", AuthLocal)
+	if cfg.Runtime.ArtifactBaseURL == "" {
+		cfg.Runtime.ArtifactBaseURL = "https://storage.googleapis.com/telos-runtime-artifacts/releases"
 	}
-	if cfg.Mode == ModeCloud && cfg.Auth.Type != AuthBearer {
-		return Config{}, fmt.Errorf("cloud mode requires auth.type %q", AuthBearer)
+	if cfg.Runtime.ArtifactVersion == "" {
+		cfg.Runtime.ArtifactVersion = "latest"
 	}
-	if cfg.Mode == ModeLocal && cfg.Server.Transport != "unix" {
-		return Config{}, fmt.Errorf("local mode requires server.transport %q", "unix")
+	if cfg.Runtime.MountPath == "" {
+		cfg.Runtime.MountPath = "/telos-runtime"
 	}
-	if cfg.Mode == ModeCloud && cfg.Server.Transport != "http" {
-		return Config{}, fmt.Errorf("cloud mode requires server.transport %q", "http")
-	}
-	if cfg.Auth.Type != AuthLocal && cfg.Auth.Type != AuthBearer {
-		return Config{}, fmt.Errorf("invalid auth.type %q", cfg.Auth.Type)
-	}
-	if cfg.Auth.Type == AuthBearer {
-		if cfg.Auth.Token == "" {
-			token, err := authTokenFromFile(cfg.Auth.TokenFile)
-			if err != nil {
-				return Config{}, err
-			}
-			cfg.Auth.Token = token
+	if cfg.Auth.Token == "" {
+		token, err := authTokenFromFile(cfg.Auth.TokenFile)
+		if err != nil {
+			return Config{}, err
 		}
-		if cfg.Auth.Token == "" {
-			cfg.Auth.Token = os.Getenv("TELOS_API_TOKEN")
-		}
-		if cfg.Auth.Token == "" {
-			return Config{}, fmt.Errorf("auth.token is required for bearer auth")
-		}
+		cfg.Auth.Token = token
 	}
-	switch cfg.Server.Transport {
-	case "unix":
-		if cfg.Server.Socket == "" {
-			return Config{}, fmt.Errorf("server.socket is required for unix transport")
-		}
-	case "http":
-		if cfg.Server.Listen == "" {
-			return Config{}, fmt.Errorf("server.listen is required for http transport")
-		}
-	default:
-		return Config{}, fmt.Errorf("invalid server.transport %q", cfg.Server.Transport)
+	if cfg.Auth.Token == "" {
+		cfg.Auth.Token = os.Getenv("TELOS_API_TOKEN")
+	}
+	if cfg.Auth.Token == "" {
+		return Config{}, fmt.Errorf("auth.token is required for bearer auth")
 	}
 	return cfg, nil
 }
