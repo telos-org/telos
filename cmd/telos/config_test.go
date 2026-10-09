@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -209,6 +211,94 @@ func TestConfigReportListsManagedInferenceFirst(t *testing.T) {
 	}
 }
 
+func TestCmdConfigListsCredentialsForNetworkRules(t *testing.T) {
+	server := accountBootstrapServer(t)
+	defer server.Close()
+	configureCloudTest(t, server.URL)
+	t.Setenv(config.AuthTokenEnv, "test-token")
+
+	out := captureStdout(t, func() { cmdConfig(nil) })
+	if got := configOutputValue(t, out, "Reading list API"); got != "sec_reading" {
+		t.Fatalf("credential row = %q\n%s", got, out)
+	}
+	if strings.Contains(out, "sec_bifrost_1") || strings.Contains(out, "READING_TOKEN") {
+		t.Fatalf("config lists a managed credential or a key name:\n%s", out)
+	}
+
+	var report configReport
+	if err := json.Unmarshal([]byte(captureStdout(t, func() { cmdConfig([]string{"--json"}) })), &report); err != nil {
+		t.Fatal(err)
+	}
+	if want := []cloud.Credential{{ID: "sec_reading", Name: "Reading list API"}}; !reflect.DeepEqual(report.Credentials, want) {
+		t.Fatalf("credentials = %#v, want %#v", report.Credentials, want)
+	}
+}
+
+func TestCmdConfigTellsNoCredentialsFromAFailedLookup(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		status  int
+		body    string
+		want    string
+		section []string
+	}{
+		{"none", http.StatusOK, `{"secrets":[]}`, "[]", []string{"Credentials", "  none"}},
+		{"failed", http.StatusServiceUnavailable, `{"detail":"secret store unavailable"}`, "null", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var secretsOrg string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/account/bootstrap":
+					_, _ = w.Write([]byte(`{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","handle":"person","role":"owner"},{"id":"org_telos","handle":"telos","role":"owner"}]}`))
+				case "/api/inference/connections":
+					_, _ = w.Write([]byte(`{"errors":{},"connections":[]}`))
+				case "/api/inference/preference":
+					_, _ = w.Write([]byte(`{"selection":{"source":"managed","tier":"default"}}`))
+				case "/api/secrets":
+					secretsOrg = r.Header.Get("X-Telos-Org-Id")
+					w.WriteHeader(tt.status)
+					_, _ = w.Write([]byte(tt.body))
+				default:
+					t.Errorf("request = %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+			configureCloudTest(t, server.URL)
+			t.Setenv(config.ContextEnv, "@telos")
+
+			var report map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(captureStdout(t, func() { cmdConfig([]string{"--json"}) })), &report); err != nil {
+				t.Fatal(err)
+			}
+			if got := string(report["credentials"]); got != tt.want {
+				t.Fatalf("credentials = %s, want %s", got, tt.want)
+			}
+			if secretsOrg != "org_telos" {
+				t.Fatalf("credentials were read from org %q, want the context's org_telos", secretsOrg)
+			}
+
+			out := captureStdout(t, func() { cmdConfig(nil) })
+			lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+			// Credentials must not widen the Inference rows above them.
+			if !slices.Contains(lines, "  telos  Managed  telos/default, telos/max") {
+				t.Fatalf("Inference rows changed layout:\n%s", out)
+			}
+			at := slices.Index(lines, "Credentials")
+			if tt.section == nil {
+				if at >= 0 || !strings.Contains(out, "credentials: ") {
+					t.Fatalf("a failed lookup should report an error, not a Credentials section:\n%s", out)
+				}
+				return
+			}
+			if at < 0 || !slices.Equal(lines[at:at+len(tt.section)], tt.section) {
+				t.Fatalf("Credentials section = %q, want %q\n%s", lines[max(at, 0):], tt.section, out)
+			}
+		})
+	}
+}
+
 func TestCmdConfigClearsResolvedPersonalContext(t *testing.T) {
 	server := accountBootstrapServer(t)
 	defer server.Close()
@@ -327,6 +417,8 @@ func accountBootstrapServer(t *testing.T) *httptest.Server {
 			_, _ = w.Write([]byte(`{"errors":{},"connections":[{"source":"subscription","id":"conn_1","name":"openai-rohan","provider":"chatgpt-codex","status":"connected","account_label":"owner@example.com","plan":"pro"},{"source":"byok","status":"saved","id":"key_work","name":"Work Anthropic","provider":"anthropic"}]}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/preference":
 			_, _ = w.Write([]byte(`{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/secrets":
+			_, _ = w.Write([]byte(`{"secrets":[{"id":"sec_reading","name":"Reading list API","credentials":[{"key":"READING_TOKEN"}],"managed_by":null},{"id":"sec_bifrost_1","name":"Telos inference","credentials":[],"managed_by":"bifrost"}]}`))
 		default:
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}

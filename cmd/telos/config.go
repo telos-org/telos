@@ -98,6 +98,7 @@ type configReport struct {
 	Context          string                      `json:"context"`
 	WorkspaceDefault *cloud.InferenceSelection   `json:"workspace_default,omitempty"`
 	Connections      []cloud.InferenceConnection `json:"connections"`
+	Credentials      []cloud.Credential          `json:"credentials"`
 	ModelOverride    string                      `json:"model_override,omitempty"`
 	ThinkingOverride string                      `json:"thinking_override,omitempty"`
 	Error            string                      `json:"error,omitempty"`
@@ -136,15 +137,19 @@ func loadConfigReport(cfg *config.Config, path string) configReport {
 	}
 	report.Context = account.CanonicalContextName(organization)
 	client.OrgID = organization.ID
-	var connectionsErr, preferenceErr error
+	var connectionsErr, preferenceErr, credentialsErr error
 	var wg sync.WaitGroup
 	wg.Go(func() { report.Connections, connectionsErr = client.ListInferenceConnections() })
 	wg.Go(func() { report.WorkspaceDefault, preferenceErr = client.InferencePreference() })
+	wg.Go(func() { report.Credentials, credentialsErr = client.ListCredentials() })
 	wg.Wait()
 	if preferenceErr != nil {
 		preferenceErr = fmt.Errorf("workspace default: %w", preferenceErr)
 	}
-	if err := errors.Join(connectionsErr, preferenceErr); err != nil {
+	if credentialsErr != nil {
+		credentialsErr = fmt.Errorf("credentials: %w", credentialsErr)
+	}
+	if err := errors.Join(connectionsErr, preferenceErr, credentialsErr); err != nil {
 		report.Error = err.Error()
 	}
 	return report
@@ -169,6 +174,17 @@ func printConfigReport(report configReport) {
 		fmt.Fprintf(w, "  telos\t%s\ttelos/default, telos/max\n", inferenceSourceLabel("managed"))
 		for _, connection := range report.Connections {
 			fmt.Fprintf(w, "  %s\t%s\t%s\n", connection.Name, inferenceSourceLabel(connection.Source), connection.Status)
+		}
+		// A Goal's network rules name credentials by ID. A failed lookup leaves
+		// the list nil, and the error is reported below.
+		if report.Credentials != nil {
+			fmt.Fprintln(w, "Credentials")
+			if len(report.Credentials) == 0 {
+				fmt.Fprintln(w, "  none")
+			}
+			for _, credential := range report.Credentials {
+				fmt.Fprintf(w, "  %s\t%s\n", credential.Name, credential.ID)
+			}
 		}
 	}
 	if report.Error != "" {
