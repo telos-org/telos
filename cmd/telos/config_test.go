@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -233,26 +234,68 @@ func TestCmdConfigListsCredentialsForNetworkRules(t *testing.T) {
 	}
 }
 
-func TestConfigReportShowsCredentialsOnlyWhenKnown(t *testing.T) {
+func TestCmdConfigTellsNoCredentialsFromAFailedLookup(t *testing.T) {
 	for _, tt := range []struct {
-		credentials []cloud.Credential
-		want        string
+		name    string
+		status  int
+		body    string
+		want    string
+		section []string
 	}{
-		{nil, ""},
-		{[]cloud.Credential{}, "none"},
+		{"none", http.StatusOK, `{"secrets":[]}`, "[]", []string{"Credentials", "  none"}},
+		{"failed", http.StatusServiceUnavailable, `{"detail":"secret store unavailable"}`, "null", nil},
 	} {
-		out := captureStdout(t, func() {
-			printConfigReport(configReport{Authentication: "valid", Context: "personal", Credentials: tt.credentials})
-		})
-		if tt.credentials == nil {
-			if strings.Contains(out, "Credentials") {
-				t.Fatalf("unknown credentials are listed:\n%s", out)
+		t.Run(tt.name, func(t *testing.T) {
+			var secretsOrg string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/account/bootstrap":
+					_, _ = w.Write([]byte(`{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","handle":"person","role":"owner"},{"id":"org_telos","handle":"telos","role":"owner"}]}`))
+				case "/api/inference/connections":
+					_, _ = w.Write([]byte(`{"errors":{},"connections":[]}`))
+				case "/api/inference/preference":
+					_, _ = w.Write([]byte(`{"selection":{"source":"managed","tier":"default"}}`))
+				case "/api/secrets":
+					secretsOrg = r.Header.Get("X-Telos-Org-Id")
+					w.WriteHeader(tt.status)
+					_, _ = w.Write([]byte(tt.body))
+				default:
+					t.Errorf("request = %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+			configureCloudTest(t, server.URL)
+			t.Setenv(config.ContextEnv, "@telos")
+
+			var report map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(captureStdout(t, func() { cmdConfig([]string{"--json"}) })), &report); err != nil {
+				t.Fatal(err)
 			}
-			continue
-		}
-		if got := configOutputValue(t, out, "Credentials"); got != tt.want {
-			t.Fatalf("Credentials = %q, want %q", got, tt.want)
-		}
+			if got := string(report["credentials"]); got != tt.want {
+				t.Fatalf("credentials = %s, want %s", got, tt.want)
+			}
+			if secretsOrg != "org_telos" {
+				t.Fatalf("credentials were read from org %q, want the context's org_telos", secretsOrg)
+			}
+
+			out := captureStdout(t, func() { cmdConfig(nil) })
+			lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+			// Credentials must not widen the Inference rows above them.
+			if !slices.Contains(lines, "  telos  Managed  telos/default, telos/max") {
+				t.Fatalf("Inference rows changed layout:\n%s", out)
+			}
+			at := slices.Index(lines, "Credentials")
+			if tt.section == nil {
+				if at >= 0 || !strings.Contains(out, "credentials: ") {
+					t.Fatalf("a failed lookup should report an error, not a Credentials section:\n%s", out)
+				}
+				return
+			}
+			if at < 0 || !slices.Equal(lines[at:at+len(tt.section)], tt.section) {
+				t.Fatalf("Credentials section = %q, want %q\n%s", lines[max(at, 0):], tt.section, out)
+			}
+		})
 	}
 }
 

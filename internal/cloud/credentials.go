@@ -1,5 +1,7 @@
 package cloud
 
+import "context"
+
 // Credential is a saved workspace credential that a Goal's network rules can
 // name by ID. Cloud never returns its values.
 type Credential struct {
@@ -10,13 +12,13 @@ type Credential struct {
 // ListCredentials returns the context's saved credentials, leaving out the ones
 // Telos manages for itself.
 func (c *Client) ListCredentials() ([]Credential, error) {
-	var result struct {
+	result, err := getJSONWithRetry[struct {
 		Secrets []struct {
 			Credential
 			ManagedBy *string `json:"managed_by"`
 		} `json:"secrets"`
-	}
-	if err := c.getJSON("/api/secrets", &result); err != nil {
+	}](context.Background(), c, "/api/secrets")
+	if err != nil {
 		return nil, err
 	}
 	credentials := []Credential{}

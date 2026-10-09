@@ -36,7 +36,7 @@ func (c *Client) ListInferenceConnections() ([]InferenceConnection, error) {
 		Connections []InferenceConnection `json:"connections"`
 		Errors      map[string]string     `json:"errors"`
 	}
-	if err := c.getJSON("/api/inference/connections", &result); err != nil {
+	if err := c.inferenceJSON("/api/inference/connections", &result); err != nil {
 		return nil, err
 	}
 	if result.Errors == nil {
@@ -53,13 +53,13 @@ func (c *Client) InferencePreference() (*InferenceSelection, error) {
 	var result struct {
 		Selection InferenceSelection `json:"selection"`
 	}
-	if err := c.getJSON("/api/inference/preference", &result); err != nil {
+	if err := c.inferenceJSON("/api/inference/preference", &result); err != nil {
 		return nil, err
 	}
 	return &result.Selection, nil
 }
 
-func (c *Client) getJSON(path string, result any) error {
+func (c *Client) inferenceJSON(path string, result any) error {
 	resp, err := c.do(http.MethodGet, path, nil)
 	if err != nil {
 		return err
