@@ -35,11 +35,7 @@ func cmdDescribe(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
-			return
-		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		describeCloudGoal(cloudSession, contextName, contextOverride, *jsonOut)
 		return
 	}
 
@@ -60,11 +56,7 @@ func cmdDescribe(args []string) {
 		os.Exit(1)
 	}
 	if found {
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
-			return
-		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		describeCloudGoal(cloudSession, contextName, "", *jsonOut)
 		return
 	}
 
@@ -72,13 +64,34 @@ func cmdDescribe(args []string) {
 	os.Exit(1)
 }
 
+func describeCloudGoal(
+	session *cloud.SessionRecord,
+	contextName string,
+	contextOverride string,
+	jsonOut bool,
+) {
+	var control *cloud.Client
+	if needsInferenceLookup(*session) {
+		control, _ = cloud.ControlClientForContext(contextOverride)
+	}
+	cost := goalCosts(control, []cloud.SessionRecord{*session})[0]
+	if jsonOut {
+		printCloudSessionJSON(session, contextName, cost)
+		return
+	}
+	printCloudSessionDescriptionForContext(os.Stdout, *session, contextName, cost)
+}
+
 // cloudSessionJSON is a Cloud session as describe and list print it. Callers
 // read status and status_reason; the raw lifecycle state is left out.
 type cloudSessionJSON struct {
 	*cloud.SessionRecord
-	// State stays nil so it hides the record's raw state.
-	State  *string `json:"state,omitempty"`
-	Status string  `json:"status,omitempty"`
+	// State and Billing stay nil so they hide the record's raw state and
+	// billing, which cost presents.
+	State   *string   `json:"state,omitempty"`
+	Billing *struct{} `json:"billing,omitempty"`
+	Status  string    `json:"status,omitempty"`
+	Cost    *goalCost `json:"cost,omitempty"`
 }
 
 func newCloudSessionJSON(session *cloud.SessionRecord) cloudSessionJSON {
@@ -88,12 +101,15 @@ func newCloudSessionJSON(session *cloud.SessionRecord) cloudSessionJSON {
 func printCloudSessionJSON(
 	session *cloud.SessionRecord,
 	contextName string,
+	cost *goalCost,
 ) {
+	record := newCloudSessionJSON(session)
+	record.Cost = cost
 	printJSON(struct {
 		cloudSessionJSON
 		Context string `json:"context,omitempty"`
 	}{
-		cloudSessionJSON: newCloudSessionJSON(session),
+		cloudSessionJSON: record,
 		Context:          contextName,
 	})
 }
@@ -119,13 +135,14 @@ func getCloudSessionForContext(
 }
 
 func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
-	printCloudSessionDescriptionForContext(out, session, "")
+	printCloudSessionDescriptionForContext(out, session, "", nil)
 }
 
 func printCloudSessionDescriptionForContext(
 	out io.Writer,
 	session cloud.SessionRecord,
 	contextName string,
+	cost *goalCost,
 ) {
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
@@ -138,6 +155,7 @@ func printCloudSessionDescriptionForContext(
 	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
 		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
 	}
+	printGoalCost(out, cost)
 	if reason := cloudSessionReason(session); reason != "" {
 		printSummaryField(out, "Reason", reason)
 	}

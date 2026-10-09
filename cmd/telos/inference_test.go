@@ -356,7 +356,7 @@ func TestCloudReceiptShowsSavedInference(t *testing.T) {
 			t.Fatalf("description includes %q: %s", unwanted, out.String())
 		}
 	}
-	encoded := captureStdout(t, func() { printCloudSessionJSON(&session, "@telos") })
+	encoded := captureStdout(t, func() { printCloudSessionJSON(&session, "@telos", nil) })
 	var decoded struct{ Inference cloud.InferenceSummary }
 	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil || decoded.Inference.ConnectionName != "Work Anthropic" {
 		t.Fatalf("JSON omitted inference: %s, %v", encoded, err)
