@@ -380,6 +380,42 @@ func TestInferenceRejectsIncompatibleSessionWorker(t *testing.T) {
 	}
 }
 
+func TestInferenceReadReportsWorkerCompatibilityWithoutHidingSettings(t *testing.T) {
+	for _, worker := range []string{"old_runner", "old_epoch", "compatible_runner", "compatible_epoch", "none"} {
+		t.Run(worker, func(t *testing.T) {
+			store, path := inferenceStore(t)
+			if _, err := MutateManifest(path, func(m *Manifest) error {
+				runner := &Runner{Kind: "local-subprocess", PID: 12345, InferenceUpdates: strings.HasPrefix(worker, "compatible")}
+				if strings.HasSuffix(worker, "runner") {
+					m.Runner = runner
+				} else if strings.HasSuffix(worker, "epoch") {
+					m.Epochs = []Epoch{{ID: 1, Runner: runner}}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			mux := http.NewServeMux()
+			RegisterRoutes(mux, store, NewBearerAuthorizer(store, "operator-token"), RuntimeIdentity{})
+			request := httptest.NewRequest("GET", "/api/sessions/session/inference", nil)
+			request.Header.Set("Authorization", "Bearer operator-token")
+			response := httptest.NewRecorder()
+			mux.ServeHTTP(response, request)
+			var state InferenceResponse
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &state) != nil || state.Settings != (InferenceSettings{Model: "provider/old", Thinking: "medium"}) {
+				t.Fatalf("worker compatibility hid saved settings: %d %s", response.Code, response.Body.String())
+			}
+			if strings.HasPrefix(worker, "old") {
+				if !strings.Contains(state.UpdateError, "restart it with the updated telosd") {
+					t.Fatalf("missing actionable worker preflight: %s", response.Body.String())
+				}
+			} else if bytes.Contains(response.Body.Bytes(), []byte(`"update_error"`)) {
+				t.Fatalf("compatible worker advertised an update error: %s", response.Body.String())
+			}
+		})
+	}
+}
+
 func TestInferenceCompareAndSwapAndDurableReplay(t *testing.T) {
 	store, path := inferenceStore(t)
 	model := "provider/new"

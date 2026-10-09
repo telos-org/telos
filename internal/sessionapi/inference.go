@@ -95,6 +95,7 @@ type InferenceResponse struct {
 	Settings            InferenceSettings `json:"settings"`
 	Revision            int               `json:"revision"`
 	Update              *InferenceUpdate  `json:"update,omitempty"`
+	UpdateError         string            `json:"update_error,omitempty"`
 }
 
 var ErrInferenceUnavailable = errors.New("Pi capability check unavailable")
@@ -170,6 +171,9 @@ func inferenceResponse(m *Manifest, connectionSwitching *bool) *InferenceRespons
 			connection.APIKey = ""
 			update.Connection, r.Update = &connection, &update
 		}
+	}
+	if err := requireInferenceWorker(m); err != nil {
+		r.UpdateError = err.Error()
 	}
 	return r
 }
