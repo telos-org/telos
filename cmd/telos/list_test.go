@@ -13,6 +13,7 @@ import (
 
 	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -942,5 +943,21 @@ func TestPrintLocalSessionDeleteReceiptUsesSessionIDForUnnamedSession(t *testing
 		if strings.Contains(text, notWant) {
 			t.Fatalf("delete receipt should omit %q:\n%s", notWant, text)
 		}
+	}
+}
+
+func TestCmdListTellsASignedOutUserToLogIn(t *testing.T) {
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "config.yaml"))
+	t.Setenv(config.APIEndpointEnv, "")
+	t.Setenv(config.AuthTokenEnv, "")
+	t.Setenv(config.ContextEnv, "")
+	t.Setenv("TELOS_SESSION_ID", "")
+	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+
+	out := captureStdout(t, func() {
+		cmdList(nil)
+	})
+	if out != "Not signed in. Run `telos login` to see your Goals.\n" {
+		t.Fatalf("signed-out list = %q", out)
 	}
 }

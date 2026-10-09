@@ -275,7 +275,7 @@ func TestCmdConfigSurfacesAuthenticationFailure(t *testing.T) {
 			out := captureStdout(t, func() {
 				cmdConfig(nil)
 			})
-			if got := configOutputValue(t, out, "Authentication"); got != "invalid" {
+			if got := configOutputValue(t, out, "Authentication"); got != "invalid; run `telos login`" {
 				t.Fatalf("authentication = %q", got)
 			}
 			for _, want := range []string{"token rejected", fmt.Sprintf("HTTP %d", statusCode)} {
@@ -300,7 +300,7 @@ func TestCmdConfigShowsUnauthenticatedLocalValues(t *testing.T) {
 	out := captureStdout(t, func() {
 		cmdConfig(nil)
 	})
-	for _, want := range []string{"https://api.usetelos.ai", "not configured", "org_telos"} {
+	for _, want := range []string{"https://api.usetelos.ai", "not configured; run `telos login`", "org_telos"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output %q does not contain %q", out, want)
 		}

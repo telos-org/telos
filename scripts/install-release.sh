@@ -220,5 +220,29 @@ if [ "$install_telosd" -eq 1 ] && ! command -v pi >/dev/null 2>&1; then
   echo "pi setup: https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/quickstart.md"
 fi
 if ! command -v telos >/dev/null 2>&1; then
-  echo "add $install_dir to PATH to run telos from any shell"
+  path_dir="$install_dir"
+  if [ -n "${HOME:-}" ] && [ "$HOME" != / ]; then
+    case "$install_dir" in
+      "$HOME"/*) path_dir="\$HOME${install_dir#"$HOME"}" ;;
+    esac
+  fi
+  echo
+  case "${SHELL##*/}" in
+    fish)
+      echo "To run telos from any shell, run: fish_add_path $path_dir"
+      ;;
+    *)
+      case "${SHELL##*/}" in
+        zsh) profile="~/.zshrc" ;;
+        bash)
+          if [ "$(uname -s)" = Darwin ]; then profile="~/.bash_profile"; else profile="~/.bashrc"; fi
+          ;;
+        *) profile="~/.profile" ;;
+      esac
+      path_line="export PATH=\"$path_dir:\$PATH\""
+      echo "To run telos from any shell, add it to your PATH:"
+      echo "  echo '$path_line' >> $profile"
+      echo "Then open a new terminal, or run: $path_line"
+      ;;
+  esac
 fi

@@ -152,7 +152,11 @@ func loadConfigReport(cfg *config.Config, path string) configReport {
 
 func printConfigReport(report configReport) {
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(w, "Config file\t%s\nEndpoint\t%s\nAuthentication\t%s\nContext\t%s\n", report.ConfigFile, report.Endpoint, report.Authentication, report.Context)
+	authentication := report.Authentication
+	if authentication == "not configured" || authentication == "invalid" {
+		authentication += "; run `telos login`"
+	}
+	fmt.Fprintf(w, "Config file\t%s\nEndpoint\t%s\nAuthentication\t%s\nContext\t%s\n", report.ConfigFile, report.Endpoint, authentication, report.Context)
 	if report.WorkspaceDefault != nil {
 		fmt.Fprintf(w, "Workspace model\t%s\n", inferenceSelectionName(*report.WorkspaceDefault, report.Connections))
 	}
