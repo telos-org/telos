@@ -218,6 +218,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		CurrentRevision:          currentRevision,
 		Config:                   buildConfig(req),
 		InferenceModelDefinition: req.ModelDefinition,
+		InferenceConnection:      req.InferenceConnection,
 		Provenance:               provenance,
 		PackageDigest:            prepared.PackageDigest,
 		ApplyPackageLock:         prepared.ApplyPackageLock,

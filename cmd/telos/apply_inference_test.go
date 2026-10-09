@@ -28,6 +28,23 @@ func configureInferenceApplyTest(t *testing.T, endpoint string) {
 	t.Setenv("TELOS_MAX_COST_USD", "not-a-number")
 }
 
+func configureLocalInferenceDescribeTest(t *testing.T) {
+	t.Helper()
+	configureInferenceApplyTest(t, "http://unused.invalid")
+	// These tests exercise settings persistence and output, without model calls.
+	// Model/thinking changes also work with Pi lacking connection switching.
+	home := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '{\"connection_switching\":false,\"executable\":\"%s\"}\\n' \"$0\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+}
+
 func inferenceCLIProcess(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 	command := exec.Command(os.Args[0], append([]string{"-test.run=^TestInferenceCLIProcess$", "--"}, args...)...)
@@ -42,6 +59,44 @@ func initialCloudInference() cloud.DeploymentInferenceState {
 	return cloud.DeploymentInferenceState{
 		Inference:  cloud.InferenceSummary{Source: "managed", Tier: "default"},
 		AgentModel: "telos-bifrost/telos/default", AgentThinking: "medium", Revision: 7,
+	}
+}
+
+func TestInferenceConnectionChangesNameBothConnections(t *testing.T) {
+	for _, tt := range []struct {
+		name, source, target string
+		current, requested   cloud.InferenceSummary
+		selection            cloud.InferenceSelection
+	}{
+		{"different key same model", "Old key/model", "New key/model", cloud.InferenceSummary{Source: "byok", Model: "model", ConnectionName: "Old key"}, cloud.InferenceSummary{Source: "byok", Model: "model", ConnectionName: "New key"}, cloud.InferenceSelection{Source: "byok", ConnectionID: "new-key", Model: "model"}},
+		{"managed to subscription", "telos/default", "ChatGPT/model", cloud.InferenceSummary{Source: "managed", Tier: "default"}, cloud.InferenceSummary{Source: "subscription", Model: "model", ConnectionName: "ChatGPT"}, cloud.InferenceSelection{Source: "subscription", ConnectionID: "sub", Model: "model"}},
+		{"subscription to managed", "ChatGPT/model", "telos/max", cloud.InferenceSummary{Source: "subscription", Model: "model", ConnectionName: "ChatGPT"}, cloud.InferenceSummary{Source: "managed", Tier: "max"}, cloud.InferenceSelection{Source: "managed", Tier: "max"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			state := initialCloudInference()
+			state.Inference, state.RequestedInference = tt.current, &tt.requested
+			state.Status, state.Request = "pending", &cloud.DeploymentInferenceRequest{RequestID: "request", Inference: &tt.selection}
+			receipt, err := cloudInferenceReceipt("session", "@workspace", &state)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, print := range []func(*bytes.Buffer){
+				func(out *bytes.Buffer) { printInferenceReceipt(out, receipt) },
+				func(out *bytes.Buffer) { printInferenceDescription(out, describeInference(receipt)) },
+				func(out *bytes.Buffer) {
+					printCloudSessionDetails(out, cloud.SessionRecord{AgentModel: state.AgentModel, AgentThinking: state.AgentThinking, Inference: &state.Inference}, "@workspace", describeInference(receipt))
+				},
+			} {
+				var out bytes.Buffer
+				print(&out)
+				if !strings.Contains(out.String(), tt.source+" -> "+tt.target+" (next turn)") {
+					t.Fatalf("connection change not displayed: %s", out.String())
+				}
+			}
+			if receipt.Settings.Model != state.AgentModel {
+				t.Fatal("display labels changed structured confirmed model")
+			}
+		})
 	}
 }
 
@@ -237,7 +292,7 @@ func TestApplyInferenceOutcomesAndLostReplies(t *testing.T) {
 }
 
 func TestDescribeLocalInferenceShowsConfirmation(t *testing.T) {
-	configureInferenceApplyTest(t, "http://unused.invalid")
+	configureLocalInferenceDescribeTest(t)
 	root := t.TempDir()
 	t.Setenv("TELOS_SESSION_DIR", root)
 	id := "local_settings"

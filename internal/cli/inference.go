@@ -51,20 +51,24 @@ func (e *sessionInferenceExecutor) ExecuteTurn(task, role string, ts *game.TurnS
 	}
 	e.pi.Model, e.pi.Thinking = m.Config.Model, m.Config.Thinking
 	definition := m.InferenceModelDefinition
+	connection := m.InferenceConnection
 	if update != nil {
 		e.pi.Model, e.pi.Thinking = update.Settings.Model, update.Settings.Thinking
 		if update.Model != nil && (len(update.ModelDefinition) > 0 || e.pi.Model != m.Config.Model) {
 			definition = update.ModelDefinition
+		}
+		if update.Connection != nil {
+			connection = update.Connection
 		}
 	}
 	e.pi.Startup, e.pi.OnStartup = nil, nil
 	var persistErr error
 	var stop atomic.Bool
 	settled := false
-	if update != nil || (m.InferenceUpdate != nil && m.InferenceUpdate.Status == "applied") || len(definition) > 0 {
+	if update != nil || (m.InferenceUpdate != nil && m.InferenceUpdate.Status == "applied") || len(definition) > 0 || connection != nil {
 		e.pi.Startup = &executor.PiStartupConfig{
 			AttemptID: attempt, Model: e.pi.Model, Thinking: e.pi.Thinking,
-			Definition: definition, ReceiptPath: receiptPath,
+			Definition: definition, Connection: connection, ReceiptPath: receiptPath,
 		}
 		if update != nil {
 			e.pi.Startup.RequestID = update.RequestID
@@ -101,8 +105,8 @@ func (e *sessionInferenceExecutor) ExecuteTurn(task, role string, ts *game.TurnS
 			e.pi.Model, e.pi.Thinking = m.Config.Model, m.Config.Thinking
 			e.pi.OnStartup = nil
 			e.pi.Startup = nil
-			if len(m.InferenceModelDefinition) > 0 {
-				e.pi.Startup = &executor.PiStartupConfig{AttemptID: rand.Text(), Model: e.pi.Model, Thinking: e.pi.Thinking, Definition: m.InferenceModelDefinition, ReceiptPath: receiptPath + ".fallback"}
+			if len(m.InferenceModelDefinition) > 0 || m.InferenceConnection != nil {
+				e.pi.Startup = &executor.PiStartupConfig{AttemptID: rand.Text(), Model: e.pi.Model, Thinking: e.pi.Thinking, Definition: m.InferenceModelDefinition, Connection: m.InferenceConnection, ReceiptPath: receiptPath + ".fallback"}
 			}
 			return e.pi.ExecuteTurn(task, role, ts)
 		}
@@ -123,6 +127,12 @@ func confirmTurnInference(path string, m *sessionapi.Manifest) (bool, error) {
 		return true, sessionapi.FinishInferenceUpdate(path, u.RequestID, "rejected", r.Error, nil)
 	}
 	want := sessionapi.InferenceSettings{Model: m.Config.Model, Thinking: m.Config.Thinking}
+	if m.InferenceConnection != nil {
+		want.ConnectionID = m.InferenceConnection.ID
+	}
+	if u.Connection != nil {
+		want.ConnectionID = u.Connection.ID
+	}
 	if u.Model != nil {
 		want.Model = *u.Model
 	}
@@ -132,7 +142,7 @@ func confirmTurnInference(path string, m *sessionapi.Manifest) (bool, error) {
 	if u.Settings != nil {
 		want = *u.Settings
 	}
-	if r.Model != want.Model || r.Thinking == "" || (u.Thinking != nil && r.Thinking != want.Thinking) {
+	if r.Model != want.Model || r.Thinking == "" || (u.Thinking != nil && r.Thinking != want.Thinking) || r.ConnectionID != want.ConnectionID {
 		return true, sessionapi.FinishInferenceUpdate(path, u.RequestID, "unknown", "Pi startup receipt does not match the queued settings", nil)
 	}
 	// An omitted thinking level inherits the previous default, which Pi may

@@ -111,6 +111,8 @@ func writeInferenceError(w http.ResponseWriter, err error) {
 		status = http.StatusBadRequest
 	case errors.Is(err, ErrConflict):
 		status = http.StatusConflict
+	case errors.Is(err, ErrInferenceUnavailable):
+		status = http.StatusServiceUnavailable
 	}
 	writeError(w, status, err.Error())
 }

@@ -42,13 +42,14 @@ type DeploymentInferenceRequest struct {
 }
 
 type DeploymentInferenceState struct {
-	Inference     InferenceSummary            `json:"inference"`
-	AgentModel    string                      `json:"agent_model"`
-	AgentThinking string                      `json:"agent_thinking"`
-	Revision      int                         `json:"revision"`
-	Request       *DeploymentInferenceRequest `json:"request,omitempty"`
-	Status        string                      `json:"status,omitempty"`
-	Error         string                      `json:"error,omitempty"`
+	Inference          InferenceSummary            `json:"inference"`
+	RequestedInference *InferenceSummary           `json:"requested_inference,omitempty"`
+	AgentModel         string                      `json:"agent_model"`
+	AgentThinking      string                      `json:"agent_thinking"`
+	Revision           int                         `json:"revision"`
+	Request            *DeploymentInferenceRequest `json:"request,omitempty"`
+	Status             string                      `json:"status,omitempty"`
+	Error              string                      `json:"error,omitempty"`
 }
 
 func (c *Client) GetDeploymentInference(id string) (*DeploymentInferenceState, error) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,6 +14,89 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/sessionworker"
 )
+
+func TestInferenceConnectionsSurviveBootstrapAndChildCreation(t *testing.T) {
+	home := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\nprintf '{\"connection_switching\":true,\"executable\":\"%s\"}\\n' \"$0\"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	connection := &sessionapi.InferenceConnection{ID: "profile-old", Provider: "provider", BaseURL: "https://models.example/v1", ProxyURL: "http://172.31.255.1:20000", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
+	definition := `{"id":"model","name":"Model","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`
+	encoded, _ := json.Marshal(connection)
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "provider/model")
+	t.Setenv("TELOS_CLOUD_DEFAULT_CONNECTION_JSON", string(encoded))
+	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL_DEFINITION_JSON", definition)
+	t.Setenv("TELOS_SESSION_ID", "sess_bootstrap")
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	store := newControllerReconciler(base, &recordingSubstrate{}, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: parent\nplatform: cloud\n---\n# Parent\n"
+	parent, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, CloudSessionID: "sess_bootstrap"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldChild, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, ParentSessionID: &parent.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	model := "provider/model"
+	next := *connection
+	next.ID, next.ProxyURL, next.APIKey = "profile-next", "http://172.31.255.1:20004", "telos-proxy-"+strings.Repeat("b", 43)
+	if _, err := store.UpdateInference(parent.SessionID, sessionapi.InferenceUpdateRequest{RequestID: "switch", Model: &model, ModelDefinition: json.RawMessage(definition), Connection: &next}); err != nil {
+		t.Fatal(err)
+	}
+	pendingDefaults := store.applyCreateDefaults(sessionapi.SessionCreateRequest{ParentSessionID: &parent.SessionID})
+	if pendingDefaults.InferenceConnection == nil || *pendingDefaults.InferenceConnection != *connection {
+		t.Fatal("pending connection leaked into child defaults")
+	}
+	path := filepath.Join(*parent.SessionDir, "session.json")
+	update, err := sessionapi.ClaimInferenceUpdate(path, "attempt", "receipt.json", sessionapi.InferenceSettings{})
+	if err != nil || update == nil {
+		t.Fatal(err)
+	}
+	if err := sessionapi.FinishInferenceUpdate(path, "switch", "applied", "", update.Settings); err != nil {
+		t.Fatal(err)
+	}
+	newChild, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, ParentSessionID: &parent.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, child := range []*sessionapi.Session{oldChild, newChild} {
+		m, err := sessionapi.ReadManifest(filepath.Join(*child.SessionDir, "session.json"))
+		want := connection
+		if child == newChild {
+			want = &next
+		}
+		if err != nil || m.InferenceConnection == nil || *m.InferenceConnection != *want {
+			t.Fatalf("child connection changed unexpectedly: %+v %v", m, err)
+		}
+	}
+	explicit := store.applyCreateDefaults(sessionapi.SessionCreateRequest{ParentSessionID: &parent.SessionID, Model: "other/model"})
+	if explicit.InferenceConnection != nil {
+		t.Fatal("child with another provider inherited root bootstrap connection")
+	}
+	withinProvider := store.applyCreateDefaults(sessionapi.SessionCreateRequest{ParentSessionID: &parent.SessionID, Model: "provider/another"})
+	if withinProvider.InferenceConnection == nil || withinProvider.InferenceConnection.ID != next.ID || len(withinProvider.ModelDefinition) != 0 {
+		t.Fatal("child model override lost the selected connection")
+	}
+}
+
+func TestInvalidInferenceBootstrapFailsClosed(t *testing.T) {
+	for _, value := range []string{"null", "{}", "{", `{"id":"profile","api_key":"real-secret"}`} {
+		t.Run(value, func(t *testing.T) {
+			t.Setenv("TELOS_CLOUD_DEFAULT_CONNECTION_JSON", value)
+			defaults := cloudControllerDefaults()
+			store := newControllerReconciler(sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud), &recordingSubstrate{}, nil, defaults)
+			if _, err := store.Create(sessionapi.SessionCreateRequest{}); err == nil || !strings.Contains(err.Error(), "invalid Cloud inference connection defaults") {
+				t.Fatalf("invalid bootstrap silently fell back: %v", err)
+			}
+		})
+	}
+}
 
 func TestInferenceDefaultsReachChildrenWithoutSchedulingAnExtraCycle(t *testing.T) {
 	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
