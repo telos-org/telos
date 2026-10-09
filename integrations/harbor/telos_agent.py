@@ -57,7 +57,6 @@ def render_harbor_spec(
         "---",
         "version: 0.1.0",
         f"name: {sanitize_spec_name(name)}",
-        "platform: local",
     ]
     if skills:
         frontmatter.append("skills:")

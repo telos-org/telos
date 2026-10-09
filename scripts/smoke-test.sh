@@ -121,7 +121,6 @@ cat > "$FIXTURE_SPEC_PATH" <<'FIXTURE_SPEC'
 ---
 version: 0.1.0
 name: smoke-fixture
-platform: local
 ---
 
 # Goal
@@ -200,13 +199,12 @@ echo "=== 3. Plan contract ==="
 
 PLAN_HUMAN="$(telos_cmd plan "$FIXTURE_SPEC_PATH" 2>&1)"
 check_contains "plan human includes spec name" "$PLAN_HUMAN" "smoke-fixture"
-check_contains "plan human includes platform" "$PLAN_HUMAN" "local"
+check_contains "plan human includes version" "$PLAN_HUMAN" "0.1.0"
 check_not_contains "plan human has no panic" "$PLAN_HUMAN" "panic"
 
 PLAN_JSON="$(telos_cmd plan "$FIXTURE_SPEC_PATH" --json 2>&1)"
 check_json "plan --json parses" "$PLAN_JSON"
 check_contains "plan JSON includes spec name" "$PLAN_JSON" '"name": "smoke-fixture"'
-check_contains "plan JSON includes platform" "$PLAN_JSON" '"platform": "local"'
 
 echo "=== 4. List contract ==="
 
