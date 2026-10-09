@@ -17,7 +17,6 @@ type Manifest struct {
 	DesiredStatus            SessionDesiredStatus       `json:"desired_status,omitempty"`
 	Runtime                  SessionRuntime             `json:"runtime,omitempty"`
 	CreatedAt                string                     `json:"created_at"`
-	Launcher                 string                     `json:"launcher"`
 	ParentSessionID          *string                    `json:"parent_session_id"`
 	SourceSpecPath           *string                    `json:"source_spec_path,omitempty"`
 	SessionSpecPath          *string                    `json:"session_spec_path,omitempty"`
@@ -121,7 +120,6 @@ type InitialManifest struct {
 	SessionID                string
 	SessionKind              SessionKind
 	Runtime                  SessionRuntime
-	Launcher                 string
 	CreatedAt                string
 	ParentSessionID          *string
 	SourceSpecPath           *string
@@ -152,6 +150,12 @@ type InitialManifestSpec struct {
 	IntervalSeconds *int
 }
 
+// ResolvedRuntime reports where the session executes. Manifests written before
+// runtime was recorded fall back to their provenance, then to fallback.
+func (m *Manifest) ResolvedRuntime(fallback SessionRuntime) SessionRuntime {
+	return manifestRuntime(m, fallback)
+}
+
 func WriteInitialManifest(path string, input InitialManifest) error {
 	m := ManifestFromInitial(input)
 	return WriteManifest(path, &m)
@@ -164,11 +168,8 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 	if input.Runtime == "" {
 		input.Runtime = RuntimeLocal
 	}
-	if input.Launcher == "" {
-		input.Launcher = "local"
-	}
 	if input.Provenance == nil {
-		input.Provenance = map[string]any{"mode": runtimeMode(input.Runtime)}
+		input.Provenance = map[string]any{}
 	}
 	specs := make([]ManifestSpec, 0, len(input.Specs))
 	for _, spec := range input.Specs {
@@ -191,7 +192,6 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		DesiredStatus:            DesiredStatusRunning,
 		Runtime:                  input.Runtime,
 		CreatedAt:                input.CreatedAt,
-		Launcher:                 input.Launcher,
 		ParentSessionID:          input.ParentSessionID,
 		SourceSpecPath:           input.SourceSpecPath,
 		SessionSpecPath:          input.SessionSpecPath,
@@ -256,6 +256,15 @@ func WriteManifest(path string, m *Manifest) error {
 }
 
 func MutateManifest(path string, mutate func(*Manifest) error) (*Manifest, error) {
+	return withLockedManifest(path, func(m *Manifest) error {
+		if err := mutate(m); err != nil {
+			return err
+		}
+		return WriteManifest(path, m)
+	})
+}
+
+func withLockedManifest(path string, action func(*Manifest) error) (*Manifest, error) {
 	lockPath := path + ".lock"
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -274,10 +283,7 @@ func MutateManifest(path string, mutate func(*Manifest) error) (*Manifest, error
 	if err != nil {
 		return nil, err
 	}
-	if err := mutate(m); err != nil {
-		return nil, err
-	}
-	if err := WriteManifest(path, m); err != nil {
+	if err := action(m); err != nil {
 		return nil, err
 	}
 	return m, nil

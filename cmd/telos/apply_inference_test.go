@@ -138,6 +138,7 @@ func TestApplyInferenceInvalidFlagsDoNoWork(t *testing.T) {
 		{"--session", "sess_test", "--thinking", ""},
 		{"--session", "sess_test", "--thinking", "HIGH"},
 		{"--session", "bad_id", "--thinking", "high"},
+		{"--session", "local_test", "--thinking", "high"},
 		{"--session", "sess_test", "--thinking", "high", "--force"},
 		{"--session", "sess_test", "--thinking", "high", "--workspace", "."},
 		{"--session", "sess_test", "--thinking", "high", "--max-cost-usd", "1"},
@@ -148,7 +149,7 @@ func TestApplyInferenceInvalidFlagsDoNoWork(t *testing.T) {
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			_, stderr, err := inferenceCLIProcess(t, append([]string{"apply"}, args...)...)
-			if err == nil || !strings.Contains(stderr, "error:") || requests.Load() != 0 {
+			if err == nil || (!strings.Contains(stderr, "error:") && !strings.Contains(stderr, "flag provided but not defined:")) || requests.Load() != 0 {
 				t.Fatalf("invalid command did work: err=%v, requests=%d, stderr=%s", err, requests.Load(), stderr)
 			}
 		})
@@ -235,7 +236,7 @@ func TestApplyInferenceOutcomesAndLostReplies(t *testing.T) {
 	}
 }
 
-func TestApplyLocalInferenceQueuesAndDescribeShowsConfirmation(t *testing.T) {
+func TestDescribeLocalInferenceShowsConfirmation(t *testing.T) {
 	configureInferenceApplyTest(t, "http://unused.invalid")
 	root := t.TempDir()
 	t.Setenv("TELOS_SESSION_DIR", root)
@@ -246,12 +247,11 @@ func TestApplyLocalInferenceQueuesAndDescribeShowsConfirmation(t *testing.T) {
 	if err := sessionapi.WriteManifest(path, manifest); err != nil {
 		t.Fatal(err)
 	}
-	out := captureStdout(t, func() { cmdApply([]string{"--session", id, "--model", "provider/new", "--thinking", "max"}) })
-	want := "Session   local_settings\nModel     provider/old -> provider/new (next turn)\nThinking  medium -> max (next turn)\n"
-	if out != want {
-		t.Fatalf("pending receipt: %s", out)
+	model, thinking := "provider/new", "max"
+	if _, err := store().UpdateInference(id, sessionapi.InferenceUpdateRequest{ApplyAt: "next_turn", RequestID: "existing-change", Model: &model, Thinking: &thinking}); err != nil {
+		t.Fatal(err)
 	}
-	out = captureStdout(t, func() { cmdDescribe([]string{id}) })
+	out := captureStdout(t, func() { cmdDescribe([]string{id}) })
 	if !strings.Contains(out, "Model     provider/old -> provider/new (next turn)") || !strings.Contains(out, "Thinking  medium -> max (next turn)") {
 		t.Fatalf("describe omitted queued settings: %s", out)
 	}
@@ -278,6 +278,7 @@ func TestApplyLocalInferenceQueuesAndDescribeShowsConfirmation(t *testing.T) {
 }
 
 func TestDescribeInferenceCompatibilityAndFreshness(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("8f21c47a91ee", 5) + "0000"
 	for _, tt := range []struct {
 		name       string
 		statusCode int
@@ -296,7 +297,7 @@ func TestDescribeInferenceCompatibilityAndFreshness(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			server := inferenceTestServer(t, map[string]http.HandlerFunc{
 				"GET /api/deployments/sess_test": func(w http.ResponseWriter, r *http.Request) {
-					_ = json.NewEncoder(w).Encode(cloud.SessionRecord{ID: "sess_test", State: "running", AgentModel: "telos-bifrost/telos/default", AgentThinking: "medium"})
+					_ = json.NewEncoder(w).Encode(cloud.SessionRecord{ID: "sess_test", State: "running", Status: "working", PackageDigest: digest, AgentModel: "telos-bifrost/telos/default", AgentThinking: "medium"})
 				},
 				"GET /api/deployments/sess_test/inference": func(w http.ResponseWriter, r *http.Request) {
 					if tt.statusCode != http.StatusOK {
@@ -322,7 +323,13 @@ func TestDescribeInferenceCompatibilityAndFreshness(t *testing.T) {
 				if err := json.Unmarshal([]byte(out), &description); err != nil || description.SessionRecord == nil || description.ID != "sess_test" {
 					t.Fatalf("describe lost existing fields: %v %s", err, out)
 				}
+				if description.State != nil || description.Status != "working" || description.PackageDigest != digest {
+					t.Fatalf("describe lost Cloud JSON status/revision contract: %s", out)
+				}
 				text := captureStdout(t, func() { cmdDescribe(args) })
+				if !strings.Contains(text, "Status    working") || !strings.Contains(text, "Revision  sha256:8f21c47a91ee\n") {
+					t.Fatalf("describe lost Cloud text status/revision contract: %s", text)
+				}
 				switch tt.statusCode {
 				case http.StatusOK:
 					confirmed := sessionapi.InferenceSettings{Model: "telos-bifrost/telos/default", Thinking: "medium"}
@@ -380,11 +387,36 @@ func assertDescribeInferenceSettings(t *testing.T, output string, expected sessi
 	}
 }
 
-func TestApplyLocalInferenceRetryKeepsQueuedRequest(t *testing.T) {
+func TestDescribeQueuedInferenceKeepsConnectionModelName(t *testing.T) {
+	for _, source := range []string{"byok", "subscription"} {
+		t.Run(source, func(t *testing.T) {
+			session := cloud.SessionRecord{
+				ID: "sess_test", AgentModel: "internal/old", AgentThinking: "medium",
+				Inference: &cloud.InferenceSummary{Source: source, ConnectionName: "Work", Model: "old"},
+			}
+			description := describeInference(&inferenceReceipt{
+				Settings: sessionapi.InferenceSettings{Model: "internal/old", Thinking: "medium"},
+				Status:   "pending", RequestedModel: "Work/new", RequestedThinking: "high",
+			})
+			var out bytes.Buffer
+			printCloudSessionDetails(&out, session, "@telos", description)
+			if !strings.Contains(out.String(), "Model     Work/old -> Work/new (next turn)") || !strings.Contains(out.String(), "Thinking  medium -> high (next turn)") {
+				t.Fatalf("describe lost model selection names: %s", out.String())
+			}
+			for _, unwanted := range []string{"internal/", "Connection", "Inference"} {
+				if strings.Contains(out.String(), unwanted) {
+					t.Fatalf("description includes %q: %s", unwanted, out.String())
+				}
+			}
+		})
+	}
+}
+
+func TestApplyLocalInferenceRejectedWithoutChangingManifest(t *testing.T) {
 	configureInferenceApplyTest(t, "http://unused.invalid")
 	root := t.TempDir()
 	t.Setenv("TELOS_SESSION_DIR", root)
-	id := "local_retry"
+	id := "local_settings"
 	dir := filepath.Join(root, id)
 	path := filepath.Join(dir, "session.json")
 	if err := sessionapi.WriteManifest(path, &sessionapi.Manifest{
@@ -393,23 +425,21 @@ func TestApplyLocalInferenceRetryKeepsQueuedRequest(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	receipt, submitErr := applySessionInference(id, "provider/new", "high", "")
-	pending, err := store().Inference(id)
-	if err != nil || pending.Update == nil || pending.Update.Status != "pending" {
-		t.Fatalf("notification failure lost saved change: %+v %v", pending, err)
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if receipt == nil || submitErr != nil || receipt.Status != "pending" {
-		t.Fatalf("queue failed: %+v %v", receipt, submitErr)
+	if receipt, err := applySessionInference(id, "provider/new", "high", ""); err == nil || receipt != nil || !strings.Contains(err.Error(), "telos apply only updates Telos Cloud sessions") {
+		t.Fatalf("local settings apply not rejected: %+v %v", receipt, err)
 	}
-	// Omitting a requested field is different intent; it cannot reuse the ID.
-	if receipt, err := applySessionInference(id, "provider/new", "", ""); err == nil || receipt != nil || !strings.Contains(err.Error(), "already in progress") {
-		t.Fatalf("different flags replaced the pending change: %+v %v", receipt, err)
+	stdout, stderr, err := inferenceCLIProcess(t, "apply", "--session", id, "--thinking", "high")
+	if err == nil || stdout != "" || !strings.Contains(stderr, "telos apply only updates Telos Cloud sessions") {
+		t.Fatalf("local CLI settings apply not rejected: err=%v, stdout=%s, stderr=%s", err, stdout, stderr)
 	}
-	receipt, err = applySessionInference(id, "provider/new", "high", "")
-	if err != nil || receipt == nil || receipt.RequestID != pending.Update.RequestID || receipt.Revision != pending.Revision || receipt.Status != "pending" {
-		t.Fatalf("retry did not preserve saved request: %+v %v", receipt, err)
+	after, err := os.ReadFile(path)
+	if err != nil || !bytes.Equal(before, after) {
+		t.Fatalf("rejected local settings apply changed manifest: %v", err)
 	}
-
 }
 
 func TestSpecApplyIgnoresInferenceEnvironment(t *testing.T) {

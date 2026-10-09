@@ -22,6 +22,7 @@ go_library(
 go_test(
     name = "sessionapi_test",
     srcs = [
+        "revision_reactivation_test.go",
         "server_test.go",
         "types_test.go",
     ],

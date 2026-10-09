@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/telos-org/telos/internal/sessionworker"
 )
 
 // Version is set at build time.
@@ -73,21 +75,24 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "core commands:")
 	fmt.Fprintln(out, "  login              Log in to Telos Cloud via the browser")
 	fmt.Fprintln(out, "  plan SPEC.md       Preview a spec without running it")
-	fmt.Fprintln(out, "  apply [SPEC.md]    Create a session, update its spec, or change model/thinking")
+	fmt.Fprintln(out, "  apply [SPEC.md]    Deploy to Cloud, update its spec, or change model/thinking")
 	fmt.Fprintln(out, "  list               List sessions")
 	fmt.Fprintln(out, "  describe SESSION   Show session details")
 	fmt.Fprintln(out, "  logs SESSION       Show recent activity")
 	fmt.Fprintln(out, "  delete SESSION     Delete a session")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "other commands:")
-	fmt.Fprintln(out, "  run SPEC.md        Run a spec as a bounded task")
+	_, hostedSession := rootSessionContext()
+	if _, err := sessionworker.ResolveTelosd(); hostedSession || err == nil {
+		fmt.Fprintln(out, "  run SPEC.md        Run a spec as a bounded task")
+	}
 	fmt.Fprintln(out, "  push SPEC.md       Publish a versioned spec or skill for reuse")
-	fmt.Fprintln(out, "  pull PACKAGE       Download a package; use `pull skill REF` for a skill")
+	fmt.Fprintln(out, "  pull PACKAGE       Download a spec or skill package")
 	fmt.Fprintln(out, "  get SESSION        Download a session's package")
 	fmt.Fprintln(out, "  logout             Log out and revoke this device's token")
 	fmt.Fprintln(out, "  config             Show or update CLI configuration")
 	fmt.Fprintln(out, "  version            Show version")
-	fmt.Fprintln(out, "  update [VERSION]   Update this CLI to latest or an exact release")
+	fmt.Fprintln(out, "  update [VERSION]   Update installed Telos components to one release")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "global flags:")
 	fmt.Fprintln(out, "  -h, --help         Show help")
