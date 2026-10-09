@@ -14,6 +14,23 @@ import (
 	"github.com/telos-org/telos/internal/sessionworker"
 )
 
+func TestSubmitLocalSessionWithoutRuntimeCreatesNoSession(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	t.Setenv("TELOSD_PATH", filepath.Join(workspace, "missing-telosd"))
+	_, err := SubmitLocalSession(filepath.Join(workspace, "SPEC.md"), LocalRunConfig{Workspace: workspace})
+	if err == nil || !strings.Contains(err.Error(), "sh -s -- --with-telosd") {
+		t.Fatalf("missing runtime error = %v", err)
+	}
+	entries, err := os.ReadDir(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("missing runtime created local artifacts: %v", entries)
+	}
+}
+
 // fakeExecutor for testing local run.
 type fakeExecutor struct {
 	proverResult   game.TurnResult
