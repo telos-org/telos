@@ -115,6 +115,9 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 
 // SubmitLocalSession creates a session and starts its worker in the background.
 func SubmitLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, error) {
+	if _, err := sessionworker.ResolveTelosd(); err != nil {
+		return nil, err
+	}
 	session, err := CreateLocalSession(specPath, cfg)
 	if err != nil {
 		return nil, err
@@ -372,7 +375,6 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 		SessionKind:        sessionapi.KindTask,
 		Runtime:            sessionapi.RuntimeLocal,
 		CreatedAt:          time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		Launcher:           "local",
 		SourceSpecPath:     &sourceSpecPath,
 		SessionSpecPath:    &sessionSpecPath,
 		SpecName:           compiled.Environment.Name,
@@ -387,8 +389,7 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 			AgentTimeoutSec: cfg.AgentTimeoutSec,
 			Thinking:        thinking,
 		},
-		Workspace:  workspace,
-		Provenance: map[string]any{"mode": "local"},
+		Workspace: workspace,
 		Specs: []sessionapi.InitialManifestSpec{{
 			Index:           0,
 			Name:            compiled.Environment.Name,

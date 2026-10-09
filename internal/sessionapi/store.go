@@ -79,7 +79,6 @@ type FileStore struct {
 	PackageRoot  string
 	OnSpecUpdate func(SpecUpdateEvent)
 	runtime      SessionRuntime
-	launcher     string
 	mu           sync.Mutex
 }
 
@@ -88,11 +87,7 @@ func NewFileStore(root string, runtime SessionRuntime) *FileStore {
 	if runtime == "" {
 		runtime = RuntimeLocal
 	}
-	launcher := "local"
-	if runtime == RuntimeCloud {
-		launcher = "telosd"
-	}
-	return &FileStore{Root: root, runtime: runtime, launcher: launcher}
+	return &FileStore{Root: root, runtime: runtime}
 }
 
 func (fs *FileStore) sessionDir(id string) string {
@@ -201,7 +196,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	}
 	prepared.SessionSpecPath = strPtr(sessionSpecPath)
 
-	provenance := map[string]any{"mode": runtimeMode(fs.runtime)}
+	provenance := map[string]any{}
 	if cloudSessionID := strings.TrimSpace(req.CloudSessionID); cloudSessionID != "" {
 		provenance["cloud_session_id"] = cloudSessionID
 	}
@@ -213,7 +208,6 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		SessionKind:      sessionKind,
 		Runtime:          fs.runtime,
 		CreatedAt:        tsNow(),
-		Launcher:         fs.launcher,
 		ParentSessionID:  req.ParentSessionID,
 		SourceSpecPath:   prepared.SourceSpecPath,
 		SessionSpecPath:  prepared.SessionSpecPath,
@@ -1057,7 +1051,6 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		Status:                status,
 		CreatedAt:             strPtr(m.CreatedAt),
 		Runtime:               manifestRuntime(m, fs.runtime),
-		Launcher:              strPtr(m.Launcher),
 		SessionSpecPath:       m.SessionSpecPath,
 		SessionDir:            strPtr(dir),
 		ActiveWorkspacePath:   activeWorkspacePathPtr,
@@ -2378,13 +2371,6 @@ func stringMapValue(m map[string]any, key string) string {
 	}
 	value, _ := m[key].(string)
 	return value
-}
-
-func runtimeMode(runtime SessionRuntime) string {
-	if runtime == RuntimeCloud {
-		return "cloud"
-	}
-	return "local"
 }
 
 func manifestRuntime(m *Manifest, fallback SessionRuntime) SessionRuntime {
