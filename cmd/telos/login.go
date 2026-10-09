@@ -17,16 +17,23 @@ import (
 
 func cmdLogin(args []string) {
 	fs := newCommandFlagSet("login", "telos login [flags]")
-	endpoint := fs.String("endpoint", cloud.DefaultAPIEndpoint, "API endpoint")
+	endpoint := fs.String("endpoint", "", "API endpoint; defaults to $TELOS_API_ENDPOINT, then saved config, then "+cloud.DefaultAPIEndpoint)
 	parseFlags(fs, args)
 	requireArgCount(fs, 0, "no positional arguments")
 
-	ep := cloud.NormalizeEndpoint(*endpoint)
 	cfg, err := config.LoadStoredConfig()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	ep := cfg.APIEndpoint
+	if ep == "" {
+		ep = cloud.DefaultAPIEndpoint
+	}
+	if override := stringOption(fs, "endpoint", *endpoint, config.APIEndpointEnv); override != "" {
+		ep = override
+	}
+	ep = cloud.NormalizeEndpoint(ep)
 	who, loggedIn, err := configuredLogin(ep, cfg)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: could not verify existing login: %v\n", err)

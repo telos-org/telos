@@ -6,6 +6,7 @@ go_library(
         "auth.go",
         "dashboard_doc_open_other.go",
         "dashboard_doc_open_unix.go",
+        "events.go",
         "manifest.go",
         "server.go",
         "store.go",
@@ -14,6 +15,7 @@ go_library(
     importpath = "github.com/telos-org/telos/internal/sessionapi",
     visibility = ["//:__subpackages__"],
     deps = [
+        "//internal/evidence",
         "//internal/spec",
     ],
 )
@@ -21,6 +23,7 @@ go_library(
 go_test(
     name = "sessionapi_test",
     srcs = [
+        "revision_reactivation_test.go",
         "server_test.go",
         "types_test.go",
     ],
@@ -33,8 +36,11 @@ go_test(
 go_test(
     name = "sessionapi_store_test",
     srcs = [
+        "events_test.go",
         "store_dashboard_doc_unix_test.go",
         "store_test.go",
     ],
+    data = ["testdata/visible_events.json"],
     embed = [":sessionapi"],
+    deps = ["//internal/evidence"],
 )

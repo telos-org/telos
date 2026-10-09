@@ -84,7 +84,7 @@ func LoadConfig() (*Config, error) {
 	if err != nil {
 		return nil, err
 	}
-	if value := os.Getenv(APIEndpointEnv); value != "" {
+	if value := strings.TrimSpace(os.Getenv(APIEndpointEnv)); value != "" {
 		cfg.APIEndpoint = value
 	}
 	if value := os.Getenv(AuthTokenEnv); value != "" {

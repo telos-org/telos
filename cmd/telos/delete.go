@@ -12,7 +12,7 @@ import (
 // -- delete -------------------------------------------------------------------
 
 func cmdDelete(args []string) {
-	fs := newCommandFlagSet("delete", "telos delete SESSION [flags]")
+	fs := newCommandFlagSet("delete", "telos delete GOAL [flags]")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -22,7 +22,7 @@ func cmdDelete(args []string) {
 		os.Exit(2)
 	}
 
-	requireArgCount(fs, 1, "one SESSION")
+	requireArgCount(fs, 1, "one GOAL")
 	sessionID := fs.Arg(0)
 	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -46,7 +46,7 @@ func cmdDelete(args []string) {
 	session, err := stopSessionAnywhere(sessionID)
 	if err == nil {
 		if *jsonOut {
-			printJSON(session)
+			printJSON(goalJSON(session))
 			return
 		}
 		printLocalSessionDeleteReceipt(os.Stdout, *session)
@@ -91,7 +91,7 @@ func deleteCloudSessionForContext(
 	}
 	session, err := control.DeleteSession(sessionID)
 	if err != nil {
-		return nil, "", err
+		return nil, "", goalNotFound(err, sessionID, control.ContextName())
 	}
 	return session, control.ContextName(), nil
 }
@@ -126,7 +126,7 @@ func printCloudSessionDeleteReceiptForContext(
 		fmt.Fprintf(out, "delete requested for %s\n\n", session.Name)
 	}
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
-	printSummaryField(out, "Session", session.ID)
+	printSummaryField(out, "Goal", session.ID)
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
 	}
@@ -136,7 +136,7 @@ func printLocalSessionDeleteReceipt(out io.Writer, session sessionapi.Session) {
 	fmt.Fprintf(out, "deleted %s (history preserved)\n\n", deletedSessionName(session))
 	row := displayRow(session)
 	printSummaryField(out, "Status", row.Status)
-	printSummaryField(out, "Session", row.Session)
+	printSummaryField(out, "Goal", row.Session)
 	if session.TotalCostUSD != nil {
 		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	}

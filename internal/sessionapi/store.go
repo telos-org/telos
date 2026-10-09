@@ -32,7 +32,9 @@ var ErrInvalidSession = errors.New("invalid session")
 var ErrConflict = errors.New("conflict")
 
 var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
-var cloudSessionIDRE = regexp.MustCompile(`^sess_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+
+// Cloud names Goals goal_…; Goals created before that keep sess_… IDs.
+var cloudSessionIDRE = regexp.MustCompile(`^(?:goal|sess)_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 func PackagePathForDigest(root string, digest string) (string, error) {
 	digest = strings.TrimSpace(digest)
@@ -79,7 +81,6 @@ type FileStore struct {
 	PackageRoot  string
 	OnSpecUpdate func(SpecUpdateEvent)
 	runtime      SessionRuntime
-	launcher     string
 	mu           sync.Mutex
 }
 
@@ -88,11 +89,7 @@ func NewFileStore(root string, runtime SessionRuntime) *FileStore {
 	if runtime == "" {
 		runtime = RuntimeLocal
 	}
-	launcher := "local"
-	if runtime == RuntimeCloud {
-		launcher = "telosd"
-	}
-	return &FileStore{Root: root, runtime: runtime, launcher: launcher}
+	return &FileStore{Root: root, runtime: runtime}
 }
 
 func (fs *FileStore) sessionDir(id string) string {
@@ -201,7 +198,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 	}
 	prepared.SessionSpecPath = strPtr(sessionSpecPath)
 
-	provenance := map[string]any{"mode": runtimeMode(fs.runtime)}
+	provenance := map[string]any{}
 	if cloudSessionID := strings.TrimSpace(req.CloudSessionID); cloudSessionID != "" {
 		provenance["cloud_session_id"] = cloudSessionID
 	}
@@ -209,21 +206,22 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		provenance["cloud_session_name"] = cloudSessionName
 	}
 	m := ManifestFromInitial(InitialManifest{
-		SessionID:        id,
-		SessionKind:      sessionKind,
-		Runtime:          fs.runtime,
-		CreatedAt:        tsNow(),
-		Launcher:         fs.launcher,
-		ParentSessionID:  req.ParentSessionID,
-		SourceSpecPath:   prepared.SourceSpecPath,
-		SessionSpecPath:  prepared.SessionSpecPath,
-		SpecName:         specName,
-		CurrentRevision:  currentRevision,
-		Config:           buildConfig(req),
-		Provenance:       provenance,
-		PackageDigest:    prepared.PackageDigest,
-		ApplyPackageLock: prepared.ApplyPackageLock,
-		Access:           access,
+		SessionID:                id,
+		SessionKind:              sessionKind,
+		Runtime:                  fs.runtime,
+		CreatedAt:                tsNow(),
+		ParentSessionID:          req.ParentSessionID,
+		SourceSpecPath:           prepared.SourceSpecPath,
+		SessionSpecPath:          prepared.SessionSpecPath,
+		SpecName:                 specName,
+		CurrentRevision:          currentRevision,
+		Config:                   buildConfig(req),
+		InferenceModelDefinition: req.ModelDefinition,
+		InferenceConnection:      req.InferenceConnection,
+		Provenance:               provenance,
+		PackageDigest:            prepared.PackageDigest,
+		ApplyPackageLock:         prepared.ApplyPackageLock,
+		Access:                   access,
 		Specs: []InitialManifestSpec{{
 			Index:           0,
 			Name:            specName,
@@ -559,6 +557,11 @@ func (fs *FileStore) createRequestForSpecUpdate(req SessionSpecUpdateRequest, ki
 	if !hasPackage && !hasMarkdown {
 		return SessionCreateRequest{}, fmt.Errorf("spec_markdown or package_digest is required: %w", ErrInvalidSession)
 	}
+	if req.Inference != nil {
+		if err := req.Inference.Validate(); err != nil {
+			return SessionCreateRequest{}, err
+		}
+	}
 	if packagePath == "" && packageDigest != "" {
 		resolved, err := fs.packagePathForDigest(packageDigest)
 		if err != nil {
@@ -566,26 +569,24 @@ func (fs *FileStore) createRequestForSpecUpdate(req SessionSpecUpdateRequest, ki
 		}
 		packagePath = resolved
 	}
-	if packagePath != "" {
-		return SessionCreateRequest{
-			PackagePath:     packagePath,
-			PackageDigest:   packageDigest,
-			SessionKind:     kind,
-			Model:           req.Model,
-			Thinking:        req.Thinking,
-			MaxCostUSD:      req.MaxCostUSD,
-			AgentTimeoutSec: req.AgentTimeoutSec,
-		}, nil
-	}
-	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
-	return SessionCreateRequest{
-		SpecMarkdown:    &markdown,
+	createReq := SessionCreateRequest{
 		SessionKind:     kind,
 		Model:           req.Model,
 		Thinking:        req.Thinking,
 		MaxCostUSD:      req.MaxCostUSD,
 		AgentTimeoutSec: req.AgentTimeoutSec,
-	}, nil
+	}
+	if in := req.Inference; in != nil {
+		createReq.Model, createReq.Thinking, createReq.InferenceGeneration = in.Model, in.Thinking, in.Generation
+		createReq.ModelDefinition, createReq.InferenceConnection = in.ModelDefinition, in.Connection
+	}
+	if packagePath != "" {
+		createReq.PackagePath, createReq.PackageDigest = packagePath, packageDigest
+		return createReq, nil
+	}
+	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
+	createReq.SpecMarkdown = &markdown
+	return createReq, nil
 }
 
 func (fs *FileStore) packagePathForDigest(digest string) (string, error) {
@@ -621,6 +622,7 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 	var previousRevision string
 	var previousSpecPath string
 	var versionEntry map[string]any
+	var revisionAttempted bool
 	m, err = MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
 		if m.ParentSessionID != nil && *m.ParentSessionID != "" {
 			return fmt.Errorf("child sessions do not have mutable specs: %w", ErrInvalidSession)
@@ -636,6 +638,13 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		}
 		if prepared.Name != m.SpecName {
 			return fmt.Errorf("root session spec name is immutable: %w", ErrInvalidSession)
+		}
+		if err := restoreCommittedRevisionAliases(fs.sessionDir(id), m); err != nil {
+			return err
+		}
+		if in := req.Inference; in != nil && in.Generation > m.Config.InferenceGeneration {
+			m.Config.InferenceGeneration, m.Config.Model, m.Config.Thinking = in.Generation, in.Model, in.Thinking
+			m.InferenceModelDefinition, m.InferenceConnection = in.ModelDefinition, in.Connection
 		}
 		previousVersion = ptrOr(m.CurrentSpecVersion, 1)
 		previousPackageDigest = strValue(m.PackageDigest)
@@ -662,11 +671,13 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 			return err
 		}
 		stabilizeLatestSpecVersion(m.SpecVersions, *m.SessionSpecPath, previousSpecPath, previousRevision)
+		revisionAttempted = true
 		paths, metadata, err := fs.installRevision(fs.sessionDir(id), prepared.Name, prepared, revisionInstallOptions{
-			Sequence:         currentVersion,
-			PreviousVersion:  previousRevision,
-			PreviousSpecPath: previousSpecPath,
-			ActiveSpecPath:   *m.SessionSpecPath,
+			Sequence:          currentVersion,
+			PreviousVersion:   previousRevision,
+			PreviousSpecPath:  previousSpecPath,
+			ActiveSpecPath:    *m.SessionSpecPath,
+			CommittedVersions: m.SpecVersions,
 		})
 		if err != nil {
 			return err
@@ -698,6 +709,12 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		return nil
 	})
 	if err != nil {
+		if revisionAttempted {
+			_, repairErr := withLockedManifest(fs.manifestPath(id), func(latest *Manifest) error {
+				return restoreCommittedRevisionAliases(fs.sessionDir(id), latest)
+			})
+			err = errors.Join(err, repairErr)
+		}
 		return nil, false, err
 	}
 	if !changed {
@@ -727,7 +744,16 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 func (fs *FileStore) List() ([]Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
+	return fs.listSessions(true)
+}
 
+// ListMetadata supports identity lookups without reading evidence or waiting
+// for usage-summary scans. Manifests are replaced atomically by their writers.
+func (fs *FileStore) ListMetadata() ([]Session, error) {
+	return fs.listSessions(false)
+}
+
+func (fs *FileStore) listSessions(includeEvidence bool) ([]Session, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
 		return []Session{}, nil
@@ -745,7 +771,7 @@ func (fs *FileStore) List() ([]Session, error) {
 		if err != nil {
 			continue // skip unreadable entries
 		}
-		s, err := fs.deriveSession(entry.Name(), m)
+		s, err := fs.deriveSessionWithEvidence(entry.Name(), m, includeEvidence)
 		if err != nil {
 			continue
 		}
@@ -1013,11 +1039,18 @@ func specUpdateEvent(id string, m *Manifest, event SpecUpdateEvent) SpecUpdateEv
 // --------- Derivation (manifest -> Session) ------------------------------------------------------------------------------------------------------------------------
 
 func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
+	return fs.deriveSessionWithEvidence(id, m, true)
+}
+
+func (fs *FileStore) deriveSessionWithEvidence(id string, m *Manifest, includeEvidence bool) (*Session, error) {
 	dir := fs.sessionDir(id)
 
 	specs := make([]SessionSpec, len(m.Specs))
 	for i, ms := range m.Specs {
-		summary, _ := readEvidenceSummary(ms.EvidencePath)
+		var summary *evidenceSummary
+		if includeEvidence {
+			summary, _ = readEvidenceSummary(ms.EvidencePath)
+		}
 		specs[i] = deriveSpec(ms, summary)
 	}
 
@@ -1045,7 +1078,6 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		Status:                status,
 		CreatedAt:             strPtr(m.CreatedAt),
 		Runtime:               manifestRuntime(m, fs.runtime),
-		Launcher:              strPtr(m.Launcher),
 		SessionSpecPath:       m.SessionSpecPath,
 		SessionDir:            strPtr(dir),
 		ActiveWorkspacePath:   activeWorkspacePathPtr,
@@ -1057,6 +1089,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		Epochs:                epochs,
 		CurrentSpecVersion:    m.CurrentSpecVersion,
 		SpecVersions:          cloneSpecVersions(m.SpecVersions),
+		VisibleEvents:         true,
 		Reconciliation:        deriveReconciliation(m),
 	}
 
@@ -1351,38 +1384,46 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 			continue
 		}
 
-		eventName, _ := raw["event"].(string)
-		if eventName == "" {
+		ev, ok := projectEvidenceEvent(raw, spec)
+		if !ok {
 			continue
-		}
-
-		dataField, _ := raw["data"].(map[string]any)
-		timestamp, _ := raw["ts"].(string)
-		role, _ := raw["role"].(string)
-
-		ev := SessionEvent{
-			Schema:           stringPtrFromAny(raw["schema"]),
-			EventID:          stringPtrFromAny(raw["event_id"]),
-			Event:            eventName,
-			EventSeq:         eventSeq(raw),
-			EpochID:          numberAsInt(raw["epoch_id"]),
-			Round:            numberAsInt(raw["round"]),
-			Role:             strPtr(role),
-			Timestamp:        strPtr(timestamp),
-			SourceTimestamp:  stringPtrFromAny(raw["source_ts"]),
-			ReceivedAt:       stringPtrFromAny(raw["received_at"]),
-			SessionStartedAt: stringPtrFromAny(raw["session_started_at"]),
-			SessionID:        stringPtrFromAny(raw["session_id"]),
-			Source:           stringPtrFromAny(raw["source"]),
-			System:           stringPtrFromAny(raw["system"]),
-			SpecIndex:        spec.Index,
-			SpecName:         strPtr(spec.Name),
-			SpecDirName:      strPtr(spec.DirName),
-			Data:             dataField,
 		}
 		events = append(events, ev)
 	}
 	return events, nil
+}
+
+func projectEvidenceEvent(raw map[string]any, spec *ManifestSpec) (SessionEvent, bool) {
+	eventName, _ := raw["event"].(string)
+	if eventName == "" {
+		return SessionEvent{}, false
+	}
+
+	dataField, _ := raw["data"].(map[string]any)
+	timestamp, _ := raw["ts"].(string)
+	role, _ := raw["role"].(string)
+
+	ev := SessionEvent{
+		Schema:           stringPtrFromAny(raw["schema"]),
+		EventID:          stringPtrFromAny(raw["event_id"]),
+		Event:            eventName,
+		EventSeq:         eventSeq(raw),
+		EpochID:          numberAsInt(raw["epoch_id"]),
+		Round:            numberAsInt(raw["round"]),
+		Role:             strPtr(role),
+		Timestamp:        strPtr(timestamp),
+		SourceTimestamp:  stringPtrFromAny(raw["source_ts"]),
+		ReceivedAt:       stringPtrFromAny(raw["received_at"]),
+		SessionStartedAt: stringPtrFromAny(raw["session_started_at"]),
+		SessionID:        stringPtrFromAny(raw["session_id"]),
+		Source:           stringPtrFromAny(raw["source"]),
+		System:           stringPtrFromAny(raw["system"]),
+		SpecIndex:        spec.Index,
+		SpecName:         strPtr(spec.Name),
+		SpecDirName:      strPtr(spec.DirName),
+		Data:             dataField,
+	}
+	return ev, true
 }
 
 // eventSeq lifts the evidence writer's sequence number; nil for lines that
@@ -1677,10 +1718,11 @@ func specSHA256(data []byte) string {
 }
 
 type revisionInstallOptions struct {
-	Sequence         int
-	PreviousVersion  string
-	PreviousSpecPath string
-	ActiveSpecPath   string
+	Sequence          int
+	PreviousVersion   string
+	PreviousSpecPath  string
+	ActiveSpecPath    string
+	CommittedVersions []map[string]any
 }
 
 type revisionPaths struct {
@@ -1724,7 +1766,7 @@ func (fs *FileStore) ensureStablePreviousSpecPath(sessionDir string, specName st
 		version = specVersionFromMarkdown(data)
 	}
 	if spec.IsSemver(version) {
-		paths := revisionLayout(sessionDir, specName, version, activeSpecPath)
+		paths := revisionLayout(sessionDir, specName, version, filepath.Join(sessionDir, "revisions", version), activeSpecPath)
 		if err := fs.snapshotLegacyRevision(sessionDir, paths, sequence, data, packageDigest); err != nil {
 			return "", "", err
 		}
@@ -1866,37 +1908,35 @@ func (fs *FileStore) installRevision(sessionDir string, specName string, prepare
 	if len(prepared.PackageData) == 0 {
 		return revisionPaths{}, revisionMetadata{}, fmt.Errorf("apply package data is required for revision %s: %w", version, ErrInvalidSession)
 	}
-	paths := revisionLayout(sessionDir, specName, version, opts.ActiveSpecPath)
+	revisionDir := filepath.Join(sessionDir, "revisions", version)
+	specHash := specSHA256(prepared.SpecData)
+	packageDigest := strValue(prepared.PackageDigest)
+	if existing, ok, err := readRevisionMetadata(revisionDir); err != nil {
+		return revisionPaths{}, revisionMetadata{}, err
+	} else if ok {
+		if existing.SpecSHA256 != specHash || existing.PackageDigest != packageDigest {
+			return revisionPaths{}, revisionMetadata{}, fmt.Errorf("revision %s already exists with different content: %w", version, ErrConflict)
+		}
+		// Preserve the old package and transition while recording a new activation.
+		revisionDir = filepath.Join(sessionDir, "revisions", "activations", fmt.Sprint(opts.Sequence))
+		if err := removeUncommittedActivation(revisionDir, opts.CommittedVersions); err != nil {
+			return revisionPaths{}, revisionMetadata{}, err
+		}
+	}
+	paths := revisionLayout(sessionDir, specName, version, revisionDir, opts.ActiveSpecPath)
 	metadata := revisionMetadata{
 		Version:         version,
 		Sequence:        opts.Sequence,
 		PreviousVersion: strings.TrimSpace(opts.PreviousVersion),
-		SpecSHA256:      specSHA256(prepared.SpecData),
-		PackageDigest:   strValue(prepared.PackageDigest),
+		SpecSHA256:      specHash,
+		PackageDigest:   packageDigest,
 		SpecPath:        paths.SpecPath,
 		PackagePath:     paths.PackagePath,
 		PackageSpecPath: paths.PackageSpecPath,
 		ActiveSpecPath:  paths.ActiveSpecPath,
 		CreatedAt:       tsNow(),
 	}
-	if existing, ok, err := readRevisionMetadata(paths.RevisionDir); err != nil {
-		return revisionPaths{}, revisionMetadata{}, err
-	} else if ok {
-		if existing.SpecSHA256 != metadata.SpecSHA256 || existing.PackageDigest != metadata.PackageDigest {
-			return revisionPaths{}, revisionMetadata{}, fmt.Errorf("revision %s already exists with different content: %w", version, ErrConflict)
-		}
-		return revisionPaths{}, revisionMetadata{}, fmt.Errorf("revision %s already exists; rollback/reapply is not supported by PUT: %w", version, ErrConflict)
-	}
-
-	if err := materializeRevision(paths, prepared); err != nil {
-		return revisionPaths{}, revisionMetadata{}, err
-	}
-	if opts.PreviousSpecPath != "" {
-		if err := writeSpecDiff(opts.PreviousSpecPath, paths.SpecPath, paths.DiffPath); err == nil {
-			metadata.DiffPath = paths.DiffPath
-		}
-	}
-	if err := writeRevisionMetadata(filepath.Join(paths.RevisionDir, "revision.json"), metadata); err != nil {
+	if err := materializeRevision(paths, prepared, opts.PreviousSpecPath, &metadata); err != nil {
 		return revisionPaths{}, revisionMetadata{}, err
 	}
 	if err := advanceRevisionAliases(sessionDir, paths); err != nil {
@@ -1905,8 +1945,7 @@ func (fs *FileStore) installRevision(sessionDir string, specName string, prepare
 	return paths, metadata, nil
 }
 
-func revisionLayout(sessionDir string, specName string, version string, activeSpecPath string) revisionPaths {
-	revisionDir := filepath.Join(sessionDir, "revisions", version)
+func revisionLayout(sessionDir string, specName string, version string, revisionDir string, activeSpecPath string) revisionPaths {
 	if activeSpecPath == "" {
 		activeSpecPath = filepath.Join(sessionDir, "specs", specName, "spec.md")
 	}
@@ -1940,7 +1979,26 @@ func readRevisionMetadata(revisionDir string) (revisionMetadata, bool, error) {
 	return metadata, true, nil
 }
 
-func materializeRevision(paths revisionPaths, prepared preparedRequestSpec) error {
+func removeUncommittedActivation(dir string, versions []map[string]any) error {
+	for _, entry := range versions {
+		for _, key := range []string{"spec_path", "package_path", "package_spec_path", "diff_path"} {
+			path := stringMapValue(entry, key)
+			if path == "" {
+				continue
+			}
+			rel, err := filepath.Rel(dir, path)
+			if err != nil {
+				return err
+			}
+			if rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				return fmt.Errorf("activation %s is referenced by committed history: %w", dir, ErrConflict)
+			}
+		}
+	}
+	return os.RemoveAll(dir)
+}
+
+func materializeRevision(paths revisionPaths, prepared preparedRequestSpec, previousSpecPath string, metadata *revisionMetadata) error {
 	parent := filepath.Dir(paths.RevisionDir)
 	if err := os.MkdirAll(parent, 0o755); err != nil {
 		return fmt.Errorf("create revisions dir: %w", err)
@@ -1960,6 +2018,14 @@ func materializeRevision(paths revisionPaths, prepared preparedRequestSpec) erro
 	}
 	if _, err := spec.ExtractApplyPackage(prepared.PackageData, filepath.Join(tmp, "package")); err != nil {
 		return fmt.Errorf("extract revision package: %w", err)
+	}
+	if previousSpecPath != "" {
+		if err := writeSpecDiff(previousSpecPath, paths.SpecPath, prepared.SpecData, filepath.Join(tmp, "spec.diff")); err == nil {
+			metadata.DiffPath = paths.DiffPath
+		}
+	}
+	if err := writeRevisionMetadata(filepath.Join(tmp, "revision.json"), *metadata); err != nil {
+		return err
 	}
 	if err := os.Rename(tmp, paths.RevisionDir); err != nil {
 		if errors.Is(err, os.ErrExist) {
@@ -1981,7 +2047,11 @@ func writeRevisionMetadata(path string, metadata revisionMetadata) error {
 }
 
 func advanceRevisionAliases(sessionDir string, paths revisionPaths) error {
-	if err := replaceSymlink(filepath.Join(sessionDir, "revisions", "current"), paths.Version); err != nil {
+	revisionTarget, err := filepath.Rel(filepath.Join(sessionDir, "revisions"), paths.RevisionDir)
+	if err != nil {
+		return err
+	}
+	if err := replaceSymlink(filepath.Join(sessionDir, "revisions", "current"), revisionTarget); err != nil {
 		return fmt.Errorf("update current revision link: %w", err)
 	}
 	specTarget, err := filepath.Rel(filepath.Dir(paths.ActiveSpecPath), filepath.Join(sessionDir, "revisions", "current", "SPEC.md"))
@@ -1997,7 +2067,27 @@ func advanceRevisionAliases(sessionDir string, paths revisionPaths) error {
 	return nil
 }
 
+func restoreCommittedRevisionAliases(sessionDir string, m *Manifest) error {
+	if len(m.SpecVersions) == 0 {
+		return nil
+	}
+	latest := m.SpecVersions[len(m.SpecVersions)-1]
+	specPath := stringMapValue(latest, "spec_path")
+	packagePath := stringMapValue(latest, "package_path")
+	if specPath == "" || packagePath == "" || strValue(m.SessionSpecPath) == "" {
+		return nil
+	}
+	paths := revisionLayout(sessionDir, m.SpecName, strValue(m.CurrentRevision), filepath.Dir(specPath), *m.SessionSpecPath)
+	if paths.SpecPath != specPath || paths.PackagePath != packagePath {
+		return fmt.Errorf("committed revision paths are inconsistent: %w", ErrConflict)
+	}
+	return advanceRevisionAliases(sessionDir, paths)
+}
+
 func replaceSymlink(path string, target string) error {
+	if current, err := os.Readlink(path); err == nil && current == target {
+		return nil
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -2017,12 +2107,8 @@ func replaceSymlink(path string, target string) error {
 	return nil
 }
 
-func writeSpecDiff(previousPath string, currentPath string, diffPath string) error {
+func writeSpecDiff(previousPath string, currentPath string, current []byte, diffPath string) error {
 	previous, err := os.ReadFile(previousPath)
-	if err != nil {
-		return err
-	}
-	current, err := os.ReadFile(currentPath)
 	if err != nil {
 		return err
 	}
@@ -2190,8 +2276,9 @@ func materializedSpecDir(data []byte) string {
 
 func buildConfig(req SessionCreateRequest) SessionConfig {
 	cfg := SessionConfig{
-		Model:    req.Model,
-		Thinking: req.Thinking,
+		Model:               req.Model,
+		Thinking:            req.Thinking,
+		InferenceGeneration: req.InferenceGeneration,
 	}
 	if req.Until != nil {
 		cfg.Until = *req.Until
@@ -2321,13 +2408,6 @@ func stringMapValue(m map[string]any, key string) string {
 	}
 	value, _ := m[key].(string)
 	return value
-}
-
-func runtimeMode(runtime SessionRuntime) string {
-	if runtime == RuntimeCloud {
-		return "cloud"
-	}
-	return "local"
 }
 
 func manifestRuntime(m *Manifest, fallback SessionRuntime) SessionRuntime {

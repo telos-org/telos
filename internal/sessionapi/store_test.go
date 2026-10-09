@@ -1,6 +1,7 @@
 package sessionapi
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -325,4 +326,53 @@ func createCloudStoreSession(t *testing.T) (*FileStore, *Session) {
 		t.Fatal(err)
 	}
 	return store, session
+}
+
+func TestNewManifestsRecordRuntimeOnce(t *testing.T) {
+	for _, runtime := range []SessionRuntime{RuntimeLocal, RuntimeCloud} {
+		store := NewFileStore(t.TempDir(), runtime)
+		markdown := "---\nversion: 0.1.0\nname: once\n---\n# Once\n"
+		session, err := store.Create(SessionCreateRequest{SpecMarkdown: &markdown})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(*session.SessionDir, "session.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var raw map[string]any
+		if err := json.Unmarshal(data, &raw); err != nil {
+			t.Fatal(err)
+		}
+		if raw["runtime"] != string(runtime) {
+			t.Fatalf("runtime = %v, want %s", raw["runtime"], runtime)
+		}
+		if _, ok := raw["launcher"]; ok {
+			t.Fatalf("%s manifest records launcher: %s", runtime, data)
+		}
+		if provenance, _ := raw["provenance"].(map[string]any); provenance == nil || provenance["mode"] != nil {
+			t.Fatalf("%s provenance = %v, want an object without mode", runtime, raw["provenance"])
+		}
+	}
+}
+
+func TestManifestRuntimeReadsLegacyProvenanceMode(t *testing.T) {
+	legacy := &Manifest{Provenance: map[string]any{"mode": "cloud"}}
+	if got := manifestRuntime(legacy, RuntimeLocal); got != RuntimeCloud {
+		t.Fatalf("runtime = %s, want %s", got, RuntimeCloud)
+	}
+}
+
+func TestCloudSessionIDsAcceptGoalAndSessionPrefixes(t *testing.T) {
+	for id, want := range map[string]bool{
+		"goal_c7d2f0a4e8":  true,
+		"sess_c7d2f0a4e8":  true,
+		"local_c7d2f0a4e8": false,
+		"goal_":            false,
+		"c7d2f0a4e8":       false,
+	} {
+		if got := cloudSessionIDRE.MatchString(id); got != want {
+			t.Errorf("cloudSessionIDRE.MatchString(%q) = %v, want %v", id, got, want)
+		}
+	}
 }

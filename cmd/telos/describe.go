@@ -13,7 +13,7 @@ import (
 // -- describe -----------------------------------------------------------------
 
 func cmdDescribe(args []string) {
-	fs := newCommandFlagSet("describe", "telos describe SESSION [flags]")
+	fs := newCommandFlagSet("describe", "telos describe GOAL [flags]")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -23,7 +23,7 @@ func cmdDescribe(args []string) {
 		os.Exit(2)
 	}
 
-	requireArgCount(fs, 1, "one SESSION")
+	requireArgCount(fs, 1, "one GOAL")
 	sessionID := fs.Arg(0)
 	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -35,18 +35,20 @@ func cmdDescribe(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
-			return
-		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		describeCloudGoal(
+			cloudSession,
+			contextName,
+			contextOverride,
+			followUpContextName(contextOverride, contextName),
+			*jsonOut,
+		)
 		return
 	}
 
 	session, err := getSessionFromAnywhere(sessionID)
 	if err == nil {
 		if *jsonOut {
-			printJSON(session)
+			printJSON(goalJSON(session))
 			return
 		}
 
@@ -60,11 +62,7 @@ func cmdDescribe(args []string) {
 		os.Exit(1)
 	}
 	if found {
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
-			return
-		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		describeCloudGoal(cloudSession, contextName, "", "", *jsonOut)
 		return
 	}
 
@@ -72,16 +70,59 @@ func cmdDescribe(args []string) {
 	os.Exit(1)
 }
 
+func describeCloudGoal(
+	session *cloud.SessionRecord,
+	contextName string,
+	contextOverride string,
+	followUp string,
+	jsonOut bool,
+) {
+	var control *cloud.Client
+	if session.Billing == nil || billedByProvider(*session) {
+		control, _ = cloud.ControlClientForContext(contextOverride)
+	}
+	if control != nil && session.Billing == nil {
+		if withBilling, err := control.GetSessionWithBilling(session.ID); err == nil {
+			session = withBilling
+		}
+	}
+	cost := goalCosts(control, []cloud.SessionRecord{*session})[0]
+	if jsonOut {
+		printCloudSessionJSON(session, contextName, cost)
+		return
+	}
+	printCloudSessionDescriptionForContext(os.Stdout, *session, contextName, cost, followUp)
+}
+
+// cloudSessionJSON is a Cloud Goal as describe and list print it. Callers
+// read status and status_reason; the raw lifecycle state is left out.
+type cloudSessionJSON struct {
+	*cloud.SessionRecord
+	// State and Billing stay nil so they hide the record's raw state and
+	// billing, which cost presents.
+	State   *string   `json:"state,omitempty"`
+	Billing *struct{} `json:"billing,omitempty"`
+	Status  string    `json:"status,omitempty"`
+	Cost    *goalCost `json:"cost,omitempty"`
+}
+
+func newCloudSessionJSON(session *cloud.SessionRecord) cloudSessionJSON {
+	return cloudSessionJSON{SessionRecord: session, Status: cloudSessionDisplayStatus(*session)}
+}
+
 func printCloudSessionJSON(
 	session *cloud.SessionRecord,
 	contextName string,
+	cost *goalCost,
 ) {
+	record := newCloudSessionJSON(session)
+	record.Cost = cost
 	printJSON(struct {
-		*cloud.SessionRecord
+		cloudSessionJSON
 		Context string `json:"context,omitempty"`
 	}{
-		SessionRecord: session,
-		Context:       contextName,
+		cloudSessionJSON: record,
+		Context:          contextName,
 	})
 }
 
@@ -100,24 +141,28 @@ func getCloudSessionForContext(
 	}
 	session, err := control.GetSession(sessionID)
 	if err != nil {
-		return nil, "", err
+		return nil, "", goalNotFound(err, sessionID, control.ContextName())
 	}
 	return session, control.ContextName(), nil
 }
 
 func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
-	printCloudSessionDescriptionForContext(out, session, "")
+	printCloudSessionDescriptionForContext(out, session, "", nil, "")
 }
 
+// printCloudSessionDescriptionForContext names followUp in suggested commands
+// when the saved context would select another one.
 func printCloudSessionDescriptionForContext(
 	out io.Writer,
 	session cloud.SessionRecord,
 	contextName string,
+	cost *goalCost,
+	followUp string,
 ) {
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
-	printSummaryField(out, "Session", session.ID)
-	printSummaryField(out, "Revision", session.PackageDigest)
+	printSummaryField(out, "Goal", session.ID)
+	printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
 	printCloudInferenceSummary(out, session)
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
@@ -125,9 +170,26 @@ func printCloudSessionDescriptionForContext(
 	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
 		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
 	}
+	printGoalCost(out, cost)
 	if reason := cloudSessionReason(session); reason != "" {
 		printSummaryField(out, "Reason", reason)
 	}
+	if cloudSessionDisplayStatus(session) == "needs_attention" {
+		printSummaryField(out, "Next", needsAttentionNextStep(session.ID, followUp))
+	}
+}
+
+// needsAttentionNextStep tells the owner of a Goal that needs attention how
+// to move it forward.
+func needsAttentionNextStep(goalID, followUp string) string {
+	contextFlag := ""
+	if followUp != "" {
+		contextFlag = " --context " + followUp
+	}
+	return fmt.Sprintf(
+		"Fix the spec, then: telos apply SPEC.md --goal %s%s, or telos delete %s%s",
+		goalID, contextFlag, goalID, contextFlag,
+	)
 }
 
 func cloudSessionDisplayStatus(session cloud.SessionRecord) string {
@@ -135,6 +197,16 @@ func cloudSessionDisplayStatus(session cloud.SessionRecord) string {
 		return session.Status
 	}
 	return session.State
+}
+
+// shortRevision abbreviates a sha256 package digest to its first 12 hex
+// digits for human output. --json keeps the full digest.
+func shortRevision(digest string) string {
+	hex, ok := strings.CutPrefix(digest, "sha256:")
+	if !ok || len(hex) <= 12 {
+		return digest
+	}
+	return "sha256:" + hex[:12]
 }
 
 func cloudSessionReason(session cloud.SessionRecord) string {
@@ -149,12 +221,43 @@ func cloudSessionReason(session cloud.SessionRecord) string {
 	}
 }
 
+// cloudSessionModel names a Goal's model the way --model selects it:
+// telos/<tier> for managed inference, <connection-name>/<model-id> for a
+// saved API key or subscription. Viewers who cannot see the connection name
+// get the model ID and its source instead.
+func cloudSessionModel(session cloud.SessionRecord) string {
+	model := session.AgentModel
+	summary := session.Inference
+	if summary == nil {
+		return model
+	}
+	if summary.Model != "" {
+		model = summary.Model
+	}
+	if summary.Source == "managed" {
+		if model == "" && summary.Tier != "" {
+			model = "telos/" + summary.Tier
+		}
+		if model == "telos-bifrost/telos/default" || model == "telos-bifrost/telos/max" {
+			model = strings.TrimPrefix(model, "telos-bifrost/")
+		}
+		return model
+	}
+	if model == "" {
+		return ""
+	}
+	if summary.ConnectionName != "" {
+		return summary.ConnectionName + "/" + model
+	}
+	return model + " (" + inferenceSourceLabel(summary.Source) + ")"
+}
+
 func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	row := displayRow(session)
 	printSummaryField(out, "Name", row.Name)
 	printSummaryField(out, "Target", row.Target)
 	printSummaryField(out, "Status", row.Status)
-	printSummaryField(out, "Session", row.Session)
+	printSummaryField(out, "Goal", row.Session)
 	if session.TotalCostUSD != nil {
 		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	}
@@ -173,29 +276,11 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 }
 
 func printCloudInferenceSummary(out io.Writer, session cloud.SessionRecord) {
-	model := session.AgentModel
-	if summary := session.Inference; summary != nil {
-		printSummaryField(out, "Inference", inferenceSourceLabel(summary.Source))
-		if summary.ConnectionName != "" {
-			printSummaryField(out, "Connection", summary.ConnectionName)
-		}
-		if summary.Model != "" {
-			model = summary.Model
-		}
-		if summary.Source == "managed" {
-			if model == "" && summary.Tier != "" {
-				model = "telos/" + summary.Tier
-			}
-			if model == "telos-bifrost/telos/default" || model == "telos-bifrost/telos/max" {
-				model = strings.TrimPrefix(model, "telos-bifrost/")
-			}
-		}
-	}
-	if model != "" {
+	if model := cloudSessionModel(session); model != "" {
 		printSummaryField(out, "Model", model)
 	}
 	if session.AgentThinking != "" {
-		printSummaryField(out, "Thinking", session.AgentThinking+" (requested)")
+		printSummaryField(out, "Thinking", session.AgentThinking)
 	}
 }
 

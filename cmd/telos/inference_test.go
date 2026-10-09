@@ -15,6 +15,7 @@ import (
 
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func TestResolveCloudInference(t *testing.T) {
@@ -118,6 +119,8 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 					})
 				case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3/bundle":
 					_, _ = w.Write(pkg.Bytes)
+				case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+					_, _ = w.Write([]byte(`{"deployments":[]}`))
 				case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
 					_, _ = w.Write([]byte(`{"errors":{},"connections":[{"source":"subscription","id":"conn_rohan","name":"openai-rohan","provider":"chatgpt-codex","status":"connected"},{"source":"byok","status":"saved","id":"key_work","name":"Work Anthropic","provider":"anthropic"},{"source":"byok","status":"saved","id":"key_router","name":"Work/Router","provider":"openrouter"}]}`))
 				case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
@@ -180,6 +183,9 @@ func inferenceTestServer(t *testing.T, overrides map[string]http.HandlerFunc) *h
 		"GET /api/account/bootstrap":     `{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","handle":"person","role":"owner"},{"id":"org_telos","handle":"telos","role":"owner"}]}`,
 		"GET /api/inference/connections": `{"errors":{},"connections":[{"source":"subscription","id":"sub_work","name":"My ChatGPT","provider":"chatgpt-codex","status":"connected"},{"source":"byok","status":"saved","id":"key_work","name":"Work Anthropic","provider":"anthropic","api_key":"never-print-this-key"},{"source":"byok","status":"saved","id":"key_router","name":"Work/Router","provider":"openrouter"}]}`,
 		"GET /api/inference/preference":  `{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`,
+		"GET /api/deployments":           `{"deployments":[]}`,
+		"GET /api/secrets":               `{"secrets":[]}`,
+		"GET /api/billing/usage":         `{"lifetime_balance_micro_usd":50000000,"work_allowed":true}`,
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -224,7 +230,7 @@ func TestCloudInferenceRejectsAmbiguityAndPreservesModelSlashes(t *testing.T) {
 		{ID: "slash", Name: "Work/Router", Source: "byok"},
 	}
 	for _, model := range []string{"Work/model", "Work/Router/vendor/model"} {
-		if _, _, err := selectInferenceConnection(connections, model); err == nil || !strings.Contains(err.Error(), "ambiguous") {
+		if _, _, err := selectInferenceConnection(connections, model); err == nil || !strings.Contains(err.Error(), "matches more than one") {
 			t.Fatalf("selector %q: %v", model, err)
 		}
 	}
@@ -280,12 +286,59 @@ func TestInferenceCLIProcess(t *testing.T) {
 	switch args[0] {
 	case "apply":
 		cmdApply(args[1:])
+	case "plan":
+		cmdPlan(args[1:])
+	case "run":
+		cmdRun(args[1:])
 	case "config":
 		cmdConfig(args[1:])
+	case "describe":
+		cmdDescribe(args[1:])
+	case "logs":
+		cmdLogs(args[1:])
 	default:
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+func TestNestedRunInheritsParentInferenceUnlessFlagged(t *testing.T) {
+	requests := make(chan sessionapi.SessionCreateRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req sessionapi.SessionCreateRequest
+		if r.Method != http.MethodPost || r.URL.Path != "/api/sessions" || json.NewDecoder(r.Body).Decode(&req) != nil {
+			http.NotFound(w, r)
+			return
+		}
+		requests <- req
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"session_id":"sess_child"}`))
+	}))
+	defer server.Close()
+	// The worker's environment can hold the model it started with.
+	for name, value := range map[string]string{"TELOS_RUNTIME": "cloud", "TELOS_API_TOKEN": "scoped-token", "TELOS_SESSION_ID": "sess_parent", "TELOS_API_ENDPOINT": server.URL, "TELOS_MODEL": "provider/stale", "TELOS_THINKING": "low"} {
+		t.Setenv(name, value)
+	}
+	path := filepath.Join(t.TempDir(), "SPEC.md")
+	if err := os.WriteFile(path, []byte("---\nname: child\nversion: 1.0.0\n---\n# Goal\nTest.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		args            []string
+		model, thinking string
+	}{
+		{[]string{"run", path}, "", ""},
+		{[]string{"run", path, "--model", "provider/explicit", "--thinking", "high"}, "provider/explicit", "high"},
+	} {
+		command := exec.Command(os.Args[0], append([]string{"-test.run=^TestInferenceCLIProcess$", "--"}, tt.args...)...)
+		command.Env = append(os.Environ(), "TELOS_TEST_INFERENCE_COMMAND=1")
+		if out, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v %s", tt.args, err, out)
+		}
+		if req := <-requests; req.Model != tt.model || req.Thinking != tt.thinking {
+			t.Fatalf("%v sent model=%q thinking=%q", tt.args, req.Model, req.Thinking)
+		}
+	}
 }
 
 func TestCloudApplyInferenceErrors(t *testing.T) {
@@ -318,10 +371,10 @@ func TestCloudApplyInferenceErrors(t *testing.T) {
 	}{
 		{"API key model rejected by Cloud", []string{"apply", path, "--model", "Work Anthropic/missing"}, "model is unavailable for this connection (HTTP 422)", 1},
 		{"subscription model rejected by Cloud", []string{"apply", path, "--model", "My ChatGPT/missing"}, "model is unavailable for this connection (HTTP 422)", 1},
-		{"missing connection", []string{"apply", path, "--model", "Missing/model"}, "not found", 0},
+		{"missing API key or subscription", []string{"apply", path, "--model", "Missing/model"}, "no saved API key or subscription matches", 0},
 		{"missing model", []string{"apply", path, "--model", "Work Anthropic/"}, "model ID is required", 0},
 		{"invalid syntax", []string{"apply", path, "--model", "Work Anthropic"}, "--model must be", 0},
-		{"model cannot change existing deployment", []string{"apply", path, "--session", "sess_existing", "--model", "Work Anthropic/claude-test"}, "cannot update an existing", 0},
+		{"spec and model changes are separate", []string{"apply", path, "--goal", "sess_existing", "--model", "Work Anthropic/claude-test"}, "apply spec and model/thinking changes separately", 0},
 		{"empty context", []string{"config", "--context", ""}, "requires @handle", 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -345,18 +398,43 @@ func TestCloudReceiptShowsSavedInference(t *testing.T) {
 	session := cloud.SessionRecord{ID: "sess_test", AgentModel: "internal/model", AgentThinking: "high", Inference: &cloud.InferenceSummary{Source: "byok", ConnectionName: "Work Anthropic", Provider: "anthropic", Model: "claude-test"}}
 	var out bytes.Buffer
 	printCloudSessionDescription(&out, session)
-	for _, want := range []string{"API key", "Work Anthropic", "claude-test", "high (requested)"} {
-		if !strings.Contains(out.String(), want) {
-			t.Fatalf("description omitted %q: %s", want, out.String())
+	if got := configOutputValue(t, out.String(), "Model"); got != "Work Anthropic/claude-test" {
+		t.Fatalf("displayed model = %q, want the --model selection: %s", got, out.String())
+	}
+	if got := configOutputValue(t, out.String(), "Thinking"); got != "high" {
+		t.Fatalf("displayed thinking = %q, want high: %s", got, out.String())
+	}
+	for _, unwanted := range []string{"internal/model", "Inference", "Connection"} {
+		if strings.Contains(out.String(), unwanted) {
+			t.Fatalf("description includes %q: %s", unwanted, out.String())
 		}
 	}
-	if strings.Contains(out.String(), "internal/model") {
-		t.Fatal("description replaced the public selection with the internal runtime model")
-	}
-	encoded := captureStdout(t, func() { printCloudSessionJSON(&session, "@telos") })
+	encoded := captureStdout(t, func() { printCloudSessionJSON(&session, "@telos", nil) })
 	var decoded struct{ Inference cloud.InferenceSummary }
 	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil || decoded.Inference.ConnectionName != "Work Anthropic" {
 		t.Fatalf("JSON omitted inference: %s, %v", encoded, err)
+	}
+}
+
+func TestCloudSessionModelMatchesModelSelection(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		agentModel string
+		summary    *cloud.InferenceSummary
+		want       string
+	}{
+		{"managed", "telos-bifrost/telos/max", &cloud.InferenceSummary{Source: "managed", Tier: "max"}, "telos/max"},
+		{"api key", "internal/model", &cloud.InferenceSummary{Source: "byok", ConnectionName: "Work Anthropic", Model: "claude-test"}, "Work Anthropic/claude-test"},
+		{"subscription", "internal/model", &cloud.InferenceSummary{Source: "subscription", ConnectionName: "ChatGPT", Model: "gpt-test"}, "ChatGPT/gpt-test"},
+		{"hidden connection", "internal/model", &cloud.InferenceSummary{Source: "subscription", Model: "gpt-test"}, "gpt-test (Subscription)"},
+		{"no inference summary", "internal/model", nil, "internal/model"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			session := cloud.SessionRecord{AgentModel: tt.agentModel, Inference: tt.summary}
+			if got := cloudSessionModel(session); got != tt.want {
+				t.Fatalf("cloudSessionModel = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 

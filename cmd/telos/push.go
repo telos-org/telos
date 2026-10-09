@@ -36,7 +36,6 @@ var packageVersionNumberRE = regexp.MustCompile(`^(0|[1-9][0-9]*)$`)
 
 func cmdPush(args []string) {
 	fs := newCommandFlagSet("push", "telos push SPEC.md|SKILL_DIR [flags]")
-	scope := fs.String("scope", "", "Package scope")
 	version := fs.String("version", "", "Version override for skill or package publishing")
 	public := fs.Bool(
 		"public",
@@ -53,6 +52,8 @@ func cmdPush(args []string) {
 		os.Exit(2)
 	}
 	input := fs.Arg(0)
+	// Packages publish under the selected context's handle, which an empty
+	// scope selects.
 	if skill, ok, err := packageSkillDir(input, *version); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -72,7 +73,7 @@ func cmdPush(args []string) {
 		if *public {
 			visibility = "public"
 		}
-		record, err := pushSkillPackageWithVisibility(client, skill, *scope, visibility)
+		record, err := pushSkillPackageWithVisibility(client, skill, "", visibility)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
@@ -115,7 +116,7 @@ func cmdPush(args []string) {
 	record, err := pushSpecPackageWithVisibility(
 		client,
 		pkg,
-		*scope,
+		"",
 		visibility,
 	)
 	if err != nil {
@@ -478,7 +479,7 @@ func pushPackageSkills(
 func defaultPublishScope(client *cloud.Client) (string, error) {
 	account, err := client.AccountBootstrap()
 	if err != nil {
-		return "", fmt.Errorf("resolve default publish scope: %w", err)
+		return "", fmt.Errorf("resolve the context's handle: %w", err)
 	}
 	orgID := strings.TrimSpace(client.OrgID)
 	if orgID == "" {
@@ -493,7 +494,7 @@ func defaultPublishScope(client *cloud.Client) (string, error) {
 			return scope, nil
 		}
 	}
-	return "", fmt.Errorf("selected organization has no default publish scope")
+	return "", fmt.Errorf("the selected context has no handle to publish under")
 }
 
 func pushPackageSkill(

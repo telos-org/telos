@@ -213,6 +213,7 @@ func (p *PVG) promptOptions() spec.PromptOptions {
 		PrimarySpecPath: p.Config.PrimarySpecPath,
 		ReviewBudget:    p.reviewBudgetMode(),
 		ReviewCycleCap:  p.Config.Until,
+		LocalRuntime:    p.Config.LocalRuntime,
 	}
 }
 

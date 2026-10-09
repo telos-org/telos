@@ -5,8 +5,12 @@
 package sessionapi
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
 )
 
 // --------- Enums ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -82,30 +86,136 @@ func (k *SessionKind) UnmarshalJSON(data []byte) error {
 
 // SessionCreateRequest is the body of POST /api/sessions.
 type SessionCreateRequest struct {
-	SpecMarkdown     *string      `json:"spec_markdown,omitempty"`
-	PackageDigest    string       `json:"package_digest,omitempty"`
-	PackagePath      string       `json:"-"`
-	CloudSessionID   string       `json:"-"`
-	CloudSessionName string       `json:"-"`
-	SessionKind      *SessionKind `json:"-"`
-	ParentSessionID  *string      `json:"parent_session_id,omitempty"`
-	Until            *int         `json:"until,omitempty"`
-	UntilSeconds     *int         `json:"until_seconds,omitempty"`
-	Model            string       `json:"model,omitempty"`
-	Thinking         string       `json:"thinking,omitempty"`
-	MaxCostUSD       *float64     `json:"max_cost_usd,omitempty"`
-	AgentTimeoutSec  *int         `json:"agent_timeout_sec,omitempty"`
+	SpecMarkdown        *string              `json:"spec_markdown,omitempty"`
+	PackageDigest       string               `json:"package_digest,omitempty"`
+	PackagePath         string               `json:"-"`
+	CloudSessionID      string               `json:"-"`
+	CloudSessionName    string               `json:"-"`
+	SessionKind         *SessionKind         `json:"-"`
+	ParentSessionID     *string              `json:"parent_session_id,omitempty"`
+	Until               *int                 `json:"until,omitempty"`
+	UntilSeconds        *int                 `json:"until_seconds,omitempty"`
+	Model               string               `json:"model,omitempty"`
+	Thinking            string               `json:"thinking,omitempty"`
+	ModelDefinition     json.RawMessage      `json:"-"`
+	InferenceConnection *InferenceConnection `json:"-"`
+	InferenceGeneration int                  `json:"-"`
+	MaxCostUSD          *float64             `json:"max_cost_usd,omitempty"`
+	AgentTimeoutSec     *int                 `json:"agent_timeout_sec,omitempty"`
 }
 
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{name}/spec.
 type SessionSpecUpdateRequest struct {
-	SpecMarkdown    string   `json:"spec_markdown,omitempty"`
-	PackageDigest   string   `json:"package_digest,omitempty"`
-	PackagePath     string   `json:"-"`
-	Model           string   `json:"-"`
-	Thinking        string   `json:"-"`
-	MaxCostUSD      *float64 `json:"-"`
-	AgentTimeoutSec *int     `json:"-"`
+	SpecMarkdown    string             `json:"spec_markdown,omitempty"`
+	PackageDigest   string             `json:"package_digest,omitempty"`
+	Inference       *InferenceSettings `json:"inference,omitempty"`
+	PackagePath     string             `json:"-"`
+	Model           string             `json:"-"`
+	Thinking        string             `json:"-"`
+	MaxCostUSD      *float64           `json:"-"`
+	AgentTimeoutSec *int               `json:"-"`
+}
+
+// InferenceSettings replace a root session's model, thinking, model definition,
+// and connection when Generation is newer than the stored one. Turns started
+// later use them.
+type InferenceSettings struct {
+	Generation      int                  `json:"generation"`
+	Model           string               `json:"model"`
+	Thinking        string               `json:"thinking"`
+	ModelDefinition json.RawMessage      `json:"model_definition,omitempty"`
+	Connection      *InferenceConnection `json:"connection,omitempty"`
+}
+
+// InferenceConnection routes one provider through the deployment credential
+// proxy. APIKey is a proxy placeholder, never the upstream credential, and is
+// registered inside each Pi process rather than in shared Pi configuration.
+type InferenceConnection struct {
+	ID         string `json:"id"`
+	Provider   string `json:"provider"`
+	BaseURL    string `json:"base_url"`
+	ProxyURL   string `json:"proxy_url"`
+	APIKey     string `json:"api_key,omitempty"`
+	AuthHeader bool   `json:"auth_header,omitempty"`
+}
+
+var modelDefinitionFields = map[string]bool{"id": true, "name": true, "api": true, "reasoning": true, "thinkingLevelMap": true, "input": true, "cost": true, "contextWindow": true, "maxTokens": true, "samplingParams": true, "compat": true}
+
+func (s *InferenceSettings) Validate() error {
+	if string(s.ModelDefinition) == "null" {
+		s.ModelDefinition = nil
+	}
+	provider, modelID, ok := strings.Cut(s.Model, "/")
+	switch {
+	case s.Generation <= 0:
+		return fmt.Errorf("inference generation must be positive: %w", ErrInvalidSession)
+	case !ok || provider == "" || modelID == "" || len(s.Model) > 512 || strings.ContainsAny(s.Model, " \t\r\n\x00"):
+		return fmt.Errorf("inference model must use <provider>/<model-id>: %w", ErrInvalidSession)
+	case s.Thinking == "" || len(s.Thinking) > 32 || strings.ContainsAny(s.Thinking, " \t\r\n\x00"):
+		return fmt.Errorf("inference thinking must be a non-empty level: %w", ErrInvalidSession)
+	case len(s.ModelDefinition) == 0 && s.Connection != nil:
+		return fmt.Errorf("inference connection requires a model_definition: %w", ErrInvalidSession)
+	case len(s.ModelDefinition) == 0:
+		return nil
+	case len(s.ModelDefinition) > 64<<10:
+		return fmt.Errorf("inference model_definition must be at most 64 KiB: %w", ErrInvalidSession)
+	}
+	var definition map[string]json.RawMessage
+	if err := json.Unmarshal(s.ModelDefinition, &definition); err != nil || definition == nil {
+		return fmt.Errorf("invalid inference model_definition: %w", ErrInvalidSession)
+	}
+	for key := range definition {
+		if !modelDefinitionFields[key] {
+			return fmt.Errorf("inference model_definition may not set %s: %w", key, ErrInvalidSession)
+		}
+	}
+	var id string
+	if json.Unmarshal(definition["id"], &id) != nil || id != modelID {
+		return fmt.Errorf("inference model_definition id must match model: %w", ErrInvalidSession)
+	}
+	if s.Connection == nil {
+		return nil
+	}
+	for _, field := range []string{"name", "api", "reasoning", "input", "cost", "contextWindow", "maxTokens"} {
+		if value := definition[field]; len(value) == 0 || string(value) == "null" {
+			return fmt.Errorf("inference connection requires a complete model_definition (%s is missing): %w", field, ErrInvalidSession)
+		}
+	}
+	return s.Connection.Validate(provider)
+}
+
+const (
+	inferenceCredentialProxy = "http://172.31.255.1:18080"
+	openAIAuthClaim          = "https://api.openai.com/auth"
+)
+
+var (
+	inferenceIdentifier      = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+	inferenceProxyValue      = regexp.MustCompile(`^telos-proxy-[A-Za-z0-9_-]{43}$`)
+	inferenceCodexProxyValue = regexp.MustCompile(`^telos-proxy\.([A-Za-z0-9_-]{1,1000})\.[A-Za-z0-9_-]{43}$`)
+)
+
+func (c *InferenceConnection) Validate(provider string) error {
+	if !inferenceIdentifier.MatchString(c.ID) || !inferenceIdentifier.MatchString(c.Provider) || c.Provider != provider {
+		return fmt.Errorf("inference connection id and provider must match the model: %w", ErrInvalidSession)
+	}
+	u, err := url.Parse(c.BaseURL)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(c.BaseURL) > 2048 || strings.ContainsAny(c.BaseURL, " \t\r\n\\$") {
+		return fmt.Errorf("inference connection base_url must be an HTTPS endpoint: %w", ErrInvalidSession)
+	}
+	if c.ProxyURL != inferenceCredentialProxy {
+		return fmt.Errorf("inference connection proxy_url must name the deployment credential proxy: %w", ErrInvalidSession)
+	}
+	valid := inferenceProxyValue.MatchString(c.APIKey)
+	if match := inferenceCodexProxyValue.FindStringSubmatch(c.APIKey); match != nil {
+		var claims map[string]map[string]string
+		decoded, err := base64.RawURLEncoding.DecodeString(match[1])
+		valid = err == nil && json.Unmarshal(decoded, &claims) == nil && len(claims) == 1 && len(claims[openAIAuthClaim]) == 1 && claims[openAIAuthClaim]["chatgpt_account_id"] == "telos-proxy"
+	}
+	if !valid {
+		return fmt.Errorf("inference connection api_key must be a Telos proxy placeholder: %w", ErrInvalidSession)
+	}
+	return nil
 }
 
 // SessionSpecUpdateResponse is returned by PUT /api/sessions/{name}/spec.
@@ -213,7 +323,6 @@ type Session struct {
 	CreatedAt       *string       `json:"created_at,omitempty"`
 
 	Runtime                SessionRuntime   `json:"runtime"`
-	Launcher               *string          `json:"launcher,omitempty"`
 	SessionSpecPath        *string          `json:"session_spec_path,omitempty"`
 	SessionDir             *string          `json:"session_dir,omitempty"`
 	ActiveWorkspacePath    *string          `json:"active_workspace_path,omitempty"`
@@ -243,6 +352,9 @@ type Session struct {
 	DashboardDoc           *string          `json:"dashboard_doc,omitempty"`
 	CurrentSpecVersion     *int             `json:"current_spec_version,omitempty"`
 	SpecVersions           []map[string]any `json:"spec_versions"`
+	// VisibleEvents reports that GET /api/sessions/{id}/events pages hold only
+	// events a person sees. Older runtimes' pages hold every event.
+	VisibleEvents bool `json:"visible_events,omitempty"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
 }
@@ -266,6 +378,7 @@ type SessionListItem struct {
 	DashboardURL       *string        `json:"dashboard_url,omitempty"`
 	DashboardDoc       *string        `json:"dashboard_doc,omitempty"`
 	CurrentSpecVersion *int           `json:"current_spec_version,omitempty"`
+	VisibleEvents      bool           `json:"visible_events,omitempty"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
 }
@@ -302,6 +415,7 @@ func SessionListItemFromSession(session Session) SessionListItem {
 		DashboardURL:       session.DashboardURL,
 		DashboardDoc:       session.DashboardDoc,
 		CurrentSpecVersion: session.CurrentSpecVersion,
+		VisibleEvents:      session.VisibleEvents,
 		Reconciliation:     session.Reconciliation,
 	}
 }
@@ -324,6 +438,7 @@ func (item SessionListItem) AsSession() Session {
 		DashboardURL:       item.DashboardURL,
 		DashboardDoc:       item.DashboardDoc,
 		CurrentSpecVersion: item.CurrentSpecVersion,
+		VisibleEvents:      item.VisibleEvents,
 		Reconciliation:     item.Reconciliation,
 	}
 }

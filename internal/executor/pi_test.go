@@ -1,8 +1,10 @@
 package executor
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -10,7 +12,80 @@ import (
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
+
+func TestExecuteTurnRegistersInferenceForThisPiProcess(t *testing.T) {
+	home := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/argv.txt\"\n" +
+		"cp \"$TELOS_PI_STARTUP_CONFIG\" \"$HOME/startup.json\"\ncmp -s \"$TELOS_PI_STARTUP_EXTENSION\" \"$HOME/expected.js\" && touch \"$HOME/extension-ok\"\n" +
+		"printf 'done\\n<status>CONCEDE</status>\\n'\n"
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "expected.js"), piStartupExtension, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := platform.NewLocalPlatform(t.TempDir())
+	p.Env = map[string]string{"HOME": home}
+	e := NewPiExecutor(p, "provider/model", "high", 5)
+	e.ModelDefinition = json.RawMessage(`{"id":"model","contextWindow":256000}`)
+	e.Connection = &sessionapi.InferenceConnection{ID: "profile", Provider: "provider", BaseURL: "https://models.test/v1", ProxyURL: "http://172.31.255.1:18080", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
+
+	if result := e.ExecuteTurn("do it", "prover", nil); result.Status != game.StatusConcede {
+		t.Fatalf("turn: %+v", result)
+	}
+	argv, _ := os.ReadFile(filepath.Join(home, "argv.txt"))
+	if !strings.HasPrefix(string(argv), "-e\n") || !strings.Contains(string(argv), "--model\nprovider/model\n--thinking\nhigh\n") {
+		t.Fatalf("Pi did not load the startup extension: %s", argv)
+	}
+	if _, err := os.Stat(filepath.Join(home, "extension-ok")); err != nil {
+		t.Fatal("startup extension was not written")
+	}
+	var config piStartupConfig
+	data, _ := os.ReadFile(filepath.Join(home, "startup.json"))
+	if err := json.Unmarshal(data, &config); err != nil || config.Model != "provider/model" || string(config.Definition) != string(e.ModelDefinition) || config.Connection == nil || *config.Connection != *e.Connection {
+		t.Fatalf("startup config = %s, %v", data, err)
+	}
+
+	e.ModelDefinition, e.Connection = nil, nil
+	if result := e.ExecuteTurn("do it", "prover", nil); result.Status != game.StatusConcede {
+		t.Fatalf("turn: %+v", result)
+	}
+	if argv, _ := os.ReadFile(filepath.Join(home, "argv.txt")); strings.Contains(string(argv), "-e\n") {
+		t.Fatalf("turn without a definition loaded the extension: %s", argv)
+	}
+}
+
+func TestPiStartupExtensionFailsTurnWithMessage(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("node is needed to exercise the startup extension")
+	}
+	dir := t.TempDir()
+	extension, config := filepath.Join(dir, "startup.mjs"), filepath.Join(dir, "config.json")
+	if err := os.WriteFile(extension, piStartupExtension, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config, []byte(`{"model":"provider/model","definition":{"id":"model"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Outside Pi the provider catalog cannot be imported, so registration fails.
+	script := fmt.Sprintf(`const { default: init } = await import(%q); await init({ registerProvider() {} }); console.log("PROMPT_SENT");`, extension)
+	cmd := exec.Command(node, "--input-type=module", "-e", script)
+	cmd.Env = append(os.Environ(), "TELOS_PI_STARTUP_CONFIG="+config)
+	output, err := cmd.CombinedOutput()
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 78 || strings.Contains(string(output), "PROMPT_SENT") || !strings.Contains(string(output), "Telos could not register Pi model provider/model") {
+		t.Fatalf("startup failure was not reported: %s, %v", output, err)
+	}
+	if code, _ := game.AgentFailureBlocker(string(output)); code != "agent_configuration_invalid" {
+		t.Fatalf("rejected settings should wait for new ones, got %q", code)
+	}
+}
 
 func TestPiProgressPreservesReportAndFinalStatus(t *testing.T) {
 	progress := "<progress_update>Orders costing > $25 are rejected without changing your balance.</progress_update>"
@@ -59,13 +134,15 @@ func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	}
 }
 
-func TestRecoverableAgentFailureRejectsCredentialErrors(t *testing.T) {
+func TestRecoverableAgentFailureRejectsProviderBlockers(t *testing.T) {
 	for _, errorText := range []string{
 		"403: inactive virtual key",
 		"request failed (HTTP 401)",
+		"400: Your credit balance is too low to access the Anthropic API",
+		"429: insufficient_quota",
 	} {
 		if recoverableAgentFailure(errorText) {
-			t.Fatalf("credential error marked recoverable: %q", errorText)
+			t.Fatalf("provider blocker marked recoverable: %q", errorText)
 		}
 	}
 	for _, errorText := range []string{
@@ -347,30 +424,17 @@ func TestReadPiSessionRequiresAssistantMessage(t *testing.T) {
 	}
 }
 
-func TestPiLineEventsProjectsSafeToolCallProgress(t *testing.T) {
-	events := piLineEvents(`{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"toolCall","name":"read","arguments":{"path":"/tmp/other/spec.md"}},{"type":"toolCall","name":"bash","arguments":{"command":"kubectl get pods --token SECRET"}},{"type":"toolCall","name":"bash","arguments":{"command":"git status --short"}}]}}`)
-
-	got := make([]string, 0, len(events))
-	for _, event := range events {
-		got = append(got, event.Kind+":"+event.Text)
-	}
-	want := []string{
-		"tool:Reading session/spec.md",
-		"tool:Reading other/spec.md",
-		"tool:Running kubectl",
-		"tool:Updating workspace",
-	}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("events:\ngot\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
-	if strings.Contains(strings.Join(got, "\n"), "SECRET") {
-		t.Fatalf("tool progress leaked command contents: %v", got)
+func TestPiLineEventsLeaveToolCallsOutOfActivity(t *testing.T) {
+	line := `{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"text","text":"<progress_update>Checking the spec</progress_update>"}]}}`
+	events := piLineEvents(line)
+	if len(events) != 1 || events[0].Kind != "progress_update" || events[0].Text != "Checking the spec" {
+		t.Fatalf("events: %#v", events)
 	}
 }
 
 func TestPiLiveProjectorPreservesRepeatedActivityWithoutReplayingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	line := `{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/workspace/config.go"}}]}}`
+	line := piProgressLine("Checking the config")
 	var events []game.LiveAgentEvent
 	projector := &piLiveProjector{
 		sessionPath: path,
@@ -389,7 +453,7 @@ func TestPiLiveProjectorPreservesRepeatedActivityWithoutReplayingFile(t *testing
 		t.Fatalf("repeated activity count = %d, want 2: %#v", len(events), events)
 	}
 	for _, event := range events {
-		if event.Kind != "tool" || event.Text != "Reading workspace/config.go" {
+		if event.Kind != "progress_update" || event.Text != "Checking the config" {
 			t.Fatalf("unexpected event: %#v", event)
 		}
 	}

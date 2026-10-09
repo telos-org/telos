@@ -19,6 +19,9 @@ type PromptOptions struct {
 	PrimarySpecPath string
 	ReviewBudget    bool
 	ReviewCycleCap  int
+	// LocalRuntime marks a session that executes on a workstation. Sessions
+	// otherwise execute in Telos Cloud.
+	LocalRuntime bool
 }
 
 // RenderProverTask builds the full prover task prompt.
@@ -61,9 +64,9 @@ func promptOptions(opts []PromptOptions) PromptOptions {
 }
 
 func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) string {
-	platform := compiled.Environment.Platform
-	if platform == "" {
-		platform = "cloud"
+	runtime := "cloud"
+	if opts.LocalRuntime {
+		runtime = "local"
 	}
 	lifecycle := "bounded"
 	if opts.Persistent {
@@ -73,7 +76,7 @@ func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) str
 		"## Session",
 		"",
 		fmt.Sprintf("- Spec: `%s`", compiled.Environment.Name),
-		fmt.Sprintf("- Platform: `%s`", platform),
+		fmt.Sprintf("- Runtime: `%s`", runtime),
 		fmt.Sprintf("- Lifecycle: `%s`", lifecycle),
 		"- Root goal changes (`telos apply`) are reserved for operators.",
 	}
@@ -83,7 +86,7 @@ func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) str
 	if opts.ReviewBudget && opts.ReviewCycleCap > 0 {
 		lines = append(lines, fmt.Sprintf("- Review cycle cap: at most `%d` verifier cycles", opts.ReviewCycleCap))
 	}
-	if platform != "local" {
+	if !opts.LocalRuntime {
 		lines = append(lines,
 			fmt.Sprintf("- Namespace: `%s`", compiled.Namespace),
 			"- The runtime supplies session identity and CLI credentials.",

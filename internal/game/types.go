@@ -67,6 +67,7 @@ type PVGConfig struct {
 	EpochID         int
 	Persistent      bool
 	PrimarySpecPath string
+	LocalRuntime    bool
 	StopRequested   func() bool
 }
 

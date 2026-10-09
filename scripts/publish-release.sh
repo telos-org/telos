@@ -45,7 +45,7 @@ skill_version="${version#v}"
 skill_ref="@telos/telos-cli:${skill_version}"
 skill_json="$(
   "${publisher}" push "${repo_root}/skills/telos-cli" \
-    --scope telos \
+    --context @telos \
     --version "${skill_version}" \
     --json
 )"

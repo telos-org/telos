@@ -12,28 +12,29 @@ import (
 
 // Manifest is the persisted session.json shape shared by the store and worker.
 type Manifest struct {
-	SessionID          string                     `json:"session_id"`
-	SessionKind        SessionKind                `json:"session_kind"`
-	DesiredStatus      SessionDesiredStatus       `json:"desired_status,omitempty"`
-	Runtime            SessionRuntime             `json:"runtime,omitempty"`
-	CreatedAt          string                     `json:"created_at"`
-	Launcher           string                     `json:"launcher"`
-	ParentSessionID    *string                    `json:"parent_session_id"`
-	SourceSpecPath     *string                    `json:"source_spec_path,omitempty"`
-	SessionSpecPath    *string                    `json:"session_spec_path,omitempty"`
-	SpecName           string                     `json:"spec_name"`
-	CurrentRevision    *string                    `json:"current_revision,omitempty"`
-	CurrentSpecVersion *int                       `json:"current_spec_version,omitempty"`
-	SpecVersions       []map[string]any           `json:"spec_versions,omitempty"`
-	PackageDigest      *string                    `json:"package_digest,omitempty"`
-	ApplyPackageLock   *spec.ApplyPackageManifest `json:"apply_package_lock,omitempty"`
-	Config             SessionConfig              `json:"config"`
-	Workspace          *Workspace                 `json:"workspace,omitempty"`
-	Provenance         map[string]any             `json:"provenance"`
-	Access             *ScopedToken               `json:"access,omitempty"`
-	Runner             *Runner                    `json:"runner,omitempty"`
-	Specs              []ManifestSpec             `json:"specs"`
-	Epochs             []Epoch                    `json:"epochs"`
+	SessionID                string                     `json:"session_id"`
+	SessionKind              SessionKind                `json:"session_kind"`
+	DesiredStatus            SessionDesiredStatus       `json:"desired_status,omitempty"`
+	Runtime                  SessionRuntime             `json:"runtime,omitempty"`
+	CreatedAt                string                     `json:"created_at"`
+	ParentSessionID          *string                    `json:"parent_session_id"`
+	SourceSpecPath           *string                    `json:"source_spec_path,omitempty"`
+	SessionSpecPath          *string                    `json:"session_spec_path,omitempty"`
+	SpecName                 string                     `json:"spec_name"`
+	CurrentRevision          *string                    `json:"current_revision,omitempty"`
+	CurrentSpecVersion       *int                       `json:"current_spec_version,omitempty"`
+	SpecVersions             []map[string]any           `json:"spec_versions,omitempty"`
+	PackageDigest            *string                    `json:"package_digest,omitempty"`
+	ApplyPackageLock         *spec.ApplyPackageManifest `json:"apply_package_lock,omitempty"`
+	Config                   SessionConfig              `json:"config"`
+	InferenceModelDefinition json.RawMessage            `json:"inference_model_definition,omitempty"`
+	InferenceConnection      *InferenceConnection       `json:"inference_connection,omitempty"`
+	Workspace                *Workspace                 `json:"workspace,omitempty"`
+	Provenance               map[string]any             `json:"provenance"`
+	Access                   *ScopedToken               `json:"access,omitempty"`
+	Runner                   *Runner                    `json:"runner,omitempty"`
+	Specs                    []ManifestSpec             `json:"specs"`
+	Epochs                   []Epoch                    `json:"epochs"`
 }
 
 type Workspace struct {
@@ -103,37 +104,39 @@ type ScopedToken struct {
 }
 
 type SessionConfig struct {
-	Model           string         `json:"model,omitempty"`
-	Until           int            `json:"until,omitempty"`
-	UntilSeconds    int            `json:"until_seconds,omitempty"`
-	MaxCostUSD      *float64       `json:"max_cost_usd,omitempty"`
-	AgentTimeoutSec int            `json:"agent_timeout_sec,omitempty"`
-	Thinking        string         `json:"thinking,omitempty"`
-	Extra           map[string]any `json:"-"`
+	Model               string         `json:"model,omitempty"`
+	Until               int            `json:"until,omitempty"`
+	UntilSeconds        int            `json:"until_seconds,omitempty"`
+	MaxCostUSD          *float64       `json:"max_cost_usd,omitempty"`
+	AgentTimeoutSec     int            `json:"agent_timeout_sec,omitempty"`
+	Thinking            string         `json:"thinking,omitempty"`
+	InferenceGeneration int            `json:"inference_generation,omitempty"`
+	Extra               map[string]any `json:"-"`
 }
 
 // InitialManifest is the typed input for creating a session.json before any
 // worker epoch has started.
 type InitialManifest struct {
-	SessionID          string
-	SessionKind        SessionKind
-	Runtime            SessionRuntime
-	Launcher           string
-	CreatedAt          string
-	ParentSessionID    *string
-	SourceSpecPath     *string
-	SessionSpecPath    *string
-	SpecName           string
-	CurrentRevision    *string
-	CurrentSpecVersion *int
-	SpecVersions       []map[string]any
-	Config             SessionConfig
-	Workspace          *Workspace
-	Provenance         map[string]any
-	PackageDigest      *string
-	ApplyPackageLock   *spec.ApplyPackageManifest
-	Access             *ScopedToken
-	Specs              []InitialManifestSpec
+	SessionID                string
+	SessionKind              SessionKind
+	Runtime                  SessionRuntime
+	CreatedAt                string
+	ParentSessionID          *string
+	SourceSpecPath           *string
+	SessionSpecPath          *string
+	SpecName                 string
+	CurrentRevision          *string
+	CurrentSpecVersion       *int
+	SpecVersions             []map[string]any
+	Config                   SessionConfig
+	InferenceModelDefinition json.RawMessage
+	InferenceConnection      *InferenceConnection
+	Workspace                *Workspace
+	Provenance               map[string]any
+	PackageDigest            *string
+	ApplyPackageLock         *spec.ApplyPackageManifest
+	Access                   *ScopedToken
+	Specs                    []InitialManifestSpec
 }
 
 type InitialManifestSpec struct {
@@ -148,6 +151,12 @@ type InitialManifestSpec struct {
 	IntervalSeconds *int
 }
 
+// ResolvedRuntime reports where the session executes. Manifests written before
+// runtime was recorded fall back to their provenance, then to fallback.
+func (m *Manifest) ResolvedRuntime(fallback SessionRuntime) SessionRuntime {
+	return manifestRuntime(m, fallback)
+}
+
 func WriteInitialManifest(path string, input InitialManifest) error {
 	m := ManifestFromInitial(input)
 	return WriteManifest(path, &m)
@@ -160,11 +169,8 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 	if input.Runtime == "" {
 		input.Runtime = RuntimeLocal
 	}
-	if input.Launcher == "" {
-		input.Launcher = "local"
-	}
 	if input.Provenance == nil {
-		input.Provenance = map[string]any{"mode": runtimeMode(input.Runtime)}
+		input.Provenance = map[string]any{}
 	}
 	specs := make([]ManifestSpec, 0, len(input.Specs))
 	for _, spec := range input.Specs {
@@ -182,27 +188,28 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		})
 	}
 	return Manifest{
-		SessionID:          input.SessionID,
-		SessionKind:        input.SessionKind,
-		DesiredStatus:      DesiredStatusRunning,
-		Runtime:            input.Runtime,
-		CreatedAt:          input.CreatedAt,
-		Launcher:           input.Launcher,
-		ParentSessionID:    input.ParentSessionID,
-		SourceSpecPath:     input.SourceSpecPath,
-		SessionSpecPath:    input.SessionSpecPath,
-		SpecName:           input.SpecName,
-		CurrentRevision:    input.CurrentRevision,
-		CurrentSpecVersion: input.CurrentSpecVersion,
-		SpecVersions:       cloneSpecVersionMaps(input.SpecVersions),
-		Config:             input.Config,
-		Workspace:          input.Workspace,
-		Provenance:         input.Provenance,
-		PackageDigest:      input.PackageDigest,
-		ApplyPackageLock:   input.ApplyPackageLock,
-		Access:             input.Access,
-		Specs:              specs,
-		Epochs:             []Epoch{},
+		SessionID:                input.SessionID,
+		SessionKind:              input.SessionKind,
+		DesiredStatus:            DesiredStatusRunning,
+		Runtime:                  input.Runtime,
+		CreatedAt:                input.CreatedAt,
+		ParentSessionID:          input.ParentSessionID,
+		SourceSpecPath:           input.SourceSpecPath,
+		SessionSpecPath:          input.SessionSpecPath,
+		SpecName:                 input.SpecName,
+		CurrentRevision:          input.CurrentRevision,
+		CurrentSpecVersion:       input.CurrentSpecVersion,
+		SpecVersions:             cloneSpecVersionMaps(input.SpecVersions),
+		Config:                   input.Config,
+		InferenceModelDefinition: input.InferenceModelDefinition,
+		InferenceConnection:      input.InferenceConnection,
+		Workspace:                input.Workspace,
+		Provenance:               input.Provenance,
+		PackageDigest:            input.PackageDigest,
+		ApplyPackageLock:         input.ApplyPackageLock,
+		Access:                   input.Access,
+		Specs:                    specs,
+		Epochs:                   []Epoch{},
 	}
 }
 
@@ -251,6 +258,15 @@ func WriteManifest(path string, m *Manifest) error {
 }
 
 func MutateManifest(path string, mutate func(*Manifest) error) (*Manifest, error) {
+	return withLockedManifest(path, func(m *Manifest) error {
+		if err := mutate(m); err != nil {
+			return err
+		}
+		return WriteManifest(path, m)
+	})
+}
+
+func withLockedManifest(path string, action func(*Manifest) error) (*Manifest, error) {
 	lockPath := path + ".lock"
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, err
@@ -269,10 +285,7 @@ func MutateManifest(path string, mutate func(*Manifest) error) (*Manifest, error
 	if err != nil {
 		return nil, err
 	}
-	if err := mutate(m); err != nil {
-		return nil, err
-	}
-	if err := WriteManifest(path, m); err != nil {
+	if err := action(m); err != nil {
 		return nil, err
 	}
 	return m, nil
@@ -398,6 +411,9 @@ func (c SessionConfig) MarshalJSON() ([]byte, error) {
 	if c.Thinking != "" {
 		m["thinking"] = c.Thinking
 	}
+	if c.InferenceGeneration > 0 {
+		m["inference_generation"] = c.InferenceGeneration
+	}
 	return json.Marshal(m)
 }
 
@@ -442,6 +458,12 @@ func (c *SessionConfig) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("config.thinking: %w", err)
 		}
 		delete(raw, "thinking")
+	}
+	if value, ok := raw["inference_generation"]; ok {
+		if err := json.Unmarshal(value, &c.InferenceGeneration); err != nil {
+			return fmt.Errorf("config.inference_generation: %w", err)
+		}
+		delete(raw, "inference_generation")
 	}
 	if _, ok := raw["workspace"]; ok {
 		delete(raw, "workspace")

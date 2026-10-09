@@ -1,6 +1,9 @@
 package telosd
 
 import (
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +14,170 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/sessionworker"
 )
+
+func TestSpecUpdateAppliesNewerInferenceGeneration(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	substrate := &recordingSubstrate{}
+	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: postgres\nplatform: cloud\n---\n# Postgres\n"
+	update := func(inference sessionapi.InferenceSettings) (*sessionapi.SessionSpecUpdateResponse, error) {
+		return store.UpdateSpec("postgres", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown, Inference: &inference})
+	}
+	created, err := update(sessionapi.InferenceSettings{Generation: 2, Model: "provider/first", Thinking: "low"})
+	if err != nil || created.Operation != "created" {
+		t.Fatalf("create: %+v %v", created, err)
+	}
+	assertInference := func(response *sessionapi.SessionSpecUpdateResponse, generation int, model, thinking, definition string) {
+		t.Helper()
+		config := response.Session.Config
+		if config["inference_generation"] != float64(generation) || config["model"] != model || config["thinking"] != thinking {
+			t.Fatalf("session config = %+v", config)
+		}
+		m, err := sessionapi.ReadManifest(filepath.Join(*response.Session.SessionDir, "session.json"))
+		if err != nil || compactJSON(m.InferenceModelDefinition) != definition {
+			t.Fatalf("stored definition = %s, %v", m.InferenceModelDefinition, err)
+		}
+	}
+	assertInference(created, 2, "provider/first", "low", "")
+
+	definition := `{"id":"second","contextWindow":256000}`
+	changed, err := update(sessionapi.InferenceSettings{Generation: 3, Model: "provider/second", Thinking: "high", ModelDefinition: json.RawMessage(definition)})
+	if err != nil || changed.Operation != "unchanged" {
+		t.Fatalf("update: %+v %v", changed, err)
+	}
+	assertInference(changed, 3, "provider/second", "high", definition)
+	if len(substrate.wakes) != 1 || substrate.wakes[0].wakeReason != "spec_unchanged" {
+		t.Fatalf("settings update should wake the worker: %+v", substrate.wakes)
+	}
+
+	for _, generation := range []int{3, 1} {
+		stale, err := update(sessionapi.InferenceSettings{Generation: generation, Model: "provider/stale", Thinking: "low"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		assertInference(stale, 3, "provider/second", "high", definition)
+	}
+
+	for _, invalid := range []sessionapi.InferenceSettings{
+		{Generation: 0, Model: "provider/model", Thinking: "low"},
+		{Generation: 4, Model: "model", Thinking: "low"},
+		{Generation: 4, Model: "provider/model"},
+		{Generation: 4, Model: "provider/model", Thinking: "low", ModelDefinition: json.RawMessage(`{"id":"other"}`)},
+		{Generation: 4, Model: "provider/model", Thinking: "low", ModelDefinition: json.RawMessage(`{"id":"model","baseUrl":"https://example.test"}`)},
+	} {
+		if _, err := update(invalid); !errors.Is(err, sessionapi.ErrInvalidSession) {
+			t.Fatalf("invalid settings %+v accepted: %v", invalid, err)
+		}
+	}
+	if len(substrate.wakes) != 3 {
+		t.Fatalf("rejected settings woke the worker: %+v", substrate.wakes)
+	}
+	cleared, err := update(sessionapi.InferenceSettings{Generation: 4, Model: "provider/second", Thinking: "high", ModelDefinition: json.RawMessage("null")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInference(cleared, 4, "provider/second", "high", "")
+}
+
+func TestSpecUpdateStoresInferenceConnectionWithoutEchoingKey(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	store := newControllerReconciler(base, &recordingSubstrate{}, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: parent\nplatform: cloud\n---\n# Parent\n"
+	key := "telos-proxy-" + strings.Repeat("a", 43)
+	connection := sessionapi.InferenceConnection{ID: "profile", Provider: "provider", BaseURL: "https://models.example/v1", ProxyURL: "http://172.31.255.1:18080", APIKey: key, AuthHeader: true}
+	definition := `{"id":"model","name":"Model","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`
+	update := func(generation int, connection sessionapi.InferenceConnection, definition string) (*sessionapi.SessionSpecUpdateResponse, error) {
+		return store.UpdateSpec("parent", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown, Inference: &sessionapi.InferenceSettings{
+			Generation: generation, Model: "provider/model", Thinking: "high", ModelDefinition: json.RawMessage(definition), Connection: &connection,
+		}})
+	}
+	parent, err := update(1, connection, definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := json.Marshal(parent); bytes.Contains(data, []byte(key)) {
+		t.Fatalf("response echoed the connection key: %s", data)
+	}
+	next := connection
+	next.ID, next.APIKey = "next", "telos-proxy-"+strings.Repeat("b", 43)
+	if _, err := update(2, next, definition); err != nil {
+		t.Fatal(err)
+	}
+	m, err := sessionapi.ReadManifest(filepath.Join(*parent.Session.SessionDir, "session.json"))
+	if err != nil || m.InferenceConnection == nil || *m.InferenceConnection != next {
+		t.Fatalf("stored connection = %+v, %v", m.InferenceConnection, err)
+	}
+
+	child, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, ParentSessionID: &parent.Session.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, err := sessionapi.ReadManifest(filepath.Join(*child.SessionDir, "session.json")); err != nil || m.InferenceConnection == nil || *m.InferenceConnection != next {
+		t.Fatalf("new child did not inherit the connection: %+v %v", m, err)
+	}
+	for _, child := range []struct {
+		model string
+		want  *sessionapi.InferenceConnection
+	}{{"", &next}, {"provider/other", &next}, {"other/model", nil}} {
+		req := store.applyCreateDefaults(sessionapi.SessionCreateRequest{ParentSessionID: &parent.Session.SessionID, Model: child.model})
+		if (req.InferenceConnection == nil) != (child.want == nil) || (child.want != nil && *req.InferenceConnection != *child.want) {
+			t.Fatalf("child %q connection = %+v", child.model, req.InferenceConnection)
+		}
+	}
+
+	codexClaims := base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"telos-proxy"}}`))
+	codex := connection
+	codex.APIKey = "telos-proxy." + codexClaims + "." + strings.Repeat("c", 43)
+	if _, err := update(3, codex, definition); err != nil {
+		t.Fatalf("Codex placeholder rejected: %v", err)
+	}
+	for name, invalid := range map[string]func(*sessionapi.InferenceConnection){
+		"http base":         func(c *sessionapi.InferenceConnection) { c.BaseURL = "http://models.example/v1" },
+		"other proxy":       func(c *sessionapi.InferenceConnection) { c.ProxyURL = "http://127.0.0.1:18080" },
+		"real key":          func(c *sessionapi.InferenceConnection) { c.APIKey = "sk-real-secret" },
+		"other provider":    func(c *sessionapi.InferenceConnection) { c.Provider = "other" },
+		"forged codex auth": func(c *sessionapi.InferenceConnection) { c.APIKey = "telos-proxy.e30." + strings.Repeat("c", 43) },
+	} {
+		bad := connection
+		invalid(&bad)
+		if _, err := update(4, bad, definition); !errors.Is(err, sessionapi.ErrInvalidSession) {
+			t.Fatalf("%s accepted: %v", name, err)
+		}
+	}
+	if _, err := update(4, connection, `{"id":"model"}`); !errors.Is(err, sessionapi.ErrInvalidSession) {
+		t.Fatalf("incomplete definition accepted with a connection: %v", err)
+	}
+}
+
+func compactJSON(data []byte) string {
+	var out bytes.Buffer
+	_ = json.Compact(&out, data)
+	return out.String()
+}
+
+func TestChildSessionsInheritParentInference(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	store := newControllerReconciler(base, &recordingSubstrate{}, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: parent\nplatform: cloud\n---\n# Parent\n"
+	definition := `{"id":"new","contextWindow":256000}`
+	inference := sessionapi.InferenceSettings{Generation: 1, Model: "provider/new", Thinking: "max", ModelDefinition: json.RawMessage(definition)}
+	parent, err := store.UpdateSpec("parent", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown, Inference: &inference})
+	if err != nil {
+		t.Fatal(err)
+	}
+	child, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, ParentSessionID: &parent.Session.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := sessionapi.ReadManifest(filepath.Join(*child.SessionDir, "session.json"))
+	if err != nil || m.Config.Model != "provider/new" || m.Config.Thinking != "max" || m.Config.InferenceGeneration != 1 || compactJSON(m.InferenceModelDefinition) != definition {
+		t.Fatalf("child did not inherit settings: %+v %s %v", m.Config, m.InferenceModelDefinition, err)
+	}
+	explicit := store.applyCreateDefaults(sessionapi.SessionCreateRequest{ParentSessionID: &parent.Session.SessionID, Model: "provider/explicit", Thinking: "low"})
+	if explicit.Model != "provider/explicit" || explicit.Thinking != "low" || len(explicit.ModelDefinition) != 0 {
+		t.Fatalf("explicit child settings changed: %+v", explicit)
+	}
+}
 
 type recordingSubstrate struct {
 	applies  []recordedApply

@@ -6,12 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"strings"
 	"time"
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 // PiExecutor runs Pi as one PVG agent turn on the given LocalPlatform.
@@ -20,6 +22,10 @@ type PiExecutor struct {
 	Model    string
 	Thinking string
 	Timeout  int
+	// ModelDefinition and Connection, when set, are registered for Model in
+	// each Pi process.
+	ModelDefinition json.RawMessage
+	Connection      *sessionapi.InferenceConnection
 }
 
 const piEnvPromptMaxBytes = 256 * 1024
@@ -58,12 +64,26 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		promptPath = taskPath
 		taskEnv = ""
 	}
-	argv := BuildPiArgv(model, thinking, promptPath, sessionPath)
+	env := map[string]string{"TELOS_ROLE": role}
+	startup := len(pe.ModelDefinition) > 0 || pe.Connection != nil
+	if startup {
+		dir, err := os.MkdirTemp("", "telos-pi-startup-")
+		if err != nil {
+			return game.TurnResult{Role: role, Error: "pi_startup: " + err.Error()}
+		}
+		defer os.RemoveAll(dir)
+		startupEnv, err := writePiStartup(dir, piStartupConfig{Model: model, Definition: pe.ModelDefinition, Connection: pe.Connection})
+		if err != nil {
+			return game.TurnResult{Role: role, Error: "pi_startup: " + err.Error()}
+		}
+		maps.Copy(env, startupEnv)
+	}
+	argv := buildPiArgv(model, thinking, promptPath, sessionPath, startup)
 	projector := startPiLiveProjector(sessionPath, turnState)
 	if projector != nil {
 		defer projector.Stop()
 	}
-	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, nil)
+	result := pe.Platform.Run(argv, taskEnv, env, pe.Timeout, stopRequested, nil)
 
 	logs := strings.Join(result.RawLines, "\n")
 	if sessionPath != "" {
@@ -256,91 +276,8 @@ func piLineEvents(line string) []game.LiveAgentEvent {
 	if !ok || getString(msg, "role") != "assistant" {
 		return nil
 	}
-	events := game.ExtractLiveAgentEvents(assistantText(msg))
-	events = append(events, piToolCallEvents(msg)...)
-	return events
-}
-
-func piToolCallEvents(msg map[string]interface{}) []game.LiveAgentEvent {
-	content, _ := msg["content"].([]interface{})
-	var events []game.LiveAgentEvent
-	for _, block := range content {
-		bm, ok := block.(map[string]interface{})
-		if !ok || getString(bm, "type") != "toolCall" {
-			continue
-		}
-		text := safeToolProgressText(bm)
-		if text == "" {
-			continue
-		}
-		events = append(events, game.LiveAgentEvent{
-			Kind: "tool",
-			Text: text,
-		})
-	}
-	return events
-}
-
-func safeToolProgressText(block map[string]interface{}) string {
-	name := getString(block, "name")
-	args, _ := block["arguments"].(map[string]interface{})
-	switch name {
-	case "read":
-		if path := safePathLabel(getString(args, "path")); path != "" {
-			return "Reading " + path
-		}
-		return "Reading files"
-	case "write", "edit":
-		if path := safePathLabel(getString(args, "path")); path != "" {
-			return "Editing " + path
-		}
-		return "Editing workspace files"
-	case "bash":
-		return safeShellProgressText(getString(args, "command"))
-	case "":
-		return ""
-	default:
-		return "Using " + name
-	}
-}
-
-func safePathLabel(path string) string {
-	path = strings.TrimSpace(path)
-	if path == "" {
-		return ""
-	}
-	path = strings.TrimRight(path, "/")
-	if path == "" {
-		return ""
-	}
-	parts := strings.Split(path, "/")
-	label := parts[len(parts)-1]
-	if label == "" || label == "." || label == ".." {
-		return "file"
-	}
-	if len(parts) > 1 {
-		parent := parts[len(parts)-2]
-		if parent != "" && parent != "." && parent != ".." {
-			return parent + "/" + label
-		}
-	}
-	return label
-}
-
-func safeShellProgressText(command string) string {
-	command = strings.TrimSpace(command)
-	switch {
-	case strings.HasPrefix(command, "kubectl "):
-		return "Running kubectl"
-	case strings.HasPrefix(command, "git "):
-		return "Updating workspace"
-	case strings.HasPrefix(command, "npm "), strings.HasPrefix(command, "npx "), strings.Contains(command, " npm "):
-		return "Running Node build step"
-	case command == "":
-		return "Running shell command"
-	default:
-		return "Running shell command"
-	}
+	// Tool calls stay in the Pi session log; activity shows what the agent reports.
+	return game.ExtractLiveAgentEvents(assistantText(msg))
 }
 
 // CheckpointWorkspace creates a workspace checkpoint.
@@ -350,6 +287,14 @@ func (pe *PiExecutor) CheckpointWorkspace(dest string) bool {
 
 // BuildPiArgv builds the Pi command line.
 func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
+	return buildPiArgv(model, thinking, taskPath, sessionPath, false)
+}
+
+func buildPiArgv(model, thinking, taskPath, sessionPath string, startup bool) []string {
+	piCommand := "exec pi"
+	if startup {
+		piCommand += ` -e "$TELOS_PI_STARTUP_EXTENSION"`
+	}
 	script := `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; ` +
 		`if ! command -v pi >/dev/null 2>&1; then ` +
 		`for nvm_script in "${NVM_DIR:-}/nvm.sh" "$HOME/.nvm/nvm.sh" "/usr/local/nvm/nvm.sh"; do ` +
@@ -364,11 +309,11 @@ func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
 		`append_file=""; ` +
 		`if [ -n "$append_prompt" ]; then append_file="$(mktemp)"; printf '%s' "$append_prompt" > "$append_file"; fi; ` +
 		`if [ -n "${4:-}" ]; then ` +
-		`if [ -n "$append_file" ]; then exec pi --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --session "$4" -p "$prompt"; fi; ` +
-		`exec pi --mode text --model "$1" --thinking "$2" --session "$4" -p "$prompt"; ` +
+		`if [ -n "$append_file" ]; then ` + piCommand + ` --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --session "$4" -p "$prompt"; fi; ` +
+		piCommand + ` --mode text --model "$1" --thinking "$2" --session "$4" -p "$prompt"; ` +
 		`fi; ` +
-		`if [ -n "$append_file" ]; then exec pi --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --no-session -p "$prompt"; fi; ` +
-		`exec pi --mode text --model "$1" --thinking "$2" --no-session -p "$prompt"`
+		`if [ -n "$append_file" ]; then ` + piCommand + ` --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --no-session -p "$prompt"; fi; ` +
+		piCommand + ` --mode text --model "$1" --thinking "$2" --no-session -p "$prompt"`
 	argv := []string{"sh", "-c", script, "pi", model, thinking}
 	if taskPath != "" {
 		argv = append(argv, "@"+taskPath)

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sync"
@@ -197,14 +198,21 @@ func visitEvidenceLinesReverse(path string, visit func(map[string]interface{}) b
 	if err != nil {
 		return
 	}
+	_ = VisitLinesReverse(f, info.Size(), visit)
+}
+
+// VisitLinesReverse reads a fixed snapshot from the end, stopping when visit
+// returns true. Invalid JSON and blank lines are skipped. Readers can bound a
+// tail request without decoding or indexing the file's older history.
+func VisitLinesReverse(reader io.ReaderAt, size int64, visit func(map[string]any) bool) error {
 	const chunkSize int64 = 64 * 1024
-	end := info.Size()
+	end := size
 	var carry []byte
 	for end > 0 {
 		start := max(end-chunkSize, 0)
 		chunk := make([]byte, end-start)
-		if _, err := f.ReadAt(chunk, start); err != nil {
-			return
+		if _, err := reader.ReadAt(chunk, start); err != nil {
+			return err
 		}
 		combined := append(chunk, carry...)
 		lines := bytes.Split(combined, []byte{'\n'})
@@ -219,12 +227,13 @@ func visitEvidenceLinesReverse(path string, visit func(map[string]interface{}) b
 			}
 			var record map[string]interface{}
 			if json.Unmarshal(line, &record) == nil && visit(record) {
-				return
+				return nil
 			}
 		}
 		carry = append([]byte(nil), lines[0]...)
 		end = start
 	}
+	return nil
 }
 
 func splitLines(s string) []string {

@@ -100,10 +100,81 @@ func TestPackageForReferenceUsesRegistryDigest(t *testing.T) {
 	}
 }
 
+func TestPullPackageFallsBackToSkill(t *testing.T) {
+	digest, bundle := testRegistrySkillBundle(t, "verify-test")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/skills/telos/verify-test/versions/1.2.3":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"scope":   "telos",
+				"name":    "verify-test",
+				"version": "1.2.3",
+				"ref":     "@telos/verify-test:1.2.3",
+				"digest":  digest,
+			})
+		case "/api/skills/telos/verify-test/versions/1.2.3/bundle":
+			_, _ = w.Write(bundle)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+	client := cloud.NewClient(srv.URL, "token")
+
+	reference, err := parsePackageReference("@telos/verify-test:1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(t.TempDir(), "verify-test")
+	gotDigest, path, err := pullPackage(client, reference, output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if gotDigest != digest || path != output {
+		t.Fatalf("pulled digest=%q path=%q", gotDigest, path)
+	}
+	if data, err := os.ReadFile(filepath.Join(output, "SKILL.md")); err != nil || !strings.Contains(string(data), "Verify the result.") {
+		t.Fatalf("pulled SKILL.md = %q, %v", data, err)
+	}
+
+	missing, err := parsePackageReference("@telos/missing:1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := pullPackage(client, missing, filepath.Join(t.TempDir(), "missing")); err == nil ||
+		err.Error() != "no package or skill found for @telos/missing:1.0.0" {
+		t.Fatalf("missing reference error = %v", err)
+	}
+}
+
+func TestPullPackageDoesNotHidePackageErrors(t *testing.T) {
+	skillRequested := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/skills/") {
+			skillRequested = true
+		}
+		http.Error(w, "registry unavailable", http.StatusServiceUnavailable)
+	}))
+	defer srv.Close()
+
+	reference, err := parsePackageReference("@telos/demo:1.2.3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := pullPackage(cloud.NewClient(srv.URL, "token"), reference, filepath.Join(t.TempDir(), "demo")); err == nil ||
+		!strings.Contains(err.Error(), "resolve @telos/demo:1.2.3") {
+		t.Fatalf("error = %v", err)
+	}
+	if skillRequested {
+		t.Fatal("a package lookup failure fell back to the skill registry")
+	}
+}
+
 func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	pkg := testApplyPackage(t)
 	var published bool
 	var forcedUpdate bool
+	var listed int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3":
@@ -117,6 +188,9 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3/bundle":
 			_, _ = w.Write(pkg.Bytes)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+			listed++
+			_ = json.NewEncoder(w).Encode(map[string]any{"deployments": []any{}})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/packages":
 			published = true
 			http.Error(w, "unexpected publish", http.StatusInternalServerError)
@@ -177,17 +251,23 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	if result["operation"] != "created" || result["context"] != "personal" {
 		t.Fatalf("apply result = %#v", result)
 	}
+	if listed != 1 {
+		t.Fatalf("create checked for an existing Goal %d times, want 1", listed)
+	}
 
 	out = captureStdout(t, func() {
 		cmdApply([]string{
 			"@telos/demo:1.2.3",
-			"--session", "sess_registry",
+			"--goal", "sess_registry",
 			"--force",
 			"--json",
 		})
 	})
 	if !forcedUpdate {
 		t.Fatal("forced registry apply did not update the deployment")
+	}
+	if listed != 1 {
+		t.Fatal("an update through --goal checked for a duplicate name")
 	}
 	result = map[string]any{}
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
@@ -226,7 +306,7 @@ func TestRegistryPackageForApplyRejectsDigestMismatch(t *testing.T) {
 	}
 }
 
-func TestMaterializePackageDirectoryAndMarkdown(t *testing.T) {
+func TestMaterializePackageWritesADirectory(t *testing.T) {
 	pkg := testApplyPackage(t)
 	pulled := &pulledPackage{
 		reference: packageReference{
@@ -250,19 +330,18 @@ func TestMaterializePackageDirectoryAndMarkdown(t *testing.T) {
 	assertFileContains(t, filepath.Join(dir, "SPEC.md"), "name: demo")
 	assertFileContains(t, filepath.Join(dir, "manifest.json"), `"schema_version": 1`)
 
-	markdown := filepath.Join(root, "copy.md")
-	path, err = materializePackage(cloud.NewClient("", ""), pulled, markdown)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if path != markdown {
-		t.Fatalf("path: got %q want %q", path, markdown)
-	}
-	assertFileContains(t, markdown, "name: demo")
-
-	if _, err := materializePackage(cloud.NewClient("", ""), pulled, markdown); err == nil ||
+	if _, err := materializePackage(cloud.NewClient("", ""), pulled, dir); err == nil ||
 		!strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("existing output error: %v", err)
+	}
+
+	markdown := filepath.Join(root, "copy.md")
+	if _, err := materializePackage(cloud.NewClient("", ""), pulled, markdown); err == nil ||
+		!strings.Contains(err.Error(), "not a Markdown file") {
+		t.Fatalf("Markdown output error: %v", err)
+	}
+	if _, err := os.Lstat(markdown); !os.IsNotExist(err) {
+		t.Fatalf("Markdown output was created: %v", err)
 	}
 }
 

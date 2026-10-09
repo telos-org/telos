@@ -12,7 +12,6 @@ import (
 
 func TestNewSessionSubstrateDefaultsToLocalProcess(t *testing.T) {
 	cfg, err := NormalizeConfig(Config{
-		Mode: ModeCloud,
 		Auth: AuthConfig{Token: "operator-token"},
 	})
 	if err != nil {

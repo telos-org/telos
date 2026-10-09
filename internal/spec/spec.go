@@ -37,8 +37,6 @@ type EnvironmentSpec struct {
 	SkillSourceRefs            map[string]string
 	SpecText                   string
 	IntervalSeconds            *int
-	Tags                       []string
-	Platform                   string // "local" or "cloud"
 	RequiredVerifierSkillPaths []string
 }
 
@@ -137,15 +135,6 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 		SpecText: specBody,
 	}
 
-	// platform
-	if v, ok := raw["platform"]; ok {
-		p := fmt.Sprint(v)
-		if p != "local" && p != "cloud" {
-			return nil, fmt.Errorf("%s: invalid platform '%s' (valid: cloud, local)", path, p)
-		}
-		env.Platform = p
-	}
-
 	// skills
 	if v, ok := raw["skills"]; ok {
 		refs, reqPaths, sourceRefs, err := parseSkillRefs(baseDir, v)
@@ -164,17 +153,6 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 			return nil, err
 		}
 		env.IntervalSeconds = &secs
-	}
-
-	// tags
-	if v, ok := raw["tags"]; ok {
-		list, ok := v.([]interface{})
-		if !ok {
-			return nil, fmt.Errorf("%s: 'tags' must be a list", path)
-		}
-		for _, t := range list {
-			env.Tags = append(env.Tags, fmt.Sprint(t))
-		}
 	}
 
 	return env, nil
