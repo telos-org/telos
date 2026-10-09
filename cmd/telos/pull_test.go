@@ -296,7 +296,7 @@ func TestRegistryPackageForApplyRejectsDigestMismatch(t *testing.T) {
 	}
 }
 
-func TestMaterializePackageDirectoryAndMarkdown(t *testing.T) {
+func TestMaterializePackageWritesADirectory(t *testing.T) {
 	pkg := testApplyPackage(t)
 	pulled := &pulledPackage{
 		reference: packageReference{
@@ -320,19 +320,18 @@ func TestMaterializePackageDirectoryAndMarkdown(t *testing.T) {
 	assertFileContains(t, filepath.Join(dir, "SPEC.md"), "name: demo")
 	assertFileContains(t, filepath.Join(dir, "manifest.json"), `"schema_version": 1`)
 
-	markdown := filepath.Join(root, "copy.md")
-	path, err = materializePackage(cloud.NewClient("", ""), pulled, markdown)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if path != markdown {
-		t.Fatalf("path: got %q want %q", path, markdown)
-	}
-	assertFileContains(t, markdown, "name: demo")
-
-	if _, err := materializePackage(cloud.NewClient("", ""), pulled, markdown); err == nil ||
+	if _, err := materializePackage(cloud.NewClient("", ""), pulled, dir); err == nil ||
 		!strings.Contains(err.Error(), "already exists") {
 		t.Fatalf("existing output error: %v", err)
+	}
+
+	markdown := filepath.Join(root, "copy.md")
+	if _, err := materializePackage(cloud.NewClient("", ""), pulled, markdown); err == nil ||
+		!strings.Contains(err.Error(), "not a Markdown file") {
+		t.Fatalf("Markdown output error: %v", err)
+	}
+	if _, err := os.Lstat(markdown); !os.IsNotExist(err) {
+		t.Fatalf("Markdown output was created: %v", err)
 	}
 }
 
