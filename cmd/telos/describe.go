@@ -13,7 +13,7 @@ import (
 // -- describe -----------------------------------------------------------------
 
 func cmdDescribe(args []string) {
-	fs := newCommandFlagSet("describe", "telos describe SESSION [flags]")
+	fs := newCommandFlagSet("describe", "telos describe GOAL [flags]")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -23,7 +23,7 @@ func cmdDescribe(args []string) {
 		os.Exit(2)
 	}
 
-	requireArgCount(fs, 1, "one SESSION")
+	requireArgCount(fs, 1, "one GOAL")
 	sessionID := fs.Arg(0)
 	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -46,7 +46,7 @@ func cmdDescribe(args []string) {
 	session, err := getSessionFromAnywhere(sessionID)
 	if err == nil {
 		if *jsonOut {
-			printJSON(session)
+			printJSON(goalJSON(session))
 			return
 		}
 
@@ -72,7 +72,7 @@ func cmdDescribe(args []string) {
 	os.Exit(1)
 }
 
-// cloudSessionJSON is a Cloud session as describe and list print it. Callers
+// cloudSessionJSON is a Cloud Goal as describe and list print it. Callers
 // read status and status_reason; the raw lifecycle state is left out.
 type cloudSessionJSON struct {
 	*cloud.SessionRecord
@@ -113,7 +113,7 @@ func getCloudSessionForContext(
 	}
 	session, err := control.GetSession(sessionID)
 	if err != nil {
-		return nil, "", err
+		return nil, "", goalNotFound(err, sessionID, control.ContextName())
 	}
 	return session, control.ContextName(), nil
 }
@@ -129,7 +129,7 @@ func printCloudSessionDescriptionForContext(
 ) {
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
-	printSummaryField(out, "Session", session.ID)
+	printSummaryField(out, "Goal", session.ID)
 	printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
 	printCloudInferenceSummary(out, session)
 	if contextName != "" {
@@ -208,7 +208,7 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	printSummaryField(out, "Name", row.Name)
 	printSummaryField(out, "Target", row.Target)
 	printSummaryField(out, "Status", row.Status)
-	printSummaryField(out, "Session", row.Session)
+	printSummaryField(out, "Goal", row.Session)
 	if session.TotalCostUSD != nil {
 		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	}

@@ -88,7 +88,7 @@ func TestPrintPlanPreviewShowsSessionDiff(t *testing.T) {
 	printPlanPreview(&out, compiled, "personal", comparison)
 	text := out.String()
 	for _, want := range []string{
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Current   @telos/demo:1.2.3",
 		"--- deployed/SPEC.md",
 		"+++ proposed/SPEC.md",
@@ -123,6 +123,10 @@ func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
 
 func TestPlanShowsCanonicalContext(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/deployments" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"deployments": []any{}})
+			return
+		}
 		if r.URL.Path != "/api/account/bootstrap" {
 			http.NotFound(w, r)
 			return
@@ -223,7 +227,7 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := captureStdout(t, func() {
-		cmdPlan([]string{specPath, "--session", "sess_123", "--json"})
+		cmdPlan([]string{specPath, "--goal", "sess_123", "--json"})
 	})
 	var plan struct {
 		Spec    map[string]any `json:"spec"`
@@ -284,8 +288,8 @@ func configurePlanSkillsCatalogue(t *testing.T) string {
 
 func TestCompareSessionSpecRejectsLocalSession(t *testing.T) {
 	_, err := compareSessionSpec("local_123", nil, planSpecState{}, "")
-	if err == nil || !strings.Contains(err.Error(), "only compares Telos Cloud sessions") {
-		t.Fatalf("error = %v, want local session rejection", err)
+	if err == nil || !strings.Contains(err.Error(), "only compares Telos Cloud Goals") {
+		t.Fatalf("error = %v, want local Goal rejection", err)
 	}
 }
 

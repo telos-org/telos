@@ -42,8 +42,8 @@ func TestCLIWithTestFakeExecutor(t *testing.T) {
 	}
 	runOut := runProcess(t, workspace, env, telosBin, "run", "SPEC.md", "--json", "--max-cost-usd", "1")
 	var runResp struct {
-		SessionID  string `json:"session_id"`
-		SessionDir string `json:"session_dir"`
+		SessionID  string `json:"goal_id"`
+		SessionDir string `json:"goal_dir"`
 		SpecName   string `json:"spec_name"`
 		Status     string `json:"status"`
 	}
@@ -60,8 +60,8 @@ func TestCLIWithTestFakeExecutor(t *testing.T) {
 	listOut := runProcess(t, workspace, env, telosBin, "list", "--local", "--wide", "--json")
 	var listResp struct {
 		Sessions []struct {
-			SessionID string `json:"session_id"`
-		} `json:"sessions"`
+			SessionID string `json:"goal_id"`
+		} `json:"goals"`
 	}
 	mustJSON(t, listOut, &listResp)
 	listed := false
@@ -77,7 +77,7 @@ func TestCLIWithTestFakeExecutor(t *testing.T) {
 
 	describeOut := runProcess(t, workspace, env, telosBin, "describe", runResp.SessionID, "--json")
 	var describeResp struct {
-		SessionID        string   `json:"session_id"`
+		SessionID        string   `json:"goal_id"`
 		Status           string   `json:"status"`
 		CompletionReason *string  `json:"completion_reason"`
 		TotalCostUSD     *float64 `json:"total_cost_usd"`
@@ -112,7 +112,7 @@ func TestCLIWithTestFakeExecutor(t *testing.T) {
 
 	deleteOut := runProcess(t, workspace, env, telosBin, "delete", runResp.SessionID, "--json")
 	var deleteResp struct {
-		SessionID string `json:"session_id"`
+		SessionID string `json:"goal_id"`
 		Status    string `json:"status"`
 	}
 	mustJSON(t, deleteOut, &deleteResp)

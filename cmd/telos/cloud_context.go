@@ -38,7 +38,7 @@ func followUpContext(control *cloud.Client, contextOverride string) string {
 
 func validateCloudSessionContext(sessionID, contextOverride string) error {
 	if isLocalApplyID(strings.TrimSpace(sessionID)) && strings.TrimSpace(contextOverride) != "" {
-		return fmt.Errorf("--context cannot be used with a local session")
+		return fmt.Errorf("--context cannot be used with a local Goal")
 	}
 	return nil
 }

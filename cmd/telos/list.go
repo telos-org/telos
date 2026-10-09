@@ -17,8 +17,8 @@ func cmdList(args []string) {
 	fs := newCommandFlagSet("list", "telos list [flags]")
 	limit := fs.Int("limit", 0, "Limit results")
 	wide := fs.Bool("wide", false, "Wide output")
-	localOnly := fs.Bool("local", false, "Local sessions only")
-	cloudOnly := fs.Bool("cloud", false, "Cloud sessions only")
+	localOnly := fs.Bool("local", false, "Local Goals only")
+	cloudOnly := fs.Bool("cloud", false, "Cloud Goals only")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -78,23 +78,23 @@ func cmdList(args []string) {
 	visible := visibleListSessions(sessions, effectiveWide)
 	visible = limitListSessions(visible, *limit)
 	if *jsonOut {
-		printJSON(sessionapi.SessionListResponse{Sessions: sessionapi.SessionListItems(visible)})
+		printJSON(map[string]any{"goals": goalJSONList(sessionapi.SessionListItems(visible))})
 		return
 	}
 
 	if len(visible) == 0 {
 		if !effectiveWide && len(sessions) > 0 {
-			fmt.Println("no top-level sessions (use --wide for child sessions)")
+			fmt.Println("no top-level Goals (use --wide for child Goals)")
 		} else {
-			fmt.Println("no sessions")
+			fmt.Println("no Goals")
 		}
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if effectiveWide {
-		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPARENT\tCOST\tSESSION")
+		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPARENT\tCOST\tID")
 	} else {
-		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tID")
 	}
 	for _, sess := range visible {
 		row := displayRow(sess)
@@ -176,13 +176,13 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 			sessions = append(sessions, newCloudSessionJSON(&cloudSessions[index]))
 		}
 		printJSON(map[string]any{
-			"context":  control.ContextName(),
-			"sessions": sessions,
+			"context": control.ContextName(),
+			"goals":   sessions,
 		})
 		return
 	}
 	if len(cloudSessions) == 0 {
-		fmt.Println("no sessions")
+		fmt.Println("no Goals")
 		return
 	}
 	if wide {
@@ -191,9 +191,9 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if wide {
-		fmt.Fprintln(w, "NAME\tSTATUS\tREVISION\tSERVICE\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tREVISION\tSERVICE\tID")
 	} else {
-		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tID")
 	}
 	for _, session := range cloudSessions {
 		serviceURL := optionalSessionString(session.ServiceURL)
