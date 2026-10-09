@@ -30,7 +30,7 @@ type pulledPackage struct {
 
 func cmdGet(args []string) {
 	fs := newCommandFlagSet("get", "telos get SESSION [flags]")
-	output := fs.String("output", "", "Destination package directory or Markdown file")
+	output := fs.String("output", "", "Destination package directory")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
 	requireArgCount(fs, 1, "one SESSION")
@@ -261,8 +261,7 @@ func materializePackage(control *cloud.Client, pkg *pulledPackage, output string
 	if pkg == nil {
 		return "", fmt.Errorf("package is required")
 	}
-	rootSpec, err := verifiedPackageSpec(pkg)
-	if err != nil {
+	if _, err := verifiedPackageSpec(pkg); err != nil {
 		return "", err
 	}
 
@@ -271,7 +270,7 @@ func materializePackage(control *cloud.Client, pkg *pulledPackage, output string
 		destination = pkg.reference.name
 	}
 	if strings.EqualFold(filepath.Ext(destination), ".md") {
-		return destination, writePackageSpec(rootSpec, destination)
+		return "", fmt.Errorf("--output names a directory, not a Markdown file; the spec is written to SPEC.md inside it")
 	}
 	hydrated, _, err := spec.HydrateApplyPackage(pkg.data, registrySkillFetcher(control))
 	if err != nil {
@@ -334,25 +333,6 @@ func registrySkillFetcher(control *cloud.Client) spec.ApplyPackageSkillFetcher {
 			reference.Version,
 		)
 	}
-}
-
-func writePackageSpec(markdown []byte, destination string) error {
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("%s already exists", destination)
-		}
-		return err
-	}
-	if _, err := file.Write(markdown); err != nil {
-		file.Close()
-		os.Remove(destination)
-		return err
-	}
-	return file.Close()
 }
 
 func extractPackageDirectory(data []byte, destination string) error {
