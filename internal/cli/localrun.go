@@ -27,8 +27,6 @@ const (
 
 // LocalRunConfig holds configuration for local PVG runs.
 type LocalRunConfig struct {
-	SessionKind     sessionapi.SessionKind
-	ParentSessionID *string
 	Workspace       string
 	Model           string
 	Thinking        string
@@ -57,10 +55,6 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	absSpec, err := filepath.Abs(specPath)
 	if err != nil {
 		return nil, fmt.Errorf("resolve spec path: %w", err)
-	}
-	sessionKind := localSessionKind(cfg)
-	if sessionKind == sessionapi.KindController && (cfg.Until > 0 || cfg.UntilSeconds > 0) {
-		return nil, fmt.Errorf("controller sessions do not support per-run duration bounds")
 	}
 	sourceWorkspace, scopePath, err := workspaceScope(cfg.Workspace)
 	if err != nil {
@@ -95,50 +89,18 @@ func CreateLocalSession(specPath string, cfg LocalRunConfig) (*LocalSession, err
 	if err != nil {
 		return nil, fmt.Errorf("read spec: %w", err)
 	}
-	sourceSpecPath := absSpec
-	sessionSpecPath := state.SpecPath()
-	currentRevision := strPtr(compiled.Environment.Version)
-	version := 1
-	currentSpecVersion := &version
-	var specVersions []map[string]any
-	var packageDigest *string
-	var applyPackageLock *spec.ApplyPackageManifest
-	if sessionKind == sessionapi.KindController && cfg.ParentSessionID == nil {
-		revision, err := materializeLocalControllerRevision(sessionDir, compiled, state.SpecPath(), data)
-		if err != nil {
-			return nil, err
-		}
-		sourceSpecPath = revision.PackageSpecPath
-		sessionSpecPath = revision.ActiveSpecPath
-		currentRevision = strPtr(revision.Version)
-		packageDigest = strPtr(revision.PackageDigest)
-		applyPackageLock = revision.ApplyPackageLock
-		specVersions = []map[string]any{{
-			"version":           version,
-			"revision":          revision.Version,
-			"spec_path":         revision.SpecPath,
-			"spec_sha256":       specDataSHA256(data),
-			"package_digest":    revision.PackageDigest,
-			"package_path":      revision.PackagePath,
-			"package_spec_path": revision.PackageSpecPath,
-			"active_spec_path":  revision.ActiveSpecPath,
-			"provenance":        map[string]any{"type": "inline"},
-			"created_at":        time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		}}
-	} else {
-		if err := os.WriteFile(state.SpecPath(), data, 0o644); err != nil {
-			return nil, fmt.Errorf("write session spec: %w", err)
-		}
-		specVersions = []map[string]any{{
-			"version":     version,
-			"revision":    compiled.Environment.Version,
-			"spec_path":   state.SpecPath(),
-			"spec_sha256": specDataSHA256(data),
-			"created_at":  time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		}}
+	if err := os.WriteFile(state.SpecPath(), data, 0o644); err != nil {
+		return nil, fmt.Errorf("write session spec: %w", err)
 	}
-
-	if err := writeLocalManifest(sessionDir, compiled, sourceSpecPath, sessionSpecPath, state, cfg, workspace, currentRevision, currentSpecVersion, specVersions, packageDigest, applyPackageLock); err != nil {
+	version := 1
+	specVersions := []map[string]any{{
+		"version":     version,
+		"revision":    compiled.Environment.Version,
+		"spec_path":   state.SpecPath(),
+		"spec_sha256": specDataSHA256(data),
+		"created_at":  time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+	}}
+	if err := writeLocalManifest(sessionDir, compiled, absSpec, state.SpecPath(), state, cfg, workspace, strPtr(compiled.Environment.Version), &version, specVersions); err != nil {
 		return nil, err
 	}
 
@@ -247,6 +209,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		EpochID:         epochID,
 		IsController:    controllerPromptEnabled(manifest),
 		PrimarySpecPath: compileSpecPath,
+		LocalRuntime:    manifest.ResolvedRuntime(sessionapi.SessionRuntime(os.Getenv("TELOS_RUNTIME"))) == sessionapi.RuntimeLocal,
 		StopRequested:   func() bool { return sessionStopped(sessionDir) },
 	}
 
@@ -392,126 +355,12 @@ func newSessionDir(root string) (string, error) {
 	return "", fmt.Errorf("could not allocate local session under %s", root)
 }
 
-type localControllerRevision struct {
-	Version          string
-	SpecPath         string
-	PackagePath      string
-	PackageSpecPath  string
-	ActiveSpecPath   string
-	PackageDigest    string
-	ApplyPackageLock *spec.ApplyPackageManifest
-}
-
-type localRevisionMetadata struct {
-	Version         string `json:"version"`
-	Sequence        int    `json:"sequence"`
-	SpecSHA256      string `json:"spec_sha256"`
-	PackageDigest   string `json:"package_digest,omitempty"`
-	SpecPath        string `json:"spec_path"`
-	PackagePath     string `json:"package_path,omitempty"`
-	PackageSpecPath string `json:"package_spec_path,omitempty"`
-	ActiveSpecPath  string `json:"active_spec_path"`
-	CreatedAt       string `json:"created_at"`
-}
-
-func materializeLocalControllerRevision(sessionDir string, compiled *spec.CompiledEnvironment, activeSpecPath string, specData []byte) (localControllerRevision, error) {
-	pkg, err := spec.BuildApplyPackage(compiled)
-	if err != nil {
-		return localControllerRevision{}, err
-	}
-	version := compiled.Environment.Version
-	revisionDir := filepath.Join(sessionDir, "revisions", version)
-	packagePath := filepath.Join(revisionDir, "package")
-	manifest := pkg.Manifest
-	revision := localControllerRevision{
-		Version:          version,
-		SpecPath:         filepath.Join(revisionDir, "SPEC.md"),
-		PackagePath:      packagePath,
-		PackageSpecPath:  filepath.Join(packagePath, "SPEC.md"),
-		ActiveSpecPath:   activeSpecPath,
-		PackageDigest:    pkg.Digest,
-		ApplyPackageLock: &manifest,
-	}
-	if err := os.MkdirAll(revisionDir, 0o755); err != nil {
-		return localControllerRevision{}, err
-	}
-	if err := os.WriteFile(revision.SpecPath, specData, 0o644); err != nil {
-		return localControllerRevision{}, fmt.Errorf("write revision spec: %w", err)
-	}
-	if _, err := spec.ExtractApplyPackage(pkg.Bytes, packagePath); err != nil {
-		return localControllerRevision{}, fmt.Errorf("extract revision package: %w", err)
-	}
-	if err := writeLocalRevisionMetadata(filepath.Join(revisionDir, "revision.json"), localRevisionMetadata{
-		Version:         version,
-		Sequence:        1,
-		SpecSHA256:      specDataSHA256(specData),
-		PackageDigest:   pkg.Digest,
-		SpecPath:        revision.SpecPath,
-		PackagePath:     revision.PackagePath,
-		PackageSpecPath: revision.PackageSpecPath,
-		ActiveSpecPath:  revision.ActiveSpecPath,
-		CreatedAt:       time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-	}); err != nil {
-		return localControllerRevision{}, fmt.Errorf("write revision metadata: %w", err)
-	}
-	if err := replaceLocalSymlink(filepath.Join(sessionDir, "revisions", "current"), version); err != nil {
-		return localControllerRevision{}, fmt.Errorf("update current revision link: %w", err)
-	}
-	specTarget, err := filepath.Rel(filepath.Dir(activeSpecPath), filepath.Join(sessionDir, "revisions", "current", "SPEC.md"))
-	if err != nil {
-		return localControllerRevision{}, err
-	}
-	if err := replaceLocalSymlink(activeSpecPath, specTarget); err != nil {
-		return localControllerRevision{}, fmt.Errorf("update active spec link: %w", err)
-	}
-	if err := replaceLocalSymlink(filepath.Join(sessionDir, "package"), filepath.Join("revisions", "current", "package")); err != nil {
-		return localControllerRevision{}, fmt.Errorf("update active package link: %w", err)
-	}
-	return revision, nil
-}
-
-func writeLocalRevisionMetadata(path string, metadata localRevisionMetadata) error {
-	data, err := json.MarshalIndent(metadata, "", "  ")
-	if err != nil {
-		return err
-	}
-	data = append(data, '\n')
-	return os.WriteFile(path, data, 0o644)
-}
-
-func replaceLocalSymlink(path string, target string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := filepath.Join(filepath.Dir(path), "."+filepath.Base(path)+".tmp")
-	_ = os.Remove(tmp)
-	if err := os.Symlink(target, tmp); err != nil {
-		return err
-	}
-	if err := os.RemoveAll(path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		_ = os.Remove(tmp)
-		return err
-	}
-	return nil
-}
-
 func specDataSHA256(data []byte) string {
 	hash := sha256.Sum256(data)
 	return fmt.Sprintf("%x", hash)
 }
 
-func localSessionKind(cfg LocalRunConfig) sessionapi.SessionKind {
-	if cfg.SessionKind != "" {
-		return cfg.SessionKind
-	}
-	return sessionapi.KindTask
-}
-
-func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, sourceSpecPath string, sessionSpecPath string, state *game.PVGState, cfg LocalRunConfig, workspace *sessionapi.Workspace, currentRevision *string, currentSpecVersion *int, specVersions []map[string]any, packageDigest *string, applyPackageLock *spec.ApplyPackageManifest) error {
+func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, sourceSpecPath string, sessionSpecPath string, state *game.PVGState, cfg LocalRunConfig, workspace *sessionapi.Workspace, currentRevision *string, currentSpecVersion *int, specVersions []map[string]any) error {
 	model := cfg.Model
 	if model == "" {
 		model = DefaultLocalModel
@@ -520,23 +369,18 @@ func writeLocalManifest(sessionDir string, compiled *spec.CompiledEnvironment, s
 	if thinking == "" {
 		thinking = DefaultLocalThinking
 	}
-	sessionKind := localSessionKind(cfg)
-
 	manifestPath := filepath.Join(sessionDir, "session.json")
 	err := sessionapi.WriteInitialManifest(manifestPath, sessionapi.InitialManifest{
 		SessionID:          filepath.Base(sessionDir),
-		SessionKind:        sessionKind,
+		SessionKind:        sessionapi.KindTask,
 		Runtime:            sessionapi.RuntimeLocal,
 		CreatedAt:          time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		ParentSessionID:    cfg.ParentSessionID,
 		SourceSpecPath:     &sourceSpecPath,
 		SessionSpecPath:    &sessionSpecPath,
 		SpecName:           compiled.Environment.Name,
 		CurrentRevision:    currentRevision,
 		CurrentSpecVersion: currentSpecVersion,
 		SpecVersions:       specVersions,
-		PackageDigest:      packageDigest,
-		ApplyPackageLock:   applyPackageLock,
 		Config: sessionapi.SessionConfig{
 			Model:           model,
 			Until:           cfg.Until,

@@ -244,10 +244,6 @@ func ToIRJSON(c *CompiledEnvironment) map[string]interface{} {
 	if len(specText) > 500 {
 		specText = specText[:500]
 	}
-	platform := c.Environment.Platform
-	if platform == "" {
-		platform = "cloud"
-	}
 	return map[string]interface{}{
 		"kind":             "telos.compiled_environment.v1",
 		"name":             c.Environment.Name,
@@ -257,7 +253,6 @@ func ToIRJSON(c *CompiledEnvironment) map[string]interface{} {
 		"context":          c.Context,
 		"interval_seconds": c.Environment.IntervalSeconds,
 		"tags":             c.Environment.Tags,
-		"platform":         platform,
 		"skills":           skillList,
 	}
 }

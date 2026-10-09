@@ -146,6 +146,12 @@ type InitialManifestSpec struct {
 	IntervalSeconds *int
 }
 
+// ResolvedRuntime reports where the session executes. Manifests written before
+// runtime was recorded fall back to their provenance, then to fallback.
+func (m *Manifest) ResolvedRuntime(fallback SessionRuntime) SessionRuntime {
+	return manifestRuntime(m, fallback)
+}
+
 func WriteInitialManifest(path string, input InitialManifest) error {
 	m := ManifestFromInitial(input)
 	return WriteManifest(path, &m)

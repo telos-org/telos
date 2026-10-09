@@ -3,45 +3,34 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
-
-	"github.com/telos-org/telos/internal/telosd"
 )
 
-func TestConfigFromFlagsDefaultsToLocal(t *testing.T) {
-	cfg, err := configFromFlags("", "")
-	if err != nil {
-		t.Fatalf("configFromFlags: %v", err)
-	}
-	if cfg.Mode != telosd.ModeLocal {
-		t.Fatalf("mode: got %q", cfg.Mode)
-	}
-	if cfg.Server.Transport != "unix" {
-		t.Fatalf("transport: got %q", cfg.Server.Transport)
+func TestConfigFromFlagsRequiresConfig(t *testing.T) {
+	_, err := configFromFlags("", "")
+	if err == nil || !strings.Contains(err.Error(), "--config is required") {
+		t.Fatalf("error = %v, want --config is required", err)
 	}
 }
 
-func TestConfigFromFlagsUsesModeFromConfig(t *testing.T) {
+func writeConfig(t *testing.T) string {
+	t.Helper()
 	path := filepath.Join(t.TempDir(), "telosd.yaml")
 	if err := os.WriteFile(path, []byte(`kind: telosd.config.v1
 mode: cloud
 root: /state
-server:
-  transport: http
-  listen: 127.0.0.1:9000
-auth:
-  type: bearer
-  token: test-token
+token: test-token
 `), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return path
+}
 
-	cfg, err := configFromFlags(path, "")
+func TestConfigFromFlagsLoadsConfig(t *testing.T) {
+	cfg, err := configFromFlags(writeConfig(t), "")
 	if err != nil {
 		t.Fatalf("configFromFlags: %v", err)
-	}
-	if cfg.Mode != telosd.ModeCloud {
-		t.Fatalf("mode: got %q", cfg.Mode)
 	}
 	if cfg.Root != "/state" {
 		t.Fatalf("root: got %q", cfg.Root)
@@ -49,14 +38,11 @@ auth:
 }
 
 func TestConfigFromFlagsRootOverride(t *testing.T) {
-	cfg, err := configFromFlags("", "/tmp/telos-state")
+	cfg, err := configFromFlags(writeConfig(t), "/tmp/telos-state")
 	if err != nil {
 		t.Fatalf("configFromFlags: %v", err)
 	}
 	if cfg.Root != "/tmp/telos-state" {
 		t.Fatalf("root: got %q", cfg.Root)
-	}
-	if cfg.Server.Socket != filepath.Join("/tmp/telos-state", "run", "telosd.sock") {
-		t.Fatalf("socket: got %q", cfg.Server.Socket)
 	}
 }
