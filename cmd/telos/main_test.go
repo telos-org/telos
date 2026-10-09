@@ -115,8 +115,9 @@ func TestPullUsageKeepsFrequentPullAtTopLevel(t *testing.T) {
 }
 
 func TestPrintPlanPreviewCloud(t *testing.T) {
+	interval := 6 * 60 * 60
 	compiled := &spec.CompiledEnvironment{
-		Environment: &spec.EnvironmentSpec{Name: "gitea"},
+		Environment: &spec.EnvironmentSpec{Name: "gitea", Version: "0.1.0", IntervalSeconds: &interval},
 		Namespace:   "ns-gitea",
 		ContentHash: "8a8f0c21",
 		Skills: []*spec.Skill{
@@ -126,22 +127,17 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "personal", nil)
+	printPlanPreview(&out, compiled, "personal", nil)
 	text := out.String()
-	for _, want := range []string{
-		"Spec      gitea",
-		"Target    cloud",
-		"Context   personal",
-		"Path      ./SPEC.md",
-		"Namespace ns-gitea",
-		"Hash      8a8f0c21",
-		"Skills    verify-engineering, verify-quality",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("plan output missing %q:\n%s", want, text)
-		}
+	want := "Spec      gitea\n" +
+		"Version   0.1.0\n" +
+		"Interval  6h\n" +
+		"Context   personal\n" +
+		"Skills    verify-engineering, verify-quality\n"
+	if text != want {
+		t.Fatalf("plan output:\n%s\nwant:\n%s", text, want)
 	}
-	for _, notWant := range []string{"Plan for", "No sessions", "Lineage", "Mutates"} {
+	for _, notWant := range []string{"Target", "Path", "Namespace", "Hash", "Plan for", "No sessions", "Lineage", "Mutates"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("plan output should not contain %q:\n%s", notWant, text)
 		}
@@ -161,7 +157,7 @@ func TestPrintPlanPreviewStarsRequiredVerifierSkills(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "personal", nil)
+	printPlanPreview(&out, compiled, "personal", nil)
 	text := out.String()
 	if !strings.Contains(text, "Skills    verify-engineering*, verify-quality") {
 		t.Fatalf("plan output missing starred skill marker:\n%s", text)

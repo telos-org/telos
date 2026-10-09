@@ -136,7 +136,7 @@ func cmdPlan(args []string) {
 		return
 	}
 
-	printPlanPreview(os.Stdout, compiled, specPath, targetContext, comparison)
+	printPlanPreview(os.Stdout, compiled, targetContext, comparison)
 }
 
 func compilePlanSpec(
@@ -164,20 +164,22 @@ func compilePlanSpec(
 func printPlanPreview(
 	out io.Writer,
 	compiled *spec.CompiledEnvironment,
-	specPath string,
 	contextName string,
 	comparison *specComparison,
 ) {
 	printSummaryField(out, "Spec", compiled.Environment.Name)
-	printSummaryField(out, "Target", "cloud")
+	// A session plan shows version and interval changes after the skills instead.
+	if comparison == nil {
+		printSummaryField(out, "Version", compiled.Environment.Version)
+		if compiled.Environment.IntervalSeconds != nil {
+			printSummaryField(out, "Interval", formatPlanInterval(compiled.Environment.IntervalSeconds))
+		}
+	}
 	printSummaryField(out, "Context", contextName)
 	if comparison != nil {
 		printSummaryField(out, "Session", comparison.sessionID)
 		printSummaryField(out, "Current", comparison.currentRef)
 	}
-	printSummaryField(out, "Path", specPath)
-	printSummaryField(out, "Namespace", compiled.Namespace)
-	printSummaryField(out, "Hash", compiled.ContentHash)
 	if len(compiled.Skills) > 0 {
 		printSummaryField(out, "Skills", strings.Join(skillDisplayNames(compiled), ", "))
 	}
@@ -374,11 +376,19 @@ func planDeltaValue(current, proposed string) string {
 	return firstNonEmpty(current, "-") + " -> " + firstNonEmpty(proposed, "-")
 }
 
+// formatPlanInterval writes an interval the way specs do, such as 6h or 1h30m.
 func formatPlanInterval(seconds *int) string {
 	if seconds == nil {
 		return "-"
 	}
-	return (time.Duration(*seconds) * time.Second).String()
+	value := (time.Duration(*seconds) * time.Second).String()
+	if strings.HasSuffix(value, "m0s") {
+		value = strings.TrimSuffix(value, "0s")
+	}
+	if strings.HasSuffix(value, "h0m") {
+		value = strings.TrimSuffix(value, "0m")
+	}
+	return value
 }
 
 func formatPlanSkillLocks(skills []planSkillLock) string {
