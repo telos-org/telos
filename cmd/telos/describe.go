@@ -72,16 +72,29 @@ func cmdDescribe(args []string) {
 	os.Exit(1)
 }
 
+// cloudSessionJSON is a Cloud session as describe and list print it. Callers
+// read status and status_reason; the raw lifecycle state is left out.
+type cloudSessionJSON struct {
+	*cloud.SessionRecord
+	// State stays nil so it hides the record's raw state.
+	State  *string `json:"state,omitempty"`
+	Status string  `json:"status,omitempty"`
+}
+
+func newCloudSessionJSON(session *cloud.SessionRecord) cloudSessionJSON {
+	return cloudSessionJSON{SessionRecord: session, Status: cloudSessionDisplayStatus(*session)}
+}
+
 func printCloudSessionJSON(
 	session *cloud.SessionRecord,
 	contextName string,
 ) {
 	printJSON(struct {
-		*cloud.SessionRecord
+		cloudSessionJSON
 		Context string `json:"context,omitempty"`
 	}{
-		SessionRecord: session,
-		Context:       contextName,
+		cloudSessionJSON: newCloudSessionJSON(session),
+		Context:          contextName,
 	})
 }
 
@@ -117,7 +130,7 @@ func printCloudSessionDescriptionForContext(
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Session", session.ID)
-	printSummaryField(out, "Revision", session.PackageDigest)
+	printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
 	printCloudInferenceSummary(out, session)
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
@@ -135,6 +148,16 @@ func cloudSessionDisplayStatus(session cloud.SessionRecord) string {
 		return session.Status
 	}
 	return session.State
+}
+
+// shortRevision abbreviates a sha256 package digest to its first 12 hex
+// digits for human output. --json keeps the full digest.
+func shortRevision(digest string) string {
+	hex, ok := strings.CutPrefix(digest, "sha256:")
+	if !ok || len(hex) <= 12 {
+		return digest
+	}
+	return "sha256:" + hex[:12]
 }
 
 func cloudSessionReason(session cloud.SessionRecord) string {
@@ -208,7 +231,7 @@ func printCloudInferenceSummary(out io.Writer, session cloud.SessionRecord) {
 		printSummaryField(out, "Model", model)
 	}
 	if session.AgentThinking != "" {
-		printSummaryField(out, "Thinking", session.AgentThinking+" (requested)")
+		printSummaryField(out, "Thinking", session.AgentThinking)
 	}
 }
 

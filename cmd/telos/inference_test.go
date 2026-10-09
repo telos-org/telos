@@ -348,8 +348,8 @@ func TestCloudReceiptShowsSavedInference(t *testing.T) {
 	if got := configOutputValue(t, out.String(), "Model"); got != "Work Anthropic/claude-test" {
 		t.Fatalf("displayed model = %q, want the --model selection: %s", got, out.String())
 	}
-	if !strings.Contains(out.String(), "high (requested)") {
-		t.Fatalf("description omitted thinking: %s", out.String())
+	if got := configOutputValue(t, out.String(), "Thinking"); got != "high" {
+		t.Fatalf("displayed thinking = %q, want high: %s", got, out.String())
 	}
 	for _, unwanted := range []string{"internal/model", "Inference", "Connection"} {
 		if strings.Contains(out.String(), unwanted) {

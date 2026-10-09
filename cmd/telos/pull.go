@@ -22,12 +22,6 @@ type packageReference struct {
 	ref     string
 }
 
-type registryReference struct {
-	scope   string
-	name    string
-	version string
-}
-
 type pulledPackage struct {
 	reference packageReference
 	digest    string
@@ -36,7 +30,7 @@ type pulledPackage struct {
 
 func cmdGet(args []string) {
 	fs := newCommandFlagSet("get", "telos get SESSION [flags]")
-	output := fs.String("output", "", "Destination package directory or Markdown file")
+	output := fs.String("output", "", "Destination package directory")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
 	requireArgCount(fs, 1, "one SESSION")
@@ -56,54 +50,49 @@ func cmdGet(args []string) {
 	if err != nil {
 		exitWithError(err)
 	}
-	printPackageReceipt("got", pkg, path)
+	printPackageReceipt("got", pkg.reference.ref, pkg.digest, path)
 }
 
 func cmdPull(args []string) {
 	fs, output, contextValue := newPullFlagSet()
 	parseFlags(fs, args)
-	if fs.NArg() > 0 && strings.EqualFold(strings.TrimSpace(fs.Arg(0)), "skill") {
-		requireArgCount(fs, 2, "skill and an exact @scope/name:version")
-		reference, err := parseRegistryReference(fs.Arg(1))
-		if err != nil {
-			exitWithError(err)
-		}
-		if reference.version == "" {
-			fmt.Fprintln(os.Stderr, "error: skill pull requires an exact version")
-			os.Exit(2)
-		}
-		client := registryReadClient(fs, *contextValue)
-		destination, record, err := pullRegistrySkill(client, reference, *output)
-		if err != nil {
-			exitWithError(err)
-		}
-		fmt.Printf("pulled %s (%s) to %s\n", record.Ref, record.Digest, destination)
-		return
-	}
-
-	requireArgCount(fs, 1, "one PACKAGE or skill and an exact @scope/name:version")
+	requireArgCount(fs, 1, "one exact @context/name:version")
 	reference, err := parsePackageReference(fs.Arg(0))
 	if err != nil {
 		exitWithError(err)
 	}
-	control := registryReadClient(fs, *contextValue)
-	pkg, err := packageForReference(control, reference)
+	client := registryReadClient(fs, *contextValue)
+	digest, path, err := pullPackage(client, reference, *output)
 	if err != nil {
 		exitWithError(err)
 	}
-	path, err := materializePackage(control, pkg, *output)
-	if err != nil {
-		exitWithError(err)
+	printPackageReceipt("pulled", reference.ref, digest, path)
+}
+
+// pullPackage downloads the spec or skill package a reference names. Both
+// kinds share one reference form, so a reference that names no spec package
+// is looked up as a skill.
+func pullPackage(client *cloud.Client, reference packageReference, output string) (string, string, error) {
+	pkg, err := packageForReference(client, reference)
+	if err == nil {
+		path, err := materializePackage(client, pkg, output)
+		return pkg.digest, path, err
 	}
-	printPackageReceipt("pulled", pkg, path)
+	if !cloud.IsStatus(err, 404) {
+		return "", "", err
+	}
+	path, record, err := pullRegistrySkill(client, reference, output)
+	if cloud.IsStatus(err, 404) {
+		return "", "", fmt.Errorf("no package or skill found for %s", reference.ref)
+	}
+	if err != nil {
+		return "", "", err
+	}
+	return record.Digest, path, nil
 }
 
 func newPullFlagSet() (*flag.FlagSet, *string, *string) {
-	fs := newCommandFlagSet(
-		"pull",
-		"telos pull @scope/name:version [flags]\n"+
-			"       telos pull skill @scope/name:version [flags]",
-	)
+	fs := newCommandFlagSet("pull", "telos pull @context/name:version [flags]")
 	output := fs.String("output", "", "Destination package or skill path")
 	contextValue := cloudContextFlag(fs)
 	return fs, output, contextValue
@@ -126,32 +115,9 @@ func registryReadClient(fs *flag.FlagSet, contextValue string) *cloud.Client {
 	return client
 }
 
-func parseRegistryReference(raw string) (registryReference, error) {
-	value := strings.TrimSpace(raw)
-	if !strings.HasPrefix(value, "@") {
-		return registryReference{}, fmt.Errorf("registry reference must start with @scope/name")
-	}
-	scope, rest, ok := strings.Cut(strings.TrimPrefix(value, "@"), "/")
-	if !ok {
-		return registryReference{}, fmt.Errorf("invalid registry reference %q", value)
-	}
-	name, version, ok := strings.Cut(rest, ":")
-	if !ok || strings.Contains(version, ":") || !packageSemverRE.MatchString(version) {
-		return registryReference{}, fmt.Errorf("skill reference requires an exact semantic version")
-	}
-	if !packageRefSegmentRE.MatchString(scope) || !packageRefSegmentRE.MatchString(name) {
-		return registryReference{}, fmt.Errorf("invalid registry reference %q", value)
-	}
-	canonical := "@" + scope + "/" + name + ":" + version
-	if canonical != value {
-		return registryReference{}, fmt.Errorf("registry reference must be canonical: %s", canonical)
-	}
-	return registryReference{scope: scope, name: name, version: version}, nil
-}
-
 func pullRegistrySkill(
 	client *cloud.Client,
-	reference registryReference,
+	reference packageReference,
 	output string,
 ) (string, *cloud.SkillRecord, error) {
 	if client == nil {
@@ -295,8 +261,7 @@ func materializePackage(control *cloud.Client, pkg *pulledPackage, output string
 	if pkg == nil {
 		return "", fmt.Errorf("package is required")
 	}
-	rootSpec, err := verifiedPackageSpec(pkg)
-	if err != nil {
+	if _, err := verifiedPackageSpec(pkg); err != nil {
 		return "", err
 	}
 
@@ -305,7 +270,7 @@ func materializePackage(control *cloud.Client, pkg *pulledPackage, output string
 		destination = pkg.reference.name
 	}
 	if strings.EqualFold(filepath.Ext(destination), ".md") {
-		return destination, writePackageSpec(rootSpec, destination)
+		return "", fmt.Errorf("--output names a directory, not a Markdown file; the spec is written to SPEC.md inside it")
 	}
 	hydrated, _, err := spec.HydrateApplyPackage(pkg.data, registrySkillFetcher(control))
 	if err != nil {
@@ -370,25 +335,6 @@ func registrySkillFetcher(control *cloud.Client) spec.ApplyPackageSkillFetcher {
 	}
 }
 
-func writePackageSpec(markdown []byte, destination string) error {
-	if err := os.MkdirAll(filepath.Dir(destination), 0o755); err != nil {
-		return err
-	}
-	file, err := os.OpenFile(destination, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-	if err != nil {
-		if errors.Is(err, os.ErrExist) {
-			return fmt.Errorf("%s already exists", destination)
-		}
-		return err
-	}
-	if _, err := file.Write(markdown); err != nil {
-		file.Close()
-		os.Remove(destination)
-		return err
-	}
-	return file.Close()
-}
-
 func extractPackageDirectory(data []byte, destination string) error {
 	if _, err := os.Lstat(destination); err == nil {
 		return fmt.Errorf("%s already exists", destination)
@@ -413,7 +359,7 @@ func extractPackageDirectory(data []byte, destination string) error {
 func parsePackageReference(raw string) (packageReference, error) {
 	value := strings.TrimSpace(raw)
 	if !strings.HasPrefix(value, "@") {
-		return packageReference{}, fmt.Errorf("package must be an exact @scope/name:version reference")
+		return packageReference{}, fmt.Errorf("package must be an exact @context/name:version reference")
 	}
 	scope, rest, ok := strings.Cut(strings.TrimPrefix(value, "@"), "/")
 	if !ok {
@@ -434,10 +380,10 @@ func parsePackageReference(raw string) (packageReference, error) {
 	}, nil
 }
 
-func printPackageReceipt(operation string, pkg *pulledPackage, path string) {
-	fmt.Printf("%s %s\n\n", operation, pkg.reference.ref)
-	printSummaryField(os.Stdout, "Package", pkg.reference.ref)
-	printSummaryField(os.Stdout, "Digest", pkg.digest)
+func printPackageReceipt(operation, ref, digest, path string) {
+	fmt.Printf("%s %s\n\n", operation, ref)
+	printSummaryField(os.Stdout, "Package", ref)
+	printSummaryField(os.Stdout, "Digest", digest)
 	printSummaryField(os.Stdout, "Path", path)
 }
 

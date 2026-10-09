@@ -156,7 +156,7 @@ func writeFakeScenario(t *testing.T, dir string) {
 
 func writeFakeIntegrationSpec(t *testing.T, dir string) {
 	t.Helper()
-	spec := "---\nversion: 0.1.0\nname: fake-cli\nplatform: local\n---\n# Goal\n\nCreate hello.txt.\n"
+	spec := "---\nversion: 0.1.0\nname: fake-cli\n---\n# Goal\n\nCreate hello.txt.\n"
 	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte(spec), 0o644); err != nil {
 		t.Fatal(err)
 	}
