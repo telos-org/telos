@@ -46,9 +46,6 @@ func TestLoadEnvironment(t *testing.T) {
 	if env.Version != "0.1.0" {
 		t.Errorf("version: got %q", env.Version)
 	}
-	if env.Platform != "local" {
-		t.Errorf("platform: got %q", env.Platform)
-	}
 	if env.SpecText != "# My Test\n\nSpec body here." {
 		t.Errorf("spec_text: got %q", env.SpecText)
 	}
@@ -118,14 +115,13 @@ func TestLoadEnvironmentInvalidVersion(t *testing.T) {
 	}
 }
 
-func TestLoadEnvironmentInvalidPlatform(t *testing.T) {
+func TestLoadEnvironmentIgnoresPlatform(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: bad-plat\nplatform: docker\n---\nBody"), 0o644)
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: retired-plat\nplatform: docker\n---\nBody"), 0o644)
 
-	_, err := LoadEnvironment(specPath)
-	if err == nil {
-		t.Fatal("expected error for invalid platform")
+	if _, err := LoadEnvironment(specPath); err != nil {
+		t.Fatalf("LoadEnvironment: %v", err)
 	}
 }
 

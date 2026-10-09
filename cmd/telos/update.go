@@ -20,11 +20,16 @@ import (
 const releaseBaseURL = "https://usetelos.ai/releases"
 
 type cliReleaseManifest struct {
-	Version   string `json:"version"`
+	Version string `json:"version"`
+	Skills  []struct {
+		Ref      string `json:"ref"`
+		Artifact string `json:"artifact"`
+	} `json:"skills"`
 	Platforms []struct {
-		OS    string `json:"os"`
-		Arch  string `json:"arch"`
-		Telos string `json:"telos"`
+		OS     string `json:"os"`
+		Arch   string `json:"arch"`
+		Telos  string `json:"telos"`
+		Telosd string `json:"telosd"`
 	} `json:"platforms"`
 }
 
@@ -48,24 +53,24 @@ func cmdUpdate(args []string) {
 			return nil
 		},
 	}
-	var version string
+	var result installationUpdate
 	if err == nil {
-		version, err = updateCLI(executable, Version, requested, releaseBaseURL, client)
+		result, err = updateCLI(executable, Version, requested, releaseBaseURL, client)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if version == Version {
-		fmt.Printf("telos is already up to date (%s)\n", version)
+	if len(result.Components) == 0 {
+		fmt.Printf("Telos installation is already up to date (%s)\n", result.Version)
 		return
 	}
-	fmt.Printf("updated telos %s -> %s\n", Version, version)
+	fmt.Printf("updated Telos installation to %s (%s)\n", result.Version, strings.Join(result.Components, ", "))
 }
 
-func updateCLI(executable, current, requested, baseURL string, client *http.Client) (string, error) {
+func updateCLI(executable, current, requested, baseURL string, client *http.Client) (installationUpdate, error) {
 	if current == "dev" || strings.HasPrefix(current, "v0.0.0-dev.") {
-		return "", fmt.Errorf("development builds must be rebuilt from source; install a released CLI to use telos update")
+		return installationUpdate{}, fmt.Errorf("development builds must be rebuilt from source; install a released CLI to use telos update")
 	}
 	version := requested
 	if version == "" {
@@ -73,71 +78,39 @@ func updateCLI(executable, current, requested, baseURL string, client *http.Clie
 	}
 	if version != "latest" {
 		if !validCLIReleaseVersion(version) {
-			return "", fmt.Errorf("invalid release version %q; use latest or a version such as v0.1.5", version)
+			return installationUpdate{}, fmt.Errorf("invalid release version %q; use latest or a version such as v0.1.5", version)
 		}
 		version = "v" + strings.TrimPrefix(version, "v")
 	}
 	target, err := cliUpdateTarget(executable)
 	if err != nil {
-		return "", err
+		return installationUpdate{}, err
 	}
 	var metadata bytes.Buffer
 	if err := downloadCLIUpdate(client, baseURL+"/"+version+"/manifest.json", &metadata, 1<<20); err != nil {
-		return "", err
+		return installationUpdate{}, err
 	}
 	var manifest cliReleaseManifest
 	if err := json.Unmarshal(metadata.Bytes(), &manifest); err != nil {
-		return "", fmt.Errorf("invalid release manifest: %w", err)
+		return installationUpdate{}, fmt.Errorf("invalid release manifest: %w", err)
 	}
 	if !strings.HasPrefix(manifest.Version, "v") || !validCLIReleaseVersion(manifest.Version) {
-		return "", fmt.Errorf("invalid version in release manifest: %q", manifest.Version)
+		return installationUpdate{}, fmt.Errorf("invalid version in release manifest: %q", manifest.Version)
 	}
 	if version != "latest" && manifest.Version != version {
-		return "", fmt.Errorf("release manifest version %q does not match requested %q", manifest.Version, version)
+		return installationUpdate{}, fmt.Errorf("release manifest version %q does not match requested %q", manifest.Version, version)
 	}
 	artifact, err := cliReleaseArtifact(manifest, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
-		return "", err
-	}
-	if manifest.Version == current {
-		return current, nil
+		return installationUpdate{}, err
 	}
 	// Pin every subsequent request to the immutable version, even if latest moves.
 	immutableURL := baseURL + "/" + manifest.Version
 	metadata.Reset()
 	if err := downloadCLIUpdate(client, immutableURL+"/SHA256SUMS", &metadata, 1<<20); err != nil {
-		return "", err
+		return installationUpdate{}, err
 	}
-	expected, err := cliReleaseChecksum(metadata.String(), artifact)
-	if err != nil {
-		return "", err
-	}
-	stage, err := os.CreateTemp(filepath.Dir(target), ".telos-update-*")
-	if err != nil {
-		return "", fmt.Errorf("cannot stage CLI update beside %s (check directory permissions): %w", target, err)
-	}
-	defer os.Remove(stage.Name())
-	defer stage.Close()
-	hash := sha256.New()
-	if err := downloadCLIUpdate(client, immutableURL+"/"+artifact, io.MultiWriter(stage, hash), 256<<20); err != nil {
-		return "", err
-	}
-	if !bytes.Equal(hash.Sum(nil), expected) {
-		return "", fmt.Errorf("checksum verification failed for %s; existing CLI is unchanged", artifact)
-	}
-	if err := stage.Chmod(0o755); err != nil {
-		return "", err
-	}
-	if err := stage.Sync(); err != nil {
-		return "", err
-	}
-	if err := stage.Close(); err != nil {
-		return "", err
-	}
-	if err := os.Rename(stage.Name(), target); err != nil {
-		return "", fmt.Errorf("replace CLI %s: %w", target, err)
-	}
-	return manifest.Version, nil
+	return updateInstallation(target, artifact, manifest, immutableURL, metadata.String(), client)
 }
 
 func validCLIReleaseVersion(version string) bool {
