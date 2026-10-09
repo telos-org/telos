@@ -14,6 +14,23 @@ import (
 	"github.com/telos-org/telos/internal/sessionworker"
 )
 
+func TestSubmitLocalSessionWithoutRuntimeCreatesNoSession(t *testing.T) {
+	workspace := t.TempDir()
+	t.Chdir(workspace)
+	t.Setenv("TELOSD_PATH", filepath.Join(workspace, "missing-telosd"))
+	_, err := SubmitLocalSession(filepath.Join(workspace, "SPEC.md"), LocalRunConfig{Workspace: workspace})
+	if err == nil || !strings.Contains(err.Error(), "sh -s -- --with-telosd") {
+		t.Fatalf("missing runtime error = %v", err)
+	}
+	entries, err := os.ReadDir(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("missing runtime created local artifacts: %v", entries)
+	}
+}
+
 // fakeExecutor for testing local run.
 type fakeExecutor struct {
 	proverResult   game.TurnResult
@@ -298,16 +315,15 @@ func TestValidatePiModelMalformedConfigIsNonFatalForNonDefault(t *testing.T) {
 	}
 }
 
-func TestCreateLocalSessionRecordsParentSession(t *testing.T) {
+func TestCreateLocalSessionRecordsInitialRevision(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
-	parentID := "local_parent"
 
 	orig, _ := os.Getwd()
 	os.Chdir(dir)
 	defer os.Chdir(orig)
 
-	session, err := CreateLocalSession(specPath, LocalRunConfig{ParentSessionID: &parentID})
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
 	}
@@ -315,8 +331,8 @@ func TestCreateLocalSessionRecordsParentSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.ParentSessionID == nil || *manifest.ParentSessionID != parentID {
-		t.Fatalf("parent session id: got %#v, want %q", manifest.ParentSessionID, parentID)
+	if manifest.ParentSessionID != nil || manifest.SessionKind != sessionapi.KindTask {
+		t.Fatalf("local run should be a top-level task: parent %#v, kind %q", manifest.ParentSessionID, manifest.SessionKind)
 	}
 	if manifest.CurrentRevision == nil || *manifest.CurrentRevision != "0.1.0" {
 		t.Fatalf("current_revision: %#v", manifest.CurrentRevision)
@@ -325,86 +341,7 @@ func TestCreateLocalSessionRecordsParentSession(t *testing.T) {
 		t.Fatalf("current_spec_version: %#v", manifest.CurrentSpecVersion)
 	}
 	if len(manifest.SpecVersions) != 1 || manifest.SpecVersions[0]["revision"] != "0.1.0" {
-		t.Fatalf("child spec identity: %#v", manifest.SpecVersions)
-	}
-}
-
-func TestCreateLocalControllerMaterializesInitialRevision(t *testing.T) {
-	dir := t.TempDir()
-	specPath := writeTestSpec(t, dir)
-
-	orig, _ := os.Getwd()
-	os.Chdir(dir)
-	defer os.Chdir(orig)
-
-	session, err := CreateLocalSession(specPath, LocalRunConfig{SessionKind: sessionapi.KindController})
-	if err != nil {
-		t.Fatalf("CreateLocalSession: %v", err)
-	}
-	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
-	if err != nil {
-		t.Fatalf("ReadManifest: %v", err)
-	}
-	if manifest.CurrentRevision == nil || *manifest.CurrentRevision != "0.1.0" {
-		t.Fatalf("current_revision: %#v", manifest.CurrentRevision)
-	}
-	if manifest.CurrentSpecVersion == nil || *manifest.CurrentSpecVersion != 1 {
-		t.Fatalf("current_spec_version: %#v", manifest.CurrentSpecVersion)
-	}
-	if len(manifest.SpecVersions) != 1 {
-		t.Fatalf("spec_versions: %#v", manifest.SpecVersions)
-	}
-	revisionSpec := filepath.Join(session.SessionDir, "revisions", "0.1.0", "SPEC.md")
-	if got, _ := manifest.SpecVersions[0]["spec_path"].(string); got != revisionSpec {
-		t.Fatalf("spec_path: got %q want %q", got, revisionSpec)
-	}
-	revisionMetadataPath := filepath.Join(session.SessionDir, "revisions", "0.1.0", "revision.json")
-	metadataData, err := os.ReadFile(revisionMetadataPath)
-	if err != nil {
-		t.Fatalf("revision metadata missing: %v", err)
-	}
-	var metadata map[string]any
-	if err := json.Unmarshal(metadataData, &metadata); err != nil {
-		t.Fatalf("revision metadata json: %v", err)
-	}
-	if metadata["version"] != "0.1.0" {
-		t.Fatalf("revision metadata version: %#v", metadata["version"])
-	}
-	if metadata["spec_path"] != revisionSpec {
-		t.Fatalf("revision metadata spec_path: %#v", metadata["spec_path"])
-	}
-	if _, err := os.Lstat(filepath.Join(session.SessionDir, "revisions", "current")); err != nil {
-		t.Fatalf("current revision link missing: %v", err)
-	}
-	if info, err := os.Lstat(*manifest.SessionSpecPath); err != nil {
-		t.Fatalf("active spec missing: %v", err)
-	} else if info.Mode()&os.ModeSymlink == 0 {
-		t.Fatalf("active spec should be a symlink: %s", info.Mode())
-	}
-	if manifest.PackageDigest == nil || *manifest.PackageDigest == "" {
-		t.Fatalf("package_digest: %#v", manifest.PackageDigest)
-	}
-	if manifest.ApplyPackageLock == nil {
-		t.Fatal("missing apply package lock")
-	}
-	if _, err := os.Stat(filepath.Join(session.SessionDir, "package", "SPEC.md")); err != nil {
-		t.Fatalf("active package missing: %v", err)
-	}
-}
-
-func TestCreateLocalControllerRejectsDurationBounds(t *testing.T) {
-	dir := t.TempDir()
-	specPath := writeTestSpec(t, dir)
-
-	_, err := CreateLocalSession(specPath, LocalRunConfig{
-		SessionKind:  sessionapi.KindController,
-		UntilSeconds: 1800,
-	})
-	if err == nil {
-		t.Fatal("expected controller duration bound to be rejected")
-	}
-	if !strings.Contains(err.Error(), "controller sessions do not support per-run duration bounds") {
-		t.Fatalf("unexpected error: %v", err)
+		t.Fatalf("spec identity: %#v", manifest.SpecVersions)
 	}
 }
 
@@ -967,9 +904,18 @@ func TestLocalWorkerEnvIncludesSessionContext(t *testing.T) {
 	orig, _ := os.Getwd()
 	os.Chdir(dir)
 	defer os.Chdir(orig)
-	session, err := CreateLocalSession(specPath, LocalRunConfig{ParentSessionID: &parentID})
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
 	if err != nil {
 		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	manifestPath := filepath.Join(session.SessionDir, "session.json")
+	manifest, err := sessionapi.ReadManifest(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.ParentSessionID = &parentID
+	if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
+		t.Fatal(err)
 	}
 
 	values := map[string]string{}
@@ -990,6 +936,58 @@ func TestLocalWorkerEnvIncludesSessionContext(t *testing.T) {
 	}
 	if values["TELOS_PARENT_SESSION_ID"] != parentID {
 		t.Fatalf("TELOS_PARENT_SESSION_ID: got %q, want %q", values["TELOS_PARENT_SESSION_ID"], parentID)
+	}
+}
+
+func TestRunLocalSessionPreambleFollowsRuntime(t *testing.T) {
+	for _, tt := range []struct {
+		runtime       sessionapi.SessionRuntime
+		preamble      string
+		wantNamespace bool
+	}{
+		{runtime: sessionapi.RuntimeLocal, preamble: "## Platform: local"},
+		{runtime: sessionapi.RuntimeCloud, preamble: "## Target: cloud", wantNamespace: true},
+	} {
+		t.Run(string(tt.runtime), func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(dir, "telos-output"))
+			specPath := filepath.Join(dir, "SPEC.md")
+			if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: preamble\n---\n# Preamble\n\nTest body."), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			orig, _ := os.Getwd()
+			os.Chdir(dir)
+			defer os.Chdir(orig)
+
+			session, err := CreateLocalSession(specPath, LocalRunConfig{})
+			if err != nil {
+				t.Fatalf("CreateLocalSession: %v", err)
+			}
+			manifestPath := filepath.Join(session.SessionDir, "session.json")
+			manifest, err := sessionapi.ReadManifest(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest.Runtime = tt.runtime
+			if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
+				t.Fatal(err)
+			}
+
+			exec := &fakeExecutor{
+				proverResult:   game.TurnResult{Role: "prover", Status: game.StatusContinue, Logs: "Done."},
+				verifierResult: game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "OK\n\n<status>CONCEDE</status>\n"},
+			}
+			if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
+				t.Fatalf("RunLocalSession: %v", err)
+			}
+			task := exec.firstTask()
+			if !strings.Contains(task, tt.preamble) {
+				t.Fatalf("prompt missing %q:\n%s", tt.preamble, task)
+			}
+			if got := strings.Contains(task, "- Namespace: `"); got != tt.wantNamespace {
+				t.Fatalf("namespace in prompt = %v, want %v", got, tt.wantNamespace)
+			}
+		})
 	}
 }
 
@@ -1041,50 +1039,6 @@ func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
 	}
 	if !strings.Contains(task, "Primary spec: `") {
 		t.Fatal("controller prompt should include primary spec path")
-	}
-}
-
-func TestRunLocalControllerSessionUsesControllerPromptByDefault(t *testing.T) {
-	dir := t.TempDir()
-	specPath := writeTestSpec(t, dir)
-	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(t.TempDir(), "telos-output"))
-	runTestCommand(t, dir, "git", "init", "-q")
-	runTestCommand(t, dir, "git", "add", "-A")
-	runTestCommand(t, dir, "git", "-c", "user.name=Telos", "-c", "user.email=telos@local", "commit", "-q", "-m", "initial")
-	session, err := CreateLocalSession(specPath, LocalRunConfig{
-		SessionKind: sessionapi.KindController,
-		Workspace:   dir,
-	})
-	if err != nil {
-		t.Fatalf("CreateLocalSession: %v", err)
-	}
-	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := sessionapi.WriteManifest(filepath.Join(session.SessionDir, "session.json"), manifest); err != nil {
-		t.Fatal(err)
-	}
-
-	exec := &fakeExecutor{
-		proverResult: game.TurnResult{
-			Role:   "prover",
-			Status: game.StatusContinue,
-			Logs:   "Built.\n\n<progress_update>Built</progress_update>",
-		},
-		verifierResult: game.TurnResult{
-			Role:   "verifier",
-			Status: game.StatusConcede,
-			Logs:   "OK\n\n<status>CONCEDE</status>\n",
-		},
-	}
-	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
-		t.Fatalf("RunLocalSession: %v", err)
-	}
-
-	task := exec.firstTask()
-	if !strings.Contains(task, "## Controller Session") {
-		t.Fatal("controller prompt should be enabled by session kind")
 	}
 }
 
@@ -1551,7 +1505,7 @@ func TestSessionArtifactShape(t *testing.T) {
 	json.Unmarshal(data, &m)
 
 	requiredKeys := []string{
-		"session_id", "session_kind", "created_at", "launcher",
+		"session_id", "session_kind", "runtime", "created_at",
 		"source_spec_path", "session_spec_path", "spec_name",
 		"config", "provenance", "specs", "epochs",
 	}

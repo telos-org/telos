@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
 )
 
@@ -177,6 +178,33 @@ func TestCmdConfigShowsResolvedContextWithoutExposingToken(t *testing.T) {
 	for _, detail := range []string{"chatgpt-codex", "owner@example.com", "conn_1", "key_work"} {
 		if strings.Contains(out, detail) {
 			t.Fatalf("normal output contains connection detail %q: %q", detail, out)
+		}
+	}
+}
+
+func TestConfigReportListsManagedInferenceFirst(t *testing.T) {
+	for _, connections := range [][]cloud.InferenceConnection{
+		{},
+		{{Source: "byok", ID: "key_work", Name: "Work Anthropic", Status: "saved"}},
+	} {
+		out := captureStdout(t, func() {
+			printConfigReport(configReport{Authentication: "valid", Context: "personal", Connections: connections})
+		})
+		lines := strings.Split(out, "\n")
+		for index, line := range lines {
+			if strings.TrimSpace(line) != "Inference" {
+				continue
+			}
+			if index+1 >= len(lines) || strings.Join(strings.Fields(lines[index+1]), " ") != "telos Managed telos/default, telos/max" {
+				t.Fatalf("managed inference is not listed first:\n%s", out)
+			}
+			if len(connections) > 0 && !strings.Contains(lines[index+2], "Work Anthropic") {
+				t.Fatalf("saved sources do not follow managed inference:\n%s", out)
+			}
+			break
+		}
+		if !strings.Contains(out, "telos/default, telos/max") {
+			t.Fatalf("output has no managed inference row:\n%s", out)
 		}
 	}
 }
@@ -361,5 +389,39 @@ func TestConfigJSONShowsWorkspaceDefaultAndOverridesWithoutKeys(t *testing.T) {
 	after, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("config inspection changed saved settings: %s, %v", after, err)
+	}
+}
+
+func TestFollowUpContextNamesOnlyAContextOtherThanTheDefault(t *testing.T) {
+	server := accountBootstrapServer(t)
+	defer server.Close()
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "config.yaml"))
+	t.Setenv(config.APIEndpointEnv, "")
+	t.Setenv(config.AuthTokenEnv, "")
+	if err := config.SaveConfig(&config.Config{APIEndpoint: server.URL, AuthToken: "test-token", Context: "org_telos"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		override, environment, want string
+	}{
+		{"", "", ""},
+		{"@telos", "", ""},
+		{"org_telos", "", ""},
+		{"personal", "", "personal"},
+		{"@grohan", "", "personal"},
+		// A later command reads TELOS_CONTEXT too, so it needs a flag only
+		// when this one selected something else.
+		{"", "personal", ""},
+		{"personal", "personal", ""},
+		{"org_telos", "personal", "@telos"},
+	} {
+		t.Setenv(config.ContextEnv, test.environment)
+		control, err := cloud.ControlClientForContext(test.override)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := followUpContext(control, test.override); got != test.want {
+			t.Fatalf("followUpContext(override %q, TELOS_CONTEXT %q) = %q, want %q", test.override, test.environment, got, test.want)
+		}
 	}
 }

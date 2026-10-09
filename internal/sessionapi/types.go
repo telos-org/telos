@@ -215,7 +215,6 @@ type Session struct {
 	CreatedAt       *string       `json:"created_at,omitempty"`
 
 	Runtime                SessionRuntime   `json:"runtime"`
-	Launcher               *string          `json:"launcher,omitempty"`
 	SessionSpecPath        *string          `json:"session_spec_path,omitempty"`
 	SessionDir             *string          `json:"session_dir,omitempty"`
 	ActiveWorkspacePath    *string          `json:"active_workspace_path,omitempty"`

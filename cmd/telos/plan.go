@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
 	"sort"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	internaldiff "github.com/rogpeppe/go-internal/diff"
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
-	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
 
@@ -65,17 +63,12 @@ func cmdPlan(args []string) {
 		os.Exit(1)
 	}
 
-	platform := compiled.Environment.Platform
-	if platform == "" {
-		platform = "cloud"
-	}
 	var comparison *specComparison
 	if strings.TrimSpace(*sessionID) != "" {
 		comparison, err = compareSessionSpec(
 			*sessionID,
 			proposedSpec,
 			proposedState,
-			platform,
 			contextOverride,
 		)
 		if err != nil {
@@ -83,48 +76,40 @@ func cmdPlan(args []string) {
 			os.Exit(1)
 		}
 	}
-	targetMode := "local"
-	targetContext := ""
-	if platform != "local" {
-		targetMode = "cloud"
-		cfg, err := config.LoadConfig()
+	cfg, err := config.LoadConfig()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+	targetContext := strings.TrimSpace(contextOverride)
+	if targetContext == "" {
+		targetContext = strings.TrimSpace(cfg.Context)
+	}
+	if targetContext == "" {
+		targetContext = "personal"
+	}
+	if cfg.AuthToken != "" {
+		control, err := cloud.ControlClientForContext(contextOverride)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		targetContext = strings.TrimSpace(contextOverride)
-		if targetContext == "" {
-			targetContext = strings.TrimSpace(cfg.Context)
-		}
-		if targetContext == "" {
-			targetContext = "personal"
-		}
-		if cfg.AuthToken != "" {
-			control, err := cloud.ControlClientForContext(contextOverride)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			targetContext = control.ContextName()
-		}
+		targetContext = control.ContextName()
 	}
 	targetOperation := "create"
 	if comparison != nil {
 		targetOperation = "update"
 	}
 	targetScope := map[string]interface{}{
-		"mode":      targetMode,
+		"mode":      "cloud",
 		"operation": targetOperation,
-	}
-	if targetContext != "" {
-		targetScope["context"] = targetContext
+		"context":   targetContext,
 	}
 	plan := map[string]interface{}{
 		"spec": map[string]interface{}{
 			"name":         compiled.Environment.Name,
 			"path":         specPath,
 			"content_hash": compiled.ContentHash,
-			"platform":     platform,
 			"namespace":    compiled.Namespace,
 			"skills":       skillNames(compiled.Skills),
 			"required_rubrics": skillNames(
@@ -151,7 +136,7 @@ func cmdPlan(args []string) {
 		return
 	}
 
-	printPlanPreview(os.Stdout, compiled, specPath, platform, targetContext, comparison)
+	printPlanPreview(os.Stdout, compiled, targetContext, comparison)
 }
 
 func compilePlanSpec(
@@ -179,25 +164,22 @@ func compilePlanSpec(
 func printPlanPreview(
 	out io.Writer,
 	compiled *spec.CompiledEnvironment,
-	specPath string,
-	platform string,
 	contextName string,
 	comparison *specComparison,
 ) {
 	printSummaryField(out, "Spec", compiled.Environment.Name)
-	printSummaryField(out, "Target", platform)
-	if contextName != "" {
-		printSummaryField(out, "Context", contextName)
+	// A session plan shows version and interval changes after the skills instead.
+	if comparison == nil {
+		printSummaryField(out, "Version", compiled.Environment.Version)
+		if compiled.Environment.IntervalSeconds != nil {
+			printSummaryField(out, "Interval", formatPlanInterval(compiled.Environment.IntervalSeconds))
+		}
 	}
+	printSummaryField(out, "Context", contextName)
 	if comparison != nil {
 		printSummaryField(out, "Session", comparison.sessionID)
 		printSummaryField(out, "Current", comparison.currentRef)
 	}
-	printSummaryField(out, "Path", specPath)
-	if platform != "local" {
-		printSummaryField(out, "Namespace", compiled.Namespace)
-	}
-	printSummaryField(out, "Hash", compiled.ContentHash)
 	if len(compiled.Skills) > 0 {
 		printSummaryField(out, "Skills", strings.Join(skillDisplayNames(compiled), ", "))
 	}
@@ -220,46 +202,13 @@ func compareSessionSpec(
 	sessionID string,
 	proposed []byte,
 	proposedState planSpecState,
-	platform string,
 	contextOverride string,
 ) (*specComparison, error) {
 	sessionID = strings.TrimSpace(sessionID)
 	switch {
 	case isLocalApplyID(sessionID):
-		if platform != "local" {
-			return nil, fmt.Errorf("%s is local but the proposed spec targets %s", sessionID, platform)
-		}
-		localStore := store()
-		current, err := localStore.Spec(sessionID)
-		if err != nil {
-			return nil, err
-		}
-		localSession, err := localStore.Get(sessionID)
-		if err != nil {
-			return nil, err
-		}
-		if localSession.SessionDir == nil || strings.TrimSpace(*localSession.SessionDir) == "" {
-			return nil, fmt.Errorf("local session %s has no session directory", sessionID)
-		}
-		currentState, err := planLocalSessionSpecState(
-			[]byte(current.Markdown),
-			*localSession.SessionDir,
-		)
-		if err != nil {
-			return nil, err
-		}
-		return newSpecComparisonWithStates(
-			sessionID,
-			"current session",
-			[]byte(current.Markdown),
-			proposed,
-			currentState,
-			proposedState,
-		), nil
+		return nil, fmt.Errorf("%s is a local session; telos plan --session only compares Telos Cloud sessions", sessionID)
 	case isCloudApplyID(sessionID):
-		if platform == "local" {
-			return nil, fmt.Errorf("%s is cloud but the proposed spec targets local", sessionID)
-		}
 		control, err := cloud.ControlClientForContext(contextOverride)
 		if err != nil {
 			return nil, err
@@ -268,17 +217,6 @@ func compareSessionSpec(
 	default:
 		return nil, fmt.Errorf("invalid session id %q", sessionID)
 	}
-}
-
-func planLocalSessionSpecState(
-	markdown []byte,
-	sessionDir string,
-) (planSpecState, error) {
-	manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
-	if err != nil {
-		return planSpecState{}, fmt.Errorf("read current local session metadata: %w", err)
-	}
-	return planSpecStateFromMarkdown(markdown, manifest.ApplyPackageLock)
 }
 
 func compareCloudSessionSpec(
@@ -438,11 +376,19 @@ func planDeltaValue(current, proposed string) string {
 	return firstNonEmpty(current, "-") + " -> " + firstNonEmpty(proposed, "-")
 }
 
+// formatPlanInterval writes an interval the way specs do, such as 6h or 1h30m.
 func formatPlanInterval(seconds *int) string {
 	if seconds == nil {
 		return "-"
 	}
-	return (time.Duration(*seconds) * time.Second).String()
+	value := (time.Duration(*seconds) * time.Second).String()
+	if strings.HasSuffix(value, "m0s") {
+		value = strings.TrimSuffix(value, "0s")
+	}
+	if strings.HasSuffix(value, "h0m") {
+		value = strings.TrimSuffix(value, "0m")
+	}
+	return value
 }
 
 func formatPlanSkillLocks(skills []planSkillLock) string {

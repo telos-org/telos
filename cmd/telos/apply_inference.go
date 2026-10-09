@@ -39,11 +39,11 @@ func validateApplyInferenceFlags(fs *flag.FlagSet, sessionID, model, thinking st
 	if sessionID == "" || !settingsSet {
 		return fmt.Errorf("provide a SPEC.md, or --session SESSION with --model and/or --thinking")
 	}
-	if !isCloudApplyID(sessionID) && !isLocalApplyID(sessionID) {
-		return fmt.Errorf("invalid session id %q", sessionID)
+	if err := validateApplySession(sessionID); err != nil {
+		return err
 	}
-	if flagNamesSet(fs, "workspace", "force", "max-cost-usd") {
-		return fmt.Errorf("--workspace, --force, and --max-cost-usd cannot be used for a settings-only apply")
+	if flagNameSet(fs, "force") {
+		return fmt.Errorf("--force cannot be used for a settings-only apply")
 	}
 	if flagNameSet(fs, "model") && strings.TrimSpace(model) == "" {
 		return fmt.Errorf("--model requires a non-empty model")
@@ -55,13 +55,13 @@ func validateApplyInferenceFlags(fs *flag.FlagSet, sessionID, model, thinking st
 }
 
 func applySessionInference(sessionID, model, thinking, contextOverride string) (*inferenceReceipt, error) {
+	if err := validateApplySession(sessionID); err != nil {
+		return nil, err
+	}
 	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
 		return nil, err
 	}
 	requestID := "cli_" + rand.Text()
-	if isLocalApplyID(sessionID) {
-		return applyLocalInference(sessionID, model, thinking, requestID)
-	}
 	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		return nil, err
@@ -96,42 +96,6 @@ func applySessionInference(sessionID, model, thinking, contextOverride string) (
 		return nil, inferenceSubmissionError(sessionID, control.ContextName(), requestID, err)
 	}
 	return receipt, inferenceOutcomeError(receipt)
-}
-
-func applyLocalInference(sessionID, model, thinking, requestID string) (*inferenceReceipt, error) {
-	s := store()
-	current, err := s.Inference(sessionID)
-	if err != nil {
-		return nil, err
-	}
-	request := sessionapi.InferenceUpdateRequest{ApplyAt: "next_turn", RequestID: requestID, ExpectedRevision: current.Revision}
-	if model != "" {
-		request.Model = &model
-	}
-	if thinking != "" {
-		request.Thinking = &thinking
-	}
-	// Repeating the same pending request reuses its identity.
-	if pending := current.Update; pending != nil && pending.Status == "pending" &&
-		matchesRequestedSetting(pending.Model, model) && matchesRequestedSetting(pending.Thinking, thinking) {
-		request = pending.InferenceUpdateRequest
-	}
-	if err := request.Validate(); err != nil {
-		return nil, err
-	}
-	state, err := s.UpdateInference(sessionID, request)
-	if err != nil {
-		return nil, inferenceSubmissionError(sessionID, "", request.RequestID, err)
-	}
-	receipt := localInferenceReceipt(sessionID, state)
-	if err := validateInferenceReply(receipt, request.RequestID, request.ExpectedRevision+1); err != nil {
-		return nil, inferenceSubmissionError(sessionID, "", request.RequestID, err)
-	}
-	return receipt, inferenceOutcomeError(receipt)
-}
-
-func matchesRequestedSetting(saved *string, value string) bool {
-	return (saved == nil && value == "") || (saved != nil && *saved == value)
 }
 
 func cloudInferenceReceipt(sessionID, contextName string, state *cloud.DeploymentInferenceState) (*inferenceReceipt, error) {
