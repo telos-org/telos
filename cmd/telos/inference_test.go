@@ -183,6 +183,7 @@ func inferenceTestServer(t *testing.T, overrides map[string]http.HandlerFunc) *h
 		"GET /api/inference/connections": `{"errors":{},"connections":[{"source":"subscription","id":"sub_work","name":"My ChatGPT","provider":"chatgpt-codex","status":"connected"},{"source":"byok","status":"saved","id":"key_work","name":"Work Anthropic","provider":"anthropic","api_key":"never-print-this-key"},{"source":"byok","status":"saved","id":"key_router","name":"Work/Router","provider":"openrouter"}]}`,
 		"GET /api/inference/preference":  `{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`,
 		"GET /api/deployments":           `{"deployments":[]}`,
+		"GET /api/secrets":               `{"secrets":[]}`,
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -361,7 +362,7 @@ func TestCloudReceiptShowsSavedInference(t *testing.T) {
 			t.Fatalf("description includes %q: %s", unwanted, out.String())
 		}
 	}
-	encoded := captureStdout(t, func() { printCloudSessionJSON(&session, "@telos") })
+	encoded := captureStdout(t, func() { printCloudSessionJSON(&session, "@telos", nil) })
 	var decoded struct{ Inference cloud.InferenceSummary }
 	if err := json.Unmarshal([]byte(encoded), &decoded); err != nil || decoded.Inference.ConnectionName != "Work Anthropic" {
 		t.Fatalf("JSON omitted inference: %s, %v", encoded, err)

@@ -374,7 +374,7 @@ func TestPrintCloudSessionJSONContainsOnlyAuthoritativeRecord(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		printCloudSessionJSON(session, "org_telos")
+		printCloudSessionJSON(session, "org_telos", nil)
 	})
 	var body map[string]any
 	if err := json.Unmarshal([]byte(out), &body); err != nil {
@@ -392,7 +392,7 @@ func TestPrintCloudSessionJSONContainsOnlyAuthoritativeRecord(t *testing.T) {
 	// A control plane that predates status still reports one.
 	session.Status = ""
 	out = captureStdout(t, func() {
-		printCloudSessionJSON(session, "org_telos")
+		printCloudSessionJSON(session, "org_telos", nil)
 	})
 	body = map[string]any{}
 	if err := json.Unmarshal([]byte(out), &body); err != nil {
