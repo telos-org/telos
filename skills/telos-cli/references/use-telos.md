@@ -21,7 +21,7 @@ Install Telos with:
 $ curl -fsSL https://usetelos.ai/install.sh | sh
 ```
 
-This will install the `telos` binary into your `$HOME/.local/bin` or `$TELOS_INSTALL_DIR`. This also packages with it the coupled `telos-cli` agent skill, installed under `$HOME/.agents/skills/`. The `telos` binary is self-contained, and you can check the installed version with:
+This will install the `telos` binary on your machine. This also comes with the coupled `telos-cli` agent skill, to guide your coding agent of choice on using `telos`. The `telos` binary is self-contained, and you can check the installed version with:
 
 ```console
 $ telos --version
@@ -64,7 +64,11 @@ Context          personal
 Workspace model  telos/default
 Inference
   telos  Managed  telos/default, telos/max
+Credentials
+  example-api-key
 ```
+
+`telos config` is useful to see the active context, the default workspace model, configured inference providers (see [Models](models.md) for more), and credentials (see [Credentials](environment.md#credentials) for more).
 
 Congratulations! You are now ready to run your Goals on Telos.
 
