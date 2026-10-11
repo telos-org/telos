@@ -64,6 +64,8 @@ class InstallReleaseTest(unittest.TestCase):
 
     def install(self, local=False, remember_skills=False, extra_env=None, args=()):
         env = dict(os.environ)
+        # Keep the installer away from the real home, ~/.claude included.
+        env["HOME"] = str(self.root / "home")
         env["TELOS_INSTALL_DIR"] = str(self.binaries)
         env["TELOS_RELEASE_BASE_URL"] = (self.root / "releases").as_uri()
         if remember_skills:
@@ -131,6 +133,8 @@ class InstallReleaseTest(unittest.TestCase):
 
     def test_piped_installer_accepts_runtime_flag(self):
         env = dict(os.environ)
+        # Keep the installer away from the real home, ~/.claude included.
+        env["HOME"] = str(self.root / "home")
         env["TELOS_INSTALL_DIR"] = str(self.binaries)
         env["TELOS_AGENT_SKILLS_DIR"] = str(self.skills)
         env["TELOS_RELEASE_BASE_URL"] = (self.root / "releases").as_uri()
@@ -158,6 +162,25 @@ class InstallReleaseTest(unittest.TestCase):
         self.binaries = home / ".local/bin"
         self.skills = home / ".agents/skills"
         self.assert_installed()
+
+    def test_links_the_skill_for_claude_code(self):
+        home = self.root / "home"
+        link = home / ".claude/skills/telos-cli"
+        self.assertEqual(self.install().returncode, 0)
+        self.assertFalse(link.is_symlink(), "no ~/.claude, so no link")
+
+        (home / ".claude").mkdir(parents=True)
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((link / "SKILL.md").read_bytes(), b"released skill")
+
+    def test_leaves_a_claude_code_copy_alone(self):
+        own = self.root / "home/.claude/skills/telos-cli"
+        own.mkdir(parents=True)
+        (own / "SKILL.md").write_text("my own copy")
+        result = self.install()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual((own / "SKILL.md").read_text(), "my own copy")
 
     def test_reinstall_preserves_existing_local_runtime_and_custom_skill_path(self):
         self.assertEqual(self.install(local=True).returncode, 0)
