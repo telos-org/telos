@@ -362,3 +362,17 @@ func TestManifestRuntimeReadsLegacyProvenanceMode(t *testing.T) {
 		t.Fatalf("runtime = %s, want %s", got, RuntimeCloud)
 	}
 }
+
+func TestCloudSessionIDsAcceptGoalAndSessionPrefixes(t *testing.T) {
+	for id, want := range map[string]bool{
+		"goal_c7d2f0a4e8":  true,
+		"sess_c7d2f0a4e8":  true,
+		"local_c7d2f0a4e8": false,
+		"goal_":            false,
+		"c7d2f0a4e8":       false,
+	} {
+		if got := cloudSessionIDRE.MatchString(id); got != want {
+			t.Errorf("cloudSessionIDRE.MatchString(%q) = %v, want %v", id, got, want)
+		}
+	}
+}
