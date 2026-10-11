@@ -68,19 +68,19 @@ network:
 
 Each entry in `network` specifies a host and optionally restricts HTTP methods and URL paths on that host. A host without `methods` or `paths` allows traffic via all methods and all paths.
 
-If you want to retain the default-deny egress behavior for Telos, either don't define `network` or set it to []. Doing so will still keep the defaults (Docker Hub, PyPI, npm).
+If you want to retain the default-deny egress behavior for Telos, either don't define `network` or set `network: []`. Doing so will still keep the defaults (Docker Hub, PyPI, npm).
 
 ## Credentials
 
 It is also possible to securely inject credentials to outbound requests from the Telos runtime. The workflow for this is as follows:
 
-1. Create a credential on the [web dashboard](https://usetelos.ai/workspace?tab=credentials). A credential is a name plus one or more keys, each sent in a HTTP header that you choose.
-
-> NOTE: The credential's name is what gets referenced in the YAML frontmatter and most use lowercase letters, numbers, and hyphen-separators.
-
+1. Create a credential on the [web dashboard](https://usetelos.ai/workspace?tab=credentials). A credential is a name plus one or more keys, each sent in an HTTP header that you choose.
 2. List defined credentials' names locally via `telos config`.
 3. Add the credential's destination host to `network` in your Goal's frontmatter.
 4. Associate that host with the credential's name.
+
+> The credential's name is what gets referenced in the YAML frontmatter and must use lowercase letters, numbers, and hyphen-separators.
+
 
 Credentials are encrypted at rest and never enter your Goal's VM. Instead, a proxy outside the VM adds them to requests that match your `network` rules.
 
