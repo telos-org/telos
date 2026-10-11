@@ -26,6 +26,7 @@ Telos lets you bring your own inference, configurable at <https://usetelos.ai/wo
 
 In many instances, teams have active API keys with major providers (Anthropic, OpenAI, xAI) or marketplaces (OpenRouter). Telos supports configuring this via the web interface.
 
+
 ### Subscription
 
 For individual developers or small teams, most token spend goes through subscriptions like ChatGPT Plus/Pro. Telos supports connecting with the following subscription providers:
@@ -34,3 +35,19 @@ For individual developers or small teams, most token spend goes through subscrip
 - xAI
 
 As of October 2026, Anthropic is unsupported since connecting third-party applications to their subscription is against their terms of service.
+
+## Spend observability
+
+In order to see costs per goal on inference, run either `telos describe` or `telos list --wide`. For example:
+
+```console
+$ telos describe goal_c7d2f0a4e8
+...
+Service   https://reading-list-c7d2f0a4e8.usetelos.ai
+Cloud     $1.25 (compute $1.00, storage $0.25)
+Inference $3.40 (Telos)
+```
+
+Costs are labeled by the provider - `Telos`, the provider of your API key (like `Anthropic API key`), or your subscription (like `ChatGPT subscription`). Telos bills only `Telos` inference; your provider bills API key usage, and your subscription covers its own. For subscription inference, costs displayed are the API-equivalent cost.
+
+For an API key or subscription, the agent runtime (`Pi`-backed) records the inference cost. If the runtime can't be reached, that cost is displayed as `unavailable`.
