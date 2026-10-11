@@ -36,7 +36,7 @@ Telos follows a strict networking model, with limited ingress and egress by defa
 
 The only entry points into a Goal's runtime environment are:
 
-- the product API or UI, accessed through the managed hostname (`<name>-<session-id>.usetelos.ai`)
+- the product API or UI, accessed through the managed hostname (`<name>-<id>.usetelos.ai`, where `<id>` is the Goal ID without `goal_`, like `reading-list-c7d2f0a4e8.usetelos.ai`)
 - the administration dashboard, accessed via the web UI and restricted to workspace administrators.
 
 ### Egress

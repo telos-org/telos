@@ -7,7 +7,7 @@ group: Getting started
 Telos is a goal-oriented programming system. Telos treats the goal specification as the source of truth, and background agents own the software lifecycle beneath it.
 
 Implementations can change as the Goal evolves,
-while its session, deployment, history, and evidence remain connected.
+while its deployment, history, and evidence stay attached to the same Goal.
 
 This guide follows one small service from its first spec through a live update.
 Generated IDs, digests, paths, and URLs in the transcripts are illustrative;
@@ -122,15 +122,15 @@ $ telos apply SPEC.md
 created reading-list
 
 Status    working
-Session   sess_c7d2f0a4e8
+Goal      goal_c7d2f0a4e8
 Revision  sha256:8f21c47a91ee
 Model     telos/default
 Thinking  medium
 Context   personal
-Logs      telos logs sess_c7d2f0a4e8
+Logs      telos logs goal_c7d2f0a4e8
 ```
 
-The `apply` command returns immediately and launches a session in the cloud.
+The `apply` command returns immediately and starts the Goal in the cloud.
 
 ## Watch it work
 
@@ -140,18 +140,18 @@ For a one-line overview of all running Goals:
 
 ```console
 $ telos list
-NAME          STATUS   SESSION
-reading-list  working  sess_c7d2f0a4e8
+NAME          STATUS   ID
+reading-list  working  goal_c7d2f0a4e8
 ```
 
-For a description of a specific Goal, run `telos describe sess_c7d2f0a4e8`.
+For a description of a specific Goal, run `telos describe goal_c7d2f0a4e8`.
 
 For scripts and agents, `telos describe --json` returns the same information as JSON.
 
 To follow the agent's work in detail:
 
 ```console
-$ telos logs sess_c7d2f0a4e8
+$ telos logs goal_c7d2f0a4e8
 ...
 [2026-10-08T17:02:11Z] [INFO] Working on the spec requirements
 [2026-10-08T17:06:48Z] [INFO] Stood up POST /books and GET /books per goal requirements
@@ -160,28 +160,34 @@ $ telos logs sess_c7d2f0a4e8
 ...
 ```
 
+Add `--follow` to keep printing new activity as it happens, until the Goal stops or you press Ctrl-C.
+
 `telos list` and `telos describe` report one of four statuses. When a Goal needs attention or has stopped, `describe` also shows why. Here's how to interpret them:
 
 | Status | Meaning |
 |---|---|
 | `working` | Telos is preparing the Goal's environment, implementing the current spec, or verifying it. |
 | `ready` | The system accepted the current Goal, and the service is live. |
-| `needs_attention` | The latest run failed or stopped unexpectedly. `telos describe` shows why. |
+| `needs_attention` | The latest run failed or stopped unexpectedly. `telos describe` shows why, and what to run next. |
 | `stopped` | The Goal has stopped running, usually because you deleted it. |
 
-When the system is done working, `describe` reports the accepted Goal as `ready` and exposes a public handle.
+When the system is done working, `describe` reports the accepted Goal as `ready`, with its public URL and what it has cost so far.
 
 ```console
-$ telos describe sess_c7d2f0a4e8
+$ telos describe goal_c7d2f0a4e8
 Name      reading-list
 Status    ready
-Session   sess_c7d2f0a4e8
+Goal      goal_c7d2f0a4e8
 Revision  sha256:8f21c47a91ee
 Model     telos/default
 Thinking  medium
 Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
+Cloud     $1.25 (compute $1.00, storage $0.25)
+Inference $3.40 (Telos)
 ```
+
+Costs come in two lines: `Cloud` (compute and storage) and `Inference` (through Telos, your own API key, or a subscription; see [Models](models.md)).
 
 Once ready, open the service and verify that the behavior is as desired.
 In this case, you would exercise `POST /books` and `GET /books` through the public URL to confirm everything is in order.
@@ -190,13 +196,15 @@ In this case, you would exercise `POST /books` and `GET /books` through the publ
 
 Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump its version to `0.2.0`, and add "Every book records who added it" to the Goal.
 
-Plan against the existing session:
+Names are unique within a context, so updates target the Goal by its ID with `--goal`. Without it, `telos plan` and `telos apply` refuse to create a second `reading-list`.
+
+Plan against the existing Goal:
 
 ```console
-$ telos plan SPEC.md --session sess_c7d2f0a4e8
+$ telos plan SPEC.md --goal goal_c7d2f0a4e8
 Spec      reading-list
 Context   personal
-Session   sess_c7d2f0a4e8
+Goal      goal_c7d2f0a4e8
 Current   @alice/reading-list:0.1.0
 Version   0.1.0 -> 0.2.0
 
@@ -217,21 +225,21 @@ Version   0.1.0 -> 0.2.0
 +- Every book records who added it.
 ```
 
-The session-aware plan identifies the deployed package and displays the
-contract change. Apply that new revision to the same session:
+The plan identifies the deployed package and displays the
+contract change. Apply that new revision to the same Goal:
 
 ```console
-$ telos apply SPEC.md --session sess_c7d2f0a4e8
+$ telos apply SPEC.md --goal goal_c7d2f0a4e8
 updated reading-list
 
 Status    working
-Session   sess_c7d2f0a4e8
+Goal      goal_c7d2f0a4e8
 Revision  sha256:3211e85fe81b
 Model     telos/default
 Thinking  medium
 Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
-Logs      telos logs sess_c7d2f0a4e8
+Logs      telos logs goal_c7d2f0a4e8
 ```
 
 This applies the update in-place, and the system begins reconciling towards the new desired Goal. Continue to monitor status from `working` to `ready`, then exercise the updated API behavior.
@@ -239,7 +247,7 @@ This applies the update in-place, and the system begins reconciling towards the 
 Suppose the spec has updated under you (by your coworker), you can fetch the deployed package with:
 
 ```console
-$ telos get <session-id>
+$ telos get goal_c7d2f0a4e8
 ```
 
 This writes the goal spec and its skills to a directory named after the Goal. Use `--output <dir>` to override the directory name.
@@ -249,11 +257,11 @@ This writes the goal spec and its skills to a directory named after the Goal. Us
 If you would like to delete your Goal, its corresponding agent workspace, and the sandbox it lives in — you can run:
 
 ```console
-$ telos delete sess_c7d2f0a4e8
+$ telos delete goal_c7d2f0a4e8
 delete requested for reading-list
 
 Status    stopped
-Session   sess_c7d2f0a4e8
+Goal      goal_c7d2f0a4e8
 Context   personal
 ```
 
