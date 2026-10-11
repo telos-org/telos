@@ -60,7 +60,7 @@ version: 0.1.0
 network:
   - host: public.example.com
   - host: api.example.com
-    credentials: sec-example
+    credential: example-api-key
     methods: [GET]
     paths: ["/reports/*"]
 ---
@@ -68,21 +68,29 @@ network:
 
 Each entry in `network` specifies a host and optionally restricts HTTP methods and URL paths on that host. A host without `methods` or `paths` allows traffic via all methods and all paths.
 
+If you want to retain the default-deny egress behavior for Telos, either don't define `network` or set it to []. Doing so will still keep the defaults (Docker Hub, PyPI, npm).
+
 ## Credentials
 
-For authenticated requests, it is also possible to securely inject credentials. The workflow for this is as follows:
+It is also possible to securely inject credentials to outbound requests from the Telos runtime. The workflow for this is as follows:
 
-1. Create a credential (a name and its secret value) on the [web dashboard](https://usetelos.ai/workspace?tab=credentials). Telos gives it an ID, such as `sec-example`.
-2. Add the credential's destination host to `network` in your Goal's frontmatter.
-3. Associate that host with the credential's ID using `credentials`.
+1. Create a credential on the [web dashboard](https://usetelos.ai/workspace?tab=credentials). A credential is a name plus one or more keys, each sent in a HTTP header that you choose.
 
-A few additional details on this feature:
+> NOTE: The credential's name is what gets referenced in the YAML frontmatter and most use lowercase letters, numbers, and hyphen-separators.
 
-- Outbound access is only for HTTPS (no raw TCP/UDP)
-- Credentialed entries require an exact hostname, and paths must be exact or end in `/*`
-- Network-only entries can use wildcard hosts
-- One credential can serve multiple declared hosts
+2. List defined credentials' names locally via `telos config`.
+3. Add the credential's destination host to `network` in your Goal's frontmatter.
+4. Associate that host with the credential's name.
 
 Credentials are encrypted at rest and never enter your Goal's VM. Instead, a proxy outside the VM adds them to requests that match your `network` rules.
 
-In short, **your Goal can use credentials, but never see them**. It can still make any request your rules allow, so we recommend using a least-privilege key and narrowing access with `methods` and `paths`.
+Simply put, **your Goal can use credentials, but never see them**. It can still make any request your rules allow, so we recommend using a least-privilege key and narrowing access with `methods` and `paths`.
+
+A few additional details on this feature:
+
+- Outbound access is only for HTTPS (no raw TCP/UDP) requests.
+- Credentialed entries require an exact hostname, and paths must be exact or end in `/*`.
+- Network-only entries can use wildcard hosts.
+- One credential can serve multiple declared hosts.
+- Only owners and admins of a workspace can create, edit, or delete credentials.
+
