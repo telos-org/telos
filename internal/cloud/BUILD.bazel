@@ -7,6 +7,7 @@ go_library(
         "cliauth.go",
         "client.go",
         "costs.go",
+        "credentials.go",
         "inference.go",
     ],
     importpath = "github.com/telos-org/telos/internal/cloud",
