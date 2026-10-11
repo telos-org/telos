@@ -1,5 +1,5 @@
 ---
-title: The Telos Cloud environment
+title: Environment
 description: Everything you need to know about the Telos Cloud environment — the VM, developer toolchain, networking, and credentials.
 group: Platform
 ---
