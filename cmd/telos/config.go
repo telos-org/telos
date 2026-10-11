@@ -175,15 +175,15 @@ func printConfigReport(report configReport) {
 		for _, connection := range report.Connections {
 			fmt.Fprintf(w, "  %s\t%s\t%s\n", connection.Name, inferenceSourceLabel(connection.Source), connection.Status)
 		}
-		// A Goal's network rules name credentials by ID. A failed lookup leaves
-		// the list nil, and the error is reported below.
+		// A Goal's network rules name credentials by name. A failed lookup
+		// leaves the list nil, and the error is reported below.
 		if report.Credentials != nil {
 			fmt.Fprintln(w, "Credentials")
 			if len(report.Credentials) == 0 {
 				fmt.Fprintln(w, "  none")
 			}
 			for _, credential := range report.Credentials {
-				fmt.Fprintf(w, "  %s\t%s\n", credential.Name, credential.ID)
+				fmt.Fprintf(w, "  %s\n", credential.Name)
 			}
 		}
 	}

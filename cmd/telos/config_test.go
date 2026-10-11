@@ -218,18 +218,19 @@ func TestCmdConfigListsCredentialsForNetworkRules(t *testing.T) {
 	t.Setenv(config.AuthTokenEnv, "test-token")
 
 	out := captureStdout(t, func() { cmdConfig(nil) })
-	if got := configOutputValue(t, out, "Reading list API"); got != "sec_reading" {
-		t.Fatalf("credential row = %q\n%s", got, out)
+	if !strings.Contains(out, "Credentials\n  reading-list-api\n") {
+		t.Fatalf("config doesn't list the credential by name:\n%s", out)
 	}
-	if strings.Contains(out, "sec_bifrost_1") || strings.Contains(out, "READING_TOKEN") {
-		t.Fatalf("config lists a managed credential or a key name:\n%s", out)
+	if strings.Contains(out, "sec_reading") || strings.Contains(out, "sec_bifrost_1") ||
+		strings.Contains(out, "Telos inference") || strings.Contains(out, "READING_TOKEN") {
+		t.Fatalf("config lists an ID, a managed credential or a key name:\n%s", out)
 	}
 
 	var report configReport
 	if err := json.Unmarshal([]byte(captureStdout(t, func() { cmdConfig([]string{"--json"}) })), &report); err != nil {
 		t.Fatal(err)
 	}
-	if want := []cloud.Credential{{ID: "sec_reading", Name: "Reading list API"}}; !reflect.DeepEqual(report.Credentials, want) {
+	if want := []cloud.Credential{{ID: "sec_reading", Name: "reading-list-api"}}; !reflect.DeepEqual(report.Credentials, want) {
 		t.Fatalf("credentials = %#v, want %#v", report.Credentials, want)
 	}
 }
@@ -418,7 +419,7 @@ func accountBootstrapServer(t *testing.T) *httptest.Server {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/inference/preference":
 			_, _ = w.Write([]byte(`{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/secrets":
-			_, _ = w.Write([]byte(`{"secrets":[{"id":"sec_reading","name":"Reading list API","credentials":[{"key":"READING_TOKEN"}],"managed_by":null},{"id":"sec_bifrost_1","name":"Telos inference","credentials":[],"managed_by":"bifrost"}]}`))
+			_, _ = w.Write([]byte(`{"secrets":[{"id":"sec_reading","name":"reading-list-api","credentials":[{"key":"READING_TOKEN"}],"managed_by":null},{"id":"sec_bifrost_1","name":"Telos inference","credentials":[],"managed_by":"bifrost"}]}`))
 		default:
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}

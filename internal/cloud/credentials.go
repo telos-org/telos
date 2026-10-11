@@ -2,8 +2,8 @@ package cloud
 
 import "context"
 
-// Credential is a saved workspace credential that a Goal's network rules can
-// name by ID. Cloud never returns its values.
+// Credential is a saved workspace credential, which a Goal's network rules name
+// by Name. Cloud never returns its values.
 type Credential struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
