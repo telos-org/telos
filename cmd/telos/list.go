@@ -164,16 +164,28 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	cloudSessions, err := control.ListSessions()
+	list := control.ListSessions
+	if wide {
+		list = control.ListSessionsWithBilling
+	}
+	cloudSessions, err := list()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	cloudSessions = limitCloudSessions(cloudSessions, limit)
+	var costs []*goalCost
+	if wide {
+		costs = goalCosts(control, cloudSessions)
+	}
 	if jsonOut {
 		sessions := make([]cloudSessionJSON, 0, len(cloudSessions))
 		for index := range cloudSessions {
-			sessions = append(sessions, newCloudSessionJSON(&cloudSessions[index]))
+			record := newCloudSessionJSON(&cloudSessions[index])
+			if costs != nil {
+				record.Cost = costs[index]
+			}
+			sessions = append(sessions, record)
 		}
 		printJSON(map[string]any{
 			"context":  control.ContextName(),
@@ -191,18 +203,21 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if wide {
-		fmt.Fprintln(w, "NAME\tSTATUS\tREVISION\tSERVICE\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tREVISION\tSERVICE\tCLOUD\tINFERENCE\tSESSION")
 	} else {
 		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
 	}
-	for _, session := range cloudSessions {
+	for index, session := range cloudSessions {
 		serviceURL := optionalSessionString(session.ServiceURL)
 		if wide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			cloudSpend, inference := costCells(costs[index])
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				session.Name,
 				cloudSessionDisplayStatus(session),
 				shortRevision(session.PackageDigest),
 				serviceURL,
+				cloudSpend,
+				inference,
 				session.ID,
 			)
 			continue
