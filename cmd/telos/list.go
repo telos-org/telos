@@ -48,6 +48,7 @@ func cmdList(args []string) {
 
 	var sessions []sessionapi.Session
 	rootScoped := false
+	signedOut := false
 
 	if !*localOnly {
 		rootSessions, handled, err := rootListSessions(*limit)
@@ -68,6 +69,7 @@ func cmdList(args []string) {
 				listCloudSessions(contextOverride, *jsonOut, *limit, *wide)
 				return
 			}
+			signedOut = true
 			sessions = append(sessions, listLocalSessions()...)
 		}
 	} else {
@@ -83,9 +85,12 @@ func cmdList(args []string) {
 	}
 
 	if len(visible) == 0 {
-		if !effectiveWide && len(sessions) > 0 {
+		switch {
+		case !effectiveWide && len(sessions) > 0:
 			fmt.Println("no top-level Goals (use --wide for child Goals)")
-		} else {
+		case signedOut:
+			fmt.Println("Not signed in. Run `telos login` to see your Goals.")
+		default:
 			fmt.Println("no Goals")
 		}
 		return
