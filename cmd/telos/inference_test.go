@@ -180,6 +180,7 @@ func inferenceTestServer(t *testing.T, overrides map[string]http.HandlerFunc) *h
 		"GET /api/account/bootstrap":     `{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","handle":"person","role":"owner"},{"id":"org_telos","handle":"telos","role":"owner"}]}`,
 		"GET /api/inference/connections": `{"errors":{},"connections":[{"source":"subscription","id":"sub_work","name":"My ChatGPT","provider":"chatgpt-codex","status":"connected"},{"source":"byok","status":"saved","id":"key_work","name":"Work Anthropic","provider":"anthropic","api_key":"never-print-this-key"},{"source":"byok","status":"saved","id":"key_router","name":"Work/Router","provider":"openrouter"}]}`,
 		"GET /api/inference/preference":  `{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`,
+		"GET /api/secrets":               `{"secrets":[]}`,
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
