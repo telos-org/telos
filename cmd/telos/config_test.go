@@ -235,7 +235,7 @@ func TestCmdConfigListsCredentialsForNetworkRules(t *testing.T) {
 	}
 }
 
-func TestCmdConfigShowsCreditsLeft(t *testing.T) {
+func TestCmdConfigShowsCredits(t *testing.T) {
 	for _, tt := range []struct {
 		name   string
 		status int
@@ -243,11 +243,8 @@ func TestCmdConfigShowsCreditsLeft(t *testing.T) {
 		line   string
 		json   string
 	}{
-		{"left", http.StatusOK, `{"lifetime_balance_micro_usd":37504999,"work_allowed":true,"work_block_reason":null}`,
-			"$37.50 left", `{"usd":37.504999,"work_allowed":true}`},
-		{"paused", http.StatusOK, `{"lifetime_balance_micro_usd":0,"work_allowed":false,"work_block_reason":"credits_exhausted"}`,
-			"$0.00 left, agent work paused: credits used up; add a payment method on the web",
-			`{"usd":0,"work_allowed":false,"work_block_reason":"credits_exhausted"}`},
+		{"credit", http.StatusOK, `{"lifetime_balance_micro_usd":37504999,"work_allowed":true}`, "$37.50", `{"usd":37.504999}`},
+		{"none", http.StatusOK, `{"lifetime_balance_micro_usd":0,"work_allowed":false,"work_block_reason":"credits_exhausted"}`, "$0.00", `{"usd":0}`},
 		{"failed", http.StatusServiceUnavailable, `{"detail":"ledger unavailable"}`, "", "null"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

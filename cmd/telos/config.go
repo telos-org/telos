@@ -139,12 +139,12 @@ func loadConfigReport(cfg *config.Config, path string) configReport {
 	report.Context = account.CanonicalContextName(organization)
 	client.OrgID = organization.ID
 	var connectionsErr, preferenceErr, credentialsErr, creditsErr error
-	var credits *cloud.Credits
+	var creditsMicroUSD int64
 	var wg sync.WaitGroup
 	wg.Go(func() { report.Connections, connectionsErr = client.ListInferenceConnections() })
 	wg.Go(func() { report.WorkspaceDefault, preferenceErr = client.InferencePreference() })
 	wg.Go(func() { report.Credentials, credentialsErr = client.ListCredentials() })
-	wg.Go(func() { credits, creditsErr = client.Credits() })
+	wg.Go(func() { creditsMicroUSD, creditsErr = client.CreditsMicroUSD() })
 	wg.Wait()
 	if preferenceErr != nil {
 		preferenceErr = fmt.Errorf("workspace default: %w", preferenceErr)
@@ -155,7 +155,7 @@ func loadConfigReport(cfg *config.Config, path string) configReport {
 	if creditsErr != nil {
 		creditsErr = fmt.Errorf("credits: %w", creditsErr)
 	} else {
-		report.Credits = newCreditsReport(*credits)
+		report.Credits = &creditsReport{USD: dollars(creditsMicroUSD), microUSD: creditsMicroUSD}
 	}
 	if err := errors.Join(connectionsErr, preferenceErr, credentialsErr, creditsErr); err != nil {
 		report.Error = err.Error()
@@ -208,41 +208,12 @@ func printConfigReport(report configReport) {
 
 // creditsReport is what is left of the context's usage credit.
 type creditsReport struct {
-	USD             *float64 `json:"usd"`
-	WorkAllowed     bool     `json:"work_allowed"`
-	WorkBlockReason string   `json:"work_block_reason,omitempty"`
-	microUSD        int64
-}
-
-func newCreditsReport(credits cloud.Credits) *creditsReport {
-	return &creditsReport{
-		USD:             dollars(credits.BalanceMicroUSD),
-		WorkAllowed:     credits.WorkAllowed,
-		WorkBlockReason: credits.WorkBlockReason,
-		microUSD:        credits.BalanceMicroUSD,
-	}
-}
-
-var workBlockReasons = map[string]string{
-	"credits_exhausted":  "credits used up; add a payment method on the web",
-	"payment_past_due":   "payment past due",
-	"spend_cap_reached":  "usage limit reached",
-	"workspace_archived": "workspace archived",
+	USD      *float64 `json:"usd"`
+	microUSD int64
 }
 
 func (r creditsReport) String() string {
-	left := formatMicroUSD(r.microUSD) + " left"
-	if r.WorkAllowed {
-		return left
-	}
-	reason, ok := workBlockReasons[r.WorkBlockReason]
-	if !ok {
-		reason = r.WorkBlockReason
-	}
-	if reason == "" {
-		return left + ", agent work paused"
-	}
-	return left + ", agent work paused: " + reason
+	return formatMicroUSD(r.microUSD)
 }
 
 func inferenceSelectionName(selection cloud.InferenceSelection, connections []cloud.InferenceConnection) string {
