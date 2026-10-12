@@ -26,6 +26,7 @@ func cmdLogs(args []string) {
 	tail := fs.Int("tail", defaultLogTail, "Show the most recent N activity rows")
 	all := fs.Bool("all", false, "Show all activity rows")
 	follow := fs.Bool("follow", false, "Keep printing new activity until the Goal stops")
+	fs.BoolVar(follow, "f", false, "Same as --follow")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
 	contextOverride, err := cloudContextOverride(fs, *contextValue)

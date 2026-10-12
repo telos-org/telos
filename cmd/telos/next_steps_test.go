@@ -25,7 +25,7 @@ func TestDescribeTellsTheOwnerHowToMoveAGoalForward(t *testing.T) {
 		{"@team", "Next      Fix the spec, then: telos apply SPEC.md --goal goal_c7d2f0a4e8 --context @team, or telos delete goal_c7d2f0a4e8 --context @team\n"},
 	} {
 		var out bytes.Buffer
-		printCloudSessionDescriptionForContext(&out, session, "@team", tt.followUp)
+		printCloudSessionDescriptionForContext(&out, session, "@team", nil, tt.followUp)
 		if !strings.HasSuffix(out.String(), tt.want) {
 			t.Fatalf("description:\n%s\nwant it to end with:\n%s", out.String(), tt.want)
 		}
@@ -33,7 +33,7 @@ func TestDescribeTellsTheOwnerHowToMoveAGoalForward(t *testing.T) {
 
 	session.Status = "ready"
 	var out bytes.Buffer
-	printCloudSessionDescriptionForContext(&out, session, "personal", "")
+	printCloudSessionDescriptionForContext(&out, session, "personal", nil, "")
 	if strings.Contains(out.String(), "Next") {
 		t.Fatalf("a ready Goal got a next step:\n%s", out.String())
 	}

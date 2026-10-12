@@ -32,7 +32,9 @@ var ErrInvalidSession = errors.New("invalid session")
 var ErrConflict = errors.New("conflict")
 
 var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
-var cloudSessionIDRE = regexp.MustCompile(`^sess_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+
+// Cloud names Goals goal_…; Goals created before that keep sess_… IDs.
+var cloudSessionIDRE = regexp.MustCompile(`^(?:goal|sess)_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 func PackagePathForDigest(root string, digest string) (string, error) {
 	digest = strings.TrimSpace(digest)
