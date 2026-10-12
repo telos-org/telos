@@ -34,8 +34,9 @@ func AgentFailureBlocker(errorText string) (string, bool) {
 		return "agent_access_denied", true
 	case strings.Contains(value, "api key not configured"),
 		strings.Contains(value, "no api key"),
-		strings.Contains(value, "credentials not configured"),
-		strings.Contains(value, "unknown model"),
+		strings.Contains(value, "credentials not configured"):
+		return "agent_credentials_missing", true
+	case strings.Contains(value, "unknown model"),
 		strings.Contains(value, "invalid model"),
 		strings.Contains(value, "model not found"):
 		return "agent_configuration_invalid", true

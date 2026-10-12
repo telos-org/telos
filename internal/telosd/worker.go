@@ -249,7 +249,7 @@ func logControllerSuspended(sessionDir, blockerCode, errorText string, retryAfte
 	}
 	if retryAfter > 0 {
 		details["retry_after_seconds"] = retryAfter.Seconds()
-		details["action"] = fmt.Sprintf("fix the provider credentials, permissions, or quota; the controller will retry in %s", retryAfter.Round(time.Second))
+		details["action"] = fmt.Sprintf("fix the provider credentials, permissions, or quota, or add Telos credits; the controller will retry in %s", retryAfter.Round(time.Second))
 	}
 	ev.Log("agent_suspended", 0, "system", details)
 }

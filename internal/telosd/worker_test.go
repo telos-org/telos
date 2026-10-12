@@ -211,7 +211,7 @@ func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
 		`"blocker_code":"agent_authentication_invalid"`,
 		`"state":"waiting"`,
 		`"retry_after_seconds":60`,
-		"fix the provider credentials",
+		"fix the provider credentials, permissions, or quota, or add Telos credits",
 		"retry in 1m0s",
 	} {
 		if !strings.Contains(text, want) {
@@ -295,7 +295,7 @@ func TestControllerProviderRecoveryBacksOffAndReturnsToIdle(t *testing.T) {
 	for _, providerError := range []string{
 		"401: invalid x-api-key", "403: forbidden", "403: inactive virtual key",
 		"400: Your credit balance is too low to access the Anthropic API",
-		"429: insufficient_quota",
+		"429: insufficient_quota", "API key not configured",
 	} {
 		t.Run(providerError, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
