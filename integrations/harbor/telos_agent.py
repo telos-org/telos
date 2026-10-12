@@ -521,20 +521,20 @@ cd {shlex.quote(workdir)}
 export TELOS_SESSION_DIR=/tmp/telos-harbor/sessions
 run_json="$(telos run /tmp/telos-harbor/SPEC.md --workspace {shlex.quote(workdir)} --model {shlex.quote(model)} --thinking {shlex.quote(self.thinking)} --until {self.until}{max_cost_flag} --json)"
 printf '%s\n' "$run_json" > /tmp/telos-harbor/run.json
-session_id="$(json_field /tmp/telos-harbor/run.json session_id || true)"
-if [ -z "$session_id" ]; then
-  echo "telos run did not return a session_id" >&2
+goal_id="$(json_field /tmp/telos-harbor/run.json goal_id || true)"
+if [ -z "$goal_id" ]; then
+  echo "telos run did not return a goal_id" >&2
   cat /tmp/telos-harbor/run.json >&2
   exit 2
 fi
 deadline="$(($(date +%s) + {self.session_timeout_sec}))"
 while :; do
-  telos describe "$session_id" --json > /tmp/telos-harbor/describe.json || true
+  telos describe "$goal_id" --json > /tmp/telos-harbor/describe.json || true
   status="$(json_field /tmp/telos-harbor/describe.json status || true)"
   case "$status" in
     completed|failed|stopped|stale)
-      if ! telos logs "$session_id" --raw > /tmp/telos-harbor/transcript.md 2>/tmp/telos-harbor/logs.err; then
-        telos logs "$session_id" > /tmp/telos-harbor/transcript.md || true
+      if ! telos logs "$goal_id" --raw > /tmp/telos-harbor/transcript.md 2>/tmp/telos-harbor/logs.err; then
+        telos logs "$goal_id" > /tmp/telos-harbor/transcript.md || true
       fi
       printf 'TELOS_HARBOR_TRANSCRIPT_BEGIN\n'
       cat /tmp/telos-harbor/transcript.md
@@ -565,8 +565,8 @@ PY
       ;;
   esac
   if [ "$(date +%s)" -ge "$deadline" ]; then
-    telos delete "$session_id" >/dev/null 2>&1 || true
-    echo "timed out waiting for Telos session $session_id" >&2
+    telos delete "$goal_id" >/dev/null 2>&1 || true
+    echo "timed out waiting for Telos Goal $goal_id" >&2
     exit 124
   fi
   sleep {self.poll_interval_sec}

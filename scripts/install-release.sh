@@ -211,6 +211,14 @@ done
 
 echo "installed telos $version to $install_dir"
 echo "installed @telos/telos-cli:@TELOS_SKILL_VERSION@ to $agent_skills_dir/telos-cli"
+
+# Claude Code reads skills only from ~/.claude/skills.
+claude_skill="$HOME/.claude/skills/telos-cli"
+if [ -d "$HOME/.claude" ] && [ ! -e "$claude_skill" ] && [ ! -L "$claude_skill" ]; then
+  mkdir -p "$HOME/.claude/skills"
+  ln -s "$skill_target" "$claude_skill"
+  echo "linked $claude_skill for Claude Code"
+fi
 if [ "$install_telosd" -eq 1 ]; then
   echo "installed telosd $version to $install_dir"
 fi

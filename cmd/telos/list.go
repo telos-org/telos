@@ -17,8 +17,8 @@ func cmdList(args []string) {
 	fs := newCommandFlagSet("list", "telos list [flags]")
 	limit := fs.Int("limit", 0, "Limit results")
 	wide := fs.Bool("wide", false, "Wide output")
-	localOnly := fs.Bool("local", false, "Local sessions only")
-	cloudOnly := fs.Bool("cloud", false, "Cloud sessions only")
+	localOnly := fs.Bool("local", false, "Local Goals only")
+	cloudOnly := fs.Bool("cloud", false, "Cloud Goals only")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -78,23 +78,23 @@ func cmdList(args []string) {
 	visible := visibleListSessions(sessions, effectiveWide)
 	visible = limitListSessions(visible, *limit)
 	if *jsonOut {
-		printJSON(sessionapi.SessionListResponse{Sessions: sessionapi.SessionListItems(visible)})
+		printJSON(map[string]any{"goals": goalJSONList(sessionapi.SessionListItems(visible))})
 		return
 	}
 
 	if len(visible) == 0 {
 		if !effectiveWide && len(sessions) > 0 {
-			fmt.Println("no top-level sessions (use --wide for child sessions)")
+			fmt.Println("no top-level Goals (use --wide for child Goals)")
 		} else {
-			fmt.Println("no sessions")
+			fmt.Println("no Goals")
 		}
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if effectiveWide {
-		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPARENT\tCOST\tSESSION")
+		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPARENT\tCOST\tID")
 	} else {
-		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tID")
 	}
 	for _, sess := range visible {
 		row := displayRow(sess)
@@ -164,25 +164,37 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	cloudSessions, err := control.ListSessions()
+	list := control.ListSessions
+	if wide {
+		list = control.ListSessionsWithBilling
+	}
+	cloudSessions, err := list()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	cloudSessions = limitCloudSessions(cloudSessions, limit)
+	var costs []*goalCost
+	if wide {
+		costs = goalCosts(control, cloudSessions)
+	}
 	if jsonOut {
 		sessions := make([]cloudSessionJSON, 0, len(cloudSessions))
 		for index := range cloudSessions {
-			sessions = append(sessions, newCloudSessionJSON(&cloudSessions[index]))
+			record := newCloudSessionJSON(&cloudSessions[index])
+			if costs != nil {
+				record.Cost = costs[index]
+			}
+			sessions = append(sessions, record)
 		}
 		printJSON(map[string]any{
-			"context":  control.ContextName(),
-			"sessions": sessions,
+			"context": control.ContextName(),
+			"goals":   sessions,
 		})
 		return
 	}
 	if len(cloudSessions) == 0 {
-		fmt.Println("no sessions")
+		fmt.Println("no Goals")
 		return
 	}
 	if wide {
@@ -191,18 +203,21 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if wide {
-		fmt.Fprintln(w, "NAME\tSTATUS\tREVISION\tSERVICE\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tREVISION\tSERVICE\tCLOUD\tINFERENCE\tID")
 	} else {
-		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tID")
 	}
-	for _, session := range cloudSessions {
+	for index, session := range cloudSessions {
 		serviceURL := optionalSessionString(session.ServiceURL)
 		if wide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			cloudSpend, inference := costCells(costs[index])
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				session.Name,
 				cloudSessionDisplayStatus(session),
 				shortRevision(session.PackageDigest),
 				serviceURL,
+				cloudSpend,
+				inference,
 				session.ID,
 			)
 			continue

@@ -13,7 +13,7 @@ import (
 // -- describe -----------------------------------------------------------------
 
 func cmdDescribe(args []string) {
-	fs := newCommandFlagSet("describe", "telos describe SESSION [flags]")
+	fs := newCommandFlagSet("describe", "telos describe GOAL [flags]")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -23,7 +23,7 @@ func cmdDescribe(args []string) {
 		os.Exit(2)
 	}
 
-	requireArgCount(fs, 1, "one SESSION")
+	requireArgCount(fs, 1, "one GOAL")
 	sessionID := fs.Arg(0)
 	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -35,18 +35,20 @@ func cmdDescribe(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
-			return
-		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		describeCloudGoal(
+			cloudSession,
+			contextName,
+			contextOverride,
+			followUpContextName(contextOverride, contextName),
+			*jsonOut,
+		)
 		return
 	}
 
 	session, err := getSessionFromAnywhere(sessionID)
 	if err == nil {
 		if *jsonOut {
-			printJSON(session)
+			printJSON(goalJSON(session))
 			return
 		}
 
@@ -60,11 +62,7 @@ func cmdDescribe(args []string) {
 		os.Exit(1)
 	}
 	if found {
-		if *jsonOut {
-			printCloudSessionJSON(cloudSession, contextName)
-			return
-		}
-		printCloudSessionDescriptionForContext(os.Stdout, *cloudSession, contextName)
+		describeCloudGoal(cloudSession, contextName, "", "", *jsonOut)
 		return
 	}
 
@@ -72,13 +70,40 @@ func cmdDescribe(args []string) {
 	os.Exit(1)
 }
 
-// cloudSessionJSON is a Cloud session as describe and list print it. Callers
+func describeCloudGoal(
+	session *cloud.SessionRecord,
+	contextName string,
+	contextOverride string,
+	followUp string,
+	jsonOut bool,
+) {
+	var control *cloud.Client
+	if session.Billing == nil || billedByProvider(*session) {
+		control, _ = cloud.ControlClientForContext(contextOverride)
+	}
+	if control != nil && session.Billing == nil {
+		if withBilling, err := control.GetSessionWithBilling(session.ID); err == nil {
+			session = withBilling
+		}
+	}
+	cost := goalCosts(control, []cloud.SessionRecord{*session})[0]
+	if jsonOut {
+		printCloudSessionJSON(session, contextName, cost)
+		return
+	}
+	printCloudSessionDescriptionForContext(os.Stdout, *session, contextName, cost, followUp)
+}
+
+// cloudSessionJSON is a Cloud Goal as describe and list print it. Callers
 // read status and status_reason; the raw lifecycle state is left out.
 type cloudSessionJSON struct {
 	*cloud.SessionRecord
-	// State stays nil so it hides the record's raw state.
-	State  *string `json:"state,omitempty"`
-	Status string  `json:"status,omitempty"`
+	// State and Billing stay nil so they hide the record's raw state and
+	// billing, which cost presents.
+	State   *string   `json:"state,omitempty"`
+	Billing *struct{} `json:"billing,omitempty"`
+	Status  string    `json:"status,omitempty"`
+	Cost    *goalCost `json:"cost,omitempty"`
 }
 
 func newCloudSessionJSON(session *cloud.SessionRecord) cloudSessionJSON {
@@ -88,12 +113,15 @@ func newCloudSessionJSON(session *cloud.SessionRecord) cloudSessionJSON {
 func printCloudSessionJSON(
 	session *cloud.SessionRecord,
 	contextName string,
+	cost *goalCost,
 ) {
+	record := newCloudSessionJSON(session)
+	record.Cost = cost
 	printJSON(struct {
 		cloudSessionJSON
 		Context string `json:"context,omitempty"`
 	}{
-		cloudSessionJSON: newCloudSessionJSON(session),
+		cloudSessionJSON: record,
 		Context:          contextName,
 	})
 }
@@ -113,23 +141,27 @@ func getCloudSessionForContext(
 	}
 	session, err := control.GetSession(sessionID)
 	if err != nil {
-		return nil, "", err
+		return nil, "", goalNotFound(err, sessionID, control.ContextName())
 	}
 	return session, control.ContextName(), nil
 }
 
 func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
-	printCloudSessionDescriptionForContext(out, session, "")
+	printCloudSessionDescriptionForContext(out, session, "", nil, "")
 }
 
+// printCloudSessionDescriptionForContext names followUp in suggested commands
+// when the saved context would select another one.
 func printCloudSessionDescriptionForContext(
 	out io.Writer,
 	session cloud.SessionRecord,
 	contextName string,
+	cost *goalCost,
+	followUp string,
 ) {
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
-	printSummaryField(out, "Session", session.ID)
+	printSummaryField(out, "Goal", session.ID)
 	printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
 	printCloudInferenceSummary(out, session)
 	if contextName != "" {
@@ -138,9 +170,26 @@ func printCloudSessionDescriptionForContext(
 	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
 		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
 	}
+	printGoalCost(out, cost)
 	if reason := cloudSessionReason(session); reason != "" {
 		printSummaryField(out, "Reason", reason)
 	}
+	if cloudSessionDisplayStatus(session) == "needs_attention" {
+		printSummaryField(out, "Next", needsAttentionNextStep(session.ID, followUp))
+	}
+}
+
+// needsAttentionNextStep tells the owner of a Goal that needs attention how
+// to move it forward.
+func needsAttentionNextStep(goalID, followUp string) string {
+	contextFlag := ""
+	if followUp != "" {
+		contextFlag = " --context " + followUp
+	}
+	return fmt.Sprintf(
+		"Fix the spec, then: telos apply SPEC.md --goal %s%s, or telos delete %s%s",
+		goalID, contextFlag, goalID, contextFlag,
+	)
 }
 
 func cloudSessionDisplayStatus(session cloud.SessionRecord) string {
@@ -208,7 +257,7 @@ func printSessionDescription(out io.Writer, session sessionapi.Session) {
 	printSummaryField(out, "Name", row.Name)
 	printSummaryField(out, "Target", row.Target)
 	printSummaryField(out, "Status", row.Status)
-	printSummaryField(out, "Session", row.Session)
+	printSummaryField(out, "Goal", row.Session)
 	if session.TotalCostUSD != nil {
 		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	}

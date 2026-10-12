@@ -46,7 +46,7 @@ func TestReorderInterspersedFlags(t *testing.T) {
 }
 
 func TestCommandFlagUsageUsesPublicFlagSyntax(t *testing.T) {
-	fs := newCommandFlagSet("logs", "telos logs SESSION [flags]")
+	fs := newCommandFlagSet("logs", "telos logs GOAL [flags]")
 	fs.Bool("q", false, "Quiet output")
 	fs.Bool("json", false, "Print JSON")
 	fs.String("context", "", "Cloud context")
@@ -57,7 +57,7 @@ func TestCommandFlagUsageUsesPublicFlagSyntax(t *testing.T) {
 
 	text := out.String()
 	for _, want := range []string{
-		"usage: telos logs SESSION [flags]",
+		"usage: telos logs GOAL [flags]",
 		"--context string",
 		"-q",
 		"--json",
@@ -82,9 +82,9 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
-		"apply SPEC.md      Create or update a durable session from a spec",
-		"get SESSION        Download a session's package",
-		"delete SESSION     Delete a session",
+		"apply SPEC.md      Create a Goal from a spec, or update one with --goal",
+		"get GOAL           Download a Goal's package",
+		"delete GOAL        Delete a Goal",
 		"pull PACKAGE       Download a spec or skill package",
 		"version            Show version",
 		"update [VERSION]   Update installed Telos components to one release",
@@ -194,7 +194,7 @@ func TestFlagNamesSetUsesExplicitFlagsOnly(t *testing.T) {
 
 func TestValidateCloudSessionContextRejectsLocalSession(t *testing.T) {
 	err := validateCloudSessionContext("local_123", "org_telos")
-	if err == nil || err.Error() != "--context cannot be used with a local session" {
+	if err == nil || err.Error() != "--context cannot be used with a local Goal" {
 		t.Fatalf("local update context error = %v", err)
 	}
 	for _, sessionID := range []string{"", "sess_123"} {
@@ -424,7 +424,7 @@ func TestUntilFlagValueRejectsSubsecondDuration(t *testing.T) {
 func TestValidateForceApplyRequiresCloudUpdate(t *testing.T) {
 	for _, sessionID := range []string{"", "local_123"} {
 		err := validateForceApply(true, sessionID)
-		if err == nil || !strings.Contains(err.Error(), "requires --session") {
+		if err == nil || !strings.Contains(err.Error(), "requires --goal") {
 			t.Fatalf("forced %q: got %v", sessionID, err)
 		}
 	}
@@ -439,18 +439,14 @@ func TestValidateForceApplyRequiresCloudUpdate(t *testing.T) {
 }
 
 func TestValidateApplySession(t *testing.T) {
-	for _, sessionID := range []string{"", "sess_123"} {
+	// Cloud Goal IDs are opaque, so Cloud resolves any ID that is not local.
+	for _, sessionID := range []string{"", "sess_123", "goal_123"} {
 		if err := validateApplySession(sessionID); err != nil {
 			t.Fatalf("validate %q: %v", sessionID, err)
 		}
 	}
-	for sessionID, wantErr := range map[string]string{
-		"local_123":      "only updates Telos Cloud sessions",
-		"deployment_123": "invalid session id",
-	} {
-		if err := validateApplySession(sessionID); err == nil || !strings.Contains(err.Error(), wantErr) {
-			t.Fatalf("validate %q: got %v, want containing %q", sessionID, err, wantErr)
-		}
+	if err := validateApplySession("local_123"); err == nil || !strings.Contains(err.Error(), "only updates Telos Cloud Goals") {
+		t.Fatalf("validate local_123: got %v", err)
 	}
 }
 
@@ -1639,8 +1635,8 @@ func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
 	}
 	text := err.Error()
 	for _, want := range []string{
-		"session local_missing not found in",
-		"Local sessions are workspace-scoped",
+		"Goal local_missing not found in",
+		"Local Goals are workspace-scoped",
 		"TELOS_SESSION_DIR=/path/to/.telos/sessions",
 	} {
 		if !strings.Contains(text, want) {
