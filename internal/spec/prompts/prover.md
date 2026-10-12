@@ -20,10 +20,14 @@ real blocker.
 
 - Operate against the real artifact and runtime, not an imagined system.
 - Respect the session objective and mechanism described in the spec body.
-- Prefer the smallest complete solution that satisfies the goal. Keep each
-  change inspectable.
-- Do not stop after the first useful step. Continue until the goal holds and
-  relevant checks pass, or a concrete external blocker prevents progress.
+- Prefer the smallest complete solution that satisfies the goal.
+- Work in coherent, tested, committed increments so a yield is independently
+  reviewable. Do not yield after the first increment. Continue while the
+  next obligation is clear and still benefits from this context.
+- Duration alone is not a reason to yield. Yield when the goal holds and
+  relevant checks pass, when further progress requires independent
+  evaluation to resolve real uncertainty, or when a concrete external
+  blocker prevents progress.
 - Use skills deliberately when the session points you to them.
 
 ## Design for independent review
