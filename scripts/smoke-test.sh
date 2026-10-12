@@ -110,7 +110,7 @@ json_value() {
 
 json_has_session() {
   local expected="$1"
-  python3 -c 'import json,sys; ids=[s.get("session_id") for s in json.load(sys.stdin).get("sessions", [])]; assert sys.argv[1] in ids' "$expected"
+  python3 -c 'import json,sys; ids=[g.get("goal_id") for g in json.load(sys.stdin).get("goals", [])]; assert sys.argv[1] in ids' "$expected"
 }
 
 FIXTURE_DIR="$(mktemp -d)"
@@ -142,9 +142,9 @@ echo "=== 1. Help and version ==="
 HELP="$(telos_cmd --help 2>&1)"
 check_contains "help mentions plan" "$HELP" "plan SPEC.md"
 check_contains "help mentions list" "$HELP" "list"
-check_contains "help mentions describe" "$HELP" "describe SESSION"
+check_contains "help mentions describe" "$HELP" "describe GOAL"
 check_contains "help mentions logs" "$HELP" "logs"
-check_contains "help mentions delete" "$HELP" "delete SESSION"
+check_contains "help mentions delete" "$HELP" "delete GOAL"
 check_contains "help mentions --version" "$HELP" "--version"
 
 VERSION="$(telos_cmd --version 2>&1)"
@@ -213,7 +213,7 @@ check_not_contains "list has no panic" "$LIST_HUMAN" "panic"
 
 LIST_JSON="$(telos_cmd list --local --json 2>&1 || true)"
 check_json "list --json parses" "$LIST_JSON"
-check_contains "list JSON includes sessions" "$LIST_JSON" '"sessions"'
+check_contains "list JSON includes goals" "$LIST_JSON" '"goals"'
 
 echo "=== 5. Fixture lifecycle ==="
 
@@ -225,13 +225,13 @@ RUN_JSON="$(telos_fixture run "$FIXTURE_SPEC_PATH" \
   2>&1 || true)"
 
 check_json "run --json parses" "$RUN_JSON"
-SESSION_ID="$(json_value session_id <<<"$RUN_JSON" 2>/dev/null || true)"
-SESSION_DIR="$(json_value session_dir <<<"$RUN_JSON" 2>/dev/null || true)"
+SESSION_ID="$(json_value goal_id <<<"$RUN_JSON" 2>/dev/null || true)"
+SESSION_DIR="$(json_value goal_dir <<<"$RUN_JSON" 2>/dev/null || true)"
 
 if [ -n "$SESSION_ID" ] && [ -n "$SESSION_DIR" ]; then
-  pass "run JSON includes session_id and session_dir"
+  pass "run JSON includes goal_id and goal_dir"
 else
-  fail "run JSON includes session_id and session_dir"
+  fail "run JSON includes goal_id and goal_dir"
   echo "$RUN_JSON"
   echo "=== Results: $PASS passed, $FAIL failed ==="
   exit 1
@@ -278,7 +278,7 @@ check_not_contains "describe has no panic" "$DESCRIBE_HUMAN" "panic"
 
 DESCRIBE_JSON="$(telos_fixture describe "$SESSION_ID" --json 2>&1 || true)"
 check_json "describe --json parses" "$DESCRIBE_JSON"
-check_contains "describe JSON includes session_id" "$DESCRIBE_JSON" '"session_id"'
+check_contains "describe JSON includes goal_id" "$DESCRIBE_JSON" '"goal_id"'
 check_contains "describe JSON includes status" "$DESCRIBE_JSON" '"status"'
 
 LOGS_OUTPUT="$(telos_fixture logs "$SESSION_ID" 2>&1 || true)"

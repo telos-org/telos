@@ -36,7 +36,7 @@ on the same release. Managed Cloud runtimes are updated by Cloud automation.
 Cloud deployments require authentication. Use `telos login` interactively, or
 supply `TELOS_AUTH_TOKEN` for agents and CI. An existing valid login or token
 needs no additional login step; see
-[Cloud authentication](skills/telos-cli/references/cloud.md#authenticate).
+[Sign in](skills/telos-cli/references/use-telos.md#sign-in).
 
 ## Get started
 
@@ -54,7 +54,6 @@ An example `SPEC.md`:
 ---
 name: reading-list
 version: 0.1.0
-platform: cloud
 ---
 
 # Goal
@@ -93,29 +92,29 @@ After reviewing and approving the resolved action and context, apply it:
 telos apply SPEC.md --context personal
 ```
 
-`apply` returns a session ID when the revision is accepted for work. The work
+`apply` returns a Goal ID when the revision is accepted for work. The work
 then continues in the background.
 
-After applying, use `telos list` to find the session and `telos describe` to
+After applying, use `telos list` to find the Goal and `telos describe` to
 check its status. Once the service is published, `describe` also prints its URL:
 
 ```console
 $ telos list --context personal
-NAME           STATUS  SESSION
-reading-list   ready   sess_123
+NAME           STATUS  ID
+reading-list   ready   goal_123
 
-$ telos describe sess_123 --context personal
+$ telos describe goal_123 --context personal
 Name      reading-list
 Status    ready
-Session   sess_123
+Goal      goal_123
 Revision  sha256:abc123...
 Context   personal
 Service   https://reading-list.example.com
 ```
 
 Cloud reports `working`, `ready`, `needs_attention`, or `stopped`.
-[The lifecycle](skills/telos-cli/references/lifecycle.md) is authoritative for
-their revision, route-publication, and compatibility semantics.
+[Use Telos](skills/telos-cli/references/use-telos.md#watch-it-work) explains
+each status.
 
 For a service, exercise the live behavior in the spec before treating the Goal
 as complete.
@@ -123,28 +122,28 @@ as complete.
 Follow agent updates with:
 
 ```bash
-telos logs SESSION_ID --context personal
+telos logs GOAL_ID --context personal
 ```
 
 To update a live Goal, edit `SPEC.md`, bump its version, and apply the new
-revision to the same session:
+revision to the same Goal:
 
 ```bash
-telos plan SPEC.md --session SESSION_ID --context personal
-telos apply SPEC.md --session SESSION_ID --context personal
+telos plan SPEC.md --goal GOAL_ID --context personal
+telos apply SPEC.md --goal GOAL_ID --context personal
 ```
+
+Goal names are unique within a context: applying a spec whose name is already
+taken fails and names the Goal to update with `--goal`.
 
 `telos` reconciles the existing live software toward the new desired state.
 
-Continue with the worked [persistent Goal](skills/telos-cli/references/use-telos.md)
-or read [the lifecycle](skills/telos-cli/references/lifecycle.md) to understand
-sessions, revisions, states, and evidence.
+Continue with the worked [persistent Goal](skills/telos-cli/references/use-telos.md).
 
 ## Local runs
 
 `telos apply` is the primary interface. For harness development, benchmarking,
-and nested execution, `telos run` executes bounded local work. See
-[Bounded runs](skills/telos-cli/references/bounded-runs.md) for setup and usage.
+and nested execution, `telos run` executes bounded local work.
 
 ## Acknowledgements
 
