@@ -97,6 +97,7 @@ type configReport struct {
 	Authentication   string                      `json:"authentication"`
 	Context          string                      `json:"context"`
 	WorkspaceDefault *cloud.InferenceSelection   `json:"workspace_default,omitempty"`
+	Credits          *creditsReport              `json:"credits,omitempty"`
 	Connections      []cloud.InferenceConnection `json:"connections"`
 	Credentials      []cloud.Credential          `json:"credentials"`
 	ModelOverride    string                      `json:"model_override,omitempty"`
@@ -137,11 +138,13 @@ func loadConfigReport(cfg *config.Config, path string) configReport {
 	}
 	report.Context = account.CanonicalContextName(organization)
 	client.OrgID = organization.ID
-	var connectionsErr, preferenceErr, credentialsErr error
+	var connectionsErr, preferenceErr, credentialsErr, creditsErr error
+	var creditsMicroUSD int64
 	var wg sync.WaitGroup
 	wg.Go(func() { report.Connections, connectionsErr = client.ListInferenceConnections() })
 	wg.Go(func() { report.WorkspaceDefault, preferenceErr = client.InferencePreference() })
 	wg.Go(func() { report.Credentials, credentialsErr = client.ListCredentials() })
+	wg.Go(func() { creditsMicroUSD, creditsErr = client.CreditsMicroUSD() })
 	wg.Wait()
 	if preferenceErr != nil {
 		preferenceErr = fmt.Errorf("workspace default: %w", preferenceErr)
@@ -149,7 +152,12 @@ func loadConfigReport(cfg *config.Config, path string) configReport {
 	if credentialsErr != nil {
 		credentialsErr = fmt.Errorf("credentials: %w", credentialsErr)
 	}
-	if err := errors.Join(connectionsErr, preferenceErr, credentialsErr); err != nil {
+	if creditsErr != nil {
+		creditsErr = fmt.Errorf("credits: %w", creditsErr)
+	} else {
+		report.Credits = &creditsReport{USD: dollars(creditsMicroUSD), microUSD: creditsMicroUSD}
+	}
+	if err := errors.Join(connectionsErr, preferenceErr, credentialsErr, creditsErr); err != nil {
 		report.Error = err.Error()
 	}
 	return report
@@ -160,6 +168,9 @@ func printConfigReport(report configReport) {
 	fmt.Fprintf(w, "Config file\t%s\nEndpoint\t%s\nAuthentication\t%s\nContext\t%s\n", report.ConfigFile, report.Endpoint, report.Authentication, report.Context)
 	if report.WorkspaceDefault != nil {
 		fmt.Fprintf(w, "Workspace model\t%s\n", inferenceSelectionName(*report.WorkspaceDefault, report.Connections))
+	}
+	if report.Credits != nil {
+		fmt.Fprintf(w, "Credits\t%s\n", report.Credits)
 	}
 	if report.ModelOverride != "" {
 		fmt.Fprintf(w, "Model override\t%s (TELOS_MODEL)\n", report.ModelOverride)
@@ -193,6 +204,16 @@ func printConfigReport(report configReport) {
 		}
 	}
 	_ = w.Flush()
+}
+
+// creditsReport is what is left of the context's usage credit.
+type creditsReport struct {
+	USD      *float64 `json:"usd"`
+	microUSD int64
+}
+
+func (r creditsReport) String() string {
+	return formatMicroUSD(r.microUSD)
 }
 
 func inferenceSelectionName(selection cloud.InferenceSelection, connections []cloud.InferenceConnection) string {
