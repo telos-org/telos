@@ -6,6 +6,9 @@ go_library(
         "account.go",
         "cliauth.go",
         "client.go",
+        "costs.go",
+        "credentials.go",
+        "credits.go",
         "inference.go",
     ],
     importpath = "github.com/telos-org/telos/internal/cloud",
@@ -22,6 +25,7 @@ go_test(
     srcs = [
         "account_test.go",
         "cliauth_test.go",
+        "client_retry_test.go",
         "client_test.go",
     ],
     embed = [":cloud"],

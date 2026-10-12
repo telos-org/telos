@@ -38,7 +38,6 @@ type EnvironmentSpec struct {
 	SpecText                   string
 	IntervalSeconds            *int
 	Tags                       []string
-	Platform                   string // "local" or "cloud"
 	RequiredVerifierSkillPaths []string
 }
 
@@ -135,15 +134,6 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 		Version:  version,
 		Name:     name,
 		SpecText: specBody,
-	}
-
-	// platform
-	if v, ok := raw["platform"]; ok {
-		p := fmt.Sprint(v)
-		if p != "local" && p != "cloud" {
-			return nil, fmt.Errorf("%s: invalid platform '%s' (valid: cloud, local)", path, p)
-		}
-		env.Platform = p
 	}
 
 	// skills

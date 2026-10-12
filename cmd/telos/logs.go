@@ -20,11 +20,13 @@ import (
 const maxCloudLogTail = 1000
 
 func cmdLogs(args []string) {
-	fs := newCommandFlagSet("logs", "telos logs SESSION [flags]")
+	fs := newCommandFlagSet("logs", "telos logs GOAL [flags]")
 	jsonOutput := fs.Bool("json", false, "Print newline-delimited JSON events")
 	raw := fs.Bool("raw", false, "Print the raw transcript or evidence events")
 	tail := fs.Int("tail", defaultLogTail, "Show the most recent N activity rows")
 	all := fs.Bool("all", false, "Show all activity rows")
+	follow := fs.Bool("follow", false, "Keep printing new activity until the Goal stops")
+	fs.BoolVar(follow, "f", false, "Same as --follow")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
 	contextOverride, err := cloudContextOverride(fs, *contextValue)
@@ -33,7 +35,7 @@ func cmdLogs(args []string) {
 		os.Exit(2)
 	}
 
-	requireArgCount(fs, 1, "one SESSION")
+	requireArgCount(fs, 1, "one GOAL")
 	if enabledFlagCount(*jsonOutput, *raw) > 1 {
 		fmt.Fprintln(os.Stderr, "error: --json and --raw are mutually exclusive")
 		os.Exit(2)
@@ -42,8 +44,8 @@ func cmdLogs(args []string) {
 		fmt.Fprintln(os.Stderr, "error: --all and --tail are mutually exclusive")
 		os.Exit(2)
 	}
-	if *raw && (*all || flagNameSet(fs, "tail")) {
-		fmt.Fprintln(os.Stderr, "error: --raw cannot be combined with --all or --tail")
+	if *raw && (*all || flagNameSet(fs, "tail") || *follow) {
+		fmt.Fprintln(os.Stderr, "error: --raw cannot be combined with --all, --tail, or --follow")
 		os.Exit(2)
 	}
 	if *tail < 1 && !*all {
@@ -62,7 +64,7 @@ func cmdLogs(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		printCloudSessionLogs(session, options, *jsonOutput, *raw, contextOverride)
+		printCloudSessionLogs(session, options, *jsonOutput, *raw, *follow, contextOverride)
 		return
 	}
 
@@ -81,6 +83,7 @@ func cmdLogs(args []string) {
 		if !*jsonOutput {
 			if transcript, ok := legacyTranscriptFallback(sessionID, events, eventsErr); ok {
 				printLogs(os.Stdout, transcript, false)
+				followLocalLogsIfAsked(*follow, sessionID, *session, nil, false)
 				return
 			}
 		}
@@ -88,7 +91,7 @@ func cmdLogs(args []string) {
 			if *jsonOutput && transcriptNotReady(eventsErr) {
 				fmt.Fprintln(
 					os.Stderr,
-					"error: structured events are unavailable for this older session; omit --json for readable logs or use --raw for the transcript",
+					"error: structured events are unavailable for this older Goal; omit --json for readable logs or use --raw for the transcript",
 				)
 				os.Exit(1)
 			}
@@ -100,9 +103,10 @@ func cmdLogs(args []string) {
 				fmt.Fprintf(os.Stderr, "error: %v\n", eventsErr)
 				os.Exit(1)
 			}
-			return
+		} else {
+			printStructuredLogs(os.Stdout, events, options)
 		}
-		printStructuredLogs(os.Stdout, events, options)
+		followLocalLogsIfAsked(*follow, sessionID, *session, events, *jsonOutput)
 		return
 	}
 
@@ -110,7 +114,7 @@ func cmdLogs(args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", cloudErr)
 		os.Exit(1)
 	} else if found {
-		printCloudSessionLogs(session, options, *jsonOutput, *raw, "")
+		printCloudSessionLogs(session, options, *jsonOutput, *raw, *follow, "")
 		return
 	}
 
@@ -118,11 +122,29 @@ func cmdLogs(args []string) {
 	os.Exit(1)
 }
 
+func followLocalLogsIfAsked(
+	follow bool,
+	goalID string,
+	goal sessionapi.Session,
+	printed []sessionapi.SessionEvent,
+	jsonOutput bool,
+) {
+	if !follow || !localGoalActive(goal) {
+		return
+	}
+	printer := newLogFollowPrinter(os.Stdout, jsonOutput, "", printed)
+	if err := followLocalLogs(goalID, len(printed), printer); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+}
+
 func printCloudSessionLogs(
 	session *cloud.SessionRecord,
 	options logViewOptions,
 	jsonOutput bool,
 	raw bool,
+	follow bool,
 	contextOverride string,
 ) {
 	status := cloudSessionDisplayStatus(*session)
@@ -148,6 +170,7 @@ func printCloudSessionLogs(
 		}
 		return
 	}
+	events := page.Events
 	if jsonOutput {
 		if err := printJSONLogEventsForContext(
 			os.Stdout,
@@ -157,17 +180,24 @@ func printCloudSessionLogs(
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+	} else {
+		if tail > 0 {
+			events, err = expandCloudHumanLogs(control, session.ID, page, options.Tail)
+			if err != nil {
+				options.Active = false
+				fmt.Fprintf(os.Stderr, "Some progress updates could not be loaded: %v\n", err)
+			}
+		}
+		printStructuredLogs(os.Stdout, events, options)
+	}
+	if !follow || status == "stopped" {
 		return
 	}
-	events := page.Events
-	if tail > 0 {
-		events, err = expandCloudHumanLogs(control, session.ID, page, options.Tail)
-		if err != nil {
-			options.Active = false
-			fmt.Fprintf(os.Stderr, "Some progress updates could not be loaded: %v\n", err)
-		}
+	printer := newLogFollowPrinter(os.Stdout, jsonOutput, control.ContextName(), events)
+	if err := followCloudLogs(control, session.ID, newCloudLogFollower(page), printer); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
 	}
-	printStructuredLogs(os.Stdout, events, options)
 }
 
 func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *cloud.SessionLogPage, tail int) ([]sessionapi.SessionEvent, error) {
@@ -185,7 +215,7 @@ func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *clou
 			return combined, errors.New("the runtime could not be reached; earlier activity may still be available")
 		}
 		if cloudLogSessionChanged(initial, page) {
-			return combined, errors.New("the session changed while loading earlier activity; run telos logs again to view the new session")
+			return combined, errors.New("the Goal restarted while loading earlier activity; run telos logs again to view its new activity")
 		}
 		if fullHistory {
 			return page.Events, nil
@@ -328,7 +358,7 @@ func enabledFlagCount(values ...bool) int {
 func printRawJSONLogEvents(out io.Writer, events []json.RawMessage) error {
 	for _, event := range events {
 		if !json.Valid(event) {
-			return errors.New("raw session log event is invalid JSON")
+			return errors.New("raw log event is invalid JSON")
 		}
 		if _, err := out.Write(event); err != nil {
 			return err
@@ -369,7 +399,7 @@ func printLogs(out io.Writer, transcript string, raw bool) {
 	}
 	blocks := logBlocks(transcript)
 	if len(blocks) == 0 {
-		fmt.Fprintln(out, "no session log entries")
+		fmt.Fprintln(out, "no log entries")
 		return
 	}
 	printLogBlocks(out, blocks, 0)
