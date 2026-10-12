@@ -174,6 +174,7 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	pkg := testApplyPackage(t)
 	var published bool
 	var forcedUpdate bool
+	var listed int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3":
@@ -187,6 +188,9 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 			})
 		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3/bundle":
 			_, _ = w.Write(pkg.Bytes)
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
+			listed++
+			_ = json.NewEncoder(w).Encode(map[string]any{"deployments": []any{}})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/packages":
 			published = true
 			http.Error(w, "unexpected publish", http.StatusInternalServerError)
@@ -247,17 +251,23 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	if result["operation"] != "created" || result["context"] != "personal" {
 		t.Fatalf("apply result = %#v", result)
 	}
+	if listed != 1 {
+		t.Fatalf("create checked for an existing Goal %d times, want 1", listed)
+	}
 
 	out = captureStdout(t, func() {
 		cmdApply([]string{
 			"@telos/demo:1.2.3",
-			"--session", "sess_registry",
+			"--goal", "sess_registry",
 			"--force",
 			"--json",
 		})
 	})
 	if !forcedUpdate {
 		t.Fatal("forced registry apply did not update the deployment")
+	}
+	if listed != 1 {
+		t.Fatal("an update through --goal checked for a duplicate name")
 	}
 	result = map[string]any{}
 	if err := json.Unmarshal([]byte(out), &result); err != nil {

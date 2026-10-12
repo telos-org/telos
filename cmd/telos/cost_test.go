@@ -180,7 +180,7 @@ func TestListShowsCostsOnlyWhenWide(t *testing.T) {
 		}
 	}
 	for name, want := range map[string][]string{
-		"NAME":      {"CLOUD", "INFERENCE", "SESSION"},
+		"NAME":      {"CLOUD", "INFERENCE", "ID"},
 		"star-tap":  {"$1.25", "$6.50", "goal_telos"},
 		"byok-demo": {"$1.25", "$3.40", "goal_key"},
 		"sub-demo":  {"$0.00", "?", "goal_sub"},
@@ -193,9 +193,9 @@ func TestListShowsCostsOnlyWhenWide(t *testing.T) {
 	}
 
 	var listed struct {
-		Sessions []struct {
+		Goals []struct {
 			Cost *goalCost `json:"cost"`
-		} `json:"sessions"`
+		} `json:"goals"`
 	}
 	wideJSON := captureStdout(t, func() { cmdList([]string{"--wide", "--json"}) })
 	if strings.Contains(wideJSON, `"billing"`) {
@@ -204,7 +204,7 @@ func TestListShowsCostsOnlyWhenWide(t *testing.T) {
 	if err := json.Unmarshal([]byte(wideJSON), &listed); err != nil {
 		t.Fatal(err)
 	}
-	key := listed.Sessions[1].Cost
+	key := listed.Goals[1].Cost
 	if key == nil || key.Inference.USD == nil || *key.Inference.USD != 3.4 || key.Inference.Source != "byok" ||
 		key.Inference.Provider != "anthropic" || *key.Cloud.ComputeUSD != 1 || *key.Cloud.StorageUSD != 0.25 {
 		t.Fatalf("API key Goal cost JSON = %#v", key)

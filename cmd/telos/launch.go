@@ -36,7 +36,7 @@ func cmdLaunch(command, action string, args []string) {
 	forceValue := false
 	force := &forceValue
 	if command == "apply" {
-		sessionID = fs.String("session", "", "Managed session ID to update")
+		sessionID = fs.String("goal", "", "ID of the Goal to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
 	}
 	modelHelp := "Model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
@@ -82,11 +82,11 @@ func cmdLaunch(command, action string, args []string) {
 
 	if ctx, ok := rootSessionContext(); ok {
 		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session; use telos run to launch nested specs")
+			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos Goal; use telos run to launch nested specs")
 			os.Exit(1)
 		}
 		if localConfigSet {
-			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a Telos session")
+			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a Telos Goal")
 			os.Exit(1)
 		}
 		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
@@ -100,7 +100,7 @@ func cmdLaunch(command, action string, args []string) {
 
 	if command == "apply" {
 		if insideTelosSession() {
-			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session; use telos run to launch nested specs")
+			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos Goal; use telos run to launch nested specs")
 			os.Exit(1)
 		}
 		if err := validateApplySession(*sessionID); err != nil {
@@ -121,7 +121,7 @@ func cmdLaunch(command, action string, args []string) {
 			os.Exit(1)
 		}
 		if *sessionID != "" && cloudRuntimeConfigSet(runtimeConfig) {
-			fmt.Fprintln(os.Stderr, "error: cloud runtime config flags can only seed a new session; they cannot update an existing session")
+			fmt.Fprintln(os.Stderr, "error: cloud runtime config flags can only seed a new Goal; they cannot update an existing Goal")
 			os.Exit(1)
 		}
 		applyCloudControl(
@@ -165,8 +165,8 @@ func cmdLaunch(command, action string, args []string) {
 
 	if *jsonOut {
 		printJSON(map[string]interface{}{
-			"session_id":       session.SessionID,
-			"session_dir":      session.SessionDir,
+			"goal_id":          session.SessionID,
+			"goal_dir":         session.SessionDir,
 			"workspace":        session.WorkspaceScope,
 			"active_workspace": session.ActiveWorkspace,
 			"spec_name":        session.SpecName,
@@ -184,11 +184,19 @@ func printLocalLaunch(out io.Writer, action string, session *cli.LocalSession) {
 	printSummaryField(out, "Target", "local")
 	printSummaryField(out, "Status", "active")
 	printSummaryField(out, "Cost", "-")
-	printSummaryField(out, "Session", session.SessionID)
+	printSummaryField(out, "Goal", session.SessionID)
 	printSummaryField(out, "Workspace", session.WorkspaceScope)
 	fmt.Fprintln(out)
 	printSummaryField(out, "Describe", fmt.Sprintf("cd %s && telos describe %s", workspace, session.SessionID))
 	printSummaryField(out, "Logs", fmt.Sprintf("cd %s && telos logs %s", workspace, session.SessionID))
+}
+
+// shellArg quotes s only when a shell would otherwise split or expand it.
+func shellArg(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%+=:,./_-") == "" {
+		return s
+	}
+	return shellQuote(s)
 }
 
 func shellQuote(s string) string {
@@ -198,18 +206,14 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// validateApplySession accepts only Telos Cloud sessions: telos apply always
+// validateApplySession accepts only Telos Cloud Goals: telos apply always
 // deploys to Telos Cloud, and local work is telos run.
 func validateApplySession(sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
-	switch {
-	case sessionID == "", isCloudApplyID(sessionID):
-		return nil
-	case isLocalApplyID(sessionID):
-		return fmt.Errorf("%s is a local session; telos apply only updates Telos Cloud sessions", sessionID)
-	default:
-		return fmt.Errorf("invalid session id %q", sessionID)
+	if isLocalApplyID(sessionID) {
+		return fmt.Errorf("%s is a local Goal; telos apply only updates Telos Cloud Goals", sessionID)
 	}
+	return nil
 }
 
 func requireCloudLogin() error {
@@ -250,7 +254,7 @@ func runCloudChildSession(
 		os.Exit(1)
 	}
 	if jsonOut {
-		printJSON(map[string]any{"session": session})
+		printJSON(map[string]any{"goal": goalJSON(session)})
 		return
 	}
 	printSessionReceipt(os.Stdout, action, session)
@@ -278,26 +282,35 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	var pkg *specPackage
+	packageName := ""
+	if reference != nil {
+		packageName = reference.name
+	} else {
+		pkg, err = packageSpec(specArg, contextOverride)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		packageName = pkg.name
+	}
 	var inference *cloud.InferenceSelection
 	if sessionID == "" {
+		if err := refuseDuplicateGoal(control, "apply", specArg, packageName, contextOverride); err != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
 		inference, err = resolveCloudInference(control, runtimeConfig.Model)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 	}
-	packageName := ""
 	var packageRecord *cloud.PackageVersionRecord
 	if reference != nil {
-		packageName = reference.name
 		packageRecord, err = registryPackageForApply(control, *reference)
 	} else {
-		var pkg *specPackage
-		pkg, err = packageSpec(specArg, contextOverride)
-		if err == nil {
-			packageName = pkg.name
-			packageRecord, err = pushSpecPackage(control, pkg, "")
-		}
+		packageRecord, err = pushSpecPackage(control, pkg, "")
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -321,7 +334,7 @@ func applyCloudControl(
 			"context":   control.ContextName(),
 			"operation": operation,
 			"package":   packageRecord,
-			"session":   session,
+			"goal":      session,
 		})
 		return
 	}
@@ -345,7 +358,7 @@ func applyCloudSessionPackage(
 ) (string, *cloud.SessionRecord, error) {
 	if sessionID != "" {
 		if !isCloudApplyID(sessionID) {
-			return "", nil, fmt.Errorf("invalid cloud session id %q", sessionID)
+			return "", nil, fmt.Errorf("invalid Goal ID %q", sessionID)
 		}
 		session, err := control.UpdateSession(sessionID, cloud.SessionUpdateOptions{
 			PackageRef: packageRef,
@@ -357,7 +370,7 @@ func applyCloudSessionPackage(
 				return "unchanged", current, nil
 			}
 		}
-		return "updated", session, actionableDeploymentUpdateError(err, force)
+		return "updated", session, actionableDeploymentUpdateError(goalNotFound(err, sessionID, control.ContextName()), force)
 	}
 
 	session, err := control.CreateSession(cloud.SessionCreateOptions{
@@ -367,6 +380,46 @@ func applyCloudSessionPackage(
 		Inference:     inference,
 	})
 	return "created", session, err
+}
+
+// refuseDuplicateGoal fails when control's context already has a Goal named
+// name. Names are unique within a context: apply creates a Goal, and only
+// --goal updates one.
+func refuseDuplicateGoal(control *cloud.Client, command, specArg, name, contextOverride string) error {
+	goals, err := control.ListSessions()
+	if err != nil {
+		return err
+	}
+	for _, goal := range goals {
+		if goal.Name == name && goal.State != "deleted" {
+			return &duplicateGoalError{
+				name:     name,
+				context:  control.ContextName(),
+				id:       goal.ID,
+				command:  command,
+				specArg:  specArg,
+				followUp: followUpContext(control, contextOverride),
+			}
+		}
+	}
+	return nil
+}
+
+type duplicateGoalError struct {
+	name     string
+	context  string
+	id       string
+	command  string
+	specArg  string
+	followUp string
+}
+
+func (e *duplicateGoalError) Error() string {
+	update := fmt.Sprintf("telos %s %s --goal %s", e.command, shellArg(e.specArg), e.id)
+	if e.followUp != "" {
+		update += " --context " + e.followUp
+	}
+	return fmt.Sprintf("a Goal named %s already exists in %s (%s)\nTo update it: %s", e.name, e.context, e.id, update)
 }
 
 func actionableDeploymentUpdateError(err error, force bool) error {
@@ -400,7 +453,7 @@ func cloudRuntimeConfigSet(cfg sessionRuntimeConfig) bool {
 
 func validateForceApply(force bool, sessionID string) error {
 	if force && !isCloudApplyID(sessionID) {
-		return errors.New("--force requires --session with a cloud deployment ID")
+		return errors.New("--force requires --goal")
 	}
 	return nil
 }
@@ -413,7 +466,7 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	fmt.Fprintf(out, "%s %s\n\n", operation, name)
 	row := displayRow(*session)
 	printSummaryField(out, "Status", row.Status)
-	printSummaryField(out, "Session", row.Session)
+	printSummaryField(out, "Goal", row.Session)
 	if session.TotalCostUSD != nil {
 		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	}
@@ -432,7 +485,7 @@ func printCloudSessionReceiptForContext(
 ) {
 	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
-	printSummaryField(out, "Session", session.ID)
+	printSummaryField(out, "Goal", session.ID)
 	printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
 	printCloudInferenceSummary(out, *session)
 	if contextName != "" {

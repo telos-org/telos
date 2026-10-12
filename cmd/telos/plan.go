@@ -40,7 +40,7 @@ type planSkillLock struct {
 
 func cmdPlan(args []string) {
 	fs := newCommandFlagSet("plan", "telos plan SPEC.md [flags]")
-	sessionID := fs.String("session", "", "Managed session ID to compare")
+	sessionID := fs.String("goal", "", "ID of the Goal to compare against")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -95,6 +95,12 @@ func cmdPlan(args []string) {
 			os.Exit(1)
 		}
 		targetContext = control.ContextName()
+		if comparison == nil {
+			if err := refuseDuplicateGoal(control, "plan", fs.Arg(0), compiled.Environment.Name, contextOverride); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+		}
 	}
 	targetOperation := "create"
 	if comparison != nil {
@@ -116,14 +122,14 @@ func cmdPlan(args []string) {
 				compiled.RequiredVerifierSkills,
 			),
 		},
-		"session": map[string]interface{}{
+		"goal": map[string]interface{}{
 			"interval_seconds": compiled.Environment.IntervalSeconds,
 		},
 		"target": targetScope,
 	}
 	if comparison != nil {
 		plan["change"] = map[string]interface{}{
-			"session_id":  comparison.sessionID,
+			"goal_id":     comparison.sessionID,
 			"current_ref": comparison.currentRef,
 			"current":     comparison.current,
 			"proposed":    comparison.proposed,
@@ -168,7 +174,7 @@ func printPlanPreview(
 	comparison *specComparison,
 ) {
 	printSummaryField(out, "Spec", compiled.Environment.Name)
-	// A session plan shows version and interval changes after the skills instead.
+	// A plan against a Goal shows version and interval changes after the skills instead.
 	if comparison == nil {
 		printSummaryField(out, "Version", compiled.Environment.Version)
 		if compiled.Environment.IntervalSeconds != nil {
@@ -177,7 +183,7 @@ func printPlanPreview(
 	}
 	printSummaryField(out, "Context", contextName)
 	if comparison != nil {
-		printSummaryField(out, "Session", comparison.sessionID)
+		printSummaryField(out, "Goal", comparison.sessionID)
 		printSummaryField(out, "Current", comparison.currentRef)
 	}
 	if len(compiled.Skills) > 0 {
@@ -205,18 +211,14 @@ func compareSessionSpec(
 	contextOverride string,
 ) (*specComparison, error) {
 	sessionID = strings.TrimSpace(sessionID)
-	switch {
-	case isLocalApplyID(sessionID):
-		return nil, fmt.Errorf("%s is a local session; telos plan --session only compares Telos Cloud sessions", sessionID)
-	case isCloudApplyID(sessionID):
-		control, err := cloud.ControlClientForContext(contextOverride)
-		if err != nil {
-			return nil, err
-		}
-		return compareCloudSessionSpecWithState(control, sessionID, proposed, proposedState)
-	default:
-		return nil, fmt.Errorf("invalid session id %q", sessionID)
+	if isLocalApplyID(sessionID) {
+		return nil, fmt.Errorf("%s is a local Goal; telos plan --goal only compares Telos Cloud Goals", sessionID)
 	}
+	control, err := cloud.ControlClientForContext(contextOverride)
+	if err != nil {
+		return nil, err
+	}
+	return compareCloudSessionSpecWithState(control, sessionID, proposed, proposedState)
 }
 
 func compareCloudSessionSpec(

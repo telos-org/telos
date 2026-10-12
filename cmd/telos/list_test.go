@@ -101,7 +101,7 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 	for _, want := range []string{
 		"NAME",
 		"STATUS",
-		"SESSION",
+		"ID",
 		"auth",
 		"ready",
 		"sess_123",
@@ -124,7 +124,7 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 		"STATUS",
 		"REVISION",
 		"SERVICE",
-		"SESSION",
+		"ID",
 		"auth",
 		"ready",
 		"sha256:8f21c47a91ee ",
@@ -178,7 +178,7 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 	if body["context"] != "personal" {
 		t.Fatalf("cloud list json context: %#v", body["context"])
 	}
-	sessions, ok := body["sessions"].([]any)
+	sessions, ok := body["goals"].([]any)
 	if !ok || len(sessions) != 1 {
 		t.Fatalf("cloud list json sessions: %#v", body)
 	}
@@ -251,7 +251,7 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 	for _, want := range []string{
 		"Name      auth",
 		"Status    ready",
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Revision  sha256:8f21c47a91ee\n",
 		"Service   https://auth.example.com",
 	} {
@@ -290,7 +290,7 @@ func TestPrintCloudSessionReceiptShowsNextUsefulAction(t *testing.T) {
 	for _, want := range []string{
 		"created auth",
 		"Status    working",
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Revision  sha256:8f21c47a91ee\n",
 		"Context   personal",
 		"Service   https://auth.example.com",
@@ -331,7 +331,7 @@ func TestPrintCloudSessionDescriptionOmitsUnavailableSurfaces(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"Status    deploying",
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Revision  sha256:abc",
 	} {
 		if !strings.Contains(text, want) {
@@ -420,7 +420,7 @@ func TestPrintCloudSessionDeleteReceiptUsesSessionSummary(t *testing.T) {
 	for _, want := range []string{
 		"deleted auth",
 		"Status    deleted",
-		"Session   sess_123",
+		"Goal      sess_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("cloud session stop receipt missing %q:\n%s", want, text)
@@ -450,7 +450,7 @@ func TestPrintCloudSessionDeleteReceiptShowsAsyncDeletion(t *testing.T) {
 	for _, want := range []string{
 		"delete requested for auth",
 		"Status    deleting",
-		"Session   sess_123",
+		"Goal      sess_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("cloud session delete receipt missing %q:\n%s", want, text)
@@ -510,7 +510,7 @@ func TestCmdDeleteDeletesCloudSession(t *testing.T) {
 	for _, want := range []string{
 		"deleted auth",
 		"Status    deleted",
-		"Session   sess_123",
+		"Goal      sess_123",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("delete output missing %q:\n%s", want, out)
@@ -716,7 +716,7 @@ func TestPrintSessionDescriptionIncludesOnlyLifecycleEssentials(t *testing.T) {
 		"Name      postgres",
 		"Target    cloud",
 		"Status    completed",
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Cost      $1.2300",
 		"Revision  2",
 		"Parent    sess_parent",
@@ -843,7 +843,7 @@ func TestPrintLocalLaunchIncludesWorkspaceScopedCommands(t *testing.T) {
 		"Target    local",
 		"Status    active",
 		"Cost      -",
-		"Session   local_123",
+		"Goal      local_123",
 		"Workspace /tmp/telos-blackbox",
 		"Describe  cd '/tmp/telos-blackbox' && telos describe local_123",
 		"Logs      cd '/tmp/telos-blackbox' && telos logs local_123",
@@ -874,7 +874,7 @@ func TestPrintSessionReceiptUsesNormalizedSummary(t *testing.T) {
 	for _, want := range []string{
 		"updated gitea",
 		"Status    idle",
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Cost      $1.1907",
 	} {
 		if !strings.Contains(text, want) {
@@ -905,7 +905,7 @@ func TestPrintLocalSessionDeleteReceiptUsesSessionSummary(t *testing.T) {
 	for _, want := range []string{
 		"deleted gitea (history preserved)",
 		"Status    stopped",
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Cost      $1.1907",
 	} {
 		if !strings.Contains(text, want) {
@@ -932,7 +932,7 @@ func TestPrintLocalSessionDeleteReceiptUsesSessionIDForUnnamedSession(t *testing
 	for _, want := range []string{
 		"deleted sess_123 (history preserved)",
 		"Status    stopped",
-		"Session   sess_123",
+		"Goal      sess_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("delete receipt missing %q:\n%s", want, text)
