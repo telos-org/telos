@@ -1,16 +1,16 @@
 ---
 title: Environment
-description: Everything you need to know about the Telos Cloud environment — the VM, developer toolchain, networking, and credentials.
+description: Everything you need to know about a Goal's environment — the VM, developer toolchain, networking, and credentials.
 group: Platform
 ---
 
-The Telos Cloud environment is the place where your Goals are translated into running software.
+A Goal's environment is where Telos turns it into running software.
 
 ## Overview
 
 Each Goal gets its own persistent VM that runs a lightweight Kubernetes cluster.
 
-The Telos agent harness lives inside this VM and has access to a full `git` workspace, developer toolchain, and permissions to launch and manage services (inside the VM). This lets the agent own the full build, test, and deploy lifecycle.
+The Telos agent harness lives inside this VM and has access to a full `git` repository, developer toolchain, and permissions to launch and manage services (inside the VM). This lets the agent own the full build, test, and deploy lifecycle.
 
 ## Toolchain
 
@@ -34,14 +34,14 @@ Telos follows a strict networking model, with limited ingress and egress by defa
 
 ### Ingress
 
-The only entry points into a Goal's runtime environment are:
+The only entry points into a Goal's environment are:
 
 - the product API or UI, accessed through the managed hostname (`<name>-<id>.usetelos.ai`, where `<id>` is the Goal ID without `goal_`, like `reading-list-c7d2f0a4e8.usetelos.ai`)
 - the administration dashboard, accessed via the web UI and restricted to workspace administrators.
 
 ### Egress
 
-By default, the Telos system has a limited set of egress points out of its runtime environment:
+By default, the Telos system has a limited set of egress points out of a Goal's environment:
 
 | Ecosystem | Description | Hostnames |
 |---|---|---|
@@ -51,7 +51,7 @@ By default, the Telos system has a limited set of egress points out of its runti
 
 Access is limited to the read-only HTTPS methods and paths needed for these downloads — it does not allow arbitrary requests to these hosts.
 
-For most real-world use cases, this is insufficient, so Telos also supports configuring additional outbound HTTPS access in your Goal's YAML frontmatter, for example:
+For most real-world use cases, this is insufficient, so Telos also supports configuring additional outbound HTTPS access in your Goal's YAML [frontmatter](goals.md#frontmatter), for example:
 
 ```yaml
 ---

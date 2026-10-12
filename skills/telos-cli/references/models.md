@@ -6,7 +6,12 @@ group: Platform
 
 Telos is designed to be flexible and neutral to model choice, and supports the options below.
 
-You can select a model from the CLI with `--model <name>/<model-id>`, where `<name>` is `telos` for managed inference or the name you gave your API key or subscription. A default can be set in the web UI. Telos also exposes standard "thinking effort" values (`--thinking [low,medium,high,xhigh]`).
+You can select a model from the CLI with `--model <name>/<model-id>`, where `<name>` is `telos` for managed inference or the name you gave your API key or subscription. A default can be set in the [web UI](https://usetelos.ai/workspace?tab=inference). Telos also exposes standard "thinking effort" values (`--thinking [low,medium,high,xhigh]`).
+
+```console
+$ telos apply SPEC.md --model telos/max --thinking high
+$ telos apply SPEC.md --model my-anthropic-key/claude-sonnet-5-5
+```
 
 ## Managed inference
 
@@ -29,7 +34,7 @@ In many instances, teams have active API keys with major providers (Anthropic, O
 
 ### Subscription
 
-For individual developers or small teams, most token spend goes through subscriptions like ChatGPT Plus/Pro. Telos supports connecting with the following subscription providers:
+Many individual developers and small teams already pay for subscriptions like ChatGPT Plus/Pro. Telos supports connecting with the following subscription providers:
 
 - ChatGPT
 - xAI
@@ -38,7 +43,7 @@ As of October 2026, Anthropic is unsupported since connecting third-party applic
 
 ## Spend observability
 
-In order to see costs per goal on inference, run either `telos describe` or `telos list --wide`. For example:
+In order to see costs per Goal on inference, run either `telos describe` or `telos list --wide`. For example:
 
 ```console
 $ telos describe goal_c7d2f0a4e8

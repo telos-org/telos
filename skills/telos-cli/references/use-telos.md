@@ -7,13 +7,13 @@ group: Getting started
 Telos is a goal-oriented programming system. Telos treats the goal specification as the source of truth, and background agents own the software lifecycle beneath it.
 
 Implementations can change as the Goal evolves,
-while its deployment, history, and evidence stay attached to the same Goal.
+while its history and the evidence that it meets its spec stay attached to the same Goal.
 
-This guide follows one small service from its first spec through a live update.
+This guide walks one Goal through its full lifecycle on Telos.
 Generated IDs, digests, paths, and URLs in the transcripts are illustrative;
 the command and field shapes match the current CLI.
 
-## Installation
+## Install
 
 Install Telos with:
 
@@ -21,25 +21,18 @@ Install Telos with:
 $ curl -fsSL https://usetelos.ai/install.sh | sh
 ```
 
-This will install the `telos` binary on your machine. This also comes with the coupled `telos-cli` agent skill, to guide your coding agent of choice on using `telos`. The `telos` binary is self-contained, and you can check the installed version with:
+This installs the `telos` binary and the `telos-cli` agent skill on your machine. Telos is built for the agent experience, and can be driven entirely through your coding agent of choice. Check the installed version with:
 
 ```console
 $ telos --version
 ```
 
-If you want to update your local installation, use:
+To update your installation later:
 
 ```console
-$ telos update
+$ telos update            # the latest release
+$ telos update <version>  # a specific release
 ```
-to install the latest stable version.
-
-or
-
-```console
-$ telos update <version>
-```
-to install a specific release.
 
 ## Sign in
 
@@ -70,11 +63,11 @@ Credentials
 
 `telos config` is useful to see the active context, the default workspace model, configured inference providers (see [Models](models.md) for more), and credentials (see [Credentials](environment.md#credentials) for more).
 
+A context is the workspace your commands act in: `personal`, or a team's `@handle`.
+
 Congratulations! You are now ready to run your Goals on Telos.
 
-## An example Goal
-
-This section serves as a walkthrough of the lifecycle of a goal specification on Telos.
+## Write a goal specification
 
 Start by writing a preliminary `SPEC.md` for your service:
 
@@ -98,11 +91,11 @@ Run a public service for a shared reading list.
   returns it.
 ```
 
-Writing good Goals is important enough of a topic that we've dedicated [an entire section to it](goals.md), but at a framework level, the above example covers the minimal required items.
+At a framework level, the above example covers the minimal required items. [Goals](goals.md) walks through everything else a goal specification can include: frontmatter, skills, rubrics, and packages.
 
-## Plan
+## Plan it
 
-Once you are happy with the goal specification, `telos plan` validates the spec and shows you a dry-run of what the spec would look like when applied.
+Once you are happy with the goal specification, `telos plan` validates the spec and shows what applying it would change, without changing anything.
 
 ```console
 $ telos plan SPEC.md
@@ -115,7 +108,7 @@ The first plan has no deployed version to compare against, so it shows the Goal'
 
 ## Apply it
 
-Once the plan looks good, use `telos apply` to deploy the spec in the cloud environment.
+Once the plan looks good, use `telos apply` to deploy the spec to Telos Cloud.
 
 ```console
 $ telos apply SPEC.md
@@ -166,7 +159,7 @@ Add `--follow` to keep printing new activity as it happens, until the Goal stops
 
 | Status | Meaning |
 |---|---|
-| `working` | Telos is preparing the Goal's environment, implementing the current spec, or verifying it. |
+| `working` | Telos is preparing the Goal's [environment](environment.md), implementing the current spec, or verifying it. |
 | `ready` | The system accepted the current Goal, and the service is live. |
 | `needs_attention` | The latest run failed or stopped unexpectedly. `telos describe` shows why, and what to run next. |
 | `stopped` | The Goal has stopped running, usually because you deleted it. |
@@ -192,7 +185,7 @@ Costs come in two lines: `Cloud` (compute and storage) and `Inference` (through 
 Once ready, open the service and verify that the behavior is as desired.
 In this case, you would exercise `POST /books` and `GET /books` through the public URL to confirm everything is in order.
 
-## Iterating on the Goal
+## Update it
 
 Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump its version to `0.2.0`, and add "Every book records who added it" to the Goal.
 
@@ -208,6 +201,7 @@ Goal      goal_c7d2f0a4e8
 Current   @alice/reading-list:0.1.0
 Version   0.1.0 -> 0.2.0
 
+diff deployed/SPEC.md proposed/SPEC.md
 --- deployed/SPEC.md
 +++ proposed/SPEC.md
 @@ -1,6 +1,6 @@
@@ -223,10 +217,13 @@ Version   0.1.0 -> 0.2.0
  - `GET /books` returns the current list.
  - Books remain available when the application restarts.
 +- Every book records who added it.
+ 
+ # Acceptance
+ 
 ```
 
-The plan identifies the deployed package and displays the
-contract change. Apply that new revision to the same Goal:
+The plan shows the Goal's current spec and how the new one
+differs. Apply that new revision to the same Goal:
 
 ```console
 $ telos apply SPEC.md --goal goal_c7d2f0a4e8
@@ -244,17 +241,17 @@ Logs      telos logs goal_c7d2f0a4e8
 
 This applies the update in-place, and the system begins reconciling towards the new desired Goal. Continue to monitor status from `working` to `ready`, then exercise the updated API behavior.
 
-Suppose the spec has updated under you (by your coworker), you can fetch the deployed package with:
+If the Goal has been updated by someone else, you can fetch its current spec with:
 
 ```console
 $ telos get goal_c7d2f0a4e8
 ```
 
-This writes the goal spec and its skills to a directory named after the Goal. Use `--output <dir>` to override the directory name.
+This writes the spec and its skills to a directory named after the Goal. Use `--output <dir>` to override the directory name.
 
-## Delete the Goal
+## Delete it
 
-If you would like to delete your Goal, its corresponding agent workspace, and the sandbox it lives in — you can run:
+If you would like to delete your Goal, along with its environment and the code the agent wrote — you can run:
 
 ```console
 $ telos delete goal_c7d2f0a4e8
@@ -274,7 +271,14 @@ The Goal disappears from `telos list` as soon as you delete it.
 
 For advanced use — such as scripting, CI, or custom development setups — you can configure various defaults.
 
-In terms of precedence, flags override environment variables, and environment variables override your saved config (in `telos config`).
+In terms of precedence, flags override environment variables, and environment variables override your saved config (in `telos config`). For example, to work in a team's workspace by default, save its context:
+
+```console
+$ telos config --context @acme
+context set to @acme
+```
+
+A `--context` flag still overrides it for a single command.
 
 | Variable | Purpose | Default |
 |---|---|---|
