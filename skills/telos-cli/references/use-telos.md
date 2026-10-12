@@ -55,13 +55,14 @@ Endpoint         https://api.usetelos.ai
 Authentication   valid
 Context          personal
 Workspace model  telos/default
+Credits          $50.00
 Inference
   telos  Managed  telos/default, telos/max
 Credentials
   example-api-key
 ```
 
-`telos config` is useful to see the active context, the default workspace model, configured inference providers (see [Models](models.md) for more), and credentials (see [Credentials](environment.md#credentials) for more).
+`telos config` is useful to see the active context, the default workspace model, credits left, configured inference providers (see [Models](models.md) for more), and credentials (see [Credentials](environment.md#credentials) for more).
 
 A context is the workspace your commands act in: `personal`, or a team's `@handle`.
 
