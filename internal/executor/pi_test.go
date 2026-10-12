@@ -59,13 +59,15 @@ func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	}
 }
 
-func TestRecoverableAgentFailureRejectsCredentialErrors(t *testing.T) {
+func TestRecoverableAgentFailureRejectsProviderBlockers(t *testing.T) {
 	for _, errorText := range []string{
 		"403: inactive virtual key",
 		"request failed (HTTP 401)",
+		"400: Your credit balance is too low to access the Anthropic API",
+		"429: insufficient_quota",
 	} {
 		if recoverableAgentFailure(errorText) {
-			t.Fatalf("credential error marked recoverable: %q", errorText)
+			t.Fatalf("provider blocker marked recoverable: %q", errorText)
 		}
 	}
 	for _, errorText := range []string{
