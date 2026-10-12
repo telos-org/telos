@@ -64,10 +64,6 @@ func (f *fakeExecutor) taskAt(i int) string {
 	return f.tasks[i]
 }
 
-func (f *fakeExecutor) WorkspaceState() string {
-	return "=== FILES ===\n(no files)"
-}
-
 func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {
 	os.MkdirAll(filepath.Dir(dest), 0o755)
 	os.WriteFile(dest, []byte("fake"), 0o644)
@@ -938,14 +934,14 @@ func TestLocalWorkerEnvIncludesSessionContext(t *testing.T) {
 	}
 }
 
-func TestRunLocalSessionPreambleFollowsRuntime(t *testing.T) {
+func TestRunLocalSessionContextFollowsRuntime(t *testing.T) {
 	for _, tt := range []struct {
 		runtime       sessionapi.SessionRuntime
-		preamble      string
+		context       string
 		wantNamespace bool
 	}{
-		{runtime: sessionapi.RuntimeLocal, preamble: "## Platform: local"},
-		{runtime: sessionapi.RuntimeCloud, preamble: "## Target: cloud", wantNamespace: true},
+		{runtime: sessionapi.RuntimeLocal, context: "- Runtime: `local`"},
+		{runtime: sessionapi.RuntimeCloud, context: "- Runtime: `cloud`", wantNamespace: true},
 	} {
 		t.Run(string(tt.runtime), func(t *testing.T) {
 			dir := t.TempDir()
@@ -980,8 +976,8 @@ func TestRunLocalSessionPreambleFollowsRuntime(t *testing.T) {
 				t.Fatalf("RunLocalSession: %v", err)
 			}
 			task := exec.firstTask()
-			if !strings.Contains(task, tt.preamble) {
-				t.Fatalf("prompt missing %q:\n%s", tt.preamble, task)
+			if !strings.Contains(task, tt.context) {
+				t.Fatalf("prompt missing %q:\n%s", tt.context, task)
 			}
 			if got := strings.Contains(task, "- Namespace: `"); got != tt.wantNamespace {
 				t.Fatalf("namespace in prompt = %v, want %v", got, tt.wantNamespace)
@@ -990,7 +986,7 @@ func TestRunLocalSessionPreambleFollowsRuntime(t *testing.T) {
 	}
 }
 
-func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
+func TestRunLocalSessionUsesUpdatedLifecycleContext(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 
@@ -1030,14 +1026,57 @@ func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
 	}
 
 	task := exec.firstTask()
-	if !strings.Contains(task, "## Controller Session") {
-		t.Fatal("controller session should receive controller prompt")
+	if !strings.Contains(task, "Lifecycle: `persistent`") {
+		t.Fatal("persistent session should receive lifecycle context")
 	}
 	if strings.Contains(task, "`telos-orchestrate`") {
-		t.Fatal("controller prompt should not auto-inject telos-orchestrate")
+		t.Fatal("persistent session prompt should not auto-inject telos-orchestrate")
 	}
 	if !strings.Contains(task, "Primary spec: `") {
-		t.Fatal("controller prompt should include primary spec path")
+		t.Fatal("persistent session prompt should include primary spec path")
+	}
+}
+
+func TestRunLocalPersistentSessionUsesLifecycleContext(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(t.TempDir(), "telos-output"))
+	runTestCommand(t, dir, "git", "init", "-q")
+	runTestCommand(t, dir, "git", "add", "-A")
+	runTestCommand(t, dir, "git", "-c", "user.name=Telos", "-c", "user.email=telos@local", "commit", "-q", "-m", "initial")
+	session, err := CreateLocalSession(specPath, LocalRunConfig{Workspace: dir})
+	if err != nil {
+		t.Fatalf("CreateLocalSession: %v", err)
+	}
+	// Hosted runtimes still record persistent sessions as controllers.
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.SessionKind = sessionapi.KindController
+	if err := sessionapi.WriteManifest(filepath.Join(session.SessionDir, "session.json"), manifest); err != nil {
+		t.Fatal(err)
+	}
+
+	exec := &fakeExecutor{
+		proverResult: game.TurnResult{
+			Role:   "prover",
+			Status: game.StatusContinue,
+			Logs:   "Built.\n\n<progress_update>Built</progress_update>",
+		},
+		verifierResult: game.TurnResult{
+			Role:   "verifier",
+			Status: game.StatusConcede,
+			Logs:   "OK\n\n<status>CONCEDE</status>\n",
+		},
+	}
+	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
+		t.Fatalf("RunLocalSession: %v", err)
+	}
+
+	task := exec.firstTask()
+	if !strings.Contains(task, "Lifecycle: `persistent`") {
+		t.Fatal("persistent session prompt should be enabled by session kind")
 	}
 }
 
@@ -1087,7 +1126,7 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 	if firstImplementationTask == "" {
 		t.Fatalf("expected first implementation task, got %d tasks", len(exec.tasks))
 	}
-	if !strings.Contains(firstImplementationTask, "First action every turn: read this transcript path") {
+	if !strings.Contains(firstImplementationTask, "Read the transcript for current spec updates and unresolved findings before acting") {
 		t.Fatal("first implementation prompt should require reading transcript first")
 	}
 
@@ -1095,7 +1134,7 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 	if evaluationTask == "" {
 		t.Fatalf("expected evaluation task, got %d tasks", len(exec.tasks))
 	}
-	if !strings.Contains(evaluationTask, "First action every turn: read this transcript path") {
+	if !strings.Contains(evaluationTask, "Read the transcript for current spec updates and unresolved findings before acting") {
 		t.Fatal("evaluation prompt should require reading transcript first")
 	}
 
@@ -1103,10 +1142,10 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 	if secondImplementationTask == "" {
 		t.Fatalf("expected second implementation task, got %d tasks", len(exec.tasks))
 	}
-	if !strings.Contains(secondImplementationTask, "First action every turn: read this transcript path") {
+	if !strings.Contains(secondImplementationTask, "Read the transcript for current spec updates and unresolved findings before acting") {
 		t.Fatal("second implementation prompt should require reading transcript first")
 	}
-	if !strings.Contains(secondImplementationTask, "identify unresolved evaluator findings") {
+	if !strings.Contains(secondImplementationTask, "resolve applicable evaluator findings") {
 		t.Fatal("implementation prompt should identify unresolved evaluator findings")
 	}
 }
