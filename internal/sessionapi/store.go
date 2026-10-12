@@ -735,7 +735,16 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 func (fs *FileStore) List() ([]Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
+	return fs.listSessions(true)
+}
 
+// ListMetadata supports identity lookups without reading evidence or waiting
+// for usage-summary scans. Manifests are replaced atomically by their writers.
+func (fs *FileStore) ListMetadata() ([]Session, error) {
+	return fs.listSessions(false)
+}
+
+func (fs *FileStore) listSessions(includeEvidence bool) ([]Session, error) {
 	entries, err := os.ReadDir(fs.Root)
 	if errors.Is(err, os.ErrNotExist) {
 		return []Session{}, nil
@@ -753,7 +762,7 @@ func (fs *FileStore) List() ([]Session, error) {
 		if err != nil {
 			continue // skip unreadable entries
 		}
-		s, err := fs.deriveSession(entry.Name(), m)
+		s, err := fs.deriveSessionWithEvidence(entry.Name(), m, includeEvidence)
 		if err != nil {
 			continue
 		}
@@ -1021,11 +1030,18 @@ func specUpdateEvent(id string, m *Manifest, event SpecUpdateEvent) SpecUpdateEv
 // --------- Derivation (manifest -> Session) ------------------------------------------------------------------------------------------------------------------------
 
 func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
+	return fs.deriveSessionWithEvidence(id, m, true)
+}
+
+func (fs *FileStore) deriveSessionWithEvidence(id string, m *Manifest, includeEvidence bool) (*Session, error) {
 	dir := fs.sessionDir(id)
 
 	specs := make([]SessionSpec, len(m.Specs))
 	for i, ms := range m.Specs {
-		summary, _ := readEvidenceSummary(ms.EvidencePath)
+		var summary *evidenceSummary
+		if includeEvidence {
+			summary, _ = readEvidenceSummary(ms.EvidencePath)
+		}
 		specs[i] = deriveSpec(ms, summary)
 	}
 
@@ -1358,38 +1374,46 @@ func readEvidenceFile(path string, spec *ManifestSpec) ([]SessionEvent, error) {
 			continue
 		}
 
-		eventName, _ := raw["event"].(string)
-		if eventName == "" {
+		ev, ok := projectEvidenceEvent(raw, spec)
+		if !ok {
 			continue
-		}
-
-		dataField, _ := raw["data"].(map[string]any)
-		timestamp, _ := raw["ts"].(string)
-		role, _ := raw["role"].(string)
-
-		ev := SessionEvent{
-			Schema:           stringPtrFromAny(raw["schema"]),
-			EventID:          stringPtrFromAny(raw["event_id"]),
-			Event:            eventName,
-			EventSeq:         eventSeq(raw),
-			EpochID:          numberAsInt(raw["epoch_id"]),
-			Round:            numberAsInt(raw["round"]),
-			Role:             strPtr(role),
-			Timestamp:        strPtr(timestamp),
-			SourceTimestamp:  stringPtrFromAny(raw["source_ts"]),
-			ReceivedAt:       stringPtrFromAny(raw["received_at"]),
-			SessionStartedAt: stringPtrFromAny(raw["session_started_at"]),
-			SessionID:        stringPtrFromAny(raw["session_id"]),
-			Source:           stringPtrFromAny(raw["source"]),
-			System:           stringPtrFromAny(raw["system"]),
-			SpecIndex:        spec.Index,
-			SpecName:         strPtr(spec.Name),
-			SpecDirName:      strPtr(spec.DirName),
-			Data:             dataField,
 		}
 		events = append(events, ev)
 	}
 	return events, nil
+}
+
+func projectEvidenceEvent(raw map[string]any, spec *ManifestSpec) (SessionEvent, bool) {
+	eventName, _ := raw["event"].(string)
+	if eventName == "" {
+		return SessionEvent{}, false
+	}
+
+	dataField, _ := raw["data"].(map[string]any)
+	timestamp, _ := raw["ts"].(string)
+	role, _ := raw["role"].(string)
+
+	ev := SessionEvent{
+		Schema:           stringPtrFromAny(raw["schema"]),
+		EventID:          stringPtrFromAny(raw["event_id"]),
+		Event:            eventName,
+		EventSeq:         eventSeq(raw),
+		EpochID:          numberAsInt(raw["epoch_id"]),
+		Round:            numberAsInt(raw["round"]),
+		Role:             strPtr(role),
+		Timestamp:        strPtr(timestamp),
+		SourceTimestamp:  stringPtrFromAny(raw["source_ts"]),
+		ReceivedAt:       stringPtrFromAny(raw["received_at"]),
+		SessionStartedAt: stringPtrFromAny(raw["session_started_at"]),
+		SessionID:        stringPtrFromAny(raw["session_id"]),
+		Source:           stringPtrFromAny(raw["source"]),
+		System:           stringPtrFromAny(raw["system"]),
+		SpecIndex:        spec.Index,
+		SpecName:         strPtr(spec.Name),
+		SpecDirName:      strPtr(spec.DirName),
+		Data:             dataField,
+	}
+	return ev, true
 }
 
 // eventSeq lifts the evidence writer's sequence number; nil for lines that
