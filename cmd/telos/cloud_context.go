@@ -27,13 +27,19 @@ func cloudContextOverride(fs *flag.FlagSet, value string) (string, error) {
 // followUpContext returns the --context a later command needs to reach the
 // same workspace as control, or "" when its default context already does.
 func followUpContext(control *cloud.Client, contextOverride string) string {
+	return followUpContextName(contextOverride, control.ContextName())
+}
+
+// followUpContextName is followUpContext for a context already resolved to
+// contextName.
+func followUpContextName(contextOverride, contextName string) string {
 	if strings.TrimSpace(contextOverride) == "" {
 		return ""
 	}
-	if fallback, err := cloud.ControlClientForContext(""); err == nil && fallback.ContextName() == control.ContextName() {
+	if fallback, err := cloud.ControlClientForContext(""); err == nil && fallback.ContextName() == contextName {
 		return ""
 	}
-	return control.ContextName()
+	return contextName
 }
 
 func validateCloudSessionContext(sessionID, contextOverride string) error {

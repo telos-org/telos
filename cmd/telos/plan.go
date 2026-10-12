@@ -51,7 +51,11 @@ func cmdPlan(args []string) {
 	}
 
 	requireArgCount(fs, 1, "one SPEC.md")
-	specPath := resolveSpecPath(fs.Arg(0))
+	specPath, ok := existingSpecPath(fs.Arg(0))
+	if !ok {
+		fmt.Fprintf(os.Stderr, "error: %v\n", specFileNotFound(fs.Arg(0)))
+		os.Exit(1)
+	}
 	proposedSpec, err := os.ReadFile(specPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

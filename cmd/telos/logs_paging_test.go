@@ -169,7 +169,7 @@ func TestCloudRawAndJSONLogsKeepTheirSingleRequestContract(t *testing.T) {
 			configureCloudTest(t, client.Endpoint)
 			t.Setenv("TELOS_CONTEXT", "")
 			out := captureStdout(t, func() {
-				printCloudSessionLogs(&cloud.SessionRecord{ID: "session_1", State: "healthy"}, logViewOptions{Tail: 2}, !raw, raw, "")
+				printCloudSessionLogs(&cloud.SessionRecord{ID: "session_1", State: "healthy"}, logViewOptions{Tail: 2}, !raw, raw, false, "")
 			})
 			if *calls != 1 || !strings.Contains(out, "technical evidence") || raw && !strings.Contains(out, "future_field") {
 				t.Fatalf("calls=%d output=%s", *calls, out)
@@ -186,7 +186,7 @@ func TestCloudHumanLogsDoNotCallUnreachableRuntimeQuiet(t *testing.T) {
 	configureCloudTest(t, client.Endpoint)
 	t.Setenv("TELOS_CONTEXT", "")
 	out := captureStdout(t, func() {
-		printCloudSessionLogs(&cloud.SessionRecord{ID: "session_1", State: "working"}, logViewOptions{Tail: 2}, false, false, "")
+		printCloudSessionLogs(&cloud.SessionRecord{ID: "session_1", State: "working"}, logViewOptions{Tail: 2}, false, false, false, "")
 	})
 	if !strings.Contains(out, "Checking risk limits.") || strings.Contains(out, "No new progress update") {
 		t.Fatalf("unreachable runtime misreported as quiet: %s", out)
@@ -210,7 +210,7 @@ func TestCloudHumanLogsUseAuthoritativeStatusForQuietMessage(t *testing.T) {
 			configureCloudTest(t, client.Endpoint)
 			t.Setenv("TELOS_CONTEXT", "")
 			out := captureStdout(t, func() {
-				printCloudSessionLogs(&cloud.SessionRecord{ID: "session_1", State: "running", Status: test.status}, logViewOptions{Tail: 1}, false, false, "")
+				printCloudSessionLogs(&cloud.SessionRecord{ID: "session_1", State: "running", Status: test.status}, logViewOptions{Tail: 1}, false, false, false, "")
 			})
 			if strings.Contains(out, "No new progress update") != test.quiet {
 				t.Fatalf("status=%q output=%s", test.status, out)

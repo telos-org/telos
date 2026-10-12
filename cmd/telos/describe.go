@@ -35,7 +35,13 @@ func cmdDescribe(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		describeCloudGoal(cloudSession, contextName, contextOverride, *jsonOut)
+		describeCloudGoal(
+			cloudSession,
+			contextName,
+			contextOverride,
+			followUpContextName(contextOverride, contextName),
+			*jsonOut,
+		)
 		return
 	}
 
@@ -56,7 +62,7 @@ func cmdDescribe(args []string) {
 		os.Exit(1)
 	}
 	if found {
-		describeCloudGoal(cloudSession, contextName, "", *jsonOut)
+		describeCloudGoal(cloudSession, contextName, "", "", *jsonOut)
 		return
 	}
 
@@ -68,6 +74,7 @@ func describeCloudGoal(
 	session *cloud.SessionRecord,
 	contextName string,
 	contextOverride string,
+	followUp string,
 	jsonOut bool,
 ) {
 	var control *cloud.Client
@@ -84,7 +91,7 @@ func describeCloudGoal(
 		printCloudSessionJSON(session, contextName, cost)
 		return
 	}
-	printCloudSessionDescriptionForContext(os.Stdout, *session, contextName, cost)
+	printCloudSessionDescriptionForContext(os.Stdout, *session, contextName, cost, followUp)
 }
 
 // cloudSessionJSON is a Cloud Goal as describe and list print it. Callers
@@ -140,14 +147,17 @@ func getCloudSessionForContext(
 }
 
 func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
-	printCloudSessionDescriptionForContext(out, session, "", nil)
+	printCloudSessionDescriptionForContext(out, session, "", nil, "")
 }
 
+// printCloudSessionDescriptionForContext names followUp in suggested commands
+// when the saved context would select another one.
 func printCloudSessionDescriptionForContext(
 	out io.Writer,
 	session cloud.SessionRecord,
 	contextName string,
 	cost *goalCost,
+	followUp string,
 ) {
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
@@ -164,6 +174,22 @@ func printCloudSessionDescriptionForContext(
 	if reason := cloudSessionReason(session); reason != "" {
 		printSummaryField(out, "Reason", reason)
 	}
+	if cloudSessionDisplayStatus(session) == "needs_attention" {
+		printSummaryField(out, "Next", needsAttentionNextStep(session.ID, followUp))
+	}
+}
+
+// needsAttentionNextStep tells the owner of a Goal that needs attention how
+// to move it forward.
+func needsAttentionNextStep(goalID, followUp string) string {
+	contextFlag := ""
+	if followUp != "" {
+		contextFlag = " --context " + followUp
+	}
+	return fmt.Sprintf(
+		"Fix the spec, then: telos apply SPEC.md --goal %s%s, or telos delete %s%s",
+		goalID, contextFlag, goalID, contextFlag,
+	)
 }
 
 func cloudSessionDisplayStatus(session cloud.SessionRecord) string {

@@ -28,14 +28,6 @@ func store() *sessionapi.FileStore {
 	return store
 }
 
-func resolveSpecPath(input string) string {
-	if path, ok := existingSpecPath(input); ok {
-		return path
-	}
-	abs, _ := filepath.Abs(input)
-	return abs
-}
-
 func existingSpecPath(input string) (string, bool) {
 	if info, err := os.Stat(input); err == nil {
 		if !info.IsDir() {
@@ -66,7 +58,11 @@ func sessionCreateRequestForSpec(input string) (sessionapi.SessionCreateRequest,
 	if input == "" {
 		return sessionapi.SessionCreateRequest{}, fmt.Errorf("empty spec")
 	}
-	return sessionapi.SessionCreateRequest{}, fmt.Errorf("spec file not found: %s", input)
+	return sessionapi.SessionCreateRequest{}, specFileNotFound(input)
+}
+
+func specFileNotFound(input string) error {
+	return fmt.Errorf("spec file not found: %s", input)
 }
 
 func localSessionExists(sessionID string) bool {
