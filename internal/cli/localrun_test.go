@@ -140,8 +140,17 @@ func TestRunLocalSessionRecoversAfterProviderBlocker(t *testing.T) {
 			dir := t.TempDir()
 			specPath := writeTestSpec(t, dir)
 			t.Chdir(dir)
-			session, err := CreateLocalSession(specPath, LocalRunConfig{SessionKind: sessionapi.KindController})
+			session, err := CreateLocalSession(specPath, LocalRunConfig{})
 			if err != nil {
+				t.Fatal(err)
+			}
+			manifestPath := filepath.Join(session.SessionDir, "session.json")
+			manifest, err := sessionapi.ReadManifest(manifestPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifest.SessionKind = sessionapi.KindController
+			if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
 				t.Fatal(err)
 			}
 			workspaceFile := filepath.Join(session.SessionDir, "workspace", "partial-work.txt")
@@ -172,7 +181,7 @@ func TestRunLocalSessionRecoversAfterProviderBlocker(t *testing.T) {
 			if err != nil || recovered.GameResult != game.GameSuccess {
 				t.Fatalf("recovery cycle: %#v, %v", recovered, err)
 			}
-			manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+			manifest, err = sessionapi.ReadManifest(manifestPath)
 			if err != nil {
 				t.Fatal(err)
 			}
