@@ -24,9 +24,10 @@ var (
 const maxTurnBodyChars = 8000
 
 type AppendTurnOptions struct {
-	IncludeStatus bool
-	PiSessionPath string
-	EvidencePath  string
+	IncludeStatus    bool
+	PiSessionPath    string
+	EvidencePath     string
+	CompletionMarker string
 }
 
 type ExternalUpdate struct {
@@ -112,13 +113,20 @@ func AppendTurnWithOptions(path string, role string, roleRound int, status strin
 	}
 	defer f.Close()
 
-	fmt.Fprintf(f, "\n## %s %d\n\n", label, roleRound)
+	var section strings.Builder
+	fmt.Fprintf(&section, "\n## %s %d\n\n", label, roleRound)
 	meta := turnMeta(stats, turnID)
 	if meta != "" {
-		fmt.Fprintf(f, "%s\n\n", meta)
+		fmt.Fprintf(&section, "%s\n\n", meta)
 	}
-	fmt.Fprintf(f, "%s\n", body)
-	return nil
+	fmt.Fprintf(&section, "%s\n", body)
+	if opts.CompletionMarker != "" {
+		fmt.Fprintf(&section, "\n%s\n", opts.CompletionMarker)
+	}
+	if _, err := f.WriteString(section.String()); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 // ExtractLiveAgentEvents returns progress artifacts safe to surface mid-turn.
@@ -222,6 +230,10 @@ func AppendExternalUpdate(path string, update ExternalUpdate) error {
 
 // AppendGameResult appends the terminal session result to the transcript.
 func AppendGameResult(path string, result string, errorMsg string) error {
+	return appendGameResult(path, result, errorMsg, "")
+}
+
+func appendGameResult(path string, result string, errorMsg string, marker string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -230,11 +242,18 @@ func AppendGameResult(path string, result string, errorMsg string) error {
 		return err
 	}
 	defer f.Close()
-	fmt.Fprintf(f, "\n## Result\n\n- Status: `%s`\n", result)
+	var section strings.Builder
+	fmt.Fprintf(&section, "\n## Result\n\n- Status: `%s`\n", result)
 	if errorMsg != "" {
-		fmt.Fprintf(f, "- Error: `%s`\n", errorMsg)
+		fmt.Fprintf(&section, "- Error: `%s`\n", errorMsg)
 	}
-	return nil
+	if marker != "" {
+		fmt.Fprintf(&section, "\n%s\n", marker)
+	}
+	if _, err := f.WriteString(section.String()); err != nil {
+		return err
+	}
+	return f.Sync()
 }
 
 func turnMeta(stats *TurnStats, turnID string) string {

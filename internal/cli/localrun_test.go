@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
@@ -36,6 +37,7 @@ type fakeExecutor struct {
 	proverResult   game.TurnResult
 	verifierResult game.TurnResult
 	onExecute      func(role string)
+	onCheckpoint   func()
 	tasks          []string
 }
 
@@ -71,7 +73,167 @@ func (f *fakeExecutor) WorkspaceState() string {
 func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {
 	os.MkdirAll(filepath.Dir(dest), 0o755)
 	os.WriteFile(dest, []byte("fake"), 0o644)
+	if f.onCheckpoint != nil {
+		f.onCheckpoint()
+	}
 	return true
+}
+
+func interruptLocalVerifier(t *testing.T) (*LocalSession, string) {
+	t.Helper()
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	t.Chdir(dir)
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeExecutor{
+		proverResult: game.TurnResult{Role: "prover", Status: game.StatusContinue, Logs: "builder finished", Stats: game.TurnStats{CostUSD: 0.25, InputTokens: 10}},
+		onExecute: func(role string) {
+			if role == "verifier" {
+				panic("interrupted verifier")
+			}
+		},
+	}
+	func() {
+		defer func() {
+			if got := recover(); got != "interrupted verifier" {
+				t.Fatalf("expected interrupted verifier, got %v", got)
+			}
+		}()
+		_, _ = RunLocalSessionWithExecutor(session.SessionDir, executor)
+	}()
+	checkpoint := filepath.Join(session.SessionDir, "specs", session.SpecName, "turns", "epoch-0001", "checkpoint.json")
+	return session, checkpoint
+}
+
+func TestRunLocalSessionResumesInterruptedVerifierInSameEpoch(t *testing.T) {
+	session, _ := interruptLocalVerifier(t)
+	var roles []string
+	executor := &fakeExecutor{
+		verifierResult: game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "<status>CONCEDE</status>", Stats: game.TurnStats{CostUSD: 0.5, InputTokens: 3}},
+		onExecute:      func(role string) { roles = append(roles, role) },
+	}
+	result, err := RunLocalSessionWithExecutor(session.SessionDir, executor)
+	if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.ProverRounds != 1 || result.VerifierRounds != 1 || result.TotalCostUSD != 0.75 || result.TotalInputTokens != 13 {
+		t.Fatalf("resumed result = %+v, %v", result, err)
+	}
+	if strings.Join(roles, ",") != "verifier" {
+		t.Fatalf("resumed the wrong turn: roles=%v", roles)
+	}
+	manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
+	if err != nil || len(manifest.Epochs) != 1 || manifest.OpenEpoch() != nil || manifest.Epochs[0].RoundCount == nil || *manifest.Epochs[0].RoundCount != 2 {
+		t.Fatalf("resumed epoch = %+v, %v", manifest, err)
+	}
+}
+
+func TestRunLocalSessionCheckpointErrorsKeepEpochOpen(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "corrupt", true: "legacy missing"}[missing], func(t *testing.T) {
+			session, path := interruptLocalVerifier(t)
+			var err error
+			if missing {
+				err = os.Remove(path)
+			} else {
+				err = os.WriteFile(path, []byte(`{"version":`), 0o600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			executor := &fakeExecutor{}
+			for attempt := 0; attempt < 2; attempt++ {
+				result, err := RunLocalSessionWithExecutor(session.SessionDir, executor)
+				if err == nil || !strings.Contains(err.Error(), "restore execution checkpoint") || result != nil || len(executor.tasks) != 0 {
+					t.Fatalf("unsafe recovery: result=%+v err=%v executed=%d", result, err, len(executor.tasks))
+				}
+				manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
+				if err != nil || len(manifest.Epochs) != 1 || manifest.OpenEpoch() == nil || manifest.OpenEpoch().ID != 1 {
+					t.Fatalf("recovery reset the epoch: %+v, %v", manifest, err)
+				}
+			}
+		})
+	}
+}
+
+func TestRunLocalSessionFinalizesTerminalCheckpointWithoutPi(t *testing.T) {
+	session, _ := interruptLocalVerifier(t)
+	path := manifestPath(session.SessionDir)
+	var openManifest []byte
+	executor := &fakeExecutor{
+		verifierResult: game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "<status>CONCEDE</status>"},
+		onCheckpoint: func() {
+			var err error
+			openManifest, err = os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Simulate a storage failure after the durable result but before the
+			// CLI can record the epoch's completion in its manifest.
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	result, err := RunLocalSessionWithExecutor(session.SessionDir, executor)
+	if err == nil || !strings.Contains(err.Error(), "finish epoch") || result == nil || result.GameResult != game.GameSuccess {
+		t.Fatalf("expected failure finishing a completed run, got %+v, %v", result, err)
+	}
+	if err := os.WriteFile(path, openManifest, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	result, err = RunLocalSessionWithExecutor(session.SessionDir, nil)
+	if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.TotalCostUSD != 0.25 {
+		t.Fatalf("terminal recovery required Pi or reran a turn: %+v, %v", result, err)
+	}
+	manifest, err := sessionapi.ReadManifest(path)
+	if err != nil || len(manifest.Epochs) != 1 || manifest.OpenEpoch() != nil || manifest.Epochs[0].Result == nil || *manifest.Epochs[0].Result != "completed" {
+		t.Fatalf("terminal recovery did not close the original epoch: %+v, %v", manifest, err)
+	}
+}
+
+func TestRunLocalSessionAcceptsPendingConcessionWithoutPi(t *testing.T) {
+	session, path := interruptLocalVerifier(t)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint map[string]json.RawMessage
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	transcript := filepath.Join(session.SessionDir, "specs", session.SpecName, "transcript-"+session.SessionID+".md")
+	info, err := os.Stat(transcript)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Model the persisted result immediately after the verifier finishes and
+	// before the coordinator processes its concession.
+	checkpoint["pending"], err = json.Marshal(map[string]any{
+		"turn":        game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "review complete\n<status>CONCEDE</status>", Stats: game.TurnStats{CostUSD: 0.5}},
+		"finished_at": time.Now(), "stopped": false, "transcript_offset": info.Size(),
+		"completion_id": "pending-concession-fixture",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = json.Marshal(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
+	if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.TotalCostUSD != 0.75 {
+		t.Fatalf("pending concession required Pi or reran a turn: %+v, %v", result, err)
+	}
+	data, err = os.ReadFile(transcript)
+	if err != nil || strings.Count(string(data), "review complete") != 1 {
+		t.Fatalf("pending handoff missing or duplicated: %v\n%s", err, data)
+	}
 }
 
 func writeTestSpec(t *testing.T, dir string) string {

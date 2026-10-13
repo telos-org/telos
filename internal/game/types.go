@@ -44,6 +44,9 @@ type TurnResult struct {
 	Stats       TurnStats
 	Error       string
 	Recoverable bool
+	// StateError means execution history cannot be trusted. Preserve the pending
+	// turn and return an error without closing the epoch or resetting its limits.
+	StateError string
 }
 
 // LiveAgentEvent is structured agent activity emitted before a turn exits.

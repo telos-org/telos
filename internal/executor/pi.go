@@ -3,7 +3,9 @@ package executor
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -59,18 +61,30 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		taskEnv = ""
 	}
 	argv := BuildPiArgv(model, thinking, promptPath, sessionPath)
-	projector := startPiLiveProjector(sessionPath, turnState)
-	if projector != nil {
-		defer projector.Stop()
+	baseline, err := capturePiSessionBaseline(sessionPath)
+	if err != nil {
+		return piSessionStateError(role, stats, err)
 	}
+	projector := startPiLiveProjector(sessionPath, turnState, baseline)
 	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, nil)
+	if projector != nil {
+		projector.Stop()
+		if projector.integrityErr != nil {
+			return piSessionStateError(role, stats, projector.integrityErr)
+		}
+	}
 
 	logs := strings.Join(result.RawLines, "\n")
 	if sessionPath != "" {
-		summary, err := ReadPiSession(sessionPath)
+		summary, err := readPiSession(sessionPath, baseline)
+		if errors.Is(err, errPiSessionChanged) {
+			return piSessionStateError(role, stats, err)
+		}
+		// An interrupted turn has no completed-turn accounting yet. Include its
+		// earlier usage once, even if this attempt produces no new response.
+		stats = mergeTurnStats(stats, summary.Stats)
 		if err == nil {
 			logs = summary.Logs
-			stats = mergeTurnStats(stats, summary.Stats)
 			agentError = summary.Error
 		} else if result.ReturnCode == 0 && result.InfraError == "" {
 			return game.TurnResult{
@@ -150,24 +164,126 @@ func recoverableAgentFailure(errorText string) bool {
 	return !blocked
 }
 
+func piSessionStateError(role string, stats game.TurnStats, err error) game.TurnResult {
+	diagnostic := fmt.Sprintf("pi_session_integrity: %v; usage is unknown, preserve the session for inspection", err)
+	return game.TurnResult{Role: role, Status: game.StatusContinue, Logs: diagnostic, Stats: stats, StateError: diagnostic}
+}
+
 type piLiveProjector struct {
-	sessionPath string
-	turnState   *game.TurnState
-	offset      int64
-	fileInfo    os.FileInfo
-	pending     []byte
+	sessionPath  string
+	turnState    *game.TurnState
+	offset       int64
+	fileInfo     os.FileInfo
+	pending      []byte
+	baseline     piSessionBaseline
+	integrityErr error
 
 	stop chan struct{}
 	done chan struct{}
 }
 
-func startPiLiveProjector(sessionPath string, turnState *game.TurnState) *piLiveProjector {
+// piSessionBaseline separates a resumed attempt's new output from its existing
+// conversation. Capture it before Pi starts so early output cannot be skipped.
+type piSessionBaseline struct {
+	offset   int64
+	fileInfo os.FileInfo
+	pending  []byte
+	anchor   []byte
+}
+
+var errPiSessionChanged = errors.New("existing Pi session history changed")
+
+func capturePiSessionBaseline(path string) (piSessionBaseline, error) {
+	var baseline piSessionBaseline
+	if path == "" {
+		return baseline, nil
+	}
+	f, err := os.Open(path)
+	if os.IsNotExist(err) {
+		return baseline, nil
+	}
+	if err != nil {
+		return baseline, err
+	}
+	defer f.Close()
+	baseline.fileInfo, err = f.Stat()
+	if err != nil {
+		return baseline, err
+	}
+	baseline.offset = baseline.fileInfo.Size()
+	if baseline.offset == 0 {
+		return baseline, nil
+	}
+	// Current Pi sessions append records. Older versions are rewritten by Pi's
+	// migration, invalidating byte positions and potentially retained usage.
+	header, err := bufio.NewReader(f).ReadBytes('\n')
+	if err != nil && err != io.EOF {
+		return baseline, err
+	}
+	var format struct {
+		Type    string `json:"type"`
+		Version int    `json:"version"`
+		ID      string `json:"id"`
+	}
+	if json.Unmarshal(header, &format) != nil || format.Type != "session" || format.Version != 3 || format.ID == "" {
+		return baseline, fmt.Errorf("resuming requires a valid Pi session header with version 3 and an id; automatic migration is not safe")
+	}
+	baseline.anchor = make([]byte, min(baseline.offset, 64))
+	if _, err := f.ReadAt(baseline.anchor, baseline.offset-int64(len(baseline.anchor))); err != nil {
+		return baseline, err
+	}
+	// Only an unfinished trailing record can become new output after resuming.
+	// Read backwards to its boundary, without scanning the existing history.
+	start := baseline.offset
+	for start > 0 {
+		blockStart := max(start-64*1024, 0)
+		block := make([]byte, start-blockStart)
+		if _, err := f.ReadAt(block, blockStart); err != nil {
+			return baseline, err
+		}
+		start = blockStart
+		if i := bytes.LastIndexByte(block, '\n'); i >= 0 {
+			start += int64(i + 1)
+			break
+		}
+	}
+	if start < baseline.offset {
+		tail := make([]byte, baseline.offset-start)
+		if _, err := f.ReadAt(tail, start); err != nil {
+			return baseline, err
+		}
+		if !json.Valid(tail) {
+			baseline.pending = tail
+		}
+	}
+	return baseline, nil
+}
+
+func (b piSessionBaseline) validate(f *os.File, info os.FileInfo) error {
+	if b.fileInfo == nil {
+		return nil
+	}
+	if !os.SameFile(b.fileInfo, info) || info.Size() < b.offset {
+		return errPiSessionChanged
+	}
+	anchor := make([]byte, len(b.anchor))
+	if _, err := f.ReadAt(anchor, b.offset-int64(len(anchor))); err != nil || !bytes.Equal(anchor, b.anchor) {
+		return errPiSessionChanged
+	}
+	return nil
+}
+
+func startPiLiveProjector(sessionPath string, turnState *game.TurnState, baseline piSessionBaseline) *piLiveProjector {
 	if sessionPath == "" || turnState == nil || turnState.OnLiveEvent == nil {
 		return nil
 	}
 	p := &piLiveProjector{
 		sessionPath: sessionPath,
 		turnState:   turnState,
+		offset:      baseline.offset,
+		fileInfo:    baseline.fileInfo,
+		pending:     baseline.pending,
+		baseline:    baseline,
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
 	}
@@ -196,6 +312,9 @@ func (p *piLiveProjector) watch() {
 }
 
 func (p *piLiveProjector) observeSessionFile(final bool) {
+	if p.integrityErr != nil {
+		return
+	}
 	f, err := os.Open(p.sessionPath)
 	if err != nil {
 		return
@@ -203,6 +322,10 @@ func (p *piLiveProjector) observeSessionFile(final bool) {
 	defer f.Close()
 	info, err := f.Stat()
 	if err != nil {
+		return
+	}
+	if err := p.baseline.validate(f, info); err != nil {
+		p.integrityErr = err
 		return
 	}
 	if info.Size() < p.offset || (p.fileInfo != nil && !os.SameFile(p.fileInfo, info)) {
@@ -229,6 +352,17 @@ func (p *piLiveProjector) observeSessionFile(final bool) {
 			}
 		}
 	}
+	if p.baseline.fileInfo != nil && p.offset > p.baseline.offset {
+		// Also protect output observed during this attempt: a later rewrite
+		// must not replay it or silently remove its usage from the final total.
+		p.baseline.offset = p.offset
+		p.baseline.fileInfo = info
+		p.baseline.anchor = make([]byte, min(p.offset, 64))
+		if _, err := f.ReadAt(p.baseline.anchor, p.offset-int64(len(p.baseline.anchor))); err != nil {
+			p.integrityErr = errPiSessionChanged
+			return
+		}
+	}
 	if final && len(p.pending) > 0 {
 		p.emitPendingLine()
 	}
@@ -243,7 +377,7 @@ func (p *piLiveProjector) emitPendingLine() {
 
 func piLineEvents(line string) []game.LiveAgentEvent {
 	line = strings.TrimSpace(line)
-	if line == "" {
+	if line == "" || !json.Valid([]byte(line)) {
 		return nil
 	}
 	var entry map[string]interface{}
@@ -396,18 +530,37 @@ type PiSessionSummary struct {
 
 // ReadPiSession reads Pi's compact session JSONL file for a completed turn.
 func ReadPiSession(path string) (PiSessionSummary, error) {
+	return readPiSession(path, piSessionBaseline{})
+}
+
+func readPiSession(path string, baseline piSessionBaseline) (PiSessionSummary, error) {
 	f, err := os.Open(path)
 	if err != nil {
+		if baseline.fileInfo != nil {
+			return PiSessionSummary{}, fmt.Errorf("%w: %v", errPiSessionChanged, err)
+		}
 		return PiSessionSummary{}, err
 	}
 	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		if baseline.fileInfo != nil {
+			return PiSessionSummary{}, fmt.Errorf("%w: %v", errPiSessionChanged, err)
+		}
+		return PiSessionSummary{}, err
+	}
+	if err := baseline.validate(f, info); err != nil {
+		return PiSessionSummary{}, err
+	}
+	newOutputOffset := baseline.offset - int64(len(baseline.pending))
 
 	var summary PiSessionSummary
 	var finalAssistant map[string]interface{}
+	var offset int64
 	reader := bufio.NewReader(f)
 	for {
 		line, err := reader.ReadString('\n')
-		if strings.TrimSpace(line) != "" {
+		if strings.TrimSpace(line) != "" && json.Valid([]byte(line)) {
 			var entry map[string]interface{}
 			dec := json.NewDecoder(strings.NewReader(line))
 			dec.UseNumber()
@@ -415,7 +568,9 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 				if msg, ok := entry["message"].(map[string]interface{}); ok {
 					switch getString(msg, "role") {
 					case "assistant":
-						finalAssistant = msg
+						if offset >= newOutputOffset && offset+int64(len(line)) > baseline.offset {
+							finalAssistant = msg
+						}
 						summary.Stats = mergeTurnStats(summary.Stats, statsFromPiMessage(msg))
 					case "toolResult", "bashExecution":
 						summary.Stats.NumTurns++
@@ -423,15 +578,22 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 				}
 			}
 		}
+		offset += int64(len(line))
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
+			if baseline.fileInfo != nil {
+				return PiSessionSummary{}, fmt.Errorf("%w: %v", errPiSessionChanged, err)
+			}
 			return PiSessionSummary{}, err
 		}
 	}
 	if finalAssistant == nil {
-		return PiSessionSummary{}, fmt.Errorf("no assistant message in pi session")
+		if baseline.fileInfo == nil {
+			return summary, fmt.Errorf("no assistant message in pi session")
+		}
+		return summary, fmt.Errorf("no new assistant message in pi session")
 	}
 
 	summary.Logs = assistantText(finalAssistant)

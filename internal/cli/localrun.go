@@ -187,18 +187,8 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		return nil, err
 	}
 
-	var agentExec game.AgentExecutor
-	if exec != nil {
-		agentExec = exec
-	} else {
-		agentExec, err = createAgentExecutor(workspace, cfg)
-		if err != nil {
-			fail := &game.PVGResult{GameResult: game.GameFailure, Error: err.Error()}
-			if finishErr := finishEpoch(sessionDir, epochID, fail); finishErr != nil {
-				return nil, fmt.Errorf("%w; also failed to finish epoch: %v", err, finishErr)
-			}
-			return nil, err
-		}
+	if exec == nil {
+		exec = &lazyAgentExecutor{LocalPlatform: platform.NewLocalPlatform(workspace), config: cfg}
 	}
 
 	pvgCfg := game.PVGConfig{
@@ -213,8 +203,12 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		StopRequested:   func() bool { return sessionStopped(sessionDir) },
 	}
 
-	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)
-	result := pvg.Run()
+	pvg := game.NewPVG(compiled, exec, state, pvgCfg)
+	result, err := pvg.Run()
+	if err != nil {
+		// Keep the epoch open: retrying storage/recovery must retain its limits.
+		return nil, err
+	}
 
 	// Close epoch
 	if err := finishEpoch(sessionDir, epochID, result); err != nil {
@@ -227,6 +221,25 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	return result, nil
+}
+
+// Recovery can finalize a saved result without Pi installed or configured.
+// Initialize the agent only if the checkpoint actually requires another turn.
+type lazyAgentExecutor struct {
+	*platform.LocalPlatform
+	config LocalRunConfig
+	agent  game.AgentExecutor
+}
+
+func (e *lazyAgentExecutor) ExecuteTurn(task, role string, turn *game.TurnState) game.TurnResult {
+	if e.agent == nil {
+		agent, err := createAgentExecutor(e.Workspace, e.config)
+		if err != nil {
+			return game.TurnResult{Role: role, Status: game.StatusContinue, Error: "agent_configuration_invalid: " + err.Error()}
+		}
+		e.agent = agent
+	}
+	return e.agent.ExecuteTurn(task, role, turn)
 }
 
 func boundSpecPaths(manifest *sessionapi.Manifest, fallbackPath, fallbackBase string) (string, string) {

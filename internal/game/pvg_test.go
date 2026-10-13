@@ -100,7 +100,7 @@ func TestPVGVerifierConcedes(t *testing.T) {
 
 	cfg := PVGConfig{Verbose: false}
 	pvg := NewPVG(compiled, exec, state, cfg)
-	result := pvg.Run()
+	result := mustRunPVG(t, pvg)
 
 	if result.GameResult != GameSuccess {
 		t.Errorf("expected success, got %s", result.GameResult)
@@ -149,7 +149,7 @@ func TestPVGHumanProgressLeavesTechnicalHandoffIntact(t *testing.T) {
 		},
 		verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: "Verified technical evidence.\n<status>CONCEDE</status>"}},
 	}
-	result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{EpochID: 7}).Run()
+	result := mustRunPVG(t, NewPVG(compileTestSpec(t), exec, state, PVGConfig{EpochID: 7}))
 	if result.GameResult != GameSuccess || !result.VerifierConceded {
 		t.Fatalf("result=%+v", result)
 	}
@@ -217,11 +217,11 @@ func TestPVGEpochsUseDistinctTurnArtifacts(t *testing.T) {
 	}
 
 	first := newExecutor()
-	if result := NewPVG(compiled, first, state, PVGConfig{EpochID: 1}).Run(); result.GameResult != GameSuccess {
+	if result := mustRunPVG(t, NewPVG(compiled, first, state, PVGConfig{EpochID: 1})); result.GameResult != GameSuccess {
 		t.Fatalf("first epoch result: %s error=%q", result.GameResult, result.Error)
 	}
 	second := newExecutor()
-	if result := NewPVG(compiled, second, state, PVGConfig{EpochID: 2}).Run(); result.GameResult != GameSuccess {
+	if result := mustRunPVG(t, NewPVG(compiled, second, state, PVGConfig{EpochID: 2})); result.GameResult != GameSuccess {
 		t.Fatalf("second epoch result: %s error=%q", result.GameResult, result.Error)
 	}
 
@@ -258,7 +258,7 @@ func TestPVGUntilStopsOnVerifierConcede(t *testing.T) {
 
 	cfg := PVGConfig{Until: 2, Verbose: false}
 	pvg := NewPVG(compiled, exec, state, cfg)
-	result := pvg.Run()
+	result := mustRunPVG(t, pvg)
 
 	if result.GameResult != GameSuccess {
 		t.Errorf("expected success, got %s", result.GameResult)
@@ -308,7 +308,7 @@ func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
 	}
 
 	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
-	result := pvg.Run()
+	result := mustRunPVG(t, pvg)
 
 	if result.GameResult != GameSuccess {
 		t.Fatalf("expected success, got %s error=%q", result.GameResult, result.Error)
@@ -353,7 +353,7 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 	}
 
 	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
-	result := pvg.Run()
+	result := mustRunPVG(t, pvg)
 
 	if result.GameResult != GameFailure {
 		t.Fatalf("expected failure, got %s", result.GameResult)
@@ -378,7 +378,7 @@ func TestPVGDoesNotRetryCredentialFailure(t *testing.T) {
 		Recoverable: true,
 	}}}
 
-	result := NewPVG(compiled, exec, state, PVGConfig{}).Run()
+	result := mustRunPVG(t, NewPVG(compiled, exec, state, PVGConfig{}))
 	if result.GameResult != GameFailure || result.Rounds != 1 {
 		t.Fatalf("result = %#v", result)
 	}
@@ -401,7 +401,7 @@ func TestPVGQuotaFailureDoesNotStartAnotherAgentTurn(t *testing.T) {
 				exec.verifierResults = []TurnResult{failure}
 				wantRounds = 2
 			}
-			result := NewPVG(compiled, exec, state, PVGConfig{}).Run()
+			result := mustRunPVG(t, NewPVG(compiled, exec, state, PVGConfig{}))
 			if result.GameResult != GameFailure || result.Rounds != wantRounds || result.Error != failure.Error {
 				t.Fatalf("quota failure started another turn: %#v", result)
 			}
@@ -430,7 +430,7 @@ func TestPVGUntilFailsWhenReviewBudgetExhausted(t *testing.T) {
 	}
 
 	pvg := NewPVG(compiled, exec, state, PVGConfig{Until: 2, Verbose: false})
-	result := pvg.Run()
+	result := mustRunPVG(t, pvg)
 
 	if result.GameResult != GameFailure {
 		t.Fatalf("expected failure, got %s error=%q", result.GameResult, result.Error)
@@ -461,7 +461,7 @@ func TestPVGUntilSecondsFailsWhenDurationExhausted(t *testing.T) {
 
 	start := time.Now()
 	pvg := NewPVG(compiled, exec, state, PVGConfig{UntilSeconds: 1, Verbose: false})
-	result := pvg.Run()
+	result := mustRunPVG(t, pvg)
 	elapsed := time.Since(start)
 
 	if result.GameResult != GameFailure {
@@ -493,7 +493,7 @@ func TestPVGProverError(t *testing.T) {
 
 	cfg := PVGConfig{Verbose: false}
 	pvg := NewPVG(compiled, exec, state, cfg)
-	result := pvg.Run()
+	result := mustRunPVG(t, pvg)
 
 	if result.GameResult != GameFailure {
 		t.Errorf("expected failure, got %s", result.GameResult)
@@ -519,7 +519,7 @@ func TestPVGBudgetExceeded(t *testing.T) {
 
 	cfg := PVGConfig{MaxCostUSD: &maxCost, Verbose: false}
 	pvg := NewPVG(compiled, exec, state, cfg)
-	result := pvg.Run()
+	result := mustRunPVG(t, pvg)
 
 	if result.GameResult != GameFailure {
 		t.Errorf("expected failure, got %s", result.GameResult)
@@ -547,7 +547,7 @@ func TestPVGEvidenceFormat(t *testing.T) {
 
 	cfg := PVGConfig{Verbose: false, EpochID: 7}
 	pvg := NewPVG(compiled, exec, state, cfg)
-	pvg.Run()
+	mustRunPVG(t, pvg)
 
 	// Read evidence JSONL
 	data, err := os.ReadFile(state.EvidencePath)
@@ -602,7 +602,7 @@ func TestPVGWorkspaceCheckpoint(t *testing.T) {
 
 	cfg := PVGConfig{Verbose: false}
 	pvg := NewPVG(compiled, exec, state, cfg)
-	result := pvg.Run()
+	result := mustRunPVG(t, pvg)
 
 	if result.WorkspaceCheckpointPath == "" {
 		t.Error("expected workspace checkpoint path")
@@ -635,7 +635,7 @@ func TestPVGLiveToolEventsRemainInEvidenceOnly(t *testing.T) {
 			{Role: "verifier", Status: StatusConcede, Logs: "Accepted the validation change."},
 		},
 	}
-	if result := NewPVG(compiled, exec, state, PVGConfig{}).Run(); result.GameResult != GameSuccess {
+	if result := mustRunPVG(t, NewPVG(compiled, exec, state, PVGConfig{})); result.GameResult != GameSuccess {
 		t.Fatalf("result: %s error=%q", result.GameResult, result.Error)
 	}
 
@@ -687,4 +687,13 @@ func TestPVGLiveToolEventsRemainInEvidenceOnly(t *testing.T) {
 			}
 		}
 	}
+}
+
+func mustRunPVG(t *testing.T, pvg *PVG) *PVGResult {
+	t.Helper()
+	result, err := pvg.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return result
 }
