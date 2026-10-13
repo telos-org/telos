@@ -89,6 +89,7 @@ type InferenceUpdate struct {
 }
 
 type InferenceResponse struct {
+	ConnectionRetirement bool `json:"connection_retirement"`
 	// GET checks availability; a mutation that does not need the check omits it.
 	ConnectionSwitching *bool             `json:"connection_switching,omitempty"`
 	ApplyAt             string            `json:"apply_at"`
@@ -160,7 +161,7 @@ func (r InferenceUpdateRequest) Validate() error {
 }
 
 func inferenceResponse(m *Manifest, connectionSwitching *bool) *InferenceResponse {
-	r := &InferenceResponse{ConnectionSwitching: connectionSwitching, ApplyAt: "next_turn", Settings: InferenceSettings{Model: m.Config.Model, Thinking: m.Config.Thinking}, Update: m.InferenceUpdate}
+	r := &InferenceResponse{ConnectionRetirement: supportsInferenceRetirement(m), ConnectionSwitching: connectionSwitching, ApplyAt: "next_turn", Settings: InferenceSettings{Model: m.Config.Model, Thinking: m.Config.Thinking}, Update: m.InferenceUpdate}
 	if m.InferenceConnection != nil {
 		r.Settings.ConnectionID = m.InferenceConnection.ID
 	}
@@ -204,7 +205,7 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 		return nil, ErrNotFound
 	}
 	var connectionSwitching *bool
-	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
+	m, err := MutateInferenceManifest(fs.manifestPath(id), func(m *Manifest) error {
 		current := inferenceResponse(m, connectionSwitching)
 		if current.Update != nil && current.Update.RequestID == req.RequestID {
 			if !sameInferenceRequest(m.InferenceUpdate.InferenceUpdateRequest, req) {

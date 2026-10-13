@@ -195,7 +195,7 @@ func AcquireOwnership(sessionDir string, logPath string) (*Ownership, error) {
 	if logPath != "" {
 		runner.LogPath = logPath
 	}
-	if _, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(m *sessionapi.Manifest) error {
+	if _, err := sessionapi.MutateInferenceManifest(manifestPath(sessionDir), func(m *sessionapi.Manifest) error {
 		m.Runner = &runner
 		return nil
 	}); err != nil {
@@ -326,11 +326,12 @@ func StartEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid 
 
 func RunnerIdentity(pid int) sessionapi.Runner {
 	return sessionapi.Runner{
-		Kind:             "local-subprocess",
-		PID:              pid,
-		PGID:             pid,
-		StartedAt:        time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
-		InferenceUpdates: true,
+		Kind:                "local-subprocess",
+		PID:                 pid,
+		PGID:                pid,
+		StartedAt:           time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		InferenceUpdates:    true,
+		InferenceRetirement: true,
 	}
 }
 
