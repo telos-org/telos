@@ -95,9 +95,12 @@ func TestInferenceQueuedWithoutWorkerSurvivesSupportedRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer owner.Release()
-	state, err := store.Inference("session")
-	if err != nil || state.Update == nil || state.Update.RequestID != "queued" || state.Update.Status != "pending" {
-		t.Fatalf("startup discarded queued settings: %+v %v", state, err)
+	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if update := manifest.InferenceUpdate; update == nil || update.RequestID != "queued" || update.Status != "pending" {
+		t.Fatalf("startup discarded queued settings: %+v", update)
 	}
 	if _, err := sessionapi.ClaimInferenceUpdate(manifestPath(sessionDir), "attempt", "receipt.json", sessionapi.InferenceSettings{}); err != nil {
 		t.Fatal(err)

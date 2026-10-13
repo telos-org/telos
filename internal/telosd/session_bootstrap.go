@@ -2,7 +2,9 @@ package telosd
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strconv"
@@ -176,11 +178,27 @@ func cloudAgentTimeoutSec() *int {
 }
 
 func cloudControllerDefaults() controllerDefaults {
-	return controllerDefaults{
+	defaults := controllerDefaults{
 		Model:           cloudSessionModel(),
 		Thinking:        cloudSessionThinking(),
 		AgentTimeoutSec: cloudAgentTimeoutSec(),
 	}
+	if value := os.Getenv("TELOS_CLOUD_DEFAULT_CONNECTION_JSON"); value != "" {
+		decoder := json.NewDecoder(strings.NewReader(value))
+		decoder.DisallowUnknownFields()
+		err := decoder.Decode(&defaults.Connection)
+		if err == nil && (defaults.Connection == nil || decoder.Decode(&struct{}{}) != io.EOF) {
+			err = fmt.Errorf("expected one connection object")
+		}
+		defaults.ModelDefinition = json.RawMessage(os.Getenv("TELOS_CLOUD_DEFAULT_MODEL_DEFINITION_JSON"))
+		if err == nil {
+			err = (sessionapi.InferenceUpdateRequest{RequestID: "bootstrap", Model: &defaults.Model, ModelDefinition: defaults.ModelDefinition, Connection: defaults.Connection}).Validate()
+		}
+		if err != nil {
+			defaults.InferenceError = fmt.Errorf("invalid Cloud inference connection defaults: %w", err)
+		}
+	}
+	return defaults
 }
 
 func activeRootSessionsByName(sessions []sessionapi.Session) map[string]sessionapi.Session {

@@ -29,6 +29,7 @@ type Manifest struct {
 	Config                   SessionConfig              `json:"config"`
 	InferenceUpdate          *InferenceUpdate           `json:"inference_update,omitempty"`
 	InferenceModelDefinition json.RawMessage            `json:"inference_model_definition,omitempty"`
+	InferenceConnection      *InferenceConnection       `json:"inference_connection,omitempty"`
 	Workspace                *Workspace                 `json:"workspace,omitempty"`
 	Provenance               map[string]any             `json:"provenance"`
 	Access                   *ScopedToken               `json:"access,omitempty"`
@@ -84,18 +85,19 @@ const (
 )
 
 type Runner struct {
-	Kind             string  `json:"kind,omitempty"`
-	PID              int     `json:"pid,omitempty"`
-	PGID             int     `json:"pgid,omitempty"`
-	LogPath          string  `json:"log_path,omitempty"`
-	InCluster        bool    `json:"in_cluster"`
-	Hostname         string  `json:"hostname,omitempty"`
-	PodName          string  `json:"pod_name,omitempty"`
-	PodNamespace     string  `json:"pod_namespace,omitempty"`
-	StartedAt        string  `json:"started_at,omitempty"`
-	FinishedAt       *string `json:"finished_at,omitempty"`
-	Status           string  `json:"status,omitempty"`
-	InferenceUpdates bool    `json:"inference_updates,omitempty"`
+	Kind                string  `json:"kind,omitempty"`
+	PID                 int     `json:"pid,omitempty"`
+	PGID                int     `json:"pgid,omitempty"`
+	LogPath             string  `json:"log_path,omitempty"`
+	InCluster           bool    `json:"in_cluster"`
+	Hostname            string  `json:"hostname,omitempty"`
+	PodName             string  `json:"pod_name,omitempty"`
+	PodNamespace        string  `json:"pod_namespace,omitempty"`
+	StartedAt           string  `json:"started_at,omitempty"`
+	FinishedAt          *string `json:"finished_at,omitempty"`
+	Status              string  `json:"status,omitempty"`
+	InferenceUpdates    bool    `json:"inference_updates,omitempty"`
+	InferenceRetirement bool    `json:"inference_retirement,omitempty"`
 }
 
 type ScopedToken struct {
@@ -130,6 +132,7 @@ type InitialManifest struct {
 	SpecVersions             []map[string]any
 	Config                   SessionConfig
 	InferenceModelDefinition json.RawMessage
+	InferenceConnection      *InferenceConnection
 	Workspace                *Workspace
 	Provenance               map[string]any
 	PackageDigest            *string
@@ -201,6 +204,7 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		SpecVersions:             cloneSpecVersionMaps(input.SpecVersions),
 		Config:                   input.Config,
 		InferenceModelDefinition: input.InferenceModelDefinition,
+		InferenceConnection:      input.InferenceConnection,
 		Workspace:                input.Workspace,
 		Provenance:               input.Provenance,
 		PackageDigest:            input.PackageDigest,

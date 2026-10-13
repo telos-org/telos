@@ -19,9 +19,15 @@ To change an existing Goal's model or thinking effort, use `--goal` without a sp
 $ telos apply --goal goal_c7d2f0a4e8 --model telos/max --thinking high
 ```
 
-The running turn finishes with its current settings. The change takes effect at the next prover or verifier turn; an idle Goal waits for its next scheduled or triggered turn. New children inherit the confirmed settings.
+The running turn finishes with its current settings. The change takes effect at the next prover or verifier turn; an idle Goal waits for its next scheduled or triggered turn.
 
-Model updates stay on the Goal's current connection: Telos Default/Max for managed inference, or another model on the same API key or subscription. Settings updates accept thinking levels supported by the selected model. If you change the model without specifying thinking, Pi may lower the current level to one the new model supports. An explicitly requested level must be supported.
+You can also switch between managed inference, API keys, and subscriptions by selecting the new connection's name. Connection switching is available only on Goals whose runtime and host support it. Existing children keep their connection; new children inherit the parent's confirmed settings. Model, thinking, and connection take effect together at the next turn.
+
+```console
+$ telos apply --goal goal_c7d2f0a4e8 --model "Work OpenAI/gpt-5"
+```
+
+Settings updates accept thinking levels supported by the selected model. If you change the model without specifying thinking, Pi may lower the current level to one the new model supports. An explicitly requested level must be supported.
 
 ## Managed inference
 

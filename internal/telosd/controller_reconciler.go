@@ -2,6 +2,7 @@ package telosd
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -27,6 +28,9 @@ type controllerDefaults struct {
 	Model           string
 	Thinking        string
 	AgentTimeoutSec *int
+	Connection      *sessionapi.InferenceConnection
+	ModelDefinition json.RawMessage
+	InferenceError  error
 }
 
 type controllerReconciler struct {
@@ -54,6 +58,9 @@ func newControllerReconciler(
 }
 
 func (s *controllerReconciler) Create(req sessionapi.SessionCreateRequest) (*sessionapi.Session, error) {
+	if s.defaults.InferenceError != nil {
+		return nil, s.defaults.InferenceError
+	}
 	req = s.applyCreateDefaults(req)
 	if err := s.materializeCreatePackage(&req); err != nil {
 		return nil, err
@@ -227,6 +234,11 @@ func (s *controllerReconciler) Stop(id string) (*sessionapi.Session, error) {
 
 func (s *controllerReconciler) applyCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.SessionCreateRequest {
 	parent := os.Getenv("TELOS_SESSION_ID")
+	if req.CloudSessionID != "" {
+		// A bootstrap root identifies itself in TELOS_SESSION_ID; it is not its
+		// own parent and must receive the confirmed connection defaults.
+		parent = ""
+	}
 	if req.ParentSessionID != nil {
 		parent = *req.ParentSessionID
 	}
@@ -242,10 +254,19 @@ func (s *controllerReconciler) applyCreateDefaults(req sessionapi.SessionCreateR
 			if req.Model == m.Config.Model {
 				req.ModelDefinition = m.InferenceModelDefinition
 			}
+			if c := m.InferenceConnection; c != nil && strings.HasPrefix(req.Model, c.Provider+"/") {
+				req.InferenceConnection = c
+			}
 		}
 	}
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = s.defaults.Model
+	}
+	if parent == "" && req.InferenceConnection == nil && s.defaults.Connection != nil && strings.HasPrefix(req.Model, s.defaults.Connection.Provider+"/") {
+		req.InferenceConnection = s.defaults.Connection
+		if req.Model == s.defaults.Model {
+			req.ModelDefinition = s.defaults.ModelDefinition
+		}
 	}
 	if req.ParentSessionID != nil {
 		return req

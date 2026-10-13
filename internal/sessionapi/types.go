@@ -82,20 +82,21 @@ func (k *SessionKind) UnmarshalJSON(data []byte) error {
 
 // SessionCreateRequest is the body of POST /api/sessions.
 type SessionCreateRequest struct {
-	SpecMarkdown     *string         `json:"spec_markdown,omitempty"`
-	PackageDigest    string          `json:"package_digest,omitempty"`
-	PackagePath      string          `json:"-"`
-	CloudSessionID   string          `json:"-"`
-	CloudSessionName string          `json:"-"`
-	SessionKind      *SessionKind    `json:"-"`
-	ParentSessionID  *string         `json:"parent_session_id,omitempty"`
-	Until            *int            `json:"until,omitempty"`
-	UntilSeconds     *int            `json:"until_seconds,omitempty"`
-	Model            string          `json:"model,omitempty"`
-	Thinking         string          `json:"thinking,omitempty"`
-	ModelDefinition  json.RawMessage `json:"-"`
-	MaxCostUSD       *float64        `json:"max_cost_usd,omitempty"`
-	AgentTimeoutSec  *int            `json:"agent_timeout_sec,omitempty"`
+	SpecMarkdown        *string              `json:"spec_markdown,omitempty"`
+	PackageDigest       string               `json:"package_digest,omitempty"`
+	PackagePath         string               `json:"-"`
+	CloudSessionID      string               `json:"-"`
+	CloudSessionName    string               `json:"-"`
+	SessionKind         *SessionKind         `json:"-"`
+	ParentSessionID     *string              `json:"parent_session_id,omitempty"`
+	Until               *int                 `json:"until,omitempty"`
+	UntilSeconds        *int                 `json:"until_seconds,omitempty"`
+	Model               string               `json:"model,omitempty"`
+	Thinking            string               `json:"thinking,omitempty"`
+	ModelDefinition     json.RawMessage      `json:"-"`
+	InferenceConnection *InferenceConnection `json:"-"`
+	MaxCostUSD          *float64             `json:"max_cost_usd,omitempty"`
+	AgentTimeoutSec     *int                 `json:"agent_timeout_sec,omitempty"`
 }
 
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{name}/spec.

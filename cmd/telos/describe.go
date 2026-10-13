@@ -100,10 +100,11 @@ type inferenceDescription struct {
 	// Queued targets are displayed only in text output.
 	queuedModel    string
 	queuedThinking string
+	displayModel   string
 }
 
 func describeInference(receipt *inferenceReceipt) *inferenceDescription {
-	description := &inferenceDescription{Settings: receipt.Settings}
+	description := &inferenceDescription{Settings: receipt.Settings, displayModel: receipt.displayModel}
 	if receipt.Status == "pending" || receipt.Status == "applying" {
 		description.queuedModel = receipt.RequestedModel
 		description.queuedThinking = receipt.RequestedThinking
@@ -113,6 +114,9 @@ func describeInference(receipt *inferenceReceipt) *inferenceDescription {
 
 func printInferenceDescription(out io.Writer, description *inferenceDescription) {
 	model := strings.TrimPrefix(description.Settings.Model, "telos-bifrost/")
+	if description.displayModel != "" {
+		model = description.displayModel
+	}
 	queuedModel := strings.TrimPrefix(description.queuedModel, "telos-bifrost/")
 	printSummaryField(out, "Model", inferenceSettingChange(model, queuedModel, "pending"))
 	printSummaryField(out, "Thinking", inferenceSettingChange(description.Settings.Thinking, description.queuedThinking, "pending"))

@@ -25,6 +25,7 @@ type inferenceReceipt struct {
 	RequestedModel    string                       `json:"requested_model,omitempty"`
 	RequestedThinking string                       `json:"requested_thinking,omitempty"`
 	Error             string                       `json:"error,omitempty"`
+	displayModel      string
 }
 
 func validateApplyInferenceFlags(fs *flag.FlagSet, sessionID, model, thinking string) error {
@@ -105,6 +106,7 @@ func cloudInferenceReceipt(sessionID, contextName string, state *cloud.Deploymen
 		SessionID: sessionID, Context: contextName,
 		Settings: sessionapi.InferenceSettings{Model: state.AgentModel, Thinking: state.AgentThinking},
 		Revision: state.Revision, Status: state.Status, Error: state.Error,
+		displayModel: cloudSessionModel(cloud.SessionRecord{AgentModel: state.AgentModel, Inference: &state.Inference}),
 	}
 	if state.Request != nil {
 		receipt.RequestID = state.Request.RequestID
@@ -113,8 +115,8 @@ func cloudInferenceReceipt(sessionID, contextName string, state *cloud.Deploymen
 				receipt.RequestedModel = "telos/" + selection.Tier
 			} else {
 				receipt.RequestedModel = selection.Model
-				if state.Inference.ConnectionName != "" {
-					receipt.RequestedModel = state.Inference.ConnectionName + "/" + selection.Model
+				if state.RequestedInference != nil {
+					receipt.RequestedModel = cloudSessionModel(cloud.SessionRecord{AgentModel: selection.Model, Inference: state.RequestedInference})
 				}
 			}
 		}
@@ -184,6 +186,9 @@ func printInferenceReceipt(out io.Writer, receipt *inferenceReceipt) {
 		printSummaryField(out, "Context", receipt.Context)
 	}
 	model := strings.TrimPrefix(receipt.Settings.Model, "telos-bifrost/")
+	if receipt.displayModel != "" {
+		model = receipt.displayModel
+	}
 	requestedModel := strings.TrimPrefix(receipt.RequestedModel, "telos-bifrost/")
 	printSummaryField(out, "Model", inferenceSettingChange(model, requestedModel, receipt.Status))
 	printSummaryField(out, "Thinking", inferenceSettingChange(receipt.Settings.Thinking, receipt.RequestedThinking, receipt.Status))
