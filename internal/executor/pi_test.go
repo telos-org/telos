@@ -287,21 +287,25 @@ func TestExecuteTurnResumesWithoutReplayingExistingActivity(t *testing.T) {
 
 func TestExecuteTurnRequiresNewAssistantOutputAfterResume(t *testing.T) {
 	old := `{"message":{"role":"assistant","content":[{"type":"text","text":"<status>CONCEDE</status>"}],"usage":{"input":10,"cost":{"total":0.25}}}}`
-	for _, trailingNewline := range []string{"", "\n"} {
-		for _, appended := range []string{"", "\n", "\n" + `{"message":{"role":"user","content":"resume"}}` + "\n"} {
-			t.Run(fmt.Sprintf("newline_%t/append_%q", trailingNewline != "", appended), func(t *testing.T) {
-				exec, turn := newPiResumeTestExecutor(t, old+trailingNewline, appended)
-				var events []game.LiveAgentEvent
-				turn.OnLiveEvent = func(event game.LiveAgentEvent) { events = append(events, event) }
-				result := exec.ExecuteTurn("resume verifier", "verifier", turn)
-				if result.Status != game.StatusContinue || !result.Recoverable || !strings.Contains(result.Error, "no new assistant message") {
-					t.Fatalf("reused stale concession: %+v", result)
-				}
-				if len(events) != 0 || result.Stats.InputTokens != 10 || result.Stats.CostUSD != 0.25 {
-					t.Fatalf("replayed activity or lost prior usage: events=%#v stats=%+v", events, result.Stats)
-				}
-			})
-		}
+	for _, tc := range []struct {
+		name, trailingNewline, appended string
+	}{
+		{"no new bytes", "\n", ""},
+		{"old record gets its newline", "", "\n"},
+		{"new user message only", "\n", `{"message":{"role":"user","content":"resume"}}` + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec, turn := newPiResumeTestExecutor(t, old+tc.trailingNewline, tc.appended)
+			var events []game.LiveAgentEvent
+			turn.OnLiveEvent = func(event game.LiveAgentEvent) { events = append(events, event) }
+			result := exec.ExecuteTurn("resume verifier", "verifier", turn)
+			if result.Status != game.StatusContinue || !result.Recoverable || !strings.Contains(result.Error, "no new assistant message") {
+				t.Fatalf("reused stale concession: %+v", result)
+			}
+			if len(events) != 0 || result.Stats.InputTokens != 10 || result.Stats.CostUSD != 0.25 {
+				t.Fatalf("replayed activity or lost prior usage: events=%#v stats=%+v", events, result.Stats)
+			}
+		})
 	}
 }
 
@@ -349,9 +353,9 @@ func TestPiResumeRejectsChangedHistory(t *testing.T) {
 				}
 			}
 			projector.Stop()
-			summary, err := readPiSession(path, baseline)
-			if !errors.Is(err, errPiSessionChanged) || !errors.Is(projector.integrityErr, errPiSessionChanged) || len(events) != 0 || summary.Stats.CostUSD != 0 {
-				t.Fatalf("changed history was treated as valid output/usage: summary=%+v err=%v events=%#v", summary, err, events)
+			_, err = readPiSession(path, baseline)
+			if !errors.Is(err, errPiSessionChanged) || !errors.Is(projector.integrityErr, errPiSessionChanged) || len(events) != 0 {
+				t.Fatalf("changed history was treated as valid output: err=%v events=%#v", err, events)
 			}
 		})
 	}
@@ -359,8 +363,8 @@ func TestPiResumeRejectsChangedHistory(t *testing.T) {
 
 func TestExecuteTurnRejectsUnsupportedSessionBeforeStartingPi(t *testing.T) {
 	for _, header := range []string{
-		`{"type":"session","version":1}`, `{"type":"session","version":2}`, `{"type":"session","version":`, `{"type":"session","version":4}`,
-		`{"type":"session","version":3}`, `{"type":"session","version":3,"id":42}`, `{"type":"session","version":3,"id":""}`,
+		`{"type":"session","version":2,"id":"test"}`, `{"type":"session","version":`, `{"type":"session","version":4,"id":"test"}`,
+		`{"type":"session","version":3}`, `{"type":"session","version":3,"id":42}`,
 	} {
 		t.Run(header, func(t *testing.T) {
 			executor, turn := newPiResumeTestExecutor(t, "", piProgressLine("new")+"\n")

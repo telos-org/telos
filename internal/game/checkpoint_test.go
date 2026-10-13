@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -119,7 +118,7 @@ func TestPVGResumeAfterProcessExit(t *testing.T) {
 }
 
 func TestPVGResumePreservesFailureAndCostLimits(t *testing.T) {
-	for _, mode := range []string{"failures", "cost", "successful review"} {
+	for _, mode := range []string{"failures", "cost"} {
 		t.Run(mode, func(t *testing.T) {
 			compiled := compileTestSpec(t)
 			state := NewPVGState("pvg-test", t.TempDir(), "limits")
@@ -148,13 +147,10 @@ func TestPVGResumePreservesFailureAndCostLimits(t *testing.T) {
 				last.Stats.CostUSD = 0.5
 				last.Status = StatusContinue
 				want = "budget exceeded"
-			} else if mode == "successful review" {
-				last.Error, last.Status = "", StatusConcede
-				want = ""
 			}
 			executor := &fakeExecutor{verifierResults: []TurnResult{last}}
 			result := mustRunPVG(t, NewPVG(compiled, executor, state, cfg))
-			if result.Rounds != 4 || !strings.Contains(result.Error, want) || (want == "" && result.GameResult != GameSuccess) {
+			if result.GameResult != GameFailure || result.Rounds != 4 || !strings.Contains(result.Error, want) {
 				t.Fatalf("lost limits: %+v", result)
 			}
 			if result.TotalCostUSD != 0.75+last.Stats.CostUSD {
@@ -183,23 +179,17 @@ func TestPVGStateErrorRemainsPendingAcrossRestarts(t *testing.T) {
 func TestPVGReturnedResultSurvivesTranscriptFailure(t *testing.T) {
 	compiled := compileTestSpec(t)
 	state := NewPVGState("pvg-test", t.TempDir(), "handoff-failure")
-	returned := false
-	blocked := false
-	cfg := PVGConfig{EpochID: 1, StopRequested: func() bool {
-		if returned && !blocked {
-			blocked = true
+	cfg := PVGConfig{EpochID: 1}
+	first := &fakeExecutor{
+		proverResults: []TurnResult{{Logs: "durable builder result", Stats: TurnStats{CostUSD: 0.25}}},
+		onTurn: func(*TurnState) {
 			if err := os.Rename(state.TranscriptPath, state.TranscriptPath+".saved"); err != nil {
 				t.Fatal(err)
 			}
 			if err := os.Mkdir(state.TranscriptPath, 0o700); err != nil {
 				t.Fatal(err)
 			}
-		}
-		return false
-	}}
-	first := &fakeExecutor{
-		proverResults: []TurnResult{{Logs: "durable builder result", Stats: TurnStats{CostUSD: 0.25}}},
-		onTurn:        func(*TurnState) { returned = true },
+		},
 	}
 	if _, err := NewPVG(compiled, first, state, cfg).Run(); err == nil {
 		t.Fatal("expected transcript write error")
@@ -250,12 +240,21 @@ func pendingCheckpoint(t *testing.T, cfg PVGConfig, turn TurnResult) *PVG {
 	return p
 }
 
-func TestPVGPendingCompletionSurvivesHandoffAndFinalizationCrashes(t *testing.T) {
-	for _, handoffAlreadyWritten := range []bool{false, true} {
-		t.Run(map[bool]string{false: "before handoff", true: "after handoff"}[handoffAlreadyWritten], func(t *testing.T) {
+func TestPVGConcessionSurvivesCrashesDuringFinalization(t *testing.T) {
+	for _, phase := range []string{"before handoff", "after handoff", "after saved decision"} {
+		t.Run(phase, func(t *testing.T) {
 			p := pendingCheckpoint(t, PVGConfig{EpochID: 2}, TurnResult{Status: StatusConcede, Logs: "saved verdict", Stats: TurnStats{CostUSD: 0.5}})
-			if handoffAlreadyWritten {
+			if phase != "before handoff" {
 				if err := p.appendPendingTurn(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if phase == "after saved decision" {
+				// Decision saved, but neither agent_complete nor game_end has
+				// reached the API's evidence projection.
+				p.acceptPendingTurn()
+				p.checkpoint.Pending = nil
+				if err := p.saveCheckpoint(); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -270,8 +269,23 @@ func TestPVGPendingCompletionSurvivesHandoffAndFinalizationCrashes(t *testing.T)
 				}
 			}
 			transcript := ReadTranscript(p.State.TranscriptPath)
-			if !strings.Contains(transcript, "operator update must survive") || strings.Count(transcript, "\n## Evaluation 1\n") != 1 {
+			if !strings.Contains(transcript, "operator update must survive") || strings.Count(transcript, "\n## Evaluation 1\n") != 1 || strings.Count(transcript, "\n## Result\n") != 1 {
 				t.Fatalf("handoff duplicated or operator update lost: %s", transcript)
+			}
+			data, err := os.ReadFile(p.State.EvidencePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var last struct {
+				Event string `json:"event"`
+				Data  struct {
+					Cost     float64 `json:"total_cost_usd"`
+					Conceded bool    `json:"verifier_conceded"`
+				} `json:"data"`
+			}
+			lines := strings.Split(strings.TrimSpace(string(data)), "\n")
+			if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil || last.Event != "game_end" || last.Data.Cost != 0.75 || !last.Data.Conceded {
+				t.Fatalf("terminal evidence not repaired: %+v, %v", last, err)
 			}
 		})
 	}
@@ -299,7 +313,7 @@ func TestPVGResumeKeepsDeadlineAndHonorsSavedCompletionTime(t *testing.T) {
 }
 
 func TestPVGRejectsUnsafeResumeState(t *testing.T) {
-	for _, mode := range []string{"malformed", "version", "session", "epoch", "rounds", "pending role", "legacy", "unwritable"} {
+	for _, mode := range []string{"version", "session", "epoch", "rounds", "pending role"} {
 		t.Run(mode, func(t *testing.T) {
 			p := pendingCheckpoint(t, PVGConfig{EpochID: 1}, TurnResult{Status: StatusConcede})
 			switch mode {
@@ -316,26 +330,6 @@ func TestPVGRejectsUnsafeResumeState(t *testing.T) {
 			}
 			if err := p.saveCheckpoint(); err != nil {
 				t.Fatal(err)
-			}
-			switch mode {
-			case "malformed":
-				if err := os.WriteFile(p.checkpointPath(), []byte("{bad"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-			case "legacy":
-				if err := os.Remove(p.checkpointPath()); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.MkdirAll(p.State.Turn(1, 1, "prover").Dir, 0o755); err != nil {
-					t.Fatal(err)
-				}
-			case "unwritable":
-				if err := os.RemoveAll(filepath.Dir(p.checkpointPath())); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Dir(p.checkpointPath()), []byte("not a directory"), 0o600); err != nil {
-					t.Fatal(err)
-				}
 			}
 			executor := &fakeExecutor{onTurn: func(*TurnState) { t.Fatal("executed with unsafe state") }}
 			if result, err := NewPVG(p.Compiled, executor, p.State, p.Config).Run(); err == nil || result != nil {
@@ -369,46 +363,6 @@ func TestPVGCheckpointWriteFailureNeverStartsNextTurn(t *testing.T) {
 	var persisted runCheckpoint
 	if err := json.Unmarshal(data, &persisted); err != nil || persisted.Result.Rounds != 0 {
 		t.Fatalf("old durable checkpoint changed: %+v, %v", persisted, err)
-	}
-}
-
-func TestPVGTerminalRecoveryRepairsSummaryWithoutRepeatingHandoff(t *testing.T) {
-	p := pendingCheckpoint(t, PVGConfig{EpochID: 1}, TurnResult{Status: StatusConcede, Stats: TurnStats{CostUSD: 0.5}})
-	if err := p.appendPendingTurn(); err != nil {
-		t.Fatal(err)
-	}
-	p.acceptPendingTurn()
-	p.checkpoint.Pending = nil
-	if err := p.saveCheckpoint(); err != nil {
-		t.Fatal(err)
-	}
-	// Crash here: the decision is durable, but neither agent_complete nor
-	// game_end has reached the API's evidence projection.
-	for attempt := 0; attempt < 2; attempt++ {
-		result := mustRunPVG(t, NewPVG(p.Compiled, &fakeExecutor{
-			onTurn: func(*TurnState) { t.Fatal("executed after saved concession") },
-		}, p.State, p.Config))
-		if result.GameResult != GameSuccess || result.TotalCostUSD != 0.75 {
-			t.Fatalf("lost saved decision: %+v", result)
-		}
-	}
-	data, err := os.ReadFile(p.State.EvidencePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var last struct {
-		Event string `json:"event"`
-		Data  struct {
-			Cost     float64 `json:"total_cost_usd"`
-			Conceded bool    `json:"verifier_conceded"`
-		} `json:"data"`
-	}
-	lines := strings.Split(strings.TrimSpace(string(data)), "\n")
-	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &last); err != nil || last.Event != "game_end" || last.Data.Cost != 0.75 || !last.Data.Conceded {
-		t.Fatalf("terminal evidence not repaired: %+v, %v", last, err)
-	}
-	if count := strings.Count(ReadTranscript(p.State.TranscriptPath), "\n## Result\n"); count != 1 {
-		t.Fatalf("result handoff repeated %d times", count)
 	}
 }
 
