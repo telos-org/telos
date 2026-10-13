@@ -86,22 +86,26 @@ func (p *PVG) Run() (*PVGResult, error) {
 func (p *PVG) runDefaultLoop() error {
 	for p.Result.GameResult == "" {
 		if p.checkpoint.Pending == nil {
-			if p.runDurationExhausted(p.checkpoint.Deadline) {
-				if err := p.recoverInterruptedUsage(); err != nil {
-					return err
+			round := p.Result.Rounds + 1
+			role := turnRole(round)
+			var interruptedStats TurnStats
+			if p.checkpoint.TurnInFlight {
+				var err error
+				interruptedStats, err = p.Executor.RecoverTurnStats(p.State.Turn(p.Config.EpochID, round, role))
+				if err != nil {
+					return recoveryErrorf("recover interrupted turn usage: %w", err)
 				}
+			}
+			if p.runDurationExhausted(p.checkpoint.Deadline) {
+				p.Result.Accumulate(interruptedStats)
 				p.failRunDurationExhausted()
 				return p.saveCheckpoint()
 			}
 			if p.shouldStop(p.checkpoint.Deadline) {
-				if err := p.recoverInterruptedUsage(); err != nil {
-					return err
-				}
+				p.Result.Accumulate(interruptedStats)
 				p.end(GameStopped)
 				return p.saveCheckpoint()
 			}
-			round := p.Result.Rounds + 1
-			role := turnRole(round)
 			workspace := p.Executor.WorkspaceState()
 			promptOpts := p.promptOptions()
 			var task string
@@ -114,8 +118,19 @@ func (p *PVG) runDefaultLoop() error {
 			if err != nil {
 				return err
 			}
+			// A crash after dispatch may have incurred usage even if Pi's file
+			// is missing. Only a confirmed preparation failure can undo dispatch.
+			wasInFlight := p.checkpoint.TurnInFlight
+			p.checkpoint.TurnInFlight = true
+			if err := p.saveCheckpoint(); err != nil {
+				return err
+			}
 			turn, err := p.runAgentTurn(round, role, (round+1)/2, task, p.checkpoint.Deadline)
 			if err != nil {
+				p.checkpoint.TurnInFlight = wasInFlight
+				if saveErr := p.saveCheckpoint(); saveErr != nil {
+					return fmt.Errorf("%w; persist preparation failure: %v", err, saveErr)
+				}
 				return err
 			}
 			turn.Role = role
@@ -130,6 +145,7 @@ func (p *PVG) runDefaultLoop() error {
 				// mistaken for the coordinator's completed handoff marker.
 				CompletionID: rand.Text(),
 			}
+			p.checkpoint.TurnInFlight = false
 			if err := p.saveCheckpoint(); err != nil {
 				return err
 			}
@@ -149,30 +165,6 @@ func (p *PVG) runDefaultLoop() error {
 		// Activity is a best-effort projection, never the authority for resuming.
 		p.Evidence.LogAgent(p.Result.Rounds, turn.Role, string(turn.Status), turn.Logs, &turn.Stats)
 	}
-	return nil
-}
-
-// An interrupted turn has not entered Result yet. Persist its usage together
-// with the terminal decision, without starting the agent or claiming completion.
-func (p *PVG) recoverInterruptedUsage() error {
-	round := p.Result.Rounds + 1
-	turn := p.State.Turn(p.Config.EpochID, round, turnRole(round))
-	if _, err := os.Stat(turn.PiSessionPath()); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	recoverer, ok := p.Executor.(interface {
-		RecoverTurnStats(*TurnState) (TurnStats, error)
-	})
-	if !ok {
-		return recoveryErrorf("executor cannot recover interrupted turn usage")
-	}
-	stats, err := recoverer.RecoverTurnStats(turn)
-	if err != nil {
-		return recoveryErrorf("recover interrupted turn usage: %w", err)
-	}
-	p.Result.Accumulate(stats)
 	return nil
 }
 
@@ -320,6 +312,7 @@ func (p *PVG) logGameState(event string) {
 
 func (p *PVG) end(result GameResult) *PVGResult {
 	p.Result.GameResult = result
+	p.checkpoint.TurnInFlight = false
 	p.checkpoint.ResultID = rand.Text()
 	if p.Result.CompletionReason == "" {
 		p.Result.CompletionReason = p.completionReason(result)

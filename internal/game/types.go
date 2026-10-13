@@ -70,6 +70,8 @@ type LiveAgentEvent struct {
 // AgentExecutor runs one PVG agent turn.
 type AgentExecutor interface {
 	ExecuteTurn(task string, role string, turnState *TurnState) TurnResult
+	// RecoverTurnStats validates and reads interrupted usage without launching an agent.
+	RecoverTurnStats(turnState *TurnState) (TurnStats, error)
 	WorkspaceState() string
 	CheckpointWorkspace(dest string) bool
 }

@@ -42,6 +42,10 @@ type fakeExecutor struct {
 	tasks          []string
 }
 
+func (f *fakeExecutor) RecoverTurnStats(*game.TurnState) (game.TurnStats, error) {
+	return game.TurnStats{}, nil
+}
+
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) game.TurnResult {
 	f.tasks = append(f.tasks, task)
 	if f.onExecute != nil {
@@ -165,39 +169,50 @@ func TestRunLocalSessionRetriesInterruptedTurnAfterExecutorSetupFailure(t *testi
 	}
 }
 
-func TestRunLocalSessionExpiredInterruptedTurnPreservesUsage(t *testing.T) {
-	for _, corrupt := range []bool{false, true} {
-		t.Run(map[bool]string{false: "valid usage", true: "corrupt usage"}[corrupt], func(t *testing.T) {
+func expireLocalCheckpoint(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint map[string]json.RawMessage
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint["until_seconds"] = json.RawMessage("1")
+	checkpoint["deadline"], err = json.Marshal(time.Now().Add(-time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = json.Marshal(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
+	for _, mode := range []string{"valid", "corrupt", "missing", "missing before deadline"} {
+		t.Run(mode, func(t *testing.T) {
 			session, checkpointPath := interruptLocalVerifier(t)
-			data, err := os.ReadFile(checkpointPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var checkpoint map[string]json.RawMessage
-			if err := json.Unmarshal(data, &checkpoint); err != nil {
-				t.Fatal(err)
-			}
-			// Advance past the saved deadline while the verifier is interrupted.
-			checkpoint["until_seconds"] = json.RawMessage("1")
-			checkpoint["deadline"], err = json.Marshal(time.Now().Add(-time.Second))
-			if err != nil {
-				t.Fatal(err)
-			}
-			data, err = json.Marshal(checkpoint)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(checkpointPath, data, 0o600); err != nil {
-				t.Fatal(err)
+			if mode != "missing before deadline" {
+				expireLocalCheckpoint(t, checkpointPath)
 			}
 			state := game.NewPVGState(session.SpecName, filepath.Join(session.SessionDir, "specs", session.SpecName), session.SessionID)
 			history := "{\"type\":\"session\",\"version\":3,\"id\":\"interrupted\"}\n" +
 				"{\"message\":{\"role\":\"assistant\",\"usage\":{\"input\":100,\"output\":20,\"cost\":{\"total\":0.75}}}}\n"
-			if corrupt {
+			if mode == "corrupt" {
 				history += "{\"message\":\n"
 			}
 			if err := os.WriteFile(state.Turn(1, 2, "verifier").PiSessionPath(), []byte(history), 0o600); err != nil {
 				t.Fatal(err)
+			}
+			if strings.HasPrefix(mode, "missing") {
+				if err := os.Remove(state.Turn(1, 2, "verifier").PiSessionPath()); err != nil {
+					t.Fatal(err)
+				}
 			}
 			manifestFile := manifestPath(session.SessionDir)
 			openManifest, err := os.ReadFile(manifestFile)
@@ -207,7 +222,7 @@ func TestRunLocalSessionExpiredInterruptedTurnPreservesUsage(t *testing.T) {
 			t.Setenv("PATH", t.TempDir())
 			for attempt := 0; attempt < 2; attempt++ {
 				result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
-				if corrupt {
+				if mode != "valid" {
 					var recovery *game.RecoveryError
 					if !errors.As(err, &recovery) || result != nil {
 						t.Fatalf("unknown usage finalized the attempt: %+v, %v", result, err)
@@ -233,6 +248,30 @@ func TestRunLocalSessionExpiredInterruptedTurnPreservesUsage(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestRunLocalSessionPreparationFailureHasNoInterruptedUsage(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	t.Chdir(dir)
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	preparation := errors.New("process could not start")
+	result, err := RunLocalSessionWithExecutor(session.SessionDir, &fakeExecutor{
+		proverResult: game.TurnResult{PreparationError: preparation},
+	})
+	if !errors.Is(err, preparation) || result != nil {
+		t.Fatalf("preparation failure was not retryable: %+v, %v", result, err)
+	}
+	checkpoint := filepath.Join(session.SessionDir, "specs", session.SpecName, "turns", "epoch-0001", "checkpoint.json")
+	expireLocalCheckpoint(t, checkpoint)
+	t.Setenv("PATH", t.TempDir())
+	result, err = RunLocalSessionWithExecutor(session.SessionDir, nil)
+	if err != nil || result.CompletionReason != "run_duration_exhausted" || result.Rounds != 0 || result.TotalCostUSD != 0 {
+		t.Fatalf("unstarted turn required execution history: %+v, %v", result, err)
 	}
 }
 

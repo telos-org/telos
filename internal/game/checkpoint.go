@@ -25,6 +25,7 @@ type runCheckpoint struct {
 	RecoverableFailures int            `json:"recoverable_failures"`
 	ReviewCycles        int            `json:"review_cycles"`
 	TranscriptOffset    int64          `json:"transcript_offset"`
+	TurnInFlight        bool           `json:"turn_in_flight,omitempty"`
 	ResultID            string         `json:"result_id,omitempty"`
 	Pending             *completedTurn `json:"pending,omitempty"`
 }

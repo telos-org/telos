@@ -24,6 +24,10 @@ type fakeExecutor struct {
 	onTurn          func(*TurnState)
 }
 
+func (f *fakeExecutor) RecoverTurnStats(*TurnState) (TurnStats, error) {
+	return TurnStats{}, nil
+}
+
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) TurnResult {
 	if f.onTurn != nil {
 		f.onTurn(ts)
