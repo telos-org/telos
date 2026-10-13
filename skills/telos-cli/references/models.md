@@ -6,12 +6,22 @@ group: Platform
 
 Telos is designed to be flexible and neutral to model choice, and supports the options below.
 
-You can select a model from the CLI with `--model <name>/<model-id>`, where `<name>` is `telos` for managed inference or the name you gave your API key or subscription. A default can be set in the [web UI](https://usetelos.ai/workspace?tab=inference). Telos also exposes standard "thinking effort" values (`--thinking [low,medium,high,xhigh]`).
+You can select a model from the CLI with `--model <name>/<model-id>`, where `<name>` is `telos` for managed inference or the name you gave your API key or subscription. A default can be set in the [web UI](https://usetelos.ai/workspace?tab=inference). For new Goals, `--thinking` accepts `low`, `medium`, `high`, or `xhigh`.
 
 ```console
 $ telos apply SPEC.md --model telos/max --thinking high
 $ telos apply SPEC.md --model my-anthropic-key/claude-sonnet-5-5
 ```
+
+To change an existing Goal's model or thinking effort, use `--goal` without a spec file:
+
+```console
+$ telos apply --goal goal_c7d2f0a4e8 --model telos/max --thinking high
+```
+
+The running turn finishes with its current settings. The change takes effect at the next prover or verifier turn; an idle Goal waits for its next scheduled or triggered turn. New children inherit the confirmed settings.
+
+Model updates stay on the Goal's current connection: Telos Default/Max for managed inference, or another model on the same API key or subscription. Settings updates accept thinking levels supported by the selected model. If you change the model without specifying thinking, Pi may lower the current level to one the new model supports. An explicitly requested level must be supported.
 
 ## Managed inference
 
