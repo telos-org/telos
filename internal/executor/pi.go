@@ -550,6 +550,24 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 	return summary, err
 }
 
+// ReadPiSessionStats recovers an interrupted turn's usage without invoking Pi.
+// No final assistant response is required, but all saved records must be valid.
+func ReadPiSessionStats(path string) (game.TurnStats, error) {
+	baseline, err := capturePiSessionBaseline(path)
+	if err != nil {
+		return game.TurnStats{}, err
+	}
+	summary, err := readPiSession(path, baseline)
+	if errors.Is(err, errPiNoAssistant) {
+		err = nil
+	}
+	return summary.Stats, err
+}
+
+func (pe *PiExecutor) RecoverTurnStats(turn *game.TurnState) (game.TurnStats, error) {
+	return ReadPiSessionStats(turn.PiSessionPath())
+}
+
 func readPiSession(path string, baseline piSessionBaseline) (PiSessionSummary, error) {
 	f, err := os.Open(path)
 	if err != nil {

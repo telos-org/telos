@@ -129,6 +129,77 @@ func TestRunLocalSessionResumesInterruptedVerifierInSameEpoch(t *testing.T) {
 	}
 }
 
+func TestRunLocalSessionExpiredInterruptedTurnPreservesUsage(t *testing.T) {
+	for _, corrupt := range []bool{false, true} {
+		t.Run(map[bool]string{false: "valid usage", true: "corrupt usage"}[corrupt], func(t *testing.T) {
+			session, checkpointPath := interruptLocalVerifier(t)
+			data, err := os.ReadFile(checkpointPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var checkpoint map[string]json.RawMessage
+			if err := json.Unmarshal(data, &checkpoint); err != nil {
+				t.Fatal(err)
+			}
+			// Advance past the saved deadline while the verifier is interrupted.
+			checkpoint["until_seconds"] = json.RawMessage("1")
+			checkpoint["deadline"], err = json.Marshal(time.Now().Add(-time.Second))
+			if err != nil {
+				t.Fatal(err)
+			}
+			data, err = json.Marshal(checkpoint)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(checkpointPath, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			state := game.NewPVGState(session.SpecName, filepath.Join(session.SessionDir, "specs", session.SpecName), session.SessionID)
+			history := "{\"type\":\"session\",\"version\":3,\"id\":\"interrupted\"}\n" +
+				"{\"message\":{\"role\":\"assistant\",\"usage\":{\"input\":100,\"output\":20,\"cost\":{\"total\":0.75}}}}\n"
+			if corrupt {
+				history += "{\"message\":\n"
+			}
+			if err := os.WriteFile(state.Turn(1, 2, "verifier").PiSessionPath(), []byte(history), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			manifestFile := manifestPath(session.SessionDir)
+			openManifest, err := os.ReadFile(manifestFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("PATH", t.TempDir())
+			for attempt := 0; attempt < 2; attempt++ {
+				result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
+				if corrupt {
+					var recovery *game.RecoveryError
+					if !errors.As(err, &recovery) || result != nil {
+						t.Fatalf("unknown usage finalized the attempt: %+v, %v", result, err)
+					}
+					manifest, err := sessionapi.ReadManifest(manifestFile)
+					if err != nil || manifest.Recovery == nil || manifest.OpenEpoch() == nil {
+						t.Fatalf("unknown usage did not block recovery: %+v, %v", manifest, err)
+					}
+					continue
+				}
+				if err != nil || result.CompletionReason != "run_duration_exhausted" || result.Rounds != 1 ||
+					result.TotalCostUSD != 1 || result.TotalInputTokens != 110 || result.TotalOutputTokens != 20 {
+					t.Fatalf("lost or duplicated interrupted usage: %+v, %v", result, err)
+				}
+				store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
+				current, err := store.Get(session.SessionID)
+				if err != nil || current.TotalCostUSD == nil || *current.TotalCostUSD != 1 {
+					t.Fatalf("recovered usage missing from API: %+v, %v", current, err)
+				}
+				// Repeat terminal recovery as if publishing the epoch had failed.
+				if err := os.WriteFile(manifestFile, openManifest, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+		})
+	}
+}
+
 func TestRunLocalSessionRequiresOperatorRecoveryForUnsafeCheckpoint(t *testing.T) {
 	for _, missing := range []bool{false, true} {
 		t.Run(map[bool]string{false: "corrupt", true: "legacy missing"}[missing], func(t *testing.T) {

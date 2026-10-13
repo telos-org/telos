@@ -262,6 +262,10 @@ type lazyAgentExecutor struct {
 	agent  game.AgentExecutor
 }
 
+func (e *lazyAgentExecutor) RecoverTurnStats(turn *game.TurnState) (game.TurnStats, error) {
+	return executor.ReadPiSessionStats(turn.PiSessionPath())
+}
+
 func (e *lazyAgentExecutor) ExecuteTurn(task, role string, turn *game.TurnState) game.TurnResult {
 	if e.agent == nil {
 		agent, err := createAgentExecutor(e.Workspace, e.config)

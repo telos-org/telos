@@ -87,10 +87,16 @@ func (p *PVG) runDefaultLoop() error {
 	for p.Result.GameResult == "" {
 		if p.checkpoint.Pending == nil {
 			if p.runDurationExhausted(p.checkpoint.Deadline) {
+				if err := p.recoverInterruptedUsage(); err != nil {
+					return err
+				}
 				p.failRunDurationExhausted()
 				return p.saveCheckpoint()
 			}
 			if p.shouldStop(p.checkpoint.Deadline) {
+				if err := p.recoverInterruptedUsage(); err != nil {
+					return err
+				}
 				p.end(GameStopped)
 				return p.saveCheckpoint()
 			}
@@ -143,6 +149,30 @@ func (p *PVG) runDefaultLoop() error {
 		// Activity is a best-effort projection, never the authority for resuming.
 		p.Evidence.LogAgent(p.Result.Rounds, turn.Role, string(turn.Status), turn.Logs, &turn.Stats)
 	}
+	return nil
+}
+
+// An interrupted turn has not entered Result yet. Persist its usage together
+// with the terminal decision, without starting the agent or claiming completion.
+func (p *PVG) recoverInterruptedUsage() error {
+	round := p.Result.Rounds + 1
+	turn := p.State.Turn(p.Config.EpochID, round, turnRole(round))
+	if _, err := os.Stat(turn.PiSessionPath()); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	recoverer, ok := p.Executor.(interface {
+		RecoverTurnStats(*TurnState) (TurnStats, error)
+	})
+	if !ok {
+		return recoveryErrorf("executor cannot recover interrupted turn usage")
+	}
+	stats, err := recoverer.RecoverTurnStats(turn)
+	if err != nil {
+		return recoveryErrorf("recover interrupted turn usage: %w", err)
+	}
+	p.Result.Accumulate(stats)
 	return nil
 }
 
