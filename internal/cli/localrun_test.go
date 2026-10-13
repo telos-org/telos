@@ -129,6 +129,42 @@ func TestRunLocalSessionResumesInterruptedVerifierInSameEpoch(t *testing.T) {
 	}
 }
 
+func TestRunLocalSessionRetriesInterruptedTurnAfterExecutorSetupFailure(t *testing.T) {
+	session, _ := interruptLocalVerifier(t)
+	state := game.NewPVGState(session.SpecName, filepath.Join(session.SessionDir, "specs", session.SpecName), session.SessionID)
+	history := "{\"type\":\"session\",\"version\":3,\"id\":\"interrupted\"}\n" +
+		"{\"message\":{\"role\":\"assistant\",\"usage\":{\"input\":100,\"cost\":{\"total\":0.75}}}}\n"
+	if err := os.WriteFile(state.Turn(1, 2, "verifier").PiSessionPath(), []byte(history), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
+	var recovery *game.RecoveryError
+	if err == nil || errors.As(err, &recovery) || result != nil {
+		t.Fatalf("setup failure completed or blocked interrupted turn: %+v, %v", result, err)
+	}
+	manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
+	if err != nil || manifest.Recovery != nil || manifest.OpenEpoch() == nil || manifest.OpenEpoch().ID != 1 {
+		t.Fatalf("setup failure abandoned interrupted epoch: %+v, %v", manifest, err)
+	}
+	resumed := &fakeExecutor{
+		verifierResult: game.TurnResult{Status: game.StatusConcede, Stats: game.TurnStats{CostUSD: 0.75, InputTokens: 100}},
+		onExecute: func(role string) {
+			if role != "verifier" {
+				t.Fatalf("replayed completed %s", role)
+			}
+			data, err := os.ReadFile(state.Turn(1, 2, "verifier").PiSessionPath())
+			if err != nil || string(data) != history {
+				t.Fatalf("setup failure lost interrupted history: %q, %v", data, err)
+			}
+		},
+	}
+	result, err = RunLocalSessionWithExecutor(session.SessionDir, resumed)
+	if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.TotalCostUSD != 1 || result.TotalInputTokens != 110 {
+		t.Fatalf("setup repair lost interrupted usage: %+v, %v", result, err)
+	}
+}
+
 func TestRunLocalSessionExpiredInterruptedTurnPreservesUsage(t *testing.T) {
 	for _, corrupt := range []bool{false, true} {
 		t.Run(map[bool]string{false: "valid usage", true: "corrupt usage"}[corrupt], func(t *testing.T) {

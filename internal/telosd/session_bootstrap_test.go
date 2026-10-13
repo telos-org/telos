@@ -115,6 +115,34 @@ func TestSessionBootstrapReconcilerCreatesDesiredPackageSession(t *testing.T) {
 	}
 }
 
+func TestSessionBootstrapReplacesRecoverySessionOnlyAfterStop(t *testing.T) {
+	pkg := buildMaterializerTestPackage(t, "auth")
+	root := t.TempDir()
+	packagePath := filepath.Join(root, "blobs", "sha256", pkg.Digest[len("sha256:"):], "package.tar.gz")
+	if err := writePackageCacheEntry(packagePath, pkg.Bytes); err != nil {
+		t.Fatal(err)
+	}
+	name := "auth"
+	store := &fakeReconcileStore{sessions: []sessionapi.Session{{
+		SessionID: "sess_blocked", SpecName: &name, Status: sessionapi.StatusFailed,
+		Recovery: &sessionapi.SessionRecovery{EpochID: 1, Error: "unsafe history"},
+	}}}
+	reconciler := sessionBootstrapReconciler{packageRoot: root, store: store}
+	desired := []cloudBootstrapSession{{Name: name, PackageDigest: pkg.Digest}}
+	if err := reconciler.reconcile(desired); err != nil || len(store.creates) != 0 {
+		t.Fatalf("bootstrap replaced an unresolved attempt: creates=%v, %v", store.creates, err)
+	}
+	if _, err := store.Stop("sess_blocked"); err != nil {
+		t.Fatal(err)
+	}
+	if err := reconciler.reconcile(desired); err != nil || len(store.creates) != 1 {
+		t.Fatalf("stopped recovery prevented desired bootstrap: creates=%v, %v", store.creates, err)
+	}
+	if store.creates[0].CloudSessionName != name || store.creates[0].PackageDigest != pkg.Digest {
+		t.Fatalf("bootstrap did not use the desired session: %+v", store.creates[0])
+	}
+}
+
 func TestSessionBootstrapMatchesCloudSessionNameBeforeSpecName(t *testing.T) {
 	digest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	specName := "auth-v2"

@@ -270,6 +270,11 @@ func (e *lazyAgentExecutor) ExecuteTurn(task, role string, turn *game.TurnState)
 	if e.agent == nil {
 		agent, err := createAgentExecutor(e.Workspace, e.config)
 		if err != nil {
+			// An interrupted turn may already have spent tokens. Keep it open
+			// until setup is repaired instead of completing it with zero usage.
+			if _, historyErr := os.Stat(turn.PiSessionPath()); !os.IsNotExist(historyErr) {
+				return game.TurnResult{Role: role, Status: game.StatusContinue, PreparationError: err}
+			}
 			return game.TurnResult{Role: role, Status: game.StatusContinue, Error: "agent_configuration_invalid: " + err.Error()}
 		}
 		e.agent = agent
