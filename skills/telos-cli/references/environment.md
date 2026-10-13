@@ -82,7 +82,16 @@ It is also possible to securely inject credentials to outbound requests from the
 > The credential's name is what gets referenced in the YAML frontmatter and must use lowercase letters, numbers, and hyphen-separators.
 
 
-Credentials are encrypted at rest and never enter your Goal's VM. Instead, a proxy outside the VM adds them to requests that match your `network` rules.
+Credentials are encrypted at rest and never enter your Goal's VM. The credential defines its keys and authentication headers; your Goal's `network` rules define the allowed hosts, methods, and paths. A proxy outside the VM replaces the public marker `telos-proxy-v1` with the real key in a matching request. Credentials do not supply destination permissions or hosting environment variables.
+
+Send the marker where the vendor client expects its key. For a credential whose header is `Authorization`, for example:
+
+```bash
+curl https://api.example.com/reports/latest \
+  -H 'Authorization: Bearer telos-proxy-v1'
+```
+
+For a client that reads an API-key environment variable, set that variable to `telos-proxy-v1` in your application configuration. This is a public dummy, not the stored secret. For a custom header such as `X-Vault-Token`, send `X-Vault-Token: telos-proxy-v1`. The proxy only replaces matching headers on requests permitted by the Goal's network rules.
 
 Simply put, **your Goal can use credentials, but never see them**. It can still make any request your rules allow, so we recommend using a least-privilege key and narrowing access with `methods` and `paths`.
 
@@ -92,5 +101,6 @@ A few additional details on this feature:
 - Credentialed entries require an exact hostname, and paths must be exact or end in `/*`.
 - Network-only entries can use wildcard hosts.
 - One credential can serve multiple declared hosts.
+- Credential names must use lowercase letters, numbers, and hyphen-separators. After an older credential is renamed to this format, use the name shown by `telos config` in your SPEC.
 - Only owners and admins of a workspace can create, edit, or delete credentials.
 
