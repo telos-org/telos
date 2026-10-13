@@ -1,16 +1,16 @@
 ---
-title: The Telos Cloud environment
-description: Everything you need to know about the Telos Cloud environment — the VM, developer toolchain, networking, and credentials.
+title: Environment
+description: Everything you need to know about a Goal's environment — the VM, developer toolchain, networking, and credentials.
 group: Platform
 ---
 
-The Telos Cloud environment is the place where your Goals are translated into running software.
+A Goal's environment is where Telos turns it into running software.
 
 ## Overview
 
 Each Goal gets its own persistent VM that runs a lightweight Kubernetes cluster.
 
-The Telos agent harness lives inside this VM and has access to a full `git` workspace, developer toolchain, and permissions to launch and manage services (inside the VM). This lets the agent own the full build, test, and deploy lifecycle.
+The Telos agent harness lives inside this VM and has access to a full `git` repository, developer toolchain, and permissions to launch and manage services (inside the VM). This lets the agent own the full build, test, and deploy lifecycle.
 
 ## Toolchain
 
@@ -34,14 +34,14 @@ Telos follows a strict networking model, with limited ingress and egress by defa
 
 ### Ingress
 
-The only entry points into a Goal's runtime environment are:
+The only entry points into a Goal's environment are:
 
-- the product API or UI, accessed through the managed hostname (`<name>-<session-id>.usetelos.ai`)
+- the product API or UI, accessed through the managed hostname (`<name>-<id>.usetelos.ai`, where `<id>` is the Goal ID without `goal_`, like `reading-list-c7d2f0a4e8.usetelos.ai`)
 - the administration dashboard, accessed via the web UI and restricted to workspace administrators.
 
 ### Egress
 
-By default, the Telos system has a limited set of egress points out of its runtime environment:
+By default, the Telos system has a limited set of egress points out of a Goal's environment:
 
 | Ecosystem | Description | Hostnames |
 |---|---|---|
@@ -51,7 +51,7 @@ By default, the Telos system has a limited set of egress points out of its runti
 
 Access is limited to the read-only HTTPS methods and paths needed for these downloads — it does not allow arbitrary requests to these hosts.
 
-For most real-world use cases, this is insufficient, so Telos also supports configuring additional outbound HTTPS access in your Goal's YAML frontmatter, for example:
+For most real-world use cases, this is insufficient, so Telos also supports configuring additional outbound HTTPS access in your Goal's YAML [frontmatter](goals.md#frontmatter), for example:
 
 ```yaml
 ---
@@ -60,7 +60,7 @@ version: 0.1.0
 network:
   - host: public.example.com
   - host: api.example.com
-    credentials: sec-example
+    credential: example-api-key
     methods: [GET]
     paths: ["/reports/*"]
 ---
@@ -68,21 +68,29 @@ network:
 
 Each entry in `network` specifies a host and optionally restricts HTTP methods and URL paths on that host. A host without `methods` or `paths` allows traffic via all methods and all paths.
 
+If you want to retain the default-deny egress behavior for Telos, either don't define `network` or set `network: []`. Doing so will still keep the defaults (Docker Hub, PyPI, npm).
+
 ## Credentials
 
-For authenticated requests, it is also possible to securely inject credentials. The workflow for this is as follows:
+It is also possible to securely inject credentials to outbound requests from the Telos runtime. The workflow for this is as follows:
 
-1. Create a credential (a name and its secret value) on the [web dashboard](https://usetelos.ai/workspace?tab=credentials). Telos gives it an ID, such as `sec-example`.
-2. Add the credential's destination host to `network` in your Goal's frontmatter.
-3. Associate that host with the credential's ID using `credentials`.
+1. Create a credential on the [web dashboard](https://usetelos.ai/workspace?tab=credentials). A credential is a name plus one or more keys, each sent in an HTTP header that you choose.
+2. List defined credentials' names locally via `telos config`.
+3. Add the credential's destination host to `network` in your Goal's frontmatter.
+4. Associate that host with the credential's name.
 
-A few additional details on this feature:
+> The credential's name is what gets referenced in the YAML frontmatter and must use lowercase letters, numbers, and hyphen-separators.
 
-- Outbound access is only for HTTPS (no raw TCP/UDP)
-- Credentialed entries require an exact hostname, and paths must be exact or end in `/*`
-- Network-only entries can use wildcard hosts
-- One credential can serve multiple declared hosts
 
 Credentials are encrypted at rest and never enter your Goal's VM. Instead, a proxy outside the VM adds them to requests that match your `network` rules.
 
-In short, **your Goal can use credentials, but never see them**. It can still make any request your rules allow, so we recommend using a least-privilege key and narrowing access with `methods` and `paths`.
+Simply put, **your Goal can use credentials, but never see them**. It can still make any request your rules allow, so we recommend using a least-privilege key and narrowing access with `methods` and `paths`.
+
+A few additional details on this feature:
+
+- Outbound access is only for HTTPS (no raw TCP/UDP) requests.
+- Credentialed entries require an exact hostname, and paths must be exact or end in `/*`.
+- Network-only entries can use wildcard hosts.
+- One credential can serve multiple declared hosts.
+- Only owners and admins of a workspace can create, edit, or delete credentials.
+

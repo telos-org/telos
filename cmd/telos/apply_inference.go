@@ -16,7 +16,7 @@ var thinkingSyntax = regexp.MustCompile(`^[a-z]{1,32}$`)
 
 // A receipt distinguishes requested values from the last confirmed settings.
 type inferenceReceipt struct {
-	SessionID         string                       `json:"session_id"`
+	SessionID         string                       `json:"goal_id"`
 	Context           string                       `json:"context,omitempty"`
 	Settings          sessionapi.InferenceSettings `json:"settings"`
 	Revision          int                          `json:"revision"`
@@ -32,12 +32,12 @@ func validateApplyInferenceFlags(fs *flag.FlagSet, sessionID, model, thinking st
 	settingsSet := flagNamesSet(fs, "model", "thinking")
 	if fs.NArg() > 0 {
 		if sessionID != "" && settingsSet {
-			return fmt.Errorf("apply spec and model/thinking changes separately: first apply SPEC.md --session %s, then apply --session %s --model MODEL and/or --thinking LEVEL", sessionID, sessionID)
+			return fmt.Errorf("apply spec and model/thinking changes separately: first apply SPEC.md --goal %s, then apply --goal %s --model MODEL and/or --thinking LEVEL", sessionID, sessionID)
 		}
 		return nil
 	}
 	if sessionID == "" || !settingsSet {
-		return fmt.Errorf("provide a SPEC.md, or --session SESSION with --model and/or --thinking")
+		return fmt.Errorf("provide a SPEC.md, or --goal GOAL with --model and/or --thinking")
 	}
 	if err := validateApplySession(sessionID); err != nil {
 		return err
@@ -181,7 +181,7 @@ func inferenceDescribeCommand(sessionID, contextName string) string {
 }
 
 func printInferenceReceipt(out io.Writer, receipt *inferenceReceipt) {
-	printSummaryField(out, "Session", receipt.SessionID)
+	printSummaryField(out, "Goal", receipt.SessionID)
 	if receipt.Context != "" {
 		printSummaryField(out, "Context", receipt.Context)
 	}

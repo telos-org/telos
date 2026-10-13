@@ -185,6 +185,19 @@ func TestRetirementRouteRequiresOperator(t *testing.T) {
 	if reply.Code != http.StatusUnauthorized {
 		t.Fatalf("unauthorized retirement: %d %s", reply.Code, reply.Body.String())
 	}
+	scoped, err := NewScopedToken("session", KindController)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := MutateManifest(store.manifestPath("session"), func(m *Manifest) error { m.Access = scoped; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	request.Header.Set("Authorization", "Bearer "+scoped.APIToken)
+	reply = httptest.NewRecorder()
+	mux.ServeHTTP(reply, request)
+	if reply.Code != http.StatusForbidden {
+		t.Fatalf("agent retired connection: %d %s", reply.Code, reply.Body.String())
+	}
 	request.Header.Set("Authorization", "Bearer operator")
 	reply = httptest.NewRecorder()
 	mux.ServeHTTP(reply, request)

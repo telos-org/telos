@@ -84,7 +84,7 @@ func TestInferenceConnectionChangesNameBothConnections(t *testing.T) {
 				func(out *bytes.Buffer) { printInferenceReceipt(out, receipt) },
 				func(out *bytes.Buffer) { printInferenceDescription(out, describeInference(receipt)) },
 				func(out *bytes.Buffer) {
-					printCloudSessionDetails(out, cloud.SessionRecord{AgentModel: state.AgentModel, AgentThinking: state.AgentThinking, Inference: &state.Inference}, "@workspace", describeInference(receipt))
+					printCloudSessionDetails(out, cloud.SessionRecord{AgentModel: state.AgentModel, AgentThinking: state.AgentThinking, Inference: &state.Inference}, "@workspace", nil, "", describeInference(receipt))
 				},
 			} {
 				var out bytes.Buffer
@@ -160,7 +160,7 @@ func TestApplyInferenceExplicitSettings(t *testing.T) {
 			})
 			defer server.Close()
 			configureInferenceApplyTest(t, server.URL)
-			args := []string{"--session", "sess_test", "--context", "@telos", "--json"}
+			args := []string{"--goal", "sess_test", "--context", "@telos", "--json"}
 			if tt.model != "" {
 				args = append(args, "--model", tt.model)
 			}
@@ -188,19 +188,18 @@ func TestApplyInferenceInvalidFlagsDoNoWork(t *testing.T) {
 	defer server.Close()
 	configureInferenceApplyTest(t, server.URL)
 	for _, args := range [][]string{
-		{}, {"--model", "telos/max"}, {"--session", "sess_test"},
-		{"--session", "sess_test", "--model", ""},
-		{"--session", "sess_test", "--thinking", ""},
-		{"--session", "sess_test", "--thinking", "HIGH"},
-		{"--session", "bad_id", "--thinking", "high"},
-		{"--session", "local_test", "--thinking", "high"},
-		{"--session", "sess_test", "--thinking", "high", "--force"},
-		{"--session", "sess_test", "--thinking", "high", "--workspace", "."},
-		{"--session", "sess_test", "--thinking", "high", "--max-cost-usd", "1"},
-		{"--session", "local_test", "--thinking", "high", "--context", "@telos"},
-		{"does-not-exist.md", "--session", "sess_test", "--model", "telos/max"},
-		{"@telos/demo:1.0.0", "--session", "sess_test", "--thinking", "high"},
-		{"does-not-exist.md", "--session", "local_test", "--thinking", "high"},
+		{}, {"--model", "telos/max"}, {"--goal", "sess_test"},
+		{"--goal", "sess_test", "--model", ""},
+		{"--goal", "sess_test", "--thinking", ""},
+		{"--goal", "sess_test", "--thinking", "HIGH"},
+		{"--goal", "local_test", "--thinking", "high"},
+		{"--goal", "sess_test", "--thinking", "high", "--force"},
+		{"--goal", "sess_test", "--thinking", "high", "--workspace", "."},
+		{"--goal", "sess_test", "--thinking", "high", "--max-cost-usd", "1"},
+		{"--goal", "local_test", "--thinking", "high", "--context", "@telos"},
+		{"does-not-exist.md", "--goal", "sess_test", "--model", "telos/max"},
+		{"@telos/demo:1.0.0", "--goal", "sess_test", "--thinking", "high"},
+		{"does-not-exist.md", "--goal", "local_test", "--thinking", "high"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			_, stderr, err := inferenceCLIProcess(t, append([]string{"apply"}, args...)...)
@@ -211,7 +210,7 @@ func TestApplyInferenceInvalidFlagsDoNoWork(t *testing.T) {
 	}
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_API_TOKEN", "agent-token")
-	_, stderr, err := inferenceCLIProcess(t, "apply", "--session", "sess_test", "--thinking", "high")
+	_, stderr, err := inferenceCLIProcess(t, "apply", "--goal", "sess_test", "--thinking", "high")
 	if err == nil || !strings.Contains(stderr, "cannot be used from inside") || requests.Load() != 0 {
 		t.Fatalf("agent bypassed apply restriction: %v %s", err, stderr)
 	}
@@ -270,7 +269,7 @@ func TestApplyInferenceOutcomesAndLostReplies(t *testing.T) {
 				},
 			})
 			configureInferenceApplyTest(t, server.URL)
-			stdout, stderr, err := inferenceCLIProcess(t, "apply", "--session", "sess_test", "--model", "telos/max", "--thinking", "high", "--json")
+			stdout, stderr, err := inferenceCLIProcess(t, "apply", "--goal", "sess_test", "--model", "telos/max", "--thinking", "high", "--json")
 			server.Close()
 			wantSuccess := outcome == "applied" || outcome == "applying"
 			if (err == nil) != wantSuccess || writes.Load() != 1 {
@@ -454,7 +453,7 @@ func TestDescribeQueuedInferenceKeepsConnectionModelName(t *testing.T) {
 				Status:   "pending", RequestedModel: "Work/new", RequestedThinking: "high",
 			})
 			var out bytes.Buffer
-			printCloudSessionDetails(&out, session, "@telos", description)
+			printCloudSessionDetails(&out, session, "@telos", nil, "", description)
 			if !strings.Contains(out.String(), "Model     Work/old -> Work/new (next turn)") || !strings.Contains(out.String(), "Thinking  medium -> high (next turn)") {
 				t.Fatalf("describe lost model selection names: %s", out.String())
 			}
@@ -484,11 +483,11 @@ func TestApplyLocalInferenceRejectedWithoutChangingManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt, err := applySessionInference(id, "provider/new", "high", ""); err == nil || receipt != nil || !strings.Contains(err.Error(), "telos apply only updates Telos Cloud sessions") {
+	if receipt, err := applySessionInference(id, "provider/new", "high", ""); err == nil || receipt != nil || !strings.Contains(err.Error(), "telos apply only updates Telos Cloud Goals") {
 		t.Fatalf("local settings apply not rejected: %+v %v", receipt, err)
 	}
-	stdout, stderr, err := inferenceCLIProcess(t, "apply", "--session", id, "--thinking", "high")
-	if err == nil || stdout != "" || !strings.Contains(stderr, "telos apply only updates Telos Cloud sessions") {
+	stdout, stderr, err := inferenceCLIProcess(t, "apply", "--goal", id, "--thinking", "high")
+	if err == nil || stdout != "" || !strings.Contains(stderr, "telos apply only updates Telos Cloud Goals") {
 		t.Fatalf("local CLI settings apply not rejected: err=%v, stdout=%s, stderr=%s", err, stdout, stderr)
 	}
 	after, err := os.ReadFile(path)
@@ -519,7 +518,7 @@ func TestSpecApplyIgnoresInferenceEnvironment(t *testing.T) {
 	})
 	defer server.Close()
 	configureInferenceApplyTest(t, server.URL)
-	out := captureStdout(t, func() { cmdApply([]string{"@telos/demo:1.2.3", "--session", "sess_test", "--json"}) })
+	out := captureStdout(t, func() { cmdApply([]string{"@telos/demo:1.2.3", "--goal", "sess_test", "--json"}) })
 	if updates.Load() != 1 || !strings.Contains(out, `"operation": "updated"`) {
 		t.Fatalf("existing spec update failed with inference env vars: %s", out)
 	}

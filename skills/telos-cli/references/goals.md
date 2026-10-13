@@ -1,12 +1,12 @@
 ---
 title: Goals
-description: An overview of the framework behind the Telos Cloud platform.
+description: An overview of the framework behind Telos — the goal specification, skills, rubrics, and packages.
 group: Platform
 ---
 
-Telos is built on top of Goals as the durable unit of work. But a Goal is not *just* a markdown file. There are a few components to the programming system, designed to make it flexible and maximally useful to the end user.
+Telos is built on top of Goals as the durable unit of work. But a Goal is not *just* a markdown file. There are a few components to the programming system — the goal specification, skills, rubrics, and packages — designed to make it flexible and maximally useful to the end user.
 
-## The Goal specification
+## The goal specification
 
 The goal specification (`SPEC.md`) is the entrypoint to a Telos program. We'll walk through an example below:
 
@@ -32,9 +32,10 @@ The markdown frontmatter (YAML block at the top of `SPEC.md`) supports the follo
 | Field | Meaning |
 | --- | --- |
 | `name` | Required lowercase, DNS-compatible identity. Keep it stable across revisions. |
-| `version` | Required semantic version for this immutable revision. Bump it when the contract changes. |
+| `version` | Required semantic version for this immutable revision. Bump it when the spec changes. |
 | `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
-| `interval` | A positive duration ending in `s`, `m`, or `h`, such as `30m` or `6h`, carried as the contract's reconciliation interval. |
+| `interval` | The schedule on which the system wakes up to check the Goal against the live state. |
+| `network` | [Outbound network configuration](environment.md#egress) for the Goal. |
 | `tags` | A YAML list of string labels. The default is an empty list. |
 
 ### The entrypoint
@@ -45,7 +46,7 @@ Within this file, describe the service you want. Focus on the high-level intent 
 
 Implementation details, such as choice of programming language, code structure, etc., should be intentionally omitted. The focus is entirely on system design.
 
-Writing high-quality specs is a non-trivial problem! Our reccomendation is for users to focus on describing externally-visible outcomes: API design, constraints, and behaviours, as opposed to implementation details.
+Writing high-quality goal specs is a non-trivial problem! Our recommendation is for users to focus on describing externally-visible outcomes: API design, constraints, and behaviors, as opposed to implementation details.
 
 ## Skills
 
@@ -64,7 +65,7 @@ Rubrics are skills that are marked with a trailing asterisk (`*`). These skills 
 
 - skills can provide additional context, but are ultimately primarily informational as opposed to binding
 - agents are non-deterministic processes that may sometimes skip instructions or terminate early
-- due to the autoregressive nature of LLMs, agents tend to grade their own work favorably and tend to have blind spots
+- agents tend to grade their own work favorably and have blind spots
 
 Independent evaluation lets the system work persistently until an arbitrary set of criteria — including the spec and rubrics — is verified.
 
@@ -72,14 +73,14 @@ Human organizations exhibit similar tendencies too — there's a reason students
 
 ## Packaging
 
-Having defined the goal `SPEC.md` (the entrypoint), skills, and rubrics, a natural next question is the packaging and distribution of these artifacts. Telos supports two forms of packaging:
+Having defined the goal specification (`SPEC.md`), skills, and rubrics, a natural next question is the packaging and distribution of these artifacts. Telos supports two kinds of packages:
 
-- Packages with just a skill (A)
-- Packages comprising a spec, with associated skills (B)
+- skill packages, with just a skill
+- spec packages, with a spec and its skills
 
 The naming convention adopted for both is of the form `@<context>/<name>:<version>`.
 
-Packages of type B can reference packages of type A. For example, suppose we have a skill `@telos/how-to-fish:1.0.2`, a Goal's frontmatter could reference it as follows:
+Spec packages can reference skill packages. For example, suppose we have a skill `@telos/how-to-fish:1.0.2`, a Goal's frontmatter could reference it as follows:
 
 ```markdown
 ---
@@ -95,14 +96,41 @@ interval: 6h
 
 ```
 
-Telos Cloud manages a hosted registry of packages of both types. The method for interaction with this hosted registry is simple:
+Telos Cloud manages a hosted registry of packages of both kinds. The method for interaction with this hosted registry is simple:
 
 Use `telos push <SPEC.md|skill-dir>` to push up your package, optionally with an explicit `--context` (that is otherwise derived from your default in `telos config`).
 
-To fetch a package locally, for inspection or modification, you can run `telos pull @<context>/<name>:<version>` 
+```console
+$ telos push SPEC.md
+pushed undersea-survival
+
+Ref       @alice/undersea-survival:0.1.0
+Digest    sha256:3158b3a4fbe9577b43bab574bb725f8ecebf4ec86c89bc896a0696a2ca17800d
+Version   0.1.0
+```
+
+To fetch a package locally, for inspection or modification, you can run `telos pull @<context>/<name>:<version>`.
+
+```console
+$ telos pull @telos/how-to-fish:1.0.2
+pulled @telos/how-to-fish:1.0.2
+
+Package   @telos/how-to-fish:1.0.2
+Digest    sha256:b474a99a2705e23cf905a484ec6d14ef58b56bbe62e9292783466ec363b5072d
+Path      how-to-fish
+```
+
+A skill folder holds the skill's `SKILL.md` and any files it bundles:
+
+```text
+how-to-fish/
+├── SKILL.md
+└── references/
+    └── knots.md
+```
 
 ## A mental model
 
 On framework design: you might notice some similarities to the C programming language. You could conceptualize a `SPEC.md` as equivalent to a `main.c` and skill files like `#include`d headers.
 
-Framed this way, the purposes and shapes of the primitives in the Telos ecosystem should feel a lot more familiar, and you can even go as far as to treat type A packages as reusable "libraries" and type B packages as "binaries"!
+Framed this way, the purposes and shapes of the primitives in the Telos ecosystem should feel a lot more familiar, and you can even go as far as to treat skill packages as reusable "libraries" and spec packages as "binaries"!
