@@ -68,6 +68,7 @@ type Store interface {
 	List() ([]Session, error)
 	Get(id string) (*Session, error)
 	Stop(id string) (*Session, error)
+	Restart(id string, req SessionRestartRequest) (*SessionRestartResponse, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
 }
@@ -386,7 +387,7 @@ func isTopLevelManifest(m *Manifest) bool {
 
 func (fs *FileStore) liveTopLevelSessionIDsBySpecName(specName string) ([]string, error) {
 	return fs.topLevelSessionIDsBySpecName(specName, func(id string, m *Manifest) bool {
-		return !deriveStatus(fs.sessionDir(id), m).IsTerminal()
+		return (m.Recovery != nil && !m.IsStopped()) || !deriveStatus(fs.sessionDir(id), m).IsTerminal()
 	})
 }
 
@@ -792,7 +793,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 		if !rootController {
 			continue
 		}
-		if manifest.IsStopped() {
+		if manifest.IsStopped() || (manifest.Recovery != nil && !manifest.Recovery.RestartRequested) {
 			continue
 		}
 		var result *string
@@ -807,6 +808,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 			ParentSessionID: manifest.ParentSessionID,
 			SessionDir:      &sessionDir,
 			Result:          result,
+			Recovery:        manifest.Recovery,
 		})
 	}
 	return sessions, nil
@@ -844,7 +846,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	if m.IsStopped() {
 		return s, nil
 	}
-	if s.Status.IsTerminal() && s.Status != StatusStale && m.SessionKind != KindController {
+	if s.Status.IsTerminal() && s.Status != StatusStale && m.SessionKind != KindController && m.Recovery == nil {
 		return s, nil
 	}
 
@@ -905,6 +907,51 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	}
 
 	return fs.deriveSession(id, m)
+}
+
+// Restart requests a new attempt without deleting the blocked attempt or its
+// workspace. The worker consumes the request while holding session ownership.
+func (fs *FileStore) Restart(id string, req SessionRestartRequest) (*SessionRestartResponse, error) {
+	if req.EpochID <= 0 {
+		return nil, fmt.Errorf("epoch_id must be positive: %w", ErrInvalidSession)
+	}
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	operation := "unchanged"
+	m, err := withLockedManifest(fs.manifestPath(id), func(m *Manifest) error {
+		if m.SessionKind != KindController || !isTopLevelManifest(m) {
+			return fmt.Errorf("only root controller sessions support recovery restart: %w", ErrInvalidSession)
+		}
+		for _, epoch := range m.Epochs {
+			if epoch.ID == req.EpochID && epoch.FinishedAt != nil && ptrOr(epoch.CompletionReason, "") == "recovery_restart" {
+				return nil
+			}
+		}
+		if m.IsStopped() || m.Recovery == nil || m.Recovery.EpochID != req.EpochID {
+			return fmt.Errorf("session is not blocked on epoch %d: %w", req.EpochID, ErrConflict)
+		}
+		open := m.OpenEpoch()
+		if open == nil || open.ID != req.EpochID {
+			return fmt.Errorf("blocked epoch %d is not the open epoch: %w", req.EpochID, ErrConflict)
+		}
+		if !m.Recovery.RestartRequested {
+			m.Recovery.RestartRequested = true
+			operation = "restart_requested"
+			return WriteManifest(fs.manifestPath(id), m)
+		}
+		return nil
+	})
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return nil, err
+	}
+	session, err := fs.deriveSession(id, m)
+	if err != nil {
+		return nil, err
+	}
+	return &SessionRestartResponse{Operation: operation, Session: session}, nil
 }
 
 // Transcript returns the session transcript markdown for the first spec.
@@ -1065,6 +1112,7 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		CurrentSpecVersion:    m.CurrentSpecVersion,
 		SpecVersions:          cloneSpecVersions(m.SpecVersions),
 		Reconciliation:        deriveReconciliation(m),
+		Recovery:              m.Recovery,
 	}
 
 	if s.Config == nil {
@@ -1080,6 +1128,10 @@ func (fs *FileStore) deriveSession(id string, m *Manifest) (*Session, error) {
 		s.Error = last.Error
 	}
 	applySessionEvidenceSummary(&s)
+	if m.Recovery != nil && !m.IsStopped() {
+		s.Result = strPtr("failed")
+		s.Error = strPtr(m.Recovery.Error)
+	}
 
 	if activeWorkspaceExists {
 		if doc, ok := readDashboardDoc(activeWorkspacePath); ok {
@@ -1139,6 +1191,11 @@ func deriveReconciliation(m *Manifest) *SessionReconciliation {
 	reconciliation := &SessionReconciliation{
 		PackageDigest: ptrOr(m.PackageDigest, ""),
 		State:         ReconciliationPending,
+	}
+	if m.Recovery != nil && !m.IsStopped() {
+		reconciliation.State = ReconciliationFailed
+		reconciliation.Error = m.Recovery.Error
+		return reconciliation
 	}
 	for i := len(m.Epochs) - 1; i >= 0; i-- {
 		epoch := &m.Epochs[i]
@@ -1252,6 +1309,12 @@ func applySessionEvidenceSummary(session *Session) {
 }
 
 func deriveStatus(sessionDir string, m *Manifest) SessionStatus {
+	if m.Recovery != nil {
+		if m.IsStopped() {
+			return StatusStopped
+		}
+		return StatusFailed
+	}
 	open := m.OpenEpoch()
 	last := m.LastEpoch()
 

@@ -44,6 +44,7 @@ const (
 	ActionListSessions      AccessAction = "list_sessions"
 	ActionReadSession       AccessAction = "read_session"
 	ActionStopSession       AccessAction = "stop_session"
+	ActionRestartSession    AccessAction = "restart_session"
 )
 
 type AccessRequest struct {
@@ -171,6 +172,11 @@ func authorizeCaller(store *FileStore, caller Caller, req AccessRequest) error {
 		return requireSessionAccess(store, caller, req.SessionID, ScopeSessionsRead)
 	case ActionStopSession:
 		return requireSessionAccess(store, caller, req.SessionID, ScopeSessionsStop)
+	case ActionRestartSession:
+		if caller.Role != RoleOperator {
+			return authError{status: http.StatusForbidden, detail: "operator access required to restart an attempt"}
+		}
+		return requireScope(caller, ScopeSessionsApply)
 	default:
 		return authError{status: http.StatusForbidden, detail: "unsupported session API action"}
 	}

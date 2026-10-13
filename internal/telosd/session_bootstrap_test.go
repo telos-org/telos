@@ -50,6 +50,10 @@ func (s *fakeReconcileStore) Stop(id string) (*sessionapi.Session, error) {
 	return &sessionapi.Session{SessionID: id, Status: sessionapi.StatusStopped}, nil
 }
 
+func (s *fakeReconcileStore) Restart(string, sessionapi.SessionRestartRequest) (*sessionapi.SessionRestartResponse, error) {
+	return nil, sessionapi.ErrNotFound
+}
+
 func (s *fakeReconcileStore) Spec(string) (*sessionapi.SessionSpecResponse, error) {
 	return nil, sessionapi.ErrNotFound
 }

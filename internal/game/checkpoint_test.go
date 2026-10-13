@@ -170,7 +170,8 @@ func TestPVGStateErrorRemainsPendingAcrossRestarts(t *testing.T) {
 	}
 	for attempt := 0; attempt < 3; attempt++ {
 		result, err := NewPVG(compiled, executor, state, PVGConfig{EpochID: 1}).Run()
-		if err == nil || !strings.Contains(err.Error(), "agent session history changed") || result != nil || calls != 1 {
+		var recovery *RecoveryError
+		if !errors.As(err, &recovery) || !strings.Contains(err.Error(), "agent session history changed") || result != nil || calls != 1 {
 			t.Fatalf("integrity failure reset or continued: result=%+v err=%v calls=%d", result, err, calls)
 		}
 	}
@@ -332,7 +333,8 @@ func TestPVGRejectsUnsafeResumeState(t *testing.T) {
 				t.Fatal(err)
 			}
 			executor := &fakeExecutor{onTurn: func(*TurnState) { t.Fatal("executed with unsafe state") }}
-			if result, err := NewPVG(p.Compiled, executor, p.State, p.Config).Run(); err == nil || result != nil {
+			var recovery *RecoveryError
+			if result, err := NewPVG(p.Compiled, executor, p.State, p.Config).Run(); !errors.As(err, &recovery) || result != nil {
 				t.Fatalf("unsafe state treated as terminal/safe: %+v, %v", result, err)
 			}
 		})

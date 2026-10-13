@@ -34,6 +34,7 @@ go_test(
 go_test(
     name = "sessionapi_store_test",
     srcs = [
+        "recovery_test.go",
         "store_dashboard_doc_unix_test.go",
         "store_test.go",
     ],

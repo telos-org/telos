@@ -114,6 +114,24 @@ type SessionSpecUpdateResponse struct {
 	Session   *Session `json:"session"`
 }
 
+// SessionRecovery identifies an attempt that cannot resume safely.
+type SessionRecovery struct {
+	EpochID          int    `json:"epoch_id"`
+	Error            string `json:"error"`
+	RestartRequested bool   `json:"restart_requested,omitempty"`
+}
+
+// SessionRestartRequest asks the worker to abandon a blocked top-level controller
+// attempt. Its successor retains the workspace and configuration, with fresh limits.
+type SessionRestartRequest struct {
+	EpochID int `json:"epoch_id"`
+}
+
+type SessionRestartResponse struct {
+	Operation string   `json:"operation"`
+	Session   *Session `json:"session"`
+}
+
 type SpecUpdateEvent struct {
 	SessionID             string
 	SpecName              string
@@ -244,6 +262,7 @@ type Session struct {
 	SpecVersions           []map[string]any `json:"spec_versions"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
+	Recovery       *SessionRecovery       `json:"recovery,omitempty"`
 }
 
 // --------- Response types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -267,6 +286,7 @@ type SessionListItem struct {
 	CurrentSpecVersion *int           `json:"current_spec_version,omitempty"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
+	Recovery       *SessionRecovery       `json:"recovery,omitempty"`
 }
 
 // SessionListResponse wraps GET /api/sessions.
@@ -302,6 +322,7 @@ func SessionListItemFromSession(session Session) SessionListItem {
 		DashboardDoc:       session.DashboardDoc,
 		CurrentSpecVersion: session.CurrentSpecVersion,
 		Reconciliation:     session.Reconciliation,
+		Recovery:           session.Recovery,
 	}
 }
 
@@ -324,6 +345,7 @@ func (item SessionListItem) AsSession() Session {
 		DashboardDoc:       item.DashboardDoc,
 		CurrentSpecVersion: item.CurrentSpecVersion,
 		Reconciliation:     item.Reconciliation,
+		Recovery:           item.Recovery,
 	}
 }
 

@@ -44,10 +44,22 @@ type TurnResult struct {
 	Stats       TurnStats
 	Error       string
 	Recoverable bool
+	// PreparationError means no agent was started. Retry the same turn without
+	// recording a completion or consuming its failure budget.
+	PreparationError error `json:"-"`
 	// StateError means execution history cannot be trusted. Preserve the pending
 	// turn and return an error without closing the epoch or resetting its limits.
 	StateError string
 }
+
+// RecoveryError requires operator intervention. Automatic retries cannot repair
+// missing or untrustworthy execution state and must not reset the run's limits.
+type RecoveryError struct {
+	Err error
+}
+
+func (e *RecoveryError) Error() string { return e.Err.Error() }
+func (e *RecoveryError) Unwrap() error { return e.Err }
 
 // LiveAgentEvent is structured agent activity emitted before a turn exits.
 type LiveAgentEvent struct {

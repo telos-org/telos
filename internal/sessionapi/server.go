@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,6 +23,7 @@ const maxSessionRequestBytes = 4 << 20
 //	GET  /api/sessions/{id}/spec
 //	PUT  /api/sessions/{name}/spec
 //	POST /api/sessions/{id}/stop
+//	POST /api/sessions/{id}/restart
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
 //	GET  /api/healthz
@@ -38,6 +40,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("GET /api/sessions/{id}/spec", h.getSpec)
 	mux.HandleFunc("PUT /api/sessions/{name}/spec", h.updateSpec)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
+	mux.HandleFunc("POST /api/sessions/{id}/restart", h.restartSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
 }
@@ -232,6 +235,40 @@ func (h *handler) stopSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, session)
+}
+
+func (h *handler) restartSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionRestartSession, SessionID: id}); !ok {
+		return
+	}
+	var req SessionRestartRequest
+	r.Body = http.MaxBytesReader(w, r.Body, maxSessionRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		writeError(w, http.StatusBadRequest, "request body must contain one JSON object")
+		return
+	}
+	response, err := h.store.Restart(id, req)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrConflict):
+			writeError(w, http.StatusConflict, err.Error())
+		case errors.Is(err, ErrInvalidSession):
+			writeError(w, http.StatusBadRequest, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *handler) getTranscript(w http.ResponseWriter, r *http.Request) {

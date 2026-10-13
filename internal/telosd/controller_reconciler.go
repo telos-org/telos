@@ -157,6 +157,9 @@ func (s *controllerReconciler) Get(id string) (*sessionapi.Session, error) {
 }
 
 func (s *controllerReconciler) apply(session *sessionapi.Session, wakeReason string) error {
+	if session.Recovery != nil && !session.Recovery.RestartRequested {
+		return nil
+	}
 	if s.substrate == nil {
 		return nil
 	}
@@ -182,6 +185,9 @@ func (s *controllerReconciler) ensureRootWorkers(wakeReason string) error {
 }
 
 func (s *controllerReconciler) wake(session *sessionapi.Session, wakeReason string) error {
+	if session.Recovery != nil && !session.Recovery.RestartRequested {
+		return nil
+	}
 	if s.substrate == nil {
 		return nil
 	}

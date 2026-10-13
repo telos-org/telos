@@ -129,7 +129,7 @@ func (p *PVG) runDefaultLoop() error {
 			}
 		}
 		if stateError := p.checkpoint.Pending.Turn.StateError; stateError != "" {
-			return fmt.Errorf("agent session integrity: %s", stateError)
+			return recoveryErrorf("agent session integrity: %s", stateError)
 		}
 		if err := p.appendPendingTurn(); err != nil {
 			return err
@@ -275,7 +275,8 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 		return TurnResult{}, fmt.Errorf("prepare turn %d: %w", roundNum, err)
 	}
 	p.Evidence.Log("round_start", roundNum, role, map[string]interface{}{"audience": "user"})
-	return p.Executor.ExecuteTurn(task, role, ts), nil
+	turn := p.Executor.ExecuteTurn(task, role, ts)
+	return turn, turn.PreparationError
 }
 
 func (p *PVG) logGameState(event string) {

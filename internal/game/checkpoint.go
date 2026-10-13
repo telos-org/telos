@@ -55,7 +55,7 @@ func (p *PVG) restoreCheckpoint() error {
 		}
 		for _, entry := range entries {
 			if entry.IsDir() {
-				return fmt.Errorf("cannot safely resume epoch %d: turn history exists without an execution checkpoint; preserve this session and explicitly start a new run to continue", p.Config.EpochID)
+				return recoveryErrorf("attempt %d has turn history but no saved execution checkpoint; an operator must start a new attempt to continue", p.Config.EpochID)
 			}
 		}
 		p.checkpoint = &runCheckpoint{
@@ -74,37 +74,37 @@ func (p *PVG) restoreCheckpoint() error {
 	}
 	var checkpoint runCheckpoint
 	if err := json.Unmarshal(data, &checkpoint); err != nil {
-		return fmt.Errorf("decode execution checkpoint: %w", err)
+		return recoveryErrorf("decode execution checkpoint: %w", err)
 	}
 	r := checkpoint.Result
 	if checkpoint.Version != 1 || checkpoint.SessionID != p.State.SessionID || checkpoint.EpochID != p.Config.EpochID || r == nil {
-		return fmt.Errorf("execution checkpoint version or session/epoch identity does not match")
+		return recoveryErrorf("execution checkpoint version or session/epoch identity does not match")
 	}
 	if r.SystemName != p.Compiled.Environment.Name || r.Rounds < 0 || r.ProverRounds != (r.Rounds+1)/2 || r.VerifierRounds != r.Rounds/2 ||
 		checkpoint.RecoverableFailures < 0 || checkpoint.RecoverableFailures > maxRecoverableAgentFailures+1 ||
 		checkpoint.ReviewCycles < 0 || checkpoint.ReviewCycles > r.VerifierRounds || checkpoint.TranscriptOffset < 0 ||
 		r.TotalCostUSD < 0 || r.TotalInputTokens < 0 || r.TotalOutputTokens < 0 || r.TotalCacheReadTokens < 0 || r.TotalCacheCreateTokens < 0 ||
 		(checkpoint.UntilSeconds > 0) == checkpoint.Deadline.IsZero() {
-		return fmt.Errorf("execution checkpoint has inconsistent progress or budgets")
+		return recoveryErrorf("execution checkpoint has inconsistent progress or budgets")
 	}
 	switch r.GameResult {
 	case "", GameFailure, GameStopped:
 		if r.VerifierConceded {
-			return fmt.Errorf("execution checkpoint has inconsistent concession")
+			return recoveryErrorf("execution checkpoint has inconsistent concession")
 		}
 	case GameSuccess:
 		if !r.VerifierConceded || r.Rounds == 0 || r.Rounds%2 != 0 {
-			return fmt.Errorf("execution checkpoint has inconsistent success")
+			return recoveryErrorf("execution checkpoint has inconsistent success")
 		}
 	default:
-		return fmt.Errorf("execution checkpoint has unknown result %q", r.GameResult)
+		return recoveryErrorf("execution checkpoint has unknown result %q", r.GameResult)
 	}
 	if r.GameResult != "" && checkpoint.ResultID == "" {
-		return fmt.Errorf("execution checkpoint is missing its result identity")
+		return recoveryErrorf("execution checkpoint is missing its result identity")
 	}
 	if pending := checkpoint.Pending; pending != nil {
 		if r.GameResult != "" || pending.CompletionID == "" || pending.TranscriptOffset < 0 || pending.FinishedAt.IsZero() || pending.Turn.Role != turnRole(r.Rounds+1) {
-			return fmt.Errorf("execution checkpoint has inconsistent pending turn")
+			return recoveryErrorf("execution checkpoint has inconsistent pending turn")
 		}
 	}
 	p.checkpoint, p.Result = &checkpoint, r
@@ -118,6 +118,10 @@ func (p *PVG) restoreCheckpoint() error {
 		p.logGameState("game_resume")
 	}
 	return nil
+}
+
+func recoveryErrorf(format string, args ...any) error {
+	return &RecoveryError{Err: fmt.Errorf(format, args...)}
 }
 
 func (p *PVG) saveCheckpoint() error {
@@ -188,7 +192,7 @@ func transcriptHasMarker(path string, offset int64, marker string) (bool, error)
 		return false, err
 	}
 	if info.Size() < offset {
-		return false, fmt.Errorf("transcript is shorter than its execution checkpoint offset")
+		return false, recoveryErrorf("transcript is shorter than its execution checkpoint offset")
 	}
 	tail, err := io.ReadAll(io.NewSectionReader(f, offset, info.Size()-offset))
 	if err != nil {

@@ -160,6 +160,57 @@ func TestStartEpochDoesNotAppendAfterSessionStops(t *testing.T) {
 	}
 }
 
+func TestRecoveryRestartHandoffRequiresRequestAndPreservesHistory(t *testing.T) {
+	sessionDir := t.TempDir()
+	version, maxCost := 2, 3.5
+	manifest := &sessionapi.Manifest{
+		SessionID: "sess-recovery", SessionKind: sessionapi.KindController,
+		DesiredStatus: sessionapi.DesiredStatusRunning, SpecName: "demo",
+		CurrentSpecVersion: &version,
+		Config:             sessionapi.SessionConfig{MaxCostUSD: &maxCost, Until: 4},
+		Recovery:           &sessionapi.SessionRecovery{EpochID: 1, Error: "corrupt progress"},
+		Epochs:             []sessionapi.Epoch{{ID: 1, StartedAt: "2026-10-12T00:00:00Z"}},
+	}
+	if err := sessionapi.WriteManifest(manifestPath(sessionDir), manifest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := StartEpochWithRunner(sessionDir, manifest, os.Getpid(), ""); err == nil {
+		t.Fatal("blocked attempt resumed without operator request")
+	}
+	owner, err := AcquireOwnership(sessionDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer owner.Release()
+	_, err = sessionapi.MutateManifest(manifestPath(sessionDir), func(m *sessionapi.Manifest) error {
+		m.Recovery.RestartRequested = true
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Deliberately pass a stale manifest; recovery must bind the current one.
+	stale := *manifest
+	stale.CurrentSpecVersion = nil
+	for i := 0; i < 2; i++ {
+		id, err := StartEpochWithRunner(sessionDir, &stale, os.Getpid(), "new.log")
+		if err != nil || id != 2 {
+			t.Fatalf("handoff %d: epoch %d, %v", i, id, err)
+		}
+	}
+	current, err := sessionapi.ReadManifest(manifestPath(sessionDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	old, next := current.Epochs[0], current.OpenEpoch()
+	if len(current.Epochs) != 2 || current.Recovery != nil || old.FinishedAt == nil || old.Result == nil || *old.Result != "failed" || old.CompletionReason == nil || *old.CompletionReason != "recovery_restart" || *old.Error != "corrupt progress" {
+		t.Fatalf("incorrect recovery history: %+v", current)
+	}
+	if next == nil || next.ID != 2 || next.SpecVersion == nil || *next.SpecVersion != version || next.Runner == nil || next.Runner.PID != os.Getpid() || current.Config.Until != 4 || *current.Config.MaxCostUSD != maxCost {
+		t.Fatalf("incorrect replacement attempt: %+v", current)
+	}
+}
+
 func TestWorkerExportsSelectedModelForNestedCLI(t *testing.T) {
 	const model = "anthropic/claude-sonnet-4-6"
 	t.Setenv("TELOS_MODEL", "openai-codex/gpt-5.5")

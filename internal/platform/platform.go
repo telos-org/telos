@@ -28,6 +28,7 @@ type CommandResult struct {
 	ReturnCode  int
 	DurationMS  int
 	InfraError  string
+	Started     bool
 	TimedOut    bool
 	Interrupted bool
 }
@@ -75,6 +76,11 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 	cmd.Env = mergedEnv
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
+	if interrupt != nil && interrupt() {
+		result.Interrupted = true
+		result.InfraError = "local_interrupted:stop_requested"
+		return result
+	}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		result.InfraError = fmt.Sprintf("stdout_pipe: %v", err)
@@ -87,6 +93,7 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 		result.InfraError = fmt.Sprintf("local_spawn_failed:%v", err)
 		return result
 	}
+	result.Started = true
 
 	stdoutDone := make(chan struct{})
 	go func() {

@@ -63,21 +63,27 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	argv := BuildPiArgv(model, thinking, promptPath, sessionPath)
 	baseline, err := capturePiSessionBaseline(sessionPath)
 	if err != nil {
-		return piSessionStateError(role, stats, err)
+		if errors.Is(err, errPiSessionFormat) {
+			return piSessionStateError(role, stats, err)
+		}
+		return game.TurnResult{Role: role, Status: game.StatusContinue, Stats: stats, PreparationError: fmt.Errorf("prepare Pi session: %w", err)}
 	}
 	projector := startPiLiveProjector(sessionPath, turnState, baseline)
 	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, nil)
 	if projector != nil {
 		projector.Stop()
-		if projector.integrityErr != nil {
-			return piSessionStateError(role, stats, projector.integrityErr)
-		}
+	}
+	if !result.Started {
+		return game.TurnResult{Role: role, Status: game.StatusContinue, Stats: stats, PreparationError: fmt.Errorf("start Pi: %s", result.InfraError)}
+	}
+	if projector != nil && projector.integrityErr != nil {
+		return piSessionStateError(role, stats, projector.integrityErr)
 	}
 
 	logs := strings.Join(result.RawLines, "\n")
 	if sessionPath != "" {
 		summary, err := readPiSession(sessionPath, baseline)
-		if errors.Is(err, errPiSessionChanged) {
+		if err != nil && !errors.Is(err, errPiNoAssistant) {
 			return piSessionStateError(role, stats, err)
 		}
 		// An interrupted turn has no completed-turn accounting yet. Include its
@@ -191,7 +197,11 @@ type piSessionBaseline struct {
 	anchor   []byte
 }
 
-var errPiSessionChanged = errors.New("existing Pi session history changed")
+var (
+	errPiSessionChanged = errors.New("existing Pi session history changed")
+	errPiSessionFormat  = errors.New("resuming requires a valid Pi session header with version 3 and an id; automatic migration is not safe")
+	errPiNoAssistant    = errors.New("no new assistant message in pi session")
+)
 
 func capturePiSessionBaseline(path string) (piSessionBaseline, error) {
 	var baseline piSessionBaseline
@@ -210,6 +220,9 @@ func capturePiSessionBaseline(path string) (piSessionBaseline, error) {
 	if err != nil {
 		return baseline, err
 	}
+	if !baseline.fileInfo.Mode().IsRegular() {
+		return baseline, fmt.Errorf("Pi session %q is not a regular file", path)
+	}
 	baseline.offset = baseline.fileInfo.Size()
 	if baseline.offset == 0 {
 		return baseline, nil
@@ -226,7 +239,7 @@ func capturePiSessionBaseline(path string) (piSessionBaseline, error) {
 		ID      string `json:"id"`
 	}
 	if json.Unmarshal(header, &format) != nil || format.Type != "session" || format.Version != 3 || format.ID == "" {
-		return baseline, fmt.Errorf("resuming requires a valid Pi session header with version 3 and an id; automatic migration is not safe")
+		return baseline, errPiSessionFormat
 	}
 	baseline.anchor = make([]byte, min(baseline.offset, 64))
 	if _, err := f.ReadAt(baseline.anchor, baseline.offset-int64(len(baseline.anchor))); err != nil {
@@ -530,7 +543,11 @@ type PiSessionSummary struct {
 
 // ReadPiSession reads Pi's compact session JSONL file for a completed turn.
 func ReadPiSession(path string) (PiSessionSummary, error) {
-	return readPiSession(path, piSessionBaseline{})
+	summary, err := readPiSession(path, piSessionBaseline{})
+	if errors.Is(err, errPiNoAssistant) {
+		return summary, errors.New("no assistant message in pi session")
+	}
+	return summary, err
 }
 
 func readPiSession(path string, baseline piSessionBaseline) (PiSessionSummary, error) {
@@ -560,21 +577,22 @@ func readPiSession(path string, baseline piSessionBaseline) (PiSessionSummary, e
 	reader := bufio.NewReader(f)
 	for {
 		line, err := reader.ReadString('\n')
-		if strings.TrimSpace(line) != "" && json.Valid([]byte(line)) {
+		if strings.TrimSpace(line) != "" {
 			var entry map[string]interface{}
 			dec := json.NewDecoder(strings.NewReader(line))
 			dec.UseNumber()
-			if dec.Decode(&entry) == nil {
-				if msg, ok := entry["message"].(map[string]interface{}); ok {
-					switch getString(msg, "role") {
-					case "assistant":
-						if offset >= newOutputOffset && offset+int64(len(line)) > baseline.offset {
-							finalAssistant = msg
-						}
-						summary.Stats = mergeTurnStats(summary.Stats, statsFromPiMessage(msg))
-					case "toolResult", "bashExecution":
-						summary.Stats.NumTurns++
+			if !json.Valid([]byte(line)) || dec.Decode(&entry) != nil || entry == nil {
+				return PiSessionSummary{}, fmt.Errorf("invalid Pi session record at byte %d", offset)
+			}
+			if msg, ok := entry["message"].(map[string]interface{}); ok {
+				switch getString(msg, "role") {
+				case "assistant":
+					if offset >= newOutputOffset && offset+int64(len(line)) > baseline.offset {
+						finalAssistant = msg
 					}
+					summary.Stats = mergeTurnStats(summary.Stats, statsFromPiMessage(msg))
+				case "toolResult", "bashExecution":
+					summary.Stats.NumTurns++
 				}
 			}
 		}
@@ -590,10 +608,7 @@ func readPiSession(path string, baseline piSessionBaseline) (PiSessionSummary, e
 		}
 	}
 	if finalAssistant == nil {
-		if baseline.fileInfo == nil {
-			return summary, fmt.Errorf("no assistant message in pi session")
-		}
-		return summary, fmt.Errorf("no new assistant message in pi session")
+		return summary, errPiNoAssistant
 	}
 
 	summary.Logs = assistantText(finalAssistant)

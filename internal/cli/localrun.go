@@ -142,6 +142,20 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	if manifest.IsStopped() {
 		return &game.PVGResult{GameResult: game.GameStopped, Error: "stopped by operator"}, nil
 	}
+	if recovery := manifest.Recovery; recovery != nil {
+		if !recovery.RestartRequested {
+			return nil, &game.RecoveryError{Err: errors.New(recovery.Error)}
+		}
+		// Consume the operator's request while this worker owns the session,
+		// then bind compilation to the replacement attempt's spec version.
+		if _, err := sessionworker.StartEpoch(sessionDir, manifest); err != nil {
+			return nil, err
+		}
+		manifest, err = sessionapi.ReadManifest(manifestPath(sessionDir))
+		if err != nil {
+			return nil, err
+		}
+	}
 
 	cfg := manifestToConfig(manifest)
 	if len(manifest.Specs) == 0 {
@@ -207,6 +221,23 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	result, err := pvg.Run()
 	if err != nil {
 		// Keep the epoch open: retrying storage/recovery must retain its limits.
+		var recovery *game.RecoveryError
+		if errors.As(err, &recovery) {
+			_, saveErr := sessionapi.MutateManifest(manifestPath(sessionDir), func(m *sessionapi.Manifest) error {
+				if open := m.OpenEpoch(); open != nil && open.ID == epochID && !m.IsStopped() {
+					action := "Preserve the workspace and history; the parent controller or operator can create a successor task with POST /api/sessions."
+					if m.SessionKind == sessionapi.KindController && (m.ParentSessionID == nil || *m.ParentSessionID == "") {
+						action = fmt.Sprintf("An operator can request a new attempt with POST /api/sessions/%s/restart and {\"epoch_id\":%d}. This preserves the workspace and history and starts fresh counters under the configured per-attempt limits.", m.SessionID, epochID)
+					}
+					m.Recovery = &sessionapi.SessionRecovery{EpochID: epochID, Error: err.Error() + ". " + action}
+				}
+				return nil
+			})
+			if saveErr != nil {
+				// Retry publishing the blocker instead of suspending invisibly.
+				return nil, fmt.Errorf("persist recovery status: %w", saveErr)
+			}
+		}
 		return nil, err
 	}
 
