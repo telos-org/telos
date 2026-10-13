@@ -84,7 +84,14 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	if sessionPath != "" {
 		summary, err := readPiSession(sessionPath, baseline)
 		if err != nil && !errors.Is(err, errPiNoAssistant) {
-			return piSessionStateError(role, stats, err)
+			// Pi may reject credentials or model configuration before creating
+			// a fresh session. Preserve that actionable failure without treating
+			// unknown failures or missing prior history as zero usage.
+			blocker, _ := game.AgentFailureBlocker(result.Stderr)
+			startupFailure := blocker == "agent_credentials_missing" || blocker == "agent_configuration_invalid"
+			if baseline.fileInfo != nil || !os.IsNotExist(err) || result.ReturnCode == 0 || !startupFailure {
+				return piSessionStateError(role, stats, err)
+			}
 		}
 		// An interrupted turn has no completed-turn accounting yet. Include its
 		// earlier usage once, even if this attempt produces no new response.

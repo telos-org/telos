@@ -449,6 +449,35 @@ func TestExecuteTurnHonorsStopBeforeStartingPi(t *testing.T) {
 	}
 }
 
+func TestExecuteTurnCanRecoverFromMissingCredentialsBeforeSessionCreation(t *testing.T) {
+	newLine := `{"message":{"role":"assistant","content":[{"type":"text","text":"credentials repaired"}],"usage":{"input":3,"cost":{"total":0.5}}}}`
+	executor, turn := newPiResumeTestExecutor(t, "", piTestSessionHeader+"\n"+newLine+"\n")
+	if err := os.Remove(turn.PiSessionPath()); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(executor.Platform.Env["HOME"], ".local", "bin", "pi")
+	script, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Pi validates credentials before it writes the first session record.
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho 'No API key found for anthropic.' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result := executor.ExecuteTurn("run", "prover", turn)
+	blocker, _ := game.AgentFailureBlocker(result.Error)
+	if result.StateError != "" || result.PreparationError != nil || blocker != "agent_credentials_missing" || result.Stats.CostUSD != 0 {
+		t.Fatalf("missing credentials became unknown usage: %+v", result)
+	}
+	if err := os.WriteFile(binary, script, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result = executor.ExecuteTurn("run", "prover", turn)
+	if result.StateError != "" || result.Error != "" || result.Logs != "credentials repaired" || result.Stats.CostUSD != 0.5 {
+		t.Fatalf("credential repair could not recover: %+v", result)
+	}
+}
+
 func TestExecuteTurnBlocksWhenNewSessionIsUnreadableAfterLaunch(t *testing.T) {
 	for _, action := range []string{`rm "$session"`, `rm "$session"; mkdir "$session"`} {
 		t.Run(action, func(t *testing.T) {
