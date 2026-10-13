@@ -148,7 +148,7 @@ reading-list  working  goal_c7d2f0a4e8
 
 For a description of a specific Goal, run `telos describe goal_c7d2f0a4e8`.
 
-While a model or thinking change is queued, text output shows the confirmed value and the requested value with an arrow and `(next turn)`. After confirmation, it shows the new value without an arrow. Rejected or unconfirmed requests are not shown as queued.
+While an inference change is queued, text output shows the confirmed value and the requested value with an arrow and `(next turn)`. The model row names the connection, so changes between accounts remain visible even when both offer the same model. After confirmation, it shows the new value without an arrow. Rejected or unconfirmed requests are not shown as queued.
 
 For scripts and agents, `telos describe --json` returns structured Goal details. Its `inference_state` contains confirmed settings only; it does not include the queued change shown in text output.
 
