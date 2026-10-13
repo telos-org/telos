@@ -75,7 +75,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "core commands:")
 	fmt.Fprintln(out, "  login              Log in to Telos Cloud via the browser")
 	fmt.Fprintln(out, "  plan SPEC.md       Preview a spec without running it")
-	fmt.Fprintln(out, "  apply SPEC.md      Create a Goal from a spec, or update one with --goal")
+	fmt.Fprintln(out, "  apply [SPEC.md]    Create a Goal, update its spec, or change model/thinking")
 	fmt.Fprintln(out, "  list               List Goals")
 	fmt.Fprintln(out, "  describe GOAL      Show a Goal's details")
 	fmt.Fprintln(out, "  logs GOAL          Show recent activity")

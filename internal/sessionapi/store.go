@@ -70,6 +70,9 @@ type Store interface {
 	Stop(id string) (*Session, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
+	Inference(id string) (*InferenceResponse, error)
+	UpdateInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error)
+	CancelInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error)
 }
 
 // --------- FileStore ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -206,20 +209,21 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		provenance["cloud_session_name"] = cloudSessionName
 	}
 	m := ManifestFromInitial(InitialManifest{
-		SessionID:        id,
-		SessionKind:      sessionKind,
-		Runtime:          fs.runtime,
-		CreatedAt:        tsNow(),
-		ParentSessionID:  req.ParentSessionID,
-		SourceSpecPath:   prepared.SourceSpecPath,
-		SessionSpecPath:  prepared.SessionSpecPath,
-		SpecName:         specName,
-		CurrentRevision:  currentRevision,
-		Config:           buildConfig(req),
-		Provenance:       provenance,
-		PackageDigest:    prepared.PackageDigest,
-		ApplyPackageLock: prepared.ApplyPackageLock,
-		Access:           access,
+		SessionID:                id,
+		SessionKind:              sessionKind,
+		Runtime:                  fs.runtime,
+		CreatedAt:                tsNow(),
+		ParentSessionID:          req.ParentSessionID,
+		SourceSpecPath:           prepared.SourceSpecPath,
+		SessionSpecPath:          prepared.SessionSpecPath,
+		SpecName:                 specName,
+		CurrentRevision:          currentRevision,
+		Config:                   buildConfig(req),
+		InferenceModelDefinition: req.ModelDefinition,
+		Provenance:               provenance,
+		PackageDigest:            prepared.PackageDigest,
+		ApplyPackageLock:         prepared.ApplyPackageLock,
+		Access:                   access,
 		Specs: []InitialManifestSpec{{
 			Index:           0,
 			Name:            specName,
@@ -867,6 +871,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		roundCount := 0
 
 		m.DesiredStatus = DesiredStatusStopped
+		SettleInferenceUpdateInManifest(m, "session stopped before confirming the inference change")
 		if open := m.OpenEpoch(); open != nil {
 			open.FinishedAt = &now
 			open.Result = &stopped

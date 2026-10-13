@@ -7,6 +7,7 @@ go_library(
         "dashboard_doc_open_other.go",
         "dashboard_doc_open_unix.go",
         "manifest.go",
+        "inference.go",
         "server.go",
         "store.go",
         "types.go",
@@ -34,6 +35,7 @@ go_test(
 go_test(
     name = "sessionapi_store_test",
     srcs = [
+        "inference_test.go",
         "store_dashboard_doc_unix_test.go",
         "store_test.go",
     ],

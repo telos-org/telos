@@ -124,7 +124,15 @@ Context   personal
 Logs      telos logs goal_c7d2f0a4e8
 ```
 
-The `apply` command returns immediately and starts the Goal in the cloud.
+Applying a spec returns immediately and starts the Goal in the cloud.
+
+To change only the model or thinking effort of an existing Goal, omit the spec file:
+
+```console
+$ telos apply --goal goal_c7d2f0a4e8 --model telos/max --thinking high
+```
+
+The current turn keeps its settings; the change takes effect at the next prover or verifier turn. Apply spec changes and inference settings in separate commands. See [Models](models.md) for supported choices.
 
 ## Watch it work
 
@@ -140,7 +148,9 @@ reading-list  working  goal_c7d2f0a4e8
 
 For a description of a specific Goal, run `telos describe goal_c7d2f0a4e8`.
 
-For scripts and agents, `telos describe --json` returns the same information as JSON.
+While a model or thinking change is queued, text output shows the confirmed value and the requested value with an arrow and `(next turn)`. After confirmation, it shows the new value without an arrow. Rejected or unconfirmed requests are not shown as queued.
+
+For scripts and agents, `telos describe --json` returns structured Goal details. Its `inference_state` contains confirmed settings only; it does not include the queued change shown in text output.
 
 To follow the agent's work in detail:
 

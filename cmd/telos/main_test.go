@@ -82,7 +82,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
-		"apply SPEC.md      Create a Goal from a spec, or update one with --goal",
+		"apply [SPEC.md]    Create a Goal, update its spec, or change model/thinking",
 		"get GOAL           Download a Goal's package",
 		"delete GOAL        Delete a Goal",
 		"pull PACKAGE       Download a spec or skill package",
@@ -1685,4 +1685,30 @@ func configureLocalOnlyTest(t *testing.T) {
 	t.Setenv("TELOS_CONFIG", filepath.Join(dir, "config.yaml"))
 	t.Setenv("TELOS_API_ENDPOINT", "")
 	t.Setenv("TELOS_AUTH_TOKEN", "")
+}
+
+func TestThinkingOptionInheritsAcceptedParentLevel(t *testing.T) {
+	for _, level := range []string{"off", "minimal"} {
+		t.Run(level, func(t *testing.T) {
+			t.Setenv("TELOS_INHERITED_THINKING", level)
+			t.Setenv("TELOS_THINKING", level)
+			fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+			fs.String("thinking", "", "")
+			if got, err := thinkingOption(fs, ""); err != nil || got != level {
+				t.Fatalf("inherited level = %q, %v", got, err)
+			}
+			if err := fs.Parse([]string{"--thinking", "high"}); err != nil {
+				t.Fatal(err)
+			}
+			if got, err := thinkingOption(fs, "high"); err != nil || got != "high" {
+				t.Fatalf("explicit override = %q, %v", got, err)
+			}
+			if err := fs.Parse([]string{"--thinking", "imaginary"}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := thinkingOption(fs, "imaginary"); err == nil {
+				t.Fatal("inheritance bypassed explicit input validation")
+			}
+		})
+	}
 }

@@ -12,27 +12,29 @@ import (
 
 // Manifest is the persisted session.json shape shared by the store and worker.
 type Manifest struct {
-	SessionID          string                     `json:"session_id"`
-	SessionKind        SessionKind                `json:"session_kind"`
-	DesiredStatus      SessionDesiredStatus       `json:"desired_status,omitempty"`
-	Runtime            SessionRuntime             `json:"runtime,omitempty"`
-	CreatedAt          string                     `json:"created_at"`
-	ParentSessionID    *string                    `json:"parent_session_id"`
-	SourceSpecPath     *string                    `json:"source_spec_path,omitempty"`
-	SessionSpecPath    *string                    `json:"session_spec_path,omitempty"`
-	SpecName           string                     `json:"spec_name"`
-	CurrentRevision    *string                    `json:"current_revision,omitempty"`
-	CurrentSpecVersion *int                       `json:"current_spec_version,omitempty"`
-	SpecVersions       []map[string]any           `json:"spec_versions,omitempty"`
-	PackageDigest      *string                    `json:"package_digest,omitempty"`
-	ApplyPackageLock   *spec.ApplyPackageManifest `json:"apply_package_lock,omitempty"`
-	Config             SessionConfig              `json:"config"`
-	Workspace          *Workspace                 `json:"workspace,omitempty"`
-	Provenance         map[string]any             `json:"provenance"`
-	Access             *ScopedToken               `json:"access,omitempty"`
-	Runner             *Runner                    `json:"runner,omitempty"`
-	Specs              []ManifestSpec             `json:"specs"`
-	Epochs             []Epoch                    `json:"epochs"`
+	SessionID                string                     `json:"session_id"`
+	SessionKind              SessionKind                `json:"session_kind"`
+	DesiredStatus            SessionDesiredStatus       `json:"desired_status,omitempty"`
+	Runtime                  SessionRuntime             `json:"runtime,omitempty"`
+	CreatedAt                string                     `json:"created_at"`
+	ParentSessionID          *string                    `json:"parent_session_id"`
+	SourceSpecPath           *string                    `json:"source_spec_path,omitempty"`
+	SessionSpecPath          *string                    `json:"session_spec_path,omitempty"`
+	SpecName                 string                     `json:"spec_name"`
+	CurrentRevision          *string                    `json:"current_revision,omitempty"`
+	CurrentSpecVersion       *int                       `json:"current_spec_version,omitempty"`
+	SpecVersions             []map[string]any           `json:"spec_versions,omitempty"`
+	PackageDigest            *string                    `json:"package_digest,omitempty"`
+	ApplyPackageLock         *spec.ApplyPackageManifest `json:"apply_package_lock,omitempty"`
+	Config                   SessionConfig              `json:"config"`
+	InferenceUpdate          *InferenceUpdate           `json:"inference_update,omitempty"`
+	InferenceModelDefinition json.RawMessage            `json:"inference_model_definition,omitempty"`
+	Workspace                *Workspace                 `json:"workspace,omitempty"`
+	Provenance               map[string]any             `json:"provenance"`
+	Access                   *ScopedToken               `json:"access,omitempty"`
+	Runner                   *Runner                    `json:"runner,omitempty"`
+	Specs                    []ManifestSpec             `json:"specs"`
+	Epochs                   []Epoch                    `json:"epochs"`
 }
 
 type Workspace struct {
@@ -82,17 +84,18 @@ const (
 )
 
 type Runner struct {
-	Kind         string  `json:"kind,omitempty"`
-	PID          int     `json:"pid,omitempty"`
-	PGID         int     `json:"pgid,omitempty"`
-	LogPath      string  `json:"log_path,omitempty"`
-	InCluster    bool    `json:"in_cluster"`
-	Hostname     string  `json:"hostname,omitempty"`
-	PodName      string  `json:"pod_name,omitempty"`
-	PodNamespace string  `json:"pod_namespace,omitempty"`
-	StartedAt    string  `json:"started_at,omitempty"`
-	FinishedAt   *string `json:"finished_at,omitempty"`
-	Status       string  `json:"status,omitempty"`
+	Kind             string  `json:"kind,omitempty"`
+	PID              int     `json:"pid,omitempty"`
+	PGID             int     `json:"pgid,omitempty"`
+	LogPath          string  `json:"log_path,omitempty"`
+	InCluster        bool    `json:"in_cluster"`
+	Hostname         string  `json:"hostname,omitempty"`
+	PodName          string  `json:"pod_name,omitempty"`
+	PodNamespace     string  `json:"pod_namespace,omitempty"`
+	StartedAt        string  `json:"started_at,omitempty"`
+	FinishedAt       *string `json:"finished_at,omitempty"`
+	Status           string  `json:"status,omitempty"`
+	InferenceUpdates bool    `json:"inference_updates,omitempty"`
 }
 
 type ScopedToken struct {
@@ -114,24 +117,25 @@ type SessionConfig struct {
 // InitialManifest is the typed input for creating a session.json before any
 // worker epoch has started.
 type InitialManifest struct {
-	SessionID          string
-	SessionKind        SessionKind
-	Runtime            SessionRuntime
-	CreatedAt          string
-	ParentSessionID    *string
-	SourceSpecPath     *string
-	SessionSpecPath    *string
-	SpecName           string
-	CurrentRevision    *string
-	CurrentSpecVersion *int
-	SpecVersions       []map[string]any
-	Config             SessionConfig
-	Workspace          *Workspace
-	Provenance         map[string]any
-	PackageDigest      *string
-	ApplyPackageLock   *spec.ApplyPackageManifest
-	Access             *ScopedToken
-	Specs              []InitialManifestSpec
+	SessionID                string
+	SessionKind              SessionKind
+	Runtime                  SessionRuntime
+	CreatedAt                string
+	ParentSessionID          *string
+	SourceSpecPath           *string
+	SessionSpecPath          *string
+	SpecName                 string
+	CurrentRevision          *string
+	CurrentSpecVersion       *int
+	SpecVersions             []map[string]any
+	Config                   SessionConfig
+	InferenceModelDefinition json.RawMessage
+	Workspace                *Workspace
+	Provenance               map[string]any
+	PackageDigest            *string
+	ApplyPackageLock         *spec.ApplyPackageManifest
+	Access                   *ScopedToken
+	Specs                    []InitialManifestSpec
 }
 
 type InitialManifestSpec struct {
@@ -183,26 +187,27 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		})
 	}
 	return Manifest{
-		SessionID:          input.SessionID,
-		SessionKind:        input.SessionKind,
-		DesiredStatus:      DesiredStatusRunning,
-		Runtime:            input.Runtime,
-		CreatedAt:          input.CreatedAt,
-		ParentSessionID:    input.ParentSessionID,
-		SourceSpecPath:     input.SourceSpecPath,
-		SessionSpecPath:    input.SessionSpecPath,
-		SpecName:           input.SpecName,
-		CurrentRevision:    input.CurrentRevision,
-		CurrentSpecVersion: input.CurrentSpecVersion,
-		SpecVersions:       cloneSpecVersionMaps(input.SpecVersions),
-		Config:             input.Config,
-		Workspace:          input.Workspace,
-		Provenance:         input.Provenance,
-		PackageDigest:      input.PackageDigest,
-		ApplyPackageLock:   input.ApplyPackageLock,
-		Access:             input.Access,
-		Specs:              specs,
-		Epochs:             []Epoch{},
+		SessionID:                input.SessionID,
+		SessionKind:              input.SessionKind,
+		DesiredStatus:            DesiredStatusRunning,
+		Runtime:                  input.Runtime,
+		CreatedAt:                input.CreatedAt,
+		ParentSessionID:          input.ParentSessionID,
+		SourceSpecPath:           input.SourceSpecPath,
+		SessionSpecPath:          input.SessionSpecPath,
+		SpecName:                 input.SpecName,
+		CurrentRevision:          input.CurrentRevision,
+		CurrentSpecVersion:       input.CurrentSpecVersion,
+		SpecVersions:             cloneSpecVersionMaps(input.SpecVersions),
+		Config:                   input.Config,
+		InferenceModelDefinition: input.InferenceModelDefinition,
+		Workspace:                input.Workspace,
+		Provenance:               input.Provenance,
+		PackageDigest:            input.PackageDigest,
+		ApplyPackageLock:         input.ApplyPackageLock,
+		Access:                   input.Access,
+		Specs:                    specs,
+		Epochs:                   []Epoch{},
 	}
 }
 
