@@ -71,6 +71,7 @@ type LiveAgentEvent struct {
 type AgentExecutor interface {
 	ExecuteTurn(task string, role string, turnState *TurnState) TurnResult
 	// RecoverTurnStats validates and reads interrupted usage without launching an agent.
+	// Integrity failures return RecoveryError; temporary I/O failures remain retryable.
 	RecoverTurnStats(turnState *TurnState) (TurnStats, error)
 	WorkspaceState() string
 	CheckpointWorkspace(dest string) bool

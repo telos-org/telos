@@ -194,7 +194,7 @@ func expireLocalCheckpoint(t *testing.T, path string) {
 }
 
 func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
-	for _, mode := range []string{"valid", "corrupt", "missing", "missing before deadline"} {
+	for _, mode := range []string{"valid", "unreadable", "corrupt", "missing", "missing before deadline"} {
 		t.Run(mode, func(t *testing.T) {
 			session, checkpointPath := interruptLocalVerifier(t)
 			if mode != "missing before deadline" {
@@ -215,6 +215,28 @@ func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
 				}
 			}
 			manifestFile := manifestPath(session.SessionDir)
+			if mode == "unreadable" {
+				path := state.Turn(1, 2, "verifier").PiSessionPath()
+				if err := os.Chmod(path, 0o000); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+				if _, err := os.ReadFile(path); !os.IsPermission(err) {
+					t.Skip("file permissions do not restrict this user")
+				}
+				result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
+				var recovery *game.RecoveryError
+				if !errors.Is(err, os.ErrPermission) || errors.As(err, &recovery) || result != nil {
+					t.Fatalf("temporary history access failure was not retryable: %+v, %v", result, err)
+				}
+				manifest, err := sessionapi.ReadManifest(manifestFile)
+				if err != nil || manifest.Recovery != nil || manifest.OpenEpoch() == nil {
+					t.Fatalf("temporary access failure abandoned the attempt: %+v, %v", manifest, err)
+				}
+				if err := os.Chmod(path, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			openManifest, err := os.ReadFile(manifestFile)
 			if err != nil {
 				t.Fatal(err)
@@ -222,7 +244,7 @@ func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
 			t.Setenv("PATH", t.TempDir())
 			for attempt := 0; attempt < 2; attempt++ {
 				result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
-				if mode != "valid" {
+				if mode == "corrupt" || strings.HasPrefix(mode, "missing") {
 					var recovery *game.RecoveryError
 					if !errors.As(err, &recovery) || result != nil {
 						t.Fatalf("unknown usage finalized the attempt: %+v, %v", result, err)

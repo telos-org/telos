@@ -287,7 +287,10 @@ func (b piSessionBaseline) validate(f *os.File, info os.FileInfo) error {
 		return errPiSessionChanged
 	}
 	anchor := make([]byte, len(b.anchor))
-	if _, err := f.ReadAt(anchor, b.offset-int64(len(anchor))); err != nil || !bytes.Equal(anchor, b.anchor) {
+	if _, err := f.ReadAt(anchor, b.offset-int64(len(anchor))); err != nil {
+		return fmt.Errorf("%w: %w", errPiSessionChanged, err)
+	}
+	if !bytes.Equal(anchor, b.anchor) {
 		return errPiSessionChanged
 	}
 	return nil
@@ -562,11 +565,19 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 func ReadPiSessionStats(path string) (game.TurnStats, error) {
 	baseline, err := capturePiSessionBaseline(path)
 	if err != nil {
+		if errors.Is(err, errPiSessionFormat) {
+			err = &game.RecoveryError{Err: err}
+		}
 		return game.TurnStats{}, err
 	}
 	summary, err := readPiSession(path, baseline)
 	if errors.Is(err, errPiNoAssistant) {
 		err = nil
+	} else if err != nil {
+		var pathErr *os.PathError
+		if !errors.As(err, &pathErr) || os.IsNotExist(pathErr) {
+			err = &game.RecoveryError{Err: err}
+		}
 	}
 	return summary.Stats, err
 }
@@ -579,7 +590,7 @@ func readPiSession(path string, baseline piSessionBaseline) (PiSessionSummary, e
 	f, err := os.Open(path)
 	if err != nil {
 		if baseline.fileInfo != nil {
-			return PiSessionSummary{}, fmt.Errorf("%w: %v", errPiSessionChanged, err)
+			return PiSessionSummary{}, fmt.Errorf("%w: %w", errPiSessionChanged, err)
 		}
 		return PiSessionSummary{}, err
 	}
@@ -587,7 +598,7 @@ func readPiSession(path string, baseline piSessionBaseline) (PiSessionSummary, e
 	info, err := f.Stat()
 	if err != nil {
 		if baseline.fileInfo != nil {
-			return PiSessionSummary{}, fmt.Errorf("%w: %v", errPiSessionChanged, err)
+			return PiSessionSummary{}, fmt.Errorf("%w: %w", errPiSessionChanged, err)
 		}
 		return PiSessionSummary{}, err
 	}
@@ -627,7 +638,7 @@ func readPiSession(path string, baseline piSessionBaseline) (PiSessionSummary, e
 		}
 		if err != nil {
 			if baseline.fileInfo != nil {
-				return PiSessionSummary{}, fmt.Errorf("%w: %v", errPiSessionChanged, err)
+				return PiSessionSummary{}, fmt.Errorf("%w: %w", errPiSessionChanged, err)
 			}
 			return PiSessionSummary{}, err
 		}

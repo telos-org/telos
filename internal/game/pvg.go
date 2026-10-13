@@ -93,7 +93,7 @@ func (p *PVG) runDefaultLoop() error {
 				var err error
 				interruptedStats, err = p.Executor.RecoverTurnStats(p.State.Turn(p.Config.EpochID, round, role))
 				if err != nil {
-					return recoveryErrorf("recover interrupted turn usage: %w", err)
+					return fmt.Errorf("recover interrupted turn usage: %w", err)
 				}
 			}
 			if p.runDurationExhausted(p.checkpoint.Deadline) {
