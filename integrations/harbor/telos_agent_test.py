@@ -24,7 +24,7 @@ from integrations.harbor.telos_agent import (
 
 
 class TelosHarborAgentTest(unittest.TestCase):
-    def test_render_harbor_spec_is_local_telos_spec(self):
+    def test_render_harbor_spec(self):
         rendered = render_harbor_spec(
             "Implement checkpoint 1.",
             workdir="/app",
@@ -32,7 +32,7 @@ class TelosHarborAgentTest(unittest.TestCase):
             skills=("@telos/verify-engineering:0.1.0*",),
         )
 
-        self.assertIn("platform: local", rendered)
+        self.assertNotIn("platform:", rendered)
         self.assertIn("name: scbench-circuit-eval", rendered)
         self.assertIn(
             "skills:\n  - @telos/verify-engineering:0.1.0*", rendered
@@ -118,9 +118,9 @@ class TelosHarborAgentTest(unittest.TestCase):
         script = agent._run_script("---\nversion: 0.1.0\nname: task\n---\nBody", "/app")
 
         self.assertIn("--workspace /app", script)
-        self.assertIn('telos logs "$session_id" --raw', script)
+        self.assertIn('telos logs "$goal_id" --raw', script)
         self.assertIn("retry() {", script)
-        self.assertIn("json_field /tmp/telos-harbor/run.json session_id", script)
+        self.assertIn("json_field /tmp/telos-harbor/run.json goal_id", script)
         self.assertIn("json_field /tmp/telos-harbor/describe.json status", script)
         self.assertNotIn("awk -F", script)
         self.assertIn("TELOS_HARBOR_TRANSCRIPT_BEGIN", script)

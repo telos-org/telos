@@ -29,11 +29,11 @@ type pulledPackage struct {
 }
 
 func cmdGet(args []string) {
-	fs := newCommandFlagSet("get", "telos get SESSION [flags]")
+	fs := newCommandFlagSet("get", "telos get GOAL [flags]")
 	output := fs.String("output", "", "Destination package directory")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
-	requireArgCount(fs, 1, "one SESSION")
+	requireArgCount(fs, 1, "one GOAL")
 	contextOverride, err := cloudContextOverride(fs, *contextValue)
 	if err != nil {
 		exitWithError(err)
@@ -188,11 +188,11 @@ func pullRegistrySkill(
 func packageForSession(control *cloud.Client, sessionID string) (*pulledPackage, error) {
 	session, err := control.GetSession(strings.TrimSpace(sessionID))
 	if err != nil {
-		return nil, err
+		return nil, goalNotFound(err, strings.TrimSpace(sessionID), control.ContextName())
 	}
 	reference, err := parsePackageReference(session.PackageRef)
 	if err != nil {
-		return nil, fmt.Errorf("session %s has invalid package_ref: %w", session.ID, err)
+		return nil, fmt.Errorf("Goal %s has an invalid package_ref: %w", session.ID, err)
 	}
 	data, err := control.DownloadPackageVersionBundle(
 		reference.scope,

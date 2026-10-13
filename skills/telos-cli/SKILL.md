@@ -1,6 +1,6 @@
 ---
 name: telos-cli
-description: The user guide for the Telos CLI and cloud platform.
+description: The complete user guide for the Telos CLI and cloud platform. Use this skill for anything to do with Telos.
 metadata:
   registry: "@telos/telos-cli"
   public_guide: "references/use-telos.md"
@@ -9,11 +9,21 @@ metadata:
 
 # Telos
 
+Telos is a goal-oriented programming system. Telos treats the goal specification (SPEC.md) as the source of truth, and background agents own the software lifecycle beneath it.
+
 This is the index of the Telos CLI guide. It ships with every Telos release and is published at `usetelos.ai/docs`.
 
 ## Guide
 
-- [Use Telos](references/use-telos.md) — install, sign in, and take one Goal from first plan to deletion
-- [Goals](references/goals.md) — the Goal specification, skills, rubrics, and packages
-- [The Telos Cloud environment](references/environment.md) — the VM, toolchain, and network access each Goal runs with
+- [Use Telos](references/use-telos.md) — install, sign in, and walk one Goal through its full lifecycle
+- [Goals](references/goals.md) — the goal specification, skills, rubrics, and packages
+- [Environment](references/environment.md) — the VM, toolchain, and network access each Goal runs with
 - [Models](references/models.md) — inference options when using Telos: managed inference and bring your own keys/subscriptions
+
+## For agents
+
+The CLI is designed to be agent-friendly: its default output is compact text, meant to be read as is. Most commands also take `--json` for when a result needs to go through other shell tools, like `jq`. JSON costs more tokens, so use it only then.
+
+- Ask before `telos apply`, which starts paid compute and inference, `telos delete`, which can't be undone, and `telos push --public`, which publishes.
+- `telos login` opens a browser and waits for the user to approve.
+- A Goal can work for a long time. Check on it with `telos describe` and `telos logs` every few minutes, not in a tight loop. `telos logs --follow` doesn't return until the Goal stops.
