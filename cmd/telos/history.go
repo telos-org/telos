@@ -258,23 +258,29 @@ func revisionCapabilityText(capability cloud.RevisionCapability) string {
 	return "unavailable — " + revisionReason(revisionString(capability.Reason))
 }
 
+// These Cloud reasons reject an action before mutation. Share their display
+// text with history so adding a reason cannot leave the rejection list behind.
+var revisionRejectionReasons = map[string]string{
+	"current_revision":       "this revision is already current",
+	"no_snapshot":            "no snapshot was captured",
+	"snapshot_pending":       "a snapshot is still being captured",
+	"snapshot_lost":          "the saved snapshot is no longer available",
+	"snapshot_incompatible":  "the saved snapshot is incompatible with this deployment host",
+	"operation_in_progress":  "another deployment operation is in progress",
+	"deployment_not_ready":   "the deployment is not ready for this action",
+	"runtime_unsupported":    "this deployment host does not support snapshot restore",
+	"package_unavailable":    "the revision's package is no longer available",
+	"runtime_unavailable":    "the revision's runtime release is no longer available",
+	"stale_current_revision": "the current revision changed; refresh history before trying again",
+	"restore_access_differs": "network access differs; redeploy the revision's access before restoring its snapshot",
+}
+
 func revisionReason(reason string) string {
-	reasons := map[string]string{
-		"unsupported":            "not supported by this Cloud release",
-		"current_revision":       "this revision is already current",
-		"no_snapshot":            "no snapshot was captured",
-		"snapshot_pending":       "a snapshot is still being captured",
-		"snapshot_lost":          "the saved snapshot is no longer available",
-		"snapshot_incompatible":  "the saved snapshot is incompatible with this deployment host",
-		"operation_in_progress":  "another deployment operation is in progress",
-		"deployment_not_ready":   "the deployment is not ready for this action",
-		"runtime_unsupported":    "this deployment host does not support snapshot restore",
-		"package_unavailable":    "the revision's package is no longer available",
-		"runtime_unavailable":    "the revision's runtime release is no longer available",
-		"stale_current_revision": "the current revision changed; refresh history before trying again",
-	}
-	if message, ok := reasons[reason]; ok {
+	if message, ok := revisionRejectionReasons[reason]; ok {
 		return message
+	}
+	if reason == "unsupported" {
+		return "not supported by this Cloud release"
 	}
 	if reason == "" {
 		return "this action is not currently allowed"

@@ -181,23 +181,20 @@ func revisionPackageFiles(ctx context.Context, control *cloud.Client, sessionID 
 	if err != nil {
 		return nil, nil, err
 	}
+	// Check package identity before fetching any referenced skills.
 	_, manifest, err := verifiedPackageContents(&pulledPackage{
 		reference: packageReference{ref: revision.PackageRef}, digest: revision.PackageDigest, data: data,
 	})
 	if err != nil {
 		return nil, nil, err
 	}
-	hydrated, _, err := spec.HydrateApplyPackage(data, func(request spec.ApplyPackageSkillFetchRequest) ([]byte, error) {
+	files, err := spec.HydrateApplyPackageFiles(data, func(request spec.ApplyPackageSkillFetchRequest) ([]byte, error) {
 		ref, ok := spec.ParseRegistrySkillRef(request.Ref)
 		if !ok || ref.Version == "" {
 			return nil, fmt.Errorf("invalid historical skill ref %q", request.Ref)
 		}
 		return control.DownloadRevisionSkillBundle(ctx, sessionID, revision.ID, ref.Scope, ref.Name, ref.Version, request.Digest)
 	})
-	if err != nil {
-		return nil, nil, err
-	}
-	files, err := spec.ApplyPackageFiles(hydrated)
 	delete(files, "manifest.json")
 	return files, manifest, err
 }

@@ -1382,10 +1382,10 @@ func TestCompileIgnoresStarredLockInSchemaV1(t *testing.T) {
 	}
 }
 
-func TestApplyPackageFilesPreservesArchiveContentsAndRejectsTampering(t *testing.T) {
+func TestHydrateApplyPackageFilesPreservesArchiveContentsAndRejectsTampering(t *testing.T) {
 	pkg := buildPackageTestPackage(t, "package-read-only")
 	entries, modes := tarEntries(t, pkg.Bytes), tarEntryModes(t, pkg.Bytes)
-	files, err := ApplyPackageFiles(pkg.Bytes)
+	files, err := HydrateApplyPackageFiles(pkg.Bytes, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1403,7 +1403,7 @@ func TestApplyPackageFilesPreservesArchiveContentsAndRejectsTampering(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := ApplyPackageFiles(tampered); err == nil {
+	if _, err := HydrateApplyPackageFiles(tampered, nil); err == nil {
 		t.Fatal("read unverified skill contents")
 	}
 }
