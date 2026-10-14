@@ -90,10 +90,10 @@ func cmdRevisionDiff(args []string) {
 	printRevisionField(os.Stdout, "Name", session.Name)
 	printRevisionField(os.Stdout, "Goal", session.ID)
 	printRevisionField(os.Stdout, "Context", control.ContextName())
-	printRevisionField(os.Stdout, "From", fmt.Sprintf("revision %d (%s)", from.Sequence, from.ID))
-	toLabel := fmt.Sprintf("revision %d (%s)", to.Sequence, to.ID)
+	printRevisionField(os.Stdout, "From", fmt.Sprintf("revision %d", from.Sequence))
+	toLabel := fmt.Sprintf("revision %d", to.Sequence)
 	if to.ID == page.CurrentRevisionID {
-		toLabel += " (current when comparison started)"
+		toLabel += " (current)"
 	}
 	printRevisionField(os.Stdout, "To", toLabel)
 	for _, change := range result.Files {
