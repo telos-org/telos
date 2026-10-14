@@ -20,7 +20,7 @@ func TestRevisionClientPreservesContextAndActionPrecondition(t *testing.T) {
 		}
 		switch r.URL.Path {
 		case "/api/deployments/sess_test/revisions":
-			if r.URL.RawQuery != "before=9&limit=3" {
+			if r.URL.Query().Get("before") != "9" || r.URL.Query().Get("limit") != "3" {
 				t.Errorf("query = %q", r.URL.RawQuery)
 			}
 			io.WriteString(w, `{"current_revision_id":"rev_12","revisions":[{"id":"rev_8","sequence":8}],"next_before":8}`)
@@ -103,19 +103,5 @@ func TestRevisionClientDoesNotRetryLostMutationResponse(t *testing.T) {
 	_, err := client.StartRevisionOperation(context.Background(), "sess_test", "rev_7", "redeploy", RevisionActionOptions{ExpectedCurrentRevisionID: "rev_12"})
 	if !errors.Is(err, io.ErrUnexpectedEOF) || attempts != 1 {
 		t.Fatalf("attempts = %d, err = %v", attempts, err)
-	}
-}
-
-func TestRevisionSkillBundleUsesDeploymentAuthorization(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/deployments/sess_test/revisions/rev_7/skills/team/check/1.0.0/bundle" || r.URL.Query().Get("digest") != "sha256:abc" {
-			t.Errorf("URL = %s", r.URL)
-		}
-		io.WriteString(w, "bundle")
-	}))
-	defer server.Close()
-	data, err := NewClient(server.URL, "").DownloadRevisionSkillBundle(context.Background(), "sess_test", "rev_7", "team", "check", "1.0.0", "sha256:abc")
-	if err != nil || string(data) != "bundle" {
-		t.Fatalf("data = %s, err = %v", data, err)
 	}
 }

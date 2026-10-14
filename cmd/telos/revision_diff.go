@@ -4,8 +4,9 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -126,14 +127,7 @@ func compareRevisions(ctx context.Context, control *cloud.Client, sessionID stri
 	if err != nil {
 		return nil, fmt.Errorf("read revision %d: %w", to.Sequence, err)
 	}
-	paths := map[string]bool{}
-	for path := range oldFiles {
-		paths[path] = true
-	}
-	for path := range newFiles {
-		paths[path] = true
-	}
-	for _, path := range sortedRevisionKeys(paths) {
+	for _, path := range revisionKeys(oldFiles, newFiles) {
 		oldFile, hadOld := oldFiles[path]
 		newFile, hasNew := newFiles[path]
 		if hadOld && hasNew && oldFile.Mode == newFile.Mode && bytes.Equal(oldFile.Data, newFile.Data) {
@@ -164,14 +158,7 @@ func compareRevisions(ctx context.Context, control *cloud.Client, sessionID stri
 		}
 		result.Files = append(result.Files, change)
 	}
-	names := map[string]bool{}
-	for name := range oldManifest.Skills {
-		names[name] = true
-	}
-	for name := range newManifest.Skills {
-		names[name] = true
-	}
-	for _, name := range sortedRevisionKeys(names) {
+	for _, name := range revisionKeys(oldManifest.Skills, newManifest.Skills) {
 		oldLock, oldOK := revisionSkillLock(oldManifest, name)
 		newLock, newOK := revisionSkillLock(newManifest, name)
 		if oldOK == newOK && oldLock == newLock {
@@ -223,13 +210,11 @@ func revisionSkillLock(manifest *spec.ApplyPackageManifest, name string) (spec.A
 	return lock, ok
 }
 
-func sortedRevisionKeys(values map[string]bool) []string {
-	keys := make([]string, 0, len(values))
-	for key := range values {
-		keys = append(keys, key)
-	}
-	sort.Strings(keys)
-	return keys
+// revisionKeys returns the sorted union without changing either input map.
+func revisionKeys[V any](before, after map[string]V) []string {
+	keys := append(slices.Collect(maps.Keys(before)), slices.Collect(maps.Keys(after))...)
+	slices.Sort(keys)
+	return slices.Compact(keys)
 }
 
 func skillLockLabel(lock *spec.ApplyPackageSkillLock) string {

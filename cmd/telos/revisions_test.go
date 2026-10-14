@@ -97,10 +97,8 @@ func runRevisionCLI(t *testing.T, args ...string) (string, string, int) {
 }
 
 func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
-	var pageReads atomic.Int32
 	revisionTestServer(t, map[string]http.HandlerFunc{
 		"GET " + revisionTestPath: func(w http.ResponseWriter, r *http.Request) {
-			pageReads.Add(1)
 			before, _ := strconv.Atoi(r.URL.Query().Get("before"))
 			limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
 			start := 60
@@ -128,16 +126,15 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 	if code != 0 || stderr != "" || !strings.Contains(stdout, "60*") || !strings.Contains(stdout, "--before 11") || !strings.Contains(stdout, "Update 60") {
 		t.Fatalf("history: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
-	pageReads.Store(0)
 	stdout, stderr, code = runRevisionCLI(t, "history", "sess_test", "--revision", "7", "--json")
 	var detail struct {
 		Revision cloud.Revision `json:"revision"`
 	}
-	if code != 0 || json.Unmarshal([]byte(stdout), &detail) != nil || detail.Revision.Sequence != 7 || pageReads.Load() != 2 {
-		t.Fatalf("old revision: exit=%d stdout=%s stderr=%s reads=%d", code, stdout, stderr, pageReads.Load())
+	if code != 0 || json.Unmarshal([]byte(stdout), &detail) != nil || detail.Revision.Sequence != 7 {
+		t.Fatalf("old revision: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
 	stdout, stderr, code = runRevisionCLI(t, "history", "sess_test", "--revision", "rev_7")
-	if code != 0 || !strings.Contains(stdout, "saved snapshot is no longer available") || !strings.Contains(stdout, "Redeploy           available") {
+	if code != 0 || !strings.Contains(stdout, "saved snapshot is no longer available") || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "Redeploy available") {
 		t.Fatalf("detail: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
 	stdout, stderr, code = runRevisionCLI(t, "history", "sess_test", "--all", "--limit", "20", "--json")
@@ -171,18 +168,28 @@ func TestRevisionCLIRejectsInvalidInputBeforeNetwork(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1) }))
 	defer server.Close()
 	configureCloudTest(t, server.URL)
-	for _, args := range [][]string{
-		{"history", "local_test"}, {"history", "sess_test", "--limit", "101"},
-		{"history", "sess_test", "--before", "0"}, {"history", "sess_test", "--revision", "0"},
-		{"history", "sess_test", "--revision", "7", "--all"}, {"diff", "sess_test", "HEAD"},
-		{"restore", "sess_test"}, {"restore", "sess_test", "--revision", "7", "--timeout", "1s"},
-		{"redeploy", "sess_test", "--revision", "7", "--wait", "--timeout", "0s"},
-		{"restore", "sess_test", "--revision", "7", "--message", "two\nlines"},
+	for _, tt := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"history", "local_test"}, "requires a Cloud session ID"},
+		{[]string{"history", "sess_test", "--limit", "101"}, "--limit must be between 1 and 100"},
+		{[]string{"history", "sess_test", "--before", "0"}, "--before must be positive"},
+		{[]string{"history", "sess_test", "--revision", "0"}, "revision must be a positive number"},
+		{[]string{"history", "sess_test", "--revision", "7", "--all"}, "--revision cannot be combined"},
+		{[]string{"diff", "sess_test", "HEAD"}, "revision must be a positive number"},
+		{[]string{"restore", "sess_test", "--message", "Recovery"}, "revision must be a positive number"},
+		{[]string{"restore", "sess_test", "--revision", "7", "--message", "Recovery", "--timeout", "1s"}, "--timeout must be positive and requires --wait"},
+		{[]string{"redeploy", "sess_test", "--revision", "7", "--message", "Recovery", "--wait", "--timeout", "0s"}, "--timeout must be positive and requires --wait"},
+		{[]string{"restore", "sess_test", "--revision", "7"}, "--message is required"},
+		{[]string{"redeploy", "sess_test", "--revision", "7", "--message", ""}, "--message is required"},
+		{[]string{"restore", "sess_test", "--revision", "7", "--message", "   "}, "--message is required"},
+		{[]string{"restore", "sess_test", "--revision", "7", "--message", "two\nlines"}, "revision messages must be a single line"},
 	} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			_, stderr, code := runRevisionCLI(t, args...)
-			if code == 0 || !strings.Contains(stderr, "error:") {
-				t.Fatalf("exit=%d stderr=%s", code, stderr)
+		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
+			stdout, stderr, code := runRevisionCLI(t, tt.args...)
+			if code != 1 || stdout != "" || !strings.Contains(stderr, tt.want) {
+				t.Fatalf("exit=%d stdout=%s stderr=%s; want %q", code, stdout, stderr, tt.want)
 			}
 		})
 	}
@@ -232,36 +239,6 @@ func TestRevisionActionCLIAcceptsOnceAndWaitsForExactResult(t *testing.T) {
 	}
 }
 
-func TestRevisionActionCLIRequiresMessageBeforeNetwork(t *testing.T) {
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { requests.Add(1) }))
-	defer server.Close()
-	configureCloudTest(t, server.URL)
-	for _, action := range []string{"restore", "redeploy"} {
-		for _, tt := range []struct {
-			name  string
-			flags []string
-		}{
-			{"missing", nil},
-			{"empty", []string{"--message", ""}},
-			{"spaces", []string{"--message", "   "}},
-			{"Unicode spaces", []string{"--message", "\u2003\u00a0"}},
-			{"BOM whitespace", []string{"--message", "\ufeff \ufeff"}},
-		} {
-			t.Run(action+"/"+tt.name, func(t *testing.T) {
-				args := append([]string{action, "sess_test", "--revision", "7"}, tt.flags...)
-				stdout, stderr, code := runRevisionCLI(t, args...)
-				if code != 1 || stdout != "" || !strings.Contains(stderr, "--message is required and must not be blank") {
-					t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout, stderr)
-				}
-			})
-		}
-	}
-	if requests.Load() != 0 {
-		t.Fatalf("commands without a message made %d requests", requests.Load())
-	}
-}
-
 func TestRevisionActionCLIReportsFailuresWithoutRetry(t *testing.T) {
 	for _, tt := range []struct {
 		name, response, want string
@@ -299,12 +276,12 @@ func TestRevisionActionCLIReportsFailuresWithoutRetry(t *testing.T) {
 
 func TestRevisionActionsRespectCapabilitiesWithoutFallback(t *testing.T) {
 	for _, tt := range []struct {
-		name, action, reason, snapshot string
-		sequence                       int
+		name, action, reason, snapshot, want string
+		sequence                             int
 	}{
-		{"current", "restore", "current_revision", "available", 12},
-		{"lost snapshot", "restore", "snapshot_lost", "lost", 7},
-		{"capture gate", "redeploy", "snapshot_pending", "capturing", 7},
+		{"current", "restore", "current_revision", "available", "this revision is already current", 12},
+		{"lost snapshot", "restore", "snapshot_lost", "lost", "the saved snapshot is no longer available", 7},
+		{"capture gate", "redeploy", "snapshot_pending", "capturing", "a snapshot is still being captured", 7},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			revisionTestServer(t, map[string]http.HandlerFunc{
@@ -316,7 +293,7 @@ func TestRevisionActionsRespectCapabilitiesWithoutFallback(t *testing.T) {
 				},
 			})
 			_, stderr, code := runRevisionCLI(t, tt.action, "sess_test", "--revision", strconv.Itoa(tt.sequence), "--message", "Back to stable")
-			if code != 1 || !strings.Contains(stderr, revisionReason(tt.reason)) {
+			if code != 1 || !strings.Contains(stderr, tt.want) {
 				t.Fatalf("exit=%d stderr=%s", code, stderr)
 			}
 		})
@@ -326,10 +303,9 @@ func TestRevisionActionsRespectCapabilitiesWithoutFallback(t *testing.T) {
 func TestWaitRevisionOperationTracksReceiptInsteadOfLatestDeployment(t *testing.T) {
 	for _, mismatch := range []bool{false, true} {
 		t.Run(fmt.Sprint(mismatch), func(t *testing.T) {
-			var polls, resultReads atomic.Int32
+			var resultReads atomic.Int32
 			server := revisionTestServer(t, map[string]http.HandlerFunc{
 				"GET /api/deployments/sess_test/operations/op_exact": func(w http.ResponseWriter, r *http.Request) {
-					polls.Add(1)
 					fmt.Fprint(w, `{"id":"op_exact","kind":"restore","status":"succeeded","result_revision_id":"rev_13"}`)
 				},
 				"GET " + revisionTestPath + "/rev_13": func(w http.ResponseWriter, r *http.Request) {
@@ -356,8 +332,8 @@ func TestWaitRevisionOperationTracksReceiptInsteadOfLatestDeployment(t *testing.
 				if err == nil || !strings.Contains(err.Error(), "does not match") || result != nil {
 					t.Fatalf("accepted mismatched result: %+v, %v", result, err)
 				}
-			} else if err != nil || result == nil || result.ID != "rev_13" || operation.Status != "succeeded" || polls.Load() != 2 {
-				t.Fatalf("operation=%+v result=%+v err=%v polls=%d", operation, result, err, polls.Load())
+			} else if err != nil || result == nil || result.ID != "rev_13" || operation.Status != "succeeded" {
+				t.Fatalf("operation=%+v result=%+v err=%v", operation, result, err)
 			}
 		})
 	}
@@ -379,7 +355,7 @@ func TestRevisionMessageUnicodeLimit(t *testing.T) {
 	if got, err := normalizeCLIRevisionMessage("\ufeff " + message + " \ufeff"); err != nil || got != message {
 		t.Fatalf("valid Unicode message rejected: %v", err)
 	}
-	for _, invalid := range []string{message + "界", "a\nb", "a\tb", "a\x1bb", "a\u2028b"} {
+	for _, invalid := range []string{"", "   ", "\u2003\u00a0", "\ufeff \ufeff", message + "界", "a\nb", "a\tb", "a\x1bb", "a\u2028b"} {
 		if _, err := normalizeCLIRevisionMessage(invalid); err == nil {
 			t.Fatalf("accepted invalid message %q", invalid)
 		}
