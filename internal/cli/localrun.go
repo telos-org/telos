@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/telos-org/telos/internal/evidence"
 	"github.com/telos-org/telos/internal/executor"
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
@@ -214,17 +213,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		}
 		// Unusable execution state is an ordinary failed attempt. Controllers
 		// already retry failed attempts; no separate recovery lifecycle is needed.
-		result = pvg.Result
-		result.GameResult = game.GameFailure
-		result.VerifierConceded = false
-		result.Error = err.Error()
-		result.CompletionReason = "recovery_failed"
-		ev := evidence.New(compiled.Environment.Name, state.EvidencePath, manifest.SessionID, epochID)
-		ev.LogGameState("game_end", string(result.GameResult), result.Rounds,
-			result.ProverRounds, result.VerifierRounds, false, result.TotalCostUSD,
-			result.TotalInputTokens, result.TotalOutputTokens, result.TotalCacheReadTokens,
-			result.TotalCacheCreateTokens, result.Error, result.CompletionReason)
-		ev.Close()
+		result = pvg.RecordRecoveryFailure(err)
 	}
 
 	// Close epoch

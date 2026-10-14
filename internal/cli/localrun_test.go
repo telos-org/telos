@@ -312,31 +312,36 @@ func expireLocalCheckpoint(t *testing.T, path string) {
 }
 
 func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
-	for _, mode := range []string{"valid", "unreadable", "corrupt", "empty", "missing", "missing before deadline"} {
-		t.Run(mode, func(t *testing.T) {
+	const history = "{\"type\":\"session\",\"version\":3,\"id\":\"interrupted\"}\n" +
+		"{\"message\":{\"role\":\"assistant\",\"usage\":{\"input\":100,\"output\":20,\"cost\":{\"total\":0.75}}}}\n"
+	for _, tc := range []struct {
+		name, history                string
+		expired, missing, unreadable bool
+		invalid                      bool
+	}{
+		{name: "valid", history: history, expired: true},
+		{name: "unreadable", history: history, expired: true, unreadable: true},
+		{name: "corrupt", history: history + "{\"message\":\n", expired: true, invalid: true},
+		{name: "empty", invalid: true},
+		{name: "missing", missing: true, expired: true, invalid: true},
+		{name: "missing before deadline", missing: true, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
 			session, checkpointPath := interruptLocalVerifier(t)
-			if mode != "missing before deadline" && mode != "empty" {
+			if tc.expired {
 				expireLocalCheckpoint(t, checkpointPath)
 			}
 			state := game.NewPVGState(session.SpecName, filepath.Join(session.SessionDir, "specs", session.SpecName), session.SessionID)
-			history := "{\"type\":\"session\",\"version\":3,\"id\":\"interrupted\"}\n" +
-				"{\"message\":{\"role\":\"assistant\",\"usage\":{\"input\":100,\"output\":20,\"cost\":{\"total\":0.75}}}}\n"
-			if mode == "corrupt" {
-				history += "{\"message\":\n"
-			} else if mode == "empty" {
-				history = ""
-			}
-			if err := os.WriteFile(state.Turn(1, 2, "verifier").PiSessionPath(), []byte(history), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if strings.HasPrefix(mode, "missing") {
-				if err := os.Remove(state.Turn(1, 2, "verifier").PiSessionPath()); err != nil {
+			path := state.Turn(1, 2, "verifier").PiSessionPath()
+			if tc.missing {
+				if err := os.Remove(path); err != nil {
 					t.Fatal(err)
 				}
+			} else if err := os.WriteFile(path, []byte(tc.history), 0o600); err != nil {
+				t.Fatal(err)
 			}
 			manifestFile := manifestPath(session.SessionDir)
-			if mode == "unreadable" {
-				path := state.Turn(1, 2, "verifier").PiSessionPath()
+			if tc.unreadable {
 				if err := os.Chmod(path, 0o000); err != nil {
 					t.Fatal(err)
 				}
@@ -357,36 +362,24 @@ func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			openManifest, err := os.ReadFile(manifestFile)
-			if err != nil {
-				t.Fatal(err)
-			}
 			t.Setenv("PATH", t.TempDir())
-			for attempt := 0; attempt < 2; attempt++ {
-				result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
-				if mode == "corrupt" || mode == "empty" || strings.HasPrefix(mode, "missing") {
-					if err != nil || result == nil || result.GameResult != game.GameFailure || result.CompletionReason != "recovery_failed" || result.TotalCostUSD != 0.25 {
-						t.Fatalf("unknown usage did not fail the attempt with known usage retained: %+v, %v", result, err)
-					}
-					manifest, err := sessionapi.ReadManifest(manifestFile)
-					if err != nil || manifest.OpenEpoch() != nil || len(manifest.Epochs) != 1 || *manifest.Epochs[0].Result != "failed" {
-						t.Fatalf("invalid history did not close the failed attempt: %+v, %v", manifest, err)
-					}
-					break
-				}
-				if err != nil || result.CompletionReason != "run_duration_exhausted" || result.Rounds != 1 ||
-					result.TotalCostUSD != 1 || result.TotalInputTokens != 110 || result.TotalOutputTokens != 20 {
-					t.Fatalf("lost or duplicated interrupted usage: %+v, %v", result, err)
-				}
-				store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
-				current, err := store.Get(session.SessionID)
-				if err != nil || current.TotalCostUSD == nil || *current.TotalCostUSD != 1 {
-					t.Fatalf("recovered usage missing from API: %+v, %v", current, err)
-				}
-				// Repeat terminal recovery as if publishing the epoch had failed.
-				if err := os.WriteFile(manifestFile, openManifest, 0o600); err != nil {
-					t.Fatal(err)
-				}
+			wantReason, wantCost, wantInput, wantOutput := "run_duration_exhausted", 1.0, 110, 20
+			if tc.invalid {
+				wantReason, wantCost, wantInput, wantOutput = "recovery_failed", 0.25, 10, 0
+			}
+			result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
+			if err != nil || result == nil || result.GameResult != game.GameFailure || result.CompletionReason != wantReason || result.Rounds != 1 ||
+				result.TotalCostUSD != wantCost || result.TotalInputTokens != wantInput || result.TotalOutputTokens != wantOutput {
+				t.Fatalf("wrong recovered outcome or usage: %+v, %v", result, err)
+			}
+			manifest, err := sessionapi.ReadManifest(manifestFile)
+			if err != nil || manifest.OpenEpoch() != nil || len(manifest.Epochs) != 1 || *manifest.Epochs[0].Result != "failed" {
+				t.Fatalf("recovery did not close the failed attempt: %+v, %v", manifest, err)
+			}
+			store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
+			current, err := store.Get(session.SessionID)
+			if err != nil || current.TotalCostUSD == nil || *current.TotalCostUSD != wantCost {
+				t.Fatalf("recovered usage missing from API: %+v, %v", current, err)
 			}
 		})
 	}

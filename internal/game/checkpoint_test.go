@@ -1,7 +1,6 @@
 package game
 
 import (
-	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"os"
@@ -172,25 +171,40 @@ func TestPVGReturnedResultSurvivesTranscriptFailure(t *testing.T) {
 	}
 }
 
+// Capture a real pending checkpoint by failing the transcript write after the
+// verifier exits. All counters, identities and save ordering come from Run.
 func pendingCheckpoint(t *testing.T, cfg PVGConfig, turn TurnResult) *PVG {
 	t.Helper()
-	p := NewPVG(compileTestSpec(t), &fakeExecutor{}, NewPVGState("pvg-test", t.TempDir(), "pending"), cfg)
+	state := NewPVGState("pvg-test", t.TempDir(), "pending")
+	executor := &fakeExecutor{
+		proverResults:   []TurnResult{{Stats: TurnStats{CostUSD: 0.25}}},
+		verifierResults: []TurnResult{turn},
+		onTurn: func(ts *TurnState) {
+			if ts.Role == "verifier" {
+				if err := os.Rename(state.TranscriptPath, state.TranscriptPath+".saved"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(state.TranscriptPath, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			}
+		},
+	}
+	p := NewPVG(compileTestSpec(t), executor, state, cfg)
+	if _, err := p.Run(); err == nil {
+		t.Fatal("expected handoff write failure")
+	}
+	if err := os.Remove(state.TranscriptPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(state.TranscriptPath+".saved", state.TranscriptPath); err != nil {
+		t.Fatal(err)
+	}
 	if err := p.restoreCheckpoint(); err != nil {
 		t.Fatal(err)
 	}
-	if err := InitializeTranscript(p.State.TranscriptPath, p.State.SessionID, p.State.SystemName, p.State.EvidencePath, p.Evidence.StartedAt); err != nil {
-		t.Fatal(err)
-	}
-	info, err := os.Stat(p.State.TranscriptPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	p.Result.Rounds, p.Result.ProverRounds = 1, 1
-	p.Result.TotalCostUSD = 0.25
-	turn.Role = "verifier"
-	p.checkpoint.Pending = &completedTurn{Turn: turn, FinishedAt: time.Now(), TranscriptOffset: info.Size(), CompletionID: rand.Text()}
-	if err := p.saveCheckpoint(); err != nil {
-		t.Fatal(err)
+	if p.checkpoint.Pending == nil {
+		t.Fatal("returned result was not saved before handoff")
 	}
 	return p
 }
@@ -200,17 +214,30 @@ func TestPVGConcessionSurvivesCrashesDuringFinalization(t *testing.T) {
 		t.Run(phase, func(t *testing.T) {
 			p := pendingCheckpoint(t, PVGConfig{EpochID: 2}, TurnResult{Status: StatusConcede, Logs: "saved verdict", Stats: TurnStats{CostUSD: 0.5}})
 			if phase != "before handoff" {
-				if err := p.appendPendingTurn(); err != nil {
+				pending, err := os.ReadFile(p.checkpointPath())
+				if err != nil {
 					t.Fatal(err)
 				}
-			}
-			if phase == "after saved decision" {
-				// Decision saved, but neither agent_complete nor game_end has
-				// reached the API's evidence projection.
-				p.acceptPendingTurn()
-				p.checkpoint.Pending = nil
-				if err := p.saveCheckpoint(); err != nil {
+				finished := NewPVG(p.Compiled, &fakeExecutor{onTurn: func(*TurnState) { t.Fatal("re-executed saved verdict") }}, p.State, p.Config)
+				mustRunPVG(t, finished)
+				// Use the handoff and decision written by real recovery. Remove
+				// later publication to represent an interruption at that boundary.
+				transcript := ReadTranscript(p.State.TranscriptPath)
+				resultStart := strings.Index(transcript, "\n## Result\n")
+				if resultStart < 0 {
+					t.Fatal("missing completed result")
+				}
+				if err := os.Truncate(p.State.TranscriptPath, int64(resultStart)); err != nil {
 					t.Fatal(err)
+				}
+				if err := os.Remove(p.State.EvidencePath); err != nil {
+					t.Fatal(err)
+				}
+				if phase == "after handoff" {
+					// The handoff reached disk, but its accepted checkpoint did not.
+					if err := os.WriteFile(p.checkpointPath(), pending, 0o600); err != nil {
+						t.Fatal(err)
+					}
 				}
 			}
 			if err := AppendExternalUpdate(p.State.TranscriptPath, ExternalUpdate{Message: "operator update must survive"}); err != nil {
@@ -249,12 +276,9 @@ func TestPVGConcessionSurvivesCrashesDuringFinalization(t *testing.T) {
 func TestPVGResumeKeepsDeadlineAndHonorsSavedCompletionTime(t *testing.T) {
 	for _, status := range []AgentStatus{StatusContinue, StatusConcede} {
 		t.Run(string(status), func(t *testing.T) {
-			p := pendingCheckpoint(t, PVGConfig{EpochID: 1, UntilSeconds: 60}, TurnResult{Status: status})
-			p.checkpoint.Deadline = time.Now().Add(-time.Second)
-			p.checkpoint.Pending.FinishedAt = p.checkpoint.Deadline.Add(-time.Second)
-			if err := p.saveCheckpoint(); err != nil {
-				t.Fatal(err)
-			}
+			p := pendingCheckpoint(t, PVGConfig{EpochID: 1, UntilSeconds: 1}, TurnResult{Status: status})
+			// Let the original deadline pass after the actual saved completion.
+			time.Sleep(time.Until(p.checkpoint.Deadline) + time.Millisecond)
 			executor := &fakeExecutor{onTurn: func(*TurnState) { t.Fatal("started another turn after deadline") }}
 			result := mustRunPVG(t, NewPVG(p.Compiled, executor, p.State, PVGConfig{EpochID: 1, UntilSeconds: 3600}))
 			if status == StatusConcede && result.GameResult != GameSuccess {

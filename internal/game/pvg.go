@@ -83,6 +83,17 @@ func (p *PVG) Run() (*PVGResult, error) {
 	return p.Result, nil
 }
 
+// RecordRecoveryFailure projects unusable state as an ordinary failed attempt.
+// Its checkpoint cannot be trusted; the caller closes the attempt's lifecycle.
+func (p *PVG) RecordRecoveryFailure(err error) *PVGResult {
+	p.Result.GameResult = GameFailure
+	p.Result.VerifierConceded = false
+	p.Result.Error = err.Error()
+	p.Result.CompletionReason = "recovery_failed"
+	p.logGameState("game_end")
+	return p.Result
+}
+
 func (p *PVG) runDefaultLoop() error {
 	for p.Result.GameResult == "" {
 		if p.checkpoint.Pending == nil {
@@ -114,47 +125,7 @@ func (p *PVG) runDefaultLoop() error {
 				p.end(GameFailure)
 				return p.saveCheckpoint()
 			}
-			workspace := p.Executor.WorkspaceState()
-			promptOpts := p.promptOptions()
-			var task string
-			if role == "prover" {
-				task = spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
-			} else {
-				task = spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
-			}
-			info, err := os.Stat(p.State.TranscriptPath)
-			if err != nil {
-				return err
-			}
-			// A crash after dispatch may have incurred usage even if Pi's file
-			// is missing. Only a confirmed preparation failure can undo dispatch.
-			wasInFlight := p.checkpoint.TurnInFlight
-			p.checkpoint.TurnInFlight = true
-			if err := p.saveCheckpoint(); err != nil {
-				return err
-			}
-			turn, err := p.runAgentTurn(round, role, (round+1)/2, task, p.checkpoint.Deadline)
-			if err != nil {
-				p.checkpoint.TurnInFlight = wasInFlight
-				if saveErr := p.saveCheckpoint(); saveErr != nil {
-					return fmt.Errorf("%w; persist preparation failure: %v", err, saveErr)
-				}
-				return err
-			}
-			turn.Role = role
-			if turn.Status != StatusConcede {
-				turn.Status = StatusContinue
-			}
-			finishedAt := time.Now()
-			p.checkpoint.Pending = &completedTurn{
-				Turn: turn, FinishedAt: finishedAt, TranscriptOffset: info.Size(),
-				Stopped: p.Config.StopRequested != nil && p.Config.StopRequested(),
-				// Generated after the agent exits: its earlier output cannot be
-				// mistaken for the coordinator's completed handoff marker.
-				CompletionID: rand.Text(),
-			}
-			p.checkpoint.TurnInFlight = false
-			if err := p.saveCheckpoint(); err != nil {
+			if err := p.dispatchAndSaveTurn(round, role); err != nil {
 				return err
 			}
 		}
@@ -174,6 +145,52 @@ func (p *PVG) runDefaultLoop() error {
 		p.Evidence.LogAgent(p.Result.Rounds, turn.Role, string(turn.Status), turn.Logs, &turn.Stats)
 	}
 	return nil
+}
+
+// dispatchAndSaveTurn brackets execution with its durable obligations: first
+// record possible spending, then save the returned result before any handoff.
+func (p *PVG) dispatchAndSaveTurn(round int, role string) error {
+	workspace := p.Executor.WorkspaceState()
+	promptOpts := p.promptOptions()
+	var task string
+	if role == "prover" {
+		task = spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
+	} else {
+		task = spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
+	}
+	info, err := os.Stat(p.State.TranscriptPath)
+	if err != nil {
+		return err
+	}
+	// A crash after dispatch may have incurred usage even if Pi's file
+	// is missing. Only a confirmed preparation failure can undo dispatch.
+	wasInFlight := p.checkpoint.TurnInFlight
+	p.checkpoint.TurnInFlight = true
+	if err := p.saveCheckpoint(); err != nil {
+		return err
+	}
+	turn, err := p.runAgentTurn(round, role, (round+1)/2, task, p.checkpoint.Deadline)
+	if err != nil {
+		p.checkpoint.TurnInFlight = wasInFlight
+		if saveErr := p.saveCheckpoint(); saveErr != nil {
+			return fmt.Errorf("%w; persist preparation failure: %v", err, saveErr)
+		}
+		return err
+	}
+	turn.Role = role
+	if turn.Status != StatusConcede {
+		turn.Status = StatusContinue
+	}
+	finishedAt := time.Now()
+	p.checkpoint.Pending = &completedTurn{
+		Turn: turn, FinishedAt: finishedAt, TranscriptOffset: info.Size(),
+		Stopped: p.Config.StopRequested != nil && p.Config.StopRequested(),
+		// Generated after the agent exits: its earlier output cannot be
+		// mistaken for the coordinator's completed handoff marker.
+		CompletionID: rand.Text(),
+	}
+	p.checkpoint.TurnInFlight = false
+	return p.saveCheckpoint()
 }
 
 func (p *PVG) acceptPendingTurn() {
