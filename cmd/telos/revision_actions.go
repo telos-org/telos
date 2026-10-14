@@ -73,9 +73,9 @@ func cmdRevisionAction(action string, args []string) {
 		GoalID: session.ID, Context: control.ContextName(), Action: action,
 		PreviousRevisionID: page.CurrentRevisionID, SourceRevision: source, Operation: operation,
 	}
-	progress, completed := "Restoring", "Restored"
+	progress, completed := "Restoring", "Restore complete."
 	if action == "redeploy" {
-		progress, completed = "Redeploying", "Redeployed"
+		progress, completed = "Redeploying", "Redeploy complete."
 	}
 	if !*jsonOut {
 		printRevisionField(os.Stdout, "Name", session.Name)
@@ -100,7 +100,7 @@ func cmdRevisionAction(action string, args []string) {
 	if *jsonOut {
 		printJSON(receipt)
 	} else if receipt.ResultRevision != nil {
-		fmt.Fprintf(os.Stdout, "%s as revision %d.\n", completed, receipt.ResultRevision.Sequence)
+		fmt.Fprintln(os.Stdout, completed)
 	} else if err == nil {
 		fmt.Printf("%s requested for revision %d.\n", strings.ToUpper(action[:1])+action[1:], source.Sequence)
 		fmt.Fprintf(os.Stdout, "\nCheck history: telos history %s --context %s\n", session.ID, control.ContextName())
