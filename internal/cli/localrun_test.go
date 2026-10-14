@@ -312,10 +312,10 @@ func expireLocalCheckpoint(t *testing.T, path string) {
 }
 
 func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
-	for _, mode := range []string{"valid", "unreadable", "corrupt", "missing", "missing before deadline"} {
+	for _, mode := range []string{"valid", "unreadable", "corrupt", "empty", "missing", "missing before deadline"} {
 		t.Run(mode, func(t *testing.T) {
 			session, checkpointPath := interruptLocalVerifier(t)
-			if mode != "missing before deadline" {
+			if mode != "missing before deadline" && mode != "empty" {
 				expireLocalCheckpoint(t, checkpointPath)
 			}
 			state := game.NewPVGState(session.SpecName, filepath.Join(session.SessionDir, "specs", session.SpecName), session.SessionID)
@@ -323,6 +323,8 @@ func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
 				"{\"message\":{\"role\":\"assistant\",\"usage\":{\"input\":100,\"output\":20,\"cost\":{\"total\":0.75}}}}\n"
 			if mode == "corrupt" {
 				history += "{\"message\":\n"
+			} else if mode == "empty" {
+				history = ""
 			}
 			if err := os.WriteFile(state.Turn(1, 2, "verifier").PiSessionPath(), []byte(history), 0o600); err != nil {
 				t.Fatal(err)
@@ -362,7 +364,7 @@ func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
 			t.Setenv("PATH", t.TempDir())
 			for attempt := 0; attempt < 2; attempt++ {
 				result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
-				if mode == "corrupt" || strings.HasPrefix(mode, "missing") {
+				if mode == "corrupt" || mode == "empty" || strings.HasPrefix(mode, "missing") {
 					if err != nil || result == nil || result.GameResult != game.GameFailure || result.CompletionReason != "recovery_failed" || result.TotalCostUSD != 0.25 {
 						t.Fatalf("unknown usage did not fail the attempt with known usage retained: %+v, %v", result, err)
 					}

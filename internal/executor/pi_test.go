@@ -444,7 +444,7 @@ func TestExecuteTurnCanRecoverFromMissingCredentialsBeforeSessionCreation(t *tes
 }
 
 func TestExecuteTurnBlocksWhenNewSessionIsUnreadableAfterLaunch(t *testing.T) {
-	for _, action := range []string{`rm "$session"`, `rm "$session"; mkdir "$session"`} {
+	for _, action := range []string{`rm "$session"`, `rm "$session"; mkdir "$session"`, `: > "$session"`} {
 		t.Run(action, func(t *testing.T) {
 			executor, turn := newPiResumeTestExecutor(t, "", piProgressLine("new")+"\n")
 			if err := os.Remove(turn.PiSessionPath()); err != nil {

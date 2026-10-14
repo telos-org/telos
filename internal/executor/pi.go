@@ -177,6 +177,8 @@ func recoverableAgentFailure(errorText string) bool {
 	return !blocked
 }
 
+// Once Pi ran, an unreadable result is a durable failure even for a temporary
+// read error: the preparation-error contract would incorrectly undo dispatch.
 func piSessionStateError(role string, stats game.TurnStats, err error) game.TurnResult {
 	diagnostic := fmt.Sprintf("pi_session_integrity: %v; usage is unknown, preserve the session for inspection", err)
 	return game.TurnResult{Role: role, Status: game.StatusContinue, Logs: diagnostic, Stats: stats, StateError: diagnostic}
@@ -227,12 +229,9 @@ func capturePiSessionBaseline(path string) (piSessionBaseline, error) {
 		return baseline, err
 	}
 	if !baseline.fileInfo.Mode().IsRegular() {
-		return baseline, fmt.Errorf("Pi session %q is not a regular file", path)
+		return baseline, &os.PathError{Op: "read", Path: path, Err: errors.New("Pi session is not a regular file")}
 	}
 	baseline.offset = baseline.fileInfo.Size()
-	if baseline.offset == 0 {
-		return baseline, nil
-	}
 	// Current Pi sessions append records. Older versions are rewritten by Pi's
 	// migration, invalidating byte positions and potentially retained usage.
 	header, err := bufio.NewReader(f).ReadBytes('\n')
@@ -539,21 +538,23 @@ func ReadPiSession(path string) (PiSessionSummary, error) {
 func ReadPiSessionStats(path string) (game.TurnStats, error) {
 	baseline, err := capturePiSessionBaseline(path)
 	if err != nil {
-		if errors.Is(err, errPiSessionFormat) {
-			err = &game.RecoveryError{Err: err}
-		}
-		return game.TurnStats{}, err
+		return game.TurnStats{}, classifyPiRecoveryError(err)
 	}
 	summary, err := readPiSession(path, baseline)
-	if errors.Is(err, errPiNoAssistant) {
-		err = nil
-	} else if err != nil {
-		var pathErr *os.PathError
-		if !errors.As(err, &pathErr) || os.IsNotExist(pathErr) {
-			err = &game.RecoveryError{Err: err}
-		}
+	return summary.Stats, classifyPiRecoveryError(err)
+}
+
+// Before dispatch, intact but temporarily inaccessible history can be retried.
+// Missing/invalid history cannot establish usage; a valid header-only session can.
+func classifyPiRecoveryError(err error) error {
+	if err == nil || errors.Is(err, errPiNoAssistant) {
+		return nil
 	}
-	return summary.Stats, err
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) && !os.IsNotExist(pathErr) {
+		return err
+	}
+	return &game.RecoveryError{Err: err}
 }
 
 func (pe *PiExecutor) RecoverTurnStats(turn *game.TurnState) (game.TurnStats, error) {
@@ -575,6 +576,9 @@ func readPiSession(path string, baseline piSessionBaseline) (PiSessionSummary, e
 			return PiSessionSummary{}, fmt.Errorf("%w: %w", errPiSessionChanged, err)
 		}
 		return PiSessionSummary{}, err
+	}
+	if info.Size() == 0 {
+		return PiSessionSummary{}, errPiSessionFormat
 	}
 	if err := baseline.validate(f, info); err != nil {
 		return PiSessionSummary{}, err
