@@ -106,6 +106,14 @@ func (p *PVG) runDefaultLoop() error {
 				p.end(GameStopped)
 				return p.saveCheckpoint()
 			}
+			if p.costBudgetExhausted(p.Result.TotalCostUSD + interruptedStats.CostUSD) {
+				// A resumed request must not spend again after recovered usage
+				// exhausts the cap. Otherwise ExecuteTurn accounts for it later.
+				p.Result.Accumulate(interruptedStats)
+				p.overBudget(round, role)
+				p.end(GameFailure)
+				return p.saveCheckpoint()
+			}
 			workspace := p.Executor.WorkspaceState()
 			promptOpts := p.promptOptions()
 			var task string
@@ -345,13 +353,10 @@ func (p *PVG) checkpointWorkspace() {
 }
 
 func (p *PVG) overBudget(roundNum int, role string) bool {
-	if p.Config.MaxCostUSD == nil {
+	if !p.costBudgetExhausted(p.Result.TotalCostUSD) {
 		return false
 	}
 	cap := *p.Config.MaxCostUSD
-	if p.Result.TotalCostUSD < cap {
-		return false
-	}
 	p.Evidence.Log("budget_exceeded", roundNum, role, map[string]interface{}{
 		"session_cost_usd": p.Result.TotalCostUSD,
 		"cap_usd":          cap,
@@ -359,4 +364,8 @@ func (p *PVG) overBudget(roundNum int, role string) bool {
 	p.Result.Error = fmt.Sprintf("budget exceeded: $%.2f >= cap $%.2f",
 		p.Result.TotalCostUSD, cap)
 	return true
+}
+
+func (p *PVG) costBudgetExhausted(cost float64) bool {
+	return p.Config.MaxCostUSD != nil && cost >= *p.Config.MaxCostUSD
 }

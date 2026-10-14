@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,22 +137,24 @@ func (e interruptedPiExecutor) ExecuteTurn(task, role string, turn *game.TurnSta
 	return result, err
 }
 
-func TestRunLocalSessionResumesPiVerifierWithoutReplayingActivity(t *testing.T) {
-	dir := t.TempDir()
-	specPath := writeTestSpec(t, dir)
-	t.Chdir(dir)
-	session, err := CreateLocalSession(specPath, LocalRunConfig{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	home := t.TempDir()
-	bin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Exercise the real launch, session parser, live projector, PVG and CLI.
-	// Only the provider-facing Pi executable is replaced.
-	script := `#!/bin/sh
+func TestRunLocalSessionRecoversPiVerifierWithinSavedCostLimit(t *testing.T) {
+	for _, cap := range []float64{0.5, 1.0} {
+		t.Run(fmt.Sprintf("cap-%.2f", cap), func(t *testing.T) {
+			dir := t.TempDir()
+			specPath := writeTestSpec(t, dir)
+			t.Chdir(dir)
+			session, err := CreateLocalSession(specPath, LocalRunConfig{MaxCostUSD: &cap})
+			if err != nil {
+				t.Fatal(err)
+			}
+			home := t.TempDir()
+			bin := filepath.Join(home, ".local", "bin")
+			if err := os.MkdirAll(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// Exercise the real launch, session parser, live projector, PVG and CLI.
+			// Only the provider-facing Pi executable is replaced.
+			script := `#!/bin/sh
 while [ "$#" -gt 0 ]; do
   if [ "$1" = "--session" ]; then shift; session="$1"; fi
   shift
@@ -164,58 +167,87 @@ else
 fi
 if [ "$TELOS_ROLE" = "prover" ]; then progress="builder"; fi
 printf '%s\n' "$TELOS_ROLE:$progress" >> "$HOME/launches"
-printf '{"message":{"role":"assistant","content":[{"type":"text","text":"<progress_update>%s</progress_update>\\n<status>CONCEDE</status>"}],"usage":{"input":10,"cost":{"total":0.25}}}}\n' "$progress" >> "$session"
+printf '{"message":{"role":"assistant","content":[{"type":"text","text":"<progress_update>%s</progress_update>\\n<status>CONCEDE</status>"},{"type":"toolCall","name":"bash","arguments":{"command":"test"}}],"usage":{"input":10,"cost":{"total":0.25}}}}\n' "$progress" >> "$session"
 `
-	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	newExecutor := func() *piexecutor.PiExecutor {
-		local := platform.NewLocalPlatform(session.ActiveWorkspace)
-		local.Env = map[string]string{"HOME": home}
-		return piexecutor.NewPiExecutor(local, "test-model", "high", 0)
-	}
-	func() {
-		defer func() {
-			if got := recover(); got != "interrupted verifier" {
-				t.Fatalf("expected interruption, got %v", got)
+			if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
 			}
-		}()
-		result, err := RunLocalSessionWithExecutor(session.SessionDir, interruptedPiExecutor{newExecutor()})
-		t.Fatalf("did not interrupt: %+v, %v", result, err)
-	}()
-	result, err := RunLocalSessionWithExecutor(session.SessionDir, newExecutor())
-	if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.TotalCostUSD != 0.75 || result.TotalInputTokens != 30 {
-		t.Fatalf("resumed result = %+v, %v", result, err)
-	}
-	launches, err := os.ReadFile(filepath.Join(home, "launches"))
-	if err != nil || string(launches) != "prover:builder\nverifier:review-before\nverifier:review-after\n" {
-		t.Fatalf("wrong resumed conversation or role: %s, %v", launches, err)
-	}
-	data, err := os.ReadFile(result.EvidencePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	progress := map[string]int{}
-	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
-		var event struct {
-			Event string `json:"event"`
-			Data  struct {
-				Text string `json:"text"`
-			} `json:"data"`
-		}
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			t.Fatal(err)
-		}
-		if event.Event == "agent_progress" {
-			progress[event.Data.Text]++
-		}
-	}
-	if len(progress) != 3 || progress["builder"] != 1 || progress["review-before"] != 1 || progress["review-after"] != 1 {
-		t.Fatalf("activity lost or replayed: %v", progress)
-	}
-	manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
-	if err != nil || len(manifest.Epochs) != 1 || manifest.OpenEpoch() != nil || manifest.Epochs[0].RoundCount == nil || *manifest.Epochs[0].RoundCount != 2 {
-		t.Fatalf("resumed epoch = %+v, %v", manifest, err)
+			newExecutor := func() *piexecutor.PiExecutor {
+				local := platform.NewLocalPlatform(session.ActiveWorkspace)
+				local.Env = map[string]string{"HOME": home}
+				return piexecutor.NewPiExecutor(local, "test-model", "high", 0)
+			}
+			func() {
+				defer func() {
+					if got := recover(); got != "interrupted verifier" {
+						t.Fatalf("expected interruption, got %v", got)
+					}
+				}()
+				result, err := RunLocalSessionWithExecutor(session.SessionDir, interruptedPiExecutor{newExecutor()})
+				t.Fatalf("did not interrupt: %+v, %v", result, err)
+			}()
+			wantResult, wantRounds, wantCost, wantTokens := game.GameSuccess, 2, 0.75, 30
+			wantLaunches := "prover:builder\nverifier:review-before\nverifier:review-after\n"
+			if cap == 0.5 {
+				wantResult, wantRounds, wantCost, wantTokens = game.GameFailure, 1, 0.5, 20
+				wantLaunches = "prover:builder\nverifier:review-before\n"
+			}
+			manifestFile := manifestPath(session.SessionDir)
+			openManifest, err := os.ReadFile(manifestFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result *game.PVGResult
+			for recovery := 0; recovery < 2; recovery++ {
+				result, err = RunLocalSessionWithExecutor(session.SessionDir, newExecutor())
+				if err != nil || result.GameResult != wantResult || result.Rounds != wantRounds || result.TotalCostUSD != wantCost || result.TotalInputTokens != wantTokens {
+					t.Fatalf("recovery %d: %+v, %v", recovery, result, err)
+				}
+				if cap == 0.5 && !strings.Contains(result.Error, "budget exceeded") {
+					t.Fatalf("expected budget failure: %+v", result)
+				}
+				if recovery == 0 {
+					// Simulate a crash before the terminal result reached the manifest.
+					if err := os.WriteFile(manifestFile, openManifest, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			launches, err := os.ReadFile(filepath.Join(home, "launches"))
+			if err != nil || string(launches) != wantLaunches {
+				t.Fatalf("wrong resumed conversation or extra launch: %s, %v", launches, err)
+			}
+			data, err := os.ReadFile(result.EvidencePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			progress := map[string]int{}
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				var event struct {
+					Event string `json:"event"`
+					Data  struct {
+						Text string `json:"text"`
+					} `json:"data"`
+				}
+				if err := json.Unmarshal([]byte(line), &event); err != nil {
+					t.Fatal(err)
+				}
+				if event.Event == "agent_progress" {
+					progress[event.Data.Text]++
+				}
+			}
+			wantResumed := 1
+			if cap == 0.5 {
+				wantResumed = 0
+			}
+			if len(progress) != 3+wantResumed || progress["builder"] != 1 || progress["review-before"] != 1 || progress["review-after"] != wantResumed || progress["Running shell command"] != 2+wantResumed {
+				t.Fatalf("activity lost or replayed: %v", progress)
+			}
+			manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
+			if err != nil || len(manifest.Epochs) != 1 || manifest.OpenEpoch() != nil || manifest.Epochs[0].RoundCount == nil || *manifest.Epochs[0].RoundCount != wantRounds {
+				t.Fatalf("resumed epoch = %+v, %v", manifest, err)
+			}
+		})
 	}
 }
 

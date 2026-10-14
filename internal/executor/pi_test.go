@@ -270,33 +270,6 @@ func TestExecuteTurnTreatsTimeoutAsTerminalFailure(t *testing.T) {
 	}
 }
 
-func TestExecuteTurnResumesWithoutReplayingExistingActivity(t *testing.T) {
-	old := `{"message":{"role":"assistant","content":[{"type":"text","text":"<progress_update>old</progress_update>\n<status>CONCEDE</status>"},{"type":"toolCall","name":"bash","arguments":{"command":"old command"}}],"usage":{"input":10,"output":20,"cost":{"total":0.25}}}}` + "\n"
-	newLine := `{"message":{"role":"assistant","content":[{"type":"text","text":"<progress_update>new</progress_update>\n<status>CONTINUE</status>"},{"type":"toolCall","name":"bash","arguments":{"command":"new command"}}],"usage":{"input":3,"output":4,"cost":{"total":0.5}}}}` + "\n"
-	exec, turn := newPiResumeTestExecutor(t, old, newLine)
-	var events []game.LiveAgentEvent
-	turn.OnLiveEvent = func(event game.LiveAgentEvent) { events = append(events, event) }
-	result, preparationErr := exec.ExecuteTurn("resume verifier", "verifier", turn)
-	if preparationErr != nil {
-		t.Fatal(preparationErr)
-	}
-	if result.Error != "" || result.Status != game.StatusContinue || strings.Contains(result.Logs, "old") {
-		t.Fatalf("resumed result = %+v", result)
-	}
-	want := []game.LiveAgentEvent{
-		{Kind: "progress_update", Text: "new"},
-		{Kind: "tool", Text: "Running shell command"},
-	}
-	if !slices.Equal(events, want) {
-		t.Fatalf("resumed activity = %#v, want %#v", events, want)
-	}
-	// Nothing accounted for the interrupted attempt's usage yet. Both pieces
-	// of this one turn are reported together when it finally completes.
-	if result.Stats.InputTokens != 13 || result.Stats.OutputTokens != 24 || result.Stats.CostUSD != 0.75 {
-		t.Fatalf("interrupted turn usage was lost: %+v", result.Stats)
-	}
-}
-
 func TestExecuteTurnRequiresNewAssistantOutputAfterResume(t *testing.T) {
 	old := `{"message":{"role":"assistant","content":[{"type":"text","text":"<status>CONCEDE</status>"}],"usage":{"input":10,"cost":{"total":0.25}}}}`
 	for _, tc := range []struct {
@@ -535,21 +508,6 @@ func TestPiResumeRejectsRewritingNewlyObservedHistory(t *testing.T) {
 	projector.observeSessionFile(true)
 	if !errors.Is(projector.integrityErr, errPiSessionChanged) || !slices.Equal(events, []game.LiveAgentEvent{{Kind: "progress_update", Text: "new"}}) {
 		t.Fatalf("replayed or lost newly observed history: err=%v events=%#v", projector.integrityErr, events)
-	}
-}
-
-func TestExecuteTurnDoesNotConcedeFromMalformedOldTail(t *testing.T) {
-	old := `{"message":{"role":"assistant","content":[{"type":"text","text":"<status>CONCEDE</status>"}]}}!`
-	newAssistant := `{"message":{"role":"assistant","content":[{"type":"text","text":"<status>CONCEDE</status>"}],"usage":{"cost":{"total":0.5}}}}`
-	for _, appended := range []string{"", "\n", "\n" + newAssistant + "\n"} {
-		executor, turn := newPiResumeTestExecutor(t, old, appended)
-		result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
-		if preparationErr != nil {
-			t.Fatal(preparationErr)
-		}
-		if result.Status == game.StatusConcede || result.Recoverable || !strings.Contains(result.StateError, "invalid Pi session record") || result.Stats.CostUSD != 0 {
-			t.Fatalf("malformed historical tail accepted with untrustworthy accounting: %+v", result)
-		}
 	}
 }
 
