@@ -515,35 +515,24 @@ func TestRunLocalSessionFinalizesTerminalCheckpointWithoutPi(t *testing.T) {
 }
 
 func TestRunLocalSessionAcceptsPendingConcessionWithoutPi(t *testing.T) {
-	session, path := interruptLocalVerifier(t)
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var checkpoint map[string]json.RawMessage
-	if err := json.Unmarshal(data, &checkpoint); err != nil {
-		t.Fatal(err)
-	}
+	session, _ := interruptLocalVerifier(t)
 	transcript := filepath.Join(session.SessionDir, "specs", session.SpecName, "transcript-"+session.SessionID+".md")
-	info, err := os.Stat(transcript)
-	if err != nil {
-		t.Fatal(err)
+	executor := &fakeExecutor{
+		verifierResult: game.TurnResult{Status: game.StatusConcede, Logs: "review complete\n<status>CONCEDE</status>", Stats: game.TurnStats{CostUSD: 0.5}},
+		onExecute: func(role string) {
+			if role != "verifier" {
+				t.Fatalf("replayed completed %s", role)
+			}
+			// Fail the handoff write after the returned result has been saved.
+			if err := os.Rename(transcript, transcript+".saved"); err != nil {
+				t.Fatal(err)
+			}
+		},
 	}
-	// Model the persisted result immediately after the verifier finishes and
-	// before the coordinator processes its concession.
-	checkpoint["pending"], err = json.Marshal(map[string]any{
-		"turn":        game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "review complete\n<status>CONCEDE</status>", Stats: game.TurnStats{CostUSD: 0.5}},
-		"finished_at": time.Now(), "stopped": false, "transcript_offset": info.Size(),
-		"completion_id": "pending-concession-fixture",
-	})
-	if err != nil {
-		t.Fatal(err)
+	if result, err := RunLocalSessionWithExecutor(session.SessionDir, executor); !errors.Is(err, ErrAttemptPending) || result != nil {
+		t.Fatalf("expected pending handoff failure: %+v, %v", result, err)
 	}
-	data, err = json.Marshal(checkpoint)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, data, 0o600); err != nil {
+	if err := os.Rename(transcript+".saved", transcript); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", t.TempDir())
@@ -551,7 +540,7 @@ func TestRunLocalSessionAcceptsPendingConcessionWithoutPi(t *testing.T) {
 	if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.TotalCostUSD != 0.75 {
 		t.Fatalf("pending concession required Pi or reran a turn: %+v, %v", result, err)
 	}
-	data, err = os.ReadFile(transcript)
+	data, err := os.ReadFile(transcript)
 	if err != nil || strings.Count(string(data), "review complete") != 1 {
 		t.Fatalf("pending handoff missing or duplicated: %v\n%s", err, data)
 	}

@@ -129,8 +129,8 @@ func (p *PVG) runDefaultLoop() error {
 				return err
 			}
 		}
-		if stateError := p.checkpoint.Pending.Turn.StateError; stateError != "" {
-			return recoveryErrorf("agent session integrity: %s", stateError)
+		if turn := p.checkpoint.Pending.Turn; turn.Failure == FailureState {
+			return recoveryErrorf("agent session integrity: %s", turn.Error)
 		}
 		if err := p.appendPendingTurn(); err != nil {
 			return err
@@ -258,7 +258,7 @@ func (p *PVG) runDurationExhausted(deadline time.Time) bool {
 }
 
 func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
-	if _, blocked := AgentFailureBlocker(turn.Error); blocked || !turn.Recoverable {
+	if _, blocked := AgentFailureBlocker(turn.Error); blocked || turn.Failure != FailureRecoverable {
 		p.Result.Error = turn.Error
 		return true
 	}

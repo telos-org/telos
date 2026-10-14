@@ -104,11 +104,11 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 		for time.Now().Before(deadline) {
 			if ts != nil && ts.StopRequested != nil && ts.StopRequested() {
 				return game.TurnResult{
-					Role:        role,
-					Status:      game.StatusContinue,
-					Logs:        "test fake interrupted by stop request",
-					Error:       "local_interrupted:stop_requested",
-					Recoverable: true,
+					Role:    role,
+					Status:  game.StatusContinue,
+					Logs:    "test fake interrupted by stop request",
+					Error:   "local_interrupted:stop_requested",
+					Failure: game.FailureRecoverable,
 				}, nil
 			}
 			time.Sleep(10 * time.Millisecond)
@@ -123,12 +123,16 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 		}, nil
 	}
 
+	failure := game.FailureTerminal
+	if turn.Recoverable {
+		failure = game.FailureRecoverable
+	}
 	return game.TurnResult{
-		Role:        role,
-		Status:      testFakeStatus(turn.Status),
-		Logs:        turn.Logs,
-		Error:       turn.Error,
-		Recoverable: turn.Recoverable,
+		Role:    role,
+		Status:  testFakeStatus(turn.Status),
+		Logs:    turn.Logs,
+		Error:   turn.Error,
+		Failure: failure,
 		Stats: game.TurnStats{
 			CostUSD:             turn.CostUSD,
 			DurationMS:          turn.DurationMS,

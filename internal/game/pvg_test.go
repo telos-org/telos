@@ -36,7 +36,7 @@ func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) (Tur
 		deadline := time.Now().Add(f.delay)
 		for time.Now().Before(deadline) {
 			if ts != nil && ts.StopRequested != nil && ts.StopRequested() {
-				return TurnResult{Role: role, Status: StatusContinue, Logs: "stopped", Error: "local_interrupted:stop_requested", Recoverable: true}, nil
+				return TurnResult{Role: role, Status: StatusContinue, Logs: "stopped", Error: "local_interrupted:stop_requested", Failure: FailureRecoverable}, nil
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -304,7 +304,7 @@ func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
 
 	exec := &fakeExecutor{
 		proverResults: []TurnResult{
-			{Role: "prover", Status: StatusContinue, Logs: "pi_failed:1", Error: "pi_failed:1", Recoverable: true},
+			{Role: "prover", Status: StatusContinue, Logs: "pi_failed:1", Error: "pi_failed:1", Failure: FailureRecoverable},
 		},
 		verifierResults: []TurnResult{
 			{Role: "verifier", Status: StatusConcede, Logs: "Inspected failed prover turn.\n<status>CONCEDE</status>\n"},
@@ -338,11 +338,11 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 
 	recoverable := func(role string) TurnResult {
 		return TurnResult{
-			Role:        role,
-			Status:      StatusContinue,
-			Logs:        "pi_failed:1",
-			Error:       "pi_failed:1",
-			Recoverable: true,
+			Role:    role,
+			Status:  StatusContinue,
+			Logs:    "pi_failed:1",
+			Error:   "pi_failed:1",
+			Failure: FailureRecoverable,
 		}
 	}
 	exec := &fakeExecutor{
@@ -376,10 +376,10 @@ func TestPVGDoesNotRetryCredentialFailure(t *testing.T) {
 	state := NewPVGState("pvg-test", filepath.Join(dir, "specs", "pvg-test"), "test-session-auth")
 	state.Ensure()
 	exec := &fakeExecutor{proverResults: []TurnResult{{
-		Role:        "prover",
-		Status:      StatusContinue,
-		Error:       "403: inactive virtual key",
-		Recoverable: true,
+		Role:    "prover",
+		Status:  StatusContinue,
+		Error:   "403: inactive virtual key",
+		Failure: FailureRecoverable,
 	}}}
 
 	result := mustRunPVG(t, NewPVG(compiled, exec, state, PVGConfig{}))
@@ -397,7 +397,7 @@ func TestPVGQuotaFailureDoesNotStartAnotherAgentTurn(t *testing.T) {
 			compiled := compileTestSpec(t)
 			state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-quota")
 			state.Ensure()
-			failure := TurnResult{Role: role, Error: "400: Your credit balance is too low to access the Anthropic API", Recoverable: true}
+			failure := TurnResult{Role: role, Error: "400: Your credit balance is too low to access the Anthropic API", Failure: FailureRecoverable}
 			exec := &fakeExecutor{proverResults: []TurnResult{failure}}
 			wantRounds := 1
 			if role == "verifier" {
@@ -427,7 +427,7 @@ func TestPVGUntilFailsWhenReviewBudgetExhausted(t *testing.T) {
 			{Role: "prover", Status: StatusContinue, Logs: "Round 3"},
 		},
 		verifierResults: []TurnResult{
-			{Role: "verifier", Status: StatusContinue, Logs: "pi_failed:1", Error: "pi_failed:1", Recoverable: true},
+			{Role: "verifier", Status: StatusContinue, Logs: "pi_failed:1", Error: "pi_failed:1", Failure: FailureRecoverable},
 			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,7.0/10\n</review>\n\n<summary>Keep going.</summary>\n"},
 			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,8.0/10\n</review>\n\n<summary>Better.</summary>\n"},
 		},

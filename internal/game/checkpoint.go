@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const checkpointVersion = 2
+
 // runCheckpoint is the execution authority, separate from best-effort activity
 // logs. Result counts completed turns; the next turn is always Rounds + 1.
 // Workers must hold the session ownership lock throughout Run.
@@ -59,7 +61,7 @@ func (p *PVG) restoreCheckpoint() error {
 			}
 		}
 		p.checkpoint = &runCheckpoint{
-			Version: 1, SessionID: p.State.SessionID, EpochID: p.Config.EpochID,
+			Version: checkpointVersion, SessionID: p.State.SessionID, EpochID: p.Config.EpochID,
 			Until: p.Config.Until, UntilSeconds: p.Config.UntilSeconds,
 			MaxCostUSD: p.Config.MaxCostUSD, Deadline: p.runDeadline(), Result: p.Result,
 		}
@@ -77,7 +79,7 @@ func (p *PVG) restoreCheckpoint() error {
 		return recoveryErrorf("decode execution checkpoint: %w", err)
 	}
 	r := checkpoint.Result
-	if checkpoint.Version != 1 || checkpoint.SessionID != p.State.SessionID || checkpoint.EpochID != p.Config.EpochID || r == nil {
+	if checkpoint.Version != checkpointVersion || checkpoint.SessionID != p.State.SessionID || checkpoint.EpochID != p.Config.EpochID || r == nil {
 		return recoveryErrorf("execution checkpoint version or session/epoch identity does not match")
 	}
 	if r.SystemName != p.Compiled.Environment.Name || r.Rounds < 0 || r.ProverRounds != (r.Rounds+1)/2 || r.VerifierRounds != r.Rounds/2 ||
@@ -103,6 +105,11 @@ func (p *PVG) restoreCheckpoint() error {
 		return recoveryErrorf("execution checkpoint is missing its result identity")
 	}
 	if pending := checkpoint.Pending; pending != nil {
+		switch pending.Turn.Failure {
+		case FailureTerminal, FailureRecoverable, FailureState:
+		default:
+			return recoveryErrorf("execution checkpoint has unknown turn failure %q", pending.Turn.Failure)
+		}
 		if r.GameResult != "" || pending.CompletionID == "" || pending.TranscriptOffset < 0 || pending.FinishedAt.IsZero() || pending.Turn.Role != turnRole(r.Rounds+1) {
 			return recoveryErrorf("execution checkpoint has inconsistent pending turn")
 		}

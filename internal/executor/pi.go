@@ -101,24 +101,28 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			agentError = summary.Error
 		} else if result.ReturnCode == 0 && result.InfraError == "" {
 			return game.TurnResult{
-				Role:        role,
-				Status:      game.StatusContinue,
-				Logs:        fmt.Sprintf("pi_session_unavailable:%v", err),
-				Stats:       stats,
-				Error:       fmt.Sprintf("pi_session_unavailable:%v", err),
-				Recoverable: true,
+				Role:    role,
+				Status:  game.StatusContinue,
+				Logs:    fmt.Sprintf("pi_session_unavailable:%v", err),
+				Stats:   stats,
+				Error:   fmt.Sprintf("pi_session_unavailable:%v", err),
+				Failure: game.FailureRecoverable,
 			}, nil
 		}
 	}
 
 	if result.InfraError != "" {
+		failure := agentFailureKind(result.InfraError)
+		if result.TimedOut {
+			failure = game.FailureTerminal
+		}
 		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        result.InfraError,
-			Stats:       stats,
-			Error:       result.InfraError,
-			Recoverable: !result.TimedOut && recoverableAgentFailure(result.InfraError),
+			Role:    role,
+			Status:  game.StatusContinue,
+			Logs:    result.InfraError,
+			Stats:   stats,
+			Error:   result.InfraError,
+			Failure: failure,
 		}, nil
 	}
 
@@ -129,23 +133,23 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			reason = fmt.Sprintf("%s\n[stderr]\n%s", reason, stderrTrimmed)
 		}
 		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        reason,
-			Stats:       stats,
-			Error:       reason,
-			Recoverable: recoverableAgentFailure(reason),
+			Role:    role,
+			Status:  game.StatusContinue,
+			Logs:    reason,
+			Stats:   stats,
+			Error:   reason,
+			Failure: agentFailureKind(reason),
 		}, nil
 	}
 
 	if agentError != "" {
 		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        agentError,
-			Stats:       stats,
-			Error:       agentError,
-			Recoverable: recoverableAgentFailure(agentError),
+			Role:    role,
+			Status:  game.StatusContinue,
+			Logs:    agentError,
+			Stats:   stats,
+			Error:   agentError,
+			Failure: agentFailureKind(agentError),
 		}, nil
 	}
 
@@ -155,12 +159,12 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			detail = fmt.Sprintf("%s\n[stderr]\n%s", detail, stderrTrimmed)
 		}
 		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        detail,
-			Stats:       stats,
-			Error:       "agent_no_output",
-			Recoverable: true,
+			Role:    role,
+			Status:  game.StatusContinue,
+			Logs:    detail,
+			Stats:   stats,
+			Error:   "agent_no_output",
+			Failure: game.FailureRecoverable,
 		}, nil
 	}
 
@@ -172,16 +176,18 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	}, nil
 }
 
-func recoverableAgentFailure(errorText string) bool {
-	_, blocked := game.AgentFailureBlocker(errorText)
-	return !blocked
+func agentFailureKind(errorText string) game.TurnFailure {
+	if _, blocked := game.AgentFailureBlocker(errorText); blocked {
+		return game.FailureTerminal
+	}
+	return game.FailureRecoverable
 }
 
 // Once Pi ran, an unreadable result is a durable failure even for a temporary
 // read error: the preparation-error contract would incorrectly undo dispatch.
 func piSessionStateError(role string, stats game.TurnStats, err error) game.TurnResult {
 	diagnostic := fmt.Sprintf("pi_session_integrity: %v; usage is unknown, preserve the session for inspection", err)
-	return game.TurnResult{Role: role, Status: game.StatusContinue, Logs: diagnostic, Stats: stats, StateError: diagnostic}
+	return game.TurnResult{Role: role, Status: game.StatusContinue, Logs: diagnostic, Stats: stats, Error: diagnostic, Failure: game.FailureState}
 }
 
 type piLiveProjector struct {

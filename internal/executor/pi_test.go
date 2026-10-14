@@ -60,14 +60,14 @@ func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	}
 }
 
-func TestRecoverableAgentFailureRejectsProviderBlockers(t *testing.T) {
+func TestAgentFailureKindClassifiesProviderErrors(t *testing.T) {
 	for _, errorText := range []string{
 		"403: inactive virtual key",
 		"request failed (HTTP 401)",
 		"400: Your credit balance is too low to access the Anthropic API",
 		"429: insufficient_quota",
 	} {
-		if recoverableAgentFailure(errorText) {
+		if agentFailureKind(errorText) != game.FailureTerminal {
 			t.Fatalf("provider blocker marked recoverable: %q", errorText)
 		}
 	}
@@ -75,7 +75,7 @@ func TestRecoverableAgentFailureRejectsProviderBlockers(t *testing.T) {
 		"429: provider at capacity",
 		"502: no healthy upstream",
 	} {
-		if !recoverableAgentFailure(errorText) {
+		if agentFailureKind(errorText) != game.FailureRecoverable {
 			t.Fatalf("transient error marked non-recoverable: %q", errorText)
 		}
 	}
@@ -265,8 +265,8 @@ func TestExecuteTurnTreatsTimeoutAsTerminalFailure(t *testing.T) {
 	if result.Error != "local_timeout:1" {
 		t.Fatalf("error: got %q", result.Error)
 	}
-	if result.Recoverable {
-		t.Fatalf("timeout should be terminal, got recoverable result: %#v", result)
+	if result.Failure != game.FailureTerminal {
+		t.Fatalf("timeout should be terminal: %#v", result)
 	}
 }
 
@@ -287,7 +287,7 @@ func TestExecuteTurnRequiresNewAssistantOutputAfterResume(t *testing.T) {
 			if preparationErr != nil {
 				t.Fatal(preparationErr)
 			}
-			if result.Status != game.StatusContinue || !result.Recoverable || !strings.Contains(result.Error, "no new assistant message") {
+			if result.Status != game.StatusContinue || result.Failure != game.FailureRecoverable || !strings.Contains(result.Error, "no new assistant message") {
 				t.Fatalf("reused stale concession: %+v", result)
 			}
 			if len(events) != 0 || result.Stats.InputTokens != 10 || result.Stats.CostUSD != 0.25 {
@@ -350,7 +350,7 @@ func TestExecuteTurnRejectsUnsupportedSessionBeforeStartingPi(t *testing.T) {
 			}
 			result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
 			data, err := os.ReadFile(turn.PiSessionPath())
-			if err != nil || string(data) != initial || result.StateError == "" || preparationErr != nil || result.Recoverable || result.Status == game.StatusConcede {
+			if err != nil || string(data) != initial || result.Failure != game.FailureState || preparationErr != nil || result.Status == game.StatusConcede {
 				t.Fatalf("unsafe session was launched: result=%+v readErr=%v", result, err)
 			}
 		})
@@ -373,7 +373,7 @@ func TestExecuteTurnRetriesPreparationFailureWithoutLaunchingPi(t *testing.T) {
 				executor.Platform.Workspace = filepath.Join(t.TempDir(), "missing-workspace")
 			}
 			result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
-			if preparationErr == nil || result.StateError != "" || result.Error != "" {
+			if preparationErr == nil || result.Failure == game.FailureState || result.Error != "" {
 				t.Fatalf("preparation failure was not retryable: %+v", result)
 			}
 			startedPath := filepath.Join(executor.Platform.Env["HOME"], "pi-started")
@@ -389,7 +389,7 @@ func TestExecuteTurnRetriesPreparationFailureWithoutLaunchingPi(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, preparationErr = executor.ExecuteTurn("resume", "verifier", turn)
-			if preparationErr != nil || result.StateError != "" || result.Error != "" || !strings.Contains(result.Logs, "repaired") {
+			if preparationErr != nil || result.Failure == game.FailureState || result.Error != "" || !strings.Contains(result.Logs, "repaired") {
 				t.Fatalf("same turn could not run after repair: %+v", result)
 			}
 			if data, err := os.ReadFile(startedPath); err != nil || string(data) != "started\n" {
@@ -403,7 +403,7 @@ func TestExecuteTurnHonorsStopBeforeStartingPi(t *testing.T) {
 	executor, turn := newPiResumeTestExecutor(t, "", piProgressLine("must not run")+"\n")
 	turn.StopRequested = func() bool { return true }
 	result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
-	if preparationErr == nil || !strings.Contains(preparationErr.Error(), "stop_requested") || result.StateError != "" || result.Error != "" {
+	if preparationErr == nil || !strings.Contains(preparationErr.Error(), "stop_requested") || result.Failure == game.FailureState || result.Error != "" {
 		t.Fatalf("pre-start stop consumed an attempt: %+v", result)
 	}
 	if _, err := os.Stat(filepath.Join(executor.Platform.Env["HOME"], "pi-started")); !os.IsNotExist(err) {
@@ -428,7 +428,7 @@ func TestExecuteTurnCanRecoverFromMissingCredentialsBeforeSessionCreation(t *tes
 	}
 	result, preparationErr := executor.ExecuteTurn("run", "prover", turn)
 	blocker, _ := game.AgentFailureBlocker(result.Error)
-	if result.StateError != "" || preparationErr != nil || blocker != "agent_credentials_missing" || result.Stats.CostUSD != 0 {
+	if result.Failure == game.FailureState || preparationErr != nil || blocker != "agent_credentials_missing" || result.Stats.CostUSD != 0 {
 		t.Fatalf("missing credentials became unknown usage: %+v", result)
 	}
 	if err := os.WriteFile(binary, script, 0o755); err != nil {
@@ -438,7 +438,7 @@ func TestExecuteTurnCanRecoverFromMissingCredentialsBeforeSessionCreation(t *tes
 	if preparationErr != nil {
 		t.Fatal(preparationErr)
 	}
-	if result.StateError != "" || result.Error != "" || result.Logs != "credentials repaired" || result.Stats.CostUSD != 0.5 {
+	if result.Failure == game.FailureState || result.Error != "" || result.Logs != "credentials repaired" || result.Stats.CostUSD != 0.5 {
 		t.Fatalf("credential repair could not recover: %+v", result)
 	}
 }
@@ -459,7 +459,7 @@ func TestExecuteTurnBlocksWhenNewSessionIsUnreadableAfterLaunch(t *testing.T) {
 				t.Fatal(err)
 			}
 			result, preparationErr := executor.ExecuteTurn("run", "verifier", turn)
-			if result.StateError == "" || !strings.Contains(result.StateError, "usage is unknown") || preparationErr != nil || result.Recoverable || result.Status == game.StatusConcede {
+			if result.Failure != game.FailureState || !strings.Contains(result.Error, "usage is unknown") || preparationErr != nil || result.Status == game.StatusConcede {
 				t.Fatalf("unverifiable post-launch accounting was accepted: %+v", result)
 			}
 		})
@@ -478,7 +478,7 @@ func TestExecuteTurnPreservesKnownUsageOnProcessFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
-	if result.StateError != "" || preparationErr != nil || !result.Recoverable || result.Error != "pi_failed:1" || result.Status != game.StatusContinue || result.Stats.InputTokens != 10 || result.Stats.CostUSD != 0.25 {
+	if preparationErr != nil || result.Failure != game.FailureRecoverable || result.Error != "pi_failed:1" || result.Status != game.StatusContinue || result.Stats.InputTokens != 10 || result.Stats.CostUSD != 0.25 {
 		t.Fatalf("process failure lost known usage or reused stale verdict: %+v", result)
 	}
 }
@@ -527,7 +527,7 @@ func TestExecuteTurnBlocksWhenHistoryChangesAndUsageIsUnknown(t *testing.T) {
 	if preparationErr != nil {
 		t.Fatal(preparationErr)
 	}
-	if result.StateError == "" || !strings.Contains(result.StateError, "usage is unknown") || result.Recoverable || result.Status == game.StatusConcede || result.Stats.CostUSD != 0 {
+	if result.Failure != game.FailureState || !strings.Contains(result.Error, "usage is unknown") || result.Status == game.StatusConcede || result.Stats.CostUSD != 0 {
 		t.Fatalf("lost history accepted with incomplete spending: %+v", result)
 	}
 }

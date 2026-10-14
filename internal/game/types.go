@@ -36,17 +36,26 @@ type TurnStats struct {
 	Model               string  `json:"model"`
 }
 
-// TurnResult is the result of one agent turn.
+// TurnFailure classifies a durable failure when TurnResult.Error is nonempty.
+// Its zero value ends the attempt; recoverable failures use the normal turn
+// failure budget, while state failures preserve the result and abort recovery.
+type TurnFailure string
+
+const (
+	FailureTerminal    TurnFailure = ""
+	FailureRecoverable TurnFailure = "recoverable"
+	FailureState       TurnFailure = "state"
+)
+
+// TurnResult is the durable result of one agent turn. JSON names are explicit
+// because this type is embedded in the execution checkpoint.
 type TurnResult struct {
-	Role        string
-	Status      AgentStatus
-	Logs        string
-	Stats       TurnStats
-	Error       string
-	Recoverable bool
-	// StateError means execution history cannot be trusted. Preserve the pending
-	// turn and fail the attempt instead of continuing from untrusted history.
-	StateError string
+	Role    string      `json:"Role"`
+	Status  AgentStatus `json:"Status"`
+	Logs    string      `json:"Logs"`
+	Stats   TurnStats   `json:"Stats"`
+	Error   string      `json:"Error"`
+	Failure TurnFailure `json:"Failure"`
 }
 
 // RecoveryError identifies missing or untrustworthy execution state. The attempt
@@ -92,22 +101,22 @@ type PVGConfig struct {
 
 // PVGResult holds the aggregated result of a PVG run.
 type PVGResult struct {
-	SystemName              string
-	GameResult              GameResult
-	Rounds                  int
-	ProverRounds            int
-	VerifierRounds          int
-	VerifierConceded        bool
-	CompletionReason        string
-	TotalCostUSD            float64
-	TotalInputTokens        int
-	TotalOutputTokens       int
-	TotalCacheReadTokens    int
-	TotalCacheCreateTokens  int
-	Error                   string
-	EvidencePath            string
-	TranscriptPath          string
-	WorkspaceCheckpointPath string
+	SystemName              string     `json:"SystemName"`
+	GameResult              GameResult `json:"GameResult"`
+	Rounds                  int        `json:"Rounds"`
+	ProverRounds            int        `json:"ProverRounds"`
+	VerifierRounds          int        `json:"VerifierRounds"`
+	VerifierConceded        bool       `json:"VerifierConceded"`
+	CompletionReason        string     `json:"CompletionReason"`
+	TotalCostUSD            float64    `json:"TotalCostUSD"`
+	TotalInputTokens        int        `json:"TotalInputTokens"`
+	TotalOutputTokens       int        `json:"TotalOutputTokens"`
+	TotalCacheReadTokens    int        `json:"TotalCacheReadTokens"`
+	TotalCacheCreateTokens  int        `json:"TotalCacheCreateTokens"`
+	Error                   string     `json:"Error"`
+	EvidencePath            string     `json:"EvidencePath"`
+	TranscriptPath          string     `json:"TranscriptPath"`
+	WorkspaceCheckpointPath string     `json:"WorkspaceCheckpointPath"`
 }
 
 // Accumulate adds turn stats to the result totals.

@@ -77,7 +77,7 @@ func TestPVGResumePreservesFailureAndCostLimits(t *testing.T) {
 			state := NewPVGState("pvg-test", t.TempDir(), "limits")
 			limit := 1.0
 			cfg := PVGConfig{EpochID: 1, Until: 1}
-			failure := TurnResult{Error: "provider unavailable", Recoverable: true, Stats: TurnStats{CostUSD: 0.25}}
+			failure := TurnResult{Error: "provider unavailable", Failure: FailureRecoverable, Stats: TurnStats{CostUSD: 0.25}}
 			if mode == "cost" {
 				cfg.MaxCostUSD = &limit
 				cfg.Until = 0
@@ -113,12 +113,12 @@ func TestPVGResumePreservesFailureAndCostLimits(t *testing.T) {
 	}
 }
 
-func TestPVGStateErrorRemainsPendingAcrossRestarts(t *testing.T) {
+func TestPVGIntegrityFailureRemainsPendingAcrossRestarts(t *testing.T) {
 	compiled := compileTestSpec(t)
 	state := NewPVGState("pvg-test", t.TempDir(), "integrity-error")
 	calls := 0
 	executor := &fakeExecutor{
-		proverResults: []TurnResult{{StateError: "agent session history changed"}},
+		proverResults: []TurnResult{{Error: "agent session history changed", Failure: FailureState}},
 		onTurn:        func(*TurnState) { calls++ },
 	}
 	for attempt := 0; attempt < 2; attempt++ {
@@ -184,18 +184,12 @@ func pendingCheckpoint(t *testing.T, cfg PVGConfig, turn TurnResult) *PVG {
 				if err := os.Rename(state.TranscriptPath, state.TranscriptPath+".saved"); err != nil {
 					t.Fatal(err)
 				}
-				if err := os.Mkdir(state.TranscriptPath, 0o700); err != nil {
-					t.Fatal(err)
-				}
 			}
 		},
 	}
 	p := NewPVG(compileTestSpec(t), executor, state, cfg)
 	if _, err := p.Run(); err == nil {
 		t.Fatal("expected handoff write failure")
-	}
-	if err := os.Remove(state.TranscriptPath); err != nil {
-		t.Fatal(err)
 	}
 	if err := os.Rename(state.TranscriptPath+".saved", state.TranscriptPath); err != nil {
 		t.Fatal(err)
@@ -292,7 +286,7 @@ func TestPVGResumeKeepsDeadlineAndHonorsSavedCompletionTime(t *testing.T) {
 }
 
 func TestPVGRejectsUnsafeResumeState(t *testing.T) {
-	for _, mode := range []string{"version", "session", "epoch", "rounds", "pending role"} {
+	for _, mode := range []string{"version", "session", "epoch", "rounds", "pending role", "failure kind"} {
 		t.Run(mode, func(t *testing.T) {
 			p := pendingCheckpoint(t, PVGConfig{EpochID: 1}, TurnResult{Status: StatusConcede})
 			switch mode {
@@ -306,6 +300,8 @@ func TestPVGRejectsUnsafeResumeState(t *testing.T) {
 				p.Result.Rounds++
 			case "pending role":
 				p.checkpoint.Pending.Turn.Role = "prover"
+			case "failure kind":
+				p.checkpoint.Pending.Turn.Failure = "unknown"
 			}
 			if err := p.saveCheckpoint(); err != nil {
 				t.Fatal(err)
