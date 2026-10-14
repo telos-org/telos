@@ -2,6 +2,7 @@ package telosd
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,7 +12,9 @@ import (
 	"testing/synctest"
 	"time"
 
+	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func TestWorkerIntervalReadsSessionManifest(t *testing.T) {
@@ -448,3 +451,60 @@ func writeWorkerManifest(t *testing.T, data map[string]any) string {
 	}
 	return sessionDir
 }
+
+// Exercise worker → CLI → PVG, so a resumable error cannot be lost between layers.
+func TestTaskWorkerRetriesPreparationFailureInOriginalEpoch(t *testing.T) {
+	for _, once := range []bool{false, true} {
+		t.Run(map[bool]string{false: "retry", true: "once"}[once], func(t *testing.T) {
+			dir := t.TempDir()
+			t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(t.TempDir(), "output"))
+			specPath := filepath.Join(dir, "SPEC.md")
+			if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: task-retry\nplatform: local\n---\n# Test\nTest task."), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			session, err := cli.CreateLocalSession(specPath, cli.LocalRunConfig{Workspace: dir})
+			if err != nil {
+				t.Fatal(err)
+			}
+			manifestPath := filepath.Join(session.SessionDir, "session.json")
+			if _, err := sessionapi.MutateManifest(manifestPath, func(m *sessionapi.Manifest) error {
+				m.SessionKind = sessionapi.KindTask
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			executor := &preparationRetryExecutor{}
+			code, err := runSessionWorker(session.SessionDir, once, func(path string) (*game.PVGResult, error) {
+				return cli.RunLocalSessionWithExecutor(path, executor)
+			}, make(chan os.Signal), make(chan os.Signal))
+			manifest, readErr := sessionapi.ReadManifest(manifestPath)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			if once {
+				if code != 1 || !errors.Is(err, cli.ErrAttemptPending) || executor.calls != 1 || manifest.OpenEpoch() == nil {
+					t.Fatalf("one-cycle worker retried: code=%d err=%v calls=%d epoch=%+v", code, err, executor.calls, manifest.OpenEpoch())
+				}
+				return
+			}
+			if code != 0 || err != nil || executor.calls != 3 || len(manifest.Epochs) != 1 || manifest.OpenEpoch() != nil || manifest.Epochs[0].RoundCount == nil || *manifest.Epochs[0].RoundCount != 2 {
+				t.Fatalf("task did not finish original attempt: code=%d err=%v calls=%d epochs=%+v", code, err, executor.calls, manifest.Epochs)
+			}
+		})
+	}
+}
+
+type preparationRetryExecutor struct{ calls int }
+
+func (e *preparationRetryExecutor) ExecuteTurn(_ string, role string, _ *game.TurnState) (game.TurnResult, error) {
+	e.calls++
+	if e.calls == 1 {
+		return game.TurnResult{}, errors.New("temporary spawn failure")
+	}
+	return game.TurnResult{Role: role, Status: game.StatusConcede}, nil
+}
+func (*preparationRetryExecutor) RecoverTurnStats(*game.TurnState) (game.TurnStats, error) {
+	return game.TurnStats{}, errors.New("unstarted turn must not require history")
+}
+func (*preparationRetryExecutor) WorkspaceState() string          { return "" }
+func (*preparationRetryExecutor) CheckpointWorkspace(string) bool { return false }

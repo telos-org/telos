@@ -20,6 +20,10 @@ import (
 	"github.com/telos-org/telos/internal/spec"
 )
 
+// ErrAttemptPending means execution left its current attempt open. Workers
+// should retry it with backoff; starting a new attempt would reset saved limits.
+var ErrAttemptPending = errors.New("attempt remains open for retry")
+
 const (
 	DefaultLocalModel    = "openai-codex/gpt-5.5"
 	DefaultLocalThinking = "high"
@@ -187,18 +191,8 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		return nil, err
 	}
 
-	var agentExec game.AgentExecutor
-	if exec != nil {
-		agentExec = exec
-	} else {
-		agentExec, err = createAgentExecutor(workspace, cfg)
-		if err != nil {
-			fail := &game.PVGResult{GameResult: game.GameFailure, Error: err.Error()}
-			if finishErr := finishEpoch(sessionDir, epochID, fail); finishErr != nil {
-				return nil, fmt.Errorf("%w; also failed to finish epoch: %v", err, finishErr)
-			}
-			return nil, err
-		}
+	if exec == nil {
+		exec = &lazyAgentExecutor{LocalPlatform: platform.NewLocalPlatform(workspace), config: cfg}
 	}
 
 	pvgCfg := game.PVGConfig{
@@ -213,8 +207,18 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		StopRequested:   func() bool { return sessionStopped(sessionDir) },
 	}
 
-	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)
-	result := pvg.Run()
+	pvg := game.NewPVG(compiled, exec, state, pvgCfg)
+	result, err := pvg.Run()
+	if err != nil {
+		var recovery *game.RecoveryError
+		if !errors.As(err, &recovery) {
+			// Retry temporary storage/setup failures within the same attempt.
+			return nil, fmt.Errorf("%w: %w", ErrAttemptPending, err)
+		}
+		// Unusable execution state is an ordinary failed attempt. Controllers
+		// already retry failed attempts; no separate recovery lifecycle is needed.
+		result = pvg.RecordRecoveryFailure(err)
+	}
 
 	// Close epoch
 	if err := finishEpoch(sessionDir, epochID, result); err != nil {
@@ -227,6 +231,34 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	return result, nil
+}
+
+// Recovery can finalize a saved result without Pi installed or configured.
+// Initialize the agent only if the checkpoint actually requires another turn.
+type lazyAgentExecutor struct {
+	*platform.LocalPlatform
+	config LocalRunConfig
+	agent  game.AgentExecutor
+}
+
+func (e *lazyAgentExecutor) RecoverTurnStats(turn *game.TurnState) (game.TurnStats, error) {
+	return executor.ReadPiSessionStats(turn.PiSessionPath())
+}
+
+func (e *lazyAgentExecutor) ExecuteTurn(task, role string, turn *game.TurnState) (game.TurnResult, error) {
+	if e.agent == nil {
+		agent, err := createAgentExecutor(e.Workspace, e.config)
+		if err != nil {
+			// An interrupted turn may already have spent tokens. Keep it open
+			// until setup is repaired instead of completing it with zero usage.
+			if _, historyErr := os.Stat(turn.PiSessionPath()); !os.IsNotExist(historyErr) {
+				return game.TurnResult{}, err
+			}
+			return game.TurnResult{Role: role, Status: game.StatusContinue, Error: "agent_configuration_invalid: " + err.Error()}, nil
+		}
+		e.agent = agent
+	}
+	return e.agent.ExecuteTurn(task, role, turn)
 }
 
 func boundSpecPaths(manifest *sessionapi.Manifest, fallbackPath, fallbackBase string) (string, string) {

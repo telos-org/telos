@@ -2,12 +2,16 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	piexecutor "github.com/telos-org/telos/internal/executor"
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -39,15 +43,19 @@ type fakeExecutor struct {
 	tasks          []string
 }
 
-func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) game.TurnResult {
+func (f *fakeExecutor) RecoverTurnStats(turn *game.TurnState) (game.TurnStats, error) {
+	return piexecutor.ReadPiSessionStats(turn.PiSessionPath())
+}
+
+func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) (game.TurnResult, error) {
 	f.tasks = append(f.tasks, task)
 	if f.onExecute != nil {
 		f.onExecute(role)
 	}
 	if role == "prover" {
-		return f.proverResult
+		return f.proverResult, nil
 	}
-	return f.verifierResult
+	return f.verifierResult, nil
 }
 
 func (f *fakeExecutor) firstTask() string {
@@ -72,6 +80,381 @@ func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {
 	os.MkdirAll(filepath.Dir(dest), 0o755)
 	os.WriteFile(dest, []byte("fake"), 0o644)
 	return true
+}
+
+func interruptLocalVerifier(t *testing.T) (*LocalSession, string) {
+	t.Helper()
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	t.Chdir(dir)
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	executor := &fakeExecutor{
+		proverResult: game.TurnResult{Role: "prover", Status: game.StatusContinue, Logs: "builder finished", Stats: game.TurnStats{CostUSD: 0.25, InputTokens: 10}},
+		onExecute: func(role string) {
+			if role == "verifier" {
+				state := game.NewPVGState(session.SpecName, filepath.Join(session.SessionDir, "specs", session.SpecName), session.SessionID)
+				if err := os.WriteFile(state.Turn(1, 2, "verifier").PiSessionPath(), []byte("{\"type\":\"session\",\"version\":3,\"id\":\"interrupted\"}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				panic("interrupted verifier")
+			}
+		},
+	}
+	func() {
+		defer func() {
+			if got := recover(); got != "interrupted verifier" {
+				t.Fatalf("expected interrupted verifier, got %v", got)
+			}
+		}()
+		_, _ = RunLocalSessionWithExecutor(session.SessionDir, executor)
+	}()
+	checkpoint := filepath.Join(session.SessionDir, "specs", session.SpecName, "turns", "epoch-0001", "checkpoint.json")
+	return session, checkpoint
+}
+
+// Lose the verifier's returned result before PVG can checkpoint it. Pi has
+// exited, but its conversation and projected activity are already on disk.
+type interruptedPiExecutor struct {
+	game.AgentExecutor
+}
+
+func (e interruptedPiExecutor) ExecuteTurn(task, role string, turn *game.TurnState) (game.TurnResult, error) {
+	result, err := e.AgentExecutor.ExecuteTurn(task, role, turn)
+	if err == nil && role == "verifier" {
+		panic("interrupted verifier")
+	}
+	return result, err
+}
+
+func TestRunLocalSessionRecoversPiVerifierWithinSavedCostLimit(t *testing.T) {
+	for _, cap := range []float64{0.5, 1.0} {
+		t.Run(fmt.Sprintf("cap-%.2f", cap), func(t *testing.T) {
+			dir := t.TempDir()
+			specPath := writeTestSpec(t, dir)
+			t.Chdir(dir)
+			session, err := CreateLocalSession(specPath, LocalRunConfig{MaxCostUSD: &cap})
+			if err != nil {
+				t.Fatal(err)
+			}
+			home := t.TempDir()
+			bin := filepath.Join(home, ".local", "bin")
+			if err := os.MkdirAll(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			// Exercise the real launch, session parser, live projector, PVG and CLI.
+			// Only the provider-facing Pi executable is replaced.
+			script := `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--session" ]; then shift; session="$1"; fi
+  shift
+done
+if [ -s "$session" ]; then
+  progress="review-after"
+  parent='"review-before"'
+else
+  printf '%s\n' '{"type":"session","version":3,"id":"integration","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}' > "$session"
+  progress="review-before"
+  parent=null
+fi
+if [ "$TELOS_ROLE" = "prover" ]; then progress="builder"; fi
+printf '%s\n' "$TELOS_ROLE:$progress" >> "$HOME/launches"
+printf '{"type":"message","id":"%s","parentId":%s,"timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"assistant","api":"openai-responses","provider":"openai","model":"test-model","stopReason":"stop","timestamp":1767225600000,"content":[{"type":"text","text":"<progress_update>%s</progress_update>\\n<status>CONCEDE</status>"},{"type":"toolCall","name":"bash","arguments":{"command":"test"}}],"usage":{"input":10,"cost":{"total":0.25}}}}\n' "$progress" "$parent" "$progress" >> "$session"
+`
+			if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			newExecutor := func() *piexecutor.PiExecutor {
+				local := platform.NewLocalPlatform(session.ActiveWorkspace)
+				local.Env = map[string]string{"HOME": home}
+				return piexecutor.NewPiExecutor(local, "test-model", "high", 0)
+			}
+			func() {
+				defer func() {
+					if got := recover(); got != "interrupted verifier" {
+						t.Fatalf("expected interruption, got %v", got)
+					}
+				}()
+				result, err := RunLocalSessionWithExecutor(session.SessionDir, interruptedPiExecutor{newExecutor()})
+				t.Fatalf("did not interrupt: %+v, %v", result, err)
+			}()
+			if cap == 1.0 {
+				t.Run("executor setup failure", func(t *testing.T) {
+					t.Setenv("PATH", t.TempDir())
+					if result, err := RunLocalSessionWithExecutor(session.SessionDir, nil); !errors.Is(err, ErrAttemptPending) || result != nil {
+						t.Fatalf("setup failure closed the interrupted attempt: %+v, %v", result, err)
+					}
+				})
+			}
+			wantResult, wantRounds, wantCost, wantTokens := game.GameSuccess, 2, 0.75, 30
+			wantLaunches := "prover:builder\nverifier:review-before\nverifier:review-after\n"
+			if cap == 0.5 {
+				wantResult, wantRounds, wantCost, wantTokens = game.GameFailure, 1, 0.5, 20
+				wantLaunches = "prover:builder\nverifier:review-before\n"
+			}
+			manifestFile := manifestPath(session.SessionDir)
+			openManifest, err := os.ReadFile(manifestFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result *game.PVGResult
+			for recovery := 0; recovery < 2; recovery++ {
+				var executor game.AgentExecutor
+				if recovery == 0 {
+					executor = newExecutor()
+				} else {
+					// Saved terminal results must finalize without installing Pi.
+					t.Setenv("PATH", t.TempDir())
+				}
+				result, err = RunLocalSessionWithExecutor(session.SessionDir, executor)
+				if err != nil || result.GameResult != wantResult || result.Rounds != wantRounds || result.TotalCostUSD != wantCost || result.TotalInputTokens != wantTokens {
+					t.Fatalf("recovery %d: %+v, %v", recovery, result, err)
+				}
+				if cap == 0.5 && !strings.Contains(result.Error, "budget exceeded") {
+					t.Fatalf("expected budget failure: %+v", result)
+				}
+				if recovery == 0 {
+					// Simulate a crash before the terminal result reached the manifest.
+					if err := os.WriteFile(manifestFile, openManifest, 0o600); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			launches, err := os.ReadFile(filepath.Join(home, "launches"))
+			if err != nil || string(launches) != wantLaunches {
+				t.Fatalf("wrong resumed conversation or extra launch: %s, %v", launches, err)
+			}
+			data, err := os.ReadFile(result.EvidencePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			progress := map[string]int{}
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				var event struct {
+					Event string `json:"event"`
+					Data  struct {
+						Text string `json:"text"`
+					} `json:"data"`
+				}
+				if err := json.Unmarshal([]byte(line), &event); err != nil {
+					t.Fatal(err)
+				}
+				if event.Event == "agent_progress" {
+					progress[event.Data.Text]++
+				}
+			}
+			wantResumed := 1
+			if cap == 0.5 {
+				wantResumed = 0
+			}
+			if len(progress) != 3+wantResumed || progress["builder"] != 1 || progress["review-before"] != 1 || progress["review-after"] != wantResumed || progress["Running shell command"] != 2+wantResumed {
+				t.Fatalf("activity lost or replayed: %v", progress)
+			}
+			manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
+			if err != nil || len(manifest.Epochs) != 1 || manifest.OpenEpoch() != nil || manifest.Epochs[0].RoundCount == nil || *manifest.Epochs[0].RoundCount != wantRounds {
+				t.Fatalf("resumed epoch = %+v, %v", manifest, err)
+			}
+		})
+	}
+}
+
+func expireLocalCheckpoint(t *testing.T, path string) {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var checkpoint map[string]json.RawMessage
+	if err := json.Unmarshal(data, &checkpoint); err != nil {
+		t.Fatal(err)
+	}
+	checkpoint["until_seconds"] = json.RawMessage("1")
+	checkpoint["deadline"], err = json.Marshal(time.Now().Add(-time.Second))
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err = json.Marshal(checkpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
+	const history = "{\"type\":\"session\",\"version\":3,\"id\":\"interrupted\"}\n" +
+		"{\"message\":{\"role\":\"assistant\",\"usage\":{\"input\":100,\"output\":20,\"cost\":{\"total\":0.75}}}}\n"
+	for _, tc := range []struct {
+		name, history                string
+		expired, missing, unreadable bool
+		invalid                      bool
+	}{
+		{name: "valid", history: history, expired: true},
+		{name: "unreadable", history: history, expired: true, unreadable: true},
+		{name: "corrupt", history: history + "{\"message\":\n", expired: true, invalid: true},
+		{name: "empty", invalid: true},
+		{name: "missing", missing: true, expired: true, invalid: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			session, checkpointPath := interruptLocalVerifier(t)
+			if tc.expired {
+				expireLocalCheckpoint(t, checkpointPath)
+			}
+			state := game.NewPVGState(session.SpecName, filepath.Join(session.SessionDir, "specs", session.SpecName), session.SessionID)
+			path := state.Turn(1, 2, "verifier").PiSessionPath()
+			if tc.missing {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(path, []byte(tc.history), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			manifestFile := manifestPath(session.SessionDir)
+			if tc.unreadable {
+				if err := os.Chmod(path, 0o000); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = os.Chmod(path, 0o600) })
+				if _, err := os.ReadFile(path); !os.IsPermission(err) {
+					t.Skip("file permissions do not restrict this user")
+				}
+				result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
+				var recovery *game.RecoveryError
+				if !errors.Is(err, os.ErrPermission) || errors.As(err, &recovery) || result != nil {
+					t.Fatalf("temporary history access failure was not retryable: %+v, %v", result, err)
+				}
+				manifest, err := sessionapi.ReadManifest(manifestFile)
+				if err != nil || manifest.OpenEpoch() == nil {
+					t.Fatalf("temporary access failure abandoned the attempt: %+v, %v", manifest, err)
+				}
+				if err := os.Chmod(path, 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", t.TempDir())
+			wantReason, wantCost, wantInput, wantOutput := "run_duration_exhausted", 1.0, 110, 20
+			if tc.invalid {
+				wantReason, wantCost, wantInput, wantOutput = "recovery_failed", 0.25, 10, 0
+			}
+			result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
+			if err != nil || result == nil || result.GameResult != game.GameFailure || result.CompletionReason != wantReason || result.Rounds != 1 ||
+				result.TotalCostUSD != wantCost || result.TotalInputTokens != wantInput || result.TotalOutputTokens != wantOutput {
+				t.Fatalf("wrong recovered outcome or usage: %+v, %v", result, err)
+			}
+			manifest, err := sessionapi.ReadManifest(manifestFile)
+			if err != nil || manifest.OpenEpoch() != nil || len(manifest.Epochs) != 1 || *manifest.Epochs[0].Result != "failed" {
+				t.Fatalf("recovery did not close the failed attempt: %+v, %v", manifest, err)
+			}
+			store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
+			current, err := store.Get(session.SessionID)
+			if err != nil || current.TotalCostUSD == nil || *current.TotalCostUSD != wantCost {
+				t.Fatalf("recovered usage missing from API: %+v, %v", current, err)
+			}
+		})
+	}
+}
+
+func TestRunLocalSessionInvalidCheckpointUsesNormalFailureLifecycle(t *testing.T) {
+	for _, missing := range []bool{false, true} {
+		t.Run(map[bool]string{false: "corrupt", true: "missing"}[missing], func(t *testing.T) {
+			session, path := interruptLocalVerifier(t)
+			if _, err := sessionapi.MutateManifest(manifestPath(session.SessionDir), func(m *sessionapi.Manifest) error {
+				m.SessionKind = sessionapi.KindController
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			var err error
+			if missing {
+				err = os.Remove(path)
+			} else {
+				err = os.WriteFile(path, []byte(`{"version":`), 0o600)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			workspaceFile := filepath.Join(session.ActiveWorkspace, "keep.txt")
+			if err := os.WriteFile(workspaceFile, []byte("existing work"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			transcript := filepath.Join(session.SessionDir, "specs", session.SpecName, "transcript-"+session.SessionID+".md")
+			before, err := os.ReadFile(transcript)
+			if err != nil {
+				t.Fatal(err)
+			}
+			executor := &fakeExecutor{}
+			result, err := RunLocalSessionWithExecutor(session.SessionDir, executor)
+			if err != nil || result == nil || result.GameResult != game.GameFailure || result.CompletionReason != "recovery_failed" || !strings.Contains(result.Error, "restore execution checkpoint") || len(executor.tasks) != 0 {
+				t.Fatalf("invalid checkpoint was not an ordinary failure: %+v, %v", result, err)
+			}
+			manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
+			if err != nil || len(manifest.Epochs) != 1 || manifest.OpenEpoch() != nil || *manifest.Epochs[0].Result != "failed" {
+				t.Fatalf("failed attempt remained open: %+v, %v", manifest, err)
+			}
+			store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
+			current, err := store.Get(session.SessionID)
+			if err != nil || current.Status != sessionapi.StatusFailed || current.Error == nil || !strings.Contains(*current.Error, "restore execution checkpoint") || current.CurrentRound != nil {
+				t.Fatalf("failed attempt was not visible through the existing API: %+v, %v", current, err)
+			}
+			// The controller's normal next cycle can proceed without an operator API.
+			executor = &fakeExecutor{
+				verifierResult: game.TurnResult{Status: game.StatusConcede},
+				onExecute: func(string) {
+					data, err := os.ReadFile(workspaceFile)
+					if err != nil || string(data) != "existing work" {
+						t.Fatalf("lost prior workspace: %q, %v", data, err)
+					}
+					data, err = os.ReadFile(transcript)
+					if err != nil || !strings.HasPrefix(string(data), string(before)) {
+						t.Fatalf("lost prior transcript: %v", err)
+					}
+				},
+			}
+			result, err = RunLocalSessionWithExecutor(session.SessionDir, executor)
+			if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 {
+				t.Fatalf("next attempt: %+v, %v", result, err)
+			}
+			manifest, err = sessionapi.ReadManifest(manifestPath(session.SessionDir))
+			if err != nil || len(manifest.Epochs) != 2 || *manifest.Epochs[0].CompletionReason != "recovery_failed" {
+				t.Fatalf("next attempt lost failure history: %+v, %v", manifest, err)
+			}
+		})
+	}
+}
+
+func TestRunLocalSessionAcceptsPendingConcessionWithoutPi(t *testing.T) {
+	session, _ := interruptLocalVerifier(t)
+	transcript := filepath.Join(session.SessionDir, "specs", session.SpecName, "transcript-"+session.SessionID+".md")
+	executor := &fakeExecutor{
+		verifierResult: game.TurnResult{Status: game.StatusConcede, Logs: "review complete\n<status>CONCEDE</status>", Stats: game.TurnStats{CostUSD: 0.5}},
+		onExecute: func(role string) {
+			if role != "verifier" {
+				t.Fatalf("replayed completed %s", role)
+			}
+			// Fail the handoff write after the returned result has been saved.
+			if err := os.Rename(transcript, transcript+".saved"); err != nil {
+				t.Fatal(err)
+			}
+		},
+	}
+	if result, err := RunLocalSessionWithExecutor(session.SessionDir, executor); !errors.Is(err, ErrAttemptPending) || result != nil {
+		t.Fatalf("expected pending handoff failure: %+v, %v", result, err)
+	}
+	if err := os.Rename(transcript+".saved", transcript); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", t.TempDir())
+	result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
+	if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.TotalCostUSD != 0.75 {
+		t.Fatalf("pending concession required Pi or reran a turn: %+v, %v", result, err)
+	}
+	data, err := os.ReadFile(transcript)
+	if err != nil || strings.Count(string(data), "review complete") != 1 {
+		t.Fatalf("pending handoff missing or duplicated: %v\n%s", err, data)
+	}
 }
 
 func writeTestSpec(t *testing.T, dir string) string {
