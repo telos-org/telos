@@ -161,13 +161,15 @@ while [ "$#" -gt 0 ]; do
 done
 if [ -s "$session" ]; then
   progress="review-after"
+  parent='"review-before"'
 else
-  printf '%s\n' '{"type":"session","version":3,"id":"integration"}' > "$session"
+  printf '%s\n' '{"type":"session","version":3,"id":"integration","timestamp":"2026-01-01T00:00:00.000Z","cwd":"/tmp"}' > "$session"
   progress="review-before"
+  parent=null
 fi
 if [ "$TELOS_ROLE" = "prover" ]; then progress="builder"; fi
 printf '%s\n' "$TELOS_ROLE:$progress" >> "$HOME/launches"
-printf '{"message":{"role":"assistant","content":[{"type":"text","text":"<progress_update>%s</progress_update>\\n<status>CONCEDE</status>"},{"type":"toolCall","name":"bash","arguments":{"command":"test"}}],"usage":{"input":10,"cost":{"total":0.25}}}}\n' "$progress" >> "$session"
+printf '{"type":"message","id":"%s","parentId":%s,"timestamp":"2026-01-01T00:00:00.000Z","message":{"role":"assistant","api":"openai-responses","provider":"openai","model":"test-model","stopReason":"stop","timestamp":1767225600000,"content":[{"type":"text","text":"<progress_update>%s</progress_update>\\n<status>CONCEDE</status>"},{"type":"toolCall","name":"bash","arguments":{"command":"test"}}],"usage":{"input":10,"cost":{"total":0.25}}}}\n' "$progress" "$parent" "$progress" >> "$session"
 `
 			if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
 				t.Fatal(err)

@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -12,6 +13,73 @@ import (
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 )
+
+// CI supplies the pinned Pi module; ordinary Go tests need neither Node nor Pi.
+func TestPiSessionManagerResumeContract(t *testing.T) {
+	module := os.Getenv("TELOS_TEST_PI_SESSION_MANAGER")
+	if module == "" {
+		t.Skip("set TELOS_TEST_PI_SESSION_MANAGER to Pi's dist/core/session-manager.js")
+	}
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	const script = `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const [module, path, phase] = process.argv.slice(1);
+const { SessionManager } = await import(pathToFileURL(module).href);
+const session = SessionManager.open(path);
+const text = (label, status) => "<progress_update>" + label + "</progress_update>\n<status>" + status + "</status>";
+if (phase === "resume") {
+  const messages = session.buildSessionContext().messages;
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].role, "user");
+  assert.equal(messages[0].content, "old request");
+  assert.equal(messages[1].role, "assistant");
+  assert.equal(messages[1].content[0].text, text("old", "CONCEDE"));
+}
+const label = phase === "seed" ? "old" : "new";
+session.appendMessage({ role: "user", content: label + " request", timestamp: Date.now() });
+session.appendMessage({
+  role: "assistant", api: "openai-responses", provider: "openai", model: "test-model",
+  content: [{ type: "text", text: text(label, phase === "seed" ? "CONCEDE" : "CONTINUE") }],
+  stopReason: "stop", timestamp: Date.now(),
+  usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 30,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: phase === "seed" ? 0.25 : 0.5 } }
+});
+`
+	runPi := func(phase string) {
+		t.Helper()
+		if output, err := exec.Command("node", "--input-type=module", "-e", script, module, path, phase).CombinedOutput(); err != nil {
+			t.Fatalf("Pi session manager %s: %v\n%s", phase, err, output)
+		}
+	}
+	runPi("seed")
+	baseline, err := capturePiSessionBaseline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := ReadPiSessionStats(path)
+	if err != nil || stats.CostUSD != 0.25 || stats.InputTokens != 10 || stats.OutputTokens != 20 {
+		t.Fatalf("interrupted usage: %+v, %v", stats, err)
+	}
+	var events []game.LiveAgentEvent
+	projector := startPiLiveProjector(path, &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
+		events = append(events, event)
+	}}, baseline)
+	func() {
+		defer projector.Stop()
+		runPi("resume")
+	}()
+	summary, err := readPiSession(path, baseline)
+	if err != nil || summary.Error != "" || summary.Logs != "<progress_update>new</progress_update>\n<status>CONTINUE</status>" || game.ExtractStatus(summary.Logs) != game.StatusContinue {
+		t.Fatalf("resumed response: %+v, %v", summary, err)
+	}
+	if summary.Stats.CostUSD != 0.75 || summary.Stats.InputTokens != 20 || summary.Stats.OutputTokens != 40 {
+		t.Fatalf("resumed usage: %+v", summary.Stats)
+	}
+	if !slices.Equal(events, []game.LiveAgentEvent{{Kind: "progress_update", Text: "new"}}) {
+		t.Fatalf("resumed activity: %#v", events)
+	}
+}
 
 func TestPiProgressPreservesReportAndFinalStatus(t *testing.T) {
 	progress := "<progress_update>Orders costing > $25 are rejected without changing your balance.</progress_update>"
