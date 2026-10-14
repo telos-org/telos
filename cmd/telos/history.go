@@ -273,6 +273,8 @@ var revisionRejectionReasons = map[string]string{
 	"runtime_unavailable":    "the revision's runtime release is no longer available",
 	"stale_current_revision": "the current revision changed; refresh history before trying again",
 	"restore_access_differs": "network access differs; redeploy the revision's access before restoring its snapshot",
+	"access_unsupported":     "this deployment host does not support the revision's network access",
+	"access_changed":         "network access changed during validation; retry the action",
 }
 
 func revisionReason(reason string) string {

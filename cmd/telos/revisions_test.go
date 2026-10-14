@@ -245,21 +245,23 @@ func TestRevisionActionCLIAcceptsOnceAndWaitsForExactResult(t *testing.T) {
 
 func TestRevisionActionCLIReportsFailuresWithoutRetry(t *testing.T) {
 	for _, tt := range []struct {
-		name, response, want string
-		status               int
+		name, action, response, want string
+		status                       int
 	}{
-		{"stale", `{"error":{"code":"stale_current_revision","message":"Current revision changed"}}`, "restore revision 7: Current revision changed", 409},
-		{"access differs", `{"detail":{"code":"restore_access_differs","message":"Redeploy the revision to apply its access, then restore its snapshot."}}`, "restore revision 7: Redeploy the revision to apply its access, then restore its snapshot.", 409},
-		{"dispatch failure after commit", `{"detail":"Runtime update rejected"}`, "check history before retrying", 409},
-		{"server failure", `{"error":{"code":"internal_error","message":"Lost response"}}`, "check history before retrying", 503},
-		{"protected", `{"detail":{"code":"change_requests_client_required","message":"Use change requests"}}`, "use the Telos web UI", 409},
-		{"failed operation", `{"id":"op_exact","status":"failed","error":{"code":"snapshot_lost","message":"Snapshot disappeared"}}`, "Snapshot disappeared", 202},
-		{"timeout", `{"id":"op_exact","status":"running"}`, "the Cloud operation was not cancelled", 202},
+		{"stale", "restore", `{"error":{"code":"stale_current_revision","message":"Current revision changed"}}`, "restore revision 7: Current revision changed", 409},
+		{"access differs", "restore", `{"detail":{"code":"restore_access_differs","message":"Redeploy the revision to apply its access, then restore its snapshot."}}`, "restore revision 7: Redeploy the revision to apply its access, then restore its snapshot.", 409},
+		{"unsupported access", "redeploy", `{"detail":{"code":"access_unsupported","message":"Host cannot enforce the requested policy"}}`, "redeploy revision 7: Host cannot enforce the requested policy", 409},
+		{"access changed", "redeploy", `{"detail":{"code":"access_changed","message":"Deployment access changed during validation. Submit the update again."}}`, "redeploy revision 7: Deployment access changed during validation. Submit the update again.", 409},
+		{"dispatch failure after commit", "restore", `{"detail":"Runtime update rejected"}`, "check history before retrying", 409},
+		{"server failure", "restore", `{"error":{"code":"internal_error","message":"Lost response"}}`, "check history before retrying", 503},
+		{"protected", "restore", `{"detail":{"code":"change_requests_client_required","message":"Use change requests"}}`, "use the Telos web UI", 409},
+		{"failed operation", "restore", `{"id":"op_exact","status":"failed","error":{"code":"snapshot_lost","message":"Snapshot disappeared"}}`, "Snapshot disappeared", 202},
+		{"timeout", "restore", `{"id":"op_exact","status":"running"}`, "the Cloud operation was not cancelled", 202},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			var posts atomic.Int32
 			revisionTestServer(t, map[string]http.HandlerFunc{
-				"POST " + revisionTestPath + "/rev_7/restore": func(w http.ResponseWriter, r *http.Request) {
+				"POST " + revisionTestPath + "/rev_7/" + tt.action: func(w http.ResponseWriter, r *http.Request) {
 					posts.Add(1)
 					w.WriteHeader(tt.status)
 					if tt.name == "failed operation" {
@@ -276,7 +278,7 @@ func TestRevisionActionCLIReportsFailuresWithoutRetry(t *testing.T) {
 			if tt.name == "timeout" {
 				timeout = "20ms"
 			}
-			stdout, stderr, code := runRevisionCLI(t, "restore", "goal_test", "--revision", "7", "--message", "Back to stable", "--wait", "--timeout", timeout, "--json")
+			stdout, stderr, code := runRevisionCLI(t, tt.action, "goal_test", "--revision", "7", "--message", "Back to stable", "--wait", "--timeout", timeout, "--json")
 			if code != 1 || !strings.Contains(stderr, tt.want) || posts.Load() != 1 {
 				t.Fatalf("exit=%d stdout=%s stderr=%s posts=%d", code, stdout, stderr, posts.Load())
 			}
