@@ -247,7 +247,8 @@ func TestRevisionActionCLIReportsFailuresWithoutRetry(t *testing.T) {
 		name, response, want string
 		status               int
 	}{
-		{"stale", `{"error":{"code":"stale_current_revision","message":"Current revision changed"}}`, "Current revision changed", 409},
+		{"stale", `{"error":{"code":"stale_current_revision","message":"Current revision changed"}}`, "restore revision 7: Current revision changed", 409},
+		{"access differs", `{"detail":{"code":"restore_access_differs","message":"Redeploy the revision to apply its access, then restore its snapshot."}}`, "restore revision 7: Redeploy the revision to apply its access, then restore its snapshot.", 409},
 		{"dispatch failure after commit", `{"detail":"Runtime update rejected"}`, "check history before retrying", 409},
 		{"server failure", `{"error":{"code":"internal_error","message":"Lost response"}}`, "check history before retrying", 503},
 		{"protected", `{"detail":{"code":"change_requests_client_required","message":"Use change requests"}}`, "use the Telos web UI", 409},

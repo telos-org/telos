@@ -122,7 +122,7 @@ func revisionActionError(action string, sequence int, err error) error {
 		switch apiErr.Code {
 		case "change_requests_client_required":
 			return fmt.Errorf("this deployment requires a change request; use the Telos web UI to %s this revision: %w", action, err)
-		case "stale_current_revision", "current_revision", "no_snapshot", "snapshot_pending", "snapshot_lost", "snapshot_incompatible", "operation_in_progress", "deployment_not_ready", "runtime_unsupported", "package_unavailable", "runtime_unavailable":
+		case "restore_access_differs", "stale_current_revision", "current_revision", "no_snapshot", "snapshot_pending", "snapshot_lost", "snapshot_incompatible", "operation_in_progress", "deployment_not_ready", "runtime_unsupported", "package_unavailable", "runtime_unavailable":
 			return fmt.Errorf("%s revision %d: %w", action, sequence, err)
 		}
 	}
