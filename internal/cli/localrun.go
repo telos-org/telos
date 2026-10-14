@@ -20,6 +20,10 @@ import (
 	"github.com/telos-org/telos/internal/spec"
 )
 
+// ErrAttemptPending means execution left its current attempt open. Workers
+// should retry it with backoff; starting a new attempt would reset saved limits.
+var ErrAttemptPending = errors.New("attempt remains open for retry")
+
 const (
 	DefaultLocalModel    = "openai-codex/gpt-5.5"
 	DefaultLocalThinking = "high"
@@ -209,7 +213,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		var recovery *game.RecoveryError
 		if !errors.As(err, &recovery) {
 			// Retry temporary storage/setup failures within the same attempt.
-			return nil, err
+			return nil, fmt.Errorf("%w: %w", ErrAttemptPending, err)
 		}
 		// Unusable execution state is an ordinary failed attempt. Controllers
 		// already retry failed attempts; no separate recovery lifecycle is needed.

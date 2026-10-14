@@ -397,7 +397,7 @@ func TestRunLocalSessionPreparationFailureHasNoInterruptedUsage(t *testing.T) {
 	result, err := RunLocalSessionWithExecutor(session.SessionDir, &fakeExecutor{
 		preparationErr: preparation,
 	})
-	if !errors.Is(err, preparation) || result != nil {
+	if !errors.Is(err, preparation) || !errors.Is(err, ErrAttemptPending) || result != nil {
 		t.Fatalf("preparation failure was not retryable: %+v, %v", result, err)
 	}
 	checkpoint := filepath.Join(session.SessionDir, "specs", session.SpecName, "turns", "epoch-0001", "checkpoint.json")
