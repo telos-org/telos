@@ -332,8 +332,8 @@ func TestRevisionActionsRespectCapabilitiesWithoutFallback(t *testing.T) {
 }
 
 func TestWaitRevisionOperationTracksReceiptInsteadOfLatestDeployment(t *testing.T) {
-	for _, mismatch := range []bool{false, true} {
-		t.Run(fmt.Sprint(mismatch), func(t *testing.T) {
+	for _, mismatch := range []string{"matching", "kind", "source", "parent", "digest"} {
+		t.Run(mismatch, func(t *testing.T) {
 			var resultReads atomic.Int32
 			server := revisionTestServer(t, map[string]http.HandlerFunc{
 				"GET /api/deployments/goal_test/operations/op_exact": func(w http.ResponseWriter, r *http.Request) {
@@ -347,8 +347,15 @@ func TestWaitRevisionOperationTracksReceiptInsteadOfLatestDeployment(t *testing.
 					revision := testRevision(13)
 					revision.Kind = "restore"
 					parent, source := "rev_12", "rev_7"
-					if mismatch {
+					switch mismatch {
+					case "kind":
+						revision.Kind = "redeploy"
+					case "source":
 						source = "rev_8"
+					case "parent":
+						parent = "rev_11"
+					case "digest":
+						revision.PackageDigest = "sha256:other"
 					}
 					revision.ParentRevisionID, revision.RestoredFromRevisionID = &parent, &source
 					_ = json.NewEncoder(w).Encode(revision)
@@ -359,7 +366,7 @@ func TestWaitRevisionOperationTracksReceiptInsteadOfLatestDeployment(t *testing.
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
 			operation, result, err := waitRevisionOperation(ctx, client, "goal_test", "restore", "rev_12", &source, &cloud.RevisionOperation{ID: "op_exact", Status: "running"}, time.Millisecond)
-			if mismatch {
+			if mismatch != "matching" {
 				if err == nil || !strings.Contains(err.Error(), "does not match") || result != nil {
 					t.Fatalf("accepted mismatched result: %+v, %v", result, err)
 				}
