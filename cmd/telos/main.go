@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/telos-org/telos/internal/sessionworker"
 )
 
 // Version is set at build time.
@@ -79,25 +81,28 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "core commands:")
 	fmt.Fprintln(out, "  login              Log in to Telos Cloud via the browser")
 	fmt.Fprintln(out, "  plan SPEC.md       Preview a spec without running it")
-	fmt.Fprintln(out, "  apply SPEC.md      Create or update a durable session from a spec")
-	fmt.Fprintln(out, "  list               List sessions")
-	fmt.Fprintln(out, "  describe SESSION   Show session details")
-	fmt.Fprintln(out, "  logs SESSION       Show recent activity")
-	fmt.Fprintln(out, "  history SESSION    List or inspect deployment revisions")
-	fmt.Fprintln(out, "  diff SESSION A [B] Compare revision A with B or the current revision")
-	fmt.Fprintln(out, "  restore SESSION    Restore a revision's saved snapshot")
-	fmt.Fprintln(out, "  redeploy SESSION   Deploy a historical revision's package again")
-	fmt.Fprintln(out, "  delete SESSION     Delete a session")
+	fmt.Fprintln(out, "  apply SPEC.md      Create a Goal from a spec, or update one with --goal")
+	fmt.Fprintln(out, "  list               List Goals")
+	fmt.Fprintln(out, "  describe GOAL      Show a Goal's details")
+	fmt.Fprintln(out, "  logs GOAL          Show recent activity")
+	fmt.Fprintln(out, "  history GOAL       List or inspect deployment revisions")
+	fmt.Fprintln(out, "  diff GOAL A [B]    Compare revision A with B or the current revision")
+	fmt.Fprintln(out, "  restore GOAL       Restore a revision's saved snapshot")
+	fmt.Fprintln(out, "  redeploy GOAL      Deploy a historical revision's package again")
+	fmt.Fprintln(out, "  delete GOAL        Delete a Goal")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "other commands:")
-	fmt.Fprintln(out, "  run SPEC.md        Run a spec as a bounded task")
+	_, hostedSession := rootSessionContext()
+	if _, err := sessionworker.ResolveTelosd(); hostedSession || err == nil {
+		fmt.Fprintln(out, "  run SPEC.md        Run a spec as a bounded task")
+	}
 	fmt.Fprintln(out, "  push SPEC.md       Publish a versioned spec or skill for reuse")
-	fmt.Fprintln(out, "  pull PACKAGE       Download a package; use `pull skill REF` for a skill")
-	fmt.Fprintln(out, "  get SESSION        Download a session's package")
+	fmt.Fprintln(out, "  pull PACKAGE       Download a spec or skill package")
+	fmt.Fprintln(out, "  get GOAL           Download a Goal's package")
 	fmt.Fprintln(out, "  logout             Log out and revoke this device's token")
 	fmt.Fprintln(out, "  config             Show or update CLI configuration")
 	fmt.Fprintln(out, "  version            Show version")
-	fmt.Fprintln(out, "  update [VERSION]   Update this CLI to latest or an exact release")
+	fmt.Fprintln(out, "  update [VERSION]   Update installed Telos components to one release")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "global flags:")
 	fmt.Fprintln(out, "  -h, --help         Show help")

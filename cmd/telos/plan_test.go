@@ -12,7 +12,6 @@ import (
 
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
-	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
 
@@ -86,10 +85,10 @@ func TestPrintPlanPreviewShowsSessionDiff(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", comparison)
+	printPlanPreview(&out, compiled, "personal", comparison)
 	text := out.String()
 	for _, want := range []string{
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Current   @telos/demo:1.2.3",
 		"--- deployed/SPEC.md",
 		"+++ proposed/SPEC.md",
@@ -116,7 +115,7 @@ func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
 	)
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", comparison)
+	printPlanPreview(&out, compiled, "personal", comparison)
 	if !strings.Contains(out.String(), "No spec changes.") {
 		t.Fatalf("plan output:\n%s", out.String())
 	}
@@ -124,6 +123,10 @@ func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
 
 func TestPlanShowsCanonicalContext(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/deployments" {
+			_ = json.NewEncoder(w).Encode(map[string]any{"deployments": []any{}})
+			return
+		}
 		if r.URL.Path != "/api/account/bootstrap" {
 			http.NotFound(w, r)
 			return
@@ -224,7 +227,7 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := captureStdout(t, func() {
-		cmdPlan([]string{specPath, "--session", "sess_123", "--json"})
+		cmdPlan([]string{specPath, "--goal", "sess_123", "--json"})
 	})
 	var plan struct {
 		Spec    map[string]any `json:"spec"`
@@ -283,84 +286,10 @@ func configurePlanSkillsCatalogue(t *testing.T) string {
 	return catalogue
 }
 
-func TestCompareLocalSessionSpecUsesPersistedSkillLocks(t *testing.T) {
-	catalogue := configurePlanSkillsCatalogue(t)
-	skillDir := filepath.Join(catalogue, "build-dashboard")
-	if err := os.MkdirAll(skillDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(skillDir, "SKILL.md"),
-		[]byte("---\nname: build-dashboard\n---\nBuild the dashboard.\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	markdown := []byte(`---
-name: local-plan
-version: 1.0.0
-platform: local
-skills:
-  - build-dashboard*
----
-
-# Goal
-
-Build it.
-`)
-	root := t.TempDir()
-	t.Setenv("TELOS_SESSION_DIR", root)
-	kind := sessionapi.KindController
-	localStore := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdownText := string(markdown)
-	session, err := localStore.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown: &markdownText,
-		SessionKind:  &kind,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	specPath := filepath.Join(t.TempDir(), "SPEC.md")
-	if err := os.WriteFile(specPath, markdown, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	compiled, err := spec.CompileEnvironment(specPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proposed, err := planSpecStateForCompiled(compiled, markdown)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	comparison, err := compareSessionSpec(
-		session.SessionID,
-		markdown,
-		proposed,
-		"local",
-		"",
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(comparison.current.Skills) != len(comparison.proposed.Skills) {
-		t.Fatalf("skill delta: current=%#v proposed=%#v", comparison.current.Skills, comparison.proposed.Skills)
-	}
-	for i := range comparison.current.Skills {
-		if comparison.current.Skills[i] != comparison.proposed.Skills[i] {
-			t.Fatalf("skill delta: current=%#v proposed=%#v", comparison.current.Skills, comparison.proposed.Skills)
-		}
-	}
-	required := false
-	for _, skill := range comparison.current.Skills {
-		if skill.Name == "build-dashboard" && skill.Starred {
-			required = true
-			break
-		}
-	}
-	if !required {
-		t.Fatalf("current required skill = %#v", comparison.current.Skills)
+func TestCompareSessionSpecRejectsLocalSession(t *testing.T) {
+	_, err := compareSessionSpec("local_123", nil, planSpecState{}, "")
+	if err == nil || !strings.Contains(err.Error(), "only compares Telos Cloud Goals") {
+		t.Fatalf("error = %v, want local Goal rejection", err)
 	}
 }
 
@@ -404,7 +333,7 @@ func TestPlanSpecStateCapturesResolvedChanges(t *testing.T) {
 	normalized := strings.Join(strings.Fields(out.String()), " ")
 	for _, want := range []string{
 		"Version 1.0.0 -> 1.1.0",
-		"Interval 5m0s -> 10m0s",
+		"Interval 5m -> 10m",
 		"verify-quality @telos/verify-quality:1.0.0 sha256:current",
 		"verify-quality @telos/verify-quality:1.1.0 sha256:proposed *",
 	} {
@@ -435,5 +364,16 @@ func TestPrintPlanStateDeltaOmitsUnchangedResolvedState(t *testing.T) {
 	printPlanStateDelta(&out, state, state)
 	if out.Len() != 0 {
 		t.Fatalf("unchanged resolved state should be silent:\n%s", out.String())
+	}
+}
+
+func TestFormatPlanIntervalMatchesSpecStyle(t *testing.T) {
+	for seconds, want := range map[int]string{45: "45s", 30 * 60: "30m", 6 * 60 * 60: "6h", 90 * 60: "1h30m", 60*60 + 30: "1h0m30s"} {
+		if got := formatPlanInterval(&seconds); got != want {
+			t.Fatalf("formatPlanInterval(%d) = %q, want %q", seconds, got, want)
+		}
+	}
+	if got := formatPlanInterval(nil); got != "-" {
+		t.Fatalf("formatPlanInterval(nil) = %q", got)
 	}
 }

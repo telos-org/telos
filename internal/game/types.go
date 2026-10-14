@@ -68,6 +68,7 @@ type PVGConfig struct {
 	EpochID         int
 	IsController    bool
 	PrimarySpecPath string
+	LocalRuntime    bool
 	StopRequested   func() bool
 }
 

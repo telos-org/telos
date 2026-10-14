@@ -46,7 +46,7 @@ func TestReorderInterspersedFlags(t *testing.T) {
 }
 
 func TestCommandFlagUsageUsesPublicFlagSyntax(t *testing.T) {
-	fs := newCommandFlagSet("logs", "telos logs SESSION [flags]")
+	fs := newCommandFlagSet("logs", "telos logs GOAL [flags]")
 	fs.Bool("q", false, "Quiet output")
 	fs.Bool("json", false, "Print JSON")
 	fs.String("context", "", "Cloud context")
@@ -57,7 +57,7 @@ func TestCommandFlagUsageUsesPublicFlagSyntax(t *testing.T) {
 
 	text := out.String()
 	for _, want := range []string{
-		"usage: telos logs SESSION [flags]",
+		"usage: telos logs GOAL [flags]",
 		"--context string",
 		"-q",
 		"--json",
@@ -82,12 +82,12 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
-		"apply SPEC.md      Create or update a durable session from a spec",
-		"get SESSION        Download a session's package",
-		"delete SESSION     Delete a session",
-		"pull PACKAGE       Download a package; use `pull skill REF` for a skill",
+		"apply SPEC.md      Create a Goal from a spec, or update one with --goal",
+		"get GOAL           Download a Goal's package",
+		"delete GOAL        Delete a Goal",
+		"pull PACKAGE       Download a spec or skill package",
 		"version            Show version",
-		"update [VERSION]   Update this CLI to latest or an exact release",
+		"update [VERSION]   Update installed Telos components to one release",
 		"--version",
 		"telos <command> --help",
 	} {
@@ -103,8 +103,7 @@ func TestPullUsageKeepsFrequentPullAtTopLevel(t *testing.T) {
 	fs.SetOutput(&pullOut)
 	fs.Usage()
 	for _, want := range []string{
-		"telos pull @scope/name:version",
-		"telos pull skill @scope/name:version",
+		"telos pull @context/name:version",
 		"--context string",
 		"--output string",
 	} {
@@ -112,41 +111,15 @@ func TestPullUsageKeepsFrequentPullAtTopLevel(t *testing.T) {
 			t.Fatalf("pull usage missing %q:\n%s", want, pullOut.String())
 		}
 	}
-}
-
-func TestPrintPlanPreviewLocal(t *testing.T) {
-	compiled := &spec.CompiledEnvironment{
-		Environment: &spec.EnvironmentSpec{Name: "hello-service"},
-		ContentHash: "8a8f0c21",
-		Skills: []*spec.Skill{
-			{Name: "verify-engineering"},
-		},
-	}
-
-	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", nil)
-	text := out.String()
-	for _, want := range []string{
-		"Spec      hello-service",
-		"Target    local",
-		"Path      ./SPEC.md",
-		"Hash      8a8f0c21",
-		"Skills    verify-engineering",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("plan output missing %q:\n%s", want, text)
-		}
-	}
-	for _, notWant := range []string{"Namespace", "Plan for", "No sessions", "Lineage", "Mutates"} {
-		if strings.Contains(text, notWant) {
-			t.Fatalf("plan output should not contain %q:\n%s", notWant, text)
-		}
+	if strings.Contains(pullOut.String(), "pull skill") {
+		t.Fatalf("pull usage still mentions pull skill:\n%s", pullOut.String())
 	}
 }
 
 func TestPrintPlanPreviewCloud(t *testing.T) {
+	interval := 6 * 60 * 60
 	compiled := &spec.CompiledEnvironment{
-		Environment: &spec.EnvironmentSpec{Name: "gitea"},
+		Environment: &spec.EnvironmentSpec{Name: "gitea", Version: "0.1.0", IntervalSeconds: &interval},
 		Namespace:   "ns-gitea",
 		ContentHash: "8a8f0c21",
 		Skills: []*spec.Skill{
@@ -156,18 +129,19 @@ func TestPrintPlanPreviewCloud(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "cloud", "personal", nil)
+	printPlanPreview(&out, compiled, "personal", nil)
 	text := out.String()
-	for _, want := range []string{
-		"Spec      gitea",
-		"Target    cloud",
-		"Path      ./SPEC.md",
-		"Namespace ns-gitea",
-		"Hash      8a8f0c21",
-		"Skills    verify-engineering, verify-quality",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("plan output missing %q:\n%s", want, text)
+	want := "Spec      gitea\n" +
+		"Version   0.1.0\n" +
+		"Interval  6h\n" +
+		"Context   personal\n" +
+		"Skills    verify-engineering, verify-quality\n"
+	if text != want {
+		t.Fatalf("plan output:\n%s\nwant:\n%s", text, want)
+	}
+	for _, notWant := range []string{"Target", "Path", "Namespace", "Hash", "Plan for", "No sessions", "Lineage", "Mutates"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("plan output should not contain %q:\n%s", notWant, text)
 		}
 	}
 }
@@ -185,7 +159,7 @@ func TestPrintPlanPreviewStarsRequiredVerifierSkills(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "./SPEC.md", "local", "", nil)
+	printPlanPreview(&out, compiled, "personal", nil)
 	text := out.String()
 	if !strings.Contains(text, "Skills    verify-engineering*, verify-quality") {
 		t.Fatalf("plan output missing starred skill marker:\n%s", text)
@@ -220,7 +194,7 @@ func TestFlagNamesSetUsesExplicitFlagsOnly(t *testing.T) {
 
 func TestValidateCloudSessionContextRejectsLocalSession(t *testing.T) {
 	err := validateCloudSessionContext("local_123", "org_telos")
-	if err == nil || err.Error() != "--context cannot be used with a local session" {
+	if err == nil || err.Error() != "--context cannot be used with a local Goal" {
 		t.Fatalf("local update context error = %v", err)
 	}
 	for _, sessionID := range []string{"", "sess_123"} {
@@ -374,6 +348,23 @@ func TestThinkingOptionRejectsUnknownEnvironmentLevel(t *testing.T) {
 	}
 }
 
+func TestResolveSessionRuntimeConfigIgnoresBudgetWithoutBoundedFlag(t *testing.T) {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	fs.String("model", "", "")
+	fs.String("thinking", "", "")
+	parseFlags(fs, []string{"SPEC.md"})
+
+	t.Setenv("TELOS_MAX_COST_USD", "5")
+
+	cfg, err := resolveSessionRuntimeConfigFromFlags(fs, "", "", 0)
+	if err != nil {
+		t.Fatalf("resolveSessionRuntimeConfigFromFlags: %v", err)
+	}
+	if cfg.MaxCostUSD != nil {
+		t.Fatalf("max cost: got %v, want none for apply", *cfg.MaxCostUSD)
+	}
+}
+
 func TestUntilFlagValue(t *testing.T) {
 	fs := flag.NewFlagSet("run", flag.ContinueOnError)
 	fs.String("until", "", "")
@@ -430,146 +421,10 @@ func TestUntilFlagValueRejectsSubsecondDuration(t *testing.T) {
 	}
 }
 
-func TestDecideLaunchModeMatchesPythonParity(t *testing.T) {
-	tests := []struct {
-		name            string
-		platform        string
-		cloudConfigured bool
-		localConfigSet  bool
-		want            launchMode
-		wantErr         string
-	}{
-		{
-			name:     "local spec runs locally",
-			platform: "local",
-			want:     launchLocal,
-		},
-		{
-			name:           "local spec accepts local flags",
-			platform:       "local",
-			localConfigSet: true,
-			want:           launchLocal,
-		},
-		{
-			name:            "unspecified platform is cloud",
-			cloudConfigured: true,
-			want:            launchCloudApply,
-		},
-		{
-			name:    "unspecified platform requires cloud login",
-			wantErr: "runs in Telos Cloud",
-		},
-		{
-			name:           "cloud rejects local flags",
-			platform:       "cloud",
-			localConfigSet: true,
-			wantErr:        "local run config flags require a platform: local spec",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got, err := decideLaunchMode(
-				tt.platform,
-				tt.cloudConfigured,
-				tt.localConfigSet,
-			)
-			if tt.wantErr != "" {
-				if err == nil {
-					t.Fatalf("expected error containing %q", tt.wantErr)
-				}
-				if !strings.Contains(err.Error(), tt.wantErr) {
-					t.Fatalf("error: got %q, want %q", err.Error(), tt.wantErr)
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("decideLaunchMode: %v", err)
-			}
-			if got != tt.want {
-				t.Fatalf("mode: got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResolveLaunchModeKeepsLocalRunsIndependentOfCloudConfig(t *testing.T) {
-	configPath := filepath.Join(t.TempDir(), "config.yaml")
-	if err := os.WriteFile(configPath, []byte("context: [\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv(config.ConfigPathEnv, configPath)
-
-	mode, err := resolveLaunchMode("local", false)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if mode != launchLocal {
-		t.Fatalf("mode = %q, want %q", mode, launchLocal)
-	}
-
-	if _, err := resolveLaunchMode("cloud", false); err == nil || !strings.Contains(err.Error(), configPath) {
-		t.Fatalf("cloud config error = %v, want path %s", err, configPath)
-	}
-}
-
-func TestValidateApplySessionPlatformRejectsCrossedTargets(t *testing.T) {
-	tests := []struct {
-		name      string
-		sessionID string
-		platform  string
-		wantErr   string
-	}{
-		{
-			name:      "local session with cloud spec",
-			sessionID: "local_123",
-			platform:  "cloud",
-			wantErr:   "requires a platform: local spec",
-		},
-		{
-			name:      "cloud session with local spec",
-			sessionID: "sess_123",
-			platform:  "local",
-			wantErr:   "cannot apply a platform: local spec",
-		},
-		{
-			name:      "unknown session namespace",
-			sessionID: "deployment_123",
-			platform:  "cloud",
-			wantErr:   "invalid session id",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := validateApplySessionPlatform(tt.sessionID, tt.platform)
-			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("error: got %v, want containing %q", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestValidateApplySessionPlatformAcceptsMatchingTargets(t *testing.T) {
-	for _, target := range []struct {
-		sessionID string
-		platform  string
-	}{
-		{sessionID: "", platform: "local"},
-		{sessionID: "local_123", platform: "local"},
-		{sessionID: "sess_123", platform: "cloud"},
-		{sessionID: "sess_123", platform: ""},
-	} {
-		if err := validateApplySessionPlatform(target.sessionID, target.platform); err != nil {
-			t.Fatalf("validate %q/%q: %v", target.sessionID, target.platform, err)
-		}
-	}
-}
-
 func TestValidateForceApplyRequiresCloudUpdate(t *testing.T) {
 	for _, sessionID := range []string{"", "local_123"} {
 		err := validateForceApply(true, sessionID)
-		if err == nil || !strings.Contains(err.Error(), "requires --session") {
+		if err == nil || !strings.Contains(err.Error(), "requires --goal") {
 			t.Fatalf("forced %q: got %v", sessionID, err)
 		}
 	}
@@ -580,6 +435,51 @@ func TestValidateForceApplyRequiresCloudUpdate(t *testing.T) {
 	}
 	if err := validateForceApply(true, "sess_123"); err != nil {
 		t.Fatalf("forced cloud update: %v", err)
+	}
+}
+
+func TestValidateApplySession(t *testing.T) {
+	// Cloud Goal IDs are opaque, so Cloud resolves any ID that is not local.
+	for _, sessionID := range []string{"", "sess_123", "goal_123"} {
+		if err := validateApplySession(sessionID); err != nil {
+			t.Fatalf("validate %q: %v", sessionID, err)
+		}
+	}
+	if err := validateApplySession("local_123"); err == nil || !strings.Contains(err.Error(), "only updates Telos Cloud Goals") {
+		t.Fatalf("validate local_123: got %v", err)
+	}
+}
+
+func TestInsideTelosSession(t *testing.T) {
+	t.Setenv("TELOS_SESSION_ID", "")
+	if insideTelosSession() {
+		t.Fatal("a shell without a session ID is not inside a Telos session")
+	}
+	t.Setenv("TELOS_SESSION_ID", "local_20261005_120000_00")
+	if !insideTelosSession() {
+		t.Fatal("a local session worker is inside a Telos session")
+	}
+}
+
+func TestRequireCloudLogin(t *testing.T) {
+	configPath := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(configPath, []byte("context: [\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv(config.ConfigPathEnv, configPath)
+	t.Setenv(config.AuthTokenEnv, "")
+	if err := requireCloudLogin(); err == nil || !strings.Contains(err.Error(), configPath) {
+		t.Fatalf("config error = %v, want path %s", err, configPath)
+	}
+
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "missing.yaml"))
+	if err := requireCloudLogin(); err == nil || !strings.Contains(err.Error(), "telos login") {
+		t.Fatalf("missing login error = %v", err)
+	}
+
+	t.Setenv(config.AuthTokenEnv, "token")
+	if err := requireCloudLogin(); err != nil {
+		t.Fatalf("token login: %v", err)
 	}
 }
 
@@ -595,31 +495,6 @@ func TestSessionCreateRequestForLocalSpec(t *testing.T) {
 	}
 	if req.SpecMarkdown == nil || !strings.Contains(*req.SpecMarkdown, "name: demo") {
 		t.Fatalf("expected spec markdown, got %#v", req)
-	}
-}
-
-func TestSessionKindForCommand(t *testing.T) {
-	if got := sessionKindForCommand("apply"); got != sessionapi.KindController {
-		t.Fatalf("apply kind: got %q", got)
-	}
-	if got := sessionKindForCommand("run"); got != sessionapi.KindTask {
-		t.Fatalf("run kind: got %q", got)
-	}
-}
-
-func TestValidateLaunchCommandRejectsCloudRunOutsideRoot(t *testing.T) {
-	err := validateLaunchCommand("run", launchCloudApply)
-	if err == nil {
-		t.Fatal("expected cloud run rejection")
-	}
-	if !strings.Contains(err.Error(), "use telos apply") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if err := validateLaunchCommand("apply", launchCloudApply); err != nil {
-		t.Fatalf("apply should be allowed: %v", err)
-	}
-	if err := validateLaunchCommand("run", launchLocal); err != nil {
-		t.Fatalf("local run should be allowed: %v", err)
 	}
 }
 
@@ -1066,26 +941,6 @@ func TestRegistryPublicationErrorExplainsIdentityKindCollision(t *testing.T) {
 	}
 }
 
-func TestLaunchSpecPlatformDoesNotResolveSkills(t *testing.T) {
-	dir := t.TempDir()
-	specPath := filepath.Join(dir, "SPEC.md")
-	if err := os.WriteFile(
-		specPath,
-		[]byte("---\nversion: 0.1.0\nname: hosted\nplatform: cloud\nskills:\n  - server-side-only\n---\n# Hosted\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
-
-	platform, err := launchSpecPlatform(specPath)
-	if err != nil {
-		t.Fatalf("launchSpecPlatform: %v", err)
-	}
-	if platform != "cloud" {
-		t.Fatalf("platform: got %q", platform)
-	}
-}
-
 func TestNormalizePackageVersion(t *testing.T) {
 	for input, want := range map[string]string{
 		"1":                "1.0.0",
@@ -1430,69 +1285,6 @@ func TestRootSessionContextIgnoresLocalRuntime(t *testing.T) {
 
 	if ctx, ok := rootSessionContext(); ok {
 		t.Fatalf("local runtime should not be cloud root context: %#v", ctx)
-	}
-}
-
-func TestLocalRootSessionIDUsesLocalSessionContext(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "sessions")
-	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: 0.1.0\nname: local-root\nplatform: local\n---\n# Local Root\n"
-	kind := sessionapi.KindController
-	session, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown: &markdown,
-		SessionKind:  &kind,
-	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	t.Setenv("TELOS_SESSION_ID", session.SessionID)
-	t.Setenv("TELOS_SESSION_DIR", root)
-	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
-
-	sessionID, ok := localRootSessionID()
-	if !ok {
-		t.Fatal("expected local root session context")
-	}
-	if sessionID != session.SessionID {
-		t.Fatalf("session id: got %q", sessionID)
-	}
-}
-
-func TestLocalRootSessionIDIgnoresTaskSession(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "sessions")
-	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: 0.1.0\nname: local-task\nplatform: local\n---\n# Local Task\n"
-	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	t.Setenv("TELOS_SESSION_ID", session.SessionID)
-	t.Setenv("TELOS_SESSION_DIR", root)
-	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
-
-	if sessionID, ok := localRootSessionID(); ok {
-		t.Fatalf("task session should not be local root context: %s", sessionID)
-	}
-}
-
-func TestLocalRootSessionIDRequiresLocalRuntimeMarker(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "sessions")
-	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	markdown := "---\nversion: 0.1.0\nname: local-root\nplatform: local\n---\n# Local Root\n"
-	kind := sessionapi.KindController
-	session, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown: &markdown,
-		SessionKind:  &kind,
-	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	t.Setenv("TELOS_RUNTIME", "")
-	t.Setenv("TELOS_SESSION_ID", session.SessionID)
-	t.Setenv("TELOS_SESSION_DIR", root)
-
-	if sessionID, ok := localRootSessionID(); ok {
-		t.Fatalf("session should not be local root context without runtime marker: %s", sessionID)
 	}
 }
 
@@ -1843,8 +1635,8 @@ func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
 	}
 	text := err.Error()
 	for _, want := range []string{
-		"session local_missing not found in",
-		"Local sessions are workspace-scoped",
+		"Goal local_missing not found in",
+		"Local Goals are workspace-scoped",
 		"TELOS_SESSION_DIR=/path/to/.telos/sessions",
 	} {
 		if !strings.Contains(text, want) {

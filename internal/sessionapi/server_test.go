@@ -2752,7 +2752,6 @@ func writeAuthorizedSession(
 		SessionKind:     kind,
 		Runtime:         sessionapi.RuntimeCloud,
 		CreatedAt:       "2026-05-18T12:00:00.000Z",
-		Launcher:        "telosd",
 		ParentSessionID: parentID,
 		SessionSpecPath: &specPath,
 		SpecName:        id,

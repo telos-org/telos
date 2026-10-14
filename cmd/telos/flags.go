@@ -204,6 +204,10 @@ func resolveSessionRuntimeConfigFromFlags(
 		Model:    modelOption(fs, model),
 		Thinking: level,
 	}
+	// Only bounded commands define a cost budget; a persistent apply has none.
+	if fs.Lookup("max-cost-usd") == nil {
+		return cfg, nil
+	}
 	if flagNameSet(fs, "max-cost-usd") || strings.TrimSpace(os.Getenv("TELOS_MAX_COST_USD")) != "" {
 		cost, err := positiveFloatOption(fs, "max-cost-usd", maxCostUSD, "TELOS_MAX_COST_USD", 20.0)
 		if err != nil {

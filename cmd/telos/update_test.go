@@ -1,7 +1,9 @@
 package main
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"fmt"
 	"io"
@@ -18,11 +20,40 @@ import (
 )
 
 func updateTestManifest(version string) string {
-	return fmt.Sprintf(`{"version":%q,"base_url":"https://unused.invalid","platforms":[{"os":%q,"arch":%q,"telos":%q}]}`,
-		version, runtime.GOOS, runtime.GOARCH, "telos-"+runtime.GOOS+"-"+runtime.GOARCH)
+	return fmt.Sprintf(`{"version":%q,"skills":[{"ref":%q,"artifact":"telos-cli-skill.tar.gz"}],"platforms":[{"os":%q,"arch":%q,"telos":%q,"telosd":%q}]}`,
+		version, "@telos/telos-cli:"+strings.TrimPrefix(version, "v"), runtime.GOOS, runtime.GOARCH, "telos-"+runtime.GOOS+"-"+runtime.GOARCH, "telosd-"+runtime.GOOS+"-"+runtime.GOARCH)
+}
+
+func updateTestSkill(t *testing.T) []byte {
+	t.Helper()
+	var buffer bytes.Buffer
+	gz := gzip.NewWriter(&buffer)
+	archive := tar.NewWriter(gz)
+	for _, name := range []string{"SKILL.md", "references/install.md"} {
+		data := []byte("released " + name)
+		if err := archive.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data))}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := archive.Write(data); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buffer.Bytes()
+}
+
+func updateTestSums(binary []byte, skill []byte) string {
+	return fmt.Sprintf("%x  telos-%s-%s\n%x  telosd-%s-%s\n%x  telos-cli-skill.tar.gz\n",
+		sha256.Sum256(binary), runtime.GOOS, runtime.GOARCH, sha256.Sum256(binary), runtime.GOOS, runtime.GOARCH, sha256.Sum256(skill))
 }
 
 func TestCLIUpdateRejectsDevelopmentBuilds(t *testing.T) {
+	t.Setenv("TELOS_AGENT_SKILLS_DIR", t.TempDir())
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -54,8 +85,10 @@ func TestCLIUpdateRejectsDevelopmentBuilds(t *testing.T) {
 }
 
 func TestCLIUpdateReleaseSelection(t *testing.T) {
+	t.Setenv("TELOS_AGENT_SKILLS_DIR", t.TempDir())
 	for _, requested := range []string{"", "latest", "v0.1.5+master.abc123", "0.1.5+master.abc123"} {
 		t.Run(requested, func(t *testing.T) {
+			t.Setenv("TELOS_AGENT_SKILLS_DIR", t.TempDir())
 			dir := t.TempDir()
 			target := filepath.Join(dir, "telos")
 			for _, name := range []string{"telos", "telosd", "config.yaml", "SKILL.md"} {
@@ -66,6 +99,7 @@ func TestCLIUpdateReleaseSelection(t *testing.T) {
 			version := "v0.1.5+master.abc123"
 			artifact := "telos-" + runtime.GOOS + "-" + runtime.GOARCH
 			payload := []byte("verified replacement")
+			skill := updateTestSkill(t)
 			manifestVersion := version
 			if requested == "" || requested == "latest" {
 				manifestVersion = "latest"
@@ -77,7 +111,11 @@ func TestCLIUpdateReleaseSelection(t *testing.T) {
 				case "/" + manifestVersion + "/manifest.json":
 					fmt.Fprint(w, updateTestManifest(version))
 				case "/" + version + "/SHA256SUMS":
-					fmt.Fprintf(w, "%x  %s\n", sha256.Sum256(payload), artifact)
+					fmt.Fprint(w, updateTestSums(payload, skill))
+				case "/" + version + "/telos-cli-skill.tar.gz":
+					w.Write(skill)
+				case "/" + version + "/telosd-" + runtime.GOOS + "-" + runtime.GOARCH:
+					w.Write(payload)
 				case "/" + version + "/" + artifact:
 					w.Write(payload)
 				default:
@@ -90,24 +128,32 @@ func TestCLIUpdateReleaseSelection(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if got != version {
-				t.Fatalf("version = %q", got)
+			if got.Version != version {
+				t.Fatalf("version = %q", got.Version)
 			}
 			data, err := os.ReadFile(target)
 			if err != nil || !bytes.Equal(data, payload) {
 				t.Fatalf("replacement = %q, %v", data, err)
 			}
+			data, err = os.ReadFile(filepath.Join(dir, "telosd"))
+			if err != nil || !bytes.Equal(data, payload) {
+				t.Fatalf("runtime replacement = %q, %v", data, err)
+			}
+			data, err = os.ReadFile(filepath.Join(os.Getenv("TELOS_AGENT_SKILLS_DIR"), "telos-cli", "SKILL.md"))
+			if err != nil || string(data) != "released SKILL.md" || len(got.Components) != 3 {
+				t.Fatalf("skill replacement = %q, components = %v, error = %v", data, got.Components, err)
+			}
 			info, err := os.Stat(target)
 			if err != nil || info.Mode().Perm() != 0o755 {
 				t.Fatalf("replacement permissions: %v, %v", info, err)
 			}
-			for _, name := range []string{"telosd", "config.yaml", "SKILL.md"} {
+			for _, name := range []string{"config.yaml", "SKILL.md"} {
 				data, err := os.ReadFile(filepath.Join(dir, name))
 				if err != nil || string(data) != "original" {
 					t.Fatalf("changed %s", name)
 				}
 			}
-			if requests.Load() != 3 {
+			if requests.Load() != 5 {
 				t.Fatalf("requests = %d", requests.Load())
 			}
 			assertNoUpdateStage(t, dir)
@@ -116,22 +162,38 @@ func TestCLIUpdateReleaseSelection(t *testing.T) {
 }
 
 func TestCLIUpdateNoop(t *testing.T) {
+	t.Setenv("TELOS_AGENT_SKILLS_DIR", t.TempDir())
 	dir := t.TempDir()
 	target := filepath.Join(dir, "telos")
 	if err := os.WriteFile(target, []byte("original"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	before, _ := os.Stat(target)
+	skill := updateTestSkill(t)
+	skillTarget := filepath.Join(os.Getenv("TELOS_AGENT_SKILLS_DIR"), "telos-cli")
+	if err := os.MkdirAll(skillTarget, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := extractReleaseSkill(skill, skillTarget); err != nil {
+		t.Fatal(err)
+	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/latest/manifest.json" {
+		switch filepath.Base(r.URL.Path) {
+		case "manifest.json":
+			fmt.Fprint(w, updateTestManifest("v0.1.5"))
+		case "SHA256SUMS":
+			fmt.Fprint(w, updateTestSums([]byte("original"), skill))
+		case "telos-cli-skill.tar.gz":
+			w.Write(skill)
+		default:
 			t.Errorf("unexpected request %s", r.URL.Path)
+			http.NotFound(w, r)
 		}
-		fmt.Fprint(w, updateTestManifest("v0.1.5"))
 	}))
 	defer srv.Close()
 	got, err := updateCLI(target, "v0.1.5", "latest", srv.URL, srv.Client())
-	if err != nil || got != "v0.1.5" {
-		t.Fatalf("update = %q, %v", got, err)
+	if err != nil || got.Version != "v0.1.5" || len(got.Components) != 0 {
+		t.Fatalf("update = %+v, %v", got, err)
 	}
 	after, _ := os.Stat(target)
 	if !os.SameFile(before, after) {
@@ -141,6 +203,7 @@ func TestCLIUpdateNoop(t *testing.T) {
 }
 
 func TestCLIUpdateFailuresKeepOriginal(t *testing.T) {
+	t.Setenv("TELOS_AGENT_SKILLS_DIR", t.TempDir())
 	for _, failure := range []string{"manifest-http", "manifest-json", "manifest-version", "wrong-version", "missing-platform", "unsafe-artifact", "checksum-http", "checksum-missing", "checksum-invalid", "checksum-duplicate", "checksum-mismatch", "binary-http", "truncated-binary"} {
 		t.Run(failure, func(t *testing.T) {
 			dir := t.TempDir()
@@ -149,6 +212,7 @@ func TestCLIUpdateFailuresKeepOriginal(t *testing.T) {
 				t.Fatal(err)
 			}
 			payload := []byte("new binary")
+			skill := updateTestSkill(t)
 			artifact := "telos-" + runtime.GOOS + "-" + runtime.GOARCH
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch filepath.Base(r.URL.Path) {
@@ -183,8 +247,10 @@ func TestCLIUpdateFailuresKeepOriginal(t *testing.T) {
 					case "checksum-mismatch":
 						fmt.Fprintf(w, "%x  %s\n", sha256.Sum256([]byte("other")), artifact)
 					default:
-						fmt.Fprint(w, line)
+						fmt.Fprint(w, updateTestSums(payload, skill))
 					}
+				case "telos-cli-skill.tar.gz":
+					w.Write(skill)
 				case artifact:
 					if failure == "binary-http" {
 						http.Error(w, "unavailable", 503)
@@ -212,6 +278,7 @@ func TestCLIUpdateFailuresKeepOriginal(t *testing.T) {
 }
 
 func TestCLIUpdatePreservesSymlink(t *testing.T) {
+	t.Setenv("TELOS_AGENT_SKILLS_DIR", t.TempDir())
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real-telos")
 	link := filepath.Join(dir, "telos")
@@ -239,6 +306,7 @@ func TestCLIUpdatePreservesSymlink(t *testing.T) {
 }
 
 func TestCLIUpdateRejectsManagedTargets(t *testing.T) {
+	t.Setenv("TELOS_AGENT_SKILLS_DIR", t.TempDir())
 	for _, path := range []string{"opt/homebrew/Cellar/telos/0.1.5/bin/telos", "nix/store/hash-telos/bin/telos", "snap/telos/1/bin/telos", "opt/local/bin/telos"} {
 		t.Run(path, func(t *testing.T) {
 			target := filepath.Join(t.TempDir(), path)
@@ -256,6 +324,7 @@ func TestCLIUpdateRejectsManagedTargets(t *testing.T) {
 }
 
 func TestCLIReleaseVersions(t *testing.T) {
+	t.Setenv("TELOS_AGENT_SKILLS_DIR", t.TempDir())
 	for _, valid := range []string{"v0.1.5", "0.1.5", "v0.1.5+master.abc123", "v1.2.3-rc.1"} {
 		if !validCLIReleaseVersion(valid) {
 			t.Errorf("rejected %q", valid)
@@ -269,6 +338,7 @@ func TestCLIReleaseVersions(t *testing.T) {
 }
 
 func TestCLIUpdateDownloadBound(t *testing.T) {
+	t.Setenv("TELOS_AGENT_SKILLS_DIR", t.TempDir())
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { fmt.Fprint(w, "too large") }))
 	defer srv.Close()
 	var out bytes.Buffer
@@ -281,6 +351,7 @@ func TestCLIUpdateDownloadBound(t *testing.T) {
 }
 
 func TestCLIUpdateRunningExecutable(t *testing.T) {
+	t.Setenv("TELOS_AGENT_SKILLS_DIR", t.TempDir())
 	if endpoint := os.Getenv("TELOS_TEST_SELF_UPDATE_URL"); endpoint != "" {
 		executable, err := os.Executable()
 		if err != nil {
@@ -313,13 +384,16 @@ func TestCLIUpdateRunningExecutable(t *testing.T) {
 		t.Fatal(err)
 	}
 	payload := []byte("replacement CLI")
+	skill := updateTestSkill(t)
 	artifact := "telos-" + runtime.GOOS + "-" + runtime.GOARCH
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch filepath.Base(r.URL.Path) {
 		case "manifest.json":
 			fmt.Fprint(w, updateTestManifest("v0.1.5"))
 		case "SHA256SUMS":
-			fmt.Fprintf(w, "%x  %s\n", sha256.Sum256(payload), artifact)
+			fmt.Fprint(w, updateTestSums(payload, skill))
+		case "telos-cli-skill.tar.gz":
+			w.Write(skill)
 		case artifact:
 			w.Write(payload)
 		default:

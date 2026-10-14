@@ -17,8 +17,8 @@ func cmdList(args []string) {
 	fs := newCommandFlagSet("list", "telos list [flags]")
 	limit := fs.Int("limit", 0, "Limit results")
 	wide := fs.Bool("wide", false, "Wide output")
-	localOnly := fs.Bool("local", false, "Local sessions only")
-	cloudOnly := fs.Bool("cloud", false, "Cloud sessions only")
+	localOnly := fs.Bool("local", false, "Local Goals only")
+	cloudOnly := fs.Bool("cloud", false, "Cloud Goals only")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -48,6 +48,7 @@ func cmdList(args []string) {
 
 	var sessions []sessionapi.Session
 	rootScoped := false
+	signedOut := false
 
 	if !*localOnly {
 		rootSessions, handled, err := rootListSessions(*limit)
@@ -68,6 +69,7 @@ func cmdList(args []string) {
 				listCloudSessions(contextOverride, *jsonOut, *limit, *wide)
 				return
 			}
+			signedOut = true
 			sessions = append(sessions, listLocalSessions()...)
 		}
 	} else {
@@ -78,23 +80,26 @@ func cmdList(args []string) {
 	visible := visibleListSessions(sessions, effectiveWide)
 	visible = limitListSessions(visible, *limit)
 	if *jsonOut {
-		printJSON(sessionapi.SessionListResponse{Sessions: sessionapi.SessionListItems(visible)})
+		printJSON(map[string]any{"goals": goalJSONList(sessionapi.SessionListItems(visible))})
 		return
 	}
 
 	if len(visible) == 0 {
-		if !effectiveWide && len(sessions) > 0 {
-			fmt.Println("no top-level sessions (use --wide for child sessions)")
-		} else {
-			fmt.Println("no sessions")
+		switch {
+		case !effectiveWide && len(sessions) > 0:
+			fmt.Println("no top-level Goals (use --wide for child Goals)")
+		case signedOut:
+			fmt.Println("Not signed in. Run `telos login` to see your Goals.")
+		default:
+			fmt.Println("no Goals")
 		}
 		return
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if effectiveWide {
-		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPARENT\tCOST\tSESSION")
+		fmt.Fprintln(w, "NAME\tTARGET\tSTATUS\tPARENT\tCOST\tID")
 	} else {
-		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tID")
 	}
 	for _, sess := range visible {
 		row := displayRow(sess)
@@ -119,14 +124,6 @@ func cmdList(args []string) {
 }
 
 func rootListSessions(limit int) ([]sessionapi.Session, bool, error) {
-	if sessionID, ok := localRootSessionID(); ok {
-		sessions, err := store().List()
-		if err != nil {
-			return nil, true, fmt.Errorf("local root session list failed: %w", err)
-		}
-		return sessionTreeForRoot(sessions, sessionID), true, nil
-	}
-
 	ctx, ok := rootSessionContext()
 	if !ok {
 		return nil, false, nil
@@ -136,39 +133,6 @@ func rootListSessions(limit int) ([]sessionapi.Session, bool, error) {
 		return nil, true, fmt.Errorf("root session list failed: %w", err)
 	}
 	return sessions, true, nil
-}
-
-func sessionTreeForRoot(sessions []sessionapi.Session, rootID string) []sessionapi.Session {
-	byID := make(map[string]sessionapi.Session, len(sessions))
-	childrenByParent := make(map[string][]sessionapi.Session)
-	for _, session := range sessions {
-		byID[session.SessionID] = session
-		if session.ParentSessionID != nil && *session.ParentSessionID != "" {
-			childrenByParent[*session.ParentSessionID] = append(childrenByParent[*session.ParentSessionID], session)
-		}
-	}
-
-	root, ok := byID[rootID]
-	if !ok {
-		return nil
-	}
-
-	out := []sessionapi.Session{root}
-	seen := map[string]bool{rootID: true}
-	queue := []string{rootID}
-	for len(queue) > 0 {
-		parentID := queue[0]
-		queue = queue[1:]
-		for _, child := range childrenByParent[parentID] {
-			if seen[child.SessionID] {
-				continue
-			}
-			seen[child.SessionID] = true
-			out = append(out, child)
-			queue = append(queue, child.SessionID)
-		}
-	}
-	return out
 }
 
 func listLocalSessions() []sessionapi.Session {
@@ -205,21 +169,37 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	cloudSessions, err := control.ListSessions()
+	list := control.ListSessions
+	if wide {
+		list = control.ListSessionsWithBilling
+	}
+	cloudSessions, err := list()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
 	cloudSessions = limitCloudSessions(cloudSessions, limit)
+	var costs []*goalCost
+	if wide {
+		costs = goalCosts(control, cloudSessions)
+	}
 	if jsonOut {
+		sessions := make([]cloudSessionJSON, 0, len(cloudSessions))
+		for index := range cloudSessions {
+			record := newCloudSessionJSON(&cloudSessions[index])
+			if costs != nil {
+				record.Cost = costs[index]
+			}
+			sessions = append(sessions, record)
+		}
 		printJSON(map[string]any{
-			"context":  control.ContextName(),
-			"sessions": cloudSessions,
+			"context": control.ContextName(),
+			"goals":   sessions,
 		})
 		return
 	}
 	if len(cloudSessions) == 0 {
-		fmt.Println("no sessions")
+		fmt.Println("no Goals")
 		return
 	}
 	if wide {
@@ -228,18 +208,21 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 	}
 	w := tabwriter.NewWriter(os.Stdout, 0, 4, 2, ' ', 0)
 	if wide {
-		fmt.Fprintln(w, "NAME\tSTATUS\tREVISION\tSERVICE\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tREVISION\tSERVICE\tCLOUD\tINFERENCE\tID")
 	} else {
-		fmt.Fprintln(w, "NAME\tSTATUS\tSESSION")
+		fmt.Fprintln(w, "NAME\tSTATUS\tID")
 	}
-	for _, session := range cloudSessions {
+	for index, session := range cloudSessions {
 		serviceURL := optionalSessionString(session.ServiceURL)
 		if wide {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\n",
+			cloudSpend, inference := costCells(costs[index])
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				session.Name,
 				cloudSessionDisplayStatus(session),
-				session.PackageDigest,
+				shortRevision(session.PackageDigest),
 				serviceURL,
+				cloudSpend,
+				inference,
 				session.ID,
 			)
 			continue

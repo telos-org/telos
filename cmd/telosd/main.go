@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -55,15 +56,12 @@ func main() {
 }
 
 func configFromFlags(configPath, root string) (telosd.Config, error) {
-	var cfg telosd.Config
-	var err error
-	if configPath != "" {
-		cfg, err = telosd.LoadConfig(configPath)
-		if err != nil {
-			return telosd.Config{}, err
-		}
-	} else {
-		cfg = telosd.Config{Kind: telosd.ConfigKind, Mode: telosd.ModeLocal}
+	if configPath == "" {
+		return telosd.Config{}, errors.New("--config is required to serve; use --session-dir to run one session worker")
+	}
+	cfg, err := telosd.LoadConfig(configPath)
+	if err != nil {
+		return telosd.Config{}, err
 	}
 	if root != "" {
 		cfg.Root = root
