@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	piexecutor "github.com/telos-org/telos/internal/executor"
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -42,8 +43,8 @@ type fakeExecutor struct {
 	tasks          []string
 }
 
-func (f *fakeExecutor) RecoverTurnStats(*game.TurnState) (game.TurnStats, error) {
-	return game.TurnStats{}, nil
+func (f *fakeExecutor) RecoverTurnStats(turn *game.TurnState) (game.TurnStats, error) {
+	return piexecutor.ReadPiSessionStats(turn.PiSessionPath())
 }
 
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) game.TurnResult {
@@ -97,6 +98,10 @@ func interruptLocalVerifier(t *testing.T) (*LocalSession, string) {
 		proverResult: game.TurnResult{Role: "prover", Status: game.StatusContinue, Logs: "builder finished", Stats: game.TurnStats{CostUSD: 0.25, InputTokens: 10}},
 		onExecute: func(role string) {
 			if role == "verifier" {
+				state := game.NewPVGState(session.SpecName, filepath.Join(session.SessionDir, "specs", session.SpecName), session.SessionID)
+				if err := os.WriteFile(state.Turn(1, 2, "verifier").PiSessionPath(), []byte("{\"type\":\"session\",\"version\":3,\"id\":\"interrupted\"}\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 				panic("interrupted verifier")
 			}
 		},

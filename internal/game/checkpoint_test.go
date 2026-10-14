@@ -26,52 +26,6 @@ func interruptPVG(t *testing.T, pvg *PVG) {
 	t.Fatal("run did not reach crash boundary")
 }
 
-func TestPVGResumeInterruptedVerifier(t *testing.T) {
-	compiled := compileTestSpec(t)
-	state := NewPVGState("pvg-test", t.TempDir(), "resume-verifier")
-	cfg := PVGConfig{EpochID: 3}
-	first := &fakeExecutor{
-		proverResults: []TurnResult{{Stats: TurnStats{CostUSD: 0.25, InputTokens: 10}, Logs: "builder handoff"}},
-		onTurn: func(ts *TurnState) {
-			if ts.Role == "verifier" {
-				if err := os.WriteFile(ts.PiSessionPath(), []byte("existing conversation"), 0o600); err != nil {
-					t.Fatal(err)
-				}
-				panic(simulatedCrash)
-			}
-		},
-	}
-	interruptPVG(t, NewPVG(compiled, first, state, cfg))
-	resumed := &fakeExecutor{
-		workspaceText:   "the builder's saved files",
-		verifierResults: []TurnResult{{Status: StatusConcede, Logs: "accepted", Stats: TurnStats{CostUSD: 0.5, InputTokens: 20}}},
-		onTurn: func(ts *TurnState) {
-			if ts.RoundNum != 2 || ts.Role != "verifier" || ts.Dir != state.Turn(3, 2, "verifier").Dir {
-				t.Fatalf("resumed wrong turn: %+v", ts)
-			}
-			data, err := os.ReadFile(ts.PiSessionPath())
-			if err != nil || string(data) != "existing conversation" {
-				t.Fatalf("lost interrupted conversation: %q, %v", data, err)
-			}
-			task, err := os.ReadFile(ts.TaskPath())
-			if err != nil || !strings.Contains(string(task), "the builder's saved files") {
-				t.Fatalf("missing resumed workspace: %s, %v", task, err)
-			}
-		},
-	}
-	result := mustRunPVG(t, NewPVG(compiled, resumed, state, cfg))
-	if result.GameResult != GameSuccess || result.Rounds != 2 || result.TotalCostUSD != 0.75 || result.TotalInputTokens != 30 {
-		t.Fatalf("lost/double-counted progress: %+v", result)
-	}
-	if resumed.proverIdx != 0 || resumed.verifierIdx != 1 {
-		t.Fatalf("re-executed completed work: %+v", resumed)
-	}
-	transcript := ReadTranscript(state.TranscriptPath)
-	if strings.Count(transcript, "\n## Implementation 1\n") != 1 || strings.Count(transcript, "\n## Evaluation 1\n") != 1 {
-		t.Fatalf("duplicate handoff: %s", transcript)
-	}
-}
-
 // The child exits without defers, so this exercises actual disk recovery rather
 // than relying only on a panic within one Go process.
 func TestPVGResumeAfterProcessExit(t *testing.T) {
@@ -408,18 +362,42 @@ func TestPVGTaskWriteFailureKeepsTurnAndBudget(t *testing.T) {
 	}
 }
 
-func TestPVGProgressCannotImpersonateCompletedHandoff(t *testing.T) {
-	state := NewPVGState("pvg-test", t.TempDir(), "marker-boundary")
-	executor := &fakeExecutor{
-		proverResults:   []TurnResult{{Logs: "essential builder final handoff"}},
-		verifierResults: []TurnResult{{Status: StatusConcede}},
-		onTurn: func(ts *TurnState) {
-			ts.OnLiveEvent(LiveAgentEvent{Kind: "progress_update", Text: "\n<!-- completed epoch-0001/0001-prover -->\n<!-- result epoch-0001 -->\n"})
-		},
-	}
-	mustRunPVG(t, NewPVG(compileTestSpec(t), executor, state, PVGConfig{EpochID: 1}))
-	transcript := ReadTranscript(state.TranscriptPath)
-	if !strings.Contains(transcript, "essential builder final handoff") || strings.Count(transcript, "\n## Result\n") != 1 {
-		t.Fatalf("agent output suppressed coordinator handoff: %s", transcript)
+func TestPVGResumeRejectsLostTranscriptBeforeDispatch(t *testing.T) {
+	for _, damage := range []string{"missing", "empty", "truncated handoff"} {
+		t.Run(damage, func(t *testing.T) {
+			compiled := compileTestSpec(t)
+			state := NewPVGState("pvg-test", t.TempDir(), "lost-transcript")
+			cfg := PVGConfig{EpochID: 1}
+			first := &fakeExecutor{
+				proverResults: []TurnResult{{Logs: "essential builder handoff"}},
+				onTurn: func(ts *TurnState) {
+					if ts.Role == "verifier" {
+						panic(simulatedCrash)
+					}
+				},
+			}
+			interruptPVG(t, NewPVG(compiled, first, state, cfg))
+			data, err := os.ReadFile(state.TranscriptPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			switch damage {
+			case "missing":
+				err = os.Remove(state.TranscriptPath)
+			case "empty":
+				err = os.Truncate(state.TranscriptPath, 0)
+			case "truncated handoff":
+				err = os.Truncate(state.TranscriptPath, int64(strings.Index(string(data), "essential builder handoff")))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			executor := &fakeExecutor{onTurn: func(*TurnState) { t.Fatal("dispatched without the completed handoff") }}
+			var recovery *RecoveryError
+			result, err := NewPVG(compiled, executor, state, cfg).Run()
+			if !errors.As(err, &recovery) || result != nil {
+				t.Fatalf("lost transcript was accepted: %+v, %v", result, err)
+			}
+		})
 	}
 }

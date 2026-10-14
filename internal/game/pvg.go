@@ -51,12 +51,11 @@ func (p *PVG) Run() (*PVGResult, error) {
 	if err := p.restoreCheckpoint(); err != nil {
 		return nil, fmt.Errorf("restore execution checkpoint: %w", err)
 	}
+	if err := p.prepareTranscript(); err != nil {
+		return nil, err
+	}
 	alreadyTerminal := p.Result.GameResult != ""
 	if !alreadyTerminal {
-		if err := InitializeTranscript(p.State.TranscriptPath, p.State.SessionID,
-			p.Compiled.Environment.Name, p.State.EvidencePath, p.Evidence.StartedAt); err != nil {
-			return nil, err
-		}
 		if p.Config.Verbose {
 			log.Printf("=== PVG RUN: %s, next round %d ===", p.Compiled.Environment.Name, p.Result.Rounds+1)
 		}
@@ -172,7 +171,6 @@ func (p *PVG) runDefaultLoop() error {
 func (p *PVG) acceptPendingTurn() {
 	pending := p.checkpoint.Pending
 	turn := pending.Turn
-	p.checkpoint.TranscriptOffset = pending.TranscriptOffset
 	p.Result.Rounds++
 	if turn.Role == "prover" {
 		p.Result.ProverRounds++

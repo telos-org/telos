@@ -29,6 +29,7 @@ go_test(
     ],
     embed = [":cli"],
     deps = [
+        "//internal/executor",
         "//internal/game",
         "//internal/platform",
         "//internal/sessionapi",

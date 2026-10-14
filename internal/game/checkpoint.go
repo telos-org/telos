@@ -120,6 +120,32 @@ func (p *PVG) restoreCheckpoint() error {
 	return nil
 }
 
+// TranscriptOffset covers the last durable handoff, not merely its start.
+// A resumed turn must not silently recreate communication history that was lost.
+func (p *PVG) prepareTranscript() error {
+	if p.checkpoint.TranscriptOffset == 0 {
+		if err := InitializeTranscript(p.State.TranscriptPath, p.State.SessionID,
+			p.Compiled.Environment.Name, p.State.EvidencePath, p.Evidence.StartedAt); err != nil {
+			return err
+		}
+	}
+	info, err := os.Stat(p.State.TranscriptPath)
+	if os.IsNotExist(err) {
+		return recoveryErrorf("saved transcript is missing: %w", err)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Size() < p.checkpoint.TranscriptOffset {
+		return recoveryErrorf("transcript is shorter than its saved handoff boundary")
+	}
+	if p.checkpoint.TranscriptOffset == 0 {
+		p.checkpoint.TranscriptOffset = info.Size()
+		return p.saveCheckpoint()
+	}
+	return nil
+}
+
 func recoveryErrorf(format string, args ...any) error {
 	return &RecoveryError{Err: fmt.Errorf(format, args...)}
 }
@@ -168,17 +194,26 @@ func (p *PVG) appendPendingTurn() error {
 	turn := pending.Turn
 	turnID := fmt.Sprintf("epoch-%04d/%04d-%s", p.Config.EpochID, round, turn.Role)
 	marker := fmt.Sprintf("<!-- telos completion %s -->", pending.CompletionID)
-	if found, err := transcriptHasMarker(p.State.TranscriptPath, pending.TranscriptOffset, marker); err != nil {
+	found, err := transcriptHasMarker(p.State.TranscriptPath, pending.TranscriptOffset, marker)
+	if err != nil {
 		return err
-	} else if found {
-		return nil
 	}
-	return AppendTurnWithOptions(p.State.TranscriptPath, turn.Role, (round+1)/2, string(turn.Status),
-		turn.Logs, &turn.Stats, turnID, turn.Error, AppendTurnOptions{
-			IncludeStatus: true, CompletionMarker: marker,
-			PiSessionPath: p.State.Turn(p.Config.EpochID, round, turn.Role).PiSessionPath(),
-			EvidencePath:  p.State.EvidencePath,
-		})
+	if !found {
+		if err := AppendTurnWithOptions(p.State.TranscriptPath, turn.Role, (round+1)/2, string(turn.Status),
+			turn.Logs, &turn.Stats, turnID, turn.Error, AppendTurnOptions{
+				IncludeStatus: true, CompletionMarker: marker,
+				PiSessionPath: p.State.Turn(p.Config.EpochID, round, turn.Role).PiSessionPath(),
+				EvidencePath:  p.State.EvidencePath,
+			}); err != nil {
+			return err
+		}
+	}
+	info, err := os.Stat(p.State.TranscriptPath)
+	if err != nil {
+		return err
+	}
+	p.checkpoint.TranscriptOffset = info.Size()
+	return nil
 }
 
 func transcriptHasMarker(path string, offset int64, marker string) (bool, error) {

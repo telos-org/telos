@@ -381,59 +381,45 @@ func TestExecuteTurnRejectsUnsupportedSessionBeforeStartingPi(t *testing.T) {
 	}
 }
 
-func TestExecuteTurnCanRetryAfterSessionPreparationIOFailure(t *testing.T) {
-	executor, turn := newPiResumeTestExecutor(t, "", piProgressLine("repaired")+"\n")
-	path := turn.PiSessionPath()
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(path, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	result := executor.ExecuteTurn("resume", "verifier", turn)
-	if result.PreparationError == nil || result.StateError != "" || result.Error != "" || result.Status != game.StatusContinue {
-		t.Fatalf("preflight I/O failure was not safely retryable: %+v", result)
-	}
-	startedPath := filepath.Join(executor.Platform.Env["HOME"], "pi-started")
-	if _, err := os.Stat(startedPath); !os.IsNotExist(err) {
-		t.Fatalf("Pi started despite failed preparation: %v", err)
-	}
-	if err := os.Remove(path); err != nil {
-		t.Fatal(err)
-	}
-	writePiSession(t, path, piTestSessionHeader)
-	result = executor.ExecuteTurn("resume", "verifier", turn)
-	if result.PreparationError != nil || result.StateError != "" || result.Error != "" || !strings.Contains(result.Logs, "repaired") {
-		t.Fatalf("same turn could not run after repair: %+v", result)
-	}
-	if data, err := os.ReadFile(startedPath); err != nil || string(data) != "started\n" {
-		t.Fatalf("expected exactly one Pi launch after repair: %q, %v", data, err)
-	}
-}
-
-func TestExecuteTurnCanRetryWhenProcessDidNotStart(t *testing.T) {
-	executor, turn := newPiResumeTestExecutor(t, "", piTestSessionHeader+"\n"+piProgressLine("started after repair")+"\n")
-	if err := os.Remove(turn.PiSessionPath()); err != nil {
-		t.Fatal(err)
-	}
-	executor.Platform.Workspace = filepath.Join(t.TempDir(), "missing-workspace")
-	result := executor.ExecuteTurn("resume", "verifier", turn)
-	if result.PreparationError == nil || result.StateError != "" || result.Error != "" || result.Status != game.StatusContinue {
-		t.Fatalf("failed process start was not safely retryable: %+v", result)
-	}
-	startedPath := filepath.Join(executor.Platform.Env["HOME"], "pi-started")
-	if _, err := os.Stat(startedPath); !os.IsNotExist(err) {
-		t.Fatalf("Pi started despite missing workspace: %v", err)
-	}
-	if err := os.Mkdir(executor.Platform.Workspace, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	result = executor.ExecuteTurn("resume", "verifier", turn)
-	if result.PreparationError != nil || result.StateError != "" || result.Error != "" || !strings.Contains(result.Logs, "started after repair") {
-		t.Fatalf("same turn could not run after workspace repair: %+v", result)
-	}
-	if data, err := os.ReadFile(startedPath); err != nil || string(data) != "started\n" {
-		t.Fatalf("expected exactly one Pi launch after repair: %q, %v", data, err)
+func TestExecuteTurnRetriesPreparationFailureWithoutLaunchingPi(t *testing.T) {
+	for _, failure := range []string{"unreadable session", "missing workspace"} {
+		t.Run(failure, func(t *testing.T) {
+			executor, turn := newPiResumeTestExecutor(t, "", piProgressLine("repaired")+"\n")
+			path := turn.PiSessionPath()
+			if failure == "unreadable session" {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				executor.Platform.Workspace = filepath.Join(t.TempDir(), "missing-workspace")
+			}
+			result := executor.ExecuteTurn("resume", "verifier", turn)
+			if result.PreparationError == nil || result.StateError != "" || result.Error != "" {
+				t.Fatalf("preparation failure was not retryable: %+v", result)
+			}
+			startedPath := filepath.Join(executor.Platform.Env["HOME"], "pi-started")
+			if _, err := os.Stat(startedPath); !os.IsNotExist(err) {
+				t.Fatalf("Pi started before repair: %v", err)
+			}
+			if failure == "unreadable session" {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				writePiSession(t, path, piTestSessionHeader)
+			} else if err := os.Mkdir(executor.Platform.Workspace, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			result = executor.ExecuteTurn("resume", "verifier", turn)
+			if result.PreparationError != nil || result.StateError != "" || result.Error != "" || !strings.Contains(result.Logs, "repaired") {
+				t.Fatalf("same turn could not run after repair: %+v", result)
+			}
+			if data, err := os.ReadFile(startedPath); err != nil || string(data) != "started\n" {
+				t.Fatalf("expected exactly one Pi launch: %q, %v", data, err)
+			}
+		})
 	}
 }
 
