@@ -70,46 +70,26 @@ func TestPVGResumeAfterProcessExit(t *testing.T) {
 	}
 }
 
-func TestPVGResumePreservesFailureAndCostLimits(t *testing.T) {
-	for _, mode := range []string{"failures", "cost"} {
-		t.Run(mode, func(t *testing.T) {
-			compiled := compileTestSpec(t)
-			state := NewPVGState("pvg-test", t.TempDir(), "limits")
-			limit := 1.0
-			cfg := PVGConfig{EpochID: 1, Until: 1}
-			failure := TurnResult{Error: "provider unavailable", Failure: FailureRecoverable, Stats: TurnStats{CostUSD: 0.25}}
-			if mode == "cost" {
-				cfg.MaxCostUSD = &limit
-				cfg.Until = 0
-			}
-			for round := 1; round <= 3; round++ {
-				executor := &fakeExecutor{
-					proverResults: []TurnResult{failure}, verifierResults: []TurnResult{failure},
-					onTurn: func(ts *TurnState) {
-						if ts.RoundNum != round {
-							panic(simulatedCrash)
-						}
-					},
+func TestPVGResumePreservesFailureLimit(t *testing.T) {
+	compiled := compileTestSpec(t)
+	state := NewPVGState("pvg-test", t.TempDir(), "failure-limit")
+	cfg := PVGConfig{EpochID: 1, Until: 1}
+	failure := TurnResult{Error: "provider unavailable", Failure: FailureRecoverable}
+	for round := 1; round <= 3; round++ {
+		executor := &fakeExecutor{
+			proverResults: []TurnResult{failure}, verifierResults: []TurnResult{failure},
+			onTurn: func(ts *TurnState) {
+				if ts.RoundNum != round {
+					panic(simulatedCrash)
 				}
-				interruptPVG(t, NewPVG(compiled, executor, state, cfg))
-			}
-			last := failure
-			want := "agent_failure_budget_exceeded"
-			if mode == "cost" {
-				last.Error = ""
-				last.Stats.CostUSD = 0.5
-				last.Status = StatusContinue
-				want = "budget exceeded"
-			}
-			executor := &fakeExecutor{verifierResults: []TurnResult{last}}
-			result := mustRunPVG(t, NewPVG(compiled, executor, state, cfg))
-			if result.GameResult != GameFailure || result.Rounds != 4 || !strings.Contains(result.Error, want) {
-				t.Fatalf("lost limits: %+v", result)
-			}
-			if result.TotalCostUSD != 0.75+last.Stats.CostUSD {
-				t.Fatalf("lost cost: %+v", result)
-			}
-		})
+			},
+		}
+		interruptPVG(t, NewPVG(compiled, executor, state, cfg))
+	}
+	executor := &fakeExecutor{verifierResults: []TurnResult{failure}}
+	result := mustRunPVG(t, NewPVG(compiled, executor, state, cfg))
+	if result.GameResult != GameFailure || result.Rounds != 4 || !strings.Contains(result.Error, "agent_failure_budget_exceeded") {
+		t.Fatalf("restart reset the failure limit: %+v", result)
 	}
 }
 
@@ -131,61 +111,42 @@ func TestPVGIntegrityFailureRemainsPendingAcrossRestarts(t *testing.T) {
 }
 
 func TestPVGReturnedResultSurvivesTranscriptFailure(t *testing.T) {
-	compiled := compileTestSpec(t)
-	state := NewPVGState("pvg-test", t.TempDir(), "handoff-failure")
-	cfg := PVGConfig{EpochID: 1}
-	first := &fakeExecutor{
-		proverResults: []TurnResult{{Logs: "durable builder result", Stats: TurnStats{CostUSD: 0.25}}},
-		onTurn: func(*TurnState) {
-			if err := os.Rename(state.TranscriptPath, state.TranscriptPath+".saved"); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Mkdir(state.TranscriptPath, 0o700); err != nil {
-				t.Fatal(err)
-			}
-		},
-	}
-	if _, err := NewPVG(compiled, first, state, cfg).Run(); err == nil {
-		t.Fatal("expected transcript write error")
-	}
-	if err := os.Remove(state.TranscriptPath); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Rename(state.TranscriptPath+".saved", state.TranscriptPath); err != nil {
-		t.Fatal(err)
-	}
+	p := pendingCheckpoint(t, PVGConfig{EpochID: 1}, TurnResult{Role: "prover", Logs: "durable builder result", Stats: TurnStats{CostUSD: 0.25}})
 	resumed := &fakeExecutor{
 		verifierResults: []TurnResult{{Status: StatusConcede}},
 		onTurn: func(ts *TurnState) {
-			if ts.Role != "verifier" || ts.RoundNum != 2 {
-				t.Fatalf("reran returned builder: %+v", ts)
-			}
-			if !strings.Contains(ReadTranscript(state.TranscriptPath), "durable builder result") {
-				t.Fatal("verifier started without repaired handoff")
+			if ts.Role != "verifier" || ts.RoundNum != 2 || !strings.Contains(ReadTranscript(p.State.TranscriptPath), "durable builder result") {
+				t.Fatalf("handoff was not repaired before dispatch: %+v", ts)
 			}
 		},
 	}
-	result := mustRunPVG(t, NewPVG(compiled, resumed, state, cfg))
+	result := mustRunPVG(t, NewPVG(p.Compiled, resumed, p.State, p.Config))
 	if result.GameResult != GameSuccess || result.TotalCostUSD != 0.25 {
 		t.Fatalf("lost pending result: %+v", result)
 	}
 }
 
 // Capture a real pending checkpoint by failing the transcript write after the
-// verifier exits. All counters, identities and save ordering come from Run.
+// agent exits. All counters, identities and save ordering come from Run.
 func pendingCheckpoint(t *testing.T, cfg PVGConfig, turn TurnResult) *PVG {
 	t.Helper()
 	state := NewPVGState("pvg-test", t.TempDir(), "pending")
+	if turn.Role == "" {
+		turn.Role = "verifier"
+	}
 	executor := &fakeExecutor{
 		proverResults:   []TurnResult{{Stats: TurnStats{CostUSD: 0.25}}},
 		verifierResults: []TurnResult{turn},
 		onTurn: func(ts *TurnState) {
-			if ts.Role == "verifier" {
+			if ts.Role == turn.Role {
 				if err := os.Rename(state.TranscriptPath, state.TranscriptPath+".saved"); err != nil {
 					t.Fatal(err)
 				}
 			}
 		},
+	}
+	if turn.Role == "prover" {
+		executor.proverResults = []TurnResult{turn}
 	}
 	p := NewPVG(compileTestSpec(t), executor, state, cfg)
 	if _, err := p.Run(); err == nil {

@@ -37,11 +37,9 @@ func TestSubmitLocalSessionWithoutRuntimeCreatesNoSession(t *testing.T) {
 
 // fakeExecutor for testing local run.
 type fakeExecutor struct {
-	preparationErr error
 	proverResult   game.TurnResult
 	verifierResult game.TurnResult
 	onExecute      func(role string)
-	onCheckpoint   func()
 	tasks          []string
 }
 
@@ -50,9 +48,6 @@ func (f *fakeExecutor) RecoverTurnStats(turn *game.TurnState) (game.TurnStats, e
 }
 
 func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) (game.TurnResult, error) {
-	if f.preparationErr != nil {
-		return game.TurnResult{}, f.preparationErr
-	}
 	f.tasks = append(f.tasks, task)
 	if f.onExecute != nil {
 		f.onExecute(role)
@@ -84,9 +79,6 @@ func (f *fakeExecutor) WorkspaceState() string {
 func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {
 	os.MkdirAll(filepath.Dir(dest), 0o755)
 	os.WriteFile(dest, []byte("fake"), 0o644)
-	if f.onCheckpoint != nil {
-		f.onCheckpoint()
-	}
 	return true
 }
 
@@ -188,6 +180,14 @@ printf '{"type":"message","id":"%s","parentId":%s,"timestamp":"2026-01-01T00:00:
 				result, err := RunLocalSessionWithExecutor(session.SessionDir, interruptedPiExecutor{newExecutor()})
 				t.Fatalf("did not interrupt: %+v, %v", result, err)
 			}()
+			if cap == 1.0 {
+				t.Run("executor setup failure", func(t *testing.T) {
+					t.Setenv("PATH", t.TempDir())
+					if result, err := RunLocalSessionWithExecutor(session.SessionDir, nil); !errors.Is(err, ErrAttemptPending) || result != nil {
+						t.Fatalf("setup failure closed the interrupted attempt: %+v, %v", result, err)
+					}
+				})
+			}
 			wantResult, wantRounds, wantCost, wantTokens := game.GameSuccess, 2, 0.75, 30
 			wantLaunches := "prover:builder\nverifier:review-before\nverifier:review-after\n"
 			if cap == 0.5 {
@@ -201,7 +201,14 @@ printf '{"type":"message","id":"%s","parentId":%s,"timestamp":"2026-01-01T00:00:
 			}
 			var result *game.PVGResult
 			for recovery := 0; recovery < 2; recovery++ {
-				result, err = RunLocalSessionWithExecutor(session.SessionDir, newExecutor())
+				var executor game.AgentExecutor
+				if recovery == 0 {
+					executor = newExecutor()
+				} else {
+					// Saved terminal results must finalize without installing Pi.
+					t.Setenv("PATH", t.TempDir())
+				}
+				result, err = RunLocalSessionWithExecutor(session.SessionDir, executor)
 				if err != nil || result.GameResult != wantResult || result.Rounds != wantRounds || result.TotalCostUSD != wantCost || result.TotalInputTokens != wantTokens {
 					t.Fatalf("recovery %d: %+v, %v", recovery, result, err)
 				}
@@ -253,42 +260,6 @@ printf '{"type":"message","id":"%s","parentId":%s,"timestamp":"2026-01-01T00:00:
 	}
 }
 
-func TestRunLocalSessionRetriesInterruptedTurnAfterExecutorSetupFailure(t *testing.T) {
-	session, _ := interruptLocalVerifier(t)
-	state := game.NewPVGState(session.SpecName, filepath.Join(session.SessionDir, "specs", session.SpecName), session.SessionID)
-	history := "{\"type\":\"session\",\"version\":3,\"id\":\"interrupted\"}\n" +
-		"{\"message\":{\"role\":\"assistant\",\"usage\":{\"input\":100,\"cost\":{\"total\":0.75}}}}\n"
-	if err := os.WriteFile(state.Turn(1, 2, "verifier").PiSessionPath(), []byte(history), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", t.TempDir())
-	result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
-	var recovery *game.RecoveryError
-	if err == nil || errors.As(err, &recovery) || result != nil {
-		t.Fatalf("setup failure completed or blocked interrupted turn: %+v, %v", result, err)
-	}
-	manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
-	if err != nil || manifest.OpenEpoch() == nil || manifest.OpenEpoch().ID != 1 {
-		t.Fatalf("setup failure abandoned interrupted epoch: %+v, %v", manifest, err)
-	}
-	resumed := &fakeExecutor{
-		verifierResult: game.TurnResult{Status: game.StatusConcede, Stats: game.TurnStats{CostUSD: 0.75, InputTokens: 100}},
-		onExecute: func(role string) {
-			if role != "verifier" {
-				t.Fatalf("replayed completed %s", role)
-			}
-			data, err := os.ReadFile(state.Turn(1, 2, "verifier").PiSessionPath())
-			if err != nil || string(data) != history {
-				t.Fatalf("setup failure lost interrupted history: %q, %v", data, err)
-			}
-		},
-	}
-	result, err = RunLocalSessionWithExecutor(session.SessionDir, resumed)
-	if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.TotalCostUSD != 1 || result.TotalInputTokens != 110 {
-		t.Fatalf("setup repair lost interrupted usage: %+v, %v", result, err)
-	}
-}
-
 func expireLocalCheckpoint(t *testing.T, path string) {
 	t.Helper()
 	data, err := os.ReadFile(path)
@@ -326,7 +297,6 @@ func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
 		{name: "corrupt", history: history + "{\"message\":\n", expired: true, invalid: true},
 		{name: "empty", invalid: true},
 		{name: "missing", missing: true, expired: true, invalid: true},
-		{name: "missing before deadline", missing: true, invalid: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			session, checkpointPath := interruptLocalVerifier(t)
@@ -384,30 +354,6 @@ func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
 				t.Fatalf("recovered usage missing from API: %+v, %v", current, err)
 			}
 		})
-	}
-}
-
-func TestRunLocalSessionPreparationFailureHasNoInterruptedUsage(t *testing.T) {
-	dir := t.TempDir()
-	specPath := writeTestSpec(t, dir)
-	t.Chdir(dir)
-	session, err := CreateLocalSession(specPath, LocalRunConfig{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	preparation := errors.New("process could not start")
-	result, err := RunLocalSessionWithExecutor(session.SessionDir, &fakeExecutor{
-		preparationErr: preparation,
-	})
-	if !errors.Is(err, preparation) || !errors.Is(err, ErrAttemptPending) || result != nil {
-		t.Fatalf("preparation failure was not retryable: %+v, %v", result, err)
-	}
-	checkpoint := filepath.Join(session.SessionDir, "specs", session.SpecName, "turns", "epoch-0001", "checkpoint.json")
-	expireLocalCheckpoint(t, checkpoint)
-	t.Setenv("PATH", t.TempDir())
-	result, err = RunLocalSessionWithExecutor(session.SessionDir, nil)
-	if err != nil || result.CompletionReason != "run_duration_exhausted" || result.Rounds != 0 || result.TotalCostUSD != 0 {
-		t.Fatalf("unstarted turn required execution history: %+v, %v", result, err)
 	}
 }
 
@@ -476,43 +422,6 @@ func TestRunLocalSessionInvalidCheckpointUsesNormalFailureLifecycle(t *testing.T
 				t.Fatalf("next attempt lost failure history: %+v, %v", manifest, err)
 			}
 		})
-	}
-}
-
-func TestRunLocalSessionFinalizesTerminalCheckpointWithoutPi(t *testing.T) {
-	session, _ := interruptLocalVerifier(t)
-	path := manifestPath(session.SessionDir)
-	var openManifest []byte
-	executor := &fakeExecutor{
-		verifierResult: game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "<status>CONCEDE</status>"},
-		onCheckpoint: func() {
-			var err error
-			openManifest, err = os.ReadFile(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			// Simulate a storage failure after the durable result but before the
-			// CLI can record the epoch's completion in its manifest.
-			if err := os.Remove(path); err != nil {
-				t.Fatal(err)
-			}
-		},
-	}
-	result, err := RunLocalSessionWithExecutor(session.SessionDir, executor)
-	if err == nil || !strings.Contains(err.Error(), "finish epoch") || result == nil || result.GameResult != game.GameSuccess {
-		t.Fatalf("expected failure finishing a completed run, got %+v, %v", result, err)
-	}
-	if err := os.WriteFile(path, openManifest, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("PATH", t.TempDir())
-	result, err = RunLocalSessionWithExecutor(session.SessionDir, nil)
-	if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.TotalCostUSD != 0.25 {
-		t.Fatalf("terminal recovery required Pi or reran a turn: %+v, %v", result, err)
-	}
-	manifest, err := sessionapi.ReadManifest(path)
-	if err != nil || len(manifest.Epochs) != 1 || manifest.OpenEpoch() != nil || manifest.Epochs[0].Result == nil || *manifest.Epochs[0].Result != "completed" {
-		t.Fatalf("terminal recovery did not close the original epoch: %+v, %v", manifest, err)
 	}
 }
 

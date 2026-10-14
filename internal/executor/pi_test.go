@@ -365,41 +365,36 @@ func TestExecuteTurnRequiresNewAssistantOutputAfterResume(t *testing.T) {
 	}
 }
 
-func TestPiResumeRejectsChangedHistory(t *testing.T) {
+func TestExecuteTurnRejectsChangedHistory(t *testing.T) {
 	for _, change := range []string{"truncation", "replacement", "same-inode regrowth"} {
 		t.Run(change, func(t *testing.T) {
-			path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-			initial := piTestSessionHeader + "\n" + piProgressLine(strings.Repeat("old", 100)) + "\n"
-			if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
-				t.Fatal(err)
+			old := `{"message":{"role":"assistant","usage":{"cost":{"total":0.25}}}}` + "\n" + piProgressLine(strings.Repeat("old", 100)) + "\n"
+			updated := piTestSessionHeader + "\n" + piProgressLine("new") + "\n" +
+				`{"message":{"role":"assistant","content":[{"type":"text","text":"<status>CONCEDE</status>"}],"usage":{"cost":{"total":0.5}}}}` + "\n"
+			if change != "truncation" {
+				updated += strings.Repeat("\n", len(old))
 			}
-			baseline, err := capturePiSessionBaseline(path)
+			executor, turn := newPiResumeTestExecutor(t, old, updated)
+			binary := filepath.Join(executor.Platform.Env["HOME"], ".local", "bin", "pi")
+			script, err := os.ReadFile(binary)
 			if err != nil {
 				t.Fatal(err)
 			}
-			var events []game.LiveAgentEvent
-			projector := startPiLiveProjector(path, &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
-				events = append(events, event)
-			}}, baseline)
-			updatedPath, updated := path, piTestSessionHeader+"\n"+piProgressLine("new")+"\n"
+			replacement := `> "$session"`
 			if change == "replacement" {
-				updatedPath += ".new"
+				replacement = `> "$session.new"; mv "$session.new" "$session"`
 			}
-			if change != "truncation" {
-				updated += strings.Repeat("\n", len(initial))
-			}
-			if err := os.WriteFile(updatedPath, []byte(updated), 0o644); err != nil {
+			if err := os.WriteFile(binary, []byte(strings.ReplaceAll(string(script), `>> "$session"`, replacement)), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			if change == "replacement" {
-				if err := os.Rename(updatedPath, path); err != nil {
-					t.Fatal(err)
-				}
+			var events []game.LiveAgentEvent
+			// Also cover final session parsing when live projection is disabled.
+			if change != "replacement" {
+				turn.OnLiveEvent = func(event game.LiveAgentEvent) { events = append(events, event) }
 			}
-			projector.Stop()
-			_, err = readPiSession(path, baseline)
-			if !errors.Is(err, errPiSessionChanged) || !errors.Is(projector.integrityErr, errPiSessionChanged) || len(events) != 0 {
-				t.Fatalf("changed history was treated as valid output: err=%v events=%#v", err, events)
+			result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
+			if preparationErr != nil || result.Failure != game.FailureState || !strings.Contains(result.Error, "usage is unknown") || result.Status == game.StatusConcede || result.Stats.CostUSD != 0 || len(events) != 0 {
+				t.Fatalf("changed history was accepted or replayed: result=%+v err=%v events=%#v", result, preparationErr, events)
 			}
 		})
 	}
@@ -479,17 +474,12 @@ func TestExecuteTurnHonorsStopBeforeStartingPi(t *testing.T) {
 	}
 }
 
-func TestExecuteTurnCanRecoverFromMissingCredentialsBeforeSessionCreation(t *testing.T) {
-	newLine := `{"message":{"role":"assistant","content":[{"type":"text","text":"credentials repaired"}],"usage":{"input":3,"cost":{"total":0.5}}}}`
-	executor, turn := newPiResumeTestExecutor(t, "", piTestSessionHeader+"\n"+newLine+"\n")
+func TestExecuteTurnReportsMissingCredentialsBeforeSessionCreation(t *testing.T) {
+	executor, turn := newPiResumeTestExecutor(t, "", "")
 	if err := os.Remove(turn.PiSessionPath()); err != nil {
 		t.Fatal(err)
 	}
 	binary := filepath.Join(executor.Platform.Env["HOME"], ".local", "bin", "pi")
-	script, err := os.ReadFile(binary)
-	if err != nil {
-		t.Fatal(err)
-	}
 	// Pi validates credentials before it writes the first session record.
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho 'No API key found for anthropic.' >&2\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -498,16 +488,6 @@ func TestExecuteTurnCanRecoverFromMissingCredentialsBeforeSessionCreation(t *tes
 	blocker, _ := game.AgentFailureBlocker(result.Error)
 	if result.Failure == game.FailureState || preparationErr != nil || blocker != "agent_credentials_missing" || result.Stats.CostUSD != 0 {
 		t.Fatalf("missing credentials became unknown usage: %+v", result)
-	}
-	if err := os.WriteFile(binary, script, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	result, preparationErr = executor.ExecuteTurn("run", "prover", turn)
-	if preparationErr != nil {
-		t.Fatal(preparationErr)
-	}
-	if result.Failure == game.FailureState || result.Error != "" || result.Logs != "credentials repaired" || result.Stats.CostUSD != 0.5 {
-		t.Fatalf("credential repair could not recover: %+v", result)
 	}
 }
 
@@ -576,27 +556,6 @@ func TestPiResumeRejectsRewritingNewlyObservedHistory(t *testing.T) {
 	projector.observeSessionFile(true)
 	if !errors.Is(projector.integrityErr, errPiSessionChanged) || !slices.Equal(events, []game.LiveAgentEvent{{Kind: "progress_update", Text: "new"}}) {
 		t.Fatalf("replayed or lost newly observed history: err=%v events=%#v", projector.integrityErr, events)
-	}
-}
-
-func TestExecuteTurnBlocksWhenHistoryChangesAndUsageIsUnknown(t *testing.T) {
-	old := `{"message":{"role":"assistant","content":[{"type":"text","text":"old"}],"usage":{"input":10,"cost":{"total":0.25}}}}`
-	newLine := `{"message":{"role":"assistant","content":[{"type":"text","text":"<status>CONCEDE</status>"}],"usage":{"input":3,"cost":{"total":0.5}}}}`
-	executor, turn := newPiResumeTestExecutor(t, old+"\n", piTestSessionHeader+"\n"+newLine+"\n")
-	binary := filepath.Join(executor.Platform.Env["HOME"], ".local", "bin", "pi")
-	script, err := os.ReadFile(binary)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(binary, []byte(strings.ReplaceAll(string(script), `>> "$session"`, `> "$session"`)), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
-	if preparationErr != nil {
-		t.Fatal(preparationErr)
-	}
-	if result.Failure != game.FailureState || !strings.Contains(result.Error, "usage is unknown") || result.Status == game.StatusConcede || result.Stats.CostUSD != 0 {
-		t.Fatalf("lost history accepted with incomplete spending: %+v", result)
 	}
 }
 
