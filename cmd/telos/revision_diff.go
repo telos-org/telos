@@ -32,7 +32,7 @@ type revisionSkillChange struct {
 }
 
 type revisionDiffResult struct {
-	SessionID         string                `json:"session_id"`
+	GoalID            string                `json:"goal_id"`
 	Context           string                `json:"context"`
 	CurrentRevisionID string                `json:"current_revision_id"`
 	From              *cloud.Revision       `json:"from"`
@@ -42,12 +42,12 @@ type revisionDiffResult struct {
 }
 
 func cmdRevisionDiff(args []string) {
-	fs := newCommandFlagSet("diff", "telos diff SESSION FROM [TO] [flags]")
+	fs := newCommandFlagSet("diff", "telos diff GOAL FROM [TO] [flags]")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
 	if fs.NArg() != 2 && fs.NArg() != 3 {
-		fmt.Fprintln(os.Stderr, "error: expected SESSION, FROM, and optional TO revision")
+		fmt.Fprintln(os.Stderr, "error: expected GOAL, FROM, and optional TO revision")
 		fs.Usage()
 		os.Exit(2)
 	}
@@ -87,8 +87,8 @@ func cmdRevisionDiff(args []string) {
 		printJSON(result)
 		return
 	}
-	printRevisionField(os.Stdout, "Goal", session.Name)
-	printRevisionField(os.Stdout, "Session", session.ID)
+	printRevisionField(os.Stdout, "Name", session.Name)
+	printRevisionField(os.Stdout, "Goal", session.ID)
 	printRevisionField(os.Stdout, "Context", control.ContextName())
 	printRevisionField(os.Stdout, "From", fmt.Sprintf("revision %d (%s)", from.Sequence, from.ID))
 	toLabel := fmt.Sprintf("revision %d (%s)", to.Sequence, to.ID)
@@ -115,7 +115,7 @@ func cmdRevisionDiff(args []string) {
 }
 
 func compareRevisions(ctx context.Context, control *cloud.Client, sessionID string, from, to *cloud.Revision) (*revisionDiffResult, error) {
-	result := &revisionDiffResult{SessionID: sessionID, From: from, To: to, Files: []revisionFileDiff{}, Skills: []revisionSkillChange{}}
+	result := &revisionDiffResult{GoalID: sessionID, From: from, To: to, Files: []revisionFileDiff{}, Skills: []revisionSkillChange{}}
 	if from.PackageDigest == to.PackageDigest && from.PackageDigest != "" {
 		return result, nil
 	}

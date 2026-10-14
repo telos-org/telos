@@ -80,16 +80,16 @@ func TestRevisionDiffCLIUsesHistoricalPackagesAndDefaultDirection(t *testing.T) 
 	if err := os.WriteFile("SPEC.md", []byte("Unrelated local changes\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr, code := runRevisionCLI(t, "diff", "sess_test", "7", "--json")
+	stdout, stderr, code := runRevisionCLI(t, "diff", "goal_test", "7", "--json")
 	var result revisionDiffResult
-	if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &result) != nil || result.From.Sequence != 7 || result.To.Sequence != 12 || len(result.Files) != 1 || result.Files[0].Path != "SPEC.md" {
+	if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &result) != nil || result.GoalID != "goal_test" || result.From.Sequence != 7 || result.To.Sequence != 12 || len(result.Files) != 1 || result.Files[0].Path != "SPEC.md" {
 		t.Fatalf("diff: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
 	patch := result.Files[0].Patch
 	if !strings.Contains(patch, "-Serve the old demo.") || !strings.Contains(patch, "+Serve the new demo.") {
 		t.Fatalf("wrong default direction:\n%s", patch)
 	}
-	stdout, stderr, code = runRevisionCLI(t, "diff", "sess_test", "12", "7")
+	stdout, stderr, code = runRevisionCLI(t, "diff", "goal_test", "12", "7")
 	if code != 0 || !strings.Contains(stdout, "-Serve the new demo.") || !strings.Contains(stdout, "+Serve the old demo.") {
 		t.Fatalf("explicit diff: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
@@ -139,7 +139,7 @@ func TestRevisionDiffIncludesSkillContentsModesAndDependencies(t *testing.T) {
 			server := revisionTestServer(t, routes)
 			oldRevision, newRevision := testRevision(7), testRevision(12)
 			oldRevision.PackageDigest, newRevision.PackageDigest = oldPackage.Digest, newPackage.Digest
-			result, err := compareRevisions(context.Background(), cloud.NewClient(server.URL, "control-token"), "sess_test", &oldRevision, &newRevision)
+			result, err := compareRevisions(context.Background(), cloud.NewClient(server.URL, "control-token"), "goal_test", &oldRevision, &newRevision)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -169,12 +169,12 @@ func TestRevisionDiffRejectsWrongDigestAndSkipsIdenticalPackages(t *testing.T) {
 	})
 	client := cloud.NewClient(server.URL, "control-token")
 	oldRevision, newRevision := testRevision(7), testRevision(12)
-	result, err := compareRevisions(context.Background(), client, "sess_test", &oldRevision, &newRevision)
+	result, err := compareRevisions(context.Background(), client, "goal_test", &oldRevision, &newRevision)
 	if err != nil || len(result.Files) != 0 || reads.Load() != 0 {
 		t.Fatalf("identical packages: %+v %v reads=%d", result, err, reads.Load())
 	}
 	newRevision.PackageDigest = pkg.Digest
-	if _, err := compareRevisions(context.Background(), client, "sess_test", &oldRevision, &newRevision); err == nil || !strings.Contains(err.Error(), "digest mismatch") || reads.Load() != 1 {
+	if _, err := compareRevisions(context.Background(), client, "goal_test", &oldRevision, &newRevision); err == nil || !strings.Contains(err.Error(), "digest mismatch") || reads.Load() != 1 {
 		t.Fatalf("unverified historical package accepted: %v reads=%d", err, reads.Load())
 	}
 }

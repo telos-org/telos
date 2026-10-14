@@ -20,7 +20,7 @@ import (
 	"github.com/telos-org/telos/internal/cloud"
 )
 
-const revisionTestPath = "/api/deployments/sess_test/revisions"
+const revisionTestPath = "/api/deployments/goal_test/revisions"
 
 func testRevision(sequence int) cloud.Revision {
 	revision := cloud.Revision{
@@ -51,8 +51,8 @@ func revisionTestServer(t *testing.T, routes map[string]http.HandlerFunc) *httpt
 		switch r.Method + " " + r.URL.Path {
 		case "GET /api/capabilities":
 			_ = json.NewEncoder(w).Encode(testRevisionCapabilities())
-		case "GET /api/deployments/sess_test":
-			_ = json.NewEncoder(w).Encode(cloud.SessionRecord{ID: "sess_test", Name: "demo"})
+		case "GET /api/deployments/goal_test":
+			_ = json.NewEncoder(w).Encode(cloud.SessionRecord{ID: "goal_test", Name: "demo"})
 		case "GET " + revisionTestPath:
 			_ = json.NewEncoder(w).Encode(cloud.RevisionPage{CurrentRevisionID: "rev_12", Revisions: []cloud.Revision{testRevision(12), testRevision(7)}})
 		default:
@@ -124,23 +124,24 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(revision)
 		},
 	})
-	stdout, stderr, code := runRevisionCLI(t, "history", "sess_test")
+	stdout, stderr, code := runRevisionCLI(t, "history", "goal_test")
 	if code != 0 || stderr != "" || !strings.Contains(stdout, "1000*") || !strings.Contains(stdout, "--before 951") || !strings.Contains(stdout, "Update 1000") {
 		t.Fatalf("history: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
 	pageReads.Store(0)
-	stdout, stderr, code = runRevisionCLI(t, "history", "sess_test", "--revision", "7", "--json")
+	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--revision", "7", "--json")
 	var detail struct {
+		GoalID   string         `json:"goal_id"`
 		Revision cloud.Revision `json:"revision"`
 	}
-	if code != 0 || json.Unmarshal([]byte(stdout), &detail) != nil || detail.Revision.Sequence != 7 || pageReads.Load() > 2 {
+	if code != 0 || json.Unmarshal([]byte(stdout), &detail) != nil || detail.GoalID != "goal_test" || detail.Revision.Sequence != 7 || pageReads.Load() > 2 {
 		t.Fatalf("old revision: exit=%d stdout=%s stderr=%s reads=%d", code, stdout, stderr, pageReads.Load())
 	}
-	stdout, stderr, code = runRevisionCLI(t, "history", "sess_test", "--revision", "rev_7")
+	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--revision", "rev_7")
 	if code != 0 || !strings.Contains(stdout, "saved snapshot is no longer available") || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "Redeploy available") {
 		t.Fatalf("detail: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
-	stdout, stderr, code = runRevisionCLI(t, "history", "sess_test", "--all", "--limit", "20", "--json")
+	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--all", "--limit", "20", "--json")
 	var all cloud.RevisionPage
 	if code != 0 || json.Unmarshal([]byte(stdout), &all) != nil || len(all.Revisions) != 1000 || all.NextBefore != nil {
 		t.Fatalf("all history: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
@@ -159,7 +160,7 @@ func TestHistoryCLIRejectsChangingCurrentRevision(t *testing.T) {
 		},
 	})
 	for _, flags := range [][]string{{"--all"}, {"--revision", "7"}} {
-		stdout, stderr, code := runRevisionCLI(t, append([]string{"history", "sess_test"}, flags...)...)
+		stdout, stderr, code := runRevisionCLI(t, append([]string{"history", "goal_test"}, flags...)...)
 		if code == 0 || stdout != "" || !strings.Contains(stderr, "current revision changed") {
 			t.Fatalf("exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 		}
@@ -175,19 +176,19 @@ func TestRevisionCLIRejectsInvalidInputBeforeNetwork(t *testing.T) {
 		args []string
 		want string
 	}{
-		{[]string{"history", "local_test"}, "requires a Cloud session ID"},
-		{[]string{"history", "sess_test", "--limit", "101"}, "--limit must be between 1 and 100"},
-		{[]string{"history", "sess_test", "--before", "0"}, "--before must be positive"},
-		{[]string{"history", "sess_test", "--revision", "0"}, "revision must be a positive number"},
-		{[]string{"history", "sess_test", "--revision", "7", "--all"}, "--revision cannot be combined"},
-		{[]string{"diff", "sess_test", "HEAD"}, "revision must be a positive number"},
-		{[]string{"restore", "sess_test", "--message", "Recovery"}, "revision must be a positive number"},
-		{[]string{"restore", "sess_test", "--revision", "7", "--message", "Recovery", "--timeout", "1s"}, "--timeout must be positive and requires --wait"},
-		{[]string{"redeploy", "sess_test", "--revision", "7", "--message", "Recovery", "--wait", "--timeout", "0s"}, "--timeout must be positive and requires --wait"},
-		{[]string{"restore", "sess_test", "--revision", "7"}, "--message is required"},
-		{[]string{"redeploy", "sess_test", "--revision", "7", "--message", ""}, "--message is required"},
-		{[]string{"restore", "sess_test", "--revision", "7", "--message", "   "}, "--message is required"},
-		{[]string{"restore", "sess_test", "--revision", "7", "--message", "two\nlines"}, "revision messages must be a single line"},
+		{[]string{"history", "local_test"}, "requires a Cloud Goal ID"},
+		{[]string{"history", "goal_test", "--limit", "101"}, "--limit must be between 1 and 100"},
+		{[]string{"history", "goal_test", "--before", "0"}, "--before must be positive"},
+		{[]string{"history", "goal_test", "--revision", "0"}, "revision must be a positive number"},
+		{[]string{"history", "goal_test", "--revision", "7", "--all"}, "--revision cannot be combined"},
+		{[]string{"diff", "goal_test", "HEAD"}, "revision must be a positive number"},
+		{[]string{"restore", "goal_test", "--message", "Recovery"}, "revision must be a positive number"},
+		{[]string{"restore", "goal_test", "--revision", "7", "--message", "Recovery", "--timeout", "1s"}, "--timeout must be positive and requires --wait"},
+		{[]string{"redeploy", "goal_test", "--revision", "7", "--message", "Recovery", "--wait", "--timeout", "0s"}, "--timeout must be positive and requires --wait"},
+		{[]string{"restore", "goal_test", "--revision", "7"}, "--message is required"},
+		{[]string{"redeploy", "goal_test", "--revision", "7", "--message", ""}, "--message is required"},
+		{[]string{"restore", "goal_test", "--revision", "7", "--message", "   "}, "--message is required"},
+		{[]string{"restore", "goal_test", "--revision", "7", "--message", "two\nlines"}, "revision messages must be a single line"},
 	} {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
 			stdout, stderr, code := runRevisionCLI(t, tt.args...)
@@ -225,13 +226,13 @@ func TestRevisionActionCLIAcceptsOnceAndWaitsForExactResult(t *testing.T) {
 						_ = json.NewEncoder(w).Encode(revision)
 					},
 				})
-				args := []string{action, "sess_test", "--revision", "7", "--message", " Back to stable ", "--json"}
+				args := []string{action, "goal_test", "--revision", "7", "--message", " Back to stable ", "--json"}
 				if wait {
 					args = append(args, "--wait")
 				}
 				stdout, stderr, code := runRevisionCLI(t, args...)
 				var receipt revisionActionReceipt
-				if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &receipt) != nil || receipt.Operation == nil || receipt.Operation.ID != "op_exact" || posts.Load() != 1 {
+				if code != 0 || stderr != "" || json.Unmarshal([]byte(stdout), &receipt) != nil || receipt.GoalID != "goal_test" || receipt.Operation == nil || receipt.Operation.ID != "op_exact" || posts.Load() != 1 {
 					t.Fatalf("exit=%d stdout=%s stderr=%s posts=%d", code, stdout, stderr, posts.Load())
 				}
 				if wait != (receipt.ResultRevision != nil) || (wait && (receipt.ResultRevision.ID != "rev_13" || resultReads.Load() != 1)) {
@@ -267,7 +268,7 @@ func TestRevisionActionCLIReportsFailuresWithoutRetry(t *testing.T) {
 						fmt.Fprint(w, tt.response)
 					}
 				},
-				"GET /api/deployments/sess_test/operations/op_exact": func(w http.ResponseWriter, r *http.Request) {
+				"GET /api/deployments/goal_test/operations/op_exact": func(w http.ResponseWriter, r *http.Request) {
 					fmt.Fprint(w, tt.response)
 				},
 			})
@@ -275,7 +276,7 @@ func TestRevisionActionCLIReportsFailuresWithoutRetry(t *testing.T) {
 			if tt.name == "timeout" {
 				timeout = "20ms"
 			}
-			stdout, stderr, code := runRevisionCLI(t, "restore", "sess_test", "--revision", "7", "--message", "Back to stable", "--wait", "--timeout", timeout, "--json")
+			stdout, stderr, code := runRevisionCLI(t, "restore", "goal_test", "--revision", "7", "--message", "Back to stable", "--wait", "--timeout", timeout, "--json")
 			if code != 1 || !strings.Contains(stderr, tt.want) || posts.Load() != 1 {
 				t.Fatalf("exit=%d stdout=%s stderr=%s posts=%d", code, stdout, stderr, posts.Load())
 			}
@@ -322,7 +323,7 @@ func TestRevisionActionsRespectCapabilitiesWithoutFallback(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(cloud.RevisionPage{CurrentRevisionID: "rev_12", Revisions: []cloud.Revision{revision}})
 				},
 			})
-			_, stderr, code := runRevisionCLI(t, tt.action, "sess_test", "--revision", strconv.Itoa(tt.sequence), "--message", "Back to stable")
+			_, stderr, code := runRevisionCLI(t, tt.action, "goal_test", "--revision", strconv.Itoa(tt.sequence), "--message", "Back to stable")
 			if code != 1 || !strings.Contains(stderr, tt.want) {
 				t.Fatalf("exit=%d stderr=%s", code, stderr)
 			}
@@ -335,7 +336,7 @@ func TestWaitRevisionOperationTracksReceiptInsteadOfLatestDeployment(t *testing.
 		t.Run(fmt.Sprint(mismatch), func(t *testing.T) {
 			var resultReads atomic.Int32
 			server := revisionTestServer(t, map[string]http.HandlerFunc{
-				"GET /api/deployments/sess_test/operations/op_exact": func(w http.ResponseWriter, r *http.Request) {
+				"GET /api/deployments/goal_test/operations/op_exact": func(w http.ResponseWriter, r *http.Request) {
 					fmt.Fprint(w, `{"id":"op_exact","kind":"restore","status":"succeeded","result_revision_id":"rev_13"}`)
 				},
 				"GET " + revisionTestPath + "/rev_13": func(w http.ResponseWriter, r *http.Request) {
@@ -357,7 +358,7 @@ func TestWaitRevisionOperationTracksReceiptInsteadOfLatestDeployment(t *testing.
 			source := testRevision(7)
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			operation, result, err := waitRevisionOperation(ctx, client, "sess_test", "restore", "rev_12", &source, &cloud.RevisionOperation{ID: "op_exact", Status: "running"}, time.Millisecond)
+			operation, result, err := waitRevisionOperation(ctx, client, "goal_test", "restore", "rev_12", &source, &cloud.RevisionOperation{ID: "op_exact", Status: "running"}, time.Millisecond)
 			if mismatch {
 				if err == nil || !strings.Contains(err.Error(), "does not match") || result != nil {
 					t.Fatalf("accepted mismatched result: %+v, %v", result, err)
@@ -374,7 +375,7 @@ func TestWaitRevisionOperationCancellation(t *testing.T) {
 	cancel()
 	source := testRevision(7)
 	operation := &cloud.RevisionOperation{ID: "op_exact", Status: "running"}
-	last, result, err := waitRevisionOperation(ctx, cloud.NewClient("http://unused.invalid", ""), "sess_test", "restore", "rev_12", &source, operation, time.Hour)
+	last, result, err := waitRevisionOperation(ctx, cloud.NewClient("http://unused.invalid", ""), "goal_test", "restore", "rev_12", &source, operation, time.Hour)
 	if !errors.Is(err, context.Canceled) || result != nil || last != operation {
 		t.Fatalf("cancellation lost receipt: %+v %+v %v", last, result, err)
 	}

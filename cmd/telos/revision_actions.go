@@ -15,7 +15,7 @@ import (
 )
 
 type revisionActionReceipt struct {
-	SessionID          string                   `json:"session_id"`
+	GoalID             string                   `json:"goal_id"`
 	Context            string                   `json:"context"`
 	Action             string                   `json:"action"`
 	PreviousRevisionID string                   `json:"previous_revision_id"`
@@ -26,7 +26,7 @@ type revisionActionReceipt struct {
 }
 
 func cmdRevisionAction(action string, args []string) {
-	fs := newCommandFlagSet(action, "telos "+action+" SESSION --revision REVISION --message MESSAGE [flags]")
+	fs := newCommandFlagSet(action, "telos "+action+" GOAL --revision REVISION --message MESSAGE [flags]")
 	selector := fs.String("revision", "", "Source revision number or full revision ID (required)")
 	message := fs.String("message", "", "Revision message (required; at most 200 characters)")
 	wait := fs.Bool("wait", false, "Wait for the operation and its exact result revision")
@@ -34,7 +34,7 @@ func cmdRevisionAction(action string, args []string) {
 	jsonOut := fs.Bool("json", false, "JSON receipt; with --wait, print the final result")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
-	requireArgCount(fs, 1, "one SESSION")
+	requireArgCount(fs, 1, "one GOAL")
 	if _, err := parseRevisionSelector(*selector); err != nil {
 		exitWithError(err)
 	}
@@ -70,13 +70,13 @@ func cmdRevisionAction(action string, args []string) {
 		exitWithError(revisionActionError(action, source.Sequence, err))
 	}
 	receipt := revisionActionReceipt{
-		SessionID: session.ID, Context: control.ContextName(), Action: action,
+		GoalID: session.ID, Context: control.ContextName(), Action: action,
 		PreviousRevisionID: page.CurrentRevisionID, SourceRevision: source, Operation: operation,
 	}
 	if !*jsonOut {
 		fmt.Printf("%s requested\n\n", strings.ToUpper(action[:1])+action[1:])
-		printRevisionField(os.Stdout, "Goal", session.Name)
-		printRevisionField(os.Stdout, "Session", session.ID)
+		printRevisionField(os.Stdout, "Name", session.Name)
+		printRevisionField(os.Stdout, "Goal", session.ID)
 		printRevisionField(os.Stdout, "Context", control.ContextName())
 		printRevisionField(os.Stdout, "Previous revision", revisionLabel(page.CurrentRevisionID, page))
 		printRevisionField(os.Stdout, "Source revision", fmt.Sprint(source.Sequence))
@@ -155,7 +155,7 @@ func revisionActionAllowed(action string, source *cloud.Revision, currentID stri
 	if !capability.Allowed {
 		reason := revisionReason(revisionString(capability.Reason))
 		if action == "restore" && revisionActionCapability("redeploy", source, currentID, capabilities).Allowed {
-			reason += "; package redeploy is available with telos redeploy SESSION --revision " + fmt.Sprint(source.Sequence) + " --message MESSAGE"
+			reason += "; package redeploy is available with telos redeploy GOAL --revision " + fmt.Sprint(source.Sequence) + " --message MESSAGE"
 		}
 		return fmt.Errorf("cannot %s revision %d: %s", action, source.Sequence, reason)
 	}

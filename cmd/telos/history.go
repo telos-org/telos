@@ -20,7 +20,7 @@ const revisionPageSize = 50
 var revisionIDPattern = regexp.MustCompile(`^rev_[A-Za-z0-9_-]+$`)
 
 func cmdHistory(args []string) {
-	fs := newCommandFlagSet("history", "telos history SESSION [flags]")
+	fs := newCommandFlagSet("history", "telos history GOAL [flags]")
 	selector := fs.String("revision", "", "Inspect a revision number or full revision ID")
 	limit := fs.Int("limit", revisionPageSize, "Revisions per page (1–100)")
 	before := fs.Int("before", 0, "List revisions before this revision number")
@@ -28,7 +28,7 @@ func cmdHistory(args []string) {
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
-	requireArgCount(fs, 1, "one SESSION")
+	requireArgCount(fs, 1, "one GOAL")
 	if *limit < 1 || *limit > 100 || *before < 0 || (flagNameSet(fs, "before") && *before == 0) {
 		exitWithError(fmt.Errorf("--limit must be between 1 and 100; --before must be positive"))
 	}
@@ -56,7 +56,7 @@ func cmdHistory(args []string) {
 		}
 		if *jsonOut {
 			printJSON(struct {
-				SessionID         string              `json:"session_id"`
+				GoalID            string              `json:"goal_id"`
 				Context           string              `json:"context"`
 				CurrentRevisionID string              `json:"current_revision_id"`
 				Capabilities      *cloud.Capabilities `json:"capabilities"`
@@ -82,7 +82,7 @@ func cmdHistory(args []string) {
 	}
 	if *jsonOut {
 		printJSON(struct {
-			SessionID    string              `json:"session_id"`
+			GoalID       string              `json:"goal_id"`
 			Context      string              `json:"context"`
 			Capabilities *cloud.Capabilities `json:"capabilities"`
 			*cloud.RevisionPage
@@ -95,7 +95,7 @@ func cmdHistory(args []string) {
 func revisionCommandTarget(fs *flag.FlagSet, contextValue string) (*cloud.Client, *cloud.SessionRecord, *cloud.Capabilities, error) {
 	sessionID := strings.TrimSpace(fs.Arg(0))
 	if !isCloudApplyID(sessionID) {
-		return nil, nil, nil, fmt.Errorf("%s requires a Cloud session ID (sess_...)", fs.Name())
+		return nil, nil, nil, fmt.Errorf("%s requires a Cloud Goal ID", fs.Name())
 	}
 	contextOverride, err := cloudContextOverride(fs, contextValue)
 	if err != nil {
@@ -117,7 +117,7 @@ func revisionCommandTarget(fs *flag.FlagSet, contextValue string) (*cloud.Client
 		return nil, nil, nil, err
 	}
 	if session.ID != sessionID {
-		return nil, nil, nil, fmt.Errorf("Cloud returned a different session")
+		return nil, nil, nil, fmt.Errorf("Cloud returned a different Goal")
 	}
 	return control, session, capabilities, nil
 }
@@ -157,12 +157,12 @@ func resolveRevision(ctx context.Context, control *cloud.Client, sessionID, sele
 			return &revision, nil
 		}
 	}
-	return nil, fmt.Errorf("revision %d was not found in session %s", number, sessionID)
+	return nil, fmt.Errorf("revision %d was not found in Goal %s", number, sessionID)
 }
 
 func printRevisionHistory(out io.Writer, session *cloud.SessionRecord, contextName string, page *cloud.RevisionPage) {
-	printRevisionField(out, "Goal", session.Name)
-	printRevisionField(out, "Session", session.ID)
+	printRevisionField(out, "Name", session.Name)
+	printRevisionField(out, "Goal", session.ID)
 	printRevisionField(out, "Context", contextName)
 	printRevisionField(out, "Current revision", revisionLabel(page.CurrentRevisionID, page))
 	fmt.Fprintln(out)
@@ -191,8 +191,8 @@ func printRevisionHistory(out io.Writer, session *cloud.SessionRecord, contextNa
 }
 
 func printRevisionDetail(out io.Writer, session *cloud.SessionRecord, contextName string, page *cloud.RevisionPage, revision *cloud.Revision, capabilities *cloud.Capabilities) {
-	printRevisionField(out, "Goal", session.Name)
-	printRevisionField(out, "Session", session.ID)
+	printRevisionField(out, "Name", session.Name)
+	printRevisionField(out, "Goal", session.ID)
 	printRevisionField(out, "Context", contextName)
 	printRevisionField(out, "Revision", strconv.Itoa(revision.Sequence))
 	printRevisionField(out, "Revision ID", revision.ID)
