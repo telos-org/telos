@@ -73,19 +73,19 @@ func cmdRevisionAction(action string, args []string) {
 		GoalID: session.ID, Context: control.ContextName(), Action: action,
 		PreviousRevisionID: page.CurrentRevisionID, SourceRevision: source, Operation: operation,
 	}
+	progress, completed := "Restoring", "Restored"
+	if action == "redeploy" {
+		progress, completed = "Redeploying", "Redeployed"
+	}
 	if !*jsonOut {
-		fmt.Printf("%s requested\n\n", strings.ToUpper(action[:1])+action[1:])
 		printRevisionField(os.Stdout, "Name", session.Name)
 		printRevisionField(os.Stdout, "Goal", session.ID)
 		printRevisionField(os.Stdout, "Context", control.ContextName())
-		printRevisionField(os.Stdout, "Previous revision", revisionLabel(page.CurrentRevisionID, page))
-		printRevisionField(os.Stdout, "Source revision", fmt.Sprint(source.Sequence))
-		printRevisionField(os.Stdout, "Operation", operation.ID)
-		printRevisionField(os.Stdout, "Operation status", operation.Status)
+		fmt.Fprintln(os.Stdout)
 	}
 	if *wait {
 		if !*jsonOut {
-			fmt.Fprintf(os.Stderr, "\nWaiting for %s…\n", action)
+			fmt.Fprintf(os.Stderr, "%s revision %d…\n", progress, source.Sequence)
 		}
 		waitCtx, cancel := context.WithTimeout(ctx, *timeout)
 		defer cancel()
@@ -100,16 +100,10 @@ func cmdRevisionAction(action string, args []string) {
 	if *jsonOut {
 		printJSON(receipt)
 	} else if receipt.ResultRevision != nil {
-		fmt.Fprintln(os.Stdout, "\nOperation succeeded.")
-		printRevisionField(os.Stdout, "Created revision", fmt.Sprint(receipt.ResultRevision.Sequence))
-		printRevisionField(os.Stdout, "Revision ID", receipt.ResultRevision.ID)
-		label := "Restored from"
-		if action == "redeploy" {
-			label = "Redeployed from"
-		}
-		printRevisionField(os.Stdout, label, fmt.Sprint(source.Sequence))
+		fmt.Fprintf(os.Stdout, "%s as revision %d.\n", completed, receipt.ResultRevision.Sequence)
 	} else if err == nil {
-		fmt.Fprintf(os.Stdout, "\nCheck resulting history: telos history %s --context %s\n", session.ID, control.ContextName())
+		fmt.Printf("%s requested for revision %d.\n", strings.ToUpper(action[:1])+action[1:], source.Sequence)
+		fmt.Fprintf(os.Stdout, "\nCheck history: telos history %s --context %s\n", session.ID, control.ContextName())
 	}
 	if err != nil {
 		exitWithError(err)
