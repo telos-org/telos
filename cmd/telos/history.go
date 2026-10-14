@@ -141,16 +141,10 @@ func resolveRevision(ctx context.Context, control *cloud.Client, sessionID, sele
 		return control.GetSessionRevision(ctx, sessionID, selector)
 	}
 	page := first
-	for {
-		for _, revision := range page.Revisions {
-			if revision.Sequence == number {
-				return &revision, nil
-			}
-		}
-		if page.NextBefore == nil {
-			return nil, fmt.Errorf("revision %d was not found in session %s", number, sessionID)
-		}
-		page, err = control.ListSessionRevisions(ctx, sessionID, revisionPageSize, *page.NextBefore)
+	if first.NextBefore != nil && number < *first.NextBefore {
+		// The exclusive cursor seeks directly to the requested number. This
+		// bound also ensures number+1 cannot overflow.
+		page, err = control.ListSessionRevisions(ctx, sessionID, 1, number+1)
 		if err != nil {
 			return nil, err
 		}
@@ -158,6 +152,12 @@ func resolveRevision(ctx context.Context, control *cloud.Client, sessionID, sele
 			return nil, fmt.Errorf("the current revision changed while selecting a revision; refresh history and retry")
 		}
 	}
+	for _, revision := range page.Revisions {
+		if revision.Sequence == number {
+			return &revision, nil
+		}
+	}
+	return nil, fmt.Errorf("revision %d was not found in session %s", number, sessionID)
 }
 
 func printRevisionHistory(out io.Writer, session *cloud.SessionRecord, contextName string, page *cloud.RevisionPage) {

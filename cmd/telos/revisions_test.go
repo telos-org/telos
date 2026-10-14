@@ -97,15 +97,17 @@ func runRevisionCLI(t *testing.T, args ...string) (string, string, int) {
 }
 
 func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
+	var pageReads atomic.Int32
 	revisionTestServer(t, map[string]http.HandlerFunc{
 		"GET " + revisionTestPath: func(w http.ResponseWriter, r *http.Request) {
+			pageReads.Add(1)
 			before, _ := strconv.Atoi(r.URL.Query().Get("before"))
 			limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
-			start := 60
+			start := 1000
 			if before > 0 {
 				start = before - 1
 			}
-			page := cloud.RevisionPage{CurrentRevisionID: "rev_60", Revisions: []cloud.Revision{}}
+			page := cloud.RevisionPage{CurrentRevisionID: "rev_1000", Revisions: []cloud.Revision{}}
 			for sequence := start; sequence > 0 && len(page.Revisions) < limit; sequence-- {
 				page.Revisions = append(page.Revisions, testRevision(sequence))
 			}
@@ -123,15 +125,16 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 		},
 	})
 	stdout, stderr, code := runRevisionCLI(t, "history", "sess_test")
-	if code != 0 || stderr != "" || !strings.Contains(stdout, "60*") || !strings.Contains(stdout, "--before 11") || !strings.Contains(stdout, "Update 60") {
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "1000*") || !strings.Contains(stdout, "--before 951") || !strings.Contains(stdout, "Update 1000") {
 		t.Fatalf("history: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
+	pageReads.Store(0)
 	stdout, stderr, code = runRevisionCLI(t, "history", "sess_test", "--revision", "7", "--json")
 	var detail struct {
 		Revision cloud.Revision `json:"revision"`
 	}
-	if code != 0 || json.Unmarshal([]byte(stdout), &detail) != nil || detail.Revision.Sequence != 7 {
-		t.Fatalf("old revision: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
+	if code != 0 || json.Unmarshal([]byte(stdout), &detail) != nil || detail.Revision.Sequence != 7 || pageReads.Load() > 2 {
+		t.Fatalf("old revision: exit=%d stdout=%s stderr=%s reads=%d", code, stdout, stderr, pageReads.Load())
 	}
 	stdout, stderr, code = runRevisionCLI(t, "history", "sess_test", "--revision", "rev_7")
 	if code != 0 || !strings.Contains(stdout, "saved snapshot is no longer available") || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "Redeploy available") {
@@ -139,7 +142,7 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 	}
 	stdout, stderr, code = runRevisionCLI(t, "history", "sess_test", "--all", "--limit", "20", "--json")
 	var all cloud.RevisionPage
-	if code != 0 || json.Unmarshal([]byte(stdout), &all) != nil || len(all.Revisions) != 60 || all.NextBefore != nil {
+	if code != 0 || json.Unmarshal([]byte(stdout), &all) != nil || len(all.Revisions) != 1000 || all.NextBefore != nil {
 		t.Fatalf("all history: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
 }
@@ -257,17 +260,34 @@ func TestRevisionActionCLIReportsFailuresWithoutRetry(t *testing.T) {
 				"POST " + revisionTestPath + "/rev_7/restore": func(w http.ResponseWriter, r *http.Request) {
 					posts.Add(1)
 					w.WriteHeader(tt.status)
+					if tt.name == "failed operation" {
+						fmt.Fprint(w, `{"id":"op_exact","status":"running"}`)
+					} else {
+						fmt.Fprint(w, tt.response)
+					}
+				},
+				"GET /api/deployments/sess_test/operations/op_exact": func(w http.ResponseWriter, r *http.Request) {
 					fmt.Fprint(w, tt.response)
 				},
 			})
-			stdout, stderr, code := runRevisionCLI(t, "restore", "sess_test", "--revision", "7", "--message", "Back to stable", "--wait", "--timeout", "20ms", "--json")
+			timeout := "5s"
+			if tt.name == "timeout" {
+				timeout = "20ms"
+			}
+			stdout, stderr, code := runRevisionCLI(t, "restore", "sess_test", "--revision", "7", "--message", "Back to stable", "--wait", "--timeout", timeout, "--json")
 			if code != 1 || !strings.Contains(stderr, tt.want) || posts.Load() != 1 {
 				t.Fatalf("exit=%d stdout=%s stderr=%s posts=%d", code, stdout, stderr, posts.Load())
 			}
-			if tt.name == "timeout" {
+			if tt.status == http.StatusAccepted {
 				var receipt revisionActionReceipt
-				if json.Unmarshal([]byte(stdout), &receipt) != nil || receipt.Operation == nil || receipt.Operation.ID != "op_exact" || receipt.ObservationError == "" || receipt.ResultRevision != nil {
-					t.Fatalf("timeout lost operation receipt: %s", stdout)
+				if json.Unmarshal([]byte(stdout), &receipt) != nil || receipt.Operation == nil || receipt.Operation.ID != "op_exact" || receipt.ResultRevision != nil {
+					t.Fatalf("lost operation receipt: %s", stdout)
+				}
+				if tt.name == "timeout" && receipt.ObservationError == "" {
+					t.Fatalf("missing observation error: %s", stdout)
+				}
+				if tt.name == "failed operation" && (receipt.Operation.Status != "failed" || receipt.Operation.Error == nil || receipt.Operation.Error.Code != "snapshot_lost" || receipt.ObservationError != "") {
+					t.Fatalf("incorrect failure receipt: %s", stdout)
 				}
 			}
 		})
@@ -278,16 +298,25 @@ func TestRevisionActionsRespectCapabilitiesWithoutFallback(t *testing.T) {
 	for _, tt := range []struct {
 		name, action, reason, snapshot, want string
 		sequence                             int
+		enabled                              bool
 	}{
-		{"current", "restore", "current_revision", "available", "this revision is already current", 12},
-		{"lost snapshot", "restore", "snapshot_lost", "lost", "the saved snapshot is no longer available", 7},
-		{"capture gate", "redeploy", "snapshot_pending", "capturing", "a snapshot is still being captured", 7},
+		{"current", "restore", "current_revision", "available", "this revision is already current", 12, true},
+		{"lost snapshot", "restore", "snapshot_lost", "lost", "the saved snapshot is no longer available", 7, true},
+		{"capture gate", "redeploy", "snapshot_pending", "capturing", "a snapshot is still being captured", 7, true},
+		{"unsupported Cloud", "restore", "", "available", "not supported by this Cloud release", 7, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			revisionTestServer(t, map[string]http.HandlerFunc{
+				"GET /api/capabilities": func(w http.ResponseWriter, r *http.Request) {
+					capabilities := testRevisionCapabilities()
+					capabilities.DeploymentSnapshotRestore = tt.enabled
+					_ = json.NewEncoder(w).Encode(capabilities)
+				},
 				"GET " + revisionTestPath: func(w http.ResponseWriter, r *http.Request) {
 					revision := testRevision(tt.sequence)
-					revision.RestoreCapability = cloud.RevisionCapability{Reason: &tt.reason}
+					if tt.reason != "" {
+						revision.RestoreCapability = cloud.RevisionCapability{Reason: &tt.reason}
+					}
 					revision.Snapshot.Status = tt.snapshot
 					_ = json.NewEncoder(w).Encode(cloud.RevisionPage{CurrentRevisionID: "rev_12", Revisions: []cloud.Revision{revision}})
 				},
