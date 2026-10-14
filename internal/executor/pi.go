@@ -40,7 +40,7 @@ func NewPiExecutor(p *platform.LocalPlatform, model, thinking string, timeout in
 }
 
 // ExecuteTurn runs one Pi agent turn.
-func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.TurnState) game.TurnResult {
+func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.TurnState) (game.TurnResult, error) {
 	var stats game.TurnStats
 	model, thinking := pe.Model, pe.Thinking
 	stats.Model = model
@@ -64,9 +64,9 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	baseline, err := capturePiSessionBaseline(sessionPath)
 	if err != nil {
 		if errors.Is(err, errPiSessionFormat) {
-			return piSessionStateError(role, stats, err)
+			return piSessionStateError(role, stats, err), nil
 		}
-		return game.TurnResult{Role: role, Status: game.StatusContinue, Stats: stats, PreparationError: fmt.Errorf("prepare Pi session: %w", err)}
+		return game.TurnResult{}, fmt.Errorf("prepare Pi session: %w", err)
 	}
 	projector := startPiLiveProjector(sessionPath, turnState, baseline)
 	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, nil)
@@ -74,10 +74,10 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		projector.Stop()
 	}
 	if !result.Started {
-		return game.TurnResult{Role: role, Status: game.StatusContinue, Stats: stats, PreparationError: fmt.Errorf("start Pi: %s", result.InfraError)}
+		return game.TurnResult{}, fmt.Errorf("start Pi: %s", result.InfraError)
 	}
 	if projector != nil && projector.integrityErr != nil {
-		return piSessionStateError(role, stats, projector.integrityErr)
+		return piSessionStateError(role, stats, projector.integrityErr), nil
 	}
 
 	logs := strings.Join(result.RawLines, "\n")
@@ -90,7 +90,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			blocker, _ := game.AgentFailureBlocker(result.Stderr)
 			startupFailure := blocker == "agent_credentials_missing" || blocker == "agent_configuration_invalid"
 			if baseline.fileInfo != nil || !os.IsNotExist(err) || result.ReturnCode == 0 || !startupFailure {
-				return piSessionStateError(role, stats, err)
+				return piSessionStateError(role, stats, err), nil
 			}
 		}
 		// An interrupted turn has no completed-turn accounting yet. Include its
@@ -107,7 +107,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 				Stats:       stats,
 				Error:       fmt.Sprintf("pi_session_unavailable:%v", err),
 				Recoverable: true,
-			}
+			}, nil
 		}
 	}
 
@@ -119,7 +119,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Stats:       stats,
 			Error:       result.InfraError,
 			Recoverable: !result.TimedOut && recoverableAgentFailure(result.InfraError),
-		}
+		}, nil
 	}
 
 	stderrTrimmed := strings.TrimSpace(result.Stderr)
@@ -135,7 +135,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Stats:       stats,
 			Error:       reason,
 			Recoverable: recoverableAgentFailure(reason),
-		}
+		}, nil
 	}
 
 	if agentError != "" {
@@ -146,7 +146,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Stats:       stats,
 			Error:       agentError,
 			Recoverable: recoverableAgentFailure(agentError),
-		}
+		}, nil
 	}
 
 	if strings.TrimSpace(logs) == "" {
@@ -161,7 +161,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Stats:       stats,
 			Error:       "agent_no_output",
 			Recoverable: true,
-		}
+		}, nil
 	}
 
 	return game.TurnResult{
@@ -169,7 +169,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		Status: game.ExtractStatus(logs),
 		Logs:   logs,
 		Stats:  stats,
-	}
+	}, nil
 }
 
 func recoverableAgentFailure(errorText string) bool {
@@ -200,7 +200,6 @@ type piLiveProjector struct {
 type piSessionBaseline struct {
 	offset   int64
 	fileInfo os.FileInfo
-	pending  []byte
 	anchor   []byte
 }
 
@@ -252,30 +251,6 @@ func capturePiSessionBaseline(path string) (piSessionBaseline, error) {
 	if _, err := f.ReadAt(baseline.anchor, baseline.offset-int64(len(baseline.anchor))); err != nil {
 		return baseline, err
 	}
-	// Only an unfinished trailing record can become new output after resuming.
-	// Read backwards to its boundary, without scanning the existing history.
-	start := baseline.offset
-	for start > 0 {
-		blockStart := max(start-64*1024, 0)
-		block := make([]byte, start-blockStart)
-		if _, err := f.ReadAt(block, blockStart); err != nil {
-			return baseline, err
-		}
-		start = blockStart
-		if i := bytes.LastIndexByte(block, '\n'); i >= 0 {
-			start += int64(i + 1)
-			break
-		}
-	}
-	if start < baseline.offset {
-		tail := make([]byte, baseline.offset-start)
-		if _, err := f.ReadAt(tail, start); err != nil {
-			return baseline, err
-		}
-		if !json.Valid(tail) {
-			baseline.pending = tail
-		}
-	}
 	return baseline, nil
 }
 
@@ -305,7 +280,6 @@ func startPiLiveProjector(sessionPath string, turnState *game.TurnState, baselin
 		turnState:   turnState,
 		offset:      baseline.offset,
 		fileInfo:    baseline.fileInfo,
-		pending:     baseline.pending,
 		baseline:    baseline,
 		stop:        make(chan struct{}),
 		done:        make(chan struct{}),
@@ -605,7 +579,6 @@ func readPiSession(path string, baseline piSessionBaseline) (PiSessionSummary, e
 	if err := baseline.validate(f, info); err != nil {
 		return PiSessionSummary{}, err
 	}
-	newOutputOffset := baseline.offset - int64(len(baseline.pending))
 
 	var summary PiSessionSummary
 	var finalAssistant map[string]interface{}
@@ -623,7 +596,7 @@ func readPiSession(path string, baseline piSessionBaseline) (PiSessionSummary, e
 			if msg, ok := entry["message"].(map[string]interface{}); ok {
 				switch getString(msg, "role") {
 				case "assistant":
-					if offset >= newOutputOffset && offset+int64(len(line)) > baseline.offset {
+					if offset >= baseline.offset {
 						finalAssistant = msg
 					}
 					summary.Stats = mergeTurnStats(summary.Stats, statsFromPiMessage(msg))

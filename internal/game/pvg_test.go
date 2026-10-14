@@ -28,7 +28,7 @@ func (f *fakeExecutor) RecoverTurnStats(*TurnState) (TurnStats, error) {
 	return TurnStats{}, nil
 }
 
-func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) TurnResult {
+func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) (TurnResult, error) {
 	if f.onTurn != nil {
 		f.onTurn(ts)
 	}
@@ -36,7 +36,7 @@ func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) Turn
 		deadline := time.Now().Add(f.delay)
 		for time.Now().Before(deadline) {
 			if ts != nil && ts.StopRequested != nil && ts.StopRequested() {
-				return TurnResult{Role: role, Status: StatusContinue, Logs: "stopped", Error: "local_interrupted:stop_requested", Recoverable: true}
+				return TurnResult{Role: role, Status: StatusContinue, Logs: "stopped", Error: "local_interrupted:stop_requested", Recoverable: true}, nil
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -49,16 +49,16 @@ func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) Turn
 		if f.proverIdx < len(f.proverResults) {
 			r := f.proverResults[f.proverIdx]
 			f.proverIdx++
-			return r
+			return r, nil
 		}
-		return TurnResult{Role: role, Status: StatusContinue, Logs: "prover default"}
+		return TurnResult{Role: role, Status: StatusContinue, Logs: "prover default"}, nil
 	}
 	if f.verifierIdx < len(f.verifierResults) {
 		r := f.verifierResults[f.verifierIdx]
 		f.verifierIdx++
-		return r
+		return r, nil
 	}
-	return TurnResult{Role: role, Status: StatusContinue, Logs: "verifier default"}
+	return TurnResult{Role: role, Status: StatusContinue, Logs: "verifier default"}, nil
 }
 
 func (f *fakeExecutor) WorkspaceState() string {

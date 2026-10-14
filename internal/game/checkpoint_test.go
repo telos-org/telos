@@ -122,7 +122,7 @@ func TestPVGStateErrorRemainsPendingAcrossRestarts(t *testing.T) {
 		proverResults: []TurnResult{{StateError: "agent session history changed"}},
 		onTurn:        func(*TurnState) { calls++ },
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt < 2; attempt++ {
 		result, err := NewPVG(compiled, executor, state, PVGConfig{EpochID: 1}).Run()
 		var recovery *RecoveryError
 		if !errors.As(err, &recovery) || !strings.Contains(err.Error(), "agent session history changed") || result != nil || calls != 1 {

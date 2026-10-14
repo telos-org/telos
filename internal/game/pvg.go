@@ -296,8 +296,7 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 		return TurnResult{}, fmt.Errorf("prepare turn %d: %w", roundNum, err)
 	}
 	p.Evidence.Log("round_start", roundNum, role, map[string]interface{}{"audience": "user"})
-	turn := p.Executor.ExecuteTurn(task, role, ts)
-	return turn, turn.PreparationError
+	return p.Executor.ExecuteTurn(task, role, ts)
 }
 
 func (p *PVG) logGameState(event string) {

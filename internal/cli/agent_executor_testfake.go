@@ -79,14 +79,14 @@ func (e *testFakeExecutor) RecoverTurnStats(*game.TurnState) (game.TurnStats, er
 	return game.TurnStats{}, nil
 }
 
-func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) game.TurnResult {
+func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) (game.TurnResult, error) {
 	if e.nextTurn >= len(e.scenario.Turns) {
 		return game.TurnResult{
 			Role:   role,
 			Status: game.StatusContinue,
 			Logs:   "test fake scenario exhausted",
 			Error:  "test fake scenario exhausted",
-		}
+		}, nil
 	}
 	turn := e.scenario.Turns[e.nextTurn]
 	e.nextTurn++
@@ -97,7 +97,7 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 			Status: game.StatusContinue,
 			Logs:   fmt.Sprintf("test fake role mismatch: got %s, want %s", role, turn.Role),
 			Error:  fmt.Sprintf("test fake role mismatch: got %s, want %s", role, turn.Role),
-		}
+		}, nil
 	}
 	if turn.SleepMS > 0 {
 		deadline := time.Now().Add(time.Duration(turn.SleepMS) * time.Millisecond)
@@ -109,7 +109,7 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 					Logs:        "test fake interrupted by stop request",
 					Error:       "local_interrupted:stop_requested",
 					Recoverable: true,
-				}
+				}, nil
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -120,7 +120,7 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 			Status: game.StatusContinue,
 			Logs:   err.Error(),
 			Error:  err.Error(),
-		}
+		}, nil
 	}
 
 	return game.TurnResult{
@@ -139,7 +139,7 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 			CacheCreationTokens: turn.CacheCreationTokens,
 			Model:               turn.Model,
 		},
-	}
+	}, nil
 }
 
 func (e *testFakeExecutor) WorkspaceState() string {

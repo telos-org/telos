@@ -36,6 +36,7 @@ func TestSubmitLocalSessionWithoutRuntimeCreatesNoSession(t *testing.T) {
 
 // fakeExecutor for testing local run.
 type fakeExecutor struct {
+	preparationErr error
 	proverResult   game.TurnResult
 	verifierResult game.TurnResult
 	onExecute      func(role string)
@@ -47,15 +48,18 @@ func (f *fakeExecutor) RecoverTurnStats(turn *game.TurnState) (game.TurnStats, e
 	return piexecutor.ReadPiSessionStats(turn.PiSessionPath())
 }
 
-func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) game.TurnResult {
+func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) (game.TurnResult, error) {
+	if f.preparationErr != nil {
+		return game.TurnResult{}, f.preparationErr
+	}
 	f.tasks = append(f.tasks, task)
 	if f.onExecute != nil {
 		f.onExecute(role)
 	}
 	if role == "prover" {
-		return f.proverResult
+		return f.proverResult, nil
 	}
-	return f.verifierResult
+	return f.verifierResult, nil
 }
 
 func (f *fakeExecutor) firstTask() string {
@@ -118,19 +122,96 @@ func interruptLocalVerifier(t *testing.T) (*LocalSession, string) {
 	return session, checkpoint
 }
 
-func TestRunLocalSessionResumesInterruptedVerifierInSameEpoch(t *testing.T) {
-	session, _ := interruptLocalVerifier(t)
-	var roles []string
-	executor := &fakeExecutor{
-		verifierResult: game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "<status>CONCEDE</status>", Stats: game.TurnStats{CostUSD: 0.5, InputTokens: 3}},
-		onExecute:      func(role string) { roles = append(roles, role) },
+// Lose the verifier's returned result before PVG can checkpoint it. Pi has
+// exited, but its conversation and projected activity are already on disk.
+type interruptedPiExecutor struct {
+	game.AgentExecutor
+}
+
+func (e interruptedPiExecutor) ExecuteTurn(task, role string, turn *game.TurnState) (game.TurnResult, error) {
+	result, err := e.AgentExecutor.ExecuteTurn(task, role, turn)
+	if err == nil && role == "verifier" {
+		panic("interrupted verifier")
 	}
-	result, err := RunLocalSessionWithExecutor(session.SessionDir, executor)
-	if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.ProverRounds != 1 || result.VerifierRounds != 1 || result.TotalCostUSD != 0.75 || result.TotalInputTokens != 13 {
+	return result, err
+}
+
+func TestRunLocalSessionResumesPiVerifierWithoutReplayingActivity(t *testing.T) {
+	dir := t.TempDir()
+	specPath := writeTestSpec(t, dir)
+	t.Chdir(dir)
+	session, err := CreateLocalSession(specPath, LocalRunConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	home := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Exercise the real launch, session parser, live projector, PVG and CLI.
+	// Only the provider-facing Pi executable is replaced.
+	script := `#!/bin/sh
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--session" ]; then shift; session="$1"; fi
+  shift
+done
+if [ -s "$session" ]; then
+  progress="review-after"
+else
+  printf '%s\n' '{"type":"session","version":3,"id":"integration"}' > "$session"
+  progress="review-before"
+fi
+if [ "$TELOS_ROLE" = "prover" ]; then progress="builder"; fi
+printf '%s\n' "$TELOS_ROLE:$progress" >> "$HOME/launches"
+printf '{"message":{"role":"assistant","content":[{"type":"text","text":"<progress_update>%s</progress_update>\\n<status>CONCEDE</status>"}],"usage":{"input":10,"cost":{"total":0.25}}}}\n' "$progress" >> "$session"
+`
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	newExecutor := func() *piexecutor.PiExecutor {
+		local := platform.NewLocalPlatform(session.ActiveWorkspace)
+		local.Env = map[string]string{"HOME": home}
+		return piexecutor.NewPiExecutor(local, "test-model", "high", 0)
+	}
+	func() {
+		defer func() {
+			if got := recover(); got != "interrupted verifier" {
+				t.Fatalf("expected interruption, got %v", got)
+			}
+		}()
+		result, err := RunLocalSessionWithExecutor(session.SessionDir, interruptedPiExecutor{newExecutor()})
+		t.Fatalf("did not interrupt: %+v, %v", result, err)
+	}()
+	result, err := RunLocalSessionWithExecutor(session.SessionDir, newExecutor())
+	if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.TotalCostUSD != 0.75 || result.TotalInputTokens != 30 {
 		t.Fatalf("resumed result = %+v, %v", result, err)
 	}
-	if strings.Join(roles, ",") != "verifier" {
-		t.Fatalf("resumed the wrong turn: roles=%v", roles)
+	launches, err := os.ReadFile(filepath.Join(home, "launches"))
+	if err != nil || string(launches) != "prover:builder\nverifier:review-before\nverifier:review-after\n" {
+		t.Fatalf("wrong resumed conversation or role: %s, %v", launches, err)
+	}
+	data, err := os.ReadFile(result.EvidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	progress := map[string]int{}
+	for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var event struct {
+			Event string `json:"event"`
+			Data  struct {
+				Text string `json:"text"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Event == "agent_progress" {
+			progress[event.Data.Text]++
+		}
+	}
+	if len(progress) != 3 || progress["builder"] != 1 || progress["review-before"] != 1 || progress["review-after"] != 1 {
+		t.Fatalf("activity lost or replayed: %v", progress)
 	}
 	manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
 	if err != nil || len(manifest.Epochs) != 1 || manifest.OpenEpoch() != nil || manifest.Epochs[0].RoundCount == nil || *manifest.Epochs[0].RoundCount != 2 {
@@ -287,7 +368,7 @@ func TestRunLocalSessionPreparationFailureHasNoInterruptedUsage(t *testing.T) {
 	}
 	preparation := errors.New("process could not start")
 	result, err := RunLocalSessionWithExecutor(session.SessionDir, &fakeExecutor{
-		proverResult: game.TurnResult{PreparationError: preparation},
+		preparationErr: preparation,
 	})
 	if !errors.Is(err, preparation) || result != nil {
 		t.Fatalf("preparation failure was not retryable: %+v, %v", result, err)

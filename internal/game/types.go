@@ -44,9 +44,6 @@ type TurnResult struct {
 	Stats       TurnStats
 	Error       string
 	Recoverable bool
-	// PreparationError means no agent was started. Retry the same turn without
-	// recording a completion or consuming its failure budget.
-	PreparationError error `json:"-"`
 	// StateError means execution history cannot be trusted. Preserve the pending
 	// turn and fail the attempt instead of continuing from untrusted history.
 	StateError string
@@ -69,7 +66,10 @@ type LiveAgentEvent struct {
 
 // AgentExecutor runs one PVG agent turn.
 type AgentExecutor interface {
-	ExecuteTurn(task string, role string, turnState *TurnState) TurnResult
+	// ExecuteTurn returns an error only when no agent started. The caller retries
+	// that turn without recording a completion or consuming its failure budget.
+	// Once started, all outcomes (including untrusted history) are durable results.
+	ExecuteTurn(task string, role string, turnState *TurnState) (TurnResult, error)
 	// RecoverTurnStats validates and reads interrupted usage without launching an agent.
 	// Integrity failures return RecoveryError; temporary I/O failures remain retryable.
 	RecoverTurnStats(turnState *TurnState) (TurnStats, error)
