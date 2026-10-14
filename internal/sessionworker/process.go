@@ -300,20 +300,6 @@ func StartEpochWithRunner(sessionDir string, manifest *sessionapi.Manifest, pid 
 		if m.IsStopped() {
 			return ErrSessionStopped
 		}
-		if recovery := m.Recovery; recovery != nil {
-			open := m.OpenEpoch()
-			if !recovery.RestartRequested || open == nil || open.ID != recovery.EpochID {
-				return fmt.Errorf("session requires recovery of epoch %d", recovery.EpochID)
-			}
-			now := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-			failed, reason := "failed", "recovery_restart"
-			open.FinishedAt = &now
-			open.Result = &failed
-			open.Error = &recovery.Error
-			open.CompletionReason = &reason
-			m.Recovery = nil
-			manifest = m
-		}
 		if open := m.OpenEpoch(); open != nil {
 			epochID = open.ID
 			return nil

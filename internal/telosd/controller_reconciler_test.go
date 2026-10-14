@@ -4,7 +4,6 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -420,72 +419,6 @@ func TestStoppedFailedControllerIsNotResupervised(t *testing.T) {
 	}
 	if len(substrate.applies) != 0 {
 		t.Fatalf("stopped failed controller was relaunched: %#v", substrate.applies)
-	}
-}
-
-func TestRecoveryPreservesRootUntilExplicitRestartRequest(t *testing.T) {
-	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
-	substrate := &recordingSubstrate{}
-	store := newControllerReconciler(base, substrate, nil, cloudControllerDefaults())
-	markdown := "---\nversion: 0.1.0\nname: recovery-root\nplatform: cloud\n---\n# Recovery\n"
-	session, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown})
-	if err != nil {
-		t.Fatal(err)
-	}
-	path := filepath.Join(*session.SessionDir, "session.json")
-	_, err = sessionapi.MutateManifest(path, func(m *sessionapi.Manifest) error {
-		m.Epochs = append(m.Epochs, sessionapi.NewEpoch(m, 1, "2026-10-12T00:00:00Z", nil))
-		m.Recovery = &sessionapi.SessionRecovery{EpochID: 1, Error: "corrupt saved progress"}
-		return nil
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	substrate.applies = nil
-	for _, spec := range []string{markdown, strings.Replace(markdown, "0.1.0", "0.1.1", 1)} {
-		if _, err := store.UpdateSpec("recovery-root", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: spec}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := store.ensureRootWorkers("worker_supervision"); err != nil {
-		t.Fatal(err)
-	}
-	bootstrap := sessionBootstrapReconciler{store: store}
-	if err := bootstrap.reconcile([]cloudBootstrapSession{{Name: "recovery-root", PackageDigest: "sha256:existing"}}); err != nil {
-		t.Fatalf("bootstrap attempted to replace blocked root: %v", err)
-	}
-	if len(substrate.applies) != 0 || len(substrate.wakes) != 0 {
-		t.Fatalf("blocked root was restarted by update or supervision: %+v", substrate)
-	}
-	request := sessionapi.SessionRestartRequest{EpochID: 1}
-	for _, operation := range []string{"restart_requested", "unchanged"} {
-		response, err := store.Restart(session.SessionID, request)
-		if err != nil || response.Operation != operation {
-			t.Fatalf("restart = %+v, %v", response, err)
-		}
-	}
-	if len(substrate.applies) != 0 || len(substrate.wakes) != 0 {
-		t.Fatal("restart API dispatched from a potentially stale response")
-	}
-	if err := store.ensureRootWorkers("worker_supervision"); err != nil {
-		t.Fatal(err)
-	}
-	if len(substrate.applies) != 1 || substrate.applies[0].sessionID != session.SessionID {
-		t.Fatalf("persisted request was not supervised: %+v", substrate.applies)
-	}
-	manifest, err := sessionapi.ReadManifest(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := sessionworker.StartEpochWithRunner(*session.SessionDir, manifest, os.Getpid(), ""); err != nil {
-		t.Fatal(err)
-	}
-	response, err := store.Restart(session.SessionID, request)
-	if err != nil || response.Operation != "unchanged" || response.Session.Recovery != nil {
-		t.Fatalf("consumed request retry = %+v, %v", response, err)
-	}
-	if len(substrate.applies) != 1 || len(substrate.wakes) != 0 {
-		t.Fatal("old restart acknowledgment dispatched another attempt")
 	}
 }
 

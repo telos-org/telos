@@ -189,7 +189,7 @@ func activeRootSessionsByName(sessions []sessionapi.Session) map[string]sessiona
 		if session.ParentSessionID != nil && *session.ParentSessionID != "" {
 			continue
 		}
-		if session.Status == sessionapi.StatusStopped || (session.Status.IsTerminal() && session.Recovery == nil) {
+		if session.Status.IsTerminal() {
 			continue
 		}
 		if name := sessionCloudName(session); name != "" {

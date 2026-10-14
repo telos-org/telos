@@ -148,7 +148,7 @@ func TestRunLocalSessionRetriesInterruptedTurnAfterExecutorSetupFailure(t *testi
 		t.Fatalf("setup failure completed or blocked interrupted turn: %+v, %v", result, err)
 	}
 	manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
-	if err != nil || manifest.Recovery != nil || manifest.OpenEpoch() == nil || manifest.OpenEpoch().ID != 1 {
+	if err != nil || manifest.OpenEpoch() == nil || manifest.OpenEpoch().ID != 1 {
 		t.Fatalf("setup failure abandoned interrupted epoch: %+v, %v", manifest, err)
 	}
 	resumed := &fakeExecutor{
@@ -230,7 +230,7 @@ func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
 					t.Fatalf("temporary history access failure was not retryable: %+v, %v", result, err)
 				}
 				manifest, err := sessionapi.ReadManifest(manifestFile)
-				if err != nil || manifest.Recovery != nil || manifest.OpenEpoch() == nil {
+				if err != nil || manifest.OpenEpoch() == nil {
 					t.Fatalf("temporary access failure abandoned the attempt: %+v, %v", manifest, err)
 				}
 				if err := os.Chmod(path, 0o600); err != nil {
@@ -245,15 +245,14 @@ func TestRunLocalSessionInterruptedTurnPreservesUsage(t *testing.T) {
 			for attempt := 0; attempt < 2; attempt++ {
 				result, err := RunLocalSessionWithExecutor(session.SessionDir, nil)
 				if mode == "corrupt" || strings.HasPrefix(mode, "missing") {
-					var recovery *game.RecoveryError
-					if !errors.As(err, &recovery) || result != nil {
-						t.Fatalf("unknown usage finalized the attempt: %+v, %v", result, err)
+					if err != nil || result == nil || result.GameResult != game.GameFailure || result.CompletionReason != "recovery_failed" || result.TotalCostUSD != 0.25 {
+						t.Fatalf("unknown usage did not fail the attempt with known usage retained: %+v, %v", result, err)
 					}
 					manifest, err := sessionapi.ReadManifest(manifestFile)
-					if err != nil || manifest.Recovery == nil || manifest.OpenEpoch() == nil {
-						t.Fatalf("unknown usage did not block recovery: %+v, %v", manifest, err)
+					if err != nil || manifest.OpenEpoch() != nil || len(manifest.Epochs) != 1 || *manifest.Epochs[0].Result != "failed" {
+						t.Fatalf("invalid history did not close the failed attempt: %+v, %v", manifest, err)
 					}
-					continue
+					break
 				}
 				if err != nil || result.CompletionReason != "run_duration_exhausted" || result.Rounds != 1 ||
 					result.TotalCostUSD != 1 || result.TotalInputTokens != 110 || result.TotalOutputTokens != 20 {
@@ -297,9 +296,9 @@ func TestRunLocalSessionPreparationFailureHasNoInterruptedUsage(t *testing.T) {
 	}
 }
 
-func TestRunLocalSessionRequiresOperatorRecoveryForUnsafeCheckpoint(t *testing.T) {
+func TestRunLocalSessionInvalidCheckpointUsesNormalFailureLifecycle(t *testing.T) {
 	for _, missing := range []bool{false, true} {
-		t.Run(map[bool]string{false: "corrupt", true: "legacy missing"}[missing], func(t *testing.T) {
+		t.Run(map[bool]string{false: "corrupt", true: "missing"}[missing], func(t *testing.T) {
 			session, path := interruptLocalVerifier(t)
 			if _, err := sessionapi.MutateManifest(manifestPath(session.SessionDir), func(m *sessionapi.Manifest) error {
 				m.SessionKind = sessionapi.KindController
@@ -316,24 +315,6 @@ func TestRunLocalSessionRequiresOperatorRecoveryForUnsafeCheckpoint(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
-			executor := &fakeExecutor{}
-			for attempt := 0; attempt < 2; attempt++ {
-				result, err := RunLocalSessionWithExecutor(session.SessionDir, executor)
-				var recovery *game.RecoveryError
-				if !errors.As(err, &recovery) || !strings.Contains(err.Error(), "restore execution checkpoint") || result != nil || len(executor.tasks) != 0 {
-					t.Fatalf("unsafe recovery: result=%+v err=%v executed=%d", result, err, len(executor.tasks))
-				}
-				manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
-				if err != nil || len(manifest.Epochs) != 1 || manifest.OpenEpoch() == nil || manifest.OpenEpoch().ID != 1 || manifest.Recovery == nil || manifest.Recovery.EpochID != 1 || manifest.Recovery.RestartRequested {
-					t.Fatalf("recovery reset the epoch: %+v, %v", manifest, err)
-				}
-			}
-			if !missing {
-				return
-			}
-
-			// The actual operator handoff must preserve the workspace and history,
-			// then use a fresh attempt rather than reading the unsafe checkpoint.
 			workspaceFile := filepath.Join(session.ActiveWorkspace, "keep.txt")
 			if err := os.WriteFile(workspaceFile, []byte("existing work"), 0o600); err != nil {
 				t.Fatal(err)
@@ -343,18 +324,21 @@ func TestRunLocalSessionRequiresOperatorRecoveryForUnsafeCheckpoint(t *testing.T
 			if err != nil {
 				t.Fatal(err)
 			}
+			executor := &fakeExecutor{}
+			result, err := RunLocalSessionWithExecutor(session.SessionDir, executor)
+			if err != nil || result == nil || result.GameResult != game.GameFailure || result.CompletionReason != "recovery_failed" || !strings.Contains(result.Error, "restore execution checkpoint") || len(executor.tasks) != 0 {
+				t.Fatalf("invalid checkpoint was not an ordinary failure: %+v, %v", result, err)
+			}
+			manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
+			if err != nil || len(manifest.Epochs) != 1 || manifest.OpenEpoch() != nil || *manifest.Epochs[0].Result != "failed" {
+				t.Fatalf("failed attempt remained open: %+v, %v", manifest, err)
+			}
 			store := sessionapi.NewFileStore(filepath.Dir(session.SessionDir), sessionapi.RuntimeLocal)
-			update, err := store.UpdateSpec(session.SpecName, sessionapi.SessionSpecUpdateRequest{
-				SpecMarkdown: "---\nversion: 0.2.0\nname: cli-test\nplatform: local\n---\n# CLI Test\n\nUpdated requirements.",
-			})
-			if err != nil {
-				t.Fatal(err)
+			current, err := store.Get(session.SessionID)
+			if err != nil || current.Status != sessionapi.StatusFailed || current.Error == nil || !strings.Contains(*current.Error, "restore execution checkpoint") || current.CurrentRound != nil {
+				t.Fatalf("failed attempt was not visible through the existing API: %+v, %v", current, err)
 			}
-			newSpecPath := update.Session.SpecVersions[len(update.Session.SpecVersions)-1]["spec_path"].(string)
-			response, err := store.Restart(session.SessionID, sessionapi.SessionRestartRequest{EpochID: 1})
-			if err != nil || response.Operation != "restart_requested" {
-				t.Fatalf("operator restart: %+v, %v", response, err)
-			}
+			// The controller's normal next cycle can proceed without an operator API.
 			executor = &fakeExecutor{
 				verifierResult: game.TurnResult{Status: game.StatusConcede},
 				onExecute: func(string) {
@@ -368,20 +352,13 @@ func TestRunLocalSessionRequiresOperatorRecoveryForUnsafeCheckpoint(t *testing.T
 					}
 				},
 			}
-			result, err := RunLocalSessionWithExecutor(session.SessionDir, executor)
-			if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 || result.TotalCostUSD != 0 {
-				t.Fatalf("new attempt: %+v, %v", result, err)
+			result, err = RunLocalSessionWithExecutor(session.SessionDir, executor)
+			if err != nil || result.GameResult != game.GameSuccess || result.Rounds != 2 {
+				t.Fatalf("next attempt: %+v, %v", result, err)
 			}
-			if !strings.Contains(executor.firstTask(), newSpecPath) {
-				t.Fatalf("new attempt used the abandoned attempt's spec: %s", executor.firstTask())
-			}
-			manifest, err := sessionapi.ReadManifest(manifestPath(session.SessionDir))
-			if err != nil || manifest.Recovery != nil || len(manifest.Epochs) != 2 || manifest.Epochs[0].CompletionReason == nil || *manifest.Epochs[0].CompletionReason != "recovery_restart" {
-				t.Fatalf("restart lost attempt history: %+v, %v", manifest, err)
-			}
-			_, err = os.Stat(path)
-			if !os.IsNotExist(err) {
-				t.Fatalf("rewrote legacy attempt: %v", err)
+			manifest, err = sessionapi.ReadManifest(manifestPath(session.SessionDir))
+			if err != nil || len(manifest.Epochs) != 2 || *manifest.Epochs[0].CompletionReason != "recovery_failed" {
+				t.Fatalf("next attempt lost failure history: %+v, %v", manifest, err)
 			}
 		})
 	}

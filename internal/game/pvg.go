@@ -45,6 +45,7 @@ func NewPVG(compiled *spec.CompiledEnvironment, executor AgentExecutor, state *P
 // Run executes or resumes one epoch. The caller must hold session ownership.
 // Persistence errors leave the epoch open; callers must not turn them into a
 // terminal game failure, which would permit a new epoch with fresh budgets.
+// RecoveryError instead signals unusable state and ends the attempt in the caller.
 func (p *PVG) Run() (*PVGResult, error) {
 	defer p.Evidence.Close()
 	if err := p.restoreCheckpoint(); err != nil {

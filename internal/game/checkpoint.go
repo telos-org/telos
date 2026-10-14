@@ -48,15 +48,14 @@ func (p *PVG) restoreCheckpoint() error {
 	path := p.checkpointPath()
 	data, err := os.ReadFile(path)
 	if os.IsNotExist(err) {
-		// Old runtimes did not persist errors, budgets or turn decisions reliably.
-		// Guessing from their activity would silently rerun work/reset limits.
+		// Existing turn files without a checkpoint cannot be resumed reliably.
 		entries, readErr := os.ReadDir(filepath.Dir(path))
 		if readErr != nil && !os.IsNotExist(readErr) {
 			return readErr
 		}
 		for _, entry := range entries {
 			if entry.IsDir() {
-				return recoveryErrorf("attempt %d has turn history but no saved execution checkpoint; an operator must start a new attempt to continue", p.Config.EpochID)
+				return recoveryErrorf("attempt %d has turn history but no saved execution checkpoint", p.Config.EpochID)
 			}
 		}
 		p.checkpoint = &runCheckpoint{

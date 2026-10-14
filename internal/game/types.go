@@ -48,12 +48,12 @@ type TurnResult struct {
 	// recording a completion or consuming its failure budget.
 	PreparationError error `json:"-"`
 	// StateError means execution history cannot be trusted. Preserve the pending
-	// turn and return an error without closing the epoch or resetting its limits.
+	// turn and fail the attempt instead of continuing from untrusted history.
 	StateError string
 }
 
-// RecoveryError requires operator intervention. Automatic retries cannot repair
-// missing or untrustworthy execution state and must not reset the run's limits.
+// RecoveryError identifies missing or untrustworthy execution state. The attempt
+// cannot resume; its caller reports failure through the ordinary session lifecycle.
 type RecoveryError struct {
 	Err error
 }

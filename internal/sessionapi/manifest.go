@@ -31,7 +31,6 @@ type Manifest struct {
 	Provenance         map[string]any             `json:"provenance"`
 	Access             *ScopedToken               `json:"access,omitempty"`
 	Runner             *Runner                    `json:"runner,omitempty"`
-	Recovery           *SessionRecovery           `json:"recovery,omitempty"`
 	Specs              []ManifestSpec             `json:"specs"`
 	Epochs             []Epoch                    `json:"epochs"`
 }

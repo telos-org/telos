@@ -2,7 +2,6 @@ package telosd
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -13,7 +12,6 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/game"
-	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func TestWorkerIntervalReadsSessionManifest(t *testing.T) {
@@ -291,70 +289,6 @@ func TestControllerConfigurationFailureSuspendsUntilExplicitWake(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("worker did not stop after resumed cycle")
 	}
-}
-
-func TestRecoveryWaitsForDurableRequestWithoutRetryingExecution(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
-		sessionDir := writeWorkerManifest(t, map[string]any{
-			"session_id": "sess_recovery", "session_kind": "controller",
-			"specs":    []map[string]any{{"name": "demo", "evidence_path": evidencePath}},
-			"epochs":   []map[string]any{{"id": 1}},
-			"recovery": map[string]any{"epoch_id": 1, "error": "corrupt saved progress; POST /api/sessions/sess_recovery/restart resets the attempt's limits"},
-		})
-		wake, stop := make(chan os.Signal, 1), make(chan os.Signal, 1)
-		var attempts atomic.Int32
-		done := make(chan struct{})
-		go func() {
-			defer close(done)
-			code, err := runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
-				if attempts.Add(1) == 1 {
-					return nil, &game.RecoveryError{Err: errors.New("corrupt saved progress")}
-				}
-				return &game.PVGResult{GameResult: game.GameStopped}, nil
-			}, wake, stop)
-			if code != 0 || err != nil {
-				t.Errorf("worker = %d, %v", code, err)
-			}
-		}()
-		synctest.Wait()
-		time.Sleep(time.Hour)
-		wake <- syscall.SIGUSR1
-		synctest.Wait()
-		if got := attempts.Load(); got != 1 {
-			t.Fatalf("timer or ordinary wake retried blocked execution %d times", got)
-		}
-		_, err := sessionapi.MutateManifest(filepath.Join(sessionDir, "session.json"), func(m *sessionapi.Manifest) error {
-			m.Recovery.RestartRequested = true
-			return nil
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		// Only the persisted request is needed; the API does not signal the worker.
-		time.Sleep(rootWorkerReconcileInterval)
-		synctest.Wait()
-		select {
-		case <-done:
-		default:
-			t.Fatal("worker did not consume persisted restart request")
-		}
-		if got := attempts.Load(); got != 2 {
-			t.Fatalf("restart executed %d total attempts", got)
-		}
-		data, err := os.ReadFile(evidencePath)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, want := range []string{`"event":"game_error"`, `"audience":"user"`, `"epoch_id":1`, "POST /api/sessions/sess_recovery/restart", "resets the attempt's limits"} {
-			if !strings.Contains(string(data), want) {
-				t.Fatalf("visible recovery event missing %q: %s", want, data)
-			}
-		}
-		if strings.Count(string(data), `"event":"game_error"`) != 1 {
-			t.Fatalf("blocked execution replayed its error: %s", data)
-		}
-	})
 }
 
 func TestControllerProviderRecoveryBacksOffAndReturnsToIdle(t *testing.T) {

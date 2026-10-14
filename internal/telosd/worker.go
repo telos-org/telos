@@ -65,22 +65,6 @@ func runSessionWorker(
 		desired := manifest.Desired
 		result, err := runSession(sessionDir)
 		if err != nil {
-			var recovery *game.RecoveryError
-			if errors.As(err, &recovery) {
-				fmt.Fprintf(os.Stderr, "session recovery required: %v\n", err)
-				logRecoveryRequired(sessionDir)
-				if !root || once {
-					return 1, err
-				}
-				stopped, waitErr := waitForRecoveryRequest(sessionDir, wake, stop)
-				if waitErr != nil {
-					return 1, waitErr
-				}
-				if stopped {
-					return 0, nil
-				}
-				continue
-			}
 			if !root || once {
 				return 1, err
 			}
@@ -145,48 +129,6 @@ func runSessionWorker(
 			return 0, nil
 		}
 	}
-}
-
-// Polling only observes durable operator requests; it never retries blocked execution.
-func waitForRecoveryRequest(sessionDir string, wake <-chan os.Signal, stop <-chan os.Signal) (bool, error) {
-	ticker := time.NewTicker(rootWorkerReconcileInterval)
-	defer ticker.Stop()
-	for {
-		manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
-		if err != nil {
-			return false, err
-		}
-		if manifest.IsStopped() {
-			return true, nil
-		}
-		if manifest.Recovery == nil || manifest.Recovery.RestartRequested {
-			return false, nil
-		}
-		select {
-		case <-wake:
-		case <-ticker.C:
-		case <-stop:
-			return true, nil
-		}
-	}
-}
-
-func logRecoveryRequired(sessionDir string) {
-	manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
-	if err != nil || manifest.Recovery == nil || len(manifest.Specs) == 0 {
-		return
-	}
-	specManifest := manifest.Specs[0]
-	if specManifest.EvidencePath == nil || *specManifest.EvidencePath == "" {
-		return
-	}
-	ev := evidence.New(specManifest.Name, *specManifest.EvidencePath, manifest.SessionID, manifest.Recovery.EpochID)
-	defer ev.Close()
-	ev.Log("game_error", 0, "system", map[string]interface{}{
-		"audience": "user",
-		"type":     "RecoveryError",
-		"error":    "Execution is paused because its saved progress cannot be recovered safely. " + manifest.Recovery.Error,
-	})
 }
 
 func stopRequested(stop <-chan os.Signal) bool {
