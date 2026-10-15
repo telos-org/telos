@@ -110,7 +110,7 @@ func cmdRevisionDiff(args []string) {
 		fmt.Printf("\nSkill dependency %s:\n  From %s\n  To   %s\n", revisionText(change.Name), skillLockLabel(change.Before), skillLockLabel(change.After))
 	}
 	if len(result.Files) == 0 && len(result.Skills) == 0 {
-		fmt.Println("\nNo package changes.")
+		fmt.Println("\nNo changes.")
 	}
 }
 
