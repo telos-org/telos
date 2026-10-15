@@ -110,6 +110,12 @@ telos apply SPEC.md --goal goal_c7d2f0a4e8
 Goal names are unique within a context: applying a spec whose name is already
 taken fails and names the Goal to update with `--goal`.
 
+Deleting a Goal removes its environment and can't be undone:
+
+```bash
+telos delete goal_c7d2f0a4e8
+```
+
 [Use Telos](skills/telos-cli/references/use-telos.md) walks one Goal through
 its whole lifecycle, including statuses, logs, and deletion.
 
