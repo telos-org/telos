@@ -35,20 +35,14 @@ func (w planReviewWriter) Write(p []byte) (int, error) {
 }
 
 func deploymentPlanState(markdown string, skills []cloud.DeploymentPlanSkill) planSpecState {
-	state := planSpecState{Skills: []planSkillLock{}}
+	state := planSpecState{}
 	if strings.TrimSpace(markdown) != "" {
 		if parsed, err := planSpecStateFromMarkdown([]byte(markdown)); err == nil {
 			state = parsed
 		}
 	}
-	for _, skill := range skills {
-		lock := planSkillLock{Name: skill.Name, Ref: skill.Ref, Digest: skill.Digest, Starred: skill.Starred, Draft: skill.Draft}
-		if skill.PublishedRef != nil {
-			lock.PublishedRef = *skill.PublishedRef
-		}
-		state.Skills = append(state.Skills, lock)
-	}
-	slices.SortFunc(state.Skills, func(a, b planSkillLock) int { return strings.Compare(a.Name, b.Name) })
+	state.Skills = slices.Clone(skills)
+	slices.SortFunc(state.Skills, func(a, b cloud.DeploymentPlanSkill) int { return strings.Compare(a.Name, b.Name) })
 	return state
 }
 

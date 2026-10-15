@@ -4,28 +4,19 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"strings"
 	"time"
 
+	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/spec"
 )
 
 // -- plan ---------------------------------------------------------------------
 
 type planSpecState struct {
-	Version         string          `json:"version,omitempty"`
-	IntervalSeconds *int            `json:"interval_seconds,omitempty"`
-	Skills          []planSkillLock `json:"skills"`
-}
-
-type planSkillLock struct {
-	Name         string `json:"name"`
-	Ref          string `json:"ref,omitempty"`
-	Digest       string `json:"digest"`
-	Starred      bool   `json:"required_rubric,omitempty"`
-	Draft        bool   `json:"draft,omitempty"`
-	PublishedRef string `json:"published_ref,omitempty"`
+	Version         string                      `json:"version,omitempty"`
+	IntervalSeconds *int                        `json:"interval_seconds,omitempty"`
+	Skills          []cloud.DeploymentPlanSkill `json:"skills"`
 }
 
 func cmdPlan(args []string) {
@@ -88,7 +79,7 @@ func planSpecStateFromMarkdown(markdown []byte) (planSpecState, error) {
 	if !ok {
 		return planSpecState{}, fmt.Errorf("spec has no valid YAML frontmatter")
 	}
-	state := planSpecState{Skills: []planSkillLock{}}
+	state := planSpecState{}
 	if version, ok := raw["version"].(string); ok {
 		state.Version = strings.TrimSpace(version)
 	}
@@ -109,7 +100,8 @@ func printPlanStateDelta(out io.Writer, current, proposed planSpecState) {
 	proposedInterval := formatPlanInterval(proposed.IntervalSeconds)
 	versionChanged := current.Version != proposed.Version
 	intervalChanged := currentInterval != proposedInterval
-	skillsChanged := !slices.Equal(current.Skills, proposed.Skills)
+	currentSkills, proposedSkills := formatPlanSkillLocks(current.Skills), formatPlanSkillLocks(proposed.Skills)
+	skillsChanged := currentSkills != proposedSkills
 	if !versionChanged && !intervalChanged && !skillsChanged {
 		return
 	}
@@ -124,8 +116,8 @@ func printPlanStateDelta(out io.Writer, current, proposed planSpecState) {
 			fmt.Fprintln(out)
 		}
 		fmt.Fprintln(out, "Skill locks")
-		printDetailField(out, "current", formatPlanSkillLocks(current.Skills))
-		printDetailField(out, "proposed", formatPlanSkillLocks(proposed.Skills))
+		printDetailField(out, "current", currentSkills)
+		printDetailField(out, "proposed", proposedSkills)
 	}
 }
 
@@ -148,7 +140,7 @@ func formatPlanInterval(seconds *int) string {
 	return value
 }
 
-func formatPlanSkillLocks(skills []planSkillLock) string {
+func formatPlanSkillLocks(skills []cloud.DeploymentPlanSkill) string {
 	if len(skills) == 0 {
 		return "-"
 	}
@@ -165,8 +157,8 @@ func formatPlanSkillLocks(skills []planSkillLock) string {
 		if skill.Draft {
 			value += " (draft)"
 		}
-		if skill.PublishedRef != "" {
-			value += " (publishes as " + skill.PublishedRef + ")"
+		if skill.PublishedRef != nil && *skill.PublishedRef != "" {
+			value += " (publishes as " + *skill.PublishedRef + ")"
 		}
 		values = append(values, value)
 	}

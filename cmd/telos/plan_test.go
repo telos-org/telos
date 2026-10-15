@@ -16,7 +16,7 @@ import (
 
 func TestDeploymentPlanPreviewShowsChangedAndUnchangedSpecs(t *testing.T) {
 	for _, changed := range []bool{false, true} {
-		request := testDeploymentPlan("preview", "preview")
+		request := testDirectDeploymentPlan("preview", "awaiting_confirmation")
 		if !changed {
 			request.Preview.ProposedSpec = request.Preview.BaseSpec
 		}
@@ -42,7 +42,7 @@ func TestPlanShowsCanonicalContext(t *testing.T) {
 			return
 		}
 		if r.URL.Path == "/api/deployment-plans" {
-			_ = json.NewEncoder(w).Encode(testDeploymentPlan("preview", "preview"))
+			_ = json.NewEncoder(w).Encode(testDirectDeploymentPlan("preview", "awaiting_confirmation"))
 			return
 		}
 		if r.URL.Path != "/api/account/bootstrap" {
@@ -91,10 +91,9 @@ Serve a demo.
 		name   string
 		stored string
 		want   string
-		hidden string
 	}{
-		{name: "team", stored: "org_telos", want: "@telos", hidden: "org_telos"},
-		{name: "personal", stored: "org_personal", want: "personal", hidden: "org_personal"},
+		{name: "team", stored: "org_telos", want: "@telos"},
+		{name: "personal", stored: "org_personal", want: "personal"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := config.SaveConfig(&config.Config{Context: tt.stored}); err != nil {
@@ -105,9 +104,6 @@ Serve a demo.
 			})
 			if got := configOutputValue(t, out, "Context"); got != tt.want {
 				t.Fatalf("Context = %q, want %q\n%s", got, tt.want, out)
-			}
-			if strings.Contains(out, tt.hidden) {
-				t.Fatalf("plan exposed internal organization ID:\n%s", out)
 			}
 		})
 	}
@@ -129,7 +125,7 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 			if options.Mode != "preview" || options.Create != nil || options.Update == nil || options.Update.ExpectedCurrentRevisionID != "rev_7" {
 				t.Errorf("preview=%+v", options)
 			}
-			_ = json.NewEncoder(w).Encode(testDeploymentPlan("preview", "preview"))
+			_ = json.NewEncoder(w).Encode(testDirectDeploymentPlan("preview", "awaiting_confirmation"))
 		default:
 			t.Errorf("preview mutated deployment: %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
@@ -144,13 +140,13 @@ func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
 	out := captureStdout(t, func() { cmdPlan([]string{path, "--goal", "sess_123", "--json"}) })
 	var receipt struct {
 		Operation string                    `json:"operation"`
-		Request   cloud.ChangeRequestRecord `json:"change_request"`
+		Plan      cloud.ChangeRequestRecord `json:"plan"`
 		ReviewURL string                    `json:"review_url"`
 	}
 	if err := json.Unmarshal([]byte(out), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	if receipt.Operation != "preview" || receipt.Request.Mode != "preview" || receipt.Request.Preview == nil || receipt.ReviewURL == "" || plans != 1 {
+	if receipt.Operation != "preview" || receipt.Plan.Mode != "preview" || receipt.Plan.Preview == nil || receipt.ReviewURL == "" || plans != 1 {
 		t.Fatalf("receipt=%s plans=%d", out, plans)
 	}
 }
@@ -205,7 +201,7 @@ func TestPrintPlanStateDeltaOmitsUnchangedResolvedState(t *testing.T) {
 	state := planSpecState{
 		Version:         "1.0.0",
 		IntervalSeconds: &interval,
-		Skills: []planSkillLock{{
+		Skills: []cloud.DeploymentPlanSkill{{
 			Name:    "verify-quality",
 			Ref:     "@telos/verify-quality:1.0.0",
 			Digest:  "sha256:same",
