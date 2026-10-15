@@ -154,8 +154,8 @@ func printCloudSessionLogs(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	tail := options.Tail
-	if raw || options.All || tail > maxCloudLogTail {
+	tail := min(options.Tail, maxCloudLogTail)
+	if raw || options.All {
 		tail = 0
 	}
 	page, err := control.GetSessionLogPage(session.ID, tail)
@@ -171,23 +171,27 @@ func printCloudSessionLogs(
 		return
 	}
 	events := page.Events
+	if tail > 0 && (!jsonOutput || options.Tail > maxCloudLogTail) {
+		events, err = expandCloudLogs(control, session.ID, page, options.Tail, jsonOutput)
+		if err != nil {
+			if jsonOutput {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			options.Active = false
+			fmt.Fprintf(os.Stderr, "Some progress updates could not be loaded: %v\n", err)
+		}
+	}
 	if jsonOutput {
 		if err := printJSONLogEventsForContext(
 			os.Stdout,
-			selectLogEvents(page.Events, options),
+			selectLogEvents(events, options),
 			control.ContextName(),
 		); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
-		if tail > 0 {
-			events, err = expandCloudHumanLogs(control, session.ID, page, options.Tail)
-			if err != nil {
-				options.Active = false
-				fmt.Fprintf(os.Stderr, "Some progress updates could not be loaded: %v\n", err)
-			}
-		}
 		printStructuredLogs(os.Stdout, events, options)
 	}
 	if !follow || status == "stopped" {
@@ -200,7 +204,7 @@ func printCloudSessionLogs(
 	}
 }
 
-func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *cloud.SessionLogPage, tail int) ([]sessionapi.SessionEvent, error) {
+func expandCloudLogs(control *cloud.Client, sessionID string, initial *cloud.SessionLogPage, tail int, jsonOutput bool) ([]sessionapi.SessionEvent, error) {
 	combined := initial.Events
 	page := initial
 	var beforeRuntime, beforeControl *int64
@@ -240,7 +244,7 @@ func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *clou
 				// Hidden tool activity need not accumulate while searching history.
 				// Turn endings still matter to the quiet notice.
 				_, visible := renderedLogRowFromEvent(event)
-				if !visible && event.Event != "agent_complete" && event.Event != "agent_suspended" && event.Event != "game_end" {
+				if !jsonOutput && !visible && event.Event != "agent_complete" && event.Event != "agent_suspended" && event.Event != "game_end" {
 					continue
 				}
 				if keys != nil {
@@ -253,7 +257,11 @@ func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *clou
 			}
 			combined = append(events, combined...)
 			sortCloudLogEvents(combined)
-			if len(renderLogRows(combined)) >= tail {
+			count := len(combined)
+			if !jsonOutput {
+				count = len(renderLogRows(combined))
+			}
+			if count >= tail {
 				return combined, nil
 			}
 		}
@@ -266,7 +274,7 @@ func expandCloudHumanLogs(control *cloud.Client, sessionID string, initial *clou
 		}
 		var err error
 		if page.Cursors == nil || keys == nil {
-			if page == initial && len(page.RawEvents) < tail {
+			if page == initial && len(page.RawEvents) < min(tail, maxCloudLogTail) {
 				return combined, nil
 			}
 			// Read legacy history once when durable cursors are unavailable.
