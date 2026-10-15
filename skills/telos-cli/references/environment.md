@@ -81,7 +81,14 @@ It is also possible to securely inject credentials to outbound requests from the
 
 > The credential's name is what gets referenced in the YAML frontmatter and must use lowercase letters, numbers, and hyphen-separators.
 
-Credentials are encrypted at rest and never enter your Goal's VM. Instead, a proxy outside the VM adds them to requests that match your `network` rules.
+Credentials are encrypted at rest and never enter your Goal's VM. Instead, your Goal sends the placeholder `telos-proxy-v1` where the key goes, and a proxy outside the VM replaces it with the real key on requests that match your `network` rules. For a credential sent in the `Authorization` header:
+
+```bash
+curl https://api.example.com/reports/latest \
+  -H 'Authorization: Bearer telos-proxy-v1'
+```
+
+If the credential uses a custom header, send the placeholder there, like `X-Vault-Token: telos-proxy-v1`. For a client that reads its key from an environment variable, set that variable to `telos-proxy-v1` yourself. Credentials don't set environment variables. The placeholder is public, not a secret.
 
 **Your Goal can use credentials, but never see them**. It can still make any request your rules allow, so we recommend using a least-privilege key and narrowing access with `methods` and `paths`.
 
