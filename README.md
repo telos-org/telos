@@ -36,10 +36,8 @@ set `TELOS_AUTH_TOKEN` instead of logging in.
 
 ## Get started
 
-> Work with your coding agent to write and iterate on your goal specification,
-> and have the agent drive `telos` for you.
->
-> The CLI is built for the agent experience.
+Work with your coding agent to iterate on your goal specification and drive the
+`telos` CLI, which is built for the agent experience.
 
 The goal specification (`SPEC.md`) is the entry point to a `telos` program:
 
