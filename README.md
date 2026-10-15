@@ -83,7 +83,7 @@ telos logs goal_c7d2f0a4e8 --follow   # follow the agent's work
 telos describe goal_c7d2f0a4e8        # status, service URL, and cost
 ```
 
-When the service meets its spec, the Goal is `ready` and live:
+When the service meets its spec, the Goal is `ready`:
 
 ```console
 $ telos describe goal_c7d2f0a4e8

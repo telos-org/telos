@@ -68,7 +68,7 @@ network:
 
 Each entry in `network` specifies a host and optionally restricts HTTP methods and URL paths on that host. A host without `methods` or `paths` allows traffic via all methods and all paths.
 
-If you want to retain the default-deny egress behavior for Telos, either don't define `network` or set `network: []`. Doing so will still keep the defaults (Docker Hub, PyPI, npm).
+For a new Goal, if you want to retain the default-deny egress behavior for Telos, either don't define `network` or set `network: []`. Doing so will still keep the defaults (Docker Hub, PyPI, npm).
 
 ## Credentials
 
