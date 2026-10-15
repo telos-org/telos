@@ -4,14 +4,11 @@ description: Get started with building on Telos.
 group: Getting started
 ---
 
-Telos is a goal-oriented programming system. Telos treats the goal specification as the source of truth, and background agents own the software lifecycle beneath it.
+Telos is a goal-oriented programming system.
 
-Implementations can change as the Goal evolves,
-while its history and the evidence that it meets its spec stay attached to the same Goal.
+A Telos program is a *goal specification*: a declarative description of a service's desired state. Telos agents build the service and keep reconciling its current state toward the goal.
 
-This guide walks one Goal through its full lifecycle on Telos.
-Generated IDs, digests, paths, and URLs in the transcripts are illustrative;
-the command and field shapes match the current CLI.
+This page takes you from installing Telos to launching your first Goal, then walks that Goal through the rest of its lifecycle.
 
 ## Install
 
@@ -65,8 +62,6 @@ Credentials
 `telos config` is useful to see the active context, the default workspace model, credits left, configured inference providers (see [Models](models.md) for more), and credentials (see [Credentials](environment.md#credentials) for more).
 
 A context is the workspace your commands act in: `personal`, or a team's `@handle`.
-
-Congratulations! You are now ready to run your Goals on Telos.
 
 ## Write a goal specification
 
@@ -124,7 +119,7 @@ Context   personal
 Logs      telos logs goal_c7d2f0a4e8
 ```
 
-The `apply` command returns immediately and starts the Goal in the cloud.
+The `apply` command returns immediately and starts the Goal in the cloud with a unique ID.
 
 ## Watch it work
 
@@ -161,11 +156,13 @@ Add `--follow` to keep printing new activity as it happens, until the Goal stops
 | Status | Meaning |
 |---|---|
 | `working` | Telos is preparing the Goal's [environment](environment.md), implementing the current spec, or verifying it. |
-| `ready` | The system accepted the current Goal, and the service is live. |
+| `ready` | Telos accepted the current Goal. |
 | `needs_attention` | The latest run failed or stopped unexpectedly. `telos describe` shows why, and what to run next. |
 | `stopped` | The Goal has stopped running, usually because you deleted it. |
 
-When the system is done working, `describe` reports the accepted Goal as `ready`, with its public URL and what it has cost so far.
+When a Goal is in `needs_attention`, re-applying the same spec with `telos apply SPEC.md --goal goal_c7d2f0a4e8` retries straight away. Credit or key failures also recover on their own once you add credits or fix the key. If the reason points to the environment or runtime, it may need escalation to Telos support (hello@usetelos.ai).
+
+When Telos is done working, `describe` reports the Goal as `ready`, with its service URL and what it has cost so far.
 
 ```console
 $ telos describe goal_c7d2f0a4e8
@@ -185,6 +182,8 @@ Costs come in two lines: `Cloud` (compute and storage) and `Inference` (through 
 
 Once ready, open the service and verify that the behavior is as desired.
 In this case, you would exercise `POST /books` and `GET /books` through the public URL to confirm everything is in order.
+
+Congratulations! Your first Goal is live.
 
 ## Update it
 
@@ -240,7 +239,7 @@ Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 Logs      telos logs goal_c7d2f0a4e8
 ```
 
-This applies the update in-place, and the system begins reconciling towards the new desired Goal. Continue to monitor status from `working` to `ready`, then exercise the updated API behavior.
+This applies the update in place, and Telos begins reconciling toward the new desired state. Continue to monitor status from `working` to `ready`, then exercise the updated API behavior.
 
 If the Goal has been updated by someone else, you can fetch its current spec with:
 
@@ -264,7 +263,6 @@ Context   personal
 ```
 
 > Deleting a Goal is irreversible — please proceed with caution.
-> Deletion can take up to 10 minutes as background processes reconcile billing data and in-flight inference requests.
 
 The Goal disappears from `telos list` as soon as you delete it.
 
