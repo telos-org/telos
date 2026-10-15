@@ -143,7 +143,7 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 	}
 	revisionTestServer(t, routes)
 	stdout, stderr, code := runRevisionCLI(t, "history", "goal_test")
-	if code != 0 || stderr != "" || !strings.Contains(stdout, "1000*") || !strings.Contains(stdout, "--before 951") || !strings.Contains(stdout, "Update 1000") || labelReads.Load() != 0 {
+	if code != 0 || stderr != "" || !strings.HasPrefix(stdout, "REV ") || !strings.Contains(stdout, "1000*") || !strings.Contains(stdout, "--before 951") || !strings.Contains(stdout, "Update 1000") || labelReads.Load() != 0 {
 		t.Fatalf("history: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
 	pageReads.Store(0)
@@ -166,7 +166,7 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 	}
 	labelReads.Store(0)
 	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--before", "10", "--limit", "3")
-	if code != 0 || stderr != "" || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "Current revision 1000") || !strings.Contains(stdout, "Update 9") || !strings.Contains(stdout, "--before 7") || strings.Contains(stdout, "Update 1000") || strings.Contains(stdout, "rev_") || labelReads.Load() != 1 {
+	if code != 0 || stderr != "" || strings.Contains(stdout, "Current revision") || !strings.Contains(stdout, "Update 9") || !strings.Contains(stdout, "--before 7") || strings.Contains(stdout, "Update 1000") || strings.Contains(stdout, "rev_") || labelReads.Load() != 0 {
 		t.Fatalf("older page: exit=%d stdout=%s stderr=%s lookups=%d", code, stdout, stderr, labelReads.Load())
 	}
 	labelReads.Store(0)

@@ -93,11 +93,7 @@ func cmdHistory(args []string) {
 		}{session.ID, control.ContextName(), capabilities, page})
 		return
 	}
-	labels, err := revisionLabels(ctx, control, session.ID, page, page.CurrentRevisionID)
-	if err != nil {
-		exitWithError(err)
-	}
-	printRevisionHistory(os.Stdout, session.ID, control.ContextName(), page, labels)
+	printRevisionHistory(os.Stdout, session.ID, control.ContextName(), page)
 }
 
 func revisionCommandTarget(fs *flag.FlagSet, contextValue string) (*cloud.Client, *cloud.SessionRecord, *cloud.Capabilities, error) {
@@ -168,9 +164,7 @@ func resolveRevision(ctx context.Context, control *cloud.Client, sessionID, sele
 	return nil, fmt.Errorf("revision %d was not found in Goal %s", number, sessionID)
 }
 
-func printRevisionHistory(out io.Writer, goalID, contextName string, page *cloud.RevisionPage, labels map[string]string) {
-	printRevisionField(out, "Current revision", labels[page.CurrentRevisionID])
-	fmt.Fprintln(out)
+func printRevisionHistory(out io.Writer, goalID, contextName string, page *cloud.RevisionPage) {
 	if len(page.Revisions) == 0 {
 		fmt.Fprintln(out, "No revisions.")
 		return
