@@ -66,6 +66,32 @@ func TestPackageForSessionUsesAttachedVersion(t *testing.T) {
 	}
 }
 
+func TestPackageForSessionRejectsPendingInitialGoal(t *testing.T) {
+	for _, packageRef := range []string{"", "@telos/demo:1.2.3"} {
+		t.Run(packageRef, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodGet || r.URL.Path != "/api/deployments/sess_pending" {
+					t.Errorf("pending Goal attempted a Registry request: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				_ = json.NewEncoder(w).Encode(cloud.SessionRecord{
+					ID:         "sess_pending",
+					State:      "pending",
+					PackageRef: packageRef,
+				})
+			}))
+			defer srv.Close()
+
+			got, err := packageForSession(cloud.NewClient(srv.URL, "token"), "sess_pending")
+			want := "session sess_pending has no deployed revision yet; inspect its initial Change Request in the dashboard"
+			if got != nil || err == nil || err.Error() != want {
+				t.Fatalf("pending Goal package=%+v error=%v, want %q", got, err, want)
+			}
+		})
+	}
+}
+
 func TestPackageForReferenceUsesRegistryDigest(t *testing.T) {
 	pkg := testApplyPackage(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
