@@ -64,7 +64,11 @@ func cmdHistory(args []string) {
 			}{session.ID, control.ContextName(), page.CurrentRevisionID, capabilities, revision})
 			return
 		}
-		printRevisionDetail(os.Stdout, session, control.ContextName(), page, revision, capabilities)
+		labels, err := revisionLabels(ctx, control, session.ID, page, page.CurrentRevisionID, revisionString(revision.ParentRevisionID), revisionString(revision.RestoredFromRevisionID))
+		if err != nil {
+			exitWithError(err)
+		}
+		printRevisionDetail(os.Stdout, session, control.ContextName(), page, revision, capabilities, labels)
 		return
 	}
 	if *all {
@@ -89,7 +93,11 @@ func cmdHistory(args []string) {
 		}{session.ID, control.ContextName(), capabilities, page})
 		return
 	}
-	printRevisionHistory(os.Stdout, session, control.ContextName(), page)
+	labels, err := revisionLabels(ctx, control, session.ID, page, page.CurrentRevisionID)
+	if err != nil {
+		exitWithError(err)
+	}
+	printRevisionHistory(os.Stdout, session, control.ContextName(), page, labels)
 }
 
 func revisionCommandTarget(fs *flag.FlagSet, contextValue string) (*cloud.Client, *cloud.SessionRecord, *cloud.Capabilities, error) {
@@ -160,11 +168,11 @@ func resolveRevision(ctx context.Context, control *cloud.Client, sessionID, sele
 	return nil, fmt.Errorf("revision %d was not found in Goal %s", number, sessionID)
 }
 
-func printRevisionHistory(out io.Writer, session *cloud.SessionRecord, contextName string, page *cloud.RevisionPage) {
+func printRevisionHistory(out io.Writer, session *cloud.SessionRecord, contextName string, page *cloud.RevisionPage, labels map[string]string) {
 	printRevisionField(out, "Name", session.Name)
 	printRevisionField(out, "Goal", session.ID)
 	printRevisionField(out, "Context", contextName)
-	printRevisionField(out, "Current revision", revisionLabel(page.CurrentRevisionID, page))
+	printRevisionField(out, "Current revision", labels[page.CurrentRevisionID])
 	fmt.Fprintln(out)
 	if len(page.Revisions) == 0 {
 		fmt.Fprintln(out, "No revisions in this history page.")
@@ -190,16 +198,16 @@ func printRevisionHistory(out io.Writer, session *cloud.SessionRecord, contextNa
 	}
 }
 
-func printRevisionDetail(out io.Writer, session *cloud.SessionRecord, contextName string, page *cloud.RevisionPage, revision *cloud.Revision, capabilities *cloud.Capabilities) {
+func printRevisionDetail(out io.Writer, session *cloud.SessionRecord, contextName string, page *cloud.RevisionPage, revision *cloud.Revision, capabilities *cloud.Capabilities, labels map[string]string) {
 	printRevisionField(out, "Name", session.Name)
 	printRevisionField(out, "Goal", session.ID)
 	printRevisionField(out, "Context", contextName)
 	printRevisionField(out, "Revision", strconv.Itoa(revision.Sequence))
 	printRevisionField(out, "Revision ID", revision.ID)
-	printRevisionField(out, "Current revision", revisionLabel(page.CurrentRevisionID, page))
-	printRevisionField(out, "Parent revision", revisionLabel(revisionString(revision.ParentRevisionID), page))
+	printRevisionField(out, "Current revision", labels[page.CurrentRevisionID])
+	printRevisionField(out, "Parent revision", labels[revisionString(revision.ParentRevisionID)])
 	if revision.RestoredFromRevisionID != nil {
-		printRevisionField(out, "Source revision", revisionLabel(*revision.RestoredFromRevisionID, page))
+		printRevisionField(out, "Source revision", labels[*revision.RestoredFromRevisionID])
 	}
 	printRevisionField(out, "Action", revision.Kind)
 	printRevisionField(out, "Author", revisionAuthor(revision))
@@ -215,13 +223,22 @@ func printRevisionDetail(out io.Writer, session *cloud.SessionRecord, contextNam
 	printRevisionField(out, "Redeploy", revisionCapabilityText(revisionActionCapability("redeploy", revision, page.CurrentRevisionID, capabilities)))
 }
 
-func revisionLabel(id string, page *cloud.RevisionPage) string {
+func revisionLabels(ctx context.Context, control *cloud.Client, sessionID string, page *cloud.RevisionPage, ids ...string) (map[string]string, error) {
+	labels := make(map[string]string, len(page.Revisions))
 	for _, revision := range page.Revisions {
-		if revision.ID == id {
-			return strconv.Itoa(revision.Sequence)
-		}
+		labels[revision.ID] = strconv.Itoa(revision.Sequence)
 	}
-	return orDash(id)
+	for _, id := range ids {
+		if id == "" || labels[id] != "" {
+			continue
+		}
+		revision, err := control.GetSessionRevision(ctx, sessionID, id)
+		if err != nil {
+			return nil, err
+		}
+		labels[id] = strconv.Itoa(revision.Sequence)
+	}
+	return labels, nil
 }
 
 func revisionString(value *string) string {

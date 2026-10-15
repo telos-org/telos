@@ -24,7 +24,7 @@ const revisionTestPath = "/api/deployments/goal_test/revisions"
 
 func testRevision(sequence int) cloud.Revision {
 	revision := cloud.Revision{
-		ID: fmt.Sprintf("rev_%d", sequence), Sequence: sequence, Kind: "apply",
+		ID: fmt.Sprintf("rev_%d", sequence), Sequence: sequence, Kind: "deploy",
 		PackageRef: "@team/demo:1.0.0", PackageDigest: "sha256:historical",
 		Message: fmt.Sprintf("Update %d", sequence), CommittedAt: "2026-10-08T12:00:00Z",
 		RestoreCapability: cloud.RevisionCapability{Allowed: true}, RedeployCapability: cloud.RevisionCapability{Allowed: true},
@@ -97,8 +97,8 @@ func runRevisionCLI(t *testing.T, args ...string) (string, string, int) {
 }
 
 func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
-	var pageReads atomic.Int32
-	revisionTestServer(t, map[string]http.HandlerFunc{
+	var pageReads, labelReads atomic.Int32
+	routes := map[string]http.HandlerFunc{
 		"GET " + revisionTestPath: func(w http.ResponseWriter, r *http.Request) {
 			pageReads.Add(1)
 			before, _ := strconv.Atoi(r.URL.Query().Get("before"))
@@ -119,13 +119,25 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 		},
 		"GET " + revisionTestPath + "/rev_7": func(w http.ResponseWriter, r *http.Request) {
 			revision := testRevision(7)
+			revision.Kind = "restore"
+			parent, source := "rev_6", "rev_2"
+			revision.ParentRevisionID, revision.RestoredFromRevisionID = &parent, &source
 			reason := "snapshot_lost"
 			revision.RestoreCapability = cloud.RevisionCapability{Reason: &reason}
 			_ = json.NewEncoder(w).Encode(revision)
 		},
-	})
+	}
+	for id, sequence := range map[string]int{"rev_1000": 1000, "rev_6": 6, "rev_2": 2} {
+		routes["GET "+revisionTestPath+"/"+id] = func(w http.ResponseWriter, r *http.Request) {
+			labelReads.Add(1)
+			revision := testRevision(sequence)
+			revision.ID = id
+			_ = json.NewEncoder(w).Encode(revision)
+		}
+	}
+	revisionTestServer(t, routes)
 	stdout, stderr, code := runRevisionCLI(t, "history", "goal_test")
-	if code != 0 || stderr != "" || !strings.Contains(stdout, "1000*") || !strings.Contains(stdout, "--before 951") || !strings.Contains(stdout, "Update 1000") {
+	if code != 0 || stderr != "" || !strings.Contains(stdout, "1000*") || !strings.Contains(stdout, "--before 951") || !strings.Contains(stdout, "Update 1000") || labelReads.Load() != 0 {
 		t.Fatalf("history: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
 	pageReads.Store(0)
@@ -140,6 +152,21 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--revision", "rev_7")
 	if code != 0 || !strings.Contains(stdout, "saved snapshot is no longer available") || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "Redeploy available") {
 		t.Fatalf("detail: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
+	}
+	for _, field := range []string{"Revision ID rev_7", "Current revision 1000", "Parent revision 6", "Source revision 2"} {
+		if !strings.Contains(strings.Join(strings.Fields(stdout), " "), field) {
+			t.Fatalf("detail missing %q: %s", field, stdout)
+		}
+	}
+	labelReads.Store(0)
+	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--before", "10", "--limit", "3")
+	if code != 0 || stderr != "" || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "Current revision 1000") || !strings.Contains(stdout, "Update 9") || !strings.Contains(stdout, "--before 7") || strings.Contains(stdout, "Update 1000") || strings.Contains(stdout, "rev_") || labelReads.Load() != 1 {
+		t.Fatalf("older page: exit=%d stdout=%s stderr=%s lookups=%d", code, stdout, stderr, labelReads.Load())
+	}
+	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--before", "10", "--limit", "3", "--json")
+	var older cloud.RevisionPage
+	if code != 0 || json.Unmarshal([]byte(stdout), &older) != nil || older.CurrentRevisionID != "rev_1000" || len(older.Revisions) != 3 || older.Revisions[0].Sequence != 9 || labelReads.Load() != 1 {
+		t.Fatalf("older JSON page: exit=%d stdout=%s stderr=%s lookups=%d", code, stdout, stderr, labelReads.Load())
 	}
 	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--all", "--limit", "20", "--json")
 	var all cloud.RevisionPage
