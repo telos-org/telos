@@ -37,7 +37,6 @@ type EnvironmentSpec struct {
 	SkillSourceRefs            map[string]string
 	SpecText                   string
 	IntervalSeconds            *int
-	Tags                       []string
 	RequiredVerifierSkillPaths []string
 }
 
@@ -154,17 +153,6 @@ func parseEnvFields(raw map[string]interface{}, path, baseDir, body string) (*En
 			return nil, err
 		}
 		env.IntervalSeconds = &secs
-	}
-
-	// tags
-	if v, ok := raw["tags"]; ok {
-		list, ok := v.([]interface{})
-		if !ok {
-			return nil, fmt.Errorf("%s: 'tags' must be a list", path)
-		}
-		for _, t := range list {
-			env.Tags = append(env.Tags, fmt.Sprint(t))
-		}
 	}
 
 	return env, nil

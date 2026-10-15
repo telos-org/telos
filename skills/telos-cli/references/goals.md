@@ -36,7 +36,6 @@ The markdown frontmatter (YAML block at the top of `SPEC.md`) supports the follo
 | `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
 | `interval` | The schedule on which the system wakes up to check the Goal against the live state. |
 | `network` | [Outbound network configuration](environment.md#egress) for the Goal. |
-| `tags` | A YAML list of string labels. The default is an empty list. |
 
 ### The entrypoint
 

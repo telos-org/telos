@@ -139,17 +139,22 @@ func TestLoadEnvironmentWithInterval(t *testing.T) {
 	}
 }
 
-func TestLoadEnvironmentWithTags(t *testing.T) {
+func TestCompileEnvironmentIgnoresUnusedMetadata(t *testing.T) {
 	dir := t.TempDir()
-	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: tag-test\ntags:\n  - alpha\n  - beta\n---\nBody"), 0o644)
-
-	env, err := LoadEnvironment(specPath)
-	if err != nil {
-		t.Fatalf("LoadEnvironment: %v", err)
+	path := filepath.Join(dir, "SPEC.md")
+	if err := os.WriteFile(path, []byte("---\nversion: 0.1.0\nname: old-goal\ntags: old-value\n---\nKeep serving."), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if len(env.Tags) != 2 || env.Tags[0] != "alpha" || env.Tags[1] != "beta" {
-		t.Errorf("tags: got %v", env.Tags)
+	compiled, err := CompileEnvironment(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ir := ToIRJSON(compiled)
+	if ir["name"] != "old-goal" || ir["spec"] != "Keep serving." {
+		t.Fatalf("lost goal content: %#v", ir)
+	}
+	if _, exists := ir["tags"]; exists {
+		t.Fatal("unused metadata leaked into compiled output")
 	}
 }
 
