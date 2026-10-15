@@ -41,7 +41,7 @@ The only entry points into a Goal's environment are:
 
 ### Egress
 
-By default, the Telos system has a limited set of egress points out of a Goal's environment:
+By default, Telos allows a limited set of egress points out of a Goal's environment:
 
 | Ecosystem | Description | Hostnames |
 |---|---|---|
@@ -81,16 +81,15 @@ It is also possible to securely inject credentials to outbound requests from the
 
 > The credential's name is what gets referenced in the YAML frontmatter and must use lowercase letters, numbers, and hyphen-separators.
 
-
 Credentials are encrypted at rest and never enter your Goal's VM. Instead, a proxy outside the VM adds them to requests that match your `network` rules.
 
-Simply put, **your Goal can use credentials, but never see them**. It can still make any request your rules allow, so we recommend using a least-privilege key and narrowing access with `methods` and `paths`.
+**Your Goal can use credentials, but never see them**. It can still make any request your rules allow, so we recommend using a least-privilege key and narrowing access with `methods` and `paths`.
 
 A few additional details on this feature:
 
 - Outbound access is only for HTTPS (no raw TCP/UDP) requests.
 - Credentialed entries require an exact hostname, and paths must be exact or end in `/*`.
-- Network-only entries can use wildcard hosts.
+- Network-only entries can use a wildcard host with a leading `*.`, like `*.example.com`.
 - One credential can serve multiple declared hosts.
 - Only owners and admins of a workspace can create, edit, or delete credentials.
 
