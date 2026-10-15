@@ -1,10 +1,10 @@
-# Telos
+# telos
 
 τέλος [ˈte.los] — *the end, goal, or purpose*
 
-Telos is a goal-oriented programming system. You write down what a software service should do in a *goal specification*, and Telos takes it from there — building, testing, deploying, and maintaining the software for you.
+`telos` is a goal-oriented programming system. You write down what a software service should do in a *goal specification*, and `telos` takes it from there — building, testing, deploying, and maintaining the software for you.
 
-A goal specification is a declarative description of a service's desired state: its intent, APIs, and behavior. It's the living source of truth, and Telos continually reconciles the running software toward it.
+A goal specification is a declarative description of a service's desired state: its intent, APIs, and behavior. It's the living source of truth, and `telos` continually reconciles the running software toward it.
 
 ## Install
 
