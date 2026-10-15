@@ -1,7 +1,5 @@
 package cloud
 
-import "context"
-
 // Credential is a saved workspace credential, which a Goal's network rules name
 // by Name. Cloud never returns its values.
 type Credential struct {
@@ -17,7 +15,7 @@ func (c *Client) ListCredentials() ([]Credential, error) {
 			Credential
 			ManagedBy *string `json:"managed_by"`
 		} `json:"secrets"`
-	}](context.Background(), c, "/api/secrets")
+	}](c.context(), c, "/api/secrets")
 	if err != nil {
 		return nil, err
 	}

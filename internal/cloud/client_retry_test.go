@@ -123,7 +123,7 @@ func TestMonitoringReadRecoversOnLastAttempt(t *testing.T) {
 
 func TestMonitoringReadSharesTimeoutAcrossAttempts(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
-		client := NewClient("https://api.example.test", "")
+		client := NewClient("https://api.example.test", "").WithContext(context.Background())
 		client.HTTP.Timeout = time.Second
 		attempts := 0
 		client.HTTP.Transport = readRetryTransport(func(req *http.Request) (*http.Response, error) {
@@ -167,6 +167,23 @@ func TestMonitoringReadBoundsClientsWithoutHTTPTimeout(t *testing.T) {
 	})
 }
 
+func TestExplicitReadContextOverridesClientDefault(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		client := NewClient("https://api.example.test", "").WithContext(context.Background())
+		client.HTTP.Transport = readRetryTransport(func(req *http.Request) (*http.Response, error) {
+			<-req.Context().Done()
+			return nil, req.Context().Err()
+		})
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+		start := time.Now()
+		_, err := client.InferenceCost(ctx, "session-test")
+		if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) != 50*time.Millisecond {
+			t.Fatalf("explicit deadline lost: elapsed=%v err=%v", time.Since(start), err)
+		}
+	})
+}
+
 func TestMonitoringReadStopsDuringBackoff(t *testing.T) {
 	for _, canceled := range []bool{false, true} {
 		name := "deadline"
@@ -194,7 +211,7 @@ func TestMonitoringReadStopsDuringBackoff(t *testing.T) {
 					return nil, syscall.ECONNRESET
 				})
 				start := time.Now()
-				_, err := getJSONWithRetry[SessionRecord](ctx, client, "/api/deployments/session-test")
+				_, err := client.WithContext(ctx).GetSession("session-test")
 				if !errors.Is(err, wantErr) || attempts != 1 {
 					t.Fatalf("attempts = %d, error = %v; want %v", attempts, err, wantErr)
 				}
@@ -214,7 +231,7 @@ func TestMonitoringReadHonorsAlreadyCanceledContext(t *testing.T) {
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := getJSONWithRetry[SessionRecord](ctx, client, "/api/deployments/session-test")
+	_, err := client.WithContext(ctx).GetSession("session-test")
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("error = %v, want context.Canceled", err)
 	}
@@ -646,30 +663,51 @@ func TestNetworkCloudMutationResponseLossNeverReplays(t *testing.T) {
 		name   string
 		method string
 		path   string
-		call   func(*Client) (*SessionRecord, error)
+		call   func(*Client) (bool, error)
 	}{
 		{
 			name:   "create",
 			method: http.MethodPost,
 			path:   "/api/deployments",
-			call: func(client *Client) (*SessionRecord, error) {
-				return client.CreateSession(SessionCreateOptions{Name: "test", PackageRef: "@test/package:1.0.0"})
+			call: func(client *Client) (bool, error) {
+				record, err := client.CreateSession(SessionCreateOptions{Name: "test", PackageRef: "@test/package:1.0.0"})
+				return record != nil, err
 			},
 		},
 		{
 			name:   "update",
 			method: http.MethodPut,
 			path:   "/api/deployments/sess_123",
-			call: func(client *Client) (*SessionRecord, error) {
-				return client.UpdateSession("sess_123", SessionUpdateOptions{PackageRef: "@test/package:2.0.0", Force: true})
+			call: func(client *Client) (bool, error) {
+				record, err := client.UpdateSession("sess_123", SessionUpdateOptions{PackageRef: "@test/package:2.0.0", Force: true})
+				return record != nil, err
+			},
+		},
+		{
+			name:   "plan",
+			method: http.MethodPost,
+			path:   "/api/deployment-plans",
+			call: func(client *Client) (bool, error) {
+				record, err := client.CreateDeploymentPlan(DeploymentPlanOptions{Mode: "apply", Create: &SessionCreateOptions{Name: "test", PackageRef: "@test/package:1.0.0"}})
+				return record != nil, err
+			},
+		},
+		{
+			name:   "confirm",
+			method: http.MethodPost,
+			path:   "/api/deployments/sess_123/change-requests/cr_saved/confirm",
+			call: func(client *Client) (bool, error) {
+				record, err := client.ConfirmChangeRequest(ChangeRequestRecord{ID: "cr_saved", DeploymentID: "sess_123", PreparedPlanID: "cp_saved"})
+				return record != nil, err
 			},
 		},
 		{
 			name:   "delete",
 			method: http.MethodDelete,
 			path:   "/api/deployments/sess_123",
-			call: func(client *Client) (*SessionRecord, error) {
-				return client.DeleteSession("sess_123")
+			call: func(client *Client) (bool, error) {
+				record, err := client.DeleteSession("sess_123")
+				return record != nil, err
 			},
 		},
 	}
@@ -689,13 +727,13 @@ func TestNetworkCloudMutationResponseLossNeverReplays(t *testing.T) {
 						breakNetworkResponse(t, w, failure, http.StatusOK, `{"id":"sess_123","state":`, headersObserved)
 						return
 					}
-					_, _ = io.WriteString(w, `{"id":"duplicate-mutation","state":"healthy"}`)
+					_, _ = io.WriteString(w, `{"id":"duplicate-mutation","deployment_id":"sess_123","status":"applied","state":"healthy"}`)
 				}))
 				t.Cleanup(server.Close)
 				client := newNetworkClient(t, server.URL, headersObserved)
-				record, err := test.call(client)
-				if err == nil || record != nil {
-					t.Fatalf("lost mutation response did not remain an error: record=%+v, err=%v", record, err)
+				hasRecord, err := test.call(client)
+				if err == nil || hasRecord {
+					t.Fatalf("lost mutation response did not remain an error: hasRecord=%t, err=%v", hasRecord, err)
 				}
 				if got := mutations.Load(); got != 1 {
 					t.Fatalf("accepted %s was replayed after response loss: %d mutations", test.name, got)

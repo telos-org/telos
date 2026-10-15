@@ -43,6 +43,8 @@ type PackageVersionRecord struct {
 }
 
 type Capabilities struct {
+	DeploymentPlans            bool `json:"deployment_plans"`
+	DeploymentChangeRequests   bool `json:"deployment_change_requests"`
 	DeploymentRevisionHistory  bool `json:"deployment_revision_history"`
 	DeploymentRevisionMessages bool `json:"deployment_revision_messages"`
 	DeploymentPackageRedeploy  bool `json:"deployment_package_redeploy"`
@@ -70,37 +72,41 @@ type SkillRecord struct {
 }
 
 type SessionRecord struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	State          string            `json:"state"`
-	Status         string            `json:"status,omitempty"`
-	StatusReason   string            `json:"status_reason,omitempty"`
-	PackageRef     string            `json:"package_ref"`
-	PackageDigest  string            `json:"package_digest"`
-	RuntimeVersion *string           `json:"runtime_version,omitempty"`
-	AgentModel     string            `json:"agent_model,omitempty"`
-	AgentThinking  string            `json:"agent_thinking,omitempty"`
-	Inference      *InferenceSummary `json:"inference,omitempty"`
-	Billing        *GoalBilling      `json:"billing,omitempty"`
-	AccessSource   string            `json:"access_source,omitempty"`
-	ServiceURL     *string           `json:"service_url,omitempty"`
-	DashboardURL   *string           `json:"dashboard_url,omitempty"`
-	FailureReason  *string           `json:"failure_reason,omitempty"`
-	CreatedAt      string            `json:"created_at"`
-	UpdatedAt      string            `json:"updated_at"`
+	CurrentRevisionID string            `json:"current_revision_id,omitempty"`
+	ID                string            `json:"id"`
+	Name              string            `json:"name"`
+	State             string            `json:"state"`
+	Status            string            `json:"status,omitempty"`
+	StatusReason      string            `json:"status_reason,omitempty"`
+	PackageRef        string            `json:"package_ref"`
+	PackageDigest     string            `json:"package_digest"`
+	RuntimeVersion    *string           `json:"runtime_version,omitempty"`
+	AgentModel        string            `json:"agent_model,omitempty"`
+	AgentThinking     string            `json:"agent_thinking,omitempty"`
+	Inference         *InferenceSummary `json:"inference,omitempty"`
+	Billing           *GoalBilling      `json:"billing,omitempty"`
+	AccessSource      string            `json:"access_source,omitempty"`
+	ServiceURL        *string           `json:"service_url,omitempty"`
+	DashboardURL      *string           `json:"dashboard_url,omitempty"`
+	FailureReason     *string           `json:"failure_reason,omitempty"`
+	CreatedAt         string            `json:"created_at"`
+	UpdatedAt         string            `json:"updated_at"`
 }
 
 type SessionCreateOptions struct {
-	Name            string
-	PackageRef      string
-	AgentThinking   string
-	AgentTimeoutSec *int
-	Inference       *InferenceSelection
+	RevisionMessage string              `json:"revision_message,omitempty"`
+	Name            string              `json:"name"`
+	PackageRef      string              `json:"package_ref"`
+	AgentThinking   string              `json:"agent_thinking,omitempty"`
+	AgentTimeoutSec *int                `json:"agent_timeout_sec,omitempty"`
+	Inference       *InferenceSelection `json:"inference,omitempty"`
 }
 
 type SessionUpdateOptions struct {
-	PackageRef string `json:"package_ref"`
-	Force      bool   `json:"force,omitempty"`
+	RevisionMessage           string `json:"revision_message,omitempty"`
+	PackageRef                string `json:"package_ref"`
+	Force                     bool   `json:"force,omitempty"`
+	ExpectedCurrentRevisionID string `json:"expected_current_revision_id,omitempty"`
 }
 
 // The hosted control API still exposes cloud sessions at /api/deployments.
@@ -217,10 +223,12 @@ func (event deploymentLogEvent) asSessionEvent() sessionapi.SessionEvent {
 
 // Client is a Telos Cloud API client.
 type Client struct {
-	Endpoint string
-	Token    string
-	OrgID    string
-	HTTP     *http.Client
+	requestContext context.Context
+	planArtifacts  bool
+	Endpoint       string
+	Token          string
+	OrgID          string
+	HTTP           *http.Client
 
 	contextName string
 }
@@ -250,6 +258,21 @@ func NewClient(endpoint, token string) *Client {
 		Token:    token,
 		HTTP:     &http.Client{Timeout: DefaultTimeout},
 	}
+}
+
+// WithContext sets the default context for requests without an explicit one.
+// It leaves the original client available for independent recovery requests.
+func (c *Client) WithContext(ctx context.Context) *Client {
+	copy := *c
+	copy.requestContext = ctx
+	return &copy
+}
+
+func (c *Client) context() context.Context {
+	if c.requestContext != nil {
+		return c.requestContext
+	}
+	return context.Background()
 }
 
 type resolvedContext struct {
@@ -379,7 +402,11 @@ func (c *Client) PublishPackageWithVisibility(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("POST", "/api/packages", body)
+	path := "/api/packages"
+	if c.planArtifacts {
+		path = "/api/deployment-plans/packages"
+	}
+	resp, err := c.do("POST", path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -469,7 +496,11 @@ func (c *Client) PublishSkillVersionWithVisibility(
 	if err != nil {
 		return nil, err
 	}
-	resp, err := c.do("POST", "/api/skills", body)
+	path := "/api/skills"
+	if c.planArtifacts {
+		path = "/api/deployment-plans/skills"
+	}
+	resp, err := c.do("POST", path, body)
 	if err != nil {
 		return nil, err
 	}
@@ -621,7 +652,7 @@ func (c *Client) ListSessions() ([]SessionRecord, error) {
 }
 
 func (c *Client) listSessions(path string) ([]SessionRecord, error) {
-	response, err := getJSONWithRetry[sessionListResponse](context.Background(), c, path)
+	response, err := getJSONWithRetry[sessionListResponse](c.context(), c, path)
 	if err != nil {
 		return nil, err
 	}
@@ -629,7 +660,7 @@ func (c *Client) listSessions(path string) ([]SessionRecord, error) {
 }
 
 func (c *Client) GetSession(sessionID string) (*SessionRecord, error) {
-	return getJSONWithRetry[SessionRecord](context.Background(), c, "/api/deployments/"+url.PathEscape(sessionID))
+	return getJSONWithRetry[SessionRecord](c.context(), c, "/api/deployments/"+url.PathEscape(sessionID))
 }
 
 func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {
@@ -675,7 +706,7 @@ func (c *Client) GetSessionLogPageBefore(sessionID string, tail int, beforeRunti
 	if len(query) > 0 {
 		path += "?" + query.Encode()
 	}
-	response, err := getJSONWithRetry[deploymentLogEventsResponse](context.Background(), c, path)
+	response, err := getJSONWithRetry[deploymentLogEventsResponse](c.context(), c, path)
 	if err != nil {
 		return nil, err
 	}
@@ -708,10 +739,13 @@ func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
 }
 
 func (c *Client) doRaw(method, path string, body []byte, contentType string) (*http.Response, error) {
-	return c.doRawContext(context.Background(), method, path, body, contentType)
+	return c.doRawContext(c.context(), method, path, body, contentType)
 }
 
 func (c *Client) doRawContext(ctx context.Context, method, path string, body []byte, contentType string) (*http.Response, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	var bodyReader io.Reader
 	if body != nil {
 		bodyReader = bytes.NewReader(body)

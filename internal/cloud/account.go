@@ -1,7 +1,6 @@
 package cloud
 
 import (
-	"context"
 	"fmt"
 	"strings"
 )
@@ -21,7 +20,7 @@ type AccountBootstrapRecord struct {
 }
 
 func (c *Client) AccountBootstrap() (*AccountBootstrapRecord, error) {
-	return getJSONWithRetry[AccountBootstrapRecord](context.Background(), c, "/api/account/bootstrap")
+	return getJSONWithRetry[AccountBootstrapRecord](c.context(), c, "/api/account/bootstrap")
 }
 
 func (c *Client) ResolveContext(value string) (*OrganizationRecord, error) {

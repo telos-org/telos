@@ -21,7 +21,7 @@ func (c *Client) ListSessionsWithBilling() ([]SessionRecord, error) {
 // GetSessionWithBilling returns a Goal with its billing, which Cloud gives
 // workspace members who aren't operators only when asked.
 func (c *Client) GetSessionWithBilling(sessionID string) (*SessionRecord, error) {
-	return getJSONWithRetry[SessionRecord](context.Background(), c, "/api/deployments/"+url.PathEscape(sessionID)+"?include_billing=true")
+	return getJSONWithRetry[SessionRecord](c.context(), c, "/api/deployments/"+url.PathEscape(sessionID)+"?include_billing=true")
 }
 
 // InferenceCost returns the inference cost a Goal's runtime has recorded on
