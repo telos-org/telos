@@ -79,7 +79,7 @@ Preview a spec, apply it, and watch `telos` work:
 ```bash
 telos plan SPEC.md                    # preview what applying would change
 telos apply SPEC.md                   # create the Goal and print its ID
-telos logs goal_c7d2f0a4e8 --follow   # follow the agent's work
+telos logs goal_c7d2f0a4e8 --follow   # follow the agents' work
 telos describe goal_c7d2f0a4e8        # status, service URL, and cost
 ```
 
