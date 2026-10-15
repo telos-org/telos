@@ -22,16 +22,16 @@ func TestDeploymentPlansUseCloudContractAndPrivateArtifactRoutes(t *testing.T) {
 			if err := json.NewDecoder(r.Body).Decode(&options); err != nil {
 				t.Error(err)
 			}
-			if options.Mode != "saved" || options.Create != nil || options.Update.ExpectedCurrentRevisionID != "rev_7" {
+			if options.Mode != "saved" || options.Create != nil || options.Update == nil || options.Update.ExpectedCurrentRevisionID != "rev_7" || options.Update.RevisionMessage != "Update app" {
 				t.Errorf("unexpected options: %+v", options)
 			}
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"id":"cr_1","deployment_id":"sess_1","mode":"saved","status":"awaiting_confirmation","base_revision_id":"rev_7","preview":{"base_spec":"old","proposed_spec":"new","base_skills":[],"proposed_skills":[{"name":"coding","ref":"@acme/coding:1.0.0","digest":"sha256:123","starred":true}]}}`))
+			_, _ = w.Write([]byte(`{"id":"cr_1","kind":"change_request","deployment_id":"sess_1","mode":"saved","status":"awaiting_confirmation","update_number":1,"prepared_plan_id":"cp_reviewed","base_revision_id":"rev_7","preview":{"base_spec":"old","proposed_spec":"new","base_skills":[],"proposed_skills":[{"name":"coding","ref":"@acme/coding:1.0.0","digest":"sha256:123","starred":true}]}}`))
 		case "/api/deployments/sess_1/change-requests/cr_1/confirm":
 			var body map[string]any
 			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body["expected_current_revision_id"] != "rev_7" {
-				t.Errorf("lost reviewed baseline: %v", body)
+			if body["expected_current_revision_id"] != "rev_7" || body["expected_plan_id"] != "cp_reviewed" {
+				t.Errorf("lost reviewed identity: %v", body)
 			}
 			_, _ = w.Write([]byte(`{"id":"cr_1","deployment_id":"sess_1","mode":"saved","status":"applied"}`))
 		case "/api/deployment-plans/packages", "/api/packages":
@@ -49,7 +49,7 @@ func TestDeploymentPlansUseCloudContractAndPrivateArtifactRoutes(t *testing.T) {
 	if err != nil || !access.CanPlan || access.CanApply {
 		t.Fatalf("access=%+v err=%v", access, err)
 	}
-	request, err := client.CreateDeploymentPlan(DeploymentPlanOptions{Mode: "saved", DeploymentID: "sess_1", Update: &SessionUpdateOptions{PackageRef: "@acme/app:1.0.0", ExpectedCurrentRevisionID: "rev_7"}})
+	request, err := client.CreateDeploymentPlan(DeploymentPlanOptions{Mode: "saved", DeploymentID: "sess_1", Update: &SessionUpdateOptions{RevisionMessage: "Update app", PackageRef: "@acme/app:1.0.0", ExpectedCurrentRevisionID: "rev_7"}})
 	if err != nil || request.Preview == nil || len(request.Preview.ProposedSkills) != 1 || !request.Preview.ProposedSkills[0].Starred {
 		t.Fatalf("request=%+v err=%v", request, err)
 	}
@@ -76,19 +76,49 @@ func TestDeploymentPlansUseCloudContractAndPrivateArtifactRoutes(t *testing.T) {
 	}
 }
 
-func TestConfirmCreateSendsExplicitNullBaseline(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		var body map[string]json.RawMessage
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		if string(body["expected_current_revision_id"]) != "null" {
-			t.Errorf("create baseline must be explicit null: %v", body)
-		}
-		_, _ = w.Write([]byte(`{"id":"cr_1","deployment_id":"sess_1","mode":"saved","status":"applying"}`))
-	}))
-	defer server.Close()
-	_, err := NewClient(server.URL, "token").ConfirmChangeRequest(ChangeRequestRecord{ID: "cr_1", DeploymentID: "sess_1"})
-	if err != nil {
-		t.Fatal(err)
+func TestCreateProposalReadAndConfirmationRoutes(t *testing.T) {
+	for _, tc := range []struct{ id, path, action, preparedID string }{
+		{"cr_1", "/api/deployments/sess_1/change-requests/cr_1", "/confirm", "cp_reviewed"},
+		{"plan_1", "/api/deployment-plans/plan_1", "/apply", ""},
+	} {
+		t.Run(tc.id, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodGet && r.URL.Path == tc.path {
+					_ = json.NewEncoder(w).Encode(ChangeRequestRecord{ID: tc.id, DeploymentID: "sess_1", Status: "awaiting_confirmation", PreparedPlanID: tc.preparedID})
+					return
+				}
+				if r.Method != http.MethodPost || r.URL.Path != tc.path+tc.action {
+					t.Errorf("unexpected proposal route: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+					return
+				}
+				var body map[string]json.RawMessage
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if string(body["expected_current_revision_id"]) != "null" {
+					t.Errorf("create baseline must be explicit null: %v", body)
+				}
+				var preparedID string
+				if value, ok := body["expected_plan_id"]; ok {
+					_ = json.Unmarshal(value, &preparedID)
+				}
+				if preparedID != tc.preparedID {
+					t.Errorf("prepared identity = %q, want %q", preparedID, tc.preparedID)
+				}
+				_ = json.NewEncoder(w).Encode(ChangeRequestRecord{ID: tc.id, DeploymentID: "sess_1", Status: "applying", PreparedPlanID: tc.preparedID})
+			}))
+			defer server.Close()
+			client := NewClient(server.URL, "token")
+			request, err := client.GetChangeRequest("sess_1", tc.id)
+			if err != nil {
+				t.Fatal(err)
+			}
+			confirmed, err := client.ConfirmChangeRequest(*request)
+			if err != nil || confirmed == nil || !confirmed.Started() || confirmed.IsPlan() != (tc.id == "plan_1") {
+				t.Fatalf("confirmation=%+v error=%v", confirmed, err)
+			}
+		})
 	}
 }
 
