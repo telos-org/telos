@@ -595,20 +595,8 @@ func (c *Client) RegistryCapabilities() (*Capabilities, error) {
 }
 
 func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error) {
-	payload := map[string]any{
-		"name":        opts.Name,
-		"package_ref": opts.PackageRef,
-	}
-	if strings.TrimSpace(opts.AgentThinking) != "" {
-		payload["agent_thinking"] = strings.TrimSpace(opts.AgentThinking)
-	}
-	if opts.Inference != nil {
-		payload["inference"] = opts.Inference
-	}
-	if opts.AgentTimeoutSec != nil {
-		payload["agent_timeout_sec"] = *opts.AgentTimeoutSec
-	}
-	body, err := json.Marshal(payload)
+	opts.AgentThinking = strings.TrimSpace(opts.AgentThinking)
+	body, err := json.Marshal(opts)
 	if err != nil {
 		return nil, err
 	}

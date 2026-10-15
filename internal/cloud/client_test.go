@@ -455,10 +455,11 @@ func TestClientCreateSession(t *testing.T) {
 	client.OrgID = "org_telos"
 	timeout := 1800
 	session, err := client.CreateSession(SessionCreateOptions{
+		RevisionMessage: "Create auth service",
 		Name:            "auth",
 		PackageRef:      "@telos/auth:1.2.3",
 		Inference:       &InferenceSelection{Source: "managed", Tier: "max"},
-		AgentThinking:   "high",
+		AgentThinking:   " high ",
 		AgentTimeoutSec: &timeout,
 	})
 	if err != nil {
@@ -469,7 +470,7 @@ func TestClientCreateSession(t *testing.T) {
 	}
 	if gotBody["name"] != "auth" ||
 		gotBody["package_ref"] != "@telos/auth:1.2.3" ||
-
+		gotBody["revision_message"] != "Create auth service" ||
 		gotBody["agent_thinking"] != "high" ||
 		gotBody["agent_timeout_sec"] != float64(1800) {
 		t.Fatalf("body: got %#v", gotBody)
