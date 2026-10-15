@@ -42,27 +42,34 @@ func TestSavedFilesPinUpdateAndPreparedPlan(t *testing.T) {
 	}
 }
 
-func TestLostConfirmationCannotReportDifferentPlanAsSuccess(t *testing.T) {
-	first := testDeploymentPlan("saved", "awaiting_confirmation")
-	first.UpdateNumber, first.PreparedPlanID = 1, "cp_first"
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			var body map[string]any
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body["expected_plan_id"] != "cp_first" {
-				t.Errorf("body=%v", body)
+func TestConfirmationCannotApproveOrReportAReplacementAsSuccess(t *testing.T) {
+	for _, status := range []string{"awaiting_confirmation", "applied"} {
+		t.Run(status, func(t *testing.T) {
+			first := testDeploymentPlan("apply", "awaiting_confirmation")
+			first.UpdateNumber, first.PreparedPlanID = 1, "cp_first"
+			confirms := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost {
+					confirms++
+					var body map[string]any
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					if body["expected_plan_id"] != "cp_first" {
+						t.Errorf("body=%v", body)
+					}
+					http.Error(w, "replaced", http.StatusConflict)
+					return
+				}
+				second := first
+				second.UpdateNumber, second.PreparedPlanID, second.Status = 2, "cp_second", status
+				_ = json.NewEncoder(w).Encode(second)
+			}))
+			defer server.Close()
+			_, err := awaitCloudApply(context.Background(), cloud.NewClient(server.URL, "token"), &first, true,
+				strings.NewReader(""), io.Discard, time.Millisecond)
+			if err == nil || !strings.Contains(err.Error(), "changed") || confirms != 1 {
+				t.Fatalf("replacement approved or reported as success: err=%v confirmations=%d", err, confirms)
 			}
-			http.Error(w, "replaced", http.StatusConflict)
-			return
-		}
-		second := first
-		second.UpdateNumber, second.PreparedPlanID, second.Status = 2, "cp_second", "applied"
-		_ = json.NewEncoder(w).Encode(second)
-	}))
-	defer server.Close()
-	client := cloud.NewClient(server.URL, "token")
-	if _, err := confirmCloudRequest(client, &first); err == nil || !strings.Contains(err.Error(), "changed") {
-		t.Fatalf("error=%v", err)
+		})
 	}
 }
 
@@ -84,8 +91,35 @@ func TestInteractiveApplyStopsWhenPlanChangesWhilePromptIsOpen(t *testing.T) {
 	reader, writer := io.Pipe()
 	defer reader.Close()
 	defer writer.Close()
-	_, err := awaitCloudApply(context.Background(), cloud.NewClient(server.URL, "token"), &first, false, reader, io.Discard, io.Discard, time.Millisecond)
+	_, err := awaitCloudApply(context.Background(), cloud.NewClient(server.URL, "token"), &first, false, reader, io.Discard, time.Millisecond)
 	if err == nil || !strings.Contains(err.Error(), "changed") || mutations != 0 {
 		t.Fatalf("err=%v mutations=%d", err, mutations)
+	}
+}
+
+func TestExactSavedReferenceCanApplyFormerRegularRequest(t *testing.T) {
+	request := testDeploymentPlan("apply", "awaiting_confirmation")
+	request.UpdateNumber, request.PreparedPlanID = 2, "cp_second"
+	confirms := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDeploymentPlanPrerequisites(w, r) {
+			return
+		}
+		if r.Method == http.MethodPost {
+			confirms++
+			request.Status = "applied"
+		}
+		_ = json.NewEncoder(w).Encode(request)
+	}))
+	defer server.Close()
+	configureCloudTest(t, server.URL)
+	bookmark := newSavedDeploymentPlan(cloud.NewClient(server.URL, "token"), &request, "org_personal")
+	captureStdout(t, func() {
+		if err := runSavedCloudApply(&bookmark, "", true); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if confirms != 1 {
+		t.Fatalf("confirmations=%d", confirms)
 	}
 }

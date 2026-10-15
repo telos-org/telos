@@ -249,11 +249,14 @@ func runCloudApply(input cloudPlanInput, jsonOut bool) error {
 		return err
 	}
 	request := plan.request
-	if !jsonOut {
-		printDeploymentPlan(os.Stdout, control, request)
+	var previewOut io.Writer = os.Stdout
+	if jsonOut {
+		previewOut = io.Discard
+	} else if !input.yes {
+		previewOut = os.Stderr
 	}
 	request, err = awaitCloudApply(ctx, control, request, input.yes, os.Stdin,
-		planOutputWriter(jsonOut), os.Stderr, time.Second)
+		previewOut, time.Second)
 	if err != nil {
 		return err
 	}
@@ -381,43 +384,38 @@ func replacedPlanError(request *cloud.ChangeRequestRecord) error {
 }
 
 func confirmCloudRequest(control *cloud.Client, request *cloud.ChangeRequestRecord) (*cloud.ChangeRequestRecord, error) {
-	confirmed, err := control.ConfirmChangeRequest(*request)
-	if err == nil {
-		if !sameCloudPlan(request, confirmed) {
-			return nil, replacedPlanError(request)
+	confirmed, postErr := control.ConfirmChangeRequest(*request)
+	if postErr != nil {
+		// A dashboard confirmation or a lost acknowledgement may have won the race.
+		current, readErr := control.GetChangeRequest(request.DeploymentID, request.ID)
+		if readErr != nil {
+			return nil, postErr
 		}
-		if err := snapshotConfirmationError(control, confirmed); err != nil {
-			return nil, err
+		confirmed = current
+	}
+	if !sameCloudPlan(request, confirmed) {
+		return nil, replacedPlanError(request)
+	}
+	if err := snapshotConfirmationError(control, confirmed); err != nil {
+		return nil, err
+	}
+	if !requestStarted(confirmed) {
+		if postErr != nil {
+			return nil, postErr
 		}
-		if confirmed.Kind == "plan" && (confirmed.Error != nil || !requestStarted(confirmed)) {
+		if confirmed.Kind == "plan" {
 			return nil, directPlanError(control, confirmed)
 		}
-		if !requestStarted(confirmed) {
-			return nil, requestStoppedError(confirmed)
-		}
-		return confirmed, nil
+		return nil, requestStoppedError(confirmed)
 	}
-	// A dashboard confirmation or a lost acknowledgement may have won the race.
-	current, readErr := control.GetChangeRequest(request.DeploymentID, request.ID)
-	if readErr == nil {
-		if !sameCloudPlan(request, current) {
-			return nil, replacedPlanError(request)
-		}
-		if err := snapshotConfirmationError(control, current); err != nil {
-			return nil, err
-		}
+	if confirmed.Kind == "plan" && confirmed.Error != nil {
+		return nil, directPlanError(control, confirmed)
 	}
-	if readErr == nil && requestStarted(current) {
-		if current.Kind == "plan" && current.Error != nil {
-			return nil, directPlanError(control, current)
-		}
-		return current, nil
-	}
-	return nil, err
+	return confirmed, nil
 }
 
 func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.ChangeRequestRecord,
-	yes bool, input io.Reader, previewOut, promptOut io.Writer, pollInterval time.Duration,
+	yes bool, input io.Reader, out io.Writer, pollInterval time.Duration,
 ) (*cloud.ChangeRequestRecord, error) {
 	stopped := fmt.Errorf("stopped waiting for %s; review or discard it at %s", request.ID, cloudRequestReviewURL(control, *request))
 	control = control.WithContext(ctx)
@@ -431,10 +429,11 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	var answer <-chan bool
+	printDeploymentPlan(out, control, request)
 	printedPreview := request.Preview != nil
 	for {
 		if request.Preview != nil && !printedPreview {
-			printDeploymentPlan(previewOut, control, request)
+			printDeploymentPlan(out, control, request)
 			printedPreview = true
 		}
 		if err := snapshotConfirmationError(control, request); err != nil {
@@ -464,7 +463,7 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 			if yes {
 				return confirm()
 			}
-			fmt.Fprint(promptOut, "Apply these changes? Type yes to confirm: ")
+			fmt.Fprint(out, "Apply these changes? Type yes to confirm: ")
 			response := make(chan bool, 1)
 			answer = response
 			go func() {

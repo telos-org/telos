@@ -4,20 +4,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"os"
 	"slices"
 	"strings"
 
 	internaldiff "github.com/rogpeppe/go-internal/diff"
 	"github.com/telos-org/telos/internal/cloud"
 )
-
-func planOutputWriter(jsonOut bool) io.Writer {
-	if jsonOut {
-		return io.Discard
-	}
-	return os.Stdout
-}
 
 func deploymentPlanState(markdown string, skills []cloud.DeploymentPlanSkill) planSpecState {
 	state := planSpecState{Skills: []planSkillLock{}}

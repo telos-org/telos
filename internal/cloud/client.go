@@ -587,59 +587,6 @@ func (c *Client) RegistryCapabilities() (*Capabilities, error) {
 	return &capabilities, nil
 }
 
-func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error) {
-	payload := map[string]any{
-		"name":        opts.Name,
-		"package_ref": opts.PackageRef,
-	}
-	if strings.TrimSpace(opts.AgentThinking) != "" {
-		payload["agent_thinking"] = strings.TrimSpace(opts.AgentThinking)
-	}
-	if opts.Inference != nil {
-		payload["inference"] = opts.Inference
-	}
-	if opts.AgentTimeoutSec != nil {
-		payload["agent_timeout_sec"] = *opts.AgentTimeoutSec
-	}
-	body, err := json.Marshal(payload)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.do("POST", "/api/deployments", body)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, readError(resp)
-	}
-	var response SessionRecord
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
-	return &response, nil
-}
-
-func (c *Client) UpdateSession(sessionID string, opts SessionUpdateOptions) (*SessionRecord, error) {
-	body, err := json.Marshal(opts)
-	if err != nil {
-		return nil, err
-	}
-	resp, err := c.do("PUT", "/api/deployments/"+url.PathEscape(sessionID), body)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return nil, readError(resp)
-	}
-	var response SessionRecord
-	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
-		return nil, err
-	}
-	return &response, nil
-}
-
 func (c *Client) ListSessions() ([]SessionRecord, error) {
 	return c.listSessions("/api/deployments")
 }

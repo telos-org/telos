@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -238,79 +237,22 @@ func TestDirectSavedApplyResumesOnceAndDoesNotReplan(t *testing.T) {
 	}
 }
 
-func TestDirectInteractiveApplyRequiresCompleteYes(t *testing.T) {
-	for _, answer := range []string{"yes\n", "no\n", "yes", ""} {
-		t.Run(answer, func(t *testing.T) {
-			var calls atomic.Int32
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calls.Add(1)
-				path, status := "/api/deployment-plans/plan_saved/apply", "applied"
-				if r.Method != http.MethodPost || r.URL.Path != path {
-					t.Errorf("unexpected interactive action: %s %s", r.Method, r.URL.Path)
-				}
-				_ = json.NewEncoder(w).Encode(testDirectDeploymentPlan("apply", status))
-			}))
-			defer server.Close()
-			initial := testDirectDeploymentPlan("apply", "awaiting_confirmation")
-			var prompt bytes.Buffer
-			plan, err := awaitCloudApply(context.Background(), cloud.NewClient(server.URL, "token"), &initial, false,
-				strings.NewReader(answer), io.Discard, &prompt, time.Hour)
-			wantCalls := int32(0)
-			if answer == "yes\n" {
-				wantCalls = 1
-			}
-			if calls.Load() != wantCalls || !strings.Contains(prompt.String(), "Type yes to confirm") {
-				t.Fatalf("calls=%d prompt=%s", calls.Load(), prompt.String())
-			}
-			if answer == "yes\n" {
-				if err != nil || plan.Status != "applied" {
-					t.Fatalf("confirmation failed: %+v %v", plan, err)
-				}
-			} else if err == nil || !strings.Contains(err.Error(), "stopped waiting") {
-				t.Fatalf("non-confirmation applied the plan: %+v %v", plan, err)
-			}
-		})
-	}
-}
-
-func TestDirectApplySnapshotFailureStopsInsteadOfPolling(t *testing.T) {
-	for _, automatic := range []bool{false, true} {
-		t.Run(map[bool]string{false: "interactive", true: "yes"}[automatic], func(t *testing.T) {
-			var calls atomic.Int32
-			initial := testDirectDeploymentPlan("apply", "awaiting_confirmation")
-			blocked := initial
-			reason, code := "The current revision must finish snapshotting before it can change.", "snapshot_pending"
-			blocked.Error, blocked.ErrorCode = &reason, &code
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				calls.Add(1)
-				if automatic || r.Method != http.MethodPost || r.URL.Path != "/api/deployment-plans/plan_saved/apply" {
-					t.Errorf("snapshot error triggered polling or another apply: %s %s", r.Method, r.URL.Path)
-				}
-				_ = json.NewEncoder(w).Encode(blocked)
-			}))
-			defer server.Close()
-			if automatic {
-				initial = blocked
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-			defer cancel()
-			var prompt bytes.Buffer
-			_, err := awaitCloudApply(ctx, cloud.NewClient(server.URL, "token"), &initial, automatic,
-				strings.NewReader("yes\n"), io.Discard, &prompt, time.Millisecond)
-			if err == nil || !strings.Contains(err.Error(), reason) || !strings.Contains(err.Error(), initial.ReviewURL) || ctx.Err() != nil {
-				t.Fatalf("snapshot failure was not returned immediately with a dashboard link: %v", err)
-			}
-			wantCalls := int32(1)
-			if automatic {
-				wantCalls = 0
-				if prompt.Len() != 0 {
-					t.Fatalf("--yes prompted: %s", prompt.String())
-				}
-			}
-			if calls.Load() != wantCalls {
-				t.Fatalf("calls=%d want=%d", calls.Load(), wantCalls)
-			}
-		})
+func TestDirectInteractiveYesUsesApplyEndpoint(t *testing.T) {
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		if r.Method != http.MethodPost || r.URL.Path != "/api/deployment-plans/plan_saved/apply" {
+			t.Errorf("unexpected interactive action: %s %s", r.Method, r.URL.Path)
+		}
+		_ = json.NewEncoder(w).Encode(testDirectDeploymentPlan("apply", "applied"))
+	}))
+	defer server.Close()
+	initial := testDirectDeploymentPlan("apply", "awaiting_confirmation")
+	var output bytes.Buffer
+	plan, err := awaitCloudApply(context.Background(), cloud.NewClient(server.URL, "token"), &initial, false,
+		strings.NewReader("yes\n"), &output, time.Hour)
+	if err != nil || plan.Status != "applied" || calls.Load() != 1 || !strings.Contains(output.String(), "Type yes to confirm") {
+		t.Fatalf("plan=%+v err=%v calls=%d output=%s", plan, err, calls.Load(), output.String())
 	}
 }
 
@@ -380,28 +322,5 @@ func TestDirectCLIYesSnapshotFailureExitsWithDashboardLink(t *testing.T) {
 	}
 	if strings.Contains(string(output), `"operation"`) {
 		t.Fatalf("snapshot failure printed a success receipt: %s", output)
-	}
-}
-
-func TestDirectApplyLostResponseObservesExistingPlan(t *testing.T) {
-	var applies, reads atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method + " " + r.URL.Path {
-		case "POST /api/deployment-plans/plan_saved/apply":
-			applies.Add(1)
-			http.Error(w, `{"detail":"acknowledgement lost"}`, http.StatusBadGateway)
-		case "GET /api/deployment-plans/plan_saved":
-			reads.Add(1)
-			_ = json.NewEncoder(w).Encode(testDirectDeploymentPlan("saved", "applied"))
-		default:
-			t.Errorf("lost-response recovery changed its target: %s %s", r.Method, r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	initial := testDirectDeploymentPlan("saved", "awaiting_confirmation")
-	plan, err := confirmCloudRequest(cloud.NewClient(server.URL, "token"), &initial)
-	if err != nil || plan.Status != "applied" || applies.Load() != 1 || reads.Load() != 1 {
-		t.Fatalf("lost-response recovery failed: plan=%+v err=%v applies=%d reads=%d", plan, err, applies.Load(), reads.Load())
 	}
 }

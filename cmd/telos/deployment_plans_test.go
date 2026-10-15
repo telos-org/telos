@@ -250,11 +250,18 @@ func TestMemberCanSavePrivatePlanAndBookmarkWithoutDeploying(t *testing.T) {
 }
 
 func TestSavedPlanParserRejectsInvalidJSONAndUnsupportedVersion(t *testing.T) {
-	for _, contents := range []string{`{bad`, `{"version":2}`, `{"version":1}`, `[]`, `{"version":1} {}`} {
+	for _, tt := range []struct{ contents, want string }{
+		{`{bad`, "invalid saved plan file"},
+		{`{"version":2}`, "one plan or request ID"},
+		{`{"version":1}`, "one plan or request ID"},
+		{`{"version":99}`, "unsupported saved plan format 99"},
+		{`[]`, "invalid saved plan file"},
+		{`{"version":1} {}`, "invalid saved plan file"},
+	} {
 		path := filepath.Join(t.TempDir(), "SPEC.md")
-		_ = os.WriteFile(path, []byte(contents), 0o600)
-		if _, err := readSavedDeploymentPlan(path); err == nil {
-			t.Fatalf("invalid bookmark accepted as spec or plan: %q", contents)
+		_ = os.WriteFile(path, []byte(tt.contents), 0o600)
+		if _, err := readSavedDeploymentPlan(path); err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Fatalf("bookmark=%q error=%v want=%q", tt.contents, err, tt.want)
 		}
 	}
 	path := filepath.Join(t.TempDir(), "change.plan")
@@ -282,10 +289,15 @@ func TestSavedPlanWriteNeverReplacesConcurrentFile(t *testing.T) {
 	}
 }
 
-func TestSavedPlanEndpointAndContextBindingRejectBeforeNetwork(t *testing.T) {
+func TestSavedPlanRejectsForeignEndpointContextAndAccount(t *testing.T) {
 	var calls int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		calls++
+		if r.Method == http.MethodGet && r.URL.Path == "/api/account/bootstrap" {
+			_, _ = w.Write([]byte(`{"personal_org_id":"org_current"}`))
+			return
+		}
+		t.Errorf("foreign bookmark accessed %s %s", r.Method, r.URL.Path)
 		http.Error(w, "unexpected", http.StatusInternalServerError)
 	}))
 	defer server.Close()
@@ -299,7 +311,14 @@ func TestSavedPlanEndpointAndContextBindingRejectBeforeNetwork(t *testing.T) {
 		}
 	}
 	if calls != 0 {
-		t.Fatalf("foreign bookmark caused %d API calls", calls)
+		t.Fatalf("foreign endpoint or context caused %d API calls", calls)
+	}
+	bookmark := savedDeploymentPlan{APIEndpoint: server.URL, Context: "personal", OrgID: "org_previous"}
+	if err := validateSavedDeploymentPlan(client, &bookmark); err == nil || !strings.Contains(err.Error(), "different organization") {
+		t.Fatalf("foreign account accepted: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("account mismatch made %d calls; only account lookup is allowed", calls)
 	}
 }
 
@@ -325,11 +344,11 @@ func TestQueuedApplyConfirmsFreshHeadPreview(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(request)
 	}))
 	defer server.Close()
-	var preview, prompt bytes.Buffer
+	var preview bytes.Buffer
 	request, err := awaitCloudApply(context.Background(), cloud.NewClient(server.URL, "token"), &initial, false,
-		strings.NewReader("yes\n"), &preview, &prompt, time.Millisecond)
-	if err != nil || request.Status != "applied" || confirmCount != 1 || !strings.Contains(preview.String(), "Alice's changes") || !strings.Contains(prompt.String(), "Type yes") {
-		t.Fatalf("request=%+v err=%v confirms=%d preview=%s prompt=%s", request, err, confirmCount, preview.String(), prompt.String())
+		strings.NewReader("yes\n"), &preview, time.Millisecond)
+	if err != nil || request.Status != "applied" || confirmCount != 1 || !strings.Contains(preview.String(), "Alice's changes") || !strings.Contains(preview.String(), "Type yes") {
+		t.Fatalf("request=%+v err=%v confirms=%d preview=%s", request, err, confirmCount, preview.String())
 	}
 }
 
@@ -349,36 +368,44 @@ func TestDashboardConfirmationReleasesWaitingTerminal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
 	request, err := awaitCloudApply(ctx, cloud.NewClient(server.URL, "token"), &initial, false,
-		reader, io.Discard, io.Discard, time.Millisecond)
+		reader, io.Discard, time.Millisecond)
 	if err != nil || request.Status != "applied" {
 		t.Fatalf("dashboard confirmation did not finish terminal: %+v %v", request, err)
 	}
 }
 
 func TestApplyMissingSnapshotLeavesRequestPending(t *testing.T) {
-	for _, mode := range []string{"interactive", "automatic", "queued automatic"} {
-		t.Run(mode, func(t *testing.T) {
-			blocked := testDeploymentPlan("apply", "awaiting_confirmation")
+	for _, tt := range []struct {
+		name                        string
+		direct, interactive, queued bool
+		path                        string
+	}{
+		{name: "request initially blocked"},
+		{name: "direct initially blocked", direct: true},
+		{name: "request confirmation blocked", interactive: true, path: "/api/deployments/sess_123/change-requests/cr_saved/confirm"},
+		{name: "direct confirmation blocked", direct: true, interactive: true, path: "/api/deployment-plans/plan_saved/apply"},
+		{name: "queued request blocked", queued: true, path: "/api/deployments/sess_123/change-requests/cr_saved"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			initial := testDeploymentPlan("apply", "awaiting_confirmation")
+			if tt.direct {
+				initial = testDirectDeploymentPlan("apply", "awaiting_confirmation")
+			}
+			blocked := initial
 			reason, code := "The current revision must finish snapshotting before it can change.", "snapshot_pending"
 			blocked.Error, blocked.ErrorCode = &reason, &code
-			initial := blocked
-			switch mode {
-			case "interactive":
-				initial.Error, initial.ErrorCode = nil, nil
-			case "queued automatic":
+			if tt.queued {
 				initial.Status, initial.Preview = "queued", nil
-				initial.Error, initial.ErrorCode = nil, nil
+			} else if !tt.interactive {
+				initial = blocked
 			}
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if calls.Add(1) > 1 {
-					t.Error("snapshot choice caused another API call")
+				method := http.MethodPost
+				if tt.queued {
+					method = http.MethodGet
 				}
-				wantMethod, wantPath := http.MethodGet, "/api/deployments/sess_123/change-requests/cr_saved"
-				if mode == "interactive" {
-					wantMethod, wantPath = http.MethodPost, wantPath+"/confirm"
-				}
-				if mode == "automatic" || r.Method != wantMethod || r.URL.Path != wantPath {
+				if calls.Add(1) > 1 || tt.path == "" || r.Method != method || r.URL.Path != tt.path {
 					t.Errorf("unexpected snapshot action: %s %s", r.Method, r.URL.Path)
 				}
 				_ = json.NewEncoder(w).Encode(blocked)
@@ -386,9 +413,9 @@ func TestApplyMissingSnapshotLeavesRequestPending(t *testing.T) {
 			defer server.Close()
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			var prompt bytes.Buffer
-			request, err := awaitCloudApply(ctx, cloud.NewClient(server.URL, "token"), &initial, mode != "interactive",
-				strings.NewReader("yes\n"), io.Discard, &prompt, time.Millisecond)
+			var output bytes.Buffer
+			request, err := awaitCloudApply(ctx, cloud.NewClient(server.URL, "token"), &initial, !tt.interactive,
+				strings.NewReader("yes\n"), &output, time.Millisecond)
 			if request != nil || err == nil || ctx.Err() != nil {
 				t.Fatalf("did not stop for a snapshot choice: request=%+v err=%v ctx=%v", request, err, ctx.Err())
 			}
@@ -397,12 +424,12 @@ func TestApplyMissingSnapshotLeavesRequestPending(t *testing.T) {
 					t.Errorf("missing %q from snapshot guidance: %v", want, err)
 				}
 			}
-			wantCalls := int32(1)
-			if mode == "automatic" {
-				wantCalls = 0
+			wantCalls := int32(0)
+			if tt.path != "" {
+				wantCalls = 1
 			}
-			if calls.Load() != wantCalls || (mode != "interactive" && prompt.Len() != 0) {
-				t.Fatalf("calls=%d want=%d prompt=%s", calls.Load(), wantCalls, prompt.String())
+			if calls.Load() != wantCalls || strings.Contains(output.String(), "Type yes") != tt.interactive {
+				t.Fatalf("calls=%d want=%d output=%s", calls.Load(), wantCalls, output.String())
 			}
 		})
 	}
@@ -484,7 +511,7 @@ func TestInteractiveNoEOFAndCancellationLeaveRemoteRequestUntouched(t *testing.T
 				cancel()
 			}
 			_, err := awaitCloudApply(ctx, cloud.NewClient(server.URL, "token"), &initial, false,
-				strings.NewReader(tt.input), io.Discard, io.Discard, time.Second)
+				strings.NewReader(tt.input), io.Discard, time.Second)
 			if err == nil || !strings.Contains(err.Error(), "stopped waiting") || mutationCount != 0 {
 				t.Fatalf("err=%v mutations=%d", err, mutationCount)
 			}
@@ -517,7 +544,7 @@ func TestCancellationInterruptsInFlightPlanRequests(t *testing.T) {
 			result := make(chan error, 1)
 			go func() {
 				_, err := awaitCloudApply(ctx, cloud.NewClient(server.URL, "token"), &initial, true,
-					strings.NewReader(""), io.Discard, io.Discard, time.Millisecond)
+					strings.NewReader(""), io.Discard, time.Millisecond)
 				result <- err
 			}()
 			select {
@@ -539,22 +566,40 @@ func TestCancellationInterruptsInFlightPlanRequests(t *testing.T) {
 }
 
 func TestConfirmationLostResponseReadsExistingResult(t *testing.T) {
-	var confirmations int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodPost {
-			confirmations++
-			w.WriteHeader(http.StatusConflict)
-			_, _ = w.Write([]byte(`{"detail":"already applied"}`))
-			return
-		}
-		request := testDeploymentPlan("saved", "applied")
-		_ = json.NewEncoder(w).Encode(request)
-	}))
-	defer server.Close()
-	initial := testDeploymentPlan("saved", "awaiting_confirmation")
-	request, err := confirmCloudRequest(cloud.NewClient(server.URL, "token"), &initial)
-	if err != nil || request.Status != "applied" || confirmations != 1 {
-		t.Fatalf("request=%+v err=%v confirmations=%d", request, err, confirmations)
+	for _, tt := range []struct {
+		name, path, action string
+		status             int
+	}{
+		{"request", "/api/deployments/sess_123/change-requests/cr_saved", "/confirm", http.StatusConflict},
+		{"direct", "/api/deployment-plans/plan_saved", "/apply", http.StatusBadGateway},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			initial := testDeploymentPlan("saved", "awaiting_confirmation")
+			if tt.name == "direct" {
+				initial = testDirectDeploymentPlan("saved", "awaiting_confirmation")
+			}
+			confirms, reads := 0, 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method + " " + r.URL.Path {
+				case "POST " + tt.path + tt.action:
+					confirms++
+					http.Error(w, "acknowledgement lost", tt.status)
+				case "GET " + tt.path:
+					reads++
+					applied := initial
+					applied.Status = "applied"
+					_ = json.NewEncoder(w).Encode(applied)
+				default:
+					t.Errorf("lost-response recovery changed its target: %s %s", r.Method, r.URL.Path)
+					http.NotFound(w, r)
+				}
+			}))
+			defer server.Close()
+			request, err := confirmCloudRequest(cloud.NewClient(server.URL, "token"), &initial)
+			if err != nil || request.Status != "applied" || confirms != 1 || reads != 1 {
+				t.Fatalf("request=%+v err=%v confirms=%d reads=%d", request, err, confirms, reads)
+			}
+		})
 	}
 }
 
@@ -583,7 +628,7 @@ func TestSavedAndInteractiveApplyReportInlineExecutionFailure(t *testing.T) {
 			}
 			initial := testDeploymentPlan("apply", "awaiting_confirmation")
 			_, err := awaitCloudApply(context.Background(), cloud.NewClient(server.URL, "token"), &initial, false,
-				strings.NewReader("yes\n"), io.Discard, io.Discard, time.Second)
+				strings.NewReader("yes\n"), io.Discard, time.Second)
 			if err == nil || !strings.Contains(err.Error(), "execution stopped") {
 				t.Fatalf("interactive apply reported success: %v", err)
 			}
