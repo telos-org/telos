@@ -64,7 +64,7 @@ pin them to an immutable registry version:
 
 ```yaml
 skills:
-  - path/to/postgres-skill
+  - path/to/api-guidelines
   - "@acme/service-readiness:1.0.0*"
 ```
 
