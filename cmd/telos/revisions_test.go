@@ -98,6 +98,14 @@ func runRevisionCLI(t *testing.T, args ...string) (string, string, int) {
 
 func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 	var pageReads, labelReads atomic.Int32
+	ids := map[int]string{1000: "rev_current", 7: "rev_inspected", 6: "rev_parent", 2: "rev_source"}
+	historyRevision := func(sequence int) cloud.Revision {
+		revision := testRevision(sequence)
+		if id := ids[sequence]; id != "" {
+			revision.ID = id
+		}
+		return revision
+	}
 	routes := map[string]http.HandlerFunc{
 		"GET " + revisionTestPath: func(w http.ResponseWriter, r *http.Request) {
 			pageReads.Add(1)
@@ -107,9 +115,9 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 			if before > 0 {
 				start = before - 1
 			}
-			page := cloud.RevisionPage{CurrentRevisionID: "rev_1000", Revisions: []cloud.Revision{}}
+			page := cloud.RevisionPage{CurrentRevisionID: "rev_current", Revisions: []cloud.Revision{}}
 			for sequence := start; sequence > 0 && len(page.Revisions) < limit; sequence-- {
-				page.Revisions = append(page.Revisions, testRevision(sequence))
+				page.Revisions = append(page.Revisions, historyRevision(sequence))
 			}
 			if len(page.Revisions) > 0 && page.Revisions[len(page.Revisions)-1].Sequence > 1 {
 				cursor := page.Revisions[len(page.Revisions)-1].Sequence
@@ -117,22 +125,20 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(page)
 		},
-		"GET " + revisionTestPath + "/rev_7": func(w http.ResponseWriter, r *http.Request) {
-			revision := testRevision(7)
+		"GET " + revisionTestPath + "/rev_inspected": func(w http.ResponseWriter, r *http.Request) {
+			revision := historyRevision(7)
 			revision.Kind = "restore"
-			parent, source := "rev_6", "rev_2"
+			parent, source := "rev_parent", "rev_source"
 			revision.ParentRevisionID, revision.RestoredFromRevisionID = &parent, &source
 			reason := "snapshot_lost"
 			revision.RestoreCapability = cloud.RevisionCapability{Reason: &reason}
 			_ = json.NewEncoder(w).Encode(revision)
 		},
 	}
-	for id, sequence := range map[string]int{"rev_1000": 1000, "rev_6": 6, "rev_2": 2} {
-		routes["GET "+revisionTestPath+"/"+id] = func(w http.ResponseWriter, r *http.Request) {
+	for _, sequence := range []int{1000, 6, 2} {
+		routes["GET "+revisionTestPath+"/"+ids[sequence]] = func(w http.ResponseWriter, r *http.Request) {
 			labelReads.Add(1)
-			revision := testRevision(sequence)
-			revision.ID = id
-			_ = json.NewEncoder(w).Encode(revision)
+			_ = json.NewEncoder(w).Encode(historyRevision(sequence))
 		}
 	}
 	revisionTestServer(t, routes)
@@ -146,14 +152,14 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 		GoalID   string         `json:"goal_id"`
 		Revision cloud.Revision `json:"revision"`
 	}
-	if code != 0 || json.Unmarshal([]byte(stdout), &detail) != nil || detail.GoalID != "goal_test" || detail.Revision.Sequence != 7 || pageReads.Load() > 2 {
+	if code != 0 || json.Unmarshal([]byte(stdout), &detail) != nil || detail.GoalID != "goal_test" || detail.Revision.Sequence != 7 || detail.Revision.ID != "rev_inspected" || pageReads.Load() > 2 {
 		t.Fatalf("old revision: exit=%d stdout=%s stderr=%s reads=%d", code, stdout, stderr, pageReads.Load())
 	}
-	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--revision", "rev_7")
+	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--revision", "rev_inspected")
 	if code != 0 || !strings.Contains(stdout, "saved snapshot is no longer available") || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "Redeploy available") {
 		t.Fatalf("detail: exit=%d stdout=%s stderr=%s", code, stdout, stderr)
 	}
-	for _, field := range []string{"Revision ID rev_7", "Current revision 1000", "Parent revision 6", "Source revision 2"} {
+	for _, field := range []string{"Revision ID rev_inspected", "Current revision 1000", "Parent revision 6", "Source revision 2"} {
 		if !strings.Contains(strings.Join(strings.Fields(stdout), " "), field) {
 			t.Fatalf("detail missing %q: %s", field, stdout)
 		}
@@ -163,9 +169,10 @@ func TestHistoryCLIListsAndInspectsPaginatedRevisions(t *testing.T) {
 	if code != 0 || stderr != "" || !strings.Contains(strings.Join(strings.Fields(stdout), " "), "Current revision 1000") || !strings.Contains(stdout, "Update 9") || !strings.Contains(stdout, "--before 7") || strings.Contains(stdout, "Update 1000") || strings.Contains(stdout, "rev_") || labelReads.Load() != 1 {
 		t.Fatalf("older page: exit=%d stdout=%s stderr=%s lookups=%d", code, stdout, stderr, labelReads.Load())
 	}
+	labelReads.Store(0)
 	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--before", "10", "--limit", "3", "--json")
 	var older cloud.RevisionPage
-	if code != 0 || json.Unmarshal([]byte(stdout), &older) != nil || older.CurrentRevisionID != "rev_1000" || len(older.Revisions) != 3 || older.Revisions[0].Sequence != 9 || labelReads.Load() != 1 {
+	if code != 0 || json.Unmarshal([]byte(stdout), &older) != nil || older.CurrentRevisionID != "rev_current" || len(older.Revisions) != 3 || older.Revisions[0].Sequence != 9 || labelReads.Load() != 0 {
 		t.Fatalf("older JSON page: exit=%d stdout=%s stderr=%s lookups=%d", code, stdout, stderr, labelReads.Load())
 	}
 	stdout, stderr, code = runRevisionCLI(t, "history", "goal_test", "--all", "--limit", "20", "--json")
