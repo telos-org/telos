@@ -2,13 +2,11 @@
 
 τέλος [ˈte.los] — *the end, goal, or purpose*
 
-`telos` is a goal-oriented programming system. You write down what a software
-service should do in a *goal specification*, and `telos` takes it from there —
-building, testing, deploying, and maintaining the software for you.
+`telos` is a goal-oriented programming system.
 
-A goal specification is a declarative description of a service's desired state:
-its intent, APIs, and behavior. It's the living source of truth, and `telos`
-continually reconciles the running software toward it.
+A `telos` program is a *goal specification*: a declarative description of a
+service's desired state. `telos` agents build the service and keep reconciling
+its current state toward the goal.
 
 Read the guide at [usetelos.ai/docs](https://usetelos.ai/docs).
 
