@@ -31,9 +31,9 @@ The markdown frontmatter (YAML block at the top of `SPEC.md`) supports the follo
 
 | Field | Meaning |
 | --- | --- |
-| `name` | Required lowercase, DNS-compatible identity. Keep it stable across revisions. |
-| `version` | Required semantic version for this immutable revision. Bump it when the spec changes. |
-| `skills` | A path or YAML list of paths and exact registry refs. Relative paths resolve from the spec directory. A trailing `*` makes a skill an acceptance rubric. |
+| `name` | Required lowercase, DNS-compatible identity |
+| `version` | Required version for this goal specification (semver-style)|
+| `skills` | A list of skill paths (relative/absolute) or registry refs. A trailing `*` makes a skill a rubric. |
 | `interval` | The schedule on which the system wakes up to check the Goal against the live state. |
 | `network` | [Outbound network configuration](environment.md#egress) for the Goal. |
 | `tags` | A YAML list of string labels. The default is an empty list. |

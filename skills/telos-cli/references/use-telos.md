@@ -4,14 +4,11 @@ description: Get started with building on Telos.
 group: Getting started
 ---
 
-Telos is a goal-oriented programming system. Telos treats the goal specification as the source of truth, and background agents own the software lifecycle beneath it.
+Telos is a goal-oriented programming system. You write down what a software service should do in a *goal specification*, and Telos takes it from there — building, testing, deploying, and maintaining the software for you.
 
-Implementations can change as the Goal evolves,
-while its history and the evidence that it meets its spec stay attached to the same Goal.
+A goal specification is a declarative description of a service's desired state: its intent, APIs, and behavior. It's the living source of truth, and Telos continually reconciles the running software toward it.
 
-This guide walks one Goal through its full lifecycle on Telos.
-Generated IDs, digests, paths, and URLs in the transcripts are illustrative;
-the command and field shapes match the current CLI.
+This page takes you from installing Telos to launching your first Goal, then walks that Goal through the rest of its lifecycle.
 
 ## Install
 
@@ -124,7 +121,7 @@ Context   personal
 Logs      telos logs goal_c7d2f0a4e8
 ```
 
-The `apply` command returns immediately and starts the Goal in the cloud.
+The `apply` command returns immediately and starts the Goal in the cloud with a unique ID.
 
 ## Watch it work
 
