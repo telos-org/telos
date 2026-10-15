@@ -8,8 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/telos-org/telos/internal/cloud"
 )
 
 func TestCloudPlanOutputUsesPreparedVersionAndPackage(t *testing.T) {
@@ -35,11 +33,14 @@ func TestCloudPlanOutputUsesPreparedVersionAndPackage(t *testing.T) {
 				prepared.Preview.ProposedSpec = preparedSpec
 				if tt.kind == "plan" {
 					prepared.ID = "plan_prepared"
-				}
-				if tt.mode == "apply" {
-					prepared.Status = "applied"
+				} else {
+					prepared.UpdateNumber, prepared.PreparedPlanID = 1, "cp_prepared"
 				}
 				var uploads, submissions, confirms int
+				confirmPath := "/api/deployments/sess_123/change-requests/cr_saved/confirm"
+				if tt.kind == "plan" {
+					confirmPath = "/api/deployment-plans/plan_prepared/apply"
+				}
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if r.URL.Path == "/api/deployment-plans/packages" {
 						uploads++
@@ -52,11 +53,17 @@ func TestCloudPlanOutputUsesPreparedVersionAndPackage(t *testing.T) {
 						_, _ = w.Write([]byte(`{"id":"sess_123","package_ref":"@personal/demo:1.2.3","current_revision_id":"rev_7"}`))
 					case "POST /api/deployment-plans":
 						submissions++
-						var options cloud.DeploymentPlanOptions
+						var options struct {
+							Mode        string          `json:"mode"`
+							AutoConfirm json.RawMessage `json:"auto_confirm"`
+							Update      struct {
+								PackageRef string `json:"package_ref"`
+							} `json:"update"`
+						}
 						if err := json.NewDecoder(r.Body).Decode(&options); err != nil {
 							t.Error(err)
 						}
-						if options.Mode != tt.mode || options.Update == nil || options.Update.PackageRef != "@personal/plan-artifact:1.0.0" {
+						if options.Mode != tt.mode || options.AutoConfirm != nil || options.Update.PackageRef != "@personal/plan-artifact:1.0.0" {
 							t.Errorf("unexpected source proposal: %+v", options)
 						}
 						if tt.queued {
@@ -69,10 +76,21 @@ func TestCloudPlanOutputUsesPreparedVersionAndPackage(t *testing.T) {
 						_ = json.NewEncoder(w).Encode(prepared)
 					case "GET /api/deployments/sess_123/change-requests/cr_saved":
 						_ = json.NewEncoder(w).Encode(prepared)
-					case "POST /api/deployments/sess_123/change-requests/cr_saved/confirm":
+					case "POST " + confirmPath:
 						confirms++
+						var body map[string]json.RawMessage
+						if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+							t.Error(err)
+						}
+						if string(body["expected_current_revision_id"]) != `"rev_7"` ||
+							(tt.kind != "plan" && string(body["expected_plan_id"]) != `"cp_prepared"`) {
+							t.Errorf("confirmation lost the reviewed plan: %s", body)
+						}
 						applied := prepared
 						applied.Status = "applied"
+						if tt.kind != "plan" {
+							applied.Preview = nil // Confirmation receipts omit the preview.
+						}
 						_ = json.NewEncoder(w).Encode(applied)
 					default:
 						t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
@@ -91,6 +109,10 @@ func TestCloudPlanOutputUsesPreparedVersionAndPackage(t *testing.T) {
 					bookmarkPath = filepath.Join(t.TempDir(), "change.plan")
 				}
 				jsonOut := format == "json"
+				wantSpec := preparedSpec
+				if tt.mode == "apply" && tt.kind != "plan" {
+					wantSpec = ""
+				}
 				var runErr error
 				output := captureStdout(t, func() {
 					if tt.mode == "apply" {
@@ -103,7 +125,7 @@ func TestCloudPlanOutputUsesPreparedVersionAndPackage(t *testing.T) {
 					t.Fatal(runErr)
 				}
 				if jsonOut {
-					assertPreparedPackageReceipt(t, output, tt.kind, preparedRef, preparedDigest, preparedSpec)
+					assertPreparedPackageReceipt(t, output, tt.kind, preparedRef, preparedDigest, wantSpec)
 				} else if !strings.Contains(output, "1.2.3 -> 1.2.4") || !strings.Contains(output, "+version: 1.2.4") {
 					t.Fatalf("terminal did not show Cloud's prepared version: %s", output)
 				}
@@ -124,10 +146,14 @@ func TestCloudPlanOutputUsesPreparedVersionAndPackage(t *testing.T) {
 					if runErr != nil || confirms != 1 {
 						t.Fatalf("saved apply err=%v confirms=%d", runErr, confirms)
 					}
-					assertPreparedPackageReceipt(t, output, tt.kind, preparedRef, preparedDigest, preparedSpec)
+					assertPreparedPackageReceipt(t, output, tt.kind, preparedRef, preparedDigest, "")
 				}
-				if uploads != 1 || submissions != 1 {
-					t.Fatalf("unexpected artifact upload or replan: uploads=%d submissions=%d", uploads, submissions)
+				wantConfirms := 1
+				if tt.mode == "preview" {
+					wantConfirms = 0
+				}
+				if uploads != 1 || submissions != 1 || confirms != wantConfirms {
+					t.Fatalf("uploads=%d submissions=%d confirmations=%d (want %d)", uploads, submissions, confirms, wantConfirms)
 				}
 			})
 		}
@@ -136,10 +162,23 @@ func TestCloudPlanOutputUsesPreparedVersionAndPackage(t *testing.T) {
 
 func assertPreparedPackageReceipt(t *testing.T, output, kind, ref, digest, proposedSpec string) {
 	t.Helper()
+	type proposalReceipt struct {
+		PackageRef    string `json:"package_ref"`
+		PackageDigest string `json:"package_digest"`
+		Preview       *struct {
+			ProposedSpec string `json:"proposed_spec"`
+		} `json:"preview"`
+	}
 	var receipt struct {
-		Package       cloud.PackageVersionRecord `json:"package"`
-		Plan          *cloud.ChangeRequestRecord `json:"plan"`
-		ChangeRequest *cloud.ChangeRequestRecord `json:"change_request"`
+		Package struct {
+			Ref     string `json:"ref"`
+			Digest  string `json:"digest"`
+			Scope   string `json:"scope"`
+			Name    string `json:"name"`
+			Version string `json:"version"`
+		} `json:"package"`
+		Plan          *proposalReceipt `json:"plan"`
+		ChangeRequest *proposalReceipt `json:"change_request"`
 	}
 	if err := json.Unmarshal([]byte(output), &receipt); err != nil {
 		t.Fatal(err)
@@ -153,8 +192,11 @@ func assertPreparedPackageReceipt(t *testing.T, output, kind, ref, digest, propo
 	} else if receipt.Plan != nil {
 		t.Fatalf("Change Request receipt contains a direct plan: %s", output)
 	}
-	if proposal == nil || proposal.PackageRef != ref || proposal.PackageDigest != digest || proposal.Preview == nil || proposal.Preview.ProposedSpec != proposedSpec {
+	if proposal == nil || proposal.PackageRef != ref || proposal.PackageDigest != digest {
 		t.Fatalf("receipt did not preserve Cloud's prepared proposal: %s", output)
+	}
+	if proposedSpec == "" && proposal.Preview != nil || proposedSpec != "" && (proposal.Preview == nil || proposal.Preview.ProposedSpec != proposedSpec) {
+		t.Fatalf("receipt did not preserve the server's optional preview: %s", output)
 	}
 	if receipt.Package.Ref != ref || receipt.Package.Digest != digest || receipt.Package.Scope != "personal" || receipt.Package.Name != "plan-artifact" || receipt.Package.Version != "0.0.0-plan.sha256-prepared" {
 		t.Fatalf("receipt reported the original upload instead of the prepared package: %s", output)

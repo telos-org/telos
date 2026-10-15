@@ -420,6 +420,14 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 	yes bool, input io.Reader, previewOut, promptOut io.Writer, pollInterval time.Duration,
 ) (*cloud.ChangeRequestRecord, error) {
 	stopped := fmt.Errorf("stopped waiting for %s; review or discard it at %s", request.ID, cloudRequestReviewURL(control, *request))
+	control = control.WithContext(ctx)
+	confirm := func() (*cloud.ChangeRequestRecord, error) {
+		confirmed, err := confirmCloudRequest(control, request)
+		if err != nil && ctx.Err() != nil {
+			return nil, stopped
+		}
+		return confirmed, err
+	}
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	var answer <-chan bool
@@ -454,7 +462,7 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 			// --yes authorizes this exact prepared plan, never a future update.
 			// In particular, do not send auto_confirm when creating the proposal.
 			if yes {
-				return confirmCloudRequest(control, request)
+				return confirm()
 			}
 			fmt.Fprint(promptOut, "Apply these changes? Type yes to confirm: ")
 			response := make(chan bool, 1)
@@ -472,10 +480,13 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 			if !yes || ctx.Err() != nil {
 				return nil, stopped
 			}
-			return confirmCloudRequest(control, request)
+			return confirm()
 		case <-ticker.C:
 			current, err := control.GetChangeRequest(request.DeploymentID, request.ID)
 			if err != nil {
+				if ctx.Err() != nil {
+					return nil, stopped
+				}
 				return nil, fmt.Errorf("could not observe plan %s: %w; inspect it at %s", request.ID, err, cloudRequestReviewURL(control, *request))
 			}
 			if !sameCloudPlan(request, current) {

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,33 @@ import (
 
 	"github.com/telos-org/telos/internal/cloud"
 )
+
+func TestPendingGoalDescriptionPreservesCloudReason(t *testing.T) {
+	for _, tt := range []struct{ status, reason, failure string }{
+		{"pending", "Waiting for confirmation.", ""},
+		{"pending", "Preparing the plan.", ""},
+		{"working", "The request is confirmed and waiting to start.", ""},
+		{"needs_attention", "The requesting account is no longer available.", ""},
+		{"stopped", "The initial request was discarded.", ""},
+		{"needs_attention", "Request failed.", "Unable to start the Goal."},
+	} {
+		t.Run(tt.reason, func(t *testing.T) {
+			session := cloud.SessionRecord{State: "pending", Status: tt.status, StatusReason: tt.reason}
+			want := tt.reason
+			if tt.failure != "" {
+				session.FailureReason, want = &tt.failure, tt.failure
+			}
+			var out bytes.Buffer
+			printCloudSessionDescription(&out, session)
+			if got := configOutputValue(t, out.String(), "Reason"); got != want {
+				t.Fatalf("reason=%q want=%q", got, want)
+			}
+			if got := configOutputValue(t, out.String(), "Revision"); got != "not deployed yet" {
+				t.Fatalf("pending Goal reported a deployed revision: %s", out.String())
+			}
+		})
+	}
+}
 
 func TestDescribeKeepsPendingRequestsSeparateFromCurrentStatus(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

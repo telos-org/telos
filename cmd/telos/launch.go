@@ -337,6 +337,9 @@ func (e *duplicateGoalError) Error() string {
 	if e.followUp != "" {
 		update += " --context " + e.followUp
 	}
+	if e.command == "apply" {
+		update += ` --message "Describe the change"`
+	}
 	return fmt.Sprintf("a Goal named %s already exists in %s (%s)\nTo update it: %s", e.name, e.context, e.id, update)
 }
 
@@ -388,34 +391,4 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	if session.TotalCostUSD != nil {
 		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	}
-}
-
-func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.SessionRecord) {
-	printCloudSessionReceiptForContext(out, operation, session, "", "")
-}
-
-func printCloudSessionReceiptForContext(
-	out io.Writer,
-	operation string,
-	session *cloud.SessionRecord,
-	contextName string,
-	logsContext string,
-) {
-	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
-	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
-	printSummaryField(out, "Goal", session.ID)
-	printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
-	printCloudInferenceSummary(out, *session)
-	if contextName != "" {
-		printSummaryField(out, "Context", contextName)
-	}
-	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
-		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
-	}
-	// The hint names a context only when the saved one would select another.
-	logsCommand := fmt.Sprintf("telos logs %s", session.ID)
-	if logsContext != "" {
-		logsCommand = fmt.Sprintf("telos logs --context %s %s", logsContext, session.ID)
-	}
-	printSummaryField(out, "Logs", logsCommand)
 }

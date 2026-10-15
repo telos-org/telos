@@ -283,7 +283,7 @@ func TestDescribeEndsWithCostBeforeTheReason(t *testing.T) {
 	want := "Cloud     $1.25 (compute $1.00, storage $0.25)\n" +
 		"Inference $3.40 (Anthropic API key)\n" +
 		"Reason    provider rejected the API key\n" +
-		"Next      Fix the spec, then: telos apply SPEC.md --goal goal_key, or telos delete goal_key"
+		"Next      Fix the spec, then: telos apply SPEC.md --goal goal_key --message \"Describe the fix\", or telos delete goal_key"
 	if tail != want {
 		t.Fatalf("describe ends with:\n%s\nwant:\n%s", tail, want)
 	}

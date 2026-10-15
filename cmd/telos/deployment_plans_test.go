@@ -355,23 +355,6 @@ func TestDashboardConfirmationReleasesWaitingTerminal(t *testing.T) {
 	}
 }
 
-func TestQueuedAutomaticApplyStillPrintsItsPreparedPlan(t *testing.T) {
-	initial := testDeploymentPlan("apply", "queued")
-	initial.Preview = nil
-	initial.BaseRevisionID = nil
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		request := testDeploymentPlan("apply", "applied")
-		_ = json.NewEncoder(w).Encode(request)
-	}))
-	defer server.Close()
-	var preview, prompt bytes.Buffer
-	request, err := awaitCloudApply(context.Background(), cloud.NewClient(server.URL, "token"), &initial, true,
-		strings.NewReader(""), &preview, &prompt, time.Millisecond)
-	if err != nil || request.Status != "applied" || !strings.Contains(preview.String(), "Serve an updated demo") || prompt.Len() != 0 {
-		t.Fatalf("request=%+v err=%v preview=%s prompt=%s", request, err, preview.String(), prompt.String())
-	}
-}
-
 func TestApplyMissingSnapshotLeavesRequestPending(t *testing.T) {
 	for _, mode := range []string{"interactive", "automatic", "queued automatic"} {
 		t.Run(mode, func(t *testing.T) {
@@ -504,6 +487,52 @@ func TestInteractiveNoEOFAndCancellationLeaveRemoteRequestUntouched(t *testing.T
 				strings.NewReader(tt.input), io.Discard, io.Discard, time.Second)
 			if err == nil || !strings.Contains(err.Error(), "stopped waiting") || mutationCount != 0 {
 				t.Fatalf("err=%v mutations=%d", err, mutationCount)
+			}
+		})
+	}
+}
+
+func TestCancellationInterruptsInFlightPlanRequests(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		t.Run(method, func(t *testing.T) {
+			started, release := make(chan struct{}), make(chan struct{})
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != method {
+					t.Errorf("unexpected request during cancellation: %s", r.Method)
+				}
+				close(started)
+				select {
+				case <-r.Context().Done():
+				case <-release:
+				}
+			}))
+			defer server.Close()
+			defer close(release)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			initial := testDeploymentPlan("apply", "queued")
+			if method == http.MethodPost {
+				initial.Status = "awaiting_confirmation"
+			}
+			result := make(chan error, 1)
+			go func() {
+				_, err := awaitCloudApply(ctx, cloud.NewClient(server.URL, "token"), &initial, true,
+					strings.NewReader(""), io.Discard, io.Discard, time.Millisecond)
+				result <- err
+			}()
+			select {
+			case <-started:
+			case <-time.After(time.Second):
+				t.Fatal("request did not start")
+			}
+			cancel()
+			select {
+			case err := <-result:
+				if err == nil || !strings.Contains(err.Error(), "stopped waiting") || !strings.Contains(err.Error(), initial.ReviewURL) {
+					t.Fatalf("cancellation lost recovery guidance: %v", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("Ctrl-C did not interrupt the in-flight request")
 			}
 		})
 	}

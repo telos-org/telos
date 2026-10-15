@@ -403,19 +403,16 @@ func TestCloudSessionModelMatchesModelSelection(t *testing.T) {
 	}
 }
 
-func TestCloudReceiptPreservesCustomManagedModel(t *testing.T) {
+func TestCloudDescriptionPreservesCustomManagedModel(t *testing.T) {
 	for _, tt := range []struct{ model, want string }{
 		{"openai/gpt-4.1", "openai/gpt-4.1"},
 		{"telos-bifrost/telos/default", "telos/default"},
 	} {
 		session := cloud.SessionRecord{ID: "sess_test", AgentModel: tt.model, Inference: &cloud.InferenceSummary{Source: "managed", Tier: "default", Model: tt.model}}
-		var description, receipt bytes.Buffer
+		var description bytes.Buffer
 		printCloudSessionDescription(&description, session)
-		printCloudSessionReceipt(&receipt, "created", &session)
-		for _, output := range []string{description.String(), receipt.String()} {
-			if got := configOutputValue(t, output, "Model"); got != tt.want {
-				t.Fatalf("displayed model = %q, want %q", got, tt.want)
-			}
+		if got := configOutputValue(t, description.String(), "Model"); got != tt.want {
+			t.Fatalf("displayed model = %q, want %q", got, tt.want)
 		}
 	}
 }

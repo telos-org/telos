@@ -199,7 +199,7 @@ func needsAttentionNextStep(goalID, followUp string) string {
 		contextFlag = " --context " + followUp
 	}
 	return fmt.Sprintf(
-		"Fix the spec, then: telos apply SPEC.md --goal %s%s, or telos delete %s%s",
+		"Fix the spec, then: telos apply SPEC.md --goal %s%s --message \"Describe the fix\", or telos delete %s%s",
 		goalID, contextFlag, goalID, contextFlag,
 	)
 }
@@ -222,11 +222,11 @@ func shortRevision(digest string) string {
 }
 
 func cloudSessionReason(session cloud.SessionRecord) string {
-	if session.State == "pending" && session.CurrentRevisionID == "" {
-		return "waiting for a change request to be confirmed"
-	}
 	if session.FailureReason != nil && strings.TrimSpace(*session.FailureReason) != "" {
 		return strings.TrimSpace(*session.FailureReason)
+	}
+	if session.State == "pending" && session.CurrentRevisionID == "" {
+		return strings.TrimSpace(session.StatusReason)
 	}
 	switch strings.ToLower(strings.TrimSpace(cloudSessionDisplayStatus(session))) {
 	case "needs_attention", "needs attention", "failed", "stopped":

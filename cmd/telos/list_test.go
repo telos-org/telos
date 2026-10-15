@@ -269,51 +269,6 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 	}
 }
 
-func TestPrintCloudSessionReceiptShowsNextUsefulAction(t *testing.T) {
-	serviceURL := "https://auth.example.com"
-	dashboardURL := "https://dashboard.example.com"
-	session := &cloud.SessionRecord{
-		ID:            "sess_123",
-		Name:          "auth",
-		State:         "deploying",
-		Status:        "working",
-		PackageRef:    "@telos/auth:1.0.0",
-		PackageDigest: "sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a",
-		AgentModel:    "provider/model",
-		AgentThinking: "high",
-		ServiceURL:    &serviceURL,
-		DashboardURL:  &dashboardURL,
-	}
-
-	var out bytes.Buffer
-	printCloudSessionReceiptForContext(&out, "created", session, "personal", "")
-	text := out.String()
-	for _, want := range []string{
-		"created auth",
-		"Status    working",
-		"Goal      sess_123",
-		"Revision  sha256:8f21c47a91ee\n",
-		"Context   personal",
-		"Service   https://auth.example.com",
-		"Logs      telos logs sess_123\n",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("cloud session receipt missing %q:\n%s", want, text)
-		}
-	}
-	for _, notWant := range []string{"Name", "Target", "Package", "Digest", "Dashboard"} {
-		if strings.Contains(text, notWant) {
-			t.Fatalf("cloud session receipt should omit %q:\n%s", notWant, text)
-		}
-	}
-
-	out.Reset()
-	printCloudSessionReceiptForContext(&out, "created", session, "@telos", "@telos")
-	if !strings.Contains(out.String(), "Logs      telos logs --context @telos sess_123") {
-		t.Fatalf("receipt for a context other than the saved one omits it from the logs hint:\n%s", out.String())
-	}
-}
-
 func TestPrintCloudSessionDescriptionOmitsUnavailableSurfaces(t *testing.T) {
 	dashboardURL := "https://dashboard.example.com"
 	session := cloud.SessionRecord{

@@ -21,8 +21,8 @@ func TestDescribeTellsTheOwnerHowToMoveAGoalForward(t *testing.T) {
 		followUp string
 		want     string
 	}{
-		{"", "Next      Fix the spec, then: telos apply SPEC.md --goal goal_c7d2f0a4e8, or telos delete goal_c7d2f0a4e8\n"},
-		{"@team", "Next      Fix the spec, then: telos apply SPEC.md --goal goal_c7d2f0a4e8 --context @team, or telos delete goal_c7d2f0a4e8 --context @team\n"},
+		{"", "Next      Fix the spec, then: telos apply SPEC.md --goal goal_c7d2f0a4e8 --message \"Describe the fix\", or telos delete goal_c7d2f0a4e8\n"},
+		{"@team", "Next      Fix the spec, then: telos apply SPEC.md --goal goal_c7d2f0a4e8 --context @team --message \"Describe the fix\", or telos delete goal_c7d2f0a4e8 --context @team\n"},
 	} {
 		var out bytes.Buffer
 		printCloudSessionDescriptionForContext(&out, session, "@team", nil, tt.followUp)
