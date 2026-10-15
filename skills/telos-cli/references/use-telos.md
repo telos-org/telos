@@ -4,9 +4,9 @@ description: Get started with building on Telos.
 group: Getting started
 ---
 
-Telos is a goal-oriented programming system. You write down what a software service should do in a *goal specification*, and Telos takes it from there — building, testing, deploying, and maintaining the software for you.
+Telos is a goal-oriented programming system.
 
-A goal specification is a declarative description of a service's desired state: its intent, APIs, and behavior. It's the living source of truth, and Telos continually reconciles the running software toward it.
+A Telos program is a *goal specification*: a declarative description of a service's desired state. Telos agents build the service and keep reconciling its current state toward the goal.
 
 This page takes you from installing Telos to launching your first Goal, then walks that Goal through the rest of its lifecycle.
 

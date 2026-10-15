@@ -32,7 +32,7 @@ The markdown frontmatter (YAML block at the top of `SPEC.md`) supports the follo
 | Field | Meaning |
 | --- | --- |
 | `name` | Required lowercase, DNS-compatible identity |
-| `version` | Required version for this goal specification (semver-style)|
+| `version` | Required version for this goal specification (semver, like `0.1.0`) |
 | `skills` | A list of skill paths (relative/absolute) or registry refs. A trailing `*` makes a skill a rubric. |
 | `interval` | The schedule on which the system wakes up to check the Goal against the live state. |
 | `network` | [Outbound network configuration](environment.md#egress) for the Goal. |
