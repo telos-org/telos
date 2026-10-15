@@ -235,6 +235,76 @@ func TestCmdConfigListsCredentialsForNetworkRules(t *testing.T) {
 	}
 }
 
+func TestCmdConfigShowsCredits(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status int
+		body   string
+		line   string
+		json   string
+	}{
+		{"credit", http.StatusOK, `{"lifetime_balance_micro_usd":37504999,"work_allowed":true}`, "$37.50", `{"usd":37.504999}`},
+		{"none", http.StatusOK, `{"lifetime_balance_micro_usd":0,"work_allowed":false,"work_block_reason":"credits_exhausted"}`, "$0.00", `{"usd":0}`},
+		{"failed", http.StatusServiceUnavailable, `{"detail":"ledger unavailable"}`, "", "null"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var usageOrg string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.URL.Path {
+				case "/api/account/bootstrap":
+					_, _ = w.Write([]byte(`{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","handle":"person","role":"owner"},{"id":"org_telos","handle":"telos","role":"owner"}]}`))
+				case "/api/inference/connections":
+					_, _ = w.Write([]byte(`{"errors":{},"connections":[]}`))
+				case "/api/inference/preference":
+					_, _ = w.Write([]byte(`{"selection":{"source":"managed","tier":"default"}}`))
+				case "/api/secrets":
+					_, _ = w.Write([]byte(`{"secrets":[]}`))
+				case "/api/billing/usage":
+					usageOrg = r.Header.Get("X-Telos-Org-Id")
+					w.WriteHeader(tt.status)
+					_, _ = w.Write([]byte(tt.body))
+				default:
+					t.Errorf("request = %s %s", r.Method, r.URL.Path)
+				}
+			}))
+			defer server.Close()
+			configureCloudTest(t, server.URL)
+			t.Setenv(config.ContextEnv, "@telos")
+
+			var report map[string]json.RawMessage
+			if err := json.Unmarshal([]byte(captureStdout(t, func() { cmdConfig([]string{"--json"}) })), &report); err != nil {
+				t.Fatal(err)
+			}
+			var got bytes.Buffer
+			if raw := report["credits"]; raw != nil {
+				if err := json.Compact(&got, raw); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				got.WriteString("null")
+			}
+			if got.String() != tt.json {
+				t.Fatalf("credits = %s, want %s", got.String(), tt.json)
+			}
+			if usageOrg != "org_telos" {
+				t.Fatalf("credits were read from org %q, want the context's org_telos", usageOrg)
+			}
+
+			out := captureStdout(t, func() { cmdConfig(nil) })
+			if tt.line == "" {
+				if strings.Contains(out, "\nCredits ") || !strings.Contains(out, "credits: ") {
+					t.Fatalf("a failed lookup should report an error, not a Credits line:\n%s", out)
+				}
+				return
+			}
+			if got := configOutputValue(t, out, "Credits"); got != tt.line {
+				t.Fatalf("Credits = %q, want %q\n%s", got, tt.line, out)
+			}
+		})
+	}
+}
+
 func TestCmdConfigTellsNoCredentialsFromAFailedLookup(t *testing.T) {
 	for _, tt := range []struct {
 		name    string
@@ -261,6 +331,8 @@ func TestCmdConfigTellsNoCredentialsFromAFailedLookup(t *testing.T) {
 					secretsOrg = r.Header.Get("X-Telos-Org-Id")
 					w.WriteHeader(tt.status)
 					_, _ = w.Write([]byte(tt.body))
+				case "/api/billing/usage":
+					_, _ = w.Write([]byte(`{"lifetime_balance_micro_usd":0,"work_allowed":true}`))
 				default:
 					t.Errorf("request = %s %s", r.Method, r.URL.Path)
 				}
@@ -366,7 +438,7 @@ func TestCmdConfigSurfacesAuthenticationFailure(t *testing.T) {
 			out := captureStdout(t, func() {
 				cmdConfig(nil)
 			})
-			if got := configOutputValue(t, out, "Authentication"); got != "invalid" {
+			if got := configOutputValue(t, out, "Authentication"); got != "invalid; run `telos login`" {
 				t.Fatalf("authentication = %q", got)
 			}
 			for _, want := range []string{"token rejected", fmt.Sprintf("HTTP %d", statusCode)} {
@@ -391,7 +463,7 @@ func TestCmdConfigShowsUnauthenticatedLocalValues(t *testing.T) {
 	out := captureStdout(t, func() {
 		cmdConfig(nil)
 	})
-	for _, want := range []string{"https://api.usetelos.ai", "not configured", "org_telos"} {
+	for _, want := range []string{"https://api.usetelos.ai", "not configured; run `telos login`", "org_telos"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("output %q does not contain %q", out, want)
 		}
@@ -420,6 +492,8 @@ func accountBootstrapServer(t *testing.T) *httptest.Server {
 			_, _ = w.Write([]byte(`{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`))
 		case r.Method == http.MethodGet && r.URL.Path == "/api/secrets":
 			_, _ = w.Write([]byte(`{"secrets":[{"id":"sec_reading","name":"reading-list-api","credentials":[{"key":"READING_TOKEN"}],"managed_by":null},{"id":"sec_bifrost_1","name":"Telos inference","credentials":[],"managed_by":"bifrost"}]}`))
+		case r.Method == http.MethodGet && r.URL.Path == "/api/billing/usage":
+			_, _ = w.Write([]byte(`{"lifetime_granted_micro_usd":50000000,"lifetime_balance_micro_usd":37504999,"work_allowed":true,"work_block_reason":null}`))
 		default:
 			t.Fatalf("request = %s %s", r.Method, r.URL.Path)
 		}

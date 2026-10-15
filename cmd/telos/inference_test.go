@@ -184,6 +184,7 @@ func inferenceTestServer(t *testing.T, overrides map[string]http.HandlerFunc) *h
 		"GET /api/inference/preference":  `{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`,
 		"GET /api/deployments":           `{"deployments":[]}`,
 		"GET /api/secrets":               `{"secrets":[]}`,
+		"GET /api/billing/usage":         `{"lifetime_balance_micro_usd":50000000,"work_allowed":true}`,
 	}
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")

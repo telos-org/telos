@@ -163,6 +163,23 @@ class InstallReleaseTest(unittest.TestCase):
         self.skills = home / ".agents/skills"
         self.assert_installed()
 
+    def test_missing_path_entry_prints_the_line_to_add(self):
+        home = self.root / "home"
+        for shell, profile in (("/bin/zsh", "~/.zshrc"), ("/bin/sh", "~/.profile")):
+            with self.subTest(shell=shell):
+                result = self.install(
+                    extra_env={
+                        "HOME": str(home),
+                        "SHELL": shell,
+                        "PATH": "/usr/bin:/bin",
+                        "TELOS_INSTALL_DIR": "",
+                    }
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                line = 'export PATH="$HOME/.local/bin:$PATH"'
+                self.assertIn(f"  echo '{line}' >> {profile}\n", result.stdout)
+                self.assertIn(f"Then open a new terminal, or run: {line}\n", result.stdout)
+
     def test_links_the_skill_for_claude_code(self):
         home = self.root / "home"
         link = home / ".claude/skills/telos-cli"
