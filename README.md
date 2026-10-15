@@ -86,6 +86,10 @@ First, preview the spec without changing the Goal or its target state:
 telos plan SPEC.md --context personal
 ```
 
+Cloud prepares the preview using privately staged spec and skill artifacts.
+The output shows Cloud's resolved changes and a review URL. Previewing does not
+deploy the Goal or publish the staged artifacts to the Registry.
+
 After reviewing and approving the resolved action and context, apply it:
 
 ```bash
@@ -94,6 +98,15 @@ telos apply SPEC.md --context personal
 
 `apply` returns a Goal ID when the revision is accepted for work. The work
 then continues in the background.
+
+To save a Change Request for review, provide an output file and a change message:
+
+```bash
+telos plan SPEC.md --context personal --out=change.plan --message "Create the reading list"
+```
+
+The file records the saved proposal's identity. Review or confirm the request
+using the Cloud review URL in the output.
 
 After applying, use `telos list` to find the Goal and `telos describe` to
 check its status. Once the service is published, `describe` also prints its URL:

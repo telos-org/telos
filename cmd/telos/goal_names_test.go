@@ -17,6 +17,12 @@ import (
 func TestApplyAndPlanRefuseADuplicateGoalName(t *testing.T) {
 	var publications, deployments atomic.Int32
 	server := inferenceTestServer(t, map[string]http.HandlerFunc{
+		"GET /api/capabilities": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"deployment_plans":true}`))
+		},
+		"GET /api/deployment-plans/access": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"can_plan":true}`))
+		},
 		"GET /api/deployments": func(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"deployments":[` +
 				`{"id":"goal_gone","name":"example","state":"deleted"},` +
