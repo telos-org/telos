@@ -77,12 +77,6 @@ func cmdRevisionAction(action string, args []string) {
 	if action == "redeploy" {
 		progress, completed = "Redeploying", "Redeploy complete."
 	}
-	if !*jsonOut {
-		printRevisionField(os.Stdout, "Name", session.Name)
-		printRevisionField(os.Stdout, "Goal", session.ID)
-		printRevisionField(os.Stdout, "Context", control.ContextName())
-		fmt.Fprintln(os.Stdout)
-	}
 	if *wait {
 		if !*jsonOut {
 			fmt.Fprintf(os.Stderr, "%s revision %d…\n", progress, source.Sequence)
@@ -103,7 +97,6 @@ func cmdRevisionAction(action string, args []string) {
 		fmt.Fprintln(os.Stdout, completed)
 	} else if err == nil {
 		fmt.Printf("%s requested for revision %d.\n", strings.ToUpper(action[:1])+action[1:], source.Sequence)
-		fmt.Fprintf(os.Stdout, "\nCheck history: telos history %s --context %s\n", session.ID, control.ContextName())
 	}
 	if err != nil {
 		exitWithError(err)

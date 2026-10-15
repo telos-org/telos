@@ -87,9 +87,6 @@ func cmdRevisionDiff(args []string) {
 		printJSON(result)
 		return
 	}
-	printRevisionField(os.Stdout, "Name", session.Name)
-	printRevisionField(os.Stdout, "Goal", session.ID)
-	printRevisionField(os.Stdout, "Context", control.ContextName())
 	printRevisionField(os.Stdout, "From", fmt.Sprintf("revision %d", from.Sequence))
 	toLabel := fmt.Sprintf("revision %d", to.Sequence)
 	if to.ID == page.CurrentRevisionID {

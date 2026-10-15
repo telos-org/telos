@@ -68,7 +68,7 @@ func cmdHistory(args []string) {
 		if err != nil {
 			exitWithError(err)
 		}
-		printRevisionDetail(os.Stdout, session, control.ContextName(), page, revision, capabilities, labels)
+		printRevisionDetail(os.Stdout, page, revision, capabilities, labels)
 		return
 	}
 	if *all {
@@ -97,7 +97,7 @@ func cmdHistory(args []string) {
 	if err != nil {
 		exitWithError(err)
 	}
-	printRevisionHistory(os.Stdout, session, control.ContextName(), page, labels)
+	printRevisionHistory(os.Stdout, session.ID, control.ContextName(), page, labels)
 }
 
 func revisionCommandTarget(fs *flag.FlagSet, contextValue string) (*cloud.Client, *cloud.SessionRecord, *cloud.Capabilities, error) {
@@ -168,22 +168,21 @@ func resolveRevision(ctx context.Context, control *cloud.Client, sessionID, sele
 	return nil, fmt.Errorf("revision %d was not found in Goal %s", number, sessionID)
 }
 
-func printRevisionHistory(out io.Writer, session *cloud.SessionRecord, contextName string, page *cloud.RevisionPage, labels map[string]string) {
-	printRevisionField(out, "Name", session.Name)
-	printRevisionField(out, "Goal", session.ID)
-	printRevisionField(out, "Context", contextName)
+func printRevisionHistory(out io.Writer, goalID, contextName string, page *cloud.RevisionPage, labels map[string]string) {
 	printRevisionField(out, "Current revision", labels[page.CurrentRevisionID])
 	fmt.Fprintln(out)
 	if len(page.Revisions) == 0 {
-		fmt.Fprintln(out, "No revisions in this history page.")
+		fmt.Fprintln(out, "No revisions.")
 		return
 	}
 	w := tabwriter.NewWriter(out, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(w, "REV\tACTION\tDATE\tAUTHOR\tSNAPSHOT\tMESSAGE")
+	hasCurrent := false
 	for _, revision := range page.Revisions {
 		label := strconv.Itoa(revision.Sequence)
 		if revision.ID == page.CurrentRevisionID {
 			label += "*"
+			hasCurrent = true
 		}
 		date := revision.CommittedAt
 		if len(date) > 10 {
@@ -192,16 +191,15 @@ func printRevisionHistory(out io.Writer, session *cloud.SessionRecord, contextNa
 		fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\n", label, revisionText(revision.Kind), revisionText(date), revisionAuthor(&revision), revisionText(revision.Snapshot.Status), revisionText(revision.Message))
 	}
 	_ = w.Flush()
-	fmt.Fprintln(out, "\n* Current revision")
+	if hasCurrent {
+		fmt.Fprintln(out, "\n* Current revision")
+	}
 	if page.NextBefore != nil {
-		fmt.Fprintf(out, "\nOlder revisions: telos history %s --context %s --before %d\n", session.ID, contextName, *page.NextBefore)
+		fmt.Fprintf(out, "\nOlder revisions: telos history %s --context %s --before %d\n", goalID, contextName, *page.NextBefore)
 	}
 }
 
-func printRevisionDetail(out io.Writer, session *cloud.SessionRecord, contextName string, page *cloud.RevisionPage, revision *cloud.Revision, capabilities *cloud.Capabilities, labels map[string]string) {
-	printRevisionField(out, "Name", session.Name)
-	printRevisionField(out, "Goal", session.ID)
-	printRevisionField(out, "Context", contextName)
+func printRevisionDetail(out io.Writer, page *cloud.RevisionPage, revision *cloud.Revision, capabilities *cloud.Capabilities, labels map[string]string) {
 	printRevisionField(out, "Revision", strconv.Itoa(revision.Sequence))
 	printRevisionField(out, "Revision ID", revision.ID)
 	printRevisionField(out, "Current revision", labels[page.CurrentRevisionID])
