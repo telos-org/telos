@@ -20,6 +20,9 @@ import (
 func TestResolveCloudInference(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDeploymentPlanPrerequisites(w, r) {
+			return
+		}
 		requests.Add(1)
 		if r.Header.Get("X-Telos-Inference-Version") != "2" {
 			t.Error("missing shared discovery version header")
@@ -110,6 +113,9 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			requests := make(chan map[string]json.RawMessage, 1)
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/deployments" && serveDeploymentPlanPrerequisites(w, r) {
+					return
+				}
 				switch {
 				case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3":
 					_ = json.NewEncoder(w).Encode(map[string]string{
@@ -122,15 +128,17 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 					_, _ = w.Write([]byte(`{"deployments":[]}`))
 				case r.Method == http.MethodGet && r.URL.Path == "/api/inference/connections":
 					_, _ = w.Write([]byte(`{"errors":{},"connections":[{"source":"subscription","id":"conn_rohan","name":"openai-rohan","provider":"chatgpt-codex","status":"connected"},{"source":"byok","status":"saved","id":"key_work","name":"Work Anthropic","provider":"anthropic"},{"source":"byok","status":"saved","id":"key_router","name":"Work/Router","provider":"openrouter"}]}`))
-				case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
+				case r.Method == http.MethodPost && r.URL.Path == "/api/deployment-plans":
 					var request map[string]json.RawMessage
 					if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
 						t.Errorf("decode deployment request: %v", err)
 						http.Error(w, "invalid request", http.StatusBadRequest)
 						return
 					}
-					requests <- request
-					_, _ = w.Write([]byte(`{"id":"sess_test","name":"demo","state":"provisioning"}`))
+					var create map[string]json.RawMessage
+					_ = json.Unmarshal(request["create"], &create)
+					requests <- create
+					_ = json.NewEncoder(w).Encode(testDeploymentPlan("apply", "applied"))
 				default:
 					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
 					http.NotFound(w, r)
@@ -146,7 +154,7 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 				t.Fatal(err)
 			}
 			captureStdout(t, func() {
-				cmdApply(append([]string{"@telos/demo:1.2.3", "--json"}, tt.flags...))
+				cmdApply(append([]string{"@telos/demo:1.2.3", "--json", "--yes", "--message", "Test inference"}, tt.flags...))
 			})
 
 			var request map[string]json.RawMessage
@@ -195,6 +203,9 @@ func inferenceTestServer(t *testing.T, overrides map[string]http.HandlerFunc) *h
 		}
 		if body, ok := responses[key]; ok {
 			_, _ = w.Write([]byte(body))
+			return
+		}
+		if serveDeploymentPlanPrerequisites(w, r) {
 			return
 		}
 		t.Errorf("unexpected request: %s", key)
@@ -284,7 +295,7 @@ func TestInferenceCLIProcess(t *testing.T) {
 	args := os.Args[index+1:]
 	switch args[0] {
 	case "apply":
-		cmdApply(args[1:])
+		cmdApply(append(args[1:], "--yes", "--message", "Test apply"))
 	case "plan":
 		cmdPlan(args[1:])
 	case "config":
@@ -298,11 +309,11 @@ func TestInferenceCLIProcess(t *testing.T) {
 func TestCloudApplyInferenceErrors(t *testing.T) {
 	var publications, deployments atomic.Int32
 	server := inferenceTestServer(t, map[string]http.HandlerFunc{
-		"POST /api/packages": func(w http.ResponseWriter, r *http.Request) {
+		"POST /api/deployment-plans/packages": func(w http.ResponseWriter, r *http.Request) {
 			publications.Add(1)
 			_, _ = w.Write([]byte(`{"ref":"@person/example:1.0.0"}`))
 		},
-		"POST /api/deployments": func(w http.ResponseWriter, r *http.Request) {
+		"POST /api/deployment-plans": func(w http.ResponseWriter, r *http.Request) {
 			deployments.Add(1)
 			w.WriteHeader(http.StatusUnprocessableEntity)
 			_, _ = w.Write([]byte(`{"detail":"model is unavailable for this connection"}`))
@@ -392,19 +403,16 @@ func TestCloudSessionModelMatchesModelSelection(t *testing.T) {
 	}
 }
 
-func TestCloudReceiptPreservesCustomManagedModel(t *testing.T) {
+func TestCloudDescriptionPreservesCustomManagedModel(t *testing.T) {
 	for _, tt := range []struct{ model, want string }{
 		{"openai/gpt-4.1", "openai/gpt-4.1"},
 		{"telos-bifrost/telos/default", "telos/default"},
 	} {
 		session := cloud.SessionRecord{ID: "sess_test", AgentModel: tt.model, Inference: &cloud.InferenceSummary{Source: "managed", Tier: "default", Model: tt.model}}
-		var description, receipt bytes.Buffer
+		var description bytes.Buffer
 		printCloudSessionDescription(&description, session)
-		printCloudSessionReceipt(&receipt, "created", &session)
-		for _, output := range []string{description.String(), receipt.String()} {
-			if got := configOutputValue(t, output, "Model"); got != tt.want {
-				t.Fatalf("displayed model = %q, want %q", got, tt.want)
-			}
+		if got := configOutputValue(t, description.String(), "Model"); got != tt.want {
+			t.Fatalf("displayed model = %q, want %q", got, tt.want)
 		}
 	}
 }

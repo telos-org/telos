@@ -424,68 +424,6 @@ func TestReadBundleResponseRejectsUnknownLengthOverLimit(t *testing.T) {
 	}
 }
 
-func TestClientCreateSession(t *testing.T) {
-	var gotBody map[string]any
-	var gotOrgID string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost || r.URL.Path != "/api/deployments" {
-			http.NotFound(w, r)
-			return
-		}
-		gotOrgID = r.Header.Get("X-Telos-Org-Id")
-		if r.Header.Get("User-Agent") != UserAgent {
-			t.Fatalf("user-agent: got %q", r.Header.Get("User-Agent"))
-		}
-		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
-			t.Fatal(err)
-		}
-		json.NewEncoder(w).Encode(map[string]any{
-			"id":             "sess_123",
-			"name":           "auth",
-			"state":          "provisioning",
-			"package_ref":    "@telos/auth:1.2.3",
-			"package_digest": "sha256:abc",
-			"created_at":     "now",
-			"updated_at":     "now",
-		})
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "test-token")
-	client.OrgID = "org_telos"
-	timeout := 1800
-	session, err := client.CreateSession(SessionCreateOptions{
-		Name:            "auth",
-		PackageRef:      "@telos/auth:1.2.3",
-		Inference:       &InferenceSelection{Source: "managed", Tier: "max"},
-		AgentThinking:   "high",
-		AgentTimeoutSec: &timeout,
-	})
-	if err != nil {
-		t.Fatalf("CreateSession: %v", err)
-	}
-	if session.ID != "sess_123" || session.Name != "auth" || session.State != "provisioning" {
-		t.Fatalf("session: got %+v", session)
-	}
-	if gotBody["name"] != "auth" ||
-		gotBody["package_ref"] != "@telos/auth:1.2.3" ||
-
-		gotBody["agent_thinking"] != "high" ||
-		gotBody["agent_timeout_sec"] != float64(1800) {
-		t.Fatalf("body: got %#v", gotBody)
-	}
-	if _, legacy := gotBody["agent_model"]; legacy {
-		t.Fatalf("creation serialized a legacy model: %#v", gotBody)
-	}
-	selection, ok := gotBody["inference"].(map[string]any)
-	if !ok || selection["source"] != "managed" || selection["tier"] != "max" {
-		t.Fatalf("inference selection: %#v", gotBody["inference"])
-	}
-	if gotOrgID != "org_telos" {
-		t.Fatalf("org header: got %q", gotOrgID)
-	}
-}
-
 func TestClientGetsAndDownloadsPackageVersion(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer test-token" {
@@ -524,63 +462,6 @@ func TestClientGetsAndDownloadsPackageVersion(t *testing.T) {
 	}
 	if string(bundle) != "package-bundle" {
 		t.Fatalf("bundle: got %q", bundle)
-	}
-}
-
-func TestClientUpdateSession(t *testing.T) {
-	var gotBodies []map[string]any
-	var gotOrgID string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPut || r.URL.Path != "/api/deployments/sess_123" {
-			http.NotFound(w, r)
-			return
-		}
-		gotOrgID = r.Header.Get("X-Telos-Org-Id")
-		var body map[string]any
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-			t.Fatal(err)
-		}
-		gotBodies = append(gotBodies, body)
-		json.NewEncoder(w).Encode(map[string]any{
-			"id":             "sess_123",
-			"name":           "auth",
-			"state":          "deploying",
-			"package_ref":    "@telos/auth:1.2.4",
-			"package_digest": "sha256:def",
-			"created_at":     "then",
-			"updated_at":     "now",
-		})
-	}))
-	defer srv.Close()
-
-	client := NewClient(srv.URL, "test-token")
-	client.OrgID = " org_telos "
-	session, err := client.UpdateSession("sess_123", SessionUpdateOptions{
-		PackageRef: "@telos/auth:1.2.4",
-	})
-	if err != nil {
-		t.Fatalf("UpdateSession: %v", err)
-	}
-	if session.ID != "sess_123" || session.PackageDigest != "sha256:def" || session.State != "deploying" {
-		t.Fatalf("session: got %+v", session)
-	}
-	if len(gotBodies) != 1 || gotBodies[0]["package_ref"] != "@telos/auth:1.2.4" {
-		t.Fatalf("body: got %#v", gotBodies)
-	}
-	if _, exists := gotBodies[0]["force"]; exists {
-		t.Fatalf("normal update sent force: %#v", gotBodies[0])
-	}
-	if _, err := client.UpdateSession("sess_123", SessionUpdateOptions{
-		PackageRef: "@telos/auth:1.2.4",
-		Force:      true,
-	}); err != nil {
-		t.Fatalf("forced UpdateSession: %v", err)
-	}
-	if len(gotBodies) != 2 || gotBodies[1]["force"] != true {
-		t.Fatalf("forced body: got %#v", gotBodies)
-	}
-	if gotOrgID != "org_telos" {
-		t.Fatalf("org header: got %q", gotOrgID)
 	}
 }
 

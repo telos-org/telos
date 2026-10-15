@@ -12,119 +12,37 @@ import (
 
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
-	"github.com/telos-org/telos/internal/spec"
 )
 
-func TestCompareCloudSessionSpecShowsDeployedDiff(t *testing.T) {
-	pkg := testApplyPackage(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/deployments/sess_123":
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "sess_123",
-				"name":           "demo",
-				"state":          "healthy",
-				"package_ref":    "@telos/demo:1.2.3",
-				"package_digest": pkg.Digest,
-				"created_at":     "then",
-				"updated_at":     "now",
-			})
-		case "/api/packages/telos/demo/versions/1.2.3/bundle":
-			_, _ = w.Write(pkg.Bytes)
-		default:
-			http.NotFound(w, r)
+func TestDeploymentPlanPreviewShowsChangedAndUnchangedSpecs(t *testing.T) {
+	for _, changed := range []bool{false, true} {
+		request := testDeploymentPlan("preview", "preview")
+		if !changed {
+			request.Preview.ProposedSpec = request.Preview.BaseSpec
 		}
-	}))
-	defer srv.Close()
-
-	proposed := []byte(`---
-name: demo
-version: 1.2.4
-platform: cloud
----
-
-# Goal
-
-Serve an updated demo.
-`)
-	comparison, err := compareCloudSessionSpec(
-		cloud.NewClient(srv.URL, "token"),
-		"sess_123",
-		proposed,
-	)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if comparison.currentRef != "@telos/demo:1.2.3" {
-		t.Fatalf("current ref: got %q", comparison.currentRef)
-	}
-	for _, want := range []string{
-		"--- deployed/SPEC.md",
-		"+++ proposed/SPEC.md",
-		"-version: 1.2.3",
-		"+version: 1.2.4",
-		"-Serve a demo.",
-		"+Serve an updated demo.",
-	} {
-		if !strings.Contains(comparison.diff, want) {
-			t.Fatalf("diff missing %q:\n%s", want, comparison.diff)
+		var out bytes.Buffer
+		printDeploymentPlanDetails(&out, &request)
+		if !changed {
+			if !strings.Contains(out.String(), "No spec changes.") || strings.Contains(out.String(), "--- deployed/") {
+				t.Fatalf("unchanged preview: %s", out.String())
+			}
+			continue
 		}
-	}
-}
-
-func TestPrintPlanPreviewShowsSessionDiff(t *testing.T) {
-	compiled := &spec.CompiledEnvironment{
-		Environment: &spec.EnvironmentSpec{Name: "demo"},
-		ContentHash: "8a8f0c21",
-	}
-	comparison := newSpecComparison(
-		"sess_123",
-		"@telos/demo:1.2.3",
-		[]byte("# Goal\n\nOld.\n"),
-		[]byte("# Goal\n\nNew.\n"),
-	)
-
-	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "personal", comparison)
-	text := out.String()
-	for _, want := range []string{
-		"Goal      sess_123",
-		"Current   @telos/demo:1.2.3",
-		"--- deployed/SPEC.md",
-		"+++ proposed/SPEC.md",
-		"-Old.",
-		"+New.",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("plan output missing %q:\n%s", want, text)
+		for _, want := range []string{"--- deployed/SPEC.md", "+++ proposed/SPEC.md", "-Serve a demo.", "+Serve an updated demo."} {
+			if !strings.Contains(out.String(), want) {
+				t.Fatalf("preview missing %q: %s", want, out.String())
+			}
 		}
-	}
-}
-
-func TestPrintPlanPreviewShowsNoSpecChanges(t *testing.T) {
-	compiled := &spec.CompiledEnvironment{
-		Environment: &spec.EnvironmentSpec{Name: "demo"},
-		ContentHash: "8a8f0c21",
-	}
-	markdown := []byte("# Goal\n\nUnchanged.\n")
-	comparison := newSpecComparison(
-		"sess_123",
-		"@telos/demo:1.2.3",
-		markdown,
-		markdown,
-	)
-
-	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "personal", comparison)
-	if !strings.Contains(out.String(), "No spec changes.") {
-		t.Fatalf("plan output:\n%s", out.String())
 	}
 }
 
 func TestPlanShowsCanonicalContext(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/deployments" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"deployments": []any{}})
+		if r.URL.Path != "/api/account/bootstrap" && serveDeploymentPlanPrerequisites(w, r) {
+			return
+		}
+		if r.URL.Path == "/api/deployment-plans" {
+			_ = json.NewEncoder(w).Encode(testDeploymentPlan("preview", "preview"))
 			return
 		}
 		if r.URL.Path != "/api/account/bootstrap" {
@@ -196,86 +114,44 @@ Serve a demo.
 }
 
 func TestPlanSessionJSONReportsUpdateWithoutCreate(t *testing.T) {
-	pkg := testApplyPackage(t)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	var plans int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if serveDeploymentPlanPrerequisites(w, r) {
+			return
+		}
 		switch r.URL.Path {
 		case "/api/deployments/sess_123":
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "sess_123",
-				"name":           "demo",
-				"state":          "healthy",
-				"package_ref":    "@telos/demo:1.2.3",
-				"package_digest": pkg.Digest,
-				"created_at":     "then",
-				"updated_at":     "now",
-			})
-		case "/api/packages/telos/demo/versions/1.2.3/bundle":
-			_, _ = w.Write(pkg.Bytes)
+			_, _ = w.Write([]byte(`{"id":"sess_123","current_revision_id":"rev_7"}`))
+		case "/api/deployment-plans":
+			plans++
+			var options cloud.DeploymentPlanOptions
+			_ = json.NewDecoder(r.Body).Decode(&options)
+			if options.Mode != "preview" || options.Create != nil || options.Update == nil || options.Update.ExpectedCurrentRevisionID != "rev_7" {
+				t.Errorf("preview=%+v", options)
+			}
+			_ = json.NewEncoder(w).Encode(testDeploymentPlan("preview", "preview"))
 		default:
+			t.Errorf("preview mutated deployment: %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
 		}
 	}))
-	defer srv.Close()
-	configureCloudTest(t, srv.URL)
-
-	specPath := filepath.Join(t.TempDir(), "SPEC.md")
-	markdown, _, err := spec.ApplyPackageSpec(pkg.Bytes)
-	if err != nil {
+	defer server.Close()
+	configureCloudTest(t, server.URL)
+	path := filepath.Join(t.TempDir(), "SPEC.md")
+	if err := os.WriteFile(path, []byte(testPlanSpec), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(specPath, markdown, 0o644); err != nil {
+	out := captureStdout(t, func() { cmdPlan([]string{path, "--goal", "sess_123", "--json"}) })
+	var receipt struct {
+		Operation string                    `json:"operation"`
+		Request   cloud.ChangeRequestRecord `json:"change_request"`
+		ReviewURL string                    `json:"review_url"`
+	}
+	if err := json.Unmarshal([]byte(out), &receipt); err != nil {
 		t.Fatal(err)
 	}
-	out := captureStdout(t, func() {
-		cmdPlan([]string{specPath, "--goal", "sess_123", "--json"})
-	})
-	var plan struct {
-		Spec    map[string]any `json:"spec"`
-		Session map[string]any `json:"session"`
-		Target  struct {
-			Operation string `json:"operation"`
-		} `json:"target"`
-		Change struct {
-			Current  planSpecState `json:"current"`
-			Proposed planSpecState `json:"proposed"`
-		} `json:"change"`
-	}
-	if err := json.Unmarshal([]byte(out), &plan); err != nil {
-		t.Fatal(err)
-	}
-	if plan.Target.Operation != "update" {
-		t.Fatalf("target: got %+v", plan.Target)
-	}
-	if _, ok := plan.Spec["lineage"]; ok {
-		t.Fatalf("spec lineage should be omitted: %#v", plan.Spec)
-	}
-	if _, ok := plan.Session["lineage"]; ok {
-		t.Fatalf("session lineage should be omitted: %#v", plan.Session)
-	}
-	if _, ok := plan.Spec["required_verifier_skills"]; ok {
-		t.Fatalf("plan should not expose internal verifier roles: %#v", plan.Spec)
-	}
-	if _, ok := plan.Spec["required_rubrics"]; !ok {
-		t.Fatalf("plan should expose required rubrics: %#v", plan.Spec)
-	}
-	var raw map[string]any
-	if err := json.Unmarshal([]byte(out), &raw); err != nil {
-		t.Fatal(err)
-	}
-	target := raw["target"].(map[string]any)
-	for _, key := range []string{"will_mutate", "will_create_session", "will_update_session"} {
-		if _, ok := target[key]; ok {
-			t.Fatalf("redundant target field %q should be omitted: %#v", key, target)
-		}
-	}
-	if _, ok := raw["user"]; ok {
-		t.Fatalf("plan should omit synthetic user metadata: %#v", raw["user"])
-	}
-	if plan.Change.Current.Version != "1.2.3" || plan.Change.Proposed.Version != "1.2.3" {
-		t.Fatalf("versions: current=%q proposed=%q", plan.Change.Current.Version, plan.Change.Proposed.Version)
-	}
-	if len(plan.Change.Current.Skills) != 0 || len(plan.Change.Proposed.Skills) != 0 {
-		t.Fatalf("undeclared skills were injected: current=%#v proposed=%#v", plan.Change.Current.Skills, plan.Change.Proposed.Skills)
+	if receipt.Operation != "preview" || receipt.Request.Mode != "preview" || receipt.Request.Preview == nil || receipt.ReviewURL == "" || plans != 1 {
+		t.Fatalf("receipt=%s plans=%d", out, plans)
 	}
 }
 
@@ -286,38 +162,15 @@ func configurePlanSkillsCatalogue(t *testing.T) string {
 	return catalogue
 }
 
-func TestCompareSessionSpecRejectsLocalSession(t *testing.T) {
-	_, err := compareSessionSpec("local_123", nil, planSpecState{}, "")
-	if err == nil || !strings.Contains(err.Error(), "only compares Telos Cloud Goals") {
-		t.Fatalf("error = %v, want local Goal rejection", err)
-	}
-}
-
 func TestPlanSpecStateCapturesResolvedChanges(t *testing.T) {
 	currentIntervalSpec := []byte("---\nname: demo\nversion: 1.0.0\ninterval: 5m\n---\n\n# Goal\n\nCurrent.\n")
 	proposedIntervalSpec := []byte("---\nname: demo\nversion: 1.1.0\ninterval: 10m\n---\n\n# Goal\n\nProposed.\n")
-	currentManifest := &spec.ApplyPackageManifest{Skills: map[string]spec.ApplyPackageSkillLock{
-		"verify-quality": {
-			Ref:    "@telos/verify-quality:1.0.0",
-			Digest: "sha256:current",
-		},
-	}}
-	proposedManifest := &spec.ApplyPackageManifest{Skills: map[string]spec.ApplyPackageSkillLock{
-		"verify-quality": {
-			Ref:     "@telos/verify-quality:1.1.0",
-			Digest:  "sha256:proposed",
-			Starred: true,
-		},
-	}}
-
-	current, err := planSpecStateFromMarkdown(currentIntervalSpec, currentManifest)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proposed, err := planSpecStateFromMarkdown(proposedIntervalSpec, proposedManifest)
-	if err != nil {
-		t.Fatal(err)
-	}
+	current := deploymentPlanState(string(currentIntervalSpec), []cloud.DeploymentPlanSkill{
+		{Name: "verify-quality", Ref: "@telos/verify-quality:1.0.0", Digest: "sha256:current"},
+	})
+	proposed := deploymentPlanState(string(proposedIntervalSpec), []cloud.DeploymentPlanSkill{
+		{Name: "verify-quality", Ref: "@telos/verify-quality:1.1.0", Digest: "sha256:proposed", Starred: true},
+	})
 	if current.IntervalSeconds == nil || *current.IntervalSeconds != 300 {
 		t.Fatalf("current interval = %#v", current.IntervalSeconds)
 	}

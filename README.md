@@ -89,11 +89,16 @@ telos plan SPEC.md --context personal
 After reviewing and approving the resolved action and context, apply it:
 
 ```bash
-telos apply SPEC.md --context personal
+telos apply SPEC.md --context personal --message "Create the reading list"
 ```
 
-`apply` returns a Goal ID when the revision is accepted for work. The work
-then continues in the background.
+`apply` shows the prepared changes and asks for confirmation. Scripts must pass
+`--yes`. Once confirmed, the work continues in the background; Ctrl-C or answering
+no leaves the proposal available for review in Cloud.
+
+To save a proposal for later, use `telos plan SPEC.md --out=change.plan
+--message "Create the reading list"`. `telos apply change.plan` confirms that
+exact proposal and rejects stale or replaced plans.
 
 After applying, use `telos list` to find the Goal and `telos describe` to
 check its status. Once the service is published, `describe` also prints its URL:
@@ -130,7 +135,7 @@ revision to the same Goal:
 
 ```bash
 telos plan SPEC.md --goal GOAL_ID --context personal
-telos apply SPEC.md --goal GOAL_ID --context personal
+telos apply SPEC.md --goal GOAL_ID --context personal --message "Describe the update"
 ```
 
 Goal names are unique within a context: applying a spec whose name is already

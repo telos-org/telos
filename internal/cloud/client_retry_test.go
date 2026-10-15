@@ -646,30 +646,33 @@ func TestNetworkCloudMutationResponseLossNeverReplays(t *testing.T) {
 		name   string
 		method string
 		path   string
-		call   func(*Client) (*SessionRecord, error)
+		call   func(*Client) error
 	}{
 		{
-			name:   "create",
+			name:   "plan",
 			method: http.MethodPost,
-			path:   "/api/deployments",
-			call: func(client *Client) (*SessionRecord, error) {
-				return client.CreateSession(SessionCreateOptions{Name: "test", PackageRef: "@test/package:1.0.0"})
+			path:   "/api/deployment-plans",
+			call: func(client *Client) error {
+				_, err := client.CreateDeploymentPlan(DeploymentPlanOptions{Mode: "apply", Create: &SessionCreateOptions{Name: "test", PackageRef: "@test/package:1.0.0"}})
+				return err
 			},
 		},
 		{
-			name:   "update",
-			method: http.MethodPut,
-			path:   "/api/deployments/sess_123",
-			call: func(client *Client) (*SessionRecord, error) {
-				return client.UpdateSession("sess_123", SessionUpdateOptions{PackageRef: "@test/package:2.0.0", Force: true})
+			name:   "confirm",
+			method: http.MethodPost,
+			path:   "/api/deployments/sess_123/change-requests/cr_saved/confirm",
+			call: func(client *Client) error {
+				_, err := client.ConfirmChangeRequest(ChangeRequestRecord{ID: "cr_saved", DeploymentID: "sess_123", PreparedPlanID: "cp_saved"})
+				return err
 			},
 		},
 		{
 			name:   "delete",
 			method: http.MethodDelete,
 			path:   "/api/deployments/sess_123",
-			call: func(client *Client) (*SessionRecord, error) {
-				return client.DeleteSession("sess_123")
+			call: func(client *Client) error {
+				_, err := client.DeleteSession("sess_123")
+				return err
 			},
 		},
 	}
@@ -689,13 +692,12 @@ func TestNetworkCloudMutationResponseLossNeverReplays(t *testing.T) {
 						breakNetworkResponse(t, w, failure, http.StatusOK, `{"id":"sess_123","state":`, headersObserved)
 						return
 					}
-					_, _ = io.WriteString(w, `{"id":"duplicate-mutation","state":"healthy"}`)
+					_, _ = io.WriteString(w, `{"id":"duplicate-mutation","deployment_id":"sess_123","status":"applied","state":"healthy"}`)
 				}))
 				t.Cleanup(server.Close)
 				client := newNetworkClient(t, server.URL, headersObserved)
-				record, err := test.call(client)
-				if err == nil || record != nil {
-					t.Fatalf("lost mutation response did not remain an error: record=%+v, err=%v", record, err)
+				if err := test.call(client); err == nil {
+					t.Fatal("lost mutation response did not remain an error")
 				}
 				if got := mutations.Load(); got != 1 {
 					t.Fatalf("accepted %s was replayed after response loss: %d mutations", test.name, got)

@@ -172,109 +172,76 @@ func TestPullPackageDoesNotHidePackageErrors(t *testing.T) {
 
 func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	pkg := testApplyPackage(t)
-	var published bool
-	var forcedUpdate bool
-	var listed int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3":
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"scope":      "telos",
-				"name":       "demo",
-				"version":    "1.2.3",
-				"ref":        "@telos/demo:1.2.3",
-				"digest":     pkg.Digest,
-				"created_at": "now",
-			})
-		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3/bundle":
+	var creates, updates, confirmations int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/packages", "/api/skills", "/api/deployment-plans/packages", "/api/deployment-plans/skills":
+			t.Errorf("exact Registry package was republished: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected publication", http.StatusBadRequest)
+			return
+		}
+		if serveDeploymentPlanPrerequisites(w, r) {
+			return
+		}
+		switch r.URL.Path {
+		case "/api/packages/telos/demo/versions/1.2.3":
+			_ = json.NewEncoder(w).Encode(map[string]string{"scope": "telos", "name": "demo", "version": "1.2.3", "ref": "@telos/demo:1.2.3", "digest": pkg.Digest})
+		case "/api/packages/telos/demo/versions/1.2.3/bundle":
 			_, _ = w.Write(pkg.Bytes)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
-			listed++
-			_ = json.NewEncoder(w).Encode(map[string]any{"deployments": []any{}})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/packages":
-			published = true
-			http.Error(w, "unexpected publish", http.StatusInternalServerError)
-		case r.Method == http.MethodPost && r.URL.Path == "/api/deployments":
-			var request map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+		case "/api/deployments/sess_registry":
+			_, _ = w.Write([]byte(`{"id":"sess_registry","package_ref":"@telos/demo:1.2.2","current_revision_id":"rev_7"}`))
+		case "/api/deployment-plans":
+			var options cloud.DeploymentPlanOptions
+			_ = json.NewDecoder(r.Body).Decode(&options)
+			if options.Mode != "apply" {
+				t.Errorf("unexpected mode: %+v", options)
+			}
+			if options.Create != nil {
+				creates++
+				if options.Create.Name != "demo" || options.Create.PackageRef != "@telos/demo:1.2.3" {
+					t.Errorf("create=%+v", options.Create)
+				}
+			} else {
+				updates++
+				if options.DeploymentID != "sess_registry" || options.Update.PackageRef != "@telos/demo:1.2.3" || options.Update.ExpectedCurrentRevisionID != "rev_7" || !options.Update.Force {
+					t.Errorf("update=%+v", options)
+				}
+			}
+			request := testDeploymentPlan("apply", "awaiting_confirmation")
+			request.PreparedPlanID = "cp_registry"
+			_ = json.NewEncoder(w).Encode(request)
+		case "/api/deployments/sess_123/change-requests/cr_saved/confirm":
+			confirmations++
+			var body map[string]json.RawMessage
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 				t.Fatal(err)
 			}
-			if request["name"] != "demo" || request["package_ref"] != "@telos/demo:1.2.3" {
-				t.Fatalf("deployment request = %#v", request)
+			if string(body["expected_plan_id"]) != `"cp_registry"` || string(body["expected_current_revision_id"]) != `"rev_7"` {
+				t.Errorf("confirmation lost reviewed identity: %v", body)
 			}
-			w.WriteHeader(http.StatusCreated)
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id":             "sess_registry",
-				"name":           "demo",
-				"state":          "provisioning",
-				"package_ref":    "@telos/demo:1.2.3",
-				"package_digest": pkg.Digest,
-				"created_at":     "then",
-				"updated_at":     "now",
-			})
-		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_registry":
-			var request map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
-				t.Fatal(err)
-			}
-			if len(request) != 2 || request["package_ref"] != "@telos/demo:1.2.3" || request["force"] != true {
-				t.Fatalf("forced deployment request = %#v", request)
-			}
-			forcedUpdate = true
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"id":             "sess_registry",
-				"name":           "demo",
-				"state":          "deploying",
-				"package_ref":    "@telos/demo:1.2.3",
-				"package_digest": pkg.Digest,
-				"created_at":     "then",
-				"updated_at":     "now",
-			})
+			request := testDeploymentPlan("apply", "applied")
+			request.PreparedPlanID = "cp_registry"
+			_ = json.NewEncoder(w).Encode(request)
 		default:
+			t.Errorf("registry apply tried to republish or bypass the plan API: %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
 		}
 	}))
-	defer srv.Close()
-	configureCloudTest(t, srv.URL)
+	defer server.Close()
+	configureCloudTest(t, server.URL)
 	t.Setenv("TELOS_CONTEXT", "")
-
-	out := captureStdout(t, func() {
-		cmdApply([]string{"@telos/demo:1.2.3", "--json"})
-	})
-	if published {
-		t.Fatal("registry apply republished the package")
+	for _, args := range [][]string{
+		{"@telos/demo:1.2.3", "--json", "--yes", "--message", "Deploy the reading list"},
+		{"@telos/demo:1.2.3", "--goal", "sess_registry", "--force", "--json", "-y", "-m", "Deploy the reading list"},
+	} {
+		out := captureStdout(t, func() { cmdApply(args) })
+		var result map[string]any
+		if err := json.Unmarshal([]byte(out), &result); err != nil || result["operation"] != "applied" || result["context"] != "personal" || result["review_url"] != "https://example.com/changes/cr_saved" {
+			t.Fatalf("receipt=%s err=%v", out, err)
+		}
 	}
-	var result map[string]any
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		t.Fatalf("apply JSON: %v\n%s", err, out)
-	}
-	if result["operation"] != "created" || result["context"] != "personal" {
-		t.Fatalf("apply result = %#v", result)
-	}
-	if listed != 1 {
-		t.Fatalf("create checked for an existing Goal %d times, want 1", listed)
-	}
-
-	out = captureStdout(t, func() {
-		cmdApply([]string{
-			"@telos/demo:1.2.3",
-			"--goal", "sess_registry",
-			"--force",
-			"--json",
-		})
-	})
-	if !forcedUpdate {
-		t.Fatal("forced registry apply did not update the deployment")
-	}
-	if listed != 1 {
-		t.Fatal("an update through --goal checked for a duplicate name")
-	}
-	result = map[string]any{}
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		t.Fatalf("forced apply JSON: %v\n%s", err, out)
-	}
-	if result["operation"] != "updated" || result["context"] != "personal" {
-		t.Fatalf("forced apply result = %#v", result)
+	if creates != 1 || updates != 1 || confirmations != 2 {
+		t.Fatalf("creates=%d updates=%d confirmations=%d", creates, updates, confirmations)
 	}
 }
 

@@ -6,6 +6,8 @@ go_library(
         "account.go",
         "cliauth.go",
         "client.go",
+        "change_requests.go",
+        "deployment_plans.go",
         "costs.go",
         "credentials.go",
         "credits.go",
@@ -27,6 +29,7 @@ go_test(
         "cliauth_test.go",
         "client_retry_test.go",
         "client_test.go",
+        "deployment_plans_test.go",
     ],
     embed = [":cloud"],
     deps = [

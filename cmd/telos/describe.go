@@ -77,9 +77,13 @@ func describeCloudGoal(
 	followUp string,
 	jsonOut bool,
 ) {
-	var control *cloud.Client
-	if session.Billing == nil || billedByProvider(*session) {
-		control, _ = cloud.ControlClientForContext(contextOverride)
+	control, err := cloud.ControlClientForContext(contextOverride)
+	if err != nil {
+		exitWithError(err)
+	}
+	requests, err := pendingCloudChangeRequests(control, session.ID)
+	if err != nil {
+		exitWithError(fmt.Errorf("read change requests: %w", err))
 	}
 	if control != nil && session.Billing == nil {
 		if withBilling, err := control.GetSessionWithBilling(session.ID); err == nil {
@@ -88,10 +92,11 @@ func describeCloudGoal(
 	}
 	cost := goalCosts(control, []cloud.SessionRecord{*session})[0]
 	if jsonOut {
-		printCloudSessionJSON(session, contextName, cost)
+		printCloudSessionJSON(session, contextName, cost, requests...)
 		return
 	}
 	printCloudSessionDescriptionForContext(os.Stdout, *session, contextName, cost, followUp)
+	printPendingCloudChangeRequests(os.Stdout, control, requests)
 }
 
 // cloudSessionJSON is a Cloud Goal as describe and list print it. Callers
@@ -114,15 +119,18 @@ func printCloudSessionJSON(
 	session *cloud.SessionRecord,
 	contextName string,
 	cost *goalCost,
+	requests ...cloud.ChangeRequestRecord,
 ) {
 	record := newCloudSessionJSON(session)
 	record.Cost = cost
 	printJSON(struct {
 		cloudSessionJSON
-		Context string `json:"context,omitempty"`
+		Context               string                      `json:"context,omitempty"`
+		PendingChangeRequests []cloud.ChangeRequestRecord `json:"pending_change_requests,omitempty"`
 	}{
-		cloudSessionJSON: record,
-		Context:          contextName,
+		cloudSessionJSON:      record,
+		Context:               contextName,
+		PendingChangeRequests: requests,
 	})
 }
 
@@ -162,7 +170,11 @@ func printCloudSessionDescriptionForContext(
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
 	printSummaryField(out, "Goal", session.ID)
-	printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
+	if session.State == "pending" && session.CurrentRevisionID == "" {
+		printSummaryField(out, "Revision", "not deployed yet")
+	} else {
+		printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
+	}
 	printCloudInferenceSummary(out, session)
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
@@ -187,7 +199,7 @@ func needsAttentionNextStep(goalID, followUp string) string {
 		contextFlag = " --context " + followUp
 	}
 	return fmt.Sprintf(
-		"Fix the spec, then: telos apply SPEC.md --goal %s%s, or telos delete %s%s",
+		"Fix the spec, then: telos apply SPEC.md --goal %s%s --message \"Describe the fix\", or telos delete %s%s",
 		goalID, contextFlag, goalID, contextFlag,
 	)
 }
@@ -212,6 +224,9 @@ func shortRevision(digest string) string {
 func cloudSessionReason(session cloud.SessionRecord) string {
 	if session.FailureReason != nil && strings.TrimSpace(*session.FailureReason) != "" {
 		return strings.TrimSpace(*session.FailureReason)
+	}
+	if session.State == "pending" && session.CurrentRevisionID == "" {
+		return strings.TrimSpace(session.StatusReason)
 	}
 	switch strings.ToLower(strings.TrimSpace(cloudSessionDisplayStatus(session))) {
 	case "needs_attention", "needs attention", "failed", "stopped":

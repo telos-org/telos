@@ -219,6 +219,8 @@ func TestDescribeReadsTheGoalsCostInItsContext(t *testing.T) {
 			orgs = append(orgs, r.URL.Path+" "+r.Header.Get("X-Telos-Org-Id"))
 		}
 		switch r.URL.Path {
+		case "/api/capabilities":
+			_, _ = w.Write([]byte(`{}`))
 		case "/api/account/bootstrap":
 			_, _ = w.Write([]byte(`{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","handle":"person","role":"owner"},{"id":"org_telos","handle":"telos","role":"owner"}]}`))
 		case "/api/deployments/goal_key":
@@ -281,7 +283,7 @@ func TestDescribeEndsWithCostBeforeTheReason(t *testing.T) {
 	want := "Cloud     $1.25 (compute $1.00, storage $0.25)\n" +
 		"Inference $3.40 (Anthropic API key)\n" +
 		"Reason    provider rejected the API key\n" +
-		"Next      Fix the spec, then: telos apply SPEC.md --goal goal_key, or telos delete goal_key"
+		"Next      Fix the spec, then: telos apply SPEC.md --goal goal_key --message \"Describe the fix\", or telos delete goal_key"
 	if tail != want {
 		t.Fatalf("describe ends with:\n%s\nwant:\n%s", tail, want)
 	}

@@ -23,11 +23,11 @@ func TestApplyAndPlanRefuseADuplicateGoalName(t *testing.T) {
 				`{"id":"goal_live","name":"example","state":"running","status":"ready"},` +
 				`{"id":"goal_other","name":"other","state":"running","status":"ready"}]}`))
 		},
-		"POST /api/packages": func(w http.ResponseWriter, r *http.Request) {
+		"POST /api/deployment-plans/packages": func(w http.ResponseWriter, r *http.Request) {
 			publications.Add(1)
 			_, _ = w.Write([]byte(`{"ref":"@person/example:1.0.0"}`))
 		},
-		"POST /api/deployments": func(w http.ResponseWriter, r *http.Request) {
+		"POST /api/deployment-plans": func(w http.ResponseWriter, r *http.Request) {
 			deployments.Add(1)
 			http.Error(w, "unexpected create", http.StatusInternalServerError)
 		},
@@ -50,7 +50,11 @@ func TestApplyAndPlanRefuseADuplicateGoalName(t *testing.T) {
 			process.Env = append(os.Environ(), "TELOS_TEST_INFERENCE_COMMAND=1")
 			out, err := process.CombinedOutput()
 			want := "error: a Goal named example already exists in personal (goal_live)\n" +
-				"To update it: telos " + command + " SPEC.md --goal goal_live\n"
+				"To update it: telos " + command + " SPEC.md --goal goal_live"
+			if command == "apply" {
+				want += ` --message "Describe the change"`
+			}
+			want += "\n"
 			if err == nil || !strings.Contains(string(out), want) {
 				t.Fatalf("err=%v output=%s\nwant %q", err, out, want)
 			}
@@ -71,7 +75,7 @@ func TestDuplicateGoalErrorNamesTheContextWhenNeeded(t *testing.T) {
 		followUp: "@team",
 	}
 	want := "a Goal named reading-list already exists in @team (goal_c7d2f0a4e8)\n" +
-		"To update it: telos apply 'specs/reading list.md' --goal goal_c7d2f0a4e8 --context @team"
+		"To update it: telos apply 'specs/reading list.md' --goal goal_c7d2f0a4e8 --context @team --message \"Describe the change\""
 	if err.Error() != want {
 		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
