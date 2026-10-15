@@ -174,6 +174,12 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	pkg := testApplyPackage(t)
 	var creates, updates, confirmations int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/packages", "/api/skills", "/api/deployment-plans/packages", "/api/deployment-plans/skills":
+			t.Errorf("exact Registry package was republished: %s %s", r.Method, r.URL.Path)
+			http.Error(w, "unexpected publication", http.StatusBadRequest)
+			return
+		}
 		if serveDeploymentPlanPrerequisites(w, r) {
 			return
 		}

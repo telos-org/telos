@@ -172,8 +172,8 @@ func stageCloudPlanPackage(control *cloud.Client, input cloudPlanInput) (*cloud.
 	}
 	var record *cloud.PackageVersionRecord
 	var name string
-	err := withPlanRegistrySkills(path, input.contextOverride, func() error {
-		pkg, err := packageSpec(path, input.contextOverride)
+	err := withPlanRegistrySkills(path, control, func() error {
+		pkg, err := compileSpecPackage(path)
 		if err != nil {
 			return err
 		}

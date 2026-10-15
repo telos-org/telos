@@ -157,6 +157,11 @@ func packageSpec(input, contextOverride string) (*specPackage, error) {
 	if err := prepareRegistrySkillsForContext(path, contextOverride); err != nil {
 		return nil, err
 	}
+	return compileSpecPackage(path)
+}
+
+// compileSpecPackage builds from already prepared skills without network I/O.
+func compileSpecPackage(path string) (*specPackage, error) {
 	compiled, err := spec.CompileEnvironment(path)
 	if err != nil {
 		return nil, err

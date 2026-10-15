@@ -39,7 +39,7 @@ func prepareRegistrySkillsForContext(specPath, contextOverride string) error {
 
 func withPlanRegistrySkills(
 	specPath string,
-	contextOverride string,
+	client *cloud.Client,
 	compile func() error,
 ) error {
 	refs, err := spec.RegistrySkillRefs(specPath)
@@ -75,8 +75,12 @@ func withPlanRegistrySkills(
 		}
 	}()
 
-	if err := prepareRegistrySkillsForContext(specPath, contextOverride); err != nil {
-		return err
+	for _, ref := range refs {
+		if ref.Version != "" && !registrySkillCached(ref) {
+			if err := cacheRegistrySkill(client, ref); err != nil {
+				return err
+			}
+		}
 	}
 	return compile()
 }
