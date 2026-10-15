@@ -88,6 +88,8 @@ func testDeploymentPlan(mode, status string) cloud.ChangeRequestRecord {
 // endpoint themselves so assertions inspect actual client payloads.
 func serveDeploymentPlanPrerequisites(w http.ResponseWriter, r *http.Request) bool {
 	switch r.URL.Path {
+	case "/api/deployments":
+		_, _ = w.Write([]byte(`{"deployments":[]}`))
 	case "/api/capabilities":
 		_, _ = w.Write([]byte(`{"deployment_plans":true,"deployment_change_requests":true}`))
 	case "/api/deployment-plans/access":
@@ -475,7 +477,7 @@ func TestSnapshotChoiceAfterLostConfirmationResponse(t *testing.T) {
 	}
 }
 
-func TestInteractiveNoEOFAndCancellationDiscardOnlyUnstartedRequest(t *testing.T) {
+func TestInteractiveNoEOFAndCancellationLeaveRemoteRequestUntouched(t *testing.T) {
 	for _, tt := range []struct {
 		name, input string
 		canceled    bool
@@ -483,14 +485,11 @@ func TestInteractiveNoEOFAndCancellationDiscardOnlyUnstartedRequest(t *testing.T
 		{name: "no", input: "no\n"}, {name: "EOF"}, {name: "partial yes then EOF", input: "yes"}, {name: "interrupt queued", canceled: true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			var discardCount int
+			var mutationCount int
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if !strings.HasSuffix(r.URL.Path, "/discard") {
-					t.Errorf("unexpected action: %s %s", r.Method, r.URL.Path)
-				}
-				discardCount++
-				request := testDeploymentPlan("apply", "discarded")
-				_ = json.NewEncoder(w).Encode(request)
+				mutationCount++
+				t.Errorf("stopping the terminal touched the remote request: %s %s", r.Method, r.URL.Path)
+				http.NotFound(w, r)
 			}))
 			defer server.Close()
 			initial := testDeploymentPlan("apply", "awaiting_confirmation")
@@ -503,8 +502,8 @@ func TestInteractiveNoEOFAndCancellationDiscardOnlyUnstartedRequest(t *testing.T
 			}
 			_, err := awaitCloudApply(ctx, cloud.NewClient(server.URL, "token"), &initial, false,
 				strings.NewReader(tt.input), io.Discard, io.Discard, time.Second)
-			if err == nil || !strings.Contains(err.Error(), "discarded") || discardCount != 1 {
-				t.Fatalf("err=%v discards=%d", err, discardCount)
+			if err == nil || !strings.Contains(err.Error(), "stopped waiting") || mutationCount != 0 {
+				t.Fatalf("err=%v mutations=%d", err, mutationCount)
 			}
 		})
 	}
@@ -644,7 +643,7 @@ func TestCLIPlanApplySubprocess(t *testing.T) {
 	}
 }
 
-func TestCLIErrorsBeforeAnyNetworkForMissingConfirmationAndLocalOut(t *testing.T) {
+func TestCLIRequiresConfirmationBeforeAnyNetwork(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("invalid invocation made API call: %s %s", r.Method, r.URL.Path)
 		http.NotFound(w, r)
@@ -653,16 +652,14 @@ func TestCLIErrorsBeforeAnyNetworkForMissingConfirmationAndLocalOut(t *testing.T
 	configureCloudTest(t, server.URL)
 	specPath := filepath.Join(t.TempDir(), "SPEC.md")
 	_ = os.WriteFile(specPath, []byte(testPlanSpec), 0o600)
-	localPath := filepath.Join(t.TempDir(), "SPEC.md")
-	_ = os.WriteFile(localPath, []byte(strings.Replace(testPlanSpec, "platform: cloud", "platform: local", 1)), 0o600)
 	for _, args := range [][]string{
-		{"apply", specPath, "--message", "Update the demo"}, {"apply", specPath, "--json", "--message", "Update the demo"}, {"plan", localPath, "--out=local.plan"},
+		{"apply", specPath, "--message", "Update the demo"}, {"apply", specPath, "--json", "--message", "Update the demo"},
 	} {
 		command := exec.Command(os.Args[0], "-test.run=^TestCLIPlanApplySubprocess$")
 		encoded, _ := json.Marshal(args)
 		command.Env = append(os.Environ(), "TELOS_TEST_PLAN_COMMAND="+string(encoded))
 		output, err := command.CombinedOutput()
-		if err == nil || !strings.Contains(string(output), "error:") {
+		if err == nil || !strings.Contains(string(output), "interactive confirmation is unavailable") {
 			t.Fatalf("args=%v err=%v output=%s", args, err, output)
 		}
 	}

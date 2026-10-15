@@ -40,7 +40,7 @@ func (c *Client) ListInferenceConnections() ([]InferenceConnection, error) {
 		return nil, err
 	}
 	if result.Errors == nil {
-		return nil, fmt.Errorf("Cloud does not support unified inference discovery; update Cloud before selecting a named connection")
+		return nil, fmt.Errorf("Cloud does not support unified inference discovery; update Cloud before selecting a saved API key or subscription")
 	}
 	var failures []error
 	for source, message := range result.Errors {

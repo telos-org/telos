@@ -1,29 +1,42 @@
 ---
 title: Use Telos
-description: Each Goal keeps its spec, revisions, deployment, and verification evidence together.
+description: Get started with building on Telos.
 group: Getting started
 ---
 
-# Use Telos
+Telos is a goal-oriented programming system. Telos treats the goal specification as the source of truth, and background agents own the software lifecycle beneath it.
 
-Telos is a goal-oriented programming system. You describe what the software
-should do in `SPEC.md`; Telos assigns agents to implement, run, and verify the
-current revision.
+Implementations can change as the Goal evolves,
+while its history and the evidence that it meets its spec stay attached to the same Goal.
 
-The spec is the durable source. Implementations can change as the Goal evolves,
-while its session, deployment, history, and evidence remain connected.
-
-This guide follows one small service from its first spec through a live update.
+This guide walks one Goal through its full lifecycle on Telos.
 Generated IDs, digests, paths, and URLs in the transcripts are illustrative;
 the command and field shapes match the current CLI.
 
-## Sign in and choose a context
+## Install
 
-Install Telos first if needed. For first-time interactive setup, authenticate
-and inspect the available Cloud contexts as shown below. If you already have
-a valid saved login, proceed to `telos config`. Agents and CI can instead
-supply `TELOS_AUTH_TOKEN` and skip `telos login`; see
-[Cloud authentication](cloud.md#authenticate).
+Install Telos with:
+
+```console
+$ curl -fsSL https://usetelos.ai/install.sh | sh
+```
+
+This installs the `telos` binary and the `telos-cli` agent skill on your machine. Telos is built for the agent experience, and can be driven entirely through your coding agent of choice. Check the installed version with:
+
+```console
+$ telos --version
+```
+
+To update your installation later:
+
+```console
+$ telos update            # the latest release
+$ telos update <version>  # a specific release
+```
+
+## Sign in
+
+For first-time interactive setup, authenticate with Telos Cloud as shown below.
 
 ```console
 $ telos login
@@ -31,28 +44,38 @@ Opening your browser to approve this login...
 If it doesn't open, visit this link on any device: https://usetelos.ai/cli-auth?code=...
 Waiting for approval...
 logged in to https://api.usetelos.ai as alice@example.com
-
-$ telos config
-Config file     ~/.telos/config.yaml
-Endpoint        https://api.usetelos.ai
-Authentication  valid
-Context         personal
-Workspace model telos/default
-Connections
 ```
 
-[Install Telos](install.md) covers first-time setup and PATH repair. This
-walkthrough uses the personal context explicitly on every Cloud command.
+To validate your signed-in configuration, run:
 
-## Describe the Goal
+```console
+$ telos config
+Config file      ~/.telos/config.yaml
+Endpoint         https://api.usetelos.ai
+Authentication   valid
+Context          personal
+Workspace model  telos/default
+Credits          $50.00
+Inference
+  telos  Managed  telos/default, telos/max
+Credentials
+  example-api-key
+```
 
-Create `SPEC.md`:
+`telos config` is useful to see the active context, the default workspace model, credits left, configured inference providers (see [Models](models.md) for more), and credentials (see [Credentials](environment.md#credentials) for more).
+
+A context is the workspace your commands act in: `personal`, or a team's `@handle`.
+
+Congratulations! You are now ready to run your Goals on Telos.
+
+## Write a goal specification
+
+Start by writing a preliminary `SPEC.md` for your service:
 
 ```markdown
 ---
 name: reading-list
 version: 0.1.0
-platform: cloud
 ---
 
 # Goal
@@ -69,183 +92,201 @@ Run a public service for a shared reading list.
   returns it.
 ```
 
-The contract names the behavior that matters without choosing a framework,
-database, or deployment layout. Before applying, confirm that the service fits
-the [managed Cloud runtime](cloud.md). This one does: a small interpreted
-service can be delivered from source, and environment-local persistent storage
-can satisfy its restart requirement.
+At a framework level, the above example covers the minimal required items. [Goals](goals.md) walks through everything else a goal specification can include: frontmatter, skills, rubrics, and packages.
 
-[Write a SPEC.md](goals.md) covers every supported frontmatter field and the
-boundary between a desired outcome and an available platform capability.
+## Plan it
 
-## Preview the first revision
+Once you are happy with the goal specification, `telos plan` validates the spec and shows what applying it would change, without changing anything.
 
-`plan` validates your spec and saves a preview in Cloud without deploying:
-
-```bash
-telos plan SPEC.md --context personal
+```console
+$ telos plan SPEC.md
+Spec      reading-list
+Version   0.1.0
+Context   personal
 ```
 
-The terminal shows the proposed spec and skill changes and a dashboard link.
-The initial plan compares your spec with an empty deployment. Anyone with the
-appropriate access can inspect the preview, but it cannot be applied directly.
-Add `--out=change.plan --message "Launch the reading list"` to save an immutable
-plan in a Change Request for later confirmation, even when requests are optional.
+The first plan has no deployed version to compare against, so it shows the Goal's name, version, and context.
 
 ## Apply it
 
-```bash
-telos apply SPEC.md --message "Launch the reading list" --context personal
-```
-
-For a new deployment, this displays a fresh plan and asks
-`Apply these changes? Type yes to confirm:`. Type `yes` to proceed, or apply the
-same plan through its dashboard link. Any workspace member can create a new
-deployment, and creation starts directly without a Change Request. For authorized
-noninteractive execution, use `--yes --json`.
-
-On an existing deployment, authorized editors can apply directly unless its
-Settings require Change Requests. Protected updates open a request with an
-immediately prepared plan and need owner/admin confirmation. Use `plan --out` to save a request for someone
-else to confirm, whether or not protection is enabled.
-
-The receipt identifies the plan or request, session, dashboard URL, and resulting
-revision when available. Applying or applied does not mean that the agent has
-finished verification. Once execution starts, follow the deployment using its
-session ID and selected context:
-
-```bash
-telos describe sess_c7d2f0a4e8 --context personal --json
-telos logs sess_c7d2f0a4e8 --context personal
-```
-
-[Change Requests](change-requests.md) explains exact plans, concurrent requests,
-permissions, deployment settings, and JSON receipts. Cloud plan and apply
-require a compatible server; older servers return an upgrade error.
-[The Goal lifecycle](lifecycle.md) gives the observation deadline, stopping
-conditions, and evidence rules after execution starts.
-
-## Observe `ready`
-
-When reconciliation succeeds, `describe` reports the accepted revision. The
-public route is published after its own surface probe; once that succeeds,
-`describe` also includes `Service`:
+Once the plan looks good, use `telos apply` to deploy the spec to Telos Cloud.
 
 ```console
-$ telos describe sess_c7d2f0a4e8 --context personal
+$ telos apply SPEC.md
+created reading-list
+
+Status    working
+Goal      goal_c7d2f0a4e8
+Revision  sha256:8f21c47a91ee
+Model     telos/default
+Thinking  medium
+Context   personal
+Logs      telos logs goal_c7d2f0a4e8
+```
+
+The `apply` command returns immediately and starts the Goal in the cloud.
+
+## Watch it work
+
+You can monitor your active Goal at different levels of detail and verbosity.
+
+For a one-line overview of all running Goals:
+
+```console
+$ telos list
+NAME          STATUS   ID
+reading-list  working  goal_c7d2f0a4e8
+```
+
+For a description of a specific Goal, run `telos describe goal_c7d2f0a4e8`.
+
+For scripts and agents, `telos describe --json` returns the same information as JSON.
+
+To follow the agent's work in detail:
+
+```console
+$ telos logs goal_c7d2f0a4e8
+...
+[2026-10-08T17:02:11Z] [INFO] Working on the spec requirements
+[2026-10-08T17:06:48Z] [INFO] Stood up POST /books and GET /books per goal requirements
+[2026-10-08T17:11:23Z] [INFO] Stored the reading list in PostgreSQL backed by persistent storage
+[2026-10-08T17:14:05Z] [INFO] Checking the result against the spec
+...
+```
+
+Add `--follow` to keep printing new activity as it happens, until the Goal stops or you press Ctrl-C.
+
+`telos list` and `telos describe` report one of four statuses. When a Goal needs attention or has stopped, `describe` also shows why. Here's how to interpret them:
+
+| Status | Meaning |
+|---|---|
+| `working` | Telos is preparing the Goal's [environment](environment.md), implementing the current spec, or verifying it. |
+| `ready` | The system accepted the current Goal, and the service is live. |
+| `needs_attention` | The latest run failed or stopped unexpectedly. `telos describe` shows why, and what to run next. |
+| `stopped` | The Goal has stopped running, usually because you deleted it. |
+
+When the system is done working, `describe` reports the accepted Goal as `ready`, with its public URL and what it has cost so far.
+
+```console
+$ telos describe goal_c7d2f0a4e8
 Name      reading-list
 Status    ready
-Session   sess_c7d2f0a4e8
-Revision  sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a
-Inference Managed
+Goal      goal_c7d2f0a4e8
+Revision  sha256:8f21c47a91ee
 Model     telos/default
-Thinking  medium (requested)
+Thinking  medium
 Context   personal
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
+Cloud     $1.25 (compute $1.00, storage $0.25)
+Inference $3.40 (Telos)
 ```
 
-On current managed runtimes, this `ready` result belongs to the displayed
-revision digest. The Cloud agent's evidence should include the promised
-write–restart–read sequence. From outside the environment, exercise
-`POST /books` and `GET /books` through the public URL and confirm the live
-behavior independently.
+Costs come in two lines: `Cloud` (compute and storage) and `Inference` (through Telos, your own API key, or a subscription; see [Models](models.md)).
 
-If `ready` appears before `Service`, keep observing `describe` for route
-publication within the same deadline. A public service is not externally
-verifiable until that URL exists.
+Once ready, open the service and verify that the behavior is as desired.
+In this case, you would exercise `POST /books` and `GET /books` through the public URL to confirm everything is in order.
 
-## Revise the same Goal
+## Update it
 
-Suppose the reading list now needs attribution. Edit the same `SPEC.md` and add
-“Every book records who added it” to the Goal. You can leave its version alone:
-Cloud prepares an unused version before showing the plan. Save a proposal
-against the existing session:
+Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump its version to `0.2.0`, and add "Every book records who added it" to the Goal.
 
-```bash
-telos plan SPEC.md --session sess_c7d2f0a4e8 --context personal --out=attribution.plan --message "Record book ownership"
-```
+Names are unique within a context, so updates target the Goal by its ID with `--goal`. Without it, `telos plan` and `telos apply` refuse to create a second `reading-list`.
 
-The terminal and dashboard show the diff. For example:
+Plan against the existing Goal:
 
-```diff
+```console
+$ telos plan SPEC.md --goal goal_c7d2f0a4e8
+Spec      reading-list
+Context   personal
+Goal      goal_c7d2f0a4e8
+Current   @alice/reading-list:0.1.0
+Version   0.1.0 -> 0.2.0
+
+diff deployed/SPEC.md proposed/SPEC.md
+--- deployed/SPEC.md
++++ proposed/SPEC.md
+@@ -1,6 +1,6 @@
+ ---
+ name: reading-list
+-version: 0.1.0
++version: 0.2.0
+ ---
+
+ # Goal
+@@ -10,6 +10,7 @@
  - `POST /books` adds a title.
  - `GET /books` returns the current list.
  - Books remain available when the application restarts.
 +- Every book records who added it.
+ 
+ # Acceptance
+ 
 ```
 
-The plan preserves the final spec and version shown in the diff,
-package digest, skill digests, and baseline revision. Your local `SPEC.md` stays
-unchanged. Web edits use the same version preparation. Resubmitting a changed
-proposal does not require a manual bump; ordinary `telos push` still requires a
-new Registry version when publishing changed content.
+The plan shows the Goal's current spec and how the new one
+differs. Apply that new revision to the same Goal:
 
-When you are ready, confirm the exact saved proposal:
+```console
+$ telos apply SPEC.md --goal goal_c7d2f0a4e8
+updated reading-list
 
-```bash
-telos apply attribution.plan --context personal
+Status    working
+Goal      goal_c7d2f0a4e8
+Revision  sha256:3211e85fe81b
+Model     telos/default
+Thinking  medium
+Context   personal
+Service   https://reading-list-c7d2f0a4e8.usetelos.ai
+Logs      telos logs goal_c7d2f0a4e8
 ```
 
-This command needs Apply permission and asks no additional question. You can
-instead confirm the request on its dashboard page. If another change has moved
-the deployment to a new revision, the plan is stale while its request stays open.
-Reconcile the request against the current deployment in Web and resolve any
-conflicts explicitly. Review and confirm that new plan on the request page;
-earlier confirmation never carries over, and the old saved file remains invalid.
+This applies the update in-place, and the system begins reconciling towards the new desired Goal. Continue to monitor status from `working` to `ready`, then exercise the updated API behavior.
 
-Alternatively, `telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 --context personal`
-prepares a plan and asks for confirmation. On a protected deployment, it opens
-a Change Request and prepares the comparison immediately. The current revision
-keeps reconciling while it waits for confirmation. The Goal, session, deployment, and history stay the same when the new
-revision executes. Observe that revision through `working` to `ready`, then
-exercise the updated API behavior.
+If the Goal has been updated by someone else, you can fetch its current spec with:
 
-### Deploy without a restorable snapshot
-
-If the current revision's snapshot is missing, your proposal stays pending and
-unconfirmed. The CLI stops with an error and a dashboard link, even with `--yes`.
-On that page, **Wait** leaves it pending until you confirm again; it will not
-apply automatically when the snapshot is ready. Choose **Apply Now** to proceed
-without the snapshot. You can also create a fresh CLI plan with `--force`.
-Applying with this bypass can leave the previous revision without
-an exact workspace and runtime restore point. A pending request does not reserve
-an execution turn or prevent reviewing other requests.
-
-```bash
-telos apply SPEC.md --message "Record book ownership" --session sess_c7d2f0a4e8 --context personal --force
+```console
+$ telos get goal_c7d2f0a4e8
 ```
 
-This bypass applies only to the missing-snapshot gate. Active operations,
-authorization, confirmation requirements, runtime availability, and
-stale-revision protection still apply. An apply must wait for any executing
-operation to finish; `--force` never supplies confirmation by itself.
+This writes the spec and its skills to a directory named after the Goal. Use `--output <dir>` to override the directory name.
 
-For another contract, continue with [Write a SPEC.md](goals.md). Use
-[Bounded runs](bounded-runs.md) for local work and
-[Troubleshooting](troubleshooting.md) when observed state diverges from the
-contract.
+## Delete it
 
-## Resume later
+If you would like to delete your Goal, along with its environment and the code the agent wrote — you can run:
 
-Return through the same context and recover the session ID from `list`:
+```console
+$ telos delete goal_c7d2f0a4e8
+delete requested for reading-list
 
-```bash
-telos list --context personal
-telos describe SESSION_ID --context personal
+Status    stopped
+Goal      goal_c7d2f0a4e8
+Context   personal
 ```
 
-Continue revisions on that session so its identity and history remain joined.
+> Deleting a Goal is irreversible — please proceed with caution.
+> Deletion can take up to 10 minutes as background processes reconcile billing data and in-flight inference requests.
 
-## Delete the Goal
+The Goal disappears from `telos list` as soon as you delete it.
 
-Cloud deletion is irreversible. Check the session and context, and confirm
-that you want to remove the environment, application and PVC data, routes,
-attachments, deployment record, and history before running:
+## Advanced configuration
 
-```bash
-telos delete SESSION_ID --context personal
+For advanced use — such as scripting, CI, or custom development setups — you can configure various defaults.
+
+In terms of precedence, flags override environment variables, and environment variables override your saved config (in `telos config`). For example, to work in a team's workspace by default, save its context:
+
+```console
+$ telos config --context @acme
+context set to @acme
 ```
 
-Teardown continues asynchronously; subsequent inspection eventually returns
-not found. [The Goal lifecycle](lifecycle.md#delete-a-goal) distinguishes this
-from local deletion, which preserves session history.
+A `--context` flag still overrides it for a single command.
+
+| Variable | Purpose | Default |
+|---|---|---|
+| `TELOS_AUTH_TOKEN` | API token provisioned [on the web](https://usetelos.ai/account?tab=tokens) for agents, CI and other non-interactive use. | Your saved login |
+| `TELOS_CONTEXT` | Context for every command, like `--context`. | Your saved context |
+| `TELOS_CONFIG` | Path to the config file. | `~/.telos/config.yaml` |
+| `TELOS_MODEL` | Model for new Goals, like `--model`. | Your workspace default |
+| `TELOS_THINKING` | Thinking effort for new Goals: `low`, `medium`, `high` or `xhigh`. | `medium` |
+| `TELOS_INSTALL_DIR` | Where the installer puts `telos`. | `~/.local/bin` |
+| `TELOS_AGENT_SKILLS_DIR` | Where the installer puts the `telos-cli` skill. | `~/.agents/skills` |

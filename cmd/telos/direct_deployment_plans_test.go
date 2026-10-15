@@ -238,16 +238,13 @@ func TestDirectSavedApplyResumesOnceAndDoesNotReplan(t *testing.T) {
 	}
 }
 
-func TestDirectInteractiveApplyUsesApplyAndDiscardRoutes(t *testing.T) {
+func TestDirectInteractiveApplyRequiresCompleteYes(t *testing.T) {
 	for _, answer := range []string{"yes\n", "no\n", "yes", ""} {
 		t.Run(answer, func(t *testing.T) {
 			var calls atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				calls.Add(1)
-				path, status := "/api/deployment-plans/plan_saved/discard", "discarded"
-				if answer == "yes\n" {
-					path, status = "/api/deployment-plans/plan_saved/apply", "applied"
-				}
+				path, status := "/api/deployment-plans/plan_saved/apply", "applied"
 				if r.Method != http.MethodPost || r.URL.Path != path {
 					t.Errorf("unexpected interactive action: %s %s", r.Method, r.URL.Path)
 				}
@@ -258,14 +255,18 @@ func TestDirectInteractiveApplyUsesApplyAndDiscardRoutes(t *testing.T) {
 			var prompt bytes.Buffer
 			plan, err := awaitCloudApply(context.Background(), cloud.NewClient(server.URL, "token"), &initial, false,
 				strings.NewReader(answer), io.Discard, &prompt, time.Hour)
-			if calls.Load() != 1 || !strings.Contains(prompt.String(), "Type yes to confirm") {
+			wantCalls := int32(0)
+			if answer == "yes\n" {
+				wantCalls = 1
+			}
+			if calls.Load() != wantCalls || !strings.Contains(prompt.String(), "Type yes to confirm") {
 				t.Fatalf("calls=%d prompt=%s", calls.Load(), prompt.String())
 			}
 			if answer == "yes\n" {
 				if err != nil || plan.Status != "applied" {
 					t.Fatalf("confirmation failed: %+v %v", plan, err)
 				}
-			} else if err == nil || !strings.Contains(err.Error(), "discarded") {
+			} else if err == nil || !strings.Contains(err.Error(), "stopped waiting") {
 				t.Fatalf("non-confirmation applied the plan: %+v %v", plan, err)
 			}
 		})
@@ -371,7 +372,7 @@ func TestDirectCLIYesSnapshotFailureExitsWithDashboardLink(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCLIPlanApplySubprocess$")
-	args, _ := json.Marshal([]string{"apply", specPath, "--session", "sess_123", "--message", "Update the demo", "--yes", "--json"})
+	args, _ := json.Marshal([]string{"apply", specPath, "--goal", "sess_123", "--message", "Update the demo", "--yes", "--json"})
 	command.Env = append(os.Environ(), "TELOS_TEST_PLAN_COMMAND="+string(args))
 	output, err := command.CombinedOutput()
 	if err == nil || ctx.Err() != nil || submissions.Load() != 1 || !strings.Contains(string(output), reason) || !strings.Contains(string(output), "/plans/plan_saved") {

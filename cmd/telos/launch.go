@@ -12,8 +12,6 @@ import (
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/runtimeclient"
 	"github.com/telos-org/telos/internal/sessionapi"
-	"github.com/telos-org/telos/internal/sessionworker"
-	"github.com/telos-org/telos/internal/spec"
 )
 
 // -- run ----------------------------------------------------------------------
@@ -32,7 +30,11 @@ func cmdLaunch(command, action string, args []string) {
 		inputHelp = "SPEC.md|PLAN"
 	}
 	fs := newCommandFlagSet(command, fmt.Sprintf("telos %s %s [flags]", command, inputHelp))
-	workspace := fs.String("workspace", "", "Workspace directory for local specs")
+	workspaceValue := ""
+	workspace := &workspaceValue
+	if command == "run" {
+		workspace = fs.String("workspace", "", "Workspace directory for local specs")
+	}
 	sessionIDValue := ""
 	sessionID := &sessionIDValue
 	forceValue := false
@@ -40,25 +42,27 @@ func cmdLaunch(command, action string, args []string) {
 	yes := false
 	message := ""
 	if command == "apply" {
-		sessionID = fs.String("session", "", "Managed session ID to update")
+		sessionID = fs.String("goal", "", "ID of the Goal to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
 		fs.BoolVar(&yes, "yes", false, "Confirm a new Cloud plan automatically; requires Apply permission")
 		fs.BoolVar(&yes, "y", false, "Shorthand for --yes")
 		fs.StringVar(&message, "message", "", "Describe the change; required for a fresh Cloud apply")
 		fs.StringVar(&message, "m", "", "Shorthand for --message")
 	}
-	modelHelp := "pi model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
+	modelHelp := "Model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	if command == "apply" {
-		modelHelp = "Cloud: telos/default, telos/max, or <subscription-or-key-name>/<model-id>; local: <provider>/<model>; defaults to $TELOS_MODEL, then the workspace preference for Cloud"
+		modelHelp = "telos/default, telos/max, or <name>/<model-id> for a saved API key or subscription; defaults to $TELOS_MODEL, then the workspace default"
 	}
 	model := fs.String("model", "", modelHelp)
-	thinking := fs.String("thinking", "", "Thinking effort; defaults to $TELOS_THINKING, then high for local runs")
+	thinking := fs.String("thinking", "", "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs")
 	untilValue := ""
 	until := &untilValue
+	maxCostUSDValue := 0.0
+	maxCostUSD := &maxCostUSDValue
 	if command == "run" {
 		until = fs.String("until", "", "Run at most N review cycles or duration like 30m")
+		maxCostUSD = fs.Float64("max-cost-usd", 0, "Maximum local execution cost in USD; defaults to 20")
 	}
-	maxCostUSD := fs.Float64("max-cost-usd", 0, "Maximum local execution cost in USD; defaults to 20")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := ""
 	contextFlagValue := &contextValue
@@ -78,15 +82,7 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if command == "apply" {
-		requireArgCount(fs, 1, "one SPEC.md or saved plan file")
-	} else {
-		requireArgCount(fs, 1, "one SPEC.md")
-	}
-	if command == "apply" && *sessionID != "" && *workspace != "" {
-		fmt.Fprintln(os.Stderr, "error: --workspace can only seed a new session; it cannot be used with --session")
-		os.Exit(1)
-	}
+	requireArgCount(fs, 1, "one "+inputHelp)
 	if err := validateCloudSessionContext(*sessionID, contextOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
@@ -96,11 +92,11 @@ func cmdLaunch(command, action string, args []string) {
 
 	if ctx, ok := rootSessionContext(); ok {
 		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session; use telos run to launch nested specs")
+			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos Goal; use telos run to launch nested specs")
 			os.Exit(1)
 		}
 		if localConfigSet {
-			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a Telos session")
+			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a Telos Goal")
 			os.Exit(1)
 		}
 		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
@@ -111,6 +107,7 @@ func cmdLaunch(command, action string, args []string) {
 		runCloudChildSession(specArg, ctx, untilConfig, runtimeConfig, *jsonOut, action)
 		return
 	}
+
 	if command == "apply" && hasLocalSpec {
 		bookmark, err := readSavedDeploymentPlan(specPath)
 		if err != nil {
@@ -118,12 +115,12 @@ func cmdLaunch(command, action string, args []string) {
 			os.Exit(1)
 		}
 		if bookmark != nil {
-			if _, inSession := localRootSessionID(); inSession {
-				fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session")
+			if insideTelosSession() {
+				fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos Goal")
 				os.Exit(1)
 			}
-			if flagNamesSet(fs, "session", "workspace", "force", "model", "thinking", "max-cost-usd", "message", "m") {
-				fmt.Fprintln(os.Stderr, "error: a saved plan freezes its target, message, and inputs; --session, --workspace, --force, --model, --thinking, --max-cost-usd, and --message cannot be used with it")
+			if flagNamesSet(fs, "goal", "force", "model", "thinking", "message", "m") {
+				fmt.Fprintln(os.Stderr, "error: a saved plan freezes its target, message, and inputs; --goal, --force, --model, --thinking, and --message cannot be used with it")
 				os.Exit(2)
 			}
 			if err := runSavedCloudApply(bookmark, contextOverride, *jsonOut); err != nil {
@@ -134,21 +131,12 @@ func cmdLaunch(command, action string, args []string) {
 		}
 	}
 
-	platform := ""
-	if hasLocalSpec {
-		parsedPlatform, err := launchSpecPlatform(specPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+	if command == "apply" {
+		if insideTelosSession() {
+			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos Goal; use telos run to launch nested specs")
 			os.Exit(1)
 		}
-		platform = parsedPlatform
-	}
-	if command == "apply" {
-		if (platform == "local" || isLocalApplyID(*sessionID)) && flagNamesSet(fs, "message", "m") {
-			fmt.Fprintln(os.Stderr, "error: --message requires a Cloud deployment")
-			os.Exit(2)
-		}
-		if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
+		if err := validateApplySession(*sessionID); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -156,76 +144,38 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-	}
-	if command == "apply" && *sessionID != "" && isLocalApplyID(*sessionID) {
-		if !hasLocalSpec {
-			fmt.Fprintf(os.Stderr, "error: unknown local spec: %s\n", specArg)
+		if !hasLocalSpec && !strings.HasPrefix(strings.TrimSpace(specArg), "@") {
+			fmt.Fprintf(os.Stderr, "error: %v\n", specFileNotFound(specArg))
 			os.Exit(1)
 		}
-		if err := prepareRegistrySkills(specPath); err != nil {
+		if err := requireCloudLogin(); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
-		}
-		applyLocalSessionSpec(specPath, *sessionID, *jsonOut)
-		return
-	}
-
-	launchMode, err := resolveLaunchMode(platform, localConfigSet)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if launchMode == launchLocal && contextOverride != "" {
-		fmt.Fprintln(os.Stderr, "error: --context can only be used with a cloud apply")
-		os.Exit(2)
-	}
-	localRootID, inLocalRoot := localRootSessionID()
-	if inLocalRoot {
-		if command == "apply" {
-			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos session; use telos run to launch nested specs")
-			os.Exit(1)
-		}
-		if launchMode != launchLocal {
-			fmt.Fprintln(os.Stderr, "error: a local Telos session can only launch specs with platform: local")
-			os.Exit(1)
-		}
-	}
-	if err := validateLaunchCommand(command, launchMode); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	switch launchMode {
-	case launchCloudApply:
-		message, err = normalizePlanMessage(message, true)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(2)
 		}
 		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		if runtimeConfig.MaxCostUSD != nil {
-			fmt.Fprintln(os.Stderr, "error: --max-cost-usd is not supported for cloud apply yet")
+		if *sessionID != "" && cloudRuntimeConfigSet(runtimeConfig) {
+			fmt.Fprintln(os.Stderr, "error: cloud runtime config flags can only seed a new Goal; they cannot update an existing Goal")
 			os.Exit(1)
 		}
-		if *sessionID != "" && cloudRuntimeConfigSet(runtimeConfig) {
-			fmt.Fprintln(os.Stderr, "error: cloud runtime config flags can only seed a new session; they cannot update an existing session")
-			os.Exit(1)
+		message, err = normalizePlanMessage(message, true)
+		if err != nil {
+			exitWithError(err)
 		}
 		if err := runCloudApply(cloudPlanInput{
 			specArg: specArg, sessionID: *sessionID, runtimeConfig: runtimeConfig,
 			force: *force, contextOverride: contextOverride,
 			mode: "apply", yes: yes, revisionMessage: message,
 		}, *jsonOut); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+			exitWithError(err)
 		}
 		return
 	}
 	if !hasLocalSpec {
-		fmt.Fprintf(os.Stderr, "error: unknown local spec: %s\n", specArg)
+		fmt.Fprintf(os.Stderr, "error: %v\n", specFileNotFound(specArg))
 		os.Exit(1)
 	}
 	if err := prepareRegistrySkills(specPath); err != nil {
@@ -244,12 +194,8 @@ func cmdLaunch(command, action string, args []string) {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	cfg.SessionKind = sessionKindForCommand(command)
 	cfg.Until = untilConfig.ReviewCycles
 	cfg.UntilSeconds = untilConfig.Seconds
-	if inLocalRoot {
-		cfg.ParentSessionID = &localRootID
-	}
 
 	session, err := cli.SubmitLocalSession(specPath, cfg)
 	if err != nil {
@@ -259,8 +205,8 @@ func cmdLaunch(command, action string, args []string) {
 
 	if *jsonOut {
 		printJSON(map[string]interface{}{
-			"session_id":       session.SessionID,
-			"session_dir":      session.SessionDir,
+			"goal_id":          session.SessionID,
+			"goal_dir":         session.SessionDir,
 			"workspace":        session.WorkspaceScope,
 			"active_workspace": session.ActiveWorkspace,
 			"spec_name":        session.SpecName,
@@ -271,57 +217,6 @@ func cmdLaunch(command, action string, args []string) {
 	}
 }
 
-func applyLocalSessionSpec(specPath string, sessionID string, jsonOut bool) {
-	s := store()
-	current, err := s.Get(sessionID)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if current.SessionKind != nil && *current.SessionKind != sessionapi.KindController {
-		fmt.Fprintf(os.Stderr, "error: %s is not a controller session\n", sessionID)
-		os.Exit(1)
-	}
-	if current.Status == sessionapi.StatusStopped {
-		fmt.Fprintf(os.Stderr, "error: %s is %s; create a new controller session instead\n", sessionID, current.Status)
-		os.Exit(1)
-	}
-	data, err := os.ReadFile(specPath)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	response, err := s.UpdateSpecByID(sessionID, sessionapi.SessionSpecUpdateRequest{
-		SpecMarkdown: string(data),
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	session := response.Session
-	if session != nil {
-		sessionDir := ""
-		if session.SessionDir != nil {
-			sessionDir = *session.SessionDir
-		}
-		if err := sessionworker.Wake(sessionDir); err != nil {
-			if !errors.Is(err, sessionworker.ErrWorkerNotRunning) {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			if err := sessionworker.Start(sessionDir, sessionapi.RuntimeLocal); err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-		}
-	}
-	if jsonOut {
-		printJSON(map[string]any{"operation": response.Operation, "session": session})
-		return
-	}
-	printSessionReceipt(os.Stdout, response.Operation, session)
-}
-
 func printLocalLaunch(out io.Writer, action string, session *cli.LocalSession) {
 	workspace := shellQuote(session.WorkspaceScope)
 	fmt.Fprintf(out, "%s %s\n\n", action, session.SpecName)
@@ -329,11 +224,19 @@ func printLocalLaunch(out io.Writer, action string, session *cli.LocalSession) {
 	printSummaryField(out, "Target", "local")
 	printSummaryField(out, "Status", "active")
 	printSummaryField(out, "Cost", "-")
-	printSummaryField(out, "Session", session.SessionID)
+	printSummaryField(out, "Goal", session.SessionID)
 	printSummaryField(out, "Workspace", session.WorkspaceScope)
 	fmt.Fprintln(out)
 	printSummaryField(out, "Describe", fmt.Sprintf("cd %s && telos describe %s", workspace, session.SessionID))
 	printSummaryField(out, "Logs", fmt.Sprintf("cd %s && telos logs %s", workspace, session.SessionID))
+}
+
+// shellArg quotes s only when a shell would otherwise split or expand it.
+func shellArg(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789@%+=:,./_-") == "" {
+		return s
+	}
+	return shellQuote(s)
 }
 
 func shellQuote(s string) string {
@@ -343,87 +246,23 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-func launchSpecPlatform(specPath string) (string, error) {
-	data, err := os.ReadFile(specPath)
-	if err != nil {
-		return "", err
-	}
-	raw, _, ok := spec.ParseFrontmatter(string(data))
-	if !ok {
-		return "", fmt.Errorf("%s has no valid YAML frontmatter", specPath)
-	}
-	platform, ok := raw["platform"]
-	if !ok {
-		return "", nil
-	}
-	value := fmt.Sprint(platform)
-	if value != "local" && value != "cloud" {
-		return "", fmt.Errorf("%s: invalid platform '%s' (valid: cloud, local)", specPath, value)
-	}
-	return value, nil
-}
-
-func validateApplySessionPlatform(sessionID, platform string) error {
+// validateApplySession accepts only Telos Cloud Goals: telos apply always
+// deploys to Telos Cloud, and local work is telos run.
+func validateApplySession(sessionID string) error {
 	sessionID = strings.TrimSpace(sessionID)
-	if sessionID == "" {
-		return nil
-	}
-	switch {
-	case isLocalApplyID(sessionID):
-		if platform != "local" {
-			return fmt.Errorf("local session %q requires a platform: local spec", sessionID)
-		}
-	case isCloudApplyID(sessionID):
-		if platform == "local" {
-			return fmt.Errorf("cloud session %q cannot apply a platform: local spec", sessionID)
-		}
-	default:
-		return fmt.Errorf("invalid session id %q", sessionID)
+	if isLocalApplyID(sessionID) {
+		return fmt.Errorf("%s is a local Goal; telos apply only updates Telos Cloud Goals", sessionID)
 	}
 	return nil
 }
 
-type launchMode string
-
-const (
-	launchLocal      launchMode = "local"
-	launchCloudApply launchMode = "cloud-apply"
-)
-
-func resolveLaunchMode(platform string, localConfigSet bool) (launchMode, error) {
-	if platform == "local" {
-		return launchLocal, nil
-	}
-	if localConfigSet {
-		return decideLaunchMode(platform, false, true)
-	}
-	cloudConfigured, err := config.IsConfigured()
+func requireCloudLogin() error {
+	configured, err := config.IsConfigured()
 	if err != nil {
-		return "", err
+		return err
 	}
-	return decideLaunchMode(platform, cloudConfigured, false)
-}
-
-func decideLaunchMode(
-	platform string,
-	cloudConfigured bool,
-	localConfigSet bool,
-) (launchMode, error) {
-	if platform == "local" {
-		return launchLocal, nil
-	}
-	if localConfigSet {
-		return "", fmt.Errorf("local run config flags require a platform: local spec")
-	}
-	if !cloudConfigured {
-		return "", fmt.Errorf("this spec runs in Telos Cloud; run `telos login` first")
-	}
-	return launchCloudApply, nil
-}
-
-func validateLaunchCommand(command string, mode launchMode) error {
-	if command == "run" && mode == launchCloudApply {
-		return fmt.Errorf("use telos apply to start cloud specs; telos run can only launch cloud specs from inside an existing Telos session")
+	if !configured {
+		return errors.New("telos apply deploys to Telos Cloud; run `telos login` first")
 	}
 	return nil
 }
@@ -455,10 +294,50 @@ func runCloudChildSession(
 		os.Exit(1)
 	}
 	if jsonOut {
-		printJSON(map[string]any{"session": session})
+		printJSON(map[string]any{"goal": goalJSON(session)})
 		return
 	}
 	printSessionReceipt(os.Stdout, action, session)
+}
+
+// refuseDuplicateGoal fails when control's context already has a Goal named
+// name. Names are unique within a context: apply creates a Goal, and only
+// --goal updates one.
+func refuseDuplicateGoal(control *cloud.Client, command, specArg, name, contextOverride string) error {
+	goals, err := control.ListSessions()
+	if err != nil {
+		return err
+	}
+	for _, goal := range goals {
+		if goal.Name == name && goal.State != "deleted" {
+			return &duplicateGoalError{
+				name:     name,
+				context:  control.ContextName(),
+				id:       goal.ID,
+				command:  command,
+				specArg:  specArg,
+				followUp: followUpContext(control, contextOverride),
+			}
+		}
+	}
+	return nil
+}
+
+type duplicateGoalError struct {
+	name     string
+	context  string
+	id       string
+	command  string
+	specArg  string
+	followUp string
+}
+
+func (e *duplicateGoalError) Error() string {
+	update := fmt.Sprintf("telos %s %s --goal %s", e.command, shellArg(e.specArg), e.id)
+	if e.followUp != "" {
+		update += " --context " + e.followUp
+	}
+	return fmt.Sprintf("a Goal named %s already exists in %s (%s)\nTo update it: %s", e.name, e.context, e.id, update)
 }
 
 func actionableDeploymentUpdateError(err error, force bool) error {
@@ -492,7 +371,7 @@ func cloudRuntimeConfigSet(cfg sessionRuntimeConfig) bool {
 
 func validateForceApply(force bool, sessionID string) error {
 	if force && !isCloudApplyID(sessionID) {
-		return errors.New("--force requires --session with a cloud deployment ID")
+		return errors.New("--force requires --goal")
 	}
 	return nil
 }
@@ -505,15 +384,38 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 	fmt.Fprintf(out, "%s %s\n\n", operation, name)
 	row := displayRow(*session)
 	printSummaryField(out, "Status", row.Status)
-	printSummaryField(out, "Session", row.Session)
+	printSummaryField(out, "Goal", row.Session)
 	if session.TotalCostUSD != nil {
 		printSummaryField(out, "Cost", formatDetailCost(session.TotalCostUSD))
 	}
 }
 
-func sessionKindForCommand(command string) sessionapi.SessionKind {
-	if command == "apply" {
-		return sessionapi.KindController
+func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.SessionRecord) {
+	printCloudSessionReceiptForContext(out, operation, session, "", "")
+}
+
+func printCloudSessionReceiptForContext(
+	out io.Writer,
+	operation string,
+	session *cloud.SessionRecord,
+	contextName string,
+	logsContext string,
+) {
+	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
+	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
+	printSummaryField(out, "Goal", session.ID)
+	printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
+	printCloudInferenceSummary(out, *session)
+	if contextName != "" {
+		printSummaryField(out, "Context", contextName)
 	}
-	return sessionapi.KindTask
+	if session.ServiceURL != nil && strings.TrimSpace(*session.ServiceURL) != "" {
+		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
+	}
+	// The hint names a context only when the saved one would select another.
+	logsCommand := fmt.Sprintf("telos logs %s", session.ID)
+	if logsContext != "" {
+		logsCommand = fmt.Sprintf("telos logs --context %s %s", logsContext, session.ID)
+	}
+	printSummaryField(out, "Logs", logsCommand)
 }

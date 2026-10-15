@@ -24,7 +24,7 @@ func TestDescribeKeepsPendingRequestsSeparateFromCurrentStatus(t *testing.T) {
 	defer srv.Close()
 	configureCloudTest(t, srv.URL)
 	session := &cloud.SessionRecord{ID: "sess_123", Status: "ready", CurrentRevisionID: "rev_7", PackageDigest: "sha256:old"}
-	out := captureStdout(t, func() { describeCloudSession(session, "personal", true) })
+	out := captureStdout(t, func() { describeCloudGoal(session, "personal", "", "", true) })
 	var result struct {
 		Status                string                      `json:"status"`
 		PackageDigest         string                      `json:"package_digest"`
@@ -36,8 +36,8 @@ func TestDescribeKeepsPendingRequestsSeparateFromCurrentStatus(t *testing.T) {
 	if result.Status != "ready" || result.PackageDigest != "sha256:old" || len(result.PendingChangeRequests) != 2 || result.PendingChangeRequests[0].ID != "req_42" {
 		t.Fatalf("description = %s", out)
 	}
-	out = captureStdout(t, func() { describeCloudSession(session, "personal", false) })
-	if !strings.Contains(out, "Status    ready") || !strings.Contains(out, "Change requests") || !strings.Contains(out, "awaiting confirmation") || !strings.Contains(out, "https://app.example.com/review") {
+	out = captureStdout(t, func() { describeCloudGoal(session, "personal", "", "", false) })
+	if !strings.Contains(out, "Status") || !strings.Contains(out, "Change requests") || !strings.Contains(out, "awaiting confirmation") || !strings.Contains(out, "https://app.example.com/review") {
 		t.Fatalf("description = %s", out)
 	}
 }
@@ -53,49 +53,5 @@ func TestChangeRequestURLKeepsOrganizationAndServerProvidedOrigin(t *testing.T) 
 	request.ReviewURL = "https://custom.example.com/changes/42"
 	if got := cloudRequestReviewURL(control, request); got != request.ReviewURL {
 		t.Fatalf("server-provided URL ignored: %s", got)
-	}
-}
-
-func TestCmdApplyJSONReturnsInitialChangeRequest(t *testing.T) {
-	pkg := testApplyPackage(t)
-	var mutations int
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if serveDeploymentPlanPrerequisites(w, r) {
-			return
-		}
-		switch r.URL.Path {
-		case "/api/packages/telos/demo/versions/1.2.3":
-			_ = json.NewEncoder(w).Encode(map[string]string{"scope": "telos", "name": "demo", "version": "1.2.3", "ref": "@telos/demo:1.2.3", "digest": pkg.Digest})
-		case "/api/packages/telos/demo/versions/1.2.3/bundle":
-			_, _ = w.Write(pkg.Bytes)
-		case "/api/deployment-plans":
-			mutations++
-			var body cloud.DeploymentPlanOptions
-			_ = json.NewDecoder(r.Body).Decode(&body)
-			if body.Create == nil {
-				t.Errorf("explicit confirmation missing: %+v", body)
-			}
-			request := testDeploymentPlan("apply", "applied")
-			_ = json.NewEncoder(w).Encode(request)
-		default:
-			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
-	configureCloudTest(t, server.URL)
-	out := captureStdout(t, func() {
-		cmdApply([]string{"@telos/demo:1.2.3", "--json", "--yes", "--message", "Deploy the reading list"})
-	})
-	var receipt struct {
-		Operation string                    `json:"operation"`
-		Request   cloud.ChangeRequestRecord `json:"change_request"`
-		ReviewURL string                    `json:"review_url"`
-	}
-	if err := json.Unmarshal([]byte(out), &receipt); err != nil {
-		t.Fatal(err)
-	}
-	if receipt.Operation != "applied" || receipt.Request.ID != "cr_saved" || receipt.ReviewURL != "https://example.com/changes/cr_saved" || mutations != 1 {
-		t.Fatalf("receipt=%s mutations=%d", out, mutations)
 	}
 }

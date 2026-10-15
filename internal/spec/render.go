@@ -19,6 +19,9 @@ type PromptOptions struct {
 	PrimarySpecPath string
 	ReviewBudget    bool
 	ReviewCycleCap  int
+	// LocalRuntime selects the local preamble for a session that executes on a
+	// workstation. Sessions otherwise execute in Telos Cloud.
+	LocalRuntime bool
 }
 
 // RenderProverTask builds the full prover task prompt.
@@ -32,7 +35,7 @@ func RenderProverTask(compiled *CompiledEnvironment, workspace, transcriptPath s
 	parts := []string{
 		preamble,
 		"",
-		renderPlatformPreamble(compiled),
+		renderPlatformPreamble(options),
 		renderSessionContext(compiled, RoleProver, options),
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleProver, options),
@@ -51,7 +54,7 @@ func RenderVerifierTask(compiled *CompiledEnvironment, workspace, transcriptPath
 	parts := []string{
 		preamble,
 		"",
-		renderPlatformPreamble(compiled),
+		renderPlatformPreamble(options),
 		renderSessionContext(compiled, RoleVerifier, options),
 		renderSpec(compiled),
 		renderRequiredEvaluationRubrics(compiled, RoleVerifier, options),
@@ -75,12 +78,12 @@ func promptOptions(opts []PromptOptions) PromptOptions {
 	return opts[0]
 }
 
-func renderPlatformPreamble(compiled *CompiledEnvironment) string {
-	platform := compiled.Environment.Platform
-	if platform == "" {
-		platform = "cloud"
+func renderPlatformPreamble(opts PromptOptions) string {
+	runtime := "cloud"
+	if opts.LocalRuntime {
+		runtime = "local"
 	}
-	text, err := ReadPrompt("preamble/" + platform + ".md")
+	text, err := ReadPrompt("preamble/" + runtime + ".md")
 	if err != nil {
 		return ""
 	}
@@ -88,10 +91,6 @@ func renderPlatformPreamble(compiled *CompiledEnvironment) string {
 }
 
 func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptOptions) string {
-	platform := compiled.Environment.Platform
-	if platform == "" {
-		platform = "cloud"
-	}
 	lines := []string{
 		"## Session",
 		"",
@@ -107,7 +106,7 @@ func renderSessionContext(compiled *CompiledEnvironment, role Role, opts PromptO
 	if opts.ReviewBudget && opts.ReviewCycleCap > 0 {
 		lines = append(lines, fmt.Sprintf("- Review cycle cap: at most `%d` verifier cycles", opts.ReviewCycleCap))
 	}
-	if platform != "local" {
+	if !opts.LocalRuntime {
 		lines = append(lines, fmt.Sprintf("- Namespace: `%s`", compiled.Namespace))
 	}
 

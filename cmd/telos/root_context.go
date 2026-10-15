@@ -2,7 +2,6 @@ package main
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/telos-org/telos/internal/cloud"
@@ -35,18 +34,8 @@ func rootSessionContext() (rootContext, bool) {
 	}, true
 }
 
-func localRootSessionID() (string, bool) {
-	sessionID := strings.TrimSpace(os.Getenv("TELOS_SESSION_ID"))
-	sessionRoot := strings.TrimSpace(os.Getenv("TELOS_SESSION_DIR"))
-	if sessionID == "" || sessionRoot == "" {
-		return "", false
-	}
-	if strings.TrimSpace(os.Getenv("TELOS_RUNTIME")) != string(sessionapi.RuntimeLocal) {
-		return "", false
-	}
-	manifest, err := sessionapi.ReadManifest(filepath.Join(sessionRoot, sessionID, "session.json"))
-	if err != nil || manifest.SessionKind != sessionapi.KindController {
-		return "", false
-	}
-	return sessionID, true
+// insideTelosSession reports whether the command runs inside a Telos session,
+// local or hosted. Goals are top-level, so apply is rejected there.
+func insideTelosSession() bool {
+	return strings.TrimSpace(os.Getenv("TELOS_SESSION_ID")) != ""
 }

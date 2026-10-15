@@ -2,42 +2,20 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/signal"
-	"path/filepath"
-	"slices"
 	"strings"
 	"syscall"
 	"time"
 	"unicode"
 	"unicode/utf8"
 
-	internaldiff "github.com/rogpeppe/go-internal/diff"
 	"github.com/telos-org/telos/internal/cloud"
 	"golang.org/x/term"
 )
-
-const savedPlanVersion = 2
-
-// A bookmark identifies a server-owned proposal, never credentials or executable
-// inputs. The configured endpoint/context must match before it can be used.
-type savedDeploymentPlan struct {
-	UpdateNumber    int    `json:"update_number,omitempty"`
-	PreparedPlanID  string `json:"prepared_plan_id,omitempty"`
-	Version         int    `json:"version"`
-	ChangeRequestID string `json:"change_request_id,omitempty"`
-	PlanID          string `json:"plan_id,omitempty"`
-	DeploymentID    string `json:"deployment_id"`
-	Context         string `json:"context"`
-	OrgID           string `json:"org_id"`
-	APIEndpoint     string `json:"api_endpoint"`
-}
 
 type cloudPlanInput struct {
 	specArg         string
@@ -141,7 +119,7 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloudPlanRes
 			RevisionMessage: message,
 		}
 	}
-	record, name, err := stageCloudPlanPackage(control, input.specArg, input.contextOverride)
+	record, name, err := stageCloudPlanPackage(control, input)
 	if err != nil {
 		return nil, err
 	}
@@ -166,193 +144,47 @@ func createCloudPlan(control *cloud.Client, input cloudPlanInput) (*cloudPlanRes
 	}, nil
 }
 
-func stageCloudPlanPackage(control *cloud.Client, specArg, contextOverride string) (*cloud.PackageVersionRecord, string, error) {
+func stageCloudPlanPackage(control *cloud.Client, input cloudPlanInput) (*cloud.PackageVersionRecord, string, error) {
+	checkName := func(name string) error {
+		if input.sessionID != "" {
+			return nil
+		}
+		command := "plan"
+		if input.mode == "apply" {
+			command = "apply"
+		}
+		return refuseDuplicateGoal(control, command, input.specArg, name, input.contextOverride)
+	}
+	if strings.HasPrefix(strings.TrimSpace(input.specArg), "@") {
+		reference, err := parsePackageReference(input.specArg)
+		if err != nil {
+			return nil, "", err
+		}
+		if err := checkName(reference.name); err != nil {
+			return nil, "", err
+		}
+		record, err := registryPackageForApply(control, reference)
+		return record, reference.name, err
+	}
+	path, ok := existingSpecPath(input.specArg)
+	if !ok {
+		return nil, "", specFileNotFound(input.specArg)
+	}
 	var record *cloud.PackageVersionRecord
 	var name string
-	if strings.HasPrefix(strings.TrimSpace(specArg), "@") {
-		reference, err := parsePackageReference(specArg)
+	err := withPlanRegistrySkills(path, input.contextOverride, func() error {
+		pkg, err := packageSpec(path, input.contextOverride)
 		if err != nil {
-			return nil, "", err
-		}
-		name = reference.name
-		record, err = registryPackageForApply(control, reference)
-		if err != nil {
-			return nil, "", err
-		}
-	} else {
-		path := resolveSpecPath(specArg)
-		err := withPlanRegistrySkills(path, contextOverride, func() error {
-			pkg, err := packageSpec(path, contextOverride)
-			if err != nil {
-				return err
-			}
-			name = pkg.name
-			record, err = pushSpecPackage(control.PlanArtifactClient(), pkg, "")
 			return err
-		})
-		if err != nil {
-			return nil, "", err
 		}
-	}
-	return record, name, nil
-}
-
-func cloudPlanOrgID(control *cloud.Client) (string, error) {
-	if control.OrgID != "" {
-		return control.OrgID, nil
-	}
-	account, err := control.AccountBootstrap()
-	if err != nil {
-		return "", err
-	}
-	if account.PersonalOrgID == "" {
-		return "", fmt.Errorf("Cloud did not identify the personal organization")
-	}
-	return account.PersonalOrgID, nil
-}
-
-func newSavedDeploymentPlan(control *cloud.Client, request *cloud.ChangeRequestRecord, orgID string) savedDeploymentPlan {
-	bookmark := savedDeploymentPlan{
-		Version: savedPlanVersion, DeploymentID: request.DeploymentID,
-		Context: control.ContextName(), OrgID: orgID, APIEndpoint: control.Endpoint,
-	}
-	if request.Kind == "plan" {
-		bookmark.PlanID = request.ID
-	} else {
-		bookmark.ChangeRequestID = request.ID
-		bookmark.UpdateNumber = request.UpdateNumber
-		bookmark.PreparedPlanID = request.PreparedPlanID
-		// Older servers have immutable requests and only understand v1 files.
-		if request.PreparedPlanID == "" {
-			bookmark.Version = 1
+		name = pkg.name
+		if err := checkName(name); err != nil {
+			return err
 		}
-	}
-	return bookmark
-}
-
-// A temporary sibling and an atomic link provide an all-or-nothing write that
-// refuses to replace a file, including a symlink or a concurrently saved plan.
-type savedPlanWriter struct {
-	file *os.File
-	path string
-}
-
-func prepareSavedPlanWriter(path string) (*savedPlanWriter, error) {
-	if strings.TrimSpace(path) == "" {
-		return nil, fmt.Errorf("--out requires a filename")
-	}
-	if _, err := os.Lstat(path); err == nil {
-		return nil, fmt.Errorf("refusing to overwrite %s; choose another --out filename", path)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return nil, err
-	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".telos-plan-*")
-	if err != nil {
-		return nil, fmt.Errorf("prepare saved plan file: %w", err)
-	}
-	return &savedPlanWriter{file: f, path: path}, nil
-}
-
-func (w *savedPlanWriter) close() {
-	_ = w.file.Close()
-	_ = os.Remove(w.file.Name())
-}
-
-func (w *savedPlanWriter) save(bookmark savedDeploymentPlan) error {
-	encoder := json.NewEncoder(w.file)
-	encoder.SetIndent("", "  ")
-	if err := encoder.Encode(bookmark); err != nil {
+		record, err = pushSpecPackage(control.PlanArtifactClient(), pkg, "")
 		return err
-	}
-	if err := w.file.Sync(); err != nil {
-		return err
-	}
-	if err := w.file.Close(); err != nil {
-		return err
-	}
-	return os.Link(w.file.Name(), w.path)
-}
-
-func readSavedDeploymentPlan(path string) (*savedDeploymentPlan, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	// SPEC.md starts with YAML frontmatter. Any JSON-looking file is treated as
-	// a bookmark and can never fall through to a new deployment on parse error.
-	r := bufio.NewReader(f)
-	for {
-		b, err := r.ReadByte()
-		if err != nil {
-			return nil, nil
-		}
-		if bytes.ContainsRune([]byte(" \t\r\n"), rune(b)) {
-			continue
-		}
-		if b != '{' && b != '[' {
-			return nil, nil
-		}
-		_ = r.UnreadByte()
-		break
-	}
-	data, err := io.ReadAll(io.LimitReader(r, 64*1024+1))
-	if err != nil {
-		return nil, err
-	}
-	if len(data) > 64*1024 {
-		return nil, fmt.Errorf("saved plan file is too large")
-	}
-	var bookmark savedDeploymentPlan
-	if err := json.Unmarshal(data, &bookmark); err != nil {
-		return nil, fmt.Errorf("invalid saved plan file: %w", err)
-	}
-	if bookmark.Version != 1 && bookmark.Version != savedPlanVersion {
-		return nil, fmt.Errorf("unsupported saved plan format %d; update the Telos CLI or create a new saved plan", bookmark.Version)
-	}
-	if (bookmark.ChangeRequestID == "") == (bookmark.PlanID == "") || bookmark.DeploymentID == "" || bookmark.Context == "" || bookmark.OrgID == "" || bookmark.APIEndpoint == "" {
-		return nil, fmt.Errorf("invalid saved plan file: one plan or request ID, deployment, context, organization, and API endpoint are required")
-	}
-	if bookmark.Version >= 2 && bookmark.ChangeRequestID != "" && (bookmark.PreparedPlanID == "" || bookmark.UpdateNumber < 1) {
-		return nil, fmt.Errorf("invalid saved plan file: an exact prepared plan and update number are required")
-	}
-	return &bookmark, nil
-}
-
-func validateSavedRequest(bookmark *savedDeploymentPlan, request *cloud.ChangeRequestRecord) error {
-	if bookmark.ChangeRequestID != "" {
-		if bookmark.Version == 1 {
-			if request.LegacyConfirmationValid != nil && !*request.LegacyConfirmationValid {
-				return fmt.Errorf("this saved file refers to the original plan of %s, which was replaced; review the request and save a new plan", request.ID)
-			}
-		} else if bookmark.PreparedPlanID != request.PreparedPlanID || bookmark.UpdateNumber != request.UpdateNumber {
-			return fmt.Errorf("%s Update %d's saved plan was replaced; review Update %d and save a new plan", request.ID, bookmark.UpdateNumber, request.UpdateNumber)
-		}
-	}
-	if request.PlanStale {
-		if request.Kind == "plan" {
-			return fmt.Errorf("the deployment changed after this plan was prepared; nothing was applied; prepare a fresh plan against session %s", request.DeploymentID)
-		}
-		return fmt.Errorf("the deployment changed after this plan was prepared; nothing was applied; review and reconcile request %s in the dashboard before confirming its new plan", request.ID)
-	}
-	return nil
-}
-
-func validateSavedDeploymentPlan(control *cloud.Client, bookmark *savedDeploymentPlan) error {
-	if cloud.NormalizeEndpoint(bookmark.APIEndpoint) != control.Endpoint {
-		return fmt.Errorf("saved plan belongs to a different API endpoint; select its configured endpoint before applying")
-	}
-	if bookmark.Context != control.ContextName() {
-		return fmt.Errorf("saved plan belongs to context %s, but the selected context is %s; use --context %s", bookmark.Context, control.ContextName(), bookmark.Context)
-	}
-	orgID, err := cloudPlanOrgID(control)
-	if err != nil {
-		return err
-	}
-	if bookmark.OrgID != orgID {
-		return fmt.Errorf("saved plan belongs to a different organization or personal account")
-	}
-	return nil
+	})
+	return record, name, err
 }
 
 func runCloudPlan(input cloudPlanInput, output string, jsonOut bool) error {
@@ -492,13 +324,6 @@ func runSavedCloudApply(bookmark *savedDeploymentPlan, contextOverride string, j
 	return nil
 }
 
-func planOutputWriter(jsonOut bool) io.Writer {
-	if jsonOut {
-		return io.Discard
-	}
-	return os.Stdout
-}
-
 func requestStarted(request *cloud.ChangeRequestRecord) bool {
 	return request.Status == "confirmed" || request.Status == "applying" || request.Status == "applied"
 }
@@ -591,24 +416,10 @@ func confirmCloudRequest(control *cloud.Client, request *cloud.ChangeRequestReco
 	return nil, err
 }
 
-func discardUnstartedCloudRequest(control *cloud.Client, request *cloud.ChangeRequestRecord) (*cloud.ChangeRequestRecord, error) {
-	discarded, err := control.DiscardChangeRequest(*request)
-	if err != nil {
-		current, readErr := control.GetChangeRequest(request.DeploymentID, request.ID)
-		if readErr == nil && sameCloudPlan(request, current) && requestStarted(current) {
-			return current, nil
-		}
-		return nil, fmt.Errorf("could not discard plan %s: %w; inspect or discard it at %s", request.ID, err, cloudRequestReviewURL(control, *request))
-	}
-	if requestStarted(discarded) {
-		return discarded, nil
-	}
-	return nil, fmt.Errorf("Plan %s was discarded; no changes were applied", request.ID)
-}
-
 func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.ChangeRequestRecord,
 	yes bool, input io.Reader, previewOut, promptOut io.Writer, pollInterval time.Duration,
 ) (*cloud.ChangeRequestRecord, error) {
+	stopped := fmt.Errorf("stopped waiting for %s; review or discard it at %s", request.ID, cloudRequestReviewURL(control, *request))
 	ticker := time.NewTicker(pollInterval)
 	defer ticker.Stop()
 	var answer <-chan bool
@@ -628,7 +439,7 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 			return request, nil
 		}
 		if ctx.Err() != nil {
-			return discardUnstartedCloudRequest(control, request)
+			return nil, stopped
 		}
 		if request.Status != "queued" && request.Status != "awaiting_confirmation" {
 			return nil, requestStoppedError(request)
@@ -656,10 +467,10 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 		}
 		select {
 		case <-ctx.Done():
-			return discardUnstartedCloudRequest(control, request)
+			return nil, stopped
 		case yes := <-answer:
 			if !yes || ctx.Err() != nil {
-				return discardUnstartedCloudRequest(control, request)
+				return nil, stopped
 			}
 			return confirmCloudRequest(control, request)
 		case <-ticker.C:
@@ -673,161 +484,4 @@ func awaitCloudApply(ctx context.Context, control *cloud.Client, request *cloud.
 			request = current
 		}
 	}
-}
-
-func deploymentPlanState(markdown string, skills []cloud.DeploymentPlanSkill) planSpecState {
-	state := planSpecState{Skills: []planSkillLock{}}
-	if strings.TrimSpace(markdown) != "" {
-		if parsed, err := planSpecStateFromMarkdown([]byte(markdown), nil); err == nil {
-			state = parsed
-		}
-	}
-	for _, skill := range skills {
-		state.Skills = append(state.Skills, planSkillLock{Name: skill.Name, Ref: skill.Ref, Digest: skill.Digest, Starred: skill.Starred})
-	}
-	slices.SortFunc(state.Skills, func(a, b planSkillLock) int { return strings.Compare(a.Name, b.Name) })
-	return state
-}
-
-func printDeploymentPreview(out io.Writer, control *cloud.Client, plan *cloudPlanResult) {
-	request := plan.request
-	printSummaryField(out, "Spec", plan.specName)
-	printSummaryField(out, "Target", "cloud")
-	printSummaryField(out, "Context", control.ContextName())
-	printSummaryField(out, "Session", request.DeploymentID)
-	if plan.currentRef != "" {
-		printSummaryField(out, "Current", plan.currentRef)
-	}
-	if request.Kind == "plan" {
-		printSummaryField(out, "Preview", cloudRequestReviewURL(control, *request))
-	} else {
-		printSummaryField(out, "Review", cloudRequestReviewURL(control, *request))
-	}
-	if request.Error != nil {
-		printSummaryField(out, "Reason", *request.Error)
-	}
-	printDeploymentPlanDetails(out, request)
-}
-
-func printDeploymentPlan(out io.Writer, control *cloud.Client, request *cloud.ChangeRequestRecord) {
-	if request.Kind == "plan" {
-		printSummaryField(out, "Plan", request.ID)
-	} else {
-		printSummaryField(out, "Request", request.ID)
-		if request.UpdateNumber > 0 {
-			printSummaryField(out, "Update", fmt.Sprint(request.UpdateNumber))
-		}
-		printSummaryField(out, "Status", changeRequestStatus(request.Status))
-	}
-	if request.Message != "" {
-		printSummaryField(out, "Message", request.Message)
-	}
-	if request.Error != nil {
-		printSummaryField(out, "Reason", *request.Error)
-	}
-	printSummaryField(out, "Context", control.ContextName())
-	printSummaryField(out, "Session", request.DeploymentID)
-	if request.Kind == "plan" {
-		printSummaryField(out, "Preview", cloudRequestReviewURL(control, *request))
-	} else {
-		printSummaryField(out, "Review", cloudRequestReviewURL(control, *request))
-	}
-	printDeploymentPlanDetails(out, request)
-}
-
-func printDeploymentPlanDetails(out io.Writer, request *cloud.ChangeRequestRecord) {
-	if creation := request.Creation; creation != nil {
-		if request.Mode != "preview" {
-			printSummaryField(out, "Name", creation.Name)
-		}
-		if creation.AgentModel != nil {
-			printSummaryField(out, "Model", *creation.AgentModel)
-		}
-		if creation.AgentThinking != nil {
-			printSummaryField(out, "Thinking", *creation.AgentThinking)
-		}
-		if creation.Inference != nil {
-			selection, _ := json.Marshal(creation.Inference)
-			printSummaryField(out, "Inference", string(selection))
-		}
-		printSummaryField(out, "Secrets", firstNonEmpty(strings.Join(creation.SecretIDs, ", "), "none"))
-	}
-	if request.Force {
-		printSummaryField(out, "Snapshot", "bypass allowed (--force)")
-		fmt.Fprintln(out, "The current revision may not have a restore point when this change applies.")
-	}
-	if request.Preview == nil {
-		fmt.Fprintln(out, "Preparing the plan.")
-		return
-	}
-	if request.BaseRevisionID != nil {
-		printSummaryField(out, "Base", *request.BaseRevisionID)
-	}
-	preview := request.Preview
-	printPlanStateDelta(out, deploymentPlanState(preview.BaseSpec, preview.BaseSkills), deploymentPlanState(preview.ProposedSpec, preview.ProposedSkills))
-	diff := internaldiff.Diff("deployed/SPEC.md", []byte(preview.BaseSpec), "proposed/SPEC.md", []byte(preview.ProposedSpec))
-	if len(diff) > 0 {
-		fmt.Fprintln(out)
-		fmt.Fprint(out, string(diff))
-	} else {
-		fmt.Fprintln(out, "No spec changes.")
-	}
-	if request.Mode == "preview" {
-		fmt.Fprintln(out, "Preview only. Use --out=FILE with --message to save a Change Request that can be applied.")
-	}
-}
-
-func printDeploymentPlanResult(out io.Writer, control *cloud.Client, request *cloud.ChangeRequestRecord) {
-	fmt.Fprintln(out)
-	if request.Kind == "plan" {
-		printSummaryField(out, "Plan", request.ID)
-		printSummaryField(out, "Deployment", cloudPlanDeploymentURL(control, *request))
-	} else {
-		printSummaryField(out, "Request", request.ID)
-	}
-	printSummaryField(out, "Status", changeRequestStatus(request.Status))
-	if request.Error != nil {
-		printSummaryField(out, "Reason", *request.Error)
-	}
-	if request.ResultRevisionID != nil {
-		printSummaryField(out, "Revision", *request.ResultRevisionID)
-	}
-	printSummaryField(out, "Describe", "telos describe "+request.DeploymentID+" --context "+control.ContextName())
-}
-
-func printDeploymentPlanJSON(control *cloud.Client, request *cloud.ChangeRequestRecord, output string) {
-	operation := request.Status
-	if request.Mode == "preview" {
-		operation = "preview"
-	} else if !requestStarted(request) {
-		operation = "requested"
-	}
-	receipt := map[string]any{
-		"operation": operation, "context": control.ContextName(), "change_request": request,
-		"review_url": cloudRequestReviewURL(control, *request), "session_id": request.DeploymentID,
-	}
-	if request.Kind == "plan" {
-		delete(receipt, "change_request")
-		receipt["plan"] = request
-		receipt["preview_url"] = cloudRequestReviewURL(control, *request)
-		if operation == "requested" {
-			receipt["operation"] = "planned"
-		}
-		if requestStarted(request) {
-			receipt["deployment_url"] = cloudPlanDeploymentURL(control, *request)
-		}
-	}
-	if request.PackageRef != "" {
-		// Cloud may prepare a new package version before confirmation. Report that final artifact,
-		// never the original upload or its metadata.
-		pkg := map[string]string{"ref": request.PackageRef, "digest": request.PackageDigest}
-		if reference, err := parsePackageReference(request.PackageRef); err == nil {
-			pkg["scope"], pkg["name"], pkg["version"] = reference.scope, reference.name, reference.version
-		}
-		receipt["package"] = pkg
-	}
-	if output != "" {
-		receipt["plan_file"] = output
-	}
-	printJSON(receipt)
 }

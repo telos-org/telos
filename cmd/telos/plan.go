@@ -4,26 +4,14 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
-	internaldiff "github.com/rogpeppe/go-internal/diff"
-	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
 
 // -- plan ---------------------------------------------------------------------
-
-type specComparison struct {
-	sessionID  string
-	currentRef string
-	diff       string
-	current    planSpecState
-	proposed   planSpecState
-}
 
 type planSpecState struct {
 	Version         string          `json:"version,omitempty"`
@@ -40,7 +28,7 @@ type planSkillLock struct {
 
 func cmdPlan(args []string) {
 	fs := newCommandFlagSet("plan", "telos plan SPEC.md [--out=FILE] [flags]")
-	sessionID := fs.String("session", "", "Managed session ID to compare")
+	sessionID := fs.String("goal", "", "ID of the Goal to compare against")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	output := fs.String("out", "", "Save a Cloud Change Request and write its reference to this file")
 	message := ""
@@ -57,264 +45,47 @@ func cmdPlan(args []string) {
 		os.Exit(2)
 	}
 	requireArgCount(fs, 1, "one SPEC.md")
+	if !strings.HasPrefix(strings.TrimSpace(fs.Arg(0)), "@") {
+		if _, ok := existingSpecPath(fs.Arg(0)); !ok {
+			exitWithError(specFileNotFound(fs.Arg(0)))
+		}
+	}
 	*sessionID = strings.TrimSpace(*sessionID)
-	specPath := resolveSpecPath(fs.Arg(0))
-	platform := "cloud"
-	if !strings.HasPrefix(fs.Arg(0), "@") {
-		platform, err = launchSpecPlatform(specPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
+	if err := validateApplySession(*sessionID); err != nil {
+		exitWithError(err)
 	}
-	if err := validateApplySessionPlatform(*sessionID, platform); err != nil {
+
+	if err := validateForceApply(*force, *sessionID); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
-	if platform != "local" {
-		if err := validateForceApply(*force, *sessionID); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(2)
-		}
-		runtimeConfig := sessionRuntimeConfig{
-			Model: modelOption(fs, *model), Thinking: stringOption(fs, "thinking", *thinking, "TELOS_THINKING"),
-		}
-		if *sessionID != "" && cloudRuntimeConfigSet(runtimeConfig) {
-			fmt.Fprintln(os.Stderr, "error: --model and --thinking can only configure a new Cloud deployment")
-			os.Exit(2)
-		}
-		mode := "preview"
-		if flagNameSet(fs, "out") {
-			mode = "saved"
-		}
-		message, err = normalizePlanMessage(message, mode == "saved")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(2)
-		}
-		if err := runCloudPlan(cloudPlanInput{
-			specArg: fs.Arg(0), sessionID: *sessionID, contextOverride: contextOverride,
-			runtimeConfig: runtimeConfig, force: *force, mode: mode, revisionMessage: message,
-		}, *output, *jsonOut); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		return
+	runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, 0)
+	if err != nil {
+		exitWithError(err)
 	}
-	if flagNamesSet(fs, "out", "model", "thinking", "force", "message", "m") || contextOverride != "" {
-		fmt.Fprintln(os.Stderr, "error: --out, --context, --model, --thinking, --force, and --message require a Cloud plan")
+	if *sessionID != "" && cloudRuntimeConfigSet(runtimeConfig) {
+		fmt.Fprintln(os.Stderr, "error: --model and --thinking can only configure a new Cloud deployment")
 		os.Exit(2)
 	}
-	markdown, err := os.ReadFile(specPath)
+	mode := "preview"
+	if flagNameSet(fs, "out") {
+		mode = "saved"
+	}
+	message, err = normalizePlanMessage(message, mode == "saved")
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
+	if err := runCloudPlan(cloudPlanInput{
+		specArg: fs.Arg(0), sessionID: *sessionID, contextOverride: contextOverride,
+		runtimeConfig: runtimeConfig, force: *force, mode: mode, revisionMessage: message,
+	}, *output, *jsonOut); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	compiled, state, err := compilePlanSpec(specPath, "", markdown)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	var comparison *specComparison
-	if *sessionID != "" {
-		comparison, err = compareSessionSpec(*sessionID, markdown, state, platform, "")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	if *jsonOut {
-		operation := "create"
-		if comparison != nil {
-			operation = "update"
-		}
-		plan := map[string]any{
-			"spec": map[string]any{
-				"name": compiled.Environment.Name, "path": specPath, "content_hash": compiled.ContentHash,
-				"platform": platform, "namespace": compiled.Namespace, "skills": skillNames(compiled.Skills),
-				"required_rubrics": skillNames(compiled.RequiredVerifierSkills),
-			},
-			"session": map[string]any{"interval_seconds": compiled.Environment.IntervalSeconds},
-			"target":  map[string]any{"mode": "local", "operation": operation},
-		}
-		if comparison != nil {
-			plan["change"] = map[string]any{
-				"session_id": comparison.sessionID, "current_ref": comparison.currentRef,
-				"current": comparison.current, "proposed": comparison.proposed, "spec_diff": comparison.diff,
-			}
-		}
-		printJSON(plan)
-		return
-	}
-	printPlanPreview(os.Stdout, compiled, specPath, platform, "", comparison)
 }
 
-func compilePlanSpec(
-	specPath string,
-	contextOverride string,
-	markdown []byte,
-) (*spec.CompiledEnvironment, planSpecState, error) {
-	var compiled *spec.CompiledEnvironment
-	var state planSpecState
-	err := withPlanRegistrySkills(specPath, contextOverride, func() error {
-		var err error
-		compiled, err = spec.CompileEnvironment(specPath)
-		if err != nil {
-			return err
-		}
-		state, err = planSpecStateForCompiled(compiled, markdown)
-		if err != nil {
-			return fmt.Errorf("build plan metadata: %w", err)
-		}
-		return nil
-	})
-	return compiled, state, err
-}
-
-func printPlanPreview(
-	out io.Writer,
-	compiled *spec.CompiledEnvironment,
-	specPath string,
-	platform string,
-	contextName string,
-	comparison *specComparison,
-) {
-	printSummaryField(out, "Spec", compiled.Environment.Name)
-	printSummaryField(out, "Target", platform)
-	if contextName != "" {
-		printSummaryField(out, "Context", contextName)
-	}
-	if comparison != nil {
-		printSummaryField(out, "Session", comparison.sessionID)
-		printSummaryField(out, "Current", comparison.currentRef)
-	}
-	printSummaryField(out, "Path", specPath)
-	if platform != "local" {
-		printSummaryField(out, "Namespace", compiled.Namespace)
-	}
-	printSummaryField(out, "Hash", compiled.ContentHash)
-	if len(compiled.Skills) > 0 {
-		printSummaryField(out, "Skills", strings.Join(skillDisplayNames(compiled), ", "))
-	}
-	if comparison == nil {
-		return
-	}
-	printPlanStateDelta(out, comparison.current, comparison.proposed)
-	fmt.Fprintln(out)
-	if comparison.diff == "" {
-		fmt.Fprintln(out, "No spec changes.")
-		return
-	}
-	fmt.Fprint(out, comparison.diff)
-	if !strings.HasSuffix(comparison.diff, "\n") {
-		fmt.Fprintln(out)
-	}
-}
-
-func compareSessionSpec(
-	sessionID string,
-	proposed []byte,
-	proposedState planSpecState,
-	platform string,
-	contextOverride string,
-) (*specComparison, error) {
-	sessionID = strings.TrimSpace(sessionID)
-	switch {
-	case isLocalApplyID(sessionID):
-		if platform != "local" {
-			return nil, fmt.Errorf("%s is local but the proposed spec targets %s", sessionID, platform)
-		}
-		localStore := store()
-		current, err := localStore.Spec(sessionID)
-		if err != nil {
-			return nil, err
-		}
-		localSession, err := localStore.Get(sessionID)
-		if err != nil {
-			return nil, err
-		}
-		if localSession.SessionDir == nil || strings.TrimSpace(*localSession.SessionDir) == "" {
-			return nil, fmt.Errorf("local session %s has no session directory", sessionID)
-		}
-		currentState, err := planLocalSessionSpecState(
-			[]byte(current.Markdown),
-			*localSession.SessionDir,
-		)
-		if err != nil {
-			return nil, err
-		}
-		return newSpecComparisonWithStates(
-			sessionID,
-			"current session",
-			[]byte(current.Markdown),
-			proposed,
-			currentState,
-			proposedState,
-		), nil
-	default:
-		return nil, fmt.Errorf("invalid session id %q", sessionID)
-	}
-}
-
-func planLocalSessionSpecState(
-	markdown []byte,
-	sessionDir string,
-) (planSpecState, error) {
-	manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
-	if err != nil {
-		return planSpecState{}, fmt.Errorf("read current local session metadata: %w", err)
-	}
-	return planSpecStateFromMarkdown(markdown, manifest.ApplyPackageLock)
-}
-
-func newSpecComparison(sessionID string, currentRef string, current, proposed []byte) *specComparison {
-	return newSpecComparisonWithStates(
-		sessionID,
-		currentRef,
-		current,
-		proposed,
-		planSpecState{},
-		planSpecState{},
-	)
-}
-
-func newSpecComparisonWithStates(
-	sessionID string,
-	currentRef string,
-	current []byte,
-	proposed []byte,
-	currentState planSpecState,
-	proposedState planSpecState,
-) *specComparison {
-	return &specComparison{
-		sessionID:  sessionID,
-		currentRef: currentRef,
-		current:    currentState,
-		proposed:   proposedState,
-		diff: string(internaldiff.Diff(
-			"deployed/SPEC.md",
-			current,
-			"proposed/SPEC.md",
-			proposed,
-		)),
-	}
-}
-
-func planSpecStateForCompiled(
-	compiled *spec.CompiledEnvironment,
-	markdown []byte,
-) (planSpecState, error) {
-	pkg, err := spec.BuildApplyPackage(compiled)
-	if err != nil {
-		return planSpecState{}, err
-	}
-	return planSpecStateFromMarkdown(markdown, &pkg.Manifest)
-}
-
-func planSpecStateFromMarkdown(
-	markdown []byte,
-	manifest *spec.ApplyPackageManifest,
-) (planSpecState, error) {
+func planSpecStateFromMarkdown(markdown []byte) (planSpecState, error) {
 	raw, _, ok := spec.ParseFrontmatter(string(markdown))
 	if !ok {
 		return planSpecState{}, fmt.Errorf("spec has no valid YAML frontmatter")
@@ -331,27 +102,7 @@ func planSpecStateFromMarkdown(
 		seconds := int(duration / time.Second)
 		state.IntervalSeconds = &seconds
 	}
-	if manifest == nil {
-		return state, nil
-	}
-	names := make([]string, 0, len(manifest.Skills))
-	for name := range manifest.Skills {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		lock := manifest.Skills[name]
-		ref := strings.TrimSpace(lock.Ref)
-		if ref == "" {
-			ref = strings.TrimSpace(manifest.SkillProvenance[name].Ref)
-		}
-		state.Skills = append(state.Skills, planSkillLock{
-			Name:    name,
-			Ref:     ref,
-			Digest:  strings.TrimSpace(lock.Digest),
-			Starred: lock.Starred,
-		})
-	}
+
 	return state, nil
 }
 
@@ -384,11 +135,19 @@ func planDeltaValue(current, proposed string) string {
 	return firstNonEmpty(current, "-") + " -> " + firstNonEmpty(proposed, "-")
 }
 
+// formatPlanInterval writes an interval the way specs do, such as 6h or 1h30m.
 func formatPlanInterval(seconds *int) string {
 	if seconds == nil {
 		return "-"
 	}
-	return (time.Duration(*seconds) * time.Second).String()
+	value := (time.Duration(*seconds) * time.Second).String()
+	if strings.HasSuffix(value, "m0s") {
+		value = strings.TrimSuffix(value, "0s")
+	}
+	if strings.HasSuffix(value, "h0m") {
+		value = strings.TrimSuffix(value, "0m")
+	}
+	return value
 }
 
 func formatPlanSkillLocks(skills []planSkillLock) string {
@@ -408,30 +167,4 @@ func formatPlanSkillLocks(skills []planSkillLock) string {
 		values = append(values, value)
 	}
 	return strings.Join(values, ", ")
-}
-
-func skillNames(skills []*spec.Skill) []string {
-	var names []string
-	for _, s := range skills {
-		names = append(names, s.Name)
-	}
-	return names
-}
-
-// skillDisplayNames marks required rubrics with the same trailing star used in
-// spec frontmatter.
-func skillDisplayNames(compiled *spec.CompiledEnvironment) []string {
-	required := map[string]bool{}
-	for _, s := range compiled.RequiredVerifierSkills {
-		required[s.Name] = true
-	}
-	var names []string
-	for _, s := range compiled.Skills {
-		name := s.Name
-		if required[name] {
-			name += "*"
-		}
-		names = append(names, name)
-	}
-	return names
 }

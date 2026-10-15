@@ -13,6 +13,7 @@ import (
 
 	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -84,7 +85,7 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 				"state":          "healthy",
 				"status":         "ready",
 				"package_ref":    "@telos/auth:1.0.0",
-				"package_digest": "sha256:abc",
+				"package_digest": "sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a",
 				"service_url":    "https://auth.example.com",
 				"dashboard_url":  "https://dashboard.example.com",
 				"created_at":     "then",
@@ -101,7 +102,7 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 	for _, want := range []string{
 		"NAME",
 		"STATUS",
-		"SESSION",
+		"ID",
 		"auth",
 		"ready",
 		"sess_123",
@@ -124,10 +125,10 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 		"STATUS",
 		"REVISION",
 		"SERVICE",
-		"SESSION",
+		"ID",
 		"auth",
 		"ready",
-		"sha256:abc",
+		"sha256:8f21c47a91ee ",
 		"https://auth.example.com",
 		"sess_123",
 	} {
@@ -135,7 +136,7 @@ func TestCmdListShowsCloudSessionsForConfiguredCloud(t *testing.T) {
 			t.Fatalf("wide list output missing %q:\n%s", want, wideOut)
 		}
 	}
-	for _, notWant := range []string{"TARGET", "PACKAGE", "DASHBOARD", "@telos/auth:1.0.0"} {
+	for _, notWant := range []string{"TARGET", "PACKAGE", "DASHBOARD", "@telos/auth:1.0.0", "8f21c47a91ee1"} {
 		if strings.Contains(wideOut, notWant) {
 			t.Fatalf("wide list output should omit %q:\n%s", notWant, wideOut)
 		}
@@ -178,7 +179,7 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 	if body["context"] != "personal" {
 		t.Fatalf("cloud list json context: %#v", body["context"])
 	}
-	sessions, ok := body["sessions"].([]any)
+	sessions, ok := body["goals"].([]any)
 	if !ok || len(sessions) != 1 {
 		t.Fatalf("cloud list json sessions: %#v", body)
 	}
@@ -186,6 +187,9 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 	if !ok || session["id"] != "sess_123" || session["status"] != "ready" ||
 		session["status_reason"] != "The agent finished and the verifier accepted the result." {
 		t.Fatalf("cloud list json first session: %#v", sessions[0])
+	}
+	if _, ok := session["state"]; ok {
+		t.Fatalf("cloud list json exposes the raw state: %#v", session)
 	}
 }
 
@@ -235,7 +239,7 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 		Status:        "ready",
 		StatusReason:  "The agent finished and the verifier accepted the result.",
 		PackageRef:    "@telos/auth:1.0.0",
-		PackageDigest: "sha256:abc",
+		PackageDigest: "sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a",
 		ServiceURL:    &serviceURL,
 		DashboardURL:  &dashboardURL,
 		CreatedAt:     "then",
@@ -248,8 +252,8 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 	for _, want := range []string{
 		"Name      auth",
 		"Status    ready",
-		"Session   sess_123",
-		"Revision  sha256:abc",
+		"Goal      sess_123",
+		"Revision  sha256:8f21c47a91ee\n",
 		"Service   https://auth.example.com",
 	} {
 		if !strings.Contains(text, want) {
@@ -262,6 +266,51 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("cloud session description should omit %q:\n%s", notWant, text)
 		}
+	}
+}
+
+func TestPrintCloudSessionReceiptShowsNextUsefulAction(t *testing.T) {
+	serviceURL := "https://auth.example.com"
+	dashboardURL := "https://dashboard.example.com"
+	session := &cloud.SessionRecord{
+		ID:            "sess_123",
+		Name:          "auth",
+		State:         "deploying",
+		Status:        "working",
+		PackageRef:    "@telos/auth:1.0.0",
+		PackageDigest: "sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a",
+		AgentModel:    "provider/model",
+		AgentThinking: "high",
+		ServiceURL:    &serviceURL,
+		DashboardURL:  &dashboardURL,
+	}
+
+	var out bytes.Buffer
+	printCloudSessionReceiptForContext(&out, "created", session, "personal", "")
+	text := out.String()
+	for _, want := range []string{
+		"created auth",
+		"Status    working",
+		"Goal      sess_123",
+		"Revision  sha256:8f21c47a91ee\n",
+		"Context   personal",
+		"Service   https://auth.example.com",
+		"Logs      telos logs sess_123\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("cloud session receipt missing %q:\n%s", want, text)
+		}
+	}
+	for _, notWant := range []string{"Name", "Target", "Package", "Digest", "Dashboard"} {
+		if strings.Contains(text, notWant) {
+			t.Fatalf("cloud session receipt should omit %q:\n%s", notWant, text)
+		}
+	}
+
+	out.Reset()
+	printCloudSessionReceiptForContext(&out, "created", session, "@telos", "@telos")
+	if !strings.Contains(out.String(), "Logs      telos logs --context @telos sess_123") {
+		t.Fatalf("receipt for a context other than the saved one omits it from the logs hint:\n%s", out.String())
 	}
 }
 
@@ -283,7 +332,7 @@ func TestPrintCloudSessionDescriptionOmitsUnavailableSurfaces(t *testing.T) {
 	text := out.String()
 	for _, want := range []string{
 		"Status    deploying",
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Revision  sha256:abc",
 	} {
 		if !strings.Contains(text, want) {
@@ -326,7 +375,7 @@ func TestPrintCloudSessionJSONContainsOnlyAuthoritativeRecord(t *testing.T) {
 	}
 
 	out := captureStdout(t, func() {
-		printCloudSessionJSON(session, "org_telos")
+		printCloudSessionJSON(session, "org_telos", nil)
 	})
 	var body map[string]any
 	if err := json.Unmarshal([]byte(out), &body); err != nil {
@@ -335,10 +384,23 @@ func TestPrintCloudSessionJSONContainsOnlyAuthoritativeRecord(t *testing.T) {
 	if body["id"] != "sess_123" || body["status"] != "working" || body["context"] != "org_telos" {
 		t.Fatalf("cloud session JSON: %#v", body)
 	}
-	for _, key := range []string{"progress", "progress_error", "stage", "latest_activity", "waiting_action"} {
+	for _, key := range []string{"state", "progress", "progress_error", "stage", "latest_activity", "waiting_action"} {
 		if _, ok := body[key]; ok {
-			t.Fatalf("cloud session JSON contains derived field %q: %#v", key, body)
+			t.Fatalf("cloud session JSON contains %q: %#v", key, body)
 		}
+	}
+
+	// A control plane that predates status still reports one.
+	session.Status = ""
+	out = captureStdout(t, func() {
+		printCloudSessionJSON(session, "org_telos", nil)
+	})
+	body = map[string]any{}
+	if err := json.Unmarshal([]byte(out), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body["status"] != "deploying" {
+		t.Fatalf("cloud session JSON without a Cloud status: %#v", body)
 	}
 }
 
@@ -359,7 +421,7 @@ func TestPrintCloudSessionDeleteReceiptUsesSessionSummary(t *testing.T) {
 	for _, want := range []string{
 		"deleted auth",
 		"Status    deleted",
-		"Session   sess_123",
+		"Goal      sess_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("cloud session stop receipt missing %q:\n%s", want, text)
@@ -389,7 +451,7 @@ func TestPrintCloudSessionDeleteReceiptShowsAsyncDeletion(t *testing.T) {
 	for _, want := range []string{
 		"delete requested for auth",
 		"Status    deleting",
-		"Session   sess_123",
+		"Goal      sess_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("cloud session delete receipt missing %q:\n%s", want, text)
@@ -449,7 +511,7 @@ func TestCmdDeleteDeletesCloudSession(t *testing.T) {
 	for _, want := range []string{
 		"deleted auth",
 		"Status    deleted",
-		"Session   sess_123",
+		"Goal      sess_123",
 	} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("delete output missing %q:\n%s", want, out)
@@ -593,55 +655,6 @@ func TestRootListSessionsUsesScopedContext(t *testing.T) {
 	}
 }
 
-func TestRootListSessionsScopesLocalRootTree(t *testing.T) {
-	root := filepath.Join(t.TempDir(), "sessions")
-	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	rootKind := sessionapi.KindController
-	rootSpec := "---\nversion: 0.1.0\nname: root\nplatform: local\n---\n# Root\n"
-	rootSession, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown: &rootSpec,
-		SessionKind:  &rootKind,
-	})
-	if err != nil {
-		t.Fatalf("Create root: %v", err)
-	}
-	childSpec := "---\nversion: 0.1.0\nname: child\nplatform: local\n---\n# Child\n"
-	child, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown:    &childSpec,
-		ParentSessionID: &rootSession.SessionID,
-	})
-	if err != nil {
-		t.Fatalf("Create child: %v", err)
-	}
-	siblingSpec := "---\nversion: 0.1.0\nname: sibling\nplatform: local\n---\n# Sibling\n"
-	if _, err := store.Create(sessionapi.SessionCreateRequest{
-		SpecMarkdown: &siblingSpec,
-		SessionKind:  &rootKind,
-	}); err != nil {
-		t.Fatalf("Create sibling: %v", err)
-	}
-
-	t.Setenv("TELOS_SESSION_DIR", root)
-	t.Setenv("TELOS_RUNTIME", string(sessionapi.RuntimeLocal))
-	t.Setenv("TELOS_SESSION_ID", rootSession.SessionID)
-
-	sessions, handled, err := rootListSessions(0)
-	if err != nil {
-		t.Fatalf("rootListSessions: %v", err)
-	}
-	if !handled {
-		t.Fatal("expected local root context to be handled")
-	}
-	got := make([]string, 0, len(sessions))
-	for _, session := range sessions {
-		got = append(got, session.SessionID)
-	}
-	want := []string{rootSession.SessionID, child.SessionID}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("scoped sessions: got %v want %v", got, want)
-	}
-}
-
 func TestPrintSessionDescriptionIncludesOnlyLifecycleEssentials(t *testing.T) {
 	name := "postgres"
 	kind := sessionapi.KindController
@@ -704,7 +717,7 @@ func TestPrintSessionDescriptionIncludesOnlyLifecycleEssentials(t *testing.T) {
 		"Name      postgres",
 		"Target    cloud",
 		"Status    completed",
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Cost      $1.2300",
 		"Revision  2",
 		"Parent    sess_parent",
@@ -831,7 +844,7 @@ func TestPrintLocalLaunchIncludesWorkspaceScopedCommands(t *testing.T) {
 		"Target    local",
 		"Status    active",
 		"Cost      -",
-		"Session   local_123",
+		"Goal      local_123",
 		"Workspace /tmp/telos-blackbox",
 		"Describe  cd '/tmp/telos-blackbox' && telos describe local_123",
 		"Logs      cd '/tmp/telos-blackbox' && telos logs local_123",
@@ -862,7 +875,7 @@ func TestPrintSessionReceiptUsesNormalizedSummary(t *testing.T) {
 	for _, want := range []string{
 		"updated gitea",
 		"Status    idle",
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Cost      $1.1907",
 	} {
 		if !strings.Contains(text, want) {
@@ -893,7 +906,7 @@ func TestPrintLocalSessionDeleteReceiptUsesSessionSummary(t *testing.T) {
 	for _, want := range []string{
 		"deleted gitea (history preserved)",
 		"Status    stopped",
-		"Session   sess_123",
+		"Goal      sess_123",
 		"Cost      $1.1907",
 	} {
 		if !strings.Contains(text, want) {
@@ -920,7 +933,7 @@ func TestPrintLocalSessionDeleteReceiptUsesSessionIDForUnnamedSession(t *testing
 	for _, want := range []string{
 		"deleted sess_123 (history preserved)",
 		"Status    stopped",
-		"Session   sess_123",
+		"Goal      sess_123",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("delete receipt missing %q:\n%s", want, text)
@@ -930,5 +943,21 @@ func TestPrintLocalSessionDeleteReceiptUsesSessionIDForUnnamedSession(t *testing
 		if strings.Contains(text, notWant) {
 			t.Fatalf("delete receipt should omit %q:\n%s", notWant, text)
 		}
+	}
+}
+
+func TestCmdListTellsASignedOutUserToLogIn(t *testing.T) {
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "config.yaml"))
+	t.Setenv(config.APIEndpointEnv, "")
+	t.Setenv(config.AuthTokenEnv, "")
+	t.Setenv(config.ContextEnv, "")
+	t.Setenv("TELOS_SESSION_ID", "")
+	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+
+	out := captureStdout(t, func() {
+		cmdList(nil)
+	})
+	if out != "Not signed in. Run `telos login` to see your Goals.\n" {
+		t.Fatalf("signed-out list = %q", out)
 	}
 }

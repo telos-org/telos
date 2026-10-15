@@ -107,12 +107,24 @@ func TestPrepareRegistrySkillsCachesAndPinsExactVersion(t *testing.T) {
 	}
 }
 
-func TestCompilePlanSpecLeavesPersistentRegistryCacheUntouched(t *testing.T) {
+func TestPlanStagesRegistrySkillsWithoutPopulatingPersistentCache(t *testing.T) {
 	digest, bundle := testRegistrySkillBundle(t, "verify-test")
 	metadataRequests := 0
 	bundleRequests := 0
+	var stagedPackage []byte
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/deployment-plans/packages":
+			var payload struct {
+				Data []byte `json:"data_base64"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+				t.Error(err)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			stagedPackage = payload.Data
+			_, _ = w.Write([]byte(`{"ref":"@test/remote-skill:0.1.0"}`))
 		case "/api/skills/telos/verify-test/versions/1.2.3":
 			metadataRequests++
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -143,15 +155,19 @@ func TestCompilePlanSpecLeavesPersistentRegistryCacheUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	compiled, state, err := compilePlanSpec(specPath, "", markdown)
+	_, _, err := stageCloudPlanPackage(cloud.NewClient(srv.URL, "test-token"), cloudPlanInput{
+		specArg: specPath, sessionID: "goal_existing", mode: "preview",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(compiled.Skills) != 1 || compiled.Skills[0].Instructions != "Verify the result." {
-		t.Fatalf("compiled skills: %#v", compiled.Skills)
+	_, manifest, err := spec.ApplyPackageSpec(stagedPackage)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if len(state.Skills) != 1 || state.Skills[0].Digest != digest || !state.Skills[0].Starred {
-		t.Fatalf("planned skill locks: %#v", state.Skills)
+	lock := manifest.Skills["verify-test"]
+	if lock.Digest != digest || !lock.Starred {
+		t.Fatalf("planned skill lock: %#v", lock)
 	}
 	if got := os.Getenv(spec.RegistrySkillsDirEnv); got != persistentCache {
 		t.Fatalf("registry cache environment = %q, want %q", got, persistentCache)
@@ -160,7 +176,7 @@ func TestCompilePlanSpecLeavesPersistentRegistryCacheUntouched(t *testing.T) {
 	if _, err := os.Stat(spec.RegistrySkillPath(ref)); !os.IsNotExist(err) {
 		t.Fatalf("plan populated persistent registry cache: %v", err)
 	}
-	if metadataRequests != 1 || bundleRequests != 1 {
+	if metadataRequests != 2 || bundleRequests != 1 {
 		t.Fatalf("registry requests: metadata=%d bundle=%d", metadataRequests, bundleRequests)
 	}
 }
