@@ -42,7 +42,11 @@ func deploymentPlanState(markdown string, skills []cloud.DeploymentPlanSkill) pl
 		}
 	}
 	for _, skill := range skills {
-		state.Skills = append(state.Skills, planSkillLock{Name: skill.Name, Ref: skill.Ref, Digest: skill.Digest, Starred: skill.Starred})
+		lock := planSkillLock{Name: skill.Name, Ref: skill.Ref, Digest: skill.Digest, Starred: skill.Starred, Draft: skill.Draft}
+		if skill.PublishedRef != nil {
+			lock.PublishedRef = *skill.PublishedRef
+		}
+		state.Skills = append(state.Skills, lock)
 	}
 	slices.SortFunc(state.Skills, func(a, b planSkillLock) int { return strings.Compare(a.Name, b.Name) })
 	return state

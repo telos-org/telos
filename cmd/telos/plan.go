@@ -20,10 +20,12 @@ type planSpecState struct {
 }
 
 type planSkillLock struct {
-	Name    string `json:"name"`
-	Ref     string `json:"ref,omitempty"`
-	Digest  string `json:"digest"`
-	Starred bool   `json:"required_rubric,omitempty"`
+	Name         string `json:"name"`
+	Ref          string `json:"ref,omitempty"`
+	Digest       string `json:"digest"`
+	Starred      bool   `json:"required_rubric,omitempty"`
+	Draft        bool   `json:"draft,omitempty"`
+	PublishedRef string `json:"published_ref,omitempty"`
 }
 
 func cmdPlan(args []string) {
@@ -159,6 +161,12 @@ func formatPlanSkillLocks(skills []planSkillLock) string {
 		value += " " + skill.Digest
 		if skill.Starred {
 			value += " *"
+		}
+		if skill.Draft {
+			value += " (draft)"
+		}
+		if skill.PublishedRef != "" {
+			value += " (publishes as " + skill.PublishedRef + ")"
 		}
 		values = append(values, value)
 	}

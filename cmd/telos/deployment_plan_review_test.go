@@ -31,7 +31,7 @@ func TestCloudSkillReviewSurvivesDecodingAndOutput(t *testing.T) {
 	}
 	var output bytes.Buffer
 	printDeploymentPlan(&output, client, request)
-	for _, want := range []string{"No spec changes", "-Old instructions.", "+Review every change.", "0644 -> 0755", "Content omitted: binary", `skill "large-skill" preview is incomplete (limit)`, "example.com"} {
+	for _, want := range []string{"No spec changes", "-Old instructions.", "+Review every change.", "0644 -> 0755", "Content omitted: binary", `skill "large-skill" preview is incomplete (limit)`, "example.com", "@personal/draft:1.0.0 sha256:new * (draft) (publishes as @personal/review:1.0.1)"} {
 		if !strings.Contains(output.String(), want) {
 			t.Errorf("terminal review lost %q: %s", want, output.String())
 		}
