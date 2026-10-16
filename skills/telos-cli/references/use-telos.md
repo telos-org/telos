@@ -63,7 +63,7 @@ Credentials
 
 A context is the workspace your commands act in: `personal`, or a team's `@handle`.
 
-## Write a goal specification
+## Write a spec
 
 Start by writing a preliminary `SPEC.md` for your service:
 
@@ -89,7 +89,7 @@ Run a public service for a shared reading list.
 
 At a framework level, the above example covers the minimal required items. [Goals](goals.md) walks through everything else a goal specification can include: frontmatter, skills, rubrics, and packages.
 
-## Plan it
+## Plan
 
 Once you are happy with the goal specification, `telos plan` validates the spec and shows what applying it would change, without changing anything.
 
@@ -102,7 +102,7 @@ Context   personal
 
 The first plan has no deployed version to compare against, so it shows the Goal's name, version, and context.
 
-## Apply it
+## Apply
 
 Once the plan looks good, use `telos apply` to deploy the spec to Telos Cloud.
 
@@ -121,7 +121,7 @@ Logs      telos logs goal_c7d2f0a4e8
 
 The `apply` command returns immediately and starts the Goal in the cloud with a unique ID.
 
-## Watch it work
+## Watch
 
 You can monitor your active Goal at different levels of detail and verbosity.
 
@@ -185,7 +185,7 @@ In this case, you would exercise `POST /books` and `GET /books` through the publ
 
 Congratulations! Your first Goal is live.
 
-## Update it
+## Update
 
 Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump its version to `0.2.0`, and add "Every book records who added it" to the Goal.
 
@@ -249,7 +249,7 @@ $ telos get goal_c7d2f0a4e8
 
 This writes the spec and its skills to a directory named after the Goal. Use `--output <dir>` to override the directory name.
 
-## Delete it
+## Delete
 
 If you would like to delete your Goal, along with its environment and the code the agent wrote — you can run:
 
