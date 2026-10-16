@@ -13,6 +13,8 @@ $ telos apply SPEC.md --model telos/max --thinking high
 $ telos apply SPEC.md --model my-anthropic-key/claude-sonnet-5-5
 ```
 
+The model and thinking effort are set when a Goal is created. They can't be changed on an existing Goal, so `--model` and `--thinking` don't work with `--goal`.
+
 ## Managed inference
 
 Telos exposes `telos/default` and `telos/max` as managed inference models. These abstract routing to frontier open and frontier closed models, respectively.
@@ -30,7 +32,6 @@ Telos lets you bring your own inference, configurable at <https://usetelos.ai/wo
 ### API key
 
 In many instances, teams have active API keys with major providers (Anthropic, OpenAI, xAI) or marketplaces (OpenRouter). Telos supports configuring this via the web interface.
-
 
 ### Subscription
 
@@ -53,6 +54,6 @@ Cloud     $1.25 (compute $1.00, storage $0.25)
 Inference $3.40 (Telos)
 ```
 
-Costs are labeled by the provider - `Telos`, the provider of your API key (like `Anthropic API key`), or your subscription (like `ChatGPT subscription`). Telos bills only `Telos` inference; your provider bills API key usage, and your subscription covers its own. For subscription inference, costs displayed are the API-equivalent cost.
+Costs are labeled by the provider: `Telos`, the provider of your API key (like `Anthropic API key`), or your subscription (like `ChatGPT subscription`). Telos bills only `Telos` inference; your provider bills API key usage, and your subscription covers its own. For subscription inference, costs displayed are the API-equivalent cost.
 
 For an API key or subscription, the agent runtime (`Pi`-backed) records the inference cost. If the runtime can't be reached, that cost is displayed as `unavailable`.
