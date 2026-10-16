@@ -9,7 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"slices"
+	"reflect"
 	"sort"
 	"strings"
 	"testing"
@@ -19,7 +19,7 @@ func TestApplyPackagePreservesYamlAliases(t *testing.T) {
 	dir := t.TempDir()
 	writePackageTestSkill(t, dir, "alpha", map[string]string{"SKILL.md": "---\nname: alpha\ndescription: Review service.\n---\nReview.\n"})
 	path := filepath.Join(dir, "SPEC.md")
-	data := []byte("---\nname: alias-spec\nversion: 1.0.0\nplatform: cloud\nskills: &selected [alpha]\ntags: *selected\n---\nBuild the service.\n")
+	data := []byte("---\nname: alias-spec\nversion: 1.0.0\nplatform: cloud\nskills: &selected [alpha]\nnotes: *selected\n---\nBuild the service.\n")
 	if err := os.WriteFile(path, data, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -46,10 +46,10 @@ func TestApplyPackagePreservesYamlAliases(t *testing.T) {
 func TestApplyPackageRelocationPreservesAliasedMetadata(t *testing.T) {
 	for _, registry := range []bool{false, true} {
 		for name, fields := range map[string]string{
-			"sequence": "skills: &selected [\"./rubrics/alpha*\"]\ntags: *selected\n",
-			"scalar":   "skills: &selected \"./rubrics/alpha*\"\ntags: [*selected]\n",
-			"import":   "tags: &selected [\"./rubrics/alpha*\"]\nskills: *selected\n",
-			"merge":    "defaults: &defaults {skills: [\"./rubrics/alpha*\"], tags: [review]}\n<<: *defaults\n",
+			"sequence": "skills: &selected [\"./rubrics/alpha*\"]\nnotes: *selected\n",
+			"scalar":   "skills: &selected \"./rubrics/alpha*\"\nnotes: [*selected]\n",
+			"import":   "notes: &selected [\"./rubrics/alpha*\"]\nskills: *selected\n",
+			"merge":    "defaults: &defaults {skills: [\"./rubrics/alpha*\"], notes: [review]}\n<<: *defaults\n",
 		} {
 			t.Run(fmt.Sprintf("registry=%t/%s", registry, name), func(t *testing.T) {
 				dir := t.TempDir()
@@ -92,7 +92,9 @@ func TestApplyPackageRelocationPreservesAliasedMetadata(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if !slices.Equal(relocated.Environment.Tags, compiled.Environment.Tags) {
+				original, _, _ := ParseFrontmatter(string(tarEntries(t, pkg.Bytes)["SPEC.md"]))
+				source, _, _ := ParseFrontmatter("---\n" + fields + "---\n" + body)
+				if !reflect.DeepEqual(original["notes"], source["notes"]) {
 					t.Fatal("changed aliased metadata")
 				}
 				if len(relocated.RequiredVerifierSkills) != 1 || relocated.RequiredVerifierSkills[0].Name != "alpha" {

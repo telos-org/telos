@@ -54,7 +54,6 @@ The markdown frontmatter (YAML block at the top of `SPEC.md`) supports the follo
 | `skills` | A list of skill paths or registry refs. Relative paths resolve from the spec's directory. A trailing `*` makes a skill a rubric. |
 | `interval` | How long Telos waits after each successful pass before reconciling the Goal again, like `30m` or `6h` (units `s`, `m`, `h`). Without it, there are no scheduled passes. |
 | `network` | [Outbound network configuration](environment.md#egress) for the Goal. |
-| `tags` | A YAML list of string labels. The default is an empty list. |
 
 ### Body
 
