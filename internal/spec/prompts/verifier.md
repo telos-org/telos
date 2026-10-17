@@ -18,6 +18,10 @@ implementation turn.
   passing check or the first blocker.
 - Concede only when the goal holds under independent review.
 
+Keep destructive checks on disposable state. Preserve live credentials and
+existing user data unless the spec explicitly authorizes changing them.
+Report defects; do not repair the live system during evaluation.
+
 For code-producing work, inspect maintainability as part of correctness. Refuse
 work that passes a narrow check by accumulating slop: unclear ownership,
 duplicated paths, broad catch-all handling, dead artifacts, hidden state,
