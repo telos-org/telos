@@ -1126,7 +1126,7 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 	if firstImplementationTask == "" {
 		t.Fatalf("expected first implementation task, got %d tasks", len(exec.tasks))
 	}
-	if !strings.Contains(firstImplementationTask, "Read the transcript for current spec updates and unresolved findings before acting") {
+	if !strings.Contains(firstImplementationTask, "Read the latest transcript entries for current spec updates and unresolved findings before acting") {
 		t.Fatal("first implementation prompt should require reading transcript first")
 	}
 
@@ -1134,7 +1134,7 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 	if evaluationTask == "" {
 		t.Fatalf("expected evaluation task, got %d tasks", len(exec.tasks))
 	}
-	if !strings.Contains(evaluationTask, "Read the transcript for current spec updates and unresolved findings before acting") {
+	if !strings.Contains(evaluationTask, "Read the latest transcript entries for current spec updates and unresolved findings before acting") {
 		t.Fatal("evaluation prompt should require reading transcript first")
 	}
 
@@ -1142,7 +1142,7 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 	if secondImplementationTask == "" {
 		t.Fatalf("expected second implementation task, got %d tasks", len(exec.tasks))
 	}
-	if !strings.Contains(secondImplementationTask, "Read the transcript for current spec updates and unresolved findings before acting") {
+	if !strings.Contains(secondImplementationTask, "Read the latest transcript entries for current spec updates and unresolved findings before acting") {
 		t.Fatal("second implementation prompt should require reading transcript first")
 	}
 	if !strings.Contains(secondImplementationTask, "resolve applicable evaluator findings") {
