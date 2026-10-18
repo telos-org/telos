@@ -142,7 +142,7 @@ func renderTranscriptProtocol(transcriptPath string) string {
 	return strings.Join([]string{
 		"## Transcript",
 		fmt.Sprintf("Path: `%s`", transcriptPath),
-		"Read the transcript for current spec updates and unresolved findings before acting.",
+		"Read the latest transcript entries for current spec updates and unresolved findings before acting. Read older history only when the latest state or delivered artifact leaves uncertainty.",
 		"On <external_update>, read the current spec and available diff named in the block before continuing.",
 		"Reuse work that serves the current spec; remove behavior that only served superseded requirements. Preserve required data and history.",
 		"Reassess earlier findings and approvals against the current spec and state.",

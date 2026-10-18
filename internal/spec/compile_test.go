@@ -293,6 +293,7 @@ func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
 		"You may add and commit useful tests or probes",
 		"do not change the implementation",
 		"project's test location or `evaluation/`",
+		"Prefer extending an existing durable probe",
 	} {
 		if !strings.Contains(task, want) {
 			t.Fatalf("verifier prompt missing %q:\n%s", want, task)
@@ -459,7 +460,8 @@ func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 	verifierTask := RenderVerifierTask(compiled, "/tmp/transcript.md")
 	for _, task := range []string{proverTask, verifierTask} {
 		for _, want := range []string{
-			"Read the transcript for current spec updates and unresolved findings before acting",
+			"Read the latest transcript entries for current spec updates and unresolved findings before acting",
+			"Read older history only when the latest state or delivered artifact leaves uncertainty",
 			"read the current spec and available diff",
 			"remove behavior that only served superseded requirements",
 			"Preserve required data and history",
