@@ -75,14 +75,18 @@ func newTestFakeExecutor(workspace string, scenarioPath string) (*testFakeExecut
 	return &testFakeExecutor{workspace: workspace, scenario: scenario}, nil
 }
 
-func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) game.TurnResult {
+func (e *testFakeExecutor) RecoverTurnStats(*game.TurnState) (game.TurnStats, error) {
+	return game.TurnStats{}, nil
+}
+
+func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnState) (game.TurnResult, error) {
 	if e.nextTurn >= len(e.scenario.Turns) {
 		return game.TurnResult{
 			Role:   role,
 			Status: game.StatusContinue,
 			Logs:   "test fake scenario exhausted",
 			Error:  "test fake scenario exhausted",
-		}
+		}, nil
 	}
 	turn := e.scenario.Turns[e.nextTurn]
 	e.nextTurn++
@@ -93,19 +97,19 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 			Status: game.StatusContinue,
 			Logs:   fmt.Sprintf("test fake role mismatch: got %s, want %s", role, turn.Role),
 			Error:  fmt.Sprintf("test fake role mismatch: got %s, want %s", role, turn.Role),
-		}
+		}, nil
 	}
 	if turn.SleepMS > 0 {
 		deadline := time.Now().Add(time.Duration(turn.SleepMS) * time.Millisecond)
 		for time.Now().Before(deadline) {
 			if ts != nil && ts.StopRequested != nil && ts.StopRequested() {
 				return game.TurnResult{
-					Role:        role,
-					Status:      game.StatusContinue,
-					Logs:        "test fake interrupted by stop request",
-					Error:       "local_interrupted:stop_requested",
-					Recoverable: true,
-				}
+					Role:    role,
+					Status:  game.StatusContinue,
+					Logs:    "test fake interrupted by stop request",
+					Error:   "local_interrupted:stop_requested",
+					Failure: game.FailureRecoverable,
+				}, nil
 			}
 			time.Sleep(10 * time.Millisecond)
 		}
@@ -116,15 +120,19 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 			Status: game.StatusContinue,
 			Logs:   err.Error(),
 			Error:  err.Error(),
-		}
+		}, nil
 	}
 
+	failure := game.FailureTerminal
+	if turn.Recoverable {
+		failure = game.FailureRecoverable
+	}
 	return game.TurnResult{
-		Role:        role,
-		Status:      testFakeStatus(turn.Status),
-		Logs:        turn.Logs,
-		Error:       turn.Error,
-		Recoverable: turn.Recoverable,
+		Role:    role,
+		Status:  testFakeStatus(turn.Status),
+		Logs:    turn.Logs,
+		Error:   turn.Error,
+		Failure: failure,
 		Stats: game.TurnStats{
 			CostUSD:             turn.CostUSD,
 			DurationMS:          turn.DurationMS,
@@ -135,7 +143,7 @@ func (e *testFakeExecutor) ExecuteTurn(task string, role string, ts *game.TurnSt
 			CacheCreationTokens: turn.CacheCreationTokens,
 			Model:               turn.Model,
 		},
-	}
+	}, nil
 }
 
 func (e *testFakeExecutor) WorkspaceState() string {

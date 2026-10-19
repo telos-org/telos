@@ -1,8 +1,10 @@
 package executor
 
 import (
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -11,6 +13,73 @@ import (
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
 )
+
+// CI supplies the pinned Pi module; ordinary Go tests need neither Node nor Pi.
+func TestPiSessionManagerResumeContract(t *testing.T) {
+	module := os.Getenv("TELOS_TEST_PI_SESSION_MANAGER")
+	if module == "" {
+		t.Skip("set TELOS_TEST_PI_SESSION_MANAGER to Pi's dist/core/session-manager.js")
+	}
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	const script = `
+import assert from "node:assert/strict";
+import { pathToFileURL } from "node:url";
+const [module, path, phase] = process.argv.slice(1);
+const { SessionManager } = await import(pathToFileURL(module).href);
+const session = SessionManager.open(path);
+const text = (label, status) => "<progress_update>" + label + "</progress_update>\n<status>" + status + "</status>";
+if (phase === "resume") {
+  const messages = session.buildSessionContext().messages;
+  assert.equal(messages.length, 2);
+  assert.equal(messages[0].role, "user");
+  assert.equal(messages[0].content, "old request");
+  assert.equal(messages[1].role, "assistant");
+  assert.equal(messages[1].content[0].text, text("old", "CONCEDE"));
+}
+const label = phase === "seed" ? "old" : "new";
+session.appendMessage({ role: "user", content: label + " request", timestamp: Date.now() });
+session.appendMessage({
+  role: "assistant", api: "openai-responses", provider: "openai", model: "test-model",
+  content: [{ type: "text", text: text(label, phase === "seed" ? "CONCEDE" : "CONTINUE") }],
+  stopReason: "stop", timestamp: Date.now(),
+  usage: { input: 10, output: 20, cacheRead: 0, cacheWrite: 0, totalTokens: 30,
+    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: phase === "seed" ? 0.25 : 0.5 } }
+});
+`
+	runPi := func(phase string) {
+		t.Helper()
+		if output, err := exec.Command("node", "--input-type=module", "-e", script, module, path, phase).CombinedOutput(); err != nil {
+			t.Fatalf("Pi session manager %s: %v\n%s", phase, err, output)
+		}
+	}
+	runPi("seed")
+	baseline, err := capturePiSessionBaseline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stats, err := ReadPiSessionStats(path)
+	if err != nil || stats.CostUSD != 0.25 || stats.InputTokens != 10 || stats.OutputTokens != 20 {
+		t.Fatalf("interrupted usage: %+v, %v", stats, err)
+	}
+	var events []game.LiveAgentEvent
+	projector := startPiLiveProjector(path, &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) {
+		events = append(events, event)
+	}}, baseline)
+	func() {
+		defer projector.Stop()
+		runPi("resume")
+	}()
+	summary, err := readPiSession(path, baseline)
+	if err != nil || summary.Error != "" || summary.Logs != "<progress_update>new</progress_update>\n<status>CONTINUE</status>" || game.ExtractStatus(summary.Logs) != game.StatusContinue {
+		t.Fatalf("resumed response: %+v, %v", summary, err)
+	}
+	if summary.Stats.CostUSD != 0.75 || summary.Stats.InputTokens != 20 || summary.Stats.OutputTokens != 40 {
+		t.Fatalf("resumed usage: %+v", summary.Stats)
+	}
+	if !slices.Equal(events, []game.LiveAgentEvent{{Kind: "progress_update", Text: "new"}}) {
+		t.Fatalf("resumed activity: %#v", events)
+	}
+}
 
 func TestPiProgressPreservesReportAndFinalStatus(t *testing.T) {
 	progress := "<progress_update>Orders costing > $25 are rejected without changing your balance.</progress_update>"
@@ -59,14 +128,14 @@ func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	}
 }
 
-func TestRecoverableAgentFailureRejectsProviderBlockers(t *testing.T) {
+func TestAgentFailureKindClassifiesProviderErrors(t *testing.T) {
 	for _, errorText := range []string{
 		"403: inactive virtual key",
 		"request failed (HTTP 401)",
 		"400: Your credit balance is too low to access the Anthropic API",
 		"429: insufficient_quota",
 	} {
-		if recoverableAgentFailure(errorText) {
+		if agentFailureKind(errorText) != game.FailureTerminal {
 			t.Fatalf("provider blocker marked recoverable: %q", errorText)
 		}
 	}
@@ -74,7 +143,7 @@ func TestRecoverableAgentFailureRejectsProviderBlockers(t *testing.T) {
 		"429: provider at capacity",
 		"502: no healthy upstream",
 	} {
-		if !recoverableAgentFailure(errorText) {
+		if agentFailureKind(errorText) != game.FailureRecoverable {
 			t.Fatalf("transient error marked non-recoverable: %q", errorText)
 		}
 	}
@@ -164,7 +233,10 @@ func TestExecuteTurnIncludesStderrOnPiFailure(t *testing.T) {
 	p.Env = map[string]string{"HOME": home}
 	exec := NewPiExecutor(p, "test-model", "high", 0)
 
-	result := exec.ExecuteTurn("do it", "prover", nil)
+	result, preparationErr := exec.ExecuteTurn("do it", "prover", nil)
+	if preparationErr != nil {
+		t.Fatal(preparationErr)
+	}
 
 	if result.Error == "" || !strings.Contains(result.Error, "pi_failed:1") {
 		t.Fatalf("error: got %q", result.Error)
@@ -212,7 +284,10 @@ printf '%s\n' '{"type":"message","message":{"role":"assistant","content":[{"type
 	p.Env = map[string]string{"HOME": home}
 	exec := NewPiExecutor(p, "test-model", "high", 0)
 
-	result := exec.ExecuteTurn(task, "prover", turn)
+	result, preparationErr := exec.ExecuteTurn(task, "prover", turn)
+	if preparationErr != nil {
+		t.Fatal(preparationErr)
+	}
 
 	if result.Status != game.StatusConcede {
 		t.Fatalf("status: got %q logs=%q error=%q", result.Status, result.Logs, result.Error)
@@ -250,14 +325,273 @@ func TestExecuteTurnTreatsTimeoutAsTerminalFailure(t *testing.T) {
 	p.Env = map[string]string{"HOME": home}
 	exec := NewPiExecutor(p, "test-model", "high", 1)
 
-	result := exec.ExecuteTurn("do it", "prover", nil)
+	result, preparationErr := exec.ExecuteTurn("do it", "prover", nil)
+	if preparationErr != nil {
+		t.Fatal(preparationErr)
+	}
 
 	if result.Error != "local_timeout:1" {
 		t.Fatalf("error: got %q", result.Error)
 	}
-	if result.Recoverable {
-		t.Fatalf("timeout should be terminal, got recoverable result: %#v", result)
+	if result.Failure != game.FailureTerminal {
+		t.Fatalf("timeout should be terminal: %#v", result)
 	}
+}
+
+func TestExecuteTurnRequiresNewAssistantOutputAfterResume(t *testing.T) {
+	old := `{"message":{"role":"assistant","content":[{"type":"text","text":"<status>CONCEDE</status>"}],"usage":{"input":10,"cost":{"total":0.25}}}}`
+	for _, tc := range []struct {
+		name, trailingNewline, appended string
+	}{
+		{"no new bytes", "\n", ""},
+		{"old record gets its newline", "", "\n"},
+		{"new user message only", "\n", `{"message":{"role":"user","content":"resume"}}` + "\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			exec, turn := newPiResumeTestExecutor(t, old+tc.trailingNewline, tc.appended)
+			var events []game.LiveAgentEvent
+			turn.OnLiveEvent = func(event game.LiveAgentEvent) { events = append(events, event) }
+			result, preparationErr := exec.ExecuteTurn("resume verifier", "verifier", turn)
+			if preparationErr != nil {
+				t.Fatal(preparationErr)
+			}
+			if result.Status != game.StatusContinue || result.Failure != game.FailureRecoverable || !strings.Contains(result.Error, "no new assistant message") {
+				t.Fatalf("reused stale concession: %+v", result)
+			}
+			if len(events) != 0 || result.Stats.InputTokens != 10 || result.Stats.CostUSD != 0.25 {
+				t.Fatalf("replayed activity or lost prior usage: events=%#v stats=%+v", events, result.Stats)
+			}
+		})
+	}
+}
+
+func TestExecuteTurnRejectsChangedHistory(t *testing.T) {
+	for _, change := range []string{"truncation", "replacement", "same-inode regrowth"} {
+		t.Run(change, func(t *testing.T) {
+			old := `{"message":{"role":"assistant","usage":{"cost":{"total":0.25}}}}` + "\n" + piProgressLine(strings.Repeat("old", 100)) + "\n"
+			updated := piTestSessionHeader + "\n" + piProgressLine("new") + "\n" +
+				`{"message":{"role":"assistant","content":[{"type":"text","text":"<status>CONCEDE</status>"}],"usage":{"cost":{"total":0.5}}}}` + "\n"
+			if change != "truncation" {
+				updated += strings.Repeat("\n", len(old))
+			}
+			executor, turn := newPiResumeTestExecutor(t, old, updated)
+			binary := filepath.Join(executor.Platform.Env["HOME"], ".local", "bin", "pi")
+			script, err := os.ReadFile(binary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			replacement := `> "$session"`
+			if change == "replacement" {
+				replacement = `> "$session.new"; mv "$session.new" "$session"`
+			}
+			if err := os.WriteFile(binary, []byte(strings.ReplaceAll(string(script), `>> "$session"`, replacement)), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			var events []game.LiveAgentEvent
+			// Also cover final session parsing when live projection is disabled.
+			if change != "replacement" {
+				turn.OnLiveEvent = func(event game.LiveAgentEvent) { events = append(events, event) }
+			}
+			result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
+			if preparationErr != nil || result.Failure != game.FailureState || !strings.Contains(result.Error, "usage is unknown") || result.Status == game.StatusConcede || result.Stats.CostUSD != 0 || len(events) != 0 {
+				t.Fatalf("changed history was accepted or replayed: result=%+v err=%v events=%#v", result, preparationErr, events)
+			}
+		})
+	}
+}
+
+func TestExecuteTurnRejectsUnsupportedSessionBeforeStartingPi(t *testing.T) {
+	for _, header := range []string{
+		`{"type":"session","version":2,"id":"test"}`, `{"type":"session","version":`, `{"type":"session","version":4,"id":"test"}`,
+		`{"type":"session","version":3}`, `{"type":"session","version":3,"id":42}`,
+	} {
+		t.Run(header, func(t *testing.T) {
+			executor, turn := newPiResumeTestExecutor(t, "", piProgressLine("new")+"\n")
+			initial := header + "\n" + piProgressLine("old") + "\n"
+			if err := os.WriteFile(turn.PiSessionPath(), []byte(initial), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
+			data, err := os.ReadFile(turn.PiSessionPath())
+			if err != nil || string(data) != initial || result.Failure != game.FailureState || preparationErr != nil || result.Status == game.StatusConcede {
+				t.Fatalf("unsafe session was launched: result=%+v readErr=%v", result, err)
+			}
+		})
+	}
+}
+
+func TestExecuteTurnRetriesPreparationFailureWithoutLaunchingPi(t *testing.T) {
+	for _, failure := range []string{"unreadable session", "missing workspace"} {
+		t.Run(failure, func(t *testing.T) {
+			executor, turn := newPiResumeTestExecutor(t, "", piProgressLine("repaired")+"\n")
+			path := turn.PiSessionPath()
+			if failure == "unreadable session" {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(path, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				executor.Platform.Workspace = filepath.Join(t.TempDir(), "missing-workspace")
+			}
+			result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
+			if preparationErr == nil || result.Failure == game.FailureState || result.Error != "" {
+				t.Fatalf("preparation failure was not retryable: %+v", result)
+			}
+			startedPath := filepath.Join(executor.Platform.Env["HOME"], "pi-started")
+			if _, err := os.Stat(startedPath); !os.IsNotExist(err) {
+				t.Fatalf("Pi started before repair: %v", err)
+			}
+			if failure == "unreadable session" {
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				writePiSession(t, path, piTestSessionHeader)
+			} else if err := os.Mkdir(executor.Platform.Workspace, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			result, preparationErr = executor.ExecuteTurn("resume", "verifier", turn)
+			if preparationErr != nil || result.Failure == game.FailureState || result.Error != "" || !strings.Contains(result.Logs, "repaired") {
+				t.Fatalf("same turn could not run after repair: %+v", result)
+			}
+			if data, err := os.ReadFile(startedPath); err != nil || string(data) != "started\n" {
+				t.Fatalf("expected exactly one Pi launch: %q, %v", data, err)
+			}
+		})
+	}
+}
+
+func TestExecuteTurnHonorsStopBeforeStartingPi(t *testing.T) {
+	executor, turn := newPiResumeTestExecutor(t, "", piProgressLine("must not run")+"\n")
+	turn.StopRequested = func() bool { return true }
+	result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
+	if preparationErr == nil || !strings.Contains(preparationErr.Error(), "stop_requested") || result.Failure == game.FailureState || result.Error != "" {
+		t.Fatalf("pre-start stop consumed an attempt: %+v", result)
+	}
+	if _, err := os.Stat(filepath.Join(executor.Platform.Env["HOME"], "pi-started")); !os.IsNotExist(err) {
+		t.Fatalf("Pi started despite stop request: %v", err)
+	}
+}
+
+func TestExecuteTurnReportsMissingCredentialsBeforeSessionCreation(t *testing.T) {
+	executor, turn := newPiResumeTestExecutor(t, "", "")
+	if err := os.Remove(turn.PiSessionPath()); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(executor.Platform.Env["HOME"], ".local", "bin", "pi")
+	// Pi validates credentials before it writes the first session record.
+	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho 'No API key found for anthropic.' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result, preparationErr := executor.ExecuteTurn("run", "prover", turn)
+	blocker, _ := game.AgentFailureBlocker(result.Error)
+	if result.Failure == game.FailureState || preparationErr != nil || blocker != "agent_credentials_missing" || result.Stats.CostUSD != 0 {
+		t.Fatalf("missing credentials became unknown usage: %+v", result)
+	}
+}
+
+func TestExecuteTurnBlocksWhenNewSessionIsUnreadableAfterLaunch(t *testing.T) {
+	for _, action := range []string{`rm "$session"`, `rm "$session"; mkdir "$session"`, `: > "$session"`} {
+		t.Run(action, func(t *testing.T) {
+			executor, turn := newPiResumeTestExecutor(t, "", piProgressLine("new")+"\n")
+			if err := os.Remove(turn.PiSessionPath()); err != nil {
+				t.Fatal(err)
+			}
+			binary := filepath.Join(executor.Platform.Env["HOME"], ".local", "bin", "pi")
+			script, err := os.ReadFile(binary)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(binary, append(script, []byte(action+"\n")...), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			result, preparationErr := executor.ExecuteTurn("run", "verifier", turn)
+			if result.Failure != game.FailureState || !strings.Contains(result.Error, "usage is unknown") || preparationErr != nil || result.Status == game.StatusConcede {
+				t.Fatalf("unverifiable post-launch accounting was accepted: %+v", result)
+			}
+		})
+	}
+}
+
+func TestExecuteTurnPreservesKnownUsageOnProcessFailure(t *testing.T) {
+	old := `{"message":{"role":"assistant","content":[{"type":"text","text":"<status>CONCEDE</status>"}],"usage":{"input":10,"cost":{"total":0.25}}}}` + "\n"
+	executor, turn := newPiResumeTestExecutor(t, old, "")
+	binary := filepath.Join(executor.Platform.Env["HOME"], ".local", "bin", "pi")
+	script, err := os.ReadFile(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(binary, append(script, []byte("exit 1\n")...), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	result, preparationErr := executor.ExecuteTurn("resume", "verifier", turn)
+	if preparationErr != nil || result.Failure != game.FailureRecoverable || result.Error != "pi_failed:1" || result.Status != game.StatusContinue || result.Stats.InputTokens != 10 || result.Stats.CostUSD != 0.25 {
+		t.Fatalf("process failure lost known usage or reused stale verdict: %+v", result)
+	}
+}
+
+func TestPiResumeRejectsRewritingNewlyObservedHistory(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+	initial := piTestSessionHeader + "\n" + piProgressLine("old") + "\n"
+	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := capturePiSessionBaseline(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []game.LiveAgentEvent
+	projector := &piLiveProjector{
+		sessionPath: path, offset: baseline.offset, fileInfo: baseline.fileInfo, baseline: baseline,
+		turnState: &game.TurnState{OnLiveEvent: func(event game.LiveAgentEvent) { events = append(events, event) }},
+	}
+	appendPiSession(t, path, piProgressLine("new"))
+	projector.observeSessionFile(false)
+	// Keep the original resume boundary intact, but overwrite output already
+	// observed during this attempt and regrow beyond the current cursor.
+	if err := os.WriteFile(path, []byte(initial+piProgressLine("replacement")+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projector.observeSessionFile(true)
+	if !errors.Is(projector.integrityErr, errPiSessionChanged) || !slices.Equal(events, []game.LiveAgentEvent{{Kind: "progress_update", Text: "new"}}) {
+		t.Fatalf("replayed or lost newly observed history: err=%v events=%#v", projector.integrityErr, events)
+	}
+}
+
+const piTestSessionHeader = `{"type":"session","version":3,"id":"test-session"}`
+
+func newPiResumeTestExecutor(t *testing.T, initial, appended string) (*PiExecutor, *game.TurnState) {
+	t.Helper()
+	home := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+printf 'started\n' >> "$HOME/pi-started"
+while [ "$#" -gt 0 ]; do
+  if [ "$1" = "--session" ]; then
+    shift
+    session="$1"
+  fi
+  shift || true
+done
+printf '%s' "$TELOS_TEST_PI_APPEND" >> "$session"
+`
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	turn := game.NewPVGState("spec", t.TempDir(), "sess").Turn(1, 2, "verifier")
+	if err := game.WriteTurnTask(turn, "resume verifier"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(turn.PiSessionPath(), []byte(piTestSessionHeader+"\n"+initial), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := platform.NewLocalPlatform(t.TempDir())
+	p.Env = map[string]string{"HOME": home, "TELOS_TEST_PI_APPEND": appended}
+	return NewPiExecutor(p, "test-model", "high", 0), turn
 }
 
 func TestReadPiSessionExtractsAssistantTextStatsAndTurns(t *testing.T) {

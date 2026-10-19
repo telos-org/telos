@@ -1489,7 +1489,7 @@ func readEvidenceSummary(path *string) (*evidenceSummary, error) {
 				activeRound = nil
 				activeRole = nil
 			}
-		case "game_end":
+		case "game_end", "game_resume":
 			activeRound = nil
 			activeRole = nil
 			summary = &evidenceSummary{

@@ -161,7 +161,7 @@ func TestEvidenceLogGameEnd(t *testing.T) {
 	path := filepath.Join(dir, "evidence.jsonl")
 
 	ev := New("test-system", path, "sess-005", 0)
-	ev.LogGameEnd("success", 3, 2, 1, true, 5.5, 10000, 5000, 1000, 500, "", "verifier_conceded")
+	ev.LogGameState("game_end", "success", 3, 2, 1, true, 5.5, 10000, 5000, 1000, 500, "", "verifier_conceded")
 	ev.Close()
 
 	data, _ := os.ReadFile(path)

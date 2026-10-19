@@ -23,6 +23,13 @@ jobs:
       - run: python3 scripts/test_install_release.py
       - run: go test ./...
       - run: go test -race ./...
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify Pi session recovery contract
+        run: |
+          npm install --prefix "$RUNNER_TEMP/pi-contract" --ignore-scripts --no-audit --no-fund @earendil-works/pi-coding-agent@0.84.2
+          TELOS_TEST_PI_SESSION_MANAGER="$RUNNER_TEMP/pi-contract/node_modules/@earendil-works/pi-coding-agent/dist/core/session-manager.js" go test -race ./internal/executor -run '^TestPiSessionManagerResumeContract$' -count=1
 
   release:
     name: publish-release

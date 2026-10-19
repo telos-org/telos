@@ -7,6 +7,49 @@ import (
 	"testing"
 )
 
+func TestEvidenceResumeRestoresTotalsAndActiveTurn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evidence.jsonl")
+	// Activity may be incomplete or stale when the process dies between a
+	// durable checkpoint and its best-effort projection.
+	history := `{"event":"agent_complete","round":1,"role":"prover","data":{"cost_usd":9,"input_tokens":99}}` + "\n" +
+		`{"event":"round_start","round":1,"role":"prover"}` + "\n"
+	resume := `{"event":"game_resume","round":1,"data":{"prover_rounds":1,"verifier_rounds":0,"total_cost_usd":0.25,"total_input_tokens":10,"total_output_tokens":20,"total_cache_read_tokens":30,"total_cache_creation_tokens":40,"verifier_conceded":false}}` + "\n"
+	end := `{"event":"game_end","round":2,"data":{"prover_rounds":1,"verifier_rounds":1,"total_cost_usd":0.75,"total_input_tokens":13,"total_output_tokens":24,"total_cache_read_tokens":35,"total_cache_creation_tokens":46,"verifier_conceded":true,"completion_reason":"verifier_conceded"}}` + "\n"
+	for _, phase := range []struct {
+		name, events                        string
+		cost                                float64
+		input, output, read, create, rounds int
+		active, complete                    bool
+	}{
+		{"resume replaces stale totals and active round", resume, 0.25, 10, 20, 30, 40, 1, false, false},
+		{"resumed verifier becomes active", `{"event":"round_start","round":2,"role":"verifier"}` + "\n", 0.25, 10, 20, 30, 40, 1, true, false},
+		{"completed totals replace turn additions", `{"event":"agent_complete","round":2,"role":"verifier","data":{"cost_usd":0.5,"input_tokens":3}}` + "\n" + end, 0.75, 13, 24, 35, 46, 2, false, true},
+		{"repeated terminal projection is idempotent", end, 0.75, 13, 24, 35, 46, 2, false, true},
+	} {
+		history += phase.events
+		t.Run(phase.name, func(t *testing.T) {
+			if err := os.WriteFile(path, []byte(history), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			summary, err := readEvidenceSummary(&path)
+			if err != nil || summary == nil {
+				t.Fatalf("summary = %+v, %v", summary, err)
+			}
+			if ptrOr(summary.TotalCostUSD, -1) != phase.cost || ptrOr(summary.TotalInputTokens, -1) != phase.input || ptrOr(summary.TotalOutputTokens, -1) != phase.output ||
+				ptrOr(summary.TotalCacheReadTokens, -1) != phase.read || ptrOr(summary.TotalCacheCreateTokens, -1) != phase.create || ptrOr(summary.RoundCount, -1) != phase.rounds || ptrOr(summary.VerifierConceded, false) != phase.complete {
+				t.Fatalf("incorrect restored totals: %+v", summary)
+			}
+			if phase.active {
+				if ptrOr(summary.CurrentRound, -1) != 2 || ptrOr(summary.CurrentRole, "") != "verifier" {
+					t.Fatalf("resumed verifier missing: %+v", summary)
+				}
+			} else if summary.CurrentRound != nil || summary.CurrentRole != nil {
+				t.Fatalf("stale active turn survived aggregate projection: %+v", summary)
+			}
+		})
+	}
+}
+
 func TestCreateSessionDirSkipsExistingID(t *testing.T) {
 	root := t.TempDir()
 	store := NewFileStore(root, RuntimeLocal)

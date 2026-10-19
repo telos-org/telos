@@ -65,10 +65,10 @@ func runSessionWorker(
 		desired := manifest.Desired
 		result, err := runSession(sessionDir)
 		if err != nil {
-			if !root || once {
+			if once || (!root && !errors.Is(err, cli.ErrAttemptPending)) {
 				return 1, err
 			}
-			fmt.Fprintf(os.Stderr, "root session cycle failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "session cycle failed: %v\n", err)
 			failures++
 			if waitForNextCycle(wake, stop, jitteredFailureBackoff(failures, time.Second)) {
 				return 0, nil

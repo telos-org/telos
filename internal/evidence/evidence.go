@@ -142,9 +142,10 @@ func (e *Evidence) LogAgent(roundNum int, role string, status string, logsTail s
 	e.Log("agent_complete", roundNum, role, data)
 }
 
-// LogGameEnd logs the terminal game result.
-func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRounds int, conceded bool, costUSD float64, inputTokens, outputTokens, cacheRead, cacheCreate int, errMsg string, completionReason string) {
-	e.Log("game_end", rounds, "system", map[string]interface{}{
+// LogGameState projects aggregate execution state at completion or recovery.
+// Unlike agent_complete, a repeated snapshot replaces rather than adds usage.
+func (e *Evidence) LogGameState(event, result string, rounds, proverRounds, verifierRounds int, conceded bool, costUSD float64, inputTokens, outputTokens, cacheRead, cacheCreate int, errMsg string, completionReason string) {
+	e.Log(event, rounds, "system", map[string]interface{}{
 		"audience":                    "user",
 		"game_result":                 result,
 		"completion_reason":           completionReason,

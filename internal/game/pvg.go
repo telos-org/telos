@@ -1,8 +1,10 @@
 package game
 
 import (
+	"crypto/rand"
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/telos-org/telos/internal/evidence"
@@ -19,6 +21,8 @@ type PVG struct {
 	Config   PVGConfig
 	Result   *PVGResult
 	Evidence *evidence.Evidence
+
+	checkpoint *runCheckpoint
 }
 
 // NewPVG creates a new PVG game instance.
@@ -27,9 +31,6 @@ func NewPVG(compiled *spec.CompiledEnvironment, executor AgentExecutor, state *P
 	result := &PVGResult{SystemName: compiled.Environment.Name}
 	result.EvidencePath = ev.Path
 	result.TranscriptPath = state.TranscriptPath
-
-	InitializeTranscript(state.TranscriptPath, state.SessionID,
-		compiled.Environment.Name, ev.Path, ev.StartedAt)
 
 	return &PVG{
 		Compiled: compiled,
@@ -41,106 +42,201 @@ func NewPVG(compiled *spec.CompiledEnvironment, executor AgentExecutor, state *P
 	}
 }
 
-// Run executes the full PVG loop.
-func (p *PVG) Run() *PVGResult {
-	p.Evidence.Log("game_start", 0, "system", nil)
-	defer func() {
+// Run executes or resumes one epoch. The caller must hold session ownership.
+// Persistence errors leave the epoch open; callers must not turn them into a
+// terminal game failure, which would permit a new epoch with fresh budgets.
+// RecoveryError instead signals unusable state and ends the attempt in the caller.
+func (p *PVG) Run() (*PVGResult, error) {
+	defer p.Evidence.Close()
+	if err := p.restoreCheckpoint(); err != nil {
+		return nil, fmt.Errorf("restore execution checkpoint: %w", err)
+	}
+	if err := p.prepareTranscript(); err != nil {
+		return nil, err
+	}
+	alreadyTerminal := p.Result.GameResult != ""
+	if !alreadyTerminal {
+		if p.Config.Verbose {
+			log.Printf("=== PVG RUN: %s, next round %d ===", p.Compiled.Environment.Name, p.Result.Rounds+1)
+		}
+		if err := p.runDefaultLoop(); err != nil {
+			return nil, fmt.Errorf("persist execution progress: %w", err)
+		}
+	}
+	// Aggregate snapshots can be repeated after a crash without adding usage
+	// twice. A saved terminal decision must still reach evidence readers.
+	p.logGameState("game_end")
+	marker := fmt.Sprintf("<!-- telos result %s -->", p.checkpoint.ResultID)
+	if found, err := transcriptHasMarker(p.State.TranscriptPath, p.checkpoint.TranscriptOffset, marker); err != nil {
+		return nil, err
+	} else if !found {
+		if err := appendGameResult(p.State.TranscriptPath, string(p.Result.GameResult), p.Result.Error, marker); err != nil {
+			return nil, err
+		}
+	}
+	if p.Result.WorkspaceCheckpointPath == "" {
 		p.checkpointWorkspace()
-		p.Evidence.Close()
-	}()
-
-	result, err := p.runLoop()
-	if err != nil {
-		p.Result.Error = err.Error()
-		p.Evidence.Log("game_error", p.Result.Rounds, "system", map[string]interface{}{
-			"error": p.Result.Error,
-			"type":  "PVGError",
-		})
-		return p.end(GameFailure)
+		if err := p.saveCheckpoint(); err != nil {
+			return nil, fmt.Errorf("persist workspace checkpoint: %w", err)
+		}
 	}
-	return result
+	return p.Result, nil
 }
 
-func (p *PVG) runLoop() (*PVGResult, error) {
-	if p.Config.Verbose {
-		log.Printf("=== PVG START: %s ===", p.Compiled.Environment.Name)
-	}
-
-	return p.runDefaultLoop(), nil
+// RecordRecoveryFailure projects unusable state as an ordinary failed attempt.
+// Its checkpoint cannot be trusted; the caller closes the attempt's lifecycle.
+func (p *PVG) RecordRecoveryFailure(err error) *PVGResult {
+	p.Result.GameResult = GameFailure
+	p.Result.VerifierConceded = false
+	p.Result.Error = err.Error()
+	p.Result.CompletionReason = "recovery_failed"
+	p.logGameState("game_end")
+	return p.Result
 }
 
-func (p *PVG) runDefaultLoop() *PVGResult {
+func (p *PVG) runDefaultLoop() error {
+	for p.Result.GameResult == "" {
+		if p.checkpoint.Pending == nil {
+			round := p.Result.Rounds + 1
+			role := turnRole(round)
+			var interruptedStats TurnStats
+			if p.checkpoint.TurnInFlight {
+				var err error
+				interruptedStats, err = p.Executor.RecoverTurnStats(p.State.Turn(p.Config.EpochID, round, role))
+				if err != nil {
+					return fmt.Errorf("recover interrupted turn usage: %w", err)
+				}
+			}
+			if p.runDurationExhausted(p.checkpoint.Deadline) {
+				p.Result.Accumulate(interruptedStats)
+				p.failRunDurationExhausted()
+				return p.saveCheckpoint()
+			}
+			if p.shouldStop(p.checkpoint.Deadline) {
+				p.Result.Accumulate(interruptedStats)
+				p.end(GameStopped)
+				return p.saveCheckpoint()
+			}
+			if p.costBudgetExhausted(p.Result.TotalCostUSD + interruptedStats.CostUSD) {
+				// A resumed request must not spend again after recovered usage
+				// exhausts the cap. Otherwise ExecuteTurn accounts for it later.
+				p.Result.Accumulate(interruptedStats)
+				p.overBudget(round, role)
+				p.end(GameFailure)
+				return p.saveCheckpoint()
+			}
+			if err := p.dispatchAndSaveTurn(round, role); err != nil {
+				return err
+			}
+		}
+		if turn := p.checkpoint.Pending.Turn; turn.Failure == FailureState {
+			return recoveryErrorf("agent session integrity: %s", turn.Error)
+		}
+		if err := p.appendPendingTurn(); err != nil {
+			return err
+		}
+		turn := p.checkpoint.Pending.Turn
+		p.acceptPendingTurn()
+		p.checkpoint.Pending = nil
+		if err := p.saveCheckpoint(); err != nil {
+			return err
+		}
+		// Activity is a best-effort projection, never the authority for resuming.
+		p.Evidence.LogAgent(p.Result.Rounds, turn.Role, string(turn.Status), turn.Logs, &turn.Stats)
+	}
+	return nil
+}
+
+// dispatchAndSaveTurn brackets execution with its durable obligations: first
+// record possible spending, then save the returned result before any handoff.
+func (p *PVG) dispatchAndSaveTurn(round int, role string) error {
+	workspace := p.Executor.WorkspaceState()
 	promptOpts := p.promptOptions()
-	workspace := ""
-	recoverableFailures := 0
-	reviewCyclesCompleted := 0
-	deadline := p.runDeadline()
+	var task string
+	if role == "prover" {
+		task = spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
+	} else {
+		task = spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
+	}
+	info, err := os.Stat(p.State.TranscriptPath)
+	if err != nil {
+		return err
+	}
+	// A crash after dispatch may have incurred usage even if Pi's file
+	// is missing. Only a confirmed preparation failure can undo dispatch.
+	wasInFlight := p.checkpoint.TurnInFlight
+	p.checkpoint.TurnInFlight = true
+	if err := p.saveCheckpoint(); err != nil {
+		return err
+	}
+	turn, err := p.runAgentTurn(round, role, (round+1)/2, task, p.checkpoint.Deadline)
+	if err != nil {
+		p.checkpoint.TurnInFlight = wasInFlight
+		if saveErr := p.saveCheckpoint(); saveErr != nil {
+			return fmt.Errorf("%w; persist preparation failure: %v", err, saveErr)
+		}
+		return err
+	}
+	turn.Role = role
+	if turn.Status != StatusConcede {
+		turn.Status = StatusContinue
+	}
+	finishedAt := time.Now()
+	p.checkpoint.Pending = &completedTurn{
+		Turn: turn, FinishedAt: finishedAt, TranscriptOffset: info.Size(),
+		Stopped: p.Config.StopRequested != nil && p.Config.StopRequested(),
+		// Generated after the agent exits: its earlier output cannot be
+		// mistaken for the coordinator's completed handoff marker.
+		CompletionID: rand.Text(),
+	}
+	p.checkpoint.TurnInFlight = false
+	return p.saveCheckpoint()
+}
 
-	for {
-		if p.runDurationExhausted(deadline) {
-			return p.failRunDurationExhausted()
+func (p *PVG) acceptPendingTurn() {
+	pending := p.checkpoint.Pending
+	turn := pending.Turn
+	p.Result.Rounds++
+	if turn.Role == "prover" {
+		p.Result.ProverRounds++
+	} else {
+		p.Result.VerifierRounds++
+	}
+	p.Result.Accumulate(turn.Stats)
+	if !p.checkpoint.Deadline.IsZero() && pending.FinishedAt.After(p.checkpoint.Deadline) {
+		p.failRunDurationExhausted()
+		return
+	}
+	if pending.Stopped {
+		p.end(GameStopped)
+		return
+	}
+	if turn.Error != "" {
+		if p.turnFailureExceeded(turn, &p.checkpoint.RecoverableFailures) {
+			p.end(GameFailure)
+			return
 		}
-		if p.shouldStop(deadline) {
-			return p.end(GameStopped)
-		}
-		turn := p.runProverTurn(workspace, promptOpts, deadline)
-		if p.runDurationExhausted(deadline) {
-			return p.failRunDurationExhausted()
-		}
-		if p.shouldStop(deadline) {
-			return p.end(GameStopped)
-		}
-		if turn.Error != "" {
-			if p.turnFailureExceeded(turn, &recoverableFailures) {
-				return p.end(GameFailure)
-			}
-		} else {
-			recoverableFailures = 0
-		}
-		if p.overBudget(p.Result.Rounds, "prover") {
-			return p.end(GameFailure)
-		}
-
-		workspace = p.Executor.WorkspaceState()
-		if p.runDurationExhausted(deadline) {
-			return p.failRunDurationExhausted()
-		}
-		if p.shouldStop(deadline) {
-			return p.end(GameStopped)
-		}
-		turn = p.runVerifierTurn(workspace, promptOpts, deadline)
-		if p.runDurationExhausted(deadline) {
-			return p.failRunDurationExhausted()
-		}
-		if p.shouldStop(deadline) {
-			return p.end(GameStopped)
-		}
-		if turn.Error != "" {
-			if p.turnFailureExceeded(turn, &recoverableFailures) {
-				return p.end(GameFailure)
-			}
-		} else {
-			recoverableFailures = 0
-		}
+	} else {
+		p.checkpoint.RecoverableFailures = 0
+	}
+	if turn.Role == "verifier" {
 		if turn.Error == "" && turn.Status == StatusConcede {
 			p.Result.VerifierConceded = true
-			if p.Config.Verbose {
-				log.Printf("=== PVG SUCCESS: verifier conceded ===")
-			}
-			return p.end(GameSuccess)
+			p.end(GameSuccess)
+			return
 		}
 		if turn.Error == "" {
-			reviewCyclesCompleted++
+			p.checkpoint.ReviewCycles++
 		}
-		if p.reviewBudgetExhausted(reviewCyclesCompleted) {
+		if p.reviewBudgetExhausted(p.checkpoint.ReviewCycles) {
 			p.Result.Error = fmt.Sprintf("review_budget_exhausted: verifier did not concede within %d review cycles", p.Config.Until)
 			p.Result.CompletionReason = "review_budget_exhausted"
-			return p.end(GameFailure)
+			p.end(GameFailure)
+			return
 		}
-		if p.overBudget(p.Result.Rounds, "verifier") {
-			return p.end(GameFailure)
-		}
-		workspace = p.Executor.WorkspaceState()
+	}
+	if p.overBudget(p.Result.Rounds, turn.Role) {
+		p.end(GameFailure)
 	}
 }
 
@@ -161,28 +257,8 @@ func (p *PVG) runDurationExhausted(deadline time.Time) bool {
 	return !deadline.IsZero() && time.Now().After(deadline)
 }
 
-func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
-	p.Result.Rounds++
-	p.Result.ProverRounds++
-	roundNum := p.Result.Rounds
-	p.Evidence.Log("round_start", roundNum, "prover", map[string]interface{}{"audience": "user"})
-
-	task := spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
-	return p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task, deadline)
-}
-
-func (p *PVG) runVerifierTurn(workspace string, promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
-	p.Result.Rounds++
-	p.Result.VerifierRounds++
-	roundNum := p.Result.Rounds
-	p.Evidence.Log("round_start", roundNum, "verifier", map[string]interface{}{"audience": "user"})
-
-	task := spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
-	return p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task, deadline)
-}
-
 func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
-	if _, blocked := AgentFailureBlocker(turn.Error); blocked || !turn.Recoverable {
+	if _, blocked := AgentFailureBlocker(turn.Error); blocked || turn.Failure != FailureRecoverable {
 		p.Result.Error = turn.Error
 		return true
 	}
@@ -220,7 +296,7 @@ func (p *PVG) promptOptions() spec.PromptOptions {
 	}
 }
 
-func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string, deadline time.Time) TurnResult {
+func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string, deadline time.Time) (TurnResult, error) {
 	ts := p.State.Turn(p.Config.EpochID, roundNum, role)
 	ts.StopRequested = func() bool {
 		return p.shouldStop(deadline)
@@ -242,55 +318,28 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 		})
 	}
 	if err := WriteTurnTask(ts, task); err != nil {
-		turn := TurnResult{
-			Role:   role,
-			Status: StatusContinue,
-			Logs:   fmt.Sprintf("turn_prepare_failed:%v", err),
-			Error:  fmt.Sprintf("turn_prepare_failed:%v", err),
-		}
-		p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
-		AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
-			turn.Logs, &turn.Stats, turnID, turn.Error,
-			AppendTurnOptions{
-				IncludeStatus: true,
-				PiSessionPath: ts.PiSessionPath(),
-				EvidencePath:  p.State.EvidencePath,
-			})
-		return turn
+		return TurnResult{}, fmt.Errorf("prepare turn %d: %w", roundNum, err)
 	}
-
-	turn := p.Executor.ExecuteTurn(task, role, ts)
-	p.Result.Accumulate(turn.Stats)
-	p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
-
-	AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
-		turn.Logs, &turn.Stats, turnID, turn.Error,
-		AppendTurnOptions{
-			IncludeStatus: true,
-			PiSessionPath: ts.PiSessionPath(),
-			EvidencePath:  p.State.EvidencePath,
-		})
-
-	return turn
+	p.Evidence.Log("round_start", roundNum, role, map[string]interface{}{"audience": "user"})
+	return p.Executor.ExecuteTurn(task, role, ts)
 }
 
-func (p *PVG) end(result GameResult) *PVGResult {
-	p.Result.GameResult = result
-	if p.Result.CompletionReason == "" {
-		p.Result.CompletionReason = p.completionReason(result)
-	}
-	errMsg := ""
-	if p.Result.Error != "" {
-		errMsg = p.Result.Error
-	}
-	p.Evidence.LogGameEnd(string(result), p.Result.Rounds,
+func (p *PVG) logGameState(event string) {
+	p.Evidence.LogGameState(event, string(p.Result.GameResult), p.Result.Rounds,
 		p.Result.ProverRounds, p.Result.VerifierRounds,
 		p.Result.VerifierConceded, p.Result.TotalCostUSD,
 		p.Result.TotalInputTokens, p.Result.TotalOutputTokens,
 		p.Result.TotalCacheReadTokens, p.Result.TotalCacheCreateTokens,
-		errMsg, p.Result.CompletionReason)
+		p.Result.Error, p.Result.CompletionReason)
+}
 
-	AppendGameResult(p.State.TranscriptPath, string(result), errMsg)
+func (p *PVG) end(result GameResult) *PVGResult {
+	p.Result.GameResult = result
+	p.checkpoint.TurnInFlight = false
+	p.checkpoint.ResultID = rand.Text()
+	if p.Result.CompletionReason == "" {
+		p.Result.CompletionReason = p.completionReason(result)
+	}
 	return p.Result
 }
 
@@ -321,13 +370,10 @@ func (p *PVG) checkpointWorkspace() {
 }
 
 func (p *PVG) overBudget(roundNum int, role string) bool {
-	if p.Config.MaxCostUSD == nil {
+	if !p.costBudgetExhausted(p.Result.TotalCostUSD) {
 		return false
 	}
 	cap := *p.Config.MaxCostUSD
-	if p.Result.TotalCostUSD < cap {
-		return false
-	}
 	p.Evidence.Log("budget_exceeded", roundNum, role, map[string]interface{}{
 		"session_cost_usd": p.Result.TotalCostUSD,
 		"cap_usd":          cap,
@@ -335,4 +381,8 @@ func (p *PVG) overBudget(roundNum int, role string) bool {
 	p.Result.Error = fmt.Sprintf("budget exceeded: $%.2f >= cap $%.2f",
 		p.Result.TotalCostUSD, cap)
 	return true
+}
+
+func (p *PVG) costBudgetExhausted(cost float64) bool {
+	return p.Config.MaxCostUSD != nil && cost >= *p.Config.MaxCostUSD
 }
