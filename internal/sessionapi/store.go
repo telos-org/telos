@@ -951,28 +951,8 @@ func (fs *FileStore) Transcript(id string) (string, error) {
 
 // Events reads all evidence JSONL events for the session.
 func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
-	fs.mu.Lock()
-	defer fs.mu.Unlock()
-
-	m, err := ReadManifest(fs.manifestPath(id))
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
-		}
-		return nil, err
-	}
-	var events []SessionEvent
-	for _, spec := range m.Specs {
-		if spec.EvidencePath == nil || *spec.EvidencePath == "" {
-			continue
-		}
-		specEvents, err := readEvidenceFile(*spec.EvidencePath, &spec)
-		if err != nil {
-			continue
-		}
-		events = append(events, specEvents...)
-	}
-	return fs.sequenceEvents(id, events, len(m.Specs) != 1)
+	page, err := fs.EventsPage(id, EventWindow{})
+	return page.Events, err
 }
 
 // durableEventSeqs reports whether the projected seqs can serve as

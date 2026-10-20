@@ -67,10 +67,6 @@ func StartWithOptions(sessionDir string, opts StartOptions) error {
 		// Detached workers are supervised through their runner lock and manifest,
 		// but the spawning process must still reap the OS child handle.
 		_ = cmd.Wait()
-		// A killed worker cannot write its terminal manifest. Wake file watchers
-		// so they observe the released runner lock without polling.
-		now := time.Now()
-		_ = os.Chtimes(filepath.Join(sessionDir, "runner.lock"), now, now)
 	}()
 	return nil
 }

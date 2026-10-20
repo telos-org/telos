@@ -10,6 +10,8 @@ go_library(
         "event_watch.go",
         "events.go",
         "manifest.go",
+        "process_exit_darwin.go",
+        "process_exit_linux.go",
         "server.go",
         "store.go",
         "types.go",
@@ -20,6 +22,7 @@ go_library(
         "//internal/evidence",
         "//internal/spec",
         "@com_github_fsnotify_fsnotify//:fsnotify",
+        "@org_golang_x_sys//unix",
     ],
 )
 

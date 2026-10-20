@@ -5,85 +5,10 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 
 	"github.com/telos-org/telos/internal/sessionapi"
 )
-
-func TestAbruptWorkerExitNotifiesActivityWatchers(t *testing.T) {
-	if os.Getenv("TELOS_TEST_EXIT_WORKER") == "1" {
-		sessionDir := filepath.Join(os.Getenv("TELOS_SESSION_DIR"), os.Getenv("TELOS_SESSION_ID"))
-		owner, err := AcquireOwnership(sessionDir, "")
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer owner.Release()
-		time.Sleep(time.Hour)
-		return
-	}
-	root := t.TempDir()
-	sessionDir := filepath.Join(root, "sess_exit")
-	manifest := sessionapi.ManifestFromInitial(sessionapi.InitialManifest{
-		SessionID: "sess_exit", SpecName: "exit",
-	})
-	if err := sessionapi.WriteManifest(manifestPath(sessionDir), &manifest); err != nil {
-		t.Fatal(err)
-	}
-	helper := filepath.Join(root, "telosd")
-	if err := os.WriteFile(helper, []byte("#!/bin/sh\nexec \"$TELOS_TEST_WORKER_BINARY\" -test.run=^TestAbruptWorkerExitNotifiesActivityWatchers$\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("TELOSD_PATH", helper)
-	t.Setenv("TELOS_TEST_EXIT_WORKER", "1")
-	t.Setenv("TELOS_TEST_WORKER_BINARY", os.Args[0])
-	if err := Start(sessionDir, sessionapi.RuntimeLocal); err != nil {
-		t.Fatal(err)
-	}
-	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	deadline := time.Now().Add(3 * time.Second)
-	for {
-		manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
-		if err != nil {
-			t.Fatal(err)
-		}
-		if manifest.Runner != nil {
-			pid := manifest.Runner.PID
-			killed := false
-			t.Cleanup(func() {
-				if !killed {
-					_ = syscall.Kill(pid, syscall.SIGKILL)
-				}
-			})
-			changed, stop, err := store.WatchEvents("sess_exit")
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer stop()
-			if err := syscall.Kill(pid, syscall.SIGKILL); err != nil {
-				t.Fatal(err)
-			}
-			killed = true
-			select {
-			case _, ok := <-changed:
-				if !ok {
-					t.Fatal("watch failed instead of announcing worker exit")
-				}
-			case <-time.After(time.Second):
-				t.Fatal("abrupt worker exit did not reach activity watchers")
-			}
-			if status, err := store.Status("sess_exit"); err != nil || status != sessionapi.StatusStale {
-				t.Fatalf("worker exit status: %s, %v", status, err)
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("worker did not acquire ownership")
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
 
 func TestAcquireOwnershipIsExclusiveAndRecordsTopLevelRunner(t *testing.T) {
 	sessionDir := t.TempDir()

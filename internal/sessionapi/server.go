@@ -420,7 +420,7 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 	// replays need an ordinal count, which is never advertised as a cursor.
 	sent := 0
 	emitAvailable := func() bool {
-		page, err := h.readEvents(id, EventWindow{After: after})
+		page, err := h.readEvents(id, EventWindow{After: after, tryLock: true})
 		if err != nil {
 			return false
 		}

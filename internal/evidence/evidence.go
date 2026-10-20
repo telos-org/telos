@@ -205,6 +205,14 @@ func visitEvidenceLinesReverse(path string, visit func(map[string]interface{}) b
 // returns true. Invalid JSON and blank lines are skipped. Readers can bound a
 // tail request without decoding or indexing the file's older history.
 func VisitLinesReverse(reader io.ReaderAt, size int64, visit func(map[string]any) bool) error {
+	return VisitRawLinesReverse(reader, size, func(line []byte) bool {
+		var record map[string]interface{}
+		return json.Unmarshal(line, &record) == nil && visit(record)
+	})
+}
+
+// VisitRawLinesReverse visits nonempty lines without decoding their payloads.
+func VisitRawLinesReverse(reader io.ReaderAt, size int64, visit func([]byte) bool) error {
 	const chunkSize int64 = 64 * 1024
 	end := size
 	var carry []byte
@@ -225,8 +233,7 @@ func VisitLinesReverse(reader io.ReaderAt, size int64, visit func(map[string]any
 			if len(line) == 0 {
 				continue
 			}
-			var record map[string]interface{}
-			if json.Unmarshal(line, &record) == nil && visit(record) {
+			if visit(line) {
 				return nil
 			}
 		}
