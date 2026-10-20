@@ -330,13 +330,8 @@ func TestLiveStreamAppendsAndCompatibilityFallback(t *testing.T) {
 				t.Fatalf("append missing or replayed: %+v", event)
 			}
 			appendEvents("{\"event\":\"legacy append\"}\n")
-			// Losing durable sequences replays the complete compatibility
-			// history once; a page length is not a full-history offset.
-			for i := range 1002 {
-				event := nextEvent()
-				if event.EventSeq != nil || (i == 1001 && event.Event != "legacy append") {
-					t.Fatalf("incorrect compatibility replay at %d: %+v", i, event)
-				}
+			if event := nextEvent(); ptrOr(event.EventSeq, 0) != 1002 || event.Event != "legacy append" {
+				t.Fatalf("legacy append missing or history replayed: %+v", event)
 			}
 			appendEvents("{\"event\":\"second legacy append\"}\n")
 			if event := nextEvent(); event.Event != "second legacy append" {

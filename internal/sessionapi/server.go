@@ -405,6 +405,12 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 			}
 		}
 	}
+	changed, stop, err := h.store.WatchEvents(id)
+	if err != nil {
+		writeError(w, http.StatusServiceUnavailable, "cannot watch session events")
+		return
+	}
+	defer stop()
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
@@ -446,26 +452,33 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		}
 		return true
 	}
-	poll := time.NewTicker(time.Second)
-	defer poll.Stop()
 	heartbeat := time.NewTicker(15 * time.Second)
 	defer heartbeat.Stop()
-	for {
+	emit := func() bool {
 		if !emitAvailable() {
-			return
+			return false
 		}
 		status, err := h.sessionStatus(id)
 		if err == nil && status.IsTerminal() {
 			emitAvailable()
-			return
+			return false
 		}
+		return true
+	}
+	if !emit() {
+		return
+	}
+	for {
 		select {
 		case <-r.Context().Done():
 			return
 		case <-heartbeat.C:
 			_, _ = fmt.Fprint(w, ": keep-alive\n\n")
 			flusher.Flush()
-		case <-poll.C:
+		case _, ok := <-changed:
+			if !ok || !emit() {
+				return
+			}
 		}
 	}
 }

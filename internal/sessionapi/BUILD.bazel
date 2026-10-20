@@ -6,6 +6,8 @@ go_library(
         "auth.go",
         "dashboard_doc_open_other.go",
         "dashboard_doc_open_unix.go",
+        "event_positions.go",
+        "event_watch.go",
         "events.go",
         "manifest.go",
         "server.go",
@@ -17,12 +19,14 @@ go_library(
     deps = [
         "//internal/evidence",
         "//internal/spec",
+        "@com_github_fsnotify_fsnotify//:fsnotify",
     ],
 )
 
 go_test(
     name = "sessionapi_test",
     srcs = [
+        "event_watch_test.go",
         "revision_reactivation_test.go",
         "server_test.go",
         "types_test.go",
@@ -36,6 +40,7 @@ go_test(
 go_test(
     name = "sessionapi_store_test",
     srcs = [
+        "event_positions_test.go",
         "events_test.go",
         "store_dashboard_doc_unix_test.go",
         "store_test.go",

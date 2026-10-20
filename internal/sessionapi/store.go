@@ -70,6 +70,7 @@ type Store interface {
 	Stop(id string) (*Session, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
+	WatchEvents(id string) (<-chan struct{}, func(), error)
 }
 
 // --------- FileStore ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -971,7 +972,7 @@ func (fs *FileStore) Events(id string) ([]SessionEvent, error) {
 		}
 		events = append(events, specEvents...)
 	}
-	return normalizeEventSeqs(events), nil
+	return fs.sequenceEvents(id, events, len(m.Specs) != 1)
 }
 
 // durableEventSeqs reports whether the projected seqs can serve as
@@ -986,19 +987,6 @@ func durableEventSeqs(events []SessionEvent) bool {
 		last = *event.EventSeq
 	}
 	return true
-}
-
-// normalizeEventSeqs strips event_seq unless it is durable for the whole
-// session. Mixed legacy evidence and multi-spec sequences cannot safely
-// resume, so callers replay them without cursor IDs.
-func normalizeEventSeqs(events []SessionEvent) []SessionEvent {
-	if durableEventSeqs(events) {
-		return events
-	}
-	for i := range events {
-		events[i].EventSeq = nil
-	}
-	return events
 }
 
 func (fs *FileStore) emitSpecUpdate(event SpecUpdateEvent) {

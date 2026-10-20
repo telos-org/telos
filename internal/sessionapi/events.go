@@ -34,7 +34,8 @@ func (fs *FileStore) EventsPage(id string, window EventWindow) (SessionEventsRes
 			}
 			return SessionEventsResponse{}, err
 		}
-		if len(manifest.Specs) == 1 && manifest.Specs[0].EvidencePath != nil {
+		_, journalErr := os.Stat(fs.eventPositionsPath(id))
+		if errors.Is(journalErr, os.ErrNotExist) && len(manifest.Specs) == 1 && manifest.Specs[0].EvidencePath != nil {
 			spec := &manifest.Specs[0]
 			file, err := os.Open(*spec.EvidencePath)
 			if err == nil {

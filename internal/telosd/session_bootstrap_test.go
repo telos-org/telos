@@ -62,6 +62,10 @@ func (s *fakeReconcileStore) Get(string) (*sessionapi.Session, error) {
 func (s *fakeReconcileStore) Transcript(string) (string, error) {
 	return "", sessionapi.ErrNotFound
 }
+func (s *fakeReconcileStore) WatchEvents(string) (<-chan struct{}, func(), error) {
+	return make(chan struct{}), func() {}, nil
+}
+
 func (s *fakeReconcileStore) Events(string) ([]sessionapi.SessionEvent, error) {
 	return nil, sessionapi.ErrNotFound
 }

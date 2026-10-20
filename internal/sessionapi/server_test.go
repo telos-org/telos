@@ -1753,9 +1753,9 @@ func TestEventsPresent(t *testing.T) {
 	if evResp.Events[0].Data["cost_usd"] != 0.5 {
 		t.Errorf("expected cost_usd=0.5, got %v", evResp.Events[0].Data["cost_usd"])
 	}
-	// Legacy evidence has no event_seq: the projection must not invent one.
-	if evResp.Events[0].EventSeq != nil {
-		t.Errorf("expected nil event_seq, got %v", *evResp.Events[0].EventSeq)
+	// Legacy evidence receives a persisted position for replay.
+	if evResp.Events[0].EventSeq == nil || *evResp.Events[0].EventSeq != 1 {
+		t.Errorf("expected position 1, got %v", evResp.Events[0].EventSeq)
 	}
 
 	assertEqual(t, "event[1].event", "game_end", evResp.Events[1].Event)
@@ -1944,7 +1944,7 @@ func TestEventsBeforeTailCombined(t *testing.T) {
 	assertEqual(t, "events", "two,three", eventNames(events))
 }
 
-func TestEventsLegacyCursorReplaysSafely(t *testing.T) {
+func TestEventsLegacyCursorResumesWithoutReplaying(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
@@ -1957,7 +1957,7 @@ func TestEventsLegacyCursorReplaysSafely(t *testing.T) {
 	})
 
 	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?after=1")
-	assertEqual(t, "events", "one,two,three", eventNames(events))
+	assertEqual(t, "events", "two,three", eventNames(events))
 	tailed := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?tail=2")
 	assertEqual(t, "events", "two,three", eventNames(tailed))
 }
@@ -1979,13 +1979,12 @@ func TestEventsBadParams(t *testing.T) {
 	}
 }
 
-func TestEventsMixedSeqFileReplaysWithoutCursor(t *testing.T) {
+func TestEventsMixedSeqFileGetsDurableCursors(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
 	created := createSession(t, srv.URL, createSessionBody(t, "emx"))
-	// Seq-less lines ahead of numbered ones: the numbered seqs collide with
-	// the legacy lines' ordinal positions, so none of them are durable.
+	// Legacy lines and colliding writer positions receive persisted cursors.
 	writeEventsFixture(t, store.Root, created.SessionID, "emx", []string{
 		`{"event":"legacy-one"}`,
 		`{"event":"legacy-two"}`,
@@ -1998,20 +1997,19 @@ func TestEventsMixedSeqFileReplaysWithoutCursor(t *testing.T) {
 		t.Fatalf("expected 4 events, got %d", len(events))
 	}
 	for i, event := range events {
-		if event.EventSeq != nil {
-			t.Fatalf("event %d: expected event_seq stripped, got %d", i, *event.EventSeq)
+		if event.EventSeq == nil || *event.EventSeq != int64(i+1) {
+			t.Fatalf("event %d: expected durable position, got %v", i, event.EventSeq)
 		}
 	}
 	filtered := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?after=2")
-	assertEqual(t, "events", "legacy-one,legacy-two,new-one,new-two", eventNames(filtered))
+	assertEqual(t, "events", "new-one,new-two", eventNames(filtered))
 }
 
-func TestEventsMultiSpecSeqsNotAdvertised(t *testing.T) {
+func TestEventsMultiSpecSeqsAreSessionGlobal(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
-	// Two specs, each evidence file numbered independently from 1: the
-	// concatenation is not a usable cursor space, so no seqs may surface.
+	// Two independently numbered specs share one persisted cursor space.
 	id := "sess_multispec"
 	sessionDir := filepath.Join(store.Root, id)
 	specs := []sessionapi.InitialManifestSpec{}
@@ -2048,15 +2046,15 @@ func TestEventsMultiSpecSeqsNotAdvertised(t *testing.T) {
 		t.Fatalf("expected 4 events, got %d", len(events))
 	}
 	for i, event := range events {
-		if event.EventSeq != nil {
-			t.Fatalf("event %d: expected event_seq stripped, got %d", i, *event.EventSeq)
+		if event.EventSeq == nil || *event.EventSeq != int64(i+1) {
+			t.Fatalf("event %d: expected durable position, got %v", i, event.EventSeq)
 		}
 	}
 	filtered := getEventsList(t, srv.URL+"/api/sessions/"+id+"/events?after=2")
 	assertEqual(
 		t,
 		"events",
-		"alpha-one,alpha-two,beta-one,beta-two",
+		"beta-one,beta-two",
 		eventNames(filtered),
 	)
 }
@@ -2185,12 +2183,13 @@ func TestEventsSSERejectsSnapshotWindows(t *testing.T) {
 	}
 }
 
-func TestEventsSSELegacyCursorReplaysWithoutIDFrames(t *testing.T) {
+func TestEventsSSELegacyCursorResumesWithPersistedIDs(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 
 	created := createSession(t, srv.URL, createSessionBody(t, "esl"))
 	writeEventsFixture(t, store.Root, created.SessionID, "esl", []string{
+		`{"event":"first"}`,
 		`{"event":"game_end","data":{"game_result":"success"}}`,
 	})
 	stopSession(t, srv.URL, created.SessionID)
@@ -2200,7 +2199,7 @@ func TestEventsSSELegacyCursorReplaysWithoutIDFrames(t *testing.T) {
 		t.Fatal(err)
 	}
 	req.Header.Set("Accept", "text/event-stream")
-	req.Header.Set("Last-Event-ID", "99")
+	req.Header.Set("Last-Event-ID", "1")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatal(err)
@@ -2213,9 +2212,9 @@ func TestEventsSSELegacyCursorReplaysWithoutIDFrames(t *testing.T) {
 	if !strings.Contains(string(body), `data: {"event":"game_end"`) {
 		t.Fatalf("unexpected SSE body: %s", body)
 	}
-	// Ordinal positions are not durable cursors: never advertise them.
-	if strings.Contains(string(body), "id: ") {
-		t.Fatalf("expected no id frames for legacy events, got: %s", body)
+	// The first event was already acknowledged and must not replay.
+	if !strings.Contains(string(body), "id: 2\n") || strings.Contains(string(body), `"event":"first"`) {
+		t.Fatalf("incorrect legacy resume: %s", body)
 	}
 }
 

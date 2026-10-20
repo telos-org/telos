@@ -341,9 +341,8 @@ type SessionEvent struct {
 	Schema  *string `json:"schema,omitempty"`
 	EventID *string `json:"event_id,omitempty"`
 	Event   string  `json:"event"`
-	// EventSeq is the evidence writer's dense 1-based sequence number —
-	// the durable cursor for pagination and stream resume. Nil for lines
-	// written before seq-stamping existed.
+	// EventSeq is the durable session-wide cursor for pagination and resume.
+	// Legacy and multi-spec evidence receives persisted positions on ingestion.
 	EventSeq         *int64         `json:"event_seq,omitempty"`
 	EpochID          *int           `json:"epoch_id,omitempty"`
 	Round            *int           `json:"round,omitempty"`
