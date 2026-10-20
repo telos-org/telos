@@ -2344,7 +2344,15 @@ func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
 	if err := file.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpPath, path)
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	directory, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	return directory.Sync()
 }
 
 func strValue(s *string) string {
