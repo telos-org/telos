@@ -1,7 +1,6 @@
 package sessionapi
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -65,12 +64,12 @@ func inferenceOperation(m *Manifest, requestID string) *InferenceOperation {
 func inferenceRequestDigest(req InferenceUpdateRequest) string {
 	// ApplyAt has one semantic value; JSON key order and whitespace are immaterial.
 	req.ApplyAt = "next_turn"
+	if len(req.ModelDefinition) > 0 {
+		var definition any
+		_ = json.Unmarshal(req.ModelDefinition, &definition)
+		req.ModelDefinition, _ = json.Marshal(definition)
+	}
 	data, _ := json.Marshal(req)
-	var value any
-	decoder := json.NewDecoder(bytes.NewReader(data))
-	decoder.UseNumber()
-	_ = decoder.Decode(&value)
-	data, _ = json.Marshal(value)
 	digest := sha256.Sum256(data)
 	return hex.EncodeToString(digest[:])
 }

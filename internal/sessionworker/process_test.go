@@ -34,7 +34,7 @@ func TestAcquireOwnershipIsExclusiveAndRecordsTopLevelRunner(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if manifest.Runner == nil || manifest.Runner.PID != os.Getpid() || !manifest.Runner.InferenceUpdates {
+	if manifest.Runner == nil || manifest.Runner.PID != os.Getpid() || !manifest.Runner.InferenceUpdates || !manifest.Runner.InferenceReceipts {
 		t.Fatalf("top-level runner not recorded: %#v", manifest.Runner)
 	}
 }
