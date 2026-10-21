@@ -189,6 +189,7 @@ func (fs *FileStore) Inference(id string) (*InferenceResponse, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrInferenceUnavailable, err)
 	}
+	supported = supported && requireInferenceWorker(m) == nil && requireInferenceConnectionWorker(m) == nil
 	return inferenceResponse(m, &supported), nil
 }
 
@@ -224,6 +225,9 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 			return nil
 		}
 		if req.Connection != nil || m.InferenceConnection != nil {
+			if err := requireInferenceConnectionWorker(m); err != nil {
+				return err
+			}
 			supported, err := platform.PiSupportsInferenceConnections()
 			if err != nil {
 				return fmt.Errorf("%w: %v", ErrInferenceUnavailable, err)
@@ -315,6 +319,22 @@ func requireInferenceWorker(m *Manifest) error {
 	}
 	if runner != nil && (!runner.InferenceUpdates || !runner.InferenceReceipts) {
 		return fmt.Errorf("%w: this session worker does not support inference changes; restart it with the updated telosd before changing settings", ErrConflict)
+	}
+	if m.InferenceConnection != nil || (m.InferenceUpdate != nil && m.InferenceUpdate.Connection != nil) {
+		return requireInferenceConnectionWorker(m)
+	}
+	return nil
+}
+
+func requireInferenceConnectionWorker(m *Manifest) error {
+	runner := m.Runner
+	if runner == nil {
+		if epoch := m.OpenEpoch(); epoch != nil {
+			runner = epoch.Runner
+		}
+	}
+	if runner != nil && !runner.InferenceConnections {
+		return fmt.Errorf("%w: this session worker does not support inference connections; restart it with the updated telosd before changing connections", ErrConflict)
 	}
 	return nil
 }

@@ -71,6 +71,99 @@ func TestInferenceConnectionIsDurableAndRedacted(t *testing.T) {
 	}
 }
 
+func TestInferenceConnectionRequiresWorkerSupportBeyondReceipts(t *testing.T) {
+	for _, location := range []string{"runner", "open_epoch"} {
+		for _, supportsConnections := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/%t", location, supportsConnections), func(t *testing.T) {
+				store, path := inferenceStore(t)
+				setInferencePi(t, true)
+				if _, err := MutateManifest(path, func(m *Manifest) error {
+					worker := &Runner{InferenceUpdates: true, InferenceReceipts: true, InferenceConnections: supportsConnections}
+					if location == "runner" {
+						m.Runner = worker
+					} else {
+						m.Epochs = []Epoch{{ID: 1, Runner: worker}}
+					}
+					return nil
+				}); err != nil {
+					t.Fatal(err)
+				}
+				state, err := store.Inference("session")
+				if err != nil || !state.OperationReceipts || state.ConnectionSwitching == nil || *state.ConnectionSwitching != supportsConnections {
+					t.Fatalf("worker capability was not reflected: %+v %v", state, err)
+				}
+				model, thinking := "provider/new", "high"
+				req := InferenceUpdateRequest{
+					RequestID: "connection", Model: &model, Connection: testInferenceConnection(),
+					ModelDefinition: json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{},"contextWindow":128000,"maxTokens":8192}`),
+				}
+				state, err = store.UpdateInference("session", req)
+				if supportsConnections {
+					if err != nil || state.Update.Status != "pending" {
+						t.Fatalf("compatible worker could not switch: %+v %v", state, err)
+					}
+					return
+				}
+				if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "restart it with the updated telosd") {
+					t.Fatalf("receipt-only worker accepted a connection: %+v %v", state, err)
+				}
+				m, err := ReadManifest(path)
+				if err != nil || m.InferenceUpdate != nil || len(m.InferenceReceipts) != 0 || m.Config.Model != "provider/old" {
+					t.Fatalf("unsupported connection changed durable state: %+v %v", m, err)
+				}
+				state, err = store.UpdateInference("session", InferenceUpdateRequest{RequestID: "plain", Model: &model, Thinking: &thinking})
+				if err != nil || state.Update.Status != "pending" || !state.OperationReceipts {
+					t.Fatalf("receipt worker lost model/thinking support: %+v %v", state, err)
+				}
+			})
+		}
+	}
+}
+
+func TestInferenceConnectionStateNeedsACompatibleWorkerBeforeSettlement(t *testing.T) {
+	for _, phase := range []string{"pending", "applied"} {
+		t.Run(phase, func(t *testing.T) {
+			store, path := inferenceStore(t)
+			setInferencePi(t, true)
+			model := "provider/new"
+			req := InferenceUpdateRequest{
+				RequestID: "connection", Model: &model, Connection: testInferenceConnection(),
+				ModelDefinition: json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{},"contextWindow":128000,"maxTokens":8192}`),
+			}
+			if _, err := store.UpdateInference("session", req); err != nil {
+				t.Fatal(err)
+			}
+			if phase == "applied" {
+				update, err := ClaimInferenceUpdate(path, "attempt", "receipt.json", InferenceSettings{})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", update.Settings); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := MutateManifest(path, func(m *Manifest) error {
+				m.Runner = &Runner{InferenceUpdates: true, InferenceReceipts: true}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			state, err := store.Inference("session")
+			if err != nil || state.OperationReceipts || state.ConnectionSwitching == nil || *state.ConnectionSwitching || !strings.Contains(state.UpdateError, "does not support inference connections") {
+				t.Fatalf("incompatible worker advertised connection settlement: %+v %v", state, err)
+			}
+			state, err = store.InferenceRequest("session", req.RequestID)
+			if err != nil || state.OperationReceipts || state.Operation.Status != phase {
+				t.Fatalf("historical state was hidden or trusted for settlement: %+v %v", state, err)
+			}
+			thinking := "high"
+			if _, err := store.UpdateInference("session", InferenceUpdateRequest{RequestID: "plain", ExpectedRevision: 1, Thinking: &thinking}); !errors.Is(err, ErrConflict) {
+				t.Fatalf("incompatible worker could discard connection defaults: %v", err)
+			}
+		})
+	}
+}
+
 func setInferencePi(t *testing.T, supported bool) string {
 	t.Helper()
 	home := t.TempDir()
