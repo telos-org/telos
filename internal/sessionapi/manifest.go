@@ -12,30 +12,31 @@ import (
 
 // Manifest is the persisted session.json shape shared by the store and worker.
 type Manifest struct {
-	SessionID                string                     `json:"session_id"`
-	SessionKind              SessionKind                `json:"session_kind"`
-	DesiredStatus            SessionDesiredStatus       `json:"desired_status,omitempty"`
-	Runtime                  SessionRuntime             `json:"runtime,omitempty"`
-	CreatedAt                string                     `json:"created_at"`
-	ParentSessionID          *string                    `json:"parent_session_id"`
-	SourceSpecPath           *string                    `json:"source_spec_path,omitempty"`
-	SessionSpecPath          *string                    `json:"session_spec_path,omitempty"`
-	SpecName                 string                     `json:"spec_name"`
-	CurrentRevision          *string                    `json:"current_revision,omitempty"`
-	CurrentSpecVersion       *int                       `json:"current_spec_version,omitempty"`
-	SpecVersions             []map[string]any           `json:"spec_versions,omitempty"`
-	PackageDigest            *string                    `json:"package_digest,omitempty"`
-	ApplyPackageLock         *spec.ApplyPackageManifest `json:"apply_package_lock,omitempty"`
-	Config                   SessionConfig              `json:"config"`
-	InferenceUpdate          *InferenceUpdate           `json:"inference_update,omitempty"`
-	InferenceModelDefinition json.RawMessage            `json:"inference_model_definition,omitempty"`
-	InferenceConnection      *InferenceConnection       `json:"inference_connection,omitempty"`
-	Workspace                *Workspace                 `json:"workspace,omitempty"`
-	Provenance               map[string]any             `json:"provenance"`
-	Access                   *ScopedToken               `json:"access,omitempty"`
-	Runner                   *Runner                    `json:"runner,omitempty"`
-	Specs                    []ManifestSpec             `json:"specs"`
-	Epochs                   []Epoch                    `json:"epochs"`
+	SessionID                string                      `json:"session_id"`
+	SessionKind              SessionKind                 `json:"session_kind"`
+	DesiredStatus            SessionDesiredStatus        `json:"desired_status,omitempty"`
+	Runtime                  SessionRuntime              `json:"runtime,omitempty"`
+	CreatedAt                string                      `json:"created_at"`
+	ParentSessionID          *string                     `json:"parent_session_id"`
+	SourceSpecPath           *string                     `json:"source_spec_path,omitempty"`
+	SessionSpecPath          *string                     `json:"session_spec_path,omitempty"`
+	SpecName                 string                      `json:"spec_name"`
+	CurrentRevision          *string                     `json:"current_revision,omitempty"`
+	CurrentSpecVersion       *int                        `json:"current_spec_version,omitempty"`
+	SpecVersions             []map[string]any            `json:"spec_versions,omitempty"`
+	PackageDigest            *string                     `json:"package_digest,omitempty"`
+	ApplyPackageLock         *spec.ApplyPackageManifest  `json:"apply_package_lock,omitempty"`
+	Config                   SessionConfig               `json:"config"`
+	InferenceUpdate          *InferenceUpdate            `json:"inference_update,omitempty"`
+	InferenceReceipts        map[string]InferenceReceipt `json:"inference_receipts,omitempty"`
+	InferenceModelDefinition json.RawMessage             `json:"inference_model_definition,omitempty"`
+	InferenceConnection      *InferenceConnection        `json:"inference_connection,omitempty"`
+	Workspace                *Workspace                  `json:"workspace,omitempty"`
+	Provenance               map[string]any              `json:"provenance"`
+	Access                   *ScopedToken                `json:"access,omitempty"`
+	Runner                   *Runner                     `json:"runner,omitempty"`
+	Specs                    []ManifestSpec              `json:"specs"`
+	Epochs                   []Epoch                     `json:"epochs"`
 }
 
 type Workspace struct {
@@ -97,6 +98,7 @@ type Runner struct {
 	FinishedAt          *string `json:"finished_at,omitempty"`
 	Status              string  `json:"status,omitempty"`
 	InferenceUpdates    bool    `json:"inference_updates,omitempty"`
+	InferenceReceipts   bool    `json:"inference_receipts,omitempty"`
 	InferenceRetirement bool    `json:"inference_retirement,omitempty"`
 }
 

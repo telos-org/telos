@@ -89,7 +89,9 @@ type InferenceUpdate struct {
 }
 
 type InferenceResponse struct {
-	ConnectionRetirement bool `json:"connection_retirement"`
+	OperationReceipts    bool                `json:"operation_receipts"`
+	Operation            *InferenceOperation `json:"operation,omitempty"`
+	ConnectionRetirement bool                `json:"connection_retirement"`
 	// GET checks availability; a mutation that does not need the check omits it.
 	ConnectionSwitching *bool             `json:"connection_switching,omitempty"`
 	ApplyAt             string            `json:"apply_at"`
@@ -161,10 +163,7 @@ func (r InferenceUpdateRequest) Validate() error {
 }
 
 func inferenceResponse(m *Manifest, connectionSwitching *bool) *InferenceResponse {
-	r := &InferenceResponse{ConnectionRetirement: supportsInferenceRetirement(m), ConnectionSwitching: connectionSwitching, ApplyAt: "next_turn", Settings: InferenceSettings{Model: m.Config.Model, Thinking: m.Config.Thinking}, Update: m.InferenceUpdate}
-	if m.InferenceConnection != nil {
-		r.Settings.ConnectionID = m.InferenceConnection.ID
-	}
+	r := &InferenceResponse{ConnectionRetirement: supportsInferenceRetirement(m), ConnectionSwitching: connectionSwitching, ApplyAt: "next_turn", Settings: committedInferenceSettings(m), Update: m.InferenceUpdate}
 	if r.Update != nil {
 		r.Revision = r.Update.Revision
 		if r.Update.Connection != nil {
@@ -172,9 +171,12 @@ func inferenceResponse(m *Manifest, connectionSwitching *bool) *InferenceRespons
 			connection.APIKey = ""
 			update.Connection, r.Update = &connection, &update
 		}
+		r.Operation = inferenceOperation(m, r.Update.RequestID)
 	}
 	if err := requireInferenceWorker(m); err != nil {
 		r.UpdateError = err.Error()
+	} else {
+		r.OperationReceipts = true
 	}
 	return r
 }
@@ -205,28 +207,28 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 		return nil, ErrNotFound
 	}
 	var connectionSwitching *bool
+	var rejection string
 	m, err := MutateInferenceManifest(fs.manifestPath(id), func(m *Manifest) error {
 		current := inferenceResponse(m, connectionSwitching)
-		if current.Update != nil && current.Update.RequestID == req.RequestID {
-			if !sameInferenceRequest(m.InferenceUpdate.InferenceUpdateRequest, req) {
-				return fmt.Errorf("%w: request_id already used with different settings", ErrConflict)
-			}
-			return nil
+		if replayed, err := replayInferenceRequest(m, req); replayed || err != nil {
+			return err
 		}
 		if err := requireInferenceWorker(m); err != nil {
 			return err
 		}
-		if current.Revision != req.ExpectedRevision {
-			return fmt.Errorf("%w: inference settings changed; reload before submitting another change", ErrConflict)
+		switch {
+		case current.Revision != req.ExpectedRevision:
+			rejection = "inference settings changed; reload before submitting another change"
+		case m.IsStopped() || (m.SessionKind == KindTask && deriveStatus(fs.sessionDir(id), m).IsTerminal()):
+			rejection = "session is not running"
+		case m.SessionKind == KindTask && m.LastEpoch() != nil && m.LastEpoch().FinishedAt != nil:
+			rejection = "task has already finished"
+		case current.Update != nil && (current.Update.Status == "pending" || current.Update.Status == "applying"):
+			rejection = "an inference change is already in progress"
 		}
-		if m.IsStopped() || (m.SessionKind == KindTask && deriveStatus(fs.sessionDir(id), m).IsTerminal()) {
-			return fmt.Errorf("%w: session is not running", ErrConflict)
-		}
-		if epoch := m.LastEpoch(); m.SessionKind == KindTask && epoch != nil && epoch.FinishedAt != nil {
-			return fmt.Errorf("%w: task has already finished", ErrConflict)
-		}
-		if current.Update != nil && (current.Update.Status == "pending" || current.Update.Status == "applying") {
-			return fmt.Errorf("%w: an inference change is already in progress", ErrConflict)
+		if rejection != "" {
+			rejectInferenceRequest(m, req, rejection)
+			return nil
 		}
 		if req.Connection != nil || m.InferenceConnection != nil {
 			supported, err := platform.PiSupportsInferenceConnections()
@@ -241,6 +243,7 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 		if req.Connection == nil && req.Model != nil && m.InferenceConnection != nil && !strings.HasPrefix(*req.Model, m.InferenceConnection.Provider+"/") {
 			return fmt.Errorf("%w: changing providers requires a prepared connection", ErrInvalidSession)
 		}
+		recordInferenceReceipt(m)
 		m.InferenceUpdate = &InferenceUpdate{InferenceUpdateRequest: req, Revision: current.Revision + 1, Status: "pending", UpdatedAt: inferenceTimestamp()}
 		return nil
 	})
@@ -250,7 +253,12 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 	if err != nil {
 		return nil, err
 	}
-	return inferenceResponse(m, connectionSwitching), nil
+	if rejection != "" {
+		return nil, fmt.Errorf("%w: %s", ErrConflict, rejection)
+	}
+	response := inferenceResponse(m, connectionSwitching)
+	response.Operation = inferenceOperation(m, req.RequestID)
+	return response, nil
 }
 
 // CancelInference also records cancellation before a delayed PUT has arrived.
@@ -265,25 +273,31 @@ func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*In
 	}
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
 		current := inferenceResponse(m, nil)
-		matched := current.Update != nil && current.Update.RequestID == req.RequestID
-		if update := current.Update; matched {
-			if !sameInferenceRequest(m.InferenceUpdate.InferenceUpdateRequest, req) {
-				return fmt.Errorf("%w: request_id already used with different settings", ErrConflict)
-			}
-			if update.Status == "rejected" || (update.Status == "unknown" && update.Connection != nil) {
+		replayed, err := replayInferenceRequest(m, req)
+		if err != nil {
+			return err
+		}
+		if replayed {
+			if current.Update == nil || current.Update.RequestID != req.RequestID || current.Update.Status != "pending" {
 				return nil
 			}
-			if update.Status != "pending" {
-				return fmt.Errorf("%w: inference change has already started and cannot be cancelled", ErrConflict)
-			}
-		} else if current.Revision != req.ExpectedRevision || (current.Update != nil && (current.Update.Status == "pending" || current.Update.Status == "applying")) {
-			return fmt.Errorf("%w: inference settings changed; reload before cancelling", ErrConflict)
 		}
 		if err := requireInferenceWorker(m); err != nil {
 			return err
 		}
+		if !replayed && (current.Revision != req.ExpectedRevision || (current.Update != nil && (current.Update.Status == "pending" || current.Update.Status == "applying"))) {
+			rejectInferenceRequest(m, req, "inference change cancelled before delivery")
+			if current.Revision != req.ExpectedRevision {
+				receipt := m.InferenceReceipts[req.RequestID]
+				receipt.Status = "unknown"
+				receipt.Error = "inference change fenced for future delivery; prior outcome is unavailable"
+				m.InferenceReceipts[req.RequestID] = receipt
+			}
+			return nil
+		}
+		recordInferenceReceipt(m)
 		status, detail := "rejected", "inference change cancelled before the next turn"
-		if !matched && req.Connection != nil {
+		if !replayed && req.Connection != nil {
 			// Missing history cannot prove no child previously used this connection.
 			status, detail = "unknown", "inference change cancelled for future turns; prior connection history is unavailable"
 		}
@@ -291,6 +305,7 @@ func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*In
 			InferenceUpdateRequest: req, Revision: req.ExpectedRevision + 1,
 			Status: status, Error: detail, UpdatedAt: inferenceTimestamp(),
 		}
+		recordInferenceReceipt(m)
 		return nil
 	})
 	if errors.Is(err, os.ErrNotExist) {
@@ -299,7 +314,9 @@ func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*In
 	if err != nil {
 		return nil, err
 	}
-	return inferenceResponse(m, nil), nil
+	response := inferenceResponse(m, nil)
+	response.Operation = inferenceOperation(m, req.RequestID)
+	return response, nil
 }
 
 func requireInferenceWorker(m *Manifest) error {
@@ -309,7 +326,7 @@ func requireInferenceWorker(m *Manifest) error {
 			runner = epoch.Runner
 		}
 	}
-	if runner != nil && !runner.InferenceUpdates {
+	if runner != nil && (!runner.InferenceUpdates || !runner.InferenceReceipts) {
 		return fmt.Errorf("%w: this session worker does not support inference changes; restart it with the updated telosd before changing settings", ErrConflict)
 	}
 	return nil
@@ -373,6 +390,7 @@ func ClaimInferenceUpdate(path, attemptID, receiptPath string, defaults Inferenc
 			claimed = &copy
 		}
 		u.UpdatedAt = inferenceTimestamp()
+		recordInferenceReceipt(m)
 		return nil
 	})
 	return claimed, err
@@ -405,6 +423,7 @@ func FinishInferenceUpdate(path, requestID, status, detail string, settings *Inf
 			}
 		}
 		u.Status, u.Error, u.UpdatedAt = status, detail, inferenceTimestamp()
+		recordInferenceReceipt(m)
 		return nil
 	})
 	return err
@@ -416,6 +435,7 @@ func RecoverInferenceUpdate(path string) error {
 			u.Status = "unknown"
 			u.Error = "previous turn ended without confirming startup; saved settings were retained"
 			u.UpdatedAt = inferenceTimestamp()
+			recordInferenceReceipt(m)
 		}
 		return nil
 	})
@@ -439,5 +459,6 @@ func SettleInferenceUpdateInManifest(m *Manifest, detail string) {
 			u.Status = "unknown"
 		}
 		u.Error, u.UpdatedAt = detail, inferenceTimestamp()
+		recordInferenceReceipt(m)
 	}
 }

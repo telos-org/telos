@@ -71,6 +71,7 @@ type Store interface {
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
 	Inference(id string) (*InferenceResponse, error)
+	InferenceRequest(id, requestID string) (*InferenceResponse, error)
 	UpdateInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error)
 	CancelInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error)
 	RetireInferenceConnection(id, connectionID string) (*InferenceRetirement, error)

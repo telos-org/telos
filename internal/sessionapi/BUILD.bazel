@@ -9,6 +9,7 @@ go_library(
         "manifest.go",
         "inference.go",
         "inference_retirement.go",
+        "inference_receipts.go",
         "server.go",
         "store.go",
         "types.go",
@@ -39,6 +40,7 @@ go_test(
     srcs = [
         "inference_test.go",
         "inference_retirement_test.go",
+        "inference_receipts_test.go",
         "store_dashboard_doc_unix_test.go",
         "store_test.go",
     ],

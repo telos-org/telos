@@ -331,6 +331,7 @@ func RunnerIdentity(pid int) sessionapi.Runner {
 		PGID:                pid,
 		StartedAt:           time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
 		InferenceUpdates:    true,
+		InferenceReceipts:   true,
 		InferenceRetirement: true,
 	}
 }

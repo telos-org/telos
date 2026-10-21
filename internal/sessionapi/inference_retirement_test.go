@@ -15,7 +15,7 @@ func retirementStore(t *testing.T) (*FileStore, string) {
 	t.Helper()
 	store, path := inferenceStore(t)
 	if _, err := MutateManifest(path, func(m *Manifest) error {
-		m.Runner = &Runner{InferenceUpdates: true, InferenceRetirement: true}
+		m.Runner = &Runner{InferenceUpdates: true, InferenceRetirement: true, InferenceReceipts: true}
 		return nil
 	}); err != nil {
 		t.Fatal(err)

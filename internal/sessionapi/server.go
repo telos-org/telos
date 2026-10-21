@@ -42,6 +42,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
 	mux.HandleFunc("GET /api/sessions/{id}/inference", h.getInference)
+	mux.HandleFunc("GET /api/sessions/{id}/inference/requests/{request_id}", h.getInferenceRequest)
 	mux.HandleFunc("PUT /api/sessions/{id}/inference", h.updateInference)
 	mux.HandleFunc("POST /api/sessions/{id}/inference/cancel", h.cancelInference)
 	mux.HandleFunc("POST /api/sessions/{id}/inference/connections/{connection_id}/retire", h.retireInferenceConnection)
@@ -62,6 +63,19 @@ func (h *handler) getInference(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) updateInference(w http.ResponseWriter, r *http.Request) {
 	h.mutateInference(w, r, false)
+}
+
+func (h *handler) getInferenceRequest(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
+		return
+	}
+	response, err := h.store.InferenceRequest(id, r.PathValue("request_id"))
+	if err != nil {
+		writeInferenceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 func (h *handler) cancelInference(w http.ResponseWriter, r *http.Request) {
@@ -97,7 +111,7 @@ func (h *handler) mutateInference(w http.ResponseWriter, r *http.Request, cancel
 		return
 	}
 	status := http.StatusOK
-	if response.Update != nil && (response.Update.Status == "pending" || response.Update.Status == "applying") {
+	if response.Operation != nil && (response.Operation.Status == "pending" || response.Operation.Status == "applying") {
 		status = http.StatusAccepted
 	}
 	writeJSON(w, status, response)
