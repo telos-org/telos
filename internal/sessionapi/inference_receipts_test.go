@@ -342,3 +342,56 @@ func TestInferenceRequestCollisionIsDistinctFromAdmissionConflict(t *testing.T) 
 		})
 	}
 }
+
+func TestInferenceConnectionReceiptsRetainCommittedConnection(t *testing.T) {
+	for _, outcome := range []string{"applied", "rejected", "unknown", "admission_rejected"} {
+		t.Run(outcome, func(t *testing.T) {
+			store, path := inferenceStore(t)
+			setInferencePi(t, true)
+			old := testInferenceConnection()
+			old.ID = "existing-connection"
+			if _, err := MutateManifest(path, func(m *Manifest) error { m.InferenceConnection = old; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			model := "provider/new"
+			req := InferenceUpdateRequest{
+				RequestID: "switch", Model: &model, Connection: testInferenceConnection(),
+				ModelDefinition: json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{},"contextWindow":128000,"maxTokens":8192}`),
+			}
+			pending, err := store.UpdateInference("session", req)
+			if err != nil || pending.Operation.Settings.ConnectionID != old.ID {
+				t.Fatalf("pending operation changed committed connection: %+v %v", pending, err)
+			}
+			if outcome == "admission_rejected" {
+				req.RequestID, req.ExpectedRevision = "another", 1
+				if _, err := store.UpdateInference("session", req); !errors.Is(err, ErrConflict) {
+					t.Fatalf("concurrent switch was accepted: %v", err)
+				}
+			} else {
+				claimed, err := ClaimInferenceUpdate(path, "attempt", "receipt.json", InferenceSettings{})
+				if err != nil || claimed.Settings.ConnectionID != req.Connection.ID {
+					t.Fatalf("startup lost requested connection: %+v %v", claimed, err)
+				}
+				var confirmed *InferenceSettings
+				if outcome == "applied" {
+					confirmed = claimed.Settings
+				}
+				if err := FinishInferenceUpdate(path, req.RequestID, outcome, "", confirmed); err != nil {
+					t.Fatal(err)
+				}
+			}
+			result, err := NewFileStore(store.Root, RuntimeLocal).InferenceRequest("session", req.RequestID)
+			wanted := old.ID
+			if outcome == "applied" {
+				wanted = req.Connection.ID
+			}
+			if err != nil || result.Operation.Settings.ConnectionID != wanted {
+				t.Fatalf("terminal receipt lost committed connection: %+v %v", result, err)
+			}
+			m, err := ReadManifest(path)
+			if err != nil || m.InferenceReceipts[req.RequestID].Settings.ConnectionID != wanted {
+				t.Fatalf("durable receipt lost connection: %+v %v", m, err)
+			}
+		})
+	}
+}

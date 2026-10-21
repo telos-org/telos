@@ -289,7 +289,3 @@ func TestSessionBootstrapDoesNotOverwriteUpdatedPackageDigest(t *testing.T) {
 		t.Fatalf("expected bootstrap seed to leave updated session alone, creates=%#v stops=%#v", store.creates, store.stops)
 	}
 }
-
-func (s *fakeReconcileStore) RetireInferenceConnection(string, string) (*sessionapi.InferenceRetirement, error) {
-	return nil, sessionapi.ErrNotFound
-}

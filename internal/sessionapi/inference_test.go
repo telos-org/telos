@@ -15,7 +15,7 @@ import (
 )
 
 func testInferenceConnection() *InferenceConnection {
-	return &InferenceConnection{ID: "grant-new", Provider: "provider", BaseURL: "https://models.example/v1", ProxyURL: "http://172.31.255.1:20000", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
+	return &InferenceConnection{ID: "grant-new", Provider: "provider", BaseURL: "https://models.example/v1", ProxyURL: "http://172.31.255.1:18080", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
 }
 
 func TestInferenceConnectionIsDurableAndRedacted(t *testing.T) {
@@ -112,15 +112,9 @@ func TestInferenceConnectionCancellationFencesPreparedAndDelayedHandoffs(t *test
 				cancelRequest.Connection = nil
 			}
 			wantStatus := "rejected"
-			if stage == "prepared" {
-				wantStatus = "unknown"
-			}
 			state, err := store.CancelInference("session", cancelRequest)
 			if err != nil || state.Update.Status != wantStatus || state.Revision != 1 || state.Settings.ConnectionID != "" {
 				t.Fatalf("cancel connection: %+v %v", state, err)
-			}
-			if wantStatus == "unknown" && !strings.Contains(state.Update.Error, "prior connection history is unavailable") {
-				t.Fatalf("missing history was reported as a known rejection: %+v", state.Update)
 			}
 			if state.Update.Connection != nil && state.Update.Connection.APIKey != "" {
 				t.Fatal("cancel response exposed the prepared placeholder")
@@ -310,7 +304,7 @@ func TestInferenceReplayAndPlainSettingsDoNotProbe(t *testing.T) {
 func TestInferenceConnectionValidation(t *testing.T) {
 	model := "provider/new"
 	definition := json.RawMessage(`{"id":"new","name":"New","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`)
-	for _, name := range []string{"valid", "codex", "secret", "command", "environment", "bad_codex", "http", "url_auth", "url_query", "proxy_host", "proxy_port", "proxy_suffix", "proxy_range", "provider", "id", "no_model", "no_definition", "partial_definition"} {
+	for _, name := range []string{"valid", "codex", "secret", "command", "environment", "bad_codex", "http", "url_auth", "url_query", "proxy_host", "proxy_port", "proxy_suffix", "proxy_profile", "proxy_external", "provider", "id", "no_model", "no_definition", "partial_definition"} {
 		t.Run(name, func(t *testing.T) {
 			req := InferenceUpdateRequest{RequestID: "request", Model: &model, ModelDefinition: definition, Connection: testInferenceConnection()}
 			switch name {
@@ -331,13 +325,15 @@ func TestInferenceConnectionValidation(t *testing.T) {
 			case "url_query":
 				req.Connection.BaseURL = "https://models.example/v1?api_key=secret"
 			case "proxy_host":
-				req.Connection.ProxyURL = "http://127.0.0.1:20000"
+				req.Connection.ProxyURL = "http://127.0.0.1:18080"
 			case "proxy_port":
 				req.Connection.ProxyURL = "http://172.31.255.1:20001"
 			case "proxy_suffix":
-				req.Connection.ProxyURL = "http://172.31.255.1:20000/"
-			case "proxy_range":
-				req.Connection.ProxyURL = "http://172.31.255.1:20256"
+				req.Connection.ProxyURL = "http://172.31.255.1:18080/"
+			case "proxy_profile":
+				req.Connection.ProxyURL = "http://172.31.255.1:20000"
+			case "proxy_external":
+				req.Connection.ProxyURL = "http://proxy.example:18080"
 			case "provider":
 				req.Connection.Provider = "other"
 			case "id":

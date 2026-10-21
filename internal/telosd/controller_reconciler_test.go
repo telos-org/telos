@@ -25,7 +25,7 @@ func TestInferenceConnectionsSurviveBootstrapAndChildCreation(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
-	connection := &sessionapi.InferenceConnection{ID: "profile-old", Provider: "provider", BaseURL: "https://models.example/v1", ProxyURL: "http://172.31.255.1:20000", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
+	connection := &sessionapi.InferenceConnection{ID: "profile-old", Provider: "provider", BaseURL: "https://models.example/v1", ProxyURL: "http://172.31.255.1:18080", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
 	definition := `{"id":"model","name":"Model","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`
 	encoded, _ := json.Marshal(connection)
 	t.Setenv("TELOS_CLOUD_DEFAULT_MODEL", "provider/model")
@@ -45,7 +45,7 @@ func TestInferenceConnectionsSurviveBootstrapAndChildCreation(t *testing.T) {
 	}
 	model := "provider/model"
 	next := *connection
-	next.ID, next.ProxyURL, next.APIKey = "profile-next", "http://172.31.255.1:20004", "telos-proxy-"+strings.Repeat("b", 43)
+	next.ID, next.ProxyURL, next.APIKey = "profile-next", "http://172.31.255.1:18080", "telos-proxy-"+strings.Repeat("b", 43)
 	if _, err := store.UpdateInference(parent.SessionID, sessionapi.InferenceUpdateRequest{RequestID: "switch", Model: &model, ModelDefinition: json.RawMessage(definition), Connection: &next}); err != nil {
 		t.Fatal(err)
 	}

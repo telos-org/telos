@@ -8,7 +8,6 @@ go_library(
         "dashboard_doc_open_unix.go",
         "manifest.go",
         "inference.go",
-        "inference_retirement.go",
         "inference_receipts.go",
         "server.go",
         "store.go",
@@ -39,7 +38,6 @@ go_test(
     name = "sessionapi_store_test",
     srcs = [
         "inference_test.go",
-        "inference_retirement_test.go",
         "inference_receipts_test.go",
         "store_dashboard_doc_unix_test.go",
         "store_test.go",

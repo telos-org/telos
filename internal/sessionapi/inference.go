@@ -9,7 +9,6 @@ import (
 	"os"
 	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
 	"time"
 
@@ -47,13 +46,8 @@ func (c *InferenceConnection) Validate(model string) error {
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || u.RawQuery != "" || u.Fragment != "" || len(c.BaseURL) > 2048 || strings.ContainsAny(c.BaseURL, " \t\r\n\\$") {
 		return fmt.Errorf("%w: connection base_url must be an HTTPS endpoint", ErrInvalidSession)
 	}
-	proxy, err := url.Parse(c.ProxyURL)
-	port := 0
-	if err == nil {
-		port, _ = strconv.Atoi(proxy.Port())
-	}
-	if err != nil || port < 20000 || port > 20252 || (port-20000)%4 != 0 || c.ProxyURL != fmt.Sprintf("http://172.31.255.1:%d", port) {
-		return fmt.Errorf("%w: connection proxy_url must name a prepared inference proxy", ErrInvalidSession)
+	if c.ProxyURL != "http://172.31.255.1:18080" {
+		return fmt.Errorf("%w: connection proxy_url must name the deployment credential proxy", ErrInvalidSession)
 	}
 	valid := inferenceProxyValue.MatchString(c.APIKey)
 	if match := inferenceCodexProxyValue.FindStringSubmatch(c.APIKey); match != nil {
@@ -89,9 +83,8 @@ type InferenceUpdate struct {
 }
 
 type InferenceResponse struct {
-	OperationReceipts    bool                `json:"operation_receipts"`
-	Operation            *InferenceOperation `json:"operation,omitempty"`
-	ConnectionRetirement bool                `json:"connection_retirement"`
+	OperationReceipts bool                `json:"operation_receipts"`
+	Operation         *InferenceOperation `json:"operation,omitempty"`
 	// GET checks availability; a mutation that does not need the check omits it.
 	ConnectionSwitching *bool             `json:"connection_switching,omitempty"`
 	ApplyAt             string            `json:"apply_at"`
@@ -163,7 +156,7 @@ func (r InferenceUpdateRequest) Validate() error {
 }
 
 func inferenceResponse(m *Manifest, connectionSwitching *bool) *InferenceResponse {
-	r := &InferenceResponse{ConnectionRetirement: supportsInferenceRetirement(m), ConnectionSwitching: connectionSwitching, ApplyAt: "next_turn", Settings: committedInferenceSettings(m), Update: m.InferenceUpdate}
+	r := &InferenceResponse{ConnectionSwitching: connectionSwitching, ApplyAt: "next_turn", Settings: committedInferenceSettings(m), Update: m.InferenceUpdate}
 	if r.Update != nil {
 		r.Revision = r.Update.Revision
 		if r.Update.Connection != nil {
@@ -208,7 +201,7 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 	}
 	var connectionSwitching *bool
 	var rejection string
-	m, err := MutateInferenceManifest(fs.manifestPath(id), func(m *Manifest) error {
+	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
 		current := inferenceResponse(m, connectionSwitching)
 		if replayed, err := replayInferenceRequest(m, req); replayed || err != nil {
 			return err
@@ -295,14 +288,9 @@ func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*In
 			return nil
 		}
 		recordInferenceReceipt(m)
-		status, detail := "rejected", "inference change cancelled before the next turn"
-		if !replayed && req.Connection != nil {
-			// Missing history cannot prove no child previously used this connection.
-			status, detail = "unknown", "inference change cancelled for future turns; prior connection history is unavailable"
-		}
 		m.InferenceUpdate = &InferenceUpdate{
 			InferenceUpdateRequest: req, Revision: req.ExpectedRevision + 1,
-			Status: status, Error: detail, UpdatedAt: inferenceTimestamp(),
+			Status: "rejected", Error: "inference change cancelled before the next turn", UpdatedAt: inferenceTimestamp(),
 		}
 		recordInferenceReceipt(m)
 		return nil

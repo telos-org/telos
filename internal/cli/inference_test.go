@@ -158,7 +158,7 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 					model = "turn-a/probe-a"
 				}
 				provider, id, _ := strings.Cut(model, "/")
-				request.Connection = &sessionapi.InferenceConnection{ID: "new-connection", Provider: provider, BaseURL: "https://new-account.invalid/v1", ProxyURL: "http://172.31.255.1:20004", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
+				request.Connection = &sessionapi.InferenceConnection{ID: "new-connection", Provider: provider, BaseURL: "https://new-account.invalid/v1", ProxyURL: "http://172.31.255.1:18080", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
 				request.ModelDefinition = json.RawMessage(fmt.Sprintf(`{"id":%q,"name":"Offline test","api":"telos-offline-test","reasoning":true,"input":["text"],"contextWindow":256000,"maxTokens":8192,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}`, id))
 				if phase == "connection_rejected" {
 					thinking = "imaginary"
@@ -221,7 +221,7 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 					originalModel := "turn-a/probe-a"
 					followUp.Model = &originalModel
 					followUp.ModelDefinition = json.RawMessage(`{"id":"probe-a","name":"Offline test","api":"telos-offline-test","reasoning":true,"input":["text"],"contextWindow":128000,"maxTokens":4096,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}`)
-					followUp.Connection = &sessionapi.InferenceConnection{ID: "original-connection", Provider: "turn-a", BaseURL: "https://original-account.invalid/v1", ProxyURL: "http://172.31.255.1:20000", APIKey: "telos-proxy-" + strings.Repeat("b", 43)}
+					followUp.Connection = &sessionapi.InferenceConnection{ID: "original-connection", Provider: "turn-a", BaseURL: "https://original-account.invalid/v1", ProxyURL: "http://172.31.255.1:18080", APIKey: "telos-proxy-" + strings.Repeat("b", 43)}
 				}
 				if _, err := store.UpdateInference("session", followUp); err != nil {
 					t.Fatal(err)
@@ -267,7 +267,7 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 				t.Fatalf("new process did not use complete pair: %s", second)
 			}
 			if connectionPhase && !rejected {
-				for _, value := range []string{`"baseUrl":"https://new-account.invalid/v1"`, `"apiKey":"` + request.Connection.APIKey + `"`, `"proxy":"http://172.31.255.1:20004"`, `"processProxy":"http://general-proxy.invalid:18080"`} {
+				for _, value := range []string{`"baseUrl":"https://new-account.invalid/v1"`, `"apiKey":"` + request.Connection.APIKey + `"`, `"proxy":"http://172.31.255.1:18080"`, `"processProxy":"http://general-proxy.invalid:18080"`} {
 					if !bytes.Contains(second, []byte(value)) {
 						t.Fatalf("new connection not used (%s): %s", value, second)
 					}

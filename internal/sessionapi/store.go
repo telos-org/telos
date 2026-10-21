@@ -74,7 +74,6 @@ type Store interface {
 	InferenceRequest(id, requestID string) (*InferenceResponse, error)
 	UpdateInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error)
 	CancelInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error)
-	RetireInferenceConnection(id, connectionID string) (*InferenceRetirement, error)
 }
 
 // --------- FileStore ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -255,7 +254,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		m.SpecVersions = append(m.SpecVersions, initialVersionEntry)
 	}
 
-	if err := writeInferenceManifest(fs.manifestPath(id), &m); err != nil {
+	if err := WriteManifest(fs.manifestPath(id), &m); err != nil {
 		return nil, err
 	}
 
