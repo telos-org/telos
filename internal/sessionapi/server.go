@@ -118,6 +118,10 @@ func (h *handler) mutateInference(w http.ResponseWriter, r *http.Request, cancel
 }
 
 func writeInferenceError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrInferenceRequestConflict) {
+		writeJSON(w, http.StatusConflict, map[string]string{"detail": err.Error(), "code": "request_id_conflict"})
+		return
+	}
 	status := http.StatusInternalServerError
 	switch {
 	case errors.Is(err, ErrNotFound):

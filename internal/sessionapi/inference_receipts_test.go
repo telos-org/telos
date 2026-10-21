@@ -3,6 +3,7 @@ package sessionapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -294,5 +295,50 @@ func TestInferenceReceiptFingerprintMatchesRequestEquality(t *testing.T) {
 	b.ExpectedRevision = a.ExpectedRevision + 1
 	if sameInferenceRequest(a, b) || inferenceRequestDigest(a) == inferenceRequestDigest(b) {
 		t.Fatal("fingerprint lost typed revision precision")
+	}
+}
+
+func TestInferenceRequestCollisionIsDistinctFromAdmissionConflict(t *testing.T) {
+	for _, terminal := range []bool{false, true} {
+		t.Run(fmt.Sprint(terminal), func(t *testing.T) {
+			store, path := inferenceStore(t)
+			level := "high"
+			req := InferenceUpdateRequest{RequestID: "same", Thinking: &level}
+			if _, err := store.UpdateInference("session", req); err != nil {
+				t.Fatal(err)
+			}
+			if terminal {
+				if err := SettleInferenceUpdate(path, "worker ended"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			other := "low"
+			req.Thinking = &other
+			if _, err := store.UpdateInference("session", req); !errors.Is(err, ErrInferenceRequestConflict) || !errors.Is(err, ErrConflict) {
+				t.Fatalf("request collision was not distinguishable: %v", err)
+			}
+			mux := http.NewServeMux()
+			RegisterRoutes(mux, store, NewBearerAuthorizer(store, "operator-token"), RuntimeIdentity{})
+			for _, endpoint := range []struct{ method, path string }{{"PUT", "/inference"}, {"POST", "/inference/cancel"}} {
+				data, err := json.Marshal(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request := httptest.NewRequest(endpoint.method, "/api/sessions/session"+endpoint.path, strings.NewReader(string(data)))
+				request.Header.Set("Authorization", "Bearer operator-token")
+				response := httptest.NewRecorder()
+				mux.ServeHTTP(response, request)
+				var body struct{ Code string }
+				if response.Code != http.StatusConflict || json.Unmarshal(response.Body.Bytes(), &body) != nil || body.Code != "request_id_conflict" {
+					t.Fatalf("collision looked like an uncertain delivery: %d %s", response.Code, response.Body)
+				}
+			}
+			if _, err := MutateManifest(path, func(m *Manifest) error { m.Runner = &Runner{}; return nil }); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := store.UpdateInference("session", req); !errors.Is(err, ErrConflict) || errors.Is(err, ErrInferenceRequestConflict) {
+				t.Fatalf("incompatible writer confirmed an immutable request fence: %v", err)
+			}
+		})
 	}
 }

@@ -25,6 +25,8 @@ type InferenceReceipt struct {
 	RequestDigest string `json:"request_digest"`
 }
 
+var ErrInferenceRequestConflict = fmt.Errorf("%w: request_id already used with different settings", ErrConflict)
+
 func (fs *FileStore) InferenceRequest(id, requestID string) (*InferenceResponse, error) {
 	if !safeSessionID(id) || !inferenceRequestID.MatchString(requestID) {
 		return nil, ErrInvalidSession
@@ -75,19 +77,21 @@ func inferenceRequestDigest(req InferenceUpdateRequest) string {
 }
 
 func replayInferenceRequest(m *Manifest, req InferenceUpdateRequest) (bool, error) {
+	var matches bool
 	if receipt, ok := m.InferenceReceipts[req.RequestID]; ok {
-		if receipt.RequestDigest != inferenceRequestDigest(req) {
-			return false, fmt.Errorf("%w: request_id already used with different settings", ErrConflict)
-		}
+		matches = receipt.RequestDigest == inferenceRequestDigest(req)
+	} else if update := m.InferenceUpdate; update != nil && update.RequestID == req.RequestID {
+		matches = sameInferenceRequest(update.InferenceUpdateRequest, req)
+	} else {
+		return false, nil
+	}
+	if matches {
 		return true, nil
 	}
-	if update := m.InferenceUpdate; update != nil && update.RequestID == req.RequestID {
-		if !sameInferenceRequest(update.InferenceUpdateRequest, req) {
-			return false, fmt.Errorf("%w: request_id already used with different settings", ErrConflict)
-		}
-		return true, nil
+	if err := requireInferenceWorker(m); err != nil {
+		return false, err
 	}
-	return false, nil
+	return false, ErrInferenceRequestConflict
 }
 
 func recordInferenceReceipt(m *Manifest) {
