@@ -262,8 +262,7 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 }
 
 // CancelInference also records cancellation before a delayed PUT has arrived.
-// Keeping the original request as a terminal update prevents that PUT from
-// resurrecting it, using the same revision and retry rules as UpdateInference.
+// Its durable receipt prevents that PUT from resurrecting cancelled work.
 func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error) {
 	if err := req.Validate(); err != nil {
 		return nil, err

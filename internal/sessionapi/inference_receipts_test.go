@@ -192,3 +192,107 @@ func TestInferenceRequestLookupRequiresAuthorizationAndDistinguishesAbsence(t *t
 		}
 	}
 }
+
+func TestInferenceReceiptCapabilityRejectsWorkersThatOnlySupportUpdates(t *testing.T) {
+	for _, location := range []string{"runner", "open_epoch"} {
+		t.Run(location, func(t *testing.T) {
+			store, path := inferenceStore(t)
+			if _, err := MutateManifest(path, func(m *Manifest) error {
+				runner := &Runner{InferenceUpdates: true}
+				if location == "runner" {
+					m.Runner = runner
+				} else {
+					m.Epochs = []Epoch{{Runner: runner}}
+				}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			state, err := store.Inference("session")
+			if err != nil || state.OperationReceipts || state.UpdateError == "" {
+				t.Fatalf("old writer advertised durable receipts: %+v %v", state, err)
+			}
+			level := "high"
+			for _, mutate := range []func(string, InferenceUpdateRequest) (*InferenceResponse, error){store.UpdateInference, store.CancelInference} {
+				if _, err := mutate("session", InferenceUpdateRequest{RequestID: "change", Thinking: &level}); !errors.Is(err, ErrConflict) {
+					t.Fatalf("old writer accepted a receipt operation: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestInferenceRequestRoutesReturnRequestedOperation(t *testing.T) {
+	store, path := inferenceStore(t)
+	mux := http.NewServeMux()
+	RegisterRoutes(mux, store, NewBearerAuthorizer(store, "operator-token"), RuntimeIdentity{})
+	request := func(method, url, body string, wantCode int) InferenceResponse {
+		t.Helper()
+		req := httptest.NewRequest(method, url, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer operator-token")
+		response := httptest.NewRecorder()
+		mux.ServeHTTP(response, req)
+		var state InferenceResponse
+		if response.Code != wantCode || json.Unmarshal(response.Body.Bytes(), &state) != nil {
+			t.Fatalf("%s %s: %d %s", method, url, response.Code, response.Body)
+		}
+		if strings.Contains(response.Body.String(), "request_digest") {
+			t.Fatalf("internal fingerprint leaked: %s", response.Body)
+		}
+		return state
+	}
+	const url = "/api/sessions/session/inference"
+	const first = `{"request_id":"first","thinking":"high"}`
+	state := request("PUT", url, first, http.StatusAccepted)
+	if !state.OperationReceipts || state.Operation.Status != "pending" {
+		t.Fatalf("missing operation contract: %+v", state)
+	}
+	if _, err := ClaimInferenceUpdate(path, "attempt", "receipt.json", InferenceSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinishInferenceUpdate(path, "first", "applied", "", &InferenceSettings{Model: "provider/old", Thinking: "high"}); err != nil {
+		t.Fatal(err)
+	}
+	const second = `{"request_id":"second","expected_revision":1,"thinking":"low"}`
+	request("PUT", url, second, http.StatusAccepted)
+	for _, endpoint := range []struct{ method, url, body string }{
+		{"PUT", url, first},
+		{"POST", url + "/cancel", first},
+		{"GET", url + "/requests/first", ""},
+	} {
+		state = request(endpoint.method, endpoint.url, endpoint.body, http.StatusOK)
+		if state.Operation.RequestID != "first" || state.Operation.Status != "applied" || state.Update.RequestID != "second" || state.Update.Status != "pending" {
+			t.Fatalf("historical reply confused with current command: %+v", state)
+		}
+	}
+	if _, err := ClaimInferenceUpdate(path, "attempt2", "receipt2.json", InferenceSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	state = request("POST", url+"/cancel", second, http.StatusAccepted)
+	if state.Operation.Status != "applying" {
+		t.Fatalf("late cancellation hid application in progress: %+v", state)
+	}
+	if err := FinishInferenceUpdate(path, "second", "unknown", "startup unconfirmed", nil); err != nil {
+		t.Fatal(err)
+	}
+	state = request("POST", url+"/cancel", second, http.StatusOK)
+	if state.Operation.Status != "unknown" || state.Operation.Settings.Thinking != "high" {
+		t.Fatalf("late cancellation changed authoritative defaults: %+v", state)
+	}
+}
+
+func TestInferenceReceiptFingerprintMatchesRequestEquality(t *testing.T) {
+	model := "provider/new"
+	a := InferenceUpdateRequest{RequestID: "same", Model: &model, ModelDefinition: json.RawMessage(`{"id":"new","contextWindow":1000}`)}
+	b := a
+	b.ApplyAt = "next_turn"
+	b.ModelDefinition = json.RawMessage(`{"contextWindow":1e3,"id":"new"}`)
+	if !sameInferenceRequest(a, b) || inferenceRequestDigest(a) != inferenceRequestDigest(b) {
+		t.Fatal("fingerprint changed for an equivalent inference request")
+	}
+	a.ExpectedRevision = 1 << 53
+	b.ExpectedRevision = a.ExpectedRevision + 1
+	if sameInferenceRequest(a, b) || inferenceRequestDigest(a) == inferenceRequestDigest(b) {
+		t.Fatal("fingerprint lost typed revision precision")
+	}
+}
