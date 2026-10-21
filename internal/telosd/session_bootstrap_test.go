@@ -70,6 +70,10 @@ func (s *fakeReconcileStore) Inference(string) (*sessionapi.InferenceResponse, e
 	return nil, sessionapi.ErrNotFound
 }
 
+func (s *fakeReconcileStore) InferenceRequest(string, string) (*sessionapi.InferenceResponse, error) {
+	return nil, sessionapi.ErrNotFound
+}
+
 func (s *fakeReconcileStore) UpdateInference(string, sessionapi.InferenceUpdateRequest) (*sessionapi.InferenceResponse, error) {
 	return nil, sessionapi.ErrNotFound
 }

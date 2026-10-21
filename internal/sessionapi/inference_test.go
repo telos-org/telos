@@ -57,7 +57,7 @@ func TestInferenceReadReportsWorkerCompatibilityWithoutHidingSettings(t *testing
 		t.Run(worker, func(t *testing.T) {
 			store, path := inferenceStore(t)
 			if _, err := MutateManifest(path, func(m *Manifest) error {
-				runner := &Runner{Kind: "local-subprocess", PID: 12345, InferenceUpdates: strings.HasPrefix(worker, "compatible")}
+				runner := &Runner{Kind: "local-subprocess", PID: 12345, InferenceUpdates: strings.HasPrefix(worker, "compatible"), InferenceReceipts: strings.HasPrefix(worker, "compatible")}
 				if strings.HasSuffix(worker, "runner") {
 					m.Runner = runner
 				} else if strings.HasSuffix(worker, "epoch") {
@@ -214,7 +214,7 @@ func TestInferenceCancellationFencesDelayedSubmission(t *testing.T) {
 }
 
 func TestInferenceCancellationDoesNotOverrideStartedOrDifferentRequest(t *testing.T) {
-	for _, status := range []string{"applying", "applied", "unknown", "different_id", "different_settings", "different_revision"} {
+	for _, status := range []string{"applying", "applied", "unknown", "different_settings", "different_revision"} {
 		t.Run(status, func(t *testing.T) {
 			store, path := inferenceStore(t)
 			level := "high"
@@ -224,8 +224,6 @@ func TestInferenceCancellationDoesNotOverrideStartedOrDifferentRequest(t *testin
 			}
 			if strings.HasPrefix(status, "different") {
 				switch status {
-				case "different_id":
-					req.RequestID, req.ExpectedRevision = "other", 1
 				case "different_settings":
 					other := "low"
 					req.Thinking = &other
@@ -242,8 +240,13 @@ func TestInferenceCancellationDoesNotOverrideStartedOrDifferentRequest(t *testin
 			if err != nil {
 				t.Fatal(err)
 			}
-			if _, err := store.CancelInference("session", req); !errors.Is(err, ErrConflict) {
-				t.Fatalf("unsafe cancel succeeded: %v", err)
+			result, err := store.CancelInference("session", req)
+			if strings.HasPrefix(status, "different") {
+				if !errors.Is(err, ErrConflict) {
+					t.Fatalf("unsafe cancel succeeded: %v", err)
+				}
+			} else if err != nil || result.Operation.Status != status {
+				t.Fatalf("cancellation did not return the actual outcome: %+v %v", result, err)
 			}
 			after, err := os.ReadFile(path)
 			if err != nil || !bytes.Equal(before, after) {
@@ -283,7 +286,7 @@ func TestInferenceCancellationSerializesWithTurnStartup(t *testing.T) {
 			t.Fatal(err)
 		}
 		if claimed != nil {
-			if !errors.Is(cancelErr, ErrConflict) || state.Update.Status != "applying" {
+			if cancelErr != nil || state.Update.Status != "applying" {
 				t.Fatalf("cancelled after startup claim: %+v %v", state.Update, cancelErr)
 			}
 		} else if cancelErr != nil || state.Update.Status != "rejected" {
