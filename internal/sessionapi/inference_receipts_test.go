@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -428,5 +429,24 @@ func TestInferenceCancelledStartupCannotFinishAfterReplacement(t *testing.T) {
 	}
 	if err := FinishInferenceUpdate(path, first.RequestID, "first-attempt", "applied", "", &InferenceSettings{Model: model, Thinking: level}); !errors.Is(err, ErrConflict) {
 		t.Fatalf("old attempt finished recreated request: %v", err)
+	}
+}
+
+func TestInferenceMissingSessionDoesNotBlockRecreation(t *testing.T) {
+	store := NewFileStore(t.TempDir(), RuntimeLocal)
+	model := "provider/new"
+	req := InferenceUpdateRequest{RequestID: "change", Model: &model}
+	for _, operation := range []func() error{
+		func() error { _, err := store.Inference("missing"); return err },
+		func() error { _, err := store.InferenceRequest("missing", req.RequestID); return err },
+		func() error { _, err := store.UpdateInference("missing", req); return err },
+		func() error { _, err := store.CancelInference("missing", req); return err },
+	} {
+		if err := operation(); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("missing session result: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(store.Root, "missing")); !os.IsNotExist(err) {
+			t.Fatalf("missing-session request blocked recreation: %v", err)
+		}
 	}
 }

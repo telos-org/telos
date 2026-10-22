@@ -269,9 +269,6 @@ func MutateManifest(path string, mutate func(*Manifest) error) (*Manifest, error
 
 func withLockedManifest(path string, action func(*Manifest) error) (*Manifest, error) {
 	lockPath := path + ".lock"
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return nil, err
-	}
 	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
