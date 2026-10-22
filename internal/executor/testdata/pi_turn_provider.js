@@ -47,17 +47,13 @@ export default async function (pi) {
       try {
         stream.push({ type: "start", partial: message });
         if (number === 1) {
-          if (process.env.TELOS_PI_PROBE_PHASE !== "tool") {
-            await waitForRelease(options?.signal);
-          }
+          await waitForRelease(options?.signal);
           const started = quote(join(directory, "tool-started"));
           const released = quote(join(directory, "tool-release"));
-          const environment = quote(join(directory, "tool-thinking"));
           const toolCall = {
             type: "toolCall", id: "call_probe", name: "bash",
             arguments: {
-              command: "printf '%s\\n%s\\n' \"$TELOS_THINKING\" \"$TELOS_INHERITED_THINKING\" > " + environment +
-                "; printf started > " + started + "; while [ ! -f " + released + " ]; do sleep 0.02; done; printf 'preserved tool result'",
+              command: "printf started > " + started + "; while [ ! -f " + released + " ]; do sleep 0.02; done; printf 'preserved tool result'",
             },
           };
           message.content.push(toolCall);
@@ -95,7 +91,7 @@ export default async function (pi) {
       baseUrl: "https://unused.invalid",
       models: [{
         id: "probe-" + suffix, name: "Offline test",
-        reasoning: suffix !== "b" || process.env.TELOS_PI_PROBE_PHASE !== "model_only_nonreasoning",
+        reasoning: true,
         headers: { "x-telos-model-header": "preserved" },
         input: ["text"], contextWindow: 128000, maxTokens: 4096,
         cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },

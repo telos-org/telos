@@ -289,8 +289,6 @@ func TestInferenceCLIProcess(t *testing.T) {
 		cmdPlan(args[1:])
 	case "config":
 		cmdConfig(args[1:])
-	case "describe":
-		cmdDescribe(args[1:])
 	default:
 		os.Exit(2)
 	}

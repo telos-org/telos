@@ -12,32 +12,28 @@ import (
 
 // Manifest is the persisted session.json shape shared by the store and worker.
 type Manifest struct {
-	SessionInstanceID        string                      `json:"session_instance_id,omitempty"`
-	SessionID                string                      `json:"session_id"`
-	SessionKind              SessionKind                 `json:"session_kind"`
-	DesiredStatus            SessionDesiredStatus        `json:"desired_status,omitempty"`
-	Runtime                  SessionRuntime              `json:"runtime,omitempty"`
-	CreatedAt                string                      `json:"created_at"`
-	ParentSessionID          *string                     `json:"parent_session_id"`
-	SourceSpecPath           *string                     `json:"source_spec_path,omitempty"`
-	SessionSpecPath          *string                     `json:"session_spec_path,omitempty"`
-	SpecName                 string                      `json:"spec_name"`
-	CurrentRevision          *string                     `json:"current_revision,omitempty"`
-	CurrentSpecVersion       *int                        `json:"current_spec_version,omitempty"`
-	SpecVersions             []map[string]any            `json:"spec_versions,omitempty"`
-	PackageDigest            *string                     `json:"package_digest,omitempty"`
-	ApplyPackageLock         *spec.ApplyPackageManifest  `json:"apply_package_lock,omitempty"`
-	Config                   SessionConfig               `json:"config"`
-	InferenceUpdate          *InferenceUpdate            `json:"inference_update,omitempty"`
-	InferenceReceipts        map[string]InferenceReceipt `json:"inference_receipts,omitempty"`
-	InferenceModelDefinition json.RawMessage             `json:"inference_model_definition,omitempty"`
-	InferenceConnection      *InferenceConnection        `json:"inference_connection,omitempty"`
-	Workspace                *Workspace                  `json:"workspace,omitempty"`
-	Provenance               map[string]any              `json:"provenance"`
-	Access                   *ScopedToken                `json:"access,omitempty"`
-	Runner                   *Runner                     `json:"runner,omitempty"`
-	Specs                    []ManifestSpec              `json:"specs"`
-	Epochs                   []Epoch                     `json:"epochs"`
+	SessionID                string                     `json:"session_id"`
+	SessionKind              SessionKind                `json:"session_kind"`
+	DesiredStatus            SessionDesiredStatus       `json:"desired_status,omitempty"`
+	Runtime                  SessionRuntime             `json:"runtime,omitempty"`
+	CreatedAt                string                     `json:"created_at"`
+	ParentSessionID          *string                    `json:"parent_session_id"`
+	SourceSpecPath           *string                    `json:"source_spec_path,omitempty"`
+	SessionSpecPath          *string                    `json:"session_spec_path,omitempty"`
+	SpecName                 string                     `json:"spec_name"`
+	CurrentRevision          *string                    `json:"current_revision,omitempty"`
+	CurrentSpecVersion       *int                       `json:"current_spec_version,omitempty"`
+	SpecVersions             []map[string]any           `json:"spec_versions,omitempty"`
+	PackageDigest            *string                    `json:"package_digest,omitempty"`
+	ApplyPackageLock         *spec.ApplyPackageManifest `json:"apply_package_lock,omitempty"`
+	Config                   SessionConfig              `json:"config"`
+	InferenceModelDefinition json.RawMessage            `json:"inference_model_definition,omitempty"`
+	Workspace                *Workspace                 `json:"workspace,omitempty"`
+	Provenance               map[string]any             `json:"provenance"`
+	Access                   *ScopedToken               `json:"access,omitempty"`
+	Runner                   *Runner                    `json:"runner,omitempty"`
+	Specs                    []ManifestSpec             `json:"specs"`
+	Epochs                   []Epoch                    `json:"epochs"`
 }
 
 type Workspace struct {
@@ -87,20 +83,17 @@ const (
 )
 
 type Runner struct {
-	Kind                 string  `json:"kind,omitempty"`
-	PID                  int     `json:"pid,omitempty"`
-	PGID                 int     `json:"pgid,omitempty"`
-	LogPath              string  `json:"log_path,omitempty"`
-	InCluster            bool    `json:"in_cluster"`
-	Hostname             string  `json:"hostname,omitempty"`
-	PodName              string  `json:"pod_name,omitempty"`
-	PodNamespace         string  `json:"pod_namespace,omitempty"`
-	StartedAt            string  `json:"started_at,omitempty"`
-	FinishedAt           *string `json:"finished_at,omitempty"`
-	Status               string  `json:"status,omitempty"`
-	InferenceUpdates     bool    `json:"inference_updates,omitempty"`
-	InferenceReceipts    bool    `json:"inference_receipts,omitempty"`
-	InferenceConnections bool    `json:"inference_connections,omitempty"`
+	Kind         string  `json:"kind,omitempty"`
+	PID          int     `json:"pid,omitempty"`
+	PGID         int     `json:"pgid,omitempty"`
+	LogPath      string  `json:"log_path,omitempty"`
+	InCluster    bool    `json:"in_cluster"`
+	Hostname     string  `json:"hostname,omitempty"`
+	PodName      string  `json:"pod_name,omitempty"`
+	PodNamespace string  `json:"pod_namespace,omitempty"`
+	StartedAt    string  `json:"started_at,omitempty"`
+	FinishedAt   *string `json:"finished_at,omitempty"`
+	Status       string  `json:"status,omitempty"`
 }
 
 type ScopedToken struct {
@@ -110,13 +103,14 @@ type ScopedToken struct {
 }
 
 type SessionConfig struct {
-	Model           string         `json:"model,omitempty"`
-	Until           int            `json:"until,omitempty"`
-	UntilSeconds    int            `json:"until_seconds,omitempty"`
-	MaxCostUSD      *float64       `json:"max_cost_usd,omitempty"`
-	AgentTimeoutSec int            `json:"agent_timeout_sec,omitempty"`
-	Thinking        string         `json:"thinking,omitempty"`
-	Extra           map[string]any `json:"-"`
+	Model               string         `json:"model,omitempty"`
+	Until               int            `json:"until,omitempty"`
+	UntilSeconds        int            `json:"until_seconds,omitempty"`
+	MaxCostUSD          *float64       `json:"max_cost_usd,omitempty"`
+	AgentTimeoutSec     int            `json:"agent_timeout_sec,omitempty"`
+	Thinking            string         `json:"thinking,omitempty"`
+	InferenceGeneration int            `json:"inference_generation,omitempty"`
+	Extra               map[string]any `json:"-"`
 }
 
 // InitialManifest is the typed input for creating a session.json before any
@@ -135,7 +129,6 @@ type InitialManifest struct {
 	SpecVersions             []map[string]any
 	Config                   SessionConfig
 	InferenceModelDefinition json.RawMessage
-	InferenceConnection      *InferenceConnection
 	Workspace                *Workspace
 	Provenance               map[string]any
 	PackageDigest            *string
@@ -207,7 +200,6 @@ func ManifestFromInitial(input InitialManifest) Manifest {
 		SpecVersions:             cloneSpecVersionMaps(input.SpecVersions),
 		Config:                   input.Config,
 		InferenceModelDefinition: input.InferenceModelDefinition,
-		InferenceConnection:      input.InferenceConnection,
 		Workspace:                input.Workspace,
 		Provenance:               input.Provenance,
 		PackageDigest:            input.PackageDigest,
@@ -273,6 +265,9 @@ func MutateManifest(path string, mutate func(*Manifest) error) (*Manifest, error
 
 func withLockedManifest(path string, action func(*Manifest) error) (*Manifest, error) {
 	lockPath := path + ".lock"
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, err
+	}
 	lock, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, err
@@ -413,6 +408,9 @@ func (c SessionConfig) MarshalJSON() ([]byte, error) {
 	if c.Thinking != "" {
 		m["thinking"] = c.Thinking
 	}
+	if c.InferenceGeneration > 0 {
+		m["inference_generation"] = c.InferenceGeneration
+	}
 	return json.Marshal(m)
 }
 
@@ -457,6 +455,12 @@ func (c *SessionConfig) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("config.thinking: %w", err)
 		}
 		delete(raw, "thinking")
+	}
+	if value, ok := raw["inference_generation"]; ok {
+		if err := json.Unmarshal(value, &c.InferenceGeneration); err != nil {
+			return fmt.Errorf("config.inference_generation: %w", err)
+		}
+		delete(raw, "inference_generation")
 	}
 	if _, ok := raw["workspace"]; ok {
 		delete(raw, "workspace")

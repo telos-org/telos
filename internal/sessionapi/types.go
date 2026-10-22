@@ -7,6 +7,7 @@ package sessionapi
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
 // --------- Enums ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -82,32 +83,74 @@ func (k *SessionKind) UnmarshalJSON(data []byte) error {
 
 // SessionCreateRequest is the body of POST /api/sessions.
 type SessionCreateRequest struct {
-	SpecMarkdown        *string              `json:"spec_markdown,omitempty"`
-	PackageDigest       string               `json:"package_digest,omitempty"`
-	PackagePath         string               `json:"-"`
-	CloudSessionID      string               `json:"-"`
-	CloudSessionName    string               `json:"-"`
-	SessionKind         *SessionKind         `json:"-"`
-	ParentSessionID     *string              `json:"parent_session_id,omitempty"`
-	Until               *int                 `json:"until,omitempty"`
-	UntilSeconds        *int                 `json:"until_seconds,omitempty"`
-	Model               string               `json:"model,omitempty"`
-	Thinking            string               `json:"thinking,omitempty"`
-	ModelDefinition     json.RawMessage      `json:"-"`
-	InferenceConnection *InferenceConnection `json:"-"`
-	MaxCostUSD          *float64             `json:"max_cost_usd,omitempty"`
-	AgentTimeoutSec     *int                 `json:"agent_timeout_sec,omitempty"`
+	SpecMarkdown        *string         `json:"spec_markdown,omitempty"`
+	PackageDigest       string          `json:"package_digest,omitempty"`
+	PackagePath         string          `json:"-"`
+	CloudSessionID      string          `json:"-"`
+	CloudSessionName    string          `json:"-"`
+	SessionKind         *SessionKind    `json:"-"`
+	ParentSessionID     *string         `json:"parent_session_id,omitempty"`
+	Until               *int            `json:"until,omitempty"`
+	UntilSeconds        *int            `json:"until_seconds,omitempty"`
+	Model               string          `json:"model,omitempty"`
+	Thinking            string          `json:"thinking,omitempty"`
+	ModelDefinition     json.RawMessage `json:"-"`
+	InferenceGeneration int             `json:"-"`
+	MaxCostUSD          *float64        `json:"max_cost_usd,omitempty"`
+	AgentTimeoutSec     *int            `json:"agent_timeout_sec,omitempty"`
 }
 
 // SessionSpecUpdateRequest is the body of PUT /api/sessions/{name}/spec.
 type SessionSpecUpdateRequest struct {
-	SpecMarkdown    string   `json:"spec_markdown,omitempty"`
-	PackageDigest   string   `json:"package_digest,omitempty"`
-	PackagePath     string   `json:"-"`
-	Model           string   `json:"-"`
-	Thinking        string   `json:"-"`
-	MaxCostUSD      *float64 `json:"-"`
-	AgentTimeoutSec *int     `json:"-"`
+	SpecMarkdown    string             `json:"spec_markdown,omitempty"`
+	PackageDigest   string             `json:"package_digest,omitempty"`
+	Inference       *InferenceSettings `json:"inference,omitempty"`
+	PackagePath     string             `json:"-"`
+	Model           string             `json:"-"`
+	Thinking        string             `json:"-"`
+	MaxCostUSD      *float64           `json:"-"`
+	AgentTimeoutSec *int               `json:"-"`
+}
+
+// InferenceSettings replace a root session's model and thinking when
+// Generation is newer than the stored one. Turns started later use them.
+type InferenceSettings struct {
+	Generation      int             `json:"generation"`
+	Model           string          `json:"model"`
+	Thinking        string          `json:"thinking"`
+	ModelDefinition json.RawMessage `json:"model_definition,omitempty"`
+}
+
+var modelDefinitionFields = map[string]bool{"id": true, "name": true, "api": true, "reasoning": true, "thinkingLevelMap": true, "input": true, "cost": true, "contextWindow": true, "maxTokens": true, "samplingParams": true, "compat": true}
+
+func (s *InferenceSettings) Validate() error {
+	provider, modelID, ok := strings.Cut(s.Model, "/")
+	switch {
+	case s.Generation <= 0:
+		return fmt.Errorf("inference generation must be positive: %w", ErrInvalidSession)
+	case !ok || provider == "" || modelID == "" || len(s.Model) > 512 || strings.ContainsAny(s.Model, " \t\r\n\x00"):
+		return fmt.Errorf("inference model must use <provider>/<model-id>: %w", ErrInvalidSession)
+	case s.Thinking == "" || len(s.Thinking) > 32 || strings.ContainsAny(s.Thinking, " \t\r\n\x00"):
+		return fmt.Errorf("inference thinking must be a non-empty level: %w", ErrInvalidSession)
+	case len(s.ModelDefinition) == 0:
+		return nil
+	case len(s.ModelDefinition) > 64<<10:
+		return fmt.Errorf("inference model_definition must be at most 64 KiB: %w", ErrInvalidSession)
+	}
+	var definition map[string]json.RawMessage
+	if err := json.Unmarshal(s.ModelDefinition, &definition); err != nil || definition == nil {
+		return fmt.Errorf("invalid inference model_definition: %w", ErrInvalidSession)
+	}
+	for key := range definition {
+		if !modelDefinitionFields[key] {
+			return fmt.Errorf("inference model_definition may not set %s: %w", key, ErrInvalidSession)
+		}
+	}
+	var id string
+	if json.Unmarshal(definition["id"], &id) != nil || id != modelID {
+		return fmt.Errorf("inference model_definition id must match model: %w", ErrInvalidSession)
+	}
+	return nil
 }
 
 // SessionSpecUpdateResponse is returned by PUT /api/sessions/{name}/spec.

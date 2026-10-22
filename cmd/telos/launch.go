@@ -88,17 +88,15 @@ func cmdLaunch(command, action string, args []string) {
 			os.Exit(2)
 		}
 		if fs.NArg() == 0 {
-			receipt, err := applySessionInference(*sessionID, strings.TrimSpace(*model), strings.TrimSpace(*thinking), contextOverride)
-			if receipt != nil {
-				if *jsonOut {
-					printJSON(goalJSON(receipt))
-				} else {
-					printInferenceReceipt(os.Stdout, receipt)
-				}
-			}
+			change, err := applySessionInference(*sessionID, strings.TrimSpace(*model), strings.TrimSpace(*thinking), contextOverride)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
 				os.Exit(1)
+			}
+			if *jsonOut {
+				printJSON(change)
+			} else {
+				printInferenceChange(os.Stdout, change)
 			}
 			return
 		}

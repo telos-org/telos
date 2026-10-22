@@ -28,23 +28,6 @@ func configureInferenceApplyTest(t *testing.T, endpoint string) {
 	t.Setenv("TELOS_MAX_COST_USD", "not-a-number")
 }
 
-func configureLocalInferenceDescribeTest(t *testing.T) {
-	t.Helper()
-	configureInferenceApplyTest(t, "http://unused.invalid")
-	// These tests exercise settings persistence and output, without model calls.
-	// Model/thinking changes also work with Pi lacking connection switching.
-	home := t.TempDir()
-	bin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	script := "#!/bin/sh\nprintf '{\"connection_switching\":false,\"executable\":\"%s\"}\\n' \"$0\"\n"
-	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("HOME", home)
-}
-
 func inferenceCLIProcess(t *testing.T, args ...string) (string, string, error) {
 	t.Helper()
 	command := exec.Command(os.Args[0], append([]string{"-test.run=^TestInferenceCLIProcess$", "--"}, args...)...)
@@ -53,51 +36,6 @@ func inferenceCLIProcess(t *testing.T, args ...string) (string, string, error) {
 	command.Stderr = &stderr
 	stdout, err := command.Output()
 	return string(stdout), stderr.String(), err
-}
-
-func initialCloudInference() cloud.DeploymentInferenceState {
-	return cloud.DeploymentInferenceState{
-		Inference:  cloud.InferenceSummary{Source: "managed", Tier: "default"},
-		AgentModel: "telos-bifrost/telos/default", AgentThinking: "medium", Revision: 7,
-	}
-}
-
-func TestInferenceConnectionChangesNameBothConnections(t *testing.T) {
-	for _, tt := range []struct {
-		name, source, target string
-		current, requested   cloud.InferenceSummary
-		selection            cloud.InferenceSelection
-	}{
-		{"different key same model", "Old key/model", "New key/model", cloud.InferenceSummary{Source: "byok", Model: "model", ConnectionName: "Old key"}, cloud.InferenceSummary{Source: "byok", Model: "model", ConnectionName: "New key"}, cloud.InferenceSelection{Source: "byok", ConnectionID: "new-key", Model: "model"}},
-		{"managed to subscription", "telos/default", "ChatGPT/model", cloud.InferenceSummary{Source: "managed", Tier: "default"}, cloud.InferenceSummary{Source: "subscription", Model: "model", ConnectionName: "ChatGPT"}, cloud.InferenceSelection{Source: "subscription", ConnectionID: "sub", Model: "model"}},
-		{"subscription to managed", "ChatGPT/model", "telos/max", cloud.InferenceSummary{Source: "subscription", Model: "model", ConnectionName: "ChatGPT"}, cloud.InferenceSummary{Source: "managed", Tier: "max"}, cloud.InferenceSelection{Source: "managed", Tier: "max"}},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			state := initialCloudInference()
-			state.Inference, state.RequestedInference = tt.current, &tt.requested
-			state.Status, state.Request = "pending", &cloud.DeploymentInferenceRequest{RequestID: "request", Inference: &tt.selection}
-			receipt, err := cloudInferenceReceipt("session", "@workspace", &state)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, print := range []func(*bytes.Buffer){
-				func(out *bytes.Buffer) { printInferenceReceipt(out, receipt) },
-				func(out *bytes.Buffer) { printInferenceDescription(out, describeInference(receipt)) },
-				func(out *bytes.Buffer) {
-					printCloudSessionDetails(out, cloud.SessionRecord{AgentModel: state.AgentModel, AgentThinking: state.AgentThinking, Inference: &state.Inference}, "@workspace", nil, "", describeInference(receipt))
-				},
-			} {
-				var out bytes.Buffer
-				print(&out)
-				if !strings.Contains(out.String(), tt.source+" -> "+tt.target+" (next turn)") {
-					t.Fatalf("connection change not displayed: %s", out.String())
-				}
-			}
-			if receipt.Settings.Model != state.AgentModel {
-				t.Fatal("display labels changed structured confirmed model")
-			}
-		})
-	}
 }
 
 func TestApplyInferenceExplicitSettings(t *testing.T) {
@@ -117,12 +55,6 @@ func TestApplyInferenceExplicitSettings(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var writes atomic.Int32
 			server := inferenceTestServer(t, map[string]http.HandlerFunc{
-				"GET /api/deployments/sess_test/inference": func(w http.ResponseWriter, r *http.Request) {
-					if r.Header.Get("X-Telos-Org-Id") != "org_telos" {
-						t.Error("settings read lost the selected context")
-					}
-					_ = json.NewEncoder(w).Encode(initialCloudInference())
-				},
 				"PUT /api/deployments/sess_test/inference": func(w http.ResponseWriter, r *http.Request) {
 					writes.Add(1)
 					if r.Header.Get("X-Telos-Org-Id") != "org_telos" || r.Header.Get("Authorization") != "Bearer control-token" {
@@ -135,9 +67,6 @@ func TestApplyInferenceExplicitSettings(t *testing.T) {
 					data, _ := json.Marshal(raw)
 					var request cloud.DeploymentInferenceRequest
 					_ = json.Unmarshal(data, &request)
-					if request.RequestID == "" || request.ExpectedRevision != 7 {
-						t.Errorf("request identity/revision = %+v", request)
-					}
 					if tt.selection == nil {
 						if _, exists := raw["inference"]; exists {
 							t.Error("thinking-only update included a model")
@@ -152,10 +81,10 @@ func TestApplyInferenceExplicitSettings(t *testing.T) {
 					} else if request.AgentThinking == nil || *request.AgentThinking != tt.thinking {
 						t.Errorf("thinking = %v", request.AgentThinking)
 					}
-					state := initialCloudInference()
-					state.Request, state.Status, state.Revision = &request, "pending", 8
-					w.WriteHeader(http.StatusAccepted)
-					_ = json.NewEncoder(w).Encode(state)
+					_ = json.NewEncoder(w).Encode(cloud.DeploymentInference{
+						Inference:  cloud.InferenceSummary{Source: "managed", Tier: "max"},
+						AgentModel: "telos-bifrost/telos/max", AgentThinking: "high", Generation: 8, Applied: true,
+					})
 				},
 			})
 			defer server.Close()
@@ -168,12 +97,12 @@ func TestApplyInferenceExplicitSettings(t *testing.T) {
 				args = append(args, "--thinking", tt.thinking)
 			}
 			out := captureStdout(t, func() { cmdApply(args) })
-			var receipt inferenceReceipt
-			if err := json.Unmarshal([]byte(out), &receipt); err != nil {
+			var change inferenceChange
+			if err := json.Unmarshal([]byte(out), &change); err != nil {
 				t.Fatal(err)
 			}
-			if writes.Load() != 1 || receipt.Status != "pending" || receipt.Settings.Thinking != "medium" || receipt.Settings.Model != "telos-bifrost/telos/default" || receipt.Context != "@telos" {
-				t.Fatalf("pending change presented incorrect confirmed settings: %s (writes %d)", out, writes.Load())
+			if writes.Load() != 1 || change.SessionID != "sess_test" || change.Context != "@telos" || change.Generation != 8 || !change.Applied || change.AgentThinking != "high" {
+				t.Fatalf("unexpected settings output: %s (writes %d)", out, writes.Load())
 			}
 		})
 	}
@@ -216,256 +145,6 @@ func TestApplyInferenceInvalidFlagsDoNoWork(t *testing.T) {
 	}
 }
 
-func TestApplyInferenceOutcomesAndLostReplies(t *testing.T) {
-	for _, outcome := range []string{"applied", "applying", "partial", "rejected", "unknown", "bad-request-id", "bad-revision", "bad-status", "missing-status", "invalid-json", "conflict", "unavailable", "lost-reply"} {
-		t.Run(outcome, func(t *testing.T) {
-			var writes atomic.Int32
-			var submittedID string
-			server := inferenceTestServer(t, map[string]http.HandlerFunc{
-				"GET /api/deployments/sess_test/inference": func(w http.ResponseWriter, r *http.Request) {
-					_ = json.NewEncoder(w).Encode(initialCloudInference())
-				},
-				"PUT /api/deployments/sess_test/inference": func(w http.ResponseWriter, r *http.Request) {
-					writes.Add(1)
-					var request cloud.DeploymentInferenceRequest
-					_ = json.NewDecoder(r.Body).Decode(&request)
-					submittedID = request.RequestID
-					state := initialCloudInference()
-					state.Request, state.Revision, state.Status = &request, 8, outcome
-					switch outcome {
-					case "applied", "partial":
-						state.AgentModel = "telos-bifrost/telos/max"
-						if outcome == "applied" {
-							state.AgentThinking = "high"
-						} else {
-							state.Error = "thinking level is unsupported"
-						}
-					case "bad-request-id":
-						state.Status, request.RequestID = "applied", "another-request"
-					case "bad-revision":
-						state.Status, state.Revision = "applied", 99
-					case "missing-status":
-						state.Status = ""
-					case "invalid-json":
-						_, _ = w.Write([]byte(`{`))
-						return
-					case "conflict", "unavailable":
-						code := http.StatusConflict
-						if outcome == "unavailable" {
-							code = http.StatusServiceUnavailable
-						}
-						http.Error(w, "change not confirmed", code)
-						return
-					case "lost-reply":
-						connection, _, err := w.(http.Hijacker).Hijack()
-						if err != nil {
-							t.Error(err)
-							return
-						}
-						_ = connection.Close()
-						return
-					}
-					_ = json.NewEncoder(w).Encode(state)
-				},
-			})
-			configureInferenceApplyTest(t, server.URL)
-			stdout, stderr, err := inferenceCLIProcess(t, "apply", "--goal", "sess_test", "--model", "telos/max", "--thinking", "high", "--json")
-			server.Close()
-			wantSuccess := outcome == "applied" || outcome == "applying"
-			if (err == nil) != wantSuccess || writes.Load() != 1 {
-				t.Fatalf("err=%v, writes=%d, stdout=%s, stderr=%s", err, writes.Load(), stdout, stderr)
-			}
-			if validInferenceStatus(outcome) {
-				var receipt inferenceReceipt
-				if json.Unmarshal([]byte(stdout), &receipt) != nil || receipt.Status != outcome || receipt.RequestID != submittedID {
-					t.Fatalf("lost structured outcome: %s", stdout)
-				}
-				if outcome == "partial" && (receipt.Settings.Model != "telos-bifrost/telos/max" || receipt.Settings.Thinking != "medium") {
-					t.Fatalf("partial result lied about confirmed pair: %s", stdout)
-				}
-			} else if !strings.Contains(stderr, submittedID) || !strings.Contains(stderr, "Check confirmed settings with: telos describe") || stdout != "" {
-				t.Fatalf("unconfirmed request lost identity or suggested success: %s %s", stdout, stderr)
-			}
-		})
-	}
-}
-
-func TestDescribeLocalInferenceShowsConfirmation(t *testing.T) {
-	configureLocalInferenceDescribeTest(t)
-	root := t.TempDir()
-	t.Setenv("TELOS_SESSION_DIR", root)
-	id := "local_settings"
-	dir := filepath.Join(root, id)
-	path := filepath.Join(dir, "session.json")
-	manifest := &sessionapi.Manifest{SessionID: id, SessionKind: sessionapi.KindController, Runtime: sessionapi.RuntimeLocal, Config: sessionapi.SessionConfig{Model: "provider/old", Thinking: "medium"}}
-	if err := sessionapi.WriteManifest(path, manifest); err != nil {
-		t.Fatal(err)
-	}
-	model, thinking := "provider/new", "max"
-	if _, err := store().UpdateInference(id, sessionapi.InferenceUpdateRequest{ApplyAt: "next_turn", RequestID: "existing-change", Model: &model, Thinking: &thinking}); err != nil {
-		t.Fatal(err)
-	}
-	out := captureStdout(t, func() { cmdDescribe([]string{id}) })
-	if !strings.Contains(out, "Model     provider/old -> provider/new (next turn)") || !strings.Contains(out, "Thinking  medium -> max (next turn)") {
-		t.Fatalf("describe omitted queued settings: %s", out)
-	}
-	for _, unwanted := range []string{"Settings", "Request", "pending", "not confirmed"} {
-		if strings.Contains(out, unwanted) {
-			t.Fatalf("describe exposed request details %q: %s", unwanted, out)
-		}
-	}
-	out = captureStdout(t, func() { cmdDescribe([]string{id, "--json"}) })
-	assertDescribeInferenceSettings(t, out, sessionapi.InferenceSettings{Model: "provider/old", Thinking: "medium"})
-	update, err := sessionapi.ClaimInferenceUpdate(path, "attempt", "receipt.json", sessionapi.InferenceSettings{})
-	if err != nil || update == nil || *update.Model != "provider/new" || *update.Thinking != "max" {
-		t.Fatalf("saved update = %+v, %v", update, err)
-	}
-	if err := sessionapi.FinishInferenceUpdate(path, update.RequestID, update.AttemptID, "applied", "", &sessionapi.InferenceSettings{Model: "provider/new", Thinking: "max"}); err != nil {
-		t.Fatal(err)
-	}
-	out = captureStdout(t, func() { cmdDescribe([]string{id}) })
-	if !strings.Contains(out, "Model     provider/new") || !strings.Contains(out, "Thinking  max") || strings.Contains(out, "->") {
-		t.Fatalf("describe did not settle on confirmed settings: %s", out)
-	}
-	out = captureStdout(t, func() { cmdDescribe([]string{id, "--json"}) })
-	assertDescribeInferenceSettings(t, out, sessionapi.InferenceSettings{Model: "provider/new", Thinking: "max"})
-}
-
-func TestDescribeInferenceCompatibilityAndFreshness(t *testing.T) {
-	digest := "sha256:" + strings.Repeat("8f21c47a91ee", 5) + "0000"
-	for _, tt := range []struct {
-		name       string
-		statusCode int
-		status     string
-	}{
-		{"pending", http.StatusOK, "pending"},
-		{"applying", http.StatusOK, "applying"},
-		{"applied", http.StatusOK, "applied"},
-		{"rejected", http.StatusOK, "rejected"},
-		{"unknown", http.StatusOK, "unknown"},
-		{"not found", http.StatusNotFound, ""},
-		{"method not allowed", http.StatusMethodNotAllowed, ""},
-		{"not implemented", http.StatusNotImplemented, ""},
-		{"forbidden", http.StatusForbidden, ""},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			server := inferenceTestServer(t, map[string]http.HandlerFunc{
-				"GET /api/deployments/sess_test": func(w http.ResponseWriter, r *http.Request) {
-					_ = json.NewEncoder(w).Encode(cloud.SessionRecord{ID: "sess_test", State: "running", Status: "working", PackageDigest: digest, AgentModel: "telos-bifrost/telos/default", AgentThinking: "medium"})
-				},
-				"GET /api/deployments/sess_test/inference": func(w http.ResponseWriter, r *http.Request) {
-					if tt.statusCode != http.StatusOK {
-						http.Error(w, "settings unavailable", tt.statusCode)
-						return
-					}
-					state := initialCloudInference()
-					if tt.status == "applied" {
-						state.AgentModel, state.AgentThinking = "telos-bifrost/telos/max", "high"
-					}
-					thinking := "high"
-					state.Request = &cloud.DeploymentInferenceRequest{RequestID: "other-browser", ExpectedRevision: 6, Inference: &cloud.InferenceSelection{Source: "managed", Tier: "max"}, AgentThinking: &thinking}
-					state.Status = tt.status
-					_ = json.NewEncoder(w).Encode(state)
-				},
-			})
-			defer server.Close()
-			configureInferenceApplyTest(t, server.URL)
-			for _, contextArgs := range [][]string{nil, {"--context", "@telos"}} {
-				args := append([]string{"sess_test"}, contextArgs...)
-				out := captureStdout(t, func() { cmdDescribe(append(args, "--json")) })
-				var description cloudDescription
-				if err := json.Unmarshal([]byte(out), &description); err != nil || description.SessionRecord == nil || description.ID != "sess_test" {
-					t.Fatalf("describe lost existing fields: %v %s", err, out)
-				}
-				if description.State != nil || description.Status != "working" || description.PackageDigest != digest {
-					t.Fatalf("describe lost Cloud JSON status/revision contract: %s", out)
-				}
-				text := captureStdout(t, func() { cmdDescribe(args) })
-				if !strings.Contains(text, "Status    working") || !strings.Contains(text, "Revision  sha256:8f21c47a91ee\n") {
-					t.Fatalf("describe lost Cloud text status/revision contract: %s", text)
-				}
-				switch tt.statusCode {
-				case http.StatusOK:
-					confirmed := sessionapi.InferenceSettings{Model: "telos-bifrost/telos/default", Thinking: "medium"}
-					model, thinking := "telos/default", "medium"
-					if tt.status == "applied" {
-						confirmed = sessionapi.InferenceSettings{Model: "telos-bifrost/telos/max", Thinking: "high"}
-						model, thinking = "telos/max", "high"
-					}
-					assertDescribeInferenceSettings(t, out, confirmed)
-					if description.AgentModel != confirmed.Model || description.AgentThinking != confirmed.Thinking {
-						t.Fatalf("describe showed stale session settings: %s", out)
-					}
-					if tt.status == "pending" || tt.status == "applying" {
-						model += " -> telos/max (next turn)"
-						thinking += " -> high (next turn)"
-					} else if strings.Contains(text, "->") {
-						t.Fatalf("describe showed an inactive change as queued: %s", text)
-					}
-					if !strings.Contains(text, "Model     "+model) || !strings.Contains(text, "Thinking  "+thinking) {
-						t.Fatalf("text settings disagreed with change state: %s", text)
-					}
-					for _, unwanted := range []string{"Inference", "Settings", "Request", "(requested)", "applied", "other-browser"} {
-						if strings.Contains(text, unwanted) {
-							t.Fatalf("describe exposed stale settings or request details %q: %s", unwanted, text)
-						}
-					}
-				case http.StatusForbidden:
-					if description.InferenceError == "" || !strings.Contains(text, "unavailable:") {
-						t.Fatalf("describe hid settings fetch failure: %s %s", out, text)
-					}
-				default:
-					if description.InferenceState != nil || description.InferenceError != "" || !strings.Contains(text, "telos-bifrost/telos/default") {
-						t.Fatalf("older Cloud describe compatibility broken: %s %s", out, text)
-					}
-				}
-			}
-		})
-	}
-}
-
-func assertDescribeInferenceSettings(t *testing.T, output string, expected sessionapi.InferenceSettings) {
-	t.Helper()
-	var description struct {
-		InferenceState map[string]json.RawMessage `json:"inference_state"`
-	}
-	if err := json.Unmarshal([]byte(output), &description); err != nil {
-		t.Fatal(err)
-	}
-	if len(description.InferenceState) != 1 {
-		t.Fatalf("describe must only include confirmed inference settings: %s", output)
-	}
-	var settings sessionapi.InferenceSettings
-	if err := json.Unmarshal(description.InferenceState["settings"], &settings); err != nil || settings != expected {
-		t.Fatalf("describe settings = %+v, want %+v: %v", settings, expected, err)
-	}
-}
-
-func TestDescribeQueuedInferenceKeepsConnectionModelName(t *testing.T) {
-	for _, source := range []string{"byok", "subscription"} {
-		t.Run(source, func(t *testing.T) {
-			session := cloud.SessionRecord{
-				ID: "sess_test", AgentModel: "internal/old", AgentThinking: "medium",
-				Inference: &cloud.InferenceSummary{Source: source, ConnectionName: "Work", Model: "old"},
-			}
-			description := describeInference(&inferenceReceipt{
-				Settings: sessionapi.InferenceSettings{Model: "internal/old", Thinking: "medium"},
-				Status:   "pending", RequestedModel: "Work/new", RequestedThinking: "high",
-			})
-			var out bytes.Buffer
-			printCloudSessionDetails(&out, session, "@telos", nil, "", description)
-			if !strings.Contains(out.String(), "Model     Work/old -> Work/new (next turn)") || !strings.Contains(out.String(), "Thinking  medium -> high (next turn)") {
-				t.Fatalf("describe lost model selection names: %s", out.String())
-			}
-			for _, unwanted := range []string{"internal/", "Connection", "Inference"} {
-				if strings.Contains(out.String(), unwanted) {
-					t.Fatalf("description includes %q: %s", unwanted, out.String())
-				}
-			}
-		})
-	}
-}
-
 func TestApplyLocalInferenceRejectedWithoutChangingManifest(t *testing.T) {
 	configureInferenceApplyTest(t, "http://unused.invalid")
 	root := t.TempDir()
@@ -483,8 +162,8 @@ func TestApplyLocalInferenceRejectedWithoutChangingManifest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if receipt, err := applySessionInference(id, "provider/new", "high", ""); err == nil || receipt != nil || !strings.Contains(err.Error(), "telos apply only updates Telos Cloud Goals") {
-		t.Fatalf("local settings apply not rejected: %+v %v", receipt, err)
+	if change, err := applySessionInference(id, "provider/new", "high", ""); err == nil || change != nil || !strings.Contains(err.Error(), "telos apply only updates Telos Cloud Goals") {
+		t.Fatalf("local settings apply not rejected: %+v %v", change, err)
 	}
 	stdout, stderr, err := inferenceCLIProcess(t, "apply", "--goal", id, "--thinking", "high")
 	if err == nil || stdout != "" || !strings.Contains(stderr, "telos apply only updates Telos Cloud Goals") {
@@ -524,19 +203,33 @@ func TestSpecApplyIgnoresInferenceEnvironment(t *testing.T) {
 	}
 }
 
-func TestApplyInferenceRejectsInvalidPreflightWithoutWriting(t *testing.T) {
-	var writes atomic.Int32
+func TestApplyInferenceTextShowsUndeliveredChange(t *testing.T) {
 	server := inferenceTestServer(t, map[string]http.HandlerFunc{
-		"GET /api/deployments/sess_test/inference": func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte(`{}`))
-		},
 		"PUT /api/deployments/sess_test/inference": func(w http.ResponseWriter, r *http.Request) {
-			writes.Add(1)
+			_, _ = w.Write([]byte(`{"inference":{"source":"byok","model":"claude-test","connection_name":"Work Anthropic"},"agent_model":"anthropic/claude-test","agent_thinking":"high","generation":3,"applied":false}`))
 		},
 	})
 	defer server.Close()
 	configureInferenceApplyTest(t, server.URL)
-	if receipt, err := applySessionInference("sess_test", "telos/max", "", ""); err == nil || receipt != nil || writes.Load() != 0 {
-		t.Fatalf("malformed preflight proceeded: %+v, %v, writes=%d", receipt, err, writes.Load())
+	out := captureStdout(t, func() { cmdApply([]string{"--goal", "sess_test", "--model", "Work Anthropic/claude-test"}) })
+	for _, want := range []string{"Model     Work Anthropic/claude-test", "Thinking  high", "Applies   next turn after the Goal's runtime receives it"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("output missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestApplyInferenceReportsCloudRejection(t *testing.T) {
+	server := inferenceTestServer(t, map[string]http.HandlerFunc{
+		"PUT /api/deployments/sess_test/inference": func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"detail":"changing the inference connection is not supported"}`))
+		},
+	})
+	defer server.Close()
+	configureInferenceApplyTest(t, server.URL)
+	_, stderr, err := inferenceCLIProcess(t, "apply", "--goal", "sess_test", "--model", "telos/max")
+	if err == nil || !strings.Contains(stderr, "changing the inference connection is not supported") {
+		t.Fatalf("rejection not reported: %v %s", err, stderr)
 	}
 }

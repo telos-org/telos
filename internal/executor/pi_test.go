@@ -14,69 +14,74 @@ import (
 	"github.com/telos-org/telos/internal/platform"
 )
 
-func TestPiStartupFailureIncludesReceiptDiagnostic(t *testing.T) {
-	for _, current := range []bool{true, false} {
-		t.Run(fmt.Sprint(current), func(t *testing.T) {
-			dir := t.TempDir()
-			bin := filepath.Join(dir, ".local", "bin")
-			if err := os.MkdirAll(bin, 0o755); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(bin, "pi"), []byte("#!/bin/sh\nexit 78\n"), 0o755); err != nil {
-				t.Fatal(err)
-			}
-			p := platform.NewLocalPlatform(dir)
-			p.Env = map[string]string{"HOME": dir}
-			e := NewPiExecutor(p, "provider/model", "medium", 5)
-			e.Startup = &PiStartupConfig{AttemptID: "current", Model: e.Model, Thinking: e.Thinking, ReceiptPath: filepath.Join(dir, "receipt.json")}
-			receipt := PiStartupReceipt{AttemptID: "current", Error: "Pi selected thinking level off; requested medium"}
-			if !current {
-				receipt.AttemptID = "previous"
-			}
-			data, _ := json.Marshal(receipt)
-			if err := os.WriteFile(e.Startup.ReceiptPath, data, 0o600); err != nil {
-				t.Fatal(err)
-			}
-			result := e.ExecuteTurn("test", "prover", nil)
-			want := "pi_startup: " + receipt.Error
-			if !current {
-				want = "pi_startup: startup validation failed without a matching receipt; check the installed Pi version and startup configuration"
-			}
-			if result.Error != want {
-				t.Fatalf("startup error = %q, want %q", result.Error, want)
-			}
-		})
+func TestExecuteTurnRegistersModelDefinitionForThisPiProcess(t *testing.T) {
+	home := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/argv.txt\"\nprintf '%s' \"$TELOS_MODEL\" > \"$HOME/model.txt\"\n" +
+		"cp \"$TELOS_PI_STARTUP_CONFIG\" \"$HOME/startup.json\"\ncmp -s \"$TELOS_PI_STARTUP_EXTENSION\" \"$HOME/expected.js\" && touch \"$HOME/extension-ok\"\n" +
+		"printf 'done\\n<status>CONCEDE</status>\\n'\n"
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "expected.js"), piStartupExtension, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	p := platform.NewLocalPlatform(t.TempDir())
+	p.Env = map[string]string{"HOME": home}
+	e := NewPiExecutor(p, "provider/model", "high", 5)
+	e.ModelDefinition = json.RawMessage(`{"id":"model","contextWindow":256000}`)
+
+	if result := e.ExecuteTurn("do it", "prover", nil); result.Status != game.StatusConcede {
+		t.Fatalf("turn: %+v", result)
+	}
+	argv, _ := os.ReadFile(filepath.Join(home, "argv.txt"))
+	if !strings.HasPrefix(string(argv), "-e\n") || !strings.Contains(string(argv), "--model\nprovider/model\n--thinking\nhigh\n") {
+		t.Fatalf("Pi did not load the startup extension: %s", argv)
+	}
+	if _, err := os.Stat(filepath.Join(home, "extension-ok")); err != nil {
+		t.Fatal("startup extension was not written")
+	}
+	var config piStartupConfig
+	data, _ := os.ReadFile(filepath.Join(home, "startup.json"))
+	if err := json.Unmarshal(data, &config); err != nil || config.Model != "provider/model" || string(config.Definition) != string(e.ModelDefinition) {
+		t.Fatalf("startup config = %s, %v", data, err)
+	}
+	if model, _ := os.ReadFile(filepath.Join(home, "model.txt")); string(model) != "provider/model" {
+		t.Fatalf("TELOS_MODEL = %q", model)
+	}
+
+	e.ModelDefinition = nil
+	if result := e.ExecuteTurn("do it", "prover", nil); result.Status != game.StatusConcede {
+		t.Fatalf("turn: %+v", result)
+	}
+	if argv, _ := os.ReadFile(filepath.Join(home, "argv.txt")); strings.Contains(string(argv), "-e\n") {
+		t.Fatalf("turn without a definition loaded the extension: %s", argv)
 	}
 }
 
-func TestPiStartupReceiptFailureExitsBeforePrompt(t *testing.T) {
+func TestPiStartupExtensionFailsTurnWithMessage(t *testing.T) {
 	node, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("node is needed to exercise the startup extension")
 	}
-	for _, thinking := range []string{"high", "imaginary"} {
-		t.Run(thinking, func(t *testing.T) {
-			dir := t.TempDir()
-			config := filepath.Join(dir, "config.json")
-			data := fmt.Sprintf(`{"model":"provider/model","thinking":%q,"attempt_id":"test","receipt_path":%q}`, thinking, filepath.Join(dir, "missing", "receipt.json"))
-			if err := os.WriteFile(config, []byte(data), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			script := fmt.Sprintf(`
-const { default: initialize } = await import("data:text/javascript;base64," + Buffer.from(%q).toString("base64"));
-let onStart;
-await initialize({ on: (_event, handler) => { onStart = handler; }, getThinkingLevel: () => "high" });
-const model = { provider: "provider", id: "model", api: "test" };
-onStart({}, { model, modelRegistry: { find: () => model } });
-console.log("PROMPT_SENT");
-`, string(piStartupExtension))
-			cmd := exec.Command(node, "--input-type=module", "-e", script)
-			cmd.Env = append(os.Environ(), "TELOS_PI_STARTUP_CONFIG="+config)
-			output, err := cmd.CombinedOutput()
-			if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 78 || strings.Contains(string(output), "PROMPT_SENT") {
-				t.Fatalf("failed to stop before prompt: %s, %v", output, err)
-			}
-		})
+	dir := t.TempDir()
+	extension, config := filepath.Join(dir, "startup.mjs"), filepath.Join(dir, "config.json")
+	if err := os.WriteFile(extension, piStartupExtension, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(config, []byte(`{"model":"provider/model","definition":{"id":"model"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Outside Pi the provider catalog cannot be imported, so registration fails.
+	script := fmt.Sprintf(`const { default: init } = await import(%q); await init({ registerProvider() {} }); console.log("PROMPT_SENT");`, extension)
+	cmd := exec.Command(node, "--input-type=module", "-e", script)
+	cmd.Env = append(os.Environ(), "TELOS_PI_STARTUP_CONFIG="+config)
+	output, err := cmd.CombinedOutput()
+	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 78 || strings.Contains(string(output), "PROMPT_SENT") || !strings.Contains(string(output), "Telos could not register Pi model provider/model") {
+		t.Fatalf("startup failure was not reported: %s, %v", output, err)
 	}
 }
 
