@@ -12,6 +12,7 @@ import (
 
 // Manifest is the persisted session.json shape shared by the store and worker.
 type Manifest struct {
+	SessionInstanceID        string                      `json:"session_instance_id,omitempty"`
 	SessionID                string                      `json:"session_id"`
 	SessionKind              SessionKind                 `json:"session_kind"`
 	DesiredStatus            SessionDesiredStatus        `json:"desired_status,omitempty"`

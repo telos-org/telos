@@ -31,7 +31,7 @@ func (fs *FileStore) InferenceRequest(id, requestID string) (*InferenceResponse,
 	if !safeSessionID(id) || !inferenceRequestID.MatchString(requestID) {
 		return nil, ErrInvalidSession
 	}
-	m, err := ReadManifest(fs.manifestPath(id))
+	m, err := inferenceManifest(fs.manifestPath(id))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNotFound
 	}

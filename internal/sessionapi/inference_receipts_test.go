@@ -15,7 +15,11 @@ import (
 func TestInferenceReceiptsSurviveNewerCommandsAndRestart(t *testing.T) {
 	store, path := inferenceStore(t)
 	model := "provider/new"
-	req := InferenceUpdateRequest{RequestID: "first", Model: &model, ModelDefinition: json.RawMessage(`{"id":"new","api":"openai-responses"}`)}
+	initial, err := store.Inference("session")
+	if err != nil || initial.SessionInstanceID == "" {
+		t.Fatalf("missing session instance: %+v %v", initial, err)
+	}
+	req := InferenceUpdateRequest{RequestID: "first", ExpectedSessionInstanceID: initial.SessionInstanceID, Model: &model, ModelDefinition: json.RawMessage(`{"id":"new","api":"openai-responses"}`)}
 	if _, err := store.UpdateInference("session", req); err != nil {
 		t.Fatal(err)
 	}
@@ -55,7 +59,7 @@ func TestInferenceReceiptsSurviveNewerCommandsAndRestart(t *testing.T) {
 		func() (*InferenceResponse, error) { return store.CancelInference("session", req) },
 	} {
 		result, err := lookup()
-		if err != nil || !reflect.DeepEqual(result.Operation, first.Operation) || result.Revision != 2 || result.Settings.Thinking != level {
+		if err != nil || result.SessionInstanceID != initial.SessionInstanceID || !reflect.DeepEqual(result.Operation, first.Operation) || result.Revision != 2 || result.Settings.Thinking != level {
 			t.Fatalf("historical result changed: %+v %v", result, err)
 		}
 	}
@@ -338,6 +342,52 @@ func TestInferenceRequestCollisionIsDistinctFromAdmissionConflict(t *testing.T) 
 			}
 			if _, err := store.UpdateInference("session", req); !errors.Is(err, ErrConflict) || errors.Is(err, ErrInferenceRequestConflict) {
 				t.Fatalf("incompatible writer confirmed an immutable request fence: %v", err)
+			}
+		})
+	}
+}
+
+func TestInferenceSessionInstanceFencesRecreatedSession(t *testing.T) {
+	for _, method := range []string{"update", "cancel"} {
+		t.Run(method, func(t *testing.T) {
+			store, path := inferenceStore(t)
+			before, err := store.Inference("session")
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := ReadManifest(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.SessionInstanceID = ""
+			if err := WriteManifest(path, m); err != nil {
+				t.Fatal(err)
+			}
+			store = NewFileStore(store.Root, RuntimeLocal)
+			after, err := store.Inference("session")
+			if err != nil || after.SessionInstanceID == before.SessionInstanceID || after.Revision != 0 {
+				t.Fatalf("recreated instance: %+v %v", after, err)
+			}
+			model := "provider/new"
+			req := InferenceUpdateRequest{RequestID: "delayed", ExpectedSessionInstanceID: before.SessionInstanceID, Model: &model}
+			mutate := store.UpdateInference
+			if method == "cancel" {
+				mutate = store.CancelInference
+			}
+			if _, err := mutate("session", req); !errors.Is(err, ErrConflict) {
+				t.Fatalf("old instance accepted: %v", err)
+			}
+			req.ExpectedSessionInstanceID = after.SessionInstanceID
+			result, err := mutate("session", req)
+			if err != nil || result.Operation == nil || result.SessionInstanceID != after.SessionInstanceID {
+				t.Fatalf("new instance rejected: %+v %v", result, err)
+			}
+			if _, err := mutate("session", req); err != nil {
+				t.Fatalf("same-instance replay failed: %v", err)
+			}
+			req.ExpectedSessionInstanceID = before.SessionInstanceID
+			if _, err := mutate("session", req); !errors.Is(err, ErrConflict) {
+				t.Fatalf("old instance bypassed fencing through replay: %v", err)
 			}
 		})
 	}

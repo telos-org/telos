@@ -1,6 +1,7 @@
 package sessionapi
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -18,12 +19,13 @@ type InferenceSettings struct {
 
 // A request changes model, thinking, or both at the next agent turn.
 type InferenceUpdateRequest struct {
-	ApplyAt          string          `json:"apply_at,omitempty"`
-	RequestID        string          `json:"request_id"`
-	ExpectedRevision int             `json:"expected_revision"`
-	Model            *string         `json:"model,omitempty"`
-	Thinking         *string         `json:"thinking,omitempty"`
-	ModelDefinition  json.RawMessage `json:"model_definition,omitempty"`
+	ApplyAt                   string          `json:"apply_at,omitempty"`
+	RequestID                 string          `json:"request_id"`
+	ExpectedRevision          int             `json:"expected_revision"`
+	ExpectedSessionInstanceID string          `json:"expected_session_instance_id,omitempty"`
+	Model                     *string         `json:"model,omitempty"`
+	Thinking                  *string         `json:"thinking,omitempty"`
+	ModelDefinition           json.RawMessage `json:"model_definition,omitempty"`
 }
 
 type InferenceUpdate struct {
@@ -38,6 +40,7 @@ type InferenceUpdate struct {
 }
 
 type InferenceResponse struct {
+	SessionInstanceID string              `json:"session_instance_id"`
 	OperationReceipts bool                `json:"operation_receipts"`
 	Operation         *InferenceOperation `json:"operation,omitempty"`
 	ApplyAt           string              `json:"apply_at"`
@@ -92,7 +95,7 @@ func (r InferenceUpdateRequest) Validate() error {
 }
 
 func inferenceResponse(m *Manifest) *InferenceResponse {
-	r := &InferenceResponse{ApplyAt: "next_turn", Settings: InferenceSettings{Model: m.Config.Model, Thinking: m.Config.Thinking}, Update: m.InferenceUpdate}
+	r := &InferenceResponse{SessionInstanceID: m.SessionInstanceID, ApplyAt: "next_turn", Settings: InferenceSettings{Model: m.Config.Model, Thinking: m.Config.Thinking}, Update: m.InferenceUpdate}
 	if r.Update != nil {
 		r.Revision = r.Update.Revision
 		r.Operation = inferenceOperation(m, r.Update.RequestID)
@@ -105,11 +108,31 @@ func inferenceResponse(m *Manifest) *InferenceResponse {
 	return r
 }
 
+func inferenceManifest(path string) (*Manifest, error) {
+	return withLockedManifest(path, func(m *Manifest) error {
+		if m.SessionInstanceID != "" {
+			return nil
+		}
+		m.SessionInstanceID = rand.Text()
+		return WriteManifest(path, m)
+	})
+}
+
+func checkInferenceSession(m *Manifest, req InferenceUpdateRequest) error {
+	if m.SessionInstanceID == "" {
+		m.SessionInstanceID = rand.Text()
+	}
+	if req.ExpectedSessionInstanceID != "" && req.ExpectedSessionInstanceID != m.SessionInstanceID {
+		return fmt.Errorf("%w: session instance changed; reload before changing inference settings", ErrConflict)
+	}
+	return nil
+}
+
 func (fs *FileStore) Inference(id string) (*InferenceResponse, error) {
 	if !safeSessionID(id) {
 		return nil, ErrNotFound
 	}
-	m, err := ReadManifest(fs.manifestPath(id))
+	m, err := inferenceManifest(fs.manifestPath(id))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNotFound
 	}
@@ -128,6 +151,9 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 	}
 	var rejection string
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
+		if err := checkInferenceSession(m, req); err != nil {
+			return err
+		}
 		current := inferenceResponse(m)
 		if replayed, err := replayInferenceRequest(m, req); replayed || err != nil {
 			return err
@@ -177,6 +203,9 @@ func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*In
 		return nil, ErrNotFound
 	}
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
+		if err := checkInferenceSession(m, req); err != nil {
+			return err
+		}
 		current := inferenceResponse(m)
 		replayed, err := replayInferenceRequest(m, req)
 		if err != nil {
@@ -233,7 +262,7 @@ func requireInferenceWorker(m *Manifest) error {
 }
 
 func sameInferenceRequest(a, b InferenceUpdateRequest) bool {
-	return a.ExpectedRevision == b.ExpectedRevision && sameOptionalString(a.Model, b.Model) && sameOptionalString(a.Thinking, b.Thinking) && sameJSON(a.ModelDefinition, b.ModelDefinition)
+	return a.ExpectedSessionInstanceID == b.ExpectedSessionInstanceID && a.ExpectedRevision == b.ExpectedRevision && sameOptionalString(a.Model, b.Model) && sameOptionalString(a.Thinking, b.Thinking) && sameJSON(a.ModelDefinition, b.ModelDefinition)
 }
 
 func safeSessionID(id string) bool {
