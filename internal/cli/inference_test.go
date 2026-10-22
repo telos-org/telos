@@ -507,8 +507,8 @@ func TestInferenceCancellationStopsUnconfirmedStartup(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("cancelled startup did not stop")
 	}
-	state, err := store.Inference("session")
-	if err != nil || state.Settings.Model != m.Config.Model || state.Update.Status != "unknown" {
+	state, err := sessionapi.ReadManifest(manifestPath(dir))
+	if err != nil || state.Config.Model != m.Config.Model || state.InferenceUpdate.Status != "unknown" {
 		t.Fatalf("cancelled startup changed defaults: %+v %v", state, err)
 	}
 	if _, err := os.Stat(filepath.Join(home, "finished")); !os.IsNotExist(err) {
