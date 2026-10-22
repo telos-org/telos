@@ -38,8 +38,11 @@ func changeInference(t *testing.T, path string, definition json.RawMessage) {
 	}
 }
 
-func TestEachTurnReadsCurrentInferenceSettings(t *testing.T) {
-	dir, home := t.TempDir(), t.TempDir()
+// fakePiTurns runs turns for the session in dir against a Pi stub and returns
+// each turn's argv.
+func fakePiTurns(t *testing.T, dir string) func() string {
+	t.Helper()
+	home := t.TempDir()
 	bin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
@@ -48,11 +51,10 @@ func TestEachTurnReadsCurrentInferenceSettings(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	path := writeInferenceManifest(t, dir)
 	p := platform.NewLocalPlatform(dir)
 	p.Env = map[string]string{"HOME": home}
 	e := &sessionInferenceExecutor{PiExecutor: executor.NewPiExecutor(p, "turn-a/probe-a", "medium", 5), sessionDir: dir}
-	turn := func() string {
+	return func() string {
 		t.Helper()
 		if result := e.ExecuteTurn("do it", "prover", nil); result.Status != game.StatusConcede {
 			t.Fatalf("turn: %+v", result)
@@ -60,12 +62,43 @@ func TestEachTurnReadsCurrentInferenceSettings(t *testing.T) {
 		argv, _ := os.ReadFile(filepath.Join(home, "argv.txt"))
 		return string(argv)
 	}
+}
+
+func TestEachTurnReadsCurrentInferenceSettings(t *testing.T) {
+	dir := t.TempDir()
+	path := writeInferenceManifest(t, dir)
+	turn := fakePiTurns(t, dir)
 	if argv := turn(); !strings.HasPrefix(argv, "--mode\ntext\n--model\nturn-a/probe-a\n--thinking\nmedium\n") {
 		t.Fatalf("first turn argv:\n%s", argv)
 	}
 	changeInference(t, path, json.RawMessage(`{"id":"probe-b"}`))
 	if argv := turn(); !strings.HasPrefix(argv, "-e\n") || !strings.Contains(argv, "--model\nturn-b/probe-b\n--thinking\nhigh\n") {
 		t.Fatalf("next turn did not read the changed settings:\n%s", argv)
+	}
+}
+
+func TestChildTurnFollowsNewerRootSettings(t *testing.T) {
+	sessions := t.TempDir()
+	rootPath := writeInferenceManifest(t, filepath.Join(sessions, "root"))
+	parent := "root"
+	childPath := filepath.Join(sessions, "child", "session.json")
+	if err := sessionapi.WriteManifest(childPath, &sessionapi.Manifest{
+		SessionID: "child", SessionKind: sessionapi.KindTask, ParentSessionID: &parent,
+		Config: sessionapi.SessionConfig{Model: "turn-a/explicit", Thinking: "low"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	turn := fakePiTurns(t, filepath.Dir(childPath))
+	if argv := turn(); !strings.Contains(argv, "--model\nturn-a/explicit\n--thinking\nlow\n") {
+		t.Fatalf("child lost its own settings before a root change:\n%s", argv)
+	}
+	changeInference(t, rootPath, json.RawMessage(`{"id":"probe-b"}`))
+	if argv := turn(); !strings.HasPrefix(argv, "-e\n") || !strings.Contains(argv, "--model\nturn-b/probe-b\n--thinking\nhigh\n") {
+		t.Fatalf("child did not follow the root's newer settings:\n%s", argv)
+	}
+	m, err := sessionapi.ReadManifest(childPath)
+	if err != nil || m.Config.InferenceGeneration != 1 || m.Config.Model != "turn-b/probe-b" || !strings.Contains(string(m.InferenceModelDefinition), `"probe-b"`) {
+		t.Fatalf("child manifest = %+v %s %v", m.Config, m.InferenceModelDefinition, err)
 	}
 }
 

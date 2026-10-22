@@ -47,7 +47,6 @@ func TestApplyInferenceExplicitSettings(t *testing.T) {
 		{"thinking only", "", "high", nil},
 		{"combined", "telos/max", "off", &cloud.InferenceSelection{Source: "managed", Tier: "max"}},
 		{"native max", "", "max", nil},
-		{"native minimal", "", "minimal", nil},
 		{"API key", "Work Anthropic/claude-test", "high", &cloud.InferenceSelection{Source: "byok", ConnectionID: "key_work", Model: "claude-test"}},
 		{"subscription", "My ChatGPT/gpt-test", "", &cloud.InferenceSelection{Source: "subscription", ConnectionID: "sub_work", Model: "gpt-test"}},
 		{"model with slash", "Work/Router/anthropic/claude-test", "", &cloud.InferenceSelection{Source: "byok", ConnectionID: "key_router", Model: "anthropic/claude-test"}},

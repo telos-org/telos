@@ -119,6 +119,14 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
+		// Without flags, telosd copies the parent's current settings; the
+		// environment may hold the model the worker started with.
+		if !flagNameSet(fs, "model") {
+			runtimeConfig.Model = ""
+		}
+		if !flagNameSet(fs, "thinking") {
+			runtimeConfig.Thinking = ""
+		}
 		runCloudChildSession(specArg, ctx, untilConfig, runtimeConfig, *jsonOut, action)
 		return
 	}
