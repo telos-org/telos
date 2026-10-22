@@ -242,7 +242,20 @@ func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	sessions, err := h.store.List()
+	includeEvidence := true
+	if raw := strings.TrimSpace(r.URL.Query().Get("include_evidence")); raw != "" {
+		includeEvidence, err = strconv.ParseBool(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "include_evidence must be a boolean")
+			return
+		}
+	}
+	var sessions []Session
+	if store, ok := h.store.(interface{ ListMetadata() ([]Session, error) }); ok && !includeEvidence {
+		sessions, err = store.ListMetadata()
+	} else {
+		sessions, err = h.store.List()
+	}
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -372,7 +385,7 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 		h.streamEvents(w, r, id, after)
 		return
 	}
-	events, err := h.store.Events(id)
+	page, err := h.readEvents(id, EventWindow{After: after, Before: before, Tail: tail})
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -381,10 +394,36 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	writeJSON(w, http.StatusOK, SessionEventsResponse{
-		Events:       filterEventsWindow(events, after, before, tail),
+	writeJSON(w, http.StatusOK, page)
+}
+
+func (h *handler) readEvents(id string, window EventWindow) (SessionEventsResponse, error) {
+	if store, ok := h.store.(interface {
+		EventsPage(string, EventWindow) (SessionEventsResponse, error)
+	}); ok {
+		return store.EventsPage(id, window)
+	}
+	events, err := h.store.Events(id)
+	if err != nil {
+		return SessionEventsResponse{}, err
+	}
+	return SessionEventsResponse{
+		Events:       filterEventsWindow(events, window.After, window.Before, window.Tail),
 		HeadEventSeq: headEventSeq(events),
-	})
+	}, nil
+}
+
+func (h *handler) sessionStatus(id string) (SessionStatus, error) {
+	if store, ok := h.store.(interface {
+		Status(string) (SessionStatus, error)
+	}); ok {
+		return store.Status(id)
+	}
+	session, err := h.store.Get(id)
+	if err != nil {
+		return "", err
+	}
+	return session.Status, nil
 }
 
 func queryParamSet(r *http.Request, name string) bool {
@@ -435,7 +474,7 @@ func headEventSeq(events []SessionEvent) *int64 {
 }
 
 func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string, after int64) {
-	if _, err := h.store.Get(id); err != nil {
+	if _, err := h.sessionStatus(id); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -462,34 +501,39 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// File-backed evidence is append-only; sent indexes are stable for one stream.
+	// Numbered streams resume from their durable head. Only compatibility
+	// replays need an ordinal count, which is never advertised as a cursor.
 	sent := 0
 	emitAvailable := func() bool {
-		events, err := h.store.Events(id)
+		page, err := h.readEvents(id, EventWindow{After: after})
 		if err != nil {
 			return false
 		}
-		// A legacy or multi-spec stream has no durable cursor. Replay it
-		// instead of treating list position as event identity.
-		for sent < len(events) && after > 0 && events[sent].EventSeq != nil &&
-			*events[sent].EventSeq <= after {
-			sent++
+		events := page.Events
+		if page.HeadEventSeq == nil {
+			events = events[min(sent, len(events)):]
 		}
-		for sent < len(events) {
-			data, err := json.Marshal(events[sent])
+		for _, event := range events {
+			data, err := json.Marshal(event)
 			if err != nil {
-				sent++
 				continue
 			}
 			// Only durable seqs are advertised as SSE ids; an ordinal
 			// would resume wrongly on a client that stored it.
-			if seq := events[sent].EventSeq; seq != nil {
+			if seq := event.EventSeq; seq != nil {
 				_, _ = fmt.Fprintf(w, "id: %d\ndata: %s\n\n", *seq, data)
 			} else {
 				_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
 			}
 			flusher.Flush()
-			sent++
+		}
+		if page.HeadEventSeq != nil {
+			after = max(after, *page.HeadEventSeq)
+			// If a later append breaks the writer invariant, replay the full
+			// compatibility history once instead of guessing its list position.
+			sent = 0
+		} else {
+			sent = len(page.Events)
 		}
 		return true
 	}
@@ -501,8 +545,8 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		if !emitAvailable() {
 			return
 		}
-		session, err := h.store.Get(id)
-		if err == nil && session.Status.IsTerminal() {
+		status, err := h.sessionStatus(id)
+		if err == nil && status.IsTerminal() {
 			emitAvailable()
 			return
 		}

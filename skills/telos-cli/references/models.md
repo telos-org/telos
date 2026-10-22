@@ -23,6 +23,8 @@ The running turn finishes with its current settings. The change takes effect at 
 
 Model updates stay on the Goal's current connection: Telos Default/Max for managed inference, or another model on the same API key or subscription. Settings updates accept thinking levels supported by the selected model. If you change the model without specifying thinking, Pi may lower the current level to one the new model supports. An explicitly requested level must be supported.
 
+If the Goal’s runtime session is recreated, retry the change with both `--model` and `--thinking`.
+
 ## Managed inference
 
 Telos exposes `telos/default` and `telos/max` as managed inference models. These abstract routing to frontier open and frontier closed models, respectively.
@@ -40,7 +42,6 @@ Telos lets you bring your own inference, configurable at <https://usetelos.ai/wo
 ### API key
 
 In many instances, teams have active API keys with major providers (Anthropic, OpenAI, xAI) or marketplaces (OpenRouter). Telos supports configuring this via the web interface.
-
 
 ### Subscription
 
@@ -63,6 +64,6 @@ Cloud     $1.25 (compute $1.00, storage $0.25)
 Inference $3.40 (Telos)
 ```
 
-Costs are labeled by the provider - `Telos`, the provider of your API key (like `Anthropic API key`), or your subscription (like `ChatGPT subscription`). Telos bills only `Telos` inference; your provider bills API key usage, and your subscription covers its own. For subscription inference, costs displayed are the API-equivalent cost.
+Costs are labeled by the provider: `Telos`, the provider of your API key (like `Anthropic API key`), or your subscription (like `ChatGPT subscription`). Telos bills only `Telos` inference; your provider bills API key usage, and your subscription covers its own. For subscription inference, costs displayed are the API-equivalent cost.
 
 For an API key or subscription, the agent runtime (`Pi`-backed) records the inference cost. If the runtime can't be reached, that cost is displayed as `unavailable`.

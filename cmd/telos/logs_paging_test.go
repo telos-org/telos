@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/cloud"
 )
@@ -26,7 +28,7 @@ func TestCloudHumanLogsPagePastHiddenEventsAndRetainAbsentSourceCursor(t *testin
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := expandCloudHumanLogs(client, "session_1", first, 2)
+	events, err := expandCloudLogs(client, "session_1", first, 2, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +50,7 @@ func TestCloudHumanLogsDeduplicateOverlappingPages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := expandCloudHumanLogs(client, "session_1", first, 2)
+	events, err := expandCloudLogs(client, "session_1", first, 2, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +69,7 @@ func TestCloudHumanLogsMergeSourcesByReceiptTime(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := expandCloudHumanLogs(client, "session_1", first, 3)
+	events, err := expandCloudLogs(client, "session_1", first, 3, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +98,7 @@ func TestCloudHumanLogsKeepSnapshotWhenOlderHistoryIsUnavailable(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			events, err := expandCloudHumanLogs(client, "session_1", first, 2)
+			events, err := expandCloudLogs(client, "session_1", first, 2, false)
 			if err == nil || !strings.Contains(err.Error(), test.want) || *calls != 2 {
 				t.Fatalf("calls=%d err=%v", *calls, err)
 			}
@@ -116,7 +118,7 @@ func TestCloudHumanLogsStopAtEmptyReachablePage(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := expandCloudHumanLogs(client, "session_1", first, 2)
+	events, err := expandCloudLogs(client, "session_1", first, 2, false)
 	if err != nil || *calls != 2 || len(events) != 0 {
 		t.Fatalf("calls=%d page=%#v err=%v", *calls, events, err)
 	}
@@ -134,7 +136,7 @@ func TestCloudHumanLogsUseOneLegacyFallback(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			events, err := expandCloudHumanLogs(client, "session_1", first, 2)
+			events, err := expandCloudLogs(client, "session_1", first, 2, false)
 			if err != nil || *calls != 2 || len(renderLogRows(events)) != 1 {
 				t.Fatalf("calls=%d page=%#v err=%v", *calls, events, err)
 			}
@@ -152,27 +154,42 @@ func TestCloudHumanLogsDoNotReplaceSnapshotWithAnotherSessionDuringLegacyFallbac
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := expandCloudHumanLogs(client, "session_1", first, 2)
+	events, err := expandCloudLogs(client, "session_1", first, 2, false)
 	if err == nil || !strings.Contains(err.Error(), "Goal restarted") || *calls != 3 || events[0].Data["text"] != "Original session." {
 		t.Fatalf("calls=%d page=%#v err=%v", *calls, events, err)
 	}
 }
 
-func TestCloudRawAndJSONLogsKeepTheirSingleRequestContract(t *testing.T) {
-	for _, raw := range []bool{false, true} {
-		t.Run(fmt.Sprintf("raw=%v", raw), func(t *testing.T) {
-			query := "tail=2"
-			if raw {
-				query = ""
-			}
-			client, calls := logPagingServer(t, []string{logPage(`{"event":"agent_progress","event_seq":1,"data":{"kind":"tool","text":"technical evidence"},"future_field":"preserved"}`, `"runtime_1"`)}, []string{query})
+func TestCloudLogsPreserveSingleRequestModes(t *testing.T) {
+	for _, test := range []struct {
+		name  string
+		tail  int
+		all   bool
+		raw   bool
+		json  bool
+		query string
+	}{
+		{"default", defaultLogTail, false, false, false, "tail=50"},
+		{"small JSON", 2, false, false, true, "tail=2"},
+		{"page-sized JSON", 1000, false, false, true, "tail=1000"},
+		{"all", 1500, true, false, false, ""},
+		{"all JSON", 1500, true, false, true, ""},
+		{"raw", 1500, false, true, false, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			page := `{"events":[{"event":"agent_progress","event_seq":1,"data":{"audience":"user","text":"Visible activity"},"future_field":"preserved"},` +
+				`{"event":"agent_progress","event_seq":2,"data":{"audience":"agent","text":"technical evidence"}}]}`
+			client, calls := logPagingServer(t, []string{page}, []string{test.query})
 			configureCloudTest(t, client.Endpoint)
 			t.Setenv("TELOS_CONTEXT", "")
 			out := captureStdout(t, func() {
-				printCloudSessionLogs(&cloud.SessionRecord{ID: "session_1", State: "healthy"}, logViewOptions{Tail: 2}, !raw, raw, false, "")
+				printCloudSessionLogs(&cloud.SessionRecord{ID: "session_1", State: "healthy"}, logViewOptions{Tail: test.tail, All: test.all}, test.json, test.raw, false, "")
 			})
-			if *calls != 1 || !strings.Contains(out, "technical evidence") || raw && !strings.Contains(out, "future_field") {
+			if *calls != 1 || !strings.Contains(out, "Visible activity") || test.raw && !strings.Contains(out, "future_field") {
 				t.Fatalf("calls=%d output=%s", *calls, out)
+			}
+			if strings.Contains(out, "technical evidence") != (test.json || test.raw) {
+				t.Fatalf("technical event visibility changed: %s", out)
 			}
 		})
 	}
@@ -227,7 +244,7 @@ func TestCloudHumanLogsKeepAvailableRowsWhenInitiallyUnreachable(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := expandCloudHumanLogs(client, "session_1", first, 2)
+	events, err := expandCloudLogs(client, "session_1", first, 2, false)
 	if err == nil || *calls != 1 || len(events) != 1 {
 		t.Fatalf("available history lost: page=%#v err=%v calls=%d", events, err, *calls)
 	}
@@ -242,7 +259,7 @@ func TestCloudHumanLogsRetainTurnEndingsForQuietNotice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	events, err := expandCloudHumanLogs(client, "session_1", first, 1)
+	events, err := expandCloudLogs(client, "session_1", first, 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -251,6 +268,120 @@ func TestCloudHumanLogsRetainTurnEndingsForQuietNotice(t *testing.T) {
 	if !strings.Contains(output.String(), "Checking recovery.") || strings.Contains(output.String(), "No new progress update") {
 		t.Fatalf("turn ending lost: %s", output.String())
 	}
+}
+
+func TestCloudLargeTailsPageAndFollow(t *testing.T) {
+	previous := logFollowInterval
+	logFollowInterval = 0
+	t.Cleanup(func() { logFollowInterval = previous })
+	page := func(first, last int) string {
+		return `{"events":[` + logHistoryEvents(first, last) + `],"cursors":{"rt":4000,"cp":null,"session":"runtime_1"}}`
+	}
+	for _, jsonOutput := range []bool{false, true} {
+		for _, follow := range []bool{false, true} {
+			t.Run(fmt.Sprintf("json=%t/follow=%t", jsonOutput, follow), func(t *testing.T) {
+				// Each older page overlaps the previous one; odd events are hidden in readable output.
+				pages := []string{page(3001, 4000), page(2002, 3001)}
+				queries := []string{"tail=1000", "before_rt=3001&tail=1000"}
+				if !jsonOutput {
+					pages = append(pages, page(1003, 2002), page(4, 1003))
+					queries = append(queries, "before_rt=2002&tail=1000", "before_rt=1003&tail=1000")
+				}
+				if follow {
+					pages = append(pages, page(4000, 4002))
+					queries = append(queries, "tail=1000")
+				}
+				calls, goalCalls := 0, 0
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if r.URL.Path == "/api/deployments/session_1" {
+						goalCalls++
+						fmt.Fprint(w, `{"id":"session_1","state":"stopped"}`)
+						return
+					}
+					if calls >= len(pages) {
+						t.Errorf("unexpected extra request: %s", r.URL)
+						http.NotFound(w, r)
+						return
+					}
+					if r.URL.Path != "/api/deployments/session_1/logs" || r.URL.RawQuery != queries[calls] {
+						t.Errorf("request %d = %s, want query %s", calls, r.URL, queries[calls])
+					}
+					fmt.Fprint(w, pages[calls])
+					calls++
+				}))
+				defer server.Close()
+				configureCloudTest(t, server.URL)
+				t.Setenv("TELOS_CONTEXT", "")
+				// A file avoids filling captureStdout's pipe with thousands of rows.
+				output, err := os.CreateTemp(t.TempDir(), "logs")
+				if err != nil {
+					t.Fatal(err)
+				}
+				previousStdout := os.Stdout
+				os.Stdout = output
+				defer func() { os.Stdout = previousStdout }()
+				printCloudSessionLogs(&cloud.SessionRecord{ID: "session_1", State: "healthy"}, logViewOptions{Tail: 1500}, jsonOutput, false, follow, "")
+				if err := output.Close(); err != nil {
+					t.Fatal(err)
+				}
+				body, err := os.ReadFile(output.Name())
+				if err != nil {
+					t.Fatal(err)
+				}
+				first, step, last := 1002, 2, 4000
+				if jsonOutput {
+					first, step = 2501, 1
+				}
+				if follow {
+					last = 4002
+				}
+				lines := strings.Split(strings.TrimSpace(string(body)), "\n")
+				if calls != len(pages) || len(lines) != (last-first)/step+1 || (goalCalls == 1) != follow {
+					t.Fatalf("calls=%d goalCalls=%d lines=%d", calls, goalCalls, len(lines))
+				}
+				for index, line := range lines {
+					want := fmt.Sprintf("event_%04d", first+index*step)
+					if !strings.Contains(line, want) {
+						t.Fatalf("line %d = %s, want %s", index, line, want)
+					}
+					if jsonOutput && (!json.Valid([]byte(line)) || !strings.Contains(line, `"context":`)) {
+						t.Fatalf("JSON event lost its shape or context: %s", line)
+					}
+				}
+			})
+		}
+	}
+}
+
+func TestCloudLargeTailsUseOneLegacyFallback(t *testing.T) {
+	for _, jsonOutput := range []bool{false, true} {
+		t.Run(fmt.Sprintf("json=%t", jsonOutput), func(t *testing.T) {
+			client, calls := logPagingServer(t, []string{
+				`{"events":[` + logHistoryEvents(501, 1500) + `]}`,
+				`{"events":[` + logHistoryEvents(1, 1500) + `]}`,
+			}, []string{"tail=1000", ""})
+			first, err := client.GetSessionLogPage("session_1", 1000)
+			if err != nil {
+				t.Fatal(err)
+			}
+			events, err := expandCloudLogs(client, "session_1", first, 2000, jsonOutput)
+			if err != nil || *calls != 2 || len(events) != 1500 || *events[0].EventSeq != 1 {
+				t.Fatalf("calls=%d events=%d err=%v", *calls, len(events), err)
+			}
+		})
+	}
+}
+
+func logHistoryEvents(first, last int) string {
+	events := make([]string, 0, last-first+1)
+	for seq := first; seq <= last; seq++ {
+		audience := "agent"
+		if seq%2 == 0 {
+			audience = "user"
+		}
+		events = append(events, fmt.Sprintf(`{"event":"agent_progress","event_seq":%d,"ts":%q,"data":{"audience":%q,"text":"event_%04d"}}`, seq, time.Unix(int64(seq), 0).UTC().Format(time.RFC3339), audience, seq))
+	}
+	return strings.Join(events, ",")
 }
 
 func logPage(events, session string) string {
