@@ -47,7 +47,7 @@ func TestInferenceConnectionIsDurableAndRedacted(t *testing.T) {
 	if err != nil || update.Connection.APIKey != connection.APIKey || update.Settings.ConnectionID != connection.ID {
 		t.Fatalf("claim lost prepared connection: %+v %v", update, err)
 	}
-	if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", update.Settings); err != nil {
+	if err := FinishInferenceUpdate(path, req.RequestID, update.AttemptID, "applied", "", update.Settings); err != nil {
 		t.Fatal(err)
 	}
 	thinking := "high"
@@ -58,7 +58,7 @@ func TestInferenceConnectionIsDurableAndRedacted(t *testing.T) {
 	if err != nil || update.Settings.ConnectionID != connection.ID {
 		t.Fatalf("thinking change lost connection: %+v %v", update, err)
 	}
-	if err := FinishInferenceUpdate(path, "thinking", "applied", "", update.Settings); err != nil {
+	if err := FinishInferenceUpdate(path, "thinking", update.AttemptID, "applied", "", update.Settings); err != nil {
 		t.Fatal(err)
 	}
 	saved, err := ReadManifest(path)
@@ -138,7 +138,7 @@ func TestInferenceConnectionStateNeedsACompatibleWorkerBeforeSettlement(t *testi
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", update.Settings); err != nil {
+				if err := FinishInferenceUpdate(path, req.RequestID, update.AttemptID, "applied", "", update.Settings); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -266,7 +266,7 @@ func TestInferenceConnectionCapabilityGatesNewRequests(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", claimed.Settings); err != nil {
+	if err := FinishInferenceUpdate(path, req.RequestID, claimed.AttemptID, "applied", "", claimed.Settings); err != nil {
 		t.Fatal(err)
 	}
 	setInferencePi(t, false)
@@ -299,6 +299,9 @@ func TestInferenceLegacyPiCanStillQueueModelAndThinking(t *testing.T) {
 func TestInferenceCapabilityFailureIsRetryable(t *testing.T) {
 	store, path := inferenceStore(t)
 	binary := setInferencePi(t, true)
+	if _, err := store.Inference("session"); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(binary, []byte("#!/bin/sh\necho private-probe-error >&2\nexit 78\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -356,7 +359,7 @@ func TestInferenceReplayAndPlainSettingsDoNotProbe(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", claimed.Settings); err != nil {
+					if err := FinishInferenceUpdate(path, req.RequestID, claimed.AttemptID, "applied", "", claimed.Settings); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -547,7 +550,7 @@ func TestInferenceCompareAndSwapAndDurableReplay(t *testing.T) {
 		t.Fatalf("duplicate claim: %+v %v", again, err)
 	}
 	confirmed := &InferenceSettings{Model: model, Thinking: "low"}
-	if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", confirmed); err != nil {
+	if err := FinishInferenceUpdate(path, req.RequestID, "attempt", "applied", "", confirmed); err != nil {
 		t.Fatal(err)
 	}
 	response, err = store.UpdateInference("session", req)
@@ -575,7 +578,7 @@ func TestInferenceModelDefinitionSurvivesSameModelAndThinkingChanges(t *testing.
 		if _, err := ClaimInferenceUpdate(path, "attempt", "receipt.json", InferenceSettings{}); err != nil {
 			t.Fatal(err)
 		}
-		if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", &InferenceSettings{Model: model, Thinking: thinking}); err != nil {
+		if err := FinishInferenceUpdate(path, req.RequestID, "attempt", "applied", "", &InferenceSettings{Model: model, Thinking: thinking}); err != nil {
 			t.Fatal(err)
 		}
 		m, err := ReadManifest(path)
@@ -646,8 +649,8 @@ func TestInferenceCancellationFencesDelayedSubmission(t *testing.T) {
 	}
 }
 
-func TestInferenceCancellationDoesNotOverrideStartedOrDifferentRequest(t *testing.T) {
-	for _, status := range []string{"applying", "applied", "unknown", "different_settings", "different_revision"} {
+func TestInferenceCancellationPreservesTerminalOrDifferentRequest(t *testing.T) {
+	for _, status := range []string{"applied", "unknown", "different_settings", "different_revision"} {
 		t.Run(status, func(t *testing.T) {
 			store, path := inferenceStore(t)
 			level := "high"
@@ -719,8 +722,8 @@ func TestInferenceCancellationSerializesWithTurnStartup(t *testing.T) {
 			t.Fatal(err)
 		}
 		if claimed != nil {
-			if cancelErr != nil || state.Update.Status != "applying" {
-				t.Fatalf("cancelled after startup claim: %+v %v", state.Update, cancelErr)
+			if cancelErr != nil || state.Update.Status != "unknown" {
+				t.Fatalf("startup cancellation was not fenced: %+v %v", state.Update, cancelErr)
 			}
 		} else if cancelErr != nil || state.Update.Status != "rejected" {
 			t.Fatalf("cancellation did not fence startup: %+v %v", state.Update, cancelErr)

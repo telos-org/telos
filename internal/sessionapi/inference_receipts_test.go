@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -15,7 +16,11 @@ import (
 func TestInferenceReceiptsSurviveNewerCommandsAndRestart(t *testing.T) {
 	store, path := inferenceStore(t)
 	model := "provider/new"
-	req := InferenceUpdateRequest{RequestID: "first", Model: &model, ModelDefinition: json.RawMessage(`{"id":"new","api":"openai-responses"}`)}
+	initial, err := store.Inference("session")
+	if err != nil || initial.SessionInstanceID == "" {
+		t.Fatalf("missing session instance: %+v %v", initial, err)
+	}
+	req := InferenceUpdateRequest{RequestID: "first", ExpectedSessionInstanceID: initial.SessionInstanceID, Model: &model, ModelDefinition: json.RawMessage(`{"id":"new","api":"openai-responses"}`)}
 	if _, err := store.UpdateInference("session", req); err != nil {
 		t.Fatal(err)
 	}
@@ -23,7 +28,7 @@ func TestInferenceReceiptsSurviveNewerCommandsAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	wanted := InferenceSettings{Model: model, Thinking: "low"}
-	if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", &wanted); err != nil {
+	if err := FinishInferenceUpdate(path, req.RequestID, "attempt", "applied", "", &wanted); err != nil {
 		t.Fatal(err)
 	}
 	first, err := store.InferenceRequest("session", req.RequestID)
@@ -37,7 +42,7 @@ func TestInferenceReceiptsSurviveNewerCommandsAndRestart(t *testing.T) {
 	if _, err := ClaimInferenceUpdate(path, "attempt2", "receipt2.json", InferenceSettings{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := FinishInferenceUpdate(path, "second", "applied", "", &InferenceSettings{Model: model, Thinking: level}); err != nil {
+	if err := FinishInferenceUpdate(path, "second", "attempt2", "applied", "", &InferenceSettings{Model: model, Thinking: level}); err != nil {
 		t.Fatal(err)
 	}
 	// A historical reply remains available even when current admission is closed.
@@ -55,7 +60,7 @@ func TestInferenceReceiptsSurviveNewerCommandsAndRestart(t *testing.T) {
 		func() (*InferenceResponse, error) { return store.CancelInference("session", req) },
 	} {
 		result, err := lookup()
-		if err != nil || !reflect.DeepEqual(result.Operation, first.Operation) || result.Revision != 2 || result.Settings.Thinking != level {
+		if err != nil || result.SessionInstanceID != initial.SessionInstanceID || !reflect.DeepEqual(result.Operation, first.Operation) || result.Revision != 2 || result.Settings.Thinking != level {
 			t.Fatalf("historical result changed: %+v %v", result, err)
 		}
 	}
@@ -94,7 +99,7 @@ func TestInferenceTerminalReceiptsRetainCommittedDefaults(t *testing.T) {
 			case "stop_pending", "stop_applying":
 				err = SettleInferenceUpdate(path, "worker ended")
 			default:
-				err = FinishInferenceUpdate(path, req.RequestID, outcome, "startup failed", nil)
+				err = FinishInferenceUpdate(path, req.RequestID, "attempt", outcome, "startup failed", nil)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -251,7 +256,7 @@ func TestInferenceRequestRoutesReturnRequestedOperation(t *testing.T) {
 	if _, err := ClaimInferenceUpdate(path, "attempt", "receipt.json", InferenceSettings{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := FinishInferenceUpdate(path, "first", "applied", "", &InferenceSettings{Model: "provider/old", Thinking: "high"}); err != nil {
+	if err := FinishInferenceUpdate(path, "first", "attempt", "applied", "", &InferenceSettings{Model: "provider/old", Thinking: "high"}); err != nil {
 		t.Fatal(err)
 	}
 	const second = `{"request_id":"second","expected_revision":1,"thinking":"low"}`
@@ -269,12 +274,12 @@ func TestInferenceRequestRoutesReturnRequestedOperation(t *testing.T) {
 	if _, err := ClaimInferenceUpdate(path, "attempt2", "receipt2.json", InferenceSettings{}); err != nil {
 		t.Fatal(err)
 	}
-	state = request("POST", url+"/cancel", second, http.StatusAccepted)
-	if state.Operation.Status != "applying" {
-		t.Fatalf("late cancellation hid application in progress: %+v", state)
+	state = request("POST", url+"/cancel", second, http.StatusOK)
+	if state.Operation.Status != "unknown" {
+		t.Fatalf("startup cancellation was not fenced: %+v", state)
 	}
-	if err := FinishInferenceUpdate(path, "second", "unknown", "startup unconfirmed", nil); err != nil {
-		t.Fatal(err)
+	if err := FinishInferenceUpdate(path, "second", "attempt2", "applied", "", &InferenceSettings{Model: "provider/old", Thinking: "low"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("cancelled startup committed: %v", err)
 	}
 	state = request("POST", url+"/cancel", second, http.StatusOK)
 	if state.Operation.Status != "unknown" || state.Operation.Settings.Thinking != "high" {
@@ -344,7 +349,7 @@ func TestInferenceRequestCollisionIsDistinctFromAdmissionConflict(t *testing.T) 
 }
 
 func TestInferenceConnectionReceiptsRetainCommittedConnection(t *testing.T) {
-	for _, outcome := range []string{"applied", "rejected", "unknown", "admission_rejected"} {
+	for _, outcome := range []string{"applied", "rejected", "unknown", "cancelled", "admission_rejected"} {
 		t.Run(outcome, func(t *testing.T) {
 			store, path := inferenceStore(t)
 			setInferencePi(t, true)
@@ -376,7 +381,11 @@ func TestInferenceConnectionReceiptsRetainCommittedConnection(t *testing.T) {
 				if outcome == "applied" {
 					confirmed = claimed.Settings
 				}
-				if err := FinishInferenceUpdate(path, req.RequestID, outcome, "", confirmed); err != nil {
+				if outcome == "cancelled" {
+					if state, err := store.CancelInference("session", req); err != nil || state.Operation.Status != "unknown" {
+						t.Fatalf("connection startup was not cancelled: %+v %v", state, err)
+					}
+				} else if err := FinishInferenceUpdate(path, req.RequestID, "attempt", outcome, "", confirmed); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -393,5 +402,108 @@ func TestInferenceConnectionReceiptsRetainCommittedConnection(t *testing.T) {
 				t.Fatalf("durable receipt lost connection: %+v %v", m, err)
 			}
 		})
+	}
+}
+
+func TestInferenceSessionInstanceFencesRecreatedSession(t *testing.T) {
+	for _, method := range []string{"update", "cancel"} {
+		t.Run(method, func(t *testing.T) {
+			store, path := inferenceStore(t)
+			before, err := store.Inference("session")
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := ReadManifest(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m.SessionInstanceID = ""
+			if err := WriteManifest(path, m); err != nil {
+				t.Fatal(err)
+			}
+			store = NewFileStore(store.Root, RuntimeLocal)
+			after, err := store.Inference("session")
+			if err != nil || after.SessionInstanceID == before.SessionInstanceID || after.Revision != 0 {
+				t.Fatalf("recreated instance: %+v %v", after, err)
+			}
+			model := "provider/new"
+			req := InferenceUpdateRequest{RequestID: "delayed", ExpectedSessionInstanceID: before.SessionInstanceID, Model: &model}
+			mutate := store.UpdateInference
+			if method == "cancel" {
+				mutate = store.CancelInference
+			}
+			if _, err := mutate("session", req); !errors.Is(err, ErrConflict) {
+				t.Fatalf("old instance accepted: %v", err)
+			}
+			req.ExpectedSessionInstanceID = after.SessionInstanceID
+			result, err := mutate("session", req)
+			if err != nil || result.Operation == nil || result.SessionInstanceID != after.SessionInstanceID {
+				t.Fatalf("new instance rejected: %+v %v", result, err)
+			}
+			if _, err := mutate("session", req); err != nil {
+				t.Fatalf("same-instance replay failed: %v", err)
+			}
+			req.ExpectedSessionInstanceID = before.SessionInstanceID
+			if _, err := mutate("session", req); !errors.Is(err, ErrConflict) {
+				t.Fatalf("old instance bypassed fencing through replay: %v", err)
+			}
+		})
+	}
+}
+
+func TestInferenceCancelledStartupCannotFinishAfterReplacement(t *testing.T) {
+	store, path := inferenceStore(t)
+	model := "provider/new"
+	first := InferenceUpdateRequest{RequestID: "first", Model: &model}
+	if _, err := store.UpdateInference("session", first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ClaimInferenceUpdate(path, "first-attempt", "receipt.json", InferenceSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := store.CancelInference("session", first)
+	if err != nil || cancelled.Operation.Status != "unknown" || cancelled.Settings.Model != "provider/old" {
+		t.Fatalf("cancelled startup: %+v %v", cancelled, err)
+	}
+	level := "high"
+	second := InferenceUpdateRequest{RequestID: "second", ExpectedRevision: 1, Thinking: &level}
+	if _, err := store.UpdateInference("session", second); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinishInferenceUpdate(path, first.RequestID, "first-attempt", "applied", "", &InferenceSettings{Model: model, Thinking: level}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("cancelled attempt overwrote replacement: %v", err)
+	}
+	state, err := store.Inference("session")
+	if err != nil || state.Settings.Model != "provider/old" || state.Update.RequestID != second.RequestID || state.Update.Status != "pending" {
+		t.Fatalf("replacement changed: %+v %v", state, err)
+	}
+	// A recreated manifest may reuse a request ID, but never a startup attempt.
+	if _, err := MutateManifest(path, func(m *Manifest) error {
+		m.InferenceUpdate = &InferenceUpdate{InferenceUpdateRequest: first, Status: "applying", AttemptID: "replacement-attempt"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinishInferenceUpdate(path, first.RequestID, "first-attempt", "applied", "", &InferenceSettings{Model: model, Thinking: level}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("old attempt finished recreated request: %v", err)
+	}
+}
+
+func TestInferenceMissingSessionDoesNotBlockRecreation(t *testing.T) {
+	store := NewFileStore(t.TempDir(), RuntimeLocal)
+	model := "provider/new"
+	req := InferenceUpdateRequest{RequestID: "change", Model: &model}
+	for _, operation := range []func() error{
+		func() error { _, err := store.Inference("missing"); return err },
+		func() error { _, err := store.InferenceRequest("missing", req.RequestID); return err },
+		func() error { _, err := store.UpdateInference("missing", req); return err },
+		func() error { _, err := store.CancelInference("missing", req); return err },
+	} {
+		if err := operation(); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("missing session result: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(store.Root, "missing")); !os.IsNotExist(err) {
+			t.Fatalf("missing-session request blocked recreation: %v", err)
+		}
 	}
 }

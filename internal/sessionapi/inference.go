@@ -1,6 +1,7 @@
 package sessionapi
 
 import (
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -62,13 +63,14 @@ func (c *InferenceConnection) Validate(model string) error {
 
 // A request changes model, thinking, or both at the next agent turn.
 type InferenceUpdateRequest struct {
-	ApplyAt          string               `json:"apply_at,omitempty"`
-	RequestID        string               `json:"request_id"`
-	ExpectedRevision int                  `json:"expected_revision"`
-	Model            *string              `json:"model,omitempty"`
-	Thinking         *string              `json:"thinking,omitempty"`
-	ModelDefinition  json.RawMessage      `json:"model_definition,omitempty"`
-	Connection       *InferenceConnection `json:"connection,omitempty"`
+	ApplyAt                   string               `json:"apply_at,omitempty"`
+	RequestID                 string               `json:"request_id"`
+	ExpectedRevision          int                  `json:"expected_revision"`
+	ExpectedSessionInstanceID string               `json:"expected_session_instance_id,omitempty"`
+	Model                     *string              `json:"model,omitempty"`
+	Thinking                  *string              `json:"thinking,omitempty"`
+	ModelDefinition           json.RawMessage      `json:"model_definition,omitempty"`
+	Connection                *InferenceConnection `json:"connection,omitempty"`
 }
 
 type InferenceUpdate struct {
@@ -83,6 +85,7 @@ type InferenceUpdate struct {
 }
 
 type InferenceResponse struct {
+	SessionInstanceID string              `json:"session_instance_id"`
 	OperationReceipts bool                `json:"operation_receipts"`
 	Operation         *InferenceOperation `json:"operation,omitempty"`
 	// GET checks availability; a mutation that does not need the check omits it.
@@ -156,7 +159,7 @@ func (r InferenceUpdateRequest) Validate() error {
 }
 
 func inferenceResponse(m *Manifest, connectionSwitching *bool) *InferenceResponse {
-	r := &InferenceResponse{ConnectionSwitching: connectionSwitching, ApplyAt: "next_turn", Settings: committedInferenceSettings(m), Update: m.InferenceUpdate}
+	r := &InferenceResponse{SessionInstanceID: m.SessionInstanceID, ConnectionSwitching: connectionSwitching, ApplyAt: "next_turn", Settings: committedInferenceSettings(m), Update: m.InferenceUpdate}
 	if r.Update != nil {
 		r.Revision = r.Update.Revision
 		if r.Update.Connection != nil {
@@ -174,11 +177,31 @@ func inferenceResponse(m *Manifest, connectionSwitching *bool) *InferenceRespons
 	return r
 }
 
+func inferenceManifest(path string) (*Manifest, error) {
+	return withLockedManifest(path, func(m *Manifest) error {
+		if m.SessionInstanceID != "" {
+			return nil
+		}
+		m.SessionInstanceID = rand.Text()
+		return WriteManifest(path, m)
+	})
+}
+
+func checkInferenceSession(m *Manifest, req InferenceUpdateRequest) error {
+	if m.SessionInstanceID == "" {
+		m.SessionInstanceID = rand.Text()
+	}
+	if req.ExpectedSessionInstanceID != "" && req.ExpectedSessionInstanceID != m.SessionInstanceID {
+		return fmt.Errorf("%w: session instance changed; reload before changing inference settings", ErrConflict)
+	}
+	return nil
+}
+
 func (fs *FileStore) Inference(id string) (*InferenceResponse, error) {
 	if !safeSessionID(id) {
 		return nil, ErrNotFound
 	}
-	m, err := ReadManifest(fs.manifestPath(id))
+	m, err := inferenceManifest(fs.manifestPath(id))
 	if errors.Is(err, os.ErrNotExist) {
 		return nil, ErrNotFound
 	}
@@ -203,6 +226,9 @@ func (fs *FileStore) UpdateInference(id string, req InferenceUpdateRequest) (*In
 	var connectionSwitching *bool
 	var rejection string
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
+		if err := checkInferenceSession(m, req); err != nil {
+			return err
+		}
 		current := inferenceResponse(m, connectionSwitching)
 		if replayed, err := replayInferenceRequest(m, req); replayed || err != nil {
 			return err
@@ -268,18 +294,28 @@ func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*In
 		return nil, ErrNotFound
 	}
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
+		if err := checkInferenceSession(m, req); err != nil {
+			return err
+		}
 		current := inferenceResponse(m, nil)
 		replayed, err := replayInferenceRequest(m, req)
 		if err != nil {
 			return err
 		}
 		if replayed {
-			if current.Update == nil || current.Update.RequestID != req.RequestID || current.Update.Status != "pending" {
+			if current.Update == nil || current.Update.RequestID != req.RequestID || (current.Update.Status != "pending" && current.Update.Status != "applying") {
 				return nil
 			}
 		}
 		if err := requireInferenceWorker(m); err != nil {
 			return err
+		}
+		if replayed && current.Update.Status == "applying" {
+			m.InferenceUpdate.Status = "unknown"
+			m.InferenceUpdate.Error = "inference change cancelled before startup was confirmed; the current turn may already have started"
+			m.InferenceUpdate.UpdatedAt = inferenceTimestamp()
+			recordInferenceReceipt(m)
+			return nil
 		}
 		if !replayed && (current.Revision != req.ExpectedRevision || (current.Update != nil && (current.Update.Status == "pending" || current.Update.Status == "applying"))) {
 			rejectInferenceRequest(m, req, "inference change cancelled before delivery")
@@ -340,7 +376,7 @@ func requireInferenceConnectionWorker(m *Manifest) error {
 }
 
 func sameInferenceRequest(a, b InferenceUpdateRequest) bool {
-	return a.ExpectedRevision == b.ExpectedRevision && sameOptionalString(a.Model, b.Model) && sameOptionalString(a.Thinking, b.Thinking) && sameJSON(a.ModelDefinition, b.ModelDefinition) && reflect.DeepEqual(a.Connection, b.Connection)
+	return a.ExpectedSessionInstanceID == b.ExpectedSessionInstanceID && a.ExpectedRevision == b.ExpectedRevision && sameOptionalString(a.Model, b.Model) && sameOptionalString(a.Thinking, b.Thinking) && sameJSON(a.ModelDefinition, b.ModelDefinition) && reflect.DeepEqual(a.Connection, b.Connection)
 }
 
 func safeSessionID(id string) bool {
@@ -403,10 +439,10 @@ func ClaimInferenceUpdate(path, attemptID, receiptPath string, defaults Inferenc
 	return claimed, err
 }
 
-func FinishInferenceUpdate(path, requestID, status, detail string, settings *InferenceSettings) error {
+func FinishInferenceUpdate(path, requestID, attemptID, status, detail string, settings *InferenceSettings) error {
 	_, err := MutateManifest(path, func(m *Manifest) error {
 		u := m.InferenceUpdate
-		if u == nil || u.RequestID != requestID || u.Status != "applying" {
+		if u == nil || u.RequestID != requestID || u.Status != "applying" || attemptID == "" || u.AttemptID != attemptID {
 			return fmt.Errorf("%w: inference request is no longer active", ErrConflict)
 		}
 		if status == "applied" && settings != nil {

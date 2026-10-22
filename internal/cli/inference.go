@@ -2,6 +2,7 @@ package cli
 
 import (
 	"crypto/rand"
+	"fmt"
 	"path/filepath"
 	"sync/atomic"
 
@@ -42,6 +43,9 @@ func (e *sessionInferenceExecutor) ExecuteTurn(task, role string, ts *game.TurnS
 	m, err := sessionapi.ReadManifest(path)
 	if err != nil {
 		return failure(err)
+	}
+	if update != nil && (m.InferenceUpdate == nil || m.InferenceUpdate.RequestID != update.RequestID || m.InferenceUpdate.AttemptID != update.AttemptID || m.InferenceUpdate.Status != "applying") {
+		return failure(fmt.Errorf("%w: inference request is no longer active", sessionapi.ErrConflict))
 	}
 	if m.Config.Model == "" {
 		m.Config.Model = e.defaults.Model
@@ -92,7 +96,7 @@ func (e *sessionInferenceExecutor) ExecuteTurn(task, role string, ts *game.TurnS
 			return failure(err)
 		}
 		if !settled {
-			if err := sessionapi.FinishInferenceUpdate(path, update.RequestID, "unknown", "Pi startup was not confirmed; saved settings were retained", nil); err != nil {
+			if err := sessionapi.FinishInferenceUpdate(path, update.RequestID, update.AttemptID, "unknown", "Pi startup was not confirmed; saved settings were retained", nil); err != nil {
 				return failure(err)
 			}
 		}
@@ -124,7 +128,7 @@ func confirmTurnInference(path string, m *sessionapi.Manifest) (bool, error) {
 		return false, nil
 	}
 	if r.Error != "" {
-		return true, sessionapi.FinishInferenceUpdate(path, u.RequestID, "rejected", r.Error, nil)
+		return true, sessionapi.FinishInferenceUpdate(path, u.RequestID, u.AttemptID, "rejected", r.Error, nil)
 	}
 	want := sessionapi.InferenceSettings{Model: m.Config.Model, Thinking: m.Config.Thinking}
 	if m.InferenceConnection != nil {
@@ -143,12 +147,12 @@ func confirmTurnInference(path string, m *sessionapi.Manifest) (bool, error) {
 		want = *u.Settings
 	}
 	if r.Model != want.Model || r.Thinking == "" || (u.Thinking != nil && r.Thinking != want.Thinking) || r.ConnectionID != want.ConnectionID {
-		return true, sessionapi.FinishInferenceUpdate(path, u.RequestID, "unknown", "Pi startup receipt does not match the queued settings", nil)
+		return true, sessionapi.FinishInferenceUpdate(path, u.RequestID, u.AttemptID, "unknown", "Pi startup receipt does not match the queued settings", nil)
 	}
 	// An omitted thinking level inherits the previous default, which Pi may
 	// lower for the new model. Save the actual level for all subsequent turns.
 	want.Thinking = r.Thinking
-	return true, sessionapi.FinishInferenceUpdate(path, u.RequestID, "applied", "", &want)
+	return true, sessionapi.FinishInferenceUpdate(path, u.RequestID, u.AttemptID, "applied", "", &want)
 }
 
 func recoverTurnInference(path string) error {

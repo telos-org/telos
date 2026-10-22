@@ -58,7 +58,7 @@ func TestInferenceConnectionsSurviveBootstrapAndChildCreation(t *testing.T) {
 	if err != nil || update == nil {
 		t.Fatal(err)
 	}
-	if err := sessionapi.FinishInferenceUpdate(path, "switch", "applied", "", update.Settings); err != nil {
+	if err := sessionapi.FinishInferenceUpdate(path, "switch", update.AttemptID, "applied", "", update.Settings); err != nil {
 		t.Fatal(err)
 	}
 	newChild, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, ParentSessionID: &parent.SessionID})
@@ -119,7 +119,7 @@ func TestInferenceDefaultsReachChildrenWithoutSchedulingAnExtraCycle(t *testing.
 	if _, err := sessionapi.ClaimInferenceUpdate(path, "attempt", "receipt.json", sessionapi.InferenceSettings{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sessionapi.FinishInferenceUpdate(path, "switch", "applied", "", &sessionapi.InferenceSettings{Model: model, Thinking: "max"}); err != nil {
+	if err := sessionapi.FinishInferenceUpdate(path, "switch", "attempt", "applied", "", &sessionapi.InferenceSettings{Model: model, Thinking: "max"}); err != nil {
 		t.Fatal(err)
 	}
 	child, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, ParentSessionID: &parent.SessionID})
