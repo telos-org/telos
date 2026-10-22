@@ -2,6 +2,7 @@ package cli
 
 import (
 	"crypto/rand"
+	"fmt"
 	"path/filepath"
 	"sync/atomic"
 
@@ -42,6 +43,9 @@ func (e *sessionInferenceExecutor) ExecuteTurn(task, role string, ts *game.TurnS
 	m, err := sessionapi.ReadManifest(path)
 	if err != nil {
 		return failure(err)
+	}
+	if update != nil && (m.InferenceUpdate == nil || m.InferenceUpdate.RequestID != update.RequestID || m.InferenceUpdate.AttemptID != update.AttemptID || m.InferenceUpdate.Status != "applying") {
+		return failure(fmt.Errorf("%w: inference request is no longer active", sessionapi.ErrConflict))
 	}
 	if m.Config.Model == "" {
 		m.Config.Model = e.defaults.Model
