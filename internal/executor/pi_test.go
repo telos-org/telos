@@ -12,9 +12,10 @@ import (
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
-func TestExecuteTurnRegistersModelDefinitionForThisPiProcess(t *testing.T) {
+func TestExecuteTurnRegistersInferenceForThisPiProcess(t *testing.T) {
 	home := t.TempDir()
 	bin := filepath.Join(home, ".local", "bin")
 	if err := os.MkdirAll(bin, 0o755); err != nil {
@@ -33,6 +34,7 @@ func TestExecuteTurnRegistersModelDefinitionForThisPiProcess(t *testing.T) {
 	p.Env = map[string]string{"HOME": home}
 	e := NewPiExecutor(p, "provider/model", "high", 5)
 	e.ModelDefinition = json.RawMessage(`{"id":"model","contextWindow":256000}`)
+	e.Connection = &sessionapi.InferenceConnection{ID: "profile", Provider: "provider", BaseURL: "https://models.test/v1", ProxyURL: "http://172.31.255.1:18080", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
 
 	if result := e.ExecuteTurn("do it", "prover", nil); result.Status != game.StatusConcede {
 		t.Fatalf("turn: %+v", result)
@@ -46,14 +48,14 @@ func TestExecuteTurnRegistersModelDefinitionForThisPiProcess(t *testing.T) {
 	}
 	var config piStartupConfig
 	data, _ := os.ReadFile(filepath.Join(home, "startup.json"))
-	if err := json.Unmarshal(data, &config); err != nil || config.Model != "provider/model" || string(config.Definition) != string(e.ModelDefinition) {
+	if err := json.Unmarshal(data, &config); err != nil || config.Model != "provider/model" || string(config.Definition) != string(e.ModelDefinition) || config.Connection == nil || *config.Connection != *e.Connection {
 		t.Fatalf("startup config = %s, %v", data, err)
 	}
 	if model, _ := os.ReadFile(filepath.Join(home, "model.txt")); string(model) != "provider/model" {
 		t.Fatalf("TELOS_MODEL = %q", model)
 	}
 
-	e.ModelDefinition = nil
+	e.ModelDefinition, e.Connection = nil, nil
 	if result := e.ExecuteTurn("do it", "prover", nil); result.Status != game.StatusConcede {
 		t.Fatalf("turn: %+v", result)
 	}

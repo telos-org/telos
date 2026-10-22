@@ -217,6 +217,7 @@ func (fs *FileStore) createLocked(req SessionCreateRequest) (*Session, error) {
 		CurrentRevision:          currentRevision,
 		Config:                   buildConfig(req),
 		InferenceModelDefinition: req.ModelDefinition,
+		InferenceConnection:      req.InferenceConnection,
 		Provenance:               provenance,
 		PackageDigest:            prepared.PackageDigest,
 		ApplyPackageLock:         prepared.ApplyPackageLock,
@@ -576,7 +577,8 @@ func (fs *FileStore) createRequestForSpecUpdate(req SessionSpecUpdateRequest, ki
 		AgentTimeoutSec: req.AgentTimeoutSec,
 	}
 	if in := req.Inference; in != nil {
-		createReq.Model, createReq.Thinking, createReq.ModelDefinition, createReq.InferenceGeneration = in.Model, in.Thinking, in.ModelDefinition, in.Generation
+		createReq.Model, createReq.Thinking, createReq.InferenceGeneration = in.Model, in.Thinking, in.Generation
+		createReq.ModelDefinition, createReq.InferenceConnection = in.ModelDefinition, in.Connection
 	}
 	if packagePath != "" {
 		createReq.PackagePath, createReq.PackageDigest = packagePath, packageDigest
@@ -642,7 +644,7 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		}
 		if in := req.Inference; in != nil && in.Generation > m.Config.InferenceGeneration {
 			m.Config.InferenceGeneration, m.Config.Model, m.Config.Thinking = in.Generation, in.Model, in.Thinking
-			m.InferenceModelDefinition = in.ModelDefinition
+			m.InferenceModelDefinition, m.InferenceConnection = in.ModelDefinition, in.Connection
 		}
 		previousVersion = ptrOr(m.CurrentSpecVersion, 1)
 		previousPackageDigest = strValue(m.PackageDigest)

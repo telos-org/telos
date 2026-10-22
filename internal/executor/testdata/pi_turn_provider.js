@@ -3,7 +3,7 @@ import { existsSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai";
 
-export default async function (pi) {
+export default function (pi) {
   const directory = process.env.TELOS_PI_PROBE_DIR;
   let requestCount = 0;
   const record = (name, value) => {
@@ -40,8 +40,6 @@ export default async function (pi) {
       pid: process.pid, model: model.id, thinking: options?.reasoning ?? "off",
       api: model.api, contextWindow: model.contextWindow, maxTokens: model.maxTokens,
       messages: context.messages, headers: options?.headers,
-      baseUrl: model.baseUrl, apiKey: options?.apiKey,
-      proxy: options?.env?.HTTPS_PROXY, processProxy: process.env.HTTPS_PROXY,
     });
     (async () => {
       try {
@@ -79,10 +77,6 @@ export default async function (pi) {
     })();
     return stream;
   };
-  if (process.env.TELOS_PI_PROBE_PHASE?.startsWith("connection")) {
-    const { registerApiProvider } = await import("@earendil-works/pi-ai/compat");
-    registerApiProvider({ api: "telos-offline-test", stream: streamSimple, streamSimple });
-  }
   for (const suffix of ["a", "b"]) {
     const provider = "turn-" + suffix;
     const config = {

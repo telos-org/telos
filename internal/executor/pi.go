@@ -13,6 +13,7 @@ import (
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 // PiExecutor runs Pi as one PVG agent turn on the given LocalPlatform.
@@ -21,8 +22,10 @@ type PiExecutor struct {
 	Model    string
 	Thinking string
 	Timeout  int
-	// ModelDefinition, when set, is registered for Model in each Pi process.
+	// ModelDefinition and Connection, when set, are registered for Model in
+	// each Pi process.
 	ModelDefinition json.RawMessage
+	Connection      *sessionapi.InferenceConnection
 }
 
 const piEnvPromptMaxBytes = 256 * 1024
@@ -63,14 +66,14 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	}
 	// Children created during this turn inherit the model it runs with.
 	env := map[string]string{"TELOS_ROLE": role, "TELOS_MODEL": model}
-	startup := len(pe.ModelDefinition) > 0
+	startup := len(pe.ModelDefinition) > 0 || pe.Connection != nil
 	if startup {
 		dir, err := os.MkdirTemp("", "telos-pi-startup-")
 		if err != nil {
 			return game.TurnResult{Role: role, Error: "pi_startup: " + err.Error()}
 		}
 		defer os.RemoveAll(dir)
-		startupEnv, err := writePiStartup(dir, piStartupConfig{Model: model, Definition: pe.ModelDefinition})
+		startupEnv, err := writePiStartup(dir, piStartupConfig{Model: model, Definition: pe.ModelDefinition, Connection: pe.Connection})
 		if err != nil {
 			return game.TurnResult{Role: role, Error: "pi_startup: " + err.Error()}
 		}
@@ -381,7 +384,14 @@ func buildPiArgv(model, thinking, taskPath, sessionPath string, startup bool) []
 	if startup {
 		piCommand += ` -e "$TELOS_PI_STARTUP_EXTENSION"`
 	}
-	script := platform.PiShellSetup +
+	script := `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; ` +
+		`if ! command -v pi >/dev/null 2>&1; then ` +
+		`for nvm_script in "${NVM_DIR:-}/nvm.sh" "$HOME/.nvm/nvm.sh" "/usr/local/nvm/nvm.sh"; do ` +
+		`[ -s "$nvm_script" ] || continue; ` +
+		`. "$nvm_script"; ` +
+		`break; ` +
+		`done; ` +
+		`fi; ` +
 		fmt.Sprintf(`prompt="${%s}"; `, platform.TaskEnvVar) +
 		`if [ -n "${3:-}" ]; then prompt="$3"; fi; ` +
 		`append_prompt="${TELOS_PI_APPEND_SYSTEM_PROMPT:-}"; ` +

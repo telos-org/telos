@@ -2,6 +2,7 @@ package telosd
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -70,6 +71,76 @@ func TestSpecUpdateAppliesNewerInferenceGeneration(t *testing.T) {
 	}
 	if len(substrate.wakes) != 3 {
 		t.Fatalf("rejected settings woke the worker: %+v", substrate.wakes)
+	}
+}
+
+func TestSpecUpdateStoresInferenceConnectionWithoutEchoingKey(t *testing.T) {
+	base := sessionapi.NewFileStore(t.TempDir(), sessionapi.RuntimeCloud)
+	store := newControllerReconciler(base, &recordingSubstrate{}, nil, cloudControllerDefaults())
+	markdown := "---\nversion: 0.1.0\nname: parent\nplatform: cloud\n---\n# Parent\n"
+	key := "telos-proxy-" + strings.Repeat("a", 43)
+	connection := sessionapi.InferenceConnection{ID: "profile", Provider: "provider", BaseURL: "https://models.example/v1", ProxyURL: "http://172.31.255.1:18080", APIKey: key, AuthHeader: true}
+	definition := `{"id":"model","name":"Model","api":"openai-responses","reasoning":true,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":128000,"maxTokens":8192}`
+	update := func(generation int, connection sessionapi.InferenceConnection, definition string) (*sessionapi.SessionSpecUpdateResponse, error) {
+		return store.UpdateSpec("parent", sessionapi.SessionSpecUpdateRequest{SpecMarkdown: markdown, Inference: &sessionapi.InferenceSettings{
+			Generation: generation, Model: "provider/model", Thinking: "high", ModelDefinition: json.RawMessage(definition), Connection: &connection,
+		}})
+	}
+	parent, err := update(1, connection, definition)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if data, _ := json.Marshal(parent); bytes.Contains(data, []byte(key)) {
+		t.Fatalf("response echoed the connection key: %s", data)
+	}
+	next := connection
+	next.ID, next.APIKey = "next", "telos-proxy-"+strings.Repeat("b", 43)
+	if _, err := update(2, next, definition); err != nil {
+		t.Fatal(err)
+	}
+	m, err := sessionapi.ReadManifest(filepath.Join(*parent.Session.SessionDir, "session.json"))
+	if err != nil || m.InferenceConnection == nil || *m.InferenceConnection != next {
+		t.Fatalf("stored connection = %+v, %v", m.InferenceConnection, err)
+	}
+
+	child, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, ParentSessionID: &parent.Session.SessionID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m, err := sessionapi.ReadManifest(filepath.Join(*child.SessionDir, "session.json")); err != nil || m.InferenceConnection == nil || *m.InferenceConnection != next {
+		t.Fatalf("new child did not inherit the connection: %+v %v", m, err)
+	}
+	for _, child := range []struct {
+		model string
+		want  *sessionapi.InferenceConnection
+	}{{"", &next}, {"provider/other", &next}, {"other/model", nil}} {
+		req := store.applyCreateDefaults(sessionapi.SessionCreateRequest{ParentSessionID: &parent.Session.SessionID, Model: child.model})
+		if (req.InferenceConnection == nil) != (child.want == nil) || (child.want != nil && *req.InferenceConnection != *child.want) {
+			t.Fatalf("child %q connection = %+v", child.model, req.InferenceConnection)
+		}
+	}
+
+	codexClaims := base64.RawURLEncoding.EncodeToString([]byte(`{"https://api.openai.com/auth":{"chatgpt_account_id":"telos-proxy"}}`))
+	codex := connection
+	codex.APIKey = "telos-proxy." + codexClaims + "." + strings.Repeat("c", 43)
+	if _, err := update(3, codex, definition); err != nil {
+		t.Fatalf("Codex placeholder rejected: %v", err)
+	}
+	for name, invalid := range map[string]func(*sessionapi.InferenceConnection){
+		"http base":         func(c *sessionapi.InferenceConnection) { c.BaseURL = "http://models.example/v1" },
+		"other proxy":       func(c *sessionapi.InferenceConnection) { c.ProxyURL = "http://127.0.0.1:18080" },
+		"real key":          func(c *sessionapi.InferenceConnection) { c.APIKey = "sk-real-secret" },
+		"other provider":    func(c *sessionapi.InferenceConnection) { c.Provider = "other" },
+		"forged codex auth": func(c *sessionapi.InferenceConnection) { c.APIKey = "telos-proxy.e30." + strings.Repeat("c", 43) },
+	} {
+		bad := connection
+		invalid(&bad)
+		if _, err := update(4, bad, definition); !errors.Is(err, sessionapi.ErrInvalidSession) {
+			t.Fatalf("%s accepted: %v", name, err)
+		}
+	}
+	if _, err := update(4, connection, `{"id":"model"}`); !errors.Is(err, sessionapi.ErrInvalidSession) {
+		t.Fatalf("incomplete definition accepted with a connection: %v", err)
 	}
 }
 

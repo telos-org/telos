@@ -30,6 +30,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -46,6 +47,34 @@ func TestPiConnectionsRouteModelsAndToolsSeparately(t *testing.T) {
 	}
 	for _, api := range []string{"openai-completions", "openai-responses", "anthropic-messages", "openai-codex-responses"} {
 		t.Run(api, func(t *testing.T) { testPiConnectionTransport(t, binary, api) })
+	}
+}
+
+func TestLegacyPiFailsTurnWithInferenceConnection(t *testing.T) {
+	binary := os.Getenv("TELOS_TEST_LEGACY_PI_BINARY")
+	if binary == "" {
+		if os.Getenv("CI") == "true" {
+			t.Fatal("required integration test binary is missing: TELOS_TEST_LEGACY_PI_BINARY")
+		}
+		t.Skip("set TELOS_TEST_LEGACY_PI_BINARY to run legacy Pi")
+	}
+	home := t.TempDir()
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nexec '" + binary + "' --offline --no-extensions --no-skills --no-prompt-templates --no-themes --no-context-files \"$@\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := platform.NewLocalPlatform(t.TempDir())
+	p.Env = map[string]string{"HOME": home, "PI_CODING_AGENT_DIR": home, "PI_TELEMETRY": "0"}
+	e := NewPiExecutor(p, "openai/probe", "off", 15)
+	e.ModelDefinition = json.RawMessage(`{"id":"probe","name":"Probe","api":"openai-responses","reasoning":false,"input":["text"],"contextWindow":128000,"maxTokens":4096,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}`)
+	e.Connection = &sessionapi.InferenceConnection{ID: "profile", Provider: "openai", BaseURL: "https://models.test/v1", ProxyURL: "http://172.31.255.1:18080", APIKey: "telos-proxy-" + strings.Repeat("a", 43)}
+	result := e.ExecuteTurn("Report success.", "prover", nil)
+	if !strings.Contains(result.Error, "inference connections require the compiled Pi 1.0.4") {
+		t.Fatalf("legacy Pi did not fail the turn clearly: %+v", result)
 	}
 }
 
@@ -82,7 +111,6 @@ func testPiConnectionTransport(t *testing.T, binary, api string) {
 		calls     atomic.Int32
 		key       string
 		profileID string
-		receipt   string
 		modelID   string
 	}
 	runs := make([]*invocation, 0, 2)
@@ -194,7 +222,6 @@ func testPiConnectionTransport(t *testing.T, binary, api string) {
 		}
 		write("settings.json", []byte(fmt.Sprintf(`{"compaction":{"enabled":false},"retry":{"enabled":false},"transport":%q}`, transport)))
 		extension := write("startup.js", piStartupExtension)
-		run.receipt = filepath.Join(dir, "receipt.json")
 		definition := json.RawMessage(fmt.Sprintf(`{"id":%q,"name":"Probe","api":%q,"reasoning":false,"input":["text"],"contextWindow":128000,"maxTokens":4096,"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0}}`, run.modelID, api))
 		var configured map[string]any
 		if err := json.Unmarshal(definition, &configured); err != nil {
@@ -222,7 +249,7 @@ func testPiConnectionTransport(t *testing.T, binary, api string) {
 			"models": []any{configured}, "modelOverrides": map[string]any{run.modelID: override},
 		}}})
 		write("models.json", modelsData)
-		config := PiStartupConfig{RequestID: "switch", AttemptID: run.profileID, Model: provider + "/" + run.modelID, Thinking: "off", Definition: definition, ReceiptPath: run.receipt,
+		config := piStartupConfig{Model: provider + "/" + run.modelID, Definition: definition,
 			Connection: &sessionapi.InferenceConnection{ID: run.profileID, Provider: provider, BaseURL: baseURL, ProxyURL: proxy.URL, APIKey: run.key, AuthHeader: i == 1 && api != "anthropic-messages"}}
 		// The extension is invoked directly to use local test proxy ports. The
 		// operator API separately tests the production address/port allowlist.
@@ -230,7 +257,7 @@ func testPiConnectionTransport(t *testing.T, binary, api string) {
 		configPath := write("startup.json", data)
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		run.command = exec.CommandContext(ctx, binary, "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--tools", "bash", "-e", extension, "--model", config.Model, "--thinking", config.Thinking, "--mode", "text", "--print", "Run the tool, then report success.")
+		run.command = exec.CommandContext(ctx, binary, "--offline", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files", "--tools", "bash", "-e", extension, "--model", config.Model, "--thinking", "off", "--mode", "text", "--print", "Run the tool, then report success.")
 		run.command.Env = append(os.Environ(), "HOME="+dir, "PI_CODING_AGENT_DIR="+dir, "PI_TELEMETRY=0", "TELOS_PI_STARTUP_CONFIG="+configPath,
 			"OPENAI_ORG_ID=stale-sdk-org", "OPENAI_PROJECT_ID=stale-sdk-project",
 			"HTTP_PROXY="+general.URL, "HTTPS_PROXY="+general.URL, "http_proxy="+general.URL, "https_proxy="+general.URL, "OPENCLAW_PROXY_URL="+general.URL, "NO_PROXY=", "no_proxy=", "NODE_EXTRA_CA_CERTS="+caPath, "SSL_CERT_FILE="+caPath, "CURL_CA_BUNDLE="+caPath)
@@ -247,10 +274,6 @@ func testPiConnectionTransport(t *testing.T, binary, api string) {
 		}
 		if run.calls.Load() != 2 {
 			t.Fatalf("model requests = %d, want 2", run.calls.Load())
-		}
-		receipt, err := ReadPiStartupReceipt(run.receipt)
-		if err != nil || receipt.Error != "" || receipt.ConnectionID != run.profileID {
-			t.Fatalf("connection not confirmed: %+v %v", receipt, err)
 		}
 	}
 	if toolRequests.Load() != 2 {

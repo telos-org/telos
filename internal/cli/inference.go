@@ -7,7 +7,7 @@ import (
 )
 
 // sessionInferenceExecutor starts each prover/verifier turn with the
-// session's current model, thinking, and model definition.
+// session's current model, thinking, model definition, and connection.
 type sessionInferenceExecutor struct {
 	*executor.PiExecutor
 	sessionDir string
@@ -24,6 +24,6 @@ func (e *sessionInferenceExecutor) ExecuteTurn(task, role string, ts *game.TurnS
 	if m.Config.Thinking != "" {
 		e.Thinking = m.Config.Thinking
 	}
-	e.ModelDefinition = m.InferenceModelDefinition
+	e.ModelDefinition, e.Connection = m.InferenceModelDefinition, m.InferenceConnection
 	return e.PiExecutor.ExecuteTurn(task, role, ts)
 }
