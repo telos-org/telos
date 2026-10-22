@@ -23,7 +23,7 @@ The running turn finishes with its current settings. The change takes effect at 
 
 Model updates stay on the Goal's current connection: Telos Default/Max for managed inference, or another model on the same API key or subscription. Settings updates accept thinking levels supported by the selected model. If you change the model without specifying thinking, Pi may lower the current level to one the new model supports. An explicitly requested level must be supported.
 
-If the Goal’s runtime session is recreated, retry the change with both `--model` and `--thinking`.
+If the Goal's runtime session is recreated, retry the change with both `--model` and `--thinking`.
 
 ## Managed inference
 
