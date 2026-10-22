@@ -44,7 +44,6 @@ const (
 	ActionListSessions      AccessAction = "list_sessions"
 	ActionReadSession       AccessAction = "read_session"
 	ActionStopSession       AccessAction = "stop_session"
-	ActionUpdateInference   AccessAction = "update_inference"
 )
 
 type AccessRequest struct {
@@ -165,11 +164,6 @@ func authorizeCaller(store *FileStore, caller Caller, req AccessRequest) error {
 		}
 		return requireScope(caller, ScopeSessionsApply)
 	case ActionUpdateSessionSpec:
-		return requireScope(caller, ScopeSessionsApply)
-	case ActionUpdateInference:
-		if caller.Role != RoleOperator {
-			return authError{status: http.StatusForbidden, detail: "operator access required to change inference settings"}
-		}
 		return requireScope(caller, ScopeSessionsApply)
 	case ActionListSessions:
 		return requireScope(caller, ScopeSessionsRead)

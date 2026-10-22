@@ -226,13 +226,8 @@ func (s *controllerReconciler) Stop(id string) (*sessionapi.Session, error) {
 }
 
 func (s *controllerReconciler) applyCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.SessionCreateRequest {
-	parent := os.Getenv("TELOS_SESSION_ID")
-	if req.ParentSessionID != nil {
-		parent = *req.ParentSessionID
-	}
-	if parent != "" && filepath.Base(parent) == parent {
-		m, err := sessionapi.ReadManifest(filepath.Join(s.Root, parent, "session.json"))
-		if err == nil {
+	if parent := req.ParentSessionID; parent != nil && filepath.Base(*parent) == *parent {
+		if m, err := sessionapi.ReadManifest(filepath.Join(s.Root, *parent, "session.json")); err == nil {
 			if req.Model == "" {
 				req.Model = m.Config.Model
 			}

@@ -70,10 +70,6 @@ type Store interface {
 	Stop(id string) (*Session, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
-	Inference(id string) (*InferenceResponse, error)
-	InferenceRequest(id, requestID string) (*InferenceResponse, error)
-	UpdateInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error)
-	CancelInference(id string, req InferenceUpdateRequest) (*InferenceResponse, error)
 }
 
 // --------- FileStore ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -560,6 +556,11 @@ func (fs *FileStore) createRequestForSpecUpdate(req SessionSpecUpdateRequest, ki
 	if !hasPackage && !hasMarkdown {
 		return SessionCreateRequest{}, fmt.Errorf("spec_markdown or package_digest is required: %w", ErrInvalidSession)
 	}
+	if req.Inference != nil {
+		if err := req.Inference.Validate(); err != nil {
+			return SessionCreateRequest{}, err
+		}
+	}
 	if packagePath == "" && packageDigest != "" {
 		resolved, err := fs.packagePathForDigest(packageDigest)
 		if err != nil {
@@ -567,26 +568,23 @@ func (fs *FileStore) createRequestForSpecUpdate(req SessionSpecUpdateRequest, ki
 		}
 		packagePath = resolved
 	}
-	if packagePath != "" {
-		return SessionCreateRequest{
-			PackagePath:     packagePath,
-			PackageDigest:   packageDigest,
-			SessionKind:     kind,
-			Model:           req.Model,
-			Thinking:        req.Thinking,
-			MaxCostUSD:      req.MaxCostUSD,
-			AgentTimeoutSec: req.AgentTimeoutSec,
-		}, nil
-	}
-	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
-	return SessionCreateRequest{
-		SpecMarkdown:    &markdown,
+	createReq := SessionCreateRequest{
 		SessionKind:     kind,
 		Model:           req.Model,
 		Thinking:        req.Thinking,
 		MaxCostUSD:      req.MaxCostUSD,
 		AgentTimeoutSec: req.AgentTimeoutSec,
-	}, nil
+	}
+	if in := req.Inference; in != nil {
+		createReq.Model, createReq.Thinking, createReq.ModelDefinition, createReq.InferenceGeneration = in.Model, in.Thinking, in.ModelDefinition, in.Generation
+	}
+	if packagePath != "" {
+		createReq.PackagePath, createReq.PackageDigest = packagePath, packageDigest
+		return createReq, nil
+	}
+	markdown := strings.TrimRight(req.SpecMarkdown, "\n") + "\n"
+	createReq.SpecMarkdown = &markdown
+	return createReq, nil
 }
 
 func (fs *FileStore) packagePathForDigest(digest string) (string, error) {
@@ -641,6 +639,10 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		}
 		if err := restoreCommittedRevisionAliases(fs.sessionDir(id), m); err != nil {
 			return err
+		}
+		if in := req.Inference; in != nil && in.Generation > m.Config.InferenceGeneration {
+			m.Config.InferenceGeneration, m.Config.Model, m.Config.Thinking = in.Generation, in.Model, in.Thinking
+			m.InferenceModelDefinition = in.ModelDefinition
 		}
 		previousVersion = ptrOr(m.CurrentSpecVersion, 1)
 		previousPackageDigest = strValue(m.PackageDigest)
@@ -881,7 +883,6 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 		roundCount := 0
 
 		m.DesiredStatus = DesiredStatusStopped
-		SettleInferenceUpdateInManifest(m, "session stopped before confirming the inference change")
 		if open := m.OpenEpoch(); open != nil {
 			open.FinishedAt = &now
 			open.Result = &stopped
@@ -2272,8 +2273,9 @@ func materializedSpecDir(data []byte) string {
 
 func buildConfig(req SessionCreateRequest) SessionConfig {
 	cfg := SessionConfig{
-		Model:    req.Model,
-		Thinking: req.Thinking,
+		Model:               req.Model,
+		Thinking:            req.Thinking,
+		InferenceGeneration: req.InferenceGeneration,
 	}
 	if req.Until != nil {
 		cfg.Until = *req.Until

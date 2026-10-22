@@ -36,8 +36,6 @@ func costServer(t *testing.T) *httptest.Server {
 				billing(`{"inference_micro_usd":0,"compute_micro_usd":0,"storage_micro_usd":0}`) + `},
 				{"id":"goal_shared","name":"shared","status":"ready","access_source":"link","inference":{"source":"byok","provider":"openai"}}
 			]}`))
-		case "/api/deployments/goal_key/inference":
-			http.NotFound(w, r) // Older Cloud without live settings still provides costs.
 		case "/api/deployments/goal_key/inference-usage":
 			_, _ = w.Write([]byte(`{"estimated_cost_micro_usd":3400000}`))
 		case "/api/deployments/goal_sub/inference-usage":
@@ -230,8 +228,6 @@ func TestDescribeReadsTheGoalsCostInItsContext(t *testing.T) {
 				billing = `,"billing":{"inference_micro_usd":0,"compute_micro_usd":1000000,"storage_micro_usd":250000}`
 			}
 			_, _ = w.Write([]byte(`{"id":"goal_key","name":"byok-demo","status":"ready","inference":{"source":"byok","provider":"anthropic"}` + billing + `}`))
-		case "/api/deployments/goal_key/inference":
-			http.NotFound(w, r) // Older Cloud without live settings still provides costs.
 		case "/api/deployments/goal_key/inference-usage":
 			_, _ = w.Write([]byte(`{"estimated_cost_micro_usd":3400000}`))
 		default:

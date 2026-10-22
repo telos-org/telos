@@ -1,7 +1,6 @@
 package cloud
 
 import (
-	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,29 +33,22 @@ type InferenceSummary struct {
 }
 
 type DeploymentInferenceRequest struct {
-	ApplyAt          string              `json:"apply_at"`
-	RequestID        string              `json:"request_id"`
-	ExpectedRevision int                 `json:"expected_revision"`
-	Inference        *InferenceSelection `json:"inference,omitempty"`
-	AgentThinking    *string             `json:"agent_thinking,omitempty"`
+	Inference     *InferenceSelection `json:"inference,omitempty"`
+	AgentThinking *string             `json:"agent_thinking,omitempty"`
 }
 
-type DeploymentInferenceState struct {
-	Inference     InferenceSummary            `json:"inference"`
-	AgentModel    string                      `json:"agent_model"`
-	AgentThinking string                      `json:"agent_thinking"`
-	Revision      int                         `json:"revision"`
-	Request       *DeploymentInferenceRequest `json:"request,omitempty"`
-	Status        string                      `json:"status,omitempty"`
-	Error         string                      `json:"error,omitempty"`
+// DeploymentInference is the deployment's desired settings. Applied reports
+// whether the Goal's runtime has stored them for its next turn.
+type DeploymentInference struct {
+	Inference     InferenceSummary    `json:"inference"`
+	Selection     *InferenceSelection `json:"selection,omitempty"`
+	AgentModel    string              `json:"agent_model"`
+	AgentThinking string              `json:"agent_thinking"`
+	Generation    int                 `json:"generation"`
+	Applied       bool                `json:"applied"`
 }
 
-func (c *Client) GetDeploymentInference(id string) (*DeploymentInferenceState, error) {
-	return getJSONWithRetry[DeploymentInferenceState](context.Background(), c, "/api/deployments/"+url.PathEscape(id)+"/inference")
-}
-
-// Writes are single-attempt: a lost response may follow a saved change.
-func (c *Client) UpdateDeploymentInference(id string, request DeploymentInferenceRequest) (*DeploymentInferenceState, error) {
+func (c *Client) UpdateDeploymentInference(id string, request DeploymentInferenceRequest) (*DeploymentInference, error) {
 	body, err := json.Marshal(request)
 	if err != nil {
 		return nil, err
@@ -66,10 +58,10 @@ func (c *Client) UpdateDeploymentInference(id string, request DeploymentInferenc
 		return nil, err
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusAccepted {
+	if resp.StatusCode != http.StatusOK {
 		return nil, readError(resp)
 	}
-	var state DeploymentInferenceState
+	var state DeploymentInference
 	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
 		return nil, err
 	}
