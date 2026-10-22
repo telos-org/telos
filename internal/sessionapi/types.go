@@ -124,6 +124,9 @@ type InferenceSettings struct {
 var modelDefinitionFields = map[string]bool{"id": true, "name": true, "api": true, "reasoning": true, "thinkingLevelMap": true, "input": true, "cost": true, "contextWindow": true, "maxTokens": true, "samplingParams": true, "compat": true}
 
 func (s *InferenceSettings) Validate() error {
+	if string(s.ModelDefinition) == "null" {
+		s.ModelDefinition = nil
+	}
 	provider, modelID, ok := strings.Cut(s.Model, "/")
 	switch {
 	case s.Generation <= 0:

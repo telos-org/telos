@@ -15,6 +15,7 @@ import (
 
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func TestResolveCloudInference(t *testing.T) {
@@ -287,12 +288,53 @@ func TestInferenceCLIProcess(t *testing.T) {
 		cmdApply(args[1:])
 	case "plan":
 		cmdPlan(args[1:])
+	case "run":
+		cmdRun(args[1:])
 	case "config":
 		cmdConfig(args[1:])
 	default:
 		os.Exit(2)
 	}
 	os.Exit(0)
+}
+
+func TestNestedRunInheritsParentInferenceUnlessFlagged(t *testing.T) {
+	requests := make(chan sessionapi.SessionCreateRequest, 1)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req sessionapi.SessionCreateRequest
+		if r.Method != http.MethodPost || r.URL.Path != "/api/sessions" || json.NewDecoder(r.Body).Decode(&req) != nil {
+			http.NotFound(w, r)
+			return
+		}
+		requests <- req
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"session_id":"sess_child"}`))
+	}))
+	defer server.Close()
+	// The worker's environment can hold the model it started with.
+	for name, value := range map[string]string{"TELOS_RUNTIME": "cloud", "TELOS_API_TOKEN": "scoped-token", "TELOS_SESSION_ID": "sess_parent", "TELOS_API_ENDPOINT": server.URL, "TELOS_MODEL": "provider/stale", "TELOS_THINKING": "low"} {
+		t.Setenv(name, value)
+	}
+	path := filepath.Join(t.TempDir(), "SPEC.md")
+	if err := os.WriteFile(path, []byte("---\nname: child\nversion: 1.0.0\n---\n# Goal\nTest.\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		args            []string
+		model, thinking string
+	}{
+		{[]string{"run", path}, "", ""},
+		{[]string{"run", path, "--model", "provider/explicit", "--thinking", "high"}, "provider/explicit", "high"},
+	} {
+		command := exec.Command(os.Args[0], append([]string{"-test.run=^TestInferenceCLIProcess$", "--"}, tt.args...)...)
+		command.Env = append(os.Environ(), "TELOS_TEST_INFERENCE_COMMAND=1")
+		if out, err := command.CombinedOutput(); err != nil {
+			t.Fatalf("%v: %v %s", tt.args, err, out)
+		}
+		if req := <-requests; req.Model != tt.model || req.Thinking != tt.thinking {
+			t.Fatalf("%v sent model=%q thinking=%q", tt.args, req.Model, req.Thinking)
+		}
+	}
 }
 
 func TestCloudApplyInferenceErrors(t *testing.T) {

@@ -13,7 +13,8 @@ export default async function (pi) {
     pi.registerProvider(provider, providerConfig(provider, config.definition, getBuiltinModels(provider)));
   } catch (error) {
     // Pi swallows extension errors; exit so the turn fails before any prompt.
-    writeSync(2, "Telos could not register Pi model " + model + ": " + (error instanceof Error ? error.message : String(error)) + "\n");
+    // "invalid model" makes Telos wait for new settings instead of retrying.
+    writeSync(2, "Telos could not register Pi model " + model + " (invalid model settings): " + (error instanceof Error ? error.message : String(error)) + "\n");
     process.exit(78);
   }
 }

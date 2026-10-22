@@ -20,7 +20,7 @@ func TestExecuteTurnRegistersModelDefinitionForThisPiProcess(t *testing.T) {
 	if err := os.MkdirAll(bin, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/argv.txt\"\nprintf '%s' \"$TELOS_MODEL\" > \"$HOME/model.txt\"\n" +
+	script := "#!/bin/sh\nprintf '%s\\n' \"$@\" > \"$HOME/argv.txt\"\n" +
 		"cp \"$TELOS_PI_STARTUP_CONFIG\" \"$HOME/startup.json\"\ncmp -s \"$TELOS_PI_STARTUP_EXTENSION\" \"$HOME/expected.js\" && touch \"$HOME/extension-ok\"\n" +
 		"printf 'done\\n<status>CONCEDE</status>\\n'\n"
 	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
@@ -48,9 +48,6 @@ func TestExecuteTurnRegistersModelDefinitionForThisPiProcess(t *testing.T) {
 	data, _ := os.ReadFile(filepath.Join(home, "startup.json"))
 	if err := json.Unmarshal(data, &config); err != nil || config.Model != "provider/model" || string(config.Definition) != string(e.ModelDefinition) {
 		t.Fatalf("startup config = %s, %v", data, err)
-	}
-	if model, _ := os.ReadFile(filepath.Join(home, "model.txt")); string(model) != "provider/model" {
-		t.Fatalf("TELOS_MODEL = %q", model)
 	}
 
 	e.ModelDefinition = nil
@@ -82,6 +79,9 @@ func TestPiStartupExtensionFailsTurnWithMessage(t *testing.T) {
 	output, err := cmd.CombinedOutput()
 	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 78 || strings.Contains(string(output), "PROMPT_SENT") || !strings.Contains(string(output), "Telos could not register Pi model provider/model") {
 		t.Fatalf("startup failure was not reported: %s, %v", output, err)
+	}
+	if code, _ := game.AgentFailureBlocker(string(output)); code != "agent_configuration_invalid" {
+		t.Fatalf("rejected settings should wait for new ones, got %q", code)
 	}
 }
 

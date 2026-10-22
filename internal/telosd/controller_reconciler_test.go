@@ -71,6 +71,11 @@ func TestSpecUpdateAppliesNewerInferenceGeneration(t *testing.T) {
 	if len(substrate.wakes) != 3 {
 		t.Fatalf("rejected settings woke the worker: %+v", substrate.wakes)
 	}
+	cleared, err := update(sessionapi.InferenceSettings{Generation: 4, Model: "provider/second", Thinking: "high", ModelDefinition: json.RawMessage("null")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	assertInference(cleared, 4, "provider/second", "high", "")
 }
 
 func compactJSON(data []byte) string {
@@ -94,7 +99,7 @@ func TestChildSessionsInheritParentInference(t *testing.T) {
 		t.Fatal(err)
 	}
 	m, err := sessionapi.ReadManifest(filepath.Join(*child.SessionDir, "session.json"))
-	if err != nil || m.Config.Model != "provider/new" || m.Config.Thinking != "max" || compactJSON(m.InferenceModelDefinition) != definition {
+	if err != nil || m.Config.Model != "provider/new" || m.Config.Thinking != "max" || m.Config.InferenceGeneration != 1 || compactJSON(m.InferenceModelDefinition) != definition {
 		t.Fatalf("child did not inherit settings: %+v %s %v", m.Config, m.InferenceModelDefinition, err)
 	}
 	explicit := store.applyCreateDefaults(sessionapi.SessionCreateRequest{ParentSessionID: &parent.Session.SessionID, Model: "provider/explicit", Thinking: "low"})

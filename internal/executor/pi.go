@@ -61,8 +61,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		promptPath = taskPath
 		taskEnv = ""
 	}
-	// Children created during this turn inherit the model it runs with.
-	env := map[string]string{"TELOS_ROLE": role, "TELOS_MODEL": model}
+	env := map[string]string{"TELOS_ROLE": role}
 	startup := len(pe.ModelDefinition) > 0
 	if startup {
 		dir, err := os.MkdirTemp("", "telos-pi-startup-")
