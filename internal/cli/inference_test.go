@@ -102,6 +102,69 @@ func TestChildTurnFollowsNewerRootSettings(t *testing.T) {
 	}
 }
 
+func TestChildTurnFollowsRootConnectionSwitch(t *testing.T) {
+	sessions := t.TempDir()
+	rootPath := writeInferenceManifest(t, filepath.Join(sessions, "root"))
+	parent := "root"
+	childPath := filepath.Join(sessions, "child", "session.json")
+	old := &sessionapi.InferenceConnection{ID: "old", Provider: "turn-a", BaseURL: "https://old.example", ProxyURL: "http://172.31.255.1:18080", APIKey: "telos-proxy-old"}
+	if err := sessionapi.WriteManifest(childPath, &sessionapi.Manifest{
+		SessionID: "child", SessionKind: sessionapi.KindTask, ParentSessionID: &parent,
+		Config:              sessionapi.SessionConfig{Model: "turn-a/probe-a", Thinking: "medium"},
+		InferenceConnection: old,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sessionapi.MutateManifest(rootPath, func(m *sessionapi.Manifest) error {
+		m.Config.Model, m.Config.Thinking, m.Config.InferenceGeneration = "turn-b/probe-b", "high", 1
+		m.InferenceModelDefinition = json.RawMessage(`{"id":"probe-b"}`)
+		m.InferenceConnection = &sessionapi.InferenceConnection{ID: "new", Provider: "turn-b", BaseURL: "https://new.example", ProxyURL: old.ProxyURL, APIKey: "telos-proxy-new"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if argv := fakePiTurns(t, filepath.Dir(childPath))(); !strings.Contains(argv, "--model\nturn-b/probe-b\n") {
+		t.Fatalf("child did not switch with the root:\n%s", argv)
+	}
+	m, err := sessionapi.ReadManifest(childPath)
+	if err != nil || m.InferenceConnection == nil || m.InferenceConnection.ID != "new" || m.InferenceConnection.APIKey != "telos-proxy-new" {
+		t.Fatalf("child connection = %+v %v", m.InferenceConnection, err)
+	}
+}
+
+func TestTurnFailureAfterSettingsChangeIsRetryable(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	path := writeInferenceManifest(t, dir)
+	next := filepath.Join(home, "next.json")
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Cloud switches the connection while this turn runs; the old key is gone.
+	script := "#!/bin/sh\n[ -f " + next + " ] && mv " + next + " " + path + "\necho '401 Unauthorized: invalid api key' >&2\nexit 1\n"
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := platform.NewLocalPlatform(dir)
+	p.Env = map[string]string{"HOME": home}
+	e := &sessionInferenceExecutor{PiExecutor: executor.NewPiExecutor(p, "turn-a/probe-a", "medium", 5), sessionDir: dir}
+	if result := e.ExecuteTurn("do it", "prover", nil); result.Recoverable || !strings.Contains(result.Error, "invalid api key") {
+		t.Fatalf("an invalid key without a settings change must block: %+v", result)
+	}
+	m, err := sessionapi.ReadManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Config.InferenceGeneration = 1
+	if err := sessionapi.WriteManifest(next, m); err != nil {
+		t.Fatal(err)
+	}
+	result := e.ExecuteTurn("do it", "prover", nil)
+	if _, blocked := game.AgentFailureBlocker(result.Error); blocked || !result.Recoverable {
+		t.Fatalf("a failure after a settings change should retry: %+v", result)
+	}
+}
+
 func TestInferenceRealPiNextTurn(t *testing.T) {
 	for _, binaryEnv := range []string{"TELOS_TEST_PI_BINARY", "TELOS_TEST_LEGACY_PI_BINARY"} {
 		t.Run(binaryEnv, func(t *testing.T) {
