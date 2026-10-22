@@ -102,7 +102,7 @@ func TestInferenceQueuedWithoutWorkerSurvivesSupportedRestart(t *testing.T) {
 	if _, err := sessionapi.ClaimInferenceUpdate(manifestPath(sessionDir), "attempt", "receipt.json", sessionapi.InferenceSettings{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sessionapi.FinishInferenceUpdate(manifestPath(sessionDir), "queued", "applied", "", &sessionapi.InferenceSettings{Model: "provider/old", Thinking: thinking}); err != nil {
+	if err := sessionapi.FinishInferenceUpdate(manifestPath(sessionDir), "queued", "attempt", "applied", "", &sessionapi.InferenceSettings{Model: "provider/old", Thinking: thinking}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := store.UpdateInference("session", sessionapi.InferenceUpdateRequest{RequestID: "idle", ExpectedRevision: 1, Thinking: &thinking}); err != nil {

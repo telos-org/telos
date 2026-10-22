@@ -212,12 +212,19 @@ func (fs *FileStore) CancelInference(id string, req InferenceUpdateRequest) (*In
 			return err
 		}
 		if replayed {
-			if current.Update == nil || current.Update.RequestID != req.RequestID || current.Update.Status != "pending" {
+			if current.Update == nil || current.Update.RequestID != req.RequestID || (current.Update.Status != "pending" && current.Update.Status != "applying") {
 				return nil
 			}
 		}
 		if err := requireInferenceWorker(m); err != nil {
 			return err
+		}
+		if replayed && current.Update.Status == "applying" {
+			m.InferenceUpdate.Status = "unknown"
+			m.InferenceUpdate.Error = "inference change cancelled before startup was confirmed; the current turn may already have started"
+			m.InferenceUpdate.UpdatedAt = inferenceTimestamp()
+			recordInferenceReceipt(m)
+			return nil
 		}
 		if !replayed && (current.Revision != req.ExpectedRevision || (current.Update != nil && (current.Update.Status == "pending" || current.Update.Status == "applying"))) {
 			rejectInferenceRequest(m, req, "inference change cancelled before delivery")
@@ -319,10 +326,10 @@ func ClaimInferenceUpdate(path, attemptID, receiptPath string, defaults Inferenc
 	return claimed, err
 }
 
-func FinishInferenceUpdate(path, requestID, status, detail string, settings *InferenceSettings) error {
+func FinishInferenceUpdate(path, requestID, attemptID, status, detail string, settings *InferenceSettings) error {
 	_, err := MutateManifest(path, func(m *Manifest) error {
 		u := m.InferenceUpdate
-		if u == nil || u.RequestID != requestID || u.Status != "applying" {
+		if u == nil || u.RequestID != requestID || u.Status != "applying" || attemptID == "" || u.AttemptID != attemptID {
 			return fmt.Errorf("%w: inference request is no longer active", ErrConflict)
 		}
 		if status == "applied" && settings != nil {

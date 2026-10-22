@@ -372,3 +372,73 @@ func TestInferenceMissingReceiptDoesNotReplayPrompt(t *testing.T) {
 		t.Fatalf("prompt replayed after missing receipt: %q %v", calls, err)
 	}
 }
+
+func TestInferenceCancellationStopsUnconfirmedStartup(t *testing.T) {
+	root := t.TempDir()
+	dir, home := filepath.Join(root, "session"), filepath.Join(root, "home")
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nprintf '%s' \"$TELOS_PI_STARTUP_CONFIG\" > \"$HOME/ready\"\nwhile [ ! -f \"$HOME/continue\" ]; do sleep 0.01; done\ncat \"$HOME/startup-line\"\nsleep 20\nprintf 'finished' > \"$HOME/finished\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := &sessionapi.Manifest{SessionID: "session", SessionKind: sessionapi.KindController, Config: sessionapi.SessionConfig{Model: "provider/old", Thinking: "medium"}}
+	if err := sessionapi.WriteManifest(manifestPath(dir), m); err != nil {
+		t.Fatal(err)
+	}
+	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
+	model := "provider/new"
+	req := sessionapi.InferenceUpdateRequest{RequestID: "change", Model: &model}
+	if _, err := store.UpdateInference("session", req); err != nil {
+		t.Fatal(err)
+	}
+	p := platform.NewLocalPlatform(dir)
+	p.Env = map[string]string{"HOME": home}
+	e := &sessionInferenceExecutor{sessionDir: dir, pi: executor.NewPiExecutor(p, m.Config.Model, m.Config.Thinking, 5)}
+	results := make(chan game.TurnResult, 1)
+	go func() { results <- e.ExecuteTurn("Do work once.", "prover", &game.TurnState{Dir: dir}) }()
+	var configPath []byte
+	deadline := time.Now().Add(3 * time.Second)
+	for len(configPath) == 0 && time.Now().Before(deadline) {
+		configPath, _ = os.ReadFile(filepath.Join(home, "ready"))
+		time.Sleep(10 * time.Millisecond)
+	}
+	data, err := os.ReadFile(string(configPath))
+	var config executor.PiStartupConfig
+	if err != nil || json.Unmarshal(data, &config) != nil {
+		t.Fatalf("startup did not become ready: %s %v", data, err)
+	}
+	if _, err := store.CancelInference("session", req); err != nil {
+		t.Fatal(err)
+	}
+	receipt, _ := json.Marshal(executor.PiStartupReceipt{RequestID: req.RequestID, AttemptID: config.AttemptID, Model: model, Thinking: "medium"})
+	for _, file := range []struct {
+		path    string
+		content []byte
+	}{
+		{config.ReceiptPath, receipt},
+		{filepath.Join(home, "startup-line"), []byte("TELOS_PI_STARTUP " + config.AttemptID + "\n")},
+		{filepath.Join(home, "continue"), nil},
+	} {
+		if err := os.WriteFile(file.path, file.content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case result := <-results:
+		if !strings.Contains(result.Error, "inference request is no longer active") {
+			t.Fatalf("cancelled startup did not fail: %+v", result)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancelled startup did not stop")
+	}
+	state, err := store.Inference("session")
+	if err != nil || state.Settings.Model != m.Config.Model || state.Update.Status != "unknown" {
+		t.Fatalf("cancelled startup changed defaults: %+v %v", state, err)
+	}
+	if _, err := os.Stat(filepath.Join(home, "finished")); !os.IsNotExist(err) {
+		t.Fatal("cancelled process finished its work")
+	}
+}

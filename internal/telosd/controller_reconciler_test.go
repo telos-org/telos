@@ -35,7 +35,7 @@ func TestInferenceDefaultsReachChildrenWithoutSchedulingAnExtraCycle(t *testing.
 	if _, err := sessionapi.ClaimInferenceUpdate(path, "attempt", "receipt.json", sessionapi.InferenceSettings{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := sessionapi.FinishInferenceUpdate(path, "switch", "applied", "", &sessionapi.InferenceSettings{Model: model, Thinking: "max"}); err != nil {
+	if err := sessionapi.FinishInferenceUpdate(path, "switch", "attempt", "applied", "", &sessionapi.InferenceSettings{Model: model, Thinking: "max"}); err != nil {
 		t.Fatal(err)
 	}
 	child, err := store.Create(sessionapi.SessionCreateRequest{SpecMarkdown: &markdown, ParentSessionID: &parent.SessionID})

@@ -265,7 +265,7 @@ func TestDescribeLocalInferenceShowsConfirmation(t *testing.T) {
 	if err != nil || update == nil || *update.Model != "provider/new" || *update.Thinking != "max" {
 		t.Fatalf("saved update = %+v, %v", update, err)
 	}
-	if err := sessionapi.FinishInferenceUpdate(path, update.RequestID, "applied", "", &sessionapi.InferenceSettings{Model: "provider/new", Thinking: "max"}); err != nil {
+	if err := sessionapi.FinishInferenceUpdate(path, update.RequestID, update.AttemptID, "applied", "", &sessionapi.InferenceSettings{Model: "provider/new", Thinking: "max"}); err != nil {
 		t.Fatal(err)
 	}
 	out = captureStdout(t, func() { cmdDescribe([]string{id}) })

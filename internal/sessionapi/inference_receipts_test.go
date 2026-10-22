@@ -27,7 +27,7 @@ func TestInferenceReceiptsSurviveNewerCommandsAndRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	wanted := InferenceSettings{Model: model, Thinking: "low"}
-	if err := FinishInferenceUpdate(path, req.RequestID, "applied", "", &wanted); err != nil {
+	if err := FinishInferenceUpdate(path, req.RequestID, "attempt", "applied", "", &wanted); err != nil {
 		t.Fatal(err)
 	}
 	first, err := store.InferenceRequest("session", req.RequestID)
@@ -41,7 +41,7 @@ func TestInferenceReceiptsSurviveNewerCommandsAndRestart(t *testing.T) {
 	if _, err := ClaimInferenceUpdate(path, "attempt2", "receipt2.json", InferenceSettings{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := FinishInferenceUpdate(path, "second", "applied", "", &InferenceSettings{Model: model, Thinking: level}); err != nil {
+	if err := FinishInferenceUpdate(path, "second", "attempt2", "applied", "", &InferenceSettings{Model: model, Thinking: level}); err != nil {
 		t.Fatal(err)
 	}
 	// A historical reply remains available even when current admission is closed.
@@ -98,7 +98,7 @@ func TestInferenceTerminalReceiptsRetainCommittedDefaults(t *testing.T) {
 			case "stop_pending", "stop_applying":
 				err = SettleInferenceUpdate(path, "worker ended")
 			default:
-				err = FinishInferenceUpdate(path, req.RequestID, outcome, "startup failed", nil)
+				err = FinishInferenceUpdate(path, req.RequestID, "attempt", outcome, "startup failed", nil)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -255,7 +255,7 @@ func TestInferenceRequestRoutesReturnRequestedOperation(t *testing.T) {
 	if _, err := ClaimInferenceUpdate(path, "attempt", "receipt.json", InferenceSettings{}); err != nil {
 		t.Fatal(err)
 	}
-	if err := FinishInferenceUpdate(path, "first", "applied", "", &InferenceSettings{Model: "provider/old", Thinking: "high"}); err != nil {
+	if err := FinishInferenceUpdate(path, "first", "attempt", "applied", "", &InferenceSettings{Model: "provider/old", Thinking: "high"}); err != nil {
 		t.Fatal(err)
 	}
 	const second = `{"request_id":"second","expected_revision":1,"thinking":"low"}`
@@ -273,12 +273,12 @@ func TestInferenceRequestRoutesReturnRequestedOperation(t *testing.T) {
 	if _, err := ClaimInferenceUpdate(path, "attempt2", "receipt2.json", InferenceSettings{}); err != nil {
 		t.Fatal(err)
 	}
-	state = request("POST", url+"/cancel", second, http.StatusAccepted)
-	if state.Operation.Status != "applying" {
-		t.Fatalf("late cancellation hid application in progress: %+v", state)
+	state = request("POST", url+"/cancel", second, http.StatusOK)
+	if state.Operation.Status != "unknown" {
+		t.Fatalf("startup cancellation was not fenced: %+v", state)
 	}
-	if err := FinishInferenceUpdate(path, "second", "unknown", "startup unconfirmed", nil); err != nil {
-		t.Fatal(err)
+	if err := FinishInferenceUpdate(path, "second", "attempt2", "applied", "", &InferenceSettings{Model: "provider/old", Thinking: "low"}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("cancelled startup committed: %v", err)
 	}
 	state = request("POST", url+"/cancel", second, http.StatusOK)
 	if state.Operation.Status != "unknown" || state.Operation.Settings.Thinking != "high" {
@@ -390,5 +390,43 @@ func TestInferenceSessionInstanceFencesRecreatedSession(t *testing.T) {
 				t.Fatalf("old instance bypassed fencing through replay: %v", err)
 			}
 		})
+	}
+}
+
+func TestInferenceCancelledStartupCannotFinishAfterReplacement(t *testing.T) {
+	store, path := inferenceStore(t)
+	model := "provider/new"
+	first := InferenceUpdateRequest{RequestID: "first", Model: &model}
+	if _, err := store.UpdateInference("session", first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ClaimInferenceUpdate(path, "first-attempt", "receipt.json", InferenceSettings{}); err != nil {
+		t.Fatal(err)
+	}
+	cancelled, err := store.CancelInference("session", first)
+	if err != nil || cancelled.Operation.Status != "unknown" || cancelled.Settings.Model != "provider/old" {
+		t.Fatalf("cancelled startup: %+v %v", cancelled, err)
+	}
+	level := "high"
+	second := InferenceUpdateRequest{RequestID: "second", ExpectedRevision: 1, Thinking: &level}
+	if _, err := store.UpdateInference("session", second); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinishInferenceUpdate(path, first.RequestID, "first-attempt", "applied", "", &InferenceSettings{Model: model, Thinking: level}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("cancelled attempt overwrote replacement: %v", err)
+	}
+	state, err := store.Inference("session")
+	if err != nil || state.Settings.Model != "provider/old" || state.Update.RequestID != second.RequestID || state.Update.Status != "pending" {
+		t.Fatalf("replacement changed: %+v %v", state, err)
+	}
+	// A recreated manifest may reuse a request ID, but never a startup attempt.
+	if _, err := MutateManifest(path, func(m *Manifest) error {
+		m.InferenceUpdate = &InferenceUpdate{InferenceUpdateRequest: first, Status: "applying", AttemptID: "replacement-attempt"}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := FinishInferenceUpdate(path, first.RequestID, "first-attempt", "applied", "", &InferenceSettings{Model: model, Thinking: level}); !errors.Is(err, ErrConflict) {
+		t.Fatalf("old attempt finished recreated request: %v", err)
 	}
 }
