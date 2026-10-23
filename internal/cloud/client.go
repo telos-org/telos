@@ -699,7 +699,7 @@ func (c *Client) GetSessionLogPageBefore(sessionID string, tail int, beforeRunti
 
 // NormalizeEndpoint cleans up an API endpoint URL.
 func NormalizeEndpoint(endpoint string) string {
-	endpoint = strings.TrimRight(endpoint, "/")
+	endpoint = strings.TrimRight(strings.TrimSpace(endpoint), "/")
 	if !strings.HasPrefix(endpoint, "http") {
 		endpoint = "https://" + endpoint
 	}
