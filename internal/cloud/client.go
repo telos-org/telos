@@ -326,7 +326,7 @@ func ControlClientForContext(contextOverride string) (*Client, error) {
 }
 
 // RegistryReadClientForContext permits anonymous reads only when no
-// organization context was explicitly selected.
+// organization context was selected by a flag, environment, or saved config.
 func RegistryReadClientForContext(contextOverride string) (*Client, error) {
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -336,8 +336,11 @@ func RegistryReadClientForContext(contextOverride string) (*Client, error) {
 		return ControlClientForContext(contextOverride)
 	}
 	context := strings.TrimSpace(contextOverride)
+	if context == "" {
+		context = strings.TrimSpace(cfg.Context)
+	}
 	if context != "" && context != "personal" {
-		return nil, fmt.Errorf("--context requires login; run `telos login` first")
+		return nil, fmt.Errorf("context %q requires login; run `telos login` first", context)
 	}
 	endpoint := cfg.APIEndpoint
 	if endpoint == "" {

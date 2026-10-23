@@ -33,6 +33,44 @@ func TestNormalizeEndpoint(t *testing.T) {
 	}
 }
 
+func TestAnonymousRegistryContextPrecedence(t *testing.T) {
+	for _, tt := range []struct {
+		name, saved, env, flag string
+		wantError              bool
+	}{
+		{name: "default"},
+		{name: "saved organization", saved: "@saved", wantError: true},
+		{name: "environment organization", env: "@environment", wantError: true},
+		{name: "flag organization", flag: "@flag", wantError: true},
+		{name: "environment overrides saved", saved: "@saved", env: "personal"},
+		{name: "flag overrides environment", env: "@environment", flag: "personal"},
+		{name: "flag organization overrides personal", env: "personal", flag: "@flag", wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "config.yaml"))
+			t.Setenv(config.APIEndpointEnv, "http://127.0.0.1:1")
+			t.Setenv(config.AuthTokenEnv, "")
+			t.Setenv(config.ContextEnv, tt.env)
+			if err := config.SaveConfig(&config.Config{Context: tt.saved}); err != nil {
+				t.Fatal(err)
+			}
+			client, err := RegistryReadClientForContext(tt.flag)
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), "requires login") {
+					t.Fatalf("client = %#v, error = %v; want login required", client, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client.Token != "" || client.OrgID != "" {
+				t.Fatalf("anonymous client = %#v", client)
+			}
+		})
+	}
+}
+
 func TestReadErrorPreservesStableRegistryCode(t *testing.T) {
 	err := readError(&http.Response{
 		StatusCode: http.StatusBadRequest,
