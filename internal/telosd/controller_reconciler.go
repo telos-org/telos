@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -225,6 +226,20 @@ func (s *controllerReconciler) Stop(id string) (*sessionapi.Session, error) {
 }
 
 func (s *controllerReconciler) applyCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.SessionCreateRequest {
+	if parent := req.ParentSessionID; parent != nil && filepath.IsLocal(*parent) && filepath.Base(*parent) == *parent {
+		if m, err := sessionapi.ReadManifest(filepath.Join(s.Root, *parent, "session.json")); err == nil {
+			if req.Model == "" {
+				req.Model = m.Config.Model
+			}
+			if req.Thinking == "" {
+				req.Thinking = m.Config.Thinking
+			}
+			if req.Model == m.Config.Model {
+				req.ModelDefinition = m.InferenceModelDefinition
+			}
+			req.InferenceGeneration = m.Config.InferenceGeneration
+		}
+	}
 	if strings.TrimSpace(req.Model) == "" {
 		req.Model = s.defaults.Model
 	}

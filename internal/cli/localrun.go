@@ -3,7 +3,6 @@ package cli
 
 import (
 	"crypto/sha256"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -201,6 +200,10 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		}
 	}
 
+	if pi, ok := agentExec.(*executor.PiExecutor); ok {
+		agentExec = &sessionInferenceExecutor{PiExecutor: pi, sessionDir: sessionDir}
+	}
+
 	pvgCfg := game.PVGConfig{
 		Until:           cfg.Until,
 		UntilSeconds:    cfg.UntilSeconds,
@@ -293,50 +296,15 @@ func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecuto
 	return executor.NewPiExecutor(p, model, thinking, cfg.AgentTimeoutSec), nil
 }
 
-type piModelsConfig struct {
-	Providers map[string]piProvider `json:"providers"`
-}
-
-type piProvider struct {
-	Models []piModel `json:"models"`
-}
-
-type piModel struct {
-	ID string `json:"id"`
-}
-
 func validatePiModel(model string) error {
 	providerName, modelID, ok := strings.Cut(model, "/")
 	if !ok || providerName == "" || modelID == "" {
 		return fmt.Errorf("pi model %q must use <provider>/<model-id>; choose one with `telos run SPEC.md --model <provider>/<model-id>` or set `TELOS_MODEL=<provider>/<model-id>`", model)
 	}
 
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil
-	}
-	data, err := os.ReadFile(filepath.Join(home, ".pi", "agent", "models.json"))
-	if err != nil {
-		return nil
-	}
-
-	var config piModelsConfig
-	if err := json.Unmarshal(data, &config); err != nil {
-		return nil
-	}
-	provider, configured := config.Providers[providerName]
-	if !configured {
-		return nil
-	}
-	if len(provider.Models) == 0 {
-		return nil
-	}
-	for _, configuredModel := range provider.Models {
-		if configuredModel.ID == modelID {
-			return nil
-		}
-	}
-	return fmt.Errorf("pi model %q is not configured: provider %q exists in ~/.pi/agent/models.json, but model id %q was not found; choose one with `telos run SPEC.md --model <provider>/<model-id>` or set `TELOS_MODEL=<provider>/<model-id>`", model, providerName, modelID)
+	// models.json supplements Pi's built-in catalog and Telos model
+	// definitions, so Pi itself reports unknown models.
+	return nil
 }
 
 func newSessionDir(root string) (string, error) {

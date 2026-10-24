@@ -2,7 +2,8 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "executor",
-    srcs = ["pi.go"],
+    srcs = ["pi.go", "pi_startup.go"],
+    embedsrcs = ["pi_startup.js"],
     importpath = "github.com/telos-org/telos/internal/executor",
     visibility = ["//:__subpackages__"],
     deps = [
@@ -16,4 +17,10 @@ go_test(
     srcs = ["pi_test.go"],
     embed = [":executor"],
     deps = ["//internal/game"],
+)
+
+filegroup(
+    name = "pi_turn_provider",
+    srcs = ["testdata/pi_turn_provider.js"],
+    visibility = ["//internal/cli:__pkg__"],
 )

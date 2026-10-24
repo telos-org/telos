@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 )
 
 type InferenceConnection struct {
@@ -29,6 +30,42 @@ type InferenceSummary struct {
 	Provider       string `json:"provider,omitempty"`
 	Model          string `json:"model,omitempty"`
 	ConnectionName string `json:"connection_name,omitempty"`
+}
+
+type DeploymentInferenceRequest struct {
+	Inference     *InferenceSelection `json:"inference,omitempty"`
+	AgentThinking *string             `json:"agent_thinking,omitempty"`
+}
+
+// DeploymentInference is the deployment's desired settings. Applied reports
+// whether the Goal's runtime has stored them for its next turn.
+type DeploymentInference struct {
+	Inference     InferenceSummary    `json:"inference"`
+	Selection     *InferenceSelection `json:"selection,omitempty"`
+	AgentModel    string              `json:"agent_model"`
+	AgentThinking string              `json:"agent_thinking"`
+	Generation    int                 `json:"generation"`
+	Applied       bool                `json:"applied"`
+}
+
+func (c *Client) UpdateDeploymentInference(id string, request DeploymentInferenceRequest) (*DeploymentInference, error) {
+	body, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do(http.MethodPut, "/api/deployments/"+url.PathEscape(id)+"/inference", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var state DeploymentInference
+	if err := json.NewDecoder(resp.Body).Decode(&state); err != nil {
+		return nil, err
+	}
+	return &state, nil
 }
 
 func (c *Client) ListInferenceConnections() ([]InferenceConnection, error) {

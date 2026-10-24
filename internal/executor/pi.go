@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ type PiExecutor struct {
 	Model    string
 	Thinking string
 	Timeout  int
+	// ModelDefinition, when set, is registered for Model in each Pi process.
+	ModelDefinition json.RawMessage
 }
 
 const piEnvPromptMaxBytes = 256 * 1024
@@ -58,12 +61,26 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		promptPath = taskPath
 		taskEnv = ""
 	}
-	argv := BuildPiArgv(model, thinking, promptPath, sessionPath)
+	env := map[string]string{"TELOS_ROLE": role}
+	startup := len(pe.ModelDefinition) > 0
+	if startup {
+		dir, err := os.MkdirTemp("", "telos-pi-startup-")
+		if err != nil {
+			return game.TurnResult{Role: role, Error: "pi_startup: " + err.Error()}
+		}
+		defer os.RemoveAll(dir)
+		startupEnv, err := writePiStartup(dir, piStartupConfig{Model: model, Definition: pe.ModelDefinition})
+		if err != nil {
+			return game.TurnResult{Role: role, Error: "pi_startup: " + err.Error()}
+		}
+		maps.Copy(env, startupEnv)
+	}
+	argv := buildPiArgv(model, thinking, promptPath, sessionPath, startup)
 	projector := startPiLiveProjector(sessionPath, turnState)
 	if projector != nil {
 		defer projector.Stop()
 	}
-	result := pe.Platform.Run(argv, taskEnv, map[string]string{"TELOS_ROLE": role}, pe.Timeout, stopRequested, nil)
+	result := pe.Platform.Run(argv, taskEnv, env, pe.Timeout, stopRequested, nil)
 
 	logs := strings.Join(result.RawLines, "\n")
 	if sessionPath != "" {
@@ -355,6 +372,14 @@ func (pe *PiExecutor) CheckpointWorkspace(dest string) bool {
 
 // BuildPiArgv builds the Pi command line.
 func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
+	return buildPiArgv(model, thinking, taskPath, sessionPath, false)
+}
+
+func buildPiArgv(model, thinking, taskPath, sessionPath string, startup bool) []string {
+	piCommand := "exec pi"
+	if startup {
+		piCommand += ` -e "$TELOS_PI_STARTUP_EXTENSION"`
+	}
 	script := `export PATH="$HOME/.local/bin:$HOME/.npm-global/bin:$PATH"; ` +
 		`if ! command -v pi >/dev/null 2>&1; then ` +
 		`for nvm_script in "${NVM_DIR:-}/nvm.sh" "$HOME/.nvm/nvm.sh" "/usr/local/nvm/nvm.sh"; do ` +
@@ -369,11 +394,11 @@ func BuildPiArgv(model, thinking, taskPath, sessionPath string) []string {
 		`append_file=""; ` +
 		`if [ -n "$append_prompt" ]; then append_file="$(mktemp)"; printf '%s' "$append_prompt" > "$append_file"; fi; ` +
 		`if [ -n "${4:-}" ]; then ` +
-		`if [ -n "$append_file" ]; then exec pi --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --session "$4" -p "$prompt"; fi; ` +
-		`exec pi --mode text --model "$1" --thinking "$2" --session "$4" -p "$prompt"; ` +
+		`if [ -n "$append_file" ]; then ` + piCommand + ` --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --session "$4" -p "$prompt"; fi; ` +
+		piCommand + ` --mode text --model "$1" --thinking "$2" --session "$4" -p "$prompt"; ` +
 		`fi; ` +
-		`if [ -n "$append_file" ]; then exec pi --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --no-session -p "$prompt"; fi; ` +
-		`exec pi --mode text --model "$1" --thinking "$2" --no-session -p "$prompt"`
+		`if [ -n "$append_file" ]; then ` + piCommand + ` --mode text --model "$1" --thinking "$2" --append-system-prompt "$append_file" --no-session -p "$prompt"; fi; ` +
+		piCommand + ` --mode text --model "$1" --thinking "$2" --no-session -p "$prompt"`
 	argv := []string{"sh", "-c", script, "pi", model, thinking}
 	if taskPath != "" {
 		argv = append(argv, "@"+taskPath)

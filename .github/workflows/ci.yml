@@ -18,6 +18,24 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+      - name: Install pinned Pi runtimes for required integration tests
+        run: |
+          set -euo pipefail
+          install_pi() {
+            local version="$1" checksum="$2"
+            local destination="$RUNNER_TEMP/pi-$version"
+            mkdir -p "$destination"
+            curl --fail --location --retry 3 \
+              "https://github.com/earendil-works/pi/releases/download/v$version/pi-linux-x64.tar.gz" \
+              -o "$destination/pi.tar.gz"
+            printf '%s  %s\n' "$checksum" "$destination/pi.tar.gz" | sha256sum --check --strict
+            tar -xzf "$destination/pi.tar.gz" -C "$destination"
+            test "$("$destination/pi/pi" --version)" = "$version"
+          }
+          install_pi 1.0.4 284c45dd28cf975a13cff6af34741dd0a0cdca6634e8bdfc0083ae7d452e86d6
+          install_pi 0.84.2 906fbe787fd225c4ac624fe7ebd5b1d55a60e0f5c7ef51795d231564f9ee1c13
+          echo "TELOS_TEST_PI_BINARY=$RUNNER_TEMP/pi-1.0.4/pi/pi" >> "$GITHUB_ENV"
+          echo "TELOS_TEST_LEGACY_PI_BINARY=$RUNNER_TEMP/pi-0.84.2/pi/pi" >> "$GITHUB_ENV"
       - run: go build ./...
       - run: go vet ./...
       - run: python3 scripts/test_install_release.py
