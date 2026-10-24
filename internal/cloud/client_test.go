@@ -24,12 +24,86 @@ func TestNormalizeEndpoint(t *testing.T) {
 		{"https://api.example.com/", "https://api.example.com"},
 		{"http://localhost:8080/", "http://localhost:8080"},
 		{"api.example.com", "https://api.example.com"},
+		{" \thttps://api.example.com///\n", "https://api.example.com"},
+		{" \tapi.example.com/\n", "https://api.example.com"},
 	}
 	for _, tt := range tests {
 		got := NormalizeEndpoint(tt.input)
 		if got != tt.expected {
 			t.Errorf("NormalizeEndpoint(%q) = %q, want %q", tt.input, got, tt.expected)
 		}
+	}
+}
+
+func TestControlClientNormalizesConfiguredEndpoint(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/me" {
+			t.Errorf("path = %q", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"subject":"user-1"}`))
+	}))
+	defer server.Close()
+	for _, source := range []string{"saved", "environment"} {
+		t.Run(source, func(t *testing.T) {
+			t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "config.yaml"))
+			t.Setenv(config.APIEndpointEnv, "")
+			t.Setenv(config.AuthTokenEnv, "")
+			t.Setenv(config.ContextEnv, "")
+			stored := config.Config{APIEndpoint: " \t" + server.URL + "/\n", AuthToken: "test-token"}
+			if source == "environment" {
+				t.Setenv(config.APIEndpointEnv, stored.APIEndpoint)
+				stored.APIEndpoint = "http://127.0.0.1:1"
+			}
+			if err := config.SaveConfig(&stored); err != nil {
+				t.Fatal(err)
+			}
+			client, err := ControlClient()
+			if err != nil {
+				t.Fatal(err)
+			}
+			me, err := client.Me()
+			if err != nil || me.Subject != "user-1" {
+				t.Fatalf("Me() = %#v, %v", me, err)
+			}
+		})
+	}
+}
+
+func TestAnonymousRegistryContextPrecedence(t *testing.T) {
+	for _, tt := range []struct {
+		name, saved, env, flag string
+		wantError              bool
+	}{
+		{name: "default"},
+		{name: "saved organization", saved: "@saved", wantError: true},
+		{name: "environment organization", env: "@environment", wantError: true},
+		{name: "flag organization", flag: "@flag", wantError: true},
+		{name: "environment overrides saved", saved: "@saved", env: "personal"},
+		{name: "flag overrides environment", env: "@environment", flag: "personal"},
+		{name: "flag organization overrides personal", env: "personal", flag: "@flag", wantError: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "config.yaml"))
+			t.Setenv(config.APIEndpointEnv, "http://127.0.0.1:1")
+			t.Setenv(config.AuthTokenEnv, "")
+			t.Setenv(config.ContextEnv, tt.env)
+			if err := config.SaveConfig(&config.Config{Context: tt.saved}); err != nil {
+				t.Fatal(err)
+			}
+			client, err := RegistryReadClientForContext(tt.flag)
+			if tt.wantError {
+				if err == nil || !strings.Contains(err.Error(), "requires login") {
+					t.Fatalf("client = %#v, error = %v; want login required", client, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if client.Token != "" || client.OrgID != "" {
+				t.Fatalf("anonymous client = %#v", client)
+			}
+		})
 	}
 }
 
