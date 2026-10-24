@@ -95,6 +95,25 @@ func TestLoadConfigEnvOverride(t *testing.T) {
 	}
 }
 
+func TestLoadConfigTrimsEndpointOverride(t *testing.T) {
+	t.Setenv(ConfigPathEnv, filepath.Join(t.TempDir(), "config.yaml"))
+	if err := SaveConfig(&Config{APIEndpoint: "https://saved.example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct{ env, want string }{
+		{" \thttps://environment.example.com\n", "https://environment.example.com"},
+		{" \t\n", "https://saved.example.com"},
+	} {
+		t.Run(tt.env, func(t *testing.T) {
+			t.Setenv(APIEndpointEnv, tt.env)
+			cfg := loadConfigForTest(t)
+			if cfg.APIEndpoint != tt.want {
+				t.Fatalf("endpoint = %q, want %q", cfg.APIEndpoint, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoadStoredConfigIgnoresEnvOverride(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "config.yaml")
