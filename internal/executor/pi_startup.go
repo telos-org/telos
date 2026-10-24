@@ -5,18 +5,21 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 //go:embed pi_startup.js
 var piStartupExtension []byte
 
 type piStartupConfig struct {
-	Model      string          `json:"model"`
-	Definition json.RawMessage `json:"definition"`
+	Model      string                          `json:"model"`
+	Definition json.RawMessage                 `json:"definition,omitempty"`
+	Connection *sessionapi.InferenceConnection `json:"connection,omitempty"`
 }
 
 // writePiStartup prepares the extension that registers this turn's model
-// definition and returns the environment that loads it.
+// definition and connection, and returns the environment that loads it.
 func writePiStartup(dir string, config piStartupConfig) (map[string]string, error) {
 	data, err := json.Marshal(config)
 	if err != nil {

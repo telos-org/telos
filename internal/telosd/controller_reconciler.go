@@ -237,6 +237,9 @@ func (s *controllerReconciler) applyCreateDefaults(req sessionapi.SessionCreateR
 			if req.Model == m.Config.Model {
 				req.ModelDefinition = m.InferenceModelDefinition
 			}
+			if c := m.InferenceConnection; c != nil && strings.HasPrefix(req.Model, c.Provider+"/") {
+				req.InferenceConnection = c
+			}
 			req.InferenceGeneration = m.Config.InferenceGeneration
 		}
 	}

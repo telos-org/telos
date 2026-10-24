@@ -13,6 +13,7 @@ import (
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 // PiExecutor runs Pi as one PVG agent turn on the given LocalPlatform.
@@ -21,8 +22,10 @@ type PiExecutor struct {
 	Model    string
 	Thinking string
 	Timeout  int
-	// ModelDefinition, when set, is registered for Model in each Pi process.
+	// ModelDefinition and Connection, when set, are registered for Model in
+	// each Pi process.
 	ModelDefinition json.RawMessage
+	Connection      *sessionapi.InferenceConnection
 }
 
 const piEnvPromptMaxBytes = 256 * 1024
@@ -62,14 +65,14 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		taskEnv = ""
 	}
 	env := map[string]string{"TELOS_ROLE": role}
-	startup := len(pe.ModelDefinition) > 0
+	startup := len(pe.ModelDefinition) > 0 || pe.Connection != nil
 	if startup {
 		dir, err := os.MkdirTemp("", "telos-pi-startup-")
 		if err != nil {
 			return game.TurnResult{Role: role, Error: "pi_startup: " + err.Error()}
 		}
 		defer os.RemoveAll(dir)
-		startupEnv, err := writePiStartup(dir, piStartupConfig{Model: model, Definition: pe.ModelDefinition})
+		startupEnv, err := writePiStartup(dir, piStartupConfig{Model: model, Definition: pe.ModelDefinition, Connection: pe.Connection})
 		if err != nil {
 			return game.TurnResult{Role: role, Error: "pi_startup: " + err.Error()}
 		}

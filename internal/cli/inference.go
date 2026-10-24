@@ -9,8 +9,8 @@ import (
 )
 
 // sessionInferenceExecutor starts each prover/verifier turn with the
-// session's current model, thinking, and model definition. A child takes the
-// root's settings once they are newer than the ones it inherited.
+// session's current model, thinking, model definition, and connection. A child
+// takes the root's settings once they are newer than the ones it inherited.
 type sessionInferenceExecutor struct {
 	*executor.PiExecutor
 	sessionDir string
@@ -23,7 +23,7 @@ func (e *sessionInferenceExecutor) ExecuteTurn(task, role string, ts *game.TurnS
 		if root := rootManifest(e.sessionDir); root != nil && root.Config.InferenceGeneration > m.Config.InferenceGeneration {
 			m, err = sessionapi.MutateManifest(path, func(m *sessionapi.Manifest) error {
 				m.Config.InferenceGeneration, m.Config.Model, m.Config.Thinking = root.Config.InferenceGeneration, root.Config.Model, root.Config.Thinking
-				m.InferenceModelDefinition = root.InferenceModelDefinition
+				m.InferenceModelDefinition, m.InferenceConnection = root.InferenceModelDefinition, root.InferenceConnection
 				return nil
 			})
 		}
@@ -37,8 +37,14 @@ func (e *sessionInferenceExecutor) ExecuteTurn(task, role string, ts *game.TurnS
 	if m.Config.Thinking != "" {
 		e.Thinking = m.Config.Thinking
 	}
-	e.ModelDefinition = m.InferenceModelDefinition
-	return e.PiExecutor.ExecuteTurn(task, role, ts)
+	e.ModelDefinition, e.Connection = m.InferenceModelDefinition, m.InferenceConnection
+	result := e.PiExecutor.ExecuteTurn(task, role, ts)
+	// A switch can revoke the credential this turn used; the next turn uses the
+	// new settings, so keep the error away from the permanent blockers.
+	if root := rootManifest(e.sessionDir); result.Error != "" && root != nil && root.Config.InferenceGeneration > m.Config.InferenceGeneration {
+		result.Error, result.Recoverable = "inference settings changed during the turn", true
+	}
+	return result
 }
 
 // rootManifest follows parent links from sessionDir, or returns nil when the
