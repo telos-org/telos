@@ -48,6 +48,12 @@ func main() {
 		cmdDescribe(os.Args[2:])
 	case "logs":
 		cmdLogs(os.Args[2:])
+	case "history":
+		cmdHistory(os.Args[2:])
+	case "diff":
+		cmdRevisionDiff(os.Args[2:])
+	case "restore", "redeploy":
+		cmdRevisionAction(os.Args[1], os.Args[2:])
 	case "delete":
 		cmdDelete(os.Args[2:])
 	case "pull":
@@ -79,6 +85,10 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  list               List Goals")
 	fmt.Fprintln(out, "  describe GOAL      Show a Goal's details")
 	fmt.Fprintln(out, "  logs GOAL          Show recent activity")
+	fmt.Fprintln(out, "  history GOAL       List or inspect deployment revisions")
+	fmt.Fprintln(out, "  diff GOAL A [B]    Compare revision A with B or the current revision")
+	fmt.Fprintln(out, "  restore GOAL       Restore a revision's saved snapshot")
+	fmt.Fprintln(out, "  redeploy GOAL      Deploy a historical revision's package again")
 	fmt.Fprintln(out, "  delete GOAL        Delete a Goal")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "other commands:")
