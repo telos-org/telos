@@ -178,7 +178,12 @@ func cliReleaseChecksum(sums, artifact string) ([]byte, error) {
 }
 
 func downloadCLIUpdate(client *http.Client, url string, out io.Writer, limit int64) error {
-	resp, err := client.Get(url)
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return fmt.Errorf("download release: %w", err)
+	}
+	req.Header.Set("User-Agent", "telos-cli/"+Version)
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("download release: %w", err)
 	}
