@@ -107,6 +107,9 @@ func TestCLIUpdateReleaseSelection(t *testing.T) {
 			var requests atomic.Int32
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				requests.Add(1)
+				if got := r.Header.Get("User-Agent"); got != "telos-cli/"+Version {
+					t.Errorf("User-Agent = %q, want %q", got, "telos-cli/"+Version)
+				}
 				switch r.URL.Path {
 				case "/" + manifestVersion + "/manifest.json":
 					fmt.Fprint(w, updateTestManifest(version))
