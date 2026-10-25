@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "sessionapi",
     srcs = [
+        "activity.go",
         "auth.go",
         "dashboard_doc_open_other.go",
         "dashboard_doc_open_unix.go",
@@ -15,6 +16,7 @@ go_library(
     importpath = "github.com/telos-org/telos/internal/sessionapi",
     visibility = ["//:__subpackages__"],
     deps = [
+        "//internal/activity",
         "//internal/evidence",
         "//internal/spec",
     ],
@@ -37,6 +39,7 @@ go_test(
     name = "sessionapi_store_test",
     srcs = [
         "events_test.go",
+        "activity_test.go",
         "store_dashboard_doc_unix_test.go",
         "store_test.go",
     ],

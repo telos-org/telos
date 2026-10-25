@@ -15,6 +15,7 @@ var logFollowInterval = 2 * time.Second
 // logFollowPrinter prints activity that arrives after the first view, in the
 // same format, without repeating the last row it printed.
 type logFollowPrinter struct {
+	activity    bool
 	out         io.Writer
 	jsonOutput  bool
 	contextName string
@@ -35,6 +36,10 @@ func newLogFollowPrinter(
 }
 
 func (p *logFollowPrinter) print(events []sessionapi.SessionEvent) error {
+	if p.activity {
+		printActivity(p.out, localActivity(events))
+		return nil
+	}
 	if p.jsonOutput {
 		return printJSONLogEventsForContext(p.out, events, p.contextName)
 	}

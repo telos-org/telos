@@ -1,0 +1,414 @@
+[
+  {
+    "name": "tool hidden",
+    "event": {
+      "event": "agent_progress",
+      "data": {
+        "audience": "agent",
+        "kind": "tool",
+        "text": "Reading src/main.py"
+      }
+    },
+    "expected": null
+  },
+  {
+    "name": "legacy tool hidden",
+    "event": {
+      "event": "agent_progress",
+      "data": {
+        "kind": "tool",
+        "text": "Reading src/main.py"
+      }
+    },
+    "expected": null
+  },
+  {
+    "name": "legacy progress preserved",
+    "event": {
+      "event": "agent_progress",
+      "data": {
+        "kind": "progress_update",
+        "text": "Implemented the endpoint"
+      }
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "narrative",
+      "headline": "Implemented the endpoint",
+      "body": null,
+      "tone": "neutral",
+      "phase": "build"
+    }
+  },
+  {
+    "name": "heartbeat hidden",
+    "event": {
+      "event": "heartbeat",
+      "data": {
+        "elapsed_sec": 40
+      }
+    },
+    "expected": null
+  },
+  {
+    "name": "checkpoint hidden",
+    "event": {
+      "event": "workspace_checkpoint"
+    },
+    "expected": null
+  },
+  {
+    "name": "external instruction hidden",
+    "event": {
+      "event": "external_update",
+      "data": {
+        "message": "Reload the spec"
+      }
+    },
+    "expected": null
+  },
+  {
+    "name": "tagged completion hidden",
+    "event": {
+      "event": "agent_complete",
+      "data": {
+        "audience": "agent",
+        "status": "CONCEDE"
+      }
+    },
+    "expected": null
+  },
+  {
+    "name": "explicit progress",
+    "event": {
+      "event": "agent_progress",
+      "event_seq": 9,
+      "ts": "2026-10-17T12:00:00Z",
+      "role": "prover",
+      "data": {
+        "audience": "user",
+        "text": "Checking the deployment."
+      }
+    },
+    "expected": {
+      "id": "rt:9",
+      "ts": "2026-10-17T12:00:00Z",
+      "kind": "goal",
+      "headline": "Checking the deployment.",
+      "body": null,
+      "tone": "neutral",
+      "phase": "test",
+      "event_seq": 9
+    }
+  },
+  {
+    "name": "verifier start",
+    "event": {
+      "event": "round_start",
+      "role": "verifier",
+      "data": {
+        "audience": "user"
+      }
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Checking the result against the spec",
+      "body": null,
+      "tone": "neutral",
+      "phase": "verify"
+    }
+  },
+  {
+    "name": "internal round hidden",
+    "event": {
+      "event": "round_start",
+      "role": "prover",
+      "data": {
+        "audience": "agent"
+      }
+    },
+    "expected": null
+  },
+  {
+    "name": "successful evaluation",
+    "event": {
+      "event": "game_end",
+      "data": {
+        "audience": "user",
+        "game_result": "success",
+        "completion_reason": "verifier_conceded"
+      }
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Evaluation cycle completed",
+      "body": null,
+      "tone": "success",
+      "phase": "verify"
+    }
+  },
+  {
+    "name": "failure details",
+    "event": {
+      "event": "game_end",
+      "data": {
+        "game_result": "failure",
+        "error": "Probe failed"
+      }
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Evaluation cycle interrupted",
+      "body": "Probe failed",
+      "tone": "danger",
+      "phase": "verify"
+    }
+  },
+  {
+    "name": "oversized notice",
+    "event": {
+      "event": "agent_progress",
+      "event_seq": 7,
+      "activity_truncated": true
+    },
+    "expected": {
+      "id": "rt:7",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "This activity entry was too large to display",
+      "body": null,
+      "tone": "warning",
+      "phase": "system",
+      "event_seq": 7
+    }
+  },
+  {
+    "name": "provider retry",
+    "event": {
+      "event": "agent_failure_recoverable",
+      "data": {
+        "error": "429 throttled",
+        "consecutive_failures": 2,
+        "max_failures": 3
+      }
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Model provider at capacity",
+      "body": "429 throttled · attempt 2 of 3",
+      "tone": "warning",
+      "phase": "build"
+    }
+  },
+  {
+    "name": "legacy completion cost redacted",
+    "event": {
+      "event": "agent_complete",
+      "data": {
+        "num_turns": 2,
+        "cost_usd": 1.25,
+        "model": "example"
+      }
+    },
+    "costs": false,
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Implementation turn completed",
+      "body": "2 turns · example",
+      "tone": "neutral",
+      "phase": "build"
+    }
+  },
+  {
+    "name": "legacy completion cost",
+    "event": {
+      "event": "agent_complete",
+      "data": {
+        "num_turns": 1,
+        "cost_usd": 1.25
+      }
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Implementation turn completed",
+      "body": "1 turn · $1.25",
+      "tone": "neutral",
+      "phase": "build"
+    }
+  },
+  {
+    "name": "budget redacted",
+    "event": {
+      "event": "budget_exceeded",
+      "data": {
+        "session_cost_usd": 10,
+        "cap_usd": 10
+      }
+    },
+    "costs": false,
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Budget requires attention",
+      "body": null,
+      "tone": "warning",
+      "phase": "system"
+    }
+  },
+  {
+    "name": "deployment milestone",
+    "event": {
+      "event": "deployment.update_accepted",
+      "seq": 8,
+      "message": "accepted managed update"
+    },
+    "expected": {
+      "id": "cp:8",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Accepted managed update",
+      "body": null,
+      "tone": "neutral",
+      "phase": "deploy",
+      "seq": 8
+    }
+  },
+  {
+    "name": "stage start hidden",
+    "event": {
+      "event": "runtime.prepare.started"
+    },
+    "expected": null
+  },
+  {
+    "name": "unknown failure preserved",
+    "event": {
+      "event": "runtime.future.failed",
+      "message": "new failure"
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "New failure",
+      "body": null,
+      "tone": "danger",
+      "phase": "deploy"
+    }
+  },
+  {
+    "name": "controller suspension retains remediation",
+    "event": {
+      "event": "agent_suspended",
+      "role": "system",
+      "data": {
+        "state": "waiting",
+        "blocker_code": "provider_credentials",
+        "error": "Provider credentials rejected",
+        "action": "fix the provider credentials, permissions, or quota, or add Telos credits; the controller will retry in 1m0s"
+      }
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Execution suspended",
+      "body": "Provider credentials rejected · fix the provider credentials, permissions, or quota, or add Telos credits; the controller will retry in 1m0s",
+      "tone": "danger",
+      "phase": "system"
+    }
+  },
+  {
+    "name": "controller suspension without error retains blocker",
+    "event": {
+      "event": "agent_suspended",
+      "data": {
+        "blocker_code": "model_configuration",
+        "action": "fix the model configuration, then re-apply the spec or explicitly wake the session"
+      }
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Execution suspended",
+      "body": "model_configuration · fix the model configuration, then re-apply the spec or explicitly wake the session",
+      "tone": "danger",
+      "phase": "system"
+    }
+  },
+  {
+    "name": "accented control message",
+    "event": {
+      "event": "deployment.updated",
+      "message": "évaluation terminée"
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Évaluation terminée",
+      "body": null,
+      "tone": "neutral",
+      "phase": "deploy"
+    }
+  },
+  {
+    "name": "emoji control message",
+    "event": {
+      "event": "runtime.prepare.failed",
+      "message": "🔴 connection failed"
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "🔴 connection failed",
+      "body": null,
+      "tone": "danger",
+      "phase": "deploy"
+    }
+  },
+  {
+    "name": "unicode completion reason",
+    "event": {
+      "event": "game_end",
+      "data": {
+        "game_result": "failure",
+        "completion_reason": "évaluation_interrompue"
+      }
+    },
+    "expected": {
+      "id": "",
+      "ts": null,
+      "kind": "lifecycle",
+      "headline": "Evaluation cycle interrupted",
+      "body": "Évaluation interrompue",
+      "tone": "danger",
+      "phase": "verify"
+    }
+  },
+  {
+    "name": "truncated internal control start remains hidden",
+    "event": {
+      "event": "deployment.provisioning.started",
+      "seq": 1,
+      "activity_truncated": true
+    },
+    "expected": null
+  }
+]

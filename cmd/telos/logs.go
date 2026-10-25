@@ -104,7 +104,7 @@ func cmdLogs(args []string) {
 				os.Exit(1)
 			}
 		} else {
-			printStructuredLogs(os.Stdout, events, options)
+			printLocalActivity(events, options)
 		}
 		followLocalLogsIfAsked(*follow, sessionID, *session, events, *jsonOutput)
 		return
@@ -133,6 +133,7 @@ func followLocalLogsIfAsked(
 		return
 	}
 	printer := newLogFollowPrinter(os.Stdout, jsonOutput, "", printed)
+	printer.activity = !jsonOutput
 	if err := followLocalLogs(goalID, len(printed), printer); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -153,6 +154,16 @@ func printCloudSessionLogs(
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
+	}
+	if !raw && !jsonOutput {
+		handled, activityErr := printCloudActivity(control, session.ID, options, follow && status != "stopped")
+		if activityErr != nil {
+			fmt.Fprintf(os.Stderr, "error: %v\n", activityErr)
+			os.Exit(1)
+		}
+		if handled {
+			return
+		}
 	}
 	tail := min(options.Tail, maxCloudLogTail)
 	if raw || options.All {

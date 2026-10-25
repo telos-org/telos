@@ -10,13 +10,17 @@ import (
 	"os"
 	"slices"
 
+	"github.com/telos-org/telos/internal/activity"
 	"github.com/telos-org/telos/internal/evidence"
 )
 
 type EventWindow struct {
-	After  int64
-	Before int64
-	Tail   int64
+	After           int64
+	Before          int64
+	Tail            int64
+	Activity        bool
+	Costs           bool
+	DisplaySnapshot bool
 }
 
 // EventsPage reads modern single-file logs backward. Their writer serializes
@@ -54,10 +58,7 @@ func (fs *FileStore) EventsPage(id string, window EventWindow) (SessionEventsRes
 	if err != nil {
 		return SessionEventsResponse{}, err
 	}
-	return SessionEventsResponse{
-		Events:       filterEventsWindow(events, window.After, window.Before, window.Tail),
-		HeadEventSeq: headEventSeq(events),
-	}, nil
+	return eventWindow(events, window), nil
 }
 
 func writerSequence(raw map[string]any, sessionID string) (int64, bool) {
@@ -103,6 +104,7 @@ func readEvidenceWindow(reader io.ReaderAt, size int64, sessionID string, spec *
 	}
 	supported := true
 	var previous int64
+	activityBytes := 0
 	err = evidence.VisitLinesReverse(reader, size, func(raw map[string]any) bool {
 		event, ok := projectEvidenceEvent(raw, spec)
 		if !ok {
@@ -123,6 +125,15 @@ func readEvidenceWindow(reader io.ReaderAt, size int64, sessionID string, spec *
 		if window.Before > 0 && seq >= window.Before {
 			return false
 		}
+		if window.Activity {
+			entry := activity.Project(raw, fmt.Sprintf("snapshot:%d", seq), window.Costs)
+			if entry == nil {
+				return false
+			}
+			activityBytes += activityEntrySize(entry)
+			page.ActivityEntries = append(page.ActivityEntries, *entry)
+			return int64(len(page.ActivityEntries)) >= window.Tail || activityBytes > activityPageBytes
+		}
 		page.Events = append(page.Events, event)
 		return window.Tail > 0 && int64(len(page.Events)) >= window.Tail
 	})
@@ -140,4 +151,37 @@ func (fs *FileStore) Status(id string) (SessionStatus, error) {
 		return "", err
 	}
 	return deriveStatus(fs.sessionDir(id), manifest), nil
+}
+
+// Activity reads count the projected rows, while evidence reads retain raw semantics.
+func eventWindow(events []SessionEvent, window EventWindow) SessionEventsResponse {
+	page := SessionEventsResponse{HeadEventSeq: headEventSeq(events)}
+	if !window.Activity {
+		if window.DisplaySnapshot && page.HeadEventSeq == nil {
+			page.ActivitySnapshot = activitySnapshot(events)
+		}
+		page.Events = filterEventsWindow(events, window.After, window.Before, window.Tail)
+		return page
+	}
+	events = filterEventsWindow(events, window.After, window.Before, 0)
+	size := 0
+	for i := len(events) - 1; i >= 0; i-- {
+		raw, _ := json.Marshal(events[i])
+		var record map[string]any
+		_ = json.Unmarshal(raw, &record)
+		entry := activity.Project(record, fmt.Sprintf("snapshot:%d", i), window.Costs)
+		if entry == nil {
+			continue
+		}
+		if page.HeadEventSeq == nil {
+			entry.EventSeq = nil
+			entry.ID = fmt.Sprintf("snapshot:%d", i)
+		}
+		size += activityEntrySize(entry)
+		page.ActivityEntries = append(page.ActivityEntries, *entry)
+		if int64(len(page.ActivityEntries)) >= window.Tail || size > activityPageBytes {
+			break
+		}
+	}
+	return page
 }

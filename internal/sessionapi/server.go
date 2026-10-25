@@ -40,6 +40,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
+	mux.HandleFunc("GET /api/sessions/{id}/activity", h.getActivity)
 }
 
 type handler struct {
@@ -227,6 +228,7 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	session.ActivityVersion = 1
 	writeJSON(w, http.StatusOK, session)
 }
 
@@ -294,13 +296,17 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 		h.streamEvents(w, r, id, after)
 		return
 	}
-	page, err := h.readEvents(id, EventWindow{After: after, Before: before, Tail: tail})
+	page, err := h.readEvents(id, EventWindow{After: after, Before: before, Tail: tail, DisplaySnapshot: r.URL.Query().Get("view") == "activity"})
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
 			return
 		}
 		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if r.URL.Query().Get("view") == "activity" {
+		writeJSON(w, http.StatusOK, activityEventPage(page))
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
@@ -316,10 +322,7 @@ func (h *handler) readEvents(id string, window EventWindow) (SessionEventsRespon
 	if err != nil {
 		return SessionEventsResponse{}, err
 	}
-	return SessionEventsResponse{
-		Events:       filterEventsWindow(events, window.After, window.Before, window.Tail),
-		HeadEventSeq: headEventSeq(events),
-	}, nil
+	return eventWindow(events, window), nil
 }
 
 func (h *handler) sessionStatus(id string) (SessionStatus, error) {
@@ -422,8 +425,12 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 		if page.HeadEventSeq == nil {
 			events = events[min(sent, len(events)):]
 		}
-		for _, event := range events {
-			data, err := json.Marshal(event)
+		for index, event := range events {
+			var payload any = event
+			if r.URL.Query().Get("view") == "activity" {
+				payload = activityEvent(event, fmt.Sprintf("snapshot:%d", index))
+			}
+			data, err := json.Marshal(payload)
 			if err != nil {
 				continue
 			}

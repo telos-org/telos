@@ -293,6 +293,10 @@ func TestCloudLargeTailsPageAndFollow(t *testing.T) {
 				}
 				calls, goalCalls := 0, 0
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					if strings.HasSuffix(r.URL.Path, "/activity") {
+						http.NotFound(w, r)
+						return
+					}
 					if r.URL.Path == "/api/deployments/session_1" {
 						goalCalls++
 						fmt.Fprint(w, `{"id":"session_1","state":"stopped"}`)
@@ -392,6 +396,10 @@ func logPagingServer(t *testing.T, pages, queries []string) (*cloud.Client, *int
 	t.Helper()
 	calls := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/activity") {
+			http.NotFound(w, r)
+			return
+		}
 		index := calls
 		calls++
 		if index >= len(pages) {

@@ -11,6 +11,8 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+
+	"github.com/telos-org/telos/internal/activity"
 )
 
 // --------- Enums ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -315,6 +317,7 @@ type SessionReconciliation struct {
 
 // Session is the full API representation returned by get/create/stop.
 type Session struct {
+	ActivityVersion int           `json:"activity_version,omitempty"`
 	SessionID       string        `json:"session_id"`
 	SessionKind     *SessionKind  `json:"-"`
 	ParentSessionID *string       `json:"parent_session_id,omitempty"`
@@ -360,6 +363,7 @@ type Session struct {
 
 // SessionListItem is the product-facing summary returned by GET /api/sessions.
 type SessionListItem struct {
+	ActivityVersion    int            `json:"activity_version"`
 	SessionID          string         `json:"session_id"`
 	ParentSessionID    *string        `json:"parent_session_id,omitempty"`
 	SpecName           *string        `json:"spec_name,omitempty"`
@@ -396,6 +400,7 @@ func SessionListItems(sessions []Session) []SessionListItem {
 // SessionListItemFromSession strips debug-heavy fields from a full Session.
 func SessionListItemFromSession(session Session) SessionListItem {
 	return SessionListItem{
+		ActivityVersion:    1,
 		SessionID:          session.SessionID,
 		ParentSessionID:    session.ParentSessionID,
 		SpecName:           session.SpecName,
@@ -473,6 +478,8 @@ type SessionEvent struct {
 
 // SessionEventsResponse wraps GET /api/sessions/{id}/events.
 type SessionEventsResponse struct {
-	Events       []SessionEvent `json:"events"`
-	HeadEventSeq *int64         `json:"head_event_seq,omitempty"`
+	ActivitySnapshot []activityEventEnvelope `json:"-"`
+	ActivityEntries  []activity.Entry        `json:"-"`
+	Events           []SessionEvent          `json:"events"`
+	HeadEventSeq     *int64                  `json:"head_event_seq,omitempty"`
 }

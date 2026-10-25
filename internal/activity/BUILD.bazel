@@ -1,0 +1,13 @@
+load("@rules_go//go:def.bzl", "go_library", "go_test")
+go_library(
+    name = "activity",
+    srcs = ["activity.go"],
+    importpath = "github.com/telos-org/telos/internal/activity",
+    visibility = ["//:__subpackages__"],
+)
+go_test(
+    name = "activity_test",
+    srcs = ["activity_test.go"],
+    data = ["testdata/activity.json"],
+    embed = [":activity"],
+)
