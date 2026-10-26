@@ -118,19 +118,43 @@ func (e *Evidence) log(event string, roundNum int, role string, data map[string]
 	return nil
 }
 
-// syncActivity restores the row of the newest evidence event when the process
-// stopped, or its append failed, after the event was written. Each write runs
-// it first, so only the newest event can lack its row.
+// SyncActivity restores the newest event's row when its writer stopped before
+// writing it, such as after a session's final event, then reports whether
+// the display log still holds all of its rows. Only a log missing that row
+// takes the evidence lock.
+func SyncActivity(path string) bool {
+	activityPath := ActivityPath(path)
+	if fileExists(activityPath) {
+		if row, _ := missingRow(path, activityPath); row != nil {
+			if lock, err := lockEvidenceFile(path); err == nil {
+				syncActivity(path, activityPath)
+				unlockEvidenceFile(lock)
+			}
+		}
+	}
+	return HasActivity(path)
+}
+
+// syncActivity restores the newest event's row; callers hold the evidence
+// lock. Writers run it before each write, so only the newest event can lack
+// its row.
 func syncActivity(path, activityPath string) {
+	if row, seq := missingRow(path, activityPath); row != nil {
+		appendActivity(activityPath, row, seq)
+	}
+}
+
+// missingRow returns the newest evidence event's row, and that event's
+// event_seq, when the display log lacks it.
+func missingRow(path, activityPath string) (map[string]interface{}, int) {
 	last := lastRecord(path)
 	row := activityRow(last)
-	if row == nil {
-		return
-	}
+	seq, _ := last["event_seq"].(float64)
 	synced, _ := lastRecord(activityPath)["evidence_seq"].(float64)
-	if seq, _ := last["event_seq"].(float64); seq > synced {
-		appendActivity(activityPath, row, int(seq))
+	if row == nil || seq <= synced {
+		return nil, 0
 	}
+	return row, int(seq)
 }
 
 // appendActivity appends the row of evidence event evidenceSeq. A display log

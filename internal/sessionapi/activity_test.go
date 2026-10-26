@@ -166,3 +166,30 @@ func TestActivityServedOnlyForLogsBegunWithIt(t *testing.T) {
 		t.Fatal("multi-spec session reported activity")
 	}
 }
+
+func TestActivityRestoresTheFinalRowOfAStoppedWriter(t *testing.T) {
+	store, path := eventFixture(t, "")
+	evidence.New("pvg", path, eventSessionID, 1).Log("agent_progress", 1, "prover", map[string]interface{}{"audience": "user", "text": "first"})
+	// The writer stopped after the session's final event, before its row.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(`{"event":"game_end","event_seq":2,"ts":"t","data":{"audience":"user","game_result":"success"}}` + "\n")
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	page, err := store.Activity(eventSessionID, EventWindow{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []any
+	for _, row := range page.Events {
+		got = append(got, row["kind"])
+	}
+	if fmt.Sprint(got) != "[message evaluation_ended]" || ptrOr(page.HeadEventSeq, 0) != 2 {
+		t.Fatalf("rows %v head %v, want the final evaluation_ended row", got, page.HeadEventSeq)
+	}
+}

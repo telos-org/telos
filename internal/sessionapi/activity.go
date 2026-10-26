@@ -41,7 +41,7 @@ func (fs *FileStore) Activity(id string, window EventWindow) (ActivityPage, erro
 		return page, err
 	}
 	source := activityEvidence(manifest)
-	if source == "" {
+	if source == "" || !evidence.SyncActivity(source) {
 		return page, fmt.Errorf("session %s has no activity log: %w", id, ErrNotFound)
 	}
 	file, err := os.Open(evidence.ActivityPath(source))
