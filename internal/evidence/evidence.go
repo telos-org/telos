@@ -109,7 +109,7 @@ func (e *Evidence) log(event string, roundNum int, role string, data map[string]
 		record["data"] = map[string]interface{}{}
 	}
 
-	if err := appendLine(e.Path, record); err != nil {
+	if err := appendLine(e.Path, os.O_CREATE, record); err != nil {
 		return err
 	}
 	if row := activityRow(record); row != nil && fileExists(activityPath) {
@@ -157,22 +157,24 @@ func missingRow(path, activityPath string) (map[string]interface{}, int) {
 	return row, int(seq)
 }
 
-// appendActivity appends the row of evidence event evidenceSeq. A display log
+// appendActivity appends the row of evidence event evidenceSeq. It never
+// creates the display log, so a log removed as incomplete stays removed; a log
 // it cannot complete is removed, so readers serve the raw events instead.
 func appendActivity(activityPath string, row map[string]interface{}, evidenceSeq int) {
 	row["event_seq"] = lastEventSeq(activityPath) + 1
 	row["evidence_seq"] = evidenceSeq
-	if appendLine(activityPath, row) != nil {
+	if appendLine(activityPath, 0, row) != nil {
 		os.Remove(activityPath)
 	}
 }
 
-func appendLine(path string, value any) error {
+// appendLine appends one JSON line; create is os.O_CREATE or 0.
+func appendLine(path string, create int, value any) error {
 	line, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|create|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}

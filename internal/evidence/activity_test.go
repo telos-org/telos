@@ -115,6 +115,31 @@ func TestActivityLogThatCannotBeCompletedIsRemoved(t *testing.T) {
 	}
 }
 
+func TestActivityRepairNeverRecreatesARemovedLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evidence.jsonl")
+	New("pvg", path, "sess-removed", 1).Log("agent_progress", 1, "prover", map[string]interface{}{"audience": "user", "text": "first"})
+	// A writer removed the log as incomplete after a reader saw it, but before
+	// the reader took the lock and repaired the newest event's missing row.
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(`{"event":"game_end","event_seq":2,"data":{"audience":"user","game_result":"success"}}` + "\n")
+	f.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(ActivityPath(path)); err != nil {
+		t.Fatal(err)
+	}
+
+	syncActivity(path, ActivityPath(path))
+
+	if fileExists(ActivityPath(path)) || HasActivity(path) {
+		t.Fatal("repair recreated a display log removed as incomplete")
+	}
+}
+
 // testdata/activity_rows.json is shared with Cloud's fallback for runtimes
 // without activity logs (telos/control/tests/fixtures in telos-org/cloud).
 func TestActivityRowsMatchSharedFixture(t *testing.T) {
