@@ -11,7 +11,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -824,33 +823,6 @@ func TestPrintSessionDescriptionOmitsCompletionImplementationDetails(t *testing.
 	for _, notWant := range []string{"completion", "review_budget_exhausted", "evaluation"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("description should omit %q:\n%s", notWant, text)
-		}
-	}
-}
-
-func TestPrintLocalLaunchIncludesWorkspaceScopedCommands(t *testing.T) {
-	session := &cli.LocalSession{
-		SessionID:      "local_123",
-		SpecName:       "blackbox",
-		WorkspaceScope: "/tmp/telos-blackbox",
-	}
-
-	var out bytes.Buffer
-	printLocalLaunch(&out, "submitted", session)
-	text := out.String()
-	for _, want := range []string{
-		"submitted blackbox",
-		"Name      blackbox",
-		"Target    local",
-		"Status    active",
-		"Cost      -",
-		"Goal      local_123",
-		"Workspace /tmp/telos-blackbox",
-		"Describe  cd '/tmp/telos-blackbox' && telos describe local_123",
-		"Logs      cd '/tmp/telos-blackbox' && telos logs local_123",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("launch output missing %q:\n%s", want, text)
 		}
 	}
 }

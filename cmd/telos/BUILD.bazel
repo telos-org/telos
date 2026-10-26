@@ -10,16 +10,16 @@ go_library(
     visibility = ["//visibility:private"],
     deps = [
         "//internal/bundlelimits",
-        "//internal/cli",
         "//internal/cloud",
         "//internal/config",
         "//internal/runtimeclient",
         "//internal/sessionapi",
-        "//internal/sessionupdate",
-        "//internal/sessionworker",
         "//internal/spec",
         "@com_github_rogpeppe_go_internal//diff",
-    ],
+    ] + select({
+        "@rules_go//go/platform:windows": [],
+        "//conditions:default": ["//internal/cli", "//internal/sessionupdate", "//internal/sessionworker"],
+    }),
 )
 
 go_binary(
@@ -73,7 +73,9 @@ go_test(
         "//internal/cloud",
         "//internal/config",
         "//internal/sessionapi",
-        "//internal/sessionworker",
         "//internal/spec",
-    ],
+    ] + select({
+        "@rules_go//go/platform:windows": [],
+        "//conditions:default": ["//internal/cli"],
+    }),
 )

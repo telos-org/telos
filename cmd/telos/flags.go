@@ -10,7 +10,6 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
@@ -151,32 +150,6 @@ func flagNameSet(fs *flag.FlagSet, name string) bool {
 		seen[f.Name] = true
 	})
 	return seen[name]
-}
-
-func resolveLocalRunConfigFromFlags(
-	fs *flag.FlagSet,
-	workspace string,
-	model string,
-	thinking string,
-	maxCostUSD float64,
-) (cli.LocalRunConfig, error) {
-	cost, err := positiveFloatOption(fs, "max-cost-usd", maxCostUSD, "TELOS_MAX_COST_USD", 20.0)
-	if err != nil {
-		return cli.LocalRunConfig{}, err
-	}
-	level, err := thinkingOption(fs, thinking)
-	if err != nil {
-		return cli.LocalRunConfig{}, err
-	}
-	if level == "" {
-		level = cli.DefaultLocalThinking
-	}
-	return cli.LocalRunConfig{
-		Workspace:  stringOption(fs, "workspace", workspace, "TELOS_WORKSPACE"),
-		Model:      modelOption(fs, model),
-		Thinking:   level,
-		MaxCostUSD: &cost,
-	}, nil
 }
 
 type sessionRuntimeConfig struct {
