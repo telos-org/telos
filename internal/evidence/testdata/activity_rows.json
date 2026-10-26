@@ -1,0 +1,18 @@
+[
+  {"event": {"event_seq": 1, "ts": "t", "event": "agent_progress", "role": "prover", "data": {"audience": "user", "text": "Starting"}}, "row": {"ts": "t", "kind": "message", "role": "prover", "text": "Starting"}},
+  {"event": {"event_seq": 2, "ts": "t", "event": "agent_progress", "role": "prover", "data": {"audience": "agent", "kind": "tool", "text": "Read a file"}}, "row": null},
+  {"event": {"event_seq": 3, "ts": "t", "event": "agent_progress", "role": "prover", "data": {"text": "Written before audiences"}}, "row": {"ts": "t", "kind": "message", "role": "prover", "text": "Written before audiences"}},
+  {"event": {"event_seq": 4, "ts": "t", "event": "agent_progress", "role": "prover", "data": {"audience": "user", "text": ""}}, "row": null},
+  {"event": {"event_seq": 5, "ts": "t", "event": "round_start", "role": "verifier", "data": {"audience": "user"}}, "row": {"ts": "t", "kind": "round_started", "role": "verifier"}},
+  {"event": {"event_seq": 6, "ts": "t", "event": "round_start", "role": "verifier", "data": {}}, "row": null},
+  {"event": {"event_seq": 7, "ts": "t", "event": "agent_complete", "role": "verifier", "data": {"audience": "agent", "status": "CONCEDE", "cost_usd": 0.5}}, "row": {"ts": "t", "kind": "turn_ended", "role": "verifier"}},
+  {"event": {"event_seq": 8, "ts": "t", "event": "agent_failure_recoverable", "role": "prover", "data": {"error": "429 Too Many Requests", "consecutive_failures": 1, "max_failures": 3}}, "row": {"ts": "t", "kind": "retry", "role": "prover", "error": "429 Too Many Requests", "consecutive_failures": 1, "max_failures": 3}},
+  {"event": {"event_seq": 9, "ts": "t", "event": "budget_exceeded", "role": "system", "data": {"session_cost_usd": 5.0, "cap_usd": 4.0}}, "row": {"ts": "t", "kind": "budget_exceeded", "session_cost_usd": 5.0, "cap_usd": 4.0}},
+  {"event": {"event_seq": 10, "ts": "t", "event": "game_end", "role": "system", "data": {"audience": "user", "game_result": "success", "completion_reason": "verifier_conceded", "error": "", "total_cost_usd": 2.0}}, "row": {"ts": "t", "kind": "evaluation_ended", "game_result": "success", "completion_reason": "verifier_conceded"}},
+  {"event": {"event_seq": 11, "ts": "t", "event": "game_end", "role": "system", "data": {"result": "failure", "error": "boom"}}, "row": {"ts": "t", "kind": "evaluation_ended", "game_result": "failure", "error": "boom"}},
+  {"event": {"event_seq": 12, "ts": "t", "event": "agent_suspended", "role": "system", "data": {"error": "quota", "action": "add credit"}}, "row": {"ts": "t", "kind": "suspended", "error": "quota", "action": "add credit"}},
+  {"event": {"event_seq": 13, "ts": "t", "event": "workspace_checkpoint", "role": "system", "data": {"path": "/w"}}, "row": null},
+  {"event": {"event_seq": 14, "ts": "t", "event": "agent_progress", "role": "prover", "data": {"audience": null, "text": "Null audience"}}, "row": {"ts": "t", "kind": "message", "role": "prover", "text": "Null audience"}},
+  {"event": {"event_seq": 15, "ts": "t", "event": "game_end", "role": "system", "data": {"result": "", "completion_reason": "stopped"}}, "row": {"ts": "t", "kind": "evaluation_ended", "completion_reason": "stopped"}},
+  {"event": {"event_seq": 16, "ts": "t", "event": "agent_complete", "role": "prover", "data": {"status": "CONTINUE", "num_turns": 4}}, "row": {"ts": "t", "kind": "turn_ended", "role": "prover"}}
+]

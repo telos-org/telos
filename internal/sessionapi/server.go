@@ -1,9 +1,11 @@
 package sessionapi
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,6 +26,7 @@ const maxSessionRequestBytes = 4 << 20
 //	POST /api/sessions/{id}/stop
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
+//	GET  /api/sessions/{id}/activity
 //	GET  /api/healthz
 func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runtime RuntimeIdentity) {
 	if authorizer == nil {
@@ -40,6 +43,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
+	mux.HandleFunc("GET /api/sessions/{id}/activity", h.getActivity)
 }
 
 type handler struct {
@@ -267,43 +271,61 @@ func (h *handler) getTranscript(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
+	req, ok := h.windowRequest(w, r)
+	if !ok {
 		return
 	}
-	after, err := nonNegativeIntParam(r, "after")
-	if err != nil {
+	if req.stream {
+		h.streamEvents(w, r, req.id, req.window.After)
+		return
+	}
+	page, err := h.readEvents(req.id, req.window)
+	writePage(w, page, err)
+}
+
+type windowParams struct {
+	id     string
+	window EventWindow
+	stream bool
+}
+
+// windowRequest authorizes a session read and parses its ?after, ?before and
+// ?tail window. Streams resume after a position, so they reject before and tail.
+func (h *handler) windowRequest(w http.ResponseWriter, r *http.Request) (windowParams, bool) {
+	req := windowParams{id: r.PathValue("id")}
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: req.id}); !ok {
+		return req, false
+	}
+	var errs [3]error
+	req.window.After, errs[0] = nonNegativeIntParam(r, "after")
+	req.window.Before, errs[1] = nonNegativeIntParam(r, "before")
+	req.window.Tail, errs[2] = nonNegativeIntParam(r, "tail")
+	if err := cmp.Or(errs[:]...); err != nil { // the first, as /events reports it
 		writeError(w, http.StatusBadRequest, err.Error())
-		return
+		return req, false
 	}
-	before, err := nonNegativeIntParam(r, "before")
+	req.stream = strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream")
+	if req.stream && (queryParamSet(r, "before") || queryParamSet(r, "tail")) {
+		writeError(w, http.StatusBadRequest, "before and tail are not supported for event streams")
+		return req, false
+	}
+	return req, true
+}
+
+func writePage(w http.ResponseWriter, page any, err error) {
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	tail, err := nonNegativeIntParam(r, "tail")
-	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {
-		if queryParamSet(r, "before") || queryParamSet(r, "tail") {
-			writeError(w, http.StatusBadRequest, "before and tail are not supported for event streams")
-			return
-		}
-		h.streamEvents(w, r, id, after)
-		return
-	}
-	page, err := h.readEvents(id, EventWindow{After: after, Before: before, Tail: tail})
-	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeStoreError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, page)
+}
+
+func writeStoreError(w http.ResponseWriter, err error) {
+	if errors.Is(err, ErrNotFound) {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeError(w, http.StatusInternalServerError, err.Error())
 }
 
 func (h *handler) readEvents(id string, window EventWindow) (SessionEventsResponse, error) {
@@ -383,12 +405,48 @@ func headEventSeq(events []SessionEvent) *int64 {
 }
 
 func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string, after int64) {
-	if _, err := h.sessionStatus(id); err != nil {
-		if errors.Is(err, ErrNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-			return
+	// Numbered streams resume from their durable head. Only compatibility
+	// replays need an ordinal count, which is never advertised as a cursor.
+	sent := 0
+	h.stream(w, r, id, after, func(out io.Writer, after *int64) bool {
+		page, err := h.readEvents(id, EventWindow{After: *after})
+		if err != nil {
+			return false
 		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		events := page.Events
+		if page.HeadEventSeq == nil {
+			events = events[min(sent, len(events)):]
+		}
+		for _, event := range events {
+			data, err := json.Marshal(event)
+			if err != nil {
+				continue
+			}
+			// Only durable seqs are advertised as SSE ids; an ordinal
+			// would resume wrongly on a client that stored it.
+			if seq := event.EventSeq; seq != nil {
+				_, _ = fmt.Fprintf(out, "id: %d\ndata: %s\n\n", *seq, data)
+			} else {
+				_, _ = fmt.Fprintf(out, "data: %s\n\n", data)
+			}
+		}
+		if page.HeadEventSeq != nil {
+			*after = max(*after, *page.HeadEventSeq)
+			// If a later append breaks the writer invariant, replay the full
+			// compatibility history once instead of guessing its list position.
+			sent = 0
+		} else {
+			sent = len(page.Events)
+		}
+		return true
+	})
+}
+
+// stream polls emit every second until the session ends or the client leaves.
+// emit writes frames after a resume position and advances it.
+func (h *handler) stream(w http.ResponseWriter, r *http.Request, id string, after int64, emit func(out io.Writer, after *int64) bool) {
+	if _, err := h.sessionStatus(id); err != nil {
+		writeStoreError(w, err)
 		return
 	}
 	flusher, ok := w.(http.Flusher)
@@ -410,41 +468,10 @@ func (h *handler) streamEvents(w http.ResponseWriter, r *http.Request, id string
 	w.WriteHeader(http.StatusOK)
 	flusher.Flush()
 
-	// Numbered streams resume from their durable head. Only compatibility
-	// replays need an ordinal count, which is never advertised as a cursor.
-	sent := 0
 	emitAvailable := func() bool {
-		page, err := h.readEvents(id, EventWindow{After: after})
-		if err != nil {
-			return false
-		}
-		events := page.Events
-		if page.HeadEventSeq == nil {
-			events = events[min(sent, len(events)):]
-		}
-		for _, event := range events {
-			data, err := json.Marshal(event)
-			if err != nil {
-				continue
-			}
-			// Only durable seqs are advertised as SSE ids; an ordinal
-			// would resume wrongly on a client that stored it.
-			if seq := event.EventSeq; seq != nil {
-				_, _ = fmt.Fprintf(w, "id: %d\ndata: %s\n\n", *seq, data)
-			} else {
-				_, _ = fmt.Fprintf(w, "data: %s\n\n", data)
-			}
-			flusher.Flush()
-		}
-		if page.HeadEventSeq != nil {
-			after = max(after, *page.HeadEventSeq)
-			// If a later append breaks the writer invariant, replay the full
-			// compatibility history once instead of guessing its list position.
-			sent = 0
-		} else {
-			sent = len(page.Events)
-		}
-		return true
+		ok := emit(w, &after)
+		flusher.Flush()
+		return ok
 	}
 	poll := time.NewTicker(time.Second)
 	defer poll.Stop()

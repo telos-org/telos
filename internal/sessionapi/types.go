@@ -352,6 +352,9 @@ type Session struct {
 	DashboardDoc           *string          `json:"dashboard_doc,omitempty"`
 	CurrentSpecVersion     *int             `json:"current_spec_version,omitempty"`
 	SpecVersions           []map[string]any `json:"spec_versions"`
+	// ActivityRows reports that GET /api/sessions/{id}/activity serves all of this
+	// session's display rows. Sessions an older runtime began never do.
+	ActivityRows bool `json:"activity_rows,omitempty"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
 }
@@ -375,6 +378,7 @@ type SessionListItem struct {
 	DashboardURL       *string        `json:"dashboard_url,omitempty"`
 	DashboardDoc       *string        `json:"dashboard_doc,omitempty"`
 	CurrentSpecVersion *int           `json:"current_spec_version,omitempty"`
+	ActivityRows       bool           `json:"activity_rows,omitempty"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
 }
@@ -411,6 +415,7 @@ func SessionListItemFromSession(session Session) SessionListItem {
 		DashboardURL:       session.DashboardURL,
 		DashboardDoc:       session.DashboardDoc,
 		CurrentSpecVersion: session.CurrentSpecVersion,
+		ActivityRows:       session.ActivityRows,
 		Reconciliation:     session.Reconciliation,
 	}
 }

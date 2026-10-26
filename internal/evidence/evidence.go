@@ -43,6 +43,24 @@ func New(systemName string, path string, sessionID string, epochID int) *Evidenc
 	}
 }
 
+func fileExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// HasActivity reports whether an evidence log has a display log holding all
+// of its rows: one begun with it. Logs an older runtime began have none. (A
+// log later appended to by an older runtime again would miss those rows.)
+func HasActivity(path string) bool {
+	return fileExists(ActivityPath(path)) || isEmpty(path)
+}
+
+// isEmpty reports an evidence log with no events yet, including a missing one.
+func isEmpty(path string) bool {
+	info, err := os.Stat(path)
+	return err != nil || info.Size() == 0
+}
+
 // Log writes a single best-effort evidence event.
 func (e *Evidence) Log(event string, roundNum int, role string, data map[string]interface{}) {
 	_ = e.log(event, roundNum, role, data)
@@ -60,6 +78,15 @@ func (e *Evidence) log(event string, roundNum int, role string, data map[string]
 
 	if lastSeq := lastEventSeq(e.Path); lastSeq > e.eventSeq {
 		e.eventSeq = lastSeq
+	}
+	// The display log begins with the evidence log. Rows are best-effort like
+	// evidence: a failed second append, or a snapshot taken between the two,
+	// loses only its row.
+	activityPath := ActivityPath(e.Path)
+	if isEmpty(e.Path) {
+		if f, err := os.OpenFile(activityPath, os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
+			f.Close()
+		}
 	}
 	e.eventSeq++
 	record := map[string]interface{}{
@@ -80,26 +107,34 @@ func (e *Evidence) log(event string, roundNum int, role string, data map[string]
 		record["data"] = map[string]interface{}{}
 	}
 
-	line, err := json.Marshal(record)
+	if err := appendLine(e.Path, record); err != nil {
+		return err
+	}
+	if row := activityRow(record); row != nil && fileExists(activityPath) {
+		row["event_seq"] = lastEventSeq(activityPath) + 1
+		return appendLine(activityPath, row)
+	}
+	return nil
+}
+
+func appendLine(path string, value any) error {
+	line, err := json.Marshal(value)
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(e.Path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 	line = append(line, '\n')
-	if needsLeadingNewline(e.Path) {
+	if needsLeadingNewline(path) {
 		line = append([]byte{'\n'}, line...)
 	}
 	if _, err := f.Write(line); err != nil {
 		return err
 	}
-	if err := f.Sync(); err != nil {
-		return err
-	}
-	return nil
+	return f.Sync()
 }
 
 func needsLeadingNewline(path string) bool {

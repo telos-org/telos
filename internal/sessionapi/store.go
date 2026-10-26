@@ -1082,6 +1082,7 @@ func (fs *FileStore) deriveSessionWithEvidence(id string, m *Manifest, includeEv
 		SessionDir:            strPtr(dir),
 		ActiveWorkspacePath:   activeWorkspacePathPtr,
 		ActiveWorkspaceExists: activeWorkspaceExistsPtr,
+		ActivityRows:          activityEvidence(m) != "",
 		Config:                m.Config.AsMap(),
 		Workspace:             m.Workspace,
 		Provenance:            m.Provenance,

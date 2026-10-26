@@ -3,6 +3,7 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 go_library(
     name = "sessionapi",
     srcs = [
+        "activity.go",
         "auth.go",
         "dashboard_doc_open_other.go",
         "dashboard_doc_open_unix.go",
@@ -36,6 +37,7 @@ go_test(
 go_test(
     name = "sessionapi_store_test",
     srcs = [
+        "activity_test.go",
         "events_test.go",
         "store_dashboard_doc_unix_test.go",
         "store_test.go",

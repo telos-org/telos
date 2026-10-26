@@ -2,13 +2,20 @@ load("@rules_go//go:def.bzl", "go_library", "go_test")
 
 go_library(
     name = "evidence",
-    srcs = ["evidence.go"],
+    srcs = [
+        "activity.go",
+        "evidence.go",
+    ],
     importpath = "github.com/telos-org/telos/internal/evidence",
     visibility = ["//:__subpackages__"],
 )
 
 go_test(
     name = "evidence_test",
-    srcs = ["evidence_test.go"],
+    srcs = [
+        "activity_test.go",
+        "evidence_test.go",
+    ],
+    data = glob(["testdata/**"]),
     embed = [":evidence"],
 )
