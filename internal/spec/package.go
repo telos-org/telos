@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,8 @@ import (
 )
 
 const ApplyPackageSchemaVersion = 1
+
+const skillExecutablesFile = ".telos-executables"
 
 const (
 	applyPackageMaxFiles         = bundlelimits.MaxFiles
@@ -632,6 +635,9 @@ func readApplyPackage(data []byte) (map[string]packageFile, *ApplyPackageManifes
 }
 
 func writePackageFiles(dest string, files map[string]packageFile) error {
+	if err := validatePackageFilePaths(files); err != nil {
+		return err
+	}
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return fmt.Errorf("create package dir: %w", err)
 	}
@@ -644,7 +650,7 @@ func writePackageFiles(dest string, files map[string]packageFile) error {
 			return fmt.Errorf("write package entry %q: %w", name, err)
 		}
 	}
-	return nil
+	return writeSkillExecutables(dest, files)
 }
 
 func validateApplyPackageFiles(manifest *ApplyPackageManifest, files map[string]packageFile) error {
@@ -1017,7 +1023,7 @@ func packageFilesFromMap(files map[string]packageFile) []packageFile {
 }
 
 func safePackageEntry(name string) (string, error) {
-	if name == "" || name != strings.TrimSpace(name) || strings.Contains(name, `\`) || strings.ContainsRune(name, 0) || strings.HasPrefix(name, "/") || strings.Contains(name, "//") {
+	if !filepath.IsLocal(filepath.FromSlash(name)) || name == "" || name != strings.TrimSpace(name) || strings.Contains(name, `\`) || strings.ContainsRune(name, 0) || strings.HasPrefix(name, "/") || strings.Contains(name, "//") {
 		return "", fmt.Errorf("unsafe apply package entry %q", name)
 	}
 	for _, part := range strings.Split(name, "/") {
@@ -1036,42 +1042,187 @@ func packagePathName(name string) (string, error) {
 	return name, nil
 }
 
-func readSkillFiles(skill *Skill) ([]packageFile, error) {
-	root := skill.Path
-	var files []packageFile
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
+type SkillFile struct {
+	Path string
+	Mode int64
+	Data []byte
+}
+
+// ReadSkillFiles reads portable file names and executable metadata for publication.
+func ReadSkillFiles(root string) ([]SkillFile, error) {
+	executables, err := readSkillExecutables(root)
+	if err != nil {
+		return nil, err
+	}
+	var files []SkillFile
+	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if entry.IsDir() {
 			return nil
 		}
+		if runtime.GOOS == "windows" && strings.EqualFold(entry.Name(), skillExecutablesFile) {
+			if filepath.Clean(filepath.Dir(path)) == filepath.Clean(root) {
+				return nil
+			}
+			return fmt.Errorf("reserved Windows skill metadata file: %s", path)
+		}
 		info, err := entry.Info()
 		if err != nil {
 			return err
 		}
 		if !info.Mode().IsRegular() {
-			return fmt.Errorf("skill %q contains non-regular file: %s", skill.Name, path)
+			return fmt.Errorf("skill contains non-regular file: %s", path)
 		}
 		rel, err := filepath.Rel(root, path)
 		if err != nil {
 			return err
 		}
+		rel = filepath.ToSlash(rel)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return err
 		}
-		files = append(files, packageFile{
-			path: filepath.ToSlash(rel),
-			mode: normalizedPackageMode(info.Mode()),
-			data: data,
-		})
+		mode := normalizedPackageMode(info.Mode())
+		if runtime.GOOS == "windows" {
+			mode = 0o644
+			if executables[strings.ToUpper(rel)] {
+				mode = 0o755
+			}
+		}
+		files = append(files, SkillFile{Path: rel, Mode: mode, Data: data})
 		return nil
 	})
 	if err != nil {
+		return nil, err
+	}
+	sort.Slice(files, func(i, j int) bool { return files[i].Path < files[j].Path })
+	return files, nil
+}
+
+func readSkillExecutables(root string) (map[string]bool, error) {
+	if runtime.GOOS != "windows" {
+		return nil, nil
+	}
+	path := filepath.Join(root, skillExecutablesFile)
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("skill executable metadata is not a regular file: %s", path)
+	}
+	limit := int64(bundlelimits.MaxFiles * (bundlelimits.MaxPathBytes + 2))
+	if info.Size() > limit {
+		return nil, fmt.Errorf("skill executable metadata exceeds %d bytes", limit)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, nil
+	}
+	// Windows filenames cannot contain line breaks, so paths need no escaping.
+	paths := strings.Split(strings.TrimSuffix(strings.ReplaceAll(string(data), "\r\n", "\n"), "\n"), "\n")
+	if len(paths) > bundlelimits.MaxFiles {
+		return nil, fmt.Errorf("skill executable metadata contains too many paths")
+	}
+	executables := make(map[string]bool, len(paths))
+	for _, path := range paths {
+		if _, err := safePackageEntry(path); err != nil {
+			return nil, err
+		}
+		if len(path) > bundlelimits.MaxPathBytes {
+			return nil, fmt.Errorf("skill executable metadata path exceeds %d bytes", bundlelimits.MaxPathBytes)
+		}
+		executables[strings.ToUpper(path)] = true
+	}
+	return executables, nil
+}
+
+func writeSkillExecutables(dest string, files map[string]packageFile) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	roots := []string{}
+	if _, exists := files["SKILL.md"]; exists {
+		roots = append(roots, "")
+	} else {
+		for name := range files {
+			parts := strings.Split(name, "/")
+			if len(parts) == 3 && parts[0] == "skills" && parts[2] == "SKILL.md" {
+				roots = append(roots, "skills/"+parts[1])
+			}
+		}
+	}
+	for _, root := range roots {
+		prefix := root
+		if prefix != "" {
+			prefix += "/"
+		}
+		paths := []string{}
+		for name, file := range files {
+			if strings.HasPrefix(name, prefix) && file.mode&0o111 != 0 {
+				paths = append(paths, strings.TrimPrefix(name, prefix))
+			}
+		}
+		path := filepath.Join(dest, filepath.FromSlash(root), skillExecutablesFile)
+		if len(paths) == 0 {
+			if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			continue
+		}
+		sort.Strings(paths)
+		if err := os.WriteFile(path, []byte(strings.Join(paths, "\n")+"\n"), 0o644); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePackageFilePaths(files map[string]packageFile) error {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
+	seen := map[string]string{}
+	for name := range files {
+		if _, err := safePackageEntry(name); err != nil {
+			return err
+		}
+		parts := strings.Split(name, "/")
+		for index, part := range parts {
+			if strings.TrimRight(part, " .") != part || strings.ContainsAny(part, `<>:"|?*`) || strings.IndexFunc(part, func(r rune) bool { return r < 32 }) >= 0 || strings.EqualFold(part, skillExecutablesFile) {
+				return fmt.Errorf("invalid or reserved Windows package path %q", name)
+			}
+			prefix := strings.Join(parts[:index+1], "/")
+			folded := strings.ToUpper(prefix)
+			if previous, exists := seen[folded]; exists && previous != prefix {
+				return fmt.Errorf("Windows package paths %q and %q refer to the same file", previous, prefix)
+			}
+			if _, isFile := files[prefix]; isFile && prefix != name {
+				return fmt.Errorf("Windows package path %q uses file %q as a directory", name, prefix)
+			}
+			seen[folded] = prefix
+		}
+	}
+	return nil
+}
+
+func readSkillFiles(skill *Skill) ([]packageFile, error) {
+	entries, err := ReadSkillFiles(skill.Path)
+	if err != nil {
 		return nil, fmt.Errorf("read skill %q files: %w", skill.Name, err)
 	}
-	sort.Slice(files, func(i, j int) bool { return files[i].path < files[j].path })
+	files := make([]packageFile, 0, len(entries))
+	for _, file := range entries {
+		files = append(files, packageFile{path: file.Path, mode: file.Mode, data: file.Data})
+	}
 	return files, nil
 }
 

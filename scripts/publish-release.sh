@@ -80,9 +80,11 @@ publish_immutable() {
     }
     return
   fi
-  gcloud storage cp "${dist}/${artifact}" "${remote}/${artifact}" \
-    --cache-control="public,max-age=31536000,immutable" \
-    --if-generation-match=0
+  local upload_flags=(--cache-control="public,max-age=31536000,immutable" --if-generation-match=0)
+  if [[ "$artifact" == "install.ps1" ]]; then
+    upload_flags+=(--content-type="text/plain; charset=utf-8")
+  fi
+  gcloud storage cp "${dist}/${artifact}" "${remote}/${artifact}" "${upload_flags[@]}"
 }
 
 # The manifest is the release commit point. Upload it only after every artifact
@@ -92,13 +94,15 @@ for artifact in \
   telos-darwin-arm64 \
   telos-linux-amd64 \
   telos-linux-arm64 \
+  telos-windows-amd64.exe \
   telosd-darwin-amd64 \
   telosd-darwin-arm64 \
   telosd-linux-amd64 \
   telosd-linux-arm64 \
   telos-cli-skill.tar.gz \
   SHA256SUMS \
-  install.sh
+  install.sh \
+  install.ps1
 do
   publish_immutable "${artifact}"
 done

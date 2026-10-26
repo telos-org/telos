@@ -153,6 +153,9 @@ func (e localSessionNotFound) Error() string {
 	if !isLocalApplyID(e.sessionID) {
 		return fmt.Sprintf("Goal %s not found", e.sessionID)
 	}
+	if e.root == "" {
+		return fmt.Sprintf("Goal %s is local; local execution is not supported on Windows", e.sessionID)
+	}
 	return fmt.Sprintf(
 		"Goal %s not found in %s\n\nLocal Goals are workspace-scoped. Run this command from the workspace where the Goal was created, or set:\n\n  TELOS_SESSION_DIR=/path/to/.telos/sessions",
 		e.sessionID,

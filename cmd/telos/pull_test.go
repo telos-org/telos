@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -402,5 +403,58 @@ func assertFileContains(t *testing.T, path string, want string) {
 	}
 	if !strings.Contains(string(data), want) {
 		t.Fatalf("%s missing %q:\n%s", path, want, data)
+	}
+}
+
+func TestPulledSkillExecutableMetadataSurvivesRepublication(t *testing.T) {
+	source := t.TempDir()
+	scripts := filepath.Join(source, "bin with spaces")
+	if err := os.MkdirAll(scripts, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "SKILL.md"), []byte("---\nname: executable-skill\n---\nRun the script.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scripts, "tool.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.GOOS == "windows" {
+		if err := os.WriteFile(filepath.Join(source, ".telos-executables"), []byte("bin with spaces/tool.sh\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	digest, bundle, err := spec.BuildSkillBundle(&spec.Skill{Name: "executable-skill", Path: source})
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/skills/telos/executable-skill/versions/1.0.0":
+			_ = json.NewEncoder(w).Encode(map[string]any{"scope": "telos", "name": "executable-skill", "version": "1.0.0", "ref": "@telos/executable-skill:1.0.0", "digest": digest})
+		case "/api/skills/telos/executable-skill/versions/1.0.0/bundle":
+			_, _ = w.Write(bundle)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	reference, err := parsePackageReference("@telos/executable-skill:1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	destination := filepath.Join(t.TempDir(), "download with spaces")
+	if _, _, err := pullRegistrySkill(cloud.NewClient(server.URL, "token"), reference, destination); err != nil {
+		t.Fatal(err)
+	}
+	files, err := readSkillPublishFiles(destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files["bin with spaces/tool.sh"].Mode != "0755" {
+		t.Fatalf("download/republication lost executable metadata or included sidecars: %+v", files)
+	}
+	republished, _, err := spec.BuildSkillBundle(&spec.Skill{Name: "executable-skill", Path: destination})
+	if err != nil || republished != digest {
+		t.Fatalf("download/republication changed digest: %s != %s, %v", republished, digest, err)
 	}
 }

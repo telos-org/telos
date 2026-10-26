@@ -25,7 +25,7 @@ func serveInstallationUpdate(t *testing.T, version string, binary, skill []byte)
 			fmt.Fprint(w, updateTestManifest(version))
 		case "SHA256SUMS":
 			fmt.Fprint(w, updateTestSums(binary, skill))
-		case "telos-" + runtime.GOOS + "-" + runtime.GOARCH, "telosd-" + runtime.GOOS + "-" + runtime.GOARCH:
+		case releaseBinaryName("telos", runtime.GOOS, runtime.GOARCH), "telosd-" + runtime.GOOS + "-" + runtime.GOARCH:
 			w.Write(binary)
 		case "telos-cli-skill.tar.gz":
 			w.Write(skill)
@@ -38,6 +38,9 @@ func serveInstallationUpdate(t *testing.T, version string, binary, skill []byte)
 }
 
 func TestInstallationUpdateRepairsCompanionsAtCurrentVersion(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not ship telosd")
+	}
 	dir := t.TempDir()
 	skillsDir := t.TempDir()
 	t.Setenv("TELOS_AGENT_SKILLS_DIR", skillsDir)
@@ -84,6 +87,9 @@ func TestInstallationUpdateRepairsCompanionsAtCurrentVersion(t *testing.T) {
 }
 
 func TestInstallationUpdateRemembersSkillDirectoryAndPreservesSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires Unix runtime and symlinks")
+	}
 	dir := t.TempDir()
 	skillsDir := t.TempDir()
 	t.Setenv("TELOS_AGENT_SKILLS_DIR", "")
@@ -252,5 +258,66 @@ func TestInstallationUpdateRejectsUnsafeSkillBeforeReplacingAnything(t *testing.
 			assertNoUpdateStage(t, dir)
 			assertNoUpdateStage(t, os.Getenv("TELOS_AGENT_SKILLS_DIR"))
 		})
+	}
+}
+
+func TestInitialInstallationUsesUpdater(t *testing.T) {
+	dir := t.TempDir()
+	skills := t.TempDir()
+	t.Setenv("TELOS_AGENT_SKILLS_DIR", skills)
+	target := filepath.Join(dir, "telos")
+	server := serveInstallationUpdate(t, "v0.1.5", []byte("new CLI"), updateTestSkill(t))
+	if _, err := updateCLI(target, "", "v0.1.5", server.URL, server.Client()); err != nil {
+		t.Fatal(err)
+	}
+	for path, want := range map[string]string{
+		target: "new CLI",
+		filepath.Join(skills, "telos-cli", "SKILL.md"): "released SKILL.md",
+	} {
+		if data, err := os.ReadFile(path); err != nil || string(data) != want {
+			t.Fatalf("%s = %q, %v; want %q", path, data, err, want)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(dir, "telosd")); !os.IsNotExist(err) {
+		t.Fatalf("initial cloud installation included runtime: %v", err)
+	}
+}
+
+func TestInstallationLockIsExclusive(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".telos-install.lock")
+	first, err := lockInstallation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := lockInstallation(path)
+	if err == nil {
+		second.Close()
+		first.Close()
+		t.Fatal("concurrent installation lock succeeded")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	third, err := lockInstallation(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	third.Close()
+}
+
+func TestBinaryReplacementFailurePreservesOriginal(t *testing.T) {
+	directory := t.TempDir()
+	target := filepath.Join(directory, "telos.exe")
+	if err := os.WriteFile(target, []byte("original CLI"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := replaceReleaseTarget(&releaseReplacement{stage: filepath.Join(directory, "missing-stage"), target: target}); err == nil {
+		t.Fatal("missing replacement succeeded")
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "original CLI" {
+		t.Fatalf("original not restored: %q %v", data, err)
+	}
+	if _, err := os.Stat(target + ".old"); !os.IsNotExist(err) {
+		t.Fatalf("rollback left a backup: %v", err)
 	}
 }

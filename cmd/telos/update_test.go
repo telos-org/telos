@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -20,17 +21,31 @@ import (
 )
 
 func updateTestManifest(version string) string {
+	daemon := ""
+	if runtime.GOOS != "windows" {
+		daemon = releaseBinaryName("telosd", runtime.GOOS, runtime.GOARCH)
+	}
 	return fmt.Sprintf(`{"version":%q,"skills":[{"ref":%q,"artifact":"telos-cli-skill.tar.gz"}],"platforms":[{"os":%q,"arch":%q,"telos":%q,"telosd":%q}]}`,
-		version, "@telos/telos-cli:"+strings.TrimPrefix(version, "v"), runtime.GOOS, runtime.GOARCH, "telos-"+runtime.GOOS+"-"+runtime.GOARCH, "telosd-"+runtime.GOOS+"-"+runtime.GOARCH)
+		version, "@telos/telos-cli:"+strings.TrimPrefix(version, "v"), runtime.GOOS, runtime.GOARCH, releaseBinaryName("telos", runtime.GOOS, runtime.GOARCH), daemon)
 }
 
 func updateTestSkill(t *testing.T) []byte {
 	t.Helper()
+	return updateTestSkillFiles(t, map[string]string{"SKILL.md": "released SKILL.md", "references/install.md": "released references/install.md"})
+}
+
+func updateTestSkillFiles(t *testing.T, files map[string]string) []byte {
+	t.Helper()
 	var buffer bytes.Buffer
 	gz := gzip.NewWriter(&buffer)
 	archive := tar.NewWriter(gz)
-	for _, name := range []string{"SKILL.md", "references/install.md"} {
-		data := []byte("released " + name)
+	names := make([]string, 0, len(files))
+	for name := range files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		data := []byte(files[name])
 		if err := archive.WriteHeader(&tar.Header{Name: name, Mode: 0o644, Size: int64(len(data))}); err != nil {
 			t.Fatal(err)
 		}
@@ -48,8 +63,7 @@ func updateTestSkill(t *testing.T) []byte {
 }
 
 func updateTestSums(binary []byte, skill []byte) string {
-	return fmt.Sprintf("%x  telos-%s-%s\n%x  telosd-%s-%s\n%x  telos-cli-skill.tar.gz\n",
-		sha256.Sum256(binary), runtime.GOOS, runtime.GOARCH, sha256.Sum256(binary), runtime.GOOS, runtime.GOARCH, sha256.Sum256(skill))
+	return fmt.Sprintf("%x  %s\n%x  %s\n%x  telos-cli-skill.tar.gz\n", sha256.Sum256(binary), releaseBinaryName("telos", runtime.GOOS, runtime.GOARCH), sha256.Sum256(binary), releaseBinaryName("telosd", runtime.GOOS, runtime.GOARCH), sha256.Sum256(skill))
 }
 
 func TestCLIUpdateRejectsDevelopmentBuilds(t *testing.T) {
@@ -97,7 +111,7 @@ func TestCLIUpdateReleaseSelection(t *testing.T) {
 				}
 			}
 			version := "v0.1.5+master.abc123"
-			artifact := "telos-" + runtime.GOOS + "-" + runtime.GOARCH
+			artifact := releaseBinaryName("telos", runtime.GOOS, runtime.GOARCH)
 			payload := []byte("verified replacement")
 			skill := updateTestSkill(t)
 			manifestVersion := version
@@ -139,15 +153,19 @@ func TestCLIUpdateReleaseSelection(t *testing.T) {
 				t.Fatalf("replacement = %q, %v", data, err)
 			}
 			data, err = os.ReadFile(filepath.Join(dir, "telosd"))
-			if err != nil || !bytes.Equal(data, payload) {
+			if runtime.GOOS != "windows" && (err != nil || !bytes.Equal(data, payload)) {
 				t.Fatalf("runtime replacement = %q, %v", data, err)
 			}
 			data, err = os.ReadFile(filepath.Join(os.Getenv("TELOS_AGENT_SKILLS_DIR"), "telos-cli", "SKILL.md"))
-			if err != nil || string(data) != "released SKILL.md" || len(got.Components) != 3 {
+			expectedComponents := 3
+			if runtime.GOOS == "windows" {
+				expectedComponents = 2
+			}
+			if err != nil || string(data) != "released SKILL.md" || len(got.Components) != expectedComponents {
 				t.Fatalf("skill replacement = %q, components = %v, error = %v", data, got.Components, err)
 			}
 			info, err := os.Stat(target)
-			if err != nil || info.Mode().Perm() != 0o755 {
+			if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o755) {
 				t.Fatalf("replacement permissions: %v, %v", info, err)
 			}
 			for _, name := range []string{"config.yaml", "SKILL.md"} {
@@ -156,7 +174,11 @@ func TestCLIUpdateReleaseSelection(t *testing.T) {
 					t.Fatalf("changed %s", name)
 				}
 			}
-			if requests.Load() != 5 {
+			expectedRequests := int32(5)
+			if runtime.GOOS == "windows" {
+				expectedRequests = 4
+			}
+			if requests.Load() != expectedRequests {
 				t.Fatalf("requests = %d", requests.Load())
 			}
 			assertNoUpdateStage(t, dir)
@@ -216,7 +238,7 @@ func TestCLIUpdateFailuresKeepOriginal(t *testing.T) {
 			}
 			payload := []byte("new binary")
 			skill := updateTestSkill(t)
-			artifact := "telos-" + runtime.GOOS + "-" + runtime.GOARCH
+			artifact := releaseBinaryName("telos", runtime.GOOS, runtime.GOARCH)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch filepath.Base(r.URL.Path) {
 				case "manifest.json":
@@ -281,6 +303,9 @@ func TestCLIUpdateFailuresKeepOriginal(t *testing.T) {
 }
 
 func TestCLIUpdatePreservesSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("requires Unix symlink permissions")
+	}
 	t.Setenv("TELOS_AGENT_SKILLS_DIR", t.TempDir())
 	dir := t.TempDir()
 	target := filepath.Join(dir, "real-telos")
@@ -366,7 +391,11 @@ func TestCLIUpdateRunningExecutable(t *testing.T) {
 		return
 	}
 	dir := t.TempDir()
-	target := filepath.Join(dir, "telos")
+	name := "telos"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	target := filepath.Join(dir, name)
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -388,7 +417,7 @@ func TestCLIUpdateRunningExecutable(t *testing.T) {
 	}
 	payload := []byte("replacement CLI")
 	skill := updateTestSkill(t)
-	artifact := "telos-" + runtime.GOOS + "-" + runtime.GOARCH
+	artifact := releaseBinaryName("telos", runtime.GOOS, runtime.GOARCH)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch filepath.Base(r.URL.Path) {
 		case "manifest.json":

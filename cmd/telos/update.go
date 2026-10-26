@@ -17,7 +17,20 @@ import (
 	"github.com/telos-org/telos/internal/spec"
 )
 
-const releaseBaseURL = "https://usetelos.ai/releases"
+var releaseBaseURL = "https://usetelos.ai/releases"
+
+var releaseHTTPClient = &http.Client{
+	Timeout: 2 * time.Minute,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if req.URL.Scheme != "https" {
+			return fmt.Errorf("refusing release redirect to non-HTTPS URL")
+		}
+		if len(via) >= 10 {
+			return fmt.Errorf("too many release redirects")
+		}
+		return nil
+	},
+}
 
 type cliReleaseManifest struct {
 	Version string `json:"version"`
@@ -41,21 +54,10 @@ func cmdUpdate(args []string) {
 	}
 	requested := fs.Arg(0)
 	executable, err := os.Executable()
-	client := &http.Client{
-		Timeout: 2 * time.Minute,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if req.URL.Scheme != "https" {
-				return fmt.Errorf("refusing release redirect to non-HTTPS URL")
-			}
-			if len(via) >= 10 {
-				return fmt.Errorf("too many release redirects")
-			}
-			return nil
-		},
-	}
+
 	var result installationUpdate
 	if err == nil {
-		result, err = updateCLI(executable, Version, requested, releaseBaseURL, client)
+		result, err = updateCLI(executable, Version, requested, releaseBaseURL, releaseHTTPClient)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -66,6 +68,32 @@ func cmdUpdate(args []string) {
 		return
 	}
 	fmt.Printf("updated Telos installation to %s (%s)\n", result.Version, strings.Join(result.Components, ", "))
+}
+
+// cmdInstall is the private bootstrap entrypoint used by the PowerShell installer.
+func cmdInstall(args []string) {
+	if runtime.GOOS != "windows" || len(args) < 1 || len(args) > 2 {
+		exitWithError(fmt.Errorf("invalid installer invocation"))
+	}
+	directory, err := filepath.Abs(args[0])
+	if err == nil {
+		err = os.MkdirAll(directory, 0o755)
+	}
+	if err == nil && len(args) == 2 {
+		err = os.Setenv("TELOS_AGENT_SKILLS_DIR", args[1])
+	}
+	if err != nil {
+		exitWithError(err)
+	}
+	baseURL := os.Getenv("TELOS_RELEASE_BASE_URL")
+	if baseURL == "" {
+		baseURL = releaseBaseURL
+	}
+	result, err := updateCLI(filepath.Join(directory, "telos.exe"), "", Version, strings.TrimRight(baseURL, "/"), releaseHTTPClient)
+	if err != nil {
+		exitWithError(err)
+	}
+	fmt.Printf("installed Telos %s to %s\n", result.Version, directory)
 }
 
 func updateCLI(executable, current, requested, baseURL string, client *http.Client) (installationUpdate, error) {
@@ -82,10 +110,15 @@ func updateCLI(executable, current, requested, baseURL string, client *http.Clie
 		}
 		version = "v" + strings.TrimPrefix(version, "v")
 	}
-	target, err := cliUpdateTarget(executable)
-	if err != nil {
-		return installationUpdate{}, err
+	target := executable
+	if current != "" {
+		var err error
+		target, err = cliUpdateTarget(executable)
+		if err != nil {
+			return installationUpdate{}, err
+		}
 	}
+
 	var metadata bytes.Buffer
 	if err := downloadCLIUpdate(client, baseURL+"/"+version+"/manifest.json", &metadata, 1<<20); err != nil {
 		return installationUpdate{}, err
@@ -144,18 +177,26 @@ func cliUpdateTarget(executable string) (string, error) {
 }
 
 func cliReleaseArtifact(manifest cliReleaseManifest, goos, goarch string) (string, error) {
-	if (goos != "darwin" && goos != "linux") || (goarch != "amd64" && goarch != "arm64") {
+	if (goos != "darwin" && goos != "linux" && goos != "windows") || (goarch != "amd64" && goarch != "arm64") || (goos == "windows" && goarch != "amd64") {
 		return "", fmt.Errorf("CLI updates are unsupported on %s/%s", goos, goarch)
 	}
 	for _, platform := range manifest.Platforms {
 		if platform.OS == goos && platform.Arch == goarch {
-			if platform.Telos != "telos-"+goos+"-"+goarch {
+			if platform.Telos != releaseBinaryName("telos", goos, goarch) || (goos == "windows" && platform.Telosd != "") {
 				return "", fmt.Errorf("invalid CLI artifact in release manifest: %q", platform.Telos)
 			}
 			return platform.Telos, nil
 		}
 	}
 	return "", fmt.Errorf("release %s has no CLI for %s/%s", manifest.Version, goos, goarch)
+}
+
+func releaseBinaryName(component, goos, goarch string) string {
+	name := component + "-" + goos + "-" + goarch
+	if goos == "windows" {
+		name += ".exe"
+	}
+	return name
 }
 
 func cliReleaseChecksum(sums, artifact string) ([]byte, error) {

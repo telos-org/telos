@@ -9,12 +9,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 )
 
 func TestCLIWithTestFakeExecutor(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("local execution is unavailable on Windows")
+	}
 	if testing.Short() {
 		t.Skip("skipping subprocess integration test in short mode")
 	}

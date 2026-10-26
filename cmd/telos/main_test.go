@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -531,7 +532,11 @@ func TestPackageSkillDirBuildsSkillPublishPayload(t *testing.T) {
 	if string(skill.files["SKILL.md"].Data) != "---\nname: k8s-deploy\ndescription: Deploy\n---\nUse kubectl.\n" {
 		t.Fatalf("skill file: got %#v", skill.files["SKILL.md"])
 	}
-	if skill.files["scripts/deploy.sh"].Mode != "0755" {
+	expectedMode := "0755"
+	if runtime.GOOS == "windows" {
+		expectedMode = "0644"
+	}
+	if skill.files["scripts/deploy.sh"].Mode != expectedMode {
 		t.Fatalf("script file: got %#v", skill.files["scripts/deploy.sh"])
 	}
 }
@@ -1465,6 +1470,9 @@ func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 }
 
 func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("local execution is unavailable on Windows")
+	}
 	configureLocalOnlyTest(t)
 	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
 
@@ -1485,6 +1493,9 @@ func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
 }
 
 func TestLocalSessionRootDefaultsToOutputRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("local execution is unavailable on Windows")
+	}
 	t.Setenv("TELOS_SESSION_DIR", "")
 	outputRoot := filepath.Join(t.TempDir(), "telos-output")
 	t.Setenv("TELOS_OUTPUT_ROOT", outputRoot)
@@ -1500,6 +1511,9 @@ func TestLocalSessionRootDefaultsToOutputRoot(t *testing.T) {
 }
 
 func TestLocalSessionRootHonorsSessionDirEnv(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("local execution is unavailable on Windows")
+	}
 	want := filepath.Join(t.TempDir(), "sessions")
 	t.Setenv("TELOS_SESSION_DIR", want)
 	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(t.TempDir(), "telos-output"))

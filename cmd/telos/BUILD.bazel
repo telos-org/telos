@@ -59,6 +59,13 @@ go_cross_binary(
     visibility = ["//visibility:public"],
 )
 
+go_cross_binary(
+    name = "telos_windows_amd64",
+    platform = "@rules_go//go/toolchain:windows_amd64",
+    target = ":telos",
+    visibility = ["//visibility:public"],
+)
+
 go_test(
     name = "telos_test",
     srcs = glob(
@@ -66,7 +73,7 @@ go_test(
         # This subprocess integration test builds tagged telos/telosd binaries
         # with ambient `go build`; keep it under `go test ./...` until it is
         # Bazel-native.
-        exclude = ["testfake_integration_test.go"],
+        exclude = ["testfake_integration_test.go", "installation_windows_test.go"],
     ),
     embed = [":telos_lib"],
     deps = [

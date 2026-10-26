@@ -17,7 +17,7 @@ Read the guide at [usetelos.ai/docs](https://usetelos.ai/docs).
 ```text
 Set up Telos.
 
-- Install it with `curl -fsSL https://usetelos.ai/install.sh | sh`.
+- Install the native Telos CLI and bundled agent skill for this platform.
 - Run `telos login` to sign in to Telos Cloud.
 - Read the installed `telos-cli` skill to get started.
 ```
@@ -29,7 +29,19 @@ curl -fsSL https://usetelos.ai/install.sh | sh
 telos login
 ```
 
-The installer supports macOS and Linux on amd64 and arm64. For agents and CI,
+On Windows amd64, run this in PowerShell:
+
+```powershell
+Invoke-RestMethod https://usetelos.ai/releases/latest/install.ps1 | Invoke-Expression
+```
+
+The shell installer supports macOS and Linux on amd64 and arm64. The Windows
+installer includes the CLI and agent skill; local execution and `telosd` are
+available on macOS/Linux. Both installers support `TELOS_INSTALL_DIR` and
+`TELOS_AGENT_SKILLS_DIR`. On Windows, add the printed installation directory to
+your user PATH and open a new terminal before running `telos login`.
+
+Use `telos update` to update the CLI and bundled skill. For agents and CI,
 set `TELOS_AUTH_TOKEN` instead of logging in.
 
 ## Get started
