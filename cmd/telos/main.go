@@ -12,6 +12,7 @@ import (
 var Version = "dev"
 
 func main() {
+	cleanupPreviousExecutable()
 	if len(os.Args) == 2 && os.Args[1] == "--version" {
 		fmt.Println("telos " + Version)
 		return
@@ -28,6 +29,8 @@ func main() {
 	case "version":
 		fmt.Println("telos " + Version)
 		return
+	case "__install":
+		cmdInstall(os.Args[2:])
 	case "update":
 		cmdUpdate(os.Args[2:])
 	case "plan":

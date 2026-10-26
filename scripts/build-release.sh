@@ -32,6 +32,7 @@ bazel build \
   //cmd/telos:telos_darwin_arm64 \
   //cmd/telos:telos_linux_amd64 \
   //cmd/telos:telos_linux_arm64 \
+  //cmd/telos:telos_windows_amd64 \
   //cmd/telosd:telosd_darwin_amd64 \
   //cmd/telosd:telosd_darwin_arm64 \
   //cmd/telosd:telosd_linux_amd64 \
@@ -55,6 +56,7 @@ copy_binary "//cmd/telos:telos_darwin_amd64" "telos-darwin-amd64"
 copy_binary "//cmd/telos:telos_darwin_arm64" "telos-darwin-arm64"
 copy_binary "//cmd/telos:telos_linux_amd64" "telos-linux-amd64"
 copy_binary "//cmd/telos:telos_linux_arm64" "telos-linux-arm64"
+copy_binary "//cmd/telos:telos_windows_amd64" "telos-windows-amd64.exe"
 copy_binary "//cmd/telosd:telosd_darwin_amd64" "telosd-darwin-amd64"
 copy_binary "//cmd/telosd:telosd_darwin_arm64" "telosd-darwin-arm64"
 copy_binary "//cmd/telosd:telosd_linux_amd64" "telosd-linux-amd64"
@@ -95,6 +97,9 @@ sign_darwin_artifacts
   sed -e "s/@TELOS_VERSION@/${version}/g" \
     -e "s/@TELOS_SKILL_VERSION@/${skill_version}/g" \
     "${repo_root}/scripts/install-release.sh" > install.sh
+  sed -e "s/@TELOS_VERSION@/${version}/g" \
+    -e "s/@TELOS_SKILL_VERSION@/${skill_version}/g" \
+    "${repo_root}/scripts/install-release.ps1" > install.ps1
   chmod 0755 install.sh
   cat > manifest.json <<EOF
 {
@@ -107,7 +112,8 @@ sign_darwin_artifacts
     {"os": "darwin", "arch": "amd64", "telos": "telos-darwin-amd64", "telosd": "telosd-darwin-amd64"},
     {"os": "darwin", "arch": "arm64", "telos": "telos-darwin-arm64", "telosd": "telosd-darwin-arm64"},
     {"os": "linux", "arch": "amd64", "telos": "telos-linux-amd64", "telosd": "telosd-linux-amd64"},
-    {"os": "linux", "arch": "arm64", "telos": "telos-linux-arm64", "telosd": "telosd-linux-arm64"}
+    {"os": "linux", "arch": "arm64", "telos": "telos-linux-arm64", "telosd": "telosd-linux-arm64"},
+    {"os": "windows", "arch": "amd64", "telos": "telos-windows-amd64.exe"}
   ]
 }
 EOF

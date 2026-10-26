@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -241,38 +240,14 @@ func existingSkillDir(input string) (string, bool) {
 
 func readSkillPublishFiles(root string) (map[string]cloud.SkillFile, error) {
 	files := map[string]cloud.SkillFile{}
-	err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return nil
-		}
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("skill contains non-regular file: %s", path)
-		}
-		rel, err := filepath.Rel(root, path)
-		if err != nil {
-			return err
-		}
-		data, err := os.ReadFile(path)
-		if err != nil {
-			return err
-		}
-		mode := "0644"
-		if info.Mode().Perm()&0o111 != 0 {
-			mode = "0755"
-		}
-		files[filepath.ToSlash(rel)] = cloud.SkillFile{Mode: mode, Data: data}
-		return nil
-	})
+	entries, err := spec.ReadSkillFiles(root)
 	if err != nil {
 		return nil, err
 	}
+	for _, file := range entries {
+		files[file.Path] = cloud.SkillFile{Mode: fmt.Sprintf("%04o", file.Mode), Data: file.Data}
+	}
+
 	if _, ok := files["SKILL.md"]; !ok {
 		return nil, fmt.Errorf("skill missing SKILL.md")
 	}

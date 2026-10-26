@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -229,7 +230,7 @@ func TestApplyPackageRelocatesAuthoredSkillPaths(t *testing.T) {
 					"SKILL.md": "---\nname: beta\ndescription: Implement the product.\n---\nBuild the service.\n",
 				})
 				body := "# Goal\n\nKeep every requirement and all rubric stars.\n"
-				original := []byte("---\nname: portable-package\nversion: 1.0.0\nplatform: cloud\nskills: [\"" + ref + "\", " + implementationRef + "]\n---\n\n" + body)
+				original := []byte(fmt.Sprintf("---\nname: portable-package\nversion: 1.0.0\nplatform: cloud\nskills: [%q, %s]\n---\n\n%s", ref, implementationRef, body))
 				path := filepath.Join(source, "SPEC.md")
 				if layout == "name-collision-base" {
 					path = filepath.Join(t.TempDir(), "SPEC.md")
@@ -837,6 +838,9 @@ func TestBuildApplyPackageDigestIgnoresSkillFileCreationOrder(t *testing.T) {
 }
 
 func TestBuildApplyPackageNormalizesSkillFileModes(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows executable metadata is covered by skill round-trip tests")
+	}
 	dir := t.TempDir()
 	specPath := writePackageTestSpec(t, dir, "package-modes", "alpha")
 	skillPath := writePackageTestSkill(t, dir, "alpha", map[string]string{
@@ -1676,4 +1680,242 @@ func tarEntryModes(t *testing.T, data []byte) map[string]int64 {
 		modes[header.Name] = header.Mode
 	}
 	return modes
+}
+
+func TestWindowsSkillExecutableModesSurviveExtractionAndRepublication(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable metadata")
+	}
+	files := []packageFile{
+		{path: "SKILL.md", mode: 0o644, data: []byte("---\nname: alpha\n---\nUse alpha.\n")},
+		{path: "bin with spaces/工具&.sh", mode: 0o755, data: []byte("#!/bin/sh\nexit 0\n")},
+	}
+	digest := digestPackagedSkill("alpha", files)
+	bundle, err := writePackageTar(files)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	if err := ExtractSkillBundle("alpha", digest, bundle, root); err != nil {
+		t.Fatal(err)
+	}
+	record, err := os.ReadFile(filepath.Join(root, skillExecutablesFile))
+	if err != nil || strings.TrimSpace(string(record)) != "bin with spaces/工具&.sh" {
+		t.Fatalf("skill executable record: %s %v", record, err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "bin with spaces", skillExecutablesFile)); !os.IsNotExist(err) {
+		t.Fatalf("per-directory metadata created: %v", err)
+	}
+	entries, err := ReadSkillFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 || entries[1].Path != "bin with spaces/工具&.sh" || entries[1].Mode != 0o755 {
+		t.Fatalf("lost executable metadata: %+v", entries)
+	}
+	republishedDigest, republishedBundle, err := BuildSkillBundle(&Skill{Name: "alpha", Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if republishedDigest != digest {
+		t.Fatalf("download/republication changed digest: %s != %s", republishedDigest, digest)
+	}
+	if err := VerifySkillBundle("alpha", digest, republishedBundle); err != nil {
+		t.Fatal(err)
+	}
+	specPath := filepath.Join(root, "SPEC.md")
+	if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: windows-package\nskills: [./]\n---\nBody.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := CompileEnvironment(specPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := BuildApplyPackage(compiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	extracted := t.TempDir()
+	if _, err := ExtractApplyPackage(pkg.Bytes, extracted); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(extracted, skillExecutablesFile)); !os.IsNotExist(err) {
+		t.Fatalf("metadata created outside a skill root: %v", err)
+	}
+	record, err = os.ReadFile(filepath.Join(extracted, "skills", "alpha", skillExecutablesFile))
+	if err != nil || strings.TrimSpace(string(record)) != "bin with spaces/工具&.sh" {
+		t.Fatalf("packaged skill executable record: %s %v", record, err)
+	}
+	extractedCompiled, err := CompileEnvironment(filepath.Join(extracted, "SPEC.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	rebuilt, err := BuildApplyPackage(extractedCompiled)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rebuilt.Digest != pkg.Digest {
+		t.Fatalf("package round trip changed digest: %s != %s", rebuilt.Digest, pkg.Digest)
+	}
+}
+
+func TestWindowsPackagePathsRejectAliasesAndAlternateStreams(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows filesystem paths")
+	}
+	for _, names := range [][]string{
+		{"bad\x01.txt"}, {"C:/outside"}, {"file:stream"}, {"CON"}, {"folder/file."}, {"folder/file "}, {"folder/file", "folder/FILE"}, {"bin/a", "BIN/b"}, {"a/bin/x", "a/BIN/y"}, {"bin", "bin/a"}, {".TELOS-EXECUTABLES"},
+		{"bin/σ", "bin/ς"}, {"σ/a", "ς/b"},
+	} {
+		files := map[string]packageFile{}
+		for _, name := range names {
+			files[name] = packageFile{path: name, mode: 0o644, data: []byte("data")}
+		}
+		directory := filepath.Join(t.TempDir(), "not-created")
+		if err := writePackageFiles(directory, files); err == nil {
+			t.Fatalf("unsafe paths accepted: %v", names)
+		}
+		if _, err := os.Stat(directory); !os.IsNotExist(err) {
+			t.Fatalf("unsafe package wrote to disk: %v", err)
+		}
+	}
+}
+
+func TestWindowsExecutableMetadataBounds(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable metadata")
+	}
+	limits := defaultArchiveReadLimits()
+	for name, tc := range map[string]struct {
+		data      string
+		wantError bool
+	}{
+		"empty file":            {"", false},
+		"without final newline": {"bin with spaces/工具&.sh", false},
+		"with final newline":    {"bin with spaces/工具&.sh\n", false},
+		"with CRLF separators":  {"bin/tool.sh\r\nscripts/check.sh\r\n", false},
+		"maximum CRLF record":   {strings.Repeat(strings.Repeat("a", limits.maxPathBytes)+"\r\n", limits.maxFiles), false},
+		"too many paths":        {strings.Repeat("a\n", limits.maxFiles+1), true},
+		"path too long":         {strings.Repeat("a", limits.maxPathBytes+1), true},
+		"file too large":        {strings.Repeat("a", limits.maxFiles*(limits.maxPathBytes+2)+1), true},
+		"unsafe path":           {"../escape\n", true},
+		"empty entry":           {"bin/tool.sh\n\n", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, skillExecutablesFile), []byte(tc.data), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := readSkillExecutables(root); (err != nil) != tc.wantError {
+				t.Fatalf("executable metadata error = %v, want error %v", err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestWindowsExecutableMetadataUsesUppercasePathMatching(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable metadata")
+	}
+	for _, separator := range []string{"\n", "\r\n"} {
+		t.Run(fmt.Sprintf("separator %q", separator), func(t *testing.T) {
+			root := t.TempDir()
+			if err := os.Mkdir(filepath.Join(root, "bin"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "bin", "ς.sh"), []byte("tool"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, skillExecutablesFile), []byte("BIN/σ.SH"+separator), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			files, err := ReadSkillFiles(root)
+			if err != nil || len(files) != 1 || files[0].Path != "bin/ς.sh" || files[0].Mode != 0o755 {
+				t.Fatalf("case-varied executable metadata: %+v, %v", files, err)
+			}
+		})
+	}
+}
+
+func TestUnixSkillPublicationPreservesMetadataNamedPayloadFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Unix publication filenames")
+	}
+	root := t.TempDir()
+	names := []string{"SKILL.md", skillExecutablesFile, ".telos-executables.json", ".telos-file-modes.json"}
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(root, name), []byte("ordinary payload"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files, err := ReadSkillFiles(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != len(names) {
+		t.Fatalf("publication omitted a legitimate Unix file: %+v", files)
+	}
+	digest, bundle, err := BuildSkillBundle(&Skill{Name: "metadata-payload", Path: root})
+	if err != nil {
+		t.Fatal(err)
+	}
+	extracted := t.TempDir()
+	if err := ExtractSkillBundle("metadata-payload", digest, bundle, extracted); err != nil {
+		t.Fatal(err)
+	}
+	republished, _, err := BuildSkillBundle(&Skill{Name: "metadata-payload", Path: extracted})
+	if err != nil || republished != digest {
+		t.Fatalf("Unix metadata-named files did not survive round trip: %s != %s, %v", republished, digest, err)
+	}
+	entries := tarEntries(t, bundle)
+	for _, name := range names {
+		if string(entries[name]) != "ordinary payload" {
+			t.Fatalf("lost payload file %s", name)
+		}
+	}
+}
+
+func TestWindowsPackageExecutableRecordsBelongToSkillRoots(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows executable metadata")
+	}
+	files := map[string]packageFile{
+		"SPEC.md":               {mode: 0o644, data: []byte("spec")},
+		"skills/alpha/SKILL.md": {mode: 0o644, data: []byte("alpha")},
+		"skills/alpha/bin/a":    {mode: 0o755, data: []byte("a")},
+		"skills/beta/SKILL.md":  {mode: 0o644, data: []byte("beta")},
+		"skills/beta/scripts/b": {mode: 0o755, data: []byte("b")},
+		"skills/gamma/SKILL.md": {mode: 0o644, data: []byte("gamma")},
+	}
+	root := t.TempDir()
+	if err := writePackageFiles(root, files); err != nil {
+		t.Fatal(err)
+	}
+	records := map[string]string{}
+	if err := filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.Name() == skillExecutablesFile {
+			relative, err := filepath.Rel(root, path)
+			if err != nil {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			records[filepath.ToSlash(relative)] = strings.TrimSpace(string(data))
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	expected := map[string]string{
+		"skills/alpha/" + skillExecutablesFile: "bin/a",
+		"skills/beta/" + skillExecutablesFile:  "scripts/b",
+	}
+	if !reflect.DeepEqual(records, expected) {
+		t.Fatalf("metadata roots: got %v, want %v", records, expected)
+	}
 }

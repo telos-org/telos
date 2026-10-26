@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -21,13 +22,13 @@ func TestUsageShowsRunForAvailableExecution(t *testing.T) {
 		{name: "hosted nested execution", hosted: true, show: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			runtime := filepath.Join(t.TempDir(), "telosd")
+			runtimePath := filepath.Join(t.TempDir(), "telosd")
 			if test.mode != 0 {
-				if err := os.WriteFile(runtime, []byte("#!/bin/sh\n"), test.mode); err != nil {
+				if err := os.WriteFile(runtimePath, []byte("#!/bin/sh\n"), test.mode); err != nil {
 					t.Fatal(err)
 				}
 			}
-			t.Setenv("TELOSD_PATH", runtime)
+			t.Setenv("TELOSD_PATH", runtimePath)
 			t.Setenv("TELOS_RUNTIME", "")
 			t.Setenv("TELOS_API_TOKEN", "")
 			t.Setenv("TELOS_SESSION_ID", "")
@@ -37,7 +38,7 @@ func TestUsageShowsRunForAvailableExecution(t *testing.T) {
 			}
 			var out bytes.Buffer
 			usage(&out)
-			if strings.Contains(out.String(), "run SPEC.md") != test.show {
+			if strings.Contains(out.String(), "run SPEC.md") != (test.show && runtime.GOOS != "windows") {
 				t.Fatalf("unexpected run visibility:\n%s", out.String())
 			}
 			for _, command := range []string{"apply [SPEC.md]", "list", "describe GOAL", "logs GOAL", "update [VERSION]"} {

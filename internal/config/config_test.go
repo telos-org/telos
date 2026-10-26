@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -294,7 +295,7 @@ func assertMode(t *testing.T, path string, want os.FileMode) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := info.Mode().Perm(); got != want {
+	if got := info.Mode().Perm(); runtime.GOOS != "windows" && got != want {
 		t.Fatalf("mode for %s = %04o, want %04o", path, got, want)
 	}
 }

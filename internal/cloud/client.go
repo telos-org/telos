@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -804,6 +805,14 @@ func retryableReadError(err error) bool {
 		errors.Is(err, syscall.ECONNRESET) || errors.Is(err, syscall.ECONNABORTED) ||
 		errors.Is(err, syscall.EPIPE) || errors.Is(err, syscall.ECONNREFUSED) {
 		return true
+	}
+	if runtime.GOOS == "windows" {
+		// Win32 broken pipe and Winsock abort/reset/timeout/refused errors.
+		for _, code := range []syscall.Errno{109, 10053, 10054, 10060, 10061} {
+			if errors.Is(err, code) {
+				return true
+			}
+		}
 	}
 	// net/http's HTTP/2 stream error is unexported. Match only internal-error
 	// resets sent by the peer, including errors wrapped by http.Client.Do.

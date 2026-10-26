@@ -343,11 +343,70 @@ class InstallReleaseTest(unittest.TestCase):
         self.assertEqual(list(real.glob(".telos-install.*")), [])
         self.assertEqual(list(self.root.glob(".telos-cli.*")), [])
 
+    def test_promotes_releases_with_and_without_windows(self):
+        tools = self.root / "promotion tools"
+        tools.mkdir()
+        gcloud = tools / "gcloud"
+        gcloud.write_text(
+            "#!/usr/bin/env python3\n"
+            "import os, shutil, sys\n"
+            "from pathlib import Path\n"
+            "root = Path(os.environ['INSTALL_TEST_RELEASE_ROOT'])\n"
+            "def path(arg): return Path(arg.replace('gs://release-fixture/', str(root) + '/', 1))\n"
+            "if os.environ.get('INSTALL_TEST_STORAGE_FAILURE') == sys.argv[2]: sys.exit(73)\n"
+            "if sys.argv[2] == 'ls':\n"
+            "    for entry in path(sys.argv[3]).parent.iterdir(): print('gs://release-fixture/' + str(entry.relative_to(root)))\n"
+            "elif sys.argv[2] == 'rm':\n"
+            "    for entry in sys.stdin: path(entry.rstrip('\\n')).unlink()\n"
+            "else:\n"
+            "    source, target = map(path, sys.argv[3:5])\n"
+            "    target.parent.mkdir(parents=True, exist_ok=True)\n"
+            "    shutil.copyfile(source, target)\n"
+        )
+        gcloud.chmod(0o755)
+        env = dict(os.environ)
+        env.update(PATH=str(tools) + os.pathsep + env["PATH"], TELOS_RELEASE_BUCKET="release-fixture", INSTALL_TEST_RELEASE_ROOT=str(self.root))
+        artifacts = [
+            f"{binary}-{system}-{arch}"
+            for binary in ("telos", "telosd")
+            for system in ("darwin", "linux")
+            for arch in ("amd64", "arm64")
+        ] + ["telos-cli-skill.tar.gz", "SHA256SUMS", "install.sh"]
+        latest = self.root / "releases" / "latest"
+        command = ["bash", str(INSTALLER.with_name("promote-release.sh")), VERSION]
+        for windows in (False, True, False, False):
+            with self.subTest(windows=windows):
+                platforms = [
+                    {"os": system, "arch": arch, "telos": f"telos-{system}-{arch}", "telosd": f"telosd-{system}-{arch}"}
+                    for system in ("darwin", "linux") for arch in ("amd64", "arm64")
+                ]
+                if windows:
+                    platforms.append({"os": "windows", "arch": "amd64", "telos": "telos-windows-amd64.exe"})
+                (self.release / "manifest.json").write_text(json.dumps({"version": VERSION, "platforms": platforms}))
+                expected = artifacts + (["telos-windows-amd64.exe", "install.ps1"] if windows else [])
+                for artifact in expected:
+                    (self.release / artifact).write_text(artifact)
+                if not windows and (latest / "install.ps1").exists():
+                    previous = (latest / "manifest.json").read_bytes()
+                    for failure in ("ls", "rm"):
+                        env["INSTALL_TEST_STORAGE_FAILURE"] = failure
+                        result = subprocess.run(command, env=env, text=True, capture_output=True, check=False)
+                        self.assertNotEqual(result.returncode, 0)
+                        self.assertEqual((latest / "manifest.json").read_bytes(), previous)
+                    del env["INSTALL_TEST_STORAGE_FAILURE"]
+                result = subprocess.run(
+                    command,
+                    env=env, text=True, capture_output=True, check=False,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(sorted(path.name for path in latest.iterdir()), sorted(expected + ["manifest.json"]))
+                self.assertEqual((latest / "manifest.json").read_bytes(), (self.release / "manifest.json").read_bytes())
+
     def test_release_builder_keeps_both_binaries_for_hosted_bootstrap(self):
         repository = self.root / "repo"
         scripts = repository / "scripts"
         scripts.mkdir(parents=True)
-        for name in ("build-release.sh", "install-release.sh"):
+        for name in ("build-release.sh", "install-release.sh", "install-release.ps1"):
             shutil.copyfile(INSTALLER.with_name(name), scripts / name)
         outputs = self.root / "build outputs"
         outputs.mkdir()
@@ -357,6 +416,7 @@ class InstallReleaseTest(unittest.TestCase):
             for system in ("darwin", "linux")
             for arch in ("amd64", "arm64")
         ]
+        artifacts.append("telos-windows-amd64.exe")
         for artifact in artifacts:
             (outputs / artifact).write_bytes(artifact.encode())
         shutil.copyfile(self.release / "telos-cli-skill.tar.gz", outputs / "telos-cli-skill.tar.gz")
@@ -369,6 +429,7 @@ class InstallReleaseTest(unittest.TestCase):
             'for arg in "$@"; do label="$arg"; done\n'
             'case "$label" in\n'
             '  //skills:telos_cli_bundle) artifact=telos-cli-skill.tar.gz ;;\n'
+            '  //cmd/telos:telos_windows_amd64) artifact=telos-windows-amd64.exe ;;\n'
             '  *) artifact="$(printf %s "${label##*:}" | tr _ -)" ;;\n'
             'esac\n'
             'printf "%s/%s\\n" "$INSTALL_TEST_BUILD_OUTPUTS" "$artifact"\n'
@@ -389,8 +450,11 @@ class InstallReleaseTest(unittest.TestCase):
         release = repository / "dist" / VERSION
         manifest = json.loads((release / "manifest.json").read_text())
         self.assertEqual(manifest["version"], VERSION)
-        self.assertEqual(len(manifest["platforms"]), 4)
+        self.assertEqual(len(manifest["platforms"]), 5)
         for entry in manifest["platforms"]:
+            if entry["os"] == "windows":
+                self.assertEqual(entry, {"os": "windows", "arch": "amd64", "telos": "telos-windows-amd64.exe"})
+                continue
             suffix = f"{entry['os']}-{entry['arch']}"
             self.assertEqual(entry["telos"], f"telos-{suffix}")
             self.assertEqual(entry["telosd"], f"telosd-{suffix}")
@@ -399,6 +463,7 @@ class InstallReleaseTest(unittest.TestCase):
             digest = hashlib.sha256((release / artifact).read_bytes()).hexdigest()
             self.assertIn(f"{digest}  {artifact}\n", checksums)
         self.assertNotIn("@TELOS_", (release / "install.sh").read_text())
+        self.assertNotIn("@TELOS_", (release / "install.ps1").read_text())
 
 
 if __name__ == "__main__":

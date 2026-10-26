@@ -17,7 +17,7 @@ fi
 
 # Consumers resolve the immutable version from manifest.json. Publish that
 # manifest last so latest always names a complete, verified release.
-for artifact in \
+artifacts=(
   telos-darwin-amd64 \
   telos-darwin-arm64 \
   telos-linux-amd64 \
@@ -29,10 +29,24 @@ for artifact in \
   telos-cli-skill.tar.gz \
   SHA256SUMS \
   install.sh
-do
-  gcloud storage cp "${source}/${artifact}" "${target}/${artifact}" \
-    --cache-control="no-cache,max-age=0"
+)
+windows="$(jq -r 'any(.platforms[]; .os == "windows" and .arch == "amd64")' "${verify_dir}/manifest.json")"
+if [[ "$windows" == true ]]; then
+  artifacts+=(telos-windows-amd64.exe install.ps1)
+fi
+for artifact in "${artifacts[@]}"; do
+  copy_flags=(--cache-control="no-cache,max-age=0")
+  if [[ "$artifact" == "install.ps1" ]]; then
+    copy_flags+=(--content-type="text/plain; charset=utf-8")
+  fi
+  gcloud storage cp "${source}/${artifact}" "${target}/${artifact}" "${copy_flags[@]}"
 done
+if [[ "$windows" == false ]]; then
+  obsolete="$(gcloud storage ls "${target}/*" | awk -v prefix="${target}/" '$0 == prefix "telos-windows-amd64.exe" || $0 == prefix "install.ps1"')"
+  if [[ -n "$obsolete" ]]; then
+    printf '%s\n' "$obsolete" | gcloud storage rm --read-paths-from-stdin
+  fi
+fi
 gcloud storage cp "${source}/manifest.json" "${target}/manifest.json" \
   --cache-control="no-cache,max-age=0"
 

@@ -36,15 +36,40 @@ jobs:
           install_pi 0.84.2 906fbe787fd225c4ac624fe7ebd5b1d55a60e0f5c7ef51795d231564f9ee1c13
           echo "TELOS_TEST_PI_BINARY=$RUNNER_TEMP/pi-1.0.4/pi/pi" >> "$GITHUB_ENV"
           echo "TELOS_TEST_LEGACY_PI_BINARY=$RUNNER_TEMP/pi-0.84.2/pi/pi" >> "$GITHUB_ENV"
+      - name: Check Windows Bazel target
+        run: |
+          go install github.com/bazelbuild/bazelisk@v1.27.0
+          bazelisk build //cmd/telos:telos_windows_amd64
       - run: go build ./...
       - run: go vet ./...
       - run: python3 scripts/test_install_release.py
       - run: go test ./...
       - run: go test -race ./...
 
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Build native Windows CLI
+        run: go build -o "$env:RUNNER_TEMP/telos.exe" ./cmd/telos
+      - name: Verify portable dependency boundary
+        run: |
+          $dependencies = go list -deps ./cmd/telos
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($dependencies -match 'telos/internal/(cli|executor|platform|sessionstore|sessionworker|telosd)$') {
+            throw "Windows CLI includes local runtime dependencies"
+          }
+      - name: Test CLI, installation, self-update, and portable packages
+        run: go test -timeout 10m ./cmd/telos ./internal/bundlelimits ./internal/cloud ./internal/config ./internal/runtimeclient ./internal/sessionapi ./internal/spec
+      - name: Vet portable packages
+        run: go vet ./cmd/telos ./internal/cloud ./internal/config ./internal/runtimeclient ./internal/sessionapi ./internal/spec
+
   release:
     name: publish-release
-    needs: test
+    needs: [test, windows]
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
     timeout-minutes: 60

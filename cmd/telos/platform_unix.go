@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"syscall"
 
 	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/runtimeclient"
@@ -207,4 +208,16 @@ func cmdRun(args []string) {
 	} else {
 		printLocalLaunch(os.Stdout, "submitted", session)
 	}
+}
+
+func lockInstallation(path string) (*os.File, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("cannot lock installation (check directory permissions): %w", err)
+	}
+	if err := syscall.Flock(int(file.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
+		file.Close()
+		return nil, fmt.Errorf("another installation update is in progress: %w", err)
+	}
+	return file, nil
 }

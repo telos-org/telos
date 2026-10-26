@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -299,6 +300,9 @@ func TestInferenceCLIProcess(t *testing.T) {
 }
 
 func TestNestedRunInheritsParentInferenceUnlessFlagged(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("local execution is unavailable on Windows")
+	}
 	requests := make(chan sessionapi.SessionCreateRequest, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req sessionapi.SessionCreateRequest

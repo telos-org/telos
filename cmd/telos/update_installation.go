@@ -13,8 +13,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
-	"syscall"
 
 	"github.com/telos-org/telos/internal/bundlelimits"
 )
@@ -36,15 +36,11 @@ type releaseReplacement struct {
 func updateInstallation(target, artifact string, manifest cliReleaseManifest, baseURL, sums string, client *http.Client) (installationUpdate, error) {
 	result := installationUpdate{Version: manifest.Version}
 	installDir := filepath.Dir(target)
-	lock, err := os.OpenFile(filepath.Join(installDir, ".telos-install.lock"), os.O_CREATE|os.O_RDWR, 0o600)
+	lock, err := lockInstallation(filepath.Join(installDir, ".telos-install.lock"))
 	if err != nil {
-		return result, fmt.Errorf("cannot lock installation (check directory permissions): %w", err)
+		return result, err
 	}
 	defer lock.Close()
-	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
-		return result, fmt.Errorf("another installation update is in progress: %w", err)
-	}
-	defer syscall.Flock(int(lock.Fd()), syscall.LOCK_UN)
 
 	skillTarget, err := installedSkillTarget(installDir)
 	if err != nil {
@@ -77,7 +73,7 @@ func updateInstallation(target, artifact string, manifest cliReleaseManifest, ba
 		return err
 	}
 	runtimePath := filepath.Join(installDir, "telosd")
-	if _, err := os.Lstat(runtimePath); err == nil {
+	if _, err := os.Lstat(runtimePath); runtime.GOOS != "windows" && err == nil {
 		runtimeTarget, err := cliUpdateTarget(runtimePath)
 		if err != nil {
 			return result, fmt.Errorf("resolve installed telosd: %w", err)
@@ -95,7 +91,7 @@ func updateInstallation(target, artifact string, manifest cliReleaseManifest, ba
 		if err := stageBinary("telosd", runtimeTarget, runtimeArtifact); err != nil {
 			return result, err
 		}
-	} else if !os.IsNotExist(err) {
+	} else if runtime.GOOS != "windows" && !os.IsNotExist(err) {
 		return result, err
 	}
 
@@ -159,7 +155,7 @@ func stageReleaseBinary(component, target, artifact, baseURL, sums string, clien
 	if err != nil {
 		return nil, err
 	}
-	if info, err := os.Stat(target); err == nil && info.Mode().IsRegular() && info.Mode().Perm() == 0o755 {
+	if info, err := os.Stat(target); err == nil && info.Mode().IsRegular() && (runtime.GOOS == "windows" || info.Mode().Perm() == 0o755) {
 		file, err := os.Open(target)
 		if err != nil {
 			return nil, err
@@ -384,10 +380,7 @@ func releaseFileTree(root string) (map[string]releaseFile, error) {
 	return files, err
 }
 
-// installReleaseReplacements renames each verified artifact over its target.
-// Every artifact is staged beside its target, so a file is replaced by one
-// atomic rename and is never missing or half-written. The CLI comes last, so a
-// failed rename leaves a working CLI to run the update again with.
+// The CLI comes last, after every companion artifact has been verified.
 func installReleaseReplacements(replacements []*releaseReplacement) error {
 	var updated []string
 	for _, replacement := range replacements {
@@ -405,15 +398,20 @@ func installReleaseReplacements(replacements []*releaseReplacement) error {
 }
 
 func replaceReleaseTarget(replacement *releaseReplacement) error {
-	if !replacement.directory {
+	if !replacement.directory && runtime.GOOS != "windows" {
 		if err := os.Rename(replacement.stage, replacement.target); err != nil {
 			return fmt.Errorf("replace %s: %w", replacement.target, err)
 		}
 		return nil
 	}
-	// A directory cannot be renamed over another, so the previous one moves
-	// aside first and comes back if the new one cannot take its place.
+	// Directories and running Windows executables move aside before replacement.
 	previous := replacement.stage + ".previous"
+	if !replacement.directory {
+		previous = replacement.target + ".old"
+		if err := os.Remove(previous); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove previous release (close other Telos processes and retry): %w", err)
+		}
+	}
 	if err := os.Rename(replacement.target, previous); os.IsNotExist(err) {
 		previous = ""
 	} else if err != nil {
@@ -429,7 +427,19 @@ func replaceReleaseTarget(replacement *releaseReplacement) error {
 		return err
 	}
 	if previous != "" {
-		os.RemoveAll(previous)
+		if replacement.directory {
+			_ = os.RemoveAll(previous)
+		} else {
+			_ = os.Remove(previous)
+		}
 	}
 	return nil
+}
+
+func cleanupPreviousExecutable() {
+	if runtime.GOOS == "windows" {
+		if executable, err := os.Executable(); err == nil {
+			_ = os.Remove(executable + ".old")
+		}
+	}
 }
