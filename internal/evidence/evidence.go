@@ -49,8 +49,9 @@ func fileExists(path string) bool {
 }
 
 // HasActivity reports whether an evidence log has a display log holding all
-// of its rows: one begun with it. Logs an older runtime began have none. (A
-// log later appended to by an older runtime again would miss those rows.)
+// of its rows: one begun with it and never removed. Logs an older runtime
+// began have none. (A log later appended to by an older runtime again would
+// miss those rows.)
 func HasActivity(path string) bool {
 	return fileExists(ActivityPath(path)) || isEmpty(path)
 }
@@ -79,14 +80,15 @@ func (e *Evidence) log(event string, roundNum int, role string, data map[string]
 	if lastSeq := lastEventSeq(e.Path); lastSeq > e.eventSeq {
 		e.eventSeq = lastSeq
 	}
-	// The display log begins with the evidence log. Rows are best-effort like
-	// evidence: a failed second append, or a snapshot taken between the two,
-	// loses only its row.
+	// The display log begins with the evidence log, and holds a row for every
+	// user-facing event in it, or is removed.
 	activityPath := ActivityPath(e.Path)
 	if isEmpty(e.Path) {
 		if f, err := os.OpenFile(activityPath, os.O_CREATE|os.O_WRONLY, 0o644); err == nil {
 			f.Close()
 		}
+	} else if fileExists(activityPath) {
+		syncActivity(e.Path, activityPath)
 	}
 	e.eventSeq++
 	record := map[string]interface{}{
@@ -111,10 +113,34 @@ func (e *Evidence) log(event string, roundNum int, role string, data map[string]
 		return err
 	}
 	if row := activityRow(record); row != nil && fileExists(activityPath) {
-		row["event_seq"] = lastEventSeq(activityPath) + 1
-		return appendLine(activityPath, row)
+		appendActivity(activityPath, row, e.eventSeq)
 	}
 	return nil
+}
+
+// syncActivity restores the row of the newest evidence event when the process
+// stopped, or its append failed, after the event was written. Each write runs
+// it first, so only the newest event can lack its row.
+func syncActivity(path, activityPath string) {
+	last := lastRecord(path)
+	row := activityRow(last)
+	if row == nil {
+		return
+	}
+	synced, _ := lastRecord(activityPath)["evidence_seq"].(float64)
+	if seq, _ := last["event_seq"].(float64); seq > synced {
+		appendActivity(activityPath, row, int(seq))
+	}
+}
+
+// appendActivity appends the row of evidence event evidenceSeq. A display log
+// it cannot complete is removed, so readers serve the raw events instead.
+func appendActivity(activityPath string, row map[string]interface{}, evidenceSeq int) {
+	row["event_seq"] = lastEventSeq(activityPath) + 1
+	row["evidence_seq"] = evidenceSeq
+	if appendLine(activityPath, row) != nil {
+		os.Remove(activityPath)
+	}
 }
 
 func appendLine(path string, value any) error {
@@ -209,6 +235,15 @@ func (e *Evidence) LogWorkspaceCheckpoint(roundNum int, path string) {
 
 // Close is a no-op; evidence is flushed on each write.
 func (e *Evidence) Close() {}
+
+func lastRecord(path string) map[string]interface{} {
+	var last map[string]interface{}
+	visitEvidenceLinesReverse(path, func(record map[string]interface{}) bool {
+		last = record
+		return true
+	})
+	return last
+}
 
 func lastEventSeq(path string) int {
 	seq := 0

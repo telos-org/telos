@@ -2,6 +2,7 @@ package evidence
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -35,6 +36,7 @@ func TestActivityRowsFollowUserFacingEvents(t *testing.T) {
 			t.Fatalf("row without a timestamp: %v", row)
 		}
 		delete(row, "ts")
+		delete(row, "evidence_seq")
 		rows = append(rows, row)
 	}
 	want := []map[string]interface{}{
@@ -59,6 +61,57 @@ func TestActivityLogsBeginWithTheirEvidence(t *testing.T) {
 
 	if HasActivity(path) || fileExists(ActivityPath(path)) {
 		t.Fatal("a log an older runtime began reported partial display rows")
+	}
+}
+
+func TestActivityRowsSurviveAStopBetweenTheTwoWrites(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evidence.jsonl")
+	user := func(text string) map[string]interface{} {
+		return map[string]interface{}{"audience": "user", "text": text}
+	}
+	New("pvg", path, "sess-stop", 1).Log("agent_progress", 1, "prover", user("first"))
+	// The process stops after writing the evidence event, before its row.
+	evidence, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := `{"event":"agent_progress","event_seq":2,"ts":"t","role":"prover","data":{"audience":"user","text":"second"}}` + "\n"
+	if err := os.WriteFile(path, append(evidence, stopped...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ev := New("pvg", path, "sess-stop", 1)
+	ev.Log("agent_progress", 1, "prover", map[string]interface{}{"audience": "agent", "text": "Read a file"})
+	ev.Log("agent_progress", 1, "prover", user("third"))
+
+	data, err := os.ReadFile(ActivityPath(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for i, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+		var row map[string]interface{}
+		if err := json.Unmarshal([]byte(line), &row); err != nil || row["event_seq"] != float64(i+1) {
+			t.Fatalf("row %d: %v (%v)", i, row, err)
+		}
+		got = append(got, fmt.Sprintf("%v@%v", row["text"], row["evidence_seq"]))
+	}
+	if want := []string{"first@1", "second@2", "third@4"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("rows %v, want %v", got, want)
+	}
+}
+
+func TestActivityLogThatCannotBeCompletedIsRemoved(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "evidence.jsonl")
+	ev := New("pvg", path, "sess-full", 1)
+	ev.Log("agent_progress", 1, "prover", map[string]interface{}{"audience": "user", "text": "first"})
+	if err := os.Chmod(ActivityPath(path), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	ev.Log("agent_progress", 1, "prover", map[string]interface{}{"audience": "user", "text": "second"})
+
+	if HasActivity(path) {
+		t.Fatal("a display log missing a row still reported activity")
 	}
 }
 

@@ -4,7 +4,8 @@ import "path/filepath"
 
 // ActivityPath is the display log beside an evidence log. Each line is one
 // row a user sees, numbered by its own dense event_seq so pages and live
-// replay can resume from a row position.
+// replay can resume from a row position, and naming the evidence event it
+// shows by evidence_seq.
 func ActivityPath(evidencePath string) string {
 	return filepath.Join(filepath.Dir(evidencePath), "activity.jsonl")
 }
