@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -141,42 +142,55 @@ func TestFollowCloudLogsPrintsNewActivityUntilTheGoalStops(t *testing.T) {
 	}
 }
 
-func TestFollowCloudLogsRereadsARestartedRuntimeFromTheStart(t *testing.T) {
+func TestFollowCloudLogsPrintsEveryPendingEvent(t *testing.T) {
 	previous := logFollowInterval
 	logFollowInterval = 0
 	t.Cleanup(func() { logFollowInterval = previous })
 
-	early := progressEvent(`"event_seq":1`, "First step after the restart")
-	later := progressEvent(`"event_seq":6`, "Second step after the restart")
-	var queries []string
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/deployments/goal_1/logs":
-			queries = append(queries, r.URL.RawQuery)
-			events := later
-			if r.URL.Query().Get("after_rt") == "" {
-				events = early + "," + later
-			}
-			_, _ = fmt.Fprintf(w, `{"events":[%s],"cursors":{"session":"runtime_2"}}`, events)
-		case "/api/deployments/goal_1":
-			_, _ = fmt.Fprint(w, `{"id":"goal_1","name":"demo","state":"running","status":"stopped"}`)
-		default:
-			t.Errorf("unexpected request: %s", r.URL)
-			http.NotFound(w, r)
-		}
-	}))
-	defer server.Close()
+	for name, test := range map[string]struct {
+		printed int64  // the last event the first view printed, from runtime_1
+		session string // the runtime serving 1,201 events when the Goal is followed
+		first   int64  // the first event that should be printed
+	}{
+		"burst":   {printed: 1, session: "runtime_1", first: 2},
+		"restart": {printed: 5000, session: "runtime_2", first: 1},
+	} {
+		t.Run(name, func(t *testing.T) {
+			// Cloud returns the newest tail events between the cursors.
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/deployments/goal_1" {
+					_, _ = fmt.Fprint(w, `{"id":"goal_1","name":"demo","state":"running","status":"stopped"}`)
+					return
+				}
+				query := r.URL.Query()
+				bound := func(name string, fallback int64) int64 {
+					if value, err := strconv.ParseInt(query.Get(name), 10, 64); err == nil {
+						return value
+					}
+					return fallback
+				}
+				after, before, tail := bound("after_rt", 0), bound("before_rt", 1202), bound("tail", 0)
+				first := max(after+1, before-tail)
+				var events []string
+				for seq := first; seq < before; seq++ {
+					events = append(events, progressEvent(fmt.Sprintf(`"event_seq":%d`, seq), fmt.Sprintf("update %d", seq)))
+				}
+				_, _ = fmt.Fprintf(w, `{"events":[%s],"cursors":{"session":%q}}`, strings.Join(events, ","), test.session)
+			}))
+			defer server.Close()
 
-	initial := followTestPage(t, "runtime_1", progressEvent(`"event_seq":5`, "Before the restart"))
-	var out bytes.Buffer
-	printer := newLogFollowPrinter(&out, false, "personal", initial.Events)
-	if err := followCloudLogs(cloud.NewClient(server.URL, "token"), "goal_1", newCloudLogFollower(initial), printer); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(out.String(), "First step after the restart") || !strings.Contains(out.String(), "Second step after the restart") {
-		t.Fatalf("followed output:\n%s", out.String())
-	}
-	if strings.Join(queries, " ") != "after_rt=5&tail=1000 tail=1000" {
-		t.Fatalf("queries: %v", queries)
+			initial := followTestPage(t, "runtime_1", progressEvent(fmt.Sprintf(`"event_seq":%d`, test.printed), "already printed"))
+			var out bytes.Buffer
+			printer := newLogFollowPrinter(&out, true, "personal", initial.Events)
+			if err := followCloudLogs(cloud.NewClient(server.URL, "token"), "goal_1", newCloudLogFollower(initial), printer); err != nil {
+				t.Fatal(err)
+			}
+			lines := strings.Split(strings.TrimSpace(out.String()), "\n")
+			if int64(len(lines)) != 1201-test.first+1 ||
+				!strings.Contains(lines[0], fmt.Sprintf(`"update %d"`, test.first)) ||
+				!strings.Contains(lines[len(lines)-1], `"update 1201"`) {
+				t.Fatalf("printed %d events, from %.80s to %.80s", len(lines), lines[0], lines[len(lines)-1])
+			}
+		})
 	}
 }

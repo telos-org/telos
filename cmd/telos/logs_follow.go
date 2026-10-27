@@ -120,6 +120,52 @@ func (f *cloudLogFollower) fresh(page *cloud.SessionLogPage) []sessionapi.Sessio
 	return events
 }
 
+// readPendingCloudLogs returns every event query selects, oldest first. A
+// full page may have older matches behind it, so it pages back until a page
+// comes back short.
+func readPendingCloudLogs(control *cloud.Client, goalID string, query cloud.LogPageQuery) (*cloud.SessionLogPage, error) {
+	page, err := control.GetSessionLogPage(goalID, query)
+	if err != nil {
+		return nil, err
+	}
+	pending := &cloud.SessionLogPage{Cursors: page.Cursors}
+	seen := map[string]bool{}
+	for {
+		keys, runtime, controlSeq := cloudLogPagePositions(page.RawEvents)
+		if keys == nil {
+			// Events without positions can't be paged; keep what was read.
+			if len(pending.RawEvents) == 0 {
+				return page, nil
+			}
+			return pending, nil
+		}
+		var events []sessionapi.SessionEvent
+		var raw []json.RawMessage
+		for index, key := range keys {
+			if !seen[key] {
+				seen[key] = true
+				events = append(events, page.Events[index])
+				raw = append(raw, page.RawEvents[index])
+			}
+		}
+		pending.Events = append(events, pending.Events...)
+		pending.RawEvents = append(raw, pending.RawEvents...)
+		if len(raw) == 0 || len(page.RawEvents) < query.Tail {
+			return pending, nil
+		}
+		// A source with no events on this page keeps its earlier boundary.
+		if runtime != nil {
+			query.BeforeRuntime = runtime
+		}
+		if controlSeq != nil {
+			query.BeforeControl = controlSeq
+		}
+		if page, err = control.GetSessionLogPage(goalID, query); err != nil {
+			return nil, err
+		}
+	}
+}
+
 // followCloudLogs prints new activity until the Goal stops or is deleted.
 func followCloudLogs(
 	control *cloud.Client,
@@ -132,10 +178,10 @@ func followCloudLogs(
 		query := cloud.LogPageQuery{Tail: maxCloudLogTail}
 		after := query
 		after.AfterRuntime, after.AfterControl = follower.positions()
-		page, err := control.GetSessionLogPage(goalID, after)
+		page, err := readPendingCloudLogs(control, goalID, after)
 		if err == nil && follower.restarted(page) {
 			// A restarted runtime numbers its events from the start again.
-			page, err = control.GetSessionLogPage(goalID, query)
+			page, err = readPendingCloudLogs(control, goalID, query)
 		}
 		if err != nil {
 			return err
