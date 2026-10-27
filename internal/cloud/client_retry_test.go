@@ -512,7 +512,7 @@ func TestNetworkCloudReadsRecoverOnWire(t *testing.T) {
 			complete: `{"events":[{"event":"agent_progress","event_id":"evt_101","event_seq":101,"data":{"text":"first"},"extension":"preserve"},{"event":"agent_progress","event_id":"evt_102","event_seq":102,"data":{"text":"second"}}],"cursors":{"rt":101,"cp":0,"session":"runtime-session"}}`,
 			check: func(t *testing.T, client *Client) {
 				runtime, control := int64(125), int64(0)
-				page, err := client.GetSessionLogPageBefore("sess/with space?x", 2, &runtime, &control)
+				page, err := client.GetSessionLogPage("sess/with space?x", LogPageQuery{Tail: 2, BeforeRuntime: &runtime, BeforeControl: &control})
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -596,7 +596,7 @@ func TestNetworkCloudReadExhaustionReturnsNoPartialLogs(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	client := newNetworkClient(t, server.URL, headersObserved)
-	page, err := client.GetSessionLogPage("sess_123", 2)
+	page, err := client.GetSessionLogPage("sess_123", LogPageQuery{Tail: 2})
 	if err == nil || page != nil {
 		t.Fatalf("exhausted read exposed a partial page or hid the error: page=%+v, err=%v", page, err)
 	}

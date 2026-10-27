@@ -1089,6 +1089,7 @@ func (fs *FileStore) deriveSessionWithEvidence(id string, m *Manifest, includeEv
 		Epochs:                epochs,
 		CurrentSpecVersion:    m.CurrentSpecVersion,
 		SpecVersions:          cloneSpecVersions(m.SpecVersions),
+		VisibleEvents:         true,
 		Reconciliation:        deriveReconciliation(m),
 	}
 

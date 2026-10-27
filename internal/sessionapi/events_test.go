@@ -100,7 +100,7 @@ func TestReverseWindowsMatchCompleteProjection(t *testing.T) {
 		{After: 999, Before: 900}, {Tail: 2000},
 	} {
 		page, err := store.EventsPage(eventSessionID, window)
-		if err != nil || !reflect.DeepEqual(page.Events, filterEventsWindow(full, window.After, window.Before, window.Tail)) || !reflect.DeepEqual(page.HeadEventSeq, headEventSeq(full)) {
+		if err != nil || !reflect.DeepEqual(page.Events, filterEventsWindow(full, window)) || !reflect.DeepEqual(page.HeadEventSeq, headEventSeq(full)) {
 			t.Fatalf("window %+v changed projection, err=%v", window, err)
 		}
 	}
@@ -128,7 +128,7 @@ func TestReverseReaderFallbackAndErrors(t *testing.T) {
 			t.Fatal(err)
 		}
 		page, err := store.EventsPage(eventSessionID, EventWindow{Tail: 200})
-		if err != nil || !reflect.DeepEqual(page.Events, filterEventsWindow(full, 0, 0, 200)) || !reflect.DeepEqual(page.HeadEventSeq, headEventSeq(full)) {
+		if err != nil || !reflect.DeepEqual(page.Events, filterEventsWindow(full, EventWindow{Tail: 200})) || !reflect.DeepEqual(page.HeadEventSeq, headEventSeq(full)) {
 			t.Fatalf("compatibility path changed: %v", err)
 		}
 	}
@@ -235,6 +235,9 @@ func TestMetadataLookupKeepsNormalUsageSummaries(t *testing.T) {
 			}
 			if (list.Sessions[0].TotalCostUSD != nil) != fixture.cost {
 				t.Fatalf("%s: incorrect evidence hydration", fixture.query)
+			}
+			if !list.Sessions[0].VisibleEvents {
+				t.Fatalf("%s: sessions do not report ?visible support", fixture.query)
 			}
 		}
 	}

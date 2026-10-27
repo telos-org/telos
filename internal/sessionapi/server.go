@@ -291,10 +291,13 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "before and tail are not supported for event streams")
 			return
 		}
+		// The stream carries every event: Cloud reads spend and replay
+		// positions from it, and shows only what a person sees.
 		h.streamEvents(w, r, id, after)
 		return
 	}
-	page, err := h.readEvents(id, EventWindow{After: after, Before: before, Tail: tail})
+	// Pages are a Goal's activity: only events a person sees, which tail counts.
+	page, err := h.readEvents(id, EventWindow{After: after, Before: before, Tail: tail, Visible: true})
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -317,7 +320,7 @@ func (h *handler) readEvents(id string, window EventWindow) (SessionEventsRespon
 		return SessionEventsResponse{}, err
 	}
 	return SessionEventsResponse{
-		Events:       filterEventsWindow(events, window.After, window.Before, window.Tail),
+		Events:       filterEventsWindow(events, window),
 		HeadEventSeq: headEventSeq(events),
 	}, nil
 }
@@ -351,25 +354,28 @@ func nonNegativeIntParam(r *http.Request, name string) (int64, error) {
 	return value, nil
 }
 
-// filterEventsWindow applies ?after / ?before / ?tail to the event list.
-// after and before are durable event_seq cursors. Events without a durable
-// sequence are retained, preferring a harmless replay over dropping events.
-func filterEventsWindow(events []SessionEvent, after, before, tail int64) []SessionEvent {
+// filterEventsWindow applies a window to the event list. after and before are
+// durable event_seq cursors. Events without a durable sequence are retained,
+// preferring a harmless replay over dropping events.
+func filterEventsWindow(events []SessionEvent, window EventWindow) []SessionEvent {
 	filtered := make([]SessionEvent, 0, len(events))
 	for _, event := range events {
+		if window.Visible && !visibleEvent(event) {
+			continue
+		}
 		if event.EventSeq == nil {
 			filtered = append(filtered, event)
 			continue
 		}
-		if after > 0 && *event.EventSeq <= after {
+		if window.After > 0 && *event.EventSeq <= window.After {
 			continue
 		}
-		if before > 0 && *event.EventSeq >= before {
+		if window.Before > 0 && *event.EventSeq >= window.Before {
 			continue
 		}
 		filtered = append(filtered, event)
 	}
-	if tail > 0 && int64(len(filtered)) > tail {
+	if tail := window.Tail; tail > 0 && int64(len(filtered)) > tail {
 		filtered = filtered[int64(len(filtered))-tail:]
 	}
 	return filtered

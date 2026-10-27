@@ -424,30 +424,17 @@ func TestReadPiSessionRequiresAssistantMessage(t *testing.T) {
 	}
 }
 
-func TestPiLineEventsProjectsSafeToolCallProgress(t *testing.T) {
-	events := piLineEvents(`{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"toolCall","name":"read","arguments":{"path":"/tmp/other/spec.md"}},{"type":"toolCall","name":"bash","arguments":{"command":"kubectl get pods --token SECRET"}},{"type":"toolCall","name":"bash","arguments":{"command":"git status --short"}}]}}`)
-
-	got := make([]string, 0, len(events))
-	for _, event := range events {
-		got = append(got, event.Kind+":"+event.Text)
-	}
-	want := []string{
-		"tool:Reading session/spec.md",
-		"tool:Reading other/spec.md",
-		"tool:Running kubectl",
-		"tool:Updating workspace",
-	}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("events:\ngot\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
-	if strings.Contains(strings.Join(got, "\n"), "SECRET") {
-		t.Fatalf("tool progress leaked command contents: %v", got)
+func TestPiLineEventsLeaveToolCallsOutOfActivity(t *testing.T) {
+	line := `{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"text","text":"<progress_update>Checking the spec</progress_update>"}]}}`
+	events := piLineEvents(line)
+	if len(events) != 1 || events[0].Kind != "progress_update" || events[0].Text != "Checking the spec" {
+		t.Fatalf("events: %#v", events)
 	}
 }
 
 func TestPiLiveProjectorPreservesRepeatedActivityWithoutReplayingFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	line := `{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/workspace/config.go"}}]}}`
+	line := piProgressLine("Checking the config")
 	var events []game.LiveAgentEvent
 	projector := &piLiveProjector{
 		sessionPath: path,
@@ -466,7 +453,7 @@ func TestPiLiveProjectorPreservesRepeatedActivityWithoutReplayingFile(t *testing
 		t.Fatalf("repeated activity count = %d, want 2: %#v", len(events), events)
 	}
 	for _, event := range events {
-		if event.Kind != "tool" || event.Text != "Reading workspace/config.go" {
+		if event.Kind != "progress_update" || event.Text != "Checking the config" {
 			t.Fatalf("unexpected event: %#v", event)
 		}
 	}

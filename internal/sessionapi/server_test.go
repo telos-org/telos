@@ -1719,7 +1719,7 @@ func TestEventsPresent(t *testing.T) {
 	evidencePath := filepath.Join(store.Root, created.SessionID, "specs", "ep", "evidence.jsonl")
 	os.MkdirAll(filepath.Dir(evidencePath), 0o755)
 	lines := []string{
-		`{"ts":"2026-05-21T00:00:01.000Z","event":"agent_complete","data":{"cost_usd":0.5,"role":"prover"}}`,
+		`{"ts":"2026-05-21T00:00:01.000Z","event":"game_start","data":{"cost_usd":0.5,"role":"prover"}}`,
 		`{"event":"game_end","data":{"game_result":"accepted"}}`,
 	}
 	os.WriteFile(evidencePath, []byte(strings.Join(lines, "\n")+"\n"), 0o644)
@@ -1740,7 +1740,7 @@ func TestEventsPresent(t *testing.T) {
 	}
 
 	// Verify event shape matches the Python contract.
-	assertEqual(t, "event[0].event", "agent_complete", evResp.Events[0].Event)
+	assertEqual(t, "event[0].event", "game_start", evResp.Events[0].Event)
 	if evResp.Events[0].Timestamp == nil || *evResp.Events[0].Timestamp != "2026-05-21T00:00:01.000Z" {
 		t.Errorf("expected timestamp, got %v", evResp.Events[0].Timestamp)
 	}
@@ -1839,10 +1839,15 @@ func getEventsList(t *testing.T, url string) []sessionapi.SessionEvent {
 	return getEventsResponse(t, url).Events
 }
 
+// eventNames lists each event's progress text, or its name when it has none.
 func eventNames(events []sessionapi.SessionEvent) string {
 	names := make([]string, 0, len(events))
 	for _, event := range events {
-		names = append(names, event.Event)
+		name, _ := event.Data["text"].(string)
+		if name == "" {
+			name = event.Event
+		}
+		names = append(names, name)
 	}
 	return strings.Join(names, ",")
 }
@@ -1850,11 +1855,11 @@ func eventNames(events []sessionapi.SessionEvent) string {
 // Fixture for the cursor tests: seq-stamped lines with one malformed line —
 // the window params must count only parsed events.
 var cursorFixtureLines = []string{
-	`{"event_seq":1,"event":"one","ts":"2026-05-21T00:00:01.000Z"}`,
-	`{"event_seq":2,"event":"two"}`,
+	`{"event_seq":1,"event":"agent_progress","data":{"text":"one"},"ts":"2026-05-21T00:00:01.000Z"}`,
+	`{"event_seq":2,"event":"agent_progress","data":{"text":"two"}}`,
 	`this line is not json`,
-	`{"event_seq":3,"event":"three"}`,
-	`{"event_seq":4,"event":"four"}`,
+	`{"event_seq":3,"event":"agent_progress","data":{"text":"three"}}`,
+	`{"event_seq":4,"event":"agent_progress","data":{"text":"four"}}`,
 }
 
 func TestEventsIdentitySeqAndRoleProjected(t *testing.T) {
@@ -1950,10 +1955,10 @@ func TestEventsLegacyCursorReplaysSafely(t *testing.T) {
 
 	created := createSession(t, srv.URL, createSessionBody(t, "eal"))
 	writeEventsFixture(t, store.Root, created.SessionID, "eal", []string{
-		`{"event":"one"}`,
+		`{"event":"agent_progress","data":{"text":"one"}}`,
 		`this line is not json`,
-		`{"event":"two"}`,
-		`{"event":"three"}`,
+		`{"event":"agent_progress","data":{"text":"two"}}`,
+		`{"event":"agent_progress","data":{"text":"three"}}`,
 	})
 
 	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events?after=1")
@@ -1987,10 +1992,10 @@ func TestEventsMixedSeqFileReplaysWithoutCursor(t *testing.T) {
 	// Seq-less lines ahead of numbered ones: the numbered seqs collide with
 	// the legacy lines' ordinal positions, so none of them are durable.
 	writeEventsFixture(t, store.Root, created.SessionID, "emx", []string{
-		`{"event":"legacy-one"}`,
-		`{"event":"legacy-two"}`,
-		`{"event_seq":1,"event":"new-one"}`,
-		`{"event_seq":2,"event":"new-two"}`,
+		`{"event":"agent_progress","data":{"text":"legacy-one"}}`,
+		`{"event":"agent_progress","data":{"text":"legacy-two"}}`,
+		`{"event_seq":1,"event":"agent_progress","data":{"text":"new-one"}}`,
+		`{"event_seq":2,"event":"agent_progress","data":{"text":"new-two"}}`,
 	})
 
 	events := getEventsList(t, srv.URL+"/api/sessions/"+created.SessionID+"/events")
@@ -2021,8 +2026,8 @@ func TestEventsMultiSpecSeqsNotAdvertised(t *testing.T) {
 			t.Fatal(err)
 		}
 		evidencePath := filepath.Join(specDir, "evidence.jsonl")
-		lines := `{"event_seq":1,"event":"` + name + `-one"}` + "\n" +
-			`{"event_seq":2,"event":"` + name + `-two"}` + "\n"
+		lines := `{"event_seq":1,"event":"agent_progress","data":{"text":"` + name + `-one"}}` + "\n" +
+			`{"event_seq":2,"event":"agent_progress","data":{"text":"` + name + `-two"}}` + "\n"
 		if err := os.WriteFile(evidencePath, []byte(lines), 0o644); err != nil {
 			t.Fatal(err)
 		}
@@ -2094,7 +2099,7 @@ func TestEventsSSEResume(t *testing.T) {
 
 	// ?after resumes past the cursor and frames carry durable ids.
 	body := stream("?after=2", "")
-	if strings.Contains(body, `"event":"two"`) || !strings.Contains(body, `"event":"three"`) {
+	if strings.Contains(body, `"text":"two"`) || !strings.Contains(body, `"text":"three"`) {
 		t.Fatalf("expected resume after seq 2, got: %s", body)
 	}
 	if !strings.Contains(body, "id: 3\n") {
@@ -2103,18 +2108,18 @@ func TestEventsSSEResume(t *testing.T) {
 
 	// The standard reconnect header works the same way…
 	body = stream("", "2")
-	if strings.Contains(body, `"event":"two"`) || !strings.Contains(body, `"event":"three"`) {
+	if strings.Contains(body, `"text":"two"`) || !strings.Contains(body, `"text":"three"`) {
 		t.Fatalf("expected Last-Event-ID resume, got: %s", body)
 	}
 
 	// …but an explicit ?after wins over it.
 	body = stream("?after=3", "1")
-	if strings.Contains(body, `"event":"three"`) || !strings.Contains(body, `"event":"four"`) {
+	if strings.Contains(body, `"text":"three"`) || !strings.Contains(body, `"text":"four"`) {
 		t.Fatalf("expected ?after to win over Last-Event-ID, got: %s", body)
 	}
 
 	body = stream("?after=0", "3")
-	if !strings.Contains(body, `"event":"one"`) {
+	if !strings.Contains(body, `"text":"one"`) {
 		t.Fatalf("expected explicit ?after=0 to override Last-Event-ID, got: %s", body)
 	}
 }

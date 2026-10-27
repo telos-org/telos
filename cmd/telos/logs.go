@@ -158,7 +158,7 @@ func printCloudSessionLogs(
 	if raw || options.All {
 		tail = 0
 	}
-	page, err := control.GetSessionLogPage(session.ID, tail)
+	page, err := control.GetSessionLogPage(session.ID, cloud.LogPageQuery{Tail: tail})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -241,10 +241,10 @@ func expandCloudLogs(control *cloud.Client, sessionID string, initial *cloud.Ses
 				if keys != nil && seen[keys[index]] {
 					continue
 				}
-				// Hidden tool activity need not accumulate while searching history.
-				// Turn endings still matter to the quiet notice.
+				// Events this view does not render need not accumulate while
+				// searching history. Evaluation endings still matter to the quiet notice.
 				_, visible := renderedLogRowFromEvent(event)
-				if !jsonOutput && !visible && event.Event != "agent_complete" && event.Event != "agent_suspended" && event.Event != "game_end" {
+				if !jsonOutput && !visible && event.Event != "game_end" {
 					continue
 				}
 				if keys != nil {
@@ -278,13 +278,13 @@ func expandCloudLogs(control *cloud.Client, sessionID string, initial *cloud.Ses
 				return combined, nil
 			}
 			// Read legacy history once when durable cursors are unavailable.
-			page, err = control.GetSessionLogPage(sessionID, 0)
+			page, err = control.GetSessionLogPage(sessionID, cloud.LogPageQuery{})
 			fullHistory = true
 		} else {
 			if beforeRuntime == nil && beforeControl == nil {
 				return combined, nil
 			}
-			page, err = control.GetSessionLogPageBefore(sessionID, maxCloudLogTail, beforeRuntime, beforeControl)
+			page, err = control.GetSessionLogPage(sessionID, cloud.LogPageQuery{Tail: maxCloudLogTail, BeforeRuntime: beforeRuntime, BeforeControl: beforeControl})
 		}
 		if err != nil {
 			return combined, err

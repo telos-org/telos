@@ -352,6 +352,9 @@ type Session struct {
 	DashboardDoc           *string          `json:"dashboard_doc,omitempty"`
 	CurrentSpecVersion     *int             `json:"current_spec_version,omitempty"`
 	SpecVersions           []map[string]any `json:"spec_versions"`
+	// VisibleEvents reports that GET /api/sessions/{id}/events pages hold only
+	// events a person sees. Older runtimes' pages hold every event.
+	VisibleEvents bool `json:"visible_events,omitempty"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
 }
@@ -375,6 +378,7 @@ type SessionListItem struct {
 	DashboardURL       *string        `json:"dashboard_url,omitempty"`
 	DashboardDoc       *string        `json:"dashboard_doc,omitempty"`
 	CurrentSpecVersion *int           `json:"current_spec_version,omitempty"`
+	VisibleEvents      bool           `json:"visible_events,omitempty"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
 }
@@ -411,6 +415,7 @@ func SessionListItemFromSession(session Session) SessionListItem {
 		DashboardURL:       session.DashboardURL,
 		DashboardDoc:       session.DashboardDoc,
 		CurrentSpecVersion: session.CurrentSpecVersion,
+		VisibleEvents:      session.VisibleEvents,
 		Reconciliation:     session.Reconciliation,
 	}
 }
@@ -433,6 +438,7 @@ func (item SessionListItem) AsSession() Session {
 		DashboardURL:       item.DashboardURL,
 		DashboardDoc:       item.DashboardDoc,
 		CurrentSpecVersion: item.CurrentSpecVersion,
+		VisibleEvents:      item.VisibleEvents,
 		Reconciliation:     item.Reconciliation,
 	}
 }
