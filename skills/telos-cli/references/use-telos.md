@@ -121,13 +121,11 @@ Logs      telos logs goal_c7d2f0a4e8
 
 The `apply` command returns immediately and starts the Goal in the cloud with a unique ID.
 
-To change only the model or thinking effort of an existing Goal, omit the spec file:
+To change only the model or thinking effort of an existing Goal (applies at next agent turn), omit the spec file:
 
 ```console
 $ telos apply --goal goal_c7d2f0a4e8 --model telos/max --thinking high
 ```
-
-The current turn keeps its settings; the change takes effect at the next prover or verifier turn. Apply spec changes and inference settings in separate commands. See [Models](models.md) for supported choices.
 
 ## Watch
 
