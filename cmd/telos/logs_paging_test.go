@@ -288,8 +288,9 @@ func TestCloudLargeTailsPageAndFollow(t *testing.T) {
 					queries = append(queries, "before_rt=2002&tail=1000", "before_rt=1003&tail=1000")
 				}
 				if follow {
-					pages = append(pages, page(4000, 4002))
-					queries = append(queries, "after_rt=4000&tail=1000")
+					// The follow poll pages back until nothing new arrives.
+					pages = append(pages, page(4000, 4002), `{"events":[],"cursors":{"rt":4002,"cp":null,"session":"runtime_1"}}`)
+					queries = append(queries, "after_rt=4000&tail=1000", "after_rt=4000&before_rt=4000&tail=1000")
 				}
 				calls, goalCalls := 0, 0
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

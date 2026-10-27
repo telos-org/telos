@@ -48,9 +48,9 @@ func (p *logFollowPrinter) print(events []sessionapi.SessionEvent) error {
 	return nil
 }
 
-// cloudLogFollower tracks the newest event already printed from each Cloud
-// log stream: the Goal's runtime numbers its events with event_seq, and Cloud
-// numbers its own with seq.
+// cloudLogFollower tracks how far each Cloud log stream has been read: the
+// Goal's runtime numbers its events with event_seq, and Cloud numbers its own
+// with seq.
 type cloudLogFollower struct {
 	session string
 	runtime int64
@@ -58,15 +58,14 @@ type cloudLogFollower struct {
 	unkeyed map[string]bool
 }
 
-// newCloudLogFollower starts after the events in page, which the first view
-// already printed.
+// newCloudLogFollower starts after page, which the first view already printed.
 func newCloudLogFollower(page *cloud.SessionLogPage) *cloudLogFollower {
 	follower := &cloudLogFollower{unkeyed: map[string]bool{}}
 	follower.fresh(page)
 	return follower
 }
 
-// positions are the newest printed from each stream, nil before any.
+// positions are how far each stream has been read, nil before any.
 func (f *cloudLogFollower) positions() (runtime, control *int64) {
 	if runtimeSeq := f.runtime; runtimeSeq > 0 {
 		runtime = &runtimeSeq
@@ -114,15 +113,27 @@ func (f *cloudLogFollower) fresh(page *cloud.SessionLogPage) []sessionapi.Sessio
 			}
 			f.unkeyed[string(raw)] = true
 		}
-		events = append(events, page.Events[index])
+		if page.Events[index].Event != "" { // not a position-only marker
+			events = append(events, page.Events[index])
+		}
+	}
+	// The page read everything up to its watermarks, including events older
+	// than a first view shows and events a person does not see.
+	if cursors := page.Cursors; cursors != nil {
+		if cursors.Runtime != nil {
+			f.runtime = max(f.runtime, *cursors.Runtime)
+		}
+		if cursors.Control != nil {
+			f.control = max(f.control, *cursors.Control)
+		}
 	}
 	sortCloudLogEvents(events)
 	return events
 }
 
 // readPendingCloudLogs returns every event query selects, oldest first. A
-// full page may have older matches behind it, so it pages back until a page
-// comes back short.
+// page can stop short of the query's start, at its size limit or at a
+// position marker, so it pages back until one brings nothing new.
 func readPendingCloudLogs(control *cloud.Client, goalID string, query cloud.LogPageQuery) (*cloud.SessionLogPage, error) {
 	page, err := control.GetSessionLogPage(goalID, query)
 	if err != nil {
@@ -130,6 +141,7 @@ func readPendingCloudLogs(control *cloud.Client, goalID string, query cloud.LogP
 	}
 	pending := &cloud.SessionLogPage{Cursors: page.Cursors}
 	seen := map[string]bool{}
+	older := query
 	for {
 		keys, runtime, controlSeq := cloudLogPagePositions(page.RawEvents)
 		if keys == nil {
@@ -148,22 +160,33 @@ func readPendingCloudLogs(control *cloud.Client, goalID string, query cloud.LogP
 				raw = append(raw, page.RawEvents[index])
 			}
 		}
-		pending.Events = append(events, pending.Events...)
-		pending.RawEvents = append(raw, pending.RawEvents...)
-		if len(raw) == 0 || len(page.RawEvents) < query.Tail {
+		if len(raw) == 0 {
 			return pending, nil
 		}
+		pending.Events = append(events, pending.Events...)
+		pending.RawEvents = append(raw, pending.RawEvents...)
 		// A source with no events on this page keeps its earlier boundary.
 		if runtime != nil {
-			query.BeforeRuntime = runtime
+			older.BeforeRuntime = runtime
 		}
 		if controlSeq != nil {
-			query.BeforeControl = controlSeq
+			older.BeforeControl = controlSeq
 		}
-		if page, err = control.GetSessionLogPage(goalID, query); err != nil {
+		if page, err = control.GetSessionLogPage(goalID, older); err != nil {
 			return nil, err
 		}
+		if pageSession(page) != pageSession(pending) {
+			// The runtime restarted while paging: read its run from the start.
+			return readPendingCloudLogs(control, goalID, query)
+		}
 	}
+}
+
+func pageSession(page *cloud.SessionLogPage) string {
+	if page.Cursors == nil || page.Cursors.Session == nil {
+		return ""
+	}
+	return *page.Cursors.Session
 }
 
 // followCloudLogs prints new activity until the Goal stops or is deleted.
