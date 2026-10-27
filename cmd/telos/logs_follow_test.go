@@ -97,9 +97,11 @@ func TestFollowCloudLogsPrintsNewActivityUntilTheGoalStops(t *testing.T) {
 	for _, jsonOutput := range []bool{false, true} {
 		t.Run(fmt.Sprintf("json=%t", jsonOutput), func(t *testing.T) {
 			logCalls, goalCalls := 0, 0
+			var queries []string
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/deployments/goal_1/logs":
+					queries = append(queries, r.URL.Query().Get("after_rt"))
 					_, _ = fmt.Fprint(w, pages[logCalls])
 					logCalls++
 				case "/api/deployments/goal_1":
@@ -131,6 +133,50 @@ func TestFollowCloudLogsPrintsNewActivityUntilTheGoalStops(t *testing.T) {
 			if goalCalls != 2 {
 				t.Fatalf("follow checked the Goal %d times, want 2", goalCalls)
 			}
+			// Each poll asks only for what follows the newest printed event.
+			if strings.Join(queries, ",") != "1,2" {
+				t.Fatalf("polled after %v, want 1 then 2", queries)
+			}
 		})
+	}
+}
+
+func TestFollowCloudLogsRereadsARestartedRuntimeFromTheStart(t *testing.T) {
+	previous := logFollowInterval
+	logFollowInterval = 0
+	t.Cleanup(func() { logFollowInterval = previous })
+
+	early := progressEvent(`"event_seq":1`, "First step after the restart")
+	later := progressEvent(`"event_seq":6`, "Second step after the restart")
+	var queries []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/deployments/goal_1/logs":
+			queries = append(queries, r.URL.RawQuery)
+			events := later
+			if r.URL.Query().Get("after_rt") == "" {
+				events = early + "," + later
+			}
+			_, _ = fmt.Fprintf(w, `{"events":[%s],"cursors":{"session":"runtime_2"}}`, events)
+		case "/api/deployments/goal_1":
+			_, _ = fmt.Fprint(w, `{"id":"goal_1","name":"demo","state":"running","status":"stopped"}`)
+		default:
+			t.Errorf("unexpected request: %s", r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	initial := followTestPage(t, "runtime_1", progressEvent(`"event_seq":5`, "Before the restart"))
+	var out bytes.Buffer
+	printer := newLogFollowPrinter(&out, false, "personal", initial.Events)
+	if err := followCloudLogs(cloud.NewClient(server.URL, "token"), "goal_1", newCloudLogFollower(initial), printer); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), "First step after the restart") || !strings.Contains(out.String(), "Second step after the restart") {
+		t.Fatalf("followed output:\n%s", out.String())
+	}
+	if strings.Join(queries, " ") != "after_rt=5&tail=1000&visible=true tail=1000&visible=true" {
+		t.Fatalf("queries: %v", queries)
 	}
 }

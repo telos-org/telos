@@ -289,14 +289,11 @@ func TestCloudLargeTailsPageAndFollow(t *testing.T) {
 				}
 				if follow {
 					pages = append(pages, page(4000, 4002))
-					queries = append(queries, "tail=1000")
+					queries = append(queries, "after_rt=4000&tail=1000")
 				}
 				if !jsonOutput {
 					for index := range queries {
 						queries[index] += "&visible=true"
-					}
-					if follow {
-						queries[len(queries)-1] = "tail=50&visible=true"
 					}
 				}
 				calls, goalCalls := 0, 0

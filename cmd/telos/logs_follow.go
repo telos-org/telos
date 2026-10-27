@@ -66,9 +66,25 @@ func newCloudLogFollower(page *cloud.SessionLogPage) *cloudLogFollower {
 	return follower
 }
 
+// positions are the newest printed from each stream, nil before any.
+func (f *cloudLogFollower) positions() (runtime, control *int64) {
+	if runtimeSeq := f.runtime; runtimeSeq > 0 {
+		runtime = &runtimeSeq
+	}
+	if controlSeq := f.control; controlSeq > 0 {
+		control = &controlSeq
+	}
+	return runtime, control
+}
+
+// restarted reports a page from a different runtime than the printed events.
+func (f *cloudLogFollower) restarted(page *cloud.SessionLogPage) bool {
+	return page.Cursors != nil && page.Cursors.Session != nil && *page.Cursors.Session != f.session
+}
+
 // fresh returns the events in page that have not been printed yet.
 func (f *cloudLogFollower) fresh(page *cloud.SessionLogPage) []sessionapi.SessionEvent {
-	if page.Cursors != nil && page.Cursors.Session != nil && *page.Cursors.Session != f.session {
+	if f.restarted(page) {
 		// A restarted runtime numbers its events from the start again.
 		f.session = *page.Cursors.Session
 		f.runtime = 0
@@ -113,12 +129,14 @@ func followCloudLogs(
 ) error {
 	for {
 		time.Sleep(logFollowInterval)
-		// A page of visible events covers far more than one interval of activity.
-		tail := maxCloudLogTail
-		if !printer.jsonOutput {
-			tail = defaultLogTail
+		query := cloud.LogPageQuery{Tail: maxCloudLogTail, Visible: !printer.jsonOutput}
+		after := query
+		after.AfterRuntime, after.AfterControl = follower.positions()
+		page, err := control.GetSessionLogPage(goalID, after)
+		if err == nil && follower.restarted(page) {
+			// A restarted runtime numbers its events from the start again.
+			page, err = control.GetSessionLogPage(goalID, query)
 		}
-		page, err := control.GetSessionLogPage(goalID, cloud.LogPageQuery{Tail: tail, Visible: !printer.jsonOutput})
 		if err != nil {
 			return err
 		}

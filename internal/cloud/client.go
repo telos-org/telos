@@ -660,10 +660,12 @@ func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, er
 }
 
 // LogPageQuery selects a page of a Goal's log: the newest Tail events (all
-// when 0), before the given positions. Visible keeps only events a person
+// when 0) between the given positions. Visible keeps only events a person
 // sees, and Tail then counts those.
 type LogPageQuery struct {
 	Tail          int
+	AfterRuntime  *int64
+	AfterControl  *int64
 	BeforeRuntime *int64
 	BeforeControl *int64
 	Visible       bool
@@ -677,6 +679,12 @@ func (c *Client) GetSessionLogPage(sessionID string, page LogPageQuery) (*Sessio
 	}
 	if page.Tail > 0 {
 		query.Set("tail", strconv.Itoa(page.Tail))
+	}
+	if page.AfterRuntime != nil {
+		query.Set("after_rt", strconv.FormatInt(*page.AfterRuntime, 10))
+	}
+	if page.AfterControl != nil {
+		query.Set("after_cp", strconv.FormatInt(*page.AfterControl, 10))
 	}
 	if page.BeforeRuntime != nil {
 		query.Set("before_rt", strconv.FormatInt(*page.BeforeRuntime, 10))
