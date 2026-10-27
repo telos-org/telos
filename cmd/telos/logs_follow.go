@@ -113,7 +113,12 @@ func followCloudLogs(
 ) error {
 	for {
 		time.Sleep(logFollowInterval)
-		page, err := control.GetSessionLogPage(goalID, maxCloudLogTail)
+		// A page of visible events covers far more than one interval of activity.
+		tail := maxCloudLogTail
+		if !printer.jsonOutput {
+			tail = defaultLogTail
+		}
+		page, err := control.GetSessionLogPage(goalID, cloud.LogPageQuery{Tail: tail, Visible: !printer.jsonOutput})
 		if err != nil {
 			return err
 		}

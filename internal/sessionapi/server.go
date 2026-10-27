@@ -286,15 +286,22 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	visible := false
+	if raw := strings.TrimSpace(r.URL.Query().Get("visible")); raw != "" {
+		if visible, err = strconv.ParseBool(raw); err != nil {
+			writeError(w, http.StatusBadRequest, "visible must be a boolean")
+			return
+		}
+	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {
-		if queryParamSet(r, "before") || queryParamSet(r, "tail") {
-			writeError(w, http.StatusBadRequest, "before and tail are not supported for event streams")
+		if queryParamSet(r, "before") || queryParamSet(r, "tail") || visible {
+			writeError(w, http.StatusBadRequest, "before, tail, and visible are not supported for event streams")
 			return
 		}
 		h.streamEvents(w, r, id, after)
 		return
 	}
-	page, err := h.readEvents(id, EventWindow{After: after, Before: before, Tail: tail})
+	page, err := h.readEvents(id, EventWindow{After: after, Before: before, Tail: tail, Visible: visible})
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -317,7 +324,7 @@ func (h *handler) readEvents(id string, window EventWindow) (SessionEventsRespon
 		return SessionEventsResponse{}, err
 	}
 	return SessionEventsResponse{
-		Events:       filterEventsWindow(events, window.After, window.Before, window.Tail),
+		Events:       filterEventsWindow(events, window),
 		HeadEventSeq: headEventSeq(events),
 	}, nil
 }
@@ -351,25 +358,28 @@ func nonNegativeIntParam(r *http.Request, name string) (int64, error) {
 	return value, nil
 }
 
-// filterEventsWindow applies ?after / ?before / ?tail to the event list.
-// after and before are durable event_seq cursors. Events without a durable
-// sequence are retained, preferring a harmless replay over dropping events.
-func filterEventsWindow(events []SessionEvent, after, before, tail int64) []SessionEvent {
+// filterEventsWindow applies ?after / ?before / ?tail / ?visible to the event
+// list. after and before are durable event_seq cursors. Events without a
+// durable sequence are retained, preferring a harmless replay over dropping events.
+func filterEventsWindow(events []SessionEvent, window EventWindow) []SessionEvent {
 	filtered := make([]SessionEvent, 0, len(events))
 	for _, event := range events {
+		if window.Visible && !visibleEvent(event) {
+			continue
+		}
 		if event.EventSeq == nil {
 			filtered = append(filtered, event)
 			continue
 		}
-		if after > 0 && *event.EventSeq <= after {
+		if window.After > 0 && *event.EventSeq <= window.After {
 			continue
 		}
-		if before > 0 && *event.EventSeq >= before {
+		if window.Before > 0 && *event.EventSeq >= window.Before {
 			continue
 		}
 		filtered = append(filtered, event)
 	}
-	if tail > 0 && int64(len(filtered)) > tail {
+	if tail := window.Tail; tail > 0 && int64(len(filtered)) > tail {
 		filtered = filtered[int64(len(filtered))-tail:]
 	}
 	return filtered

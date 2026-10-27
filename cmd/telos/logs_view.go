@@ -51,6 +51,7 @@ func printStructuredLogs(
 func printLogSilence(out io.Writer, events []sessionapi.SessionEvent, now time.Time) {
 	var latest *renderedLogRow
 	for _, event := range events {
+		// Visible Cloud pages leave out agent_complete; local logs still have it.
 		if event.Event == "game_end" || event.Event == "agent_complete" || event.Event == "agent_suspended" {
 			latest = nil
 			continue
@@ -154,9 +155,7 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 		if audience != "" {
 			return renderedLogRow{}, false
 		}
-		kind := strings.ToLower(eventDataString(event, "kind"))
-		if text == "" || kind == "tool" || kind == "review" || kind == "summary" ||
-			isLegacyToolLogAction(kind, text) {
+		if text == "" || sessionapi.LegacyAgentNote(eventDataString(event, "kind"), text) {
 			return renderedLogRow{}, false
 		}
 		row.Summary, row.Detail = splitLogText(text)
@@ -348,30 +347,6 @@ func isTerminalLogFailureEvent(event string) bool {
 	return strings.HasSuffix(name, ".failed") ||
 		strings.HasSuffix(name, "_failed") ||
 		strings.HasSuffix(name, ".error")
-}
-
-func isMinorLogAction(text string) bool {
-	trimmed := strings.TrimSpace(text)
-	for _, prefix := range []string{
-		"Reading ",
-		"Editing ",
-		"Creating ",
-		"Writing ",
-		"Updating ",
-		"Deleting ",
-		"Running shell command",
-		"Running kubectl",
-		"Running Node build step",
-	} {
-		if strings.HasPrefix(trimmed, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func isLegacyToolLogAction(kind string, text string) bool {
-	return (kind == "" || kind == "progress_update") && isMinorLogAction(text)
 }
 
 func friendlyAgentError(errorText string) string {

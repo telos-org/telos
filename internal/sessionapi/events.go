@@ -17,6 +17,8 @@ type EventWindow struct {
 	After  int64
 	Before int64
 	Tail   int64
+	// Visible keeps only events a person sees; Tail then counts those.
+	Visible bool
 }
 
 // EventsPage reads modern single-file logs backward. Their writer serializes
@@ -55,7 +57,7 @@ func (fs *FileStore) EventsPage(id string, window EventWindow) (SessionEventsRes
 		return SessionEventsResponse{}, err
 	}
 	return SessionEventsResponse{
-		Events:       filterEventsWindow(events, window.After, window.Before, window.Tail),
+		Events:       filterEventsWindow(events, window),
 		HeadEventSeq: headEventSeq(events),
 	}, nil
 }
@@ -121,6 +123,9 @@ func readEvidenceWindow(reader io.ReaderAt, size int64, sessionID string, spec *
 			return true
 		}
 		if window.Before > 0 && seq >= window.Before {
+			return false
+		}
+		if window.Visible && !visibleEvent(event) {
 			return false
 		}
 		page.Events = append(page.Events, event)

@@ -652,28 +652,37 @@ func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {
 }
 
 func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, error) {
-	page, err := c.GetSessionLogPage(sessionID, 0)
+	page, err := c.GetSessionLogPage(sessionID, LogPageQuery{})
 	if err != nil {
 		return nil, err
 	}
 	return page.Events, nil
 }
 
-func (c *Client) GetSessionLogPage(sessionID string, tail int) (*SessionLogPage, error) {
-	return c.GetSessionLogPageBefore(sessionID, tail, nil, nil)
+// LogPageQuery selects a page of a Goal's log: the newest Tail events (all
+// when 0), before the given positions. Visible keeps only events a person
+// sees, and Tail then counts those.
+type LogPageQuery struct {
+	Tail          int
+	BeforeRuntime *int64
+	BeforeControl *int64
+	Visible       bool
 }
 
-func (c *Client) GetSessionLogPageBefore(sessionID string, tail int, beforeRuntime, beforeControl *int64) (*SessionLogPage, error) {
+func (c *Client) GetSessionLogPage(sessionID string, page LogPageQuery) (*SessionLogPage, error) {
 	path := "/api/deployments/" + url.PathEscape(sessionID) + "/logs"
 	query := url.Values{}
-	if tail > 0 {
-		query.Set("tail", strconv.Itoa(tail))
+	if page.Visible {
+		query.Set("visible", "true")
 	}
-	if beforeRuntime != nil {
-		query.Set("before_rt", strconv.FormatInt(*beforeRuntime, 10))
+	if page.Tail > 0 {
+		query.Set("tail", strconv.Itoa(page.Tail))
 	}
-	if beforeControl != nil {
-		query.Set("before_cp", strconv.FormatInt(*beforeControl, 10))
+	if page.BeforeRuntime != nil {
+		query.Set("before_rt", strconv.FormatInt(*page.BeforeRuntime, 10))
+	}
+	if page.BeforeControl != nil {
+		query.Set("before_cp", strconv.FormatInt(*page.BeforeControl, 10))
 	}
 	if len(query) > 0 {
 		path += "?" + query.Encode()

@@ -794,7 +794,7 @@ func TestClientSessionLogPagePreservesRawEvents(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	page, err := NewClient(srv.URL, "test-token").GetSessionLogPage("sess_123", 0)
+	page, err := NewClient(srv.URL, "test-token").GetSessionLogPage("sess_123", LogPageQuery{})
 	if err != nil {
 		t.Fatalf("GetSessionLogPage: %v", err)
 	}
@@ -833,7 +833,7 @@ func TestClientSessionLogPageRequestsTail(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	if _, err := NewClient(srv.URL, "test-token").GetSessionLogPage("sess_123", 50); err != nil {
+	if _, err := NewClient(srv.URL, "test-token").GetSessionLogPage("sess_123", LogPageQuery{Tail: 50}); err != nil {
 		t.Fatalf("GetSessionLogPage: %v", err)
 	}
 }
@@ -848,7 +848,7 @@ func TestClientSessionLogPageRequestsBeforeCursors(t *testing.T) {
 	}))
 	defer srv.Close()
 	runtime, control := int64(30), int64(0)
-	page, err := NewClient(srv.URL, "test-token").GetSessionLogPageBefore("sess_123", 1000, &runtime, &control)
+	page, err := NewClient(srv.URL, "test-token").GetSessionLogPage("sess_123", LogPageQuery{Tail: 1000, BeforeRuntime: &runtime, BeforeControl: &control})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,9 +22,9 @@ func TestCloudHumanLogsPagePastHiddenEventsAndRetainAbsentSourceCursor(t *testin
 			`{"event":"agent_progress","event_seq":99,"data":{"kind":"tool","text":"read"}}`, `"runtime_1"`),
 		logPage(`{"event":"agent_progress","seq":899,"data":{"audience":"user","kind":"progress_update","text":"Defining recovery after a restart."}}`, `"runtime_1"`),
 	}
-	queries := []string{"tail=2", "before_cp=900&before_rt=100&tail=1000", "before_cp=900&before_rt=98&tail=1000"}
+	queries := []string{"tail=2&visible=true", "before_cp=900&before_rt=100&tail=1000&visible=true", "before_cp=900&before_rt=98&tail=1000&visible=true"}
 	client, calls := logPagingServer(t, pages, queries)
-	first, err := client.GetSessionLogPage("session_1", 2)
+	first, err := client.GetSessionLogPage("session_1", cloud.LogPageQuery{Tail: 2, Visible: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -45,8 +45,8 @@ func TestCloudHumanLogsDeduplicateOverlappingPages(t *testing.T) {
 		logPage(`{"event":"agent_progress","event_seq":7,"data":{"audience":"user","kind":"progress_update","text":"Checking restart recovery."}},`+
 			`{"event":"agent_progress","event_seq":8,"data":{"audience":"user","kind":"progress_update","text":"Checking risk limits."}}`, `"runtime_1"`),
 	}
-	client, calls := logPagingServer(t, pages, []string{"tail=2", "before_cp=901&before_rt=10&tail=1000", "before_cp=901&before_rt=8&tail=1000"})
-	first, err := client.GetSessionLogPage("session_1", 2)
+	client, calls := logPagingServer(t, pages, []string{"tail=2&visible=true", "before_cp=901&before_rt=10&tail=1000&visible=true", "before_cp=901&before_rt=8&tail=1000&visible=true"})
+	first, err := client.GetSessionLogPage("session_1", cloud.LogPageQuery{Tail: 2, Visible: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,8 +64,8 @@ func TestCloudHumanLogsMergeSourcesByReceiptTime(t *testing.T) {
 		logPage(`{"event":"agent_progress","seq":20,"time":"2026-09-16T12:01:00Z","data":{"audience":"user","kind":"progress_update","text":"Earlier control update."}},`+
 			`{"event":"agent_progress","event_seq":30,"received_at":"2026-09-16T12:01:40Z","data":{"audience":"user","kind":"progress_update","text":"Latest runtime update."}}`, `"runtime_1"`),
 		logPage(`{"event":"agent_progress","event_seq":29,"received_at":"2026-09-16T12:01:30Z","data":{"audience":"user","kind":"progress_update","text":"Middle runtime update."}}`, `"runtime_1"`),
-	}, []string{"tail=3", "before_cp=20&before_rt=30&tail=1000"})
-	first, err := client.GetSessionLogPage("session_1", 3)
+	}, []string{"tail=3&visible=true", "before_cp=20&before_rt=30&tail=1000&visible=true"})
+	first, err := client.GetSessionLogPage("session_1", cloud.LogPageQuery{Tail: 3, Visible: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,8 +93,8 @@ func TestCloudHumanLogsKeepSnapshotWhenOlderHistoryIsUnavailable(t *testing.T) {
 		{"server ignored cursor", initial, "older activity page"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			client, calls := logPagingServer(t, []string{initial, test.next}, []string{"tail=2", "before_cp=901&before_rt=10&tail=1000"})
-			first, err := client.GetSessionLogPage("session_1", 2)
+			client, calls := logPagingServer(t, []string{initial, test.next}, []string{"tail=2&visible=true", "before_cp=901&before_rt=10&tail=1000&visible=true"})
+			first, err := client.GetSessionLogPage("session_1", cloud.LogPageQuery{Tail: 2, Visible: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -113,8 +113,8 @@ func TestCloudHumanLogsStopAtEmptyReachablePage(t *testing.T) {
 	client, calls := logPagingServer(t, []string{
 		logPage(`{"event":"agent_progress","event_seq":1,"data":{"kind":"tool","text":"read"}}`, `"runtime_1"`),
 		`{"events":[],"cursors":{"rt":null,"cp":null,"session":"runtime_1"}}`,
-	}, []string{"tail=2", "before_cp=901&before_rt=1&tail=1000"})
-	first, err := client.GetSessionLogPage("session_1", 2)
+	}, []string{"tail=2&visible=true", "before_cp=901&before_rt=1&tail=1000&visible=true"})
+	first, err := client.GetSessionLogPage("session_1", cloud.LogPageQuery{Tail: 2, Visible: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -131,8 +131,8 @@ func TestCloudHumanLogsUseOneLegacyFallback(t *testing.T) {
 		t.Run(envelope, func(t *testing.T) {
 			initial := `{"events":[` + initialEvents + `]` + envelope + `}`
 			full := `{"events":[{"event":"agent_progress","data":{"audience":"user","kind":"progress_update","text":"Checking risk limits."}}]}`
-			client, calls := logPagingServer(t, []string{initial, full}, []string{"tail=2", ""})
-			first, err := client.GetSessionLogPage("session_1", 2)
+			client, calls := logPagingServer(t, []string{initial, full}, []string{"tail=2&visible=true", "visible=true"})
+			first, err := client.GetSessionLogPage("session_1", cloud.LogPageQuery{Tail: 2, Visible: true})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -149,8 +149,8 @@ func TestCloudHumanLogsDoNotReplaceSnapshotWithAnotherSessionDuringLegacyFallbac
 		logPage(`{"event":"agent_progress","event_seq":10,"data":{"audience":"user","kind":"progress_update","text":"Original session."}}`, `"runtime_1"`),
 		logPage(`{"event":"agent_progress","data":{"kind":"tool","text":"legacy"}}`, `"runtime_1"`),
 		logPage(`{"event":"agent_progress","data":{"audience":"user","kind":"progress_update","text":"New session."}}`, `"runtime_2"`),
-	}, []string{"tail=2", "before_cp=901&before_rt=10&tail=1000", ""})
-	first, err := client.GetSessionLogPage("session_1", 2)
+	}, []string{"tail=2&visible=true", "before_cp=901&before_rt=10&tail=1000&visible=true", "visible=true"})
+	first, err := client.GetSessionLogPage("session_1", cloud.LogPageQuery{Tail: 2, Visible: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -169,10 +169,10 @@ func TestCloudLogsPreserveSingleRequestModes(t *testing.T) {
 		json  bool
 		query string
 	}{
-		{"default", defaultLogTail, false, false, false, "tail=50"},
+		{"default", defaultLogTail, false, false, false, "tail=50&visible=true"},
 		{"small JSON", 2, false, false, true, "tail=2"},
 		{"page-sized JSON", 1000, false, false, true, "tail=1000"},
-		{"all", 1500, true, false, false, ""},
+		{"all", 1500, true, false, false, "visible=true"},
 		{"all JSON", 1500, true, false, true, ""},
 		{"raw", 1500, false, true, false, ""},
 	} {
@@ -199,7 +199,7 @@ func TestCloudHumanLogsDoNotCallUnreachableRuntimeQuiet(t *testing.T) {
 	client, _ := logPagingServer(t, []string{
 		logPage(`{"event":"agent_progress","event_seq":10,"received_at":"2020-01-01T12:01:40Z","data":{"audience":"user","kind":"progress_update","text":"Checking risk limits."}}`, `"runtime_1"`),
 		logPage("", "null"),
-	}, []string{"tail=2", "before_cp=901&before_rt=10&tail=1000"})
+	}, []string{"tail=2&visible=true", "before_cp=901&before_rt=10&tail=1000&visible=true"})
 	configureCloudTest(t, client.Endpoint)
 	t.Setenv("TELOS_CONTEXT", "")
 	out := captureStdout(t, func() {
@@ -223,7 +223,7 @@ func TestCloudHumanLogsUseAuthoritativeStatusForQuietMessage(t *testing.T) {
 		t.Run(test.status, func(t *testing.T) {
 			client, _ := logPagingServer(t, []string{
 				logPage(`{"event":"agent_progress","event_seq":10,"received_at":"2020-01-01T12:01:40Z","data":{"audience":"user","kind":"progress_update","text":"Checking risk limits."}}`, `"runtime_1"`),
-			}, []string{"tail=1"})
+			}, []string{"tail=1&visible=true"})
 			configureCloudTest(t, client.Endpoint)
 			t.Setenv("TELOS_CONTEXT", "")
 			out := captureStdout(t, func() {
@@ -239,8 +239,8 @@ func TestCloudHumanLogsUseAuthoritativeStatusForQuietMessage(t *testing.T) {
 func TestCloudHumanLogsKeepAvailableRowsWhenInitiallyUnreachable(t *testing.T) {
 	client, calls := logPagingServer(t, []string{
 		logPage(`{"event":"deployment.status","seq":1,"message":"Waiting for the runtime"}`, "null"),
-	}, []string{"tail=2"})
-	first, err := client.GetSessionLogPage("session_1", 2)
+	}, []string{"tail=2&visible=true"})
+	first, err := client.GetSessionLogPage("session_1", cloud.LogPageQuery{Tail: 2, Visible: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -250,12 +250,12 @@ func TestCloudHumanLogsKeepAvailableRowsWhenInitiallyUnreachable(t *testing.T) {
 	}
 }
 
-func TestCloudHumanLogsRetainTurnEndingsForQuietNotice(t *testing.T) {
+func TestCloudHumanLogsRetainEvaluationEndingsForQuietNotice(t *testing.T) {
 	client, _ := logPagingServer(t, []string{
-		logPage(`{"event":"agent_complete","event_seq":10,"received_at":"2020-01-01T12:02:00Z","data":{"audience":"agent"}}`, `"runtime_1"`),
+		logPage(`{"event":"game_end","event_seq":10,"received_at":"2020-01-01T12:02:00Z","data":{"audience":"user"}}`, `"runtime_1"`),
 		logPage(`{"event":"agent_progress","event_seq":9,"received_at":"2020-01-01T12:01:00Z","data":{"audience":"user","kind":"progress_update","text":"Checking recovery."}}`, `"runtime_1"`),
-	}, []string{"tail=1", "before_cp=901&before_rt=10&tail=1000"})
-	first, err := client.GetSessionLogPage("session_1", 1)
+	}, []string{"tail=1&visible=true", "before_cp=901&before_rt=10&tail=1000&visible=true"})
+	first, err := client.GetSessionLogPage("session_1", cloud.LogPageQuery{Tail: 1, Visible: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -266,7 +266,7 @@ func TestCloudHumanLogsRetainTurnEndingsForQuietNotice(t *testing.T) {
 	var output bytes.Buffer
 	printStructuredLogs(&output, events, logViewOptions{Tail: 1, Active: true})
 	if !strings.Contains(output.String(), "Checking recovery.") || strings.Contains(output.String(), "No new progress update") {
-		t.Fatalf("turn ending lost: %s", output.String())
+		t.Fatalf("evaluation ending lost: %s", output.String())
 	}
 }
 
@@ -290,6 +290,14 @@ func TestCloudLargeTailsPageAndFollow(t *testing.T) {
 				if follow {
 					pages = append(pages, page(4000, 4002))
 					queries = append(queries, "tail=1000")
+				}
+				if !jsonOutput {
+					for index := range queries {
+						queries[index] += "&visible=true"
+					}
+					if follow {
+						queries[len(queries)-1] = "tail=50&visible=true"
+					}
 				}
 				calls, goalCalls := 0, 0
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -356,11 +364,15 @@ func TestCloudLargeTailsPageAndFollow(t *testing.T) {
 func TestCloudLargeTailsUseOneLegacyFallback(t *testing.T) {
 	for _, jsonOutput := range []bool{false, true} {
 		t.Run(fmt.Sprintf("json=%t", jsonOutput), func(t *testing.T) {
+			queries := []string{"tail=1000", ""}
+			if !jsonOutput {
+				queries = []string{"tail=1000&visible=true", "visible=true"}
+			}
 			client, calls := logPagingServer(t, []string{
 				`{"events":[` + logHistoryEvents(501, 1500) + `]}`,
 				`{"events":[` + logHistoryEvents(1, 1500) + `]}`,
-			}, []string{"tail=1000", ""})
-			first, err := client.GetSessionLogPage("session_1", 1000)
+			}, queries)
+			first, err := client.GetSessionLogPage("session_1", cloud.LogPageQuery{Tail: 1000, Visible: !jsonOutput})
 			if err != nil {
 				t.Fatal(err)
 			}

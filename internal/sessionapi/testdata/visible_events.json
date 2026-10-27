@@ -1,0 +1,23 @@
+[
+  {"event": {"event": "agent_progress", "role": "prover", "data": {"audience": "user", "text": "Starting"}}, "visible": true},
+  {"event": {"event": "agent_progress", "role": "prover", "data": {"audience": "agent", "kind": "tool", "text": "Read a file"}}, "visible": false},
+  {"event": {"event": "agent_progress", "role": "prover", "data": {"text": "Written before audiences"}}, "visible": true},
+  {"event": {"event": "agent_progress", "role": "prover", "data": {"kind": "tool", "text": "Reading src/auth.ts"}}, "visible": false},
+  {"event": {"event": "agent_progress", "role": "prover", "data": {"text": "Editing src/auth.ts"}}, "visible": false},
+  {"event": {"event": "agent_progress", "role": "prover", "data": {"audience": "user", "text": "Editing the login form"}}, "visible": true},
+  {"event": {"event": "agent_progress", "role": "prover", "data": {"audience": null, "text": "Null audience"}}, "visible": true},
+  {"event": {"event": "agent_progress", "role": "prover", "data": {"audience": "user", "text": "  "}}, "visible": false},
+  {"event": {"event": "round_start", "role": "verifier", "data": {"audience": "user"}}, "visible": true},
+  {"event": {"event": "round_start", "role": "verifier", "data": {}}, "visible": false},
+  {"event": {"event": "agent_complete", "role": "verifier", "data": {"status": "CONCEDE", "cost_usd": 0.5}}, "visible": false},
+  {"event": {"event": "game_start", "role": "system", "data": {"audience": "agent"}}, "visible": false},
+  {"event": {"event": "game_start", "role": "system", "data": {}}, "visible": true},
+  {"event": {"event": "agent_failure_recoverable", "role": "prover", "data": {"error": "429 Too Many Requests", "consecutive_failures": 1, "max_failures": 3}}, "visible": true},
+  {"event": {"event": "agent_suspended", "role": "system", "data": {"error": "quota", "action": "add credit"}}, "visible": true},
+  {"event": {"event": "budget_exceeded", "role": "system", "data": {"session_cost_usd": 5.0, "cap_usd": 4.0}}, "visible": true},
+  {"event": {"event": "game_error", "role": "system", "data": {"error": "boom"}}, "visible": true},
+  {"event": {"event": "game_end", "role": "system", "data": {"audience": "user", "game_result": "success"}}, "visible": true},
+  {"event": {"event": "external_update", "role": "system", "data": {"message": "spec updated"}}, "visible": true},
+  {"event": {"event": "workspace_checkpoint", "role": "system", "data": {"path": "/w"}}, "visible": false},
+  {"event": {"event": "heartbeat", "role": "prover", "data": {"elapsed_sec": 30}}, "visible": false}
+]
