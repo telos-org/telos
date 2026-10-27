@@ -158,7 +158,7 @@ func printCloudSessionLogs(
 	if raw || options.All {
 		tail = 0
 	}
-	page, err := control.GetSessionLogPage(session.ID, cloud.LogPageQuery{Tail: tail, Visible: !raw && !jsonOutput})
+	page, err := control.GetSessionLogPage(session.ID, cloud.LogPageQuery{Tail: tail})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -278,13 +278,13 @@ func expandCloudLogs(control *cloud.Client, sessionID string, initial *cloud.Ses
 				return combined, nil
 			}
 			// Read legacy history once when durable cursors are unavailable.
-			page, err = control.GetSessionLogPage(sessionID, cloud.LogPageQuery{Visible: !jsonOutput})
+			page, err = control.GetSessionLogPage(sessionID, cloud.LogPageQuery{})
 			fullHistory = true
 		} else {
 			if beforeRuntime == nil && beforeControl == nil {
 				return combined, nil
 			}
-			page, err = control.GetSessionLogPage(sessionID, cloud.LogPageQuery{Tail: maxCloudLogTail, BeforeRuntime: beforeRuntime, BeforeControl: beforeControl, Visible: !jsonOutput})
+			page, err = control.GetSessionLogPage(sessionID, cloud.LogPageQuery{Tail: maxCloudLogTail, BeforeRuntime: beforeRuntime, BeforeControl: beforeControl})
 		}
 		if err != nil {
 			return combined, err

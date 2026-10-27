@@ -352,8 +352,8 @@ type Session struct {
 	DashboardDoc           *string          `json:"dashboard_doc,omitempty"`
 	CurrentSpecVersion     *int             `json:"current_spec_version,omitempty"`
 	SpecVersions           []map[string]any `json:"spec_versions"`
-	// VisibleEvents reports that GET /api/sessions/{id}/events accepts
-	// ?visible=true. Older runtimes ignore the parameter.
+	// VisibleEvents reports that GET /api/sessions/{id}/events pages hold only
+	// events a person sees. Older runtimes' pages hold every event.
 	VisibleEvents bool `json:"visible_events,omitempty"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`

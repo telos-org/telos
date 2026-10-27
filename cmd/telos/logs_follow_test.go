@@ -176,7 +176,7 @@ func TestFollowCloudLogsRereadsARestartedRuntimeFromTheStart(t *testing.T) {
 	if !strings.Contains(out.String(), "First step after the restart") || !strings.Contains(out.String(), "Second step after the restart") {
 		t.Fatalf("followed output:\n%s", out.String())
 	}
-	if strings.Join(queries, " ") != "after_rt=5&tail=1000&visible=true tail=1000&visible=true" {
+	if strings.Join(queries, " ") != "after_rt=5&tail=1000 tail=1000" {
 		t.Fatalf("queries: %v", queries)
 	}
 }

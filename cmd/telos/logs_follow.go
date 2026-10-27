@@ -129,7 +129,7 @@ func followCloudLogs(
 ) error {
 	for {
 		time.Sleep(logFollowInterval)
-		query := cloud.LogPageQuery{Tail: maxCloudLogTail, Visible: !printer.jsonOutput}
+		query := cloud.LogPageQuery{Tail: maxCloudLogTail}
 		after := query
 		after.AfterRuntime, after.AfterControl = follower.positions()
 		page, err := control.GetSessionLogPage(goalID, after)

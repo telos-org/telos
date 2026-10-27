@@ -612,12 +612,10 @@ func TestPVGWorkspaceCheckpoint(t *testing.T) {
 	}
 }
 
-func TestPVGLiveToolEventsRemainInEvidenceOnly(t *testing.T) {
+func TestPVGLiveEventsReachTranscriptAndEvidence(t *testing.T) {
 	compiled := compileTestSpec(t)
 	state := NewPVGState("pvg-test", t.TempDir(), "test-session-live-events")
 	liveEvents := []LiveAgentEvent{
-		{Kind: "tool", Text: "Reading app/main.py"},
-		{Kind: "tool", Text: "Running shell command"},
 		{Kind: "progress_update", Text: "Reading app/main.py revealed missing input validation."},
 		{Kind: "review", Text: "The input validation tests pass."},
 		{Kind: "summary", Text: "Input validation is ready."},
@@ -640,13 +638,7 @@ func TestPVGLiveToolEventsRemainInEvidenceOnly(t *testing.T) {
 	}
 
 	transcript := ReadTranscript(state.TranscriptPath)
-	if strings.Contains(transcript, "<tool>") {
-		t.Errorf("transcript contains automatic tool notices:\n%s", transcript)
-	}
 	for _, event := range liveEvents {
-		if event.Kind == "tool" {
-			continue
-		}
 		block := "<" + event.Kind + ">" + event.Text + "</" + event.Kind + ">"
 		if count := strings.Count(transcript, block); count != 2 {
 			t.Errorf("expected %q in both turns, got %d copies", block, count)

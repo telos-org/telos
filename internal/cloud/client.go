@@ -659,24 +659,19 @@ func (c *Client) GetSessionLogs(sessionID string) ([]sessionapi.SessionEvent, er
 	return page.Events, nil
 }
 
-// LogPageQuery selects a page of a Goal's log: the newest Tail events (all
-// when 0) between the given positions. Visible keeps only events a person
-// sees, and Tail then counts those.
+// LogPageQuery selects a page of a Goal's activity: the newest Tail events
+// (all when 0) between the given positions.
 type LogPageQuery struct {
 	Tail          int
 	AfterRuntime  *int64
 	AfterControl  *int64
 	BeforeRuntime *int64
 	BeforeControl *int64
-	Visible       bool
 }
 
 func (c *Client) GetSessionLogPage(sessionID string, page LogPageQuery) (*SessionLogPage, error) {
 	path := "/api/deployments/" + url.PathEscape(sessionID) + "/logs"
 	query := url.Values{}
-	if page.Visible {
-		query.Set("visible", "true")
-	}
 	if page.Tail > 0 {
 		query.Set("tail", strconv.Itoa(page.Tail))
 	}

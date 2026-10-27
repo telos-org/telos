@@ -2,11 +2,11 @@ package sessionapi
 
 import "strings"
 
-// visibleEvent reports whether a person sees event in a Goal's activity, as
-// GET /api/sessions/{id}/events?visible=true returns it. Events addressed to
-// another audience are internal. Events written before audiences existed
-// were for the user, except round markers and the agent's own notes. Cloud
-// applies the same rules to runtimes without ?visible;
+// visibleEvent reports whether a person sees event in a Goal's activity, the
+// pages GET /api/sessions/{id}/events returns. Events addressed to another
+// audience are internal. Events written before audiences existed were for the
+// user, except round markers and the agent's own notes. Cloud applies the
+// same rules to older runtimes, whose pages hold every event;
 // testdata/visible_events.json keeps them equal.
 func visibleEvent(event SessionEvent) bool {
 	audience := event.Data["audience"]

@@ -286,22 +286,18 @@ func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	visible := false
-	if raw := strings.TrimSpace(r.URL.Query().Get("visible")); raw != "" {
-		if visible, err = strconv.ParseBool(raw); err != nil {
-			writeError(w, http.StatusBadRequest, "visible must be a boolean")
-			return
-		}
-	}
 	if strings.Contains(strings.ToLower(r.Header.Get("Accept")), "text/event-stream") {
-		if queryParamSet(r, "before") || queryParamSet(r, "tail") || visible {
-			writeError(w, http.StatusBadRequest, "before, tail, and visible are not supported for event streams")
+		if queryParamSet(r, "before") || queryParamSet(r, "tail") {
+			writeError(w, http.StatusBadRequest, "before and tail are not supported for event streams")
 			return
 		}
+		// The stream carries every event: Cloud reads spend and replay
+		// positions from it, and shows only what a person sees.
 		h.streamEvents(w, r, id, after)
 		return
 	}
-	page, err := h.readEvents(id, EventWindow{After: after, Before: before, Tail: tail, Visible: visible})
+	// Pages are a Goal's activity: only events a person sees, which tail counts.
+	page, err := h.readEvents(id, EventWindow{After: after, Before: before, Tail: tail, Visible: true})
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
@@ -358,9 +354,9 @@ func nonNegativeIntParam(r *http.Request, name string) (int64, error) {
 	return value, nil
 }
 
-// filterEventsWindow applies ?after / ?before / ?tail / ?visible to the event
-// list. after and before are durable event_seq cursors. Events without a
-// durable sequence are retained, preferring a harmless replay over dropping events.
+// filterEventsWindow applies a window to the event list. after and before are
+// durable event_seq cursors. Events without a durable sequence are retained,
+// preferring a harmless replay over dropping events.
 func filterEventsWindow(events []SessionEvent, window EventWindow) []SessionEvent {
 	filtered := make([]SessionEvent, 0, len(events))
 	for _, event := range events {

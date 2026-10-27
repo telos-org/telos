@@ -30,15 +30,15 @@ func TestVisibleEventsMatchSharedFixture(t *testing.T) {
 	}
 }
 
-func TestVisibleEventPagesCountOnlyShownEvents(t *testing.T) {
+func TestEventPagesHoldOnlyShownEvents(t *testing.T) {
 	hidden := func(seq int) string {
 		return fmt.Sprintf("{\"schema\":\"telos.evidence.v2\",\"session_id\":%q,\"event_seq\":%d,\"event\":\"agent_progress\",\"data\":{\"audience\":\"agent\",\"text\":\"tool\"}}\n", eventSessionID, seq)
 	}
 	body := writerLine(1, "first") + hidden(2) + writerLine(3, "second") + hidden(4) + hidden(5) + writerLine(6, "third") + hidden(7)
 	queries := map[string][]string{
-		"visible=true&tail=2":          {"second", "third"},
-		"visible=true&before=3&tail=2": {"first"},
-		"visible=true":                 {"first", "second", "third"},
+		"tail=2":          {"second", "third"},
+		"before=3&tail=2": {"first"},
+		"":                {"first", "second", "third"},
 	}
 	// A log without sequence numbers at its start takes the full-projection
 	// path, which has no durable cursors.

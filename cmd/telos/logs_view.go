@@ -51,7 +51,7 @@ func printStructuredLogs(
 func printLogSilence(out io.Writer, events []sessionapi.SessionEvent, now time.Time) {
 	var latest *renderedLogRow
 	for _, event := range events {
-		// Visible Cloud pages leave out agent_complete; local logs still have it.
+		// Cloud pages leave out agent_complete; local logs still have it.
 		if event.Event == "game_end" || event.Event == "agent_complete" || event.Event == "agent_suspended" {
 			latest = nil
 			continue
