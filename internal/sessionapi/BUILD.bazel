@@ -15,10 +15,10 @@ go_library(
     ],
     importpath = "github.com/telos-org/telos/internal/sessionapi",
     visibility = ["//:__subpackages__"],
-    deps = [
-        "//internal/evidence",
-        "//internal/spec",
-    ],
+    deps = select({
+        "@rules_go//go/platform:windows": [],
+        "//conditions:default": ["//internal/evidence", "//internal/spec"],
+    }),
 )
 
 go_test(

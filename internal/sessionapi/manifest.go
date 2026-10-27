@@ -1,3 +1,5 @@
+//go:build unix
+
 package sessionapi
 
 import (
@@ -35,12 +37,6 @@ type Manifest struct {
 	Runner                   *Runner                    `json:"runner,omitempty"`
 	Specs                    []ManifestSpec             `json:"specs"`
 	Epochs                   []Epoch                    `json:"epochs"`
-}
-
-type Workspace struct {
-	Mode       string `json:"mode"`
-	Source     string `json:"source,omitempty"`
-	BaseCommit string `json:"base_commit,omitempty"`
 }
 
 type ManifestSpec struct {

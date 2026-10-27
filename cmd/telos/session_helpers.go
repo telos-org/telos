@@ -6,27 +6,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/runtimeclient"
 	"github.com/telos-org/telos/internal/sessionapi"
-	"github.com/telos-org/telos/internal/sessionupdate"
-	"github.com/telos-org/telos/internal/sessionworker"
 )
-
-func store() *sessionapi.FileStore {
-	root, err := cli.DefaultLocalSessionRoot("")
-	if err != nil {
-		root = os.Getenv("TELOS_SESSION_DIR")
-		if root == "" {
-			root = filepath.Join(".telos", "sessions")
-		}
-	}
-	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
-	store.OnSpecUpdate = sessionupdate.ProjectSpecUpdate
-	return store
-}
 
 func existingSpecPath(input string) (string, bool) {
 	if info, err := os.Stat(input); err == nil {
@@ -66,7 +50,7 @@ func specFileNotFound(input string) error {
 }
 
 func localSessionExists(sessionID string) bool {
-	_, err := store().Get(sessionID)
+	_, err := getLocalSession(sessionID)
 	return err == nil
 }
 
@@ -103,8 +87,7 @@ func getCloudSessionIfConfigured(
 
 func getSessionFromAnywhere(sessionID string) (*sessionapi.Session, error) {
 	// Try local first
-	s := store()
-	session, err := s.Get(sessionID)
+	session, err := getLocalSession(sessionID)
 	if err == nil {
 		return session, nil
 	}
@@ -121,8 +104,7 @@ func getSessionFromAnywhere(sessionID string) (*sessionapi.Session, error) {
 }
 
 func getTranscriptFromAnywhere(sessionID string) (string, error) {
-	s := store()
-	text, err := s.Transcript(sessionID)
+	text, err := getLocalTranscript(sessionID)
 	if err == nil {
 		return text, nil
 	}
@@ -142,8 +124,7 @@ func getTranscriptFromAnywhere(sessionID string) (string, error) {
 }
 
 func getEventsFromAnywhere(sessionID string) ([]sessionapi.SessionEvent, error) {
-	s := store()
-	events, err := s.Events(sessionID)
+	events, err := getLocalEvents(sessionID)
 	if err == nil {
 		return events, nil
 	}
@@ -159,35 +140,8 @@ func getEventsFromAnywhere(sessionID string) ([]sessionapi.SessionEvent, error) 
 	return nil, localSessionNotFoundError(sessionID)
 }
 
-func stopSessionAnywhere(sessionID string) (*sessionapi.Session, error) {
-	s := store()
-	var sessionDir string
-	if session, err := s.Get(sessionID); err == nil && session.SessionDir != nil {
-		sessionDir = *session.SessionDir
-	}
-	session, err := s.Stop(sessionID)
-	if err == nil {
-		if sessionDir != "" {
-			if err := sessionworker.Stop(sessionDir); err != nil {
-				return nil, err
-			}
-		}
-		return session, nil
-	}
-
-	return nil, localSessionNotFoundError(sessionID)
-}
-
 func localSessionNotFoundError(sessionID string) error {
 	return localSessionNotFound{sessionID: sessionID, root: localSessionRoot()}
-}
-
-func localSessionRoot() string {
-	root, err := cli.DefaultLocalSessionRoot("")
-	if err == nil {
-		return root
-	}
-	return filepath.Join(".telos", "sessions")
 }
 
 type localSessionNotFound struct {

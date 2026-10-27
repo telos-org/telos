@@ -7,6 +7,7 @@ package sessionapi
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"regexp"
@@ -482,3 +483,19 @@ type SessionEventsResponse struct {
 	Events       []SessionEvent `json:"events"`
 	HeadEventSeq *int64         `json:"head_event_seq,omitempty"`
 }
+
+type Workspace struct {
+	Mode       string `json:"mode"`
+	Source     string `json:"source,omitempty"`
+	BaseCommit string `json:"base_commit,omitempty"`
+}
+
+// ErrNotFound is returned when a session or artifact does not exist.
+var ErrNotFound = errors.New("not found")
+
+// ErrInvalidSession is returned when a request targets the wrong session kind
+// or would violate session identity.
+var ErrInvalidSession = errors.New("invalid session")
+
+// ErrConflict is returned when a request would create duplicate live state.
+var ErrConflict = errors.New("conflict")
