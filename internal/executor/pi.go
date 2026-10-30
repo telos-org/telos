@@ -280,11 +280,6 @@ func piLineEvents(line string) []game.LiveAgentEvent {
 	return game.ExtractLiveAgentEvents(assistantText(msg))
 }
 
-// WorkspaceState returns the workspace state from the platform.
-func (pe *PiExecutor) WorkspaceState() string {
-	return pe.Platform.WorkspaceState()
-}
-
 // CheckpointWorkspace creates a workspace checkpoint.
 func (pe *PiExecutor) CheckpointWorkspace(dest string) bool {
 	return pe.Platform.CheckpointWorkspace(dest)
