@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -480,6 +481,30 @@ func TestRequireCloudLogin(t *testing.T) {
 	t.Setenv(config.AuthTokenEnv, "token")
 	if err := requireCloudLogin(); err != nil {
 		t.Fatalf("token login: %v", err)
+	}
+}
+
+func TestDescribeAndLogsRequireCloudLogin(t *testing.T) {
+	configureLocalOnlyTest(t)
+	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+	t.Setenv("TELOS_SESSION_ID", "")
+	t.Setenv("TELOS_CONTEXT", "")
+	for _, args := range [][]string{
+		{"describe", "goal_example"},
+		{"describe", "goal_example", "--json"},
+		{"describe", "goal_example", "--context", "personal"},
+		{"logs", "goal_example"},
+		{"logs", "goal_example", "--json"},
+		{"logs", "goal_example", "--context", "personal"},
+	} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			out, stderr, err := inferenceCLIProcess(t, args...)
+			var exit *exec.ExitError
+			if !errors.As(err, &exit) || exit.ExitCode() != 1 || out != "" ||
+				stderr != "error: not logged in; run `telos login` first\n" {
+				t.Fatalf("exit = %v, stdout = %q, stderr = %q", err, out, stderr)
+			}
+		})
 	}
 }
 
@@ -1599,6 +1624,8 @@ func TestPrintJSONLogEventsIncludesCloudContext(t *testing.T) {
 }
 
 func TestRootLookupReturnsClusterAPIError(t *testing.T) {
+	configureLocalOnlyTest(t)
+	t.Setenv("TELOS_CONTEXT", "")
 	t.Setenv("TELOS_RUNTIME", "")
 	cluster := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/sessions/sess_root" {
@@ -1623,11 +1650,19 @@ func TestRootLookupReturnsClusterAPIError(t *testing.T) {
 	if strings.Contains(err.Error(), "session sess_root: not found") {
 		t.Fatalf("root error fell through to generic not found: %v", err)
 	}
+	for _, command := range []string{"describe", "logs"} {
+		out, stderr, commandErr := inferenceCLIProcess(t, command, "sess_root")
+		if commandErr == nil || out != "" || stderr != "error: "+err.Error()+"\n" {
+			t.Fatalf("%s: exit = %v, stdout = %q, stderr = %q", command, commandErr, out, stderr)
+		}
+	}
 }
 
 func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
 	configureLocalOnlyTest(t)
 	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+	t.Setenv("TELOS_SESSION_ID", "")
+	t.Setenv("TELOS_CONTEXT", "")
 
 	_, err := getSessionFromAnywhere("local_missing")
 	if err == nil {
@@ -1641,6 +1676,12 @@ func TestLocalSessionNotFoundErrorExplainsWorkspaceScope(t *testing.T) {
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing guidance %q:\n%s", want, text)
+		}
+	}
+	for _, command := range []string{"describe", "logs"} {
+		out, stderr, commandErr := inferenceCLIProcess(t, command, "local_missing")
+		if commandErr == nil || out != "" || stderr != "error: "+err.Error()+"\n" {
+			t.Fatalf("%s: exit = %v, stdout = %q, stderr = %q", command, commandErr, out, stderr)
 		}
 	}
 }

@@ -88,7 +88,10 @@ func getCloudSessionIfConfigured(
 	if err != nil {
 		return nil, "", false, err
 	}
-	if !configured {
+	// Runtime-scoped lookups use their own token. Otherwise, a Cloud ID
+	// requires a login even when no Cloud credentials are configured.
+	_, rootScoped := rootSessionContext()
+	if !configured && (rootScoped || !isCloudApplyID(id)) {
 		return nil, "", false, nil
 	}
 	session, contextName, err := getCloudSessionForContext(id, contextOverride)
