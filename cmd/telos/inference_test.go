@@ -292,6 +292,20 @@ func TestInferenceCLIProcess(t *testing.T) {
 		cmdRun(args[1:])
 	case "config":
 		cmdConfig(args[1:])
+	case "describe":
+		cmdDescribe(args[1:])
+	case "logs":
+		cmdLogs(args[1:])
+	case "list":
+		cmdList(args[1:])
+	case "get":
+		cmdGet(args[1:])
+	case "delete":
+		cmdDelete(args[1:])
+	case "push":
+		cmdPush(args[1:])
+	case "logout":
+		cmdLogout(args[1:])
 	default:
 		os.Exit(2)
 	}

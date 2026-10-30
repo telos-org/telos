@@ -68,7 +68,8 @@ func cmdLogs(args []string) {
 		return
 	}
 
-	if session, err := getSessionFromAnywhere(sessionID); err == nil {
+	session, sessionErr := getSessionFromAnywhere(sessionID)
+	if sessionErr == nil {
 		options.Active = session.Status == sessionapi.StatusRunning
 		if *raw {
 			text, transcriptErr := getTranscriptFromAnywhere(sessionID)
@@ -118,7 +119,7 @@ func cmdLogs(args []string) {
 		return
 	}
 
-	fmt.Fprintf(os.Stderr, "error: %v\n", localSessionNotFoundError(sessionID))
+	fmt.Fprintf(os.Stderr, "error: %v\n", sessionErr)
 	os.Exit(1)
 }
 
