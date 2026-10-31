@@ -123,6 +123,25 @@ func TestReadErrorPreservesStableRegistryCode(t *testing.T) {
 	}
 }
 
+func TestAuthenticationErrorsIncludeRecoveryAdvice(t *testing.T) {
+	for _, tt := range []struct {
+		status     int
+		body, want string
+	}{
+		{http.StatusUnauthorized, `{"detail":"token expired"}`, "token expired (HTTP 401); run `telos login` or update TELOS_AUTH_TOKEN"},
+		{http.StatusUnauthorized, "", "HTTP 401; run `telos login` or update TELOS_AUTH_TOKEN"},
+		{http.StatusForbidden, `{"detail":"access denied"}`, "access denied (HTTP 403)"},
+	} {
+		err := readError(&http.Response{
+			StatusCode: tt.status,
+			Body:       io.NopCloser(strings.NewReader(tt.body)),
+		})
+		if !IsStatus(err, tt.status) || err.Error() != tt.want {
+			t.Fatalf("HTTP %d, body %q: error = %v; want %q", tt.status, tt.body, err, tt.want)
+		}
+	}
+}
+
 func TestControlClientResolvesHandleContext(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/account/bootstrap" {
