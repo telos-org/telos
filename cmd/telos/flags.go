@@ -90,17 +90,12 @@ func requireArgCount(fs *flag.FlagSet, count int, expected string) {
 func reorderInterspersedFlags(fs *flag.FlagSet, args []string) []string {
 	flags := make([]string, 0, len(args))
 	positionals := make([]string, 0, len(args))
-	afterDashDash := false
-
 	for i := 0; i < len(args); i++ {
 		arg := args[i]
-		if afterDashDash {
-			positionals = append(positionals, arg)
-			continue
-		}
 		if arg == "--" {
-			afterDashDash = true
-			continue
+			flags = append(flags, "--")
+			positionals = append(positionals, args[i+1:]...)
+			break
 		}
 		if !strings.HasPrefix(arg, "-") || arg == "-" {
 			positionals = append(positionals, arg)

@@ -168,13 +168,23 @@ func TestPrintPlanPreviewStarsRequiredVerifierSkills(t *testing.T) {
 }
 
 func TestReorderInterspersedFlagsDashDash(t *testing.T) {
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	fs.Bool("json", false, "")
-
-	got := reorderInterspersedFlags(fs, []string{"--json", "--", "-literal"})
-	want := []string{"--json", "-literal"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %#v, want %#v", got, want)
+	for _, tt := range []struct {
+		args, want []string
+		json       bool
+	}{
+		{[]string{"--json", "--", "-literal"}, []string{"-literal"}, true},
+		{[]string{"SPEC.md", "--json", "--", "--help", "--"}, []string{"SPEC.md", "--help", "--"}, true},
+		{[]string{"--", "--json"}, []string{"--json"}, false},
+		{[]string{"--"}, []string{}, false},
+	} {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		json := fs.Bool("json", false, "")
+		if err := fs.Parse(reorderInterspersedFlags(fs, tt.args)); err != nil {
+			t.Fatalf("%v: %v", tt.args, err)
+		}
+		if !reflect.DeepEqual(fs.Args(), tt.want) || *json != tt.json {
+			t.Fatalf("%v: args = %v, json = %v; want args = %v, json = %v", tt.args, fs.Args(), *json, tt.want, tt.json)
+		}
 	}
 }
 
