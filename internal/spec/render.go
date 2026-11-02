@@ -15,7 +15,7 @@ const (
 
 // RenderTask builds the complete task prompt for one agent role.
 func RenderTask(role Role, compiled *CompiledEnvironment, transcriptPath string) string {
-	specText := fmt.Sprintf("# Spec: `%s@%s`\n\n", compiled.Environment.Name, compiled.Environment.Version)
+	specText := fmt.Sprintf("# Spec\n\nname: `%s`\nversion: %s\n\n", compiled.Environment.Name, compiled.Environment.Version)
 	if compiled.Environment.Path != "" {
 		specText += fmt.Sprintf("Source: `%s`\n\n", compiled.Environment.Path)
 	}
