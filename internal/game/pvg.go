@@ -164,7 +164,7 @@ func (p *PVG) runProverTurn(promptOpts spec.PromptOptions, deadline time.Time) T
 	roundNum := p.Result.Rounds
 	p.Evidence.Log("round_start", roundNum, "prover", map[string]interface{}{"audience": "user"})
 
-	task := spec.RenderProverTask(p.Compiled, p.State.TranscriptPath, promptOpts)
+	task := spec.RenderTask(spec.RoleProver, p.Compiled, p.State.TranscriptPath, promptOpts)
 	return p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task, deadline)
 }
 
@@ -174,7 +174,7 @@ func (p *PVG) runVerifierTurn(promptOpts spec.PromptOptions, deadline time.Time)
 	roundNum := p.Result.Rounds
 	p.Evidence.Log("round_start", roundNum, "verifier", map[string]interface{}{"audience": "user"})
 
-	task := spec.RenderVerifierTask(p.Compiled, p.State.TranscriptPath, promptOpts)
+	task := spec.RenderTask(spec.RoleVerifier, p.Compiled, p.State.TranscriptPath, promptOpts)
 	return p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task, deadline)
 }
 

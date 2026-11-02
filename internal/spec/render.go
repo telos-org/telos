@@ -23,41 +23,27 @@ type PromptOptions struct {
 	LocalRuntime bool
 }
 
-// RenderProverTask builds the full prover task prompt.
-func RenderProverTask(compiled *CompiledEnvironment, transcriptPath string, opts ...PromptOptions) string {
-	options := promptOptions(opts)
-	role, _ := ReadPrompt("prover.md")
-	parts := []string{
-		role,
+// RenderTask builds the complete task prompt for one agent role.
+func RenderTask(role Role, compiled *CompiledEnvironment, transcriptPath string, opts ...PromptOptions) string {
+	options := PromptOptions{}
+	if len(opts) > 0 {
+		options = opts[0]
+	}
+	rolePrompt, _ := ReadPrompt(role + ".md")
+	var parts []string
+	for _, part := range []string{
+		rolePrompt,
 		renderSessionContext(compiled, options),
-		renderSpec(compiled),
-		renderSkillsRoster(compiled, RoleProver),
+		"# Spec\n\n" + compiled.SpecText + "\n",
+		renderSkillsRoster(compiled, role),
 		renderTranscriptProtocol(transcriptPath),
-		renderOutputContract(RoleProver, options),
+		renderOutputContract(role, options),
+	} {
+		if part != "" {
+			parts = append(parts, part)
+		}
 	}
-	return joinNonEmpty(parts)
-}
-
-// RenderVerifierTask builds the full verifier task prompt.
-func RenderVerifierTask(compiled *CompiledEnvironment, transcriptPath string, opts ...PromptOptions) string {
-	options := promptOptions(opts)
-	role, _ := ReadPrompt("verifier.md")
-	parts := []string{
-		role,
-		renderSessionContext(compiled, options),
-		renderSpec(compiled),
-		renderSkillsRoster(compiled, RoleVerifier),
-		renderTranscriptProtocol(transcriptPath),
-		renderOutputContract(RoleVerifier, options),
-	}
-	return joinNonEmpty(parts)
-}
-
-func promptOptions(opts []PromptOptions) PromptOptions {
-	if len(opts) == 0 {
-		return PromptOptions{}
-	}
-	return opts[0]
+	return strings.Join(parts, "\n")
 }
 
 func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) string {
@@ -94,10 +80,6 @@ func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) str
 	return strings.Join(lines, "\n")
 }
 
-func renderSpec(compiled *CompiledEnvironment) string {
-	return "# Spec\n\n" + compiled.SpecText + "\n"
-}
-
 func renderSkillsRoster(compiled *CompiledEnvironment, role Role) string {
 	skills := compiled.Skills
 	if len(skills) == 0 {
@@ -117,16 +99,14 @@ func renderSkillsRoster(compiled *CompiledEnvironment, role Role) string {
 		lines = append(lines, "Load every required rubric and report PASS or FAIL with evidence for each. Any failure blocks concession.", "")
 	}
 	for _, s := range skills {
-		desc := strings.TrimSpace(s.Description)
-		marker := ""
+		entry := fmt.Sprintf("- `%s`", s.Name)
 		if requiredNames[s.Name] {
-			marker = " - required evaluation rubric"
+			entry += " - required evaluation rubric"
 		}
-		if desc != "" {
-			lines = append(lines, fmt.Sprintf("- `%s`%s - %s", s.Name, marker, desc))
-		} else {
-			lines = append(lines, fmt.Sprintf("- `%s`%s", s.Name, marker))
+		if desc := strings.TrimSpace(s.Description); desc != "" {
+			entry += " - " + desc
 		}
+		lines = append(lines, entry)
 	}
 	lines = append(lines, "")
 	return strings.Join(lines, "\n")
@@ -172,14 +152,4 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		"- End with exactly one status tag on its own final line: <status>CONCEDE</status> to concede, otherwise <status>CONTINUE</status>.",
 	)
 	return strings.Join(lines, "\n")
-}
-
-func joinNonEmpty(parts []string) string {
-	var out []string
-	for _, p := range parts {
-		if p != "" {
-			out = append(out, p)
-		}
-	}
-	return strings.Join(out, "\n")
 }
