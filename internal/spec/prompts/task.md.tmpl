@@ -4,31 +4,51 @@
 
 name: `{{.Spec.Name}}`
 version: {{.Spec.Version}}
+
 {{if .Spec.Path}}
 Source: `{{.Spec.Path}}`
 {{end}}
+
 {{.Body}}
+
 {{if .Skills}}
 ## Skills
 
 Skills marked `required evaluation rubric` provide mandatory evaluation criteria.
+
 {{if .VerifyRubrics}}
-Load every required rubric and report PASS or FAIL with evidence for each. Any failure blocks concession.
+Load every required rubric and report PASS or FAIL with evidence for each.
+Any failure blocks concession.
 {{end}}
+
 {{range .Skills -}}
-- `{{.Name}}`{{if .Required}} - required evaluation rubric{{end}}{{if .Description}} - {{.Description}}{{end}}
-{{end}}{{end}}
+- `{{.Name}}`{{if .Required}} - required evaluation rubric{{end}}
+  {{- if .Description}} - {{.Description}}{{end}}
+{{end}}
+{{end}}
+
 # Communication
+
 {{if .TranscriptPath}}
 ## Transcript
+
 Path: `{{.TranscriptPath}}`
-Read recent transcript entries and account for unresolved findings before acting. Consult older history when needed.
+
+Read recent transcript entries and account for unresolved findings before acting.
+Consult older history when needed.
+
 On <external_update>, read the current spec and available diff before continuing.
 Only the current spec governs; preserve required data and history.
+
 The runtime appends your response; do not edit the transcript.
 {{end}}
+
 ## Output and progress
-- Keep evidence, technical details, and uncertainty in your report. Report only what you established.
-- Use <progress_update>...</progress_update> for short updates in everyday language when work begins, a result is established, direction changes, or a blocker appears.
+
+- Keep evidence, technical details, and uncertainty in your report.
+  Report only what you established.
+- Use <progress_update>...</progress_update> for short updates in everyday language
+  when work begins, a result is established, direction changes, or a blocker appears.
 - During waits, report only observed activity.
-- Finish with your report and one final <progress_update>...</progress_update> in the same response; do not send a separate update-only final response.
+- Finish with your report and one final <progress_update>...</progress_update> in the same response;
+  do not send a separate update-only final response.
