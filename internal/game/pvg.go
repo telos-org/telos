@@ -196,10 +196,6 @@ func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
 	return true
 }
 
-func (p *PVG) reviewBudgetMode() bool {
-	return p.Config.Until > 0
-}
-
 func (p *PVG) shouldStop(deadline time.Time) bool {
 	if p.runDurationExhausted(deadline) {
 		return true
@@ -211,7 +207,6 @@ func (p *PVG) promptOptions() spec.PromptOptions {
 	return spec.PromptOptions{
 		Persistent:      p.Config.Persistent,
 		PrimarySpecPath: p.Config.PrimarySpecPath,
-		ReviewBudget:    p.reviewBudgetMode(),
 		ReviewCycleCap:  p.Config.Until,
 		LocalRuntime:    p.Config.LocalRuntime,
 	}

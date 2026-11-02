@@ -474,7 +474,6 @@ func TestRenderVerifierTaskReviewBudgetUsesStatusContract(t *testing.T) {
 
 	compiled, _ := CompileEnvironment(specPath)
 	task := RenderVerifierTask(compiled, "/tmp/transcript.md", PromptOptions{
-		ReviewBudget:   true,
 		ReviewCycleCap: 2,
 	})
 

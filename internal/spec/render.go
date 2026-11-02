@@ -17,7 +17,6 @@ const (
 type PromptOptions struct {
 	Persistent      bool
 	PrimarySpecPath string
-	ReviewBudget    bool
 	ReviewCycleCap  int
 	// LocalRuntime marks a session that executes on a workstation. Sessions
 	// otherwise execute in Telos Cloud.
@@ -85,7 +84,7 @@ func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) str
 	if opts.PrimarySpecPath != "" {
 		lines = append(lines, fmt.Sprintf("- Primary spec: `%s`", opts.PrimarySpecPath))
 	}
-	if opts.ReviewBudget && opts.ReviewCycleCap > 0 {
+	if opts.ReviewCycleCap > 0 {
 		lines = append(lines, fmt.Sprintf("- Review cycle cap: at most `%d` verifier cycles", opts.ReviewCycleCap))
 	}
 	if !opts.LocalRuntime {
