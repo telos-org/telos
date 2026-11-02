@@ -305,8 +305,8 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 			"- For controller cycles, a pending or running child task is valid waiting work when the controller observed it first, launched no competing work, and did not claim final goal satisfaction",
 			"- <status>CONCEDE</status> for that cycle if the correct next controller action is simply to wait for the child task",
 			"- <status>CONTINUE</status> if a child is stopped, failed, terminal but uninspected, missing expected artifacts, or if the controller treats a launched/running task as final goal satisfaction",
-			"- <status>BLOCKED</status> only if the spec itself cannot be satisfied as written, such as contradictory requirements or access the goal can never have; more implementation work would not help. Agents stop until the spec author changes the spec or resumes the goal",
-			"- With BLOCKED, write one plain sentence for the spec author, at most 280 characters, naming the problem and what to change, as <blocked>...</blocked> just before the status tag",
+			"- <status>BLOCKED</status> only if the goal spec/skills cannot be satisfied as written, such as contradictory requirements (e.g. website should be entirely blue and entirely red) or network access the goal can never have. More implementation work would not help.",
+			"- With BLOCKED, write one human-friendly, plain sentence, at most 280 characters, naming the problem and what to change, as <blocked>...</blocked> just before the status tag",
 		)
 	}
 	lines = append(lines,
