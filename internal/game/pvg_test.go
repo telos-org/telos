@@ -140,9 +140,8 @@ func TestPVGHumanProgressLeavesTechnicalHandoffIntact(t *testing.T) {
 	exec := &fakeExecutor{
 		onTurn: func(ts *TurnState) {
 			ts.OnLiveEvent(LiveAgentEvent{Kind: "progress_update", Text: "Checking restart recovery without duplicate orders."})
-			ts.OnLiveEvent(LiveAgentEvent{Kind: "review", Text: "Replay evidence: evaluation/restart.go."})
 		},
-		verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: "Verified technical evidence.\n<status>CONCEDE</status>"}},
+		verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: "Verified technical evidence. Replay evidence: evaluation/restart.go.\n<status>CONCEDE</status>"}},
 	}
 	result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{EpochID: 7}).Run()
 	if result.GameResult != GameSuccess || !result.VerifierConceded {
@@ -175,19 +174,15 @@ func TestPVGHumanProgressLeavesTechnicalHandoffIntact(t *testing.T) {
 			if event["epoch_id"] != float64(7) || event["session_id"] != "human-progress" || body["turn_id"] == "" {
 				t.Fatalf("missing provenance: %#v", event)
 			}
-			switch body["audience"] {
-			case "user":
-				humanCount++
-				if body["kind"] != "progress_update" || body["text"] != "Checking restart recovery without duplicate orders." {
-					t.Fatalf("human update changed: %#v", event)
-				}
-			case "agent":
-				technicalCount++
-				if body["kind"] != "review" || body["text"] != "Replay evidence: evaluation/restart.go." {
-					t.Fatalf("technical update changed: %#v", event)
-				}
-			default:
-				t.Fatalf("new progress must identify its audience: %#v", event)
+			humanCount++
+			if body["audience"] != "user" || body["kind"] != "progress_update" || body["text"] != "Checking restart recovery without duplicate orders." {
+				t.Fatalf("human update changed: %#v", event)
+			}
+		}
+		if event["event"] == "agent_complete" {
+			technicalCount++
+			if body["audience"] != "agent" {
+				t.Fatalf("technical report audience changed: %#v", event)
 			}
 		}
 	}
@@ -246,8 +241,8 @@ func TestPVGUntilStopsOnVerifierConcede(t *testing.T) {
 			{Role: "prover", Status: StatusContinue, Logs: "Round 2"},
 		},
 		verifierResults: []TurnResult{
-			{Role: "verifier", Status: StatusConcede, Logs: "<review>\ncriteria,score\nFunctional correctness,7.0/10\n</review>\n\n<summary>Keep going.</summary>\n\n<status>CONCEDE</status>\n"},
-			{Role: "verifier", Status: StatusConcede, Logs: "<review>\ncriteria,score\nFunctional correctness,8.0/10\n</review>\n\n<summary>Better.</summary>\n\n<status>CONCEDE</status>\n"},
+			{Role: "verifier", Status: StatusConcede, Logs: "Independent checks passed.\n<status>CONCEDE</status>\n"},
+			{Role: "verifier", Status: StatusConcede, Logs: "Independent checks passed again.\n<status>CONCEDE</status>\n"},
 		},
 	}
 
@@ -272,8 +267,8 @@ func TestPVGUntilStopsOnVerifierConcede(t *testing.T) {
 	}
 
 	transcript := ReadTranscript(state.TranscriptPath)
-	if count := strings.Count(transcript, "<review>"); count != 1 {
-		t.Fatalf("expected one review block, got %d:\n%s", count, transcript)
+	if count := strings.Count(transcript, "## Evaluation "); count != 1 {
+		t.Fatalf("expected one evaluation turn, got %d:\n%s", count, transcript)
 	}
 }
 
@@ -419,8 +414,8 @@ func TestPVGUntilFailsWhenReviewBudgetExhausted(t *testing.T) {
 		},
 		verifierResults: []TurnResult{
 			{Role: "verifier", Status: StatusContinue, Logs: "pi_failed:1", Error: "pi_failed:1", Recoverable: true},
-			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,7.0/10\n</review>\n\n<summary>Keep going.</summary>\n"},
-			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,8.0/10\n</review>\n\n<summary>Better.</summary>\n"},
+			{Role: "verifier", Status: StatusContinue, Logs: "A required endpoint still fails validation."},
+			{Role: "verifier", Status: StatusContinue, Logs: "The endpoint still returns the wrong status."},
 		},
 	}
 
@@ -437,8 +432,8 @@ func TestPVGUntilFailsWhenReviewBudgetExhausted(t *testing.T) {
 		t.Fatalf("verifier attempts: got %d", result.VerifierRounds)
 	}
 	transcript := ReadTranscript(state.TranscriptPath)
-	if count := strings.Count(transcript, "<review>"); count != 2 {
-		t.Fatalf("expected two successful review blocks, got %d:\n%s", count, transcript)
+	if count := strings.Count(transcript, "## Evaluation "); count != 3 {
+		t.Fatalf("expected one failed and two completed evaluation turns, got %d:\n%s", count, transcript)
 	}
 }
 
@@ -612,8 +607,8 @@ func TestPVGLiveEventsReachTranscriptAndEvidence(t *testing.T) {
 	state := NewPVGState("pvg-test", t.TempDir(), "test-session-live-events")
 	liveEvents := []LiveAgentEvent{
 		{Kind: "progress_update", Text: "Reading app/main.py revealed missing input validation."},
-		{Kind: "review", Text: "The input validation tests pass."},
-		{Kind: "summary", Text: "Input validation is ready."},
+		{Kind: "progress_update", Text: "The input validation tests pass."},
+		{Kind: "progress_update", Text: "Input validation is ready."},
 	}
 	exec := &fakeExecutor{
 		onTurn: func(ts *TurnState) {

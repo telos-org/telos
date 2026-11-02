@@ -14,11 +14,7 @@ var (
 	finalStatusRE         = regexp.MustCompile(`(?:^|\n)\s*<status>\w+</status>\s*$`)
 	finalProgressUpdateRE = regexp.MustCompile(`(?s)(?:^|\n)\s*<progress_update>.*?</progress_update>\s*$`)
 	progressUpdateRE      = regexp.MustCompile(`(?si)<progress_update>\s*(.*?)\s*</progress_update>`)
-	liveTagREs            = map[string]*regexp.Regexp{
-		"progress_update": regexp.MustCompile(`(?si)<progress_update\b[^>]*>\s*(.*?)\s*</progress_update>`),
-		"review":          regexp.MustCompile(`(?si)<review\b[^>]*>\s*(.*?)\s*</review>`),
-		"summary":         regexp.MustCompile(`(?si)<summary\b[^>]*>\s*(.*?)\s*</summary>`),
-	}
+	liveProgressUpdateRE  = regexp.MustCompile(`(?si)<progress_update\b[^>]*>\s*(.*?)\s*</progress_update>`)
 )
 
 const maxTurnBodyChars = 8000
@@ -121,17 +117,15 @@ func AppendTurnWithOptions(path string, role string, roleRound int, status strin
 	return nil
 }
 
-// ExtractLiveAgentEvents returns progress artifacts safe to surface mid-turn.
+// ExtractLiveAgentEvents returns progress updates to surface mid-turn.
 func ExtractLiveAgentEvents(text string) []LiveAgentEvent {
 	var events []LiveAgentEvent
-	for _, kind := range []string{"progress_update", "review", "summary"} {
-		for _, match := range liveTagREs[kind].FindAllStringSubmatch(text, -1) {
-			body := strings.TrimSpace(match[1])
-			if body == "" {
-				continue
-			}
-			events = append(events, LiveAgentEvent{Kind: kind, Text: body})
+	for _, match := range liveProgressUpdateRE.FindAllStringSubmatch(text, -1) {
+		body := strings.TrimSpace(match[1])
+		if body == "" {
+			continue
 		}
+		events = append(events, LiveAgentEvent{Kind: "progress_update", Text: body})
 	}
 	return events
 }

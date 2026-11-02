@@ -94,7 +94,7 @@ func TestAppendTurnVerifier(t *testing.T) {
 }
 
 func TestExtractAndAppendLiveAgentEvents(t *testing.T) {
-	text := "working\n<progress_update ts=\"now\">Built API</progress_update>\n<summary>Ready for review</summary>"
+	text := "working\n<review>Technical finding</review>\n<progress_update ts=\"now\">Built API</progress_update>\n<summary>Ready for review</summary>\n<progress_update>Ready for review</progress_update>"
 	events := ExtractLiveAgentEvents(text)
 	if len(events) != 2 {
 		t.Fatalf("events: got %#v", events)
@@ -102,7 +102,7 @@ func TestExtractAndAppendLiveAgentEvents(t *testing.T) {
 	if events[0].Kind != "progress_update" || events[0].Text != "Built API" {
 		t.Fatalf("first event: got %#v", events[0])
 	}
-	if events[1].Kind != "summary" || events[1].Text != "Ready for review" {
+	if events[1].Kind != "progress_update" || events[1].Text != "Ready for review" {
 		t.Fatalf("second event: got %#v", events[1])
 	}
 

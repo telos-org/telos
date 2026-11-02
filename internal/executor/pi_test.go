@@ -425,7 +425,7 @@ func TestReadPiSessionRequiresAssistantMessage(t *testing.T) {
 }
 
 func TestPiLineEventsLeaveToolCallsOutOfActivity(t *testing.T) {
-	line := `{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"text","text":"<progress_update>Checking the spec</progress_update>"}]}}`
+	line := `{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"text","text":"<review>Technical finding</review><progress_update>Checking the spec</progress_update><summary>Ready for review</summary>"}]}}`
 	events := piLineEvents(line)
 	if len(events) != 1 || events[0].Kind != "progress_update" || events[0].Text != "Checking the spec" {
 		t.Fatalf("events: %#v", events)
