@@ -19,7 +19,7 @@ import (
 
 const controllerFailureBackoffCap = 15 * time.Minute
 
-// holdRecheckInterval is how often a held child rechecks its root's hold.
+// holdRecheckInterval is how often a held session rechecks its goal's hold.
 const holdRecheckInterval = 5 * time.Second
 
 func RunSessionWorker(sessionDir string, once bool) (int, error) {
@@ -139,15 +139,12 @@ func runSessionWorker(
 	}
 }
 
-// waitOutHold waits for the goal's hold to lift and reports a stop. An
+// waitOutHold waits for the goal's hold to lift and reports a stop. It
+// rechecks on a timer rather than relying on a wake, which can be lost. An
 // accepted root then keeps its schedule instead of starting a check at once.
 func waitOutHold(sessionDir string, root bool, wake, stop <-chan os.Signal) bool {
-	recheck := holdRecheckInterval
-	if root {
-		recheck = 0 // a root is woken when its hold lifts
-	}
 	for {
-		if waitForNextCycle(wake, stop, recheck) {
+		if waitForNextCycle(wake, stop, holdRecheckInterval) {
 			return true
 		}
 		manifest, err := LoadWorkerManifest(sessionDir)

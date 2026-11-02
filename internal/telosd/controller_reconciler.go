@@ -225,41 +225,6 @@ func (s *controllerReconciler) Stop(id string) (*sessionapi.Session, error) {
 	return s.FileStore.Get(id)
 }
 
-// Hold and Resume wake the worker when they lift a hold or a block, so the
-// goal continues at once instead of after a leftover backoff. A new hold
-// stops running agents through the worker's own stop check.
-func (s *controllerReconciler) Hold(id string, held bool) (*sessionapi.Session, error) {
-	lifted := !held && s.manifest(id).Held
-	session, err := s.FileStore.Hold(id, held)
-	return s.wakeIf(lifted, session, err)
-}
-
-func (s *controllerReconciler) Resume(id string) (*sessionapi.Session, error) {
-	lifted := s.manifest(id).Issue.Blocked()
-	session, err := s.FileStore.Resume(id)
-	return s.wakeIf(lifted, session, err)
-}
-
-// manifest reads a session for the wake decision. An unreadable one counts as
-// not held; the store call that follows reports the error.
-func (s *controllerReconciler) manifest(id string) *sessionapi.Manifest {
-	m, err := sessionapi.ReadManifest(filepath.Join(s.Root, id, "session.json"))
-	if err != nil {
-		return &sessionapi.Manifest{}
-	}
-	return m
-}
-
-func (s *controllerReconciler) wakeIf(lifted bool, session *sessionapi.Session, err error) (*sessionapi.Session, error) {
-	if err != nil || !lifted {
-		return session, err
-	}
-	if err := s.wake(session, "hold_lifted"); err != nil {
-		return nil, err
-	}
-	return session, nil
-}
-
 func (s *controllerReconciler) applyCreateDefaults(req sessionapi.SessionCreateRequest) sessionapi.SessionCreateRequest {
 	if parent := req.ParentSessionID; parent != nil && filepath.IsLocal(*parent) && filepath.Base(*parent) == *parent {
 		if m, err := sessionapi.ReadManifest(filepath.Join(s.Root, *parent, "session.json")); err == nil {

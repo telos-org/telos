@@ -231,7 +231,7 @@ func TestRootFailureRecordsRetryingIssueAndBacksOff(t *testing.T) {
 	})
 }
 
-func TestVerifierBlockHoldsRootUntilWake(t *testing.T) {
+func TestVerifierBlockHoldsRootUntilResume(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sessionDir := writeWorkerManifest(t, map[string]any{
 			"session_kind": "controller",
@@ -271,7 +271,7 @@ func TestVerifierBlockHoldsRootUntilWake(t *testing.T) {
 		if _, err := store.Resume(filepath.Base(sessionDir)); err != nil {
 			t.Fatal(err)
 		}
-		wake <- syscall.SIGUSR1
+		time.Sleep(holdRecheckInterval)
 		synctest.Wait()
 		if issue := readIssue(t, sessionDir); attempts.Load() != 2 || issue.Status != sessionapi.IssueRetrying {
 			t.Fatalf("after resume: attempts = %d, issue = %+v", attempts.Load(), issue)
@@ -310,7 +310,6 @@ func TestLiftedHoldKeepsAnAcceptedGoalOnItsSchedule(t *testing.T) {
 		if _, err := store.Hold(filepath.Base(sessionDir), false); err != nil {
 			t.Fatal(err)
 		}
-		wake <- syscall.SIGUSR1
 		time.Sleep(59 * time.Minute)
 		synctest.Wait()
 		if attempts.Load() != 0 {
@@ -391,7 +390,7 @@ func TestHeldRootWaitsWithoutRunning(t *testing.T) {
 		if _, err := store.Hold(filepath.Base(sessionDir), false); err != nil {
 			t.Fatal(err)
 		}
-		wake <- syscall.SIGUSR1
+		time.Sleep(holdRecheckInterval) // no wake: the root notices on its own
 		synctest.Wait()
 		if attempts.Load() != 1 {
 			t.Fatalf("lifting the hold ran %d attempts", attempts.Load())

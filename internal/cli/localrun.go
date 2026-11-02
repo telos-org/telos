@@ -214,7 +214,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		PrimarySpecPath: compileSpecPath,
 		LocalRuntime:    manifest.ResolvedRuntime(sessionapi.SessionRuntime(os.Getenv("TELOS_RUNTIME"))) == sessionapi.RuntimeLocal,
 		StopRequested:   func() bool { return agentsShouldStop(sessionDir) },
-		RecordBlock:     func(message string) string { return recordBlock(sessionDir, manifest, message) },
+		RecordBlock:     func(message string) string { return recordBlock(sessionDir, epochID, message) },
 	}
 
 	if pvgCfg.IsController {
@@ -509,14 +509,16 @@ func ClearRetryingIssue(sessionDir string) {
 }
 
 // recordBlock sets a blocked issue on the root and returns its reason, unless
-// the spec changed since started was read: a block of a replaced spec would
-// outlive the new one.
-func recordBlock(sessionDir string, started *sessionapi.Manifest, message string) string {
+// the epoch checked a spec other than the current one: a block of a replaced
+// spec would outlive the new one.
+func recordBlock(sessionDir string, epochID int, message string) string {
 	recorded := false
 	_, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(m *sessionapi.Manifest) error {
-		if equalPtr(m.CurrentSpecVersion, started.CurrentSpecVersion) && equalPtr(m.PackageDigest, started.PackageDigest) {
-			m.Issue = sessionapi.NewIssue(sessionapi.IssueBlocked, sessionapi.ReasonSpecUnsatisfiable, message, time.Now())
-			recorded = true
+		for _, epoch := range m.Epochs {
+			if epoch.ID == epochID && equalPtr(epoch.SpecVersion, m.CurrentSpecVersion) && equalPtr(epoch.PackageDigest, m.PackageDigest) {
+				m.Issue = sessionapi.NewIssue(sessionapi.IssueBlocked, sessionapi.ReasonSpecUnsatisfiable, message, time.Now())
+				recorded = true
+			}
 		}
 		return nil
 	})
