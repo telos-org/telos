@@ -151,12 +151,9 @@ func renderTranscriptProtocol(transcriptPath string) string {
 func renderOutputContract(role Role, opts PromptOptions) string {
 	lines := []string{
 		"## Output and progress",
-		"- Keep technical claims, evidence, findings, and uncertainty in your concise Markdown report.",
-		"- Use <progress_update>...</progress_update> for short updates to the person waiting for the result, usually one sentence of 10–20 words.",
-		"- Send an update when meaningful work begins, a result is established, direction changes, or a blocker appears; during a wait, report only the activity or reason you observed.",
-		"- Describe the requested behavior in everyday words. Keep file names, commands, test inventories, and internal agent roles in the report.",
-		"- Example: <progress_update>Retrying a test order after a restart no longer charges your balance twice.</progress_update>",
-		"- Report only what you established; a passing check or running child does not mean the whole Goal is complete.",
+		"- Keep evidence, technical details, and uncertainty in your report. Report only what you established.",
+		"- Use <progress_update>...</progress_update> for short updates in everyday language when work begins, a result is established, direction changes, or a blocker appears.",
+		"- During waits, report only observed activity.",
 		"- Finish with your report and one final <progress_update>...</progress_update> in the same response; do not send a separate update-only final response.",
 	}
 	if role == RoleProver {

@@ -438,7 +438,7 @@ func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 	}
 }
 
-func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
+func TestRenderOutputContractUsesProgressProtocol(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: progress-test\nplatform: local\n---\nBody"), 0o644)
@@ -450,16 +450,10 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 	for _, task := range []string{proverTask, verifierTask} {
 		for _, want := range []string{
 			"<progress_update>...</progress_update>",
-			"person waiting for the result",
-			"meaningful work begins",
-			"during a wait",
-			"everyday words",
-			"technical claims, evidence, findings, and uncertainty",
 			"final <progress_update>...</progress_update> in the same response",
-			"does not mean the whole Goal is complete",
 		} {
 			if !strings.Contains(task, want) {
-				t.Fatalf("prompt missing progress guidance %q:\n%s", want, task)
+				t.Fatalf("prompt missing progress protocol %q:\n%s", want, task)
 			}
 		}
 		if strings.Contains(task, `phase=`) || strings.Contains(task, `timestamp=`) {
