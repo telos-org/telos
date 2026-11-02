@@ -502,26 +502,20 @@ func TestRenderVerifierTaskReviewBudgetUsesStatusContract(t *testing.T) {
 	}
 }
 
-func TestRenderVerifierTaskAllowsWaitingOnlyForPersistentSessions(t *testing.T) {
+func TestRenderVerifierRequiresSpecSatisfaction(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: task-state\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderTask(RoleVerifier, compiled, "/tmp/transcript.md")
-	if strings.Contains(task, "waiting for an inspected pending/running child") {
-		t.Fatalf("bounded verifier must not concede while waiting for children:\n%s", task)
-	}
-
-	persistentTask := RenderTask(RoleVerifier, compiled, "/tmp/transcript.md", PromptOptions{Persistent: true})
-	if !strings.Contains(persistentTask, "waiting for an inspected pending/running child") {
-		t.Fatalf("persistent verifier should allow waiting for inspected children:\n%s", persistentTask)
-	}
-	if !strings.Contains(persistentTask, "Waiting does not mean the goal is complete") {
-		t.Fatalf("waiting must not claim goal completion:\n%s", persistentTask)
-	}
-	if !strings.Contains(persistentTask, "Relevant failed or stopped children, and completed children with uninspected or missing expected results, are blockers") {
-		t.Fatalf("persistent verifier should still block bad child state:\n%s", persistentTask)
+	for _, opts := range []PromptOptions{{}, {Persistent: true}} {
+		task := RenderTask(RoleVerifier, compiled, "/tmp/transcript.md", opts)
+		if !strings.Contains(task, "Concede only when every obligation holds under independent review") {
+			t.Fatal("verifier should require spec satisfaction before conceding")
+		}
+		if strings.Contains(task, "child") {
+			t.Fatal("verifier should not concede based on child-session state")
+		}
 	}
 }
 

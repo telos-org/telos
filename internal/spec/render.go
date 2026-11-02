@@ -37,7 +37,7 @@ func RenderTask(role Role, compiled *CompiledEnvironment, transcriptPath string,
 		"# Spec\n\n" + compiled.SpecText + "\n",
 		renderSkillsRoster(compiled, role),
 		renderTranscriptProtocol(transcriptPath),
-		renderOutputContract(role, options),
+		renderOutputContract(role),
 	} {
 		if part != "" {
 			parts = append(parts, part)
@@ -127,7 +127,7 @@ func renderTranscriptProtocol(transcriptPath string) string {
 	}, "\n")
 }
 
-func renderOutputContract(role Role, opts PromptOptions) string {
+func renderOutputContract(role Role) string {
 	lines := []string{
 		"## Output and progress",
 		"- Keep evidence, technical details, and uncertainty in your report. Report only what you established.",
@@ -139,15 +139,8 @@ func renderOutputContract(role Role, opts PromptOptions) string {
 		lines = append(lines, "- The final update states what is ready for independent review; do not claim independent verification.")
 		return strings.Join(lines, "\n")
 	}
-	if opts.Persistent {
-		lines = append(lines,
-			"- Concede this cycle when the goal holds, or the only next action is waiting for an inspected pending/running child and no duplicate work was launched. Waiting does not mean the goal is complete.",
-			"- Relevant failed or stopped children, and completed children with uninspected or missing expected results, are blockers.",
-		)
-	} else {
-		lines = append(lines, "- Concede only when every obligation holds under independent review.")
-	}
 	lines = append(lines,
+		"- Concede only when every obligation holds under independent review.",
 		"- Put blockers first; the final update states what you independently confirmed or what still blocks progress.",
 		"- End with exactly one status tag on its own final line: <status>CONCEDE</status> to concede, otherwise <status>CONTINUE</status>.",
 	)
