@@ -325,6 +325,52 @@ func TestLiftedHoldKeepsAnAcceptedGoalOnItsSchedule(t *testing.T) {
 	})
 }
 
+func TestHoldLiftedBeforeTheCheckStopsKeepsAnAcceptedGoalOnItsSchedule(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		accepted := map[string]any{
+			"id": 1, "started_at": "t", "finished_at": "t", "result": "completed", "spec_version": 1,
+			"completion_reason": "verifier_conceded", "verifier_conceded": true, "checkpoint_saved": true,
+		}
+		sessionDir := writeWorkerManifest(t, map[string]any{
+			"session_kind":         "controller",
+			"current_spec_version": 1,
+			"specs":                []map[string]any{{"name": "demo", "interval_seconds": 3600}},
+			"epochs":               []map[string]any{accepted},
+		})
+		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
+		wake, stop := make(chan os.Signal, 1), make(chan os.Signal, 1)
+		var attempts atomic.Int32
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+				if attempts.Add(1) > 1 {
+					return &game.PVGResult{GameResult: game.GameSuccess}, nil
+				}
+				// Paused mid-check, then resumed while the check is still saving.
+				for _, held := range []bool{true, false} {
+					if _, err := store.Hold(filepath.Base(sessionDir), held); err != nil {
+						t.Error(err)
+					}
+				}
+				return &game.PVGResult{GameResult: game.GameStopped}, nil
+			}, wake, stop)
+		}()
+		time.Sleep(59 * time.Minute)
+		synctest.Wait()
+		if attempts.Load() != 1 {
+			t.Fatalf("resuming before the check stopped started another at once: %d attempts", attempts.Load())
+		}
+		time.Sleep(2 * time.Minute)
+		synctest.Wait()
+		if attempts.Load() != 2 {
+			t.Fatalf("scheduled check after resume: %d attempts", attempts.Load())
+		}
+		stop <- syscall.SIGTERM
+		<-done
+	})
+}
+
 func TestChildStoppedByRootHoldWaitsInsteadOfFailing(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		rootDir := writeWorkerManifest(t, map[string]any{"session_kind": "controller"})

@@ -76,9 +76,13 @@ func runSessionWorker(
 		desired := manifest.Desired
 		result, err := runSession(sessionDir)
 		if err == nil && result.GameResult == game.GameStopped && !once {
-			// Agents stopped for a hold, even one lifted since, go round again;
-			// an operator stop exits.
+			// Agents stopped for a hold, even one lifted since, wait it out like
+			// any hold, so an accepted root keeps its schedule; an operator stop
+			// exits.
 			if current, err := LoadWorkerManifest(sessionDir); err == nil && !current.Stopped {
+				if waitOutHold(sessionDir, root, wake, stop) {
+					return 0, nil
+				}
 				continue
 			}
 		}
