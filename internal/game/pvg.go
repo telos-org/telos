@@ -70,7 +70,6 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 }
 
 func (p *PVG) runDefaultLoop() *PVGResult {
-	promptOpts := p.promptOptions()
 	recoverableFailures := 0
 	reviewCyclesCompleted := 0
 	deadline := p.runDeadline()
@@ -82,7 +81,7 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 		if p.shouldStop(deadline) {
 			return p.end(GameStopped)
 		}
-		turn := p.runProverTurn(promptOpts, deadline)
+		turn := p.runProverTurn(deadline)
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
@@ -106,7 +105,7 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 		if p.shouldStop(deadline) {
 			return p.end(GameStopped)
 		}
-		turn = p.runVerifierTurn(promptOpts, deadline)
+		turn = p.runVerifierTurn(deadline)
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
@@ -158,23 +157,23 @@ func (p *PVG) runDurationExhausted(deadline time.Time) bool {
 	return !deadline.IsZero() && time.Now().After(deadline)
 }
 
-func (p *PVG) runProverTurn(promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
+func (p *PVG) runProverTurn(deadline time.Time) TurnResult {
 	p.Result.Rounds++
 	p.Result.ProverRounds++
 	roundNum := p.Result.Rounds
 	p.Evidence.Log("round_start", roundNum, "prover", map[string]interface{}{"audience": "user"})
 
-	task := spec.RenderTask(spec.RoleProver, p.Compiled, p.State.TranscriptPath, promptOpts)
+	task := spec.RenderTask(spec.RoleProver, p.Compiled, p.State.TranscriptPath)
 	return p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task, deadline)
 }
 
-func (p *PVG) runVerifierTurn(promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
+func (p *PVG) runVerifierTurn(deadline time.Time) TurnResult {
 	p.Result.Rounds++
 	p.Result.VerifierRounds++
 	roundNum := p.Result.Rounds
 	p.Evidence.Log("round_start", roundNum, "verifier", map[string]interface{}{"audience": "user"})
 
-	task := spec.RenderTask(spec.RoleVerifier, p.Compiled, p.State.TranscriptPath, promptOpts)
+	task := spec.RenderTask(spec.RoleVerifier, p.Compiled, p.State.TranscriptPath)
 	return p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task, deadline)
 }
 
@@ -201,15 +200,6 @@ func (p *PVG) shouldStop(deadline time.Time) bool {
 		return true
 	}
 	return p.Config.StopRequested != nil && p.Config.StopRequested()
-}
-
-func (p *PVG) promptOptions() spec.PromptOptions {
-	return spec.PromptOptions{
-		Persistent:      p.Config.Persistent,
-		PrimarySpecPath: p.Config.PrimarySpecPath,
-		ReviewCycleCap:  p.Config.Until,
-		LocalRuntime:    p.Config.LocalRuntime,
-	}
 }
 
 func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string, deadline time.Time) TurnResult {

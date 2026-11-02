@@ -999,59 +999,7 @@ func TestLocalWorkerEnvIncludesSessionContext(t *testing.T) {
 	}
 }
 
-func TestRunLocalSessionContextFollowsRuntime(t *testing.T) {
-	for _, tt := range []struct {
-		runtime       sessionapi.SessionRuntime
-		context       string
-		wantNamespace bool
-	}{
-		{runtime: sessionapi.RuntimeLocal, context: "- Runtime: `local`"},
-		{runtime: sessionapi.RuntimeCloud, context: "- Runtime: `cloud`", wantNamespace: true},
-	} {
-		t.Run(string(tt.runtime), func(t *testing.T) {
-			dir := t.TempDir()
-			t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(dir, "telos-output"))
-			specPath := filepath.Join(dir, "SPEC.md")
-			if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: preamble\n---\n# Preamble\n\nTest body."), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			orig, _ := os.Getwd()
-			os.Chdir(dir)
-			defer os.Chdir(orig)
-
-			session, err := CreateLocalSession(specPath, LocalRunConfig{})
-			if err != nil {
-				t.Fatalf("CreateLocalSession: %v", err)
-			}
-			manifestPath := filepath.Join(session.SessionDir, "session.json")
-			manifest, err := sessionapi.ReadManifest(manifestPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			manifest.Runtime = tt.runtime
-			if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
-				t.Fatal(err)
-			}
-
-			exec := &fakeExecutor{
-				proverResult:   game.TurnResult{Role: "prover", Status: game.StatusContinue, Logs: "Done."},
-				verifierResult: game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "OK\n\n<status>CONCEDE</status>\n"},
-			}
-			if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
-				t.Fatalf("RunLocalSession: %v", err)
-			}
-			task := exec.firstTask()
-			if !strings.Contains(task, tt.context) {
-				t.Fatalf("prompt missing %q:\n%s", tt.context, task)
-			}
-			if got := strings.Contains(task, "- Namespace: `"); got != tt.wantNamespace {
-				t.Fatalf("namespace in prompt = %v, want %v", got, tt.wantNamespace)
-			}
-		})
-	}
-}
-
-func TestRunLocalSessionUsesUpdatedLifecycleContext(t *testing.T) {
+func TestRunLocalPersistentSessionUsesBoundSpec(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 
@@ -1091,57 +1039,12 @@ func TestRunLocalSessionUsesUpdatedLifecycleContext(t *testing.T) {
 	}
 
 	task := exec.firstTask()
-	if !strings.Contains(task, "Lifecycle: `persistent`") {
-		t.Fatal("persistent session should receive lifecycle context")
+	boundSpecPath, _ := manifest.SpecVersions[0]["spec_path"].(string)
+	if boundSpecPath == "" {
+		t.Fatal("session should record its bound spec path")
 	}
-	if strings.Contains(task, "`telos-orchestrate`") {
-		t.Fatal("persistent session prompt should not auto-inject telos-orchestrate")
-	}
-	if !strings.Contains(task, "Primary spec: `") {
-		t.Fatal("persistent session prompt should include primary spec path")
-	}
-}
-
-func TestRunLocalPersistentSessionUsesLifecycleContext(t *testing.T) {
-	dir := t.TempDir()
-	specPath := writeTestSpec(t, dir)
-	t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(t.TempDir(), "telos-output"))
-	runTestCommand(t, dir, "git", "init", "-q")
-	runTestCommand(t, dir, "git", "add", "-A")
-	runTestCommand(t, dir, "git", "-c", "user.name=Telos", "-c", "user.email=telos@local", "commit", "-q", "-m", "initial")
-	session, err := CreateLocalSession(specPath, LocalRunConfig{Workspace: dir})
-	if err != nil {
-		t.Fatalf("CreateLocalSession: %v", err)
-	}
-	// Hosted runtimes still record persistent sessions as controllers.
-	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	manifest.SessionKind = sessionapi.KindController
-	if err := sessionapi.WriteManifest(filepath.Join(session.SessionDir, "session.json"), manifest); err != nil {
-		t.Fatal(err)
-	}
-
-	exec := &fakeExecutor{
-		proverResult: game.TurnResult{
-			Role:   "prover",
-			Status: game.StatusContinue,
-			Logs:   "Built.\n\n<progress_update>Built</progress_update>",
-		},
-		verifierResult: game.TurnResult{
-			Role:   "verifier",
-			Status: game.StatusConcede,
-			Logs:   "OK\n\n<status>CONCEDE</status>\n",
-		},
-	}
-	if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
-		t.Fatalf("RunLocalSession: %v", err)
-	}
-
-	task := exec.firstTask()
-	if !strings.Contains(task, "Lifecycle: `persistent`") {
-		t.Fatal("persistent session prompt should be enabled by session kind")
+	if !strings.Contains(task, "Source: `"+boundSpecPath+"`") {
+		t.Fatal("persistent session prompt should reference its bound spec")
 	}
 }
 

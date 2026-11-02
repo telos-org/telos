@@ -13,28 +13,18 @@ const (
 	RoleVerifier Role = "verifier"
 )
 
-// PromptOptions carries session metadata that affects prompt rendering.
-type PromptOptions struct {
-	Persistent      bool
-	PrimarySpecPath string
-	ReviewCycleCap  int
-	// LocalRuntime marks a session that executes on a workstation. Sessions
-	// otherwise execute in Telos Cloud.
-	LocalRuntime bool
-}
-
 // RenderTask builds the complete task prompt for one agent role.
-func RenderTask(role Role, compiled *CompiledEnvironment, transcriptPath string, opts ...PromptOptions) string {
-	options := PromptOptions{}
-	if len(opts) > 0 {
-		options = opts[0]
+func RenderTask(role Role, compiled *CompiledEnvironment, transcriptPath string) string {
+	specText := "# Spec\n\n"
+	if compiled.Environment.Path != "" {
+		specText += fmt.Sprintf("Source: `%s`\n\n", compiled.Environment.Path)
 	}
+	specText += compiled.SpecText + "\n"
 	rolePrompt, _ := ReadPrompt(role + ".md")
 	var parts []string
 	for _, part := range []string{
 		rolePrompt,
-		renderSessionContext(compiled, options),
-		"# Spec\n\n" + compiled.SpecText + "\n",
+		specText,
 		renderSkillsRoster(compiled, role),
 		renderTranscriptProtocol(transcriptPath),
 		renderOutputContract(role),
@@ -44,40 +34,6 @@ func RenderTask(role Role, compiled *CompiledEnvironment, transcriptPath string,
 		}
 	}
 	return strings.Join(parts, "\n")
-}
-
-func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) string {
-	runtime := "cloud"
-	if opts.LocalRuntime {
-		runtime = "local"
-	}
-	lifecycle := "bounded"
-	if opts.Persistent {
-		lifecycle = "persistent"
-	}
-	lines := []string{
-		"## Session",
-		"",
-		fmt.Sprintf("- Spec: `%s`", compiled.Environment.Name),
-		fmt.Sprintf("- Runtime: `%s`", runtime),
-		fmt.Sprintf("- Lifecycle: `%s`", lifecycle),
-		"- Workspace: durable working tree.",
-		"- Root goal changes (`telos apply`) are reserved for operators.",
-	}
-	if opts.Persistent {
-		lines = append(lines, "- If the spec already holds, preserve the working state and report the evidence.")
-	}
-	if opts.PrimarySpecPath != "" {
-		lines = append(lines, fmt.Sprintf("- Primary spec: `%s`", opts.PrimarySpecPath))
-	}
-	if opts.ReviewCycleCap > 0 {
-		lines = append(lines, fmt.Sprintf("- Review cycle cap: at most `%d` verifier cycles", opts.ReviewCycleCap))
-	}
-	if !opts.LocalRuntime {
-		lines = append(lines, fmt.Sprintf("- Namespace: `%s`", compiled.Namespace))
-	}
-
-	return strings.Join(lines, "\n")
 }
 
 func renderSkillsRoster(compiled *CompiledEnvironment, role Role) string {
@@ -136,7 +92,10 @@ func renderOutputContract(role Role) string {
 		"- Finish with your report and one final <progress_update>...</progress_update> in the same response; do not send a separate update-only final response.",
 	}
 	if role == RoleProver {
-		lines = append(lines, "- The final update states what is ready for independent review; do not claim independent verification.")
+		lines = append(lines,
+			"- If the spec already holds, preserve the working state and report the evidence.",
+			"- The final update states what is ready for independent review; do not claim independent verification.",
+		)
 		return strings.Join(lines, "\n")
 	}
 	lines = append(lines,

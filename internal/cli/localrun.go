@@ -205,15 +205,12 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	pvgCfg := game.PVGConfig{
-		Until:           cfg.Until,
-		UntilSeconds:    cfg.UntilSeconds,
-		MaxCostUSD:      cfg.MaxCostUSD,
-		Verbose:         true,
-		EpochID:         epochID,
-		Persistent:      manifest.SessionKind == sessionapi.KindController,
-		PrimarySpecPath: compileSpecPath,
-		LocalRuntime:    manifest.ResolvedRuntime(sessionapi.SessionRuntime(os.Getenv("TELOS_RUNTIME"))) == sessionapi.RuntimeLocal,
-		StopRequested:   func() bool { return sessionStopped(sessionDir) },
+		Until:         cfg.Until,
+		UntilSeconds:  cfg.UntilSeconds,
+		MaxCostUSD:    cfg.MaxCostUSD,
+		Verbose:       true,
+		EpochID:       epochID,
+		StopRequested: func() bool { return sessionStopped(sessionDir) },
 	}
 
 	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)

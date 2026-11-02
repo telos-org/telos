@@ -246,23 +246,6 @@ func TestRenderProverTask(t *testing.T) {
 	}
 }
 
-func TestRenderSessionContextFollowsRuntime(t *testing.T) {
-	dir := t.TempDir()
-	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: runtime-test\nplatform: local\n---\n# Task\n\nDo something."), 0o644)
-
-	compiled, err := CompileEnvironment(specPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if task := RenderTask(RoleProver, compiled, ""); !strings.Contains(task, "- Runtime: `cloud`") || !strings.Contains(task, "- Namespace: `") {
-		t.Error("a session should default to the cloud runtime whatever the spec declares")
-	}
-	if task := RenderTask(RoleVerifier, compiled, "", PromptOptions{LocalRuntime: true}); !strings.Contains(task, "- Runtime: `local`") || strings.Contains(task, "- Namespace: `") {
-		t.Error("a local session should name the local runtime without a namespace")
-	}
-}
-
 func TestRenderVerifierTask(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
@@ -369,25 +352,17 @@ func TestRenderWithRequiredEvaluationSkills(t *testing.T) {
 	}
 }
 
-func TestRenderPersistentSessionContext(t *testing.T) {
+func TestRenderIncludesSpecSource(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: persistent-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderTask(RoleProver, compiled, "/tmp/transcript.md", PromptOptions{
-		Persistent:      true,
-		PrimarySpecPath: "/tmp/spec.md",
-	})
-
-	if !strings.Contains(task, "Lifecycle: `persistent`") {
-		t.Error("prompt should identify the persistent lifecycle")
-	}
-	if strings.Contains(task, "`telos-orchestrate`") {
-		t.Error("persistent session prompt should not auto-inject telos-orchestrate")
-	}
-	if !strings.Contains(task, "Primary spec: `/tmp/spec.md`") {
-		t.Error("persistent session prompt should include primary spec path")
+	for _, role := range []Role{RoleProver, RoleVerifier} {
+		task := RenderTask(role, compiled, "/tmp/transcript.md")
+		if !strings.Contains(task, "Source: `"+specPath+"`") {
+			t.Error("prompt should reference the compiled spec source")
+		}
 	}
 }
 
@@ -467,18 +442,15 @@ func TestRenderOutputContractUsesProgressProtocol(t *testing.T) {
 	}
 }
 
-func TestRenderVerifierTaskReviewBudgetUsesStatusContract(t *testing.T) {
+func TestRenderVerifierUsesStatusContract(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: review-mode\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderTask(RoleVerifier, compiled, "/tmp/transcript.md", PromptOptions{
-		ReviewCycleCap: 2,
-	})
+	task := RenderTask(RoleVerifier, compiled, "/tmp/transcript.md")
 
 	for _, want := range []string{
-		"Review cycle cap: at most `2` verifier cycles",
 		"exactly one status tag on its own final line",
 		"<status>CONTINUE</status>",
 		"<status>CONCEDE</status>",
@@ -508,27 +480,25 @@ func TestRenderVerifierRequiresSpecSatisfaction(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: task-state\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	for _, opts := range []PromptOptions{{}, {Persistent: true}} {
-		task := RenderTask(RoleVerifier, compiled, "/tmp/transcript.md", opts)
-		if !strings.Contains(task, "Concede only when every obligation holds under independent review") {
-			t.Fatal("verifier should require spec satisfaction before conceding")
-		}
-		if strings.Contains(task, "child") {
-			t.Fatal("verifier should not concede based on child-session state")
-		}
+	task := RenderTask(RoleVerifier, compiled, "/tmp/transcript.md")
+	if !strings.Contains(task, "Concede only when every obligation holds under independent review") {
+		t.Fatal("verifier should require spec satisfaction before conceding")
 	}
 }
 
-func TestRenderDoesNotInjectChildIntegrationInstructions(t *testing.T) {
+func TestRenderDoesNotInjectSessionMetadata(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: ws-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
 	for _, task := range []string{RenderTask(RoleProver, compiled, ""), RenderTask(RoleVerifier, compiled, "")} {
-		for _, unwanted := range []string{"workspace.tar.gz", "CLI credentials", "/workspace/output"} {
+		for _, unwanted := range []string{
+			"## Session", "Namespace:", "Runtime:", "Lifecycle:", "Review cycle cap:",
+			"workspace.tar.gz", "CLI credentials", "telos apply", "child", compiled.Namespace,
+		} {
 			if strings.Contains(task, unwanted) {
-				t.Errorf("prompt should not inject child integration instructions or runtime paths: %q", unwanted)
+				t.Errorf("prompt should not inject session metadata or child instructions: %q", unwanted)
 			}
 		}
 	}
