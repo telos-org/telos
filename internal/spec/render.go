@@ -48,7 +48,7 @@ func renderSkillsRoster(compiled *CompiledEnvironment, role Role) string {
 	lines := []string{
 		"## Skills",
 		"",
-		"Skills marked `required evaluation rubric` are part of the goal.",
+		"Skills marked `required evaluation rubric` provide mandatory evaluation criteria.",
 		"",
 	}
 	if role == RoleVerifier && len(requiredNames) > 0 {
