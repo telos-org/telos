@@ -12,6 +12,7 @@ import (
 	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/sessionworker"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 func TestSubmitLocalSessionWithoutRuntimeCreatesNoSession(t *testing.T) {
@@ -1209,8 +1210,12 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 	if !strings.Contains(secondImplementationTask, "Read the latest transcript entries for current spec updates and unresolved findings before acting") {
 		t.Fatal("second implementation prompt should require reading transcript first")
 	}
-	if !strings.Contains(secondImplementationTask, "resolve applicable evaluator findings") {
-		t.Fatal("implementation prompt should identify unresolved evaluator findings")
+	rolePrompt, err := spec.ReadPrompt("prover.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(secondImplementationTask, rolePrompt) {
+		t.Fatal("subsequent generator turns should receive the current prover role prompt")
 	}
 }
 

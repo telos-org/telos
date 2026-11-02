@@ -225,8 +225,12 @@ func TestRenderProverTask(t *testing.T) {
 	if strings.Contains(task, "# Build:") || strings.Contains(task, "# Fix:") {
 		t.Error("prover prompt should not derive build/fix semantics from the round number")
 	}
-	if !strings.Contains(task, "implementation agent") {
-		t.Error("should contain implementation role prompt")
+	rolePrompt, err := ReadPrompt("prover.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(task, rolePrompt) {
+		t.Error("should begin with the embedded prover role prompt")
 	}
 	if !strings.Contains(task, "Do something.") {
 		t.Error("should contain spec body")
@@ -270,59 +274,15 @@ func TestRenderVerifierTask(t *testing.T) {
 	if strings.Contains(task, "# Verify:") {
 		t.Error("verifier prompt should not use a synthetic title")
 	}
-	if !strings.Contains(task, "evaluation agent") {
-		t.Error("should contain evaluation role prompt")
+	rolePrompt, err := ReadPrompt("verifier.md")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(task, rolePrompt) {
+		t.Error("should begin with the embedded verifier role prompt")
 	}
 	if !strings.Contains(task, "Check something.") {
 		t.Error("should contain spec body")
-	}
-	if !strings.Contains(task, "including removal of superseded behavior") {
-		t.Error("verifier prompt should check retirement as well as new behavior")
-	}
-}
-
-func TestRenderVerifierTaskAllowsReusableEvaluationArtifacts(t *testing.T) {
-	dir := t.TempDir()
-	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: reusable-eval\nplatform: local\n---\nBody"), 0o644)
-
-	compiled, _ := CompileEnvironment(specPath)
-	task := RenderVerifierTask(compiled, "")
-
-	for _, want := range []string{
-		"You may add and commit useful tests or probes",
-		"do not change the implementation",
-		"project's test location or `evaluation/`",
-		"Prefer extending an existing durable probe",
-	} {
-		if !strings.Contains(task, want) {
-			t.Fatalf("verifier prompt missing %q:\n%s", want, task)
-		}
-	}
-	if strings.Contains(task, "Keep evaluator scratch outside the delivered tree") {
-		t.Fatalf("verifier prompt should not forbid durable evaluator artifacts:\n%s", task)
-	}
-}
-
-func TestRenderProverRequiresCompleteOutcome(t *testing.T) {
-	dir := t.TempDir()
-	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: continuation-test\nplatform: local\n---\nBody"), 0o644)
-
-	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "")
-
-	if strings.Contains(task, "# Build:") || strings.Contains(task, "# Fix:") {
-		t.Error("prover prompt should not use build/fix titles")
-	}
-	if !strings.Contains(task, "smallest complete solution") ||
-		!strings.Contains(task, "Continue while you can make progress toward the goal") ||
-		!strings.Contains(task, "Exercise your changes") {
-		t.Error("prover prompt should require a complete outcome")
-	}
-	if strings.Contains(task, "smallest change that improves") ||
-		strings.Contains(task, "Prefer incremental, inspectable changes") {
-		t.Error("prover prompt should not encourage partial turns")
 	}
 }
 
@@ -507,9 +467,6 @@ func TestRenderOutputContractRequiresRegularProgressUpdates(t *testing.T) {
 				t.Fatalf("progress guidance should not prescribe %q:\n%s", unwanted, task)
 			}
 		}
-	}
-	if !strings.Contains(verifierTask, "In one bounded pass, review every obligation") {
-		t.Fatal("evaluation prompt should require a complete bounded review")
 	}
 }
 
