@@ -34,7 +34,6 @@ func RenderProverTask(compiled *CompiledEnvironment, transcriptPath string, opts
 		renderSpec(compiled),
 		renderSkillsRoster(compiled, RoleProver),
 		renderTranscriptProtocol(transcriptPath),
-		renderWorkspace(),
 		renderOutputContract(RoleProver, options),
 	}
 	return joinNonEmpty(parts)
@@ -50,7 +49,6 @@ func RenderVerifierTask(compiled *CompiledEnvironment, transcriptPath string, op
 		renderSpec(compiled),
 		renderSkillsRoster(compiled, RoleVerifier),
 		renderTranscriptProtocol(transcriptPath),
-		renderWorkspace(),
 		renderOutputContract(RoleVerifier, options),
 	}
 	return joinNonEmpty(parts)
@@ -78,7 +76,11 @@ func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) str
 		fmt.Sprintf("- Spec: `%s`", compiled.Environment.Name),
 		fmt.Sprintf("- Runtime: `%s`", runtime),
 		fmt.Sprintf("- Lifecycle: `%s`", lifecycle),
+		"- Workspace: durable working tree.",
 		"- Root goal changes (`telos apply`) are reserved for operators.",
+	}
+	if opts.Persistent {
+		lines = append(lines, "- If the spec already holds, preserve the working state and report the evidence.")
 	}
 	if opts.PrimarySpecPath != "" {
 		lines = append(lines, fmt.Sprintf("- Primary spec: `%s`", opts.PrimarySpecPath))
@@ -87,10 +89,7 @@ func renderSessionContext(compiled *CompiledEnvironment, opts PromptOptions) str
 		lines = append(lines, fmt.Sprintf("- Review cycle cap: at most `%d` verifier cycles", opts.ReviewCycleCap))
 	}
 	if !opts.LocalRuntime {
-		lines = append(lines,
-			fmt.Sprintf("- Namespace: `%s`", compiled.Namespace),
-			"- The runtime supplies session identity and CLI credentials.",
-		)
+		lines = append(lines, fmt.Sprintf("- Namespace: `%s`", compiled.Namespace))
 	}
 
 	return strings.Join(lines, "\n")
@@ -142,18 +141,11 @@ func renderTranscriptProtocol(transcriptPath string) string {
 	return strings.Join([]string{
 		"## Transcript",
 		fmt.Sprintf("Path: `%s`", transcriptPath),
-		"Read the latest transcript entries for current spec updates and unresolved findings before acting. Read older history only when the latest state or delivered artifact leaves uncertainty.",
-		"On <external_update>, read the current spec and available diff named in the block before continuing.",
-		"Reuse work that serves the current spec; remove behavior that only served superseded requirements. Preserve required data and history.",
-		"Reassess earlier findings and approvals against the current spec and state.",
-		"The runtime appends your response. Do not edit the transcript.",
+		"Read recent transcript entries and account for unresolved findings before acting. Consult older history when needed.",
+		"On <external_update>, read the current spec and available diff before continuing.",
+		"Only the current spec governs; preserve required data and history.",
+		"The runtime appends your response; do not edit the transcript.",
 	}, "\n")
-}
-
-func renderWorkspace() string {
-	return "## Workspace\n\nDurable working tree; use git history to inspect prior work.\n" +
-		"Inspect existing child sessions before launching more.\n" +
-		"Child tasks use isolated workspaces. Inspect their transcripts and evidence; extract `workspace.tar.gz` checkpoints to integrate results, including git state.\n"
 }
 
 func renderOutputContract(role Role, opts PromptOptions) string {

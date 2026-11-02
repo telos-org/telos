@@ -397,12 +397,16 @@ func TestRenderTranscriptProtocolDoesNotDumpTranscript(t *testing.T) {
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: transcript-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "/tmp/transcript.md")
+	transcriptPath := filepath.Join(dir, "transcript.md")
+	if err := os.WriteFile(transcriptPath, []byte("Some history"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	task := RenderProverTask(compiled, transcriptPath)
 
 	if !strings.Contains(task, "## Transcript") {
 		t.Error("should contain transcript protocol section")
 	}
-	if !strings.Contains(task, "/tmp/transcript.md") {
+	if !strings.Contains(task, transcriptPath) {
 		t.Error("should contain transcript path")
 	}
 	if strings.Contains(task, "Some history") || strings.Contains(task, "~~~~markdown") {
@@ -420,13 +424,12 @@ func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
 	verifierTask := RenderVerifierTask(compiled, "/tmp/transcript.md")
 	for _, task := range []string{proverTask, verifierTask} {
 		for _, want := range []string{
-			"Read the latest transcript entries for current spec updates and unresolved findings before acting",
-			"Read older history only when the latest state or delivered artifact leaves uncertainty",
+			"account for unresolved findings before acting",
+			"Consult older history when needed",
 			"read the current spec and available diff",
-			"remove behavior that only served superseded requirements",
-			"Preserve required data and history",
-			"Reassess earlier findings and approvals against the current spec and state",
-			"Do not edit the transcript",
+			"Only the current spec governs",
+			"preserve required data and history",
+			"do not edit the transcript",
 		} {
 			if !strings.Contains(task, want) {
 				t.Errorf("prompt missing transcript guidance %q", want)
@@ -529,21 +532,17 @@ func TestRenderVerifierTaskAllowsWaitingOnlyForPersistentSessions(t *testing.T) 
 	}
 }
 
-func TestRenderWorkspaceGuidance(t *testing.T) {
+func TestRenderDoesNotInjectChildIntegrationInstructions(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: ws-test\nplatform: local\n---\nBody"), 0o644)
 
 	compiled, _ := CompileEnvironment(specPath)
-	task := RenderProverTask(compiled, "")
-
-	if !strings.Contains(task, "## Workspace") {
-		t.Error("should contain workspace section")
-	}
-	if !strings.Contains(task, "workspace.tar.gz") {
-		t.Error("should describe child workspace checkpoints")
-	}
-	if strings.Contains(task, "/workspace/output") {
-		t.Fatalf("workspace prompt should not hardcode container paths:\n%s", task)
+	for _, task := range []string{RenderProverTask(compiled, ""), RenderVerifierTask(compiled, "")} {
+		for _, unwanted := range []string{"workspace.tar.gz", "CLI credentials", "/workspace/output"} {
+			if strings.Contains(task, unwanted) {
+				t.Errorf("prompt should not inject child integration instructions or runtime paths: %q", unwanted)
+			}
+		}
 	}
 }

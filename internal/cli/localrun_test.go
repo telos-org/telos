@@ -1145,7 +1145,7 @@ func TestRunLocalPersistentSessionUsesLifecycleContext(t *testing.T) {
 	}
 }
 
-func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
+func TestRunLocalSessionPromptsShareTranscript(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 
@@ -1187,34 +1187,27 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 		t.Fatalf("RunLocalSession: %v", err)
 	}
 
-	firstImplementationTask := exec.taskAt(0)
-	if firstImplementationTask == "" {
-		t.Fatalf("expected first implementation task, got %d tasks", len(exec.tasks))
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(firstImplementationTask, "Read the latest transcript entries for current spec updates and unresolved findings before acting") {
-		t.Fatal("first implementation prompt should require reading transcript first")
+	if len(manifest.Specs) == 0 || manifest.Specs[0].TranscriptPath == nil {
+		t.Fatal("session should record its shared transcript")
 	}
-
-	evaluationTask := exec.taskAt(1)
-	if evaluationTask == "" {
-		t.Fatalf("expected evaluation task, got %d tasks", len(exec.tasks))
+	transcriptPath := *manifest.Specs[0].TranscriptPath
+	if transcriptPath == "" {
+		t.Fatal("session transcript path should not be empty")
 	}
-	if !strings.Contains(evaluationTask, "Read the latest transcript entries for current spec updates and unresolved findings before acting") {
-		t.Fatal("evaluation prompt should require reading transcript first")
-	}
-
-	secondImplementationTask := exec.taskAt(2)
-	if secondImplementationTask == "" {
-		t.Fatalf("expected second implementation task, got %d tasks", len(exec.tasks))
-	}
-	if !strings.Contains(secondImplementationTask, "Read the latest transcript entries for current spec updates and unresolved findings before acting") {
-		t.Fatal("second implementation prompt should require reading transcript first")
+	for i, task := range []string{exec.taskAt(0), exec.taskAt(1), exec.taskAt(2)} {
+		if !strings.Contains(task, transcriptPath) {
+			t.Fatalf("turn %d should reference the shared transcript", i+1)
+		}
 	}
 	rolePrompt, err := spec.ReadPrompt("prover.md")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.HasPrefix(secondImplementationTask, rolePrompt) {
+	if !strings.HasPrefix(exec.taskAt(2), rolePrompt) {
 		t.Fatal("subsequent generator turns should receive the current prover role prompt")
 	}
 }
