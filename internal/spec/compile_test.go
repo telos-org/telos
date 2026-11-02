@@ -588,6 +588,16 @@ func TestRenderVerifierTaskGatesControllerOnlyTaskState(t *testing.T) {
 	if !strings.Contains(controllerTask, "CONTINUE</status> if a child is stopped, failed, terminal but uninspected") {
 		t.Fatalf("controller verifier should still block bad child state:\n%s", controllerTask)
 	}
+	if !strings.Contains(controllerTask, "<status>BLOCKED</status> only if the spec itself cannot be satisfied") ||
+		!strings.Contains(controllerTask, "<blocked>...</blocked>") {
+		t.Fatalf("root verifier should be able to block an unsatisfiable spec:\n%s", controllerTask)
+	}
+	prover := RenderProverTask(compiled, "", "/tmp/transcript.md", PromptOptions{Controller: true})
+	for name, other := range map[string]string{"child verifier": task, "prover": prover} {
+		if strings.Contains(other, "BLOCKED") {
+			t.Fatalf("%s must not be offered BLOCKED:\n%s", name, other)
+		}
+	}
 }
 
 func TestRenderWithWorkspace(t *testing.T) {

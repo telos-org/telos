@@ -164,8 +164,9 @@ func visibleEvent(event SessionEvent) bool {
 		text, _ := event.Data["text"].(string)
 		kind, _ := event.Data["kind"].(string)
 		return forUser && strings.TrimSpace(text) != "" && !(audience == nil && LegacyAgentNote(kind, text))
+	// agent_suspended is no longer written; older logs still hold it.
 	case "game_start", "agent_failure_recoverable", "agent_suspended",
-		"budget_exceeded", "game_error", "game_end", "external_update":
+		"budget_exceeded", "game_error", "game_end", "external_update", "goal_blocked":
 		return forUser
 	}
 	return false

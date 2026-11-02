@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -192,6 +193,66 @@ func TestRunLocalSessionRecoversAfterProviderBlocker(t *testing.T) {
 				if got := manifest.Epochs[i].Result; got == nil || *got != want {
 					t.Fatalf("epoch %d result = %v, want %s", i+1, got, want)
 				}
+			}
+		})
+	}
+}
+
+func TestRootVerifierBlockIsRecordedUnlessTheSpecChanged(t *testing.T) {
+	for _, specChanged := range []bool{false, true} {
+		t.Run(fmt.Sprintf("spec changed %v", specChanged), func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			session, err := CreateLocalSession(writeTestSpec(t, dir), LocalRunConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(session.SessionDir, "session.json")
+			if _, err := sessionapi.MutateManifest(path, func(m *sessionapi.Manifest) error {
+				m.SessionKind = sessionapi.KindController
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+			exec := &fakeExecutor{proverResult: game.TurnResult{Role: "prover", Logs: "work"}}
+			verifierTurns := 0
+			exec.onExecute = func(role string) {
+				if role != "verifier" {
+					return
+				}
+				verifierTurns++
+				exec.verifierResult = game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "<status>CONCEDE</status>"}
+				if verifierTurns == 1 {
+					logs := "<blocked>The spec needs a key it never provides.</blocked>\n<status>BLOCKED</status>"
+					exec.verifierResult = game.TurnResult{Role: "verifier", Status: game.StatusBlocked, Logs: logs}
+				}
+				if verifierTurns == 1 && specChanged { // the author applies a new version meanwhile
+					if _, err := sessionapi.MutateManifest(path, func(m *sessionapi.Manifest) error {
+						version := 2
+						m.CurrentSpecVersion = &version
+						return nil
+					}); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			result, err := RunLocalSessionWithExecutor(session.SessionDir, exec)
+			if err != nil {
+				t.Fatal(err)
+			}
+			m, err := sessionapi.ReadManifest(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if specChanged {
+				if result.GameResult != game.GameSuccess || m.Issue != nil {
+					t.Fatalf("a block of the replaced spec was kept: %s, %+v", result.GameResult, m.Issue)
+				}
+				return
+			}
+			if result.GameResult != game.GameBlocked || m.Issue == nil || m.Issue.Status != sessionapi.IssueBlocked ||
+				m.Issue.Message != "The spec needs a key it never provides." || *m.Epochs[0].Result != "blocked" {
+				t.Fatalf("block not recorded: %s, %+v", result.GameResult, m.Issue)
 			}
 		})
 	}

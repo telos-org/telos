@@ -8,6 +8,7 @@
   {"event": {"event": "agent_progress", "role": "prover", "data": {"audience": null, "text": "Null audience"}}, "visible": true},
   {"event": {"event": "agent_progress", "role": "prover", "data": {"audience": "user", "text": "  "}}, "visible": false},
   {"event": {"event": "round_start", "role": "verifier", "data": {"audience": "user"}}, "visible": true},
+  {"event": {"event": "goal_blocked", "role": "verifier", "data": {"audience": "user", "reason": "SPEC_UNSATISFIABLE", "message": "Drop one of the two conflicting rules."}}, "visible": true},
   {"event": {"event": "round_start", "role": "verifier", "data": {}}, "visible": false},
   {"event": {"event": "agent_complete", "role": "verifier", "data": {"status": "CONCEDE", "cost_usd": 0.5}}, "visible": false},
   {"event": {"event": "game_start", "role": "system", "data": {"audience": "agent"}}, "visible": false},

@@ -52,7 +52,7 @@ func printLogSilence(out io.Writer, events []sessionapi.SessionEvent, now time.T
 	var latest *renderedLogRow
 	for _, event := range events {
 		// Cloud pages leave out agent_complete; local logs still have it.
-		if event.Event == "game_end" || event.Event == "agent_complete" || event.Event == "agent_suspended" {
+		if event.Event == "game_end" || event.Event == "agent_complete" || event.Event == "agent_suspended" || event.Event == "goal_blocked" {
 			latest = nil
 			continue
 		}
@@ -180,6 +180,11 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 				row.Detail = fmt.Sprintf("attempt %d of %d", current, maxFailures)
 			}
 		}
+		return row, true
+	case "goal_blocked":
+		row.Level = "ERROR"
+		row.Summary = "Blocked"
+		row.Detail = eventDataString(event, "message")
 		return row, true
 	case "agent_suspended":
 		row.Level = "ERROR"

@@ -111,7 +111,7 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			Logs:        result.InfraError,
 			Stats:       stats,
 			Error:       result.InfraError,
-			Recoverable: !result.TimedOut && recoverableAgentFailure(result.InfraError),
+			Recoverable: !result.TimedOut,
 		}
 	}
 
@@ -122,23 +122,25 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			reason = fmt.Sprintf("%s\n[stderr]\n%s", reason, stderrTrimmed)
 		}
 		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        reason,
-			Stats:       stats,
-			Error:       reason,
-			Recoverable: recoverableAgentFailure(reason),
+			Role:          role,
+			Status:        game.StatusContinue,
+			Logs:          reason,
+			Stats:         stats,
+			Error:         reason,
+			Recoverable:   true,
+			ProviderError: agentError != "",
 		}
 	}
 
 	if agentError != "" {
 		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        agentError,
-			Stats:       stats,
-			Error:       agentError,
-			Recoverable: recoverableAgentFailure(agentError),
+			Role:          role,
+			Status:        game.StatusContinue,
+			Logs:          agentError,
+			Stats:         stats,
+			Error:         agentError,
+			Recoverable:   true,
+			ProviderError: true,
 		}
 	}
 
@@ -163,11 +165,6 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		Logs:   logs,
 		Stats:  stats,
 	}
-}
-
-func recoverableAgentFailure(errorText string) bool {
-	_, blocked := game.AgentFailureBlocker(errorText)
-	return !blocked
 }
 
 type piLiveProjector struct {

@@ -122,6 +122,9 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 		} else {
 			recoverableFailures = 0
 		}
+		if p.verifierBlocked(turn) {
+			return p.end(GameBlocked)
+		}
 		if turn.Error == "" && turn.Status == StatusConcede {
 			p.Result.VerifierConceded = true
 			if p.Config.Verbose {
@@ -181,9 +184,34 @@ func (p *PVG) runVerifierTurn(workspace string, promptOpts spec.PromptOptions, d
 	return p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task, deadline)
 }
 
+// verifierBlocked reports a root verifier's verdict that the spec cannot be
+// satisfied. A block without a sentence for the spec author, or one that
+// could not be recorded, counts as CONTINUE.
+func (p *PVG) verifierBlocked(turn TurnResult) bool {
+	if turn.Error != "" || turn.Status != StatusBlocked || !p.Config.IsController {
+		return false
+	}
+	message := ExtractBlockedMessage(turn.Logs)
+	if message == "" || p.Config.RecordBlock == nil {
+		return false
+	}
+	reason := p.Config.RecordBlock(message)
+	if reason == "" {
+		return false
+	}
+	p.Result.BlockedMessage = message
+	p.Evidence.Log("goal_blocked", p.Result.Rounds, "verifier", map[string]interface{}{
+		"audience": "user",
+		"reason":   reason,
+		"message":  message,
+	})
+	return true
+}
+
 func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
-	if _, blocked := AgentFailureBlocker(turn.Error); blocked || !turn.Recoverable {
+	if !turn.Recoverable {
 		p.Result.Error = turn.Error
+		p.Result.ProviderError = providerError(turn)
 		return true
 	}
 	*consecutive++
@@ -196,7 +224,15 @@ func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
 		return false
 	}
 	p.Result.Error = fmt.Sprintf("agent_failure_budget_exceeded: %s", turn.Error)
+	p.Result.ProviderError = providerError(turn)
 	return true
+}
+
+func providerError(turn TurnResult) string {
+	if !turn.ProviderError {
+		return ""
+	}
+	return turn.Error
 }
 
 func (p *PVG) reviewBudgetMode() bool {
@@ -260,6 +296,9 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 	}
 
 	turn := p.Executor.ExecuteTurn(task, role, ts)
+	if turn.Error == "" && p.Config.OnTurnSucceeded != nil {
+		p.Config.OnTurnSucceeded()
+	}
 	p.Result.Accumulate(turn.Stats)
 	p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
 
@@ -303,6 +342,8 @@ func (p *PVG) completionReason(result GameResult) string {
 		return "success"
 	case GameStopped:
 		return "stopped"
+	case GameBlocked:
+		return "blocked"
 	default:
 		return "failure"
 	}

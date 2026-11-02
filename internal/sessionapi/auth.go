@@ -44,6 +44,9 @@ const (
 	ActionListSessions      AccessAction = "list_sessions"
 	ActionReadSession       AccessAction = "read_session"
 	ActionStopSession       AccessAction = "stop_session"
+	// ActionHoldSession pauses or resumes agents. Only the operator may, so
+	// an agent's own token can never lift its hold or block.
+	ActionHoldSession AccessAction = "hold_session"
 )
 
 type AccessRequest struct {
@@ -171,6 +174,11 @@ func authorizeCaller(store *FileStore, caller Caller, req AccessRequest) error {
 		return requireSessionAccess(store, caller, req.SessionID, ScopeSessionsRead)
 	case ActionStopSession:
 		return requireSessionAccess(store, caller, req.SessionID, ScopeSessionsStop)
+	case ActionHoldSession:
+		if caller.Role != RoleOperator {
+			return authError{status: http.StatusForbidden, detail: "operator access required"}
+		}
+		return nil
 	default:
 		return authError{status: http.StatusForbidden, detail: "unsupported session API action"}
 	}

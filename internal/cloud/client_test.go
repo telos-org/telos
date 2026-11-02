@@ -701,7 +701,7 @@ func TestClientGetSession(t *testing.T) {
 			"name":           "auth",
 			"state":          "healthy",
 			"status":         "ready",
-			"status_reason":  "The agent finished and the verifier accepted the result.",
+			"message":        "The agent finished and the verifier accepted the result.",
 			"package_ref":    "@telos/auth:1.2.3",
 			"package_digest": "sha256:abc",
 			"created_at":     "then",
@@ -717,7 +717,7 @@ func TestClientGetSession(t *testing.T) {
 	}
 	if session.ID != "sess_123" || session.PackageRef != "@telos/auth:1.2.3" ||
 		session.Status != "ready" ||
-		session.StatusReason != "The agent finished and the verifier accepted the result." {
+		session.Message != "The agent finished and the verifier accepted the result." {
 		t.Fatalf("session: got %+v", session)
 	}
 }

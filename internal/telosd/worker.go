@@ -1,6 +1,7 @@
 package telosd
 
 import (
+	"cmp"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -11,13 +12,15 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/cli"
-	"github.com/telos-org/telos/internal/evidence"
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/sessionworker"
 )
 
 const controllerFailureBackoffCap = 15 * time.Minute
+
+// holdRecheckInterval is how often a held child rechecks its root's hold.
+const holdRecheckInterval = 5 * time.Second
 
 func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	var err error
@@ -62,15 +65,30 @@ func runSessionWorker(
 			return 1, err
 		}
 		root := manifest.Kind == sessionapi.KindController
+		if !once && manifest.OnHold {
+			cli.ClearRetryingIssue(sessionDir) // stopped agents are not retrying
+			failures = 0
+			if waitOutHold(sessionDir, root, wake, stop) {
+				return 0, nil
+			}
+			continue
+		}
 		desired := manifest.Desired
 		result, err := runSession(sessionDir)
+		if err == nil && result.GameResult == game.GameStopped && !once {
+			// Agents stopped for a hold, even one lifted since, go round again;
+			// an operator stop exits.
+			if current, err := LoadWorkerManifest(sessionDir); err == nil && !current.Stopped {
+				continue
+			}
+		}
 		if err != nil {
 			if !root || once {
 				return 1, err
 			}
 			fmt.Fprintf(os.Stderr, "root session cycle failed: %v\n", err)
 			failures++
-			if waitForNextCycle(wake, stop, jitteredFailureBackoff(failures, time.Second)) {
+			if waitForRetry(sessionDir, wake, stop, failures, sessionapi.ReasonInternalError, "") {
 				return 0, nil
 			}
 			continue
@@ -86,26 +104,16 @@ func runSessionWorker(
 			return 0, nil
 		} else if result.GameResult == game.GameStopped {
 			return 0, nil
+		} else if result.GameResult == game.GameBlocked {
+			continue // the game recorded the block; the next loop waits it out
 		} else if result.GameResult != game.GameSuccess {
 			failures++
-			if blockerCode, blocked := game.AgentFailureBlocker(result.Error); blocked {
-				delay := time.Duration(0)
-				if blockerCode != "agent_configuration_invalid" {
-					delay = jitteredFailureBackoff(failures, time.Minute)
-				}
-				fmt.Fprintf(os.Stderr, "root session agent suspended: %s\n", result.Error)
-				logControllerSuspended(sessionDir, blockerCode, result.Error, delay)
-				if waitForNextCycle(wake, stop, delay) {
-					return 0, nil
-				}
-				continue
+			fmt.Fprintf(os.Stderr, "root session cycle failed: %s\n", cmp.Or(result.Error, string(result.GameResult)))
+			reason := sessionapi.ReasonInternalError
+			if result.ProviderError != "" {
+				reason = sessionapi.ReasonInferenceProviderError
 			}
-			if result.Error != "" {
-				fmt.Fprintf(os.Stderr, "root session cycle failed: %s\n", result.Error)
-			} else {
-				fmt.Fprintf(os.Stderr, "root session cycle failed: %s\n", result.GameResult)
-			}
-			if waitForNextCycle(wake, stop, jitteredFailureBackoff(failures, time.Second)) {
+			if waitForRetry(sessionDir, wake, stop, failures, reason, result.ProviderError) {
 				return 0, nil
 			}
 			continue
@@ -129,6 +137,53 @@ func runSessionWorker(
 			return 0, nil
 		}
 	}
+}
+
+// waitOutHold waits for the goal's hold to lift and reports a stop. An
+// accepted root then keeps its schedule instead of starting a check at once.
+func waitOutHold(sessionDir string, root bool, wake, stop <-chan os.Signal) bool {
+	recheck := holdRecheckInterval
+	if root {
+		recheck = 0 // a root is woken when its hold lifts
+	}
+	for {
+		if waitForNextCycle(wake, stop, recheck) {
+			return true
+		}
+		manifest, err := LoadWorkerManifest(sessionDir)
+		if err == nil && manifest.OnHold {
+			continue
+		}
+		if err == nil && root && manifest.Accepted {
+			return waitForNextCycle(wake, stop, controllerInterval(manifest.Interval))
+		}
+		return false
+	}
+}
+
+// waitForRetry records a retrying issue for the failed attempt and waits out
+// its backoff. A wake (new settings, spec, or lifted hold) retries at once.
+// message is a provider's own words, or empty: Telos errors stay in the log.
+func waitForRetry(sessionDir string, wake, stop <-chan os.Signal, failures int, reason, message string) bool {
+	delay := jitteredFailureBackoff(failures, time.Second)
+	now := time.Now()
+	_, err := sessionapi.MutateManifest(filepath.Join(sessionDir, "session.json"), func(m *sessionapi.Manifest) error {
+		if m.Issue.Blocked() {
+			return nil // only Resume or a new spec version clears a block
+		}
+		issue := sessionapi.NewIssue(sessionapi.IssueRetrying, reason, message, now)
+		if m.Issue != nil && m.Issue.Reason == reason {
+			issue.Since = m.Issue.Since
+		}
+		issue.LastRetryAt = sessionapi.FormatTime(now)
+		issue.NextRetryAt = sessionapi.FormatTime(now.Add(delay))
+		m.Issue = issue
+		return nil
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "record root session issue: %v\n", err)
+	}
+	return waitForNextCycle(wake, stop, delay)
 }
 
 func stopRequested(stop <-chan os.Signal) bool {
@@ -161,6 +216,9 @@ type WorkerManifest struct {
 	Kind     sessionapi.SessionKind
 	Interval time.Duration
 	Desired  DesiredState
+	OnHold   bool
+	Accepted bool
+	Stopped  bool
 }
 
 type DesiredState struct {
@@ -180,8 +238,12 @@ func LoadWorkerManifest(sessionDir string) (WorkerManifest, error) {
 	if m.SessionKind != sessionapi.KindController && m.SessionKind != sessionapi.KindTask {
 		return WorkerManifest{}, fmt.Errorf("invalid session_kind %q in worker manifest", m.SessionKind)
 	}
+	root, _ := sessionapi.ReadRootManifest(sessionDir)
 	manifest := WorkerManifest{
-		Kind: m.SessionKind,
+		Kind:     m.SessionKind,
+		OnHold:   root.OnHold(),
+		Accepted: m.Accepted(),
+		Stopped:  m.IsStopped(),
 		Desired: DesiredState{
 			SpecVersion:   intValue(m.CurrentSpecVersion),
 			PackageDigest: strValue(m.PackageDigest),
@@ -217,41 +279,6 @@ func jitteredFailureBackoff(failures int, initial time.Duration) time.Duration {
 		return base
 	}
 	return base - window + time.Duration(rand.Int64N(int64(window)+1))
-}
-
-func logControllerSuspended(sessionDir, blockerCode, errorText string, retryAfter time.Duration) {
-	manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
-	if err != nil || len(manifest.Specs) == 0 {
-		return
-	}
-	specManifest := manifest.Specs[0]
-	if specManifest.EvidencePath == nil || *specManifest.EvidencePath == "" {
-		return
-	}
-	epochID := 0
-	if last := manifest.LastEpoch(); last != nil {
-		epochID = last.ID
-	}
-	ev := evidence.New(
-		specManifest.Name,
-		*specManifest.EvidencePath,
-		manifest.SessionID,
-		epochID,
-	)
-	if manifest.CreatedAt != "" {
-		ev.StartedAt = manifest.CreatedAt
-	}
-	details := map[string]interface{}{
-		"state":        "waiting",
-		"blocker_code": blockerCode,
-		"error":        errorText,
-		"action":       "fix the model configuration, then re-apply the spec or explicitly wake the session",
-	}
-	if retryAfter > 0 {
-		details["retry_after_seconds"] = retryAfter.Seconds()
-		details["action"] = fmt.Sprintf("fix the provider credentials, permissions, or quota, or add Telos credits; the controller will retry in %s", retryAfter.Round(time.Second))
-	}
-	ev.Log("agent_suspended", 0, "system", details)
 }
 
 func waitForNextCycle(wake <-chan os.Signal, stop <-chan os.Signal, delay time.Duration) bool {

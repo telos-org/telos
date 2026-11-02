@@ -86,6 +86,8 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"apply [SPEC.md]    Create a Goal, update its spec, or change model/thinking",
 		"get GOAL           Download a Goal's package",
 		"delete GOAL        Delete a Goal",
+		"pause GOAL         Stop a Goal's agents; its app keeps running",
+		"resume GOAL        Restart a paused or blocked Goal's agents",
 		"pull PACKAGE       Download a spec or skill package",
 		"version            Show version",
 		"update [VERSION]   Update installed Telos components to one release",

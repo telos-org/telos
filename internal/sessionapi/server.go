@@ -22,6 +22,8 @@ const maxSessionRequestBytes = 4 << 20
 //	GET  /api/sessions/{id}/spec
 //	PUT  /api/sessions/{name}/spec
 //	POST /api/sessions/{id}/stop
+//	PUT  /api/sessions/{id}/pause
+//	POST /api/sessions/{id}/resume
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
 //	GET  /api/healthz
@@ -38,6 +40,8 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("GET /api/sessions/{id}/spec", h.getSpec)
 	mux.HandleFunc("PUT /api/sessions/{name}/spec", h.updateSpec)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
+	mux.HandleFunc("PUT /api/sessions/{id}/pause", h.pauseSession)
+	mux.HandleFunc("POST /api/sessions/{id}/resume", h.resumeSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
 }
@@ -245,6 +249,43 @@ func (h *handler) stopSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, session)
+}
+
+func (h *handler) pauseSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionHoldSession, SessionID: id}); !ok {
+		return
+	}
+	var req SessionPauseRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSessionRequestBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil || req.Held == nil {
+		writeError(w, http.StatusBadRequest, `body must be {"held": true|false}`)
+		return
+	}
+	h.writeRootMutation(w, func() (*Session, error) { return h.store.Hold(id, *req.Held) })
+}
+
+func (h *handler) resumeSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionHoldSession, SessionID: id}); !ok {
+		return
+	}
+	h.writeRootMutation(w, func() (*Session, error) { return h.store.Resume(id) })
+}
+
+func (h *handler) writeRootMutation(w http.ResponseWriter, mutate func() (*Session, error)) {
+	session, err := mutate()
+	switch {
+	case errors.Is(err, ErrNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrInvalidSession):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+	default:
+		writeJSON(w, http.StatusOK, session)
+	}
 }
 
 func (h *handler) getTranscript(w http.ResponseWriter, r *http.Request) {

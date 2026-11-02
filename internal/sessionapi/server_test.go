@@ -739,6 +739,12 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 	rootSession, _ := writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
+	if _, err := sessionapi.MutateManifest(filepath.Join(store.Root, "postgres", "session.json"), func(m *sessionapi.Manifest) error {
+		m.Issue = &sessionapi.Issue{Status: sessionapi.IssueBlocked, Reason: sessionapi.ReasonSpecUnsatisfiable}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 
 	updated := "---\nversion: 0.1.1\nname: postgres\nplatform: cloud\ninterval: 5m\n---\n# Postgres v2\n"
 	body, err := json.Marshal(sessionapi.SessionSpecUpdateRequest{
@@ -777,6 +783,9 @@ func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
 	}
 	if session.SpecName == nil || *session.SpecName != "postgres" {
 		t.Fatalf("spec_name: got %#v", session.SpecName)
+	}
+	if session.Issue != nil {
+		t.Fatalf("a new spec version must clear the block: %+v", session.Issue)
 	}
 	if session.Specs[0].IntervalSeconds == nil || *session.Specs[0].IntervalSeconds != 300 {
 		t.Fatalf("interval: got %#v", session.Specs[0].IntervalSeconds)
@@ -2956,4 +2965,66 @@ func assertJSONType(t *testing.T, m map[string]any, key string, kind string) {
 
 func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
+}
+
+func TestPauseAndResumeRootSession(t *testing.T) {
+	srv, store := newBearerTestServer(t, "operator-token")
+	defer srv.Close()
+	root, rootToken := writeAuthorizedSession(t, store.Root, "sess_root", sessionapi.KindController, nil)
+	child, _ := writeAuthorizedSession(t, store.Root, "sess_child", sessionapi.KindTask, &root.SessionID)
+	if _, err := sessionapi.MutateManifest(filepath.Join(store.Root, root.SessionID, "session.json"), func(m *sessionapi.Manifest) error {
+		m.Issue = &sessionapi.Issue{Status: sessionapi.IssueBlocked, Reason: sessionapi.ReasonSpecUnsatisfiable, Message: "Contradiction."}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	call := func(method, path, body, token string) (int, sessionapi.Session) {
+		t.Helper()
+		req, _ := http.NewRequest(method, srv.URL+path, strings.NewReader(body))
+		req.Header.Set("Authorization", "Bearer "+token)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		var session sessionapi.Session
+		_ = json.NewDecoder(resp.Body).Decode(&session)
+		return resp.StatusCode, session
+	}
+
+	for _, tc := range []struct{ method, path, body, token string }{
+		{"PUT", "/api/sessions/sess_root/pause", `{"held":false}`, rootToken},
+		{"POST", "/api/sessions/sess_root/resume", "", rootToken},
+	} {
+		if code, _ := call(tc.method, tc.path, tc.body, tc.token); code != http.StatusForbidden {
+			t.Fatalf("agent token %s %s = %d, want 403", tc.method, tc.path, code)
+		}
+	}
+	if code, _ := call("PUT", "/api/sessions/sess_root/pause", `{}`, "operator-token"); code != http.StatusBadRequest {
+		t.Fatalf("missing held = %d, want 400", code)
+	}
+	if code, _ := call("PUT", "/api/sessions/"+child.SessionID+"/pause", `{"held":true}`, "operator-token"); code != http.StatusBadRequest {
+		t.Fatalf("child pause = %d, want 400", code)
+	}
+	if code, _ := call("POST", "/api/sessions/sess_missing/resume", "", "operator-token"); code != http.StatusNotFound {
+		t.Fatalf("missing resume = %d, want 404", code)
+	}
+	if code, session := call("PUT", "/api/sessions/sess_root/pause", `{"held":true}`, "operator-token"); code != http.StatusOK || !session.Held || session.Issue == nil {
+		t.Fatalf("pause = %d %+v", code, session)
+	}
+	if code, session := call("POST", "/api/sessions/sess_root/resume", "", "operator-token"); code != http.StatusOK || !session.Held || session.Issue != nil {
+		t.Fatalf("resume must clear the block and leave the hold = %d %+v", code, session)
+	}
+
+	var list sessionapi.SessionListResponse
+	req, _ := http.NewRequest("GET", srv.URL+"/api/sessions", nil)
+	req.Header.Set("Authorization", "Bearer operator-token")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil || len(list.Sessions) != 1 || !list.Sessions[0].Held {
+		t.Fatalf("list does not report the hold: %+v %v", list, err)
+	}
 }
