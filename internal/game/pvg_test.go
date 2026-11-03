@@ -737,12 +737,55 @@ func TestPVGLargeFailuresStayInRunnerLog(t *testing.T) {
 func TestPVGDoesNotReferenceUnwrittenDiagnostics(t *testing.T) {
 	state := NewPVGState("pvg-test", t.TempDir(), "unwritten-diagnostic")
 	pvg := NewPVG(compileTestSpec(t), &fakeExecutor{}, state, PVGConfig{})
-	if pvg.logDiagnostic("prover", "first failure") == "" {
+	if pvg.logDiagnostic("prover", "first failure", "") == "" {
 		t.Fatal("expected initial diagnostic write to succeed")
 	}
 	state.RunnerLogPath = state.SpecDir
-	if pvg.logDiagnostic("prover", "second failure") != "" || pvg.diagnosticLogPath != "" {
+	if pvg.logDiagnostic("prover", "second failure", "") != "" || pvg.diagnosticLogPath != "" || pvg.diagnosticError != "" {
 		t.Fatal("a failed write must not publish a stale diagnostic reference")
+	}
+}
+
+func TestPVGRecordsTerminalErrorAfterRecoverableFailure(t *testing.T) {
+	maxCost := 0.5
+	for _, tc := range []struct {
+		name   string
+		config PVGConfig
+		want   string
+	}{
+		{"cost budget", PVGConfig{MaxCostUSD: &maxCost}, "budget exceeded: $1.00 >= cap $0.50"},
+		{"review budget", PVGConfig{Until: 1}, "review_budget_exhausted: verifier did not concede within 1 review cycles"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewPVGState("pvg-test", t.TempDir(), "terminal-error")
+			exec := &fakeExecutor{
+				proverResults: []TurnResult{{Role: "prover", Error: "pi_failed:1", Recoverable: true}},
+				verifierResults: []TurnResult{{Role: "verifier", Status: StatusContinue,
+					Logs: "Review complete", Stats: TurnStats{CostUSD: 1}}},
+			}
+			result := NewPVG(compileTestSpec(t), exec, state, tc.config).Run()
+			if result.GameResult != GameFailure || result.Error != tc.want {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+			diagnostics, err := os.ReadFile(state.RunnerLogPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, failure := range []string{"pi_failed:1", tc.want} {
+				if strings.Count(string(diagnostics), failure) != 1 {
+					t.Fatalf("runner log must retain each distinct failure once: %s", diagnostics)
+				}
+				for _, path := range []string{state.TranscriptPath, state.EvidencePath} {
+					data, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if strings.Contains(string(data), failure) {
+						t.Fatalf("raw failure leaked into %s", path)
+					}
+				}
+			}
+		})
 	}
 }
 

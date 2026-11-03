@@ -21,6 +21,7 @@ type PVG struct {
 	Result            *PVGResult
 	Evidence          *evidence.Evidence
 	diagnosticLogPath string
+	diagnosticError   string
 }
 
 // NewPVG creates a new PVG game instance.
@@ -54,7 +55,7 @@ func (p *PVG) Run() *PVGResult {
 	result, err := p.runLoop()
 	if err != nil {
 		p.Result.Error = err.Error()
-		p.logDiagnostic("system", p.Result.Error)
+		p.logDiagnostic("system", p.Result.Error, "")
 		p.Evidence.Log("game_error", p.Result.Rounds, "system", map[string]interface{}{
 			"message":  "Runtime execution failed.",
 			"log_path": p.diagnosticLogPath,
@@ -238,11 +239,7 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 	p.Result.Accumulate(turn.Stats)
 	logPath := ""
 	if turn.Error != "" {
-		details := turn.Error
-		if turn.Logs != "" && turn.Logs != turn.Error {
-			details += "\n\nCaptured output:\n" + turn.Logs
-		}
-		logPath = p.logDiagnostic(role, details)
+		logPath = p.logDiagnostic(role, turn.Error, turn.Logs)
 	}
 	p.Evidence.LogAgent(roundNum, role, string(turn.Status), &turn.Stats)
 
@@ -264,10 +261,8 @@ func (p *PVG) end(result GameResult) *PVGResult {
 	}
 	logPath := ""
 	if p.Result.Error != "" {
-		if p.diagnosticLogPath == "" {
-			p.logDiagnostic("system", p.Result.Error)
-		} else {
-			p.logDiagnostic("system", "Run ended: "+p.Result.CompletionReason)
+		if p.diagnosticLogPath == "" || p.diagnosticError != p.Result.Error {
+			p.logDiagnostic("system", p.Result.Error, "")
 		}
 		logPath = p.diagnosticLogPath
 	}
@@ -282,8 +277,13 @@ func (p *PVG) end(result GameResult) *PVGResult {
 	return p.Result
 }
 
-func (p *PVG) logDiagnostic(role, message string) string {
+func (p *PVG) logDiagnostic(role, failure, output string) string {
 	p.diagnosticLogPath = ""
+	p.diagnosticError = ""
+	message := failure
+	if output != "" && output != failure {
+		message += "\n\nCaptured output:\n" + output
+	}
 	f, err := os.OpenFile(p.State.RunnerLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 	if err != nil {
 		log.Printf("write runner diagnostics: %v; turn failure: %s", err, message)
@@ -297,6 +297,7 @@ func (p *PVG) logDiagnostic(role, message string) string {
 		return ""
 	}
 	p.diagnosticLogPath = p.State.RunnerLogPath
+	p.diagnosticError = failure
 	return p.diagnosticLogPath
 }
 
