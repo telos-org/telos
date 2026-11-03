@@ -11,18 +11,17 @@ import (
 )
 
 var (
-	finalStatusRE         = regexp.MustCompile(`(?:^|\n)\s*<status>\w+</status>\s*$`)
-	finalProgressUpdateRE = regexp.MustCompile(`(?s)(?:^|\n)\s*<progress_update>.*?</progress_update>\s*$`)
-	progressUpdateRE      = regexp.MustCompile(`(?si)<progress_update>\s*(.*?)\s*</progress_update>`)
-	liveProgressUpdateRE  = regexp.MustCompile(`(?si)<progress_update\b[^>]*>\s*(.*?)\s*</progress_update>`)
+	finalStatusRE        = regexp.MustCompile(`(?:^|\n)\s*<status>\w+</status>\s*$`)
+	liveProgressUpdateRE = regexp.MustCompile(`(?si)<progress_update\b[^>]*>\s*(.*?)\s*</progress_update>`)
 )
 
 const maxTurnBodyChars = 8000
 
 type AppendTurnOptions struct {
-	IncludeStatus bool
-	RunnerLogPath string
-	EpochID       int
+	IncludeStatus    bool
+	RunnerLogPath    string
+	EpochID          int
+	RecordedProgress map[string]bool
 }
 
 type ExternalUpdate struct {
@@ -88,18 +87,14 @@ func AppendTurnWithOptions(path string, role string, roleRound int, status strin
 	}
 	body := "_Turn failed; no completed agent report._"
 	if turnError == "" {
-		body = stripFinalStatus(turnBody(logs))
+		body = turnBody(logs, opts.RecordedProgress)
 	} else if opts.RunnerLogPath != "" {
 		body += fmt.Sprintf("\n\nDetails: `%s` (epoch `%d`, turn `%s`).", opts.RunnerLogPath, opts.EpochID, turnID)
 	} else {
 		body += " Diagnostic log unavailable."
 	}
-	if turnError == "" && !hasFinalProgressUpdate(body) {
-		body = fmt.Sprintf("%s\n\n<progress_update>%s</progress_update>",
-			body, fallbackProgressUpdate(body, status, opts.IncludeStatus))
-	}
 	if turnError == "" && opts.IncludeStatus {
-		body = fmt.Sprintf("%s\n\n<status>%s</status>", body, status)
+		body = strings.TrimSpace(fmt.Sprintf("%s\n\n<status>%s</status>", body, status))
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -151,12 +146,12 @@ func AppendLiveAgentEvent(path string, role string, roleRound int, turnID string
 	}
 	defer f.Close()
 
-	fmt.Fprintf(f, "\n## Live %s %d\n\n", label, roleRound)
-	if turnID != "" {
-		fmt.Fprintf(f, "_Turn metadata: turn `%s`._\n\n", turnID)
+	meta := turnMeta(nil, turnID)
+	if meta != "" {
+		meta += "\n\n"
 	}
-	fmt.Fprintf(f, "<%s>%s</%s>\n", event.Kind, strings.TrimSpace(event.Text), event.Kind)
-	return nil
+	_, err = fmt.Fprintf(f, "\n## Live %s %d\n\n%s<%s>%s</%s>\n", label, roleRound, meta, event.Kind, strings.TrimSpace(event.Text), event.Kind)
+	return err
 }
 
 func AppendExternalUpdate(path string, update ExternalUpdate) error {
@@ -243,16 +238,19 @@ func turnMeta(stats *TurnStats, turnID string) string {
 	return fmt.Sprintf("_Turn metadata: %s._", strings.Join(parts, ", "))
 }
 
-func turnBody(logs string) string {
+func turnBody(logs string, recordedProgress map[string]bool) string {
 	stripped := stripFinalStatus(strings.TrimSpace(logs))
 	if stripped == "" {
 		return "_No assistant text captured._"
 	}
-	return capTurnBody(stripped)
-}
-
-func hasFinalProgressUpdate(body string) bool {
-	return finalProgressUpdateRE.MatchString(strings.TrimRight(body, " \t\n\r"))
+	stripped = liveProgressUpdateRE.ReplaceAllStringFunc(stripped, func(block string) string {
+		text := strings.TrimSpace(liveProgressUpdateRE.FindStringSubmatch(block)[1])
+		if recordedProgress[text] {
+			return ""
+		}
+		return block
+	})
+	return capTurnBody(strings.TrimSpace(stripped))
 }
 
 func stripFinalStatus(body string) string {
@@ -269,15 +267,4 @@ func capTurnBody(body string) string {
 	}
 	lines = append(lines, "", trimmed)
 	return strings.Join(lines, "\n")
-}
-
-func fallbackProgressUpdate(body, status string, includeStatus bool) string {
-	matches := progressUpdateRE.FindAllStringSubmatch(body, -1)
-	if len(matches) > 0 {
-		return strings.TrimSpace(matches[len(matches)-1][1])
-	}
-	if !includeStatus {
-		return "Turn completed."
-	}
-	return fmt.Sprintf("Turn completed with status %s.", status)
 }

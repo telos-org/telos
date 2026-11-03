@@ -617,10 +617,10 @@ func TestPVGLiveEventsReachTranscriptAndEvidence(t *testing.T) {
 			}
 		},
 		proverResults: []TurnResult{
-			{Role: "prover", Status: StatusContinue, Logs: "Added input validation."},
+			{Role: "prover", Status: StatusContinue, Logs: "Added input validation.\n<progress_update>Input validation is ready.</progress_update>\n<progress_update>New final handoff.</progress_update>\nRegression evidence: tests/test_validation.py."},
 		},
 		verifierResults: []TurnResult{
-			{Role: "verifier", Status: StatusConcede, Logs: "Accepted the validation change."},
+			{Role: "verifier", Status: StatusConcede, Logs: "Accepted the validation change.\n<progress_update>Input validation is ready.</progress_update>\n<status>CONCEDE</status>"},
 		},
 	}
 	if result := NewPVG(compiled, exec, state, PVGConfig{}).Run(); result.GameResult != GameSuccess {
@@ -634,10 +634,13 @@ func TestPVGLiveEventsReachTranscriptAndEvidence(t *testing.T) {
 			t.Errorf("expected %q in both turns, got %d copies", block, count)
 		}
 	}
-	for _, report := range []string{"Added input validation.", "Accepted the validation change."} {
+	for _, report := range []string{"Added input validation.", "Accepted the validation change.", "Regression evidence: tests/test_validation.py."} {
 		if !strings.Contains(transcript, report) {
 			t.Errorf("transcript lost completed report %q", report)
 		}
+	}
+	if count := strings.Count(transcript, "<progress_update>New final handoff.</progress_update>"); count != 1 {
+		t.Fatalf("unrecorded final progress must appear once, got %d copies", count)
 	}
 
 	data, err := os.ReadFile(state.EvidencePath)
@@ -668,6 +671,60 @@ func TestPVGLiveEventsReachTranscriptAndEvidence(t *testing.T) {
 				t.Errorf("%s evidence event %d: got %#v, want %#v", role, i, got[i], want)
 			}
 		}
+	}
+}
+
+func TestPVGFinalProgressAppearsOncePerTurn(t *testing.T) {
+	const report = "The current spec holds."
+	for _, mode := range []string{"recorded", "not emitted", "write failed"} {
+		t.Run(mode, func(t *testing.T) {
+			state := NewPVGState("pvg-test", t.TempDir(), "final-progress")
+			body := "<progress_update>\n" + report + "\n</progress_update>"
+			stats := TurnStats{Model: "test-model", CostUSD: 0.01}
+			exec := &fakeExecutor{
+				onTurn: func(ts *TurnState) {
+					if mode == "not emitted" {
+						return
+					}
+					if mode == "write failed" {
+						if err := os.Rename(state.TranscriptPath, state.TranscriptPath+".saved"); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Mkdir(state.TranscriptPath, 0o755); err != nil {
+							t.Fatal(err)
+						}
+					}
+					ts.OnLiveEvent(LiveAgentEvent{Kind: "progress_update", Text: "\n" + report + "\n"})
+					if mode == "write failed" {
+						if err := os.Remove(state.TranscriptPath); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Rename(state.TranscriptPath+".saved", state.TranscriptPath); err != nil {
+							t.Fatal(err)
+						}
+					}
+				},
+				proverResults:   []TurnResult{{Role: "prover", Status: StatusContinue, Logs: body, Stats: stats}},
+				verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: body + "\n<status>CONCEDE</status>", Stats: stats}},
+			}
+			if result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{}).Run(); result.GameResult != GameSuccess {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+			transcript := ReadTranscript(state.TranscriptPath)
+			if strings.Count(transcript, report) != 2 || strings.Count(transcript, "model `test-model`") != 2 {
+				t.Fatalf("each turn must retain its report once and completion metadata:\n%s", transcript)
+			}
+			for _, status := range []string{"CONTINUE", "CONCEDE"} {
+				if strings.Count(transcript, "<status>"+status+"</status>") != 1 {
+					t.Fatalf("completion verdict missing or duplicated:\n%s", transcript)
+				}
+			}
+			for _, fabricated := range []string{"No assistant text captured", "Turn completed"} {
+				if strings.Contains(transcript, fabricated) {
+					t.Fatalf("completion manufactured text despite the available report:\n%s", transcript)
+				}
+			}
+		})
 	}
 }
 

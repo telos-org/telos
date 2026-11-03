@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/telos-org/telos/internal/evidence"
@@ -214,9 +215,13 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 		return p.shouldStop(deadline)
 	}
 	turnID := fmt.Sprintf("%04d-%s", roundNum, role)
+	recordedProgress := make(map[string]bool)
 	ts.OnLiveEvent = func(event LiveAgentEvent) {
 		if err := AppendLiveAgentEvent(p.State.TranscriptPath, role, roleRound, turnID, event); err != nil {
 			return
+		}
+		if text := strings.TrimSpace(event.Text); event.Kind == "progress_update" && text != "" {
+			recordedProgress[text] = true
 		}
 		p.Evidence.Log("agent_progress", roundNum, role, map[string]interface{}{
 			"audience": "user",
@@ -246,9 +251,10 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 	AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
 		turn.Logs, &turn.Stats, turnID, turn.Error,
 		AppendTurnOptions{
-			IncludeStatus: true,
-			RunnerLogPath: logPath,
-			EpochID:       p.Config.EpochID,
+			IncludeStatus:    true,
+			RunnerLogPath:    logPath,
+			EpochID:          p.Config.EpochID,
+			RecordedProgress: recordedProgress,
 		})
 
 	return turn
