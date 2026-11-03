@@ -13,6 +13,7 @@ type PVGState struct {
 	SpecDir        string
 	EvidencePath   string
 	TranscriptPath string
+	RunnerLogPath  string
 	WorkspacePath  string
 }
 
@@ -31,6 +32,7 @@ func NewPVGState(systemName, specDir, sessionID string) *PVGState {
 		SpecDir:        abs,
 		EvidencePath:   evidencePath,
 		TranscriptPath: transcriptPath,
+		RunnerLogPath:  filepath.Join(abs, "runner.log"),
 		WorkspacePath:  workspacePath,
 	}
 }

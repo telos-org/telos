@@ -60,26 +60,23 @@ type LiveAgentEvent struct {
 // AgentExecutor runs one PVG agent turn.
 type AgentExecutor interface {
 	ExecuteTurn(task string, role string, turnState *TurnState) TurnResult
-	WorkspaceState() string
 	CheckpointWorkspace(dest string) bool
 }
 
 // PVGConfig holds runtime settings for a PVG run.
 type PVGConfig struct {
-	Until           int
-	UntilSeconds    int
-	MaxCostUSD      *float64
-	Verbose         bool
-	EpochID         int
-	IsController    bool
-	PrimarySpecPath string
-	LocalRuntime    bool
-	StopRequested   func() bool
+	Until         int
+	UntilSeconds  int
+	MaxCostUSD    *float64
+	Verbose       bool
+	EpochID       int
+	StopRequested func() bool
 	// OnTurnSucceeded runs after every turn that ends without an error.
 	OnTurnSucceeded func()
-	// RecordBlock records a root verifier's block of the spec and returns its
-	// reason code. It returns "" when the spec changed since the game started,
-	// or the record failed; the game then continues.
+	// RecordBlock records the goal's own verifier's block of the spec and
+	// returns its reason code; only the goal's root session sets it. It returns
+	// "" when the spec changed since the game started, or the record failed;
+	// the game then continues.
 	RecordBlock func(message string) (reason string)
 }
 

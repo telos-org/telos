@@ -1,7 +1,6 @@
 package telosd
 
 import (
-	"cmp"
 	"errors"
 	"fmt"
 	"math/rand/v2"
@@ -112,7 +111,7 @@ func runSessionWorker(
 			continue // the game recorded the block; the next loop waits it out
 		} else if result.GameResult != game.GameSuccess {
 			failures++
-			fmt.Fprintf(os.Stderr, "root session cycle failed: %s\n", cmp.Or(result.Error, string(result.GameResult)))
+			fmt.Fprintf(os.Stderr, "root session cycle failed: %s; see runner.log\n", result.GameResult)
 			reason := sessionapi.ReasonInternalError
 			if result.ProviderError != "" {
 				reason = sessionapi.ReasonInferenceProviderError

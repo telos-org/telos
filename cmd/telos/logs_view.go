@@ -169,7 +169,7 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 		row.Summary = "Current revision accepted"
 		return row, true
 	case "agent_failure_recoverable":
-		errorText := eventDataString(event, "error")
+		errorText := firstNonEmpty(eventDataString(event, "message"), eventDataString(event, "error"))
 		if errorText == "" {
 			return renderedLogRow{}, false
 		}
@@ -235,7 +235,7 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 	case "game_error":
 		row.Level = "ERROR"
 		row.Summary = "Execution error"
-		row.Detail = eventDataString(event, "error")
+		row.Detail = firstNonEmpty(eventDataString(event, "message"), eventDataString(event, "error"))
 		return row, true
 	case "external_update":
 		row.Summary = firstNonEmpty(eventDataString(event, "message"), "Revision updated")
