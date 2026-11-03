@@ -165,6 +165,40 @@ func TestTurnFailureAfterSettingsChangeIsRetryable(t *testing.T) {
 	}
 }
 
+func TestInferenceSwitchPreservesTimeoutDiagnostics(t *testing.T) {
+	dir, home := t.TempDir(), t.TempDir()
+	path := writeInferenceManifest(t, dir)
+	next := filepath.Join(home, "next.json")
+	m, err := sessionapi.ReadManifest(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Config.InferenceGeneration++
+	if err := sessionapi.WriteManifest(next, m); err != nil {
+		t.Fatal(err)
+	}
+	bin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(bin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	script := "#!/bin/sh\nmv \"$TELOS_TEST_NEXT\" \"$TELOS_TEST_MANIFEST\"\nprintf 'PI_STARTUP_DIAGNOSTIC\\n' >&2\nsleep 5\n"
+	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	p := platform.NewLocalPlatform(dir)
+	p.Env = map[string]string{"HOME": home, "TELOS_TEST_NEXT": next, "TELOS_TEST_MANIFEST": path}
+	e := &sessionInferenceExecutor{PiExecutor: executor.NewPiExecutor(p, "turn-a/probe-a", "medium", 1), sessionDir: dir}
+	result := e.ExecuteTurn("do it", "prover", nil)
+	if result.Error != "inference settings changed during the turn" || !result.Recoverable {
+		t.Fatalf("settings change must remain retryable: %+v", result)
+	}
+	for _, detail := range []string{"local_timeout:1", "PI_STARTUP_DIAGNOSTIC"} {
+		if strings.Count(result.Logs, detail) != 1 {
+			t.Fatalf("original diagnostic %q must survive once: %s", detail, result.Logs)
+		}
+	}
+}
+
 func TestInferenceRealPiNextTurn(t *testing.T) {
 	for _, binaryEnv := range []string{"TELOS_TEST_PI_BINARY", "TELOS_TEST_LEGACY_PI_BINARY"} {
 		t.Run(binaryEnv, func(t *testing.T) {

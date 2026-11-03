@@ -42,6 +42,9 @@ func (e *sessionInferenceExecutor) ExecuteTurn(task, role string, ts *game.TurnS
 	// A switch can revoke the credential this turn used; the next turn uses the
 	// new settings, so keep the error away from the permanent blockers.
 	if root := rootManifest(e.sessionDir); result.Error != "" && root != nil && root.Config.InferenceGeneration > m.Config.InferenceGeneration {
+		if result.Logs != result.Error {
+			result.Logs = result.Error + "\n\n" + result.Logs
+		}
 		result.Error, result.Recoverable = "inference settings changed during the turn", true
 	}
 	return result
