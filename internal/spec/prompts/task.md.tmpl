@@ -29,26 +29,20 @@ Any failure blocks concession.
 
 # Communication
 
-{{if .TranscriptPath}}
-## Transcript
+The transcript is the shared, append-only communication log between the generator and evaluator agents.
 
 Path: `{{.TranscriptPath}}`
 
-Read recent transcript entries and account for unresolved findings before acting.
-Consult older history when needed.
+Use it to read and understand prior turns, checks, unresolved findings, and key handoff items before continuing.
 
-On <external_update>, read the current spec and available diff before continuing.
-Only the current spec governs; preserve required data and history.
+Read the most recent log items first, and consult older history when needed. Reassess earlier failures and findings against the current spec and observed state.
 
-The runtime appends your response; do not edit the transcript.
-{{end}}
+Transcript items can contain the following types of XML entries:
 
-## Output and progress
+- <progress_update> ... </progress_update> messages which are incremental, short updates in simplified language. These updates should contain high level progress updates as pertaining to the goal specification. Avoid narrating routine implementation details.
 
-- Keep evidence, technical details, and uncertainty in your report.
-  Report only what you established.
-- Use <progress_update>...</progress_update> for short updates in everyday language
-  when work begins, a result is established, direction changes, or a blocker appears.
-- During waits, report only observed activity.
-- Finish with your report and one final <progress_update>...</progress_update> in the same response;
-  do not send a separate update-only final response.
+- <external_update> ... </external_update> messages are either spec updates or other runtime level updates from the end user. Read the current spec and available diff to identify required reconciliation work.
+
+Emit <progress_update> periodically (at least every 20 minutes, or when a milestone occurs in the implementation or evaluation process - whichever one is sooner) as assistant messages; do not edit the transcript yourself, the agent runtime will parse <progress_update> automatically.
+
+Include your terminal summary in a <progress_update> block in your final response. This serves as not only the user-facing report but also the handoff to the next turn.
