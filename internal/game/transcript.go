@@ -21,8 +21,8 @@ const maxTurnBodyChars = 8000
 
 type AppendTurnOptions struct {
 	IncludeStatus bool
-	PiSessionPath string
-	EvidencePath  string
+	RunnerLogPath string
+	EpochID       int
 }
 
 type ExternalUpdate struct {
@@ -90,12 +90,19 @@ func AppendTurnWithOptions(path string, role string, roleRound int, status strin
 	if role == "verifier" {
 		label = "Evaluation"
 	}
-	body := stripFinalStatus(turnBody(logs, turnError, opts))
-	if turnError != "" || !hasFinalProgressUpdate(body) {
-		body = fmt.Sprintf("%s\n\n<progress_update>%s</progress_update>",
-			body, fallbackProgressUpdate(body, status, turnError, opts.IncludeStatus))
+	body := "_Turn failed; no completed agent report._"
+	if turnError == "" {
+		body = stripFinalStatus(turnBody(logs))
+	} else if opts.RunnerLogPath != "" {
+		body += fmt.Sprintf("\n\nDetails: `%s` (epoch `%d`, turn `%s`).", opts.RunnerLogPath, opts.EpochID, turnID)
+	} else {
+		body += " Diagnostic log unavailable."
 	}
-	if opts.IncludeStatus {
+	if turnError == "" && !hasFinalProgressUpdate(body) {
+		body = fmt.Sprintf("%s\n\n<progress_update>%s</progress_update>",
+			body, fallbackProgressUpdate(body, status, opts.IncludeStatus))
+	}
+	if turnError == "" && opts.IncludeStatus {
 		body = fmt.Sprintf("%s\n\n<status>%s</status>", body, status)
 	}
 
@@ -214,7 +221,7 @@ func AppendExternalUpdate(path string, update ExternalUpdate) error {
 }
 
 // AppendGameResult appends the terminal session result to the transcript.
-func AppendGameResult(path string, result string, errorMsg string) error {
+func AppendGameResult(path string, result string, runnerLogPath string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -224,8 +231,8 @@ func AppendGameResult(path string, result string, errorMsg string) error {
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "\n## Result\n\n- Status: `%s`\n", result)
-	if errorMsg != "" {
-		fmt.Fprintf(f, "- Error: `%s`\n", errorMsg)
+	if runnerLogPath != "" {
+		fmt.Fprintf(f, "- Runner log: `%s`\n", runnerLogPath)
 	}
 	return nil
 }
@@ -252,29 +259,12 @@ func turnMeta(stats *TurnStats, turnID string) string {
 	return fmt.Sprintf("_Turn metadata: %s._", strings.Join(parts, ", "))
 }
 
-func turnBody(logs, turnError string, opts AppendTurnOptions) string {
+func turnBody(logs string) string {
 	stripped := stripFinalStatus(strings.TrimSpace(logs))
-	if turnError != "" {
-		return runtimeErrorBody(turnError, opts)
-	}
 	if stripped == "" {
 		return "_No assistant text captured._"
 	}
 	return capTurnBody(stripped)
-}
-
-func runtimeErrorBody(err string, opts AppendTurnOptions) string {
-	lines := []string{fmt.Sprintf("_Turn ended with runtime error: `%s`._", err)}
-	if opts.PiSessionPath != "" || opts.EvidencePath != "" {
-		lines = append(lines, "", "Inspect the canonical turn artifacts before judging or continuing:")
-		if opts.PiSessionPath != "" {
-			lines = append(lines, fmt.Sprintf("- Pi session: `%s`", opts.PiSessionPath))
-		}
-		if opts.EvidencePath != "" {
-			lines = append(lines, fmt.Sprintf("- Evidence log: `%s`", opts.EvidencePath))
-		}
-	}
-	return strings.Join(lines, "\n")
 }
 
 func hasFinalProgressUpdate(body string) bool {
@@ -297,10 +287,7 @@ func capTurnBody(body string) string {
 	return strings.Join(lines, "\n")
 }
 
-func fallbackProgressUpdate(body, status, turnError string, includeStatus bool) string {
-	if turnError != "" {
-		return fmt.Sprintf("Turn ended with runtime error: %s.", turnError)
-	}
+func fallbackProgressUpdate(body, status string, includeStatus bool) string {
 	matches := progressUpdateRE.FindAllStringSubmatch(body, -1)
 	if len(matches) > 0 {
 		return strings.TrimSpace(matches[len(matches)-1][1])

@@ -120,10 +120,9 @@ func needsLeadingNewline(path string) bool {
 }
 
 // LogAgent logs an agent completion event.
-func (e *Evidence) LogAgent(roundNum int, role string, status string, logsTail string, stats interface{}) {
+func (e *Evidence) LogAgent(roundNum int, role string, status string, stats interface{}) {
 	data := map[string]interface{}{
-		"status":    status,
-		"logs_tail": truncate(logsTail, 8000),
+		"status": status,
 	}
 	if stats != nil {
 		// Marshal stats to map
@@ -143,8 +142,8 @@ func (e *Evidence) LogAgent(roundNum int, role string, status string, logsTail s
 }
 
 // LogGameEnd logs the terminal game result.
-func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRounds int, conceded bool, costUSD float64, inputTokens, outputTokens, cacheRead, cacheCreate int, errMsg string, completionReason string) {
-	e.Log("game_end", rounds, "system", map[string]interface{}{
+func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRounds int, conceded bool, costUSD float64, inputTokens, outputTokens, cacheRead, cacheCreate int, runnerLogPath string, completionReason string) {
+	data := map[string]interface{}{
 		"audience":                    "user",
 		"game_result":                 result,
 		"completion_reason":           completionReason,
@@ -156,8 +155,11 @@ func (e *Evidence) LogGameEnd(result string, rounds, proverRounds, verifierRound
 		"total_output_tokens":         outputTokens,
 		"total_cache_read_tokens":     cacheRead,
 		"total_cache_creation_tokens": cacheCreate,
-		"error":                       errMsg,
-	})
+	}
+	if runnerLogPath != "" {
+		data["log_path"] = runnerLogPath
+	}
+	e.Log("game_end", rounds, "system", data)
 }
 
 // LogWorkspaceCheckpoint logs a workspace checkpoint event.
@@ -270,11 +272,4 @@ func unlockEvidenceFile(lock *os.File) {
 
 func tsNow() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-}
-
-func truncate(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[len(s)-max:]
 }

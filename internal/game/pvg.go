@@ -3,6 +3,7 @@ package game
 import (
 	"fmt"
 	"log"
+	"os"
 	"time"
 
 	"github.com/telos-org/telos/internal/evidence"
@@ -13,12 +14,13 @@ const maxRecoverableAgentFailures = 3
 
 // PVG runs the prover-verifier loop for one compiled environment.
 type PVG struct {
-	Compiled *spec.CompiledEnvironment
-	Executor AgentExecutor
-	State    *PVGState
-	Config   PVGConfig
-	Result   *PVGResult
-	Evidence *evidence.Evidence
+	Compiled          *spec.CompiledEnvironment
+	Executor          AgentExecutor
+	State             *PVGState
+	Config            PVGConfig
+	Result            *PVGResult
+	Evidence          *evidence.Evidence
+	diagnosticLogPath string
 }
 
 // NewPVG creates a new PVG game instance.
@@ -52,9 +54,11 @@ func (p *PVG) Run() *PVGResult {
 	result, err := p.runLoop()
 	if err != nil {
 		p.Result.Error = err.Error()
+		p.logDiagnostic("system", p.Result.Error)
 		p.Evidence.Log("game_error", p.Result.Rounds, "system", map[string]interface{}{
-			"error": p.Result.Error,
-			"type":  "PVGError",
+			"message":  "Runtime execution failed.",
+			"log_path": p.diagnosticLogPath,
+			"type":     "PVGError",
 		})
 		return p.end(GameFailure)
 	}
@@ -184,7 +188,8 @@ func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
 	}
 	*consecutive++
 	p.Evidence.Log("agent_failure_recoverable", p.Result.Rounds, turn.Role, map[string]interface{}{
-		"error":                turn.Error,
+		"message":              "Agent turn failed.",
+		"log_path":             p.diagnosticLogPath,
 		"consecutive_failures": *consecutive,
 		"max_failures":         maxRecoverableAgentFailures,
 	})
@@ -219,34 +224,34 @@ func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string
 			"turn_id":  turnID,
 		})
 	}
+	var turn TurnResult
 	if err := WriteTurnTask(ts, task); err != nil {
-		turn := TurnResult{
+		turn = TurnResult{
 			Role:   role,
 			Status: StatusContinue,
 			Logs:   fmt.Sprintf("turn_prepare_failed:%v", err),
 			Error:  fmt.Sprintf("turn_prepare_failed:%v", err),
 		}
-		p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
-		AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
-			turn.Logs, &turn.Stats, turnID, turn.Error,
-			AppendTurnOptions{
-				IncludeStatus: true,
-				PiSessionPath: ts.PiSessionPath(),
-				EvidencePath:  p.State.EvidencePath,
-			})
-		return turn
+	} else {
+		turn = p.Executor.ExecuteTurn(task, role, ts)
 	}
-
-	turn := p.Executor.ExecuteTurn(task, role, ts)
 	p.Result.Accumulate(turn.Stats)
-	p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
+	logPath := ""
+	if turn.Error != "" {
+		details := turn.Error
+		if turn.Logs != "" && turn.Logs != turn.Error {
+			details += "\n\nCaptured output:\n" + turn.Logs
+		}
+		logPath = p.logDiagnostic(role, details)
+	}
+	p.Evidence.LogAgent(roundNum, role, string(turn.Status), &turn.Stats)
 
 	AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
 		turn.Logs, &turn.Stats, turnID, turn.Error,
 		AppendTurnOptions{
 			IncludeStatus: true,
-			PiSessionPath: ts.PiSessionPath(),
-			EvidencePath:  p.State.EvidencePath,
+			RunnerLogPath: logPath,
+			EpochID:       p.Config.EpochID,
 		})
 
 	return turn
@@ -257,19 +262,42 @@ func (p *PVG) end(result GameResult) *PVGResult {
 	if p.Result.CompletionReason == "" {
 		p.Result.CompletionReason = p.completionReason(result)
 	}
-	errMsg := ""
+	logPath := ""
 	if p.Result.Error != "" {
-		errMsg = p.Result.Error
+		if p.diagnosticLogPath == "" {
+			p.logDiagnostic("system", p.Result.Error)
+		} else {
+			p.logDiagnostic("system", "Run ended: "+p.Result.CompletionReason)
+		}
+		logPath = p.diagnosticLogPath
 	}
 	p.Evidence.LogGameEnd(string(result), p.Result.Rounds,
 		p.Result.ProverRounds, p.Result.VerifierRounds,
 		p.Result.VerifierConceded, p.Result.TotalCostUSD,
 		p.Result.TotalInputTokens, p.Result.TotalOutputTokens,
 		p.Result.TotalCacheReadTokens, p.Result.TotalCacheCreateTokens,
-		errMsg, p.Result.CompletionReason)
+		logPath, p.Result.CompletionReason)
 
-	AppendGameResult(p.State.TranscriptPath, string(result), errMsg)
+	AppendGameResult(p.State.TranscriptPath, string(result), logPath)
 	return p.Result
+}
+
+func (p *PVG) logDiagnostic(role, message string) string {
+	p.diagnosticLogPath = ""
+	f, err := os.OpenFile(p.State.RunnerLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("write runner diagnostics: %v; turn failure: %s", err, message)
+		return ""
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "\n[%s] session=%s epoch=%d turn=%04d-%s\n%s\n",
+		time.Now().UTC().Format(time.RFC3339), p.State.SessionID, p.Config.EpochID, p.Result.Rounds, role, message)
+	if err != nil {
+		log.Printf("write runner diagnostics: %v; turn failure: %s", err, message)
+		return ""
+	}
+	p.diagnosticLogPath = p.State.RunnerLogPath
+	return p.diagnosticLogPath
 }
 
 func (p *PVG) completionReason(result GameResult) string {

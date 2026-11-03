@@ -307,11 +307,11 @@ func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
 		t.Fatalf("rounds: got %d", result.Rounds)
 	}
 	transcript := ReadTranscript(state.TranscriptPath)
-	if !strings.Contains(transcript, "Turn ended with runtime error") {
+	if !strings.Contains(transcript, "Turn failed; no completed agent report") {
 		t.Fatalf("transcript should record recoverable turn error:\n%s", transcript)
 	}
-	if !strings.Contains(transcript, filepath.Join(state.TurnsDir(), "epoch-0000", "0001-prover", "pi-session.jsonl")) {
-		t.Fatalf("transcript should point to Pi session:\n%s", transcript)
+	if !strings.Contains(transcript, state.RunnerLogPath) {
+		t.Fatalf("transcript should point to runner diagnostics:\n%s", transcript)
 	}
 }
 
@@ -667,6 +667,109 @@ func TestPVGLiveEventsReachTranscriptAndEvidence(t *testing.T) {
 			if got[i] != want {
 				t.Errorf("%s evidence event %d: got %#v, want %#v", role, i, got[i], want)
 			}
+		}
+	}
+}
+
+func TestPVGLargeFailuresStayInRunnerLog(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		prefix      string
+		recoverable bool
+		wantResult  GameResult
+	}{
+		{"recoverable", "pi_failed:1", true, GameSuccess},
+		{"fatal", "pi_failed:1", false, GameFailure},
+		{"authentication blocker", "401: invalid api key", true, GameFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewPVGState("pvg-test", t.TempDir(), "large-failure")
+			failure := tc.prefix + "\n" + strings.Repeat("PRIVATE_PROVIDER_ERROR", 65536)
+			exec := &fakeExecutor{
+				proverResults:   []TurnResult{{Role: "prover", Status: StatusContinue, Logs: failure, Error: failure, Recoverable: tc.recoverable}},
+				verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: "Independently checked the existing system."}},
+			}
+			result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{EpochID: 7}).Run()
+			if result.GameResult != tc.wantResult {
+				t.Fatalf("result=%s want=%s", result.GameResult, tc.wantResult)
+			}
+			if tc.wantResult == GameFailure && result.Error != failure {
+				t.Fatal("raw failure must remain available to the runtime's recovery policy")
+			}
+			diagnostics, err := os.ReadFile(state.RunnerLogPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(string(diagnostics), failure) != 1 || !strings.Contains(string(diagnostics), "epoch=7 turn=0001-prover") {
+				t.Fatal("runner log must retain one complete diagnostic with turn provenance")
+			}
+			transcript := ReadTranscript(state.TranscriptPath)
+			if len(transcript) > 5000 || !strings.Contains(transcript, state.RunnerLogPath) || !strings.Contains(transcript, "epoch `7`, turn `0001-prover`") {
+				t.Fatalf("transcript must contain a compact diagnostic reference: %d bytes", len(transcript))
+			}
+			if strings.Contains(transcript, "PRIVATE_PROVIDER_ERROR") || strings.Contains(transcript, tc.prefix) {
+				t.Fatal("transcript contains raw failure diagnostics")
+			}
+			data, err := os.ReadFile(state.EvidencePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(data) > 16000 || strings.Contains(string(data), "PRIVATE_PROVIDER_ERROR") {
+				t.Fatalf("evidence grew with the error payload: %d bytes", len(data))
+			}
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				var record struct {
+					Data map[string]any `json:"data"`
+				}
+				if err := json.Unmarshal([]byte(line), &record); err != nil {
+					t.Fatal(err)
+				}
+				for _, field := range []string{"error", "logs_tail"} {
+					if _, exists := record.Data[field]; exists {
+						t.Fatalf("evidence must not copy raw diagnostics or assistant output into %s", field)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPVGDoesNotReferenceUnwrittenDiagnostics(t *testing.T) {
+	state := NewPVGState("pvg-test", t.TempDir(), "unwritten-diagnostic")
+	pvg := NewPVG(compileTestSpec(t), &fakeExecutor{}, state, PVGConfig{})
+	if pvg.logDiagnostic("prover", "first failure") == "" {
+		t.Fatal("expected initial diagnostic write to succeed")
+	}
+	state.RunnerLogPath = state.SpecDir
+	if pvg.logDiagnostic("prover", "second failure") != "" || pvg.diagnosticLogPath != "" {
+		t.Fatal("a failed write must not publish a stale diagnostic reference")
+	}
+}
+
+func TestPVGFailurePreservesCapturedStderr(t *testing.T) {
+	state := NewPVGState("pvg-test", t.TempDir(), "captured-stderr")
+	captured := "STDERR_DETAILS\n" + strings.Repeat("provider startup detail\n", 1000)
+	exec := &fakeExecutor{proverResults: []TurnResult{{
+		Role: "prover", Status: StatusContinue, Error: "agent_no_output", Logs: captured,
+	}}}
+	result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{}).Run()
+	if result.GameResult != GameFailure {
+		t.Fatalf("result: %s", result.GameResult)
+	}
+	diagnostics, err := os.ReadFile(state.RunnerLogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(diagnostics), captured) {
+		t.Fatal("captured stderr must survive in runner.log without truncation")
+	}
+	for _, path := range []string{state.TranscriptPath, state.EvidencePath} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "STDERR_DETAILS") {
+			t.Fatalf("captured stderr leaked into %s", path)
 		}
 	}
 }

@@ -169,6 +169,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 
 	specDir := filepath.Dir(*sessionSpecPath)
 	state := game.NewPVGState(compiled.Environment.Name, specDir, manifest.SessionID)
+	state.RunnerLogPath = filepath.Join(sessionDir, "runner.log")
 
 	workspace := activeWorkspacePath(sessionDir)
 	if err := ensureSessionWorkspace(sessionDir, manifest); err != nil {
