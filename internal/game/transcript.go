@@ -11,39 +11,30 @@ import (
 )
 
 var (
-	finalStatusRE         = regexp.MustCompile(`(?:^|\n)\s*<status>\w+</status>\s*$`)
-	finalProgressUpdateRE = regexp.MustCompile(`(?s)(?:^|\n)\s*<progress_update>.*?</progress_update>\s*$`)
-	progressUpdateRE      = regexp.MustCompile(`(?si)<progress_update>\s*(.*?)\s*</progress_update>`)
-	liveTagREs            = map[string]*regexp.Regexp{
-		"progress_update": regexp.MustCompile(`(?si)<progress_update\b[^>]*>\s*(.*?)\s*</progress_update>`),
-		"review":          regexp.MustCompile(`(?si)<review\b[^>]*>\s*(.*?)\s*</review>`),
-		"summary":         regexp.MustCompile(`(?si)<summary\b[^>]*>\s*(.*?)\s*</summary>`),
-	}
+	finalStatusRE        = regexp.MustCompile(`(?:^|\n)\s*<status>\w+</status>\s*$`)
+	liveProgressUpdateRE = regexp.MustCompile(`(?si)<progress_update\b[^>]*>\s*(.*?)\s*</progress_update>`)
 )
 
 const maxTurnBodyChars = 8000
 
 type AppendTurnOptions struct {
-	IncludeStatus bool
-	PiSessionPath string
-	EvidencePath  string
+	IncludeStatus    bool
+	RunnerLogPath    string
+	EpochID          int
+	RecordedProgress map[string]bool
 }
 
 type ExternalUpdate struct {
-	Message               string
-	PreviousSpecVersion   int
-	CurrentSpecVersion    int
-	PreviousSpecSHA256    string
-	CurrentSpecSHA256     string
-	PreviousPackageDigest string
-	CurrentPackageDigest  string
-	SpecPath              string
-	PreviousSpecPath      string
-	CurrentSpecPath       string
-	ActiveSpecPath        string
-	DiffPath              string
-	PreviousRevision      string
-	CurrentRevision       string
+	Message             string
+	PreviousSpecVersion int
+	CurrentSpecVersion  int
+	SpecPath            string
+	PreviousSpecPath    string
+	CurrentSpecPath     string
+	ActiveSpecPath      string
+	DiffPath            string
+	PreviousRevision    string
+	CurrentRevision     string
 }
 
 // InitializeTranscript creates a transcript header if the file does not exist.
@@ -94,13 +85,16 @@ func AppendTurnWithOptions(path string, role string, roleRound int, status strin
 	if role == "verifier" {
 		label = "Evaluation"
 	}
-	body := stripFinalStatus(turnBody(logs, turnError, opts))
-	if turnError != "" || !hasFinalProgressUpdate(body) {
-		body = fmt.Sprintf("%s\n\n<progress_update>%s</progress_update>",
-			body, fallbackProgressUpdate(body, status, turnError, opts.IncludeStatus))
+	body := "_Turn failed; no completed agent report._"
+	if turnError == "" {
+		body = turnBody(logs, opts.RecordedProgress)
+	} else if opts.RunnerLogPath != "" {
+		body += fmt.Sprintf("\n\nDetails: `%s` (epoch `%d`, turn `%s`).", opts.RunnerLogPath, opts.EpochID, turnID)
+	} else {
+		body += " Diagnostic log unavailable."
 	}
-	if opts.IncludeStatus {
-		body = fmt.Sprintf("%s\n\n<status>%s</status>", body, status)
+	if turnError == "" && opts.IncludeStatus {
+		body = strings.TrimSpace(fmt.Sprintf("%s\n\n<status>%s</status>", body, status))
 	}
 
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
@@ -121,17 +115,15 @@ func AppendTurnWithOptions(path string, role string, roleRound int, status strin
 	return nil
 }
 
-// ExtractLiveAgentEvents returns progress artifacts safe to surface mid-turn.
+// ExtractLiveAgentEvents returns progress updates to surface mid-turn.
 func ExtractLiveAgentEvents(text string) []LiveAgentEvent {
 	var events []LiveAgentEvent
-	for _, kind := range []string{"progress_update", "review", "summary"} {
-		for _, match := range liveTagREs[kind].FindAllStringSubmatch(text, -1) {
-			body := strings.TrimSpace(match[1])
-			if body == "" {
-				continue
-			}
-			events = append(events, LiveAgentEvent{Kind: kind, Text: body})
+	for _, match := range liveProgressUpdateRE.FindAllStringSubmatch(text, -1) {
+		body := strings.TrimSpace(match[1])
+		if body == "" {
+			continue
 		}
+		events = append(events, LiveAgentEvent{Kind: "progress_update", Text: body})
 	}
 	return events
 }
@@ -154,12 +146,12 @@ func AppendLiveAgentEvent(path string, role string, roleRound int, turnID string
 	}
 	defer f.Close()
 
-	fmt.Fprintf(f, "\n## Live %s %d\n\n", label, roleRound)
-	if turnID != "" {
-		fmt.Fprintf(f, "_Turn metadata: turn `%s`._\n\n", turnID)
+	meta := turnMeta(nil, turnID)
+	if meta != "" {
+		meta += "\n\n"
 	}
-	fmt.Fprintf(f, "<%s>%s</%s>\n", event.Kind, strings.TrimSpace(event.Text), event.Kind)
-	return nil
+	_, err = fmt.Fprintf(f, "\n## Live %s %d\n\n%s<%s>%s</%s>\n", label, roleRound, meta, event.Kind, strings.TrimSpace(event.Text), event.Kind)
+	return err
 }
 
 func AppendExternalUpdate(path string, update ExternalUpdate) error {
@@ -188,18 +180,6 @@ func AppendExternalUpdate(path string, update ExternalUpdate) error {
 	if update.CurrentRevision != "" {
 		fmt.Fprintf(f, "- Current revision: `%s`\n", update.CurrentRevision)
 	}
-	if update.PreviousSpecSHA256 != "" {
-		fmt.Fprintf(f, "- Previous spec SHA-256: `%s`\n", update.PreviousSpecSHA256)
-	}
-	if update.CurrentSpecSHA256 != "" {
-		fmt.Fprintf(f, "- Current spec SHA-256: `%s`\n", update.CurrentSpecSHA256)
-	}
-	if update.PreviousPackageDigest != "" {
-		fmt.Fprintf(f, "- Previous package digest: `%s`\n", update.PreviousPackageDigest)
-	}
-	if update.CurrentPackageDigest != "" {
-		fmt.Fprintf(f, "- Current package digest: `%s`\n", update.CurrentPackageDigest)
-	}
 	if update.PreviousSpecPath != "" {
 		fmt.Fprintf(f, "- Previous spec path: `%s`\n", update.PreviousSpecPath)
 	}
@@ -220,7 +200,7 @@ func AppendExternalUpdate(path string, update ExternalUpdate) error {
 }
 
 // AppendGameResult appends the terminal session result to the transcript.
-func AppendGameResult(path string, result string, errorMsg string) error {
+func AppendGameResult(path string, result string, runnerLogPath string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
@@ -230,8 +210,8 @@ func AppendGameResult(path string, result string, errorMsg string) error {
 	}
 	defer f.Close()
 	fmt.Fprintf(f, "\n## Result\n\n- Status: `%s`\n", result)
-	if errorMsg != "" {
-		fmt.Fprintf(f, "- Error: `%s`\n", errorMsg)
+	if runnerLogPath != "" {
+		fmt.Fprintf(f, "- Runner log: `%s`\n", runnerLogPath)
 	}
 	return nil
 }
@@ -258,33 +238,19 @@ func turnMeta(stats *TurnStats, turnID string) string {
 	return fmt.Sprintf("_Turn metadata: %s._", strings.Join(parts, ", "))
 }
 
-func turnBody(logs, turnError string, opts AppendTurnOptions) string {
+func turnBody(logs string, recordedProgress map[string]bool) string {
 	stripped := stripFinalStatus(strings.TrimSpace(logs))
-	if turnError != "" {
-		return runtimeErrorBody(turnError, opts)
-	}
 	if stripped == "" {
 		return "_No assistant text captured._"
 	}
-	return capTurnBody(stripped)
-}
-
-func runtimeErrorBody(err string, opts AppendTurnOptions) string {
-	lines := []string{fmt.Sprintf("_Turn ended with runtime error: `%s`._", err)}
-	if opts.PiSessionPath != "" || opts.EvidencePath != "" {
-		lines = append(lines, "", "Inspect the canonical turn artifacts before judging or continuing:")
-		if opts.PiSessionPath != "" {
-			lines = append(lines, fmt.Sprintf("- Pi session: `%s`", opts.PiSessionPath))
+	stripped = liveProgressUpdateRE.ReplaceAllStringFunc(stripped, func(block string) string {
+		text := strings.TrimSpace(liveProgressUpdateRE.FindStringSubmatch(block)[1])
+		if recordedProgress[text] {
+			return ""
 		}
-		if opts.EvidencePath != "" {
-			lines = append(lines, fmt.Sprintf("- Evidence log: `%s`", opts.EvidencePath))
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func hasFinalProgressUpdate(body string) bool {
-	return finalProgressUpdateRE.MatchString(strings.TrimRight(body, " \t\n\r"))
+		return block
+	})
+	return capTurnBody(strings.TrimSpace(stripped))
 }
 
 func stripFinalStatus(body string) string {
@@ -301,18 +267,4 @@ func capTurnBody(body string) string {
 	}
 	lines = append(lines, "", trimmed)
 	return strings.Join(lines, "\n")
-}
-
-func fallbackProgressUpdate(body, status, turnError string, includeStatus bool) string {
-	if turnError != "" {
-		return fmt.Sprintf("Turn ended with runtime error: %s.", turnError)
-	}
-	matches := progressUpdateRE.FindAllStringSubmatch(body, -1)
-	if len(matches) > 0 {
-		return strings.TrimSpace(matches[len(matches)-1][1])
-	}
-	if !includeStatus {
-		return "Turn completed."
-	}
-	return fmt.Sprintf("Turn completed with status %s.", status)
 }

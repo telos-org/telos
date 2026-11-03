@@ -93,18 +93,14 @@ func runSessionWorker(
 				if blockerCode != "agent_configuration_invalid" {
 					delay = jitteredFailureBackoff(failures, time.Minute)
 				}
-				fmt.Fprintf(os.Stderr, "root session agent suspended: %s\n", result.Error)
-				logControllerSuspended(sessionDir, blockerCode, result.Error, delay)
+				fmt.Fprintf(os.Stderr, "root session agent suspended: %s; see runner.log\n", blockerCode)
+				logControllerSuspended(sessionDir, blockerCode, delay)
 				if waitForNextCycle(wake, stop, delay) {
 					return 0, nil
 				}
 				continue
 			}
-			if result.Error != "" {
-				fmt.Fprintf(os.Stderr, "root session cycle failed: %s\n", result.Error)
-			} else {
-				fmt.Fprintf(os.Stderr, "root session cycle failed: %s\n", result.GameResult)
-			}
+			fmt.Fprintf(os.Stderr, "root session cycle failed: %s; see runner.log\n", result.GameResult)
 			if waitForNextCycle(wake, stop, jitteredFailureBackoff(failures, time.Second)) {
 				return 0, nil
 			}
@@ -219,7 +215,7 @@ func jitteredFailureBackoff(failures int, initial time.Duration) time.Duration {
 	return base - window + time.Duration(rand.Int64N(int64(window)+1))
 }
 
-func logControllerSuspended(sessionDir, blockerCode, errorText string, retryAfter time.Duration) {
+func logControllerSuspended(sessionDir, blockerCode string, retryAfter time.Duration) {
 	manifest, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
 	if err != nil || len(manifest.Specs) == 0 {
 		return
@@ -244,7 +240,7 @@ func logControllerSuspended(sessionDir, blockerCode, errorText string, retryAfte
 	details := map[string]interface{}{
 		"state":        "waiting",
 		"blocker_code": blockerCode,
-		"error":        errorText,
+		"log_path":     filepath.Join(sessionDir, "runner.log"),
 		"action":       "fix the model configuration, then re-apply the spec or explicitly wake the session",
 	}
 	if retryAfter > 0 {

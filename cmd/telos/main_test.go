@@ -1455,7 +1455,7 @@ func TestLegacyTranscriptFallbackUsesOlderRootRuntime(t *testing.T) {
 	}
 }
 
-func TestPrintLogsDefaultsToProtocolBlocks(t *testing.T) {
+func TestPrintLogsShowsOnlyProgressAndExternalUpdates(t *testing.T) {
 	transcript := `# Transcript
 
 	hidden raw content with inline code ` + "`<progress_update>`" + `
@@ -1485,16 +1485,16 @@ Reload the current spec.
 	for _, want := range []string{
 		"#1 First checkpoint",
 		"#2 Second checkpoint",
-		"Review\ncriteria,score\nCorrectness,8.0/10",
-		"Summary\nNeeds one more check.",
 		"External update\nReload the current spec.\n- Current spec version: `2`",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("log output missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "hidden raw content") || strings.Contains(text, "more raw content") {
-		t.Fatalf("log output leaked raw transcript:\n%s", text)
+	for _, hidden := range []string{"hidden raw content", "more raw content", "Correctness,8.0/10", "Needs one more check."} {
+		if strings.Contains(text, hidden) {
+			t.Fatalf("log output leaked %q:\n%s", hidden, text)
+		}
 	}
 }
 

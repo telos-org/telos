@@ -435,11 +435,9 @@ func printProgressUpdate(out io.Writer, index int, update string) {
 }
 
 // Logs only treat standalone protocol tags as public log entries. This avoids
-// turning inline examples into user-visible progress or review output.
+// turning inline examples into user-visible updates.
 var (
 	progressUpdateTagRE = regexp.MustCompile(`(?ims)^[ \t]*<progress_update\b[^>]*>\s*(.*?)\s*</progress_update>[ \t]*$`)
-	reviewTagRE         = regexp.MustCompile(`(?ims)^[ \t]*<review\b[^>]*>\s*(.*?)\s*</review>[ \t]*$`)
-	summaryTagRE        = regexp.MustCompile(`(?ims)^[ \t]*<summary\b[^>]*>\s*(.*?)\s*</summary>[ \t]*$`)
 	externalUpdateTagRE = regexp.MustCompile(`(?ims)^[ \t]*<external_update\b[^>]*>\s*(.*?)\s*</external_update>[ \t]*$`)
 )
 
@@ -468,8 +466,6 @@ func progressUpdates(transcript string) []string {
 func logBlocks(transcript string) []logBlock {
 	var blocks []logBlock
 	blocks = appendLogBlocks(blocks, transcript, "progress_update", progressUpdateTagRE)
-	blocks = appendLogBlocks(blocks, transcript, "review", reviewTagRE)
-	blocks = appendLogBlocks(blocks, transcript, "summary", summaryTagRE)
 	blocks = appendLogBlocks(blocks, transcript, "external_update", externalUpdateTagRE)
 	sort.SliceStable(blocks, func(i, j int) bool {
 		return blocks[i].start < blocks[j].start
@@ -502,10 +498,6 @@ func printLogBlocks(out io.Writer, blocks []logBlock, progressCount int) int {
 		case "progress_update":
 			progressCount++
 			fmt.Fprintf(out, "#%d %s\n", progressCount, block.text)
-		case "review":
-			fmt.Fprintf(out, "Review\n%s\n", block.text)
-		case "summary":
-			fmt.Fprintf(out, "Summary\n%s\n", block.text)
 		case "external_update":
 			fmt.Fprintf(out, "External update\n%s\n", block.text)
 		default:

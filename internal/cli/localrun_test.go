@@ -12,6 +12,7 @@ import (
 	"github.com/telos-org/telos/internal/platform"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/sessionworker"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 func TestSubmitLocalSessionWithoutRuntimeCreatesNoSession(t *testing.T) {
@@ -62,10 +63,6 @@ func (f *fakeExecutor) taskAt(i int) string {
 		return ""
 	}
 	return f.tasks[i]
-}
-
-func (f *fakeExecutor) WorkspaceState() string {
-	return "=== FILES ===\n(no files)"
 }
 
 func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {
@@ -1002,59 +999,7 @@ func TestLocalWorkerEnvIncludesSessionContext(t *testing.T) {
 	}
 }
 
-func TestRunLocalSessionPreambleFollowsRuntime(t *testing.T) {
-	for _, tt := range []struct {
-		runtime       sessionapi.SessionRuntime
-		preamble      string
-		wantNamespace bool
-	}{
-		{runtime: sessionapi.RuntimeLocal, preamble: "## Platform: local"},
-		{runtime: sessionapi.RuntimeCloud, preamble: "## Target: cloud", wantNamespace: true},
-	} {
-		t.Run(string(tt.runtime), func(t *testing.T) {
-			dir := t.TempDir()
-			t.Setenv("TELOS_OUTPUT_ROOT", filepath.Join(dir, "telos-output"))
-			specPath := filepath.Join(dir, "SPEC.md")
-			if err := os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: preamble\n---\n# Preamble\n\nTest body."), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			orig, _ := os.Getwd()
-			os.Chdir(dir)
-			defer os.Chdir(orig)
-
-			session, err := CreateLocalSession(specPath, LocalRunConfig{})
-			if err != nil {
-				t.Fatalf("CreateLocalSession: %v", err)
-			}
-			manifestPath := filepath.Join(session.SessionDir, "session.json")
-			manifest, err := sessionapi.ReadManifest(manifestPath)
-			if err != nil {
-				t.Fatal(err)
-			}
-			manifest.Runtime = tt.runtime
-			if err := sessionapi.WriteManifest(manifestPath, manifest); err != nil {
-				t.Fatal(err)
-			}
-
-			exec := &fakeExecutor{
-				proverResult:   game.TurnResult{Role: "prover", Status: game.StatusContinue, Logs: "Done."},
-				verifierResult: game.TurnResult{Role: "verifier", Status: game.StatusConcede, Logs: "OK\n\n<status>CONCEDE</status>\n"},
-			}
-			if _, err := RunLocalSessionWithExecutor(session.SessionDir, exec); err != nil {
-				t.Fatalf("RunLocalSession: %v", err)
-			}
-			task := exec.firstTask()
-			if !strings.Contains(task, tt.preamble) {
-				t.Fatalf("prompt missing %q:\n%s", tt.preamble, task)
-			}
-			if got := strings.Contains(task, "- Namespace: `"); got != tt.wantNamespace {
-				t.Fatalf("namespace in prompt = %v, want %v", got, tt.wantNamespace)
-			}
-		})
-	}
-}
-
-func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
+func TestRunLocalPersistentSessionUsesBoundSpec(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 
@@ -1094,18 +1039,16 @@ func TestRunLocalControllerSessionUsesControllerPrompt(t *testing.T) {
 	}
 
 	task := exec.firstTask()
-	if !strings.Contains(task, "## Controller Session") {
-		t.Fatal("controller session should receive controller prompt")
+	boundSpecPath, _ := manifest.SpecVersions[0]["spec_path"].(string)
+	if boundSpecPath == "" {
+		t.Fatal("session should record its bound spec path")
 	}
-	if strings.Contains(task, "`telos-orchestrate`") {
-		t.Fatal("controller prompt should not auto-inject telos-orchestrate")
-	}
-	if !strings.Contains(task, "Primary spec: `") {
-		t.Fatal("controller prompt should include primary spec path")
+	if !strings.Contains(task, "Source: `"+boundSpecPath+"`") {
+		t.Fatal("persistent session prompt should reference its bound spec")
 	}
 }
 
-func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
+func TestRunLocalSessionPromptsShareTranscript(t *testing.T) {
 	dir := t.TempDir()
 	specPath := writeTestSpec(t, dir)
 
@@ -1147,31 +1090,28 @@ func TestRunLocalSessionPromptsReadTranscriptFirst(t *testing.T) {
 		t.Fatalf("RunLocalSession: %v", err)
 	}
 
-	firstImplementationTask := exec.taskAt(0)
-	if firstImplementationTask == "" {
-		t.Fatalf("expected first implementation task, got %d tasks", len(exec.tasks))
+	manifest, err := sessionapi.ReadManifest(filepath.Join(session.SessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(firstImplementationTask, "First action every turn: read this transcript path") {
-		t.Fatal("first implementation prompt should require reading transcript first")
+	if len(manifest.Specs) == 0 || manifest.Specs[0].TranscriptPath == nil {
+		t.Fatal("session should record its shared transcript")
 	}
-
-	evaluationTask := exec.taskAt(1)
-	if evaluationTask == "" {
-		t.Fatalf("expected evaluation task, got %d tasks", len(exec.tasks))
+	transcriptPath := *manifest.Specs[0].TranscriptPath
+	if transcriptPath == "" {
+		t.Fatal("session transcript path should not be empty")
 	}
-	if !strings.Contains(evaluationTask, "First action every turn: read this transcript path") {
-		t.Fatal("evaluation prompt should require reading transcript first")
+	for i, task := range []string{exec.taskAt(0), exec.taskAt(1), exec.taskAt(2)} {
+		if !strings.Contains(task, transcriptPath) {
+			t.Fatalf("turn %d should reference the shared transcript", i+1)
+		}
 	}
-
-	secondImplementationTask := exec.taskAt(2)
-	if secondImplementationTask == "" {
-		t.Fatalf("expected second implementation task, got %d tasks", len(exec.tasks))
+	rolePrompt, err := spec.ReadPrompt("prover.md")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(secondImplementationTask, "First action every turn: read this transcript path") {
-		t.Fatal("second implementation prompt should require reading transcript first")
-	}
-	if !strings.Contains(secondImplementationTask, "identify unresolved evaluator findings") {
-		t.Fatal("implementation prompt should identify unresolved evaluator findings")
+	if !strings.HasPrefix(exec.taskAt(2), rolePrompt) {
+		t.Fatal("subsequent generator turns should receive the current prover role prompt")
 	}
 }
 

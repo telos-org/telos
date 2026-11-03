@@ -169,6 +169,7 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 
 	specDir := filepath.Dir(*sessionSpecPath)
 	state := game.NewPVGState(compiled.Environment.Name, specDir, manifest.SessionID)
+	state.RunnerLogPath = filepath.Join(sessionDir, "runner.log")
 
 	workspace := activeWorkspacePath(sessionDir)
 	if err := ensureSessionWorkspace(sessionDir, manifest); err != nil {
@@ -205,15 +206,12 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	pvgCfg := game.PVGConfig{
-		Until:           cfg.Until,
-		UntilSeconds:    cfg.UntilSeconds,
-		MaxCostUSD:      cfg.MaxCostUSD,
-		Verbose:         true,
-		EpochID:         epochID,
-		IsController:    controllerPromptEnabled(manifest),
-		PrimarySpecPath: compileSpecPath,
-		LocalRuntime:    manifest.ResolvedRuntime(sessionapi.SessionRuntime(os.Getenv("TELOS_RUNTIME"))) == sessionapi.RuntimeLocal,
-		StopRequested:   func() bool { return sessionStopped(sessionDir) },
+		Until:         cfg.Until,
+		UntilSeconds:  cfg.UntilSeconds,
+		MaxCostUSD:    cfg.MaxCostUSD,
+		Verbose:       true,
+		EpochID:       epochID,
+		StopRequested: func() bool { return sessionStopped(sessionDir) },
 	}
 
 	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)
@@ -271,10 +269,6 @@ func numericMapValue(values map[string]any, key string) int {
 	default:
 		return 0
 	}
-}
-
-func controllerPromptEnabled(manifest *sessionapi.Manifest) bool {
-	return manifest.SessionKind == sessionapi.KindController
 }
 
 func createPiExecutor(workspace string, cfg LocalRunConfig) (*executor.PiExecutor, error) {

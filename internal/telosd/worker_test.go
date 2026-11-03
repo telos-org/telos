@@ -199,7 +199,7 @@ func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
 		}},
 	})
 
-	logControllerSuspended(sessionDir, "agent_authentication_invalid", "403: inactive virtual key", time.Minute)
+	logControllerSuspended(sessionDir, "agent_authentication_invalid", time.Minute)
 	data, err := os.ReadFile(evidencePath)
 	if err != nil {
 		t.Fatal(err)
@@ -210,6 +210,7 @@ func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
 		`"epoch_id":4`,
 		`"blocker_code":"agent_authentication_invalid"`,
 		`"state":"waiting"`,
+		"runner.log",
 		`"retry_after_seconds":60`,
 		"fix the provider credentials, permissions, or quota, or add Telos credits",
 		"retry in 1m0s",
@@ -217,6 +218,9 @@ func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
 		if !strings.Contains(text, want) {
 			t.Fatalf("suspension evidence missing %q:\n%s", want, text)
 		}
+	}
+	if strings.Contains(text, `"error":`) {
+		t.Fatal("suspension evidence should reference diagnostics without copying raw errors")
 	}
 }
 

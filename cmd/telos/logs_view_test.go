@@ -294,3 +294,18 @@ func TestPrintRenderedLogRowIndentsMultilineDetails(t *testing.T) {
 		t.Fatalf("multiline log row = %q", text)
 	}
 }
+
+func TestRetryActivityDoesNotRequireRawDiagnostics(t *testing.T) {
+	row, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
+		Event: "agent_failure_recoverable",
+		Data: map[string]any{
+			"message":              "Agent turn failed.",
+			"log_path":             "/session/runner.log",
+			"consecutive_failures": 2,
+			"max_failures":         3,
+		},
+	})
+	if !visible || row.Level != "WARNING" || row.Summary != "Execution error; retrying" || row.Detail != "attempt 2 of 3" {
+		t.Fatalf("retry metadata did not produce activity: %#v visible=%v", row, visible)
+	}
+}
