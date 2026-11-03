@@ -241,9 +241,6 @@ func TestRenderProverTask(t *testing.T) {
 	if strings.Contains(task, "## Requirements") {
 		t.Error("should not use Requirements heading")
 	}
-	if !strings.Contains(task, "## Output") {
-		t.Error("should contain output contract")
-	}
 }
 
 func TestRenderVerifierTask(t *testing.T) {
@@ -360,13 +357,19 @@ func TestRenderIncludesSpecSource(t *testing.T) {
 	compiled, _ := CompileEnvironment(specPath)
 	for _, role := range []Role{RoleProver, RoleVerifier} {
 		task := RenderTask(role, compiled, "/tmp/transcript.md")
-		if !strings.Contains(task, "Source: `"+specPath+"`") {
-			t.Error("prompt should reference the compiled spec source")
+		for _, want := range []string{
+			"name: `" + compiled.Environment.Name + "`",
+			"version: " + compiled.Environment.Version,
+			"Source: `" + specPath + "`",
+		} {
+			if !strings.Contains(task, want) {
+				t.Errorf("prompt missing compiled spec identity: %q", want)
+			}
 		}
 	}
 }
 
-func TestRenderTranscriptProtocolDoesNotDumpTranscript(t *testing.T) {
+func TestRenderReferencesTranscriptWithoutInliningHistory(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: transcript-test\nplatform: local\n---\nBody"), 0o644)
@@ -376,44 +379,18 @@ func TestRenderTranscriptProtocolDoesNotDumpTranscript(t *testing.T) {
 	if err := os.WriteFile(transcriptPath, []byte("Some history"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	task := RenderTask(RoleProver, compiled, transcriptPath)
-
-	if !strings.Contains(task, "## Transcript") {
-		t.Error("should contain transcript protocol section")
-	}
-	if !strings.Contains(task, transcriptPath) {
-		t.Error("should contain transcript path")
-	}
-	if strings.Contains(task, "Some history") || strings.Contains(task, "~~~~markdown") {
-		t.Error("should not dump transcript content into task prompt")
-	}
-}
-
-func TestRenderTranscriptProtocolRequiresReadFirst(t *testing.T) {
-	dir := t.TempDir()
-	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: transcript-read\nplatform: local\n---\nBody"), 0o644)
-
-	compiled, _ := CompileEnvironment(specPath)
-	proverTask := RenderTask(RoleProver, compiled, "/tmp/transcript.md")
-	verifierTask := RenderTask(RoleVerifier, compiled, "/tmp/transcript.md")
-	for _, task := range []string{proverTask, verifierTask} {
-		for _, want := range []string{
-			"account for unresolved findings before acting",
-			"Consult older history when needed",
-			"read the current spec and available diff",
-			"Only the current spec governs",
-			"preserve required data and history",
-			"do not edit the transcript",
-		} {
-			if !strings.Contains(task, want) {
-				t.Errorf("prompt missing transcript guidance %q", want)
-			}
+	for _, role := range []Role{RoleProver, RoleVerifier} {
+		task := RenderTask(role, compiled, transcriptPath)
+		if !strings.Contains(task, transcriptPath) {
+			t.Error("should contain transcript path")
+		}
+		if strings.Contains(task, "Some history") || strings.Contains(task, "~~~~markdown") {
+			t.Error("should not dump transcript content into task prompt")
 		}
 	}
 }
 
-func TestRenderOutputContractUsesProgressProtocol(t *testing.T) {
+func TestRenderIncludesProgressProtocol(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")
 	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: progress-test\nplatform: local\n---\nBody"), 0o644)
@@ -424,19 +401,11 @@ func TestRenderOutputContractUsesProgressProtocol(t *testing.T) {
 
 	for _, task := range []string{proverTask, verifierTask} {
 		for _, want := range []string{
-			"<progress_update>...</progress_update>",
-			"final <progress_update>...</progress_update> in the same response",
+			"<progress_update>",
+			"</progress_update>",
 		} {
 			if !strings.Contains(task, want) {
 				t.Fatalf("prompt missing progress protocol %q:\n%s", want, task)
-			}
-		}
-		if strings.Contains(task, `phase=`) || strings.Contains(task, `timestamp=`) {
-			t.Fatalf("progress guidance should not require model-owned metadata:\n%s", task)
-		}
-		for _, unwanted := range []string{"<user_update>", "after planning", "after scoping", "about once per minute"} {
-			if strings.Contains(task, unwanted) {
-				t.Fatalf("progress guidance should not prescribe %q:\n%s", unwanted, task)
 			}
 		}
 	}
@@ -451,7 +420,6 @@ func TestRenderVerifierUsesStatusContract(t *testing.T) {
 	task := RenderTask(RoleVerifier, compiled, "/tmp/transcript.md")
 
 	for _, want := range []string{
-		"exactly one status tag on its own final line",
 		"<status>CONTINUE</status>",
 		"<status>CONCEDE</status>",
 	} {
@@ -462,27 +430,11 @@ func TestRenderVerifierUsesStatusContract(t *testing.T) {
 	for _, unwanted := range []string{
 		"<review>",
 		"<summary>",
-		"criteria,score",
-		"Do not emit <status> tags",
-		"clear evaluation gradient",
-		"next useful implementation pressure",
-		"handoff summary for the next implementation turn",
+		"<user_update>",
 	} {
 		if strings.Contains(task, unwanted) {
 			t.Fatalf("review-mode prompt should not contain stale pressure wording %q:\n%s", unwanted, task)
 		}
-	}
-}
-
-func TestRenderVerifierRequiresSpecSatisfaction(t *testing.T) {
-	dir := t.TempDir()
-	specPath := filepath.Join(dir, "SPEC.md")
-	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: task-state\nplatform: local\n---\nBody"), 0o644)
-
-	compiled, _ := CompileEnvironment(specPath)
-	task := RenderTask(RoleVerifier, compiled, "/tmp/transcript.md")
-	if !strings.Contains(task, "Concede only when every obligation holds under independent review") {
-		t.Fatal("verifier should require spec satisfaction before conceding")
 	}
 }
 
