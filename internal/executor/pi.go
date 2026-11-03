@@ -406,7 +406,7 @@ func errorFromPiMessage(msg map[string]interface{}) string {
 	if getString(msg, "stopReason") == "length" {
 		return "agent_output_truncated:length"
 	}
-	return extractMessageError(msg)
+	return getString(msg, "errorMessage")
 }
 
 func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
@@ -421,26 +421,6 @@ func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
 		base.Model = extra.Model
 	}
 	return base
-}
-
-func extractMessageError(msg map[string]interface{}) string {
-	em := getString(msg, "errorMessage")
-	if em == "" {
-		return ""
-	}
-	if isTransientError(em) {
-		return ""
-	}
-	return em
-}
-
-func isTransientError(err string) bool {
-	for _, t := range []string{"overloaded_error", "rate_limit_error", "api_error"} {
-		if strings.Contains(err, t) {
-			return true
-		}
-	}
-	return false
 }
 
 func getString(m map[string]interface{}, key string) string {

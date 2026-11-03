@@ -252,6 +252,7 @@ func TestExecuteTurnIncludesStderrOnPiFailure(t *testing.T) {
 
 func TestExecuteTurnPreservesFailureStderr(t *testing.T) {
 	structuredError := `{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"401: test authentication failure","content":[]}}`
+	providerError := `{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"overloaded_error: try again","content":[{"type":"text","text":"UNFINISHED_REPORT\n<status>CONCEDE</status>"}]}}`
 	emptyReport := `{"type":"message","message":{"role":"assistant","stopReason":"stop","content":[]}}`
 	for _, tc := range []struct {
 		name, session, wantError string
@@ -261,6 +262,7 @@ func TestExecuteTurnPreservesFailureStderr(t *testing.T) {
 		{"missing session", "", "pi_session_unavailable:", 0, true},
 		{"structured error", structuredError, "401: test authentication failure", 0, false},
 		{"structured error and crash", structuredError, "401: test authentication failure", 1, false},
+		{"provider error with partial verdict", providerError, "overloaded_error: try again", 0, true},
 		{"empty report", emptyReport, "agent_no_output", 0, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -286,6 +288,9 @@ func TestExecuteTurnPreservesFailureStderr(t *testing.T) {
 			}
 			if strings.Contains(result.Error, "STDERR_TAIL") || !strings.Contains(result.Logs, stderr) || strings.Count(result.Logs, "STDERR_TAIL") != 1 {
 				t.Fatal("stderr must remain complete in diagnostics without changing the failure reason")
+			}
+			if strings.Contains(result.Logs, "UNFINISHED_REPORT") {
+				t.Fatal("failed partial output must not become a completed report")
 			}
 		})
 	}
@@ -444,17 +449,21 @@ func TestReadPiSessionMapsLengthStopToRecoverableError(t *testing.T) {
 	}
 }
 
-func TestReadPiSessionIgnoresTransientErrors(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
-	appendPiSession(t, path, `{"type":"message","id":"a","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"error","errorMessage":"overloaded_error: try again","content":[{"type":"text","text":"partial"}],"usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.3}}}}`)
-
-	summary, err := ReadPiSession(path)
-	if err != nil {
-		t.Fatalf("ReadPiSession: %v", err)
-	}
-	if summary.Error != "" {
-		t.Fatalf("transient error should be ignored, got %q", summary.Error)
+func TestReadPiSessionPreservesFinalProviderErrors(t *testing.T) {
+	for _, errorMessage := range []string{"overloaded_error: try again", "rate_limit_error: try again", "api_error: try again"} {
+		t.Run(errorMessage, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+			writePiSession(t, path, fmt.Sprintf(`{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":%q,"content":[{"type":"text","text":"partial"}]}}`, errorMessage))
+			summary, err := ReadPiSession(path)
+			if err != nil || summary.Error != errorMessage {
+				t.Fatalf("final failure was discarded: %+v, %v", summary, err)
+			}
+			appendPiSession(t, path, `{"type":"message","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Completed after retry.\n<status>CONCEDE</status>"}]}}`)
+			summary, err = ReadPiSession(path)
+			if err != nil || summary.Error != "" || game.ExtractStatus(summary.Logs) != game.StatusConcede {
+				t.Fatalf("earlier failure overrode the completed response: %+v, %v", summary, err)
+			}
+		})
 	}
 }
 
