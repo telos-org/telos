@@ -250,6 +250,47 @@ func TestExecuteTurnIncludesStderrOnPiFailure(t *testing.T) {
 	}
 }
 
+func TestExecuteTurnPreservesFailureStderr(t *testing.T) {
+	structuredError := `{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"401: test authentication failure","content":[]}}`
+	emptyReport := `{"type":"message","message":{"role":"assistant","stopReason":"stop","content":[]}}`
+	for _, tc := range []struct {
+		name, session, wantError string
+		exitCode                 int
+		recoverable              bool
+	}{
+		{"missing session", "", "pi_session_unavailable:", 0, true},
+		{"structured error", structuredError, "401: test authentication failure", 0, false},
+		{"structured error and crash", structuredError, "401: test authentication failure", 1, false},
+		{"empty report", emptyReport, "agent_no_output", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			bin := filepath.Join(home, ".local", "bin")
+			if err := os.MkdirAll(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stderr := strings.Repeat("adapter stderr detail\n", 1000) + "STDERR_TAIL"
+			script := fmt.Sprintf("#!/bin/sh\ncat <<'STDERR' >&2\n%s\nSTDERR\nexit %d\n", stderr, tc.exitCode)
+			if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			turn := &game.TurnState{Dir: t.TempDir()}
+			if tc.session != "" {
+				writePiSession(t, turn.PiSessionPath(), tc.session)
+			}
+			p := platform.NewLocalPlatform(t.TempDir())
+			p.Env = map[string]string{"HOME": home}
+			result := NewPiExecutor(p, "test-model", "high", 0).ExecuteTurn("do it", "prover", turn)
+			if !strings.HasPrefix(result.Error, tc.wantError) || result.Recoverable != tc.recoverable || result.Status != game.StatusContinue {
+				t.Fatalf("unexpected failure classification: %+v", result)
+			}
+			if strings.Contains(result.Error, "STDERR_TAIL") || !strings.Contains(result.Logs, stderr) || strings.Count(result.Logs, "STDERR_TAIL") != 1 {
+				t.Fatal("stderr must remain complete in diagnostics without changing the failure reason")
+			}
+		})
+	}
+}
+
 func TestExecuteTurnUsesEnvPromptForNormalSessionTask(t *testing.T) {
 	workspace := t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
@@ -316,7 +357,7 @@ func TestExecuteTurnTreatsTimeoutAsTerminalFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	piPath := filepath.Join(bin, "pi")
-	script := "#!/bin/sh\nsleep 5\n"
+	script := "#!/bin/sh\nprintf 'TIMEOUT_STDERR\\n' >&2\nsleep 5\n"
 	if err := os.WriteFile(piPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -332,6 +373,9 @@ func TestExecuteTurnTreatsTimeoutAsTerminalFailure(t *testing.T) {
 	}
 	if result.Recoverable {
 		t.Fatalf("timeout should be terminal, got recoverable result: %#v", result)
+	}
+	if !strings.Contains(result.Logs, "TIMEOUT_STDERR") {
+		t.Fatal("timeout diagnostics must retain captured stderr")
 	}
 }
 
