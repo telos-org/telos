@@ -122,17 +122,13 @@ func TestExtractAndAppendLiveAgentEvents(t *testing.T) {
 func TestAppendExternalUpdate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "transcript.md")
 	if err := AppendExternalUpdate(path, ExternalUpdate{
-		Message:               "The operator updated the session spec. Reload the current spec before continuing.",
-		PreviousSpecVersion:   1,
-		CurrentSpecVersion:    2,
-		PreviousSpecSHA256:    "old",
-		CurrentSpecSHA256:     "new",
-		PreviousPackageDigest: "sha256:old",
-		CurrentPackageDigest:  "sha256:new",
-		PreviousSpecPath:      "/sessions/sess/revisions/0.1.0/SPEC.md",
-		CurrentSpecPath:       "/sessions/sess/revisions/0.1.1/SPEC.md",
-		ActiveSpecPath:        "/sessions/sess/specs/postgres/spec.md",
-		DiffPath:              "/sessions/sess/revisions/0.1.1/spec.diff",
+		Message:             "The operator updated the session spec. Reload the current spec before continuing.",
+		PreviousSpecVersion: 1,
+		CurrentSpecVersion:  2,
+		PreviousSpecPath:    "/sessions/sess/revisions/0.1.0/SPEC.md",
+		CurrentSpecPath:     "/sessions/sess/revisions/0.1.1/SPEC.md",
+		ActiveSpecPath:      "/sessions/sess/specs/postgres/spec.md",
+		DiffPath:            "/sessions/sess/revisions/0.1.1/spec.diff",
 	}); err != nil {
 		t.Fatalf("AppendExternalUpdate: %v", err)
 	}

@@ -26,20 +26,16 @@ type AppendTurnOptions struct {
 }
 
 type ExternalUpdate struct {
-	Message               string
-	PreviousSpecVersion   int
-	CurrentSpecVersion    int
-	PreviousSpecSHA256    string
-	CurrentSpecSHA256     string
-	PreviousPackageDigest string
-	CurrentPackageDigest  string
-	SpecPath              string
-	PreviousSpecPath      string
-	CurrentSpecPath       string
-	ActiveSpecPath        string
-	DiffPath              string
-	PreviousRevision      string
-	CurrentRevision       string
+	Message             string
+	PreviousSpecVersion int
+	CurrentSpecVersion  int
+	SpecPath            string
+	PreviousSpecPath    string
+	CurrentSpecPath     string
+	ActiveSpecPath      string
+	DiffPath            string
+	PreviousRevision    string
+	CurrentRevision     string
 }
 
 // InitializeTranscript creates a transcript header if the file does not exist.
@@ -188,18 +184,6 @@ func AppendExternalUpdate(path string, update ExternalUpdate) error {
 	}
 	if update.CurrentRevision != "" {
 		fmt.Fprintf(f, "- Current revision: `%s`\n", update.CurrentRevision)
-	}
-	if update.PreviousSpecSHA256 != "" {
-		fmt.Fprintf(f, "- Previous spec SHA-256: `%s`\n", update.PreviousSpecSHA256)
-	}
-	if update.CurrentSpecSHA256 != "" {
-		fmt.Fprintf(f, "- Current spec SHA-256: `%s`\n", update.CurrentSpecSHA256)
-	}
-	if update.PreviousPackageDigest != "" {
-		fmt.Fprintf(f, "- Previous package digest: `%s`\n", update.PreviousPackageDigest)
-	}
-	if update.CurrentPackageDigest != "" {
-		fmt.Fprintf(f, "- Current package digest: `%s`\n", update.CurrentPackageDigest)
 	}
 	if update.PreviousSpecPath != "" {
 		fmt.Fprintf(f, "- Previous spec path: `%s`\n", update.PreviousSpecPath)
