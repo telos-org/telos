@@ -37,10 +37,10 @@ type Manifest struct {
 	Runner                   *Runner                    `json:"runner,omitempty"`
 	Specs                    []ManifestSpec             `json:"specs"`
 	Epochs                   []Epoch                    `json:"epochs"`
-	// Issue is the root session's current problem. Held is set only by the
+	// Issue is the root session's current problem. Paused is set only by the
 	// operator (Cloud). Agents stop while either holds them; see OnHold.
-	Issue *Issue `json:"issue,omitempty"`
-	Held  bool   `json:"held,omitempty"`
+	Issue  *Issue `json:"issue,omitempty"`
+	Paused bool   `json:"paused,omitempty"`
 }
 
 // IssueStatus says whether an Issue stops agents (blocked) or not (retrying).
@@ -112,14 +112,15 @@ func (m *Manifest) Accepted() bool {
 	return r != nil && r.State == ReconciliationAccepted
 }
 
-// Blocked reports a block, which only Resume or a new spec version clears.
+// Blocked reports a block, which only Recheck or a new spec version clears;
+// new inference settings also clear a block for provider errors.
 func (i *Issue) Blocked() bool {
 	return i != nil && i.Status == IssueBlocked
 }
 
 // OnHold reports whether agents must stop: a blocked issue or Cloud's hold.
 func (m *Manifest) OnHold() bool {
-	return m != nil && (m.Held || m.Issue.Blocked())
+	return m != nil && (m.Paused || m.Issue.Blocked())
 }
 
 type Workspace struct {

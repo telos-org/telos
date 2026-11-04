@@ -733,6 +733,56 @@ func TestCreateSessionRejectsOversizedBody(t *testing.T) {
 	assertEqual(t, "status_code", "400", itoa(resp.StatusCode))
 }
 
+func TestNewInferenceSettingsClearOnlyAProviderBlock(t *testing.T) {
+	const spec = "---\nversion: 0.1.1\nname: postgres\nplatform: cloud\n---\n# Postgres v2\n"
+	for _, tc := range []struct {
+		reason  string
+		cleared bool
+	}{
+		{sessionapi.ReasonInferenceProviderError, true},
+		{sessionapi.ReasonSpecUnsatisfiable, false},
+	} {
+		t.Run(tc.reason, func(t *testing.T) {
+			srv, store := newTestServer(t)
+			defer srv.Close()
+			writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
+			path := filepath.Join(store.Root, "postgres", "session.json")
+			apply := func(inference *sessionapi.InferenceSettings) {
+				t.Helper()
+				body, _ := json.Marshal(sessionapi.SessionSpecUpdateRequest{SpecMarkdown: spec, Inference: inference})
+				req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(string(body)))
+				req.Header.Set("Content-Type", "application/json")
+				resp, err := http.DefaultClient.Do(req)
+				if err != nil {
+					t.Fatal(err)
+				}
+				resp.Body.Close()
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("apply: %d", resp.StatusCode)
+				}
+			}
+			apply(nil)
+			if _, err := sessionapi.MutateManifest(path, func(m *sessionapi.Manifest) error {
+				m.Issue = &sessionapi.Issue{Status: sessionapi.IssueBlocked, Reason: tc.reason}
+				return nil
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			// The same spec again, with new inference settings.
+			apply(&sessionapi.InferenceSettings{Generation: 1, Model: "anthropic/claude-test", Thinking: "medium"})
+
+			m, err := sessionapi.ReadManifest(path)
+			if err != nil || m.Config.InferenceGeneration != 1 {
+				t.Fatalf("settings not applied: %+v, %v", m, err)
+			}
+			if cleared := m.Issue == nil; cleared != tc.cleared {
+				t.Fatalf("block cleared = %v, want %v", cleared, tc.cleared)
+			}
+		})
+	}
+}
+
 // --------- PUT /api/sessions/{name}/spec ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {
@@ -2967,7 +3017,7 @@ func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-func TestPauseAndResumeRootSession(t *testing.T) {
+func TestPauseAndRecheckRootSession(t *testing.T) {
 	srv, store := newBearerTestServer(t, "operator-token")
 	defer srv.Close()
 	root, rootToken := writeAuthorizedSession(t, store.Root, "sess_root", sessionapi.KindController, nil)
@@ -2993,27 +3043,27 @@ func TestPauseAndResumeRootSession(t *testing.T) {
 	}
 
 	for _, tc := range []struct{ method, path, body, token string }{
-		{"PUT", "/api/sessions/sess_root/pause", `{"held":false}`, rootToken},
-		{"POST", "/api/sessions/sess_root/resume", "", rootToken},
+		{"PUT", "/api/sessions/sess_root/pause", `{"paused":false}`, rootToken},
+		{"POST", "/api/sessions/sess_root/recheck", "", rootToken},
 	} {
 		if code, _ := call(tc.method, tc.path, tc.body, tc.token); code != http.StatusForbidden {
 			t.Fatalf("agent token %s %s = %d, want 403", tc.method, tc.path, code)
 		}
 	}
 	if code, _ := call("PUT", "/api/sessions/sess_root/pause", `{}`, "operator-token"); code != http.StatusBadRequest {
-		t.Fatalf("missing held = %d, want 400", code)
+		t.Fatalf("missing paused = %d, want 400", code)
 	}
-	if code, _ := call("PUT", "/api/sessions/"+child.SessionID+"/pause", `{"held":true}`, "operator-token"); code != http.StatusBadRequest {
+	if code, _ := call("PUT", "/api/sessions/"+child.SessionID+"/pause", `{"paused":true}`, "operator-token"); code != http.StatusBadRequest {
 		t.Fatalf("child pause = %d, want 400", code)
 	}
-	if code, _ := call("POST", "/api/sessions/sess_missing/resume", "", "operator-token"); code != http.StatusNotFound {
-		t.Fatalf("missing resume = %d, want 404", code)
+	if code, _ := call("POST", "/api/sessions/sess_missing/recheck", "", "operator-token"); code != http.StatusNotFound {
+		t.Fatalf("missing recheck = %d, want 404", code)
 	}
-	if code, session := call("PUT", "/api/sessions/sess_root/pause", `{"held":true}`, "operator-token"); code != http.StatusOK || !session.Held || session.Issue == nil {
+	if code, session := call("PUT", "/api/sessions/sess_root/pause", `{"paused":true}`, "operator-token"); code != http.StatusOK || !session.Paused || session.Issue == nil {
 		t.Fatalf("pause = %d %+v", code, session)
 	}
-	if code, session := call("POST", "/api/sessions/sess_root/resume", "", "operator-token"); code != http.StatusOK || !session.Held || session.Issue != nil {
-		t.Fatalf("resume must clear the block and leave the hold = %d %+v", code, session)
+	if code, session := call("POST", "/api/sessions/sess_root/recheck", "", "operator-token"); code != http.StatusOK || !session.Paused || session.Issue != nil {
+		t.Fatalf("recheck must clear the block and leave the pause = %d %+v", code, session)
 	}
 
 	var list sessionapi.SessionListResponse
@@ -3024,7 +3074,7 @@ func TestPauseAndResumeRootSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer resp.Body.Close()
-	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil || len(list.Sessions) != 1 || !list.Sessions[0].Held {
+	if err := json.NewDecoder(resp.Body).Decode(&list); err != nil || len(list.Sessions) != 1 || !list.Sessions[0].Paused {
 		t.Fatalf("list does not report the hold: %+v %v", list, err)
 	}
 }

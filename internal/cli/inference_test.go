@@ -264,8 +264,8 @@ func TestRootHoldStopsChildAgentsAndTurnSuccessEndsRetrying(t *testing.T) {
 	if !agentsShouldStop(childDir) {
 		t.Fatal("a blocked root must stop its children, and turn success must not clear a block")
 	}
-	setRoot(func(m *sessionapi.Manifest) { m.Issue, m.Held = nil, true })
+	setRoot(func(m *sessionapi.Manifest) { m.Issue, m.Paused = nil, true })
 	if !agentsShouldStop(childDir) {
-		t.Fatal("a held root must stop its children")
+		t.Fatal("a paused root must stop its children")
 	}
 }

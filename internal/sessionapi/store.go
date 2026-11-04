@@ -68,8 +68,8 @@ type Store interface {
 	List() ([]Session, error)
 	Get(id string) (*Session, error)
 	Stop(id string) (*Session, error)
-	Hold(id string, held bool) (*Session, error)
-	Resume(id string) (*Session, error)
+	Pause(id string, paused bool) (*Session, error)
+	Recheck(id string) (*Session, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
 }
@@ -647,6 +647,9 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		if in := req.Inference; in != nil && in.Generation > m.Config.InferenceGeneration {
 			m.Config.InferenceGeneration, m.Config.Model, m.Config.Thinking = in.Generation, in.Model, in.Thinking
 			m.InferenceModelDefinition, m.InferenceConnection = in.ModelDefinition, in.Connection
+			if m.Issue.Blocked() && m.Issue.Reason == ReasonInferenceProviderError {
+				m.Issue = nil // new settings may fix what the provider kept rejecting
+			}
 		}
 		previousVersion = ptrOr(m.CurrentSpecVersion, 1)
 		previousPackageDigest = strValue(m.PackageDigest)
@@ -930,13 +933,13 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	return fs.deriveSession(id, m)
 }
 
-// Hold sets the operator's hold on a root session. Agents stop while it is on.
-func (fs *FileStore) Hold(id string, held bool) (*Session, error) {
-	return fs.mutateRoot(id, func(m *Manifest) { m.Held = held })
+// Pause sets the operator's pause on a root session. Agents stop while it is on.
+func (fs *FileStore) Pause(id string, paused bool) (*Session, error) {
+	return fs.mutateRoot(id, func(m *Manifest) { m.Paused = paused })
 }
 
-// Resume clears a blocked issue so agents check the spec again.
-func (fs *FileStore) Resume(id string) (*Session, error) {
+// Recheck clears a blocked issue so agents check the spec again.
+func (fs *FileStore) Recheck(id string) (*Session, error) {
 	return fs.mutateRoot(id, func(m *Manifest) {
 		if m.Issue.Blocked() {
 			m.Issue = nil
@@ -952,7 +955,7 @@ func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest)) (*Session, er
 	}
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
 		if !isTopLevelManifest(m) || m.SessionKind != KindController {
-			return fmt.Errorf("only root sessions can be paused or resumed: %w", ErrInvalidSession)
+			return fmt.Errorf("only root sessions can be paused or rechecked: %w", ErrInvalidSession)
 		}
 		mutate(m)
 		return nil
@@ -1130,7 +1133,7 @@ func (fs *FileStore) deriveSessionWithEvidence(id string, m *Manifest, includeEv
 		VisibleEvents:         true,
 		Reconciliation:        deriveReconciliation(m),
 		Issue:                 m.Issue,
-		Held:                  m.Held,
+		Paused:                m.Paused,
 	}
 
 	if s.Config == nil {

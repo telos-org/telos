@@ -23,7 +23,7 @@ const maxSessionRequestBytes = 4 << 20
 //	PUT  /api/sessions/{name}/spec
 //	POST /api/sessions/{id}/stop
 //	PUT  /api/sessions/{id}/pause
-//	POST /api/sessions/{id}/resume
+//	POST /api/sessions/{id}/recheck
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
 //	GET  /api/healthz
@@ -41,7 +41,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("PUT /api/sessions/{name}/spec", h.updateSpec)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("PUT /api/sessions/{id}/pause", h.pauseSession)
-	mux.HandleFunc("POST /api/sessions/{id}/resume", h.resumeSession)
+	mux.HandleFunc("POST /api/sessions/{id}/recheck", h.recheckSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
 }
@@ -253,25 +253,25 @@ func (h *handler) stopSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) pauseSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionHoldSession, SessionID: id}); !ok {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionPauseSession, SessionID: id}); !ok {
 		return
 	}
 	var req SessionPauseRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSessionRequestBytes))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil || req.Held == nil {
-		writeError(w, http.StatusBadRequest, `body must be {"held": true|false}`)
+	if err := dec.Decode(&req); err != nil || req.Paused == nil {
+		writeError(w, http.StatusBadRequest, `body must be {"paused": true|false}`)
 		return
 	}
-	h.writeRootMutation(w, func() (*Session, error) { return h.store.Hold(id, *req.Held) })
+	h.writeRootMutation(w, func() (*Session, error) { return h.store.Pause(id, *req.Paused) })
 }
 
-func (h *handler) resumeSession(w http.ResponseWriter, r *http.Request) {
+func (h *handler) recheckSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionHoldSession, SessionID: id}); !ok {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionPauseSession, SessionID: id}); !ok {
 		return
 	}
-	h.writeRootMutation(w, func() (*Session, error) { return h.store.Resume(id) })
+	h.writeRootMutation(w, func() (*Session, error) { return h.store.Recheck(id) })
 }
 
 func (h *handler) writeRootMutation(w http.ResponseWriter, mutate func() (*Session, error)) {

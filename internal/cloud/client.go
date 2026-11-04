@@ -646,7 +646,7 @@ func (c *Client) PauseSession(sessionID string) (*SessionRecord, error) {
 	return c.postSession(sessionID, "pause")
 }
 
-// ResumeSession lifts a pause and has the verifier check a blocked spec again.
+// ResumeSession lifts a pause and has the runtime check a blocked Goal again.
 func (c *Client) ResumeSession(sessionID string) (*SessionRecord, error) {
 	return c.postSession(sessionID, "resume")
 }

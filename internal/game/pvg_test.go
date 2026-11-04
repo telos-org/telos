@@ -331,16 +331,12 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 			Recoverable: true,
 		}
 	}
-	exec := &fakeExecutor{
-		proverResults: []TurnResult{
-			recoverable("prover"),
-			recoverable("prover"),
-		},
-		verifierResults: []TurnResult{
-			recoverable("verifier"),
-			recoverable("verifier"),
-		},
+	// The prover keeps failing while the verifier's turns succeed in between.
+	var failures []TurnResult
+	for range maxRecoverableAgentFailures + 1 {
+		failures = append(failures, recoverable("prover"))
 	}
+	exec := &fakeExecutor{proverResults: failures}
 
 	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
 	result := pvg.Run()
@@ -351,7 +347,7 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 	if !strings.Contains(result.Error, "agent_failure_budget_exceeded") {
 		t.Fatalf("error: got %q", result.Error)
 	}
-	if result.Rounds != maxRecoverableAgentFailures+1 {
+	if result.Rounds != 2*maxRecoverableAgentFailures+1 {
 		t.Fatalf("rounds: got %d", result.Rounds)
 	}
 }
@@ -412,15 +408,14 @@ func TestPVGReportsWhetherAProviderErrorEndedTheGame(t *testing.T) {
 		want     string
 	}{
 		// The provider's own words, not the runtime's failure-budget wrapping.
-		{"provider error", []TurnResult{provider, provider}, "overloaded"},
-		{"recovered provider error, then a Telos error", []TurnResult{provider, internal}, ""},
+		{"provider error", []TurnResult{provider, provider, provider, provider}, "overloaded"},
+		{"provider error, then a Telos error", []TurnResult{provider, internal}, ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-provider")
 			state.Ensure()
-			// Prover and verifier fail alike, so the failures add up.
-			prover := TurnResult{Role: "prover", Error: "overloaded", Recoverable: true, ProviderError: true}
-			exec := &fakeExecutor{proverResults: []TurnResult{prover, prover}, verifierResults: tc.verifier}
+			// The prover succeeds every turn; the verifier's failures still end the game.
+			exec := &fakeExecutor{verifierResults: tc.verifier}
 			result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{}).Run()
 			if result.GameResult != GameFailure || result.ProviderError != tc.want {
 				t.Fatalf("result = %+v", result)

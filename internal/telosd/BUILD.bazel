@@ -19,6 +19,7 @@ go_library(
     deps = [
         "//internal/bundlelimits",
         "//internal/cli",
+        "//internal/evidence",
         "//internal/game",
         "//internal/sessionapi",
         "//internal/sessionupdate",

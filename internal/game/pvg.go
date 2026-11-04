@@ -76,7 +76,9 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 }
 
 func (p *PVG) runDefaultLoop() *PVGResult {
-	recoverableFailures := 0
+	// Failures count per role: one role's successes say nothing about the
+	// other's failures, which would otherwise never reach the limit.
+	proverFailures, verifierFailures := 0, 0
 	reviewCyclesCompleted := 0
 	deadline := p.runDeadline()
 
@@ -95,11 +97,11 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 			return p.end(GameStopped)
 		}
 		if turn.Error != "" {
-			if p.turnFailureExceeded(turn, &recoverableFailures) {
+			if p.turnFailureExceeded(turn, &proverFailures) {
 				return p.end(GameFailure)
 			}
 		} else {
-			recoverableFailures = 0
+			proverFailures = 0
 		}
 		if p.overBudget(p.Result.Rounds, "prover") {
 			return p.end(GameFailure)
@@ -119,11 +121,11 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 			return p.end(GameStopped)
 		}
 		if turn.Error != "" {
-			if p.turnFailureExceeded(turn, &recoverableFailures) {
+			if p.turnFailureExceeded(turn, &verifierFailures) {
 				return p.end(GameFailure)
 			}
 		} else {
-			recoverableFailures = 0
+			verifierFailures = 0
 		}
 		if p.verifierBlocked(turn) {
 			return p.end(GameBlocked)

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -231,7 +232,61 @@ func TestRootFailureRecordsRetryingIssueAndBacksOff(t *testing.T) {
 	})
 }
 
-func TestVerifierBlockHoldsRootUntilResume(t *testing.T) {
+func TestAnHourOfProviderErrorsBlocksTheRootUntilRecheck(t *testing.T) {
+	evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
+	synctest.Test(t, func(t *testing.T) {
+		sessionDir := writeWorkerManifest(t, map[string]any{
+			"session_kind": "controller",
+			"specs":        []map[string]any{{"name": "demo", "evidence_path": evidencePath}},
+		})
+		wake, stop := make(chan os.Signal, 1), make(chan os.Signal, 1)
+		var attempts atomic.Int32
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+				attempts.Add(1)
+				return &game.PVGResult{GameResult: game.GameFailure, Error: "agent_failure_budget_exceeded: 401: invalid api key", ProviderError: "401: invalid api key"}, nil
+			}, wake, stop)
+		}()
+		time.Sleep(59 * time.Minute)
+		synctest.Wait()
+		if issue := readIssue(t, sessionDir); issue.Status != sessionapi.IssueRetrying {
+			t.Fatalf("before an hour: %+v", issue)
+		}
+		time.Sleep(30 * time.Minute) // past the hour, and past the next retry
+		synctest.Wait()
+		issue := readIssue(t, sessionDir)
+		if issue.Status != sessionapi.IssueBlocked || issue.Reason != sessionapi.ReasonInferenceProviderError ||
+			!strings.Contains(issue.Message, "401: invalid api key") {
+			t.Fatalf("after an hour: %+v", issue)
+		}
+		activity, _ := os.ReadFile(evidencePath)
+		if !strings.Contains(string(activity), `"event":"goal_blocked"`) ||
+			!strings.Contains(string(activity), `"reason":"INFERENCE_PROVIDER_ERROR"`) {
+			t.Fatalf("the block is missing from the activity:\n%s", activity)
+		}
+		blockedAt := attempts.Load()
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if attempts.Load() != blockedAt {
+			t.Fatalf("blocked root kept trying: %d attempts after %d", attempts.Load(), blockedAt)
+		}
+		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
+		if _, err := store.Recheck(filepath.Base(sessionDir)); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(holdRecheckInterval)
+		synctest.Wait()
+		if issue := readIssue(t, sessionDir); attempts.Load() <= blockedAt || issue.Status != sessionapi.IssueRetrying {
+			t.Fatalf("recheck did not retry: %d attempts after %d, %+v", attempts.Load(), blockedAt, issue)
+		}
+		stop <- syscall.SIGTERM
+		<-done
+	})
+}
+
+func TestVerifierBlockHoldsRootUntilRecheck(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sessionDir := writeWorkerManifest(t, map[string]any{
 			"session_kind": "controller",
@@ -268,7 +323,7 @@ func TestVerifierBlockHoldsRootUntilResume(t *testing.T) {
 			t.Fatalf("blocked root ran again: %d attempts", attempts.Load())
 		}
 		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
-		if _, err := store.Resume(filepath.Base(sessionDir)); err != nil {
+		if _, err := store.Recheck(filepath.Base(sessionDir)); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(holdRecheckInterval)
@@ -290,7 +345,7 @@ func TestLiftedHoldKeepsAnAcceptedGoalOnItsSchedule(t *testing.T) {
 		interrupted := map[string]any{"id": 2, "started_at": "t", "finished_at": "t", "result": sessionapi.EpochHeld, "spec_version": 1}
 		sessionDir := writeWorkerManifest(t, map[string]any{
 			"session_kind":         "controller",
-			"held":                 true,
+			"paused":               true,
 			"current_spec_version": 1,
 			"specs":                []map[string]any{{"name": "demo", "interval_seconds": 3600}},
 			"epochs":               []map[string]any{accepted, interrupted},
@@ -307,7 +362,7 @@ func TestLiftedHoldKeepsAnAcceptedGoalOnItsSchedule(t *testing.T) {
 		}()
 		synctest.Wait()
 		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
-		if _, err := store.Hold(filepath.Base(sessionDir), false); err != nil {
+		if _, err := store.Pause(filepath.Base(sessionDir), false); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(59 * time.Minute)
@@ -348,8 +403,8 @@ func TestHoldLiftedBeforeTheCheckStopsKeepsAnAcceptedGoalOnItsSchedule(t *testin
 					return &game.PVGResult{GameResult: game.GameSuccess}, nil
 				}
 				// Paused mid-check, then resumed while the check is still saving.
-				for _, held := range []bool{true, false} {
-					if _, err := store.Hold(filepath.Base(sessionDir), held); err != nil {
+				for _, paused := range []bool{true, false} {
+					if _, err := store.Pause(filepath.Base(sessionDir), paused); err != nil {
 						t.Error(err)
 					}
 				}
@@ -387,7 +442,7 @@ func TestChildStoppedByRootHoldWaitsInsteadOfFailing(t *testing.T) {
 		go func() {
 			code, _ := runSessionWorker(childDir, false, func(string) (*game.PVGResult, error) {
 				if attempts.Add(1) == 1 { // Cloud holds the goal mid-run.
-					if _, err := store.Hold(filepath.Base(rootDir), true); err != nil {
+					if _, err := store.Pause(filepath.Base(rootDir), true); err != nil {
 						t.Error(err)
 					}
 					return &game.PVGResult{GameResult: game.GameStopped}, nil
@@ -401,7 +456,7 @@ func TestChildStoppedByRootHoldWaitsInsteadOfFailing(t *testing.T) {
 		if attempts.Load() != 1 {
 			t.Fatalf("held child ran %d attempts", attempts.Load())
 		}
-		if _, err := store.Hold(filepath.Base(rootDir), false); err != nil {
+		if _, err := store.Pause(filepath.Base(rootDir), false); err != nil {
 			t.Fatal(err)
 		}
 		if code := <-done; code != 0 || attempts.Load() != 2 {
@@ -414,7 +469,7 @@ func TestHeldRootWaitsWithoutRunning(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sessionDir := writeWorkerManifest(t, map[string]any{
 			"session_kind": "controller",
-			"held":         true,
+			"paused":       true,
 			"specs":        []map[string]any{{"name": "demo"}},
 		})
 		wake, stop := make(chan os.Signal, 1), make(chan os.Signal, 1)
@@ -433,7 +488,7 @@ func TestHeldRootWaitsWithoutRunning(t *testing.T) {
 			t.Fatalf("held root ran %d attempts", attempts.Load())
 		}
 		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
-		if _, err := store.Hold(filepath.Base(sessionDir), false); err != nil {
+		if _, err := store.Pause(filepath.Base(sessionDir), false); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(holdRecheckInterval) // no wake: the root notices on its own
