@@ -733,56 +733,6 @@ func TestCreateSessionRejectsOversizedBody(t *testing.T) {
 	assertEqual(t, "status_code", "400", itoa(resp.StatusCode))
 }
 
-func TestNewInferenceSettingsClearOnlyAProviderBlock(t *testing.T) {
-	const spec = "---\nversion: 0.1.1\nname: postgres\nplatform: cloud\n---\n# Postgres v2\n"
-	for _, tc := range []struct {
-		reason  string
-		cleared bool
-	}{
-		{sessionapi.ReasonInferenceProviderError, true},
-		{sessionapi.ReasonSpecUnsatisfiable, false},
-	} {
-		t.Run(tc.reason, func(t *testing.T) {
-			srv, store := newTestServer(t)
-			defer srv.Close()
-			writeAuthorizedSession(t, store.Root, "postgres", sessionapi.KindController, nil)
-			path := filepath.Join(store.Root, "postgres", "session.json")
-			apply := func(inference *sessionapi.InferenceSettings) {
-				t.Helper()
-				body, _ := json.Marshal(sessionapi.SessionSpecUpdateRequest{SpecMarkdown: spec, Inference: inference})
-				req, _ := http.NewRequest(http.MethodPut, srv.URL+"/api/sessions/postgres/spec", strings.NewReader(string(body)))
-				req.Header.Set("Content-Type", "application/json")
-				resp, err := http.DefaultClient.Do(req)
-				if err != nil {
-					t.Fatal(err)
-				}
-				resp.Body.Close()
-				if resp.StatusCode != http.StatusOK {
-					t.Fatalf("apply: %d", resp.StatusCode)
-				}
-			}
-			apply(nil)
-			if _, err := sessionapi.MutateManifest(path, func(m *sessionapi.Manifest) error {
-				m.Issue = &sessionapi.Issue{Status: sessionapi.IssueBlocked, Reason: tc.reason}
-				return nil
-			}); err != nil {
-				t.Fatal(err)
-			}
-
-			// The same spec again, with new inference settings.
-			apply(&sessionapi.InferenceSettings{Generation: 1, Model: "anthropic/claude-test", Thinking: "medium"})
-
-			m, err := sessionapi.ReadManifest(path)
-			if err != nil || m.Config.InferenceGeneration != 1 {
-				t.Fatalf("settings not applied: %+v, %v", m, err)
-			}
-			if cleared := m.Issue == nil; cleared != tc.cleared {
-				t.Fatalf("block cleared = %v, want %v", cleared, tc.cleared)
-			}
-		})
-	}
-}
-
 // --------- PUT /api/sessions/{name}/spec ---------------------------------------------------------------------------------------------------------------------------------------------------------------
 
 func TestApplySessionSpecUpdatesExistingRoot(t *testing.T) {

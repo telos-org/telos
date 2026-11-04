@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -216,7 +217,7 @@ func TestRootFailureRecordsRetryingIssueAndBacksOff(t *testing.T) {
 		synctest.Wait()
 		issue := readIssue(t, sessionDir)
 		if issue.Status != sessionapi.IssueRetrying || issue.Reason != sessionapi.ReasonInferenceProviderError ||
-			issue.Message != "503: overloaded" || issue.Since != sessionapi.FormatTime(first) ||
+			issue.Message != providerRetryHint+"503: overloaded" || issue.Since != sessionapi.FormatTime(first) ||
 			issue.LastRetryAt != sessionapi.FormatTime(previous) || issue.NextRetryAt <= issue.LastRetryAt {
 			t.Fatalf("issue = %+v", issue)
 		}
@@ -232,54 +233,56 @@ func TestRootFailureRecordsRetryingIssueAndBacksOff(t *testing.T) {
 	})
 }
 
-func TestAnHourOfProviderErrorsBlocksTheRootUntilRecheck(t *testing.T) {
-	evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
+func TestProviderErrorsKeepRetryingPastAnHourUntilPaused(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sessionDir := writeWorkerManifest(t, map[string]any{
 			"session_kind": "controller",
-			"specs":        []map[string]any{{"name": "demo", "evidence_path": evidencePath}},
+			"specs":        []map[string]any{{"name": "demo"}},
 		})
-		wake, stop := make(chan os.Signal, 1), make(chan os.Signal, 1)
-		var attempts atomic.Int32
+		stop := make(chan os.Signal, 1)
+		var mu sync.Mutex
+		var starts []time.Time
 		done := make(chan struct{})
 		go func() {
 			defer close(done)
 			_, _ = runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
-				attempts.Add(1)
+				mu.Lock()
+				starts = append(starts, time.Now())
+				mu.Unlock()
 				return &game.PVGResult{GameResult: game.GameFailure, Error: "agent_failure_budget_exceeded: 401: invalid api key", ProviderError: "401: invalid api key"}, nil
-			}, wake, stop)
+			}, make(chan os.Signal, 1), stop)
 		}()
-		time.Sleep(59 * time.Minute)
+		begin := time.Now()
+		time.Sleep(3 * time.Hour)
 		synctest.Wait()
-		if issue := readIssue(t, sessionDir); issue.Status != sessionapi.IssueRetrying {
-			t.Fatalf("before an hour: %+v", issue)
+		mu.Lock()
+		attempts := len(starts)
+		last := starts[attempts-1]
+		for i := 1; i < attempts; i++ {
+			if gap := starts[i].Sub(starts[i-1]); gap > 15*time.Minute {
+				t.Fatalf("retry %d waited %v, over the 15 minute cap", i, gap)
+			}
 		}
-		time.Sleep(30 * time.Minute) // past the hour, and past the next retry
-		synctest.Wait()
-		issue := readIssue(t, sessionDir)
-		if issue.Status != sessionapi.IssueBlocked || issue.Reason != sessionapi.ReasonInferenceProviderError ||
-			!strings.Contains(issue.Message, "401: invalid api key") {
-			t.Fatalf("after an hour: %+v", issue)
+		mu.Unlock()
+		if last.Sub(begin) < 2*time.Hour {
+			t.Fatalf("retries stopped after %v", last.Sub(begin))
 		}
-		activity, _ := os.ReadFile(evidencePath)
-		if !strings.Contains(string(activity), `"event":"goal_blocked"`) ||
-			!strings.Contains(string(activity), `"reason":"INFERENCE_PROVIDER_ERROR"`) {
-			t.Fatalf("the block is missing from the activity:\n%s", activity)
+		if issue := readIssue(t, sessionDir); issue.Status != sessionapi.IssueRetrying || issue.Reason != sessionapi.ReasonInferenceProviderError ||
+			!strings.Contains(issue.Message, "check it. Provider error: 401: invalid api key") {
+			t.Fatalf("issue = %+v", issue)
 		}
-		blockedAt := attempts.Load()
-		time.Sleep(time.Hour)
-		synctest.Wait()
-		if attempts.Load() != blockedAt {
-			t.Fatalf("blocked root kept trying: %d attempts after %d", attempts.Load(), blockedAt)
-		}
+
 		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
-		if _, err := store.Recheck(filepath.Base(sessionDir)); err != nil {
+		if _, err := store.Pause(filepath.Base(sessionDir), true); err != nil {
 			t.Fatal(err)
 		}
-		time.Sleep(holdRecheckInterval)
+		time.Sleep(time.Hour)
 		synctest.Wait()
-		if issue := readIssue(t, sessionDir); attempts.Load() <= blockedAt || issue.Status != sessionapi.IssueRetrying {
-			t.Fatalf("recheck did not retry: %d attempts after %d, %+v", attempts.Load(), blockedAt, issue)
+		mu.Lock()
+		paused := len(starts)
+		mu.Unlock()
+		if paused != attempts {
+			t.Fatalf("pause did not stop the retries: %d attempts, then %d", attempts, paused)
 		}
 		stop <- syscall.SIGTERM
 		<-done

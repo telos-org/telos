@@ -647,9 +647,6 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		if in := req.Inference; in != nil && in.Generation > m.Config.InferenceGeneration {
 			m.Config.InferenceGeneration, m.Config.Model, m.Config.Thinking = in.Generation, in.Model, in.Thinking
 			m.InferenceModelDefinition, m.InferenceConnection = in.ModelDefinition, in.Connection
-			if m.Issue.Blocked() && m.Issue.Reason == ReasonInferenceProviderError {
-				m.Issue = nil // new settings may fix what the provider kept rejecting
-			}
 		}
 		previousVersion = ptrOr(m.CurrentSpecVersion, 1)
 		previousPackageDigest = strValue(m.PackageDigest)

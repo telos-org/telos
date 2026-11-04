@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/cli"
-	"github.com/telos-org/telos/internal/evidence"
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/sessionworker"
@@ -22,10 +21,10 @@ const controllerFailureBackoffCap = 15 * time.Minute
 // holdRecheckInterval is how often a held session rechecks its goal's hold.
 const holdRecheckInterval = 5 * time.Second
 
-// providerBlockAfter is how long a root retries model provider errors before
-// its agents stop: by then the provider, or the user's own key or account,
-// likely needs a person.
-const providerBlockAfter = time.Hour
+// providerRetryHint leads a provider's own words. Telos keeps retrying, but a
+// key or account only the user controls may be the cause.
+const providerRetryHint = "The model provider returned an error, and Telos keeps retrying. " +
+	"If this goal uses your own API key or provider account, check it. Provider error: "
 
 func RunSessionWorker(sessionDir string, once bool) (int, error) {
 	var err error
@@ -61,7 +60,6 @@ func runSessionWorker(
 	defer owner.Release()
 
 	failures := 0
-	var providerFailingSince time.Time // zero unless the last attempts hit provider errors
 	for {
 		if stopRequested(stop) {
 			return 0, nil
@@ -73,7 +71,7 @@ func runSessionWorker(
 		root := manifest.Kind == sessionapi.KindController
 		if !once && manifest.OnHold {
 			cli.ClearRetryingIssue(sessionDir) // stopped agents are not retrying
-			failures, providerFailingSince = 0, time.Time{}
+			failures = 0
 			if waitOutHold(sessionDir, root, wake, stop) {
 				return 0, nil
 			}
@@ -97,7 +95,7 @@ func runSessionWorker(
 				return 1, err
 			}
 			fmt.Fprintf(os.Stderr, "root session cycle failed: %v\n", err)
-			failures, providerFailingSince = failures+1, time.Time{}
+			failures++
 			if waitForRetry(sessionDir, wake, stop, failures, sessionapi.ReasonInternalError, "") {
 				return 0, nil
 			}
@@ -119,24 +117,16 @@ func runSessionWorker(
 		} else if result.GameResult != game.GameSuccess {
 			failures++
 			fmt.Fprintf(os.Stderr, "root session cycle failed: %s; see runner.log\n", result.GameResult)
-			reason := sessionapi.ReasonInternalError
-			if result.ProviderError == "" {
-				providerFailingSince = time.Time{}
-			} else {
-				reason = sessionapi.ReasonInferenceProviderError
-				if providerFailingSince.IsZero() {
-					providerFailingSince = time.Now()
-				}
-				if time.Since(providerFailingSince) >= providerBlockAfter && blockForProvider(sessionDir, result.ProviderError) {
-					continue // the next loop waits out the block
-				}
+			reason, message := sessionapi.ReasonInternalError, ""
+			if result.ProviderError != "" {
+				reason, message = sessionapi.ReasonInferenceProviderError, providerRetryHint+result.ProviderError
 			}
-			if waitForRetry(sessionDir, wake, stop, failures, reason, result.ProviderError) {
+			if waitForRetry(sessionDir, wake, stop, failures, reason, message) {
 				return 0, nil
 			}
 			continue
 		}
-		failures, providerFailingSince = 0, time.Time{}
+		failures = 0
 		if root {
 			completedDesired := desired
 			if completed, ok, err := LoadCompletedEpochDesired(sessionDir); err == nil && ok {
@@ -199,45 +189,6 @@ func waitForRetry(sessionDir string, wake, stop <-chan os.Signal, failures int, 
 		fmt.Fprintf(os.Stderr, "record root session issue: %v\n", err)
 	}
 	return waitForNextCycle(wake, stop, delay)
-}
-
-// blockForProvider stops the root's agents after an hour of provider errors,
-// until Recheck or new inference settings or spec, and adds the block to the
-// goal's activity. It reports whether the block was recorded.
-func blockForProvider(sessionDir, providerMessage string) bool {
-	m, err := sessionapi.MutateManifest(filepath.Join(sessionDir, "session.json"), func(m *sessionapi.Manifest) error {
-		m.Issue = sessionapi.NewIssue(sessionapi.IssueBlocked, sessionapi.ReasonInferenceProviderError,
-			"The model provider kept failing for an hour, so agents stopped. Check this goal's model, API key or provider account, then resume. Provider error: "+providerMessage,
-			time.Now())
-		return nil
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "record provider block: %v\n", err)
-		return false
-	}
-	logGoalBlocked(m)
-	return true
-}
-
-// logGoalBlocked adds the root's block to its activity, the same entry a
-// verifier's block writes during a run.
-func logGoalBlocked(m *sessionapi.Manifest) {
-	if len(m.Specs) == 0 || m.Specs[0].EvidencePath == nil || *m.Specs[0].EvidencePath == "" {
-		return
-	}
-	epochID := 0
-	if last := m.LastEpoch(); last != nil {
-		epochID = last.ID
-	}
-	ev := evidence.New(m.Specs[0].Name, *m.Specs[0].EvidencePath, m.SessionID, epochID)
-	if m.CreatedAt != "" {
-		ev.StartedAt = m.CreatedAt
-	}
-	ev.Log("goal_blocked", 0, "system", map[string]interface{}{
-		"audience": "user",
-		"reason":   m.Issue.Reason,
-		"message":  m.Issue.Message,
-	})
 }
 
 func stopRequested(stop <-chan os.Signal) bool {
