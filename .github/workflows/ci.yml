@@ -136,11 +136,6 @@ jobs:
           diff -ru skills/telos-cli "$verify/registry-skill"
           test -z "$(find "$verify/registry-skill" -type f ! -perm 0644 -print -quit)"
 
-      - name: Promote release
-        env:
-          VERSION: ${{ steps.version.outputs.version }}
-        run: |
-          set -euo pipefail
-          git fetch origin master
-          test "$(git rev-parse origin/master)" = "$GITHUB_SHA"
-          scripts/promote-release.sh "$VERSION"
+      # Releases stay unpromoted here. Production Cloud deploys move latest to
+      # the release they pin (telos-org/cloud scripts/promote-cli-release.sh),
+      # so new CLI installs never run ahead of the Cloud they talk to.
