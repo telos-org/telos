@@ -1,3 +1,5 @@
+//go:build unix
+
 package sessionapi
 
 import (
@@ -20,16 +22,6 @@ import (
 
 	"github.com/telos-org/telos/internal/spec"
 )
-
-// ErrNotFound is returned when a session or artifact does not exist.
-var ErrNotFound = errors.New("not found")
-
-// ErrInvalidSession is returned when a request targets the wrong session kind
-// or would violate session identity.
-var ErrInvalidSession = errors.New("invalid session")
-
-// ErrConflict is returned when a request would create duplicate live state.
-var ErrConflict = errors.New("conflict")
 
 var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
