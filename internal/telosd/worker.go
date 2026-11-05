@@ -167,11 +167,13 @@ func waitOutHold(sessionDir string, root bool, wake, stop <-chan os.Signal) bool
 }
 
 // waitForRetry records a retrying issue for the failed attempt and waits out
-// its backoff. A wake (new settings, spec, or lifted hold) retries at once.
+// its backoff. A wake (new settings or spec) retries at once, and a pause or
+// block ends the wait so the loop holds instead (see waitOutRetry).
 // message is a provider's own words, or empty: Telos errors stay in the log.
 func waitForRetry(sessionDir string, wake, stop <-chan os.Signal, failures int, reason, message string) bool {
 	delay := jitteredFailureBackoff(failures, time.Second)
 	now := time.Now()
+	nextRetryAt := sessionapi.FormatTime(now.Add(delay))
 	_, err := sessionapi.MutateManifest(filepath.Join(sessionDir, "session.json"), func(m *sessionapi.Manifest) error {
 		if m.Issue.Blocked() {
 			return nil // only Resume or a new spec version clears a block
@@ -181,14 +183,45 @@ func waitForRetry(sessionDir string, wake, stop <-chan os.Signal, failures int, 
 			issue.Since = m.Issue.Since
 		}
 		issue.LastRetryAt = sessionapi.FormatTime(now)
-		issue.NextRetryAt = sessionapi.FormatTime(now.Add(delay))
+		issue.NextRetryAt = nextRetryAt
 		m.Issue = issue
 		return nil
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "record root session issue: %v\n", err)
+		nextRetryAt = "" // no issue of ours to watch
 	}
-	return waitForNextCycle(wake, stop, delay)
+	return waitOutRetry(sessionDir, wake, stop, delay, nextRetryAt)
+}
+
+// waitOutRetry waits out a retry backoff, rechecking the goal like a hold
+// does. A pause or block ends the wait, so the loop waits out the hold and
+// retries as soon as it lifts instead of finishing a backoff of up to 15
+// minutes. So does a cleared retrying issue: Pause clears it, so a pause
+// lifted between two checks still counts.
+func waitOutRetry(sessionDir string, wake, stop <-chan os.Signal, delay time.Duration, nextRetryAt string) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	recheck := time.NewTicker(holdRecheckInterval)
+	defer recheck.Stop()
+	for {
+		select {
+		case <-timer.C:
+			return false
+		case <-wake:
+			return false
+		case <-stop:
+			return true
+		case <-recheck.C:
+			m, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
+			if err != nil {
+				continue
+			}
+			if m.OnHold() || (nextRetryAt != "" && (m.Issue == nil || m.Issue.NextRetryAt != nextRetryAt)) {
+				return false
+			}
+		}
+	}
 }
 
 func stopRequested(stop <-chan os.Signal) bool {

@@ -930,9 +930,17 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	return fs.deriveSession(id, m)
 }
 
-// Pause sets the operator's pause on a root session. Agents stop while it is on.
+// Pause sets the operator's pause on a root session. Agents stop while it is
+// on, so pausing also clears a retrying issue: paused agents are not retrying,
+// and a worker waiting out a retry sees its goal changed even if the pause
+// lifts before its next check.
 func (fs *FileStore) Pause(id string, paused bool) (*Session, error) {
-	return fs.mutateRoot(id, func(m *Manifest) { m.Paused = paused })
+	return fs.mutateRoot(id, func(m *Manifest) {
+		m.Paused = paused
+		if paused && m.Issue != nil && m.Issue.Status == IssueRetrying {
+			m.Issue = nil
+		}
+	})
 }
 
 // Resume clears a blocked issue so agents work on the spec again. It leaves

@@ -289,6 +289,74 @@ func TestProviderErrorsKeepRetryingPastAnHourUntilPaused(t *testing.T) {
 	})
 }
 
+func TestResumeDuringCappedBackoffRetriesPromptly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// seen: the worker notices the pause before it lifts; otherwise the
+		// pause lifts between two of its checks.
+		seen bool
+	}{{"pause seen", true}, {"pause lifted between checks", false}} {
+		t.Run(tc.name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				sessionDir := writeWorkerManifest(t, map[string]any{
+					"session_kind": "controller",
+					"specs":        []map[string]any{{"name": "demo"}},
+				})
+				stop := make(chan os.Signal, 1)
+				starts := make(chan time.Time)
+				done := make(chan struct{})
+				go func() {
+					defer close(done)
+					_, _ = runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+						starts <- time.Now()
+						return &game.PVGResult{GameResult: game.GameFailure, Error: "agent_failure_budget_exceeded: 503: overloaded", ProviderError: "503: overloaded"}, nil
+					}, make(chan os.Signal, 1), stop)
+				}()
+				// Backoff doubles from 1s and reaches the 15 minute cap after 11 failures.
+				for range 12 {
+					<-starts
+				}
+				synctest.Wait()
+				time.Sleep(time.Minute) // over 10 minutes of capped backoff remain
+				synctest.Wait()
+				store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
+				id := filepath.Base(sessionDir)
+				if _, err := store.Pause(id, true); err != nil {
+					t.Fatal(err)
+				}
+				if tc.seen {
+					time.Sleep(2 * holdRecheckInterval)
+					synctest.Wait()
+					select {
+					case <-starts:
+						t.Fatal("a paused goal retried")
+					default:
+					}
+				}
+				if _, err := store.Pause(id, false); err != nil {
+					t.Fatal(err)
+				}
+				time.Sleep(holdRecheckInterval + time.Second)
+				synctest.Wait()
+				select {
+				case <-starts:
+				default:
+					t.Fatal("Resume left the goal waiting out its capped backoff")
+				}
+				stop <- syscall.SIGTERM
+				for { // take any attempt racing the stop
+					select {
+					case <-starts:
+						continue
+					case <-done:
+					}
+					break
+				}
+			})
+		})
+	}
+}
+
 func TestVerifierBlockHoldsRootUntilResume(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sessionDir := writeWorkerManifest(t, map[string]any{
