@@ -1,0 +1,48 @@
+{{.RolePrompt}}
+
+# Spec
+
+name: `{{.Spec.Name}}`
+version: {{.Spec.Version}}
+
+{{if .Spec.Path}}
+Source: `{{.Spec.Path}}`
+{{end}}
+
+{{.Body}}
+
+{{if .Skills}}
+## Skills
+
+Skills marked `required evaluation rubric` provide mandatory evaluation criteria.
+
+{{if .VerifyRubrics}}
+Load every required rubric and report PASS or FAIL with evidence for each.
+Any failure blocks concession.
+{{end}}
+
+{{range .Skills -}}
+- `{{.Name}}`{{if .Required}} - required evaluation rubric{{end}}
+  {{- if .Description}} - {{.Description}}{{end}}
+{{end}}
+{{end}}
+
+# Communication
+
+The transcript is the shared, append-only communication log between the generator and evaluator agents.
+
+Path: `{{.TranscriptPath}}`
+
+Use it to read and understand prior turns, checks, unresolved findings, and key handoff items before continuing.
+
+Read the most recent log items first, and consult older history when needed. Reassess earlier failures and findings against the current spec and observed state.
+
+Transcript items can contain the following types of XML entries:
+
+- <progress_update> ... </progress_update> messages which are incremental, short updates in simplified language. These updates should contain high level progress updates as pertaining to the goal specification. Avoid narrating routine implementation details.
+
+- <external_update> ... </external_update> messages are either spec updates or other runtime level updates from the end user. Read the current spec and available diff to identify required reconciliation work.
+
+Emit <progress_update> periodically (at least every 20 minutes, or when a milestone occurs in the implementation or evaluation process - whichever one is sooner) as assistant messages; do not edit the transcript yourself, the agent runtime will parse <progress_update> automatically.
+
+Include your terminal summary in a <progress_update> block in your final response. This serves as not only the user-facing report but also the handoff to the next turn.

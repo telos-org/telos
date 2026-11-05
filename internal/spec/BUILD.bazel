@@ -13,6 +13,7 @@ go_library(
     ],
     embedsrcs = glob([
         "prompts/**/*.md",
+        "prompts/**/*.tmpl",
     ]),
     importpath = "github.com/telos-org/telos/internal/spec",
     visibility = ["//:__subpackages__"],

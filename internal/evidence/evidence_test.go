@@ -138,7 +138,7 @@ func TestEvidenceLogAgent(t *testing.T) {
 	path := filepath.Join(dir, "evidence.jsonl")
 
 	ev := New("test-system", path, "sess-004", 0)
-	ev.LogAgent(1, "prover", "CONTINUE", "some logs", nil)
+	ev.LogAgent(1, "prover", "CONTINUE", map[string]interface{}{"input_tokens": 42})
 	ev.Close()
 
 	data, _ := os.ReadFile(path)
@@ -151,8 +151,11 @@ func TestEvidenceLogAgent(t *testing.T) {
 	if d["status"] != "CONTINUE" {
 		t.Errorf("status: got %v", d["status"])
 	}
-	if d["audience"] != "agent" || d["logs_tail"] != "some logs" {
+	if d["audience"] != "agent" || d["input_tokens"] != float64(42) {
 		t.Errorf("technical completion: got %v", d)
+	}
+	if _, exists := d["logs_tail"]; exists {
+		t.Fatal("completion metadata should not duplicate assistant output")
 	}
 }
 
