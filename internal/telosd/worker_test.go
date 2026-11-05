@@ -289,7 +289,7 @@ func TestProviderErrorsKeepRetryingPastAnHourUntilPaused(t *testing.T) {
 	})
 }
 
-func TestVerifierBlockHoldsRootUntilRecheck(t *testing.T) {
+func TestVerifierBlockHoldsRootUntilResume(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		sessionDir := writeWorkerManifest(t, map[string]any{
 			"session_kind": "controller",
@@ -326,7 +326,7 @@ func TestVerifierBlockHoldsRootUntilRecheck(t *testing.T) {
 			t.Fatalf("blocked root ran again: %d attempts", attempts.Load())
 		}
 		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
-		if _, err := store.Recheck(filepath.Base(sessionDir)); err != nil {
+		if _, err := store.Resume(filepath.Base(sessionDir)); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(holdRecheckInterval)

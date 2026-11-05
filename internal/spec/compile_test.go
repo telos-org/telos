@@ -445,7 +445,7 @@ func TestOnlyTheRootVerifierIsOfferedBlocked(t *testing.T) {
 	compiled, _ := CompileEnvironment(specPath)
 
 	root := RenderRootVerifierTask(compiled, "/tmp/transcript.md")
-	if !strings.Contains(root, "<status>BLOCKED</status> only if the goal spec/skills cannot be satisfied as written") ||
+	if !strings.Contains(root, "<status>BLOCKED</status> only if the goal spec/skills cannot be satisfied as written in this environment") ||
 		!strings.Contains(root, "<blocked>...</blocked>") {
 		t.Fatalf("root verifier should be able to block an unsatisfiable spec:\n%s", root)
 	}

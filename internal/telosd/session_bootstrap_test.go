@@ -59,7 +59,7 @@ func (s *fakeReconcileStore) UpdateSpec(string, sessionapi.SessionSpecUpdateRequ
 func (s *fakeReconcileStore) Pause(string, bool) (*sessionapi.Session, error) {
 	return nil, sessionapi.ErrNotFound
 }
-func (s *fakeReconcileStore) Recheck(string) (*sessionapi.Session, error) {
+func (s *fakeReconcileStore) Resume(string) (*sessionapi.Session, error) {
 	return nil, sessionapi.ErrNotFound
 }
 func (s *fakeReconcileStore) Get(string) (*sessionapi.Session, error) {

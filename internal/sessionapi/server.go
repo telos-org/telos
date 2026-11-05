@@ -23,7 +23,7 @@ const maxSessionRequestBytes = 4 << 20
 //	PUT  /api/sessions/{name}/spec
 //	POST /api/sessions/{id}/stop
 //	PUT  /api/sessions/{id}/pause
-//	POST /api/sessions/{id}/recheck
+//	POST /api/sessions/{id}/resume
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
 //	GET  /api/healthz
@@ -41,7 +41,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("PUT /api/sessions/{name}/spec", h.updateSpec)
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("PUT /api/sessions/{id}/pause", h.pauseSession)
-	mux.HandleFunc("POST /api/sessions/{id}/recheck", h.recheckSession)
+	mux.HandleFunc("POST /api/sessions/{id}/resume", h.resumeSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
 }
@@ -266,12 +266,13 @@ func (h *handler) pauseSession(w http.ResponseWriter, r *http.Request) {
 	h.writeRootMutation(w, func() (*Session, error) { return h.store.Pause(id, *req.Paused) })
 }
 
-func (h *handler) recheckSession(w http.ResponseWriter, r *http.Request) {
+// resumeSession clears a block. Turning a pause off is PUT .../pause.
+func (h *handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionPauseSession, SessionID: id}); !ok {
 		return
 	}
-	h.writeRootMutation(w, func() (*Session, error) { return h.store.Recheck(id) })
+	h.writeRootMutation(w, func() (*Session, error) { return h.store.Resume(id) })
 }
 
 func (h *handler) writeRootMutation(w http.ResponseWriter, mutate func() (*Session, error)) {

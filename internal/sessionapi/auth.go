@@ -44,7 +44,7 @@ const (
 	ActionListSessions      AccessAction = "list_sessions"
 	ActionReadSession       AccessAction = "read_session"
 	ActionStopSession       AccessAction = "stop_session"
-	// ActionPauseSession pauses agents or rechecks a blocked spec. Only the
+	// ActionPauseSession pauses agents or resumes a blocked goal. Only the
 	// operator may, so an agent's own token can never lift its pause or block.
 	ActionPauseSession AccessAction = "pause_session"
 )

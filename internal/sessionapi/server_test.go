@@ -2967,7 +2967,7 @@ func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-func TestPauseAndRecheckRootSession(t *testing.T) {
+func TestPauseAndResumeRootSession(t *testing.T) {
 	srv, store := newBearerTestServer(t, "operator-token")
 	defer srv.Close()
 	root, rootToken := writeAuthorizedSession(t, store.Root, "sess_root", sessionapi.KindController, nil)
@@ -2994,7 +2994,7 @@ func TestPauseAndRecheckRootSession(t *testing.T) {
 
 	for _, tc := range []struct{ method, path, body, token string }{
 		{"PUT", "/api/sessions/sess_root/pause", `{"paused":false}`, rootToken},
-		{"POST", "/api/sessions/sess_root/recheck", "", rootToken},
+		{"POST", "/api/sessions/sess_root/resume", "", rootToken},
 	} {
 		if code, _ := call(tc.method, tc.path, tc.body, tc.token); code != http.StatusForbidden {
 			t.Fatalf("agent token %s %s = %d, want 403", tc.method, tc.path, code)
@@ -3006,14 +3006,14 @@ func TestPauseAndRecheckRootSession(t *testing.T) {
 	if code, _ := call("PUT", "/api/sessions/"+child.SessionID+"/pause", `{"paused":true}`, "operator-token"); code != http.StatusBadRequest {
 		t.Fatalf("child pause = %d, want 400", code)
 	}
-	if code, _ := call("POST", "/api/sessions/sess_missing/recheck", "", "operator-token"); code != http.StatusNotFound {
-		t.Fatalf("missing recheck = %d, want 404", code)
+	if code, _ := call("POST", "/api/sessions/sess_missing/resume", "", "operator-token"); code != http.StatusNotFound {
+		t.Fatalf("missing resume = %d, want 404", code)
 	}
 	if code, session := call("PUT", "/api/sessions/sess_root/pause", `{"paused":true}`, "operator-token"); code != http.StatusOK || !session.Paused || session.Issue == nil {
 		t.Fatalf("pause = %d %+v", code, session)
 	}
-	if code, session := call("POST", "/api/sessions/sess_root/recheck", "", "operator-token"); code != http.StatusOK || !session.Paused || session.Issue != nil {
-		t.Fatalf("recheck must clear the block and leave the pause = %d %+v", code, session)
+	if code, session := call("POST", "/api/sessions/sess_root/resume", "", "operator-token"); code != http.StatusOK || !session.Paused || session.Issue != nil {
+		t.Fatalf("resume must clear the block and leave the pause = %d %+v", code, session)
 	}
 
 	var list sessionapi.SessionListResponse

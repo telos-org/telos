@@ -112,7 +112,7 @@ func (m *Manifest) Accepted() bool {
 	return r != nil && r.State == ReconciliationAccepted
 }
 
-// Blocked reports a block, which only Recheck or a new spec version clears.
+// Blocked reports a block, which only Resume or a new spec version clears.
 func (i *Issue) Blocked() bool {
 	return i != nil && i.Status == IssueBlocked
 }

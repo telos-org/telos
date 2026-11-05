@@ -69,7 +69,7 @@ type Store interface {
 	Get(id string) (*Session, error)
 	Stop(id string) (*Session, error)
 	Pause(id string, paused bool) (*Session, error)
-	Recheck(id string) (*Session, error)
+	Resume(id string) (*Session, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
 }
@@ -935,8 +935,10 @@ func (fs *FileStore) Pause(id string, paused bool) (*Session, error) {
 	return fs.mutateRoot(id, func(m *Manifest) { m.Paused = paused })
 }
 
-// Recheck clears a blocked issue so agents check the spec again.
-func (fs *FileStore) Recheck(id string) (*Session, error) {
+// Resume clears a blocked issue so agents work on the spec again. It leaves
+// the pause alone: PUT .../pause owns that, so an account hold Cloud keeps on
+// survives a Resume.
+func (fs *FileStore) Resume(id string) (*Session, error) {
 	return fs.mutateRoot(id, func(m *Manifest) {
 		if m.Issue.Blocked() {
 			m.Issue = nil
@@ -952,7 +954,7 @@ func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest)) (*Session, er
 	}
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
 		if !isTopLevelManifest(m) || m.SessionKind != KindController {
-			return fmt.Errorf("only root sessions can be paused or rechecked: %w", ErrInvalidSession)
+			return fmt.Errorf("only root sessions can be paused or resumed: %w", ErrInvalidSession)
 		}
 		mutate(m)
 		return nil
