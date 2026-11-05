@@ -98,22 +98,20 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		}
 	}
 
+	// Every failure is retried, except a timeout: a provider's error is the
+	// provider's to fix, so the goal keeps retrying rather than stopping.
 	var failure, diagnostics string
-	recoverable := true
 	stderrTrimmed := strings.TrimSpace(result.Stderr)
 	switch {
 	case result.InfraError != "":
 		failure = result.InfraError
-		recoverable = !result.TimedOut && recoverableAgentFailure(failure)
 	case result.ReturnCode != 0:
 		failure = orDefault(agentError, fmt.Sprintf("pi_failed:%d", result.ReturnCode))
 		if agentError == "" && stderrTrimmed != "" {
 			failure = fmt.Sprintf("%s\n[stderr]\n%s", failure, stderrTrimmed)
 		}
-		recoverable = recoverableAgentFailure(failure)
 	case agentError != "":
 		failure = agentError
-		recoverable = recoverableAgentFailure(failure)
 	case sessionError != "":
 		failure = sessionError
 	case strings.TrimSpace(logs) == "":
@@ -132,12 +130,13 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 			diagnostics = failure
 		}
 		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        diagnostics,
-			Stats:       stats,
-			Error:       failure,
-			Recoverable: recoverable,
+			Role:          role,
+			Status:        game.StatusContinue,
+			Logs:          diagnostics,
+			Stats:         stats,
+			Error:         failure,
+			Recoverable:   !result.TimedOut,
+			ProviderError: result.InfraError == "" && agentError != "",
 		}
 	}
 
@@ -147,11 +146,6 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		Logs:   logs,
 		Stats:  stats,
 	}
-}
-
-func recoverableAgentFailure(errorText string) bool {
-	_, blocked := game.AgentFailureBlocker(errorText)
-	return !blocked
 }
 
 type piLiveProjector struct {

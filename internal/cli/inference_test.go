@@ -132,73 +132,6 @@ func TestChildTurnFollowsRootConnectionSwitch(t *testing.T) {
 	}
 }
 
-func TestTurnFailureAfterSettingsChangeIsRetryable(t *testing.T) {
-	dir, home := t.TempDir(), t.TempDir()
-	path := writeInferenceManifest(t, dir)
-	next := filepath.Join(home, "next.json")
-	bin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	// Cloud switches the connection while this turn runs; the old key is gone.
-	script := "#!/bin/sh\n[ -f " + next + " ] && mv " + next + " " + path + "\necho '401 Unauthorized: invalid api key' >&2\nexit 1\n"
-	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	p := platform.NewLocalPlatform(dir)
-	p.Env = map[string]string{"HOME": home}
-	e := &sessionInferenceExecutor{PiExecutor: executor.NewPiExecutor(p, "turn-a/probe-a", "medium", 5), sessionDir: dir}
-	if result := e.ExecuteTurn("do it", "prover", nil); result.Recoverable || !strings.Contains(result.Error, "invalid api key") {
-		t.Fatalf("an invalid key without a settings change must block: %+v", result)
-	}
-	m, err := sessionapi.ReadManifest(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.Config.InferenceGeneration = 1
-	if err := sessionapi.WriteManifest(next, m); err != nil {
-		t.Fatal(err)
-	}
-	result := e.ExecuteTurn("do it", "prover", nil)
-	if _, blocked := game.AgentFailureBlocker(result.Error); blocked || !result.Recoverable {
-		t.Fatalf("a failure after a settings change should retry: %+v", result)
-	}
-}
-
-func TestInferenceSwitchPreservesTimeoutDiagnostics(t *testing.T) {
-	dir, home := t.TempDir(), t.TempDir()
-	path := writeInferenceManifest(t, dir)
-	next := filepath.Join(home, "next.json")
-	m, err := sessionapi.ReadManifest(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	m.Config.InferenceGeneration++
-	if err := sessionapi.WriteManifest(next, m); err != nil {
-		t.Fatal(err)
-	}
-	bin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(bin, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	script := "#!/bin/sh\nmv \"$TELOS_TEST_NEXT\" \"$TELOS_TEST_MANIFEST\"\nprintf 'PI_STARTUP_DIAGNOSTIC\\n' >&2\nsleep 5\n"
-	if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	p := platform.NewLocalPlatform(dir)
-	p.Env = map[string]string{"HOME": home, "TELOS_TEST_NEXT": next, "TELOS_TEST_MANIFEST": path}
-	e := &sessionInferenceExecutor{PiExecutor: executor.NewPiExecutor(p, "turn-a/probe-a", "medium", 1), sessionDir: dir}
-	result := e.ExecuteTurn("do it", "prover", nil)
-	if result.Error != "inference settings changed during the turn" || !result.Recoverable {
-		t.Fatalf("settings change must remain retryable: %+v", result)
-	}
-	for _, detail := range []string{"local_timeout:1", "PI_STARTUP_DIAGNOSTIC"} {
-		if strings.Count(result.Logs, detail) != 1 {
-			t.Fatalf("original diagnostic %q must survive once: %s", detail, result.Logs)
-		}
-	}
-}
-
 func TestInferenceRealPiNextTurn(t *testing.T) {
 	for _, binaryEnv := range []string{"TELOS_TEST_PI_BINARY", "TELOS_TEST_LEGACY_PI_BINARY"} {
 		t.Run(binaryEnv, func(t *testing.T) {
@@ -295,5 +228,44 @@ func TestInferenceRealPiNextTurn(t *testing.T) {
 				t.Fatalf("next turn did not use the new settings and definition: %s", next)
 			}
 		})
+	}
+}
+
+func TestRootHoldStopsChildAgentsAndTurnSuccessEndsRetrying(t *testing.T) {
+	sessions := t.TempDir()
+	rootPath := writeInferenceManifest(t, filepath.Join(sessions, "root"))
+	parent := "root"
+	childDir := filepath.Join(sessions, "child")
+	if err := sessionapi.WriteManifest(manifestPath(childDir), &sessionapi.Manifest{
+		SessionID: "child", SessionKind: sessionapi.KindTask, ParentSessionID: &parent,
+		DesiredStatus: sessionapi.DesiredStatusRunning,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	setRoot := func(mutate func(*sessionapi.Manifest)) {
+		t.Helper()
+		if _, err := sessionapi.MutateManifest(rootPath, func(m *sessionapi.Manifest) error { mutate(m); return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	retrying := &sessionapi.Issue{Status: sessionapi.IssueRetrying, Reason: sessionapi.ReasonInternalError}
+	setRoot(func(m *sessionapi.Manifest) { m.Issue = retrying })
+	if agentsShouldStop(childDir) {
+		t.Fatal("a retrying issue must not stop agents")
+	}
+	ClearRetryingIssue(childDir)
+	if m, _ := sessionapi.ReadManifest(rootPath); m.Issue != nil {
+		t.Fatalf("turn success left the retrying issue: %+v", m.Issue)
+	}
+	setRoot(func(m *sessionapi.Manifest) {
+		m.Issue = &sessionapi.Issue{Status: sessionapi.IssueBlocked, Reason: sessionapi.ReasonSpecUnsatisfiable}
+	})
+	ClearRetryingIssue(childDir)
+	if !agentsShouldStop(childDir) {
+		t.Fatal("a blocked root must stop its children, and turn success must not clear a block")
+	}
+	setRoot(func(m *sessionapi.Manifest) { m.Issue, m.Paused = nil, true })
+	if !agentsShouldStop(childDir) {
+		t.Fatal("a paused root must stop its children")
 	}
 }

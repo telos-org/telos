@@ -68,6 +68,8 @@ type Store interface {
 	List() ([]Session, error)
 	Get(id string) (*Session, error)
 	Stop(id string) (*Session, error)
+	Pause(id string, paused bool) (*Session, error)
+	Resume(id string) (*Session, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
 }
@@ -693,6 +695,9 @@ func (fs *FileStore) updateSpecByIDLocked(id string, req SessionSpecUpdateReques
 		})
 		m.CurrentSpecVersion = &currentVersion
 		m.CurrentRevision = strPtr(metadata.Version)
+		if m.Issue.Blocked() {
+			m.Issue = nil
+		}
 		m.SpecVersions = append(m.SpecVersions, versionEntry)
 		m.PackageDigest = prepared.PackageDigest
 		m.ApplyPackageLock = prepared.ApplyPackageLock
@@ -925,6 +930,49 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 	return fs.deriveSession(id, m)
 }
 
+// Pause sets the operator's pause on a root session. Agents stop while it is
+// on, so pausing also clears a retrying issue: paused agents are not retrying,
+// and a worker waiting out a retry sees its goal changed even if the pause
+// lifts before its next check.
+func (fs *FileStore) Pause(id string, paused bool) (*Session, error) {
+	return fs.mutateRoot(id, func(m *Manifest) {
+		m.Paused = paused
+		if paused && m.Issue != nil && m.Issue.Status == IssueRetrying {
+			m.Issue = nil
+		}
+	})
+}
+
+// Resume clears a blocked issue so agents work on the spec again. It leaves
+// the pause alone: PUT .../pause owns that, so an account hold Cloud keeps on
+// survives a Resume.
+func (fs *FileStore) Resume(id string) (*Session, error) {
+	return fs.mutateRoot(id, func(m *Manifest) {
+		if m.Issue.Blocked() {
+			m.Issue = nil
+		}
+	})
+}
+
+func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest)) (*Session, error) {
+	fs.mu.Lock()
+	defer fs.mu.Unlock()
+	if !fileExists(fs.manifestPath(id)) {
+		return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+	}
+	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
+		if !isTopLevelManifest(m) || m.SessionKind != KindController {
+			return fmt.Errorf("only root sessions can be paused or resumed: %w", ErrInvalidSession)
+		}
+		mutate(m)
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return fs.deriveSession(id, m)
+}
+
 // Transcript returns the session transcript markdown for the first spec.
 func (fs *FileStore) Transcript(id string) (string, error) {
 	fs.mu.Lock()
@@ -1091,6 +1139,8 @@ func (fs *FileStore) deriveSessionWithEvidence(id string, m *Manifest, includeEv
 		SpecVersions:          cloneSpecVersions(m.SpecVersions),
 		VisibleEvents:         true,
 		Reconciliation:        deriveReconciliation(m),
+		Issue:                 m.Issue,
+		Paused:                m.Paused,
 	}
 
 	if s.Config == nil {
@@ -1174,6 +1224,9 @@ func deriveReconciliation(m *Manifest) *SessionReconciliation {
 		}
 		if epoch.FinishedAt == nil || epoch.Result == nil {
 			return reconciliation
+		}
+		if *epoch.Result == EpochHeld {
+			continue // a hold interrupted the check; the one before still stands
 		}
 		if *epoch.Result == "completed" &&
 			ptrOr(epoch.CompletionReason, "") == "verifier_conceded" &&

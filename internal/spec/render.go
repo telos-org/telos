@@ -22,6 +22,7 @@ type taskPromptData struct {
 	Skills         []taskPromptSkill
 	TranscriptPath string
 	VerifyRubrics  bool
+	CanBlock       bool
 }
 
 type taskPromptSkill struct {
@@ -32,6 +33,16 @@ type taskPromptSkill struct {
 
 // RenderTask builds the complete task prompt for one agent role.
 func RenderTask(role Role, compiled *CompiledEnvironment, transcriptPath string) string {
+	return renderTask(role, compiled, transcriptPath, false)
+}
+
+// RenderRootVerifierTask builds the verifier prompt for a goal's root
+// session, the only verifier that may report the spec cannot be satisfied.
+func RenderRootVerifierTask(compiled *CompiledEnvironment, transcriptPath string) string {
+	return renderTask(RoleVerifier, compiled, transcriptPath, true)
+}
+
+func renderTask(role Role, compiled *CompiledEnvironment, transcriptPath string, canBlock bool) string {
 	rolePrompt, err := ReadPrompt(role + ".md")
 	if err != nil {
 		panic(err)
@@ -42,6 +53,7 @@ func RenderTask(role Role, compiled *CompiledEnvironment, transcriptPath string)
 		Body:           compiled.SpecText,
 		TranscriptPath: strings.TrimSpace(transcriptPath),
 		VerifyRubrics:  role == RoleVerifier && len(compiled.RequiredVerifierSkills) > 0,
+		CanBlock:       canBlock,
 	}
 	requiredNames := map[string]bool{}
 	for _, skill := range compiled.RequiredVerifierSkills {

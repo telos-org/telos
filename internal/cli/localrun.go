@@ -211,9 +211,14 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 		MaxCostUSD:    cfg.MaxCostUSD,
 		Verbose:       true,
 		EpochID:       epochID,
-		StopRequested: func() bool { return sessionStopped(sessionDir) },
+		StopRequested: func() bool { return agentsShouldStop(sessionDir) },
 	}
-
+	if manifest.SessionKind == sessionapi.KindController {
+		// Only the root's verifier judges the goal's spec, and only the root's
+		// own turns show that what it retries works again.
+		pvgCfg.RecordBlock = func(message string) string { return recordBlock(sessionDir, epochID, message) }
+		pvgCfg.OnTurnSucceeded = func() { ClearRetryingIssue(sessionDir) }
+	}
 	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)
 	result := pvg.Run()
 
@@ -424,15 +429,20 @@ func finishEpoch(sessionDir string, epochID int, result *game.PVGResult) error {
 			if result.Error != "" {
 				epoch.Error = &result.Error
 			}
+		case game.GameBlocked:
+			blocked := "blocked"
+			epoch.Result = &blocked
+			epoch.Error = &result.BlockedMessage
 		case game.GameStopped:
-			stopped := "stopped"
+			stopped, reason := "stopped", "stopped by operator"
+			if !manifest.IsStopped() {
+				stopped, reason = sessionapi.EpochHeld, "agents held"
+			}
 			epoch.Result = &stopped
 			if result.Error != "" {
-				epoch.Error = &result.Error
-			} else {
-				err := "stopped by operator"
-				epoch.Error = &err
+				reason = result.Error
 			}
+			epoch.Error = &reason
 		}
 		return nil
 	})
@@ -475,6 +485,52 @@ func sessionStopped(sessionDir string) bool {
 		return false
 	}
 	return manifest.IsStopped()
+}
+
+// ClearRetryingIssue ends the root's retrying issue: an agent turn succeeded,
+// or agents stopped for a hold.
+func ClearRetryingIssue(sessionDir string) {
+	root, rootDir := sessionapi.ReadRootManifest(sessionDir)
+	if root == nil || root.Issue == nil || root.Issue.Status != sessionapi.IssueRetrying {
+		return
+	}
+	_, _ = sessionapi.MutateManifest(manifestPath(rootDir), func(m *sessionapi.Manifest) error {
+		if m.Issue != nil && m.Issue.Status == sessionapi.IssueRetrying {
+			m.Issue = nil
+		}
+		return nil
+	})
+}
+
+// recordBlock sets a blocked issue on the root and returns its reason, unless
+// the epoch checked a spec other than the current one: a block of a replaced
+// spec would outlive the new one.
+func recordBlock(sessionDir string, epochID int, message string) string {
+	recorded := false
+	_, err := sessionapi.MutateManifest(manifestPath(sessionDir), func(m *sessionapi.Manifest) error {
+		for _, epoch := range m.Epochs {
+			if epoch.ID == epochID && equalPtr(epoch.SpecVersion, m.CurrentSpecVersion) && equalPtr(epoch.PackageDigest, m.PackageDigest) {
+				m.Issue = sessionapi.NewIssue(sessionapi.IssueBlocked, sessionapi.ReasonSpecUnsatisfiable, message, time.Now())
+				recorded = true
+			}
+		}
+		return nil
+	})
+	if err != nil || !recorded {
+		return ""
+	}
+	return sessionapi.ReasonSpecUnsatisfiable
+}
+
+func equalPtr[T comparable](a, b *T) bool {
+	return (a == nil) == (b == nil) && (a == nil || *a == *b)
+}
+
+// agentsShouldStop reports an operator stop of this session, or a hold on
+// its root that stops every agent in the goal.
+func agentsShouldStop(sessionDir string) bool {
+	root, _ := sessionapi.ReadRootManifest(sessionDir)
+	return sessionStopped(sessionDir) || root.OnHold()
 }
 
 func currentManifest(sessionDir string, fallback *sessionapi.Manifest) *sessionapi.Manifest {

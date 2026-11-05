@@ -438,6 +438,24 @@ func TestRenderVerifierUsesStatusContract(t *testing.T) {
 	}
 }
 
+func TestOnlyTheRootVerifierIsOfferedBlocked(t *testing.T) {
+	dir := t.TempDir()
+	specPath := filepath.Join(dir, "SPEC.md")
+	os.WriteFile(specPath, []byte("---\nversion: 0.1.0\nname: blocked\nplatform: local\n---\nBody"), 0o644)
+	compiled, _ := CompileEnvironment(specPath)
+
+	root := RenderRootVerifierTask(compiled, "/tmp/transcript.md")
+	if !strings.Contains(root, "<status>BLOCKED</status> only if the goal spec/skills cannot be satisfied as written in this environment") ||
+		!strings.Contains(root, "<blocked>...</blocked>") {
+		t.Fatalf("root verifier should be able to block an unsatisfiable spec:\n%s", root)
+	}
+	for _, role := range []Role{RoleVerifier, RoleProver} {
+		if task := RenderTask(role, compiled, "/tmp/transcript.md"); strings.Contains(task, "BLOCKED") {
+			t.Fatalf("%s must not be offered BLOCKED:\n%s", role, task)
+		}
+	}
+}
+
 func TestRenderDoesNotInjectSessionMetadata(t *testing.T) {
 	dir := t.TempDir()
 	specPath := filepath.Join(dir, "SPEC.md")

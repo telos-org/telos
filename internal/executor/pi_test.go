@@ -82,9 +82,6 @@ func TestPiStartupExtensionFailsTurnWithMessage(t *testing.T) {
 	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 78 || strings.Contains(string(output), "PROMPT_SENT") || !strings.Contains(string(output), "Telos could not register Pi model provider/model") {
 		t.Fatalf("startup failure was not reported: %s, %v", output, err)
 	}
-	if code, _ := game.AgentFailureBlocker(string(output)); code != "agent_configuration_invalid" {
-		t.Fatalf("rejected settings should wait for new ones, got %q", code)
-	}
 }
 
 func TestPiProgressPreservesReportAndFinalStatus(t *testing.T) {
@@ -131,27 +128,6 @@ func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	}
 	if exec.Thinking != "medium" {
 		t.Fatalf("thinking: got %q", exec.Thinking)
-	}
-}
-
-func TestRecoverableAgentFailureRejectsProviderBlockers(t *testing.T) {
-	for _, errorText := range []string{
-		"403: inactive virtual key",
-		"request failed (HTTP 401)",
-		"400: Your credit balance is too low to access the Anthropic API",
-		"429: insufficient_quota",
-	} {
-		if recoverableAgentFailure(errorText) {
-			t.Fatalf("provider blocker marked recoverable: %q", errorText)
-		}
-	}
-	for _, errorText := range []string{
-		"429: provider at capacity",
-		"502: no healthy upstream",
-	} {
-		if !recoverableAgentFailure(errorText) {
-			t.Fatalf("transient error marked non-recoverable: %q", errorText)
-		}
 	}
 }
 
@@ -260,8 +236,8 @@ func TestExecuteTurnPreservesFailureStderr(t *testing.T) {
 		recoverable              bool
 	}{
 		{"missing session", "", "pi_session_unavailable:", 0, true},
-		{"structured error", structuredError, "401: test authentication failure", 0, false},
-		{"structured error and crash", structuredError, "401: test authentication failure", 1, false},
+		{"structured error", structuredError, "401: test authentication failure", 0, true},
+		{"structured error and crash", structuredError, "401: test authentication failure", 1, true},
 		{"provider error with partial verdict", providerError, "overloaded_error: try again", 0, true},
 		{"empty report", emptyReport, "agent_no_output", 0, true},
 	} {

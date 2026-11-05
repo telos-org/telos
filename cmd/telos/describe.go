@@ -1,10 +1,12 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -35,13 +37,7 @@ func cmdDescribe(args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		describeCloudGoal(
-			cloudSession,
-			contextName,
-			contextOverride,
-			followUpContextName(contextOverride, contextName),
-			*jsonOut,
-		)
+		describeCloudGoal(cloudSession, contextName, contextOverride, *jsonOut)
 		return
 	}
 
@@ -62,7 +58,7 @@ func cmdDescribe(args []string) {
 		os.Exit(1)
 	}
 	if found {
-		describeCloudGoal(cloudSession, contextName, "", "", *jsonOut)
+		describeCloudGoal(cloudSession, contextName, "", *jsonOut)
 		return
 	}
 
@@ -74,7 +70,6 @@ func describeCloudGoal(
 	session *cloud.SessionRecord,
 	contextName string,
 	contextOverride string,
-	followUp string,
 	jsonOut bool,
 ) {
 	var control *cloud.Client
@@ -91,11 +86,11 @@ func describeCloudGoal(
 		printCloudSessionJSON(session, contextName, cost)
 		return
 	}
-	printCloudSessionDescriptionForContext(os.Stdout, *session, contextName, cost, followUp)
+	printCloudSessionDescriptionForContext(os.Stdout, *session, contextName, cost)
 }
 
 // cloudSessionJSON is a Cloud Goal as describe and list print it. Callers
-// read status and status_reason; the raw lifecycle state is left out.
+// read status, reason and message; the raw lifecycle state is left out.
 type cloudSessionJSON struct {
 	*cloud.SessionRecord
 	// State and Billing stay nil so they hide the record's raw state and
@@ -147,17 +142,14 @@ func getCloudSessionForContext(
 }
 
 func printCloudSessionDescription(out io.Writer, session cloud.SessionRecord) {
-	printCloudSessionDescriptionForContext(out, session, "", nil, "")
+	printCloudSessionDescriptionForContext(out, session, "", nil)
 }
 
-// printCloudSessionDescriptionForContext names followUp in suggested commands
-// when the saved context would select another one.
 func printCloudSessionDescriptionForContext(
 	out io.Writer,
 	session cloud.SessionRecord,
 	contextName string,
 	cost *goalCost,
-	followUp string,
 ) {
 	printSummaryField(out, "Name", session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(session))
@@ -171,25 +163,40 @@ func printCloudSessionDescriptionForContext(
 		printSummaryField(out, "Service", strings.TrimSpace(*session.ServiceURL))
 	}
 	printGoalCost(out, cost)
-	if reason := cloudSessionReason(session); reason != "" {
-		printSummaryField(out, "Reason", reason)
+	if session.Reason != "" {
+		printSummaryField(out, "Reason", session.Reason)
 	}
-	if cloudSessionDisplayStatus(session) == "needs_attention" {
-		printSummaryField(out, "Next", needsAttentionNextStep(session.ID, followUp))
+	if message := cmp.Or(session.Message, session.StatusReason); message != "" {
+		printSummaryField(out, "Message", message)
+	}
+	if at, err := time.Parse(time.RFC3339, session.LastRetryAt); err == nil {
+		printSummaryField(out, "Last retry", formatRelative(time.Since(at))+" ago")
+	}
+	if at, err := time.Parse(time.RFC3339, session.NextRetryAt); err == nil {
+		printSummaryField(out, "Next retry", "in "+formatRelative(time.Until(at)))
 	}
 }
 
-// needsAttentionNextStep tells the owner of a Goal that needs attention how
-// to move it forward.
-func needsAttentionNextStep(goalID, followUp string) string {
-	contextFlag := ""
-	if followUp != "" {
-		contextFlag = " --context " + followUp
+// formatRelative renders a duration the way people say it: 45s, 3m, 2h.
+func formatRelative(d time.Duration) string {
+	switch d = max(d, 0); {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	default:
+		return fmt.Sprintf("%dh", int(d.Hours()))
 	}
-	return fmt.Sprintf(
-		"Fix the spec, then: telos apply SPEC.md --goal %s%s, or telos delete %s%s",
-		goalID, contextFlag, goalID, contextFlag,
-	)
+}
+
+// cloudSessionStatusCell is the STATUS column of telos list: the status, and
+// its reason when it adds something, e.g. "blocked (CREDITS_EXHAUSTED)".
+func cloudSessionStatusCell(session cloud.SessionRecord) string {
+	status := cloudSessionDisplayStatus(session)
+	if session.Reason == "" || strings.EqualFold(session.Reason, status) {
+		return status
+	}
+	return fmt.Sprintf("%s (%s)", status, session.Reason)
 }
 
 func cloudSessionDisplayStatus(session cloud.SessionRecord) string {
@@ -207,18 +214,6 @@ func shortRevision(digest string) string {
 		return digest
 	}
 	return "sha256:" + hex[:12]
-}
-
-func cloudSessionReason(session cloud.SessionRecord) string {
-	if session.FailureReason != nil && strings.TrimSpace(*session.FailureReason) != "" {
-		return strings.TrimSpace(*session.FailureReason)
-	}
-	switch strings.ToLower(strings.TrimSpace(cloudSessionDisplayStatus(session))) {
-	case "needs_attention", "needs attention", "failed", "stopped":
-		return strings.TrimSpace(session.StatusReason)
-	default:
-		return ""
-	}
 }
 
 // cloudSessionModel names a Goal's model the way --model selects it:

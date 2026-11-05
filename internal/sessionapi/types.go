@@ -357,6 +357,14 @@ type Session struct {
 	VisibleEvents bool `json:"visible_events,omitempty"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
+	Issue          *Issue                 `json:"issue,omitempty"`
+	// Paused is always sent, so callers can tell runtimes that support pausing.
+	Paused bool `json:"paused"`
+}
+
+// SessionPauseRequest is the body of PUT /api/sessions/{id}/pause.
+type SessionPauseRequest struct {
+	Paused *bool `json:"paused"`
 }
 
 // --------- Response types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -381,6 +389,9 @@ type SessionListItem struct {
 	VisibleEvents      bool           `json:"visible_events,omitempty"`
 
 	Reconciliation *SessionReconciliation `json:"reconciliation,omitempty"`
+	Issue          *Issue                 `json:"issue,omitempty"`
+	// Paused is always sent, so callers can tell runtimes that support pausing.
+	Paused bool `json:"paused"`
 }
 
 // SessionListResponse wraps GET /api/sessions.
@@ -417,6 +428,8 @@ func SessionListItemFromSession(session Session) SessionListItem {
 		CurrentSpecVersion: session.CurrentSpecVersion,
 		VisibleEvents:      session.VisibleEvents,
 		Reconciliation:     session.Reconciliation,
+		Issue:              session.Issue,
+		Paused:             session.Paused,
 	}
 }
 
@@ -440,6 +453,8 @@ func (item SessionListItem) AsSession() Session {
 		CurrentSpecVersion: item.CurrentSpecVersion,
 		VisibleEvents:      item.VisibleEvents,
 		Reconciliation:     item.Reconciliation,
+		Issue:              item.Issue,
+		Paused:             item.Paused,
 	}
 }
 

@@ -295,6 +295,16 @@ func TestPrintRenderedLogRowIndentsMultilineDetails(t *testing.T) {
 	}
 }
 
+func TestVerifierBlockReadsAsBlockedWithItsSentence(t *testing.T) {
+	row, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
+		Event: "goal_blocked",
+		Data:  map[string]any{"audience": "user", "reason": "SPEC_UNSATISFIABLE", "message": "Drop one of the two rules."},
+	})
+	if !visible || row.Level != "ERROR" || row.Summary != "Blocked" || row.Detail != "Drop one of the two rules." {
+		t.Fatalf("row = %#v visible=%v", row, visible)
+	}
+}
+
 func TestRetryActivityDoesNotRequireRawDiagnostics(t *testing.T) {
 	row, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
 		Event: "agent_failure_recoverable",

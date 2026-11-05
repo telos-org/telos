@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/telos-org/telos/internal/spec"
 )
@@ -35,6 +37,89 @@ type Manifest struct {
 	Runner                   *Runner                    `json:"runner,omitempty"`
 	Specs                    []ManifestSpec             `json:"specs"`
 	Epochs                   []Epoch                    `json:"epochs"`
+	// Issue is the root session's current problem. Paused is set only by the
+	// operator (Cloud). Agents stop while either holds them; see OnHold.
+	Issue  *Issue `json:"issue,omitempty"`
+	Paused bool   `json:"paused,omitempty"`
+}
+
+// IssueStatus says whether an Issue stops agents (blocked) or not (retrying).
+type IssueStatus string
+
+const (
+	IssueBlocked  IssueStatus = "blocked"
+	IssueRetrying IssueStatus = "retrying"
+)
+
+const (
+	ReasonSpecUnsatisfiable      = "SPEC_UNSATISFIABLE"
+	ReasonInferenceProviderError = "INFERENCE_PROVIDER_ERROR"
+	ReasonInternalError          = "INTERNAL_ERROR"
+)
+
+const issueMessageMaxRunes = 280
+
+// NewIssue starts an issue now, with message whitespace collapsed and cut to
+// 280 characters.
+func NewIssue(status IssueStatus, reason, message string, now time.Time) *Issue {
+	text := []rune(strings.Join(strings.Fields(message), " "))
+	if len(text) > issueMessageMaxRunes {
+		text = append(text[:issueMessageMaxRunes-1], '…')
+	}
+	return &Issue{Status: status, Reason: reason, Message: string(text), Since: FormatTime(now)}
+}
+
+// FormatTime renders t the way manifests store timestamps.
+func FormatTime(t time.Time) string {
+	return t.UTC().Format("2006-01-02T15:04:05.000Z")
+}
+
+// Issue is a problem the runtime found. LastRetryAt and NextRetryAt are set
+// only while retrying.
+type Issue struct {
+	Status      IssueStatus `json:"status"`
+	Reason      string      `json:"reason"`
+	Message     string      `json:"message"`
+	Since       string      `json:"since"`
+	LastRetryAt string      `json:"last_retry_at,omitempty"`
+	NextRetryAt string      `json:"next_retry_at,omitempty"`
+}
+
+// ReadRootManifest follows parent links from sessionDir to the root session
+// and returns its manifest and directory, or nil when the lineage is unreadable.
+func ReadRootManifest(sessionDir string) (*Manifest, string) {
+	m, err := ReadManifest(filepath.Join(sessionDir, "session.json"))
+	for depth := 0; err == nil && m.ParentSessionID != nil && *m.ParentSessionID != ""; depth++ {
+		id := *m.ParentSessionID
+		if depth == 64 || !filepath.IsLocal(id) || filepath.Base(id) != id {
+			return nil, ""
+		}
+		sessionDir = filepath.Join(filepath.Dir(sessionDir), id)
+		m, err = ReadManifest(filepath.Join(sessionDir, "session.json"))
+	}
+	if err != nil {
+		return nil, ""
+	}
+	return m, sessionDir
+}
+
+// EpochHeld is the result of an epoch whose agents a hold stopped.
+const EpochHeld = "held"
+
+// Accepted reports whether the verifier accepted the current spec.
+func (m *Manifest) Accepted() bool {
+	r := deriveReconciliation(m)
+	return r != nil && r.State == ReconciliationAccepted
+}
+
+// Blocked reports a block, which only Resume or a new spec version clears.
+func (i *Issue) Blocked() bool {
+	return i != nil && i.Status == IssueBlocked
+}
+
+// OnHold reports whether agents must stop: a blocked issue or Cloud's hold.
+func (m *Manifest) OnHold() bool {
+	return m != nil && (m.Paused || m.Issue.Blocked())
 }
 
 type Workspace struct {

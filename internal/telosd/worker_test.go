@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/telos-org/telos/internal/game"
+	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func TestWorkerIntervalReadsSessionManifest(t *testing.T) {
@@ -183,179 +185,400 @@ func TestJitteredFailureBackoffStaysWithinBound(t *testing.T) {
 	}
 }
 
-func TestLogControllerSuspendedWritesStructuredEvidence(t *testing.T) {
-	evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
-	sessionDir := writeWorkerManifest(t, map[string]any{
-		"session_id":   "sess_123",
-		"session_kind": "controller",
-		"created_at":   "2026-08-10T12:00:00Z",
-		"specs": []map[string]any{{
-			"name":          "demo",
-			"evidence_path": evidencePath,
-		}},
-		"epochs": []map[string]any{{
-			"id":         4,
-			"started_at": "2026-08-10T12:00:00Z",
-		}},
-	})
-
-	logControllerSuspended(sessionDir, "agent_authentication_invalid", time.Minute)
-	data, err := os.ReadFile(evidencePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(data)
-	for _, want := range []string{
-		`"event":"agent_suspended"`,
-		`"epoch_id":4`,
-		`"blocker_code":"agent_authentication_invalid"`,
-		`"state":"waiting"`,
-		"runner.log",
-		`"retry_after_seconds":60`,
-		"fix the provider credentials, permissions, or quota, or add Telos credits",
-		"retry in 1m0s",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("suspension evidence missing %q:\n%s", want, text)
+func TestRootFailureRecordsRetryingIssueAndBacksOff(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sessionDir := writeWorkerManifest(t, map[string]any{
+			"session_kind": "controller",
+			"specs":        []map[string]any{{"name": "demo"}},
+		})
+		stop, wake := make(chan os.Signal, 1), make(chan os.Signal, 1)
+		starts := make(chan time.Time, 1)
+		var attempts atomic.Int32
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+				starts <- time.Now()
+				if attempts.Add(1) == 5 {
+					return &game.PVGResult{GameResult: game.GameSuccess}, nil
+				}
+				return &game.PVGResult{GameResult: game.GameFailure, Error: "agent_failure_budget_exceeded: 503: overloaded", ProviderError: "503: overloaded"}, nil
+			}, wake, stop)
+		}()
+		first := <-starts
+		previous := first
+		for _, upper := range []time.Duration{time.Second, 2 * time.Second, 4 * time.Second} {
+			next := <-starts
+			if elapsed := next.Sub(previous); elapsed < upper*4/5 || elapsed > upper {
+				t.Fatalf("retry after %v, want [%v, %v]", elapsed, upper*4/5, upper)
+			}
+			previous = next
 		}
-	}
-	if strings.Contains(text, `"error":`) {
-		t.Fatal("suspension evidence should reference diagnostics without copying raw errors")
-	}
+		synctest.Wait()
+		issue := readIssue(t, sessionDir)
+		if issue.Status != sessionapi.IssueRetrying || issue.Reason != sessionapi.ReasonInferenceProviderError ||
+			issue.Message != providerRetryHint+"503: overloaded" || issue.Since != sessionapi.FormatTime(first) ||
+			issue.LastRetryAt != sessionapi.FormatTime(previous) || issue.NextRetryAt <= issue.LastRetryAt {
+			t.Fatalf("issue = %+v", issue)
+		}
+
+		<-starts // the fifth attempt succeeds
+		wake <- syscall.SIGUSR1
+		failed := <-starts
+		if elapsed := (<-starts).Sub(failed); elapsed > time.Second {
+			t.Fatalf("backoff did not reset after a success: %v", elapsed)
+		}
+		stop <- syscall.SIGTERM
+		<-done
+	})
 }
 
-func TestControllerConfigurationFailureSuspendsUntilExplicitWake(t *testing.T) {
-	evidencePath := filepath.Join(t.TempDir(), "evidence.jsonl")
-	sessionDir := writeWorkerManifest(t, map[string]any{
-		"session_id":   "sess_123",
-		"session_kind": "controller",
-		"specs": []map[string]any{{
-			"name":          "demo",
-			"evidence_path": evidencePath,
-		}},
+func TestProviderErrorsKeepRetryingPastAnHourUntilPaused(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sessionDir := writeWorkerManifest(t, map[string]any{
+			"session_kind": "controller",
+			"specs":        []map[string]any{{"name": "demo"}},
+		})
+		stop := make(chan os.Signal, 1)
+		var mu sync.Mutex
+		var starts []time.Time
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+				mu.Lock()
+				starts = append(starts, time.Now())
+				mu.Unlock()
+				return &game.PVGResult{GameResult: game.GameFailure, Error: "agent_failure_budget_exceeded: 401: invalid api key", ProviderError: "401: invalid api key"}, nil
+			}, make(chan os.Signal, 1), stop)
+		}()
+		begin := time.Now()
+		time.Sleep(3 * time.Hour)
+		synctest.Wait()
+		mu.Lock()
+		attempts := len(starts)
+		last := starts[attempts-1]
+		for i := 1; i < attempts; i++ {
+			if gap := starts[i].Sub(starts[i-1]); gap > 15*time.Minute {
+				t.Fatalf("retry %d waited %v, over the 15 minute cap", i, gap)
+			}
+		}
+		mu.Unlock()
+		if last.Sub(begin) < 2*time.Hour {
+			t.Fatalf("retries stopped after %v", last.Sub(begin))
+		}
+		if issue := readIssue(t, sessionDir); issue.Status != sessionapi.IssueRetrying || issue.Reason != sessionapi.ReasonInferenceProviderError ||
+			!strings.Contains(issue.Message, "check it. Provider error: 401: invalid api key") {
+			t.Fatalf("issue = %+v", issue)
+		}
+
+		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
+		if _, err := store.Pause(filepath.Base(sessionDir), true); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		mu.Lock()
+		paused := len(starts)
+		mu.Unlock()
+		if paused != attempts {
+			t.Fatalf("pause did not stop the retries: %d attempts, then %d", attempts, paused)
+		}
+		stop <- syscall.SIGTERM
+		<-done
 	})
-	wake := make(chan os.Signal, 1)
-	stop := make(chan os.Signal, 1)
-	t.Cleanup(func() { stop <- syscall.SIGTERM })
-	calls := make(chan int, 2)
-	attempt := 0
-	runSession := func(string) (*game.PVGResult, error) {
-		attempt++
-		calls <- attempt
-		if attempt == 1 {
-			return &game.PVGResult{
-				GameResult: game.GameFailure,
-				Error:      "unknown model",
-			}, nil
-		}
-		return &game.PVGResult{GameResult: game.GameStopped}, nil
-	}
-	type workerResult struct {
-		code int
-		err  error
-	}
-	done := make(chan workerResult, 1)
-	go func() {
-		code, err := runSessionWorker(sessionDir, false, runSession, wake, stop)
-		done <- workerResult{code: code, err: err}
-	}()
-
-	select {
-	case got := <-calls:
-		if got != 1 {
-			t.Fatalf("first attempt = %d", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("worker did not run the first cycle")
-	}
-	select {
-	case got := <-calls:
-		t.Fatalf("worker retried without a wake signal: attempt %d", got)
-	case result := <-done:
-		t.Fatalf("worker exited while suspended: %#v", result)
-	case <-time.After(failureBackoff(1, time.Second) + 100*time.Millisecond):
-	}
-
-	wake <- syscall.SIGUSR1
-	select {
-	case got := <-calls:
-		if got != 2 {
-			t.Fatalf("attempt after wake = %d", got)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("worker did not resume after wake")
-	}
-	select {
-	case result := <-done:
-		if result.code != 0 || result.err != nil {
-			t.Fatalf("worker result = %#v", result)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("worker did not stop after resumed cycle")
-	}
 }
 
-func TestControllerProviderRecoveryBacksOffAndReturnsToIdle(t *testing.T) {
-	for _, providerError := range []string{
-		"401: invalid x-api-key", "403: forbidden", "403: inactive virtual key",
-		"400: Your credit balance is too low to access the Anthropic API",
-		"429: insufficient_quota", "API key not configured",
-	} {
-		t.Run(providerError, func(t *testing.T) {
+func TestResumeDuringCappedBackoffRetriesPromptly(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// seen: the worker notices the pause before it lifts; otherwise the
+		// pause lifts between two of its checks.
+		seen bool
+	}{{"pause seen", true}, {"pause lifted between checks", false}} {
+		t.Run(tc.name, func(t *testing.T) {
 			synctest.Test(t, func(t *testing.T) {
 				sessionDir := writeWorkerManifest(t, map[string]any{
 					"session_kind": "controller",
 					"specs":        []map[string]any{{"name": "demo"}},
 				})
 				stop := make(chan os.Signal, 1)
-				wake := make(chan os.Signal, 1)
-				defer func() { stop <- syscall.SIGTERM }()
-				starts := make(chan time.Time, 1)
-				var attempts atomic.Int32
+				starts := make(chan time.Time)
 				done := make(chan struct{})
 				go func() {
 					defer close(done)
-					code, err := runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
-						attempt := attempts.Add(1)
+					_, _ = runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
 						starts <- time.Now()
-						if attempt <= 7 || attempt == 9 {
-							return &game.PVGResult{GameResult: game.GameFailure, Error: providerError}, nil
-						}
-						return &game.PVGResult{GameResult: game.GameSuccess}, nil
-					}, wake, stop)
-					if code != 0 || err != nil {
-						t.Errorf("worker returned %d, %v", code, err)
-					}
+						return &game.PVGResult{GameResult: game.GameFailure, Error: "agent_failure_budget_exceeded: 503: overloaded", ProviderError: "503: overloaded"}, nil
+					}, make(chan os.Signal, 1), stop)
 				}()
-				previous := <-starts
-				for _, upper := range []time.Duration{
-					time.Minute, 2 * time.Minute, 4 * time.Minute, 8 * time.Minute,
-					15 * time.Minute, 15 * time.Minute, 15 * time.Minute,
-				} {
-					next := <-starts
-					elapsed := next.Sub(previous)
-					if elapsed < upper*4/5 || elapsed > upper {
-						t.Fatalf("retry after %v, want [%v, %v]", elapsed, upper*4/5, upper)
+				// Backoff doubles from 1s and reaches the 15 minute cap after 11 failures.
+				for range 12 {
+					<-starts
+				}
+				synctest.Wait()
+				time.Sleep(time.Minute) // over 10 minutes of capped backoff remain
+				synctest.Wait()
+				store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
+				id := filepath.Base(sessionDir)
+				if _, err := store.Pause(id, true); err != nil {
+					t.Fatal(err)
+				}
+				if tc.seen {
+					time.Sleep(2 * holdRecheckInterval)
+					synctest.Wait()
+					select {
+					case <-starts:
+						t.Fatal("a paused goal retried")
+					default:
 					}
-					previous = next
 				}
-				synctest.Wait()
-				time.Sleep(time.Hour)
-				synctest.Wait()
-				if attempts.Load() != 8 {
-					t.Fatalf("retried after success with no interval: %d attempts", attempts.Load())
+				if _, err := store.Pause(id, false); err != nil {
+					t.Fatal(err)
 				}
-				wake <- syscall.SIGUSR1
-				previous = <-starts
-				next := <-starts
-				if elapsed := next.Sub(previous); elapsed < 48*time.Second || elapsed > time.Minute {
-					t.Fatalf("backoff did not reset after success: %v", elapsed)
+				time.Sleep(holdRecheckInterval + time.Second)
+				synctest.Wait()
+				select {
+				case <-starts:
+				default:
+					t.Fatal("Resume left the goal waiting out its capped backoff")
 				}
 				stop <- syscall.SIGTERM
-				<-done
+				for { // take any attempt racing the stop
+					select {
+					case <-starts:
+						continue
+					case <-done:
+					}
+					break
+				}
 			})
 		})
 	}
+}
+
+func TestVerifierBlockHoldsRootUntilResume(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sessionDir := writeWorkerManifest(t, map[string]any{
+			"session_kind": "controller",
+			"specs":        []map[string]any{{"name": "demo"}},
+		})
+		wake, stop := make(chan os.Signal, 1), make(chan os.Signal, 1)
+		var attempts atomic.Int32
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+				if attempts.Add(1) == 1 { // the game records its block, as cli.recordBlock does
+					if _, err := sessionapi.MutateManifest(filepath.Join(sessionDir, "session.json"), func(m *sessionapi.Manifest) error {
+						m.Issue = sessionapi.NewIssue(sessionapi.IssueBlocked, sessionapi.ReasonSpecUnsatisfiable, "The spec needs a key it never provides.", time.Now())
+						return nil
+					}); err != nil {
+						t.Error(err)
+					}
+					return &game.PVGResult{GameResult: game.GameBlocked}, nil
+				}
+				return &game.PVGResult{GameResult: game.GameFailure, Error: "boom"}, nil
+			}, wake, stop)
+		}()
+		synctest.Wait()
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if issue := readIssue(t, sessionDir); attempts.Load() != 1 || issue.Status != sessionapi.IssueBlocked ||
+			issue.Reason != sessionapi.ReasonSpecUnsatisfiable || issue.Message != "The spec needs a key it never provides." {
+			t.Fatalf("attempts = %d, issue = %+v", attempts.Load(), issue)
+		}
+		wake <- syscall.SIGUSR1 // a wake alone does not lift a block
+		synctest.Wait()
+		if attempts.Load() != 1 {
+			t.Fatalf("blocked root ran again: %d attempts", attempts.Load())
+		}
+		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
+		if _, err := store.Resume(filepath.Base(sessionDir)); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(holdRecheckInterval)
+		synctest.Wait()
+		if issue := readIssue(t, sessionDir); attempts.Load() != 2 || issue.Status != sessionapi.IssueRetrying {
+			t.Fatalf("after resume: attempts = %d, issue = %+v", attempts.Load(), issue)
+		}
+		stop <- syscall.SIGTERM
+		<-done
+	})
+}
+
+func TestLiftedHoldKeepsAnAcceptedGoalOnItsSchedule(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		accepted := map[string]any{
+			"id": 1, "started_at": "t", "finished_at": "t", "result": "completed", "spec_version": 1,
+			"completion_reason": "verifier_conceded", "verifier_conceded": true, "checkpoint_saved": true,
+		}
+		interrupted := map[string]any{"id": 2, "started_at": "t", "finished_at": "t", "result": sessionapi.EpochHeld, "spec_version": 1}
+		sessionDir := writeWorkerManifest(t, map[string]any{
+			"session_kind":         "controller",
+			"paused":               true,
+			"current_spec_version": 1,
+			"specs":                []map[string]any{{"name": "demo", "interval_seconds": 3600}},
+			"epochs":               []map[string]any{accepted, interrupted},
+		})
+		wake, stop := make(chan os.Signal, 1), make(chan os.Signal, 1)
+		var attempts atomic.Int32
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+				attempts.Add(1)
+				return &game.PVGResult{GameResult: game.GameSuccess}, nil
+			}, wake, stop)
+		}()
+		synctest.Wait()
+		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
+		if _, err := store.Pause(filepath.Base(sessionDir), false); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(59 * time.Minute)
+		synctest.Wait()
+		if attempts.Load() != 0 {
+			t.Fatalf("resuming an accepted goal started a check at once: %d attempts", attempts.Load())
+		}
+		time.Sleep(2 * time.Minute)
+		synctest.Wait()
+		if attempts.Load() != 1 {
+			t.Fatalf("scheduled check after resume: %d attempts", attempts.Load())
+		}
+		stop <- syscall.SIGTERM
+		<-done
+	})
+}
+
+func TestHoldLiftedBeforeTheCheckStopsKeepsAnAcceptedGoalOnItsSchedule(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		accepted := map[string]any{
+			"id": 1, "started_at": "t", "finished_at": "t", "result": "completed", "spec_version": 1,
+			"completion_reason": "verifier_conceded", "verifier_conceded": true, "checkpoint_saved": true,
+		}
+		sessionDir := writeWorkerManifest(t, map[string]any{
+			"session_kind":         "controller",
+			"current_spec_version": 1,
+			"specs":                []map[string]any{{"name": "demo", "interval_seconds": 3600}},
+			"epochs":               []map[string]any{accepted},
+		})
+		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
+		wake, stop := make(chan os.Signal, 1), make(chan os.Signal, 1)
+		var attempts atomic.Int32
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+				if attempts.Add(1) > 1 {
+					return &game.PVGResult{GameResult: game.GameSuccess}, nil
+				}
+				// Paused mid-check, then resumed while the check is still saving.
+				for _, paused := range []bool{true, false} {
+					if _, err := store.Pause(filepath.Base(sessionDir), paused); err != nil {
+						t.Error(err)
+					}
+				}
+				return &game.PVGResult{GameResult: game.GameStopped}, nil
+			}, wake, stop)
+		}()
+		time.Sleep(59 * time.Minute)
+		synctest.Wait()
+		if attempts.Load() != 1 {
+			t.Fatalf("resuming before the check stopped started another at once: %d attempts", attempts.Load())
+		}
+		time.Sleep(2 * time.Minute)
+		synctest.Wait()
+		if attempts.Load() != 2 {
+			t.Fatalf("scheduled check after resume: %d attempts", attempts.Load())
+		}
+		stop <- syscall.SIGTERM
+		<-done
+	})
+}
+
+func TestChildStoppedByRootHoldWaitsInsteadOfFailing(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		rootDir := writeWorkerManifest(t, map[string]any{"session_kind": "controller"})
+		store := sessionapi.NewFileStore(filepath.Dir(rootDir), sessionapi.RuntimeCloud)
+		childDir := filepath.Join(filepath.Dir(rootDir), "sess_child")
+		parent := filepath.Base(rootDir)
+		if err := sessionapi.WriteManifest(filepath.Join(childDir, "session.json"), &sessionapi.Manifest{
+			SessionID: "sess_child", SessionKind: sessionapi.KindTask, ParentSessionID: &parent,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		var attempts atomic.Int32
+		done := make(chan int, 1)
+		go func() {
+			code, _ := runSessionWorker(childDir, false, func(string) (*game.PVGResult, error) {
+				if attempts.Add(1) == 1 { // Cloud holds the goal mid-run.
+					if _, err := store.Pause(filepath.Base(rootDir), true); err != nil {
+						t.Error(err)
+					}
+					return &game.PVGResult{GameResult: game.GameStopped}, nil
+				}
+				return &game.PVGResult{GameResult: game.GameSuccess}, nil
+			}, make(chan os.Signal), make(chan os.Signal))
+			done <- code
+		}()
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if attempts.Load() != 1 {
+			t.Fatalf("held child ran %d attempts", attempts.Load())
+		}
+		if _, err := store.Pause(filepath.Base(rootDir), false); err != nil {
+			t.Fatal(err)
+		}
+		if code := <-done; code != 0 || attempts.Load() != 2 {
+			t.Fatalf("child after hold lifted: code %d, %d attempts", code, attempts.Load())
+		}
+	})
+}
+
+func TestHeldRootWaitsWithoutRunning(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		sessionDir := writeWorkerManifest(t, map[string]any{
+			"session_kind": "controller",
+			"paused":       true,
+			"specs":        []map[string]any{{"name": "demo"}},
+		})
+		wake, stop := make(chan os.Signal, 1), make(chan os.Signal, 1)
+		var attempts atomic.Int32
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			_, _ = runSessionWorker(sessionDir, false, func(string) (*game.PVGResult, error) {
+				attempts.Add(1)
+				return &game.PVGResult{GameResult: game.GameSuccess}, nil
+			}, wake, stop)
+		}()
+		time.Sleep(time.Hour)
+		synctest.Wait()
+		if attempts.Load() != 0 {
+			t.Fatalf("held root ran %d attempts", attempts.Load())
+		}
+		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
+		if _, err := store.Pause(filepath.Base(sessionDir), false); err != nil {
+			t.Fatal(err)
+		}
+		time.Sleep(holdRecheckInterval) // no wake: the root notices on its own
+		synctest.Wait()
+		if attempts.Load() != 1 {
+			t.Fatalf("lifting the hold ran %d attempts", attempts.Load())
+		}
+		stop <- syscall.SIGTERM
+		<-done
+	})
+}
+
+func readIssue(t *testing.T, sessionDir string) sessionapi.Issue {
+	t.Helper()
+	m, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
+	if err != nil || m.Issue == nil {
+		t.Fatalf("issue missing: %+v, %v", m, err)
+	}
+	return *m.Issue
 }
 
 func TestCredentialRetryRespectsWakeAndStop(t *testing.T) {

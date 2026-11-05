@@ -331,16 +331,12 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 			Recoverable: true,
 		}
 	}
-	exec := &fakeExecutor{
-		proverResults: []TurnResult{
-			recoverable("prover"),
-			recoverable("prover"),
-		},
-		verifierResults: []TurnResult{
-			recoverable("verifier"),
-			recoverable("verifier"),
-		},
+	// The prover keeps failing while the verifier's turns succeed in between.
+	var failures []TurnResult
+	for range maxRecoverableAgentFailures + 1 {
+		failures = append(failures, recoverable("prover"))
 	}
+	exec := &fakeExecutor{proverResults: failures}
 
 	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
 	result := pvg.Run()
@@ -351,51 +347,91 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 	if !strings.Contains(result.Error, "agent_failure_budget_exceeded") {
 		t.Fatalf("error: got %q", result.Error)
 	}
-	if result.Rounds != maxRecoverableAgentFailures+1 {
+	if result.Rounds != 2*maxRecoverableAgentFailures+1 {
 		t.Fatalf("rounds: got %d", result.Rounds)
 	}
 }
 
-func TestPVGDoesNotRetryCredentialFailure(t *testing.T) {
-	compiled := compileTestSpec(t)
-	dir := t.TempDir()
-	state := NewPVGState("pvg-test", filepath.Join(dir, "specs", "pvg-test"), "test-session-auth")
-	state.Ensure()
-	exec := &fakeExecutor{proverResults: []TurnResult{{
-		Role:        "prover",
-		Status:      StatusContinue,
-		Error:       "403: inactive virtual key",
-		Recoverable: true,
-	}}}
-
-	result := NewPVG(compiled, exec, state, PVGConfig{}).Run()
-	if result.GameResult != GameFailure || result.Rounds != 1 {
-		t.Fatalf("result = %#v", result)
-	}
-	if result.Error != "403: inactive virtual key" {
-		t.Fatalf("error = %q", result.Error)
+func TestPVGRootVerifierBlock(t *testing.T) {
+	blocked := "Spec contradiction.\n<blocked>The spec requires both no network and a live Stripe charge; drop one.</blocked>\n<status>BLOCKED</status>"
+	for _, tc := range []struct {
+		name       string
+		controller bool
+		logs       string
+		recorded   bool
+		want       GameResult
+	}{
+		{"root verifier with a sentence", true, blocked, true, GameBlocked},
+		{"root verifier without a sentence", true, "No reason.\n<status>BLOCKED</status>", true, GameFailure},
+		{"child verifier", false, blocked, true, GameFailure},
+		{"block not recorded", true, blocked, false, GameFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-block")
+			state.Ensure()
+			// A game that does not block ends at the next verifier turn.
+			exec := &fakeExecutor{verifierResults: []TurnResult{
+				{Role: "verifier", Status: ExtractStatus(tc.logs), Logs: tc.logs},
+				{Role: "verifier", Error: "boom"},
+			}}
+			var config PVGConfig // a child session records no blocks
+			if tc.controller {
+				config.RecordBlock = func(string) string {
+					if tc.recorded {
+						return "SPEC_UNSATISFIABLE"
+					}
+					return ""
+				}
+			}
+			result := NewPVG(compileTestSpec(t), exec, state, config).Run()
+			if result.GameResult != tc.want {
+				t.Fatalf("result = %s, want %s", result.GameResult, tc.want)
+			}
+			evidence, _ := os.ReadFile(state.EvidencePath)
+			logged := strings.Contains(string(evidence), `"event":"goal_blocked"`)
+			if tc.want == GameBlocked && (result.BlockedMessage != "The spec requires both no network and a live Stripe charge; drop one." || !logged) {
+				t.Fatalf("block message %q, logged %v", result.BlockedMessage, logged)
+			}
+			if tc.want != GameBlocked && logged {
+				t.Fatal("non-block logged goal_blocked")
+			}
+		})
 	}
 }
 
-func TestPVGQuotaFailureDoesNotStartAnotherAgentTurn(t *testing.T) {
-	for _, role := range []string{"prover", "verifier"} {
-		t.Run(role, func(t *testing.T) {
-			compiled := compileTestSpec(t)
-			state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-quota")
+func TestPVGReportsWhetherAProviderErrorEndedTheGame(t *testing.T) {
+	provider := TurnResult{Role: "verifier", Error: "overloaded", Recoverable: true, ProviderError: true}
+	internal := TurnResult{Role: "verifier", Error: "pi crashed"}
+	for _, tc := range []struct {
+		name     string
+		verifier []TurnResult
+		want     string
+	}{
+		// The provider's own words, not the runtime's failure-budget wrapping.
+		{"provider error", []TurnResult{provider, provider, provider, provider}, "overloaded"},
+		{"provider error, then a Telos error", []TurnResult{provider, internal}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-provider")
 			state.Ensure()
-			failure := TurnResult{Role: role, Error: "400: Your credit balance is too low to access the Anthropic API", Recoverable: true}
-			exec := &fakeExecutor{proverResults: []TurnResult{failure}}
-			wantRounds := 1
-			if role == "verifier" {
-				exec.proverResults = []TurnResult{{Role: "prover", Status: StatusContinue, Logs: "partial work"}}
-				exec.verifierResults = []TurnResult{failure}
-				wantRounds = 2
-			}
-			result := NewPVG(compiled, exec, state, PVGConfig{}).Run()
-			if result.GameResult != GameFailure || result.Rounds != wantRounds || result.Error != failure.Error {
-				t.Fatalf("quota failure started another turn: %#v", result)
+			// The prover succeeds every turn; the verifier's failures still end the game.
+			exec := &fakeExecutor{verifierResults: tc.verifier}
+			result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{}).Run()
+			if result.GameResult != GameFailure || result.ProviderError != tc.want {
+				t.Fatalf("result = %+v", result)
 			}
 		})
+	}
+}
+
+func TestPVGCallsOnTurnSucceededOnlyForTurnsWithoutErrors(t *testing.T) {
+	state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-success")
+	state.Ensure()
+	exec := &fakeExecutor{verifierResults: []TurnResult{{Role: "verifier", Error: "boom"}}}
+	successes := 0
+	NewPVG(compileTestSpec(t), exec, state, PVGConfig{OnTurnSucceeded: func() { successes++ }}).Run()
+	if successes != 1 {
+		t.Fatalf("successes = %d, want the one prover turn", successes)
 	}
 }
 
@@ -737,7 +773,6 @@ func TestPVGLargeFailuresStayInRunnerLog(t *testing.T) {
 	}{
 		{"recoverable", "pi_failed:1", true, GameSuccess},
 		{"fatal", "pi_failed:1", false, GameFailure},
-		{"authentication blocker", "401: invalid api key", true, GameFailure},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			state := NewPVGState("pvg-test", t.TempDir(), "large-failure")

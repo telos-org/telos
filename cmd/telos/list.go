@@ -218,7 +218,7 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 			cloudSpend, inference := costCells(costs[index])
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				session.Name,
-				cloudSessionDisplayStatus(session),
+				cloudSessionStatusCell(session),
 				shortRevision(session.PackageDigest),
 				serviceURL,
 				cloudSpend,
@@ -229,7 +229,7 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 		}
 		fmt.Fprintf(w, "%s\t%s\t%s\n",
 			session.Name,
-			cloudSessionDisplayStatus(session),
+			cloudSessionStatusCell(session),
 			session.ID,
 		)
 	}
