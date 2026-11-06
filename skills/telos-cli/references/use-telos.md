@@ -165,38 +165,26 @@ Add `--follow` to keep printing new activity as it happens, until the Goal stops
 |---|---|
 | `working` | Telos is preparing the Goal's [environment](environment.md), implementing the current spec, or verifying it. |
 | `ready` | Telos accepted the current Goal. |
-| `blocked` | The agents stopped because of something only you can fix, such as a spec that can't be met or a problem with your account. |
-| `retrying` | Telos or the model provider is failing. Telos keeps retrying on its own. |
-| `paused` | A workspace admin [paused](#pause) the Goal. Its app keeps running. |
+| `blocked` | Work on the Goal has stopped until something is fixed. `telos describe` shows why. |
+| `retrying` | Something failed, and Telos is retrying. `telos describe` shows why, and when it will try next. |
+| `paused` | Someone in your workspace [paused](#pause) the Goal. |
 | `stopped` | The Goal has stopped running, usually because you deleted it. |
 
-When a Goal is `blocked` or `retrying`, `telos list` shows the reason next to the status, and `describe` adds a `Reason` and a `Message` that explains it:
+For a blocked or retrying Goal, `telos list` also shows the reason:
 
 ```console
 $ telos list
 NAME          STATUS                        ID
 reading-list  blocked (SPEC_UNSATISFIABLE)  goal_c7d2f0a4e8
-
-$ telos describe goal_c7d2f0a4e8
-Name      reading-list
-Status    blocked
-...
-Reason    SPEC_UNSATISFIABLE
-Message   Books must survive restarts, but the spec also forbids any storage outside memory; allow a database or drop the restart requirement.
 ```
 
-A `retrying` Goal also shows `Last retry` and `Next retry`. Each reason tells you what to do:
+`SPEC_UNSATISFIABLE` means the agents found that the spec can't be met as written. `telos describe` tells you what's wrong with it. Edit the spec and apply the new version, and work picks back up. If the problem was something else that you've since fixed, `telos resume` has the agents take another look.
 
-| Reason | Status | What to do |
-|---|---|---|
-| `SPEC_UNSATISFIABLE` | `blocked` | The spec can't be met as written in this environment, and `Message` says why. Apply a new version of the spec and the agents start again. If you fixed the cause some other way, run `telos resume` to have Telos check again. |
-| `CREDITS_EXHAUSTED` | `blocked` | Add credits. The Goal resumes on its own. |
-| `SPEND_CAP_REACHED` | `blocked` | Raise the workspace's monthly spend cap. The Goal resumes on its own. |
-| `PAYMENT_PAST_DUE` | `blocked` | Update your payment. The Goal resumes on its own. |
-| `WORKSPACE_ARCHIVED` | `blocked` | Restore the workspace. The Goal resumes on its own. |
-| `INTERNAL_ERROR` | `blocked` | The Goal failed to deploy. Re-apply its spec with `telos apply SPEC.md --goal goal_c7d2f0a4e8`, or contact Telos support (hello@usetelos.ai) if it keeps failing. |
-| `INFERENCE_PROVIDER_ERROR` | `retrying` | The model provider is returning errors. If the Goal uses your own API key or subscription, check it. `telos pause` stops the retries. |
-| `INTERNAL_ERROR` | `retrying` | Telos hit a problem and keeps retrying. If it doesn't recover, contact Telos support (hello@usetelos.ai). |
+Billing problems (`CREDITS_EXHAUSTED`, `PAYMENT_PAST_DUE`, `SPEND_CAP_REACHED`) and an archived workspace (`WORKSPACE_ARCHIVED`) also block a Goal. These clear on their own once you sort them out.
+
+`INFERENCE_PROVIDER_ERROR` means the model provider is returning errors. If you're using your own API key or subscription, check it. Telos keeps retrying in the meantime, and you can [pause](#pause) the Goal to stop it.
+
+A Goal blocked with `INTERNAL_ERROR` failed to deploy. Re-apply its spec with `telos apply SPEC.md --goal goal_c7d2f0a4e8` to try again. If that keeps failing, or a Goal keeps retrying with `INTERNAL_ERROR`, it may need escalation to Telos support (hello@usetelos.ai).
 
 When Telos is done working, `describe` reports the Goal as `ready`, with its service URL and what it has cost so far.
 
@@ -287,21 +275,21 @@ This writes the spec and its skills to a directory named after the Goal. Use `--
 
 ## Pause
 
-To stop a Goal's agents without deleting anything, pause it. Its app keeps running, and the agents stay stopped until you resume it:
+If you want the agents to stop working on a Goal for a while, without deleting anything, you can pause it:
 
 ```console
 $ telos pause goal_c7d2f0a4e8
 Paused goal_c7d2f0a4e8
 ```
 
-`telos describe` now reports the Goal as `paused`. To start the agents again:
+The service keeps running while the Goal is paused. When you're ready for the agents to get back to work:
 
 ```console
 $ telos resume goal_c7d2f0a4e8
 Resumed goal_c7d2f0a4e8
 ```
 
-Only workspace admins can pause and resume a Goal. Goals started on an older Telos runtime can't be paused, and `telos pause` says so.
+Only workspace admins can pause or resume a Goal. Goals started on an older Telos runtime can't be paused yet.
 
 ## Delete
 
