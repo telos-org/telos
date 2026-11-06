@@ -159,16 +159,44 @@ $ telos logs goal_c7d2f0a4e8
 
 Add `--follow` to keep printing new activity as it happens, until the Goal stops or you press Ctrl-C.
 
-`telos list` and `telos describe` report one of four statuses. When a Goal needs attention or has stopped, `describe` also shows why. Here's how to interpret them:
+`telos list` and `telos describe` report one of six statuses. Here's how to interpret them:
 
 | Status | Meaning |
 |---|---|
 | `working` | Telos is preparing the Goal's [environment](environment.md), implementing the current spec, or verifying it. |
 | `ready` | Telos accepted the current Goal. |
-| `needs_attention` | The latest run failed or stopped unexpectedly. `telos describe` shows why, and what to run next. |
+| `blocked` | The agents stopped because of something only you can fix, such as a spec that can't be met or a problem with your account. |
+| `retrying` | Telos or the model provider is failing. Telos keeps retrying on its own. |
+| `paused` | A workspace admin [paused](#pause) the Goal. Its app keeps running. |
 | `stopped` | The Goal has stopped running, usually because you deleted it. |
 
-When a Goal is in `needs_attention`, re-applying the same spec with `telos apply SPEC.md --goal goal_c7d2f0a4e8` retries straight away. Credit or key failures also recover on their own once you add credits or fix the key. If the reason points to the environment or runtime, it may need escalation to Telos support (hello@usetelos.ai).
+When a Goal is `blocked` or `retrying`, `telos list` shows the reason next to the status, and `describe` adds a `Reason` and a `Message` that explains it:
+
+```console
+$ telos list
+NAME          STATUS                        ID
+reading-list  blocked (SPEC_UNSATISFIABLE)  goal_c7d2f0a4e8
+
+$ telos describe goal_c7d2f0a4e8
+Name      reading-list
+Status    blocked
+...
+Reason    SPEC_UNSATISFIABLE
+Message   Books must survive restarts, but the spec also forbids any storage outside memory; allow a database or drop the restart requirement.
+```
+
+A `retrying` Goal also shows `Last retry` and `Next retry`. Each reason tells you what to do:
+
+| Reason | Status | What to do |
+|---|---|---|
+| `SPEC_UNSATISFIABLE` | `blocked` | The spec can't be met as written in this environment, and `Message` says why. Apply a new version of the spec and the agents start again. If you fixed the cause some other way, run `telos resume` to have Telos check again. |
+| `CREDITS_EXHAUSTED` | `blocked` | Add credits. The Goal resumes on its own. |
+| `SPEND_CAP_REACHED` | `blocked` | Raise the workspace's monthly spend cap. The Goal resumes on its own. |
+| `PAYMENT_PAST_DUE` | `blocked` | Update your payment. The Goal resumes on its own. |
+| `WORKSPACE_ARCHIVED` | `blocked` | Restore the workspace. The Goal resumes on its own. |
+| `INTERNAL_ERROR` | `blocked` | The Goal failed to deploy. Re-apply its spec with `telos apply SPEC.md --goal goal_c7d2f0a4e8`, or contact Telos support (hello@usetelos.ai) if it keeps failing. |
+| `INFERENCE_PROVIDER_ERROR` | `retrying` | The model provider is returning errors. If the Goal uses your own API key or subscription, check it. `telos pause` stops the retries. |
+| `INTERNAL_ERROR` | `retrying` | Telos hit a problem and keeps retrying. If it doesn't recover, contact Telos support (hello@usetelos.ai). |
 
 When Telos is done working, `describe` reports the Goal as `ready`, with its service URL and what it has cost so far.
 
@@ -256,6 +284,24 @@ $ telos get goal_c7d2f0a4e8
 ```
 
 This writes the spec and its skills to a directory named after the Goal. Use `--output <dir>` to override the directory name.
+
+## Pause
+
+To stop a Goal's agents without deleting anything, pause it. Its app keeps running, and the agents stay stopped until you resume it:
+
+```console
+$ telos pause goal_c7d2f0a4e8
+Paused goal_c7d2f0a4e8
+```
+
+`telos describe` now reports the Goal as `paused`. To start the agents again:
+
+```console
+$ telos resume goal_c7d2f0a4e8
+Resumed goal_c7d2f0a4e8
+```
+
+Only workspace admins can pause and resume a Goal. Goals started on an older Telos runtime can't be paused, and `telos pause` says so.
 
 ## Delete
 
