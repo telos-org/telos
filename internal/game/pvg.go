@@ -222,13 +222,15 @@ func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
 		return true
 	}
 	*consecutive++
-	p.Evidence.Log("agent_failure_recoverable", p.Result.Rounds, turn.Role, map[string]interface{}{
-		"message":              "Agent turn failed.",
-		"log_path":             p.diagnosticLogPath,
-		"consecutive_failures": *consecutive,
-		"max_failures":         maxRecoverableAgentFailures,
-	})
 	if *consecutive <= maxRecoverableAgentFailures {
+		// Logged only when the turn is retried: the failure past the budget
+		// ends the game instead, and the game's end reports it.
+		p.Evidence.Log("agent_failure_recoverable", p.Result.Rounds, turn.Role, map[string]interface{}{
+			"message":              "Agent turn failed.",
+			"log_path":             p.diagnosticLogPath,
+			"consecutive_failures": *consecutive,
+			"max_failures":         maxRecoverableAgentFailures,
+		})
 		return false
 	}
 	p.Result.Error = fmt.Sprintf("agent_failure_budget_exceeded: %s", turn.Error)
