@@ -187,7 +187,7 @@ reading-list  blocked (SPEC_UNSATISFIABLE)  goal_c7d2f0a4e8
 | `WORKSPACE_ARCHIVED` | `blocked` | The workspace is archived. | Restore the workspace. |
 | `INTERNAL_ERROR` | `blocked` | The Goal failed to deploy. | Re-apply with `telos apply SPEC.md --goal goal_c7d2f0a4e8`. |
 | `INTERNAL_ERROR` | `retrying` | Telos hit a problem. | Nothing. Telos keeps retrying. |
-| `INFERENCE_PROVIDER_ERROR` | `retrying` | The model provider is returning errors. | Check the Goal's API key or subscription. [Pause](#pause) the Goal to stop the retries. |
+| `INFERENCE_PROVIDER_ERROR` | `retrying` | The model provider is returning errors. | Check the Goal's API key or subscription, or wait for the model provider to recover. [Pause](#pause) the Goal to stop the retries. |
 
 Billing and workspace blocks clear on their own once fixed.
 
