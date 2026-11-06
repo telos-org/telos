@@ -165,7 +165,7 @@ Add `--follow` to keep printing new activity as it happens, until the Goal stops
 |---|---|
 | `working` | Telos is preparing the Goal's [environment](environment.md), implementing the current spec, or verifying it. |
 | `ready` | Telos accepted the current Goal. |
-| `blocked` | Agents have stopped due to client-side issues (for example, unsatisfiable spec or a billing problem). |
+| `blocked` | The harness has stopped due to client-side issues (for example, unsatisfiable spec or a billing problem). |
 | `retrying` | Something failed (for example, Telos server error or inference provider down), and Telos is retrying. |
 | `paused` | Someone in your workspace [paused](#pause) the Goal. |
 | `stopped` | The Goal has stopped running, usually because you deleted it. |
@@ -189,7 +189,7 @@ reading-list  blocked (SPEC_UNSATISFIABLE)  goal_c7d2f0a4e8
 | `INTERNAL_ERROR` | `retrying` | Telos hit an error on its side. | Nothing at first. Telos keeps retrying. If it doesn't recover, contact Telos support (hello@usetelos.ai) with the Goal ID. |
 | `INFERENCE_PROVIDER_ERROR` | `retrying` | The model provider is returning errors. | Check the Goal's API key or subscription, or wait for the model provider to recover. |
 
-`telos describe` goes deeper into the error and shows what to do next, and for a retrying Goal, when Telos will try again.
+`telos describe` goes deeper into the error and shows what to do next. For a retrying Goal, it also shows when Telos will try again.
 
 You can [pause](#pause) the Goal anytime to stop the retries. Billing and workspace blocks clear on their own once fixed.
 
