@@ -181,7 +181,7 @@ reading-list  blocked (SPEC_UNSATISFIABLE)  goal_c7d2f0a4e8
 | Reason | Status | Meaning | What to do |
 |---|---|---|---|
 | `SPEC_UNSATISFIABLE` | `blocked` | The agents found that the spec can't be met as written. | Edit the spec and apply the new version. |
-| `CREDITS_EXHAUSTED` | `blocked` | The workspace is out of Telos credits. | Add credits. |
+| `CREDITS_EXHAUSTED` | `blocked` | The workspace is out of Telos credits. | Add Telos credits. |
 | `PAYMENT_PAST_DUE` | `blocked` | A payment failed. | Update the payment method. |
 | `SPEND_CAP_REACHED` | `blocked` | The workspace reached its monthly spend cap. | Raise or remove the cap. |
 | `WORKSPACE_ARCHIVED` | `blocked` | The workspace is archived. | Restore the workspace. |
@@ -289,7 +289,7 @@ $ telos pause goal_c7d2f0a4e8
 Paused goal_c7d2f0a4e8
 ```
 
-The service keeps running while the Goal is paused. To resume the agents, run:
+The service keeps running while the Goal is paused. To resume the harness, run:
 
 ```console
 $ telos resume goal_c7d2f0a4e8
