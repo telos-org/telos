@@ -243,7 +243,7 @@ func (e *APIError) Error() string {
 		message = fmt.Sprintf("%s (%s)", e.Detail, message)
 	}
 	if e.StatusCode == http.StatusUnauthorized {
-		message += "; run `telos login` or update TELOS_AUTH_TOKEN"
+		message += ". Run `telos login` or update TELOS_AUTH_TOKEN."
 	}
 	return message
 }
