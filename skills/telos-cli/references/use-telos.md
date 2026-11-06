@@ -159,16 +159,39 @@ $ telos logs goal_c7d2f0a4e8
 
 Add `--follow` to keep printing new activity as it happens, until the Goal stops or you press Ctrl-C.
 
-`telos list` and `telos describe` report one of four statuses. When a Goal needs attention or has stopped, `describe` also shows why. Here's how to interpret them:
+`telos list` shows one of six statuses. Here's how to interpret them:
 
 | Status | Meaning |
 |---|---|
 | `working` | Telos is preparing the Goal's [environment](environment.md), implementing the current spec, or verifying it. |
 | `ready` | Telos accepted the current Goal. |
-| `needs_attention` | The latest run failed or stopped unexpectedly. `telos describe` shows why, and what to run next. |
+| `blocked` | The harness has stopped due to client-side issues (for example, unsatisfiable spec or a billing problem). |
+| `retrying` | Something failed (for example, Telos server error or inference provider down), and Telos is retrying. |
+| `paused` | Someone in your workspace [paused](#pause) the Goal. |
 | `stopped` | The Goal has stopped running, usually because you deleted it. |
 
-When a Goal is in `needs_attention`, re-applying the same spec with `telos apply SPEC.md --goal goal_c7d2f0a4e8` retries straight away. Credit or key failures also recover on their own once you add credits or fix the key. If the reason points to the environment or runtime, it may need escalation to Telos support (hello@usetelos.ai).
+For a blocked or retrying Goal, `telos list` also shows the reason:
+
+```console
+$ telos list
+NAME          STATUS                        ID
+reading-list  blocked (SPEC_UNSATISFIABLE)  goal_c7d2f0a4e8
+```
+
+| Reason | Status | Meaning | What to do |
+|---|---|---|---|
+| `SPEC_UNSATISFIABLE` | `blocked` | The agents found that the spec can't be met as written. | Edit the spec and apply the new version. |
+| `CREDITS_EXHAUSTED` | `blocked` | The workspace is out of Telos credits. | Add Telos credits. |
+| `PAYMENT_PAST_DUE` | `blocked` | A payment failed. | Update the payment method. |
+| `SPEND_CAP_REACHED` | `blocked` | The workspace reached its monthly spend cap. | Raise or remove the cap. |
+| `WORKSPACE_ARCHIVED` | `blocked` | The workspace is archived. | Restore the workspace. |
+| `INTERNAL_ERROR` | `blocked` | The Goal failed to deploy. | Re-apply with `telos apply SPEC.md --goal goal_c7d2f0a4e8`. If it fails again, contact Telos support (hello@usetelos.ai) with the Goal ID. |
+| `INTERNAL_ERROR` | `retrying` | Telos hit an error on its side. | Nothing at first. Telos keeps retrying. If it doesn't recover, contact Telos support (hello@usetelos.ai) with the Goal ID. |
+| `INFERENCE_PROVIDER_ERROR` | `retrying` | The model provider is returning errors. | Check the Goal's API key or subscription, or wait for the model provider to recover. |
+
+`telos describe` goes deeper into the error and shows what to do next. For a retrying Goal, it also shows when Telos will try again.
+
+You can [pause](#pause) the Goal anytime to stop the retries. Billing and workspace blocks clear on their own once fixed.
 
 When Telos is done working, `describe` reports the Goal as `ready`, with its service URL and what it has cost so far.
 
@@ -256,6 +279,24 @@ $ telos get goal_c7d2f0a4e8
 ```
 
 This writes the spec and its skills to a directory named after the Goal. Use `--output <dir>` to override the directory name.
+
+## Pause
+
+To stop the harness working on a Goal, you can pause it with:
+
+```console
+$ telos pause goal_c7d2f0a4e8
+Paused goal_c7d2f0a4e8
+```
+
+The service keeps running while the Goal is paused. To resume the harness, run:
+
+```console
+$ telos resume goal_c7d2f0a4e8
+Resumed goal_c7d2f0a4e8
+```
+
+Only workspace admins can pause or resume a Goal. A Goal can be paused while it's `working`, `ready` or `retrying`, and resumed while it's `paused` or blocked by its spec.
 
 ## Delete
 
