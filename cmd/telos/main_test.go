@@ -46,6 +46,23 @@ func TestReorderInterspersedFlags(t *testing.T) {
 	}
 }
 
+func TestReorderInterspersedFlagsRejectsMissingValues(t *testing.T) {
+	for _, args := range [][]string{
+		{"SPEC.md", "--workspace"},
+		{"SPEC.md", "--json", "--workspace"},
+		{"7", "--tail"},
+	} {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		fs.SetOutput(&bytes.Buffer{})
+		fs.String("workspace", "", "")
+		fs.Int("tail", 50, "")
+		fs.Bool("json", false, "")
+		if err := fs.Parse(reorderInterspersedFlags(fs, args)); err == nil || !strings.Contains(err.Error(), "flag needs an argument") {
+			t.Fatalf("%v: error = %v; want missing flag value", args, err)
+		}
+	}
+}
+
 func TestCommandFlagUsageUsesPublicFlagSyntax(t *testing.T) {
 	fs := newCommandFlagSet("logs", "telos logs GOAL [flags]")
 	fs.Bool("q", false, "Quiet output")
