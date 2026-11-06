@@ -238,10 +238,14 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
+	message := fmt.Sprintf("HTTP %d", e.StatusCode)
 	if e.Detail != "" {
-		return fmt.Sprintf("%s (HTTP %d)", e.Detail, e.StatusCode)
+		message = fmt.Sprintf("%s (%s)", e.Detail, message)
 	}
-	return fmt.Sprintf("HTTP %d", e.StatusCode)
+	if e.StatusCode == http.StatusUnauthorized {
+		message += ". Run `telos login` or update TELOS_AUTH_TOKEN."
+	}
+	return message
 }
 
 func IsStatus(err error, statusCode int) bool {
