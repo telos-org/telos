@@ -128,8 +128,8 @@ func TestAuthenticationErrorsIncludeRecoveryAdvice(t *testing.T) {
 		status     int
 		body, want string
 	}{
-		{http.StatusUnauthorized, `{"detail":"token expired"}`, "token expired (HTTP 401); run `telos login` or update TELOS_AUTH_TOKEN"},
-		{http.StatusUnauthorized, "", "HTTP 401; run `telos login` or update TELOS_AUTH_TOKEN"},
+		{http.StatusUnauthorized, `{"detail":"token expired"}`, "token expired (HTTP 401). Run `telos login` or update TELOS_AUTH_TOKEN."},
+		{http.StatusUnauthorized, "", "HTTP 401. Run `telos login` or update TELOS_AUTH_TOKEN."},
 		{http.StatusForbidden, `{"detail":"access denied"}`, "access denied (HTTP 403)"},
 	} {
 		err := readError(&http.Response{
