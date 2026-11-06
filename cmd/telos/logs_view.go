@@ -175,9 +175,11 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 		}
 		row.Level = "WARNING"
 		row.Summary = friendlyAgentError(errorText) + "; retrying"
+		// Older runtimes also logged the failure that ended the game, one past
+		// the budget; that row gets no count.
 		if current, ok := numericEventValue(event.Data["consecutive_failures"]); ok {
-			if maxFailures, hasMax := numericEventValue(event.Data["max_failures"]); hasMax {
-				row.Detail = fmt.Sprintf("attempt %d of %d", current, maxFailures)
+			if maxFailures, hasMax := numericEventValue(event.Data["max_failures"]); hasMax && current <= maxFailures {
+				row.Detail = fmt.Sprintf("retry %d of %d", current, maxFailures)
 			}
 		}
 		return row, true

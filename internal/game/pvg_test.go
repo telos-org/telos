@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -349,6 +350,35 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 	}
 	if result.Rounds != 2*maxRecoverableAgentFailures+1 {
 		t.Fatalf("rounds: got %d", result.Rounds)
+	}
+	// Each retried failure is logged as retry N of the budget; the last one
+	// ends the game rather than claiming another retry.
+	evidence, err := os.ReadFile(state.EvidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retries []int
+	for _, line := range strings.Split(strings.TrimSpace(string(evidence)), "\n") {
+		var event struct {
+			Event string `json:"event"`
+			Data  struct {
+				Consecutive int `json:"consecutive_failures"`
+				Max         int `json:"max_failures"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Event != "agent_failure_recoverable" {
+			continue
+		}
+		if event.Data.Max != maxRecoverableAgentFailures {
+			t.Fatalf("max_failures: got %d", event.Data.Max)
+		}
+		retries = append(retries, event.Data.Consecutive)
+	}
+	if !slices.Equal(retries, []int{1, 2, 3}) {
+		t.Fatalf("logged retries: got %v", retries)
 	}
 }
 
