@@ -159,14 +159,14 @@ $ telos logs goal_c7d2f0a4e8
 
 Add `--follow` to keep printing new activity as it happens, until the Goal stops or you press Ctrl-C.
 
-`telos list` and `telos describe` report one of six statuses. Here's how to interpret them:
+`telos list` shows one of six statuses. Here's how to interpret them:
 
 | Status | Meaning |
 |---|---|
 | `working` | Telos is preparing the Goal's [environment](environment.md), implementing the current spec, or verifying it. |
 | `ready` | Telos accepted the current Goal. |
-| `blocked` | Agents have stopped due to client-side issues (for example, contradictory spec or a billing problem). `telos describe` shows why, and what to fix. |
-| `retrying` | Something failed (for example, Telos issues or inference provider down), and Telos is retrying. `telos describe` shows why, and when it will try next. |
+| `blocked` | Agents have stopped due to client-side issues (for example, unsatisfiable spec or a billing problem). |
+| `retrying` | Something failed (for example, Telos server error or inference provider down), and Telos is retrying. |
 | `paused` | Someone in your workspace [paused](#pause) the Goal. |
 | `stopped` | The Goal has stopped running, usually because you deleted it. |
 
@@ -181,13 +181,15 @@ reading-list  blocked (SPEC_UNSATISFIABLE)  goal_c7d2f0a4e8
 | Reason | Status | Meaning | What to do |
 |---|---|---|---|
 | `SPEC_UNSATISFIABLE` | `blocked` | The agents found that the spec can't be met as written. | Edit the spec and apply the new version. |
-| `CREDITS_EXHAUSTED` | `blocked` | The workspace is out of credits. | Add credits. |
+| `CREDITS_EXHAUSTED` | `blocked` | The workspace is out of Telos credits. | Add credits. |
 | `PAYMENT_PAST_DUE` | `blocked` | A payment failed. | Update the payment method. |
 | `SPEND_CAP_REACHED` | `blocked` | The workspace reached its monthly spend cap. | Raise or remove the cap. |
 | `WORKSPACE_ARCHIVED` | `blocked` | The workspace is archived. | Restore the workspace. |
-| `INTERNAL_ERROR` | `blocked` | The Goal failed to deploy. | Re-apply with `telos apply SPEC.md --goal goal_c7d2f0a4e8`. |
-| `INTERNAL_ERROR` | `retrying` | Telos hit a problem. | Nothing. Telos keeps retrying. |
+| `INTERNAL_ERROR` | `blocked` | The Goal failed to deploy. | Re-apply with `telos apply SPEC.md --goal goal_c7d2f0a4e8`. If it fails again, contact Telos support (hello@usetelos.ai) with the Goal ID. |
+| `INTERNAL_ERROR` | `retrying` | Telos hit an error on its side. | Nothing at first. Telos keeps retrying. If it doesn't recover, contact Telos support (hello@usetelos.ai) with the Goal ID. |
 | `INFERENCE_PROVIDER_ERROR` | `retrying` | The model provider is returning errors. | Check the Goal's API key or subscription, or wait for the model provider to recover. |
+
+`telos describe` goes deeper into the error and shows what to do next, and for a retrying Goal, when Telos will try again.
 
 You can [pause](#pause) the Goal anytime to stop the retries. Billing and workspace blocks clear on their own once fixed.
 
@@ -280,21 +282,21 @@ This writes the spec and its skills to a directory named after the Goal. Use `--
 
 ## Pause
 
-To stop the agents working on a Goal, you can pause it with:
+To stop the harness working on a Goal, you can pause it with:
 
 ```console
 $ telos pause goal_c7d2f0a4e8
 Paused goal_c7d2f0a4e8
 ```
 
-The service keeps running while the Goal is paused. and compute and storage are still charged. Inference isn't charged while the Goal is paused. To resume the agents, run:
+The service keeps running while the Goal is paused. To resume the agents, run:
 
 ```console
 $ telos resume goal_c7d2f0a4e8
 Resumed goal_c7d2f0a4e8
 ```
 
-Only workspace admins can pause or resume a Goal. Goals started on an older Telos runtime can't be paused.
+Only workspace admins can pause or resume a Goal. A Goal can be paused while it's `working`, `ready` or `retrying`, and resumed while it's `paused` or blocked by its spec.
 
 ## Delete
 
