@@ -3,9 +3,8 @@
 ## Documentation and user-facing prose
 
 Follow [Google's developer documentation style guide](https://developers.google.com/style)
-for documentation, CLI help, and error messages. Prefer a period between a
-problem and its recovery instruction. This guidance applies to prose, not code
-style.
+for documentation, CLI help, and error messages. This guidance applies to prose,
+not code style.
 
 ## Do not edit the CLI guide
 
