@@ -106,10 +106,12 @@ func reorderInterspersedFlags(fs *flag.FlagSet, args []string) []string {
 		if strings.Contains(arg, "=") || flagIsBool(fs, arg) {
 			continue
 		}
-		if i+1 < len(args) {
-			i++
-			flags = append(flags, args[i])
+		if i+1 == len(args) {
+			// Let flag.Parse report the missing value without consuming an earlier positional argument.
+			return flags
 		}
+		i++
+		flags = append(flags, args[i])
 	}
 
 	return append(flags, positionals...)
