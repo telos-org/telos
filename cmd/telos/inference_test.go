@@ -292,6 +292,8 @@ func TestInferenceCLIProcess(t *testing.T) {
 		cmdRun(args[1:])
 	case "config":
 		cmdConfig(args[1:])
+	case "list":
+		cmdList(args[1:])
 	case "describe":
 		cmdDescribe(args[1:])
 	case "logs":
