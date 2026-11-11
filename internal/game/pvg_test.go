@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -17,7 +18,6 @@ type fakeExecutor struct {
 	verifierResults []TurnResult
 	proverIdx       int
 	verifierIdx     int
-	workspaceText   string
 	checkpointOK    bool
 	turnDirs        []string
 	delay           time.Duration
@@ -55,10 +55,6 @@ func (f *fakeExecutor) ExecuteTurn(task string, role string, ts *TurnState) Turn
 		return r
 	}
 	return TurnResult{Role: role, Status: StatusContinue, Logs: "verifier default"}
-}
-
-func (f *fakeExecutor) WorkspaceState() string {
-	return f.workspaceText
 }
 
 func (f *fakeExecutor) CheckpointWorkspace(dest string) bool {
@@ -145,9 +141,8 @@ func TestPVGHumanProgressLeavesTechnicalHandoffIntact(t *testing.T) {
 	exec := &fakeExecutor{
 		onTurn: func(ts *TurnState) {
 			ts.OnLiveEvent(LiveAgentEvent{Kind: "progress_update", Text: "Checking restart recovery without duplicate orders."})
-			ts.OnLiveEvent(LiveAgentEvent{Kind: "review", Text: "Replay evidence: evaluation/restart.go."})
 		},
-		verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: "Verified technical evidence.\n<status>CONCEDE</status>"}},
+		verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: "Verified technical evidence. Replay evidence: evaluation/restart.go.\n<status>CONCEDE</status>"}},
 	}
 	result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{EpochID: 7}).Run()
 	if result.GameResult != GameSuccess || !result.VerifierConceded {
@@ -180,19 +175,15 @@ func TestPVGHumanProgressLeavesTechnicalHandoffIntact(t *testing.T) {
 			if event["epoch_id"] != float64(7) || event["session_id"] != "human-progress" || body["turn_id"] == "" {
 				t.Fatalf("missing provenance: %#v", event)
 			}
-			switch body["audience"] {
-			case "user":
-				humanCount++
-				if body["kind"] != "progress_update" || body["text"] != "Checking restart recovery without duplicate orders." {
-					t.Fatalf("human update changed: %#v", event)
-				}
-			case "agent":
-				technicalCount++
-				if body["kind"] != "review" || body["text"] != "Replay evidence: evaluation/restart.go." {
-					t.Fatalf("technical update changed: %#v", event)
-				}
-			default:
-				t.Fatalf("new progress must identify its audience: %#v", event)
+			humanCount++
+			if body["audience"] != "user" || body["kind"] != "progress_update" || body["text"] != "Checking restart recovery without duplicate orders." {
+				t.Fatalf("human update changed: %#v", event)
+			}
+		}
+		if event["event"] == "agent_complete" {
+			technicalCount++
+			if body["audience"] != "agent" {
+				t.Fatalf("technical report audience changed: %#v", event)
 			}
 		}
 	}
@@ -251,8 +242,8 @@ func TestPVGUntilStopsOnVerifierConcede(t *testing.T) {
 			{Role: "prover", Status: StatusContinue, Logs: "Round 2"},
 		},
 		verifierResults: []TurnResult{
-			{Role: "verifier", Status: StatusConcede, Logs: "<review>\ncriteria,score\nFunctional correctness,7.0/10\n</review>\n\n<summary>Keep going.</summary>\n\n<status>CONCEDE</status>\n"},
-			{Role: "verifier", Status: StatusConcede, Logs: "<review>\ncriteria,score\nFunctional correctness,8.0/10\n</review>\n\n<summary>Better.</summary>\n\n<status>CONCEDE</status>\n"},
+			{Role: "verifier", Status: StatusConcede, Logs: "Independent checks passed.\n<status>CONCEDE</status>\n"},
+			{Role: "verifier", Status: StatusConcede, Logs: "Independent checks passed again.\n<status>CONCEDE</status>\n"},
 		},
 	}
 
@@ -277,8 +268,8 @@ func TestPVGUntilStopsOnVerifierConcede(t *testing.T) {
 	}
 
 	transcript := ReadTranscript(state.TranscriptPath)
-	if count := strings.Count(transcript, "<review>"); count != 1 {
-		t.Fatalf("expected one review block, got %d:\n%s", count, transcript)
+	if count := strings.Count(transcript, "## Evaluation "); count != 1 {
+		t.Fatalf("expected one evaluation turn, got %d:\n%s", count, transcript)
 	}
 }
 
@@ -317,11 +308,11 @@ func TestPVGRecoverableProverFailureContinuesToVerifier(t *testing.T) {
 		t.Fatalf("rounds: got %d", result.Rounds)
 	}
 	transcript := ReadTranscript(state.TranscriptPath)
-	if !strings.Contains(transcript, "Turn ended with runtime error") {
+	if !strings.Contains(transcript, "Turn failed; no completed agent report") {
 		t.Fatalf("transcript should record recoverable turn error:\n%s", transcript)
 	}
-	if !strings.Contains(transcript, filepath.Join(state.TurnsDir(), "epoch-0000", "0001-prover", "pi-session.jsonl")) {
-		t.Fatalf("transcript should point to Pi session:\n%s", transcript)
+	if !strings.Contains(transcript, state.RunnerLogPath) {
+		t.Fatalf("transcript should point to runner diagnostics:\n%s", transcript)
 	}
 }
 
@@ -341,16 +332,12 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 			Recoverable: true,
 		}
 	}
-	exec := &fakeExecutor{
-		proverResults: []TurnResult{
-			recoverable("prover"),
-			recoverable("prover"),
-		},
-		verifierResults: []TurnResult{
-			recoverable("verifier"),
-			recoverable("verifier"),
-		},
+	// The prover keeps failing while the verifier's turns succeed in between.
+	var failures []TurnResult
+	for range maxRecoverableAgentFailures + 1 {
+		failures = append(failures, recoverable("prover"))
 	}
+	exec := &fakeExecutor{proverResults: failures}
 
 	pvg := NewPVG(compiled, exec, state, PVGConfig{Verbose: false})
 	result := pvg.Run()
@@ -361,51 +348,120 @@ func TestPVGRecoverableFailureBudget(t *testing.T) {
 	if !strings.Contains(result.Error, "agent_failure_budget_exceeded") {
 		t.Fatalf("error: got %q", result.Error)
 	}
-	if result.Rounds != maxRecoverableAgentFailures+1 {
+	if result.Rounds != 2*maxRecoverableAgentFailures+1 {
 		t.Fatalf("rounds: got %d", result.Rounds)
 	}
+	// Each retried failure is logged as retry N of the budget; the last one
+	// ends the game rather than claiming another retry.
+	evidence, err := os.ReadFile(state.EvidencePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var retries []int
+	for _, line := range strings.Split(strings.TrimSpace(string(evidence)), "\n") {
+		var event struct {
+			Event string `json:"event"`
+			Data  struct {
+				Consecutive int `json:"consecutive_failures"`
+				Max         int `json:"max_failures"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal([]byte(line), &event); err != nil {
+			t.Fatal(err)
+		}
+		if event.Event != "agent_failure_recoverable" {
+			continue
+		}
+		if event.Data.Max != maxRecoverableAgentFailures {
+			t.Fatalf("max_failures: got %d", event.Data.Max)
+		}
+		retries = append(retries, event.Data.Consecutive)
+	}
+	if !slices.Equal(retries, []int{1, 2, 3}) {
+		t.Fatalf("logged retries: got %v", retries)
+	}
 }
 
-func TestPVGDoesNotRetryCredentialFailure(t *testing.T) {
-	compiled := compileTestSpec(t)
-	dir := t.TempDir()
-	state := NewPVGState("pvg-test", filepath.Join(dir, "specs", "pvg-test"), "test-session-auth")
-	state.Ensure()
-	exec := &fakeExecutor{proverResults: []TurnResult{{
-		Role:        "prover",
-		Status:      StatusContinue,
-		Error:       "403: inactive virtual key",
-		Recoverable: true,
-	}}}
-
-	result := NewPVG(compiled, exec, state, PVGConfig{}).Run()
-	if result.GameResult != GameFailure || result.Rounds != 1 {
-		t.Fatalf("result = %#v", result)
-	}
-	if result.Error != "403: inactive virtual key" {
-		t.Fatalf("error = %q", result.Error)
-	}
-}
-
-func TestPVGQuotaFailureDoesNotStartAnotherAgentTurn(t *testing.T) {
-	for _, role := range []string{"prover", "verifier"} {
-		t.Run(role, func(t *testing.T) {
-			compiled := compileTestSpec(t)
-			state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-quota")
+func TestPVGRootVerifierBlock(t *testing.T) {
+	blocked := "Spec contradiction.\n<blocked>The spec requires both no network and a live Stripe charge; drop one.</blocked>\n<status>BLOCKED</status>"
+	for _, tc := range []struct {
+		name       string
+		controller bool
+		logs       string
+		recorded   bool
+		want       GameResult
+	}{
+		{"root verifier with a sentence", true, blocked, true, GameBlocked},
+		{"root verifier without a sentence", true, "No reason.\n<status>BLOCKED</status>", true, GameFailure},
+		{"child verifier", false, blocked, true, GameFailure},
+		{"block not recorded", true, blocked, false, GameFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-block")
 			state.Ensure()
-			failure := TurnResult{Role: role, Error: "400: Your credit balance is too low to access the Anthropic API", Recoverable: true}
-			exec := &fakeExecutor{proverResults: []TurnResult{failure}}
-			wantRounds := 1
-			if role == "verifier" {
-				exec.proverResults = []TurnResult{{Role: "prover", Status: StatusContinue, Logs: "partial work"}}
-				exec.verifierResults = []TurnResult{failure}
-				wantRounds = 2
+			// A game that does not block ends at the next verifier turn.
+			exec := &fakeExecutor{verifierResults: []TurnResult{
+				{Role: "verifier", Status: ExtractStatus(tc.logs), Logs: tc.logs},
+				{Role: "verifier", Error: "boom"},
+			}}
+			var config PVGConfig // a child session records no blocks
+			if tc.controller {
+				config.RecordBlock = func(string) string {
+					if tc.recorded {
+						return "SPEC_UNSATISFIABLE"
+					}
+					return ""
+				}
 			}
-			result := NewPVG(compiled, exec, state, PVGConfig{}).Run()
-			if result.GameResult != GameFailure || result.Rounds != wantRounds || result.Error != failure.Error {
-				t.Fatalf("quota failure started another turn: %#v", result)
+			result := NewPVG(compileTestSpec(t), exec, state, config).Run()
+			if result.GameResult != tc.want {
+				t.Fatalf("result = %s, want %s", result.GameResult, tc.want)
+			}
+			evidence, _ := os.ReadFile(state.EvidencePath)
+			logged := strings.Contains(string(evidence), `"event":"goal_blocked"`)
+			if tc.want == GameBlocked && (result.BlockedMessage != "The spec requires both no network and a live Stripe charge; drop one." || !logged) {
+				t.Fatalf("block message %q, logged %v", result.BlockedMessage, logged)
+			}
+			if tc.want != GameBlocked && logged {
+				t.Fatal("non-block logged goal_blocked")
 			}
 		})
+	}
+}
+
+func TestPVGReportsWhetherAProviderErrorEndedTheGame(t *testing.T) {
+	provider := TurnResult{Role: "verifier", Error: "overloaded", Recoverable: true, ProviderError: true}
+	internal := TurnResult{Role: "verifier", Error: "pi crashed"}
+	for _, tc := range []struct {
+		name     string
+		verifier []TurnResult
+		want     string
+	}{
+		// The provider's own words, not the runtime's failure-budget wrapping.
+		{"provider error", []TurnResult{provider, provider, provider, provider}, "overloaded"},
+		{"provider error, then a Telos error", []TurnResult{provider, internal}, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-provider")
+			state.Ensure()
+			// The prover succeeds every turn; the verifier's failures still end the game.
+			exec := &fakeExecutor{verifierResults: tc.verifier}
+			result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{}).Run()
+			if result.GameResult != GameFailure || result.ProviderError != tc.want {
+				t.Fatalf("result = %+v", result)
+			}
+		})
+	}
+}
+
+func TestPVGCallsOnTurnSucceededOnlyForTurnsWithoutErrors(t *testing.T) {
+	state := NewPVGState("pvg-test", filepath.Join(t.TempDir(), "specs", "pvg-test"), "test-session-success")
+	state.Ensure()
+	exec := &fakeExecutor{verifierResults: []TurnResult{{Role: "verifier", Error: "boom"}}}
+	successes := 0
+	NewPVG(compileTestSpec(t), exec, state, PVGConfig{OnTurnSucceeded: func() { successes++ }}).Run()
+	if successes != 1 {
+		t.Fatalf("successes = %d, want the one prover turn", successes)
 	}
 }
 
@@ -424,8 +480,8 @@ func TestPVGUntilFailsWhenReviewBudgetExhausted(t *testing.T) {
 		},
 		verifierResults: []TurnResult{
 			{Role: "verifier", Status: StatusContinue, Logs: "pi_failed:1", Error: "pi_failed:1", Recoverable: true},
-			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,7.0/10\n</review>\n\n<summary>Keep going.</summary>\n"},
-			{Role: "verifier", Status: StatusContinue, Logs: "<review>\ncriteria,score\nFunctional correctness,8.0/10\n</review>\n\n<summary>Better.</summary>\n"},
+			{Role: "verifier", Status: StatusContinue, Logs: "A required endpoint still fails validation."},
+			{Role: "verifier", Status: StatusContinue, Logs: "The endpoint still returns the wrong status."},
 		},
 	}
 
@@ -442,8 +498,8 @@ func TestPVGUntilFailsWhenReviewBudgetExhausted(t *testing.T) {
 		t.Fatalf("verifier attempts: got %d", result.VerifierRounds)
 	}
 	transcript := ReadTranscript(state.TranscriptPath)
-	if count := strings.Count(transcript, "<review>"); count != 2 {
-		t.Fatalf("expected two successful review blocks, got %d:\n%s", count, transcript)
+	if count := strings.Count(transcript, "## Evaluation "); count != 3 {
+		t.Fatalf("expected one failed and two completed evaluation turns, got %d:\n%s", count, transcript)
 	}
 }
 
@@ -617,8 +673,8 @@ func TestPVGLiveEventsReachTranscriptAndEvidence(t *testing.T) {
 	state := NewPVGState("pvg-test", t.TempDir(), "test-session-live-events")
 	liveEvents := []LiveAgentEvent{
 		{Kind: "progress_update", Text: "Reading app/main.py revealed missing input validation."},
-		{Kind: "review", Text: "The input validation tests pass."},
-		{Kind: "summary", Text: "Input validation is ready."},
+		{Kind: "progress_update", Text: "The input validation tests pass."},
+		{Kind: "progress_update", Text: "Input validation is ready."},
 	}
 	exec := &fakeExecutor{
 		onTurn: func(ts *TurnState) {
@@ -627,10 +683,10 @@ func TestPVGLiveEventsReachTranscriptAndEvidence(t *testing.T) {
 			}
 		},
 		proverResults: []TurnResult{
-			{Role: "prover", Status: StatusContinue, Logs: "Added input validation."},
+			{Role: "prover", Status: StatusContinue, Logs: "Added input validation.\n<progress_update>Input validation is ready.</progress_update>\n<progress_update>New final handoff.</progress_update>\nRegression evidence: tests/test_validation.py."},
 		},
 		verifierResults: []TurnResult{
-			{Role: "verifier", Status: StatusConcede, Logs: "Accepted the validation change."},
+			{Role: "verifier", Status: StatusConcede, Logs: "Accepted the validation change.\n<progress_update>Input validation is ready.</progress_update>\n<status>CONCEDE</status>"},
 		},
 	}
 	if result := NewPVG(compiled, exec, state, PVGConfig{}).Run(); result.GameResult != GameSuccess {
@@ -644,10 +700,13 @@ func TestPVGLiveEventsReachTranscriptAndEvidence(t *testing.T) {
 			t.Errorf("expected %q in both turns, got %d copies", block, count)
 		}
 	}
-	for _, report := range []string{"Added input validation.", "Accepted the validation change."} {
+	for _, report := range []string{"Added input validation.", "Accepted the validation change.", "Regression evidence: tests/test_validation.py."} {
 		if !strings.Contains(transcript, report) {
 			t.Errorf("transcript lost completed report %q", report)
 		}
+	}
+	if count := strings.Count(transcript, "<progress_update>New final handoff.</progress_update>"); count != 1 {
+		t.Fatalf("unrecorded final progress must appear once, got %d copies", count)
 	}
 
 	data, err := os.ReadFile(state.EvidencePath)
@@ -677,6 +736,205 @@ func TestPVGLiveEventsReachTranscriptAndEvidence(t *testing.T) {
 			if got[i] != want {
 				t.Errorf("%s evidence event %d: got %#v, want %#v", role, i, got[i], want)
 			}
+		}
+	}
+}
+
+func TestPVGFinalProgressAppearsOncePerTurn(t *testing.T) {
+	const report = "The current spec holds."
+	for _, mode := range []string{"recorded", "not emitted", "write failed"} {
+		t.Run(mode, func(t *testing.T) {
+			state := NewPVGState("pvg-test", t.TempDir(), "final-progress")
+			body := "<progress_update>\n" + report + "\n</progress_update>"
+			stats := TurnStats{Model: "test-model", CostUSD: 0.01}
+			exec := &fakeExecutor{
+				onTurn: func(ts *TurnState) {
+					if mode == "not emitted" {
+						return
+					}
+					if mode == "write failed" {
+						if err := os.Rename(state.TranscriptPath, state.TranscriptPath+".saved"); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Mkdir(state.TranscriptPath, 0o755); err != nil {
+							t.Fatal(err)
+						}
+					}
+					ts.OnLiveEvent(LiveAgentEvent{Kind: "progress_update", Text: "\n" + report + "\n"})
+					if mode == "write failed" {
+						if err := os.Remove(state.TranscriptPath); err != nil {
+							t.Fatal(err)
+						}
+						if err := os.Rename(state.TranscriptPath+".saved", state.TranscriptPath); err != nil {
+							t.Fatal(err)
+						}
+					}
+				},
+				proverResults:   []TurnResult{{Role: "prover", Status: StatusContinue, Logs: body, Stats: stats}},
+				verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: body + "\n<status>CONCEDE</status>", Stats: stats}},
+			}
+			if result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{}).Run(); result.GameResult != GameSuccess {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+			transcript := ReadTranscript(state.TranscriptPath)
+			if strings.Count(transcript, report) != 2 || strings.Count(transcript, "model `test-model`") != 2 {
+				t.Fatalf("each turn must retain its report once and completion metadata:\n%s", transcript)
+			}
+			for _, status := range []string{"CONTINUE", "CONCEDE"} {
+				if strings.Count(transcript, "<status>"+status+"</status>") != 1 {
+					t.Fatalf("completion verdict missing or duplicated:\n%s", transcript)
+				}
+			}
+			for _, fabricated := range []string{"No assistant text captured", "Turn completed"} {
+				if strings.Contains(transcript, fabricated) {
+					t.Fatalf("completion manufactured text despite the available report:\n%s", transcript)
+				}
+			}
+		})
+	}
+}
+
+func TestPVGLargeFailuresStayInRunnerLog(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		prefix      string
+		recoverable bool
+		wantResult  GameResult
+	}{
+		{"recoverable", "pi_failed:1", true, GameSuccess},
+		{"fatal", "pi_failed:1", false, GameFailure},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewPVGState("pvg-test", t.TempDir(), "large-failure")
+			failure := tc.prefix + "\n" + strings.Repeat("PRIVATE_PROVIDER_ERROR", 65536)
+			exec := &fakeExecutor{
+				proverResults:   []TurnResult{{Role: "prover", Status: StatusContinue, Logs: failure, Error: failure, Recoverable: tc.recoverable}},
+				verifierResults: []TurnResult{{Role: "verifier", Status: StatusConcede, Logs: "Independently checked the existing system."}},
+			}
+			result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{EpochID: 7}).Run()
+			if result.GameResult != tc.wantResult {
+				t.Fatalf("result=%s want=%s", result.GameResult, tc.wantResult)
+			}
+			if tc.wantResult == GameFailure && result.Error != failure {
+				t.Fatal("raw failure must remain available to the runtime's recovery policy")
+			}
+			diagnostics, err := os.ReadFile(state.RunnerLogPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Count(string(diagnostics), failure) != 1 || !strings.Contains(string(diagnostics), "epoch=7 turn=0001-prover") {
+				t.Fatal("runner log must retain one complete diagnostic with turn provenance")
+			}
+			transcript := ReadTranscript(state.TranscriptPath)
+			if len(transcript) > 5000 || !strings.Contains(transcript, state.RunnerLogPath) || !strings.Contains(transcript, "epoch `7`, turn `0001-prover`") {
+				t.Fatalf("transcript must contain a compact diagnostic reference: %d bytes", len(transcript))
+			}
+			if strings.Contains(transcript, "PRIVATE_PROVIDER_ERROR") || strings.Contains(transcript, tc.prefix) {
+				t.Fatal("transcript contains raw failure diagnostics")
+			}
+			data, err := os.ReadFile(state.EvidencePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(data) > 16000 || strings.Contains(string(data), "PRIVATE_PROVIDER_ERROR") {
+				t.Fatalf("evidence grew with the error payload: %d bytes", len(data))
+			}
+			for _, line := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+				var record struct {
+					Data map[string]any `json:"data"`
+				}
+				if err := json.Unmarshal([]byte(line), &record); err != nil {
+					t.Fatal(err)
+				}
+				for _, field := range []string{"error", "logs_tail"} {
+					if _, exists := record.Data[field]; exists {
+						t.Fatalf("evidence must not copy raw diagnostics or assistant output into %s", field)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPVGDoesNotReferenceUnwrittenDiagnostics(t *testing.T) {
+	state := NewPVGState("pvg-test", t.TempDir(), "unwritten-diagnostic")
+	pvg := NewPVG(compileTestSpec(t), &fakeExecutor{}, state, PVGConfig{})
+	if pvg.logDiagnostic("prover", "first failure", "") == "" {
+		t.Fatal("expected initial diagnostic write to succeed")
+	}
+	state.RunnerLogPath = state.SpecDir
+	if pvg.logDiagnostic("prover", "second failure", "") != "" || pvg.diagnosticLogPath != "" || pvg.diagnosticError != "" {
+		t.Fatal("a failed write must not publish a stale diagnostic reference")
+	}
+}
+
+func TestPVGRecordsTerminalErrorAfterRecoverableFailure(t *testing.T) {
+	maxCost := 0.5
+	for _, tc := range []struct {
+		name   string
+		config PVGConfig
+		want   string
+	}{
+		{"cost budget", PVGConfig{MaxCostUSD: &maxCost}, "budget exceeded: $1.00 >= cap $0.50"},
+		{"review budget", PVGConfig{Until: 1}, "review_budget_exhausted: verifier did not concede within 1 review cycles"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			state := NewPVGState("pvg-test", t.TempDir(), "terminal-error")
+			exec := &fakeExecutor{
+				proverResults: []TurnResult{{Role: "prover", Error: "pi_failed:1", Recoverable: true}},
+				verifierResults: []TurnResult{{Role: "verifier", Status: StatusContinue,
+					Logs: "Review complete", Stats: TurnStats{CostUSD: 1}}},
+			}
+			result := NewPVG(compileTestSpec(t), exec, state, tc.config).Run()
+			if result.GameResult != GameFailure || result.Error != tc.want {
+				t.Fatalf("unexpected result: %+v", result)
+			}
+			diagnostics, err := os.ReadFile(state.RunnerLogPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, failure := range []string{"pi_failed:1", tc.want} {
+				if strings.Count(string(diagnostics), failure) != 1 {
+					t.Fatalf("runner log must retain each distinct failure once: %s", diagnostics)
+				}
+				for _, path := range []string{state.TranscriptPath, state.EvidencePath} {
+					data, err := os.ReadFile(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if strings.Contains(string(data), failure) {
+						t.Fatalf("raw failure leaked into %s", path)
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestPVGFailurePreservesCapturedStderr(t *testing.T) {
+	state := NewPVGState("pvg-test", t.TempDir(), "captured-stderr")
+	captured := "STDERR_DETAILS\n" + strings.Repeat("provider startup detail\n", 1000)
+	exec := &fakeExecutor{proverResults: []TurnResult{{
+		Role: "prover", Status: StatusContinue, Error: "agent_no_output", Logs: captured,
+	}}}
+	result := NewPVG(compileTestSpec(t), exec, state, PVGConfig{}).Run()
+	if result.GameResult != GameFailure {
+		t.Fatalf("result: %s", result.GameResult)
+	}
+	diagnostics, err := os.ReadFile(state.RunnerLogPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(diagnostics), captured) {
+		t.Fatal("captured stderr must survive in runner.log without truncation")
+	}
+	for _, path := range []string{state.TranscriptPath, state.EvidencePath} {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(data), "STDERR_DETAILS") {
+			t.Fatalf("captured stderr leaked into %s", path)
 		}
 	}
 }

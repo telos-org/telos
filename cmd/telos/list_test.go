@@ -155,7 +155,7 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 				"name":           "auth",
 				"state":          "healthy",
 				"status":         "ready",
-				"status_reason":  "The agent finished and the verifier accepted the result.",
+				"message":        "The agent finished and the verifier accepted the result.",
 				"package_ref":    "@telos/auth:1.0.0",
 				"package_digest": "sha256:abc",
 				"created_at":     "then",
@@ -185,7 +185,7 @@ func TestCmdListJSONShowsCloudSessions(t *testing.T) {
 	}
 	session, ok := sessions[0].(map[string]any)
 	if !ok || session["id"] != "sess_123" || session["status"] != "ready" ||
-		session["status_reason"] != "The agent finished and the verifier accepted the result." {
+		session["message"] != "The agent finished and the verifier accepted the result." {
 		t.Fatalf("cloud list json first session: %#v", sessions[0])
 	}
 	if _, ok := session["state"]; ok {
@@ -237,7 +237,7 @@ func TestPrintCloudSessionDescriptionShowsProductSurfaces(t *testing.T) {
 		Name:          "auth",
 		State:         "healthy",
 		Status:        "ready",
-		StatusReason:  "The agent finished and the verifier accepted the result.",
+		Message:       "The agent finished and the verifier accepted the result.",
 		PackageRef:    "@telos/auth:1.0.0",
 		PackageDigest: "sha256:8f21c47a91ee1438e724bdb55edc81af864db782c29dfb10870e8cdb304f6e1a",
 		ServiceURL:    &serviceURL,
@@ -343,25 +343,6 @@ func TestPrintCloudSessionDescriptionOmitsUnavailableSurfaces(t *testing.T) {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("cloud session description should omit %q:\n%s", notWant, text)
 		}
-	}
-}
-
-func TestPrintCloudSessionDescriptionShowsCanonicalFailureReason(t *testing.T) {
-	failureReason := "Provider authentication failed"
-	session := cloud.SessionRecord{
-		ID:            "sess_123",
-		Name:          "auth",
-		State:         "failed",
-		Status:        "needs_attention",
-		StatusReason:  "The session needs operator attention.",
-		PackageDigest: "sha256:abc",
-		FailureReason: &failureReason,
-	}
-
-	var out bytes.Buffer
-	printCloudSessionDescription(&out, session)
-	if !strings.Contains(out.String(), "Reason    Provider authentication failed") {
-		t.Fatalf("cloud session description missing canonical reason:\n%s", out.String())
 	}
 }
 

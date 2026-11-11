@@ -56,6 +56,12 @@ func (s *fakeReconcileStore) Spec(string) (*sessionapi.SessionSpecResponse, erro
 func (s *fakeReconcileStore) UpdateSpec(string, sessionapi.SessionSpecUpdateRequest) (*sessionapi.SessionSpecUpdateResponse, error) {
 	return nil, sessionapi.ErrNotFound
 }
+func (s *fakeReconcileStore) Pause(string, bool) (*sessionapi.Session, error) {
+	return nil, sessionapi.ErrNotFound
+}
+func (s *fakeReconcileStore) Resume(string) (*sessionapi.Session, error) {
+	return nil, sessionapi.ErrNotFound
+}
 func (s *fakeReconcileStore) Get(string) (*sessionapi.Session, error) {
 	return nil, sessionapi.ErrNotFound
 }

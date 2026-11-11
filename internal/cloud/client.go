@@ -70,11 +70,16 @@ type SkillRecord struct {
 }
 
 type SessionRecord struct {
-	ID             string            `json:"id"`
-	Name           string            `json:"name"`
-	State          string            `json:"state"`
-	Status         string            `json:"status,omitempty"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	State   string `json:"state"`
+	Status  string `json:"status,omitempty"`
+	Reason  string `json:"reason,omitempty"`
+	Message string `json:"message,omitempty"`
+	// StatusReason is what Clouds before the rename send instead of Message.
 	StatusReason   string            `json:"status_reason,omitempty"`
+	LastRetryAt    string            `json:"last_retry_at,omitempty"`
+	NextRetryAt    string            `json:"next_retry_at,omitempty"`
 	PackageRef     string            `json:"package_ref"`
 	PackageDigest  string            `json:"package_digest"`
 	RuntimeVersion *string           `json:"runtime_version,omitempty"`
@@ -85,9 +90,10 @@ type SessionRecord struct {
 	AccessSource   string            `json:"access_source,omitempty"`
 	ServiceURL     *string           `json:"service_url,omitempty"`
 	DashboardURL   *string           `json:"dashboard_url,omitempty"`
-	FailureReason  *string           `json:"failure_reason,omitempty"`
-	CreatedAt      string            `json:"created_at"`
-	UpdatedAt      string            `json:"updated_at"`
+	// FailureReason is the raw lifecycle error; only --json shows it.
+	FailureReason *string `json:"failure_reason,omitempty"`
+	CreatedAt     string  `json:"created_at"`
+	UpdatedAt     string  `json:"updated_at"`
 }
 
 type SessionCreateOptions struct {
@@ -232,10 +238,14 @@ type APIError struct {
 }
 
 func (e *APIError) Error() string {
+	message := fmt.Sprintf("HTTP %d", e.StatusCode)
 	if e.Detail != "" {
-		return fmt.Sprintf("%s (HTTP %d)", e.Detail, e.StatusCode)
+		message = fmt.Sprintf("%s (%s)", e.Detail, message)
 	}
-	return fmt.Sprintf("HTTP %d", e.StatusCode)
+	if e.StatusCode == http.StatusUnauthorized {
+		message += ". Run `telos login` or update TELOS_AUTH_TOKEN."
+	}
+	return message
 }
 
 func IsStatus(err error, statusCode int) bool {
@@ -633,6 +643,32 @@ func (c *Client) listSessions(path string) ([]SessionRecord, error) {
 
 func (c *Client) GetSession(sessionID string) (*SessionRecord, error) {
 	return getJSONWithRetry[SessionRecord](context.Background(), c, "/api/deployments/"+url.PathEscape(sessionID))
+}
+
+// PauseSession stops a Goal's agents until ResumeSession. Workspace admins only.
+func (c *Client) PauseSession(sessionID string) (*SessionRecord, error) {
+	return c.postSession(sessionID, "pause")
+}
+
+// ResumeSession lifts a pause and has the runtime check a blocked Goal again.
+func (c *Client) ResumeSession(sessionID string) (*SessionRecord, error) {
+	return c.postSession(sessionID, "resume")
+}
+
+func (c *Client) postSession(sessionID, action string) (*SessionRecord, error) {
+	resp, err := c.do("POST", "/api/deployments/"+url.PathEscape(sessionID)+"/"+action, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var response SessionRecord
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+		return nil, err
+	}
+	return &response, nil
 }
 
 func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {

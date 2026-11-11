@@ -3,6 +3,8 @@ package game
 import (
 	"fmt"
 	"log"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/telos-org/telos/internal/evidence"
@@ -13,12 +15,14 @@ const maxRecoverableAgentFailures = 3
 
 // PVG runs the prover-verifier loop for one compiled environment.
 type PVG struct {
-	Compiled *spec.CompiledEnvironment
-	Executor AgentExecutor
-	State    *PVGState
-	Config   PVGConfig
-	Result   *PVGResult
-	Evidence *evidence.Evidence
+	Compiled          *spec.CompiledEnvironment
+	Executor          AgentExecutor
+	State             *PVGState
+	Config            PVGConfig
+	Result            *PVGResult
+	Evidence          *evidence.Evidence
+	diagnosticLogPath string
+	diagnosticError   string
 }
 
 // NewPVG creates a new PVG game instance.
@@ -52,9 +56,11 @@ func (p *PVG) Run() *PVGResult {
 	result, err := p.runLoop()
 	if err != nil {
 		p.Result.Error = err.Error()
+		p.logDiagnostic("system", p.Result.Error, "")
 		p.Evidence.Log("game_error", p.Result.Rounds, "system", map[string]interface{}{
-			"error": p.Result.Error,
-			"type":  "PVGError",
+			"message":  "Runtime execution failed.",
+			"log_path": p.diagnosticLogPath,
+			"type":     "PVGError",
 		})
 		return p.end(GameFailure)
 	}
@@ -70,9 +76,9 @@ func (p *PVG) runLoop() (*PVGResult, error) {
 }
 
 func (p *PVG) runDefaultLoop() *PVGResult {
-	promptOpts := p.promptOptions()
-	workspace := ""
-	recoverableFailures := 0
+	// Failures count per role: one role's successes say nothing about the
+	// other's failures, which would otherwise never reach the limit.
+	proverFailures, verifierFailures := 0, 0
 	reviewCyclesCompleted := 0
 	deadline := p.runDeadline()
 
@@ -83,7 +89,7 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 		if p.shouldStop(deadline) {
 			return p.end(GameStopped)
 		}
-		turn := p.runProverTurn(workspace, promptOpts, deadline)
+		turn := p.runProverTurn(deadline)
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
@@ -91,24 +97,23 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 			return p.end(GameStopped)
 		}
 		if turn.Error != "" {
-			if p.turnFailureExceeded(turn, &recoverableFailures) {
+			if p.turnFailureExceeded(turn, &proverFailures) {
 				return p.end(GameFailure)
 			}
 		} else {
-			recoverableFailures = 0
+			proverFailures = 0
 		}
 		if p.overBudget(p.Result.Rounds, "prover") {
 			return p.end(GameFailure)
 		}
 
-		workspace = p.Executor.WorkspaceState()
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
 		if p.shouldStop(deadline) {
 			return p.end(GameStopped)
 		}
-		turn = p.runVerifierTurn(workspace, promptOpts, deadline)
+		turn = p.runVerifierTurn(deadline)
 		if p.runDurationExhausted(deadline) {
 			return p.failRunDurationExhausted()
 		}
@@ -116,11 +121,14 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 			return p.end(GameStopped)
 		}
 		if turn.Error != "" {
-			if p.turnFailureExceeded(turn, &recoverableFailures) {
+			if p.turnFailureExceeded(turn, &verifierFailures) {
 				return p.end(GameFailure)
 			}
 		} else {
-			recoverableFailures = 0
+			verifierFailures = 0
+		}
+		if p.verifierBlocked(turn) {
+			return p.end(GameBlocked)
 		}
 		if turn.Error == "" && turn.Status == StatusConcede {
 			p.Result.VerifierConceded = true
@@ -140,7 +148,6 @@ func (p *PVG) runDefaultLoop() *PVGResult {
 		if p.overBudget(p.Result.Rounds, "verifier") {
 			return p.end(GameFailure)
 		}
-		workspace = p.Executor.WorkspaceState()
 	}
 }
 
@@ -161,46 +168,81 @@ func (p *PVG) runDurationExhausted(deadline time.Time) bool {
 	return !deadline.IsZero() && time.Now().After(deadline)
 }
 
-func (p *PVG) runProverTurn(workspace string, promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
+func (p *PVG) runProverTurn(deadline time.Time) TurnResult {
 	p.Result.Rounds++
 	p.Result.ProverRounds++
 	roundNum := p.Result.Rounds
 	p.Evidence.Log("round_start", roundNum, "prover", map[string]interface{}{"audience": "user"})
 
-	task := spec.RenderProverTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
+	task := spec.RenderTask(spec.RoleProver, p.Compiled, p.State.TranscriptPath)
 	return p.runAgentTurn(roundNum, "prover", p.Result.ProverRounds, task, deadline)
 }
 
-func (p *PVG) runVerifierTurn(workspace string, promptOpts spec.PromptOptions, deadline time.Time) TurnResult {
+func (p *PVG) runVerifierTurn(deadline time.Time) TurnResult {
 	p.Result.Rounds++
 	p.Result.VerifierRounds++
 	roundNum := p.Result.Rounds
 	p.Evidence.Log("round_start", roundNum, "verifier", map[string]interface{}{"audience": "user"})
 
-	task := spec.RenderVerifierTask(p.Compiled, workspace, p.State.TranscriptPath, promptOpts)
+	task := spec.RenderTask(spec.RoleVerifier, p.Compiled, p.State.TranscriptPath)
+	if p.Config.RecordBlock != nil {
+		task = spec.RenderRootVerifierTask(p.Compiled, p.State.TranscriptPath)
+	}
 	return p.runAgentTurn(roundNum, "verifier", p.Result.VerifierRounds, task, deadline)
 }
 
-func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
-	if _, blocked := AgentFailureBlocker(turn.Error); blocked || !turn.Recoverable {
-		p.Result.Error = turn.Error
-		return true
-	}
-	*consecutive++
-	p.Evidence.Log("agent_failure_recoverable", p.Result.Rounds, turn.Role, map[string]interface{}{
-		"error":                turn.Error,
-		"consecutive_failures": *consecutive,
-		"max_failures":         maxRecoverableAgentFailures,
-	})
-	if *consecutive <= maxRecoverableAgentFailures {
+// verifierBlocked reports a root verifier's verdict that the spec cannot be
+// satisfied. A block without a sentence for the spec author, or one that
+// could not be recorded, counts as CONTINUE.
+func (p *PVG) verifierBlocked(turn TurnResult) bool {
+	if turn.Error != "" || turn.Status != StatusBlocked || p.Config.RecordBlock == nil {
 		return false
 	}
-	p.Result.Error = fmt.Sprintf("agent_failure_budget_exceeded: %s", turn.Error)
+	message := ExtractBlockedMessage(turn.Logs)
+	if message == "" {
+		return false
+	}
+	reason := p.Config.RecordBlock(message)
+	if reason == "" {
+		return false
+	}
+	p.Result.BlockedMessage = message
+	p.Evidence.Log("goal_blocked", p.Result.Rounds, "verifier", map[string]interface{}{
+		"audience": "user",
+		"reason":   reason,
+		"message":  message,
+	})
 	return true
 }
 
-func (p *PVG) reviewBudgetMode() bool {
-	return p.Config.Until > 0
+func (p *PVG) turnFailureExceeded(turn TurnResult, consecutive *int) bool {
+	if !turn.Recoverable {
+		p.Result.Error = turn.Error
+		p.Result.ProviderError = providerError(turn)
+		return true
+	}
+	*consecutive++
+	if *consecutive <= maxRecoverableAgentFailures {
+		// Logged only when the turn is retried: the failure past the budget
+		// ends the game instead, and the game's end reports it.
+		p.Evidence.Log("agent_failure_recoverable", p.Result.Rounds, turn.Role, map[string]interface{}{
+			"message":              "Agent turn failed.",
+			"log_path":             p.diagnosticLogPath,
+			"consecutive_failures": *consecutive,
+			"max_failures":         maxRecoverableAgentFailures,
+		})
+		return false
+	}
+	p.Result.Error = fmt.Sprintf("agent_failure_budget_exceeded: %s", turn.Error)
+	p.Result.ProviderError = providerError(turn)
+	return true
+}
+
+func providerError(turn TurnResult) string {
+	if !turn.ProviderError {
+		return ""
+	}
+	return turn.Error
 }
 
 func (p *PVG) shouldStop(deadline time.Time) bool {
@@ -210,65 +252,55 @@ func (p *PVG) shouldStop(deadline time.Time) bool {
 	return p.Config.StopRequested != nil && p.Config.StopRequested()
 }
 
-func (p *PVG) promptOptions() spec.PromptOptions {
-	return spec.PromptOptions{
-		Controller:      p.Config.IsController,
-		PrimarySpecPath: p.Config.PrimarySpecPath,
-		ReviewBudget:    p.reviewBudgetMode(),
-		ReviewCycleCap:  p.Config.Until,
-		LocalRuntime:    p.Config.LocalRuntime,
-	}
-}
-
 func (p *PVG) runAgentTurn(roundNum int, role string, roleRound int, task string, deadline time.Time) TurnResult {
 	ts := p.State.Turn(p.Config.EpochID, roundNum, role)
 	ts.StopRequested = func() bool {
 		return p.shouldStop(deadline)
 	}
 	turnID := fmt.Sprintf("%04d-%s", roundNum, role)
+	recordedProgress := make(map[string]bool)
 	ts.OnLiveEvent = func(event LiveAgentEvent) {
 		if err := AppendLiveAgentEvent(p.State.TranscriptPath, role, roleRound, turnID, event); err != nil {
 			return
 		}
-		audience := "agent"
-		if event.Kind == "progress_update" {
-			audience = "user"
+		if text := strings.TrimSpace(event.Text); event.Kind == "progress_update" && text != "" {
+			recordedProgress[text] = true
 		}
 		p.Evidence.Log("agent_progress", roundNum, role, map[string]interface{}{
-			"audience": audience,
+			"audience": "user",
 			"kind":     event.Kind,
 			"text":     event.Text,
 			"turn_id":  turnID,
 		})
 	}
+	var turn TurnResult
 	if err := WriteTurnTask(ts, task); err != nil {
-		turn := TurnResult{
+		turn = TurnResult{
 			Role:   role,
 			Status: StatusContinue,
 			Logs:   fmt.Sprintf("turn_prepare_failed:%v", err),
 			Error:  fmt.Sprintf("turn_prepare_failed:%v", err),
 		}
-		p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
-		AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
-			turn.Logs, &turn.Stats, turnID, turn.Error,
-			AppendTurnOptions{
-				IncludeStatus: true,
-				PiSessionPath: ts.PiSessionPath(),
-				EvidencePath:  p.State.EvidencePath,
-			})
-		return turn
+	} else {
+		turn = p.Executor.ExecuteTurn(task, role, ts)
 	}
-
-	turn := p.Executor.ExecuteTurn(task, role, ts)
+	if turn.Error == "" && p.Config.OnTurnSucceeded != nil {
+		p.Config.OnTurnSucceeded()
+	}
 	p.Result.Accumulate(turn.Stats)
-	p.Evidence.LogAgent(roundNum, role, string(turn.Status), turn.Logs, &turn.Stats)
+	logPath := ""
+	if turn.Error != "" {
+		logPath = p.logDiagnostic(role, turn.Error, turn.Logs)
+	}
+	p.Evidence.LogAgent(roundNum, role, string(turn.Status), &turn.Stats)
 
 	AppendTurnWithOptions(p.State.TranscriptPath, role, roleRound, string(turn.Status),
 		turn.Logs, &turn.Stats, turnID, turn.Error,
 		AppendTurnOptions{
-			IncludeStatus: true,
-			PiSessionPath: ts.PiSessionPath(),
-			EvidencePath:  p.State.EvidencePath,
+			IncludeStatus:    true,
+			RunnerLogPath:    logPath,
+			EpochID:          p.Config.EpochID,
+			RecordedProgress: recordedProgress,
 		})
 
 	return turn
@@ -279,19 +311,46 @@ func (p *PVG) end(result GameResult) *PVGResult {
 	if p.Result.CompletionReason == "" {
 		p.Result.CompletionReason = p.completionReason(result)
 	}
-	errMsg := ""
+	logPath := ""
 	if p.Result.Error != "" {
-		errMsg = p.Result.Error
+		if p.diagnosticLogPath == "" || p.diagnosticError != p.Result.Error {
+			p.logDiagnostic("system", p.Result.Error, "")
+		}
+		logPath = p.diagnosticLogPath
 	}
 	p.Evidence.LogGameEnd(string(result), p.Result.Rounds,
 		p.Result.ProverRounds, p.Result.VerifierRounds,
 		p.Result.VerifierConceded, p.Result.TotalCostUSD,
 		p.Result.TotalInputTokens, p.Result.TotalOutputTokens,
 		p.Result.TotalCacheReadTokens, p.Result.TotalCacheCreateTokens,
-		errMsg, p.Result.CompletionReason)
+		logPath, p.Result.CompletionReason)
 
-	AppendGameResult(p.State.TranscriptPath, string(result), errMsg)
+	AppendGameResult(p.State.TranscriptPath, string(result), logPath)
 	return p.Result
+}
+
+func (p *PVG) logDiagnostic(role, failure, output string) string {
+	p.diagnosticLogPath = ""
+	p.diagnosticError = ""
+	message := failure
+	if output != "" && output != failure {
+		message += "\n\nCaptured output:\n" + output
+	}
+	f, err := os.OpenFile(p.State.RunnerLogPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		log.Printf("write runner diagnostics: %v; turn failure: %s", err, message)
+		return ""
+	}
+	defer f.Close()
+	_, err = fmt.Fprintf(f, "\n[%s] session=%s epoch=%d turn=%04d-%s\n%s\n",
+		time.Now().UTC().Format(time.RFC3339), p.State.SessionID, p.Config.EpochID, p.Result.Rounds, role, message)
+	if err != nil {
+		log.Printf("write runner diagnostics: %v; turn failure: %s", err, message)
+		return ""
+	}
+	p.diagnosticLogPath = p.State.RunnerLogPath
+	p.diagnosticError = failure
+	return p.diagnosticLogPath
 }
 
 func (p *PVG) completionReason(result GameResult) string {
@@ -303,6 +362,8 @@ func (p *PVG) completionReason(result GameResult) string {
 		return "success"
 	case GameStopped:
 		return "stopped"
+	case GameBlocked:
+		return "blocked"
 	default:
 		return "failure"
 	}

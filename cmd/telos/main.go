@@ -50,6 +50,10 @@ func main() {
 		cmdLogs(os.Args[2:])
 	case "delete":
 		cmdDelete(os.Args[2:])
+	case "pause":
+		cmdPause(os.Args[2:])
+	case "resume":
+		cmdResume(os.Args[2:])
 	case "pull":
 		cmdPull(os.Args[2:])
 	case "login":
@@ -80,6 +84,8 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  describe GOAL      Show a Goal's details")
 	fmt.Fprintln(out, "  logs GOAL          Show recent activity")
 	fmt.Fprintln(out, "  delete GOAL        Delete a Goal")
+	fmt.Fprintln(out, "  pause GOAL         Stop a Goal's agents; its app keeps running")
+	fmt.Fprintln(out, "  resume GOAL        Restart a paused or blocked Goal's agents")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "other commands:")
 	_, hostedSession := rootSessionContext()

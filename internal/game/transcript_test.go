@@ -94,7 +94,7 @@ func TestAppendTurnVerifier(t *testing.T) {
 }
 
 func TestExtractAndAppendLiveAgentEvents(t *testing.T) {
-	text := "working\n<progress_update ts=\"now\">Built API</progress_update>\n<summary>Ready for review</summary>"
+	text := "working\n<review>Technical finding</review>\n<progress_update ts=\"now\">Built API</progress_update>\n<summary>Ready for review</summary>\n<progress_update>Ready for review</progress_update>"
 	events := ExtractLiveAgentEvents(text)
 	if len(events) != 2 {
 		t.Fatalf("events: got %#v", events)
@@ -102,7 +102,7 @@ func TestExtractAndAppendLiveAgentEvents(t *testing.T) {
 	if events[0].Kind != "progress_update" || events[0].Text != "Built API" {
 		t.Fatalf("first event: got %#v", events[0])
 	}
-	if events[1].Kind != "summary" || events[1].Text != "Ready for review" {
+	if events[1].Kind != "progress_update" || events[1].Text != "Ready for review" {
 		t.Fatalf("second event: got %#v", events[1])
 	}
 
@@ -122,17 +122,13 @@ func TestExtractAndAppendLiveAgentEvents(t *testing.T) {
 func TestAppendExternalUpdate(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "transcript.md")
 	if err := AppendExternalUpdate(path, ExternalUpdate{
-		Message:               "The operator updated the session spec. Reload the current spec before continuing.",
-		PreviousSpecVersion:   1,
-		CurrentSpecVersion:    2,
-		PreviousSpecSHA256:    "old",
-		CurrentSpecSHA256:     "new",
-		PreviousPackageDigest: "sha256:old",
-		CurrentPackageDigest:  "sha256:new",
-		PreviousSpecPath:      "/sessions/sess/revisions/0.1.0/SPEC.md",
-		CurrentSpecPath:       "/sessions/sess/revisions/0.1.1/SPEC.md",
-		ActiveSpecPath:        "/sessions/sess/specs/postgres/spec.md",
-		DiffPath:              "/sessions/sess/revisions/0.1.1/spec.diff",
+		Message:             "The operator updated the session spec. Reload the current spec before continuing.",
+		PreviousSpecVersion: 1,
+		CurrentSpecVersion:  2,
+		PreviousSpecPath:    "/sessions/sess/revisions/0.1.0/SPEC.md",
+		CurrentSpecPath:     "/sessions/sess/revisions/0.1.1/SPEC.md",
+		ActiveSpecPath:      "/sessions/sess/specs/postgres/spec.md",
+		DiffPath:            "/sessions/sess/revisions/0.1.1/spec.diff",
 	}); err != nil {
 		t.Fatalf("AppendExternalUpdate: %v", err)
 	}
@@ -163,26 +159,19 @@ func TestAppendTurnWithError(t *testing.T) {
 	path := filepath.Join(dir, "transcript.md")
 	os.WriteFile(path, []byte("# Transcript\n"), 0o644)
 
-	piSessionPath := filepath.Join(dir, "turns", "0001-prover", "pi-session.jsonl")
-	evidencePath := filepath.Join(dir, "evidence.jsonl")
-	AppendTurnWithOptions(path, "prover", 1, "CONTINUE", "I changed main.go before the tool failed.\n\n<status>CONTINUE</status>", nil, "0001-prover", "pi_failed:1", AppendTurnOptions{
+	runnerLogPath := filepath.Join(dir, "runner.log")
+	turnError := "pi_failed:1\n" + strings.Repeat("large provider error", 10000)
+	AppendTurnWithOptions(path, "prover", 1, "CONTINUE", "I changed main.go before the tool failed.\n\n<status>CONTINUE</status>", nil, "0001-prover", turnError, AppendTurnOptions{
 		IncludeStatus: true,
-		PiSessionPath: piSessionPath,
-		EvidencePath:  evidencePath,
+		RunnerLogPath: runnerLogPath,
+		EpochID:       7,
 	})
 
 	content := ReadTranscript(path)
-	if !strings.Contains(content, "runtime error") {
-		t.Error("should mention runtime error")
-	}
-	if !strings.Contains(content, "pi_failed:1") {
-		t.Error("should contain error detail")
-	}
-	if !strings.Contains(content, piSessionPath) {
-		t.Error("should point to Pi session")
-	}
-	if !strings.Contains(content, evidencePath) {
-		t.Error("should point to evidence log")
+	for _, want := range []string{"Turn failed", runnerLogPath, "epoch `7`", "turn `0001-prover`"} {
+		if !strings.Contains(content, want) {
+			t.Errorf("failure notice missing %q", want)
+		}
 	}
 	if strings.Contains(content, "Captured Assistant Text Before Error") {
 		t.Error("should not summarize captured assistant text in the transcript")
@@ -190,8 +179,13 @@ func TestAppendTurnWithError(t *testing.T) {
 	if strings.Contains(content, "I changed main.go before the tool failed.") {
 		t.Error("should leave captured assistant text in Pi artifacts")
 	}
-	if strings.Contains(content, "<status>CONTINUE</status>\n\n<progress_update>") {
-		t.Error("captured assistant text should not preserve the assistant status tag")
+	for _, unwanted := range []string{"pi_failed", "large provider error", "<status>", "<progress_update>"} {
+		if strings.Contains(content, unwanted) {
+			t.Errorf("failed turn should not publish error payloads or synthetic agent output: %q", unwanted)
+		}
+	}
+	if len(content) > 1000 {
+		t.Fatalf("failure notice grew with the provider error: %d bytes", len(content))
 	}
 }
 
@@ -211,19 +205,20 @@ func TestAppendGameResult(t *testing.T) {
 	}
 }
 
-func TestAppendGameResultWithError(t *testing.T) {
+func TestAppendGameResultReferencesDiagnostics(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "transcript.md")
 	os.WriteFile(path, []byte("# Transcript\n"), 0o644)
 
-	AppendGameResult(path, "failure", "budget exceeded")
+	runnerLogPath := filepath.Join(dir, "runner.log")
+	AppendGameResult(path, "failure", runnerLogPath)
 
 	content := ReadTranscript(path)
 	if !strings.Contains(content, "`failure`") {
 		t.Error("should contain failure result")
 	}
-	if !strings.Contains(content, "budget exceeded") {
-		t.Error("should contain error message")
+	if !strings.Contains(content, runnerLogPath) {
+		t.Error("should reference runner diagnostics")
 	}
 }
 

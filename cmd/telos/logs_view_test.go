@@ -79,7 +79,7 @@ func TestUnmarkedLogsKeepOriginalOutput(t *testing.T) {
 	}
 	const expected = "[2026-08-10T12:00:00Z] [INFO] Running integration tests\n" +
 		"[2026-08-10T12:00:00Z] [INFO] Planning complete — Building the app next.\n" +
-		"[2026-08-10T12:00:00Z] [WARNING] Model provider unavailable; retrying — attempt 1 of 3\n" +
+		"[2026-08-10T12:00:00Z] [WARNING] Model provider unavailable; retrying — retry 1 of 3\n" +
 		"[2026-08-10T12:00:00Z] [INFO] Current revision accepted\n"
 	var out bytes.Buffer
 	printStructuredLogs(&out, events, logViewOptions{All: true, Active: true})
@@ -216,7 +216,7 @@ func TestRenderedLogRowUsesStandardSeverityLevels(t *testing.T) {
 			"max_failures":         5,
 		},
 	})
-	if !visible || retry.Level != "WARNING" || retry.Summary != "Model provider unavailable; retrying" || retry.Detail != "attempt 2 of 5" {
+	if !visible || retry.Level != "WARNING" || retry.Summary != "Model provider unavailable; retrying" || retry.Detail != "retry 2 of 5" {
 		t.Fatalf("retry row = %#v visible=%v", retry, visible)
 	}
 
@@ -292,5 +292,45 @@ func TestPrintRenderedLogRowIndentsMultilineDetails(t *testing.T) {
 		!strings.Contains(text, "│ authentication failed\n") ||
 		!strings.Contains(text, "│ run telos login\n") {
 		t.Fatalf("multiline log row = %q", text)
+	}
+}
+
+func TestVerifierBlockReadsAsBlockedWithItsSentence(t *testing.T) {
+	row, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
+		Event: "goal_blocked",
+		Data:  map[string]any{"audience": "user", "reason": "SPEC_UNSATISFIABLE", "message": "Drop one of the two rules."},
+	})
+	if !visible || row.Level != "ERROR" || row.Summary != "Blocked" || row.Detail != "Drop one of the two rules." {
+		t.Fatalf("row = %#v visible=%v", row, visible)
+	}
+}
+
+func TestRetryActivityDoesNotRequireRawDiagnostics(t *testing.T) {
+	row, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
+		Event: "agent_failure_recoverable",
+		Data: map[string]any{
+			"message":              "Agent turn failed.",
+			"log_path":             "/session/runner.log",
+			"consecutive_failures": 2,
+			"max_failures":         3,
+		},
+	})
+	if !visible || row.Level != "WARNING" || row.Summary != "Execution error; retrying" || row.Detail != "retry 2 of 3" {
+		t.Fatalf("retry metadata did not produce activity: %#v visible=%v", row, visible)
+	}
+}
+
+func TestRetryActivityPastTheBudgetHasNoCount(t *testing.T) {
+	// Older runtimes logged the failure that ended the game as one more retry.
+	row, visible := renderedLogRowFromEvent(sessionapi.SessionEvent{
+		Event: "agent_failure_recoverable",
+		Data: map[string]any{
+			"message":              "Agent turn failed.",
+			"consecutive_failures": 4,
+			"max_failures":         3,
+		},
+	})
+	if !visible || row.Detail != "" {
+		t.Fatalf("row = %#v visible=%v", row, visible)
 	}
 }

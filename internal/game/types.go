@@ -14,6 +14,8 @@ const (
 	GameSuccess GameResult = "success"
 	GameFailure GameResult = "failure"
 	GameStopped GameResult = "stopped"
+	// GameBlocked means the verifier found the spec cannot be satisfied.
+	GameBlocked GameResult = "blocked"
 )
 
 // AgentStatus is the normalized status from an agent turn.
@@ -22,6 +24,7 @@ type AgentStatus string
 const (
 	StatusContinue AgentStatus = "CONTINUE"
 	StatusConcede  AgentStatus = "CONCEDE"
+	StatusBlocked  AgentStatus = "BLOCKED"
 )
 
 // TurnStats holds token and cost data from a single agent turn.
@@ -44,6 +47,8 @@ type TurnResult struct {
 	Stats       TurnStats
 	Error       string
 	Recoverable bool
+	// ProviderError marks an Error the model provider returned.
+	ProviderError bool
 }
 
 // LiveAgentEvent is structured agent activity emitted before a turn exits.
@@ -55,21 +60,24 @@ type LiveAgentEvent struct {
 // AgentExecutor runs one PVG agent turn.
 type AgentExecutor interface {
 	ExecuteTurn(task string, role string, turnState *TurnState) TurnResult
-	WorkspaceState() string
 	CheckpointWorkspace(dest string) bool
 }
 
 // PVGConfig holds runtime settings for a PVG run.
 type PVGConfig struct {
-	Until           int
-	UntilSeconds    int
-	MaxCostUSD      *float64
-	Verbose         bool
-	EpochID         int
-	IsController    bool
-	PrimarySpecPath string
-	LocalRuntime    bool
-	StopRequested   func() bool
+	Until         int
+	UntilSeconds  int
+	MaxCostUSD    *float64
+	Verbose       bool
+	EpochID       int
+	StopRequested func() bool
+	// OnTurnSucceeded runs after every turn that ends without an error.
+	OnTurnSucceeded func()
+	// RecordBlock records the goal's own verifier's block of the spec and
+	// returns its reason code; only the goal's root session sets it. It returns
+	// "" when the spec changed since the game started, or the record failed;
+	// the game then continues.
+	RecordBlock func(message string) (reason string)
 }
 
 // PVGResult holds the aggregated result of a PVG run.
@@ -90,6 +98,12 @@ type PVGResult struct {
 	EvidencePath            string
 	TranscriptPath          string
 	WorkspaceCheckpointPath string
+
+	// ProviderError is the model provider's own words when its error ended the
+	// game, without the runtime's wrapping.
+	ProviderError string
+	// BlockedMessage is the verifier's sentence when GameResult is GameBlocked.
+	BlockedMessage string
 }
 
 // Accumulate adds turn stats to the result totals.
@@ -129,7 +143,10 @@ func (ts *TurnState) PiSessionPath() string {
 
 // -- Status extraction -------------------------------------------------------
 
-var statusRE = regexp.MustCompile(`(?:^|\n)\s*<status>(\w+)</status>\s*$`)
+var (
+	statusRE  = regexp.MustCompile(`(?:^|\n)\s*<status>(\w+)</status>\s*$`)
+	blockedRE = regexp.MustCompile(`(?s)<blocked>(.*?)</blocked>`)
+)
 
 // ExtractStatus parses the final status tag from agent output.
 func ExtractStatus(text string) AgentStatus {
@@ -141,7 +158,18 @@ func ExtractStatus(text string) AgentStatus {
 	switch strings.ToUpper(last) {
 	case "CONCEDE":
 		return StatusConcede
+	case "BLOCKED":
+		return StatusBlocked
 	default:
 		return StatusContinue
 	}
+}
+
+// ExtractBlockedMessage returns the text of the last <blocked> tag.
+func ExtractBlockedMessage(text string) string {
+	matches := blockedRE.FindAllStringSubmatch(text, -1)
+	if len(matches) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(matches[len(matches)-1][1])
 }

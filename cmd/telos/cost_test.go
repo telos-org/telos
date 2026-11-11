@@ -268,20 +268,20 @@ func TestDescribeReadsTheGoalsCostInItsContext(t *testing.T) {
 
 func TestDescribeEndsWithCostBeforeTheReason(t *testing.T) {
 	var out strings.Builder
-	reason := "provider rejected the API key"
 	printCloudSessionDescriptionForContext(&out, cloud.SessionRecord{
-		ID: "goal_key", Name: "byok-demo", Status: "needs_attention", FailureReason: &reason,
+		ID: "goal_key", Name: "byok-demo", Status: "retrying",
+		Reason: "INFERENCE_PROVIDER_ERROR", Message: "provider rejected the API key",
 	}, "@telos", &goalCost{
 		Cloud:     newCloudCost(1_000_000, 250_000),
 		Inference: newInferenceCost("byok", "anthropic", microUSD(3_400_000)),
-	}, "")
+	})
 
 	lines := strings.Split(strings.TrimSpace(out.String()), "\n")
 	tail := strings.Join(lines[len(lines)-4:], "\n")
 	want := "Cloud     $1.25 (compute $1.00, storage $0.25)\n" +
 		"Inference $3.40 (Anthropic API key)\n" +
-		"Reason    provider rejected the API key\n" +
-		"Next      Fix the spec, then: telos apply SPEC.md --goal goal_key, or telos delete goal_key"
+		"Reason    INFERENCE_PROVIDER_ERROR\n" +
+		"Message   provider rejected the API key"
 	if tail != want {
 		t.Fatalf("describe ends with:\n%s\nwant:\n%s", tail, want)
 	}

@@ -86,74 +86,57 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 	result := pe.Platform.Run(argv, taskEnv, env, pe.Timeout, stopRequested, nil)
 
 	logs := strings.Join(result.RawLines, "\n")
+	var sessionError string
 	if sessionPath != "" {
 		summary, err := ReadPiSession(sessionPath)
 		if err == nil {
 			logs = summary.Logs
 			stats = mergeTurnStats(stats, summary.Stats)
 			agentError = summary.Error
-		} else if result.ReturnCode == 0 && result.InfraError == "" {
-			return game.TurnResult{
-				Role:        role,
-				Status:      game.StatusContinue,
-				Logs:        fmt.Sprintf("pi_session_unavailable:%v", err),
-				Stats:       stats,
-				Error:       fmt.Sprintf("pi_session_unavailable:%v", err),
-				Recoverable: true,
-			}
+		} else {
+			sessionError = fmt.Sprintf("pi_session_unavailable:%v", err)
 		}
 	}
 
-	if result.InfraError != "" {
-		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        result.InfraError,
-			Stats:       stats,
-			Error:       result.InfraError,
-			Recoverable: !result.TimedOut && recoverableAgentFailure(result.InfraError),
-		}
-	}
-
+	// Every failure is retried, except a timeout: a provider's error is the
+	// provider's to fix, so the goal keeps retrying rather than stopping.
+	var failure, diagnostics string
 	stderrTrimmed := strings.TrimSpace(result.Stderr)
-	if result.ReturnCode != 0 {
-		reason := orDefault(agentError, fmt.Sprintf("pi_failed:%d", result.ReturnCode))
+	switch {
+	case result.InfraError != "":
+		failure = result.InfraError
+	case result.ReturnCode != 0:
+		failure = orDefault(agentError, fmt.Sprintf("pi_failed:%d", result.ReturnCode))
 		if agentError == "" && stderrTrimmed != "" {
-			reason = fmt.Sprintf("%s\n[stderr]\n%s", reason, stderrTrimmed)
+			failure = fmt.Sprintf("%s\n[stderr]\n%s", failure, stderrTrimmed)
 		}
-		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        reason,
-			Stats:       stats,
-			Error:       reason,
-			Recoverable: recoverableAgentFailure(reason),
-		}
+	case agentError != "":
+		failure = agentError
+	case sessionError != "":
+		failure = sessionError
+	case strings.TrimSpace(logs) == "":
+		failure = "agent_no_output"
+		diagnostics = "Pi produced no assistant text."
 	}
 
-	if agentError != "" {
-		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        agentError,
-			Stats:       stats,
-			Error:       agentError,
-			Recoverable: recoverableAgentFailure(agentError),
+	if failure != "" {
+		if stderrTrimmed != "" && !strings.Contains(failure, stderrTrimmed) {
+			if diagnostics != "" {
+				diagnostics += "\n"
+			}
+			diagnostics += "[stderr]\n" + stderrTrimmed
 		}
-	}
-
-	if strings.TrimSpace(logs) == "" {
-		detail := "Pi produced no assistant text."
-		if stderrTrimmed != "" {
-			detail = fmt.Sprintf("%s\n[stderr]\n%s", detail, stderrTrimmed)
+		if diagnostics == "" {
+			diagnostics = failure
 		}
 		return game.TurnResult{
-			Role:        role,
-			Status:      game.StatusContinue,
-			Logs:        detail,
-			Stats:       stats,
-			Error:       "agent_no_output",
-			Recoverable: true,
+			Role:          role,
+			Status:        game.StatusContinue,
+			Logs:          diagnostics,
+			Stats:         stats,
+			Error:         failure,
+			Recoverable:   !result.TimedOut,
+			ProviderError: result.InfraError == "" && agentError != "",
 		}
 	}
 
@@ -163,11 +146,6 @@ func (pe *PiExecutor) ExecuteTurn(task string, role string, turnState *game.Turn
 		Logs:   logs,
 		Stats:  stats,
 	}
-}
-
-func recoverableAgentFailure(errorText string) bool {
-	_, blocked := game.AgentFailureBlocker(errorText)
-	return !blocked
 }
 
 type piLiveProjector struct {
@@ -278,11 +256,6 @@ func piLineEvents(line string) []game.LiveAgentEvent {
 	}
 	// Tool calls stay in the Pi session log; activity shows what the agent reports.
 	return game.ExtractLiveAgentEvents(assistantText(msg))
-}
-
-// WorkspaceState returns the workspace state from the platform.
-func (pe *PiExecutor) WorkspaceState() string {
-	return pe.Platform.WorkspaceState()
 }
 
 // CheckpointWorkspace creates a workspace checkpoint.
@@ -427,7 +400,7 @@ func errorFromPiMessage(msg map[string]interface{}) string {
 	if getString(msg, "stopReason") == "length" {
 		return "agent_output_truncated:length"
 	}
-	return extractMessageError(msg)
+	return getString(msg, "errorMessage")
 }
 
 func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
@@ -442,26 +415,6 @@ func mergeTurnStats(base, extra game.TurnStats) game.TurnStats {
 		base.Model = extra.Model
 	}
 	return base
-}
-
-func extractMessageError(msg map[string]interface{}) string {
-	em := getString(msg, "errorMessage")
-	if em == "" {
-		return ""
-	}
-	if isTransientError(em) {
-		return ""
-	}
-	return em
-}
-
-func isTransientError(err string) bool {
-	for _, t := range []string{"overloaded_error", "rate_limit_error", "api_error"} {
-		if strings.Contains(err, t) {
-			return true
-		}
-	}
-	return false
 }
 
 func getString(m map[string]interface{}, key string) string {

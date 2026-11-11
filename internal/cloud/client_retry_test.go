@@ -477,14 +477,14 @@ func TestNetworkCloudReadsRecoverOnWire(t *testing.T) {
 		{
 			name:     "session",
 			path:     "/api/deployments/sess%2Fwith%20space%3Fx",
-			partial:  `{"id":"discard-me","status_reason":"stale","state":`,
+			partial:  `{"id":"discard-me","message":"stale","state":`,
 			complete: `{"id":"sess/with space?x","state":"healthy","status":"ready"}`,
 			check: func(t *testing.T, client *Client) {
 				record, err := client.GetSession("sess/with space?x")
 				if err != nil {
 					t.Fatal(err)
 				}
-				if record.ID != "sess/with space?x" || record.State != "healthy" || record.Status != "ready" || record.StatusReason != "" {
+				if record.ID != "sess/with space?x" || record.State != "healthy" || record.Status != "ready" || record.Message != "" {
 					t.Fatalf("recovered session contains missing or stale fields: %+v", record)
 				}
 			},

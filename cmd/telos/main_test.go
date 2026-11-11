@@ -46,6 +46,23 @@ func TestReorderInterspersedFlags(t *testing.T) {
 	}
 }
 
+func TestReorderInterspersedFlagsRejectsMissingValues(t *testing.T) {
+	for _, args := range [][]string{
+		{"SPEC.md", "--workspace"},
+		{"SPEC.md", "--json", "--workspace"},
+		{"7", "--tail"},
+	} {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		fs.SetOutput(&bytes.Buffer{})
+		fs.String("workspace", "", "")
+		fs.Int("tail", 50, "")
+		fs.Bool("json", false, "")
+		if err := fs.Parse(reorderInterspersedFlags(fs, args)); err == nil || !strings.Contains(err.Error(), "flag needs an argument") {
+			t.Fatalf("%v: error = %v; want missing flag value", args, err)
+		}
+	}
+}
+
 func TestCommandFlagUsageUsesPublicFlagSyntax(t *testing.T) {
 	fs := newCommandFlagSet("logs", "telos logs GOAL [flags]")
 	fs.Bool("q", false, "Quiet output")
@@ -86,6 +103,8 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"apply [SPEC.md]    Create a Goal, update its spec, or change model/thinking",
 		"get GOAL           Download a Goal's package",
 		"delete GOAL        Delete a Goal",
+		"pause GOAL         Stop a Goal's agents; its app keeps running",
+		"resume GOAL        Restart a paused or blocked Goal's agents",
 		"pull PACKAGE       Download a spec or skill package",
 		"version            Show version",
 		"update [VERSION]   Update installed Telos components to one release",
@@ -168,13 +187,23 @@ func TestPrintPlanPreviewStarsRequiredVerifierSkills(t *testing.T) {
 }
 
 func TestReorderInterspersedFlagsDashDash(t *testing.T) {
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	fs.Bool("json", false, "")
-
-	got := reorderInterspersedFlags(fs, []string{"--json", "--", "-literal"})
-	want := []string{"--json", "-literal"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %#v, want %#v", got, want)
+	for _, tt := range []struct {
+		args, want []string
+		json       bool
+	}{
+		{[]string{"--json", "--", "-literal"}, []string{"-literal"}, true},
+		{[]string{"SPEC.md", "--json", "--", "--help", "--"}, []string{"SPEC.md", "--help", "--"}, true},
+		{[]string{"--", "--json"}, []string{"--json"}, false},
+		{[]string{"--"}, []string{}, false},
+	} {
+		fs := flag.NewFlagSet("test", flag.ContinueOnError)
+		json := fs.Bool("json", false, "")
+		if err := fs.Parse(reorderInterspersedFlags(fs, tt.args)); err != nil {
+			t.Fatalf("%v: %v", tt.args, err)
+		}
+		if !reflect.DeepEqual(fs.Args(), tt.want) || *json != tt.json {
+			t.Fatalf("%v: args = %v, json = %v; want args = %v, json = %v", tt.args, fs.Args(), *json, tt.want, tt.json)
+		}
 	}
 }
 
@@ -1455,7 +1484,7 @@ func TestLegacyTranscriptFallbackUsesOlderRootRuntime(t *testing.T) {
 	}
 }
 
-func TestPrintLogsDefaultsToProtocolBlocks(t *testing.T) {
+func TestPrintLogsShowsOnlyProgressAndExternalUpdates(t *testing.T) {
 	transcript := `# Transcript
 
 	hidden raw content with inline code ` + "`<progress_update>`" + `
@@ -1485,16 +1514,16 @@ Reload the current spec.
 	for _, want := range []string{
 		"#1 First checkpoint",
 		"#2 Second checkpoint",
-		"Review\ncriteria,score\nCorrectness,8.0/10",
-		"Summary\nNeeds one more check.",
 		"External update\nReload the current spec.\n- Current spec version: `2`",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("log output missing %q:\n%s", want, text)
 		}
 	}
-	if strings.Contains(text, "hidden raw content") || strings.Contains(text, "more raw content") {
-		t.Fatalf("log output leaked raw transcript:\n%s", text)
+	for _, hidden := range []string{"hidden raw content", "more raw content", "Correctness,8.0/10", "Needs one more check."} {
+		if strings.Contains(text, hidden) {
+			t.Fatalf("log output leaked %q:\n%s", hidden, text)
+		}
 	}
 }
 

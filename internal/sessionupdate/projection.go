@@ -23,20 +23,16 @@ func ProjectSpecUpdate(event sessionapi.SpecUpdateEvent) {
 			event.SessionCreatedAt,
 		); err == nil {
 			_ = game.AppendExternalUpdate(event.TranscriptPath, game.ExternalUpdate{
-				Message:               message,
-				PreviousSpecVersion:   event.PreviousSpecVersion,
-				CurrentSpecVersion:    event.CurrentSpecVersion,
-				PreviousSpecSHA256:    event.PreviousSpecSHA256,
-				CurrentSpecSHA256:     event.CurrentSpecSHA256,
-				PreviousPackageDigest: event.PreviousPackageDigest,
-				CurrentPackageDigest:  event.CurrentPackageDigest,
-				SpecPath:              event.SpecPath,
-				PreviousSpecPath:      event.PreviousSpecPath,
-				CurrentSpecPath:       event.CurrentSpecPath,
-				ActiveSpecPath:        event.ActiveSpecPath,
-				DiffPath:              event.DiffPath,
-				PreviousRevision:      event.PreviousRevision,
-				CurrentRevision:       event.CurrentRevision,
+				Message:             message,
+				PreviousSpecVersion: event.PreviousSpecVersion,
+				CurrentSpecVersion:  event.CurrentSpecVersion,
+				SpecPath:            event.SpecPath,
+				PreviousSpecPath:    event.PreviousSpecPath,
+				CurrentSpecPath:     event.CurrentSpecPath,
+				ActiveSpecPath:      event.ActiveSpecPath,
+				DiffPath:            event.DiffPath,
+				PreviousRevision:    event.PreviousRevision,
+				CurrentRevision:     event.CurrentRevision,
 			})
 		}
 	}

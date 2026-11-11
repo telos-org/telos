@@ -52,7 +52,7 @@ func printLogSilence(out io.Writer, events []sessionapi.SessionEvent, now time.T
 	var latest *renderedLogRow
 	for _, event := range events {
 		// Cloud pages leave out agent_complete; local logs still have it.
-		if event.Event == "game_end" || event.Event == "agent_complete" || event.Event == "agent_suspended" {
+		if event.Event == "game_end" || event.Event == "agent_complete" || event.Event == "agent_suspended" || event.Event == "goal_blocked" {
 			latest = nil
 			continue
 		}
@@ -169,17 +169,24 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 		row.Summary = "Current revision accepted"
 		return row, true
 	case "agent_failure_recoverable":
-		errorText := eventDataString(event, "error")
+		errorText := firstNonEmpty(eventDataString(event, "message"), eventDataString(event, "error"))
 		if errorText == "" {
 			return renderedLogRow{}, false
 		}
 		row.Level = "WARNING"
 		row.Summary = friendlyAgentError(errorText) + "; retrying"
+		// Older runtimes also logged the failure that ended the game, one past
+		// the budget; that row gets no count.
 		if current, ok := numericEventValue(event.Data["consecutive_failures"]); ok {
-			if maxFailures, hasMax := numericEventValue(event.Data["max_failures"]); hasMax {
-				row.Detail = fmt.Sprintf("attempt %d of %d", current, maxFailures)
+			if maxFailures, hasMax := numericEventValue(event.Data["max_failures"]); hasMax && current <= maxFailures {
+				row.Detail = fmt.Sprintf("retry %d of %d", current, maxFailures)
 			}
 		}
+		return row, true
+	case "goal_blocked":
+		row.Level = "ERROR"
+		row.Summary = "Blocked"
+		row.Detail = eventDataString(event, "message")
 		return row, true
 	case "agent_suspended":
 		row.Level = "ERROR"
@@ -230,7 +237,7 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 	case "game_error":
 		row.Level = "ERROR"
 		row.Summary = "Execution error"
-		row.Detail = eventDataString(event, "error")
+		row.Detail = firstNonEmpty(eventDataString(event, "message"), eventDataString(event, "error"))
 		return row, true
 	case "external_update":
 		row.Summary = firstNonEmpty(eventDataString(event, "message"), "Revision updated")

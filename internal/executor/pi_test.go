@@ -82,9 +82,6 @@ func TestPiStartupExtensionFailsTurnWithMessage(t *testing.T) {
 	if exit, ok := err.(*exec.ExitError); !ok || exit.ExitCode() != 78 || strings.Contains(string(output), "PROMPT_SENT") || !strings.Contains(string(output), "Telos could not register Pi model provider/model") {
 		t.Fatalf("startup failure was not reported: %s, %v", output, err)
 	}
-	if code, _ := game.AgentFailureBlocker(string(output)); code != "agent_configuration_invalid" {
-		t.Fatalf("rejected settings should wait for new ones, got %q", code)
-	}
 }
 
 func TestPiProgressPreservesReportAndFinalStatus(t *testing.T) {
@@ -131,27 +128,6 @@ func TestNewPiExecutorDefaultsToNoTimeout(t *testing.T) {
 	}
 	if exec.Thinking != "medium" {
 		t.Fatalf("thinking: got %q", exec.Thinking)
-	}
-}
-
-func TestRecoverableAgentFailureRejectsProviderBlockers(t *testing.T) {
-	for _, errorText := range []string{
-		"403: inactive virtual key",
-		"request failed (HTTP 401)",
-		"400: Your credit balance is too low to access the Anthropic API",
-		"429: insufficient_quota",
-	} {
-		if recoverableAgentFailure(errorText) {
-			t.Fatalf("provider blocker marked recoverable: %q", errorText)
-		}
-	}
-	for _, errorText := range []string{
-		"429: provider at capacity",
-		"502: no healthy upstream",
-	} {
-		if !recoverableAgentFailure(errorText) {
-			t.Fatalf("transient error marked non-recoverable: %q", errorText)
-		}
 	}
 }
 
@@ -250,6 +226,52 @@ func TestExecuteTurnIncludesStderrOnPiFailure(t *testing.T) {
 	}
 }
 
+func TestExecuteTurnPreservesFailureStderr(t *testing.T) {
+	structuredError := `{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"401: test authentication failure","content":[]}}`
+	providerError := `{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":"overloaded_error: try again","content":[{"type":"text","text":"UNFINISHED_REPORT\n<status>CONCEDE</status>"}]}}`
+	emptyReport := `{"type":"message","message":{"role":"assistant","stopReason":"stop","content":[]}}`
+	for _, tc := range []struct {
+		name, session, wantError string
+		exitCode                 int
+		recoverable              bool
+	}{
+		{"missing session", "", "pi_session_unavailable:", 0, true},
+		{"structured error", structuredError, "401: test authentication failure", 0, true},
+		{"structured error and crash", structuredError, "401: test authentication failure", 1, true},
+		{"provider error with partial verdict", providerError, "overloaded_error: try again", 0, true},
+		{"empty report", emptyReport, "agent_no_output", 0, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			bin := filepath.Join(home, ".local", "bin")
+			if err := os.MkdirAll(bin, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			stderr := strings.Repeat("adapter stderr detail\n", 1000) + "STDERR_TAIL"
+			script := fmt.Sprintf("#!/bin/sh\ncat <<'STDERR' >&2\n%s\nSTDERR\nexit %d\n", stderr, tc.exitCode)
+			if err := os.WriteFile(filepath.Join(bin, "pi"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			turn := &game.TurnState{Dir: t.TempDir()}
+			if tc.session != "" {
+				writePiSession(t, turn.PiSessionPath(), tc.session)
+			}
+			p := platform.NewLocalPlatform(t.TempDir())
+			p.Env = map[string]string{"HOME": home}
+			result := NewPiExecutor(p, "test-model", "high", 0).ExecuteTurn("do it", "prover", turn)
+			if !strings.HasPrefix(result.Error, tc.wantError) || result.Recoverable != tc.recoverable || result.Status != game.StatusContinue {
+				t.Fatalf("unexpected failure classification: %+v", result)
+			}
+			if strings.Contains(result.Error, "STDERR_TAIL") || !strings.Contains(result.Logs, stderr) || strings.Count(result.Logs, "STDERR_TAIL") != 1 {
+				t.Fatal("stderr must remain complete in diagnostics without changing the failure reason")
+			}
+			if strings.Contains(result.Logs, "UNFINISHED_REPORT") {
+				t.Fatal("failed partial output must not become a completed report")
+			}
+		})
+	}
+}
+
 func TestExecuteTurnUsesEnvPromptForNormalSessionTask(t *testing.T) {
 	workspace := t.TempDir()
 	home := filepath.Join(t.TempDir(), "home")
@@ -316,7 +338,7 @@ func TestExecuteTurnTreatsTimeoutAsTerminalFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 	piPath := filepath.Join(bin, "pi")
-	script := "#!/bin/sh\nsleep 5\n"
+	script := "#!/bin/sh\nprintf 'TIMEOUT_STDERR\\n' >&2\nsleep 5\n"
 	if err := os.WriteFile(piPath, []byte(script), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -332,6 +354,9 @@ func TestExecuteTurnTreatsTimeoutAsTerminalFailure(t *testing.T) {
 	}
 	if result.Recoverable {
 		t.Fatalf("timeout should be terminal, got recoverable result: %#v", result)
+	}
+	if !strings.Contains(result.Logs, "TIMEOUT_STDERR") {
+		t.Fatal("timeout diagnostics must retain captured stderr")
 	}
 }
 
@@ -400,17 +425,21 @@ func TestReadPiSessionMapsLengthStopToRecoverableError(t *testing.T) {
 	}
 }
 
-func TestReadPiSessionIgnoresTransientErrors(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "pi-session.jsonl")
-	writePiSession(t, path, `{"type":"session","version":3,"id":"sess","timestamp":"2026-05-21T00:00:00Z","cwd":"/tmp"}`)
-	appendPiSession(t, path, `{"type":"message","id":"a","parentId":null,"timestamp":"2026-05-21T00:00:01Z","message":{"role":"assistant","model":"gpt-5.5","stopReason":"error","errorMessage":"overloaded_error: try again","content":[{"type":"text","text":"partial"}],"usage":{"input":1,"output":2,"cacheRead":0,"cacheWrite":0,"cost":{"total":0.3}}}}`)
-
-	summary, err := ReadPiSession(path)
-	if err != nil {
-		t.Fatalf("ReadPiSession: %v", err)
-	}
-	if summary.Error != "" {
-		t.Fatalf("transient error should be ignored, got %q", summary.Error)
+func TestReadPiSessionPreservesFinalProviderErrors(t *testing.T) {
+	for _, errorMessage := range []string{"overloaded_error: try again", "rate_limit_error: try again", "api_error: try again"} {
+		t.Run(errorMessage, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "pi-session.jsonl")
+			writePiSession(t, path, fmt.Sprintf(`{"type":"message","message":{"role":"assistant","stopReason":"error","errorMessage":%q,"content":[{"type":"text","text":"partial"}]}}`, errorMessage))
+			summary, err := ReadPiSession(path)
+			if err != nil || summary.Error != errorMessage {
+				t.Fatalf("final failure was discarded: %+v, %v", summary, err)
+			}
+			appendPiSession(t, path, `{"type":"message","message":{"role":"assistant","stopReason":"stop","content":[{"type":"text","text":"Completed after retry.\n<status>CONCEDE</status>"}]}}`)
+			summary, err = ReadPiSession(path)
+			if err != nil || summary.Error != "" || game.ExtractStatus(summary.Logs) != game.StatusConcede {
+				t.Fatalf("earlier failure overrode the completed response: %+v, %v", summary, err)
+			}
+		})
 	}
 }
 
@@ -425,7 +454,7 @@ func TestReadPiSessionRequiresAssistantMessage(t *testing.T) {
 }
 
 func TestPiLineEventsLeaveToolCallsOutOfActivity(t *testing.T) {
-	line := `{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"text","text":"<progress_update>Checking the spec</progress_update>"}]}}`
+	line := `{"type":"message","message":{"role":"assistant","content":[{"type":"toolCall","name":"read","arguments":{"path":"/tmp/session/spec.md"}},{"type":"text","text":"<review>Technical finding</review><progress_update>Checking the spec</progress_update><summary>Ready for review</summary>"}]}}`
 	events := piLineEvents(line)
 	if len(events) != 1 || events[0].Kind != "progress_update" || events[0].Text != "Checking the spec" {
 		t.Fatalf("events: %#v", events)
