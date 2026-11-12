@@ -942,3 +942,44 @@ func TestCmdListTellsASignedOutUserToLogIn(t *testing.T) {
 		t.Fatalf("signed-out list = %q", out)
 	}
 }
+
+func TestListReportsLocalStorageErrors(t *testing.T) {
+	t.Setenv(config.ConfigPathEnv, filepath.Join(t.TempDir(), "config.yaml"))
+	t.Setenv(config.AuthTokenEnv, "")
+	t.Setenv("TELOS_SESSION_ID", "")
+	for _, kind := range []string{"missing", "empty", "file"} {
+		t.Run(kind, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "sessions")
+			switch kind {
+			case "empty":
+				if err := os.Mkdir(path, 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "file":
+				if err := os.WriteFile(path, []byte("not a directory"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("TELOS_SESSION_DIR", path)
+			for _, local := range []bool{false, true} {
+				for _, jsonOutput := range []bool{false, true} {
+					args := []string{"list"}
+					if local {
+						args = append(args, "--local")
+					}
+					if jsonOutput {
+						args = append(args, "--json")
+					}
+					out, stderr, err := inferenceCLIProcess(t, args...)
+					if kind == "file" {
+						if err == nil || out != "" || !strings.Contains(stderr, "error: list local Goals:") || !strings.Contains(stderr, path) {
+							t.Fatalf("%v: stdout=%q stderr=%q error=%v", args, out, stderr, err)
+						}
+					} else if err != nil || stderr != "" || (jsonOutput && !strings.Contains(out, `"goals": []`)) {
+						t.Fatalf("%v: stdout=%q stderr=%q error=%v", args, out, stderr, err)
+					}
+				}
+			}
+		})
+	}
+}
