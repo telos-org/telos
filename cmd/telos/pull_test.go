@@ -318,30 +318,35 @@ func TestMaterializePackageWritesADirectory(t *testing.T) {
 		digest: pkg.Digest,
 		data:   pkg.Bytes,
 	}
-	root := t.TempDir()
-	dir := filepath.Join(root, "package")
-	path, err := materializePackage(cloud.NewClient("", ""), pulled, dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if path != dir {
-		t.Fatalf("path: got %q want %q", path, dir)
-	}
-	assertFileContains(t, filepath.Join(dir, "SPEC.md"), "name: demo")
-	assertFileContains(t, filepath.Join(dir, "manifest.json"), `"schema_version": 1`)
+	for _, suffix := range []string{"", string(os.PathSeparator)} {
+		t.Run("suffix="+suffix, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, "package")
+			output := dir + suffix
+			path, err := materializePackage(cloud.NewClient("", ""), pulled, output)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if path != dir {
+				t.Fatalf("path: got %q want %q", path, dir)
+			}
+			assertFileContains(t, filepath.Join(dir, "SPEC.md"), "name: demo")
+			assertFileContains(t, filepath.Join(dir, "manifest.json"), `"schema_version": 1`)
 
-	if _, err := materializePackage(cloud.NewClient("", ""), pulled, dir); err == nil ||
-		!strings.Contains(err.Error(), "already exists") {
-		t.Fatalf("existing output error: %v", err)
-	}
+			if _, err := materializePackage(cloud.NewClient("", ""), pulled, output); err == nil ||
+				!strings.Contains(err.Error(), "already exists") {
+				t.Fatalf("existing output error: %v", err)
+			}
 
-	markdown := filepath.Join(root, "copy.md")
-	if _, err := materializePackage(cloud.NewClient("", ""), pulled, markdown); err == nil ||
-		!strings.Contains(err.Error(), "not a Markdown file") {
-		t.Fatalf("Markdown output error: %v", err)
-	}
-	if _, err := os.Lstat(markdown); !os.IsNotExist(err) {
-		t.Fatalf("Markdown output was created: %v", err)
+			markdown := filepath.Join(root, "copy.md")
+			if _, err := materializePackage(cloud.NewClient("", ""), pulled, markdown+suffix); err == nil ||
+				!strings.Contains(err.Error(), "not a Markdown file") {
+				t.Fatalf("Markdown output error: %v", err)
+			}
+			if _, err := os.Lstat(markdown); !os.IsNotExist(err) {
+				t.Fatalf("Markdown output was created: %v", err)
+			}
+		})
 	}
 }
 
