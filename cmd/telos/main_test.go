@@ -1756,3 +1756,31 @@ func configureLocalOnlyTest(t *testing.T) {
 	t.Setenv("TELOS_API_ENDPOINT", "")
 	t.Setenv("TELOS_AUTH_TOKEN", "")
 }
+
+func TestLocalCostBudgetMustBeFiniteAndPositive(t *testing.T) {
+	for _, input := range []string{"NaN", "+Inf", "-Inf", "0", "-1", "1.25"} {
+		for _, source := range []string{"flag", "environment"} {
+			t.Run(source+"/"+input, func(t *testing.T) {
+				t.Setenv("TELOS_MAX_COST_USD", "")
+				t.Setenv("TELOS_THINKING", "")
+				fs := flag.NewFlagSet("run", flag.ContinueOnError)
+				value := fs.Float64("max-cost-usd", 0, "")
+				if source == "flag" {
+					if err := fs.Parse([]string{"--max-cost-usd=" + input}); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					t.Setenv("TELOS_MAX_COST_USD", input)
+				}
+				cfg, err := resolveLocalRunConfigFromFlags(fs, "", "", "", *value)
+				if input == "1.25" {
+					if err != nil || cfg.MaxCostUSD == nil || *cfg.MaxCostUSD != 1.25 {
+						t.Fatalf("valid budget: config=%+v error=%v", cfg, err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "must be finite and positive") {
+					t.Fatalf("invalid budget %q: error=%v", input, err)
+				}
+			})
+		}
+	}
+}
