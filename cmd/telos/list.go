@@ -138,7 +138,8 @@ func rootListSessions(limit int) ([]sessionapi.Session, bool, error) {
 func listLocalSessions() []sessionapi.Session {
 	sessions, err := store().List()
 	if err != nil {
-		return nil
+		fmt.Fprintf(os.Stderr, "error: list local Goals: %v\n", err)
+		os.Exit(1)
 	}
 	return sessions
 }
