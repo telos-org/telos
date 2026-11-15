@@ -1,3 +1,5 @@
+//go:build unix
+
 package sessionapi
 
 import (
@@ -120,12 +122,6 @@ func (i *Issue) Blocked() bool {
 // OnHold reports whether agents must stop: a blocked issue or Cloud's hold.
 func (m *Manifest) OnHold() bool {
 	return m != nil && (m.Paused || m.Issue.Blocked())
-}
-
-type Workspace struct {
-	Mode       string `json:"mode"`
-	Source     string `json:"source,omitempty"`
-	BaseCommit string `json:"base_commit,omitempty"`
 }
 
 type ManifestSpec struct {

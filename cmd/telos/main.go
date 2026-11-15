@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-
-	"github.com/telos-org/telos/internal/sessionworker"
 )
 
 // Version is set at build time.
@@ -88,8 +86,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  resume GOAL        Restart a paused or blocked Goal's agents")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "other commands:")
-	_, hostedSession := rootSessionContext()
-	if _, err := sessionworker.ResolveTelosd(); hostedSession || err == nil {
+	if localRunAvailable() {
 		fmt.Fprintln(out, "  run SPEC.md        Run a spec as a bounded task")
 	}
 	fmt.Fprintln(out, "  push SPEC.md       Publish a versioned spec or skill for reuse")

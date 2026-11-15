@@ -135,14 +135,6 @@ func rootListSessions(limit int) ([]sessionapi.Session, bool, error) {
 	return sessions, true, nil
 }
 
-func listLocalSessions() []sessionapi.Session {
-	sessions, err := store().List()
-	if err != nil {
-		return nil
-	}
-	return sessions
-}
-
 func visibleListSessions(sessions []sessionapi.Session, wide bool) []sessionapi.Session {
 	if wide {
 		return sessions

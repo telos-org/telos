@@ -13,7 +13,6 @@ import (
 	"testing"
 
 	"github.com/telos-org/telos/internal/cloud"
-	"github.com/telos-org/telos/internal/sessionapi"
 )
 
 func configureInferenceApplyTest(t *testing.T, endpoint string) {
@@ -151,10 +150,10 @@ func TestApplyLocalInferenceRejectedWithoutChangingManifest(t *testing.T) {
 	id := "local_settings"
 	dir := filepath.Join(root, id)
 	path := filepath.Join(dir, "session.json")
-	if err := sessionapi.WriteManifest(path, &sessionapi.Manifest{
-		SessionID: id, SessionKind: sessionapi.KindController,
-		Config: sessionapi.SessionConfig{Model: "provider/old", Thinking: "medium"},
-	}); err != nil {
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"session_id":"local_settings","session_kind":"controller","config":{"model":"provider/old","thinking":"medium"}}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	before, err := os.ReadFile(path)

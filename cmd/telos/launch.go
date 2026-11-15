@@ -7,220 +7,72 @@ import (
 	"os"
 	"strings"
 
-	"github.com/telos-org/telos/internal/cli"
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/config"
-	"github.com/telos-org/telos/internal/runtimeclient"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
-// -- run ----------------------------------------------------------------------
-
-func cmdRun(args []string) {
-	cmdLaunch("run", "submitted", args)
-}
-
 func cmdApply(args []string) {
-	cmdLaunch("apply", "applied", args)
-}
-
-func cmdLaunch(command, action string, args []string) {
-	synopsis := fmt.Sprintf("telos %s SPEC.md [flags]", command)
-	if command == "apply" {
-		synopsis += "\n       telos apply --goal GOAL [--model MODEL] [--thinking LEVEL] [flags]"
-	}
-	fs := newCommandFlagSet(command, synopsis)
-	workspaceValue := ""
-	workspace := &workspaceValue
-	if command == "run" {
-		workspace = fs.String("workspace", "", "Workspace directory for local specs")
-	}
-	sessionIDValue := ""
-	sessionID := &sessionIDValue
-	forceValue := false
-	force := &forceValue
-	if command == "apply" {
-		sessionID = fs.String("goal", "", "ID of the Goal to update")
-		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
-	}
-	modelHelp := "Model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
-	thinkingHelp := "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs"
-	if command == "apply" {
-		modelHelp = "telos/default, telos/max, or <name>/<model-id> for a saved API key or subscription. Creation defaults to $TELOS_MODEL, then the workspace default; updates require an explicit flag without SPEC.md"
-		thinkingHelp = "Creation: low, medium, high, or xhigh; defaults to $TELOS_THINKING. Updates: a model-supported level for the next turn, explicitly supplied without SPEC.md"
-	}
-	model := fs.String("model", "", modelHelp)
-	thinking := fs.String("thinking", "", thinkingHelp)
-	untilValue := ""
-	until := &untilValue
-	maxCostUSDValue := 0.0
-	maxCostUSD := &maxCostUSDValue
-	if command == "run" {
-		until = fs.String("until", "", "Run at most N review cycles or duration like 30m")
-		maxCostUSD = fs.Float64("max-cost-usd", 0, "Maximum local execution cost in USD; defaults to 20")
-	}
+	fs := newCommandFlagSet("apply", "telos apply SPEC.md [flags]\n       telos apply --goal GOAL [--model MODEL] [--thinking LEVEL] [flags]")
+	goal := fs.String("goal", "", "ID of the Goal to update")
+	force := fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
+	model := fs.String("model", "", "telos/default, telos/max, or <name>/<model-id> for a saved API key or subscription. Creation defaults to $TELOS_MODEL, then the workspace default; updates require an explicit flag without SPEC.md")
+	thinking := fs.String("thinking", "", "Creation: low, medium, high, or xhigh; defaults to $TELOS_THINKING. Updates: a model-supported level for the next turn, explicitly supplied without SPEC.md")
 	jsonOut := fs.Bool("json", false, "JSON output")
-	contextValue := ""
-	contextFlagValue := &contextValue
-	if command == "apply" {
-		contextFlagValue = cloudContextFlag(fs)
-	}
+	contextFlag := cloudContextFlag(fs)
 	parseFlags(fs, args)
-	*sessionID = strings.TrimSpace(*sessionID)
-	contextOverride, err := cloudContextOverride(fs, *contextFlagValue)
+	*goal = strings.TrimSpace(*goal)
+	contextOverride, err := cloudContextOverride(fs, *contextFlag)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
-	localConfigSet := flagNamesSet(fs, "workspace")
-	untilConfig, err := untilFlagValue(fs, *until)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+	if insideTelosSession() {
+		exitWithError(errors.New("telos apply cannot be used from inside a Telos Goal; use telos run to launch nested specs"))
 	}
-	if command == "apply" {
-		if insideTelosSession() {
-			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos Goal; use telos run to launch nested specs")
-			os.Exit(1)
+	if err := validateApplyInferenceFlags(fs, *goal, *model, *thinking); err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(2)
+	}
+	if fs.NArg() == 0 {
+		change, err := applySessionInference(*goal, strings.TrimSpace(*model), strings.TrimSpace(*thinking), contextOverride)
+		if err != nil {
+			exitWithError(err)
 		}
-		if err := validateApplyInferenceFlags(fs, *sessionID, *model, *thinking); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(2)
+		if *jsonOut {
+			printJSON(change)
+		} else {
+			printInferenceChange(os.Stdout, change)
 		}
-		if fs.NArg() == 0 {
-			change, err := applySessionInference(*sessionID, strings.TrimSpace(*model), strings.TrimSpace(*thinking), contextOverride)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			if *jsonOut {
-				printJSON(change)
-			} else {
-				printInferenceChange(os.Stdout, change)
-			}
-			return
-		}
+		return
 	}
 	requireArgCount(fs, 1, "one SPEC.md")
-	if err := validateCloudSessionContext(*sessionID, contextOverride); err != nil {
+	if err := validateCloudSessionContext(*goal, contextOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
 	}
 	specArg := fs.Arg(0)
-	specPath, hasLocalSpec := existingSpecPath(specArg)
-
-	if ctx, ok := rootSessionContext(); ok {
-		if localConfigSet {
-			fmt.Fprintln(os.Stderr, "error: local run config flags are not supported inside a Telos Goal")
-			os.Exit(1)
-		}
-		runtimeConfig, err := resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
+	_, hasLocalSpec := existingSpecPath(specArg)
+	if err := validateApplySession(*goal); err != nil {
+		exitWithError(err)
+	}
+	if err := validateForceApply(*force, *goal); err != nil {
+		exitWithError(err)
+	}
+	if !hasLocalSpec && !strings.HasPrefix(strings.TrimSpace(specArg), "@") {
+		exitWithError(specFileNotFound(specArg))
+	}
+	if err := requireCloudLogin(); err != nil {
+		exitWithError(err)
+	}
+	var runtimeConfig sessionRuntimeConfig
+	if *goal == "" {
+		runtimeConfig, err = resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, 0)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
+			exitWithError(err)
 		}
-		// Without flags, telosd copies the parent's current settings; the
-		// environment may hold the model the worker started with.
-		if !flagNameSet(fs, "model") {
-			runtimeConfig.Model = ""
-		}
-		if !flagNameSet(fs, "thinking") {
-			runtimeConfig.Thinking = ""
-		}
-		runCloudChildSession(specArg, ctx, untilConfig, runtimeConfig, *jsonOut, action)
-		return
 	}
-
-	if command == "apply" {
-		if err := validateApplySession(*sessionID); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		if err := validateForceApply(*force, *sessionID); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		if !hasLocalSpec && !strings.HasPrefix(strings.TrimSpace(specArg), "@") {
-			fmt.Fprintf(os.Stderr, "error: %v\n", specFileNotFound(specArg))
-			os.Exit(1)
-		}
-		if err := requireCloudLogin(); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		var runtimeConfig sessionRuntimeConfig
-		if *sessionID == "" {
-			runtimeConfig, err = resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-		}
-		applyCloudControl(
-			specArg,
-			*sessionID,
-			runtimeConfig,
-			*force,
-			*jsonOut,
-			contextOverride,
-		)
-		return
-	}
-	if !hasLocalSpec {
-		fmt.Fprintf(os.Stderr, "error: %v\n", specFileNotFound(specArg))
-		os.Exit(1)
-	}
-	if err := prepareRegistrySkills(specPath); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	cfg, err := resolveLocalRunConfigFromFlags(
-		fs,
-		*workspace,
-		*model,
-		*thinking,
-		*maxCostUSD,
-	)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	cfg.Until = untilConfig.ReviewCycles
-	cfg.UntilSeconds = untilConfig.Seconds
-
-	session, err := cli.SubmitLocalSession(specPath, cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-
-	if *jsonOut {
-		printJSON(map[string]interface{}{
-			"goal_id":          session.SessionID,
-			"goal_dir":         session.SessionDir,
-			"workspace":        session.WorkspaceScope,
-			"active_workspace": session.ActiveWorkspace,
-			"spec_name":        session.SpecName,
-			"status":           "running",
-		})
-	} else {
-		printLocalLaunch(os.Stdout, action, session)
-	}
-}
-
-func printLocalLaunch(out io.Writer, action string, session *cli.LocalSession) {
-	workspace := shellQuote(session.WorkspaceScope)
-	fmt.Fprintf(out, "%s %s\n\n", action, session.SpecName)
-	printSummaryField(out, "Name", session.SpecName)
-	printSummaryField(out, "Target", "local")
-	printSummaryField(out, "Status", "active")
-	printSummaryField(out, "Cost", "-")
-	printSummaryField(out, "Goal", session.SessionID)
-	printSummaryField(out, "Workspace", session.WorkspaceScope)
-	fmt.Fprintln(out)
-	printSummaryField(out, "Describe", fmt.Sprintf("cd %s && telos describe %s", workspace, session.SessionID))
-	printSummaryField(out, "Logs", fmt.Sprintf("cd %s && telos logs %s", workspace, session.SessionID))
+	applyCloudControl(specArg, *goal, runtimeConfig, *force, *jsonOut, contextOverride)
 }
 
 // shellArg quotes s only when a shell would otherwise split or expand it.
@@ -257,39 +109,6 @@ func requireCloudLogin() error {
 		return errors.New("telos apply deploys to Telos Cloud; run `telos login` first")
 	}
 	return nil
-}
-
-func runCloudChildSession(
-	specArg string,
-	ctx rootContext,
-	until untilConfig,
-	runtimeConfig sessionRuntimeConfig,
-	jsonOut bool,
-	action string,
-) {
-	req, err := sessionCreateRequestForSpec(specArg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	req.ParentSessionID = &ctx.sessionID
-	if until.ReviewCycles > 0 {
-		req.Until = &until.ReviewCycles
-	}
-	if until.Seconds > 0 {
-		req.UntilSeconds = &until.Seconds
-	}
-	applySessionRuntimeConfig(&req, runtimeConfig)
-	session, err := runtimeclient.New(ctx.endpoint, ctx.token).CreateSession(req)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
-	}
-	if jsonOut {
-		printJSON(map[string]any{"goal": goalJSON(session)})
-		return
-	}
-	printSessionReceipt(os.Stdout, action, session)
 }
 
 func applyCloudControl(

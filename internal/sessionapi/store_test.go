@@ -1,3 +1,5 @@
+//go:build unix
+
 package sessionapi
 
 import (
@@ -373,6 +375,45 @@ func TestCloudSessionIDsAcceptGoalAndSessionPrefixes(t *testing.T) {
 	} {
 		if got := cloudSessionIDRE.MatchString(id); got != want {
 			t.Errorf("cloudSessionIDRE.MatchString(%q) = %v, want %v", id, got, want)
+		}
+	}
+}
+
+func TestSessionConfigPreservesUnknownFields(t *testing.T) {
+	var cfg SessionConfig
+	if err := json.Unmarshal([]byte(`{"model":"opus","max_rounds":8,"future_knob":{"x":1}}`), &cfg); err != nil {
+		t.Fatalf("Unmarshal: %v", err)
+	}
+	if cfg.Model != "opus" {
+		t.Fatalf("typed fields: got model=%q", cfg.Model)
+	}
+
+	m := cfg.AsMap()
+	if got, ok := m["max_rounds"].(float64); !ok || got != 8 {
+		t.Fatalf("max_rounds should be preserved as unknown field: %#v", m["max_rounds"])
+	}
+	if _, ok := m["future_knob"].(map[string]any); !ok {
+		t.Fatalf("future_knob was not preserved: %#v", m["future_knob"])
+	}
+}
+
+func TestSessionConfigPreservesLegacyRoleConfigAsUnknownFields(t *testing.T) {
+	data := []byte(`{"model":"shared/model","generator":{"model":"generator/model"},"verifier":{"model":"verifier/model"}}`)
+	var cfg SessionConfig
+	if err := json.Unmarshal(data, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	roundTrip, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded map[string]any
+	if err := json.Unmarshal(roundTrip, &decoded); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"generator", "verifier"} {
+		if _, ok := decoded[key].(map[string]any); !ok {
+			t.Fatalf("legacy %s config was not preserved: %#v", key, decoded[key])
 		}
 	}
 }
