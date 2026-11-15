@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"math"
 	"os"
 	"slices"
 	"strconv"
@@ -277,8 +278,8 @@ func modelOption(fs *flag.FlagSet, value string) string {
 
 func positiveFloatOption(fs *flag.FlagSet, name string, value float64, envName string, defaultValue float64) (float64, error) {
 	if flagNameSet(fs, name) {
-		if value <= 0 {
-			return 0, fmt.Errorf("--%s / %s must be positive", name, envName)
+		if value <= 0 || math.IsNaN(value) || math.IsInf(value, 0) {
+			return 0, fmt.Errorf("--%s / %s must be finite and positive", name, envName)
 		}
 		return value, nil
 	}
@@ -290,8 +291,8 @@ func positiveFloatOption(fs *flag.FlagSet, name string, value float64, envName s
 	if err != nil {
 		return 0, fmt.Errorf("--%s / %s must be a number", name, envName)
 	}
-	if parsed <= 0 {
-		return 0, fmt.Errorf("--%s / %s must be positive", name, envName)
+	if parsed <= 0 || math.IsNaN(parsed) || math.IsInf(parsed, 0) {
+		return 0, fmt.Errorf("--%s / %s must be finite and positive", name, envName)
 	}
 	return parsed, nil
 }

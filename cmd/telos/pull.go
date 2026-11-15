@@ -269,6 +269,7 @@ func materializePackage(control *cloud.Client, pkg *pulledPackage, output string
 	if destination == "" {
 		destination = pkg.reference.name
 	}
+	destination = filepath.Clean(destination)
 	if strings.EqualFold(filepath.Ext(destination), ".md") {
 		return "", fmt.Errorf("--output names a directory, not a Markdown file; the spec is written to SPEC.md inside it")
 	}

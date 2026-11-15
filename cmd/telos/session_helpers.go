@@ -96,7 +96,7 @@ func getCloudSessionIfConfigured(
 	}
 	session, contextName, err := getCloudSessionForContext(id, contextOverride)
 	if err != nil {
-		if cloud.IsStatus(err, 404) {
+		if cloud.IsStatus(err, 404) && (rootScoped || !isCloudApplyID(id)) {
 			return nil, "", false, nil
 		}
 		return nil, contextName, true, err
