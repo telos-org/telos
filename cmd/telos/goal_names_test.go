@@ -119,3 +119,31 @@ func TestNotFoundErrorsNameTheGoal(t *testing.T) {
 		t.Fatalf("Cloud ID not-found error = %q", got)
 	}
 }
+
+func TestGoalReadsNameTheSelectedContextWhenNotFound(t *testing.T) {
+	server := inferenceTestServer(t, map[string]http.HandlerFunc{
+		"GET /api/deployments/goal_missing": func(w http.ResponseWriter, r *http.Request) {
+			http.Error(w, `{"detail":"deployment not found"}`, http.StatusNotFound)
+		},
+	})
+	defer server.Close()
+	configureCloudTest(t, server.URL)
+	t.Setenv("TELOS_SESSION_ID", "")
+	t.Setenv("TELOS_SESSION_DIR", filepath.Join(t.TempDir(), "sessions"))
+	for _, context := range []string{"personal", "@telos"} {
+		t.Setenv("TELOS_CONTEXT", context)
+		for _, command := range []string{"describe", "logs"} {
+			for _, explicit := range []bool{false, true} {
+				args := []string{command, "goal_missing"}
+				if explicit {
+					args = append(args, "--context", context)
+				}
+				out, stderr, err := inferenceCLIProcess(t, args...)
+				want := "error: Goal goal_missing not found in " + context + "\n"
+				if err == nil || out != "" || stderr != want {
+					t.Fatalf("%v: exit = %v, stdout = %q, stderr = %q; want %q", args, err, out, stderr, want)
+				}
+			}
+		}
+	}
+}
