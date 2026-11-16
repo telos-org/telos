@@ -2,6 +2,7 @@ package sessionapi_test
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -22,6 +23,23 @@ func TestSessionCreateRequestOmitsInternalSessionKind(t *testing.T) {
 	}
 	if string(body) != "{}" {
 		t.Fatalf("session_kind should not be public JSON: %s", body)
+	}
+}
+
+func TestInferenceConnectionAcceptsClaudePlaceholdersOnlyForAnthropic(t *testing.T) {
+	placeholder := "telos-proxy-" + strings.Repeat("a", 43)
+	for _, tc := range []struct {
+		provider, key string
+		valid         bool
+	}{
+		{"anthropic", "sk-ant-oat01-" + placeholder, true},
+		{"anthropic", "sk-ant-oat01-" + strings.Repeat("a", 43), false},
+		{"xai", "sk-ant-oat01-" + placeholder, false},
+	} {
+		connection := sessionapi.InferenceConnection{ID: "profile", Provider: tc.provider, BaseURL: "https://gateway.example/v1", ProxyURL: "http://172.31.255.1:18080", APIKey: tc.key}
+		if err := connection.Validate(tc.provider); (err == nil) != tc.valid {
+			t.Fatalf("Validate(%s, %q) = %v, want valid=%v", tc.provider, tc.key, err, tc.valid)
+		}
 	}
 }
 
