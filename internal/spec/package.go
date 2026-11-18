@@ -129,6 +129,11 @@ type ApplyPackageFileEntry struct {
 	Digest string `json:"digest"`
 }
 
+type ApplyPackageFileContents struct {
+	Data []byte
+	Mode fs.FileMode
+}
+
 type ApplyPackageSkillProvenance struct {
 	Ref    string `json:"ref"`
 	Digest string `json:"digest"`
@@ -417,6 +422,20 @@ func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageManifest, error
 	return manifest, nil
 }
 
+// HydrateApplyPackageFiles verifies and hydrates a package without re-encoding its
+// archive or changing file modes through filesystem permissions or the umask.
+func HydrateApplyPackageFiles(data []byte, fetch ApplyPackageSkillFetcher) (map[string]ApplyPackageFileContents, error) {
+	files, _, err := hydrateApplyPackageFiles(data, fetch, defaultArchiveReadLimits())
+	if err != nil {
+		return nil, err
+	}
+	contents := make(map[string]ApplyPackageFileContents, len(files))
+	for path, file := range files {
+		contents[path] = ApplyPackageFileContents{Data: file.data, Mode: fs.FileMode(file.mode)}
+	}
+	return contents, nil
+}
+
 // HydrateApplyPackage returns a self-contained package tarball by fetching any
 // registry-backed skill blobs referenced by the package manifest.
 func HydrateApplyPackage(data []byte, fetch ApplyPackageSkillFetcher) ([]byte, *ApplyPackageManifest, error) {
@@ -428,6 +447,21 @@ func hydrateApplyPackageWithLimits(
 	fetch ApplyPackageSkillFetcher,
 	limits archiveReadLimits,
 ) ([]byte, *ApplyPackageManifest, error) {
+	files, manifest, err := hydrateApplyPackageFiles(data, fetch, limits)
+	if err != nil {
+		return nil, nil, err
+	}
+	hydrated, err := writePackageTar(packageFilesFromMap(files))
+	if err != nil {
+		return nil, nil, err
+	}
+	if int64(len(hydrated)) > limits.maxCompressedBytes {
+		return nil, nil, fmt.Errorf("hydrated apply package compressed content exceeds %d bytes", limits.maxCompressedBytes)
+	}
+	return hydrated, manifest, nil
+}
+
+func hydrateApplyPackageFiles(data []byte, fetch ApplyPackageSkillFetcher, limits archiveReadLimits) (map[string]packageFile, *ApplyPackageManifest, error) {
 	files, manifest, err := readApplyPackage(data)
 	if err != nil {
 		return nil, nil, err
@@ -485,14 +519,7 @@ func hydrateApplyPackageWithLimits(
 	if err := validateApplyPackageFiles(manifest, files); err != nil {
 		return nil, nil, err
 	}
-	hydrated, err := writePackageTar(packageFilesFromMap(files))
-	if err != nil {
-		return nil, nil, err
-	}
-	if int64(len(hydrated)) > limits.maxCompressedBytes {
-		return nil, nil, fmt.Errorf("hydrated apply package compressed content exceeds %d bytes", limits.maxCompressedBytes)
-	}
-	return hydrated, manifest, nil
+	return files, manifest, nil
 }
 
 func BuildSkillBundle(skill *Skill) (string, []byte, error) {
