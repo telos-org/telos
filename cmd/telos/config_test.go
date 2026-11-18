@@ -160,6 +160,9 @@ func TestCmdConfigShowsResolvedContextWithoutExposingToken(t *testing.T) {
 	if got := configOutputValue(t, out, "Authentication"); got != "valid" {
 		t.Fatalf("authentication = %q", got)
 	}
+	if !strings.Contains(out, "Contexts\n    @grohan (personal)\n  * @telos\n") || strings.Contains(out, "\nContext ") {
+		t.Fatalf("contexts are missing, unmarked, or repeated: %q", out)
+	}
 	if got := configOutputValue(t, out, "Config file"); got != configPath {
 		t.Fatalf("config path = %q, want %q", got, configPath)
 	}
@@ -468,6 +471,9 @@ func TestCmdConfigShowsUnauthenticatedLocalValues(t *testing.T) {
 			t.Fatalf("output %q does not contain %q", out, want)
 		}
 	}
+	if strings.Contains(out, "\nContexts") {
+		t.Fatalf("signed-out config claims available contexts: %q", out)
+	}
 }
 
 func accountBootstrapServer(t *testing.T) *httptest.Server {
@@ -543,6 +549,9 @@ func TestConfigJSONShowsWorkspaceDefaultAndOverridesWithoutKeys(t *testing.T) {
 	if report.Authentication != "valid" || report.Context != "@telos" || report.WorkspaceDefault == nil || report.WorkspaceDefault.Source != "byok" || report.ModelOverride != "telos/max" || report.ThinkingOverride != "high" {
 		t.Fatalf("report = %#v", report)
 	}
+	if !slices.Equal(report.Contexts, []string{"@person", "@telos"}) || report.PersonalContext != "@person" {
+		t.Fatalf("available contexts = %v", report.Contexts)
+	}
 	for _, connection := range report.Connections {
 		if connection.Source == "byok" && connection.Status != "saved" {
 			t.Fatalf("stored key claims a connection test: %#v", connection)
@@ -556,6 +565,43 @@ func TestConfigJSONShowsWorkspaceDefaultAndOverridesWithoutKeys(t *testing.T) {
 	after, err := os.ReadFile(path)
 	if err != nil || !bytes.Equal(before, after) {
 		t.Fatalf("config inspection changed saved settings: %s, %v", after, err)
+	}
+}
+
+func TestConfigListsContextsWhenSelectedContextIsUnavailable(t *testing.T) {
+	server := inferenceTestServer(t, nil)
+	defer server.Close()
+	configureCloudTest(t, server.URL)
+	t.Setenv(config.ContextEnv, "@missing")
+	var report configReport
+	out := captureStdout(t, func() { cmdConfig([]string{"--json"}) })
+	if err := json.Unmarshal([]byte(out), &report); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(report.Contexts, []string{"@person", "@telos"}) ||
+		report.Context != "@missing" || !strings.Contains(report.Error, `context "@missing" is unavailable`) {
+		t.Fatalf("unavailable context hid the available choices: %s", out)
+	}
+	out = captureStdout(t, func() { cmdConfig(nil) })
+	if !strings.Contains(out, "Contexts\n    @person (personal)\n    @telos\n") || strings.Contains(out, "  * ") {
+		t.Fatalf("unavailable context marked as active or choices hidden: %q", out)
+	}
+}
+
+func TestConfigShowsPersonalContextByHandle(t *testing.T) {
+	server := accountBootstrapServer(t)
+	defer server.Close()
+	for _, alias := range []string{"", "personal", "@grohan", "org_personal"} {
+		report := loadConfigReport(&config.Config{
+			APIEndpoint: server.URL, AuthToken: "test-token", Context: alias,
+		}, "config.yaml")
+		if report.Context != "@grohan" || report.PersonalContext != "@grohan" || !slices.Equal(report.Contexts, []string{"@grohan", "@telos"}) || report.Error != "" {
+			t.Fatalf("context %q: report = %#v", alias, report)
+		}
+		out := captureStdout(t, func() { printConfigReport(report) })
+		if !strings.Contains(out, "Contexts\n  * @grohan (personal)\n    @telos\n") {
+			t.Fatalf("context %q: output = %q", alias, out)
+		}
 	}
 }
 

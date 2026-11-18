@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"text/tabwriter"
@@ -96,6 +97,8 @@ type configReport struct {
 	Endpoint         string                      `json:"endpoint"`
 	Authentication   string                      `json:"authentication"`
 	Context          string                      `json:"context"`
+	Contexts         []string                    `json:"contexts"`
+	PersonalContext  string                      `json:"personal_context,omitempty"`
 	WorkspaceDefault *cloud.InferenceSelection   `json:"workspace_default,omitempty"`
 	Credits          *creditsReport              `json:"credits,omitempty"`
 	Connections      []cloud.InferenceConnection `json:"connections"`
@@ -131,12 +134,20 @@ func loadConfigReport(cfg *config.Config, path string) configReport {
 		return report
 	}
 	report.Authentication = "valid"
+	report.Contexts = make([]string, 0, len(account.Organizations))
+	for _, organization := range account.Organizations {
+		report.Contexts = append(report.Contexts, organization.ContextName())
+		if organization.ID == account.PersonalOrgID {
+			report.PersonalContext = organization.ContextName()
+		}
+	}
+	slices.Sort(report.Contexts)
 	organization, err := account.ResolveContext(cfg.Context)
 	if err != nil {
 		report.Error = "context: " + err.Error()
 		return report
 	}
-	report.Context = account.CanonicalContextName(organization)
+	report.Context = organization.ContextName()
 	client.OrgID = organization.ID
 	var connectionsErr, preferenceErr, credentialsErr, creditsErr error
 	var creditsMicroUSD int64
@@ -169,7 +180,10 @@ func printConfigReport(report configReport) {
 	if authentication == "not configured" || authentication == "invalid" {
 		authentication += "; run `telos login`"
 	}
-	fmt.Fprintf(w, "Config file\t%s\nEndpoint\t%s\nAuthentication\t%s\nContext\t%s\n", report.ConfigFile, report.Endpoint, authentication, report.Context)
+	fmt.Fprintf(w, "Config file\t%s\nEndpoint\t%s\nAuthentication\t%s\n", report.ConfigFile, report.Endpoint, authentication)
+	if len(report.Contexts) == 0 {
+		fmt.Fprintf(w, "Context\t%s\n", report.Context)
+	}
 	if report.WorkspaceDefault != nil {
 		fmt.Fprintf(w, "Workspace model\t%s\n", inferenceSelectionName(*report.WorkspaceDefault, report.Connections))
 	}
@@ -181,6 +195,19 @@ func printConfigReport(report configReport) {
 	}
 	if report.ThinkingOverride != "" {
 		fmt.Fprintf(w, "Thinking override\t%s (TELOS_THINKING)\n", report.ThinkingOverride)
+	}
+	if len(report.Contexts) > 0 {
+		fmt.Fprintln(w, "Contexts")
+		for _, name := range report.Contexts {
+			marker := " "
+			if name == report.Context {
+				marker = "*"
+			}
+			if name == report.PersonalContext {
+				name += " (personal)"
+			}
+			fmt.Fprintf(w, "  %s %s\n", marker, name)
+		}
 	}
 	if report.Authentication == "valid" {
 		// Managed inference is always available, so the list is never empty and
