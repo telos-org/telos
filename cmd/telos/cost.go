@@ -207,12 +207,13 @@ func inferencePayer(cost inferenceCost) string {
 }
 
 var providerNames = map[string]string{
-	"anthropic":     "Anthropic",
-	"openai":        "OpenAI",
-	"openrouter":    "OpenRouter",
-	"xai":           "xAI",
-	"chatgpt-codex": "ChatGPT",
-	"xai-grok":      "xAI",
+	"anthropic":        "Anthropic",
+	"openai":           "OpenAI",
+	"openrouter":       "OpenRouter",
+	"xai":              "xAI",
+	"chatgpt-codex":    "ChatGPT",
+	"xai-grok":         "xAI",
+	"anthropic-claude": "Claude",
 }
 
 func providerName(provider string) string {

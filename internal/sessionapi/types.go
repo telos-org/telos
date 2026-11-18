@@ -206,7 +206,12 @@ func (c *InferenceConnection) Validate(provider string) error {
 	if c.ProxyURL != inferenceCredentialProxy {
 		return fmt.Errorf("inference connection proxy_url must name the deployment credential proxy: %w", ErrInvalidSession)
 	}
-	valid := inferenceProxyValue.MatchString(c.APIKey)
+	key := c.APIKey
+	if provider == "anthropic" {
+		// Pi uses Claude subscription auth only for keys containing sk-ant-oat.
+		key = strings.TrimPrefix(key, "sk-ant-oat01-")
+	}
+	valid := inferenceProxyValue.MatchString(key)
 	if match := inferenceCodexProxyValue.FindStringSubmatch(c.APIKey); match != nil {
 		var claims map[string]map[string]string
 		decoded, err := base64.RawURLEncoding.DecodeString(match[1])

@@ -45,8 +45,7 @@ Many individual developers and small teams already pay for subscriptions like Ch
 
 - ChatGPT
 - xAI
-
-As of October 2026, Anthropic is unsupported since connecting third-party applications to their subscription is against their terms of service.
+- Claude
 
 ## Spend observability
 
