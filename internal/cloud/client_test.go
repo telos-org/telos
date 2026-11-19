@@ -15,6 +15,32 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
+func TestReadInferenceDefaultsAndDesiredSettings(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Errorf("unexpected inference request: %s %s", r.Method, r.URL)
+		}
+		switch r.URL.Path {
+		case "/api/inference/preference":
+			_, _ = w.Write([]byte(`{"selection":{"source":"managed","tier":"max"},"agent_thinking":"high"}`))
+		case "/api/deployments/goal_test/inference":
+			_, _ = w.Write([]byte(`{"selection":{"source":"byok","connection_id":"key_work","model":"example"},"agent_model":"provider/example","agent_thinking":"off","generation":3,"applied":false}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+	client := NewClient(server.URL, "token")
+	preference, err := client.InferencePreference()
+	if err != nil || preference.Selection.Tier != "max" || preference.AgentThinking == nil || *preference.AgentThinking != "high" {
+		t.Fatalf("preference = %+v, error = %v", preference, err)
+	}
+	state, err := client.GetDeploymentInference("goal_test")
+	if err != nil || state.Selection == nil || state.Selection.ConnectionID != "key_work" || state.AgentThinking != "off" || state.Applied {
+		t.Fatalf("desired inference = %+v, error = %v", state, err)
+	}
+}
+
 func TestNormalizeEndpoint(t *testing.T) {
 	tests := []struct {
 		input    string
