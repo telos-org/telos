@@ -178,11 +178,13 @@ func cmdLaunch(command, action string, args []string) {
 			specArg,
 			*sessionID,
 			runtimeConfig,
-			*force,
-			*jsonOut,
-			contextOverride,
-			*dryRun,
-			*includeDiff,
+			cloudApplyOptions{
+				context:     contextOverride,
+				force:       *force,
+				json:        *jsonOut,
+				dryRun:      *dryRun,
+				includeDiff: *includeDiff,
+			},
 		)
 		return
 	}
@@ -312,31 +314,35 @@ func runCloudChildSession(
 	printSessionReceipt(os.Stdout, action, session)
 }
 
+type cloudApplyOptions struct {
+	context     string
+	force       bool
+	json        bool
+	dryRun      bool
+	includeDiff bool
+}
+
 func applyCloudControl(
 	specArg string,
 	sessionID string,
 	runtimeConfig sessionRuntimeConfig,
-	force bool,
-	jsonOut bool,
-	contextOverride string,
-	dryRun bool,
-	includeDiff bool,
+	options cloudApplyOptions,
 ) {
-	control, err := cloud.ControlClientForContext(contextOverride)
+	control, err := cloud.ControlClientForContext(options.context)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	prepared, err := prepareCloudApply(control, specArg, sessionID, runtimeConfig.Model, contextOverride)
+	prepared, err := prepareCloudApply(control, specArg, sessionID, runtimeConfig.Model, options.context)
 	if err != nil {
 		exitWithError(err)
 	}
-	if dryRun {
-		preview, err := previewCloudApply(control, prepared, sessionID, runtimeConfig, force, includeDiff)
+	if options.dryRun {
+		preview, err := previewCloudApply(control, prepared, sessionID, runtimeConfig, options)
 		if err != nil {
 			exitWithError(err)
 		}
-		printApplyPreview(os.Stdout, preview, jsonOut)
+		printApplyPreview(os.Stdout, preview, options.json)
 		return
 	}
 	packageRecord := prepared.record
@@ -352,14 +358,14 @@ func applyCloudControl(
 		packageRecord.Ref,
 		sessionID,
 		runtimeConfig,
-		force,
+		options.force,
 		prepared.inference,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if jsonOut {
+	if options.json {
 		printJSON(map[string]any{
 			"context":   control.ContextName(),
 			"operation": operation,
@@ -373,7 +379,7 @@ func applyCloudControl(
 		operation,
 		session,
 		control.ContextName(),
-		followUpContext(control, contextOverride),
+		followUpContext(control, options.context),
 	)
 }
 
