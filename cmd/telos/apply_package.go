@@ -105,10 +105,19 @@ func prepareLocalApplyPackage(
 	if err != nil && !cloud.IsStatus(err, 404) {
 		return applyPackageState{}, false, fmt.Errorf("check package version %s: %w", ref, err)
 	}
-	if err == nil && (pending || existing.Digest != digest) {
-		return applyPackageState{}, false, fmt.Errorf(
-			"package version %s already exists; bump version in SPEC.md before changing the spec or its skills", ref,
-		)
+	if err == nil {
+		matches := existing.Digest == digest
+		if pending {
+			matches, err = pendingPackageMatches(control, pkg, scope, refs, manifest, existing.Digest)
+			if err != nil {
+				return applyPackageState{}, false, fmt.Errorf("check package version %s: %w", ref, err)
+			}
+		}
+		if !matches {
+			return applyPackageState{}, false, fmt.Errorf(
+				"package version %s already exists; bump version in SPEC.md before changing the spec or its skills", ref,
+			)
+		}
 	}
 	return applyPackageState{
 		applySpecState: state,
@@ -117,4 +126,53 @@ func prepareLocalApplyPackage(
 		Spec:           string(markdown),
 		data:           data,
 	}, pending, nil
+}
+
+func pendingPackageMatches(
+	control *cloud.Client,
+	pkg *specPackage,
+	scope string,
+	refs map[string]string,
+	proposed *spec.ApplyPackageManifest,
+	existingDigest string,
+) (bool, error) {
+	data, err := control.DownloadPackageVersionBundle(scope, pkg.name, pkg.version)
+	if err != nil {
+		return false, err
+	}
+	_, existing, err := verifiedPackageContents(&pulledPackage{
+		reference: packageReference{ref: fmt.Sprintf("@%s/%s:%s", scope, pkg.name, pkg.version)},
+		digest:    existingDigest,
+		data:      data,
+	})
+	if err != nil {
+		return false, err
+	}
+	if existing.SchemaVersion != spec.ApplyPackageSchemaVersionExactRefs ||
+		len(existing.Skills) != len(proposed.Skills) {
+		return false, nil
+	}
+	comparisonRefs := make(map[string]string, len(refs))
+	for name, lock := range proposed.Skills {
+		previous, ok := existing.Skills[name]
+		if !ok || previous.Digest != lock.Digest || previous.Starred != lock.Starred {
+			return false, nil
+		}
+		ref := refs[name]
+		if ref == "" {
+			parsed, ok := spec.ParseRegistrySkillRef(previous.Ref)
+			if !ok || parsed.Scope != scope {
+				return false, nil
+			}
+			ref = previous.Ref
+		}
+		comparisonRefs[name] = ref
+	}
+	// Normalize imports with the existing locks for comparison only. Publication
+	// still chooses the version, so an unresolved final digest stays unresolved.
+	comparison, err := spec.BuildApplyPackageWithSkillRefs(pkg.compiled, comparisonRefs)
+	if err != nil {
+		return false, err
+	}
+	return comparison.Manifest.Spec.Digest == existing.Spec.Digest, nil
 }

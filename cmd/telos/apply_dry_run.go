@@ -67,7 +67,7 @@ func previewCloudApply(
 	preview.Proposed.applyPackageState = proposed
 	if prepared.pending {
 		preview.Notes = append(preview.Notes,
-			"New skill references and the final package digest are assigned during publication. "+
+			"Skill references and the final package digest are resolved during publication. "+
 				"The spec preview uses local skill paths.",
 		)
 	}

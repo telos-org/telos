@@ -22,7 +22,7 @@ func TestApplyPackageVersionChecksCreationAndUpdates(t *testing.T) {
 			{name: "new version", status: http.StatusNotFound},
 			{name: "identical content"},
 			{name: "conflict", digest: "sha256:different", wantError: "bump version in SPEC.md"},
-			{name: "pending skills", pending: true, wantError: "bump version in SPEC.md"},
+			{name: "pending skills with changed spec", pending: true, wantError: "bump version in SPEC.md"},
 			{name: "read denied", status: http.StatusForbidden, wantError: "check package version"},
 		} {
 			t.Run(goalID+"/"+tt.name, func(t *testing.T) {
@@ -51,12 +51,18 @@ func TestApplyPackageVersionChecksCreationAndUpdates(t *testing.T) {
 				handlers["GET /api/account/bootstrap"] = dryRunPublishScope
 				handlers["GET /api/skills/telos/verify-test/versions/1.0.0"] = http.NotFound
 				handlers["GET /api/skills/telos/verify-test"] = http.NotFound
+				handlers["GET /api/packages/telos/demo/versions/1.2.4/bundle"] = func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write(fixture.pkg.Bytes)
+				}
 				handlers["GET /api/packages/telos/demo/versions/1.2.4"] = func(w http.ResponseWriter, r *http.Request) {
 					if tt.status != 0 {
 						http.Error(w, "registry read failed", tt.status)
 						return
 					}
 					digest := proposed.Digest
+					if tt.pending {
+						digest = fixture.pkg.Digest
+					}
 					if tt.digest != "" {
 						digest = tt.digest
 					}
