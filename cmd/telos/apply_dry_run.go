@@ -62,7 +62,7 @@ func previewCloudApply(control *cloud.Client, prepared *preparedCloudApply, goal
 		proposedData = prepared.registry.data
 	}
 	if pending {
-		preview.Notes = append(preview.Notes, "New skill versions and the final package digest are assigned during publication.")
+		preview.Notes = append(preview.Notes, "New skill references and the final package digest are assigned during publication. The spec preview uses local skill paths.")
 	}
 	if goalID == "" {
 		if err := previewCreationInference(control, preview, prepared.inference, runtime); err != nil {
@@ -134,6 +134,9 @@ func previewApplyPackage(control *cloud.Client, prepared *preparedCloudApply) (a
 					return applyPreviewState{}, false, err
 				}
 				if err == nil && record.Digest == manifest.Skills[publication.name].Digest {
+					if record.Scope != scope || record.Name != publication.name {
+						return applyPreviewState{}, false, fmt.Errorf("skill @%s/%s resolved to %s", scope, publication.name, record.Ref)
+					}
 					ref = record.Ref
 				}
 			}

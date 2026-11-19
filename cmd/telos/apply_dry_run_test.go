@@ -57,6 +57,7 @@ func TestDryRunCreationInferencePrecedence(t *testing.T) {
 		flags                                                                                         []string
 	}{
 		{"workspace defaults", "", "", `{"selection":{"source":"managed","tier":"max"},"agent_thinking":"high"}`, "telos/max", "high", "workspace", "workspace", nil},
+		{"workspace subscription and native thinking", "", "", `{"selection":{"source":"subscription","connection_id":"sub_work","model":"gpt-test"},"agent_thinking":"off"}`, "My ChatGPT/gpt-test", "off", "workspace", "workspace", nil},
 		{"environment overrides", "telos/default", "low", "", "telos/default", "low", "override", "override", nil},
 		{"flags override environment", "telos/default", "low", "", "telos/max", "high", "override", "override", []string{"--model", "telos/max", "--thinking", "high"}},
 		{"empty flag inherits workspace", "telos/default", "", `{"selection":{"source":"managed","tier":"max"},"agent_thinking":"high"}`, "telos/max", "high", "workspace", "workspace", []string{"--model", ""}},
@@ -104,6 +105,37 @@ func TestDryRunSpecUpdatePreservesSettingsAndDetectsUnchanged(t *testing.T) {
 	preview := decodeApplyPreview(t, "@telos/demo:1.2.3", "--goal", "goal_test", "--force")
 	if preview.Operation != "unchanged" || preview.Current == nil || !preview.Force || preview.Proposed.ModelSource != "goal" || preview.Proposed.ThinkingSource != "goal" || preview.SpecDiff != "" {
 		t.Fatalf("preview = %+v", preview)
+	}
+}
+
+func TestDryRunIdenticalContentsWithDifferentReferenceAreAnUpdate(t *testing.T) {
+	pkg := testApplyPackage(t)
+	handlers := registryApplyHandlers(pkg)
+	handlers["GET /api/packages/other/demo/versions/1.2.3"] = func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(cloud.PackageVersionRecord{Scope: "other", Name: "demo", Version: "1.2.3", Ref: "@other/demo:1.2.3", Digest: pkg.Digest})
+	}
+	handlers["GET /api/packages/other/demo/versions/1.2.3/bundle"] = func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(pkg.Bytes)
+	}
+	server := inferenceTestServer(t, handlers)
+	defer server.Close()
+	configureDryRunTest(t, server.URL)
+	preview := decodeApplyPreview(t, "@other/demo:1.2.3", "--goal", "goal_test")
+	if preview.Operation != "update" || preview.Proposed.Digest != preview.Current.Digest || preview.Proposed.Ref == preview.Current.Ref || preview.SpecDiff != "" {
+		t.Fatalf("reference change was hidden: %+v", preview)
+	}
+}
+
+func TestDryRunRequiresLoginAndIsNotAvailableOnRun(t *testing.T) {
+	configureLocalOnlyTest(t)
+	t.Setenv("TELOS_SESSION_ID", "")
+	stdout, stderr, err := inferenceCLIProcess(t, "apply", "@telos/demo:1.2.3", "--dry-run")
+	if err == nil || stdout != "" || !strings.Contains(stderr, "run `telos login` first") {
+		t.Fatalf("unauthenticated preview: error=%v stdout=%s stderr=%s", err, stdout, stderr)
+	}
+	stdout, stderr, err = inferenceCLIProcess(t, "run", "SPEC.md", "--dry-run")
+	if err == nil || stdout != "" || !strings.Contains(stderr, "flag provided but not defined: -dry-run") {
+		t.Fatalf("local dry run: error=%v stdout=%s stderr=%s", err, stdout, stderr)
 	}
 }
 

@@ -53,7 +53,7 @@ func cmdLaunch(command, action string, args []string) {
 	thinkingHelp := "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs"
 	if command == "apply" {
 		modelHelp = "telos/default, telos/max, or <name>/<model-id> for a saved API key or subscription. Creation defaults to $TELOS_MODEL, then the workspace default; updates require an explicit flag without SPEC.md"
-		thinkingHelp = "Creation: low, medium, high, or xhigh; defaults to $TELOS_THINKING. Updates: a model-supported level for the next turn, explicitly supplied without SPEC.md"
+		thinkingHelp = "Creation: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then workspace or cloud defaults. Updates: a model-supported level for the next turn, explicitly supplied without SPEC.md"
 	}
 	model := fs.String("model", "", modelHelp)
 	thinking := fs.String("thinking", "", thinkingHelp)
