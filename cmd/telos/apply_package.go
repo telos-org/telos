@@ -91,7 +91,6 @@ func prepareLocalApplyPackage(
 			return applyPackageState{}, false, err
 		}
 		digest = resolved.Digest
-		data = resolved.Bytes
 	}
 	state, err := applySpecStateFromMarkdown(markdown, manifest)
 	if err != nil {

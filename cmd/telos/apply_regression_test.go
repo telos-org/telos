@@ -111,3 +111,38 @@ func TestApplyAllowsUnversionedSkillMatchingOlderRegistryVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestDryRunDiffUsesLocalFilesForUnpublishedSkillVersion(t *testing.T) {
+	fixture := makeDryRunSkillFixture(t)
+	data := strings.ReplaceAll(string(mustReadFile(t, fixture.path)), "1.2.3", "1.2.4")
+	if err := os.WriteFile(fixture.path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(filepath.Dir(fixture.path), "verify-test", "SKILL.md")
+	if err := os.WriteFile(path, []byte("---\nname: verify-test\nversion: 2.0.0\n---\nVerify new behavior.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handlers := registryApplyHandlers(fixture.pkg)
+	handlers["GET /api/account/bootstrap"] = dryRunPublishScope
+	handlers["GET /api/packages/telos/demo/versions/1.2.4"] = http.NotFound
+	handlers["GET /api/skills/telos/verify-test/versions/2.0.0"] = http.NotFound
+	handlers["GET /api/skills/telos/verify-test/versions/1.0.0"] = func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(cloud.SkillRecord{Digest: fixture.digest})
+	}
+	handlers["GET /api/skills/telos/verify-test/versions/1.0.0/bundle"] = func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(fixture.bundle)
+	}
+	server := inferenceTestServer(t, handlers)
+	defer server.Close()
+	configureDryRunTest(t, server.URL)
+	preview := decodeApplyPreview(t, fixture.path, "--goal", "goal_test", "--diff")
+	if preview.Proposed.Digest == "" || preview.Proposed.Skills[0].Ref != "@telos/verify-test:2.0.0" {
+		t.Fatalf("missing resolved identity: %+v", preview.Proposed)
+	}
+	if len(preview.SkillDiffs) != 1 || !strings.Contains(preview.SkillDiffs[0].Diff, "+Verify new behavior.") {
+		t.Fatalf("unpublished skill diff is missing: %+v", preview)
+	}
+	if strings.Contains(strings.Join(preview.Notes, " "), "unavailable") {
+		t.Fatalf("local skill diff attempted a Registry fetch: %v", preview.Notes)
+	}
+}
