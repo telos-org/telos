@@ -51,6 +51,7 @@ func makeDryRunSkillFixture(t *testing.T) dryRunSkillFixture {
 func TestDryRunLocalSkillIdentityAndOptionalContentDiff(t *testing.T) {
 	fixture := makeDryRunSkillFixture(t)
 	handlers := registryApplyHandlers(fixture.pkg)
+	handlers["GET /api/packages/telos/demo/versions/1.2.4"] = http.NotFound
 	handlers["GET /api/account/bootstrap"] = func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","default_publish_scope":"telos"}]}`))
 	}
@@ -78,6 +79,13 @@ func TestDryRunLocalSkillIdentityAndOptionalContentDiff(t *testing.T) {
 		t.Fatalf("unchanged local skill preview: %+v", preview)
 	}
 	if err := os.WriteFile(filepath.Join(filepath.Dir(fixture.path), "verify-test", "SKILL.md"), []byte("---\nname: verify-test\n---\nVerify new behavior.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err := inferenceCLIProcess(t, "apply", fixture.path, "--goal", "goal_test", "--dry-run")
+	if err == nil || stdout != "" || !strings.Contains(stderr, "bump version in SPEC.md") {
+		t.Fatalf("unbumped skill change: error=%v stdout=%s stderr=%s", err, stdout, stderr)
+	}
+	if err := os.WriteFile(fixture.path, []byte(strings.ReplaceAll(string(mustReadFile(t, fixture.path)), "1.2.3", "1.2.4")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	preview = decodeApplyPreview(t, args...)

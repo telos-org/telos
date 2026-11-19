@@ -128,6 +128,15 @@ func previewApplyPackage(control *cloud.Client, prepared *preparedCloudApply) (a
 		if publication.skill != nil {
 			if publication.skill.version != "" {
 				ref = fmt.Sprintf("@%s/%s:%s", scope, publication.name, publication.skill.version)
+				record, err := control.GetSkillVersion(scope, publication.name, publication.skill.version)
+				if err != nil && !cloud.IsStatus(err, 404) {
+					return applyPreviewState{}, false, fmt.Errorf("check skill version %s: %w", ref, err)
+				}
+				if err == nil && record.Digest != manifest.Skills[publication.name].Digest {
+					return applyPreviewState{}, false, fmt.Errorf(
+						"skill version %s already exists with different content; bump version in SKILL.md", ref,
+					)
+				}
 			} else {
 				record, err := control.GetSkill(scope, publication.name)
 				if err != nil && !cloud.IsStatus(err, 404) {
@@ -165,8 +174,18 @@ func previewApplyPackage(control *cloud.Client, prepared *preparedCloudApply) (a
 	for i := range state.Skills {
 		state.Skills[i].Ref = refs[state.Skills[i].Name]
 	}
+	ref := fmt.Sprintf("@%s/%s:%s", scope, pkg.name, pkg.version)
+	existing, err := control.GetPackageVersion(scope, pkg.name, pkg.version)
+	if err != nil && !cloud.IsStatus(err, 404) {
+		return applyPreviewState{}, false, fmt.Errorf("check package version %s: %w", ref, err)
+	}
+	if err == nil && (pending || existing.Digest != digest) {
+		return applyPreviewState{}, false, fmt.Errorf(
+			"package version %s already exists; bump version in SPEC.md before changing the spec or its skills", ref,
+		)
+	}
 	return applyPreviewState{
-		previewSpecState: state, Name: pkg.name, Ref: fmt.Sprintf("@%s/%s:%s", scope, pkg.name, pkg.version),
+		previewSpecState: state, Name: pkg.name, Ref: ref,
 		Digest: digest, Spec: string(markdown),
 	}, pending, nil
 }

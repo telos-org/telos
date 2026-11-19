@@ -177,6 +177,7 @@ func TestDryRunLocalSpecUsesPublishedPackageIdentity(t *testing.T) {
 		t.Fatal(err)
 	}
 	handlers := registryApplyHandlers(pkg)
+	handlers["GET /api/packages/telos/demo/versions/1.2.4"] = http.NotFound
 	handlers["GET /api/account/bootstrap"] = func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","handle":"telos","default_publish_scope":"telos"}]}`))
 	}
@@ -188,6 +189,13 @@ func TestDryRunLocalSpecUsesPublishedPackageIdentity(t *testing.T) {
 		t.Fatalf("preview = %+v", preview)
 	}
 	if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(mustReadFile(t, path)), "Serve a demo.", "Serve a changed demo.")), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err := inferenceCLIProcess(t, "apply", path, "--goal", "goal_test", "--dry-run")
+	if err == nil || stdout != "" || !strings.Contains(stderr, "bump version in SPEC.md") {
+		t.Fatalf("unbumped spec preview: error=%v stdout=%s stderr=%s", err, stdout, stderr)
+	}
+	if err := os.WriteFile(path, []byte(strings.ReplaceAll(string(mustReadFile(t, path)), "1.2.3", "1.2.4")), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	preview = decodeApplyPreview(t, path, "--goal", "goal_test")
