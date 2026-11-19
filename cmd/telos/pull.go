@@ -243,20 +243,6 @@ func resolvePackageReference(
 	}, record, nil
 }
 
-func registryPackageForApply(
-	control *cloud.Client,
-	reference packageReference,
-) (*cloud.PackageVersionRecord, error) {
-	pkg, record, err := resolvePackageReference(control, reference)
-	if err != nil {
-		return nil, err
-	}
-	if _, err := verifiedPackageSpec(pkg); err != nil {
-		return nil, err
-	}
-	return record, nil
-}
-
 func materializePackage(control *cloud.Client, pkg *pulledPackage, output string) (string, error) {
 	if pkg == nil {
 		return "", fmt.Errorf("package is required")

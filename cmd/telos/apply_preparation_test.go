@@ -36,7 +36,7 @@ func TestPackageSkillsValidateAllSkillsBeforePublishing(t *testing.T) {
 		}
 		compiled.Skills = append(compiled.Skills, &spec.Skill{Name: name, Path: dir})
 	}
-	_, err := pushPackageSkills(cloud.NewClient(server.URL, "token"), compiled, "", "")
+	_, err := pushSpecPackageWithVisibility(cloud.NewClient(server.URL, "token"), &specPackage{compiled: compiled}, "", "")
 	if err == nil || !strings.Contains(err.Error(), "must not start with v") {
 		t.Fatalf("error = %v", err)
 	}

@@ -80,14 +80,14 @@ func TestPrepareRegistrySkillsCachesAndPinsExactVersion(t *testing.T) {
 		t.Fatalf("source ref: got %q", compiled.Skills[0].SourceRef)
 	}
 
-	refs, err := pushPackageSkills(
-		cloud.NewClient(srv.URL, "test-token"),
-		compiled,
-		"user-scope",
-		"",
-	)
+	client := cloud.NewClient(srv.URL, "test-token")
+	publications, err := preparePackageSkills(client, compiled)
 	if err != nil {
-		t.Fatalf("pushPackageSkills: %v", err)
+		t.Fatal(err)
+	}
+	refs, err := publishPackageSkills(client, publications, "user-scope", "")
+	if err != nil {
+		t.Fatal(err)
 	}
 	if refs["verify-test"] != "@telos/verify-test:1.2.3" {
 		t.Fatalf("refs: got %#v", refs)

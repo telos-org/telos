@@ -285,19 +285,6 @@ func readSkillPublishFiles(root string) (map[string]cloud.SkillFile, error) {
 	return files, nil
 }
 
-func pushSpecPackage(client *cloud.Client, pkg *specPackage, scope string) (*cloud.PackageVersionRecord, error) {
-	return pushSpecPackageWithVisibility(client, pkg, scope, "")
-}
-
-func pushSpecPackageVersion(
-	client *cloud.Client,
-	pkg *specPackage,
-	scope string,
-	version string,
-) (*cloud.PackageVersionRecord, error) {
-	return pushSpecPackageVersionWithVisibility(client, pkg, scope, version, "")
-}
-
 func pushSpecPackageWithVisibility(
 	client *cloud.Client,
 	pkg *specPackage,
@@ -307,27 +294,8 @@ func pushSpecPackageWithVisibility(
 	if pkg == nil {
 		return nil, fmt.Errorf("package is required")
 	}
-	return pushSpecPackageVersionWithVisibility(
-		client,
-		pkg,
-		scope,
-		pkg.version,
-		visibility,
-	)
-}
-
-func pushSpecPackageVersionWithVisibility(
-	client *cloud.Client,
-	pkg *specPackage,
-	scope string,
-	version string,
-	visibility string,
-) (*cloud.PackageVersionRecord, error) {
-	if pkg == nil {
-		return nil, fmt.Errorf("package is required")
-	}
 	scope = strings.TrimSpace(scope)
-	version = strings.TrimSpace(version)
+	version := strings.TrimSpace(pkg.version)
 	if version != "" {
 		normalized, err := normalizePackageVersion(version)
 		if err != nil {
@@ -429,19 +397,6 @@ func registryPublicationError(err error) error {
 		)
 	}
 	return err
-}
-
-func pushPackageSkills(
-	client *cloud.Client,
-	compiled *spec.CompiledEnvironment,
-	scope string,
-	visibility string,
-) (map[string]string, error) {
-	skills, err := preparePackageSkills(client, compiled)
-	if err != nil {
-		return nil, err
-	}
-	return publishPackageSkills(client, skills, scope, visibility)
 }
 
 func preparePackageSkills(client *cloud.Client, compiled *spec.CompiledEnvironment) ([]packageSkillPublication, error) {

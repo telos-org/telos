@@ -704,8 +704,9 @@ func TestPushPackageSkillsUsesPublishedPlatformCatalogueSkill(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	refs, err := pushPackageSkills(
-		cloud.NewClient(srv.URL, "test-token"),
+	client := cloud.NewClient(srv.URL, "test-token")
+	publications, err := preparePackageSkills(
+		client,
 		&spec.CompiledEnvironment{Skills: []*spec.Skill{{
 			Name:         resolved.Name,
 			Description:  resolved.Description,
@@ -715,11 +716,13 @@ func TestPushPackageSkillsUsesPublishedPlatformCatalogueSkill(t *testing.T) {
 			Tags:         resolved.Tags,
 			Scripts:      resolved.Scripts,
 		}}},
-		"user-abc",
-		"",
 	)
 	if err != nil {
-		t.Fatalf("pushPackageSkills: %v", err)
+		t.Fatal(err)
+	}
+	refs, err := publishPackageSkills(client, publications, "user-abc", "")
+	if err != nil {
+		t.Fatal(err)
 	}
 	if postedSkill {
 		t.Fatal("platform catalogue skill should not be republished")
