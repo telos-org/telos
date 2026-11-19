@@ -345,6 +345,12 @@ func applyCloudControl(
 		printApplyPreview(os.Stdout, preview, options.json)
 		return
 	}
+	if prepared.baselineErr != nil {
+		fmt.Fprintf(os.Stderr,
+			"warning: could not read deployed baseline; continuing with server-side validation: %v\n",
+			prepared.baselineErr,
+		)
+	}
 	packageRecord := prepared.record
 	if prepared.local != nil {
 		packageRecord, err = publishSpecPackage(control, prepared.local, prepared.skills, "", prepared.local.version, "")

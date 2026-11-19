@@ -61,6 +61,9 @@ func previewCloudApply(
 	runtime sessionRuntimeConfig,
 	options cloudApplyOptions,
 ) (*applyPreview, error) {
+	if prepared.baselineErr != nil {
+		return nil, fmt.Errorf("read deployed baseline: %w", prepared.baselineErr)
+	}
 	preview := newApplyPreview(control, goalID)
 	preview.Force = options.force
 	proposed := prepared.proposed

@@ -190,6 +190,10 @@ func packageForSession(control *cloud.Client, sessionID string) (*pulledPackage,
 	if err != nil {
 		return nil, goalNotFound(err, strings.TrimSpace(sessionID), control.ContextName())
 	}
+	return packageForSessionRecord(control, session)
+}
+
+func packageForSessionRecord(control *cloud.Client, session *cloud.SessionRecord) (*pulledPackage, error) {
 	reference, err := parsePackageReference(session.PackageRef)
 	if err != nil {
 		return nil, fmt.Errorf("Goal %s has an invalid package_ref: %w", session.ID, err)

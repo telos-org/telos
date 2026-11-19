@@ -146,3 +146,117 @@ func TestDryRunDiffUsesLocalFilesForUnpublishedSkillVersion(t *testing.T) {
 		t.Fatalf("local skill diff attempted a Registry fetch: %v", preview.Notes)
 	}
 }
+
+func TestApplyCanRecoverWhenDeployedBaselineCannotBeRead(t *testing.T) {
+	for _, inputKind := range []string{"local", "registry"} {
+		for _, failure := range []struct {
+			name                              string
+			status                            int
+			corrupt, wrongDigest, missingGoal bool
+		}{
+			{name: "missing bundle", status: http.StatusNotFound},
+			{name: "unavailable bundle", status: http.StatusServiceUnavailable},
+			{name: "corrupt bundle", corrupt: true},
+			{name: "digest mismatch", wrongDigest: true},
+			{name: "missing Goal", missingGoal: true},
+		} {
+			for _, dryRun := range []bool{false, true} {
+				mode := "apply"
+				if dryRun {
+					mode = "dry-run"
+				}
+				t.Run(inputKind+"/"+failure.name+"/"+mode, func(t *testing.T) {
+					old := testApplyPackage(t)
+					path := filepath.Join(t.TempDir(), "SPEC.md")
+					if err := os.WriteFile(path, []byte("---\nname: demo\nversion: 1.2.4\n---\n# Goal\nRepair the service.\n"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					compiled, err := spec.CompileEnvironment(path)
+					if err != nil {
+						t.Fatal(err)
+					}
+					proposed, err := spec.BuildApplyPackageWithSkillRefs(compiled, map[string]string{})
+					if err != nil {
+						t.Fatal(err)
+					}
+					record := cloud.PackageVersionRecord{
+						Scope: "telos", Name: "demo", Version: "1.2.4",
+						Ref: "@telos/demo:1.2.4", Digest: proposed.Digest,
+					}
+					var writes atomic.Int32
+					handlers := registryApplyHandlers(old)
+					handlers["GET /api/account/bootstrap"] = dryRunPublishScope
+					handlers["GET /api/packages/telos/demo/versions/1.2.4"] = func(w http.ResponseWriter, r *http.Request) {
+						_ = json.NewEncoder(w).Encode(record)
+					}
+					handlers["GET /api/packages/telos/demo/versions/1.2.4/bundle"] = func(w http.ResponseWriter, r *http.Request) {
+						_, _ = w.Write(proposed.Bytes)
+					}
+					handlers["GET /api/deployments/goal_test"] = func(w http.ResponseWriter, r *http.Request) {
+						if failure.missingGoal {
+							http.NotFound(w, r)
+							return
+						}
+						digest := old.Digest
+						if failure.wrongDigest {
+							digest = "sha256:wrong"
+						}
+						_ = json.NewEncoder(w).Encode(cloud.SessionRecord{
+							ID: "goal_test", Name: "demo", PackageRef: "@telos/demo:1.2.3", PackageDigest: digest,
+						})
+					}
+					handlers["GET /api/packages/telos/demo/versions/1.2.3/bundle"] = func(w http.ResponseWriter, r *http.Request) {
+						if failure.status != 0 {
+							http.Error(w, "bundle unavailable", failure.status)
+							return
+						}
+						if failure.corrupt {
+							_, _ = w.Write([]byte("corrupt bundle"))
+							return
+						}
+						_, _ = w.Write(old.Bytes)
+					}
+					handlers["POST /api/packages"] = func(w http.ResponseWriter, r *http.Request) {
+						writes.Add(1)
+						_ = json.NewEncoder(w).Encode(record)
+					}
+					handlers["PUT /api/deployments/goal_test"] = func(w http.ResponseWriter, r *http.Request) {
+						writes.Add(1)
+						_ = json.NewEncoder(w).Encode(cloud.SessionRecord{
+							ID: "goal_test", Name: "demo", State: "deploying", PackageRef: record.Ref, PackageDigest: record.Digest,
+						})
+					}
+					server := inferenceTestServer(t, handlers)
+					defer server.Close()
+					configureDryRunTest(t, server.URL)
+					input := path
+					if inputKind == "registry" {
+						input = record.Ref
+					}
+					args := []string{"apply", input, "--goal", "goal_test", "--json"}
+					if dryRun {
+						args = append(args, "--dry-run")
+					}
+					stdout, stderr, err := inferenceCLIProcess(t, args...)
+					if failure.missingGoal || dryRun {
+						message := "read deployed baseline"
+						if failure.missingGoal {
+							message = "Goal goal_test not found"
+						}
+						if err == nil || stdout != "" || !strings.Contains(stderr, message) || writes.Load() != 0 {
+							t.Fatalf("error=%v writes=%d stdout=%s stderr=%s", err, writes.Load(), stdout, stderr)
+						}
+						return
+					}
+					wantWrites := int32(1)
+					if inputKind == "local" {
+						wantWrites++
+					}
+					if err != nil || writes.Load() != wantWrites || !strings.Contains(stdout, `"operation": "updated"`) || !strings.Contains(stderr, "warning: could not read deployed baseline") {
+						t.Fatalf("repair apply: error=%v writes=%d stdout=%s stderr=%s", err, writes.Load(), stdout, stderr)
+					}
+				})
+			}
+		}
+	}
+}

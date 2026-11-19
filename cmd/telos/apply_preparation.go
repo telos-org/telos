@@ -8,14 +8,15 @@ import (
 )
 
 type preparedCloudApply struct {
-	name      string
-	local     *specPackage
-	record    *cloud.PackageVersionRecord
-	skills    []packageSkillPublication
-	inference *cloud.InferenceSelection
-	proposed  applyPackageState
-	current   *applyPackageState
-	pending   bool
+	name        string
+	local       *specPackage
+	record      *cloud.PackageVersionRecord
+	skills      []packageSkillPublication
+	inference   *cloud.InferenceSelection
+	proposed    applyPackageState
+	current     *applyPackageState
+	pending     bool
+	baselineErr error
 }
 
 func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverride string) (*preparedCloudApply, error) {
@@ -67,13 +68,19 @@ func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverr
 		}
 	}
 	if goalID != "" {
-		pkg, err := packageForSession(control, goalID)
+		session, err := control.GetSession(goalID)
 		if err != nil {
-			return nil, err
+			return nil, goalNotFound(err, goalID, control.ContextName())
+		}
+		pkg, err := packageForSessionRecord(control, session)
+		if err != nil {
+			prepared.baselineErr = err
+			return prepared, nil
 		}
 		current, err := registryApplyPackageState(pkg)
 		if err != nil {
-			return nil, err
+			prepared.baselineErr = err
+			return prepared, nil
 		}
 		if current.Name != "" && prepared.proposed.Name != current.Name {
 			return nil, fmt.Errorf(
