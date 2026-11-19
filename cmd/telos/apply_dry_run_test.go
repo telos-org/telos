@@ -30,7 +30,8 @@ func decodeApplyPreview(t *testing.T, args ...string) applyPreview {
 	if err := json.Unmarshal([]byte(output), &preview); err != nil {
 		t.Fatal(err)
 	}
-	if !preview.DryRun || preview.Context == "" || !strings.Contains(strings.Join(preview.Notes, " "), "server-side checks") {
+	notes := strings.ToLower(strings.Join(preview.Notes, " "))
+	if !preview.DryRun || preview.Context == "" || !strings.Contains(notes, "server-side checks") {
 		t.Fatalf("incomplete preview: %s", output)
 	}
 	return preview

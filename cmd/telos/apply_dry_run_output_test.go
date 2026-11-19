@@ -37,7 +37,7 @@ func TestDryRunSettingsTextOnlyShowsChangedValues(t *testing.T) {
 				"Model     " + tt.model,
 				"Thinking  " + tt.thinking,
 				"",
-				"Other server-side checks run when applying.",
+				"Server-side checks run when applying.",
 			}
 			if tt.inherited {
 				lines = append(lines, "The server resolves inherited thinking for the selected model when applying.")

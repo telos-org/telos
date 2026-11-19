@@ -50,7 +50,7 @@ func newApplyPreview(control *cloud.Client, goalID string) *applyPreview {
 		Operation: operation,
 		Context:   control.ContextName(),
 		GoalID:    goalID,
-		Notes:     []string{"Other server-side checks run when applying."},
+		Notes:     []string{"Server-side checks run when applying."},
 	}
 }
 
