@@ -12,6 +12,7 @@ import (
 )
 
 type previewSpecState struct {
+	Name            string             `json:"name,omitempty"`
 	Version         string             `json:"version,omitempty"`
 	IntervalSeconds *int               `json:"interval_seconds,omitempty"`
 	Skills          []previewSkillLock `json:"skills,omitempty"`
@@ -33,6 +34,9 @@ func previewSpecStateFromMarkdown(
 		return previewSpecState{}, fmt.Errorf("spec has no valid YAML frontmatter")
 	}
 	state := previewSpecState{Skills: []previewSkillLock{}}
+	if name, ok := raw["name"].(string); ok {
+		state.Name = strings.TrimSpace(name)
+	}
 	if version, ok := raw["version"].(string); ok {
 		state.Version = strings.TrimSpace(version)
 	}

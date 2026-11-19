@@ -34,7 +34,6 @@ type applyPreview struct {
 
 type applyPreviewState struct {
 	previewSpecState
-	Name           string                    `json:"name,omitempty"`
 	Ref            string                    `json:"ref,omitempty"`
 	Digest         string                    `json:"digest,omitempty"`
 	Spec           string                    `json:"spec,omitempty"`
@@ -89,6 +88,11 @@ func previewCloudApply(control *cloud.Client, prepared *preparedCloudApply, goal
 		return nil, err
 	}
 	preview.Current = &current
+	if current.Name != "" && proposed.Name != current.Name {
+		return nil, fmt.Errorf(
+			"cannot change Goal %s spec name from %q to %q", goalID, current.Name, proposed.Name,
+		)
+	}
 	preview.SpecDiff = string(internaldiff.Diff("deployed/SPEC.md", []byte(current.Spec), "proposed/SPEC.md", []byte(proposed.Spec)))
 	preview.Proposed.ModelSource = previewSourceGoal
 	preview.Proposed.ThinkingSource = previewSourceGoal
@@ -109,7 +113,7 @@ func previewPackageState(pkg *pulledPackage) (applyPreviewState, error) {
 	}
 	state, err := previewSpecStateFromMarkdown(markdown, manifest)
 	return applyPreviewState{
-		previewSpecState: state, Name: pkg.reference.name, Ref: pkg.reference.ref,
+		previewSpecState: state, Ref: pkg.reference.ref,
 		Digest: pkg.digest, Spec: string(markdown),
 	}, err
 }
@@ -192,7 +196,7 @@ func previewApplyPackage(control *cloud.Client, prepared *preparedCloudApply) (a
 		)
 	}
 	return applyPreviewState{
-		previewSpecState: state, Name: pkg.name, Ref: ref,
+		previewSpecState: state, Ref: ref,
 		Digest: digest, Spec: string(markdown),
 	}, pending, nil
 }

@@ -138,3 +138,38 @@ func TestDryRunExplicitSkillVersionChecks(t *testing.T) {
 		})
 	}
 }
+
+func TestDryRunRejectsSpecNameChanges(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "SPEC.md")
+	if err := os.WriteFile(path, []byte("---\nname: other\nversion: 1.0.0\n---\n# Goal\nServe another service.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	compiled, err := spec.CompileEnvironment(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proposed, err := spec.BuildApplyPackageWithSkillRefs(compiled, map[string]string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	handlers := registryApplyHandlers(testApplyPackage(t))
+	handlers["GET /api/account/bootstrap"] = dryRunPublishScope
+	handlers["GET /api/packages/telos/other/versions/1.0.0"] = func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(cloud.PackageVersionRecord{
+			Scope: "telos", Name: "other", Version: "1.0.0",
+			Ref: "@telos/other:1.0.0", Digest: proposed.Digest,
+		})
+	}
+	handlers["GET /api/packages/telos/other/versions/1.0.0/bundle"] = func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(proposed.Bytes)
+	}
+	server := inferenceTestServer(t, handlers)
+	defer server.Close()
+	configureDryRunTest(t, server.URL)
+	for _, input := range []string{path, "@telos/other:1.0.0"} {
+		stdout, stderr, err := inferenceCLIProcess(t, "apply", input, "--goal", "goal_test", "--dry-run")
+		if err == nil || stdout != "" || !strings.Contains(stderr, `cannot change Goal goal_test spec name from "demo" to "other"`) {
+			t.Fatalf("name change: error=%v stdout=%s stderr=%s", err, stdout, stderr)
+		}
+	}
+}
