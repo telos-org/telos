@@ -11,15 +11,16 @@ import (
 )
 
 type applyPreview struct {
-	DryRun    bool               `json:"dry_run"`
-	Operation string             `json:"operation"`
-	Context   string             `json:"context"`
-	GoalID    string             `json:"goal_id,omitempty"`
-	Force     bool               `json:"force,omitempty"`
-	Current   *applyPreviewState `json:"current,omitempty"`
-	Proposed  applyPreviewState  `json:"proposed"`
-	SpecDiff  string             `json:"spec_diff,omitempty"`
-	Notes     []string           `json:"notes"`
+	DryRun     bool                   `json:"dry_run"`
+	Operation  string                 `json:"operation"`
+	Context    string                 `json:"context"`
+	GoalID     string                 `json:"goal_id,omitempty"`
+	Force      bool                   `json:"force,omitempty"`
+	Current    *applyPreviewState     `json:"current,omitempty"`
+	Proposed   applyPreviewState      `json:"proposed"`
+	SpecDiff   string                 `json:"spec_diff,omitempty"`
+	SkillDiffs []previewSkillFileDiff `json:"skill_diffs,omitempty"`
+	Notes      []string               `json:"notes"`
 }
 
 type applyPreviewState struct {
@@ -46,7 +47,7 @@ func newApplyPreview(control *cloud.Client, goalID string) *applyPreview {
 	}
 }
 
-func previewCloudApply(control *cloud.Client, prepared *preparedCloudApply, goalID string, runtime sessionRuntimeConfig, force bool) (*applyPreview, error) {
+func previewCloudApply(control *cloud.Client, prepared *preparedCloudApply, goalID string, runtime sessionRuntimeConfig, force, includeDiff bool) (*applyPreview, error) {
 	preview := newApplyPreview(control, goalID)
 	preview.Force = force
 	proposed, pending, err := previewApplyPackage(control, prepared)
@@ -54,6 +55,12 @@ func previewCloudApply(control *cloud.Client, prepared *preparedCloudApply, goal
 		return nil, err
 	}
 	preview.Proposed = proposed
+	var proposedData []byte
+	if prepared.local != nil {
+		proposedData = prepared.local.bytes
+	} else {
+		proposedData = prepared.registry.data
+	}
 	if pending {
 		preview.Notes = append(preview.Notes, "New skill versions and the final package digest are assigned during publication.")
 	}
@@ -61,6 +68,7 @@ func previewCloudApply(control *cloud.Client, prepared *preparedCloudApply, goal
 		if err := previewCreationInference(control, preview, prepared.inference, runtime); err != nil {
 			return nil, err
 		}
+		previewSkillChanges(control, preview, nil, proposedData, includeDiff)
 		return preview, nil
 	}
 	currentPackage, err := packageForSession(control, goalID)
@@ -83,6 +91,7 @@ func previewCloudApply(control *cloud.Client, prepared *preparedCloudApply, goal
 	} else {
 		preview.Notes = append(preview.Notes, "The server's snapshot check was not evaluated.")
 	}
+	previewSkillChanges(control, preview, currentPackage.data, proposedData, includeDiff)
 	return preview, nil
 }
 
@@ -265,6 +274,18 @@ func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 	if preview.SpecDiff != "" {
 		fmt.Fprintln(out)
 		fmt.Fprint(out, preview.SpecDiff)
+	}
+	for _, file := range preview.SkillDiffs {
+		fmt.Fprintln(out)
+		fmt.Fprintf(out, "%s skills/%s/%s", file.Change, file.Skill, file.Path)
+		if file.OldMode != file.NewMode {
+			fmt.Fprintf(out, " (mode %s)", previewDeltaValue(file.OldMode, file.NewMode))
+		}
+		if file.ContentOmitted != "" {
+			fmt.Fprintf(out, " (%s)", file.ContentOmitted)
+		}
+		fmt.Fprintln(out)
+		fmt.Fprint(out, file.Diff)
 	}
 	fmt.Fprintln(out)
 	for _, note := range preview.Notes {

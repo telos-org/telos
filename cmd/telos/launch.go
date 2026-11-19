@@ -41,10 +41,13 @@ func cmdLaunch(command, action string, args []string) {
 	force := &forceValue
 	dryRunValue := false
 	dryRun := &dryRunValue
+	diffValue := false
+	includeDiff := &diffValue
 	if command == "apply" {
 		sessionID = fs.String("goal", "", "ID of the Goal to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
 		dryRun = fs.Bool("dry-run", false, "Preview the apply without publishing or changing a Goal")
+		includeDiff = fs.Bool("diff", false, "Include skill file contents in the dry-run diff")
 	}
 	modelHelp := "Model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	thinkingHelp := "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs"
@@ -85,6 +88,10 @@ func cmdLaunch(command, action string, args []string) {
 		if insideTelosSession() {
 			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos Goal; use telos run to launch nested specs")
 			os.Exit(1)
+		}
+		if *includeDiff && !*dryRun {
+			fmt.Fprintln(os.Stderr, "error: --diff requires --dry-run")
+			os.Exit(2)
 		}
 		if err := validateApplyInferenceFlags(fs, *sessionID, *model, *thinking); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -175,6 +182,7 @@ func cmdLaunch(command, action string, args []string) {
 			*jsonOut,
 			contextOverride,
 			*dryRun,
+			*includeDiff,
 		)
 		return
 	}
@@ -312,6 +320,7 @@ func applyCloudControl(
 	jsonOut bool,
 	contextOverride string,
 	dryRun bool,
+	includeDiff bool,
 ) {
 	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
@@ -323,7 +332,7 @@ func applyCloudControl(
 		exitWithError(err)
 	}
 	if dryRun {
-		preview, err := previewCloudApply(control, prepared, sessionID, runtimeConfig, force)
+		preview, err := previewCloudApply(control, prepared, sessionID, runtimeConfig, force, includeDiff)
 		if err != nil {
 			exitWithError(err)
 		}
