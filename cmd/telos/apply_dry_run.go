@@ -10,6 +10,15 @@ import (
 	"github.com/telos-org/telos/internal/spec"
 )
 
+type previewSettingSource string
+
+const (
+	previewSourceGoal      previewSettingSource = "goal"
+	previewSourceWorkspace previewSettingSource = "workspace"
+	previewSourceCloud     previewSettingSource = "cloud"
+	previewSourceOverride  previewSettingSource = "override"
+)
+
 type applyPreview struct {
 	DryRun     bool                   `json:"dry_run"`
 	Operation  string                 `json:"operation"`
@@ -31,9 +40,9 @@ type applyPreviewState struct {
 	Spec           string                    `json:"spec,omitempty"`
 	Inference      *cloud.InferenceSelection `json:"inference,omitempty"`
 	Model          string                    `json:"model,omitempty"`
-	ModelSource    string                    `json:"model_source,omitempty"`
+	ModelSource    previewSettingSource      `json:"model_source,omitempty"`
 	Thinking       string                    `json:"thinking,omitempty"`
-	ThinkingSource string                    `json:"thinking_source,omitempty"`
+	ThinkingSource previewSettingSource      `json:"thinking_source,omitempty"`
 }
 
 func newApplyPreview(control *cloud.Client, goalID string) *applyPreview {
@@ -43,7 +52,7 @@ func newApplyPreview(control *cloud.Client, goalID string) *applyPreview {
 	}
 	return &applyPreview{
 		DryRun: true, Operation: operation, Context: control.ContextName(), GoalID: goalID,
-		Notes: []string{"Server-side checks were not evaluated."},
+		Notes: []string{"Other server-side checks run when applying."},
 	}
 }
 
@@ -81,15 +90,13 @@ func previewCloudApply(control *cloud.Client, prepared *preparedCloudApply, goal
 	}
 	preview.Current = &current
 	preview.SpecDiff = string(internaldiff.Diff("deployed/SPEC.md", []byte(current.Spec), "proposed/SPEC.md", []byte(proposed.Spec)))
-	preview.Proposed.ModelSource = "goal"
-	preview.Proposed.ThinkingSource = "goal"
+	preview.Proposed.ModelSource = previewSourceGoal
+	preview.Proposed.ThinkingSource = previewSourceGoal
 	if proposed.Digest != "" && proposed.Digest == current.Digest && proposed.Ref == current.Ref {
 		preview.Operation = "unchanged"
 	}
 	if force {
 		preview.Notes = append(preview.Notes, "The server's snapshot check would be bypassed by --force.")
-	} else {
-		preview.Notes = append(preview.Notes, "The server's snapshot check was not evaluated.")
 	}
 	previewSkillChanges(control, preview, currentPackage.data, proposedData, includeDiff)
 	return preview, nil
@@ -201,10 +208,10 @@ func previewCreationInference(control *cloud.Client, preview *applyPreview, sele
 	}
 	state := &preview.Proposed
 	state.Inference = selection
-	state.Model, state.ModelSource = runtime.Model, "override"
+	state.Model, state.ModelSource = runtime.Model, previewSourceOverride
 	if selection == nil {
 		state.Inference = &preference.Selection
-		state.ModelSource = "workspace"
+		state.ModelSource = previewSourceWorkspace
 		var connections []cloud.InferenceConnection
 		if preference.Selection.Source != "managed" {
 			var err error
@@ -215,11 +222,11 @@ func previewCreationInference(control *cloud.Client, preview *applyPreview, sele
 		}
 		state.Model = inferenceSelectionName(preference.Selection, connections)
 	}
-	state.Thinking, state.ThinkingSource = runtime.Thinking, "override"
+	state.Thinking, state.ThinkingSource = runtime.Thinking, previewSourceOverride
 	if runtime.Thinking == "" {
-		state.ThinkingSource = "cloud"
+		state.ThinkingSource = previewSourceCloud
 		if preference.AgentThinking != nil && *preference.AgentThinking != "" {
-			state.Thinking, state.ThinkingSource = *preference.AgentThinking, "workspace"
+			state.Thinking, state.ThinkingSource = *preference.AgentThinking, previewSourceWorkspace
 		}
 		preview.Notes = append(preview.Notes, "The server resolves inherited thinking for the selected model when applying.")
 	}
@@ -238,7 +245,7 @@ func previewSessionInference(goalID, model, thinking, contextOverride string) (*
 	preview := newApplyPreview(control, goalID)
 	preview.Current = &applyPreviewState{
 		Inference: current.Selection, Model: cloudSessionModel(cloud.SessionRecord{AgentModel: current.AgentModel, Inference: &current.Inference}),
-		Thinking: current.AgentThinking, ModelSource: "goal", ThinkingSource: "goal",
+		Thinking: current.AgentThinking, ModelSource: previewSourceGoal, ThinkingSource: previewSourceGoal,
 	}
 	preview.Proposed = *preview.Current
 	modelUnchanged := request.Inference == nil || current.Selection != nil && *request.Inference == *current.Selection
@@ -248,13 +255,13 @@ func previewSessionInference(goalID, model, thinking, contextOverride string) (*
 	}
 	if request.Inference != nil {
 		preview.Proposed.Inference = request.Inference
-		preview.Proposed.Model, preview.Proposed.ModelSource = model, "override"
+		preview.Proposed.Model, preview.Proposed.ModelSource = model, previewSourceOverride
 		if !modelUnchanged && request.AgentThinking == nil {
 			preview.Notes = append(preview.Notes, "The server resolves inherited thinking for the selected model when applying.")
 		}
 	}
 	if request.AgentThinking != nil {
-		preview.Proposed.Thinking, preview.Proposed.ThinkingSource = thinking, "override"
+		preview.Proposed.Thinking, preview.Proposed.ThinkingSource = thinking, previewSourceOverride
 	}
 	return preview, nil
 }
@@ -288,8 +295,8 @@ func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 	}
 	model, thinking := previewInferenceValue(proposed.Model, proposed.ModelSource), previewInferenceValue(proposed.Thinking, proposed.ThinkingSource)
 	if preview.Current != nil && proposed.Name == "" {
-		model = previewDeltaValue(preview.Current.Model, model)
-		thinking = previewDeltaValue(preview.Current.Thinking, thinking)
+		model = previewInferenceDelta(preview.Current.Model, proposed.Model, proposed.ModelSource)
+		thinking = previewInferenceDelta(preview.Current.Thinking, proposed.Thinking, proposed.ThinkingSource)
 	}
 	printSummaryField(out, "Model", model)
 	printSummaryField(out, "Thinking", thinking)
@@ -300,7 +307,7 @@ func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 	for _, file := range preview.SkillDiffs {
 		fmt.Fprintln(out)
 		fmt.Fprintf(out, "%s skills/%s/%s", file.Change, file.Skill, file.Path)
-		if file.OldMode != file.NewMode {
+		if file.OldMode != "" && file.NewMode != "" && file.OldMode != file.NewMode {
 			fmt.Fprintf(out, " (mode %s)", previewDeltaValue(file.OldMode, file.NewMode))
 		}
 		if file.ContentOmitted != "" {
@@ -316,16 +323,24 @@ func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 	fmt.Fprintln(out, "Nothing was applied.")
 }
 
-func previewInferenceValue(value, source string) string {
+func previewInferenceDelta(current, proposed string, source previewSettingSource) string {
+	value := previewInferenceValue(proposed, source)
+	if current == proposed || source == previewSourceGoal {
+		return value
+	}
+	return previewDeltaValue(current, value)
+}
+
+func previewInferenceValue(value string, source previewSettingSource) string {
 	switch source {
-	case "goal":
+	case previewSourceGoal:
 		if value == "" {
 			return "unchanged"
 		}
 		return value + " (Goal setting)"
-	case "workspace":
+	case previewSourceWorkspace:
 		return value + " (workspace default)"
-	case "cloud":
+	case previewSourceCloud:
 		return "cloud default (resolved on apply)"
 	default:
 		return strings.TrimSpace(value)

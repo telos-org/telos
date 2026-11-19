@@ -129,7 +129,15 @@ func diffSkillFiles(name string, before, after map[string]cloud.SkillFile) []pre
 		case len(old.Data)+len(proposed.Data) > 256*1024:
 			change.ContentOmitted = "content exceeds 256 KiB"
 		default:
-			change.Diff = string(internaldiff.Diff("deployed/skills/"+name+"/"+path, old.Data, "proposed/skills/"+name+"/"+path, proposed.Data))
+			oldPath := "deployed/skills/" + name + "/" + path
+			newPath := "proposed/skills/" + name + "/" + path
+			if !hadOld {
+				oldPath = "/dev/null"
+			}
+			if !hasNew {
+				newPath = "/dev/null"
+			}
+			change.Diff = string(internaldiff.Diff(oldPath, old.Data, newPath, proposed.Data))
 		}
 		changes = append(changes, change)
 	}

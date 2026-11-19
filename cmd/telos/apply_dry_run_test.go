@@ -30,7 +30,7 @@ func decodeApplyPreview(t *testing.T, args ...string) applyPreview {
 	if err := json.Unmarshal([]byte(output), &preview); err != nil {
 		t.Fatal(err)
 	}
-	if !preview.DryRun || preview.Context == "" || !strings.Contains(strings.Join(preview.Notes, " "), "Server-side checks") {
+	if !preview.DryRun || preview.Context == "" || !strings.Contains(strings.Join(preview.Notes, " "), "server-side checks") {
 		t.Fatalf("incomplete preview: %s", output)
 	}
 	return preview
@@ -53,8 +53,9 @@ func registryApplyHandlers(pkg *spec.ApplyPackage) map[string]http.HandlerFunc {
 func TestDryRunCreationInferencePrecedence(t *testing.T) {
 	pkg := testApplyPackage(t)
 	for _, tt := range []struct {
-		name, envModel, envThinking, preference, wantModel, wantThinking, modelSource, thinkingSource string
-		flags                                                                                         []string
+		name, envModel, envThinking, preference, wantModel, wantThinking string
+		modelSource, thinkingSource                                      previewSettingSource
+		flags                                                            []string
 	}{
 		{"workspace defaults", "", "", `{"selection":{"source":"managed","tier":"max"},"agent_thinking":"high"}`, "telos/max", "high", "workspace", "workspace", nil},
 		{"workspace subscription and native thinking", "", "", `{"selection":{"source":"subscription","connection_id":"sub_work","model":"gpt-test"},"agent_thinking":"off"}`, "My ChatGPT/gpt-test", "off", "workspace", "workspace", nil},
