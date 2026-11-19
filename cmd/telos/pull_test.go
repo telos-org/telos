@@ -230,6 +230,10 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 				"created_at":     "then",
 				"updated_at":     "now",
 			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_registry":
+			_ = json.NewEncoder(w).Encode(cloud.SessionRecord{
+				ID: "sess_registry", PackageRef: "@telos/demo:1.2.3", PackageDigest: pkg.Digest,
+			})
 		default:
 			http.NotFound(w, r)
 		}

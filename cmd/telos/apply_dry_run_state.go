@@ -11,29 +11,29 @@ import (
 	"github.com/telos-org/telos/internal/spec"
 )
 
-type previewSpecState struct {
-	Name            string             `json:"name,omitempty"`
-	Version         string             `json:"version,omitempty"`
-	IntervalSeconds *int               `json:"interval_seconds,omitempty"`
-	Skills          []previewSkillLock `json:"skills,omitempty"`
+type applySpecState struct {
+	Name            string           `json:"name,omitempty"`
+	Version         string           `json:"version,omitempty"`
+	IntervalSeconds *int             `json:"interval_seconds,omitempty"`
+	Skills          []applySkillLock `json:"skills,omitempty"`
 }
 
-type previewSkillLock struct {
+type applySkillLock struct {
 	Name    string `json:"name"`
 	Ref     string `json:"ref,omitempty"`
 	Digest  string `json:"digest"`
 	Starred bool   `json:"required_rubric,omitempty"`
 }
 
-func previewSpecStateFromMarkdown(
+func applySpecStateFromMarkdown(
 	markdown []byte,
 	manifest *spec.ApplyPackageManifest,
-) (previewSpecState, error) {
+) (applySpecState, error) {
 	raw, _, ok := spec.ParseFrontmatter(string(markdown))
 	if !ok {
-		return previewSpecState{}, fmt.Errorf("spec has no valid YAML frontmatter")
+		return applySpecState{}, fmt.Errorf("spec has no valid YAML frontmatter")
 	}
-	state := previewSpecState{Skills: []previewSkillLock{}}
+	state := applySpecState{Skills: []applySkillLock{}}
 	if name, ok := raw["name"].(string); ok {
 		state.Name = strings.TrimSpace(name)
 	}
@@ -43,7 +43,7 @@ func previewSpecStateFromMarkdown(
 	if interval, ok := raw["interval"]; ok {
 		duration, err := time.ParseDuration(strings.TrimSpace(fmt.Sprint(interval)))
 		if err != nil || duration < 0 || duration%time.Second != 0 {
-			return previewSpecState{}, fmt.Errorf("invalid interval %q", interval)
+			return applySpecState{}, fmt.Errorf("invalid interval %q", interval)
 		}
 		seconds := int(duration / time.Second)
 		state.IntervalSeconds = &seconds
@@ -62,7 +62,7 @@ func previewSpecStateFromMarkdown(
 		if ref == "" {
 			ref = strings.TrimSpace(manifest.SkillProvenance[name].Ref)
 		}
-		state.Skills = append(state.Skills, previewSkillLock{
+		state.Skills = append(state.Skills, applySkillLock{
 			Name:    name,
 			Ref:     ref,
 			Digest:  strings.TrimSpace(lock.Digest),
@@ -72,7 +72,7 @@ func previewSpecStateFromMarkdown(
 	return state, nil
 }
 
-func printPreviewStateDelta(out io.Writer, current, proposed previewSpecState) {
+func printPreviewStateDelta(out io.Writer, current, proposed applySpecState) {
 	currentInterval := formatPreviewInterval(current.IntervalSeconds)
 	proposedInterval := formatPreviewInterval(proposed.IntervalSeconds)
 	versionChanged := current.Version != proposed.Version
@@ -116,7 +116,7 @@ func formatPreviewInterval(seconds *int) string {
 	return value
 }
 
-func formatPreviewSkillLocks(skills []previewSkillLock) string {
+func formatPreviewSkillLocks(skills []applySkillLock) string {
 	if len(skills) == 0 {
 		return "-"
 	}

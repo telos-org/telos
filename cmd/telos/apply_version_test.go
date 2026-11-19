@@ -12,7 +12,7 @@ import (
 	"github.com/telos-org/telos/internal/spec"
 )
 
-func TestDryRunPackageVersionChecksCreationAndUpdates(t *testing.T) {
+func TestApplyPackageVersionChecksCreationAndUpdates(t *testing.T) {
 	for _, goalID := range []string{"", "goal_test"} {
 		for _, tt := range []struct {
 			name, digest, wantError string
@@ -65,17 +65,26 @@ func TestDryRunPackageVersionChecksCreationAndUpdates(t *testing.T) {
 				server := inferenceTestServer(t, handlers)
 				defer server.Close()
 				configureDryRunTest(t, server.URL)
-				args := []string{"apply", fixture.path, "--dry-run", "--json"}
-				if goalID != "" {
-					args = append(args, "--goal", goalID)
-				}
-				stdout, stderr, err := inferenceCLIProcess(t, args...)
+				modes := []bool{true}
 				if tt.wantError != "" {
-					if err == nil || stdout != "" || !strings.Contains(stderr, tt.wantError) {
-						t.Fatalf("error=%v stdout=%s stderr=%s", err, stdout, stderr)
+					modes = append(modes, false)
+				}
+				for _, dryRun := range modes {
+					args := []string{"apply", fixture.path, "--json"}
+					if dryRun {
+						args = append(args, "--dry-run")
 					}
-				} else if err != nil {
-					t.Fatalf("error=%v stderr=%s", err, stderr)
+					if goalID != "" {
+						args = append(args, "--goal", goalID)
+					}
+					stdout, stderr, err := inferenceCLIProcess(t, args...)
+					if tt.wantError != "" {
+						if err == nil || stdout != "" || !strings.Contains(stderr, tt.wantError) {
+							t.Fatalf("dry-run=%v error=%v stdout=%s stderr=%s", dryRun, err, stdout, stderr)
+						}
+					} else if err != nil {
+						t.Fatalf("error=%v stderr=%s", err, stderr)
+					}
 				}
 			})
 		}
@@ -86,7 +95,7 @@ func dryRunPublishScope(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","default_publish_scope":"telos"}]}`))
 }
 
-func TestDryRunExplicitSkillVersionChecks(t *testing.T) {
+func TestApplyExplicitSkillVersionChecks(t *testing.T) {
 	for _, tt := range []struct {
 		name, digest, wantError string
 		status                  int
@@ -127,19 +136,29 @@ func TestDryRunExplicitSkillVersionChecks(t *testing.T) {
 			server := inferenceTestServer(t, handlers)
 			defer server.Close()
 			configureDryRunTest(t, server.URL)
-			stdout, stderr, err := inferenceCLIProcess(t, "apply", fixture.path, "--goal", "goal_test", "--dry-run", "--json")
+			modes := []bool{true}
 			if tt.wantError != "" {
-				if err == nil || stdout != "" || !strings.Contains(stderr, tt.wantError) {
-					t.Fatalf("error=%v stdout=%s stderr=%s", err, stdout, stderr)
+				modes = append(modes, false)
+			}
+			for _, dryRun := range modes {
+				args := []string{"apply", fixture.path, "--goal", "goal_test", "--json"}
+				if dryRun {
+					args = append(args, "--dry-run")
 				}
-			} else if err != nil {
-				t.Fatalf("error=%v stderr=%s", err, stderr)
+				stdout, stderr, err := inferenceCLIProcess(t, args...)
+				if tt.wantError != "" {
+					if err == nil || stdout != "" || !strings.Contains(stderr, tt.wantError) {
+						t.Fatalf("dry-run=%v error=%v stdout=%s stderr=%s", dryRun, err, stdout, stderr)
+					}
+				} else if err != nil {
+					t.Fatalf("error=%v stderr=%s", err, stderr)
+				}
 			}
 		})
 	}
 }
 
-func TestDryRunRejectsSpecNameChanges(t *testing.T) {
+func TestApplyRejectsSpecNameChanges(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "SPEC.md")
 	if err := os.WriteFile(path, []byte("---\nname: other\nversion: 1.0.0\n---\n# Goal\nServe another service.\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -167,9 +186,15 @@ func TestDryRunRejectsSpecNameChanges(t *testing.T) {
 	defer server.Close()
 	configureDryRunTest(t, server.URL)
 	for _, input := range []string{path, "@telos/other:1.0.0"} {
-		stdout, stderr, err := inferenceCLIProcess(t, "apply", input, "--goal", "goal_test", "--dry-run")
-		if err == nil || stdout != "" || !strings.Contains(stderr, `cannot change Goal goal_test spec name from "demo" to "other"`) {
-			t.Fatalf("name change: error=%v stdout=%s stderr=%s", err, stdout, stderr)
+		for _, dryRun := range []bool{false, true} {
+			args := []string{"apply", input, "--goal", "goal_test"}
+			if dryRun {
+				args = append(args, "--dry-run")
+			}
+			stdout, stderr, err := inferenceCLIProcess(t, args...)
+			if err == nil || stdout != "" || !strings.Contains(stderr, `cannot change Goal goal_test spec name from "demo" to "other"`) {
+				t.Fatalf("dry-run=%v name change: error=%v stdout=%s stderr=%s", dryRun, err, stdout, stderr)
+			}
 		}
 	}
 }

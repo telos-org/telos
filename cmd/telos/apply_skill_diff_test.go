@@ -81,9 +81,15 @@ func TestDryRunLocalSkillIdentityAndOptionalContentDiff(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(filepath.Dir(fixture.path), "verify-test", "SKILL.md"), []byte("---\nname: verify-test\n---\nVerify new behavior.\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	stdout, stderr, err := inferenceCLIProcess(t, "apply", fixture.path, "--goal", "goal_test", "--dry-run")
-	if err == nil || stdout != "" || !strings.Contains(stderr, "bump version in SPEC.md") {
-		t.Fatalf("unbumped skill change: error=%v stdout=%s stderr=%s", err, stdout, stderr)
+	for _, dryRun := range []bool{false, true} {
+		args := []string{"apply", fixture.path, "--goal", "goal_test"}
+		if dryRun {
+			args = append(args, "--dry-run")
+		}
+		stdout, stderr, err := inferenceCLIProcess(t, args...)
+		if err == nil || stdout != "" || !strings.Contains(stderr, "bump version in SPEC.md") {
+			t.Fatalf("dry-run=%v unbumped skill: error=%v stdout=%s stderr=%s", dryRun, err, stdout, stderr)
+		}
 	}
 	if err := os.WriteFile(fixture.path, []byte(strings.ReplaceAll(string(mustReadFile(t, fixture.path)), "1.2.3", "1.2.4")), 0o644); err != nil {
 		t.Fatal(err)

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/telos-org/telos/internal/cloud"
@@ -9,10 +10,12 @@ import (
 type preparedCloudApply struct {
 	name      string
 	local     *specPackage
-	registry  *pulledPackage
 	record    *cloud.PackageVersionRecord
 	skills    []packageSkillPublication
 	inference *cloud.InferenceSelection
+	proposed  applyPackageState
+	current   *applyPackageState
+	pending   bool
 }
 
 func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverride string) (*preparedCloudApply, error) {
@@ -23,11 +26,13 @@ func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverr
 		if err != nil {
 			return nil, err
 		}
-		prepared.registry, prepared.record, err = resolvePackageReference(control, reference)
+		pkg, record, err := resolvePackageReference(control, reference)
 		if err != nil {
 			return nil, err
 		}
-		if _, err := verifiedPackageSpec(prepared.registry); err != nil {
+		prepared.record = record
+		prepared.proposed, err = registryApplyPackageState(pkg)
+		if err != nil {
 			return nil, err
 		}
 		prepared.name = reference.name
@@ -56,6 +61,26 @@ func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverr
 		if err != nil {
 			return nil, err
 		}
+		prepared.proposed, prepared.pending, err = prepareLocalApplyPackage(control, prepared.local, prepared.skills)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if goalID != "" {
+		pkg, err := packageForSession(control, goalID)
+		if err != nil {
+			return nil, err
+		}
+		current, err := registryApplyPackageState(pkg)
+		if err != nil {
+			return nil, err
+		}
+		if current.Name != "" && prepared.proposed.Name != current.Name {
+			return nil, fmt.Errorf(
+				"cannot change Goal %s spec name from %q to %q", goalID, current.Name, prepared.proposed.Name,
+			)
+		}
+		prepared.current = &current
 	}
 	return prepared, nil
 }

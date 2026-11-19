@@ -7,7 +7,6 @@ import (
 
 	internaldiff "github.com/rogpeppe/go-internal/diff"
 	"github.com/telos-org/telos/internal/cloud"
-	"github.com/telos-org/telos/internal/spec"
 )
 
 type previewSettingSource string
@@ -33,10 +32,7 @@ type applyPreview struct {
 }
 
 type applyPreviewState struct {
-	previewSpecState
-	Ref            string                    `json:"ref,omitempty"`
-	Digest         string                    `json:"digest,omitempty"`
-	Spec           string                    `json:"spec,omitempty"`
+	applyPackageState
 	Inference      *cloud.InferenceSelection `json:"inference,omitempty"`
 	Model          string                    `json:"model,omitempty"`
 	ModelSource    previewSettingSource      `json:"model_source,omitempty"`
@@ -67,18 +63,9 @@ func previewCloudApply(
 ) (*applyPreview, error) {
 	preview := newApplyPreview(control, goalID)
 	preview.Force = options.force
-	proposed, pending, err := previewApplyPackage(control, prepared)
-	if err != nil {
-		return nil, err
-	}
-	preview.Proposed = proposed
-	var proposedData []byte
-	if prepared.local != nil {
-		proposedData = prepared.local.bytes
-	} else {
-		proposedData = prepared.registry.data
-	}
-	if pending {
+	proposed := prepared.proposed
+	preview.Proposed.applyPackageState = proposed
+	if prepared.pending {
 		preview.Notes = append(preview.Notes,
 			"New skill references and the final package digest are assigned during publication. "+
 				"The spec preview uses local skill paths.",
@@ -88,23 +75,11 @@ func previewCloudApply(
 		if err := previewCreationInference(control, preview, prepared.inference, runtime); err != nil {
 			return nil, err
 		}
-		previewSkillChanges(control, preview, nil, proposedData, options.includeDiff)
+		previewSkillChanges(control, preview, nil, proposed.data, options.includeDiff)
 		return preview, nil
 	}
-	currentPackage, err := packageForSession(control, goalID)
-	if err != nil {
-		return nil, err
-	}
-	current, err := previewPackageState(currentPackage)
-	if err != nil {
-		return nil, err
-	}
-	preview.Current = &current
-	if current.Name != "" && proposed.Name != current.Name {
-		return nil, fmt.Errorf(
-			"cannot change Goal %s spec name from %q to %q", goalID, current.Name, proposed.Name,
-		)
-	}
+	current := prepared.current
+	preview.Current = &applyPreviewState{applyPackageState: *current}
 	preview.SpecDiff = string(internaldiff.Diff(
 		"deployed/SPEC.md", []byte(current.Spec),
 		"proposed/SPEC.md", []byte(proposed.Spec),
@@ -117,109 +92,8 @@ func previewCloudApply(
 	if options.force {
 		preview.Notes = append(preview.Notes, "The server's snapshot check would be bypassed by --force.")
 	}
-	previewSkillChanges(control, preview, currentPackage.data, proposedData, options.includeDiff)
+	previewSkillChanges(control, preview, current.data, proposed.data, options.includeDiff)
 	return preview, nil
-}
-
-func previewPackageState(pkg *pulledPackage) (applyPreviewState, error) {
-	markdown, manifest, err := verifiedPackageContents(pkg)
-	if err != nil {
-		return applyPreviewState{}, err
-	}
-	state, err := previewSpecStateFromMarkdown(markdown, manifest)
-	return applyPreviewState{
-		previewSpecState: state,
-		Ref:              pkg.reference.ref,
-		Digest:           pkg.digest,
-		Spec:             string(markdown),
-	}, err
-}
-
-func previewApplyPackage(control *cloud.Client, prepared *preparedCloudApply) (applyPreviewState, bool, error) {
-	if prepared.registry != nil {
-		state, err := previewPackageState(prepared.registry)
-		return state, false, err
-	}
-	pkg := prepared.local
-	scope, err := defaultPublishScope(control)
-	if err != nil {
-		return applyPreviewState{}, false, err
-	}
-	markdown, manifest, err := spec.ApplyPackageSpec(pkg.bytes)
-	if err != nil {
-		return applyPreviewState{}, false, err
-	}
-	refs := map[string]string{}
-	pending := false
-	for _, publication := range prepared.skills {
-		ref := publication.ref
-		if publication.skill != nil {
-			if publication.skill.version != "" {
-				ref = fmt.Sprintf("@%s/%s:%s", scope, publication.name, publication.skill.version)
-				record, err := control.GetSkillVersion(scope, publication.name, publication.skill.version)
-				if err != nil && !cloud.IsStatus(err, 404) {
-					return applyPreviewState{}, false, fmt.Errorf("check skill version %s: %w", ref, err)
-				}
-				if err == nil && record.Digest != manifest.Skills[publication.name].Digest {
-					return applyPreviewState{}, false, fmt.Errorf(
-						"skill version %s already exists with different content; bump version in SKILL.md", ref,
-					)
-				}
-			} else {
-				record, err := control.GetSkill(scope, publication.name)
-				if err != nil && !cloud.IsStatus(err, 404) {
-					return applyPreviewState{}, false, err
-				}
-				if err == nil && record.Digest == manifest.Skills[publication.name].Digest {
-					if record.Scope != scope || record.Name != publication.name {
-						return applyPreviewState{}, false, fmt.Errorf(
-							"skill @%s/%s resolved to %s", scope, publication.name, record.Ref,
-						)
-					}
-					ref = record.Ref
-				}
-			}
-		}
-		if ref == "" {
-			pending = true
-		}
-		refs[publication.name] = ref
-	}
-	digest := ""
-	if !pending {
-		resolved, err := spec.BuildApplyPackageWithSkillRefs(pkg.compiled, refs)
-		if err != nil {
-			return applyPreviewState{}, false, err
-		}
-		markdown, manifest, err = spec.ApplyPackageSpec(resolved.Bytes)
-		if err != nil {
-			return applyPreviewState{}, false, err
-		}
-		digest = resolved.Digest
-	}
-	state, err := previewSpecStateFromMarkdown(markdown, manifest)
-	if err != nil {
-		return applyPreviewState{}, false, err
-	}
-	for i := range state.Skills {
-		state.Skills[i].Ref = refs[state.Skills[i].Name]
-	}
-	ref := fmt.Sprintf("@%s/%s:%s", scope, pkg.name, pkg.version)
-	existing, err := control.GetPackageVersion(scope, pkg.name, pkg.version)
-	if err != nil && !cloud.IsStatus(err, 404) {
-		return applyPreviewState{}, false, fmt.Errorf("check package version %s: %w", ref, err)
-	}
-	if err == nil && (pending || existing.Digest != digest) {
-		return applyPreviewState{}, false, fmt.Errorf(
-			"package version %s already exists; bump version in SPEC.md before changing the spec or its skills", ref,
-		)
-	}
-	return applyPreviewState{
-		previewSpecState: state,
-		Ref:              ref,
-		Digest:           digest,
-		Spec:             string(markdown),
-	}, pending, nil
 }
 
 func previewCreationInference(
@@ -336,7 +210,7 @@ func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 			}
 		} else {
 			printSummaryField(out, "Current", preview.Current.Ref)
-			printPreviewStateDelta(out, preview.Current.previewSpecState, proposed.previewSpecState)
+			printPreviewStateDelta(out, preview.Current.applySpecState, proposed.applySpecState)
 		}
 	}
 	model := previewInferenceValue(proposed.Model, proposed.ModelSource)

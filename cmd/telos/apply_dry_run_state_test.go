@@ -25,11 +25,11 @@ func TestPreviewSpecStateCapturesResolvedChanges(t *testing.T) {
 		},
 	}}
 
-	current, err := previewSpecStateFromMarkdown(currentIntervalSpec, currentManifest)
+	current, err := applySpecStateFromMarkdown(currentIntervalSpec, currentManifest)
 	if err != nil {
 		t.Fatal(err)
 	}
-	proposed, err := previewSpecStateFromMarkdown(proposedIntervalSpec, proposedManifest)
+	proposed, err := applySpecStateFromMarkdown(proposedIntervalSpec, proposedManifest)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -64,10 +64,10 @@ func TestPreviewSpecStateCapturesResolvedChanges(t *testing.T) {
 
 func TestPrintPreviewStateDeltaOmitsUnchangedResolvedState(t *testing.T) {
 	interval := 300
-	state := previewSpecState{
+	state := applySpecState{
 		Version:         "1.0.0",
 		IntervalSeconds: &interval,
-		Skills: []previewSkillLock{{
+		Skills: []applySkillLock{{
 			Name:    "verify-quality",
 			Ref:     "@telos/verify-quality:1.0.0",
 			Digest:  "sha256:same",

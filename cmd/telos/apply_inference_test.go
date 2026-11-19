@@ -184,6 +184,11 @@ func TestSpecApplyIgnoresInferenceEnvironment(t *testing.T) {
 	pkg := testApplyPackage(t)
 	var updates atomic.Int32
 	server := inferenceTestServer(t, map[string]http.HandlerFunc{
+		"GET /api/deployments/sess_test": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(cloud.SessionRecord{
+				ID: "sess_test", PackageRef: "@telos/demo:1.2.3", PackageDigest: pkg.Digest,
+			})
+		},
 		"GET /api/packages/telos/demo/versions/1.2.3": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"scope": "telos", "name": "demo", "version": "1.2.3", "ref": "@telos/demo:1.2.3", "digest": pkg.Digest})
 		},
