@@ -39,9 +39,12 @@ func cmdLaunch(command, action string, args []string) {
 	sessionID := &sessionIDValue
 	forceValue := false
 	force := &forceValue
+	dryRunValue := false
+	dryRun := &dryRunValue
 	if command == "apply" {
 		sessionID = fs.String("goal", "", "ID of the Goal to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
+		dryRun = fs.Bool("dry-run", false, "Preview the apply without publishing or changing a Goal")
 	}
 	modelHelp := "Model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	thinkingHelp := "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs"
@@ -88,6 +91,14 @@ func cmdLaunch(command, action string, args []string) {
 			os.Exit(2)
 		}
 		if fs.NArg() == 0 {
+			if *dryRun {
+				preview, err := previewSessionInference(*sessionID, strings.TrimSpace(*model), strings.TrimSpace(*thinking), contextOverride)
+				if err != nil {
+					exitWithError(err)
+				}
+				printApplyPreview(os.Stdout, preview, *jsonOut)
+				return
+			}
 			change, err := applySessionInference(*sessionID, strings.TrimSpace(*model), strings.TrimSpace(*thinking), contextOverride)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -163,6 +174,7 @@ func cmdLaunch(command, action string, args []string) {
 			*force,
 			*jsonOut,
 			contextOverride,
+			*dryRun,
 		)
 		return
 	}
@@ -299,63 +311,40 @@ func applyCloudControl(
 	force bool,
 	jsonOut bool,
 	contextOverride string,
+	dryRun bool,
 ) {
-	var reference *packageReference
-	if strings.HasPrefix(strings.TrimSpace(specArg), "@") {
-		parsed, err := parsePackageReference(specArg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		reference = &parsed
-	}
 	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	var pkg *specPackage
-	packageName := ""
-	if reference != nil {
-		packageName = reference.name
-	} else {
-		pkg, err = packageSpec(specArg, contextOverride)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		packageName = pkg.name
-	}
-	var inference *cloud.InferenceSelection
-	if sessionID == "" {
-		if err := refuseDuplicateGoal(control, "apply", specArg, packageName, contextOverride); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		inference, err = resolveCloudInference(control, runtimeConfig.Model)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	var packageRecord *cloud.PackageVersionRecord
-	if reference != nil {
-		packageRecord, err = registryPackageForApply(control, *reference)
-	} else {
-		packageRecord, err = pushSpecPackage(control, pkg, "")
-	}
+	prepared, err := prepareCloudApply(control, specArg, sessionID, runtimeConfig.Model, contextOverride)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		exitWithError(err)
+	}
+	if dryRun {
+		preview, err := previewCloudApply(control, prepared, sessionID, runtimeConfig, force)
+		if err != nil {
+			exitWithError(err)
+		}
+		printApplyPreview(os.Stdout, preview, jsonOut)
+		return
+	}
+	packageRecord := prepared.record
+	if prepared.local != nil {
+		packageRecord, err = publishSpecPackage(control, prepared.local, prepared.skills, "", prepared.local.version, "")
+		if err != nil {
+			exitWithError(err)
+		}
 	}
 	operation, session, err := applyCloudSessionPackage(
 		control,
-		packageName,
+		prepared.name,
 		packageRecord.Ref,
 		sessionID,
 		runtimeConfig,
 		force,
-		inference,
+		prepared.inference,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)

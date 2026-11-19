@@ -45,29 +45,38 @@ func validateApplyInferenceFlags(fs *flag.FlagSet, sessionID, model, thinking st
 }
 
 func applySessionInference(sessionID, model, thinking, contextOverride string) (*inferenceChange, error) {
-	if err := validateApplySession(sessionID); err != nil {
-		return nil, err
-	}
-	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
-		return nil, err
-	}
-	control, err := cloud.ControlClientForContext(contextOverride)
+	control, request, err := prepareSessionInference(sessionID, model, thinking, contextOverride)
 	if err != nil {
 		return nil, err
-	}
-	selection, err := resolveCloudInference(control, model)
-	if err != nil {
-		return nil, err
-	}
-	request := cloud.DeploymentInferenceRequest{Inference: selection}
-	if thinking != "" {
-		request.AgentThinking = &thinking
 	}
 	state, err := control.UpdateDeploymentInference(sessionID, request)
 	if err != nil {
 		return nil, err
 	}
 	return &inferenceChange{SessionID: sessionID, Context: control.ContextName(), DeploymentInference: state}, nil
+}
+
+func prepareSessionInference(sessionID, model, thinking, contextOverride string) (*cloud.Client, cloud.DeploymentInferenceRequest, error) {
+	var request cloud.DeploymentInferenceRequest
+	if err := validateApplySession(sessionID); err != nil {
+		return nil, request, err
+	}
+	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
+		return nil, request, err
+	}
+	control, err := cloud.ControlClientForContext(contextOverride)
+	if err != nil {
+		return nil, request, err
+	}
+	selection, err := resolveCloudInference(control, model)
+	if err != nil {
+		return nil, request, err
+	}
+	request.Inference = selection
+	if thinking != "" {
+		request.AgentThinking = &thinking
+	}
+	return control, request, nil
 }
 
 func printInferenceChange(out io.Writer, change *inferenceChange) {
