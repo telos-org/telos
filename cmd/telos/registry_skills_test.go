@@ -107,12 +107,18 @@ func TestPrepareRegistrySkillsCachesAndPinsExactVersion(t *testing.T) {
 	}
 }
 
-func TestCompilePlanSpecLeavesPersistentRegistryCacheUntouched(t *testing.T) {
+func TestDryRunUsesPersistentRegistryCache(t *testing.T) {
 	digest, bundle := testRegistrySkillBundle(t, "verify-test")
 	metadataRequests := 0
 	bundleRequests := 0
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
+		case "/api/account/bootstrap":
+			_, _ = w.Write([]byte(`{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","default_publish_scope":"alice"}]}`))
+		case "/api/deployments":
+			_, _ = w.Write([]byte(`{"deployments":[]}`))
+		case "/api/inference/preference":
+			_, _ = w.Write([]byte(`{"selection":{"source":"managed","tier":"default"}}`))
 		case "/api/skills/telos/verify-test/versions/1.2.3":
 			metadataRequests++
 			_ = json.NewEncoder(w).Encode(map[string]any{
@@ -130,6 +136,7 @@ func TestCompilePlanSpecLeavesPersistentRegistryCacheUntouched(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
+	configureDryRunTest(t, srv.URL)
 
 	persistentCache := filepath.Join(t.TempDir(), "registry-cache")
 	t.Setenv("TELOS_CONFIG", filepath.Join(t.TempDir(), "config.yaml"))
@@ -143,13 +150,7 @@ func TestCompilePlanSpecLeavesPersistentRegistryCacheUntouched(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	compiled, state, err := compilePlanSpec(specPath, "", markdown)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(compiled.Skills) != 1 || compiled.Skills[0].Instructions != "Verify the result." {
-		t.Fatalf("compiled skills: %#v", compiled.Skills)
-	}
+	state := decodeApplyPreview(t, specPath).Proposed
 	if len(state.Skills) != 1 || state.Skills[0].Digest != digest || !state.Skills[0].Starred {
 		t.Fatalf("planned skill locks: %#v", state.Skills)
 	}
@@ -157,10 +158,10 @@ func TestCompilePlanSpecLeavesPersistentRegistryCacheUntouched(t *testing.T) {
 		t.Fatalf("registry cache environment = %q, want %q", got, persistentCache)
 	}
 	ref, _ := spec.ParseRegistrySkillRef("@telos/verify-test:1.2.3")
-	if _, err := os.Stat(spec.RegistrySkillPath(ref)); !os.IsNotExist(err) {
-		t.Fatalf("plan populated persistent registry cache: %v", err)
+	if _, err := os.Stat(filepath.Join(spec.RegistrySkillPath(ref), "SKILL.md")); err != nil {
+		t.Fatalf("dry run did not populate the registry cache: %v", err)
 	}
-	if metadataRequests != 1 || bundleRequests != 1 {
+	if metadataRequests != 2 || bundleRequests != 1 {
 		t.Fatalf("registry requests: metadata=%d bundle=%d", metadataRequests, bundleRequests)
 	}
 }

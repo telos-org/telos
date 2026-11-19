@@ -136,56 +136,6 @@ func TestPullUsageKeepsFrequentPullAtTopLevel(t *testing.T) {
 	}
 }
 
-func TestPrintPlanPreviewCloud(t *testing.T) {
-	interval := 6 * 60 * 60
-	compiled := &spec.CompiledEnvironment{
-		Environment: &spec.EnvironmentSpec{Name: "gitea", Version: "0.1.0", IntervalSeconds: &interval},
-		Namespace:   "ns-gitea",
-		ContentHash: "8a8f0c21",
-		Skills: []*spec.Skill{
-			{Name: "verify-engineering"},
-			{Name: "verify-quality"},
-		},
-	}
-
-	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "personal", nil)
-	text := out.String()
-	want := "Spec      gitea\n" +
-		"Version   0.1.0\n" +
-		"Interval  6h\n" +
-		"Context   personal\n" +
-		"Skills    verify-engineering, verify-quality\n"
-	if text != want {
-		t.Fatalf("plan output:\n%s\nwant:\n%s", text, want)
-	}
-	for _, notWant := range []string{"Target", "Path", "Namespace", "Hash", "Plan for", "No sessions", "Lineage", "Mutates"} {
-		if strings.Contains(text, notWant) {
-			t.Fatalf("plan output should not contain %q:\n%s", notWant, text)
-		}
-	}
-}
-
-func TestPrintPlanPreviewStarsRequiredVerifierSkills(t *testing.T) {
-	verifyEngineering := &spec.Skill{Name: "verify-engineering"}
-	compiled := &spec.CompiledEnvironment{
-		Environment: &spec.EnvironmentSpec{Name: "gitea"},
-		ContentHash: "8a8f0c21",
-		Skills: []*spec.Skill{
-			verifyEngineering,
-			{Name: "verify-quality"},
-		},
-		RequiredVerifierSkills: []*spec.Skill{verifyEngineering},
-	}
-
-	var out bytes.Buffer
-	printPlanPreview(&out, compiled, "personal", nil)
-	text := out.String()
-	if !strings.Contains(text, "Skills    verify-engineering*, verify-quality") {
-		t.Fatalf("plan output missing starred skill marker:\n%s", text)
-	}
-}
-
 func TestReorderInterspersedFlagsDashDash(t *testing.T) {
 	for _, tt := range []struct {
 		args, want []string

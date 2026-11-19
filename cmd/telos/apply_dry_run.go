@@ -23,7 +23,7 @@ type applyPreview struct {
 }
 
 type applyPreviewState struct {
-	planSpecState
+	previewSpecState
 	Name           string                    `json:"name,omitempty"`
 	Ref            string                    `json:"ref,omitempty"`
 	Digest         string                    `json:"digest,omitempty"`
@@ -91,9 +91,9 @@ func previewPackageState(pkg *pulledPackage) (applyPreviewState, error) {
 	if err != nil {
 		return applyPreviewState{}, err
 	}
-	state, err := planSpecStateFromMarkdown(markdown, manifest)
+	state, err := previewSpecStateFromMarkdown(markdown, manifest)
 	return applyPreviewState{
-		planSpecState: state, Name: pkg.reference.name, Ref: pkg.reference.ref,
+		previewSpecState: state, Name: pkg.reference.name, Ref: pkg.reference.ref,
 		Digest: pkg.digest, Spec: string(markdown),
 	}, err
 }
@@ -146,7 +146,7 @@ func previewApplyPackage(control *cloud.Client, prepared *preparedCloudApply) (a
 		}
 		digest = resolved.Digest
 	}
-	state, err := planSpecStateFromMarkdown(markdown, manifest)
+	state, err := previewSpecStateFromMarkdown(markdown, manifest)
 	if err != nil {
 		return applyPreviewState{}, false, err
 	}
@@ -154,7 +154,7 @@ func previewApplyPackage(control *cloud.Client, prepared *preparedCloudApply) (a
 		state.Skills[i].Ref = refs[state.Skills[i].Name]
 	}
 	return applyPreviewState{
-		planSpecState: state, Name: pkg.name, Ref: fmt.Sprintf("@%s/%s:%s", scope, pkg.name, pkg.version),
+		previewSpecState: state, Name: pkg.name, Ref: fmt.Sprintf("@%s/%s:%s", scope, pkg.name, pkg.version),
 		Digest: digest, Spec: string(markdown),
 	}, pending, nil
 }
@@ -245,20 +245,20 @@ func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 		if preview.Current == nil {
 			printSummaryField(out, "Version", proposed.Version)
 			if proposed.IntervalSeconds != nil {
-				printSummaryField(out, "Interval", formatPlanInterval(proposed.IntervalSeconds))
+				printSummaryField(out, "Interval", formatPreviewInterval(proposed.IntervalSeconds))
 			}
 			if len(proposed.Skills) > 0 {
-				printSummaryField(out, "Skills", formatPlanSkillLocks(proposed.Skills))
+				printSummaryField(out, "Skills", formatPreviewSkillLocks(proposed.Skills))
 			}
 		} else {
 			printSummaryField(out, "Current", preview.Current.Ref)
-			printPlanStateDelta(out, preview.Current.planSpecState, proposed.planSpecState)
+			printPreviewStateDelta(out, preview.Current.previewSpecState, proposed.previewSpecState)
 		}
 	}
 	model, thinking := previewInferenceValue(proposed.Model, proposed.ModelSource), previewInferenceValue(proposed.Thinking, proposed.ThinkingSource)
 	if preview.Current != nil && proposed.Name == "" {
-		model = planDeltaValue(preview.Current.Model, model)
-		thinking = planDeltaValue(preview.Current.Thinking, thinking)
+		model = previewDeltaValue(preview.Current.Model, model)
+		thinking = previewDeltaValue(preview.Current.Thinking, thinking)
 	}
 	printSummaryField(out, "Model", model)
 	printSummaryField(out, "Thinking", thinking)

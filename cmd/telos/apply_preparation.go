@@ -43,7 +43,7 @@ func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverr
 		}
 	}
 	if goalID == "" {
-		if err := refuseDuplicateGoal(control, "apply", input, prepared.name, contextOverride); err != nil {
+		if err := refuseDuplicateGoal(control, input, prepared.name, contextOverride); err != nil {
 			return nil, err
 		}
 		prepared.inference, err = resolveCloudInference(control, model)

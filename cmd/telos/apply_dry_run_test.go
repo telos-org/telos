@@ -220,3 +220,27 @@ func TestDryRunAndApplyRejectInvalidLaterSkillBeforePublishing(t *testing.T) {
 		}
 	}
 }
+
+func TestDryRunUsesCanonicalContext(t *testing.T) {
+	server := inferenceTestServer(t, registryApplyHandlers(testApplyPackage(t)))
+	defer server.Close()
+	configureDryRunTest(t, server.URL)
+	for _, tt := range []struct{ stored, want string }{
+		{"org_personal", "personal"}, {"org_telos", "@telos"},
+	} {
+		if err := config.SaveConfig(&config.Config{Context: tt.stored}); err != nil {
+			t.Fatal(err)
+		}
+		preview := decodeApplyPreview(t, "@telos/demo:1.2.3", "--model", "telos/default", "--thinking", "high")
+		if preview.Context != tt.want {
+			t.Fatalf("context = %q, want %q", preview.Context, tt.want)
+		}
+	}
+}
+
+func TestPlanCommandIsRemoved(t *testing.T) {
+	stdout, stderr, err := inferenceCLIProcess(t, "plan", "SPEC.md")
+	if err == nil || stdout != "" || !strings.Contains(stderr, "unknown command: plan") || strings.Contains(stderr, "plan SPEC.md") {
+		t.Fatalf("removed plan: error=%v stdout=%s stderr=%s", err, stdout, stderr)
+	}
+}

@@ -406,7 +406,7 @@ func applyCloudSessionPackage(
 // refuseDuplicateGoal fails when control's context already has a Goal named
 // name. Names are unique within a context: apply creates a Goal, and only
 // --goal updates one.
-func refuseDuplicateGoal(control *cloud.Client, command, specArg, name, contextOverride string) error {
+func refuseDuplicateGoal(control *cloud.Client, specArg, name, contextOverride string) error {
 	goals, err := control.ListSessions()
 	if err != nil {
 		return err
@@ -417,7 +417,6 @@ func refuseDuplicateGoal(control *cloud.Client, command, specArg, name, contextO
 				name:     name,
 				context:  control.ContextName(),
 				id:       goal.ID,
-				command:  command,
 				specArg:  specArg,
 				followUp: followUpContext(control, contextOverride),
 			}
@@ -430,13 +429,12 @@ type duplicateGoalError struct {
 	name     string
 	context  string
 	id       string
-	command  string
 	specArg  string
 	followUp string
 }
 
 func (e *duplicateGoalError) Error() string {
-	update := fmt.Sprintf("telos %s %s --goal %s", e.command, shellArg(e.specArg), e.id)
+	update := fmt.Sprintf("telos apply %s --goal %s", shellArg(e.specArg), e.id)
 	if e.followUp != "" {
 		update += " --context " + e.followUp
 	}

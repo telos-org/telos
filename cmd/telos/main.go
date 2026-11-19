@@ -32,8 +32,6 @@ func main() {
 		return
 	case "update":
 		cmdUpdate(os.Args[2:])
-	case "plan":
-		cmdPlan(os.Args[2:])
 	case "push":
 		cmdPush(os.Args[2:])
 	case "apply":
@@ -78,7 +76,6 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "core commands:")
 	fmt.Fprintln(out, "  login              Log in to Telos Cloud via the browser")
-	fmt.Fprintln(out, "  plan SPEC.md       Preview a spec without running it")
 	fmt.Fprintln(out, "  apply [SPEC.md]    Create a Goal, update its spec, or change model/thinking")
 	fmt.Fprintln(out, "  list               List Goals")
 	fmt.Fprintln(out, "  describe GOAL      Show a Goal's details")

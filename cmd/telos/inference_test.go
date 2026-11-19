@@ -286,8 +286,6 @@ func TestInferenceCLIProcess(t *testing.T) {
 	switch args[0] {
 	case "apply":
 		cmdApply(args[1:])
-	case "plan":
-		cmdPlan(args[1:])
 	case "run":
 		cmdRun(args[1:])
 	case "config":
@@ -303,7 +301,8 @@ func TestInferenceCLIProcess(t *testing.T) {
 	case "resume":
 		cmdResume(args[1:])
 	default:
-		os.Exit(2)
+		os.Args = append([]string{os.Args[0]}, args...)
+		main()
 	}
 	os.Exit(0)
 }
