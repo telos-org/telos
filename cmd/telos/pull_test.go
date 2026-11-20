@@ -230,6 +230,10 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 				"created_at":     "then",
 				"updated_at":     "now",
 			})
+		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_registry":
+			_ = json.NewEncoder(w).Encode(cloud.SessionRecord{
+				ID: "sess_registry", PackageRef: "@telos/demo:1.2.3", PackageDigest: pkg.Digest,
+			})
 		default:
 			http.NotFound(w, r)
 		}
@@ -278,7 +282,7 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	}
 }
 
-func TestRegistryPackageForApplyRejectsDigestMismatch(t *testing.T) {
+func TestPrepareCloudApplyRejectsDigestMismatch(t *testing.T) {
 	pkg := testApplyPackage(t)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -295,12 +299,7 @@ func TestRegistryPackageForApplyRejectsDigestMismatch(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	reference, err := parsePackageReference("@telos/demo:1.2.3")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	_, err = registryPackageForApply(cloud.NewClient(srv.URL, "token"), reference)
+	_, err := prepareCloudApply(cloud.NewClient(srv.URL, "token"), "@telos/demo:1.2.3", "goal_test", "", "")
 	if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
 		t.Fatalf("digest mismatch error = %v", err)
 	}

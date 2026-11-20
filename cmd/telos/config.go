@@ -142,7 +142,13 @@ func loadConfigReport(cfg *config.Config, path string) configReport {
 	var creditsMicroUSD int64
 	var wg sync.WaitGroup
 	wg.Go(func() { report.Connections, connectionsErr = client.ListInferenceConnections() })
-	wg.Go(func() { report.WorkspaceDefault, preferenceErr = client.InferencePreference() })
+	wg.Go(func() {
+		var preference *cloud.InferencePreference
+		preference, preferenceErr = client.InferencePreference()
+		if preferenceErr == nil {
+			report.WorkspaceDefault = &preference.Selection
+		}
+	})
 	wg.Go(func() { report.Credentials, credentialsErr = client.ListCredentials() })
 	wg.Go(func() { creditsMicroUSD, creditsErr = client.CreditsMicroUSD() })
 	wg.Wait()

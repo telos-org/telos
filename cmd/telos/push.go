@@ -28,6 +28,12 @@ type skillPackage struct {
 	files   map[string]cloud.SkillFile
 }
 
+type packageSkillPublication struct {
+	name  string
+	ref   string
+	skill *skillPackage
+}
+
 var packageSemverRE = regexp.MustCompile(
 	`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)` +
 		`(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`,
@@ -279,19 +285,6 @@ func readSkillPublishFiles(root string) (map[string]cloud.SkillFile, error) {
 	return files, nil
 }
 
-func pushSpecPackage(client *cloud.Client, pkg *specPackage, scope string) (*cloud.PackageVersionRecord, error) {
-	return pushSpecPackageWithVisibility(client, pkg, scope, "")
-}
-
-func pushSpecPackageVersion(
-	client *cloud.Client,
-	pkg *specPackage,
-	scope string,
-	version string,
-) (*cloud.PackageVersionRecord, error) {
-	return pushSpecPackageVersionWithVisibility(client, pkg, scope, version, "")
-}
-
 func pushSpecPackageWithVisibility(
 	client *cloud.Client,
 	pkg *specPackage,
@@ -301,27 +294,8 @@ func pushSpecPackageWithVisibility(
 	if pkg == nil {
 		return nil, fmt.Errorf("package is required")
 	}
-	return pushSpecPackageVersionWithVisibility(
-		client,
-		pkg,
-		scope,
-		pkg.version,
-		visibility,
-	)
-}
-
-func pushSpecPackageVersionWithVisibility(
-	client *cloud.Client,
-	pkg *specPackage,
-	scope string,
-	version string,
-	visibility string,
-) (*cloud.PackageVersionRecord, error) {
-	if pkg == nil {
-		return nil, fmt.Errorf("package is required")
-	}
 	scope = strings.TrimSpace(scope)
-	version = strings.TrimSpace(version)
+	version := strings.TrimSpace(pkg.version)
 	if version != "" {
 		normalized, err := normalizePackageVersion(version)
 		if err != nil {
@@ -329,7 +303,20 @@ func pushSpecPackageVersionWithVisibility(
 		}
 		version = normalized
 	}
-	skillRefs, err := pushPackageSkills(client, pkg.compiled, scope, visibility)
+	skills, err := preparePackageSkills(client, pkg.compiled)
+	if err != nil {
+		return nil, err
+	}
+	return publishSpecPackage(client, pkg, skills, scope, version, visibility)
+}
+
+func publishSpecPackage(
+	client *cloud.Client,
+	pkg *specPackage,
+	skills []packageSkillPublication,
+	scope, version, visibility string,
+) (*cloud.PackageVersionRecord, error) {
+	skillRefs, err := publishPackageSkills(client, skills, scope, visibility)
 	if err != nil {
 		return nil, err
 	}
@@ -412,12 +399,7 @@ func registryPublicationError(err error) error {
 	return err
 }
 
-func pushPackageSkills(
-	client *cloud.Client,
-	compiled *spec.CompiledEnvironment,
-	scope string,
-	visibility string,
-) (map[string]string, error) {
+func preparePackageSkills(client *cloud.Client, compiled *spec.CompiledEnvironment) ([]packageSkillPublication, error) {
 	if compiled == nil {
 		return nil, nil
 	}
@@ -431,8 +413,7 @@ func pushPackageSkills(
 		}
 		return skills[i].Name < skills[j].Name
 	})
-	refs := map[string]string{}
-	publishScope := strings.TrimSpace(scope)
+	var publications []packageSkillPublication
 	for _, resolved := range skills {
 		if resolved == nil || strings.TrimSpace(resolved.Path) == "" {
 			continue
@@ -440,13 +421,13 @@ func pushPackageSkills(
 		if ref, ok, err := resolvedRegistrySkillRef(client, resolved); err != nil {
 			return nil, err
 		} else if ok {
-			refs[resolved.Name] = ref
+			publications = append(publications, packageSkillPublication{name: resolved.Name, ref: ref})
 			continue
 		}
 		if ref, ok, err := platformCatalogueSkillRef(client, resolved); err != nil {
 			return nil, err
 		} else if ok {
-			refs[resolved.Name] = ref
+			publications = append(publications, packageSkillPublication{name: resolved.Name, ref: ref})
 			continue
 		}
 		skill, ok, err := packageSkillDir(resolved.Path, "")
@@ -456,7 +437,21 @@ func pushPackageSkills(
 		if !ok {
 			return nil, fmt.Errorf("skill %q is not publishable: %s", resolved.Name, resolved.Path)
 		}
+		publications = append(publications, packageSkillPublication{name: resolved.Name, skill: skill})
+	}
+	return publications, nil
+}
+
+func publishPackageSkills(client *cloud.Client, skills []packageSkillPublication, scope, visibility string) (map[string]string, error) {
+	refs := map[string]string{}
+	publishScope := strings.TrimSpace(scope)
+	for _, publication := range skills {
+		if publication.ref != "" {
+			refs[publication.name] = publication.ref
+			continue
+		}
 		if visibility == "public" && publishScope == "" {
+			var err error
 			publishScope, err = defaultPublishScope(client)
 			if err != nil {
 				return nil, err
@@ -464,14 +459,14 @@ func pushPackageSkills(
 		}
 		record, err := pushPackageSkill(
 			client,
-			skill,
+			publication.skill,
 			publishScope,
 			visibility,
 		)
 		if err != nil {
 			return nil, err
 		}
-		refs[resolved.Name] = record.Ref
+		refs[publication.name] = record.Ref
 	}
 	return refs, nil
 }

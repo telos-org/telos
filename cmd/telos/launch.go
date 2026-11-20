@@ -39,15 +39,21 @@ func cmdLaunch(command, action string, args []string) {
 	sessionID := &sessionIDValue
 	forceValue := false
 	force := &forceValue
+	dryRunValue := false
+	dryRun := &dryRunValue
+	diffValue := false
+	includeDiff := &diffValue
 	if command == "apply" {
 		sessionID = fs.String("goal", "", "ID of the Goal to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
+		dryRun = fs.Bool("dry-run", false, "Preview the apply without publishing or changing a Goal")
+		includeDiff = fs.Bool("diff", false, "Include skill file contents in the dry-run diff")
 	}
 	modelHelp := "Model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	thinkingHelp := "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs"
 	if command == "apply" {
 		modelHelp = "telos/default, telos/max, or <name>/<model-id> for a saved API key or subscription. Creation defaults to $TELOS_MODEL, then the workspace default; updates require an explicit flag without SPEC.md"
-		thinkingHelp = "Creation: low, medium, high, or xhigh; defaults to $TELOS_THINKING. Updates: a model-supported level for the next turn, explicitly supplied without SPEC.md"
+		thinkingHelp = "Creation: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then workspace or cloud defaults. Updates: a model-supported level for the next turn, explicitly supplied without SPEC.md"
 	}
 	model := fs.String("model", "", modelHelp)
 	thinking := fs.String("thinking", "", thinkingHelp)
@@ -83,11 +89,23 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos Goal; use telos run to launch nested specs")
 			os.Exit(1)
 		}
+		if *includeDiff && !*dryRun {
+			fmt.Fprintln(os.Stderr, "error: --diff requires --dry-run")
+			os.Exit(2)
+		}
 		if err := validateApplyInferenceFlags(fs, *sessionID, *model, *thinking); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(2)
 		}
 		if fs.NArg() == 0 {
+			if *dryRun {
+				preview, err := previewSessionInference(*sessionID, strings.TrimSpace(*model), strings.TrimSpace(*thinking), contextOverride)
+				if err != nil {
+					exitWithError(err)
+				}
+				printApplyPreview(os.Stdout, preview, *jsonOut)
+				return
+			}
 			change, err := applySessionInference(*sessionID, strings.TrimSpace(*model), strings.TrimSpace(*thinking), contextOverride)
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -160,9 +178,13 @@ func cmdLaunch(command, action string, args []string) {
 			specArg,
 			*sessionID,
 			runtimeConfig,
-			*force,
-			*jsonOut,
-			contextOverride,
+			cloudApplyOptions{
+				context:     contextOverride,
+				force:       *force,
+				json:        *jsonOut,
+				dryRun:      *dryRun,
+				includeDiff: *includeDiff,
+			},
 		)
 		return
 	}
@@ -292,76 +314,64 @@ func runCloudChildSession(
 	printSessionReceipt(os.Stdout, action, session)
 }
 
+type cloudApplyOptions struct {
+	context     string
+	force       bool
+	json        bool
+	dryRun      bool
+	includeDiff bool
+}
+
 func applyCloudControl(
 	specArg string,
 	sessionID string,
 	runtimeConfig sessionRuntimeConfig,
-	force bool,
-	jsonOut bool,
-	contextOverride string,
+	options cloudApplyOptions,
 ) {
-	var reference *packageReference
-	if strings.HasPrefix(strings.TrimSpace(specArg), "@") {
-		parsed, err := parsePackageReference(specArg)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		reference = &parsed
-	}
-	control, err := cloud.ControlClientForContext(contextOverride)
+	control, err := cloud.ControlClientForContext(options.context)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	var pkg *specPackage
-	packageName := ""
-	if reference != nil {
-		packageName = reference.name
-	} else {
-		pkg, err = packageSpec(specArg, contextOverride)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		packageName = pkg.name
-	}
-	var inference *cloud.InferenceSelection
-	if sessionID == "" {
-		if err := refuseDuplicateGoal(control, "apply", specArg, packageName, contextOverride); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		inference, err = resolveCloudInference(control, runtimeConfig.Model)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-	}
-	var packageRecord *cloud.PackageVersionRecord
-	if reference != nil {
-		packageRecord, err = registryPackageForApply(control, *reference)
-	} else {
-		packageRecord, err = pushSpecPackage(control, pkg, "")
-	}
+	prepared, err := prepareCloudApply(control, specArg, sessionID, runtimeConfig.Model, options.context)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		exitWithError(err)
+	}
+	if options.dryRun {
+		preview, err := previewCloudApply(control, prepared, sessionID, runtimeConfig, options)
+		if err != nil {
+			exitWithError(err)
+		}
+		printApplyPreview(os.Stdout, preview, options.json)
+		return
+	}
+	if prepared.baselineErr != nil {
+		fmt.Fprintf(os.Stderr,
+			"warning: could not read deployed baseline; continuing with server-side validation: %v\n",
+			prepared.baselineErr,
+		)
+	}
+	packageRecord := prepared.record
+	if prepared.local != nil {
+		packageRecord, err = publishSpecPackage(control, prepared.local, prepared.skills, "", prepared.local.version, "")
+		if err != nil {
+			exitWithError(err)
+		}
 	}
 	operation, session, err := applyCloudSessionPackage(
 		control,
-		packageName,
+		prepared.name,
 		packageRecord.Ref,
 		sessionID,
 		runtimeConfig,
-		force,
-		inference,
+		options.force,
+		prepared.inference,
 	)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	if jsonOut {
+	if options.json {
 		printJSON(map[string]any{
 			"context":   control.ContextName(),
 			"operation": operation,
@@ -375,7 +385,7 @@ func applyCloudControl(
 		operation,
 		session,
 		control.ContextName(),
-		followUpContext(control, contextOverride),
+		followUpContext(control, options.context),
 	)
 }
 
@@ -417,7 +427,7 @@ func applyCloudSessionPackage(
 // refuseDuplicateGoal fails when control's context already has a Goal named
 // name. Names are unique within a context: apply creates a Goal, and only
 // --goal updates one.
-func refuseDuplicateGoal(control *cloud.Client, command, specArg, name, contextOverride string) error {
+func refuseDuplicateGoal(control *cloud.Client, specArg, name, contextOverride string) error {
 	goals, err := control.ListSessions()
 	if err != nil {
 		return err
@@ -428,7 +438,6 @@ func refuseDuplicateGoal(control *cloud.Client, command, specArg, name, contextO
 				name:     name,
 				context:  control.ContextName(),
 				id:       goal.ID,
-				command:  command,
 				specArg:  specArg,
 				followUp: followUpContext(control, contextOverride),
 			}
@@ -441,13 +450,12 @@ type duplicateGoalError struct {
 	name     string
 	context  string
 	id       string
-	command  string
 	specArg  string
 	followUp string
 }
 
 func (e *duplicateGoalError) Error() string {
-	update := fmt.Sprintf("telos %s %s --goal %s", e.command, shellArg(e.specArg), e.id)
+	update := fmt.Sprintf("telos apply %s --goal %s", shellArg(e.specArg), e.id)
 	if e.followUp != "" {
 		update += " --context " + e.followUp
 	}
