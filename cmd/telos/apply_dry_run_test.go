@@ -96,6 +96,97 @@ func TestDryRunCreationInferencePrecedence(t *testing.T) {
 	}
 }
 
+func TestApplyChecksResolvedPackageVersion(t *testing.T) {
+	for _, tc := range []struct {
+		name, version, previewOperation, wantError string
+		status                                     int
+	}{
+		{name: "missing version", version: "1.2.4", status: http.StatusNotFound, previewOperation: "update"},
+		{name: "identical digest", version: "1.2.3", status: http.StatusOK, previewOperation: "unchanged"},
+		{
+			name: "different digest", version: "1.2.3", status: http.StatusOK,
+			wantError: "package version @telos/demo:1.2.3 already exists; bump version in SPEC.md",
+		},
+		{
+			name: "read denied", version: "1.2.3", status: http.StatusForbidden,
+			wantError: "check package version @telos/demo:1.2.3",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := makeDryRunSkillFixture(t)
+			const currentVersion = "1.2.3"
+			if tc.version != currentVersion {
+				markdown := strings.Replace(string(mustReadFile(t, fixture.path)), currentVersion, tc.version, 1)
+				if err := os.WriteFile(fixture.path, []byte(markdown), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			const skillRef = "@telos/verify-test:1.0.0"
+			ref := "@telos/demo:" + tc.version
+			var writes atomic.Int32
+			handlers := registryApplyHandlers(fixture.pkg)
+			handlers["GET /api/account/bootstrap"] = dryRunPublishScope
+			handlers["GET /api/skills/telos/verify-test"] = jsonResponse(cloud.SkillRecord{
+				Scope: "telos", Name: "verify-test", Version: "1.0.0", Ref: skillRef, Digest: fixture.digest,
+			})
+			handlers["GET /api/packages/telos/demo/versions/"+tc.version] = func(w http.ResponseWriter, r *http.Request) {
+				if tc.status != http.StatusOK {
+					http.Error(w, http.StatusText(tc.status), tc.status)
+					return
+				}
+				digest := fixture.pkg.Digest
+				if tc.wantError != "" {
+					digest = "sha256:" + strings.Repeat("0", 64)
+				}
+				jsonResponse(cloud.PackageVersionRecord{
+					Scope: "telos", Name: "demo", Version: tc.version, Ref: ref, Digest: digest,
+				})(w, r)
+			}
+			for route, response := range map[string]any{
+				"POST /api/skills":               cloud.SkillRecord{Ref: skillRef},
+				"POST /api/packages":             cloud.PackageVersionRecord{Ref: ref},
+				"PUT /api/deployments/goal_test": cloud.SessionRecord{ID: "goal_test", PackageRef: ref},
+			} {
+				handlers[route] = func(w http.ResponseWriter, r *http.Request) {
+					writes.Add(1)
+					jsonResponse(response)(w, r)
+				}
+			}
+			server := inferenceTestServer(t, handlers)
+			defer server.Close()
+			configureDryRunTest(t, server.URL)
+			for _, mode := range []string{"dry-run", "apply"} {
+				t.Run(mode, func(t *testing.T) {
+					writes.Store(0)
+					args := []string{"apply", fixture.path, "--goal", "goal_test", "--json"}
+					if mode == "dry-run" {
+						args = append(args, "--dry-run")
+					}
+					out, stderr, err := inferenceCLIProcess(t, args...)
+					if tc.wantError != "" {
+						if err == nil || out != "" || !strings.Contains(stderr, tc.wantError) || writes.Load() != 0 {
+							t.Fatalf("error=%v writes=%d stdout=%s stderr=%s", err, writes.Load(), out, stderr)
+						}
+						return
+					}
+					wantOperation, wantWrites := "updated", int32(3)
+					if mode == "dry-run" {
+						wantOperation, wantWrites = tc.previewOperation, 0
+					}
+					var result struct {
+						Operation string `json:"operation"`
+					}
+					if err != nil || json.Unmarshal([]byte(out), &result) != nil ||
+						result.Operation != wantOperation || writes.Load() != wantWrites {
+						t.Fatalf("want %s and %d writes, got error=%v writes=%d stdout=%s stderr=%s",
+							wantOperation, wantWrites, err, writes.Load(), out, stderr)
+					}
+				})
+			}
+		})
+	}
+}
+
 func TestDryRunIdenticalContentsWithDifferentReferenceAreAnUpdate(t *testing.T) {
 	pkg := testApplyPackage(t)
 	handlers := registryApplyHandlers(pkg)
