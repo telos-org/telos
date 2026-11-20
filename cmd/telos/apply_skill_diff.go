@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,9 +24,11 @@ type previewSkillFileDiff struct {
 	ContentOmitted string `json:"content_omitted,omitempty"`
 }
 
-func previewSkillChanges(control *cloud.Client, preview *applyPreview, currentData, proposedData []byte, includeDiff bool) {
+func previewSkillChanges(control *cloud.Client, preview *applyPreview, includeDiff bool) {
 	current := map[string]string{}
+	var currentData []byte
 	if preview.Current != nil {
+		currentData = preview.Current.data
 		for _, skill := range preview.Current.Skills {
 			current[skill.Name] = skill.Digest
 		}
@@ -52,17 +55,12 @@ func previewSkillChanges(control *cloud.Client, preview *applyPreview, currentDa
 		preview.Notes = append(preview.Notes, fmt.Sprintf("Deployed skill file diffs are unavailable: %v", err))
 		return
 	}
-	after, err := previewSkillFiles(control, proposedData, changed)
+	after, err := previewSkillFiles(control, preview.Proposed.data, changed)
 	if err != nil {
 		preview.Notes = append(preview.Notes, fmt.Sprintf("Proposed skill file diffs are unavailable: %v", err))
 		return
 	}
-	var names []string
-	for name := range changed {
-		names = append(names, name)
-	}
-	slices.Sort(names)
-	for _, name := range names {
+	for _, name := range slices.Sorted(maps.Keys(changed)) {
 		preview.SkillDiffs = append(preview.SkillDiffs, diffSkillFiles(name, before[name], after[name])...)
 	}
 }
@@ -105,13 +103,8 @@ func diffSkillFiles(name string, before, after map[string]cloud.SkillFile) []pre
 	for path := range after {
 		paths[path] = true
 	}
-	var sorted []string
-	for path := range paths {
-		sorted = append(sorted, path)
-	}
-	slices.Sort(sorted)
 	var changes []previewSkillFileDiff
-	for _, path := range sorted {
+	for _, path := range slices.Sorted(maps.Keys(paths)) {
 		old, hadOld := before[path]
 		proposed, hasNew := after[path]
 		if hadOld && hasNew && old.Mode == proposed.Mode && bytes.Equal(old.Data, proposed.Data) {

@@ -3,7 +3,9 @@ package main
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
+	"time"
 
 	internaldiff "github.com/rogpeppe/go-internal/diff"
 	"github.com/telos-org/telos/internal/cloud"
@@ -68,7 +70,7 @@ func previewCloudApply(
 	preview.Force = options.force
 	proposed := prepared.proposed
 	preview.Proposed.applyPackageState = proposed
-	if prepared.pending {
+	if proposed.Digest == "" {
 		preview.Notes = append(preview.Notes,
 			"Skill references and the final package digest are resolved during publication. "+
 				"The spec preview uses local skill paths.",
@@ -78,24 +80,23 @@ func previewCloudApply(
 		if err := previewCreationInference(control, preview, prepared.inference, runtime); err != nil {
 			return nil, err
 		}
-		previewSkillChanges(control, preview, nil, proposed.data, options.includeDiff)
-		return preview, nil
+	} else {
+		current := prepared.current
+		preview.Current = &applyPreviewState{applyPackageState: *current}
+		preview.SpecDiff = string(internaldiff.Diff(
+			"deployed/SPEC.md", []byte(current.Spec),
+			"proposed/SPEC.md", []byte(proposed.Spec),
+		))
+		preview.Proposed.ModelSource = previewSourceGoal
+		preview.Proposed.ThinkingSource = previewSourceGoal
+		if proposed.Digest != "" && proposed.Digest == current.Digest && proposed.Ref == current.Ref {
+			preview.Operation = "unchanged"
+		}
+		if options.force {
+			preview.Notes = append(preview.Notes, "The server's snapshot check would be bypassed by --force.")
+		}
 	}
-	current := prepared.current
-	preview.Current = &applyPreviewState{applyPackageState: *current}
-	preview.SpecDiff = string(internaldiff.Diff(
-		"deployed/SPEC.md", []byte(current.Spec),
-		"proposed/SPEC.md", []byte(proposed.Spec),
-	))
-	preview.Proposed.ModelSource = previewSourceGoal
-	preview.Proposed.ThinkingSource = previewSourceGoal
-	if proposed.Digest != "" && proposed.Digest == current.Digest && proposed.Ref == current.Ref {
-		preview.Operation = "unchanged"
-	}
-	if options.force {
-		preview.Notes = append(preview.Notes, "The server's snapshot check would be bypassed by --force.")
-	}
-	previewSkillChanges(control, preview, current.data, proposed.data, options.includeDiff)
+	previewSkillChanges(control, preview, options.includeDiff)
 	return preview, nil
 }
 
@@ -213,7 +214,7 @@ func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 			}
 		} else {
 			printSummaryField(out, "Current", preview.Current.Ref)
-			printPreviewStateDelta(out, preview.Current.applySpecState, proposed.applySpecState)
+			printPreviewStateDelta(out, *preview.Current, proposed)
 		}
 	}
 	model := previewInferenceValue(proposed.Model, proposed.ModelSource)
@@ -269,4 +270,63 @@ func previewInferenceValue(value string, source previewSettingSource) string {
 	default:
 		return strings.TrimSpace(value)
 	}
+}
+
+func printPreviewStateDelta(out io.Writer, current, proposed applyPreviewState) {
+	currentInterval := formatPreviewInterval(current.IntervalSeconds)
+	proposedInterval := formatPreviewInterval(proposed.IntervalSeconds)
+	versionChanged := current.Version != proposed.Version
+	intervalChanged := currentInterval != proposedInterval
+	if versionChanged {
+		printSummaryField(out, "Version", previewDeltaValue(current.Version, proposed.Version))
+	}
+	if intervalChanged {
+		printSummaryField(out, "Interval", previewDeltaValue(currentInterval, proposedInterval))
+	}
+	if !slices.Equal(current.Skills, proposed.Skills) {
+		if versionChanged || intervalChanged {
+			fmt.Fprintln(out)
+		}
+		fmt.Fprintln(out, "Skill locks")
+		printDetailField(out, "current", formatPreviewSkillLocks(current.Skills))
+		printDetailField(out, "proposed", formatPreviewSkillLocks(proposed.Skills))
+	}
+}
+
+func previewDeltaValue(current, proposed string) string {
+	return firstNonEmpty(current, "-") + " -> " + firstNonEmpty(proposed, "-")
+}
+
+// formatPreviewInterval writes an interval the way specs do, such as 6h or 1h30m.
+func formatPreviewInterval(seconds *int) string {
+	if seconds == nil {
+		return "-"
+	}
+	value := (time.Duration(*seconds) * time.Second).String()
+	if strings.HasSuffix(value, "m0s") {
+		value = strings.TrimSuffix(value, "0s")
+	}
+	if strings.HasSuffix(value, "h0m") {
+		value = strings.TrimSuffix(value, "0m")
+	}
+	return value
+}
+
+func formatPreviewSkillLocks(skills []applySkillLock) string {
+	if len(skills) == 0 {
+		return "-"
+	}
+	values := make([]string, 0, len(skills))
+	for _, skill := range skills {
+		value := skill.Name
+		if skill.Ref != "" {
+			value += " " + skill.Ref
+		}
+		value += " " + skill.Digest
+		if skill.Starred {
+			value += " *"
+		}
+		values = append(values, value)
+	}
+	return strings.Join(values, ", ")
 }

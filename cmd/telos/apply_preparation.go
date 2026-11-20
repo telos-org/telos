@@ -2,9 +2,13 @@ package main
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
+	"time"
 
 	"github.com/telos-org/telos/internal/cloud"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 type preparedCloudApply struct {
@@ -15,7 +19,6 @@ type preparedCloudApply struct {
 	inference   *cloud.InferenceSelection
 	proposed    applyPackageState
 	current     *applyPackageState
-	pending     bool
 	baselineErr error
 }
 
@@ -62,7 +65,7 @@ func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverr
 		if err != nil {
 			return nil, err
 		}
-		prepared.proposed, prepared.pending, err = prepareLocalApplyPackage(control, prepared.local, prepared.skills)
+		prepared.proposed, err = prepareLocalApplyPackage(control, prepared.local, prepared.skills)
 		if err != nil {
 			return nil, err
 		}
@@ -90,4 +93,215 @@ func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverr
 		prepared.current = &current
 	}
 	return prepared, nil
+}
+
+type applyPackageState struct {
+	Name            string           `json:"name,omitempty"`
+	Version         string           `json:"version,omitempty"`
+	IntervalSeconds *int             `json:"interval_seconds,omitempty"`
+	Skills          []applySkillLock `json:"skills,omitempty"`
+
+	Ref    string `json:"ref,omitempty"`
+	Digest string `json:"digest,omitempty"`
+	Spec   string `json:"spec,omitempty"`
+	data   []byte
+}
+
+func registryApplyPackageState(pkg *pulledPackage) (applyPackageState, error) {
+	markdown, manifest, err := verifiedPackageContents(pkg)
+	if err != nil {
+		return applyPackageState{}, err
+	}
+	return readApplyPackageState(pkg, markdown, manifest)
+}
+
+func prepareLocalApplyPackage(
+	control *cloud.Client,
+	pkg *specPackage,
+	skills []packageSkillPublication,
+) (applyPackageState, error) {
+	scope, err := defaultPublishScope(control)
+	if err != nil {
+		return applyPackageState{}, err
+	}
+	markdown, manifest, err := spec.ApplyPackageSpec(pkg.bytes)
+	if err != nil {
+		return applyPackageState{}, err
+	}
+	refs := map[string]string{}
+	pending := false
+	for _, publication := range skills {
+		ref, err := applySkillRef(control, scope, publication, manifest.Skills[publication.name].Digest)
+		if err != nil {
+			return applyPackageState{}, err
+		}
+		if ref == "" {
+			pending = true
+		}
+		refs[publication.name] = ref
+	}
+	digest := ""
+	if !pending {
+		resolved, err := spec.BuildApplyPackageWithSkillRefs(pkg.compiled, refs)
+		if err != nil {
+			return applyPackageState{}, err
+		}
+		markdown, manifest, err = spec.ApplyPackageSpec(resolved.Bytes)
+		if err != nil {
+			return applyPackageState{}, err
+		}
+		digest = resolved.Digest
+	}
+	ref := fmt.Sprintf("@%s/%s:%s", scope, pkg.name, pkg.version)
+	existing, err := control.GetPackageVersion(scope, pkg.name, pkg.version)
+	if err != nil && !cloud.IsStatus(err, 404) {
+		return applyPackageState{}, fmt.Errorf("check package version %s: %w", ref, err)
+	}
+	if err == nil {
+		matches := existing.Digest == digest
+		if pending {
+			matches, err = pendingPackageMatches(control, pkg, scope, refs, existing.Digest)
+			if err != nil {
+				return applyPackageState{}, fmt.Errorf("check package version %s: %w", ref, err)
+			}
+		}
+		if !matches {
+			return applyPackageState{}, fmt.Errorf(
+				"package version %s already exists; bump version in SPEC.md before changing the spec or its skills", ref,
+			)
+		}
+	}
+	state, err := readApplyPackageState(&pulledPackage{
+		reference: packageReference{ref: ref},
+		digest:    digest,
+		data:      pkg.bytes,
+	}, markdown, manifest)
+	for i := range state.Skills {
+		state.Skills[i].Ref = refs[state.Skills[i].Name]
+	}
+	return state, err
+}
+
+func pendingPackageMatches(
+	control *cloud.Client,
+	pkg *specPackage,
+	scope string,
+	refs map[string]string,
+	existingDigest string,
+) (bool, error) {
+	data, err := control.DownloadPackageVersionBundle(scope, pkg.name, pkg.version)
+	if err != nil {
+		return false, err
+	}
+	_, existing, err := verifiedPackageContents(&pulledPackage{
+		reference: packageReference{ref: fmt.Sprintf("@%s/%s:%s", scope, pkg.name, pkg.version)},
+		digest:    existingDigest,
+		data:      data,
+	})
+	if err != nil {
+		return false, err
+	}
+	comparisonRefs := maps.Clone(refs)
+	for name, ref := range refs {
+		if ref != "" {
+			continue
+		}
+		oldRef := existing.Skills[name].Ref
+		parsed, ok := spec.ParseRegistrySkillRef(oldRef)
+		if !ok || parsed.Scope != scope || parsed.Name != name || parsed.Version == "" {
+			return false, nil
+		}
+		comparisonRefs[name] = oldRef
+	}
+	// Normalize imports with the existing locks for comparison only. Publication
+	// still chooses the version, so an unresolved final digest stays unresolved.
+	comparison, err := spec.BuildApplyPackageWithSkillRefs(pkg.compiled, comparisonRefs)
+	if err != nil {
+		return false, err
+	}
+	return comparison.Digest == existingDigest, nil
+}
+
+func applySkillRef(control *cloud.Client, scope string, publication packageSkillPublication, digest string) (string, error) {
+	if publication.skill == nil {
+		return publication.ref, nil
+	}
+	name, version := publication.name, publication.skill.version
+	ref := fmt.Sprintf("@%s/%s", scope, name)
+	if version != "" {
+		ref += ":" + version
+		record, err := control.GetSkillVersion(scope, name, version)
+		switch {
+		case cloud.IsStatus(err, 404):
+			return ref, nil
+		case err != nil:
+			return "", fmt.Errorf("check skill version %s: %w", ref, err)
+		case record.Digest != digest:
+			return "", fmt.Errorf("skill version %s already exists with different content; bump version in SKILL.md", ref)
+		default:
+			return ref, nil
+		}
+	}
+	record, err := control.GetSkill(scope, name)
+	switch {
+	case cloud.IsStatus(err, 404):
+		return "", nil
+	case err != nil:
+		return "", err
+	case record.Digest != digest:
+		return "", nil
+	case record.Scope != scope || record.Name != name:
+		return "", fmt.Errorf("skill %s resolved to %s", ref, record.Ref)
+	default:
+		return record.Ref, nil
+	}
+}
+
+type applySkillLock struct {
+	Name    string `json:"name"`
+	Ref     string `json:"ref,omitempty"`
+	Digest  string `json:"digest"`
+	Starred bool   `json:"required_rubric,omitempty"`
+}
+
+func readApplyPackageState(
+	pkg *pulledPackage,
+	markdown []byte,
+	manifest *spec.ApplyPackageManifest,
+) (applyPackageState, error) {
+	raw, _, ok := spec.ParseFrontmatter(string(markdown))
+	if !ok {
+		return applyPackageState{}, fmt.Errorf("spec has no valid YAML frontmatter")
+	}
+	state := applyPackageState{
+		Ref: pkg.reference.ref, Digest: pkg.digest, Spec: string(markdown), data: pkg.data,
+	}
+	if name, ok := raw["name"].(string); ok {
+		state.Name = strings.TrimSpace(name)
+	}
+	if version, ok := raw["version"].(string); ok {
+		state.Version = strings.TrimSpace(version)
+	}
+	if interval, ok := raw["interval"]; ok {
+		duration, err := time.ParseDuration(strings.TrimSpace(fmt.Sprint(interval)))
+		if err != nil || duration < 0 || duration%time.Second != 0 {
+			return applyPackageState{}, fmt.Errorf("invalid interval %q", interval)
+		}
+		seconds := int(duration / time.Second)
+		state.IntervalSeconds = &seconds
+	}
+	for _, name := range slices.Sorted(maps.Keys(manifest.Skills)) {
+		lock := manifest.Skills[name]
+		ref := strings.TrimSpace(lock.Ref)
+		if ref == "" {
+			ref = strings.TrimSpace(manifest.SkillProvenance[name].Ref)
+		}
+		state.Skills = append(state.Skills, applySkillLock{
+			Name:    name,
+			Ref:     ref,
+			Digest:  strings.TrimSpace(lock.Digest),
+			Starred: lock.Starred,
+		})
+	}
+	return state, nil
 }
