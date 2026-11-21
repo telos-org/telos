@@ -19,10 +19,20 @@ import (
 // 2 is a usage error, and any other code is the command's own.
 const execFailed = 255
 
+// execMaxTimeout is how long a command may run. Telos Cloud is reached
+// through Cloudflare, which drops a request that has had no answer for 100 s,
+// and Cloud caps a command at the same 80 s.
+//
+// TODO: longer work, such as a full build, needs an exec that starts the
+// command and is polled for its result, not a longer request.
+const execMaxTimeout = 80 * time.Second
+
 const execUsage = "telos exec GOAL [flags] -- COMMAND [ARG...]\n\n" +
 	"Runs COMMAND, with no shell, in the workspace of a Cloud Goal that\n" +
 	"telos pause has paused. Exits with COMMAND's exit code, with 255 if Telos\n" +
-	"fails, and with 2 for a usage error."
+	"fails, and with 2 for a usage error.\n\n" +
+	"A command runs for at most 80s, 1m by default: Telos Cloud is reached\n" +
+	"through a proxy that drops a request with no answer after 100s."
 
 // cmdExec runs one command in a paused Goal's workspace and passes on its
 // output and exit code.
@@ -34,7 +44,7 @@ func cmdExec(args []string) {
 	}
 	fs := newCommandFlagSet("exec", execUsage)
 	stdinPath := fs.String("stdin", "", "File to give the command as its stdin, or - for this command's stdin")
-	timeout := fs.Duration("timeout", time.Minute, "How long the command may run, from 1s to 80s")
+	timeout := fs.Duration("timeout", time.Minute, "How long the command may run, from 1s to 80s (see above)")
 	jsonOut := fs.Bool("json", false, "JSON output, with stdout and stderr as base64")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -48,7 +58,7 @@ func cmdExec(args []string) {
 		execUsageError(fs, "expected GOAL -- COMMAND")
 	case isLocalApplyID(goalID):
 		execUsageError(fs, "exec works only for Cloud Goals")
-	case *timeout < time.Second || *timeout > 80*time.Second: // as Cloud caps it, under Cloudflare's 100 s
+	case *timeout < time.Second || *timeout > execMaxTimeout:
 		execUsageError(fs, "--timeout must be from 1s to 80s")
 	}
 
