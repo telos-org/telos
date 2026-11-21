@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -259,11 +260,11 @@ func (h *handler) pauseSession(w http.ResponseWriter, r *http.Request) {
 	var req SessionPauseRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSessionRequestBytes))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil || req.Paused == nil {
-		writeError(w, http.StatusBadRequest, `body must be {"paused": true|false}`)
+	if err := dec.Decode(&req); err != nil || req.Paused == nil || !req.valid() || (!*req.Paused && req.Message != "") {
+		writeError(w, http.StatusBadRequest, `body must be {"paused": true|false}, with "message" and "operator" together when pausing`)
 		return
 	}
-	h.writeRootMutation(w, func() (*Session, error) { return h.store.Pause(id, *req.Paused) })
+	h.writeRootMutation(w, id, "pause", req.Note, func() (*Session, error) { return h.store.Pause(id, *req.Paused) })
 }
 
 // resumeSession clears a block. Turning a pause off is PUT .../pause.
@@ -272,11 +273,23 @@ func (h *handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionPauseSession, SessionID: id}); !ok {
 		return
 	}
-	h.writeRootMutation(w, func() (*Session, error) { return h.store.Resume(id) })
+	var note Note
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSessionRequestBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&note); (err != nil && err != io.EOF) || !note.valid() {
+		writeError(w, http.StatusBadRequest, `body must be empty or {"message", "operator"}`)
+		return
+	}
+	h.writeRootMutation(w, id, "resume", note, func() (*Session, error) { return h.store.Resume(id) })
 }
 
-func (h *handler) writeRootMutation(w http.ResponseWriter, mutate func() (*Session, error)) {
+// writeRootMutation pauses or resumes, then writes the person's note, if any,
+// marked with source.
+func (h *handler) writeRootMutation(w http.ResponseWriter, id, source string, note Note, mutate func() (*Session, error)) {
 	session, err := mutate()
+	if err == nil && note.Message != "" {
+		err = h.store.WriteNote(id, source, note)
+	}
 	switch {
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())

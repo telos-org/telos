@@ -18,6 +18,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/telos-org/telos/internal/evidence"
+	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/spec"
 )
 
@@ -70,6 +72,7 @@ type Store interface {
 	Stop(id string) (*Session, error)
 	Pause(id string, paused bool) (*Session, error)
 	Resume(id string) (*Session, error)
+	WriteNote(id, source string, note Note) error
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
 }
@@ -952,6 +955,29 @@ func (fs *FileStore) Resume(id string) (*Session, error) {
 			m.Issue = nil
 		}
 	})
+}
+
+// WriteNote leaves a person's note for the agents of a root session: an
+// <external_update> entry marked `Source: <source>` in the transcript, which
+// they read when they next run, and an external_update event in the evidence
+// beside it, which `telos logs` shows.
+func (fs *FileStore) WriteNote(id, source string, note Note) error {
+	m, err := ReadManifest(fs.manifestPath(id))
+	if err != nil {
+		return err
+	}
+	event := specUpdateEvent(id, m, SpecUpdateEvent{})
+	if err := game.InitializeTranscript(event.TranscriptPath, id, m.SpecName, event.EvidencePath, m.CreatedAt); err != nil {
+		return err
+	}
+	text := fmt.Sprintf("Operator: %s\n\n%s", note.Operator, note.Message)
+	if err := game.AppendExternalUpdate(event.TranscriptPath, game.ExternalUpdate{Source: source, Message: text}); err != nil {
+		return err
+	}
+	ev := evidence.New(m.SpecName, event.EvidencePath, id, event.EpochID)
+	ev.StartedAt = m.CreatedAt
+	ev.Log("external_update", 0, "system", map[string]any{"source": source, "operator": note.Operator, "message": note.Message})
+	return nil
 }
 
 func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest)) (*Session, error) {

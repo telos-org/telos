@@ -367,9 +367,24 @@ type Session struct {
 	Paused bool `json:"paused"`
 }
 
-// SessionPauseRequest is the body of PUT /api/sessions/{id}/pause.
+// SessionPauseRequest is the body of PUT /api/sessions/{id}/pause. A note is
+// written only when pausing. Cloud's status poll sends Paused alone.
 type SessionPauseRequest struct {
 	Paused *bool `json:"paused"`
+	Note
+}
+
+// Note is what a person tells the agents when they pause or resume a goal,
+// and who they are. It is the body of POST /api/sessions/{id}/resume, which
+// may also be empty. A Note with no Message writes nothing.
+type Note struct {
+	Message  string `json:"message,omitempty"`
+	Operator string `json:"operator,omitempty"`
+}
+
+// valid reports whether the note has both fields or neither.
+func (n Note) valid() bool {
+	return (n.Message == "") == (n.Operator == "")
 }
 
 // --------- Response types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------

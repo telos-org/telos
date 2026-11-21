@@ -47,7 +47,7 @@ Transcript items can contain the following types of XML entries:
 
 - <progress_update> ... </progress_update> messages which are incremental, short updates in simplified language. These updates should contain high level progress updates as pertaining to the goal specification. Avoid narrating routine implementation details.
 
-- <external_update> ... </external_update> messages are either spec updates or other runtime level updates from the end user. Read the current spec and available diff to identify required reconciliation work.
+- <external_update> ... </external_update> messages are either spec updates or other runtime level updates from the end user. Read the current spec and available diff to identify required reconciliation work. An update marked `Source: pause` or `Source: resume` comes from a person, and the commands it points to in `exec.jsonl` were run by that person: read them as history, do not rerun them, and keep that person's change.
 
 Emit <progress_update> periodically (at least every 20 minutes, or when a milestone occurs in the implementation or evaluation process - whichever one is sooner) as assistant messages; do not edit the transcript yourself, the agent runtime will parse <progress_update> automatically.
 
