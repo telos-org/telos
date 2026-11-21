@@ -256,7 +256,7 @@ func (h *handler) stopSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) pauseSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionOperateSession, SessionID: id}); !ok {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionPauseSession, SessionID: id}); !ok {
 		return
 	}
 	var req SessionPauseRequest
@@ -273,7 +273,7 @@ func (h *handler) pauseSession(w http.ResponseWriter, r *http.Request) {
 // resumeSession clears a block. Turning a pause off is PUT .../pause.
 func (h *handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionOperateSession, SessionID: id}); !ok {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionPauseSession, SessionID: id}); !ok {
 		return
 	}
 	var note Note
@@ -291,7 +291,7 @@ func (h *handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 // its request goes away.
 func (h *handler) execCommand(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionOperateSession, SessionID: id}); !ok {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionPauseSession, SessionID: id}); !ok {
 		return
 	}
 	var req ExecRequest
