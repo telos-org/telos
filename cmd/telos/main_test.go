@@ -105,6 +105,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 		"delete GOAL        Delete a Goal",
 		"pause GOAL         Stop a Goal's agents; its app keeps running",
 		"resume GOAL        Restart a paused or blocked Goal's agents",
+		"exec GOAL -- CMD   Run a command in a paused Goal's workspace",
 		"pull PACKAGE       Download a spec or skill package",
 		"version            Show version",
 		"update [VERSION]   Update installed Telos components to one release",

@@ -677,6 +677,40 @@ func (c *Client) postSession(sessionID, action, message string) (*SessionRecord,
 	return &response, nil
 }
 
+// Exec runs argv in a paused Goal's workspace, with no shell, and returns the
+// runtime's answer once the command has finished or reached its time limit. A
+// nonzero exit code is an answer, not an error.
+func (c *Client) Exec(goalID string, argv []string, stdin []byte, timeout time.Duration) (*sessionapi.ExecResponse, error) {
+	body, err := json.Marshal(map[string]any{
+		"argv":      argv,
+		"stdin_b64": base64.StdEncoding.EncodeToString(stdin),
+		"timeout_s": int((timeout + time.Second - 1) / time.Second),
+	})
+	if err != nil {
+		return nil, err
+	}
+	// The answer comes when the command ends, so wait for its time limit on
+	// top of the usual timeout.
+	waiting, httpClient := *c, *c.HTTP
+	if httpClient.Timeout > 0 {
+		httpClient.Timeout += timeout
+	}
+	waiting.HTTP = &httpClient
+	resp, err := waiting.do(http.MethodPost, "/api/deployments/"+url.PathEscape(goalID)+"/exec", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var answer sessionapi.ExecResponse
+	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
+		return nil, err
+	}
+	return &answer, nil
+}
+
 func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {
 	resp, err := c.do("DELETE", "/api/deployments/"+url.PathEscape(sessionID), nil)
 	if err != nil {

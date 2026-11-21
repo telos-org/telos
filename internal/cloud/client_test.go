@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
@@ -959,5 +960,21 @@ func TestSharedAPIModel(t *testing.T) {
 		if decoded.Runtime != s.Runtime {
 			t.Errorf("runtime round-trip: got %q", decoded.Runtime)
 		}
+	}
+}
+
+func TestExecWaitsPastTheUsualTimeoutForTheCommandsTimeLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method+" "+r.URL.Path != "POST /api/deployments/goal_1/exec" {
+			t.Errorf("unexpected request %s %s", r.Method, r.URL.Path)
+		}
+		time.Sleep(200 * time.Millisecond) // the command runs
+		_, _ = w.Write([]byte(`{"exit_code":0}`))
+	}))
+	defer srv.Close()
+	client := NewClient(srv.URL, "token")
+	client.HTTP.Timeout = 50 * time.Millisecond
+	if _, err := client.Exec("goal_1", []string{"make"}, nil, 2*time.Second); err != nil {
+		t.Fatal(err)
 	}
 }

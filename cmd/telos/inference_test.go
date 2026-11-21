@@ -302,6 +302,8 @@ func TestInferenceCLIProcess(t *testing.T) {
 		cmdPause(args[1:])
 	case "resume":
 		cmdResume(args[1:])
+	case "exec":
+		cmdExec(args[1:])
 	default:
 		os.Exit(2)
 	}
