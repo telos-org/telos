@@ -41,10 +41,10 @@ func TestExecPassesOnTheCommandsOutputAndExitCode(t *testing.T) {
 			name:   "output cut",
 			args:   []string{"goal_1", "--", "cat", "big"},
 			status: http.StatusOK,
-			answer: `{"exit_code":0,"stdout_b64":"` + b64([]byte("partial")) + `","stdout_truncated":true}`,
+			answer: `{"exit_code":1,"stdout_b64":"` + b64([]byte("partial")) + `","stdout_truncated":true}`,
 			stdout: "partial",
-			stderr: "error: the command exited with code 0, but its output was cut at 24 MiB per stream. Write the output to a file on the Goal and read it in parts.\n",
-			exit:   execFailed,
+			stderr: "warning: the output was cut at 24 MiB per stream. Write the output to a file on the Goal and read it in parts.\n",
+			exit:   1,
 		},
 		{
 			name:   "refused",

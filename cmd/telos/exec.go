@@ -15,15 +15,14 @@ import (
 
 // -- exec ---------------------------------------------------------------------
 
-// execFailed is the exit code of telos exec when Telos fails or the command's
-// output is incomplete, as ssh uses it. 2 is a usage error, and any other code
-// is the command's own.
+// execFailed is the exit code of telos exec when Telos fails, as ssh uses it.
+// 2 is a usage error, and any other code is the command's own.
 const execFailed = 255
 
 const execUsage = "telos exec GOAL [flags] -- COMMAND [ARG...]\n\n" +
 	"Runs COMMAND, with no shell, in the workspace of a Cloud Goal that\n" +
 	"telos pause has paused. Exits with COMMAND's exit code, with 255 if Telos\n" +
-	"fails or the output is incomplete, and with 2 for a usage error."
+	"fails, and with 2 for a usage error."
 
 // cmdExec runs one command in a paused Goal's workspace and passes on its
 // output and exit code.
@@ -81,8 +80,7 @@ func cmdExec(args []string) {
 		fmt.Fprintf(os.Stderr, "error: the command was stopped at its time limit of %s. To allow more time, use --timeout, up to 80s.\n", *timeout)
 	}
 	if result.StdoutTruncated || result.StderrTruncated {
-		fmt.Fprintf(os.Stderr, "error: the command exited with code %d, but its output was cut at 24 MiB per stream. Write the output to a file on the Goal and read it in parts.\n", result.ExitCode)
-		os.Exit(execFailed)
+		fmt.Fprintln(os.Stderr, "warning: the output was cut at 24 MiB per stream. Write the output to a file on the Goal and read it in parts.")
 	}
 	os.Exit(result.ExitCode)
 }
