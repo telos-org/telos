@@ -179,31 +179,51 @@ func TestExecRunsOneCommandAtATimeUntilThePauseLifts(t *testing.T) {
 
 func TestExecStopsTheCommandAtItsLimits(t *testing.T) {
 	srv, _, id, _ := newPausedGoal(t)
-
-	_, resp, _ := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"sleep", "60"}, TimeoutS: 1})
-	if !resp.TimedOut || resp.ExitCode != 128+int(syscall.SIGTERM) {
-		t.Errorf("a command past its time limit = %+v", resp)
+	run := func(t *testing.T, argv ...string) sessionapi.ExecResponse {
+		t.Helper()
+		_, resp, _ := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: argv, TimeoutS: 2})
+		return resp
 	}
 
-	_, resp, _ = execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"head", "-c", "25165825", "/dev/zero"}})
-	if !resp.StdoutTruncated || len(decodeB64(t, resp.StdoutB64)) != 24<<20 || resp.ExitCode != 0 {
-		t.Errorf("a command with more than 24 MiB of output: exit %d, cut %t, %d bytes", resp.ExitCode, resp.StdoutTruncated, len(decodeB64(t, resp.StdoutB64)))
-	}
-
-	_, resp, _ = execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"no-such-program"}})
-	if resp.ExitCode != 127 || !strings.Contains(decodeB64(t, resp.StderrB64), "no-such-program") {
-		t.Errorf("a program that is not found = %+v", resp)
-	}
-
-	// What the command leaves running in its process group is killed when it
-	// exits.
-	_, resp, _ = execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"sh", "-c", "sleep 60 & echo $!"}})
-	var pid int
-	if _, err := fmt.Sscan(decodeB64(t, resp.StdoutB64), &pid); err != nil || resp.ExitCode != 0 {
-		t.Fatalf("background command = %+v", resp)
-	}
-	waitFor(t, "the background process to be killed", func() bool {
-		return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+	t.Run("time limit", func(t *testing.T) {
+		if resp := run(t, "sleep", "60"); !resp.TimedOut || resp.ExitCode != 128+int(syscall.SIGTERM) {
+			t.Errorf("a command past its time limit = %+v", resp)
+		}
+	})
+	t.Run("24 MiB of output", func(t *testing.T) {
+		resp := run(t, "head", "-c", "25165825", "/dev/zero")
+		if !resp.StdoutTruncated || len(decodeB64(t, resp.StdoutB64)) != 24<<20 || resp.ExitCode != 0 {
+			t.Errorf("exit %d, cut %t, %d bytes", resp.ExitCode, resp.StdoutTruncated, len(decodeB64(t, resp.StdoutB64)))
+		}
+	})
+	t.Run("program not found", func(t *testing.T) {
+		if resp := run(t, "no-such-program"); resp.ExitCode != 127 || !strings.Contains(decodeB64(t, resp.StderrB64), "no-such-program") {
+			t.Errorf("a program that is not found = %+v", resp)
+		}
+	})
+	t.Run("what it leaves in its group is killed", func(t *testing.T) {
+		resp := run(t, "sh", "-c", "sleep 60 & echo $!")
+		var pid int
+		if _, err := fmt.Sscan(decodeB64(t, resp.StdoutB64), &pid); err != nil || resp.ExitCode != 0 {
+			t.Fatalf("background command = %+v", resp)
+		}
+		waitFor(t, "the background process to be killed", func() bool {
+			return errors.Is(syscall.Kill(pid, 0), syscall.ESRCH)
+		})
+	})
+	t.Run("output held open outside its group", func(t *testing.T) {
+		// The child leaves the group, as `pg_ctl start` does, and keeps
+		// stdout open. The answer comes once the stop grace is over.
+		began := time.Now()
+		resp := run(t, "perl", "-e", `$|=1; if ($p = fork) { print "$p\n"; exit 0 } setpgrp; sleep 60`)
+		var pid int
+		if _, err := fmt.Sscan(decodeB64(t, resp.StdoutB64), &pid); err != nil || resp.ExitCode != 0 || resp.TimedOut {
+			t.Fatalf("command = %+v", resp)
+		}
+		_ = syscall.Kill(pid, syscall.SIGKILL)
+		if took := time.Since(began); took > 15*time.Second {
+			t.Errorf("the answer took %s", took)
+		}
 	})
 }
 
@@ -227,26 +247,34 @@ func TestResumeNotePointsAtTheCommandsRunSinceThePause(t *testing.T) {
 		{"PUT", "/pause", `{"paused":false}`},
 		{"PUT", "/pause", `{"paused":true,"message":"Fixing the header.","operator":"ada@example.com"}`},
 		{"POST", "/exec", `{"argv":["true"],"operator":"ada@example.com"}`},
-		{"POST", "/resume", `{"message":"Fixed the header.","operator":"ada@example.com"}`},
 	} {
 		if code, body := operatorCall(t, srv, step.method, base+step.path, step.body); code != http.StatusOK {
 			t.Fatalf("%s %s = %d %s", step.method, step.path, code, body)
 		}
 	}
-
 	m, err := sessionapi.ReadManifest(filepath.Join(store.Root, id, "session.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
+	pausedAt := m.PausedAt
+	if code, body := operatorCall(t, srv, "POST", base+"/resume", `{"message":"Fixed the header.","operator":"ada@example.com"}`); code != http.StatusOK {
+		t.Fatalf("resume = %d %s", code, body)
+	}
+
 	specDir := filepath.Dir(*m.Specs[0].EvidencePath)
 	transcript, err := os.ReadFile(filepath.Join(specDir, "transcript-"+id+".md"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := fmt.Sprintf("Fixed the header.\n\nCommands a person ran while the agents were paused: 1. "+
-		"They are the lines of `%s` with `ts` after %s.\n</external_update>\n", filepath.Join(specDir, "exec.jsonl"), m.PausedAt)
+		"They are the lines of `%s` with `ts` after %s. Each line holds a command's stdin, stdout and stderr in base64, so read the lines one at a time.\n</external_update>\n",
+		filepath.Join(specDir, "exec.jsonl"), pausedAt)
 	if !strings.HasSuffix(string(transcript), want) {
 		t.Fatalf("transcript does not end with %q:\n%s", want, transcript)
+	}
+	// Once the note is written, a command would miss it, even before the pause lifts.
+	if code, _, detail := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"true"}}); code != http.StatusConflict || !strings.HasPrefix(detail, "This goal is not paused.") {
+		t.Fatalf("exec after the resume note = %d %q", code, detail)
 	}
 
 	// A later resume, with no pause since, points at no commands.

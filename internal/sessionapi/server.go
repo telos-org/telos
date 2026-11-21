@@ -266,7 +266,8 @@ func (h *handler) pauseSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, `body must be {"paused": true|false}, with "message" and "operator" together when pausing`)
 		return
 	}
-	h.writeRootMutation(w, id, "pause", req.Note, func() (*Session, error) { return h.store.Pause(id, *req.Paused) })
+	session, err := h.store.Pause(id, *req.Paused, req.Note)
+	writeResult(w, session, err)
 }
 
 // resumeSession clears a block. Turning a pause off is PUT .../pause.
@@ -282,16 +283,7 @@ func (h *handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, `body must be empty or {"message", "operator"}`)
 		return
 	}
-	h.writeRootMutation(w, id, "resume", note, func() (*Session, error) { return h.store.Resume(id) })
-}
-
-// writeRootMutation pauses or resumes, then writes the person's note, if any,
-// marked with source.
-func (h *handler) writeRootMutation(w http.ResponseWriter, id, source string, note Note, mutate func() (*Session, error)) {
-	session, err := mutate()
-	if err == nil && note.Message != "" {
-		err = h.store.WriteNote(id, source, note)
-	}
+	session, err := h.store.Resume(id, note)
 	writeResult(w, session, err)
 }
 
@@ -320,14 +312,15 @@ func (h *handler) execCommand(w http.ResponseWriter, r *http.Request) {
 
 // writeResult answers a request on a root session with its result or error.
 func writeResult(w http.ResponseWriter, result any, err error) {
-	var refused refusal
 	switch {
-	case errors.As(err, &refused):
-		writeError(w, refused.status, refused.detail)
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, ErrInvalidSession):
+	case errors.Is(err, ErrInvalidSession), errors.Is(err, ErrInvalidRequest):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrConflict):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrTooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	default:

@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,8 +31,15 @@ var ErrNotFound = errors.New("not found")
 // or would violate session identity.
 var ErrInvalidSession = errors.New("invalid session")
 
-// ErrConflict is returned when a request would create duplicate live state.
+// ErrConflict is returned when a request would create duplicate live state,
+// or cannot be carried out in the session's current state.
 var ErrConflict = errors.New("conflict")
+
+// ErrInvalidRequest is returned for a request body telosd cannot accept.
+var ErrInvalidRequest = errors.New("invalid request")
+
+// ErrTooLarge is returned for a request over one of telosd's size limits.
+var ErrTooLarge = errors.New("too large")
 
 var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
@@ -72,9 +78,8 @@ type Store interface {
 	List() ([]Session, error)
 	Get(id string) (*Session, error)
 	Stop(id string) (*Session, error)
-	Pause(id string, paused bool) (*Session, error)
-	Resume(id string) (*Session, error)
-	WriteNote(id, source string, note Note) error
+	Pause(id string, paused bool, note Note) (*Session, error)
+	Resume(id string, note Note) (*Session, error)
 	Exec(ctx context.Context, id string, req ExecRequest) (*ExecResponse, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
@@ -944,48 +949,60 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 // and a worker waiting out a retry sees its goal changed even if the pause
 // lifts before its next check.
 //
-// Lifting the pause stops a running command.
-func (fs *FileStore) Pause(id string, paused bool) (*Session, error) {
+// Lifting the pause stops a running command. A note with a message is left
+// for the agents (see writeNote).
+func (fs *FileStore) Pause(id string, paused bool, note Note) (*Session, error) {
 	return fs.mutateRoot(id, func(m *Manifest) error {
 		if cancel := fs.execs[id]; cancel != nil && !paused {
 			cancel()
 		}
-		if paused && !m.Paused {
+		switch {
+		case !paused:
+			m.PausedAt = ""
+		case m.PausedAt == "":
 			m.PausedAt = execNow()
 		}
 		m.Paused = paused
 		if paused && m.Issue != nil && m.Issue.Status == IssueRetrying {
 			m.Issue = nil
 		}
-		return nil
+		return fs.writeNote(id, m, "pause", note, "")
 	})
 }
 
 // Resume clears a blocked issue so agents work on the spec again. It leaves
 // the pause alone: PUT .../pause owns that, so an account hold Cloud keeps on
-// survives a Resume. It refuses while a command runs, so that the resume note
-// counts every command.
-func (fs *FileStore) Resume(id string) (*Session, error) {
+// survives a Resume.
+//
+// A note with a message is left for the agents, pointing them at the
+// commands run since the pause. Exec refuses from then on, and Resume refuses
+// while a command runs, so the note counts every command.
+func (fs *FileStore) Resume(id string, note Note) (*Session, error) {
 	return fs.mutateRoot(id, func(m *Manifest) error {
 		if fs.execs[id] != nil {
-			return refusal{http.StatusConflict, "A command is still running. Wait for it to finish, then resume."}
+			return refusal{ErrConflict, "A command is still running. Wait for it to finish, then resume."}
 		}
 		if m.Issue.Blocked() {
 			m.Issue = nil
 		}
-		return nil
+		if note.Message == "" {
+			return nil
+		}
+		since := m.PausedAt
+		m.PausedAt = ""
+		return fs.writeNote(id, m, "resume", note, since)
 	})
 }
 
-// WriteNote leaves a person's note for the agents of a root session: an
-// <external_update> entry marked `Source: <source>` in the transcript, which
-// they read when they next run, and an external_update event in the evidence
-// beside it, which `telos logs` shows. If the goal is paused and commands ran
-// since it was paused, the entry says how many and where they are.
-func (fs *FileStore) WriteNote(id, source string, note Note) error {
-	m, err := ReadManifest(fs.manifestPath(id))
-	if err != nil {
-		return err
+// writeNote leaves a person's note, if it has a message, for the agents of a
+// root session: an <external_update> entry marked `Source: <source>` in the
+// transcript, which they read when they next run, and an external_update
+// event in the evidence beside it, which `telos logs` shows. If commands ran
+// after the time since, the entry says how many and where they are. The
+// caller holds fs.mu.
+func (fs *FileStore) writeNote(id string, m *Manifest, source string, note Note, since string) error {
+	if note.Message == "" {
+		return nil
 	}
 	log, err := execLogPath(m)
 	if err != nil {
@@ -996,8 +1013,9 @@ func (fs *FileStore) WriteNote(id, source string, note Note) error {
 		return err
 	}
 	text := fmt.Sprintf("Operator: %s\n\n%s", note.Operator, note.Message)
-	if n := commandsSince(log, m.PausedAt); m.Paused && n > 0 {
-		text += fmt.Sprintf("\n\nCommands a person ran while the agents were paused: %d. They are the lines of `%s` with `ts` after %s.", n, log, m.PausedAt)
+	if n := commandsSince(log, since); n > 0 {
+		text += fmt.Sprintf("\n\nCommands a person ran while the agents were paused: %d. They are the lines of `%s` with `ts` after %s. "+
+			"Each line holds a command's stdin, stdout and stderr in base64, so read the lines one at a time.", n, log, since)
 	}
 	if err := game.AppendExternalUpdate(event.TranscriptPath, game.ExternalUpdate{Source: source, Message: text}); err != nil {
 		return err

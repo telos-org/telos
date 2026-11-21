@@ -381,7 +381,9 @@ type SessionPauseRequest struct {
 // and who they are. It is the body of POST /api/sessions/{id}/resume, which
 // may also be empty. A Note with no Message writes nothing.
 type Note struct {
-	Message  string `json:"message,omitempty"`
+	Message string `json:"message,omitempty"`
+	// Operator is the person, such as their email; not the operator role of
+	// Cloud's token.
 	Operator string `json:"operator,omitempty"`
 }
 

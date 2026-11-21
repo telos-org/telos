@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -68,14 +67,15 @@ type execRecord struct {
 	ExecResponse
 }
 
-// refusal is a request telosd will not carry out, and the HTTP status that
-// reports it.
+// refusal is a request telosd will not carry out: its kind, ErrConflict,
+// ErrInvalidRequest or ErrTooLarge, and the sentence that says why.
 type refusal struct {
-	status int
+	kind   error
 	detail string
 }
 
 func (e refusal) Error() string { return e.detail }
+func (e refusal) Unwrap() error { return e.kind }
 
 // Exec runs one command in a paused root session's workspace and appends it
 // to exec.jsonl once it has finished. The command stops when ctx is done, at
@@ -84,15 +84,15 @@ func (fs *FileStore) Exec(ctx context.Context, id string, req ExecRequest) (*Exe
 	stdin, err := base64.StdEncoding.DecodeString(req.StdinB64)
 	switch {
 	case len(req.Argv) == 0 || req.Argv[0] == "":
-		return nil, refusal{http.StatusBadRequest, "The argv field must name a program to run."}
+		return nil, refusal{ErrInvalidRequest, "The argv field must name a program to run."}
 	case req.Operator == "":
-		return nil, refusal{http.StatusBadRequest, "The operator field is required."}
+		return nil, refusal{ErrInvalidRequest, "The operator field is required."}
 	case req.TimeoutS < 0 || req.TimeoutS > execMaxTimeoutS:
-		return nil, refusal{http.StatusBadRequest, fmt.Sprintf("The timeout_s field must be from 1 to %d.", execMaxTimeoutS)}
+		return nil, refusal{ErrInvalidRequest, fmt.Sprintf("The timeout_s field must be from 1 to %d, or left out for %d.", execMaxTimeoutS, execDefaultTimeoutS)}
 	case err != nil:
-		return nil, refusal{http.StatusBadRequest, "The stdin_b64 field is not valid base64."}
+		return nil, refusal{ErrInvalidRequest, "The stdin_b64 field is not valid base64."}
 	case len(stdin) > execStdinMaxBytes:
-		return nil, refusal{http.StatusRequestEntityTooLarge, "The stdin is larger than 2 MiB."}
+		return nil, refusal{ErrTooLarge, "The stdin is larger than 2 MiB."}
 	}
 
 	fs.mu.Lock()
@@ -146,7 +146,7 @@ func (fs *FileStore) Exec(ctx context.Context, id string, req ExecRequest) (*Exe
 func (fs *FileStore) execRefusal(id string, m *Manifest) error {
 	detail := ""
 	switch {
-	case !m.Paused:
+	case m.PausedAt == "": // never paused, or the resume note is already written
 		detail = "This goal is not paused. Run `telos pause GOAL -m MESSAGE` first."
 	case fs.agentTurnRunning(id):
 		detail = "The agents are still stopping. Try again in a few seconds."
@@ -155,7 +155,7 @@ func (fs *FileStore) execRefusal(id string, m *Manifest) error {
 	default:
 		return nil
 	}
-	return refusal{http.StatusConflict, detail}
+	return refusal{ErrConflict, detail}
 }
 
 // agentTurnRunning reports whether the root session or one of its children
@@ -192,11 +192,11 @@ func execNow() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.000000Z")
 }
 
-// commandsSince counts the lines of an exec.jsonl with ts after since. It
-// stops at a line it cannot read.
+// commandsSince counts the lines of an exec.jsonl with ts after since, and
+// none when since is empty. It stops at a line it cannot read.
 func commandsSince(path, since string) int {
 	f, err := os.Open(path)
-	if err != nil {
+	if err != nil || since == "" {
 		return 0
 	}
 	defer f.Close()
