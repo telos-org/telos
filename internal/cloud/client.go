@@ -645,18 +645,24 @@ func (c *Client) GetSession(sessionID string) (*SessionRecord, error) {
 	return getJSONWithRetry[SessionRecord](context.Background(), c, "/api/deployments/"+url.PathEscape(sessionID))
 }
 
-// PauseSession stops a Goal's agents until ResumeSession. Workspace admins only.
-func (c *Client) PauseSession(sessionID string) (*SessionRecord, error) {
-	return c.postSession(sessionID, "pause")
+// PauseSession stops a Goal's agents until ResumeSession. The message tells
+// the agents why. Workspace admins only.
+func (c *Client) PauseSession(sessionID, message string) (*SessionRecord, error) {
+	return c.postSession(sessionID, "pause", message)
 }
 
 // ResumeSession lifts a pause and has the runtime check a blocked Goal again.
-func (c *Client) ResumeSession(sessionID string) (*SessionRecord, error) {
-	return c.postSession(sessionID, "resume")
+// The message is the note the agents wake up to.
+func (c *Client) ResumeSession(sessionID, message string) (*SessionRecord, error) {
+	return c.postSession(sessionID, "resume", message)
 }
 
-func (c *Client) postSession(sessionID, action string) (*SessionRecord, error) {
-	resp, err := c.do("POST", "/api/deployments/"+url.PathEscape(sessionID)+"/"+action, nil)
+func (c *Client) postSession(sessionID, action, message string) (*SessionRecord, error) {
+	body, err := json.Marshal(map[string]string{"message": message})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("POST", "/api/deployments/"+url.PathEscape(sessionID)+"/"+action, body)
 	if err != nil {
 		return nil, err
 	}
