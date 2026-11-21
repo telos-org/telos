@@ -25,6 +25,7 @@ const maxSessionRequestBytes = 4 << 20
 //	POST /api/sessions/{id}/stop
 //	PUT  /api/sessions/{id}/pause
 //	POST /api/sessions/{id}/resume
+//	POST /api/sessions/{id}/exec
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
 //	GET  /api/healthz
@@ -43,6 +44,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("PUT /api/sessions/{id}/pause", h.pauseSession)
 	mux.HandleFunc("POST /api/sessions/{id}/resume", h.resumeSession)
+	mux.HandleFunc("POST /api/sessions/{id}/exec", h.execCommand)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
 }
@@ -254,7 +256,7 @@ func (h *handler) stopSession(w http.ResponseWriter, r *http.Request) {
 
 func (h *handler) pauseSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionPauseSession, SessionID: id}); !ok {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionOperateSession, SessionID: id}); !ok {
 		return
 	}
 	var req SessionPauseRequest
@@ -270,7 +272,7 @@ func (h *handler) pauseSession(w http.ResponseWriter, r *http.Request) {
 // resumeSession clears a block. Turning a pause off is PUT .../pause.
 func (h *handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
-	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionPauseSession, SessionID: id}); !ok {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionOperateSession, SessionID: id}); !ok {
 		return
 	}
 	var note Note
@@ -290,7 +292,38 @@ func (h *handler) writeRootMutation(w http.ResponseWriter, id, source string, no
 	if err == nil && note.Message != "" {
 		err = h.store.WriteNote(id, source, note)
 	}
+	writeResult(w, session, err)
+}
+
+// execCommand runs one command while the goal is paused. The command stops if
+// its request goes away.
+func (h *handler) execCommand(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionOperateSession, SessionID: id}); !ok {
+		return
+	}
+	var req ExecRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSessionRequestBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "The request is larger than 4 MiB.")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+		}
+		return
+	}
+	resp, err := h.store.Exec(r.Context(), id, req)
+	writeResult(w, resp, err)
+}
+
+// writeResult answers a request on a root session with its result or error.
+func writeResult(w http.ResponseWriter, result any, err error) {
+	var refused execError
 	switch {
+	case errors.As(err, &refused):
+		writeError(w, refused.status, refused.detail)
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, ErrInvalidSession):
@@ -298,7 +331,7 @@ func (h *handler) writeRootMutation(w http.ResponseWriter, id, source string, no
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	default:
-		writeJSON(w, http.StatusOK, session)
+		writeJSON(w, http.StatusOK, result)
 	}
 }
 

@@ -7,6 +7,7 @@ go_library(
         "dashboard_doc_open_other.go",
         "dashboard_doc_open_unix.go",
         "events.go",
+        "exec.go",
         "manifest.go",
         "server.go",
         "store.go",
@@ -24,6 +25,7 @@ go_library(
 go_test(
     name = "sessionapi_test",
     srcs = [
+        "exec_test.go",
         "operator_test.go",
         "revision_reactivation_test.go",
         "server_test.go",

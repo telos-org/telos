@@ -365,6 +365,9 @@ type Session struct {
 	Issue          *Issue                 `json:"issue,omitempty"`
 	// Paused is always sent, so callers can tell runtimes that support pausing.
 	Paused bool `json:"paused"`
+	// Exec is always true, so callers can tell runtimes that run commands
+	// with POST /api/sessions/{id}/exec and write pause and resume notes.
+	Exec bool `json:"exec"`
 }
 
 // SessionPauseRequest is the body of PUT /api/sessions/{id}/pause. A note is
@@ -412,6 +415,7 @@ type SessionListItem struct {
 	Issue          *Issue                 `json:"issue,omitempty"`
 	// Paused is always sent, so callers can tell runtimes that support pausing.
 	Paused bool `json:"paused"`
+	Exec   bool `json:"exec"`
 }
 
 // SessionListResponse wraps GET /api/sessions.
@@ -450,6 +454,7 @@ func SessionListItemFromSession(session Session) SessionListItem {
 		Reconciliation:     session.Reconciliation,
 		Issue:              session.Issue,
 		Paused:             session.Paused,
+		Exec:               session.Exec,
 	}
 }
 
@@ -475,6 +480,7 @@ func (item SessionListItem) AsSession() Session {
 		Reconciliation:     item.Reconciliation,
 		Issue:              item.Issue,
 		Paused:             item.Paused,
+		Exec:               item.Exec,
 	}
 }
 

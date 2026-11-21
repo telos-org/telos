@@ -65,6 +65,9 @@ func (s *fakeReconcileStore) Resume(string) (*sessionapi.Session, error) {
 func (s *fakeReconcileStore) WriteNote(string, string, sessionapi.Note) error {
 	return sessionapi.ErrNotFound
 }
+func (s *fakeReconcileStore) Exec(context.Context, string, sessionapi.ExecRequest) (*sessionapi.ExecResponse, error) {
+	return nil, sessionapi.ErrNotFound
+}
 func (s *fakeReconcileStore) Get(string) (*sessionapi.Session, error) {
 	return nil, sessionapi.ErrNotFound
 }

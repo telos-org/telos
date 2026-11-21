@@ -2967,7 +2967,7 @@ func itoa(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-func TestPauseAndResumeRootSession(t *testing.T) {
+func TestPauseResumeAndExecRootSession(t *testing.T) {
 	srv, store := newBearerTestServer(t, "operator-token")
 	defer srv.Close()
 	root, rootToken := writeAuthorizedSession(t, store.Root, "sess_root", sessionapi.KindController, nil)
@@ -2995,6 +2995,7 @@ func TestPauseAndResumeRootSession(t *testing.T) {
 	for _, tc := range []struct{ method, path, body, token string }{
 		{"PUT", "/api/sessions/sess_root/pause", `{"paused":false}`, rootToken},
 		{"POST", "/api/sessions/sess_root/resume", "", rootToken},
+		{"POST", "/api/sessions/sess_root/exec", `{"argv":["true"],"operator":"ada"}`, rootToken},
 	} {
 		if code, _ := call(tc.method, tc.path, tc.body, tc.token); code != http.StatusForbidden {
 			t.Fatalf("agent token %s %s = %d, want 403", tc.method, tc.path, code)
@@ -3005,6 +3006,9 @@ func TestPauseAndResumeRootSession(t *testing.T) {
 	}
 	if code, _ := call("PUT", "/api/sessions/"+child.SessionID+"/pause", `{"paused":true}`, "operator-token"); code != http.StatusBadRequest {
 		t.Fatalf("child pause = %d, want 400", code)
+	}
+	if code, _ := call("POST", "/api/sessions/"+child.SessionID+"/exec", `{"argv":["true"],"operator":"ada"}`, "operator-token"); code != http.StatusBadRequest {
+		t.Fatalf("child exec = %d, want 400", code)
 	}
 	if code, _ := call("POST", "/api/sessions/sess_missing/resume", "", "operator-token"); code != http.StatusNotFound {
 		t.Fatalf("missing resume = %d, want 404", code)

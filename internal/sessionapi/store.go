@@ -1,6 +1,7 @@
 package sessionapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -73,6 +74,7 @@ type Store interface {
 	Pause(id string, paused bool) (*Session, error)
 	Resume(id string) (*Session, error)
 	WriteNote(id, source string, note Note) error
+	Exec(ctx context.Context, id string, req ExecRequest) (*ExecResponse, error)
 	Transcript(id string) (string, error)
 	Events(id string) ([]SessionEvent, error)
 }
@@ -87,6 +89,9 @@ type FileStore struct {
 	OnSpecUpdate func(SpecUpdateEvent)
 	runtime      SessionRuntime
 	mu           sync.Mutex
+	// execs cancels the command each root session is running, by session ID.
+	// It is guarded by mu.
+	execs map[string]context.CancelFunc
 }
 
 // NewFileStore returns a FileStore rooted at the given directory.
@@ -937,8 +942,13 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 // on, so pausing also clears a retrying issue: paused agents are not retrying,
 // and a worker waiting out a retry sees its goal changed even if the pause
 // lifts before its next check.
+//
+// Lifting the pause stops a running command.
 func (fs *FileStore) Pause(id string, paused bool) (*Session, error) {
 	return fs.mutateRoot(id, func(m *Manifest) {
+		if cancel := fs.execs[id]; cancel != nil && !paused {
+			cancel()
+		}
 		m.Paused = paused
 		if paused && m.Issue != nil && m.Issue.Status == IssueRetrying {
 			m.Issue = nil
@@ -983,13 +993,10 @@ func (fs *FileStore) WriteNote(id, source string, note Note) error {
 func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest)) (*Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	if !fileExists(fs.manifestPath(id)) {
-		return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+	if _, err := fs.readRoot(id); err != nil {
+		return nil, err
 	}
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
-		if !isTopLevelManifest(m) || m.SessionKind != KindController {
-			return fmt.Errorf("only root sessions can be paused or resumed: %w", ErrInvalidSession)
-		}
 		mutate(m)
 		return nil
 	})
@@ -997,6 +1004,21 @@ func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest)) (*Session, er
 		return nil, err
 	}
 	return fs.deriveSession(id, m)
+}
+
+// readRoot reads the manifest of a root session, the only kind that can be
+// paused, resumed or run a command in.
+func (fs *FileStore) readRoot(id string) (*Manifest, error) {
+	m, err := ReadManifest(fs.manifestPath(id))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+	case err != nil:
+		return nil, err
+	case !isTopLevelManifest(m) || m.SessionKind != KindController:
+		return nil, fmt.Errorf("only root sessions can be paused, resumed or run a command in: %w", ErrInvalidSession)
+	}
+	return m, nil
 }
 
 // Transcript returns the session transcript markdown for the first spec.
@@ -1167,6 +1189,7 @@ func (fs *FileStore) deriveSessionWithEvidence(id string, m *Manifest, includeEv
 		Reconciliation:        deriveReconciliation(m),
 		Issue:                 m.Issue,
 		Paused:                m.Paused,
+		Exec:                  true,
 	}
 
 	if s.Config == nil {
