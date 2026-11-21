@@ -84,6 +84,8 @@ type FileStore struct {
 	OnSpecUpdate func(SpecUpdateEvent)
 	runtime      SessionRuntime
 	mu           sync.Mutex
+	// execMu serializes Exec journal updates.
+	execMu sync.Mutex
 }
 
 // NewFileStore returns a FileStore rooted at the given directory.
@@ -386,6 +388,12 @@ func (fs *FileStore) sessionKindForCreate(req SessionCreateRequest) (SessionKind
 
 func isTopLevelManifest(m *Manifest) bool {
 	return m.ParentSessionID == nil || *m.ParentSessionID == ""
+}
+
+// isRootController reports whether m is a goal's root session, the only kind
+// that can be paused, resumed or taken over.
+func isRootController(m *Manifest) bool {
+	return isTopLevelManifest(m) && m.SessionKind == KindController
 }
 
 func (fs *FileStore) liveTopLevelSessionIDsBySpecName(specName string) ([]string, error) {
@@ -811,8 +819,7 @@ func (fs *FileStore) ListRootWorkerSessions() ([]Session, error) {
 		if err != nil {
 			continue
 		}
-		rootController := isTopLevelManifest(manifest) && manifest.SessionKind == KindController
-		if !rootController {
+		if !isRootController(manifest) {
 			continue
 		}
 		if manifest.IsStopped() {
@@ -961,7 +968,7 @@ func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest)) (*Session, er
 		return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
 	}
 	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
-		if !isTopLevelManifest(m) || m.SessionKind != KindController {
+		if !isRootController(m) {
 			return fmt.Errorf("only root sessions can be paused or resumed: %w", ErrInvalidSession)
 		}
 		mutate(m)

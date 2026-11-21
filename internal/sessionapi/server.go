@@ -24,6 +24,9 @@ const maxSessionRequestBytes = 4 << 20
 //	POST /api/sessions/{id}/stop
 //	PUT  /api/sessions/{id}/pause
 //	POST /api/sessions/{id}/resume
+//	GET  /api/sessions/{id}/exec
+//	POST /api/sessions/{id}/exec/start
+//	POST /api/sessions/{id}/exec/{exec_id}/end
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
 //	GET  /api/healthz
@@ -42,6 +45,9 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("PUT /api/sessions/{id}/pause", h.pauseSession)
 	mux.HandleFunc("POST /api/sessions/{id}/resume", h.resumeSession)
+	mux.HandleFunc("GET /api/sessions/{id}/exec", h.execStatus)
+	mux.HandleFunc("POST /api/sessions/{id}/exec/start", h.execStart)
+	mux.HandleFunc("POST /api/sessions/{id}/exec/{exec_id}/end", h.execEnd)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
 }
@@ -286,6 +292,106 @@ func (h *handler) writeRootMutation(w http.ResponseWriter, mutate func() (*Sessi
 		writeError(w, http.StatusInternalServerError, err.Error())
 	default:
 		writeJSON(w, http.StatusOK, session)
+	}
+}
+
+// execStatus reports the session's most recent Exec takeover.
+func (h *handler) execStatus(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	store, ok := h.execStore(w, r, id)
+	if !ok {
+		return
+	}
+	takeover, err := store.ExecStatus(id)
+	if err != nil {
+		writeExecError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, takeover)
+}
+
+// execStart opens an Exec takeover. It answers 202 while an agent turn is
+// still stopping; the caller repeats the request with the same start_id.
+func (h *handler) execStart(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	store, ok := h.execStore(w, r, id)
+	if !ok {
+		return
+	}
+	var req ExecStartRequest
+	if !decodeExecRequest(w, r, &req) {
+		return
+	}
+	takeover, err := store.ExecStart(id, req)
+	if err != nil {
+		writeExecError(w, err)
+		return
+	}
+	status := http.StatusOK
+	if takeover.State == ExecStarting {
+		status = http.StatusAccepted
+	}
+	writeJSON(w, status, takeover)
+}
+
+// execEnd ends an Exec takeover.
+func (h *handler) execEnd(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	store, ok := h.execStore(w, r, id)
+	if !ok {
+		return
+	}
+	var req ExecEndRequest
+	if !decodeExecRequest(w, r, &req) {
+		return
+	}
+	result, err := store.ExecEnd(id, r.PathValue("exec_id"), req)
+	if err != nil {
+		writeExecError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+// execStore authorizes an Exec request, which only the operator may make, and
+// returns the store that serves it.
+func (h *handler) execStore(w http.ResponseWriter, r *http.Request, id string) (ExecStore, bool) {
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionExecSession, SessionID: id}); !ok {
+		return nil, false
+	}
+	store, ok := h.store.(ExecStore)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, "This runtime does not support Exec.")
+	}
+	return store, ok
+}
+
+// decodeExecRequest reads an Exec request body and reports whether it could.
+func decodeExecRequest(w http.ResponseWriter, r *http.Request, req any) bool {
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSessionRequestBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return false
+	}
+	return true
+}
+
+func writeExecError(w http.ResponseWriter, err error) {
+	var failure *execError
+	switch {
+	case errors.As(err, &failure):
+		body := map[string]string{"detail": failure.detail}
+		if failure.execID != "" {
+			body["exec_id"] = failure.execID
+		}
+		writeJSON(w, failure.status, body)
+	case errors.Is(err, ErrNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, ErrInvalidSession):
+		writeError(w, http.StatusBadRequest, err.Error())
+	default:
+		writeError(w, http.StatusInternalServerError, err.Error())
 	}
 }
 

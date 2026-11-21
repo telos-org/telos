@@ -33,6 +33,7 @@ go_test(
     srcs = [
         "config_test.go",
         "controller_reconciler_test.go",
+        "exec_test.go",
         "package_materializer_test.go",
         "platform_skills_test.go",
         "runtime_identity_test.go",
