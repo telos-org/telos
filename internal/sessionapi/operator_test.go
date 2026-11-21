@@ -57,8 +57,13 @@ func TestPauseAndResumeLeaveTheAgentsANote(t *testing.T) {
 			t.Fatalf("%s %s = %d %s", step.method, step.path, code, body)
 		}
 	}
-	if code, _ := operatorCall(t, srv, "POST", base+"/resume", `{"message":"No name."}`); code != http.StatusBadRequest {
-		t.Fatalf("a message without an operator = %d, want 400", code)
+	for _, step := range []struct{ method, path, body string }{
+		{"POST", "/resume", `{"message":"No name."}`},
+		{"PUT", "/pause", `{"paused":false,"message":"Back to work.","operator":"ada@example.com"}`}, // a note only goes with pausing
+	} {
+		if code, _ := operatorCall(t, srv, step.method, base+step.path, step.body); code != http.StatusBadRequest {
+			t.Fatalf("%s %s %s = %d, want 400", step.method, step.path, step.body, code)
+		}
 	}
 
 	session, err := store.Get(id)

@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -945,7 +946,7 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 //
 // Lifting the pause stops a running command.
 func (fs *FileStore) Pause(id string, paused bool) (*Session, error) {
-	return fs.mutateRoot(id, func(m *Manifest) {
+	return fs.mutateRoot(id, func(m *Manifest) error {
 		if cancel := fs.execs[id]; cancel != nil && !paused {
 			cancel()
 		}
@@ -956,17 +957,23 @@ func (fs *FileStore) Pause(id string, paused bool) (*Session, error) {
 		if paused && m.Issue != nil && m.Issue.Status == IssueRetrying {
 			m.Issue = nil
 		}
+		return nil
 	})
 }
 
 // Resume clears a blocked issue so agents work on the spec again. It leaves
 // the pause alone: PUT .../pause owns that, so an account hold Cloud keeps on
-// survives a Resume.
+// survives a Resume. It refuses while a command runs, so that the resume note
+// counts every command.
 func (fs *FileStore) Resume(id string) (*Session, error) {
-	return fs.mutateRoot(id, func(m *Manifest) {
+	return fs.mutateRoot(id, func(m *Manifest) error {
+		if fs.execs[id] != nil {
+			return refusal{http.StatusConflict, "A command is still running. Wait for it to finish, then resume."}
+		}
 		if m.Issue.Blocked() {
 			m.Issue = nil
 		}
+		return nil
 	})
 }
 
@@ -980,12 +987,15 @@ func (fs *FileStore) WriteNote(id, source string, note Note) error {
 	if err != nil {
 		return err
 	}
+	log, err := execLogPath(m)
+	if err != nil {
+		return err
+	}
 	event := specUpdateEvent(id, m, SpecUpdateEvent{})
 	if err := game.InitializeTranscript(event.TranscriptPath, id, m.SpecName, event.EvidencePath, m.CreatedAt); err != nil {
 		return err
 	}
 	text := fmt.Sprintf("Operator: %s\n\n%s", note.Operator, note.Message)
-	log := execLogPath(m)
 	if n := commandsSince(log, m.PausedAt); m.Paused && n > 0 {
 		text += fmt.Sprintf("\n\nCommands a person ran while the agents were paused: %d. They are the lines of `%s` with `ts` after %s.", n, log, m.PausedAt)
 	}
@@ -998,16 +1008,13 @@ func (fs *FileStore) WriteNote(id, source string, note Note) error {
 	return nil
 }
 
-func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest)) (*Session, error) {
+func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest) error) (*Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 	if _, err := fs.readRoot(id); err != nil {
 		return nil, err
 	}
-	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
-		mutate(m)
-		return nil
-	})
+	m, err := MutateManifest(fs.manifestPath(id), mutate)
 	if err != nil {
 		return nil, err
 	}

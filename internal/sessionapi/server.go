@@ -320,7 +320,7 @@ func (h *handler) execCommand(w http.ResponseWriter, r *http.Request) {
 
 // writeResult answers a request on a root session with its result or error.
 func writeResult(w http.ResponseWriter, result any, err error) {
-	var refused execError
+	var refused refusal
 	switch {
 	case errors.As(err, &refused):
 		writeError(w, refused.status, refused.detail)

@@ -92,7 +92,6 @@ func TestExecRunsACommandInThePausedWorkspaceAndRecordsIt(t *testing.T) {
 		TS       string   `json:"ts"`
 		Operator string   `json:"operator"`
 		Argv     []string `json:"argv"`
-		Cwd      string   `json:"cwd"`
 		TimeoutS int      `json:"timeout_s"`
 		StdinB64 string   `json:"stdin_b64"`
 		sessionapi.ExecResponse
@@ -101,7 +100,7 @@ func TestExecRunsACommandInThePausedWorkspaceAndRecordsIt(t *testing.T) {
 		t.Fatalf("exec.jsonl is not one line:\n%s", log)
 	}
 	if line.TS == "" || line.Operator != "ada@example.com" || strings.Join(line.Argv, " ") != strings.Join(req.Argv, " ") ||
-		line.Cwd != workspace || line.TimeoutS != 300 || line.StdinB64 != req.StdinB64 || line.ExecResponse != resp {
+		line.TimeoutS != 60 || line.StdinB64 != req.StdinB64 || line.ExecResponse != resp {
 		t.Fatalf("exec.jsonl line = %+v, want the command and its answer %+v", line, resp)
 	}
 }
@@ -156,6 +155,10 @@ func TestExecRunsOneCommandAtATimeUntilThePauseLifts(t *testing.T) {
 	})
 	if code, _, detail := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"true"}}); code != http.StatusConflict || detail != "Another command is still running. Wait for it to finish, then try again." {
 		t.Fatalf("a second command = %d %q", code, detail)
+	}
+	// A resume note written now would miss the running command.
+	if code, body := operatorCall(t, srv, "POST", "/api/sessions/"+id+"/resume", `{"message":"Done.","operator":"ada@example.com"}`); code != http.StatusConflict || !strings.Contains(body, "A command is still running.") {
+		t.Fatalf("resume during a command = %d %s", code, body)
 	}
 
 	if code, body := operatorCall(t, srv, "PUT", "/api/sessions/"+id+"/pause", `{"paused":false}`); code != http.StatusOK {

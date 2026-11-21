@@ -23,23 +23,24 @@ import (
 
 // Limits on a command. A request is at most maxSessionRequestBytes (4 MiB)
 // and carries stdin as base64. An answer carries both output streams as
-// base64, and Cloud accepts 66 MiB.
+// base64, and Cloud accepts 66 MiB. Cloudflare, in front of Cloud, drops a
+// request with no answer after 100 s, so a command and the two stop graces
+// after it fit in 90 s.
 const (
 	execStdinMaxBytes   = 2 << 20
 	execOutputMaxBytes  = 24 << 20 // of each of stdout and stderr
-	execDefaultTimeoutS = 300
-	execMaxTimeoutS     = 3600
+	execDefaultTimeoutS = 60
+	execMaxTimeoutS     = 80
 )
 
 // execStopGrace is how long a stopped command has to exit after SIGTERM
 // before SIGKILL, and how long its output may stay open once it has exited.
 const execStopGrace = 5 * time.Second
 
-// ExecRequest is the body of POST /api/sessions/{id}/exec. Cwd is the agents'
-// workspace by default, and a relative Cwd is taken from it.
+// ExecRequest is the body of POST /api/sessions/{id}/exec. The command runs
+// in the agents' workspace.
 type ExecRequest struct {
 	Argv     []string `json:"argv"`
-	Cwd      string   `json:"cwd,omitempty"`
 	StdinB64 string   `json:"stdin_b64,omitempty"`
 	TimeoutS int      `json:"timeout_s,omitempty"`
 	Operator string   `json:"operator"`
@@ -62,19 +63,19 @@ type execRecord struct {
 	TS       string   `json:"ts"`
 	Operator string   `json:"operator"`
 	Argv     []string `json:"argv"`
-	Cwd      string   `json:"cwd"`
 	TimeoutS int      `json:"timeout_s"`
 	StdinB64 string   `json:"stdin_b64"`
 	ExecResponse
 }
 
-// execError is a command refused, and the HTTP status that reports it.
-type execError struct {
+// refusal is a request telosd will not carry out, and the HTTP status that
+// reports it.
+type refusal struct {
 	status int
 	detail string
 }
 
-func (e execError) Error() string { return e.detail }
+func (e refusal) Error() string { return e.detail }
 
 // Exec runs one command in a paused root session's workspace and appends it
 // to exec.jsonl once it has finished. The command stops when ctx is done, at
@@ -83,19 +84,23 @@ func (fs *FileStore) Exec(ctx context.Context, id string, req ExecRequest) (*Exe
 	stdin, err := base64.StdEncoding.DecodeString(req.StdinB64)
 	switch {
 	case len(req.Argv) == 0 || req.Argv[0] == "":
-		return nil, execError{http.StatusBadRequest, "The argv field must name a program to run."}
+		return nil, refusal{http.StatusBadRequest, "The argv field must name a program to run."}
 	case req.Operator == "":
-		return nil, execError{http.StatusBadRequest, "The operator field is required."}
+		return nil, refusal{http.StatusBadRequest, "The operator field is required."}
 	case req.TimeoutS < 0 || req.TimeoutS > execMaxTimeoutS:
-		return nil, execError{http.StatusBadRequest, fmt.Sprintf("The timeout_s field must be from 1 to %d.", execMaxTimeoutS)}
+		return nil, refusal{http.StatusBadRequest, fmt.Sprintf("The timeout_s field must be from 1 to %d.", execMaxTimeoutS)}
 	case err != nil:
-		return nil, execError{http.StatusBadRequest, "The stdin_b64 field is not valid base64."}
+		return nil, refusal{http.StatusBadRequest, "The stdin_b64 field is not valid base64."}
 	case len(stdin) > execStdinMaxBytes:
-		return nil, execError{http.StatusRequestEntityTooLarge, "The stdin is larger than 2 MiB."}
+		return nil, refusal{http.StatusRequestEntityTooLarge, "The stdin is larger than 2 MiB."}
 	}
 
 	fs.mu.Lock()
 	m, err := fs.readRoot(id)
+	var log string
+	if err == nil {
+		log, err = execLogPath(m)
+	}
 	if err == nil {
 		err = fs.execRefusal(id, m)
 	}
@@ -117,19 +122,15 @@ func (fs *FileStore) Exec(ctx context.Context, id string, req ExecRequest) (*Exe
 		cancel()
 	}()
 
-	cwd := req.Cwd
-	if !filepath.IsAbs(cwd) {
-		cwd = filepath.Join(fs.sessionDir(id), "workspace", cwd)
-	}
-	rec := execRecord{TS: execNow(), Operator: req.Operator, Argv: req.Argv, Cwd: cwd, TimeoutS: timeoutS, StdinB64: req.StdinB64}
-	if rec.ExecResponse, err = runCommand(ctx, req.Argv, cwd, stdin); err != nil {
+	rec := execRecord{TS: execNow(), Operator: req.Operator, Argv: req.Argv, TimeoutS: timeoutS, StdinB64: req.StdinB64}
+	if rec.ExecResponse, err = runCommand(ctx, req.Argv, filepath.Join(fs.sessionDir(id), "workspace"), stdin); err != nil {
 		return nil, err
 	}
 	line, err := json.Marshal(rec)
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(execLogPath(m), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	f, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 	if err != nil {
 		return nil, err
 	}
@@ -154,7 +155,7 @@ func (fs *FileStore) execRefusal(id string, m *Manifest) error {
 	default:
 		return nil
 	}
-	return execError{http.StatusConflict, detail}
+	return refusal{http.StatusConflict, detail}
 }
 
 // agentTurnRunning reports whether the root session or one of its children
@@ -177,8 +178,11 @@ func (fs *FileStore) agentTurnRunning(rootID string) bool {
 }
 
 // execLogPath is exec.jsonl, beside the current spec's evidence.jsonl.
-func execLogPath(m *Manifest) string {
-	return filepath.Join(filepath.Dir(ptrOr(m.Specs[0].EvidencePath, "")), "exec.jsonl")
+func execLogPath(m *Manifest) (string, error) {
+	if len(m.Specs) == 0 || ptrOr(m.Specs[0].EvidencePath, "") == "" {
+		return "", fmt.Errorf("the session has no evidence folder: %w", ErrInvalidSession)
+	}
+	return filepath.Join(filepath.Dir(*m.Specs[0].EvidencePath), "exec.jsonl"), nil
 }
 
 // execNow is the time now, to the microsecond, so that a command and the
