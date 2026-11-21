@@ -12,6 +12,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -22,14 +24,14 @@ import (
 
 // Limits on a command. A request is at most maxSessionRequestBytes (4 MiB)
 // and carries stdin as base64. An answer carries both output streams as
-// base64, and Cloud accepts 66 MiB. Cloudflare, in front of Cloud, drops a
-// request with no answer after 100 s, so a command and the two stop graces
-// after it fit in 90 s.
+// base64, and Cloud accepts 66 MiB. Cloud (deployment_exec.py) and the CLI
+// (cmd/telos/exec.go) cap the time limit at 80 s, under the 100 s that
+// Cloudflare in front of Cloud waits for an answer.
 const (
 	execStdinMaxBytes   = 2 << 20
 	execOutputMaxBytes  = 24 << 20 // of each of stdout and stderr
 	execDefaultTimeoutS = 60
-	execMaxTimeoutS     = 80
+	execMaxTimeoutS     = 3600
 )
 
 // execStopGrace is how long a stopped command has to exit after SIGTERM
@@ -162,7 +164,8 @@ func (fs *FileStore) execRefusal(id string, m *Manifest) error {
 // has an epoch open. A hold stops the game loop, which closes its epoch once
 // the interrupted turn has returned, so a paused goal with no open epoch runs
 // no agent turn. An epoch that opens later sees the hold before its first
-// turn.
+// turn, though the game loop may still save a workspace checkpoint as it
+// stops.
 func (fs *FileStore) agentTurnRunning(rootID string) bool {
 	entries, err := os.ReadDir(fs.Root)
 	if err != nil {
@@ -234,6 +237,9 @@ func runCommand(ctx context.Context, argv []string, dir string, stdin []byte) (E
 
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 	cmd.Dir = dir
+	// The command sees what the agents see: telosd's environment without its
+	// operator token.
+	cmd.Env = slices.DeleteFunc(os.Environ(), func(kv string) bool { return strings.HasPrefix(kv, "TELOS_API_TOKEN=") })
 	cmd.Stdin = bytes.NewReader(stdin)
 	cmd.Stdout, cmd.Stderr = streams[0].w, streams[1].w
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}

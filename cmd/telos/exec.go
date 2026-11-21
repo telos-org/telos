@@ -48,7 +48,7 @@ func cmdExec(args []string) {
 		execUsageError(fs, "expected GOAL -- COMMAND")
 	case isLocalApplyID(goalID):
 		execUsageError(fs, "exec works only for Cloud Goals")
-	case *timeout < time.Second || *timeout > 80*time.Second:
+	case *timeout < time.Second || *timeout > 80*time.Second: // as Cloud caps it, under Cloudflare's 100 s
 		execUsageError(fs, "--timeout must be from 1s to 80s")
 	}
 

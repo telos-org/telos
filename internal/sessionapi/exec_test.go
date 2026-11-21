@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"syscall"
@@ -68,15 +69,16 @@ func TestSessionListReportsExec(t *testing.T) {
 
 func TestExecRunsACommandInThePausedWorkspaceAndRecordsIt(t *testing.T) {
 	srv, store, id, workspace := newPausedGoal(t)
+	t.Setenv("TELOS_API_TOKEN", "operator-secret") // telosd's own token
 	req := sessionapi.ExecRequest{
-		Argv:     []string{"sh", "-c", "cat - note.txt; echo oops >&2; exit 3"},
+		Argv:     []string{"sh", "-c", "cat - note.txt; echo ${TELOS_API_TOKEN-no token}; echo oops >&2; exit 3"},
 		StdinB64: base64.StdEncoding.EncodeToString([]byte("from stdin\n")),
 	}
 	if err := os.WriteFile(filepath.Join(workspace, "note.txt"), []byte("from the workspace\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	code, resp, detail := execCommand(t, srv, id, req)
-	if code != http.StatusOK || resp.ExitCode != 3 || decodeB64(t, resp.StdoutB64) != "from stdin\nfrom the workspace\n" || decodeB64(t, resp.StderrB64) != "oops\n" {
+	if code != http.StatusOK || resp.ExitCode != 3 || decodeB64(t, resp.StdoutB64) != "from stdin\nfrom the workspace\nno token\n" || decodeB64(t, resp.StderrB64) != "oops\n" {
 		t.Fatalf("exec = %d %q %+v", code, detail, resp)
 	}
 
@@ -112,6 +114,7 @@ func TestExecRejectsARequestItCannotAccept(t *testing.T) {
 		want int
 	}{
 		{sessionapi.ExecRequest{}, http.StatusBadRequest},
+		{sessionapi.ExecRequest{Argv: []string{"true"}, TimeoutS: 3601}, http.StatusBadRequest},
 		{sessionapi.ExecRequest{Argv: []string{"cat"}, StdinB64: base64.StdEncoding.EncodeToString(make([]byte, 2<<20+1))}, http.StatusRequestEntityTooLarge},
 	} {
 		if code, _, detail := execCommand(t, srv, id, tc.req); code != tc.want {
@@ -212,6 +215,9 @@ func TestExecStopsTheCommandAtItsLimits(t *testing.T) {
 		})
 	})
 	t.Run("output held open outside its group", func(t *testing.T) {
+		if _, err := exec.LookPath("perl"); err != nil {
+			t.Skip("needs perl")
+		}
 		// The child leaves the group, as `pg_ctl start` does, and keeps
 		// stdout open. The answer comes once the stop grace is over.
 		began := time.Now()
