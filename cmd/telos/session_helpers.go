@@ -25,6 +25,7 @@ func store() *sessionapi.FileStore {
 	}
 	store := sessionapi.NewFileStore(root, sessionapi.RuntimeLocal)
 	store.OnSpecUpdate = sessionupdate.ProjectSpecUpdate
+	store.OnNote = sessionupdate.ProjectNote
 	return store
 }
 

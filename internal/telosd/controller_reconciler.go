@@ -45,6 +45,9 @@ func newControllerReconciler(
 	if base.OnSpecUpdate == nil {
 		base.OnSpecUpdate = sessionupdate.ProjectSpecUpdate
 	}
+	if base.OnNote == nil {
+		base.OnNote = sessionupdate.ProjectNote
+	}
 	return &controllerReconciler{
 		FileStore:    base,
 		substrate:    substrate,

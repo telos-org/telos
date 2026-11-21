@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/sessionupdate"
 )
 
 // newGoal returns a server that takes the operator token "operator-token",
@@ -18,6 +19,7 @@ func newGoal(t *testing.T) (*httptest.Server, *sessionapi.FileStore, string) {
 	t.Helper()
 	srv, store := newBearerTestServer(t, "operator-token")
 	t.Cleanup(srv.Close)
+	store.OnNote = sessionupdate.ProjectNote
 	created, err := store.UpdateSpec("shop", sessionapi.SessionSpecUpdateRequest{
 		SpecMarkdown: "---\nversion: 0.1.0\nname: shop\nplatform: cloud\n---\n# Shop\n",
 	})

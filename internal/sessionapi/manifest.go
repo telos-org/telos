@@ -41,8 +41,9 @@ type Manifest struct {
 	// operator (Cloud). Agents stop while either holds them; see OnHold.
 	Issue  *Issue `json:"issue,omitempty"`
 	Paused bool   `json:"paused,omitempty"`
-	// PausedAt is when Paused last went on. A resume note counts the
-	// commands run since then.
+	// PausedAt is when Paused last went on, and is empty once the resume note
+	// is written, even before Paused goes off. A resume note counts the
+	// commands run since then, and Exec runs only while it is set.
 	PausedAt string `json:"paused_at,omitempty"`
 }
 

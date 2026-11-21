@@ -19,8 +19,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/telos-org/telos/internal/evidence"
-	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/spec"
 )
 
@@ -93,8 +91,10 @@ type FileStore struct {
 	Root         string
 	PackageRoot  string
 	OnSpecUpdate func(SpecUpdateEvent)
-	runtime      SessionRuntime
-	mu           sync.Mutex
+	// OnNote writes a person's note for a root session's agents.
+	OnNote  func(NoteEvent) error
+	runtime SessionRuntime
+	mu      sync.Mutex
 	// execs cancels the command each root session is running, by session ID.
 	// It is guarded by mu.
 	execs map[string]context.CancelFunc
@@ -994,22 +994,15 @@ func (fs *FileStore) Resume(id string, note Note) (*Session, error) {
 	})
 }
 
-// writeNote leaves a person's note, if it has a message, for the agents of a
-// root session: an <external_update> entry marked `Source: <source>` in the
-// transcript, which they read when they next run, and an external_update
-// event in the evidence beside it, which `telos logs` shows. If commands ran
-// after the time since, the entry says how many and where they are. The
-// caller holds fs.mu.
+// writeNote hands a person's note, if it has a message, to OnNote for the
+// agents of a root session. If commands ran after the time since, the note
+// says how many and where they are. The caller holds fs.mu.
 func (fs *FileStore) writeNote(id string, m *Manifest, source string, note Note, since string) error {
-	if note.Message == "" {
+	if note.Message == "" || fs.OnNote == nil {
 		return nil
 	}
 	log, err := execLogPath(m)
 	if err != nil {
-		return err
-	}
-	event := specUpdateEvent(id, m, SpecUpdateEvent{})
-	if err := game.InitializeTranscript(event.TranscriptPath, id, m.SpecName, event.EvidencePath, m.CreatedAt); err != nil {
 		return err
 	}
 	text := fmt.Sprintf("Operator: %s\n\n%s", note.Operator, note.Message)
@@ -1017,13 +1010,7 @@ func (fs *FileStore) writeNote(id string, m *Manifest, source string, note Note,
 		text += fmt.Sprintf("\n\nCommands a person ran while the agents were paused: %d. They are the lines of `%s` with `ts` after %s. "+
 			"Each line holds a command's stdin, stdout and stderr in base64, so read the lines one at a time.", n, log, since)
 	}
-	if err := game.AppendExternalUpdate(event.TranscriptPath, game.ExternalUpdate{Source: source, Message: text}); err != nil {
-		return err
-	}
-	ev := evidence.New(m.SpecName, event.EvidencePath, id, event.EpochID)
-	ev.StartedAt = m.CreatedAt
-	ev.Log("external_update", 0, "system", map[string]any{"source": source, "operator": note.Operator, "message": note.Message})
-	return nil
+	return fs.OnNote(NoteEvent{Where: specUpdateEvent(id, m, SpecUpdateEvent{}), Source: source, Note: note, Text: text})
 }
 
 func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest) error) (*Session, error) {

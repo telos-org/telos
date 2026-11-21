@@ -17,7 +17,6 @@ go_library(
     visibility = ["//:__subpackages__"],
     deps = [
         "//internal/evidence",
-        "//internal/game",
         "//internal/spec",
     ],
 )
@@ -33,6 +32,7 @@ go_test(
     ],
     deps = [
         ":sessionapi",
+        "//internal/sessionupdate",
         "//internal/spec",
     ],
 )

@@ -387,6 +387,16 @@ type Note struct {
 	Operator string `json:"operator,omitempty"`
 }
 
+// NoteEvent is a person's note for a root session's agents. Where locates
+// the session's transcript and evidence; Text is the transcript entry, which
+// may add to Note.Message what the agents should know.
+type NoteEvent struct {
+	Where  SpecUpdateEvent
+	Source string // pause or resume
+	Note   Note
+	Text   string
+}
+
 // valid reports whether the note has both fields or neither.
 func (n Note) valid() bool {
 	return (n.Message == "") == (n.Operator == "")
