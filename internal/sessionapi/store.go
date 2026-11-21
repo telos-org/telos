@@ -949,6 +949,9 @@ func (fs *FileStore) Pause(id string, paused bool) (*Session, error) {
 		if cancel := fs.execs[id]; cancel != nil && !paused {
 			cancel()
 		}
+		if paused && !m.Paused {
+			m.PausedAt = execNow()
+		}
 		m.Paused = paused
 		if paused && m.Issue != nil && m.Issue.Status == IssueRetrying {
 			m.Issue = nil
@@ -970,7 +973,8 @@ func (fs *FileStore) Resume(id string) (*Session, error) {
 // WriteNote leaves a person's note for the agents of a root session: an
 // <external_update> entry marked `Source: <source>` in the transcript, which
 // they read when they next run, and an external_update event in the evidence
-// beside it, which `telos logs` shows.
+// beside it, which `telos logs` shows. If the goal is paused and commands ran
+// since it was paused, the entry says how many and where they are.
 func (fs *FileStore) WriteNote(id, source string, note Note) error {
 	m, err := ReadManifest(fs.manifestPath(id))
 	if err != nil {
@@ -981,6 +985,10 @@ func (fs *FileStore) WriteNote(id, source string, note Note) error {
 		return err
 	}
 	text := fmt.Sprintf("Operator: %s\n\n%s", note.Operator, note.Message)
+	log := execLogPath(m)
+	if n := commandsSince(log, m.PausedAt); m.Paused && n > 0 {
+		text += fmt.Sprintf("\n\nCommands a person ran while the agents were paused: %d. They are the lines of `%s` with `ts` after %s.", n, log, m.PausedAt)
+	}
 	if err := game.AppendExternalUpdate(event.TranscriptPath, game.ExternalUpdate{Source: source, Message: text}); err != nil {
 		return err
 	}

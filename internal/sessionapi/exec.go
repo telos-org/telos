@@ -121,7 +121,7 @@ func (fs *FileStore) Exec(ctx context.Context, id string, req ExecRequest) (*Exe
 	if !filepath.IsAbs(cwd) {
 		cwd = filepath.Join(fs.sessionDir(id), "workspace", cwd)
 	}
-	rec := execRecord{TS: tsNow(), Operator: req.Operator, Argv: req.Argv, Cwd: cwd, TimeoutS: timeoutS, StdinB64: req.StdinB64}
+	rec := execRecord{TS: execNow(), Operator: req.Operator, Argv: req.Argv, Cwd: cwd, TimeoutS: timeoutS, StdinB64: req.StdinB64}
 	if rec.ExecResponse, err = runCommand(ctx, req.Argv, cwd, stdin); err != nil {
 		return nil, err
 	}
@@ -179,6 +179,35 @@ func (fs *FileStore) agentTurnRunning(rootID string) bool {
 // execLogPath is exec.jsonl, beside the current spec's evidence.jsonl.
 func execLogPath(m *Manifest) string {
 	return filepath.Join(filepath.Dir(ptrOr(m.Specs[0].EvidencePath, "")), "exec.jsonl")
+}
+
+// execNow is the time now, to the microsecond, so that a command and the
+// pause before it never share a time. It is fixed width, so times compare as
+// strings.
+func execNow() string {
+	return time.Now().UTC().Format("2006-01-02T15:04:05.000000Z")
+}
+
+// commandsSince counts the lines of an exec.jsonl with ts after since. It
+// stops at a line it cannot read.
+func commandsSince(path, since string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	n := 0
+	for dec := json.NewDecoder(f); ; {
+		var line struct {
+			TS string `json:"ts"`
+		}
+		if dec.Decode(&line) != nil {
+			return n
+		}
+		if line.TS > since {
+			n++
+		}
+	}
 }
 
 // runCommand runs argv directly, with no shell, in its own process group.

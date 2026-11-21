@@ -213,3 +213,49 @@ func waitFor(t *testing.T, what string, cond func() bool) {
 		}
 	}
 }
+
+// The resume note counts the commands run since the goal was last paused, and
+// tells the agents where they are.
+func TestResumeNotePointsAtTheCommandsRunSinceThePause(t *testing.T) {
+	srv, store, id, _ := newPausedGoal(t)
+	base := "/api/sessions/" + id
+	for _, step := range []struct{ method, path, body string }{
+		{"POST", "/exec", `{"argv":["true"],"operator":"ada@example.com"}`}, // during an earlier pause
+		{"PUT", "/pause", `{"paused":false}`},
+		{"PUT", "/pause", `{"paused":true,"message":"Fixing the header.","operator":"ada@example.com"}`},
+		{"POST", "/exec", `{"argv":["true"],"operator":"ada@example.com"}`},
+		{"POST", "/resume", `{"message":"Fixed the header.","operator":"ada@example.com"}`},
+	} {
+		if code, body := operatorCall(t, srv, step.method, base+step.path, step.body); code != http.StatusOK {
+			t.Fatalf("%s %s = %d %s", step.method, step.path, code, body)
+		}
+	}
+
+	m, err := sessionapi.ReadManifest(filepath.Join(store.Root, id, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	specDir := filepath.Dir(*m.Specs[0].EvidencePath)
+	transcript, err := os.ReadFile(filepath.Join(specDir, "transcript-"+id+".md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := fmt.Sprintf("Fixed the header.\n\nCommands a person ran while the agents were paused: 1. "+
+		"They are the lines of `%s` with `ts` after %s.\n</external_update>\n", filepath.Join(specDir, "exec.jsonl"), m.PausedAt)
+	if !strings.HasSuffix(string(transcript), want) {
+		t.Fatalf("transcript does not end with %q:\n%s", want, transcript)
+	}
+
+	// A later resume, with no pause since, points at no commands.
+	for _, step := range []struct{ method, path, body string }{
+		{"PUT", "/pause", `{"paused":false}`},
+		{"POST", "/resume", `{"message":"Try again.","operator":"bob@example.com"}`},
+	} {
+		if code, body := operatorCall(t, srv, step.method, base+step.path, step.body); code != http.StatusOK {
+			t.Fatalf("%s %s = %d %s", step.method, step.path, code, body)
+		}
+	}
+	if transcript, _ = os.ReadFile(filepath.Join(specDir, "transcript-"+id+".md")); !strings.HasSuffix(string(transcript), "\n\nTry again.\n</external_update>\n") {
+		t.Fatalf("the later resume note points at old commands:\n%s", transcript)
+	}
+}
