@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -27,6 +28,13 @@ func newGoal(t *testing.T) (*httptest.Server, *sessionapi.FileStore, string) {
 		t.Fatal(err)
 	}
 	return srv, store, created.Session.SessionID
+}
+
+// endsWithNote reports whether transcript ends with want, where each TIME in
+// want stands for a timestamp.
+func endsWithNote(transcript, want string) bool {
+	pattern := strings.ReplaceAll(regexp.QuoteMeta(want), "TIME", `\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d\.\d{6}Z`)
+	return regexp.MustCompile(pattern + `$`).MatchString(transcript)
 }
 
 // operatorCall sends a request with the operator token and returns the
@@ -76,10 +84,11 @@ func TestPauseAndResumeLeaveTheAgentsANote(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := "<external_update>\nSource: pause\n\nOperator: ada@example.com\n\nFixing the header by hand.\n</external_update>\n" +
+	want := "<external_update>\nSource: pause\n\nOperator: ada@example.com\nAt: TIME\n\nFixing the header by hand.\n</external_update>\n" +
 		"\n## External Update\n\n" +
-		"<external_update>\nSource: resume\n\nOperator: ada@example.com\n\nFixed the header.\n</external_update>\n"
-	if strings.Count(string(transcript), "<external_update>") != 2 || !strings.HasSuffix(string(transcript), want) {
+		"<external_update>\nSource: resume\n\nOperator: ada@example.com\nAt: TIME\n\nFixed the header.\n\n" +
+		"Commands run while paused (from TIME to TIME): 0.\n</external_update>\n"
+	if strings.Count(string(transcript), "<external_update>") != 2 || !endsWithNote(string(transcript), want) {
 		t.Fatalf("transcript does not end with the two notes:\n%s", transcript)
 	}
 

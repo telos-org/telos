@@ -995,8 +995,9 @@ func (fs *FileStore) Resume(id string, note Note) (*Session, error) {
 }
 
 // writeNote hands a person's note, if it has a message, to OnNote for the
-// agents of a root session. If commands ran after the time since, the note
-// says how many and where they are. The caller holds fs.mu.
+// agents of a root session, with the time it was written. A resume note also
+// says how many commands ran since the pause began at since, zero included,
+// and where they are. The caller holds fs.mu.
 func (fs *FileStore) writeNote(id string, m *Manifest, source string, note Note, since string) error {
 	if note.Message == "" || fs.OnNote == nil {
 		return nil
@@ -1005,10 +1006,17 @@ func (fs *FileStore) writeNote(id string, m *Manifest, source string, note Note,
 	if err != nil {
 		return err
 	}
-	text := fmt.Sprintf("Operator: %s\n\n%s", note.Operator, note.Message)
-	if n := commandsSince(log, since); n > 0 {
-		text += fmt.Sprintf("\n\nCommands a person ran while the agents were paused: %d. They are the lines of `%s` with `ts` after %s. "+
-			"Each line holds a command's stdin, stdout and stderr in base64, so read the lines one at a time.", n, log, since)
+	now := execNow()
+	text := fmt.Sprintf("Operator: %s\nAt: %s\n\n%s", note.Operator, now, note.Message)
+	switch n := commandsSince(log, since); {
+	case source != "resume":
+	case since == "": // no pause by a person, so Exec could not run
+		text += "\n\nCommands run while paused: 0."
+	case n == 0:
+		text += fmt.Sprintf("\n\nCommands run while paused (from %s to %s): 0.", since, now)
+	default:
+		text += fmt.Sprintf("\n\nCommands run while paused (from %s to %s): %d. They are the lines of `%s` with `ts` after %s. "+
+			"Each line holds a command's stdin, stdout and stderr in base64, so read the lines one at a time.", since, now, n, log, since)
 	}
 	return fs.OnNote(NoteEvent{Where: specUpdateEvent(id, m, SpecUpdateEvent{}), Source: source, Note: note, Text: text})
 }

@@ -272,10 +272,10 @@ func TestResumeNotePointsAtTheCommandsRunSinceThePause(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := fmt.Sprintf("Fixed the header.\n\nCommands a person ran while the agents were paused: 1. "+
+	want := fmt.Sprintf("Fixed the header.\n\nCommands run while paused (from %s to TIME): 1. "+
 		"They are the lines of `%s` with `ts` after %s. Each line holds a command's stdin, stdout and stderr in base64, so read the lines one at a time.\n</external_update>\n",
-		filepath.Join(specDir, "exec.jsonl"), pausedAt)
-	if !strings.HasSuffix(string(transcript), want) {
+		pausedAt, filepath.Join(specDir, "exec.jsonl"), pausedAt)
+	if !endsWithNote(string(transcript), want) {
 		t.Fatalf("transcript does not end with %q:\n%s", want, transcript)
 	}
 	// Once the note is written, a command would miss it, even before the pause lifts.
@@ -292,7 +292,7 @@ func TestResumeNotePointsAtTheCommandsRunSinceThePause(t *testing.T) {
 			t.Fatalf("%s %s = %d %s", step.method, step.path, code, body)
 		}
 	}
-	if transcript, _ = os.ReadFile(filepath.Join(specDir, "transcript-"+id+".md")); !strings.HasSuffix(string(transcript), "\n\nTry again.\n</external_update>\n") {
+	if transcript, _ = os.ReadFile(filepath.Join(specDir, "transcript-"+id+".md")); !strings.HasSuffix(string(transcript), "\n\nTry again.\n\nCommands run while paused: 0.\n</external_update>\n") {
 		t.Fatalf("the later resume note points at old commands:\n%s", transcript)
 	}
 }
