@@ -228,7 +228,9 @@ func TestDryRunSettingsTextOnlyShowsChangedValues(t *testing.T) {
 		inherited                        bool
 	}{
 		{"thinking only", "update", "telos/default (Goal setting)", "high -> off", []string{"--thinking", "off"}, false},
-		{"model only", "update", "telos/default -> telos/max", "high (Goal setting)", []string{"--model", "telos/max"}, true},
+		{"model only", "update", "telos/default -> telos/max", "high -> inherited (resolved on apply)", []string{"--model", "telos/max"}, true},
+		{"same model inherits thinking", "unchanged", "telos/default", "high (Goal setting)", []string{"--model", "telos/default"}, false},
+		{"model and thinking", "update", "telos/default -> telos/max", "high -> low", []string{"--model", "telos/max", "--thinking", "low"}, false},
 		{"unchanged", "unchanged", "telos/default", "high", []string{"--model", "telos/default", "--thinking", "high"}, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -249,6 +251,37 @@ func TestDryRunSettingsTextOnlyShowsChangedValues(t *testing.T) {
 			lines = append(lines, "Nothing was applied.", "")
 			if want := strings.Join(lines, "\n"); output != want {
 				t.Fatalf("settings preview:\n%s\nwant:\n%s", output, want)
+			}
+		})
+	}
+}
+
+func TestDryRunModelChangeThinkingJSON(t *testing.T) {
+	server := inferenceTestServer(t, map[string]http.HandlerFunc{
+		"GET /api/deployments/goal_test/inference": jsonResponse(cloud.DeploymentInference{
+			Selection:     &cloud.InferenceSelection{Source: "managed", Tier: "default"},
+			Inference:     cloud.InferenceSummary{Source: "managed", Tier: "default"},
+			AgentModel:    "telos-bifrost/telos/default",
+			AgentThinking: "high",
+		}),
+	})
+	defer server.Close()
+	configureInferenceApplyTest(t, server.URL)
+	for _, tt := range []struct {
+		name, model, thinking string
+		source                previewSettingSource
+		flags                 []string
+	}{
+		{"inherited", "telos/max", "", "inherited", nil},
+		{"explicit", "telos/max", "low", "override", []string{"--thinking", "low"}},
+		{"same model", "telos/default", "high", "goal", nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			args := append([]string{"--goal", "goal_test", "--model", tt.model}, tt.flags...)
+			preview := decodeApplyPreview(t, args...)
+			if preview.Current.Thinking != "high" || preview.Proposed.Thinking != tt.thinking ||
+				preview.Proposed.ThinkingSource != tt.source {
+				t.Fatalf("thinking preview = %+v", preview)
 			}
 		})
 	}
@@ -442,7 +475,7 @@ func TestApplyAllowsUnversionedSkillMatchingOlderRegistryVersion(t *testing.T) {
 				configureDryRunTest(t, server.URL)
 				args := []string{"apply", fixture.path, "--goal", "goal_test", "--json"}
 				if dryRun {
-					args = append(args, "--dry-run")
+					args = append(args, "--dry-run", "--diff")
 				}
 				stdout, stderr, err := inferenceCLIProcess(t, args...)
 				if change != "unchanged" {
@@ -458,11 +491,43 @@ func TestApplyAllowsUnversionedSkillMatchingOlderRegistryVersion(t *testing.T) {
 					if writes.Load() != 0 {
 						t.Fatal("dry run sent a write")
 					}
+					var preview applyPreview
+					if err := json.Unmarshal([]byte(stdout), &preview); err != nil {
+						t.Fatal(err)
+					}
+					if preview.Operation != "unchanged" || preview.Proposed.Digest != fixture.pkg.Digest || len(preview.Proposed.Skills) != 1 ||
+						preview.Proposed.Skills[0].Ref != "@telos/verify-test:1.0.0" ||
+						preview.SpecDiff != "" || len(preview.SkillDiffs) != 0 || len(preview.Notes) != 1 {
+						t.Fatalf("unchanged preview = %+v", preview)
+					}
 				} else if writes.Load() != 3 || !strings.Contains(stdout, `"operation": "unchanged"`) {
 					t.Fatalf("idempotent apply: writes=%d output=%s", writes.Load(), stdout)
 				}
 			})
 		}
+	}
+}
+
+func TestDryRunUnpublishedPackageKeepsUnversionedSkillUnresolved(t *testing.T) {
+	fixture := makeDryRunSkillFixture(t)
+	data := strings.ReplaceAll(string(mustReadFile(t, fixture.path)), "1.2.3", "1.2.4")
+	if err := os.WriteFile(fixture.path, []byte(data), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	handlers := registryApplyHandlers(fixture.pkg)
+	handlers["GET /api/account/bootstrap"] = dryRunPublishScope
+	handlers["GET /api/packages/telos/demo/versions/1.2.4"] = http.NotFound
+	handlers["GET /api/skills/telos/verify-test"] = jsonResponse(cloud.SkillRecord{
+		Scope: "telos", Name: "verify-test", Version: "2.0.0",
+		Ref: "@telos/verify-test:2.0.0", Digest: "sha256:newer-different-content",
+	})
+	server := inferenceTestServer(t, handlers)
+	defer server.Close()
+	configureDryRunTest(t, server.URL)
+	preview := decodeApplyPreview(t, fixture.path, "--goal", "goal_test")
+	if preview.Operation != "update" || preview.Proposed.Digest != "" || len(preview.Proposed.Skills) != 1 ||
+		preview.Proposed.Skills[0].Ref != "" || preview.SpecDiff == "" {
+		t.Fatalf("unpublished package preview = %+v", preview)
 	}
 }
 

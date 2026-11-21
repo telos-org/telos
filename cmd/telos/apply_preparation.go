@@ -140,17 +140,12 @@ func prepareLocalApplyPackage(
 		}
 		refs[publication.name] = ref
 	}
-	digest := ""
+	var resolved *spec.ApplyPackage
 	if !pending {
-		resolved, err := spec.BuildApplyPackageWithSkillRefs(pkg.compiled, refs)
+		resolved, err = spec.BuildApplyPackageWithSkillRefs(pkg.compiled, refs)
 		if err != nil {
 			return applyPackageState{}, err
 		}
-		markdown, manifest, err = spec.ApplyPackageSpec(resolved.Bytes)
-		if err != nil {
-			return applyPackageState{}, err
-		}
-		digest = resolved.Digest
 	}
 	ref := fmt.Sprintf("@%s/%s:%s", scope, pkg.name, pkg.version)
 	existing, err := control.GetPackageVersion(scope, pkg.name, pkg.version)
@@ -158,40 +153,49 @@ func prepareLocalApplyPackage(
 		return applyPackageState{}, fmt.Errorf("check package version %s: %w", ref, err)
 	}
 	if err == nil {
-		matches := existing.Digest == digest
 		if pending {
-			matches, err = pendingPackageMatches(control, pkg, scope, refs, existing.Digest)
+			resolved, err = matchPendingApplyPackage(control, pkg, scope, refs, existing.Digest)
 			if err != nil {
 				return applyPackageState{}, fmt.Errorf("check package version %s: %w", ref, err)
 			}
 		}
-		if !matches {
+		if resolved == nil || resolved.Digest != existing.Digest {
 			return applyPackageState{}, fmt.Errorf(
 				"package version %s already exists; bump version in SPEC.md before changing the spec or its skills", ref,
 			)
 		}
+	}
+	digest := ""
+	if resolved != nil {
+		markdown, manifest, err = spec.ApplyPackageSpec(resolved.Bytes)
+		if err != nil {
+			return applyPackageState{}, err
+		}
+		digest = resolved.Digest
 	}
 	state, err := readApplyPackageState(&pulledPackage{
 		reference: packageReference{ref: ref},
 		digest:    digest,
 		data:      pkg.bytes,
 	}, markdown, manifest)
-	for i := range state.Skills {
-		state.Skills[i].Ref = refs[state.Skills[i].Name]
+	if resolved == nil {
+		for i := range state.Skills {
+			state.Skills[i].Ref = refs[state.Skills[i].Name]
+		}
 	}
 	return state, err
 }
 
-func pendingPackageMatches(
+func matchPendingApplyPackage(
 	control *cloud.Client,
 	pkg *specPackage,
 	scope string,
 	refs map[string]string,
 	existingDigest string,
-) (bool, error) {
+) (*spec.ApplyPackage, error) {
 	data, err := control.DownloadPackageVersionBundle(scope, pkg.name, pkg.version)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	_, existing, err := verifiedPackageContents(&pulledPackage{
 		reference: packageReference{ref: fmt.Sprintf("@%s/%s:%s", scope, pkg.name, pkg.version)},
@@ -199,7 +203,7 @@ func pendingPackageMatches(
 		data:      data,
 	})
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	comparisonRefs := maps.Clone(refs)
 	for name, ref := range refs {
@@ -209,17 +213,18 @@ func pendingPackageMatches(
 		oldRef := existing.Skills[name].Ref
 		parsed, ok := spec.ParseRegistrySkillRef(oldRef)
 		if !ok || parsed.Scope != scope || parsed.Name != name || parsed.Version == "" {
-			return false, nil
+			return nil, nil
 		}
 		comparisonRefs[name] = oldRef
 	}
-	// Normalize imports with the existing locks for comparison only. Publication
-	// still chooses the version, so an unresolved final digest stays unresolved.
 	comparison, err := spec.BuildApplyPackageWithSkillRefs(pkg.compiled, comparisonRefs)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
-	return comparison.Digest == existingDigest, nil
+	if comparison.Digest != existingDigest {
+		return nil, nil
+	}
+	return comparison, nil
 }
 
 func applySkillRef(control *cloud.Client, scope string, publication packageSkillPublication, digest string) (string, error) {

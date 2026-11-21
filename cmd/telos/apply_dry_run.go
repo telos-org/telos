@@ -18,6 +18,7 @@ const (
 	previewSourceWorkspace previewSettingSource = "workspace"
 	previewSourceCloud     previewSettingSource = "cloud"
 	previewSourceOverride  previewSettingSource = "override"
+	previewSourceInherited previewSettingSource = "inherited"
 )
 
 type applyPreview struct {
@@ -178,6 +179,8 @@ func previewSessionInference(goalID, model, thinking, contextOverride string) (*
 		preview.Proposed.Model = model
 		preview.Proposed.ModelSource = previewSourceOverride
 		if !modelUnchanged && request.AgentThinking == nil {
+			preview.Proposed.Thinking = ""
+			preview.Proposed.ThinkingSource = previewSourceInherited
 			preview.Notes = append(preview.Notes,
 				"The server resolves inherited thinking for the selected model when applying.",
 			)
@@ -267,6 +270,8 @@ func previewInferenceValue(value string, source previewSettingSource) string {
 		return value + " (workspace default)"
 	case previewSourceCloud:
 		return "cloud default (resolved on apply)"
+	case previewSourceInherited:
+		return "inherited (resolved on apply)"
 	default:
 		return strings.TrimSpace(value)
 	}
