@@ -35,7 +35,7 @@ func cmdExec(args []string) {
 	}
 	fs := newCommandFlagSet("exec", execUsage)
 	stdinPath := fs.String("stdin", "", "File to give the command as its stdin, or - for this command's stdin")
-	timeout := fs.Duration("timeout", 5*time.Minute, "How long the command may run, from 1s to 1h")
+	timeout := fs.Duration("timeout", time.Minute, "How long the command may run, from 1s to 80s")
 	jsonOut := fs.Bool("json", false, "JSON output, with stdout and stderr as base64")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -49,8 +49,8 @@ func cmdExec(args []string) {
 		execUsageError(fs, "expected GOAL -- COMMAND")
 	case isLocalApplyID(goalID):
 		execUsageError(fs, "exec works only for Cloud Goals")
-	case *timeout < time.Second || *timeout > time.Hour:
-		execUsageError(fs, "--timeout must be from 1s to 1h, such as 90s or 10m")
+	case *timeout < time.Second || *timeout > 80*time.Second:
+		execUsageError(fs, "--timeout must be from 1s to 80s")
 	}
 
 	var stdin []byte
@@ -78,7 +78,7 @@ func cmdExec(args []string) {
 		execFail(err)
 	}
 	if result.TimedOut {
-		fmt.Fprintf(os.Stderr, "error: the command was stopped at its time limit of %s. To allow more time, use --timeout, up to 1h.\n", *timeout)
+		fmt.Fprintf(os.Stderr, "error: the command was stopped at its time limit of %s. To allow more time, use --timeout, up to 80s.\n", *timeout)
 	}
 	if result.StdoutTruncated || result.StderrTruncated {
 		fmt.Fprintf(os.Stderr, "error: the command exited with code %d, but its output was cut at 24 MiB per stream. Write the output to a file on the Goal and read it in parts.\n", result.ExitCode)

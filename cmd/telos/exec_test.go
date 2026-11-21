@@ -34,7 +34,7 @@ func TestExecPassesOnTheCommandsOutputAndExitCode(t *testing.T) {
 			args:   []string{"goal_1", "--", "sleep", "600"},
 			status: http.StatusOK,
 			answer: `{"exit_code":143,"timed_out":true}`,
-			stderr: "error: the command was stopped at its time limit of 5m0s. To allow more time, use --timeout, up to 1h.\n",
+			stderr: "error: the command was stopped at its time limit of 1m0s. To allow more time, use --timeout, up to 80s.\n",
 			exit:   143,
 		},
 		{
@@ -110,11 +110,11 @@ func TestExecSendsTheCommandAsGiven(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, stderr, err := inferenceCLIProcess(t, "exec", "goal_1", "--stdin", stdinPath, "--timeout", "90s", "--", "git", "apply", "--", "-"); err != nil {
+	if _, stderr, err := inferenceCLIProcess(t, "exec", "goal_1", "--stdin", stdinPath, "--timeout", "75s", "--", "git", "apply", "--", "-"); err != nil {
 		t.Fatalf("stderr %q, %v", stderr, err)
 	}
 	request := <-requests
-	if !slices.Equal(request.Argv, []string{"git", "apply", "--", "-"}) || request.StdinB64 != base64.StdEncoding.EncodeToString([]byte("+fix\n")) || request.TimeoutS != 90 {
+	if !slices.Equal(request.Argv, []string{"git", "apply", "--", "-"}) || request.StdinB64 != base64.StdEncoding.EncodeToString([]byte("+fix\n")) || request.TimeoutS != 75 {
 		t.Fatalf("request = %+v", request)
 	}
 }

@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -473,4 +474,16 @@ func TestCloudInferenceRejectsLegacyConnectionResponse(t *testing.T) {
 	if _, err := resolveCloudInference(cloud.NewClient(server.URL, "token"), "Work/model"); err == nil || !strings.Contains(err.Error(), "update Cloud") {
 		t.Fatalf("unsupported Cloud response was accepted: %v", err)
 	}
+}
+
+// exitCode is the exit code of a finished CLI process: 0 when err is nil.
+func exitCode(err error) int {
+	var exit *exec.ExitError
+	if errors.As(err, &exit) {
+		return exit.ExitCode()
+	}
+	if err != nil {
+		return -1
+	}
+	return 0
 }
