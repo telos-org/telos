@@ -27,7 +27,7 @@ func newPausedGoal(t *testing.T) (*httptest.Server, *sessionapi.FileStore, strin
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if code, body := operatorCall(t, srv, "PUT", "/api/sessions/"+id+"/pause", `{"paused":true}`); code != http.StatusOK {
+	if code, body := operatorCall(t, srv, "PUT", "/api/sessions/"+id+"/pause", `{"paused":true,"message":"Fixing it by hand.","operator":"ada@example.com"}`); code != http.StatusOK {
 		t.Fatalf("pause = %d %s", code, body)
 	}
 	return srv, store, id, workspace
@@ -116,6 +116,7 @@ func TestExecRejectsARequestItCannotAccept(t *testing.T) {
 	}{
 		{sessionapi.ExecRequest{}, http.StatusBadRequest, "The argv field must name a program to run."},
 		{sessionapi.ExecRequest{Argv: []string{"true"}, TimeoutS: 3601}, http.StatusBadRequest, "The timeout_s field must be from 1 to 3600, or left out for 60."},
+		{sessionapi.ExecRequest{Argv: []string{"cat"}, StdinB64: "not base64!"}, http.StatusBadRequest, "The stdin_b64 field is not valid base64."},
 		{sessionapi.ExecRequest{Argv: []string{"cat"}, StdinB64: base64.StdEncoding.EncodeToString(make([]byte, 2<<20+1))}, http.StatusRequestEntityTooLarge, "The stdin is larger than 2 MiB."},
 	} {
 		if code, _, detail := execCommand(t, srv, id, tc.req); code != tc.code || detail != tc.detail {
@@ -124,63 +125,76 @@ func TestExecRejectsARequestItCannotAccept(t *testing.T) {
 	}
 }
 
-// Commands run only while the goal is paused and no agent turn runs, as many
-// at once as the person likes. Lifting the pause stops them all.
+// Commands run only while a person has paused the goal and no agent turn
+// runs, as many at once as the person likes. Lifting the pause stops them all.
 func TestExecRunsCommandsAtOnceUntilThePauseLifts(t *testing.T) {
 	srv, store, id, workspace := newPausedGoal(t)
-	manifest := filepath.Join(store.Root, id, "session.json")
-	setEpoch := func(epochs []sessionapi.Epoch) {
-		t.Helper()
-		if _, err := sessionapi.MutateManifest(manifest, func(m *sessionapi.Manifest) error {
-			m.Epochs = epochs
-			return nil
-		}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	setEpoch([]sessionapi.Epoch{{ID: 1, StartedAt: "2026-11-21T10:00:00.000Z"}})
-	if code, _, detail := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"true"}}); code != http.StatusConflict || detail != "The agents are still stopping. Try again in a few seconds." {
-		t.Fatalf("exec during an agent turn = %d %q", code, detail)
-	}
-	setEpoch(nil)
+	notPaused := "This goal is not paused. Run `telos pause GOAL -m MESSAGE` first."
 
-	type result struct {
-		code int
-		resp sessionapi.ExecResponse
-	}
-	const running = 3
-	results := make(chan result, running)
-	for i := range running {
-		go func() {
-			code, resp, _ := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"sh", "-c", fmt.Sprintf("touch started-%d; exec sleep 60", i)}})
-			results <- result{code, resp}
-		}()
-	}
-	waitFor(t, "every command to start", func() bool {
-		matches, _ := filepath.Glob(filepath.Join(workspace, "started-*"))
-		return len(matches) == running
-	})
-	// A resume note written now would miss the running commands.
-	if code, body := operatorCall(t, srv, "POST", "/api/sessions/"+id+"/resume", `{"message":"Done.","operator":"ada@example.com"}`); code != http.StatusConflict || !strings.Contains(body, "A command is still running.") {
-		t.Fatalf("resume during a command = %d %s", code, body)
-	}
-
-	if code, body := operatorCall(t, srv, "PUT", "/api/sessions/"+id+"/pause", `{"paused":false}`); code != http.StatusOK {
-		t.Fatalf("lift the pause = %d %s", code, body)
-	}
-	for range running {
-		select {
-		case got := <-results:
-			if got.code != http.StatusOK || got.resp.ExitCode != 128+int(syscall.SIGTERM) || got.resp.TimedOut {
-				t.Fatalf("a stopped command = %d %+v", got.code, got.resp)
+	t.Run("refused during an agent turn", func(t *testing.T) {
+		manifest := filepath.Join(store.Root, id, "session.json")
+		setEpochs := func(epochs []sessionapi.Epoch) {
+			t.Helper()
+			if _, err := sessionapi.MutateManifest(manifest, func(m *sessionapi.Manifest) error {
+				m.Epochs = epochs
+				return nil
+			}); err != nil {
+				t.Fatal(err)
 			}
-		case <-time.After(30 * time.Second):
-			t.Fatal("lifting the pause did not stop every command")
 		}
-	}
-	if code, _, detail := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"true"}}); code != http.StatusConflict || detail != "This goal is not paused. Run `telos pause GOAL -m MESSAGE` first." {
-		t.Fatalf("exec on a goal that is not paused = %d %q", code, detail)
-	}
+		setEpochs([]sessionapi.Epoch{{ID: 1, StartedAt: "2026-11-21T10:00:00.000Z"}})
+		defer setEpochs(nil)
+		if code, _, detail := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"true"}}); code != http.StatusConflict || detail != "The agents are still stopping. Try again in a few seconds." {
+			t.Fatalf("exec during an agent turn = %d %q", code, detail)
+		}
+	})
+
+	t.Run("several at once, stopped when the pause lifts", func(t *testing.T) {
+		type result struct {
+			code int
+			resp sessionapi.ExecResponse
+		}
+		const running = 3
+		results := make(chan result, running)
+		for i := range running {
+			go func() {
+				code, resp, _ := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"sh", "-c", fmt.Sprintf("touch started-%d; exec sleep 60", i)}})
+				results <- result{code, resp}
+			}()
+		}
+		waitFor(t, "every command to start", func() bool {
+			matches, _ := filepath.Glob(filepath.Join(workspace, "started-*"))
+			return len(matches) == running
+		})
+		// A resume note written now would miss the running commands.
+		if code, body := operatorCall(t, srv, "POST", "/api/sessions/"+id+"/resume", `{"message":"Done.","operator":"ada@example.com"}`); code != http.StatusConflict || !strings.Contains(body, "A command is still running.") {
+			t.Fatalf("resume during a command = %d %s", code, body)
+		}
+		if code, body := operatorCall(t, srv, "PUT", "/api/sessions/"+id+"/pause", `{"paused":false}`); code != http.StatusOK {
+			t.Fatalf("lift the pause = %d %s", code, body)
+		}
+		for range running {
+			select {
+			case got := <-results:
+				if got.code != http.StatusOK || got.resp.ExitCode != 128+int(syscall.SIGTERM) || got.resp.TimedOut {
+					t.Fatalf("a stopped command = %d %+v", got.code, got.resp)
+				}
+			case <-time.After(30 * time.Second):
+				t.Fatal("lifting the pause did not stop every command")
+			}
+		}
+	})
+
+	t.Run("refused under a pause with no note", func(t *testing.T) {
+		// Cloud's poll pauses for an account problem with no note; that is
+		// not a person's pause.
+		if code, body := operatorCall(t, srv, "PUT", "/api/sessions/"+id+"/pause", `{"paused":true}`); code != http.StatusOK {
+			t.Fatalf("pause without a note = %d %s", code, body)
+		}
+		if code, _, detail := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"true"}}); code != http.StatusConflict || detail != notPaused {
+			t.Fatalf("exec on a goal no person paused = %d %q", code, detail)
+		}
+	})
 }
 
 func TestExecStopsTheCommandAtItsLimits(t *testing.T) {
@@ -276,7 +290,7 @@ func TestResumeNotePointsAtTheCommandsRunSinceThePause(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := fmt.Sprintf("Fixed the header.\n\nCommands run while paused (from %s to TIME): 1. "+
-		"They are the lines of `%s` with `ts` after %s. Each line holds a command's stdin, stdout and stderr in base64, so read the lines one at a time.\n</external_update>\n",
+		"They are the lines of `%s` with `ts` after %s. Each line also holds the command's stdin, stdout and stderr in base64, which can be large: read ts, argv and exit_code first.\n</external_update>\n",
 		pausedAt, filepath.Join(specDir, "exec.jsonl"), pausedAt)
 	if !endsWithNote(string(transcript), want) {
 		t.Fatalf("transcript does not end with %q:\n%s", want, transcript)

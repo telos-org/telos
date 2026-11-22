@@ -41,10 +41,13 @@ type Manifest struct {
 	// operator (Cloud). Agents stop while either holds them; see OnHold.
 	Issue  *Issue `json:"issue,omitempty"`
 	Paused bool   `json:"paused,omitempty"`
-	// PausedAt is when Paused last went on, and is empty once the resume note
-	// is written, even before Paused goes off. A resume note counts the
-	// commands run since then, and Exec runs only while it is set.
+	// PausedAt is when a person last paused the goal, with a note; Cloud's
+	// poll pausing for an account problem does not set it. It is empty once
+	// the resume note is written, even before Paused goes off. Exec runs only
+	// while it is set.
 	PausedAt string `json:"paused_at,omitempty"`
+	// CommandsSincePause counts the commands that finished since PausedAt.
+	CommandsSincePause int `json:"commands_since_pause,omitempty"`
 }
 
 // IssueStatus says whether an Issue stops agents (blocked) or not (retrying).

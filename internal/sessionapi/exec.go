@@ -32,7 +32,7 @@ const (
 	execStdinMaxBytes   = 2 << 20
 	execOutputMaxBytes  = 24 << 20 // of each of stdout and stderr
 	execDefaultTimeoutS = 60
-	execMaxTimeoutS     = 3600
+	execMaxTimeoutS     = 3600 // for an operator calling telosd directly
 )
 
 // execStopGrace is how long a stopped command has to exit after SIGTERM
@@ -68,6 +68,12 @@ type execRecord struct {
 	TimeoutS int      `json:"timeout_s"`
 	StdinB64 string   `json:"stdin_b64"`
 	ExecResponse
+}
+
+// runningCommand is a command running on a root session, and what stops it.
+type runningCommand struct {
+	root   string
+	cancel context.CancelFunc
 }
 
 // refusal is a request telosd will not carry out: its kind, ErrConflict,
@@ -114,13 +120,14 @@ func (fs *FileStore) Exec(ctx context.Context, id string, req ExecRequest) (*Exe
 	timeoutS := cmp.Or(req.TimeoutS, execDefaultTimeoutS)
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutS)*time.Second)
 	if fs.execs == nil {
-		fs.execs = map[*context.CancelFunc]string{}
+		fs.execs = map[*runningCommand]struct{}{}
 	}
-	fs.execs[&cancel] = id
+	running := &runningCommand{root: id, cancel: cancel}
+	fs.execs[running] = struct{}{}
 	fs.mu.Unlock()
 	defer func() {
 		fs.mu.Lock()
-		delete(fs.execs, &cancel)
+		delete(fs.execs, running)
 		fs.mu.Unlock()
 		cancel()
 	}()
@@ -133,10 +140,18 @@ func (fs *FileStore) Exec(ctx context.Context, id string, req ExecRequest) (*Exe
 	if err != nil {
 		return nil, err
 	}
-	// One line at a time, and before the command stops counting as running,
-	// so a resume note never misses it.
+	// One line at a time, counted before the command stops counting as
+	// running, so a resume note never misses it.
 	fs.mu.Lock()
 	err = appendLine(log, line)
+	if err == nil {
+		_, err = MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
+			if m.PausedAt != "" {
+				m.CommandsSincePause++
+			}
+			return nil
+		})
+	}
 	fs.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -202,28 +217,6 @@ func execLogPath(m *Manifest) (string, error) {
 // strings.
 func execNow() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.000000Z")
-}
-
-// commandsSince counts the lines of an exec.jsonl with ts after since. It
-// stops at a line it cannot read.
-func commandsSince(path, since string) int {
-	f, err := os.Open(path)
-	if err != nil {
-		return 0
-	}
-	defer f.Close()
-	n := 0
-	for dec := json.NewDecoder(f); ; {
-		var line struct {
-			TS string `json:"ts"`
-		}
-		if dec.Decode(&line) != nil {
-			return n
-		}
-		if line.TS > since {
-			n++
-		}
-	}
 }
 
 // runCommand runs argv directly, with no shell, in its own process group.

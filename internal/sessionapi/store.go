@@ -95,9 +95,8 @@ type FileStore struct {
 	OnNote  func(NoteEvent) error
 	runtime SessionRuntime
 	mu      sync.Mutex
-	// execs maps the cancel func of each running command to its root
-	// session's ID. It is guarded by mu.
-	execs map[*context.CancelFunc]string
+	// execs is the set of running commands. It is guarded by mu.
+	execs map[*runningCommand]struct{}
 }
 
 // NewFileStore returns a FileStore rooted at the given directory.
@@ -954,23 +953,23 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 func (fs *FileStore) Pause(id string, paused bool, note Note) (*Session, error) {
 	return fs.mutateRoot(id, func(m *Manifest) error {
 		if !paused {
-			for cancel, root := range fs.execs {
-				if root == id {
-					(*cancel)()
+			for c := range fs.execs {
+				if c.root == id {
+					c.cancel()
 				}
 			}
 		}
 		switch {
 		case !paused:
-			m.PausedAt = ""
-		case m.PausedAt == "":
-			m.PausedAt = execNow()
+			m.PausedAt, m.CommandsSincePause = "", 0
+		case note.Message != "" && m.PausedAt == "": // a person's pause, not Cloud's poll
+			m.PausedAt, m.CommandsSincePause = execNow(), 0
 		}
 		m.Paused = paused
 		if paused && m.Issue != nil && m.Issue.Status == IssueRetrying {
 			m.Issue = nil
 		}
-		return fs.writeNote(id, m, "pause", note, "")
+		return fs.writeNote(id, m, "pause", note, "", 0)
 	})
 }
 
@@ -992,9 +991,9 @@ func (fs *FileStore) Resume(id string, note Note) (*Session, error) {
 		if note.Message == "" {
 			return nil
 		}
-		since := m.PausedAt
-		m.PausedAt = ""
-		return fs.writeNote(id, m, "resume", note, since)
+		since, commands := m.PausedAt, m.CommandsSincePause
+		m.PausedAt, m.CommandsSincePause = "", 0
+		return fs.writeNote(id, m, "resume", note, since, commands)
 	})
 }
 
@@ -1002,18 +1001,18 @@ func (fs *FileStore) Resume(id string, note Note) (*Session, error) {
 // agents of a root session, with the time it was written. A resume note also
 // says how many commands ran since the pause began at since, zero included,
 // and where they are. The caller holds fs.mu.
-func (fs *FileStore) writeNote(id string, m *Manifest, source string, note Note, since string) error {
+func (fs *FileStore) writeNote(id string, m *Manifest, source string, note Note, since string, commands int) error {
 	if note.Message == "" || fs.OnNote == nil {
 		return nil
-	}
-	log, err := execLogPath(m)
-	if err != nil {
-		return err
 	}
 	now := execNow()
 	text := fmt.Sprintf("Operator: %s\nAt: %s\n\n%s", note.Operator, now, note.Message)
 	if source == "resume" {
-		text += "\n\n" + commandsNote(log, since, now)
+		log, err := execLogPath(m)
+		if err != nil {
+			return err
+		}
+		text += "\n\n" + commandsNote(log, since, now, commands)
 	}
 	return fs.OnNote(NoteEvent{Where: specUpdateEvent(id, m, SpecUpdateEvent{}), Source: source, Note: note, Text: text})
 }
@@ -1021,8 +1020,8 @@ func (fs *FileStore) writeNote(id string, m *Manifest, source string, note Note,
 // running reports whether a command runs on the root session. The caller
 // holds fs.mu.
 func (fs *FileStore) running(id string) bool {
-	for _, root := range fs.execs {
-		if root == id {
+	for c := range fs.execs {
+		if c.root == id {
 			return true
 		}
 	}
@@ -1031,16 +1030,15 @@ func (fs *FileStore) running(id string) bool {
 
 // commandsNote tells the agents how many commands ran between the pause at
 // since and now, and where they are.
-func commandsNote(log, since, now string) string {
-	if since == "" { // no pause by a person, so Exec could not run
+func commandsNote(log, since, now string, n int) string {
+	switch {
+	case since == "": // no pause by a person, so Exec could not run
 		return "Commands run while paused: 0."
-	}
-	n := commandsSince(log, since)
-	if n == 0 {
+	case n == 0:
 		return fmt.Sprintf("Commands run while paused (from %s to %s): 0.", since, now)
 	}
 	return fmt.Sprintf("Commands run while paused (from %s to %s): %d. They are the lines of `%s` with `ts` after %s. "+
-		"Each line holds a command's stdin, stdout and stderr in base64, so read the lines one at a time.", since, now, n, log, since)
+		"Each line also holds the command's stdin, stdout and stderr in base64, which can be large: read ts, argv and exit_code first.", since, now, n, log, since)
 }
 
 func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest) error) (*Session, error) {
