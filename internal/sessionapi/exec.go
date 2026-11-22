@@ -19,8 +19,9 @@ import (
 )
 
 // A person runs commands in a paused goal's workspace, in place of its
-// agents, as many at once as they like. Each finished command is one line of exec.jsonl, beside the
-// current spec's evidence.jsonl, for people and agents to read.
+// agents, as many at once as they like. Each finished command is one line of
+// exec.jsonl, beside the current spec's evidence.jsonl, for people and agents
+// to read.
 
 // Limits on a command. A request is at most maxSessionRequestBytes (4 MiB)
 // and carries stdin as base64. An answer carries both output streams as
@@ -112,22 +113,14 @@ func (fs *FileStore) Exec(ctx context.Context, id string, req ExecRequest) (*Exe
 	}
 	timeoutS := cmp.Or(req.TimeoutS, execDefaultTimeoutS)
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutS)*time.Second)
-	if fs.execs[id] == nil {
-		if fs.execs == nil {
-			fs.execs = map[string]map[int]context.CancelFunc{}
-		}
-		fs.execs[id] = map[int]context.CancelFunc{}
+	if fs.execs == nil {
+		fs.execs = map[*context.CancelFunc]string{}
 	}
-	fs.execSeq++
-	seq := fs.execSeq
-	fs.execs[id][seq] = cancel
+	fs.execs[&cancel] = id
 	fs.mu.Unlock()
 	defer func() {
 		fs.mu.Lock()
-		delete(fs.execs[id], seq)
-		if len(fs.execs[id]) == 0 {
-			delete(fs.execs, id)
-		}
+		delete(fs.execs, &cancel)
 		fs.mu.Unlock()
 		cancel()
 	}()
@@ -211,11 +204,11 @@ func execNow() string {
 	return time.Now().UTC().Format("2006-01-02T15:04:05.000000Z")
 }
 
-// commandsSince counts the lines of an exec.jsonl with ts after since, and
-// none when since is empty. It stops at a line it cannot read.
+// commandsSince counts the lines of an exec.jsonl with ts after since. It
+// stops at a line it cannot read.
 func commandsSince(path, since string) int {
 	f, err := os.Open(path)
-	if err != nil || since == "" {
+	if err != nil {
 		return 0
 	}
 	defer f.Close()

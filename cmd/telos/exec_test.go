@@ -55,6 +55,12 @@ func TestExecPassesOnTheCommandsOutputAndExitCode(t *testing.T) {
 			exit:   execFailed,
 		},
 		{
+			name:   "time limit out of range",
+			args:   []string{"goal_1", "--timeout", "81s", "--", "ls"},
+			stderr: "error: --timeout must be from 1s to 80s", // the usage follows
+			exit:   2,
+		},
+		{
 			name:   "no command",
 			args:   []string{"goal_1", "ls"},
 			stderr: "error: expected GOAL -- COMMAND", // the usage follows

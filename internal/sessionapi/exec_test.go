@@ -110,15 +110,16 @@ func TestExecRunsACommandInThePausedWorkspaceAndRecordsIt(t *testing.T) {
 func TestExecRejectsARequestItCannotAccept(t *testing.T) {
 	srv, _, id, _ := newPausedGoal(t)
 	for _, tc := range []struct {
-		req  sessionapi.ExecRequest
-		want int
+		req    sessionapi.ExecRequest
+		code   int
+		detail string
 	}{
-		{sessionapi.ExecRequest{}, http.StatusBadRequest},
-		{sessionapi.ExecRequest{Argv: []string{"true"}, TimeoutS: 3601}, http.StatusBadRequest},
-		{sessionapi.ExecRequest{Argv: []string{"cat"}, StdinB64: base64.StdEncoding.EncodeToString(make([]byte, 2<<20+1))}, http.StatusRequestEntityTooLarge},
+		{sessionapi.ExecRequest{}, http.StatusBadRequest, "The argv field must name a program to run."},
+		{sessionapi.ExecRequest{Argv: []string{"true"}, TimeoutS: 3601}, http.StatusBadRequest, "The timeout_s field must be from 1 to 3600, or left out for 60."},
+		{sessionapi.ExecRequest{Argv: []string{"cat"}, StdinB64: base64.StdEncoding.EncodeToString(make([]byte, 2<<20+1))}, http.StatusRequestEntityTooLarge, "The stdin is larger than 2 MiB."},
 	} {
-		if code, _, detail := execCommand(t, srv, id, tc.req); code != tc.want {
-			t.Errorf("exec %v = %d %q, want %d", tc.req.Argv, code, detail, tc.want)
+		if code, _, detail := execCommand(t, srv, id, tc.req); code != tc.code || detail != tc.detail {
+			t.Errorf("exec %v = %d %q, want %d %q", tc.req.Argv, code, detail, tc.code, tc.detail)
 		}
 	}
 }
