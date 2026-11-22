@@ -18,8 +18,8 @@ import (
 	"time"
 )
 
-// A person runs one command at a time in a paused goal's workspace, in place
-// of its agents. Each finished command is one line of exec.jsonl, beside the
+// A person runs commands in a paused goal's workspace, in place of its
+// agents, as many at once as they like. Each finished command is one line of exec.jsonl, beside the
 // current spec's evidence.jsonl, for people and agents to read.
 
 // Limits on a command. A request is at most maxSessionRequestBytes (4 MiB)
@@ -112,14 +112,22 @@ func (fs *FileStore) Exec(ctx context.Context, id string, req ExecRequest) (*Exe
 	}
 	timeoutS := cmp.Or(req.TimeoutS, execDefaultTimeoutS)
 	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutS)*time.Second)
-	if fs.execs == nil {
-		fs.execs = map[string]context.CancelFunc{}
+	if fs.execs[id] == nil {
+		if fs.execs == nil {
+			fs.execs = map[string]map[int]context.CancelFunc{}
+		}
+		fs.execs[id] = map[int]context.CancelFunc{}
 	}
-	fs.execs[id] = cancel
+	fs.execSeq++
+	seq := fs.execSeq
+	fs.execs[id][seq] = cancel
 	fs.mu.Unlock()
 	defer func() {
 		fs.mu.Lock()
-		delete(fs.execs, id)
+		delete(fs.execs[id], seq)
+		if len(fs.execs[id]) == 0 {
+			delete(fs.execs, id)
+		}
 		fs.mu.Unlock()
 		cancel()
 	}()
@@ -132,12 +140,12 @@ func (fs *FileStore) Exec(ctx context.Context, id string, req ExecRequest) (*Exe
 	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(log, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	// One line at a time, and before the command stops counting as running,
+	// so a resume note never misses it.
+	fs.mu.Lock()
+	err = appendLine(log, line)
+	fs.mu.Unlock()
 	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-	if _, err := f.Write(append(line, '\n')); err != nil {
 		return nil, err
 	}
 	return &rec.ExecResponse, nil
@@ -152,8 +160,6 @@ func (fs *FileStore) execRefusal(id string, m *Manifest) error {
 		detail = "This goal is not paused. Run `telos pause GOAL -m MESSAGE` first."
 	case fs.agentTurnRunning(id):
 		detail = "The agents are still stopping. Try again in a few seconds."
-	case fs.execs[id] != nil:
-		detail = "Another command is still running. Wait for it to finish, then try again."
 	default:
 		return nil
 	}
@@ -178,6 +184,16 @@ func (fs *FileStore) agentTurnRunning(rootID string) bool {
 		}
 	}
 	return false
+}
+
+// appendLine appends line and a newline to the file at path.
+func appendLine(path string, line []byte) error {
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	_, err = f.Write(append(line, '\n'))
+	return errors.Join(err, f.Close())
 }
 
 // execLogPath is exec.jsonl, beside the current spec's evidence.jsonl.

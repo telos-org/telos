@@ -95,9 +95,10 @@ type FileStore struct {
 	OnNote  func(NoteEvent) error
 	runtime SessionRuntime
 	mu      sync.Mutex
-	// execs cancels the command each root session is running, by session ID.
-	// It is guarded by mu.
-	execs map[string]context.CancelFunc
+	// execs cancels the commands each root session is running: by session
+	// ID, then by a number for each command. Both are guarded by mu.
+	execs   map[string]map[int]context.CancelFunc
+	execSeq int
 }
 
 // NewFileStore returns a FileStore rooted at the given directory.
@@ -949,12 +950,14 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 // and a worker waiting out a retry sees its goal changed even if the pause
 // lifts before its next check.
 //
-// Lifting the pause stops a running command. A note with a message is left
-// for the agents (see writeNote).
+// Lifting the pause stops every running command. A note with a message is
+// left for the agents (see writeNote).
 func (fs *FileStore) Pause(id string, paused bool, note Note) (*Session, error) {
 	return fs.mutateRoot(id, func(m *Manifest) error {
-		if cancel := fs.execs[id]; cancel != nil && !paused {
-			cancel()
+		if !paused {
+			for _, cancel := range fs.execs[id] {
+				cancel()
+			}
 		}
 		switch {
 		case !paused:
@@ -976,10 +979,10 @@ func (fs *FileStore) Pause(id string, paused bool, note Note) (*Session, error) 
 //
 // A note with a message is left for the agents, pointing them at the
 // commands run since the pause. Exec refuses from then on, and Resume refuses
-// while a command runs, so the note counts every command.
+// while any command runs, so the note counts every command.
 func (fs *FileStore) Resume(id string, note Note) (*Session, error) {
 	return fs.mutateRoot(id, func(m *Manifest) error {
-		if fs.execs[id] != nil {
+		if len(fs.execs[id]) > 0 {
 			return refusal{ErrConflict, "A command is still running. Wait for it to finish, then resume."}
 		}
 		if m.Issue.Blocked() {
