@@ -12,9 +12,8 @@ import (
 	"strings"
 )
 
-// ErrNoCode is returned when a session's workspace has no committed files to
-// download.
-var ErrNoCode = errors.New("no code committed yet")
+// ErrNoCode is returned when a session's workspace has no files to download.
+var ErrNoCode = errors.New("no code in the workspace yet")
 
 // codeExcludes keeps Telos's own files, secrets, and reinstallable
 // dependencies out of a code download. Every .env file goes, templates
@@ -33,45 +32,46 @@ var codeExcludes = []string{
 	":(exclude,glob)**/.cache/**",
 }
 
-// Code is the last commit in a session's workspace.
+// Code is a snapshot of the files in a session's workspace.
 type Code struct {
 	workspace string
-	// Commit is the commit's full ID.
-	Commit string
+	tree      string
 }
 
-// Code returns the last commit in the session's workspace. It returns
-// ErrNoCode when that commit has no files to download.
+// Code snapshots the files in the session's workspace as they are now,
+// committed or not, minus codeExcludes and anything .gitignore ignores. It
+// returns ErrNoCode when no files are left.
 func (fs *FileStore) Code(id string) (*Code, error) {
 	if !fileExists(fs.manifestPath(id)) {
 		return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
 	}
 	workspace := workspaceDir(fs.sessionDir(id))
+	// Without its own repository, git would snapshot an enclosing one.
 	if !fileExists(filepath.Join(workspace, ".git")) {
 		return nil, ErrNoCode
 	}
-	commit, err := gitOutput(workspace, "rev-parse", "-q", "--verify", "HEAD^{commit}")
-	if exitCode(err) == 1 {
-		return nil, ErrNoCode // HEAD names no commit yet
-	}
+	// Stage into a throwaway index so the agent's own index stays untouched.
+	tmp, err := os.MkdirTemp("", "telos-code-")
 	if err != nil {
 		return nil, err
 	}
-	// Exit status 1 means the commit holds files the zip would keep. ls-tree
-	// rejects :(exclude) pathspecs, so compare against the empty tree instead.
-	emptyTree, err := gitOutput(workspace, "hash-object", "-t", "tree", os.DevNull)
+	defer os.RemoveAll(tmp)
+	index := []string{"GIT_INDEX_FILE=" + filepath.Join(tmp, "index")}
+	if _, err := gitOutput(workspace, index, append([]string{"add", "-A", "--"}, codeExcludes...)...); err != nil {
+		return nil, err
+	}
+	tree, err := gitOutput(workspace, index, "write-tree")
 	if err != nil {
 		return nil, err
 	}
-	_, err = gitOutput(workspace, append([]string{"diff-tree", "-r", "--quiet", emptyTree, commit, "--"}, codeExcludes...)...)
-	switch exitCode(err) {
-	case 1:
-		return &Code{workspace: workspace, Commit: commit}, nil
-	case 0:
+	emptyTree, err := gitOutput(workspace, nil, "hash-object", "-t", "tree", os.DevNull)
+	if err != nil {
+		return nil, err
+	}
+	if tree == emptyTree {
 		return nil, ErrNoCode
-	default:
-		return nil, err
 	}
+	return &Code{workspace: workspace, tree: tree}, nil
 }
 
 // workspaceDir is where a session's agent works: a git repository.
@@ -79,20 +79,21 @@ func workspaceDir(sessionDir string) string {
 	return filepath.Join(sessionDir, "workspace")
 }
 
-// WriteZip streams the commit's files, minus codeExcludes, as a zip.
+// WriteZip streams the snapshot as a zip.
 func (c *Code) WriteZip(ctx context.Context, w io.Writer) error {
-	return git(ctx, c.workspace, w, append([]string{"archive", "--format=zip", c.Commit, "--"}, codeExcludes...)...)
+	return git(ctx, c.workspace, nil, w, "archive", "--format=zip", c.tree)
 }
 
-func gitOutput(dir string, args ...string) (string, error) {
+func gitOutput(dir string, env []string, args ...string) (string, error) {
 	var out bytes.Buffer
-	err := git(context.Background(), dir, &out, args...)
+	err := git(context.Background(), dir, env, &out, args...)
 	return strings.TrimSpace(out.String()), err
 }
 
-func git(ctx context.Context, dir string, stdout io.Writer, args ...string) error {
+func git(ctx context.Context, dir string, env []string, stdout io.Writer, args ...string) error {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
 	cmd.Stdout = stdout
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
@@ -100,16 +101,4 @@ func git(ctx context.Context, dir string, stdout io.Writer, args ...string) erro
 		return fmt.Errorf("git %s: %w: %s", args[0], err, strings.TrimSpace(stderr.String()))
 	}
 	return nil
-}
-
-// exitCode is git's exit status: 0 on success, -1 when git didn't run.
-func exitCode(err error) int {
-	var exit *exec.ExitError
-	if err == nil {
-		return 0
-	}
-	if errors.As(err, &exit) {
-		return exit.ExitCode()
-	}
-	return -1
 }

@@ -310,7 +310,7 @@ func (h *handler) getTranscript(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(text))
 }
 
-// getCode downloads the workspace's last commit as a zip.
+// getCode downloads the workspace's files, as they are now, as a zip.
 func (h *handler) getCode(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
@@ -322,8 +322,8 @@ func (h *handler) getCode(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
 	case errors.Is(err, ErrNoCode):
-		// The session exists; nothing is committed yet. The code tells this
-		// conflict apart from others on the way to Cloud.
+		// The session exists; its workspace has no files yet. The code tells
+		// this conflict apart from others on the way to Cloud.
 		writeJSON(w, http.StatusConflict, map[string]string{"detail": err.Error(), "code": "no_code"})
 		return
 	case err != nil:
@@ -331,7 +331,6 @@ func (h *handler) getCode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("X-Telos-Commit", code.Commit)
 	if err := code.WriteZip(r.Context(), w); err != nil {
 		// The status line may already be sent: drop the connection so the
 		// client sees a failed download, not a truncated zip.

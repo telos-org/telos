@@ -1624,15 +1624,22 @@ func TestTranscriptPresent(t *testing.T) {
 
 // --------- GET /api/sessions/{id}/code ------------------------------------------------------------------------------------------------------------------------
 
-func TestCodeDownloadsLastCommitWithoutTelosFilesSecretsOrDependencies(t *testing.T) {
+func TestCodeDownloadsCurrentFilesWithoutTelosFilesSecretsOrDependencies(t *testing.T) {
 	srv, store := newTestServer(t)
 	defer srv.Close()
 	created := createSession(t, srv.URL, createSessionBody(t, "billing-api"))
 	workspace := filepath.Join(store.Root, created.SessionID, "workspace")
+	writeWorkspaceFile(t, workspace, "removed.py", 0o644)
+	commitWorkspace(t, workspace)
+	if err := os.Remove(filepath.Join(workspace, "removed.py")); err != nil {
+		t.Fatal(err)
+	}
 	for name, mode := range map[string]os.FileMode{
 		"app.py":                  0o644,
 		".envoy.yaml":             0o644,
 		"bin/start.sh":            0o755,
+		".gitignore":              0o644,
+		"dist/app.js":             0o644,
 		"dashboard.oui":           0o644,
 		".env":                    0o644,
 		"api/.env.local":          0o644,
@@ -1645,8 +1652,9 @@ func TestCodeDownloadsLastCommitWithoutTelosFilesSecretsOrDependencies(t *testin
 	} {
 		writeWorkspaceFile(t, workspace, name, mode)
 	}
-	commit := commitWorkspace(t, workspace)
-	writeWorkspaceFile(t, workspace, "uncommitted.py", 0o644)
+	if err := os.WriteFile(filepath.Join(workspace, ".gitignore"), []byte("dist/\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
 	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/code")
 	if err != nil {
@@ -1656,7 +1664,6 @@ func TestCodeDownloadsLastCommitWithoutTelosFilesSecretsOrDependencies(t *testin
 	body, _ := io.ReadAll(resp.Body)
 	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
 	assertEqual(t, "content-type", "application/zip", resp.Header.Get("Content-Type"))
-	assertEqual(t, "x-telos-commit", commit, resp.Header.Get("X-Telos-Commit"))
 
 	archive, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
 	if err != nil {
@@ -1668,22 +1675,24 @@ func TestCodeDownloadsLastCommitWithoutTelosFilesSecretsOrDependencies(t *testin
 			executable[file.Name] = file.Mode()&0o111 != 0
 		}
 	}
-	want := map[string]bool{".envoy.yaml": false, "app.py": false, "bin/start.sh": true}
+	want := map[string]bool{".envoy.yaml": false, ".gitignore": false, "app.py": false, "bin/start.sh": true}
 	if !maps.Equal(executable, want) {
 		t.Fatalf("zip files (name: executable) = %v, want %v", executable, want)
 	}
+	if out, err := exec.Command("git", "-C", workspace, "diff", "--cached", "--quiet").CombinedOutput(); err != nil {
+		t.Fatalf("download staged files in the agent's index: %v: %s", err, out)
+	}
 }
 
-func TestCodeConflictsUntilServiceFilesAreCommitted(t *testing.T) {
+func TestCodeConflictsUntilTheWorkspaceHasServiceFiles(t *testing.T) {
 	for name, prepare := range map[string]func(t *testing.T, workspace string){
 		"no repository": func(*testing.T, string) {},
-		"no commit":     gitInit,
-		"empty commit":  func(t *testing.T, workspace string) { commitWorkspace(t, workspace) },
+		"no files":      gitInit,
 		"only excluded files": func(t *testing.T, workspace string) {
+			gitInit(t, workspace)
 			for _, file := range []string{"dashboard.oui", ".telos/state.json", ".env", "api/.env/prod"} {
 				writeWorkspaceFile(t, workspace, file, 0o644)
 			}
-			commitWorkspace(t, workspace)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -1741,24 +1750,18 @@ func gitInit(t *testing.T, workspace string) {
 	}
 }
 
-// commitWorkspace commits everything in the workspace, as an agent does, and
-// returns the commit ID.
-func commitWorkspace(t *testing.T, workspace string) string {
+// commitWorkspace commits everything in the workspace, as an agent does.
+func commitWorkspace(t *testing.T, workspace string) {
 	t.Helper()
 	gitInit(t, workspace)
 	for _, args := range [][]string{
 		{"add", "-A"},
-		{"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "work"},
+		{"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "-m", "work"},
 	} {
 		if out, err := exec.Command("git", append([]string{"-C", workspace}, args...)...).CombinedOutput(); err != nil {
 			t.Fatalf("git %v: %v: %s", args, err, out)
 		}
 	}
-	out, err := exec.Command("git", "-C", workspace, "rev-parse", "HEAD").Output()
-	if err != nil {
-		t.Fatal(err)
-	}
-	return strings.TrimSpace(string(out))
 }
 
 // --------- dashboard_doc surfacing ------------------------------------------------------------------------------------------------------------------------------------
