@@ -68,6 +68,9 @@ func (s *fakeReconcileStore) Get(string) (*sessionapi.Session, error) {
 func (s *fakeReconcileStore) Transcript(string) (string, error) {
 	return "", sessionapi.ErrNotFound
 }
+func (s *fakeReconcileStore) Code(string) (*sessionapi.Code, error) {
+	return nil, sessionapi.ErrNotFound
+}
 func (s *fakeReconcileStore) Events(string) ([]sessionapi.SessionEvent, error) {
 	return nil, sessionapi.ErrNotFound
 }

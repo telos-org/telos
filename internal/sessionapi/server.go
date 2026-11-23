@@ -26,6 +26,7 @@ const maxSessionRequestBytes = 4 << 20
 //	POST /api/sessions/{id}/resume
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
+//	GET  /api/sessions/{id}/code
 //	GET  /api/healthz
 func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runtime RuntimeIdentity) {
 	if authorizer == nil {
@@ -44,6 +45,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("POST /api/sessions/{id}/resume", h.resumeSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
+	mux.HandleFunc("GET /api/sessions/{id}/code", h.getCode)
 }
 
 type handler struct {
@@ -306,6 +308,35 @@ func (h *handler) getTranscript(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 	w.Write([]byte(text))
+}
+
+// getCode downloads the workspace's last commit as a zip.
+func (h *handler) getCode(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
+		return
+	}
+	code, err := h.store.Code(id)
+	switch {
+	case errors.Is(err, ErrNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	case errors.Is(err, ErrNoCode):
+		// The session exists; nothing is committed yet. The code tells this
+		// conflict apart from others on the way to Cloud.
+		writeJSON(w, http.StatusConflict, map[string]string{"detail": err.Error(), "code": "no_code"})
+		return
+	case err != nil:
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("X-Telos-Commit", code.Commit)
+	if err := code.WriteZip(r.Context(), w); err != nil {
+		// The status line may already be sent: drop the connection so the
+		// client sees a failed download, not a truncated zip.
+		panic(http.ErrAbortHandler)
+	}
 }
 
 func (h *handler) getEvents(w http.ResponseWriter, r *http.Request) {

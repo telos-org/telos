@@ -1,13 +1,17 @@
 package sessionapi_test
 
 import (
+	"archive/zip"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -1616,6 +1620,145 @@ func TestTranscriptPresent(t *testing.T) {
 	if string(body) != "# Transcript\nHello" {
 		t.Errorf("unexpected transcript body: %q", body)
 	}
+}
+
+// --------- GET /api/sessions/{id}/code ------------------------------------------------------------------------------------------------------------------------
+
+func TestCodeDownloadsLastCommitWithoutTelosFilesSecretsOrDependencies(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+	created := createSession(t, srv.URL, createSessionBody(t, "billing-api"))
+	workspace := filepath.Join(store.Root, created.SessionID, "workspace")
+	for name, mode := range map[string]os.FileMode{
+		"app.py":                  0o644,
+		".envoy.yaml":             0o644,
+		"bin/start.sh":            0o755,
+		"dashboard.oui":           0o644,
+		".env":                    0o644,
+		"api/.env.local":          0o644,
+		".telos/state.json":       0o644,
+		"web/node_modules/x/x.js": 0o644,
+		".venv/bin/python":        0o755,
+		"api/__pycache__/app.pyc": 0o644,
+		"venv/bin/python":         0o755,
+		"lib/.cache/x":            0o644,
+	} {
+		writeWorkspaceFile(t, workspace, name, mode)
+	}
+	commit := commitWorkspace(t, workspace)
+	writeWorkspaceFile(t, workspace, "uncommitted.py", 0o644)
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+	assertEqual(t, "content-type", "application/zip", resp.Header.Get("Content-Type"))
+	assertEqual(t, "x-telos-commit", commit, resp.Header.Get("X-Telos-Commit"))
+
+	archive, err := zip.NewReader(bytes.NewReader(body), int64(len(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable := map[string]bool{}
+	for _, file := range archive.File {
+		if !file.FileInfo().IsDir() {
+			executable[file.Name] = file.Mode()&0o111 != 0
+		}
+	}
+	want := map[string]bool{".envoy.yaml": false, "app.py": false, "bin/start.sh": true}
+	if !maps.Equal(executable, want) {
+		t.Fatalf("zip files (name: executable) = %v, want %v", executable, want)
+	}
+}
+
+func TestCodeConflictsUntilServiceFilesAreCommitted(t *testing.T) {
+	for name, prepare := range map[string]func(t *testing.T, workspace string){
+		"no repository": func(*testing.T, string) {},
+		"no commit":     gitInit,
+		"empty commit":  func(t *testing.T, workspace string) { commitWorkspace(t, workspace) },
+		"only excluded files": func(t *testing.T, workspace string) {
+			for _, file := range []string{"dashboard.oui", ".telos/state.json", ".env", "api/.env/prod"} {
+				writeWorkspaceFile(t, workspace, file, 0o644)
+			}
+			commitWorkspace(t, workspace)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			srv, store := newTestServer(t)
+			defer srv.Close()
+			created := createSession(t, srv.URL, createSessionBody(t, "empty"))
+			workspace := filepath.Join(store.Root, created.SessionID, "workspace")
+			if err := os.MkdirAll(workspace, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			prepare(t, workspace)
+
+			resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/code")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer resp.Body.Close()
+			assertEqual(t, "status_code", "409", itoa(resp.StatusCode))
+			var body struct{ Code string }
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatal(err)
+			}
+			assertEqual(t, "code", "no_code", body.Code)
+		})
+	}
+}
+
+func TestCodeNotFoundForUnknownSession(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/sessions/nonexistent/code")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "404", itoa(resp.StatusCode))
+}
+
+func writeWorkspaceFile(t *testing.T, workspace, name string, mode os.FileMode) {
+	t.Helper()
+	path := filepath.Join(workspace, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(name), mode); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func gitInit(t *testing.T, workspace string) {
+	t.Helper()
+	if out, err := exec.Command("git", "-C", workspace, "init", "-q").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+}
+
+// commitWorkspace commits everything in the workspace, as an agent does, and
+// returns the commit ID.
+func commitWorkspace(t *testing.T, workspace string) string {
+	t.Helper()
+	gitInit(t, workspace)
+	for _, args := range [][]string{
+		{"add", "-A"},
+		{"-c", "user.name=t", "-c", "user.email=t@example.com", "commit", "-q", "--allow-empty", "-m", "work"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", workspace}, args...)...).CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v: %s", args, err, out)
+		}
+	}
+	out, err := exec.Command("git", "-C", workspace, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(out))
 }
 
 // --------- dashboard_doc surfacing ------------------------------------------------------------------------------------------------------------------------------------

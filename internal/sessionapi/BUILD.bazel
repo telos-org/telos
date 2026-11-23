@@ -4,6 +4,7 @@ go_library(
     name = "sessionapi",
     srcs = [
         "auth.go",
+        "code.go",
         "dashboard_doc_open_other.go",
         "dashboard_doc_open_unix.go",
         "events.go",
