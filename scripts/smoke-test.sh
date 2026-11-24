@@ -3,6 +3,7 @@
 #
 # Usage:
 #   TELOS_SMOKE_BIN=/path/to/telos TELOS_SMOKE_TELOSD=/path/to/telosd ./smoke-test.sh
+#   Set TELOS_SMOKE_SCENARIO to an agent.json fixture for telos_testfake binaries.
 #
 # Validates the end-user CLI surface, then launches one tiny isolated local
 # run to cover real session creation, inspection, logs, delete, and persisted
@@ -12,6 +13,7 @@ set -euo pipefail
 
 TELOS="${TELOS_SMOKE_BIN:-$(command -v telos || true)}"
 TELOSD="${TELOS_SMOKE_TELOSD:-$(command -v telosd || true)}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ -z "$TELOS" ] || [ ! -x "$TELOS" ]; then
   echo "TELOS_SMOKE_BIN is not executable and telos was not found on PATH" >&2
@@ -26,6 +28,7 @@ PASS=0
 FAIL=0
 FIXTURE_DIR=""
 SESSION_ID=""
+CLOUD_PID=""
 
 pass() {
   PASS=$((PASS + 1))
@@ -41,10 +44,17 @@ telos_cmd() {
   env \
     -u TELOS_API_TOKEN \
     -u TELOS_API_ENDPOINT \
+    -u TELOS_AUTH_TOKEN \
+    -u TELOS_CONTEXT \
     -u TELOS_RUNTIME \
     -u TELOS_SESSION_DIR \
     -u TELOS_SESSION_ID \
+    TELOS_CONFIG="$FIXTURE_DIR/config.yaml" \
     "$TELOS" "$@"
+}
+
+telos_preview() {
+  telos_cmd apply "$@" --dry-run --model telos/default --thinking high
 }
 
 telos_fixture() {
@@ -54,6 +64,10 @@ telos_fixture() {
 cleanup() {
   if [ -n "$FIXTURE_DIR" ] && [ -n "$SESSION_ID" ]; then
     telos_fixture delete "$SESSION_ID" >/dev/null 2>&1 || true
+  fi
+  if [ -n "$CLOUD_PID" ]; then
+    kill "$CLOUD_PID" 2>/dev/null || true
+    wait "$CLOUD_PID" 2>/dev/null || true
   fi
   if [ -n "$FIXTURE_DIR" ]; then
     rm -rf "$FIXTURE_DIR"
@@ -114,8 +128,24 @@ json_has_session() {
 }
 
 FIXTURE_DIR="$(mktemp -d)"
+python3 "$SCRIPT_DIR/smoke_cloud.py" "$FIXTURE_DIR" >"$FIXTURE_DIR/cloud.log" 2>&1 &
+CLOUD_PID=$!
+for attempt in {1..50}; do
+  [ -f "$FIXTURE_DIR/config.yaml" ] && break
+  kill -0 "$CLOUD_PID" 2>/dev/null || break
+  sleep 0.1
+done
+if [ ! -f "$FIXTURE_DIR/config.yaml" ]; then
+  cat "$FIXTURE_DIR/cloud.log" >&2
+  echo "Smoke Cloud fixture did not start" >&2
+  exit 1
+fi
 mkdir -p "$FIXTURE_DIR/fixture"
 FIXTURE_SPEC_PATH="$FIXTURE_DIR/fixture/SPEC.md"
+if [ -n "${TELOS_SMOKE_SCENARIO:-}" ]; then
+  mkdir -p "$FIXTURE_DIR/.telos-testfake"
+  cp "$TELOS_SMOKE_SCENARIO" "$FIXTURE_DIR/.telos-testfake/agent.json"
+fi
 
 cat > "$FIXTURE_SPEC_PATH" <<'FIXTURE_SPEC'
 ---
@@ -140,7 +170,7 @@ FIXTURE_SPEC
 echo "=== 1. Help and version ==="
 
 HELP="$(telos_cmd --help 2>&1)"
-check_contains "help mentions plan" "$HELP" "plan SPEC.md"
+check_contains "help mentions apply" "$HELP" "apply [SPEC.md]"
 check_contains "help mentions list" "$HELP" "list"
 check_contains "help mentions describe" "$HELP" "describe GOAL"
 check_contains "help mentions logs" "$HELP" "logs"
@@ -181,30 +211,38 @@ check_contains "logs without args shows usage" "$LOGS_NOARG" "usage: telos logs"
 DELETE_NOARG="$(telos_cmd delete 2>&1 || true)"
 check_contains "delete without args shows usage" "$DELETE_NOARG" "usage: telos delete"
 
-DESCRIBE_MISSING="$(telos_cmd describe nonexistent_session 2>&1 || true)"
+DESCRIBE_MISSING="$(telos_cmd describe local_missing 2>&1 || true)"
 check_contains "describe missing session says not found" "$DESCRIBE_MISSING" "not found"
 check_not_contains "describe missing session has no panic" "$DESCRIBE_MISSING" "panic"
 
-LOGS_MISSING="$(telos_cmd logs nonexistent_session 2>&1 || true)"
+LOGS_MISSING="$(telos_cmd logs local_missing 2>&1 || true)"
 check_contains "logs missing session says not found" "$LOGS_MISSING" "not found"
 
-DELETE_MISSING="$(telos_cmd delete nonexistent_session 2>&1 || true)"
+DELETE_MISSING="$(telos_cmd delete local_missing 2>&1 || true)"
 check_contains "delete missing session says not found" "$DELETE_MISSING" "not found"
 
-PLAN_MISSING="$(telos_cmd plan nonexistent.md 2>&1 || true)"
-check_contains "plan missing spec is specific" "$PLAN_MISSING" "spec file not found"
-check_not_contains "plan missing spec has no panic" "$PLAN_MISSING" "panic"
+PREVIEW_MISSING="$(telos_preview nonexistent.md 2>&1 || true)"
+check_contains "dry run missing spec is specific" "$PREVIEW_MISSING" "spec file not found"
+check_not_contains "dry run missing spec has no panic" "$PREVIEW_MISSING" "panic"
 
-echo "=== 3. Plan contract ==="
+echo "=== 3. Apply dry-run contract ==="
 
-PLAN_HUMAN="$(telos_cmd plan "$FIXTURE_SPEC_PATH" 2>&1)"
-check_contains "plan human includes spec name" "$PLAN_HUMAN" "smoke-fixture"
-check_contains "plan human includes version" "$PLAN_HUMAN" "0.1.0"
-check_not_contains "plan human has no panic" "$PLAN_HUMAN" "panic"
+APPLY_HELP="$(telos_cmd apply --help 2>&1)"
+check_contains "apply help mentions dry run" "$APPLY_HELP" "--dry-run"
+check_contains "apply help mentions skill diff" "$APPLY_HELP" "--diff"
 
-PLAN_JSON="$(telos_cmd plan "$FIXTURE_SPEC_PATH" --json 2>&1)"
-check_json "plan --json parses" "$PLAN_JSON"
-check_contains "plan JSON includes spec name" "$PLAN_JSON" '"name": "smoke-fixture"'
+PREVIEW_HUMAN="$(telos_preview "$FIXTURE_SPEC_PATH" 2>&1)"
+check_contains "dry run includes spec name" "$PREVIEW_HUMAN" "smoke-fixture"
+check_contains "dry run includes version" "$PREVIEW_HUMAN" "0.1.0"
+check_contains "dry run reports no changes applied" "$PREVIEW_HUMAN" "Nothing was applied."
+check_not_contains "dry run has no panic" "$PREVIEW_HUMAN" "panic"
+
+PREVIEW_JSON="$(telos_preview "$FIXTURE_SPEC_PATH" --json 2>&1)"
+check_json "dry run --json parses" "$PREVIEW_JSON"
+check_contains "dry run JSON includes spec name" "$PREVIEW_JSON" '"name": "smoke-fixture"'
+check_contains "dry run JSON identifies preview" "$PREVIEW_JSON" '"dry_run": true'
+check_contains "dry run JSON identifies operation" "$PREVIEW_JSON" '"operation": "create"'
+check "dry run sends no mutating requests" test ! -e "$FIXTURE_DIR/cloud-writes"
 
 echo "=== 4. List contract ==="
 

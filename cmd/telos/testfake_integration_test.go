@@ -119,6 +119,18 @@ func TestCLIWithTestFakeExecutor(t *testing.T) {
 	if deleteResp.SessionID != runResp.SessionID || deleteResp.Status != "completed" {
 		t.Fatalf("unexpected delete response: %+v", deleteResp)
 	}
+
+	t.Run("smoke script", func(t *testing.T) {
+		smokeEnv := []string{
+			"TELOS_SMOKE_BIN=" + telosBin,
+			"TELOS_SMOKE_TELOSD=" + telosdBin,
+			"TELOS_SMOKE_SCENARIO=" + filepath.Join(workspace, ".telos-testfake", "agent.json"),
+		}
+		out := runProcess(t, repoRoot, smokeEnv, "bash", "scripts/smoke-test.sh")
+		if !strings.Contains(out, "0 failed ===") {
+			t.Fatalf("smoke test did not complete:\n%s", out)
+		}
+	})
 }
 
 func writeFakeScenario(t *testing.T, dir string) {
