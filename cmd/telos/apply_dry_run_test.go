@@ -169,7 +169,7 @@ func TestApplyChecksResolvedPackageVersion(t *testing.T) {
 						}
 						return
 					}
-					wantOperation, wantWrites := "updated", int32(3)
+					wantOperation, wantWrites := "updated", int32(2)
 					if mode == "dry-run" {
 						wantOperation, wantWrites = tc.previewOperation, 0
 					}
@@ -438,10 +438,10 @@ func TestApplyAllowsUnversionedSkillMatchingOlderRegistryVersion(t *testing.T) {
 				}
 				handlers["POST /api/skills"] = func(w http.ResponseWriter, r *http.Request) {
 					writes.Add(1)
-					if change != "unchanged" {
-						t.Error("published a changed skill before rejecting the package")
-					}
-					_ = json.NewEncoder(w).Encode(cloud.SkillRecord{Ref: "@telos/verify-test:1.0.0"})
+					t.Error("republished a skill instead of retaining its verified lock")
+					// Unversioned publication can choose a different historical
+					// version with the same content as the verified lock.
+					_ = json.NewEncoder(w).Encode(cloud.SkillRecord{Ref: "@telos/verify-test:1.1.0", Digest: fixture.digest})
 				}
 				handlers["POST /api/packages"] = func(w http.ResponseWriter, r *http.Request) {
 					writes.Add(1)
@@ -500,7 +500,7 @@ func TestApplyAllowsUnversionedSkillMatchingOlderRegistryVersion(t *testing.T) {
 						preview.SpecDiff != "" || len(preview.SkillDiffs) != 0 || len(preview.Notes) != 1 {
 						t.Fatalf("unchanged preview = %+v", preview)
 					}
-				} else if writes.Load() != 3 || !strings.Contains(stdout, `"operation": "unchanged"`) {
+				} else if writes.Load() != 2 || !strings.Contains(stdout, `"operation": "unchanged"`) {
 					t.Fatalf("idempotent apply: writes=%d output=%s", writes.Load(), stdout)
 				}
 			})

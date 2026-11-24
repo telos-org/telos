@@ -69,6 +69,16 @@ func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverr
 		if err != nil {
 			return nil, err
 		}
+		// Publishing unversioned content can select a different matching version.
+		resolvedRefs := make(map[string]string, len(prepared.proposed.Skills))
+		for _, lock := range prepared.proposed.Skills {
+			resolvedRefs[lock.Name] = lock.Ref
+		}
+		for i, publication := range prepared.skills {
+			if publication.skill != nil && publication.skill.version == "" {
+				prepared.skills[i].ref = resolvedRefs[publication.name]
+			}
+		}
 	}
 	if goalID != "" {
 		session, err := control.GetSession(goalID)
