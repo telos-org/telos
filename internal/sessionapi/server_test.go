@@ -1641,6 +1641,8 @@ func TestWorkspaceDownloadsSessionFolderWithoutSecretsOrDependencies(t *testing.
 		"workspace/.venv/bin/python":         0o755,
 		"workspace/api/__pycache__/app.pyc":  0o644,
 		"specs/billing-api/workspace.tar.gz": 0o644,
+		"snapshots/spec-version-1/SPEC.md":   0o644,
+		"workspace/snapshots/home.png":       0o644,
 	} {
 		writeSessionFile(t, filepath.Join(store.Root, created.SessionID), name, mode)
 	}
@@ -1672,9 +1674,15 @@ func TestWorkspaceDownloadsSessionFolderWithoutSecretsOrDependencies(t *testing.
 	}
 
 	for name, exec := range map[string]bool{
-		"workspace/app.py": false, "workspace/bin/start.sh": true, "workspace/.git/HEAD": false,
-		"workspace/dashboard.oui": false, "workspace/.envoy.yaml": false, "workspace/session.json": false,
-		"runner.log": false, "specs/billing-api/evidence.jsonl": false,
+		"workspace/app.py":                 false,
+		"workspace/bin/start.sh":           true,
+		"workspace/.git/HEAD":              false,
+		"workspace/dashboard.oui":          false,
+		"workspace/.envoy.yaml":            false,
+		"workspace/session.json":           false,
+		"workspace/snapshots/home.png":     false,
+		"runner.log":                       false,
+		"specs/billing-api/evidence.jsonl": false,
 	} {
 		if got, ok := executable[name]; !ok || got != exec {
 			t.Errorf("%s: in archive %v, executable %v; want in archive, executable %v", name, ok, got, exec)
@@ -1683,7 +1691,7 @@ func TestWorkspaceDownloadsSessionFolderWithoutSecretsOrDependencies(t *testing.
 	for name := range executable {
 		if strings.HasPrefix(name, "session.json") || strings.Contains(name, ".env") && name != "workspace/.envoy.yaml" ||
 			strings.Contains(name, "node_modules") || strings.Contains(name, ".venv") ||
-			strings.Contains(name, "__pycache__") || strings.HasSuffix(name, "workspace.tar.gz") {
+			strings.Contains(name, "__pycache__") || strings.HasSuffix(name, "workspace.tar.gz") || strings.HasPrefix(name, "snapshots/") {
 			t.Errorf("archive holds %s", name)
 		}
 	}

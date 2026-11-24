@@ -21,8 +21,9 @@ var archiveExcludedNames = map[string]bool{
 // WriteWorkspace streams the session's folder as a .tar.gz: the agent's files
 // with their git history, logs, transcripts, and spec versions. It leaves out
 // session.json (the session's token and provider key), the older workspace
-// checkpoint, .env files, and dependency folders. Files still being written
-// are cut at their size when reached.
+// checkpoint, legacy spec snapshots (revisions/ holds every version), .env
+// files, and dependency folders. Files still being written are cut at their
+// size when reached.
 func (fs *FileStore) WriteWorkspace(id string, w io.Writer) error {
 	if !fileExists(fs.manifestPath(id)) {
 		return fmt.Errorf("session %s: %w", id, ErrNotFound)
@@ -58,7 +59,7 @@ func (fs *FileStore) WriteWorkspace(id string, w io.Writer) error {
 
 func excludedFromArchive(rel string) bool {
 	name := path.Base(rel)
-	if !strings.Contains(rel, "/") && strings.HasPrefix(name, "session.json") {
+	if rel == "snapshots" || !strings.Contains(rel, "/") && strings.HasPrefix(name, "session.json") {
 		return true
 	}
 	checkpoint, _ := path.Match("specs/*/workspace.tar.gz*", rel)
