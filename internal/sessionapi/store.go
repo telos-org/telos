@@ -71,7 +71,7 @@ type Store interface {
 	Pause(id string, paused bool) (*Session, error)
 	Resume(id string) (*Session, error)
 	Transcript(id string) (string, error)
-	Code(id string) (*Code, error)
+	WriteWorkspace(id string, w io.Writer) error
 	Events(id string) ([]SessionEvent, error)
 }
 
@@ -1109,7 +1109,7 @@ func (fs *FileStore) deriveSessionWithEvidence(id string, m *Manifest, includeEv
 	}
 
 	status := deriveStatus(dir, m)
-	activeWorkspacePath := workspaceDir(dir)
+	activeWorkspacePath := filepath.Join(dir, "workspace")
 	activeWorkspaceExists := fileExists(activeWorkspacePath)
 	var activeWorkspacePathPtr *string
 	var activeWorkspaceExistsPtr *bool

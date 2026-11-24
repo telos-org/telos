@@ -45,7 +45,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("POST /api/sessions/{id}/resume", h.resumeSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
-	mux.HandleFunc("GET /api/sessions/{id}/code", h.getCode)
+	mux.HandleFunc("GET /api/sessions/{id}/workspace", h.getWorkspace)
 }
 
 type handler struct {
@@ -310,30 +310,20 @@ func (h *handler) getTranscript(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte(text))
 }
 
-// getCode downloads the workspace's files, as they are now, as a zip.
-func (h *handler) getCode(w http.ResponseWriter, r *http.Request) {
+// getWorkspace downloads the session's folder as a .tar.gz.
+func (h *handler) getWorkspace(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionReadSession, SessionID: id}); !ok {
 		return
 	}
-	code, err := h.store.Code(id)
+	w.Header().Set("Content-Type", "application/gzip")
+	err := h.store.WriteWorkspace(id, w)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		writeError(w, http.StatusNotFound, err.Error())
-		return
-	case errors.Is(err, ErrNoCode):
-		// The session exists; its workspace has no files yet. The code tells
-		// this conflict apart from others on the way to Cloud.
-		writeJSON(w, http.StatusConflict, map[string]string{"detail": err.Error(), "code": "no_code"})
-		return
+		writeError(w, http.StatusNotFound, err.Error()) // nothing written yet
 	case err != nil:
-		writeError(w, http.StatusInternalServerError, err.Error())
-		return
-	}
-	w.Header().Set("Content-Type", "application/zip")
-	if err := code.WriteZip(r.Context(), w); err != nil {
 		// The status line may already be sent: drop the connection so the
-		// client sees a failed download, not a truncated zip.
+		// client sees a failed download, not a truncated archive.
 		panic(http.ErrAbortHandler)
 	}
 }
