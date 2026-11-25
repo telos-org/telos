@@ -210,6 +210,40 @@ func TestDryRunIdenticalContentsWithDifferentReferenceAreUnchanged(t *testing.T)
 	}
 }
 
+func TestDryRunPreservesBooleanSpecNames(t *testing.T) {
+	for _, name := range []string{"true", "false"} {
+		t.Run(name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "SPEC.md")
+			if err := os.WriteFile(path, []byte("---\nname: "+name+"\nversion: 1.0.0\ninterval: 30m\n---\nServe a demo.\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			server := inferenceTestServer(t, map[string]http.HandlerFunc{
+				"GET /api/account/bootstrap":                          dryRunPublishScope,
+				"GET /api/deployments":                                jsonResponse(map[string]any{"deployments": []any{}}),
+				"GET /api/packages/telos/" + name + "/versions/1.0.0": http.NotFound,
+			})
+			defer server.Close()
+			configureDryRunTest(t, server.URL)
+			preview := decodeApplyPreview(t, path, "--model", "telos/default", "--thinking", "high")
+			if preview.Proposed.Name != name {
+				t.Fatalf("spec name = %q, want %q", preview.Proposed.Name, name)
+			}
+			var output bytes.Buffer
+			printApplyPreview(&output, &preview, false)
+			for _, field := range []string{
+				"Spec      " + name,
+				"Proposed  @telos/" + name + ":1.0.0",
+				"Version   1.0.0",
+				"Interval  30m",
+			} {
+				if !strings.Contains(output.String(), field) {
+					t.Fatalf("missing %q:\n%s", field, output.String())
+				}
+			}
+		})
+	}
+}
+
 func mustReadFile(t *testing.T, path string) []byte {
 	t.Helper()
 	data, err := os.ReadFile(path)

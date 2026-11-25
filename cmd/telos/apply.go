@@ -304,8 +304,8 @@ func readApplyPackageState(
 	state := applyState{
 		Ref: pkg.reference.ref, Digest: pkg.digest, Spec: string(markdown), data: pkg.data,
 	}
-	if name, ok := raw["name"].(string); ok {
-		state.Name = strings.TrimSpace(name)
+	if name, ok := raw["name"]; ok {
+		state.Name = strings.TrimSpace(fmt.Sprint(name))
 	}
 	if version, ok := raw["version"].(string); ok {
 		state.Version = strings.TrimSpace(version)
