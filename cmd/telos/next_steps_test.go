@@ -54,7 +54,9 @@ func TestDescribeShowsStatusReasonMessageAndRetryTimes(t *testing.T) {
 func TestPauseAndResumeCallCloudAndReportTheGoal(t *testing.T) {
 	var calls []string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		calls = append(calls, r.Method+" "+r.URL.Path)
+		var body map[string]string
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		calls = append(calls, r.Method+" "+r.URL.Path+" "+body["message"])
 		if r.URL.Path == "/api/deployments/goal_2/pause" {
 			http.Error(w, `{"detail":"organization admin privileges required"}`, http.StatusForbidden)
 			return
@@ -68,18 +70,21 @@ func TestPauseAndResumeCallCloudAndReportTheGoal(t *testing.T) {
 	t.Setenv("TELOS_CONTEXT", "")
 
 	for command, want := range map[string]string{"pause": "Paused goal_1\n", "resume": "Resumed goal_1\n"} {
-		if out, stderr, err := inferenceCLIProcess(t, command, "goal_1"); err != nil || out != want {
+		if out, stderr, err := inferenceCLIProcess(t, command, "goal_1", "-m", " Fixing the cart "); err != nil || out != want {
 			t.Fatalf("%s: stdout %q, stderr %q, %v", command, out, stderr, err)
 		}
+		if _, stderr, err := inferenceCLIProcess(t, command, "goal_1"); exitCode(err) != 2 || !strings.Contains(stderr, "requires -m MESSAGE") {
+			t.Fatalf("%s without a message: %q, %v", command, stderr, err)
+		}
 	}
-	if _, stderr, err := inferenceCLIProcess(t, "pause", "goal_2"); err == nil || !strings.Contains(stderr, "admin privileges required") {
+	if _, stderr, err := inferenceCLIProcess(t, "pause", "goal_2", "-m", "why"); err == nil || !strings.Contains(stderr, "admin privileges required") {
 		t.Fatalf("non-admin pause: %q, %v", stderr, err)
 	}
-	if _, stderr, err := inferenceCLIProcess(t, "pause", "local_20261101_120000_00"); err == nil || !strings.Contains(stderr, "only for Cloud Goals") {
+	if _, stderr, err := inferenceCLIProcess(t, "pause", "local_20261101_120000_00", "-m", "why"); err == nil || !strings.Contains(stderr, "only for Cloud Goals") {
 		t.Fatalf("local pause: %q, %v", stderr, err)
 	}
 	slices.Sort(calls)
-	if want := []string{"POST /api/deployments/goal_1/pause", "POST /api/deployments/goal_1/resume", "POST /api/deployments/goal_2/pause"}; !slices.Equal(calls, want) {
+	if want := []string{"POST /api/deployments/goal_1/pause Fixing the cart", "POST /api/deployments/goal_1/resume Fixing the cart", "POST /api/deployments/goal_2/pause why"}; !slices.Equal(calls, want) {
 		t.Fatalf("calls = %v", calls)
 	}
 }

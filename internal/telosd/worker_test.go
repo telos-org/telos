@@ -273,7 +273,7 @@ func TestProviderErrorsKeepRetryingPastAnHourUntilPaused(t *testing.T) {
 		}
 
 		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
-		if _, err := store.Pause(filepath.Base(sessionDir), true); err != nil {
+		if _, err := store.Pause(filepath.Base(sessionDir), true, sessionapi.Note{}); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(time.Hour)
@@ -321,7 +321,7 @@ func TestResumeDuringCappedBackoffRetriesPromptly(t *testing.T) {
 				synctest.Wait()
 				store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
 				id := filepath.Base(sessionDir)
-				if _, err := store.Pause(id, true); err != nil {
+				if _, err := store.Pause(id, true, sessionapi.Note{}); err != nil {
 					t.Fatal(err)
 				}
 				if tc.seen {
@@ -333,7 +333,7 @@ func TestResumeDuringCappedBackoffRetriesPromptly(t *testing.T) {
 					default:
 					}
 				}
-				if _, err := store.Pause(id, false); err != nil {
+				if _, err := store.Pause(id, false, sessionapi.Note{}); err != nil {
 					t.Fatal(err)
 				}
 				time.Sleep(holdRecheckInterval + time.Second)
@@ -394,7 +394,7 @@ func TestVerifierBlockHoldsRootUntilResume(t *testing.T) {
 			t.Fatalf("blocked root ran again: %d attempts", attempts.Load())
 		}
 		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
-		if _, err := store.Resume(filepath.Base(sessionDir)); err != nil {
+		if _, err := store.Resume(filepath.Base(sessionDir), sessionapi.Note{}); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(holdRecheckInterval)
@@ -433,7 +433,7 @@ func TestLiftedHoldKeepsAnAcceptedGoalOnItsSchedule(t *testing.T) {
 		}()
 		synctest.Wait()
 		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
-		if _, err := store.Pause(filepath.Base(sessionDir), false); err != nil {
+		if _, err := store.Pause(filepath.Base(sessionDir), false, sessionapi.Note{}); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(59 * time.Minute)
@@ -475,7 +475,7 @@ func TestHoldLiftedBeforeTheCheckStopsKeepsAnAcceptedGoalOnItsSchedule(t *testin
 				}
 				// Paused mid-check, then resumed while the check is still saving.
 				for _, paused := range []bool{true, false} {
-					if _, err := store.Pause(filepath.Base(sessionDir), paused); err != nil {
+					if _, err := store.Pause(filepath.Base(sessionDir), paused, sessionapi.Note{}); err != nil {
 						t.Error(err)
 					}
 				}
@@ -513,7 +513,7 @@ func TestChildStoppedByRootHoldWaitsInsteadOfFailing(t *testing.T) {
 		go func() {
 			code, _ := runSessionWorker(childDir, false, func(string) (*game.PVGResult, error) {
 				if attempts.Add(1) == 1 { // Cloud holds the goal mid-run.
-					if _, err := store.Pause(filepath.Base(rootDir), true); err != nil {
+					if _, err := store.Pause(filepath.Base(rootDir), true, sessionapi.Note{}); err != nil {
 						t.Error(err)
 					}
 					return &game.PVGResult{GameResult: game.GameStopped}, nil
@@ -527,7 +527,7 @@ func TestChildStoppedByRootHoldWaitsInsteadOfFailing(t *testing.T) {
 		if attempts.Load() != 1 {
 			t.Fatalf("held child ran %d attempts", attempts.Load())
 		}
-		if _, err := store.Pause(filepath.Base(rootDir), false); err != nil {
+		if _, err := store.Pause(filepath.Base(rootDir), false, sessionapi.Note{}); err != nil {
 			t.Fatal(err)
 		}
 		if code := <-done; code != 0 || attempts.Load() != 2 {
@@ -559,7 +559,7 @@ func TestHeldRootWaitsWithoutRunning(t *testing.T) {
 			t.Fatalf("held root ran %d attempts", attempts.Load())
 		}
 		store := sessionapi.NewFileStore(filepath.Dir(sessionDir), sessionapi.RuntimeCloud)
-		if _, err := store.Pause(filepath.Base(sessionDir), false); err != nil {
+		if _, err := store.Pause(filepath.Base(sessionDir), false, sessionapi.Note{}); err != nil {
 			t.Fatal(err)
 		}
 		time.Sleep(holdRecheckInterval) // no wake: the root notices on its own

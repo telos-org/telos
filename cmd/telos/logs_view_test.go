@@ -334,3 +334,22 @@ func TestRetryActivityPastTheBudgetHasNoCount(t *testing.T) {
 		t.Fatalf("row = %#v visible=%v", row, visible)
 	}
 }
+
+func TestPauseAndResumeNotesShowWithTheirMessage(t *testing.T) {
+	timestamp := "2026-11-21T19:00:00Z"
+	note := func(source, message string) sessionapi.SessionEvent {
+		return sessionapi.SessionEvent{Event: "external_update", Timestamp: &timestamp, Data: map[string]any{
+			"source": source, "operator": "ada@example.com", "message": message,
+		}}
+	}
+	var output bytes.Buffer
+	printStructuredLogs(&output, []sessionapi.SessionEvent{
+		note("pause", "Fixing the cart's useEffect by hand."),
+		note("resume", "The cart now loads once. Keep the empty dependency list."),
+	}, logViewOptions{Tail: defaultLogTail})
+	want := "[2026-11-21T19:00:00Z] [INFO] Pause note from ada@example.com — Fixing the cart's useEffect by hand.\n" +
+		"[2026-11-21T19:00:00Z] [INFO] Resume note from ada@example.com — The cart now loads once. Keep the empty dependency list.\n"
+	if output.String() != want {
+		t.Fatalf("logs =\n%s", output.String())
+	}
+}

@@ -35,8 +35,9 @@ type InterruptRequested func() bool
 
 // LocalPlatform runs commands as subprocesses in a workspace directory.
 type LocalPlatform struct {
-	Workspace string
-	Env       map[string]string
+	Workspace  string
+	Env        map[string]string
+	ExtraFiles []*os.File
 }
 
 // NewLocalPlatform creates a new local platform.
@@ -68,6 +69,7 @@ func (p *LocalPlatform) Run(argv []string, task string, env map[string]string, t
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = p.Workspace
 	cmd.Env = mergedEnv
+	cmd.ExtraFiles = p.ExtraFiles
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	stdout, err := cmd.StdoutPipe()

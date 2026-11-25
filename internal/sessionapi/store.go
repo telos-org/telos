@@ -1,6 +1,7 @@
 package sessionapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -28,8 +29,15 @@ var ErrNotFound = errors.New("not found")
 // or would violate session identity.
 var ErrInvalidSession = errors.New("invalid session")
 
-// ErrConflict is returned when a request would create duplicate live state.
+// ErrConflict is returned when a request would create duplicate live state,
+// or cannot be carried out in the session's current state.
 var ErrConflict = errors.New("conflict")
+
+// ErrInvalidRequest is returned for a request body telosd cannot accept.
+var ErrInvalidRequest = errors.New("invalid request")
+
+// ErrTooLarge is returned for a request over one of telosd's size limits.
+var ErrTooLarge = errors.New("too large")
 
 var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
@@ -68,8 +76,9 @@ type Store interface {
 	List() ([]Session, error)
 	Get(id string) (*Session, error)
 	Stop(id string) (*Session, error)
-	Pause(id string, paused bool) (*Session, error)
-	Resume(id string) (*Session, error)
+	Pause(id string, paused bool, note Note) (*Session, error)
+	Resume(id string, note Note) (*Session, error)
+	Exec(ctx context.Context, id string, req ExecRequest) (*ExecResponse, error)
 	Transcript(id string) (string, error)
 	WriteWorkspace(id string, w io.Writer) error
 	Events(id string) ([]SessionEvent, error)
@@ -83,8 +92,12 @@ type FileStore struct {
 	Root         string
 	PackageRoot  string
 	OnSpecUpdate func(SpecUpdateEvent)
-	runtime      SessionRuntime
-	mu           sync.Mutex
+	// OnNote writes a person's note for a root session's agents.
+	OnNote  func(NoteEvent) error
+	runtime SessionRuntime
+	mu      sync.Mutex
+	// execs is the set of running commands. It is guarded by mu.
+	execs map[*runningCommand]struct{}
 }
 
 // NewFileStore returns a FileStore rooted at the given directory.
@@ -935,43 +948,126 @@ func (fs *FileStore) Stop(id string) (*Session, error) {
 // on, so pausing also clears a retrying issue: paused agents are not retrying,
 // and a worker waiting out a retry sees its goal changed even if the pause
 // lifts before its next check.
-func (fs *FileStore) Pause(id string, paused bool) (*Session, error) {
-	return fs.mutateRoot(id, func(m *Manifest) {
+//
+// Lifting the pause stops every running command. A note with a message is
+// left for the agents (see writeNote).
+func (fs *FileStore) Pause(id string, paused bool, note Note) (*Session, error) {
+	return fs.mutateRoot(id, func(m *Manifest) error {
+		if !paused {
+			for c := range fs.execs {
+				if c.root == id {
+					c.cancel()
+				}
+			}
+		}
+		switch {
+		case !paused:
+			m.PausedAt, m.CommandsSincePause = "", 0
+		case note.Message != "" && m.PausedAt == "": // a person's pause, not Cloud's poll
+			m.PausedAt, m.CommandsSincePause = execNow(), 0
+		}
 		m.Paused = paused
 		if paused && m.Issue != nil && m.Issue.Status == IssueRetrying {
 			m.Issue = nil
 		}
+		return fs.writeNote(id, m, "pause", note, "", 0)
 	})
 }
 
 // Resume clears a blocked issue so agents work on the spec again. It leaves
 // the pause alone: PUT .../pause owns that, so an account hold Cloud keeps on
 // survives a Resume.
-func (fs *FileStore) Resume(id string) (*Session, error) {
-	return fs.mutateRoot(id, func(m *Manifest) {
+//
+// A note with a message is left for the agents, pointing them at the
+// commands run since the pause. Exec refuses from then on, and Resume refuses
+// while any command runs, so the note counts every command.
+func (fs *FileStore) Resume(id string, note Note) (*Session, error) {
+	return fs.mutateRoot(id, func(m *Manifest) error {
+		if fs.running(id) {
+			return refusal{ErrConflict, "A command is still running. Wait for it to finish, then resume."}
+		}
 		if m.Issue.Blocked() {
 			m.Issue = nil
 		}
+		if note.Message == "" {
+			return nil
+		}
+		since, commands := m.PausedAt, m.CommandsSincePause
+		m.PausedAt, m.CommandsSincePause = "", 0
+		return fs.writeNote(id, m, "resume", note, since, commands)
 	})
 }
 
-func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest)) (*Session, error) {
+// writeNote hands a person's note, if it has a message, to OnNote for the
+// agents of a root session, with the time it was written. A resume note also
+// says how many commands ran since the pause began at since, zero included,
+// and where they are. The caller holds fs.mu.
+func (fs *FileStore) writeNote(id string, m *Manifest, source string, note Note, since string, commands int) error {
+	if note.Message == "" || fs.OnNote == nil {
+		return nil
+	}
+	now := execNow()
+	text := fmt.Sprintf("Operator: %s\nAt: %s\n\n%s", note.Operator, now, note.Message)
+	if source == "resume" {
+		log, err := execLogPath(m)
+		if err != nil {
+			return err
+		}
+		text += "\n\n" + commandsNote(log, since, now, commands)
+	}
+	return fs.OnNote(NoteEvent{Where: specUpdateEvent(id, m, SpecUpdateEvent{}), Source: source, Note: note, Text: text})
+}
+
+// running reports whether a command runs on the root session. The caller
+// holds fs.mu.
+func (fs *FileStore) running(id string) bool {
+	for c := range fs.execs {
+		if c.root == id {
+			return true
+		}
+	}
+	return false
+}
+
+// commandsNote tells the agents how many commands ran between the pause at
+// since and now, and where they are.
+func commandsNote(log, since, now string, n int) string {
+	switch {
+	case since == "": // no pause by a person, so Exec could not run
+		return "Commands run while paused: 0."
+	case n == 0:
+		return fmt.Sprintf("Commands run while paused (from %s to %s): 0.", since, now)
+	}
+	return fmt.Sprintf("Commands run while paused (from %s to %s): %d. They are the lines of `%s` with `ts` after %s. "+
+		"Each line also holds the command's stdin, stdout and stderr in base64, which can be large: read ts, argv and exit_code first.", since, now, n, log, since)
+}
+
+func (fs *FileStore) mutateRoot(id string, mutate func(*Manifest) error) (*Session, error) {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
-	if !fileExists(fs.manifestPath(id)) {
-		return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+	if _, err := fs.readRoot(id); err != nil {
+		return nil, err
 	}
-	m, err := MutateManifest(fs.manifestPath(id), func(m *Manifest) error {
-		if !isTopLevelManifest(m) || m.SessionKind != KindController {
-			return fmt.Errorf("only root sessions can be paused or resumed: %w", ErrInvalidSession)
-		}
-		mutate(m)
-		return nil
-	})
+	m, err := MutateManifest(fs.manifestPath(id), mutate)
 	if err != nil {
 		return nil, err
 	}
 	return fs.deriveSession(id, m)
+}
+
+// readRoot reads the manifest of a root session, the only kind that can be
+// paused, resumed or run a command in.
+func (fs *FileStore) readRoot(id string) (*Manifest, error) {
+	m, err := ReadManifest(fs.manifestPath(id))
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+		return nil, fmt.Errorf("session %s: %w", id, ErrNotFound)
+	case err != nil:
+		return nil, err
+	case !isTopLevelManifest(m) || m.SessionKind != KindController:
+		return nil, fmt.Errorf("only root sessions can be paused, resumed or run a command in: %w", ErrInvalidSession)
+	}
+	return m, nil
 }
 
 // Transcript returns the session transcript markdown for the first spec.
@@ -1142,6 +1238,7 @@ func (fs *FileStore) deriveSessionWithEvidence(id string, m *Manifest, includeEv
 		Reconciliation:        deriveReconciliation(m),
 		Issue:                 m.Issue,
 		Paused:                m.Paused,
+		Exec:                  true,
 	}
 
 	if s.Config == nil {

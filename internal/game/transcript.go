@@ -24,7 +24,11 @@ type AppendTurnOptions struct {
 	RecordedProgress map[string]bool
 }
 
+// ExternalUpdate is one <external_update> transcript entry: a spec update, or,
+// when Source is set, a note from a person, such as `pause`, which holds only
+// Source and Message.
 type ExternalUpdate struct {
+	Source              string
 	Message             string
 	PreviousSpecVersion int
 	CurrentSpecVersion  int
@@ -170,6 +174,10 @@ func AppendExternalUpdate(path string, update ExternalUpdate) error {
 	}
 	fmt.Fprint(f, "\n## External Update\n\n")
 	fmt.Fprintln(f, "<external_update>")
+	if update.Source != "" {
+		_, err = fmt.Fprintf(f, "Source: %s\n\n%s\n</external_update>\n", update.Source, message)
+		return err
+	}
 	fmt.Fprintln(f, message)
 	fmt.Fprintln(f)
 	fmt.Fprintf(f, "- Previous spec version: `%d`\n", update.PreviousSpecVersion)

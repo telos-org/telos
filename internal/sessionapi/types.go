@@ -365,11 +365,41 @@ type Session struct {
 	Issue          *Issue                 `json:"issue,omitempty"`
 	// Paused is always sent, so callers can tell runtimes that support pausing.
 	Paused bool `json:"paused"`
+	// Exec is always true, so callers can tell runtimes that run commands
+	// with POST /api/sessions/{id}/exec and write pause and resume notes.
+	Exec bool `json:"exec"`
 }
 
-// SessionPauseRequest is the body of PUT /api/sessions/{id}/pause.
+// SessionPauseRequest is the body of PUT /api/sessions/{id}/pause. A note is
+// written only when pausing. Cloud's status poll sends Paused alone.
 type SessionPauseRequest struct {
 	Paused *bool `json:"paused"`
+	Note
+}
+
+// Note is what a person tells the agents when they pause or resume a goal,
+// and who they are. It is the body of POST /api/sessions/{id}/resume, which
+// may also be empty. A Note with no Message writes nothing.
+type Note struct {
+	Message string `json:"message,omitempty"`
+	// Operator is the person, such as their email; not the operator role of
+	// Cloud's token.
+	Operator string `json:"operator,omitempty"`
+}
+
+// NoteEvent is a person's note for a root session's agents. Where locates
+// the session's transcript and evidence; Text is the transcript entry, which
+// may add to Note.Message what the agents should know.
+type NoteEvent struct {
+	Where  SpecUpdateEvent
+	Source string // pause or resume
+	Note   Note
+	Text   string
+}
+
+// valid reports whether the note has both fields or neither.
+func (n Note) valid() bool {
+	return (n.Message == "") == (n.Operator == "")
 }
 
 // --------- Response types ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
@@ -397,6 +427,7 @@ type SessionListItem struct {
 	Issue          *Issue                 `json:"issue,omitempty"`
 	// Paused is always sent, so callers can tell runtimes that support pausing.
 	Paused bool `json:"paused"`
+	Exec   bool `json:"exec"`
 }
 
 // SessionListResponse wraps GET /api/sessions.
@@ -435,6 +466,7 @@ func SessionListItemFromSession(session Session) SessionListItem {
 		Reconciliation:     session.Reconciliation,
 		Issue:              session.Issue,
 		Paused:             session.Paused,
+		Exec:               session.Exec,
 	}
 }
 
@@ -460,6 +492,7 @@ func (item SessionListItem) AsSession() Session {
 		Reconciliation:     item.Reconciliation,
 		Issue:              item.Issue,
 		Paused:             item.Paused,
+		Exec:               item.Exec,
 	}
 }
 

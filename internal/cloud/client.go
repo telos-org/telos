@@ -645,18 +645,24 @@ func (c *Client) GetSession(sessionID string) (*SessionRecord, error) {
 	return getJSONWithRetry[SessionRecord](context.Background(), c, "/api/deployments/"+url.PathEscape(sessionID))
 }
 
-// PauseSession stops a Goal's agents until ResumeSession. Workspace admins only.
-func (c *Client) PauseSession(sessionID string) (*SessionRecord, error) {
-	return c.postSession(sessionID, "pause")
+// PauseSession stops a Goal's agents until ResumeSession. The message tells
+// the agents why. Workspace admins only.
+func (c *Client) PauseSession(sessionID, message string) (*SessionRecord, error) {
+	return c.postSession(sessionID, "pause", message)
 }
 
 // ResumeSession lifts a pause and has the runtime check a blocked Goal again.
-func (c *Client) ResumeSession(sessionID string) (*SessionRecord, error) {
-	return c.postSession(sessionID, "resume")
+// The message is the note the agents wake up to.
+func (c *Client) ResumeSession(sessionID, message string) (*SessionRecord, error) {
+	return c.postSession(sessionID, "resume", message)
 }
 
-func (c *Client) postSession(sessionID, action string) (*SessionRecord, error) {
-	resp, err := c.do("POST", "/api/deployments/"+url.PathEscape(sessionID)+"/"+action, nil)
+func (c *Client) postSession(sessionID, action, message string) (*SessionRecord, error) {
+	body, err := json.Marshal(map[string]string{"message": message})
+	if err != nil {
+		return nil, err
+	}
+	resp, err := c.do("POST", "/api/deployments/"+url.PathEscape(sessionID)+"/"+action, body)
 	if err != nil {
 		return nil, err
 	}
@@ -669,6 +675,40 @@ func (c *Client) postSession(sessionID, action string) (*SessionRecord, error) {
 		return nil, err
 	}
 	return &response, nil
+}
+
+// Exec runs argv in a paused Goal's workspace, with no shell, and returns the
+// runtime's answer once the command has finished or reached its time limit. A
+// nonzero exit code is an answer, not an error.
+func (c *Client) Exec(goalID string, argv []string, stdin []byte, timeout time.Duration) (*sessionapi.ExecResponse, error) {
+	body, err := json.Marshal(map[string]any{
+		"argv":      argv,
+		"stdin_b64": base64.StdEncoding.EncodeToString(stdin),
+		"timeout_s": int((timeout + time.Second - 1) / time.Second),
+	})
+	if err != nil {
+		return nil, err
+	}
+	// The answer comes when the command ends, so wait for its time limit on
+	// top of the usual timeout.
+	waiting, httpClient := *c, *c.HTTP
+	if httpClient.Timeout > 0 {
+		httpClient.Timeout += timeout
+	}
+	waiting.HTTP = &httpClient
+	resp, err := waiting.do(http.MethodPost, "/api/deployments/"+url.PathEscape(goalID)+"/exec", body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, readError(resp)
+	}
+	var answer sessionapi.ExecResponse
+	if err := json.NewDecoder(resp.Body).Decode(&answer); err != nil {
+		return nil, err
+	}
+	return &answer, nil
 }
 
 func (c *Client) DeleteSession(sessionID string) (*SessionRecord, error) {

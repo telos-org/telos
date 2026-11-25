@@ -85,3 +85,21 @@ func specUpdateEventData(message string, event sessionapi.SpecUpdateEvent) map[s
 	}
 	return data
 }
+
+// ProjectNote writes a person's note for a session's agents: an
+// <external_update> entry marked `Source: <source>` in the transcript, which
+// they read when they next run, and an external_update event in the evidence
+// beside it, which `telos logs` shows.
+func ProjectNote(event sessionapi.NoteEvent) error {
+	where := event.Where
+	if err := game.InitializeTranscript(where.TranscriptPath, where.SessionID, where.SpecName, where.EvidencePath, where.SessionCreatedAt); err != nil {
+		return err
+	}
+	if err := game.AppendExternalUpdate(where.TranscriptPath, game.ExternalUpdate{Source: event.Source, Message: event.Text}); err != nil {
+		return err
+	}
+	ev := evidence.New(where.SpecName, where.EvidencePath, where.SessionID, where.EpochID)
+	ev.StartedAt = where.SessionCreatedAt
+	ev.Log("external_update", 0, "system", map[string]any{"source": event.Source, "operator": event.Note.Operator, "message": event.Note.Message})
+	return nil
+}

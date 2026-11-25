@@ -240,6 +240,12 @@ func renderedLogRowFromEvent(event sessionapi.SessionEvent) (renderedLogRow, boo
 		row.Detail = firstNonEmpty(eventDataString(event, "message"), eventDataString(event, "error"))
 		return row, true
 	case "external_update":
+		// A person's note to the agents when they paused or resumed the Goal.
+		if source := eventDataString(event, "source"); source == "pause" || source == "resume" {
+			row.Summary = sentenceCase(source) + " note from " + eventDataString(event, "operator")
+			row.Detail = eventDataString(event, "message")
+			return row, true
+		}
 		row.Summary = firstNonEmpty(eventDataString(event, "message"), "Revision updated")
 		row.Detail = firstNonEmpty(
 			eventDataString(event, "current_revision"),

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ const maxSessionRequestBytes = 4 << 20
 //	POST /api/sessions/{id}/stop
 //	PUT  /api/sessions/{id}/pause
 //	POST /api/sessions/{id}/resume
+//	POST /api/sessions/{id}/exec
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
 //	GET  /api/sessions/{id}/code
@@ -43,6 +45,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("PUT /api/sessions/{id}/pause", h.pauseSession)
 	mux.HandleFunc("POST /api/sessions/{id}/resume", h.resumeSession)
+	mux.HandleFunc("POST /api/sessions/{id}/exec", h.execCommand)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
 	mux.HandleFunc("GET /api/sessions/{id}/workspace", h.getWorkspace)
@@ -261,11 +264,12 @@ func (h *handler) pauseSession(w http.ResponseWriter, r *http.Request) {
 	var req SessionPauseRequest
 	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSessionRequestBytes))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(&req); err != nil || req.Paused == nil {
-		writeError(w, http.StatusBadRequest, `body must be {"paused": true|false}`)
+	if err := dec.Decode(&req); err != nil || req.Paused == nil || !req.valid() || (!*req.Paused && req.Message != "") {
+		writeError(w, http.StatusBadRequest, `body must be {"paused": true|false}, with "message" and "operator" together when pausing`)
 		return
 	}
-	h.writeRootMutation(w, func() (*Session, error) { return h.store.Pause(id, *req.Paused) })
+	session, err := h.store.Pause(id, *req.Paused, req.Note)
+	writeResult(w, session, err)
 }
 
 // resumeSession clears a block. Turning a pause off is PUT .../pause.
@@ -274,20 +278,55 @@ func (h *handler) resumeSession(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionPauseSession, SessionID: id}); !ok {
 		return
 	}
-	h.writeRootMutation(w, func() (*Session, error) { return h.store.Resume(id) })
+	var note Note
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSessionRequestBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&note); (err != nil && err != io.EOF) || !note.valid() {
+		writeError(w, http.StatusBadRequest, `body must be empty or {"message", "operator"}`)
+		return
+	}
+	session, err := h.store.Resume(id, note)
+	writeResult(w, session, err)
 }
 
-func (h *handler) writeRootMutation(w http.ResponseWriter, mutate func() (*Session, error)) {
-	session, err := mutate()
+// execCommand runs one command while the goal is paused. The command stops if
+// its request goes away.
+func (h *handler) execCommand(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionPauseSession, SessionID: id}); !ok {
+		return
+	}
+	var req ExecRequest
+	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxSessionRequestBytes))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "The request is larger than 4 MiB.")
+		} else {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+		}
+		return
+	}
+	resp, err := h.store.Exec(r.Context(), id, req)
+	writeResult(w, resp, err)
+}
+
+// writeResult answers a request on a root session with its result or error.
+func writeResult(w http.ResponseWriter, result any, err error) {
 	switch {
 	case errors.Is(err, ErrNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
-	case errors.Is(err, ErrInvalidSession):
+	case errors.Is(err, ErrInvalidSession), errors.Is(err, ErrInvalidRequest):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrConflict):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, ErrTooLarge):
+		writeError(w, http.StatusRequestEntityTooLarge, err.Error())
 	case err != nil:
 		writeError(w, http.StatusInternalServerError, err.Error())
 	default:
-		writeJSON(w, http.StatusOK, session)
+		writeJSON(w, http.StatusOK, result)
 	}
 }
 
