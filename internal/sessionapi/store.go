@@ -33,8 +33,8 @@ var ErrConflict = errors.New("conflict")
 
 var specDirNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
-// Cloud names Goals goal_…; Goals created before that keep sess_… IDs.
-var cloudSessionIDRE = regexp.MustCompile(`^(?:goal|sess)_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
+// Cloud names Goals g_…; Goals created before that keep goal_… or sess_… IDs.
+var cloudSessionIDRE = regexp.MustCompile(`^(?:g|goal|sess)_[A-Za-z0-9][A-Za-z0-9_-]{0,127}$`)
 
 func PackagePathForDigest(root string, digest string) (string, error) {
 	digest = strings.TrimSpace(digest)
