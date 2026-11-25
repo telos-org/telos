@@ -16,7 +16,7 @@ $ telos apply SPEC.md --model my-anthropic-key/claude-sonnet-5-5
 To change an existing Goal's model or thinking effort, use `--goal` without a spec file:
 
 ```console
-$ telos apply --goal goal_c7d2f0a4e8 --model telos/max --thinking high
+$ telos apply --goal g_c7d2f0a4e8 --model telos/max --thinking high
 ```
 
 You can switch between managed inference, API keys, and subscriptions by selecting the new connection's name. The change takes effect at the next agent turn.
@@ -52,7 +52,7 @@ Many individual developers and small teams already pay for subscriptions like Ch
 In order to see costs per Goal on inference, run either `telos describe` or `telos list --wide`. For example:
 
 ```console
-$ telos describe goal_c7d2f0a4e8
+$ telos describe g_c7d2f0a4e8
 ...
 Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 Cloud     $1.25 (compute $1.00, storage $0.25)

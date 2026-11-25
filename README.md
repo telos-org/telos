@@ -79,8 +79,8 @@ Preview a spec, apply it, and watch `telos` work:
 ```bash
 telos apply SPEC.md --dry-run        # preview what applying would change
 telos apply SPEC.md                   # create the Goal and print its ID
-telos logs goal_c7d2f0a4e8 --follow   # follow the agents' work
-telos describe goal_c7d2f0a4e8        # status, service URL, and cost
+telos logs g_c7d2f0a4e8 --follow   # follow the agents' work
+telos describe g_c7d2f0a4e8        # status, service URL, and cost
 ```
 
 Add `--diff` to show spec and skill file changes.
@@ -88,10 +88,10 @@ Add `--diff` to show spec and skill file changes.
 When the service meets its spec, the Goal is `ready`:
 
 ```console
-$ telos describe goal_c7d2f0a4e8
+$ telos describe g_c7d2f0a4e8
 Name      reading-list
 Status    ready
-Goal      goal_c7d2f0a4e8
+Goal      g_c7d2f0a4e8
 Revision  sha256:8f21c47a91ee
 Model     telos/default
 Thinking  medium
@@ -105,17 +105,20 @@ To change the service, edit `SPEC.md`, bump its version, and apply it to the
 same Goal. `telos` reconciles the running software toward the new desired state.
 
 ```bash
-telos apply SPEC.md --goal goal_c7d2f0a4e8 --dry-run
-telos apply SPEC.md --goal goal_c7d2f0a4e8
+telos apply SPEC.md --dry-run
+telos apply SPEC.md
 ```
 
-Goal names are unique within a context: applying a spec whose name is already
-taken fails and names the Goal to update with `--goal`.
+To let your team review a change first, propose it instead:
+
+```bash
+telos propose SPEC.md -t "Record who added each book"
+```
 
 Deleting a Goal removes its environment and can't be undone:
 
 ```bash
-telos delete goal_c7d2f0a4e8
+telos delete g_c7d2f0a4e8
 ```
 
 [Use Telos](skills/telos-cli/references/use-telos.md) walks one Goal through
