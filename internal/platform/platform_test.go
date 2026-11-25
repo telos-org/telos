@@ -60,6 +60,24 @@ func TestLocalPlatformRunWithTask(t *testing.T) {
 	}
 }
 
+func TestLocalPlatformRunInheritsFiles(t *testing.T) {
+	f, err := os.CreateTemp(t.TempDir(), "inherited")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	p := NewLocalPlatform(t.TempDir())
+	p.ExtraFiles = []*os.File{f}
+	result := p.Run([]string{"sh", "-c", "printf inherited >&3"}, "", nil, 10, nil, nil)
+	if result.ReturnCode != 0 || result.InfraError != "" {
+		t.Fatalf("command failed: %+v", result)
+	}
+	got, err := os.ReadFile(f.Name())
+	if err != nil || string(got) != "inherited" {
+		t.Fatalf("inherited file = %q, %v", got, err)
+	}
+}
+
 func TestLocalPlatformRunWithEnv(t *testing.T) {
 	dir := t.TempDir()
 	p := NewLocalPlatform(dir)

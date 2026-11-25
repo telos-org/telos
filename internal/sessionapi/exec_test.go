@@ -125,6 +125,61 @@ func TestExecRejectsARequestItCannotAccept(t *testing.T) {
 	}
 }
 
+func TestExecAfterWorkerExitWaitsForTheSurvivingAgent(t *testing.T) {
+	srv, store, id, workspace := newPausedGoal(t)
+	sessionDir := filepath.Join(store.Root, id)
+	if _, err := sessionapi.MutateManifest(filepath.Join(sessionDir, "session.json"), func(m *sessionapi.Manifest) error {
+		m.Epochs = []sessionapi.Epoch{{ID: 1, StartedAt: "2026-11-21T10:00:00.000Z"}}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	execution, err := sessionapi.AcquireExecution(sessionDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer execution.Close()
+	agent := exec.Command("sh", "-c", "touch agent-started; exec sleep 60")
+	agent.Dir = workspace
+	agent.ExtraFiles = []*os.File{execution}
+	if err := agent.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = agent.Process.Kill()
+		_ = agent.Wait()
+	})
+	waitFor(t, "the agent to start", func() bool {
+		_, err := os.Stat(filepath.Join(workspace, "agent-started"))
+		return err == nil
+	})
+	// A worker crash closes its file without unlocking the agent's copy.
+	if err := execution.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, detail := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"true"}}); code != http.StatusConflict || detail != "The agents are still stopping. Try again in a few seconds." {
+		t.Fatalf("exec while the agent survives = %d %q", code, detail)
+	}
+	if replacement, err := sessionapi.AcquireExecution(sessionDir); err == nil {
+		replacement.Close()
+		t.Fatal("a replacement worker acquired the surviving agent's execution lock")
+	}
+	if err := agent.Process.Kill(); err != nil {
+		t.Fatal(err)
+	}
+	_ = agent.Wait()
+	if code, response, detail := execCommand(t, srv, id, sessionapi.ExecRequest{Argv: []string{"true"}}); code != http.StatusOK || response.ExitCode != 0 {
+		t.Fatalf("exec after the agent exited = %d %+v %q", code, response, detail)
+	}
+	m, err := sessionapi.ReadManifest(filepath.Join(sessionDir, "session.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.Paused || m.PausedAt == "" || m.OpenEpoch() == nil {
+		t.Fatalf("Exec changed the pause or unfinished history: %+v", m)
+	}
+}
+
 // Commands run only while a person has paused the goal and no agent turn
 // runs, as many at once as the person likes. Lifting the pause stops them all.
 func TestExecRunsCommandsAtOnceUntilThePauseLifts(t *testing.T) {

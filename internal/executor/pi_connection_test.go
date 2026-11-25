@@ -50,6 +50,61 @@ func TestPiConnectionsRouteModelsAndToolsSeparately(t *testing.T) {
 	}
 }
 
+func TestPiRetainsInheritedExecutionLock(t *testing.T) {
+	binary := os.Getenv("TELOS_TEST_PI_BINARY")
+	if binary == "" {
+		t.Skip("set TELOS_TEST_PI_BINARY to exercise native Pi lock inheritance")
+	}
+	dir := t.TempDir()
+	execution, err := sessionapi.AcquireExecution(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer execution.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, binary, "--offline", "--mode", "rpc", "--no-extensions", "--no-skills", "--no-prompt-templates", "--no-themes", "--no-context-files")
+	cmd.Env = append(os.Environ(), "HOME="+dir, "PI_CODING_AGENT_DIR="+dir, "PI_TELEMETRY=0")
+	cmd.ExtraFiles = []*os.File{execution}
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stdin.Close()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	if _, err := io.WriteString(stdin, "{\"type\":\"get_state\",\"id\":\"lock\"}\n"); err != nil {
+		t.Fatal(err)
+	}
+	var response map[string]any
+	if err := json.NewDecoder(stdout).Decode(&response); err != nil {
+		t.Fatalf("Pi did not start: %v", err)
+	}
+	if err := execution.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if replacement, err := sessionapi.AcquireExecution(dir); err == nil {
+		replacement.Close()
+		t.Fatal("Pi released its inherited execution lock")
+	}
+	_ = cmd.Process.Kill()
+	_ = cmd.Wait()
+	replacement, err := sessionapi.AcquireExecution(dir)
+	if err != nil {
+		t.Fatalf("execution lock stayed held after Pi exited: %v", err)
+	}
+	replacement.Close()
+}
+
 func TestLegacyPiFailsTurnWithInferenceConnection(t *testing.T) {
 	binary := os.Getenv("TELOS_TEST_LEGACY_PI_BINARY")
 	if binary == "" {

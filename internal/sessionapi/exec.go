@@ -174,12 +174,9 @@ func (fs *FileStore) execRefusal(id string, m *Manifest) error {
 	return refusal{ErrConflict, detail}
 }
 
-// agentTurnRunning reports whether the root session or one of its children
-// has an epoch open. A hold stops the game loop, which closes its epoch once
-// the interrupted turn has returned, so a paused goal with no open epoch runs
-// no agent turn. An epoch that opens later sees the hold before its first
-// turn, though the game loop may still save a workspace checkpoint as it
-// stops.
+// agentTurnRunning checks execution locks rather than unfinished epochs,
+// which can outlive a crashed worker. A later run sees the hold before its
+// first turn, though it may still save a workspace checkpoint as it stops.
 func (fs *FileStore) agentTurnRunning(rootID string) bool {
 	entries, err := os.ReadDir(fs.Root)
 	if err != nil {
@@ -187,7 +184,7 @@ func (fs *FileStore) agentTurnRunning(rootID string) bool {
 	}
 	for _, entry := range entries {
 		m, err := ReadManifest(fs.manifestPath(entry.Name()))
-		if err == nil && (entry.Name() == rootID || strValue(m.ParentSessionID) == rootID) && m.OpenEpoch() != nil {
+		if err == nil && (entry.Name() == rootID || strValue(m.ParentSessionID) == rootID) && executionRunning(fs.sessionDir(entry.Name()), m) {
 			return true
 		}
 	}

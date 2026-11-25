@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/telos-org/telos/internal/executor"
@@ -134,6 +135,12 @@ func RunLocalSession(sessionDir string) (*game.PVGResult, error) {
 
 // RunLocalSessionWithExecutor runs a session with an optional custom executor.
 func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*game.PVGResult, error) {
+	execution, err := sessionapi.AcquireExecution(sessionDir)
+	if err != nil {
+		return nil, err
+	}
+	defer execution.Close()
+
 	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
 	if err != nil {
 		return nil, fmt.Errorf("read session manifest: %w", err)
@@ -202,6 +209,8 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 
 	if pi, ok := agentExec.(*executor.PiExecutor); ok {
+		pi.Platform.ExtraFiles = []*os.File{execution}
+		defer func() { pi.Platform.ExtraFiles = nil }()
 		agentExec = &sessionInferenceExecutor{PiExecutor: pi, sessionDir: sessionDir}
 	}
 
@@ -221,6 +230,8 @@ func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*g
 	}
 	pvg := game.NewPVG(compiled, agentExec, state, pvgCfg)
 	result := pvg.Run()
+	// A completed run may have left background services holding inherited files.
+	defer syscall.Flock(int(execution.Fd()), syscall.LOCK_UN)
 
 	// Close epoch
 	if err := finishEpoch(sessionDir, epochID, result); err != nil {
