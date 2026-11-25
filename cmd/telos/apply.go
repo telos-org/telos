@@ -404,8 +404,12 @@ func previewCloudApply(
 		))
 		preview.Proposed.ModelSource = previewSourceGoal
 		preview.Proposed.ThinkingSource = previewSourceGoal
-		if proposed.Digest != "" && proposed.Digest == current.Digest && proposed.Ref == current.Ref {
+		if proposed.Digest != "" && proposed.Digest == current.Digest {
 			preview.Operation = "unchanged"
+			if proposed.Ref != current.Ref {
+				preview.Proposed.Ref = current.Ref
+				preview.Notes = append(preview.Notes, "The package contents are unchanged. The Goal keeps its current package reference.")
+			}
 		}
 		if options.force {
 			preview.Notes = append(preview.Notes, "The server's snapshot check would be bypassed by --force.")

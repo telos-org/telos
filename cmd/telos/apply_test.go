@@ -189,7 +189,7 @@ func TestApplyChecksResolvedPackageVersion(t *testing.T) {
 	}
 }
 
-func TestDryRunIdenticalContentsWithDifferentReferenceAreAnUpdate(t *testing.T) {
+func TestDryRunIdenticalContentsWithDifferentReferenceAreUnchanged(t *testing.T) {
 	pkg := testApplyPackage(t)
 	handlers := registryApplyHandlers(pkg)
 	handlers["GET /api/packages/other/demo/versions/1.2.3"] = func(w http.ResponseWriter, r *http.Request) {
@@ -202,8 +202,11 @@ func TestDryRunIdenticalContentsWithDifferentReferenceAreAnUpdate(t *testing.T) 
 	defer server.Close()
 	configureDryRunTest(t, server.URL)
 	preview := decodeApplyPreview(t, "@other/demo:1.2.3", "--goal", "goal_test")
-	if preview.Operation != "update" || preview.Proposed.Digest != preview.Current.Digest || preview.Proposed.Ref == preview.Current.Ref || preview.SpecDiff != "" {
-		t.Fatalf("reference change was hidden: %+v", preview)
+	if preview.Operation != "unchanged" || preview.Proposed.Digest != preview.Current.Digest || preview.Proposed.Ref != preview.Current.Ref || preview.SpecDiff != "" {
+		t.Fatalf("identical contents would change the Goal: %+v", preview)
+	}
+	if !strings.Contains(strings.Join(preview.Notes, " "), "keeps its current package reference") {
+		t.Fatalf("missing explanation for retaining the current reference: %+v", preview)
 	}
 }
 
