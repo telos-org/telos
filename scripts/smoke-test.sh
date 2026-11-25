@@ -3,7 +3,6 @@
 #
 # Usage:
 #   TELOS_SMOKE_BIN=/path/to/telos TELOS_SMOKE_TELOSD=/path/to/telosd ./smoke-test.sh
-#   Set TELOS_SMOKE_SCENARIO to an agent.json fixture for telos_testfake binaries.
 #
 # Validates the end-user CLI surface, then launches one tiny isolated local
 # run to cover real session creation, inspection, logs, delete, and persisted
@@ -13,7 +12,6 @@ set -euo pipefail
 
 TELOS="${TELOS_SMOKE_BIN:-$(command -v telos || true)}"
 TELOSD="${TELOS_SMOKE_TELOSD:-$(command -v telosd || true)}"
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 if [ -z "$TELOS" ] || [ ! -x "$TELOS" ]; then
   echo "TELOS_SMOKE_BIN is not executable and telos was not found on PATH" >&2
@@ -27,9 +25,7 @@ fi
 PASS=0
 FAIL=0
 FIXTURE_DIR=""
-CLOUD_DIR=""
 SESSION_ID=""
-CLOUD_PID=""
 
 pass() {
   PASS=$((PASS + 1))
@@ -50,12 +46,8 @@ telos_cmd() {
     -u TELOS_RUNTIME \
     -u TELOS_SESSION_DIR \
     -u TELOS_SESSION_ID \
-    TELOS_CONFIG="$CLOUD_DIR/config.yaml" \
+    TELOS_CONFIG="$FIXTURE_DIR/config.yaml" \
     "$TELOS" "$@"
-}
-
-telos_preview() {
-  telos_cmd apply "$@" --dry-run --model telos/default --thinking high
 }
 
 telos_fixture() {
@@ -66,15 +58,8 @@ cleanup() {
   if [ -n "$FIXTURE_DIR" ] && [ -n "$SESSION_ID" ]; then
     telos_fixture delete "$SESSION_ID" >/dev/null 2>&1 || true
   fi
-  if [ -n "$CLOUD_PID" ]; then
-    kill "$CLOUD_PID" 2>/dev/null || true
-    wait "$CLOUD_PID" 2>/dev/null || true
-  fi
   if [ -n "$FIXTURE_DIR" ]; then
     rm -rf "$FIXTURE_DIR"
-  fi
-  if [ -n "$CLOUD_DIR" ]; then
-    rm -rf "$CLOUD_DIR"
   fi
 }
 trap cleanup EXIT
@@ -132,25 +117,8 @@ json_has_session() {
 }
 
 FIXTURE_DIR="$(mktemp -d)"
-CLOUD_DIR="$(mktemp -d)"
-python3 "$SCRIPT_DIR/smoke_cloud.py" "$CLOUD_DIR" >"$CLOUD_DIR/cloud.log" 2>&1 &
-CLOUD_PID=$!
-for attempt in {1..50}; do
-  [ -f "$CLOUD_DIR/config.yaml" ] && break
-  kill -0 "$CLOUD_PID" 2>/dev/null || break
-  sleep 0.1
-done
-if [ ! -f "$CLOUD_DIR/config.yaml" ]; then
-  cat "$CLOUD_DIR/cloud.log" >&2
-  echo "Smoke Cloud fixture did not start" >&2
-  exit 1
-fi
 mkdir -p "$FIXTURE_DIR/fixture"
 FIXTURE_SPEC_PATH="$FIXTURE_DIR/fixture/SPEC.md"
-if [ -n "${TELOS_SMOKE_SCENARIO:-}" ]; then
-  mkdir -p "$FIXTURE_DIR/.telos-testfake"
-  cp "$TELOS_SMOKE_SCENARIO" "$FIXTURE_DIR/.telos-testfake/agent.json"
-fi
 
 cat > "$FIXTURE_SPEC_PATH" <<'FIXTURE_SPEC'
 ---
@@ -226,7 +194,7 @@ check_contains "logs missing session says not found" "$LOGS_MISSING" "not found"
 DELETE_MISSING="$(telos_cmd delete local_missing 2>&1 || true)"
 check_contains "delete missing session says not found" "$DELETE_MISSING" "not found"
 
-PREVIEW_MISSING="$(telos_preview nonexistent.md 2>&1 || true)"
+PREVIEW_MISSING="$(telos_cmd apply nonexistent.md --dry-run 2>&1 || true)"
 check_contains "dry run missing spec is specific" "$PREVIEW_MISSING" "spec file not found"
 check_not_contains "dry run missing spec has no panic" "$PREVIEW_MISSING" "panic"
 
@@ -236,18 +204,10 @@ APPLY_HELP="$(telos_cmd apply --help 2>&1)"
 check_contains "apply help mentions dry run" "$APPLY_HELP" "--dry-run"
 check_contains "apply help mentions skill diff" "$APPLY_HELP" "--diff"
 
-PREVIEW_HUMAN="$(telos_preview "$FIXTURE_SPEC_PATH" 2>&1)"
-check_contains "dry run includes spec name" "$PREVIEW_HUMAN" "smoke-fixture"
-check_contains "dry run includes version" "$PREVIEW_HUMAN" "0.1.0"
-check_contains "dry run reports no changes applied" "$PREVIEW_HUMAN" "Nothing was applied."
-check_not_contains "dry run has no panic" "$PREVIEW_HUMAN" "panic"
-
-PREVIEW_JSON="$(telos_preview "$FIXTURE_SPEC_PATH" --json 2>&1)"
-check_json "dry run --json parses" "$PREVIEW_JSON"
-check_contains "dry run JSON includes spec name" "$PREVIEW_JSON" '"name": "smoke-fixture"'
-check_contains "dry run JSON identifies preview" "$PREVIEW_JSON" '"dry_run": true'
-check_contains "dry run JSON identifies operation" "$PREVIEW_JSON" '"operation": "create"'
-check "dry run sends no mutating requests" test ! -e "$CLOUD_DIR/cloud-writes"
+# Go HTTP-fixture tests cover preview output and reject mutating requests.
+PREVIEW_SIGNED_OUT="$(telos_cmd apply "$FIXTURE_SPEC_PATH" --dry-run 2>&1 || true)"
+check_contains "dry run requires login" "$PREVIEW_SIGNED_OUT" "telos login"
+check_not_contains "signed-out dry run has no panic" "$PREVIEW_SIGNED_OUT" "panic"
 
 echo "=== 4. List contract ==="
 
