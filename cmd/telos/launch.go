@@ -387,6 +387,9 @@ func applyCloudControl(
 		exitWithError(err)
 	}
 	currentRef := ""
+	if prepared.goal != nil && prepared.goal.PackageDigest != "" && session.PackageDigest == prepared.goal.PackageDigest {
+		operation = "unchanged"
+	}
 	if prepared.current != nil {
 		currentRef = prepared.current.Ref
 		if session.PackageDigest != "" && session.PackageDigest == prepared.current.Digest {
@@ -438,12 +441,6 @@ func applyCloudSessionPackage(
 			RevisionMessage: opts.message,
 			Force:           opts.force,
 		})
-		if err != nil && cloud.IsStatus(err, 409) {
-			current, getErr := control.GetSession(sessionID)
-			if getErr == nil && current.PackageRef == packageRef {
-				return "unchanged", current, nil
-			}
-		}
 		return "updated", session, actionableDeploymentUpdateError(goalNotFound(err, sessionID, control.ContextName()), opts.force)
 	}
 

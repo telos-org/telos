@@ -262,7 +262,7 @@ Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 Logs      telos logs g_c7d2f0a4e8
 ```
 
-This applies the update in place to the Goal named by the spec's `name` field, and Telos begins reconciling toward the new desired state. To optionally describe the update, add `-m "MSG"`. Otherwise, the revision's default message is `Deploy v0.2.0`. Continue to monitor status from `working` to `ready`, then exercise the updated API behavior.
+This applies the update in place to the Goal named by the spec's `name` field. Telos begins reconciling toward the new revision. If the Goal already runs this exact spec, `apply` prints `No changes to reading-list` and adds no revision. To optionally describe the update, add `-m "MSG"`. Otherwise, the revision's default message is `Deploy v0.2.0`. Continue to monitor status from `working` to `ready`, then exercise the updated API behavior.
 
 If the Goal has been updated by someone else, you can fetch its current spec with:
 
@@ -354,7 +354,7 @@ On a Goal that requires proposals, a member can apply a proposal only after an o
 
 ```console
 $ telos apply p_3f9a2b7c
-applied "Support removing books" to reading-list
+accepted "Support removing books" for reading-list
 
 Status    working
 Goal      g_c7d2f0a4e8

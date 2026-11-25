@@ -34,9 +34,14 @@ func applyProposal(id string, force, jsonOut bool, contextOverride string) {
 		printJSON(map[string]any{"context": control.ContextName(), "proposal": applied, "goal": goal})
 		return
 	}
+	// Applied means the Goal accepted the proposal, not that it is delivered.
+	heading := fmt.Sprintf("accepted %q for %s", applied.Title, goal.Name)
+	if applied.Status == "applying" {
+		heading = fmt.Sprintf("applying %q to %s", applied.Title, goal.Name)
+	}
 	printCloudSessionReceiptForContext(
 		os.Stdout,
-		fmt.Sprintf("%s %q to %s", applied.Status, applied.Title, goal.Name),
+		heading,
 		goal,
 		control.ContextName(),
 		followUpContext(control, contextOverride),

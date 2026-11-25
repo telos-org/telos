@@ -19,7 +19,7 @@ func TestApplyProposalDeploysItAndShowsTheGoal(t *testing.T) {
 		}),
 	})
 	out := captureStdout(t, func() { cmdApply([]string{"p_3f9a2b7c"}) })
-	for _, want := range []string{"applied \"Add a weekly digest\" to reading-list\n\n", "Status    working\n", "Goal      goal_c7d2f0a4e8\n", "Logs      telos logs goal_c7d2f0a4e8\n"} {
+	for _, want := range []string{"accepted \"Add a weekly digest\" for reading-list\n\n", "Status    working\n", "Goal      goal_c7d2f0a4e8\n", "Logs      telos logs goal_c7d2f0a4e8\n"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("apply output missing %q:\n%s", want, out)
 		}

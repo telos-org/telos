@@ -81,6 +81,40 @@ func TestApplyDeploysToTheGoalTheSpecNames(t *testing.T) {
 	}
 }
 
+func TestApplySaysWhenTheGoalAlreadyRunsTheSpec(t *testing.T) {
+	goal := `{"id":"goal_live","name":"example","state":"running","status":"ready","can_deploy":true,"package_digest":"sha256:aaa"}`
+	for _, tt := range []struct {
+		name, answer, want string
+	}{
+		{"same package", goal, "No changes to example\n"},
+		{"new package", `{"id":"goal_live","name":"example","state":"running","status":"working","package_digest":"sha256:bbb"}`, "Updated example\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := inferenceTestServer(t, map[string]http.HandlerFunc{
+				"GET /api/deployments": func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(`{"deployments":[` + goal + `]}`))
+				},
+				"GET /api/deployments/goal_live":                  jsonResponse(map[string]any{"id": "goal_live", "name": "example", "package_digest": "sha256:aaa"}),
+				"GET /api/packages/person/example/versions/1.0.0": http.NotFound,
+				"POST /api/packages": func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(`{"ref":"@person/example:1.0.0","version":"1.0.0"}`))
+				},
+				"PUT /api/deployments/goal_live": func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(tt.answer))
+				},
+			})
+			defer server.Close()
+			configureCloudTest(t, server.URL)
+			dir := applyTestSpec(t)
+
+			out, stderr, err := applyTestProcess(t, dir, "apply", "SPEC.md")
+			if err != nil || !strings.HasPrefix(out, tt.want) {
+				t.Fatalf("err=%v stdout=%q stderr=%q, want %q", err, out, stderr, tt.want)
+			}
+		})
+	}
+}
+
 func TestApplyRefusesBeforeUploadingTheSpec(t *testing.T) {
 	for _, tt := range []struct {
 		name, goals string
