@@ -40,6 +40,7 @@ func decodeApplyPreview(t *testing.T, args ...string) applyPreview {
 
 func registryApplyHandlers(pkg *spec.ApplyPackage) map[string]http.HandlerFunc {
 	return map[string]http.HandlerFunc{
+		"GET /api/deployments": jsonResponse(map[string]any{"deployments": []cloud.SessionRecord{{ID: "goal_test", Name: "demo", CanDeploy: true}}}),
 		"GET /api/packages/telos/demo/versions/1.2.3": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(cloud.PackageVersionRecord{Scope: "telos", Name: "demo", Version: "1.2.3", Ref: "@telos/demo:1.2.3", Digest: pkg.Digest})
 		},
@@ -71,6 +72,7 @@ func TestDryRunCreationInferencePrecedence(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			handlers := registryApplyHandlers(pkg)
+			handlers["GET /api/deployments"] = jsonResponse(map[string]any{"deployments": []any{}})
 			handlers["GET /api/inference/preference"] = func(w http.ResponseWriter, r *http.Request) {
 				if tt.preference == "" {
 					t.Error("explicit settings should not fetch workspace defaults")
@@ -159,7 +161,7 @@ func TestApplyChecksResolvedPackageVersion(t *testing.T) {
 			for _, mode := range []string{"dry-run", "apply"} {
 				t.Run(mode, func(t *testing.T) {
 					writes.Store(0)
-					args := []string{"apply", fixture.path, "--goal", "goal_test", "--json"}
+					args := []string{"apply", fixture.path, "--json"}
 					if mode == "dry-run" {
 						args = append(args, "--dry-run")
 					}
@@ -200,7 +202,7 @@ func TestDryRunIdenticalContentsWithDifferentReferenceAreUnchanged(t *testing.T)
 	server := inferenceTestServer(t, handlers)
 	defer server.Close()
 	configureDryRunTest(t, server.URL)
-	preview := decodeApplyPreview(t, "@other/demo:1.2.3", "--goal", "goal_test")
+	preview := decodeApplyPreview(t, "@other/demo:1.2.3")
 	if preview.Operation != "unchanged" || preview.Proposed.Digest != preview.Current.Digest || preview.Proposed.Ref != preview.Current.Ref || preview.SpecDiff != "" {
 		t.Fatalf("identical contents would change the Goal: %+v", preview)
 	}
@@ -404,7 +406,7 @@ func dryRunPublishScope(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write([]byte(`{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","default_publish_scope":"telos"}]}`))
 }
 
-func TestApplyRejectsSpecNameChanges(t *testing.T) {
+func TestApplyRejectsGoalPackageNameMismatch(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "SPEC.md")
 	if err := os.WriteFile(path, []byte("---\nname: other\nversion: 1.0.0\n---\n# Goal\nServe another service.\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -418,6 +420,7 @@ func TestApplyRejectsSpecNameChanges(t *testing.T) {
 		t.Fatal(err)
 	}
 	handlers := registryApplyHandlers(testApplyPackage(t))
+	handlers["GET /api/deployments"] = jsonResponse(map[string]any{"deployments": []cloud.SessionRecord{{ID: "goal_test", Name: "other", CanDeploy: true}}})
 	handlers["GET /api/account/bootstrap"] = dryRunPublishScope
 	handlers["GET /api/packages/telos/other/versions/1.0.0"] = func(w http.ResponseWriter, r *http.Request) {
 		_ = json.NewEncoder(w).Encode(cloud.PackageVersionRecord{
@@ -508,12 +511,12 @@ func TestApplyAllowsUnversionedSkillMatchingOlderRegistryVersion(t *testing.T) {
 					}
 					handlers["PUT /api/deployments/goal_test"] = func(w http.ResponseWriter, r *http.Request) {
 						writes.Add(1)
-						http.Error(w, "already current", http.StatusConflict)
+						jsonResponse(cloud.SessionRecord{ID: "goal_test", Name: "demo", PackageRef: "@telos/demo:1.2.3", PackageDigest: fixture.pkg.Digest})(w, r)
 					}
 					server := inferenceTestServer(t, handlers)
 					defer server.Close()
 					configureDryRunTest(t, server.URL)
-					args := []string{"apply", fixture.path, "--goal", "goal_test", "--json"}
+					args := []string{"apply", fixture.path, "--json"}
 					if dryRun {
 						args = append(args, "--dry-run", "--diff")
 					}
@@ -608,7 +611,7 @@ func TestDryRunUnpublishedPackageKeepsUnversionedSkillUnresolved(t *testing.T) {
 	server := inferenceTestServer(t, handlers)
 	defer server.Close()
 	configureDryRunTest(t, server.URL)
-	preview := decodeApplyPreview(t, fixture.path, "--goal", "goal_test")
+	preview := decodeApplyPreview(t, fixture.path)
 	if preview.Operation != "update" || preview.Proposed.Digest != "" || len(preview.Proposed.Skills) != 1 ||
 		preview.Proposed.Skills[0].Ref != "" || preview.SpecDiff != "" {
 		t.Fatalf("unpublished package preview = %+v", preview)
@@ -638,7 +641,7 @@ func TestDryRunDiffUsesLocalFilesForUnpublishedSkillVersion(t *testing.T) {
 	server := inferenceTestServer(t, handlers)
 	defer server.Close()
 	configureDryRunTest(t, server.URL)
-	preview := decodeApplyPreview(t, fixture.path, "--goal", "goal_test", "--diff")
+	preview := decodeApplyPreview(t, fixture.path, "--diff")
 	if preview.Proposed.Digest == "" || preview.Proposed.Skills[0].Ref != "@telos/verify-test:2.0.0" {
 		t.Fatalf("missing resolved identity: %+v", preview.Proposed)
 	}
@@ -723,7 +726,7 @@ func TestApplyDiffIsIndependentOfDryRun(t *testing.T) {
 				server := inferenceTestServer(t, handlers)
 				defer server.Close()
 				configureDryRunTest(t, server.URL)
-				args := []string{"apply", fixture.path, "--goal", "goal_test"}
+				args := []string{"apply", fixture.path}
 				if mode.dryRun {
 					args = append(args, "--dry-run")
 				}
@@ -764,6 +767,7 @@ func TestApplyDiffIncludesNewSpec(t *testing.T) {
 		pkg := testApplyPackage(t)
 		var writes atomic.Int32
 		handlers := registryApplyHandlers(pkg)
+		handlers["GET /api/deployments"] = jsonResponse(map[string]any{"deployments": []any{}})
 		handlers["POST /api/deployments"] = func(w http.ResponseWriter, r *http.Request) {
 			writes.Add(1)
 			jsonResponse(cloud.SessionRecord{ID: "goal_new", Name: "demo", PackageRef: "@telos/demo:1.2.3", PackageDigest: pkg.Digest})(w, r)
@@ -818,16 +822,16 @@ func TestApplyWithUnreadableDeployedBaseline(t *testing.T) {
 			server := inferenceTestServer(t, handlers)
 			defer server.Close()
 			configureDryRunTest(t, server.URL)
-			out, stderr, err := inferenceCLIProcess(t, "apply", ref, "--goal", "goal_test", "--dry-run")
+			out, stderr, err := inferenceCLIProcess(t, "apply", ref, "--dry-run")
 			if err == nil || out != "" || !strings.Contains(stderr, "read deployed baseline") || updates.Load() != 0 {
 				t.Fatalf("dry-run error=%v writes=%d stdout=%s stderr=%s", err, updates.Load(), out, stderr)
 			}
-			out, stderr, err = inferenceCLIProcess(t, "apply", ref, "--goal", "goal_test", "--json")
+			out, stderr, err = inferenceCLIProcess(t, "apply", ref, "--json")
 			if err != nil || updates.Load() != 1 || !strings.Contains(out, `"operation": "updated"`) ||
 				!strings.Contains(stderr, "warning: could not read deployed baseline") {
 				t.Fatalf("apply error=%v writes=%d stdout=%s stderr=%s", err, updates.Load(), out, stderr)
 			}
-			out, stderr, err = inferenceCLIProcess(t, "apply", ref, "--goal", "goal_test", "--diff", "--json")
+			out, stderr, err = inferenceCLIProcess(t, "apply", ref, "--diff", "--json")
 			if err != nil || updates.Load() != 2 || !strings.Contains(out, "Content diffs are unavailable.") ||
 				!strings.Contains(stderr, "warning: could not read deployed baseline") {
 				t.Fatalf("apply diff error=%v writes=%d stdout=%s stderr=%s", err, updates.Load(), out, stderr)
@@ -844,7 +848,7 @@ func jsonResponse(value any) http.HandlerFunc {
 
 func assertApplyRejected(t *testing.T, input, message string) {
 	t.Helper()
-	args := []string{"apply", input, "--goal", "goal_test"}
+	args := []string{"apply", input}
 	for _, flags := range [][]string{args, append(args, "--dry-run")} {
 		out, stderr, err := inferenceCLIProcess(t, flags...)
 		if err == nil || out != "" || !strings.Contains(stderr, message) {

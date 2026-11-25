@@ -189,6 +189,9 @@ func TestSpecApplyIgnoresInferenceEnvironment(t *testing.T) {
 				ID: "sess_test", PackageRef: "@telos/demo:1.2.3", PackageDigest: pkg.Digest,
 			})
 		},
+		"GET /api/deployments": func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"deployments":[{"id":"sess_test","name":"demo","state":"healthy","can_deploy":true}]}`))
+		},
 		"GET /api/packages/telos/demo/versions/1.2.3": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"scope": "telos", "name": "demo", "version": "1.2.3", "ref": "@telos/demo:1.2.3", "digest": pkg.Digest})
 		},
@@ -207,7 +210,7 @@ func TestSpecApplyIgnoresInferenceEnvironment(t *testing.T) {
 	})
 	defer server.Close()
 	configureInferenceApplyTest(t, server.URL)
-	out := captureStdout(t, func() { cmdApply([]string{"@telos/demo:1.2.3", "--goal", "sess_test", "--json"}) })
+	out := captureStdout(t, func() { cmdApply([]string{"@telos/demo:1.2.3", "--json"}) })
 	if updates.Load() != 1 || !strings.Contains(out, `"operation": "updated"`) {
 		t.Fatalf("existing spec update failed with inference env vars: %s", out)
 	}

@@ -82,19 +82,19 @@ type inferenceChange struct {
 func validateApplyInferenceFlags(fs *flag.FlagSet, sessionID, model, thinking string) error {
 	settingsSet := flagNamesSet(fs, "model", "thinking")
 	if fs.NArg() > 0 {
-		if sessionID != "" && settingsSet {
-			return fmt.Errorf("apply spec and model/thinking changes separately: first apply SPEC.md --goal %s, then apply --goal %s --model MODEL and/or --thinking LEVEL", sessionID, sessionID)
+		if sessionID != "" {
+			return fmt.Errorf("--goal only changes model or thinking; telos apply SPEC.md deploys to the Goal the spec names")
 		}
 		return nil
 	}
 	if sessionID == "" || !settingsSet {
-		return fmt.Errorf("provide a SPEC.md, or --goal GOAL with --model and/or --thinking")
+		return fmt.Errorf("provide a SPEC.md or PROPOSAL, or --goal GOAL with --model and/or --thinking")
 	}
 	if err := validateApplySession(sessionID); err != nil {
 		return err
 	}
-	if flagNameSet(fs, "force") {
-		return fmt.Errorf("--force cannot be used for a settings-only apply")
+	if flagNamesSet(fs, "force", "m") {
+		return fmt.Errorf("--force and -m cannot be used for a settings-only apply")
 	}
 	if flagNameSet(fs, "model") && strings.TrimSpace(model) == "" {
 		return fmt.Errorf("--model requires a non-empty model")

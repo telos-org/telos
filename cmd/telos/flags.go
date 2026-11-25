@@ -88,6 +88,12 @@ func requireArgCount(fs *flag.FlagSet, count int, expected string) {
 	os.Exit(2)
 }
 
+// exitUsage reports a misused command and exits with the usage status.
+func exitUsage(format string, args ...any) {
+	fmt.Fprintf(os.Stderr, "error: "+format+"\n", args...)
+	os.Exit(2)
+}
+
 func reorderInterspersedFlags(fs *flag.FlagSet, args []string) []string {
 	flags := make([]string, 0, len(args))
 	positionals := make([]string, 0, len(args))

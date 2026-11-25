@@ -38,10 +38,14 @@ func main() {
 		cmdApply(os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
+	case "propose":
+		cmdPropose(os.Args[2:])
+	case "review":
+		cmdReview(os.Args[2:])
+	case "comment":
+		cmdComment(os.Args[2:])
 	case "list":
 		cmdList(os.Args[2:])
-	case "get":
-		cmdGet(os.Args[2:])
 	case "describe":
 		cmdDescribe(os.Args[2:])
 	case "logs":
@@ -76,11 +80,14 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "core commands:")
 	fmt.Fprintln(out, "  login              Log in to Telos Cloud via the browser")
-	fmt.Fprintln(out, "  apply [SPEC.md]    Create a Goal, update its spec, or change model/thinking")
-	fmt.Fprintln(out, "  list               List Goals")
-	fmt.Fprintln(out, "  describe GOAL      Show a Goal's details")
+	fmt.Fprintln(out, "  apply [SPEC.md]    Deploy a spec or a proposal, or change model/thinking")
+	fmt.Fprintln(out, "  propose SPEC.md    Open or update a proposal")
+	fmt.Fprintln(out, "  review PROPOSAL    Approve or block a proposal")
+	fmt.Fprintln(out, "  comment ID         Comment on a Goal or proposal, or reply to a comment")
+	fmt.Fprintln(out, "  list [KIND]        List Goals, proposals, or comments")
+	fmt.Fprintln(out, "  describe ID        Show a Goal or a proposal")
 	fmt.Fprintln(out, "  logs GOAL          Show recent activity")
-	fmt.Fprintln(out, "  delete GOAL        Delete a Goal")
+	fmt.Fprintln(out, "  delete ID          Delete a Goal or close a proposal")
 	fmt.Fprintln(out, "  pause GOAL         Stop a Goal's agents; its app keeps running")
 	fmt.Fprintln(out, "  resume GOAL        Restart a paused or blocked Goal's agents")
 	fmt.Fprintln(out, "")
@@ -90,8 +97,7 @@ func usage(out io.Writer) {
 		fmt.Fprintln(out, "  run SPEC.md        Run a spec as a bounded task")
 	}
 	fmt.Fprintln(out, "  push SPEC.md       Publish a versioned spec or skill for reuse")
-	fmt.Fprintln(out, "  pull PACKAGE       Download a spec or skill package")
-	fmt.Fprintln(out, "  get GOAL           Download a Goal's package")
+	fmt.Fprintln(out, "  pull ID|PACKAGE    Download a Goal, a proposal, or a package")
 	fmt.Fprintln(out, "  logout             Log out and revoke this device's token")
 	fmt.Fprintln(out, "  config             Show or update CLI configuration")
 	fmt.Fprintln(out, "  version            Show version")

@@ -100,12 +100,16 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
-		"apply [SPEC.md]    Create a Goal, update its spec, or change model/thinking",
-		"get GOAL           Download a Goal's package",
-		"delete GOAL        Delete a Goal",
+		"apply [SPEC.md]    Deploy a spec or a proposal, or change model/thinking",
+		"propose SPEC.md    Open or update a proposal",
+		"review PROPOSAL    Approve or block a proposal",
+		"comment ID         Comment on a Goal or proposal, or reply to a comment",
+		"list [KIND]        List Goals, proposals, or comments",
+		"describe ID        Show a Goal or a proposal",
+		"delete ID          Delete a Goal or close a proposal",
 		"pause GOAL         Stop a Goal's agents; its app keeps running",
 		"resume GOAL        Restart a paused or blocked Goal's agents",
-		"pull PACKAGE       Download a spec or skill package",
+		"pull ID|PACKAGE    Download a Goal, a proposal, or a package",
 		"version            Show version",
 		"update [VERSION]   Update installed Telos components to one release",
 		"--version",
@@ -123,7 +127,7 @@ func TestPullUsageKeepsFrequentPullAtTopLevel(t *testing.T) {
 	fs.SetOutput(&pullOut)
 	fs.Usage()
 	for _, want := range []string{
-		"telos pull @context/name:version",
+		"telos pull GOAL|PROPOSAL|@context/name:version",
 		"--context string",
 		"--output string",
 	} {
@@ -398,23 +402,6 @@ func TestUntilFlagValueRejectsSubsecondDuration(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "at least 1s") {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidateForceApplyRequiresCloudUpdate(t *testing.T) {
-	for _, sessionID := range []string{"", "local_123"} {
-		err := validateForceApply(true, sessionID)
-		if err == nil || !strings.Contains(err.Error(), "requires --goal") {
-			t.Fatalf("forced %q: got %v", sessionID, err)
-		}
-	}
-	for _, sessionID := range []string{"", "local_123", "sess_123"} {
-		if err := validateForceApply(false, sessionID); err != nil {
-			t.Fatalf("normal %q: %v", sessionID, err)
-		}
-	}
-	if err := validateForceApply(true, "sess_123"); err != nil {
-		t.Fatalf("forced cloud update: %v", err)
 	}
 }
 
@@ -1006,7 +993,7 @@ func TestApplyCloudSessionPackageCreates(t *testing.T) {
 		"@user-abc/auth:0.1.0",
 		"",
 		sessionRuntimeConfig{},
-		false,
+		cloudApplyOptions{},
 		nil,
 	)
 	if err != nil {
@@ -1043,7 +1030,7 @@ func TestApplyCloudSessionPackageSendsSubscriptionSelection(t *testing.T) {
 		"@user-abc/auth:0.1.0",
 		"",
 		sessionRuntimeConfig{},
-		false,
+		cloudApplyOptions{},
 		&cloud.InferenceSelection{Source: "subscription", ConnectionID: "conn_rohan", Model: "gpt-5.6-sol"},
 	)
 	if err != nil {
@@ -1100,7 +1087,7 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 		"@user-abc/auth:0.1.1",
 		"sess_123",
 		sessionRuntimeConfig{},
-		true,
+		cloudApplyOptions{force: true},
 		nil,
 	)
 	if err != nil {
@@ -1146,7 +1133,7 @@ func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
 		"@user-abc/auth:0.1.1",
 		"sess_123",
 		sessionRuntimeConfig{},
-		false,
+		cloudApplyOptions{},
 		nil,
 	)
 	if err != nil {
@@ -1169,7 +1156,7 @@ func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
 		"@user-abc/auth:0.1.1",
 		"sess_123",
 		sessionRuntimeConfig{},
-		true,
+		cloudApplyOptions{force: true},
 		nil,
 	)
 	if err == nil {
@@ -1203,7 +1190,7 @@ func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
 		"@user-abc/auth:0.1.1",
 		"sess_123",
 		sessionRuntimeConfig{},
-		false,
+		cloudApplyOptions{},
 		nil,
 	)
 	if err == nil {
@@ -1227,7 +1214,7 @@ func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
 		"@user-abc/auth:0.1.1",
 		"sess_123",
 		sessionRuntimeConfig{},
-		true,
+		cloudApplyOptions{force: true},
 		nil,
 	)
 	if err == nil || strings.Contains(err.Error(), "retry the same command with --force") {

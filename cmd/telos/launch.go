@@ -28,7 +28,9 @@ func cmdApply(args []string) {
 func cmdLaunch(command, action string, args []string) {
 	synopsis := fmt.Sprintf("telos %s SPEC.md [flags]", command)
 	if command == "apply" {
-		synopsis += "\n       telos apply --goal GOAL [--model MODEL] [--thinking LEVEL] [flags]"
+		synopsis = "telos apply SPEC.md [-m MSG] [flags]" +
+			"\n       telos apply PROPOSAL [flags]" +
+			"\n       telos apply --goal GOAL [--model MODEL] [--thinking LEVEL] [flags]"
 	}
 	fs := newCommandFlagSet(command, synopsis)
 	workspaceValue := ""
@@ -40,21 +42,22 @@ func cmdLaunch(command, action string, args []string) {
 	sessionID := &sessionIDValue
 	forceValue := false
 	force := &forceValue
-	dryRunValue := false
-	dryRun := &dryRunValue
-	diffValue := false
-	includeDiff := &diffValue
+	dryRunValue, diffValue := false, false
+	dryRun, includeDiff := &dryRunValue, &diffValue
+	messageValue := ""
+	message := &messageValue
 	if command == "apply" {
-		sessionID = fs.String("goal", "", "ID of the Goal to update")
+		sessionID = fs.String("goal", "", "ID of the Goal whose model or thinking to change")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
+		message = fs.String("m", "", "Revision message; defaults to Deploy v<version>")
 		dryRun = fs.Bool("dry-run", false, "Preview the apply without publishing or changing a Goal")
 		includeDiff = fs.Bool("diff", false, "Show spec and skill file diffs")
 	}
 	modelHelp := "Model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	thinkingHelp := "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs"
 	if command == "apply" {
-		modelHelp = "telos/default, telos/max, or <name>/<model-id> for a saved API key or subscription. Creation defaults to $TELOS_MODEL, then the workspace default; updates require an explicit flag without SPEC.md"
-		thinkingHelp = "Creation: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then workspace or cloud defaults. Updates: a model-supported level for the next turn, explicitly supplied without SPEC.md"
+		modelHelp = "telos/default, telos/max, or <name>/<model-id> for a saved API key or subscription. Sets a new Goal's model, or with --goal changes one; creation defaults to $TELOS_MODEL, then the workspace default"
+		thinkingHelp = "Thinking effort. A new Goal takes low, medium, high, or xhigh and defaults to $TELOS_THINKING; with --goal, any level the model supports"
 	}
 	model := fs.String("model", "", modelHelp)
 	thinking := fs.String("thinking", "", thinkingHelp)
@@ -115,12 +118,20 @@ func cmdLaunch(command, action string, args []string) {
 			}
 			return
 		}
+		requireArgCount(fs, 1, "one SPEC.md or PROPOSAL")
+		requireIDKind("apply", fs.Arg(0), "SPEC.md or a PROPOSAL", "goal", "proposal")
+		if isProposalID(fs.Arg(0)) {
+			if flagNamesSet(fs, "m", "model", "thinking") {
+				exitUsage("-m, --model, and --thinking apply only to a spec")
+			}
+			if *dryRun || *includeDiff {
+				exitUsage("--dry-run and --diff are not yet supported for proposals")
+			}
+			applyProposal(fs.Arg(0), *force, *jsonOut, contextOverride)
+			return
+		}
 	}
 	requireArgCount(fs, 1, "one SPEC.md")
-	if err := validateCloudSessionContext(*sessionID, contextOverride); err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(2)
-	}
 	specArg := fs.Arg(0)
 	specPath, hasLocalSpec := existingSpecPath(specArg)
 
@@ -147,14 +158,6 @@ func cmdLaunch(command, action string, args []string) {
 	}
 
 	if command == "apply" {
-		if err := validateApplySession(*sessionID); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
-		if err := validateForceApply(*force, *sessionID); err != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", err)
-			os.Exit(1)
-		}
 		if !hasLocalSpec && !strings.HasPrefix(strings.TrimSpace(specArg), "@") {
 			fmt.Fprintf(os.Stderr, "error: %v\n", specFileNotFound(specArg))
 			os.Exit(1)
@@ -163,26 +166,18 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		var runtimeConfig sessionRuntimeConfig
-		if *sessionID == "" {
-			runtimeConfig, err = resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-		}
-		applyCloudControl(
-			specArg,
-			*sessionID,
-			runtimeConfig,
-			cloudApplyOptions{
-				context:     contextOverride,
-				force:       *force,
-				json:        *jsonOut,
-				dryRun:      *dryRun,
-				includeDiff: *includeDiff,
+		applyCloudControl(specArg, cloudApplyOptions{
+			context:     contextOverride,
+			json:        *jsonOut,
+			dryRun:      *dryRun,
+			includeDiff: *includeDiff,
+			message:     strings.TrimSpace(*message),
+			force:       *force,
+			settingsSet: flagNamesSet(fs, "model", "thinking"),
+			newGoalSettings: func() (sessionRuntimeConfig, error) {
+				return resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
 			},
-		)
+		})
 		return
 	}
 	if !hasLocalSpec {
@@ -273,7 +268,7 @@ func requireCloudLogin() error {
 		return err
 	}
 	if !configured {
-		return errors.New("telos apply deploys to Telos Cloud; run `telos login` first")
+		return errors.New("this command uses Telos Cloud; run `telos login` first")
 	}
 	return nil
 }
@@ -312,17 +307,18 @@ func runCloudChildSession(
 }
 
 type cloudApplyOptions struct {
-	context     string
-	force       bool
-	json        bool
-	dryRun      bool
-	includeDiff bool
+	context         string
+	message         string
+	force           bool
+	json            bool
+	dryRun          bool
+	includeDiff     bool
+	settingsSet     bool
+	newGoalSettings func() (sessionRuntimeConfig, error)
 }
 
 func applyCloudControl(
 	specArg string,
-	sessionID string,
-	runtimeConfig sessionRuntimeConfig,
 	options cloudApplyOptions,
 ) {
 	control, err := cloud.ControlClientForContext(options.context)
@@ -330,12 +326,16 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	prepared, err := prepareCloudApply(control, specArg, sessionID, runtimeConfig.Model, options.context)
+	prepared, err := prepareCloudApply(control, specArg, options)
 	if err != nil {
 		exitWithError(err)
 	}
+	sessionID := ""
+	if prepared.goal != nil {
+		sessionID = prepared.goal.ID
+	}
 	if options.dryRun {
-		preview, err := previewCloudApply(control, prepared, sessionID, runtimeConfig, options)
+		preview, err := previewCloudApply(control, prepared, sessionID, prepared.runtime, options)
 		if err != nil {
 			exitWithError(err)
 		}
@@ -376,13 +376,15 @@ func applyCloudControl(
 		prepared.name,
 		packageRecord.Ref,
 		sessionID,
-		runtimeConfig,
-		options.force,
+		prepared.runtime,
+		options,
 		prepared.inference,
 	)
+	if apiCode(err) == "proposal_required" {
+		err = proposalRequiredError(prepared.goal, specArg, err)
+	}
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", err)
-		os.Exit(1)
+		exitWithError(err)
 	}
 	currentRef := ""
 	if prepared.current != nil {
@@ -419,22 +421,22 @@ func applyCloudControl(
 	}
 }
 
+// applyCloudSessionPackage deploys packageRef to the Goal sessionID, or
+// creates a Goal named name when sessionID is empty.
 func applyCloudSessionPackage(
 	control *cloud.Client,
 	name string,
 	packageRef string,
 	sessionID string,
 	runtimeConfig sessionRuntimeConfig,
-	force bool,
+	opts cloudApplyOptions,
 	inference *cloud.InferenceSelection,
 ) (string, *cloud.SessionRecord, error) {
 	if sessionID != "" {
-		if !isCloudApplyID(sessionID) {
-			return "", nil, fmt.Errorf("invalid Goal ID %q", sessionID)
-		}
 		session, err := control.UpdateSession(sessionID, cloud.SessionUpdateOptions{
-			PackageRef: packageRef,
-			Force:      force,
+			PackageRef:      packageRef,
+			RevisionMessage: opts.message,
+			Force:           opts.force,
 		})
 		if err != nil && cloud.IsStatus(err, 409) {
 			current, getErr := control.GetSession(sessionID)
@@ -442,54 +444,45 @@ func applyCloudSessionPackage(
 				return "unchanged", current, nil
 			}
 		}
-		return "updated", session, actionableDeploymentUpdateError(goalNotFound(err, sessionID, control.ContextName()), force)
+		return "updated", session, actionableDeploymentUpdateError(goalNotFound(err, sessionID, control.ContextName()), opts.force)
 	}
 
 	session, err := control.CreateSession(cloud.SessionCreateOptions{
-		Name:          name,
-		PackageRef:    packageRef,
-		AgentThinking: runtimeConfig.Thinking,
-		Inference:     inference,
+		Name:            name,
+		PackageRef:      packageRef,
+		AgentThinking:   runtimeConfig.Thinking,
+		Inference:       inference,
+		RevisionMessage: opts.message,
 	})
 	return "created", session, err
 }
 
-// refuseDuplicateGoal fails when control's context already has a Goal named
-// name. Names are unique within a context: apply creates a Goal, and only
-// --goal updates one.
-func refuseDuplicateGoal(control *cloud.Client, specArg, name, contextOverride string) error {
+// proposalRequiredError says a Goal takes proposals instead of a direct
+// deploy, and how to propose specArg.
+func proposalRequiredError(goal *cloud.SessionRecord, specArg string, cause error) error {
+	if goal == nil {
+		return ruleError(cause, "To propose: "+proposeHint(specArg))
+	}
+	return &messageError{
+		message: fmt.Sprintf("%s (%s) requires proposals\nTo propose: %s", goal.Name, goal.ID, proposeHint(specArg)),
+		cause:   cause,
+	}
+}
+
+// goalNamed returns the Goal in control's context named name, or nil when
+// there is none.
+func goalNamed(control *cloud.Client, name string) (*cloud.SessionRecord, error) {
 	goals, err := control.ListSessions()
 	if err != nil {
-		return err
+		return nil, err
 	}
-	for _, goal := range goals {
-		if goal.Name == name && goal.State != "deleted" {
-			return &duplicateGoalError{
-				name:     name,
-				context:  control.ContextName(),
-				id:       goal.ID,
-				specArg:  specArg,
-				followUp: followUpContext(control, contextOverride),
-			}
+	for index := range goals {
+		// Goals shared by link belong to other workspaces.
+		if goals[index].Name == name && goals[index].State != "deleted" && goals[index].AccessSource != "link" {
+			return &goals[index], nil
 		}
 	}
-	return nil
-}
-
-type duplicateGoalError struct {
-	name     string
-	context  string
-	id       string
-	specArg  string
-	followUp string
-}
-
-func (e *duplicateGoalError) Error() string {
-	update := fmt.Sprintf("telos apply %s --goal %s", shellArg(e.specArg), e.id)
-	if e.followUp != "" {
-		update += " --context " + e.followUp
-	}
-	return fmt.Sprintf("a Goal named %s already exists in %s (%s)\nTo update it: %s", e.name, e.context, e.id, update)
+	return nil, nil
 }
 
 func actionableDeploymentUpdateError(err error, force bool) error {
@@ -515,13 +508,6 @@ func (e *snapshotPendingUpdateError) Error() string {
 
 func (e *snapshotPendingUpdateError) Unwrap() error {
 	return e.cause
-}
-
-func validateForceApply(force bool, sessionID string) error {
-	if force && !isCloudApplyID(sessionID) {
-		return errors.New("--force requires --goal")
-	}
-	return nil
 }
 
 func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Session) {

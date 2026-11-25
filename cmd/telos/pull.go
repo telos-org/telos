@@ -1,12 +1,14 @@
 package main
 
 import (
+	"cmp"
 	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/telos-org/telos/internal/cloud"
@@ -28,45 +30,88 @@ type pulledPackage struct {
 	data      []byte
 }
 
-func cmdGet(args []string) {
-	fs := newCommandFlagSet("get", "telos get GOAL [flags]")
-	output := fs.String("output", "", "Destination package directory")
-	contextValue := cloudContextFlag(fs)
+func cmdPull(args []string) {
+	fs, output, contextValue := newPullFlagSet()
 	parseFlags(fs, args)
-	requireArgCount(fs, 1, "one GOAL")
+	requireArgCount(fs, 1, "one GOAL, PROPOSAL, or @context/name:version")
+	target := strings.TrimSpace(fs.Arg(0))
+	if strings.HasPrefix(target, "@") {
+		pullRegistryPackage(fs, target, *output, *contextValue)
+		return
+	}
+	requireIDKind("pull", target, "a GOAL, PROPOSAL, or @context/name:version", "goal", "proposal")
 	contextOverride, err := cloudContextOverride(fs, *contextValue)
 	if err != nil {
 		exitWithError(err)
 	}
-	control, err := cloud.ControlClientForContext(contextOverride)
+	control := cloudClient(contextOverride)
+	name, path := "", ""
+	if isProposalID(target) {
+		name, path, err = pullProposal(control, target, *output)
+	} else {
+		name, path, err = pullGoal(control, target, *output)
+	}
 	if err != nil {
 		exitWithError(err)
 	}
-	pkg, err := packageForSession(control, fs.Arg(0))
-	if err != nil {
-		exitWithError(err)
-	}
-	path, err := materializePackage(control, pkg, *output)
-	if err != nil {
-		exitWithError(err)
-	}
-	printPackageReceipt("got", pkg.reference.ref, pkg.digest, path)
+	fmt.Printf("pulled %s into %s\n", name, displayDir(path))
 }
 
-func cmdPull(args []string) {
-	fs, output, contextValue := newPullFlagSet()
-	parseFlags(fs, args)
-	requireArgCount(fs, 1, "one exact @context/name:version")
-	reference, err := parsePackageReference(fs.Arg(0))
+func pullRegistryPackage(fs *flag.FlagSet, target, output, contextValue string) {
+	reference, err := parsePackageReference(target)
 	if err != nil {
 		exitWithError(err)
 	}
-	client := registryReadClient(fs, *contextValue)
-	digest, path, err := pullPackage(client, reference, *output)
+	client := registryReadClient(fs, contextValue)
+	digest, path, err := pullPackage(client, reference, output)
 	if err != nil {
 		exitWithError(err)
 	}
 	printPackageReceipt("pulled", reference.ref, digest, path)
+}
+
+// pullGoal downloads a Goal's files into output, or a folder named after its
+// spec.
+func pullGoal(control *cloud.Client, id, output string) (string, string, error) {
+	pkg, err := packageForSession(control, id)
+	if err != nil {
+		return "", "", err
+	}
+	path, err := materializePackage(pkg, registrySkillFetcher(control), cmp.Or(output, pkg.reference.name))
+	return pkg.reference.name, path, err
+}
+
+// pullProposal downloads the Goal's files as they would be with the proposal
+// applied into output, or a folder named after the proposal.
+func pullProposal(control *cloud.Client, id, output string) (string, string, error) {
+	proposal, err := control.GetProposal(id)
+	if err != nil {
+		return "", "", err
+	}
+	pkg, err := proposalPackage(control, id)
+	if err != nil {
+		return "", "", err
+	}
+	path, err := materializePackage(pkg, proposalSkillFetcher(control, id), cmp.Or(output, id))
+	return strconv.Quote(proposal.Title), path, err
+}
+
+// proposalPackage downloads the apply package of the Goal as it would be with
+// the proposal applied.
+func proposalPackage(control *cloud.Client, id string) (*pulledPackage, error) {
+	data, digest, err := control.DownloadProposalBundle(id)
+	if err != nil {
+		return nil, err
+	}
+	return &pulledPackage{reference: packageReference{name: id, ref: id}, digest: digest, data: data}, nil
+}
+
+// displayDir writes a folder the way the shell names it: ./name/ when relative.
+func displayDir(path string) string {
+	if !filepath.IsAbs(path) {
+		path = "." + string(filepath.Separator) + path
+	}
+	return path + string(filepath.Separator)
 }
 
 // pullPackage downloads the spec or skill package a reference names. Both
@@ -75,7 +120,7 @@ func cmdPull(args []string) {
 func pullPackage(client *cloud.Client, reference packageReference, output string) (string, string, error) {
 	pkg, err := packageForReference(client, reference)
 	if err == nil {
-		path, err := materializePackage(client, pkg, output)
+		path, err := materializePackage(pkg, registrySkillFetcher(client), cmp.Or(output, reference.name))
 		return pkg.digest, path, err
 	}
 	if !cloud.IsStatus(err, 404) {
@@ -92,8 +137,8 @@ func pullPackage(client *cloud.Client, reference packageReference, output string
 }
 
 func newPullFlagSet() (*flag.FlagSet, *string, *string) {
-	fs := newCommandFlagSet("pull", "telos pull @context/name:version [flags]")
-	output := fs.String("output", "", "Destination package or skill path")
+	fs := newCommandFlagSet("pull", "telos pull GOAL|PROPOSAL|@context/name:version [flags]")
+	output := fs.String("output", "", "Destination folder")
 	contextValue := cloudContextFlag(fs)
 	return fs, output, contextValue
 }
@@ -247,7 +292,9 @@ func resolvePackageReference(
 	}, record, nil
 }
 
-func materializePackage(control *cloud.Client, pkg *pulledPackage, output string) (string, error) {
+// materializePackage verifies pkg, fetches its skills, and writes it into
+// the new folder destination.
+func materializePackage(pkg *pulledPackage, fetch spec.ApplyPackageSkillFetcher, destination string) (string, error) {
 	if pkg == nil {
 		return "", fmt.Errorf("package is required")
 	}
@@ -255,15 +302,11 @@ func materializePackage(control *cloud.Client, pkg *pulledPackage, output string
 		return "", err
 	}
 
-	destination := strings.TrimSpace(output)
-	if destination == "" {
-		destination = pkg.reference.name
-	}
-	destination = filepath.Clean(destination)
+	destination = filepath.Clean(strings.TrimSpace(destination))
 	if strings.EqualFold(filepath.Ext(destination), ".md") {
 		return "", fmt.Errorf("--output names a directory, not a Markdown file; the spec is written to SPEC.md inside it")
 	}
-	hydrated, _, err := spec.HydrateApplyPackage(pkg.data, registrySkillFetcher(control))
+	hydrated, _, err := spec.HydrateApplyPackage(pkg.data, fetch)
 	if err != nil {
 		return "", fmt.Errorf("hydrate %s: %w", pkg.reference.ref, err)
 	}
@@ -323,6 +366,18 @@ func registrySkillFetcher(control *cloud.Client) spec.ApplyPackageSkillFetcher {
 			reference.Name,
 			reference.Version,
 		)
+	}
+}
+
+// proposalSkillFetcher fetches the skills a proposal's package locks,
+// including skills that exist only in the proposal.
+func proposalSkillFetcher(control *cloud.Client, id string) spec.ApplyPackageSkillFetcher {
+	return func(request spec.ApplyPackageSkillFetchRequest) ([]byte, error) {
+		reference, ok := spec.ParseRegistrySkillRef(request.Ref)
+		if !ok || reference.Version == "" {
+			return nil, fmt.Errorf("invalid versioned skill ref %q", request.Ref)
+		}
+		return control.DownloadProposalSkillBundle(id, reference.Scope, reference.Name, reference.Version, request.Digest)
 	}
 }
 

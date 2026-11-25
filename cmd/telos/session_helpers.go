@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/telos-org/telos/internal/cli"
@@ -78,6 +79,47 @@ func isCloudApplyID(id string) bool {
 
 func isLocalApplyID(id string) bool {
 	return strings.HasPrefix(id, "local_")
+}
+
+// isProposalID reports whether a command argument names a proposal. Check
+// IDs before paths: a folder may have any name.
+func isProposalID(id string) bool {
+	return hasIDPrefix(id, "p_", "cr_")
+}
+
+// isCommentID reports whether a command argument names a comment or reply.
+func isCommentID(id string) bool {
+	return hasIDPrefix(id, "c_", "cmt_", "rpl_", "rcm_", "rrp_")
+}
+
+// idKind says what a command argument names: "proposal", "comment", or
+// "goal" (which may also be a path).
+func idKind(id string) string {
+	switch {
+	case isProposalID(id):
+		return "proposal"
+	case isCommentID(id):
+		return "comment"
+	default:
+		return "goal"
+	}
+}
+
+// requireIDKind exits when id names something command doesn't take, instead
+// of letting Cloud answer a route for the wrong kind of object.
+func requireIDKind(command, id, takes string, kinds ...string) {
+	if kind := idKind(id); !slices.Contains(kinds, kind) {
+		exitUsage("telos %s takes %s; %s is a %s ID", command, takes, id, kind)
+	}
+}
+
+func hasIDPrefix(id string, prefixes ...string) bool {
+	for _, prefix := range prefixes {
+		if strings.HasPrefix(id, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func getCloudSessionIfConfigured(

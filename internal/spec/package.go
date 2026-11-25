@@ -11,6 +11,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -417,6 +418,33 @@ func ExtractApplyPackage(data []byte, dest string) (*ApplyPackageManifest, error
 	return manifest, nil
 }
 
+// ApplyPackageFiles returns the contents of the files in an apply package by
+// package path, such as SPEC.md or skills/name/SKILL.md. Of the registry
+// skills the package only references, it fetches just the named ones.
+func ApplyPackageFiles(data []byte, fetch ApplyPackageSkillFetcher, skills []string) (map[string][]byte, error) {
+	files, manifest, err := readApplyPackage(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateApplyPackageFilesAllowReferences(manifest, files); err != nil {
+		return nil, err
+	}
+	if err := validateRegistryApplyPackageShape(manifest, files); err != nil {
+		return nil, err
+	}
+	missing := slices.DeleteFunc(missingPackageSkillNames(manifest, files), func(name string) bool {
+		return !slices.Contains(skills, name)
+	})
+	if err := addRegistrySkills(files, manifest, missing, fetch, defaultArchiveReadLimits()); err != nil {
+		return nil, err
+	}
+	contents := make(map[string][]byte, len(files))
+	for path, file := range files {
+		contents[path] = file.data
+	}
+	return contents, nil
+}
+
 // HydrateApplyPackage returns a self-contained package tarball by fetching any
 // registry-backed skill blobs referenced by the package manifest.
 func HydrateApplyPackage(data []byte, fetch ApplyPackageSkillFetcher) ([]byte, *ApplyPackageManifest, error) {
@@ -438,49 +466,8 @@ func hydrateApplyPackageWithLimits(
 	if err := validateRegistryApplyPackageShape(manifest, files); err != nil {
 		return nil, nil, err
 	}
-	for _, name := range missingPackageSkillNames(manifest, files) {
-		remaining, err := remainingArchiveReadLimits(files, limits)
-		if err != nil {
-			return nil, nil, err
-		}
-		if fetch == nil {
-			return nil, nil, fmt.Errorf("fetch skill %q: skill fetcher is required", name)
-		}
-		provenance, ok := manifest.SkillProvenance[name]
-		ref := strings.TrimSpace(manifest.skillRef(name))
-		if ref == "" && ok {
-			ref = strings.TrimSpace(provenance.Ref)
-		}
-		if ref == "" {
-			return nil, nil, fmt.Errorf("package missing registry ref for skill %q", name)
-		}
-		expectedDigest := manifest.skillDigest(name)
-		bundle, err := fetch(ApplyPackageSkillFetchRequest{
-			Name:   name,
-			Ref:    ref,
-			Digest: expectedDigest,
-		})
-		if err != nil {
-			return nil, nil, fmt.Errorf("fetch skill %q: %w", name, err)
-		}
-		skillFiles, err := readSkillBundleFilesWithLimits(name, bundle, remaining)
-		if err != nil {
-			return nil, nil, err
-		}
-		if digest := digestPackagedSkill(name, skillFiles); digest != expectedDigest {
-			return nil, nil, fmt.Errorf("skill digest mismatch for %q: got %s want %s", name, digest, expectedDigest)
-		}
-		skillPathName, err := packagePathName(name)
-		if err != nil {
-			return nil, nil, err
-		}
-		for _, file := range skillFiles {
-			path := filepath.ToSlash(filepath.Join("skills", skillPathName, file.path))
-			if _, exists := files[path]; exists {
-				return nil, nil, fmt.Errorf("duplicate apply package entry %q", path)
-			}
-			files[path] = packageFile{path: path, mode: file.mode, data: file.data}
-		}
+	if err := addRegistrySkills(files, manifest, missingPackageSkillNames(manifest, files), fetch, limits); err != nil {
+		return nil, nil, err
 	}
 	if err := validateApplyPackageFiles(manifest, files); err != nil {
 		return nil, nil, err
@@ -493,6 +480,62 @@ func hydrateApplyPackageWithLimits(
 		return nil, nil, fmt.Errorf("hydrated apply package compressed content exceeds %d bytes", limits.maxCompressedBytes)
 	}
 	return hydrated, manifest, nil
+}
+
+// addRegistrySkills fetches the named registry skills a package references,
+// verifies each against its lock, and adds its files to files.
+func addRegistrySkills(
+	files map[string]packageFile,
+	manifest *ApplyPackageManifest,
+	names []string,
+	fetch ApplyPackageSkillFetcher,
+	limits archiveReadLimits,
+) error {
+	for _, name := range names {
+		remaining, err := remainingArchiveReadLimits(files, limits)
+		if err != nil {
+			return err
+		}
+		if fetch == nil {
+			return fmt.Errorf("fetch skill %q: skill fetcher is required", name)
+		}
+		provenance, ok := manifest.SkillProvenance[name]
+		ref := strings.TrimSpace(manifest.skillRef(name))
+		if ref == "" && ok {
+			ref = strings.TrimSpace(provenance.Ref)
+		}
+		if ref == "" {
+			return fmt.Errorf("package missing registry ref for skill %q", name)
+		}
+		expectedDigest := manifest.skillDigest(name)
+		bundle, err := fetch(ApplyPackageSkillFetchRequest{
+			Name:   name,
+			Ref:    ref,
+			Digest: expectedDigest,
+		})
+		if err != nil {
+			return fmt.Errorf("fetch skill %q: %w", name, err)
+		}
+		skillFiles, err := readSkillBundleFilesWithLimits(name, bundle, remaining)
+		if err != nil {
+			return err
+		}
+		if digest := digestPackagedSkill(name, skillFiles); digest != expectedDigest {
+			return fmt.Errorf("skill digest mismatch for %q: got %s want %s", name, digest, expectedDigest)
+		}
+		skillPathName, err := packagePathName(name)
+		if err != nil {
+			return err
+		}
+		for _, file := range skillFiles {
+			path := filepath.ToSlash(filepath.Join("skills", skillPathName, file.path))
+			if _, exists := files[path]; exists {
+				return fmt.Errorf("duplicate apply package entry %q", path)
+			}
+			files[path] = packageFile{path: path, mode: file.mode, data: file.data}
+		}
+	}
+	return nil
 }
 
 func BuildSkillBundle(skill *Skill) (string, []byte, error) {

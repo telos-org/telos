@@ -18,6 +18,8 @@ import (
 )
 
 type preparedCloudApply struct {
+	goal        *cloud.SessionRecord
+	runtime     sessionRuntimeConfig
 	name        string
 	local       *specPackage
 	record      *cloud.PackageVersionRecord
@@ -28,7 +30,7 @@ type preparedCloudApply struct {
 	baselineErr error
 }
 
-func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverride string) (*preparedCloudApply, error) {
+func prepareCloudApply(control *cloud.Client, input string, options cloudApplyOptions) (*preparedCloudApply, error) {
 	prepared := &preparedCloudApply{}
 	var err error
 	if strings.HasPrefix(strings.TrimSpace(input), "@") {
@@ -47,7 +49,7 @@ func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverr
 		}
 		prepared.name = reference.name
 	} else {
-		prepared.local, err = packageSpec(input, contextOverride)
+		prepared.local, err = packageSpec(input, options.context)
 		if err != nil {
 			return nil, err
 		}
@@ -57,14 +59,28 @@ func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverr
 			return nil, err
 		}
 	}
-	if goalID == "" {
-		if err := refuseDuplicateGoal(control, input, prepared.name, contextOverride); err != nil {
-			return nil, err
+	prepared.goal, err = goalNamed(control, prepared.name)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case prepared.goal == nil && options.force:
+		return nil, fmt.Errorf("--force applies only to an update, and %s has no Goal named %s yet", control.ContextName(), prepared.name)
+	case prepared.goal != nil && !prepared.goal.CanDeploy:
+		return nil, proposalRequiredError(prepared.goal, input, nil)
+	case prepared.goal == nil:
+		if options.newGoalSettings != nil {
+			prepared.runtime, err = options.newGoalSettings()
+			if err != nil {
+				return nil, err
+			}
 		}
-		prepared.inference, err = resolveCloudInference(control, model)
+		prepared.inference, err = resolveCloudInference(control, prepared.runtime.Model)
 		if err != nil {
 			return nil, err
 		}
+	case options.settingsSet:
+		return nil, fmt.Errorf("--model and --thinking set up a new Goal; to change %s's: telos apply --goal %s --model MODEL --thinking LEVEL", prepared.goal.Name, prepared.goal.ID)
 	}
 	if prepared.local != nil {
 		prepared.skills, err = preparePackageSkills(control, prepared.local.compiled)
@@ -76,7 +92,8 @@ func prepareCloudApply(control *cloud.Client, input, goalID, model, contextOverr
 			return nil, err
 		}
 	}
-	if goalID != "" {
+	if prepared.goal != nil {
+		goalID := prepared.goal.ID
 		session, err := control.GetSession(goalID)
 		if err != nil {
 			return nil, goalNotFound(err, goalID, control.ContextName())
@@ -431,6 +448,7 @@ func printApplyHeadline(out io.Writer, operation, name string) {
 	case "unchanged":
 		verb = "No changes to"
 	default:
+		fmt.Fprintf(out, "%s\n\n", operation)
 		return
 	}
 	fmt.Fprintf(out, "%s %s\n\n", verb, name)

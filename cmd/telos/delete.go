@@ -12,7 +12,7 @@ import (
 // -- delete -------------------------------------------------------------------
 
 func cmdDelete(args []string) {
-	fs := newCommandFlagSet("delete", "telos delete GOAL [flags]")
+	fs := newCommandFlagSet("delete", "telos delete GOAL|PROPOSAL [flags]")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -22,8 +22,13 @@ func cmdDelete(args []string) {
 		os.Exit(2)
 	}
 
-	requireArgCount(fs, 1, "one GOAL")
+	requireArgCount(fs, 1, "one GOAL or PROPOSAL")
 	sessionID := fs.Arg(0)
+	requireIDKind("delete", sessionID, "a GOAL or PROPOSAL", "goal", "proposal")
+	if isProposalID(sessionID) {
+		closeProposal(sessionID, *jsonOut, contextOverride)
+		return
+	}
 	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)
@@ -130,6 +135,19 @@ func printCloudSessionDeleteReceiptForContext(
 	if contextName != "" {
 		printSummaryField(out, "Context", contextName)
 	}
+}
+
+// closeProposal closes a proposal without deploying it.
+func closeProposal(id string, jsonOut bool, contextOverride string) {
+	proposal, err := cloudClient(contextOverride).CloseProposal(id)
+	if err != nil {
+		exitWithError(ruleError(err, ""))
+	}
+	if jsonOut {
+		printJSON(proposal)
+		return
+	}
+	fmt.Printf("closed %q\n", proposal.Title)
 }
 
 func printLocalSessionDeleteReceipt(out io.Writer, session sessionapi.Session) {
