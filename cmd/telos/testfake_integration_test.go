@@ -122,6 +122,11 @@ func TestCLIWithTestFakeExecutor(t *testing.T) {
 
 	t.Run("smoke script", func(t *testing.T) {
 		smokeEnv := []string{
+			"GIT_CONFIG_GLOBAL=" + os.DevNull,
+			"GIT_CONFIG_NOSYSTEM=1",
+			"GIT_CONFIG_COUNT=1",
+			"GIT_CONFIG_KEY_0=core.excludesFile",
+			"GIT_CONFIG_VALUE_0=" + os.DevNull,
 			"TELOS_SMOKE_BIN=" + telosBin,
 			"TELOS_SMOKE_TELOSD=" + telosdBin,
 			"TELOS_SMOKE_SCENARIO=" + filepath.Join(workspace, ".telos-testfake", "agent.json"),

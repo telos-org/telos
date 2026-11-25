@@ -27,6 +27,7 @@ fi
 PASS=0
 FAIL=0
 FIXTURE_DIR=""
+CLOUD_DIR=""
 SESSION_ID=""
 CLOUD_PID=""
 
@@ -49,7 +50,7 @@ telos_cmd() {
     -u TELOS_RUNTIME \
     -u TELOS_SESSION_DIR \
     -u TELOS_SESSION_ID \
-    TELOS_CONFIG="$FIXTURE_DIR/config.yaml" \
+    TELOS_CONFIG="$CLOUD_DIR/config.yaml" \
     "$TELOS" "$@"
 }
 
@@ -71,6 +72,9 @@ cleanup() {
   fi
   if [ -n "$FIXTURE_DIR" ]; then
     rm -rf "$FIXTURE_DIR"
+  fi
+  if [ -n "$CLOUD_DIR" ]; then
+    rm -rf "$CLOUD_DIR"
   fi
 }
 trap cleanup EXIT
@@ -128,15 +132,16 @@ json_has_session() {
 }
 
 FIXTURE_DIR="$(mktemp -d)"
-python3 "$SCRIPT_DIR/smoke_cloud.py" "$FIXTURE_DIR" >"$FIXTURE_DIR/cloud.log" 2>&1 &
+CLOUD_DIR="$(mktemp -d)"
+python3 "$SCRIPT_DIR/smoke_cloud.py" "$CLOUD_DIR" >"$CLOUD_DIR/cloud.log" 2>&1 &
 CLOUD_PID=$!
 for attempt in {1..50}; do
-  [ -f "$FIXTURE_DIR/config.yaml" ] && break
+  [ -f "$CLOUD_DIR/config.yaml" ] && break
   kill -0 "$CLOUD_PID" 2>/dev/null || break
   sleep 0.1
 done
-if [ ! -f "$FIXTURE_DIR/config.yaml" ]; then
-  cat "$FIXTURE_DIR/cloud.log" >&2
+if [ ! -f "$CLOUD_DIR/config.yaml" ]; then
+  cat "$CLOUD_DIR/cloud.log" >&2
   echo "Smoke Cloud fixture did not start" >&2
   exit 1
 fi
@@ -242,7 +247,7 @@ check_json "dry run --json parses" "$PREVIEW_JSON"
 check_contains "dry run JSON includes spec name" "$PREVIEW_JSON" '"name": "smoke-fixture"'
 check_contains "dry run JSON identifies preview" "$PREVIEW_JSON" '"dry_run": true'
 check_contains "dry run JSON identifies operation" "$PREVIEW_JSON" '"operation": "create"'
-check "dry run sends no mutating requests" test ! -e "$FIXTURE_DIR/cloud-writes"
+check "dry run sends no mutating requests" test ! -e "$CLOUD_DIR/cloud-writes"
 
 echo "=== 4. List contract ==="
 
