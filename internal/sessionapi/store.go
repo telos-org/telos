@@ -71,6 +71,7 @@ type Store interface {
 	Pause(id string, paused bool) (*Session, error)
 	Resume(id string) (*Session, error)
 	Transcript(id string) (string, error)
+	WriteWorkspace(id string, w io.Writer) error
 	Events(id string) ([]SessionEvent, error)
 }
 

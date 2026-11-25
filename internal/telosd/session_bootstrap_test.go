@@ -2,6 +2,7 @@ package telosd
 
 import (
 	"context"
+	"io"
 	"path/filepath"
 	"testing"
 
@@ -67,6 +68,9 @@ func (s *fakeReconcileStore) Get(string) (*sessionapi.Session, error) {
 }
 func (s *fakeReconcileStore) Transcript(string) (string, error) {
 	return "", sessionapi.ErrNotFound
+}
+func (s *fakeReconcileStore) WriteWorkspace(string, io.Writer) error {
+	return sessionapi.ErrNotFound
 }
 func (s *fakeReconcileStore) Events(string) ([]sessionapi.SessionEvent, error) {
 	return nil, sessionapi.ErrNotFound

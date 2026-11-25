@@ -1,6 +1,8 @@
 package sessionapi_test
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1615,6 +1617,106 @@ func TestTranscriptPresent(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if string(body) != "# Transcript\nHello" {
 		t.Errorf("unexpected transcript body: %q", body)
+	}
+}
+
+// --------- GET /api/sessions/{id}/workspace ---------------------------------------------------------------------------------------------------------------------
+
+func TestWorkspaceDownloadsSessionFolderWithoutSecretsOrDependencies(t *testing.T) {
+	srv, store := newTestServer(t)
+	defer srv.Close()
+	created := createSession(t, srv.URL, createSessionBody(t, "billing-api"))
+	for name, mode := range map[string]os.FileMode{
+		"workspace/app.py":                   0o644,
+		"workspace/bin/start.sh":             0o755,
+		"workspace/.git/HEAD":                0o644,
+		"workspace/dashboard.oui":            0o644,
+		"workspace/.envoy.yaml":              0o644,
+		"workspace/session.json":             0o644,
+		"runner.log":                         0o644,
+		"specs/billing-api/evidence.jsonl":   0o644,
+		"workspace/.env":                     0o644,
+		"workspace/api/.env.local":           0o644,
+		"workspace/web/node_modules/x/x.js":  0o644,
+		"workspace/.venv/bin/python":         0o755,
+		"workspace/api/__pycache__/app.pyc":  0o644,
+		"specs/billing-api/workspace.tar.gz": 0o644,
+		"snapshots/spec-version-1/SPEC.md":   0o644,
+		"workspace/snapshots/home.png":       0o644,
+	} {
+		writeSessionFile(t, filepath.Join(store.Root, created.SessionID), name, mode)
+	}
+
+	resp, err := http.Get(srv.URL + "/api/sessions/" + created.SessionID + "/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "200", itoa(resp.StatusCode))
+	assertEqual(t, "content-type", "application/gzip", resp.Header.Get("Content-Type"))
+	gz, err := gzip.NewReader(resp.Body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	executable := map[string]bool{}
+	archive := tar.NewReader(gz)
+	for {
+		header, err := archive.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if header.Typeflag == tar.TypeReg {
+			executable[header.Name] = header.Mode&0o111 != 0
+		}
+	}
+
+	for name, exec := range map[string]bool{
+		"workspace/app.py":                 false,
+		"workspace/bin/start.sh":           true,
+		"workspace/.git/HEAD":              false,
+		"workspace/dashboard.oui":          false,
+		"workspace/.envoy.yaml":            false,
+		"workspace/session.json":           false,
+		"workspace/snapshots/home.png":     false,
+		"runner.log":                       false,
+		"specs/billing-api/evidence.jsonl": false,
+	} {
+		if got, ok := executable[name]; !ok || got != exec {
+			t.Errorf("%s: in archive %v, executable %v; want in archive, executable %v", name, ok, got, exec)
+		}
+	}
+	for name := range executable {
+		if strings.HasPrefix(name, "session.json") || strings.Contains(name, ".env") && name != "workspace/.envoy.yaml" ||
+			strings.Contains(name, "node_modules") || strings.Contains(name, ".venv") ||
+			strings.Contains(name, "__pycache__") || strings.HasSuffix(name, "workspace.tar.gz") || strings.HasPrefix(name, "snapshots/") {
+			t.Errorf("archive holds %s", name)
+		}
+	}
+}
+
+func TestWorkspaceNotFoundForUnknownSession(t *testing.T) {
+	srv, _ := newTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/sessions/nonexistent/workspace")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	assertEqual(t, "status_code", "404", itoa(resp.StatusCode))
+}
+
+func writeSessionFile(t *testing.T, sessionDir, name string, mode os.FileMode) {
+	t.Helper()
+	path := filepath.Join(sessionDir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(name), mode); err != nil {
+		t.Fatal(err)
 	}
 }
 
