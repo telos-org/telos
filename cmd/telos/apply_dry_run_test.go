@@ -121,6 +121,12 @@ func TestApplyChecksResolvedPackageVersion(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if tc.name == "different digest" {
+				markdown := strings.Replace(string(mustReadFile(t, fixture.path)), "Serve a demo.", "Serve a changed demo.", 1)
+				if err := os.WriteFile(fixture.path, []byte(markdown), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
 			const skillRef = "@telos/verify-test:1.0.0"
 			ref := "@telos/demo:" + tc.version
 			var writes atomic.Int32
@@ -134,12 +140,8 @@ func TestApplyChecksResolvedPackageVersion(t *testing.T) {
 					http.Error(w, http.StatusText(tc.status), tc.status)
 					return
 				}
-				digest := fixture.pkg.Digest
-				if tc.wantError != "" {
-					digest = "sha256:" + strings.Repeat("0", 64)
-				}
 				jsonResponse(cloud.PackageVersionRecord{
-					Scope: "telos", Name: "demo", Version: tc.version, Ref: ref, Digest: digest,
+					Scope: "telos", Name: "demo", Version: tc.version, Ref: ref, Digest: fixture.pkg.Digest,
 				})(w, r)
 			}
 			for route, response := range map[string]any{
@@ -402,109 +404,158 @@ func TestApplyRejectsSpecNameChanges(t *testing.T) {
 }
 
 func TestApplyAllowsUnversionedSkillMatchingOlderRegistryVersion(t *testing.T) {
-	for _, change := range []string{"unchanged", "spec", "skill", "rubric"} {
-		for _, dryRun := range []bool{false, true} {
-			mode := "apply"
-			if dryRun {
-				mode = "dry-run"
-			}
-			t.Run(change+"/"+mode, func(t *testing.T) {
-				fixture := makeDryRunSkillFixture(t)
-				switch change {
-				case "spec":
-					data := strings.ReplaceAll(string(mustReadFile(t, fixture.path)), "Serve a demo.", "Serve a changed demo.")
-					if err := os.WriteFile(fixture.path, []byte(data), 0o644); err != nil {
-						t.Fatal(err)
-					}
-				case "skill":
-					path := filepath.Join(filepath.Dir(fixture.path), "verify-test", "SKILL.md")
-					if err := os.WriteFile(path, []byte("---\nname: verify-test\n---\nChanged instructions.\n"), 0o644); err != nil {
-						t.Fatal(err)
-					}
-				case "rubric":
-					data := strings.ReplaceAll(string(mustReadFile(t, fixture.path)), "verify-test*", "verify-test")
-					if err := os.WriteFile(fixture.path, []byte(data), 0o644); err != nil {
-						t.Fatal(err)
-					}
+	for _, latestContent := range []string{"same", "different"} {
+		for _, change := range []string{"unchanged", "spec", "skill", "rubric"} {
+			for _, dryRun := range []bool{false, true} {
+				mode := "apply"
+				if dryRun {
+					mode = "dry-run"
 				}
-				var writes atomic.Int32
-				handlers := registryApplyHandlers(fixture.pkg)
-				handlers["GET /api/account/bootstrap"] = dryRunPublishScope
-				handlers["GET /api/skills/telos/verify-test"] = func(w http.ResponseWriter, r *http.Request) {
-					_ = json.NewEncoder(w).Encode(cloud.SkillRecord{
-						Scope: "telos", Name: "verify-test", Version: "2.0.0",
-						Ref: "@telos/verify-test:2.0.0", Digest: "sha256:newer-different-content",
-					})
-				}
-				handlers["POST /api/skills"] = func(w http.ResponseWriter, r *http.Request) {
-					writes.Add(1)
-					t.Error("republished a skill instead of retaining its verified lock")
-					// Unversioned publication can choose a different historical
-					// version with the same content as the verified lock.
-					_ = json.NewEncoder(w).Encode(cloud.SkillRecord{Ref: "@telos/verify-test:1.1.0", Digest: fixture.digest})
-				}
-				handlers["POST /api/packages"] = func(w http.ResponseWriter, r *http.Request) {
-					writes.Add(1)
-					var body struct {
-						Data string `json:"data_base64"`
+				t.Run(latestContent+"/"+change+"/"+mode, func(t *testing.T) {
+					fixture := makeDryRunSkillFixture(t)
+					switch change {
+					case "spec":
+						data := strings.ReplaceAll(string(mustReadFile(t, fixture.path)), "Serve a demo.", "Serve a changed demo.")
+						if err := os.WriteFile(fixture.path, []byte(data), 0o644); err != nil {
+							t.Fatal(err)
+						}
+					case "skill":
+						path := filepath.Join(filepath.Dir(fixture.path), "verify-test", "SKILL.md")
+						if err := os.WriteFile(path, []byte("---\nname: verify-test\n---\nChanged instructions.\n"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+					case "rubric":
+						data := strings.ReplaceAll(string(mustReadFile(t, fixture.path)), "verify-test*", "verify-test")
+						if err := os.WriteFile(fixture.path, []byte(data), 0o644); err != nil {
+							t.Fatal(err)
+						}
 					}
-					if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-						t.Error(err)
+					var writes atomic.Int32
+					handlers := registryApplyHandlers(fixture.pkg)
+					handlers["GET /api/account/bootstrap"] = dryRunPublishScope
+					handlers["GET /api/skills/telos/verify-test"] = func(w http.ResponseWriter, r *http.Request) {
+						version, digest := "2.0.0", "sha256:newer-different-content"
+						if latestContent == "same" {
+							version, digest = "1.1.0", fixture.digest
+						}
+						_ = json.NewEncoder(w).Encode(cloud.SkillRecord{
+							Scope: "telos", Name: "verify-test", Version: version,
+							Ref: "@telos/verify-test:" + version, Digest: digest,
+						})
 					}
-					data, err := base64.StdEncoding.DecodeString(body.Data)
-					if err != nil {
-						t.Error(err)
+					handlers["POST /api/skills"] = func(w http.ResponseWriter, r *http.Request) {
+						writes.Add(1)
+						t.Error("republished a skill instead of retaining its verified lock")
+						// Unversioned publication can choose a different historical
+						// version with the same content as the verified lock.
+						_ = json.NewEncoder(w).Encode(cloud.SkillRecord{Ref: "@telos/verify-test:1.1.0", Digest: fixture.digest})
 					}
-					_, manifest, err := spec.ApplyPackageSpec(data)
-					if err != nil {
-						t.Error(err)
-						http.Error(w, "invalid package", 400)
+					handlers["POST /api/packages"] = func(w http.ResponseWriter, r *http.Request) {
+						writes.Add(1)
+						var body struct {
+							Data string `json:"data_base64"`
+						}
+						if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+							t.Error(err)
+						}
+						data, err := base64.StdEncoding.DecodeString(body.Data)
+						if err != nil {
+							t.Error(err)
+						}
+						_, manifest, err := spec.ApplyPackageSpec(data)
+						if err != nil {
+							t.Error(err)
+							http.Error(w, "invalid package", 400)
+							return
+						}
+						if spec.ApplyPackageDigest(manifest) != fixture.pkg.Digest {
+							t.Error("an unchanged apply changed the package digest")
+						}
+						_ = json.NewEncoder(w).Encode(cloud.PackageVersionRecord{Ref: "@telos/demo:1.2.3", Digest: fixture.pkg.Digest})
+					}
+					handlers["PUT /api/deployments/goal_test"] = func(w http.ResponseWriter, r *http.Request) {
+						writes.Add(1)
+						http.Error(w, "already current", http.StatusConflict)
+					}
+					server := inferenceTestServer(t, handlers)
+					defer server.Close()
+					configureDryRunTest(t, server.URL)
+					args := []string{"apply", fixture.path, "--goal", "goal_test", "--json"}
+					if dryRun {
+						args = append(args, "--dry-run", "--diff")
+					}
+					stdout, stderr, err := inferenceCLIProcess(t, args...)
+					if change != "unchanged" {
+						if err == nil || stdout != "" || !strings.Contains(stderr, "bump version in SPEC.md") || writes.Load() != 0 {
+							t.Fatalf("changed inputs: error=%v writes=%d stdout=%s stderr=%s", err, writes.Load(), stdout, stderr)
+						}
 						return
 					}
-					if spec.ApplyPackageDigest(manifest) != fixture.pkg.Digest {
-						t.Error("an unchanged apply changed the package digest")
+					if err != nil {
+						t.Fatalf("unchanged apply failed: %v %s", err, stderr)
 					}
-					_ = json.NewEncoder(w).Encode(cloud.PackageVersionRecord{Ref: "@telos/demo:1.2.3", Digest: fixture.pkg.Digest})
-				}
-				handlers["PUT /api/deployments/goal_test"] = func(w http.ResponseWriter, r *http.Request) {
-					writes.Add(1)
-					http.Error(w, "already current", http.StatusConflict)
-				}
-				server := inferenceTestServer(t, handlers)
-				defer server.Close()
-				configureDryRunTest(t, server.URL)
-				args := []string{"apply", fixture.path, "--goal", "goal_test", "--json"}
-				if dryRun {
-					args = append(args, "--dry-run", "--diff")
-				}
-				stdout, stderr, err := inferenceCLIProcess(t, args...)
-				if change != "unchanged" {
-					if err == nil || stdout != "" || !strings.Contains(stderr, "bump version in SPEC.md") || writes.Load() != 0 {
-						t.Fatalf("changed inputs: error=%v writes=%d stdout=%s stderr=%s", err, writes.Load(), stdout, stderr)
+					if dryRun {
+						if writes.Load() != 0 {
+							t.Fatal("dry run sent a write")
+						}
+						var preview applyPreview
+						if err := json.Unmarshal([]byte(stdout), &preview); err != nil {
+							t.Fatal(err)
+						}
+						if preview.Operation != "unchanged" || preview.Proposed.Digest != fixture.pkg.Digest || len(preview.Proposed.Skills) != 1 ||
+							preview.Proposed.Skills[0].Ref != "@telos/verify-test:1.0.0" ||
+							preview.SpecDiff != "" || len(preview.SkillDiffs) != 0 || len(preview.Notes) != 1 {
+							t.Fatalf("unchanged preview = %+v", preview)
+						}
+					} else if writes.Load() != 2 || !strings.Contains(stdout, `"operation": "unchanged"`) {
+						t.Fatalf("idempotent apply: writes=%d output=%s", writes.Load(), stdout)
 					}
-					return
-				}
-				if err != nil {
-					t.Fatalf("unchanged apply failed: %v %s", err, stderr)
-				}
-				if dryRun {
-					if writes.Load() != 0 {
-						t.Fatal("dry run sent a write")
-					}
-					var preview applyPreview
-					if err := json.Unmarshal([]byte(stdout), &preview); err != nil {
-						t.Fatal(err)
-					}
-					if preview.Operation != "unchanged" || preview.Proposed.Digest != fixture.pkg.Digest || len(preview.Proposed.Skills) != 1 ||
-						preview.Proposed.Skills[0].Ref != "@telos/verify-test:1.0.0" ||
-						preview.SpecDiff != "" || len(preview.SkillDiffs) != 0 || len(preview.Notes) != 1 {
-						t.Fatalf("unchanged preview = %+v", preview)
-					}
-				} else if writes.Load() != 2 || !strings.Contains(stdout, `"operation": "unchanged"`) {
-					t.Fatalf("idempotent apply: writes=%d output=%s", writes.Load(), stdout)
-				}
-			})
+				})
+			}
 		}
+	}
+}
+
+func TestApplyDoesNotReplaceExplicitSkillVersionsWithExistingLocks(t *testing.T) {
+	for _, source := range []string{"local", "registry"} {
+		t.Run(source, func(t *testing.T) {
+			fixture := makeDryRunSkillFixture(t)
+			path := filepath.Join(filepath.Dir(fixture.path), "verify-test", "SKILL.md")
+			if err := os.WriteFile(path, []byte("---\nname: verify-test\nversion: 1.1.0\n---\nVerify old behavior.\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			compiled, err := spec.CompileEnvironment(fixture.path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			// The same files can have an older Registry version published with --version.
+			baseline, err := spec.BuildApplyPackageWithSkillRefs(compiled, map[string]string{"verify-test": "@telos/verify-test:1.0.0"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			digest, bundle, err := spec.BuildSkillBundle(compiled.Skills[0])
+			if err != nil {
+				t.Fatal(err)
+			}
+			if source == "registry" {
+				data := strings.ReplaceAll(string(mustReadFile(t, fixture.path)), "./verify-test*", "@telos/verify-test:1.1.0*")
+				if err := os.WriteFile(fixture.path, []byte(data), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			handlers := registryApplyHandlers(baseline)
+			handlers["GET /api/account/bootstrap"] = dryRunPublishScope
+			handlers["GET /api/skills/telos/verify-test/versions/1.1.0"] = jsonResponse(cloud.SkillRecord{
+				Scope: "telos", Name: "verify-test", Version: "1.1.0", Ref: "@telos/verify-test:1.1.0", Digest: digest,
+			})
+			handlers["GET /api/skills/telos/verify-test/versions/1.1.0/bundle"] = func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write(bundle)
+			}
+			server := inferenceTestServer(t, handlers)
+			defer server.Close()
+			configureDryRunTest(t, server.URL)
+			assertApplyRejected(t, fixture.path, "bump version in SPEC.md")
+		})
 	}
 }
 

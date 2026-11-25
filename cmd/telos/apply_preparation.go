@@ -139,6 +139,7 @@ func prepareLocalApplyPackage(
 		return applyPackageState{}, err
 	}
 	refs := map[string]string{}
+	unversioned := map[string]bool{}
 	pending := false
 	for _, publication := range skills {
 		ref, err := applySkillRef(control, scope, publication, manifest.Skills[publication.name].Digest)
@@ -149,6 +150,9 @@ func prepareLocalApplyPackage(
 			pending = true
 		}
 		refs[publication.name] = ref
+		if publication.skill != nil && publication.skill.version == "" {
+			unversioned[publication.name] = true
+		}
 	}
 	var resolved *spec.ApplyPackage
 	if !pending {
@@ -163,8 +167,8 @@ func prepareLocalApplyPackage(
 		return applyPackageState{}, fmt.Errorf("check package version %s: %w", ref, err)
 	}
 	if err == nil {
-		if pending {
-			resolved, err = matchPendingApplyPackage(control, pkg, scope, refs, existing.Digest)
+		if (resolved == nil || resolved.Digest != existing.Digest) && len(unversioned) > 0 {
+			resolved, err = matchExistingApplyPackage(control, pkg, scope, refs, unversioned, existing.Digest)
 			if err != nil {
 				return applyPackageState{}, fmt.Errorf("check package version %s: %w", ref, err)
 			}
@@ -196,11 +200,12 @@ func prepareLocalApplyPackage(
 	return state, err
 }
 
-func matchPendingApplyPackage(
+func matchExistingApplyPackage(
 	control *cloud.Client,
 	pkg *specPackage,
 	scope string,
 	refs map[string]string,
+	unversioned map[string]bool,
 	existingDigest string,
 ) (*spec.ApplyPackage, error) {
 	data, err := control.DownloadPackageVersionBundle(scope, pkg.name, pkg.version)
@@ -216,10 +221,7 @@ func matchPendingApplyPackage(
 		return nil, err
 	}
 	comparisonRefs := maps.Clone(refs)
-	for name, ref := range refs {
-		if ref != "" {
-			continue
-		}
+	for name := range unversioned {
 		oldRef := existing.Skills[name].Ref
 		parsed, ok := spec.ParseRegistrySkillRef(oldRef)
 		if !ok || parsed.Scope != scope || parsed.Name != name || parsed.Version == "" {
