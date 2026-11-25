@@ -89,22 +89,40 @@ Run a public service for a shared reading list.
 
 At a framework level, the above example covers the minimal required items. [Goals](goals.md) walks through everything else a goal specification can include: frontmatter, skills, rubrics, and packages.
 
-## Plan
+## Preview
 
-Once you are happy with the goal specification, `telos plan` validates the spec and shows what applying it would change, without changing anything.
+Before applying a spec, use `--dry-run` to validate it and preview the changes. You must be signed in. The preview does not publish packages, change a Goal, or start paid compute or inference. Registry downloads can populate the local skill cache.
 
 ```console
-$ telos plan SPEC.md
-Spec      reading-list
-Version   0.1.0
+$ telos apply SPEC.md --dry-run
+Operation create
 Context   personal
+Spec      reading-list
+Proposed  @alice/reading-list:0.1.0
+Version   0.1.0
+Model     telos/default (workspace default)
+Thinking  cloud default (resolved on apply)
+
+Server-side checks run when applying.
+The server resolves inherited thinking for the selected model when applying.
+Nothing was applied.
 ```
 
-The first plan has no deployed version to compare against, so it shows the Goal's name, version, and context.
+The preview reports `create`, `update`, or `unchanged`, along with the spec, version, interval, skills, and inference settings that apply would use. Model and thinking defaults depend on your workspace. Settings that cannot yet be resolved are identified in the output.
+
+You can also preview a registry package:
+
+```console
+$ telos apply @alice/reading-list:0.1.0 --dry-run
+```
+
+Add `--json` for structured output, including `dry_run: true`, or `--diff` to include skill file changes. Binary files and large files appear as summaries. Notes explain when detailed skill diffs are unavailable.
+
+The dry run shares apply's client validation. Server-side checks still run when you apply, so a successful preview does not guarantee deployment. If publication must assign new skill versions, their references and the final package digest remain unresolved in the preview.
 
 ## Apply
 
-Once the plan looks good, use `telos apply` to deploy the spec to Telos Cloud.
+Once the preview looks good, use `telos apply` to deploy the spec to Telos Cloud.
 
 ```console
 $ telos apply SPEC.md
@@ -126,6 +144,14 @@ To change only the model or thinking effort of an existing Goal (applies at next
 ```console
 $ telos apply --goal goal_c7d2f0a4e8 --model telos/max --thinking high
 ```
+
+Add `--dry-run` to preview the settings change:
+
+```console
+$ telos apply --goal goal_c7d2f0a4e8 --model telos/max --thinking high --dry-run
+```
+
+If you change the model without specifying `--thinking`, the preview shows thinking as inherited and resolved on apply. In JSON output, the proposed thinking value is omitted and `thinking_source` is `inherited`.
 
 ## Watch
 
@@ -220,17 +246,21 @@ Congratulations! Your first Goal is live.
 
 Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump its version to `0.2.0`, and add "Every book records who added it" to the Goal.
 
-Names are unique within a context, so updates target the Goal by its ID with `--goal`. Without it, `telos plan` and `telos apply` refuse to create a second `reading-list`.
+Names are unique within a context, so updates target the Goal by its ID with `--goal`. Without it, `telos apply` refuses to create a second `reading-list`, including with `--dry-run`. Keep the spec's name when updating an existing Goal.
 
-Plan against the existing Goal:
+Preview the update against the existing Goal:
 
 ```console
-$ telos plan SPEC.md --goal goal_c7d2f0a4e8
-Spec      reading-list
+$ telos apply SPEC.md --goal goal_c7d2f0a4e8 --dry-run
+Operation update
 Context   personal
 Goal      goal_c7d2f0a4e8
+Spec      reading-list
+Proposed  @alice/reading-list:0.2.0
 Current   @alice/reading-list:0.1.0
 Version   0.1.0 -> 0.2.0
+Model     unchanged
+Thinking  unchanged
 
 diff deployed/SPEC.md proposed/SPEC.md
 --- deployed/SPEC.md
@@ -251,10 +281,18 @@ diff deployed/SPEC.md proposed/SPEC.md
  
  # Acceptance
  
+
+Server-side checks run when applying.
+Nothing was applied.
 ```
 
-The plan shows the Goal's current spec and how the new one
-differs. Apply that new revision to the same Goal:
+The preview shows the current and proposed package references, changed settings and skill locks, and the spec diff. Add `--diff` to include skill file changes.
+
+When the package contents are identical, the preview reports `unchanged`. If you supplied a different registry reference for the same contents, the Goal keeps its current reference. Spec updates preserve the Goal's model and thinking settings.
+
+A dry run must be able to read and verify the deployed package. Ordinary apply can continue with a warning if that baseline is unavailable; the server still validates the update.
+
+Apply the new revision to the same Goal:
 
 ```console
 $ telos apply SPEC.md --goal goal_c7d2f0a4e8

@@ -130,7 +130,9 @@ Digest    sha256:3158b3a4fbe9577b43bab574bb725f8ecebf4ec86c89bc896a0696a2ca17800
 Version   0.1.0
 ```
 
-`telos apply` also pushes your spec as a private package, like `@alice/reading-list:0.1.0`, so bump `version` whenever the spec or its skills change. Otherwise, `apply` fails with `package version already exists (HTTP 409)`.
+`telos apply` also pushes your spec as a private package, like `@alice/reading-list:0.1.0`, so bump `version` whenever the spec or its skills change. Apply and `apply --dry-run` check for known package and explicitly versioned skill conflicts before publication and report which version to bump. A concurrent publication can still cause an HTTP 409 conflict.
+
+Unchanged local skills without an explicit version can reuse the package's verified registry locks, even if newer skill versions are available. When new skill versions must be assigned during publication, a dry run reports their references and the final package digest as unresolved.
 
 To fetch a package locally, for inspection or modification, you can run `telos pull @<context>/<name>:<version>`.
 
