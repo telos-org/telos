@@ -192,9 +192,6 @@ func previewCreationInference(
 			state.Thinking = *preference.AgentThinking
 			state.ThinkingSource = previewSourceWorkspace
 		}
-		preview.Notes = append(preview.Notes,
-			"The server resolves inherited thinking for the selected model when applying.",
-		)
 	}
 	return nil
 }
@@ -233,9 +230,6 @@ func previewSessionInference(goalID, model, thinking, contextOverride string) (*
 		if !modelUnchanged && request.AgentThinking == nil {
 			preview.Proposed.Thinking = ""
 			preview.Proposed.ThinkingSource = previewSourceInherited
-			preview.Notes = append(preview.Notes,
-				"The server resolves inherited thinking for the selected model when applying.",
-			)
 		}
 	}
 	if request.AgentThinking != nil {

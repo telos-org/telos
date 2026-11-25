@@ -32,8 +32,7 @@ func decodeApplyPreview(t *testing.T, args ...string) applyPreview {
 	if err := json.Unmarshal([]byte(output), &preview); err != nil {
 		t.Fatal(err)
 	}
-	notes := strings.ToLower(strings.Join(preview.Notes, " "))
-	if !preview.DryRun || preview.Context == "" || !strings.Contains(notes, "server-side checks") {
+	if !preview.DryRun || preview.Context == "" {
 		t.Fatalf("incomplete preview: %s", output)
 	}
 	return preview
@@ -264,13 +263,12 @@ func TestDryRunSettingsTextOnlyShowsChangedValues(t *testing.T) {
 	for _, tt := range []struct {
 		name, operation, model, thinking string
 		args                             []string
-		inherited                        bool
 	}{
-		{"thinking only", "update", "telos/default (Goal setting)", "high -> off", []string{"--thinking", "off"}, false},
-		{"model only", "update", "telos/default -> telos/max", "high -> inherited (resolved on apply)", []string{"--model", "telos/max"}, true},
-		{"same model inherits thinking", "unchanged", "telos/default", "high (Goal setting)", []string{"--model", "telos/default"}, false},
-		{"model and thinking", "update", "telos/default -> telos/max", "high -> low", []string{"--model", "telos/max", "--thinking", "low"}, false},
-		{"unchanged", "unchanged", "telos/default", "high", []string{"--model", "telos/default", "--thinking", "high"}, false},
+		{"thinking only", "update", "telos/default (Goal setting)", "high -> off", []string{"--thinking", "off"}},
+		{"model only", "update", "telos/default -> telos/max", "high -> inherited (resolved on apply)", []string{"--model", "telos/max"}},
+		{"same model inherits thinking", "unchanged", "telos/default", "high (Goal setting)", []string{"--model", "telos/default"}},
+		{"model and thinking", "update", "telos/default -> telos/max", "high -> low", []string{"--model", "telos/max", "--thinking", "low"}},
+		{"unchanged", "unchanged", "telos/default", "high", []string{"--model", "telos/default", "--thinking", "high"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			args := append([]string{"--goal", "goal_test", "--dry-run"}, tt.args...)
@@ -282,12 +280,7 @@ func TestDryRunSettingsTextOnlyShowsChangedValues(t *testing.T) {
 				"Model     " + tt.model,
 				"Thinking  " + tt.thinking,
 				"",
-				"Server-side checks run when applying.",
 			}
-			if tt.inherited {
-				lines = append(lines, "The server resolves inherited thinking for the selected model when applying.")
-			}
-			lines = append(lines, "Nothing was applied.", "")
 			if want := strings.Join(lines, "\n"); output != want {
 				t.Fatalf("settings preview:\n%s\nwant:\n%s", output, want)
 			}
@@ -541,7 +534,7 @@ func TestApplyAllowsUnversionedSkillMatchingOlderRegistryVersion(t *testing.T) {
 						}
 						if preview.Operation != "unchanged" || preview.Proposed.Digest != fixture.pkg.Digest || len(preview.Proposed.Skills) != 1 ||
 							preview.Proposed.Skills[0].Ref != "@telos/verify-test:1.0.0" ||
-							preview.SpecDiff != "" || len(preview.SkillDiffs) != 0 || len(preview.Notes) != 1 {
+							preview.SpecDiff != "" || len(preview.SkillDiffs) != 0 || len(preview.Notes) != 0 {
 							t.Fatalf("unchanged preview = %+v", preview)
 						}
 					} else if writes.Load() != 2 || !strings.Contains(stdout, `"operation": "unchanged"`) {

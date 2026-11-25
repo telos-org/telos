@@ -367,7 +367,7 @@ func newApplyPreview(control *cloud.Client, goalID string) *applyPreview {
 		Operation: operation,
 		Context:   control.ContextName(),
 		GoalID:    goalID,
-		Notes:     []string{"Server-side checks run when applying."},
+		Notes:     []string{},
 	}
 }
 
@@ -470,11 +470,12 @@ func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 		fmt.Fprintln(out)
 		fmt.Fprint(out, file.Diff)
 	}
-	fmt.Fprintln(out)
+	if len(preview.Notes) > 0 {
+		fmt.Fprintln(out)
+	}
 	for _, note := range preview.Notes {
 		fmt.Fprintln(out, note)
 	}
-	fmt.Fprintln(out, "Nothing was applied.")
 }
 
 func previewInferenceDelta(current, proposed string, source previewSettingSource) string {
