@@ -398,10 +398,6 @@ func previewCloudApply(
 	} else {
 		current := prepared.current
 		preview.Current = current
-		preview.SpecDiff = string(internaldiff.Diff(
-			"deployed/SPEC.md", []byte(current.Spec),
-			"proposed/SPEC.md", []byte(proposed.Spec),
-		))
 		preview.Proposed.ModelSource = previewSourceGoal
 		preview.Proposed.ThinkingSource = previewSourceGoal
 		if proposed.Digest != "" && proposed.Digest == current.Digest {
@@ -415,7 +411,9 @@ func previewCloudApply(
 			preview.Notes = append(preview.Notes, "The server's snapshot check would be bypassed by --force.")
 		}
 	}
-	previewSkillChanges(control, preview, options.includeDiff)
+	if options.includeDiff {
+		addApplyDiff(control, preview)
+	}
 	return preview, nil
 }
 
@@ -478,6 +476,10 @@ func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 	}
 	printSummaryField(out, "Model", model)
 	printSummaryField(out, "Thinking", thinking)
+	printApplyDetails(out, preview)
+}
+
+func printApplyDetails(out io.Writer, preview *applyPreview) {
 	if preview.SpecDiff != "" {
 		fmt.Fprintln(out)
 		fmt.Fprint(out, preview.SpecDiff)
@@ -593,7 +595,14 @@ type previewSkillFileDiff struct {
 	ContentOmitted string `json:"content_omitted,omitempty"`
 }
 
-func previewSkillChanges(control *cloud.Client, preview *applyPreview, includeDiff bool) {
+func addApplyDiff(control *cloud.Client, preview *applyPreview) {
+	oldPath := "/dev/null"
+	var oldSpec []byte
+	if preview.Current != nil {
+		oldPath = "deployed/SPEC.md"
+		oldSpec = []byte(preview.Current.Spec)
+	}
+	preview.SpecDiff = string(internaldiff.Diff(oldPath, oldSpec, "proposed/SPEC.md", []byte(preview.Proposed.Spec)))
 	current := map[string]string{}
 	var currentData []byte
 	if preview.Current != nil {
@@ -613,10 +622,6 @@ func previewSkillChanges(control *cloud.Client, preview *applyPreview, includeDi
 		changed[name] = true
 	}
 	if len(changed) == 0 {
-		return
-	}
-	if !includeDiff {
-		preview.Notes = append(preview.Notes, "Use --diff to include skill file changes.")
 		return
 	}
 	before, err := previewSkillFiles(control, currentData, changed)

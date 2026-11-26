@@ -610,7 +610,7 @@ func TestDryRunUnpublishedPackageKeepsUnversionedSkillUnresolved(t *testing.T) {
 	configureDryRunTest(t, server.URL)
 	preview := decodeApplyPreview(t, fixture.path, "--goal", "goal_test")
 	if preview.Operation != "update" || preview.Proposed.Digest != "" || len(preview.Proposed.Skills) != 1 ||
-		preview.Proposed.Skills[0].Ref != "" || preview.SpecDiff == "" {
+		preview.Proposed.Skills[0].Ref != "" || preview.SpecDiff != "" {
 		t.Fatalf("unpublished package preview = %+v", preview)
 	}
 }
@@ -660,6 +660,137 @@ func TestDryRunDiffUsesLocalFilesForUnpublishedSkillVersion(t *testing.T) {
 	assertApplyRejected(t, fixture.path, "bump version in SKILL.md")
 }
 
+func TestApplyDiffIsIndependentOfDryRun(t *testing.T) {
+	for _, mode := range []struct {
+		name                          string
+		dryRun, withDiff, unversioned bool
+	}{
+		{"apply", false, false, false},
+		{"preview", true, false, false},
+		{"apply diff", false, true, false},
+		{"preview diff", true, true, false},
+		{"apply diff unversioned", false, true, true},
+	} {
+		for _, format := range []string{"text", "json"} {
+			t.Run(mode.name+"/"+format, func(t *testing.T) {
+				fixture := makeDryRunSkillFixture(t)
+				markdown := strings.ReplaceAll(string(mustReadFile(t, fixture.path)), "1.2.3", "1.2.4")
+				markdown = strings.ReplaceAll(markdown, "Serve a demo.", "Serve a changed demo.")
+				if err := os.WriteFile(fixture.path, []byte(markdown), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				path := filepath.Join(filepath.Dir(fixture.path), "verify-test", "SKILL.md")
+				skill := "---\nname: verify-test\nversion: 2.0.0\n---\nVerify new behavior.\n"
+				if mode.unversioned {
+					skill = strings.ReplaceAll(skill, "version: 2.0.0\n", "")
+				}
+				if err := os.WriteFile(path, []byte(skill), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				compiled, err := spec.CompileEnvironment(fixture.path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				const skillRef = "@telos/verify-test:2.0.0"
+				proposed, err := spec.BuildApplyPackageWithSkillRefs(compiled, map[string]string{"verify-test": skillRef})
+				if err != nil {
+					t.Fatal(err)
+				}
+				record := cloud.PackageVersionRecord{Ref: "@telos/demo:1.2.4", Digest: proposed.Digest}
+				var writes, downloads atomic.Int32
+				handlers := registryApplyHandlers(fixture.pkg)
+				handlers["GET /api/account/bootstrap"] = dryRunPublishScope
+				handlers["GET /api/packages/telos/demo/versions/1.2.4"] = http.NotFound
+				handlers["GET /api/skills/telos/verify-test"] = jsonResponse(cloud.SkillRecord{
+					Scope: "telos", Name: "verify-test", Version: "1.0.0", Ref: "@telos/verify-test:1.0.0", Digest: fixture.digest,
+				})
+				handlers["GET /api/skills/telos/verify-test/versions/2.0.0"] = http.NotFound
+				handlers["GET /api/skills/telos/verify-test/versions/1.0.0"] = jsonResponse(cloud.SkillRecord{Digest: fixture.digest})
+				handlers["GET /api/skills/telos/verify-test/versions/1.0.0/bundle"] = func(w http.ResponseWriter, r *http.Request) {
+					downloads.Add(1)
+					_, _ = w.Write(fixture.bundle)
+				}
+				for route, response := range map[string]any{
+					"POST /api/skills":               cloud.SkillRecord{Ref: skillRef},
+					"POST /api/packages":             record,
+					"PUT /api/deployments/goal_test": cloud.SessionRecord{ID: "goal_test", Name: "demo", PackageRef: record.Ref, PackageDigest: record.Digest},
+				} {
+					handlers[route] = func(w http.ResponseWriter, r *http.Request) {
+						writes.Add(1)
+						jsonResponse(response)(w, r)
+					}
+				}
+				server := inferenceTestServer(t, handlers)
+				defer server.Close()
+				configureDryRunTest(t, server.URL)
+				args := []string{"apply", fixture.path, "--goal", "goal_test"}
+				if mode.dryRun {
+					args = append(args, "--dry-run")
+				}
+				if mode.withDiff {
+					args = append(args, "--diff")
+				}
+				if format == "json" {
+					args = append(args, "--json")
+				}
+				out, stderr, err := inferenceCLIProcess(t, args...)
+				wantWrites := int32(3)
+				if mode.dryRun {
+					wantWrites = 0
+				}
+				if err != nil || writes.Load() != wantWrites {
+					t.Fatalf("error=%v writes=%d stdout=%s stderr=%s", err, writes.Load(), out, stderr)
+				}
+				hasSpec := strings.Contains(out, "diff deployed/SPEC.md proposed/SPEC.md")
+				hasSkill := strings.Contains(out, "+Verify new behavior.")
+				if format == "json" {
+					var detail applyPreview
+					if err := json.Unmarshal([]byte(out), &detail); err != nil {
+						t.Fatal(err)
+					}
+					hasSpec = strings.Contains(detail.SpecDiff, "+Serve a changed demo.")
+					hasSkill = len(detail.SkillDiffs) == 1 && strings.Contains(detail.SkillDiffs[0].Diff, "+Verify new behavior.")
+				}
+				if hasSpec != mode.withDiff || hasSkill != mode.withDiff || (downloads.Load() > 0) != mode.withDiff {
+					t.Fatalf("want diff=%v, spec=%v skill=%v downloads=%d:\n%s", mode.withDiff, hasSpec, hasSkill, downloads.Load(), out)
+				}
+			})
+		}
+	}
+}
+
+func TestApplyDiffIncludesNewSpec(t *testing.T) {
+	for _, dryRun := range []bool{false, true} {
+		pkg := testApplyPackage(t)
+		var writes atomic.Int32
+		handlers := registryApplyHandlers(pkg)
+		handlers["POST /api/deployments"] = func(w http.ResponseWriter, r *http.Request) {
+			writes.Add(1)
+			jsonResponse(cloud.SessionRecord{ID: "goal_new", Name: "demo", PackageRef: "@telos/demo:1.2.3", PackageDigest: pkg.Digest})(w, r)
+		}
+		server := inferenceTestServer(t, handlers)
+		configureDryRunTest(t, server.URL)
+		args := []string{"apply", "@telos/demo:1.2.3", "--model", "telos/default", "--thinking", "high", "--diff", "--json"}
+		wantWrites := int32(1)
+		if dryRun {
+			args = append(args, "--dry-run")
+			wantWrites = 0
+		}
+		out, stderr, err := inferenceCLIProcess(t, args...)
+		server.Close()
+		if err != nil || writes.Load() != wantWrites {
+			t.Fatalf("dry run %v: error=%v writes=%d stdout=%s stderr=%s", dryRun, err, writes.Load(), out, stderr)
+		}
+		var detail applyPreview
+		if err := json.Unmarshal([]byte(out), &detail); err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(detail.SpecDiff, "--- /dev/null") || !strings.Contains(detail.SpecDiff, "+Serve a demo.") {
+			t.Fatalf("new spec diff is missing: %s", out)
+		}
+	}
+}
+
 func TestApplyWithUnreadableDeployedBaseline(t *testing.T) {
 	pkg := testApplyPackage(t)
 	ref := "@telos/demo:1.2.4"
@@ -695,6 +826,11 @@ func TestApplyWithUnreadableDeployedBaseline(t *testing.T) {
 			if err != nil || updates.Load() != 1 || !strings.Contains(out, `"operation": "updated"`) ||
 				!strings.Contains(stderr, "warning: could not read deployed baseline") {
 				t.Fatalf("apply error=%v writes=%d stdout=%s stderr=%s", err, updates.Load(), out, stderr)
+			}
+			out, stderr, err = inferenceCLIProcess(t, "apply", ref, "--goal", "goal_test", "--diff", "--json")
+			if err != nil || updates.Load() != 2 || !strings.Contains(out, "Content diffs are unavailable.") ||
+				!strings.Contains(stderr, "warning: could not read deployed baseline") {
+				t.Fatalf("apply diff error=%v writes=%d stdout=%s stderr=%s", err, updates.Load(), out, stderr)
 			}
 		})
 	}

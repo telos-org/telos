@@ -12,6 +12,7 @@ import (
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/runtimeclient"
 	"github.com/telos-org/telos/internal/sessionapi"
+	"github.com/telos-org/telos/internal/spec"
 )
 
 // -- run ----------------------------------------------------------------------
@@ -47,7 +48,7 @@ func cmdLaunch(command, action string, args []string) {
 		sessionID = fs.String("goal", "", "ID of the Goal to update")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
 		dryRun = fs.Bool("dry-run", false, "Preview the apply without publishing or changing a Goal")
-		includeDiff = fs.Bool("diff", false, "Include skill file contents in the dry-run diff")
+		includeDiff = fs.Bool("diff", false, "Show spec and skill file diffs")
 	}
 	modelHelp := "Model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	thinkingHelp := "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs"
@@ -88,10 +89,6 @@ func cmdLaunch(command, action string, args []string) {
 		if insideTelosSession() {
 			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos Goal; use telos run to launch nested specs")
 			os.Exit(1)
-		}
-		if *includeDiff && !*dryRun {
-			fmt.Fprintln(os.Stderr, "error: --diff requires --dry-run")
-			os.Exit(2)
 		}
 		if err := validateApplyInferenceFlags(fs, *sessionID, *model, *thinking); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -358,6 +355,22 @@ func applyCloudControl(
 			exitWithError(err)
 		}
 	}
+	var details *applyPreview
+	if options.includeDiff {
+		details = &applyPreview{Current: prepared.current, Proposed: prepared.proposed}
+		if prepared.baselineErr == nil {
+			if prepared.local != nil {
+				markdown, _, err := spec.ApplyPackageSpec(prepared.local.bytes)
+				if err != nil {
+					exitWithError(err)
+				}
+				details.Proposed.Spec = string(markdown)
+			}
+			addApplyDiff(control, details)
+		} else {
+			details.Notes = []string{"Content diffs are unavailable."}
+		}
+	}
 	operation, session, err := applyCloudSessionPackage(
 		control,
 		prepared.name,
@@ -379,12 +392,18 @@ func applyCloudControl(
 		}
 	}
 	if options.json {
-		printJSON(map[string]any{
+		result := map[string]any{
 			"context":   control.ContextName(),
 			"operation": operation,
 			"package":   packageRecord,
 			"goal":      session,
-		})
+		}
+		if details != nil {
+			result["spec_diff"] = details.SpecDiff
+			result["skill_diffs"] = details.SkillDiffs
+			result["notes"] = details.Notes
+		}
+		printJSON(result)
 		return
 	}
 	printCloudSessionReceiptForContext(
@@ -395,6 +414,9 @@ func applyCloudControl(
 		followUpContext(control, options.context),
 		currentRef,
 	)
+	if details != nil {
+		printApplyDetails(os.Stdout, details)
+	}
 }
 
 func applyCloudSessionPackage(
