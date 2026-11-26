@@ -83,11 +83,7 @@ telos logs goal_c7d2f0a4e8 --follow   # follow the agents' work
 telos describe goal_c7d2f0a4e8        # status, service URL, and cost
 ```
 
-`apply --dry-run` previews local specs, registry packages, and model or thinking
-updates without publishing anything or changing a Goal. It uses the same client
-validation as apply. Server-side checks still run when you apply the change.
-Add `--diff` to include skill file diffs. Binary files and large files appear
-as summaries.
+Add `--diff` to include skill file changes.
 
 When the service meets its spec, the Goal is `ready`:
 
