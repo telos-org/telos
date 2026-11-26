@@ -83,7 +83,7 @@ telos logs goal_c7d2f0a4e8 --follow   # follow the agents' work
 telos describe goal_c7d2f0a4e8        # status, service URL, and cost
 ```
 
-Add `--diff` to include skill file changes.
+Add `--diff` to show spec and skill file changes.
 
 When the service meets its spec, the Goal is `ready`:
 

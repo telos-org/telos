@@ -95,16 +95,15 @@ Before applying a spec, preview the changes with `--dry-run`:
 
 ```console
 $ telos apply SPEC.md --dry-run
-Operation create
+Would create reading-list
+
 Context   personal
-Spec      reading-list
-Proposed  @alice/reading-list:0.1.0
-Version   0.1.0
+Package   @alice/reading-list:0.1.0
 Model     telos/default (workspace default)
 Thinking  cloud default (resolved on apply)
 ```
 
-Add `--diff` to include skill file changes.
+`--diff` shows spec and skill file changes for both apply and dry runs.
 
 ## Apply
 
@@ -112,10 +111,11 @@ Once the preview looks good, use `telos apply` to deploy the spec to Telos Cloud
 
 ```console
 $ telos apply SPEC.md
-created reading-list
+Created reading-list
 
 Status    working
 Goal      goal_c7d2f0a4e8
+Package   @alice/reading-list:0.1.0
 Revision  sha256:8f21c47a91ee
 Model     telos/default
 Thinking  medium
@@ -230,45 +230,24 @@ Preview the update against the existing Goal:
 
 ```console
 $ telos apply SPEC.md --goal goal_c7d2f0a4e8 --dry-run
-Operation update
+Would update reading-list
+
 Context   personal
 Goal      goal_c7d2f0a4e8
-Spec      reading-list
-Proposed  @alice/reading-list:0.2.0
-Current   @alice/reading-list:0.1.0
-Version   0.1.0 -> 0.2.0
+Package   @alice/reading-list:0.1.0 -> @alice/reading-list:0.2.0
 Model     unchanged
 Thinking  unchanged
-
-diff deployed/SPEC.md proposed/SPEC.md
---- deployed/SPEC.md
-+++ proposed/SPEC.md
-@@ -1,6 +1,6 @@
- ---
- name: reading-list
--version: 0.1.0
-+version: 0.2.0
- ---
-
- # Goal
-@@ -10,6 +10,7 @@
- - `POST /books` adds a title.
- - `GET /books` returns the current list.
- - Books remain available when the application restarts.
-+- Every book records who added it.
- 
- # Acceptance
- 
 ```
 
 Apply the update:
 
 ```console
 $ telos apply SPEC.md --goal goal_c7d2f0a4e8
-updated reading-list
+Updated reading-list
 
 Status    working
 Goal      goal_c7d2f0a4e8
+Package   @alice/reading-list:0.1.0 -> @alice/reading-list:0.2.0
 Revision  sha256:3211e85fe81b
 Model     telos/default
 Thinking  medium
