@@ -89,29 +89,33 @@ Run a public service for a shared reading list.
 
 At a framework level, the above example covers the minimal required items. [Goals](goals.md) walks through everything else a goal specification can include: frontmatter, skills, rubrics, and packages.
 
-## Plan
+## Preview
 
-Once you are happy with the goal specification, `telos plan` validates the spec and shows what applying it would change, without changing anything.
+Before applying a spec, preview the changes with `--dry-run`:
 
 ```console
-$ telos plan SPEC.md
-Spec      reading-list
-Version   0.1.0
+$ telos apply SPEC.md --dry-run
+Would create reading-list
+
 Context   personal
+Package   @alice/reading-list:0.1.0
+Model     telos/default (workspace default)
+Thinking  cloud default (resolved on apply)
 ```
 
-The first plan has no deployed version to compare against, so it shows the Goal's name, version, and context.
+`--diff` shows spec and skill file changes for both apply and dry runs.
 
 ## Apply
 
-Once the plan looks good, use `telos apply` to deploy the spec to Telos Cloud.
+Once the preview looks good, use `telos apply` to deploy the spec to Telos Cloud.
 
 ```console
 $ telos apply SPEC.md
-created reading-list
+Created reading-list
 
 Status    working
 Goal      goal_c7d2f0a4e8
+Package   @alice/reading-list:0.1.0
 Revision  sha256:8f21c47a91ee
 Model     telos/default
 Thinking  medium
@@ -220,48 +224,30 @@ Congratulations! Your first Goal is live.
 
 Suppose the reading list now needs attribution. Edit the same `SPEC.md`, bump its version to `0.2.0`, and add "Every book records who added it" to the Goal.
 
-Names are unique within a context, so updates target the Goal by its ID with `--goal`. Without it, `telos plan` and `telos apply` refuse to create a second `reading-list`.
+Names are unique within a context, so updates target the Goal by its ID with `--goal`. Without it, `telos apply` refuses to create a second `reading-list`.
 
-Plan against the existing Goal:
+Preview the update against the existing Goal:
 
 ```console
-$ telos plan SPEC.md --goal goal_c7d2f0a4e8
-Spec      reading-list
+$ telos apply SPEC.md --goal goal_c7d2f0a4e8 --dry-run
+Would update reading-list
+
 Context   personal
 Goal      goal_c7d2f0a4e8
-Current   @alice/reading-list:0.1.0
-Version   0.1.0 -> 0.2.0
-
-diff deployed/SPEC.md proposed/SPEC.md
---- deployed/SPEC.md
-+++ proposed/SPEC.md
-@@ -1,6 +1,6 @@
- ---
- name: reading-list
--version: 0.1.0
-+version: 0.2.0
- ---
-
- # Goal
-@@ -10,6 +10,7 @@
- - `POST /books` adds a title.
- - `GET /books` returns the current list.
- - Books remain available when the application restarts.
-+- Every book records who added it.
- 
- # Acceptance
- 
+Package   @alice/reading-list:0.1.0 -> @alice/reading-list:0.2.0
+Model     unchanged
+Thinking  unchanged
 ```
 
-The plan shows the Goal's current spec and how the new one
-differs. Apply that new revision to the same Goal:
+Apply the update:
 
 ```console
 $ telos apply SPEC.md --goal goal_c7d2f0a4e8
-updated reading-list
+Updated reading-list
 
 Status    working
 Goal      goal_c7d2f0a4e8
+Package   @alice/reading-list:0.1.0 -> @alice/reading-list:0.2.0
 Revision  sha256:3211e85fe81b
 Model     telos/default
 Thinking  medium

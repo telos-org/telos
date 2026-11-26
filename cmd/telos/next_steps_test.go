@@ -84,10 +84,14 @@ func TestPauseAndResumeCallCloudAndReportTheGoal(t *testing.T) {
 	}
 }
 
-func TestPlanAndApplyNameAMissingSpec(t *testing.T) {
-	for _, command := range []string{"plan", "apply"} {
-		t.Run(command, func(t *testing.T) {
-			process := exec.Command(os.Args[0], "-test.run=^TestInferenceCLIProcess$", "--", command, "missing.md")
+func TestApplyAndDryRunNameAMissingSpec(t *testing.T) {
+	for _, mode := range []string{"apply", "dry run"} {
+		t.Run(mode, func(t *testing.T) {
+			args := []string{"-test.run=^TestInferenceCLIProcess$", "--", "apply", "missing.md"}
+			if mode == "dry run" {
+				args = append(args, "--dry-run")
+			}
+			process := exec.Command(os.Args[0], args...)
 			process.Dir = t.TempDir()
 			process.Env = append(os.Environ(), "TELOS_TEST_INFERENCE_COMMAND=1", "TELOS_SESSION_ID=")
 			out, err := process.CombinedOutput()

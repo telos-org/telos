@@ -77,11 +77,13 @@ starred rubric in an independent evaluation before `ready`.
 Preview a spec, apply it, and watch `telos` work:
 
 ```bash
-telos plan SPEC.md                    # preview what applying would change
+telos apply SPEC.md --dry-run        # preview what applying would change
 telos apply SPEC.md                   # create the Goal and print its ID
 telos logs goal_c7d2f0a4e8 --follow   # follow the agents' work
 telos describe goal_c7d2f0a4e8        # status, service URL, and cost
 ```
+
+Add `--diff` to show spec and skill file changes.
 
 When the service meets its spec, the Goal is `ready`:
 
@@ -103,7 +105,7 @@ To change the service, edit `SPEC.md`, bump its version, and apply it to the
 same Goal. `telos` reconciles the running software toward the new desired state.
 
 ```bash
-telos plan SPEC.md --goal goal_c7d2f0a4e8
+telos apply SPEC.md --goal goal_c7d2f0a4e8 --dry-run
 telos apply SPEC.md --goal goal_c7d2f0a4e8
 ```
 

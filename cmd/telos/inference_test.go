@@ -180,7 +180,7 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 func inferenceTestServer(t *testing.T, overrides map[string]http.HandlerFunc) *httptest.Server {
 	t.Helper()
 	responses := map[string]string{
-		"GET /api/account/bootstrap":     `{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","handle":"person","role":"owner"},{"id":"org_telos","handle":"telos","role":"owner"}]}`,
+		"GET /api/account/bootstrap":     `{"personal_org_id":"org_personal","organizations":[{"id":"org_personal","handle":"person","role":"owner","default_publish_scope":"person"},{"id":"org_telos","handle":"telos","role":"owner","default_publish_scope":"telos"}]}`,
 		"GET /api/inference/connections": `{"errors":{},"connections":[{"source":"subscription","id":"sub_work","name":"My ChatGPT","provider":"chatgpt-codex","status":"connected"},{"source":"byok","status":"saved","id":"key_work","name":"Work Anthropic","provider":"anthropic","api_key":"never-print-this-key"},{"source":"byok","status":"saved","id":"key_router","name":"Work/Router","provider":"openrouter"}]}`,
 		"GET /api/inference/preference":  `{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"}}`,
 		"GET /api/deployments":           `{"deployments":[]}`,
@@ -286,8 +286,6 @@ func TestInferenceCLIProcess(t *testing.T) {
 	switch args[0] {
 	case "apply":
 		cmdApply(args[1:])
-	case "plan":
-		cmdPlan(args[1:])
 	case "run":
 		cmdRun(args[1:])
 	case "config":
@@ -303,7 +301,8 @@ func TestInferenceCLIProcess(t *testing.T) {
 	case "resume":
 		cmdResume(args[1:])
 	default:
-		os.Exit(2)
+		os.Args = append([]string{os.Args[0]}, args...)
+		main()
 	}
 	os.Exit(0)
 }
@@ -350,6 +349,7 @@ func TestNestedRunInheritsParentInferenceUnlessFlagged(t *testing.T) {
 func TestCloudApplyInferenceErrors(t *testing.T) {
 	var publications, deployments atomic.Int32
 	server := inferenceTestServer(t, map[string]http.HandlerFunc{
+		"GET /api/packages/person/example/versions/1.0.0": http.NotFound,
 		"POST /api/packages": func(w http.ResponseWriter, r *http.Request) {
 			publications.Add(1)
 			_, _ = w.Write([]byte(`{"ref":"@person/example:1.0.0"}`))

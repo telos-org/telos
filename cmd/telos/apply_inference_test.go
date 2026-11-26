@@ -129,12 +129,18 @@ func TestApplyInferenceInvalidFlagsDoNoWork(t *testing.T) {
 		{"@telos/demo:1.0.0", "--goal", "sess_test", "--thinking", "high"},
 		{"does-not-exist.md", "--goal", "local_test", "--thinking", "high"},
 	} {
-		t.Run(strings.Join(args, " "), func(t *testing.T) {
-			_, stderr, err := inferenceCLIProcess(t, append([]string{"apply"}, args...)...)
-			if err == nil || (!strings.Contains(stderr, "error:") && !strings.Contains(stderr, "flag provided but not defined:")) || requests.Load() != 0 {
-				t.Fatalf("invalid command did work: err=%v, requests=%d, stderr=%s", err, requests.Load(), stderr)
+		for _, dryRun := range []bool{false, true} {
+			commandArgs := append([]string{"apply"}, args...)
+			if dryRun {
+				commandArgs = append(commandArgs, "--dry-run")
 			}
-		})
+			t.Run(strings.Join(commandArgs, " "), func(t *testing.T) {
+				_, stderr, err := inferenceCLIProcess(t, commandArgs...)
+				if err == nil || (!strings.Contains(stderr, "error:") && !strings.Contains(stderr, "flag provided but not defined:")) || requests.Load() != 0 {
+					t.Fatalf("invalid command did work: err=%v, requests=%d, stderr=%s", err, requests.Load(), stderr)
+				}
+			})
+		}
 	}
 	t.Setenv("TELOS_SESSION_ID", "sess_parent")
 	t.Setenv("TELOS_API_TOKEN", "agent-token")
@@ -178,6 +184,11 @@ func TestSpecApplyIgnoresInferenceEnvironment(t *testing.T) {
 	pkg := testApplyPackage(t)
 	var updates atomic.Int32
 	server := inferenceTestServer(t, map[string]http.HandlerFunc{
+		"GET /api/deployments/sess_test": func(w http.ResponseWriter, r *http.Request) {
+			_ = json.NewEncoder(w).Encode(cloud.SessionRecord{
+				ID: "sess_test", PackageRef: "@telos/demo:1.2.3", PackageDigest: pkg.Digest,
+			})
+		},
 		"GET /api/packages/telos/demo/versions/1.2.3": func(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]string{"scope": "telos", "name": "demo", "version": "1.2.3", "ref": "@telos/demo:1.2.3", "digest": pkg.Digest})
 		},

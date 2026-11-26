@@ -286,12 +286,13 @@ func TestPrintCloudSessionReceiptShowsNextUsefulAction(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	printCloudSessionReceiptForContext(&out, "created", session, "personal", "")
+	printCloudSessionReceiptForContext(&out, "created", session, "personal", "", "")
 	text := out.String()
 	for _, want := range []string{
-		"created auth",
+		"Created auth",
 		"Status    working",
 		"Goal      sess_123",
+		"Package   @telos/auth:1.0.0",
 		"Revision  sha256:8f21c47a91ee\n",
 		"Context   personal",
 		"Service   https://auth.example.com",
@@ -301,14 +302,14 @@ func TestPrintCloudSessionReceiptShowsNextUsefulAction(t *testing.T) {
 			t.Fatalf("cloud session receipt missing %q:\n%s", want, text)
 		}
 	}
-	for _, notWant := range []string{"Name", "Target", "Package", "Digest", "Dashboard"} {
+	for _, notWant := range []string{"Name", "Target", "Digest", "Dashboard"} {
 		if strings.Contains(text, notWant) {
 			t.Fatalf("cloud session receipt should omit %q:\n%s", notWant, text)
 		}
 	}
 
 	out.Reset()
-	printCloudSessionReceiptForContext(&out, "created", session, "@telos", "@telos")
+	printCloudSessionReceiptForContext(&out, "created", session, "@telos", "@telos", "")
 	if !strings.Contains(out.String(), "Logs      telos logs --context @telos sess_123") {
 		t.Fatalf("receipt for a context other than the saved one omits it from the logs hint:\n%s", out.String())
 	}

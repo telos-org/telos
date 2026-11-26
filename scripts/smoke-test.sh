@@ -41,9 +41,12 @@ telos_cmd() {
   env \
     -u TELOS_API_TOKEN \
     -u TELOS_API_ENDPOINT \
+    -u TELOS_AUTH_TOKEN \
+    -u TELOS_CONTEXT \
     -u TELOS_RUNTIME \
     -u TELOS_SESSION_DIR \
     -u TELOS_SESSION_ID \
+    TELOS_CONFIG="$FIXTURE_DIR/config.yaml" \
     "$TELOS" "$@"
 }
 
@@ -140,7 +143,7 @@ FIXTURE_SPEC
 echo "=== 1. Help and version ==="
 
 HELP="$(telos_cmd --help 2>&1)"
-check_contains "help mentions plan" "$HELP" "plan SPEC.md"
+check_contains "help mentions apply" "$HELP" "apply [SPEC.md]"
 check_contains "help mentions list" "$HELP" "list"
 check_contains "help mentions describe" "$HELP" "describe GOAL"
 check_contains "help mentions logs" "$HELP" "logs"
@@ -181,30 +184,30 @@ check_contains "logs without args shows usage" "$LOGS_NOARG" "usage: telos logs"
 DELETE_NOARG="$(telos_cmd delete 2>&1 || true)"
 check_contains "delete without args shows usage" "$DELETE_NOARG" "usage: telos delete"
 
-DESCRIBE_MISSING="$(telos_cmd describe nonexistent_session 2>&1 || true)"
+DESCRIBE_MISSING="$(telos_cmd describe local_missing 2>&1 || true)"
 check_contains "describe missing session says not found" "$DESCRIBE_MISSING" "not found"
 check_not_contains "describe missing session has no panic" "$DESCRIBE_MISSING" "panic"
 
-LOGS_MISSING="$(telos_cmd logs nonexistent_session 2>&1 || true)"
+LOGS_MISSING="$(telos_cmd logs local_missing 2>&1 || true)"
 check_contains "logs missing session says not found" "$LOGS_MISSING" "not found"
 
-DELETE_MISSING="$(telos_cmd delete nonexistent_session 2>&1 || true)"
+DELETE_MISSING="$(telos_cmd delete local_missing 2>&1 || true)"
 check_contains "delete missing session says not found" "$DELETE_MISSING" "not found"
 
-PLAN_MISSING="$(telos_cmd plan nonexistent.md 2>&1 || true)"
-check_contains "plan missing spec is specific" "$PLAN_MISSING" "spec file not found"
-check_not_contains "plan missing spec has no panic" "$PLAN_MISSING" "panic"
+PREVIEW_MISSING="$(telos_cmd apply nonexistent.md --dry-run 2>&1 || true)"
+check_contains "dry run missing spec is specific" "$PREVIEW_MISSING" "spec file not found"
+check_not_contains "dry run missing spec has no panic" "$PREVIEW_MISSING" "panic"
 
-echo "=== 3. Plan contract ==="
+echo "=== 3. Apply dry-run contract ==="
 
-PLAN_HUMAN="$(telos_cmd plan "$FIXTURE_SPEC_PATH" 2>&1)"
-check_contains "plan human includes spec name" "$PLAN_HUMAN" "smoke-fixture"
-check_contains "plan human includes version" "$PLAN_HUMAN" "0.1.0"
-check_not_contains "plan human has no panic" "$PLAN_HUMAN" "panic"
+APPLY_HELP="$(telos_cmd apply --help 2>&1)"
+check_contains "apply help mentions dry run" "$APPLY_HELP" "--dry-run"
+check_contains "apply help mentions skill diff" "$APPLY_HELP" "--diff"
 
-PLAN_JSON="$(telos_cmd plan "$FIXTURE_SPEC_PATH" --json 2>&1)"
-check_json "plan --json parses" "$PLAN_JSON"
-check_contains "plan JSON includes spec name" "$PLAN_JSON" '"name": "smoke-fixture"'
+# Go HTTP-fixture tests cover preview output and reject mutating requests.
+PREVIEW_SIGNED_OUT="$(telos_cmd apply "$FIXTURE_SPEC_PATH" --dry-run 2>&1 || true)"
+check_contains "dry run requires login" "$PREVIEW_SIGNED_OUT" "telos login"
+check_not_contains "signed-out dry run has no panic" "$PREVIEW_SIGNED_OUT" "panic"
 
 echo "=== 4. List contract ==="
 

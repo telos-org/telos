@@ -26,6 +26,7 @@ This is the index of the Telos CLI guide. It ships with every Telos release and 
 
 The CLI is designed to be agent-friendly: its default output is compact text, meant to be read as is. Most commands also take `--json` for when a result needs to go through other shell tools, like `jq`, `grep` or `awk`.
 
+- Use `telos apply --dry-run` to preview changes.
 - Ask before `telos apply` (starts paid compute and inference), `telos delete` (which can't be undone), and `telos push` (pushes to a hosted registry).
 - `telos login` opens a browser and waits for the user to approve sign in (device code authentication).
 - A Goal is a persistent object. Check on it with `telos describe` and `telos logs` every few minutes, not in a tight loop. `telos logs --follow` doesn't return until the Goal stops.

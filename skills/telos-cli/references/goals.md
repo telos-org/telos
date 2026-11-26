@@ -130,7 +130,7 @@ Digest    sha256:3158b3a4fbe9577b43bab574bb725f8ecebf4ec86c89bc896a0696a2ca17800
 Version   0.1.0
 ```
 
-`telos apply` also pushes your spec as a private package, like `@alice/reading-list:0.1.0`, so bump `version` whenever the spec or its skills change. Otherwise, `apply` fails with `package version already exists (HTTP 409)`.
+`telos apply` also pushes your spec as a private package, like `@alice/reading-list:0.1.0`, so bump `version` whenever the spec or its skills change.
 
 To fetch a package locally, for inspection or modification, you can run `telos pull @<context>/<name>:<version>`.
 

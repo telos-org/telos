@@ -14,7 +14,7 @@ import (
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
-func TestApplyAndPlanRefuseADuplicateGoalName(t *testing.T) {
+func TestApplyAndDryRunRefuseADuplicateGoalName(t *testing.T) {
 	var publications, deployments atomic.Int32
 	server := inferenceTestServer(t, map[string]http.HandlerFunc{
 		"GET /api/deployments": func(w http.ResponseWriter, r *http.Request) {
@@ -43,14 +43,18 @@ func TestApplyAndPlanRefuseADuplicateGoalName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	for _, command := range []string{"apply", "plan"} {
-		t.Run(command, func(t *testing.T) {
-			process := exec.Command(os.Args[0], "-test.run=^TestInferenceCLIProcess$", "--", command, "SPEC.md")
+	for _, mode := range []string{"apply", "dry run"} {
+		t.Run(mode, func(t *testing.T) {
+			args := []string{"-test.run=^TestInferenceCLIProcess$", "--", "apply", "SPEC.md"}
+			if mode == "dry run" {
+				args = append(args, "--dry-run")
+			}
+			process := exec.Command(os.Args[0], args...)
 			process.Dir = dir
 			process.Env = append(os.Environ(), "TELOS_TEST_INFERENCE_COMMAND=1")
 			out, err := process.CombinedOutput()
 			want := "error: a Goal named example already exists in personal (goal_live)\n" +
-				"To update it: telos " + command + " SPEC.md --goal goal_live\n"
+				"To update it: telos apply SPEC.md --goal goal_live\n"
 			if err == nil || !strings.Contains(string(out), want) {
 				t.Fatalf("err=%v output=%s\nwant %q", err, out, want)
 			}
@@ -66,7 +70,6 @@ func TestDuplicateGoalErrorNamesTheContextWhenNeeded(t *testing.T) {
 		name:     "reading-list",
 		context:  "@team",
 		id:       "goal_c7d2f0a4e8",
-		command:  "apply",
 		specArg:  "specs/reading list.md",
 		followUp: "@team",
 	}
