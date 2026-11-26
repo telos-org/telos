@@ -230,9 +230,8 @@ func TestDryRunPreservesBooleanSpecNames(t *testing.T) {
 			var output bytes.Buffer
 			printApplyPreview(&output, &preview, false)
 			for _, field := range []string{
-				"Spec      " + name,
-				"Proposed  @telos/" + name + ":1.0.0",
-				"Version   1.0.0",
+				"Would create " + name,
+				"Package   @telos/" + name + ":1.0.0",
 				"Interval  30m",
 			} {
 				if !strings.Contains(output.String(), field) {
@@ -274,12 +273,16 @@ func TestDryRunSettingsTextOnlyShowsChangedValues(t *testing.T) {
 			args := append([]string{"--goal", "goal_test", "--dry-run"}, tt.args...)
 			output := captureStdout(t, func() { cmdApply(args) })
 			lines := []string{
-				"Operation " + tt.operation,
+				"Would update goal_test",
+				"",
 				"Context   personal",
 				"Goal      goal_test",
 				"Model     " + tt.model,
 				"Thinking  " + tt.thinking,
 				"",
+			}
+			if tt.operation == "unchanged" {
+				lines[0] = "No changes to goal_test"
 			}
 			if want := strings.Join(lines, "\n"); output != want {
 				t.Fatalf("settings preview:\n%s\nwant:\n%s", output, want)

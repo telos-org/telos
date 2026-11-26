@@ -141,6 +141,7 @@ func prepareSessionInference(sessionID, model, thinking, contextOverride string)
 }
 
 func printInferenceChange(out io.Writer, change *inferenceChange) {
+	printApplyHeadline(out, "updated", change.SessionID)
 	printSummaryField(out, "Goal", change.SessionID)
 	if change.Context != "" {
 		printSummaryField(out, "Context", change.Context)

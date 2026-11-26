@@ -419,22 +419,46 @@ func previewCloudApply(
 	return preview, nil
 }
 
+func printApplyHeadline(out io.Writer, operation, name string) {
+	var verb string
+	switch operation {
+	case "create":
+		verb = "Would create"
+	case "update":
+		verb = "Would update"
+	case "created":
+		verb = "Created"
+	case "updated":
+		verb = "Updated"
+	case "unchanged":
+		verb = "No changes to"
+	default:
+		return
+	}
+	fmt.Fprintf(out, "%s %s\n\n", verb, name)
+}
+
+func printApplyPackage(out io.Writer, current, proposed string) {
+	if current != "" && current != proposed {
+		proposed = previewDeltaValue(current, proposed)
+	}
+	printSummaryField(out, "Package", proposed)
+}
+
 func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 	if jsonOut {
 		printJSON(preview)
 		return
 	}
-	printSummaryField(out, "Operation", preview.Operation)
+	proposed := preview.Proposed
+	printApplyHeadline(out, preview.Operation, firstNonEmpty(proposed.Name, preview.GoalID))
 	printSummaryField(out, "Context", preview.Context)
 	if preview.GoalID != "" {
 		printSummaryField(out, "Goal", preview.GoalID)
 	}
-	proposed := preview.Proposed
 	if proposed.Name != "" {
-		printSummaryField(out, "Spec", proposed.Name)
-		printSummaryField(out, "Proposed", proposed.Ref)
 		if preview.Current == nil {
-			printSummaryField(out, "Version", proposed.Version)
+			printApplyPackage(out, "", proposed.Ref)
 			if proposed.IntervalSeconds != nil {
 				printSummaryField(out, "Interval", formatPreviewInterval(proposed.IntervalSeconds))
 			}
@@ -442,7 +466,7 @@ func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 				printSummaryField(out, "Skills", formatPreviewSkillLocks(proposed.Skills))
 			}
 		} else {
-			printSummaryField(out, "Current", preview.Current.Ref)
+			printApplyPackage(out, preview.Current.Ref, proposed.Ref)
 			printPreviewStateDelta(out, *preview.Current, proposed)
 		}
 	}
@@ -507,16 +531,12 @@ func previewInferenceValue(value string, source previewSettingSource) string {
 func printPreviewStateDelta(out io.Writer, current, proposed applyState) {
 	currentInterval := formatPreviewInterval(current.IntervalSeconds)
 	proposedInterval := formatPreviewInterval(proposed.IntervalSeconds)
-	versionChanged := current.Version != proposed.Version
 	intervalChanged := currentInterval != proposedInterval
-	if versionChanged {
-		printSummaryField(out, "Version", previewDeltaValue(current.Version, proposed.Version))
-	}
 	if intervalChanged {
 		printSummaryField(out, "Interval", previewDeltaValue(currentInterval, proposedInterval))
 	}
 	if !slices.Equal(current.Skills, proposed.Skills) {
-		if versionChanged || intervalChanged {
+		if intervalChanged {
 			fmt.Fprintln(out)
 		}
 		fmt.Fprintln(out, "Skill locks")

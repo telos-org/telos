@@ -277,7 +277,7 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		t.Fatalf("forced apply JSON: %v\n%s", err, out)
 	}
-	if result["operation"] != "updated" || result["context"] != "personal" {
+	if result["operation"] != "unchanged" || result["context"] != "personal" {
 		t.Fatalf("forced apply result = %#v", result)
 	}
 }

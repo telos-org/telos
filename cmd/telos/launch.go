@@ -371,6 +371,13 @@ func applyCloudControl(
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
+	currentRef := ""
+	if prepared.current != nil {
+		currentRef = prepared.current.Ref
+		if session.PackageDigest != "" && session.PackageDigest == prepared.current.Digest {
+			operation = "unchanged"
+		}
+	}
 	if options.json {
 		printJSON(map[string]any{
 			"context":   control.ContextName(),
@@ -386,6 +393,7 @@ func applyCloudControl(
 		session,
 		control.ContextName(),
 		followUpContext(control, options.context),
+		currentRef,
 	)
 }
 
@@ -509,7 +517,7 @@ func printSessionReceipt(out io.Writer, operation string, session *sessionapi.Se
 }
 
 func printCloudSessionReceipt(out io.Writer, operation string, session *cloud.SessionRecord) {
-	printCloudSessionReceiptForContext(out, operation, session, "", "")
+	printCloudSessionReceiptForContext(out, operation, session, "", "", "")
 }
 
 func printCloudSessionReceiptForContext(
@@ -518,10 +526,12 @@ func printCloudSessionReceiptForContext(
 	session *cloud.SessionRecord,
 	contextName string,
 	logsContext string,
+	currentRef string,
 ) {
-	fmt.Fprintf(out, "%s %s\n\n", operation, session.Name)
+	printApplyHeadline(out, operation, session.Name)
 	printSummaryField(out, "Status", cloudSessionDisplayStatus(*session))
 	printSummaryField(out, "Goal", session.ID)
+	printApplyPackage(out, currentRef, session.PackageRef)
 	printSummaryField(out, "Revision", shortRevision(session.PackageDigest))
 	printCloudInferenceSummary(out, *session)
 	if contextName != "" {
