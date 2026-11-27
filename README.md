@@ -77,13 +77,11 @@ starred rubric in an independent evaluation before `ready`.
 Preview a spec, apply it, and watch `telos` work:
 
 ```bash
-telos apply SPEC.md --dry-run        # preview what applying would change
+telos apply SPEC.md --dry-run --diff  # preview the application
 telos apply SPEC.md                   # create the Goal and print its ID
 telos logs goal_c7d2f0a4e8 --follow   # follow the agents' work
 telos describe goal_c7d2f0a4e8        # status, service URL, and cost
 ```
-
-Add `--diff` to show spec and skill file changes.
 
 When the service meets its spec, the Goal is `ready`:
 
