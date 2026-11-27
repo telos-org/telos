@@ -52,6 +52,8 @@ func main() {
 		cmdPause(os.Args[2:])
 	case "resume":
 		cmdResume(os.Args[2:])
+	case "exec":
+		cmdExec(os.Args[2:])
 	case "pull":
 		cmdPull(os.Args[2:])
 	case "login":
@@ -83,6 +85,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "  delete GOAL        Delete a Goal")
 	fmt.Fprintln(out, "  pause GOAL         Stop a Goal's agents; its app keeps running")
 	fmt.Fprintln(out, "  resume GOAL        Restart a paused or blocked Goal's agents")
+	fmt.Fprintln(out, "  exec GOAL -- CMD   Run a command in a paused Goal's workspace")
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "other commands:")
 	_, hostedSession := rootSessionContext()

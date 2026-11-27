@@ -754,6 +754,35 @@ func NormalizeEndpoint(endpoint string) string {
 	return endpoint
 }
 
+func (c *Client) ExecSession(ctx context.Context, id string, request sessionapi.SessionExecRequest) (*sessionapi.SessionExecResponse, error) {
+	if err := request.Validate(); err != nil {
+		return nil, err
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		return nil, err
+	}
+	client, httpClient := *c, *c.HTTP
+	httpClient.Timeout = time.Duration(request.TimeoutMS)*time.Millisecond + 20*time.Second
+	client.HTTP = &httpClient
+	response, err := client.doRawContext(ctx, http.MethodPost, "/api/deployments/"+url.PathEscape(id)+"/exec", body, "application/json")
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		return nil, readError(response)
+	}
+	var result sessionapi.SessionExecResponse
+	if err := json.NewDecoder(io.LimitReader(response.Body, 3<<20)).Decode(&result); err != nil {
+		return nil, fmt.Errorf("decode command result: %w", err)
+	}
+	if result.ExitCode < 0 || result.ExitCode > 255 {
+		return nil, fmt.Errorf("invalid command exit code: %d", result.ExitCode)
+	}
+	return &result, nil
+}
+
 func (c *Client) do(method, path string, body []byte) (*http.Response, error) {
 	return c.doRaw(method, path, body, "application/json")
 }
