@@ -125,11 +125,13 @@ Logs      telos logs g_c7d2f0a4e8
 
 The `apply` command returns immediately and starts the Goal in the cloud with a unique ID.
 
-To change the model or thinking effort, apply the same spec with an override:
+To change the model or thinking effort, apply the same goal spec with the updated setting:
 
 ```console
 $ telos apply SPEC.md --model telos/max --thinking high
 ```
+
+If the goal spec and settings are unchanged, `apply` reports `No changes to <name>`.
 
 ## Watch
 
@@ -262,7 +264,7 @@ Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 Logs      telos logs g_c7d2f0a4e8
 ```
 
-Add `-m "MSG"` to describe the revision; the default message is `Deploy v0.2.0`. Identical spec and settings report `No changes to reading-list`.
+Add `-m "MSG"` to describe the revision (defaults to `Deploy v0.2.0`).
 
 If the Goal has been updated by someone else, you can fetch its current spec with:
 

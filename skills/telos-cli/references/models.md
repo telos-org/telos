@@ -13,7 +13,7 @@ $ telos apply SPEC.md --model telos/max --thinking high
 $ telos apply SPEC.md --model my-anthropic-key/claude-sonnet-5-5
 ```
 
-These flags also update an existing Goal. Omitted settings stay unchanged, and settings changes don't require a spec version bump.
+These flags can also update an existing Goal without a spec version bump.
 
 You can switch between managed inference, API keys, and subscriptions by selecting the new connection's name. The change takes effect at the next agent turn.
 
