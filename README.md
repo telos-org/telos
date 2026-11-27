@@ -77,10 +77,10 @@ starred rubric in an independent evaluation before `ready`.
 Preview a spec, apply it, and watch `telos` work:
 
 ```bash
-telos apply SPEC.md --dry-run        # preview what applying would change
-telos apply SPEC.md                   # create the Goal and print its ID
-telos logs g_c7d2f0a4e8 --follow   # follow the agents' work
-telos describe g_c7d2f0a4e8        # status, service URL, and cost
+telos apply SPEC.md --dry-run       # preview what applying would change
+telos apply SPEC.md                 # create the Goal and print its ID
+telos logs g_c7d2f0a4e8 --follow    # follow the agents' work
+telos describe g_c7d2f0a4e8         # status, service URL, and cost
 ```
 
 Add `--diff` to show spec and skill file changes.

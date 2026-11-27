@@ -13,11 +13,7 @@ $ telos apply SPEC.md --model telos/max --thinking high
 $ telos apply SPEC.md --model my-anthropic-key/claude-sonnet-5-5
 ```
 
-To change an existing Goal's model or thinking effort, use `--goal` without a spec file:
-
-```console
-$ telos apply --goal g_c7d2f0a4e8 --model telos/max --thinking high
-```
+These flags also update an existing Goal. Omitted settings stay unchanged, and settings changes don't require a spec version bump.
 
 You can switch between managed inference, API keys, and subscriptions by selecting the new connection's name. The change takes effect at the next agent turn.
 

@@ -125,10 +125,10 @@ Logs      telos logs g_c7d2f0a4e8
 
 The `apply` command returns immediately and starts the Goal in the cloud with a unique ID.
 
-To change only the model or thinking effort of an existing Goal (applies at next agent turn), omit the spec file:
+To change the model or thinking effort, apply the same spec with an override:
 
 ```console
-$ telos apply --goal g_c7d2f0a4e8 --model telos/max --thinking high
+$ telos apply SPEC.md --model telos/max --thinking high
 ```
 
 ## Watch
@@ -262,7 +262,7 @@ Service   https://reading-list-c7d2f0a4e8.usetelos.ai
 Logs      telos logs g_c7d2f0a4e8
 ```
 
-This applies the update in place to the Goal named by the spec's `name` field. Telos begins reconciling toward the new revision. If the Goal already runs this exact spec, `apply` prints `No changes to reading-list` and adds no revision. To optionally describe the update, add `-m "MSG"`. Otherwise, the revision's default message is `Deploy v0.2.0`. Continue to monitor status from `working` to `ready`, then exercise the updated API behavior.
+Add `-m "MSG"` to describe the revision; the default message is `Deploy v0.2.0`. Identical spec and settings report `No changes to reading-list`.
 
 If the Goal has been updated by someone else, you can fetch its current spec with:
 
@@ -358,6 +358,7 @@ accepted "Support removing books" for reading-list
 
 Status    working
 Goal      g_c7d2f0a4e8
+Package   @alice/reading-list:0.2.1
 Revision  sha256:8c41d07a2e5f
 Model     telos/default
 Thinking  medium
