@@ -100,12 +100,16 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
-		"apply [SPEC.md]    Create a Goal, update its spec, or change model/thinking",
-		"get GOAL           Download a Goal's package",
-		"delete GOAL        Delete a Goal",
+		"apply INPUT        Apply a spec, package, or proposal",
+		"propose SPEC.md    Open or update a proposal",
+		"review PROPOSAL    Approve or block a proposal",
+		"comment ID         Comment on a Goal or proposal, or reply to a comment",
+		"list [KIND]        List Goals, proposals, or comments",
+		"describe ID        Show a Goal or a proposal",
+		"delete ID          Delete a Goal or close a proposal",
 		"pause GOAL         Stop a Goal's agents; its app keeps running",
 		"resume GOAL        Restart a paused or blocked Goal's agents",
-		"pull PACKAGE       Download a spec or skill package",
+		"pull ID|PACKAGE    Download a Goal, a proposal, or a package",
 		"version            Show version",
 		"update [VERSION]   Update installed Telos components to one release",
 		"--version",
@@ -123,7 +127,7 @@ func TestPullUsageKeepsFrequentPullAtTopLevel(t *testing.T) {
 	fs.SetOutput(&pullOut)
 	fs.Usage()
 	for _, want := range []string{
-		"telos pull @context/name:version",
+		"telos pull GOAL|PROPOSAL|@context/name:version",
 		"--context string",
 		"--output string",
 	} {
@@ -398,35 +402,6 @@ func TestUntilFlagValueRejectsSubsecondDuration(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "at least 1s") {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidateForceApplyRequiresCloudUpdate(t *testing.T) {
-	for _, sessionID := range []string{"", "local_123"} {
-		err := validateForceApply(true, sessionID)
-		if err == nil || !strings.Contains(err.Error(), "requires --goal") {
-			t.Fatalf("forced %q: got %v", sessionID, err)
-		}
-	}
-	for _, sessionID := range []string{"", "local_123", "sess_123"} {
-		if err := validateForceApply(false, sessionID); err != nil {
-			t.Fatalf("normal %q: %v", sessionID, err)
-		}
-	}
-	if err := validateForceApply(true, "sess_123"); err != nil {
-		t.Fatalf("forced cloud update: %v", err)
-	}
-}
-
-func TestValidateApplySession(t *testing.T) {
-	// Cloud Goal IDs are opaque, so Cloud resolves any ID that is not local.
-	for _, sessionID := range []string{"", "sess_123", "goal_123"} {
-		if err := validateApplySession(sessionID); err != nil {
-			t.Fatalf("validate %q: %v", sessionID, err)
-		}
-	}
-	if err := validateApplySession("local_123"); err == nil || !strings.Contains(err.Error(), "only updates Telos Cloud Goals") {
-		t.Fatalf("validate local_123: got %v", err)
 	}
 }
 
@@ -1002,12 +977,8 @@ func TestApplyCloudSessionPackageCreates(t *testing.T) {
 
 	operation, session, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.0",
-		"",
-		sessionRuntimeConfig{},
-		false,
-		nil,
+		&preparedCloudApply{name: "auth", record: &cloud.PackageVersionRecord{Ref: "@user-abc/auth:0.1.0"}, runtime: sessionRuntimeConfig{}, inference: nil},
+		cloudApplyOptions{},
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1039,12 +1010,8 @@ func TestApplyCloudSessionPackageSendsSubscriptionSelection(t *testing.T) {
 
 	_, _, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.0",
-		"",
-		sessionRuntimeConfig{},
-		false,
-		&cloud.InferenceSelection{Source: "subscription", ConnectionID: "conn_rohan", Model: "gpt-5.6-sol"},
+		&preparedCloudApply{name: "auth", record: &cloud.PackageVersionRecord{Ref: "@user-abc/auth:0.1.0"}, runtime: sessionRuntimeConfig{}, inference: &cloud.InferenceSelection{Source: "subscription", ConnectionID: "conn_rohan", Model: "gpt-5.6-sol"}},
+		cloudApplyOptions{},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1096,12 +1063,8 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 
 	operation, session, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		true,
-		nil,
+		&preparedCloudApply{name: "auth", record: &cloud.PackageVersionRecord{Ref: "@user-abc/auth:0.1.1"}, runtime: sessionRuntimeConfig{}, inference: nil, goal: &cloud.SessionRecord{ID: "sess_123"}},
+		cloudApplyOptions{force: true},
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1111,75 +1074,6 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 	}
 	if session.ID != "sess_123" {
 		t.Fatalf("session: got %+v", session)
-	}
-}
-
-func TestApplyCloudSessionPackageConflictAlreadyCurrent(t *testing.T) {
-	var updateCalls int
-	var getCalls int
-	currentPackageRef := "@user-abc/auth:0.1.1"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPut && r.URL.Path == "/api/deployments/sess_123":
-			updateCalls++
-			http.Error(w, "conflict", http.StatusConflict)
-		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments/sess_123":
-			getCalls++
-			json.NewEncoder(w).Encode(map[string]any{
-				"id":             "sess_123",
-				"name":           "auth",
-				"state":          "healthy",
-				"package_ref":    currentPackageRef,
-				"package_digest": "sha256:new",
-				"created_at":     "then",
-				"updated_at":     "now",
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer srv.Close()
-
-	operation, session, err := applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		false,
-		nil,
-	)
-	if err != nil {
-		t.Fatalf("applyCloudSessionPackage: %v", err)
-	}
-	if operation != "unchanged" {
-		t.Fatalf("operation: got %q want unchanged", operation)
-	}
-	if session.ID != "sess_123" || session.PackageRef != "@user-abc/auth:0.1.1" {
-		t.Fatalf("session: got %+v", session)
-	}
-	if updateCalls != 1 || getCalls != 1 {
-		t.Fatalf("calls: update=%d get=%d", updateCalls, getCalls)
-	}
-
-	currentPackageRef = "@user-abc/auth:0.1.0"
-	operation, session, err = applyCloudSessionPackage(
-		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		true,
-		nil,
-	)
-	if err == nil {
-		t.Fatal("forced update hid an unrelated conflict")
-	}
-	if operation != "updated" || session != nil {
-		t.Fatalf("operation=%q session=%+v", operation, session)
-	}
-	if updateCalls != 2 || getCalls != 2 {
-		t.Fatalf("calls: update=%d get=%d", updateCalls, getCalls)
 	}
 }
 
@@ -1199,12 +1093,8 @@ func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
 
 	_, _, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		false,
-		nil,
+		&preparedCloudApply{name: "auth", record: &cloud.PackageVersionRecord{Ref: "@user-abc/auth:0.1.1"}, runtime: sessionRuntimeConfig{}, inference: nil, goal: &cloud.SessionRecord{ID: "sess_123"}},
+		cloudApplyOptions{},
 	)
 	if err == nil {
 		t.Fatal("expected snapshot pending error")
@@ -1223,12 +1113,8 @@ func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
 
 	_, _, err = applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
-		true,
-		nil,
+		&preparedCloudApply{name: "auth", record: &cloud.PackageVersionRecord{Ref: "@user-abc/auth:0.1.1"}, runtime: sessionRuntimeConfig{}, inference: nil, goal: &cloud.SessionRecord{ID: "sess_123"}},
+		cloudApplyOptions{force: true},
 	)
 	if err == nil || strings.Contains(err.Error(), "retry the same command with --force") {
 		t.Fatalf("forced retry received an invalid force suggestion: %v", err)

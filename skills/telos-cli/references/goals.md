@@ -4,7 +4,7 @@ description: "An overview of the framework behind Telos: the goal specification,
 group: Platform
 ---
 
-A Telos program is a goal specification. Applying it creates a Goal, a persistent object with an ID, a status, a cloud environment, and logs. You can update a Goal in place with `telos apply SPEC.md --goal <ID>`.
+A Telos program is a goal specification. Applying it creates a Goal, a persistent object with an ID, a status, a cloud environment, and logs. Applying the spec again updates that Goal in place.
 
 Telos has four primitives. The goal specification is the core, and the other three build on it:
 

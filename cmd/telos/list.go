@@ -1,8 +1,11 @@
 package main
 
 import (
+	"cmp"
 	"fmt"
 	"os"
+	"slices"
+	"strings"
 	"text/tabwriter"
 
 	"github.com/telos-org/telos/internal/cloud"
@@ -14,15 +17,26 @@ import (
 // -- list ---------------------------------------------------------------------
 
 func cmdList(args []string) {
-	fs := newCommandFlagSet("list", "telos list [flags]")
+	fs := newCommandFlagSet("list", "telos list [goals|proposals|comments] [--filter KEY=VALUE,...] [flags]")
+	filter := fs.String("filter", "", "Show only results matching every KEY=VALUE, such as status=open,author=me")
 	limit := fs.Int("limit", 0, "Limit results")
-	wide := fs.Bool("wide", false, "Wide output")
+	wide := fs.Bool("wide", false, "Wide output for Goals")
 	localOnly := fs.Bool("local", false, "Local Goals only")
 	cloudOnly := fs.Bool("cloud", false, "Cloud Goals only")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
-	requireArgCount(fs, 0, "no positional arguments")
+	if fs.NArg() > 1 {
+		requireArgCount(fs, 1, "at most one of goals, proposals, or comments")
+	}
+	kind := cmp.Or(fs.Arg(0), "goals")
+	filters, err := parseListFilter(kind, *filter)
+	if err != nil {
+		exitUsage("%v", err)
+	}
+	if kind != "goals" && flagNamesSet(fs, "wide", "local", "cloud") {
+		exitUsage("--wide, --local, and --cloud apply only to Goals")
+	}
 	if *localOnly && *cloudOnly {
 		fmt.Fprintln(os.Stderr, "error: --local and --cloud are mutually exclusive")
 		os.Exit(2)
@@ -40,9 +54,18 @@ func cmdList(args []string) {
 		fmt.Fprintln(os.Stderr, "error: --context cannot be used with --local")
 		os.Exit(2)
 	}
+	switch kind {
+	case "proposals":
+		listProposals(cloudClient(contextOverride), filters, *limit, *jsonOut)
+		return
+	case "comments":
+		listComments(cloudClient(contextOverride), filters, *limit, *jsonOut)
+		return
+	}
+	status := filters.Get("status")
 
 	if *cloudOnly || contextOverride != "" {
-		listCloudSessions(contextOverride, *jsonOut, *limit, *wide)
+		listCloudSessions(contextOverride, *jsonOut, *limit, *wide, status)
 		return
 	}
 
@@ -51,7 +74,11 @@ func cmdList(args []string) {
 	signedOut := false
 
 	if !*localOnly {
-		rootSessions, handled, err := rootListSessions(*limit)
+		requestLimit := *limit
+		if status != "" {
+			requestLimit = 0
+		}
+		rootSessions, handled, err := rootListSessions(requestLimit)
 		if handled {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -66,7 +93,7 @@ func cmdList(args []string) {
 				os.Exit(1)
 			}
 			if cloudConfigured {
-				listCloudSessions(contextOverride, *jsonOut, *limit, *wide)
+				listCloudSessions(contextOverride, *jsonOut, *limit, *wide, status)
 				return
 			}
 			signedOut = true
@@ -78,7 +105,8 @@ func cmdList(args []string) {
 
 	effectiveWide := *wide || rootScoped
 	visible := visibleListSessions(sessions, effectiveWide)
-	visible = limitListSessions(visible, *limit)
+	visible = withStatus(visible, status, func(session sessionapi.Session) string { return displayRow(session).Status })
+	visible = limited(visible, *limit)
 	if *jsonOut {
 		printJSON(map[string]any{"goals": goalJSONList(sessionapi.SessionListItems(visible))})
 		return
@@ -157,14 +185,30 @@ func visibleListSessions(sessions []sessionapi.Session, wide bool) []sessionapi.
 	return visible
 }
 
-func limitListSessions(sessions []sessionapi.Session, limit int) []sessionapi.Session {
-	if limit > 0 && len(sessions) > limit {
-		return sessions[:limit]
+// limited returns the first limit items, or all of them when limit is 0.
+func limited[T any](items []T, limit int) []T {
+	if limit > 0 && len(items) > limit {
+		return items[:limit]
 	}
-	return sessions
+	return items
 }
 
-func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide bool) {
+// withStatus keeps the items whose status is one of the comma-separated
+// statuses, or all when it's "".
+func withStatus[T any](items []T, status string, statusOf func(T) string) []T {
+	if status == "" {
+		return items
+	}
+	kept := make([]T, 0, len(items))
+	for _, item := range items {
+		if slices.Contains(strings.Split(status, ","), statusOf(item)) {
+			kept = append(kept, item)
+		}
+	}
+	return kept
+}
+
+func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide bool, status string) {
 	control, err := cloud.ControlClientForContext(contextOverride)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -179,7 +223,8 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-	cloudSessions = limitCloudSessions(cloudSessions, limit)
+	cloudSessions = withStatus(cloudSessions, status, cloudSessionDisplayStatus)
+	cloudSessions = limited(cloudSessions, limit)
 	var costs []*goalCost
 	if wide {
 		costs = goalCosts(control, cloudSessions)
@@ -235,13 +280,6 @@ func listCloudSessions(contextOverride string, jsonOut bool, limit int, wide boo
 		)
 	}
 	_ = w.Flush()
-}
-
-func limitCloudSessions(sessions []cloud.SessionRecord, limit int) []cloud.SessionRecord {
-	if limit > 0 && len(sessions) > limit {
-		return sessions[:limit]
-	}
-	return sessions
 }
 
 func optionalSessionString(value *string) string {

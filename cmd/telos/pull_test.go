@@ -175,6 +175,7 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 	var published bool
 	var forcedUpdate bool
 	var listed int
+	goals := []any{}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/packages/telos/demo/versions/1.2.3":
@@ -190,7 +191,7 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 			_, _ = w.Write(pkg.Bytes)
 		case r.Method == http.MethodGet && r.URL.Path == "/api/deployments":
 			listed++
-			_ = json.NewEncoder(w).Encode(map[string]any{"deployments": []any{}})
+			_ = json.NewEncoder(w).Encode(map[string]any{"deployments": goals})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/packages":
 			published = true
 			http.Error(w, "unexpected publish", http.StatusInternalServerError)
@@ -259,19 +260,12 @@ func TestCmdApplyUsesExactRegistryPackageWithoutRepublishing(t *testing.T) {
 		t.Fatalf("create checked for an existing Goal %d times, want 1", listed)
 	}
 
+	goals = []any{map[string]any{"id": "sess_registry", "name": "demo", "state": "healthy", "can_deploy": true}}
 	out = captureStdout(t, func() {
-		cmdApply([]string{
-			"@telos/demo:1.2.3",
-			"--goal", "sess_registry",
-			"--force",
-			"--json",
-		})
+		cmdApply([]string{"@telos/demo:1.2.3", "--force", "--json"})
 	})
 	if !forcedUpdate {
 		t.Fatal("forced registry apply did not update the deployment")
-	}
-	if listed != 1 {
-		t.Fatal("an update through --goal checked for a duplicate name")
 	}
 	result = map[string]any{}
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
@@ -299,7 +293,7 @@ func TestPrepareCloudApplyRejectsDigestMismatch(t *testing.T) {
 		}
 	}))
 	defer srv.Close()
-	_, err := prepareCloudApply(cloud.NewClient(srv.URL, "token"), "@telos/demo:1.2.3", "goal_test", "", "")
+	_, err := prepareCloudApply(cloud.NewClient(srv.URL, "token"), "@telos/demo:1.2.3", cloudApplyOptions{})
 	if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
 		t.Fatalf("digest mismatch error = %v", err)
 	}
@@ -322,7 +316,7 @@ func TestMaterializePackageWritesADirectory(t *testing.T) {
 			root := t.TempDir()
 			dir := filepath.Join(root, "package")
 			output := dir + suffix
-			path, err := materializePackage(cloud.NewClient("", ""), pulled, output)
+			path, err := materializePackage(pulled, nil, output)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -332,13 +326,13 @@ func TestMaterializePackageWritesADirectory(t *testing.T) {
 			assertFileContains(t, filepath.Join(dir, "SPEC.md"), "name: demo")
 			assertFileContains(t, filepath.Join(dir, "manifest.json"), `"schema_version": 1`)
 
-			if _, err := materializePackage(cloud.NewClient("", ""), pulled, output); err == nil ||
+			if _, err := materializePackage(pulled, nil, output); err == nil ||
 				!strings.Contains(err.Error(), "already exists") {
 				t.Fatalf("existing output error: %v", err)
 			}
 
 			markdown := filepath.Join(root, "copy.md")
-			if _, err := materializePackage(cloud.NewClient("", ""), pulled, markdown+suffix); err == nil ||
+			if _, err := materializePackage(pulled, nil, markdown+suffix); err == nil ||
 				!strings.Contains(err.Error(), "not a Markdown file") {
 				t.Fatalf("Markdown output error: %v", err)
 			}
@@ -362,8 +356,8 @@ func TestMaterializePackageRejectsDigestMismatch(t *testing.T) {
 		data:   pkg.Bytes,
 	}
 	_, err := materializePackage(
-		cloud.NewClient("", ""),
 		pulled,
+		nil,
 		filepath.Join(t.TempDir(), "package"),
 	)
 	if err == nil || !strings.Contains(err.Error(), "digest mismatch") {
@@ -407,4 +401,65 @@ func assertFileContains(t *testing.T, path string, want string) {
 	if !strings.Contains(string(data), want) {
 		t.Fatalf("%s missing %q:\n%s", path, want, data)
 	}
+}
+
+func TestPullWritesAGoalOrProposalIntoItsOwnFolder(t *testing.T) {
+	pkg := testApplyPackage(t)
+	bundle := func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Telos-Package-Digest", pkg.Digest)
+		_, _ = w.Write(pkg.Bytes)
+	}
+	proposalCLITest(t, map[string]http.HandlerFunc{
+		"GET /api/deployments/goal_c7d2f0a4e8": respondJSON(map[string]any{
+			"id": "goal_c7d2f0a4e8", "package_ref": "@telos/demo:1.2.3", "package_digest": pkg.Digest,
+		}),
+		"GET /api/packages/telos/demo/versions/1.2.3/bundle": bundle,
+		"GET /api/proposals/p_3f9a2b7c":                      respondJSON(testProposal("pending")),
+		"GET /api/proposals/p_3f9a2b7c/bundle":               bundle,
+	})
+	t.Chdir(t.TempDir())
+	for _, tt := range []struct{ id, want, folder string }{
+		{"goal_c7d2f0a4e8", "pulled demo into ./demo/\n", "demo"},
+		{"p_3f9a2b7c", "pulled \"Add a weekly digest\" into ./p_3f9a2b7c/\n", "p_3f9a2b7c"},
+	} {
+		out := captureStdout(t, func() { cmdPull([]string{tt.id}) })
+		if out != tt.want {
+			t.Fatalf("output = %q, want %q", out, tt.want)
+		}
+		assertFileContains(t, filepath.Join(tt.folder, "SPEC.md"), "name: demo")
+	}
+}
+
+func TestPullProposalFetchesSkillsOnlyTheProposalHas(t *testing.T) {
+	compiled := testSkillSpec(t)
+	const staged = "@org-staging/notes:0.0.0-plan.sha256-1a2b"
+	pkg, err := spec.BuildApplyPackageWithSkillRefs(compiled, map[string]string{"notes": staged})
+	if err != nil {
+		t.Fatal(err)
+	}
+	skillDigest, skillBundle, err := spec.BuildSkillBundle(compiled.Skills[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	fetched := false
+	proposalCLITest(t, map[string]http.HandlerFunc{
+		"GET /api/proposals/p_3f9a2b7c": respondJSON(testProposal("pending")),
+		"GET /api/proposals/p_3f9a2b7c/bundle": func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("X-Telos-Package-Digest", pkg.Digest)
+			_, _ = w.Write(pkg.Bytes)
+		},
+		"GET /api/proposals/p_3f9a2b7c/skills/org-staging/notes/0.0.0-plan.sha256-1a2b/bundle": func(w http.ResponseWriter, r *http.Request) {
+			fetched = true
+			if r.URL.Query().Get("digest") != skillDigest {
+				t.Errorf("skill digest = %q, want %q", r.URL.Query().Get("digest"), skillDigest)
+			}
+			_, _ = w.Write(skillBundle)
+		},
+	})
+	t.Chdir(t.TempDir())
+	out := captureStdout(t, func() { cmdPull([]string{"p_3f9a2b7c"}) })
+	if out != "pulled \"Add a weekly digest\" into ./p_3f9a2b7c/\n" || !fetched {
+		t.Fatalf("output = %q, skill fetched from the proposal: %v", out, fetched)
+	}
+	assertFileContains(t, filepath.Join("p_3f9a2b7c", "skills", "notes", "SKILL.md"), "Keep notes short.")
 }

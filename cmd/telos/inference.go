@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"io"
 	"regexp"
 	"strings"
 
@@ -73,29 +72,7 @@ func inferenceSourceLabel(source string) string {
 
 var thinkingSyntax = regexp.MustCompile(`^[a-z]{1,32}$`)
 
-type inferenceChange struct {
-	SessionID string `json:"goal_id"`
-	Context   string `json:"context,omitempty"`
-	*cloud.DeploymentInference
-}
-
-func validateApplyInferenceFlags(fs *flag.FlagSet, sessionID, model, thinking string) error {
-	settingsSet := flagNamesSet(fs, "model", "thinking")
-	if fs.NArg() > 0 {
-		if sessionID != "" && settingsSet {
-			return fmt.Errorf("apply spec and model/thinking changes separately: first apply SPEC.md --goal %s, then apply --goal %s --model MODEL and/or --thinking LEVEL", sessionID, sessionID)
-		}
-		return nil
-	}
-	if sessionID == "" || !settingsSet {
-		return fmt.Errorf("provide a SPEC.md, or --goal GOAL with --model and/or --thinking")
-	}
-	if err := validateApplySession(sessionID); err != nil {
-		return err
-	}
-	if flagNameSet(fs, "force") {
-		return fmt.Errorf("--force cannot be used for a settings-only apply")
-	}
+func validateApplyInferenceFlags(fs *flag.FlagSet, model, thinking string) error {
 	if flagNameSet(fs, "model") && strings.TrimSpace(model) == "" {
 		return fmt.Errorf("--model requires a non-empty model")
 	}
@@ -103,55 +80,6 @@ func validateApplyInferenceFlags(fs *flag.FlagSet, sessionID, model, thinking st
 		return fmt.Errorf("--thinking requires a model-supported level using 1 to 32 lowercase letters")
 	}
 	return nil
-}
-
-func applySessionInference(sessionID, model, thinking, contextOverride string) (*inferenceChange, error) {
-	control, request, err := prepareSessionInference(sessionID, model, thinking, contextOverride)
-	if err != nil {
-		return nil, err
-	}
-	state, err := control.UpdateDeploymentInference(sessionID, request)
-	if err != nil {
-		return nil, err
-	}
-	return &inferenceChange{SessionID: sessionID, Context: control.ContextName(), DeploymentInference: state}, nil
-}
-
-func prepareSessionInference(sessionID, model, thinking, contextOverride string) (*cloud.Client, cloud.DeploymentInferenceRequest, error) {
-	var request cloud.DeploymentInferenceRequest
-	if err := validateApplySession(sessionID); err != nil {
-		return nil, request, err
-	}
-	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
-		return nil, request, err
-	}
-	control, err := cloud.ControlClientForContext(contextOverride)
-	if err != nil {
-		return nil, request, err
-	}
-	selection, err := resolveCloudInference(control, model)
-	if err != nil {
-		return nil, request, err
-	}
-	request.Inference = selection
-	if thinking != "" {
-		request.AgentThinking = &thinking
-	}
-	return control, request, nil
-}
-
-func printInferenceChange(out io.Writer, change *inferenceChange) {
-	printApplyHeadline(out, "updated", change.SessionID)
-	printSummaryField(out, "Goal", change.SessionID)
-	if change.Context != "" {
-		printSummaryField(out, "Context", change.Context)
-	}
-	printCloudInferenceSummary(out, cloud.SessionRecord{AgentModel: change.AgentModel, AgentThinking: change.AgentThinking, Inference: &change.Inference})
-	if change.Applied {
-		printSummaryField(out, "Applies", "next turn")
-	} else {
-		printSummaryField(out, "Applies", "next turn after the Goal's runtime receives it")
-	}
 }
 
 func previewCreationInference(
@@ -197,45 +125,59 @@ func previewCreationInference(
 	return nil
 }
 
-func previewSessionInference(goalID, model, thinking, contextOverride string) (*applyPreview, error) {
-	control, request, err := prepareSessionInference(goalID, model, thinking, contextOverride)
-	if err != nil {
-		return nil, err
-	}
-	current, err := control.GetDeploymentInference(goalID)
-	if err != nil {
-		return nil, goalNotFound(err, goalID, control.ContextName())
-	}
-	preview := newApplyPreview(control, goalID)
-	preview.Current = &applyState{
-		Inference: current.Selection,
-		Model: cloudSessionModel(cloud.SessionRecord{
-			AgentModel: current.AgentModel,
-			Inference:  &current.Inference,
-		}),
-		Thinking:       current.AgentThinking,
+func prepareApplyInference(control *cloud.Client, prepared *preparedCloudApply, options cloudApplyOptions) error {
+	current := applyState{
+		Model:          cloudSessionModel(*prepared.goal),
+		Thinking:       prepared.goal.AgentThinking,
 		ModelSource:    previewSourceGoal,
 		ThinkingSource: previewSourceGoal,
 	}
-	preview.Proposed = *preview.Current
-	modelUnchanged := request.Inference == nil ||
-		current.Selection != nil && *request.Inference == *current.Selection
-	thinkingUnchanged := request.AgentThinking == nil || *request.AgentThinking == current.AgentThinking
-	if modelUnchanged && thinkingUnchanged {
-		preview.Operation = "unchanged"
-	}
-	if request.Inference != nil {
-		preview.Proposed.Inference = request.Inference
-		preview.Proposed.Model = model
-		preview.Proposed.ModelSource = previewSourceOverride
-		if !modelUnchanged && request.AgentThinking == nil {
-			preview.Proposed.Thinking = ""
-			preview.Proposed.ThinkingSource = previewSourceInherited
+	if options.model != nil || options.thinking != nil {
+		state, err := control.GetDeploymentInference(prepared.goal.ID)
+		if err != nil {
+			return goalNotFound(err, prepared.goal.ID, control.ContextName())
 		}
+		current.Inference = state.Selection
+		current.Model = cloudSessionModel(cloud.SessionRecord{AgentModel: state.AgentModel, Inference: &state.Inference})
+		current.Thinking = state.AgentThinking
 	}
-	if request.AgentThinking != nil {
-		preview.Proposed.Thinking = thinking
-		preview.Proposed.ThinkingSource = previewSourceOverride
+	proposed := &prepared.proposed
+	proposed.Inference, proposed.Model, proposed.Thinking = current.Inference, current.Model, current.Thinking
+	proposed.ModelSource, proposed.ThinkingSource = previewSourceGoal, previewSourceGoal
+	if prepared.current != nil {
+		prepared.current.Inference, prepared.current.Model, prepared.current.Thinking = current.Inference, current.Model, current.Thinking
+		prepared.current.ModelSource, prepared.current.ThinkingSource = previewSourceGoal, previewSourceGoal
 	}
-	return preview, nil
+	if options.model != nil {
+		selection, err := resolveCloudInference(control, *options.model)
+		if err != nil {
+			return err
+		}
+		prepared.inference = selection
+		proposed.Inference, proposed.Model, proposed.ModelSource = selection, strings.TrimSpace(*options.model), previewSourceOverride
+	}
+	if options.thinking != nil {
+		proposed.Thinking, proposed.ThinkingSource = strings.TrimSpace(*options.thinking), previewSourceOverride
+	}
+	return nil
+}
+
+func applyInferenceUnchanged(current, proposed *applyState) bool {
+	modelSame := proposed.ModelSource == previewSourceGoal ||
+		current.Inference != nil && proposed.Inference != nil && *current.Inference == *proposed.Inference
+	thinkingSame := current.Thinking == proposed.Thinking
+	return modelSame && thinkingSame
+}
+
+func goalUnchanged(current, accepted *cloud.SessionRecord) bool {
+	if current == nil {
+		return false
+	}
+	if current.CurrentRevisionID != "" && accepted.CurrentRevisionID != "" {
+		return current.CurrentRevisionID == accepted.CurrentRevisionID
+	}
+	inferenceSame := current.Inference == nil && accepted.Inference == nil ||
+		current.Inference != nil && accepted.Inference != nil && *current.Inference == *accepted.Inference
+	return current.PackageDigest != "" && current.PackageDigest == accepted.PackageDigest &&
+		inferenceSame && current.AgentModel == accepted.AgentModel && current.AgentThinking == accepted.AgentThinking
 }

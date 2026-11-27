@@ -7,76 +7,145 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync/atomic"
 	"testing"
 
 	"github.com/telos-org/telos/internal/cloud"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
 
-func TestApplyAndDryRunRefuseADuplicateGoalName(t *testing.T) {
-	var publications, deployments atomic.Int32
-	server := inferenceTestServer(t, map[string]http.HandlerFunc{
-		"GET /api/deployments": func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte(`{"deployments":[` +
-				`{"id":"goal_gone","name":"example","state":"deleted"},` +
-				`{"id":"goal_live","name":"example","state":"running","status":"ready"},` +
-				`{"id":"goal_other","name":"other","state":"running","status":"ready"}]}`))
-		},
-		"POST /api/packages": func(w http.ResponseWriter, r *http.Request) {
-			publications.Add(1)
-			_, _ = w.Write([]byte(`{"ref":"@person/example:1.0.0"}`))
-		},
-		"POST /api/deployments": func(w http.ResponseWriter, r *http.Request) {
-			deployments.Add(1)
-			http.Error(w, "unexpected create", http.StatusInternalServerError)
-		},
-	})
-	defer server.Close()
-	configureCloudTest(t, server.URL)
+// applyTestSpec writes a spec for the Goal named example and returns its folder.
+func applyTestSpec(t *testing.T) string {
+	t.Helper()
 	for _, name := range []string{"TELOS_CONTEXT", "TELOS_MODEL", "TELOS_THINKING", "TELOS_SESSION_ID", "TELOS_RUNTIME"} {
 		t.Setenv(name, "")
 	}
 	dir := t.TempDir()
-	path := filepath.Join(dir, "SPEC.md")
-	if err := os.WriteFile(path, []byte("---\nname: example\nversion: 1.0.0\n---\n# Goal\nTest.\n# Acceptance\n- Test passes.\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "SPEC.md"), []byte("---\nname: example\nversion: 1.0.0\n---\n# Goal\nTest.\n# Acceptance\n- Test passes.\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	return dir
+}
 
-	for _, mode := range []string{"apply", "dry run"} {
-		t.Run(mode, func(t *testing.T) {
-			args := []string{"-test.run=^TestInferenceCLIProcess$", "--", "apply", "SPEC.md"}
-			if mode == "dry run" {
-				args = append(args, "--dry-run")
+func applyTestProcess(t *testing.T, dir string, args ...string) (string, string, error) {
+	t.Helper()
+	process := exec.Command(os.Args[0], append([]string{"-test.run=^TestInferenceCLIProcess$", "--"}, args...)...)
+	process.Dir = dir
+	process.Env = append(os.Environ(), "TELOS_TEST_INFERENCE_COMMAND=1")
+	var stderr strings.Builder
+	process.Stderr = &stderr
+	stdout, err := process.Output()
+	return string(stdout), stderr.String(), err
+}
+
+func TestApplyDeploysToTheGoalTheSpecNames(t *testing.T) {
+	goal := `{"id":"goal_live","name":"example","state":"running","status":"ready","can_deploy":true,"package_ref":"@person/example:1.0.0"}`
+	for _, tt := range []struct {
+		name, goals, route, want string
+	}{
+		{"existing Goal", `{"deployments":[{"id":"goal_other","name":"other","state":"running"},` + goal + `]}`, "PUT /api/deployments/goal_live", "Updated example"},
+		{"no Goal with that name", `{"deployments":[{"id":"goal_other","name":"other","state":"running"}]}`, "POST /api/deployments", "Created example"},
+		{"name of a Goal shared by link", `{"deployments":[{"id":"goal_shared","name":"example","state":"running","access_source":"link","can_deploy":true}]}`, "POST /api/deployments", "Created example"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			var message any
+			server := inferenceTestServer(t, map[string]http.HandlerFunc{
+				"GET /api/deployments": func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(tt.goals))
+				},
+				"GET /api/deployments/goal_live":                         jsonResponse(map[string]any{"id": "goal_live", "name": "example", "package_ref": "@person/example:0.9.0"}),
+				"GET /api/packages/person/example/versions/0.9.0":        http.NotFound,
+				"GET /api/packages/person/example/versions/0.9.0/bundle": http.NotFound,
+				"GET /api/packages/person/example/versions/1.0.0":        http.NotFound,
+				"POST /api/packages": func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(`{"ref":"@person/example:1.0.0"}`))
+				},
+				tt.route: func(w http.ResponseWriter, r *http.Request) {
+					var body map[string]any
+					_ = json.NewDecoder(r.Body).Decode(&body)
+					message = body["revision_message"]
+					_, _ = w.Write([]byte(goal))
+				},
+			})
+			defer server.Close()
+			configureCloudTest(t, server.URL)
+			dir := applyTestSpec(t)
+
+			out, stderr, err := applyTestProcess(t, dir, "apply", "SPEC.md", "-m", "Send on Mondays")
+			if err != nil || !strings.HasPrefix(out, tt.want+"\n") {
+				t.Fatalf("err=%v stdout=%q stderr=%q, want %q", err, out, stderr, tt.want)
 			}
-			process := exec.Command(os.Args[0], args...)
-			process.Dir = dir
-			process.Env = append(os.Environ(), "TELOS_TEST_INFERENCE_COMMAND=1")
-			out, err := process.CombinedOutput()
-			want := "error: a Goal named example already exists in personal (goal_live)\n" +
-				"To update it: telos apply SPEC.md --goal goal_live\n"
-			if err == nil || !strings.Contains(string(out), want) {
-				t.Fatalf("err=%v output=%s\nwant %q", err, out, want)
-			}
-			if publications.Load() != 0 || deployments.Load() != 0 {
-				t.Fatalf("publications=%d deployments=%d, want none", publications.Load(), deployments.Load())
+			if message != "Send on Mondays" {
+				t.Fatalf("revision_message = %#v", message)
 			}
 		})
 	}
 }
 
-func TestDuplicateGoalErrorNamesTheContextWhenNeeded(t *testing.T) {
-	err := &duplicateGoalError{
-		name:     "reading-list",
-		context:  "@team",
-		id:       "goal_c7d2f0a4e8",
-		specArg:  "specs/reading list.md",
-		followUp: "@team",
+func TestApplySaysWhenTheGoalAlreadyRunsTheSpec(t *testing.T) {
+	goal := `{"id":"goal_live","name":"example","state":"running","status":"ready","can_deploy":true,"package_digest":"sha256:aaa"}`
+	for _, tt := range []struct {
+		name, answer, want string
+	}{
+		{"same package", goal, "No changes to example\n"},
+		{"new package", `{"id":"goal_live","name":"example","state":"running","status":"working","package_digest":"sha256:bbb"}`, "Updated example\n"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			server := inferenceTestServer(t, map[string]http.HandlerFunc{
+				"GET /api/deployments": func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(`{"deployments":[` + goal + `]}`))
+				},
+				"GET /api/deployments/goal_live":                  jsonResponse(map[string]any{"id": "goal_live", "name": "example", "package_digest": "sha256:aaa"}),
+				"GET /api/packages/person/example/versions/1.0.0": http.NotFound,
+				"POST /api/packages": func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(`{"ref":"@person/example:1.0.0","version":"1.0.0"}`))
+				},
+				"PUT /api/deployments/goal_live": func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(tt.answer))
+				},
+			})
+			defer server.Close()
+			configureCloudTest(t, server.URL)
+			dir := applyTestSpec(t)
+
+			out, stderr, err := applyTestProcess(t, dir, "apply", "SPEC.md")
+			if err != nil || !strings.HasPrefix(out, tt.want) {
+				t.Fatalf("err=%v stdout=%q stderr=%q, want %q", err, out, stderr, tt.want)
+			}
+		})
 	}
-	want := "a Goal named reading-list already exists in @team (goal_c7d2f0a4e8)\n" +
-		"To update it: telos apply 'specs/reading list.md' --goal goal_c7d2f0a4e8 --context @team"
-	if err.Error() != want {
-		t.Fatalf("error = %q, want %q", err.Error(), want)
+}
+
+func TestApplyRefusesBeforeUploadingTheSpec(t *testing.T) {
+	for _, tt := range []struct {
+		name, goals string
+		args        []string
+		want        string
+	}{
+		{
+			"Goal requires proposals",
+			`{"deployments":[{"id":"goal_c7d2f0a4e8","name":"example","state":"running","can_deploy":false}]}`,
+			[]string{"apply", "SPEC.md"},
+			"error: example (goal_c7d2f0a4e8) requires proposals\nTo propose: telos propose SPEC.md -t \"TITLE\"\n",
+		},
+		{
+			"force on a new Goal",
+			`{"deployments":[]}`,
+			[]string{"apply", "SPEC.md", "--force"},
+			"error: --force applies only to an update, and personal has no Goal named example yet\n",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			// Any upload or deploy is an unexpected request, which fails the test.
+			proposalCLITest(t, map[string]http.HandlerFunc{
+				"GET /api/deployments": func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write([]byte(tt.goals))
+				},
+			})
+			out, stderr, err := applyTestProcess(t, applyTestSpec(t), tt.args...)
+			if err == nil || out != "" || stderr != tt.want {
+				t.Fatalf("err=%v stdout=%q stderr=%q, want %q", err, out, stderr, tt.want)
+			}
+		})
 	}
 }
 
@@ -147,6 +216,34 @@ func TestGoalReadsNameTheSelectedContextWhenNotFound(t *testing.T) {
 					t.Fatalf("%v: exit = %v, stdout = %q, stderr = %q; want %q", args, err, out, stderr, want)
 				}
 			}
+		}
+	}
+}
+
+func TestApplyCreatingAGoalThatRequiresProposalsSaysToPropose(t *testing.T) {
+	proposalCLITest(t, map[string]http.HandlerFunc{
+		"GET /api/packages/person/example/versions/1.0.0": http.NotFound,
+		"POST /api/packages":                              respondJSON(map[string]any{"ref": "@person/example:1.0.0"}),
+		"POST /api/deployments":                           respondError(http.StatusForbidden, "proposal_required", "example requires proposals"),
+	})
+	_, stderr, err := applyTestProcess(t, applyTestSpec(t), "apply", "SPEC.md")
+	if want := "error: example requires proposals\nTo propose: telos propose SPEC.md -t \"TITLE\"\n"; err == nil || stderr != want {
+		t.Fatalf("err=%v stderr=%q, want %q", err, stderr, want)
+	}
+}
+
+func TestCommandsRefuseTheWrongKindOfID(t *testing.T) {
+	proposalCLITest(t, nil)
+	for _, tt := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"describe", "c_4d7a1f0e"}, "error: telos describe takes a GOAL or PROPOSAL; c_4d7a1f0e is a comment ID\n"},
+		{[]string{"apply", "c_4d7a1f0e"}, "error: telos apply takes SPEC.md or a PROPOSAL; c_4d7a1f0e is a comment ID\n"},
+		{[]string{"review", "goal_c7d2f0a4e8", "--approved"}, "error: telos review takes a PROPOSAL; goal_c7d2f0a4e8 is a goal ID\n"},
+	} {
+		if _, stderr, err := inferenceCLIProcess(t, tt.args...); err == nil || stderr != tt.want {
+			t.Fatalf("%v: err=%v stderr=%q, want %q", tt.args, err, stderr, tt.want)
 		}
 	}
 }

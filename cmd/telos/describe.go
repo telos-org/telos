@@ -15,7 +15,7 @@ import (
 // -- describe -----------------------------------------------------------------
 
 func cmdDescribe(args []string) {
-	fs := newCommandFlagSet("describe", "telos describe GOAL [flags]")
+	fs := newCommandFlagSet("describe", "telos describe GOAL|PROPOSAL [flags]")
 	jsonOut := fs.Bool("json", false, "JSON output")
 	contextValue := cloudContextFlag(fs)
 	parseFlags(fs, args)
@@ -25,8 +25,13 @@ func cmdDescribe(args []string) {
 		os.Exit(2)
 	}
 
-	requireArgCount(fs, 1, "one GOAL")
+	requireArgCount(fs, 1, "one GOAL or PROPOSAL")
 	sessionID := fs.Arg(0)
+	requireIDKind("describe", sessionID, "a GOAL or PROPOSAL", "goal", "proposal")
+	if isProposalID(sessionID) {
+		describeProposal(sessionID, *jsonOut, contextOverride)
+		return
+	}
 	if err := validateCloudSessionContext(sessionID, contextOverride); err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(2)

@@ -365,6 +365,8 @@ func TestManifestRuntimeReadsLegacyProvenanceMode(t *testing.T) {
 
 func TestCloudSessionIDsAcceptGoalAndSessionPrefixes(t *testing.T) {
 	for id, want := range map[string]bool{
+		"g_c7d2f0a4e8":     true,
+		"g_":               false,
 		"goal_c7d2f0a4e8":  true,
 		"sess_c7d2f0a4e8":  true,
 		"local_c7d2f0a4e8": false,

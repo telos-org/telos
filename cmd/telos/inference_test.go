@@ -84,11 +84,7 @@ func TestCloudApplyModelPrecedenceIgnoresLegacyDefault(t *testing.T) {
 			flags: []string{"--model", "telos/default"},
 			want:  &cloud.InferenceSelection{Source: "managed", Tier: "default"},
 		},
-		{
-			name:  "empty flag defers to workspace",
-			env:   "telos/max",
-			flags: []string{"--model", ""},
-		},
+
 		{
 			name:  "subscription override",
 			flags: []string{"--model", "openai-rohan/gpt-5.6-sol"},
@@ -300,6 +296,16 @@ func TestInferenceCLIProcess(t *testing.T) {
 		cmdPause(args[1:])
 	case "resume":
 		cmdResume(args[1:])
+	case "propose":
+		cmdPropose(args[1:])
+	case "review":
+		cmdReview(args[1:])
+	case "comment":
+		cmdComment(args[1:])
+	case "delete":
+		cmdDelete(args[1:])
+	case "pull":
+		cmdPull(args[1:])
 	default:
 		os.Args = append([]string{os.Args[0]}, args...)
 		main()
@@ -380,7 +386,7 @@ func TestCloudApplyInferenceErrors(t *testing.T) {
 		{"missing API key or subscription", []string{"apply", path, "--model", "Missing/model"}, "no saved API key or subscription matches", 0},
 		{"missing model", []string{"apply", path, "--model", "Work Anthropic/"}, "model ID is required", 0},
 		{"invalid syntax", []string{"apply", path, "--model", "Work Anthropic"}, "--model must be", 0},
-		{"spec and model changes are separate", []string{"apply", path, "--goal", "sess_existing", "--model", "Work Anthropic/claude-test"}, "apply spec and model/thinking changes separately", 0},
+		{"goal flag is removed", []string{"apply", path, "--goal", "sess_existing", "--model", "Work Anthropic/claude-test"}, "flag provided but not defined: -goal", 0},
 		{"empty context", []string{"config", "--context", ""}, "requires @handle", 0},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

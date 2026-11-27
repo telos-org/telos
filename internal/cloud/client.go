@@ -77,19 +77,23 @@ type SessionRecord struct {
 	Reason  string `json:"reason,omitempty"`
 	Message string `json:"message,omitempty"`
 	// StatusReason is what Clouds before the rename send instead of Message.
-	StatusReason   string            `json:"status_reason,omitempty"`
-	LastRetryAt    string            `json:"last_retry_at,omitempty"`
-	NextRetryAt    string            `json:"next_retry_at,omitempty"`
-	PackageRef     string            `json:"package_ref"`
-	PackageDigest  string            `json:"package_digest"`
-	RuntimeVersion *string           `json:"runtime_version,omitempty"`
-	AgentModel     string            `json:"agent_model,omitempty"`
-	AgentThinking  string            `json:"agent_thinking,omitempty"`
-	Inference      *InferenceSummary `json:"inference,omitempty"`
-	Billing        *GoalBilling      `json:"billing,omitempty"`
-	AccessSource   string            `json:"access_source,omitempty"`
-	ServiceURL     *string           `json:"service_url,omitempty"`
-	DashboardURL   *string           `json:"dashboard_url,omitempty"`
+	StatusReason      string            `json:"status_reason,omitempty"`
+	LastRetryAt       string            `json:"last_retry_at,omitempty"`
+	NextRetryAt       string            `json:"next_retry_at,omitempty"`
+	PackageRef        string            `json:"package_ref"`
+	PackageDigest     string            `json:"package_digest"`
+	CurrentRevisionID string            `json:"current_revision_id,omitempty"`
+	RuntimeVersion    *string           `json:"runtime_version,omitempty"`
+	AgentModel        string            `json:"agent_model,omitempty"`
+	AgentThinking     string            `json:"agent_thinking,omitempty"`
+	Inference         *InferenceSummary `json:"inference,omitempty"`
+	Billing           *GoalBilling      `json:"billing,omitempty"`
+	AccessSource      string            `json:"access_source,omitempty"`
+	// CanDeploy is whether the viewer may deploy a spec directly, rather than
+	// propose it.
+	CanDeploy    bool    `json:"can_deploy"`
+	ServiceURL   *string `json:"service_url,omitempty"`
+	DashboardURL *string `json:"dashboard_url,omitempty"`
 	// FailureReason is the raw lifecycle error; only --json shows it.
 	FailureReason *string `json:"failure_reason,omitempty"`
 	CreatedAt     string  `json:"created_at"`
@@ -102,11 +106,16 @@ type SessionCreateOptions struct {
 	AgentThinking   string
 	AgentTimeoutSec *int
 	Inference       *InferenceSelection
+	RevisionMessage string
 }
 
 type SessionUpdateOptions struct {
-	PackageRef string `json:"package_ref"`
-	Force      bool   `json:"force,omitempty"`
+	ExpectedCurrentRevisionID string              `json:"expected_current_revision_id,omitempty"`
+	PackageRef                string              `json:"package_ref"`
+	RevisionMessage           string              `json:"revision_message,omitempty"`
+	Force                     bool                `json:"force,omitempty"`
+	Inference                 *InferenceSelection `json:"inference,omitempty"`
+	AgentThinking             *string             `json:"agent_thinking,omitempty"`
 }
 
 // The hosted control API still exposes cloud sessions at /api/deployments.
@@ -454,20 +463,9 @@ func (c *Client) PublishSkillVersionWithVisibility(
 	files map[string]SkillFile,
 	visibility string,
 ) (*SkillRecord, error) {
-	type skillFileRequest struct {
-		DataBase64 string `json:"data_base64"`
-		Mode       string `json:"mode"`
-	}
-	bodyFiles := make(map[string]skillFileRequest, len(files))
-	for path, file := range files {
-		bodyFiles[path] = skillFileRequest{
-			DataBase64: base64.StdEncoding.EncodeToString(file.Data),
-			Mode:       file.Mode,
-		}
-	}
 	payload := map[string]any{
 		"name":  name,
-		"files": bodyFiles,
+		"files": skillFilesRequest(files),
 	}
 	if strings.TrimSpace(scope) != "" {
 		payload["scope"] = scope
@@ -495,6 +493,20 @@ func (c *Client) PublishSkillVersionWithVisibility(
 		return nil, err
 	}
 	return &record, nil
+}
+
+type skillFileRequest struct {
+	DataBase64 string `json:"data_base64"`
+	Mode       string `json:"mode"`
+}
+
+// skillFilesRequest encodes skill files the way the skill routes take them.
+func skillFilesRequest(files map[string]SkillFile) map[string]skillFileRequest {
+	body := make(map[string]skillFileRequest, len(files))
+	for path, file := range files {
+		body[path] = skillFileRequest{DataBase64: base64.StdEncoding.EncodeToString(file.Data), Mode: file.Mode}
+	}
+	return body
 }
 
 func (c *Client) GetSkill(scope, name string) (*SkillRecord, error) {
@@ -589,6 +601,9 @@ func (c *Client) CreateSession(opts SessionCreateOptions) (*SessionRecord, error
 	}
 	if opts.AgentTimeoutSec != nil {
 		payload["agent_timeout_sec"] = *opts.AgentTimeoutSec
+	}
+	if opts.RevisionMessage != "" {
+		payload["revision_message"] = opts.RevisionMessage
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -897,4 +912,52 @@ func readError(resp *http.Response) error {
 		return &APIError{StatusCode: resp.StatusCode, Detail: string(data)}
 	}
 	return &APIError{StatusCode: resp.StatusCode}
+}
+
+// downloadBundle starts a bundle download; the caller closes the body.
+func (c *Client) downloadBundle(path string) (*http.Response, error) {
+	resp, err := c.do(http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		return nil, readError(resp)
+	}
+	return resp, nil
+}
+
+func withQuery(path string, query url.Values) string {
+	if len(query) == 0 {
+		return path
+	}
+	return path + "?" + query.Encode()
+}
+
+// sendJSON makes one write request and decodes its JSON response. Writes are
+// never retried: a lost response does not mean they were rejected.
+func sendJSON[T any](c *Client, method, path string, body any) (*T, error) {
+	var data []byte
+	if body != nil {
+		var err error
+		if data, err = json.Marshal(body); err != nil {
+			return nil, err
+		}
+	}
+	resp, err := c.do(method, path, data)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return nil, readError(resp)
+	}
+	var result T
+	if resp.StatusCode == http.StatusNoContent {
+		return &result, nil
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+	return &result, nil
 }

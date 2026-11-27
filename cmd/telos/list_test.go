@@ -63,7 +63,7 @@ func TestLimitListSessionsAppliesAfterDefaultVisibility(t *testing.T) {
 		{SessionID: "sess_b", Status: sessionapi.StatusRunning},
 	}
 
-	visible := limitListSessions(visibleListSessions(sessions, false), 2)
+	visible := limited(visibleListSessions(sessions, false), 2)
 	if len(visible) != 2 {
 		t.Fatalf("visible limited sessions: got %d, want 2", len(visible))
 	}
