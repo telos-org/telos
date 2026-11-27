@@ -77,17 +77,18 @@ type SessionRecord struct {
 	Reason  string `json:"reason,omitempty"`
 	Message string `json:"message,omitempty"`
 	// StatusReason is what Clouds before the rename send instead of Message.
-	StatusReason   string            `json:"status_reason,omitempty"`
-	LastRetryAt    string            `json:"last_retry_at,omitempty"`
-	NextRetryAt    string            `json:"next_retry_at,omitempty"`
-	PackageRef     string            `json:"package_ref"`
-	PackageDigest  string            `json:"package_digest"`
-	RuntimeVersion *string           `json:"runtime_version,omitempty"`
-	AgentModel     string            `json:"agent_model,omitempty"`
-	AgentThinking  string            `json:"agent_thinking,omitempty"`
-	Inference      *InferenceSummary `json:"inference,omitempty"`
-	Billing        *GoalBilling      `json:"billing,omitempty"`
-	AccessSource   string            `json:"access_source,omitempty"`
+	StatusReason      string            `json:"status_reason,omitempty"`
+	LastRetryAt       string            `json:"last_retry_at,omitempty"`
+	NextRetryAt       string            `json:"next_retry_at,omitempty"`
+	PackageRef        string            `json:"package_ref"`
+	PackageDigest     string            `json:"package_digest"`
+	CurrentRevisionID string            `json:"current_revision_id,omitempty"`
+	RuntimeVersion    *string           `json:"runtime_version,omitempty"`
+	AgentModel        string            `json:"agent_model,omitempty"`
+	AgentThinking     string            `json:"agent_thinking,omitempty"`
+	Inference         *InferenceSummary `json:"inference,omitempty"`
+	Billing           *GoalBilling      `json:"billing,omitempty"`
+	AccessSource      string            `json:"access_source,omitempty"`
 	// CanDeploy is whether the viewer may deploy a spec directly, rather than
 	// propose it.
 	CanDeploy    bool    `json:"can_deploy"`
@@ -109,9 +110,12 @@ type SessionCreateOptions struct {
 }
 
 type SessionUpdateOptions struct {
-	PackageRef      string `json:"package_ref"`
-	RevisionMessage string `json:"revision_message,omitempty"`
-	Force           bool   `json:"force,omitempty"`
+	ExpectedCurrentRevisionID string              `json:"expected_current_revision_id,omitempty"`
+	PackageRef                string              `json:"package_ref"`
+	RevisionMessage           string              `json:"revision_message,omitempty"`
+	Force                     bool                `json:"force,omitempty"`
+	Inference                 *InferenceSelection `json:"inference,omitempty"`
+	AgentThinking             *string             `json:"agent_thinking,omitempty"`
 }
 
 // The hosted control API still exposes cloud sessions at /api/deployments.

@@ -100,7 +100,7 @@ func TestTopLevelUsageMentionsHelpAndVersion(t *testing.T) {
 	for _, want := range []string{
 		"usage: telos <command> [args]",
 		"--help",
-		"apply [SPEC.md]    Deploy a spec or a proposal, or change model/thinking",
+		"apply INPUT        Apply a spec, package, or proposal",
 		"propose SPEC.md    Open or update a proposal",
 		"review PROPOSAL    Approve or block a proposal",
 		"comment ID         Comment on a Goal or proposal, or reply to a comment",
@@ -402,18 +402,6 @@ func TestUntilFlagValueRejectsSubsecondDuration(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "at least 1s") {
 		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestValidateApplySession(t *testing.T) {
-	// Cloud Goal IDs are opaque, so Cloud resolves any ID that is not local.
-	for _, sessionID := range []string{"", "sess_123", "goal_123"} {
-		if err := validateApplySession(sessionID); err != nil {
-			t.Fatalf("validate %q: %v", sessionID, err)
-		}
-	}
-	if err := validateApplySession("local_123"); err == nil || !strings.Contains(err.Error(), "only updates Telos Cloud Goals") {
-		t.Fatalf("validate local_123: got %v", err)
 	}
 }
 
@@ -989,12 +977,8 @@ func TestApplyCloudSessionPackageCreates(t *testing.T) {
 
 	operation, session, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.0",
-		"",
-		sessionRuntimeConfig{},
+		&preparedCloudApply{name: "auth", record: &cloud.PackageVersionRecord{Ref: "@user-abc/auth:0.1.0"}, runtime: sessionRuntimeConfig{}, inference: nil},
 		cloudApplyOptions{},
-		nil,
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1026,12 +1010,8 @@ func TestApplyCloudSessionPackageSendsSubscriptionSelection(t *testing.T) {
 
 	_, _, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.0",
-		"",
-		sessionRuntimeConfig{},
+		&preparedCloudApply{name: "auth", record: &cloud.PackageVersionRecord{Ref: "@user-abc/auth:0.1.0"}, runtime: sessionRuntimeConfig{}, inference: &cloud.InferenceSelection{Source: "subscription", ConnectionID: "conn_rohan", Model: "gpt-5.6-sol"}},
 		cloudApplyOptions{},
-		&cloud.InferenceSelection{Source: "subscription", ConnectionID: "conn_rohan", Model: "gpt-5.6-sol"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -1083,12 +1063,8 @@ func TestApplyCloudSessionPackageUpdatesExplicitSession(t *testing.T) {
 
 	operation, session, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
+		&preparedCloudApply{name: "auth", record: &cloud.PackageVersionRecord{Ref: "@user-abc/auth:0.1.1"}, runtime: sessionRuntimeConfig{}, inference: nil, goal: &cloud.SessionRecord{ID: "sess_123"}},
 		cloudApplyOptions{force: true},
-		nil,
 	)
 	if err != nil {
 		t.Fatalf("applyCloudSessionPackage: %v", err)
@@ -1117,12 +1093,8 @@ func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
 
 	_, _, err := applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
+		&preparedCloudApply{name: "auth", record: &cloud.PackageVersionRecord{Ref: "@user-abc/auth:0.1.1"}, runtime: sessionRuntimeConfig{}, inference: nil, goal: &cloud.SessionRecord{ID: "sess_123"}},
 		cloudApplyOptions{},
-		nil,
 	)
 	if err == nil {
 		t.Fatal("expected snapshot pending error")
@@ -1141,12 +1113,8 @@ func TestApplyCloudSessionPackageSnapshotPendingSuggestsForce(t *testing.T) {
 
 	_, _, err = applyCloudSessionPackage(
 		cloud.NewClient(srv.URL, "test-token"),
-		"auth",
-		"@user-abc/auth:0.1.1",
-		"sess_123",
-		sessionRuntimeConfig{},
+		&preparedCloudApply{name: "auth", record: &cloud.PackageVersionRecord{Ref: "@user-abc/auth:0.1.1"}, runtime: sessionRuntimeConfig{}, inference: nil, goal: &cloud.SessionRecord{ID: "sess_123"}},
 		cloudApplyOptions{force: true},
-		nil,
 	)
 	if err == nil || strings.Contains(err.Error(), "retry the same command with --force") {
 		t.Fatalf("forced retry received an invalid force suggestion: %v", err)

@@ -64,7 +64,6 @@ func TestDryRunCreationInferencePrecedence(t *testing.T) {
 		{"workspace subscription and native thinking", "", "", `{"selection":{"source":"subscription","connection_id":"sub_work","model":"gpt-test"},"agent_thinking":"off"}`, "My ChatGPT/gpt-test", "off", "workspace", "workspace", nil},
 		{"environment overrides", "telos/default", "low", "", "telos/default", "low", "override", "override", nil},
 		{"flags override environment", "telos/default", "low", "", "telos/max", "high", "override", "override", []string{"--model", "telos/max", "--thinking", "high"}},
-		{"empty flag inherits workspace", "telos/default", "", `{"selection":{"source":"managed","tier":"max"},"agent_thinking":"high"}`, "telos/max", "high", "workspace", "workspace", []string{"--model", ""}},
 		{"explicit model inherits workspace thinking", "", "", `{"selection":{"source":"managed","tier":"default"},"agent_thinking":"high"}`, "telos/max", "high", "override", "workspace", []string{"--model", "telos/max"}},
 		{"explicit thinking inherits workspace model", "", "", `{"selection":{"source":"byok","connection_id":"key_work","model":"claude-test"},"agent_thinking":"high"}`, "Work Anthropic/claude-test", "low", "workspace", "override", []string{"--thinking", "low"}},
 		{"cloud thinking remains unresolved", "", "", `{"selection":{"source":"managed","tier":"default"},"agent_thinking":null}`, "telos/default", "", "workspace", "cloud", nil},
@@ -254,37 +253,38 @@ func mustReadFile(t *testing.T, path string) []byte {
 }
 
 func TestDryRunSettingsTextOnlyShowsChangedValues(t *testing.T) {
-	server := inferenceTestServer(t, map[string]http.HandlerFunc{
-		"GET /api/deployments/goal_test/inference": func(w http.ResponseWriter, r *http.Request) {
-			_, _ = w.Write([]byte(`{"selection":{"source":"managed","tier":"default"},"inference":{"source":"managed","tier":"default"},"agent_model":"telos-bifrost/telos/default","agent_thinking":"high"}`))
-		},
-	})
+	handlers := inferenceApplyHandlers(testApplyPackage(t))
+	handlers["GET /api/deployments/goal_test/inference"] = func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"selection":{"source":"managed","tier":"default"},"inference":{"source":"managed","tier":"default"},"agent_model":"telos-bifrost/telos/default","agent_thinking":"high"}`))
+	}
+	server := inferenceTestServer(t, handlers)
 	defer server.Close()
 	configureInferenceApplyTest(t, server.URL)
 	for _, tt := range []struct {
 		name, operation, model, thinking string
 		args                             []string
 	}{
-		{"thinking only", "update", "telos/default (Goal setting)", "high -> off", []string{"--thinking", "off"}},
-		{"model only", "update", "telos/default -> telos/max", "high -> inherited (resolved on apply)", []string{"--model", "telos/max"}},
-		{"same model inherits thinking", "unchanged", "telos/default", "high (Goal setting)", []string{"--model", "telos/default"}},
+		{"thinking only", "update", "unchanged", "high -> off", []string{"--thinking", "off"}},
+		{"model only", "update", "telos/default -> telos/max", "unchanged", []string{"--model", "telos/max"}},
+		{"same model preserves thinking", "unchanged", "telos/default", "unchanged", []string{"--model", "telos/default"}},
 		{"model and thinking", "update", "telos/default -> telos/max", "high -> low", []string{"--model", "telos/max", "--thinking", "low"}},
 		{"unchanged", "unchanged", "telos/default", "high", []string{"--model", "telos/default", "--thinking", "high"}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			args := append([]string{"--goal", "goal_test", "--dry-run"}, tt.args...)
+			args := append([]string{"@telos/demo:1.2.3", "--dry-run"}, tt.args...)
 			output := captureStdout(t, func() { cmdApply(args) })
 			lines := []string{
-				"Would update goal_test",
+				"Would update demo",
 				"",
 				"Context   personal",
 				"Goal      goal_test",
+				"Package   @telos/demo:1.2.3",
 				"Model     " + tt.model,
 				"Thinking  " + tt.thinking,
 				"",
 			}
 			if tt.operation == "unchanged" {
-				lines[0] = "No changes to goal_test"
+				lines[0] = "No changes to demo"
 			}
 			if want := strings.Join(lines, "\n"); output != want {
 				t.Fatalf("settings preview:\n%s\nwant:\n%s", output, want)
@@ -294,14 +294,14 @@ func TestDryRunSettingsTextOnlyShowsChangedValues(t *testing.T) {
 }
 
 func TestDryRunModelChangeThinkingJSON(t *testing.T) {
-	server := inferenceTestServer(t, map[string]http.HandlerFunc{
-		"GET /api/deployments/goal_test/inference": jsonResponse(cloud.DeploymentInference{
-			Selection:     &cloud.InferenceSelection{Source: "managed", Tier: "default"},
-			Inference:     cloud.InferenceSummary{Source: "managed", Tier: "default"},
-			AgentModel:    "telos-bifrost/telos/default",
-			AgentThinking: "high",
-		}),
+	handlers := inferenceApplyHandlers(testApplyPackage(t))
+	handlers["GET /api/deployments/goal_test/inference"] = jsonResponse(cloud.DeploymentInference{
+		Selection:     &cloud.InferenceSelection{Source: "managed", Tier: "default"},
+		Inference:     cloud.InferenceSummary{Source: "managed", Tier: "default"},
+		AgentModel:    "telos-bifrost/telos/default",
+		AgentThinking: "high",
 	})
+	server := inferenceTestServer(t, handlers)
 	defer server.Close()
 	configureInferenceApplyTest(t, server.URL)
 	for _, tt := range []struct {
@@ -309,12 +309,12 @@ func TestDryRunModelChangeThinkingJSON(t *testing.T) {
 		source                previewSettingSource
 		flags                 []string
 	}{
-		{"inherited", "telos/max", "", "inherited", nil},
+		{"preserved", "telos/max", "high", "goal", nil},
 		{"explicit", "telos/max", "low", "override", []string{"--thinking", "low"}},
 		{"same model", "telos/default", "high", "goal", nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			args := append([]string{"--goal", "goal_test", "--model", tt.model}, tt.flags...)
+			args := append([]string{"@telos/demo:1.2.3", "--model", tt.model}, tt.flags...)
 			preview := decodeApplyPreview(t, args...)
 			if preview.Current.Thinking != "high" || preview.Proposed.Thinking != tt.thinking ||
 				preview.Proposed.ThinkingSource != tt.source {
@@ -702,6 +702,7 @@ func TestApplyDiffIsIndependentOfDryRun(t *testing.T) {
 				record := cloud.PackageVersionRecord{Ref: "@telos/demo:1.2.4", Digest: proposed.Digest}
 				var writes, downloads atomic.Int32
 				handlers := registryApplyHandlers(fixture.pkg)
+				handlers["GET /api/deployments/goal_test/inference"] = jsonResponse(cloud.DeploymentInference{Selection: &cloud.InferenceSelection{Source: "managed", Tier: "default"}, Inference: cloud.InferenceSummary{Source: "managed", Tier: "default"}, AgentThinking: "medium"})
 				handlers["GET /api/account/bootstrap"] = dryRunPublishScope
 				handlers["GET /api/packages/telos/demo/versions/1.2.4"] = http.NotFound
 				handlers["GET /api/skills/telos/verify-test"] = jsonResponse(cloud.SkillRecord{
@@ -720,13 +721,22 @@ func TestApplyDiffIsIndependentOfDryRun(t *testing.T) {
 				} {
 					handlers[route] = func(w http.ResponseWriter, r *http.Request) {
 						writes.Add(1)
+						if r.Method == http.MethodPut {
+							var request cloud.SessionUpdateOptions
+							if err := json.NewDecoder(r.Body).Decode(&request); err != nil {
+								t.Error(err)
+							}
+							if request.Inference == nil || request.Inference.Tier != "max" || request.AgentThinking == nil || *request.AgentThinking != "low" || request.PackageRef != record.Ref {
+								t.Errorf("combined update = %+v", request)
+							}
+						}
 						jsonResponse(response)(w, r)
 					}
 				}
 				server := inferenceTestServer(t, handlers)
 				defer server.Close()
 				configureDryRunTest(t, server.URL)
-				args := []string{"apply", fixture.path}
+				args := []string{"apply", fixture.path, "--model", "telos/max", "--thinking", "low"}
 				if mode.dryRun {
 					args = append(args, "--dry-run")
 				}

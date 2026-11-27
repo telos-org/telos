@@ -79,8 +79,6 @@ func prepareCloudApply(control *cloud.Client, input string, options cloudApplyOp
 		if err != nil {
 			return nil, err
 		}
-	case options.settingsSet:
-		return nil, fmt.Errorf("--model and --thinking set up a new Goal; to change %s's: telos apply --goal %s --model MODEL --thinking LEVEL", prepared.goal.Name, prepared.goal.ID)
 	}
 	if prepared.local != nil {
 		prepared.skills, err = preparePackageSkills(control, prepared.local.compiled)
@@ -98,22 +96,23 @@ func prepareCloudApply(control *cloud.Client, input string, options cloudApplyOp
 		if err != nil {
 			return nil, goalNotFound(err, goalID, control.ContextName())
 		}
+		prepared.goal = session
 		pkg, err := packageForSessionRecord(control, session)
+		var current applyState
+		if err == nil {
+			current, err = registryApplyPackageState(pkg)
+		}
 		if err != nil {
 			prepared.baselineErr = err
-			return prepared, nil
+		} else {
+			if current.Name != "" && prepared.proposed.Name != current.Name {
+				return nil, fmt.Errorf("cannot change Goal %s spec name from %q to %q", goalID, current.Name, prepared.proposed.Name)
+			}
+			prepared.current = &current
 		}
-		current, err := registryApplyPackageState(pkg)
-		if err != nil {
-			prepared.baselineErr = err
-			return prepared, nil
+		if err := prepareApplyInference(control, prepared, options); err != nil {
+			return nil, err
 		}
-		if current.Name != "" && prepared.proposed.Name != current.Name {
-			return nil, fmt.Errorf(
-				"cannot change Goal %s spec name from %q to %q", goalID, current.Name, prepared.proposed.Name,
-			)
-		}
-		prepared.current = &current
 	}
 	return prepared, nil
 }
@@ -358,7 +357,6 @@ const (
 	previewSourceWorkspace previewSettingSource = "workspace"
 	previewSourceCloud     previewSettingSource = "cloud"
 	previewSourceOverride  previewSettingSource = "override"
-	previewSourceInherited previewSettingSource = "inherited"
 )
 
 type applyPreview struct {
@@ -374,32 +372,18 @@ type applyPreview struct {
 	Notes      []string               `json:"notes"`
 }
 
-func newApplyPreview(control *cloud.Client, goalID string) *applyPreview {
-	operation := "create"
-	if goalID != "" {
-		operation = "update"
-	}
-	return &applyPreview{
-		DryRun:    true,
-		Operation: operation,
-		Context:   control.ContextName(),
-		GoalID:    goalID,
-		Notes:     []string{},
-	}
-}
-
 func previewCloudApply(
 	control *cloud.Client,
 	prepared *preparedCloudApply,
-	goalID string,
-	runtime sessionRuntimeConfig,
 	options cloudApplyOptions,
 ) (*applyPreview, error) {
 	if prepared.baselineErr != nil {
 		return nil, fmt.Errorf("read deployed baseline: %w", prepared.baselineErr)
 	}
-	preview := newApplyPreview(control, goalID)
-	preview.Force = options.force
+	preview := &applyPreview{DryRun: true, Operation: "create", Context: control.ContextName(), Force: options.force, Notes: []string{}}
+	if prepared.goal != nil {
+		preview.GoalID, preview.Operation = prepared.goal.ID, "update"
+	}
 	proposed := prepared.proposed
 	preview.Proposed = proposed
 	if proposed.Digest == "" {
@@ -408,17 +392,17 @@ func previewCloudApply(
 				"The spec preview uses local skill paths.",
 		)
 	}
-	if goalID == "" {
-		if err := previewCreationInference(control, preview, prepared.inference, runtime); err != nil {
+	if prepared.goal == nil {
+		if err := previewCreationInference(control, preview, prepared.inference, prepared.runtime); err != nil {
 			return nil, err
 		}
 	} else {
 		current := prepared.current
 		preview.Current = current
-		preview.Proposed.ModelSource = previewSourceGoal
-		preview.Proposed.ThinkingSource = previewSourceGoal
 		if proposed.Digest != "" && proposed.Digest == current.Digest {
-			preview.Operation = "unchanged"
+			if applyInferenceUnchanged(current, &proposed) {
+				preview.Operation = "unchanged"
+			}
 			if proposed.Ref != current.Ref {
 				preview.Proposed.Ref = current.Ref
 				preview.Notes = append(preview.Notes, "The package contents are unchanged. The Goal keeps its current package reference.")
@@ -488,7 +472,7 @@ func printApplyPreview(out io.Writer, preview *applyPreview, jsonOut bool) {
 	}
 	model := previewInferenceValue(proposed.Model, proposed.ModelSource)
 	thinking := previewInferenceValue(proposed.Thinking, proposed.ThinkingSource)
-	if preview.Current != nil && proposed.Name == "" {
+	if preview.Current != nil {
 		model = previewInferenceDelta(preview.Current.Model, proposed.Model, proposed.ModelSource)
 		thinking = previewInferenceDelta(preview.Current.Thinking, proposed.Thinking, proposed.ThinkingSource)
 	}
@@ -524,7 +508,10 @@ func printApplyDetails(out io.Writer, preview *applyPreview) {
 
 func previewInferenceDelta(current, proposed string, source previewSettingSource) string {
 	value := previewInferenceValue(proposed, source)
-	if current == proposed || source == previewSourceGoal {
+	if source == previewSourceGoal {
+		return "unchanged"
+	}
+	if current == proposed {
 		return value
 	}
 	return previewDeltaValue(current, value)
@@ -541,8 +528,6 @@ func previewInferenceValue(value string, source previewSettingSource) string {
 		return value + " (workspace default)"
 	case previewSourceCloud:
 		return "cloud default (resolved on apply)"
-	case previewSourceInherited:
-		return "inherited (resolved on apply)"
 	default:
 		return strings.TrimSpace(value)
 	}

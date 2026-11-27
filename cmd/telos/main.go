@@ -80,7 +80,7 @@ func usage(out io.Writer) {
 	fmt.Fprintln(out, "")
 	fmt.Fprintln(out, "core commands:")
 	fmt.Fprintln(out, "  login              Log in to Telos Cloud via the browser")
-	fmt.Fprintln(out, "  apply [SPEC.md]    Deploy a spec or a proposal, or change model/thinking")
+	fmt.Fprintln(out, "  apply INPUT        Apply a spec, package, or proposal")
 	fmt.Fprintln(out, "  propose SPEC.md    Open or update a proposal")
 	fmt.Fprintln(out, "  review PROPOSAL    Approve or block a proposal")
 	fmt.Fprintln(out, "  comment ID         Comment on a Goal or proposal, or reply to a comment")

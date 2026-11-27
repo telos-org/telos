@@ -28,9 +28,7 @@ func cmdApply(args []string) {
 func cmdLaunch(command, action string, args []string) {
 	synopsis := fmt.Sprintf("telos %s SPEC.md [flags]", command)
 	if command == "apply" {
-		synopsis = "telos apply SPEC.md [-m MSG] [flags]" +
-			"\n       telos apply PROPOSAL [flags]" +
-			"\n       telos apply --goal GOAL [--model MODEL] [--thinking LEVEL] [flags]"
+		synopsis = "telos apply SPEC.md|PACKAGE|PROPOSAL [flags]"
 	}
 	fs := newCommandFlagSet(command, synopsis)
 	workspaceValue := ""
@@ -38,8 +36,6 @@ func cmdLaunch(command, action string, args []string) {
 	if command == "run" {
 		workspace = fs.String("workspace", "", "Workspace directory for local specs")
 	}
-	sessionIDValue := ""
-	sessionID := &sessionIDValue
 	forceValue := false
 	force := &forceValue
 	dryRunValue, diffValue := false, false
@@ -47,17 +43,16 @@ func cmdLaunch(command, action string, args []string) {
 	messageValue := ""
 	message := &messageValue
 	if command == "apply" {
-		sessionID = fs.String("goal", "", "ID of the Goal whose model or thinking to change")
 		force = fs.Bool("force", false, "Deploy even if the current revision has not been snapshotted")
 		message = fs.String("m", "", "Revision message; defaults to Deploy v<version>")
-		dryRun = fs.Bool("dry-run", false, "Preview the apply without publishing or changing a Goal")
-		includeDiff = fs.Bool("diff", false, "Show spec and skill file diffs")
+		dryRun = fs.Bool("dry-run", false, "Preview a spec or package without publishing or changing a Goal")
+		includeDiff = fs.Bool("diff", false, "Show spec and skill file diffs for a spec or package")
 	}
 	modelHelp := "Model as <provider>/<model> (e.g. openai-codex/gpt-5.5); defaults to $TELOS_MODEL"
 	thinkingHelp := "Thinking effort: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then high for local runs"
 	if command == "apply" {
-		modelHelp = "telos/default, telos/max, or <name>/<model-id> for a saved API key or subscription. Sets a new Goal's model, or with --goal changes one; creation defaults to $TELOS_MODEL, then the workspace default"
-		thinkingHelp = "Thinking effort. A new Goal takes low, medium, high, or xhigh and defaults to $TELOS_THINKING; with --goal, any level the model supports"
+		modelHelp = "telos/default, telos/max, or <name>/<model-id> for a saved API key or subscription. Creation defaults to $TELOS_MODEL, then the workspace default; updates preserve the current model unless specified"
+		thinkingHelp = "Creation: low, medium, high, or xhigh; defaults to $TELOS_THINKING, then workspace defaults. Updates: a model-supported level; preserved unless specified"
 	}
 	model := fs.String("model", "", modelHelp)
 	thinking := fs.String("thinking", "", thinkingHelp)
@@ -76,7 +71,6 @@ func cmdLaunch(command, action string, args []string) {
 		contextFlagValue = cloudContextFlag(fs)
 	}
 	parseFlags(fs, args)
-	*sessionID = strings.TrimSpace(*sessionID)
 	contextOverride, err := cloudContextOverride(fs, *contextFlagValue)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
@@ -93,39 +87,19 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintln(os.Stderr, "error: telos apply cannot be used from inside a Telos Goal; use telos run to launch nested specs")
 			os.Exit(1)
 		}
-		if err := validateApplyInferenceFlags(fs, *sessionID, *model, *thinking); err != nil {
+		*model, *thinking = strings.TrimSpace(*model), strings.TrimSpace(*thinking)
+		if err := validateApplyInferenceFlags(fs, *model, *thinking); err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(2)
 		}
-		if fs.NArg() == 0 {
-			if *dryRun {
-				preview, err := previewSessionInference(*sessionID, strings.TrimSpace(*model), strings.TrimSpace(*thinking), contextOverride)
-				if err != nil {
-					exitWithError(err)
-				}
-				printApplyPreview(os.Stdout, preview, *jsonOut)
-				return
-			}
-			change, err := applySessionInference(*sessionID, strings.TrimSpace(*model), strings.TrimSpace(*thinking), contextOverride)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "error: %v\n", err)
-				os.Exit(1)
-			}
-			if *jsonOut {
-				printJSON(change)
-			} else {
-				printInferenceChange(os.Stdout, change)
-			}
-			return
-		}
-		requireArgCount(fs, 1, "one SPEC.md or PROPOSAL")
+		requireArgCount(fs, 1, "one SPEC.md, PACKAGE, or PROPOSAL")
 		requireIDKind("apply", fs.Arg(0), "SPEC.md or a PROPOSAL", "goal", "proposal")
 		if isProposalID(fs.Arg(0)) {
 			if flagNamesSet(fs, "m", "model", "thinking") {
 				exitUsage("-m, --model, and --thinking apply only to a spec")
 			}
 			if *dryRun || *includeDiff {
-				exitUsage("--dry-run and --diff are not yet supported for proposals")
+				exitUsage("--dry-run and --diff apply to specs and packages; use telos describe PROPOSAL to preview a proposal")
 			}
 			applyProposal(fs.Arg(0), *force, *jsonOut, contextOverride)
 			return
@@ -166,18 +140,24 @@ func cmdLaunch(command, action string, args []string) {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
-		applyCloudControl(specArg, cloudApplyOptions{
+		options := cloudApplyOptions{
 			context:     contextOverride,
 			json:        *jsonOut,
 			dryRun:      *dryRun,
 			includeDiff: *includeDiff,
 			message:     strings.TrimSpace(*message),
 			force:       *force,
-			settingsSet: flagNamesSet(fs, "model", "thinking"),
 			newGoalSettings: func() (sessionRuntimeConfig, error) {
 				return resolveSessionRuntimeConfigFromFlags(fs, *model, *thinking, *maxCostUSD)
 			},
-		})
+		}
+		if flagNameSet(fs, "model") {
+			options.model = model
+		}
+		if flagNameSet(fs, "thinking") {
+			options.thinking = thinking
+		}
+		applyCloudControl(specArg, options)
 		return
 	}
 	if !hasLocalSpec {
@@ -252,16 +232,6 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// validateApplySession accepts only Telos Cloud Goals: telos apply always
-// deploys to Telos Cloud, and local work is telos run.
-func validateApplySession(sessionID string) error {
-	sessionID = strings.TrimSpace(sessionID)
-	if isLocalApplyID(sessionID) {
-		return fmt.Errorf("%s is a local Goal; telos apply only updates Telos Cloud Goals", sessionID)
-	}
-	return nil
-}
-
 func requireCloudLogin() error {
 	configured, err := config.IsConfigured()
 	if err != nil {
@@ -313,7 +283,8 @@ type cloudApplyOptions struct {
 	json            bool
 	dryRun          bool
 	includeDiff     bool
-	settingsSet     bool
+	model           *string
+	thinking        *string
 	newGoalSettings func() (sessionRuntimeConfig, error)
 }
 
@@ -330,12 +301,8 @@ func applyCloudControl(
 	if err != nil {
 		exitWithError(err)
 	}
-	sessionID := ""
-	if prepared.goal != nil {
-		sessionID = prepared.goal.ID
-	}
 	if options.dryRun {
-		preview, err := previewCloudApply(control, prepared, sessionID, prepared.runtime, options)
+		preview, err := previewCloudApply(control, prepared, options)
 		if err != nil {
 			exitWithError(err)
 		}
@@ -371,15 +338,8 @@ func applyCloudControl(
 			details.Notes = []string{"Content diffs are unavailable."}
 		}
 	}
-	operation, session, err := applyCloudSessionPackage(
-		control,
-		prepared.name,
-		packageRecord.Ref,
-		sessionID,
-		prepared.runtime,
-		options,
-		prepared.inference,
-	)
+	prepared.record = packageRecord
+	operation, session, err := applyCloudSessionPackage(control, prepared, options)
 	if apiCode(err) == "proposal_required" {
 		err = proposalRequiredError(prepared.goal, specArg, err)
 	}
@@ -387,14 +347,11 @@ func applyCloudControl(
 		exitWithError(err)
 	}
 	currentRef := ""
-	if prepared.goal != nil && prepared.goal.PackageDigest != "" && session.PackageDigest == prepared.goal.PackageDigest {
-		operation = "unchanged"
-	}
 	if prepared.current != nil {
 		currentRef = prepared.current.Ref
-		if session.PackageDigest != "" && session.PackageDigest == prepared.current.Digest {
-			operation = "unchanged"
-		}
+	}
+	if goalUnchanged(prepared.goal, session) {
+		operation = "unchanged"
 	}
 	if options.json {
 		result := map[string]any{
@@ -424,32 +381,24 @@ func applyCloudControl(
 	}
 }
 
-// applyCloudSessionPackage deploys packageRef to the Goal sessionID, or
-// creates a Goal named name when sessionID is empty.
-func applyCloudSessionPackage(
-	control *cloud.Client,
-	name string,
-	packageRef string,
-	sessionID string,
-	runtimeConfig sessionRuntimeConfig,
-	opts cloudApplyOptions,
-	inference *cloud.InferenceSelection,
-) (string, *cloud.SessionRecord, error) {
-	if sessionID != "" {
-		session, err := control.UpdateSession(sessionID, cloud.SessionUpdateOptions{
-			PackageRef:      packageRef,
-			RevisionMessage: opts.message,
-			Force:           opts.force,
+func applyCloudSessionPackage(control *cloud.Client, prepared *preparedCloudApply, options cloudApplyOptions) (string, *cloud.SessionRecord, error) {
+	if prepared.goal != nil {
+		session, err := control.UpdateSession(prepared.goal.ID, cloud.SessionUpdateOptions{
+			PackageRef:                prepared.record.Ref,
+			ExpectedCurrentRevisionID: prepared.goal.CurrentRevisionID,
+			RevisionMessage:           options.message,
+			Force:                     options.force,
+			Inference:                 prepared.inference,
+			AgentThinking:             options.thinking,
 		})
-		return "updated", session, actionableDeploymentUpdateError(goalNotFound(err, sessionID, control.ContextName()), opts.force)
+		return "updated", session, actionableDeploymentUpdateError(goalNotFound(err, prepared.goal.ID, control.ContextName()), options.force)
 	}
-
 	session, err := control.CreateSession(cloud.SessionCreateOptions{
-		Name:            name,
-		PackageRef:      packageRef,
-		AgentThinking:   runtimeConfig.Thinking,
-		Inference:       inference,
-		RevisionMessage: opts.message,
+		Name:            prepared.name,
+		PackageRef:      prepared.record.Ref,
+		AgentThinking:   prepared.runtime.Thinking,
+		Inference:       prepared.inference,
+		RevisionMessage: options.message,
 	})
 	return "created", session, err
 }
