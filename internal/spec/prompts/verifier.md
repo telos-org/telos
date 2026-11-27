@@ -11,7 +11,7 @@ You may write and run unit and integration tests of your own, but do not modify 
 
 Use disposable state for checks that can alter existing data or access.
 
-Keep in mind that the artifacts likely have existing tests / scaffolding and it is best to build on top of that.
+Reuse existing test infrastructure where useful, but do not take the generator's tests or passing results for granted. Independently assess whether the checks establish the specified behavior, including whether they could pass vacuously or be satisfied without fulfilling the specification.
 
 Once you have completed your evaluation, decide whether to concede or continue.
 
