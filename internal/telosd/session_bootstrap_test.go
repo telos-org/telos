@@ -63,6 +63,9 @@ func (s *fakeReconcileStore) Pause(string, bool) (*sessionapi.Session, error) {
 func (s *fakeReconcileStore) Resume(string) (*sessionapi.Session, error) {
 	return nil, sessionapi.ErrNotFound
 }
+func (s *fakeReconcileStore) Exec(context.Context, string, sessionapi.SessionExecRequest) (*sessionapi.SessionExecResponse, error) {
+	return nil, sessionapi.ErrNotFound
+}
 func (s *fakeReconcileStore) Get(string) (*sessionapi.Session, error) {
 	return nil, sessionapi.ErrNotFound
 }

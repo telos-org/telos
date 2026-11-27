@@ -134,11 +134,16 @@ func RunLocalSession(sessionDir string) (*game.PVGResult, error) {
 
 // RunLocalSessionWithExecutor runs a session with an optional custom executor.
 func RunLocalSessionWithExecutor(sessionDir string, exec game.AgentExecutor) (*game.PVGResult, error) {
+	lock, err := sessionapi.LockWorkspace(sessionDir)
+	if err != nil {
+		return nil, fmt.Errorf("lock session workspace: %w", err)
+	}
+	defer lock.Close()
 	manifest, err := sessionapi.ReadManifest(manifestPath(sessionDir))
 	if err != nil {
 		return nil, fmt.Errorf("read session manifest: %w", err)
 	}
-	if manifest.IsStopped() {
+	if agentsShouldStop(sessionDir) {
 		return &game.PVGResult{GameResult: game.GameStopped, Error: "stopped by operator"}, nil
 	}
 

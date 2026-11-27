@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/game"
 	"github.com/telos-org/telos/internal/platform"
@@ -1412,6 +1413,45 @@ func TestRunLocalSessionStopsWhenManifestIsStopped(t *testing.T) {
 	}
 	if epoch.CheckpointBytes == nil || *epoch.CheckpointBytes != 4 {
 		t.Fatalf("stopped epoch checkpoint bytes: %#v", epoch.CheckpointBytes)
+	}
+}
+
+func TestWorkerWaitsForWorkspaceAndRechecksPause(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.json")
+	if err := sessionapi.WriteManifest(path, &sessionapi.Manifest{SessionID: "goal_exec", SessionKind: sessionapi.KindController}); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := sessionapi.LockWorkspace(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lock.Close()
+	type outcome struct {
+		result *game.PVGResult
+		err    error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := RunLocalSessionWithExecutor(dir, &fakeExecutor{})
+		done <- outcome{result, err}
+	}()
+	select {
+	case out := <-done:
+		t.Fatalf("worker entered a locked workspace: %+v", out)
+	case <-time.After(30 * time.Millisecond):
+	}
+	if _, err := sessionapi.MutateManifest(path, func(m *sessionapi.Manifest) error { m.Paused = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	lock.Close()
+	select {
+	case out := <-done:
+		if out.err != nil || out.result.GameResult != game.GameStopped {
+			t.Fatalf("worker missed pause after acquiring workspace: %+v, %v", out.result, out.err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("worker did not acquire the released workspace")
 	}
 }
 
