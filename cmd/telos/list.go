@@ -74,7 +74,11 @@ func cmdList(args []string) {
 	signedOut := false
 
 	if !*localOnly {
-		rootSessions, handled, err := rootListSessions(*limit)
+		requestLimit := *limit
+		if status != "" {
+			requestLimit = 0
+		}
+		rootSessions, handled, err := rootListSessions(requestLimit)
 		if handled {
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "error: %v\n", err)

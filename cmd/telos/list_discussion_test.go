@@ -1,9 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"testing"
 
+	"github.com/telos-org/telos/internal/sessionapi"
 	"github.com/telos-org/telos/internal/spec"
 )
 
@@ -137,5 +140,34 @@ func TestListGoalsFiltersByStatus(t *testing.T) {
 	out := captureStdout(t, func() { cmdList([]string{"goals", "--filter", "status=blocked"}) })
 	if want := "NAME   STATUS   ID\ninbox  blocked  goal_b\n"; out != want {
 		t.Fatalf("output = %q, want %q", out, want)
+	}
+}
+
+func TestListRootGoalsFiltersBeforeApplyingLimit(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		items := []sessionapi.SessionListItem{
+			{SessionID: "local_running", Status: sessionapi.StatusRunning, Runtime: sessionapi.RuntimeCloud},
+			{SessionID: "local_completed", Status: sessionapi.StatusCompleted, Runtime: sessionapi.RuntimeCloud},
+		}
+		if r.URL.Query().Get("limit") == "1" {
+			items = items[:1]
+		}
+		_ = json.NewEncoder(w).Encode(sessionapi.SessionListResponse{Sessions: items})
+	}))
+	defer server.Close()
+	t.Setenv("TELOS_RUNTIME", "")
+	t.Setenv("TELOS_SESSION_ID", "g_parent")
+	t.Setenv("TELOS_API_TOKEN", "scoped-token")
+	t.Setenv("TELOS_API_ENDPOINT", server.URL)
+	out := captureStdout(t, func() {
+		cmdList([]string{"goals", "--filter", "status=completed", "--limit", "1", "--json"})
+	})
+	var result struct {
+		Goals []struct {
+			ID string `json:"goal_id"`
+		}
+	}
+	if err := json.Unmarshal([]byte(out), &result); err != nil || len(result.Goals) != 1 || result.Goals[0].ID != "local_completed" {
+		t.Fatalf("filtered goals = %s, err = %v", out, err)
 	}
 }
