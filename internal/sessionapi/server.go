@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -24,6 +25,7 @@ const maxSessionRequestBytes = 4 << 20
 //	POST /api/sessions/{id}/stop
 //	PUT  /api/sessions/{id}/pause
 //	POST /api/sessions/{id}/resume
+//	POST /api/sessions/{id}/exec
 //	GET  /api/sessions/{id}/transcript
 //	GET  /api/sessions/{id}/events
 //	GET  /api/sessions/{id}/code
@@ -43,6 +45,7 @@ func RegisterRoutes(mux *http.ServeMux, store Store, authorizer Authorizer, runt
 	mux.HandleFunc("POST /api/sessions/{id}/stop", h.stopSession)
 	mux.HandleFunc("PUT /api/sessions/{id}/pause", h.pauseSession)
 	mux.HandleFunc("POST /api/sessions/{id}/resume", h.resumeSession)
+	mux.HandleFunc("POST /api/sessions/{id}/exec", h.execSession)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", h.getTranscript)
 	mux.HandleFunc("GET /api/sessions/{id}/events", h.getEvents)
 	mux.HandleFunc("GET /api/sessions/{id}/workspace", h.getWorkspace)
@@ -52,6 +55,40 @@ type handler struct {
 	store      Store
 	authorizer Authorizer
 	runtime    RuntimeIdentity
+}
+
+func (h *handler) execSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, ok := h.authorize(w, r, AccessRequest{Action: ActionExecSession, SessionID: id}); !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxSessionRequestBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req SessionExecRequest
+	if err := dec.Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := dec.Decode(new(any)); err != io.EOF {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	result, err := h.store.Exec(r.Context(), id, req)
+	if err != nil {
+		switch {
+		case errors.Is(err, ErrNotFound):
+			writeError(w, http.StatusNotFound, err.Error())
+		case errors.Is(err, ErrInvalidSession):
+			writeError(w, http.StatusBadRequest, err.Error())
+		case errors.Is(err, ErrConflict):
+			writeError(w, http.StatusConflict, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	writeJSON(w, http.StatusOK, result)
 }
 
 func (h *handler) healthz(w http.ResponseWriter, r *http.Request) {

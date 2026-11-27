@@ -1,6 +1,7 @@
 package cloud
 
 import (
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -9,11 +10,48 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/telos-org/telos/internal/config"
 	"github.com/telos-org/telos/internal/sessionapi"
 )
+
+func TestExecSessionUsesCommandTimeoutAndDoesNotRetry(t *testing.T) {
+	for _, status := range []int{http.StatusOK, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var calls atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				if r.Header.Get("X-Telos-Org-Id") != "org_work" || r.Header.Get("Authorization") != "Bearer token" {
+					t.Error("exec lost the selected workspace or credentials")
+				}
+				time.Sleep(20 * time.Millisecond)
+				w.WriteHeader(status)
+				if status == http.StatusOK {
+					_ = json.NewEncoder(w).Encode(sessionapi.SessionExecResponse{ExitCode: 124, TimedOut: true})
+				} else {
+					_, _ = w.Write([]byte(`{"detail":"runtime unavailable"}`))
+				}
+			}))
+			defer server.Close()
+			client := NewClient(server.URL, "token")
+			client.HTTP.Timeout = time.Millisecond
+			client.OrgID = "org_work"
+			result, err := client.ExecSession(context.Background(), "goal_exec", sessionapi.SessionExecRequest{Argv: []string{"true"}})
+			if status == http.StatusOK && (err != nil || result.ExitCode != 124 || !result.TimedOut) {
+				t.Fatalf("command timeout response: %+v, %v", result, err)
+			}
+			if status != http.StatusOK && (err == nil || !strings.Contains(err.Error(), "runtime unavailable")) {
+				t.Fatalf("lost Cloud error: %v", err)
+			}
+			if calls.Load() != 1 || client.HTTP.Timeout != time.Millisecond {
+				t.Fatalf("requests=%d, shared client timeout=%s", calls.Load(), client.HTTP.Timeout)
+			}
+		})
+	}
+}
 
 func TestReadInferenceDefaultsAndDesiredSettings(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

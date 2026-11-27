@@ -47,6 +47,7 @@ const (
 	// ActionPauseSession pauses agents or resumes a blocked goal. Only the
 	// operator may, so an agent's own token can never lift its pause or block.
 	ActionPauseSession AccessAction = "pause_session"
+	ActionExecSession  AccessAction = "exec_session"
 )
 
 type AccessRequest struct {
@@ -174,7 +175,7 @@ func authorizeCaller(store *FileStore, caller Caller, req AccessRequest) error {
 		return requireSessionAccess(store, caller, req.SessionID, ScopeSessionsRead)
 	case ActionStopSession:
 		return requireSessionAccess(store, caller, req.SessionID, ScopeSessionsStop)
-	case ActionPauseSession:
+	case ActionPauseSession, ActionExecSession:
 		if caller.Role != RoleOperator {
 			return authError{status: http.StatusForbidden, detail: "operator access required"}
 		}

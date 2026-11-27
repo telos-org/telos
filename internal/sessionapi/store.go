@@ -1,6 +1,7 @@
 package sessionapi
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -70,6 +71,7 @@ type Store interface {
 	Stop(id string) (*Session, error)
 	Pause(id string, paused bool) (*Session, error)
 	Resume(id string) (*Session, error)
+	Exec(ctx context.Context, id string, req SessionExecRequest) (*SessionExecResponse, error)
 	Transcript(id string) (string, error)
 	WriteWorkspace(id string, w io.Writer) error
 	Events(id string) ([]SessionEvent, error)
